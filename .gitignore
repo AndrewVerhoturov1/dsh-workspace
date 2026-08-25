@@ -1,0 +1,26 @@
+# Секреты и идентификаторы пользователя
+.anonymous-user-id
+codex-oauth.json
+
+# Рабочие данные DSH
+sessions/
+storages/
+backup/
+
+# Базы и временные журналы
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.db
+*.log
+
+# Установленные зависимости и сборочные артефакты
+**/node_modules/
+**/dist/
+**/build/
+**/lib/
+
+# Локальные временные файлы инструментов
+.playwright-cli/
+.tmp/
+tmp/

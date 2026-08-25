@@ -1,0 +1,31 @@
+# Your patch layer for this dsh profile, applied after every bundle layer:
+# a top-level YAML array of loader patch entries (id-targeted config
+# overrides, disables, and insert lists; `!!js` expressions allowed).
+- insert:
+    - id: mcp-github
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: github
+        transport: streamable-http
+        url: https://api.githubcopilot.com/mcp/
+        headers:
+          Authorization: !!js >-
+            `Bearer ${process.env.GITHUB_TOKEN}`
+        failOnStartupError: false
+    - id: mcp-playwright
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: playwright
+        transport: stdio
+        command: npx
+        args: ['-y', '@playwright/mcp@latest', '--config', 'C:/Users/andre/.dsh/profiles/web/playwright-mcp.config.json']
+        env: {}
+        cwd: !!js process.cwd()
+        failOnStartupError: false
+
+- id: agent-instructions
+  disabled: false
+  config:
+    maxBytes: 65536
+- id: tokenledger
+  disabled: true
