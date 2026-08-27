@@ -1,0 +1,14 @@
+@echo off
+title DSH Web Restart
+echo Stopping old DSH web server on port 3080...
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":3080" ^| findstr "LISTENING"') do (
+    echo Killing PID %%a
+    taskkill /PID %%a /F
+)
+timeout /t 2 /nobreak >nul
+echo.
+echo Starting DSH web... keep this window open.
+echo Open http://127.0.0.1:3080 in your browser when it is ready.
+echo.
+dsh web
+pause

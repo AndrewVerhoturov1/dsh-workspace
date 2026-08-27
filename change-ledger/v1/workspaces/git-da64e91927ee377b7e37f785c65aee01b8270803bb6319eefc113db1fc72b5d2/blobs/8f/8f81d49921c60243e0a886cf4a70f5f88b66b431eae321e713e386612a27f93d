@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Калькулятор</title>
+  <style>
+    :root { color-scheme: dark; font-family: Georgia, 'Times New Roman', serif; }
+    * { box-sizing: border-box; }
+    body {
+      min-height: 100vh; margin: 0; display: grid; place-items: center; padding: 24px;
+      color: #f8f3e8; background: radial-gradient(circle at 20% 10%, #294346, transparent 42%), #111918;
+    }
+    .calculator { width: min(100%, 360px); padding: 20px; border: 1px solid #55706b; border-radius: 24px; background: #1b2726; box-shadow: 0 22px 60px #0008; }
+    h1 { margin: 0 0 14px; font-size: 1.15rem; letter-spacing: .08em; text-transform: uppercase; color: #d4b878; }
+    #display { width: 100%; height: 74px; margin-bottom: 14px; padding: 12px; border: 1px solid #55706b; border-radius: 14px; background: #0d1414; color: #f8f3e8; font: 2rem/1.2 Consolas, monospace; text-align: right; }
+    #display.invalid { border-color: #e0796f; color: #ff9c91; }
+    .keys { display: grid; grid-template-columns: repeat(4, 1fr); gap: 9px; }
+    button { min-height: 54px; border: 1px solid #49615d; border-radius: 13px; background: #263735; color: #f8f3e8; font: 600 1.15rem Georgia, serif; cursor: pointer; transition: transform .12s, background .12s; }
+    button:hover { background: #35504b; }
+    button:active { transform: scale(.96); }
+    button.operator { background: #735d2d; border-color: #a88b48; }
+    button.operator:hover { background: #90753b; }
+    button.clear { grid-column: span 2; background: #743b39; border-color: #a65a52; }
+    button.equals { grid-row: span 2; background: #b28b42; border-color: #d4b878; color: #111918; }
+    button.zero { grid-column: span 2; }
+    .hint { margin: 13px 0 0; color: #9eafa9; font: .78rem/1.4 Arial, sans-serif; text-align: center; }
+  </style>
+</head>
+<body>
+  <main class="calculator" aria-label="Калькулятор">
+    <h1>Калькулятор</h1>
+    <output id="display" aria-live="polite">0</output>
+    <div class="keys">
+      <button class="clear" data-action="clear" type="button">Очистить</button>
+      <button class="operator" data-operation="/" type="button" aria-label="Деление">÷</button>
+      <button class="operator" data-operation="*" type="button" aria-label="Умножение">×</button>
+      <button data-number="7" type="button">7</button><button data-number="8" type="button">8</button><button data-number="9" type="button">9</button>
+      <button class="operator" data-operation="-" type="button" aria-label="Вычитание">−</button>
+      <button data-number="4" type="button">4</button><button data-number="5" type="button">5</button><button data-number="6" type="button">6</button>
+      <button class="operator" data-operation="+" type="button" aria-label="Сложение">+</button>
+      <button data-number="1" type="button">1</button><button data-number="2" type="button">2</button><button data-number="3" type="button">3</button>
+      <button class="zero" data-number="0" type="button">0</button><button data-action="decimal" type="button">.</button>
+      <button class="equals" data-action="equals" type="button">=</button>
+    </div>
+    <p class="hint">Можно вводить выражение клавиатурой · Enter — результат · Esc — очистить</p>
+  </main>
+  <script>
+    (() => {
+      const display = document.querySelector('#display');
+      let value = '', stored = null, operation = null, waiting = false;
+      const show = (text, invalid = false) => { display.textContent = text; display.classList.toggle('invalid', invalid); };
+      const reset = () => { value = ''; stored = null; operation = null; waiting = false; show('0'); };
+      const number = (digit) => { if (waiting) { value = ''; waiting = false; } value = value === '0' ? digit : value + digit; show(value); };
+      const decimal = () => { if (waiting) { value = ''; waiting = false; } if (!value.includes('.')) value = value ? value + '.' : '0.'; show(value); };
+      const calculate = (a, b, op) => op === '+' ? a + b : op === '-' ? a - b : op === '*' ? a * b : b === 0 ? null : a / b;
+      const choose = (op) => { if (value === '' && stored === null) return; if (stored === null) stored = Number(value); else if (!waiting) { const result = calculate(stored, Number(value), operation); if (result === null || !Number.isFinite(result)) return show('Ошибка', true); stored = result; show(String(result)); } operation = op; waiting = true; };
+      const equals = () => { if (stored === null || operation === null || value === '' || waiting) return; const result = calculate(stored, Number(value), operation); if (result === null || !Number.isFinite(result)) { show('Ошибка', true); return; } value = String(result); stored = null; operation = null; waiting = true; show(value); };
+      document.querySelector('.keys').addEventListener('click', ({ target }) => { const button = target.closest('button'); if (!button) return; if (button.dataset.number) number(button.dataset.number); else if (button.dataset.operation) choose(button.dataset.operation); else if (button.dataset.action === 'decimal') decimal(); else if (button.dataset.action === 'equals') equals(); else reset(); });
+      document.addEventListener('keydown', (event) => { if (/^[0-9]$/.test(event.key)) number(event.key); else if (event.key === '.' || event.key === ',') decimal(); else if ('+-*/'.includes(event.key)) choose(event.key); else if (event.key === 'Enter' || event.key === '=') equals(); else if (event.key === 'Escape') reset(); else if (event.key === 'Backspace') { value = value.slice(0, -1); show(value || '0'); } });
+    })();
+  </script>
+</body>
+</html>

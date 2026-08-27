@@ -1,0 +1,6 @@
+[     621ms] [INFO] [tokenledger] bundle script executing (client half present) @ http://127.0.0.1:3080/plugins/dsh-tokenledger/client.js?rev=53484f5444c8:37
+[     624ms] [INFO] [tokenledger] factory materializing @ http://127.0.0.1:3080/plugins/dsh-tokenledger/client.js?rev=53484f5444c8:42
+[     624ms] [INFO] [tokenledger] factory ready; exports: apply, inject, TokenLedgerPanel, StatCaption, ACTIVITY_DAYS, Body, StatRow, SiteRows, colorOf, ActivityStrip, ModelTable, BalanceCard, AccountPicker, Footer, agoLabel, translateWith, buildQuery, makeLevelScale, DayTip, localDayKey, fmtMoney, fmtHit, share, fmt, RANGES, USAGE_PATH, zh, en @ http://127.0.0.1:3080/plugins/dsh-tokenledger/client.js?rev=53484f5444c8:1601
+[     625ms] [INFO] [tokenledger] apply() called; registering the footer seat @ http://127.0.0.1:3080/plugins/dsh-tokenledger/client.js?rev=53484f5444c8:1551
+[     625ms] [INFO] [tokenledger] sidebar.footer.action is available; registering @ http://127.0.0.1:3080/plugins/dsh-tokenledger/client.js?rev=53484f5444c8:1561
+[     645ms] [LOG] [toolbox:flow] Статический клиент загружен (без динамического подтверждения) @ http://127.0.0.1:3080/plugins/dsh-flowglass/client.js?rev=f2b51f55aab0:2703

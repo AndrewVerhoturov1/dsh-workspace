@@ -24,8 +24,8 @@
   "dependencies": {
     "@anionex/dsh-turn-rewind": "^0.1.2",
     "@deepseek-ai/dsh-mcp-client": "0.1.1-rc.2",
+    "dsh-agent-team-by-andrew": "link:D:/DEEPSEEK/dsh-agent-team-by-andrew",
     "dsh-agent-team-gui": "github:toolclub/dsh-agent-team-gui",
-    "dsh-agent-team-by-andrew": "file:C:/Users/andre/AppData/Local/Temp/dsh-agent-team-by-andrew-pack/dsh-agent-team-by-andrew-1.0.1-andrew.1.tgz",
     "dsh-better-sidebar": "^0.15.2",
     "dsh-branchline": "link:D:/DEEPSEEK/dsh-branchline",
     "dsh-client-auto-continue": "^0.8.1",

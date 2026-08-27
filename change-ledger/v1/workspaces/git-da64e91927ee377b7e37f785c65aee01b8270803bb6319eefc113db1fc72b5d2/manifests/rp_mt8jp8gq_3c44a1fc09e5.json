@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "id": "rp_mt8jp8gq_3c44a1fc09e5",
+  "kind": "turn",
+  "workspace": "D:\\DEEPSEEK",
+  "repository": {
+    "root": "D:\\DEEPSEEK",
+    "commonDir": "D:\\DEEPSEEK\\.git",
+    "head": "299f0a628474a74307263072652e684aac019b1a",
+    "branch": "main",
+    "stagedPaths": []
+  },
+  "sessionId": "19cfb177-5083-41df-b967-06b1ec0c6998",
+  "label": "Before turn 4 checkpoint",
+  "turn": 4,
+  "turnStartSeq": 3220,
+  "createdAt": 1787655117338,
+  "treeHash": "ad91c43cf96c4f79fb8fe009b6666adc16b8a0780174f4151c62c940d19de09c",
+  "fileCount": 7,
+  "totalBytes": 2806047,
+  "entries": {
+    ".playwright-cli/console-2026-08-25T03-30-27-416Z.log": {
+      "kind": "file",
+      "blob": "f0ff1b41244d0d84ad4b8152e8280fc4f5970fc9b1c420eb35c4cfe0053a3aec",
+      "size": 1267,
+      "mode": 438
+    },
+    ".playwright-cli/page-2026-08-25T03-30-28-327Z.yml": {
+      "kind": "file",
+      "blob": "791b541f343a8b7ceebaa81e77fe694a73c172c50f83a0af02c20c2637f07b16",
+      "size": 1477,
+      "mode": 438
+    },
+    ".playwright-cli/page-2026-08-25T03-31-10-369Z.yml": {
+      "kind": "file",
+      "blob": "0be3d87b5ed9b4a120c46057798a5c4327be1a64c95851373ed9efc3e7901f35",
+      "size": 4194,
+      "mode": 438
+    },
+    "README.md": {
+      "kind": "file",
+      "blob": "47cdf763d2fdbd8357208aed3a47f75dbad90d1358105e996f91e891690dc420",
+      "size": 128,
+      "mode": 438
+    },
+    "calculator.html": {
+      "kind": "file",
+      "blob": "8f81d49921c60243e0a886cf4a70f5f88b66b431eae321e713e386612a27f93d",
+      "size": 5810,
+      "mode": 438
+    },
+    "restart-dsh.cmd": {
+      "kind": "file",
+      "blob": "27e1a34f167badddbb73724adc3df923af812fdcdb7b1fbbbe769cdfccd25924",
+      "size": 389,
+      "mode": 438
+    },
+    "Тест фото.png": {
+      "kind": "file",
+      "blob": "b2e532a7ec1dd64edc129964ea50aad4cde2c4738690b56ae137a2594bf0244c",
+      "size": 2792782,
+      "mode": 438
+    }
+  },
+  "restoreCount": 0
+}

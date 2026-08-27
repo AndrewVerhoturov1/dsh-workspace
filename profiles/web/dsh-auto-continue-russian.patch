@@ -1,0 +1,1082 @@
+warning: in the working copy of 'C:\Users\andre\.dsh\profiles\web\node_modules\dsh-client-auto-continue.backup-20260825-064929\package.json', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'C:\Users\andre\.dsh\profiles\web\node_modules\dsh-client-auto-continue\package.json', LF will be replaced by CRLF the next time Git touches it
+diff --git "a/C:\\Users\\andre\\.dsh\\profiles\\web\\node_modules\\dsh-client-auto-continue.backup-20260825-064929\\package.json" "b/C:\\Users\\andre\\.dsh\\profiles\\web\\node_modules\\dsh-client-auto-continue\\package.json"
+index a8b70ff..696d2d9 100644
+--- "a/C:\\Users\\andre\\.dsh\\profiles\\web\\node_modules\\dsh-client-auto-continue.backup-20260825-064929\\package.json"
++++ "b/C:\\Users\\andre\\.dsh\\profiles\\web\\node_modules\\dsh-client-auto-continue\\package.json"
+@@ -1,6 +1,6 @@
+ {
+   "name": "dsh-client-auto-continue",
+-  "description": "DSH Web UI plugin: automatically sends \"继续\" (continue) when a request is interrupted by network errors or other non-human causes",
++  "description": "DSH Web UI plugin: automatically sends a continuation when a request is interrupted by network errors or other non-human causes",
+   "version": "0.8.1",
+   "type": "module",
+   "main": "lib/index.js",
+diff --git "a/C:\\Users\\andre\\.dsh\\profiles\\web\\node_modules\\dsh-client-auto-continue.backup-20260825-064929\\src\\client\\locales.ts" "b/C:\\Users\\andre\\.dsh\\profiles\\web\\node_modules\\dsh-client-auto-continue\\src\\client\\locales.ts"
+index a7ec2a6..cef54ee 100644
+--- "a/C:\\Users\\andre\\.dsh\\profiles\\web\\node_modules\\dsh-client-auto-continue.backup-20260825-064929\\src\\client\\locales.ts"
++++ "b/C:\\Users\\andre\\.dsh\\profiles\\web\\node_modules\\dsh-client-auto-continue\\src\\client\\locales.ts"
+@@ -4,87 +4,87 @@
+  * section. Includes the card-chrome keys the card component reads.
+  */
+ 
+-/** 简体中文词典(键集的事实来源)。 */
++/** Русский словарь (источник набора ключей). */
+ export const zh = {
+-  'card.title': '自动继续',
+-  'card.description': '请求因网络等原因(非人为)中断后, 自动发送「继续」续跑。',
+-  'field.paused': '暂停自动继续',
+-  'field.pausedHint': '全局暂停: 实时与扫描都不会再自动发送, 已排队的待发送也会取消。',
+-  'field.continueText': '继续文本',
+-  'field.continueTextHint': '中断后自动发送的消息内容。',
+-  'field.continueTextMaxTokens': '超限时的继续文本',
+-  'field.continueTextMaxTokensHint': '达到输出 token 上限时自动发送的文本, 支持与继续文本相同的占位符。',
+-  'field.guardTools': '幂等护栏',
+-  'field.guardToolsHint': '续跑前检查上一步工具调用: 结果未确认时提示先确认状态, 已成功时提示不要重复执行, 避免重复 commit/调 API。',
+-  'field.guardPendingText': '结果未确认时的护栏文本',
+-  'field.guardPendingTextHint': '上一步工具可能已部分执行时附加到继续文本之后, 支持 {tool} 占位符。',
+-  'field.guardDoneText': '工具已成功时的护栏文本',
+-  'field.guardDoneTextHint': '上一步工具已确认成功时附加到继续文本之后, 支持 {tool} 与 {result}(结果摘要)占位符。',
+-  'field.graceMs': '宽限期 (ms)',
+-  'field.graceMsHint': '检测到中断后等待的时长; 期间宿主自行恢复则取消。',
+-  'field.cooldownMs': '冷却时间 (ms)',
+-  'field.cooldownMsHint': '同一会话两次自动「继续」的最小间隔, 失败尝试也计入。',
+-  'field.maxConsecutive': '最大连续次数',
+-  'field.maxConsecutiveHint': '同一会话连续自动「继续」的上限; 超过后停止, 直到用户手动介入或出现成功回合。',
+-  'field.scanOnBoot': '启动/重连扫描',
+-  'field.scanOnBootHint': '页面启动或重连时扫描最近中断的会话并自动续跑(如浏览器关闭期间宿主崩溃)。',
+-  'field.scanLimit': '扫描会话数',
+-  'field.scanLimitHint': '最多检查多少个最近更新的会话(不含运行中与子代理会话)。',
+-  'field.freshMs': '扫描时间窗 (ms)',
+-  'field.freshMsHint': '扫描只处理该时间窗内的中断。',
+-  'field.verbose': '详细日志',
+-  'field.verboseHint': '在浏览器控制台输出 [auto-continue] 日志。',
+-  'field.classify': '错误分类',
+-  'field.classifyHint': '仅自动恢复临时性错误(网络/超时/5xx 等); 认证/余额/模型不存在等永久性错误跳过并通知。',
+-  'field.backoffFactor': '退避系数',
+-  'field.backoffFactorHint': '连续失败时冷却间隔的倍率(如 2 表示 20s→40s→80s 递增)。',
+-  'field.backoffMaxMs': '最大退避间隔 (ms)',
+-  'field.backoffMaxMsHint': '自适应退避的上限, 防止等待过久。',
+-  'field.notify': '浏览器通知',
+-  'field.notifyHint': '自动继续成功/放弃/遇到永久性错误时弹出浏览器通知, 通知带「立即续跑」与「暂停该会话 1 小时」按钮。',
+-  'stats.title': '今日统计',
+-  'stats.sent': '自动继续',
+-  'stats.skipped': '跳过(永久错误)',
+-  'stats.recovered': '恢复成功',
+-  'stats.failed': '继续后仍失败',
+-  'stats.gaveUp': '停止(达上限)',
+-  'stats.looped': '循环打断',
+-  'field.loopGuard': '循环守卫',
+-  'field.loopGuardHint': '检测运行中的回合空转: 连续短句且无工具调用, 或连续调用相同工具时, 自动取消并用循环提示文本重启回合。',
+-  'field.loopShortChars': '短句长度上限 (字符)',
+-  'field.loopShortCharsHint': '模型消息文本短于该值计为一条短句(空转信号)。',
+-  'field.loopWindowMs': '短句时间窗 (ms)',
+-  'field.loopWindowMsHint': '连续短句必须落在这个时间窗内; 正常思考的短文本散布在长时间里不会被误判。',
+-  'field.loopShortCount': '连续短句阈值',
+-  'field.loopShortCountHint': '时间窗内连续多少条短句且期间无工具调用时判定空转循环。',
+-  'field.loopRepeatText': '相同消息重复次数',
+-  'field.loopRepeatTextHint': '连续输出多少条完全相同的消息时判定空转(最强信号, 不限长度, 如模型反复说同一句话)。',
+-  'field.loopToolRepeat': '同工具重复次数',
+-  'field.loopToolRepeatHint': '同工具+同参数+同结果的连续调用多少次时判定死循环; 参数或结果有变化视为有进展。',
+-  'field.loopText': '循环提示文本',
+-  'field.loopTextHint': '打断后重启回合时发送的文本, 支持 {tool} 占位符。',
+-  'stats.byCode': '按错误码统计',
+-  'stats.empty': '今天还没有自动继续记录。',
+-  'stats.reset': '清零',
+-  'pause.title': '已暂停会话',
+-  'pause.none': '没有暂停中的会话。',
+-  'pause.clearAll': '全部解除',
+-  'pause.unpause': '解除',
+-  'pause.minutes': '分钟',
+-  'chrome.collapse': '收起设置',
+-  'chrome.expand': '展开设置',
+-  'chrome.unsaved': '未保存',
+-  'chrome.readOnly': '当前部署的设置只读。',
+-  'chrome.saveFailed': '部署未接受这些值, 已保留供你修改。',
+-  'chrome.discard': '放弃',
+-  'chrome.saving': '保存中…',
+-  'chrome.save': '保存',
+-  'chrome.overridden': '已覆盖',
+-  'chrome.reset': '恢复默认',
+-  'chrome.invalidNumber': '请输入数字, 留空则使用默认值。',
+-  'chrome.inherit': '继承',
+-  'chrome.on': '开',
+-  'chrome.off': '关',
++  'card.title': 'Автопродолжение',
++  'card.description': 'После прерывания запроса из-за сети или другой нештатной причины автоматически отправляет продолжение.',
++  'field.paused': 'Приостановить автопродолжение',
++  'field.pausedHint': 'Полная пауза: автопродолжение в реальном времени и при сканировании отключено, ожидающие отправки отменяются.',
++  'field.continueText': 'Текст продолжения',
++  'field.continueTextHint': 'Сообщение, которое автоматически отправляется после прерывания.',
++  'field.continueTextMaxTokens': 'Текст продолжения при лимите токенов',
++  'field.continueTextMaxTokensHint': 'Текст при достижении лимита вывода; поддерживает те же подстановки, что и основной текст.',
++  'field.guardTools': 'Защита от повторного запуска',
++  'field.guardToolsHint': 'Перед продолжением проверяет последний вызов инструмента: при неподтверждённом результате просит сначала проверить состояние, а после успеха запрещает повторный запуск.',
++  'field.guardPendingText': 'Текст защиты при неподтверждённом результате',
++  'field.guardPendingTextHint': 'Добавляется после текста продолжения, если инструмент мог выполниться частично; поддерживает подстановку {tool}.',
++  'field.guardDoneText': 'Текст защиты после успешного инструмента',
++  'field.guardDoneTextHint': 'Добавляется после подтверждённого успеха; поддерживает {tool} и {result} (краткий результат).',
++  'field.graceMs': 'Период ожидания (мс)',
++  'field.graceMsHint': 'Ожидание после прерывания; отменяется, если узел сам восстановился.',
++  'field.cooldownMs': 'Задержка перед продолжением (мс)',
++  'field.cooldownMsHint': 'Минимальный интервал между автопродолжениями в одном сеансе; неудачные попытки тоже учитываются.',
++  'field.maxConsecutive': 'Максимум последовательных продолжений',
++  'field.maxConsecutiveHint': 'Лимит автопродолжений в одном сеансе; после него работа ждёт ручного вмешательства или успешного хода.',
++  'field.scanOnBoot': 'Проверять при запуске и переподключении',
++  'field.scanOnBootHint': 'При запуске страницы или переподключении ищет недавно прерванные сеансы и продолжает их.',
++  'field.scanLimit': 'Количество проверяемых сеансов',
++  'field.scanLimitHint': 'Сколько последних обновлённых сеансов проверять; активные и дочерние сеансы исключаются.',
++  'field.freshMs': 'Окно проверки (мс)',
++  'field.freshMsHint': 'Учитываются только прерывания внутри этого периода.',
++  'field.verbose': 'Подробный журнал',
++  'field.verboseHint': 'Выводить сообщения [auto-continue] в консоль браузера.',
++  'field.classify': 'Классифицировать ошибки',
++  'field.classifyHint': 'Автоматически восстанавливать только временные ошибки (сеть, тайм-аут, 5xx и т. п.); ошибки авторизации, баланса и модели пропускаются и показываются пользователю.',
++  'field.backoffFactor': 'Коэффициент увеличения задержки',
++  'field.backoffFactorHint': 'Множитель задержки после последовательных ошибок (2 означает 20 с → 40 с → 80 с и далее).',
++  'field.backoffMaxMs': 'Максимальная задержка (мс)',
++  'field.backoffMaxMsHint': 'Верхний предел адаптивной задержки.',
++  'field.notify': 'Уведомления браузера',
++  'field.notifyHint': 'Показывать уведомления при автопродолжении, остановке или постоянной ошибке; в них доступны кнопки «Продолжить сейчас» и «Приостановить сеанс на 1 час».',
++  'stats.title': 'Статистика за сегодня',
++  'stats.sent': 'Автопродолжений',
++  'stats.skipped': 'Пропущено (постоянные ошибки)',
++  'stats.recovered': 'Успешно восстановлено',
++  'stats.failed': 'Ошибки после продолжения',
++  'stats.gaveUp': 'Остановлено (достигнут лимит)',
++  'stats.looped': 'Зацикливание прервано',
++  'field.loopGuard': 'Защита от зацикливания',
++  'field.loopGuardHint': 'Обнаруживает холостой ход: короткие фразы без вызовов инструментов или повторение одного инструмента. Такой ход отменяется и запускается с текстом для выхода из цикла.',
++  'field.loopShortChars': 'Максимум символов в короткой фразе',
++  'field.loopShortCharsHint': 'Сообщение короче этого значения считается короткой фразой и сигналом зацикливания.',
++  'field.loopWindowMs': 'Окно коротких фраз (мс)',
++  'field.loopWindowMsHint': 'Последовательные короткие фразы должны появиться в этом окне; обычные редкие короткие ответы не считаются циклом.',
++  'field.loopShortCount': 'Порог коротких фраз',
++  'field.loopShortCountHint': 'Сколько коротких фраз без вызова инструмента в этом окне указывает на холостой цикл.',
++  'field.loopRepeatText': 'Число повторов одинакового сообщения',
++  'field.loopRepeatTextHint': 'Сколько одинаковых сообщений подряд указывает на цикл; длина не важна.',
++  'field.loopToolRepeat': 'Число повторов одного инструмента',
++  'field.loopToolRepeatHint': 'Сколько вызовов одного инструмента с теми же параметрами и результатом указывает на цикл; изменение параметров или результата считается прогрессом.',
++  'field.loopText': 'Текст выхода из цикла',
++  'field.loopTextHint': 'Сообщение после прерывания цикла; поддерживает подстановку {tool}.',
++  'stats.byCode': 'По коду ошибки',
++  'stats.empty': 'Сегодня автопродолжений ещё не было.',
++  'stats.reset': 'Сбросить',
++  'pause.title': 'Приостановленные сеансы',
++  'pause.none': 'Нет приостановленных сеансов.',
++  'pause.clearAll': 'Снять все паузы',
++  'pause.unpause': 'Продолжить',
++  'pause.minutes': 'мин',
++  'chrome.collapse': 'Скрыть настройки',
++  'chrome.expand': 'Показать настройки',
++  'chrome.unsaved': 'Не сохранено',
++  'chrome.readOnly': 'Настройки текущего развёртывания доступны только для чтения.',
++  'chrome.saveFailed': 'Развёртывание не приняло эти значения; их можно исправить.',
++  'chrome.discard': 'Отменить изменения',
++  'chrome.saving': 'Сохранение…',
++  'chrome.save': 'Сохранить',
++  'chrome.overridden': 'Переопределено',
++  'chrome.reset': 'Восстановить значения по умолчанию',
++  'chrome.invalidNumber': 'Введите число или оставьте поле пустым, чтобы использовать значение по умолчанию.',
++  'chrome.inherit': 'Наследовать',
++  'chrome.on': 'Вкл.',
++  'chrome.off': 'Выкл.',
+ } satisfies Record<string, string>;
+ 
+ /** 本插件的键联合。 */
+@@ -93,7 +93,7 @@ export type SettingsCardKey = keyof typeof zh;
+ /** English dictionary, checked complete against the zh key set. */
+ export const en: Record<SettingsCardKey, string> = {
+   'card.title': 'Auto continue',
+-  'card.description': 'When a request is interrupted by a non-human cause, automatically send 「继续」 to resume.',
++  'card.description': 'When a request is interrupted by a non-human cause, automatically send a continuation to resume.',
+   'field.paused': 'Pause auto-continue',
+   'field.pausedHint': 'Globally pause: no live or scan auto-send fires, and queued pending sends are cancelled.',
+   'field.continueText': 'Continue text',
+diff --git "a/C:\\Users\\andre\\.dsh\\profiles\\web\\node_modules\\dsh-client-auto-continue.backup-20260825-064929\\src\\index.ts" "b/C:\\Users\\andre\\.dsh\\profiles\\web\\node_modules\\dsh-client-auto-continue\\src\\index.ts"
+index fe1b67f..5de77a8 100644
+--- "a/C:\\Users\\andre\\.dsh\\profiles\\web\\node_modules\\dsh-client-auto-continue.backup-20260825-064929\\src\\index.ts"
++++ "b/C:\\Users\\andre\\.dsh\\profiles\\web\\node_modules\\dsh-client-auto-continue\\src\\index.ts"
+@@ -27,19 +27,19 @@ export const AUTO_CONTINUE_NS = 'auto-continue';
+ /** Wire schema of the auto-continue section; defaults are the plugin's built-in values. */
+ export const AutoContinueSchema = z.object({
+   /** Text automatically sent after an interruption. */
+-  continueText: z.string().default('继续'),
++  continueText: z.string().default('Продолжай выполнение задачи с места остановки. Не повторяй уже успешно выполненные действия.'),
+   /** Text sent when the output token ceiling is reached (same placeholders as `continueText`). */
+-  continueTextMaxTokens: z.string().default('继续'),
++  continueTextMaxTokens: z.string().default('Продолжай выполнение задачи с места остановки. Не повторяй уже успешно выполненные действия.'),
+   /** Idempotency guard: inspect the last tool call before resuming and steer the model. */
+   guardTools: z.boolean().default(true),
+   /** Guard text appended when the last tool call has no confirmed result (it may have partially executed). */
+   guardPendingText: z
+     .string()
+-    .default('(上一步工具「{tool}」可能未完成, 先确认状态再继续, 不要重复执行)'),
++    .default('(Инструмент «{tool}» мог выполниться не полностью. Сначала проверь состояние, не повторяй действие.)'),
+   /** Guard text appended when the last tool call completed successfully (don't rerun it). */
+   guardDoneText: z
+     .string()
+-    .default('(上一步工具「{tool}」已完成, 结果: {result}; 不要重复执行, 直接继续)'),
++    .default('(Инструмент «{tool}» уже выполнен. Результат: {result}. Не повторяй действие, продолжай работу.)'),
+   /** Grace period after an interruption before auto-sending (ms). */
+   graceMs: z.natural().default(3000),
+   /** Minimum interval between two auto-continues per session (ms). */
+@@ -79,7 +79,7 @@ export const AutoContinueSchema = z.object({
+   /** Text sent after the loop guard cancels and restarts a turn (supports {tool}). */
+   loopText: z
+     .string()
+-    .default('(检测到你可能陷入循环, 请停止重复刚才的动作, 换一种方式继续)'),
++    .default('(Похоже, ты зациклился. Прекрати повторять последнее действие и продолжай другим способом.)'),
+ });
+ 
+ /**
+diff --git "a/C:\\Users\\andre\\.dsh\\profiles\\web\\node_modules\\dsh-client-auto-continue.backup-20260825-064929\\src\\shared\\core.ts" "b/C:\\Users\\andre\\.dsh\\profiles\\web\\node_modules\\dsh-client-auto-continue\\src\\shared\\core.ts"
+index e41b95e..0b0d28f 100644
+--- "a/C:\\Users\\andre\\.dsh\\profiles\\web\\node_modules\\dsh-client-auto-continue.backup-20260825-064929\\src\\shared\\core.ts"
++++ "b/C:\\Users\\andre\\.dsh\\profiles\\web\\node_modules\\dsh-client-auto-continue\\src\\shared\\core.ts"
+@@ -63,11 +63,11 @@ export type AutoContinueConfig = Required<AutoContinueSettings>;
+ 
+ /** Built-in defaults — must match the host schema defaults in src/index.ts. */
+ export const DEFAULT_CONFIG: AutoContinueConfig = {
+-  continueText: '继续',
+-  continueTextMaxTokens: '继续',
++  continueText: 'Продолжай выполнение задачи с места остановки. Не повторяй уже успешно выполненные действия.',
++  continueTextMaxTokens: 'Продолжай выполнение задачи с места остановки. Не повторяй уже успешно выполненные действия.',
+   guardTools: true,
+-  guardPendingText: '(上一步工具「{tool}」可能未完成, 先确认状态再继续, 不要重复执行)',
+-  guardDoneText: '(上一步工具「{tool}」已完成, 结果: {result}; 不要重复执行, 直接继续)',
++  guardPendingText: '(Инструмент «{tool}» мог выполниться не полностью. Сначала проверь состояние, не повторяй действие.)',
++  guardDoneText: '(Инструмент «{tool}» уже выполнен. Результат: {result}. Не повторяй действие, продолжай работу.)',
+   graceMs: 3000,
+   cooldownMs: 20000,
+   maxConsecutive: 3,
+@@ -86,7 +86,7 @@ export const DEFAULT_CONFIG: AutoContinueConfig = {
+   loopShortCount: 12,
+   loopRepeatText: 4,
+   loopToolRepeat: 5,
+-  loopText: '(检测到你可能陷入循环, 请停止重复刚才的动作, 换一种方式继续)',
++  loopText: '(Похоже, ты зациклился. Прекрати повторять последнее действие и продолжай другим способом.)',
+ };
+ 
+ function numberOr(value: unknown, fallback: number): number {
+@@ -456,4 +456,3 @@ export function isOurEcho(state: SessionState, event: SessionEvent): boolean {
+     .join('');
+   return text === state.lastSentText;
+ }
+-
+diff --git "a/C:\\Users\\andre\\.dsh\\profiles\\web\\node_modules\\dsh-client-auto-continue.backup-20260825-064929\\src\\host\\engine.ts" "b/C:\\Users\\andre\\.dsh\\profiles\\web\\node_modules\\dsh-client-auto-continue\\src\\host\\engine.ts"
+index b32b174..0cb95f1 100644
+--- "a/C:\\Users\\andre\\.dsh\\profiles\\web\\node_modules\\dsh-client-auto-continue.backup-20260825-064929\\src\\host\\engine.ts"
++++ "b/C:\\Users\\andre\\.dsh\\profiles\\web\\node_modules\\dsh-client-auto-continue\\src\\host\\engine.ts"
+@@ -130,8 +130,8 @@ export class AutoContinueRunner {
+       void this.bootScanLoop();
+     }
+     this.log(
+-      `已启动(host 单实例, 文本="${config.continueText}", 宽限 ${config.graceMs}ms, ` +
+-        `冷却 ${config.cooldownMs}ms, 最多连续 ${config.maxConsecutive} 次)`,
++      `Запущено (один экземпляр узла, текст="${config.continueText}", ожидание ${config.graceMs} мс, ` +
++        `задержка ${config.cooldownMs} мс, максимум подряд: ${config.maxConsecutive})`,
+     );
+   }
+ 
+@@ -185,10 +185,10 @@ export class AutoContinueRunner {
+   handleNoticeAction(sessionId: SessionId | undefined, action: string): void {
+     if (action === 'unpause') {
+       if (sessionId !== undefined) this.pauseUntil.delete(sessionId);
+-      this.log(`解除暂停 ${sessionId ?? '?'}`);
++      this.log(`Пауза снята: ${sessionId ?? '?'}`);
+     } else if (action === 'reset-stats') {
+       this.dayStats = emptyDayStats();
+-      this.log('清零今日统计');
++      this.log('Статистика за сегодня сброшена');
+     } else if (sessionId !== undefined) {
+       this.onNotifyAction(sessionId, action);
+     }
+@@ -310,14 +310,14 @@ export class AutoContinueRunner {
+     if (!state.running) return; // 只干预运行中的回合
+     const config = this.getConfig();
+     if (state.sameTextRun >= config.loopRepeatText) {
+-      this.log(`检测到空转循环 ${sessionId}: 连续 ${state.sameTextRun} 条相同消息`);
++      this.log(`Обнаружено зацикливание ${sessionId}: ${state.sameTextRun} одинаковых сообщений подряд`);
+       void this.interruptLoop(sessionId, state);
+     } else if (state.shortRun >= config.loopShortCount) {
+-      this.log(`检测到空转循环 ${sessionId}: 连续 ${state.shortRun} 条短句且无工具调用`);
++      this.log(`Обнаружено зацикливание ${sessionId}: ${state.shortRun} коротких фраз подряд без вызова инструмента`);
+       void this.interruptLoop(sessionId, state);
+     } else if (state.toolRun !== undefined && state.toolRun.count >= config.loopToolRepeat) {
+       const toolName = state.toolRun.key.split('\n')[0] ?? '?';
+-      this.log(`检测到工具死循环 ${sessionId}: 「${toolName}」连续 ${state.toolRun.count} 次(同参数同结果)`);
++      this.log(`Обнаружено зацикливание инструмента ${sessionId}: «${toolName}» вызван ${state.toolRun.count} раз с теми же параметрами и результатом`);
+       void this.interruptLoop(sessionId, state);
+     }
+   }
+@@ -331,7 +331,7 @@ export class AutoContinueRunner {
+     if (state.loopFired) return;
+     // 打断本身受冷却约束: 距上次打断/发送太近时不再打断, 防止反复打断刷屏
+     if (Date.now() - state.lastAttemptAt < this.cooldownFor(state)) {
+-      this.log(`跳过循环打断 ${sessionId}: 处于冷却期`);
++      this.log(`Прерывание цикла пропущено ${sessionId}: действует задержка`);
+       return;
+     }
+     state.loopFired = true;
+@@ -341,14 +341,14 @@ export class AutoContinueRunner {
+     try {
+       const agent = this.ctx.agents.get(sessionId);
+       if (agent === undefined) {
+-        this.log(`打断循环失败 ${sessionId}: 无 live agent`);
++        this.log(`Не удалось прервать цикл ${sessionId}: активный агент не найден`);
+         state.loopCancelled = false;
+         return;
+       }
+       agent.cancel({ kind: 'user' }, { keepInbox: true });
+-      this.log(`已打断循环 ${sessionId}: cancel 已受理`);
++      this.log(`Цикл прерван ${sessionId}: отмена принята`);
+     } catch (error) {
+-      this.log(`打断循环失败 ${sessionId}: ${error instanceof Error ? error.message : String(error)}`);
++      this.log(`Не удалось прервать цикл ${sessionId}: ${error instanceof Error ? error.message : String(error)}`);
+       state.loopCancelled = false;
+     }
+   }
+@@ -373,11 +373,11 @@ export class AutoContinueRunner {
+           clearTimeout(state.loopRetryTimer);
+           state.loopRetryTimer = undefined;
+         }
+-        this.cancelPending(sessionId, '宿主自行开启新回合');
++        this.cancelPending(sessionId, 'узел сам начал новый ход');
+         break;
+       case 'turn/end': {
+         state.running = false;
+-        this.cancelPending(sessionId, '收到新的 turn/end');
++        this.cancelPending(sessionId, 'получено новое событие turn/end');
+         const reason = event.data.reason;
+         if (reason.kind === 'completed') {
+           // 成功回合: 恢复健康状态, 并确认上一次自动发送的效果
+@@ -406,7 +406,7 @@ export class AutoContinueRunner {
+                 state.loopRetryTimer = undefined;
+                 this.schedule(sessionId, 'loop:aborted');
+               }, remaining);
+-              this.log(`loop 重启延迟 ${remaining}ms(冷却期) ${sessionId}`);
++              this.log(`Перезапуск цикла отложен на ${remaining} мс (задержка): ${sessionId}`);
+             } else {
+               this.schedule(sessionId, 'loop:aborted');
+             }
+@@ -447,7 +447,7 @@ export class AutoContinueRunner {
+         if (event.data.source.kind === 'user') {
+           // 用户手动介入: 清零上限与跨标签页发送计数
+           state.consecutive = 0;
+-          this.cancelPending(sessionId, '用户手动发送消息');
++          this.cancelPending(sessionId, 'пользователь отправил сообщение вручную');
+         }
+         break;
+       default:
+@@ -461,12 +461,12 @@ export class AutoContinueRunner {
+     const config = this.getConfig();
+     if (config.classify && !isTransientFailure(failure)) {
+       const summary = `${failure.code}${failure.status !== undefined ? ` (HTTP ${failure.status})` : ''}`;
+-      this.log(`跳过 ${sessionId}(${reason}): 永久性失败 ${summary} — ${failure.message}`);
++      this.log(`Пропущено ${sessionId} (${reason}): постоянная ошибка ${summary} — ${failure.message}`);
+       this.bumpStat({ skipped: 1, code: failure.code });
+       if (config.notify) {
+         this.notify(
+-          'dsh-auto-continue: 未自动继续',
+-          `${sessionId}: 永久性错误 ${summary}，需要人工处理`,
++          'dsh-auto-continue: автоматическое продолжение не выполнено',
++          `${sessionId}: постоянная ошибка ${summary}; требуется ручная обработка`,
+           this.notifyOptions(sessionId),
+         );
+       }
+@@ -479,8 +479,8 @@ export class AutoContinueRunner {
+   private notifyOptions(sessionId: SessionId): NotifyOptions {
+     return {
+       actions: [
+-        { action: 'resume', title: '立即续跑' },
+-        { action: 'pause1h', title: '暂停该会话 1 小时' },
++        { action: 'resume', title: 'Продолжить сейчас' },
++        { action: 'pause1h', title: 'Приостановить сеанс на 1 час' },
+       ],
+       onAction: (action) => this.onNotifyAction(sessionId, action),
+     };
+@@ -488,12 +488,12 @@ export class AutoContinueRunner {
+ 
+   private onNotifyAction(sessionId: SessionId, action: string): void {
+     if (action === 'resume') {
+-      this.log(`通知按钮: 立即续跑 ${sessionId}`);
++      this.log(`Кнопка уведомления: продолжить сейчас ${sessionId}`);
+       void this.resumeNow(sessionId);
+     } else if (action === 'pause1h') {
+-      this.log(`通知按钮: 暂停 ${sessionId} 1 小时`);
++      this.log(`Кнопка уведомления: приостановить ${sessionId} на 1 час`);
+       this.pauseUntil.set(sessionId, Date.now() + 60 * 60 * 1000);
+-      this.cancelPending(sessionId, '通知按钮暂停该会话');
++      this.cancelPending(sessionId, 'сеанс приостановлен кнопкой уведомления');
+     }
+   }
+ 
+@@ -547,7 +547,7 @@ export class AutoContinueRunner {
+     }
+     state.pendingRecoveryAt = 0;
+     this.bumpStat(outcome === 'completed' ? { recovered: 1 } : { failed: 1 });
+-    this.log(`恢复结果(${sessionId}): ${outcome === 'completed' ? '成功' : '失败'}`);
++    this.log(`Результат восстановления (${sessionId}): ${outcome === 'completed' ? 'успех' : 'ошибка'}`);
+   }
+ 
+   /** 立即为该会话发送一次自动继续(无视冷却与连续上限; 由通知按钮触发)。 */
+@@ -578,18 +578,18 @@ export class AutoContinueRunner {
+     const config = this.getConfig();
+     if (state.subagent) return; // 子代理会话由父代理处理, 不抢跑
+     if (config.paused) {
+-      this.log(`跳过 ${sessionId}(${reason}): 全局暂停中`);
++      this.log(`Пропущено ${sessionId} (${reason}): включена общая пауза`);
+       return;
+     }
+     if (Date.now() < (this.pauseUntil.get(sessionId) ?? 0)) {
+-      this.log(`跳过 ${sessionId}(${reason}): 会话暂停中`);
++      this.log(`Пропущено ${sessionId} (${reason}): сеанс приостановлен`);
+       return;
+     }
+     if (state.pendingTimer !== undefined) return; // 已有待发送
+     if (Date.now() - state.lastAttemptAt < this.cooldownFor(state)) return; // 冷却期(含失败尝试, 自适应退避)
+     if (state.consecutive >= config.maxConsecutive) {
+       this.log(
+-        `跳过 ${sessionId}(${reason}): 已连续自动继续 ${state.consecutive} 次, 等待用户介入或成功回合`,
++        `Пропущено ${sessionId} (${reason}): уже ${state.consecutive} автопродолжений подряд; ожидается вмешательство пользователя или успешный ход`,
+       );
+       return;
+     }
+@@ -605,7 +605,7 @@ export class AutoContinueRunner {
+         ? config.continueTextMaxTokens
+         : config.continueText;
+     this.log(
+-      `检测到非人为中断 ${sessionId}(${reason}), ${config.graceMs}ms 后自动发送「${template}」`,
++      `Обнаружено не вызванное пользователем прерывание ${sessionId} (${reason}); через ${config.graceMs} мс будет отправлено «${template}»`,
+     );
+   }
+ 
+@@ -614,7 +614,7 @@ export class AutoContinueRunner {
+     if (state.pendingTimer === undefined) return;
+     clearTimeout(state.pendingTimer);
+     state.pendingTimer = undefined;
+-    this.log(`取消 ${sessionId} 的自动继续(${why})`);
++    this.log(`Автопродолжение отменено для ${sessionId} (${why})`);
+   }
+ 
+   private fire(sessionId: SessionId, reason: string, force = false): void {
+@@ -623,20 +623,20 @@ export class AutoContinueRunner {
+     const config = this.getConfig();
+     if (state.subagent) return; // 子代理会话由父代理处理, 不抢跑
+     if (config.paused) {
+-      this.log(`跳过 ${sessionId}(${reason}): 全局暂停中`);
++      this.log(`Пропущено ${sessionId} (${reason}): включена общая пауза`);
+       return;
+     }
+     if (Date.now() < (this.pauseUntil.get(sessionId) ?? 0)) {
+-      this.log(`跳过 ${sessionId}(${reason}): 会话暂停中`);
++      this.log(`Пропущено ${sessionId} (${reason}): сеанс приостановлен`);
+       return;
+     }
+     // 冷却(自适应退避)与连续上限; 通知按钮的强制续跑不受约束
+     if (!force && Date.now() - state.lastAttemptAt < this.cooldownFor(state)) {
+-      this.log(`跳过 ${sessionId}(${reason}): 处于冷却期`);
++      this.log(`Пропущено ${sessionId} (${reason}): действует задержка`);
+       return;
+     }
+     if (!force && state.consecutive >= config.maxConsecutive) {
+-      this.log(`跳过 ${sessionId}(${reason}): 已连续自动继续 ${state.consecutive} 次, 等待用户介入或成功回合`);
++      this.log(`Пропущено ${sessionId} (${reason}): уже ${state.consecutive} автопродолжений подряд; ожидается вмешательство пользователя или успешный ход`);
+       return;
+     }
+     // 模板填充: continueText 可含 {code}/{message}/{status}/{tool}/{turn}/{errorCount}/{sessionTitle}/{elapsed} 占位符
+@@ -649,7 +649,7 @@ export class AutoContinueRunner {
+     // 发送: agent.followup 是排队语义(运行中会排入 inbox, 不会打断), 天然安全
+     const agent = this.ctx.agents.get(sessionId);
+     if (agent === undefined) {
+-      this.log(`跳过 ${sessionId}(${reason}): 无 live agent`);
++      this.log(`Пропущено ${sessionId} (${reason}): активный агент не найден`);
+       return;
+     }
+     state.lastAttemptAt = Date.now(); // 先记账: 无论成败, 本次尝试都进入冷却
+@@ -666,27 +666,27 @@ export class AutoContinueRunner {
+       state.lastSentText = text;
+       state.pendingRecoveryAt = now; // 等待窗口内的下一个回合结束来判定恢复结果
+       this.bumpStat({ sent: 1, ...(state.lastFailure !== undefined ? { code: state.lastFailure.code } : {}) });
+-      this.log(`已自动发送「${text}」到 ${sessionId}(${reason}), 第 ${state.consecutive} 次连续`);
++      this.log(`Автопродолжение отправлено в ${sessionId} (${reason}): «${text}», попытка подряд №${state.consecutive}`);
+       if (config.notify) {
+         this.notify(
+-          'dsh-auto-continue: 已自动继续',
+-          `${sessionId}: 已发送「${text}」(第 ${state.consecutive} 次连续)`,
++          'dsh-auto-continue: запущено автоматическое продолжение',
++          `${sessionId}: отправлено «${text}» (попытка подряд №${state.consecutive})`,
+           this.notifyOptions(sessionId),
+         );
+       }
+       if (state.consecutive >= config.maxConsecutive) {
+         this.bumpStat({ gaveUp: 1 });
+-        this.log(`达到连续上限 ${config.maxConsecutive} 次, 停止自动继续 ${sessionId}`);
++        this.log(`Достигнут лимит ${config.maxConsecutive} последовательных попыток; автопродолжение остановлено для ${sessionId}`);
+         if (config.notify) {
+           this.notify(
+-            'dsh-auto-continue: 已停止自动继续',
+-            `${sessionId}: 连续失败 ${state.consecutive} 次, 需要人工介入`,
++            'dsh-auto-continue: автопродолжение остановлено',
++            `${sessionId}: ${state.consecutive} последовательных ошибок; требуется ручное вмешательство`,
+             this.notifyOptions(sessionId),
+           );
+         }
+       }
+     } catch (error) {
+-      this.log(`发送异常 ${sessionId}: ${error instanceof Error ? error.message : String(error)}`);
++      this.log(`Ошибка отправки для ${sessionId}: ${error instanceof Error ? error.message : String(error)}`);
+     }
+   }
+ 
+@@ -747,7 +747,7 @@ export class AutoContinueRunner {
+         // 宿主未就绪时每 3s 重试; 只节流记录日志, 避免刷屏。
+         if (attempt % 10 === 0) {
+           this.log(
+-            `扫描失败(${attempt + 1}/${attempts === Infinity ? '∞' : attempts}): ${
++            `Ошибка сканирования (${attempt + 1}/${attempts === Infinity ? '∞' : attempts}): ${
+               error instanceof Error ? error.message : String(error)
+             }`,
+           );
+@@ -804,7 +804,7 @@ export class AutoContinueRunner {
+       if (superseded) continue;
+       // 幂等护栏: 从历史事件里重建上一步工具调用的执行状态
+       this.applyGuardFromEvents(state, events, lastEnd.seq);
+-      this.log(`扫描发现中断 ${candidate.sessionId}(turn/end:${reason.kind}), 安排自动继续`);
++      this.log(`Сканирование обнаружило прерывание ${candidate.sessionId} (turn/end: ${reason.kind}); запланировано автопродолжение`);
+       this.schedule(candidate.sessionId, `scan:turn/end:${reason.kind}`);
+     }
+     return true;
+diff --git "a/C:\\Users\\andre\\.dsh\\profiles\\web\\node_modules\\dsh-client-auto-continue.backup-20260825-064929\\lib\\client.js" "b/C:\\Users\\andre\\.dsh\\profiles\\web\\node_modules\\dsh-client-auto-continue\\lib\\client.js"
+index 1c537ad..f1ec1d4 100644
+--- "a/C:\\Users\\andre\\.dsh\\profiles\\web\\node_modules\\dsh-client-auto-continue.backup-20260825-064929\\lib\\client.js"
++++ "b/C:\\Users\\andre\\.dsh\\profiles\\web\\node_modules\\dsh-client-auto-continue\\lib\\client.js"
+@@ -37,89 +37,89 @@ module.exports = __toCommonJS(index_exports);
+ 
+ // src/client/locales.ts
+ var zh = {
+-  "card.title": "自动继续",
+-  "card.description": "请求因网络等原因(非人为)中断后, 自动发送「继续」续跑。",
+-  "field.paused": "暂停自动继续",
+-  "field.pausedHint": "全局暂停: 实时与扫描都不会再自动发送, 已排队的待发送也会取消。",
+-  "field.continueText": "继续文本",
+-  "field.continueTextHint": "中断后自动发送的消息内容。",
+-  "field.continueTextMaxTokens": "超限时的继续文本",
+-  "field.continueTextMaxTokensHint": "达到输出 token 上限时自动发送的文本, 支持与继续文本相同的占位符。",
+-  "field.guardTools": "幂等护栏",
+-  "field.guardToolsHint": "续跑前检查上一步工具调用: 结果未确认时提示先确认状态, 已成功时提示不要重复执行, 避免重复 commit/调 API。",
+-  "field.guardPendingText": "结果未确认时的护栏文本",
+-  "field.guardPendingTextHint": "上一步工具可能已部分执行时附加到继续文本之后, 支持 {tool} 占位符。",
+-  "field.guardDoneText": "工具已成功时的护栏文本",
+-  "field.guardDoneTextHint": "上一步工具已确认成功时附加到继续文本之后, 支持 {tool} 与 {result}(结果摘要)占位符。",
+-  "field.graceMs": "宽限期 (ms)",
+-  "field.graceMsHint": "检测到中断后等待的时长; 期间宿主自行恢复则取消。",
+-  "field.cooldownMs": "冷却时间 (ms)",
+-  "field.cooldownMsHint": "同一会话两次自动「继续」的最小间隔, 失败尝试也计入。",
+-  "field.maxConsecutive": "最大连续次数",
+-  "field.maxConsecutiveHint": "同一会话连续自动「继续」的上限; 超过后停止, 直到用户手动介入或出现成功回合。",
+-  "field.scanOnBoot": "启动/重连扫描",
+-  "field.scanOnBootHint": "页面启动或重连时扫描最近中断的会话并自动续跑(如浏览器关闭期间宿主崩溃)。",
+-  "field.scanLimit": "扫描会话数",
+-  "field.scanLimitHint": "最多检查多少个最近更新的会话(不含运行中与子代理会话)。",
+-  "field.freshMs": "扫描时间窗 (ms)",
+-  "field.freshMsHint": "扫描只处理该时间窗内的中断。",
+-  "field.verbose": "详细日志",
+-  "field.verboseHint": "在浏览器控制台输出 [auto-continue] 日志。",
+-  "field.classify": "错误分类",
+-  "field.classifyHint": "仅自动恢复临时性错误(网络/超时/5xx 等); 认证/余额/模型不存在等永久性错误跳过并通知。",
+-  "field.backoffFactor": "退避系数",
+-  "field.backoffFactorHint": "连续失败时冷却间隔的倍率(如 2 表示 20s→40s→80s 递增)。",
+-  "field.backoffMaxMs": "最大退避间隔 (ms)",
+-  "field.backoffMaxMsHint": "自适应退避的上限, 防止等待过久。",
+-  "field.notify": "浏览器通知",
+-  "field.notifyHint": "自动继续成功/放弃/遇到永久性错误时弹出浏览器通知, 通知带「立即续跑」与「暂停该会话 1 小时」按钮。",
+-  "stats.title": "今日统计",
+-  "stats.sent": "自动继续",
+-  "stats.skipped": "跳过(永久错误)",
+-  "stats.recovered": "恢复成功",
+-  "stats.failed": "继续后仍失败",
+-  "stats.gaveUp": "停止(达上限)",
+-  "stats.looped": "循环打断",
+-  "field.loopGuard": "循环守卫",
+-  "field.loopGuardHint": "检测运行中的回合空转: 连续短句且无工具调用, 或连续调用相同工具时, 自动取消并用循环提示文本重启回合。",
+-  "field.loopShortChars": "短句长度上限 (字符)",
+-  "field.loopShortCharsHint": "模型消息文本短于该值计为一条短句(空转信号)。",
+-  "field.loopWindowMs": "短句时间窗 (ms)",
+-  "field.loopWindowMsHint": "连续短句必须落在这个时间窗内; 正常思考的短文本散布在长时间里不会被误判。",
+-  "field.loopShortCount": "连续短句阈值",
+-  "field.loopShortCountHint": "时间窗内连续多少条短句且期间无工具调用时判定空转循环。",
+-  "field.loopRepeatText": "相同消息重复次数",
+-  "field.loopRepeatTextHint": "连续输出多少条完全相同的消息时判定空转(最强信号, 不限长度, 如模型反复说同一句话)。",
+-  "field.loopToolRepeat": "同工具重复次数",
+-  "field.loopToolRepeatHint": "同工具+同参数+同结果的连续调用多少次时判定死循环; 参数或结果有变化视为有进展。",
+-  "field.loopText": "循环提示文本",
+-  "field.loopTextHint": "打断后重启回合时发送的文本, 支持 {tool} 占位符。",
+-  "stats.byCode": "按错误码统计",
+-  "stats.empty": "今天还没有自动继续记录。",
+-  "stats.reset": "清零",
+-  "pause.title": "已暂停会话",
+-  "pause.none": "没有暂停中的会话。",
+-  "pause.clearAll": "全部解除",
+-  "pause.unpause": "解除",
+-  "pause.minutes": "分钟",
+-  "chrome.collapse": "收起设置",
+-  "chrome.expand": "展开设置",
+-  "chrome.unsaved": "未保存",
+-  "chrome.readOnly": "当前部署的设置只读。",
+-  "chrome.saveFailed": "部署未接受这些值, 已保留供你修改。",
+-  "chrome.discard": "放弃",
+-  "chrome.saving": "保存中…",
+-  "chrome.save": "保存",
+-  "chrome.overridden": "已覆盖",
+-  "chrome.reset": "恢复默认",
+-  "chrome.invalidNumber": "请输入数字, 留空则使用默认值。",
+-  "chrome.inherit": "继承",
+-  "chrome.on": "开",
+-  "chrome.off": "关"
++  "card.title": "Автопродолжение",
++  "card.description": "После прерывания запроса из-за сети или другой нештатной причины автоматически отправляет продолжение.",
++  "field.paused": "Приостановить автопродолжение",
++  "field.pausedHint": "Полная пауза: автопродолжение в реальном времени и при сканировании отключено, ожидающие отправки отменяются.",
++  "field.continueText": "Текст продолжения",
++  "field.continueTextHint": "Сообщение, которое автоматически отправляется после прерывания.",
++  "field.continueTextMaxTokens": "Текст продолжения при лимите токенов",
++  "field.continueTextMaxTokensHint": "Текст при достижении лимита вывода; поддерживает те же подстановки, что и основной текст.",
++  "field.guardTools": "Защита от повторного запуска",
++  "field.guardToolsHint": "Перед продолжением проверяет последний вызов инструмента: при неподтверждённом результате просит сначала проверить состояние, а после успеха запрещает повторный запуск.",
++  "field.guardPendingText": "Текст защиты при неподтверждённом результате",
++  "field.guardPendingTextHint": "Добавляется после текста продолжения, если инструмент мог выполниться частично; поддерживает подстановку {tool}.",
++  "field.guardDoneText": "Текст защиты после успешного инструмента",
++  "field.guardDoneTextHint": "Добавляется после подтверждённого успеха; поддерживает {tool} и {result} (краткий результат).",
++  "field.graceMs": "Период ожидания (мс)",
++  "field.graceMsHint": "Ожидание после прерывания; отменяется, если узел сам восстановился.",
++  "field.cooldownMs": "Задержка перед продолжением (мс)",
++  "field.cooldownMsHint": "Минимальный интервал между автопродолжениями в одном сеансе; неудачные попытки тоже учитываются.",
++  "field.maxConsecutive": "Максимум последовательных продолжений",
++  "field.maxConsecutiveHint": "Лимит автопродолжений в одном сеансе; после него работа ждёт ручного вмешательства или успешного хода.",
++  "field.scanOnBoot": "Проверять при запуске и переподключении",
++  "field.scanOnBootHint": "При запуске страницы или переподключении ищет недавно прерванные сеансы и продолжает их.",
++  "field.scanLimit": "Количество проверяемых сеансов",
++  "field.scanLimitHint": "Сколько последних обновлённых сеансов проверять; активные и дочерние сеансы исключаются.",
++  "field.freshMs": "Окно проверки (мс)",
++  "field.freshMsHint": "Учитываются только прерывания внутри этого периода.",
++  "field.verbose": "Подробный журнал",
++  "field.verboseHint": "Выводить сообщения [auto-continue] в консоль браузера.",
++  "field.classify": "Классифицировать ошибки",
++  "field.classifyHint": "Автоматически восстанавливать только временные ошибки (сеть, тайм-аут, 5xx и т. п.); ошибки авторизации, баланса и модели пропускаются и показываются пользователю.",
++  "field.backoffFactor": "Коэффициент увеличения задержки",
++  "field.backoffFactorHint": "Множитель задержки после последовательных ошибок (2 означает 20 с → 40 с → 80 с и далее).",
++  "field.backoffMaxMs": "Максимальная задержка (мс)",
++  "field.backoffMaxMsHint": "Верхний предел адаптивной задержки.",
++  "field.notify": "Уведомления браузера",
++  "field.notifyHint": "Показывать уведомления при автопродолжении, остановке или постоянной ошибке; в них доступны кнопки «Продолжить сейчас» и «Приостановить сеанс на 1 час».",
++  "stats.title": "Статистика за сегодня",
++  "stats.sent": "Автопродолжений",
++  "stats.skipped": "Пропущено (постоянные ошибки)",
++  "stats.recovered": "Успешно восстановлено",
++  "stats.failed": "Ошибки после продолжения",
++  "stats.gaveUp": "Остановлено (достигнут лимит)",
++  "stats.looped": "Зацикливание прервано",
++  "field.loopGuard": "Защита от зацикливания",
++  "field.loopGuardHint": "Обнаруживает холостой ход: короткие фразы без вызовов инструментов или повторение одного инструмента. Такой ход отменяется и запускается с текстом для выхода из цикла.",
++  "field.loopShortChars": "Максимум символов в короткой фразе",
++  "field.loopShortCharsHint": "Сообщение короче этого значения считается короткой фразой и сигналом зацикливания.",
++  "field.loopWindowMs": "Окно коротких фраз (мс)",
++  "field.loopWindowMsHint": "Последовательные короткие фразы должны появиться в этом окне; обычные редкие короткие ответы не считаются циклом.",
++  "field.loopShortCount": "Порог коротких фраз",
++  "field.loopShortCountHint": "Сколько коротких фраз без вызова инструмента в этом окне указывает на холостой цикл.",
++  "field.loopRepeatText": "Число повторов одинакового сообщения",
++  "field.loopRepeatTextHint": "Сколько одинаковых сообщений подряд указывает на цикл; длина не важна.",
++  "field.loopToolRepeat": "Число повторов одного инструмента",
++  "field.loopToolRepeatHint": "Сколько вызовов одного инструмента с теми же параметрами и результатом указывает на цикл; изменение параметров или результата считается прогрессом.",
++  "field.loopText": "Текст выхода из цикла",
++  "field.loopTextHint": "Сообщение после прерывания цикла; поддерживает подстановку {tool}.",
++  "stats.byCode": "По коду ошибки",
++  "stats.empty": "Сегодня автопродолжений ещё не было.",
++  "stats.reset": "Сбросить",
++  "pause.title": "Приостановленные сеансы",
++  "pause.none": "Нет приостановленных сеансов.",
++  "pause.clearAll": "Снять все паузы",
++  "pause.unpause": "Продолжить",
++  "pause.minutes": "мин",
++  "chrome.collapse": "Скрыть настройки",
++  "chrome.expand": "Показать настройки",
++  "chrome.unsaved": "Не сохранено",
++  "chrome.readOnly": "Настройки текущего развёртывания доступны только для чтения.",
++  "chrome.saveFailed": "Развёртывание не приняло эти значения; их можно исправить.",
++  "chrome.discard": "Отменить изменения",
++  "chrome.saving": "Сохранение…",
++  "chrome.save": "Сохранить",
++  "chrome.overridden": "Переопределено",
++  "chrome.reset": "Восстановить значения по умолчанию",
++  "chrome.invalidNumber": "Введите число или оставьте поле пустым, чтобы использовать значение по умолчанию.",
++  "chrome.inherit": "Наследовать",
++  "chrome.on": "Вкл.",
++  "chrome.off": "Выкл."
+ };
+ var en = {
+   "card.title": "Auto continue",
+-  "card.description": "When a request is interrupted by a non-human cause, automatically send 「继续」 to resume.",
++  "card.description": "When a request is interrupted by a non-human cause, automatically send a continuation to resume.",
+   "field.paused": "Pause auto-continue",
+   "field.pausedHint": "Globally pause: no live or scan auto-send fires, and queued pending sends are cancelled.",
+   "field.continueText": "Continue text",
+@@ -205,11 +205,11 @@ var import_client = require("@deepseek-ai/dsh-client-runtime/client");
+ 
+ // src/shared/core.ts
+ var DEFAULT_CONFIG = {
+-  continueText: "继续",
+-  continueTextMaxTokens: "继续",
++  continueText: "Продолжай выполнение задачи с места остановки. Не повторяй уже успешно выполненные действия.",
++  continueTextMaxTokens: "Продолжай выполнение задачи с места остановки. Не повторяй уже успешно выполненные действия.",
+   guardTools: true,
+-  guardPendingText: "(上一步工具「{tool}」可能未完成, 先确认状态再继续, 不要重复执行)",
+-  guardDoneText: "(上一步工具「{tool}」已完成, 结果: {result}; 不要重复执行, 直接继续)",
++  guardPendingText: "(Инструмент «{tool}» мог выполниться не полностью. Сначала проверь состояние, не повторяй действие.)",
++  guardDoneText: "(Инструмент «{tool}» уже выполнен. Результат: {result}. Не повторяй действие, продолжай работу.)",
+   graceMs: 3e3,
+   cooldownMs: 2e4,
+   maxConsecutive: 3,
+@@ -228,7 +228,7 @@ var DEFAULT_CONFIG = {
+   loopShortCount: 12,
+   loopRepeatText: 4,
+   loopToolRepeat: 5,
+-  loopText: "(检测到你可能陷入循环, 请停止重复刚才的动作, 换一种方式继续)"
++  loopText: "(Похоже, ты зациклился. Прекрати повторять последнее действие и продолжай другим способом.)"
+ };
+ var RECOVERY_WINDOW_MS = 10 * 60 * 1e3;
+ var ECHO_WINDOW_MS = 10 * 60 * 1e3;
+diff --git "a/C:\\Users\\andre\\.dsh\\profiles\\web\\node_modules\\dsh-client-auto-continue.backup-20260825-064929\\lib\\index.js" "b/C:\\Users\\andre\\.dsh\\profiles\\web\\node_modules\\dsh-client-auto-continue\\lib\\index.js"
+index b2cce18..05b3acd 100644
+--- "a/C:\\Users\\andre\\.dsh\\profiles\\web\\node_modules\\dsh-client-auto-continue.backup-20260825-064929\\lib\\index.js"
++++ "b/C:\\Users\\andre\\.dsh\\profiles\\web\\node_modules\\dsh-client-auto-continue\\lib\\index.js"
+@@ -99,11 +99,11 @@ var { version } = createRequire(import.meta.url)("../package.json");
+ 
+ // src/shared/core.ts
+ var DEFAULT_CONFIG = {
+-  continueText: "继续",
+-  continueTextMaxTokens: "继续",
++  continueText: "Продолжай выполнение задачи с места остановки. Не повторяй уже успешно выполненные действия.",
++  continueTextMaxTokens: "Продолжай выполнение задачи с места остановки. Не повторяй уже успешно выполненные действия.",
+   guardTools: true,
+-  guardPendingText: "(上一步工具「{tool}」可能未完成, 先确认状态再继续, 不要重复执行)",
+-  guardDoneText: "(上一步工具「{tool}」已完成, 结果: {result}; 不要重复执行, 直接继续)",
++  guardPendingText: "(Инструмент «{tool}» мог выполниться не полностью. Сначала проверь состояние, не повторяй действие.)",
++  guardDoneText: "(Инструмент «{tool}» уже выполнен. Результат: {result}. Не повторяй действие, продолжай работу.)",
+   graceMs: 3e3,
+   cooldownMs: 2e4,
+   maxConsecutive: 3,
+@@ -122,7 +122,7 @@ var DEFAULT_CONFIG = {
+   loopShortCount: 12,
+   loopRepeatText: 4,
+   loopToolRepeat: 5,
+-  loopText: "(检测到你可能陷入循环, 请停止重复刚才的动作, 换一种方式继续)"
++  loopText: "(Похоже, ты зациклился. Прекрати повторять последнее действие и продолжай другим способом.)"
+ };
+ function numberOr(value, fallback) {
+   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : fallback;
+@@ -281,7 +281,7 @@ var AutoContinueRunner = class {
+       void this.bootScanLoop();
+     }
+     this.log(
+-      `已启动(host 单实例, 文本="${config.continueText}", 宽限 ${config.graceMs}ms, 冷却 ${config.cooldownMs}ms, 最多连续 ${config.maxConsecutive} 次)`
++      `Запущено (один экземпляр узла, текст="${config.continueText}", ожидание ${config.graceMs} мс, задержка ${config.cooldownMs} мс, максимум подряд: ${config.maxConsecutive})`
+     );
+   }
+   log(message) {
+@@ -327,10 +327,10 @@ var AutoContinueRunner = class {
+   handleNoticeAction(sessionId, action) {
+     if (action === "unpause") {
+       if (sessionId !== void 0) this.pauseUntil.delete(sessionId);
+-      this.log(`解除暂停 ${sessionId ?? "?"}`);
++      this.log(`Пауза снята: ${sessionId ?? "?"}`);
+     } else if (action === "reset-stats") {
+       this.dayStats = emptyDayStats();
+-      this.log("清零今日统计");
++      this.log("Статистика за сегодня сброшена");
+     } else if (sessionId !== void 0) {
+       this.onNotifyAction(sessionId, action);
+     }
+@@ -434,14 +434,14 @@ ${event.data.arguments}`;
+     if (!state.running) return;
+     const config = this.getConfig();
+     if (state.sameTextRun >= config.loopRepeatText) {
+-      this.log(`检测到空转循环 ${sessionId}: 连续 ${state.sameTextRun} 条相同消息`);
++      this.log(`Обнаружено зацикливание ${sessionId}: ${state.sameTextRun} одинаковых сообщений подряд`);
+       void this.interruptLoop(sessionId, state);
+     } else if (state.shortRun >= config.loopShortCount) {
+-      this.log(`检测到空转循环 ${sessionId}: 连续 ${state.shortRun} 条短句且无工具调用`);
++      this.log(`Обнаружено зацикливание ${sessionId}: ${state.shortRun} коротких фраз подряд без вызова инструмента`);
+       void this.interruptLoop(sessionId, state);
+     } else if (state.toolRun !== void 0 && state.toolRun.count >= config.loopToolRepeat) {
+       const toolName = state.toolRun.key.split("\n")[0] ?? "?";
+-      this.log(`检测到工具死循环 ${sessionId}: 「${toolName}」连续 ${state.toolRun.count} 次(同参数同结果)`);
++      this.log(`Обнаружено зацикливание инструмента ${sessionId}: «${toolName}» вызван ${state.toolRun.count} раз с теми же параметрами и результатом`);
+       void this.interruptLoop(sessionId, state);
+     }
+   }
+@@ -453,7 +453,7 @@ ${event.data.arguments}`;
+   async interruptLoop(sessionId, state) {
+     if (state.loopFired) return;
+     if (Date.now() - state.lastAttemptAt < this.cooldownFor(state)) {
+-      this.log(`跳过循环打断 ${sessionId}: 处于冷却期`);
++      this.log(`Прерывание цикла пропущено ${sessionId}: действует задержка`);
+       return;
+     }
+     state.loopFired = true;
+@@ -463,14 +463,14 @@ ${event.data.arguments}`;
+     try {
+       const agent = this.ctx.agents.get(sessionId);
+       if (agent === void 0) {
+-        this.log(`打断循环失败 ${sessionId}: 无 live agent`);
++        this.log(`Не удалось прервать цикл ${sessionId}: активный агент не найден`);
+         state.loopCancelled = false;
+         return;
+       }
+       agent.cancel({ kind: "user" }, { keepInbox: true });
+-      this.log(`已打断循环 ${sessionId}: cancel 已受理`);
++      this.log(`Цикл прерван ${sessionId}: отмена принята`);
+     } catch (error) {
+-      this.log(`打断循环失败 ${sessionId}: ${error instanceof Error ? error.message : String(error)}`);
++      this.log(`Не удалось прервать цикл ${sessionId}: ${error instanceof Error ? error.message : String(error)}`);
+       state.loopCancelled = false;
+     }
+   }
+@@ -492,11 +492,11 @@ ${event.data.arguments}`;
+           clearTimeout(state.loopRetryTimer);
+           state.loopRetryTimer = void 0;
+         }
+-        this.cancelPending(sessionId, "宿主自行开启新回合");
++        this.cancelPending(sessionId, "узел сам начал новый ход");
+         break;
+       case "turn/end": {
+         state.running = false;
+-        this.cancelPending(sessionId, "收到新的 turn/end");
++        this.cancelPending(sessionId, "получено новое событие turn/end");
+         const reason = event.data.reason;
+         if (reason.kind === "completed") {
+           state.consecutive = 0;
+@@ -520,7 +520,7 @@ ${event.data.arguments}`;
+                 state.loopRetryTimer = void 0;
+                 this.schedule(sessionId, "loop:aborted");
+               }, remaining);
+-              this.log(`loop 重启延迟 ${remaining}ms(冷却期) ${sessionId}`);
++              this.log(`Перезапуск цикла отложен на ${remaining} мс (задержка): ${sessionId}`);
+             } else {
+               this.schedule(sessionId, "loop:aborted");
+             }
+@@ -554,7 +554,7 @@ ${event.data.arguments}`;
+         if (isOurEcho(state, event)) break;
+         if (event.data.source.kind === "user") {
+           state.consecutive = 0;
+-          this.cancelPending(sessionId, "用户手动发送消息");
++          this.cancelPending(sessionId, "пользователь отправил сообщение вручную");
+         }
+         break;
+       default:
+@@ -566,12 +566,12 @@ ${event.data.arguments}`;
+     const config = this.getConfig();
+     if (config.classify && !isTransientFailure(failure)) {
+       const summary = `${failure.code}${failure.status !== void 0 ? ` (HTTP ${failure.status})` : ""}`;
+-      this.log(`跳过 ${sessionId}(${reason}): 永久性失败 ${summary} — ${failure.message}`);
++      this.log(`Пропущено ${sessionId} (${reason}): постоянная ошибка ${summary} — ${failure.message}`);
+       this.bumpStat({ skipped: 1, code: failure.code });
+       if (config.notify) {
+         this.notify(
+-          "dsh-auto-continue: 未自动继续",
+-          `${sessionId}: 永久性错误 ${summary}，需要人工处理`,
++          "dsh-auto-continue: автоматическое продолжение не выполнено",
++          `${sessionId}: постоянная ошибка ${summary}; требуется ручная обработка`,
+           this.notifyOptions(sessionId)
+         );
+       }
+@@ -583,20 +583,20 @@ ${event.data.arguments}`;
+   notifyOptions(sessionId) {
+     return {
+       actions: [
+-        { action: "resume", title: "立即续跑" },
+-        { action: "pause1h", title: "暂停该会话 1 小时" }
++        { action: "resume", title: "Продолжить сейчас" },
++        { action: "pause1h", title: "Приостановить сеанс на 1 час" }
+       ],
+       onAction: (action) => this.onNotifyAction(sessionId, action)
+     };
+   }
+   onNotifyAction(sessionId, action) {
+     if (action === "resume") {
+-      this.log(`通知按钮: 立即续跑 ${sessionId}`);
++      this.log(`Кнопка уведомления: продолжить сейчас ${sessionId}`);
+       void this.resumeNow(sessionId);
+     } else if (action === "pause1h") {
+-      this.log(`通知按钮: 暂停 ${sessionId} 1 小时`);
++      this.log(`Кнопка уведомления: приостановить ${sessionId} на 1 час`);
+       this.pauseUntil.set(sessionId, Date.now() + 60 * 60 * 1e3);
+-      this.cancelPending(sessionId, "通知按钮暂停该会话");
++      this.cancelPending(sessionId, "сеанс приостановлен кнопкой уведомления");
+     }
+   }
+   /** 内存统计(host 单实例): 按今日桶累计。 */
+@@ -636,7 +636,7 @@ ${event.data.arguments}`;
+     }
+     state.pendingRecoveryAt = 0;
+     this.bumpStat(outcome === "completed" ? { recovered: 1 } : { failed: 1 });
+-    this.log(`恢复结果(${sessionId}): ${outcome === "completed" ? "成功" : "失败"}`);
++    this.log(`Результат восстановления (${sessionId}): ${outcome === "completed" ? "успех" : "ошибка"}`);
+   }
+   /** 立即为该会话发送一次自动继续(无视冷却与连续上限; 由通知按钮触发)。 */
+   async resumeNow(sessionId) {
+@@ -664,18 +664,18 @@ ${event.data.arguments}`;
+     const config = this.getConfig();
+     if (state.subagent) return;
+     if (config.paused) {
+-      this.log(`跳过 ${sessionId}(${reason}): 全局暂停中`);
++      this.log(`Пропущено ${sessionId} (${reason}): включена общая пауза`);
+       return;
+     }
+     if (Date.now() < (this.pauseUntil.get(sessionId) ?? 0)) {
+-      this.log(`跳过 ${sessionId}(${reason}): 会话暂停中`);
++      this.log(`Пропущено ${sessionId} (${reason}): сеанс приостановлен`);
+       return;
+     }
+     if (state.pendingTimer !== void 0) return;
+     if (Date.now() - state.lastAttemptAt < this.cooldownFor(state)) return;
+     if (state.consecutive >= config.maxConsecutive) {
+       this.log(
+-        `跳过 ${sessionId}(${reason}): 已连续自动继续 ${state.consecutive} 次, 等待用户介入或成功回合`
++        `Пропущено ${sessionId} (${reason}): уже ${state.consecutive} автопродолжений подряд; ожидается вмешательство пользователя или успешный ход`
+       );
+       return;
+     }
+@@ -687,7 +687,7 @@ ${event.data.arguments}`;
+     state.pendingTimer = timer;
+     const template = reason.startsWith("loop:") ? config.loopText : reason.includes("max-tokens") ? config.continueTextMaxTokens : config.continueText;
+     this.log(
+-      `检测到非人为中断 ${sessionId}(${reason}), ${config.graceMs}ms 后自动发送「${template}」`
++      `Обнаружено не вызванное пользователем прерывание ${sessionId} (${reason}); через ${config.graceMs} мс будет отправлено «${template}»`
+     );
+   }
+   cancelPending(sessionId, why) {
+@@ -695,7 +695,7 @@ ${event.data.arguments}`;
+     if (state.pendingTimer === void 0) return;
+     clearTimeout(state.pendingTimer);
+     state.pendingTimer = void 0;
+-    this.log(`取消 ${sessionId} 的自动继续(${why})`);
++    this.log(`Автопродолжение отменено для ${sessionId} (${why})`);
+   }
+   fire(sessionId, reason, force = false) {
+     if (this.disposed) return;
+@@ -703,26 +703,26 @@ ${event.data.arguments}`;
+     const config = this.getConfig();
+     if (state.subagent) return;
+     if (config.paused) {
+-      this.log(`跳过 ${sessionId}(${reason}): 全局暂停中`);
++      this.log(`Пропущено ${sessionId} (${reason}): включена общая пауза`);
+       return;
+     }
+     if (Date.now() < (this.pauseUntil.get(sessionId) ?? 0)) {
+-      this.log(`跳过 ${sessionId}(${reason}): 会话暂停中`);
++      this.log(`Пропущено ${sessionId} (${reason}): сеанс приостановлен`);
+       return;
+     }
+     if (!force && Date.now() - state.lastAttemptAt < this.cooldownFor(state)) {
+-      this.log(`跳过 ${sessionId}(${reason}): 处于冷却期`);
++      this.log(`Пропущено ${sessionId} (${reason}): действует задержка`);
+       return;
+     }
+     if (!force && state.consecutive >= config.maxConsecutive) {
+-      this.log(`跳过 ${sessionId}(${reason}): 已连续自动继续 ${state.consecutive} 次, 等待用户介入或成功回合`);
++      this.log(`Пропущено ${sessionId} (${reason}): уже ${state.consecutive} автопродолжений подряд; ожидается вмешательство пользователя или успешный ход`);
+       return;
+     }
+     const template = reason.startsWith("loop:") ? config.loopText : reason.includes("max-tokens") ? config.continueTextMaxTokens : config.continueText;
+     const text = this.buildContinueText(config, state, template);
+     const agent = this.ctx.agents.get(sessionId);
+     if (agent === void 0) {
+-      this.log(`跳过 ${sessionId}(${reason}): 无 live agent`);
++      this.log(`Пропущено ${sessionId} (${reason}): активный агент не найден`);
+       return;
+     }
+     state.lastAttemptAt = Date.now();
+@@ -739,27 +739,27 @@ ${event.data.arguments}`;
+       state.lastSentText = text;
+       state.pendingRecoveryAt = now;
+       this.bumpStat({ sent: 1, ...state.lastFailure !== void 0 ? { code: state.lastFailure.code } : {} });
+-      this.log(`已自动发送「${text}」到 ${sessionId}(${reason}), 第 ${state.consecutive} 次连续`);
++      this.log(`Автопродолжение отправлено в ${sessionId} (${reason}): «${text}», попытка подряд №${state.consecutive}`);
+       if (config.notify) {
+         this.notify(
+-          "dsh-auto-continue: 已自动继续",
+-          `${sessionId}: 已发送「${text}」(第 ${state.consecutive} 次连续)`,
++          "dsh-auto-continue: запущено автоматическое продолжение",
++          `${sessionId}: отправлено «${text}» (попытка подряд №${state.consecutive})`,
+           this.notifyOptions(sessionId)
+         );
+       }
+       if (state.consecutive >= config.maxConsecutive) {
+         this.bumpStat({ gaveUp: 1 });
+-        this.log(`达到连续上限 ${config.maxConsecutive} 次, 停止自动继续 ${sessionId}`);
++        this.log(`Достигнут лимит ${config.maxConsecutive} последовательных попыток; автопродолжение остановлено для ${sessionId}`);
+         if (config.notify) {
+           this.notify(
+-            "dsh-auto-continue: 已停止自动继续",
+-            `${sessionId}: 连续失败 ${state.consecutive} 次, 需要人工介入`,
++            "dsh-auto-continue: автопродолжение остановлено",
++            `${sessionId}: ${state.consecutive} последовательных ошибок; требуется ручное вмешательство`,
+             this.notifyOptions(sessionId)
+           );
+         }
+       }
+     } catch (error) {
+-      this.log(`发送异常 ${sessionId}: ${error instanceof Error ? error.message : String(error)}`);
++      this.log(`Ошибка отправки для ${sessionId}: ${error instanceof Error ? error.message : String(error)}`);
+     }
+   }
+   /**
+@@ -807,7 +807,7 @@ ${event.data.arguments}`;
+         if (this.disposed) return;
+         if (attempt % 10 === 0) {
+           this.log(
+-            `扫描失败(${attempt + 1}/${attempts === Infinity ? "∞" : attempts}): ${error instanceof Error ? error.message : String(error)}`
++            `Ошибка сканирования (${attempt + 1}/${attempts === Infinity ? "∞" : attempts}): ${error instanceof Error ? error.message : String(error)}`
+           );
+         }
+       }
+@@ -857,7 +857,7 @@ ${event.data.arguments}`;
+       }
+       if (superseded) continue;
+       this.applyGuardFromEvents(state, events, lastEnd.seq);
+-      this.log(`扫描发现中断 ${candidate.sessionId}(turn/end:${reason.kind}), 安排自动继续`);
++      this.log(`Сканирование обнаружило прерывание ${candidate.sessionId} (turn/end: ${reason.kind}); запланировано автопродолжение`);
+       this.schedule(candidate.sessionId, `scan:turn/end:${reason.kind}`);
+     }
+     return true;
+@@ -888,15 +888,15 @@ ${event.data.arguments}`;
+ var AUTO_CONTINUE_NS = "auto-continue";
+ var AutoContinueSchema = z2.object({
+   /** Text automatically sent after an interruption. */
+-  continueText: z2.string().default("继续"),
++  continueText: z2.string().default("Продолжай выполнение задачи с места остановки. Не повторяй уже успешно выполненные действия."),
+   /** Text sent when the output token ceiling is reached (same placeholders as `continueText`). */
+-  continueTextMaxTokens: z2.string().default("继续"),
++  continueTextMaxTokens: z2.string().default("Продолжай выполнение задачи с места остановки. Не повторяй уже успешно выполненные действия."),
+   /** Idempotency guard: inspect the last tool call before resuming and steer the model. */
+   guardTools: z2.boolean().default(true),
+   /** Guard text appended when the last tool call has no confirmed result (it may have partially executed). */
+-  guardPendingText: z2.string().default("(上一步工具「{tool}」可能未完成, 先确认状态再继续, 不要重复执行)"),
++  guardPendingText: z2.string().default("(Инструмент «{tool}» мог выполниться не полностью. Сначала проверь состояние, не повторяй действие.)"),
+   /** Guard text appended when the last tool call completed successfully (don't rerun it). */
+-  guardDoneText: z2.string().default("(上一步工具「{tool}」已完成, 结果: {result}; 不要重复执行, 直接继续)"),
++  guardDoneText: z2.string().default("(Инструмент «{tool}» уже выполнен. Результат: {result}. Не повторяй действие, продолжай работу.)"),
+   /** Grace period after an interruption before auto-sending (ms). */
+   graceMs: z2.natural().default(3e3),
+   /** Minimum interval between two auto-continues per session (ms). */
+@@ -934,7 +934,7 @@ var AutoContinueSchema = z2.object({
+   /** Consecutive identical tool calls with identical arguments AND results trip the loop guard. */
+   loopToolRepeat: z2.natural().min(2).default(5),
+   /** Text sent after the loop guard cancels and restarts a turn (supports {tool}). */
+-  loopText: z2.string().default("(检测到你可能陷入循环, 请停止重复刚才的动作, 换一种方式继续)")
++  loopText: z2.string().default("(Похоже, ты зациклился. Прекрати повторять последнее действие и продолжай другим способом.)")
+ });
+ function apply(ctx) {
+   ctx.inject(["settings"], (settingsCtx) => {

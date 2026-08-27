@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "id": "op_mt7zxopm_a31b19cc6255",
+  "workspace": "D:\\DEEPSEEK",
+  "restorePointId": "rp_mt7iw4zj_ed0c6c42dce7",
+  "rescuePointId": "rp_mt7zxopg_e3cfe4072fc4",
+  "sessionId": "session-cad2111e-09a3-4f72-a359-68af268f2905",
+  "paths": [
+    "rewind-test.txt"
+  ],
+  "startedAt": 1787621919322,
+  "state": "completed",
+  "finishedAt": 1787621919329
+}

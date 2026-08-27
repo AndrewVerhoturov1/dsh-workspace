@@ -1,0 +1,1275 @@
+[CmdletBinding()]
+param(
+    [ValidateSet('Quick','NewChat')][string]$Mode = 'Quick',
+    [Parameter(Position=0)][string]$Prompt,
+    [switch]$ReturnJson,
+    [int]$TimeoutSeconds = 120,
+    [int]$WindowTimeoutSeconds = 20,
+    [string]$LogPath,
+    [switch]$VerboseLog,
+    [string]$RunId,
+    [switch]$TestSubmitGateFailure
+)
+
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+Add-Type -AssemblyName System.Windows.Forms
+
+if ([string]::IsNullOrWhiteSpace($Prompt)) { $Prompt = [Console]::In.ReadToEnd() }
+if ([string]::IsNullOrWhiteSpace($RunId)) { $RunId = [guid]::NewGuid().ToString('N').Substring(0, 8).ToUpperInvariant() }
+
+$started = Get-Date
+$modeOut = $Mode.ToLowerInvariant().Replace('newchat', 'new-chat')
+$mutex = $null
+$ws = $null
+$w = $null
+
+$script:AuthorAnchorPattern = '^(ChatGPT сказал|ChatGPT said|Assistant|Вы сказали|You said|User)\s*:'
+$script:ChromeNoise = '^(ChatGPT сказал|ChatGPT said|Вы сказали|You said|Копировать|Copy|Хороший ответ|Good response|Неудачный ответ|Bad response|Продолжить в новом чате|Continue in new chat|Скопировать сообщение|Редактировать сообщение|Остановить|Stop|Прервать)$'
+
+function Write-Log([string]$Step, [string]$Message) {
+    $line = '[{0}] RunId={1} {2} {3}' -f (Get-Date -Format o), $RunId, $Step, $Message
+    if ($LogPath) {
+        try { Add-Content -LiteralPath $LogPath -Value $line -Encoding UTF8 } catch { }
+    } elseif ($VerboseLog) {
+        [Console]::Error.WriteLine($line)
+    }
+}
+
+function Fail([string]$Code, [string]$Message, [int]$ExitCode) {
+    throw [Exception]::new("$Code|$Message|$ExitCode")
+}
+
+function Get-RuntimeId($Element) {
+    if (!$Element) { return $null }
+    try {
+        $parts = @($Element.GetRuntimeId())
+        if ($parts.Count -gt 0) { return ($parts -join '.') }
+    } catch { }
+    return $null
+}
+
+function Is-UiaElementAlive($Element) {
+    if (!$Element) { return $false }
+    try { $null = $Element.Current; return $true }
+    catch [System.Windows.Automation.ElementNotAvailableException] { return $false }
+    catch { return $false }
+}
+
+function All-Desc($Element) {
+    if (!$Element) { return @() }
+    try {
+        return @($Element.FindAll(
+            [System.Windows.Automation.TreeScope]::Descendants,
+            [System.Windows.Automation.Condition]::TrueCondition))
+    } catch { return @() }
+}
+
+function Get-ElementAncestors($Element, [int]$Max = 16) {
+    $result = New-Object 'System.Collections.Generic.List[object]'
+    if (!$Element) { return @() }
+    $walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
+    $current = $Element
+    for ($i = 0; $i -lt $Max -and $current; $i++) {
+        try {
+            [void]$result.Add($current)
+            $current = $walker.GetParent($current)
+        } catch { break }
+    }
+    return @($result.ToArray())
+}
+
+function Get-ImmediateParent($Element) {
+    if (!$Element) { return $null }
+    try { return ([System.Windows.Automation.TreeWalker]::RawViewWalker).GetParent($Element) }
+    catch { return $null }
+}
+
+function Get-ImmediateParentRuntimeId($Element) {
+    return Get-RuntimeId (Get-ImmediateParent $Element)
+}
+
+function Same-Surface($A, $B) {
+    if (!$A -or !$B) { return $false }
+    $aIds = @(Get-ElementAncestors $A | ForEach-Object { Get-RuntimeId $_ })
+    $bIds = @(Get-ElementAncestors $B | ForEach-Object { Get-RuntimeId $_ })
+    foreach ($id in $aIds) {
+        if ($id -and ($bIds -contains $id)) { return $true }
+    }
+    return $false
+}
+
+function Get-MainWindow {
+    $root = [System.Windows.Automation.AutomationElement]::RootElement
+    $condition = New-Object System.Windows.Automation.PropertyCondition(
+        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+        [System.Windows.Automation.ControlType]::Window)
+    try { $windows = @($root.FindAll([System.Windows.Automation.TreeScope]::Children, $condition)) }
+    catch { return $null }
+    foreach ($window in $windows) {
+        try {
+            $current = $window.Current
+            $process = Get-Process -Id $current.ProcessId -ErrorAction SilentlyContinue
+            if ($process -and ($process.ProcessName -match '^(ChatGPT( \(Beta\))?|Codex)$')) {
+                return $window
+            }
+            if (!$process -and ($current.Name -match '^(ChatGPT( \(Beta\))?|Codex)$')) {
+                return $window
+            }
+        } catch { }
+    }
+    return $null
+}
+
+function Wait-MainWindow {
+    $deadline = (Get-Date).AddSeconds($WindowTimeoutSeconds)
+    do {
+        $window = Get-MainWindow
+        if ($window) {
+            try { $window.SetFocus() } catch { }
+            return $window
+        }
+        Start-Sleep -Milliseconds 300
+    } while ((Get-Date) -lt $deadline)
+
+    try { Start-Process 'shell:AppsFolder\OpenAI.CodexBeta_2p2nqsd0c76g!App' | Out-Null } catch { }
+    $deadline = (Get-Date).AddSeconds($WindowTimeoutSeconds)
+    do {
+        $window = Get-MainWindow
+        if ($window) {
+            try { $window.SetFocus() } catch { }
+            return $window
+        }
+        Start-Sleep -Milliseconds 400
+    } while ((Get-Date) -lt $deadline)
+    Fail 'WINDOW_NOT_FOUND' 'ChatGPT Desktop window not found' 2
+}
+
+function Get-ActiveChatGPTSurface($Fallback) {
+    Start-Sleep -Milliseconds 250
+    try {
+        $element = [System.Windows.Automation.AutomationElement]::FocusedElement
+        $walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
+        for ($i = 0; $i -lt 12 -and $element; $i++) {
+            try {
+                $current = $element.Current
+                $process = Get-Process -Id $current.ProcessId -ErrorAction SilentlyContinue
+                if (($current.ControlType -eq [System.Windows.Automation.ControlType]::Window) -and
+                    $process -and ($process.ProcessName -match '^(ChatGPT( \(Beta\))?|Codex)$')) {
+                    return $element
+                }
+                $element = $walker.GetParent($element)
+            } catch { break }
+        }
+    } catch { }
+    return $Fallback
+}
+
+function Get-ElementText($Element) {
+    $values = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($child in @(All-Desc $Element)) {
+        try {
+            $current = $child.Current
+            if (($current.ControlType -eq [System.Windows.Automation.ControlType]::Text) -and $current.Name) {
+                [void]$values.Add(([string]$current.Name).Trim())
+            }
+        } catch { }
+    }
+    return @($values.ToArray())
+}
+
+function Find-Composer($Window) {
+    $best = $null
+    $bestScore = -1
+    foreach ($element in @(All-Desc $Window)) {
+        try {
+            $current = $element.Current
+            if (($current.ControlType -ne [System.Windows.Automation.ControlType]::Edit) -or
+                !$current.IsEnabled -or $current.IsOffscreen) { continue }
+            $score = 0
+            if ($current.IsKeyboardFocusable) { $score += 2 }
+            if ($current.Name -match 'Выполните|сообщ|задач|message|prompt|Ask|спрос') { $score += 5 }
+            $rect = $current.BoundingRectangle
+            if (($rect.Width -gt 200) -and ($rect.Height -gt 20)) { $score += 3 }
+            if ($score -gt $bestScore) { $best = $element; $bestScore = $score }
+        } catch { }
+    }
+    return $best
+}
+
+function Find-Button($Window, [string[]]$Names) {
+    foreach ($element in @(All-Desc $Window)) {
+        try {
+            $current = $element.Current
+            if (($current.ControlType -ne [System.Windows.Automation.ControlType]::Button) -or
+                !$current.IsEnabled -or $current.IsOffscreen) { continue }
+            foreach ($name in $Names) {
+                if ([string]$current.Name -like "*$name*") { return $element }
+            }
+        } catch { }
+    }
+    return $null
+}
+
+function Find-StopButton($Window) {
+    foreach ($element in @(All-Desc $Window)) {
+        try {
+            $current = $element.Current
+            if (($current.ControlType -eq [System.Windows.Automation.ControlType]::Button) -and
+                $current.IsEnabled -and ([string]$current.Name) -match '^(Остановить|Stop|Прервать)$') {
+                return $element
+            }
+        } catch { }
+    }
+    return $null
+}
+
+function Get-ComposerValue($Element) {
+    if (!$Element) { return '' }
+    $values = New-Object 'System.Collections.Generic.List[string]'
+    try {
+        $pattern = $null
+        if ($Element.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) {
+            [void]$values.Add([string]$pattern.Current.Value)
+        }
+    } catch { }
+    try {
+        $pattern = $null
+        if ($Element.TryGetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern, [ref]$pattern)) {
+            [void]$values.Add([string]$pattern.DocumentRange.GetText(-1))
+        }
+    } catch { }
+    try {
+        if ($Element.Current.Name) { [void]$values.Add([string]$Element.Current.Name) }
+    } catch { }
+    [void]$values.Add(((Get-ElementText $Element) -join "`n"))
+    foreach ($value in $values) {
+        if (![string]::IsNullOrWhiteSpace($value)) { return $value }
+    }
+    return ''
+}
+
+function Confirm-ComposerCleared($Window, [string]$PromptText) {
+    $composer = Find-Composer $Window
+    if (!$composer) {
+        return [pscustomobject]@{ Found=$false; Cleared=$false; Value=$null; RuntimeId=$null; Reason='COMPOSER_NOT_FOUND' }
+    }
+    $value = Get-ComposerValue $composer
+    $norm = ([string]$value).Trim()
+    $normPrompt = (([string]$PromptText) -replace "`r`n|`r|`n", ' ').Trim()
+    $normValue = ($norm -replace "`r`n|`r|`n", ' ').Trim()
+    $same = ($norm -eq $PromptText) -or ($normValue -eq $normPrompt) -or ($norm -like "*$PromptText*")
+    $cleared = [string]::IsNullOrWhiteSpace($norm) -or ($norm -eq 'Сообщение ChatGPT')
+    return [pscustomobject]@{
+        Found=$true; Cleared=(!$same -and $cleared); Value=$value; RuntimeId=(Get-RuntimeId $composer)
+        Reason=if($same){'PROMPT_STILL_IN_COMPOSER'}elseif($cleared){'EMPTY'}else{'COMPOSER_CHANGED'}
+    }
+}
+
+function Test-IsComposerDescendant($Element) {
+    if (!$Element) { return $false }
+    foreach ($ancestor in @(Get-ElementAncestors $Element 12)) {
+        try {
+            $current = $ancestor.Current
+            if (($current.ControlType -eq [System.Windows.Automation.ControlType]::Edit) -or
+                ($current.ClassName -eq 'ProseMirror') -or ($current.Name -eq 'Сообщение ChatGPT')) {
+                return $true
+            }
+        } catch { }
+    }
+    return $false
+}
+
+function Find-SendButtonForComposer($Window, $Composer) {
+    $best = $null
+    $bestScore = -1
+    foreach ($element in @(All-Desc $Window)) {
+        try {
+            $current = $element.Current
+            if (($current.ControlType -ne [System.Windows.Automation.ControlType]::Button) -or
+                !$current.IsEnabled -or $current.IsOffscreen -or ($current.Name -notmatch 'Отправить|Send')) { continue }
+            if (!(Same-Surface $Composer $element)) { continue }
+            $rect = $current.BoundingRectangle
+            $composerRect = $Composer.Current.BoundingRectangle
+            $score = 0
+            if ($rect.Y -ge ($composerRect.Y - 160)) { $score += 3 }
+            if ($rect.X -gt $composerRect.X) { $score += 1 }
+            if ($score -gt $bestScore) { $best = $element; $bestScore = $score }
+        } catch { }
+    }
+    return $best
+}
+
+function Get-AuthorAnchors($Conversation) {
+    $anchors = New-Object 'System.Collections.Generic.List[object]'
+    foreach ($element in @(All-Desc $Conversation)) {
+        try {
+            $current = $element.Current
+            if ($current.ControlType -ne [System.Windows.Automation.ControlType]::Text) { continue }
+            $role = $null
+            if ([string]$current.Name -match '^(ChatGPT сказал|ChatGPT said|Assistant)\s*:') { $role = 'assistant' }
+            elseif ([string]$current.Name -match '^(Вы сказали|You said|User)\s*:') { $role = 'user' }
+            if ($role) {
+                [void]$anchors.Add([pscustomobject]@{
+                    AnchorElement=$element; AnchorRuntimeId=(Get-RuntimeId $element); Role=$role
+                    AnchorName=[string]$current.Name; YTop=[double]$current.BoundingRectangle.Y
+                })
+            }
+        } catch { }
+    }
+    return @($anchors | Where-Object { $_.YTop -gt -10000 } | Sort-Object YTop)
+}
+
+function Find-ConversationContainer($Window) {
+    $all = @(All-Desc $Window)
+    foreach ($element in $all) {
+        try { if ($element.Current.ClassName -match 'thread-scroll-container') { return $element } }
+        catch { }
+    }
+    $best = $Window
+    $bestScore = 0
+    foreach ($element in $all) {
+        try {
+            $current = $element.Current
+            if ($current.ControlType.ProgrammaticName -notmatch 'Pane|Group|Document|List|Custom|ListItem') { continue }
+            $text = @(Get-ElementText $element)
+            $score = ([int](@($text | Where-Object { $_ -match 'ChatGPT сказал|ChatGPT said|Вы сказали|You said' }).Count) * 10)
+            $score += [Math]::Min($text.Count, 20)
+            $rect = $current.BoundingRectangle
+            if (($rect.Width -gt 300) -and ($rect.Height -gt 200)) { $score += 5 }
+            if ($score -gt $bestScore) { $best = $element; $bestScore = $score }
+        } catch { }
+    }
+    return $best
+}
+
+function Find-MessageContainer($Conversation, $Anchor) {
+    if (!$Anchor -or !$Anchor.AnchorElement) { return $null }
+    foreach ($ancestor in @(Get-ElementAncestors $Anchor.AnchorElement 12)) {
+        try {
+            $current = $ancestor.Current
+            if ($current.ControlType -eq [System.Windows.Automation.ControlType]::Window) { continue }
+            if ($current.ClassName -match 'thread-scroll-container') { continue }
+            $marks = @((All-Desc $ancestor) | Where-Object {
+                try { $_.Current.ControlType -eq [System.Windows.Automation.ControlType]::Text -and ([string]$_.Current.Name) -match $script:AuthorAnchorPattern }
+                catch { $false }
+            })
+            if (($marks.Count -eq 1) -and ($current.BoundingRectangle.Width -gt 80)) { return $ancestor }
+        } catch { }
+    }
+    return $null
+}
+
+function Resolve-AssistantTextRange($Conversation, $Anchor, [double]$NextUserY = 0, [double]$ComposerY = 0) {
+    if (!$Anchor) { return $null }
+    $top = [double]$Anchor.YTop
+    $ends = New-Object 'System.Collections.Generic.List[object]'
+    if ($NextUserY -gt $top) { [void]$ends.Add([pscustomobject]@{ Y=$NextUserY; Reason='next-user-anchor' }) }
+    if ($ComposerY -gt $top) { [void]$ends.Add([pscustomobject]@{ Y=$ComposerY; Reason='composer-top' }) }
+    $end = @($ends | Where-Object { $_.Y -gt $top } | Sort-Object Y | Select-Object -First 1)
+    if (!$end) {
+        # flex-col-reverse can place the composer above an off-screen last assistant.
+        # The structural node scan still stops at the next author anchor; this large
+        # limit is only the final-message bound, never a global Copy query.
+        return [pscustomobject]@{ StartY=$top; EndY=1e9; StartRuntimeId=$Anchor.AnchorRuntimeId; EndRuntimeId=$null; BoundaryReason='last-assistant-open-end' }
+    }
+    return [pscustomobject]@{ StartY=$top; EndY=[double]$end.Y; StartRuntimeId=$Anchor.AnchorRuntimeId; EndRuntimeId=$null; BoundaryReason=$end.Reason }
+}
+
+function Resolve-MessageBoundary($Conversation, $Anchor, [double]$BottomHint = 0) {
+    if (!$Anchor) { return $null }
+    $anchors = @(Get-AuthorAnchors $Conversation)
+    $top = [double]$Anchor.YTop
+    $next = @($anchors | Where-Object { $_.YTop -gt $top } | Sort-Object YTop | Select-Object -First 1)
+    $bottom = if ($BottomHint -gt $top) { $BottomHint } elseif ($next) { [double]$next.YTop } else { 0 }
+    $container = Find-MessageContainer $Conversation $Anchor
+    $range = $null
+    if ($Anchor.Role -eq 'assistant') {
+        $composerY = 0
+        try { $composerY = [double](Find-Composer $Conversation).Current.BoundingRectangle.Y } catch { }
+        $nextY = if ($next) { [double]$next.YTop } else { 0 }
+        $range = Resolve-AssistantTextRange $Conversation $Anchor $nextY $composerY
+        if ($range.EndY -gt $top) { $bottom = $range.EndY }
+    }
+    return [pscustomobject]@{
+        Role=$Anchor.Role; AuthorAnchorElement=$Anchor.AnchorElement; AnchorElement=$Anchor.AnchorElement
+        ContainerElement=$container; BodyContainerElement=$null; AnchorRuntimeId=$Anchor.AnchorRuntimeId
+        AuthorRuntimeId=$Anchor.AnchorRuntimeId; ContainerRuntimeId=if($container){Get-RuntimeId $container}else{$null}
+        BodyRuntimeId=$null; BoundaryMode=if($container){'Container'}elseif($range){'AssistantRange'}else{'VerticalRange'}
+        Top=$top; Bottom=$bottom; AssistantRange=$range; Conversation=$Conversation; YTop=$top; YBottom=$bottom
+        AnchorName=$Anchor.AnchorName
+    }
+}
+
+function Find-ExactSubmittedUserMessage($Window, [string]$PromptText, $Composer, $BaselineIds, $BaselineCount, $BaselineTextIds) {
+    $conversation = Find-ConversationContainer $Window
+    $nodes = @(All-Desc $conversation)
+    $hits = New-Object 'System.Collections.Generic.List[object]'
+    $promptNorm = (([string]$PromptText) -replace "`r`n|`r|`n", ' ').Trim()
+    foreach ($element in $nodes) {
+        try {
+            $current = $element.Current
+            $nameNorm = (([string]$current.Name) -replace "`r`n|`r|`n", ' ').Trim()
+            if (($current.ControlType -ne [System.Windows.Automation.ControlType]::Text) -or ($nameNorm -ne $promptNorm)) { continue }
+            if (Test-IsComposerDescendant $element) { continue }
+            $rect = $current.BoundingRectangle
+            $userAnchor = $null
+            foreach ($candidate in $nodes) {
+                try {
+                    $candidateCurrent = $candidate.Current
+                    if (($candidateCurrent.ControlType -eq [System.Windows.Automation.ControlType]::Text) -and
+                        ([string]$candidateCurrent.Name -match '^(Вы сказали|You said|User)\s*:')) {
+                        $candidateRect = $candidateCurrent.BoundingRectangle
+                        if (($candidateRect.Y -le $rect.Y) -and (!$userAnchor -or ($candidateRect.Y -gt $userAnchor.YTop))) {
+                            $userAnchor = [pscustomobject]@{
+                                AnchorElement=$candidate; AnchorRuntimeId=(Get-RuntimeId $candidate); Role='user'
+                                AnchorName=[string]$candidateCurrent.Name; YTop=[double]$candidateRect.Y
+                            }
+                        }
+                    }
+                } catch { }
+            }
+            if (!$userAnchor) { continue }
+            if ($userAnchor.AnchorRuntimeId -and $BaselineIds -and $BaselineIds.Contains($userAnchor.AnchorRuntimeId)) { continue }
+            $textRuntimeId = Get-RuntimeId $element
+            if ($textRuntimeId -and $BaselineTextIds -and $BaselineTextIds.Contains($textRuntimeId)) { continue }
+            [void]$hits.Add([pscustomobject]@{
+                TextNode=$element; User=$userAnchor; Boundary=(Resolve-MessageBoundary $conversation $userAnchor)
+            })
+        } catch { }
+    }
+    if ($hits.Count -eq 0) { return $null }
+    return $hits[$hits.Count - 1]
+}
+
+function Confirm-SubmittedPrompt($Window, [string]$PromptText, [string]$Run, $Composer, $BaselineIds, $BaselineCount, $BaselineTextIds, $Deadline) {
+    $last = $null
+    do {
+        Start-Sleep -Milliseconds 250
+        $Window = Get-ActiveChatGPTSurface $Window
+        $clear = Confirm-ComposerCleared $Window $PromptText
+        if (!$clear.Found) {
+            $last = [pscustomobject]@{ Confirmed=$false; ComposerCleared=$false; ExactUserMessageFound=$false; UserMessage=$null; Reason='COMPOSER_NOT_FOUND'; ComposerRuntimeIdAfter=$null; ComposerValue=$null }
+            continue
+        }
+        if (!$clear.Cleared) {
+            $last = [pscustomobject]@{ Confirmed=$false; ComposerCleared=$false; ExactUserMessageFound=$false; UserMessage=$null; Reason='PROMPT_STILL_IN_COMPOSER'; ComposerRuntimeIdAfter=$clear.RuntimeId; ComposerValue=$clear.Value }
+            continue
+        }
+        $hit = Find-ExactSubmittedUserMessage $Window $PromptText $Composer $BaselineIds $BaselineCount $BaselineTextIds
+        if ($hit -and $hit.User) {
+            return [pscustomobject]@{ Confirmed=$true; ComposerCleared=$true; ExactUserMessageFound=$true; UserMessage=$hit.Boundary; Reason='CONFIRMED'; ComposerRuntimeIdAfter=$clear.RuntimeId; ComposerValue=$clear.Value }
+        }
+        $last = [pscustomobject]@{ Confirmed=$false; ComposerCleared=$true; ExactUserMessageFound=$false; UserMessage=$null; Reason='USER_MESSAGE_NOT_CONFIRMED'; ComposerRuntimeIdAfter=$clear.RuntimeId; ComposerValue=$clear.Value }
+    } while ((Get-Date) -lt $Deadline)
+    if ($last) { return $last }
+    return [pscustomobject]@{ Confirmed=$false; ComposerCleared=$false; ExactUserMessageFound=$false; UserMessage=$null; Reason='SUBMIT_NOT_CONFIRMED' }
+}
+
+function Refresh-AssistantBinding($Assistant) {
+    if (!$Assistant -or !$Assistant.Window -or !$Assistant.SubmittedPrompt) { return $null }
+    $conversation = Find-ConversationContainer $Assistant.Window
+    $nodes = @(All-Desc $conversation)
+    $promptNorm = (([string]$Assistant.SubmittedPrompt) -replace "`r`n|`r|`n", ' ').Trim()
+    $promptNodes = New-Object 'System.Collections.Generic.List[object]'
+    foreach ($element in $nodes) {
+        try {
+            $current = $element.Current
+            $nameNorm = (([string]$current.Name) -replace "`r`n|`r|`n", ' ').Trim()
+            if (($current.ControlType -eq [System.Windows.Automation.ControlType]::Text) -and
+                ($nameNorm -eq $promptNorm) -and !(Test-IsComposerDescendant $element)) {
+                [void]$promptNodes.Add($element)
+            }
+        } catch { }
+    }
+    if ($promptNodes.Count -eq 0) { return $null }
+    $promptNode = $promptNodes[$promptNodes.Count - 1]
+    try { $promptY = [double]$promptNode.Current.BoundingRectangle.Y } catch { return $null }
+    $anchors = @(Get-AuthorAnchors $conversation)
+    $userAnchor = @($anchors | Where-Object { ($_.Role -eq 'user') -and ($_.YTop -le $promptY) } | Sort-Object YTop | Select-Object -Last 1)
+    if (!$userAnchor) { return $null }
+    $nextUser = @($anchors | Where-Object { ($_.Role -eq 'user') -and ($_.YTop -gt $userAnchor[0].YTop) } | Sort-Object YTop | Select-Object -First 1)
+    $assistantLimit = if ($nextUser) { [double]$nextUser[0].YTop } else { 1e9 }
+    $assistantAnchor = @($anchors | Where-Object {
+        ($_.Role -eq 'assistant') -and ($_.YTop -gt $userAnchor[0].YTop) -and ($_.YTop -lt $assistantLimit)
+    } | Sort-Object YTop | Select-Object -First 1)
+    if (!$assistantAnchor) { return $null }
+    $bound = Resolve-MessageBoundary $conversation $assistantAnchor $assistantLimit
+    if (!$bound) { return $null }
+    $bound | Add-Member -NotePropertyName Window -NotePropertyValue $Assistant.Window -Force
+    $bound | Add-Member -NotePropertyName SubmittedPrompt -NotePropertyValue $Assistant.SubmittedPrompt -Force
+    $bound | Add-Member -NotePropertyName UserRuntimeId -NotePropertyValue $userAnchor[0].AnchorRuntimeId -Force
+    return $bound
+}
+
+function Get-MessageContainers($Conversation) {
+    $result = New-Object 'System.Collections.Generic.List[object]'
+    foreach ($anchor in @(Get-AuthorAnchors $Conversation)) {
+        $message = Resolve-MessageBoundary $Conversation $anchor
+        if ($message) { [void]$result.Add($message) }
+    }
+    return @($result.ToArray())
+}
+
+function Get-MessageText($Message) {
+    $texts = New-Object 'System.Collections.Generic.List[string]'
+    $range = $Message.AssistantRange
+    foreach ($element in @(All-Desc $Message.Conversation)) {
+        try {
+            $current = $element.Current
+            if ($current.ControlType -ne [System.Windows.Automation.ControlType]::Text) { continue }
+            $value = ([string]$current.Name).Trim()
+            $y = [double]$current.BoundingRectangle.Y
+            $include = $true
+            $reason = 'inside-boundary'
+            if (Test-IsComposerDescendant $element) {
+                $include = $false; $reason = 'composer-descendant'
+            } elseif (($Message.Role -eq 'assistant') -and $range -and
+                (($range.EndY -le $range.StartY) -or ($y -lt $range.StartY) -or ($y -ge $range.EndY))) {
+                $include = $false
+                $reason = if ($y -le $range.StartY) { 'before-body-range' } else { 'after-body-range' }
+            } elseif (($Message.Role -ne 'assistant') -and
+                (($y -lt $Message.Top) -or (($Message.Bottom -gt $Message.Top) -and ($y -ge $Message.Bottom)))) {
+                $include = $false; $reason = 'outside-boundary'
+            } elseif (!$value -or ($value -match $script:ChromeNoise) -or ($value -match '^\d{1,2}:\d{2}$') -or ($value -eq $Message.AnchorName)) {
+                $include = $false; $reason = 'known-non-body-text'
+            }
+            if ($LogPath) {
+                $trace = [ordered]@{ RuntimeId=(Get-RuntimeId $element); Name=$value; Y=$y; Included=$include; Reason=$reason }
+                $tracePath = Join-Path $PSScriptRoot ('diagnostics\assistant_extract_' + $RunId + '.jsonl')
+                New-Item -ItemType Directory -Path (Split-Path -Parent $tracePath) -Force | Out-Null
+                ($trace | ConvertTo-Json -Compress) | Add-Content -LiteralPath $tracePath -Encoding UTF8
+            }
+            if ($include) { [void]$texts.Add($value) }
+        } catch { }
+    }
+    return (($texts -join "`n").Trim())
+}
+
+function Get-ScopedAssistantNodes($Assistant) {
+    if (!$Assistant -or !$Assistant.Conversation -or !$Assistant.AnchorRuntimeId) { return @() }
+    $source = $Assistant.Conversation
+    if (($Assistant.BoundaryMode -eq 'Container') -and $Assistant.ContainerElement) { $source = $Assistant.ContainerElement }
+    $nodes = @(All-Desc $source)
+    $start = -1
+    for ($i = 0; $i -lt $nodes.Count; $i++) {
+        try { if ((Get-RuntimeId $nodes[$i]) -eq $Assistant.AnchorRuntimeId) { $start = $i; break } }
+        catch { }
+    }
+    if (($start -lt 0) -and ($source -ne $Assistant.Conversation)) {
+        $source = $Assistant.Conversation
+        $nodes = @(All-Desc $source)
+        for ($i = 0; $i -lt $nodes.Count; $i++) {
+            try { if ((Get-RuntimeId $nodes[$i]) -eq $Assistant.AnchorRuntimeId) { $start = $i; break } }
+            catch { }
+        }
+    }
+    if ($start -lt 0) { return @() }
+    $end = $nodes.Count
+    for ($i = $start + 1; $i -lt $nodes.Count; $i++) {
+        try {
+            $current = $nodes[$i].Current
+            if (($current.ControlType -eq [System.Windows.Automation.ControlType]::Text) -and
+                ([string]$current.Name -match $script:AuthorAnchorPattern)) {
+                $end = $i; break
+            }
+        } catch { }
+    }
+    if ($end -le $start) { return @() }
+    return @($nodes[$start..($end - 1)])
+}
+
+function Get-AssistantBodyMarkers($Assistant) {
+    $markers = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($element in @(Get-ScopedAssistantNodes $Assistant)) {
+        try {
+            $current = $element.Current
+            if ($current.ControlType -ne [System.Windows.Automation.ControlType]::Text) { continue }
+            $value = ([string]$current.Name).Trim()
+            if (!$value -or ($value -match $script:ChromeNoise) -or ($value -match '^\d{1,2}:\d{2}$') -or (Test-IsComposerDescendant $element)) { continue }
+            if ($value -match $script:AuthorAnchorPattern) { continue }
+            [void]$markers.Add($value)
+        } catch { }
+    }
+    return @($markers.ToArray())
+}
+
+function Test-IsDescendantOf($Element, $Ancestor) {
+    if (!$Element -or !$Ancestor) { return $false }
+    $target = Get-RuntimeId $Ancestor
+    if (!$target) { return $false }
+    foreach ($parent in @(Get-ElementAncestors $Element)) {
+        if ((Get-RuntimeId $parent) -eq $target) { return $true }
+    }
+    return $false
+}
+
+function Get-SupportedPatternNames($Element) {
+    $patterns = [ordered]@{
+        Invoke=[System.Windows.Automation.InvokePattern]
+        ScrollItem=[System.Windows.Automation.ScrollItemPattern]
+        Value=[System.Windows.Automation.ValuePattern]
+        Text=[System.Windows.Automation.TextPattern]
+        Toggle=[System.Windows.Automation.TogglePattern]
+        Scroll=[System.Windows.Automation.ScrollPattern]
+    }
+    $result = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($name in $patterns.Keys) {
+        try {
+            $pattern = $null
+            if ($Element.TryGetCurrentPattern($patterns[$name]::Pattern, [ref]$pattern)) { [void]$result.Add($name) }
+        } catch { }
+    }
+    return @($result.ToArray())
+}
+
+function Find-CopyButtonForAssistant($Assistant) {
+    $notFound = [pscustomobject]@{
+        Found=$false; Error='COPY_BUTTON_NOT_FOUND'; Message='No uniquely paired enabled Copy button'; Element=$null
+        RuntimeId=$null; ParentRuntimeId=$null; ControlType='ControlType.Button'; Name=$null; AutomationId=$null
+        ClassName=$null; BoundingRectangle=$null; IsEnabled=$false; IsOffscreen=$false; SupportedPatterns=@()
+        RelationMode=$null; Y=0; CandidateCount=0; CopyPresent=$false; CopyEnabled=$false
+    }
+    if (!$Assistant -or !$Assistant.AnchorRuntimeId) {
+        $notFound.Error = 'COPY_ASSISTANT_PAIRING_ERROR'
+        $notFound.Message = 'Assistant boundary has no author anchor'
+        return $notFound
+    }
+    $nodes = @(Get-ScopedAssistantNodes $Assistant)
+    $candidates = New-Object 'System.Collections.Generic.List[object]'
+    foreach ($element in $nodes) {
+        try {
+            $current = $element.Current
+            $name = ([string]$current.Name).Trim()
+            if (($current.ControlType -ne [System.Windows.Automation.ControlType]::Button) -or
+                ($name -notmatch '^(Копировать|Copy)$')) { continue }
+            $rect = $current.BoundingRectangle
+            if (($rect.Width -le 0) -or ($rect.Height -le 0) -or [double]::IsNaN($rect.Y) -or [double]::IsInfinity($rect.Y)) { continue }
+            $parentId = Get-ImmediateParentRuntimeId $element
+            $anchorParentId = Get-ImmediateParentRuntimeId $Assistant.AnchorElement
+            # The current Chromium tree has a common relative shrink-0 parent for
+            # every message.  That parent is not a message container, so sharing it
+            # is deliberately not treated as proof of pairing.  The safe relation
+            # is the bounded author-anchor-to-next-author range below.
+            $relation = 'VerticalRange'
+            if ($Assistant.ContainerElement -and (Test-IsDescendantOf $element $Assistant.ContainerElement)) {
+                $relation = 'ContainerDescendant'
+            }
+            [void]$candidates.Add([pscustomobject]@{
+                Element=$element; RuntimeId=(Get-RuntimeId $element); ParentRuntimeId=$parentId
+                ControlType=$current.ControlType.ProgrammaticName; Name=$name; AutomationId=[string]$current.AutomationId
+                ClassName=[string]$current.ClassName; BoundingRectangle=[string]$rect; IsEnabled=[bool]$current.IsEnabled
+                IsOffscreen=[bool]$current.IsOffscreen; SupportedPatterns=@(Get-SupportedPatternNames $element)
+                RelationMode=$relation; Y=[double]$rect.Y
+            })
+        } catch { }
+    }
+    if ($candidates.Count -eq 0) {
+        $notFound.CandidateCount = 0
+        $notFound.CopyPresent = $false
+        $notFound.CopyEnabled = $false
+        return $notFound
+    }
+    if ($candidates.Count -ne 1) {
+        $notFound.Error = 'COPY_BUTTON_AMBIGUOUS'
+        $notFound.Message = "Found $($candidates.Count) Copy buttons in the assistant bound"
+        $notFound.CandidateCount = $candidates.Count
+        $notFound.CopyPresent = $true
+        $notFound.CopyEnabled = [bool](@($candidates | Where-Object { $_.IsEnabled }).Count -gt 0)
+        return $notFound
+    }
+    $selected = $candidates[0]
+    if (!$selected.IsEnabled) {
+        $notFound.Message = 'The paired Copy button is present but disabled'
+        $notFound.CandidateCount = 1
+        $notFound.CopyPresent = $true
+        return $notFound
+    }
+    $selected | Add-Member -NotePropertyName Found -NotePropertyValue $true
+    $selected | Add-Member -NotePropertyName Error -NotePropertyValue $null
+    $selected | Add-Member -NotePropertyName Message -NotePropertyValue 'Unique enabled Copy button paired to assistant'
+    $selected | Add-Member -NotePropertyName CandidateCount -NotePropertyValue 1
+    $selected | Add-Member -NotePropertyName CopyPresent -NotePropertyValue $true
+    $selected | Add-Member -NotePropertyName CopyEnabled -NotePropertyValue $true
+    return $selected
+}
+
+function Normalize-CopiedText([string]$Text) {
+    if ($null -eq $Text) { return $null }
+    return (($Text -replace "`r`n", "`n") -replace "`r", "`n").TrimEnd("`n")
+}
+
+function Get-TextHash([string]$Text) {
+    if ($null -eq $Text) { return $null }
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        return (($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($Text)) | ForEach-Object { $_.ToString('x2') }) -join '')
+    } finally { $sha.Dispose() }
+}
+
+function Write-CopyTrace([string]$TraceRunId, $Row) {
+    try {
+        $directory = Join-Path $PSScriptRoot 'diagnostics'
+        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+        $path = Join-Path $directory ('copy_trace_' + $TraceRunId + '.jsonl')
+        ($Row | ConvertTo-Json -Compress -Depth 12) | Add-Content -LiteralPath $path -Encoding UTF8
+    } catch { Write-Log 'copy-trace' "failed=$($_.Exception.Message)" }
+}
+
+function Invoke-ScrollItemIntoView($Element) {
+    if (!$Element) { return $false }
+    try {
+        $pattern = $null
+        if (!$Element.TryGetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern, [ref]$pattern)) { return $false }
+        $pattern.ScrollIntoView()
+        return $true
+    } catch { return $false }
+}
+
+function Invoke-ButtonStrict($Element) {
+    $runtimeId = Get-RuntimeId $Element
+    if (!$Element) {
+        return [pscustomobject]@{ Succeeded=$false; Error='COPY_INVOKE_FAILED'; Message='Copy element is missing'; RuntimeId=$null }
+    }
+    try {
+        $pattern = $null
+        if (!$Element.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) {
+            return [pscustomobject]@{ Succeeded=$false; Error='COPY_INVOKE_FAILED'; Message='InvokePattern is unavailable'; RuntimeId=$runtimeId }
+        }
+        try {
+            $pattern.Invoke()
+            return [pscustomobject]@{ Succeeded=$true; Error=$null; Message='InvokePattern.Invoke completed'; RuntimeId=$runtimeId }
+        } catch [System.Windows.Automation.ElementNotAvailableException] {
+            return [pscustomobject]@{ Succeeded=$false; Error='COPY_INVOKE_FAILED'; Message='Copy element became stale during Invoke'; RuntimeId=$runtimeId }
+        } catch {
+            return [pscustomobject]@{ Succeeded=$false; Error='COPY_INVOKE_FAILED'; Message=$_.Exception.Message; RuntimeId=$runtimeId }
+        }
+    } catch {
+        return [pscustomobject]@{ Succeeded=$false; Error='COPY_INVOKE_FAILED'; Message=$_.Exception.Message; RuntimeId=$runtimeId }
+    }
+}
+
+function Wait-CopyButtonForAssistant($Assistant, [int]$TimeoutMs = 5000, [int]$PollMs = 200) {
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    $deadline = (Get-Date).AddMilliseconds([Math]::Max(0, $TimeoutMs))
+    $currentAssistant = $Assistant
+    $last = $null
+    $polls = 0
+    do {
+        $polls++
+        $last = Find-CopyButtonForAssistant $currentAssistant
+        if ($last.Found) {
+            $watch.Stop()
+            return [pscustomobject]@{ Found=$true; Candidate=$last; Assistant=$currentAssistant; Error=$null; Message='Copy button appeared in the assistant bound'; Polls=$polls; DurationMs=$watch.ElapsedMilliseconds }
+        }
+        # Multiple Copy controls are a real ambiguity and must stop immediately.
+        if ($last.Error -eq 'COPY_BUTTON_AMBIGUOUS') {
+            $watch.Stop()
+            return [pscustomobject]@{ Found=$false; Candidate=$last; Assistant=$currentAssistant; Error=$last.Error; Message=$last.Message; Polls=$polls; DurationMs=$watch.ElapsedMilliseconds }
+        }
+        # During delayed action-row mounting Chromium can replace the anchor and
+        # temporarily make the old scoped query empty. Rebind by the exact prompt
+        # while waiting; do not widen the search to a global Copy button.
+        try {
+            $rebound = Refresh-AssistantBinding $currentAssistant
+            if ($rebound) { $currentAssistant = $rebound }
+        } catch { }
+        if ((Get-Date) -ge $deadline) { break }
+        Start-Sleep -Milliseconds ([Math]::Max(100, $PollMs))
+    } while ((Get-Date) -lt $deadline)
+    $watch.Stop()
+    $error = if ($last -and $last.Error) { $last.Error } else { 'COPY_BUTTON_NOT_FOUND' }
+    $message = if ($last -and $last.Message) { $last.Message } else { 'Copy button did not appear before the wait deadline' }
+    return [pscustomobject]@{ Found=$false; Candidate=$last; Assistant=$currentAssistant; Error=$error; Message=$message; Polls=$polls; DurationMs=$watch.ElapsedMilliseconds }
+}
+
+function Copy-AssistantResponse($Assistant, [string]$CopyRunId, [int]$TimeoutMs = 4000) {
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    $sentinel = 'DSH_CLIPBOARD_SENTINEL_' + $CopyRunId + '_' + ([guid]::NewGuid().ToString('N').ToUpperInvariant())
+    $old = $null
+    $oldReadable = $false
+    $sentinelSet = $false
+    $copied = $null
+    $clipboardChanged = $false
+    $probe = $null
+    $trace = [ordered]@{
+        timestamp=(Get-Date).ToString('o'); UserRuntimeId=if($Assistant.PSObject.Properties['UserRuntimeId']){[string]$Assistant.UserRuntimeId}else{$null}
+        AssistantRuntimeId=$Assistant.AnchorRuntimeId; CopyRuntimeId=$null; CopyParentRuntimeId=$null; CopyName=$null
+        CopyAutomationId=$null; CopyClassName=$null; CopyBoundingRectangle=$null; CopyIsEnabled=$false; CopyIsOffscreen=$false
+        CopySupportedPatterns=@(); CopyY=$null; RelationMode=$null; CandidateCount=0; InvokeAttempted=$false
+        ClipboardSentinel=$sentinel; ClipboardChanged=$false; CopiedLength=0; CopiedHash=$null
+        ScrollIntoViewAttempted=$false; ScrollIntoViewSucceeded=$false
+        StopPresent=if($Assistant.PSObject.Properties['StopPresent']){[bool]$Assistant.StopPresent}else{$false}; CopyEnabled=$false
+        Error=$null; Message=$null
+    }
+    try { $old = Get-Clipboard -Raw -ErrorAction Stop; $oldReadable = $true } catch { }
+
+    $initialMarkers = @(Get-AssistantBodyMarkers $Assistant)
+    # The response text can stabilize before the action row is mounted.  Wait
+    # for that row instead of treating the first missing Copy as a failure.
+    $wait = Wait-CopyButtonForAssistant $Assistant 5000 200
+    if ($wait.Found -and $wait.Assistant) { $Assistant = $wait.Assistant }
+    $probe = $wait.Candidate
+    $trace.AssistantRuntimeId = $Assistant.AnchorRuntimeId
+    $trace.CopyRuntimeId = if($probe){$probe.RuntimeId}else{$null}
+    $trace.CopyParentRuntimeId = if($probe){$probe.ParentRuntimeId}else{$null}
+    $trace.CopyName = if($probe){$probe.Name}else{$null}
+    $trace.CopyAutomationId = if($probe){$probe.AutomationId}else{$null}
+    $trace.CopyClassName = if($probe){$probe.ClassName}else{$null}
+    $trace.CopyBoundingRectangle = if($probe){$probe.BoundingRectangle}else{$null}
+    $trace.CopyIsEnabled = if($probe){$probe.IsEnabled}else{$false}
+    $trace.CopyIsOffscreen = if($probe){$probe.IsOffscreen}else{$false}
+    $trace.CopySupportedPatterns = if($probe){@($probe.SupportedPatterns)}else{@()}
+    $trace.CopyY = if($probe){$probe.Y}else{$null}
+    $trace.RelationMode = if($probe){$probe.RelationMode}else{$null}
+    $trace.CandidateCount = if($probe){$probe.CandidateCount}else{0}
+    $trace.CopyEnabled = if($probe){$probe.CopyEnabled}else{$false}
+    if (!$probe.Found) {
+        $trace.Error = $probe.Error
+        $trace.Message = $probe.Message
+        Write-CopyTrace $CopyRunId ([pscustomobject]$trace)
+        return [pscustomobject]@{ Confirmed=$false; Text=$null; Error=$probe.Error; Message=$probe.Message; CopyRuntimeId=$probe.RuntimeId; DurationMs=0; LegacyText=$null; TracePath=(Join-Path $PSScriptRoot ('diagnostics\copy_trace_' + $CopyRunId + '.jsonl')) }
+    }
+
+    try {
+        Set-Clipboard -Value $sentinel -ErrorAction Stop
+        $sentinelSet = $true
+    } catch {
+        $trace.Error = 'COPY_NOT_CONFIRMED'; $trace.Message = 'Could not set clipboard sentinel'
+        Write-CopyTrace $CopyRunId ([pscustomobject]$trace)
+        return [pscustomobject]@{ Confirmed=$false; Text=$null; Error='COPY_NOT_CONFIRMED'; Message='Could not set clipboard sentinel'; CopyRuntimeId=$probe.RuntimeId; DurationMs=0; LegacyText=$null; TracePath=(Join-Path $PSScriptRoot ('diagnostics\copy_trace_' + $CopyRunId + '.jsonl')) }
+    }
+
+    try {
+        # Setting the sentinel can trigger another Chromium accessibility-tree
+        # rebuild. Wait for the same bounded assistant scope to expose Copy again;
+        # never widen this query to all buttons in the conversation.
+        $freshWait = Wait-CopyButtonForAssistant $Assistant 2000 150
+        if ($freshWait.Found -and $freshWait.Assistant) { $Assistant = $freshWait.Assistant }
+        $fresh = $freshWait.Candidate
+        if (!$freshWait.Found) {
+            $error = if($freshWait.Error){$freshWait.Error}else{'COPY_ASSISTANT_PAIRING_ERROR'}
+            $message = if($freshWait.Message){$freshWait.Message}else{'Copy pairing changed before Invoke'}
+            $trace.Error = $error; $trace.Message = $message
+            Write-CopyTrace $CopyRunId ([pscustomobject]$trace)
+            return [pscustomobject]@{ Confirmed=$false; Text=$null; Error=$error; Message=$message; CopyRuntimeId=if($probe){$probe.RuntimeId}else{$null}; DurationMs=0; LegacyText=$null; TracePath=(Join-Path $PSScriptRoot ('diagnostics\copy_trace_' + $CopyRunId + '.jsonl')) }
+        }
+        $trace.CopyRuntimeId = $fresh.RuntimeId
+        $trace.CopyParentRuntimeId = $fresh.ParentRuntimeId
+        $trace.CopyName = $fresh.Name
+        $trace.CopyAutomationId = $fresh.AutomationId
+        $trace.CopyClassName = $fresh.ClassName
+        $trace.CopyBoundingRectangle = $fresh.BoundingRectangle
+        $trace.CopyIsEnabled = $fresh.IsEnabled
+        $trace.CopyIsOffscreen = $fresh.IsOffscreen
+        $trace.CopySupportedPatterns = @($fresh.SupportedPatterns)
+        $trace.CopyY = $fresh.Y
+        $trace.RelationMode = $fresh.RelationMode
+        $trace.CopyEnabled = $fresh.CopyEnabled
+        if ($fresh.IsOffscreen) {
+            $trace.ScrollIntoViewAttempted = $true
+            $trace.ScrollIntoViewSucceeded = Invoke-ScrollItemIntoView $fresh.Element
+            Write-CopyTrace $CopyRunId ([pscustomobject]$trace)
+            Start-Sleep -Milliseconds 250
+            $w = Get-ActiveChatGPTSurface $Assistant.Window
+            $rebound = Refresh-AssistantBinding $Assistant
+            if ($rebound) { $Assistant = $rebound }
+            $visible = Find-CopyButtonForAssistant $Assistant
+            if (!$visible.Found) {
+                $trace.Error = if($visible.Error){$visible.Error}else{'COPY_BUTTON_NOT_FOUND'}
+                $trace.Message = 'Bound Copy remained unavailable after ScrollItemPattern'
+                Write-CopyTrace $CopyRunId ([pscustomobject]$trace)
+                return [pscustomobject]@{ Confirmed=$false; Text=$null; Error=$trace.Error; Message=$trace.Message; CopyRuntimeId=$fresh.RuntimeId; DurationMs=0; LegacyText=$null; TracePath=(Join-Path $PSScriptRoot ('diagnostics\\copy_trace_' + $CopyRunId + '.jsonl')) }
+            }
+            $fresh = $visible
+            $trace.CopyRuntimeId = $fresh.RuntimeId
+            $trace.CopyBoundingRectangle = $fresh.BoundingRectangle
+            $trace.CopyIsOffscreen = $fresh.IsOffscreen
+            $trace.CopySupportedPatterns = @($fresh.SupportedPatterns)
+            $trace.CopyY = $fresh.Y
+            $trace.CopyEnabled = $fresh.CopyEnabled
+        }
+        $trace.InvokeAttempted = $true
+        Write-CopyTrace $CopyRunId ([pscustomobject]$trace)
+
+        $invoke = Invoke-ButtonStrict $fresh.Element
+        if (!$invoke.Succeeded) {
+            $trace.Error = $invoke.Error; $trace.Message = $invoke.Message
+            Write-CopyTrace $CopyRunId ([pscustomobject]$trace)
+            return [pscustomobject]@{ Confirmed=$false; Text=$null; Error='COPY_INVOKE_FAILED'; Message=$invoke.Message; CopyRuntimeId=$fresh.RuntimeId; DurationMs=0; LegacyText=$null; TracePath=(Join-Path $PSScriptRoot ('diagnostics\copy_trace_' + $CopyRunId + '.jsonl')) }
+        }
+
+        $deadline = (Get-Date).AddMilliseconds($TimeoutMs)
+        do {
+            Start-Sleep -Milliseconds 150
+            try { $value = Get-Clipboard -Raw -ErrorAction Stop } catch { $value = $null }
+            if (($null -ne $value) -and ([string]$value -ne $sentinel)) {
+                $clipboardChanged = $true
+                $copied = Normalize-CopiedText ([string]$value)
+                break
+            }
+        } while ((Get-Date) -lt $deadline)
+        $watch.Stop()
+        $trace.ClipboardChanged = $clipboardChanged
+        $trace.CopiedLength = if($null -ne $copied){$copied.Length}else{0}
+        $trace.CopiedHash = Get-TextHash $copied
+        $trace.Message = 'Clipboard polling completed'
+        Write-CopyTrace $CopyRunId ([pscustomobject]$trace)
+        if (!$clipboardChanged) {
+            return [pscustomobject]@{ Confirmed=$false; Text=$null; Error='COPY_NOT_CONFIRMED'; Message='Clipboard sentinel was not replaced after Invoke'; CopyRuntimeId=$fresh.RuntimeId; DurationMs=$watch.ElapsedMilliseconds; LegacyText=$null; TracePath=(Join-Path $PSScriptRoot ('diagnostics\copy_trace_' + $CopyRunId + '.jsonl')) }
+        }
+        if ([string]::IsNullOrWhiteSpace($copied)) {
+            return [pscustomobject]@{ Confirmed=$false; Text=$null; Error='COPY_EMPTY'; Message='Copy produced empty clipboard text'; CopyRuntimeId=$fresh.RuntimeId; DurationMs=$watch.ElapsedMilliseconds; LegacyText=$null; TracePath=(Join-Path $PSScriptRoot ('diagnostics\copy_trace_' + $CopyRunId + '.jsonl')) }
+        }
+
+        $refreshedAssistant = Refresh-AssistantBinding $Assistant
+        if ($refreshedAssistant) {
+            $Assistant = $refreshedAssistant
+            $trace.AssistantRuntimeId = $Assistant.AnchorRuntimeId
+            $trace.UserRuntimeId = if($Assistant.PSObject.Properties['UserRuntimeId']){[string]$Assistant.UserRuntimeId}else{$trace.UserRuntimeId}
+        }
+        $markers = @(Get-AssistantBodyMarkers $Assistant)
+        $belongs = $false
+        foreach ($marker in $markers) {
+            if ($marker -and $copied.Contains($marker)) { $belongs = $true; break }
+        }
+        if (!$belongs) {
+            $legacy = ($markers -join "`n")
+            return [pscustomobject]@{ Confirmed=$false; Text=$null; Error='COPY_ASSISTANT_PAIRING_ERROR'; Message='Clipboard text has no marker from the paired assistant body'; CopyRuntimeId=$fresh.RuntimeId; DurationMs=$watch.ElapsedMilliseconds; LegacyText=$legacy; TracePath=(Join-Path $PSScriptRoot ('diagnostics\copy_trace_' + $CopyRunId + '.jsonl')) }
+        }
+        if ($Assistant.PSObject.Properties['SubmittedPrompt'] -and $Assistant.SubmittedPrompt -and $copied.Contains([string]$Assistant.SubmittedPrompt)) {
+            return [pscustomobject]@{ Confirmed=$false; Text=$null; Error='COPY_ASSISTANT_PAIRING_ERROR'; Message='Clipboard text contains the submitted prompt'; CopyRuntimeId=$fresh.RuntimeId; DurationMs=$watch.ElapsedMilliseconds; LegacyText=($markers -join "`n"); TracePath=(Join-Path $PSScriptRoot ('diagnostics\copy_trace_' + $CopyRunId + '.jsonl')) }
+        }
+        $after = Find-CopyButtonForAssistant $Assistant
+        if (!$after.Found -and ($after.Error -eq 'COPY_BUTTON_AMBIGUOUS')) {
+            return [pscustomobject]@{ Confirmed=$false; Text=$null; Error='COPY_BUTTON_AMBIGUOUS'; Message='Copy pairing became ambiguous after Invoke'; CopyRuntimeId=$fresh.RuntimeId; DurationMs=$watch.ElapsedMilliseconds; LegacyText=($markers -join "`n"); TracePath=(Join-Path $PSScriptRoot ('diagnostics\copy_trace_' + $CopyRunId + '.jsonl')) }
+        }
+        # A rerender can temporarily remove the control from RawView.  The Copy
+        # transaction itself is proven by sentinel replacement; never fall back
+        # to a global button or to the old clipboard value.  Keep the originally
+        # paired runtime id in the result when post-check is only NOT_FOUND.
+        $resultCopyId = if($after.Found){$after.RuntimeId}else{$fresh.RuntimeId}
+        return [pscustomobject]@{ Confirmed=$true; Text=$copied; Error=$null; Message='Copied text confirmed by sentinel and assistant marker'; CopyRuntimeId=$resultCopyId; DurationMs=$watch.ElapsedMilliseconds; LegacyText=($markers -join "`n"); TracePath=(Join-Path $PSScriptRoot ('diagnostics\copy_trace_' + $CopyRunId + '.jsonl')) }
+    } finally {
+        if ($sentinelSet) {
+            try {
+                $currentClipboard = Get-Clipboard -Raw -ErrorAction SilentlyContinue
+                if (([string]$currentClipboard -eq $sentinel) -or (($null -ne $copied) -and ([string]$currentClipboard -eq $copied))) {
+                    if ($oldReadable) { Set-Clipboard -Value $old -ErrorAction SilentlyContinue }
+                }
+            } catch { }
+        }
+    }
+}
+
+function Set-ComposerText($Element, [string]$Text) {
+    try {
+        $pattern = $null
+        if ($Element.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) {
+            $pattern.SetValue($Text)
+            Start-Sleep -Milliseconds 150
+            return $true
+        }
+    } catch { }
+    try {
+        $Element.SetFocus()
+        Set-Clipboard -Value $Text -ErrorAction Stop
+        [System.Windows.Forms.SendKeys]::SendWait('^v')
+        Start-Sleep -Milliseconds 200
+        return $true
+    } catch { return $false }
+}
+
+function Confirm-ComposerPrompt($Window, [string]$PromptText, [ref]$Composer) {
+    $deadline = (Get-Date).AddSeconds(3)
+    do {
+        $candidate = Find-Composer $Window
+        if ($candidate) {
+            $value = Get-ComposerValue $candidate
+            $normValue = (([string]$value) -replace "`r`n|`r|`n", ' ').Trim()
+            $normPrompt = (([string]$PromptText) -replace "`r`n|`r|`n", ' ').Trim()
+            if (($normValue -eq $normPrompt) -or ($value.Trim() -eq $PromptText)) {
+                $Composer.Value = $candidate
+                return $true
+            }
+        }
+        Start-Sleep -Milliseconds 150
+    } while ((Get-Date) -lt $deadline)
+    return $false
+}
+
+function Invoke-Button($Element) {
+    $result = Invoke-ButtonStrict $Element
+    return [bool]$result.Succeeded
+}
+
+function Save-MessageParentChain($Conversation, [string]$DiagnosticRunId) {
+    try {
+        $rows = New-Object 'System.Collections.Generic.List[object]'
+        $walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
+        foreach ($anchor in @(Get-AuthorAnchors $Conversation)) {
+            $chain = New-Object 'System.Collections.Generic.List[object]'
+            $currentElement = $anchor.AnchorElement
+            for ($depth = 0; $depth -lt 12 -and $currentElement; $depth++) {
+                try {
+                    $current = $currentElement.Current
+                    $descendants = @(All-Desc $currentElement)
+                    [void]$chain.Add([pscustomobject]@{
+                        Depth=$depth; RuntimeId=(Get-RuntimeId $currentElement); ParentRuntimeId=(Get-ImmediateParentRuntimeId $currentElement)
+                        ControlType=$current.ControlType.ProgrammaticName; ClassName=$current.ClassName; AutomationId=$current.AutomationId
+                        Name=$current.Name; BoundingRectangle=[string]$current.BoundingRectangle
+                        DescendantTextCount=@($descendants | Where-Object { try { $_.Current.ControlType -eq [System.Windows.Automation.ControlType]::Text } catch { $false } }).Count
+                        DescendantButtonCount=@($descendants | Where-Object { try { $_.Current.ControlType -eq [System.Windows.Automation.ControlType]::Button } catch { $false } }).Count
+                    })
+                    $currentElement = $walker.GetParent($currentElement)
+                } catch { break }
+            }
+            [void]$rows.Add([pscustomobject]@{ Role=$anchor.Role; AnchorRuntimeId=$anchor.AnchorRuntimeId; AnchorName=$anchor.AnchorName; YTop=$anchor.YTop; Ancestors=@($chain.ToArray()) })
+        }
+        $path = Join-Path $PSScriptRoot ('diagnostics\message_parent_chain_' + $DiagnosticRunId + '.json')
+        New-Item -ItemType Directory -Path (Split-Path -Parent $path) -Force | Out-Null
+        $rows.ToArray() | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $path -Encoding UTF8
+    } catch { Write-Log 'diagnostic' "parent-chain failed=$($_.Exception.Message)" }
+}
+
+function Save-FailureDump($Window, [string]$Code) {
+    try {
+        $directory = Join-Path $PSScriptRoot 'logs'
+        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+        & (Join-Path $PSScriptRoot 'chatgpt_uia_dump.ps1') `
+            -Path (Join-Path $directory ('failure_' + $RunId + '_uia.txt')) `
+            -JsonPath (Join-Path $directory ('failure_' + $RunId + '_uia.json')) | Out-Null
+        $composer = Find-Composer $Window
+        $composerValue = Get-ComposerValue $composer
+        $notes = @(
+            "RunId: $RunId",
+            "FailureStage: $Code",
+            "ActiveSurface: ChatGPT/Codex",
+            "ComposerRuntimeId: $(Get-RuntimeId $composer)",
+            "ComposerContainsPrompt: $(([string]$composerValue).Contains($Prompt))",
+            "ComposerValueLength: $(([string]$composerValue).Length)",
+            'VisualInspection: required via Computer Use',
+            'Private screenshot: not saved',
+            'UIA/visual discrepancy: inspect the accompanying dump before retry'
+        ) | Out-String
+        Set-Content -LiteralPath (Join-Path $directory ('failure_' + $RunId + '_computer_use_notes.md')) -Value $notes -Encoding UTF8
+    } catch { Write-Log 'diagnostic' "dump failed=$($_.Exception.Message)" }
+}
+
+try {
+    if ($TimeoutSeconds -lt 5) { Fail 'INVALID_ARGUMENT' 'TimeoutSeconds must be at least 5' 1 }
+    $logDirectory = if ($LogPath) { Split-Path -Parent $LogPath } else { $null }
+    if ($logDirectory) { New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null }
+    Write-Log 'start' "mode=$modeOut promptLength=$($Prompt.Length)"
+
+    $mutex = New-Object System.Threading.Mutex($false, 'Global\LunaChatGPTDesktopBridge')
+    if (!$mutex.WaitOne(10000)) { Fail 'BUSY' 'Another bridge invocation is controlling Desktop' 1 }
+
+    $w = Wait-MainWindow
+    $ws = New-Object -ComObject WScript.Shell
+    $null = $ws.AppActivate($w.Current.Name)
+    if ($Mode -eq 'Quick') {
+        $ws.SendKeys('^%n')
+    } else {
+        $ws.SendKeys('%1'); Start-Sleep -Milliseconds 700; $ws.SendKeys('^%o')
+    }
+    $w = Get-ActiveChatGPTSurface $w
+    Write-Log 'surface' "pid=$($w.Current.ProcessId) windowRuntimeId=$(Get-RuntimeId $w)"
+
+    $composerDeadline = (Get-Date).AddSeconds([Math]::Min($TimeoutSeconds, 30))
+    $composer = $null
+    do {
+        $composer = Find-Composer $w
+        if ($composer) { break }
+        Start-Sleep -Milliseconds 250
+        $w = Get-ActiveChatGPTSurface $w
+    } while ((Get-Date) -lt $composerDeadline)
+    if (!$composer) { Fail 'COMPOSER_NOT_FOUND' 'Visible enabled composer not found' 3 }
+    Write-Log 'composer' "runtimeId=$(Get-RuntimeId $composer)"
+
+    $conversation = Find-ConversationContainer $w
+    $beforeMessages = @(Get-MessageContainers $conversation)
+    $beforeIds = New-Object 'System.Collections.Generic.HashSet[string]'
+    $beforeTextIds = New-Object 'System.Collections.Generic.HashSet[string]'
+    foreach ($message in $beforeMessages) {
+        if ($message.AnchorRuntimeId) { [void]$beforeIds.Add($message.AnchorRuntimeId) }
+        foreach ($element in @(All-Desc $message.Conversation)) {
+            $runtimeId = Get-RuntimeId $element
+            if ($runtimeId) { [void]$beforeTextIds.Add($runtimeId) }
+        }
+    }
+    Save-MessageParentChain $conversation $RunId
+    Write-Log 'baseline' "messageCount=$($beforeMessages.Count)"
+
+    # The parent-chain diagnostic can take several seconds on a large history!
+    # Chromium may rerender the composer during that interval, so never reuse
+    # the pre-diagnostic UIA element for insertion.
+    $w = Get-ActiveChatGPTSurface $w
+    $composer = Find-Composer $w
+    if (!$composer) { Fail 'COMPOSER_NOT_FOUND' 'Visible enabled composer disappeared after baseline scan' 3 }
+    Write-Log 'composer-refresh' "runtimeId=$(Get-RuntimeId $composer)"
+    if (!(Set-ComposerText $composer $Prompt)) { Fail 'INPUT_FAILED' 'Could not set composer value' 1 }
+    $composerValue = Get-ComposerValue $composer
+    $promptNorm = (([string]$Prompt) -replace "`r`n|`r|`n", ' ').Trim()
+    $valueNorm = (([string]$composerValue) -replace "`r`n|`r|`n", ' ').Trim()
+    Write-Log 'prompt-readback' "valueLength=$(([string]$composerValue).Length) valueHash=$(Get-TextHash ([string]$composerValue)) normalizedMatch=$($valueNorm -eq $promptNorm)"
+    # Always perform a fresh exact readback: SetValue may rerender the ProseMirror node.
+    if (!(Confirm-ComposerPrompt $w $Prompt ([ref]$composer))) {
+        Fail 'INPUT_NOT_CONFIRMED' 'Composer did not contain the exact prompt after insertion' 1
+    }
+    Write-Log 'prompt-inserted' "runtimeId=$(Get-RuntimeId $composer) promptLength=$($Prompt.Length)"
+
+    # This explicit test-only branch does not submit and therefore cannot reach assistant lookup.
+    if ($TestSubmitGateFailure) {
+        Write-Log 'submit-skipped-test' 'intentional non-submit; assistant lookup and Copy are forbidden'
+        Fail 'SUBMIT_NOT_CONFIRMED' 'Test mode intentionally did not invoke Send' 6
+    }
+
+    try { $composer.SetFocus() } catch { }
+    $send = Find-SendButtonForComposer $w $composer
+    if (!$send) { Fail 'SUBMIT_FAILED' 'Send button for composer surface was not found' 4 }
+    Write-Log 'send-validation' "runtimeId=$(Get-RuntimeId $send) sameSurface=$(Same-Surface $composer $send)"
+    if (!(Invoke-Button $send)) { Fail 'SUBMIT_FAILED' 'Validated Send button Invoke failed' 4 }
+    Write-Log 'submit-attempted' 'method=Invoke'
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+
+    $submitted = Confirm-SubmittedPrompt $w $Prompt $RunId $composer $beforeIds $beforeMessages.Count $beforeTextIds $deadline
+    Write-Log 'submit-confirm' "confirmed=$($submitted.Confirmed) composerCleared=$($submitted.ComposerCleared) exactUser=$($submitted.ExactUserMessageFound) reason=$($submitted.Reason)"
+    if (!$submitted.Confirmed) { Fail 'SUBMIT_NOT_CONFIRMED' $submitted.Reason 6 }
+    $user = $submitted.UserMessage
+    if (!$user) { Fail 'USER_MESSAGE_NOT_CONFIRMED' 'Confirmed submit had no user boundary' 6 }
+    Write-Log 'user' "anchorRuntimeId=$($user.AnchorRuntimeId) boundaryMode=$($user.BoundaryMode) top=$($user.Top) bottom=$($user.Bottom)"
+
+    $assistant = $null
+    do {
+        Start-Sleep -Milliseconds 200
+        $w = Get-ActiveChatGPTSurface $w
+        $currentConversation = Find-ConversationContainer $w
+        $anchors = @(Get-AuthorAnchors $currentConversation)
+        $nextUser = @($anchors | Where-Object { ($_.Role -eq 'user') -and ($_.YTop -gt $user.Top) } | Sort-Object YTop | Select-Object -First 1)
+        $assistantLimit = if ($nextUser) { [double]$nextUser[0].YTop } else { 1e9 }
+        $assistantAnchor = @($anchors | Where-Object {
+            ($_.Role -eq 'assistant') -and ($_.YTop -gt $user.Top) -and ($_.YTop -lt $assistantLimit)
+        } | Sort-Object YTop | Select-Object -First 1)
+        if ($assistantAnchor) {
+            $assistant = Resolve-MessageBoundary $currentConversation $assistantAnchor $assistantLimit
+            if ($assistant) {
+                $assistant | Add-Member -NotePropertyName Window -NotePropertyValue $w -Force
+                $assistant | Add-Member -NotePropertyName SubmittedPrompt -NotePropertyValue $Prompt -Force
+                break
+            }
+        }
+    } while ((Get-Date) -lt $deadline)
+    if (!$assistant) { Fail 'RESPONSE_NOT_FOUND' 'Assistant boundary paired to user was not found' 6 }
+    Write-Log 'assistant' "anchorRuntimeId=$($assistant.AnchorRuntimeId) containerRuntimeId=$($assistant.ContainerRuntimeId) boundaryMode=$($assistant.BoundaryMode) top=$($assistant.Top) bottom=$($assistant.Bottom) generationStart=$(Get-Date -Format o)"
+
+    $lastLegacy = ''
+    $lastChange = Get-Date
+    $legacyAnswer = ''
+    $completed = $false
+    $streamTrace = Join-Path $PSScriptRoot ('diagnostics\stream_trace_' + $RunId + '.jsonl')
+    New-Item -ItemType Directory -Path (Split-Path -Parent $streamTrace) -Force | Out-Null
+    do {
+        Start-Sleep -Milliseconds 250
+        $w = Get-ActiveChatGPTSurface $w
+        $currentConversation = Find-ConversationContainer $w
+        $anchors = @(Get-AuthorAnchors $currentConversation)
+        $nextUserNow = @($anchors | Where-Object { ($_.Role -eq 'user') -and ($_.YTop -gt $user.Top) } | Sort-Object YTop | Select-Object -First 1)
+        $assistantLimitNow = if ($nextUserNow) { [double]$nextUserNow[0].YTop } else { 1e9 }
+        $currentAnchor = @($anchors | Where-Object {
+            ($_.Role -eq 'assistant') -and ($_.YTop -gt $user.Top) -and ($_.YTop -lt $assistantLimitNow)
+        } | Sort-Object YTop | Select-Object -First 1)
+        if ($currentAnchor) {
+            $freshAssistant = Resolve-MessageBoundary $currentConversation $currentAnchor $assistantLimitNow
+            if ($freshAssistant) {
+                $assistant = $freshAssistant
+                $assistant | Add-Member -NotePropertyName Window -NotePropertyValue $w -Force
+                $assistant | Add-Member -NotePropertyName SubmittedPrompt -NotePropertyValue $Prompt -Force
+            }
+        }
+        $legacyAnswer = Get-MessageText $assistant
+        if ($legacyAnswer -ne $lastLegacy) { $lastLegacy = $legacyAnswer; $lastChange = Get-Date }
+        $stop = Find-StopButton $w
+        $copyInfo = Find-CopyButtonForAssistant $assistant
+        $streamRow = [ordered]@{
+            timestamp=(Get-Date).ToString('o'); UserRuntimeId=$user.AnchorRuntimeId; AssistantRuntimeId=$assistant.AnchorRuntimeId
+            StopPresent=[bool]$stop; CopyPresent=[bool]$copyInfo.CopyPresent; AssistantTextLength=$legacyAnswer.Length
+            CopyEnabled=[bool]$copyInfo.CopyEnabled; CopyRuntimeId=$copyInfo.RuntimeId; CopyRelationMode=$copyInfo.RelationMode
+            CopyCandidateCount=$copyInfo.CandidateCount
+        }
+        ($streamRow | ConvertTo-Json -Compress) | Add-Content -LiteralPath $streamTrace -Encoding UTF8
+        $stableMs = ((Get-Date) - $lastChange).TotalMilliseconds
+        # Copy may be mounted by the virtualized Chromium view after the text
+        # has become stable.  Its absence in this 250 ms sample is not failure.
+        # Completion is established by stable text + Stop absent; Copy is waited
+        # for in a bounded assistant scope immediately afterwards.
+        if ($legacyAnswer -and ($stableMs -ge 2200) -and !$stop) {
+            $completed = $true
+            break
+        }
+    } while ((Get-Date) -lt $deadline)
+
+    if (!$completed) { Fail 'GENERATION_TIMEOUT' 'Generation did not complete before timeout' 5 }
+    if (!$legacyAnswer) { Fail 'RESPONSE_NOT_FOUND' 'New assistant response has no readable text' 6 }
+    $copyWait = Wait-CopyButtonForAssistant $assistant 5000 200
+    Write-Log 'copy-wait' "found=$($copyWait.Found) error=$($copyWait.Error) polls=$($copyWait.Polls) durationMs=$($copyWait.DurationMs)"
+    if (!$copyWait.Found) { Fail $copyWait.Error $copyWait.Message 6 }
+    if ($legacyAnswer -eq $Prompt -or $legacyAnswer.Contains($Prompt)) {
+        Write-Log 'boundary-reject' 'assistant text contains submitted prompt'
+        Fail 'MESSAGE_BOUNDARY_ERROR' 'Assistant boundary contains the submitted user prompt' 6
+    }
+    $assistant | Add-Member -NotePropertyName UserRuntimeId -NotePropertyValue $user.AnchorRuntimeId -Force
+    $assistant | Add-Member -NotePropertyName StopPresent -NotePropertyValue $false -Force
+    Write-Log 'complete' "runtimeId=$($assistant.AnchorRuntimeId) responseLength=$($legacyAnswer.Length) legacyHash=$(Get-TextHash $legacyAnswer)"
+
+    $copyResult = Copy-AssistantResponse $assistant $RunId
+    Write-Log 'copy' "confirmed=$($copyResult.Confirmed) error=$($copyResult.Error) copyRuntimeId=$($copyResult.CopyRuntimeId) copiedLength=$(if($copyResult.Text){$copyResult.Text.Length}else{0}) legacyLength=$($legacyAnswer.Length)"
+    if (!$copyResult.Confirmed) { Fail $copyResult.Error $copyResult.Message 6 }
+    $answer = $copyResult.Text
+    if ([string]::IsNullOrWhiteSpace($answer)) { Fail 'COPY_EMPTY' 'Confirmed copy returned empty text' 6 }
+    if ($answer.Contains($Prompt)) { Fail 'COPY_ASSISTANT_PAIRING_ERROR' 'Copied text contains submitted prompt' 6 }
+
+    $deep = $null
+    $conversationId = $null
+    if ($Mode -eq 'NewChat') {
+        try {
+            $oldDeep = Get-Clipboard -Raw -ErrorAction SilentlyContinue
+            $ws.SendKeys('^%l')
+            $deeplinkDeadline = (Get-Date).AddSeconds(3)
+            do {
+                Start-Sleep -Milliseconds 150
+                $deep = Get-Clipboard -Raw -ErrorAction SilentlyContinue
+            } while ((Get-Date) -lt $deeplinkDeadline -and (!$deep -or ($deep -eq $oldDeep)))
+            $match = [regex]::Match($deep, '([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})', [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+            if ($match.Success) { $conversationId = $match.Value }
+        } catch { }
+    }
+
+    $output = [ordered]@{
+        ok=$true; runId=$RunId; mode=$modeOut; response=$answer; conversationId=$conversationId; deeplink=$deep
+        extraction='copy'; copyRuntimeId=$copyResult.CopyRuntimeId; copyTracePath=$copyResult.TracePath
+        legacyLength=$legacyAnswer.Length; legacyHash=(Get-TextHash $legacyAnswer); copiedLength=$answer.Length; copiedHash=(Get-TextHash $answer)
+        durationMs=[int]((Get-Date)-$started).TotalMilliseconds; error=$null
+    }
+    if ($ReturnJson) { $output | ConvertTo-Json -Compress -Depth 8 } else { [Console]::Out.WriteLine($answer) }
+    exit 0
+}
+catch {
+    $parts = $_.Exception.Message -split '\|', 3
+    $code = if ($parts.Count -gt 0) { $parts[0] } else { 'ERROR' }
+    $message = if ($parts.Count -gt 1) { $parts[1] } else { $_.Exception.Message }
+    $exitCode = if ($parts.Count -gt 2) { [int]$parts[2] } else { 1 }
+    Write-Log 'error' "$code $message"
+    try { if ($w) { Save-FailureDump $w $code } } catch { }
+    $output = [ordered]@{
+        ok=$false; runId=$RunId; mode=$modeOut; response=$null; conversationId=$null; deeplink=$null
+        extraction=$null; copyRuntimeId=$null; copyTracePath=(Join-Path $PSScriptRoot ('diagnostics\copy_trace_' + $RunId + '.jsonl'))
+        durationMs=[int]((Get-Date)-$started).TotalMilliseconds; error=[ordered]@{ code=$code; message=$message }
+    }
+    if ($ReturnJson) { $output | ConvertTo-Json -Compress -Depth 8 } else { [Console]::Error.WriteLine($message) }
+    exit $exitCode
+}
+finally {
+    if ($mutex) { try { $mutex.ReleaseMutex(); $mutex.Dispose() } catch { } }
+}

@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "rp_mt7zxopg_e3cfe4072fc4",
+  "kind": "rescue",
+  "workspace": "D:\\DEEPSEEK",
+  "repository": {
+    "root": "D:\\DEEPSEEK",
+    "commonDir": "D:\\DEEPSEEK\\.git",
+    "branch": "master",
+    "stagedPaths": []
+  },
+  "sessionId": "session-cad2111e-09a3-4f72-a359-68af268f2905",
+  "label": "Before restoring rp_mt7iw4zj_ed0c6c42dce7",
+  "parentRestorePoint": "rp_mt7iw4zj_ed0c6c42dce7",
+  "createdAt": 1787621919316,
+  "treeHash": "0531b2675996c82899da0f6d797a0f5f129e1fee9ae18860879469f7b874fcc9",
+  "fileCount": 4,
+  "totalBytes": 2793304,
+  "entries": {
+    "README.md": {
+      "kind": "file",
+      "blob": "47cdf763d2fdbd8357208aed3a47f75dbad90d1358105e996f91e891690dc420",
+      "size": 128,
+      "mode": 438
+    },
+    "restart-dsh.cmd": {
+      "kind": "file",
+      "blob": "27e1a34f167badddbb73724adc3df923af812fdcdb7b1fbbbe769cdfccd25924",
+      "size": 389,
+      "mode": 438
+    },
+    "rewind-test.txt": {
+      "kind": "file",
+      "blob": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+      "size": 5,
+      "mode": 438
+    },
+    "Тест фото.png": {
+      "kind": "file",
+      "blob": "b2e532a7ec1dd64edc129964ea50aad4cde2c4738690b56ae137a2594bf0244c",
+      "size": 2792782,
+      "mode": 438
+    }
+  },
+  "restoreCount": 0
+}

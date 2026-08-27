@@ -1,0 +1,16 @@
+{
+  "name": "dsh-profile-web",
+  "private": true,
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-web-app",
+        "dsh-codex-switch"
+      ]
+    }
+  },
+  "dependencies": {
+    "dsh-codex-switch": "0.1.0-alpha.2"
+  }
+}

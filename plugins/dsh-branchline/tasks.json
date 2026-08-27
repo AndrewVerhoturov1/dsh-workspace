@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "tasks": {
+    "wt-c366a3fd-da80-4949-9c0e-0e11fd6ba2cc": {
+      "id": "wt-c366a3fd-da80-4949-9c0e-0e11fd6ba2cc",
+      "title": "DEEPSEEK worktree",
+      "repository": "D:\\DEEPSEEK",
+      "commonDirectory": "D:\\DEEPSEEK\\.git",
+      "path": "C:\\Users\\andre\\.dsh\\plugins\\dsh-branchline\\worktrees\\977a2b71136c4c00\\deepseek-worktree-c366a3fd",
+      "branch": "dsh/deepseek-worktree-c366a3fd",
+      "baseRef": "origin/main",
+      "baseCommit": "299f0a628474a74307263072652e684aac019b1a",
+      "createdAt": "2026-08-25T08:29:41.639Z",
+      "updatedAt": "2026-08-25T08:30:21.780Z",
+      "phase": "archived",
+      "conclusion": "discarded"
+    }
+  }
+}

@@ -1,0 +1,89 @@
+- generic [ref=e1]:
+  - generic [ref=e4]:
+    - generic [ref=e7]:
+      - button "Open sidebar" [ref=e133] [cursor=pointer]
+      - button "New session" [ref=e41] [cursor=pointer]
+      - generic [ref=e47]:
+        - button "Add workspace" [ref=e61] [cursor=pointer]
+        - button "Search sessions" [ref=e139] [cursor=pointer]
+      - generic [ref=e76]:
+        - generic [ref=e78]:
+          - button "Token Ledger" [ref=e80] [cursor=pointer]
+          - button "Worktree tasks" [active] [ref=e86] [cursor=pointer]
+        - button [ref=e143] [cursor=pointer]
+    - generic [ref=e106]:
+      - generic [ref=e109]:
+        - generic [ref=e114]: Into the Unknown
+        - generic [ref=e115]: Preview
+      - generic [ref=e116]:
+        - button "Choose workspace" [ref=e117] [cursor=pointer]:
+          - generic [ref=e120]: DEEPSEEK
+        - button "Standard mode" [ref=e153] [cursor=pointer]
+      - generic [ref=e125]:
+        - textbox "Describe what you want to build" [ref=e161]
+        - generic [ref=e129]:
+          - generic [ref=e130]:
+            - button "Commands" [ref=e162] [cursor=pointer]
+            - 'button "Access mode, current: Full access" [ref=e167] [cursor=pointer]':
+              - generic [ref=e173]: Full access
+            - button "New session on a fresh worktree off origin/main" [ref=e178] [cursor=pointer]:
+              - generic [ref=e181]: worktree
+          - generic [ref=e131]:
+            - button "Select model, current GPT-5.6 Luna, reasoning effort High" [ref=e184] [cursor=pointer]:
+              - generic [ref=e185]: GPT-5.6 Luna
+              - generic [ref=e186]: High
+            - button "Send message" [disabled] [ref=e189]
+    - generic [ref=e193]:
+      - generic [ref=e194]:
+        - generic: Details
+        - button "Close details" [ref=e195] [cursor=pointer]
+      - generic [ref=e198]: Click a tool row in the message flow to view its details
+  - generic:
+    - generic:
+      - generic [ref=e199]:
+        - button "Expand bottom panel" [ref=e200] [cursor=pointer]
+        - button "Collapse sidebar" [ref=e204] [cursor=pointer]
+      - generic [ref=e212]:
+        - generic [ref=e214]:
+          - generic "Files" [ref=e215] [cursor=pointer]:
+            - button "Close" [ref=e220]
+          - button "New tab" [ref=e224] [cursor=pointer]
+        - generic [ref=e230]:
+          - generic [ref=e231]:
+            - textbox "Search files by name…" [ref=e232]
+            - button "Refresh" [ref=e233] [cursor=pointer]
+            - button "Upload files" [ref=e236] [cursor=pointer]
+            - button "Upload folder" [ref=e240] [cursor=pointer]
+          - generic [ref=e244]:
+            - generic [ref=e245] [cursor=pointer]: DEEPSEEK
+            - button ".git" [ref=e250] [cursor=pointer]
+            - button ".playwright-cli" [ref=e255] [cursor=pointer]
+            - button "dsh-branchline" [ref=e260] [cursor=pointer]
+            - button "Тест фото.png" [ref=e264] [cursor=pointer]
+            - button "README.md" [ref=e268] [cursor=pointer]
+            - button "restart-dsh.cmd" [ref=e272] [cursor=pointer]
+  - dialog "DSH Branchline" [ref=e277]:
+    - generic [ref=e278]:
+      - banner [ref=e279]:
+        - heading "DSH Branchline" [level=2] [ref=e283]
+        - generic [ref=e284]:
+          - generic [ref=e285]: Repository
+          - combobox "Repository" [ref=e286]:
+            - option "All repositories"
+            - option "DEEPSEEK" [selected]
+        - generic [ref=e287]:
+          - button "Recover" [ref=e288] [cursor=pointer]
+          - button "Refresh" [ref=e293] [cursor=pointer]
+          - button "Close" [ref=e296] [cursor=pointer]
+      - generic [ref=e300]:
+        - complementary [ref=e301]:
+          - generic [ref=e302]:
+            - strong [ref=e303]: Tasks
+            - button [ref=e304] [cursor=pointer]
+          - group "Tasks" [ref=e308]:
+            - button "Active" [ref=e309] [cursor=pointer]
+            - button "Archived" [ref=e310] [cursor=pointer]
+            - button "All" [ref=e311] [cursor=pointer]
+          - paragraph [ref=e313]: No tasks in this view.
+        - main [ref=e314]:
+          - generic [ref=e315]: Select a task or create a new one.

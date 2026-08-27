@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "rp_mt7iw4zj_ed0c6c42dce7",
+  "kind": "turn",
+  "workspace": "D:\\DEEPSEEK",
+  "repository": {
+    "root": "D:\\DEEPSEEK",
+    "commonDir": "D:\\DEEPSEEK\\.git",
+    "branch": "master",
+    "stagedPaths": []
+  },
+  "sessionId": "session-cad2111e-09a3-4f72-a359-68af268f2905",
+  "label": "Before turn 1 checkpoint",
+  "turn": 1,
+  "turnStartSeq": 4,
+  "createdAt": 1787593293632,
+  "treeHash": "af35412b7c3f176e71a4b9e4f09b5f5fd76083c2fa07151dd0ed3483bf498418",
+  "fileCount": 3,
+  "totalBytes": 2793299,
+  "entries": {
+    "README.md": {
+      "kind": "file",
+      "blob": "47cdf763d2fdbd8357208aed3a47f75dbad90d1358105e996f91e891690dc420",
+      "size": 128,
+      "mode": 438
+    },
+    "restart-dsh.cmd": {
+      "kind": "file",
+      "blob": "27e1a34f167badddbb73724adc3df923af812fdcdb7b1fbbbe769cdfccd25924",
+      "size": 389,
+      "mode": 438
+    },
+    "Тест фото.png": {
+      "kind": "file",
+      "blob": "b2e532a7ec1dd64edc129964ea50aad4cde2c4738690b56ae137a2594bf0244c",
+      "size": 2792782,
+      "mode": 438
+    }
+  },
+  "restoreCount": 1,
+  "lastRestoredAt": 1787621919329
+}

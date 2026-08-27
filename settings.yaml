@@ -1,0 +1,16 @@
+ui-onboarding:
+  welcomeNoticeVersion: 2026-08-13.1
+ui-theme:
+  preference: dark
+agent-default-model:
+  provider: codex
+  model: gpt-5.6-luna
+  reasoningEffort: high
+llm-pi-ai:
+  providers: {}
+permission:
+  defaultPreset: danger-full-access
+dsh-better-sidebar:
+  openByDefault: true
+auto-continue:
+  paused: true

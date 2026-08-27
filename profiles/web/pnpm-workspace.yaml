@@ -1,0 +1,10 @@
+packages:
+  - .
+
+nodeLinker: hoisted
+autoInstallPeers: false
+allowBuilds:
+  '@google/genai': true
+  protobufjs: true
+  node-pty: true
+  dsh-agent-team-gui@https://codeload.github.com/toolclub/dsh-agent-team-gui/tar.gz/e3997ce798e495ad8051b95c4e96920780c96aed: true
