@@ -217,6 +217,20 @@ function Get-ActiveChatGPTSurface($Fallback) {
     return $null
 }
 
+function Get-ChatSurfaceMode($Window) {
+    if (!$Window) { return $null }
+    foreach ($element in @(All-Desc $Window)) {
+        try {
+            $current = $element.Current
+            if ($current.ControlType -ne [System.Windows.Automation.ControlType]::Button) { continue }
+            if ([string]$current.Name -match '^(Переключить режим, текущий режим|Switch mode, current mode):\s*(ChatGPT|Codex)$') {
+                return $Matches[2]
+            }
+        } catch { }
+    }
+    return $null
+}
+
 function Get-ElementText($Element) {
     $values = New-Object 'System.Collections.Generic.List[string]'
     foreach ($child in @(All-Desc $Element)) {
@@ -1409,7 +1423,11 @@ try {
         $ws.SendKeys('%1'); Start-Sleep -Milliseconds 700; $ws.SendKeys('^%o')
     }
     $w = Get-ActiveChatGPTSurface $w
-    Write-Log 'surface' "pid=$($w.Current.ProcessId) windowRuntimeId=$(Get-RuntimeId $w)"
+    $surfaceMode = Get-ChatSurfaceMode $w
+    Write-Log 'surface' "pid=$($w.Current.ProcessId) windowRuntimeId=$(Get-RuntimeId $w) mode=$surfaceMode"
+    if ($ChatPolicy -eq 'Fresh' -and $surfaceMode -eq 'Codex') {
+        Fail 'FRESH_CHAT_NOT_CONFIRMED' 'Fresh requires the ChatGPT Quick surface, but the visible surface is Codex' 3
+    }
 
     $composerDeadline = (Get-Date).AddSeconds([Math]::Min($TimeoutSeconds, 30))
     $composer = $null
