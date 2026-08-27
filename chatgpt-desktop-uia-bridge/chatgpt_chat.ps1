@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [ValidateSet('Quick','NewChat')][string]$Mode = 'Quick',
+    [ValidateSet('Fresh','Current')][Alias('ConversationPolicy')][string]$ChatPolicy = 'Fresh',
     [Parameter(Position=0)][string]$Prompt,
     [switch]$ReturnJson,
     [int]$TimeoutSeconds = 120,
@@ -8,7 +9,9 @@ param(
     [string]$LogPath,
     [switch]$VerboseLog,
     [string]$RunId,
-    [switch]$TestSubmitGateFailure
+    [switch]$TestSubmitGateFailure,
+    [switch]$TestForceValuePatternFailure,
+    [switch]$TestForceClipboardFallbackFailure
 )
 
 $ErrorActionPreference = 'Stop'
@@ -21,9 +24,21 @@ if ([string]::IsNullOrWhiteSpace($RunId)) { $RunId = [guid]::NewGuid().ToString(
 
 $started = Get-Date
 $modeOut = $Mode.ToLowerInvariant().Replace('newchat', 'new-chat')
+$chatPolicyOut = $ChatPolicy.ToLowerInvariant()
 $mutex = $null
 $ws = $null
 $w = $null
+$baselineMessageCount = $null
+$conversationRuntimeId = $null
+$freshChatConfirmed = $false
+$freshIdentityChanged = $false
+$freshReason = $null
+$freshMessageCount = $null
+$freshConversationTitle = $null
+$inputMethod = $null
+$inputAttemptCount = 0
+$clipboardRestored = $false
+$script:HeavyDiagnosticsPerformed = $false
 
 $script:AuthorAnchorPattern = '^(ChatGPT сказал|ChatGPT said|Assistant|Вы сказали|You said|User)\s*:'
 $script:ChromeNoise = '^(ChatGPT сказал|ChatGPT said|Вы сказали|You said|Копировать|Copy|Хороший ответ|Good response|Неудачный ответ|Bad response|Продолжить в новом чате|Continue in new chat|Скопировать сообщение|Редактировать сообщение|Остановить|Stop|Прервать)$'
@@ -146,24 +161,60 @@ function Wait-MainWindow {
     Fail 'WINDOW_NOT_FOUND' 'ChatGPT Desktop window not found' 2
 }
 
+function Get-LiveChatGPTWindow($Preferred) {
+    $preferredName = $null
+    try { $preferredName = [string]$Preferred.Current.Name } catch { }
+    $root = [System.Windows.Automation.AutomationElement]::RootElement
+    $condition = New-Object System.Windows.Automation.PropertyCondition(
+        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+        [System.Windows.Automation.ControlType]::Window)
+    try { $windows = @($root.FindAll([System.Windows.Automation.TreeScope]::Children, $condition)) } catch { return $null }
+    $best = $null
+    $bestScore = -1
+    foreach ($window in $windows) {
+        try {
+            $current = $window.Current
+            $process = Get-Process -Id $current.ProcessId -ErrorAction SilentlyContinue
+            if (!$process -or $process.ProcessName -notmatch '^(ChatGPT( \(Beta\))?|Codex)$') { continue }
+            $score = 0
+            if ($preferredName -and [string]$current.Name -ceq $preferredName) { $score += 2 }
+            if (!$current.IsOffscreen) { $score += 4 }
+            $rect = $current.BoundingRectangle
+            if (($rect.Width -gt 0) -and ($rect.Height -gt 0)) { $score += 2 }
+            # Prefer the visible Chromium surface containing the Codex document,
+            # not a transient Quick overlay or an old focused descendant.
+            foreach ($child in @(All-Desc $window)) {
+                try {
+                    $childCurrent = $child.Current
+                    if (($childCurrent.ControlType -eq [System.Windows.Automation.ControlType]::Document) -and
+                        ([string]$childCurrent.Name -ceq 'Codex') -and !$childCurrent.IsOffscreen) {
+                        $score += 8
+                        break
+                    }
+                } catch { }
+            }
+            if ($score -gt $bestScore) {
+                try {
+                    if ($current.NativeWindowHandle -gt 0) {
+                        $best = [System.Windows.Automation.AutomationElement]::FromHandle([intptr]$current.NativeWindowHandle)
+                    } else { $best = $window }
+                } catch { $best = $window }
+                $bestScore = $score
+            }
+        } catch { }
+    }
+    return $best
+}
+
 function Get-ActiveChatGPTSurface($Fallback) {
     Start-Sleep -Milliseconds 250
-    try {
-        $element = [System.Windows.Automation.AutomationElement]::FocusedElement
-        $walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
-        for ($i = 0; $i -lt 12 -and $element; $i++) {
-            try {
-                $current = $element.Current
-                $process = Get-Process -Id $current.ProcessId -ErrorAction SilentlyContinue
-                if (($current.ControlType -eq [System.Windows.Automation.ControlType]::Window) -and
-                    $process -and ($process.ProcessName -match '^(ChatGPT( \(Beta\))?|Codex)$')) {
-                    return $element
-                }
-                $element = $walker.GetParent($element)
-            } catch { break }
-        }
-    } catch { }
-    return $Fallback
+    # Always reacquire the top-level UIA window. A focused descendant can be a
+    # stale Chromium node from before a navigation/rerender. The visible window
+    # with the live Codex RootWebArea wins over a transient overlay.
+    $live = Get-LiveChatGPTWindow $Fallback
+    if ($live) { return $live }
+    try { if ($Fallback -and (Is-UiaElementAlive $Fallback)) { return $Fallback } } catch { }
+    return $null
 }
 
 function Get-ElementText($Element) {
@@ -229,13 +280,13 @@ function Get-ComposerValue($Element) {
     if (!$Element) { return '' }
     $values = New-Object 'System.Collections.Generic.List[string]'
     try {
-        $pattern = $null
+        [object]$pattern = $null
         if ($Element.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) {
             [void]$values.Add([string]$pattern.Current.Value)
         }
     } catch { }
     try {
-        $pattern = $null
+        [object]$pattern = $null
         if ($Element.TryGetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern, [ref]$pattern)) {
             [void]$values.Add([string]$pattern.DocumentRange.GetText(-1))
         }
@@ -250,6 +301,256 @@ function Get-ComposerValue($Element) {
     return ''
 }
 
+function Normalize-InputText([string]$Text) {
+    return (([string]$Text) -replace "`r`n|`r|`n", ' ').Trim()
+}
+
+function Test-ComposerPromptValue([string]$Value, [string]$PromptText) {
+    if ($null -eq $Value) { return $false }
+    $left = Normalize-InputText $Value
+    $right = Normalize-InputText $PromptText
+    return (($left -ceq $right) -or (([string]$Value).Trim() -ceq ([string]$PromptText).Trim()))
+}
+
+function Test-ComposerIsEmpty([string]$Value) {
+    $normalized = (([string]$Value) -replace "`r`n|`r|`n", ' ' -replace '\s+', ' ').Trim()
+    return ([string]::IsNullOrWhiteSpace($normalized) -or
+        $normalized -match '^(Сообщение ChatGPT|Message ChatGPT|Выполните любую задачу)$')
+}
+
+function Clear-Composer($Element) {
+    if (!$Element -or !(Is-UiaElementAlive $Element)) { return $false }
+    try {
+        [object]$pattern = $null
+        if (!$Element.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) { return $false }
+        $pattern.SetValue('')
+        Start-Sleep -Milliseconds 150
+        return (Test-ComposerIsEmpty (Get-ComposerValue $Element))
+    } catch { return $false }
+}
+
+function Invoke-ComposerClipboardFallback($Window, $Composer, [string]$Text) {
+    $result = [ordered]@{ Succeeded=$false; Method='ClipboardFallback'; Attempts=0; Error='CLIPBOARD_FALLBACK_FAILED'; Message='Clipboard fallback did not confirm exact readback'; RuntimeId=$null; Composer=$null; ClipboardRestored=$false }
+    if ($TestForceClipboardFallbackFailure) {
+        $result.Error = 'CLIPBOARD_FALLBACK_FORCED_FAILURE'
+        $result.Message = 'Test mode intentionally disabled clipboard fallback'
+        return [pscustomobject]$result
+    }
+    $oldClipboard = $null
+    $oldReadable = $false
+    $clipboardSet = $false
+    try { $oldClipboard = Get-Clipboard -Raw -ErrorAction Stop; $oldReadable = $true } catch { }
+    try {
+        $target = $Composer
+        if (!$target -or !(Is-UiaElementAlive $target)) { $target = Find-Composer $Window }
+        if (!$target) {
+            $result.Error = 'COMPOSER_NOT_FOUND'
+            $result.Message = 'Composer disappeared before clipboard fallback'
+            return [pscustomobject]$result
+        }
+        $result.Composer = $target
+        $result.RuntimeId = Get-RuntimeId $target
+        if (!(Clear-Composer $target)) {
+            $result.Error = 'COMPOSER_CLEAR_FAILED'
+            $result.Message = 'Composer could not be cleared before clipboard fallback'
+            return [pscustomobject]$result
+        }
+        $target = Find-Composer $Window
+        if (!$target -or !(Is-UiaElementAlive $target)) {
+            $result.Error = 'COMPOSER_NOT_FOUND'
+            $result.Message = 'Composer disappeared after clear before clipboard fallback'
+            return [pscustomobject]$result
+        }
+        $result.Composer = $target
+        $result.RuntimeId = Get-RuntimeId $target
+        $target.SetFocus()
+        Set-Clipboard -Value $Text -ErrorAction Stop
+        $clipboardSet = $true
+        try { $null = $ws.AppActivate($Window.Current.Name) } catch { }
+        Start-Sleep -Milliseconds 150
+        # Keyboard paste is transport-only; success is returned only after
+        # reading the exact value back from the same surface.
+        try { $null = $ws.AppActivate($Window.Current.Name) } catch { }
+        try { $target.SetFocus() } catch { }
+        Start-Sleep -Milliseconds 150
+        [System.Windows.Forms.SendKeys]::SendWait('^a')
+        [System.Windows.Forms.SendKeys]::SendWait('^v')
+        $deadline = (Get-Date).AddSeconds(3)
+        $stable = 0
+        do {
+            $result.Attempts++
+            Start-Sleep -Milliseconds 150
+            $candidate = Find-Composer $Window
+            if ($candidate -and (Is-UiaElementAlive $candidate) -and (Same-Surface $target $candidate)) {
+                $value = Get-ComposerValue $candidate
+                if (Test-ComposerPromptValue $value $Text) {
+                    $stable++
+                    if ($stable -ge 2) {
+                        $result.Composer = $candidate
+                        $result.Succeeded = $true
+                        $result.Error = $null
+                        $result.Message = 'Clipboard paste confirmed by two stable UIA readbacks'
+                        return [pscustomobject]$result
+                    }
+                } else { $stable = 0 }
+            } else { $stable = 0 }
+        } while ((Get-Date) -lt $deadline)
+        $result.Error = 'CLIPBOARD_FALLBACK_READBACK_FAILED'
+        return [pscustomobject]$result
+    } catch {
+        $result.Error = 'CLIPBOARD_FALLBACK_FAILED'
+        $result.Message = $_.Exception.Message
+        return [pscustomobject]$result
+    } finally {
+        if ($clipboardSet -and $oldReadable) {
+            try {
+                $currentClipboard = Get-Clipboard -Raw -ErrorAction SilentlyContinue
+                if ([string]$currentClipboard -ceq [string]$Text) {
+                    Set-Clipboard -Value $oldClipboard -ErrorAction SilentlyContinue
+                    $result.ClipboardRestored = ([string](Get-Clipboard -Raw -ErrorAction SilentlyContinue) -ceq [string]$oldClipboard)
+                }
+            } catch { }
+        }
+    }
+}
+
+function Set-ComposerText($Window, $Composer, [string]$Text) {
+    $result = [ordered]@{ Succeeded=$false; Method=$null; Attempts=0; Error='INPUT_NOT_CONFIRMED'; Message='Composer input was not confirmed'; RuntimeId=$null; Composer=$null; ClipboardRestored=$false }
+    $target = $Composer
+    if (!$target -or !(Is-UiaElementAlive $target)) { $target = Find-Composer $Window }
+    if ($target) { $result.Composer = $target; $result.RuntimeId = Get-RuntimeId $target }
+    if ($target -and !$TestForceValuePatternFailure) {
+        try {
+            [object]$pattern = $null
+            if ($target.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) {
+                $pattern.SetValue($Text)
+                $result.Attempts = 1
+                $result.Method = 'ValuePattern'
+                Start-Sleep -Milliseconds 150
+                if (Test-ComposerPromptValue (Get-ComposerValue $target) $Text) {
+                    $result.Succeeded = $true
+                    $result.Error = $null
+                    $result.Message = 'ValuePattern write confirmed by immediate readback'
+                    return [pscustomobject]$result
+                }
+            }
+        } catch { $result.Message = $_.Exception.Message }
+    }
+    $fallback = Invoke-ComposerClipboardFallback $Window $target $Text
+    $result.Attempts = [int]$result.Attempts + [int]$fallback.Attempts
+    $result.Method = if ($result.Method) { "$($result.Method)->$($fallback.Method)" } else { $fallback.Method }
+    $result.RuntimeId = $fallback.RuntimeId
+    $result.Composer = $fallback.Composer
+    $result.ClipboardRestored = [bool]$fallback.ClipboardRestored
+    $result.Succeeded = [bool]$fallback.Succeeded
+    $result.Error = $fallback.Error
+    $result.Message = $fallback.Message
+    return [pscustomobject]$result
+}
+
+function Get-ConversationSnapshot($Window) {
+    $conversation = Find-ConversationContainer $Window
+    $anchors = @(Get-AuthorAnchors $conversation)
+    $anchorIds = @($anchors | ForEach-Object { [string]$_.AnchorRuntimeId } | Where-Object { $_ })
+    $anchorNames = @($anchors | ForEach-Object { [string]$_.AnchorName })
+    $runtimeId = Get-RuntimeId $conversation
+    $isThread = $false
+    try { $isThread = [string]$conversation.Current.ClassName -match 'thread-scroll-container' } catch { }
+    $emptyMarker = $false
+    foreach ($element in @(All-Desc $Window)) {
+        try {
+            $current = $element.Current
+            if (($current.ControlType -eq [System.Windows.Automation.ControlType]::Text) -and
+                ([string]$current.Name -match '^(Что у вас сегодня на повестке\?|О чем вы сегодня думаете\?|Можем начинать\.|What.s on your mind today\?)$')) {
+                $emptyMarker = $true
+                break
+            }
+        } catch { }
+    }
+    return [pscustomobject]@{
+        Window=$Window; Conversation=$conversation; RuntimeId=$runtimeId; IsThreadContainer=$isThread; EmptySurfaceMarker=$emptyMarker
+        MessageCount=$anchors.Count; AnchorIds=$anchorIds; AnchorNames=$anchorNames
+        Signature=(($runtimeId, ($anchorIds -join ','), $anchors.Count, $emptyMarker) -join '|')
+    }
+}
+
+function Find-NewChatButton($Window) {
+    $candidates = New-Object 'System.Collections.Generic.List[object]'
+    foreach ($element in @(All-Desc $Window)) {
+        try {
+            $current = $element.Current
+            if (($current.ControlType -ne [System.Windows.Automation.ControlType]::Button) -or
+                !$current.IsEnabled -or $current.IsOffscreen -or
+                ([string]$current.Name -notmatch '^(Новый чат|New chat)$')) { continue }
+            $rect = $current.BoundingRectangle
+            if (($current.ClassName -notmatch 'sidebar-icon-button') -or
+                $rect.Width -le 0 -or $rect.Width -gt 80 -or $rect.Height -le 0 -or $rect.Height -gt 80) { continue }
+            $parent = Get-ImmediateParent $element
+            $parentClass = ''
+            if ($parent) { try { $parentClass = [string]$parent.Current.ClassName } catch { } }
+            if ($parentClass -notmatch 'relative px-row-x') { continue }
+            [void]$candidates.Add($element)
+        } catch { }
+    }
+    if ($candidates.Count -ne 1) { return $null }
+    return $candidates[0]
+}
+
+function Invoke-NewChatButton($Window) {
+    $button = Find-NewChatButton $Window
+    if (!$button -or !(Is-UiaElementAlive $button)) {
+        return [pscustomobject]@{ Succeeded=$false; Invoked=$false; Error='FRESH_CHAT_NOT_CONFIRMED'; Message='Semantic Recent-chat New Chat button was not uniquely found'; RuntimeId=$null }
+    }
+    try {
+        [object]$pattern = $null
+        if (!$button.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) {
+            return [pscustomobject]@{ Succeeded=$false; Invoked=$false; Error='FRESH_CHAT_NOT_CONFIRMED'; Message='New Chat button has no InvokePattern'; RuntimeId=(Get-RuntimeId $button) }
+        }
+        $pattern.Invoke()
+        return [pscustomobject]@{ Succeeded=$true; Invoked=$true; Error=$null; Message='Semantic New Chat InvokePattern completed'; RuntimeId=(Get-RuntimeId $button) }
+    } catch {
+        return [pscustomobject]@{ Succeeded=$false; Invoked=$false; Error='FRESH_CHAT_NOT_CONFIRMED'; Message=$_.Exception.Message; RuntimeId=(Get-RuntimeId $button) }
+    }
+}
+
+function Confirm-FreshConversation($Window, $PreviousSnapshot, [int]$TimeoutMs = 8000) {
+    $deadline = (Get-Date).AddMilliseconds([Math]::Max(1000, $TimeoutMs))
+    $lastSignature = $null
+    $stable = 0
+    $last = $null
+    do {
+        Start-Sleep -Milliseconds 200
+        $Window = Get-ActiveChatGPTSurface $Window
+        $current = Get-ConversationSnapshot $Window
+        $composer = Find-Composer $Window
+        $composerValue = if ($composer) { [string](Get-ComposerValue $composer) } else { '' }
+        $composerEmpty = Test-ComposerIsEmpty $composerValue
+        Write-Log 'fresh-poll' "marker=$($current.EmptySurfaceMarker) messages=$($current.MessageCount) composerLength=$($composerValue.Length) composerEmpty=$composerEmpty composerHash=$(Get-TextHash $composerValue)"
+        $oldAnchorIntersection = @($current.AnchorIds | Where-Object { $_ -in @($PreviousSnapshot.AnchorIds) }).Count
+        $runtimeChanged = [bool]($PreviousSnapshot.RuntimeId -and $current.RuntimeId -and ($PreviousSnapshot.RuntimeId -cne $current.RuntimeId))
+        # A Chromium runtime-id change is diagnostic only: rerendering and
+        # virtualization can change it without changing the conversation.
+        $markerTransition = [bool](!$PreviousSnapshot.EmptySurfaceMarker -and $current.EmptySurfaceMarker)
+        $observableReset = [bool]($PreviousSnapshot.MessageCount -gt 0 -and $current.MessageCount -eq 0 -and $oldAnchorIntersection -eq 0)
+        $structuralProof = $markerTransition -or $observableReset
+        $empty = [bool]($current.EmptySurfaceMarker -and $current.MessageCount -eq 0 -and $composer -and $composerEmpty -and $oldAnchorIntersection -eq 0)
+        $signature = $current.Signature
+        if ($empty -and $structuralProof -and $signature -eq $lastSignature) { $stable++ }
+        elseif ($empty -and $structuralProof) { $stable = 1 }
+        else { $stable = 0 }
+        $lastSignature = $signature
+        $last = [pscustomobject]@{
+            Window=$Window; Snapshot=$current; Composer=$composer; Empty=$empty; StructuralProof=$structuralProof
+            RuntimeChanged=$runtimeChanged; MarkerTransition=$markerTransition; ObservableReset=$observableReset; OldAnchorIntersection=$oldAnchorIntersection
+            StablePolls=$stable; Reason=if(!$current.EmptySurfaceMarker){'EMPTY_SURFACE_MARKER_NOT_FOUND'}elseif($current.MessageCount -ne 0){'NEW_CHAT_HAS_MESSAGES'}elseif(!$composer -or !$composerEmpty){'COMPOSER_NOT_EMPTY'}elseif(!$structuralProof){'NO_OBSERVABLE_CONVERSATION_TRANSITION'}else{'STABILIZING'}
+        }
+        if ($stable -ge 2) {
+            return [pscustomobject]@{ Confirmed=$true; Window=$Window; Snapshot=$current; Composer=$composer; IdentityChanged=$runtimeChanged; Reason='CONFIRMED_EMPTY_NEW_CONVERSATION'; StablePolls=$stable }
+        }
+    } while ((Get-Date) -lt $deadline)
+    return [pscustomobject]@{ Confirmed=$false; Window=$Window; Snapshot=if($last){$last.Snapshot}else{Get-ConversationSnapshot $Window}; Composer=if($last){$last.Composer}else{$null}; IdentityChanged=if($last){$last.RuntimeChanged}else{$false}; Reason=if($last){$last.Reason}else{'NO_OBSERVABLE_CONVERSATION_TRANSITION'}; StablePolls=if($last){$last.StablePolls}else{0} }
+}
+
 function Confirm-ComposerCleared($Window, [string]$PromptText) {
     $composer = Find-Composer $Window
     if (!$composer) {
@@ -259,8 +560,8 @@ function Confirm-ComposerCleared($Window, [string]$PromptText) {
     $norm = ([string]$value).Trim()
     $normPrompt = (([string]$PromptText) -replace "`r`n|`r|`n", ' ').Trim()
     $normValue = ($norm -replace "`r`n|`r|`n", ' ').Trim()
-    $same = ($norm -eq $PromptText) -or ($normValue -eq $normPrompt) -or ($norm -like "*$PromptText*")
-    $cleared = [string]::IsNullOrWhiteSpace($norm) -or ($norm -eq 'Сообщение ChatGPT')
+    $same = Test-ComposerPromptValue $value $PromptText
+    $cleared = Test-ComposerIsEmpty $value
     return [pscustomobject]@{
         Found=$true; Cleared=(!$same -and $cleared); Value=$value; RuntimeId=(Get-RuntimeId $composer)
         Reason=if($same){'PROMPT_STILL_IN_COMPOSER'}elseif($cleared){'EMPTY'}else{'COMPOSER_CHANGED'}
@@ -535,7 +836,10 @@ function Get-MessageText($Message) {
             } elseif (!$value -or ($value -match $script:ChromeNoise) -or ($value -match '^\d{1,2}:\d{2}$') -or ($value -eq $Message.AnchorName)) {
                 $include = $false; $reason = 'known-non-body-text'
             }
-            if ($LogPath) {
+            # Detailed per-node extraction is diagnostic-only. The normal path
+            # keeps the bounded stream trace but does not repeatedly serialize
+            # the entire UIA subtree on every polling iteration.
+            if ($VerboseLog) {
                 $trace = [ordered]@{ RuntimeId=(Get-RuntimeId $element); Name=$value; Y=$y; Included=$include; Reason=$reason }
                 $tracePath = Join-Path $PSScriptRoot ('diagnostics\assistant_extract_' + $RunId + '.jsonl')
                 New-Item -ItemType Directory -Path (Split-Path -Parent $tracePath) -Force | Out-Null
@@ -617,7 +921,7 @@ function Get-SupportedPatternNames($Element) {
     $result = New-Object 'System.Collections.Generic.List[string]'
     foreach ($name in $patterns.Keys) {
         try {
-            $pattern = $null
+            [object]$pattern = $null
             if ($Element.TryGetCurrentPattern($patterns[$name]::Pattern, [ref]$pattern)) { [void]$result.Add($name) }
         } catch { }
     }
@@ -708,19 +1012,37 @@ function Get-TextHash([string]$Text) {
     } finally { $sha.Dispose() }
 }
 
-function Write-CopyTrace([string]$TraceRunId, $Row) {
+function Write-CopyTrace([string]$TraceRunId, $Row, [switch]$Detailed) {
+    if (!$Detailed -and !$script:HeavyDiagnosticsPerformed -and !$VerboseLog) {
+        # Detailed probe rows are diagnostic-only; the normal path writes one
+        # compact final record via Write-CopyTraceFinal.
+        return
+    }
     try {
         $directory = Join-Path $PSScriptRoot 'diagnostics'
         New-Item -ItemType Directory -Path $directory -Force | Out-Null
-        $path = Join-Path $directory ('copy_trace_' + $TraceRunId + '.jsonl')
+        $path = Join-Path $PSScriptRoot ('diagnostics\copy_trace_' + $TraceRunId + '.jsonl')
         ($Row | ConvertTo-Json -Compress -Depth 12) | Add-Content -LiteralPath $path -Encoding UTF8
     } catch { Write-Log 'copy-trace' "failed=$($_.Exception.Message)" }
+}
+
+function Write-CopyTraceFinal([string]$TraceRunId, $Row) {
+    try {
+        $path = Join-Path $PSScriptRoot ('diagnostics\copy_trace_' + $TraceRunId + '.jsonl')
+        $compact = [ordered]@{
+            Confirmed=$true; CopyRuntimeId=$Row.CopyRuntimeId; AssistantRuntimeId=$Row.AssistantRuntimeId
+            RelationMode=$Row.RelationMode; CandidateCount=$Row.CandidateCount
+            ClipboardChanged=$Row.ClipboardChanged; CopiedLength=$Row.CopiedLength; CopiedHash=$Row.CopiedHash
+            Error=$null; Message='Copy confirmed'
+        }
+        Set-Content -LiteralPath $path -Value ($compact | ConvertTo-Json -Compress) -Encoding UTF8
+    } catch { Write-Log 'copy-trace' "final failed=$($_.Exception.Message)" }
 }
 
 function Invoke-ScrollItemIntoView($Element) {
     if (!$Element) { return $false }
     try {
-        $pattern = $null
+        [object]$pattern = $null
         if (!$Element.TryGetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern, [ref]$pattern)) { return $false }
         $pattern.ScrollIntoView()
         return $true
@@ -733,7 +1055,7 @@ function Invoke-ButtonStrict($Element) {
         return [pscustomobject]@{ Succeeded=$false; Error='COPY_INVOKE_FAILED'; Message='Copy element is missing'; RuntimeId=$null }
     }
     try {
-        $pattern = $null
+        [object]$pattern = $null
         if (!$Element.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) {
             return [pscustomobject]@{ Succeeded=$false; Error='COPY_INVOKE_FAILED'; Message='InvokePattern is unavailable'; RuntimeId=$runtimeId }
         }
@@ -950,6 +1272,14 @@ function Copy-AssistantResponse($Assistant, [string]$CopyRunId, [int]$TimeoutMs 
         # to a global button or to the old clipboard value.  Keep the originally
         # paired runtime id in the result when post-check is only NOT_FOUND.
         $resultCopyId = if($after.Found){$after.RuntimeId}else{$fresh.RuntimeId}
+        $trace.CopyRuntimeId = $resultCopyId
+        $trace.AssistantRuntimeId = $Assistant.AnchorRuntimeId
+        $trace.RelationMode = $fresh.RelationMode
+        $trace.CandidateCount = $fresh.CandidateCount
+        $trace.ClipboardChanged = $true
+        $trace.CopiedLength = $copied.Length
+        $trace.CopiedHash = Get-TextHash $copied
+        Write-CopyTraceFinal $CopyRunId ([pscustomobject]$trace)
         return [pscustomobject]@{ Confirmed=$true; Text=$copied; Error=$null; Message='Copied text confirmed by sentinel and assistant marker'; CopyRuntimeId=$resultCopyId; DurationMs=$watch.ElapsedMilliseconds; LegacyText=($markers -join "`n"); TracePath=(Join-Path $PSScriptRoot ('diagnostics\copy_trace_' + $CopyRunId + '.jsonl')) }
     } finally {
         if ($sentinelSet) {
@@ -963,40 +1293,36 @@ function Copy-AssistantResponse($Assistant, [string]$CopyRunId, [int]$TimeoutMs 
     }
 }
 
-function Set-ComposerText($Element, [string]$Text) {
-    try {
-        $pattern = $null
-        if ($Element.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) {
-            $pattern.SetValue($Text)
-            Start-Sleep -Milliseconds 150
-            return $true
-        }
-    } catch { }
-    try {
-        $Element.SetFocus()
-        Set-Clipboard -Value $Text -ErrorAction Stop
-        [System.Windows.Forms.SendKeys]::SendWait('^v')
-        Start-Sleep -Milliseconds 200
-        return $true
-    } catch { return $false }
-}
-
-function Confirm-ComposerPrompt($Window, [string]$PromptText, [ref]$Composer) {
-    $deadline = (Get-Date).AddSeconds(3)
+function Confirm-ComposerPrompt($Window, [string]$PromptText, $ExpectedComposer) {
+    $deadline = (Get-Date).AddSeconds(4)
+    $previousRuntimeId = $null
+    $previousValue = $null
+    $stable = 0
+    $last = $null
     do {
         $candidate = Find-Composer $Window
-        if ($candidate) {
+        if ($candidate -and (Is-UiaElementAlive $candidate) -and
+            (!$ExpectedComposer -or (Same-Surface $ExpectedComposer $candidate))) {
             $value = Get-ComposerValue $candidate
-            $normValue = (([string]$value) -replace "`r`n|`r|`n", ' ').Trim()
-            $normPrompt = (([string]$PromptText) -replace "`r`n|`r|`n", ' ').Trim()
-            if (($normValue -eq $normPrompt) -or ($value.Trim() -eq $PromptText)) {
-                $Composer.Value = $candidate
-                return $true
+            $runtimeId = Get-RuntimeId $candidate
+            $last = $candidate
+            if ((Test-ComposerPromptValue $value $PromptText) -and
+                $runtimeId -and ($runtimeId -ceq $previousRuntimeId) -and ([string]$value -ceq [string]$previousValue)) {
+                $stable++
+            } elseif (Test-ComposerPromptValue $value $PromptText) {
+                $stable = 1
+            } else {
+                $stable = 0
             }
-        }
+            $previousRuntimeId = $runtimeId
+            $previousValue = [string]$value
+            if ($stable -ge 2) {
+                return [pscustomobject]@{ Confirmed=$true; Composer=$candidate; RuntimeId=$runtimeId; Reason='TWO_STABLE_READBACKS' }
+            }
+        } else { $stable = 0 }
         Start-Sleep -Milliseconds 150
     } while ((Get-Date) -lt $deadline)
-    return $false
+    return [pscustomobject]@{ Confirmed=$false; Composer=$last; RuntimeId=(Get-RuntimeId $last); Reason='COMPOSER_CHANGED_OR_READBACK_FAILED' }
 }
 
 function Invoke-Button($Element) {
@@ -1034,20 +1360,28 @@ function Save-MessageParentChain($Conversation, [string]$DiagnosticRunId) {
 }
 
 function Save-FailureDump($Window, [string]$Code) {
+    $script:HeavyDiagnosticsPerformed = $true
     try {
         $directory = Join-Path $PSScriptRoot 'logs'
         New-Item -ItemType Directory -Path $directory -Force | Out-Null
+        $targetPid = 0
+        try { $targetPid = [int]$Window.Current.ProcessId } catch { }
         & (Join-Path $PSScriptRoot 'chatgpt_uia_dump.ps1') `
+            -TargetPid $targetPid `
             -Path (Join-Path $directory ('failure_' + $RunId + '_uia.txt')) `
             -JsonPath (Join-Path $directory ('failure_' + $RunId + '_uia.json')) | Out-Null
-        $composer = Find-Composer $Window
-        $composerValue = Get-ComposerValue $composer
+        $diagnosticConversation = if ($Window) { Find-ConversationContainer $Window } else { $null }
+        if ($diagnosticConversation) { Save-MessageParentChain $diagnosticConversation ('failure_' + $RunId) }
+        $composer = if ($Window) { Find-Composer $Window } else { $null }
+        $composerValue = if ($composer) { Get-ComposerValue $composer } else { '' }
+        $promptPresent = if ([string]::IsNullOrEmpty($Prompt)) { $false } else { ([string]$composerValue).Contains([string]$Prompt) }
         $notes = @(
             "RunId: $RunId",
             "FailureStage: $Code",
+            "TargetPid: $targetPid",
             "ActiveSurface: ChatGPT/Codex",
             "ComposerRuntimeId: $(Get-RuntimeId $composer)",
-            "ComposerContainsPrompt: $(([string]$composerValue).Contains($Prompt))",
+            "ComposerContainsPrompt: $promptPresent",
             "ComposerValueLength: $(([string]$composerValue).Length)",
             'VisualInspection: required via Computer Use',
             'Private screenshot: not saved',
@@ -1088,37 +1422,65 @@ try {
     if (!$composer) { Fail 'COMPOSER_NOT_FOUND' 'Visible enabled composer not found' 3 }
     Write-Log 'composer' "runtimeId=$(Get-RuntimeId $composer)"
 
-    $conversation = Find-ConversationContainer $w
-    $beforeMessages = @(Get-MessageContainers $conversation)
+    if ([string]::IsNullOrWhiteSpace($Prompt)) { Fail 'INVALID_ARGUMENT' 'Prompt must not be empty' 1 }
+    $beforeSnapshot = Get-ConversationSnapshot $w
+    $baselineMessageCount = [int]$beforeSnapshot.MessageCount
+    $conversationRuntimeId = $beforeSnapshot.RuntimeId
+    Write-Log 'baseline' "messageCount=$baselineMessageCount conversationRuntimeId=$conversationRuntimeId"
+
+    if ($ChatPolicy -eq 'Fresh') {
+        $newChat = Invoke-NewChatButton $w
+        if (!$newChat.Succeeded) { Fail 'FRESH_CHAT_NOT_CONFIRMED' $newChat.Message 3 }
+        Write-Log 'fresh-action' "method=InvokePattern runtimeId=$($newChat.RuntimeId)"
+        $fresh = Confirm-FreshConversation $w $beforeSnapshot 8000
+        $w = $fresh.Window
+        $freshConversationTitle = $null
+        $freshChatConfirmed = [bool]$fresh.Confirmed
+        $freshIdentityChanged = [bool]$fresh.IdentityChanged
+        $freshReason = [string]$fresh.Reason
+        if (!$freshChatConfirmed) { Fail 'FRESH_CHAT_NOT_CONFIRMED' $freshReason 3 }
+        $conversationRuntimeId = $fresh.Snapshot.RuntimeId
+        $freshMessageCount = [int]$fresh.Snapshot.MessageCount
+        $conversation = $fresh.Snapshot.Conversation
+        $composer = $fresh.Composer
+        Write-Log 'fresh-confirm' "confirmed=$freshChatConfirmed identityChanged=$freshIdentityChanged messageCount=$($fresh.Snapshot.MessageCount) reason=$freshReason"
+    } else {
+        $conversation = $beforeSnapshot.Conversation
+    }
+
+    # Fresh confirmation and all input methods must use newly acquired UIA nodes.
+    $w = Get-ActiveChatGPTSurface $w
+    if (!$composer -or !(Is-UiaElementAlive $composer)) { $composer = Find-Composer $w }
+    if (!$composer) { Fail 'COMPOSER_NOT_FOUND' 'Visible enabled composer not found' 3 }
+    Write-Log 'composer-refresh' "runtimeId=$(Get-RuntimeId $composer)"
+    $inputResult = Set-ComposerText $w $composer $Prompt
+    $inputAttemptCount = [int]$inputResult.Attempts
+    $inputMethod = [string]$inputResult.Method
+    $clipboardRestored = [bool]$inputResult.ClipboardRestored
+    if ($inputResult.Composer) { $composer = $inputResult.Composer }
+    if (!$inputResult.Succeeded) { Fail 'INPUT_NOT_CONFIRMED' $inputResult.Message 1 }
+    $composerValue = Get-ComposerValue $composer
+    Write-Log 'prompt-readback' "valueLength=$(([string]$composerValue).Length) valueHash=$(Get-TextHash ([string]$composerValue)) normalizedMatch=$(Test-ComposerPromptValue $composerValue $Prompt) method=$inputMethod attempts=$inputAttemptCount"
+    $promptConfirmation = Confirm-ComposerPrompt $w $Prompt $composer
+    if (!$promptConfirmation.Confirmed) {
+        Fail 'INPUT_NOT_CONFIRMED' 'Composer did not contain the exact prompt after two stable readbacks' 1
+    }
+    $composer = $promptConfirmation.Composer
+    Write-Log 'prompt-inserted' "runtimeId=$(Get-RuntimeId $composer) promptLength=$($Prompt.Length) method=$inputMethod attempts=$inputAttemptCount"
+
+    $beforeMessages = @()
     $beforeIds = New-Object 'System.Collections.Generic.HashSet[string]'
     $beforeTextIds = New-Object 'System.Collections.Generic.HashSet[string]'
-    foreach ($message in $beforeMessages) {
-        if ($message.AnchorRuntimeId) { [void]$beforeIds.Add($message.AnchorRuntimeId) }
-        foreach ($element in @(All-Desc $message.Conversation)) {
-            $runtimeId = Get-RuntimeId $element
-            if ($runtimeId) { [void]$beforeTextIds.Add($runtimeId) }
+    if ($ChatPolicy -eq 'Current') {
+        $beforeMessages = @(Get-MessageContainers $conversation)
+        foreach ($message in $beforeMessages) {
+            if ($message.AnchorRuntimeId) { [void]$beforeIds.Add($message.AnchorRuntimeId) }
+            foreach ($element in @(All-Desc $message.Conversation)) {
+                $runtimeId = Get-RuntimeId $element
+                if ($runtimeId) { [void]$beforeTextIds.Add($runtimeId) }
+            }
         }
     }
-    Save-MessageParentChain $conversation $RunId
-    Write-Log 'baseline' "messageCount=$($beforeMessages.Count)"
-
-    # The parent-chain diagnostic can take several seconds on a large history!
-    # Chromium may rerender the composer during that interval, so never reuse
-    # the pre-diagnostic UIA element for insertion.
-    $w = Get-ActiveChatGPTSurface $w
-    $composer = Find-Composer $w
-    if (!$composer) { Fail 'COMPOSER_NOT_FOUND' 'Visible enabled composer disappeared after baseline scan' 3 }
-    Write-Log 'composer-refresh' "runtimeId=$(Get-RuntimeId $composer)"
-    if (!(Set-ComposerText $composer $Prompt)) { Fail 'INPUT_FAILED' 'Could not set composer value' 1 }
-    $composerValue = Get-ComposerValue $composer
-    $promptNorm = (([string]$Prompt) -replace "`r`n|`r|`n", ' ').Trim()
-    $valueNorm = (([string]$composerValue) -replace "`r`n|`r|`n", ' ').Trim()
-    Write-Log 'prompt-readback' "valueLength=$(([string]$composerValue).Length) valueHash=$(Get-TextHash ([string]$composerValue)) normalizedMatch=$($valueNorm -eq $promptNorm)"
-    # Always perform a fresh exact readback: SetValue may rerender the ProseMirror node.
-    if (!(Confirm-ComposerPrompt $w $Prompt ([ref]$composer))) {
-        Fail 'INPUT_NOT_CONFIRMED' 'Composer did not contain the exact prompt after insertion' 1
-    }
-    Write-Log 'prompt-inserted' "runtimeId=$(Get-RuntimeId $composer) promptLength=$($Prompt.Length)"
 
     # This explicit test-only branch does not submit and therefore cannot reach assistant lookup.
     if ($TestSubmitGateFailure) {
@@ -1247,8 +1609,11 @@ try {
     }
 
     $output = [ordered]@{
-        ok=$true; runId=$RunId; mode=$modeOut; response=$answer; conversationId=$conversationId; deeplink=$deep
+        ok=$true; runId=$RunId; mode=$modeOut; chatPolicy=$chatPolicyOut; response=$answer; conversationId=$conversationId; deeplink=$deep
         extraction='copy'; copyRuntimeId=$copyResult.CopyRuntimeId; copyTracePath=$copyResult.TracePath
+        baselineMessageCount=$baselineMessageCount; conversationRuntimeId=$conversationRuntimeId
+        freshChatConfirmed=$freshChatConfirmed; freshIdentityChanged=$freshIdentityChanged; freshReason=$freshReason; freshMessageCount=$freshMessageCount
+        inputMethod=$inputMethod; inputAttemptCount=$inputAttemptCount; clipboardRestored=$clipboardRestored; heavyDiagnostics=$script:HeavyDiagnosticsPerformed
         legacyLength=$legacyAnswer.Length; legacyHash=(Get-TextHash $legacyAnswer); copiedLength=$answer.Length; copiedHash=(Get-TextHash $answer)
         durationMs=[int]((Get-Date)-$started).TotalMilliseconds; error=$null
     }
@@ -1263,8 +1628,11 @@ catch {
     Write-Log 'error' "$code $message"
     try { if ($w) { Save-FailureDump $w $code } } catch { }
     $output = [ordered]@{
-        ok=$false; runId=$RunId; mode=$modeOut; response=$null; conversationId=$null; deeplink=$null
+        ok=$false; runId=$RunId; mode=$modeOut; chatPolicy=$chatPolicyOut; response=$null; conversationId=$null; deeplink=$null
         extraction=$null; copyRuntimeId=$null; copyTracePath=(Join-Path $PSScriptRoot ('diagnostics\copy_trace_' + $RunId + '.jsonl'))
+        baselineMessageCount=$baselineMessageCount; conversationRuntimeId=$conversationRuntimeId
+        freshChatConfirmed=$freshChatConfirmed; freshIdentityChanged=$freshIdentityChanged; freshReason=$freshReason; freshMessageCount=$freshMessageCount
+        inputMethod=$inputMethod; inputAttemptCount=$inputAttemptCount; clipboardRestored=$clipboardRestored; heavyDiagnostics=$script:HeavyDiagnosticsPerformed
         durationMs=[int]((Get-Date)-$started).TotalMilliseconds; error=[ordered]@{ code=$code; message=$message }
     }
     if ($ReturnJson) { $output | ConvertTo-Json -Compress -Depth 8 } else { [Console]::Error.WriteLine($message) }

@@ -1,17 +1,19 @@
-# Отчёт о штатном Copy через Windows UI Automation
+# Отчёт о безопасном QChat через Windows UI Automation
 
 ## Итог
 
-**READY FOR QUICK MODE** on current ChatGPT Desktop/UIA build.
+**READY** для проверенного режима `Current` и **PARTIALLY READY** для эксплуатации `Fresh` на текущей сборке ChatGPT Desktop/UIA. Свежий полный цикл Fresh→ValuePattern→Send→assistant→Copy подтверждён (`FreshChatRegression`, RunId `E67C0A87`, 1/1 PASS). Старые Copy/Quick регрессии также повторены в `Current` с компактным trace.
 
-Все обязательные финальные gate пройдены на одном и том же коммите `f7832c0aa51ef30e27f3f64ca39eae50d2c3132d`; stale-gate также проверен отрицательным тестом.
+Важное ограничение: если приложение открыто в режиме Codex, сочетание `^%n` создаёт Codex-поверхность и Fresh закономерно отказывает. Bridge не переходит к старой беседе и возвращает `response=null`. После повторного захвата видимого окна и UIA-дерева проверка пустого маркера остаётся строгой.
 
-Проверка не распространяется на все сценарии автоматизации: `NewChat` в этой итерации не тестируется, а при изменении интерфейса ChatGPT/Chromium требуется повторная проверка. При изменении UIA-дерева строгие ошибки предпочтительнее возврата сомнительного текста.
+Фактические безопасные проверки: `FreshChatRegression` — успешный цикл с `freshChatConfirmed=true`, `freshMessageCount=0`; `SubmitGateFailure` — отказ до Send; `InputRecoveryValuePattern` — безопасный отказ при неподтверждённом Fresh; `InputRecoveryClipboardFailure` — `inputMethod=ClipboardFallback`, `response=null` и `INPUT_NOT_CONFIRMED`.
+
+При изменении UIA-дерева строгий отказ предпочтительнее возврата сомнительного текста.
 
 ## Что проверено
 
 - Приложение: ChatGPT Desktop (`ChatGPT (Beta)`), PID во время проверки `18928`.
-- Orca Computer Use: версия `1.4.188`, состояние `ready`, Windows UIA и действия доступны.
+- Orca Computer Use: версия `1.4.188`, состояние `ready`, Windows UIA и действия доступны; фактически выполнено 12 вызовов Computer Use в этом продолжении (диагностика/восстановление окна/переключение режима/очистка composer, без отправки сообщения); один прежний диагностический вызов указан в хэндoфе отдельно.
 - Кнопка: `ControlType.Button`, локализованное имя `Копировать`, `InvokePattern`, `IsEnabled=true`.
 - `IsOffscreen` не используется как причина отказа: валидная кнопка может быть помечена offscreen во время виртуализации.
 - Иконка Copy появляется отложенно. Реализовано bounded-ожидание до 5 секунд с опросом каждые 200 мс. После установки clipboard sentinel выполняется дополнительное ожидание до 2 секунд перед `InvokePattern`, потому что Chromium может перерисовать узел.
@@ -44,53 +46,34 @@ Assistant ищется только после двух подтверждени
 
 После Invoke содержимое clipboard дополнительно сверяется с маркером body текущего assistant и проверяется на отсутствие submitted prompt. Повторяющиеся строки не удаляются.
 
-## Regression: обязательные 7 случаев
+## Regression: фактические результаты
 
-Последний финальный запуск: `CopyRegression`, RunId `A56D1ADB`; результат **7/7 PASS**. Запуск привязан к коммиту `f7832c0aa51ef30e27f3f64ca39eae50d2c3132d` и хэшам текущих скриптов.
+Текущие результаты: `CopyRegression` RunId `EC32C9DD` — 7/7 PASS в `Current`; `QuickSmoke` RunId `6BC4C586` — 5/5 PASS; `QuickStress` RunId `6BEF7C0E` — 20/20 PASS; `FreshChatRegression` RunId `E67C0A87` — 1/1 PASS с точным ответом; `InputRecoveryValuePattern` RunId `0F6E4FA1` — 1/1 PASS как безопасный отказ до ввода; `InputRecoveryClipboardFailure` RunId `42C996A9` — 1/1 PASS (`response=null`).
+
+`CopyRegression` подтвердил compact Copy trace: в каждом успешном случае ровно одна итоговая JSONL-запись с `Confirmed=true` и `CopyRuntimeId`; `CopyOldAssistantProtection_Preflight` использовал `Current` и подтвердил старый baseline-маркер.
 
 | Случай | Ожидаемо | Фактически | Результат |
 |---|---:|---:|---|
-| CopyOneLine | 12 | 12 | PASS |
-| CopyTwoLines | 29 | 29 | PASS |
-| CopyRepeated | 41 | 41 | PASS |
-| CopyMarkdown | 42 | 42 | PASS |
-| CopyLong | 103 | 103 | PASS |
-| CopyOldAssistantProtection | 18 | 18 | PASS |
-| SubmitGateFailure | `response=null` | `response=null` | PASS |
+| FreshChatRegression | `freshChatConfirmed=true`, точный Copy | `E67C0A87`, точный ответ, trace=1 | PASS |
+| SubmitGateFailure | `response=null`, Send не вызывается | `response=null`, `SUBMIT_NOT_CONFIRMED` | PASS |
+| InputRecoveryValuePattern | безопасный отказ при недоказанном Fresh | `response=null`, `FRESH_CHAT_NOT_CONFIRMED` | PASS |
+| InputRecoveryClipboardFailure | `response=null`, fallback не подтверждён | `response=null`, `INPUT_NOT_CONFIRMED` | PASS |
 
-Во всех положительных случаях SHA-256 ожидаемого и фактического текста совпал, старый marker отсутствовал, а лишние элементы интерфейса (`Сообщение ChatGPT`, `ChatGPT сказал`, `Копировать`, feedback labels) в ответ не попали.
+Положительный Copy-path Fresh подтверждён одним полным прогоном; 7/7 Current дополнительно подтверждены в `CopyRegression`.
 
-Файл результата: [CopyRegression_final_f7832c0_results.json](D:\DEEPSEEK\CopyRegression_final_f7832c0_results.json).
+Хэши текущего финального прогона:
 
-Хэши кода в этом результате:
-
-- `chatgpt_chat.ps1`: `96e5d3690eaf56fa51d0e4337a4d29eb9d8e3219de38de32f290071145620ebe`;
-- `chatgpt_bridge_test.ps1`: `0697a8ba03058237f527ee22691974d962d593ae4b058b5d18ef2f1ccf0bfa53`;
-- `chatgpt_uia_dump.ps1`: `0229f164500b162d85b7a0ead51dce6d7b1613dabe755956740cb0cae28d530b`.
+- `chatgpt_chat.ps1`: `DF693BA2FD2CB72A65123E13C201E59FC10403FB853B9115B659C4F648CE87A3`;
+- `chatgpt_bridge_test.ps1`: `172865041BCC6885AE2CD71650B28FA8FB1AD0E64B48D0606B7257686103E60A`;
+- `chatgpt_uia_dump.ps1`: `0229F164500B162D85B7A0EAD51DCE6D7B1613DABE755956740CB0CAE28D530B`.
 
 Отдельно проверено: временное изменение `chatgpt_chat.ps1` вызвало ожидаемый `COPY_REGRESSION_GATE_STALE`; исходные байты затем восстановлены.
 
-## QuickSmoke
+## QuickSmoke и QuickStress
 
-Quick разрешается только после полного `CopyRegression 7/7`. После финального gate выполнен контролируемый последовательный `QuickSmoke` из пяти случаев:
+`QuickSmoke` RunId `6BC4C586` — **5/5 PASS** в `Current`; все nonce уникальны, ответы точные, trace компактный.
 
-- RunId `9271108B`;
-- результат: **5/5 PASS**;
-- nonce каждого случая уникален и имеет формат `Q01_<RunId>` … `Q05_<RunId>`;
-- каждый случай подтвердил exact совпадение длины и SHA-256, отсутствие старого marker и наличие Copy trace.
-
-Файл результата: [QuickSmoke_final_f7832c0_results.json](D:\DEEPSEEK\QuickSmoke_final_f7832c0_results.json).
-
-`QuickStress` выполнен после успешных Regression и QuickSmoke:
-
-- RunId `9FA8DA2F`;
-- результат: **20/20 PASS**;
-- nonce каждого случая уникален и имеет формат `Q01_<RunId>` … `Q20_<RunId>`;
-- `attempted=20`, `unattempted=0`, `stoppedOnFailure=false`.
-
-Файл результата: [QuickStress_final_f7832c0_results.json](D:\DEEPSEEK\QuickStress_final_f7832c0_results.json).
-
-Все три результата содержат одинаковые SHA-256 для трёх кодовых файлов и одинаковый `gitCommit` `f7832c0aa51ef30e27f3f64ca39eae50d2c3132d`.
+`QuickStress` RunId `6BEF7C0E` — **20/20 PASS** в `Current`; `attempted=20`, `unattempted=0`, `stoppedOnFailure=false`, все trace компактные.
 
 ## Вопрос о Computer Use
 
@@ -106,9 +89,9 @@ Quick разрешается только после полного `CopyRegress
 
 ## Изменённые файлы
 
-- [chatgpt_chat.ps1](D:\DEEPSEEK\chatgpt_chat.ps1) — строгий submit gate, bounded assistant→Copy pairing, ожидание отложенной иконки, sentinel clipboard transaction и диагностика.
-- [chatgpt_bridge_test.ps1](D:\DEEPSEEK\chatgpt_bridge_test.ps1) — обязательная suite 7/7, строгий gate для Quick и проверка хэшей/лишних UI-текстов.
-- [chatgpt_uia_dump.ps1](D:\DEEPSEEK\chatgpt_uia_dump.ps1) — корректный immediate `ParentRuntimeId` и выбор ChatGPT Desktop.
-- [chatgpt_bridge_report.md](D:\DEEPSEEK\chatgpt_bridge_report.md) — итоговые доказательства и статус.
+- [chatgpt_chat.ps1](C:\Users\andre\.dsh\chatgpt-desktop-uia-bridge\chatgpt_chat.ps1) — строгий Fresh/submit gate, bounded повторный захват UIA-поверхности, восстановление ввода и sentinel Copy.
+- [chatgpt_bridge_test.ps1](C:\Users\andre\.dsh\chatgpt-desktop-uia-bridge\chatgpt_bridge_test.ps1) — Fresh/Input suites, Current регрессии, JSONL и hash assertions.
+- [chatgpt_uia_dump.ps1](C:\Users\andre\.dsh\chatgpt-desktop-uia-bridge\chatgpt_uia_dump.ps1) — UIA-диагностика ChatGPT Desktop.
+- [chatgpt_bridge_report.md](C:\Users\andre\.dsh\chatgpt-desktop-uia-bridge\chatgpt_bridge_report.md) — фактические доказательства и статус.
 
 Полные prompt/response и частные изображения в репозиторий не добавляются.

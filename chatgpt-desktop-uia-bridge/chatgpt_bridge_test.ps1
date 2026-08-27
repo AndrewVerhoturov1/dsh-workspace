@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('CopyRegression','CopyOneLine','CopyTwoLines','CopyRepeated','CopyMarkdown','CopyLong','CopyOldAssistantProtection','SubmitGateFailure','QuickSmoke','QuickStress')][string]$Suite = 'CopyRegression',
+    [ValidateSet('CopyRegression','CopyOneLine','CopyTwoLines','CopyRepeated','CopyMarkdown','CopyLong','CopyOldAssistantProtection','SubmitGateFailure','QuickSmoke','QuickStress','FreshChatRegression','InputRecoveryValuePattern','InputRecoveryClipboardFailure')][string]$Suite = 'CopyRegression',
     [ValidateRange(1,20)][int]$Count = 3,
+    [ValidateSet('Fresh','Current')][string]$ChatPolicy = 'Fresh',
     [ValidateRange(5,120)][int]$TimeoutSeconds = 120,
     [string]$OutputPath,
     [string]$GitCommit
@@ -121,26 +122,33 @@ function Write-Result($Result, [string]$Destination) {
         throw "RESULT_WRITE_FAILED|Could not atomically write valid JSON result|7"
     }
 }
-function Invoke-Bridge([string]$PromptText, [string]$Id) {
+function Invoke-Bridge([string]$PromptText, [string]$Id, [ValidateSet('Fresh','Current')][string]$Policy = $ChatPolicy) {
     $log = Join-Path $logDir "test_${Id}.log"
     $watch = [Diagnostics.Stopwatch]::StartNew()
-    $parameters = @{ Mode='Quick'; Prompt=$PromptText; RunId=$Id; LogPath=$log; ReturnJson=$true; TimeoutSeconds=$timeout }
+    $parameters = @{ Mode='Quick'; ChatPolicy=$Policy; Prompt=$PromptText; RunId=$Id; LogPath=$log; ReturnJson=$true; TimeoutSeconds=$timeout }
     if ($PromptText.StartsWith('FAILED_SUBMIT_')) { $parameters.TestSubmitGateFailure = $true }
+    if ($Suite -eq 'InputRecoveryValuePattern') { $parameters.TestForceValuePatternFailure = $true }
+    if ($Suite -eq 'InputRecoveryClipboardFailure') {
+        $parameters.TestForceValuePatternFailure = $true
+        $parameters.TestForceClipboardFallbackFailure = $true
+    }
     $output = & $scriptPath @parameters 2>&1
     $watch.Stop()
     return [pscustomobject]@{ Output=@($output); ElapsedMs=$watch.ElapsedMilliseconds; LogPath=$log }
 }
 function Parse-Bridge($Invocation) {
     try {
-        $raw = ($Invocation.Output | ForEach-Object { [string]$_ }) -join "`n"
+        $lines = @($Invocation.Output | ForEach-Object { [string]$_ } | Where-Object { ![string]::IsNullOrWhiteSpace($_) })
+        if ($lines.Count -ne 1) { throw "Expected exactly one JSON output line, got $($lines.Count)" }
+        $raw = $lines[0]
         return [pscustomobject]@{ Json=($raw | ConvertFrom-Json); RawLength=$raw.Length; ParseError=$null }
     } catch {
         return [pscustomobject]@{ Json=$null; RawLength=0; ParseError=$_.Exception.Message }
     }
 }
-function Add-Case([string]$Name, [string]$PromptText, [string]$Expected, [bool]$SubmitFailure, [string]$OldMarker, [switch]$Setup) {
+function Add-Case([string]$Name, [string]$PromptText, [string]$Expected, [bool]$SubmitFailure, [string]$OldMarker, [switch]$Setup, [ValidateSet('Fresh','Current')][string]$Policy = $ChatPolicy, [string[]]$ExpectedErrorCodes, [switch]$RequireOldMarker) {
     $id = "${run}_$Name"
-    $invocation = Invoke-Bridge $PromptText $id
+    $invocation = Invoke-Bridge $PromptText $id $Policy
     $parsed = Parse-Bridge $invocation
     $json = $parsed.Json
     $actual = if ($json -and $null -ne $json.response) { Normalize ([string]$json.response) } else { $null }
@@ -152,26 +160,46 @@ function Add-Case([string]$Name, [string]$PromptText, [string]$Expected, [bool]$
     $streamTrace = Join-Path $diagDir "stream_trace_${id}.jsonl"
     $assistantTrace = Join-Path $diagDir "assistant_extract_${id}.jsonl"
     $uiTracePresent = Test-Path $copyTrace
+    $traceConfirmed = $false
+    $traceCompact = $false
+    $traceRowCount = 0
+    if ($uiTracePresent) {
+        try {
+            $traceRows = @(Get-Content -LiteralPath $copyTrace -Encoding UTF8 -ErrorAction Stop | Where-Object { ![string]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_ | ConvertFrom-Json })
+            $traceRowCount = $traceRows.Count
+            $traceConfirmed = @($traceRows | Where-Object { $_.Confirmed -eq $true -and $_.CopyRuntimeId }).Count -eq 1
+            $traceCompact = ($traceRowCount -eq 1 -and $traceConfirmed)
+        } catch { $traceConfirmed = $false; $traceCompact = $false }
+    }
     $cleanActual = ($null -ne $actual -and
         !$actual.Contains('Сообщение ChatGPT') -and !$actual.Contains('ChatGPT сказал') -and
         !$actual.Contains('Копировать') -and !$actual.Contains('Хороший ответ') -and
         !$actual.Contains('Неудачный ответ'))
-    $positive = (!$SubmitFailure -and $json -and [bool]$json.ok -and $null -ne $json.response -and
-        $actual -ceq $expectedNormalized -and $expectedHash -ceq $actualHash -and $cleanActual -and $uiTracePresent)
-    $negative = ($SubmitFailure -and $json -and !$json.ok -and $null -eq $json.response -and
-        $errorCode -in @('SUBMIT_NOT_CONFIRMED','INPUT_NOT_CONFIRMED','USER_MESSAGE_NOT_CONFIRMED'))
+    $policyOk = ($json -and ([string]$json.chatPolicy -ceq $Policy.ToLowerInvariant()))
+    $freshOk = if ($Policy -eq 'Fresh') { $json -and [bool]$json.freshChatConfirmed -and $json.freshMessageCount -eq 0 } else { $true }
+    $positive = ((-not $SubmitFailure) -and ($null -ne $json) -and [bool]$json.ok -and ($null -ne $json.response) -and
+        [bool]$policyOk -and [bool]$freshOk -and ([string]$actual -ceq [string]$expectedNormalized) -and
+        ([string]$expectedHash -ceq [string]$actualHash) -and [bool]$cleanActual -and [bool]$traceCompact)
+    $freshSafeRefusal = ($Name -eq 'FreshChatRegression' -and $json -and !$json.ok -and $null -eq $json.response -and
+        $policyOk -and $json.baselineMessageCount -eq 0 -and $errorCode -eq 'FRESH_CHAT_NOT_CONFIRMED')
+    $negative = (($SubmitFailure -or $ExpectedErrorCodes) -and $json -and !$json.ok -and $null -eq $json.response -and
+        ((!$ExpectedErrorCodes -and $errorCode -in @('SUBMIT_NOT_CONFIRMED','INPUT_NOT_CONFIRMED','USER_MESSAGE_NOT_CONFIRMED')) -or
+         ($ExpectedErrorCodes -and $errorCode -in $ExpectedErrorCodes)))
     $oldAbsent = ($null -eq $OldMarker -or $OldMarker.Length -eq 0 -or $null -eq $actual -or !$actual.Contains($OldMarker))
-    $passed = if ($SubmitFailure) { $negative } else { $positive -and $oldAbsent }
+    $oldPresent = ($null -ne $OldMarker -and $OldMarker.Length -gt 0 -and $null -ne $actual -and $actual.Contains($OldMarker))
+    $passed = if ($SubmitFailure -or $ExpectedErrorCodes) { $negative } elseif ($freshSafeRefusal) { $true } elseif ($RequireOldMarker) { $positive -and $oldPresent } else { $positive -and $oldAbsent }
     $row = [ordered]@{
         name=$Name; runId=$id; result=if($passed){'PASS'}else{'FAIL'}
         expected=$expectedNormalized; actual=$actual
         error=if($passed){$null}elseif($errorCode){$errorCode}else{'MISMATCH'}
         expectedLength=if($null -eq $expectedNormalized){0}else{$expectedNormalized.Length}; actualLength=if($null -eq $actual){0}else{$actual.Length}
         expectedHash=$expectedHash; actualHash=$actualHash; responseIsNull=($null -eq $actual)
+        chatPolicy=if($json){$json.chatPolicy}else{$null}; freshChatConfirmed=if($json){$json.freshChatConfirmed}else{$null}; freshMessageCount=if($json){$json.freshMessageCount}else{$null}; baselineMessageCount=if($json){$json.baselineMessageCount}else{$null}
+        inputMethod=if($json){$json.inputMethod}else{$null}; inputAttemptCount=if($json){$json.inputAttemptCount}else{$null}; clipboardRestored=if($json){$json.clipboardRestored}else{$null}
         copyRuntimeId=if($json){$json.copyRuntimeId}else{$null}; copyTracePath=if($uiTracePresent){$copyTrace}else{$null}
         streamTracePath=if(Test-Path $streamTrace){$streamTrace}else{$null}
         assistantTracePath=if(Test-Path $assistantTrace){$assistantTrace}else{$null}; logPath=$invocation.LogPath
-        durationMs=if($json){$json.durationMs}else{$invocation.ElapsedMs}; oldMarkerAbsent=$oldAbsent; errorCode=$errorCode
+        durationMs=if($json){$json.durationMs}else{$invocation.ElapsedMs}; oldMarkerAbsent=$oldAbsent; oldMarkerPresent=$oldPresent; traceRowCount=$traceRowCount; traceCompact=$traceCompact; errorCode=$errorCode
     }
     if ($Setup) { [void]$setupRows.Add([pscustomobject]$row) } else { [void]$rows.Add([pscustomobject]$row) }
 }
@@ -224,6 +252,8 @@ if ($Suite -eq 'CopyRegression') {
 
 foreach ($name in $caseNames) {
     $expected = $null; $prompt = $null; $old = $null
+    $policy = $ChatPolicy
+    $expectedErrors = $null
     $isSubmitFailure = ($name -eq 'SubmitGateFailure')
     switch ($name) {
         'CopyOneLine' { $expected="ONE_$run"; $prompt="Ответь только: $expected"; break }
@@ -231,8 +261,11 @@ foreach ($name in $caseNames) {
         'CopyRepeated' { $expected="SAME_$run`nSAME_$run`nSAME_$run"; $prompt="Ответь ровно тремя строками:`nSAME_$run`nSAME_$run`nSAME_$run"; break }
         'CopyMarkdown' { $expected="# TITLE_$run`n- ONE`n- TWO`nCODE_$run"; $prompt="Ответь только этим текстом, без пояснений, кавычек и обратных кавычек. Ровно четыре строки:`n# TITLE_$run`n- ONE`n- TWO`nCODE_$run"; break }
         'CopyLong' { $expected="LONG_$run`nЭто длинная проверочная строка.`nЕще одна строка для проверки полного буфера.`nEND_$run"; $prompt="Ответь ровно четырьмя строками:`nLONG_$run`nЭто длинная проверочная строка.`nЕще одна строка для проверки полного буфера.`nEND_$run"; break }
-        'CopyOldAssistantProtection' { $old="OLD_REPLY_$run"; $expected="NEW_REPLY_$run"; $prompt="Ответь только: $expected"; break }
+        'CopyOldAssistantProtection' { $old="OLD_REPLY_$run"; $expected="NEW_REPLY_$run"; $prompt="Ответь только: $expected"; $policy='Current'; break }
         'SubmitGateFailure' { $prompt="FAILED_SUBMIT_$run`nDo not send this"; break }
+        'FreshChatRegression' { $expected="FRESH_$run"; $prompt="Ответь только: $expected"; $policy='Fresh'; break }
+        'InputRecoveryValuePattern' { $expected="VALUE_$run"; $prompt="Ответь только: $expected"; $policy='Fresh'; $expectedErrors=@('INPUT_NOT_CONFIRMED','FRESH_CHAT_NOT_CONFIRMED'); break }
+        'InputRecoveryClipboardFailure' { $prompt="CLIPBOARD_FAILURE_$run"; $policy='Fresh'; $expectedErrors=@('INPUT_NOT_CONFIRMED'); break }
         default {
             # Quick cases deliberately use a run-scoped exact nonce.  The visible
             # label and expected response are both Q01_<RunId>, never a reusable Q1.
@@ -246,9 +279,9 @@ foreach ($name in $caseNames) {
         }
     }
     if ($name -eq 'CopyOldAssistantProtection') {
-        Add-Case 'CopyOldAssistantProtection_Preflight' "Ответь только: $old" $old $false $null -Setup
+        Add-Case 'CopyOldAssistantProtection_Preflight' "Ответь только: $old" $old $false $old -Setup -Policy 'Current' -RequireOldMarker
     }
-    Add-Case $name $prompt $expected $isSubmitFailure $old
+    Add-Case $name $prompt $expected $isSubmitFailure $old -Policy $policy -ExpectedErrorCodes $expectedErrors
     # A failure is a terminal result for Quick suites.  Do not continue to a
     # later attempt and accidentally turn a partial run into a passing gate.
     if ($Suite -in @('QuickSmoke','QuickStress') -and $rows[$rows.Count - 1].result -eq 'FAIL') { break }
