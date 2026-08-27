@@ -93,7 +93,7 @@ QUESTION
 
 Если `ok=false`, JSON не разобран, либо `response=null`, транзакция неуспешна: не придумывать ответ, не использовать старый ответ и не объявлять визуально найденный текст успешным результатом.
 
-Коды `CHATGPT_MODE_NOT_CONFIRMED`, `FRESH_CHAT_NOT_CONFIRMED`, `INPUT_NOT_CONFIRMED`, `SUBMIT_NOT_CONFIRMED`, `USER_MESSAGE_NOT_CONFIRMED`, `COPY_BUTTON_AMBIGUOUS`, `COPY_ASSISTANT_PAIRING_ERROR`, `COPY_NOT_CONFIRMED`, `GENERATION_TIMEOUT`, `COMPOSER_NOT_FOUND`, `RESPONSE_NOT_FOUND` требуют честного отказа или предусмотренной диагностики; `response=null` означает, что подтверждённого ответа ChatGPT нет. При `INPUT_NOT_CONFIRMED` bridge обязан сначала сам завершить попытку `ValuePattern → ClipboardFallback`; первый неудачный readback не является причиной сразу обращаться к Computer Use.
+Коды `CHATGPT_MODE_NOT_CONFIRMED`, `FRESH_CHAT_NOT_CONFIRMED`, `INPUT_NOT_CONFIRMED`, `COMPOSER_CLEAR_NOT_CONFIRMED`, `FRESH_COMPOSER_NOT_READY`, `SUBMIT_NOT_CONFIRMED`, `USER_MESSAGE_NOT_CONFIRMED`, `COPY_BUTTON_AMBIGUOUS`, `COPY_ASSISTANT_PAIRING_ERROR`, `COPY_NOT_CONFIRMED`, `GENERATION_TIMEOUT`, `COMPOSER_NOT_FOUND`, `RESPONSE_NOT_FOUND` требуют честного отказа или предусмотренной диагностики; `response=null` означает, что подтверждённого ответа ChatGPT нет. `COMPOSER_CLEAR_NOT_CONFIRMED` означает: Fresh уже подтверждён, но composer не удалось безопасно подготовить; ввод prompt и Send не выполняются. При `INPUT_NOT_CONFIRMED` bridge обязан сначала сам завершить попытку `ValuePattern → ClipboardFallback`; первый неудачный readback не является причиной сразу обращаться к Computer Use.
 
 ### Retry policy
 

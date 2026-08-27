@@ -12,7 +12,9 @@ param(
     [switch]$TestSubmitGateFailure,
     [switch]$TestForceValuePatternFailure,
     [switch]$TestForceClipboardFallbackFailure,
-    [switch]$TestForceFreshConfirmationFailure
+    [switch]$TestForceFreshConfirmationFailure,
+    [switch]$TestForceFreshComposerClearFailure,
+    [string]$TestSeedFreshComposerDraft
 )
 
 $ErrorActionPreference = 'Stop'
@@ -65,6 +67,11 @@ $inputMethod = $null
 $inputFallbackFrom = $null
 $inputAttemptCount = 0
 $clipboardRestored = $false
+$freshComposerInitiallyEmpty = $null
+$freshComposerSanitized = $false
+$freshComposerClearMethod = $null
+$freshComposerClearAttempts = 0
+$sendAttempted = $false
 $script:HeavyDiagnosticsPerformed = $false
 
 $script:AuthorAnchorPattern = '^(ChatGPT сказал|ChatGPT said|Assistant|Вы сказали|You said|User)\s*:'
@@ -383,15 +390,169 @@ function Test-ComposerIsEmpty([string]$Value) {
         $normalized -match '^(Сообщение ChatGPT|Message ChatGPT|Выполните любую задачу)$')
 }
 
-function Clear-Composer($Element) {
-    if (!$Element -or !(Is-UiaElementAlive $Element)) { return $false }
+function Confirm-ComposerEmpty($Window, $ExpectedComposer, [int]$TimeoutMs = 3000) {
+    $deadline = (Get-Date).AddMilliseconds([Math]::Max(1000, $TimeoutMs))
+    $previousRuntimeId = $null
+    $previousValue = $null
+    $stable = 0
+    $last = $null
+    do {
+        $candidate = Find-Composer $Window
+        if ($candidate -and (Is-UiaElementAlive $candidate) -and
+            (!$ExpectedComposer -or (Same-Surface $ExpectedComposer $candidate))) {
+            $value = [string](Get-ComposerValue $candidate)
+            $runtimeId = Get-RuntimeId $candidate
+            $last = $candidate
+            Write-Log 'composer-clear-readback' "runtimeId=$runtimeId valueLength=$($value.Length) valueHash=$(Get-TextHash $value) empty=$(Test-ComposerIsEmpty $value)"
+            # Chromium may replace the editor node after SetValue or a key
+            # event. Stability is the same empty value on the same ChatGPT
+            # surface, not an unchanged Runtime ID.
+            if ((Test-ComposerIsEmpty $value) -and ([string]$value -ceq [string]$previousValue)) {
+                $stable++
+            } elseif (Test-ComposerIsEmpty $value) {
+                $stable = 1
+            } else {
+                $stable = 0
+            }
+            $previousRuntimeId = $runtimeId
+            $previousValue = $value
+            if ($stable -ge 2) {
+                return [pscustomobject]@{ Confirmed=$true; Composer=$candidate; RuntimeId=$runtimeId; StableReadbacks=$stable; Reason='TWO_STABLE_EMPTY_READBACKS' }
+            }
+        } else { $stable = 0 }
+        Start-Sleep -Milliseconds 150
+    } while ((Get-Date) -lt $deadline)
+    return [pscustomobject]@{ Confirmed=$false; Composer=$last; RuntimeId=(Get-RuntimeId $last); StableReadbacks=$stable; Reason='EMPTY_READBACK_NOT_CONFIRMED' }
+}
+
+function Clear-Composer($Window, $Element) {
+    $result = [ordered]@{ Succeeded=$false; Method=$null; Attempts=0; Composer=$null; RuntimeId=$null; Error='COMPOSER_CLEAR_NOT_CONFIRMED'; Message='Composer clear was not confirmed'; StableReadbacks=0 }
+    if ($TestForceFreshComposerClearFailure) {
+        $result.Message = 'Test mode intentionally failed both composer clear methods'
+        return [pscustomobject]$result
+    }
+    $target = $Element
+    if (!$target -or !(Is-UiaElementAlive $target)) { $target = Find-Composer $Window }
+    if (!$target) {
+        $result.Error = 'COMPOSER_NOT_FOUND'
+        $result.Message = 'Composer was not found before clear'
+        return [pscustomobject]$result
+    }
+    $result.Composer = $target
+    $result.RuntimeId = Get-RuntimeId $target
+    $result.Attempts = 1
     try {
         [object]$pattern = $null
-        if (!$Element.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) { return $false }
-        $pattern.SetValue('')
+        if ($target.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) {
+            $pattern.SetValue('')
+            $readback = Confirm-ComposerEmpty $Window $target 2500
+            if ($readback.Confirmed) {
+                $result.Succeeded = $true
+                $result.Method = 'ValuePattern'
+                $result.Composer = $readback.Composer
+                $result.RuntimeId = $readback.RuntimeId
+                $result.StableReadbacks = $readback.StableReadbacks
+                $result.Error = $null
+                $result.Message = 'ValuePattern clear confirmed by two stable UIA readbacks'
+                return [pscustomobject]$result
+            }
+        }
+    } catch { $result.Message = $_.Exception.Message }
+
+    # Safe keyboard fallback: use only the exact, freshly acquired composer on
+    # the active ChatGPT surface. No coordinates or global focus assumptions.
+    $result.Attempts = 2
+    try {
+        $Window = Get-ActiveChatGPTSurface $Window 'ChatGPT'
+        $target = Find-Composer $Window
+        if (!$Window -or !$target -or !(Is-UiaElementAlive $target)) {
+            $result.Error = 'COMPOSER_CLEAR_NOT_CONFIRMED'
+            $result.Message = 'Composer disappeared before keyboard clear fallback'
+            return [pscustomobject]$result
+        }
+        $result.Composer = $target
+        $result.RuntimeId = Get-RuntimeId $target
+        try { $null = $ws.AppActivate($Window.Current.Name) } catch { }
+        Start-Sleep -Milliseconds 200
+        $target.SetFocus()
         Start-Sleep -Milliseconds 150
-        return (Test-ComposerIsEmpty (Get-ComposerValue $Element))
-    } catch { return $false }
+        $focused = $false
+        try { $focused = [bool]$target.Current.HasKeyboardFocus } catch { }
+        if (!$focused) {
+            $result.Message = 'Exact composer did not report UIA keyboard focus'
+            return [pscustomobject]$result
+        }
+        Send-ControlShortcut 0x41
+        Start-Sleep -Milliseconds 100
+        [DshKeyboard]::keybd_event(0x08, 0, 0, [UIntPtr]::Zero)
+        [DshKeyboard]::keybd_event(0x08, 0, [DshKeyboard]::KeyUp, [UIntPtr]::Zero)
+        $readback = Confirm-ComposerEmpty $Window $target 2500
+        if ($readback.Confirmed) {
+            $result.Succeeded = $true
+            $result.Method = 'KeyboardFallback'
+            $result.Composer = $readback.Composer
+            $result.RuntimeId = $readback.RuntimeId
+            $result.StableReadbacks = $readback.StableReadbacks
+            $result.Error = $null
+            $result.Message = 'Keyboard clear fallback confirmed by two stable UIA readbacks'
+        }
+    } catch { $result.Message = $_.Exception.Message }
+    return [pscustomobject]$result
+}
+
+function Prepare-FreshComposer($Window, $Composer) {
+    $result = [ordered]@{ InitiallyEmpty=$null; Sanitized=$false; ClearMethod=$null; ClearAttempts=0; ConfirmedEmpty=$false; Composer=$null; RuntimeId=$null; Error=$null; Message=$null }
+    $Window = Get-ActiveChatGPTSurface $Window 'ChatGPT'
+    $target = $Composer
+    if (!$target -or !(Is-UiaElementAlive $target) -or !$Window -or !(Same-Surface $Window $target)) { $target = Find-Composer $Window }
+    if (!$target) {
+        $result.Error = 'FRESH_COMPOSER_NOT_READY'
+        $result.Message = 'Fresh composer was not found after conversation confirmation'
+        return [pscustomobject]$result
+    }
+    $value = [string](Get-ComposerValue $target)
+    $result.InitiallyEmpty = [bool](Test-ComposerIsEmpty $value)
+    $result.Composer = $target
+    $result.RuntimeId = Get-RuntimeId $target
+    Write-Log 'fresh-composer' "initiallyEmpty=$($result.InitiallyEmpty) valueLength=$($value.Length) valueHash=$(Get-TextHash $value)"
+    if ($result.InitiallyEmpty) {
+        $result.ConfirmedEmpty = $true
+        $result.Message = 'Fresh composer already empty; no clear performed'
+        return [pscustomobject]$result
+    }
+    $clear = Clear-Composer $Window $target
+    $result.ClearMethod = $clear.Method
+    $result.ClearAttempts = [int]$clear.Attempts
+    $result.Composer = $clear.Composer
+    $result.RuntimeId = $clear.RuntimeId
+    $result.ConfirmedEmpty = [bool]$clear.Succeeded
+    if (!$clear.Succeeded) {
+        $result.Error = 'COMPOSER_CLEAR_NOT_CONFIRMED'
+        $result.Message = $clear.Message
+        return [pscustomobject]$result
+    }
+    $result.Sanitized = $true
+    $result.Message = $clear.Message
+    return [pscustomobject]$result
+}
+
+function Set-TestFreshComposerDraft($Window, [string]$Draft) {
+    if ([string]::IsNullOrWhiteSpace($Draft)) { return [pscustomobject]@{ Succeeded=$true; Composer=$null; Error=$null; Message='No test draft requested' } }
+    $Window = Get-ActiveChatGPTSurface $Window 'ChatGPT'
+    $target = Find-Composer $Window
+    if (!$target) { return [pscustomobject]@{ Succeeded=$false; Composer=$null; Error='TEST_DRAFT_SEED_FAILED'; Message='Composer not found for test draft seed' } }
+    try {
+        [object]$pattern = $null
+        if (!$target.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) {
+            return [pscustomobject]@{ Succeeded=$false; Composer=$target; Error='TEST_DRAFT_SEED_FAILED'; Message='ValuePattern unavailable for test draft seed' }
+        }
+        $pattern.SetValue($Draft)
+        $readback = Confirm-ComposerPrompt $Window $Draft $target
+        if (!$readback.Confirmed) { return [pscustomobject]@{ Succeeded=$false; Composer=$target; Error='TEST_DRAFT_SEED_FAILED'; Message='Test draft readback was not confirmed' } }
+        return [pscustomobject]@{ Succeeded=$true; Composer=$readback.Composer; Error=$null; Message='Test draft seeded without Send' }
+    } catch {
+        return [pscustomobject]@{ Succeeded=$false; Composer=$target; Error='TEST_DRAFT_SEED_FAILED'; Message=$_.Exception.Message }
+    }
 }
 
 function Invoke-ComposerClipboardFallback($Window, $Composer, [string]$Text) {
@@ -415,7 +576,8 @@ function Invoke-ComposerClipboardFallback($Window, $Composer, [string]$Text) {
         }
         $result.Composer = $target
         $result.RuntimeId = Get-RuntimeId $target
-        if (!(Clear-Composer $target)) {
+        $clear = Clear-Composer $Window $target
+        if (!$clear.Succeeded) {
             $result.Error = 'COMPOSER_CLEAR_FAILED'
             $result.Message = 'Composer could not be cleared before clipboard fallback'
             return [pscustomobject]$result
@@ -606,20 +768,26 @@ function Confirm-FreshConversation($Window, $PreviousSnapshot, [int]$TimeoutMs =
         # Empty marker/readback still prove the resulting state; RuntimeId alone
         # never proves a new conversation.
         $actionProof = [bool]$NewChatInvoked
+        # The verified UIA New Chat InvokePattern is the observable transition
+        # when the prior surface was already empty; a populated prior surface
+        # additionally requires the reset/anchor evidence below.
         $structuralProof = $markerTransition -or $observableReset -or $actionProof
-        $empty = [bool]($current.EmptySurfaceMarker -and $current.MessageCount -eq 0 -and $composer -and $composerEmpty -and $oldAnchorIntersection -eq 0)
+        $transitionProof = [bool]$structuralProof
+        # Fresh proof is about the conversation surface only. A retained draft
+        # belongs to composer readiness and is sanitized only after this proof.
+        $empty = [bool]($current.EmptySurfaceMarker -and $current.MessageCount -eq 0 -and $oldAnchorIntersection -eq 0)
         $signature = $current.Signature
-        if ($empty -and $structuralProof -and $signature -eq $lastSignature) { $stable++ }
-        elseif ($empty -and $structuralProof) { $stable = 1 }
+        if ($empty -and $transitionProof -and $signature -eq $lastSignature) { $stable++ }
+        elseif ($empty -and $transitionProof) { $stable = 1 }
         else { $stable = 0 }
         $lastSignature = $signature
         $last = [pscustomobject]@{
-            Window=$Window; Snapshot=$current; Composer=$composer; Empty=$empty; StructuralProof=$structuralProof
+            Window=$Window; Snapshot=$current; Composer=$composer; Empty=$empty; StructuralProof=$transitionProof
             RuntimeChanged=$runtimeChanged; MarkerTransition=$markerTransition; ObservableReset=$observableReset; ActionProof=$actionProof; OldAnchorIntersection=$oldAnchorIntersection
-            StablePolls=$stable; Reason=if(!$current.EmptySurfaceMarker){'EMPTY_SURFACE_MARKER_NOT_FOUND'}elseif($current.MessageCount -ne 0){'NEW_CHAT_HAS_MESSAGES'}elseif(!$composer -or !$composerEmpty){'COMPOSER_NOT_EMPTY'}elseif(!$structuralProof){'NO_OBSERVABLE_CONVERSATION_TRANSITION'}else{'STABILIZING'}
+            ComposerEmpty=$composerEmpty; StablePolls=$stable; Reason=if(!$current.EmptySurfaceMarker){'EMPTY_SURFACE_MARKER_NOT_FOUND'}elseif($current.MessageCount -ne 0){'NEW_CHAT_HAS_MESSAGES'}elseif($oldAnchorIntersection -ne 0){'OLD_MESSAGE_ANCHOR_PRESENT'}elseif(!$actionProof){'NEW_CHAT_ACTION_NOT_CONFIRMED'}elseif(!$structuralProof){'NO_OBSERVABLE_CONVERSATION_TRANSITION'}else{'STABILIZING'}
         }
         if ($stable -ge 2) {
-            return [pscustomobject]@{ Confirmed=$true; Window=$Window; Snapshot=$current; Composer=$composer; IdentityChanged=$runtimeChanged; TransitionObserved=$structuralProof; MarkerTransition=$markerTransition; ObservableReset=$observableReset; Reason='CONFIRMED_EMPTY_NEW_CONVERSATION'; StablePolls=$stable }
+            return [pscustomobject]@{ Confirmed=$true; Window=$Window; Snapshot=$current; Composer=$composer; IdentityChanged=$runtimeChanged; TransitionObserved=$transitionProof; MarkerTransition=$markerTransition; ObservableReset=$observableReset; Reason='CONFIRMED_NEW_CONVERSATION'; StablePolls=$stable }
         }
     } while ((Get-Date) -lt $deadline)
     return [pscustomobject]@{ Confirmed=$false; Window=$Window; Snapshot=if($last){$last.Snapshot}else{Get-ConversationSnapshot $Window}; Composer=if($last){$last.Composer}else{$null}; IdentityChanged=if($last){$last.RuntimeChanged}else{$false}; TransitionObserved=if($last){$last.StructuralProof}else{$false}; MarkerTransition=if($last){$last.MarkerTransition}else{$false}; ObservableReset=if($last){$last.ObservableReset}else{$false}; Reason=if($last){$last.Reason}else{'NO_OBSERVABLE_CONVERSATION_TRANSITION'}; StablePolls=if($last){$last.StablePolls}else{0} }
@@ -1528,6 +1696,14 @@ try {
         $freshAction = 'NewChat.InvokePattern'
         $freshActionRuntimeId = $newChat.RuntimeId
         Write-Log 'fresh-action' "method=InvokePattern runtimeId=$($newChat.RuntimeId)"
+        # Test-only reproduction of the live edge case: ChatGPT may retain a
+        # draft after New Chat. Seed it after the action but before Fresh proof;
+        # production callers never pass this switch and never send the marker.
+        if ($TestSeedFreshComposerDraft) {
+            $draftResult = Set-TestFreshComposerDraft $w $TestSeedFreshComposerDraft
+            if (!$draftResult.Succeeded) { Fail 'TEST_DRAFT_SEED_FAILED' $draftResult.Message 3 }
+            $composer = $draftResult.Composer
+        }
         if ($TestForceFreshConfirmationFailure) { Fail 'FRESH_CHAT_NOT_CONFIRMED' 'Test mode intentionally refused Fresh confirmation' 3 }
         $fresh = Confirm-FreshConversation $w $beforeSnapshot 8000 $newChat.Invoked
         $w = $fresh.Window
@@ -1546,11 +1722,25 @@ try {
         $conversation = $beforeSnapshot.Conversation
     }
 
-    # Fresh confirmation and all input methods must use newly acquired UIA nodes.
+    # Fresh proof is complete before any non-empty composer is touched. Only
+    # now may Fresh sanitize a retained draft, then insert the real prompt.
     $w = Get-ActiveChatGPTSurface $w
     if (!$composer -or !(Is-UiaElementAlive $composer)) { $composer = Find-Composer $w }
     if (!$composer) { Fail 'COMPOSER_NOT_FOUND' 'Visible enabled composer not found' 3 }
     Write-Log 'composer-refresh' "runtimeId=$(Get-RuntimeId $composer)"
+    if ($ChatPolicy -eq 'Fresh') {
+        $freshComposer = Prepare-FreshComposer $w $composer
+        $freshComposerInitiallyEmpty = $freshComposer.InitiallyEmpty
+        $freshComposerSanitized = [bool]$freshComposer.Sanitized
+        $freshComposerClearMethod = $freshComposer.ClearMethod
+        $freshComposerClearAttempts = [int]$freshComposer.ClearAttempts
+        if ($freshComposer.Composer) { $composer = $freshComposer.Composer }
+        if (!$freshComposer.ConfirmedEmpty) {
+            $code = if ($freshComposer.Error) { $freshComposer.Error } else { 'FRESH_COMPOSER_NOT_READY' }
+            Fail $code $freshComposer.Message 1
+        }
+        Write-Log 'fresh-composer-ready' "initiallyEmpty=$freshComposerInitiallyEmpty sanitized=$freshComposerSanitized clearMethod=$freshComposerClearMethod clearAttempts=$freshComposerClearAttempts"
+    }
     $inputResult = Set-ComposerText $w $composer $Prompt
     $inputAttemptCount = [int]$inputResult.Attempts
     $inputMethod = [string]$inputResult.Method
@@ -1591,6 +1781,7 @@ try {
     $send = Find-SendButtonForComposer $w $composer
     if (!$send) { Fail 'SUBMIT_FAILED' 'Send button for composer surface was not found' 4 }
     Write-Log 'send-validation' "runtimeId=$(Get-RuntimeId $send) sameSurface=$(Same-Surface $composer $send)"
+    $sendAttempted = $true
     if (!(Invoke-Button $send)) { Fail 'SUBMIT_FAILED' 'Validated Send button Invoke failed' 4 }
     Write-Log 'submit-attempted' 'method=Invoke'
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
@@ -1714,7 +1905,8 @@ try {
         surfaceModeBefore=$surfaceModeBefore; surfaceModeAfter=$surfaceModeAfter; chatModeConfirmed=$chatModeConfirmed
         freshAction=$freshAction; freshActionRuntimeId=$freshActionRuntimeId; freshTransitionObserved=$freshTransitionObserved; freshProofLevel=if($freshChatConfirmed){'UIA_ACTION_AND_EMPTY_STATE'}else{$null}
         freshChatConfirmed=$freshChatConfirmed; freshIdentityChanged=$freshIdentityChanged; freshReason=$freshReason; freshMessageCount=$freshMessageCount
-        inputMethod=$inputMethod; inputFallbackFrom=$inputFallbackFrom; inputAttemptCount=$inputAttemptCount; clipboardRestored=$clipboardRestored; heavyDiagnostics=$script:HeavyDiagnosticsPerformed
+        freshComposerInitiallyEmpty=$freshComposerInitiallyEmpty; freshComposerSanitized=$freshComposerSanitized; freshComposerClearMethod=$freshComposerClearMethod; freshComposerClearAttempts=$freshComposerClearAttempts
+        inputMethod=$inputMethod; inputFallbackFrom=$inputFallbackFrom; inputAttemptCount=$inputAttemptCount; clipboardRestored=$clipboardRestored; sendAttempted=$sendAttempted; heavyDiagnostics=$script:HeavyDiagnosticsPerformed
         legacyLength=$legacyAnswer.Length; legacyHash=(Get-TextHash $legacyAnswer); copiedLength=$answer.Length; copiedHash=(Get-TextHash $answer)
         durationMs=[int]((Get-Date)-$started).TotalMilliseconds; error=$null
     }
@@ -1735,7 +1927,8 @@ catch {
         surfaceModeBefore=$surfaceModeBefore; surfaceModeAfter=$surfaceModeAfter; chatModeConfirmed=$chatModeConfirmed
         freshAction=$freshAction; freshActionRuntimeId=$freshActionRuntimeId; freshTransitionObserved=$freshTransitionObserved; freshProofLevel=if($freshChatConfirmed){'UIA_ACTION_AND_EMPTY_STATE'}else{$null}
         freshChatConfirmed=$freshChatConfirmed; freshIdentityChanged=$freshIdentityChanged; freshReason=$freshReason; freshMessageCount=$freshMessageCount
-        inputMethod=$inputMethod; inputFallbackFrom=$inputFallbackFrom; inputAttemptCount=$inputAttemptCount; clipboardRestored=$clipboardRestored; heavyDiagnostics=$script:HeavyDiagnosticsPerformed
+        freshComposerInitiallyEmpty=$freshComposerInitiallyEmpty; freshComposerSanitized=$freshComposerSanitized; freshComposerClearMethod=$freshComposerClearMethod; freshComposerClearAttempts=$freshComposerClearAttempts
+        inputMethod=$inputMethod; inputFallbackFrom=$inputFallbackFrom; inputAttemptCount=$inputAttemptCount; clipboardRestored=$clipboardRestored; sendAttempted=$sendAttempted; heavyDiagnostics=$script:HeavyDiagnosticsPerformed
         durationMs=[int]((Get-Date)-$started).TotalMilliseconds; error=[ordered]@{ code=$code; message=$message }
     }
     if ($ReturnJson) { $output | ConvertTo-Json -Compress -Depth 8 } else { [Console]::Error.WriteLine($message) }
