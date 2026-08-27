@@ -56,18 +56,18 @@ Assistant ищется только после двух подтверждени
 
 | Suite | Ожидание | Результат |
 |---|---|---|
-| CopyRegression Current | 7/7 | PASS `22ACDA17` |
-| QuickSmoke Current | 5/5 | PASS `40402BF5` |
-| QuickStress Current | 20/20 | PASS `EF8C549A` |
+| CopyRegression Current | 7/7 | PASS `9A1ACDD6` |
+| QuickSmoke Current | 5/5 | PASS `530FF70B` |
+| QuickStress Current | 20/20 | PASS `3DB27827` |
 | FreshChatRegression | 1/1 success | PASS `EE097457` |
 | FreshSafeRefusal | `FRESH_CHAT_NOT_CONFIRMED` | PASS `07B3B0CB` |
 | InputRecoveryValuePattern | positive `ClipboardFallback` | PASS `8473F57E`, attempts=2 |
 | InputRecoveryClipboardFailure | safe `INPUT_NOT_CONFIRMED` | PASS `F140A544` |
-| FreshWithNonEmptyComposer | Fresh + non-empty draft → sanitize → Copy | PASS `BE2E1B81` |
-| FreshComposerClearFailure | Fresh confirmed + clear failure → no Send | PASS `EDDB26EF` |
-| FreshChatSmoke | 5/5 separate chats | PASS `3DE7CCCA` (включая старый-dialog preflight) |
-| FreshAfterOldConversation | PASS | PASS `63EB03D0` |
-| FreshFromCodex | PASS | PASS `1C333262` |
+| FreshWithNonEmptyComposer | Fresh + non-empty draft → sanitize → Copy | PASS `E3D9EB95` |
+| FreshComposerClearFailure | Fresh confirmed + clear failure → no Send | PASS `3ECC0392` |
+| FreshChatSmoke | 5/5 separate chats | PASS `B457D5CC` (включая старый-dialog preflight) |
+| FreshAfterOldConversation | PASS | PASS `DE81A696` |
+| FreshFromCodex | PASS | PASS `BC3C589F` |
 | Luna real QChat | 5/5 | PASS (5/5 exact Fresh bridge responses) |
 | Computer Use on successful Luna QChat | 0/5 | PASS (все 5 вызовов через bridge) |
 
