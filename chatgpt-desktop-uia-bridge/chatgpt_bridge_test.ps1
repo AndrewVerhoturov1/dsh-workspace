@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('CopyRegression','CopyOneLine','CopyTwoLines','CopyRepeated','CopyMarkdown','CopyLong','CopyOldAssistantProtection','SubmitGateFailure','QuickSmoke','QuickStress','FreshChatRegression','InputRecoveryValuePattern','InputRecoveryClipboardFailure')][string]$Suite = 'CopyRegression',
+    [ValidateSet('CopyRegression','CopyOneLine','CopyTwoLines','CopyRepeated','CopyMarkdown','CopyLong','CopyOldAssistantProtection','SubmitGateFailure','QuickSmoke','QuickStress','FreshChatRegression','FreshSafeRefusal','FreshChatSmoke','FreshAfterOldConversation','FreshFromCodex','InputRecoveryValuePattern','InputRecoveryClipboardFailure')][string]$Suite = 'CopyRegression',
     [ValidateRange(1,20)][int]$Count = 3,
     [ValidateSet('Fresh','Current')][string]$ChatPolicy = 'Fresh',
     [ValidateRange(5,120)][int]$TimeoutSeconds = 120,
@@ -19,6 +19,7 @@ New-Item -ItemType Directory -Path $logDir -Force | Out-Null
 New-Item -ItemType Directory -Path $diagDir -Force | Out-Null
 $scriptPath = Join-Path $root 'chatgpt_chat.ps1'
 $rows = New-Object 'System.Collections.Generic.List[object]'
+$freshPreviousActual = $null
 $setupRows = New-Object 'System.Collections.Generic.List[object]'
 
 function Normalize([string]$Text) {
@@ -132,6 +133,7 @@ function Invoke-Bridge([string]$PromptText, [string]$Id, [ValidateSet('Fresh','C
         $parameters.TestForceValuePatternFailure = $true
         $parameters.TestForceClipboardFallbackFailure = $true
     }
+    if ($Suite -eq 'FreshSafeRefusal') { $parameters.TestForceFreshConfirmationFailure = $true }
     $output = & $scriptPath @parameters 2>&1
     $watch.Stop()
     return [pscustomobject]@{ Output=@($output); ElapsedMs=$watch.ElapsedMilliseconds; LogPath=$log }
@@ -176,30 +178,35 @@ function Add-Case([string]$Name, [string]$PromptText, [string]$Expected, [bool]$
         !$actual.Contains('Копировать') -and !$actual.Contains('Хороший ответ') -and
         !$actual.Contains('Неудачный ответ'))
     $policyOk = ($json -and ([string]$json.chatPolicy -ceq $Policy.ToLowerInvariant()))
-    $freshOk = if ($Policy -eq 'Fresh') { $json -and [bool]$json.freshChatConfirmed -and $json.freshMessageCount -eq 0 } else { $true }
+    $freshOk = if ($Policy -eq 'Fresh') { $json -and [bool]$json.freshChatConfirmed -and [bool]$json.freshTransitionObserved -and $json.freshMessageCount -eq 0 -and [bool]$json.chatModeConfirmed } else { $true }
+    $fallbackOk = if ($Name -eq 'InputRecoveryValuePattern') { $json -and [string]$json.inputMethod -ceq 'ClipboardFallback' -and [string]$json.inputFallbackFrom -ceq 'ValuePattern' -and [int]$json.inputAttemptCount -ge 2 } else { $true }
     $positive = ((-not $SubmitFailure) -and ($null -ne $json) -and [bool]$json.ok -and ($null -ne $json.response) -and
-        [bool]$policyOk -and [bool]$freshOk -and ([string]$actual -ceq [string]$expectedNormalized) -and
+        [bool]$policyOk -and [bool]$freshOk -and [bool]$fallbackOk -and ([string]$actual -ceq [string]$expectedNormalized) -and
         ([string]$expectedHash -ceq [string]$actualHash) -and [bool]$cleanActual -and [bool]$traceCompact)
-    $freshSafeRefusal = ($Name -eq 'FreshChatRegression' -and $json -and !$json.ok -and $null -eq $json.response -and
-        $policyOk -and $json.baselineMessageCount -eq 0 -and $errorCode -eq 'FRESH_CHAT_NOT_CONFIRMED')
+    $freshSafeRefusal = $false
     $negative = (($SubmitFailure -or $ExpectedErrorCodes) -and $json -and !$json.ok -and $null -eq $json.response -and
         ((!$ExpectedErrorCodes -and $errorCode -in @('SUBMIT_NOT_CONFIRMED','INPUT_NOT_CONFIRMED','USER_MESSAGE_NOT_CONFIRMED')) -or
          ($ExpectedErrorCodes -and $errorCode -in $ExpectedErrorCodes)))
+    if ($Name -eq 'InputRecoveryClipboardFailure') {
+        $negative = $negative -and [string]$json.inputMethod -ceq 'ClipboardFallback' -and [int]$json.inputAttemptCount -ge 2
+    }
     $oldAbsent = ($null -eq $OldMarker -or $OldMarker.Length -eq 0 -or $null -eq $actual -or !$actual.Contains($OldMarker))
     $oldPresent = ($null -ne $OldMarker -and $OldMarker.Length -gt 0 -and $null -ne $actual -and $actual.Contains($OldMarker))
-    $passed = if ($SubmitFailure -or $ExpectedErrorCodes) { $negative } elseif ($freshSafeRefusal) { $true } elseif ($RequireOldMarker) { $positive -and $oldPresent } else { $positive -and $oldAbsent }
+    $passed = if ($SubmitFailure -or $ExpectedErrorCodes) { $negative } elseif ($Name -eq 'FreshSafeRefusal') { $json -and !$json.ok -and $null -eq $json.response -and $policyOk -and $errorCode -eq 'FRESH_CHAT_NOT_CONFIRMED' } elseif ($RequireOldMarker) { $positive -and $oldPresent } else { $positive -and $oldAbsent }
     $row = [ordered]@{
         name=$Name; runId=$id; result=if($passed){'PASS'}else{'FAIL'}
         expected=$expectedNormalized; actual=$actual
         error=if($passed){$null}elseif($errorCode){$errorCode}else{'MISMATCH'}
         expectedLength=if($null -eq $expectedNormalized){0}else{$expectedNormalized.Length}; actualLength=if($null -eq $actual){0}else{$actual.Length}
         expectedHash=$expectedHash; actualHash=$actualHash; responseIsNull=($null -eq $actual)
-        chatPolicy=if($json){$json.chatPolicy}else{$null}; freshChatConfirmed=if($json){$json.freshChatConfirmed}else{$null}; freshMessageCount=if($json){$json.freshMessageCount}else{$null}; baselineMessageCount=if($json){$json.baselineMessageCount}else{$null}
-        inputMethod=if($json){$json.inputMethod}else{$null}; inputAttemptCount=if($json){$json.inputAttemptCount}else{$null}; clipboardRestored=if($json){$json.clipboardRestored}else{$null}
+        chatPolicy=if($json){$json.chatPolicy}else{$null}; surfaceModeBefore=if($json){$json.surfaceModeBefore}else{$null}; surfaceModeAfter=if($json){$json.surfaceModeAfter}else{$null}; chatModeConfirmed=if($json){$json.chatModeConfirmed}else{$null}
+        freshAction=if($json){$json.freshAction}else{$null}; freshActionRuntimeId=if($json){$json.freshActionRuntimeId}else{$null}; freshTransitionObserved=if($json){$json.freshTransitionObserved}else{$null}; freshProofLevel=if($json){$json.freshProofLevel}else{$null}
+        freshChatConfirmed=if($json){$json.freshChatConfirmed}else{$null}; freshMessageCount=if($json){$json.freshMessageCount}else{$null}; baselineMessageCount=if($json){$json.baselineMessageCount}else{$null}
+        inputMethod=if($json){$json.inputMethod}else{$null}; inputFallbackFrom=if($json){$json.inputFallbackFrom}else{$null}; inputAttemptCount=if($json){$json.inputAttemptCount}else{$null}; clipboardRestored=if($json){$json.clipboardRestored}else{$null}
         copyRuntimeId=if($json){$json.copyRuntimeId}else{$null}; copyTracePath=if($uiTracePresent){$copyTrace}else{$null}
         streamTracePath=if(Test-Path $streamTrace){$streamTrace}else{$null}
         assistantTracePath=if(Test-Path $assistantTrace){$assistantTrace}else{$null}; logPath=$invocation.LogPath
-        durationMs=if($json){$json.durationMs}else{$invocation.ElapsedMs}; oldMarkerAbsent=$oldAbsent; oldMarkerPresent=$oldPresent; traceRowCount=$traceRowCount; traceCompact=$traceCompact; errorCode=$errorCode
+        durationMs=if($json){$json.durationMs}else{$invocation.ElapsedMs}; conversationRuntimeId=if($json){$json.conversationRuntimeId}else{$null}; oldMarkerAbsent=$oldAbsent; oldMarkerPresent=$oldPresent; traceRowCount=$traceRowCount; traceCompact=$traceCompact; errorCode=$errorCode
     }
     if ($Setup) { [void]$setupRows.Add([pscustomobject]$row) } else { [void]$rows.Add([pscustomobject]$row) }
 }
@@ -242,12 +249,22 @@ if ($Suite -eq 'QuickStress') {
 }
 
 $caseNames = New-Object 'System.Collections.Generic.List[string]'
+if ($Suite -eq 'FreshChatSmoke') {
+    # Seed a non-empty old conversation before Q01. This makes every target
+    # invocation observe a real reset (Q02-Q05 also start after the prior
+    # invocation has populated its own conversation), rather than merely
+    # asserting five empty-looking surfaces.
+    $seed = "OLD_FRESH_X5_$run"
+    Add-Case 'FreshChatSmoke_Preflight' "Ответь только: $seed" $seed $false $seed -Setup -Policy 'Current' -RequireOldMarker
+}
 if ($Suite -eq 'CopyRegression') {
     foreach ($name in $required) { [void]$caseNames.Add($name) }
 } elseif ($Suite -eq 'QuickSmoke') {
     foreach ($i in 1..5) { [void]$caseNames.Add(('Q{0:D2}' -f $i)) }
 } elseif ($Suite -eq 'QuickStress') {
     foreach ($i in 1..20) { [void]$caseNames.Add(('Q{0:D2}' -f $i)) }
+} elseif ($Suite -eq 'FreshChatSmoke') {
+    foreach ($i in 1..5) { [void]$caseNames.Add(('FreshChatSmoke{0}' -f $i)) }
 } else { [void]$caseNames.Add($Suite) }
 
 foreach ($name in $caseNames) {
@@ -264,7 +281,11 @@ foreach ($name in $caseNames) {
         'CopyOldAssistantProtection' { $old="OLD_REPLY_$run"; $expected="NEW_REPLY_$run"; $prompt="Ответь только: $expected"; $policy='Current'; break }
         'SubmitGateFailure' { $prompt="FAILED_SUBMIT_$run`nDo not send this"; break }
         'FreshChatRegression' { $expected="FRESH_$run"; $prompt="Ответь только: $expected"; $policy='Fresh'; break }
-        'InputRecoveryValuePattern' { $expected="VALUE_$run"; $prompt="Ответь только: $expected"; $policy='Fresh'; $expectedErrors=@('INPUT_NOT_CONFIRMED','FRESH_CHAT_NOT_CONFIRMED'); break }
+        'FreshSafeRefusal' { $expected="REFUSAL_$run"; $prompt="Ответь только: $expected"; $policy='Fresh'; break }
+        { $name -match '^FreshChatSmoke[1-5]$' } { $number = $name -replace '^FreshChatSmoke',''; $expected="FRESH_Q${number}_$run"; $prompt="Ответь только: $expected"; $policy='Fresh'; break }
+        'FreshAfterOldConversation' { $expected="NEW_FRESH_$run"; $old="OLD_FRESH_$run"; $prompt="Ответь только: $expected"; $policy='Fresh'; break }
+        'FreshFromCodex' { $expected="CODEX_FRESH_$run"; $prompt="Ответь только: $expected"; $policy='Fresh'; break }
+        'InputRecoveryValuePattern' { $expected="VALUE_$run"; $prompt="Ответь только: $expected"; $policy='Fresh'; break }
         'InputRecoveryClipboardFailure' { $prompt="CLIPBOARD_FAILURE_$run"; $policy='Fresh'; $expectedErrors=@('INPUT_NOT_CONFIRMED'); break }
         default {
             # Quick cases deliberately use a run-scoped exact nonce.  The visible
@@ -280,6 +301,12 @@ foreach ($name in $caseNames) {
     }
     if ($name -eq 'CopyOldAssistantProtection') {
         Add-Case 'CopyOldAssistantProtection_Preflight' "Ответь только: $old" $old $false $old -Setup -Policy 'Current' -RequireOldMarker
+    }
+    if ($name -eq 'FreshAfterOldConversation') {
+        # Establish a real non-empty old ChatGPT conversation first. The target
+        # Fresh invocation must then create another conversation and return only
+        # the new marker; an isolated Fresh call would not test this invariant.
+        Add-Case 'FreshAfterOldConversation_Preflight' "Ответь только: $old" $old $false $old -Setup -Policy 'Current' -RequireOldMarker
     }
     Add-Case $name $prompt $expected $isSubmitFailure $old -Policy $policy -ExpectedErrorCodes $expectedErrors
     # A failure is a terminal result for Quick suites.  Do not continue to a
@@ -307,18 +334,20 @@ if ($Suite -in @('QuickSmoke','QuickStress')) {
 
 $gitMetadata = Get-GitMetadata
 if ($GitCommit -and $GitCommit -match '^[0-9a-fA-F]{40}$') { $gitMetadata.gitCommit = $GitCommit.ToLowerInvariant() }
-$expectedTotal = if ($null -ne $expectedQuickTotal) { $expectedQuickTotal } elseif ($Suite -eq 'CopyRegression') { 7 } else { $rows.Count }
+$setupFailed = (@($setupRows | Where-Object result -eq FAIL).Count -gt 0)
+$expectedTotal = if ($null -ne $expectedQuickTotal) { $expectedQuickTotal } elseif ($Suite -eq 'CopyRegression') { 7 } elseif ($Suite -eq 'FreshChatSmoke') { 5 } else { $rows.Count }
 $passedCount = @($rows | Where-Object result -eq PASS).Count
 $failedCount = @($rows | Where-Object result -eq FAIL).Count
+if ($setupFailed) { $failedCount++ }
 $result = [ordered]@{
     schemaVersion=5; suite=$Suite; runId=$run; startedAtUtc=$startedAtUtc; completedAtUtc=(Get-Date).ToUniversalTime().ToString('o')
     timeoutSeconds=$timeout; codeHashes=$codeHashes; gitCommit=$gitMetadata.gitCommit; workingTreeDirty=$gitMetadata.workingTreeDirty
     metadata=[ordered]@{ codeFiles=@($script:CodeFiles.Keys); normalization='CRLF/CR to LF; trim terminal LF only'; exactMatch=$true; attempted=$rows.Count; unattempted=($expectedTotal - $rows.Count); stoppedOnFailure=($rows.Count -gt 0 -and $rows[$rows.Count - 1].result -eq 'FAIL'); contractError=$quickContractError }
-    summary=[ordered]@{ total=$expectedTotal; passed=$passedCount; failed=$failedCount }
+    summary=[ordered]@{ total=$expectedTotal; passed=$passedCount; failed=$failedCount; setupFailed=$setupFailed }
     attempts=@($rows.ToArray()); setupAttempts=@($setupRows.ToArray())
 }
 $destination = if ($OutputPath) { $OutputPath } else { Join-Path $root "${Suite}_${run}_results.json" }
 Write-Result $result $destination
 Write-Output ($result | ConvertTo-Json -Compress -Depth 12)
-if ($result.summary.failed -or ($result.summary.total -ne $result.summary.passed) -or $quickContractError) { exit 1 }
+if ($result.summary.failed -or ($result.summary.total -ne $result.summary.passed) -or $quickContractError -or $setupFailed) { exit 1 }
 else { exit 0 }

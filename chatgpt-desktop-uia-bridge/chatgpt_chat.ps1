@@ -11,13 +11,33 @@ param(
     [string]$RunId,
     [switch]$TestSubmitGateFailure,
     [switch]$TestForceValuePatternFailure,
-    [switch]$TestForceClipboardFallbackFailure
+    [switch]$TestForceClipboardFallbackFailure,
+    [switch]$TestForceFreshConfirmationFailure
 )
 
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 Add-Type -AssemblyName System.Windows.Forms
+Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public static class DshKeyboard {
+    [DllImport("user32.dll", SetLastError=true)]
+    public static extern void keybd_event(byte virtualKey, byte scanCode, uint flags, UIntPtr extraInfo);
+    public const uint KeyUp = 0x0002;
+}
+'@
+
+function Send-ControlShortcut([byte]$Key) {
+    [DshKeyboard]::keybd_event(0x11, 0, 0, [UIntPtr]::Zero)
+    try {
+        [DshKeyboard]::keybd_event($Key, 0, 0, [UIntPtr]::Zero)
+        [DshKeyboard]::keybd_event($Key, 0, [DshKeyboard]::KeyUp, [UIntPtr]::Zero)
+    } finally {
+        [DshKeyboard]::keybd_event(0x11, 0, [DshKeyboard]::KeyUp, [UIntPtr]::Zero)
+    }
+}
 
 if ([string]::IsNullOrWhiteSpace($Prompt)) { $Prompt = [Console]::In.ReadToEnd() }
 if ([string]::IsNullOrWhiteSpace($RunId)) { $RunId = [guid]::NewGuid().ToString('N').Substring(0, 8).ToUpperInvariant() }
@@ -35,7 +55,14 @@ $freshIdentityChanged = $false
 $freshReason = $null
 $freshMessageCount = $null
 $freshConversationTitle = $null
+$surfaceModeBefore = $null
+$surfaceModeAfter = $null
+$chatModeConfirmed = $false
+$freshAction = $null
+$freshTransitionObserved = $false
+$freshActionRuntimeId = $null
 $inputMethod = $null
+$inputFallbackFrom = $null
 $inputAttemptCount = 0
 $clipboardRestored = $false
 $script:HeavyDiagnosticsPerformed = $false
@@ -161,7 +188,7 @@ function Wait-MainWindow {
     Fail 'WINDOW_NOT_FOUND' 'ChatGPT Desktop window not found' 2
 }
 
-function Get-LiveChatGPTWindow($Preferred) {
+function Get-LiveChatGPTWindow($Preferred, [ValidateSet('Any','ChatGPT','Codex')][string]$RequiredMode = 'Any') {
     $preferredName = $null
     try { $preferredName = [string]$Preferred.Current.Name } catch { }
     $root = [System.Windows.Automation.AutomationElement]::RootElement
@@ -175,29 +202,31 @@ function Get-LiveChatGPTWindow($Preferred) {
         try {
             $current = $window.Current
             $process = Get-Process -Id $current.ProcessId -ErrorAction SilentlyContinue
-            if (!$process -or $process.ProcessName -notmatch '^(ChatGPT( \(Beta\))?|Codex)$') { continue }
+            if (!$process -or $process.ProcessName -notmatch '^ChatGPT( \(Beta\))?$') { continue }
+            # The mode button is authoritative. The Chromium document often keeps
+            # the generic name "Codex" even while the application is in ChatGPT
+            # mode, so document-name scoring must never override the explicit mode.
+            $mode = Get-ChatSurfaceMode $window
+            if (!$mode) {
+                foreach ($child in @(All-Desc $window)) {
+                    try {
+                        $childCurrent = $child.Current
+                        if (($childCurrent.ControlType -eq [System.Windows.Automation.ControlType]::Document) -and
+                            ([string]$childCurrent.Name -ceq 'Codex') -and !$childCurrent.IsOffscreen) { $mode = 'Codex'; break }
+                    } catch { }
+                }
+            }
+            if ($RequiredMode -ne 'Any' -and $mode -cne $RequiredMode) { continue }
             $score = 0
             if ($preferredName -and [string]$current.Name -ceq $preferredName) { $score += 2 }
             if (!$current.IsOffscreen) { $score += 4 }
             $rect = $current.BoundingRectangle
             if (($rect.Width -gt 0) -and ($rect.Height -gt 0)) { $score += 2 }
-            # Prefer the visible Chromium surface containing the Codex document,
-            # not a transient Quick overlay or an old focused descendant.
-            foreach ($child in @(All-Desc $window)) {
-                try {
-                    $childCurrent = $child.Current
-                    if (($childCurrent.ControlType -eq [System.Windows.Automation.ControlType]::Document) -and
-                        ([string]$childCurrent.Name -ceq 'Codex') -and !$childCurrent.IsOffscreen) {
-                        $score += 8
-                        break
-                    }
-                } catch { }
-            }
+            if ($mode -ceq $RequiredMode) { $score += 8 }
             if ($score -gt $bestScore) {
                 try {
-                    if ($current.NativeWindowHandle -gt 0) {
-                        $best = [System.Windows.Automation.AutomationElement]::FromHandle([intptr]$current.NativeWindowHandle)
-                    } else { $best = $window }
+                    if ($current.NativeWindowHandle -gt 0) { $best = [System.Windows.Automation.AutomationElement]::FromHandle([intptr]$current.NativeWindowHandle) }
+                    else { $best = $window }
                 } catch { $best = $window }
                 $bestScore = $score
             }
@@ -206,28 +235,50 @@ function Get-LiveChatGPTWindow($Preferred) {
     return $best
 }
 
-function Get-ActiveChatGPTSurface($Fallback) {
+function Get-ActiveChatGPTSurface($Fallback, [ValidateSet('Any','ChatGPT','Codex')][string]$RequiredMode = 'Any') {
     Start-Sleep -Milliseconds 250
-    # Always reacquire the top-level UIA window. A focused descendant can be a
-    # stale Chromium node from before a navigation/rerender. The visible window
-    # with the live Codex RootWebArea wins over a transient overlay.
-    $live = Get-LiveChatGPTWindow $Fallback
+    $live = Get-LiveChatGPTWindow $Fallback $RequiredMode
     if ($live) { return $live }
-    try { if ($Fallback -and (Is-UiaElementAlive $Fallback)) { return $Fallback } } catch { }
+    if ($RequiredMode -eq 'Any') {
+        try { if ($Fallback -and (Is-UiaElementAlive $Fallback)) { return $Fallback } } catch { }
+    }
     return $null
+}
+
+function Confirm-ChatGPTMode($Window, [int]$TimeoutMs = 5000) {
+    $deadline = (Get-Date).AddMilliseconds([Math]::Max(1000, $TimeoutMs))
+    do {
+        $candidate = Get-ActiveChatGPTSurface $Window 'ChatGPT'
+        if ($candidate) {
+            $mode = Get-ChatSurfaceMode $candidate
+            if ($mode -ceq 'ChatGPT') { return [pscustomobject]@{ Confirmed=$true; Window=$candidate; Mode=$mode; Reason='CHATGPT_MODE_CONFIRMED' } }
+        }
+        Start-Sleep -Milliseconds 200
+    } while ((Get-Date) -lt $deadline)
+    return [pscustomobject]@{ Confirmed=$false; Window=$Window; Mode=(Get-ChatSurfaceMode $Window); Reason='CHATGPT_MODE_NOT_CONFIRMED' }
 }
 
 function Get-ChatSurfaceMode($Window) {
     if (!$Window) { return $null }
+    $composer = $null
+    try { $composer = Find-Composer $Window } catch { }
+    $candidates = New-Object 'System.Collections.Generic.List[object]'
     foreach ($element in @(All-Desc $Window)) {
         try {
             $current = $element.Current
-            if ($current.ControlType -ne [System.Windows.Automation.ControlType]::Button) { continue }
-            if ([string]$current.Name -match '^(Переключить режим, текущий режим|Switch mode, current mode):\s*(ChatGPT|Codex)$') {
-                return $Matches[2]
-            }
+            if (($current.ControlType -ne [System.Windows.Automation.ControlType]::Button) -or $current.IsOffscreen) { continue }
+            if ([string]$current.Name -notmatch '^(Переключить режим, текущий режим|Switch mode, current mode):\s*(ChatGPT|Codex)$') { continue }
+            $mode = $Matches[2]
+            $score = 0
+            if ($composer -and (Same-Surface $composer $element)) { $score += 20 }
+            if ($current.IsEnabled) { $score += 2 }
+            $rect = $current.BoundingRectangle
+            if ($rect.Width -gt 0 -and $rect.Height -gt 0) { $score += 1 }
+            [void]$candidates.Add([pscustomobject]@{ Mode=$mode; Score=$score; Element=$element })
         } catch { }
     }
+    $selected = @($candidates | Sort-Object Score -Descending | Select-Object -First 1)
+    if ($selected) { return [string]$selected[0].Mode }
     return $null
 }
 
@@ -344,7 +395,7 @@ function Clear-Composer($Element) {
 }
 
 function Invoke-ComposerClipboardFallback($Window, $Composer, [string]$Text) {
-    $result = [ordered]@{ Succeeded=$false; Method='ClipboardFallback'; Attempts=0; Error='CLIPBOARD_FALLBACK_FAILED'; Message='Clipboard fallback did not confirm exact readback'; RuntimeId=$null; Composer=$null; ClipboardRestored=$false }
+    $result = [ordered]@{ Succeeded=$false; Method='ClipboardFallback'; Attempts=1; ReadbackPolls=0; Error='CLIPBOARD_FALLBACK_FAILED'; Message='Clipboard fallback did not confirm exact readback'; RuntimeId=$null; Composer=$null; ClipboardRestored=$false }
     if ($TestForceClipboardFallbackFailure) {
         $result.Error = 'CLIPBOARD_FALLBACK_FORCED_FAILURE'
         $result.Message = 'Test mode intentionally disabled clipboard fallback'
@@ -377,26 +428,29 @@ function Invoke-ComposerClipboardFallback($Window, $Composer, [string]$Text) {
         }
         $result.Composer = $target
         $result.RuntimeId = Get-RuntimeId $target
-        $target.SetFocus()
+        # Keep the activation/focus order used by the verified desktop probe:
+        # activate the top-level window, focus the exact editor, then populate
+        # the clipboard and paste. Re-activating after SetClipboard can detach
+        # Chromium's ProseMirror text receiver.
+        try { $null = $ws.AppActivate($Window.Current.Name) } catch { }
+        Start-Sleep -Milliseconds 250
+        try { $target.SetFocus() } catch { }
+        Start-Sleep -Milliseconds 250
         Set-Clipboard -Value $Text -ErrorAction Stop
         $clipboardSet = $true
-        try { $null = $ws.AppActivate($Window.Current.Name) } catch { }
-        Start-Sleep -Milliseconds 150
-        # Keyboard paste is transport-only; success is returned only after
-        # reading the exact value back from the same surface.
-        try { $null = $ws.AppActivate($Window.Current.Name) } catch { }
-        try { $target.SetFocus() } catch { }
-        Start-Sleep -Milliseconds 150
-        [System.Windows.Forms.SendKeys]::SendWait('^a')
-        [System.Windows.Forms.SendKeys]::SendWait('^v')
+        Start-Sleep -Milliseconds 250
+        Send-ControlShortcut 0x41
+        Start-Sleep -Milliseconds 100
+        Send-ControlShortcut 0x56
         $deadline = (Get-Date).AddSeconds(3)
         $stable = 0
         do {
-            $result.Attempts++
+            $result.ReadbackPolls++
             Start-Sleep -Milliseconds 150
             $candidate = Find-Composer $Window
             if ($candidate -and (Is-UiaElementAlive $candidate) -and (Same-Surface $target $candidate)) {
                 $value = Get-ComposerValue $candidate
+                Write-Log 'clipboard-readback' "poll=$($result.ReadbackPolls) runtimeId=$(Get-RuntimeId $candidate) valueLength=$(([string]$value).Length) valueHash=$(Get-TextHash ([string]$value)) match=$(Test-ComposerPromptValue $value $Text)"
                 if (Test-ComposerPromptValue $value $Text) {
                     $stable++
                     if ($stable -ge 2) {
@@ -429,10 +483,11 @@ function Invoke-ComposerClipboardFallback($Window, $Composer, [string]$Text) {
 }
 
 function Set-ComposerText($Window, $Composer, [string]$Text) {
-    $result = [ordered]@{ Succeeded=$false; Method=$null; Attempts=0; Error='INPUT_NOT_CONFIRMED'; Message='Composer input was not confirmed'; RuntimeId=$null; Composer=$null; ClipboardRestored=$false }
+    $result = [ordered]@{ Succeeded=$false; Method=$null; FallbackFrom=$null; Attempts=0; Error='INPUT_NOT_CONFIRMED'; Message='Composer input was not confirmed'; RuntimeId=$null; Composer=$null; ClipboardRestored=$false }
     $target = $Composer
     if (!$target -or !(Is-UiaElementAlive $target)) { $target = Find-Composer $Window }
     if ($target) { $result.Composer = $target; $result.RuntimeId = Get-RuntimeId $target }
+    if ($target -and $TestForceValuePatternFailure) { $result.Attempts = 1; $result.Method = 'ValuePattern'; $result.Message = 'Test mode intentionally failed ValuePattern' }
     if ($target -and !$TestForceValuePatternFailure) {
         try {
             [object]$pattern = $null
@@ -452,7 +507,8 @@ function Set-ComposerText($Window, $Composer, [string]$Text) {
     }
     $fallback = Invoke-ComposerClipboardFallback $Window $target $Text
     $result.Attempts = [int]$result.Attempts + [int]$fallback.Attempts
-    $result.Method = if ($result.Method) { "$($result.Method)->$($fallback.Method)" } else { $fallback.Method }
+    $result.FallbackFrom = if($fallback.Method -eq 'ClipboardFallback' -and $result.Attempts -gt 0){'ValuePattern'}else{$null}
+    $result.Method = $fallback.Method
     $result.RuntimeId = $fallback.RuntimeId
     $result.Composer = $fallback.Composer
     $result.ClipboardRestored = [bool]$fallback.ClipboardRestored
@@ -475,7 +531,7 @@ function Get-ConversationSnapshot($Window) {
         try {
             $current = $element.Current
             if (($current.ControlType -eq [System.Windows.Automation.ControlType]::Text) -and
-                ([string]$current.Name -match '^(Что у вас сегодня на повестке\?|О чем вы сегодня думаете\?|Можем начинать\.|What.s on your mind today\?)$')) {
+                ([string]$current.Name -match '^(Что у вас сегодня на повестке\?|О чем вы сегодня думаете\?|Можем начинать\.|С чего начнём\?|Что у вас на уме\?|What.s on your mind today\?|How can I help\?)$')) {
                 $emptyMarker = $true
                 break
             }
@@ -527,7 +583,7 @@ function Invoke-NewChatButton($Window) {
     }
 }
 
-function Confirm-FreshConversation($Window, $PreviousSnapshot, [int]$TimeoutMs = 8000) {
+function Confirm-FreshConversation($Window, $PreviousSnapshot, [int]$TimeoutMs = 8000, [bool]$NewChatInvoked = $false) {
     $deadline = (Get-Date).AddMilliseconds([Math]::Max(1000, $TimeoutMs))
     $lastSignature = $null
     $stable = 0
@@ -546,7 +602,11 @@ function Confirm-FreshConversation($Window, $PreviousSnapshot, [int]$TimeoutMs =
         # virtualization can change it without changing the conversation.
         $markerTransition = [bool](!$PreviousSnapshot.EmptySurfaceMarker -and $current.EmptySurfaceMarker)
         $observableReset = [bool]($PreviousSnapshot.MessageCount -gt 0 -and $current.MessageCount -eq 0 -and $oldAnchorIntersection -eq 0)
-        $structuralProof = $markerTransition -or $observableReset
+        # InvokePattern is the direct UIA evidence that the New Chat command ran.
+        # Empty marker/readback still prove the resulting state; RuntimeId alone
+        # never proves a new conversation.
+        $actionProof = [bool]$NewChatInvoked
+        $structuralProof = $markerTransition -or $observableReset -or $actionProof
         $empty = [bool]($current.EmptySurfaceMarker -and $current.MessageCount -eq 0 -and $composer -and $composerEmpty -and $oldAnchorIntersection -eq 0)
         $signature = $current.Signature
         if ($empty -and $structuralProof -and $signature -eq $lastSignature) { $stable++ }
@@ -555,14 +615,14 @@ function Confirm-FreshConversation($Window, $PreviousSnapshot, [int]$TimeoutMs =
         $lastSignature = $signature
         $last = [pscustomobject]@{
             Window=$Window; Snapshot=$current; Composer=$composer; Empty=$empty; StructuralProof=$structuralProof
-            RuntimeChanged=$runtimeChanged; MarkerTransition=$markerTransition; ObservableReset=$observableReset; OldAnchorIntersection=$oldAnchorIntersection
+            RuntimeChanged=$runtimeChanged; MarkerTransition=$markerTransition; ObservableReset=$observableReset; ActionProof=$actionProof; OldAnchorIntersection=$oldAnchorIntersection
             StablePolls=$stable; Reason=if(!$current.EmptySurfaceMarker){'EMPTY_SURFACE_MARKER_NOT_FOUND'}elseif($current.MessageCount -ne 0){'NEW_CHAT_HAS_MESSAGES'}elseif(!$composer -or !$composerEmpty){'COMPOSER_NOT_EMPTY'}elseif(!$structuralProof){'NO_OBSERVABLE_CONVERSATION_TRANSITION'}else{'STABILIZING'}
         }
         if ($stable -ge 2) {
-            return [pscustomobject]@{ Confirmed=$true; Window=$Window; Snapshot=$current; Composer=$composer; IdentityChanged=$runtimeChanged; Reason='CONFIRMED_EMPTY_NEW_CONVERSATION'; StablePolls=$stable }
+            return [pscustomobject]@{ Confirmed=$true; Window=$Window; Snapshot=$current; Composer=$composer; IdentityChanged=$runtimeChanged; TransitionObserved=$structuralProof; MarkerTransition=$markerTransition; ObservableReset=$observableReset; Reason='CONFIRMED_EMPTY_NEW_CONVERSATION'; StablePolls=$stable }
         }
     } while ((Get-Date) -lt $deadline)
-    return [pscustomobject]@{ Confirmed=$false; Window=$Window; Snapshot=if($last){$last.Snapshot}else{Get-ConversationSnapshot $Window}; Composer=if($last){$last.Composer}else{$null}; IdentityChanged=if($last){$last.RuntimeChanged}else{$false}; Reason=if($last){$last.Reason}else{'NO_OBSERVABLE_CONVERSATION_TRANSITION'}; StablePolls=if($last){$last.StablePolls}else{0} }
+    return [pscustomobject]@{ Confirmed=$false; Window=$Window; Snapshot=if($last){$last.Snapshot}else{Get-ConversationSnapshot $Window}; Composer=if($last){$last.Composer}else{$null}; IdentityChanged=if($last){$last.RuntimeChanged}else{$false}; TransitionObserved=if($last){$last.StructuralProof}else{$false}; MarkerTransition=if($last){$last.MarkerTransition}else{$false}; ObservableReset=if($last){$last.ObservableReset}else{$false}; Reason=if($last){$last.Reason}else{'NO_OBSERVABLE_CONVERSATION_TRANSITION'}; StablePolls=if($last){$last.StablePolls}else{0} }
 }
 
 function Confirm-ComposerCleared($Window, [string]$PromptText) {
@@ -1417,17 +1477,33 @@ try {
     $w = Wait-MainWindow
     $ws = New-Object -ComObject WScript.Shell
     $null = $ws.AppActivate($w.Current.Name)
+    $surfaceModeBefore = Get-ChatSurfaceMode $w
+    Write-Log 'surface-before' "pid=$($w.Current.ProcessId) mode=$surfaceModeBefore"
+
+    # Quick is a ChatGPT surface, not merely a shortcut. Always select ChatGPT
+    # first, then wait for UIA confirmation before opening the Quick overlay.
+    if ($surfaceModeBefore -ne 'ChatGPT') {
+        $ws.SendKeys('%1')
+        $modeConfirmation = Confirm-ChatGPTMode $w 5000
+        if (!$modeConfirmation.Confirmed) { Fail 'CHATGPT_MODE_NOT_CONFIRMED' $modeConfirmation.Reason 3 }
+        $w = $modeConfirmation.Window
+        $chatModeConfirmed = $true
+    } else {
+        $modeConfirmation = Confirm-ChatGPTMode $w 3000
+        if (!$modeConfirmation.Confirmed) { Fail 'CHATGPT_MODE_NOT_CONFIRMED' $modeConfirmation.Reason 3 }
+        $w = $modeConfirmation.Window
+        $chatModeConfirmed = $true
+    }
     if ($Mode -eq 'Quick') {
         $ws.SendKeys('^%n')
     } else {
-        $ws.SendKeys('%1'); Start-Sleep -Milliseconds 700; $ws.SendKeys('^%o')
+        $ws.SendKeys('^%o')
     }
-    $w = Get-ActiveChatGPTSurface $w
-    $surfaceMode = Get-ChatSurfaceMode $w
-    Write-Log 'surface' "pid=$($w.Current.ProcessId) windowRuntimeId=$(Get-RuntimeId $w) mode=$surfaceMode"
-    if ($ChatPolicy -eq 'Fresh' -and $surfaceMode -eq 'Codex') {
-        Fail 'FRESH_CHAT_NOT_CONFIRMED' 'Fresh requires the ChatGPT Quick surface, but the visible surface is Codex' 3
-    }
+    $afterModeConfirmation = Confirm-ChatGPTMode $w 5000
+    if (!$afterModeConfirmation.Confirmed) { Fail 'CHATGPT_MODE_NOT_CONFIRMED' $afterModeConfirmation.Reason 3 }
+    $w = $afterModeConfirmation.Window
+    $surfaceModeAfter = $afterModeConfirmation.Mode
+    Write-Log 'surface' "pid=$($w.Current.ProcessId) windowRuntimeId=$(Get-RuntimeId $w) mode=$surfaceModeAfter chatModeConfirmed=$chatModeConfirmed"
 
     $composerDeadline = (Get-Date).AddSeconds([Math]::Min($TimeoutSeconds, 30))
     $composer = $null
@@ -1449,12 +1525,16 @@ try {
     if ($ChatPolicy -eq 'Fresh') {
         $newChat = Invoke-NewChatButton $w
         if (!$newChat.Succeeded) { Fail 'FRESH_CHAT_NOT_CONFIRMED' $newChat.Message 3 }
+        $freshAction = 'NewChat.InvokePattern'
+        $freshActionRuntimeId = $newChat.RuntimeId
         Write-Log 'fresh-action' "method=InvokePattern runtimeId=$($newChat.RuntimeId)"
-        $fresh = Confirm-FreshConversation $w $beforeSnapshot 8000
+        if ($TestForceFreshConfirmationFailure) { Fail 'FRESH_CHAT_NOT_CONFIRMED' 'Test mode intentionally refused Fresh confirmation' 3 }
+        $fresh = Confirm-FreshConversation $w $beforeSnapshot 8000 $newChat.Invoked
         $w = $fresh.Window
         $freshConversationTitle = $null
         $freshChatConfirmed = [bool]$fresh.Confirmed
         $freshIdentityChanged = [bool]$fresh.IdentityChanged
+        $freshTransitionObserved = [bool]$fresh.TransitionObserved
         $freshReason = [string]$fresh.Reason
         if (!$freshChatConfirmed) { Fail 'FRESH_CHAT_NOT_CONFIRMED' $freshReason 3 }
         $conversationRuntimeId = $fresh.Snapshot.RuntimeId
@@ -1474,6 +1554,7 @@ try {
     $inputResult = Set-ComposerText $w $composer $Prompt
     $inputAttemptCount = [int]$inputResult.Attempts
     $inputMethod = [string]$inputResult.Method
+    $inputFallbackFrom = if($inputResult.PSObject.Properties['FallbackFrom']){[string]$inputResult.FallbackFrom}else{$null}
     $clipboardRestored = [bool]$inputResult.ClipboardRestored
     if ($inputResult.Composer) { $composer = $inputResult.Composer }
     if (!$inputResult.Succeeded) { Fail 'INPUT_NOT_CONFIRMED' $inputResult.Message 1 }
@@ -1630,8 +1711,10 @@ try {
         ok=$true; runId=$RunId; mode=$modeOut; chatPolicy=$chatPolicyOut; response=$answer; conversationId=$conversationId; deeplink=$deep
         extraction='copy'; copyRuntimeId=$copyResult.CopyRuntimeId; copyTracePath=$copyResult.TracePath
         baselineMessageCount=$baselineMessageCount; conversationRuntimeId=$conversationRuntimeId
+        surfaceModeBefore=$surfaceModeBefore; surfaceModeAfter=$surfaceModeAfter; chatModeConfirmed=$chatModeConfirmed
+        freshAction=$freshAction; freshActionRuntimeId=$freshActionRuntimeId; freshTransitionObserved=$freshTransitionObserved; freshProofLevel=if($freshChatConfirmed){'UIA_ACTION_AND_EMPTY_STATE'}else{$null}
         freshChatConfirmed=$freshChatConfirmed; freshIdentityChanged=$freshIdentityChanged; freshReason=$freshReason; freshMessageCount=$freshMessageCount
-        inputMethod=$inputMethod; inputAttemptCount=$inputAttemptCount; clipboardRestored=$clipboardRestored; heavyDiagnostics=$script:HeavyDiagnosticsPerformed
+        inputMethod=$inputMethod; inputFallbackFrom=$inputFallbackFrom; inputAttemptCount=$inputAttemptCount; clipboardRestored=$clipboardRestored; heavyDiagnostics=$script:HeavyDiagnosticsPerformed
         legacyLength=$legacyAnswer.Length; legacyHash=(Get-TextHash $legacyAnswer); copiedLength=$answer.Length; copiedHash=(Get-TextHash $answer)
         durationMs=[int]((Get-Date)-$started).TotalMilliseconds; error=$null
     }
@@ -1649,8 +1732,10 @@ catch {
         ok=$false; runId=$RunId; mode=$modeOut; chatPolicy=$chatPolicyOut; response=$null; conversationId=$null; deeplink=$null
         extraction=$null; copyRuntimeId=$null; copyTracePath=(Join-Path $PSScriptRoot ('diagnostics\copy_trace_' + $RunId + '.jsonl'))
         baselineMessageCount=$baselineMessageCount; conversationRuntimeId=$conversationRuntimeId
+        surfaceModeBefore=$surfaceModeBefore; surfaceModeAfter=$surfaceModeAfter; chatModeConfirmed=$chatModeConfirmed
+        freshAction=$freshAction; freshActionRuntimeId=$freshActionRuntimeId; freshTransitionObserved=$freshTransitionObserved; freshProofLevel=if($freshChatConfirmed){'UIA_ACTION_AND_EMPTY_STATE'}else{$null}
         freshChatConfirmed=$freshChatConfirmed; freshIdentityChanged=$freshIdentityChanged; freshReason=$freshReason; freshMessageCount=$freshMessageCount
-        inputMethod=$inputMethod; inputAttemptCount=$inputAttemptCount; clipboardRestored=$clipboardRestored; heavyDiagnostics=$script:HeavyDiagnosticsPerformed
+        inputMethod=$inputMethod; inputFallbackFrom=$inputFallbackFrom; inputAttemptCount=$inputAttemptCount; clipboardRestored=$clipboardRestored; heavyDiagnostics=$script:HeavyDiagnosticsPerformed
         durationMs=[int]((Get-Date)-$started).TotalMilliseconds; error=[ordered]@{ code=$code; message=$message }
     }
     if ($ReturnJson) { $output | ConvertTo-Json -Compress -Depth 8 } else { [Console]::Error.WriteLine($message) }
