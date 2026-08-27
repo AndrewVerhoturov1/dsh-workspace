@@ -83,9 +83,9 @@ Assistant ищется только после двух подтверждени
 
 ## QuickSmoke и QuickStress
 
-`QuickSmoke` RunId `40402BF5` — **5/5 PASS** в `Current`; все nonce уникальны, ответы точные, trace компактный.
+`QuickSmoke` RunId `530FF70B` — **5/5 PASS** в `Current`; все nonce уникальны, ответы точные, trace компактный.
 
-`QuickStress` RunId `EF8C549A` — **20/20 PASS** в `Current`; `attempted=20`, `unattempted=0`, `stoppedOnFailure=false`, все trace компактные.
+`QuickStress` RunId `3DB27827` — **20/20 PASS** в `Current`; `attempted=20`, `unattempted=0`, `stoppedOnFailure=false`, все trace компактные.
 
 ## Вопрос о Computer Use
 
