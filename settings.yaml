@@ -3,11 +3,12 @@ ui-onboarding:
 ui-theme:
   preference: dark
 agent-default-model:
-  provider: codex
+  provider: openai-codex
   model: gpt-5.6-luna
   reasoningEffort: high
 llm-pi-ai:
-  providers: {}
+  providers:
+    openai-codex: {}
 permission:
   defaultPreset: danger-full-access
 dsh-better-sidebar:

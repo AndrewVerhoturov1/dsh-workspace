@@ -1,6 +1,7 @@
 # Секреты и идентификаторы пользователя
 .anonymous-user-id
 codex-oauth.json
+.credentials.yaml
 
 # Рабочие данные DSH
 sessions/

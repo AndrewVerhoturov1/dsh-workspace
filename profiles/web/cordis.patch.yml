@@ -2,6 +2,9 @@
 # a top-level YAML array of loader patch entries (id-targeted config
 # overrides, disables, and insert lists; `!!js` expressions allowed).
 - insert:
+    - id: authorization
+      name: '@deepseek-ai/dsh-authorization'
+
     - id: mcp-github
       name: '@deepseek-ai/dsh-mcp-client'
       config:
