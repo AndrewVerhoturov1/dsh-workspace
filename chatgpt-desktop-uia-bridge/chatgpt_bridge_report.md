@@ -2,11 +2,13 @@
 
 ## Итог
 
-**READY** для `Current` и **READY FOR FRESH QCHAT** на текущей сборке ChatGPT Desktop/UIA. Fresh сначала подтверждает режим ChatGPT, затем открывает Quick и вызывает штатный New Chat через UIA. Полный положительный цикл проходит только при `freshTransitionObserved=true`, `freshChatConfirmed=true` и `freshMessageCount=0`.
+**READY FOR USER RETEST** после точечной доработки edge case с непустым composer. Fresh сначала подтверждает режим ChatGPT, затем открывает Quick и вызывает штатный New Chat через UIA. Полный положительный цикл проходит только при `freshTransitionObserved=true`, `freshChatConfirmed=true` и `freshMessageCount=0`.
 
-Полный Fresh gate завершён: Fresh X5, FreshAfterOldConversation, FreshFromCodex, положительный ClipboardFallback и пять реальных запусков Luna прошли. При неоднозначности bridge возвращает `response=null`; визуальный ответ не считается успехом.
+Живой пользовательский тест показал, что ChatGPT Desktop может сохранить или перенести draft в composer после New Chat. Ранее это ошибочно классифицировалось как `FRESH_CHAT_NOT_CONFIRMED`. Теперь Fresh proof отделён от готовности composer: `Fresh proof → composer sanitization → exact prompt input → submit → paired Copy`.
 
-Фактические безопасные проверки: `FreshChatRegression` — успешный цикл с `freshChatConfirmed=true`, `freshMessageCount=0`; `SubmitGateFailure` — отказ до Send; `InputRecoveryValuePattern` — положительный `ClipboardFallback` с точным ответом; `InputRecoveryClipboardFailure` — `inputMethod=ClipboardFallback`, `response=null` и `INPUT_NOT_CONFIRMED`.
+После подтверждённой новой conversation непустой composer безопасно очищается через `ValuePattern` с клавиатурным fallback и двумя стабильными UIA-readback. При невозможности очистки bridge возвращает `COMPOSER_CLEAR_NOT_CONFIRMED`, `response=null` и не вызывает Send. Полные draft-тексты в журнал не записываются.
+
+Фактические безопасные проверки: `FreshChatRegression` — успешный цикл с `freshChatConfirmed=true`, `freshMessageCount=0`; `FreshWithNonEmptyComposer` — положительный end-to-end путь с санитизацией draft; `FreshComposerClearFailure` — Fresh подтверждён, но отказ до Send; `SubmitGateFailure` — отказ до Send; `InputRecoveryValuePattern` — положительный `ClipboardFallback`; `InputRecoveryClipboardFailure` — безопасный `INPUT_NOT_CONFIRMED`.
 
 При изменении UIA-дерева строгий отказ предпочтительнее возврата сомнительного текста.
 
@@ -48,22 +50,24 @@ Assistant ищется только после двух подтверждени
 
 ## Regression: фактические результаты
 
-Финальный последовательный gate на текущих хэшах: `CopyRegression` RunId `22ACDA17` — 7/7 PASS; `QuickSmoke` RunId `40402BF5` — 5/5 PASS; `QuickStress` RunId `EF8C549A` — 20/20 PASS. Fresh/Input-проверки также завершены успешно: `FreshChatSmoke` `3DE7CCCA` — 5/5, `FreshAfterOldConversation` `63EB03D0`, `FreshFromCodex` `1C333262`, положительный `InputRecoveryValuePattern` `F745F90E` (`ClipboardFallback`, attempts=2), отрицательный `InputRecoveryClipboardFailure` `58A9F9B2` (`response=null`, `INPUT_NOT_CONFIRMED`).
+Финальный последовательный gate на текущих хэшах: `CopyRegression` RunId `9A1ACDD6` — 7/7 PASS; `QuickSmoke` RunId `530FF70B` — 5/5 PASS; `QuickStress` RunId `3DB27827` — 20/20 PASS. Fresh/Input-проверки также завершены успешно: `FreshChatRegression` `EE097457`, `FreshChatSmoke` `B457D5CC` — 5/5, `FreshAfterOldConversation` `DE81A696`, `FreshFromCodex` `BC3C589F`, положительный `InputRecoveryValuePattern` `8473F57E` (`ClipboardFallback`, attempts=2), отрицательный `InputRecoveryClipboardFailure` `F140A544` (`response=null`, `INPUT_NOT_CONFIRMED`), `FreshSafeRefusal` `07B3B0CB`.
 
 `CopyRegression` подтвердил compact Copy trace: в каждом успешном случае ровно одна итоговая JSONL-запись с `Confirmed=true` и `CopyRuntimeId`; `CopyOldAssistantProtection_Preflight` использовал `Current` и подтвердил старый baseline-маркер.
 
 | Suite | Ожидание | Результат |
 |---|---|---|
-| CopyRegression Current | 7/7 | PASS `22ACDA17` |
-| QuickSmoke Current | 5/5 | PASS `40402BF5` |
-| QuickStress Current | 20/20 | PASS `EF8C549A` |
-| FreshChatRegression | 1/1 success | PASS `C8B9023F` |
-| FreshSafeRefusal | `FRESH_CHAT_NOT_CONFIRMED` | PASS `1EA002B4` |
-| InputRecoveryValuePattern | positive `ClipboardFallback` | PASS `F745F90E`, attempts=2 |
-| InputRecoveryClipboardFailure | safe `INPUT_NOT_CONFIRMED` | PASS `58A9F9B2` |
-| FreshChatSmoke | 5/5 separate chats | PASS `3DE7CCCA` (включая старый-dialog preflight) |
-| FreshAfterOldConversation | PASS | PASS `63EB03D0` |
-| FreshFromCodex | PASS | PASS `1C333262` |
+| CopyRegression Current | 7/7 | PASS `9A1ACDD6` |
+| QuickSmoke Current | 5/5 | PASS `530FF70B` |
+| QuickStress Current | 20/20 | PASS `3DB27827` |
+| FreshChatRegression | 1/1 success | PASS `EE097457` |
+| FreshSafeRefusal | `FRESH_CHAT_NOT_CONFIRMED` | PASS `07B3B0CB` |
+| InputRecoveryValuePattern | positive `ClipboardFallback` | PASS `8473F57E`, attempts=2 |
+| InputRecoveryClipboardFailure | safe `INPUT_NOT_CONFIRMED` | PASS `F140A544` |
+| FreshWithNonEmptyComposer | Fresh + non-empty draft → sanitize → Copy | PASS `E3D9EB95` |
+| FreshComposerClearFailure | Fresh confirmed + clear failure → no Send | PASS `3ECC0392` |
+| FreshChatSmoke | 5/5 separate chats | PASS `B457D5CC` (включая старый-dialog preflight) |
+| FreshAfterOldConversation | PASS | PASS `DE81A696` |
+| FreshFromCodex | PASS | PASS `BC3C589F` |
 | Luna real QChat | 5/5 | PASS (5/5 exact Fresh bridge responses) |
 | Computer Use on successful Luna QChat | 0/5 | PASS (все 5 вызовов через bridge) |
 
@@ -71,17 +75,17 @@ Assistant ищется только после двух подтверждени
 
 Хэши текущего финального прогона:
 
-- `chatgpt_chat.ps1`: `D13200F60FBCC846DE5185415FD3626AE153A2A326C757CAB0925070AA9B66A1`;
-- `chatgpt_bridge_test.ps1`: `CDB52FE7EB2518AD42204243FFC406799DE53441A69D9BE5E45DA664E959EECE`;
+- `chatgpt_chat.ps1`: `E62E3EFADE44D1851CC5AE37EE4FB66151465EBD4C3AA14E094958E875E62345`;
+- `chatgpt_bridge_test.ps1`: `3724CC67050B965BC038AF5F93192E79CC3DF2AC59A9E69B66BA7A4EC0B55C77`;
 - `chatgpt_uia_dump.ps1`: `0229F164500B162D85B7A0EAD51DCE6D7B1613DABE755956740CB0CAE28D530B`.
 
 Отдельно проверено: временное изменение `chatgpt_chat.ps1` вызвало ожидаемый `COPY_REGRESSION_GATE_STALE`; исходные байты затем восстановлены.
 
 ## QuickSmoke и QuickStress
 
-`QuickSmoke` RunId `40402BF5` — **5/5 PASS** в `Current`; все nonce уникальны, ответы точные, trace компактный.
+`QuickSmoke` RunId `530FF70B` — **5/5 PASS** в `Current`; все nonce уникальны, ответы точные, trace компактный.
 
-`QuickStress` RunId `EF8C549A` — **20/20 PASS** в `Current`; `attempted=20`, `unattempted=0`, `stoppedOnFailure=false`, все trace компактные.
+`QuickStress` RunId `3DB27827` — **20/20 PASS** в `Current`; `attempted=20`, `unattempted=0`, `stoppedOnFailure=false`, все trace компактные.
 
 ## Вопрос о Computer Use
 

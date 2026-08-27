@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('CopyRegression','CopyOneLine','CopyTwoLines','CopyRepeated','CopyMarkdown','CopyLong','CopyOldAssistantProtection','SubmitGateFailure','QuickSmoke','QuickStress','FreshChatRegression','FreshSafeRefusal','FreshChatSmoke','FreshAfterOldConversation','FreshFromCodex','InputRecoveryValuePattern','InputRecoveryClipboardFailure')][string]$Suite = 'CopyRegression',
+    [ValidateSet('CopyRegression','CopyOneLine','CopyTwoLines','CopyRepeated','CopyMarkdown','CopyLong','CopyOldAssistantProtection','SubmitGateFailure','QuickSmoke','QuickStress','FreshChatRegression','FreshSafeRefusal','FreshChatSmoke','FreshAfterOldConversation','FreshFromCodex','InputRecoveryValuePattern','InputRecoveryClipboardFailure','FreshWithNonEmptyComposer','FreshComposerClearFailure')][string]$Suite = 'CopyRegression',
     [ValidateRange(1,20)][int]$Count = 3,
     [ValidateSet('Fresh','Current')][string]$ChatPolicy = 'Fresh',
     [ValidateRange(5,120)][int]$TimeoutSeconds = 120,
@@ -134,6 +134,11 @@ function Invoke-Bridge([string]$PromptText, [string]$Id, [ValidateSet('Fresh','C
         $parameters.TestForceClipboardFallbackFailure = $true
     }
     if ($Suite -eq 'FreshSafeRefusal') { $parameters.TestForceFreshConfirmationFailure = $true }
+    if ($Suite -eq 'FreshWithNonEmptyComposer') { $parameters.TestSeedFreshComposerDraft = "DRAFT_$Id" }
+    if ($Suite -eq 'FreshComposerClearFailure') {
+        $parameters.TestSeedFreshComposerDraft = "DRAFT_$Id"
+        $parameters.TestForceFreshComposerClearFailure = $true
+    }
     $output = & $scriptPath @parameters 2>&1
     $watch.Stop()
     return [pscustomobject]@{ Output=@($output); ElapsedMs=$watch.ElapsedMilliseconds; LogPath=$log }
@@ -179,9 +184,10 @@ function Add-Case([string]$Name, [string]$PromptText, [string]$Expected, [bool]$
         !$actual.Contains('Неудачный ответ'))
     $policyOk = ($json -and ([string]$json.chatPolicy -ceq $Policy.ToLowerInvariant()))
     $freshOk = if ($Policy -eq 'Fresh') { $json -and [bool]$json.freshChatConfirmed -and [bool]$json.freshTransitionObserved -and $json.freshMessageCount -eq 0 -and [bool]$json.chatModeConfirmed } else { $true }
+    $freshComposerOk = if ($Name -eq 'FreshWithNonEmptyComposer') { $json -and [string]$json.extraction -ceq 'copy' -and $json.freshComposerInitiallyEmpty -eq $false -and [bool]$json.freshComposerSanitized -and [string]$json.freshComposerClearMethod -in @('ValuePattern','KeyboardFallback') -and [int]$json.freshComposerClearAttempts -ge 1 } else { $true }
     $fallbackOk = if ($Name -eq 'InputRecoveryValuePattern') { $json -and [string]$json.inputMethod -ceq 'ClipboardFallback' -and [string]$json.inputFallbackFrom -ceq 'ValuePattern' -and [int]$json.inputAttemptCount -ge 2 } else { $true }
     $positive = ((-not $SubmitFailure) -and ($null -ne $json) -and [bool]$json.ok -and ($null -ne $json.response) -and
-        [bool]$policyOk -and [bool]$freshOk -and [bool]$fallbackOk -and ([string]$actual -ceq [string]$expectedNormalized) -and
+        [bool]$policyOk -and [bool]$freshOk -and [bool]$freshComposerOk -and [bool]$fallbackOk -and ([string]$actual -ceq [string]$expectedNormalized) -and
         ([string]$expectedHash -ceq [string]$actualHash) -and [bool]$cleanActual -and [bool]$traceCompact)
     $freshSafeRefusal = $false
     $negative = (($SubmitFailure -or $ExpectedErrorCodes) -and $json -and !$json.ok -and $null -eq $json.response -and
@@ -189,6 +195,11 @@ function Add-Case([string]$Name, [string]$PromptText, [string]$Expected, [bool]$
          ($ExpectedErrorCodes -and $errorCode -in $ExpectedErrorCodes)))
     if ($Name -eq 'InputRecoveryClipboardFailure') {
         $negative = $negative -and [string]$json.inputMethod -ceq 'ClipboardFallback' -and [int]$json.inputAttemptCount -ge 2
+    }
+    if ($Name -eq 'FreshComposerClearFailure') {
+        $negative = $json -and !$json.ok -and $null -eq $json.response -and
+            [string]$errorCode -ceq 'COMPOSER_CLEAR_NOT_CONFIRMED' -and [bool]$json.freshChatConfirmed -and
+            $json.freshMessageCount -eq 0 -and !$json.sendAttempted
     }
     $oldAbsent = ($null -eq $OldMarker -or $OldMarker.Length -eq 0 -or $null -eq $actual -or !$actual.Contains($OldMarker))
     $oldPresent = ($null -ne $OldMarker -and $OldMarker.Length -gt 0 -and $null -ne $actual -and $actual.Contains($OldMarker))
@@ -202,6 +213,7 @@ function Add-Case([string]$Name, [string]$PromptText, [string]$Expected, [bool]$
         chatPolicy=if($json){$json.chatPolicy}else{$null}; surfaceModeBefore=if($json){$json.surfaceModeBefore}else{$null}; surfaceModeAfter=if($json){$json.surfaceModeAfter}else{$null}; chatModeConfirmed=if($json){$json.chatModeConfirmed}else{$null}
         freshAction=if($json){$json.freshAction}else{$null}; freshActionRuntimeId=if($json){$json.freshActionRuntimeId}else{$null}; freshTransitionObserved=if($json){$json.freshTransitionObserved}else{$null}; freshProofLevel=if($json){$json.freshProofLevel}else{$null}
         freshChatConfirmed=if($json){$json.freshChatConfirmed}else{$null}; freshMessageCount=if($json){$json.freshMessageCount}else{$null}; baselineMessageCount=if($json){$json.baselineMessageCount}else{$null}
+        freshComposerInitiallyEmpty=if($json){$json.freshComposerInitiallyEmpty}else{$null}; freshComposerSanitized=if($json){$json.freshComposerSanitized}else{$null}; freshComposerClearMethod=if($json){$json.freshComposerClearMethod}else{$null}; freshComposerClearAttempts=if($json){$json.freshComposerClearAttempts}else{$null}; sendAttempted=if($json){$json.sendAttempted}else{$null}
         inputMethod=if($json){$json.inputMethod}else{$null}; inputFallbackFrom=if($json){$json.inputFallbackFrom}else{$null}; inputAttemptCount=if($json){$json.inputAttemptCount}else{$null}; clipboardRestored=if($json){$json.clipboardRestored}else{$null}
         copyRuntimeId=if($json){$json.copyRuntimeId}else{$null}; copyTracePath=if($uiTracePresent){$copyTrace}else{$null}
         streamTracePath=if(Test-Path $streamTrace){$streamTrace}else{$null}
@@ -287,6 +299,8 @@ foreach ($name in $caseNames) {
         'FreshFromCodex' { $expected="CODEX_FRESH_$run"; $prompt="Ответь только: $expected"; $policy='Fresh'; break }
         'InputRecoveryValuePattern' { $expected="VALUE_$run"; $prompt="Ответь только: $expected"; $policy='Fresh'; break }
         'InputRecoveryClipboardFailure' { $prompt="CLIPBOARD_FAILURE_$run"; $policy='Fresh'; $expectedErrors=@('INPUT_NOT_CONFIRMED'); break }
+         'FreshWithNonEmptyComposer' { $expected=('SANITIZED_' + $run); $prompt=('Ответь только: ' + $expected); $policy='Fresh'; break }
+         'FreshComposerClearFailure' { $prompt=('CLEAR_FAILURE_' + $run); $policy='Fresh'; $expectedErrors=@('COMPOSER_CLEAR_NOT_CONFIRMED'); break }
         default {
             # Quick cases deliberately use a run-scoped exact nonce.  The visible
             # label and expected response are both Q01_<RunId>, never a reusable Q1.
