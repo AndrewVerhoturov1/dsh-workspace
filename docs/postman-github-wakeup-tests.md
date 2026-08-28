@@ -34,3 +34,13 @@
 - файл сигнала не изменился (`signalUnchanged=true`).
 
 Это доказывает путь Issue → Actions → self-hosted runner → handler → signal и подавление повторной доставки; ручной Web ChatGPT live test этим документом не выполняется.
+
+## Отрицательные E2E-проверки
+
+- `WAITING`: Issue `#6`, run `33174449507`, job `98859328825`; job `success`, в журнале `IGNORED status=WAITING`, сигнал отсутствует.
+- unrelated Issue: Issue `#10`, run `33174680174`; workflow `skipped`, сигнал отсутствует.
+- invalid `request_id`: Issue `#13`, run `33174888752`, job `98860826659`; ожидаемая ошибка в журнале, job `failure`, сигнал отсутствует.
+- malformed body: Issue `#14`, run `33174948435`, job `98861031915`; ожидаемая ошибка в журнале, job `failure`, сигнал отсутствует.
+- false READY в ответе: покрыт локальным тестом и WAITING E2E; сигнал отсутствует.
+
+Временные отрицательные Issues `#10`, `#13` и `#14` закрыты с причиной `not planned`; probe `#6` возвращён в чистый WAITING. Ручной Web ChatGPT live test не выполнялся.
