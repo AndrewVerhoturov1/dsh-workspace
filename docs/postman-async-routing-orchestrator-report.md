@@ -1,9 +1,9 @@
 # Отчёт оркестратору: Postman Async Routing M4–M5
 
-Дата: 2026-08-29  
-Ветка: `postman/async-routing-m4-m5`  
-Базовый проверенный M1–M3 коммит: `6cefa2790b6a34c2016377db8ff8a74bc7f7cd8a`  
-Коммит реализации M4–M5: будет указан после фиксации изменений.
+Дата: 2026-08-29
+Ветка: `postman/async-routing-m4-m5`
+Базовый проверенный M1–M3 коммит: `6cefa2790b6a34c2016377db8ff8a74bc7f7cd8a`
+Коммит реализации M4–M5: `7b57c1fe85e9d42d213803e78c1d36994e7b1cb9`
 
 ## Итог
 
@@ -57,4 +57,3 @@
 - W — рабочая ветка `postman/async-routing-m4-m5`; `main` не изменён и не сливался.
 
 Минимальный следующий integration seam: преобразовать существующий сигнал GitHub `REQ_*.json` в вызов `markSyntheticReady` внутри runtime, не меняя GitHub transport на этом этапе.
-
