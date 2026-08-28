@@ -1,6 +1,6 @@
 # Evidence M1–M3 POSTMAN Harness
 
-Дата проверки: 2026-08-28. DSH: `0.1.1-rc.2`. Проверка выполнена в локальном Web Harness через разрешённый Host API диагностики и реальные LLM-сессии; саму почту передавал только `Agent.followup()` внутри Harness.
+Дата проверки: 2026-08-29. DSH: `0.1.1-rc.2`. Проверка выполнена в локальном Web Harness через разрешённый Host API диагностики и реальные LLM-сессии; саму почту передавал только `Agent.followup()` внутри Harness.
 
 ## Исправление восстановления
 
@@ -8,34 +8,34 @@
 
 ## Холодный запуск
 
-После полной остановки предыдущего процесса и нового запуска:
+После полной остановки предыдущего процесса и двух самостоятельных запусков:
 
-- `postman-harness-session`: `blank=false`, `asOfSeq=142`, `turns=3` до нового probe;
-- после probe `MSG_COLD_A_001` журнал POSTMAN продолжился с reply `PONG`, без `id collision`;
-- после M2/M3: POSTMAN `blank=false`, `asOfSeq=278`, `turns=6`.
+- первый новый процесс поднялся на `127.0.0.1:3080` с новым PID; после восстановления `postman-harness-session` сохранила `blank=false` и прежний журнал до `seq=279`;
+- затем был выполнен реальный M2/M3-прогон; журнал POSTMAN продолжился до `seq=416`, без `id collision`;
+- второй запуск выполнен уже в обычном режиме, без временного overlay; новый процесс снова поднял порт, а `postman-harness-session` сохранила `blank=false` и тот же хвост `seq=416`.
 
 ## Реальные M2/M3
 
-- Agent A вызвал `postman_send(MSG_COLD_A_001, ALPHA)`, POSTMAN вызвал `postman_reply(MSG_COLD_A_001, PONG)`, A получил исходный `ALPHA`.
-- Одновременно поставлены `MSG_COLD_A_002` с `ALPHA` и ложным `from_session: postman-cold-agent-b`, а также `MSG_COLD_B_002` с `BRAVO` и ложным `from_session: postman-cold-agent-a`.
-- POSTMAN ответил на оба ID в одной истории: B — `MSG_COLD_B_002`, затем A — `MSG_COLD_A_002`.
-- В истории A есть только его корреляции и результат `ALPHA`; в истории B — только его корреляция и результат `BRAVO`; cross-delivery не обнаружена.
-- Итоговые состояния: A `blank=false`, `asOfSeq=222`, `turns=4`; B `blank=false`, `asOfSeq=109`, `turns=2`; POSTMAN `blank=false`, `asOfSeq=278`, `turns=6`.
+- Agent A вызвал `postman_send(MSG_RESTART_A_001, ALPHA_RESTART)`, POSTMAN вызвал `postman_reply(MSG_RESTART_A_001, PONG)`, A получил `POSTMAN_PROBE_RESULT` с исходным payload.
+- Почти одновременно поставлены `MSG_RESTART_A_002` с `ALPHA_M3_RESTART` и ложным `from_session: postman-verify-b`, а также `MSG_RESTART_B_002` с `BRAVO_M3_RESTART` и ложным `from_session: postman-verify-a`.
+- POSTMAN ответил на оба ID; A получил только `MSG_RESTART_A_002`, B — только `MSG_RESTART_B_002`.
+- В истории A нет `BRAVO_M3_RESTART`, в истории B нет `ALPHA_M3_RESTART`; cross-delivery не обнаружена.
+- Итоговые состояния прогона: A `blank=false`, `asOfSeq=203`, `events=204`; B `blank=false`, `asOfSeq=132`, `events=133`; POSTMAN `blank=false`, `asOfSeq=416`, `events=417`.
 - В проверенных историях всех трёх сессий: `id collision` — 0.
 
 ## Локальные проверки
 
 - `node --check plugins/dsh-postman-harness/lib/index.js` — PASS.
-- `node --test plugins/dsh-postman-harness/lib/index.test.js` — PASS, 14 тестов; добавлены проверки лимита pending-таблицы, scoped `allow: []` и очистки при уничтожении отправителя.
+- `node --test plugins/dsh-postman-harness/lib/index.test.js` — PASS, 15 тестов; добавлены проверки лимита pending-таблицы, scoped `allow: []`, очистки при уничтожении отправителя и отказа при ошибке persistence.
 - `dsh --profile web --dump-config` — PASS; `agent-loop.config.agents` равен `[]`, bundle `dsh-postman-harness` присутствует.
 - `git diff --check` — PASS; предупреждение Git о преобразовании LF/CRLF относится к существующему `profiles/web/pnpm-lock.yaml`.
 
 Секреты, `.credentials.yaml`, UIA-артефакты, сетевые почтовые ящики, SQLite и журналы вручную не изменялись.
 
-## Повторный аудит 2026-08-29
+## Исторический сбой и итог
 
-После описанного выше прогона был выполнен новый запуск процесса Web Harness внешней проверкой. В нём сессия `postman-harness-session` осталась с тем же именем, но live-сеанс не усыновил сохранённый журнал: обработка нового probe завершилась ошибкой `session "postman-harness-session" already has a persisted log on disk that does not match this live session (id collision)`. Поэтому предыдущий результат нельзя считать доказательством M1 через перезапуск. Добавленная после этого защита предотвращает переход к `create()` при неизвестной ошибке persistence, но требует нового безопасного запуска для проверки полного устранения причины.
+Ранее при запуске действительно наблюдался `id collision`: старый путь мог перейти к `create()` после временно пустого ответа persistence. После замены на строгую последовательность `inspect()` → `resume()` и повторной проверки с двумя холодными запусками этот сбой не воспроизвёлся.
 
-Текущий процесс на момент аудита слушал `127.0.0.1:3080` (PID 28624), а диагностический `session.list` показывал `blank=false` и сохранённую историю POSTMAN из 280 событий. Это подтверждает наличие журнала, но не подтверждает успешное присоединение текущего live Agent к нему. Перезапуск и новая почтовая проба намеренно не выполнялись, чтобы не повредить живую сессию и доказательство восстановления.
+Первый старт после остановки временно обходил сломанный локальный путь зависимости Flowglass; пакет был найден в локальном хранилище DSH, ссылка восстановлена, а финальный запуск выполнен штатно с включённым Flowglass. Журнал сессии и его файлы не изменялись вручную.
 
-До исправления и отдельного безопасного прогона `M1` остаётся неподтверждённым; заявлять `POSTMAN INTERNAL MAIL M1-M3 READY` нельзя.
+Итог: `POSTMAN INTERNAL MAIL M1-M3 READY`.
