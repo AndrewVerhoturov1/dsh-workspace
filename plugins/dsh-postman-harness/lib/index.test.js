@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createPostmanReplyTool, createPostmanSendTool, PLUGIN_NAME, POSTMAN_SESSION_ID, restoreOrCreatePostman } from './index.js'
+import { apply, createPostmanReplyTool, createPostmanSendTool, PLUGIN_NAME, POSTMAN_SESSION_ID, restoreOrCreatePostman } from './index.js'
 
 const agent = (id) => {
   const calls = []
@@ -164,6 +164,28 @@ test('postman_send should prune expired probes before applying the pending limit
   assert.equal(pending.has('MSG_A_010'), true)
 })
 
+test('postman_send should reject a full pending table after pruning', async () => {
+  const pending = new Map()
+  for (let index = 0; index < 256; index += 1) {
+    const messageId = `MSG_FULL_${index}`
+    pending.set(messageId, {
+      messageId,
+      payload: 'pending',
+      senderSessionId: 'session-a',
+      createdAt: new Date().toISOString(),
+      createdAtMs: Date.now(),
+    })
+  }
+  const runtime = executeContext()
+  const tool = createPostmanSendTool(runtime.ctx, pending)
+
+  await assert.rejects(
+    tool.execute({ message_id: 'MSG_OVER_LIMIT', payload: 'ALPHA' }, { agent: runtime.sender }),
+    /limit 256/,
+  )
+  assert.equal(runtime.postman.calls.length, 0)
+})
+
 test('postman_reply should reject wrong agent, reply and unknown correlation', async () => {
   const pending = new Map()
   const runtime = executeContext()
@@ -199,6 +221,61 @@ test('postman_send should fail closed when POSTMAN is not live', async () => {
   const tool = createPostmanSendTool(runtime.ctx, pending)
 
   await assert.rejects(tool.execute({ message_id: 'MSG_A_007', payload: 'ALPHA' }, { agent: runtime.sender }), /not live/)
+  assert.equal(pending.size, 0)
+})
+
+test('apply should install a scoped reply tool and fail-closed tool boundary for POSTMAN', async () => {
+  const registeredGlobalTools = []
+  const events = new Map()
+  const sender = agent('session-a')
+  const scopedTools = []
+  const restrictions = []
+  const sections = []
+  const postman = {
+    ...agent(POSTMAN_SESSION_ID),
+    ctx: {
+      effect: (callback) => {
+        callback()
+        return () => {}
+      },
+      systemPrompt: {
+        section: (section) => sections.push(section),
+      },
+      tools: {
+        register: (tool) => scopedTools.push(tool),
+        restrict: (options) => restrictions.push(options),
+      },
+    },
+  }
+  const ctx = {
+    tools: { register: (tool) => registeredGlobalTools.push(tool) },
+    agents: {
+      resume: async () => ({ dispose() {} }),
+      get: (id) => (id === POSTMAN_SESSION_ID ? postman : sender),
+    },
+    sessionPersistence: { list: async () => [] },
+    logger: { info() {}, error() {} },
+    on: (event, listener) => {
+      events.set(event, listener)
+      return () => events.delete(event)
+    },
+    effect: (callback) => {
+      callback()
+      return () => {}
+    },
+  }
+
+  const pending = new Map()
+  apply(ctx)
+  events.get('agent/created')({ agent: postman })
+
+  assert.equal(registeredGlobalTools.length, 1)
+  assert.equal(scopedTools.length, 1)
+  assert.deepEqual(restrictions, [{ allow: [] }])
+  assert.equal(sections.length, 1)
+
+  await registeredGlobalTools[0].execute({ message_id: 'MSG_DISPOSE', payload: 'ALPHA' }, { agent: sender })
+  events.get('agent/disposed')({ agent: sender })
   assert.equal(pending.size, 0)
 })
 

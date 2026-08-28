@@ -26,8 +26,16 @@
 ## Локальные проверки
 
 - `node --check plugins/dsh-postman-harness/lib/index.js` — PASS.
-- `node --test plugins/dsh-postman-harness/lib/index.test.js` — PASS, 12 тестов.
+- `node --test plugins/dsh-postman-harness/lib/index.test.js` — PASS, 14 тестов; добавлены проверки лимита pending-таблицы, scoped `allow: []` и очистки при уничтожении отправителя.
 - `dsh --profile web --dump-config` — PASS; `agent-loop.config.agents` равен `[]`, bundle `dsh-postman-harness` присутствует.
 - `git diff --check` — PASS; предупреждение Git о преобразовании LF/CRLF относится к существующему `profiles/web/pnpm-lock.yaml`.
 
 Секреты, `.credentials.yaml`, UIA-артефакты, сетевые почтовые ящики, SQLite и журналы вручную не изменялись.
+
+## Повторный аудит 2026-08-29
+
+После описанного выше прогона был выполнен новый запуск процесса Web Harness внешней проверкой. В нём сессия `postman-harness-session` осталась с тем же именем, но live-сеанс не усыновил сохранённый журнал: обработка нового probe завершилась ошибкой `session "postman-harness-session" already has a persisted log on disk that does not match this live session (id collision)`. Поэтому предыдущий результат нельзя считать доказательством M1 через перезапуск.
+
+Текущий процесс на момент аудита слушал `127.0.0.1:3080` (PID 28624), а диагностический `session.list` показывал `blank=false` и сохранённую историю POSTMAN из 280 событий. Это подтверждает наличие журнала, но не подтверждает успешное присоединение текущего live Agent к нему. Перезапуск и новая почтовая проба намеренно не выполнялись, чтобы не повредить живую сессию и доказательство восстановления.
+
+До исправления и отдельного безопасного прогона `M1` остаётся неподтверждённым; заявлять `POSTMAN INTERNAL MAIL M1-M3 READY` нельзя.
