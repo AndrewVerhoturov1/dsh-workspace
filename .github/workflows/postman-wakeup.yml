@@ -1,0 +1,28 @@
+name: Postman Wakeup
+
+on:
+  issues:
+    types: [edited]
+
+permissions:
+  contents: read
+
+jobs:
+  wake-postman:
+    if: >-
+      startsWith(github.event.issue.title, 'POSTMAN ') &&
+      contains(github.event.issue.body, 'status: READY') &&
+      github.event.issue.pull_request == null
+    runs-on:
+      - self-hosted
+      - Windows
+      - X64
+      - postman
+    steps:
+      - name: Check out wakeup handler
+        uses: actions/checkout@v4
+      - name: Process Postman event
+        shell: pwsh
+        run: |
+          & "$env:GITHUB_WORKSPACE\postman\github-wakeup.ps1" `
+            -EventPath $env:GITHUB_EVENT_PATH
