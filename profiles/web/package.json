@@ -6,7 +6,6 @@
       "bundles": [
         "@deepseek-ai/dsh-base",
         "@deepseek-ai/dsh-web-app",
-        "dsh-codex-oauth",
         "dshmarket",
         "dsh-better-sidebar",
         "dsh-restart-web",
@@ -28,7 +27,6 @@
     "dsh-better-sidebar": "^0.15.2",
     "dsh-branchline": "link:D:/DEEPSEEK/dsh-branchline",
     "dsh-client-auto-continue": "^0.8.1",
-    "dsh-codex-oauth": "github:birat-chapagain/dsh-codex-oauth",
     "dsh-flowglass-by-andrew": "link:C:/Users/andre/.dsh/plugins/dsh-flowglass-by-andrew",
     "dsh-notification": "^0.1.1",
     "dsh-postman-harness": "link:C:/Users/andre/.dsh/plugins/dsh-postman-harness",

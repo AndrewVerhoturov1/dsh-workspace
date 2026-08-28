@@ -1,0 +1,201 @@
+name: Integration branch validation
+
+on:
+  push:
+    branches:
+      - integration/unique-from-6fb11eac
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on:
+      - self-hosted
+      - Windows
+      - X64
+      - postman
+    timeout-minutes: 30
+    steps:
+      - name: Check out isolated integration branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify base and inspect local-only refs read-only
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $base = '6fb11eac8d6893d84d7b2560f65a33057b86e2f2'
+          git cat-file -e "$base^{commit}"
+          git merge-base --is-ancestor $base HEAD
+          if ($LASTEXITCODE -ne 0) { throw "Integration branch is not based on $base" }
+
+          $candidates = New-Object System.Collections.Generic.HashSet[string]([System.StringComparer]::OrdinalIgnoreCase)
+          foreach ($p in @("$env:USERPROFILE\.dsh", "$env:USERPROFILE\Documents", 'D:\DEEPSEEK')) {
+            if (-not (Test-Path -LiteralPath $p)) { continue }
+            if (Test-Path -LiteralPath (Join-Path $p '.git')) { [void]$candidates.Add((Resolve-Path $p).Path) }
+            Get-ChildItem -LiteralPath $p -Force -Recurse -Depth 4 -ErrorAction SilentlyContinue |
+              Where-Object { $_.Name -eq '.git' } |
+              ForEach-Object { [void]$candidates.Add($_.Parent.FullName) }
+          }
+
+          $found = 0
+          foreach ($repo in $candidates) {
+            if ($repo -eq $env:GITHUB_WORKSPACE) { continue }
+            $origin = git -C $repo config --get remote.origin.url 2>$null
+            if ($LASTEXITCODE -ne 0 -or $origin -notmatch 'AndrewVerhoturov1[\\/]dsh-workspace(?:\.git)?$') { continue }
+            $found++
+            Write-Host "LOCAL_REPOSITORY=$repo"
+            git -C $repo for-each-ref --format='LOCAL_REF %(refname) %(objectname)' refs/heads
+            git fetch --no-tags $repo '+refs/heads/*:refs/remotes/local-source/*'
+            git for-each-ref --format='FETCHED_LOCAL_REF %(refname) %(objectname)' refs/remotes/local-source
+            foreach ($line in (git for-each-ref --format='%(refname:short)|%(objectname)' refs/remotes/local-source)) {
+              $parts = $line -split '\|', 2
+              $ref = $parts[0]; $sha = $parts[1]
+              $counts = git rev-list --left-right --count "$base...$sha"
+              Write-Host "LOCAL_COMPARE $ref $sha $counts"
+              git log --format='LOCAL_UNIQUE_COMMIT %H %s' "$base..$sha"
+            }
+          }
+          Write-Host "LOCAL_REPOSITORIES_FOUND=$found"
+
+      - name: Git whitespace and conflict-marker check
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $base = '6fb11eac8d6893d84d7b2560f65a33057b86e2f2'
+          git diff --check "$base...HEAD"
+          if ($LASTEXITCODE -ne 0) { throw 'git diff --check failed' }
+          $bad = git grep -n -E '^(<<<<<<<|=======|>>>>>>>)' -- ':!diagnostics/**' ':!stage8-debug/**'
+          if ($LASTEXITCODE -eq 0 -and $bad) { $bad | Write-Host; throw 'Conflict markers found' }
+
+      - name: Validate migration invariants
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pkg = Get-Content -Raw 'profiles/web/package.json' | ConvertFrom-Json
+          $bundles = @($pkg.dsh.profile.bundles)
+          if ($bundles -contains 'dsh-codex-oauth') { throw 'Legacy dsh-codex-oauth bundle still enabled' }
+          if ($pkg.dependencies.PSObject.Properties.Name -contains 'dsh-codex-oauth') { throw 'Legacy dsh-codex-oauth dependency still enabled' }
+          if ($bundles -notcontains 'dsh-postman-harness') { throw 'POSTMAN bundle was lost' }
+          if ($pkg.dependencies.PSObject.Properties.Name -notcontains 'dsh-postman-harness') { throw 'POSTMAN dependency was lost' }
+          if ($bundles | Where-Object { $_ -match 'diagnostics|stage8-debug|codex-image' }) { throw 'Diagnostic material was wired into bundles' }
+          if (-not (Select-String -Quiet -LiteralPath 'profiles/web/cordis.patch.yml' -SimpleMatch "name: '@deepseek-ai/dsh-authorization'")) { throw 'Authorization plugin is missing' }
+          if (-not (Select-String -Quiet -LiteralPath 'settings.yaml' -SimpleMatch 'provider: openai-codex')) { throw 'Default provider is not openai-codex' }
+          if (-not (Select-String -Quiet -LiteralPath 'settings.yaml' -SimpleMatch 'openai-codex: {}')) { throw 'openai-codex settings route is missing' }
+
+      - name: Regenerate lock file from the assembled package manifest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Push-Location 'profiles/web'
+          try {
+            pnpm install --lockfile-only
+            if ($LASTEXITCODE -ne 0) { throw 'pnpm install --lockfile-only failed' }
+          } finally { Pop-Location }
+          $changes = @(git status --porcelain --untracked-files=no)
+          $unexpected = @($changes | Where-Object { $_ -notmatch '^ M profiles/web/pnpm-lock\.yaml$' })
+          if ($unexpected.Count -gt 0) { $unexpected | Write-Host; throw 'Lock regeneration changed unexpected tracked files' }
+          if (git diff --quiet -- 'profiles/web/pnpm-lock.yaml') {
+            Write-Host 'LOCKFILE_ALREADY_CURRENT=true'
+          } else {
+            git add -- 'profiles/web/pnpm-lock.yaml'
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -m 'Regenerate web profile lockfile for native Codex'
+            git push origin "HEAD:$env:GITHUB_REF_NAME"
+            Write-Host 'LOCKFILE_COMMITTED=true'
+          }
+
+      - name: Verify lock contents and install dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $lock = Get-Content -Raw 'profiles/web/pnpm-lock.yaml'
+          if ($lock -match '(?m)^\s+dsh-codex-oauth:\s*$') { throw 'Legacy Codex OAuth package remains in lock importer' }
+          if ($lock -notmatch '(?m)^\s+dsh-postman-harness:\s*$') { throw 'POSTMAN is missing from lock importer' }
+          Push-Location 'profiles/web'
+          try {
+            pnpm install --frozen-lockfile
+            if ($LASTEXITCODE -ne 0) { throw 'pnpm install --frozen-lockfile failed' }
+          } finally { Pop-Location }
+
+      - name: Syntax checks
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $parseErrors = @()
+          Get-ChildItem -Recurse -File -Filter '*.ps1' | Where-Object { $_.FullName -notmatch '\\node_modules\\' } | ForEach-Object {
+            $tokens = $null; $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors)
+            if ($errors) { $parseErrors += $errors }
+          }
+          if ($parseErrors.Count) { $parseErrors | Format-List | Out-String | Write-Host; throw 'PowerShell syntax errors' }
+          Get-ChildItem -Recurse -File -Filter '*.js' | Where-Object { $_.FullName -notmatch '\\node_modules\\' } | ForEach-Object {
+            node --check $_.FullName
+            if ($LASTEXITCODE -ne 0) { throw "JavaScript syntax failed: $($_.FullName)" }
+          }
+          Get-ChildItem -Recurse -File -Filter '*.json' | Where-Object { $_.FullName -notmatch '\\node_modules\\' } | ForEach-Object {
+            try { [void](Get-Content -Raw $_.FullName | ConvertFrom-Json) } catch { throw "JSON syntax failed: $($_.FullName): $($_.Exception.Message)" }
+          }
+
+      - name: Run repository tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & pwsh -NoProfile -File '.\postman\test-github-wakeup.ps1'
+          if ($LASTEXITCODE -ne 0) { throw 'POSTMAN tests failed' }
+
+      - name: Compose and launch isolated web profile
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:DSH_HOME = $env:GITHUB_WORKSPACE
+          $dsh = Get-Command dsh -ErrorAction Stop
+          $dumpPath = Join-Path $env:RUNNER_TEMP 'dsh-integration-dump.txt'
+          & dsh --profile web --dump-config 2>&1 | Tee-Object -FilePath $dumpPath
+          if ($LASTEXITCODE -ne 0) { throw 'dsh --dump-config failed' }
+          $dump = Get-Content -Raw $dumpPath
+          foreach ($needle in @('authorization', 'openai-codex', 'postman')) {
+            if ($dump -notmatch [regex]::Escape($needle)) { throw "Composed profile does not contain $needle" }
+          }
+
+          $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+          $listener.Start(); $port = ([System.Net.IPEndPoint]$listener.LocalEndpoint).Port; $listener.Stop()
+          $stdout = Join-Path $env:RUNNER_TEMP 'dsh-integration-web.stdout.log'
+          $stderr = Join-Path $env:RUNNER_TEMP 'dsh-integration-web.stderr.log'
+          if ($dsh.Source -like '*.ps1') {
+            $args = @('-NoProfile', '-File', $dsh.Source, '--profile', 'web', '--port', "$port")
+            $proc = Start-Process -FilePath 'pwsh' -ArgumentList $args -WorkingDirectory $env:GITHUB_WORKSPACE -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+          } else {
+            $proc = Start-Process -FilePath $dsh.Source -ArgumentList @('--profile', 'web', '--port', "$port") -WorkingDirectory $env:GITHUB_WORKSPACE -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+          }
+          try {
+            $ready = $false
+            for ($i = 0; $i -lt 45; $i++) {
+              Start-Sleep -Seconds 1
+              if ($proc.HasExited) { break }
+              try {
+                $r = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$port/" -TimeoutSec 2
+                if ($r.StatusCode -ge 200 -and $r.StatusCode -lt 500) { $ready = $true; break }
+              } catch {}
+            }
+            if (-not $ready) {
+              if (Test-Path $stdout) { Get-Content $stdout -Tail 100 | Write-Host }
+              if (Test-Path $stderr) { Get-Content $stderr -Tail 100 | Write-Host }
+              throw 'Isolated web profile did not become reachable'
+            }
+            Write-Host "PROFILE_LAUNCH_OK port=$port"
+          } finally {
+            if (-not $proc.HasExited) { & taskkill.exe /PID $proc.Id /T /F | Out-Null }
+          }
+
+      - name: Final clean-tree and diff checks
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git diff --check '6fb11eac8d6893d84d7b2560f65a33057b86e2f2...HEAD'
+          if ($LASTEXITCODE -ne 0) { throw 'Final git diff --check failed' }
+          $dirty = @(git status --porcelain --untracked-files=no)
+          if ($dirty.Count) { $dirty | Write-Host; throw 'Tracked working tree is dirty after validation' }
