@@ -1,0 +1,9 @@
+# Postman bundle: host relay capability plus one persistent, named agent.
+# The plugin owns restore-or-create after session persistence is injected.
+- insert:
+    - id: postman-harness
+      name: dsh-postman-harness
+
+- id: agent-loop
+  config:
+    agents: []
