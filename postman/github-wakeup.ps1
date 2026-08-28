@@ -210,7 +210,7 @@ try {
     }
 
     $issue = Get-PropertyValue -Object $event -Name 'issue'
-    if ($issue.PSObject.Properties.Name -contains 'pull_request' -and $null -ne $issue.pull_request) {
+    if ($issue.PSObject.Properties.Name -contains 'pull_request') {
         throw 'Pull request events are not accepted as Postman issue events'
     }
 
@@ -241,12 +241,14 @@ try {
 
     $updatedAt = [string](Get-PropertyValue -Object $issue -Name 'updated_at')
     [DateTimeOffset]$updatedAtValue = [DateTimeOffset]::MinValue
-    if (-not [DateTimeOffset]::TryParse($updatedAt, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind, [ref]$updatedAtValue)) {
+    $timestampStyles = [Globalization.DateTimeStyles]::AssumeUniversal -bor [Globalization.DateTimeStyles]::AdjustToUniversal
+    if (-not [DateTimeOffset]::TryParse($updatedAt, [Globalization.CultureInfo]::InvariantCulture, $timestampStyles, [ref]$updatedAtValue)) {
         throw 'Issue updated_at is invalid'
     }
 
+    $canonicalUpdatedAt = $updatedAtValue.UtcDateTime.ToString('o')
     $bodyHash = Get-Sha256Hex -Text $body
-    $deliveryKey = '{0}|{1}|{2}|{3}' -f $parsed.RequestId, $issueNumber, $updatedAt, $bodyHash
+    $deliveryKey = '{0}|{1}|{2}|{3}' -f $parsed.RequestId, $issueNumber, $canonicalUpdatedAt, $bodyHash
     $signalPath = Get-SignalPath -RequestId $parsed.RequestId
     $receivedAt = [DateTimeOffset]::UtcNow.ToString('o')
     $deliveryId = $null
@@ -261,7 +263,7 @@ try {
         repository = $repositoryName
         status = 'READY'
         response = $parsed.Response
-        githubUpdatedAt = $updatedAt
+        githubUpdatedAt = $updatedAtValue.UtcDateTime.ToString('o')
         receivedAt = $receivedAt
         bodySha256 = $bodyHash
         deliveryKey = $deliveryKey

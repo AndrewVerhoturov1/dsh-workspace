@@ -11,12 +11,17 @@
 
 ## Synthetic E2E
 
-- probe Issue: заполняется после создания.
-- Issue edit: заполняется после изменения тела через GitHub API.
-- workflow run id: заполняется после автоматического запуска.
-- job id: заполняется после завершения job.
-- runner name/labels: заполняется по данным GitHub Actions.
-- результат и времена: заполняются по run/job.
-- durable signal: `%LOCALAPPDATA%\DSH\Postman\signals\REQ_PROBE_001.json`.
+Первый автоматический прогон выполнен на probe Issue `#6` после публикации workflow:
 
-Ручной Web ChatGPT live test этим документом не выполняется.
+- Issue edit: PASS, тело изменено на `READY` через `gh issue edit`.
+- workflow run id: `33172140309`.
+- job id: `98851625844`.
+- runner: `dsh-postman-win`, labels `self-hosted`, `Windows`, `X64`, `postman`.
+- run: `success`; job: `success`.
+- run created/started: `2026-08-28T12:41:45Z`.
+- job started/completed: `2026-08-28T12:41:49Z` — `2026-08-28T12:42:14Z`.
+- handler: PASS, журнал содержит `SIGNAL_WRITTEN`.
+- durable signal: `%LOCALAPPDATA%\DSH\Postman\signals\REQ_PROBE_001.json`.
+- ответ сохранён: `POSTMAN PROBE RESPONSE`.
+
+Этот run является доказательством пути Issue → Actions → self-hosted runner → handler → signal; ручной Web ChatGPT live test этим документом не выполняется.
