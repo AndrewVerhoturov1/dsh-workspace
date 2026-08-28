@@ -193,16 +193,17 @@ jobs:
           if (Test-Path -LiteralPath $cliRoot) { Remove-Item -LiteralPath $cliRoot -Recurse -Force }
           New-Item -ItemType Directory -Path $cliRoot | Out-Null
           Set-Content -LiteralPath (Join-Path $cliRoot 'package.json') -Encoding utf8 -NoNewline -Value '{"private":true}'
-          @'
-packages:
-  - '.'
-onlyBuiltDependencies:
-  - '@deepseek-ai/dsh-subprocess-local'
-  - '@google/genai'
-  - koffi
-  - node-pty
-  - protobufjs
-'@ | Set-Content -LiteralPath (Join-Path $cliRoot 'pnpm-workspace.yaml') -Encoding utf8
+          $workspaceYaml = @(
+            "packages:",
+            "  - '.'",
+            "onlyBuiltDependencies:",
+            "  - '@deepseek-ai/dsh-subprocess-local'",
+            "  - '@google/genai'",
+            "  - koffi",
+            "  - node-pty",
+            "  - protobufjs"
+          ) -join "`n"
+          Set-Content -LiteralPath (Join-Path $cliRoot 'pnpm-workspace.yaml') -Encoding utf8 -Value $workspaceYaml
           Push-Location $cliRoot
           try {
             pnpm add -w '@deepseek-ai/dsh@0.1.1-rc.2'
