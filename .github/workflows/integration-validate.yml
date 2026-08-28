@@ -83,6 +83,44 @@ jobs:
           if (-not (Select-String -Quiet -LiteralPath 'settings.yaml' -SimpleMatch 'provider: openai-codex')) { throw 'Default provider is not openai-codex' }
           if (-not (Select-String -Quiet -LiteralPath 'settings.yaml' -SimpleMatch 'openai-codex: {}')) { throw 'openai-codex settings route is missing' }
 
+      - name: Archive diagnostic-only branch material
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $archiveDir = 'diagnostics/archive'
+          New-Item -ItemType Directory -Force -Path $archiveDir | Out-Null
+          $changed = $false
+
+          if (Test-Path -LiteralPath 'diagnostics/codex-image') {
+            $zip = Join-Path $archiveDir 'codex-image-854e1fe41c651b82822960a9573d2f92ae2dfe29.zip'
+            if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
+            Compress-Archive -Path 'diagnostics/codex-image' -DestinationPath $zip -CompressionLevel Optimal
+            git rm -r -- 'diagnostics/codex-image'
+            git add -- $zip
+            $changed = $true
+          }
+
+          if (Test-Path -LiteralPath 'stage8-debug') {
+            $zip = Join-Path $archiveDir 'stage8-parallel-retest-59bc00b5a0c7309441b27e5e3820574e92f7824a.zip'
+            if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
+            Compress-Archive -Path 'stage8-debug' -DestinationPath $zip -CompressionLevel Optimal
+            git rm -r -- 'stage8-debug'
+            git add -- $zip
+            $changed = $true
+          }
+
+          if ($changed) {
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -m 'Archive diagnostic-only branch materials'
+            git push origin "HEAD:$env:GITHUB_REF_NAME"
+          }
+
+          if (Test-Path -LiteralPath 'diagnostics/codex-image') { throw 'Codex diagnostics remain unpacked' }
+          if (Test-Path -LiteralPath 'stage8-debug') { throw 'Stage8 diagnostics remain unpacked' }
+          if (-not (Test-Path -LiteralPath (Join-Path $archiveDir 'codex-image-854e1fe41c651b82822960a9573d2f92ae2dfe29.zip'))) { throw 'Codex diagnostic archive missing' }
+          if (-not (Test-Path -LiteralPath (Join-Path $archiveDir 'stage8-parallel-retest-59bc00b5a0c7309441b27e5e3820574e92f7824a.zip'))) { throw 'Stage8 diagnostic archive missing' }
+
       - name: Regenerate lock file from the assembled package manifest
         shell: pwsh
         run: |
