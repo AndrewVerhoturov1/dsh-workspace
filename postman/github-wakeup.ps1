@@ -162,13 +162,23 @@ function Write-AtomicSignal {
             throw 'Timed out waiting for the local signal lock'
         }
 
+        $processedDeliveryKeys = @()
         if (Test-Path -LiteralPath $SignalPath -PathType Leaf) {
             $existing = Get-Content -LiteralPath $SignalPath -Raw -Encoding UTF8 | ConvertFrom-Json
-            if ([string]$existing.deliveryKey -ceq [string]$Signal.deliveryKey) {
+            if ($existing.PSObject.Properties.Name -contains 'processedDeliveryKeys') {
+                $processedDeliveryKeys = @($existing.processedDeliveryKeys | ForEach-Object { [string]$_ })
+            }
+            elseif ($existing.PSObject.Properties.Name -contains 'deliveryKey') {
+                # Backward-compatible migration from the first signal format.
+                $processedDeliveryKeys = @([string]$existing.deliveryKey)
+            }
+
+            if ($processedDeliveryKeys -contains ([string]$Signal.deliveryKey)) {
                 return 'duplicate'
             }
         }
 
+        $Signal['processedDeliveryKeys'] = @($processedDeliveryKeys + [string]$Signal.deliveryKey)
         $temporaryPath = '{0}.{1}.tmp' -f $SignalPath, ([guid]::NewGuid().ToString('N'))
         $json = $Signal | ConvertTo-Json -Depth 10
         $utf8 = [System.Text.UTF8Encoding]::new($false)
