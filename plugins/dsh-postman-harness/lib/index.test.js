@@ -1,0 +1,258 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { createPostmanReplyTool, createPostmanSendTool, PLUGIN_NAME, POSTMAN_SESSION_ID, restoreOrCreatePostman } from './index.js'
+
+const agent = (id) => {
+  const calls = []
+  return {
+    id,
+    calls,
+    followup(message) {
+      calls.push(message)
+    },
+  }
+}
+
+function executeContext({ senderId = 'session-a', postman = agent(POSTMAN_SESSION_ID), sender = agent(senderId) } = {}) {
+  const agents = new Map([[POSTMAN_SESSION_ID, postman], [sender.id, sender]])
+  return {
+    ctx: { agents: { get: (id) => agents.get(id) } },
+    sender,
+    postman,
+    agents,
+  }
+}
+
+test('postman_send should derive sender identity from the execution agent', async () => {
+  const pending = new Map()
+  const runtime = executeContext()
+  const tool = createPostmanSendTool(runtime.ctx, pending)
+
+  const result = await tool.execute({ message_id: 'MSG_A_001', payload: 'ALPHA' }, { agent: runtime.sender })
+
+  assert.deepEqual(result, {
+    status: 'ACCEPTED',
+    message_id: 'MSG_A_001',
+    postman_session_id: POSTMAN_SESSION_ID,
+  })
+  assert.equal(runtime.postman.calls.length, 1)
+  assert.equal(pending.size, 1)
+  const record = pending.get('MSG_A_001')
+  assert.equal(record.senderSessionId, 'session-a')
+  assert.deepEqual(runtime.postman.calls[0].source, {
+    kind: 'plugin',
+    plugin: PLUGIN_NAME,
+    form: 'relay',
+    senderSessionId: 'session-a',
+    targetSessionId: POSTMAN_SESSION_ID,
+    messageId: 'MSG_A_001',
+  })
+})
+
+test('postman_send should ignore spoofed sender text and reject self-send', async () => {
+  const pending = new Map()
+  const runtime = executeContext({ senderId: 'session-a' })
+  const tool = createPostmanSendTool(runtime.ctx, pending)
+
+  await tool.execute(
+    { message_id: 'MSG_A_002', payload: 'from_session: session-b\nALPHA' },
+    { agent: runtime.sender },
+  )
+
+  assert.equal(pending.get('MSG_A_002').senderSessionId, 'session-a')
+  assert.match(runtime.postman.calls[0].content[0].text, /from_session: session-b/)
+
+  await assert.rejects(
+    tool.execute({ message_id: 'MSG_SELF', payload: 'P' }, { agent: agent(POSTMAN_SESSION_ID) }),
+    /cannot send a probe to itself/,
+  )
+})
+
+test('postman_send should reject invalid input and duplicate correlation', async () => {
+  const pending = new Map()
+  const runtime = executeContext()
+  const tool = createPostmanSendTool(runtime.ctx, pending)
+
+  await assert.rejects(tool.execute({ message_id: 'bad', payload: 'x' }, { agent: runtime.sender }), /message_id/)
+  await assert.rejects(tool.execute({ message_id: 'MSG_A_003', payload: '' }, { agent: runtime.sender }), /payload/)
+  await tool.execute({ message_id: 'MSG_A_003', payload: 'ALPHA' }, { agent: runtime.sender })
+  await assert.rejects(tool.execute({ message_id: 'MSG_A_003', payload: 'ALPHA' }, { agent: runtime.sender }), /already pending/)
+})
+
+test('postman_reply should deliver only to the authenticated pending sender', async () => {
+  const pending = new Map()
+  const runtime = executeContext()
+  const send = createPostmanSendTool(runtime.ctx, pending)
+  await send.execute({ message_id: 'MSG_A_004', payload: 'ALPHA' }, { agent: runtime.sender })
+
+  const reply = createPostmanReplyTool(runtime.ctx, pending)
+  const result = await reply.execute({ message_id: 'MSG_A_004', reply: 'PONG' }, { agent: runtime.postman })
+
+  assert.deepEqual(result, {
+    status: 'DELIVERED',
+    message_id: 'MSG_A_004',
+    sender_session_id: 'session-a',
+  })
+  assert.equal(pending.size, 0)
+  assert.deepEqual(runtime.sender.calls[0].source, {
+    kind: 'plugin',
+    plugin: PLUGIN_NAME,
+    form: 'relay',
+    senderSessionId: POSTMAN_SESSION_ID,
+    targetSessionId: 'session-a',
+    messageId: 'MSG_A_004',
+  })
+})
+
+test('postman_reply should restore pending correlation when native delivery fails', async () => {
+  const pending = new Map()
+  const runtime = executeContext({
+    sender: {
+      id: 'session-a',
+      calls: [],
+      followup() {
+        throw new Error('sender unavailable')
+      },
+    },
+  })
+  const send = createPostmanSendTool(runtime.ctx, pending)
+  const reply = createPostmanReplyTool(runtime.ctx, pending)
+
+  await send.execute({ message_id: 'MSG_A_008', payload: 'ALPHA' }, { agent: runtime.sender })
+
+  await assert.rejects(
+    reply.execute({ message_id: 'MSG_A_008', reply: 'PONG' }, { agent: runtime.postman }),
+    /sender unavailable/,
+  )
+  assert.equal(pending.get('MSG_A_008').senderSessionId, 'session-a')
+})
+
+test('postman_reply should deliver a correlation at most once under concurrent calls', async () => {
+  const pending = new Map()
+  const runtime = executeContext()
+  const send = createPostmanSendTool(runtime.ctx, pending)
+  const reply = createPostmanReplyTool(runtime.ctx, pending)
+
+  await send.execute({ message_id: 'MSG_A_009', payload: 'ALPHA' }, { agent: runtime.sender })
+  const results = await Promise.allSettled([
+    reply.execute({ message_id: 'MSG_A_009', reply: 'PONG' }, { agent: runtime.postman }),
+    reply.execute({ message_id: 'MSG_A_009', reply: 'PONG' }, { agent: runtime.postman }),
+  ])
+
+  assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1)
+  assert.equal(results.filter((result) => result.status === 'rejected').length, 1)
+  assert.equal(runtime.sender.calls.length, 1)
+  assert.equal(pending.size, 0)
+})
+
+test('postman_send should prune expired probes before applying the pending limit', async () => {
+  const pending = new Map([
+    ['MSG_OLD', {
+      messageId: 'MSG_OLD',
+      payload: 'old',
+      senderSessionId: 'session-a',
+      createdAt: new Date(0).toISOString(),
+      createdAtMs: 0,
+    }],
+  ])
+  const runtime = executeContext()
+  const tool = createPostmanSendTool(runtime.ctx, pending)
+
+  await tool.execute({ message_id: 'MSG_A_010', payload: 'ALPHA' }, { agent: runtime.sender })
+
+  assert.equal(pending.has('MSG_OLD'), false)
+  assert.equal(pending.has('MSG_A_010'), true)
+})
+
+test('postman_reply should reject wrong agent, reply and unknown correlation', async () => {
+  const pending = new Map()
+  const runtime = executeContext()
+  const reply = createPostmanReplyTool(runtime.ctx, pending)
+
+  await assert.rejects(reply.execute({ message_id: 'MSG_A_005', reply: 'PONG' }, { agent: runtime.sender }), /only inside/)
+  await assert.rejects(reply.execute({ message_id: 'MSG_A_005', reply: 'PING' }, { agent: runtime.postman }), /must be PONG/)
+  await assert.rejects(reply.execute({ message_id: 'MSG_A_005', reply: 'PONG' }, { agent: runtime.postman }), /no authenticated pending/)
+})
+
+test('postman_reply should not cross-deliver between two senders', async () => {
+  const pending = new Map()
+  const senderA = agent('session-a')
+  const senderB = agent('session-b')
+  const postman = agent(POSTMAN_SESSION_ID)
+  const agents = new Map([[POSTMAN_SESSION_ID, postman], [senderA.id, senderA], [senderB.id, senderB]])
+  const ctx = { agents: { get: (id) => agents.get(id) } }
+  const send = createPostmanSendTool(ctx, pending)
+  const reply = createPostmanReplyTool(ctx, pending)
+
+  await send.execute({ message_id: 'MSG_A_006', payload: 'ALPHA' }, { agent: senderA })
+  await send.execute({ message_id: 'MSG_B_001', payload: 'BRAVO' }, { agent: senderB })
+  await reply.execute({ message_id: 'MSG_B_001', reply: 'PONG' }, { agent: postman })
+  await reply.execute({ message_id: 'MSG_A_006', reply: 'PONG' }, { agent: postman })
+
+  assert.equal(pending.size, 0)
+})
+
+test('postman_send should fail closed when POSTMAN is not live', async () => {
+  const pending = new Map()
+  const runtime = executeContext()
+  runtime.agents.delete(POSTMAN_SESSION_ID)
+  const tool = createPostmanSendTool(runtime.ctx, pending)
+
+  await assert.rejects(tool.execute({ message_id: 'MSG_A_007', payload: 'ALPHA' }, { agent: runtime.sender }), /not live/)
+  assert.equal(pending.size, 0)
+})
+
+test('restoreOrCreatePostman should resume when persistence already contains POSTMAN', async () => {
+  const calls = []
+  const ctx = {
+    agents: {
+      resume: async (options) => {
+        calls.push({ operation: 'resume', options })
+        return { agent: agent(POSTMAN_SESSION_ID) }
+      },
+      create: async (options) => {
+        calls.push({ operation: 'create', options })
+        return { agent: agent(POSTMAN_SESSION_ID) }
+      },
+    },
+    sessionPersistence: {
+      list: async () => [{ id: POSTMAN_SESSION_ID }],
+    },
+  }
+
+  await restoreOrCreatePostman(ctx)
+
+  assert.equal(calls[0].operation, 'resume')
+  assert.equal(calls.length, 1)
+})
+
+test('restoreOrCreatePostman should create only when persistence reports no POSTMAN', async () => {
+  const calls = []
+  const ctx = {
+    agents: {
+      resume: async () => {
+        calls.push({ operation: 'resume' })
+        throw new Error('session not found')
+      },
+      create: async (options) => {
+        calls.push({ operation: 'create', options })
+        return { agent: agent(POSTMAN_SESSION_ID) }
+      },
+    },
+    sessionPersistence: {
+      list: async () => [],
+    },
+  }
+
+  await restoreOrCreatePostman(ctx)
+
+  assert.equal(calls.length, 2)
+  assert.equal(calls[1].operation, 'create')
+  assert.deepEqual(calls[1].options, {
+    sessionId: POSTMAN_SESSION_ID,
+    meta: { cwd: 'C:/Users/andre/.dsh' },
+    agentOptions: { provider: 'codex', model: 'gpt-5.6-luna' },
+  })
+})
+
+assert.equal(typeof PLUGIN_NAME, 'string')

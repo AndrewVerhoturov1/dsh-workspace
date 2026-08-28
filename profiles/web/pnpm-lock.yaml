@@ -17,9 +17,6 @@ importers:
       dsh-agent-team-by-andrew:
         specifier: file:C:/Users/andre/AppData/Local/Temp/dsh-agent-team-by-andrew-pack/dsh-agent-team-by-andrew-1.0.1-andrew.1.tgz
         version: file:../../../AppData/Local/Temp/dsh-agent-team-by-andrew-pack/dsh-agent-team-by-andrew-1.0.1-andrew.1.tgz(@deepseek-ai/schemastery@3.18.1)
-      dsh-agent-team-gui:
-        specifier: github:toolclub/dsh-agent-team-gui
-        version: https://codeload.github.com/toolclub/dsh-agent-team-gui/tar.gz/e3997ce798e495ad8051b95c4e96920780c96aed(@deepseek-ai/schemastery@3.18.1)
       dsh-better-sidebar:
         specifier: ^0.15.2
         version: 0.15.2(react@18.3.1)
@@ -38,6 +35,9 @@ importers:
       dsh-notification:
         specifier: ^0.1.1
         version: 0.1.1(@deepseek-ai/schemastery@3.18.1)
+      dsh-postman-harness:
+        specifier: link:C:/Users/andre/.dsh/plugins/dsh-postman-harness
+        version: link:../../plugins/dsh-postman-harness
       dsh-restart-web:
         specifier: github:shaoyi1991/dsh-restart-web
         version: https://codeload.github.com/shaoyi1991/dsh-restart-web/tar.gz/5651379aaace35db8a6553d87b35d3b0675b3848
@@ -833,34 +833,6 @@ packages:
   dsh-agent-team-by-andrew@file:../../../AppData/Local/Temp/dsh-agent-team-by-andrew-pack/dsh-agent-team-by-andrew-1.0.1-andrew.1.tgz:
     resolution: {integrity: sha512-/nLwayxHX7zkLv5SzYfmq1d2uXgirMLFyJqZIkjHBgRPV9I08rZmM+MZ8gAG0rcYFvYzzAszNRiQhAcMBnfXaA==, tarball: file:../../../AppData/Local/Temp/dsh-agent-team-by-andrew-pack/dsh-agent-team-by-andrew-1.0.1-andrew.1.tgz}
     version: 1.0.1-andrew.1
-    engines: {node: ^22.19.0 || >=24.0.0}
-    peerDependencies:
-      '@deepseek-ai/cordis': ^4.0.1
-      '@deepseek-ai/dsh-agent': '>=0.1.0-rc.5 <0.2.0'
-      '@deepseek-ai/dsh-brand': '>=0.1.0-rc.5 <0.2.0'
-      '@deepseek-ai/dsh-client-connection': '>=0.1.0-rc.5 <0.2.0'
-      '@deepseek-ai/dsh-client-locale': '>=0.1.0-rc.5 <0.2.0'
-      '@deepseek-ai/dsh-client-runtime': '>=0.1.0-rc.5 <0.2.0'
-      '@deepseek-ai/dsh-client-ui-conversation': '>=0.1.0-rc.5 <0.2.0'
-      '@deepseek-ai/dsh-client-ui-settings': '>=0.1.0-rc.5 <0.2.0'
-      '@deepseek-ai/dsh-client-ui-slots': '>=0.1.0-rc.5 <0.2.0'
-      '@deepseek-ai/dsh-host-apiproxy': '>=0.1.0-rc.5 <0.2.0'
-      '@deepseek-ai/dsh-jobs': '>=0.1.0-rc.5 <0.2.0'
-      '@deepseek-ai/dsh-llm': '>=0.1.0-rc.5 <0.2.0'
-      '@deepseek-ai/dsh-session': '>=0.1.0-rc.5 <0.2.0'
-      '@deepseek-ai/dsh-storage': '>=0.1.0-rc.5 <0.2.0'
-      '@deepseek-ai/dsh-storage-domain': '>=0.1.0-rc.5 <0.2.0'
-      '@deepseek-ai/dsh-subagent': '>=0.1.0-rc.5 <0.2.0'
-      '@deepseek-ai/dsh-system-prompt': '>=0.1.0-rc.5 <0.2.0'
-      '@deepseek-ai/dsh-tools': '>=0.1.0-rc.5 <0.2.0'
-      '@deepseek-ai/schemastery': ^3.18.1
-    peerDependenciesMeta:
-      '@deepseek-ai/dsh-jobs':
-        optional: true
-
-  dsh-agent-team-gui@https://codeload.github.com/toolclub/dsh-agent-team-gui/tar.gz/e3997ce798e495ad8051b95c4e96920780c96aed:
-    resolution: {gitHosted: true, integrity: sha512-+GuVlHQLdGwf4c+3m/MoJA6vDLGTGn5Zg+8PEP8HHzD/vl3DDjlifCb3VJnLSwNre1Nqf7zaq2QCA/66nSuAFA==, tarball: https://codeload.github.com/toolclub/dsh-agent-team-gui/tar.gz/e3997ce798e495ad8051b95c4e96920780c96aed}
-    version: 1.0.1
     engines: {node: ^22.19.0 || >=24.0.0}
     peerDependencies:
       '@deepseek-ai/cordis': ^4.0.1
@@ -2589,12 +2561,6 @@ snapshots:
       '@types/trusted-types': 2.0.7
 
   dsh-agent-team-by-andrew@file:../../../AppData/Local/Temp/dsh-agent-team-by-andrew-pack/dsh-agent-team-by-andrew-1.0.1-andrew.1.tgz(@deepseek-ai/schemastery@3.18.1):
-    dependencies:
-      '@deepseek-ai/schemastery': 3.18.1
-      react: 18.3.1
-      zod: 4.4.3
-
-  dsh-agent-team-gui@https://codeload.github.com/toolclub/dsh-agent-team-gui/tar.gz/e3997ce798e495ad8051b95c4e96920780c96aed(@deepseek-ai/schemastery@3.18.1):
     dependencies:
       '@deepseek-ai/schemastery': 3.18.1
       react: 18.3.1
