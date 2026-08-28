@@ -193,9 +193,19 @@ jobs:
           if (Test-Path -LiteralPath $cliRoot) { Remove-Item -LiteralPath $cliRoot -Recurse -Force }
           New-Item -ItemType Directory -Path $cliRoot | Out-Null
           Set-Content -LiteralPath (Join-Path $cliRoot 'package.json') -Encoding utf8 -NoNewline -Value '{"private":true}'
+          @'
+packages:
+  - '.'
+onlyBuiltDependencies:
+  - '@deepseek-ai/dsh-subprocess-local'
+  - '@google/genai'
+  - koffi
+  - node-pty
+  - protobufjs
+'@ | Set-Content -LiteralPath (Join-Path $cliRoot 'pnpm-workspace.yaml') -Encoding utf8
           Push-Location $cliRoot
           try {
-            pnpm add '@deepseek-ai/dsh@0.1.1-rc.2'
+            pnpm add -w '@deepseek-ai/dsh@0.1.1-rc.2'
             if ($LASTEXITCODE -ne 0) { throw 'Isolated DSH CLI install failed' }
           } finally { Pop-Location }
 
