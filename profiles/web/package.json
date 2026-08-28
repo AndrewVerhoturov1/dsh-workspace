@@ -27,9 +27,9 @@
     "dsh-better-sidebar": "^0.15.2",
     "dsh-branchline": "link:D:/DEEPSEEK/dsh-branchline",
     "dsh-client-auto-continue": "^0.8.1",
-    "dsh-flowglass-by-andrew": "link:C:/Users/andre/.dsh/plugins/dsh-flowglass-by-andrew",
+    "dsh-flowglass-by-andrew": "link:../../plugins/dsh-flowglass-by-andrew",
     "dsh-notification": "^0.1.1",
-    "dsh-postman-harness": "link:C:/Users/andre/.dsh/plugins/dsh-postman-harness",
+    "dsh-postman-harness": "link:../../plugins/dsh-postman-harness",
     "dsh-restart-web": "github:shaoyi1991/dsh-restart-web",
     "dsh-tokenledger": "^0.1.0",
     "dshmarket": "^1.19.0"
