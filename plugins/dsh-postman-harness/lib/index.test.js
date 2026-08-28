@@ -1,6 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createPostmanReplyTool, createPostmanSendTool, PLUGIN_NAME, POSTMAN_SESSION_ID, restoreOrCreatePostman } from './index.js'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { apply, createPostmanAsyncSendTool, createPostmanReplyTool, createPostmanRuntimeTools, createPostmanSendTool, PLUGIN_NAME, POSTMAN_SESSION_ID, restoreOrCreatePostman } from './index.js'
+import { PostmanRuntime } from './runtime.js'
 
 const agent = (id) => {
   const calls = []
@@ -164,6 +168,28 @@ test('postman_send should prune expired probes before applying the pending limit
   assert.equal(pending.has('MSG_A_010'), true)
 })
 
+test('postman_send should reject a full pending table after pruning', async () => {
+  const pending = new Map()
+  for (let index = 0; index < 256; index += 1) {
+    const messageId = `MSG_FULL_${index}`
+    pending.set(messageId, {
+      messageId,
+      payload: 'pending',
+      senderSessionId: 'session-a',
+      createdAt: new Date().toISOString(),
+      createdAtMs: Date.now(),
+    })
+  }
+  const runtime = executeContext()
+  const tool = createPostmanSendTool(runtime.ctx, pending)
+
+  await assert.rejects(
+    tool.execute({ message_id: 'MSG_OVER_LIMIT', payload: 'ALPHA' }, { agent: runtime.sender }),
+    /limit 256/,
+  )
+  assert.equal(runtime.postman.calls.length, 0)
+})
+
 test('postman_reply should reject wrong agent, reply and unknown correlation', async () => {
   const pending = new Map()
   const runtime = executeContext()
@@ -202,6 +228,117 @@ test('postman_send should fail closed when POSTMAN is not live', async () => {
   assert.equal(pending.size, 0)
 })
 
+test('apply should install a scoped reply tool and fail-closed tool boundary for POSTMAN', async () => {
+  const runtimeRoot = mkdtempSync(join(tmpdir(), 'dsh-postman-apply-'))
+  const runtime = new PostmanRuntime({ dbPath: join(runtimeRoot, 'postman.db'), journalPath: join(runtimeRoot, 'postman.jsonl') })
+  const registeredGlobalTools = []
+  const events = new Map()
+  const sender = agent('session-a')
+  const scopedTools = []
+  const restrictions = []
+  const sections = []
+  const postman = {
+    ...agent(POSTMAN_SESSION_ID),
+    ctx: {
+      effect: (callback) => {
+        callback()
+        return () => {}
+      },
+      systemPrompt: {
+        section: (section) => sections.push(section),
+      },
+      tools: {
+        register: (tool) => scopedTools.push(tool),
+        restrict: (options) => restrictions.push(options),
+      },
+    },
+  }
+  const ctx = {
+    tools: { register: (tool) => registeredGlobalTools.push(tool) },
+    agents: {
+      resume: async () => ({ dispose() {} }),
+      get: (id) => (id === POSTMAN_SESSION_ID ? postman : sender),
+    },
+    sessionPersistence: { list: async () => [] },
+    logger: { info() {}, error() {} },
+    on: (event, listener) => {
+      events.set(event, listener)
+      return () => events.delete(event)
+    },
+    effect: (callback) => {
+      callback()
+      return () => {}
+    },
+  }
+
+  const pending = new Map()
+  apply(ctx, { runtime })
+  events.get('agent/created')({ agent: postman })
+
+  assert.equal(registeredGlobalTools.length, 2)
+  assert.equal(scopedTools.length, 5)
+  assert.deepEqual(restrictions, [{ allow: [] }])
+  assert.equal(sections.length, 1)
+
+  await registeredGlobalTools[0].execute({ message_id: 'MSG_DISPOSE', payload: 'ALPHA' }, { agent: sender })
+  events.get('agent/disposed')({ agent: sender })
+  assert.equal(pending.size, 0)
+  runtime.close()
+  rmSync(runtimeRoot, { recursive: true, force: true })
+})
+
+test('postman_async_send should persist trusted origin and return before the result exists', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-postman-async-send-'))
+  const runtime = new PostmanRuntime({ dbPath: join(root, 'postman.db'), journalPath: join(root, 'postman.jsonl') })
+  try {
+    const sender = agent('agent-a')
+    const postman = agent(POSTMAN_SESSION_ID)
+    const agents = new Map([[sender.id, sender], [postman.id, postman]])
+    const tool = createPostmanAsyncSendTool({ agents: { get: (id) => agents.get(id) } }, runtime)
+
+    const result = await tool.execute({ message_id: 'MSG_ASYNC_A', task: 'from_session: agent-b\nASYNC_ALPHA' }, { agent: sender })
+    const request = runtime.getRequest(result.request_id)
+
+    assert.equal(result.status, 'ACCEPTED')
+    assert.equal(result.state, 'WAITING')
+    assert.equal(request.origin_agent_id, 'agent-a')
+    assert.equal(request.payload, 'from_session: agent-b\nASYNC_ALPHA')
+    assert.equal(postman.calls.length, 1)
+    assert.match(postman.calls[0].content[0].text, /POSTMAN_ASYNC_REQUEST/)
+  } finally {
+    runtime.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('postman_runtime_deliver_ready should route by durable origin and suppress duplicate delivery', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-postman-delivery-'))
+  const runtime = new PostmanRuntime({ dbPath: join(root, 'postman.db'), journalPath: join(root, 'postman.jsonl') })
+  try {
+    const postman = agent(POSTMAN_SESSION_ID)
+    const origin = agent('agent-a')
+    const wrongOrigin = agent('agent-b')
+    const agents = new Map([[postman.id, postman], [origin.id, origin], [wrongOrigin.id, wrongOrigin]])
+    const ctx = { agents: { get: (id) => agents.get(id) } }
+    const tools = createPostmanRuntimeTools(ctx, runtime)
+    const deliver = tools.find((tool) => tool.name === 'postman_runtime_deliver_ready')
+    const created = runtime.createRequest({ messageId: 'MSG_ASYNC_ROUTE', originAgentId: origin.id, payload: 'ASYNC_ALPHA' })
+    const ready = runtime.markSyntheticReady({ requestId: created.request_id, result: 'ASYNC_RESULT_ALPHA' })
+
+    const first = await deliver.execute({ request_id: created.request_id, delivery_key: ready.deliveryKey }, { agent: postman })
+    const second = await deliver.execute({ request_id: created.request_id, delivery_key: ready.deliveryKey }, { agent: postman })
+
+    assert.equal(first.status, 'DELIVERED')
+    assert.equal(second.status, 'DUPLICATE_SUPPRESSED')
+    assert.equal(origin.calls.length, 1)
+    assert.equal(wrongOrigin.calls.length, 0)
+    assert.match(origin.calls[0].content[0].text, /POSTMAN_RESULT[\s\S]*ASYNC_RESULT_ALPHA/)
+  } finally {
+    runtime.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('restoreOrCreatePostman should resume when persistence already contains POSTMAN', async () => {
   const calls = []
   const ctx = {
@@ -216,7 +353,7 @@ test('restoreOrCreatePostman should resume when persistence already contains POS
       },
     },
     sessionPersistence: {
-      list: async () => [{ id: POSTMAN_SESSION_ID }],
+      inspect: async () => ({ meta: { id: POSTMAN_SESSION_ID }, events: [] }),
     },
   }
 
@@ -240,19 +377,45 @@ test('restoreOrCreatePostman should create only when persistence reports no POST
       },
     },
     sessionPersistence: {
-      list: async () => [],
+      inspect: async () => {
+        throw new Error(`session "${POSTMAN_SESSION_ID}" not found`)
+      },
     },
   }
 
   await restoreOrCreatePostman(ctx)
 
-  assert.equal(calls.length, 2)
-  assert.equal(calls[1].operation, 'create')
-  assert.deepEqual(calls[1].options, {
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].operation, 'create')
+  assert.deepEqual(calls[0].options, {
     sessionId: POSTMAN_SESSION_ID,
     meta: { cwd: 'C:/Users/andre/.dsh' },
     agentOptions: { provider: 'codex', model: 'gpt-5.6-luna' },
   })
+})
+
+test('restoreOrCreatePostman should fail closed on persistence errors', async () => {
+  const calls = []
+  const ctx = {
+    agents: {
+      resume: async () => {
+        calls.push('resume')
+        return { agent: agent(POSTMAN_SESSION_ID) }
+      },
+      create: async () => {
+        calls.push('create')
+        return { agent: agent(POSTMAN_SESSION_ID) }
+      },
+    },
+    sessionPersistence: {
+      inspect: async () => {
+        throw new Error('persistence backend unavailable')
+      },
+    },
+  }
+
+  await assert.rejects(restoreOrCreatePostman(ctx), /persistence backend unavailable/)
+  assert.deepEqual(calls, [])
 })
 
 assert.equal(typeof PLUGIN_NAME, 'string')

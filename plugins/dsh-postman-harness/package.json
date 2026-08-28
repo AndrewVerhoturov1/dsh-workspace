@@ -8,7 +8,7 @@
     ".": "./lib/index.js",
     "./package.json": "./package.json"
   },
-  "files": ["lib/index.js", "cordis.patch.yml", "README.md"],
+  "files": ["lib/index.js", "lib/runtime.js", "cordis.patch.yml", "README.md"],
   "license": "MIT",
   "dsh": {
     "bundle": {
