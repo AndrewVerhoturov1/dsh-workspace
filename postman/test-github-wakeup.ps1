@@ -128,8 +128,10 @@ try {
     $updatedBody = "request_id: REQ_PROBE_001`nstatus: READY`nprotocol_version: 1`n`nUPDATED RESPONSE"
     $updatedResult = Invoke-Handler (New-IssueEvent -Number 700 -Title 'POSTMAN REQ_PROBE_001' -Body $updatedBody -UpdatedAt '2026-08-27T20:01:00Z')
     Assert-True ($updatedResult.ExitCode -eq 0) 'new READY version exits successfully'
-    $updatedSignal = Get-Content -LiteralPath $signalPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $updatedSignalRaw = Get-Content -LiteralPath $signalPath -Raw -Encoding UTF8
+    $updatedSignal = $updatedSignalRaw | ConvertFrom-Json
     Assert-True ($updatedSignal.response -ceq 'UPDATED RESPONSE') 'new body version updates the same durable locator'
+    Assert-True ($updatedSignalRaw -match '"githubUpdatedAt"\s*:\s*"2026-08-27T20:01:00\.0000000Z"') 'updated_at is stored in canonical UTC form'
     Assert-True (@(Get-ChildItem -LiteralPath $signalDirectory -Filter '*.json').Count -eq 1) 'same request keeps one durable locator'
 
     Write-Output "POSTMAN_WAKEUP_TESTS_PASS passed=$passed"
