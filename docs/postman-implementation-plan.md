@@ -1,5 +1,12 @@
 # Postman: план реализации
 
+## Фактический статус на 2026-08-29
+
+- **M1–M3 — DONE:** постоянная POSTMAN-сессия и внутренняя почта Harness доказаны на реальных сессиях и после холодного перезапуска.
+- **M4 — DONE в локальном runtime:** SQLite-реестр `%LOCALAPPDATA%\DSH\Postman\postman.db`, устойчивые `REQ_*`, связь `REQ → origin_agent_id`, журнал и восстановление состояний реализованы и покрыты проверками.
+- **M5 — DONE в синтетическом контуре:** `READY` будит ту же POSTMAN-сессию, runtime читает владельца из базы и доставляет `POSTMAN_RESULT` через `Agent.followup()`; повторное `READY` подавляется.
+- Настоящий Web ChatGPT и GitHub wakeup на этом этапе не подключаются. Перед M6 нужен отдельный реальный Harness E2E с двумя агентами и холодным перезапуском между `ACCEPTED` и `READY`.
+
 ## 1. Цель
 
 Postman — отдельная постоянная умная Harness-сессия, которая является единственным владельцем внешнего транспорта ChatGPT и обслуживает несколько рабочих Harness-агентов.
@@ -380,6 +387,13 @@ A+B → один POSTMAN → A+B
 
 После доказательства внутренней Harness-почты добавить SQLite/runtime.
 
+### Реализовано
+
+- `plugins/dsh-postman-harness/lib/runtime.js` использует встроенный `node:sqlite` и атомарные транзакции `BEGIN IMMEDIATE` / `COMMIT`.
+- Состояние хранится в `messages`, `requests`, `deliveries`, `metadata`; журнал — в `logs\postman.jsonl`.
+- Агент отправляет `postman_async_send`: сначала создаются `MSG_*` и `REQ_*`, затем вызывается `Agent.followup()` для POSTMAN, после чего отправитель сразу получает `POSTMAN_ACCEPTED`.
+- Владелец берётся только из `exec.agent.id`; содержимое задания и служебных событий не может изменить `origin_agent_id`.
+
 Первый обязательный mapping:
 
 ```text
@@ -420,6 +434,13 @@ Gate:
 ```text
 REQ owner registration + asynchronous return = PASS
 ```
+
+### Реализовано
+
+- Тестовый/dev-инструмент `postman_runtime_synthetic_ready` включается только при `DSH_POSTMAN_ALLOW_SYNTHETIC_READY=1`; он не регистрируется в обычном режиме.
+- `READY → DELIVERING` фиксируется до вызова `Agent.followup()` исходного агента; подтверждённый вызов переводит запись в `DELIVERED`.
+- Для повторного события используется ключ `REQ + SHA-256 результата`. Повтор не создаёт вторую доставку.
+- `Agent.followup()` в Harness имеет тип `void`, поэтому жёсткая гарантия exactly-once для окна сбоя после постановки в очередь и до фиксации `DELIVERED` недостижима. В этом окне runtime сохраняет `DELIVERING` и не делает слепой повтор; это явно отражено в документации.
 
 ---
 
