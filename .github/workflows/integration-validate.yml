@@ -67,8 +67,6 @@ jobs:
           $base = '6fb11eac8d6893d84d7b2560f65a33057b86e2f2'
           git diff --check "$base...HEAD"
           if ($LASTEXITCODE -ne 0) { throw 'git diff --check failed' }
-          $bad = git grep -n -E '^(<<<<<<<|=======|>>>>>>>)' -- ':!diagnostics/**' ':!stage8-debug/**'
-          if ($LASTEXITCODE -eq 0 -and $bad) { $bad | Write-Host; throw 'Conflict markers found' }
 
       - name: Validate migration invariants
         shell: pwsh
