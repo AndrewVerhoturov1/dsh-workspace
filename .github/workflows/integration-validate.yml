@@ -188,10 +188,22 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $env:DSH_HOME = $env:GITHUB_WORKSPACE
-          $dsh = Get-Command dsh -ErrorAction Stop
+
+          $cliRoot = Join-Path $env:RUNNER_TEMP 'dsh-cli-0.1.1-rc.2'
+          if (Test-Path -LiteralPath $cliRoot) { Remove-Item -LiteralPath $cliRoot -Recurse -Force }
+          New-Item -ItemType Directory -Path $cliRoot | Out-Null
+          Set-Content -LiteralPath (Join-Path $cliRoot 'package.json') -Encoding utf8 -NoNewline -Value '{"private":true}'
+          Push-Location $cliRoot
+          try {
+            pnpm add '@deepseek-ai/dsh@0.1.1-rc.2'
+            if ($LASTEXITCODE -ne 0) { throw 'Isolated DSH CLI install failed' }
+          } finally { Pop-Location }
+
+          $dshBin = Join-Path $cliRoot 'node_modules/@deepseek-ai/dsh/lib/bin.js'
+          if (-not (Test-Path -LiteralPath $dshBin)) { throw 'Isolated DSH bin.js is missing' }
           $dumpPath = Join-Path $env:RUNNER_TEMP 'dsh-integration-dump.txt'
-          & dsh --profile web --dump-config 2>&1 | Tee-Object -FilePath $dumpPath
-          if ($LASTEXITCODE -ne 0) { throw 'dsh --dump-config failed' }
+          & node $dshBin --profile web --dump-config 2>&1 | Tee-Object -FilePath $dumpPath
+          if ($LASTEXITCODE -ne 0) { throw 'isolated dsh --dump-config failed' }
           $dump = Get-Content -Raw $dumpPath
           foreach ($needle in @('authorization', 'openai-codex', 'postman')) {
             if ($dump -notmatch [regex]::Escape($needle)) { throw "Composed profile does not contain $needle" }
@@ -201,12 +213,7 @@ jobs:
           $listener.Start(); $port = ([System.Net.IPEndPoint]$listener.LocalEndpoint).Port; $listener.Stop()
           $stdout = Join-Path $env:RUNNER_TEMP 'dsh-integration-web.stdout.log'
           $stderr = Join-Path $env:RUNNER_TEMP 'dsh-integration-web.stderr.log'
-          if ($dsh.Source -like '*.ps1') {
-            $args = @('-NoProfile', '-File', $dsh.Source, '--profile', 'web', '--port', "$port")
-            $proc = Start-Process -FilePath 'pwsh' -ArgumentList $args -WorkingDirectory $env:GITHUB_WORKSPACE -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
-          } else {
-            $proc = Start-Process -FilePath $dsh.Source -ArgumentList @('--profile', 'web', '--port', "$port") -WorkingDirectory $env:GITHUB_WORKSPACE -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
-          }
+          $proc = Start-Process -FilePath 'node' -ArgumentList @($dshBin, '--profile', 'web', '--port', "$port") -WorkingDirectory $env:GITHUB_WORKSPACE -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
           try {
             $ready = $false
             for ($i = 0; $i -lt 45; $i++) {
