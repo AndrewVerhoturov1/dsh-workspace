@@ -132,7 +132,14 @@ try {
     $updatedSignal = $updatedSignalRaw | ConvertFrom-Json
     Assert-True ($updatedSignal.response -ceq 'UPDATED RESPONSE') 'new body version updates the same durable locator'
     Assert-True ($updatedSignalRaw -match '"githubUpdatedAt"\s*:\s*"2026-08-27T20:01:00\.0000000Z"') 'updated_at is stored in canonical UTC form'
+    Assert-True (@($updatedSignal.processedDeliveryKeys).Count -eq 2) 'signal retains both processed delivery keys'
     Assert-True (@(Get-ChildItem -LiteralPath $signalDirectory -Filter '*.json').Count -eq 1) 'same request keeps one durable locator'
+
+    $oldEventResult = Invoke-Handler (New-IssueEvent -Number 700 -Title 'POSTMAN REQ_PROBE_001' -Body $readyBody)
+    Assert-True ($oldEventResult.ExitCode -eq 0) 'previous READY event remains safe to replay'
+    Assert-True ($oldEventResult.Output -like '*SIGNAL_DUPLICATE*') 'previous delivery key is suppressed after a newer result'
+    $afterOldReplay = Get-Content -LiteralPath $signalPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    Assert-True ($afterOldReplay.response -ceq 'UPDATED RESPONSE') 'replaying an old event does not roll back the signal'
 
     Write-Output "POSTMAN_WAKEUP_TESTS_PASS passed=$passed"
 }
