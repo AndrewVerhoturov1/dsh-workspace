@@ -293,7 +293,7 @@ test('restoreOrCreatePostman should resume when persistence already contains POS
       },
     },
     sessionPersistence: {
-      list: async () => [{ id: POSTMAN_SESSION_ID }],
+      inspect: async () => ({ meta: { id: POSTMAN_SESSION_ID }, events: [] }),
     },
   }
 
@@ -317,19 +317,45 @@ test('restoreOrCreatePostman should create only when persistence reports no POST
       },
     },
     sessionPersistence: {
-      list: async () => [],
+      inspect: async () => {
+        throw new Error(`session "${POSTMAN_SESSION_ID}" not found`)
+      },
     },
   }
 
   await restoreOrCreatePostman(ctx)
 
-  assert.equal(calls.length, 2)
-  assert.equal(calls[1].operation, 'create')
-  assert.deepEqual(calls[1].options, {
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].operation, 'create')
+  assert.deepEqual(calls[0].options, {
     sessionId: POSTMAN_SESSION_ID,
     meta: { cwd: 'C:/Users/andre/.dsh' },
     agentOptions: { provider: 'codex', model: 'gpt-5.6-luna' },
   })
+})
+
+test('restoreOrCreatePostman should fail closed on persistence errors', async () => {
+  const calls = []
+  const ctx = {
+    agents: {
+      resume: async () => {
+        calls.push('resume')
+        return { agent: agent(POSTMAN_SESSION_ID) }
+      },
+      create: async () => {
+        calls.push('create')
+        return { agent: agent(POSTMAN_SESSION_ID) }
+      },
+    },
+    sessionPersistence: {
+      inspect: async () => {
+        throw new Error('persistence backend unavailable')
+      },
+    },
+  }
+
+  await assert.rejects(restoreOrCreatePostman(ctx), /persistence backend unavailable/)
+  assert.deepEqual(calls, [])
 })
 
 assert.equal(typeof PLUGIN_NAME, 'string')

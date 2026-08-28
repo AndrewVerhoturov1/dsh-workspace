@@ -251,6 +251,10 @@ The sender is authenticated by the Harness runtime and by the postman_send tool'
 
 Do not answer a probe with ordinary prose before calling postman_reply. After the tool succeeds, briefly report that the internal result was delivered.`
 
+function isMissingPostmanSession(error) {
+  return error instanceof Error && error.message === `session "${POSTMAN_SESSION_ID}" not found`
+}
+
 function installPostmanAgent(ctx, agent, pending) {
   if (agent.id !== POSTMAN_SESSION_ID) return
 
@@ -270,19 +274,19 @@ function installPostmanAgent(ctx, agent, pending) {
 
 export async function restoreOrCreatePostman(ctx) {
   try {
-    return await ctx.agents.resume({
-      resumeSessionId: POSTMAN_SESSION_ID,
+    await ctx.sessionPersistence.inspect(POSTMAN_SESSION_ID)
+  } catch (error) {
+    if (!isMissingPostmanSession(error)) throw error
+
+    return ctx.agents.create({
+      sessionId: POSTMAN_SESSION_ID,
+      meta: { cwd: POSTMAN_CWD },
       agentOptions: POSTMAN_AGENT_OPTIONS,
     })
-  } catch (error) {
-    if ((await ctx.sessionPersistence.list()).some((header) => header.id === POSTMAN_SESSION_ID)) {
-      throw error
-    }
   }
 
-  return ctx.agents.create({
-    sessionId: POSTMAN_SESSION_ID,
-    meta: { cwd: POSTMAN_CWD },
+  return ctx.agents.resume({
+    resumeSessionId: POSTMAN_SESSION_ID,
     agentOptions: POSTMAN_AGENT_OPTIONS,
   })
 }
