@@ -16,7 +16,7 @@ export const inject = ['agents', 'sessionPersistence', 'systemPrompt', 'tools']
 export const POSTMAN_SESSION_ID = 'postman-harness-session'
 export const PLUGIN_NAME = 'dsh-postman-harness'
 const POSTMAN_AGENT_OPTIONS = Object.freeze({
-  provider: 'codex',
+  provider: 'openai-codex',
   model: 'gpt-5.6-luna',
 })
 const POSTMAN_CWD = 'C:/Users/andre/.dsh'
@@ -505,7 +505,13 @@ export async function restoreOrCreatePostman(ctx) {
 
 export function apply(ctx, { runtime: injectedRuntime, externalTransport = createAndSubmitExternal } = {}) {
   const pending = new Map()
+  const installedPostmanAgents = new WeakSet()
   let postmanHandle
+  const ensurePostmanAgentInstalled = (agent) => {
+    if (agent === undefined || agent.id !== POSTMAN_SESSION_ID || installedPostmanAgents.has(agent)) return
+    installedPostmanAgents.add(agent)
+    installPostmanAgent(ctx, agent, pending, runtime, { externalTransport })
+  }
   const wakePostman = async (record) => {
     let postman = ctx.agents.get(POSTMAN_SESSION_ID)
     if (postman === undefined) {
@@ -513,6 +519,7 @@ export function apply(ctx, { runtime: injectedRuntime, externalTransport = creat
       postman = ctx.agents.get(POSTMAN_SESSION_ID) ?? handle?.agent
     }
     if (postman === undefined) throw new Error(`POSTMAN session ${POSTMAN_SESSION_ID} is not live`)
+    ensurePostmanAgentInstalled(postman)
     postman.followup(createUserMessage({
       content: [textBlock(readyEventText(record.request_id, record.delivery_key))],
       source: { kind: 'plugin', plugin: PLUGIN_NAME, form: 'ready-event', requestId: record.request_id, deliveryKey: record.delivery_key, targetSessionId: POSTMAN_SESSION_ID },
@@ -523,7 +530,7 @@ export function apply(ctx, { runtime: injectedRuntime, externalTransport = creat
   })
   ctx.tools.register(createPostmanSendTool(ctx, pending))
   ctx.tools.register(createPostmanAsyncSendTool(ctx, runtime, { deferAcceptance: externalTransport !== undefined }))
-  ctx.on('agent/created', ({ agent }) => installPostmanAgent(ctx, agent, pending, runtime, { externalTransport }))
+  ctx.on('agent/created', ({ agent }) => ensurePostmanAgentInstalled(agent))
   ctx.on('agent/disposed', ({ agent }) => clearPendingForAgent(pending, agent.id))
   ctx.on('agent/inbox/claimed', ({ agent, message }) => {
     if (agent.id !== POSTMAN_SESSION_ID) return
@@ -555,6 +562,7 @@ export function apply(ctx, { runtime: injectedRuntime, externalTransport = creat
   const startup = restoreOrCreatePostman(ctx)
     .then((handle) => {
       postmanHandle = handle
+      ensurePostmanAgentInstalled(ctx.agents.get(POSTMAN_SESSION_ID) ?? handle?.agent)
       return Promise.all(runtime.listActionable().map((record) => wakePostman(record).catch((error) => {
         runtime.journal('POSTMAN_WAKE_FAILED', { requestId: record.request_id, originAgentId: record.origin_agent_id, deliveryKey: record.delivery_key, status: record.status, error: String(error?.message ?? error) })
       }))).then(recoverSignals)

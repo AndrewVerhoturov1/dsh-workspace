@@ -38,6 +38,8 @@ using System.Runtime.InteropServices;
 public static class DshWindowFocus {
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
     [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+    [StructLayout(LayoutKind.Sequential)] public struct Msg { public IntPtr HWnd; public uint Message; public UIntPtr WParam; public IntPtr LParam; public uint Time; public int PtX; public int PtY; }
+    [DllImport("user32.dll")] public static extern bool PeekMessage(out Msg message, IntPtr hWnd, uint min, uint max, uint remove);
     [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool attach);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern IntPtr SetFocus(IntPtr hWnd);
@@ -264,7 +266,35 @@ function Invoke-DesktopModeTarget($HostWindow, [ValidateSet('ChatGPT','Codex')][
         if ($selector) { break }
         Start-Sleep -Milliseconds 150
     } while ((Get-Date) -lt $selectorDeadline)
-    if (!$selector) { $result.Message = 'Mode selector was not found on the unified host'; return [pscustomobject]$result }
+    if (!$selector) {
+        # Newer unified builds use a semantic Chat/Work TogglePattern.
+        $toggleName = if ($TargetMode -ceq 'ChatGPT') { '^(Чат|Chat)$' } else { '^(Работа|Work)$' }
+        $toggleCandidates = New-Object 'System.Collections.Generic.List[object]'
+        $toggleSearch = @(All-Desc $HostWindow)
+        try {
+            $windowPid = [int]$HostWindow.Current.ProcessId
+            $toggleSearch = @([System.Windows.Automation.AutomationElement]::RootElement.FindAll(
+                [System.Windows.Automation.TreeScope]::Descendants,
+                [System.Windows.Automation.Condition]::TrueCondition)) | Where-Object { $_.Current.ProcessId -eq $windowPid }
+        } catch { }
+        foreach ($element in $toggleSearch) {
+            try {
+                $current = $element.Current
+                if (($current.ControlType -ne [System.Windows.Automation.ControlType]::Button) -or
+                    $current.IsOffscreen -or ([string]$current.Name -notmatch $toggleName)) { continue }
+                [object]$toggle = $null
+                if ($element.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern, [ref]$toggle)) {
+                    [void]$toggleCandidates.Add([pscustomobject]@{ Element=$element; Pattern=$toggle; State=$toggle.Current.ToggleState.ToString() })
+                }
+            } catch { }
+        }
+        if ($toggleCandidates.Count -ne 1) { $result.Message = 'Mode selector was not found on the unified host'; return [pscustomobject]$result }
+        if ($toggleCandidates[0].State -ne 'On') { $toggleCandidates[0].Pattern.Toggle() }
+        $result.Method = 'UIA.TogglePattern.ChatWork'
+        $result.Succeeded = $true
+        $result.Message = "Selected $TargetMode mode toggle"
+        return [pscustomobject]$result
+    }
     try {
         [object]$expand = $null
         if (!$selector.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$expand)) {
@@ -414,6 +444,36 @@ function Get-ChatSurfaceMode($Window) {
     }
     $selected = @($candidates | Sort-Object Score -Descending | Select-Object -First 1)
     if ($selected) { return [string]$selected[0].Mode }
+
+    # Newer unified Desktop builds expose the same authority as a two-state
+    # Chat/Work toggle instead of the labelled mode-selector button. Use the
+    # selected TogglePattern state only as a semantic mode signal; composer,
+    # navigation and New Chat predicates remain independent proofs.
+    $toggleModes = New-Object 'System.Collections.Generic.List[object]'
+    $toggleSearch = @(All-Desc $Window)
+    if ($toggleSearch.Count -eq 0) {
+        try {
+            $windowPid = [int]$Window.Current.ProcessId
+            $toggleSearch = @([System.Windows.Automation.AutomationElement]::RootElement.FindAll(
+                [System.Windows.Automation.TreeScope]::Descendants,
+                [System.Windows.Automation.Condition]::TrueCondition)) | Where-Object { $_.Current.ProcessId -eq $windowPid }
+        } catch { $toggleSearch = @() }
+    }
+    foreach ($element in $toggleSearch) {
+        try {
+            $current = $element.Current
+            if (($current.ControlType -ne [System.Windows.Automation.ControlType]::Button) -or
+                $current.IsOffscreen -or ([string]$current.Name -notmatch '^(Чат|Chat|Работа|Work)$')) { continue }
+            [object]$toggle = $null
+            if (!$element.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern, [ref]$toggle)) { continue }
+            [void]$toggleModes.Add([pscustomobject]@{ Name=[string]$current.Name; State=$toggle.Current.ToggleState.ToString(); Element=$element })
+        } catch { }
+    }
+    $onModes = @($toggleModes | Where-Object State -eq 'On')
+    if ($onModes.Count -eq 1) {
+        if ($onModes[0].Name -match '^(Чат|Chat)$') { return 'ChatGPT' }
+        if ($onModes[0].Name -match '^(Работа|Work)$') { return 'Codex' }
+    }
     return $null
 }
 
@@ -866,6 +926,10 @@ function Activate-ChatGPTWindow($Window) {
     [uint32]$targetThread = 0
     [DshWindowFocus]::GetWindowThreadProcessId($handle, [ref]$targetThread) | Out-Null
     $currentThread = [DshWindowFocus]::GetCurrentThreadId()
+    # AttachThreadInput requires the caller to own a message queue. PeekMessage
+    # creates/initializes it without reading or changing any user input.
+    $message = New-Object DshWindowFocus+Msg
+    [DshWindowFocus]::PeekMessage([ref]$message, [IntPtr]::Zero, 0, 0, 0) | Out-Null
     $attachedThreads = New-Object 'System.Collections.Generic.List[uint32[]]'
     try {
         # Foreground activation is subject to Windows' foreground-lock policy.
@@ -882,12 +946,18 @@ function Activate-ChatGPTWindow($Window) {
         [DshWindowFocus]::BringWindowToTop($handle) | Out-Null
         [DshWindowFocus]::SetActiveWindow($handle) | Out-Null
         [DshWindowFocus]::SetFocus($handle) | Out-Null
-        $activated = [DshWindowFocus]::SetForegroundWindow($handle)
-        if (![DshWindowFocus]::GetForegroundWindow().Equals($handle)) {
-            [DshWindowFocus]::SwitchToThisWindow($handle, $true)
+        $activated = $false
+        $isForeground = $false
+        for ($attempt = 1; $attempt -le 5; $attempt++) {
+            $activated = ([DshWindowFocus]::SetForegroundWindow($handle) -or $activated)
+            if (![DshWindowFocus]::GetForegroundWindow().Equals($handle)) {
+                [DshWindowFocus]::SwitchToThisWindow($handle, $true)
+            }
+            $isForeground = [DshWindowFocus]::GetForegroundWindow().Equals($handle)
+            if ($isForeground) { break }
+            Start-Sleep -Milliseconds 120
         }
-        $isForeground = [DshWindowFocus]::GetForegroundWindow().Equals($handle)
-        Write-Log 'window-activation' "handle=$handle foregroundBefore=$foreground activated=$activated verified=$isForeground"
+        Write-Log 'window-activation' "handle=$handle foregroundBefore=$foreground activated=$activated attempts=$attempt verified=$isForeground"
         return $isForeground
     } catch {
         Write-Log 'window-activation' "handle=$handle error=$($_.Exception.Message)"
@@ -1062,10 +1132,15 @@ function Find-SendButtonForComposer($Window, $Composer) {
         try {
             $current = $element.Current
             if (($current.ControlType -ne [System.Windows.Automation.ControlType]::Button) -or
-                !$current.IsEnabled -or $current.IsOffscreen -or ($current.Name -notmatch 'Отправить|Send')) { continue }
+                !$current.IsEnabled -or ($current.Name -notmatch 'Отправить|Send')) { continue }
             if (!(Same-Surface $Composer $element)) { continue }
             $rect = $current.BoundingRectangle
             $composerRect = $Composer.Current.BoundingRectangle
+            # Chromium can leave IsOffscreen stale immediately after a
+            # ValuePattern update. The exact same-surface relation plus a
+            # positive UIA rectangle is the authority; no coordinates are
+            # used and InvokePattern remains the only send action.
+            if ($rect.Width -le 0 -or $rect.Height -le 0) { continue }
             $score = 0
             if ($rect.Y -ge ($composerRect.Y - 160)) { $score += 3 }
             if ($rect.X -gt $composerRect.X) { $score += 1 }
@@ -1075,7 +1150,7 @@ function Find-SendButtonForComposer($Window, $Composer) {
     return $best
 }
 
-function Get-AuthorAnchors($Conversation) {
+function Get-AuthorAnchors($Conversation, [switch]$IncludeDeepOffscreen) {
     $anchors = New-Object 'System.Collections.Generic.List[object]'
     foreach ($element in @(All-Desc $Conversation)) {
         try {
@@ -1092,7 +1167,12 @@ function Get-AuthorAnchors($Conversation) {
             }
         } catch { }
     }
-    return @($anchors | Where-Object { $_.YTop -gt -10000 } | Sort-Object YTop)
+    $filtered = if ($IncludeDeepOffscreen) {
+        @($anchors.ToArray())
+    } else {
+        @($anchors | Where-Object { $_.YTop -gt -10000 })
+    }
+    return @($filtered | Sort-Object YTop)
 }
 
 function Find-ConversationContainer($Window) {
@@ -1181,6 +1261,65 @@ function Find-ExactSubmittedUserMessage($Window, [string]$PromptText, $Composer,
     $nodes = @(All-Desc $conversation)
     $hits = New-Object 'System.Collections.Generic.List[object]'
     $promptNorm = (([string]$PromptText) -replace "`r`n|`r|`n", ' ').Trim()
+    $promptCompact = [regex]::Replace($promptNorm, '\s+', ' ').Trim()
+
+    # Chromium may expose a long submitted prompt as several adjacent Text
+    # nodes (for example, a Markdown paragraph followed by separate contract
+    # paragraphs). Compare the complete bounded user-message body as well as a
+    # single node; never broaden the search beyond the authenticated user
+    # message boundary.
+    # A long Chromium message may be represented below the normal viewport
+    # cutoff even though its text nodes remain in the current conversation
+    # container. This path is still bounded by the authenticated author
+    # anchor, the next author anchor, and baseline identity checks.
+    $userAnchors = @(Get-AuthorAnchors $conversation -IncludeDeepOffscreen | Where-Object { $_.Role -eq 'user' } | Sort-Object YTop)
+    foreach ($userAnchor in $userAnchors) {
+        try {
+            if ($userAnchor.AnchorRuntimeId -and $BaselineIds -and $BaselineIds.Contains($userAnchor.AnchorRuntimeId)) { continue }
+            $boundary = Resolve-MessageBoundary $conversation $userAnchor
+            $nextAnchor = @(
+                Get-AuthorAnchors $conversation -IncludeDeepOffscreen |
+                    Where-Object { $_.YTop -gt $userAnchor.YTop } |
+                    Sort-Object YTop |
+                    Select-Object -First 1
+            )
+            $nextAnchorY = if ($nextAnchor) { [double]$nextAnchor[0].YTop } else { [double]::PositiveInfinity }
+            $parts = New-Object 'System.Collections.Generic.List[string]'
+            $matchingNodes = New-Object 'System.Collections.Generic.List[object]'
+            foreach ($element in $nodes) {
+                $current = $element.Current
+                if ($current.ControlType -ne [System.Windows.Automation.ControlType]::Text) { continue }
+                if (Test-IsComposerDescendant $element) { continue }
+                $rect = $current.BoundingRectangle
+                if ($rect.Y -le $userAnchor.YTop) { continue }
+                # The resolved container bottom may be stale while a scrolled
+                # Chromium message has a very large negative Y. Bound the
+                # assembled text by the next authenticated author anchor.
+                if ($rect.Y -ge $nextAnchorY) { continue }
+                $rawValue = ([string]$current.Name) -replace "`r`n|`r|`n", ' '
+                $value = $rawValue.Trim()
+                if (!$value -or ($value -match $script:ChromeNoise) -or ($value -match $script:AuthorAnchorPattern) -or ($value -match '^\d{1,2}:\d{2}$')) { continue }
+                # Preserve UIA boundary whitespace for an exact comparison;
+                # also keep a compact comparison for Chromium splits that
+                # discard the blank-line separator between adjacent nodes.
+                [void]$parts.Add($rawValue)
+                [void]$matchingNodes.Add($element)
+            }
+            $assembled = (($parts.ToArray()) -join '').Trim()
+            $assembledCompact = [regex]::Replace($assembled, '\s+', ' ').Trim()
+            if (($assembled -ne $promptNorm) -and ($assembledCompact -ne $promptCompact)) { continue }
+            $textNode = if ($matchingNodes.Count -gt 0) { $matchingNodes[0] } else { $null }
+            $textRuntimeId = if ($textNode) { Get-RuntimeId $textNode } else { $null }
+            if ($textRuntimeId -and $BaselineTextIds -and $BaselineTextIds.Contains($textRuntimeId)) { continue }
+            [void]$hits.Add([pscustomobject]@{
+                TextNode=$textNode; User=$userAnchor; Boundary=$boundary
+            })
+        } catch { }
+    }
+    if ($hits.Count -gt 0) { return $hits[$hits.Count - 1] }
+
+    # Retain the original single-node check for short prompts and for UIA
+    # implementations that expose the whole body as one Text element.
     foreach ($element in $nodes) {
         try {
             $current = $element.Current

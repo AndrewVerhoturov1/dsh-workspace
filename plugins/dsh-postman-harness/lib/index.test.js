@@ -274,6 +274,7 @@ test('apply should install a scoped reply tool and fail-closed tool boundary for
   const pending = new Map()
   apply(ctx, { runtime })
   events.get('agent/created')({ agent: postman })
+  events.get('agent/created')({ agent: postman })
 
   assert.equal(registeredGlobalTools.length, 2)
   assert.equal(scopedTools.length, 5)
@@ -420,7 +421,7 @@ test('restoreOrCreatePostman should create only when persistence reports no POST
   assert.deepEqual(calls[0].options, {
     sessionId: POSTMAN_SESSION_ID,
     meta: { cwd: 'C:/Users/andre/.dsh' },
-    agentOptions: { provider: 'codex', model: 'gpt-5.6-luna' },
+    agentOptions: { provider: 'openai-codex', model: 'gpt-5.6-luna' },
   })
 })
 
