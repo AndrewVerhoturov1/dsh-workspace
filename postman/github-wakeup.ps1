@@ -9,6 +9,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $RepositoryFullName = 'AndrewVerhoturov1/dsh-workspace'
+$RuntimeIngestScript = Join-Path $PSScriptRoot 'ingest-github-signal.mjs'
 $TitlePattern = '^POSTMAN (REQ_[A-Za-z0-9_-]{1,80})$'
 $RequestIdPattern = '^REQ_[A-Za-z0-9_-]{1,80}$'
 $AllowedStatuses = @('WAITING', 'READY')
@@ -258,12 +259,18 @@ try {
 
     $canonicalUpdatedAt = $updatedAtValue.UtcDateTime.ToString('o')
     $bodyHash = Get-Sha256Hex -Text $body
-    $deliveryKey = '{0}|{1}|{2}|{3}' -f $parsed.RequestId, $issueNumber, $canonicalUpdatedAt, $bodyHash
+    $resultHash = Get-Sha256Hex -Text $parsed.Response
+    # Identity is content/correlation based. Timestamps are diagnostic only and
+    # must not turn an identical issue edit or workflow rerun into new work.
+    $deliveryKey = '{0}|{1}|{2}' -f $parsed.RequestId, $issueNumber, $bodyHash
     $signalPath = Get-SignalPath -RequestId $parsed.RequestId
     $receivedAt = [DateTimeOffset]::UtcNow.ToString('o')
     $deliveryId = $null
     if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_RUN_ID)) {
         $deliveryId = '{0}/{1}' -f $env:GITHUB_RUN_ID, $(if ($env:GITHUB_RUN_ATTEMPT) { $env:GITHUB_RUN_ATTEMPT } else { '1' })
+    }
+    else {
+        $deliveryId = 'issue/{0}/{1}' -f $issueNumber, $bodyHash
     }
 
     $signal = [ordered]@{
@@ -276,6 +283,7 @@ try {
         githubUpdatedAt = $updatedAtValue.UtcDateTime.ToString('o')
         receivedAt = $receivedAt
         bodySha256 = $bodyHash
+        resultSha256 = $resultHash
         deliveryKey = $deliveryKey
     }
     if ($deliveryId) {
@@ -288,6 +296,17 @@ try {
     }
     else {
         Write-Output "SIGNAL_WRITTEN request_id=$($parsed.RequestId) issue=$issueNumber path=$signalPath"
+    }
+    if ($env:DSH_POSTMAN_GITHUB_WAKEUP_SKIP_RUNTIME_INGEST -ne '1') {
+        if (-not (Test-Path -LiteralPath $RuntimeIngestScript -PathType Leaf)) {
+            throw "Runtime ingest script does not exist: $RuntimeIngestScript"
+        }
+        $ingestOutput = @(& node $RuntimeIngestScript --SignalPath $signalPath 2>&1)
+        $ingestExitCode = $LASTEXITCODE
+        $ingestOutput | ForEach-Object { Write-Output $_ }
+        if ($ingestExitCode -ne 0) {
+            throw "GITHUB_SIGNAL_INGEST_FAILED (exit=$ingestExitCode)"
+        }
     }
     exit 0
 }

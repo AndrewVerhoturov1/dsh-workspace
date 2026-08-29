@@ -311,6 +311,35 @@ test('postman_async_send should persist trusted origin and return before the res
   }
 })
 
+test('postman_runtime_accept_request should create the Issue transport before WAITING', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-postman-m6-accept-'))
+  const runtime = new PostmanRuntime({ dbPath: join(root, 'postman.db'), journalPath: join(root, 'postman.jsonl') })
+  try {
+    const postman = agent(POSTMAN_SESSION_ID)
+    const origin = agent('agent-a')
+    const ctx = { agents: { get: (id) => ({ [POSTMAN_SESSION_ID]: postman, 'agent-a': origin }[id]) } }
+    const created = runtime.createRequest({ messageId: 'MSG_M6_ACCEPT', originAgentId: origin.id, payload: 'M6_TASK' })
+    let submitted = false
+    const tools = createPostmanRuntimeTools(ctx, runtime, {
+      externalTransport: async ({ runtime: ownedRuntime, request }) => {
+        submitted = true
+        ownedRuntime.registerExternalIssue({ requestId: request.request_id, repository: 'AndrewVerhoturov1/dsh-workspace', issueNumber: 88 })
+        ownedRuntime.confirmExternalSubmission({ requestId: request.request_id })
+        return { status: 'WAITING', request_id: request.request_id }
+      },
+    })
+    const accept = tools.find((tool) => tool.name === 'postman_runtime_accept_request')
+    const result = await accept.execute({ request_id: created.request_id }, { agent: postman })
+    assert.equal(submitted, true)
+    assert.equal(result.status, 'WAITING')
+    assert.equal(runtime.getRequest(created.request_id).issue_number, 88)
+    assert.equal(runtime.getRequest(created.request_id).status, 'WAITING')
+  } finally {
+    runtime.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('postman_runtime_deliver_ready should route by durable origin and suppress duplicate delivery', async () => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-postman-delivery-'))
   const runtime = new PostmanRuntime({ dbPath: join(root, 'postman.db'), journalPath: join(root, 'postman.jsonl') })
@@ -333,6 +362,7 @@ test('postman_runtime_deliver_ready should route by durable origin and suppress 
     assert.equal(origin.calls.length, 1)
     assert.equal(wrongOrigin.calls.length, 0)
     assert.match(origin.calls[0].content[0].text, /POSTMAN_RESULT[\s\S]*ASYNC_RESULT_ALPHA/)
+    assert.match(origin.calls[0].content[0].text, /source: synthetic/)
   } finally {
     runtime.close()
     rmSync(root, { recursive: true, force: true })

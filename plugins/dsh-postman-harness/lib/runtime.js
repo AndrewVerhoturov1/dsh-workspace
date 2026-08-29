@@ -1,23 +1,29 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdirSync, appendFileSync } from 'node:fs'
+import { mkdirSync, appendFileSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
-export const RUNTIME_SCHEMA_VERSION = 1
+export const RUNTIME_SCHEMA_VERSION = 2
 export const REQUEST_STATUSES = Object.freeze({
   ACCEPTED: 'ACCEPTED',
   WAITING: 'WAITING',
+  ISSUE_CREATE_FAILED: 'ISSUE_CREATE_FAILED',
+  CHAT_SUBMIT_FAILED: 'CHAT_SUBMIT_FAILED',
   READY: 'READY',
   DELIVERING: 'DELIVERING',
   DELIVERED: 'DELIVERED',
   DELIVERY_RETRY: 'DELIVERY_RETRY',
   DELIVERY_BLOCKED_ORIGIN_MISSING: 'DELIVERY_BLOCKED_ORIGIN_MISSING',
+  EXTERNAL_READY_UNKNOWN_REQUEST: 'EXTERNAL_READY_UNKNOWN_REQUEST',
+  EXTERNAL_READY_INVALID: 'EXTERNAL_READY_INVALID',
 })
 
 const MESSAGE_ID_PATTERN = /^MSG_[A-Za-z0-9_-]{1,80}$/
 const REQUEST_ID_PATTERN = /^REQ_[A-Za-z0-9_-]{1,120}$/
 const MAX_PAYLOAD_CHARS = 64 * 1024
+const HASH_PATTERN = /^[a-f0-9]{64}$/
+const EXTERNAL_SOURCE = 'github-web-chatgpt'
 
 function defaultRuntimeDir() {
   return process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local')
@@ -49,6 +55,22 @@ function assertPayload(value) {
   if (typeof value !== 'string' || value.length === 0 || value.length > MAX_PAYLOAD_CHARS) {
     throw new Error(`payload must be a non-empty string of at most ${MAX_PAYLOAD_CHARS} characters`)
   }
+}
+
+function assertExternalSource(value) {
+  if (value !== EXTERNAL_SOURCE) throw new Error(`source must be ${EXTERNAL_SOURCE}`)
+}
+
+function assertHash(value, name) {
+  if (typeof value !== 'string' || !HASH_PATTERN.test(value)) throw new Error(`${name} must be a lowercase SHA-256 hex digest`)
+}
+
+function assertDeliveryKey(value) {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 300) throw new Error('deliveryKey must be a non-empty string')
+}
+
+function assertExternalDeliveryId(value) {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 300) throw new Error('externalDeliveryId must be a non-empty string')
 }
 
 function sha256(value) {
@@ -116,6 +138,11 @@ export class PostmanRuntime {
         result_text TEXT,
         result_sha256 TEXT,
         delivery_key TEXT,
+        external_source TEXT,
+        repository TEXT,
+        issue_number INTEGER,
+        external_delivery_id TEXT,
+        body_sha256 TEXT,
         error TEXT
       );
       CREATE TABLE IF NOT EXISTS deliveries (
@@ -131,6 +158,16 @@ export class PostmanRuntime {
       CREATE INDEX IF NOT EXISTS requests_status_idx ON requests(status);
       CREATE INDEX IF NOT EXISTS deliveries_request_idx ON deliveries(request_id);
     `)
+    const requestColumns = new Set(this.db.prepare('PRAGMA table_info(requests)').all().map((row) => row.name))
+    for (const [name, definition] of [
+      ['external_source', 'TEXT'],
+      ['repository', 'TEXT'],
+      ['issue_number', 'INTEGER'],
+      ['external_delivery_id', 'TEXT'],
+      ['body_sha256', 'TEXT'],
+    ]) {
+      if (!requestColumns.has(name)) this.db.exec(`ALTER TABLE requests ADD COLUMN ${name} ${definition}`)
+    }
     this.db.prepare('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)').run('schema_version', String(RUNTIME_SCHEMA_VERSION))
   }
 
@@ -220,6 +257,57 @@ export class PostmanRuntime {
     return record
   }
 
+  registerExternalIssue({ requestId, source = EXTERNAL_SOURCE, repository, issueNumber }) {
+    assertRequestId(requestId)
+    assertExternalSource(source)
+    if (typeof repository !== 'string' || repository.length === 0 || repository.length > 200 || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) throw new Error('repository must be owner/name')
+    if (!Number.isSafeInteger(issueNumber) || issueNumber <= 0) throw new Error('issueNumber must be a positive integer')
+    let record
+    this.transaction(() => {
+      const current = this.getRequest(requestId)
+      if (current === undefined) return
+      if (current.repository !== null && current.repository !== repository) throw new Error('repository does not match persisted issue metadata')
+      if (current.issue_number !== null && Number(current.issue_number) !== issueNumber) throw new Error('issueNumber does not match persisted issue metadata')
+      this.db.prepare('UPDATE requests SET external_source = ?, repository = ?, issue_number = ?, error = NULL WHERE request_id = ?')
+        .run(source, repository, issueNumber, requestId)
+      record = this.getRequest(requestId)
+    })
+    if (record !== undefined) this.journal('ISSUE_CREATED', { requestId, messageId: record.message_id, originAgentId: record.origin_agent_id, issueNumber, repository, status: record.status })
+    return record
+  }
+
+  confirmExternalSubmission({ requestId, source = EXTERNAL_SOURCE }) {
+    assertRequestId(requestId)
+    assertExternalSource(source)
+    let record
+    this.transaction(() => {
+      const current = this.getRequest(requestId)
+      if (current === undefined) return
+      if ([REQUEST_STATUSES.ACCEPTED, REQUEST_STATUSES.CHAT_SUBMIT_FAILED].includes(current.status)) {
+        this.db.prepare('UPDATE requests SET status = ?, external_source = ?, error = NULL WHERE request_id = ?').run(REQUEST_STATUSES.WAITING, source, requestId)
+        this.db.prepare('UPDATE messages SET status = ? WHERE message_id = ?').run(REQUEST_STATUSES.WAITING, current.message_id)
+      }
+      record = this.getRequest(requestId)
+    })
+    if (record?.status === REQUEST_STATUSES.WAITING) this.journal('EXTERNAL_WAITING', { requestId, messageId: record.message_id, originAgentId: record.origin_agent_id, issueNumber: record.issue_number, repository: record.repository, status: record.status })
+    return record
+  }
+
+  markExternalFailure({ requestId, status, error }) {
+    assertRequestId(requestId)
+    if (![REQUEST_STATUSES.ISSUE_CREATE_FAILED, REQUEST_STATUSES.CHAT_SUBMIT_FAILED].includes(status)) throw new Error('unsupported external failure status')
+    if (typeof error !== 'string' || error.length === 0) throw new Error('error must be a non-empty string')
+    let record
+    this.transaction(() => {
+      const current = this.getRequest(requestId)
+      if (current === undefined) return
+      this.db.prepare('UPDATE requests SET status = ?, error = ? WHERE request_id = ?').run(status, error.slice(0, 2000), requestId)
+      record = this.getRequest(requestId)
+    })
+    if (record !== undefined) this.journal(status, { requestId, messageId: record.message_id, originAgentId: record.origin_agent_id, issueNumber: record.issue_number, repository: record.repository, status, error: error.slice(0, 2000) })
+    return record
+  }
+
   getRequest(requestId) {
     assertRequestId(requestId)
     return toRecord(this.db.prepare('SELECT requests.*, messages.payload AS payload FROM requests JOIN messages ON messages.message_id = requests.message_id WHERE requests.request_id = ?').get(requestId))
@@ -292,6 +380,120 @@ export class PostmanRuntime {
       }
     }
     return { status: 'READY', requestId, deliveryKey: stableDeliveryKey, wakeup, record }
+  }
+
+  markExternalReady({ requestId, source, resultText, resultSha256, deliveryKey, externalDeliveryId, metadata = {}, wake = true }) {
+    assertRequestId(requestId)
+    assertExternalSource(source)
+    assertPayload(resultText)
+    assertHash(resultSha256, 'resultSha256')
+    if (sha256(resultText) !== resultSha256) throw new Error('resultSha256 does not match resultText')
+    assertDeliveryKey(deliveryKey)
+    assertExternalDeliveryId(externalDeliveryId)
+    const repository = metadata.repository
+    const issueNumber = metadata.issueNumber
+    const bodySha256 = metadata.bodySha256
+    const githubUpdatedAt = metadata.githubUpdatedAt
+    if (repository !== undefined) {
+      if (typeof repository !== 'string' || repository.length === 0 || repository.length > 200 || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) throw new Error('metadata.repository must be owner/name')
+    }
+    if (issueNumber !== undefined && (!Number.isSafeInteger(issueNumber) || issueNumber <= 0)) throw new Error('metadata.issueNumber must be a positive integer')
+    if (bodySha256 !== undefined) assertHash(bodySha256, 'metadata.bodySha256')
+
+    let record
+    let outcome = 'READY'
+    this.journal('GITHUB_SIGNAL_RECEIVED', { requestId, source, issueNumber, repository, deliveryKey, deliveryId: externalDeliveryId, externalDeliveryId, bodySha256, githubUpdatedAt })
+    this.transaction(() => {
+      const current = this.getRequest(requestId)
+      if (current === undefined) {
+        outcome = REQUEST_STATUSES.EXTERNAL_READY_UNKNOWN_REQUEST
+        return
+      }
+      if (current.repository !== null && repository !== undefined && current.repository !== repository) throw new Error('external repository does not match persisted issue metadata')
+      if (current.issue_number !== null && issueNumber !== undefined && Number(current.issue_number) !== issueNumber) throw new Error('external issue number does not match persisted issue metadata')
+      if ([REQUEST_STATUSES.READY, REQUEST_STATUSES.DELIVERING, REQUEST_STATUSES.DELIVERED].includes(current.status)) {
+        const sameBody = bodySha256 !== undefined && current.body_sha256 !== null && current.body_sha256 === bodySha256
+        const sameDelivery = current.delivery_key === deliveryKey || current.external_delivery_id === externalDeliveryId
+        if (current.result_sha256 === resultSha256 && (sameDelivery || sameBody)) {
+          outcome = 'DUPLICATE_SUPPRESSED'
+          record = current
+          return
+        }
+        outcome = REQUEST_STATUSES.EXTERNAL_READY_INVALID
+        record = current
+        return
+      }
+      if (![REQUEST_STATUSES.WAITING, REQUEST_STATUSES.CHAT_SUBMIT_FAILED, REQUEST_STATUSES.DELIVERY_RETRY].includes(current.status)) {
+        outcome = REQUEST_STATUSES.EXTERNAL_READY_INVALID
+        record = current
+        return
+      }
+      const readyAt = nowIso(this.now)
+      this.db.prepare(`UPDATE requests SET status = ?, ready_at = ?, result_text = ?, result_sha256 = ?, delivery_key = ?, external_source = ?, external_delivery_id = ?, repository = COALESCE(repository, ?), issue_number = COALESCE(issue_number, ?), body_sha256 = COALESCE(?, body_sha256), error = NULL WHERE request_id = ?`)
+        .run(REQUEST_STATUSES.READY, readyAt, resultText, resultSha256, deliveryKey, source, externalDeliveryId, repository ?? null, issueNumber ?? null, bodySha256 ?? null, requestId)
+      this.db.prepare('INSERT INTO deliveries (delivery_key, request_id, target_agent_id, status, created_at) VALUES (?, ?, ?, ?, ?)')
+        .run(deliveryKey, requestId, current.origin_agent_id, REQUEST_STATUSES.READY, readyAt)
+      record = this.getRequest(requestId)
+    })
+    if (outcome === REQUEST_STATUSES.EXTERNAL_READY_UNKNOWN_REQUEST) {
+      this.journal(REQUEST_STATUSES.EXTERNAL_READY_UNKNOWN_REQUEST, { requestId, source, issueNumber, repository, deliveryKey, deliveryId: externalDeliveryId, bodySha256, githubUpdatedAt, status: outcome })
+      return { status: outcome, requestId, deliveryKey }
+    }
+    if (outcome === 'DUPLICATE_SUPPRESSED') {
+      this.journal('EXTERNAL_READY_DUPLICATE', { requestId, originAgentId: record.origin_agent_id, issueNumber: record.issue_number, repository: record.repository, deliveryKey, deliveryId: externalDeliveryId, bodySha256, githubUpdatedAt, status: outcome })
+      return { status: outcome, requestId, deliveryKey, record }
+    }
+    if (outcome === REQUEST_STATUSES.EXTERNAL_READY_INVALID) {
+      this.journal(REQUEST_STATUSES.EXTERNAL_READY_INVALID, { requestId, deliveryKey, deliveryId: externalDeliveryId, bodySha256, githubUpdatedAt, status: outcome })
+      return { status: outcome, requestId, deliveryKey, record }
+    }
+    this.journal('GITHUB_SIGNAL_INGESTED', { requestId, originAgentId: record.origin_agent_id, issueNumber: record.issue_number, repository: record.repository, deliveryKey, deliveryId: externalDeliveryId, bodySha256, githubUpdatedAt, status: record.status })
+    this.journal('EXTERNAL_READY', { requestId, originAgentId: record.origin_agent_id, issueNumber: record.issue_number, repository: record.repository, deliveryKey, deliveryId: externalDeliveryId, bodySha256, resultSha256, githubUpdatedAt, status: record.status })
+    if (!wake || this.onReady === undefined) return { status: 'READY', requestId, deliveryKey, wakeup: wake ? 'NOT_AVAILABLE' : 'DEFERRED', record }
+    this.journal('POSTMAN_WAKE_REQUESTED', { requestId, originAgentId: record.origin_agent_id, issueNumber: record.issue_number, repository: record.repository, deliveryKey, deliveryId: externalDeliveryId, bodySha256, status: record.status })
+    try {
+      const wakeResult = this.onReady(record)
+      if (wakeResult?.then !== undefined) {
+        return Promise.resolve(wakeResult).then(() => {
+          this.journal('POSTMAN_WAKE_SUCCEEDED', { requestId, deliveryKey, status: record.status })
+          return { status: 'READY', requestId, deliveryKey, wakeup: 'SUCCEEDED', record }
+        }).catch((error) => {
+          this.journal('POSTMAN_WAKE_FAILED', { requestId, deliveryKey, status: record.status, error: String(error?.message ?? error) })
+          return { status: 'READY', requestId, deliveryKey, wakeup: 'FAILED', record }
+        })
+      }
+      this.journal('POSTMAN_WAKE_SUCCEEDED', { requestId, deliveryKey, status: record.status })
+      return { status: 'READY', requestId, deliveryKey, wakeup: 'SUCCEEDED', record }
+    } catch (error) {
+      this.journal('POSTMAN_WAKE_FAILED', { requestId, deliveryKey, status: record.status, error: String(error?.message ?? error) })
+      return { status: 'READY', requestId, deliveryKey, wakeup: 'FAILED', record }
+    }
+  }
+
+  ingestSignal(signal, options = {}) {
+    if (signal === null || typeof signal !== 'object') throw new Error('signal must be an object')
+    if (signal.status !== 'READY') throw new Error('signal status must be READY')
+    const result = this.markExternalReady({
+      requestId: signal.requestId,
+      source: 'github-web-chatgpt',
+      resultText: signal.response,
+      resultSha256: signal.resultSha256 ?? sha256(signal.response),
+      deliveryKey: signal.deliveryKey,
+      externalDeliveryId: signal.deliveryId ?? `github-issue-${signal.issueNumber}`,
+      metadata: {
+        issueNumber: Number(signal.issueNumber),
+        repository: signal.repository,
+        bodySha256: signal.bodySha256,
+        githubUpdatedAt: signal.githubUpdatedAt,
+      },
+      wake: options.wake ?? true,
+    })
+    return result
+  }
+
+  ingestSignalFile(signalPath, options = {}) {
+    const signal = JSON.parse(readFileSync(signalPath, 'utf8'))
+    return this.ingestSignal(signal, options)
   }
 
   beginDelivery(requestId) {

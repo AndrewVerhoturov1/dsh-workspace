@@ -63,6 +63,7 @@ function Invoke-Handler {
 try {
     New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
     $env:LOCALAPPDATA = $tempRoot
+    $env:DSH_POSTMAN_GITHUB_WAKEUP_SKIP_RUNTIME_INGEST = '1'
     $signalDirectory = Join-Path $tempRoot 'DSH\Postman\signals'
 
     $readyBody = "request_id: REQ_PROBE_001`nstatus: READY`nprotocol_version: 1`n`nPOSTMAN PROBE RESPONSE"
@@ -77,6 +78,8 @@ try {
     Assert-True ([int]$signal.issueNumber -eq 700) 'issue number is preserved separately'
     Assert-True ($signal.response -ceq 'POSTMAN PROBE RESPONSE') 'response is preserved'
     Assert-True ($signal.status -ceq 'READY') 'signal status is READY'
+    Assert-True ($signal.deliveryKey -like 'REQ_PROBE_001|700|*') 'delivery key uses request, issue and body hash'
+    Assert-True ($signal.deliveryKey -notlike '*2026*') 'delivery key does not use a timestamp'
     $firstSignalContent = Get-Content -LiteralPath $signalPath -Raw -Encoding UTF8
 
     $duplicateResult = Invoke-Handler (New-IssueEvent -Number 700 -Title 'POSTMAN REQ_PROBE_001' -Body $readyBody)
@@ -84,6 +87,10 @@ try {
     Assert-True ($duplicateResult.Output -like '*SIGNAL_DUPLICATE*') 'identical event is suppressed'
     Assert-True (@(Get-ChildItem -LiteralPath $signalDirectory -Filter '*.json').Count -eq 1) 'duplicate does not create another signal file'
     Assert-True ((Get-Content -LiteralPath $signalPath -Raw -Encoding UTF8) -ceq $firstSignalContent) 'duplicate does not rewrite logical result'
+
+    $timestampOnlyResult = Invoke-Handler (New-IssueEvent -Number 700 -Title 'POSTMAN REQ_PROBE_001' -Body $readyBody -UpdatedAt '2026-08-27T20:00:30Z')
+    Assert-True ($timestampOnlyResult.ExitCode -eq 0) 'timestamp-only replay exits successfully'
+    Assert-True ($timestampOnlyResult.Output -like '*SIGNAL_DUPLICATE*') 'timestamp-only replay is suppressed'
 
     $waitingBody = "request_id: REQ_WAITING_001`nstatus: WAITING`nprotocol_version: 1`n`nstatus: READY appears only in response text"
     $waitingResult = Invoke-Handler (New-IssueEvent -Number 701 -Title 'POSTMAN REQ_WAITING_001' -Body $waitingBody)
@@ -150,5 +157,6 @@ finally {
     else {
         $env:LOCALAPPDATA = $oldLocalAppData
     }
+    Remove-Item Env:DSH_POSTMAN_GITHUB_WAKEUP_SKIP_RUNTIME_INGEST -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
 }

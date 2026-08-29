@@ -5,7 +5,7 @@
 - **M1–M3 — DONE:** постоянная POSTMAN-сессия и внутренняя почта Harness доказаны на реальных сессиях и после холодного перезапуска.
 - **M4 — DONE в локальном runtime:** SQLite-реестр `%LOCALAPPDATA%\DSH\Postman\postman.db`, устойчивые `REQ_*`, связь `REQ → origin_agent_id`, журнал и восстановление состояний реализованы и покрыты проверками.
 - **M5 — DONE в синтетическом контуре:** `READY` будит ту же POSTMAN-сессию, runtime читает владельца из базы и доставляет `POSTMAN_RESULT` через `Agent.followup()`; повторное `READY` подавляется.
-- Настоящий Web ChatGPT и GitHub wakeup на этом этапе не подключаются. Перед M6 нужен отдельный реальный Harness E2E с двумя агентами и холодным перезапуском между `ACCEPTED` и `READY`.
+- **M6 — локальная реализация подключена:** Runtime получил `markExternalReady()`, GitHub signal ingest/recovery, автоматическое создание Issue и подтверждаемую отправку через существующий ChatGPT bridge. Финальный gate остаётся до live single-agent, two-agent и offline recovery доказательств.
 
 ## 1. Цель
 
@@ -456,7 +456,7 @@ GitHub READY
 → delivery originSession
 ```
 
-На этом этапе не менять GitHub transport без необходимости.
+Реализовано: обработчик сохраняет прежние строгие проверки и сигнал, затем вызывает `postman/ingest-github-signal.mjs`; Runtime выполняет `markExternalReady()` и не создаёт неизвестные REQ. Postman watcher перечитывает каталог сигналов при старте и во время работы. Отправка создаёт отдельную Issue и использует существующий мост ChatGPT в режиме `SubmitOnly`. Живые результаты и exact merge commit фиксируются в [отчёте M6](postman-github-integration-m6-tests.md).
 
 ---
 

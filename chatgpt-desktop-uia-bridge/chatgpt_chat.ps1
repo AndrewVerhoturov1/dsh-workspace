@@ -8,6 +8,7 @@ param(
     [int]$WindowTimeoutSeconds = 20,
     [string]$LogPath,
     [switch]$VerboseLog,
+    [switch]$SubmitOnly,
     [string]$RunId,
     [switch]$TestSubmitGateFailure,
     [switch]$TestForceValuePatternFailure,
@@ -1792,6 +1793,25 @@ try {
     $user = $submitted.UserMessage
     if (!$user) { Fail 'USER_MESSAGE_NOT_CONFIRMED' 'Confirmed submit had no user boundary' 6 }
     Write-Log 'user' "anchorRuntimeId=$($user.AnchorRuntimeId) boundaryMode=$($user.BoundaryMode) top=$($user.Top) bottom=$($user.Bottom)"
+
+    if ($SubmitOnly) {
+        # M6 deliberately stops after the existing submit gate. The remote
+        # result authority is GitHub Issue body, never this chat response.
+        $output = [ordered]@{
+            ok=$true; submitted=$true; userMessageConfirmed=$true; runId=$RunId; mode=$modeOut; chatPolicy=$chatPolicyOut; response=$null
+            conversationId=$null; deeplink=$null; extraction=$null; copyRuntimeId=$null; copyTracePath=$null
+            baselineMessageCount=$baselineMessageCount; conversationRuntimeId=$conversationRuntimeId
+            surfaceModeBefore=$surfaceModeBefore; surfaceModeAfter=$surfaceModeAfter; chatModeConfirmed=$chatModeConfirmed
+            freshAction=$freshAction; freshActionRuntimeId=$freshActionRuntimeId; freshTransitionObserved=$freshTransitionObserved; freshProofLevel=if($freshChatConfirmed){'UIA_ACTION_AND_EMPTY_STATE'}else{$null}
+            freshChatConfirmed=$freshChatConfirmed; freshIdentityChanged=$freshIdentityChanged; freshReason=$freshReason; freshMessageCount=$freshMessageCount
+            freshComposerInitiallyEmpty=$freshComposerInitiallyEmpty; freshComposerSanitized=$freshComposerSanitized; freshComposerClearMethod=$freshComposerClearMethod; freshComposerClearAttempts=$freshComposerClearAttempts
+            inputMethod=$inputMethod; inputFallbackFrom=$inputFallbackFrom; inputAttemptCount=$inputAttemptCount; clipboardRestored=$clipboardRestored; sendAttempted=$sendAttempted; heavyDiagnostics=$script:HeavyDiagnosticsPerformed
+            durationMs=[int]((Get-Date)-$started).TotalMilliseconds; error=$null
+        }
+        Write-Log 'submit-only-complete' 'confirmed user message; remote result remains GitHub Issue authority'
+        if ($ReturnJson) { $output | ConvertTo-Json -Compress -Depth 8 } else { [Console]::Out.WriteLine('POSTMAN_SIGNAL_SUBMITTED') }
+        exit 0
+    }
 
     $assistant = $null
     do {
