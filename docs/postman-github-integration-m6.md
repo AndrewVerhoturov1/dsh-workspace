@@ -18,6 +18,14 @@ Web ChatGPT
 
 GitHub-слой не знает `origin_agent_id` и не вызывает `Agent.followup()`. Владелец берётся только из записи `requests` в базе.
 
+## Ремонт Desktop bridge
+
+Предыдущая диагностика «ChatGPT Desktop process absent» была неверной. Unified-приложение действительно работало: `ChatGPT (Beta).exe`, PID `34728`, путь `C:\Program Files\WindowsApps\OpenAI.CodexBeta_26.727.4816.0_x64__2p2nqsd0c76g0\app\ChatGPT (Beta).exe`. У него были два верхнеуровневых UIA-элемента: видимая поверхность `Codex` (`Chrome_WidgetWin_1`, HWND `0xA5202E`) и окно-хозяин `ChatGPT (Beta)` (`Chrome_WidgetWin_1`, HWND `0x280788`); заголовок окна процесса в состоянии Codex был `Codex`.
+
+Причина ошибки была в смешении обнаружения host и поверхности: мини-поверхность Codex принималась за единственную точку управления, а клавиатурное действие направлялось не в окно-хозяин. Теперь host определяется отдельно по процессу, исполняемому файлу, PID и верхнеуровневому HWND; поверхность отдельно классифицируется как `CODEX` или `ORDINARY_CHAT`. Переход выполняется через UIA `ExpandCollapsePattern` и точный `MenuItem.InvokePattern`, затем независимо подтверждается обычная ChatGPT-поверхность по переключателю режима, структуре composer, отсутствию активного Codex-корня и глобальному `Новый чат`. При отсутствии proof возвращается `ORDINARY_CHAT_SURFACE_NOT_CONFIRMED`; Fresh и отправка не запускаются.
+
+Обычный путь и `SubmitOnly` используют один `Ensure-FreshOrdinaryChat`. Fresh подтверждается действием `Новый чат` и тремя одинаковыми семантическими UIA-снимками; Runtime ID только диагностический. До этого proof composer не очищается и не изменяется. Производственный путь использует UIA/native API, без Computer Use, координат и скриншотов.
+
 ## Отправка
 
 После `postman_async_send` запись сначала получает `REQ_*` и состояние `ACCEPTED`. POSTMAN вызывает `postman_runtime_accept_request`, который создаёт отдельную Issue с заголовком `POSTMAN REQ_<id>` и телом:

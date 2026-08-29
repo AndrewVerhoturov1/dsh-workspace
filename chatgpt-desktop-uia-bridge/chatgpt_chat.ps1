@@ -51,6 +51,7 @@ public static class DshWindowFocus {
 '@
 
 . (Join-Path $PSScriptRoot 'chatgpt_fresh_contract.ps1')
+. (Join-Path $PSScriptRoot 'chatgpt_desktop_surface_contract.ps1')
 
 function Send-ControlShortcut([byte]$Key) {
     [DshKeyboard]::keybd_event(0x11, 0, 0, [UIntPtr]::Zero)
@@ -82,6 +83,20 @@ $freshDiagnostic = $null
 $surfaceModeBefore = $null
 $surfaceModeAfter = $null
 $chatModeConfirmed = $false
+$hostFound = $false
+$hostPid = $null
+$hostHwnd = $null
+$hostProcessName = $null
+$hostExecutablePath = $null
+$hostWindowTitle = $null
+$initialSurface = 'UNKNOWN'
+$navigationAttempted = $false
+$navigationMethod = $null
+$ordinaryChatConfirmed = $false
+$composerReady = $false
+$userMessageConfirmed = $false
+$submitted = $false
+$ordinaryChatOpenedByNavigation = $false
 $freshAction = $null
 $freshTransitionObserved = $false
 $freshActionRuntimeId = $null
@@ -171,26 +186,161 @@ function Same-Surface($A, $B) {
     return $false
 }
 
-function Get-MainWindow {
+function Get-DesktopHost {
     $root = [System.Windows.Automation.AutomationElement]::RootElement
-    $condition = New-Object System.Windows.Automation.PropertyCondition(
-        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-        [System.Windows.Automation.ControlType]::Window)
-    try { $windows = @($root.FindAll([System.Windows.Automation.TreeScope]::Children, $condition)) }
+    try { $elements = @($root.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)) }
     catch { return $null }
-    foreach ($window in $windows) {
+    $candidates = New-Object 'System.Collections.Generic.List[object]'
+    foreach ($element in $elements) {
         try {
-            $current = $window.Current
+            $current = $element.Current
             $process = Get-Process -Id $current.ProcessId -ErrorAction SilentlyContinue
-            if ($process -and ($process.ProcessName -match '^(ChatGPT( \(Beta\))?|Codex)$')) {
-                return $window
+            $path = $null
+            if ($process) { try { $path = $process.Path } catch { } }
+            if (!$process -or !(Test-UnifiedDesktopHostIdentity ([string]$process.ProcessName) ([string]$path) ([string]$current.ClassName))) { continue }
+            $score = 0
+            if ([string]$current.ControlType.ProgrammaticName -ceq 'ControlType.Window') { $score += 30 }
+            if ([string]$current.ClassName -ceq 'Chrome_WidgetWin_1') { $score += 10 }
+            if ([string]$current.Name -match '^ChatGPT( \(Beta\))?$') { $score += 5 }
+            if (!$current.IsOffscreen) { $score += 4 }
+            if ($current.NativeWindowHandle -gt 0) { $score += 2 }
+            [void]$candidates.Add([pscustomobject]@{
+                Element=$element; Pid=[int]$current.ProcessId; Hwnd=[int64]$current.NativeWindowHandle
+                ProcessName=[string]$process.ProcessName; ExecutablePath=[string]$path; WindowTitle=[string]$current.Name
+                ClassName=[string]$current.ClassName; AutomationId=[string]$current.AutomationId; Score=$score
+            })
+        } catch { }
+    }
+    $selected = @($candidates | Sort-Object Score -Descending | Select-Object -First 1)
+    if (!$selected) { return $null }
+    $script:DesktopHostInfo = $selected[0]
+    return $selected[0]
+}
+
+function Get-OrdinaryChatSurfaceEvidence($Window) {
+    if (!$Window) { return [pscustomobject]@{ OrdinaryChatConfirmed=$false; ChatRootPresent=$false; ComposerStructureValid=$false; CodexRootPresent=$false; NavigationStateConfirmed=$false; NewChatControlPresent=$false } }
+    $mode = Get-ChatSurfaceMode $Window
+    $currentName = ''
+    try { $currentName = [string]$Window.Current.Name } catch { }
+    # The full Chromium document may retain the generic name "Codex" even
+    # after the explicit mode control says ChatGPT. In that state the document
+    # name is irrelevant; the mode control remains authoritative.
+    $codexRoot = ($mode -cne 'ChatGPT' -and $currentName -ceq 'Codex')
+    if (!$codexRoot -and $mode -cne 'ChatGPT') {
+        foreach ($child in @(All-Desc $Window)) {
+            try {
+                $childCurrent = $child.Current
+                if (([string]$childCurrent.Name -ceq 'Codex') -and !$childCurrent.IsOffscreen) { $codexRoot = $true; break }
+            } catch { }
+        }
+    }
+    $composer = Find-Composer $Window
+    $newChat = Find-NewChatButton $Window
+    $chatRoot = ($mode -ceq 'ChatGPT')
+    $confirmed = Test-OrdinaryChatSurfacePredicates $chatRoot ([bool]$composer) (!$codexRoot) $chatRoot ([bool]$newChat)
+    return [pscustomobject]@{
+        OrdinaryChatConfirmed=[bool]$confirmed; ChatRootPresent=[bool]$chatRoot; ComposerStructureValid=[bool]$composer
+        CodexRootPresent=[bool]$codexRoot; NavigationStateConfirmed=[bool]$chatRoot; NewChatControlPresent=[bool]$newChat
+        Mode=$mode; Composer=$composer; NewChat=$newChat
+    }
+}
+
+function Invoke-DesktopModeTarget($HostWindow, [ValidateSet('ChatGPT','Codex')][string]$TargetMode) {
+    $result = [ordered]@{ Succeeded=$false; Method='UIA.ExpandCollapsePattern+MenuItem.InvokePattern'; Message=$null }
+    if (!$HostWindow) { $result.Message = 'Unified Desktop host window is missing'; return [pscustomobject]$result }
+    $selector = $null
+    $selectorDeadline = (Get-Date).AddMilliseconds(8000)
+    do {
+        foreach ($element in @(All-Desc $HostWindow)) {
+            try {
+                $current = $element.Current
+                if (($current.ControlType -eq [System.Windows.Automation.ControlType]::Button) -and
+                    !$current.IsOffscreen -and ([string]$current.Name -match '^(Переключить режим, текущий режим|Switch mode, current mode):\s*(ChatGPT|Codex)$')) {
+                    $selector = $element
+                    break
+                }
+            } catch { }
+        }
+        if ($selector) { break }
+        Start-Sleep -Milliseconds 150
+    } while ((Get-Date) -lt $selectorDeadline)
+    if (!$selector) { $result.Message = 'Mode selector was not found on the unified host'; return [pscustomobject]$result }
+    try {
+        [object]$expand = $null
+        if (!$selector.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$expand)) {
+            $result.Message = 'Mode selector has no ExpandCollapsePattern'
+            return [pscustomobject]$result
+        }
+        # Expand is idempotent for this selector and avoids relying on a
+        # provider-specific Current-state readback.
+        $expand.Expand()
+        # Do not call this collection `$matches`: PowerShell reserves the
+        # case-insensitive `$Matches` variable for the `-match` operator.
+        # Reusing that name can replace the collection while the menu is
+        # being inspected and make a unique item look ambiguous.
+        $menuCandidates = New-Object 'System.Collections.Generic.List[object]'
+        $menuDeadline = (Get-Date).AddMilliseconds(2000)
+        do {
+            $menuCandidates.Clear()
+            foreach ($element in @(All-Desc $HostWindow)) {
+                try {
+                    $current = $element.Current
+                    if (($current.ControlType -eq [System.Windows.Automation.ControlType]::MenuItem) -and
+                        !$current.IsOffscreen -and ([string]$current.Name -match ('^' + [regex]::Escape($TargetMode) + '(\s|$)'))) {
+                        [void]$menuCandidates.Add($element)
+                    }
+                } catch { }
             }
-            if (!$process -and ($current.Name -match '^(ChatGPT( \(Beta\))?|Codex)$')) {
-                return $window
+            if ($menuCandidates.Count -eq 1) { break }
+            Start-Sleep -Milliseconds 150
+        } while ((Get-Date) -lt $menuDeadline)
+        if ($menuCandidates.Count -ne 1) { $result.Message = "Expected one $TargetMode menu item, found $($menuCandidates.Count)"; return [pscustomobject]$result }
+        [object]$invoke = $null
+        if (!$menuCandidates[0].TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$invoke)) {
+            $result.Message = "$TargetMode menu item has no InvokePattern"
+            return [pscustomobject]$result
+        }
+        $invoke.Invoke()
+        $result.Succeeded = $true
+        $result.Message = "Invoked $TargetMode mode menu item"
+    } catch {
+        $result.Message = $_.Exception.Message
+    }
+    return [pscustomobject]$result
+}
+
+function Get-DesktopSurface($HostInfo) {
+    if (!$HostInfo) { return $null }
+    $root = [System.Windows.Automation.AutomationElement]::RootElement
+    try { $elements = @($root.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)) }
+    catch { return $null }
+    $candidates = New-Object 'System.Collections.Generic.List[object]'
+    foreach ($element in $elements) {
+        try {
+            $current = $element.Current
+            if ([int]$current.ProcessId -ne [int]$HostInfo.Pid) { continue }
+            $evidence = Get-OrdinaryChatSurfaceEvidence $element
+            $kind = Get-DesktopSurfaceKind ([pscustomobject]@{ OrdinaryChatConfirmed=$evidence.OrdinaryChatConfirmed; CodexRootPresent=$evidence.CodexRootPresent })
+            $score = if ($kind -ceq 'ORDINARY_CHAT') { 50 } elseif ($kind -ceq 'CODEX') { 40 } else { 0 }
+            if (!$current.IsOffscreen) { $score += 4 }
+            if ($current.NativeWindowHandle -gt 0) { $score += 2 }
+            if ($score -gt 0) {
+                [void]$candidates.Add([pscustomobject]@{ Element=$element; Kind=$kind; Mode=$evidence.Mode; Evidence=$evidence; Score=$score; Name=[string]$current.Name; Hwnd=[int64]$current.NativeWindowHandle })
             }
         } catch { }
     }
-    return $null
+    $selected = @($candidates | Sort-Object Score -Descending | Select-Object -First 1)
+    if (!$selected) { return $null }
+    $script:DesktopSurfaceInfo = $selected[0]
+    return $selected[0]
+}
+
+function Get-MainWindow {
+    $desktopHost = Get-DesktopHost
+    if (!$desktopHost) { return $null }
+    $surface = Get-DesktopSurface $desktopHost
+    if ($surface) { return $surface.Element }
+    return $desktopHost.Element
 }
 
 function Wait-MainWindow {
@@ -203,65 +353,18 @@ function Wait-MainWindow {
         }
         Start-Sleep -Milliseconds 300
     } while ((Get-Date) -lt $deadline)
-
-    try { Start-Process 'shell:AppsFolder\OpenAI.CodexBeta_2p2nqsd0c76g!App' | Out-Null } catch { }
-    $deadline = (Get-Date).AddSeconds($WindowTimeoutSeconds)
-    do {
-        $window = Get-MainWindow
-        if ($window) {
-            try { $window.SetFocus() } catch { }
-            return $window
-        }
-        Start-Sleep -Milliseconds 400
-    } while ((Get-Date) -lt $deadline)
-    Fail 'WINDOW_NOT_FOUND' 'ChatGPT Desktop window not found' 2
+    if (Get-DesktopHost) { Fail 'DESKTOP_HOST_FOUND_WRONG_SURFACE' 'Unified Desktop host found but no recognized surface was exposed' 2 }
+    Fail 'DESKTOP_HOST_NOT_FOUND' 'Unified ChatGPT/Codex Desktop host not found' 2
 }
 
 function Get-LiveChatGPTWindow($Preferred, [ValidateSet('Any','ChatGPT','Codex')][string]$RequiredMode = 'Any') {
-    $preferredName = $null
-    try { $preferredName = [string]$Preferred.Current.Name } catch { }
-    $root = [System.Windows.Automation.AutomationElement]::RootElement
-    $condition = New-Object System.Windows.Automation.PropertyCondition(
-        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-        [System.Windows.Automation.ControlType]::Window)
-    try { $windows = @($root.FindAll([System.Windows.Automation.TreeScope]::Children, $condition)) } catch { return $null }
-    $best = $null
-    $bestScore = -1
-    foreach ($window in $windows) {
-        try {
-            $current = $window.Current
-            $process = Get-Process -Id $current.ProcessId -ErrorAction SilentlyContinue
-            if (!$process -or $process.ProcessName -notmatch '^ChatGPT( \(Beta\))?$') { continue }
-            # The mode button is authoritative. The Chromium document often keeps
-            # the generic name "Codex" even while the application is in ChatGPT
-            # mode, so document-name scoring must never override the explicit mode.
-            $mode = Get-ChatSurfaceMode $window
-            if (!$mode) {
-                foreach ($child in @(All-Desc $window)) {
-                    try {
-                        $childCurrent = $child.Current
-                        if (($childCurrent.ControlType -eq [System.Windows.Automation.ControlType]::Document) -and
-                            ([string]$childCurrent.Name -ceq 'Codex') -and !$childCurrent.IsOffscreen) { $mode = 'Codex'; break }
-                    } catch { }
-                }
-            }
-            if ($RequiredMode -ne 'Any' -and $mode -cne $RequiredMode) { continue }
-            $score = 0
-            if ($preferredName -and [string]$current.Name -ceq $preferredName) { $score += 2 }
-            if (!$current.IsOffscreen) { $score += 4 }
-            $rect = $current.BoundingRectangle
-            if (($rect.Width -gt 0) -and ($rect.Height -gt 0)) { $score += 2 }
-            if ($mode -ceq $RequiredMode) { $score += 8 }
-            if ($score -gt $bestScore) {
-                try {
-                    if ($current.NativeWindowHandle -gt 0) { $best = [System.Windows.Automation.AutomationElement]::FromHandle([intptr]$current.NativeWindowHandle) }
-                    else { $best = $window }
-                } catch { $best = $window }
-                $bestScore = $score
-            }
-        } catch { }
-    }
-    return $best
+    $desktopHost = Get-DesktopHost
+    if (!$desktopHost) { return $null }
+    $surface = Get-DesktopSurface $desktopHost
+    if (!$surface) { return $null }
+    if ($RequiredMode -ceq 'ChatGPT' -and $surface.Kind -cne 'ORDINARY_CHAT') { return $null }
+    if ($RequiredMode -ceq 'Codex' -and $surface.Kind -cne 'CODEX') { return $null }
+    return $surface.Element
 }
 
 function Get-ActiveChatGPTSurface($Fallback, [ValidateSet('Any','ChatGPT','Codex')][string]$RequiredMode = 'Any') {
@@ -274,17 +377,23 @@ function Get-ActiveChatGPTSurface($Fallback, [ValidateSet('Any','ChatGPT','Codex
     return $null
 }
 
-function Confirm-ChatGPTMode($Window, [int]$TimeoutMs = 5000) {
+function Confirm-OrdinaryChatSurface($Window, [int]$TimeoutMs = 5000) {
     $deadline = (Get-Date).AddMilliseconds([Math]::Max(1000, $TimeoutMs))
     do {
         $candidate = Get-ActiveChatGPTSurface $Window 'ChatGPT'
         if ($candidate) {
-            $mode = Get-ChatSurfaceMode $candidate
-            if ($mode -ceq 'ChatGPT') { return [pscustomobject]@{ Confirmed=$true; Window=$candidate; Mode=$mode; Reason='CHATGPT_MODE_CONFIRMED' } }
+            $evidence = Get-OrdinaryChatSurfaceEvidence $candidate
+            if ($evidence.OrdinaryChatConfirmed) {
+                return [pscustomobject]@{ Confirmed=$true; Window=$candidate; Mode='ChatGPT'; Reason='ORDINARY_CHAT_SURFACE_CONFIRMED'; Evidence=$evidence }
+            }
         }
         Start-Sleep -Milliseconds 200
     } while ((Get-Date) -lt $deadline)
-    return [pscustomobject]@{ Confirmed=$false; Window=$Window; Mode=(Get-ChatSurfaceMode $Window); Reason='CHATGPT_MODE_NOT_CONFIRMED' }
+    return [pscustomobject]@{ Confirmed=$false; Window=$Window; Mode=(Get-ChatSurfaceMode $Window); Reason='ORDINARY_CHAT_SURFACE_NOT_CONFIRMED'; Evidence=(Get-OrdinaryChatSurfaceEvidence $Window) }
+}
+
+function Confirm-ChatGPTMode($Window, [int]$TimeoutMs = 5000) {
+    return Confirm-OrdinaryChatSurface $Window $TimeoutMs
 }
 
 function Get-ChatSurfaceMode($Window) {
@@ -742,8 +851,14 @@ function Get-ConversationSnapshot($Window) {
 
 function Activate-ChatGPTWindow($Window) {
     if (!$Window) { return $false }
+    # A unified Desktop session can expose a visible Codex mini-surface and a
+    # separate full host window under the same PID. Keyboard navigation belongs
+    # to the host, not to the mini-surface; keep surface proof independent.
+    $activationTarget = $Window
+    $desktopHost = Get-DesktopHost
+    if ($desktopHost -and $desktopHost.Element) { $activationTarget = $desktopHost.Element }
     $handle = [IntPtr]::Zero
-    try { $handle = [IntPtr]$Window.Current.NativeWindowHandle } catch { }
+    try { $handle = [IntPtr]$activationTarget.Current.NativeWindowHandle } catch { }
     if ($handle -eq [IntPtr]::Zero -or ![DshWindowFocus]::IsWindow($handle)) { return $false }
     $foreground = [DshWindowFocus]::GetForegroundWindow()
     [uint32]$foregroundThread = 0
@@ -1764,37 +1879,69 @@ try {
     if (!$mutex.WaitOne(10000)) { Fail 'BUSY' 'Another bridge invocation is controlling Desktop' 1 }
 
     $w = Wait-MainWindow
+    $hostInfo = Get-DesktopHost
+    $hostFound = [bool]$hostInfo
+    if ($hostInfo) {
+        $hostPid = [int]$hostInfo.Pid
+        $hostHwnd = if ($hostInfo.Hwnd) { '0x{0:X}' -f [int64]$hostInfo.Hwnd } else { $null }
+        $hostProcessName = [string]$hostInfo.ProcessName
+        $hostExecutablePath = [string]$hostInfo.ExecutablePath
+        $hostWindowTitle = [string]$hostInfo.WindowTitle
+    }
+    $surfaceInfo = if ($hostInfo) { Get-DesktopSurface $hostInfo } else { $null }
+    $initialSurface = if ($surfaceInfo) { [string]$surfaceInfo.Kind } else { 'UNKNOWN' }
+    $ordinaryChatConfirmed = ($initialSurface -ceq 'ORDINARY_CHAT')
     $ws = New-Object -ComObject WScript.Shell
-    if (!(Activate-ChatGPTWindow $w)) { Fail 'CHATGPT_WINDOW_NOT_ACTIVE' 'ChatGPT Desktop window could not be activated' 3 }
-    $surfaceModeBefore = Get-ChatSurfaceMode $w
+    if (!(Activate-ChatGPTWindow $w)) { Fail 'DESKTOP_HOST_FOUND_WRONG_SURFACE' 'Unified Desktop host could not be activated' 3 }
+    $surfaceModeBefore = if ($initialSurface -ceq 'ORDINARY_CHAT') { 'ChatGPT' } elseif ($initialSurface -ceq 'CODEX') { 'Codex' } else { Get-ChatSurfaceMode $w }
     Write-Log 'surface-before' "pid=$($w.Current.ProcessId) mode=$surfaceModeBefore"
 
     # Quick is a ChatGPT surface, not merely a shortcut. Always select ChatGPT
     # first, then wait for UIA confirmation before opening the Quick overlay.
     if ($surfaceModeBefore -ne 'ChatGPT') {
-        if (!(Activate-ChatGPTWindow $w)) { Fail 'CHATGPT_WINDOW_NOT_ACTIVE' 'ChatGPT Desktop window could not be activated before mode selection' 3 }
-        $ws.SendKeys('%1')
+        $navigationAttempted = $true
+        $navigationMethod = 'UIA.ExpandCollapsePattern+MenuItem.InvokePattern'
+        if (!(Activate-ChatGPTWindow $w)) { Fail 'ORDINARY_CHAT_NAVIGATION_FAILED' 'Unified Desktop surface could not be activated before navigation' 3 }
+        $navigation = Invoke-DesktopModeTarget (Get-DesktopHost).Element 'ChatGPT'
+        Write-Log 'surface-navigation' "method=$($navigation.Method) succeeded=$($navigation.Succeeded) message=$($navigation.Message)"
+        if (!$navigation.Succeeded) {
+            # The semantic route is authoritative. This shortcut is only an
+            # action fallback; the following proof remains mandatory.
+            $navigationMethod = $navigationMethod + ';Alt+1'
+            if (!(Activate-ChatGPTWindow $w)) { Fail 'ORDINARY_CHAT_NAVIGATION_FAILED' 'Unified Desktop surface could not be activated before shortcut fallback' 3 }
+            $ws.SendKeys('%1')
+        }
         $modeConfirmation = Confirm-ChatGPTMode $w 5000
-        if (!$modeConfirmation.Confirmed) { Fail 'CHATGPT_MODE_NOT_CONFIRMED' $modeConfirmation.Reason 3 }
+        if (!$modeConfirmation.Confirmed -and $initialSurface -ceq 'CODEX') {
+            $navigationMethod = $navigationMethod + ';Ctrl+Alt+O'
+            if (!(Activate-ChatGPTWindow $w)) { Fail 'ORDINARY_CHAT_NAVIGATION_FAILED' 'Codex surface could not be activated before ordinary Chat fallback' 3 }
+            $ws.SendKeys('^%o')
+            $ordinaryChatOpenedByNavigation = $true
+            $modeConfirmation = Confirm-ChatGPTMode $w 5000
+        }
+        if (!$modeConfirmation.Confirmed) { Fail 'ORDINARY_CHAT_SURFACE_NOT_CONFIRMED' $modeConfirmation.Reason 3 }
         $w = $modeConfirmation.Window
         $chatModeConfirmed = $true
+        $ordinaryChatConfirmed = $true
     } else {
         $modeConfirmation = Confirm-ChatGPTMode $w 3000
-        if (!$modeConfirmation.Confirmed) { Fail 'CHATGPT_MODE_NOT_CONFIRMED' $modeConfirmation.Reason 3 }
+        if (!$modeConfirmation.Confirmed) { Fail 'ORDINARY_CHAT_SURFACE_NOT_CONFIRMED' $modeConfirmation.Reason 3 }
         $w = $modeConfirmation.Window
         $chatModeConfirmed = $true
+        $ordinaryChatConfirmed = $true
     }
     if ($Mode -eq 'Quick') {
-        if (!(Activate-ChatGPTWindow $w)) { Fail 'CHATGPT_WINDOW_NOT_ACTIVE' 'ChatGPT Desktop window could not be activated before Quick Chat' 3 }
+        if (!(Activate-ChatGPTWindow $w)) { Fail 'ORDINARY_CHAT_NAVIGATION_FAILED' 'Ordinary Chat surface could not be activated before Quick Chat' 3 }
         $ws.SendKeys('^%n')
     } else {
-        if (!(Activate-ChatGPTWindow $w)) { Fail 'CHATGPT_WINDOW_NOT_ACTIVE' 'ChatGPT Desktop window could not be activated before New Chat' 3 }
-        $ws.SendKeys('^%o')
+        if (!(Activate-ChatGPTWindow $w)) { Fail 'ORDINARY_CHAT_NAVIGATION_FAILED' 'Ordinary Chat surface could not be activated before New Chat' 3 }
+        if (!$ordinaryChatOpenedByNavigation) { $ws.SendKeys('^%o') }
     }
     $afterModeConfirmation = Confirm-ChatGPTMode $w 5000
-    if (!$afterModeConfirmation.Confirmed) { Fail 'CHATGPT_MODE_NOT_CONFIRMED' $afterModeConfirmation.Reason 3 }
+    if (!$afterModeConfirmation.Confirmed) { Fail 'ORDINARY_CHAT_SURFACE_NOT_CONFIRMED' $afterModeConfirmation.Reason 3 }
     $w = $afterModeConfirmation.Window
     $surfaceModeAfter = $afterModeConfirmation.Mode
+    $ordinaryChatConfirmed = $true
     Write-Log 'surface' "pid=$($w.Current.ProcessId) windowRuntimeId=$(Get-RuntimeId $w) mode=$surfaceModeAfter chatModeConfirmed=$chatModeConfirmed"
 
     $composerDeadline = (Get-Date).AddSeconds([Math]::Min($TimeoutSeconds, 30))
@@ -1859,6 +2006,7 @@ try {
             Fail $code $freshComposer.Message 1
         }
         Write-Log 'fresh-composer-ready' "initiallyEmpty=$freshComposerInitiallyEmpty sanitized=$freshComposerSanitized clearMethod=$freshComposerClearMethod clearAttempts=$freshComposerClearAttempts"
+        $composerReady = $true
     }
     $inputResult = Set-ComposerText $w $composer $Prompt
     $inputAttemptCount = [int]$inputResult.Attempts
@@ -1910,14 +2058,18 @@ try {
     if (!$submitted.Confirmed) { Fail 'SUBMIT_NOT_CONFIRMED' $submitted.Reason 6 }
     $user = $submitted.UserMessage
     if (!$user) { Fail 'USER_MESSAGE_NOT_CONFIRMED' 'Confirmed submit had no user boundary' 6 }
+    $userMessageConfirmed = $true
     Write-Log 'user' "anchorRuntimeId=$($user.AnchorRuntimeId) boundaryMode=$($user.BoundaryMode) top=$($user.Top) bottom=$($user.Bottom)"
 
     if ($SubmitOnly) {
         # M6 deliberately stops after the existing submit gate. The remote
         # result authority is GitHub Issue body, never this chat response.
+        $submitted = $true
         $output = [ordered]@{
             ok=$true; submitted=$true; userMessageConfirmed=$true; runId=$RunId; mode=$modeOut; chatPolicy=$chatPolicyOut; response=$null
             conversationId=$null; deeplink=$null; extraction=$null; copyRuntimeId=$null; copyTracePath=$null
+            hostFound=$hostFound; hostPid=$hostPid; hostHwnd=$hostHwnd; hostProcessName=$hostProcessName; hostExecutablePath=$hostExecutablePath; hostWindowTitle=$hostWindowTitle
+            initialSurface=$initialSurface; navigationAttempted=$navigationAttempted; navigationMethod=$navigationMethod; ordinaryChatConfirmed=$ordinaryChatConfirmed; composerReady=$composerReady
             baselineMessageCount=$baselineMessageCount; conversationRuntimeId=$conversationRuntimeId
             surfaceModeBefore=$surfaceModeBefore; surfaceModeAfter=$surfaceModeAfter; chatModeConfirmed=$chatModeConfirmed
             freshAction=$freshAction; freshActionRuntimeId=$freshActionRuntimeId; freshTransitionObserved=$freshTransitionObserved; freshProofLevel=if($freshChatConfirmed){'UIA_ACTION_AND_STABLE_EMPTY_STATE'}else{$null}
@@ -2020,6 +2172,8 @@ try {
     if ([string]::IsNullOrWhiteSpace($answer)) { Fail 'COPY_EMPTY' 'Confirmed copy returned empty text' 6 }
     if ($answer.Contains($Prompt)) { Fail 'COPY_ASSISTANT_PAIRING_ERROR' 'Copied text contains submitted prompt' 6 }
 
+    $submitted = $true
+
     $deep = $null
     $conversationId = $null
     if ($Mode -eq 'NewChat') {
@@ -2039,6 +2193,8 @@ try {
     $output = [ordered]@{
         ok=$true; runId=$RunId; mode=$modeOut; chatPolicy=$chatPolicyOut; response=$answer; conversationId=$conversationId; deeplink=$deep
         extraction='copy'; copyRuntimeId=$copyResult.CopyRuntimeId; copyTracePath=$copyResult.TracePath
+        submitted=$submitted; userMessageConfirmed=$userMessageConfirmed; hostFound=$hostFound; hostPid=$hostPid; hostHwnd=$hostHwnd; hostProcessName=$hostProcessName; hostExecutablePath=$hostExecutablePath; hostWindowTitle=$hostWindowTitle
+        initialSurface=$initialSurface; navigationAttempted=$navigationAttempted; navigationMethod=$navigationMethod; ordinaryChatConfirmed=$ordinaryChatConfirmed; composerReady=$composerReady
         baselineMessageCount=$baselineMessageCount; conversationRuntimeId=$conversationRuntimeId
         surfaceModeBefore=$surfaceModeBefore; surfaceModeAfter=$surfaceModeAfter; chatModeConfirmed=$chatModeConfirmed
         freshAction=$freshAction; freshActionRuntimeId=$freshActionRuntimeId; freshTransitionObserved=$freshTransitionObserved; freshProofLevel=if($freshChatConfirmed){'UIA_ACTION_AND_STABLE_EMPTY_STATE'}else{$null}
@@ -2061,13 +2217,15 @@ catch {
     $output = [ordered]@{
         ok=$false; runId=$RunId; mode=$modeOut; chatPolicy=$chatPolicyOut; response=$null; conversationId=$null; deeplink=$null
         extraction=$null; copyRuntimeId=$null; copyTracePath=(Join-Path $PSScriptRoot ('diagnostics\copy_trace_' + $RunId + '.jsonl'))
+        submitted=$submitted; userMessageConfirmed=$userMessageConfirmed; hostFound=$hostFound; hostPid=$hostPid; hostHwnd=$hostHwnd; hostProcessName=$hostProcessName; hostExecutablePath=$hostExecutablePath; hostWindowTitle=$hostWindowTitle
+        initialSurface=$initialSurface; navigationAttempted=$navigationAttempted; navigationMethod=$navigationMethod; ordinaryChatConfirmed=$ordinaryChatConfirmed; composerReady=$composerReady
         baselineMessageCount=$baselineMessageCount; conversationRuntimeId=$conversationRuntimeId
         surfaceModeBefore=$surfaceModeBefore; surfaceModeAfter=$surfaceModeAfter; chatModeConfirmed=$chatModeConfirmed
         freshAction=$freshAction; freshActionRuntimeId=$freshActionRuntimeId; freshTransitionObserved=$freshTransitionObserved; freshProofLevel=if($freshChatConfirmed){'UIA_ACTION_AND_STABLE_EMPTY_STATE'}else{$null}
         freshChatConfirmed=$freshChatConfirmed; freshIdentityChanged=$freshIdentityChanged; freshReason=$freshReason; freshDiagnostic=$freshDiagnostic; freshMessageCount=$freshMessageCount
         freshComposerInitiallyEmpty=$freshComposerInitiallyEmpty; freshComposerSanitized=$freshComposerSanitized; freshComposerClearMethod=$freshComposerClearMethod; freshComposerClearAttempts=$freshComposerClearAttempts
         inputMethod=$inputMethod; inputFallbackFrom=$inputFallbackFrom; inputAttemptCount=$inputAttemptCount; clipboardRestored=$clipboardRestored; sendAttempted=$sendAttempted; heavyDiagnostics=$script:HeavyDiagnosticsPerformed
-        durationMs=[int]((Get-Date)-$started).TotalMilliseconds; error=[ordered]@{ code=$code; message=$message }
+        durationMs=[int]((Get-Date)-$started).TotalMilliseconds; failureStage=$code; failureReason=$message; error=[ordered]@{ code=$code; message=$message }
     }
     if ($ReturnJson) { $output | ConvertTo-Json -Compress -Depth 8 } else { [Console]::Error.WriteLine($message) }
     exit $exitCode
