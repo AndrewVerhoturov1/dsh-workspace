@@ -1,5 +1,27 @@
 # Отчёт оркестратору: Postman GitHub Integration M6
 
+## Дополнение: защита Work prompt (30 августа 2026)
+
+Маршруты A/B/C/W продолжены: A — реализация semantic post-submit guard; B —
+standalone UIA-проверка реального модального окна; C — интегрированная live-проверка
+и регрессии; W — фиксация изменений без merge до полного M6 PASS.
+
+Guard запускается только после `CHAT_SUBMIT_CONFIRMED`, работает асинхронно для
+конкретного REQ и проверяет подтверждённый ChatGPT host. Для `Продолжить в режиме
+Work?` подтверждаются заголовок и обе кнопки в одном UIA subtree; вызывается только
+`Продолжить чат здесь` через `InvokePattern`, затем требуются два стабильных чтения
+без modal. Work-кнопка, координаты и слепые клавиши не используются.
+
+Standalone real-host proof: PID `34728`, HWND `0x280788`, `InvokePattern` доступен,
+`WORK_PROMPT_CONTINUE_HERE_INVOKED` и `WORK_PROMPT_DISMISS_CONFIRMED` получены.
+Интегрированный запрос `MSG_M6_001` → `REQ_67A8658CF323453FA91324B5EF1422DF` →
+Issue №44 достиг только `POST_SUBMIT_GUARD_STARTED`; Issue остаётся `WAITING`,
+поэтому полный Case B и последующие M6 gates не засчитаны.
+
+Итог: `BLOCKED — REQ_67A8658CF323453FA91324B5EF1422DF, Issue №44; последняя
+подтверждённая стадия POST_SUBMIT_GUARD_STARTED, ожидаемая ISSUE_READY_SEEN,
+фактически Issue WAITING без WORK_PROMPT_DETECTED и READY.`
+
 Дата проверки: 29 августа 2026 года.
 
 ## Состояние кода

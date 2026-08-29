@@ -4,11 +4,12 @@ import { readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   PostmanRuntime,
+  POSTMAN_RUNTIME_DIR,
   POSTMAN_DB_PATH,
   POSTMAN_JOURNAL_PATH,
   REQUEST_STATUSES,
 } from './runtime.js'
-import { createAndSubmitExternal } from './transport.js'
+import { createAndSubmitExternal, stopPostSubmitGuards } from './transport.js'
 
 export const name = 'dsh-postman-harness'
 export const inject = ['agents', 'sessionPersistence', 'systemPrompt', 'tools']
@@ -570,13 +571,15 @@ export function apply(ctx, { runtime: injectedRuntime, externalTransport = creat
     .catch((error) => {
       ctx.logger.error(`[postman] persistent session startup failed: ${error instanceof Error ? error.message : String(error)}`)
     })
-  ctx.effect(() => () => {
+  ctx.effect(() => {
     const timer = setInterval(() => { void recoverSignals() }, 1000)
-    return startup.then(() => {
+    timer.unref?.()
+    return () => {
       clearInterval(timer)
+      stopPostSubmitGuards(runtime)
       runtime.close()
       return postmanHandle?.dispose()
-    })
+    }
   }, `${PLUGIN_NAME}.lifecycle()`)
 }
 

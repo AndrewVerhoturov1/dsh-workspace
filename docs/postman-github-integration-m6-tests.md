@@ -1,11 +1,24 @@
 # Проверки Postman GitHub Integration M6
 
+## Дополнение после post-submit guard (30 августа 2026)
+
+- `test-post-submit-guard-contract.ps1` — PASS, 9/9.
+- `chatgpt-post-submit-guard.ps1` и изменённые PowerShell-файлы проходят parser.
+- Реальная standalone UIA-проверка подтвердила `WORK_PROMPT_DETECTED`,
+  `WORK_PROMPT_CONTINUE_HERE_INVOKED` и `WORK_PROMPT_DISMISS_CONFIRMED`; вызывается
+  только `Продолжить чат здесь`, без координат, Enter/Space и Computer Use.
+- Guard запускается только после `CHAT_SUBMIT_CONFIRMED`, ограничен конкретным
+  REQ и не является синхронным ожиданием исходного хода агента.
+- `MSG_M6_001` → `REQ_67A8658CF323453FA91324B5EF1422DF` → Issue №44 подтверждает
+  `POST_SUBMIT_GUARD_STARTED`, но Issue всё ещё `WAITING`; `WORK_PROMPT_DETECTED`
+  и `ISSUE_READY_SEEN` не получены. Это текущий точный blocker.
+
 Дата актуализации: 29 августа 2026 года.
 
 ## Локальные проверки
 
 - `node --check` для `plugins/dsh-postman-harness/lib/index.js`, Runtime и транспорта — PASS.
-- `node --test plugins/dsh-postman-harness/lib/index.test.js plugins/dsh-postman-harness/lib/runtime.test.js plugins/dsh-postman-harness/lib/transport.test.js` — PASS, 43/43.
+- `node --test plugins/dsh-postman-harness/lib/index.test.js plugins/dsh-postman-harness/lib/runtime.test.js plugins/dsh-postman-harness/lib/transport.test.js` — PASS, 46/46.
 - `postman/test-github-wakeup.ps1` — PASS, 40/40; строгий старый протокол, отрицательные сценарии и независимость ключа от временной метки сохранены.
 - `chatgpt-desktop-uia-bridge/test-fresh-contract.ps1` — PASS, 13/13; отказ Fresh происходит до разрешения очистки composer, вставки и Send, а SubmitOnly требует подтверждённое пользовательское сообщение без ожидания ассистента и Copy.
 - `chatgpt-desktop-uia-bridge/test-desktop-surface-contract.ps1` — PASS, 15/15; host, Codex, обычный Chat, fail-closed navigation и общий Fresh/SubmitOnly flow проверены синтетически.

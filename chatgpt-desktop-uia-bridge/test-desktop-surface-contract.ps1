@@ -28,6 +28,13 @@ Assert-Case 'should recognize ordinary Chat as a distinct surface' ((Get-Desktop
 Assert-Case 'should not touch composer before ordinary Chat proof' (!(Test-ComposerTouchAllowed $false))
 Assert-Case 'should allow composer only after ordinary Chat proof' (Test-ComposerTouchAllowed $true)
 Assert-Case 'should complete the synthetic Codex to Chat Fresh SubmitOnly flow' (Test-DesktopSubmitOnlyFlowContract $true 'CODEX' $true $true $true $true $true $true $false $false)
+Assert-Case 'should accept a normal host geometry without a fixed monitor size' (Test-DesktopHostGeometryPredicates $false 863 582 1440 860 $true)
+Assert-Case 'should reject an obviously narrow host geometry before navigation' (!(Test-DesktopHostGeometryPredicates $false 500 300 1440 860 $true))
+Assert-Case 'should reject a minimized host even when its rectangle is large' (!(Test-DesktopHostGeometryPredicates $true 1440 860 1440 860 $true))
+Assert-Case 'should require two stable geometry readbacks' (Test-DesktopGeometryStable ([pscustomobject]@{HostHwnd='0x1';State='normal';WindowWidth=1000;WindowHeight=700;WorkAreaWidth=1440;WorkAreaHeight=860}) ([pscustomobject]@{HostHwnd='0x1';State='normal';WindowWidth=1000;WindowHeight=700;WorkAreaWidth=1440;WorkAreaHeight=860}))
+Assert-Case 'should reject changed geometry readbacks' (!(Test-DesktopGeometryStable ([pscustomobject]@{HostHwnd='0x1';State='normal';WindowWidth=1000;WindowHeight=700;WorkAreaWidth=1440;WorkAreaHeight=860}) ([pscustomobject]@{HostHwnd='0x1';State='normal';WindowWidth=500;WindowHeight=300;WorkAreaWidth=1440;WorkAreaHeight=860})))
+$normalizationTarget = Get-DesktopGeometryNormalizationTarget 1440 860
+Assert-Case 'should normalize narrow geometry to a working target' (Test-DesktopHostGeometryPredicates $false $normalizationTarget.Width $normalizationTarget.Height 1440 860 $true)
 
 Write-Output "DESKTOP_SURFACE_CONTRACT_TESTS_PASS passed=$passed failed=$failed"
 if ($failed) { exit 1 }

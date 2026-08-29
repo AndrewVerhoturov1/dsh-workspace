@@ -1,5 +1,41 @@
 # Postman GitHub Integration M6
 
+## Необязательная защита после отправки (30 августа 2026)
+
+После подтверждённой стадии `CHAT_SUBMIT_CONFIRMED` запускается отдельный
+ограниченный post-submit guard. Он не входит в Fresh/SubmitOnly и не задерживает
+`POSTMAN_ACCEPTED` или завершение хода агента; guard связан с конкретными `requestId`
+и Issue и наблюдает только подтверждённое окно ChatGPT.
+
+Поддержанный блокирующий диалог `WORK_MODE_PROMPT` подтверждается одновременным
+наличием заголовка `Продолжить в режиме Work?`, кнопки `Продолжить чат здесь` и
+кнопки `Продолжить в режиме Work` в одном subtree host. Имена нормализуются только
+по пробелам, управляющим и private-use glyph; нечёткое сопоставление запрещено.
+Разрешён единственный вызов: `InvokePattern` на `Продолжить чат здесь`. Кнопка Work
+никогда не вызывается. После действия требуются два чтения без диалога. Неизвестный
+диалог, отсутствие правильной кнопки или более трёх повторов дают fail-closed
+`POST_SUBMIT_GUARD_BLOCKED`.
+
+События guard: `POST_SUBMIT_GUARD_STARTED`, `WORK_PROMPT_DETECTED`,
+`WORK_PROMPT_CONTINUE_HERE_INVOKED`, `WORK_PROMPT_DISMISS_CONFIRMED`,
+`WORK_PROMPT_LOOP`, `UNKNOWN_POST_SUBMIT_MODAL`, `POST_SUBMIT_GUARD_FINISHED`.
+В диагностике сохраняются PID/HWND host, foreground PID/HWND, `windowRect`,
+`workAreaRect`, имена элементов и доступность `InvokePattern`. Координаты, Enter,
+Space и Computer Use в производственном пути не применяются.
+
+## Текущее доказательство и blocker
+
+Контракт guard проверен синтетически: 9/9. На реальном host PID `34728`, HWND
+`0x280788` standalone UIA-проба обнаружила заголовок и обе кнопки, вызвала только
+`Продолжить чат здесь` через `InvokePattern` и подтвердила исчезновение диалога
+двумя чтениями. Это доказательство механизма, но не заменяет полный M6 Case B.
+
+Интегрированная попытка `MSG_M6_001` → `REQ_67A8658CF323453FA91324B5EF1422DF`
+→ Issue №44 достигла `POST_SUBMIT_GUARD_STARTED`; Issue остаётся `WAITING`, а
+`WORK_PROMPT_DETECTED` и `ISSUE_READY_SEEN` не получены. Поэтому полный single-agent
+M6, A+B, duplicate и offline/recovery после этого изменения не засчитаны и PR не
+сливается.
+
 ## Граница M6
 
 M6 подключает уже существующий путь GitHub Issue → Actions → self-hosted runner к Postman Runtime. Обработчик `postman/github-wakeup.ps1` по-прежнему проверяет строгий протокол и атомарно сохраняет `signals/REQ_*.json`; после записи он вызывает `postman/ingest-github-signal.mjs`. Загрузчик использует единственный производственный API `PostmanRuntime.markExternalReady()`.

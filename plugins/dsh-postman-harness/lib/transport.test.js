@@ -1,11 +1,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
+import { EventEmitter } from 'node:events'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { PassThrough } from 'node:stream'
 import { PostmanRuntime } from './runtime.js'
-import { buildChatGptTransportPrompt, createAndSubmitExternal, createGitHubIssue } from './transport.js'
+import { buildChatGptTransportPrompt, createAndSubmitExternal, createGitHubIssue, startPostSubmitGuard, stopPostSubmitGuard } from './transport.js'
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'dsh-postman-transport-'))
@@ -42,6 +44,89 @@ test('createAndSubmitExternal should persist issue metadata and WAITING only aft
     assert.equal(calls[0][0], 'issue')
     assert.equal(calls[1][0], 'submit')
   } finally { f.close() }
+})
+
+test('createAndSubmitExternal should start the optional post-submit guard after confirmation', async () => {
+  const f = fixture()
+  try {
+    const calls = []
+    const result = await createAndSubmitExternal({
+      runtime: f.runtime,
+      request: f.request,
+      issueCreator: async () => ({ repository: 'AndrewVerhoturov1/dsh-workspace', issueNumber: 126 }),
+      submitter: async () => ({ ok: true, submitted: true, userMessageConfirmed: true, runId: 'guard-test', hostPid: 34728, hostHwnd: '0x280788' }),
+      postSubmitGuard: (input) => { calls.push(input); return { requestId: input.requestId } },
+    })
+    assert.equal(result.status, 'WAITING')
+    assert.equal(result.postSubmitGuardStarted, true)
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0].requestId, f.request.request_id)
+    assert.equal(calls[0].issueNumber, 126)
+  } finally { f.close() }
+})
+
+test('startPostSubmitGuard should pass the confirmed host identity and journal child events', async () => {
+  class FakeChild extends EventEmitter {
+    constructor() { super(); this.stdout = new PassThrough(); this.stderr = new PassThrough() }
+    kill() { this.emit('close', null) }
+  }
+  const child = new FakeChild()
+  const calls = []
+  const runtime = {
+    getRequest: () => ({ status: 'WAITING' }),
+    journal: (event, payload) => calls.push({ event, payload }),
+  }
+  let spawnInput
+  const handle = startPostSubmitGuard({
+    runtime,
+    requestId: 'REQ_GUARD_TEST',
+    issueNumber: 127,
+    confirmation: { hostPid: 34728, hostHwnd: '0x280788' },
+    spawn: (...args) => { spawnInput = args; return child },
+    guardPath: 'guard.ps1',
+    deadlineSeconds: 9,
+  })
+  try {
+    assert.ok(handle)
+    assert.equal(spawnInput[0], process.env.DSH_POSTMAN_PWSH || 'pwsh.exe')
+    assert.deepEqual(spawnInput[1].slice(-8), ['-HostPid', '34728', '-HostHwnd', '0x280788', '-RequestId', 'REQ_GUARD_TEST', '-DeadlineSeconds', '9'])
+    child.stdout.write(JSON.stringify({ event: 'WORK_PROMPT_DETECTED', requestId: 'REQ_GUARD_TEST', hostPid: 34728 }) + '\n')
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.deepEqual(calls.find((entry) => entry.event === 'WORK_PROMPT_DETECTED'), {
+      event: 'WORK_PROMPT_DETECTED',
+      payload: { issueNumber: 127, requestId: 'REQ_GUARD_TEST', hostPid: 34728 },
+    })
+  } finally { stopPostSubmitGuard(handle) }
+})
+
+test('startPostSubmitGuard should block only the request on an unknown modal event', async () => {
+  class FakeChild extends EventEmitter {
+    constructor() { super(); this.stdout = new PassThrough(); this.stderr = new PassThrough() }
+    kill() { this.emit('close', null) }
+  }
+  const child = new FakeChild()
+  const calls = []
+  const runtime = {
+    getRequest: () => ({ status: 'WAITING' }),
+    journal: (event, payload) => calls.push({ event, payload }),
+    markExternalFailure: (input) => calls.push({ event: 'MARK_EXTERNAL_FAILURE', payload: input }),
+  }
+  const handle = startPostSubmitGuard({
+    runtime,
+    requestId: 'REQ_GUARD_BLOCK_TEST',
+    issueNumber: 128,
+    confirmation: { hostPid: 34728, hostHwnd: '0x280788' },
+    spawn: () => child,
+    guardPath: 'guard.ps1',
+  })
+  try {
+    child.stdout.write(JSON.stringify({ event: 'UNKNOWN_POST_SUBMIT_MODAL', requestId: 'REQ_GUARD_BLOCK_TEST', modalName: 'Other dialog' }) + '\n')
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.deepEqual(calls.find((entry) => entry.event === 'MARK_EXTERNAL_FAILURE'), {
+      event: 'MARK_EXTERNAL_FAILURE',
+      payload: { requestId: 'REQ_GUARD_BLOCK_TEST', status: 'POST_SUBMIT_GUARD_BLOCKED', error: 'UNKNOWN_POST_SUBMIT_MODAL: Other dialog' },
+    })
+  } finally { stopPostSubmitGuard(handle) }
 })
 
 test('createGitHubIssue should parse the URL emitted by installed gh CLI', async () => {

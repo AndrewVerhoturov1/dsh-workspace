@@ -10,6 +10,7 @@ export const REQUEST_STATUSES = Object.freeze({
   WAITING: 'WAITING',
   ISSUE_CREATE_FAILED: 'ISSUE_CREATE_FAILED',
   CHAT_SUBMIT_FAILED: 'CHAT_SUBMIT_FAILED',
+  POST_SUBMIT_GUARD_BLOCKED: 'POST_SUBMIT_GUARD_BLOCKED',
   READY: 'READY',
   DELIVERING: 'DELIVERING',
   DELIVERED: 'DELIVERED',
@@ -295,7 +296,7 @@ export class PostmanRuntime {
 
   markExternalFailure({ requestId, status, error }) {
     assertRequestId(requestId)
-    if (![REQUEST_STATUSES.ISSUE_CREATE_FAILED, REQUEST_STATUSES.CHAT_SUBMIT_FAILED].includes(status)) throw new Error('unsupported external failure status')
+    if (![REQUEST_STATUSES.ISSUE_CREATE_FAILED, REQUEST_STATUSES.CHAT_SUBMIT_FAILED, REQUEST_STATUSES.POST_SUBMIT_GUARD_BLOCKED].includes(status)) throw new Error('unsupported external failure status')
     if (typeof error !== 'string' || error.length === 0) throw new Error('error must be a non-empty string')
     let record
     this.transaction(() => {

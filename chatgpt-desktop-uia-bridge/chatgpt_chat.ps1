@@ -49,6 +49,11 @@ public static class DshWindowFocus {
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int command);
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool IsZoomed(IntPtr hWnd);
+    [DllImport("user32.dll", SetLastError=true)] public static extern bool GetWindowRect(IntPtr hWnd, out Rect rect);
+    [DllImport("user32.dll", SetLastError=true)] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
+    [StructLayout(LayoutKind.Sequential)] public struct Rect { public int Left; public int Top; public int Right; public int Bottom; }
 }
 '@
 
@@ -91,6 +96,11 @@ $hostHwnd = $null
 $hostProcessName = $null
 $hostExecutablePath = $null
 $hostWindowTitle = $null
+$hostGeometryConfirmed = $false
+$geometryNormalized = $false
+$hostGeometryBefore = $null
+$hostGeometryAfter = $null
+$geometryReadbacks = 0
 $initialSurface = 'UNKNOWN'
 $navigationAttempted = $false
 $navigationMethod = $null
@@ -217,6 +227,93 @@ function Get-DesktopHost {
     if (!$selected) { return $null }
     $script:DesktopHostInfo = $selected[0]
     return $selected[0]
+}
+
+function Convert-NativeRect($Rect) {
+    if (!$Rect) { return $null }
+    return [pscustomobject]@{
+        Left=[int]$Rect.Left; Top=[int]$Rect.Top; Right=[int]$Rect.Right; Bottom=[int]$Rect.Bottom
+        Width=([int]$Rect.Right - [int]$Rect.Left); Height=([int]$Rect.Bottom - [int]$Rect.Top)
+    }
+}
+
+function Get-ForegroundSnapshot {
+    $handle = [DshWindowFocus]::GetForegroundWindow()
+    [uint32]$foregroundPid = 0
+    if ($handle -ne [IntPtr]::Zero) { [DshWindowFocus]::GetWindowThreadProcessId($handle, [ref]$foregroundPid) | Out-Null }
+    $processName = $null
+    $windowTitle = $null
+    if ($foregroundPid) {
+        $process = Get-Process -Id ([int]$foregroundPid) -ErrorAction SilentlyContinue
+        if ($process) { $processName=[string]$process.ProcessName; $windowTitle=[string]$process.MainWindowTitle }
+    }
+    return [pscustomobject]@{
+        Hwnd=if($handle -ne [IntPtr]::Zero){'0x{0:X}' -f $handle.ToInt64()}else{$null}
+        Pid=if($foregroundPid){[int]$foregroundPid}else{$null}; ProcessName=$processName; WindowTitle=$windowTitle
+    }
+}
+
+function Get-HostWindowGeometry($HostInfo) {
+    if (!$HostInfo) { return $null }
+    $handle = [IntPtr]$HostInfo.Hwnd
+    if ($handle -eq [IntPtr]::Zero -or ![DshWindowFocus]::IsWindow($handle)) { return $null }
+    [uint32]$ownerPid = 0
+    [DshWindowFocus]::GetWindowThreadProcessId($handle, [ref]$ownerPid) | Out-Null
+    if ([int]$ownerPid -ne [int]$HostInfo.Pid) { return $null }
+    $nativeRect = New-Object DshWindowFocus+Rect
+    if (![DshWindowFocus]::GetWindowRect($handle, [ref]$nativeRect)) { return $null }
+    $rect = Convert-NativeRect $nativeRect
+    $screen = [System.Windows.Forms.Screen]::FromHandle($handle)
+    if (!$screen) { return $null }
+    $work = $screen.WorkingArea
+    $visible = ($rect.Right -gt $work.Left -and $rect.Left -lt $work.Right -and
+        $rect.Bottom -gt $work.Top -and $rect.Top -lt $work.Bottom)
+    $state = if ([DshWindowFocus]::IsIconic($handle)) { 'minimized' } elseif ([DshWindowFocus]::IsZoomed($handle)) { 'maximized' } else { 'normal' }
+    return [pscustomobject]@{
+        HostPid=[int]$ownerPid; HostHwnd=('0x{0:X}' -f $handle.ToInt64()); State=$state
+        WindowRect=$rect; WorkAreaRect=[pscustomobject]@{Left=$work.Left;Top=$work.Top;Right=$work.Right;Bottom=$work.Bottom;Width=$work.Width;Height=$work.Height}
+        WindowWidth=[int]$rect.Width; WindowHeight=[int]$rect.Height; WorkAreaWidth=[int]$work.Width; WorkAreaHeight=[int]$work.Height
+        IsMinimized=([bool]([DshWindowFocus]::IsIconic($handle))); WindowVisibleOnWorkArea=[bool]$visible
+        Foreground=(Get-ForegroundSnapshot)
+    }
+}
+
+function Normalize-HostWindowGeometry($HostInfo, $Geometry) {
+    if (!$HostInfo -or !$Geometry) { return $false }
+    $handle = [IntPtr]$HostInfo.Hwnd
+    [uint32]$ownerPid = 0
+    [DshWindowFocus]::GetWindowThreadProcessId($handle, [ref]$ownerPid) | Out-Null
+    if ([int]$ownerPid -ne [int]$HostInfo.Pid -or ![DshWindowFocus]::IsWindow($handle)) { return $false }
+    if ($Geometry.IsMinimized) { [DshWindowFocus]::ShowWindow($handle, 9) | Out-Null }
+    $work = [System.Windows.Forms.Screen]::FromHandle($handle).WorkingArea
+    $target = Get-DesktopGeometryNormalizationTarget $work.Width $work.Height
+    if (!$target) { return $false }
+    $targetWidth = [int]$target.Width
+    $targetHeight = [int]$target.Height
+    $x = [int]($work.Left + (($work.Width - $targetWidth) / 2))
+    $y = [int]($work.Top + (($work.Height - $targetHeight) / 2))
+    # Host identity and PID ownership were verified above. Keep z-order and
+    # activation unchanged; keyboard focus is handled by Activate-ChatGPTWindow.
+    return [DshWindowFocus]::SetWindowPos($handle, [IntPtr]::Zero, $x, $y, $targetWidth, $targetHeight, 0x14)
+}
+
+function Confirm-HostGeometry($HostInfo) {
+    $before = Get-HostWindowGeometry $HostInfo
+    if (!$before) { return [pscustomobject]@{ Confirmed=$false; Normalized=$false; Before=$null; After=$null; Readbacks=0; Reason='HOST_GEOMETRY_NOT_CONFIRMED' } }
+    $normalized = $false
+    $first = $before
+    if (!(Test-DesktopHostGeometryPredicates $before.IsMinimized $before.WindowWidth $before.WindowHeight $before.WorkAreaWidth $before.WorkAreaHeight $before.WindowVisibleOnWorkArea)) {
+        $normalized = [bool](Normalize-HostWindowGeometry $HostInfo $before)
+        Start-Sleep -Milliseconds 250
+        $first = Get-HostWindowGeometry $HostInfo
+    }
+    Start-Sleep -Milliseconds 250
+    $second = Get-HostWindowGeometry $HostInfo
+    $valid = ($first -and $second -and
+        (Test-DesktopHostGeometryPredicates $first.IsMinimized $first.WindowWidth $first.WindowHeight $first.WorkAreaWidth $first.WorkAreaHeight $first.WindowVisibleOnWorkArea) -and
+        (Test-DesktopHostGeometryPredicates $second.IsMinimized $second.WindowWidth $second.WindowHeight $second.WorkAreaWidth $second.WorkAreaHeight $second.WindowVisibleOnWorkArea) -and
+        (Test-DesktopGeometryStable $first $second))
+    return [pscustomobject]@{ Confirmed=[bool]$valid; Normalized=$normalized; Before=$before; After=$second; Readbacks=2; Reason=if($valid){'HOST_GEOMETRY_CONFIRMED'}else{'HOST_GEOMETRY_NOT_CONFIRMED'} }
 }
 
 function Get-OrdinaryChatSurfaceEvidence($Window) {
@@ -948,6 +1045,7 @@ function Activate-ChatGPTWindow($Window) {
         [DshWindowFocus]::SetFocus($handle) | Out-Null
         $activated = $false
         $isForeground = $false
+        $activationFallbackAttempted = $false
         for ($attempt = 1; $attempt -le 5; $attempt++) {
             $activated = ([DshWindowFocus]::SetForegroundWindow($handle) -or $activated)
             if (![DshWindowFocus]::GetForegroundWindow().Equals($handle)) {
@@ -957,7 +1055,21 @@ function Activate-ChatGPTWindow($Window) {
             if ($isForeground) { break }
             Start-Sleep -Milliseconds 120
         }
-        Write-Log 'window-activation' "handle=$handle foregroundBefore=$foreground activated=$activated attempts=$attempt verified=$isForeground"
+        if (!$isForeground) {
+            # Windows may keep a packaged Chromium host outside the foreground
+            # lock handoff even after AttachThreadInput. Minimize/restore is a
+            # native window-state transition, not input injection; the exact
+            # host HWND is checked again before the bridge proceeds.
+            $activationFallbackAttempted = $true
+            [DshWindowFocus]::ShowWindow($handle, 6) | Out-Null
+            Start-Sleep -Milliseconds 150
+            [DshWindowFocus]::ShowWindow($handle, 9) | Out-Null
+            Start-Sleep -Milliseconds 300
+            [DshWindowFocus]::BringWindowToTop($handle) | Out-Null
+            $activated = ([DshWindowFocus]::SetForegroundWindow($handle) -or $activated)
+            $isForeground = [DshWindowFocus]::GetForegroundWindow().Equals($handle)
+        }
+        Write-Log 'window-activation' "handle=$handle foregroundBefore=$foreground activated=$activated attempts=$attempt fallbackMinimizeRestore=$activationFallbackAttempted verified=$isForeground"
         return $isForeground
     } catch {
         Write-Log 'window-activation' "handle=$handle error=$($_.Exception.Message)"
@@ -2002,7 +2114,12 @@ function Save-FailureDump($Window, [string]$Code) {
             'Private screenshot: not saved',
             'UIA/visual discrepancy: inspect the accompanying dump before retry',
             "FreshReason: $freshReason",
-            "FreshDiagnosticPath: $(if($freshDiagnostic){Join-Path $directory ('failure_' + $RunId + '_fresh.json')}else{$null})"
+            "FreshDiagnosticPath: $(if($freshDiagnostic){Join-Path $directory ('failure_' + $RunId + '_fresh.json')}else{$null})",
+            "HostGeometryConfirmed: $hostGeometryConfirmed",
+            "GeometryNormalized: $geometryNormalized",
+            "GeometryReadbacks: $geometryReadbacks",
+            "GeometryBefore: $(if($hostGeometryBefore){$hostGeometryBefore | ConvertTo-Json -Compress -Depth 6}else{$null})",
+            "GeometryAfter: $(if($hostGeometryAfter){$hostGeometryAfter | ConvertTo-Json -Compress -Depth 6}else{$null})"
         ) | Out-String
         Set-Content -LiteralPath (Join-Path $directory ('failure_' + $RunId + '_computer_use_notes.md')) -Value $notes -Encoding UTF8
     } catch { Write-Log 'diagnostic' "dump failed=$($_.Exception.Message)" }
@@ -2027,6 +2144,16 @@ try {
         $hostExecutablePath = [string]$hostInfo.ExecutablePath
         $hostWindowTitle = [string]$hostInfo.WindowTitle
     }
+    $geometry = Confirm-HostGeometry $hostInfo
+    $hostGeometryConfirmed = [bool]$geometry.Confirmed
+    $geometryNormalized = [bool]$geometry.Normalized
+    $hostGeometryBefore = $geometry.Before
+    $hostGeometryAfter = $geometry.After
+    $geometryReadbacks = [int]$geometry.Readbacks
+    $beforeGeometryText = if($hostGeometryBefore){ '{0}x{1} state={2} foreground={3}' -f $hostGeometryBefore.WindowWidth,$hostGeometryBefore.WindowHeight,$hostGeometryBefore.State,$hostGeometryBefore.Foreground.Pid }else{'none'}
+    $afterGeometryText = if($hostGeometryAfter){ '{0}x{1} state={2} foreground={3}' -f $hostGeometryAfter.WindowWidth,$hostGeometryAfter.WindowHeight,$hostGeometryAfter.State,$hostGeometryAfter.Foreground.Pid }else{'none'}
+    Write-Log 'host-geometry' "confirmed=$hostGeometryConfirmed normalized=$geometryNormalized readbacks=$geometryReadbacks before=$beforeGeometryText after=$afterGeometryText"
+    if (!$hostGeometryConfirmed) { Fail 'HOST_GEOMETRY_NOT_CONFIRMED' $geometry.Reason 3 }
     $surfaceInfo = if ($hostInfo) { Get-DesktopSurface $hostInfo } else { $null }
     $initialSurface = if ($surfaceInfo) { [string]$surfaceInfo.Kind } else { 'UNKNOWN' }
     $ordinaryChatConfirmed = ($initialSurface -ceq 'ORDINARY_CHAT')
@@ -2208,6 +2335,7 @@ try {
             ok=$true; submitted=$true; userMessageConfirmed=$true; runId=$RunId; mode=$modeOut; chatPolicy=$chatPolicyOut; response=$null
             conversationId=$null; deeplink=$null; extraction=$null; copyRuntimeId=$null; copyTracePath=$null
             hostFound=$hostFound; hostPid=$hostPid; hostHwnd=$hostHwnd; hostProcessName=$hostProcessName; hostExecutablePath=$hostExecutablePath; hostWindowTitle=$hostWindowTitle
+            hostGeometryConfirmed=$hostGeometryConfirmed; geometryNormalized=$geometryNormalized; geometryReadbacks=$geometryReadbacks; geometryBefore=$hostGeometryBefore; geometryAfter=$hostGeometryAfter
             initialSurface=$initialSurface; navigationAttempted=$navigationAttempted; navigationMethod=$navigationMethod; ordinaryChatConfirmed=$ordinaryChatConfirmed; composerReady=$composerReady
             baselineMessageCount=$baselineMessageCount; conversationRuntimeId=$conversationRuntimeId
             surfaceModeBefore=$surfaceModeBefore; surfaceModeAfter=$surfaceModeAfter; chatModeConfirmed=$chatModeConfirmed
@@ -2333,6 +2461,7 @@ try {
         ok=$true; runId=$RunId; mode=$modeOut; chatPolicy=$chatPolicyOut; response=$answer; conversationId=$conversationId; deeplink=$deep
         extraction='copy'; copyRuntimeId=$copyResult.CopyRuntimeId; copyTracePath=$copyResult.TracePath
         submitted=$submitted; userMessageConfirmed=$userMessageConfirmed; hostFound=$hostFound; hostPid=$hostPid; hostHwnd=$hostHwnd; hostProcessName=$hostProcessName; hostExecutablePath=$hostExecutablePath; hostWindowTitle=$hostWindowTitle
+        hostGeometryConfirmed=$hostGeometryConfirmed; geometryNormalized=$geometryNormalized; geometryReadbacks=$geometryReadbacks; geometryBefore=$hostGeometryBefore; geometryAfter=$hostGeometryAfter
         initialSurface=$initialSurface; navigationAttempted=$navigationAttempted; navigationMethod=$navigationMethod; ordinaryChatConfirmed=$ordinaryChatConfirmed; composerReady=$composerReady
         baselineMessageCount=$baselineMessageCount; conversationRuntimeId=$conversationRuntimeId
         surfaceModeBefore=$surfaceModeBefore; surfaceModeAfter=$surfaceModeAfter; chatModeConfirmed=$chatModeConfirmed
@@ -2357,6 +2486,7 @@ catch {
         ok=$false; runId=$RunId; mode=$modeOut; chatPolicy=$chatPolicyOut; response=$null; conversationId=$null; deeplink=$null
         extraction=$null; copyRuntimeId=$null; copyTracePath=(Join-Path $PSScriptRoot ('diagnostics\copy_trace_' + $RunId + '.jsonl'))
         submitted=$submitted; userMessageConfirmed=$userMessageConfirmed; hostFound=$hostFound; hostPid=$hostPid; hostHwnd=$hostHwnd; hostProcessName=$hostProcessName; hostExecutablePath=$hostExecutablePath; hostWindowTitle=$hostWindowTitle
+        hostGeometryConfirmed=$hostGeometryConfirmed; geometryNormalized=$geometryNormalized; geometryReadbacks=$geometryReadbacks; geometryBefore=$hostGeometryBefore; geometryAfter=$hostGeometryAfter
         initialSurface=$initialSurface; navigationAttempted=$navigationAttempted; navigationMethod=$navigationMethod; ordinaryChatConfirmed=$ordinaryChatConfirmed; composerReady=$composerReady
         baselineMessageCount=$baselineMessageCount; conversationRuntimeId=$conversationRuntimeId
         surfaceModeBefore=$surfaceModeBefore; surfaceModeAfter=$surfaceModeAfter; chatModeConfirmed=$chatModeConfirmed
