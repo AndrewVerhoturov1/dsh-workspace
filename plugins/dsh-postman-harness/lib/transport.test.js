@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PostmanRuntime } from './runtime.js'
-import { buildChatGptTransportPrompt, createAndSubmitExternal } from './transport.js'
+import { buildChatGptTransportPrompt, createAndSubmitExternal, createGitHubIssue } from './transport.js'
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'dsh-postman-transport-'))
@@ -42,6 +42,18 @@ test('createAndSubmitExternal should persist issue metadata and WAITING only aft
     assert.equal(calls[0][0], 'issue')
     assert.equal(calls[1][0], 'submit')
   } finally { f.close() }
+})
+
+test('createGitHubIssue should parse the URL emitted by installed gh CLI', async () => {
+  const result = await createGitHubIssue({
+    requestId: 'REQ_TRANSPORT_001',
+    runner: async () => ({ stdout: 'https://github.com/AndrewVerhoturov1/dsh-workspace/issues/321\n', stderr: '' }),
+  })
+  assert.deepEqual(result, {
+    repository: 'AndrewVerhoturov1/dsh-workspace',
+    issueNumber: 321,
+    url: 'https://github.com/AndrewVerhoturov1/dsh-workspace/issues/321',
+  })
 })
 
 test('createAndSubmitExternal should leave a recoverable explicit failure when submit is not confirmed', async () => {
