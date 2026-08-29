@@ -8,7 +8,7 @@
 - Ветка: `postman/github-integration-m6`.
 - Реализация M6 зафиксирована коммитом `a5021b190ee58d1bd701d9857f34809c229ca591`.
 - Доработка моста зафиксирована в коммите `6084c134345347e9c3e6222c2445c575d4a4b8a0`: строгий Fresh-proof для `SubmitOnly`; перед отправкой требуются действие `Новый чат` и три стабильных семантических UIA-снимка. Runtime ID не является доказательством нового чата.
-- Незакоммиченная доработка host/surface добавляет раздельное обнаружение unified host и поверхности Codex/ChatGPT, штатный UIA-переход через `ExpandCollapsePattern` + `MenuItem.InvokePattern`, независимый ordinary-Chat proof и fail-closed ошибки. Ошибка `$matches` в PowerShell исправлена переименованием коллекции меню, чтобы автоматическая переменная `$Matches` не разрушала подсчёт кандидатов.
+- Доработка host/surface зафиксирована коммитом `b420722027f4d9a765f39248709fa91b0cd7bd99`: раздельное обнаружение unified host и поверхности Codex/ChatGPT, штатный UIA-переход через `ExpandCollapsePattern` + `MenuItem.InvokePattern`, независимый ordinary-Chat proof и fail-closed ошибки. Ошибка `$matches` в PowerShell исправлена переименованием коллекции меню, чтобы автоматическая переменная `$Matches` не разрушала подсчёт кандидатов.
 - Независимые пользовательские изменения сохранены; `settings.yaml` не включается в коммиты.
 
 ## Маршруты A, B, C, W
