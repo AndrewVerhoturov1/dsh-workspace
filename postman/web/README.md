@@ -352,3 +352,43 @@ python postman/web/browser_bootstrap.py --launch-chrome --timeout-ms 30000
 локальное browser state. Поэтому профиль должен оставаться вне repository,
 не должен коммититься, прикладываться к artifact ZIP или целиком попадать в
 диагностические отчёты.
+
+---
+
+## WP-004 — Fresh Chat + Submit
+
+WP-004 добавляет `browser_submit.py` и unit tests для P3 transport boundary.
+
+Перед отправкой worker обязан доказать одновременно:
+
+```text
+PAGE_OWNED
+→ root chatgpt.com route
+→ zero current conversation turns
+→ visible empty composer
+→ FRESH_CHAT_CONFIRMED
+→ COMPOSER_EMPTY_CONFIRMED
+```
+
+Один только видимый homepage composer не считается достаточным доказательством
+fresh chat.
+
+После вставки prompt проверяется его точный текст и SHA-256. Затем разрешена
+ровно одна попытка Send. После начала click запрещены Enter-fallback и
+автоматический повтор.
+
+Успешная отправка требует одновременного доказательства:
+
+```text
+exactly one new user turn with exact prompt text
++ empty composer
++ new bound /c/... URL
+= PROMPT_SEND_CONFIRMED
+```
+
+Если после начала Send хотя бы одно из этих доказательств отсутствует или
+результат click неопределён, состояние — `PROMPT_SEND_UNKNOWN`. Такой prompt
+автоматически повторно не отправляется.
+
+WP-004 ещё не наблюдает assistant turn, не ищет attachments и не скачивает ZIP.
+Persistent restart recovery для Send state остаётся отдельным последующим
