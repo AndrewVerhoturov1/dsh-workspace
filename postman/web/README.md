@@ -304,3 +304,51 @@ apply и tests выполняет originating Harness Agent.
 
 Следующий milestone после PASS WP-002: WP-003 — Chrome/CDP
 login/session/composer bootstrap probe без отправки production prompt.
+
+---
+
+## WP-003 — Browser Bootstrap
+
+WP-003 добавляет `browser_bootstrap.py` и unit tests для P2 browser bootstrap.
+
+Граница этого milestone:
+
+```text
+Chrome/CDP
+→ Playwright connect_over_cdp
+→ dedicated owned Page
+→ chatgpt.com
+→ manual session/login check
+→ visible composer
+```
+
+WP-003 не отправляет prompt, не ищет assistant turn и не скачивает artifacts.
+В attach-mode модуль не переиспользует существующую Page и не закрывает
+externally-owned browser/context. Профиль по умолчанию находится вне repository:
+`%LOCALAPPDATA%\\DSH\\Postman\\browser-profile`.
+
+### Постоянная идентичность браузера
+
+Для Web Postman постоянной идентичностью browser session является **каталог
+выделенного Chrome-профиля**, а не PID конкретного процесса Chrome:
+
+```text
+%LOCALAPPDATA%\\DSH\\Postman\\browser-profile
+```
+
+Профиль переживает закрытие и новый запуск Chrome и сохраняет локальное browser
+state, необходимое для повторного использования уже авторизованной сессии.
+PID процесса, CDP WebSocket URL и идентификаторы Page являются временными
+атрибутами конкретного запуска и не должны использоваться как durable identity.
+
+Обычный повторный запуск:
+
+```powershell
+python postman/web/browser_bootstrap.py --launch-chrome --timeout-ms 30000
+```
+
+Код Web Postman не вводит и не обрабатывает пароль, 2FA или CAPTCHA. При этом
+сам Chrome-профиль содержит cookies/session tokens и другое чувствительное
+локальное browser state. Поэтому профиль должен оставаться вне repository,
+не должен коммититься, прикладываться к artifact ZIP или целиком попадать в
+диагностические отчёты.
