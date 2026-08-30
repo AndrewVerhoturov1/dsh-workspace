@@ -2,11 +2,13 @@
 
 ## Статус
 
-WP-001 создаёт только skeleton/module-boundary document.
+WP-001 зафиксировал contracts и module boundaries. WP-002 добавляет первый
+production-quality модуль: детерминированный fail-closed artifact validator и
+его unit tests.
 
-В этом каталоге пока не должно быть browser implementation, Playwright
-dependencies, production state machine, ZIP extraction/application code или
-интеграции с существующим Postman Runtime.
+В WP-002 по-прежнему нет browser implementation, Playwright dependencies,
+production state machine, ZIP extraction/application code или интеграции с
+существующим Postman Runtime.
 
 Канонический контракт artifact/result transport находится в
 `docs/web-postman-artifact-contract.md`.
@@ -42,15 +44,17 @@ REQ → origin_agent_id
 
 ```text
 postman/web/
-├── artifact-validator.*
+├── artifact-validator.mjs
 ├── browser-worker.*
 ├── browser-state.*
 ├── artifact-download.*
 ├── result-store.*
 └── tests/
+    └── artifact-validator.test.mjs
 ```
 
-Эти implementation files в WP-001 **не создаются**.
+В WP-002 реализованы только `artifact-validator.mjs` и его unit tests.
+Остальные implementation modules остаются будущими.
 
 ---
 
@@ -102,8 +106,20 @@ ValidationResult
 - без extraction поверх repo;
 - один input должен давать детерминированный decision.
 
-WP-002 реализует этот модуль и unit tests по acceptance matrix из artifact
-contract.
+WP-002 реализует модуль без сторонних зависимостей. Он использует только
+стандартные модули Node.js и не требует `package.json` в `postman/web/`.
+
+Unit tests запускаются напрямую:
+
+```powershell
+node --test postman/web/tests/artifact-validator.test.mjs
+```
+
+Validator читает ZIP как недоверенные bytes, проверяет central/local headers,
+CRC, SHA-256, типы entries, path aliases/collisions, limits, manifest, trusted
+scope и unified diff до любого применения результата в workspace.
+
+ZIP не извлекается поверх repository.
 
 ---
 
@@ -233,7 +249,10 @@ single-request E2E
 concurrency/cross-correlation tests
 ```
 
-WP-002 начинает только с artifact validator unit tests и не требует browser.
+WP-002 содержит artifact validator unit tests и не требует browser/network.
+Acceptance matrix включает exact machine-readable error codes для invalid
+fixtures. Case-insensitive и Unicode-NFC collisions являются hard reject, а не
+warning.
 
 ---
 
@@ -265,9 +284,9 @@ apply и tests выполняет originating Harness Agent.
 
 ---
 
-## WP-001 запреты
+## WP-002 границы
 
-В этом milestone не добавлять:
+В этом milestone не добавляются:
 
 - Playwright runner;
 - Chrome automation;
@@ -281,6 +300,7 @@ apply и tests выполняет originating Harness Agent.
 - browser profiles;
 - runtime state;
 - diagnostics dumps;
-- dependencies.
+- новые runtime dependencies.
 
-Следующий milestone: WP-002 — deterministic fail-closed artifact validator.
+Следующий milestone после PASS WP-002: WP-003 — Chrome/CDP
+login/session/composer bootstrap probe без отправки production prompt.
