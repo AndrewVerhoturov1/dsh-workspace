@@ -507,7 +507,10 @@ class ObserverTests(unittest.TestCase):
             sleep=clock.sleep,
             monotonic=clock.monotonic,
         )
-        json.dumps(result)
+        result["details"]["unicodeProbe"] = "ЛУНА_OK"
+        payload = observer._json_dumps(result)
+        self.assertTrue(payload.isascii())
+        self.assertEqual(json.loads(payload), result)
 
     def test_module_has_no_download_api(self):
         forbidden = {"download_artifact", "apply_artifact", "save_artifact", "expect_download"}

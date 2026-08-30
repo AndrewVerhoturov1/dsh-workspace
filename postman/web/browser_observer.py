@@ -324,6 +324,13 @@ def _result(
     }
 
 
+def _json_dumps(value: dict[str, Any]) -> str:
+    """Serialize CLI JSON safely for Windows legacy console encodings."""
+    # JSON escapes preserve Unicode exactly while keeping stdout ASCII-only,
+    # avoiding UnicodeEncodeError on cp1251/cp866 consoles.
+    return json.dumps(value, ensure_ascii=True, sort_keys=True)
+
+
 def observe_next_assistant(
     page: Any,
     expected_prompt: str,
@@ -596,7 +603,7 @@ def main(argv: list[str] | None = None) -> int:
                 transitions=[],
                 recoverable=True,
             )
-            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+            print(_json_dumps(result))
             return 3
         profile_dir = Path(args.profile_dir) if args.profile_dir else bootstrap.default_profile_dir()
         launched_process = bootstrap.start_dedicated_chrome(executable, profile_dir, port=args.port)
@@ -618,7 +625,7 @@ def main(argv: list[str] | None = None) -> int:
                 profile_dir,
                 getattr(launched_process, "pid", None),
             )
-            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+            print(_json_dumps(result))
             return 3
 
     result = run_submit_and_observe(
@@ -636,7 +643,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         result["details"]["launchedChromeLeftRunning"] = True
 
-    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+    print(_json_dumps(result))
     return 0 if result.get("ok") else 3
 
 
