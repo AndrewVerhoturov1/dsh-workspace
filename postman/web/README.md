@@ -392,3 +392,46 @@ exactly one new user turn with exact prompt text
 
 WP-004 ещё не наблюдает assistant turn, не ищет attachments и не скачивает ZIP.
 Persistent restart recovery для Send state остаётся отдельным последующим
+
+---
+
+## WP-005 — Assistant Turn Observer
+
+WP-005 добавляет `browser_observer.py` и unit tests для P4 assistant-turn
+correlation/lifecycle.
+
+Observer начинает работу только после доказанного P3 submit и получает trusted
+pair:
+
+```text
+exact prompt text
++
+exact bound https://chatgpt.com/c/... URL
+```
+
+Корреляция выполняется по упорядоченным conversation-turn DOM nodes:
+
+```text
+exact proven user turn
+→ immediately next conversation turn
+→ role = assistant
+```
+
+Старые assistant turns до user anchor игнорируются. Поиск response text по всему
+`body` запрещён.
+
+Lifecycle целевого assistant turn:
+
+```text
+ASSISTANT_TURN_STARTED
+→ ASSISTANT_TURN_STREAMING   (если streaming был наблюдаем)
+→ ASSISTANT_TURN_COMPLETED
+```
+
+Для `ASSISTANT_TURN_COMPLETED` целевой turn должен иметь непустой текст,
+generation control должен быть неактивен, а текст должен оставаться стабильным
+в течение заданного интервала. Изменение URL, неожиданный следующий user turn,
+неизвестная роль turn или смена identity уже привязанного assistant turn
+завершаются fail-closed состоянием.
+
+WP-005 не ищет attachments, не скачивает файлы и не применяет artifacts.
