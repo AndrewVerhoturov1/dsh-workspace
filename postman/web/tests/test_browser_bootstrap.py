@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 from pathlib import Path
 import unittest
+from contextlib import redirect_stdout
+from unittest.mock import patch
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "browser_bootstrap.py"
 spec = importlib.util.spec_from_file_location("browser_bootstrap", MODULE_PATH)
@@ -109,6 +112,45 @@ class BrowserBootstrapTests(unittest.TestCase):
     def test_default_profile_uses_localappdata(self):
         path = bootstrap.default_profile_dir({"LOCALAPPDATA": r"C:\\Users\\A\\AppData\\Local"})
         self.assertTrue(str(path).endswith(str(Path("DSH") / "Postman" / "browser-profile")))
+
+    def test_profile_is_persistent_identity_while_pid_is_transient(self):
+        identity = bootstrap.describe_browser_identity(
+            r"C:\\Users\\A\\AppData\\Local\\DSH\\Postman\\browser-profile",
+            4321,
+        )
+        self.assertEqual(identity["persistent"]["kind"], bootstrap.PROFILE_IDENTITY_KIND)
+        self.assertTrue(identity["persistent"]["survivesChromeRestart"])
+        self.assertTrue(identity["persistent"]["profileDir"].endswith("browser-profile"))
+        self.assertEqual(identity["process"]["kind"], bootstrap.PROCESS_IDENTITY_KIND)
+        self.assertEqual(identity["process"]["pid"], 4321)
+        self.assertFalse(identity["process"]["survivesChromeRestart"])
+
+    def test_main_launch_reports_profile_as_persistent_identity(self):
+        class FakeProcess:
+            pid = 4321
+
+        output = io.StringIO()
+        ready = bootstrap._result(bootstrap.BOOTSTRAP_READY, ok=True, details={})
+        with (
+            patch.object(bootstrap, "discover_chrome_executable", return_value=Path("chrome.exe")),
+            patch.object(bootstrap, "start_dedicated_chrome", return_value=FakeProcess()),
+            patch.object(bootstrap, "wait_for_cdp", return_value={}),
+            patch.object(bootstrap, "run_live_probe", return_value=ready),
+            redirect_stdout(output),
+        ):
+            exit_code = bootstrap.main([
+                "--launch-chrome",
+                "--profile-dir",
+                r"C:\\Users\\A\\AppData\\Local\\DSH\\Postman\\browser-profile",
+            ])
+
+        payload = json.loads(output.getvalue())
+        identity = payload["details"]["browserIdentity"]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(identity["persistent"]["kind"], bootstrap.PROFILE_IDENTITY_KIND)
+        self.assertTrue(identity["persistent"]["survivesChromeRestart"])
+        self.assertEqual(identity["process"]["pid"], 4321)
+        self.assertFalse(identity["process"]["survivesChromeRestart"])
 
     def test_normalize_accepts_loopback_http(self):
         self.assertEqual(bootstrap.normalize_cdp_url("http://127.0.0.1:9222/"), "http://127.0.0.1:9222")

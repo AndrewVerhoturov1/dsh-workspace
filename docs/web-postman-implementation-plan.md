@@ -524,6 +524,19 @@ Chrome
 %LOCALAPPDATA%\DSH\Postman\browser-profile
 ```
 
+Каталог этого выделенного профиля является durable browser identity для Web
+Postman. Он переживает Chrome restart и несёт локальное session/browser state.
+
+Не являются durable identity:
+
+- PID процесса Chrome;
+- текущий CDP WebSocket URL;
+- Page id/handle;
+- номер конкретного запуска worker.
+
+Профиль является чувствительным локальным состоянием: его нельзя помещать в
+repository, artifact ZIP или diagnostics dump целиком.
+
 Первичная авторизация выполняется пользователем вручную.
 
 Запрещена автоматизация:

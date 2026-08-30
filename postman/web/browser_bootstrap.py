@@ -30,6 +30,8 @@ CHATGPT_URL = "https://chatgpt.com/"
 DEFAULT_CDP_URL = "http://127.0.0.1:9222"
 DEFAULT_REMOTE_DEBUGGING_PORT = 9222
 DEFAULT_TIMEOUT_MS = 20_000
+PROFILE_IDENTITY_KIND = "profile_dir"
+PROCESS_IDENTITY_KIND = "pid"
 
 BOOTSTRAP_READY = "BOOTSTRAP_READY"
 BOOTSTRAP_LOGIN_REQUIRED = "BOOTSTRAP_LOGIN_REQUIRED"
@@ -96,6 +98,26 @@ def default_profile_dir(env: dict[str, str] | None = None) -> Path:
     if local:
         return Path(local) / "DSH" / "Postman" / "browser-profile"
     return Path.home() / ".dsh" / "postman" / "browser-profile"
+
+
+def describe_browser_identity(profile_dir: str | Path, pid: int | None) -> dict[str, Any]:
+    """Describe durable browser identity separately from one Chrome process.
+
+    The dedicated profile directory carries authenticated browser/session state
+    across Chrome restarts. A PID identifies only one transient OS process.
+    """
+    return {
+        "persistent": {
+            "kind": PROFILE_IDENTITY_KIND,
+            "profileDir": str(Path(profile_dir)),
+            "survivesChromeRestart": True,
+        },
+        "process": {
+            "kind": PROCESS_IDENTITY_KIND,
+            "pid": pid,
+            "survivesChromeRestart": False,
+        },
+    }
 
 
 def normalize_cdp_url(cdp_url: str, *, allow_remote: bool = False) -> str:
@@ -424,6 +446,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     launched_process = None
+    launch_identity = None
     cdp_url = args.cdp_url
     if args.launch_chrome:
         executable = discover_chrome_executable(explicit=args.chrome_executable)
@@ -432,12 +455,17 @@ def main(argv: list[str] | None = None) -> int:
             return 3
         profile_dir = Path(args.profile_dir) if args.profile_dir else default_profile_dir()
         launched_process = start_dedicated_chrome(executable, profile_dir, port=args.port)
+        launch_identity = describe_browser_identity(
+            profile_dir,
+            getattr(launched_process, "pid", None),
+        )
         cdp_url = f"http://127.0.0.1:{args.port}"
         try:
             wait_for_cdp(cdp_url, timeout_s=max(args.timeout_ms / 1000.0, 1.0))
         except BrowserBootstrapError as exc:
             result = _result(exc.code, ok=False, recoverable=exc.recoverable, details=exc.details)
             result["details"]["launchedPid"] = getattr(launched_process, "pid", None)
+            result["details"]["browserIdentity"] = launch_identity
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
             return 3
 
@@ -450,6 +478,7 @@ def main(argv: list[str] | None = None) -> int:
     if launched_process is not None:
         result["details"]["launchedPid"] = getattr(launched_process, "pid", None)
         result["details"]["launchedChromeLeftRunning"] = True
+        result["details"]["browserIdentity"] = launch_identity
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
     if result["ok"]:
         return 0
