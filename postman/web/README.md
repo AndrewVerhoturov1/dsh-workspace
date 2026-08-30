@@ -304,3 +304,25 @@ apply и tests выполняет originating Harness Agent.
 
 Следующий milestone после PASS WP-002: WP-003 — Chrome/CDP
 login/session/composer bootstrap probe без отправки production prompt.
+
+---
+
+## WP-003 — Browser Bootstrap
+
+WP-003 добавляет `browser_bootstrap.py` и unit tests для P2 browser bootstrap.
+
+Граница этого milestone:
+
+```text
+Chrome/CDP
+→ Playwright connect_over_cdp
+→ dedicated owned Page
+→ chatgpt.com
+→ manual session/login check
+→ visible composer
+```
+
+WP-003 не отправляет prompt, не ищет assistant turn и не скачивает artifacts.
+В attach-mode модуль не переиспользует существующую Page и не закрывает
+externally-owned browser/context. Профиль по умолчанию находится вне repository:
+`%LOCALAPPDATA%\\DSH\\Postman\\browser-profile`.
