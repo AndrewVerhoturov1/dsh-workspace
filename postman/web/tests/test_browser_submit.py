@@ -209,19 +209,74 @@ class BrowserSubmitTests(unittest.TestCase):
     def test_insert_prompt_requires_nonempty_prompt(self):
         page = FakePage()
         composer = page.locator("#prompt-textarea")
-        result = submit.insert_prompt(composer, "")
+        result = submit.insert_prompt(page, composer, "")
         self.assertEqual(result["code"], submit.SUBMIT_INVALID_CONFIG)
 
     def test_insert_prompt_fills_exact_text(self):
         page = FakePage()
         composer = page.locator("#prompt-textarea")
-        result = submit.insert_prompt(composer, "Привет")
+        result = submit.insert_prompt(page, composer, "Привет")
         self.assertTrue(result["ok"])
         self.assertEqual(page.composer_text, "Привет")
+        self.assertEqual(result["details"]["composerSelectorAfterFill"], "#prompt-textarea")
+
+    def test_insert_prompt_reresolves_visible_composer_after_fill_swap(self):
+        class SwapComposer:
+            def __init__(self, page, kind):
+                self.page = page
+                self.kind = kind
+                self.last = self
+
+            def count(self):
+                return 1
+
+            def is_visible(self):
+                return self.page.swapped if self.kind == "live" else not self.page.swapped
+
+            def fill(self, text, timeout=None):
+                if self.kind != "fallback":
+                    raise RuntimeError("fixture expects fallback fill")
+                self.page.live_text = text
+                self.page.swapped = True
+
+            def input_value(self, timeout=None):
+                if self.kind == "fallback":
+                    return ""
+                raise RuntimeError("contenteditable has no input value")
+
+            def inner_text(self, timeout=None):
+                return self.page.live_text if self.kind == "live" else ""
+
+            def text_content(self, timeout=None):
+                return self.inner_text(timeout)
+
+        class SwapPage:
+            def __init__(self):
+                self.swapped = False
+                self.live_text = ""
+                self.fallback = SwapComposer(self, "fallback")
+                self.live = SwapComposer(self, "live")
+
+            def locator(self, selector):
+                if selector == "#prompt-textarea":
+                    return self.live
+                if selector == "textarea":
+                    return self.fallback
+                return FakeLocator(items=[])
+
+        page = SwapPage()
+        fallback = page.locator("textarea")
+        self.assertTrue(fallback.is_visible())
+        result = submit.insert_prompt(page, fallback, "WP005 swap probe", timeout_ms=0)
+        self.assertTrue(result["ok"])
+        self.assertTrue(page.swapped)
+        self.assertFalse(fallback.is_visible())
+        self.assertEqual(result["details"]["composerSelectorAfterFill"], "#prompt-textarea")
+        self.assertEqual(result["details"]["observedTextLength"], len("WP005 swap probe"))
 
     def test_insert_failure_is_pre_send(self):
         page = FakePage(fill_error="blocked")
-        result = submit.insert_prompt(page.locator("#prompt-textarea"), "x")
+        result = submit.insert_prompt(page, page.locator("#prompt-textarea"), "x")
         self.assertEqual(result["code"], submit.PROMPT_INSERT_FAILED)
 
     def test_send_control_missing_does_not_start_send(self):

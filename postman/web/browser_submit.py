@@ -313,24 +313,61 @@ def prepare_fresh_chat(page: Any, *, timeout_ms: int = DEFAULT_TIMEOUT_MS) -> di
     return {"ok": True, "code": FRESH_CHAT_CONFIRMED, "composer": composer, "details": details}
 
 
-def insert_prompt(composer: Any, prompt: str, *, timeout_ms: int = DEFAULT_TIMEOUT_MS) -> dict[str, Any]:
+def insert_prompt(
+    page: Any,
+    composer: Any,
+    prompt: str,
+    *,
+    timeout_ms: int = DEFAULT_TIMEOUT_MS,
+) -> dict[str, Any]:
     if not isinstance(prompt, str) or not prompt:
         return {"ok": False, "code": SUBMIT_INVALID_CONFIG, "details": {"reason": "prompt_empty"}}
     try:
         composer.fill(prompt, timeout=timeout_ms)
     except Exception as exc:
         return {"ok": False, "code": PROMPT_INSERT_FAILED, "details": {"message": str(exc)}}
-    actual = read_composer_text(composer)
-    if _normalize_text(actual) != _normalize_text(prompt):
+
+    # ChatGPT may replace the pre-fill fallback textarea with the real
+    # ProseMirror/contenteditable composer during fill(). The locator that
+    # accepted fill() is therefore not a durable read-back handle. Re-resolve
+    # the current visible composer on every poll before proving exact insertion.
+    def current_composer_matches() -> tuple[bool, dict[str, Any]]:
+        current, selector = find_composer(page)
+        if current is None:
+            return False, {
+                "composerFoundAfterFill": False,
+                "composerSelectorAfterFill": "",
+                "observedTextLength": 0,
+            }
+        actual = read_composer_text(current)
+        return _normalize_text(actual) == _normalize_text(prompt), {
+            "composerFoundAfterFill": True,
+            "composerSelectorAfterFill": selector or "",
+            "observedTextLength": len(actual),
+            "observedTextSha256": prompt_sha256(actual),
+        }
+
+    matched, observed = _wait_until(
+        current_composer_matches,
+        timeout_ms=timeout_ms,
+    )
+    if not matched:
         return {
             "ok": False,
             "code": PROMPT_MISMATCH,
-            "details": {"expectedSha256": prompt_sha256(prompt), "observedTextLength": len(actual)},
+            "details": {
+                "expectedSha256": prompt_sha256(prompt),
+                **observed,
+            },
         }
     return {
         "ok": True,
         "code": PROMPT_INSERTED,
-        "details": {"promptSha256": prompt_sha256(prompt), "promptLength": len(prompt)},
+        "details": {
+            "promptSha256": prompt_sha256(prompt),
+            "promptLength": len(prompt),
+            **observed,
+        },
     }
 
 
@@ -446,7 +483,7 @@ def submit_fresh_prompt(page: Any, prompt: str, *, timeout_ms: int = DEFAULT_TIM
             details=prep.get("details"),
         )
     composer = prep["composer"]
-    inserted = insert_prompt(composer, prompt, timeout_ms=timeout_ms)
+    inserted = insert_prompt(page, composer, prompt, timeout_ms=timeout_ms)
     if not inserted["ok"]:
         return _result(
             inserted["code"],
