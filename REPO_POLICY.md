@@ -224,7 +224,199 @@ git rev-parse main
 
 Если обнаружены посторонние локальные пользовательские изменения, они должны быть сохранены без автоматического `stash`, `restore`, `reset` или commit.
 
-## 13. Запрещённые destructive-операции по умолчанию
+## 13. Обязательная синхронизация локального агента с GitHub
+
+Локальная успешная работа агента не считается завершённой, пока её намеренные,
+проверенные и относящиеся к задаче изменения repository не опубликованы в
+GitHub. Это обязательное нормативное правило, а не рекомендация.
+
+```text
+LOCAL SUCCESS
+≠
+TASK COMPLETE
+
+TASK COMPLETE
+=
+local verification
++
+safe commit
++
+successful GitHub publication
++
+remote verification
+```
+
+### 13.1. Обязательный цикл публикации
+
+Минимальная последовательность для agent-authored изменений:
+
+```text
+local changes
+→ verification
+→ explicit staging of task files
+→ commit
+→ push current task branch to origin
+→ verify remote branch SHA
+```
+
+Нельзя считать результат опубликованным только потому, что commit создан
+локально. Перед финальным ответом локальный `HEAD` последнего commit результата
+должен совпадать с SHA соответствующей удалённой task branch.
+
+Для законченной reviewable работы действует последовательность:
+
+```text
+commit
+→ push
+→ create PR
+```
+
+Если PR этой ветки уже существует, push обновляет этот PR; второй PR для той же
+milestone branch создавать нельзя. Сохраняется правило:
+
+```text
+one milestone → one branch → one PR
+```
+
+### 13.2. Промежуточное и каноническое состояние
+
+Опубликованная task branch, её commit и PR являются опубликованным
+промежуточным состоянием, доступным другим агентам. Это не превращает task
+branch в постоянную ветку.
+
+Каноническое завершённое состояние достигается только после:
+
+```text
+PR
+→ squash merge
+→ origin/main verified
+→ temporary branch deleted
+```
+
+`main` остаётся единственной долгоживущей и канонической веткой.
+
+### 13.3. Проверка перед финальным ответом
+
+Каждый локальный агент перед завершением задачи обязан проверить:
+
+```bash
+git status --short --branch
+git rev-parse HEAD
+git ls-remote --heads origin <current-branch>
+```
+
+Итоговый отчёт должен доказывать:
+
+```text
+local HEAD == published origin task branch HEAD
+```
+
+Если push или проверка удалённой ветки не удались, локальная проверка может быть
+успешной, но итоговый статус обязан быть `BLOCKED_SYNC`, а не `PASS`. В отчёте
+нужно указать local HEAD, remote HEAD и точную причину сбоя. Локальный commit и
+ветку при этом нельзя удалять автоматически.
+
+### 13.4. Что именно синхронизируется
+
+Синхронизируются только intentional, task-scoped, reviewed, agent-authored
+repository changes. Это правило не означает `commit everything in working tree`
+и не разрешает использовать `git add -A` в загрязнённом рабочем дереве.
+
+Пользовательские и локальные данные не должны автоматически попадать в commit
+или push:
+
+```text
+settings.yaml
+attachments/
+runtime state
+browser profiles
+logs
+diagnostics
+temporary files
+secrets
+unrelated user modifications
+```
+
+Такие изменения нужно оставить нетронутыми. Их наличие само по себе не
+разрешает агенту включать их в task commit.
+
+### 13.5. Нельзя начинать следующую независимую задачу с непубликованным результатом
+
+Если локальный агент создал repository changes как результат задачи, он обязан
+до начала следующей независимой задачи:
+
+```text
+publish them
+OR
+explicitly discard them after user decision
+```
+
+Сочетание `important local implementation + not present on GitHub` не является
+допустимым нормальным handoff state.
+
+### 13.6. Исключение GitHub READ ONLY
+
+Обязательная синхронизация относится к локальному implementation agent,
+локальному Harness Agent и локальному Luna Agent, которые реально изменяют
+локальный repository.
+
+Она не отменяет task-specific контракты:
+
+```text
+GitHub READ ONLY
+no GitHub writes
+return ZIP only
+```
+
+Внешний ChatGPT или аналитический агент в таком режиме не пишет в GitHub.
+После локальной проверки и применения результата публикацию выполняет именно
+локальный Harness/Luna agent.
+
+Архитектурная граница:
+
+```text
+External ChatGPT
+→ GitHub READ
+→ implementation ZIP
+
+Local Luna/Harness
+→ validate
+→ apply
+→ test
+→ commit
+→ push
+→ PR/update PR
+
+GitHub
+→ shared published state
+
+Next external agent
+→ reads published state
+```
+
+### 13.7. Обязательные поля финального отчёта
+
+Финальный отчёт локального агента должен включать:
+
+```text
+Repository
+Current task branch
+Local HEAD
+Origin task branch HEAD
+Synchronized: YES/NO
+
+Commit
+Push
+PR
+PR state
+
+Merge performed
+Final origin/main SHA
+
+GitHub synchronization status: SYNCED | BLOCKED_SYNC
+```
+
+## 14. Запрещённые destructive-операции по умолчанию
 
 Без явного разрешения пользователя запрещены:
 
@@ -240,7 +432,7 @@ git branch -D для непроверенной ветки
 
 Force deletion ветки допустим только в узкой подтверждённой cleanup-операции, когда уникальная работа доказанно сохранена или patch-equivalent уже находится в `main`.
 
-## 14. Правило для агентов: не размножать ветки
+## 15. Правило для агентов: не размножать ветки
 
 Один агент в рамках одной задачи не должен самостоятельно создавать каскад новых веток.
 
@@ -252,7 +444,7 @@ Force deletion ветки допустим только в узкой подтв
 4. только после решения выполнить обязательный branch-creation preflight;
 5. создать новую ветку от актуального `main`.
 
-## 15. Завершение задачи включает уборку refs
+## 16. Завершение задачи включает уборку refs
 
 Задача считается полностью завершённой не только после успешных тестов или merge.
 
@@ -264,7 +456,7 @@ Force deletion ветки допустим только в узкой подтв
 - нет случайно созданной следующей временной ветки;
 - пользовательские локальные данные не затронуты.
 
-## 16. Принцип по умолчанию
+## 17. Принцип по умолчанию
 
 Если есть сомнение между «создать ещё одну ветку» и «сначала разобраться с уже существующей» — сначала нужно разобраться с существующей.
 
@@ -276,8 +468,13 @@ main — единственная постоянная ветка
 перед новой веткой — обязательный аудит временных веток
 одна задача — одна ветка
 один milestone — один PR
+agent-authored result → verify → commit → push → remote verify
+готовая reviewable работа → PR
+local-only successful result запрещён
+sync failure → BLOCKED_SYNC, не PASS
 merged → delete
 abandoned valuable → archive tag → delete
 ветки не являются архивами
 локальные пользовательские данные не трогать
+explicit GitHub READ ONLY имеет приоритет для read-only агента
 ```
