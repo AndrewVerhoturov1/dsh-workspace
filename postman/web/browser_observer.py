@@ -392,14 +392,12 @@ def observe_next_assistant(
                 details=last_details,
             )
         if correlation["code"] == ASSISTANT_STATE_UNKNOWN:
-            last_details["reason"] = "next_turn_role_unknown"
-            return _result(
-                ASSISTANT_STATE_UNKNOWN,
-                ok=False,
-                transitions=tracker.transitions,
-                recoverable=True,
-                details=last_details,
-            )
+            # A new ChatGPT turn container can appear before its semantic
+            # data-message-author-role is hydrated. Unknown is therefore a
+            # transient observation, not proof of assistant and not an
+            # immediate terminal failure. Keep polling the same immediately
+            # next turn position; timeout remains fail-closed.
+            last_details["reason"] = "next_turn_role_pending"
 
         if correlation["ok"]:
             assistant = correlation["assistant"]
@@ -439,11 +437,13 @@ def observe_next_assistant(
                 )
 
         if monotonic() >= deadline:
-            timeout_code = (
-                USER_TURN_ANCHOR_MISSING
-                if last_code == USER_TURN_ANCHOR_MISSING
-                else ASSISTANT_TURN_TIMEOUT
-            )
+            if last_code == USER_TURN_ANCHOR_MISSING:
+                timeout_code = USER_TURN_ANCHOR_MISSING
+            elif last_code == ASSISTANT_STATE_UNKNOWN:
+                timeout_code = ASSISTANT_STATE_UNKNOWN
+                last_details["reason"] = "next_turn_role_unknown_at_timeout"
+            else:
+                timeout_code = ASSISTANT_TURN_TIMEOUT
             last_details["lastObservedCode"] = last_code
             return _result(
                 timeout_code,

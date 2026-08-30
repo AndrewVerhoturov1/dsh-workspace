@@ -386,7 +386,7 @@ class ObserverTests(unittest.TestCase):
         )
         self.assertEqual(result["code"], observer.CHAT_CORRELATION_LOST)
 
-    def test_observer_unknown_role_fails_closed(self):
+    def test_observer_unknown_role_fails_closed_at_timeout(self):
         page = FakePage([[
             turn("user", "probe"),
             FakeLocator(text="mystery", attrs={"data-testid": "conversation-turn-2"}),
@@ -398,6 +398,61 @@ class ObserverTests(unittest.TestCase):
             timeout_ms=0,
         )
         self.assertEqual(result["code"], observer.ASSISTANT_STATE_UNKNOWN)
+        self.assertEqual(result["details"]["reason"], "next_turn_role_unknown_at_timeout")
+
+    def test_observer_waits_for_unknown_role_to_hydrate_as_assistant(self):
+        page = FakePage([
+            [
+                turn("user", "probe"),
+                FakeLocator(text="", attrs={"data-testid": "conversation-turn-2"}),
+            ],
+            [
+                turn("user", "probe"),
+                turn("assistant", "done", "conversation-turn-2"),
+            ],
+            [
+                turn("user", "probe"),
+                turn("assistant", "done", "conversation-turn-2"),
+            ],
+        ])
+        clock = FakeClock(page, increment=0.25)
+        result = observer.observe_next_assistant(
+            page,
+            "probe",
+            page.url,
+            timeout_ms=1500,
+            stable_ms=0,
+            poll_ms=10,
+            sleep=clock.sleep,
+            monotonic=clock.monotonic,
+        )
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["code"], observer.ASSISTANT_TURN_COMPLETED)
+        self.assertEqual(result["details"]["assistantIndex"], 1)
+
+    def test_observer_unknown_role_hydrating_as_user_is_correlation_lost(self):
+        page = FakePage([
+            [
+                turn("user", "probe"),
+                FakeLocator(text="", attrs={"data-testid": "conversation-turn-2"}),
+            ],
+            [
+                turn("user", "probe"),
+                turn("user", "unexpected", "conversation-turn-2"),
+            ],
+        ])
+        clock = FakeClock(page, increment=0.25)
+        result = observer.observe_next_assistant(
+            page,
+            "probe",
+            page.url,
+            timeout_ms=1000,
+            stable_ms=0,
+            poll_ms=10,
+            sleep=clock.sleep,
+            monotonic=clock.monotonic,
+        )
+        self.assertEqual(result["code"], observer.CHAT_CORRELATION_LOST)
 
     def test_observer_timeout_before_assistant(self):
         page = FakePage([[turn("user", "probe")]])
