@@ -353,6 +353,21 @@ test('case-insensitive collision -> ARTIFACT_CASE_COLLISION hard reject', () => 
   assert.deepEqual(result.warnings, []);
 });
 
+for (const [name, first, second] of [
+  ['Latin ligature ﬀ vs ff', 'files/docs/ﬀ.txt', 'files/docs/ff.txt'],
+  ['long s ſ vs s', 'files/docs/ſ.txt', 'files/docs/s.txt'],
+  ['sharp s ß vs ss', 'files/docs/ß.txt', 'files/docs/ss.txt'],
+  ['final sigma ς vs σ', 'files/docs/ς.txt', 'files/docs/σ.txt'],
+]) {
+  test(name + ' -> ARTIFACT_CASE_COLLISION', () => {
+    expectCode(makeZip([
+      manifestEntry(), patchEntry(),
+      { name: first, data: 'a' },
+      { name: second, data: 'b' },
+    ]), ERROR_CODES.CASE_COLLISION);
+  });
+}
+
 test('NFC-equivalent Unicode collision -> ARTIFACT_CASE_COLLISION', () => {
   expectCode(makeZip([
     manifestEntry(), patchEntry(),
