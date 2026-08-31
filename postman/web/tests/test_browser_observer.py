@@ -135,6 +135,62 @@ class ObserverTests(unittest.TestCase):
 
         self.assertEqual(observer.extract_turn_text(OuterWithUi()), "prompt")
 
+    def test_wrapped_role_preserves_role_when_payload_is_deeper(self):
+        class SemanticPayload(FakeLocator):
+            pass
+
+        class RoleNode(FakeLocator):
+            class Collection:
+                def __init__(self, items):
+                    self.items = list(items)
+                    self.first = self.items[0] if self.items else self
+
+                def count(self):
+                    return len(self.items)
+
+                def nth(self, index):
+                    return self.items[index]
+
+            def __init__(self):
+                super().__init__(
+                    text="promptСвернуть",
+                    attrs={"data-message-author-role": "user"},
+                )
+
+            def locator(self, selector):
+                if selector == '[data-testid="collapsible-user-message-content"]':
+                    return self.Collection([SemanticPayload(text="prompt")])
+                return self.Collection([])
+
+        class WrappedTurn(FakeLocator):
+            def __init__(self):
+                super().__init__(text="promptСвернуть", attrs={"data-testid": "conversation-turn-1"})
+                self.role_node = RoleNode()
+
+            def locator(self, selector):
+                if selector == "[data-message-author-role]":
+                    return RoleNode.Collection([self.role_node])
+                return RoleNode.Collection([])
+
+        wrapped = WrappedTurn()
+        self.assertEqual(observer.infer_turn_role(wrapped), "user")
+        self.assertEqual(observer.extract_turn_text(wrapped), "prompt")
+
+    def test_direct_user_role_ignores_collapsible_ui_label(self):
+        class DirectUserWithUi(FakeLocator):
+            def __init__(self):
+                super().__init__(
+                    text="exact promptСвернуть",
+                    attrs={"data-message-author-role": "user"},
+                )
+
+            def locator(self, selector):
+                if selector == '[data-testid="collapsible-user-message-content"]':
+                    return FakeLocator(items=[FakeLocator(text="exact prompt")])
+                return FakeLocator(items=[])
+
+        self.assertEqual(observer.extract_turn_text(DirectUserWithUi()), "exact prompt")
+
     def test_snapshot_ignores_outer_ui_labels_for_anchor_text(self):
         class OuterWithUi(FakeLocator):
             def __init__(self, role, message, ui, test_id):

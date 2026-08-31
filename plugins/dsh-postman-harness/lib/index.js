@@ -21,7 +21,6 @@ const MESSAGE_ID_PATTERN = /^MSG_[A-Za-z0-9_-]{1,80}$/
 const MAX_PAYLOAD_CHARS = 4096
 const MAX_PENDING_PROBES = 256
 const PENDING_TTL_MS = 5 * 60 * 1000
-const ASYNC_MESSAGE_ID_PATTERN = /^MSG_[A-Za-z0-9_-]{1,80}$/
 
 const textBlock = (text) => ({ type: 'text', text })
 
@@ -336,17 +335,16 @@ function runtimeOutput(value) {
 export function createPostmanAsyncSendTool(ctx, runtime) {
   return defineTool({
     name: 'postman_async_send',
-    description: 'Create a durable asynchronous Postman request. The sender identity is supplied by trusted Harness execution metadata; the call returns immediately after the durable request is registered.',
+    description: 'Register one durable asynchronous Postman request using the canonical request_id created by the initiating Harness model. Format: REQ_YYYYMMDDTHHMMSSZ_NNNN (UTC + four digits). Runtime validates uniqueness and never rewrites the key.',
     parameters: {
-      message_id: { type: 'string', required: true, description: 'Internal correlation id, for example MSG_A_001.' },
+      request_id: { type: 'string', required: true, description: 'Initiator-created immutable key, for example REQ_20260831T043812Z_4827.' },
       task: { type: 'string', required: true, description: 'Task payload to be processed asynchronously.' },
     },
     output: runtimeOutput({}),
     async execute(args, exec) {
       const sender = requireAgent(exec, 'postman_async_send')
       if (sender.id === POSTMAN_SESSION_ID) throw new Error('POSTMAN cannot create an asynchronous request for itself')
-      if (typeof args.message_id !== 'string' || !ASYNC_MESSAGE_ID_PATTERN.test(args.message_id)) throw new Error('message_id must match ^MSG_[A-Za-z0-9_-]{1,80}$')
-      const record = runtime.createRequest({ messageId: args.message_id, originAgentId: sender.id, payload: args.task })
+      const record = runtime.createRequest({ requestId: args.request_id, originAgentId: sender.id, payload: args.task })
       const postman = ctx.agents.get(POSTMAN_SESSION_ID)
       if (postman === undefined) {
         runtime.journal('POSTMAN_WAKE_FAILED', { messageId: record.message_id, requestId: record.request_id, originAgentId: record.origin_agent_id, status: record.status, error: 'POSTMAN session is not live' })

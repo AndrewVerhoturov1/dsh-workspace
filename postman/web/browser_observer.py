@@ -95,9 +95,14 @@ def _inner_text(locator: Any) -> str:
 
 
 def _turn_message_node(turn: Any) -> Any:
-    """Return the semantic message node inside a conversation-turn container."""
+    """Return semantic message content, excluding user-turn UI chrome."""
     direct_role = _get_attribute(turn, "data-message-author-role").casefold()
-    if direct_role in {"user", "assistant"}:
+    if direct_role == "user":
+        semantic, _ = submit.find_user_message_content(turn)
+        return semantic if semantic is not None else turn
+    if direct_role == "assistant":
+        # Assistant attachment controls are part of the correlated response;
+        # keep the role node so its rendered text and controls remain scoped.
         return turn
     try:
         nested = turn.locator("[data-message-author-role]")
@@ -105,7 +110,10 @@ def _turn_message_node(turn: Any) -> Any:
             try:
                 first = nested.first
                 first_role = _get_attribute(first, "data-message-author-role").casefold()
-                if first_role in {"user", "assistant"}:
+                if first_role == "user":
+                    semantic, _ = submit.find_user_message_content(first)
+                    return semantic if semantic is not None else first
+                if first_role == "assistant":
                     return first
             except Exception:
                 pass
@@ -119,7 +127,23 @@ def _turn_message_node(turn: Any) -> Any:
 
 
 def infer_turn_role(turn: Any) -> str:
-    """Infer role from a single conversation-turn container, fail-closed."""
+    """Infer role independently from payload extraction, fail-closed."""
+    direct_role = _get_attribute(turn, "data-message-author-role").casefold()
+    if direct_role in {"user", "assistant"}:
+        return direct_role
+
+    # A conversation section can wrap a role node whose payload is a deeper
+    # content node. Read the role-bearing node before selecting that payload.
+    try:
+        nested = turn.locator("[data-message-author-role]")
+        if _locator_count(nested) > 0:
+            for candidate in (nested.first, nested.nth(0)):
+                nested_role = _get_attribute(candidate, "data-message-author-role").casefold()
+                if nested_role in {"user", "assistant"}:
+                    return nested_role
+    except Exception:
+        pass
+
     message = _turn_message_node(turn)
     role = _get_attribute(message, "data-message-author-role").casefold()
     if role in {"user", "assistant"}:
@@ -134,8 +158,8 @@ def infer_turn_role(turn: Any) -> str:
 
 
 def extract_turn_text(turn: Any) -> str:
-    """Read only the semantic message text, not outer turn controls/UI labels."""
-    return _inner_text(_turn_message_node(turn))
+    """Read semantic message text, preserving scoped inline-code syntax."""
+    return submit.read_semantic_message_text(_turn_message_node(turn))
 
 
 def snapshot_turns(page: Any) -> tuple[list[dict[str, Any]], str]:

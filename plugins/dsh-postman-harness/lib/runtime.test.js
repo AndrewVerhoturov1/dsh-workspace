@@ -38,6 +38,39 @@ test('PostmanRuntime should atomically persist a message, unique REQ and trusted
   }
 })
 
+test('PostmanRuntime should register an initiator-supplied canonical request id unchanged', () => {
+  const fixture = runtimeFixture()
+  try {
+    const requestId = 'REQ_20260831T043812Z_4827'
+    const created = fixture.runtime.createRequest({ requestId, originAgentId: 'agent-a', payload: 'ALPHA' })
+
+    assert.equal(created.request_id, requestId)
+    assert.equal(created.message_id, 'MSG_20260831T043812Z_4827')
+    assert.equal(created.origin_agent_id, 'agent-a')
+  } finally {
+    fixture.close()
+  }
+})
+
+test('PostmanRuntime should fail closed on malformed or colliding canonical request ids', () => {
+  const fixture = runtimeFixture()
+  try {
+    assert.throws(
+      () => fixture.runtime.createRequest({ requestId: 'REQ_20261331T043812Z_4827', originAgentId: 'agent-a', payload: 'BAD' }),
+      /REQ_YYYYMMDDTHHMMSSZ_NNNN/,
+    )
+    const requestId = 'REQ_20260831T043812Z_4827'
+    fixture.runtime.createRequest({ requestId, originAgentId: 'agent-a', payload: 'FIRST' })
+    assert.throws(
+      () => fixture.runtime.createRequest({ requestId, originAgentId: 'agent-a', payload: 'SECOND' }),
+      /already registered/,
+    )
+    assert.equal(fixture.runtime.db.prepare('SELECT COUNT(*) AS count FROM requests').get().count, 1)
+  } finally {
+    fixture.close()
+  }
+})
+
 test('PostmanRuntime should not return an accepted request when the durable commit fails', () => {
   const fixture = runtimeFixture({ beforeCommit: () => { throw new Error('commit failed') } })
   try {

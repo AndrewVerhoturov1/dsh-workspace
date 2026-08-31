@@ -274,6 +274,110 @@ class BrowserSubmitTests(unittest.TestCase):
         self.assertEqual(result["details"]["composerSelectorAfterFill"], "#prompt-textarea")
         self.assertEqual(result["details"]["observedTextLength"], len("WP005 swap probe"))
 
+    def test_insert_prompt_prefers_live_node_over_temporary_textarea(self):
+        class Candidate:
+            def __init__(self, page, kind):
+                self.page = page
+                self.kind = kind
+                self.last = self
+
+            def count(self):
+                return 1
+
+            def is_visible(self):
+                return True
+
+            def fill(self, text, timeout=None):
+                self.page.filled_by = self.kind
+                self.page.live_text = text
+
+            def input_value(self, timeout=None):
+                if self.kind == "textarea":
+                    return ""
+                raise RuntimeError("contenteditable has no input value")
+
+            def inner_text(self, timeout=None):
+                return self.page.live_text if self.kind == "live" else ""
+
+            def text_content(self, timeout=None):
+                return self.inner_text(timeout)
+
+        class Page:
+            def __init__(self):
+                self.live_text = ""
+                self.filled_by = ""
+                self.live = Candidate(self, "live")
+                self.textarea = Candidate(self, "textarea")
+
+            def locator(self, selector):
+                if selector == "#prompt-textarea":
+                    return self.live
+                if selector == "textarea":
+                    return self.textarea
+                return FakeLocator(items=[])
+
+        page = Page()
+        result = submit.insert_prompt(
+            page,
+            page.textarea,
+            "exact prompt",
+            timeout_ms=0,
+            initial_composer_selector="textarea",
+        )
+        self.assertTrue(result["ok"])
+        self.assertEqual(page.filled_by, "live")
+
+    def test_insert_prompt_finds_exact_text_when_first_visible_wrapper_stays_empty(self):
+        class Candidate:
+            def __init__(self, page, kind):
+                self.page = page
+                self.kind = kind
+                self.last = self
+
+            def count(self):
+                return 1
+
+            def is_visible(self):
+                return True
+
+            def fill(self, text, timeout=None):
+                if self.kind != "wrapper":
+                    raise RuntimeError("fill must happen once on wrapper")
+                self.page.live_text = text
+                self.page.fill_count += 1
+
+            def input_value(self, timeout=None):
+                if self.kind == "wrapper":
+                    return ""
+                raise RuntimeError("contenteditable has no input value")
+
+            def inner_text(self, timeout=None):
+                return self.page.live_text if self.kind == "live" else ""
+
+            def text_content(self, timeout=None):
+                return self.inner_text(timeout)
+
+        class WrapperPage:
+            def __init__(self):
+                self.live_text = ""
+                self.fill_count = 0
+                self.wrapper = Candidate(self, "wrapper")
+                self.live = Candidate(self, "live")
+
+            def locator(self, selector):
+                if selector == "#prompt-textarea":
+                    return self.wrapper
+                if selector == '[contenteditable="true"][role="textbox"]':
+                    return self.live
+                return FakeLocator(items=[])
+
+        page = WrapperPage()
+        result = submit.insert_prompt(page, page.wrapper, "REQ wrapper live text", timeout_ms=0)
+        self.assertTrue(result["ok"])
+        self.assertEqual(page.fill_count, 1)
+        self.assertEqual(result["details"]["composerSelectorAfterFill"], '[contenteditable="true"][role="textbox"]')
+        self.assertEqual(result["details"]["composerCandidateCountAfterFill"], 2)
+
     def test_insert_failure_is_pre_send(self):
         page = FakePage(fill_error="blocked")
         result = submit.insert_prompt(page, page.locator("#prompt-textarea"), "x")
@@ -319,6 +423,312 @@ class BrowserSubmitTests(unittest.TestCase):
         self.assertEqual(result["code"], submit.PROMPT_SEND_CONFIRMED)
         self.assertEqual(page.click_count, 1)
         self.assertTrue(result["details"]["chatUrlBound"])
+
+    def test_user_turn_outer_ui_uses_exact_semantic_content(self):
+        prompt = "POSTMAN_REQUEST_ID: REQ_20260831T043812Z_4827\ncreate artifact"
+
+        class OuterWithUi(FakeLocator):
+            def __init__(self):
+                super().__init__(text=prompt + "Свернуть")
+                self.attrs = {"data-message-author-role": "user"}
+                self.payload = FakeLocator(text=prompt)
+
+            def get_attribute(self, name):
+                return self.attrs.get(name)
+
+            class Collection:
+                def __init__(self, items):
+                    self.items = list(items)
+
+                def count(self):
+                    return len(self.items)
+
+                def nth(self, index):
+                    return self.items[index]
+
+            def locator(self, selector):
+                if selector == '[data-testid="collapsible-user-message-content"]':
+                    return self.Collection([self.payload])
+                if selector in ('button', '[role="button"]', '[data-collapsed]'):
+                    return self.Collection([FakeLocator(text="Свернуть")]) if selector == 'button' else self.Collection([])
+                return self.Collection([])
+
+        class Page:
+            def locator(self, selector):
+                if selector == submit.USER_TURN_SELECTORS[0]:
+                    return OuterWithUi.Collection([OuterWithUi()])
+                return OuterWithUi.Collection([])
+
+        details = submit.collect_user_turn_details(Page())
+        self.assertEqual([item["text"] for item in details], [prompt])
+        self.assertEqual(
+            details[0]["semanticSelector"],
+            '[data-testid="collapsible-user-message-content"]',
+        )
+
+    def test_composer_paragraphs_restore_exact_newlines(self):
+        class ProseMirror:
+            def evaluate(self, script):
+                return "line one\n\nline `two`"
+
+            def input_value(self, timeout=None):
+                raise RuntimeError("contenteditable has no input value")
+
+            def inner_text(self, timeout=None):
+                return "line one\n\n\nline two"
+
+        self.assertEqual(
+            submit.read_composer_text(ProseMirror()),
+            "line one\n\nline `two`",
+        )
+
+    def test_semantic_text_restores_inline_code_delimiters_only_in_payload(self):
+        class RenderedPayload:
+            def evaluate(self, script):
+                self.script = script
+                return "file named `probe.txt`"
+
+            def inner_text(self, timeout=None):
+                return "file named probe.txt"
+
+        payload = RenderedPayload()
+        self.assertEqual(
+            submit.read_semantic_message_text(payload),
+            "file named `probe.txt`",
+        )
+
+    def test_composer_snapshot_merges_wrapper_and_live_descendant(self):
+        prompt = "exact live prompt"
+
+        class Node:
+            def __init__(self, page, path, *, text="", visible=True, editable="", tag="DIV"):
+                self.page = page
+                self.path = path
+                self.text = text
+                self.visible = visible
+                self.editable = editable
+                self.tag = tag
+                self.last = self
+
+            def count(self):
+                return 1
+
+            def is_visible(self):
+                return self.visible
+
+            def is_enabled(self):
+                return True
+
+            def get_attribute(self, name):
+                return {"contenteditable": self.editable, "role": "textbox" if self.editable else ""}.get(name)
+
+            def evaluate(self, script):
+                text = self.page.live_text if self.editable else ""
+                return {
+                    "tag": self.tag,
+                    "id": "prompt-textarea" if not self.editable else "",
+                    "dataTestId": "",
+                    "role": "textbox" if self.editable else "",
+                    "contenteditable": self.editable,
+                    "ariaLabel": "",
+                    "visible": self.visible,
+                    "enabled": True,
+                    "domPath": self.path,
+                    "nestingDepth": len(self.path),
+                    "ancestorComposerPath": self.page.wrapper.path if self.editable else None,
+                    "inputValue": None,
+                    "innerText": text,
+                    "textContent": text,
+                    "semanticText": text,
+                    "paragraphText": text if self.editable else "",
+                    "children": [],
+                }
+
+            def fill(self, value, timeout=None):
+                self.page.fill_count += 1
+                self.page.live_text = value
+
+        class Page:
+            def __init__(self):
+                self.fill_count = 0
+                self.live_text = ""
+                self.wrapper = Node(self, (1, 2), tag="DIV")
+                self.live = Node(self, (1, 2, 0), editable="true")
+                self.textarea = Node(self, (9,), visible=False, tag="TEXTAREA")
+
+            def locator(self, selector):
+                if selector == "#prompt-textarea":
+                    return self.wrapper
+                if selector == "textarea":
+                    return self.textarea
+                if selector in submit.COMPOSER_SNAPSHOT_SELECTORS:
+                    return self.live
+                return FakeLocator(items=[])
+
+        page = Page()
+        result = submit.insert_prompt(page, page.wrapper, prompt, timeout_ms=0)
+        self.assertTrue(result["ok"])
+        self.assertEqual(page.fill_count, 1)
+        snapshot = submit.collect_composer_snapshots(page, prompt)
+        self.assertEqual(len(snapshot["logicalCandidates"]), 2)
+        active = [group for group in snapshot["logicalCandidates"] if group["active"]]
+        self.assertEqual(len(active), 1)
+        self.assertGreaterEqual(active[0]["candidateCount"], 2)
+
+    def test_composer_snapshot_deduplicates_all_aliases_of_one_node(self):
+        class Node(FakeLocator):
+            def __init__(self):
+                super().__init__(kind="composer")
+
+            def evaluate(self, script):
+                return {
+                    "tag": "DIV", "id": "prompt-textarea", "dataTestId": "",
+                    "role": "textbox", "contenteditable": "true", "ariaLabel": "",
+                    "visible": True, "enabled": True, "domPath": (2, 3),
+                    "nestingDepth": 2, "ancestorComposerPath": None,
+                    "inputValue": None, "innerText": "", "textContent": "",
+                    "semanticText": "", "paragraphText": "", "children": [],
+                }
+
+        class Page:
+            def __init__(self):
+                self.node = Node()
+                self.node.last = self.node
+
+            def locator(self, selector):
+                if selector in submit.COMPOSER_SNAPSHOT_SELECTORS:
+                    return self.node
+                return FakeLocator(items=[])
+
+        snapshot = submit.collect_composer_snapshots(Page())
+        self.assertEqual(len(snapshot["logicalCandidates"]), 1)
+        self.assertEqual(
+            snapshot["logicalCandidates"][0]["candidateCount"],
+            len(submit.COMPOSER_SNAPSHOT_SELECTORS),
+        )
+
+    def test_composer_exact_proof_accepts_semantic_extractor_when_inner_text_mismatches(self):
+        expected = "line one\nline two"
+
+        class Node(FakeLocator):
+            def __init__(self):
+                super().__init__(kind="composer")
+
+            def evaluate(self, script):
+                return {
+                    "tag": "DIV", "id": "prompt-textarea", "dataTestId": "",
+                    "role": "textbox", "contenteditable": "true", "ariaLabel": "",
+                    "visible": True, "enabled": True, "domPath": (1,),
+                    "nestingDepth": 1, "ancestorComposerPath": None,
+                    "inputValue": None, "innerText": expected + " extra",
+                    "textContent": "line oneline two", "semanticText": expected,
+                    "paragraphText": expected, "children": [],
+                }
+
+        class Page:
+            def locator(self, selector):
+                if selector == "#prompt-textarea":
+                    return Node()
+                return FakeLocator(items=[])
+
+        matched, details = submit._exact_prompt_readback(Page(), expected)
+        self.assertTrue(matched)
+        self.assertEqual(details["composerProofStrategy"], "paragraph_text")
+
+    def test_composer_exact_proof_reports_bounded_first_difference(self):
+        expected = "expected prompt"
+
+        class Node(FakeLocator):
+            def __init__(self):
+                super().__init__(kind="composer")
+
+            def evaluate(self, script):
+                actual = "expectedXprompt"
+                return {
+                    "tag": "DIV", "id": "prompt-textarea", "dataTestId": "",
+                    "role": "textbox", "contenteditable": "true", "ariaLabel": "",
+                    "visible": True, "enabled": True, "domPath": (1,),
+                    "nestingDepth": 1, "ancestorComposerPath": None,
+                    "inputValue": None, "innerText": actual, "textContent": actual,
+                    "semanticText": actual, "paragraphText": actual, "children": [],
+                }
+
+        class Page:
+            def locator(self, selector):
+                if selector == "#prompt-textarea":
+                    return Node()
+                return FakeLocator(items=[])
+
+        matched, details = submit._exact_prompt_readback(Page(), expected)
+        self.assertFalse(matched)
+        self.assertEqual(details["firstDifferenceIndex"], 8)
+        self.assertEqual(details["expectedCodepoint"], ord(" "))
+        self.assertEqual(details["actualCodepoint"], ord("X"))
+        self.assertLessEqual(len(details["expectedContext"]), 200)
+
+    def test_composer_fill_happens_once_with_wrapper_to_live_hydration(self):
+        class Candidate:
+            def __init__(self, page, live):
+                self.page, self.live, self.last = page, live, self
+
+            def count(self): return 1
+            def is_visible(self): return True
+            def is_enabled(self): return True
+            def fill(self, value, timeout=None):
+                self.page.fill_count += 1
+                self.page.text = value
+            def evaluate(self, script):
+                value = self.page.text if self.live else ""
+                return {"tag": "DIV", "id": "prompt-textarea", "dataTestId": "",
+                        "role": "textbox" if self.live else "", "contenteditable": "true" if self.live else "",
+                        "ariaLabel": "", "visible": True, "enabled": True,
+                        "domPath": (4, 0) if self.live else (4,),
+                        "nestingDepth": 2 if self.live else 1, "ancestorComposerPath": (4,) if self.live else None,
+                        "inputValue": None, "innerText": value, "textContent": value,
+                        "semanticText": value, "paragraphText": value, "children": []}
+
+        class Page:
+            def __init__(self): self.text, self.fill_count = "", 0; self.wrapper, self.live = Candidate(self, False), Candidate(self, True)
+            def locator(self, selector):
+                if selector == "#prompt-textarea": return self.wrapper
+                if selector in submit.COMPOSER_SNAPSHOT_SELECTORS: return self.live
+                return FakeLocator(items=[])
+
+        page = Page()
+        result = submit.insert_prompt(page, page.wrapper, "one fill", timeout_ms=0)
+        self.assertTrue(result["ok"])
+        self.assertEqual(page.fill_count, 1)
+
+    def test_post_send_empty_proof_uses_shared_snapshot_function(self):
+        page = FakePage(composer_text="", user_turns=["x"], url="https://chatgpt.com/c/abc123")
+        original = submit.collect_composer_snapshots
+        calls = []
+
+        def counted(page_arg, expected_prompt=None):
+            calls.append(expected_prompt)
+            return original(page_arg, expected_prompt)
+
+        submit.collect_composer_snapshots = counted
+        try:
+            ok, details = submit._observe_send_proof(page, "x", 0)
+        finally:
+            submit.collect_composer_snapshots = original
+        self.assertTrue(ok)
+        self.assertEqual(calls, [None])
+        self.assertTrue(details["composerEmpty"])
+
+    def test_user_turn_selector_aliases_do_not_double_count(self):
+        class AliasPage:
+            def locator(self, selector):
+                if selector == submit.USER_TURN_SELECTORS[0]:
+                    return FakeLocator(items=[FakeLocator(text="one")])
+                if selector == submit.USER_TURN_SELECTORS[1]:
+                    return FakeLocator(items=[FakeLocator(text="one"), FakeLocator(text="two")])
+                return FakeLocator(items=[])
+
+        details = submit.collect_user_turn_details(AliasPage())
+        self.assertEqual(len(details), 1)
+        self.assertEqual(details[0]["selector"], submit.USER_TURN_SELECTORS[0])
 
     def test_wrong_user_turn_text_is_unknown(self):
         page = FakePage(confirm_on_click=False)
@@ -425,6 +835,9 @@ class BrowserSubmitTests(unittest.TestCase):
 
     def test_send_unknown_is_explicit_constant(self):
         self.assertEqual(submit.PROMPT_SEND_UNKNOWN, "PROMPT_SEND_UNKNOWN")
+
+    def test_public_proven_sent_protocol_alias(self):
+        self.assertEqual(submit.PROVEN_SENT, submit.SEND_PROVEN_SENT)
 
 
 if __name__ == "__main__":
