@@ -435,3 +435,52 @@ generation control должен быть неактивен, а текст до�
 завершаются fail-closed состоянием.
 
 WP-005 не ищет attachments, не скачивает файлы и не применяет artifacts.
+
+---
+
+## WP-006 — Artifact DOM Detection
+
+WP-006 добавляет `request_identity.py`, `artifact_detector.py` и unit tests для
+P5. Новый production request использует один immutable cross-system key:
+
+```text
+REQ_YYYYMMDDTHHMMSSZ_NNNN
+```
+
+Например `REQ_20260831T043812Z_4827`. Ключ создаёт initiating Harness model до
+вызова Postman; Runtime валидирует format/uniqueness, сохраняет exact значение и
+не переименовывает его. Первая непустая строка Web ChatGPT prompt обязана быть:
+
+```text
+POSTMAN_REQUEST_ID: <REQ>
+```
+
+Detector запускается только после trusted `ASSISTANT_TURN_COMPLETED` proof из
+WP-005, заново подтверждает тот же chat/user/assistant turn и принимает ZIP
+только при exact DOM-порядке:
+
+```text
+<<<POSTMAN_RESULT_BEGIN:<REQ>>>
+<REAL clickable ZIP control with exact expected filename>
+<<<POSTMAN_RESULT_END:<REQ>>>
+```
+
+Реальный control должен физически находиться между BEGIN и END. Generic
+`Download ZIP`, правильное имя вне envelope, stale ZIP, wrong REQ и
+неоднозначные controls отклоняются fail-closed.
+
+Один ZIP:
+
+```text
+POSTMAN_<REQ>_RESULT.zip
+```
+
+Несколько заранее ожидаемых ZIP одного REQ:
+
+```text
+POSTMAN_<REQ>_RESULT-01.zip
+POSTMAN_<REQ>_RESULT-02.zip
+```
+
+WP-006 ничего не кликает и не скачивает. `page.expect_download()`, controlled
+staging, validator и durable result store принадлежат P6/WP-007.

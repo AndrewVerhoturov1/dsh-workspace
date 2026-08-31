@@ -643,10 +643,41 @@ our confirmed user turn
 
 ## P5 — Artifact DOM detection
 
-Worker заранее знает expected artifact filename, например:
+Каждый новый browser-first request использует immutable key:
 
 ```text
-POSTMAN_REQ_<REQ>_RESULT.zip
+REQ_YYYYMMDDTHHMMSSZ_NNNN
+```
+
+Ключ создаёт initiating Harness model до `postman_async_send`; Runtime
+валидирует format/uniqueness и регистрирует exact значение. Первая непустая
+строка отправляемого Web ChatGPT prompt содержит exact key:
+
+```text
+POSTMAN_REQUEST_ID: <REQ>
+```
+
+Worker заранее знает exact expected artifact filename. Один ZIP:
+
+```text
+POSTMAN_<REQ>_RESULT.zip
+```
+
+Если request заранее ожидает несколько ZIP, ordinal добавляется только к имени
+artifact, не к request ID:
+
+```text
+POSTMAN_<REQ>_RESULT-01.zip
+POSTMAN_<REQ>_RESULT-02.zip
+```
+
+Финальный ZIP result должен иметь доказуемый DOM-порядок внутри correlated
+assistant turn:
+
+```text
+<<<POSTMAN_RESULT_BEGIN:<REQ>>>
+<REAL clickable/downloadable control whose visible label is exact filename>
+<<<POSTMAN_RESULT_END:<REQ>>>
 ```
 
 Допустимый detection proof:
@@ -654,26 +685,28 @@ POSTMAN_REQ_<REQ>_RESULT.zip
 ```text
 owned Page
 +
-confirmed request/user turn
+exact request key in proven user prompt
 +
 next completed assistant turn
 +
-exact result envelope/request id
+exact BEGIN marker
 +
-exact expected filename
+exact real ZIP control physically between markers
 +
-attachment/download control inside same assistant turn
+exact END marker
 ```
 
-Текстовый READY marker — полезный сигнал, но не заменяет attachment proof.
+BEGIN/END и visible filename — correlation proof, не routing authority.
 
 ### PASS P5
 
-- 10/10 correct artifact detection;
+- correct artifact detection;
 - stale ZIP from previous turn не принимается;
-- wrong filename rejected;
+- wrong request key/filename rejected;
 - same filename outside correlated assistant turn rejected;
-- unrelated Download buttons ignored.
+- exact filename control outside BEGIN/END rejected;
+- generic/unrelated Download buttons ignored;
+- P5 не кликает и не скачивает artifact.
 
 ---
 

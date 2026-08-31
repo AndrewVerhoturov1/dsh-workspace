@@ -60,6 +60,8 @@ SUBMIT_INVALID_CONFIG = "SUBMIT_INVALID_CONFIG"
 SEND_PROVEN_NOT_SENT = "PROVEN_NOT_SENT"
 SEND_STARTED = "SEND_STARTED"
 SEND_PROVEN_SENT = "PROVEN_SENT"
+# Public protocol name consumed by P5/P6 proof validation.
+PROVEN_SENT = SEND_PROVEN_SENT
 SEND_UNKNOWN = "UNKNOWN"
 
 TURN_SELECTORS = (
@@ -69,9 +71,122 @@ TURN_SELECTORS = (
 )
 
 USER_TURN_SELECTORS = (
-    '[data-testid="conversation-turn-user"]',
+    # Prefer the semantic role node. The test-id alias is a fallback only;
+    # aliases are never combined into one count.
     '[data-message-author-role="user"]',
+    '[data-testid="conversation-turn-user"]',
 )
+
+# ChatGPT may put controls (for example the collapsible-message toggle) inside
+# the role-bearing user turn. These selectors identify the message payload,
+# rather than the surrounding turn chrome.
+USER_MESSAGE_CONTENT_SELECTORS = (
+    '[data-testid="collapsible-user-message-content"]',
+    '[data-testid="user-message-content"]',
+    '[data-testid="message-content"]',
+    '[data-message-content]',
+)
+
+# User-message rendering converts Markdown inline-code delimiters into a
+# semantic <code> element. Reconstruct those delimiters only inside the
+# already-scoped payload node; never normalize arbitrary lines or page text.
+_SEMANTIC_MESSAGE_TEXT_JS = r"""
+(root) => {
+  const chunks = [];
+  const walk = (node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      chunks.push(node.nodeValue || "");
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+    const inlineCode = node.matches("code.user-message-inline-code");
+    if (inlineCode) chunks.push("`");
+    for (const child of node.childNodes) walk(child);
+    if (inlineCode) chunks.push("`");
+  };
+  walk(root);
+  return chunks.join("");
+}
+"""
+
+# ProseMirror stores each entered line in a paragraph. innerText inserts
+# browser-dependent extra spacing between those blocks, while paragraph
+# boundaries reproduce the exact text submitted by fill().
+_COMPOSER_TEXT_JS = r"""
+(root) => {
+  if (root.getAttribute("contenteditable") !== "true") return null;
+  const blocks = Array.from(root.children);
+  if (!blocks.length) return root.textContent || "";
+  return blocks.map((block) => block.textContent ?? block.innerText ?? "").join("\n");
+}
+"""
+
+# One DOM read supplies metadata for every plausible composer node. The
+# resulting path lets Python merge wrapper/contenteditable aliases without
+# treating a hidden textarea or an unrelated textbox as the active composer.
+_COMPOSER_METADATA_JS = r"""
+(root) => {
+  const plausible = '#prompt-textarea,[data-testid="composer-text-input"],textarea,.ProseMirror,[contenteditable="true"],[role="textbox"]';
+  const path = [];
+  for (let node = root; node && node.parentElement; node = node.parentElement) {
+    path.unshift(Array.prototype.indexOf.call(node.parentElement.children, node));
+  }
+  const visible = (() => {
+    const rect = root.getBoundingClientRect();
+    const style = getComputedStyle(root);
+    return !!(rect.width || rect.height || root.getClientRects().length)
+      && style.visibility !== 'hidden' && style.display !== 'none';
+  })();
+  const semanticText = (() => {
+    const chunks = [];
+    const walk = (node) => {
+      if (node.nodeType === Node.TEXT_NODE) { chunks.push(node.nodeValue || ''); return; }
+      if (node.nodeType !== Node.ELEMENT_NODE) return;
+      for (const child of node.childNodes) walk(child);
+    };
+    walk(root);
+    return chunks.join('');
+  })();
+  const paragraphText = root.getAttribute('contenteditable') === 'true'
+    ? (root.children.length
+      ? Array.from(root.children).map((block) => block.textContent ?? block.innerText ?? '').join('\n')
+      : (root.textContent || ''))
+    : null;
+  const ancestor = root.parentElement && root.parentElement.closest(plausible);
+  const ancestorPath = ancestor ? (() => {
+    const result = [];
+    for (let node = ancestor; node && node.parentElement; node = node.parentElement) {
+      result.unshift(Array.prototype.indexOf.call(node.parentElement.children, node));
+    }
+    return result;
+  })() : null;
+  return {
+    tag: root.tagName,
+    id: root.id || '',
+    dataTestId: root.getAttribute('data-testid') || '',
+    role: root.getAttribute('role') || '',
+    contenteditable: root.getAttribute('contenteditable') || '',
+    ariaLabel: root.getAttribute('aria-label') || '',
+    visible,
+    enabled: !root.disabled,
+    domPath: path,
+    nestingDepth: path.length,
+    ancestorComposerPath: ancestorPath,
+    inputValue: 'value' in root ? String(root.value ?? '') : null,
+    innerText: root.innerText || '',
+    textContent: root.textContent || '',
+    semanticText,
+    paragraphText,
+    children: Array.from(root.children).map((child) => ({
+      tag: child.tagName,
+      id: child.id || '',
+      dataTestId: child.getAttribute('data-testid') || '',
+      contenteditable: child.getAttribute('contenteditable') || '',
+      text: child.textContent || '',
+    })),
+  };
+}
+"""
 
 SEND_BUTTON_SELECTORS = (
     'button[data-testid="send-button"]',
@@ -187,6 +302,12 @@ def _normalize_text(value: str) -> str:
 
 def read_composer_text(composer: Any) -> str:
     try:
+        value = composer.evaluate(_COMPOSER_TEXT_JS)
+        if isinstance(value, str):
+            return _normalize_text(value)
+    except Exception:
+        pass
+    try:
         return _normalize_text(composer.input_value(timeout=500))
     except Exception:
         pass
@@ -200,28 +321,363 @@ def read_composer_text(composer: Any) -> str:
         return ""
 
 
+COMPOSER_SNAPSHOT_SELECTORS = tuple(dict.fromkeys((*bootstrap.COMPOSER_SELECTORS, ".ProseMirror")))
+
+
+def _path_is_prefix(prefix: tuple[int, ...], value: tuple[int, ...]) -> bool:
+    return len(prefix) <= len(value) and value[: len(prefix)] == prefix
+
+
+def _first_difference(expected: str, actual: str) -> dict[str, Any]:
+    expected = _normalize_text(expected)
+    actual = _normalize_text(actual)
+    index = 0
+    while index < min(len(expected), len(actual)) and expected[index] == actual[index]:
+        index += 1
+    exact = index == len(expected) == len(actual)
+    return {
+        "exactMatch": exact,
+        "firstDifferenceIndex": None if exact else index,
+        "expectedCharacter": None if index >= len(expected) else expected[index],
+        "expectedCodepoint": None if index >= len(expected) else ord(expected[index]),
+        "actualCharacter": None if index >= len(actual) else actual[index],
+        "actualCodepoint": None if index >= len(actual) else ord(actual[index]),
+        "expectedContext": expected[max(0, index - 100) : index + 100],
+        "actualContext": actual[max(0, index - 100) : index + 100],
+    }
+
+
+def _snapshot_metadata(candidate: Any) -> dict[str, Any]:
+    try:
+        metadata = candidate.evaluate(_COMPOSER_METADATA_JS)
+        if isinstance(metadata, dict):
+            return metadata
+    except Exception:
+        pass
+    inner = ""
+    content = ""
+    input_value: str | None = None
+    try:
+        input_value = _normalize_text(candidate.input_value(timeout=500))
+    except Exception:
+        pass
+    try:
+        inner = _normalize_text(candidate.inner_text(timeout=500))
+    except Exception:
+        pass
+    try:
+        content = _normalize_text(candidate.text_content(timeout=500))
+    except Exception:
+        pass
+    text = read_composer_text(candidate)
+    return {
+        "tag": "",
+        "id": "",
+        "dataTestId": "",
+        "role": "",
+        "contenteditable": "",
+        "ariaLabel": "",
+        "visible": _visible(candidate),
+        "enabled": True,
+        "domPath": [],
+        "nestingDepth": 0,
+        "ancestorComposerPath": None,
+        "inputValue": input_value,
+        "innerText": inner,
+        "textContent": content,
+        "semanticText": text,
+        "paragraphText": text,
+        "children": [],
+    }
+
+
+def _representation(name: str, value: Any, expected: str | None) -> dict[str, Any]:
+    text = _normalize_text(value if isinstance(value, str) else "")
+    result: dict[str, Any] = {
+        "strategy": name,
+        "textLength": len(text),
+        "textSha256": prompt_sha256(text),
+        "textStart": text[:100],
+        "textEnd": text[-100:],
+    }
+    if expected is not None:
+        result.update(_first_difference(expected, text))
+    result["_text"] = text
+    return result
+
+
+def _merge_composer_aliases(raw: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups: list[dict[str, Any]] = []
+    for item in raw:
+        path = tuple(item.get("domPath") or ())
+        group = next(
+            (
+                candidate
+                for candidate in groups
+                if _path_is_prefix(tuple(candidate["path"]), path)
+                or _path_is_prefix(path, tuple(candidate["path"]))
+            ),
+            None,
+        )
+        if group is None:
+            group = {"path": path, "aliases": [], "logicalId": f"composer-{len(groups)}"}
+            groups.append(group)
+        elif len(path) < len(group["path"]):
+            group["path"] = path
+        group["aliases"].append(item)
+    for group in groups:
+        aliases = group["aliases"]
+        active = [item for item in aliases if item["visible"] and item["enabled"]]
+        editable = [item for item in active if item["contenteditable"] == "true"]
+        preferred = max(editable or active, key=lambda item: item["nestingDepth"], default=None)
+        representations: list[dict[str, Any]] = []
+        for item in aliases:
+            representations.extend(item["representations"])
+        group.update({
+            "active": bool(active),
+            "preferred": preferred,
+            "representations": representations,
+            "candidateCount": len(aliases),
+            "descendantAliasCount": max(0, len(aliases) - 1),
+        })
+    return groups
+
+
+def collect_composer_snapshots(page: Any, expected_prompt: str | None = None) -> dict[str, Any]:
+    """Collect one logical composer tree and every exact read representation."""
+    raw: list[dict[str, Any]] = []
+    for selector in COMPOSER_SNAPSHOT_SELECTORS:
+        try:
+            locator = page.locator(selector)
+            count = _locator_count(locator)
+        except Exception:
+            continue
+        for index in range(count):
+            try:
+                candidate = locator.last if count == 1 else locator.nth(index)
+                metadata = _snapshot_metadata(candidate)
+            except Exception:
+                continue
+            values = [
+                ("paragraph_text", metadata.get("paragraphText")),
+                ("input_value", metadata.get("inputValue")),
+                ("inner_text", metadata.get("innerText")),
+                ("text_content", metadata.get("textContent")),
+                ("semantic_text", metadata.get("semanticText")),
+            ]
+            representations = [
+                _representation(name, value, expected_prompt)
+                for name, value in values
+                if value is not None
+            ]
+            path = tuple(metadata.get("domPath") or (selector, index))
+            ancestor_path = tuple(metadata.get("ancestorComposerPath") or ())
+            raw.append({
+                "selector": selector,
+                "index": index,
+                "tag": metadata.get("tag", ""),
+                "id": metadata.get("id", ""),
+                "dataTestId": metadata.get("dataTestId", ""),
+                "role": metadata.get("role", ""),
+                "contenteditable": metadata.get("contenteditable", ""),
+                "ariaLabel": metadata.get("ariaLabel", ""),
+                "visible": bool(metadata.get("visible")),
+                "enabled": bool(metadata.get("enabled", True)),
+                "nestingDepth": int(metadata.get("nestingDepth", 0) or 0),
+                "domPath": path,
+                "ancestorComposerPath": ancestor_path,
+                "descendantOfComposerCandidate": bool(ancestor_path),
+                "inputValue": metadata.get("inputValue"),
+                "innerText": metadata.get("innerText", ""),
+                "textContent": metadata.get("textContent", ""),
+                "semanticText": metadata.get("semanticText", ""),
+                "children": metadata.get("children", []),
+                "representations": representations,
+                "locator": candidate,
+            })
+    groups = _merge_composer_aliases(raw)
+    return {"logicalCandidates": groups, "allCandidates": raw}
+
+
+def _active_composer_groups(page: Any, expected_prompt: str | None = None) -> dict[str, Any]:
+    snapshot = collect_composer_snapshots(page, expected_prompt)
+    return snapshot
+
+
 def find_composer(page: Any) -> tuple[Any | None, str | None]:
-    return bootstrap.find_visible_composer(page)
+    snapshot = _active_composer_groups(page)
+    preferred = [group["preferred"] for group in snapshot["logicalCandidates"] if group["preferred"] is not None]
+    if not preferred:
+        return None, None
+    winner = max(preferred, key=lambda item: item["nestingDepth"])
+    return winner["locator"], winner["selector"]
 
 
-def collect_user_turn_texts(page: Any) -> list[str]:
+def _visible_composer_snapshots(page: Any) -> list[dict[str, Any]]:
+    return [
+        item
+        for item in collect_composer_snapshots(page)["allCandidates"]
+        if item["visible"] and item["enabled"]
+    ]
+
+
+def _composer_empty_from_snapshot(snapshot: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+    groups = [group for group in snapshot["logicalCandidates"] if group["active"]]
+    if not groups:
+        return False, {"composerCandidateCount": 0, "composerEmpty": False}
+    nonempty = [
+        group
+        for group in groups
+        if any(rep["_text"] != "" for rep in group["representations"])
+    ]
+    preferred = next((group["preferred"] for group in groups if group["preferred"]), None)
+    return not nonempty, {
+        "composerCandidateCount": len(snapshot["allCandidates"]),
+        "logicalComposerCount": len(groups),
+        "composerEmpty": not nonempty,
+        "nonemptyComposerCandidateCount": len(nonempty),
+        "composerSelector": preferred["selector"] if preferred else "",
+    }
+
+
+def _composer_empty_proof(page: Any) -> tuple[bool, dict[str, Any]]:
+    return _composer_empty_from_snapshot(_active_composer_groups(page))
+
+
+def _exact_prompt_readback(page: Any, prompt: str) -> tuple[bool, dict[str, Any]]:
+    snapshot = _active_composer_groups(page, prompt)
+    groups = [group for group in snapshot["logicalCandidates"] if group["active"]]
+    exact: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for group in groups:
+        for representation in group["representations"]:
+            if representation.get("exactMatch"):
+                exact.append((group, representation))
+    if exact:
+        group, winner = exact[0]
+        preferred = group["preferred"] or group["aliases"][0]
+        return True, {
+            "composerFoundAfterFill": True,
+            "composerSelectorAfterFill": preferred["selector"],
+            "composerCandidateCountAfterFill": len(snapshot["allCandidates"]),
+            "logicalComposerCountAfterFill": len(groups),
+            "composerAliasCountAfterFill": group["candidateCount"],
+            "composerProofStrategy": winner["strategy"],
+            "observedTextLength": winner["textLength"],
+            "observedTextSha256": winner["textSha256"],
+        }
+    representations = [rep for group in groups for rep in group["representations"]]
+    longest = max(representations, key=lambda item: item["textLength"], default=None)
+    preferred = groups[0]["preferred"] if groups else None
+    details = {
+        "composerFoundAfterFill": bool(groups),
+        "composerSelectorAfterFill": preferred["selector"] if preferred else "",
+        "composerCandidateCountAfterFill": len(snapshot["allCandidates"]),
+        "logicalComposerCountAfterFill": len(groups),
+        "observedTextLength": longest["textLength"] if longest else 0,
+        "observedTextSha256": longest["textSha256"] if longest else prompt_sha256(""),
+    }
+    if longest:
+        details.update({key: value for key, value in longest.items() if key in {
+            "strategy", "exactMatch", "firstDifferenceIndex", "expectedCharacter",
+            "expectedCodepoint", "actualCharacter", "actualCodepoint",
+            "expectedContext", "actualContext",
+        }})
+    return False, details
+
+
+def _attribute(locator: Any, name: str) -> str:
+    try:
+        return str(locator.get_attribute(name) or "")
+    except Exception:
+        return ""
+
+
+def _visible(locator: Any) -> bool:
+    try:
+        return bool(locator.is_visible())
+    except Exception:
+        return False
+
+
+def find_user_message_content(turn: Any) -> tuple[Any | None, str | None]:
+    """Find the payload node inside a role-bearing user turn.
+
+    The role node is deliberately not trusted when it contains interactive
+    controls: ChatGPT currently renders a collapsible toggle beside the exact
+    prompt. Known payload contracts are tried in order, and a plain role node
+    is used only when it has no UI-control descendants.
+    """
+    if _attribute(turn, "data-message-author-role").casefold() != "user":
+        return turn, None
+
+    for selector in USER_MESSAGE_CONTENT_SELECTORS:
+        try:
+            locator = turn.locator(selector)
+            count = _locator_count(locator)
+            for index in range(count):
+                candidate = locator.nth(index)
+                if _visible(candidate):
+                    return candidate, selector
+        except Exception:
+            continue
+
+    # Older ChatGPT markup has no dedicated content test id. Do not fall back
+    # to a container that visibly owns controls; that would reintroduce UI
+    # labels into exact prompt proof.
+    for selector in ('button', '[role="button"]', '[data-collapsed]'):
+        try:
+            if _locator_count(turn.locator(selector)):
+                return None, None
+        except Exception:
+            continue
+    return turn, None
+
+
+def read_semantic_message_text(locator: Any) -> str:
+    """Read scoped payload text while preserving rendered inline-code syntax."""
+    try:
+        value = locator.evaluate(_SEMANTIC_MESSAGE_TEXT_JS)
+        if isinstance(value, str):
+            return _normalize_text(value)
+    except Exception:
+        pass
+    try:
+        return _normalize_text(locator.inner_text(timeout=1_000))
+    except Exception:
+        return ""
+
+
+def collect_user_turn_details(page: Any) -> list[dict[str, Any]]:
+    """Collect one logical user-turn selector family, never selector aliases."""
     for selector in USER_TURN_SELECTORS:
         try:
             locator = page.locator(selector)
             count = _locator_count(locator)
             if count <= 0:
                 continue
-            values: list[str] = []
+            values: list[dict[str, Any]] = []
             for index in range(count):
                 item = locator.nth(index)
-                try:
-                    values.append(_normalize_text(item.inner_text(timeout=1_000)))
-                except Exception:
-                    values.append("")
+                semantic, semantic_selector = find_user_message_content(item)
+                text = read_semantic_message_text(semantic) if semantic is not None else ""
+                values.append({
+                    "selector": selector,
+                    "index": index,
+                    "semanticSelector": semantic_selector or "",
+                    "text": text,
+                    "textLength": len(text),
+                    "textSha256": prompt_sha256(text),
+                    "textStart": text[:120],
+                    "textEnd": text[-120:],
+                })
             return values
         except Exception:
             continue
     return []
+
+
+def collect_user_turn_texts(page: Any) -> list[str]:
+    return [item["text"] for item in collect_user_turn_details(page)]
 
 
 def find_send_button(page: Any) -> tuple[Any | None, str | None]:
@@ -280,7 +736,11 @@ def prepare_fresh_chat(page: Any, *, timeout_ms: int = DEFAULT_TIMEOUT_MS) -> di
         }
 
     def predicate() -> tuple[bool, dict[str, Any]]:
-        composer, selector = find_composer(page)
+        snapshot = _active_composer_groups(page)
+        groups = [group for group in snapshot["logicalCandidates"] if group["active"]]
+        preferred = [group["preferred"] for group in groups if group["preferred"]]
+        composer = max(preferred, key=lambda item: item["nestingDepth"], default=None)
+        selector = composer["selector"] if composer else None
         page_url = str(getattr(page, "url", "") or "")
         turns = count_conversation_turns(page)
         if composer is None:
@@ -291,15 +751,19 @@ def prepare_fresh_chat(page: Any, *, timeout_ms: int = DEFAULT_TIMEOUT_MS) -> di
                 "turnCount": turns,
                 **session_details,
             }
-        composer_text = read_composer_text(composer)
+        empty, empty_details = _composer_empty_from_snapshot(snapshot)
         fresh = is_chatgpt_root_url(page_url) and turns == 0
-        empty = composer_text == ""
-        return fresh and empty, {
+        # The visible textarea is only a temporary fallback while the live
+        # ProseMirror composer hydrates. Do not declare a fresh chat ready on
+        # that node; filling it can duplicate the prompt during the swap.
+        live_composer_ready = composer["selector"] != "textarea"
+        return fresh and empty and live_composer_ready, {
             "pageUrl": page_url,
             "turnCount": turns,
             "composerSelector": selector,
-            "composerEmpty": empty,
-            "composer": composer,
+            "liveComposerReady": live_composer_ready,
+            **empty_details,
+            "composer": composer["locator"],
         }
 
     ok, details = _wait_until(predicate, timeout_ms=timeout_ms)
@@ -319,36 +783,29 @@ def insert_prompt(
     prompt: str,
     *,
     timeout_ms: int = DEFAULT_TIMEOUT_MS,
+    initial_composer_selector: str | None = None,
 ) -> dict[str, Any]:
     if not isinstance(prompt, str) or not prompt:
         return {"ok": False, "code": SUBMIT_INVALID_CONFIG, "details": {"reason": "prompt_empty"}}
+
+    # prepare_fresh_chat can observe the temporary visible textarea fallback
+    # before the live ProseMirror node appears. Prefer that specific node when
+    # it is already available, without performing a second fill.
+    if initial_composer_selector in {"textarea", '[role="textbox"]'}:
+        resolved, resolved_selector = find_composer(page)
+        if resolved is not None and resolved_selector not in {"textarea", '[role="textbox"]'}:
+            composer = resolved
+
     try:
         composer.fill(prompt, timeout=timeout_ms)
     except Exception as exc:
         return {"ok": False, "code": PROMPT_INSERT_FAILED, "details": {"message": str(exc)}}
 
-    # ChatGPT may replace the pre-fill fallback textarea with the real
-    # ProseMirror/contenteditable composer during fill(). The locator that
-    # accepted fill() is therefore not a durable read-back handle. Re-resolve
-    # the current visible composer on every poll before proving exact insertion.
-    def current_composer_matches() -> tuple[bool, dict[str, Any]]:
-        current, selector = find_composer(page)
-        if current is None:
-            return False, {
-                "composerFoundAfterFill": False,
-                "composerSelectorAfterFill": "",
-                "observedTextLength": 0,
-            }
-        actual = read_composer_text(current)
-        return _normalize_text(actual) == _normalize_text(prompt), {
-            "composerFoundAfterFill": True,
-            "composerSelectorAfterFill": selector or "",
-            "observedTextLength": len(actual),
-            "observedTextSha256": prompt_sha256(actual),
-        }
-
+    # fill() is one-shot. Readback may come from a different visible composer
+    # candidate after React/ProseMirror hydration, but this function never fills
+    # or types a second time.
     matched, observed = _wait_until(
-        current_composer_matches,
+        lambda: _exact_prompt_readback(page, prompt),
         timeout_ms=timeout_ms,
     )
     if not matched:
@@ -372,19 +829,33 @@ def insert_prompt(
 
 
 def _observe_send_proof(page: Any, prompt: str, before_user_turn_count: int) -> tuple[bool, dict[str, Any]]:
-    user_turns = collect_user_turn_texts(page)
+    user_turn_details = collect_user_turn_details(page)
+    user_turns = [item["text"] for item in user_turn_details]
     page_url = str(getattr(page, "url", "") or "")
-    composer, selector = find_composer(page)
-    composer_empty = composer is not None and read_composer_text(composer) == ""
+    composer_snapshot = _active_composer_groups(page)
+    active_groups = [group for group in composer_snapshot["logicalCandidates"] if group["active"]]
+    preferred = [group["preferred"] for group in active_groups if group["preferred"]]
+    composer = max(preferred, key=lambda item: item["nestingDepth"], default=None)
+    selector = composer["selector"] if composer else None
+    composer_empty, empty_details = _composer_empty_from_snapshot(composer_snapshot)
     new_turn = len(user_turns) == before_user_turn_count + 1
     exact_turn = new_turn and _normalize_text(user_turns[-1]) == _normalize_text(prompt)
     chat_bound = is_bound_chat_url(page_url)
+    last_turn = user_turn_details[-1] if user_turn_details else {}
     return exact_turn and composer_empty and chat_bound, {
         "userTurnCountBefore": before_user_turn_count,
         "userTurnCountNow": len(user_turns),
+        "userTurnSelector": last_turn.get("selector", ""),
+        "userTurnIndex": last_turn.get("index"),
+        "userTurnSemanticSelector": last_turn.get("semanticSelector", ""),
+        "userTurnTextLength": last_turn.get("textLength", 0),
+        "userTurnTextSha256": last_turn.get("textSha256", prompt_sha256("")),
+        "userTurnTextStart": last_turn.get("textStart", ""),
+        "userTurnTextEnd": last_turn.get("textEnd", ""),
         "exactUserTurn": exact_turn,
         "composerEmpty": composer_empty,
         "composerSelector": selector,
+        **empty_details,
         "chatUrlBound": chat_bound,
         "chatUrl": page_url if chat_bound else "",
     }
@@ -483,7 +954,13 @@ def submit_fresh_prompt(page: Any, prompt: str, *, timeout_ms: int = DEFAULT_TIM
             details=prep.get("details"),
         )
     composer = prep["composer"]
-    inserted = insert_prompt(page, composer, prompt, timeout_ms=timeout_ms)
+    inserted = insert_prompt(
+        page,
+        composer,
+        prompt,
+        timeout_ms=timeout_ms,
+        initial_composer_selector=prep.get("details", {}).get("composerSelector"),
+    )
     if not inserted["ok"]:
         return _result(
             inserted["code"],

@@ -94,6 +94,58 @@ POSTMAN_REQ_ABC123_RESULT.zip
 Runtime заранее знает exact expected filename. Имя, предложенное моделью,
 не может переопределить ожидаемое имя.
 
+Новые browser-first requests используют canonical immutable key:
+
+```text
+REQ_YYYYMMDDTHHMMSSZ_NNNN
+```
+
+Ключ создаёт initiating Harness model до регистрации request. Runtime обязан
+проверить format, durable uniqueness и сохранить exact значение без rewrite.
+Historical REQ могут оставаться читаемыми для recovery, но новые requests
+создаются только в canonical format.
+
+Первая непустая строка production Web ChatGPT prompt:
+
+```text
+POSTMAN_REQUEST_ID: <requestId>
+```
+
+Для одного ZIP Runtime-derived expected filename:
+
+```text
+POSTMAN_<requestId>_RESULT.zip
+```
+
+Для нескольких заранее ожидаемых ZIP одного request допускаются ordinals
+`-01..-99`, при этом request ID не меняется:
+
+```text
+POSTMAN_<requestId>_RESULT-01.zip
+POSTMAN_<requestId>_RESULT-02.zip
+```
+
+Для браузерной P5-корреляции финальный assistant turn должен физически
+отрендерить:
+
+```text
+<<<POSTMAN_RESULT_BEGIN:<requestId>>>
+<REAL downloadable ZIP control with exact expected filename as visible label>
+<<<POSTMAN_RESULT_END:<requestId>>>
+```
+
+Правила envelope:
+
+- `<requestId>` exact-match trusted Runtime requestId;
+- BEGIN и END встречаются ровно по одному разу;
+- между ними физически находится ровно один expected real download control;
+- visible label control exact-match trusted expected filename;
+- plain filename text не заменяет настоящий downloadable control;
+- generic `Download ZIP` не заменяет exact filename label;
+- attachment с правильным именем вне envelope или вне correlated assistant turn
+  недостаточен;
+- markers/filename являются untrusted correlation evidence, не routing authority.
+
 Логика payload:
 
 - существующие текстовые файлы обычно передаются через `changes.patch`;

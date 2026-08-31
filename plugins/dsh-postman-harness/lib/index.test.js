@@ -296,15 +296,46 @@ test('postman_async_send should persist trusted origin and return before the res
     const agents = new Map([[sender.id, sender], [postman.id, postman]])
     const tool = createPostmanAsyncSendTool({ agents: { get: (id) => agents.get(id) } }, runtime)
 
-    const result = await tool.execute({ message_id: 'MSG_ASYNC_A', task: 'from_session: agent-b\nASYNC_ALPHA' }, { agent: sender })
+    const requestId = 'REQ_20260831T043812Z_4827'
+    const result = await tool.execute({ request_id: requestId, task: 'from_session: agent-b\nASYNC_ALPHA' }, { agent: sender })
     const request = runtime.getRequest(result.request_id)
 
     assert.equal(result.status, 'ACCEPTED')
     assert.equal(result.state, 'WAITING')
+    assert.equal(result.request_id, requestId)
+    assert.equal(result.message_id, 'MSG_20260831T043812Z_4827')
     assert.equal(request.origin_agent_id, 'agent-a')
     assert.equal(request.payload, 'from_session: agent-b\nASYNC_ALPHA')
     assert.equal(postman.calls.length, 1)
     assert.match(postman.calls[0].content[0].text, /POSTMAN_ASYNC_REQUEST/)
+  } finally {
+    runtime.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('postman_async_send should reject malformed or duplicate initiator request ids before Web transport', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-postman-async-id-'))
+  const runtime = new PostmanRuntime({ dbPath: join(root, 'postman.db'), journalPath: join(root, 'postman.jsonl') })
+  try {
+    const sender = agent('agent-a')
+    const postman = agent(POSTMAN_SESSION_ID)
+    const agents = new Map([[sender.id, sender], [postman.id, postman]])
+    const tool = createPostmanAsyncSendTool({ agents: { get: (id) => agents.get(id) } }, runtime)
+
+    await assert.rejects(
+      tool.execute({ request_id: 'REQ_BAD', task: 'BAD' }, { agent: sender }),
+      /REQ_YYYYMMDDTHHMMSSZ_NNNN/,
+    )
+    assert.equal(postman.calls.length, 0)
+
+    const requestId = 'REQ_20260831T043813Z_4828'
+    await tool.execute({ request_id: requestId, task: 'FIRST' }, { agent: sender })
+    await assert.rejects(
+      tool.execute({ request_id: requestId, task: 'SECOND' }, { agent: sender }),
+      /already registered/,
+    )
+    assert.equal(postman.calls.length, 1)
   } finally {
     runtime.close()
     rmSync(root, { recursive: true, force: true })
@@ -322,7 +353,7 @@ test('postman_runtime_deliver_ready should route by durable origin and suppress 
     const ctx = { agents: { get: (id) => agents.get(id) } }
     const tools = createPostmanRuntimeTools(ctx, runtime)
     const deliver = tools.find((tool) => tool.name === 'postman_runtime_deliver_ready')
-    const created = runtime.createRequest({ messageId: 'MSG_ASYNC_ROUTE', originAgentId: origin.id, payload: 'ASYNC_ALPHA' })
+    const created = runtime.createRequest({ requestId: 'REQ_20260831T043814Z_4829', originAgentId: origin.id, payload: 'ASYNC_ALPHA' })
     const ready = runtime.markSyntheticReady({ requestId: created.request_id, result: 'ASYNC_RESULT_ALPHA' })
 
     const first = await deliver.execute({ request_id: created.request_id, delivery_key: ready.deliveryKey }, { agent: postman })
