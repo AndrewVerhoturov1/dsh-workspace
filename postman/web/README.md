@@ -2,9 +2,12 @@
 
 ## Статус
 
-WP-001 зафиксировал contracts и module boundaries. WP-002 добавляет первый
-production-quality модуль: детерминированный fail-closed artifact validator и
-его unit tests.
+WP-006 / P5 — **COMPLETE / PASS**. Реализация объединена в canonical `main`
+через PR #54; merge SHA:
+`4ba6c68ca239a87c3383ed56cea7cbd0a10ea724`.
+
+Предыдущие разделы WP-001–WP-005 сохраняют историю границ и принятых
+milestone. Текущий следующий milestone: **WP-007 / P6 — Download + validation**.
 
 В WP-002 по-прежнему нет browser implementation, Playwright dependencies,
 production state machine, ZIP extraction/application code или интеграции с
@@ -438,7 +441,7 @@ WP-005 не ищет attachments, не скачивает файлы и не п�
 
 ---
 
-## WP-006 — Artifact DOM Detection
+## WP-006 — Artifact DOM Detection — COMPLETE / PASS
 
 WP-006 добавляет `request_identity.py`, `artifact_detector.py` и unit tests для
 P5. Новый production request использует один immutable cross-system key:
@@ -484,3 +487,55 @@ POSTMAN_<REQ>_RESULT-02.zip
 
 WP-006 ничего не кликает и не скачивает. `page.expect_download()`, controlled
 staging, validator и durable result store принадлежат P6/WP-007.
+
+### Формальное закрытие WP-006 / P5
+
+Финальный доказанный live request: `REQ_20260831T021012Z_5564`.
+
+```text
+PROMPT_INSERTED
+→ PROMPT_SEND_CONFIRMED
+→ PROVEN_SENT
+→ CHAT_URL_BOUND
+→ ASSISTANT_TURN_COMPLETED
+→ exact BEGIN
+→ exact real ZIP control
+→ exact END
+→ ARTIFACT_DOM_CONFIRMED
+```
+
+`visibleFilenameExact = true`, `betweenMarkers = true`,
+`downloadStarted = false`. P5 заканчивается на `ARTIFACT_DOM_CONFIRMED`.
+
+Граница P5: не кликать ZIP, не начинать download, не сохранять artifact, не
+запускать validator и не переводить Runtime в `READY`.
+
+Итоговые регрессии: request identity 6/6, WP-006/P5 38/38, WP-005/P4 44/44,
+WP-004/P3 47/47, WP-003/P2 28/28, WP-002/P1 60/60, Runtime 14/14,
+index/plugin 18/18; `git diff --check` — PASS.
+
+Request identity contract завершён: initiating model создаёт exact
+`REQ_YYYYMMDDTHHMMSSZ_NNNN`, Runtime требует `requestId`, не создаёт и не
+переписывает REQ, collision обрабатывается fail-closed, `MSG` выводится из того
+же REQ.
+
+Post-WP-006 integration confirmation: `delegate-via-postman` проверен новым
+агентом после controlled Harness restart; Runtime принял новый exact REQ в
+`ACCEPTED / WAITING`, caller-owned `message_id` отсутствовал. Это не является
+browser acceptance criterion P5.
+
+**CURRENT NEXT MILESTONE: WP-007 / P6 — Download + validation.**
+
+Вход P6: `ARTIFACT_DOM_CONFIRMED`. Ответственность P6:
+
+```text
+exact correlated artifact control
+→ page.expect_download()
+→ exactly one click
+→ browser download
+→ controlled staging path
+→ artifact validator
+→ validated result / failure
+```
+
+WP-007/P6 не реализован.

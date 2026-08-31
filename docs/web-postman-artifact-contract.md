@@ -156,6 +156,70 @@ POSTMAN_<requestId>_RESULT-02.zip
 
 ---
 
+### 1.4. Формальное закрытие WP-006 / P5
+
+**WP-006 / P5 — COMPLETE / PASS.**
+
+Финальный доказанный live request:
+`REQ_20260831T021012Z_5564`.
+
+```text
+PROMPT_INSERTED
+→ PROMPT_SEND_CONFIRMED
+→ PROVEN_SENT
+→ CHAT_URL_BOUND
+→ ASSISTANT_TURN_COMPLETED
+→ exact BEGIN
+→ exact real ZIP control
+→ exact END
+→ ARTIFACT_DOM_CONFIRMED
+```
+
+`visibleFilenameExact = true`, `betweenMarkers = true`,
+`downloadStarted = false`. P5 заканчивается на `ARTIFACT_DOM_CONFIRMED`.
+
+P5 не кликает ZIP, не начинает download, не сохраняет artifact, не запускает
+validator и не переводит Runtime в `READY`. Эти действия относятся к
+следующему milestone WP-007 / P6.
+
+Итоговый request identity contract:
+
+```text
+REQ_YYYYMMDDTHHMMSSZ_NNNN
+```
+
+Initiating model создаёт exact REQ до регистрации; Runtime требует exact
+`requestId`, не генерирует и не переписывает REQ, обрабатывает collision
+fail-closed, а `MSG` выводится из того же REQ.
+
+WP-006 принят через PR #54, merge SHA:
+`4ba6c68ca239a87c3383ed56cea7cbd0a10ea724`.
+
+Итоговые регрессии: request identity 6/6, WP-006/P5 38/38,
+WP-005/P4 44/44, WP-004/P3 47/47, WP-003/P2 28/28, WP-002/P1 60/60,
+Runtime 14/14, index/plugin 18/18; `git diff --check` — PASS.
+
+Post-WP-006 integration confirmation: `delegate-via-postman` проверен новым
+агентом после controlled Harness restart; Runtime принял новый exact REQ в
+состоянии `ACCEPTED / WAITING`, без caller-owned `message_id`. Это не является
+browser acceptance criterion P5.
+
+**CURRENT NEXT MILESTONE: WP-007 / P6 — Download + validation.**
+
+Вход P6: `ARTIFACT_DOM_CONFIRMED`. Его предполагаемая ответственность:
+
+```text
+exact correlated artifact control
+→ page.expect_download()
+→ exactly one click
+→ browser download
+→ controlled staging path
+→ artifact validator
+→ validated result / failure
+```
+
+WP-007/P6 не считается реализованным в этом документе.
+
 ## 2. Граница доверия
 
 ### 2.1. Trusted request metadata

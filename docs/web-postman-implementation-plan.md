@@ -641,7 +641,7 @@ our confirmed user turn
 
 ---
 
-## P5 — Artifact DOM detection
+## P5 — Artifact DOM detection — COMPLETE / PASS
 
 Каждый новый browser-first request использует immutable key:
 
@@ -707,6 +707,65 @@ BEGIN/END и visible filename — correlation proof, не routing authority.
 - exact filename control outside BEGIN/END rejected;
 - generic/unrelated Download buttons ignored;
 - P5 не кликает и не скачивает artifact.
+
+### WP-006 / P5 — формальное закрытие
+
+**Статус: COMPLETE / PASS.**
+
+WP-006 реализован и принят через PR #54. Merge SHA:
+`4ba6c68ca239a87c3383ed56cea7cbd0a10ea724`.
+
+Финальное доказательство для live request
+`REQ_20260831T021012Z_5564`:
+
+```text
+PROMPT_INSERTED
+→ PROMPT_SEND_CONFIRMED
+→ PROVEN_SENT
+→ CHAT_URL_BOUND
+→ ASSISTANT_TURN_COMPLETED
+→ exact BEGIN
+→ exact real ZIP control
+→ exact END
+→ ARTIFACT_DOM_CONFIRMED
+```
+
+Доказано: `visibleFilenameExact = true`, `betweenMarkers = true`,
+`downloadStarted = false`. P5 заканчивается на `ARTIFACT_DOM_CONFIRMED`.
+
+Граница P5: P5 не кликает ZIP, не начинает download, не сохраняет artifact,
+не запускает validator и не переводит Runtime в `READY`.
+
+Итоговые регрессионные наборы WP-006: request identity 6/6, WP-006/P5 38/38,
+WP-005/P4 44/44, WP-004/P3 47/47, WP-003/P2 28/28, WP-002/P1 60/60,
+Runtime 14/14, index/plugin 18/18; `git diff --check` — PASS.
+
+Итоговый контракт identity: initiating model создаёт exact
+`REQ_YYYYMMDDTHHMMSSZ_NNNN`, Runtime требует этот `requestId`, не создаёт и не
+переписывает REQ, обрабатывает collision fail-closed, а `MSG` выводится из того
+же REQ.
+
+Post-WP-006 integration confirmation: установленный
+`delegate-via-postman` проверен новым агентом после controlled Harness restart;
+новый REQ был принят Runtime в `ACCEPTED / WAITING` с отсутствующим
+caller-owned `message_id`. Это подтверждение интеграции не является browser
+acceptance criterion P5.
+
+**CURRENT NEXT MILESTONE: WP-007 / P6 — Download + validation.**
+
+Вход P6: `ARTIFACT_DOM_CONFIRMED`. Предполагаемая ответственность:
+
+```text
+exact correlated artifact control
+→ page.expect_download()
+→ exactly one click
+→ browser download
+→ controlled staging path
+→ artifact validator
+→ validated result / failure
+```
+
+WP-007/P6 здесь не реализован.
 
 ---
 
