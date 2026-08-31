@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash } from 'node:crypto'
 import { mkdirSync, appendFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -15,8 +15,6 @@ export const REQUEST_STATUSES = Object.freeze({
   DELIVERY_BLOCKED_ORIGIN_MISSING: 'DELIVERY_BLOCKED_ORIGIN_MISSING',
 })
 
-const MESSAGE_ID_PATTERN = /^MSG_[A-Za-z0-9_-]{1,80}$/
-const REQUEST_ID_PATTERN = /^REQ_[A-Za-z0-9_-]{1,120}$/
 export const CANONICAL_REQUEST_ID_PATTERN = /^REQ_(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z_(\d{4})$/
 const MAX_PAYLOAD_CHARS = 64 * 1024
 
@@ -28,16 +26,8 @@ export const POSTMAN_RUNTIME_DIR = join(defaultRuntimeDir(), 'DSH', 'Postman')
 export const POSTMAN_DB_PATH = join(POSTMAN_RUNTIME_DIR, 'postman.db')
 export const POSTMAN_JOURNAL_PATH = join(POSTMAN_RUNTIME_DIR, 'logs', 'postman.jsonl')
 
-function assertMessageId(value) {
-  if (typeof value !== 'string' || !MESSAGE_ID_PATTERN.test(value)) {
-    throw new Error('messageId must match ^MSG_[A-Za-z0-9_-]{1,80}$')
-  }
-}
-
 function assertRequestId(value) {
-  if (typeof value !== 'string' || !REQUEST_ID_PATTERN.test(value)) {
-    throw new Error('requestId must match REQ_<safe identifier>')
-  }
+  assertCanonicalRequestId(value)
 }
 
 export function isCanonicalRequestId(value) {
@@ -99,7 +89,6 @@ export class PostmanRuntime {
     dbPath = POSTMAN_DB_PATH,
     journalPath = defaultJournalPath(dbPath),
     now = Date.now,
-    uuid = randomUUID,
     database,
     beforeCommit,
     onReady,
@@ -107,7 +96,6 @@ export class PostmanRuntime {
     this.dbPath = dbPath
     this.journalPath = journalPath
     this.now = now
-    this.uuid = uuid
     this.beforeCommit = beforeCommit
     this.onReady = onReady
     mkdirSync(dirname(dbPath), { recursive: true })
@@ -190,68 +178,38 @@ export class PostmanRuntime {
     appendFileSync(this.journalPath, `${JSON.stringify(entry)}\n`, 'utf8')
   }
 
-  createRequest({ requestId, messageId, originAgentId, payload }) {
+  createRequest({ requestId, originAgentId, payload }) {
+    assertCanonicalRequestId(requestId)
     assertAgentId(originAgentId)
     assertPayload(payload)
 
-    let resolvedRequestId = requestId
-    let resolvedMessageId = messageId
-    const callerSuppliedRequestId = resolvedRequestId !== undefined
-
-    if (callerSuppliedRequestId) {
-      assertCanonicalRequestId(resolvedRequestId)
-      const derivedMessageId = messageIdForRequestId(resolvedRequestId)
-      if (resolvedMessageId === undefined) {
-        resolvedMessageId = derivedMessageId
-      } else {
-        assertMessageId(resolvedMessageId)
-        if (resolvedMessageId !== derivedMessageId) {
-          throw new Error(`messageId must equal ${derivedMessageId} for requestId ${resolvedRequestId}`)
-        }
-      }
-    } else {
-      assertMessageId(resolvedMessageId)
-    }
-
+    const resolvedMessageId = messageIdForRequestId(requestId)
     const createdAt = nowIso(this.now)
     let record
     this.transaction(() => {
-      if (callerSuppliedRequestId) {
-        if (this.db.prepare('SELECT request_id FROM requests WHERE request_id = ?').get(resolvedRequestId) !== undefined) {
-          throw new Error(`requestId ${resolvedRequestId} is already registered`)
-        }
-        if (this.db.prepare('SELECT message_id FROM messages WHERE message_id = ?').get(resolvedMessageId) !== undefined) {
-          throw new Error(`messageId ${resolvedMessageId} is already registered`)
-        }
-      } else {
-        resolvedRequestId = undefined
-        for (let attempt = 0; attempt < 5; attempt += 1) {
-          const candidate = `REQ_${this.uuid().replaceAll('-', '').slice(0, 32).toUpperCase()}`
-          if (!REQUEST_ID_PATTERN.test(candidate)) continue
-          if (this.db.prepare('SELECT request_id FROM requests WHERE request_id = ?').get(candidate) === undefined) {
-            resolvedRequestId = candidate
-            break
-          }
-        }
-        if (resolvedRequestId === undefined) throw new Error('could not allocate a unique legacy request id')
+      if (this.db.prepare('SELECT request_id FROM requests WHERE request_id = ?').get(requestId) !== undefined) {
+        throw new Error(`requestId ${requestId} is already registered`)
+      }
+      if (this.db.prepare('SELECT message_id FROM messages WHERE message_id = ?').get(resolvedMessageId) !== undefined) {
+        throw new Error(`messageId ${resolvedMessageId} is already registered`)
       }
 
       this.db.prepare('INSERT INTO messages (message_id, origin_agent_id, created_at, payload, status) VALUES (?, ?, ?, ?, ?)')
         .run(resolvedMessageId, originAgentId, createdAt, payload, REQUEST_STATUSES.ACCEPTED)
       this.db.prepare('INSERT INTO requests (request_id, message_id, origin_agent_id, status, created_at) VALUES (?, ?, ?, ?, ?)')
-        .run(resolvedRequestId, resolvedMessageId, originAgentId, REQUEST_STATUSES.ACCEPTED, createdAt)
-      record = this.getRequest(resolvedRequestId)
+        .run(requestId, resolvedMessageId, originAgentId, REQUEST_STATUSES.ACCEPTED, createdAt)
+      record = this.getRequest(requestId)
     })
     this.journal('MESSAGE_RECEIVED', {
       messageId: resolvedMessageId,
-      requestId: resolvedRequestId,
+      requestId,
       originAgentId,
       payloadLength: payload.length,
       payloadSha256: sha256(payload),
       status: REQUEST_STATUSES.ACCEPTED,
     })
-    this.journal('REQUEST_CREATED', { messageId: resolvedMessageId, requestId: resolvedRequestId, originAgentId, status: REQUEST_STATUSES.ACCEPTED })
-    this.journal('REQUEST_ACCEPTED', { messageId: resolvedMessageId, requestId: resolvedRequestId, originAgentId, status: REQUEST_STATUSES.ACCEPTED })
+    this.journal('REQUEST_CREATED', { messageId: resolvedMessageId, requestId, originAgentId, status: REQUEST_STATUSES.ACCEPTED })
+    this.journal('REQUEST_ACCEPTED', { messageId: resolvedMessageId, requestId, originAgentId, status: REQUEST_STATUSES.ACCEPTED })
     return record
   }
 

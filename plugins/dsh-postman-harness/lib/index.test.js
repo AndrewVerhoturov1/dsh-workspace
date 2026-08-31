@@ -353,7 +353,7 @@ test('postman_runtime_deliver_ready should route by durable origin and suppress 
     const ctx = { agents: { get: (id) => agents.get(id) } }
     const tools = createPostmanRuntimeTools(ctx, runtime)
     const deliver = tools.find((tool) => tool.name === 'postman_runtime_deliver_ready')
-    const created = runtime.createRequest({ messageId: 'MSG_ASYNC_ROUTE', originAgentId: origin.id, payload: 'ASYNC_ALPHA' })
+    const created = runtime.createRequest({ requestId: 'REQ_20260831T043814Z_4829', originAgentId: origin.id, payload: 'ASYNC_ALPHA' })
     const ready = runtime.markSyntheticReady({ requestId: created.request_id, result: 'ASYNC_RESULT_ALPHA' })
 
     const first = await deliver.execute({ request_id: created.request_id, delivery_key: ready.deliveryKey }, { agent: postman })
