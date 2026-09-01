@@ -20,7 +20,7 @@ Postman Runtime и Web Postman transport отвечают за остальну�
 
 ## Architect Agent and Implementation Agent Separation
 
-### External Architect Agent (Ч1)
+### External Architect Agent (Ч1):
 
 Ч1 является главным проектировщиком и разработчиком решения.
 
@@ -36,7 +36,7 @@ Postman Runtime и Web Postman transport отвечают за остальну�
 
 Ч1 является источником технического решения.
 
-### Local Implementation Agent (Л1)
+### Local Implementation Agent (Л1):
 
 Л1 является агентом внедрения.
 
@@ -51,7 +51,7 @@ Postman Runtime и Web Postman transport отвечают за остальну�
 
 Л1 не является архитектором решения.
 
-#### Ограничения Л1
+#### Ограничения Л1:
 
 Л1 не должен:
 
@@ -68,7 +68,7 @@ Postman Runtime и Web Postman transport отвечают за остальну�
 3. указать причину;
 4. ожидать нового решения.
 
-### Responsibility flow
+### Responsibility flow:
 
 ```text
 User Intent
