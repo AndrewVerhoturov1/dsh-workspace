@@ -8,6 +8,7 @@ import {
 } from './runtime.js'
 import { attachTaskUrl, createAndPublishTask } from './task-creation-bridge.js'
 import { WebWorkerBridge, markWebResultReady } from './web-worker-bridge.js'
+import { createGitHubTaskPublisher } from './github-task-publisher.js'
 
 export { attachTaskUrl, createAndPublishTask, createTaskPackage, renderIntentTaskFile } from './task-creation-bridge.js'
 export { WebWorkerBridge, markWebResultReady }
@@ -338,7 +339,7 @@ function runtimeOutput(value) {
 }
 
 export function createPostmanAsyncSendTool(ctx, runtime, { bridge, taskPublisher } = {}) {
-  const resolvedTaskPublisher = taskPublisher ?? ctx.taskPublisher
+  const resolvedTaskPublisher = taskPublisher
   return defineTool({
     name: 'postman_async_send',
     description: 'Register one durable asynchronous Postman request. When task_url is omitted, the configured WP-012 task publisher creates and publishes the intent task automatically.',
@@ -568,6 +569,7 @@ export async function restoreOrCreatePostman(ctx) {
 
 export function apply(ctx, { runtime: injectedRuntime, bridge: injectedBridge, webWorkerRunner, taskPublisher } = {}) {
   const pending = new Map()
+  const resolvedTaskPublisher = taskPublisher ?? createGitHubTaskPublisher({ cwd: POSTMAN_CWD })
   let postmanHandle
   const wakePostman = async (record) => {
     let postman = ctx.agents.get(POSTMAN_SESSION_ID)
@@ -588,7 +590,7 @@ export function apply(ctx, { runtime: injectedRuntime, bridge: injectedBridge, w
     ? new WebWorkerBridge({ runtime, run: webWorkerRunner })
     : undefined)
   ctx.tools.register(createPostmanSendTool(ctx, pending))
-  ctx.tools.register(createPostmanAsyncSendTool(ctx, runtime, { bridge, taskPublisher }))
+  ctx.tools.register(createPostmanAsyncSendTool(ctx, runtime, { bridge, taskPublisher: resolvedTaskPublisher }))
   ctx.on('agent/created', ({ agent }) => installPostmanAgent(ctx, agent, pending, runtime))
   ctx.on('agent/disposed', ({ agent }) => clearPendingForAgent(pending, agent.id))
   ctx.on('agent/inbox/claimed', ({ agent, message }) => {
