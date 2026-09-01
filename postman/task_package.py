@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Helpers for creating Web Postman task packages.
 
-This module is deliberately transport-agnostic: it renders a task document and
-builds the small prompt that points an external agent at published documents.
-It does not write to GitHub, access the browser, or change Postman Runtime.
+This module is deliberately transport-agnostic: it renders WP-009-compatible
+or WP-010 intent-preserving task documents and builds the small prompt that
+points an external agent at published documents. It does not write to GitHub,
+access the browser, or change Postman Runtime.
 """
 
 from __future__ import annotations
@@ -67,6 +68,32 @@ def _documents(values: Iterable[str]) -> list[str]:
     if not result:
         raise TaskPackageError("required_documents must contain at least one URL")
     return result
+
+
+def _intent_items(values: Iterable[str] | None, field: str, *, required: bool) -> list[str]:
+    """Validate explicit intent data without inventing defaults or reordering it."""
+
+    if values is None:
+        if required:
+            raise TaskPackageError(f"{field} must contain at least one confirmed item")
+        return []
+    if isinstance(values, (str, bytes)):
+        raise TaskPackageError(f"{field} must be an iterable of text items")
+    try:
+        items = list(values)
+    except TypeError as exc:
+        raise TaskPackageError(f"{field} must be an iterable of text items") from exc
+
+    result = [_required_text(value, f"{field}[{index}]") for index, value in enumerate(items)]
+    if required and not result:
+        raise TaskPackageError(f"{field} must contain at least one confirmed item")
+    return result
+
+
+def _intent_section(field: str, values: list[str]) -> list[str]:
+    lines = [f"{field}:"]
+    lines.extend(f"- {value}" for value in values)
+    return lines
 
 
 def task_filename(request_id: str) -> str:
@@ -140,6 +167,78 @@ def render_task_file(
             validation_value,
             "",
         ]
+    )
+    return "\n".join(lines)
+
+
+def render_intent_task_file(
+    *,
+    request_id: str,
+    user_intent: str,
+    confirmed_requirements: Iterable[str],
+    required_documents: Iterable[str],
+    repository: str,
+    base_commit: str,
+    expected_output: str,
+    validation: str,
+    clarifications: Iterable[str] | None = None,
+    constraints: Iterable[str] | None = None,
+) -> str:
+    """Render a task file containing only explicitly supplied intent data.
+
+    This is the WP-010 entry point. It performs validation and formatting only:
+    it never answers a clarification, infers a requirement, or designs a
+    solution on behalf of the external agent.
+    """
+
+    try:
+        assert_canonical_request_id(request_id)
+    except (TypeError, ValueError) as exc:
+        raise TaskPackageError(str(exc)) from exc
+
+    intent_value = _document_text(user_intent, "user_intent")
+    confirmed_values = _intent_items(
+        confirmed_requirements, "confirmed_requirements", required=True
+    )
+    clarification_values = _intent_items(clarifications, "clarifications", required=False)
+    constraint_values = _intent_items(constraints, "constraints", required=False)
+    documents = _documents(required_documents)
+    repository_value = _required_text(repository, "repository")
+    base_commit_value = _required_text(base_commit, "base_commit")
+    if not _SHA_RE.fullmatch(base_commit_value):
+        raise TaskPackageError("base_commit must be a 40-character commit SHA")
+    expected_value = _document_text(expected_output, "expected_output")
+    validation_value = _document_text(validation, "validation")
+
+    lines = [
+        "# POSTMAN TASK",
+        "",
+        f"request_id: {request_id}",
+        "user_intent:",
+        intent_value,
+    ]
+    for field, values in (
+        ("confirmed_requirements", confirmed_values),
+        ("clarifications", clarification_values),
+        ("constraints", constraint_values),
+    ):
+        lines.extend(("", *_intent_section(field, values)))
+    lines.extend(
+        (
+            "",
+            "required_documents:",
+            *(f"- {document}" for document in documents),
+            "",
+            f"repository: {repository_value}",
+            f"base_commit: {base_commit_value}",
+            "",
+            "expected_output:",
+            expected_value,
+            "",
+            "validation:",
+            validation_value,
+            "",
+        )
     )
     return "\n".join(lines)
 
