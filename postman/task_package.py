@@ -166,7 +166,7 @@ def build_external_prompt(
         raise TaskPackageError("task_url must point to the exact request task filename")
     return "\n".join(
         (
-            f"request_id: {request_id}",
+            f"POSTMAN_REQUEST_ID: {request_id}",
             f"skill_repository: {skill_url}",
             f"task_file: {published_task_url}",
         )

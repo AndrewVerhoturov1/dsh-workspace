@@ -19,9 +19,15 @@ REQ_<timestamp>_<digits>.md
 
 ## Ответ внешнему агенту
 
-Внешний prompt содержит только:
-1. request_id;
+Внешний Postman prompt содержит только:
+1. первую строку `POSTMAN_REQUEST_ID: REQ_xxx`;
 2. ссылку на общий skill repository;
 3. ссылку на task-файл.
 
-Не копировать техническое задание в prompt.
+Пример первой строки:
+
+```text
+POSTMAN_REQUEST_ID: REQ_xxx
+```
+
+Полное техническое задание в prompt не копировать: оно находится только в task-файле.

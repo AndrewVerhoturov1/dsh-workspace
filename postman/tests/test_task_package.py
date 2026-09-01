@@ -102,16 +102,16 @@ class TaskPackageTests(unittest.TestCase):
             prompt,
             "\n".join(
                 (
-                    f"request_id: {REQ}",
+                    f"POSTMAN_REQUEST_ID: {REQ}",
                     f"skill_repository: {SKILL_URL}",
                     f"task_file: {TASK_URL}",
                 )
             ),
         )
+        self.assertEqual(prompt.splitlines()[0], f"POSTMAN_REQUEST_ID: {REQ}")
         self.assertNotIn("Keep the runtime unchanged", prompt)
         self.assertNotIn("base_commit", prompt)
         self.assertNotIn("\nrepository:", prompt)
-        self.assertNotIn("POSTMAN_REQUEST_ID", prompt)
 
     def test_external_prompt_rejects_invalid_or_non_http_links(self):
         with self.assertRaises(task_package.TaskPackageError):
