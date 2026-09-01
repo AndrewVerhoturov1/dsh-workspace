@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
-import { POSTMAN_RESULT_ROOT } from './runtime.js'
+import { POSTMAN_RESULT_ROOT, REQUEST_STATUSES } from './runtime.js'
 
 export const WEB_WORKER_STATES = Object.freeze({
   ACCEPTED: 'ACCEPTED',
@@ -16,6 +16,10 @@ export const WEB_WORKER_NOT_CONFIGURED = 'WEB_WORKER_NOT_CONFIGURED'
 
 const SHA256 = /^[0-9a-f]{64}$/
 const MAX_HANDLE_CHARS = 8192
+const WEB_WORKER_START_STATUSES = new Set([
+  REQUEST_STATUSES.TASK_PUBLISHED,
+  REQUEST_STATUSES.WAITING,
+])
 
 function requestResultPath(requestId) {
   return join(POSTMAN_RESULT_ROOT, requestId)
@@ -87,7 +91,10 @@ export class WebWorkerBridge {
   accept({ requestId, taskUrl }) {
     const request = this.runtime.getRequest(requestId)
     if (request === undefined) return { status: 'UNKNOWN_REQUEST', requestId }
-    if (!['ACCEPTED', 'WAITING'].includes(request.status)) {
+    // A task must be published before the browser pipeline can receive it.
+    // Keep this allowlist fail-closed so pre-publication and unknown states
+    // cannot start the Worker, even when accept() is called directly.
+    if (!WEB_WORKER_START_STATUSES.has(request.status)) {
       return { status: request.status, requestId, resultPath: request.result_path }
     }
     const existing = this.jobs.get(requestId)

@@ -1,11 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createPostmanAsyncSendTool, POSTMAN_SESSION_ID } from './index.js'
-import { PostmanRuntime } from './runtime.js'
-import { WebWorkerBridge, markWebResultReady, WEB_WORKER_STATES } from './web-worker-bridge.js'
+import { PostmanRuntime, REQUEST_STATUSES } from './runtime.js'
+import { WebWorkerBridge, markWebResultReady, WEB_WORKER_RESULT_INVALID, WEB_WORKER_STATES } from './web-worker-bridge.js'
 
 const REQUEST_ID = 'REQ_20260831T043820Z_0042'
 
@@ -36,22 +36,93 @@ function fixture(options = {}) {
   return { root, runtime }
 }
 
-test('Web Worker bridge returns an ACCEPTED result path before RESULT_DURABLE', () => {
+test('Web Worker bridge does not start before task publication', () => {
   const { root, runtime } = fixture()
   try {
     const created = runtime.createRequest({ requestId: REQUEST_ID, originAgentId: 'agent-a', payload: 'task' })
-    const bridge = new WebWorkerBridge({ runtime })
+    const workerCalls = []
+    const bridge = new WebWorkerBridge({
+      runtime,
+      run: (input) => {
+        workerCalls.push(input)
+        return durableProof(REQUEST_ID)
+      },
+    })
     const accepted = bridge.accept({ requestId: created.request_id, taskUrl: 'https://example.test/tasks/request.md' })
 
-    assert.equal(accepted.status, 'WEB_WORKER_NOT_CONFIGURED')
+    assert.equal(accepted.status, REQUEST_STATUSES.ACCEPTED)
     assert.equal(accepted.requestId, REQUEST_ID)
-    assert.equal(accepted.state, WEB_WORKER_STATES.ACCEPTED)
     assert.equal(accepted.resultPath, created.result_path)
-    assert.equal(runtime.getRequest(REQUEST_ID).status, 'ACCEPTED')
+    assert.deepEqual(workerCalls, [])
+
+    runtime.markTaskCreated({ requestId: REQUEST_ID, taskUrl: 'https://example.test/tasks/request.md' })
+    const taskCreated = bridge.accept({ requestId: created.request_id, taskUrl: 'https://example.test/tasks/request.md' })
+
+    assert.equal(taskCreated.status, REQUEST_STATUSES.TASK_CREATED)
+    assert.deepEqual(workerCalls, [])
+    assert.doesNotMatch(readFileSync(join(root, 'postman.jsonl'), 'utf8'), /WEB_WORKER_(ACCEPTED|STARTED)/)
   } finally {
     runtime.close()
     rmSync(root, { recursive: true, force: true })
   }
+})
+
+test('Web Worker bridge starts from TASK_PUBLISHED', async () => {
+  const { root, runtime } = fixture()
+  try {
+    const created = runtime.createRequest({ requestId: REQUEST_ID, originAgentId: 'agent-a', payload: 'task' })
+    const taskUrl = 'https://example.test/tasks/request.md'
+    runtime.markTaskCreated({ requestId: REQUEST_ID, taskUrl })
+    runtime.markTaskPublished({ requestId: REQUEST_ID, taskUrl })
+    const workerCalls = []
+    const bridge = new WebWorkerBridge({
+      runtime,
+      run: async (input) => {
+        workerCalls.push(input)
+        throw new Error('SMOKE_STOP_NO_EXTERNAL_REQUEST')
+      },
+    })
+
+    const result = await bridge.accept({ requestId: created.request_id, taskUrl })
+
+    assert.equal(result.status, WEB_WORKER_RESULT_INVALID)
+    assert.deepEqual(workerCalls.map(({ requestId, taskUrl: receivedTaskUrl, request, state }) => ({
+      requestId,
+      taskUrl: receivedTaskUrl,
+      runtimeStatus: request.status,
+      state,
+    })), [{
+      requestId: REQUEST_ID,
+      taskUrl,
+      runtimeStatus: REQUEST_STATUSES.TASK_PUBLISHED,
+      state: WEB_WORKER_STATES.WEB_STARTING,
+    }])
+  } finally {
+    runtime.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('Web Worker bridge rejects unknown Runtime states fail-closed', () => {
+  const workerCalls = []
+  const runtime = {
+    getRequest: () => ({ status: 'UNEXPECTED_STATE', result_path: 'C:/results/unexpected' }),
+    journal() {
+      throw new Error('journal must not be reached before publication')
+    },
+  }
+  const bridge = new WebWorkerBridge({
+    runtime,
+    run: (input) => {
+      workerCalls.push(input)
+      return durableProof(REQUEST_ID)
+    },
+  })
+
+  const result = bridge.accept({ requestId: REQUEST_ID, taskUrl: 'not-a-url' })
+
+  assert.equal(result.status, 'UNEXPECTED_STATE')
+  assert.deepEqual(workerCalls, [])
 })
 
 test('postman_async_send exposes the durable target path while handing the task to the bridge', async () => {
@@ -102,16 +173,20 @@ test('markWebResultReady publishes only a compact RESULT_DURABLE handle and pres
 test('Web Worker bridge sends RESULT_DURABLE to Runtime only after the injected pipeline succeeds', async () => {
   const { root, runtime } = fixture()
   try {
+    const taskUrl = 'https://example.test/tasks/request.md'
     runtime.createRequest({ requestId: REQUEST_ID, originAgentId: 'agent-a', payload: 'task' })
+    runtime.markTaskCreated({ requestId: REQUEST_ID, taskUrl })
+    runtime.markTaskPublished({ requestId: REQUEST_ID, taskUrl })
+    runtime.acceptRequest(REQUEST_ID)
     const bridge = new WebWorkerBridge({
       runtime,
-      run: async ({ requestId, taskUrl }) => {
+      run: async ({ requestId, taskUrl: receivedTaskUrl }) => {
         assert.equal(requestId, REQUEST_ID)
-        assert.equal(taskUrl, 'https://example.test/tasks/request.md')
+        assert.equal(receivedTaskUrl, taskUrl)
         return durableProof(requestId)
       },
     })
-    const result = await bridge.accept({ requestId: REQUEST_ID, taskUrl: 'https://example.test/tasks/request.md' })
+    const result = await bridge.accept({ requestId: REQUEST_ID, taskUrl })
 
     assert.equal(result.status, 'READY')
     const stored = runtime.getRequest(REQUEST_ID)
