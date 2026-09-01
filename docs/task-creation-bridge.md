@@ -15,5 +15,14 @@ task_url
 ↓
 Web Worker
 
-Локальный агент не проектирует решение.
-Он только сохраняет подтвержденное намерение.
+Task File содержит только `user_intent` и явно подтверждённые пользователем требования.
+Транспортные поля (`request_id`, `repository`, `base_commit`, `task_url`) хранятся отдельно.
+
+Состояния Runtime:
+
+```text
+ACCEPTED → TASK_CREATED → TASK_PUBLISHED → WAITING → WEB_STARTING
+```
+
+Web Worker получает задачу только после `TASK_PUBLISHED`.
+Локальный агент не проектирует решение — он только сохраняет подтверждённое намерение.

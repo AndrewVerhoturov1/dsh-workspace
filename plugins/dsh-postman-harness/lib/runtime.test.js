@@ -44,6 +44,33 @@ test('PostmanRuntime should atomically persist the exact initiator request id an
   }
 })
 
+test('PostmanRuntime should persist TASK_CREATED and TASK_PUBLISHED before WAITING', () => {
+  const fixture = runtimeFixture()
+  try {
+    const requestId = 'REQ_20260831T043811Z_0013'
+    const created = fixture.runtime.createRequest({ requestId, originAgentId: 'agent-a', payload: 'ALPHA' })
+    const taskCreated = fixture.runtime.markTaskCreated({ requestId, taskUrl: 'https://example.test/tasks/alpha.md' })
+    const stillCreated = fixture.runtime.acceptRequest(requestId)
+    const taskPublished = fixture.runtime.markTaskPublished({ requestId, taskUrl: 'https://example.test/tasks/alpha.md' })
+    const waiting = fixture.runtime.acceptRequest(requestId)
+
+    assert.equal(created.status, REQUEST_STATUSES.ACCEPTED)
+    assert.equal(taskCreated.status, REQUEST_STATUSES.TASK_CREATED)
+    assert.equal(stillCreated.status, REQUEST_STATUSES.TASK_CREATED)
+    assert.equal(taskPublished.status, REQUEST_STATUSES.TASK_PUBLISHED)
+    assert.equal(waiting.status, REQUEST_STATUSES.WAITING)
+    assert.equal(waiting.task_url, 'https://example.test/tasks/alpha.md')
+
+    const events = readFileSync(join(fixture.root, 'logs', 'postman.jsonl'), 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line).event)
+    assert.deepEqual(events.slice(-3), ['TASK_CREATED', 'TASK_PUBLISHED', 'REQUEST_WAITING'])
+  } finally {
+    fixture.close()
+  }
+})
+
 test('PostmanRuntime should reject missing and legacy generated request ids without invoking a generator', () => {
   let generatorCalled = false
   const fixture = runtimeFixture({ uuid: () => { generatorCalled = true; return 'legacy' } })
