@@ -539,3 +539,20 @@ exact correlated artifact control
 ```
 
 WP-007/P6 не реализован.
+
+---
+
+## WP-011 — Web Worker Bridge
+
+`web_worker_bridge.py` координирует один запрос Runtime с уже существующим
+конвейером WP-003—WP-007. Он не содержит новых браузерных селекторов или
+механизма подключения: `browser_bootstrap`, `browser_submit`,
+`browser_observer`, `artifact_detector` и `artifact_download` остаются
+единственными владельцами соответствующих шагов.
+
+На этапе `ACCEPTED` мост сохраняет неизменный `request_id`, `worker_job_id` и
+request-scoped `resultPath`. После успешного P6 `RESULT_DURABLE` возвращается
+как компактное доказательство; только затем адаптер Runtime вызывает
+производственный `markReady`, который переводит запрос в существующее
+состояние `READY`. Владелец и доставка по-прежнему определяются только
+таблицей Runtime `REQ → origin_agent_id`.

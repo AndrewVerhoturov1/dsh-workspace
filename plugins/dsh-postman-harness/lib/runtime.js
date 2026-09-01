@@ -25,6 +25,7 @@ function defaultRuntimeDir() {
 export const POSTMAN_RUNTIME_DIR = join(defaultRuntimeDir(), 'DSH', 'Postman')
 export const POSTMAN_DB_PATH = join(POSTMAN_RUNTIME_DIR, 'postman.db')
 export const POSTMAN_JOURNAL_PATH = join(POSTMAN_RUNTIME_DIR, 'logs', 'postman.jsonl')
+export const POSTMAN_RESULT_ROOT = join(POSTMAN_RUNTIME_DIR, 'results')
 
 function assertRequestId(value) {
   assertCanonicalRequestId(value)
@@ -60,6 +61,22 @@ function assertAgentId(value) {
 function assertPayload(value) {
   if (typeof value !== 'string' || value.length === 0 || value.length > MAX_PAYLOAD_CHARS) {
     throw new Error(`payload must be a non-empty string of at most ${MAX_PAYLOAD_CHARS} characters`)
+  }
+}
+
+function assertTaskUrl(value) {
+  if (value === undefined || value === null) return
+  if (typeof value !== 'string' || value.length === 0 || value.length > 2048) {
+    throw new Error('taskUrl must be a non-empty URL of at most 2048 characters')
+  }
+  let parsed
+  try {
+    parsed = new URL(value)
+  } catch {
+    throw new Error('taskUrl must be an absolute HTTP(S) URL')
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname) {
+    throw new Error('taskUrl must be an absolute HTTP(S) URL')
   }
 }
 
@@ -121,6 +138,7 @@ export class PostmanRuntime {
         origin_agent_id TEXT NOT NULL,
         status TEXT NOT NULL,
         created_at TEXT NOT NULL,
+        task_url TEXT,
         ready_at TEXT,
         delivered_at TEXT,
         result_text TEXT,
@@ -141,6 +159,8 @@ export class PostmanRuntime {
       CREATE INDEX IF NOT EXISTS requests_status_idx ON requests(status);
       CREATE INDEX IF NOT EXISTS deliveries_request_idx ON deliveries(request_id);
     `)
+    const requestColumns = this.db.prepare('PRAGMA table_info(requests)').all().map((column) => column.name)
+    if (!requestColumns.includes('task_url')) this.db.exec('ALTER TABLE requests ADD COLUMN task_url TEXT')
     this.db.prepare('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)').run('schema_version', String(RUNTIME_SCHEMA_VERSION))
   }
 
@@ -178,10 +198,11 @@ export class PostmanRuntime {
     appendFileSync(this.journalPath, `${JSON.stringify(entry)}\n`, 'utf8')
   }
 
-  createRequest({ requestId, originAgentId, payload }) {
+  createRequest({ requestId, originAgentId, payload, taskUrl }) {
     assertCanonicalRequestId(requestId)
     assertAgentId(originAgentId)
     assertPayload(payload)
+    assertTaskUrl(taskUrl)
 
     const resolvedMessageId = messageIdForRequestId(requestId)
     const createdAt = nowIso(this.now)
@@ -196,8 +217,8 @@ export class PostmanRuntime {
 
       this.db.prepare('INSERT INTO messages (message_id, origin_agent_id, created_at, payload, status) VALUES (?, ?, ?, ?, ?)')
         .run(resolvedMessageId, originAgentId, createdAt, payload, REQUEST_STATUSES.ACCEPTED)
-      this.db.prepare('INSERT INTO requests (request_id, message_id, origin_agent_id, status, created_at) VALUES (?, ?, ?, ?, ?)')
-        .run(requestId, resolvedMessageId, originAgentId, REQUEST_STATUSES.ACCEPTED, createdAt)
+      this.db.prepare('INSERT INTO requests (request_id, message_id, origin_agent_id, status, created_at, task_url) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(requestId, resolvedMessageId, originAgentId, REQUEST_STATUSES.ACCEPTED, createdAt, taskUrl ?? null)
       record = this.getRequest(requestId)
     })
     this.journal('MESSAGE_RECEIVED', {
@@ -231,7 +252,7 @@ export class PostmanRuntime {
 
   getRequest(requestId) {
     assertRequestId(requestId)
-    return toRecord(this.db.prepare('SELECT requests.*, messages.payload AS payload FROM requests JOIN messages ON messages.message_id = requests.message_id WHERE requests.request_id = ?').get(requestId))
+    return toRecord(this.db.prepare('SELECT requests.*, messages.payload AS payload, ? AS result_path FROM requests JOIN messages ON messages.message_id = requests.message_id WHERE requests.request_id = ?').get(join(POSTMAN_RESULT_ROOT, requestId), requestId))
   }
 
   listActionable() {
@@ -242,7 +263,7 @@ export class PostmanRuntime {
     return this.db.prepare("SELECT * FROM requests WHERE status IN ('ACCEPTED', 'WAITING', 'READY', 'DELIVERING', 'DELIVERY_RETRY') ORDER BY created_at").all().map(toRecord)
   }
 
-  markSyntheticReady({ requestId, result, deliveryKey, wake = true }) {
+  markReady({ requestId, result, deliveryKey, wake = true }) {
     assertRequestId(requestId)
     assertPayload(result)
     const resultSha256 = sha256(result)
@@ -252,11 +273,13 @@ export class PostmanRuntime {
     }
     let record
     let duplicate = false
+    let conflict = false
     this.transaction(() => {
       const current = this.getRequest(requestId)
       if (current === undefined) return
       if ([REQUEST_STATUSES.READY, REQUEST_STATUSES.DELIVERING, REQUEST_STATUSES.DELIVERED].includes(current.status)) {
         duplicate = current.delivery_key === stableDeliveryKey && current.result_sha256 === resultSha256
+        conflict = !duplicate
         record = current
         return
       }
@@ -278,6 +301,10 @@ export class PostmanRuntime {
     if (duplicate) {
       this.journal('DUPLICATE_SUPPRESSED', { requestId, originAgentId: record.origin_agent_id, deliveryKey: stableDeliveryKey, status: record.status })
       return { status: 'DUPLICATE_SUPPRESSED', requestId, deliveryKey: stableDeliveryKey, record }
+    }
+    if (conflict) {
+      this.journal('RESULT_CONFLICT', { requestId, originAgentId: record.origin_agent_id, deliveryKey: stableDeliveryKey, status: record.status })
+      return { status: 'RESULT_CONFLICT', requestId, deliveryKey: stableDeliveryKey, record }
     }
     if (record.status !== REQUEST_STATUSES.READY) return { status: record.status, requestId, deliveryKey: stableDeliveryKey, record }
     this.journal('REQUEST_READY', { messageId: record.message_id, requestId, originAgentId: record.origin_agent_id, deliveryKey: stableDeliveryKey, status: record.status, resultLength: result.length, resultSha256 })
@@ -301,6 +328,12 @@ export class PostmanRuntime {
       }
     }
     return { status: 'READY', requestId, deliveryKey: stableDeliveryKey, wakeup, record }
+  }
+
+  // Compatibility alias for the WP-004/005 synthetic test seam. Production Web
+  // Worker code uses markReady so that the source of the result is explicit.
+  markSyntheticReady(input) {
+    return this.markReady(input)
   }
 
   beginDelivery(requestId) {

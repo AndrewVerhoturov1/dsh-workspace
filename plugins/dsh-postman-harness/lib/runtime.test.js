@@ -27,7 +27,7 @@ test('PostmanRuntime should atomically persist the exact initiator request id an
   try {
     const firstId = 'REQ_20260831T043800Z_0001'
     const secondId = 'REQ_20260831T043801Z_0002'
-    const first = fixture.runtime.createRequest({ requestId: firstId, originAgentId: 'agent-a', payload: 'ALPHA' })
+    const first = fixture.runtime.createRequest({ requestId: firstId, originAgentId: 'agent-a', payload: 'ALPHA', taskUrl: 'https://example.test/tasks/alpha.md' })
     const second = fixture.runtime.createRequest({ requestId: secondId, originAgentId: 'agent-a', payload: 'BRAVO' })
 
     assert.equal(first.request_id, firstId)
@@ -35,6 +35,8 @@ test('PostmanRuntime should atomically persist the exact initiator request id an
     assert.equal(second.request_id, secondId)
     assert.equal(second.message_id, 'MSG_20260831T043801Z_0002')
     assert.equal(fixture.runtime.getRequest(firstId).origin_agent_id, 'agent-a')
+    assert.equal(fixture.runtime.getRequest(firstId).task_url, 'https://example.test/tasks/alpha.md')
+    assert.equal(fixture.runtime.getRequest(firstId).result_path.endsWith(`${firstId}`), true)
     assert.equal(fixture.runtime.schemaVersion, 1)
     assert.match(readFileSync(join(fixture.root, 'logs', 'postman.jsonl'), 'utf8'), /"event":"REQUEST_CREATED"/)
   } finally {
