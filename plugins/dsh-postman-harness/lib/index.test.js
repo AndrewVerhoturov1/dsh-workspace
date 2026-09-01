@@ -1,10 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { apply, createPostmanAsyncSendTool, createPostmanReplyTool, createPostmanRuntimeTools, createPostmanSendTool, PLUGIN_NAME, POSTMAN_SESSION_ID, restoreOrCreatePostman } from './index.js'
-import { PostmanRuntime } from './runtime.js'
+import { PostmanRuntime, REQUEST_STATUSES } from './runtime.js'
+import { WebWorkerBridge, WEB_WORKER_STATES } from './web-worker-bridge.js'
 
 const agent = (id) => {
   const calls = []
@@ -308,6 +309,56 @@ test('postman_async_send should persist trusted origin and return before the res
     assert.equal(request.payload, 'from_session: agent-b\nASYNC_ALPHA')
     assert.equal(postman.calls.length, 1)
     assert.match(postman.calls[0].content[0].text, /POSTMAN_ASYNC_REQUEST/)
+  } finally {
+    runtime.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('postman_async_send should publish before handing the task to Web Worker', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-postman-wp012-flow-'))
+  const runtime = new PostmanRuntime({ dbPath: join(root, 'postman.db'), journalPath: join(root, 'postman.jsonl') })
+  try {
+    const sender = agent('agent-a')
+    const postman = agent(POSTMAN_SESSION_ID)
+    const agents = new Map([[sender.id, sender], [postman.id, postman]])
+    const workerCalls = []
+    const taskUrl = 'https://example.test/tasks/published.md'
+    const bridge = new WebWorkerBridge({
+      runtime,
+      run: async ({ request, requestId, taskUrl: receivedTaskUrl, state }) => {
+        workerCalls.push({ requestId, taskUrl: receivedTaskUrl, runtimeStatus: request.status, state })
+        throw new Error('SMOKE_STOP_NO_EXTERNAL_REQUEST')
+      },
+    })
+    const tool = createPostmanAsyncSendTool({ agents: { get: (id) => agents.get(id) } }, runtime, { bridge })
+
+    const result = await tool.execute({
+      request_id: 'REQ_20260831T043822Z_0044',
+      task: 'Postman, create a simple calculator in an ancient Japanese style.',
+      task_url: taskUrl,
+    }, { agent: sender })
+    await Promise.resolve()
+    await Promise.resolve()
+
+    assert.equal(result.state, REQUEST_STATUSES.WAITING)
+    assert.deepEqual(workerCalls, [{
+      requestId: result.request_id,
+      taskUrl,
+      runtimeStatus: REQUEST_STATUSES.WAITING,
+      state: WEB_WORKER_STATES.WEB_STARTING,
+    }])
+    assert.equal(runtime.getRequest(result.request_id).task_url, taskUrl)
+    const events = readFileSync(join(root, 'postman.jsonl'), 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line).event)
+    assert.deepEqual(events.filter((event) => ['TASK_CREATED', 'TASK_PUBLISHED', 'REQUEST_WAITING', 'WEB_WORKER_STARTED'].includes(event)), [
+      'TASK_CREATED',
+      'TASK_PUBLISHED',
+      'REQUEST_WAITING',
+      'WEB_WORKER_STARTED',
+    ])
   } finally {
     runtime.close()
     rmSync(root, { recursive: true, force: true })

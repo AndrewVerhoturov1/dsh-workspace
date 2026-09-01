@@ -7,6 +7,8 @@ import { DatabaseSync } from 'node:sqlite'
 export const RUNTIME_SCHEMA_VERSION = 1
 export const REQUEST_STATUSES = Object.freeze({
   ACCEPTED: 'ACCEPTED',
+  TASK_CREATED: 'TASK_CREATED',
+  TASK_PUBLISHED: 'TASK_PUBLISHED',
   WAITING: 'WAITING',
   READY: 'READY',
   DELIVERING: 'DELIVERING',
@@ -78,6 +80,7 @@ function assertTaskUrl(value) {
   if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname) {
     throw new Error('taskUrl must be an absolute HTTP(S) URL')
   }
+  return value
 }
 
 function sha256(value) {
@@ -234,13 +237,64 @@ export class PostmanRuntime {
     return record
   }
 
+  markTaskCreated({ requestId, taskUrl }) {
+    assertRequestId(requestId)
+    const publishedTaskUrl = assertTaskUrl(taskUrl)
+    if (publishedTaskUrl === undefined) throw new Error('taskUrl is required to create a task')
+
+    let record
+    this.transaction(() => {
+      const current = this.getRequest(requestId)
+      if (current === undefined) return
+      if (current.status === REQUEST_STATUSES.ACCEPTED) {
+        this.db.prepare('UPDATE requests SET status = ?, task_url = ? WHERE request_id = ?')
+          .run(REQUEST_STATUSES.TASK_CREATED, publishedTaskUrl, requestId)
+        this.db.prepare('UPDATE messages SET status = ? WHERE message_id = ?')
+          .run(REQUEST_STATUSES.TASK_CREATED, current.message_id)
+      } else if (current.status === REQUEST_STATUSES.TASK_CREATED && current.task_url !== publishedTaskUrl) {
+        throw new Error(`requestId ${requestId} already has a different taskUrl`)
+      }
+      record = this.getRequest(requestId)
+    })
+    if (record?.status === REQUEST_STATUSES.TASK_CREATED) {
+      this.journal('TASK_CREATED', { messageId: record.message_id, requestId, originAgentId: record.origin_agent_id, taskUrl: record.task_url, status: record.status })
+    }
+    return record
+  }
+
+  markTaskPublished({ requestId, taskUrl }) {
+    assertRequestId(requestId)
+    const publishedTaskUrl = assertTaskUrl(taskUrl)
+    if (publishedTaskUrl === undefined) throw new Error('taskUrl is required to publish a task')
+
+    let record
+    this.transaction(() => {
+      const current = this.getRequest(requestId)
+      if (current === undefined) return
+      if (current.status === REQUEST_STATUSES.TASK_CREATED) {
+        if (current.task_url !== publishedTaskUrl) throw new Error(`requestId ${requestId} taskUrl does not match the created task`)
+        this.db.prepare('UPDATE requests SET status = ? WHERE request_id = ?')
+          .run(REQUEST_STATUSES.TASK_PUBLISHED, requestId)
+        this.db.prepare('UPDATE messages SET status = ? WHERE message_id = ?')
+          .run(REQUEST_STATUSES.TASK_PUBLISHED, current.message_id)
+      } else if (current.status === REQUEST_STATUSES.TASK_PUBLISHED && current.task_url !== publishedTaskUrl) {
+        throw new Error(`requestId ${requestId} already has a different published taskUrl`)
+      }
+      record = this.getRequest(requestId)
+    })
+    if (record?.status === REQUEST_STATUSES.TASK_PUBLISHED) {
+      this.journal('TASK_PUBLISHED', { messageId: record.message_id, requestId, originAgentId: record.origin_agent_id, taskUrl: record.task_url, status: record.status })
+    }
+    return record
+  }
+
   acceptRequest(requestId) {
     assertRequestId(requestId)
     let record
     this.transaction(() => {
       const current = this.getRequest(requestId)
       if (current === undefined) return
-      if (current.status === REQUEST_STATUSES.ACCEPTED) {
+      if ([REQUEST_STATUSES.ACCEPTED, REQUEST_STATUSES.TASK_PUBLISHED].includes(current.status)) {
         this.db.prepare('UPDATE requests SET status = ? WHERE request_id = ?').run(REQUEST_STATUSES.WAITING, requestId)
         this.db.prepare('UPDATE messages SET status = ? WHERE message_id = ?').run(REQUEST_STATUSES.WAITING, current.message_id)
       }
@@ -260,7 +314,7 @@ export class PostmanRuntime {
   }
 
   listPending() {
-    return this.db.prepare("SELECT * FROM requests WHERE status IN ('ACCEPTED', 'WAITING', 'READY', 'DELIVERING', 'DELIVERY_RETRY') ORDER BY created_at").all().map(toRecord)
+    return this.db.prepare("SELECT * FROM requests WHERE status IN ('ACCEPTED', 'TASK_CREATED', 'TASK_PUBLISHED', 'WAITING', 'READY', 'DELIVERING', 'DELIVERY_RETRY') ORDER BY created_at").all().map(toRecord)
   }
 
   markReady({ requestId, result, deliveryKey, wake = true }) {

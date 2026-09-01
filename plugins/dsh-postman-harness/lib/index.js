@@ -6,8 +6,10 @@ import {
   POSTMAN_JOURNAL_PATH,
   REQUEST_STATUSES,
 } from './runtime.js'
+import { attachTaskUrl } from './task-creation-bridge.js'
 import { WebWorkerBridge, markWebResultReady } from './web-worker-bridge.js'
 
+export { attachTaskUrl } from './task-creation-bridge.js'
 export { WebWorkerBridge, markWebResultReady }
 
 export const name = 'dsh-postman-harness'
@@ -338,7 +340,7 @@ function runtimeOutput(value) {
 export function createPostmanAsyncSendTool(ctx, runtime, { bridge } = {}) {
   return defineTool({
     name: 'postman_async_send',
-    description: 'Register one durable asynchronous Postman request using the canonical request_id created by the initiating Harness model. Format: REQ_YYYYMMDDTHHMMSSZ_NNNN (UTC + four digits). Runtime validates uniqueness and never rewrites the key.',
+    description: 'Register one durable asynchronous Postman request using the canonical request_id created by the initiating Harness model. The optional WP-012 task_url is persisted in Runtime and passed unchanged to the Web Worker.',
     parameters: {
       request_id: { type: 'string', required: true, description: 'Initiator-created immutable key, for example REQ_20260831T043812Z_4827.' },
       task: { type: 'string', required: true, description: 'Task payload to be processed asynchronously.' },
@@ -348,22 +350,33 @@ export function createPostmanAsyncSendTool(ctx, runtime, { bridge } = {}) {
     async execute(args, exec) {
       const sender = requireAgent(exec, 'postman_async_send')
       if (sender.id === POSTMAN_SESSION_ID) throw new Error('POSTMAN cannot create an asynchronous request for itself')
-      const record = runtime.createRequest({ requestId: args.request_id, originAgentId: sender.id, payload: args.task, taskUrl: args.task_url })
+      const record = runtime.createRequest({ requestId: args.request_id, originAgentId: sender.id, payload: args.task })
+      let taskRecord = record
+      if (args.task_url !== undefined) {
+        // The task marker is created before publication; Runtime is the source
+        // of truth for both durable state transitions.
+        taskRecord = attachTaskUrl(record, args.task_url)
+        taskRecord = runtime.markTaskCreated({ requestId: record.request_id, taskUrl: taskRecord.task_url })
+        taskRecord = runtime.markTaskPublished({ requestId: record.request_id, taskUrl: taskRecord.task_url })
+      }
+
       const postman = ctx.agents.get(POSTMAN_SESSION_ID)
       if (postman === undefined) {
-        runtime.journal('POSTMAN_WAKE_FAILED', { messageId: record.message_id, requestId: record.request_id, originAgentId: record.origin_agent_id, status: record.status, error: 'POSTMAN session is not live' })
+        const current = runtime.getRequest(record.request_id) ?? record
+        runtime.journal('POSTMAN_WAKE_FAILED', { messageId: record.message_id, requestId: record.request_id, originAgentId: record.origin_agent_id, status: current.status, error: 'POSTMAN session is not live' })
         return {
           status: 'POSTMAN_UNAVAILABLE',
           message_id: record.message_id,
           request_id: record.request_id,
-          state: record.status,
-          result_path: record.result_path,
+          state: current.status,
+          result_path: current.result_path,
+          task_url: current.task_url ?? taskRecord.task_url,
           result_state: 'RESULT_DURABLE',
         }
       }
       let accepted
       try {
-        runtime.journal('POSTMAN_WAKE_REQUESTED', { messageId: record.message_id, requestId: record.request_id, originAgentId: record.origin_agent_id, status: record.status })
+        runtime.journal('POSTMAN_WAKE_REQUESTED', { messageId: record.message_id, requestId: record.request_id, originAgentId: record.origin_agent_id, status: taskRecord.status })
         postman.followup(createUserMessage({
           content: [textBlock(asyncRequestText(record))],
           source: { kind: 'plugin', plugin: PLUGIN_NAME, form: 'async-request', messageId: record.message_id, requestId: record.request_id, targetSessionId: POSTMAN_SESSION_ID },
@@ -374,7 +387,7 @@ export function createPostmanAsyncSendTool(ctx, runtime, { bridge } = {}) {
         if (bridge !== undefined && args.task_url !== undefined) {
           // Do not await the browser pipeline: ACCEPTED is returned before the
           // external model result exists. Runtime remains the sole owner of REQ.
-          Promise.resolve(bridge.accept({ requestId: record.request_id, taskUrl: args.task_url }))
+          Promise.resolve(bridge.accept({ requestId: record.request_id, taskUrl: taskRecord.task_url }))
             .catch((error) => runtime.journal('WEB_WORKER_FAILED', {
               messageId: record.message_id,
               requestId: record.request_id,
@@ -384,8 +397,9 @@ export function createPostmanAsyncSendTool(ctx, runtime, { bridge } = {}) {
         }
         accepted = waiting ?? runtime.getRequest(record.request_id)
       } catch (error) {
-        runtime.journal('POSTMAN_WAKE_FAILED', { messageId: record.message_id, requestId: record.request_id, originAgentId: record.origin_agent_id, status: record.status, error: String(error?.message ?? error) })
-        return { status: 'POSTMAN_WAKE_FAILED', message_id: record.message_id, request_id: record.request_id, state: record.status }
+        const current = runtime.getRequest(record.request_id) ?? record
+        runtime.journal('POSTMAN_WAKE_FAILED', { messageId: record.message_id, requestId: record.request_id, originAgentId: record.origin_agent_id, status: current.status, error: String(error?.message ?? error) })
+        return { status: 'POSTMAN_WAKE_FAILED', message_id: record.message_id, request_id: record.request_id, state: current.status, task_url: current.task_url ?? taskRecord.task_url }
       }
       return {
         status: 'ACCEPTED',
@@ -394,6 +408,7 @@ export function createPostmanAsyncSendTool(ctx, runtime, { bridge } = {}) {
         request_id: record.request_id,
         state: accepted?.status ?? REQUEST_STATUSES.WAITING,
         result_path: accepted?.result_path ?? record.result_path,
+        task_url: taskRecord.task_url,
         result_state: 'RESULT_DURABLE',
       }
     },
