@@ -34,6 +34,22 @@ class TaskPackageTests(unittest.TestCase):
         values.update(overrides)
         return task_package.render_task_file(**values)
 
+    def render_intent(self, **overrides):
+        values = {
+            "request_id": REQ,
+            "user_intent": "Preserve the user's request while sending it to the external agent.",
+            "confirmed_requirements": ["Keep the request meaning unchanged."],
+            "clarifications": ["Which repository should be changed? — Confirmed: dsh-workspace."],
+            "constraints": ["Do not design the solution locally."],
+            "required_documents": [SKILL_URL, "https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/REPO_POLICY.md"],
+            "repository": "AndrewVerhoturov1/dsh-workspace",
+            "base_commit": BASE_COMMIT,
+            "expected_output": "A task file for the external agent.",
+            "validation": "Run unit tests and git diff --check.",
+        }
+        values.update(overrides)
+        return task_package.render_intent_task_file(**values)
+
     def test_task_filename_uses_exact_canonical_request_id(self):
         self.assertEqual(task_package.task_filename(REQ), f"{REQ}.md")
         self.assertTrue(task_package.validate_task_path(f"{REQ}.md", REQ))
@@ -96,6 +112,52 @@ class TaskPackageTests(unittest.TestCase):
         self.assertIn("# POSTMAN TASK\n", content)
         self.assertIn("## Task\n", content)
 
+    def test_intent_task_contains_explicit_fields_in_archive_order(self):
+        content = self.render_intent()
+        fields = [
+            "request_id: REQ_20260831T043812Z_4827",
+            "user_intent:\nPreserve the user's request while sending it to the external agent.",
+            "confirmed_requirements:\n- Keep the request meaning unchanged.",
+            "clarifications:\n- Which repository should be changed? — Confirmed: dsh-workspace.",
+            "constraints:\n- Do not design the solution locally.",
+            "required_documents:\n- " + SKILL_URL,
+            "repository: AndrewVerhoturov1/dsh-workspace",
+            "base_commit: " + BASE_COMMIT,
+            "expected_output:\nA task file for the external agent.",
+            "validation:\nRun unit tests and git diff --check.",
+        ]
+        positions = [content.index(field) for field in fields]
+        self.assertEqual(positions, sorted(positions))
+        self.assertTrue(content.endswith("\n"))
+        self.assertNotIn("## Task", content)
+
+    def test_intent_task_preserves_unicode_and_does_not_infer_empty_sections(self):
+        content = self.render_intent(
+            user_intent="Сохранить смысл: ё — 漢字 ✅",
+            confirmed_requirements=["Только подтверждённое требование."],
+            clarifications=[],
+            constraints=[],
+        )
+        self.assertEqual(content.encode("utf-8").decode("utf-8"), content)
+        self.assertIn("user_intent:\nСохранить смысл: ё — 漢字 ✅", content)
+        self.assertIn("clarifications:\n\nconstraints:", content)
+        self.assertNotIn("уточнение не требуется", content.lower())
+        self.assertNotIn("архитектура", content.lower())
+
+    def test_intent_task_rejects_missing_confirmed_requirements(self):
+        with self.assertRaises(task_package.TaskPackageError):
+            self.render_intent(confirmed_requirements=[])
+
+    def test_intent_task_rejects_invalid_items_without_rewriting_them(self):
+        for field in ("confirmed_requirements", "clarifications", "constraints"):
+            with self.subTest(field=field):
+                with self.assertRaises(task_package.TaskPackageError):
+                    self.render_intent(**{field: [" "]})
+                with self.assertRaises(task_package.TaskPackageError):
+                    self.render_intent(**{field: ["line one\nline two"]})
+        with self.assertRaises(task_package.TaskPackageError):
+            self.render_intent(user_intent="   ")
+
     def test_external_prompt_contains_only_req_and_two_links(self):
         prompt = task_package.build_external_prompt(REQ, SKILL_URL, TASK_URL)
         self.assertEqual(
@@ -110,6 +172,7 @@ class TaskPackageTests(unittest.TestCase):
         )
         self.assertEqual(prompt.splitlines()[0], f"POSTMAN_REQUEST_ID: {REQ}")
         self.assertNotIn("Keep the runtime unchanged", prompt)
+        self.assertNotIn("Preserve the user's request", prompt)
         self.assertNotIn("base_commit", prompt)
         self.assertNotIn("\nrepository:", prompt)
 
