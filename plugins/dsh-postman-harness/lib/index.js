@@ -6,6 +6,9 @@ import {
   POSTMAN_JOURNAL_PATH,
   REQUEST_STATUSES,
 } from './runtime.js'
+import { WebWorkerBridge, markWebResultReady } from './web-worker-bridge.js'
+
+export { WebWorkerBridge, markWebResultReady }
 
 export const name = 'dsh-postman-harness'
 export const inject = ['agents', 'sessionPersistence', 'systemPrompt', 'tools']
@@ -332,38 +335,67 @@ function runtimeOutput(value) {
   }
 }
 
-export function createPostmanAsyncSendTool(ctx, runtime) {
+export function createPostmanAsyncSendTool(ctx, runtime, { bridge } = {}) {
   return defineTool({
     name: 'postman_async_send',
     description: 'Register one durable asynchronous Postman request using the canonical request_id created by the initiating Harness model. Format: REQ_YYYYMMDDTHHMMSSZ_NNNN (UTC + four digits). Runtime validates uniqueness and never rewrites the key.',
     parameters: {
       request_id: { type: 'string', required: true, description: 'Initiator-created immutable key, for example REQ_20260831T043812Z_4827.' },
       task: { type: 'string', required: true, description: 'Task payload to be processed asynchronously.' },
+      task_url: { type: 'string', description: 'Published task URL consumed by the Web Worker bridge.' },
     },
     output: runtimeOutput({}),
     async execute(args, exec) {
       const sender = requireAgent(exec, 'postman_async_send')
       if (sender.id === POSTMAN_SESSION_ID) throw new Error('POSTMAN cannot create an asynchronous request for itself')
-      const record = runtime.createRequest({ requestId: args.request_id, originAgentId: sender.id, payload: args.task })
+      const record = runtime.createRequest({ requestId: args.request_id, originAgentId: sender.id, payload: args.task, taskUrl: args.task_url })
       const postman = ctx.agents.get(POSTMAN_SESSION_ID)
       if (postman === undefined) {
         runtime.journal('POSTMAN_WAKE_FAILED', { messageId: record.message_id, requestId: record.request_id, originAgentId: record.origin_agent_id, status: record.status, error: 'POSTMAN session is not live' })
-        return { status: 'POSTMAN_UNAVAILABLE', message_id: record.message_id, request_id: record.request_id, state: record.status }
+        return {
+          status: 'POSTMAN_UNAVAILABLE',
+          message_id: record.message_id,
+          request_id: record.request_id,
+          state: record.status,
+          result_path: record.result_path,
+          result_state: 'RESULT_DURABLE',
+        }
       }
+      let accepted
       try {
         runtime.journal('POSTMAN_WAKE_REQUESTED', { messageId: record.message_id, requestId: record.request_id, originAgentId: record.origin_agent_id, status: record.status })
         postman.followup(createUserMessage({
           content: [textBlock(asyncRequestText(record))],
           source: { kind: 'plugin', plugin: PLUGIN_NAME, form: 'async-request', messageId: record.message_id, requestId: record.request_id, targetSessionId: POSTMAN_SESSION_ID },
         }))
-        runtime.acceptRequest(record.request_id)
+        const waiting = runtime.acceptRequest(record.request_id)
         runtime.journal('FOLLOWUP_ENQUEUED', { messageId: record.message_id, requestId: record.request_id, originAgentId: record.origin_agent_id, status: REQUEST_STATUSES.WAITING })
         runtime.journal('POSTMAN_WAKE_SUCCEEDED', { messageId: record.message_id, requestId: record.request_id, originAgentId: record.origin_agent_id, status: REQUEST_STATUSES.WAITING })
+        if (bridge !== undefined && args.task_url !== undefined) {
+          // Do not await the browser pipeline: ACCEPTED is returned before the
+          // external model result exists. Runtime remains the sole owner of REQ.
+          Promise.resolve(bridge.accept({ requestId: record.request_id, taskUrl: args.task_url }))
+            .catch((error) => runtime.journal('WEB_WORKER_FAILED', {
+              messageId: record.message_id,
+              requestId: record.request_id,
+              originAgentId: record.origin_agent_id,
+              error: String(error?.message ?? error),
+            }))
+        }
+        accepted = waiting ?? runtime.getRequest(record.request_id)
       } catch (error) {
         runtime.journal('POSTMAN_WAKE_FAILED', { messageId: record.message_id, requestId: record.request_id, originAgentId: record.origin_agent_id, status: record.status, error: String(error?.message ?? error) })
         return { status: 'POSTMAN_WAKE_FAILED', message_id: record.message_id, request_id: record.request_id, state: record.status }
       }
-      return { status: 'ACCEPTED', protocol_version: 1, message_id: record.message_id, request_id: record.request_id, state: REQUEST_STATUSES.WAITING }
+      return {
+        status: 'ACCEPTED',
+        protocol_version: 1,
+        message_id: record.message_id,
+        request_id: record.request_id,
+        state: accepted?.status ?? REQUEST_STATUSES.WAITING,
+        result_path: accepted?.result_path ?? record.result_path,
+        result_state: 'RESULT_DURABLE',
+      }
     },
   })
 }
@@ -491,7 +523,7 @@ export async function restoreOrCreatePostman(ctx) {
   })
 }
 
-export function apply(ctx, { runtime: injectedRuntime } = {}) {
+export function apply(ctx, { runtime: injectedRuntime, bridge: injectedBridge, webWorkerRunner } = {}) {
   const pending = new Map()
   let postmanHandle
   const wakePostman = async (record) => {
@@ -509,8 +541,11 @@ export function apply(ctx, { runtime: injectedRuntime } = {}) {
   const runtime = injectedRuntime ?? new PostmanRuntime({
     onReady: wakePostman,
   })
+  const bridge = injectedBridge ?? (typeof webWorkerRunner === 'function'
+    ? new WebWorkerBridge({ runtime, run: webWorkerRunner })
+    : undefined)
   ctx.tools.register(createPostmanSendTool(ctx, pending))
-  ctx.tools.register(createPostmanAsyncSendTool(ctx, runtime))
+  ctx.tools.register(createPostmanAsyncSendTool(ctx, runtime, { bridge }))
   ctx.on('agent/created', ({ agent }) => installPostmanAgent(ctx, agent, pending, runtime))
   ctx.on('agent/disposed', ({ agent }) => clearPendingForAgent(pending, agent.id))
   ctx.on('agent/inbox/claimed', ({ agent, message }) => {
@@ -522,9 +557,15 @@ export function apply(ctx, { runtime: injectedRuntime } = {}) {
   const startup = restoreOrCreatePostman(ctx)
     .then((handle) => {
       postmanHandle = handle
-      return Promise.all(runtime.listActionable().map((record) => wakePostman(record).catch((error) => {
+      const readyRecovery = runtime.listActionable().map((record) => wakePostman(record).catch((error) => {
         runtime.journal('POSTMAN_WAKE_FAILED', { requestId: record.request_id, originAgentId: record.origin_agent_id, deliveryKey: record.delivery_key, status: record.status, error: String(error?.message ?? error) })
-      })))
+      }))
+      const workerRecovery = bridge === undefined ? [] : runtime.listPending()
+        .filter((record) => record.status === REQUEST_STATUSES.WAITING && typeof record.task_url === 'string' && record.task_url.length > 0)
+        .map((record) => Promise.resolve(bridge.accept({ requestId: record.request_id, taskUrl: record.task_url })).catch((error) => {
+          runtime.journal('WEB_WORKER_FAILED', { requestId: record.request_id, originAgentId: record.origin_agent_id, status: record.status, error: String(error?.message ?? error) })
+        }))
+      return Promise.all([...readyRecovery, ...workerRecovery])
     })
     .catch((error) => {
       ctx.logger.error(`[postman] persistent session startup failed: ${error instanceof Error ? error.message : String(error)}`)
