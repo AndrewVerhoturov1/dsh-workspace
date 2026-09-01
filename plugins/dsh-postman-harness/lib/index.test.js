@@ -288,17 +288,22 @@ test('apply should install a scoped reply tool and fail-closed tool boundary for
   rmSync(runtimeRoot, { recursive: true, force: true })
 })
 
-test('postman_async_send should persist trusted origin and return before the result exists', async () => {
+test('postman_async_send should create and publish an intent task without task_url', async () => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-postman-async-send-'))
   const runtime = new PostmanRuntime({ dbPath: join(root, 'postman.db'), journalPath: join(root, 'postman.jsonl') })
   try {
     const sender = agent('agent-a')
     const postman = agent(POSTMAN_SESSION_ID)
     const agents = new Map([[sender.id, sender], [postman.id, postman]])
-    const tool = createPostmanAsyncSendTool({ agents: { get: (id) => agents.get(id) } }, runtime)
+    const published = []
+    const taskPublisher = async (task) => {
+      published.push(task)
+      return { taskUrl: `https://example.test/tasks/${task.filename}` }
+    }
+    const tool = createPostmanAsyncSendTool({ agents: { get: (id) => agents.get(id) } }, runtime, { taskPublisher })
 
     const requestId = 'REQ_20260831T043812Z_4827'
-    const result = await tool.execute({ request_id: requestId, task: 'from_session: agent-b\nASYNC_ALPHA' }, { agent: sender })
+    const result = await tool.execute({ request_id: requestId, task: 'Postman, сделай простой калькулятор в древне-японском стиле.' }, { agent: sender })
     const request = runtime.getRequest(result.request_id)
 
     assert.equal(result.status, 'ACCEPTED')
@@ -306,9 +311,48 @@ test('postman_async_send should persist trusted origin and return before the res
     assert.equal(result.request_id, requestId)
     assert.equal(result.message_id, 'MSG_20260831T043812Z_4827')
     assert.equal(request.origin_agent_id, 'agent-a')
-    assert.equal(request.payload, 'from_session: agent-b\nASYNC_ALPHA')
+    assert.equal(request.payload, 'Postman, сделай простой калькулятор в древне-японском стиле.')
+    assert.equal(request.task_url, `https://example.test/tasks/${requestId}.md`)
+    assert.equal(published.length, 1)
+    assert.equal(published[0].filename, `${requestId}.md`)
+    assert.match(published[0].content, /user_intent:\nPostman, сделай простой калькулятор в древне-японском стиле\./)
+    assert.doesNotMatch(published[0].content, /request_id:|task_url:|repository:|base_commit:/)
     assert.equal(postman.calls.length, 1)
     assert.match(postman.calls[0].content[0].text, /POSTMAN_ASYNC_REQUEST/)
+
+    const events = readFileSync(join(root, 'postman.jsonl'), 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line).event)
+    assert.deepEqual(events.filter((event) => ['TASK_CREATED', 'TASK_PUBLISHED', 'REQUEST_WAITING'].includes(event)), [
+      'TASK_CREATED',
+      'TASK_PUBLISHED',
+      'REQUEST_WAITING',
+    ])
+  } finally {
+    runtime.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('postman_async_send should fail closed when automatic task publication is unavailable', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-postman-task-failure-'))
+  const runtime = new PostmanRuntime({ dbPath: join(root, 'postman.db'), journalPath: join(root, 'postman.jsonl') })
+  try {
+    const sender = agent('agent-a')
+    const postman = agent(POSTMAN_SESSION_ID)
+    const agents = new Map([[sender.id, sender], [postman.id, postman]])
+    const tool = createPostmanAsyncSendTool({ agents: { get: (id) => agents.get(id) } }, runtime)
+
+    const result = await tool.execute({
+      request_id: 'REQ_20260831T043813Z_4828',
+      task: 'Postman, сделай простой калькулятор в древне-японском стиле.',
+    }, { agent: sender })
+
+    assert.equal(result.status, 'TASK_PUBLICATION_FAILED')
+    assert.equal(result.state, REQUEST_STATUSES.ACCEPTED)
+    assert.equal(postman.calls.length, 0)
+    assert.equal(runtime.getRequest(result.request_id).status, REQUEST_STATUSES.ACCEPTED)
   } finally {
     runtime.close()
     rmSync(root, { recursive: true, force: true })
@@ -323,7 +367,12 @@ test('postman_async_send should publish before handing the task to Web Worker', 
     const postman = agent(POSTMAN_SESSION_ID)
     const agents = new Map([[sender.id, sender], [postman.id, postman]])
     const workerCalls = []
-    const taskUrl = 'https://example.test/tasks/published.md'
+    const taskUrl = 'https://example.test/tasks/REQ_20260831T043822Z_0044.md'
+    const taskPublisher = async (task) => {
+      assert.equal(task.userIntent, 'Postman, сделай простой калькулятор в древне-японском стиле.')
+      assert.equal(task.content.includes('task_url:'), false)
+      return { taskUrl: `https://example.test/tasks/${task.filename}` }
+    }
     const bridge = new WebWorkerBridge({
       runtime,
       run: async ({ request, requestId, taskUrl: receivedTaskUrl, state }) => {
@@ -331,12 +380,11 @@ test('postman_async_send should publish before handing the task to Web Worker', 
         throw new Error('SMOKE_STOP_NO_EXTERNAL_REQUEST')
       },
     })
-    const tool = createPostmanAsyncSendTool({ agents: { get: (id) => agents.get(id) } }, runtime, { bridge })
+    const tool = createPostmanAsyncSendTool({ agents: { get: (id) => agents.get(id) } }, runtime, { bridge, taskPublisher })
 
     const result = await tool.execute({
       request_id: 'REQ_20260831T043822Z_0044',
-      task: 'Postman, create a simple calculator in an ancient Japanese style.',
-      task_url: taskUrl,
+      task: 'Postman, сделай простой калькулятор в древне-японском стиле.',
     }, { agent: sender })
     await Promise.resolve()
     await Promise.resolve()
@@ -372,7 +420,8 @@ test('postman_async_send should reject malformed or duplicate initiator request 
     const sender = agent('agent-a')
     const postman = agent(POSTMAN_SESSION_ID)
     const agents = new Map([[sender.id, sender], [postman.id, postman]])
-    const tool = createPostmanAsyncSendTool({ agents: { get: (id) => agents.get(id) } }, runtime)
+    const taskPublisher = async (task) => ({ taskUrl: `https://example.test/tasks/${task.filename}` })
+    const tool = createPostmanAsyncSendTool({ agents: { get: (id) => agents.get(id) } }, runtime, { taskPublisher })
 
     await assert.rejects(
       tool.execute({ request_id: 'REQ_BAD', task: 'BAD' }, { agent: sender }),
