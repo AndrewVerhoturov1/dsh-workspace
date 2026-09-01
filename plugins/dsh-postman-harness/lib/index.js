@@ -6,10 +6,10 @@ import {
   POSTMAN_JOURNAL_PATH,
   REQUEST_STATUSES,
 } from './runtime.js'
-import { attachTaskUrl } from './task-creation-bridge.js'
+import { attachTaskUrl, createAndPublishTask } from './task-creation-bridge.js'
 import { WebWorkerBridge, markWebResultReady } from './web-worker-bridge.js'
 
-export { attachTaskUrl } from './task-creation-bridge.js'
+export { attachTaskUrl, createAndPublishTask, createTaskPackage, renderIntentTaskFile } from './task-creation-bridge.js'
 export { WebWorkerBridge, markWebResultReady }
 
 export const name = 'dsh-postman-harness'
@@ -337,14 +337,15 @@ function runtimeOutput(value) {
   }
 }
 
-export function createPostmanAsyncSendTool(ctx, runtime, { bridge } = {}) {
+export function createPostmanAsyncSendTool(ctx, runtime, { bridge, taskPublisher } = {}) {
+  const resolvedTaskPublisher = taskPublisher ?? ctx.taskPublisher
   return defineTool({
     name: 'postman_async_send',
-    description: 'Register one durable asynchronous Postman request using the canonical request_id created by the initiating Harness model. The optional WP-012 task_url is persisted in Runtime and passed unchanged to the Web Worker.',
+    description: 'Register one durable asynchronous Postman request. When task_url is omitted, the configured WP-012 task publisher creates and publishes the intent task automatically.',
     parameters: {
       request_id: { type: 'string', required: true, description: 'Initiator-created immutable key, for example REQ_20260831T043812Z_4827.' },
-      task: { type: 'string', required: true, description: 'Task payload to be processed asynchronously.' },
-      task_url: { type: 'string', description: 'Published task URL consumed by the Web Worker bridge.' },
+      task: { type: 'string', required: true, description: 'Exact user intent to be published as an intent-only task.' },
+      task_url: { type: 'string', description: 'Legacy published task URL; optional and no longer required when a task publisher is configured.' },
     },
     output: runtimeOutput({}),
     async execute(args, exec) {
@@ -352,12 +353,36 @@ export function createPostmanAsyncSendTool(ctx, runtime, { bridge } = {}) {
       if (sender.id === POSTMAN_SESSION_ID) throw new Error('POSTMAN cannot create an asynchronous request for itself')
       const record = runtime.createRequest({ requestId: args.request_id, originAgentId: sender.id, payload: args.task })
       let taskRecord = record
-      if (args.task_url !== undefined) {
-        // The task marker is created before publication; Runtime is the source
-        // of truth for both durable state transitions.
-        taskRecord = attachTaskUrl(record, args.task_url)
+      try {
+        let taskUrl = args.task_url
+        if (taskUrl === undefined) {
+          const taskPackage = await createAndPublishTask(resolvedTaskPublisher, {
+            requestId: record.request_id,
+            userIntent: args.task,
+          })
+          taskUrl = taskPackage.taskUrl
+        }
+        // The task marker is created only after publication (automatic or legacy
+        // compatible) succeeds; Runtime remains the state authority.
+        taskRecord = attachTaskUrl(record, taskUrl)
         taskRecord = runtime.markTaskCreated({ requestId: record.request_id, taskUrl: taskRecord.task_url })
         taskRecord = runtime.markTaskPublished({ requestId: record.request_id, taskUrl: taskRecord.task_url })
+      } catch (error) {
+        runtime.journal('TASK_PUBLICATION_FAILED', {
+          messageId: record.message_id,
+          requestId: record.request_id,
+          originAgentId: record.origin_agent_id,
+          status: record.status,
+          error: String(error?.message ?? error),
+        })
+        return {
+          status: 'TASK_PUBLICATION_FAILED',
+          message_id: record.message_id,
+          request_id: record.request_id,
+          state: record.status,
+          result_path: record.result_path,
+          result_state: 'RESULT_DURABLE',
+        }
       }
 
       const postman = ctx.agents.get(POSTMAN_SESSION_ID)
@@ -384,10 +409,13 @@ export function createPostmanAsyncSendTool(ctx, runtime, { bridge } = {}) {
         const waiting = runtime.acceptRequest(record.request_id)
         runtime.journal('FOLLOWUP_ENQUEUED', { messageId: record.message_id, requestId: record.request_id, originAgentId: record.origin_agent_id, status: REQUEST_STATUSES.WAITING })
         runtime.journal('POSTMAN_WAKE_SUCCEEDED', { messageId: record.message_id, requestId: record.request_id, originAgentId: record.origin_agent_id, status: REQUEST_STATUSES.WAITING })
-        if (bridge !== undefined && args.task_url !== undefined) {
+        if (bridge !== undefined) {
+          // Read the published URL back from Runtime so the Worker cannot use a
+          // caller-owned or stale task URL.
+          const published = runtime.getRequest(record.request_id)
           // Do not await the browser pipeline: ACCEPTED is returned before the
           // external model result exists. Runtime remains the sole owner of REQ.
-          Promise.resolve(bridge.accept({ requestId: record.request_id, taskUrl: taskRecord.task_url }))
+          Promise.resolve(bridge.accept({ requestId: record.request_id, taskUrl: published.task_url }))
             .catch((error) => runtime.journal('WEB_WORKER_FAILED', {
               messageId: record.message_id,
               requestId: record.request_id,
@@ -538,7 +566,7 @@ export async function restoreOrCreatePostman(ctx) {
   })
 }
 
-export function apply(ctx, { runtime: injectedRuntime, bridge: injectedBridge, webWorkerRunner } = {}) {
+export function apply(ctx, { runtime: injectedRuntime, bridge: injectedBridge, webWorkerRunner, taskPublisher } = {}) {
   const pending = new Map()
   let postmanHandle
   const wakePostman = async (record) => {
@@ -560,7 +588,7 @@ export function apply(ctx, { runtime: injectedRuntime, bridge: injectedBridge, w
     ? new WebWorkerBridge({ runtime, run: webWorkerRunner })
     : undefined)
   ctx.tools.register(createPostmanSendTool(ctx, pending))
-  ctx.tools.register(createPostmanAsyncSendTool(ctx, runtime, { bridge }))
+  ctx.tools.register(createPostmanAsyncSendTool(ctx, runtime, { bridge, taskPublisher }))
   ctx.on('agent/created', ({ agent }) => installPostmanAgent(ctx, agent, pending, runtime))
   ctx.on('agent/disposed', ({ agent }) => clearPendingForAgent(pending, agent.id))
   ctx.on('agent/inbox/claimed', ({ agent, message }) => {
