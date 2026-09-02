@@ -12,12 +12,22 @@ param(
 
     [string]$Repository = 'AndrewVerhoturov1/dsh-workspace',
     [string]$Branch = 'main',
+    [string]$ResultRoot = '',
     [string]$Python = 'python',
     [string[]]$AllowedPath = @(),
     [string[]]$ForbiddenPath = @()
 )
 
 $ErrorActionPreference = 'Stop'
+
+if ([string]::IsNullOrWhiteSpace($ResultRoot)) {
+    if ([string]::IsNullOrWhiteSpace($env:DSH_POSTMAN_RESULT_ROOT)) {
+        $ResultRoot = 'D:\Downloads\_dsh\_auto'
+    }
+    else {
+        $ResultRoot = $env:DSH_POSTMAN_RESULT_ROOT
+    }
+}
 $bridge = Join-Path $PSScriptRoot 'postman_direct.py'
 if (-not (Test-Path -LiteralPath $bridge -PathType Leaf)) {
     throw "Direct Postman bridge not found: $bridge"
@@ -26,7 +36,8 @@ if (-not (Test-Path -LiteralPath $bridge -PathType Leaf)) {
 $argsList = @(
     $bridge,
     '--repository', $Repository,
-    '--branch', $Branch
+    '--branch', $Branch,
+    '--result-root', $ResultRoot
 )
 
 if ($BrowserSmoke) {
