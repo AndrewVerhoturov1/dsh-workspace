@@ -63,17 +63,73 @@ BrowserSmoke как обычный preflight
 
 ## 2. Trigger
 
-Активируй skill только если пользователь явно выбрал Postman как transport для
-implementation-задачи.
+### Канонический trigger
+
+Канонический и предпочтительный explicit trigger для Direct Postman:
+
+```text
+@Postman <user intent>
+```
 
 Примеры:
 
 ```text
-Postman, сделай простой калькулятор.
-Через Postman сделай страницу...
-Используй Postman и реализуй...
+@Postman сделай простой калькулятор.
+@Postman создай страницу проверки.
+@Postman измени существующий файл согласно этому запросу.
+```
+
+Если исходное пользовательское сообщение начинается с `@Postman`, это однозначный
+explicit Postman trigger для implementation-запроса.
+
+### Обязательная загрузка skill до implementation
+
+Первым task-specific действием после такого trigger должен быть вызов:
+
+```text
+skill(delegate-via-postman)
+```
+
+До загрузки этого skill Luna не должна выполнять implementation-действия:
+
+```text
+glob по task-файлам
+read implementation-файлов
+edit
+write
+создание исходников
+выбор архитектуры
+implementation shell-команды
+frontend/design skills
+```
+
+Нельзя начинать самостоятельную реализацию до загрузки `delegate-via-postman`.
+Если `delegate-via-postman` отсутствует, не загружается, недействителен или
+недоступен, действует fail-closed правило: `STOP`.
+
+При таком отказе запрещены самостоятельная реализация и любой fallback:
+
+```text
+postman_async_send
+old Harness
+QChat
+manual browser
+Playwright
+обычная самостоятельная реализация Luna
+```
+
+### Legacy-compatible triggers
+
+Для совместимости остаются explicit legacy triggers:
+
+```text
+Postman, ...
+Через Postman ...
+Используй Postman ...
 Postman передай это Ч1 и внедри результат.
 ```
+
+Для новых пользовательских запросов основной синтаксис — `@Postman`.
 
 Само обсуждение Postman transport не является trigger:
 
@@ -129,13 +185,24 @@ Git/PR
 Например:
 
 ```text
-Postman, сделай простой калькулятор в древне-японском стиле.
+@Postman сделай простой калькулятор в древне-японском стиле.
 ```
 
-payload должен оставаться по смыслу:
+Для вызова `@Postman сделай калькулятор` payload для Ч1 должен быть:
 
 ```text
-Сделай простой калькулятор в древне-японском стиле.
+сделай калькулятор
+```
+
+Удалить можно только префикс `@Postman` и окружающий его пробел. Остальной
+пользовательский intent сохранять буквально по смыслу.
+
+Для legacy-trigger удаляется только его минимальная управляющая часть:
+
+```text
+Postman,
+Через Postman
+Используй Postman
 ```
 
 Не добавлять от себя:
