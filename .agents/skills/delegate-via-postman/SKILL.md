@@ -12,7 +12,7 @@ description: >-
 
 # Delegate via Postman — Direct Production
 
-`DIRECT_POSTMAN_SKILL_VERSION: 3`
+`DIRECT_POSTMAN_SKILL_VERSION: 4`
 
 ## 0. Золотой путь
 
@@ -21,12 +21,13 @@ description: >-
 ```text
 точный user intent
 → один canonical REQ
-→ один вызов Direct Postman
+→ один foreground-вызов Direct Postman
 → ждать terminal JSON
 → RESULT_DURABLE
-→ проверить artifact identity
-→ безопасно применить ZIP
-→ тесты
+→ один bundled Git/preflight
+→ один deterministic applicator
+→ READY_FOR_TEST
+→ task-scoped tests
 → commit / push / PR
 → отчёт пользователю
 ```
@@ -273,6 +274,11 @@ $bridgeExitCode = $LASTEXITCODE
 Если shell/tool требует увеличенный timeout, дать этому одному вызову достаточно
 времени. Coding/ZIP request может выполняться много минут.
 
+Предпочитать один foreground-вызов с timeout не меньше внутреннего Postman timeout
+(15 минут). Не переводить обычный request в background только ради периодического
+polling. Background допустим только если конкретный shell-tool технически не может
+ждать достаточно долго; тогда ждать завершения именно этого одного process/job.
+
 Не запускать параллельно второй Postman request.
 Не создавать второй REQ.
 
@@ -424,35 +430,25 @@ Git integration начинается после validated `RESULT_DURABLE`.
 
 Исключение: отдельная задача разработки/ремонта самого Postman transport.
 
-## 14. Integration preflight после RESULT_DURABLE
+## 14. Bundled integration preflight после RESULT_DURABLE
 
-Перед применением implementation ZIP:
+После `RESULT_DURABLE` прочитать `REPO_POLICY.md` один раз и выполнить branch/worktree/PR
+preflight как один компактный bundled-шаг. Не повторять одинаковые `status`, branch,
+remote и worktree проверки, если repository state с предыдущей проверки не менялся.
 
-1. Прочитать `REPO_POLICY.md`.
-2. Выполнить branch/worktree/PR preflight из политики.
-3. Выполнить `git fetch origin`.
-4. Проверить, что `$result.baseCommit` существует:
+До application:
 
-```powershell
-git cat-file -e "$($result.baseCommit)^{commit}"
-```
+1. Проверить policy-required состояние веток/PR/worktrees.
+2. Выполнить `git fetch origin`.
+3. Создать ровно одну чистую task branch/worktree от текущего `origin/main`.
+4. Не применять artifact в основной dirty `C:\Users\andre\.dsh`.
 
-5. Проверить отношение:
+Проверки artifact SHA/manifest/base/staleness и exact application принадлежат
+canonical deterministic applicator из раздела 16. Л1 не должна повторять их вручную
+до или после applicator.
 
-```powershell
-git merge-base --is-ancestor $result.baseCommit origin/main
-```
-
-Если baseCommit не является ancestor текущего `origin/main` — STOP:
-`BASE_COMMIT_DIVERGED`.
-
-Если после baseCommit `main` изменился только новыми root `REQ_*.md` publication
-commits, это допустимое transport advancement.
-
-Если между baseCommit и current main есть функциональные изменения, затрагивающие
-payload paths — STOP: `RESULT_BASE_STALE`.
-
-Не переписывать решение Ч1 под новый base самостоятельно.
+Если preflight запрещает новую task branch — STOP и вернуть blocker. Не создавать
+вторую branch и не обходить `REPO_POLICY.md`.
 
 ## 15. Защита пользовательского рабочего дерева
 
@@ -471,69 +467,70 @@ payload paths — STOP: `RESULT_BASE_STALE`.
 Никогда не распаковывать implementation ZIP внутрь dirty repository root.
 Использовать `%TEMP%`.
 
-## 16. Применение ZIP
+## 16. Canonical deterministic applicator
 
-Распаковать artifact во временный каталог:
-
-```text
-%TEMP%\postman-result-<REQ>\
-```
-
-Прочитать `manifest.json` и повторно требовать:
+Normal production path после создания чистой task branch/worktree — ровно один
+вызов:
 
 ```text
-manifest.requestId  == result.requestId
-manifest.repository == result.repository
-manifest.baseCommit == result.baseCommit
+C:\Users\andre\.dsh\postman\direct\integrate_result.ps1
 ```
 
-Допустимые `resultType`:
-
-```text
-patch
-files
-hybrid_patch
-```
-
-### patch
-
-Если manifest указывает `changes.patch`:
+Сохранить exact terminal JSON Direct Postman во временный UTF-8 JSON-файл и вызвать:
 
 ```powershell
-git apply --check <changes.patch>
+& 'C:\Users\andre\.dsh\postman\direct\integrate_result.ps1' `
+  -ResultJson $resultJsonPath `
+  -RepoRoot $taskWorktree
 ```
 
-Только после PASS:
-
-```powershell
-git apply <changes.patch>
-```
-
-### files
-
-Для каждого exact path из `manifest.files` копировать только:
+Applicator детерминированно выполняет:
 
 ```text
-files/<repo-relative-path>
-```
-
-в соответствующий repo-relative destination.
-
-Не копировать дополнительные файлы, отсутствующие в manifest.
-
-### hybrid_patch
-
-Сначала `git apply --check`, затем `git apply`, затем exact manifest `files/`.
-
-Если один destination неоднозначно изменяется и patch, и `files/` — STOP:
-`RESULT_APPLICATION_AMBIGUOUS`.
-
-После application:
-
-```powershell
-git status --short
+RESULT_DURABLE gate
+request/repository/base/filename validation
+ZIP SHA256 validation
+safe ZIP + manifest validation
+diagnostic-only classification
+protected/path-traversal checks
+git fetch + base ancestry/staleness gate
+clean task-worktree + HEAD==origin/main gate
+git apply --check для patch
+exact-byte copy для manifest files
 git diff --check
+unexpected-path gate
 ```
+
+Успех application существует только при JSON:
+
+```text
+ok   = true
+code = READY_FOR_TEST
+requestId = exact исходный REQ
+```
+
+После `READY_FOR_TEST` использовать `changedFiles` applicator как authoritative список
+внедрённых путей и переходить к task-scoped tests.
+
+В normal path Л1 НЕ должна:
+
+```text
+вручную распаковывать ZIP
+повторно читать manifest для application
+вручную выполнять git apply
+автоматически переписывать implementation-файлы через write/edit LLM tool
+декодировать и заново кодировать files payload
+повторять SHA/base/staleness проверки, уже пройденные applicator
+```
+
+Файлы из `files/` должны попадать в repository exact bytes из artifact.
+
+Если applicator вернул `RESULT_DIAGNOSTIC_ONLY`, это transport/artifact success, но
+НЕ implementation success. STOP, сохранить тот же REQ, показать diagnostic blocker и
+не создавать новый REQ автоматически.
+
+Любой другой `ok=false` от applicator — STOP. Не исправлять artifact вручную и не
+заменять решение Ч1 собственным implementation.
 
 ## 17. Проверка реализации
 
@@ -548,6 +545,11 @@ git diff --check
 ```
 
 Запустить repository-defined tests, относящиеся к изменению.
+
+Для одной простой проверки предпочитать один цельный test invocation вместо цепочки
+из множества `open/snapshot/click/snapshot/console` вызовов. Для UI допускается один
+небольшой E2E/script, который запускает нужный server/browser, делает assertion и
+закрывает ресурсы. Не сокращать сами assertions ради скорости.
 
 Источники test-команд по приоритету:
 
@@ -576,6 +578,10 @@ failure.
 → подтвердить remote SHA
 → один PR в main
 ```
+
+Если shell позволяет, stage/commit/push/remote-SHA verification выполнить одним
+последовательным invocation после успешных tests. Не повторять неизменившийся Git
+preflight между этими шагами.
 
 Не merge автоматически, если пользователь отдельно не разрешил merge.
 
@@ -635,4 +641,7 @@ terminal state
 12. Не создавать implementation branch только ради transport до результата.
 13. Пользовательский dirty worktree не очищать и не переписывать.
 14. Л1 внедряет результат Ч1, а не заменяет его собственным решением.
-15. Нет validated correlated artifact → нет успешного Postman результата.
+15. Normal application выполняется через `postman/direct/integrate_result.ps1` и требует `READY_FOR_TEST`.
+16. `files/` payload копируется exact bytes; L1 не переписывает его через LLM tools.
+17. `RESULT_DIAGNOSTIC_ONLY` не является implementation success и не разрешает automatic resend.
+18. Нет validated correlated artifact → нет успешного Postman результата.
