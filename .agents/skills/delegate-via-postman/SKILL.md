@@ -1,83 +1,228 @@
 ---
 name: delegate-via-postman
-description: Делегировать явно запрошенную implementation-задачу во внешний Web ChatGPT через Direct Web Postman. Использовать, когда пользователь явно выбирает Postman как transport. Не активировать Postman автоматически только из-за сложности задачи.
+description: Использовать только когда пользователь явно выбирает Postman для implementation-задачи. Выполнить задачу через Direct Web Postman: сохранить пользовательский intent без технических дополнений, создать ровно один canonical REQ, один раз вызвать C:\Users\andre\.dsh\postman\direct\postman.ps1, дождаться validated RESULT_DURABLE, затем безопасно применить implementation ZIP, проверить изменения и оформить их по политике репозитория. Не использовать Cordis/postman_async_send, QChat или ручную автоматизацию браузера как fallback.
 ---
 
-# Delegate via Postman — Direct Bridge
+# Delegate via Postman — Direct Production
 
-## Purpose
+`DIRECT_POSTMAN_SKILL_VERSION: 3`
 
-Postman использует прямой production bridge по принципу QChat:
+## 0. Золотой путь
+
+После активации этого skill нормальный production-flow всегда такой:
 
 ```text
-User
-→ Luna (Л1)
-→ postman/direct/postman.ps1
-→ postman/direct/postman_direct.py
-→ GitHub intent task
-→ dedicated Postman Chrome/CDP
-→ external Web ChatGPT (Ч1)
-→ validated implementation ZIP
-→ JSON result to Luna
-→ Luna applies/tests/commits/reports
+точный user intent
+→ один canonical REQ
+→ один вызов Direct Postman
+→ ждать terminal JSON
+→ RESULT_DURABLE
+→ проверить artifact identity
+→ безопасно применить ZIP
+→ тесты
+→ commit / push / PR
+→ отчёт пользователю
 ```
 
-`dsh-postman-harness`, persistent POSTMAN agent, `postman_async_send`, Runtime
-wakeup/callback и Cordis plugin resolution **не являются production path** этого
-skill. Старый код может оставаться в репозитории для истории/совместимости.
+Не проектируй другой transport flow.
 
-## Roles
+После загрузки этого skill не вызывай `delegate-via-postman` повторно в этой же операции.
 
-### Ч1 — external architect / implementation author
+## 1. Жёстко запрещённые обходы
 
-Ч1 отвечает за:
+Для обычного Postman request НЕ использовать:
 
-- анализ пользовательского намерения;
-- выбор архитектуры и технологий;
-- код;
-- тесты;
-- документацию при необходимости;
-- создание одного implementation ZIP по Postman artifact policy.
+```text
+postman_async_send
+postman_send
+postman_runtime_*
+dsh-postman-harness как production transport
+persistent POSTMAN agent
+QChat
+frontend-design до получения результата Ч1
+другие implementation/design skills до получения результата Ч1
+Playwright MCP
+Computer Use
+ручное открытие ChatGPT
+ручное нажатие Send
+ручной запуск Chrome
+ручное скачивание ZIP из ChatGPT
+BrowserSmoke как обычный preflight
+```
+
+Не читать `postman/direct/README.md`, исходники bridge или browser-код только для того,
+чтобы понять обычный способ запуска. Вся production-команда уже определена этим skill.
+
+## 2. Trigger
+
+Активируй skill только если пользователь явно выбрал Postman как transport для
+implementation-задачи.
+
+Примеры:
+
+```text
+Postman, сделай простой калькулятор.
+Через Postman сделай страницу...
+Используй Postman и реализуй...
+Postman передай это Ч1 и внедри результат.
+```
+
+Само обсуждение Postman transport не является trigger:
+
+```text
+Как работает Postman?
+Почему Postman использует Chrome?
+Надо ли нам менять Postman?
+```
+
+Если пользователь не выбрал Postman явно, не активируй его из-за сложности задачи.
+
+`QChat` — отдельный transport и не является fallback.
+
+## 3. Разделение ролей
+
+### Ч1 — external implementation author
+
+Ч1 выбирает:
+
+```text
+архитектуру
+технологии
+структуру реализации
+код
+необходимые тесты
+необходимую документацию
+```
 
 ### Л1 — local implementation agent
 
-Л1 отвечает за:
+Л1 отвечает только за:
 
-- создание canonical REQ;
-- передачу точного пользовательского намерения в Direct Postman;
-- получение только подтверждённого validated ZIP;
-- проверку совместимости результата с текущим checkout;
-- применение ZIP;
-- локальные тесты;
-- commit/PR;
-- итоговый отчёт пользователю.
+```text
+точный user intent
+REQ
+Direct Postman invocation
+получение validated artifact
+безопасное внедрение результата
+локальную проверку
+Git/PR
+отчёт
+```
 
-Л1 не должна до отправки Ч1 самостоятельно выбирать framework, архитектуру,
-структуру файлов, дизайн-систему или расширять требования пользователя.
+До получения результата Ч1 Л1 не должна самостоятельно решать, как реализовать
+пользовательскую задачу.
 
-## Trigger
+## 4. Intent preservation
 
-Используй этот skill, когда пользователь явно выбирает Postman как transport,
-например:
+Главный инвариант:
 
-- `Postman, сделай ...`
-- `Через Postman сделай ...`
-- `Используй Postman для ...`
-- `Отправь через Postman ...`
+> Не превращай пользовательский запрос в собственное техническое ТЗ.
 
-Если Postman не запрошен явно, не активируй его самостоятельно.
+Например:
 
-`QChat` — отдельный transport и не является fallback для Postman.
+```text
+Postman, сделай простой калькулятор в древне-японском стиле.
+```
 
-## Canonical request ID
+payload должен оставаться по смыслу:
 
-Перед единственным production-вызовом создай:
+```text
+Сделай простой калькулятор в древне-японском стиле.
+```
+
+Не добавлять от себя:
+
+```text
+React
+Vue
+Svelte
+адаптивность
+accessibility
+список кнопок
+обработку деления на ноль
+цветовую палитру
+структуру каталогов
+test framework
+архитектурный паттерн
+язык реализации
+```
+
+Удалить можно только минимальную управляющую часть, выбирающую transport:
+
+```text
+Postman,
+Через Postman
+Используй Postman
+```
+
+Все реальные пользовательские ограничения сохранить.
+
+Если пользователь явно ссылается на предыдущий контекст, например:
+
+```text
+Postman, сделай это по тем размерам, которые мы уже зафиксировали.
+```
+
+разрешено добавить только минимальные факты из предыдущего контекста, без которых
+референт (`это`, `те размеры`, `как раньше`) непонятен Ч1.
+
+Это context resolution, а не расширение требований.
+
+Если сомневаешься, лучше передать больше исходного пользовательского текста, чем
+придумать новое требование.
+
+## 5. Не выполнять implementation work перед Ч1
+
+После Postman-trigger нельзя сначала:
+
+```text
+исследовать framework
+выбирать architecture
+загружать frontend-design
+писать собственный код
+создавать структуру проекта
+проводить implementation research вместо Ч1
+```
+
+Сначала Direct Postman.
+
+Локальное исследование до отправки разрешено только если оно необходимо, чтобы
+буквально разрешить неоднозначную пользовательскую ссылку или определить target
+repository.
+
+## 6. Canonical production bridge
+
+Единственный production entrypoint:
+
+```text
+C:\Users\andre\.dsh\postman\direct\postman.ps1
+```
+
+Перед вызовом разрешена только простая проверка существования:
+
+```powershell
+$bridge = 'C:\Users\andre\.dsh\postman\direct\postman.ps1'
+if (-not (Test-Path -LiteralPath $bridge -PathType Leaf)) {
+    throw 'POSTMAN_DIRECT_BRIDGE_MISSING'
+}
+```
+
+Если bridge отсутствует — STOP.
+
+Не искать альтернативный transport.
+Не переходить на Cordis.
+Не переходить на QChat.
+Не автоматизировать браузер вручную.
+
+## 7. Создание REQ
+
+Перед bridge invocation создать canonical:
 
 ```text
 REQ_YYYYMMDDTHHMMSSZ_NNNN
 ```
 
-На Windows:
+Использовать реальное текущее UTC-время:
 
 ```powershell
 $stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMdd'T'HHmmss'Z'")
@@ -85,106 +230,169 @@ $suffix = (Get-Random -Minimum 0 -Maximum 10000).ToString("0000")
 $requestId = "REQ_${stamp}_${suffix}"
 ```
 
-REQ после начала transport immutable.
+До первого запуска bridge можно убедиться, что direct state ещё не существует:
 
-Один логический запрос → один REQ.
-
-Нельзя автоматически создавать новый REQ после того, как Direct Postman мог
-опубликовать task или отправить prompt.
-
-## Intent preservation
-
-Передай пользовательскую задачу максимально близко к исходному тексту.
-
-Главный инвариант:
-
-> Л1 не превращает короткое намерение пользователя в собственное техническое ТЗ.
-
-Например пользовательское:
-
-```text
-Postman, сделай простой калькулятор в древне-японском стиле.
+```powershell
+$state = Join-Path $env:LOCALAPPDATA "DSH\Postman\direct\requests\$requestId.json"
 ```
 
-не должно превращаться до Ч1 в требования вроде:
+Если случайный REQ уже существует, разрешено сгенерировать другой suffix до
+запуска bridge. Максимум три локальные collision-попытки.
 
-- React/Vue/Svelte;
-- обязательная адаптивность;
-- конкретный набор операций;
-- обработка деления на ноль;
-- конкретные цвета/шрифты;
-- структура директорий;
-- test framework;
-- архитектура приложения.
+После начала bridge invocation REQ immutable.
 
-Можно удалить только управляющую формулировку выбора transport, если это не
-меняет смысл. Допустимо также передать исходный текст целиком; важнее не
-добавлять новых требований.
+Новый REQ для этой логической операции автоматически создавать нельзя.
 
-## Production bridge
+## 8. Единственный production-вызов
 
-Canonical bridge:
-
-```text
-C:\Users\andre\.dsh\postman\direct\postman.ps1
-```
-
-Нормальный вызов:
+Использовать payload из раздела Intent preservation.
 
 ```powershell
 $bridge = 'C:\Users\andre\.dsh\postman\direct\postman.ps1'
-$jsonText = & pwsh.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $bridge `
+
+$jsonText = & pwsh.exe `
+  -NoLogo `
+  -NoProfile `
+  -ExecutionPolicy Bypass `
+  -File $bridge `
   -RequestId $requestId `
   -Task $payload
-$result = $jsonText | ConvertFrom-Json
+
+$bridgeExitCode = $LASTEXITCODE
 ```
 
-Не вызывать для production path:
+Это один logical invocation.
 
-```text
-postman_async_send
-postman_send
-postman_runtime_*
-Playwright MCP
-Computer Use
-ручной запуск Chrome
-ручную навигацию ChatGPT
-```
+Если shell/tool требует увеличенный timeout, дать этому одному вызову достаточно
+времени. Coding/ZIP request может выполняться много минут.
 
-Direct bridge сам:
+Не запускать параллельно второй Postman request.
+Не создавать второй REQ.
 
-1. валидирует REQ;
-2. публикует intent-only `<REQ>.md` в GitHub `main`;
-3. фиксирует publication SHA как trusted `baseCommit`;
-4. формирует transport prompt с exact REQ/repository/baseCommit/filename/scope;
-5. запускает или переиспользует dedicated Postman Chrome;
-6. выполняет существующий browser-first pipeline;
-7. скачивает и валидирует ZIP;
-8. сохраняет durable result;
-9. возвращает один JSON object.
+Если из-за ограничения shell-tool процесс пришлось запустить background-способом,
+это всё ещё тот же единственный invocation. Ждать завершения именно этого process,
+а не запускать новый.
 
-## Dedicated Chrome
+## 9. Разбор JSON и success gate
 
-Direct Postman использует только специальный Chrome transport:
-
-```text
-CDP: http://127.0.0.1:9222
-profile: %LOCALAPPDATA%\DSH\Postman\browser-profile
-```
-
-Если CDP уже доступен — Chrome переиспользуется.
-Если нет — bridge сам находит установленный Google Chrome и запускает его с
-выделенным profile directory.
-
-Не устанавливать и не использовать Playwright MCP Chromium как замену.
-
-## Browser smoke
-
-Для диагностики transport без публикации task и без prompt:
+После завершения:
 
 ```powershell
-& pwsh.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File `
-  C:\Users\andre\.dsh\postman\direct\postman.ps1 `
+try {
+    $result = $jsonText | ConvertFrom-Json
+}
+catch {
+    throw 'POSTMAN_RESULT_JSON_INVALID'
+}
+```
+
+Production success существует только при одновременных условиях:
+
+```text
+$result.ok          == true
+$result.code        == RESULT_DURABLE
+$result.state       == RESULT_DURABLE
+$result.requestId   == exact $requestId
+$result.resultZip   != empty
+$result.sha256      != empty
+```
+
+Проверить файл:
+
+```powershell
+Test-Path -LiteralPath $result.resultZip -PathType Leaf
+```
+
+И SHA:
+
+```powershell
+$actualSha = (Get-FileHash -Algorithm SHA256 $result.resultZip).Hash.ToLower()
+```
+
+Требовать:
+
+```text
+actualSha == result.sha256
+```
+
+Также проверить:
+
+```text
+expectedFilename содержит exact REQ
+taskUrl относится к exact REQ
+baseCommit является полным 40-hex SHA
+repository соответствует ожидаемому repository
+```
+
+После `RESULT_DURABLE` не открывать ChatGPT для визуального подтверждения.
+Durable validated artifact является источником истины.
+
+## 10. Что Direct Postman уже доказал
+
+При `RESULT_DURABLE` не повторять вручную весь browser/artifact validator.
+
+Direct pipeline уже доказал:
+
+```text
+корреляцию REQ
+assistant turn
+exact expected filename
+download
+manifest
+repository
+baseCommit
+allowed/forbidden paths
+artifact integrity
+durable storage
+```
+
+Л1 делает только короткий local handoff gate из предыдущего раздела и переходит к
+integration.
+
+## 11. Failure handling
+
+Если bridge вернул `ok=false`, invalid JSON или завершился с non-zero exit — STOP.
+
+Сохранить исходный exact REQ.
+
+Не создавать автоматически второй REQ.
+Не повторять Send.
+Не открывать ChatGPT вручную.
+Не брать визуально существующий ZIP.
+Не использовать старый Harness.
+Не использовать QChat.
+Не пытаться доделать implementation самому.
+
+Разрешено один раз прочитать exact direct state/worker state этого REQ для
+диагностики, если стандартный state path известен.
+
+После этого вернуть пользователю:
+
+```text
+requestId
+code
+state
+error/reason
+последнюю доказанную transport-фазу
+```
+
+Новая отправка возможна только после нового явного пользовательского разрешения.
+
+## 12. BrowserSmoke
+
+`BrowserSmoke` является диагностической операцией.
+
+Не запускать его перед каждым нормальным Postman request.
+
+Использовать только если пользователь прямо просит smoke/диагностику либо
+исследуется неисправность browser bootstrap/CDP до новой разрешённой отправки.
+
+```powershell
+& pwsh.exe `
+  -NoLogo `
+  -NoProfile `
+  -ExecutionPolicy Bypass `
+  -File 'C:\Users\andre\.dsh\postman\direct\postman.ps1' `
   -BrowserSmoke
 ```
 
@@ -196,95 +404,228 @@ code = BROWSER_SMOKE_READY
 promptSent = false
 ```
 
-## Result success
+Smoke не является частью обычного golden path.
 
-Production success существует только если JSON одновременно подтверждает:
+## 13. Не создавать Git branch до RESULT_DURABLE только ради transport
 
-```text
-ok = true
-code = RESULT_DURABLE
-requestId = exact REQ
-resultZip = non-empty path
+Direct Postman сам публикует intent task в `main`.
+
+Л1 не должна до получения Ч1 создавать implementation branch/worktree,
+модифицировать repository или писать implementation только ради отправки.
+
+Git integration начинается после validated `RESULT_DURABLE`.
+
+Исключение: отдельная задача разработки/ремонта самого Postman transport.
+
+## 14. Integration preflight после RESULT_DURABLE
+
+Перед применением implementation ZIP:
+
+1. Прочитать `REPO_POLICY.md`.
+2. Выполнить branch/worktree/PR preflight из политики.
+3. Выполнить `git fetch origin`.
+4. Проверить, что `$result.baseCommit` существует:
+
+```powershell
+git cat-file -e "$($result.baseCommit)^{commit}"
 ```
 
-Дополнительно сверить:
+5. Проверить отношение:
 
-- `expectedFilename` содержит exact REQ;
-- `taskUrl` принадлежит exact REQ;
-- `baseCommit` — полный 40-hex SHA;
-- файл `resultZip` физически существует;
-- manifest/validation уже опубликованы durable Web Postman pipeline.
-
-Не принимать обычный текст внешнего ChatGPT вместо ZIP для implementation-задачи.
-
-## Apply result
-
-Direct Postman **не применяет ZIP автоматически**.
-
-После `RESULT_DURABLE` Л1:
-
-1. читает manifest результата;
-2. сверяет exact REQ/repository/baseCommit;
-3. убеждается, что текущий checkout совместим с baseCommit;
-4. применяет `changes.patch`/`files/` штатным способом;
-5. запускает проектные тесты;
-6. делает commit/PR;
-7. докладывает пользователю.
-
-Не переписывать решение Ч1 самостоятельно, чтобы скрыть несовместимость ZIP.
-Если пакет нельзя безопасно применить — остановиться и доложить точный blocker.
-
-## Failure handling
-
-Если bridge вернул `ok=false`:
-
-- сохранить exact REQ;
-- не создавать второй REQ автоматически;
-- не открывать ChatGPT вручную;
-- не брать визуально найденный ответ;
-- сообщить пользователю code/error/details.
-
-Если state-файл exact REQ уже существует, Direct Postman блокирует автоматический
-resend (`DIRECT_REQUEST_EXISTS`). Это fail-closed защита от двойной отправки.
-
-## Artifact contract
-
-Canonical public policy:
-
-```text
-https://raw.githubusercontent.com/AndrewVerhoturov1/agents-andrew-instructions/main/policies/postman-webchat-result-artifact.md
+```powershell
+git merge-base --is-ancestor $result.baseCommit origin/main
 ```
 
-Для одного ZIP exact filename:
+Если baseCommit не является ancestor текущего `origin/main` — STOP:
+`BASE_COMMIT_DIVERGED`.
+
+Если после baseCommit `main` изменился только новыми root `REQ_*.md` publication
+commits, это допустимое transport advancement.
+
+Если между baseCommit и current main есть функциональные изменения, затрагивающие
+payload paths — STOP: `RESULT_BASE_STALE`.
+
+Не переписывать решение Ч1 под новый base самостоятельно.
+
+## 15. Защита пользовательского рабочего дерева
+
+Если основной `C:\Users\andre\.dsh` содержит пользовательские dirty/untracked данные:
 
 ```text
-POSTMAN_<REQ>_RESULT.zip
+не reset
+не clean
+не stash автоматически
+не restore пользовательских файлов
 ```
 
-Direct Postman сам передаёт Ч1 trusted:
+Применение implementation package выполнять в отдельном чистом worktree, если это
+нужно для сохранности пользовательского дерева.
+
+Никогда не распаковывать implementation ZIP внутрь dirty repository root.
+Использовать `%TEMP%`.
+
+## 16. Применение ZIP
+
+Распаковать artifact во временный каталог:
 
 ```text
-requestId
-repository
-baseCommit
-expectedFilename
-allowedPaths
-forbiddenPaths
+%TEMP%\postman-result-<REQ>\
 ```
 
-и existing validator проверяет их после скачивания.
+Прочитать `manifest.json` и повторно требовать:
 
-## Safety invariants
+```text
+manifest.requestId  == result.requestId
+manifest.repository == result.repository
+manifest.baseCommit == result.baseCommit
+```
 
-1. Postman только по явному запросу.
-2. Один logical request → один immutable REQ.
-3. Л1 не расширяет пользовательское ТЗ до Ч1.
-4. Production path идёт напрямую через `postman/direct/postman.ps1`.
-5. Cordis `dsh-postman-harness` не является production dependency этого path.
-6. Dedicated Chrome запускает Direct Postman, не Л1.
-7. Prompt отправляет browser-first pipeline, не Л1.
-8. После неоднозначной/возможной отправки автоматический resend запрещён.
-9. Только validated `RESULT_DURABLE` считается implementation result.
-10. Direct Postman не применяет ZIP; application/tests остаются ответственностью Л1.
-11. Conversation title не является correlation key.
-12. Нет exact correlated validated artifact → нет подтверждённого результата.
+Допустимые `resultType`:
+
+```text
+patch
+files
+hybrid_patch
+```
+
+### patch
+
+Если manifest указывает `changes.patch`:
+
+```powershell
+git apply --check <changes.patch>
+```
+
+Только после PASS:
+
+```powershell
+git apply <changes.patch>
+```
+
+### files
+
+Для каждого exact path из `manifest.files` копировать только:
+
+```text
+files/<repo-relative-path>
+```
+
+в соответствующий repo-relative destination.
+
+Не копировать дополнительные файлы, отсутствующие в manifest.
+
+### hybrid_patch
+
+Сначала `git apply --check`, затем `git apply`, затем exact manifest `files/`.
+
+Если один destination неоднозначно изменяется и patch, и `files/` — STOP:
+`RESULT_APPLICATION_AMBIGUOUS`.
+
+После application:
+
+```powershell
+git status --short
+git diff --check
+```
+
+## 17. Проверка реализации
+
+Л1 не должна перепроектировать Ч1 после применения.
+
+Проверить:
+
+```text
+изменились только ожидаемые task-scoped paths
+решение соответствует пользовательскому intent
+не затронуты settings.yaml / attachments / runtime state / browser profile
+```
+
+Запустить repository-defined tests, относящиеся к изменению.
+
+Источники test-команд по приоритету:
+
+```text
+AGENTS.md / repository instructions
+package/project scripts
+тесты, включённые Ч1
+существующие тестовые команды проекта
+```
+
+Не добавлять новый framework только ради проверки.
+
+При failure — STOP. Не чинить архитектуру Ч1 молча. Сообщить точный conflict/test
+failure.
+
+## 18. Git publication
+
+После успешного application + tests следовать `REPO_POLICY.md`.
+
+Обычная схема:
+
+```text
+одна task branch
+→ commit
+→ push
+→ подтвердить remote SHA
+→ один PR в main
+```
+
+Не merge автоматически, если пользователь отдельно не разрешил merge.
+
+Не создавать вторую branch для той же операции.
+
+Не использовать:
+
+```text
+git reset --hard
+git clean
+git push --force
+автоматический stash
+```
+
+## 19. Финальный отчёт
+
+При успехе сообщить как минимум:
+
+```text
+Postman requestId
+RESULT_DURABLE
+artifact SHA256
+что было внедрено
+результаты тестов
+commit SHA
+remote synchronization
+PR/link
+merge status
+```
+
+Не перегружать пользователя browser/CDP внутренностями без диагностической
+необходимости.
+
+При failure сообщить:
+
+```text
+exact REQ
+terminal code
+terminal state
+точный blocker
+что не было выполнено после blocker
+```
+
+## 20. Критические инварианты
+
+1. Postman используется только по явному запросу.
+2. До Ч1 не загружать implementation/design skills и не проектировать решение.
+3. User intent не расширяется собственными требованиями Л1.
+4. Один logical request → один REQ.
+5. После начала Direct Postman invocation REQ immutable.
+6. Production transport — только `C:\Users\andre\.dsh\postman\direct\postman.ps1`.
+7. `postman_async_send` и Cordis path не являются production transport.
+8. BrowserSmoke не является normal preflight.
+9. Chrome/ChatGPT/Send/download принадлежат Direct Postman, а не Л1.
+10. После возможной отправки automatic resend запрещён.
+11. Только exact `RESULT_DURABLE` является implementation result.
+12. Не создавать implementation branch только ради transport до результата.
+13. Пользовательский dirty worktree не очищать и не переписывать.
+14. Л1 внедряет результат Ч1, а не заменяет его собственным решением.
+15. Нет validated correlated artifact → нет успешного Postman результата.
