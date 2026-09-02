@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 import types
 import unittest
+from unittest.mock import patch
 
 WEB_DIR = Path(__file__).resolve().parents[1]
 MODULE_PATH = WEB_DIR / "artifact_detector.py"
@@ -44,14 +45,18 @@ observer_stub.correlate_next_assistant = lambda turns, prompt: page_correlate(tu
 observer_stub.generation_active = lambda page: (page.generating, "stop-button" if page.generating else "")
 observer_stub.observe_next_assistant = lambda *args, **kwargs: {}
 
-sys.modules.setdefault("browser_bootstrap", bootstrap_stub)
-sys.modules.setdefault("browser_submit", submit_stub)
-sys.modules.setdefault("browser_observer", observer_stub)
-
-spec = importlib.util.spec_from_file_location("artifact_detector", MODULE_PATH)
-detector = importlib.util.module_from_spec(spec)
-assert spec.loader is not None
-spec.loader.exec_module(detector)
+with patch.dict(
+    sys.modules,
+    {
+        "browser_bootstrap": bootstrap_stub,
+        "browser_submit": submit_stub,
+        "browser_observer": observer_stub,
+    },
+):
+    spec = importlib.util.spec_from_file_location("artifact_detector", MODULE_PATH)
+    detector = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(detector)
 
 
 def page_correlate(turns, prompt):

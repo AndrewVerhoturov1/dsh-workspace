@@ -255,6 +255,15 @@ class WebWorkerBridge:
                     timeout_ms=observer_timeout_ms,
                     stable_ms=stable_ms,
                 )
+                completed.setdefault("details", {})
+                completed["details"].update(
+                    {
+                        "promptSha256": browser_submit.prompt_sha256(prompt),
+                        "submitCode": submitted.get("code"),
+                        "submitSendState": submitted.get("sendState"),
+                        "submitCorrelationMode": submitted.get("details", {}).get("userTurnCorrelationMode", ""),
+                    }
+                )
                 if not completed.get("ok"):
                     return self._fail(request, completed.get("code", "observer_failed"), details=completed)
 

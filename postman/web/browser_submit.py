@@ -300,6 +300,23 @@ def _normalize_text(value: str) -> str:
     return str(value or "").replace("\r\n", "\n").replace("\r", "\n")
 
 
+def request_key_line_from_prompt(prompt: str) -> str:
+    """Return the immutable Postman request-key line when it is the first non-empty line."""
+    lines = [line.strip() for line in _normalize_text(prompt).split("\n") if line.strip()]
+    if not lines:
+        return ""
+    first = lines[0]
+    if re.fullmatch(r"POSTMAN_REQUEST_ID: REQ_\d{8}T\d{6}Z_\d{4}", first):
+        return first
+    return ""
+
+
+def _turn_contains_exact_line(text: str, expected_line: str) -> bool:
+    if not expected_line:
+        return False
+    return any(line.strip() == expected_line for line in _normalize_text(text).split("\n"))
+
+
 def read_composer_text(composer: Any) -> str:
     try:
         value = composer.evaluate(_COMPOSER_TEXT_JS)
@@ -839,10 +856,15 @@ def _observe_send_proof(page: Any, prompt: str, before_user_turn_count: int) -> 
     selector = composer["selector"] if composer else None
     composer_empty, empty_details = _composer_empty_from_snapshot(composer_snapshot)
     new_turn = len(user_turns) == before_user_turn_count + 1
-    exact_turn = new_turn and _normalize_text(user_turns[-1]) == _normalize_text(prompt)
+    rendered_last = _normalize_text(user_turns[-1]) if user_turns else ""
+    exact_turn = new_turn and rendered_last == _normalize_text(prompt)
+    request_key_line = request_key_line_from_prompt(prompt)
+    request_key_turn = new_turn and _turn_contains_exact_line(rendered_last, request_key_line)
+    correlated_turn = exact_turn or request_key_turn
+    correlation_mode = "exact" if exact_turn else ("request_key" if request_key_turn else "none")
     chat_bound = is_bound_chat_url(page_url)
     last_turn = user_turn_details[-1] if user_turn_details else {}
-    return exact_turn and composer_empty and chat_bound, {
+    return correlated_turn and composer_empty and chat_bound, {
         "userTurnCountBefore": before_user_turn_count,
         "userTurnCountNow": len(user_turns),
         "userTurnSelector": last_turn.get("selector", ""),
@@ -853,6 +875,10 @@ def _observe_send_proof(page: Any, prompt: str, before_user_turn_count: int) -> 
         "userTurnTextStart": last_turn.get("textStart", ""),
         "userTurnTextEnd": last_turn.get("textEnd", ""),
         "exactUserTurn": exact_turn,
+        "requestKeyLine": request_key_line,
+        "requestKeyUserTurn": request_key_turn,
+        "userTurnCorrelated": correlated_turn,
+        "userTurnCorrelationMode": correlation_mode,
         "composerEmpty": composer_empty,
         "composerSelector": selector,
         **empty_details,
