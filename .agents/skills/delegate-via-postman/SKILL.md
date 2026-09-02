@@ -1,6 +1,13 @@
 ---
 name: delegate-via-postman
-description: Использовать только когда пользователь явно выбирает Postman для implementation-задачи. Выполнить задачу через Direct Web Postman: сохранить пользовательский intent без технических дополнений, создать ровно один canonical REQ, один раз вызвать C:\Users\andre\.dsh\postman\direct\postman.ps1, дождаться validated RESULT_DURABLE, затем безопасно применить implementation ZIP, проверить изменения и оформить их по политике репозитория. Не использовать Cordis/postman_async_send, QChat или ручную автоматизацию браузера как fallback.
+description: >-
+  Использовать только когда пользователь явно выбирает Postman для implementation-задачи.
+  Выполнить задачу через Direct Web Postman: сохранить пользовательский intent без
+  технических дополнений, создать ровно один canonical REQ, один раз вызвать
+  C:\Users\andre\.dsh\postman\direct\postman.ps1, дождаться validated RESULT_DURABLE,
+  затем безопасно применить implementation ZIP, проверить изменения и оформить их
+  по политике репозитория. Не использовать Cordis/postman_async_send, QChat или
+  ручную автоматизацию браузера как fallback.
 ---
 
 # Delegate via Postman — Direct Production

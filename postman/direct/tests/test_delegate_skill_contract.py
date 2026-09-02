@@ -1,5 +1,8 @@
+import json
 from pathlib import Path
 import re
+import shutil
+import subprocess
 import unittest
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -49,6 +52,64 @@ class DelegateViaPostmanSkillContract(unittest.TestCase):
         )
         self.assertIn("postman_async_send", self.agents)
         self.assertIn("считать его устаревшим", self.agents)
+
+    def test_frontmatter_parses_with_dsh_yaml_parser(self):
+        npm = shutil.which("npm.cmd") or shutil.which("npm")
+        node = shutil.which("node")
+        self.assertIsNotNone(npm, "npm is required to locate the DSH runtime")
+        self.assertIsNotNone(node, "node is required to run the DSH YAML parser")
+
+        npm_root = subprocess.run(
+            [npm, "root", "-g"],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        ).stdout.strip()
+        dsh_root = Path(npm_root) / "@deepseek-ai" / "dsh"
+        self.assertTrue(
+            dsh_root.is_dir(),
+            f"installed DSH runtime was not found at {dsh_root}",
+        )
+
+        parser_script = r"""
+const fs = require("node:fs");
+const { parse } = require("yaml");
+const yamlPackage = require("yaml/package.json");
+
+const skillPath = process.argv[1];
+const source = fs.readFileSync(skillPath, "utf8");
+const lines = source.split(/\r?\n/);
+if (lines[0] !== "---") throw new Error("missing frontmatter opening delimiter");
+const closing = lines.indexOf("---", 1);
+if (closing < 0) throw new Error("missing frontmatter closing delimiter");
+
+const frontmatter = parse(lines.slice(1, closing).join("\n"));
+if (!frontmatter || typeof frontmatter !== "object" || Array.isArray(frontmatter)) {
+  throw new Error("frontmatter must be a mapping");
+}
+
+process.stdout.write(JSON.stringify({
+  yamlVersion: yamlPackage.version,
+  name: frontmatter.name,
+  description: frontmatter.description,
+  modelInvocable: frontmatter["disable-model-invocation"] !== true,
+}));
+"""
+        result = subprocess.run(
+            [node, "-e", parser_script, str(SKILL)],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            cwd=dsh_root,
+        )
+        parsed = json.loads(result.stdout)
+        self.assertEqual("2.9.0", parsed["yamlVersion"])
+        self.assertEqual("delegate-via-postman", parsed["name"])
+        self.assertIsInstance(parsed["description"], str)
+        self.assertTrue(parsed["description"].strip())
+        self.assertTrue(parsed["modelInvocable"])
 
 if __name__ == "__main__":
     unittest.main()
