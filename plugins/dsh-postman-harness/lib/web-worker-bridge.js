@@ -9,6 +9,7 @@ export const WEB_WORKER_STATES = Object.freeze({
   WAITING_ASSISTANT: 'WAITING_ASSISTANT',
   ARTIFACT_FOUND: 'ARTIFACT_FOUND',
   RESULT_DURABLE: 'RESULT_DURABLE',
+  FAILED: 'WEB_WORKER_FAILED',
 })
 
 export const WEB_WORKER_RESULT_INVALID = 'WEB_WORKER_RESULT_INVALID'
@@ -42,6 +43,16 @@ function assertTaskUrl(value) {
     throw new Error('taskUrl must be an absolute HTTP(S) URL')
   }
   return text
+}
+
+function compactFailureHandle(requestId, error) {
+  const message = String(error?.message ?? error ?? 'unknown Web Worker failure').slice(0, 2000)
+  return JSON.stringify({
+    protocolVersion: 1,
+    requestId,
+    state: WEB_WORKER_STATES.FAILED,
+    error: message,
+  })
 }
 
 function compactDurableHandle(requestId, durableResult) {
@@ -127,20 +138,51 @@ export class WebWorkerBridge {
       status: started.state,
     })
     return Promise.resolve(this.run({ request, ...started }))
-      .then((durableResult) => markWebResultReady(this.runtime, {
-        requestId,
-        durableResult,
-      }))
+      .then((durableResult) => {
+        if (!durableResult || durableResult.ok !== true || durableResult.code !== WEB_WORKER_STATES.RESULT_DURABLE) {
+          const code = durableResult?.code ?? WEB_WORKER_RESULT_INVALID
+          const reason = durableResult?.details?.reason ?? durableResult?.details?.message ?? ''
+          throw new Error(reason ? `${code}: ${reason}` : String(code))
+        }
+        return markWebResultReady(this.runtime, {
+          requestId,
+          durableResult,
+        })
+      })
       .catch((error) => {
+        const message = String(error?.message ?? error)
         this.runtime.journal('WEB_WORKER_FAILED', {
           requestId,
           workerJobId: started.workerJobId,
           status: started.state,
-          error: String(error?.message ?? error),
+          error: message,
         })
-        return { status: WEB_WORKER_RESULT_INVALID, requestId, error: String(error?.message ?? error) }
+        const current = this.runtime.getRequest(requestId)
+        if (current?.status === REQUEST_STATUSES.WAITING) {
+          return markWebFailureReady(this.runtime, { requestId, error: message })
+        }
+        return { status: WEB_WORKER_RESULT_INVALID, requestId, error: message }
       })
   }
+}
+
+
+/** Persist one structured transport failure so the origin agent is woken instead of hanging in WAITING. */
+export function markWebFailureReady(runtime, { requestId, error, deliveryKey, wake = true } = {}) {
+  requiredString(requestId, 'requestId')
+  const handle = compactFailureHandle(requestId, error)
+  const ready = runtime.markReady({ requestId, result: handle, deliveryKey, wake })
+  const journal = (value) => {
+    if (value?.status === 'READY') {
+      runtime.journal('WEB_WORKER_FAILURE_DURABLE', {
+        requestId,
+        deliveryKey: value.deliveryKey,
+        status: WEB_WORKER_STATES.FAILED,
+      })
+    }
+    return value
+  }
+  return ready?.then !== undefined ? Promise.resolve(ready).then(journal) : journal(ready)
 }
 
 /** Publish only a verified WP-007 RESULT_DURABLE proof into Runtime READY. */

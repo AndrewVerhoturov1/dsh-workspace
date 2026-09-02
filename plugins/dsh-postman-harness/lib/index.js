@@ -9,6 +9,7 @@ import {
 import { attachTaskUrl, createAndPublishTask } from './task-creation-bridge.js'
 import { WebWorkerBridge, markWebResultReady } from './web-worker-bridge.js'
 import { createGitHubTaskPublisher } from './github-task-publisher.js'
+import { createProductionWebWorkerRunner } from './production-web-worker-runner.js'
 
 export { attachTaskUrl, createAndPublishTask, createTaskPackage, renderIntentTaskFile } from './task-creation-bridge.js'
 export { WebWorkerBridge, markWebResultReady }
@@ -570,6 +571,7 @@ export async function restoreOrCreatePostman(ctx) {
 export function apply(ctx, { runtime: injectedRuntime, bridge: injectedBridge, webWorkerRunner, taskPublisher } = {}) {
   const pending = new Map()
   const resolvedTaskPublisher = taskPublisher ?? createGitHubTaskPublisher({ cwd: POSTMAN_CWD })
+  const resolvedWebWorkerRunner = webWorkerRunner ?? createProductionWebWorkerRunner({ cwd: POSTMAN_CWD })
   let postmanHandle
   const wakePostman = async (record) => {
     let postman = ctx.agents.get(POSTMAN_SESSION_ID)
@@ -586,9 +588,7 @@ export function apply(ctx, { runtime: injectedRuntime, bridge: injectedBridge, w
   const runtime = injectedRuntime ?? new PostmanRuntime({
     onReady: wakePostman,
   })
-  const bridge = injectedBridge ?? (typeof webWorkerRunner === 'function'
-    ? new WebWorkerBridge({ runtime, run: webWorkerRunner })
-    : undefined)
+  const bridge = injectedBridge ?? new WebWorkerBridge({ runtime, run: resolvedWebWorkerRunner })
   ctx.tools.register(createPostmanSendTool(ctx, pending))
   ctx.tools.register(createPostmanAsyncSendTool(ctx, runtime, { bridge, taskPublisher: resolvedTaskPublisher }))
   ctx.on('agent/created', ({ agent }) => installPostmanAgent(ctx, agent, pending, runtime))

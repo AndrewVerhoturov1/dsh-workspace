@@ -8,7 +8,7 @@
     ".": "./lib/index.js",
     "./package.json": "./package.json"
   },
-  "files": ["lib/index.js", "lib/runtime.js", "lib/task-creation-bridge.js", "lib/github-task-publisher.js", "lib/web-worker-bridge.js", "cordis.patch.yml", "README.md"],
+  "files": ["lib/index.js", "lib/runtime.js", "lib/task-creation-bridge.js", "lib/github-task-publisher.js", "lib/web-worker-bridge.js", "lib/production-web-worker-runner.js", "cordis.patch.yml", "README.md"],
   "license": "MIT",
   "dsh": {
     "bundle": {

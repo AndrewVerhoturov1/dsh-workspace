@@ -8,6 +8,7 @@ import sys
 import tempfile
 import types
 import unittest
+from unittest.mock import patch
 import zipfile
 
 WEB_DIR = Path(__file__).resolve().parents[1]
@@ -38,13 +39,17 @@ identity_stub.validate_expected_artifact_filename = lambda req, name: (
     or name.startswith(f"POSTMAN_{req}_RESULT-")
 )
 
-sys.modules["artifact_detector"] = detector_stub
-sys.modules["request_identity"] = identity_stub
-
-spec = importlib.util.spec_from_file_location("artifact_download", MODULE_PATH)
-module = importlib.util.module_from_spec(spec)
-assert spec.loader is not None
-spec.loader.exec_module(module)
+with patch.dict(
+    sys.modules,
+    {
+        "artifact_detector": detector_stub,
+        "request_identity": identity_stub,
+    },
+):
+    spec = importlib.util.spec_from_file_location("artifact_download", MODULE_PATH)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
 
 
 def expected_request(**overrides):
