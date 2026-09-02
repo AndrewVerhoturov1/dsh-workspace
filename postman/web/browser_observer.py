@@ -216,18 +216,32 @@ def generation_active(page: Any) -> tuple[bool, str]:
 
 
 def find_user_anchor(turns: list[dict[str, Any]], expected_prompt: str) -> int | None:
-    """Return the last exact matching user turn.
+    """Return the last correlated user turn.
 
-    Exact means line-ending normalization only. Leading/trailing whitespace is
-    significant because P3 also proves the exact prompt text.
+    Prefer byte-equivalent rendered text. ChatGPT may render long Markdown
+    differently after Send, so Postman prompts may fall back to the immutable
+    first-line POSTMAN_REQUEST_ID anchor. Exact prompt bytes were already
+    proven in the composer before the single Send action.
     """
     expected = _normalize_text(expected_prompt)
-    matches = [
+    exact_matches = [
         turn["index"]
         for turn in turns
         if turn.get("role") == "user" and _normalize_text(turn.get("text", "")) == expected
     ]
-    return matches[-1] if matches else None
+    if exact_matches:
+        return exact_matches[-1]
+
+    request_key_line = submit.request_key_line_from_prompt(expected_prompt)
+    if not request_key_line:
+        return None
+    key_matches = [
+        turn["index"]
+        for turn in turns
+        if turn.get("role") == "user"
+        and submit._turn_contains_exact_line(str(turn.get("text", "")), request_key_line)
+    ]
+    return key_matches[-1] if key_matches else None
 
 
 def correlate_next_assistant(

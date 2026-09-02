@@ -1,140 +1,83 @@
 ---
 name: delegate-via-postman
-description: Делегировать явно запрошенную задачу во внешний Web ChatGPT через durable Postman. Использовать, когда пользователь или управляющая инструкция явно требует отправить/спросить/делегировать через Postman. Не использовать Postman автоматически только из-за сложности задачи.
+description: Делегировать явно запрошенную implementation-задачу во внешний Web ChatGPT через Direct Web Postman. Использовать, когда пользователь явно выбирает Postman как transport. Не активировать Postman автоматически только из-за сложности задачи.
 ---
 
-# Delegate via Postman
+# Delegate via Postman — Direct Bridge
 
 ## Purpose
 
-Этот skill описывает только контракт **агента-инициатора**.
-
-Инициатор:
-
-1. создаёт один immutable `request_id`;
-2. передаёт задачу через `postman_async_send`;
-3. сохраняет этот ключ для всей дальнейшей корреляции;
-4. не управляет браузером, Web ChatGPT, скачиванием или маршрутизацией результата самостоятельно.
-
-Postman Runtime и Web Postman transport отвечают за остальную цепочку.
-
-## Architect Agent and Implementation Agent Separation
-
-### External Architect Agent (Ч1):
-
-Ч1 является главным проектировщиком и разработчиком решения.
-
-Ответственность:
-
-- анализ пользовательского намерения;
-- архитектура решения;
-- технические решения;
-- подготовка кода;
-- подготовка тестов;
-- подготовка документации;
-- создание implementation package для внедрения.
-
-Ч1 является источником технического решения.
-
-### Local Implementation Agent (Л1):
-
-Л1 является агентом внедрения.
-
-Ответственность:
-
-- получить подготовленный implementation package;
-- проверить совместимость с текущим репозиторием;
-- применить подготовленные изменения;
-- выполнить проверки;
-- создать commit/PR;
-- подготовить отчёт.
-
-Л1 не является архитектором решения.
-
-#### Ограничения Л1:
-
-Л1 не должен:
-
-- самостоятельно менять архитектуру;
-- заменять подготовленную реализацию своей без необходимости;
-- добавлять требования от себя;
-- расширять задачу без согласования;
-- перепроектировать систему вместо автора решения.
-
-Если подготовленный пакет невозможно применить:
-
-1. остановить внедрение;
-2. описать точный конфликт;
-3. указать причину;
-4. ожидать нового решения.
-
-### Responsibility flow:
+Postman использует прямой production bridge по принципу QChat:
 
 ```text
-User Intent
-
-↓
-
-External Architect Agent (Ч1)
-
-архитектура + код + тесты + implementation package
-
-↓
-
-Local Implementation Agent (Л1)
-
-интеграция + проверки + PR
-
-↓
-
-Repository
+User
+→ Luna (Л1)
+→ postman/direct/postman.ps1
+→ postman/direct/postman_direct.py
+→ GitHub intent task
+→ dedicated Postman Chrome/CDP
+→ external Web ChatGPT (Ч1)
+→ validated implementation ZIP
+→ JSON result to Luna
+→ Luna applies/tests/commits/reports
 ```
+
+`dsh-postman-harness`, persistent POSTMAN agent, `postman_async_send`, Runtime
+wakeup/callback и Cordis plugin resolution **не являются production path** этого
+skill. Старый код может оставаться в репозитории для истории/совместимости.
+
+## Roles
+
+### Ч1 — external architect / implementation author
 
 Ч1 отвечает за:
 
-> «Что и как должно быть сделано».
+- анализ пользовательского намерения;
+- выбор архитектуры и технологий;
+- код;
+- тесты;
+- документацию при необходимости;
+- создание одного implementation ZIP по Postman artifact policy.
+
+### Л1 — local implementation agent
 
 Л1 отвечает за:
 
-> «Как безопасно внедрить подготовленное решение».
+- создание canonical REQ;
+- передачу точного пользовательского намерения в Direct Postman;
+- получение только подтверждённого validated ZIP;
+- проверку совместимости результата с текущим checkout;
+- применение ZIP;
+- локальные тесты;
+- commit/PR;
+- итоговый отчёт пользователю.
+
+Л1 не должна до отправки Ч1 самостоятельно выбирать framework, архитектуру,
+структуру файлов, дизайн-систему или расширять требования пользователя.
 
 ## Trigger
 
-Использовать skill, когда текущая инструкция явно использует Postman как транспорт, например:
+Используй этот skill, когда пользователь явно выбирает Postman как transport,
+например:
 
-- `Postman передай эту задачу во внешний ChatGPT`
-- `Через Postman спроси Web ChatGPT ...`
-- `Используй Postman для этой задачи`
-- `Отправь это через Postman`
+- `Postman, сделай ...`
+- `Через Postman сделай ...`
+- `Используй Postman для ...`
+- `Отправь через Postman ...`
 
-Простое обсуждение проекта или слова Postman без требования делегирования не является достаточным основанием для отправки.
+Если Postman не запрошен явно, не активируй его самостоятельно.
 
-Если Postman как транспорт не запрошен явно, не делегировать задачу самостоятельно только потому, что она сложная, длинная или требует второго мнения.
-
-`QChat` — отдельный transport skill и не является запасным путём для Postman.
+`QChat` — отдельный transport и не является fallback для Postman.
 
 ## Canonical request ID
 
-Перед первым вызовом `postman_async_send` инициатор обязан создать:
+Перед единственным production-вызовом создай:
 
 ```text
 REQ_YYYYMMDDTHHMMSSZ_NNNN
 ```
 
-Пример:
-
-```text
-REQ_20260831T043812Z_4827
-```
-
-Где:
-
-- `YYYYMMDDTHHMMSSZ` — фактическое текущее UTC-время создания до секунды;
-- `NNNN` — ровно четыре десятичные цифры `0000..9999`;
-- timestamp должен быть календарно корректным;
-- после успешной регистрации значение нельзя менять.
-
-На Windows предпочтительно получить ключ из фактических часов системы:
+На Windows:
 
 ```powershell
 $stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMdd'T'HHmmss'Z'")
@@ -142,254 +85,206 @@ $suffix = (Get-Random -Minimum 0 -Maximum 10000).ToString("0000")
 $requestId = "REQ_${stamp}_${suffix}"
 ```
 
-Если shell недоступен, используй доступный доверенный текущий UTC clock и выбери четыре цифры. Не подставляй старую дату из примеров.
+REQ после начала transport immutable.
 
-## Primary-key invariant
+Один логический запрос → один REQ.
 
-Один логический запрос имеет ровно один `request_id`.
+Нельзя автоматически создавать новый REQ после того, как Direct Postman мог
+опубликовать task или отправить prompt.
 
-После регистрации тот же exact ключ копируется byte-for-byte через:
+## Intent preservation
 
-```text
-initiating agent
-→ Postman Runtime
-→ Web prompt
-→ ChatGPT user-turn recovery
-→ assistant result envelope
-→ manifest
-→ artifact filename
-→ logs/journal
-→ durable result storage
-→ delivery back to origin agent
-```
+Передай пользовательскую задачу максимально близко к исходному тексту.
 
-Нельзя:
+Главный инвариант:
 
-- создавать новый REQ для той же уже принятой операции;
-- переименовывать REQ;
-- добавлять номер ZIP внутрь REQ;
-- выбирать результат только по «последнему чату» или времени;
-- полагаться на автоматически созданное название ChatGPT conversation.
+> Л1 не превращает короткое намерение пользователя в собственное техническое ТЗ.
 
-## Prepare task payload
-
-Удали из payload только управляющую формулировку, которая выбирает Postman как transport, если это можно сделать без изменения смысла задачи.
-
-Сохрани фактическую задачу пользователя и её ограничения.
-
-Не добавляй в `task`:
-
-- `origin_agent_id`;
-- `sender_session_id`;
-- выдуманный `message_id`;
-- BEGIN/END result markers;
-- browser/CDP instructions;
-- routing metadata;
-- другой request ID.
-
-Инициатор передаёт чистую задачу и trusted `request_id` отдельным параметром.
-
-Web Postman сам формирует browser transport prompt и обязан использовать exact REQ первой непустой строкой:
+Например пользовательское:
 
 ```text
-POSTMAN_REQUEST_ID: <REQ>
+Postman, сделай простой калькулятор в древне-японском стиле.
 ```
 
-## Send
+не должно превращаться до Ч1 в требования вроде:
+
+- React/Vue/Svelte;
+- обязательная адаптивность;
+- конкретный набор операций;
+- обработка деления на ноль;
+- конкретные цвета/шрифты;
+- структура директорий;
+- test framework;
+- архитектура приложения.
+
+Можно удалить только управляющую формулировку выбора transport, если это не
+меняет смысл. Допустимо также передать исходный текст целиком; важнее не
+добавлять новых требований.
+
+## Production bridge
+
+Canonical bridge:
+
+```text
+C:\Users\andre\.dsh\postman\direct\postman.ps1
+```
 
 Нормальный вызов:
 
-```text
-postman_async_send(
-  request_id = <canonical REQ>,
-  task       = <task payload>
-)
+```powershell
+$bridge = 'C:\Users\andre\.dsh\postman\direct\postman.ps1'
+$jsonText = & pwsh.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $bridge `
+  -RequestId $requestId `
+  -Task $payload
+$result = $jsonText | ConvertFrom-Json
 ```
 
-У `postman_async_send` нет caller-owned `message_id`.
-
-Runtime сам выводит внутренний:
+Не вызывать для production path:
 
 ```text
-MSG_YYYYMMDDTHHMMSSZ_NNNN
+postman_async_send
+postman_send
+postman_runtime_*
+Playwright MCP
+Computer Use
+ручной запуск Chrome
+ручную навигацию ChatGPT
 ```
 
-из того же REQ.
+Direct bridge сам:
 
-## Registration success
+1. валидирует REQ;
+2. публикует intent-only `<REQ>.md` в GitHub `main`;
+3. фиксирует publication SHA как trusted `baseCommit`;
+4. формирует transport prompt с exact REQ/repository/baseCommit/filename/scope;
+5. запускает или переиспользует dedicated Postman Chrome;
+6. выполняет существующий browser-first pipeline;
+7. скачивает и валидирует ZIP;
+8. сохраняет durable result;
+9. возвращает один JSON object.
 
-Успех регистрации — ответ вида:
+## Dedicated Chrome
+
+Direct Postman использует только специальный Chrome transport:
 
 ```text
-status = ACCEPTED
-state  = WAITING
-request_id = exact REQ
+CDP: http://127.0.0.1:9222
+profile: %LOCALAPPDATA%\DSH\Postman\browser-profile
 ```
 
-После `ACCEPTED`:
+Если CDP уже доступен — Chrome переиспользуется.
+Если нет — bridge сам находит установленный Google Chrome и запускает его с
+выделенным profile directory.
 
-1. сохрани exact `request_id`;
-2. не создавай второй запрос для той же задачи;
-3. не делай busy polling;
-4. не открывай Web ChatGPT сам;
-5. закончи текущую транзакцию или сообщи пользователю, что запрос принят, если интерфейс требует немедленного ответа;
-6. ожидай асинхронную доставку результата от Postman Runtime.
+Не устанавливать и не использовать Playwright MCP Chromium как замену.
 
-`ACCEPTED/WAITING` означает, что запрос зарегистрирован, а не что Web ChatGPT уже завершил работу.
+## Browser smoke
 
-## Collision rule
+Для диагностики transport без публикации task и без prompt:
 
-Если Runtime **до успешной регистрации** явно отклонил REQ как уже зарегистрированный, Web prompt ещё не отправлен.
+```powershell
+& pwsh.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File `
+  C:\Users\andre\.dsh\postman\direct\postman.ps1 `
+  -BrowserSmoke
+```
 
-Только в этом случае инициатор может создать новый четырёхзначный suffix для того же текущего UTC-момента или получить новое текущее UTC-время и повторить регистрацию.
-
-Не делать бесконечный цикл. Максимум три попытки регистрации для чистого collision.
-
-Collision retry не является повторной отправкой Web prompt, потому что исходный REQ не был принят.
-
-## Do not retry after acceptance or uncertainty
-
-После любого состояния, где request уже мог быть зарегистрирован, нельзя автоматически создавать другой REQ для той же задачи.
-
-Особенно:
-
-- `ACCEPTED`;
-- `WAITING`;
-- `POSTMAN_UNAVAILABLE` после создания durable record;
-- `POSTMAN_WAKE_FAILED`;
-- неизвестный/неоднозначный transport outcome.
-
-Сохрани исходный REQ и используй recovery по нему.
-
-Новый REQ в такой ситуации создаст вторую логическую операцию и нарушит correlation.
-
-## Result correlation
-
-Когда origin agent позже получает Postman result:
-
-1. используй trusted Runtime delivery event;
-2. проверь exact `request_id`;
-3. сопоставь его с ранее созданным запросом;
-4. не принимай результат другого REQ только потому, что он новее;
-5. не выбирай результат из browser UI самостоятельно.
-
-Если точная корреляция не доказана, не объявляй результат успешным.
-
-## Artifact naming
-
-REQ остаётся неизменным независимо от числа файлов.
-
-Один ZIP:
+Успех:
 
 ```text
-POSTMAN_<REQ>_RESULT.zip
+ok = true
+code = BROWSER_SMOKE_READY
+promptSent = false
 ```
 
-Пример:
+## Result success
+
+Production success существует только если JSON одновременно подтверждает:
 
 ```text
-POSTMAN_REQ_20260831T043812Z_4827_RESULT.zip
+ok = true
+code = RESULT_DURABLE
+requestId = exact REQ
+resultZip = non-empty path
 ```
 
-Несколько ZIP одного запроса:
+Дополнительно сверить:
 
-```text
-POSTMAN_<REQ>_RESULT-01.zip
-POSTMAN_<REQ>_RESULT-02.zip
-...
-POSTMAN_<REQ>_RESULT-99.zip
-```
+- `expectedFilename` содержит exact REQ;
+- `taskUrl` принадлежит exact REQ;
+- `baseCommit` — полный 40-hex SHA;
+- файл `resultZip` физически существует;
+- manifest/validation уже опубликованы durable Web Postman pipeline.
 
-`-01`, `-02` и т. п. являются ordinal артефакта, а не частью request ID.
+Не принимать обычный текст внешнего ChatGPT вместо ZIP для implementation-задачи.
 
-Инициатор не должен придумывать альтернативные имена вроде `final`, `new`, `(1)` или второго timestamp.
+## Apply result
 
-## Separation of responsibilities
+Direct Postman **не применяет ZIP автоматически**.
 
-### Initiating agent owns
+После `RESULT_DURABLE` Л1:
 
-- решение использовать Postman по явному запросу;
-- создание canonical REQ;
-- точный task payload;
-- один вызов `postman_async_send`;
-- сохранение REQ;
-- проверку exact REQ при возвращении результата.
+1. читает manifest результата;
+2. сверяет exact REQ/repository/baseCommit;
+3. убеждается, что текущий checkout совместим с baseCommit;
+4. применяет `changes.patch`/`files/` штатным способом;
+5. запускает проектные тесты;
+6. делает commit/PR;
+7. докладывает пользователю.
 
-### Postman Runtime owns
+Не переписывать решение Ч1 самостоятельно, чтобы скрыть несовместимость ZIP.
+Если пакет нельзя безопасно применить — остановиться и доложить точный blocker.
 
-- durable registration;
-- uniqueness;
-- trusted `REQ → origin_agent_id`;
-- internal MSG;
-- request state;
-- result delivery.
+## Failure handling
 
-### Web Postman owns
+Если bridge вернул `ok=false`:
 
-- browser bootstrap;
-- fresh chat;
-- prompt construction;
-- prompt submission;
-- assistant-turn correlation;
-- artifact detection/download when соответствующий milestone доступен;
-- validation and durable result storage.
+- сохранить exact REQ;
+- не создавать второй REQ автоматически;
+- не открывать ChatGPT вручную;
+- не брать визуально найденный ответ;
+- сообщить пользователю code/error/details.
 
-Инициатор не должен заменять отсутствующий transport прямой автоматизацией браузера.
+Если state-файл exact REQ уже существует, Direct Postman блокирует автоматический
+resend (`DIRECT_REQUEST_EXISTS`). Это fail-closed защита от двойной отправки.
 
-## Current-stage compatibility
+## Artifact contract
 
-Этот initiator contract должен оставаться стабильным на следующих milestones.
-
-Если backend ещё не умеет довести конкретный тип результата до origin agent, запрос может остаться `WAITING`.
-
-В таком случае:
-
-- не имитируй completion;
-- не обходи Postman прямым браузером;
-- не создавай новый REQ автоматически;
-- сообщи exact REQ для диагностики/recovery.
-
-Отсутствующая downstream capability — проблема transport milestone, а не причина нарушать initiator contract.
-
-## Canonical public transport policy
-
-Для диагностики и проверки transport contract:
+Canonical public policy:
 
 ```text
 https://raw.githubusercontent.com/AndrewVerhoturov1/agents-andrew-instructions/main/policies/postman-webchat-result-artifact.md
 ```
 
-Initiating agent не обязан перечитывать этот документ при каждом обычном вызове, если данный skill уже загружен и текущая задача не требует диагностики transport.
+Для одного ZIP exact filename:
 
-## Failure handling
+```text
+POSTMAN_<REQ>_RESULT.zip
+```
 
-### Invalid local REQ before tool call
+Direct Postman сам передаёт Ч1 trusted:
 
-Исправь генерацию локально. Никакой запрос ещё не создан.
+```text
+requestId
+repository
+baseCommit
+expectedFilename
+allowedPaths
+forbiddenPaths
+```
 
-### Explicit registration collision
-
-Создай новый canonical REQ и повтори регистрацию в пределах collision policy.
-
-### Runtime/Wake/Transport failure after durable registration
-
-Не создавай новый REQ. Сохрани исходный ключ и верни диагностическое состояние.
-
-### No confirmed result
-
-Не придумывай результат и не подменяй его локальным ответом, если пользователь явно потребовал Postman transport.
+и existing validator проверяет их после скачивания.
 
 ## Safety invariants
 
-1. Postman transport используется только по явному запросу.
-2. Новый REQ создаёт только initiating agent.
-3. Runtime не должен генерировать или переписывать REQ.
-4. После successful registration REQ immutable.
-5. Один логический request → один REQ.
-6. Collision до регистрации может получить новый REQ.
-7. Acceptance/uncertainty после регистрации → новый REQ запрещён.
-8. Инициатор не выбирает origin/destination из текста задачи.
-9. Инициатор не автоматизирует Web ChatGPT напрямую.
-10. Conversation title не является correlation key.
-11. ZIP ordinal не меняет REQ.
-12. Нет exact correlated result → нет подтверждённого результата.
+1. Postman только по явному запросу.
+2. Один logical request → один immutable REQ.
+3. Л1 не расширяет пользовательское ТЗ до Ч1.
+4. Production path идёт напрямую через `postman/direct/postman.ps1`.
+5. Cordis `dsh-postman-harness` не является production dependency этого path.
+6. Dedicated Chrome запускает Direct Postman, не Л1.
+7. Prompt отправляет browser-first pipeline, не Л1.
+8. После неоднозначной/возможной отправки автоматический resend запрещён.
+9. Только validated `RESULT_DURABLE` считается implementation result.
+10. Direct Postman не применяет ZIP; application/tests остаются ответственностью Л1.
+11. Conversation title не является correlation key.
+12. Нет exact correlated validated artifact → нет подтверждённого результата.
