@@ -18,7 +18,6 @@
       background: Canvas;
       color: CanvasText;
     }
-
     main {
       width: min(90vw, 28rem);
       padding: 2rem;
@@ -32,7 +31,6 @@
       margin: 0 0 1.5rem;
       font-size: clamp(1.8rem, 7vw, 2.6rem);
     }
-
     button {
       appearance: none;
       border: 0;
@@ -49,7 +47,6 @@
     button:focus-visible {
       outline: 0.2rem solid Highlight;
     }
-
     #status {
       min-height: 1.5em;
       margin: 1.25rem 0 0;
@@ -59,15 +56,15 @@
 <body>
   <main aria-labelledby="page-title">
     <h1 id="page-title">Проверка Postman</h1>
-    <button id="check-button" type="button" aria-describedby="status">Нажми меня</button>
+    <button id="check-button" type="button" aria-describedby="status">Запустить проверку</button>
     <p id="status" role="status" aria-live="polite">Готов к проверке</p>
   </main>
 
   <script>
     const button = document.getElementById('check-button');
     const status = document.getElementById('status');
-
     button.addEventListener('click', () => {
+      button.textContent = 'Postman работает';
       status.textContent = 'Postman работает';
     });
   </script>
