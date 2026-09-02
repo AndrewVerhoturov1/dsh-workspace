@@ -30,7 +30,7 @@
     "dsh-flowglass-by-andrew": "link:../../plugins/dsh-flowglass-by-andrew",
     "dsh-notification": "^0.1.1",
     "dsh-postman-harness": "link:../../plugins/dsh-postman-harness",
-    "dsh-restart-web": "github:shaoyi1991/dsh-restart-web",
+    "dsh-restart-web": "link:../../plugins/dsh-restart-web",
     "dsh-tokenledger": "^0.1.0",
     "dshmarket": "^1.19.0"
   }

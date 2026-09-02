@@ -1,0 +1,4 @@
+# Bundle patch for the repository-managed dsh-restart-web plugin.
+- insert:
+    - id: dsh-restart-web
+      name: 'dsh-restart-web'

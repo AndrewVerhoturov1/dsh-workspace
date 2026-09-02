@@ -36,8 +36,8 @@ importers:
         specifier: link:../../plugins/dsh-postman-harness
         version: link:../../plugins/dsh-postman-harness
       dsh-restart-web:
-        specifier: github:shaoyi1991/dsh-restart-web
-        version: https://codeload.github.com/shaoyi1991/dsh-restart-web/tar.gz/5651379aaace35db8a6553d87b35d3b0675b3848
+        specifier: link:../../plugins/dsh-restart-web
+        version: link:../../plugins/dsh-restart-web
       dsh-tokenledger:
         specifier: ^0.1.0
         version: 0.1.0(@deepseek-ai/schemastery@3.18.1)
@@ -650,10 +650,6 @@ packages:
     resolution: {integrity: sha512-Rp3eTbgfGCq60pPaKIvkc6r3d/U7qozUz2mUb611QkbKCH6EEkHzD3gebgpVO4B3lvZWsiE5RdM1MHgK2+Tm5Q==}
     peerDependencies:
       '@deepseek-ai/schemastery': ^3
-
-  dsh-restart-web@https://codeload.github.com/shaoyi1991/dsh-restart-web/tar.gz/5651379aaace35db8a6553d87b35d3b0675b3848:
-    resolution: {gitHosted: true, integrity: sha512-Gx6yaVaxHkWI1ANRIaXOtePMPDOU3iMWx/hUHYOdPedgpN0SlrNKRbLMFacnSeDpeqO/cWnC11krg3xsE7eUVQ==, tarball: https://codeload.github.com/shaoyi1991/dsh-restart-web/tar.gz/5651379aaace35db8a6553d87b35d3b0675b3848}
-    version: 1.0.0
 
   dsh-tokenledger@0.1.0:
     resolution: {integrity: sha512-UX8dEINaNqJO0qGOfo5MSt5F7HKNWxLaQUK/JMLTMb2UPybhI56OLHyYGdA33RB15NhW/YUpkvcpwB/Dv9mG0g==}
@@ -1877,8 +1873,6 @@ snapshots:
   dsh-notification@0.1.1(@deepseek-ai/schemastery@3.18.1):
     dependencies:
       '@deepseek-ai/schemastery': 3.18.1
-
-  dsh-restart-web@https://codeload.github.com/shaoyi1991/dsh-restart-web/tar.gz/5651379aaace35db8a6553d87b35d3b0675b3848: {}
 
   dsh-tokenledger@0.1.0(@deepseek-ai/schemastery@3.18.1):
     optionalDependencies:
