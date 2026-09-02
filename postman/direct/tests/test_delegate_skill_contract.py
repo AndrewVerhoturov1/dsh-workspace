@@ -16,7 +16,7 @@ class DelegateViaPostmanSkillContract(unittest.TestCase):
         cls.agents = AGENTS.read_text(encoding="utf-8")
 
     def test_version_and_entrypoint(self):
-        self.assertIn("DIRECT_POSTMAN_SKILL_VERSION: 3", self.skill)
+        self.assertIn("DIRECT_POSTMAN_SKILL_VERSION: 4", self.skill)
         self.assertIn(r"C:\Users\andre\.dsh\postman\direct\postman.ps1", self.skill)
 
     def test_old_callable_path_is_not_present(self):
@@ -32,10 +32,17 @@ class DelegateViaPostmanSkillContract(unittest.TestCase):
             "## 8. Единственный production-вызов",
             "## 9. Разбор JSON и success gate",
             "## 13. Не создавать Git branch до RESULT_DURABLE только ради transport",
-            "## 16. Применение ZIP",
+            "## 16. Canonical deterministic applicator",
             "## 20. Критические инварианты",
         ):
             self.assertIn(marker, self.skill)
+
+    def test_fast_integration_path_is_explicit(self):
+        self.assertIn(r"C:\Users\andre\.dsh\postman\direct\integrate_result.ps1", self.skill)
+        self.assertIn("READY_FOR_TEST", self.skill)
+        self.assertIn("RESULT_DIAGNOSTIC_ONLY", self.skill)
+        self.assertIn("exact bytes", self.skill)
+        self.assertIn("foreground-вызов", self.skill)
 
     def test_normal_smoke_is_forbidden(self):
         self.assertIn("BrowserSmoke не является normal preflight", self.skill)
