@@ -25,3 +25,16 @@ Postman production invariant.
 `postman_async_send`, `postman_runtime_*`, `dsh-postman-harness`, QChat, Playwright MCP и ручная автоматизация браузера не являются fallback для Postman.
 Если загруженный `delegate-via-postman` предлагает `postman_async_send` как normal path или противоречит этому правилу, считать его устаревшим и остановить Postman-операцию до загрузки актуального skill.
 До получения `RESULT_DURABLE` не выбирать архитектуру/технологии вместо Ч1 и не создавать implementation branch только ради transport.
+
+`@Postman` — канонический явный production trigger.
+Если пользовательский implementation-запрос начинается с `@Postman`, агент ОБЯЗАН
+сначала загрузить `delegate-via-postman` вызовом `skill(delegate-via-postman)` до
+любого task-specific implementation-действия. Нельзя обходить skill через glob,
+read, edit, write или shell, чтобы реализовать запрос самостоятельно; до загрузки
+skill запрещены также выбор архитектуры и frontend/design skills.
+
+Если `delegate-via-postman` отсутствует, не загружается, недействителен или
+недоступен, действовать fail-closed: `STOP`. Нельзя реализовывать запрос самому или
+использовать fallback `postman_async_send`, старый Harness, QChat, manual browser,
+Playwright либо другой transport. Если skill не загружается, не использовать
+другой skill или transport fallback.

@@ -37,6 +37,36 @@ class DelegateViaPostmanSkillContract(unittest.TestCase):
         ):
             self.assertIn(marker, self.skill)
 
+    def test_canonical_at_postman_trigger_and_legacy_compatibility(self):
+        self.assertIn("@Postman <user intent>", self.skill)
+        self.assertRegex(self.skill, r"(?i)канонический и предпочтительный")
+        for legacy_trigger in ("Postman, ...", "Через Postman ...", "Используй Postman ..."):
+            self.assertIn(legacy_trigger, self.skill)
+
+    def test_at_postman_requires_skill_before_implementation(self):
+        self.assertIn("skill(delegate-via-postman)", self.skill)
+        self.assertIn(
+            "До загрузки этого skill Luna не должна выполнять implementation-действия",
+            self.skill,
+        )
+        self.assertIn("сначала загрузить `delegate-via-postman`", self.agents)
+        self.assertIn("task-specific implementation-действия", self.agents)
+        self.assertIn("обходить skill через glob", self.agents)
+
+    def test_at_postman_payload_strips_only_transport_marker(self):
+        self.assertIn(
+            "Удалить можно только префикс `@Postman` и окружающий его пробел.",
+            self.skill,
+        )
+        self.assertIn("payload для Ч1 должен быть", self.skill)
+        self.assertIn("\nсделай калькулятор\n", self.skill)
+
+    def test_at_postman_is_fail_closed_when_skill_unavailable(self):
+        for document in (self.skill, self.agents):
+            self.assertIn("fail-closed", document)
+            self.assertIn("STOP", document)
+            self.assertRegex(document, r"(?i)(отсутствует|недоступен|не загружается)")
+
     def test_fast_integration_path_is_explicit(self):
         self.assertIn(r"C:\Users\andre\.dsh\postman\direct\integrate_result.ps1", self.skill)
         self.assertIn("READY_FOR_TEST", self.skill)
