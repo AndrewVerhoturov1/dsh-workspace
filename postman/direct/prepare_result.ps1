@@ -19,7 +19,7 @@ $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("postman-result-" + [Guid]::
 try {
     $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
     [System.IO.File]::WriteAllText($tmp, $ResultJsonText, $utf8NoBom)
-    & $Python $script `
+    & $Python '-X' 'utf8' $script `
         '--result-json' $tmp `
         '--repo-root' $RepoRoot `
         '--expected-repository' $ExpectedRepository `

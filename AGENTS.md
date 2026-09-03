@@ -57,3 +57,9 @@ Terminal visibility invariant.
 - не использовать `cmd.exe` или `start` способом, который создаёт видимое окно.
 
 Исключение допускается только для явно запрошенной пользователем диагностики, когда видимый интерактивный терминал действительно является целью операции. Любое всплывающее окно терминала в обычном потоке Postman/Harness считать дефектом реализации, а не нормальным поведением.
+
+Postman UTF-8 CLI boundary invariant.
+Все канонические PowerShell-wrapper'ы Direct Postman, integrator, PREPARE, TEST и
+PUBLISH обязаны запускать Python в UTF-8 mode через `-X utf8`. Диагностический JSON
+с Unicode не должен зависеть от Windows ANSI/OEM code page и не должен теряться
+из-за `UnicodeEncodeError`. Это относится и к failure-path, не только к PASS.
