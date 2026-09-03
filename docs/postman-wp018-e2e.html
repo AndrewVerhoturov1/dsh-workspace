@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WP-018 E2E PASS</title>
+</head>
+<body>
+  <h1>WP-018 E2E PASS</h1>
+  <button id="check" type="button">Проверить</button>
+  <p id="result" hidden>Postman работает</p>
+
+  <script>
+    document.getElementById('check').addEventListener('click', function () {
+      document.getElementById('result').hidden = false;
+    });
+  </script>
+</body>
+</html>
