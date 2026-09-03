@@ -31,5 +31,5 @@ if (-not [string]::IsNullOrWhiteSpace($PrTitle)) {
     $argsList += @('--pr-title', $PrTitle)
 }
 
-& $Python @argsList
+& $Python '-X' 'utf8' @argsList
 exit $LASTEXITCODE

@@ -24,5 +24,5 @@ $argsList = @(
 )
 $argsList += $TestCommand
 
-& $Python @argsList
+& $Python '-X' 'utf8' @argsList
 exit $LASTEXITCODE

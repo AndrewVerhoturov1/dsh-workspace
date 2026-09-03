@@ -42,7 +42,7 @@ $argsList = @(
 
 if ($BrowserSmoke) {
     $argsList += '--browser-smoke'
-    & $Python @argsList
+    & $Python '-X' 'utf8' @argsList
     exit $LASTEXITCODE
 }
 
@@ -64,7 +64,7 @@ try {
     foreach ($path in $ForbiddenPath) {
         $argsList += @('--forbid-path', $path)
     }
-    & $Python @argsList
+    & $Python '-X' 'utf8' @argsList
     exit $LASTEXITCODE
 }
 finally {

@@ -29,5 +29,5 @@ $arguments = @(
 if ($NoFetch) { $arguments += '--no-fetch' }
 if ($AllowMain) { $arguments += '--allow-main' }
 
-& $python.Source @arguments
+& $python.Source '-X' 'utf8' @arguments
 exit $LASTEXITCODE
