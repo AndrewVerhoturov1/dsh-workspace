@@ -15,7 +15,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 import finalization_common as common  # noqa: E402
 
-PUBLISH_VERSION = 1
+PUBLISH_VERSION = 2
 
 
 def _gh_api(
@@ -265,22 +265,8 @@ def publish(
             },
         )
 
-    removed = common.run_git(repo_root, "worktree", "remove", str(worktree), check=False)
-    if removed.returncode != 0:
-        raise common.FinalizationError(
-            "PUBLISH_CLEANUP_FAILED",
-            "PR is published, but local task worktree cleanup failed",
-            details={
-                "published": True,
-                "commitSha": commit_sha,
-                "remoteSha": remote_sha,
-                "prNumber": pr_number,
-                "prUrl": verified.get("html_url"),
-                "worktree": str(worktree),
-                "stderr": removed.stderr[-2000:],
-            },
-        )
-
+    # Keep the exact tested/published worktree available as the user-visible Result Workspace.
+    # Cleanup is a separate post-merge operation handled by cleanup_published.py.
     published_path = ready_json.parent / "published.json"
     result = {
         "ok": True,
@@ -299,7 +285,12 @@ def publish(
         "changedFiles": paths,
         "testCommand": test["testCommand"],
         "testDurationMs": test.get("durationMs"),
-        "worktreeRemoved": True,
+        "worktree": str(worktree),
+        "worktreeRemoved": False,
+        "worktreeRetained": True,
+        "resultWorkspaceReady": True,
+        "cleanupAfterMergeRequired": True,
+        "repoRoot": str(repo_root),
         "localBranchRetainedUntilMerge": True,
         "mergePerformed": False,
         "publishedJson": str(published_path),

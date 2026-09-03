@@ -12,7 +12,7 @@ description: >-
 
 # Delegate via Postman — Direct Production
 
-`DIRECT_POSTMAN_SKILL_VERSION: 8`
+`DIRECT_POSTMAN_SKILL_VERSION: 9`
 
 ## 0. Золотой путь
 
@@ -696,3 +696,25 @@ terminal state
 21. Ни PREPARE, ни TEST, ни PUBLISH не создают новый Postman REQ.
 22. PUBLISH никогда не merge-ит PR автоматически.
 23. Нет validated correlated artifact → нет успешного Postman результата.
+
+
+## Result Workspace после PUBLISHED
+
+После успешного `PUBLISHED` task worktree НЕ удаляется. `published.json` содержит
+`worktree`, `worktreeRetained: true` и `resultWorkspaceReady: true`. Это exact tested
+PR HEAD и канонический источник результата до merge.
+
+Если пользователь просит `открой результат`, `покажи файлы`, `перейди в результат`
+или хочет запустить launcher до merge, использовать `postman_result_workspace_open`
+с exact `publishedJson`. Не открывать основной `C:\Users\andre\.dsh` как замену
+result worktree. Текущую сессию нельзя менять по `cwd`; инструмент создаёт/открывает
+Harness Workspace для retained worktree.
+
+Для HTML/static preview вызвать `postman_result_preview_url` с relative entrypoint,
+затем открыть возвращённый loopback URL через Harness Playwright
+`mcp__playwright__browser_navigate`. Не использовать транспортный Postman Chrome/CDP.
+
+Пользователь не должен вводить git/SHA/worktree/HTTP-server команды вручную.
+После merge retained worktree удаляется отдельным `cleanup_published.ps1`; до merge
+автоматическая очистка запрещена. Если result worktree стал dirty после просмотра или
+редактирования, cleanup обязан fail-closed.

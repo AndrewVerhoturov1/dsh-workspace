@@ -276,7 +276,16 @@ test('apply should install a scoped reply tool and fail-closed tool boundary for
   apply(ctx, { runtime })
   events.get('agent/created')({ agent: postman })
 
-  assert.equal(registeredGlobalTools.length, 2)
+  assert.equal(registeredGlobalTools.length, 4)
+  assert.deepEqual(
+    registeredGlobalTools.map((tool) => tool.name),
+    [
+      'postman_send',
+      'postman_async_send',
+      'postman_result_workspace_open',
+      'postman_result_preview_url',
+    ],
+  )
   assert.equal(scopedTools.length, 5)
   assert.deepEqual(restrictions, [{ allow: [] }])
   assert.equal(sections.length, 1)
