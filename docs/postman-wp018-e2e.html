@@ -10,9 +10,11 @@
   <button id="check" type="button">Проверить</button>
   <br>
   <button id="red-check" type="button" style="background-color: red; color: white;">Красная проверка</button>
+  <br>
+  <button id="green-check" type="button" style="background-color: green; color: white;">Зелёная проверка</button>
+  <p id="green-result" hidden>Зелёная кнопка работает</p>
   <p id="red-result" hidden>Красная кнопка работает</p>
   <p id="result" hidden>Postman работает</p>
-
   <script>
     document.getElementById('check').addEventListener('click', function () {
       document.getElementById('result').hidden = false;
@@ -20,6 +22,10 @@
 
     document.getElementById('red-check').addEventListener('click', function () {
       document.getElementById('red-result').hidden = false;
+    });
+
+    document.getElementById('green-check').addEventListener('click', function () {
+      document.getElementById('green-result').hidden = false;
     });
   </script>
 </body>
