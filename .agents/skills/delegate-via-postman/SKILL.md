@@ -12,7 +12,7 @@ description: >-
 
 # Delegate via Postman — Direct Production
 
-`DIRECT_POSTMAN_SKILL_VERSION: 8`
+`DIRECT_POSTMAN_SKILL_VERSION: 9`
 
 ## 0. Золотой путь
 
@@ -696,3 +696,54 @@ terminal state
 21. Ни PREPARE, ни TEST, ни PUBLISH не создают новый Postman REQ.
 22. PUBLISH никогда не merge-ит PR автоматически.
 23. Нет validated correlated artifact → нет успешного Postman результата.
+
+
+## Result Workspace после PUBLISHED
+
+После успешного `PUBLISHED` task worktree НЕ удаляется. `published.json` содержит
+`worktree`, `worktreeRetained: true` и `resultWorkspaceRegistrationRequired: true`.
+Это exact tested PR HEAD и единственный локальный источник результата до merge;
+отдельную Preview-копию не создавать.
+
+Сразу после `PUBLISHED` вызвать ровно один раз:
+
+```text
+postman_result_workspace_register(published_json=<exact publishedJson>)
+```
+
+Это НЕ transport и НЕ повторная отправка Ч1. Инструмент использует host
+`ctx.workspaceRegistry.create(worktree, title)`, записывает sibling
+`result-workspace.json` и возвращает `RESULT_WORKSPACE_REGISTERED` с `workspaceId`
+и title. Штатный Workspace feed Harness сам покажет новый Workspace без reload.
+
+Не использовать для Result Workspace:
+
+```text
+ctx.workspaces.create
+ctx.sessions.create
+ctx.sessions.open
+custom remote event
+dsh-api-remotes patch
+lib/client.js
+Postman Chrome/CDP
+локальный preview HTTP server
+```
+
+Обычный клик по строке Workspace только раскрывает группу. Для работы с результатом
+пользователь выбирает Workspace в штатном picker или нажимает `+ New Session` у него;
+штатный Harness выполняет `workspaces.startSession → connectWorkspace →
+sessions.create({workspaceId}) → sessions.open`, поэтому cwd новой Session равен exact
+retained worktree. Файловые/shell/launcher операции этой Session выполняются оттуда.
+
+Если регистрация Workspace после уже успешного `PUBLISHED` не удалась, не создавать
+новый REQ, не повторять PUBLISH и не удалять PR. Сообщить post-publication UX failure
+и остановиться с сохранённым worktree.
+
+После merge сначала закрыть/архивировать Result Session, затем вызвать
+`postman_result_workspace_unregister` для exact `publishedJson`. Инструмент удаляет
+только Workspace registration и помечает `result-workspace.json` как
+`RESULT_WORKSPACE_UNREGISTERED`; worktree и Session logs он не удаляет. После этого
+`cleanup_published.ps1` может удалить только clean exact worktree, только у merged PR.
+Dirty worktree, незамерженный PR или всё ещё зарегистрированный Workspace — fail-closed.
+
+Пользователь не должен вводить git/SHA/worktree-команды или команды терминала вручную.
