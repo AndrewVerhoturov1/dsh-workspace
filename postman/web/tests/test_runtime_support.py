@@ -62,16 +62,16 @@ class WP018AStorageQuietTests(unittest.TestCase):
             ROOT / ".agents" / "skills" / "delegate-via-postman" / "SKILL.md"
         ).read_text(encoding="utf-8")
 
-        self.assertIn(r"D:\Downloads\_dsh\_auto", ps1)
+        self.assertIn(r"D:\Downloads_dsh_auto", ps1)
         self.assertIn("DSH_POSTMAN_RESULT_ROOT", ps1)
         self.assertIn("--result-root", direct)
         self.assertIn("DIRECT_RESULT_ROOT_UNAVAILABLE", direct)
         self.assertIn("runtime.prepare_result_root", direct)
         self.assertIn("result_root=self.result_root", direct)
         self.assertIn("quiet_subprocess_kwargs", direct)
-        self.assertIn(r'DEFAULT_BROWSER_DOWNLOAD_DIR = r"D:\Downloads\_dsh\_auto"', downloader)
+        self.assertIn(r'DEFAULT_BROWSER_DOWNLOAD_DIR = r"D:\Downloads_dsh_auto"', downloader)
         self.assertIn("quiet_subprocess_kwargs", downloader)
-        self.assertIn("DIRECT_POSTMAN_SKILL_VERSION: 6", skill)
+        self.assertIn("DIRECT_POSTMAN_SKILL_VERSION: 7", skill)
 
         normal = skill.split("## 8. Единственный production-вызов", 1)[1].split(
             "## 9. Разбор JSON и минимальный transport gate", 1

@@ -12,7 +12,7 @@ description: >-
 
 # Delegate via Postman — Direct Production
 
-`DIRECT_POSTMAN_SKILL_VERSION: 6`
+`DIRECT_POSTMAN_SKILL_VERSION: 7`
 
 ## 0. Золотой путь
 
@@ -288,7 +288,7 @@ if (-not (Test-Path -LiteralPath $bridge -PathType Leaf)) {
 Production wrapper по умолчанию сохраняет durable artifacts в:
 
 ```text
-D:\Downloads\_dsh\_auto
+D:\Downloads_dsh_auto
 ```
 
 `postman.ps1` поддерживает override через `DSH_POSTMAN_RESULT_ROOT` / `-ResultRoot`.
