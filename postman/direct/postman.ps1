@@ -22,7 +22,7 @@ $ErrorActionPreference = 'Stop'
 
 if ([string]::IsNullOrWhiteSpace($ResultRoot)) {
     if ([string]::IsNullOrWhiteSpace($env:DSH_POSTMAN_RESULT_ROOT)) {
-        $ResultRoot = 'D:\Downloads\_dsh\_auto'
+        $ResultRoot = 'D:\Downloads_dsh_auto'
     }
     else {
         $ResultRoot = $env:DSH_POSTMAN_RESULT_ROOT
