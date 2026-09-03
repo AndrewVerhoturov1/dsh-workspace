@@ -158,6 +158,29 @@ class TaskPackageTests(unittest.TestCase):
         with self.assertRaises(task_package.TaskPackageError):
             self.render_intent(user_intent="   ")
 
+    def test_direct_task_manifest_is_self_contained_and_preserves_intent(self):
+        intent = "Добавь красную кнопку.\nНе меняй существующую."
+        expected_filename = f"POSTMAN_{REQ}_RESULT.zip"
+        content = task_package.render_direct_task_manifest(
+            request_id=REQ,
+            user_intent=intent,
+            repository="AndrewVerhoturov1/dsh-workspace",
+            base_commit=BASE_COMMIT,
+            expected_filename=expected_filename,
+            allowed_paths=["docs", "README.md"],
+            forbidden_paths=[".git", "settings.yaml"],
+        )
+        self.assertIn(f"request_id: {REQ}", content)
+        self.assertIn(f"base_commit: {BASE_COMMIT}", content)
+        self.assertIn(f"expected_filename: {expected_filename}", content)
+        self.assertIn('allowed_paths_json: ["docs","README.md"]', content)
+        self.assertIn('forbidden_paths_json: [".git","settings.yaml"]', content)
+        self.assertIn("## User intent\n\n" + intent, content)
+        self.assertIn("GitHub использовать только как READ source", content)
+        self.assertIn(f"<<<POSTMAN_RESULT_BEGIN:{REQ}>>>", content)
+        self.assertIn(f"<<<POSTMAN_RESULT_END:{REQ}>>>", content)
+        self.assertIn(expected_filename, content)
+
     def test_external_prompt_contains_only_req_and_two_links(self):
         prompt = task_package.build_external_prompt(REQ, SKILL_URL, TASK_URL)
         self.assertEqual(
@@ -165,7 +188,7 @@ class TaskPackageTests(unittest.TestCase):
             "\n".join(
                 (
                     f"POSTMAN_REQUEST_ID: {REQ}",
-                    f"skill_repository: {SKILL_URL}",
+                    f"policy: {SKILL_URL}",
                     f"task_file: {TASK_URL}",
                 )
             ),
@@ -175,6 +198,9 @@ class TaskPackageTests(unittest.TestCase):
         self.assertNotIn("Preserve the user's request", prompt)
         self.assertNotIn("base_commit", prompt)
         self.assertNotIn("\nrepository:", prompt)
+        self.assertEqual(3, len(prompt.splitlines()))
+        for forbidden in ("expected_filename", "allowed_paths_json", "forbidden_paths_json", "RESULT_BEGIN", "RESULT_END"):
+            self.assertNotIn(forbidden, prompt)
 
     def test_external_prompt_rejects_invalid_or_non_http_links(self):
         with self.assertRaises(task_package.TaskPackageError):

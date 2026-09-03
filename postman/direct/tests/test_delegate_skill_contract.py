@@ -16,7 +16,7 @@ class DelegateViaPostmanSkillContract(unittest.TestCase):
         cls.agents = AGENTS.read_text(encoding="utf-8")
 
     def test_version_and_entrypoint(self):
-        self.assertIn("DIRECT_POSTMAN_SKILL_VERSION: 7", self.skill)
+        self.assertIn("DIRECT_POSTMAN_SKILL_VERSION: 8", self.skill)
         self.assertIn(r"C:\Users\andre\.dsh\postman\direct\postman.ps1", self.skill)
 
     def test_old_callable_path_is_not_present(self):
@@ -73,6 +73,14 @@ class DelegateViaPostmanSkillContract(unittest.TestCase):
         self.assertIn("RESULT_DIAGNOSTIC_ONLY", self.skill)
         self.assertIn("exact bytes", self.skill)
         self.assertIn("foreground-вызов", self.skill)
+
+    def test_link_only_prompt_and_task_manifest_contract(self):
+        self.assertIn("Канонический prompt Ч1 состоит ровно из трёх строк", self.skill)
+        for marker in ("POSTMAN_REQUEST_ID:", "policy:", "task_file:", "taskPublicationCommit"):
+            self.assertIn(marker, self.skill)
+        for metadata in ("repository", "base_commit", "expected_filename", "allowed_paths_json", "forbidden_paths_json"):
+            self.assertIn(metadata, self.skill)
+        self.assertIn("В prompt не должны находиться", self.skill)
 
     def test_wp018a_storage_and_quiet_contract(self):
         self.assertIn(r"D:\Downloads_dsh_auto", self.skill)

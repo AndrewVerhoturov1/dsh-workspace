@@ -12,7 +12,7 @@ description: >-
 
 # Delegate via Postman — Direct Production
 
-`DIRECT_POSTMAN_SKILL_VERSION: 7`
+`DIRECT_POSTMAN_SKILL_VERSION: 8`
 
 ## 0. Золотой путь
 
@@ -365,6 +365,29 @@ polling. Background допустим только если конкретный 
 Если из-за ограничения shell-tool процесс пришлось запустить background-способом,
 это всё ещё тот же единственный invocation. Ждать завершения именно этого process,
 а не запускать новый.
+
+
+### Внутренний link-only transport contract
+
+Luna передаёт bridge только exact user payload через `-Task`. Сам внешний prompt
+формирует Direct Postman; Luna не собирает его вручную.
+
+Канонический prompt Ч1 состоит ровно из трёх строк:
+
+```text
+POSTMAN_REQUEST_ID: REQ_xxx
+policy: <policy link>
+task_file: <SHA-pinned task link>
+```
+
+В prompt не должны находиться `repository`, `base_commit`, `expected_filename`,
+`allowed_paths_json`, `forbidden_paths_json`, user intent, result markers или
+implementation instructions. Всё это Direct Postman помещает в self-contained task-файл.
+
+`baseCommit` implementation artifact относится к snapshot `main` ДО transport-only
+публикации `REQ_xxx.md`. SHA публикации task-файла хранится отдельно как
+`taskPublicationCommit`. Luna не подменяет один SHA другим и не реконструирует task
+manifest вручную.
 
 ## 9. Разбор JSON и минимальный transport gate
 

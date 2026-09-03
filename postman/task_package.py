@@ -11,13 +11,20 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from pathlib import PurePosixPath
+import json
 import re
 from urllib.parse import unquote, urlparse
 
 try:
-    from postman.web.request_identity import assert_canonical_request_id
+    from postman.web.request_identity import (
+        assert_canonical_request_id,
+        validate_expected_artifact_filename,
+    )
 except ModuleNotFoundError:  # pragma: no cover - supports direct module loading
-    from web.request_identity import assert_canonical_request_id
+    from web.request_identity import (
+        assert_canonical_request_id,
+        validate_expected_artifact_filename,
+    )
 
 
 SKILL_REPOSITORY_URL = (
@@ -94,6 +101,21 @@ def _intent_section(field: str, values: list[str]) -> list[str]:
     lines = [f"{field}:"]
     lines.extend(f"- {value}" for value in values)
     return lines
+
+
+def _path_items(values: Iterable[str], field: str) -> list[str]:
+    if values is None or isinstance(values, (str, bytes)):
+        raise TaskPackageError(f"{field} must be an iterable of repository paths")
+    try:
+        items = list(values)
+    except TypeError as exc:
+        raise TaskPackageError(f"{field} must be an iterable of repository paths") from exc
+    result = [_required_text(value, f"{field}[{index}]") for index, value in enumerate(items)]
+    if not result:
+        raise TaskPackageError(f"{field} must contain at least one path")
+    if len(result) != len(set(result)):
+        raise TaskPackageError(f"{field} must not contain duplicates")
+    return result
 
 
 def task_filename(request_id: str) -> str:
@@ -243,15 +265,95 @@ def render_intent_task_file(
     return "\n".join(lines)
 
 
+def render_direct_task_manifest(
+    *,
+    request_id: str,
+    user_intent: str,
+    repository: str,
+    base_commit: str,
+    expected_filename: str,
+    allowed_paths: Iterable[str],
+    forbidden_paths: Iterable[str],
+) -> str:
+    """Render the self-contained task document used by Direct Web Postman.
+
+    `base_commit` is the implementation snapshot from immediately BEFORE the
+    transport-only REQ file is published. The publication commit is intentionally
+    not embedded here because doing so would create a self-referential commit hash.
+    """
+
+    try:
+        assert_canonical_request_id(request_id)
+    except (TypeError, ValueError) as exc:
+        raise TaskPackageError(str(exc)) from exc
+
+    if not isinstance(user_intent, str) or not user_intent.strip():
+        raise TaskPackageError("user_intent must be a non-empty string")
+    intent_value = user_intent.replace("\r\n", "\n").replace("\r", "\n")
+
+    repository_value = _required_text(repository, "repository")
+    base_commit_value = _required_text(base_commit, "base_commit").lower()
+    if not _SHA_RE.fullmatch(base_commit_value):
+        raise TaskPackageError("base_commit must be a 40-character commit SHA")
+
+    expected_value = _required_text(expected_filename, "expected_filename")
+    if not validate_expected_artifact_filename(request_id, expected_value):
+        raise TaskPackageError("expected_filename does not match request_id")
+
+    allowed = _path_items(allowed_paths, "allowed_paths")
+    forbidden = _path_items(forbidden_paths, "forbidden_paths")
+
+    lines = [
+        "# POSTMAN TASK",
+        "",
+        "protocol_version: 1",
+        f"request_id: {request_id}",
+        f"repository: {repository_value}",
+        f"base_commit: {base_commit_value}",
+        f"expected_filename: {expected_value}",
+        "allowed_paths_json: " + json.dumps(allowed, ensure_ascii=False, separators=(",", ":")),
+        "forbidden_paths_json: " + json.dumps(forbidden, ensure_ascii=False, separators=(",", ":")),
+        "",
+        "## User intent",
+        "",
+        intent_value,
+        "",
+        "## Execution contract",
+        "",
+        "- Сначала прочитать policy по ссылке `policy:` из transport prompt.",
+        "- `User intent` выше является авторитетным пользовательским намерением; не заменять его догадками transport-слоя.",
+        "- GitHub использовать только как READ source: не commit, не push, не открывать PR/issues и не изменять GitHub.",
+        "- Реализацию готовить против точного `base_commit` из этого task-файла.",
+        "- Не писать вне `allowed_paths_json` и никогда не писать внутри `forbidden_paths_json`.",
+        "- Архитектуру, реализацию, необходимые тесты и документацию Ч1 выбирает самостоятельно в рамках user intent.",
+        "",
+        "## Result contract",
+        "",
+        "- Создать ровно один реальный downloadable ZIP implementation artifact по policy contract.",
+        "- Root `manifest.json` ZIP должен exact-match `requestId`, `repository` и `baseCommit` из этого task-файла.",
+        f"- Имя ZIP должно быть ровно `{expected_value}`.",
+        "- Финальный ответ Ч1 должен содержать ровно три непустые видимые строки и ничего больше:",
+        "",
+        f"<<<POSTMAN_RESULT_BEGIN:{request_id}>>>",
+        expected_value,
+        f"<<<POSTMAN_RESULT_END:{request_id}>>>",
+        "",
+        f"- Средняя строка должна быть реальным downloadable ZIP attachment/control с visible filename `{expected_value}`, а не plain text.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def build_external_prompt(
     request_id: str,
     skill_repository_url: str,
     task_url: str,
 ) -> str:
-    """Build a link-only prompt for the external agent.
+    """Build the canonical three-line link-only prompt for the external agent.
 
-    The prompt contains no task text, repository metadata, or transport details:
-    only the immutable REQ and the two documents required by the protocol.
+    The prompt contains no task text, repository metadata, artifact metadata,
+    path scope, result markers, or implementation instructions. All request-
+    specific details live in the published task file.
     """
 
     try:
@@ -266,7 +368,7 @@ def build_external_prompt(
     return "\n".join(
         (
             f"POSTMAN_REQUEST_ID: {request_id}",
-            f"skill_repository: {skill_url}",
+            f"policy: {skill_url}",
             f"task_file: {published_task_url}",
         )
     )

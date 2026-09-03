@@ -31,11 +31,15 @@ from typing import Any, Callable, Iterable
 from urllib.parse import quote
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-WEB_DIR = SCRIPT_DIR.parent / "web"
+POSTMAN_DIR = SCRIPT_DIR.parent
+WEB_DIR = POSTMAN_DIR / "web"
+if str(POSTMAN_DIR) not in sys.path:
+    sys.path.insert(0, str(POSTMAN_DIR))
 if str(WEB_DIR) not in sys.path:
     sys.path.insert(0, str(WEB_DIR))
 
 import browser_bootstrap as bootstrap  # noqa: E402
+import task_package  # noqa: E402
 import request_identity  # noqa: E402
 import runtime_support as runtime  # noqa: E402
 from web_worker_bridge import WebWorkerBridge, RESULT_DURABLE  # noqa: E402
@@ -48,7 +52,7 @@ PUBLIC_POLICY_URL = (
     "main/policies/postman-webchat-result-artifact.md"
 )
 
-DIRECT_VERSION = 2
+DIRECT_VERSION = 3
 DEFAULT_ASSISTANT_TIMEOUT_MS = 15 * 60 * 1000
 STATE_INIT = "INIT"
 STATE_TASK_PUBLISHED = "TASK_PUBLISHED"
@@ -151,35 +155,14 @@ def build_external_prompt(
     forbidden_paths: list[str],
     policy_url: str = PUBLIC_POLICY_URL,
 ) -> str:
+    """Compatibility boundary delegating all prompt formatting to task_package."""
+
     request_identity.assert_canonical_request_id(request_id)
     if not request_identity.validate_expected_artifact_filename(request_id, expected_filename):
         raise DirectPostmanError("DIRECT_INVALID_FILENAME", "expected filename does not match request id")
-    return "\n".join(
-        [
-            request_identity.request_prompt_key_line(request_id),
-            f"policy: {policy_url}",
-            f"task_file: {task_url}",
-            f"repository: {repository}",
-            f"base_commit: {base_commit}",
-            f"expected_filename: {expected_filename}",
-            "allowed_paths_json: " + json.dumps(allowed_paths, ensure_ascii=False, separators=(",", ":")),
-            "forbidden_paths_json: " + json.dumps(forbidden_paths, ensure_ascii=False, separators=(",", ":")),
-            "",
-            "Read the policy and task_file before implementing anything.",
-            "The task_file contains the user's intent; do not replace it with assumptions from the transport metadata.",
-            "Use GitHub only as a READ source. Do not commit, push, open PRs/issues, or modify GitHub.",
-            "Prepare the requested implementation against the exact base_commit above.",
-            "Create exactly ONE real downloadable ZIP implementation artifact using the policy contract.",
-            "The ZIP manifest must exact-match requestId, repository, and baseCommit above.",
-            "Do not write outside allowed_paths_json and never write inside forbidden_paths_json.",
-            "",
-            "Your FINAL assistant response must contain exactly three non-empty visible lines and nothing else:",
-            f"<<<POSTMAN_RESULT_BEGIN:{request_id}>>>",
-            expected_filename,
-            f"<<<POSTMAN_RESULT_END:{request_id}>>>",
-            "The middle line must be the real downloadable ZIP attachment/control with that exact visible filename, not plain text.",
-        ]
-    )
+    # Repository/base/path metadata are intentionally ignored here. They belong
+    # only in the self-contained task file rendered before publication.
+    return task_package.build_external_prompt(request_id, policy_url, task_url)
 
 
 def _decode_task_file(path: str | os.PathLike[str]) -> str:
@@ -225,6 +208,12 @@ def derive_allowed_paths(root_entries: Iterable[str], extra: Iterable[str] = ())
 
 def derive_forbidden_paths(extra: Iterable[str] = ()) -> list[str]:
     return _normalized_unique([*DEFAULT_FORBIDDEN_PATHS, *extra])
+
+
+@dataclass(frozen=True)
+class TaskSnapshot:
+    prepublication_commit: str
+    root_entries: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -304,11 +293,49 @@ class GitHubTaskPublisher:
                 names.append(name)
         return tuple(names)
 
-    def publish(self, request_id: str, user_intent: str) -> PublishedTask:
+    def snapshot(self) -> TaskSnapshot:
+        prepublication = self._branch_sha()
+        return TaskSnapshot(
+            prepublication_commit=prepublication,
+            root_entries=self._root_entries(prepublication),
+        )
+
+    def _single_parent_sha(self, commit_sha: str) -> str:
+        value = self._api(f"repos/{self.repository}/git/commits/{commit_sha}")
+        parents = value.get("parents") if isinstance(value, dict) else None
+        if not isinstance(parents, list) or len(parents) != 1:
+            raise DirectPostmanError(
+                "DIRECT_TASK_PUBLICATION_INVALID",
+                "task publication commit must have exactly one parent",
+            )
+        parent = parents[0].get("sha") if isinstance(parents[0], dict) else None
+        if not isinstance(parent, str) or len(parent) != 40:
+            raise DirectPostmanError(
+                "DIRECT_TASK_PUBLICATION_INVALID",
+                "task publication parent did not return a full commit SHA",
+            )
+        return parent.lower()
+
+    def publish_content(
+        self,
+        request_id: str,
+        content: str,
+        *,
+        expected_parent: str,
+        root_entries: Iterable[str],
+    ) -> PublishedTask:
         request_identity.assert_canonical_request_id(request_id)
         filename = f"{request_id}.md"
-        prepublication = self._branch_sha()
-        content = render_intent_task(user_intent)
+        expected_parent = expected_parent.lower()
+
+        current = self._branch_sha().lower()
+        if current != expected_parent:
+            raise DirectPostmanError(
+                "DIRECT_TASK_PUBLICATION_RACE",
+                "repository branch advanced before task publication",
+                details={"expectedParent": expected_parent, "actualHead": current},
+            )
+
         response = self._api(
             f"repos/{self.repository}/contents/{filename}",
             method="PUT",
@@ -321,14 +348,39 @@ class GitHubTaskPublisher:
         publication = response.get("commit", {}).get("sha") if isinstance(response, dict) else None
         if not isinstance(publication, str) or len(publication) != 40:
             raise DirectPostmanError("DIRECT_GITHUB_FAILED", "task publication did not return commit SHA")
+        publication = publication.lower()
+
+        actual_parent = self._single_parent_sha(publication)
+        if actual_parent != expected_parent:
+            raise DirectPostmanError(
+                "DIRECT_TASK_PUBLICATION_RACE",
+                "task publication was not based on the snapshotted implementation base",
+                details={
+                    "expectedParent": expected_parent,
+                    "actualParent": actual_parent,
+                    "taskPublicationCommit": publication,
+                },
+            )
+
         owner, repo = self.repository.split("/", 1)
         task_url = f"https://raw.githubusercontent.com/{owner}/{repo}/{publication}/{filename}"
         return PublishedTask(
             request_id=request_id,
             task_url=task_url,
-            prepublication_commit=prepublication,
+            prepublication_commit=expected_parent,
             publication_commit=publication,
-            root_entries=self._root_entries(publication),
+            root_entries=tuple(root_entries),
+        )
+
+    def publish(self, request_id: str, user_intent: str) -> PublishedTask:
+        """Legacy compatibility helper; DirectPostman.run uses publish_content()."""
+
+        snapshot = self.snapshot()
+        return self.publish_content(
+            request_id,
+            render_intent_task(user_intent),
+            expected_parent=snapshot.prepublication_commit,
+            root_entries=snapshot.root_entries,
         )
 
 
@@ -477,14 +529,31 @@ class DirectPostman:
             gh_binary=self.gh_binary,
             cwd=self.repo_root,
         )
-        published = publisher.publish(request_id, task)
+        snapshot = publisher.snapshot()
         expected_filename = request_identity.expected_artifact_filename(request_id)
-        allowed_paths = derive_allowed_paths(published.root_entries, extra_allowed)
+        allowed_paths = derive_allowed_paths(snapshot.root_entries, extra_allowed)
         forbidden_paths = derive_forbidden_paths(extra_forbidden)
+
+        task_content = task_package.render_direct_task_manifest(
+            request_id=request_id,
+            user_intent=task,
+            repository=self.repository,
+            base_commit=snapshot.prepublication_commit,
+            expected_filename=expected_filename,
+            allowed_paths=allowed_paths,
+            forbidden_paths=forbidden_paths,
+        )
+        published = publisher.publish_content(
+            request_id,
+            task_content,
+            expected_parent=snapshot.prepublication_commit,
+            root_entries=snapshot.root_entries,
+        )
+
         expected_request = {
             "requestId": request_id,
             "repository": self.repository,
-            "baseCommit": published.publication_commit,
+            "baseCommit": snapshot.prepublication_commit,
             "expectedFilename": expected_filename,
             "allowedPaths": allowed_paths,
             "forbiddenPaths": forbidden_paths,
@@ -493,7 +562,7 @@ class DirectPostman:
             request_id=request_id,
             task_url=published.task_url,
             repository=self.repository,
-            base_commit=published.publication_commit,
+            base_commit=snapshot.prepublication_commit,
             expected_filename=expected_filename,
             allowed_paths=allowed_paths,
             forbidden_paths=forbidden_paths,
@@ -503,7 +572,8 @@ class DirectPostman:
             STATE_TASK_PUBLISHED,
             taskUrl=published.task_url,
             prepublicationCommit=published.prepublication_commit,
-            baseCommit=published.publication_commit,
+            baseCommit=published.prepublication_commit,
+            taskPublicationCommit=published.publication_commit,
             expectedFilename=expected_filename,
             allowedPaths=allowed_paths,
             forbiddenPaths=forbidden_paths,
@@ -549,7 +619,8 @@ class DirectPostman:
             state=STATE_RESULT_DURABLE,
             requestId=request_id,
             repository=self.repository,
-            baseCommit=published.publication_commit,
+            baseCommit=published.prepublication_commit,
+            taskPublicationCommit=published.publication_commit,
             taskUrl=published.task_url,
             expectedFilename=expected_filename,
             resultZip=result_zip,
