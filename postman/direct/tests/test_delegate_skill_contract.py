@@ -16,7 +16,7 @@ class DelegateViaPostmanSkillContract(unittest.TestCase):
         cls.agents = AGENTS.read_text(encoding="utf-8")
 
     def test_version_and_entrypoint(self):
-        self.assertIn("DIRECT_POSTMAN_SKILL_VERSION: 8", self.skill)
+        self.assertIn("DIRECT_POSTMAN_SKILL_VERSION: 9", self.skill)
         self.assertIn(r"C:\Users\andre\.dsh\postman\direct\postman.ps1", self.skill)
 
     def test_old_callable_path_is_not_present(self):
