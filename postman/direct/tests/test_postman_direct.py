@@ -74,23 +74,39 @@ class DirectPostmanUnitTests(unittest.TestCase):
         for invented in ("React", "responsive", "division by zero", "framework"):
             self.assertNotIn(invented, rendered)
 
-    def test_external_prompt_binds_all_trusted_metadata(self):
+    def test_external_prompt_is_exactly_req_policy_and_task_link(self):
         filename = f"POSTMAN_{REQ}_RESULT.zip"
+        task_url = f"https://raw.githubusercontent.com/x/y/{PUB}/{REQ}.md"
         prompt = direct.build_external_prompt(
             request_id=REQ,
-            task_url=f"https://raw.githubusercontent.com/x/y/{PUB}/{REQ}.md",
+            task_url=task_url,
             repository=REPO,
-            base_commit=PUB,
+            base_commit=PRE,
             expected_filename=filename,
             allowed_paths=["apps", "README.md"],
             forbidden_paths=["settings.yaml"],
         )
-        self.assertEqual(prompt.splitlines()[0], f"POSTMAN_REQUEST_ID: {REQ}")
-        self.assertIn(f"repository: {REPO}", prompt)
-        self.assertIn(f"base_commit: {PUB}", prompt)
-        self.assertIn(f"expected_filename: {filename}", prompt)
-        self.assertIn(f"<<<POSTMAN_RESULT_BEGIN:{REQ}>>>", prompt)
-        self.assertIn(f"<<<POSTMAN_RESULT_END:{REQ}>>>", prompt)
+        self.assertEqual(
+            prompt,
+            "\n".join(
+                (
+                    f"POSTMAN_REQUEST_ID: {REQ}",
+                    f"policy: {direct.PUBLIC_POLICY_URL}",
+                    f"task_file: {task_url}",
+                )
+            ),
+        )
+        self.assertEqual(3, len(prompt.splitlines()))
+        for forbidden in (
+            "repository:",
+            "base_commit:",
+            "expected_filename:",
+            "allowed_paths_json:",
+            "forbidden_paths_json:",
+            "RESULT_BEGIN",
+            "RESULT_END",
+        ):
+            self.assertNotIn(forbidden, prompt)
 
     def test_allowed_paths_exclude_req_files_and_sensitive_roots(self):
         result = direct.derive_allowed_paths([
@@ -109,13 +125,15 @@ class DirectPostmanUnitTests(unittest.TestCase):
         self.assertIn("attachments", result)
         self.assertIn("private", result)
 
-    def test_github_publisher_uses_exact_intent_bytes_and_sha_pinned_url(self):
+    def test_github_publisher_uses_snapshot_parent_and_sha_pinned_url(self):
         calls = []
         def fake_run(command, **kwargs):
             calls.append((command, kwargs))
             endpoint = command[2]
             if "/git/ref/heads/" in endpoint:
                 stdout = json.dumps({"object": {"sha": PRE}})
+            elif endpoint.endswith(f"/git/commits/{PUB}"):
+                stdout = json.dumps({"parents": [{"sha": PRE}]})
             elif command[command.index("--method") + 1] == "PUT" if "--method" in command else False:
                 stdout = json.dumps({"commit": {"sha": PUB}})
             elif "/contents?ref=" in endpoint:
@@ -182,16 +200,22 @@ class DirectPostmanUnitTests(unittest.TestCase):
         self.assertFalse(result["reused"])
         self.assertEqual(result["pid"], 99)
 
-    def test_direct_run_returns_durable_result_without_applying_zip(self):
+    def test_direct_run_uses_prepublication_base_and_self_contained_task(self):
         class Publisher:
+            contents = []
             def __init__(self, **kwargs): pass
-            def publish(self, request_id, task):
+            def snapshot(self):
+                return direct.TaskSnapshot(PRE, ("postman", "README.md"))
+            def publish_content(self, request_id, content, *, expected_parent, root_entries):
+                self.__class__.contents.append(content)
+                if expected_parent != PRE:
+                    raise AssertionError(expected_parent)
                 return direct.PublishedTask(
                     request_id,
                     f"https://raw.githubusercontent.com/x/y/{PUB}/{REQ}.md",
                     PRE,
                     PUB,
-                    ("postman", "README.md"),
+                    tuple(root_entries),
                 )
 
         class Bridge:
@@ -209,6 +233,8 @@ class DirectPostmanUnitTests(unittest.TestCase):
                 }
 
         with tempfile.TemporaryDirectory() as root:
+            Publisher.contents = []
+            Bridge.calls = []
             runner = direct.DirectPostman(
                 direct_root=Path(root) / "direct",
                 publisher_factory=Publisher,
@@ -220,14 +246,39 @@ class DirectPostmanUnitTests(unittest.TestCase):
                     "profileDir": "profile",
                 },
             )
-            result = runner.run(request_id=REQ, task="calculator")
+            result = runner.run(request_id=REQ, task="добавь красную кнопку")
             self.assertTrue(result["ok"])
             self.assertEqual(result["code"], "RESULT_DURABLE")
+            self.assertEqual(result["baseCommit"], PRE)
+            self.assertEqual(result["taskPublicationCommit"], PUB)
             self.assertEqual(result["resultZip"], r"C:\result\result.zip")
+
+            self.assertEqual(1, len(Publisher.contents))
+            task_content = Publisher.contents[0]
+            self.assertIn(f"base_commit: {PRE}", task_content)
+            self.assertIn(f"expected_filename: POSTMAN_{REQ}_RESULT.zip", task_content)
+            self.assertIn("добавь красную кнопку", task_content)
+            self.assertIn("allowed_paths_json:", task_content)
+            self.assertIn("forbidden_paths_json:", task_content)
+            self.assertIn(f"<<<POSTMAN_RESULT_BEGIN:{REQ}>>>", task_content)
+
+            self.assertEqual(1, len(Bridge.calls))
+            bridge_kwargs = Bridge.calls[0][1]
+            self.assertEqual(bridge_kwargs["expected_request"]["baseCommit"], PRE)
+            self.assertEqual(
+                bridge_kwargs["prompt"].splitlines(),
+                [
+                    f"POSTMAN_REQUEST_ID: {REQ}",
+                    f"policy: {direct.PUBLIC_POLICY_URL}",
+                    f"task_file: https://raw.githubusercontent.com/x/y/{PUB}/{REQ}.md",
+                ],
+            )
+
             self.assertTrue(runner.state_path(REQ).is_file())
             state = json.loads(runner.state_path(REQ).read_text(encoding="utf-8"))
             self.assertEqual(state["state"], "RESULT_DURABLE")
-            self.assertEqual(len(Bridge.calls), 1)
+            self.assertEqual(state["baseCommit"], PRE)
+            self.assertEqual(state["taskPublicationCommit"], PUB)
 
     def test_existing_state_blocks_automatic_resend(self):
         with tempfile.TemporaryDirectory() as root:
