@@ -16,7 +16,7 @@ class DelegateViaPostmanSkillContract(unittest.TestCase):
         cls.agents = AGENTS.read_text(encoding="utf-8")
 
     def test_version_and_entrypoint(self):
-        self.assertIn("DIRECT_POSTMAN_SKILL_VERSION: 5", self.skill)
+        self.assertIn("DIRECT_POSTMAN_SKILL_VERSION: 6", self.skill)
         self.assertIn(r"C:\Users\andre\.dsh\postman\direct\postman.ps1", self.skill)
 
     def test_old_callable_path_is_not_present(self):
@@ -30,9 +30,9 @@ class DelegateViaPostmanSkillContract(unittest.TestCase):
         for marker in (
             "## 0. Золотой путь",
             "## 8. Единственный production-вызов",
-            "## 9. Разбор JSON и success gate",
+            "## 9. Разбор JSON и минимальный transport gate",
             "## 13. Не создавать Git branch до RESULT_DURABLE только ради transport",
-            "## 16. Canonical deterministic applicator",
+            "## 14. WP-018B deterministic local finalization",
             "## 20. Критические инварианты",
         ):
             self.assertIn(marker, self.skill)
@@ -79,10 +79,19 @@ class DelegateViaPostmanSkillContract(unittest.TestCase):
         self.assertIn("DSH_POSTMAN_RESULT_ROOT", self.skill)
         self.assertIn("DIRECT_RESULT_ROOT_UNAVAILABLE", self.skill)
         normal = self.skill.split("## 8. Единственный production-вызов", 1)[1].split(
-            "## 9. Разбор JSON и success gate", 1
+            "## 9. Разбор JSON и минимальный transport gate", 1
         )[0]
         self.assertIn("$jsonText = & $bridge", normal)
         self.assertNotIn("$jsonText = & pwsh.exe", normal)
+
+    def test_wp018b_three_boundary_finalization_contract(self):
+        for name in ("prepare_result.ps1", "test_result.ps1", "publish_result.ps1"):
+            self.assertIn(name, self.skill)
+            self.assertIn(name, self.agents)
+        for code in ("READY_FOR_TEST", "TEST_PASSED", "PUBLISHED"):
+            self.assertIn(code, self.skill)
+        self.assertIn("PREPARE → TEST → PUBLISH", self.skill)
+        self.assertIn("не выполняет merge", self.agents)
 
     def test_normal_smoke_is_forbidden(self):
         self.assertIn("BrowserSmoke не является normal preflight", self.skill)

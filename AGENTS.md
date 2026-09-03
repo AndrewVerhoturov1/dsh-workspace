@@ -38,3 +38,11 @@ skill запрещены также выбор архитектуры и fronten
 использовать fallback `postman_async_send`, старый Harness, QChat, manual browser,
 Playwright либо другой transport. Если skill не загружается, не использовать
 другой skill или transport fallback.
+
+Postman local finalization invariant.
+После exact `RESULT_DURABLE` normal production path: `prepare_result.ps1` →
+`test_result.ps1` → `publish_result.ps1`. Эти deterministic boundary владеют
+соответственно Git/policy/worktree+applicator, одним task-specific test receipt и
+stage/commit/push/remote-SHA/PR. Luna не должна разлагать normal path обратно на
+множество ручных Git/gh/shell вызовов. Любой `ok=false` от boundary — fail-closed
+`STOP`; ручной fallback и новый REQ запрещены. `publish_result.ps1` не выполняет merge.

@@ -12,7 +12,7 @@ description: >-
 
 # Delegate via Postman — Direct Production
 
-`DIRECT_POSTMAN_SKILL_VERSION: 5`
+`DIRECT_POSTMAN_SKILL_VERSION: 6`
 
 ## 0. Золотой путь
 
@@ -24,11 +24,12 @@ description: >-
 → один foreground-вызов Direct Postman
 → ждать terminal JSON
 → RESULT_DURABLE
-→ один bundled Git/preflight
-→ один deterministic applicator
+→ PREPARE: один вызов prepare_result.ps1
 → READY_FOR_TEST
-→ task-scoped tests
-→ commit / push / PR
+→ TEST: один вызов test_result.ps1
+→ TEST_PASSED
+→ PUBLISH: один вызов publish_result.ps1
+→ PUBLISHED
 → отчёт пользователю
 ```
 
@@ -365,9 +366,9 @@ polling. Background допустим только если конкретный 
 это всё ещё тот же единственный invocation. Ждать завершения именно этого process,
 а не запускать новый.
 
-## 9. Разбор JSON и success gate
+## 9. Разбор JSON и минимальный transport gate
 
-После завершения:
+После завершения Direct Postman распарсить terminal JSON:
 
 ```powershell
 try {
@@ -378,46 +379,20 @@ catch {
 }
 ```
 
-Production success существует только при одновременных условиях:
+До PREPARE Luna проверяет только transport boundary:
 
 ```text
-$result.ok          == true
-$result.code        == RESULT_DURABLE
-$result.state       == RESULT_DURABLE
-$result.requestId   == exact $requestId
-$result.resultZip   != empty
-$result.sha256      != empty
+$result.ok        == true
+$result.code      == RESULT_DURABLE
+$result.state     == RESULT_DURABLE
+$result.requestId == exact $requestId
 ```
 
-Проверить файл:
-
-```powershell
-Test-Path -LiteralPath $result.resultZip -PathType Leaf
-```
-
-И SHA:
-
-```powershell
-$actualSha = (Get-FileHash -Algorithm SHA256 $result.resultZip).Hash.ToLower()
-```
-
-Требовать:
-
-```text
-actualSha == result.sha256
-```
-
-Также проверить:
-
-```text
-expectedFilename содержит exact REQ
-taskUrl относится к exact REQ
-baseCommit является полным 40-hex SHA
-repository соответствует ожидаемому repository
-```
+Не выполнять вручную `Get-FileHash`, повторный manifest/base/staleness/path validation
+или отдельный `Test-Path` как normal handoff. Полная проверка ZIP, SHA-256, manifest,
+baseCommit и application принадлежит deterministic PREPARE/applicator.
 
 После `RESULT_DURABLE` не открывать ChatGPT для визуального подтверждения.
-Durable validated artifact является источником истины.
 
 ## 10. Что Direct Postman уже доказал
 
@@ -505,171 +480,144 @@ Git integration начинается после validated `RESULT_DURABLE`.
 
 Исключение: отдельная задача разработки/ремонта самого Postman transport.
 
-## 14. Bundled integration preflight после RESULT_DURABLE
+## 14. WP-018B deterministic local finalization
 
-После `RESULT_DURABLE` прочитать `REPO_POLICY.md` один раз и выполнить branch/worktree/PR
-preflight как один компактный bundled-шаг. Не повторять одинаковые `status`, branch,
-remote и worktree проверки, если repository state с предыдущей проверки не менялся.
-
-До application:
-
-1. Проверить policy-required состояние веток/PR/worktrees.
-2. Выполнить `git fetch origin`.
-3. Создать ровно одну чистую task branch/worktree от текущего `origin/main`.
-4. Не применять artifact в основной dirty `C:\Users\andre\.dsh`.
-
-Проверки artifact SHA/manifest/base/staleness и exact application принадлежат
-canonical deterministic applicator из раздела 16. Л1 не должна повторять их вручную
-до или после applicator.
-
-Если preflight запрещает новую task branch — STOP и вернуть blocker. Не создавать
-вторую branch и не обходить `REPO_POLICY.md`.
-
-## 15. Защита пользовательского рабочего дерева
-
-Если основной `C:\Users\andre\.dsh` содержит пользовательские dirty/untracked данные:
+После exact `RESULT_DURABLE` normal production path состоит ровно из трёх deterministic boundary-вызовов:
 
 ```text
-не reset
-не clean
-не stash автоматически
-не restore пользовательских файлов
+PREPARE
+→ TEST
+→ PUBLISH
 ```
 
-Применение implementation package выполнять в отдельном чистом worktree, если это
-нужно для сохранности пользовательского дерева.
+Luna не выполняет между ними ручные Git/preflight/publication цепочки.
 
-Никогда не распаковывать implementation ZIP внутрь dirty repository root.
-Использовать `%TEMP%`.
+### PREPARE
 
-## 16. Canonical deterministic applicator
-
-Normal production path после создания чистой task branch/worktree — ровно один
-вызов:
+Единственный normal entrypoint:
 
 ```text
-C:\Users\andre\.dsh\postman\direct\integrate_result.ps1
+C:\Users\andre\.dsh\postman\direct\prepare_result.ps1
 ```
-
-Сохранить exact terminal JSON Direct Postman во временный UTF-8 JSON-файл и вызвать:
 
 ```powershell
-& 'C:\Users\andre\.dsh\postman\direct\integrate_result.ps1' `
-  -ResultJson $resultJsonPath `
-  -RepoRoot $taskWorktree
+$prepareText = & 'C:\Users\andre\.dsh\postman\direct\prepare_result.ps1' `
+  -ResultJsonText $jsonText `
+  -RepoRoot 'C:\Users\andre\.dsh'
+$prepareExit = $LASTEXITCODE
+$ready = $prepareText | ConvertFrom-Json
 ```
 
-Applicator детерминированно выполняет:
+Успех: `ok=true`, `code=READY_FOR_TEST`, exact requestId и существующий `readyJson`.
+
+PREPARE детерминированно владеет REPO_POLICY preflight, одним `git fetch origin`,
+проверкой local/origin branches, open PR и worktrees, созданием deterministic
+`postman/req-*` branch, отдельного clean worktree от `origin/main` и canonical
+`integrate_result.py` application.
+
+Основной dirty `C:\Users\andre\.dsh` не очищается. Локальный `main` может отставать
+от `origin/main` только как ancestor; task worktree создаётся от актуального `origin/main`.
+
+Существующий canonical applicator остаётся источником истины:
+`C:\Users\andre\.dsh\postman\direct\integrate_result.ps1`.
+PREPARE использует ту же deterministic `integrate_result.py` логику и сохраняет exact bytes.
+
+Если PREPARE вернул `PREPARE_DIAGNOSTIC_ONLY`, `PREPARE_POLICY_BLOCKED` или любой
+другой `ok=false` — STOP. Не создавать branch/worktree вручную.
+
+### TEST
+
+После `READY_FOR_TEST` Luna выбирает ровно одну минимальную task-specific test-команду.
+Запуск только через:
 
 ```text
-RESULT_DURABLE gate
-request/repository/base/filename validation
-ZIP SHA256 validation
-safe ZIP + manifest validation
-diagnostic-only classification
-protected/path-traversal checks
-git fetch + base ancestry/staleness gate
-clean task-worktree + HEAD==origin/main gate
-git apply --check для patch
-exact-byte copy для manifest files
-git diff --check
-unexpected-path gate
+C:\Users\andre\.dsh\postman\direct\test_result.ps1
 ```
 
-Успех application существует только при JSON:
+```powershell
+$testText = & 'C:\Users\andre\.dsh\postman\direct\test_result.ps1' `
+  -ReadyJson $ready.readyJson `
+  -TestCommand @('python', '-m', 'pytest', 'tests/task_test.py')
+$test = $testText | ConvertFrom-Json
+```
+
+Test gate проверяет branch/HEAD, authoritative changedFiles, exit code и запрещает
+незамеченную мутацию implementation worktree. Успех: `code=TEST_PASSED` и `testJson`.
+Если test failure/timeout/mutation — STOP.
+
+### PUBLISH
+
+После `TEST_PASSED` единственный normal publication entrypoint:
 
 ```text
-ok   = true
-code = READY_FOR_TEST
-requestId = exact исходный REQ
+C:\Users\andre\.dsh\postman\direct\publish_result.ps1
 ```
 
-После `READY_FOR_TEST` использовать `changedFiles` applicator как authoritative список
-внедрённых путей и переходить к task-scoped tests.
+```powershell
+$publishText = & 'C:\Users\andre\.dsh\postman\direct\publish_result.ps1' `
+  -ReadyJson $ready.readyJson `
+  -TestJson $test.testJson
+$published = $publishText | ConvertFrom-Json
+```
 
-В normal path Л1 НЕ должна:
+PUBLISH проверяет READY↔TEST binding и fingerprint, выполняет `git diff --check`,
+stage только authoritative changedFiles, commit, push без force, remote SHA verification,
+создаёт/проверяет один OPEN PR в `main` и удаляет локальный task worktree после PR.
+Локальная task branch сохраняется до merge; remote branch нужна открытому PR.
+
+Успех: `ok=true`, `code=PUBLISHED`, `remoteVerified=true`, PR identity exact,
+`mergePerformed=false`.
+
+Если PUBLISH вернул failure — STOP. Не выполнять ручную альтернативную публикацию.
+
+## 15. Что Luna больше не делает вручную после RESULT_DURABLE
+
+В normal path не запускать отдельными tool calls:
 
 ```text
-вручную распаковывать ZIP
-повторно читать manifest для application
-вручную выполнять git apply
-автоматически переписывать implementation-файлы через write/edit LLM tool
-декодировать и заново кодировать files payload
-повторять SHA/base/staleness проверки, уже пройденные applicator
+git status / branch / ls-remote / worktree preflight
+gh pr list
+git fetch
+git worktree add
+integrate_result.ps1 напрямую
+Get-FileHash результата
+повторный manifest/base/staleness check
+git add
+git commit
+git push
+remote SHA verification
+gh pr create
+повторное чтение только что созданного PR
 ```
 
-Файлы из `files/` должны попадать в repository exact bytes из artifact.
+Эти обязанности принадлежат PREPARE/TEST/PUBLISH.
 
-Если applicator вернул `RESULT_DIAGNOSTIC_ONLY`, это transport/artifact success, но
-НЕ implementation success. STOP, сохранить тот же REQ, показать diagnostic blocker и
-не создавать новый REQ автоматически.
+Запрещены по-прежнему `git reset --hard`, `git clean`, automatic stash, force push и
+ручная перепись artifact через LLM tools.
 
-Любой другой `ok=false` от applicator — STOP. Не исправлять artifact вручную и не
-заменять решение Ч1 собственным implementation.
+## 16. Failure handling local finalization
 
-## 17. Проверка реализации
+PREPARE/TEST/PUBLISH являются fail-closed. Не заменять failure собственными shell-командами.
+Не создавать второй branch и новый Postman REQ из-за локальной finalization failure.
 
-Л1 не должна перепроектировать Ч1 после применения.
+Если PREPARE после ошибки имеет чистый owned worktree, он может удалить только свой
+чистый worktree и пустую локальную branch. Dirty failure worktree сохраняется для диагностики.
 
-Проверить:
+TEST receipt связан SHA-256 с exact READY JSON и fingerprint implementation bytes.
+PUBLISH не merge-ит PR и не удаляет remote branch.
 
-```text
-изменились только ожидаемые task-scoped paths
-решение соответствует пользовательскому intent
-не затронуты settings.yaml / attachments / runtime state / browser profile
-```
+## 17. Task-specific test selection
 
-Запустить repository-defined tests, относящиеся к изменению.
+Единственное содержательное решение Л1 после READY_FOR_TEST — выбрать одну проверку,
+которая лучше всего доказывает пользовательский intent. Приоритет: тесты Ч1,
+repository-defined test, существующая project command, одна минимальная semantic assertion.
+Для UI допускается один цельный E2E/script. BrowserSmoke не является task test.
 
-Для одной простой проверки предпочитать один цельный test invocation вместо цепочки
-из множества `open/snapshot/click/snapshot/console` вызовов. Для UI допускается один
-небольшой E2E/script, который запускает нужный server/browser, делает assertion и
-закрывает ресурсы. Не сокращать сами assertions ради скорости.
+## 18. Git publication boundary
 
-Источники test-команд по приоритету:
-
-```text
-AGENTS.md / repository instructions
-package/project scripts
-тесты, включённые Ч1
-существующие тестовые команды проекта
-```
-
-Не добавлять новый framework только ради проверки.
-
-При failure — STOP. Не чинить архитектуру Ч1 молча. Сообщить точный conflict/test
-failure.
-
-## 18. Git publication
-
-После успешного application + tests следовать `REPO_POLICY.md`.
-
-Обычная схема:
-
-```text
-одна task branch
-→ commit
-→ push
-→ подтвердить remote SHA
-→ один PR в main
-```
-
-Если shell позволяет, stage/commit/push/remote-SHA verification выполнить одним
-последовательным invocation после успешных tests. Не повторять неизменившийся Git
-preflight между этими шагами.
-
-Не merge автоматически, если пользователь отдельно не разрешил merge.
-
-Не создавать вторую branch для той же операции.
-
-Не использовать:
-
-```text
-git reset --hard
-git clean
-git push --force
-автоматический stash
-```
+Git publication успешна только при exact `PUBLISHED`, который доказывает commit,
+remote exact SHA, один OPEN PR `base=main` с exact head branch/SHA, удалённый task worktree
+и отсутствие автоматического merge.
 
 ## 19. Финальный отчёт
 
@@ -716,7 +664,12 @@ terminal state
 12. Не создавать implementation branch только ради transport до результата.
 13. Пользовательский dirty worktree не очищать и не переписывать.
 14. Л1 внедряет результат Ч1, а не заменяет его собственным решением.
-15. Normal application выполняется через `postman/direct/integrate_result.ps1` и требует `READY_FOR_TEST`.
-16. `files/` payload копируется exact bytes; L1 не переписывает его через LLM tools.
-17. `RESULT_DIAGNOSTIC_ONLY` не является implementation success и не разрешает automatic resend.
-18. Нет validated correlated artifact → нет успешного Postman результата.
+15. После RESULT_DURABLE normal local path — только PREPARE → TEST → PUBLISH.
+16. PREPARE является единственным владельцем branch/worktree/preflight и canonical applicator.
+17. TEST требует exact `TEST_PASSED` receipt и запрещает незамеченную мутацию implementation.
+18. PUBLISH является единственным владельцем stage/commit/push/remote-SHA/PR в normal path.
+19. `files/` payload копируется exact bytes; Л1 не переписывает его через LLM tools.
+20. `RESULT_DIAGNOSTIC_ONLY` не является implementation success и не разрешает automatic resend.
+21. Ни PREPARE, ни TEST, ни PUBLISH не создают новый Postman REQ.
+22. PUBLISH никогда не merge-ит PR автоматически.
+23. Нет validated correlated artifact → нет успешного Postman результата.

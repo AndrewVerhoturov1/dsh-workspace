@@ -41,6 +41,7 @@ if str(WEB_DIR) not in sys.path:
     sys.path.insert(0, str(WEB_DIR))
 
 import request_identity  # noqa: E402
+import runtime_support as runtime  # noqa: E402
 
 DEFAULT_REPOSITORY = "AndrewVerhoturov1/dsh-workspace"
 DEFAULT_ORIGIN_REF = "origin/main"
@@ -104,6 +105,7 @@ def _run_git(repo_root: Path, *args: str, check: bool = True) -> subprocess.Comp
             text=True,
             encoding="utf-8",
             errors="replace",
+            **runtime.quiet_subprocess_kwargs(),
         )
     except FileNotFoundError as exc:
         raise IntegrationError("GIT_MISSING", "git executable is not available") from exc
