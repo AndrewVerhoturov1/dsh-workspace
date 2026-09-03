@@ -31,6 +31,7 @@ import zipfile
 import artifact_detector as detector
 import request_identity as identity
 
+import runtime_support as runtime
 DOWNLOAD_STARTING = "DOWNLOAD_STARTING"
 DOWNLOAD_STARTED = "DOWNLOAD_STARTED"
 DOWNLOAD_COMPLETED = "DOWNLOAD_COMPLETED"
@@ -48,7 +49,7 @@ RESULT_STORE_CONFLICT = "RESULT_STORE_CONFLICT"
 RESULT_STORE_FAILED = "RESULT_STORE_FAILED"
 RESULT_DURABLE = "RESULT_DURABLE"
 
-DEFAULT_BROWSER_DOWNLOAD_DIR = r"D:\Downloads_dsh_auto"
+DEFAULT_BROWSER_DOWNLOAD_DIR = r"D:\Downloads\_dsh\_auto"
 DEFAULT_DOWNLOAD_TIMEOUT_MS = 30000
 DEFAULT_CLICK_TIMEOUT_MS = 10000
 DEFAULT_VALIDATOR_TIMEOUT_SECONDS = 60
@@ -103,10 +104,7 @@ def _result(
 
 
 def default_result_root() -> Path:
-    local_app_data = os.environ.get("LOCALAPPDATA")
-    if not local_app_data:
-        raise RuntimeError("LOCALAPPDATA is required for the default Postman result store")
-    return Path(local_app_data) / "DSH" / "Postman" / "results"
+    return runtime.default_result_root()
 
 
 def _is_link_or_junction(path: Path) -> bool:
@@ -324,6 +322,7 @@ def _run_validator(
             errors="replace",
             timeout=timeout_seconds,
             check=False,
+            **runtime.quiet_subprocess_kwargs(),
         )
     finally:
         try:

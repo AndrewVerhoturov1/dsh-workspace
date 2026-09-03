@@ -12,7 +12,7 @@ description: >-
 
 # Delegate via Postman — Direct Production
 
-`DIRECT_POSTMAN_SKILL_VERSION: 4`
+`DIRECT_POSTMAN_SKILL_VERSION: 5`
 
 ## 0. Золотой путь
 
@@ -284,6 +284,22 @@ if (-not (Test-Path -LiteralPath $bridge -PathType Leaf)) {
 
 Если bridge отсутствует — STOP.
 
+Production wrapper по умолчанию сохраняет durable artifacts в:
+
+```text
+D:\Downloads\_dsh\_auto
+```
+
+`postman.ps1` поддерживает override через `DSH_POSTMAN_RESULT_ROOT` / `-ResultRoot`.
+Direct state, worker state и browser profile остаются в `%LOCALAPPDATA%\DSH\Postman`.
+
+До GitHub task publication и до browser Send Direct Postman обязан создать result root
+и выполнить write-probe. При невозможности записи: `DIRECT_RESULT_ROOT_UNAVAILABLE`
+и `STOP` до отправки prompt.
+
+Если вызывающий shell уже PowerShell, вызывать `postman.ps1` напрямую через `&`.
+Дополнительный nested `pwsh.exe` не является normal production path.
+
 Не искать альтернативный transport.
 Не переходить на Cordis.
 Не переходить на QChat.
@@ -325,11 +341,7 @@ $state = Join-Path $env:LOCALAPPDATA "DSH\Postman\direct\requests\$requestId.jso
 ```powershell
 $bridge = 'C:\Users\andre\.dsh\postman\direct\postman.ps1'
 
-$jsonText = & pwsh.exe `
-  -NoLogo `
-  -NoProfile `
-  -ExecutionPolicy Bypass `
-  -File $bridge `
+$jsonText = & $bridge `
   -RequestId $requestId `
   -Task $payload
 
@@ -468,11 +480,7 @@ error/reason
 исследуется неисправность browser bootstrap/CDP до новой разрешённой отправки.
 
 ```powershell
-& pwsh.exe `
-  -NoLogo `
-  -NoProfile `
-  -ExecutionPolicy Bypass `
-  -File 'C:\Users\andre\.dsh\postman\direct\postman.ps1' `
+& 'C:\Users\andre\.dsh\postman\direct\postman.ps1' `
   -BrowserSmoke
 ```
 

@@ -13,6 +13,8 @@ import zipfile
 
 WEB_DIR = Path(__file__).resolve().parents[1]
 MODULE_PATH = WEB_DIR / "artifact_download.py"
+if str(WEB_DIR) not in sys.path:
+    sys.path.insert(0, str(WEB_DIR))
 
 REQ = "REQ_20260831T161721Z_6373"
 FILENAME = "POSTMAN_REQ_20260831T161721Z_6373_RESULT.zip"

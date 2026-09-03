@@ -37,6 +37,7 @@ if str(WEB_DIR) not in sys.path:
 
 import browser_bootstrap as bootstrap  # noqa: E402
 import request_identity  # noqa: E402
+import runtime_support as runtime  # noqa: E402
 from web_worker_bridge import WebWorkerBridge, RESULT_DURABLE  # noqa: E402
 
 DEFAULT_REPOSITORY = "AndrewVerhoturov1/dsh-workspace"
@@ -268,6 +269,7 @@ class GitHubTaskPublisher:
             errors="replace",
             cwd=self.cwd,
             check=False,
+            **runtime.quiet_subprocess_kwargs(),
         )
         if completed.returncode != 0:
             raise DirectPostmanError(
@@ -380,6 +382,7 @@ class DirectPostman:
         gh_binary: str = DEFAULT_GH_BINARY,
         repo_root: str | os.PathLike[str] | None = None,
         direct_root: str | os.PathLike[str] | None = None,
+        result_root: str | os.PathLike[str] | None = None,
         publisher_factory: Callable[..., GitHubTaskPublisher] = GitHubTaskPublisher,
         bridge_factory: Callable[..., WebWorkerBridge] = WebWorkerBridge,
         ensure_browser: Callable[..., dict[str, Any]] = ensure_dedicated_chrome,
@@ -389,6 +392,12 @@ class DirectPostman:
         self.gh_binary = gh_binary
         self.repo_root = Path(repo_root) if repo_root is not None else SCRIPT_DIR.parents[1]
         self.direct_root = Path(direct_root) if direct_root is not None else default_direct_root()
+        if result_root is not None:
+            self.result_root = Path(result_root)
+        elif direct_root is not None and not os.environ.get(runtime.RESULT_ROOT_ENV):
+            self.result_root = self.direct_root.parent / "results"
+        else:
+            self.result_root = runtime.default_result_root()
         self.publisher_factory = publisher_factory
         self.bridge_factory = bridge_factory
         self.ensure_browser = ensure_browser
@@ -445,7 +454,22 @@ class DirectPostman:
                 f"request {request_id} already has direct transport state; automatic resend is forbidden",
                 details={"statePath": str(self.state_path(request_id))},
             )
-        self._write_state(request_id, STATE_INIT, taskSha256=_sha256_text(task))
+
+        try:
+            self.result_root = runtime.prepare_result_root(self.result_root)
+        except Exception as exc:
+            raise DirectPostmanError(
+                "DIRECT_RESULT_ROOT_UNAVAILABLE",
+                f"Postman result root is unavailable: {self.result_root}",
+                details={"resultRoot": str(self.result_root), "reason": str(exc)[:500]},
+            ) from exc
+
+        self._write_state(
+            request_id,
+            STATE_INIT,
+            taskSha256=_sha256_text(task),
+            resultRoot=str(self.result_root),
+        )
 
         publisher = self.publisher_factory(
             repository=self.repository,
@@ -490,7 +514,7 @@ class DirectPostman:
         self._write_state(request_id, STATE_BROWSER_READY, browser=browser)
 
         bridge_root = self.direct_root.parent
-        bridge = self.bridge_factory(root=bridge_root, result_root=bridge_root / "results")
+        bridge = self.bridge_factory(root=bridge_root, result_root=self.result_root)
         self._write_state(request_id, STATE_WEB_RUNNING)
         result = bridge.run_request(
             request_id,
@@ -530,6 +554,7 @@ class DirectPostman:
             expectedFilename=expected_filename,
             resultZip=result_zip,
             sha256=sha256,
+            resultRoot=str(self.result_root),
             browser=browser,
             statePath=str(self.state_path(request_id)),
         )
@@ -548,6 +573,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--gh-binary", default=DEFAULT_GH_BINARY)
     parser.add_argument("--repo-root")
     parser.add_argument("--direct-root")
+    parser.add_argument("--result-root")
     parser.add_argument("--cdp-url", default=bootstrap.DEFAULT_CDP_URL)
     parser.add_argument("--allow-path", action="append", default=[])
     parser.add_argument("--forbid-path", action="append", default=[])
@@ -574,6 +600,7 @@ def main(argv: list[str] | None = None) -> int:
             gh_binary=args.gh_binary,
             repo_root=args.repo_root,
             direct_root=args.direct_root,
+            result_root=args.result_root,
         )
         if args.browser_smoke:
             result = direct.browser_smoke(cdp_url=args.cdp_url)

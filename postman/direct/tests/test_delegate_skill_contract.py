@@ -16,7 +16,7 @@ class DelegateViaPostmanSkillContract(unittest.TestCase):
         cls.agents = AGENTS.read_text(encoding="utf-8")
 
     def test_version_and_entrypoint(self):
-        self.assertIn("DIRECT_POSTMAN_SKILL_VERSION: 4", self.skill)
+        self.assertIn("DIRECT_POSTMAN_SKILL_VERSION: 5", self.skill)
         self.assertIn(r"C:\Users\andre\.dsh\postman\direct\postman.ps1", self.skill)
 
     def test_old_callable_path_is_not_present(self):
@@ -73,6 +73,16 @@ class DelegateViaPostmanSkillContract(unittest.TestCase):
         self.assertIn("RESULT_DIAGNOSTIC_ONLY", self.skill)
         self.assertIn("exact bytes", self.skill)
         self.assertIn("foreground-вызов", self.skill)
+
+    def test_wp018a_storage_and_quiet_contract(self):
+        self.assertIn(r"D:\Downloads\_dsh\_auto", self.skill)
+        self.assertIn("DSH_POSTMAN_RESULT_ROOT", self.skill)
+        self.assertIn("DIRECT_RESULT_ROOT_UNAVAILABLE", self.skill)
+        normal = self.skill.split("## 8. Единственный production-вызов", 1)[1].split(
+            "## 9. Разбор JSON и success gate", 1
+        )[0]
+        self.assertIn("$jsonText = & $bridge", normal)
+        self.assertNotIn("$jsonText = & pwsh.exe", normal)
 
     def test_normal_smoke_is_forbidden(self):
         self.assertIn("BrowserSmoke не является normal preflight", self.skill)
