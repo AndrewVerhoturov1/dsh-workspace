@@ -8,11 +8,18 @@
 <body>
   <h1>WP-018 E2E PASS</h1>
   <button id="check" type="button">Проверить</button>
+  <br>
+  <button id="red-check" type="button" style="background-color: red; color: white;">Красная проверка</button>
+  <p id="red-result" hidden>Красная кнопка работает</p>
   <p id="result" hidden>Postman работает</p>
 
   <script>
     document.getElementById('check').addEventListener('click', function () {
       document.getElementById('result').hidden = false;
+    });
+
+    document.getElementById('red-check').addEventListener('click', function () {
+      document.getElementById('red-result').hidden = false;
     });
   </script>
 </body>
