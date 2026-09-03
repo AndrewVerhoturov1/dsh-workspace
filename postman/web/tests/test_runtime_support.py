@@ -71,10 +71,10 @@ class WP018AStorageQuietTests(unittest.TestCase):
         self.assertIn("quiet_subprocess_kwargs", direct)
         self.assertIn(r'DEFAULT_BROWSER_DOWNLOAD_DIR = r"D:\Downloads\_dsh\_auto"', downloader)
         self.assertIn("quiet_subprocess_kwargs", downloader)
-        self.assertIn("DIRECT_POSTMAN_SKILL_VERSION: 5", skill)
+        self.assertIn("DIRECT_POSTMAN_SKILL_VERSION: 6", skill)
 
         normal = skill.split("## 8. Единственный production-вызов", 1)[1].split(
-            "## 9. Разбор JSON и success gate", 1
+            "## 9. Разбор JSON и минимальный transport gate", 1
         )[0]
         self.assertIn("$jsonText = & $bridge", normal)
         self.assertNotIn("$jsonText = & pwsh.exe", normal)
