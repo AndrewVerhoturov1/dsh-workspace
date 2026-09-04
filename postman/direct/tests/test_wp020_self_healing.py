@@ -81,6 +81,27 @@ def old_result(root: Path, primary: Path, worktree: Path, commit: str) -> Path:
     return published
 
 
+def legacy_result(root: Path, *, retained_markers: dict | None = None) -> Path:
+    handoff = root / "handoff" / OLD_REQ
+    handoff.mkdir(parents=True)
+    published = handoff / "published.json"
+    data = {
+        "ok": True,
+        "code": "PUBLISHED",
+        "requestId": OLD_REQ,
+        "repository": REPO,
+        "prNumber": 301,
+        "commitSha": "a" * 40,
+        "branch": OLD_BRANCH,
+        "worktreeRemoved": True,
+        "publishVersion": 1,
+    }
+    if retained_markers:
+        data.update(retained_markers)
+    common.atomic_write_json(published, data)
+    return published
+
+
 class FakeGitHub:
     def __init__(self, pr: dict | None = None, open_prs: list[dict] | None = None):
         self.pr = pr
@@ -161,6 +182,73 @@ class WP020SelfHealingTests(unittest.TestCase):
             self.assertNotIn(OLD_BRANCH, git(primary, "branch", "--format=%(refname:short)").splitlines())
             self.assertIn(common.canonical_branch_name(NEW_REQ), git(primary, "branch", "--format=%(refname:short)"))
             self.assertTrue(published.exists())
+
+    def test_legacy_published_receipt_without_live_resources_is_ignored(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _, primary, _ = init_repo(root)
+            published = legacy_result(root)
+            with patch.object(common, "normalize_remote_repository", return_value=REPO):
+                result = prepare_result.preflight_policy(
+                    primary,
+                    repository=REPO,
+                    handoff_root=root / "handoff",
+                    gh_api=FakeGitHub(),
+                )
+            self.assertEqual([], result["selfHealingCleanup"])
+            self.assertTrue(published.exists())
+
+    def test_legacy_receipt_does_not_hide_unknown_live_branch(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _, primary, _ = init_repo(root)
+            legacy_result(root)
+            git(primary, "branch", OLD_BRANCH, "main")
+            with self.assertRaises(common.FinalizationError) as ctx:
+                with patch.object(common, "normalize_remote_repository", return_value=REPO):
+                    prepare_result.preflight_policy(
+                        primary,
+                        repository=REPO,
+                        handoff_root=root / "handoff",
+                        gh_api=FakeGitHub(),
+                    )
+            self.assertEqual("PREPARE_UNKNOWN_POSTMAN_RESOURCE", ctx.exception.code)
+            self.assertIn(OLD_BRANCH, ctx.exception.details["localBranches"])
+
+    def test_legacy_receipt_does_not_hide_unknown_worktree(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _, primary, _ = init_repo(root)
+            legacy_result(root)
+            extra = root / "unknown"
+            git(primary, "worktree", "add", "--detach", str(extra), "main")
+            with self.assertRaises(common.FinalizationError) as ctx:
+                with patch.object(common, "normalize_remote_repository", return_value=REPO):
+                    prepare_result.preflight_policy(
+                        primary,
+                        repository=REPO,
+                        handoff_root=root / "handoff",
+                        gh_api=FakeGitHub(),
+                    )
+            self.assertEqual("PREPARE_UNKNOWN_POSTMAN_RESOURCE", ctx.exception.code)
+            self.assertIn(str(extra.resolve()), ctx.exception.details["worktrees"])
+            self.assertTrue(extra.exists())
+
+    def test_incomplete_retained_receipt_fails_closed(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _, primary, _ = init_repo(root)
+            legacy_result(root, retained_markers={"worktreeRetained": True, "worktreeRemoved": False})
+            with self.assertRaises(common.FinalizationError) as ctx:
+                with patch.object(common, "normalize_remote_repository", return_value=REPO):
+                    prepare_result.preflight_policy(
+                        primary,
+                        repository=REPO,
+                        handoff_root=root / "handoff",
+                        gh_api=FakeGitHub(merged_pr("a" * 40)),
+                    )
+            self.assertEqual("CLEANUP_INVALID_RECEIPT", ctx.exception.code)
+            self.assertIn("missing worktree", str(ctx.exception))
 
     def test_open_pr_blocks_preflight(self):
         with tempfile.TemporaryDirectory() as td:
