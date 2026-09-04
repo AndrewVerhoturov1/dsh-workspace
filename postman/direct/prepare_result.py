@@ -87,6 +87,21 @@ def _published_receipts(handoff_root: Path | None) -> list[Path]:
     return sorted(path for path in handoff_root.glob("*/published.json") if path.is_file())
 
 
+def _is_legacy_published_receipt(published: dict[str, Any]) -> bool:
+    """Identify pre-retained-workspace receipts without weakening live-resource checks."""
+    if published.get("code") != "PUBLISHED":
+        return False
+    if published.get("worktree") or published.get("repoRoot"):
+        return False
+    retained_markers = (
+        published.get("worktreeRetained") is True,
+        published.get("worktreeRemoved") is False,
+        published.get("resultWorkspaceRegistrationRequired") is True,
+        published.get("cleanupAfterMergeRequired") is True,
+    )
+    return not any(retained_markers)
+
+
 def _sync_main_without_overwriting_dirty(repo_root: Path, origin_main: str) -> tuple[str, list[str]]:
     local_main = common.run_git(repo_root, "rev-parse", "refs/heads/main").stdout.strip().lower()
     if re.fullmatch(r"[0-9a-f]{40}", local_main) is None or re.fullmatch(r"[0-9a-f]{40}", origin_main) is None:
@@ -155,6 +170,8 @@ def _classify_and_self_heal(
             raise common.FinalizationError("PREPARE_STALE_RESOURCE_AMBIGUOUS", "old published receipt is unreadable", details={"receipt": str(receipt_path)}) from exc
         if published.get("ok") is not True or published.get("code") != "PUBLISHED" or not _task_branch(published.get("branch")):
             raise common.FinalizationError("PREPARE_STALE_RESOURCE_AMBIGUOUS", "old Postman receipt cannot be classified", details={"receipt": str(receipt_path)})
+        if _is_legacy_published_receipt(published):
+            continue
         try:
             pr_number = int(published["prNumber"])
         except (KeyError, TypeError, ValueError) as exc:
