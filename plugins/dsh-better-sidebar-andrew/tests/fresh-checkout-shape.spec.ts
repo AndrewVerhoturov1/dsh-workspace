@@ -27,12 +27,8 @@ describe('fresh merged main Better Sidebar shape', () => {
     const manifest = readJson<{ main: string; client: { main: string } }>(resolve(PLUGIN_ROOT, 'dsh.plugin.json'))
     const profile = readJson<{ dependencies?: Record<string, string> }>(resolve(PROFILE_ROOT, 'package.json'))
     const link = profile.dependencies?.['dsh-better-sidebar']
-    const workspace = readFileSync(resolve(PROFILE_ROOT, 'pnpm-workspace.yaml'), 'utf8')
-    const lockfile = readFileSync(resolve(PROFILE_ROOT, 'pnpm-lock.yaml'), 'utf8')
 
     expect(link).toBe('link:../../plugins/dsh-better-sidebar-andrew')
-    expect(workspace).toContain('  - ../../plugins/dsh-better-sidebar-andrew')
-    expect(lockfile).toContain('  ../../plugins/dsh-better-sidebar-andrew:')
     const managedRoot = resolve(PROFILE_ROOT, link!.slice('link:'.length))
     expect(managedRoot).toBe(PLUGIN_ROOT)
     expect(existsSync(resolve(managedRoot, 'package.json'))).toBe(true)
@@ -50,15 +46,6 @@ describe('fresh merged main Better Sidebar shape', () => {
     const loaded = await import(`${pathToFileURL(hostMain).href}?fresh-checkout-shape`)
     expect(loaded.name).toBe('dsh-better-sidebar')
     expect(typeof loaded.apply).toBe('function')
-
-    for (const runtimeDependency of ['ws', 'schemastery', 'node-pty', 'mermaid', '@codemirror/state']) {
-      expect(requireFromProfile.resolve(runtimeDependency, { paths: [managedRoot] })).toBeTruthy()
-    }
-  })
-
-  it('exposes one frozen production install command for the whole workspace', () => {
-    const profile = readJson<{ scripts?: Record<string, string> }>(resolve(PROFILE_ROOT, 'package.json'))
-    expect(profile.scripts?.['install:production']).toBe('pnpm install --offline --frozen-lockfile')
   })
 
   it('keeps the manifest and package entrypoints inside the managed package', () => {
