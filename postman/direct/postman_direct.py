@@ -33,12 +33,15 @@ from urllib.parse import quote
 SCRIPT_DIR = Path(__file__).resolve().parent
 POSTMAN_DIR = SCRIPT_DIR.parent
 WEB_DIR = POSTMAN_DIR / "web"
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
 if str(POSTMAN_DIR) not in sys.path:
     sys.path.insert(0, str(POSTMAN_DIR))
 if str(WEB_DIR) not in sys.path:
     sys.path.insert(0, str(WEB_DIR))
 
 import browser_bootstrap as bootstrap  # noqa: E402
+import durable_handoff  # noqa: E402
 import task_package  # noqa: E402
 import request_identity  # noqa: E402
 import runtime_support as runtime  # noqa: E402
@@ -458,6 +461,9 @@ class DirectPostman:
         request_identity.assert_canonical_request_id(request_id)
         return self.direct_root / "requests" / f"{request_id}.json"
 
+    def result_handoff_path(self, request_id: str) -> Path:
+        return durable_handoff.handoff_path(self.direct_root, request_id)
+
     def _write_state(self, request_id: str, state: str, **fields: Any) -> None:
         path = self.state_path(request_id)
         previous: dict[str, Any] = {}
@@ -606,14 +612,10 @@ class DirectPostman:
         sha256 = details.get("resultSha256")
         if not isinstance(result_zip, str) or not result_zip:
             raise DirectPostmanError("DIRECT_RESULT_INVALID", "durable result did not expose resultZip", details=details)
-        self._write_state(
-            request_id,
-            STATE_RESULT_DURABLE,
-            resultZip=result_zip,
-            artifactSha256=sha256,
-            workerDetails=details,
-        )
-        return _json_result(
+
+        state_path = self.state_path(request_id)
+        handoff_path = durable_handoff.handoff_path(self.direct_root, request_id)
+        terminal = _json_result(
             True,
             STATE_RESULT_DURABLE,
             state=STATE_RESULT_DURABLE,
@@ -627,8 +629,37 @@ class DirectPostman:
             sha256=sha256,
             resultRoot=str(self.result_root),
             browser=browser,
-            statePath=str(self.state_path(request_id)),
+            statePath=str(state_path),
+            resultHandoffPath=str(handoff_path.resolve()),
+            handoffVersion=durable_handoff.HANDOFF_VERSION,
         )
+        try:
+            terminal = durable_handoff.validate_terminal(
+                terminal,
+                expected_repository=self.repository,
+                request_id=request_id,
+                expected_state_path=state_path,
+                expected_handoff_path=handoff_path,
+            )
+        except durable_handoff.DurableHandoffError as exc:
+            raise DirectPostmanError("DIRECT_RESULT_INVALID", str(exc), details=exc.details) from exc
+        try:
+            durable_handoff.atomic_write_json(handoff_path, terminal)
+        except OSError as exc:
+            raise DirectPostmanError(
+                "DIRECT_RESULT_HANDOFF_WRITE_FAILED",
+                f"could not persist durable result handoff: {handoff_path}",
+                details={"handoffPath": str(handoff_path), "reason": str(exc)},
+            ) from exc
+
+        self._write_state(
+            request_id,
+            STATE_RESULT_DURABLE,
+            resultZip=result_zip,
+            artifactSha256=terminal["sha256"],
+            workerDetails=details,
+        )
+        return terminal
 
 
 def _build_parser() -> argparse.ArgumentParser:
