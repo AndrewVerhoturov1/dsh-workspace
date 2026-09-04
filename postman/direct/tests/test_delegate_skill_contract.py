@@ -37,11 +37,48 @@ class DelegateViaPostmanSkillContract(unittest.TestCase):
         ):
             self.assertIn(marker, self.skill)
 
-    def test_canonical_at_postman_trigger_and_legacy_compatibility(self):
-        self.assertIn("@Postman <user intent>", self.skill)
-        self.assertRegex(self.skill, r"(?i)канонический и предпочтительный")
-        for legacy_trigger in ("Postman, ...", "Через Postman ...", "Используй Postman ..."):
-            self.assertIn(legacy_trigger, self.skill)
+    def test_exclusive_at_postman_trigger_contract(self):
+        trigger_examples = (
+            "@Postman сделай X",
+            "   @Postman сделай X",
+        )
+        non_trigger_examples = (
+            "Postman сделай X",
+            "Postman, сделай X",
+            "Через Postman сделай X",
+            "Используй Postman",
+            "продолжи проект Postman",
+            "реализуй WP-020",
+            "исправь код Postman",
+            "доработай Direct Postman",
+        )
+
+        trigger_pattern = re.compile(r"^\s*@Postman(?:\s|$)")
+        for message in trigger_examples:
+            self.assertRegex(message, trigger_pattern)
+        for message in non_trigger_examples:
+            self.assertNotRegex(message, trigger_pattern)
+
+        trigger_section = self.skill.split("## 2. Trigger", 1)[1].split(
+            "## 3. Разделение ролей", 1
+        )[0]
+        self.assertIn("Postman по умолчанию OFF", trigger_section)
+        self.assertIn(r"^\s*@Postman(?:\s|$)", trigger_section)
+        for message in non_trigger_examples:
+            self.assertIn(message, trigger_section)
+        self.assertNotIn("Legacy-compatible triggers", trigger_section)
+        self.assertNotIn("Для совместимости остаются", trigger_section)
+
+    def test_postman_permission_is_current_message_only(self):
+        self.assertIn("Postman permission is current-message-only", self.skill)
+        self.assertIn("Разрешение действует только для этого сообщения", self.agents)
+        self.assertIn("не наследуется из предыдущих сообщений", self.agents)
+
+        trigger_pattern = re.compile(r"^\s*@Postman(?:\s|$)")
+        previous_message = "@Postman сделай X"
+        next_message = "продолжи проект Postman"
+        self.assertRegex(previous_message, trigger_pattern)
+        self.assertNotRegex(next_message, trigger_pattern)
 
     def test_at_postman_requires_skill_before_implementation(self):
         self.assertIn("skill(delegate-via-postman)", self.skill)
@@ -107,7 +144,7 @@ class DelegateViaPostmanSkillContract(unittest.TestCase):
 
     def test_failure_is_fail_closed(self):
         self.assertIn("Не создавать автоматически второй REQ", self.skill)
-        self.assertIn("Новая отправка возможна только после нового явного пользовательского разрешения", self.skill)
+        self.assertIn("Новая отправка возможна только после нового пользовательского сообщения с exact `@Postman` trigger", self.skill)
 
     def test_agents_global_invariant(self):
         self.assertIn(
