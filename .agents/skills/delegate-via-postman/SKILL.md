@@ -1,9 +1,10 @@
 ---
 name: delegate-via-postman
 description: >-
-  Использовать только когда пользователь явно выбирает Postman для implementation-задачи.
-  Выполнить задачу через Direct Web Postman: сохранить пользовательский intent без
-  технических дополнений, создать ровно один canonical REQ, один раз вызвать
+  Использовать только когда ТЕКУЩЕЕ пользовательское сообщение после необязательных
+  начальных пробелов начинается с точного литерала @Postman. Выполнить задачу через
+  Direct Web Postman: сохранить пользовательский intent без технических дополнений,
+  создать ровно один canonical REQ, один раз вызвать
   C:\Users\andre\.dsh\postman\direct\postman.ps1, дождаться validated RESULT_DURABLE,
   затем безопасно применить implementation ZIP, проверить изменения и оформить их
   по политике репозитория. Не использовать Cordis/postman_async_send, QChat или
@@ -64,28 +65,49 @@ BrowserSmoke как обычный preflight
 
 ## 2. Trigger
 
-### Канонический trigger
+### Exclusive current-message trigger
 
-Канонический и предпочтительный explicit trigger для Direct Postman:
-
-```text
-@Postman <user intent>
-```
-
-Примеры:
+Postman по умолчанию OFF. Единственный разрешающий trigger — ТЕКУЩЕЕ
+пользовательское сообщение, которое после возможных начальных пробелов начинается с
+точного литерала `@Postman`. Формально принимается только начало:
 
 ```text
-@Postman сделай простой калькулятор.
-@Postman создай страницу проверки.
-@Postman измени существующий файл согласно этому запросу.
+^\s*@Postman(?:\s|$)
 ```
 
-Если исходное пользовательское сообщение начинается с `@Postman`, это однозначный
-explicit Postman trigger для implementation-запроса.
+Это означает:
+
+```text
+@Postman <intent>       → trigger
+   @Postman <intent>     → trigger
+```
+
+Любая другая формулировка — НЕ trigger и не разрешает загрузку skill или запуск
+Postman. В частности, НЕ trigger:
+
+```text
+Postman сделай X
+Postman, сделай X
+Через Postman сделай X
+Используй Postman
+продолжи проект Postman
+реализуй WP-020
+исправь код Postman
+доработай Direct Postman
+```
+
+Само обсуждение Postman transport также не является trigger:
+
+```text
+Как работает Postman?
+Почему Postman использует Chrome?
+Надо ли нам менять Postman?
+```
 
 ### Обязательная загрузка skill до implementation
 
-Первым task-specific действием после такого trigger должен быть вызов:
+Только после exact trigger из текущего сообщения первым task-specific действием должен
+быть вызов:
 
 ```text
 skill(delegate-via-postman)
@@ -104,8 +126,16 @@ implementation shell-команды
 frontend/design skills
 ```
 
-Нельзя начинать самостоятельную реализацию до загрузки `delegate-via-postman`.
-Если `delegate-via-postman` отсутствует, не загружается, недействителен или
+Если `@Postman` отсутствует в текущем сообщении, этот skill не должен загружаться по
+инициативе Luna только потому, что задача связана с Postman, сложна или касается
+разработки самого Postman. В этом случае `delegate-via-postman` не активируется, а
+задача выполняется локально Luna.
+
+Разрешение Postman действует только для текущего пользовательского сообщения и не
+наследуется из предыдущих сообщений: `Postman permission is current-message-only`.
+
+Нельзя начинать самостоятельную реализацию после exact trigger до загрузки
+`delegate-via-postman`. Если skill отсутствует, не загружается, недействителен или
 недоступен, действует fail-closed правило: `STOP`.
 
 При таком отказе запрещены самостоятельная реализация и любой fallback:
@@ -118,29 +148,6 @@ manual browser
 Playwright
 обычная самостоятельная реализация Luna
 ```
-
-### Legacy-compatible triggers
-
-Для совместимости остаются explicit legacy triggers:
-
-```text
-Postman, ...
-Через Postman ...
-Используй Postman ...
-Postman передай это Ч1 и внедри результат.
-```
-
-Для новых пользовательских запросов основной синтаксис — `@Postman`.
-
-Само обсуждение Postman transport не является trigger:
-
-```text
-Как работает Postman?
-Почему Postman использует Chrome?
-Надо ли нам менять Postman?
-```
-
-Если пользователь не выбрал Postman явно, не активируй его из-за сложности задачи.
 
 `QChat` — отдельный transport и не является fallback.
 
@@ -196,15 +203,8 @@ Git/PR
 ```
 
 Удалить можно только префикс `@Postman` и окружающий его пробел. Остальной
-пользовательский intent сохранять буквально по смыслу.
-
-Для legacy-trigger удаляется только его минимальная управляющая часть:
-
-```text
-Postman,
-Через Postman
-Используй Postman
-```
+пользовательский intent сохранять буквально по смыслу. Это правило применяется
+только к сообщению, прошедшему exclusive current-message trigger.
 
 Не добавлять от себя:
 
@@ -223,24 +223,12 @@ test framework
 язык реализации
 ```
 
-Удалить можно только минимальную управляющую часть, выбирающую transport:
-
-```text
-Postman,
-Через Postman
-Используй Postman
-```
-
 Все реальные пользовательские ограничения сохранить.
 
-Если пользователь явно ссылается на предыдущий контекст, например:
-
-```text
-Postman, сделай это по тем размерам, которые мы уже зафиксировали.
-```
-
+Если текущее сообщение с exact `@Postman` явно ссылается на предыдущий контекст,
 разрешено добавить только минимальные факты из предыдущего контекста, без которых
-референт (`это`, `те размеры`, `как раньше`) непонятен Ч1.
+референт (`это`, `те размеры`, `как раньше`) непонятен Ч1. Предыдущее разрешение
+само по себе не является trigger для текущего сообщения.
 
 Это context resolution, а не расширение требований.
 
@@ -249,7 +237,7 @@ Postman, сделай это по тем размерам, которые мы �
 
 ## 5. Не выполнять implementation work перед Ч1
 
-После Postman-trigger нельзя сначала:
+После exact `@Postman` trigger нельзя сначала:
 
 ```text
 исследовать framework
@@ -466,7 +454,7 @@ error/reason
 последнюю доказанную transport-фазу
 ```
 
-Новая отправка возможна только после нового явного пользовательского разрешения.
+Новая отправка возможна только после нового пользовательского сообщения с exact `@Postman` trigger.
 
 ## 12. BrowserSmoke
 
@@ -673,29 +661,31 @@ terminal state
 
 ## 20. Критические инварианты
 
-1. Postman используется только по явному запросу.
-2. До Ч1 не загружать implementation/design skills и не проектировать решение.
-3. User intent не расширяется собственными требованиями Л1.
-4. Один logical request → один REQ.
-5. После начала Direct Postman invocation REQ immutable.
-6. Production transport — только `C:\Users\andre\.dsh\postman\direct\postman.ps1`.
-7. `postman_async_send` и Cordis path не являются production transport.
-8. BrowserSmoke не является normal preflight.
-9. Chrome/ChatGPT/Send/download принадлежат Direct Postman, а не Л1.
-10. После возможной отправки automatic resend запрещён.
-11. Только exact `RESULT_DURABLE` является implementation result.
-12. Не создавать implementation branch только ради transport до результата.
-13. Пользовательский dirty worktree не очищать и не переписывать.
-14. Л1 внедряет результат Ч1, а не заменяет его собственным решением.
-15. После RESULT_DURABLE normal local path — только PREPARE → TEST → PUBLISH.
-16. PREPARE является единственным владельцем branch/worktree/preflight и canonical applicator.
-17. TEST требует exact `TEST_PASSED` receipt и запрещает незамеченную мутацию implementation.
-18. PUBLISH является единственным владельцем stage/commit/push/remote-SHA/PR в normal path.
-19. `files/` payload копируется exact bytes; Л1 не переписывает его через LLM tools.
-20. `RESULT_DIAGNOSTIC_ONLY` не является implementation success и не разрешает automatic resend.
-21. Ни PREPARE, ни TEST, ни PUBLISH не создают новый Postman REQ.
-22. PUBLISH никогда не merge-ит PR автоматически.
-23. Нет validated correlated artifact → нет успешного Postman результата.
+1. Postman OFF по умолчанию; разрешён только при exact `@Postman` в начале текущего пользовательского сообщения после необязательных начальных пробелов.
+2. Разрешение действует только для текущего сообщения и не наследуется из предыдущих сообщений.
+3. Без exact trigger не загружать `delegate-via-postman`, не создавать REQ, не вызывать Direct Postman, не использовать другие Postman transport и не обращаться к Ч1.
+4. До Ч1 не загружать implementation/design skills и не проектировать решение.
+5. User intent не расширяется собственными требованиями Л1.
+6. Один logical request → один REQ.
+7. После начала Direct Postman invocation REQ immutable.
+8. Production transport — только `C:\Users\andre\.dsh\postman\direct\postman.ps1`.
+9. `postman_async_send` и Cordis path не являются production transport.
+10. BrowserSmoke не является normal preflight.
+11. Chrome/ChatGPT/Send/download принадлежат Direct Postman, а не Л1.
+12. После возможной отправки automatic resend запрещён.
+13. Только exact `RESULT_DURABLE` является implementation result.
+14. Не создавать implementation branch только ради transport до результата.
+15. Пользовательский dirty worktree не очищать и не переписывать.
+16. Л1 внедряет результат Ч1, а не заменяет его собственным решением.
+17. После RESULT_DURABLE normal local path — только PREPARE → TEST → PUBLISH.
+18. PREPARE является единственным владельцем branch/worktree/preflight и canonical applicator.
+19. TEST требует exact `TEST_PASSED` receipt и запрещает незамеченную мутацию implementation.
+20. PUBLISH является единственным владельцем stage/commit/push/remote-SHA/PR в normal path.
+21. `files/` payload копируется exact bytes; Л1 не переписывает его через LLM tools.
+22. `RESULT_DIAGNOSTIC_ONLY` не является implementation success и не разрешает automatic resend.
+23. Ни PREPARE, ни TEST, ни PUBLISH не создают новый Postman REQ.
+24. PUBLISH никогда не merge-ит PR автоматически.
+25. Нет validated correlated artifact → нет успешного Postman результата.
 
 
 ## Result Workspace после PUBLISHED
