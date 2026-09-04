@@ -46,6 +46,7 @@ def fixture(root: Path):
     git(worktree, "add", "sample.txt")
     git(worktree, "commit", "-m", "result")
     commit = git(worktree, "rev-parse", "HEAD")
+    git(worktree, "push", "--set-upstream", "origin", branch)
     handoff = root / "handoff" / REQ
     handoff.mkdir(parents=True)
     published = handoff / "published.json"
@@ -73,7 +74,8 @@ def merged_pr(commit: str):
         "number": 91,
         "state": "closed",
         "merged_at": "2026-09-04T00:00:00Z",
-        "head": {"sha": commit},
+        "head": {"sha": commit, "ref": "postman/req-20260904t000000z-0001"},
+        "base": {"ref": "main"},
     }
 
 
@@ -103,7 +105,7 @@ class CleanupPublishedTests(unittest.TestCase):
     def test_removes_clean_worktree_after_merge_and_workspace_unregister(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            _, worktree, published, commit = fixture(root)
+            primary, worktree, published, commit = fixture(root)
             common.atomic_write_json(
                 published.parent / "result-workspace.json",
                 {
@@ -119,8 +121,15 @@ class CleanupPublishedTests(unittest.TestCase):
                 gh_api=lambda *args, **kwargs: merged_pr(commit),
             )
             self.assertEqual("RESULT_WORKTREE_CLEANED", result["code"])
+            self.assertEqual("CLEANED", result["status"])
             self.assertTrue(result["workspaceRegistrationRemoved"])
+            self.assertTrue(result["worktreePruned"])
+            self.assertTrue(result["localBranchRemoved"])
+            self.assertTrue(result["remoteBranchRemoved"])
+            self.assertTrue(result["remoteFetched"])
             self.assertFalse(worktree.exists())
+            self.assertNotIn(result["branch"], git(primary, "branch", "--format=%(refname:short)").splitlines())
+            self.assertNotIn(result["branch"], git(primary, "ls-remote", "--heads", "origin").split())
 
     def test_rejects_cleanup_before_merge(self):
         with tempfile.TemporaryDirectory() as td:
@@ -145,6 +154,108 @@ class CleanupPublishedTests(unittest.TestCase):
                 )
             self.assertEqual("CLEANUP_PR_NOT_MERGED", ctx.exception.code)
             self.assertTrue(worktree.exists())
+
+    def test_rejects_closed_unmerged_pr(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _, worktree, published, commit = fixture(root)
+            common.atomic_write_json(
+                published.parent / "result-workspace.json",
+                {
+                    "status": "RESULT_WORKSPACE_UNREGISTERED",
+                    "requestId": REQ,
+                    "workspaceId": "workspace-91",
+                    "worktree": str(worktree.resolve()),
+                    "workspaceRemoved": True,
+                },
+            )
+            with self.assertRaises(common.FinalizationError) as ctx:
+                cleanup_published.cleanup(
+                    published_json=published,
+                    gh_api=lambda *args, **kwargs: {
+                        "number": 91,
+                        "state": "closed",
+                        "merged_at": None,
+                        "head": {"sha": commit, "ref": "postman/req-20260904t000000z-0001"},
+                        "base": {"ref": "main"},
+                    },
+                )
+            self.assertEqual("CLEANUP_PR_NOT_MERGED", ctx.exception.code)
+            self.assertTrue(worktree.exists())
+
+    def test_rejects_active_result_session(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _, worktree, published, commit = fixture(root)
+            common.atomic_write_json(
+                published.parent / "result-workspace.json",
+                {
+                    "status": "RESULT_WORKSPACE_UNREGISTERED",
+                    "requestId": REQ,
+                    "workspaceId": "workspace-91",
+                    "worktree": str(worktree.resolve()),
+                    "workspaceRemoved": True,
+                    "resultSessionUsingWorktree": True,
+                },
+            )
+            with self.assertRaises(common.FinalizationError) as ctx:
+                cleanup_published.cleanup(
+                    published_json=published,
+                    gh_api=lambda *args, **kwargs: merged_pr(commit),
+                )
+            self.assertEqual("CLEANUP_RESULT_SESSION_ACTIVE", ctx.exception.code)
+            self.assertTrue(worktree.exists())
+
+    def test_rejects_head_sha_mismatch(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _, worktree, published, commit = fixture(root)
+            common.atomic_write_json(
+                published.parent / "result-workspace.json",
+                {
+                    "status": "RESULT_WORKSPACE_UNREGISTERED",
+                    "requestId": REQ,
+                    "workspaceId": "workspace-91",
+                    "worktree": str(worktree.resolve()),
+                    "workspaceRemoved": True,
+                },
+            )
+            (worktree / "sample.txt").write_text("changed after publication\n", encoding="utf-8")
+            git(worktree, "add", "sample.txt")
+            git(worktree, "commit", "-m", "unexpected change")
+            with self.assertRaises(common.FinalizationError) as ctx:
+                cleanup_published.cleanup(
+                    published_json=published,
+                    gh_api=lambda *args, **kwargs: merged_pr(commit),
+                )
+            self.assertEqual("CLEANUP_HEAD_MISMATCH", ctx.exception.code)
+            self.assertTrue(worktree.exists())
+
+    def test_repeated_cleanup_is_already_cleaned(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _, worktree, published, commit = fixture(root)
+            common.atomic_write_json(
+                published.parent / "result-workspace.json",
+                {
+                    "status": "RESULT_WORKSPACE_UNREGISTERED",
+                    "requestId": REQ,
+                    "workspaceId": "workspace-91",
+                    "worktree": str(worktree.resolve()),
+                    "workspaceRemoved": True,
+                },
+            )
+            first = cleanup_published.cleanup(
+                published_json=published,
+                gh_api=lambda *args, **kwargs: merged_pr(commit),
+            )
+            self.assertEqual("CLEANED", first["status"])
+            second = cleanup_published.cleanup(
+                published_json=published,
+                gh_api=lambda *args, **kwargs: self.fail("already cleaned must not query PR"),
+            )
+            self.assertEqual("ALREADY_CLEANED", second["code"])
+            self.assertTrue(second["alreadyCleaned"])
 
     def test_rejects_dirty_worktree(self):
         with tempfile.TemporaryDirectory() as td:

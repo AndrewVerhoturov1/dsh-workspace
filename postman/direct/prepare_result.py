@@ -14,11 +14,12 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+import cleanup_published  # noqa: E402
 import finalization_common as common  # noqa: E402
 import integrate_result  # noqa: E402
 import request_identity  # noqa: E402
 
-PREPARE_VERSION = 1
+PREPARE_VERSION = 2
 
 
 def _load_terminal_json(path: str) -> dict[str, Any]:
@@ -76,12 +77,145 @@ def _remote_branches(repo_root: Path) -> list[str]:
     return sorted(branches)
 
 
+def _task_branch(value: Any) -> bool:
+    return isinstance(value, str) and value.startswith("postman/req-")
+
+
+def _published_receipts(handoff_root: Path | None) -> list[Path]:
+    if handoff_root is None or not handoff_root.is_dir():
+        return []
+    return sorted(path for path in handoff_root.glob("*/published.json") if path.is_file())
+
+
+def _sync_main_without_overwriting_dirty(repo_root: Path, origin_main: str) -> tuple[str, list[str]]:
+    local_main = common.run_git(repo_root, "rev-parse", "refs/heads/main").stdout.strip().lower()
+    if re.fullmatch(r"[0-9a-f]{40}", local_main) is None or re.fullmatch(r"[0-9a-f]{40}", origin_main) is None:
+        raise common.FinalizationError("PREPARE_GIT_STATE_INVALID", "main refs must be full commit SHAs")
+    ancestry = common.run_git(repo_root, "merge-base", "--is-ancestor", local_main, origin_main, check=False)
+    if ancestry.returncode != 0:
+        raise common.FinalizationError(
+            "PREPARE_LOCAL_MAIN_DIVERGED",
+            "local main is ahead/diverged from origin/main; refusing automatic branch creation",
+            details={"localMain": local_main, "originMain": origin_main},
+        )
+    incoming = [path for path in common.run_git(repo_root, "diff", "--name-only", f"{local_main}..{origin_main}").stdout.splitlines() if path]
+    dirty = common.changed_paths(repo_root)
+    overlap = sorted(set(incoming).intersection(dirty))
+    if overlap:
+        raise common.FinalizationError(
+            "PREPARE_LOCAL_MAIN_OVERLAP",
+            "dirty main overlaps incoming origin/main changes; refusing ff-only synchronization",
+            details={"overlap": overlap, "localMain": local_main, "originMain": origin_main},
+        )
+    if local_main != origin_main:
+        ff = common.run_git(repo_root, "merge", "--ff-only", "origin/main", check=False)
+        if ff.returncode != 0:
+            raise common.FinalizationError(
+                "PREPARE_LOCAL_MAIN_SYNC_FAILED",
+                "safe ff-only synchronization of main failed",
+                details={"stdout": ff.stdout[-2000:], "stderr": ff.stderr[-2000:]},
+            )
+    return origin_main, overlap
+
+
+def _classify_and_self_heal(
+    repo_root: Path,
+    *,
+    repository: str,
+    handoff_root: Path | None,
+    gh_binary: str,
+    gh_api: Callable[..., Any],
+) -> list[dict[str, Any]]:
+    local_branches = _local_branches(repo_root)
+    remote_branches = _remote_branches(repo_root)
+    task_local = {branch for branch in local_branches if _task_branch(branch)}
+    task_remote = {branch for branch in remote_branches if _task_branch(branch)}
+    worktrees = common.registered_worktree_paths(repo_root)
+    other_worktrees = {path for path in worktrees if path != repo_root.resolve()}
+
+    open_prs = gh_api(repository, f"repos/{repository}/pulls?state=open&per_page=100", gh_binary=gh_binary)
+    if not isinstance(open_prs, list):
+        raise common.FinalizationError("PREPARE_GITHUB_FAILED", "open PR response must be an array")
+    open_task_prs = [
+        pr for pr in open_prs
+        if isinstance(pr, dict) and isinstance(pr.get("head"), dict) and _task_branch(pr["head"].get("ref"))
+    ]
+    if open_task_prs:
+        raise common.FinalizationError(
+            "PREPARE_STALE_PR_OPEN",
+            "an open Postman implementation PR must be resolved before PREPARE",
+            details={"pullRequests": [pr.get("number") for pr in open_task_prs]},
+        )
+
+    candidates: list[tuple[Path, dict[str, Any]]] = []
+    for receipt_path in _published_receipts(handoff_root):
+        try:
+            published = common.load_json_file(receipt_path)
+        except common.FinalizationError as exc:
+            raise common.FinalizationError("PREPARE_STALE_RESOURCE_AMBIGUOUS", "old published receipt is unreadable", details={"receipt": str(receipt_path)}) from exc
+        if published.get("ok") is not True or published.get("code") != "PUBLISHED" or not _task_branch(published.get("branch")):
+            raise common.FinalizationError("PREPARE_STALE_RESOURCE_AMBIGUOUS", "old Postman receipt cannot be classified", details={"receipt": str(receipt_path)})
+        try:
+            pr_number = int(published["prNumber"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise common.FinalizationError("PREPARE_STALE_RESOURCE_AMBIGUOUS", "old receipt has no valid PR number", details={"receipt": str(receipt_path)}) from exc
+        pr = gh_api(repository, f"repos/{repository}/pulls/{pr_number}", gh_binary=gh_binary)
+        if not isinstance(pr, dict):
+            raise common.FinalizationError("PREPARE_STALE_RESOURCE_AMBIGUOUS", "old PR response is invalid", details={"prNumber": pr_number})
+        state = str(pr.get("state") or "").lower()
+        if state == "open":
+            raise common.FinalizationError("PREPARE_STALE_PR_OPEN", "old Postman PR is still open", details={"prNumber": pr_number})
+        if not pr.get("merged_at"):
+            if state == "closed":
+                raise common.FinalizationError("PREPARE_STALE_PR_CLOSED_UNMERGED", "old Postman PR was closed without merge", details={"prNumber": pr_number})
+            raise common.FinalizationError("PREPARE_STALE_RESOURCE_AMBIGUOUS", "old Postman PR state is ambiguous", details={"prNumber": pr_number, "state": pr.get("state")})
+        if state != "closed":
+            raise common.FinalizationError("PREPARE_STALE_RESOURCE_AMBIGUOUS", "merged Postman PR has an ambiguous state", details={"prNumber": pr_number, "state": pr.get("state")})
+        candidates.append((receipt_path, published))
+
+    candidate_branches = {str(published["branch"]) for _, published in candidates}
+    candidate_worktrees = {Path(str(published["worktree"])).resolve() for _, published in candidates if published.get("worktree")}
+    unknown_local = sorted(task_local - candidate_branches)
+    unknown_remote = sorted(task_remote - candidate_branches)
+    unknown_worktrees = sorted(str(path) for path in other_worktrees - candidate_worktrees)
+    if unknown_local or unknown_remote or unknown_worktrees:
+        raise common.FinalizationError(
+            "PREPARE_UNKNOWN_POSTMAN_RESOURCE",
+            "unknown Postman branch or worktree exists; nothing will be deleted",
+            details={"localBranches": unknown_local, "remoteBranches": unknown_remote, "worktrees": unknown_worktrees},
+        )
+
+    # Validate every candidate before mutating any of them, preventing partial cleanup.
+    contexts = [
+        cleanup_published.validate_cleanup(
+            published_json=receipt_path,
+            gh_binary=gh_binary,
+            gh_api=gh_api,
+            repo_root=repo_root,
+        )
+        for receipt_path, _ in candidates
+    ]
+    results: list[dict[str, Any]] = []
+    for (receipt_path, _), context in zip(candidates, contexts):
+        if context.get("already") is not None:
+            results.append(context["already"])
+        else:
+            results.append(cleanup_published.cleanup(
+                published_json=receipt_path,
+                gh_binary=gh_binary,
+                gh_api=gh_api,
+                repo_root=repo_root,
+            ))
+    return results
+
+
 def preflight_policy(
     repo_root: Path,
     *,
     repository: str,
     gh_binary: str = "gh",
     gh_api: Callable[..., Any] = _gh_api,
+    handoff_root: Path | None = None,
 ) -> dict[str, Any]:
     if not (repo_root / "REPO_POLICY.md").is_file():
         raise common.FinalizationError("PREPARE_POLICY_MISSING", "REPO_POLICY.md is required")
@@ -112,23 +246,25 @@ def preflight_policy(
         )
 
     common.run_git(repo_root, "fetch", "--quiet", "origin")
+    origin_main = common.run_git(repo_root, "rev-parse", "origin/main").stdout.strip().lower()
+    local_main, _ = _sync_main_without_overwriting_dirty(repo_root, origin_main)
+    self_healing = _classify_and_self_heal(
+        repo_root,
+        repository=repository,
+        handoff_root=handoff_root,
+        gh_binary=gh_binary,
+        gh_api=gh_api,
+    )
 
     local_branches = _local_branches(repo_root)
-    non_main_local = [x for x in local_branches if x != "main"]
-    if non_main_local:
-        raise common.FinalizationError(
-            "PREPARE_POLICY_BLOCKED",
-            "temporary local branch exists; repository policy forbids creating another",
-            details={"localBranches": non_main_local},
-        )
-
     remote_branches = _remote_branches(repo_root)
+    non_main_local = [x for x in local_branches if x != "main"]
     non_main_remote = [x for x in remote_branches if x != "main"]
-    if non_main_remote:
+    if non_main_local or non_main_remote:
         raise common.FinalizationError(
             "PREPARE_POLICY_BLOCKED",
-            "temporary origin branch exists; repository policy forbids creating another",
-            details={"remoteBranches": non_main_remote},
+            "unclassified temporary branch exists; repository policy forbids creating another",
+            details={"localBranches": non_main_local, "remoteBranches": non_main_remote},
         )
 
     open_prs = gh_api(repository, f"repos/{repository}/pulls?state=open&per_page=100", gh_binary=gh_binary)
@@ -150,32 +286,19 @@ def preflight_policy(
             details={"worktrees": other_worktrees},
         )
 
-    origin_main = common.run_git(repo_root, "rev-parse", "origin/main").stdout.strip().lower()
-    local_main = common.run_git(repo_root, "rev-parse", "refs/heads/main").stdout.strip().lower()
-    for field, value in (("originMain", origin_main), ("localMain", local_main)):
-        if re.fullmatch(r"[0-9a-f]{40}", value) is None:
-            raise common.FinalizationError("PREPARE_GIT_STATE_INVALID", f"{field} is not a full commit SHA")
-
-    ancestry = common.run_git(repo_root, "merge-base", "--is-ancestor", local_main, origin_main, check=False)
-    if ancestry.returncode != 0:
-        raise common.FinalizationError(
-            "PREPARE_LOCAL_MAIN_DIVERGED",
-            "local main is ahead/diverged from origin/main; refusing automatic branch creation",
-            details={"localMain": local_main, "originMain": origin_main},
-        )
-
     dirty = common.run_git(repo_root, "status", "--porcelain", "--untracked-files=all").stdout.splitlines()
     policy_sha = common.sha256_file(repo_root / "REPO_POLICY.md")
     return {
         "originMain": origin_main,
         "localMain": local_main,
-        "localMainBehindAllowed": local_main != origin_main,
+        "localMainBehindAllowed": False,
         "primaryDirty": dirty[:100],
         "policySha256": policy_sha,
         "localBranches": local_branches,
         "remoteBranches": remote_branches,
         "openPullRequests": [],
         "worktrees": [str(p) for p in worktrees],
+        "selfHealingCleanup": self_healing,
     }
 
 
@@ -212,7 +335,14 @@ def prepare(
     terminal = _load_terminal_json(result_json)
     request_id, repository = _minimal_terminal_identity(terminal, expected_repository)
 
-    policy = preflight_policy(repo_root, repository=repository, gh_binary=gh_binary, gh_api=gh_api)
+    root = handoff_root or common.default_handoff_root()
+    policy = preflight_policy(
+        repo_root,
+        repository=repository,
+        gh_binary=gh_binary,
+        gh_api=gh_api,
+        handoff_root=root,
+    )
     branch = common.canonical_branch_name(request_id)
     worktree_parent = worktree_root or common.default_worktree_root()
     worktree = (worktree_parent / request_id).resolve()
