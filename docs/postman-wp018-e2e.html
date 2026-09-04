@@ -14,6 +14,9 @@
   <button id="green-check" type="button" style="background-color: green; color: white;">Зелёная проверка</button>
   <br>
   <button id="purple-check" type="button" style="background-color: purple; color: white;">Фиолетовая проверка</button>
+  <br>
+  <button id="pink-check" type="button" style="background-color: pink;">Розовая проверка</button>
+  <p id="pink-result" hidden>Розовая кнопка работает</p>
   <p id="purple-result" hidden>Фиолетовая кнопка работает</p>
   <p id="green-result" hidden>Зелёная кнопка работает</p>
   <p id="red-result" hidden>Красная кнопка работает</p>
@@ -25,13 +28,15 @@
     document.getElementById('red-check').addEventListener('click', function () {
       document.getElementById('red-result').hidden = false;
     });
-
     document.getElementById('green-check').addEventListener('click', function () {
       document.getElementById('green-result').hidden = false;
     });
 
     document.getElementById('purple-check').addEventListener('click', function () {
       document.getElementById('purple-result').hidden = false;
+    });
+    document.getElementById('pink-check').addEventListener('click', function () {
+      document.getElementById('pink-result').hidden = false;
     });
   </script>
 </body>
