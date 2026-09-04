@@ -310,7 +310,7 @@ function makeCssPlugin(pluginId: string): BuildPlugin {
           minify: true,
         })
         const classMap: Record<string, string> = {}
-        for (const [local, exp] of Object.entries(cssExports ?? {})) classMap[local] = exp.name
+        for (const [local, exp] of Object.entries(cssExports ?? {}).sort(([a], [b]) => a.localeCompare(b))) classMap[local] = exp.name
         return [
           injectTag(pluginId, fileId, code.toString()),
           `export default ${JSON.stringify(classMap)};`,

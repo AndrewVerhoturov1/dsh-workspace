@@ -61,6 +61,7 @@
     "lib/client-mermaid.js",
     "lib/types/**/*.d.ts",
     "src",
+    "scripts/clean-lib.mjs",
     "scripts/install.sh",
     "scripts/install.ps1",
     "cordis.patch.yml",
@@ -163,7 +164,7 @@
     "vitest": "^4.1.8"
   },
   "scripts": {
-    "build": "rm -rf lib && tsc -p tsconfig.build.json && tsdown",
+    "build": "node scripts/clean-lib.mjs && tsc -p tsconfig.build.json && tsdown",
     "typecheck": "tsc --noEmit",
     "bundle": "tsdown",
     "watch": "tsdown --watch",

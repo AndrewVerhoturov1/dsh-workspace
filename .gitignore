@@ -20,6 +20,9 @@ backup/
 **/dist/
 **/build/
 **/lib/
+!plugins/dsh-better-sidebar-andrew/lib
+!plugins/dsh-better-sidebar-andrew/lib/
+!plugins/dsh-better-sidebar-andrew/lib/**
 
 # Локальные временные файлы инструментов
 .playwright-cli/
