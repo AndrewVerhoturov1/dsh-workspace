@@ -1,6 +1,9 @@
 {
   "name": "dsh-profile-web",
   "private": true,
+  "scripts": {
+    "install:production": "node scripts/install-production.mjs"
+  },
   "dsh": {
     "profile": {
       "bundles": [

@@ -25,10 +25,12 @@ describe('fresh merged main Better Sidebar shape', () => {
   it('keeps the managed link, tracked entrypoints, and loadable host plugin self-contained', async () => {
     const packageJson = readJson<{ main: string }>(resolve(PLUGIN_ROOT, 'package.json'))
     const manifest = readJson<{ main: string; client: { main: string } }>(resolve(PLUGIN_ROOT, 'dsh.plugin.json'))
-    const profile = readJson<{ dependencies?: Record<string, string> }>(resolve(PROFILE_ROOT, 'package.json'))
+    const profile = readJson<{ dependencies?: Record<string, string>; scripts?: Record<string, string> }>(resolve(PROFILE_ROOT, 'package.json'))
     const link = profile.dependencies?.['dsh-better-sidebar']
 
     expect(link).toBe('link:../../plugins/dsh-better-sidebar-andrew')
+    expect(profile.scripts?.['install:production']).toBe('node scripts/install-production.mjs')
+    expect(existsSync(resolve(PROFILE_ROOT, 'scripts/install-production.mjs'))).toBe(true)
     const managedRoot = resolve(PROFILE_ROOT, link!.slice('link:'.length))
     expect(managedRoot).toBe(PLUGIN_ROOT)
     expect(existsSync(resolve(managedRoot, 'package.json'))).toBe(true)
