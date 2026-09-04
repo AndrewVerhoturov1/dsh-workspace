@@ -15,6 +15,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import cleanup_published  # noqa: E402
+import durable_handoff  # noqa: E402
 import finalization_common as common  # noqa: E402
 import integrate_result  # noqa: E402
 import request_identity  # noqa: E402
@@ -338,6 +339,111 @@ def _cleanup_owned_clean_worktree(repo_root: Path, worktree: Path, branch: str) 
     return details
 
 
+def _resume_error(exc: durable_handoff.DurableHandoffError, source: Path) -> common.FinalizationError:
+    code = f"PREPARE_{exc.code}" if exc.code.startswith("RESUME_") else "PREPARE_RESUME_INVALID"
+    details = {"source": str(source), **exc.details}
+    return common.FinalizationError(code, str(exc), details=details)
+
+
+def _load_resume_handoff(
+    *,
+    request_id: str,
+    expected_repository: str,
+    direct_root: Path | None = None,
+) -> Path:
+    try:
+        request_identity.assert_canonical_request_id(request_id)
+    except ValueError as exc:
+        raise common.FinalizationError("PREPARE_RESUME_REQUEST_INVALID", "requestId is not canonical") from exc
+
+    root = (direct_root or (common.default_postman_root() / "direct")).resolve()
+    persisted = durable_handoff.handoff_path(root, request_id)
+    state = durable_handoff.state_path(root, request_id)
+
+    if persisted.is_file():
+        try:
+            data = common.load_json_file(persisted)
+            durable_handoff.validate_terminal(
+                data,
+                expected_repository=expected_repository,
+                request_id=request_id,
+                expected_state_path=state,
+                expected_handoff_path=persisted,
+            )
+        except durable_handoff.DurableHandoffError as exc:
+            raise _resume_error(exc, persisted) from exc
+        except common.FinalizationError as exc:
+            raise common.FinalizationError(
+                "PREPARE_RESUME_INVALID",
+                "durable result handoff is unreadable",
+                details={"source": str(persisted), "error": str(exc)},
+            ) from exc
+        return persisted
+
+    if not state.is_file():
+        raise common.FinalizationError(
+            "PREPARE_RESUME_NOT_FOUND",
+            "no canonical durable handoff or direct state exists for request",
+            details={"requestId": request_id, "handoffPath": str(persisted), "statePath": str(state)},
+        )
+
+    try:
+        direct_state = common.load_json_file(state)
+        normalized = durable_handoff.recover_legacy_direct_state(
+            direct_state,
+            request_id=request_id,
+            expected_repository=expected_repository,
+            direct_root=root,
+        )
+    except durable_handoff.DurableHandoffError as exc:
+        raise _resume_error(exc, state) from exc
+    except common.FinalizationError as exc:
+        raise common.FinalizationError(
+            "PREPARE_RESUME_INVALID",
+            "legacy direct state is unreadable",
+            details={"source": str(state), "error": str(exc)},
+        ) from exc
+
+    try:
+        durable_handoff.atomic_write_json(persisted, normalized)
+    except OSError as exc:
+        raise common.FinalizationError(
+            "PREPARE_RESUME_HANDOFF_WRITE_FAILED",
+            "could not persist recovered durable result handoff",
+            details={"handoffPath": str(persisted), "reason": str(exc)},
+        ) from exc
+    return persisted
+
+
+def prepare_from_request_id(
+    *,
+    request_id: str,
+    repo_root: Path,
+    expected_repository: str = common.DEFAULT_REPOSITORY,
+    gh_binary: str = "gh",
+    worktree_root: Path | None = None,
+    handoff_root: Path | None = None,
+    direct_root: Path | None = None,
+    gh_api: Callable[..., Any] = _gh_api,
+    integrator: Callable[..., dict[str, Any]] = integrate_result.integrate,
+) -> dict[str, Any]:
+    normalized = _load_resume_handoff(
+        request_id=request_id,
+        expected_repository=expected_repository,
+        direct_root=direct_root,
+    )
+    return prepare(
+        result_json=str(normalized),
+        repo_root=repo_root,
+        expected_repository=expected_repository,
+        gh_binary=gh_binary,
+        worktree_root=worktree_root,
+        handoff_root=handoff_root,
+        gh_api=gh_api,
+        integrator=integrator,
+    )
+
+
 def prepare(
     *,
     result_json: str,
@@ -433,26 +539,43 @@ def prepare(
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Deterministic Postman PREPARE coordinator")
-    parser.add_argument("--result-json", required=True)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--result-json")
+    source.add_argument("--request-id", help="resume from the canonical durable direct handoff")
     parser.add_argument("--repo-root", required=True)
     parser.add_argument("--expected-repository", default=common.DEFAULT_REPOSITORY)
     parser.add_argument("--gh-binary", default="gh")
     parser.add_argument("--worktree-root")
     parser.add_argument("--handoff-root")
+    parser.add_argument("--direct-root")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        result = prepare(
-            result_json=args.result_json,
-            repo_root=Path(args.repo_root).resolve(),
-            expected_repository=args.expected_repository,
-            gh_binary=args.gh_binary,
-            worktree_root=Path(args.worktree_root).resolve() if args.worktree_root else None,
-            handoff_root=Path(args.handoff_root).resolve() if args.handoff_root else None,
-        )
+        repo_root = Path(args.repo_root).resolve()
+        worktree_root = Path(args.worktree_root).resolve() if args.worktree_root else None
+        handoff_root = Path(args.handoff_root).resolve() if args.handoff_root else None
+        if args.request_id:
+            result = prepare_from_request_id(
+                request_id=args.request_id,
+                repo_root=repo_root,
+                expected_repository=args.expected_repository,
+                gh_binary=args.gh_binary,
+                worktree_root=worktree_root,
+                handoff_root=handoff_root,
+                direct_root=Path(args.direct_root).resolve() if args.direct_root else None,
+            )
+        else:
+            result = prepare(
+                result_json=args.result_json,
+                repo_root=repo_root,
+                expected_repository=args.expected_repository,
+                gh_binary=args.gh_binary,
+                worktree_root=worktree_root,
+                handoff_root=handoff_root,
+            )
         print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
         return 0
     except common.FinalizationError as exc:

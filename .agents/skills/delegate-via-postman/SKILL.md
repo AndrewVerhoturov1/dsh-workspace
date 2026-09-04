@@ -13,7 +13,7 @@ description: >-
 
 # Delegate via Postman — Direct Production
 
-`DIRECT_POSTMAN_SKILL_VERSION: 9`
+`DIRECT_POSTMAN_SKILL_VERSION: 10`
 
 ## 0. Золотой путь
 
@@ -404,6 +404,46 @@ $result.requestId == exact $requestId
 baseCommit и application принадлежит deterministic PREPARE/applicator.
 
 После `RESULT_DURABLE` не открывать ChatGPT для визуального подтверждения.
+
+### Канонический durable handoff и resume
+
+После успешного `RESULT_DURABLE` Direct Postman атомарно сохраняет тот же
+канонический terminal JSON в deterministic path:
+
+```text
+C:\Users\andre\AppData\Local\DSH\Postman\direct\results\<REQ>.json
+```
+
+Этот файл является durable источником истины для локального продолжения. Он
+содержит `ok=true`, `code=RESULT_DURABLE`, `state=RESULT_DURABLE`, transport identity,
+`baseCommit`, `taskPublicationCommit`, `taskUrl`, `expectedFilename`, `resultZip`,
+`sha256`, `resultRoot` и `statePath`.
+
+Если `$jsonText` ещё доступен, normal PREPARE передаёт его без изменений:
+
+```powershell
+& 'C:\Users\andre\.dsh\postman\direct\prepare_result.ps1' `
+  -ResultJsonText $jsonText `
+  -RepoRoot 'C:\Users\andre\.dsh'
+```
+
+После перезапуска процесса `$jsonText` не реконструировать вручную. Использовать
+только явно названный resume mode:
+
+```powershell
+& 'C:\Users\andre\.dsh\postman\direct\prepare_result.ps1' `
+  -RequestId $requestId `
+  -RepoRoot 'C:\Users\andre\.dsh'
+```
+
+Resume сначала принимает уже сохранённый durable handoff. Для старых запросов без
+него он один раз строго проверяет deterministic
+`direct\requests\<REQ>.json` и атомарно создаёт handoff только при полном
+`RESULT_DURABLE` transport identity. `INIT`, `TASK_PUBLISHED`, `WEB_RUNNING`,
+`FAILED`, другой requestId, другой repository, отсутствующие или неверные SHA,
+пути и имя artifact завершаются fail-closed. Direct state нельзя передавать как `-ResultJsonText`,
+и resume не запускает Postman и не создаёт новый REQ. Для недоказанного состояния
+используется `PREPARE_RESUME_NOT_DURABLE`.
 
 ## 10. Что Direct Postman уже доказал
 

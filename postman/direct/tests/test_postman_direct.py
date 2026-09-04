@@ -212,7 +212,7 @@ class DirectPostmanUnitTests(unittest.TestCase):
                     raise AssertionError(expected_parent)
                 return direct.PublishedTask(
                     request_id,
-                    f"https://raw.githubusercontent.com/x/y/{PUB}/{REQ}.md",
+                    f"https://raw.githubusercontent.com/{REPO}/{PUB}/{REQ}.md",
                     PRE,
                     PUB,
                     tuple(root_entries),
@@ -270,7 +270,7 @@ class DirectPostmanUnitTests(unittest.TestCase):
                 [
                     f"POSTMAN_REQUEST_ID: {REQ}",
                     f"policy: {direct.PUBLIC_POLICY_URL}",
-                    f"task_file: https://raw.githubusercontent.com/x/y/{PUB}/{REQ}.md",
+                    f"task_file: https://raw.githubusercontent.com/{REPO}/{PUB}/{REQ}.md",
                 ],
             )
 
@@ -279,6 +279,16 @@ class DirectPostmanUnitTests(unittest.TestCase):
             self.assertEqual(state["state"], "RESULT_DURABLE")
             self.assertEqual(state["baseCommit"], PRE)
             self.assertEqual(state["taskPublicationCommit"], PUB)
+
+            handoff_path = runner.result_handoff_path(REQ)
+            self.assertTrue(handoff_path.is_file())
+            handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
+            self.assertEqual(handoff["ok"], True)
+            self.assertEqual(handoff["code"], "RESULT_DURABLE")
+            self.assertEqual(handoff["state"], "RESULT_DURABLE")
+            self.assertEqual(handoff["statePath"], str(runner.state_path(REQ)))
+            self.assertEqual(handoff["resultHandoffPath"], str(handoff_path.resolve()))
+            self.assertEqual(handoff["sha256"], "c" * 64)
 
     def test_existing_state_blocks_automatic_resend(self):
         with tempfile.TemporaryDirectory() as root:
