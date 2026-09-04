@@ -24,7 +24,7 @@
     "@anionex/dsh-turn-rewind": "^0.1.2",
     "@deepseek-ai/dsh-mcp-client": "0.1.1-rc.2",
     "dsh-agent-team-by-andrew": "file:C:/Users/andre/AppData/Local/Temp/dsh-agent-team-by-andrew-pack/dsh-agent-team-by-andrew-1.0.1-andrew.1.tgz",
-    "dsh-better-sidebar": "^0.15.2",
+    "dsh-better-sidebar": "link:../../plugins/dsh-better-sidebar-andrew",
     "dsh-branchline": "link:D:/DEEPSEEK/dsh-branchline",
     "dsh-client-auto-continue": "^0.8.1",
     "dsh-flowglass-by-andrew": "link:../../plugins/dsh-flowglass-by-andrew",

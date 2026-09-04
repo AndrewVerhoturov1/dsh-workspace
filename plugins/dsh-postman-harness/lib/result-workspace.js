@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { clearResultPresentation } from './result-presentation.js'
 
 const textBlock = (text) => ({ type: 'text', text })
 
@@ -108,6 +109,10 @@ export async function unregisterResultWorkspace(ctx, publishedJson) {
       await ctx.workspaceRegistry.delete(registration.workspaceId)
     }
   }
+
+  // A presentation is UI state, not a prerequisite for removing the normal
+  // workspace registration. Cleanup remains safe if the sidebar is offline.
+  await clearResultPresentation(ctx, publishedJson).catch(() => {})
 
   const result = {
     ...registration,

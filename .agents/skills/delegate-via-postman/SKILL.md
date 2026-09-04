@@ -13,7 +13,7 @@ description: >-
 
 # Delegate via Postman — Direct Production
 
-`DIRECT_POSTMAN_SKILL_VERSION: 10`
+`DIRECT_POSTMAN_SKILL_VERSION: 11`
 
 ## 0. Золотой путь
 
@@ -31,6 +31,8 @@ description: >-
 → TEST_PASSED
 → PUBLISH: один вызов publish_result.ps1
 → PUBLISHED
+→ RESULT_WORKSPACE_REGISTERED
+→ RESULT_PRESENTED (если известна пользовательская точка входа)
 → отчёт пользователю
 ```
 
@@ -53,6 +55,7 @@ frontend-design до получения результата Ч1
 другие implementation/design skills до получения результата Ч1
 Playwright MCP
 Computer Use
+ORCA / навыки ORCA IDE
 ручное открытие ChatGPT
 ручное нажатие Send
 ручной запуск Chrome

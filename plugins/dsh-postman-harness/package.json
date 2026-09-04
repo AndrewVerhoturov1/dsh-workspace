@@ -10,6 +10,7 @@
   },
   "files": [
     "lib/index.js",
+    "lib/result-presentation.js",
     "lib/result-workspace.js",
     "lib/runtime.js",
     "lib/task-creation-bridge.js",
