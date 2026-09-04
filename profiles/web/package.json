@@ -1,6 +1,9 @@
 {
   "name": "dsh-profile-web",
   "private": true,
+  "scripts": {
+    "install:production": "pnpm install --offline --frozen-lockfile"
+  },
   "dsh": {
     "profile": {
       "bundles": [

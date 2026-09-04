@@ -1,5 +1,6 @@
 packages:
   - .
+  - ../../plugins/dsh-better-sidebar-andrew
 
 nodeLinker: hoisted
 autoInstallPeers: false
