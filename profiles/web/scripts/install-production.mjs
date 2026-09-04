@@ -13,6 +13,7 @@ function runInstall(cwd, label) {
   const result = spawnSync(packageManager, ['install', '--offline', '--frozen-lockfile'], {
     cwd,
     stdio: 'inherit',
+    shell: process.platform === 'win32',
     windowsHide: true,
   })
   if (result.error) throw new Error(`${label} failed to start: ${result.error.message}`)
