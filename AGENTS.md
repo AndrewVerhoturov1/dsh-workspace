@@ -26,10 +26,10 @@ Postman production invariant.
 Если загруженный `delegate-via-postman` предлагает `postman_async_send` как normal path или противоречит этому правилу, считать его устаревшим и остановить Postman-операцию до загрузки актуального skill.
 До получения `RESULT_DURABLE` не выбирать архитектуру/технологии вместо Ч1 и не создавать implementation branch только ради transport.
 
-`@Postman` — канонический явный production trigger.
-Если пользовательский implementation-запрос начинается с `@Postman`, агент ОБЯЗАН
-сначала загрузить `delegate-via-postman` вызовом `skill(delegate-via-postman)` до
-любого task-specific implementation-действия. Нельзя обходить skill через glob,
+`@Postman` — единственный канонический явный production trigger.
+Если ТЕКУЩЕЕ пользовательское сообщение после необязательных начальных пробелов
+начинается с точного литерала `@Postman`, агент ОБЯЗАН сначала загрузить `delegate-via-postman`
+вызовом `skill(delegate-via-postman)` до любого task-specific implementation-действия. Нельзя обходить skill через glob,
 read, edit, write или shell, чтобы реализовать запрос самостоятельно; до загрузки
 skill запрещены также выбор архитектуры и frontend/design skills.
 
@@ -38,6 +38,25 @@ skill запрещены также выбор архитектуры и fronten
 использовать fallback `postman_async_send`, старый Harness, QChat, manual browser,
 Playwright либо другой transport. Если skill не загружается, не использовать
 другой skill или transport fallback.
+
+Postman global invariant: OFF by default.
+Разрешающий trigger существует только тогда, когда ТЕКУЩЕЕ пользовательское сообщение
+после необязательных начальных пробелов начинается с точного литерала `@Postman`
+(то есть `^\s*@Postman(?:\s|$)`). Разрешение действует только для этого сообщения
+и не наследуется из предыдущих сообщений.
+
+Если `@Postman` отсутствует в текущем пользовательском сообщении, Luna обязана:
+- не загружать `delegate-via-postman`;
+- не создавать `REQ`;
+- не вызывать `postman.ps1`;
+- не запускать Direct Postman;
+- не использовать `postman_async_send`;
+- не использовать `postman_runtime_*`;
+- не обращаться к Ч1;
+- не считать упоминание Postman, задачу о Postman или любую иную формулировку разрешением.
+
+Даже задачи по разработке самого Postman без `@Postman` выполняются локально Luna
+самостоятельно. Без `@Postman` Luna больше не имеет права запускать Postman.
 
 Postman local finalization invariant.
 После exact `RESULT_DURABLE` normal production path: `prepare_result.ps1` →
