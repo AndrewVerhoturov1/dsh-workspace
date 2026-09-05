@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
-const repositoryRoot = resolve(fileURLToPath(new URL('../..', import.meta.url)))
+const repositoryRoot = resolve(fileURLToPath(new URL('../../..', import.meta.url)))
 const keepStaging = process.argv.includes('--keep')
 const stagingRoot = mkdtempSync(join(tmpdir(), 'dsh-better-sidebar-stale-'))
 const archivePath = join(tmpdir(), `${stagingRoot.split(/[\\/]/).pop()}.tar`)
