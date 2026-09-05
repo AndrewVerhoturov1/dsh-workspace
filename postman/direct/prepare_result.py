@@ -103,6 +103,42 @@ def _is_legacy_published_receipt(published: dict[str, Any]) -> bool:
     return not any(retained_markers)
 
 
+def _is_valid_abandoned_receipt(published_path: Path, published: dict[str, Any]) -> bool:
+    """Return true only for a complete, matching explicit-discard receipt."""
+    abandoned_path = published_path.parent / "abandoned.json"
+    if not abandoned_path.is_file():
+        return False
+    try:
+        abandoned = common.load_json_file(abandoned_path)
+        expected_branch = common.canonical_branch_name(str(published["requestId"]))
+    except (common.FinalizationError, KeyError):
+        raise common.FinalizationError(
+            "PREPARE_STALE_RESOURCE_AMBIGUOUS",
+            "abandoned receipt cannot be classified",
+            details={"receipt": str(abandoned_path)},
+        )
+    if (
+        abandoned.get("ok") is not True
+        or abandoned.get("code") != "ABANDONED"
+        or abandoned.get("status") != "ABANDONED"
+        or abandoned.get("explicitDiscard") is not True
+        or abandoned.get("requestId") != published.get("requestId")
+        or abandoned.get("repository") != published.get("repository")
+        or abandoned.get("prNumber") != published.get("prNumber")
+        or abandoned.get("branch") != expected_branch
+        or str(abandoned.get("commitSha", "")).lower() != str(published.get("commitSha", "")).lower()
+        or abandoned.get("worktreeRemoved") is not True
+        or abandoned.get("branchRemoved") is not True
+        or abandoned.get("remoteBranchRemoved") is not True
+    ):
+        raise common.FinalizationError(
+            "PREPARE_STALE_RESOURCE_AMBIGUOUS",
+            "abandoned receipt identity or cleanup proof is invalid",
+            details={"receipt": str(abandoned_path)},
+        )
+    return True
+
+
 def _sync_main_without_overwriting_dirty(repo_root: Path, origin_main: str) -> tuple[str, list[str]]:
     local_main = common.run_git(repo_root, "rev-parse", "refs/heads/main").stdout.strip().lower()
     if re.fullmatch(r"[0-9a-f]{40}", local_main) is None or re.fullmatch(r"[0-9a-f]{40}", origin_main) is None:
@@ -171,6 +207,8 @@ def _classify_and_self_heal(
             raise common.FinalizationError("PREPARE_STALE_RESOURCE_AMBIGUOUS", "old published receipt is unreadable", details={"receipt": str(receipt_path)}) from exc
         if published.get("ok") is not True or published.get("code") != "PUBLISHED" or not _task_branch(published.get("branch")):
             raise common.FinalizationError("PREPARE_STALE_RESOURCE_AMBIGUOUS", "old Postman receipt cannot be classified", details={"receipt": str(receipt_path)})
+        if _is_valid_abandoned_receipt(receipt_path, published):
+            continue
         if _is_legacy_published_receipt(published):
             continue
         try:
@@ -433,6 +471,7 @@ def prepare_from_request_id(
         direct_root=direct_root,
     )
     return prepare(
+        # _load_resume_handoff returns the canonical receipt path, not its JSON object.
         result_json=str(normalized),
         repo_root=repo_root,
         expected_repository=expected_repository,
@@ -521,9 +560,23 @@ def prepare(
         }
         root = handoff_root or common.default_handoff_root()
         ready_path = root / request_id / "ready.json"
-        ready["readyJson"] = str(ready_path)
-        common.atomic_write_json(ready_path, ready)
-        return ready
+        ready["readyJson"] = str(ready_path.resolve())
+        written = common.atomic_write_json(ready_path, ready)
+        if written.resolve() != ready_path.resolve() or not ready_path.is_file():
+            raise common.FinalizationError(
+                "PREPARE_RECEIPT_NOT_PERSISTED",
+                "READY_FOR_TEST receipt was not persisted at the returned path",
+                details={"readyJson": str(ready_path.resolve())},
+            )
+        persisted = common.validate_ready(common.load_json_file(ready_path))
+        if Path(persisted.get("readyJson", "")).resolve() != ready_path.resolve():
+            raise common.FinalizationError(
+                "PREPARE_RECEIPT_PATH_INVALID",
+                "persisted READY_FOR_TEST receipt points to another path",
+                details={"readyJson": str(ready_path.resolve()), "actual": persisted.get("readyJson")},
+            )
+        persisted["readyJsonSha256"] = common.sha256_file(ready_path)
+        return persisted
     except integrate_result.IntegrationError as exc:
         cleanup = _cleanup_owned_clean_worktree(repo_root, worktree, branch)
         code = "PREPARE_DIAGNOSTIC_ONLY" if exc.code == "RESULT_DIAGNOSTIC_ONLY" else "PREPARE_APPLICATOR_FAILED"

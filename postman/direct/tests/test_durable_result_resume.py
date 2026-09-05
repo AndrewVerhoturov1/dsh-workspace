@@ -115,7 +115,9 @@ class DurableResultResumeTests(unittest.TestCase):
             direct_root = root / "direct"
             terminal_handoff(direct_root)
 
+            observed = {}
             def integrator(**kwargs):
+                observed["result_json"] = kwargs["result_json"]
                 worktree = Path(kwargs["repo_root"])
                 (worktree / "sample.txt").write_text("after\n", encoding="utf-8")
                 return {
@@ -143,6 +145,7 @@ class DurableResultResumeTests(unittest.TestCase):
                 )
             self.assertEqual("READY_FOR_TEST", ready["code"])
             self.assertTrue(Path(ready["readyJson"]).is_file())
+            self.assertEqual(str(durable_handoff.handoff_path(direct_root, REQ)), observed["result_json"])
 
     def test_legacy_exact_result_durable_state_recovers_and_persists(self):
         with tempfile.TemporaryDirectory() as td:
