@@ -195,7 +195,12 @@ class WP020SelfHealingTests(unittest.TestCase):
                     handoff_root=root / "handoff",
                     gh_api=FakeGitHub(),
                 )
-            self.assertEqual([], result["selfHealingCleanup"])
+            self.assertEqual(1, len(result["selfHealingCleanup"]))
+            self.assertEqual(
+                "PREPARE_HISTORICAL_RECEIPT_IGNORED",
+                result["selfHealingCleanup"][0]["code"],
+            )
+            self.assertFalse(result["selfHealingCleanup"][0]["liveResource"])
             self.assertTrue(published.exists())
 
     def test_legacy_receipt_does_not_hide_unknown_live_branch(self):
@@ -234,21 +239,25 @@ class WP020SelfHealingTests(unittest.TestCase):
             self.assertIn(str(extra.resolve()), ctx.exception.details["worktrees"])
             self.assertTrue(extra.exists())
 
-    def test_incomplete_retained_receipt_fails_closed(self):
+    def test_incomplete_retained_receipt_without_live_resources_is_audit_only(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             _, primary, _ = init_repo(root)
-            legacy_result(root, retained_markers={"worktreeRetained": True, "worktreeRemoved": False})
-            with self.assertRaises(common.FinalizationError) as ctx:
-                with patch.object(common, "normalize_remote_repository", return_value=REPO):
-                    prepare_result.preflight_policy(
-                        primary,
-                        repository=REPO,
-                        handoff_root=root / "handoff",
-                        gh_api=FakeGitHub(merged_pr("a" * 40)),
-                    )
-            self.assertEqual("CLEANUP_INVALID_RECEIPT", ctx.exception.code)
-            self.assertIn("missing worktree", str(ctx.exception))
+            published = legacy_result(root, retained_markers={"worktreeRetained": True, "worktreeRemoved": False})
+            with patch.object(common, "normalize_remote_repository", return_value=REPO):
+                result = prepare_result.preflight_policy(
+                    primary,
+                    repository=REPO,
+                    handoff_root=root / "handoff",
+                    gh_api=FakeGitHub(),
+                )
+            self.assertEqual(1, len(result["selfHealingCleanup"]))
+            self.assertEqual(
+                "PREPARE_HISTORICAL_RECEIPT_IGNORED",
+                result["selfHealingCleanup"][0]["code"],
+            )
+            self.assertFalse(result["selfHealingCleanup"][0]["liveResource"])
+            self.assertTrue(published.exists())
 
     def test_open_pr_blocks_preflight(self):
         with tempfile.TemporaryDirectory() as td:
