@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const repositoryRoot = resolve(fileURLToPath(new URL('../../..', import.meta.url)))
 const keepStaging = process.argv.includes('--keep')
-const stagingRoot = mkdtempSync(join(tmpdir(), 'dsh-better-sidebar-stale-'))
+const stagingRoot = mkdtempSync(join(resolve(repositoryRoot, '../..'), '.dsh-better-sidebar-stale-'))
 const archivePath = join(tmpdir(), `${stagingRoot.split(/[\\/]/).pop()}.tar`)
 const staleTarget = realpathSync(resolve(repositoryRoot, 'plugins/dsh-better-sidebar-andrew'))
 
