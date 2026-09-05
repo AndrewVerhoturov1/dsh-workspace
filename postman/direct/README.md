@@ -56,6 +56,13 @@ existing validated `resultZip`.
 - A persisted direct state for a REQ blocks automatic resend.
 - GitHub publication uses authenticated `gh api` and writes only `<REQ>.md`.
 - Task content is intent-only and does not infer implementation requirements.
+- PREPARE fails closed on live conflicting Postman resources: open task PRs,
+  local/remote request branches, and registered additional worktrees.
+- Terminal historical receipts are audit history, not global locks. If an old
+  `published.json`/`abandoned.json` has no corresponding live branch or registered
+  worktree, malformed or older receipt metadata does not block a new PREPARE.
+  A live resource with ambiguous, contradictory, or missing ownership still
+  fails closed.
 - The dedicated Chrome profile is `%LOCALAPPDATA%\DSH\Postman\browser-profile`.
 - The browser process is externally owned and is not closed by the worker.
 - ZIPs are accepted only after the existing artifact validator proves trusted
