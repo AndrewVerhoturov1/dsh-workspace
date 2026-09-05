@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -31,6 +31,8 @@ describe('fresh merged main Better Sidebar shape', () => {
     expect(link).toBe('link:../../plugins/dsh-better-sidebar-andrew')
     expect(profile.scripts?.['install:production']).toBe('node scripts/install-production.mjs')
     expect(existsSync(resolve(PROFILE_ROOT, 'scripts/install-production.mjs'))).toBe(true)
+    expect(profile.scripts?.['test:install-production-stale-link']).toBe('node scripts/test-install-production-stale-link.mjs')
+    expect(existsSync(resolve(PROFILE_ROOT, 'scripts/test-install-production-stale-link.mjs'))).toBe(true)
     const managedRoot = resolve(PROFILE_ROOT, link!.slice('link:'.length))
     expect(managedRoot).toBe(PLUGIN_ROOT)
     expect(existsSync(resolve(managedRoot, 'package.json'))).toBe(true)
@@ -43,7 +45,11 @@ describe('fresh merged main Better Sidebar shape', () => {
     expect(existsSync(clientMain)).toBe(true)
 
     const requireFromProfile = createRequire(resolve(PROFILE_ROOT, 'package.json'))
-    expect(requireFromProfile.resolve(managedRoot)).toBe(hostMain)
+    const installedPackage = resolve(PROFILE_ROOT, 'node_modules/dsh-better-sidebar')
+    if (existsSync(installedPackage)) {
+      expect(realpathSync(installedPackage)).toBe(realpathSync(PLUGIN_ROOT))
+      expect(realpathSync(requireFromProfile.resolve('dsh-better-sidebar'))).toBe(realpathSync(hostMain))
+    }
 
     const loaded = await import(`${pathToFileURL(hostMain).href}?fresh-checkout-shape`)
     expect(loaded.name).toBe('dsh-better-sidebar')

@@ -2,7 +2,8 @@
   "name": "dsh-profile-web",
   "private": true,
   "scripts": {
-    "install:production": "node scripts/install-production.mjs"
+    "install:production": "node scripts/install-production.mjs",
+    "test:install-production-stale-link": "node scripts/test-install-production-stale-link.mjs"
   },
   "dsh": {
     "profile": {
