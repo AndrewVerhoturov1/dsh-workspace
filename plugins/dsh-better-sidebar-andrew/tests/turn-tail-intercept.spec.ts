@@ -174,6 +174,7 @@ describe('turn-tail interception registration (issue #15)', () => {
       title: 'a.ts',
       path: '/w/src/a.ts',
       id: 'editor:/w/src/a.ts',
+      meta: { workspaceRoot: '/w' },
     })
 
     restore()

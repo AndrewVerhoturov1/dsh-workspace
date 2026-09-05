@@ -3,6 +3,7 @@ import type { Context } from '../context-types.ts'
 import { htmlUrl } from './api.ts'
 import type { SidebarStore } from './state.ts'
 import { setWorkspaceRoot, useWorkspaceRoot } from './workspace-target.tsx'
+import { workspaceRootForOpen } from './workspace-root.ts'
 
 const FAILURE_LIMIT = 3
 
@@ -47,15 +48,27 @@ export function usePresentationFeed(input: { ctx: Context; store: SidebarStore; 
         const service = ctx.get('betterSidebar')
         if (service === undefined) return
         const title = typeof frame.title === 'string' && frame.title !== '' ? frame.title : undefined
-        const scope = { sessionId, ...(workspaceRoot !== undefined ? { workspaceRoot } : {}) }
+        const sessionCwd = ctx.sessions.list.getSnapshot().byId[sessionId]?.cwd
+        const tabWorkspaceRoot = workspaceRootForOpen({ cwd: sessionCwd, workspaceRoot })
+        const scope = {
+          sessionId,
+          ...(sessionCwd === undefined ? {} : { cwd: sessionCwd }),
+          ...(workspaceRoot !== undefined ? { workspaceRoot } : {}),
+        }
         if (frame.kind === 'html' && typeof frame.target === 'string' && frame.target !== '') {
           service.openTab({ type: 'browser', url: htmlUrl(scope, frame.target), title: title ?? 'Result' }, { sessionId })
         } else if (frame.kind === 'url' && typeof frame.target === 'string' && frame.target !== '') {
           service.openTab({ type: 'browser', url: frame.target, title }, { sessionId })
         } else if (frame.kind === 'file' && typeof frame.target === 'string' && frame.target !== '') {
-          service.openTab({ type: 'editor', path: frame.target, title, meta: workspaceRoot === undefined ? undefined : { workspaceRoot } }, { sessionId })
+          service.openTab({
+            type: 'editor', path: frame.target, title,
+            ...(tabWorkspaceRoot === undefined ? {} : { meta: { workspaceRoot: tabWorkspaceRoot } }),
+          }, scope)
         } else if (frame.kind === 'folder' && typeof frame.target === 'string' && frame.target !== '') {
-          service.openTab({ type: 'editor', path: frame.target, title, meta: { dir: true, ...(workspaceRoot === undefined ? {} : { workspaceRoot }) } }, { sessionId })
+          service.openTab({
+            type: 'editor', path: frame.target, title,
+            meta: { dir: true, ...(tabWorkspaceRoot === undefined ? {} : { workspaceRoot: tabWorkspaceRoot }) },
+          }, scope)
         }
       }
       socket.onclose = () => {

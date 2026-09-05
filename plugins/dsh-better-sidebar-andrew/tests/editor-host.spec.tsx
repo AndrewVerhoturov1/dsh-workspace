@@ -9,11 +9,12 @@
  * only, no editor chrome); file tabs keep the full chrome in both modes.
  */
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { createElement, useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
 import { act } from 'react-dom/test-utils'
 import type { Context } from '../src/context-types.ts'
+import { api } from '../src/client/api.ts'
 import { EditorHost } from '../src/client/EditorHost.tsx'
 import { createBetterSidebarService } from '../src/client/service.ts'
 import { allLeaves, createSidebarStore, type SidebarTab } from '../src/client/state.ts'
@@ -46,7 +47,7 @@ function setup(): {
 }
 
 /** Mount the host for one tab; returns the container and an unmount helper. */
-function mountHost(ctx: Context, store: ReturnType<typeof createSidebarStore>, tab: () => SidebarTab): {
+function mountHost(ctx: Context, store: ReturnType<typeof createSidebarStore>, tab: () => SidebarTab, cwd?: string): {
   container: HTMLDivElement
   rerender: () => void
   unmount: () => void
@@ -58,7 +59,7 @@ function mountHost(ctx: Context, store: ReturnType<typeof createSidebarStore>, t
     root.render(createElement(EditorHost, {
       ctx,
       store,
-      scope: { sessionId: 'editor-home-session' },
+       scope: { sessionId: 'editor-home-session', ...(cwd === undefined ? {} : { cwd }) },
       tab: tab(),
       expanded: [],
       onToggleDir: () => {},
@@ -272,7 +273,10 @@ describe('EditorHost (files window)', () => {
         return null
       },
     })
-    service.openTab({ type: 'editor', title: 'x.fake', path: '/tmp/x.fake', id: 'editor:/tmp/x.fake' })
+    service.openTab(
+      { type: 'editor', title: 'x.fake', path: '/tmp/x.fake', id: 'editor:/tmp/x.fake' },
+      { sessionId: 'editor-home-session', cwd: '/tmp' },
+    )
     const fileTab = (): SidebarTab =>
       allLeaves(store.getSnapshot().state!.splits).flatMap(leaf => leaf.tabs)
         .find(tab => tab.path === '/tmp/x.fake')!
@@ -291,6 +295,142 @@ describe('EditorHost (files window)', () => {
       expect(calls).toEqual(['mode:edit', 'save'])
     } finally {
       unmount()
+    }
+  })
+
+  it('pins file tabs to their physical roots across workspace selector changes', async () => {
+    const { store, ctx } = setup()
+    const mainRoot = 'C:\\repo-main'
+    const linkedRoot = 'C:\\repo-linked'
+    const mainPath = `${mainRoot}\\docs\\test.html`
+    const linkedPath = `${linkedRoot}\\docs\\test.html`
+    const reads: string[] = []
+    const viewerScopes: (string | undefined)[] = []
+    const fsRead = vi.spyOn(api, 'fsRead').mockImplementation(async (scope) => {
+      reads.push(scope.workspaceRoot ?? '')
+      return { kind: 'text', content: '<html>preview-pass</html>', truncated: false }
+    })
+    ctx.betterSidebar.registerFileViewer({
+      id: 'workspace-pinning-html',
+      exts: ['html'],
+      fetchStrategy: 'fsRead',
+      component: (viewerProps) => {
+        viewerScopes.push(viewerProps.scope.workspaceRoot)
+        return createElement('div', null, 'preview-pass')
+      },
+    })
+    try {
+      // Arrange + Act: main is represented by the session's physical cwd.
+      ctx.betterSidebar.openFile({ sessionId: 'editor-home-session', cwd: mainRoot }, mainPath)
+      const mainTab = (): SidebarTab => allLeaves(store.getSnapshot().state!.splits).flatMap(leaf => leaf.tabs)
+        .find(tab => tab.path === mainPath)!
+      expect(mainTab().meta).toMatchObject({ workspaceRoot: mainRoot })
+
+      const mainHost = mountHost(ctx, store, mainTab)
+      try {
+        await act(async () => { await Promise.resolve() })
+        // Assert: the initial Preview read is scoped to main.
+        expect(mainHost.container.innerHTML).toContain('preview-pass')
+        expect(reads.at(-1)).toBe(mainRoot)
+        expect(viewerScopes.at(-1)).toBe(mainRoot)
+
+        // Changing the selector must not retarget an already-open tab.
+        store.reduce(state => ({ ...state, workspaceRoot: linkedRoot, expanded: [] }))
+        mainHost.rerender()
+        await act(async () => { await Promise.resolve() })
+        expect(mainTab().path).toBe(mainPath)
+        expect(mainTab().meta).toMatchObject({ workspaceRoot: mainRoot })
+        expect(reads.at(-1)).toBe(mainRoot)
+        expect(mainHost.container.innerHTML).toContain('preview-pass')
+        expect(viewerScopes.at(-1)).toBe(mainRoot)
+      } finally {
+        mainHost.unmount()
+      }
+
+      // Act: opening the same relative file while linked selects the linked
+      // physical path and records a new, independent tab pin.
+      ctx.betterSidebar.openFile({ sessionId: 'editor-home-session', cwd: mainRoot, workspaceRoot: linkedRoot }, linkedPath)
+      const linkedTab = (): SidebarTab => allLeaves(store.getSnapshot().state!.splits).flatMap(leaf => leaf.tabs)
+        .find(tab => tab.path === linkedPath)!
+      expect(linkedTab().path).toBe(linkedPath)
+      expect(linkedTab().meta).toMatchObject({ workspaceRoot: linkedRoot })
+
+      const linkedHost = mountHost(ctx, store, linkedTab)
+      try {
+        await act(async () => { await Promise.resolve() })
+        expect(linkedHost.container.innerHTML).toContain('preview-pass')
+        expect(reads.at(-1)).toBe(linkedRoot)
+        expect(viewerScopes.at(-1)).toBe(linkedRoot)
+
+        // Switching back to main leaves both backing roots unchanged.
+        store.reduce(state => ({ ...state, workspaceRoot: undefined, expanded: [] }))
+        linkedHost.rerender()
+        await act(async () => { await Promise.resolve() })
+        expect(mainTab().meta).toMatchObject({ workspaceRoot: mainRoot })
+        expect(linkedTab().meta).toMatchObject({ workspaceRoot: linkedRoot })
+        expect(reads.at(-1)).toBe(linkedRoot)
+        expect(viewerScopes.at(-1)).toBe(linkedRoot)
+      } finally {
+        linkedHost.unmount()
+      }
+    } finally {
+      fsRead.mockRestore()
+    }
+  })
+
+  it('pins folder tabs and preserves the dir presentation marker', () => {
+    const { store, ctx } = setup()
+    const mainRoot = 'C:\\repo-main'
+    const linkedRoot = 'C:\\repo-linked'
+    ctx.betterSidebar.openTab({
+      type: 'editor',
+      title: 'docs',
+      path: `${mainRoot}\\docs`,
+      meta: { dir: true },
+    }, { sessionId: 'editor-home-session', cwd: mainRoot })
+    const folderTab = (): SidebarTab => allLeaves(store.getSnapshot().state!.splits).flatMap(leaf => leaf.tabs)
+      .find(tab => tab.path === `${mainRoot}\\docs`)!
+    expect(folderTab().meta).toMatchObject({ dir: true, workspaceRoot: mainRoot })
+    store.reduce(state => ({ ...state, workspaceRoot: linkedRoot, expanded: [] }))
+    expect(folderTab().meta).toMatchObject({ dir: true, workspaceRoot: mainRoot })
+  })
+
+  it('keeps a pinned file content root separate from the docked navigation root', async () => {
+    const { store, ctx } = setup()
+    const mainRoot = 'C:\\repo-main'
+    const linkedRoot = 'C:\\repo-linked'
+    const fsTree = vi.spyOn(api, 'fsTree').mockResolvedValue({ path: linkedRoot, entries: [], truncated: false })
+    const worktrees = vi.spyOn(api, 'gitWorktrees').mockResolvedValue([
+      { path: mainRoot, branch: 'main', current: true },
+      { path: linkedRoot, branch: 'fix/linked', current: false },
+    ])
+    ctx.betterSidebar.registerFileViewer({
+      id: 'workspace-pinning-none',
+      exts: ['none'],
+      fetchStrategy: 'none',
+      component: () => null,
+    })
+    ctx.betterSidebar.openTab({
+      type: 'editor',
+      title: 'test.none',
+      path: `${mainRoot}\\docs\\test.none`,
+      id: 'editor:pinned-navigation-test',
+      meta: { treeOpen: true, workspaceRoot: mainRoot },
+    }, { sessionId: 'editor-home-session', cwd: mainRoot })
+    const fileTab = (): SidebarTab => allLeaves(store.getSnapshot().state!.splits).flatMap(leaf => leaf.tabs)
+      .find(tab => tab.id === 'editor:pinned-navigation-test')!
+    store.reduce(state => ({ ...state, workspaceRoot: linkedRoot, expanded: [] }))
+    const { unmount } = mountHost(ctx, store, fileTab, mainRoot)
+    try {
+      await act(async () => { await Promise.resolve() })
+      expect(fsTree.mock.calls[0]).toEqual([
+        { sessionId: 'editor-home-session', cwd: mainRoot, workspaceRoot: linkedRoot },
+        linkedRoot,
+      ])
+    } finally {
+      unmount()
+      fsTree.mockRestore()
+      worktrees.mockRestore()
     }
   })
 })

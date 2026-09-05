@@ -29,6 +29,7 @@ import {
 import { isNarrowWidth } from './breakpoints.ts'
 import type { SessionScope } from './api.ts'
 import type { SidebarPrefs } from '../prefs-shared.ts'
+import { workspaceRootForOpen } from './workspace-root.ts'
 
 /**
  * Public state vocabulary re-exported for consumers (type-only; the values
@@ -610,6 +611,22 @@ export function createBetterSidebarService(store: SidebarStore): BetterSidebarSe
     const targetSessionId = scope?.sessionId ?? store.getSnapshot().sessionId
     if (targetSessionId === undefined) return
     const callbackScope: SessionScope = scope ?? { sessionId: targetSessionId }
+    // Every editor content seed is a physical file open. Pin it to the
+    // selected worktree, or to the session's main worktree when the selector
+    // is on main. This keeps public openTab calls safe for consumers too;
+    // path-less Files home and non-file tabs remain selector-independent.
+    const openedWorkspaceRoot = seed.type === 'editor' && seed.path !== undefined
+      ? workspaceRootForOpen(callbackScope)
+      : undefined
+    const openSeed: OpenTabSeed = openedWorkspaceRoot === undefined
+      ? seed
+      : {
+          ...seed,
+          meta: {
+            ...(seed.meta !== null && typeof seed.meta === 'object' && !Array.isArray(seed.meta) ? seed.meta as Record<string, unknown> : {}),
+            workspaceRoot: openedWorkspaceRoot,
+          },
+        }
     // Whether this open targets a session that is NOT the one on screen: a
     // targeted open must not auto-expand panels the user cannot see (the
     // expansion is about landing "in sight" for the CURRENT viewer).
@@ -631,14 +648,14 @@ export function createBetterSidebarService(store: SidebarStore): BetterSidebarSe
         if (result.patch !== undefined) next = { ...next, ...result.patch }
       } else {
         tab = {
-          id: seed.id ?? seed.type,
-          type: seed.type,
+          id: openSeed.id ?? openSeed.type,
+          type: openSeed.type,
           // A caller-provided title wins (the editor shows the file name);
           // otherwise the descriptor's (possibly i18n) title is the default.
-          title: seed.title ?? (typeof descriptor.title === 'function' ? descriptor.title() : descriptor.title),
-          ...(seed.path !== undefined ? { path: seed.path } : {}),
-          ...(seed.diff !== undefined ? { diff: seed.diff } : {}),
-          ...(seed.meta !== undefined ? { meta: seed.meta } : {}),
+          title: openSeed.title ?? (typeof descriptor.title === 'function' ? descriptor.title() : descriptor.title),
+          ...(openSeed.path !== undefined ? { path: openSeed.path } : {}),
+          ...(openSeed.diff !== undefined ? { diff: openSeed.diff } : {}),
+          ...(openSeed.meta !== undefined ? { meta: openSeed.meta } : {}),
         }
         next = applyDedupe(state, tab, descriptor)
       }
@@ -661,10 +678,10 @@ export function createBetterSidebarService(store: SidebarStore): BetterSidebarSe
       // overwritten. An explicit seed.title still wins over a createTab-
       // minted default title (e.g. the sidebar-browser's hostname title).
       let landed: SidebarState = next
-      if (seed.url !== undefined && isCreation) {
+      if (openSeed.url !== undefined && isCreation) {
         landed = patchTab(next, tab.id, {
-          path: seed.url,
-          ...(seed.title !== undefined ? { title: seed.title } : {}),
+          path: openSeed.url,
+          ...(openSeed.title !== undefined ? { title: openSeed.title } : {}),
         })
       }
       // Lifecycle capture (before the auto-expand block, which early-returns).
@@ -696,7 +713,7 @@ export function createBetterSidebarService(store: SidebarStore): BetterSidebarSe
       if (
         !targetsInactiveSession
         && typeof window !== 'undefined'
-        && (seed.path !== undefined || seed.url !== undefined)
+        && (openSeed.path !== undefined || openSeed.url !== undefined)
       ) {
         if (isNarrowWidth(window.innerWidth)) {
           if (!landed.panelOpen) return togglePanel(landed)
@@ -784,7 +801,14 @@ export function createBetterSidebarService(store: SidebarStore): BetterSidebarSe
    *  to the file name; the tab id is path-derived, like the internal
    *  open-path interception, so distinct files open side by side). */
   const openFile = (scope: SessionScope, path: string, title?: string): void => {
-    openTab({ type: 'editor', title: title ?? baseNameOf(path), path, id: `editor:${path}` }, scope)
+    const workspaceRoot = workspaceRootForOpen(scope)
+    openTab({
+      type: 'editor',
+      title: title ?? baseNameOf(path),
+      path,
+      id: `editor:${path}`,
+      ...(workspaceRoot === undefined ? {} : { meta: { workspaceRoot } }),
+    }, scope)
   }
 
   return {

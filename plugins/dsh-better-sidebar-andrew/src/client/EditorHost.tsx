@@ -42,6 +42,7 @@ import { resolveSidebarPath } from './produced-files.ts'
 import type { EditorToolbarControls, EditorToolbarState, FileViewerDescriptor } from './service.ts'
 import { firstLeaf, insertLeafAt, leafWithTab, mintTabId, treeOf, type SidebarStore, type SidebarTab } from './state.ts'
 import { useWorkspaceRoot } from './workspace-target.tsx'
+import { workspaceRootForOpen, workspaceRootForPath } from './workspace-root.ts'
 import css from './sidebar.module.css'
 
 type EditorLoad =
@@ -110,8 +111,42 @@ export function EditorHost(props: {
   const pinnedWorkspaceRoot = typeof tabMeta.workspaceRoot === 'string' && tabMeta.workspaceRoot !== ''
     ? tabMeta.workspaceRoot
     : undefined
-  const workspaceRoot = pinnedWorkspaceRoot ?? selectedWorkspaceRoot
-  const fileScope: SessionScope = { ...scope, ...(workspaceRoot === undefined ? {} : { workspaceRoot }) }
+  const needsLegacyPin = path !== '' && pinnedWorkspaceRoot === undefined
+  const [legacyWorkspaceRoot, setLegacyWorkspaceRoot] = useState<string | undefined>(undefined)
+  // Navigation and content have independent roots. A path-less editor is the
+  // Files navigator and must follow the selector; file/folder tabs are content
+  // and stay pinned to their physical opening root.
+  const navigationWorkspaceRoot = selectedWorkspaceRoot
+  const contentWorkspaceRoot = path === ''
+    ? undefined
+    : pinnedWorkspaceRoot ?? legacyWorkspaceRoot
+  const openWorkspaceRoot = workspaceRootForOpen({ cwd: scope.cwd, workspaceRoot: selectedWorkspaceRoot })
+
+  useEffect(() => {
+    if (!needsLegacyPin) {
+      setLegacyWorkspaceRoot(undefined)
+      return
+    }
+    let cancelled = false
+    setLegacyWorkspaceRoot(undefined)
+    const worktreeScope: SessionScope = { sessionId: scope.sessionId, ...(scope.cwd === undefined ? {} : { cwd: scope.cwd }) }
+    void api.gitWorktrees(worktreeScope).then(worktrees => {
+      if (cancelled) return
+      const resolved = workspaceRootForPath(path, worktrees, scope.cwd)
+      setLegacyWorkspaceRoot(resolved)
+      if (resolved !== undefined) patchMeta(ctx, tab, { workspaceRoot: resolved })
+    }).catch(() => {
+      if (cancelled) return
+      // Keep the legacy tab usable if worktree enumeration is temporarily
+      // unavailable; the session cwd is still the safe original root.
+      const fallback = scope.cwd
+      setLegacyWorkspaceRoot(fallback)
+      if (fallback !== undefined) patchMeta(ctx, tab, { workspaceRoot: fallback })
+    })
+    return () => { cancelled = true }
+  }, [ctx, needsLegacyPin, path, scope.sessionId, scope.cwd, tab])
+
+  const fileScope: SessionScope = { ...scope, ...(contentWorkspaceRoot === undefined ? {} : { workspaceRoot: contentWorkspaceRoot }) }
   const [load, setLoad] = useState<EditorLoad>({ status: 'loading' })
 
   // Reactive prefs read: flipping editorExplorer re-renders this tab with no
@@ -143,15 +178,19 @@ export function EditorHost(props: {
    */
   const openFile = (absolute: string): void => {
     if (inPlace) {
-      ctx.betterSidebar?.updateTab(tab.id, { path: absolute, title: baseName(absolute), meta: { ...metaOf(tab), workspaceRoot } })
+      ctx.betterSidebar?.updateTab(tab.id, {
+        path: absolute,
+        title: baseName(absolute),
+        meta: { ...metaOf(tab), ...(openWorkspaceRoot === undefined ? {} : { workspaceRoot: openWorkspaceRoot }) },
+      })
     } else {
-      openSidebarFile(ctx, store, scope.sessionId, absolute, workspaceRoot)
+      openSidebarFile(ctx, store, scope.sessionId, absolute, openWorkspaceRoot)
     }
   }
 
   /** The context menu's explicit "new tab" escape (per-path dedupe). */
   const openFileNewTab = (absolute: string): void => {
-    openSidebarFile(ctx, store, scope.sessionId, absolute, workspaceRoot)
+    openSidebarFile(ctx, store, scope.sessionId, absolute, openWorkspaceRoot)
   }
 
   /**
@@ -168,7 +207,7 @@ export function EditorHost(props: {
         type: 'editor',
         title: baseName(absolute),
         path: absolute,
-        meta: { treeOpen: false, ...(workspaceRoot === undefined ? {} : { workspaceRoot }) },
+        meta: { treeOpen: false, ...(openWorkspaceRoot === undefined ? {} : { workspaceRoot: openWorkspaceRoot }) },
       }
       const { node, leafId } = insertLeafAt(state[key], pane.id, 'row', fresh, false)
       return { ...state, [key]: node, activePane: leafId }
@@ -268,7 +307,7 @@ export function EditorHost(props: {
     setToolbar(null)
     // The seeded home tab (no path) never loads a viewer — the empty-state
     // hint renders until the user picks a file.
-    if (showEmpty || directory) return
+    if (showEmpty || directory || (path !== '' && contentWorkspaceRoot === undefined)) return
     let cancelled = false
     // Aborts the matched viewer's `load` when the editor tears down (tab
     // closed, path changed, session switched) or re-matches the viewer.
@@ -320,7 +359,7 @@ export function EditorHost(props: {
     }
     apply(planFirstMatch(ctx.betterSidebar?.matchFileViewer(path), mediaUrlOf))
     return () => { cancelled = true; controller.abort() }
-  }, [scope.sessionId, scope.cwd, workspaceRoot, path, ctx, showEmpty, directory])
+  }, [scope.sessionId, scope.cwd, contentWorkspaceRoot, path, ctx, showEmpty, directory])
 
   const treeOpen = treeOpenOf(tab)
   /** Persist the panel flag on the tab (survives reloads with the layout). */
@@ -340,8 +379,8 @@ export function EditorHost(props: {
            store={store}
            full
            sessionId={scope.sessionId}
-           cwd={workspaceRoot ?? scope.cwd}
-           workspaceRoot={workspaceRoot}
+           cwd={scope.cwd}
+           workspaceRoot={navigationWorkspaceRoot}
           expanded={expanded}
           onToggle={onToggleDir}
           onOpenFile={openFile}
@@ -365,8 +404,10 @@ export function EditorHost(props: {
           store={store}
           full
           sessionId={scope.sessionId}
-          cwd={path}
-          workspaceRoot={workspaceRoot}
+          cwd={scope.cwd}
+          workspaceRoot={contentWorkspaceRoot}
+          root={path}
+          enabled={contentWorkspaceRoot !== undefined}
           expanded={expanded}
           onToggle={onToggleDir}
           onOpenFile={openFile}
@@ -386,7 +427,7 @@ export function EditorHost(props: {
   return (
     <div className={css.editor}>
       <div className={css.editorHeader}>
-        <EditorPathInput key={path} path={path} cwd={workspaceRoot ?? scope.cwd} onOpen={openFile} />
+        <EditorPathInput key={path} path={path} cwd={contentWorkspaceRoot ?? scope.cwd} onOpen={openFile} />
         {toolbar?.modes === true && (
           <div className={css.editorModeToggle}>
             <button
@@ -436,9 +477,9 @@ export function EditorHost(props: {
           {showEmpty && <div className={css.editorPlaceholder}>{t('editorEmptyHint')}</div>}
           {!showEmpty && load.status === 'loading' && <div className={css.editorPlaceholder}>{t('loading')}</div>}
           {!showEmpty && load.status === 'error' && <div className={css.editorError}>{load.message}</div>}
-          {!showEmpty && load.status === 'binary' && <BinaryDownload scope={scope} path={path} />}
+          {!showEmpty && load.status === 'binary' && <BinaryDownload scope={fileScope} path={path} />}
           {!showEmpty && load.status === 'ready' && createElement(load.viewer.component, {
-            ctx, store, scope, path, title,
+            ctx, store, scope: fileScope, path, title,
             viewerId: load.viewer.id,
             content: load.content,
             truncated: load.truncated,
@@ -465,8 +506,8 @@ export function EditorHost(props: {
             <TreePanel
                store={store}
                sessionId={scope.sessionId}
-               cwd={workspaceRoot ?? scope.cwd}
-               workspaceRoot={workspaceRoot}
+               cwd={scope.cwd}
+               workspaceRoot={navigationWorkspaceRoot}
               expanded={expanded}
               onToggle={onToggleDir}
               onOpenFile={openFile}

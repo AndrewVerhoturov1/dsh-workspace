@@ -3553,7 +3553,7 @@ function buildApi(ctx, ptyManager, agentPtyRegistry, resolved, terminalShell, ge
 		},
 		"fs.tree": async (payload) => {
 			const { cwd } = await cwdOf(payload);
-			return listDirectory(await ensureWorkspacePath(cwd, payload.path === void 0 ? cwd : requireAbsolute(requireString(payload, "path"))), resolved.listLimit);
+			return await listDirectory(await ensureWorkspacePath(cwd, payload.path === void 0 ? cwd : requireAbsolute(requireString(payload, "path"))), resolved.listLimit);
 		},
 		"fs.search": async (payload) => {
 			const { cwd } = await cwdOf(payload);

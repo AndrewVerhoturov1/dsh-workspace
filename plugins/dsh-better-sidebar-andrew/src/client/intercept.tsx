@@ -12,12 +12,14 @@ import type { SidebarStore } from './state.ts'
 import { t } from './locales.ts'
 import { resolveSidebarPath, selectProducedFiles } from './produced-files.ts'
 import { wrapOpenPath } from './openpath-intercept.ts'
+import { workspaceRootForOpen } from './workspace-root.ts'
 import css from './sidebar.module.css'
 
 /** Open a file in the sidebar's editor (used by the intercepted row and the explorer). */
 export function openSidebarFile(ctx: Context, store: SidebarStore, sessionId: string, path: string, workspaceRoot?: string): void {
   const summary = ctx.sessions.list.getSnapshot().byId[sessionId]
-  const absolute = resolveSidebarPath(workspaceRoot ?? summary?.cwd, path)
+  const tabWorkspaceRoot = workspaceRootForOpen({ cwd: summary?.cwd, workspaceRoot })
+  const absolute = resolveSidebarPath(tabWorkspaceRoot, path)
   const at = Math.max(absolute.lastIndexOf('/'), absolute.lastIndexOf('\\'))
   const title = at === -1 ? absolute : absolute.slice(at + 1)
   // Route through the sidebar service so the editor descriptor's dedupeKey
@@ -27,7 +29,7 @@ export function openSidebarFile(ctx: Context, store: SidebarStore, sessionId: st
     title,
     path: absolute,
     id: `editor:${absolute}`,
-    meta: workspaceRoot === undefined ? undefined : { workspaceRoot },
+    meta: tabWorkspaceRoot === undefined ? undefined : { workspaceRoot: tabWorkspaceRoot },
   })
 }
 

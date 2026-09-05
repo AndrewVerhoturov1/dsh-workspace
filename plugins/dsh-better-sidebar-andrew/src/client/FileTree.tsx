@@ -106,6 +106,8 @@ export function FileTree(props: {
   sessionId: string
   cwd: string | undefined
   workspaceRoot?: string
+  /** Physical display root; kept separate from the session API cwd. */
+  root?: string
   expanded: string[]
   onToggle: (path: string) => void
   onOpenFile: (path: string) => void
@@ -134,9 +136,12 @@ export function FileTree(props: {
   onUploadRequest: (dir: string, items: UploadItem[]) => void
   /** True while an upload is in flight (drops are ignored). */
   busy: boolean
+  /** Delay filesystem work while a legacy content tab is being pinned. */
+  enabled?: boolean
 }) {
-  const { sessionId, cwd, workspaceRoot, expanded, onToggle, onOpenFile, onOpenFileNewTab, onOpenFileSide, openWithTargets, openWithPinned, openWithSsh, onOpenWith, onToggleOpenWithPin, onReferenceFile, refreshTick, onUploadRequest, busy } = props
+  const { sessionId, cwd, workspaceRoot, root: displayRoot, expanded, onToggle, onOpenFile, onOpenFileNewTab, onOpenFileSide, openWithTargets, openWithPinned, openWithSsh, onOpenWith, onToggleOpenWithPin, onReferenceFile, refreshTick, onUploadRequest, busy, enabled = true } = props
   const scope = { sessionId, cwd, ...(workspaceRoot === undefined ? {} : { workspaceRoot }) }
+  const filesRoot = displayRoot ?? workspaceRoot ?? cwd
   const [data, setData] = useState<Record<string, LevelData>>({})
   const dataRef = useRef(data)
   /** The row whose path was just copied ("copied" label replaces its button). */
@@ -189,7 +194,7 @@ export function FileTree(props: {
     event.preventDefault()
     event.stopPropagation()
     resetDrop()
-    if (cwd !== undefined) reportDrop(cwd, event.dataTransfer)
+    if (filesRoot !== undefined) reportDrop(filesRoot, event.dataTransfer)
   }
   const handleDirDrop = (event: DragEvent, dir: string): void => {
     if (!isFileDrag(event)) return
@@ -255,7 +260,7 @@ export function FileTree(props: {
     }).catch((error: unknown) => {
       storeLevel(dir, { error: error instanceof Error ? error.message : String(error) })
     })
-  }, [sessionId, cwd, workspaceRoot, storeLevel])
+  }, [sessionId, cwd, workspaceRoot, displayRoot, storeLevel])
 
   // The caller's refresh tick wipes the cache (declared BEFORE the load
   // effect so the reload below sees the empty cache).
@@ -270,11 +275,10 @@ export function FileTree(props: {
   useEffect(() => {
     // Load the visible set; already-loaded levels (kept in the cache) are
     // not refetched. Only the refresh tick wipes the cache.
-    const root = cwd
-    if (root === undefined) return
-    loadDir(root)
+    if (!enabled || filesRoot === undefined) return
+    loadDir(filesRoot)
     for (const dir of expanded) loadDir(dir)
-  }, [cwd, expanded, refreshTick, loadDir])
+  }, [enabled, filesRoot, expanded, refreshTick, loadDir])
 
   /** Copy `text`; on success flip the row's copied label for a moment. */
   const copyPath = useCallback((text: string, path: string): void => {
@@ -407,7 +411,7 @@ export function FileTree(props: {
     ]
   }
 
-  const root = cwd
+  const root = filesRoot
 
   const renderLevel = (dir: string, depth: number): ReactNode => {
     const level = data[dir]
@@ -641,7 +645,7 @@ export function FileTree(props: {
             return
           }
           copyPath(
-            id === 'relative' ? relativeTo(cwd ?? '', target.path) : target.path,
+            id === 'relative' ? relativeTo(filesRoot ?? '', target.path) : target.path,
             target.path,
           )
         }}
