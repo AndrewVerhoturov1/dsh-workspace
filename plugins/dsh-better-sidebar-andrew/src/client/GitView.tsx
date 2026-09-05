@@ -20,6 +20,7 @@ import { relativeTime, t } from './locales.ts'
 import type { SidebarTab } from './state.ts'
 import type { SidebarStore } from './state.ts'
 import { useWorkspaceRoot, WorkspaceTargetSelect } from './workspace-target.tsx'
+import { workspaceRootForOpen } from './workspace-root.ts'
 import css from './sidebar.module.css'
 
 /** The XY status letters a row badge shows (X = index, Y = worktree). */
@@ -91,6 +92,7 @@ export function GitView(props: {
   const { scope, store, onOpenFile, onOpenDiff } = props
   const workspaceRoot = useWorkspaceRoot(store)
   const operationScope: SessionScope = { ...scope, ...(workspaceRoot === undefined ? {} : { workspaceRoot }) }
+  const tabWorkspaceRoot = workspaceRootForOpen(operationScope)
   const [status, setStatus] = useState<GitStatusResult | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -155,7 +157,7 @@ export function GitView(props: {
       type: 'diff',
       title: baseName(entry.path),
        diff: { kind: 'worktree', path: entry.path, staged, untracked: isUntracked(entry) },
-       meta: workspaceRoot === undefined ? undefined : { workspaceRoot },
+       meta: tabWorkspaceRoot === undefined ? undefined : { workspaceRoot: tabWorkspaceRoot },
     })
   }
 
@@ -166,7 +168,7 @@ export function GitView(props: {
       type: 'diff',
       title: `${entry.hash} ${entry.subject}`,
       diff: { kind: 'commit', hash: entry.hash, hashFull: entry.hashFull, subject: entry.subject },
-      meta: workspaceRoot === undefined ? undefined : { workspaceRoot },
+      meta: tabWorkspaceRoot === undefined ? undefined : { workspaceRoot: tabWorkspaceRoot },
     })
   }
 

@@ -3,6 +3,7 @@
  * matchFileViewer priority/exts/detect algorithm, and openTab dedupe.
  */
 import { describe, it, expect } from 'vitest'
+import type { Context } from '../src/context-types.ts'
 
 // Mock browser globals (SidebarStore.reduce → schedulePersist uses window.setTimeout)
 const g = globalThis as Record<string, unknown>
@@ -21,7 +22,8 @@ if (g.localStorage === undefined) {
 }
 
 import { createBetterSidebarService, matchUrlTarget, SIDEBAR_FEATURES, SIDEBAR_SERVICE_VERSION } from '../src/client/service.ts'
-import { createSidebarStore, allLeaves, makeDefaultState, openDiffTab, openTabInActivePane, sanitizeState } from '../src/client/state.ts'
+import { createSidebarStore, allLeaves, makeDefaultState, openDiffTab, openTabInActivePane, sanitizeState, type SidebarTab } from '../src/client/state.ts'
+import { openSidebarFile } from '../src/client/intercept.tsx'
 
 describe('BetterSidebar service', () => {
   it('registerTab adds to the registry and dispose removes it', () => {
@@ -74,6 +76,40 @@ describe('BetterSidebar service', () => {
     unsub()
     service.registerTab({ id: 'y', title: 'Y', component: () => null })
     expect(calls).toBe(2)
+  })
+})
+
+describe('file workspace pinning', () => {
+  it('should pin main and linked relative opens without changing the selected worktree by checkout', () => {
+    const store = createSidebarStore()
+    const service = createBetterSidebarService(store)
+    service.registerTab({ id: 'editor', title: 'Editor', dedupeKey: tab => tab.path, component: () => null })
+    store.setSession('s1')
+    const mainRoot = 'C:\\repo-main'
+    const linkedRoot = 'C:\\repo-linked'
+    const ctx = {
+      betterSidebar: service,
+      sessions: { list: { getSnapshot: () => ({ byId: { s1: { cwd: mainRoot } } }) } },
+    } as unknown as Context
+
+    // Main is the empty selector value, but its file tab still gets a pin.
+    openSidebarFile(ctx, store, 's1', 'docs/test.html')
+    const tabs = (): SidebarTab[] => allLeaves(store.getSnapshot().state!.splits).flatMap(leaf => leaf.tabs)
+    const mainTab = (): SidebarTab => tabs().find(tab => tab.path === `${mainRoot}\\docs/test.html`)!
+    expect(mainTab().meta).toEqual({ workspaceRoot: mainRoot })
+
+    // The selector is state-only; no branch checkout is part of this path.
+    store.reduce(state => ({ ...state, workspaceRoot: linkedRoot, expanded: [] }))
+    expect(mainTab().meta).toEqual({ workspaceRoot: mainRoot })
+
+    // A new relative open resolves under the linked physical root.
+    openSidebarFile(ctx, store, 's1', 'docs/test.html', linkedRoot)
+    const linkedTab = (): SidebarTab => tabs().find(tab => tab.path === `${linkedRoot}\\docs/test.html`)!
+    expect(linkedTab().meta).toEqual({ workspaceRoot: linkedRoot })
+
+    store.reduce(state => ({ ...state, workspaceRoot: undefined, expanded: [] }))
+    expect(mainTab().meta).toEqual({ workspaceRoot: mainRoot })
+    expect(linkedTab().meta).toEqual({ workspaceRoot: linkedRoot })
   })
 })
 

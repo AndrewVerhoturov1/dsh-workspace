@@ -5,6 +5,8 @@ export declare function TreePanel(props: {
     sessionId: string;
     cwd: string | undefined;
     workspaceRoot?: string;
+    /** Physical display root; does not replace the session API cwd. */
+    root?: string;
     expanded: string[];
     onToggle: (path: string) => void;
     onOpenFile: (path: string) => void;
@@ -23,4 +25,6 @@ export declare function TreePanel(props: {
     /** Full-window presentation: the panel fills its host instead of docking
      *  at a fixed width. */
     full?: boolean;
+    /** Delay filesystem work while a legacy content tab is being pinned. */
+    enabled?: boolean;
 }): import("react").JSX.Element;

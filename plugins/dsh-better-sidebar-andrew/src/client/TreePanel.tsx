@@ -48,6 +48,8 @@ export function TreePanel(props: {
   sessionId: string
   cwd: string | undefined
   workspaceRoot?: string
+  /** Physical display root; does not replace the session API cwd. */
+  root?: string
   expanded: string[]
   onToggle: (path: string) => void
   onOpenFile: (path: string) => void
@@ -66,9 +68,14 @@ export function TreePanel(props: {
   /** Full-window presentation: the panel fills its host instead of docking
    *  at a fixed width. */
   full?: boolean
+  /** Delay filesystem work while a legacy content tab is being pinned. */
+  enabled?: boolean
 }) {
-  const { store, sessionId, cwd, workspaceRoot, expanded, onToggle, onOpenFile, onOpenFileNewTab, onOpenFileSide, openWithTargets, openWithPinned, openWithSsh, onOpenWith, onToggleOpenWithPin, onReferenceFile, full } = props
+  const { store, sessionId, cwd, workspaceRoot, root, expanded, onToggle, onOpenFile, onOpenFileNewTab, onOpenFileSide, openWithTargets, openWithPinned, openWithSsh, onOpenWith, onToggleOpenWithPin, onReferenceFile, full, enabled = true } = props
   const scope = { sessionId, cwd, ...(workspaceRoot === undefined ? {} : { workspaceRoot }) }
+  // `root` is the physical display root only. Keep the original session cwd
+  // in every API scope so the host can authorize workspaceRoot separately.
+  const filesRoot = root ?? workspaceRoot ?? cwd
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<{ matches: string[]; truncated: boolean } | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -89,7 +96,7 @@ export function TreePanel(props: {
 
   /** Start one upload session into `dir` (absolute, inside the workspace). */
   const startUpload = (dir: string, items: UploadItem[]): void => {
-    if (items.length === 0 || cwd === undefined || upload !== null) return
+    if (!enabled || items.length === 0 || filesRoot === undefined || upload !== null) return
     cancelledRef.current = false
     const controller = new AbortController()
     setUploadFailed(false)
@@ -133,6 +140,7 @@ export function TreePanel(props: {
 
   const needle = query.trim()
   useEffect(() => {
+    if (!enabled) return
     if (needle === '') {
       setResults(null)
       setError(null)
@@ -153,7 +161,7 @@ export function TreePanel(props: {
       window.clearTimeout(timer)
       controller.abort()
     }
-  }, [sessionId, cwd, workspaceRoot, needle])
+  }, [enabled, sessionId, cwd, workspaceRoot, needle])
 
   const busy = upload !== null
 
@@ -203,7 +211,7 @@ export function TreePanel(props: {
           multiple
           style={{ display: 'none' }}
           onChange={(event) => {
-            if (cwd !== undefined) startUpload(cwd, uploadItemsFromFiles(event.target.files ?? []))
+            if (filesRoot !== undefined) startUpload(filesRoot, uploadItemsFromFiles(event.target.files ?? []))
             event.target.value = ''
           }}
         />
@@ -214,7 +222,7 @@ export function TreePanel(props: {
           {...folderInputProps}
           style={{ display: 'none' }}
           onChange={(event) => {
-            if (cwd !== undefined) startUpload(cwd, uploadItemsFromFiles(event.target.files ?? []))
+            if (filesRoot !== undefined) startUpload(filesRoot, uploadItemsFromFiles(event.target.files ?? []))
             event.target.value = ''
           }}
         />
@@ -227,6 +235,8 @@ export function TreePanel(props: {
           sessionId={sessionId}
           cwd={cwd}
           workspaceRoot={workspaceRoot}
+          root={filesRoot}
+          enabled={enabled}
           expanded={expanded}
           onToggle={onToggle}
           onOpenFile={onOpenFile}
@@ -255,7 +265,7 @@ export function TreePanel(props: {
               type="button"
               className={css.editorSearchResult}
               title={rel}
-              onClick={() => { onOpenFile(resolveSidebarPath(cwd, rel)) }}
+              onClick={() => { onOpenFile(resolveSidebarPath(filesRoot, rel)) }}
             >
               {rel}
             </button>

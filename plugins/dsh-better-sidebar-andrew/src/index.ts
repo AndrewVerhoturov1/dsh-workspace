@@ -262,7 +262,8 @@ function buildApi(
       const record = payload as { path?: unknown }
       const requested = record.path === undefined ? cwd : requireAbsolute(requireString(payload, 'path'))
       const target = await ensureWorkspacePath(cwd, requested)
-      return listDirectory(target, resolved.listLimit)
+      const listing = await listDirectory(target, resolved.listLimit)
+      return listing
     },
     'fs.search': async (payload) => {
       // The editor side panel's global name search: rooted at the session

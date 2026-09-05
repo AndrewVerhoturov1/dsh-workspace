@@ -6,6 +6,8 @@ export declare function FileTree(props: {
     sessionId: string;
     cwd: string | undefined;
     workspaceRoot?: string;
+    /** Physical display root; kept separate from the session API cwd. */
+    root?: string;
     expanded: string[];
     onToggle: (path: string) => void;
     onOpenFile: (path: string) => void;
@@ -34,4 +36,6 @@ export declare function FileTree(props: {
     onUploadRequest: (dir: string, items: UploadItem[]) => void;
     /** True while an upload is in flight (drops are ignored). */
     busy: boolean;
+    /** Delay filesystem work while a legacy content tab is being pinned. */
+    enabled?: boolean;
 }): import("react").JSX.Element;
