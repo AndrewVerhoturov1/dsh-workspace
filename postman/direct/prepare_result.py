@@ -139,6 +139,17 @@ def _is_valid_abandoned_receipt(published_path: Path, published: dict[str, Any])
     return True
 
 
+def _historical_receipt_audit(receipt_path: Path, *, reason: str) -> dict[str, Any]:
+    """Describe an inert historical receipt without turning it into a blocker."""
+    return {
+        "ok": True,
+        "code": "PREPARE_HISTORICAL_RECEIPT_IGNORED",
+        "receipt": str(receipt_path),
+        "reason": reason,
+        "liveResource": False,
+    }
+
+
 def _sync_main_without_overwriting_dirty(repo_root: Path, origin_main: str) -> tuple[str, list[str]]:
     local_main = common.run_git(repo_root, "rev-parse", "refs/heads/main").stdout.strip().lower()
     if re.fullmatch(r"[0-9a-f]{40}", local_main) is None or re.fullmatch(r"[0-9a-f]{40}", origin_main) is None:
@@ -200,15 +211,52 @@ def _classify_and_self_heal(
         )
 
     candidates: list[tuple[Path, dict[str, Any]]] = []
+    audits: list[dict[str, Any]] = []
     for receipt_path in _published_receipts(handoff_root):
         try:
             published = common.load_json_file(receipt_path)
-        except common.FinalizationError as exc:
-            raise common.FinalizationError("PREPARE_STALE_RESOURCE_AMBIGUOUS", "old published receipt is unreadable", details={"receipt": str(receipt_path)}) from exc
-        if published.get("ok") is not True or published.get("code") != "PUBLISHED" or not _task_branch(published.get("branch")):
-            raise common.FinalizationError("PREPARE_STALE_RESOURCE_AMBIGUOUS", "old Postman receipt cannot be classified", details={"receipt": str(receipt_path)})
-        if _is_valid_abandoned_receipt(receipt_path, published):
+        except common.FinalizationError:
+            # Historical receipt bytes are not authority over current Git state.
+            # If a live Postman branch/worktree exists it will be rejected below
+            # as an unknown live resource; otherwise the broken receipt is inert.
+            audits.append(_historical_receipt_audit(receipt_path, reason="historical published receipt is unreadable"))
             continue
+        if published.get("ok") is not True or published.get("code") != "PUBLISHED" or not _task_branch(published.get("branch")):
+            audits.append(_historical_receipt_audit(receipt_path, reason="historical published receipt cannot be classified"))
+            continue
+
+        receipt_branch = str(published["branch"])
+        receipt_worktree = None
+        if published.get("worktree"):
+            try:
+                receipt_worktree = Path(str(published["worktree"])).resolve()
+            except (OSError, RuntimeError):
+                receipt_worktree = None
+        branch_live = receipt_branch in task_local or receipt_branch in task_remote
+        worktree_live = receipt_worktree in other_worktrees if receipt_worktree is not None else False
+
+        if not branch_live and not worktree_live:
+            # A terminal receipt with no registered/local/remote live resource is
+            # audit history only. Do not re-prove every historical cleanup on
+            # every future PREPARE. Open task PRs were already checked above.
+            reason = "terminal historical receipt has no live Postman branch or registered worktree"
+            if (receipt_path.parent / "abandoned.json").is_file():
+                reason = "abandoned historical receipt has no live Postman branch or registered worktree"
+            audits.append(_historical_receipt_audit(receipt_path, reason=reason))
+            continue
+
+        if _is_valid_abandoned_receipt(receipt_path, published):
+            # ABANDONED claims these resources were removed. Seeing them live is
+            # contradictory and must remain fail-closed.
+            raise common.FinalizationError(
+                "PREPARE_STALE_RESOURCE_AMBIGUOUS",
+                "ABANDONED receipt claims cleanup but a live Postman resource still exists",
+                details={
+                    "receipt": str(receipt_path.parent / "abandoned.json"),
+                    "branchLive": branch_live,
+                    "worktreeLive": worktree_live,
+                },
+            )
         if _is_legacy_published_receipt(published):
             continue
         try:
@@ -251,7 +299,7 @@ def _classify_and_self_heal(
         )
         for receipt_path, _ in candidates
     ]
-    results: list[dict[str, Any]] = []
+    results: list[dict[str, Any]] = list(audits)
     for (receipt_path, _), context in zip(candidates, contexts):
         if context.get("already") is not None:
             results.append(context["already"])
