@@ -10,10 +10,12 @@ import { attachTaskUrl, createAndPublishTask } from './task-creation-bridge.js'
 import { WebWorkerBridge, markWebResultReady } from './web-worker-bridge.js'
 import { createGitHubTaskPublisher } from './github-task-publisher.js'
 import { createResultWorkspaceTools } from './result-workspace.js'
+import { createResultPresentationTool } from './result-presentation.js'
 
 export { attachTaskUrl, createAndPublishTask, createTaskPackage, renderIntentTaskFile } from './task-creation-bridge.js'
 export { WebWorkerBridge, markWebResultReady }
 export { createResultWorkspaceTools } from './result-workspace.js'
+export { clearResultPresentation, createResultPresentationTool, presentResult } from './result-presentation.js'
 
 export const name = 'dsh-postman-harness'
 export const inject = ['agents', 'sessionPersistence', 'systemPrompt', 'tools', 'workspaceRegistry']
@@ -594,6 +596,7 @@ export function apply(ctx, { runtime: injectedRuntime, bridge: injectedBridge, w
   ctx.tools.register(createPostmanSendTool(ctx, pending))
   ctx.tools.register(createPostmanAsyncSendTool(ctx, runtime, { bridge, taskPublisher: resolvedTaskPublisher }))
   for (const tool of createResultWorkspaceTools(ctx)) ctx.tools.register(tool)
+  ctx.tools.register(createResultPresentationTool(ctx))
   ctx.on('agent/created', ({ agent }) => installPostmanAgent(ctx, agent, pending, runtime))
   ctx.on('agent/disposed', ({ agent }) => clearPendingForAgent(pending, agent.id))
   ctx.on('agent/inbox/claimed', ({ agent, message }) => {

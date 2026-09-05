@@ -1,0 +1,16 @@
+{
+  "id": "dsh-external/dsh-better-sidebar",
+  "version": "0.15.2-andrew.1",
+  "main": "./lib/index.js",
+  "description": "Andrew local frozen Better Sidebar: Files/Git worktree selection + internal user browser + deterministic result presentation",
+  "engines": {
+    "dsh": ">=0.0.1"
+  },
+  "contributes": {
+    "tools": [],
+    "skills": []
+  },
+  "client": {
+    "main": "./lib/client-registry.js"
+  }
+}
