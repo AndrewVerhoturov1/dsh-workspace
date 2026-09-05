@@ -1,0 +1,152 @@
+{
+  "Role": "user",
+  "AnchorRuntimeId": "42.404348.4.5.1.56436",
+  "AnchorName": "Вы сказали:",
+  "YTop": 228.0,
+  "Ancestors": [
+    {
+      "Depth": 0,
+      "RuntimeId": "42.404348.4.5.1.56436",
+      "ParentRuntimeId": "42.404348.4.5.1.56268",
+      "ControlType": "ControlType.Text",
+      "ClassName": "sr-only select-none",
+      "AutomationId": "",
+      "Name": "Вы сказали:",
+      "BoundingRectangle": "562,228,1,1",
+      "DescendantTextCount": 0,
+      "DescendantButtonCount": 0
+    },
+    {
+      "Depth": 1,
+      "RuntimeId": "42.404348.4.5.1.56268",
+      "ParentRuntimeId": "42.404348.4.5.1.56319",
+      "ControlType": "ControlType.Group",
+      "ClassName": "relative shrink-0",
+      "AutomationId": "",
+      "Name": "",
+      "BoundingRectangle": "563,221,702,338",
+      "DescendantTextCount": 4,
+      "DescendantButtonCount": 2
+    },
+    {
+      "Depth": 2,
+      "RuntimeId": "42.404348.4.5.1.56319",
+      "ParentRuntimeId": "42.404348.4.5.1.56322",
+      "ControlType": "ControlType.Group",
+      "ClassName": "mx-auto w-full max-w-(--thread-content-max-width) px-toolbar relative flex flex-1 shrink-0 flex-col pb-8",
+      "AutomationId": "",
+      "Name": "",
+      "BoundingRectangle": "547,201,734,420",
+      "DescendantTextCount": 4,
+      "DescendantButtonCount": 2
+    },
+    {
+      "Depth": 3,
+      "RuntimeId": "42.404348.4.5.1.56322",
+      "ParentRuntimeId": "42.404348.4.5.1.56337",
+      "ControlType": "ControlType.Group",
+      "ClassName": "thread-scroll-container relative h-full overflow-x-hidden overflow-y-auto [overflow-anchor:none] [scroll-padding-bottom:var(--thread-scroll-padding-bottom,0px)] electron:[scrollbar-gutter:stable_both-edges] pt-(--thread-content-top-inset) [container-name:thread-content] [container-type:inline-size] focus:outline-none [&:has([data-thread-scroll-footer='true']:focus-within)]:[scroll-padding-bottom:0px] flex flex-col-reverse",
+      "AutomationId": "",
+      "Name": "",
+      "BoundingRectangle": "532,169,764,605",
+      "DescendantTextCount": 7,
+      "DescendantButtonCount": 4
+    },
+    {
+      "Depth": 4,
+      "RuntimeId": "42.404348.4.5.1.56337",
+      "ParentRuntimeId": "42.404348.4.5.1.56341",
+      "ControlType": "ControlType.Group",
+      "ClassName": "relative h-full flex-1 [content-visibility:auto]",
+      "AutomationId": "",
+      "Name": "",
+      "BoundingRectangle": "532,169,764,605",
+      "DescendantTextCount": 7,
+      "DescendantButtonCount": 4
+    },
+    {
+      "Depth": 5,
+      "RuntimeId": "42.404348.4.5.1.56341",
+      "ParentRuntimeId": "42.404348.4.5.1.56344",
+      "ControlType": "ControlType.Group",
+      "ClassName": "relative mx-auto flex min-h-0 w-full flex-1 flex-col",
+      "AutomationId": "",
+      "Name": "",
+      "BoundingRectangle": "532,169,764,605",
+      "DescendantTextCount": 8,
+      "DescendantButtonCount": 5
+    },
+    {
+      "Depth": 6,
+      "RuntimeId": "42.404348.4.5.1.56344",
+      "ParentRuntimeId": "42.404348.4.5.1.56351",
+      "ControlType": "ControlType.Group",
+      "ClassName": "relative flex h-full flex-col",
+      "AutomationId": "",
+      "Name": "",
+      "BoundingRectangle": "532,169,764,605",
+      "DescendantTextCount": 8,
+      "DescendantButtonCount": 5
+    },
+    {
+      "Depth": 7,
+      "RuntimeId": "42.404348.4.5.1.56351",
+      "ParentRuntimeId": "42.404348.4.5.1.1556",
+      "ControlType": "ControlType.Group",
+      "ClassName": "relative h-full min-h-0",
+      "AutomationId": "",
+      "Name": "",
+      "BoundingRectangle": "532,169,764,605",
+      "DescendantTextCount": 8,
+      "DescendantButtonCount": 5
+    },
+    {
+      "Depth": 8,
+      "RuntimeId": "42.404348.4.5.1.1556",
+      "ParentRuntimeId": "42.404348.4.5.1.1555",
+      "ControlType": "ControlType.Group",
+      "ClassName": "relative flex min-h-0 flex-1",
+      "AutomationId": "",
+      "Name": "",
+      "BoundingRectangle": "532,169,764,605",
+      "DescendantTextCount": 8,
+      "DescendantButtonCount": 5
+    },
+    {
+      "Depth": 9,
+      "RuntimeId": "42.404348.4.5.1.1555",
+      "ParentRuntimeId": "42.404348.4.5.1.1554",
+      "ControlType": "ControlType.Group",
+      "ClassName": "_MainContentFrame_zbk1f_191",
+      "AutomationId": "",
+      "Name": "",
+      "BoundingRectangle": "532,168,764,606",
+      "DescendantTextCount": 8,
+      "DescendantButtonCount": 5
+    },
+    {
+      "Depth": 10,
+      "RuntimeId": "42.404348.4.5.1.1554",
+      "ParentRuntimeId": "42.404348.4.5.1.1553",
+      "ControlType": "ControlType.Group",
+      "ClassName": "_MainContentViewport_zbk1f_143",
+      "AutomationId": "",
+      "Name": "",
+      "BoundingRectangle": "532,122,764,652",
+      "DescendantTextCount": 8,
+      "DescendantButtonCount": 5
+    },
+    {
+      "Depth": 11,
+      "RuntimeId": "42.404348.4.5.1.1553",
+      "ParentRuntimeId": "42.404348.4.5.1.1497",
+      "ControlType": "ControlType.Group",
+      "ClassName": "relative isolate flex min-h-0 flex-1 overflow-hidden",
+      "AutomationId": "",
+      "Name": "",
+      "BoundingRectangle": "532,122,764,652",
+      "DescendantTextCount": 8,
+      "DescendantButtonCount": 5
+    }
+  ]
+}

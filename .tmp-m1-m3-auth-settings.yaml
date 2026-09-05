@@ -1,0 +1,11 @@
+agent-default-model:
+  provider: openai-codex
+  model: gpt-5.6-luna
+  reasoningEffort: high
+llm-pi-ai:
+  providers:
+    openai-codex: {}
+ui-onboarding:
+  welcomeNoticeVersion: 2026-08-13.1
+ui-theme:
+  preference: dark

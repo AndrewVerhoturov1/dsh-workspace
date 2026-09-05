@@ -1,0 +1,82 @@
+{
+  "schemaVersion": 5,
+  "suite": "FreshComposerClearFailure",
+  "runId": "EDDB26EF",
+  "startedAtUtc": "2026-08-27T17:52:32.9745554Z",
+  "completedAtUtc": "2026-08-27T17:52:52.5100888Z",
+  "timeoutSeconds": 120,
+  "codeHashes": {
+    "chatgpt_chat.ps1": "e62e3efade44d1851cc5ae37ee4fb66151465ebd4c3aa14e094958e875e62345",
+    "chatgpt_bridge_test.ps1": "3724cc67050b965bc038af5f93192e79cc3df2ac59a9e69b66ba7a4ec0b55c77",
+    "chatgpt_uia_dump.ps1": "0229f164500b162d85b7a0ead51dce6d7b1613dabe755956740cb0cae28d530b"
+  },
+  "gitCommit": "2efd1b2e75069687438e0a8f58319dde682b196b",
+  "workingTreeDirty": true,
+  "metadata": {
+    "codeFiles": [
+      "chatgpt_chat.ps1",
+      "chatgpt_bridge_test.ps1",
+      "chatgpt_uia_dump.ps1"
+    ],
+    "normalization": "CRLF/CR to LF; trim terminal LF only",
+    "exactMatch": true,
+    "attempted": 1,
+    "unattempted": 0,
+    "stoppedOnFailure": false,
+    "contractError": null
+  },
+  "summary": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0,
+    "setupFailed": false
+  },
+  "attempts": [
+    {
+      "name": "FreshComposerClearFailure",
+      "runId": "EDDB26EF_FreshComposerClearFailure",
+      "result": "PASS",
+      "expected": "",
+      "actual": null,
+      "error": null,
+      "expectedLength": 0,
+      "actualLength": 0,
+      "expectedHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "actualHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "responseIsNull": true,
+      "chatPolicy": "fresh",
+      "surfaceModeBefore": "ChatGPT",
+      "surfaceModeAfter": "ChatGPT",
+      "chatModeConfirmed": true,
+      "freshAction": "NewChat.InvokePattern",
+      "freshActionRuntimeId": "42.458832.4.5.1.4307",
+      "freshTransitionObserved": true,
+      "freshProofLevel": "UIA_ACTION_AND_EMPTY_STATE",
+      "freshChatConfirmed": true,
+      "freshMessageCount": 0,
+      "baselineMessageCount": 2,
+      "freshComposerInitiallyEmpty": false,
+      "freshComposerSanitized": false,
+      "freshComposerClearMethod": null,
+      "freshComposerClearAttempts": 0,
+      "sendAttempted": false,
+      "inputMethod": null,
+      "inputFallbackFrom": null,
+      "inputAttemptCount": 0,
+      "clipboardRestored": false,
+      "copyRuntimeId": null,
+      "copyTracePath": null,
+      "streamTracePath": null,
+      "assistantTracePath": null,
+      "logPath": "C:\\Users\\andre\\.dsh\\chatgpt-desktop-uia-bridge\\logs\\test_EDDB26EF_FreshComposerClearFailure.log",
+      "durationMs": 19223,
+      "conversationRuntimeId": "42.1508952.4.0.0.5",
+      "oldMarkerAbsent": true,
+      "oldMarkerPresent": false,
+      "traceRowCount": 0,
+      "traceCompact": false,
+      "errorCode": "COMPOSER_CLEAR_NOT_CONFIRMED"
+    }
+  ],
+  "setupAttempts": []
+}

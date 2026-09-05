@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 5,
+  "suite": "InputRecoveryValuePattern",
+  "runId": "5E374A69",
+  "startedAtUtc": "2026-08-27T14:08:18.5264375Z",
+  "completedAtUtc": "2026-08-27T14:08:39.8710878Z",
+  "timeoutSeconds": 40,
+  "codeHashes": {
+    "chatgpt_chat.ps1": "e2f22443349dd8ce716198d9259ac7f08cb5d84da552fd409e3c4bc830a97c8a",
+    "chatgpt_bridge_test.ps1": "6f90acd04424a01fcf353ea3e9746468728c9f99e7fc21a80c5d6985f9a41867",
+    "chatgpt_uia_dump.ps1": "0229f164500b162d85b7a0ead51dce6d7b1613dabe755956740cb0cae28d530b"
+  },
+  "gitCommit": "a360cd7bc51270f86fd9b00dbd38390d1cab9ca0",
+  "workingTreeDirty": true,
+  "metadata": {
+    "codeFiles": [
+      "chatgpt_chat.ps1",
+      "chatgpt_bridge_test.ps1",
+      "chatgpt_uia_dump.ps1"
+    ],
+    "normalization": "CRLF/CR to LF; trim terminal LF only",
+    "exactMatch": true,
+    "attempted": 1,
+    "unattempted": 0,
+    "stoppedOnFailure": true,
+    "contractError": null
+  },
+  "summary": {
+    "total": 1,
+    "passed": 0,
+    "failed": 1
+  },
+  "attempts": [
+    {
+      "name": "InputRecoveryValuePattern",
+      "runId": "5E374A69_InputRecoveryValuePattern",
+      "result": "FAIL",
+      "expected": "VALUE_5E374A69",
+      "actual": null,
+      "error": "FRESH_CHAT_NOT_CONFIRMED",
+      "expectedLength": 14,
+      "actualLength": 0,
+      "expectedHash": "a36cf627e069381b750a1455a92e9558c03716867a54b9f325484acfde908f71",
+      "actualHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "responseIsNull": true,
+      "chatPolicy": "fresh",
+      "surfaceModeBefore": "ChatGPT",
+      "surfaceModeAfter": "ChatGPT",
+      "chatModeConfirmed": true,
+      "freshAction": "NewChat.InvokePattern",
+      "freshActionRuntimeId": "42.458832.4.5.1.4307",
+      "freshTransitionObserved": true,
+      "freshChatConfirmed": false,
+      "freshMessageCount": null,
+      "baselineMessageCount": 0,
+      "inputMethod": null,
+      "inputFallbackFrom": null,
+      "inputAttemptCount": 0,
+      "clipboardRestored": false,
+      "copyRuntimeId": null,
+      "copyTracePath": null,
+      "streamTracePath": null,
+      "assistantTracePath": null,
+      "logPath": "C:\\Users\\andre\\.dsh\\chatgpt-desktop-uia-bridge\\logs\\test_5E374A69_InputRecoveryValuePattern.log",
+      "durationMs": 20159,
+      "conversationRuntimeId": "42.1508952.4.0.0.5",
+      "oldMarkerAbsent": true,
+      "oldMarkerPresent": false,
+      "traceRowCount": 0,
+      "traceCompact": false,
+      "errorCode": "FRESH_CHAT_NOT_CONFIRMED"
+    }
+  ],
+  "setupAttempts": []
+}

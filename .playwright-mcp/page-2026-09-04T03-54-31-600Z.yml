@@ -1,0 +1,75 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e4]:
+    - generic [ref=e7]:
+      - button "Open sidebar" [ref=e119] [cursor=pointer]
+      - button "New session" [ref=e41] [cursor=pointer]
+      - generic [ref=e47]:
+        - button "Add workspace" [ref=e61] [cursor=pointer]
+        - button "Search sessions" [ref=e125] [cursor=pointer]
+      - generic [ref=e69]:
+        - button "Worktree tasks" [ref=e72] [cursor=pointer]
+        - button [ref=e129] [cursor=pointer]
+    - generic [ref=e92]:
+      - generic [ref=e95]:
+        - generic [ref=e100]: Into the Unknown
+        - generic [ref=e101]: Preview
+      - generic [ref=e102]:
+        - button "Choose workspace" [ref=e103] [cursor=pointer]:
+          - generic [ref=e106]: "Postman PR #88 — REQ_20260904T023423Z_8302"
+        - button "Standard mode" [ref=e139] [cursor=pointer]
+      - generic [ref=e111]:
+        - textbox "Describe what you want to build" [ref=e147]
+        - generic [ref=e115]:
+          - generic [ref=e116]:
+            - button "Commands" [ref=e148] [cursor=pointer]
+            - 'button "Access mode, current: Full access" [ref=e153] [cursor=pointer]':
+              - generic [ref=e159]: Full access
+            - button "New session on a fresh worktree off origin/main" [ref=e164] [cursor=pointer]:
+              - generic [ref=e167]: worktree
+          - generic [ref=e117]:
+            - 'button "Режим команды: Наследовать" [ref=e170] [cursor=pointer]':
+              - generic [ref=e172]: Наследовать
+              - generic [aria-hidden] [ref=e173]: ⌄
+            - button "Select model, current GPT-5.6 Luna, reasoning effort High" [ref=e176] [cursor=pointer]:
+              - generic [ref=e177]: GPT-5.6 Luna
+              - generic [ref=e178]: High
+            - button "Send message" [disabled] [ref=e181]
+    - generic [ref=e185]:
+      - generic [ref=e186]:
+        - generic: Details
+        - button "Close details" [ref=e187] [cursor=pointer]
+      - generic [ref=e190]: Click a tool row in the message flow to view its details
+  - generic:
+    - generic:
+      - generic [ref=e191]:
+        - button "Expand bottom panel" [ref=e192] [cursor=pointer]
+        - button "Collapse sidebar" [ref=e196] [cursor=pointer]
+      - generic [ref=e204]:
+        - generic [ref=e206]:
+          - generic "Files" [ref=e207] [cursor=pointer]:
+            - button "Close" [ref=e212]
+          - generic "postman-wp018-e2e.html" [ref=e515] [cursor=pointer]:
+            - button "Close" [ref=e520]
+          - button "New tab" [ref=e216] [cursor=pointer]
+        - generic [ref=e524]:
+          - generic [ref=e525]:
+            - textbox "C:\\Users\\andre\\AppData\\Local\\DSH\\Postman\\worktrees\\REQ_20260904T023423Z_8302\\docs\\postman-wp018-e2e.html" [ref=e526]:
+              - /placeholder: File path (relative to the session directory or absolute), Enter to open
+              - text: docs/postman-wp018-e2e.html
+            - generic [ref=e527]:
+              - button "Preview" [ref=e528] [cursor=pointer]
+              - button "Edit" [ref=e529] [cursor=pointer]
+            - button "Save" [ref=e530] [cursor=pointer]
+            - button "File tree panel" [ref=e533] [cursor=pointer]
+          - generic [ref=e538]:
+            - generic [ref=e539]:
+              - 'generic "Sandbox mode: on · pages cannot access the GUI''s data or local files; logins and third-party cookies may not work" [ref=e541]'
+              - button "Temporarily disable (unsafe)" [ref=e542] [cursor=pointer]
+            - iframe [ref=e543]:
+              - generic [ref=f1e1]:
+                - heading "WP-018 E2E PASS" [level=1] [ref=f1e2]
+                - button "Проверить" [ref=f1e3]
+                - button "Красная проверка" [ref=f1e4]
+                - button "Зелёная проверка" [ref=f1e5]
+                - button "Фиолетовая проверка" [ref=f1e6]
+                - button "Розовая проверка" [ref=f1e7]

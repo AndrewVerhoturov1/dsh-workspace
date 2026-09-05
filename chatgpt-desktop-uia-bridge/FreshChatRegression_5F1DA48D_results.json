@@ -1,0 +1,82 @@
+{
+  "schemaVersion": 5,
+  "suite": "FreshChatRegression",
+  "runId": "5F1DA48D",
+  "startedAtUtc": "2026-08-27T17:30:23.0915068Z",
+  "completedAtUtc": "2026-08-27T17:30:47.0241693Z",
+  "timeoutSeconds": 120,
+  "codeHashes": {
+    "chatgpt_chat.ps1": "0560c5890084468b18a7d652becf8c334dbfb0691f2b880077b3559ca09a67c5",
+    "chatgpt_bridge_test.ps1": "3724cc67050b965bc038af5f93192e79cc3df2ac59a9e69b66ba7a4ec0b55c77",
+    "chatgpt_uia_dump.ps1": "0229f164500b162d85b7a0ead51dce6d7b1613dabe755956740cb0cae28d530b"
+  },
+  "gitCommit": "2efd1b2e75069687438e0a8f58319dde682b196b",
+  "workingTreeDirty": true,
+  "metadata": {
+    "codeFiles": [
+      "chatgpt_chat.ps1",
+      "chatgpt_bridge_test.ps1",
+      "chatgpt_uia_dump.ps1"
+    ],
+    "normalization": "CRLF/CR to LF; trim terminal LF only",
+    "exactMatch": true,
+    "attempted": 1,
+    "unattempted": 0,
+    "stoppedOnFailure": false,
+    "contractError": null
+  },
+  "summary": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0,
+    "setupFailed": false
+  },
+  "attempts": [
+    {
+      "name": "FreshChatRegression",
+      "runId": "5F1DA48D_FreshChatRegression",
+      "result": "PASS",
+      "expected": "FRESH_5F1DA48D",
+      "actual": "FRESH_5F1DA48D",
+      "error": null,
+      "expectedLength": 14,
+      "actualLength": 14,
+      "expectedHash": "9233a1871cdc0086155130b5f2534afee3e2e693ae5bd5e68419352bfab32553",
+      "actualHash": "9233a1871cdc0086155130b5f2534afee3e2e693ae5bd5e68419352bfab32553",
+      "responseIsNull": false,
+      "chatPolicy": "fresh",
+      "surfaceModeBefore": "ChatGPT",
+      "surfaceModeAfter": "ChatGPT",
+      "chatModeConfirmed": true,
+      "freshAction": "NewChat.InvokePattern",
+      "freshActionRuntimeId": "42.458832.4.5.1.4307",
+      "freshTransitionObserved": true,
+      "freshProofLevel": "UIA_ACTION_AND_EMPTY_STATE",
+      "freshChatConfirmed": true,
+      "freshMessageCount": 0,
+      "baselineMessageCount": 0,
+      "freshComposerInitiallyEmpty": false,
+      "freshComposerSanitized": true,
+      "freshComposerClearMethod": "ValuePattern",
+      "freshComposerClearAttempts": 1,
+      "sendAttempted": true,
+      "inputMethod": "ValuePattern",
+      "inputFallbackFrom": "",
+      "inputAttemptCount": 1,
+      "clipboardRestored": false,
+      "copyRuntimeId": "42.458832.4.5.1.84624",
+      "copyTracePath": "C:\\Users\\andre\\.dsh\\chatgpt-desktop-uia-bridge\\diagnostics\\copy_trace_5F1DA48D_FreshChatRegression.jsonl",
+      "streamTracePath": "C:\\Users\\andre\\.dsh\\chatgpt-desktop-uia-bridge\\diagnostics\\stream_trace_5F1DA48D_FreshChatRegression.jsonl",
+      "assistantTracePath": null,
+      "logPath": "C:\\Users\\andre\\.dsh\\chatgpt-desktop-uia-bridge\\logs\\test_5F1DA48D_FreshChatRegression.log",
+      "durationMs": 22564,
+      "conversationRuntimeId": "42.1508952.4.0.0.5",
+      "oldMarkerAbsent": true,
+      "oldMarkerPresent": false,
+      "traceRowCount": 1,
+      "traceCompact": true,
+      "errorCode": null
+    }
+  ],
+  "setupAttempts": []
+}

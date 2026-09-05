@@ -1,0 +1,29 @@
+{
+  "protocolVersion": 1,
+  "packageId": "WP-006",
+  "repository": "AndrewVerhoturov1/dsh-workspace",
+  "branch": "postman/web-postman-wp-006",
+  "baseCommit": "d837b85996ebe82cda40c72bfe03b629b2f5ed71",
+  "resultType": "hybrid_patch",
+  "patch": "changes.patch",
+  "files": [
+    "postman/web/artifact_detector.py",
+    "postman/web/tests/test_artifact_detector.py"
+  ],
+  "allowedPaths": [
+    "postman/web/artifact_detector.py",
+    "postman/web/tests/test_artifact_detector.py",
+    "postman/web/README.md",
+    "docs/web-postman-implementation-plan.md",
+    "docs/web-postman-artifact-contract.md"
+  ],
+  "expectedTests": [
+    "WP-006 artifact detector unit suite PASS",
+    "WP-005/P4 42/42 PASS",
+    "WP-004/P3 34/34 PASS",
+    "WP-003 28/28 PASS",
+    "WP-002 60/60 PASS",
+    "git diff --check PASS",
+    "one low-noise live P5 DOM smoke, zero downloads"
+  ]
+}

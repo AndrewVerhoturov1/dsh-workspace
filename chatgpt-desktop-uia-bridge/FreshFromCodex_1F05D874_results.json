@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 5,
+  "suite": "FreshFromCodex",
+  "runId": "1F05D874",
+  "startedAtUtc": "2026-08-27T14:23:27.5930041Z",
+  "completedAtUtc": "2026-08-27T14:23:38.4791683Z",
+  "timeoutSeconds": 45,
+  "codeHashes": {
+    "chatgpt_chat.ps1": "679ac576c135cae53c35276ef03da1dfe24d28ac3c81d9b1ff70332b9cf1810e",
+    "chatgpt_bridge_test.ps1": "d3ce880a2c77aff510ada05cf5c3e1fb8d5ec25f229b71f70addf7aae085a161",
+    "chatgpt_uia_dump.ps1": "0229f164500b162d85b7a0ead51dce6d7b1613dabe755956740cb0cae28d530b"
+  },
+  "gitCommit": "a360cd7bc51270f86fd9b00dbd38390d1cab9ca0",
+  "workingTreeDirty": true,
+  "metadata": {
+    "codeFiles": [
+      "chatgpt_chat.ps1",
+      "chatgpt_bridge_test.ps1",
+      "chatgpt_uia_dump.ps1"
+    ],
+    "normalization": "CRLF/CR to LF; trim terminal LF only",
+    "exactMatch": true,
+    "attempted": 1,
+    "unattempted": 0,
+    "stoppedOnFailure": true,
+    "contractError": null
+  },
+  "summary": {
+    "total": 1,
+    "passed": 0,
+    "failed": 1
+  },
+  "attempts": [
+    {
+      "name": "FreshFromCodex",
+      "runId": "1F05D874_FreshFromCodex",
+      "result": "FAIL",
+      "expected": "CODEX_FRESH_1F05D874",
+      "actual": null,
+      "error": "BUSY",
+      "expectedLength": 20,
+      "actualLength": 0,
+      "expectedHash": "6171c7cc289b319fd2ed25b6457ad63388d0f944676e4d395dd63d5b37e7d1cb",
+      "actualHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "responseIsNull": true,
+      "chatPolicy": "fresh",
+      "surfaceModeBefore": null,
+      "surfaceModeAfter": null,
+      "chatModeConfirmed": false,
+      "freshAction": null,
+      "freshActionRuntimeId": null,
+      "freshTransitionObserved": false,
+      "freshChatConfirmed": false,
+      "freshMessageCount": null,
+      "baselineMessageCount": null,
+      "inputMethod": null,
+      "inputFallbackFrom": null,
+      "inputAttemptCount": 0,
+      "clipboardRestored": false,
+      "copyRuntimeId": null,
+      "copyTracePath": null,
+      "streamTracePath": null,
+      "assistantTracePath": null,
+      "logPath": "C:\\Users\\andre\\.dsh\\chatgpt-desktop-uia-bridge\\logs\\test_1F05D874_FreshFromCodex.log",
+      "durationMs": 10072,
+      "conversationRuntimeId": null,
+      "oldMarkerAbsent": true,
+      "oldMarkerPresent": false,
+      "traceRowCount": 0,
+      "traceCompact": false,
+      "errorCode": "BUSY"
+    }
+  ],
+  "setupAttempts": []
+}

@@ -1,0 +1,77 @@
+{
+  "schemaVersion": 5,
+  "suite": "FreshFromCodex",
+  "runId": "1C333262",
+  "startedAtUtc": "2026-08-27T15:05:07.6789368Z",
+  "completedAtUtc": "2026-08-27T15:05:56.3589711Z",
+  "timeoutSeconds": 45,
+  "codeHashes": {
+    "chatgpt_chat.ps1": "d13200f60fbcc846de5185415fd3626ae153a2a326c757cab0925070aa9b66a1",
+    "chatgpt_bridge_test.ps1": "cdb52fe7eb2518ad42204243ffc406799de53441a69d9be5e45da664e959eece",
+    "chatgpt_uia_dump.ps1": "0229f164500b162d85b7a0ead51dce6d7b1613dabe755956740cb0cae28d530b"
+  },
+  "gitCommit": "a360cd7bc51270f86fd9b00dbd38390d1cab9ca0",
+  "workingTreeDirty": true,
+  "metadata": {
+    "codeFiles": [
+      "chatgpt_chat.ps1",
+      "chatgpt_bridge_test.ps1",
+      "chatgpt_uia_dump.ps1"
+    ],
+    "normalization": "CRLF/CR to LF; trim terminal LF only",
+    "exactMatch": true,
+    "attempted": 1,
+    "unattempted": 0,
+    "stoppedOnFailure": false,
+    "contractError": null
+  },
+  "summary": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0,
+    "setupFailed": false
+  },
+  "attempts": [
+    {
+      "name": "FreshFromCodex",
+      "runId": "1C333262_FreshFromCodex",
+      "result": "PASS",
+      "expected": "CODEX_FRESH_1C333262",
+      "actual": "CODEX_FRESH_1C333262",
+      "error": null,
+      "expectedLength": 20,
+      "actualLength": 20,
+      "expectedHash": "e090168b08638866f9b339e274188bc3c183ee908280c3efd499c66fed281a71",
+      "actualHash": "e090168b08638866f9b339e274188bc3c183ee908280c3efd499c66fed281a71",
+      "responseIsNull": false,
+      "chatPolicy": "fresh",
+      "surfaceModeBefore": "ChatGPT",
+      "surfaceModeAfter": "ChatGPT",
+      "chatModeConfirmed": true,
+      "freshAction": "NewChat.InvokePattern",
+      "freshActionRuntimeId": "42.458832.4.5.1.4307",
+      "freshTransitionObserved": true,
+      "freshProofLevel": "UIA_ACTION_AND_EMPTY_STATE",
+      "freshChatConfirmed": true,
+      "freshMessageCount": 0,
+      "baselineMessageCount": 2,
+      "inputMethod": "ValuePattern",
+      "inputFallbackFrom": "",
+      "inputAttemptCount": 1,
+      "clipboardRestored": false,
+      "copyRuntimeId": "42.458832.4.5.1.64666",
+      "copyTracePath": "C:\\Users\\andre\\.dsh\\chatgpt-desktop-uia-bridge\\diagnostics\\copy_trace_1C333262_FreshFromCodex.jsonl",
+      "streamTracePath": "C:\\Users\\andre\\.dsh\\chatgpt-desktop-uia-bridge\\diagnostics\\stream_trace_1C333262_FreshFromCodex.jsonl",
+      "assistantTracePath": null,
+      "logPath": "C:\\Users\\andre\\.dsh\\chatgpt-desktop-uia-bridge\\logs\\test_1C333262_FreshFromCodex.log",
+      "durationMs": 47961,
+      "conversationRuntimeId": "42.1508952.4.0.0.5",
+      "oldMarkerAbsent": true,
+      "oldMarkerPresent": false,
+      "traceRowCount": 1,
+      "traceCompact": true,
+      "errorCode": null
+    }
+  ],
+  "setupAttempts": []
+}

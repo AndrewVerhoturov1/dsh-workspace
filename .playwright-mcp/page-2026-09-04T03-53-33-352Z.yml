@@ -1,0 +1,103 @@
+- generic [ref=e1]:
+  - generic [ref=e4]:
+    - generic [ref=e7]:
+      - button "Open sidebar" [ref=e119] [cursor=pointer]
+      - button "New session" [active] [ref=e41] [cursor=pointer]
+      - tooltip "New session"
+      - generic [ref=e47]:
+        - button "Add workspace" [ref=e61] [cursor=pointer]
+        - button "Search sessions" [ref=e125] [cursor=pointer]
+      - generic [ref=e69]:
+        - button "Worktree tasks" [ref=e72] [cursor=pointer]
+        - button [ref=e129] [cursor=pointer]
+    - generic [ref=e92]:
+      - generic [ref=e95]:
+        - generic [ref=e100]: Into the Unknown
+        - generic [ref=e101]: Preview
+      - generic [ref=e102]:
+        - button "Choose workspace" [ref=e103] [cursor=pointer]:
+          - generic [ref=e106]: "Postman PR #88 — REQ_20260904T023423Z_8302"
+        - button "Standard mode" [ref=e139] [cursor=pointer]
+      - generic [ref=e111]:
+        - textbox "Describe what you want to build" [ref=e147]
+        - generic [ref=e115]:
+          - generic [ref=e116]:
+            - button "Commands" [ref=e148] [cursor=pointer]
+            - 'button "Access mode, current: Full access" [ref=e153] [cursor=pointer]':
+              - generic [ref=e159]: Full access
+            - button "New session on a fresh worktree off origin/main" [ref=e164] [cursor=pointer]:
+              - generic [ref=e167]: worktree
+          - generic [ref=e117]:
+            - 'button "Режим команды: Наследовать" [ref=e170] [cursor=pointer]':
+              - generic [ref=e172]: Наследовать
+              - generic [aria-hidden] [ref=e173]: ⌄
+            - button "Select model, current GPT-5.6 Luna, reasoning effort High" [ref=e176] [cursor=pointer]:
+              - generic [ref=e177]: GPT-5.6 Luna
+              - generic [ref=e178]: High
+            - button "Send message" [disabled] [ref=e181]
+    - generic [ref=e185]:
+      - generic [ref=e186]:
+        - generic: Details
+        - button "Close details" [ref=e187] [cursor=pointer]
+      - generic [ref=e190]: Click a tool row in the message flow to view its details
+  - generic:
+    - generic:
+      - generic [ref=e191]:
+        - button "Expand bottom panel" [ref=e192] [cursor=pointer]
+        - button "Collapse sidebar" [ref=e196] [cursor=pointer]
+      - generic [ref=e204]:
+        - generic [ref=e206]:
+          - generic "Files" [ref=e207] [cursor=pointer]:
+            - button "Close" [ref=e212]
+          - button "New tab" [ref=e216] [cursor=pointer]
+        - generic [ref=e222]:
+          - generic [ref=e223]:
+            - textbox "Search files by name…" [ref=e224]
+            - button "Refresh" [ref=e225] [cursor=pointer]
+            - button "Upload files" [ref=e228] [cursor=pointer]
+            - button "Upload folder" [ref=e232] [cursor=pointer]
+          - generic [ref=e236]:
+            - generic [ref=e237] [cursor=pointer]: REQ_20260904T023423Z_8302
+            - button ".agents" [ref=e242] [cursor=pointer]
+            - button ".github" [ref=e247] [cursor=pointer]
+            - button "change-ledger" [ref=e252] [cursor=pointer]
+            - button "chatgpt-desktop-uia-bridge" [ref=e257] [cursor=pointer]
+            - button "diagnostics" [ref=e262] [cursor=pointer]
+            - button "docs" [ref=e267] [cursor=pointer]
+            - button "plugins" [ref=e272] [cursor=pointer]
+            - button "postman" [ref=e277] [cursor=pointer]
+            - button "profiles" [ref=e282] [cursor=pointer]
+            - button "tools" [ref=e287] [cursor=pointer]
+            - button ".git" [ref=e291] [cursor=pointer]
+            - button ".gitignore" [ref=e295] [cursor=pointer]
+            - button "AGENTS.md" [ref=e299] [cursor=pointer]
+            - button "LUNA_IMPLEMENTATION_PROMPT.md" [ref=e303] [cursor=pointer]
+            - button "postman-check.html" [ref=e307] [cursor=pointer]
+            - button "README.md" [ref=e311] [cursor=pointer]
+            - button "REPO_POLICY.md" [ref=e315] [cursor=pointer]
+            - button "REQ_20260901T102848Z_2974.md" [ref=e319] [cursor=pointer]
+            - button "REQ_20260901T201152Z_4142.md" [ref=e323] [cursor=pointer]
+            - button "REQ_20260901T205131Z_2292.md" [ref=e327] [cursor=pointer]
+            - button "REQ_20260901T213939Z_3681.md" [ref=e331] [cursor=pointer]
+            - button "REQ_20260901T230600Z_0142.md" [ref=e335] [cursor=pointer]
+            - button "REQ_20260901T233133Z_1874.md" [ref=e339] [cursor=pointer]
+            - button "REQ_20260902T003436Z_4353.md" [ref=e343] [cursor=pointer]
+            - button "REQ_20260902T013000Z_7314.md" [ref=e347] [cursor=pointer]
+            - button "REQ_20260902T015001Z_0141.md" [ref=e351] [cursor=pointer]
+            - button "REQ_20260902T020321Z_5975.md" [ref=e355] [cursor=pointer]
+            - button "REQ_20260902T021752Z_8191.md" [ref=e359] [cursor=pointer]
+            - button "REQ_20260902T021859Z_4496.md" [ref=e363] [cursor=pointer]
+            - button "REQ_20260902T022150Z_7466.md" [ref=e367] [cursor=pointer]
+            - button "REQ_20260902T041659Z_4827.md" [ref=e371] [cursor=pointer]
+            - button "REQ_20260902T112957Z_8262.md" [ref=e375] [cursor=pointer]
+            - button "REQ_20260902T113736Z_6074.md" [ref=e379] [cursor=pointer]
+            - button "REQ_20260902T201932Z_5328.md" [ref=e383] [cursor=pointer]
+            - button "REQ_20260902T203658Z_8235.md" [ref=e387] [cursor=pointer]
+            - button "REQ_20260903T005851Z_4149.md" [ref=e391] [cursor=pointer]
+            - button "REQ_20260903T013829Z_1808.md" [ref=e395] [cursor=pointer]
+            - button "REQ_20260903T043402Z_7925.md" [ref=e399] [cursor=pointer]
+            - button "REQ_20260903T044322Z_9563.md" [ref=e403] [cursor=pointer]
+            - button "REQ_20260903T212957Z_0994.md" [ref=e407] [cursor=pointer]
+            - button "REQ_20260903T234842Z_1094.md" [ref=e411] [cursor=pointer]
+            - button "REQ_20260904T012813Z_9750.md" [ref=e415] [cursor=pointer]
+            - button "REQ_20260904T023423Z_8302.md" [ref=e419] [cursor=pointer]

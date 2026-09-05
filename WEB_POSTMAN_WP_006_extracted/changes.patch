@@ -1,0 +1,104 @@
+--- a/postman/web/README.md
++++ b/postman/web/README.md
+@@ -1 +1,40 @@
+ WP-005 не ищет attachments, не скачивает файлы и не применяет artifacts.
++
++---
++
++## WP-006 — Artifact DOM Detection
++
++WP-006 добавляет `artifact_detector.py` и unit tests для P5. Detector запускается
++только после trusted `ASSISTANT_TURN_COMPLETED` proof из WP-005, заново
++подтверждает тот же chat/user/assistant turn и ищет artifact только внутри DOM
++этого assistant turn.
++
++Для ZIP результата внешний ChatGPT должен поместить в semantic text того же
++assistant turn один exact result envelope:
++
++```text
++<<<POSTMAN_RESULT_BEGIN:<REQ>>>
++POSTMAN_ARTIFACT:POSTMAN_<REQ>_RESULT.zip
++<<<POSTMAN_RESULT_END:<REQ>>>
++```
++
++`REQ` и ожидаемое имя файла заранее известны Runtime. Маркеры являются только
++дополнительным correlation proof и не являются routing authority.
++
++`ARTIFACT_DOM_CONFIRMED` требует одновременно:
++
++```text
++trusted completed WP-005 assistant proof
+++ exact bound /c/... URL
+++ same immediately-following assistant turn
+++ unchanged completed assistant text SHA-256
+++ no active generation control
+++ one exact BEGIN -> ARTIFACT -> END envelope
+++ one exact expected attachment/download control inside that same turn
++```
++
++ZIP с правильным именем в старом/другом turn, page-wide Download button,
++неверное имя или неоднозначные attachment controls отклоняются fail-closed.
++
++WP-006 ничего не кликает и не скачивает. `page.expect_download()`, controlled
++staging, validator и durable result store принадлежат P6/WP-007.
+--- a/docs/web-postman-implementation-plan.md
++++ b/docs/web-postman-implementation-plan.md
+@@ -5,6 +5,19 @@
+ ```text
+ POSTMAN_REQ_<REQ>_RESULT.zip
+ ```
++
++Для ZIP result используется exact textual envelope внутри correlated assistant
++turn:
++
++```text
++<<<POSTMAN_RESULT_BEGIN:<REQ>>>
++POSTMAN_ARTIFACT:POSTMAN_<REQ>_RESULT.zip
++<<<POSTMAN_RESULT_END:<REQ>>>
++```
++
++BEGIN/END и `POSTMAN_ARTIFACT:` — только дополнительный correlation proof.
++Они не являются authority и не дают права выбирать attachment вне целевого
++assistant turn.
+ 
+ Допустимый detection proof:
+ 
+@@ -15,9 +28,9 @@
+ +
+ next completed assistant turn
+ +
+-exact result envelope/request id
++exact BEGIN -> ARTIFACT -> END envelope for trusted request id
+ +
+-exact expected filename
++exact Runtime-derived expected filename
+ +
+ attachment/download control inside same assistant turn
+ ```
+--- a/docs/web-postman-artifact-contract.md
++++ b/docs/web-postman-artifact-contract.md
+@@ -1,4 +1,24 @@
+ Runtime заранее знает exact expected filename. Имя, предложенное моделью,
+ не может переопределить ожидаемое имя.
+ 
++Для браузерной P5-корреляции ZIP response содержит один exact result envelope в
++semantic text того же correlated assistant turn:
++
++```text
++<<<POSTMAN_RESULT_BEGIN:<requestId>>>
++POSTMAN_ARTIFACT:POSTMAN_<requestId>_RESULT.zip
++<<<POSTMAN_RESULT_END:<requestId>>>
++```
++
++Правила envelope:
++
++- `<requestId>` должен exact-match trusted Runtime requestId;
++- `POSTMAN_ARTIFACT:` должен содержать exact Runtime-derived filename;
++- BEGIN, artifact declaration и END должны встретиться ровно по одному разу и
++  в указанном порядке;
++- envelope является model-written untrusted signal, а не routing authority;
++- envelope без attachment/download control в том же correlated assistant turn
++  недостаточен;
++- attachment с правильным именем вне correlated assistant turn недостаточен.
++
+ Логика payload:

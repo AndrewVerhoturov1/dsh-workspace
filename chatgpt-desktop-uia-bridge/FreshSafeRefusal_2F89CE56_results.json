@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 5,
+  "suite": "FreshSafeRefusal",
+  "runId": "2F89CE56",
+  "startedAtUtc": "2026-08-27T14:15:49.2011116Z",
+  "completedAtUtc": "2026-08-27T14:15:59.2828750Z",
+  "timeoutSeconds": 40,
+  "codeHashes": {
+    "chatgpt_chat.ps1": "679ac576c135cae53c35276ef03da1dfe24d28ac3c81d9b1ff70332b9cf1810e",
+    "chatgpt_bridge_test.ps1": "6f90acd04424a01fcf353ea3e9746468728c9f99e7fc21a80c5d6985f9a41867",
+    "chatgpt_uia_dump.ps1": "0229f164500b162d85b7a0ead51dce6d7b1613dabe755956740cb0cae28d530b"
+  },
+  "gitCommit": "a360cd7bc51270f86fd9b00dbd38390d1cab9ca0",
+  "workingTreeDirty": true,
+  "metadata": {
+    "codeFiles": [
+      "chatgpt_chat.ps1",
+      "chatgpt_bridge_test.ps1",
+      "chatgpt_uia_dump.ps1"
+    ],
+    "normalization": "CRLF/CR to LF; trim terminal LF only",
+    "exactMatch": true,
+    "attempted": 1,
+    "unattempted": 0,
+    "stoppedOnFailure": false,
+    "contractError": null
+  },
+  "summary": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0
+  },
+  "attempts": [
+    {
+      "name": "FreshSafeRefusal",
+      "runId": "2F89CE56_FreshSafeRefusal",
+      "result": "PASS",
+      "expected": "REFUSAL_2F89CE56",
+      "actual": null,
+      "error": null,
+      "expectedLength": 16,
+      "actualLength": 0,
+      "expectedHash": "9912d8f5431f57cfca7b52e0a55d8d2e93701db711b2f5fa23d4aac4d4b73dc0",
+      "actualHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "responseIsNull": true,
+      "chatPolicy": "fresh",
+      "surfaceModeBefore": "ChatGPT",
+      "surfaceModeAfter": "ChatGPT",
+      "chatModeConfirmed": true,
+      "freshAction": "NewChat.InvokePattern",
+      "freshActionRuntimeId": "42.458832.4.5.1.4307",
+      "freshTransitionObserved": false,
+      "freshChatConfirmed": false,
+      "freshMessageCount": null,
+      "baselineMessageCount": 2,
+      "inputMethod": null,
+      "inputFallbackFrom": null,
+      "inputAttemptCount": 0,
+      "clipboardRestored": false,
+      "copyRuntimeId": null,
+      "copyTracePath": null,
+      "streamTracePath": null,
+      "assistantTracePath": null,
+      "logPath": "C:\\Users\\andre\\.dsh\\chatgpt-desktop-uia-bridge\\logs\\test_2F89CE56_FreshSafeRefusal.log",
+      "durationMs": 9281,
+      "conversationRuntimeId": "42.458832.4.5.1.24057",
+      "oldMarkerAbsent": true,
+      "oldMarkerPresent": false,
+      "traceRowCount": 0,
+      "traceCompact": false,
+      "errorCode": "FRESH_CHAT_NOT_CONFIRMED"
+    }
+  ],
+  "setupAttempts": []
+}

@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 5,
+  "suite": "FreshChatRegression",
+  "runId": "5A8F4821",
+  "startedAtUtc": "2026-08-27T12:05:31.0547995Z",
+  "completedAtUtc": "2026-08-27T12:05:50.8844027Z",
+  "timeoutSeconds": 30,
+  "codeHashes": {
+    "chatgpt_chat.ps1": "0c88d9e4d005d60240c9a00c35c1b748b34f0ab732c5f7c6a5543233cbdb8495",
+    "chatgpt_bridge_test.ps1": "172865041bcc6885ae2cd71650b28fa8fb1ad0e64b48d0606b7257686103e60a",
+    "chatgpt_uia_dump.ps1": "0229f164500b162d85b7a0ead51dce6d7b1613dabe755956740cb0cae28d530b"
+  },
+  "gitCommit": "e14ae3c8aed61bea4ab5009494c105b42477d518",
+  "workingTreeDirty": true,
+  "metadata": {
+    "codeFiles": [
+      "chatgpt_chat.ps1",
+      "chatgpt_bridge_test.ps1",
+      "chatgpt_uia_dump.ps1"
+    ],
+    "normalization": "CRLF/CR to LF; trim terminal LF only",
+    "exactMatch": true,
+    "attempted": 1,
+    "unattempted": 0,
+    "stoppedOnFailure": false,
+    "contractError": null
+  },
+  "summary": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0
+  },
+  "attempts": [
+    {
+      "name": "FreshChatRegression",
+      "runId": "5A8F4821_FreshChatRegression",
+      "result": "PASS",
+      "expected": "FRESH_5A8F4821",
+      "actual": "FRESH_5A8F4821",
+      "error": null,
+      "expectedLength": 14,
+      "actualLength": 14,
+      "expectedHash": "7717245f308585a0e532f814f0b855de23c88929ba214ec74d39a590c04c516b",
+      "actualHash": "7717245f308585a0e532f814f0b855de23c88929ba214ec74d39a590c04c516b",
+      "responseIsNull": false,
+      "chatPolicy": "fresh",
+      "freshChatConfirmed": true,
+      "freshMessageCount": 0,
+      "baselineMessageCount": 16,
+      "inputMethod": "ValuePattern",
+      "inputAttemptCount": 1,
+      "clipboardRestored": false,
+      "copyRuntimeId": "42.458832.4.5.1.21653",
+      "copyTracePath": "C:\\Users\\andre\\.dsh\\chatgpt-desktop-uia-bridge\\diagnostics\\copy_trace_5A8F4821_FreshChatRegression.jsonl",
+      "streamTracePath": "C:\\Users\\andre\\.dsh\\chatgpt-desktop-uia-bridge\\diagnostics\\stream_trace_5A8F4821_FreshChatRegression.jsonl",
+      "assistantTracePath": null,
+      "logPath": "C:\\Users\\andre\\.dsh\\chatgpt-desktop-uia-bridge\\logs\\test_5A8F4821_FreshChatRegression.log",
+      "durationMs": 18981,
+      "oldMarkerAbsent": true,
+      "oldMarkerPresent": false,
+      "traceRowCount": 1,
+      "traceCompact": true,
+      "errorCode": null
+    }
+  ],
+  "setupAttempts": []
+}

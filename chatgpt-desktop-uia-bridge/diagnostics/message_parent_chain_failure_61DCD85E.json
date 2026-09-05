@@ -1,0 +1,1870 @@
+[
+  {
+    "Role": "user",
+    "AnchorRuntimeId": "42.656862.4.6.1.1940",
+    "AnchorName": "Вы сказали:",
+    "YTop": -4838.0,
+    "Ancestors": [
+      {
+        "Depth": 0,
+        "RuntimeId": "42.656862.4.6.1.1940",
+        "ParentRuntimeId": "42.656862.4.6.1.884",
+        "ControlType": "ControlType.Text",
+        "ClassName": "sr-only select-none",
+        "AutomationId": "",
+        "Name": "Вы сказали:",
+        "BoundingRectangle": "1282,-4838,1,2",
+        "DescendantTextCount": 0,
+        "DescendantButtonCount": 0
+      },
+      {
+        "Depth": 1,
+        "RuntimeId": "42.656862.4.6.1.884",
+        "ParentRuntimeId": "42.656862.4.6.1.883",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative shrink-0",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "546,-4837,736,5519",
+        "DescendantTextCount": 421,
+        "DescendantButtonCount": 242
+      },
+      {
+        "Depth": 2,
+        "RuntimeId": "42.656862.4.6.1.883",
+        "ParentRuntimeId": "42.656862.4.6.1.569",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative flex flex-col gap-3 electron:[--color-token-description-foreground:color-mix(in_srgb,var(--color-token-foreground)_70%,transparent)]",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "546,-4837,736,5519",
+        "DescendantTextCount": 421,
+        "DescendantButtonCount": 242
+      },
+      {
+        "Depth": 3,
+        "RuntimeId": "42.656862.4.6.1.569",
+        "ParentRuntimeId": "42.656862.4.6.1.1068",
+        "ControlType": "ControlType.Group",
+        "ClassName": "mx-auto w-full max-w-(--thread-content-max-width) px-toolbar relative flex flex-1 shrink-0 flex-col pb-8",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "530,-4837,768,5551",
+        "DescendantTextCount": 421,
+        "DescendantButtonCount": 242
+      },
+      {
+        "Depth": 4,
+        "RuntimeId": "42.656862.4.6.1.1068",
+        "ParentRuntimeId": "42.656862.4.6.1.1931",
+        "ControlType": "ControlType.Group",
+        "ClassName": "thread-scroll-container relative h-full overflow-x-hidden overflow-y-auto [overflow-anchor:none] [scroll-padding-bottom:var(--thread-scroll-padding-bottom,0px)] electron:[scrollbar-gutter:stable_both-edges] pt-(--thread-content-top-inset) [container-name:thread-content] [container-type:inline-size] focus:outline-none [&:has([data-thread-scroll-footer='true']:focus-within)]:[scroll-padding-bottom:0px] flex flex-col-reverse",
+        "AutomationId": "",
+        "Name": "Вы сказали: Ты работаешь с репозиторием: https://github.com/AndrewVerhoturov1/dsh-workspace… Ghjdthm xnj bp 'njuj yt ljltkfyj b ljltkfq 13:46 Скопировать сообщение Работал на протяжении 11m 25s ChatGPT сказал: Сделано на ветке postman/github-integration-m6. Добавлено: внешний markExternalReady() и миграция схемы M4 → M6; GitHub signal ingest и восстановление после перезапуска; подавление повторов без зависимости от времени; автоматическое создание Issue и безопасная повторная отправка; режим SubmitOnly для ChatGPT bridge; тесты и документация. Проверки: Node: 42/42 PASS; PowerShell: 40/40 PASS; синтаксис PowerShell: PASS; git diff --check: PASS; runner dsh-postman-win: online, занят — false. Живой E2E заблокирован: ",
+        "BoundingRectangle": "387,82,1054,779",
+        "DescendantTextCount": 426,
+        "DescendantButtonCount": 248
+      },
+      {
+        "Depth": 5,
+        "RuntimeId": "42.656862.4.6.1.1931",
+        "ParentRuntimeId": "42.656862.4.6.1.1929",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative h-full flex-1 [content-visibility:auto]",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "387,82,1054,779",
+        "DescendantTextCount": 426,
+        "DescendantButtonCount": 248
+      },
+      {
+        "Depth": 6,
+        "RuntimeId": "42.656862.4.6.1.1929",
+        "ParentRuntimeId": "42.656862.4.6.1.1926",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative mx-auto flex min-h-0 w-full flex-1 flex-col",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "387,82,1054,779",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      },
+      {
+        "Depth": 7,
+        "RuntimeId": "42.656862.4.6.1.1926",
+        "ParentRuntimeId": "42.656862.4.6.1.1924",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative flex h-full flex-col min-h-0",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "387,82,1054,779",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 261
+      },
+      {
+        "Depth": 8,
+        "RuntimeId": "42.656862.4.6.1.1924",
+        "ParentRuntimeId": "42.656862.4.6.1.1922",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative h-full min-h-0",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "387,82,1054,779",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 261
+      },
+      {
+        "Depth": 9,
+        "RuntimeId": "42.656862.4.6.1.1922",
+        "ParentRuntimeId": "42.656862.4.6.1.1921",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative flex min-h-0 flex-1",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "387,82,1054,779",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 261
+      },
+      {
+        "Depth": 10,
+        "RuntimeId": "42.656862.4.6.1.1921",
+        "ParentRuntimeId": "42.656862.4.6.1.1920",
+        "ControlType": "ControlType.Group",
+        "ClassName": "_MainContentFrame_zbk1f_191",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "387,81,1054,780",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 261
+      },
+      {
+        "Depth": 11,
+        "RuntimeId": "42.656862.4.6.1.1920",
+        "ParentRuntimeId": "42.656862.4.6.1.1919",
+        "ControlType": "ControlType.Group",
+        "ClassName": "_MainContentViewport_zbk1f_143",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "387,35,1054,826",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 261
+      }
+    ]
+  },
+  {
+    "Role": "assistant",
+    "AnchorRuntimeId": "42.656862.4.6.1.1980",
+    "AnchorName": "ChatGPT сказал:",
+    "YTop": -4670.0,
+    "Ancestors": [
+      {
+        "Depth": 0,
+        "RuntimeId": "42.656862.4.6.1.1980",
+        "ParentRuntimeId": "42.656862.4.6.1.884",
+        "ControlType": "ControlType.Text",
+        "ClassName": "sr-only select-none",
+        "AutomationId": "",
+        "Name": "ChatGPT сказал:",
+        "BoundingRectangle": "545,-4670,1,2",
+        "DescendantTextCount": 0,
+        "DescendantButtonCount": 0
+      },
+      {
+        "Depth": 1,
+        "RuntimeId": "42.656862.4.6.1.884",
+        "ParentRuntimeId": "42.656862.4.6.1.883",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative shrink-0",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "546,-4837,736,5519",
+        "DescendantTextCount": 421,
+        "DescendantButtonCount": 242
+      },
+      {
+        "Depth": 2,
+        "RuntimeId": "42.656862.4.6.1.883",
+        "ParentRuntimeId": "42.656862.4.6.1.569",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative flex flex-col gap-3 electron:[--color-token-description-foreground:color-mix(in_srgb,var(--color-token-foreground)_70%,transparent)]",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "546,-4837,736,5519",
+        "DescendantTextCount": 421,
+        "DescendantButtonCount": 242
+      },
+      {
+        "Depth": 3,
+        "RuntimeId": "42.656862.4.6.1.569",
+        "ParentRuntimeId": "42.656862.4.6.1.1068",
+        "ControlType": "ControlType.Group",
+        "ClassName": "mx-auto w-full max-w-(--thread-content-max-width) px-toolbar relative flex flex-1 shrink-0 flex-col pb-8",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "530,-4837,768,5551",
+        "DescendantTextCount": 421,
+        "DescendantButtonCount": 242
+      },
+      {
+        "Depth": 4,
+        "RuntimeId": "42.656862.4.6.1.1068",
+        "ParentRuntimeId": "42.656862.4.6.1.1931",
+        "ControlType": "ControlType.Group",
+        "ClassName": "thread-scroll-container relative h-full overflow-x-hidden overflow-y-auto [overflow-anchor:none] [scroll-padding-bottom:var(--thread-scroll-padding-bottom,0px)] electron:[scrollbar-gutter:stable_both-edges] pt-(--thread-content-top-inset) [container-name:thread-content] [container-type:inline-size] focus:outline-none [&:has([data-thread-scroll-footer='true']:focus-within)]:[scroll-padding-bottom:0px] flex flex-col-reverse",
+        "AutomationId": "",
+        "Name": "Вы сказали: Ты работаешь с репозиторием: https://github.com/AndrewVerhoturov1/dsh-workspace… Ghjdthm xnj bp 'njuj yt ljltkfyj b ljltkfq 13:46 Скопировать сообщение Работал на протяжении 11m 25s ChatGPT сказал: Сделано на ветке postman/github-integration-m6. Добавлено: внешний markExternalReady() и миграция схемы M4 → M6; GitHub signal ingest и восстановление после перезапуска; подавление повторов без зависимости от времени; автоматическое создание Issue и безопасная повторная отправка; режим SubmitOnly для ChatGPT bridge; тесты и документация. Проверки: Node: 42/42 PASS; PowerShell: 40/40 PASS; синтаксис PowerShell: PASS; git diff --check: PASS; runner dsh-postman-win: online, занят — false. Живой E2E заблокирован: ",
+        "BoundingRectangle": "387,82,1054,779",
+        "DescendantTextCount": 426,
+        "DescendantButtonCount": 248
+      },
+      {
+        "Depth": 5,
+        "RuntimeId": "42.656862.4.6.1.1931",
+        "ParentRuntimeId": "42.656862.4.6.1.1929",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative h-full flex-1 [content-visibility:auto]",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,83,1054,779",
+        "DescendantTextCount": 426,
+        "DescendantButtonCount": 248
+      },
+      {
+        "Depth": 6,
+        "RuntimeId": "42.656862.4.6.1.1929",
+        "ParentRuntimeId": "42.656862.4.6.1.1926",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative mx-auto flex min-h-0 w-full flex-1 flex-col",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,83,1054,779",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      },
+      {
+        "Depth": 7,
+        "RuntimeId": "42.656862.4.6.1.1926",
+        "ParentRuntimeId": "42.656862.4.6.1.1924",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative flex h-full flex-col min-h-0",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,83,1054,779",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      },
+      {
+        "Depth": 8,
+        "RuntimeId": "42.656862.4.6.1.1924",
+        "ParentRuntimeId": "42.656862.4.6.1.1922",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative h-full min-h-0",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,83,1054,779",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      },
+      {
+        "Depth": 9,
+        "RuntimeId": "42.656862.4.6.1.1922",
+        "ParentRuntimeId": "42.656862.4.6.1.1921",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative flex min-h-0 flex-1",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,83,1054,779",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      },
+      {
+        "Depth": 10,
+        "RuntimeId": "42.656862.4.6.1.1921",
+        "ParentRuntimeId": "42.656862.4.6.1.1920",
+        "ControlType": "ControlType.Group",
+        "ClassName": "_MainContentFrame_zbk1f_191",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,82,1054,780",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      },
+      {
+        "Depth": 11,
+        "RuntimeId": "42.656862.4.6.1.1920",
+        "ParentRuntimeId": "42.656862.4.6.1.1919",
+        "ControlType": "ControlType.Group",
+        "ClassName": "_MainContentViewport_zbk1f_143",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,36,1054,826",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      }
+    ]
+  },
+  {
+    "Role": "user",
+    "AnchorRuntimeId": "42.656862.4.6.1.2124",
+    "AnchorName": "Вы сказали:",
+    "YTop": -3762.0,
+    "Ancestors": [
+      {
+        "Depth": 0,
+        "RuntimeId": "42.656862.4.6.1.2124",
+        "ParentRuntimeId": "42.656862.4.6.1.884",
+        "ControlType": "ControlType.Text",
+        "ClassName": "sr-only select-none",
+        "AutomationId": "",
+        "Name": "Вы сказали:",
+        "BoundingRectangle": "1283,-3761,1,2",
+        "DescendantTextCount": 0,
+        "DescendantButtonCount": 0
+      },
+      {
+        "Depth": 1,
+        "RuntimeId": "42.656862.4.6.1.884",
+        "ParentRuntimeId": "42.656862.4.6.1.883",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative shrink-0",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "547,-4836,736,5519",
+        "DescendantTextCount": 421,
+        "DescendantButtonCount": 242
+      },
+      {
+        "Depth": 2,
+        "RuntimeId": "42.656862.4.6.1.883",
+        "ParentRuntimeId": "42.656862.4.6.1.569",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative flex flex-col gap-3 electron:[--color-token-description-foreground:color-mix(in_srgb,var(--color-token-foreground)_70%,transparent)]",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "547,-4836,736,5519",
+        "DescendantTextCount": 421,
+        "DescendantButtonCount": 242
+      },
+      {
+        "Depth": 3,
+        "RuntimeId": "42.656862.4.6.1.569",
+        "ParentRuntimeId": "42.656862.4.6.1.1068",
+        "ControlType": "ControlType.Group",
+        "ClassName": "mx-auto w-full max-w-(--thread-content-max-width) px-toolbar relative flex flex-1 shrink-0 flex-col pb-8",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "531,-4836,768,5551",
+        "DescendantTextCount": 421,
+        "DescendantButtonCount": 242
+      },
+      {
+        "Depth": 4,
+        "RuntimeId": "42.656862.4.6.1.1068",
+        "ParentRuntimeId": "42.656862.4.6.1.1931",
+        "ControlType": "ControlType.Group",
+        "ClassName": "thread-scroll-container relative h-full overflow-x-hidden overflow-y-auto [overflow-anchor:none] [scroll-padding-bottom:var(--thread-scroll-padding-bottom,0px)] electron:[scrollbar-gutter:stable_both-edges] pt-(--thread-content-top-inset) [container-name:thread-content] [container-type:inline-size] focus:outline-none [&:has([data-thread-scroll-footer='true']:focus-within)]:[scroll-padding-bottom:0px] flex flex-col-reverse",
+        "AutomationId": "",
+        "Name": "Вы сказали: Ты работаешь с репозиторием: https://github.com/AndrewVerhoturov1/dsh-workspace… Ghjdthm xnj bp 'njuj yt ljltkfyj b ljltkfq 13:46 Скопировать сообщение Работал на протяжении 11m 25s ChatGPT сказал: Сделано на ветке postman/github-integration-m6. Добавлено: внешний markExternalReady() и миграция схемы M4 → M6; GitHub signal ingest и восстановление после перезапуска; подавление повторов без зависимости от времени; автоматическое создание Issue и безопасная повторная отправка; режим SubmitOnly для ChatGPT bridge; тесты и документация. Проверки: Node: 42/42 PASS; PowerShell: 40/40 PASS; синтаксис PowerShell: PASS; git diff --check: PASS; runner dsh-postman-win: online, занят — false. Живой E2E заблокирован: ",
+        "BoundingRectangle": "388,83,1054,779",
+        "DescendantTextCount": 426,
+        "DescendantButtonCount": 248
+      },
+      {
+        "Depth": 5,
+        "RuntimeId": "42.656862.4.6.1.1931",
+        "ParentRuntimeId": "42.656862.4.6.1.1929",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative h-full flex-1 [content-visibility:auto]",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,83,1054,779",
+        "DescendantTextCount": 426,
+        "DescendantButtonCount": 248
+      },
+      {
+        "Depth": 6,
+        "RuntimeId": "42.656862.4.6.1.1929",
+        "ParentRuntimeId": "42.656862.4.6.1.1926",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative mx-auto flex min-h-0 w-full flex-1 flex-col",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,83,1054,779",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      },
+      {
+        "Depth": 7,
+        "RuntimeId": "42.656862.4.6.1.1926",
+        "ParentRuntimeId": "42.656862.4.6.1.1924",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative flex h-full flex-col min-h-0",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,83,1054,779",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      },
+      {
+        "Depth": 8,
+        "RuntimeId": "42.656862.4.6.1.1924",
+        "ParentRuntimeId": "42.656862.4.6.1.1922",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative h-full min-h-0",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,83,1054,779",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      },
+      {
+        "Depth": 9,
+        "RuntimeId": "42.656862.4.6.1.1922",
+        "ParentRuntimeId": "42.656862.4.6.1.1921",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative flex min-h-0 flex-1",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,83,1054,779",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      },
+      {
+        "Depth": 10,
+        "RuntimeId": "42.656862.4.6.1.1921",
+        "ParentRuntimeId": "42.656862.4.6.1.1920",
+        "ControlType": "ControlType.Group",
+        "ClassName": "_MainContentFrame_zbk1f_191",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,82,1054,780",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      },
+      {
+        "Depth": 11,
+        "RuntimeId": "42.656862.4.6.1.1920",
+        "ParentRuntimeId": "42.656862.4.6.1.1919",
+        "ControlType": "ControlType.Group",
+        "ClassName": "_MainContentViewport_zbk1f_143",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,36,1054,826",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      }
+    ]
+  },
+  {
+    "Role": "assistant",
+    "AnchorRuntimeId": "42.656862.4.6.1.2145",
+    "AnchorName": "ChatGPT сказал:",
+    "YTop": -3667.0,
+    "Ancestors": [
+      {
+        "Depth": 0,
+        "RuntimeId": "42.656862.4.6.1.2145",
+        "ParentRuntimeId": "42.656862.4.6.1.884",
+        "ControlType": "ControlType.Text",
+        "ClassName": "sr-only select-none",
+        "AutomationId": "",
+        "Name": "ChatGPT сказал:",
+        "BoundingRectangle": "546,-3666,1,1",
+        "DescendantTextCount": 0,
+        "DescendantButtonCount": 0
+      },
+      {
+        "Depth": 1,
+        "RuntimeId": "42.656862.4.6.1.884",
+        "ParentRuntimeId": "42.656862.4.6.1.883",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative shrink-0",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "547,-4836,736,5519",
+        "DescendantTextCount": 421,
+        "DescendantButtonCount": 242
+      },
+      {
+        "Depth": 2,
+        "RuntimeId": "42.656862.4.6.1.883",
+        "ParentRuntimeId": "42.656862.4.6.1.569",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative flex flex-col gap-3 electron:[--color-token-description-foreground:color-mix(in_srgb,var(--color-token-foreground)_70%,transparent)]",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "547,-4836,736,5519",
+        "DescendantTextCount": 421,
+        "DescendantButtonCount": 242
+      },
+      {
+        "Depth": 3,
+        "RuntimeId": "42.656862.4.6.1.569",
+        "ParentRuntimeId": "42.656862.4.6.1.1068",
+        "ControlType": "ControlType.Group",
+        "ClassName": "mx-auto w-full max-w-(--thread-content-max-width) px-toolbar relative flex flex-1 shrink-0 flex-col pb-8",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "531,-4836,768,5551",
+        "DescendantTextCount": 421,
+        "DescendantButtonCount": 242
+      },
+      {
+        "Depth": 4,
+        "RuntimeId": "42.656862.4.6.1.1068",
+        "ParentRuntimeId": "42.656862.4.6.1.1931",
+        "ControlType": "ControlType.Group",
+        "ClassName": "thread-scroll-container relative h-full overflow-x-hidden overflow-y-auto [overflow-anchor:none] [scroll-padding-bottom:var(--thread-scroll-padding-bottom,0px)] electron:[scrollbar-gutter:stable_both-edges] pt-(--thread-content-top-inset) [container-name:thread-content] [container-type:inline-size] focus:outline-none [&:has([data-thread-scroll-footer='true']:focus-within)]:[scroll-padding-bottom:0px] flex flex-col-reverse",
+        "AutomationId": "",
+        "Name": "Вы сказали: Ты работаешь с репозиторием: https://github.com/AndrewVerhoturov1/dsh-workspace… Ghjdthm xnj bp 'njuj yt ljltkfyj b ljltkfq 13:46 Скопировать сообщение Работал на протяжении 11m 25s ChatGPT сказал: Сделано на ветке postman/github-integration-m6. Добавлено: внешний markExternalReady() и миграция схемы M4 → M6; GitHub signal ingest и восстановление после перезапуска; подавление повторов без зависимости от времени; автоматическое создание Issue и безопасная повторная отправка; режим SubmitOnly для ChatGPT bridge; тесты и документация. Проверки: Node: 42/42 PASS; PowerShell: 40/40 PASS; синтаксис PowerShell: PASS; git diff --check: PASS; runner dsh-postman-win: online, занят — false. Живой E2E заблокирован: ",
+        "BoundingRectangle": "388,83,1054,779",
+        "DescendantTextCount": 426,
+        "DescendantButtonCount": 248
+      },
+      {
+        "Depth": 5,
+        "RuntimeId": "42.656862.4.6.1.1931",
+        "ParentRuntimeId": "42.656862.4.6.1.1929",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative h-full flex-1 [content-visibility:auto]",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,83,1054,779",
+        "DescendantTextCount": 426,
+        "DescendantButtonCount": 248
+      },
+      {
+        "Depth": 6,
+        "RuntimeId": "42.656862.4.6.1.1929",
+        "ParentRuntimeId": "42.656862.4.6.1.1926",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative mx-auto flex min-h-0 w-full flex-1 flex-col",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,83,1054,779",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      },
+      {
+        "Depth": 7,
+        "RuntimeId": "42.656862.4.6.1.1926",
+        "ParentRuntimeId": "42.656862.4.6.1.1924",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative flex h-full flex-col min-h-0",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,83,1054,779",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      },
+      {
+        "Depth": 8,
+        "RuntimeId": "42.656862.4.6.1.1924",
+        "ParentRuntimeId": "42.656862.4.6.1.1922",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative h-full min-h-0",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,83,1054,779",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      },
+      {
+        "Depth": 9,
+        "RuntimeId": "42.656862.4.6.1.1922",
+        "ParentRuntimeId": "42.656862.4.6.1.1921",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative flex min-h-0 flex-1",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,83,1054,779",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      },
+      {
+        "Depth": 10,
+        "RuntimeId": "42.656862.4.6.1.1921",
+        "ParentRuntimeId": "42.656862.4.6.1.1920",
+        "ControlType": "ControlType.Group",
+        "ClassName": "_MainContentFrame_zbk1f_191",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,82,1054,780",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      },
+      {
+        "Depth": 11,
+        "RuntimeId": "42.656862.4.6.1.1920",
+        "ParentRuntimeId": "42.656862.4.6.1.1919",
+        "ControlType": "ControlType.Group",
+        "ClassName": "_MainContentViewport_zbk1f_143",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,36,1054,826",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      }
+    ]
+  },
+  {
+    "Role": "assistant",
+    "AnchorRuntimeId": "42.656862.4.6.1.2168",
+    "AnchorName": "ChatGPT сказал:",
+    "YTop": -3570.0,
+    "Ancestors": [
+      {
+        "Depth": 0,
+        "RuntimeId": "42.656862.4.6.1.2168",
+        "ParentRuntimeId": "42.656862.4.6.1.884",
+        "ControlType": "ControlType.Text",
+        "ClassName": "sr-only select-none",
+        "AutomationId": "",
+        "Name": "ChatGPT сказал:",
+        "BoundingRectangle": "546,-3569,1,1",
+        "DescendantTextCount": 0,
+        "DescendantButtonCount": 0
+      },
+      {
+        "Depth": 1,
+        "RuntimeId": "42.656862.4.6.1.884",
+        "ParentRuntimeId": "42.656862.4.6.1.883",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative shrink-0",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "547,-4836,736,5519",
+        "DescendantTextCount": 421,
+        "DescendantButtonCount": 242
+      },
+      {
+        "Depth": 2,
+        "RuntimeId": "42.656862.4.6.1.883",
+        "ParentRuntimeId": "42.656862.4.6.1.569",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative flex flex-col gap-3 electron:[--color-token-description-foreground:color-mix(in_srgb,var(--color-token-foreground)_70%,transparent)]",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "547,-4836,736,5519",
+        "DescendantTextCount": 421,
+        "DescendantButtonCount": 242
+      },
+      {
+        "Depth": 3,
+        "RuntimeId": "42.656862.4.6.1.569",
+        "ParentRuntimeId": "42.656862.4.6.1.1068",
+        "ControlType": "ControlType.Group",
+        "ClassName": "mx-auto w-full max-w-(--thread-content-max-width) px-toolbar relative flex flex-1 shrink-0 flex-col pb-8",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "531,-4836,768,5551",
+        "DescendantTextCount": 421,
+        "DescendantButtonCount": 242
+      },
+      {
+        "Depth": 4,
+        "RuntimeId": "42.656862.4.6.1.1068",
+        "ParentRuntimeId": "42.656862.4.6.1.1931",
+        "ControlType": "ControlType.Group",
+        "ClassName": "thread-scroll-container relative h-full overflow-x-hidden overflow-y-auto [overflow-anchor:none] [scroll-padding-bottom:var(--thread-scroll-padding-bottom,0px)] electron:[scrollbar-gutter:stable_both-edges] pt-(--thread-content-top-inset) [container-name:thread-content] [container-type:inline-size] focus:outline-none [&:has([data-thread-scroll-footer='true']:focus-within)]:[scroll-padding-bottom:0px] flex flex-col-reverse",
+        "AutomationId": "",
+        "Name": "Вы сказали: Ты работаешь с репозиторием: https://github.com/AndrewVerhoturov1/dsh-workspace… Ghjdthm xnj bp 'njuj yt ljltkfyj b ljltkfq 13:46 Скопировать сообщение Работал на протяжении 11m 25s ChatGPT сказал: Сделано на ветке postman/github-integration-m6. Добавлено: внешний markExternalReady() и миграция схемы M4 → M6; GitHub signal ingest и восстановление после перезапуска; подавление повторов без зависимости от времени; автоматическое создание Issue и безопасная повторная отправка; режим SubmitOnly для ChatGPT bridge; тесты и документация. Проверки: Node: 42/42 PASS; PowerShell: 40/40 PASS; синтаксис PowerShell: PASS; git diff --check: PASS; runner dsh-postman-win: online, занят — false. Живой E2E заблокирован: ",
+        "BoundingRectangle": "388,83,1054,779",
+        "DescendantTextCount": 426,
+        "DescendantButtonCount": 248
+      },
+      {
+        "Depth": 5,
+        "RuntimeId": "42.656862.4.6.1.1931",
+        "ParentRuntimeId": "42.656862.4.6.1.1929",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative h-full flex-1 [content-visibility:auto]",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,83,1054,779",
+        "DescendantTextCount": 426,
+        "DescendantButtonCount": 248
+      },
+      {
+        "Depth": 6,
+        "RuntimeId": "42.656862.4.6.1.1929",
+        "ParentRuntimeId": "42.656862.4.6.1.1926",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative mx-auto flex min-h-0 w-full flex-1 flex-col",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,83,1054,779",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      },
+      {
+        "Depth": 7,
+        "RuntimeId": "42.656862.4.6.1.1926",
+        "ParentRuntimeId": "42.656862.4.6.1.1924",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative flex h-full flex-col min-h-0",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,83,1054,779",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      },
+      {
+        "Depth": 8,
+        "RuntimeId": "42.656862.4.6.1.1924",
+        "ParentRuntimeId": "42.656862.4.6.1.1922",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative h-full min-h-0",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,83,1054,779",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      },
+      {
+        "Depth": 9,
+        "RuntimeId": "42.656862.4.6.1.1922",
+        "ParentRuntimeId": "42.656862.4.6.1.1921",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative flex min-h-0 flex-1",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,83,1054,779",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      },
+      {
+        "Depth": 10,
+        "RuntimeId": "42.656862.4.6.1.1921",
+        "ParentRuntimeId": "42.656862.4.6.1.1920",
+        "ControlType": "ControlType.Group",
+        "ClassName": "_MainContentFrame_zbk1f_191",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,82,1054,780",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      },
+      {
+        "Depth": 11,
+        "RuntimeId": "42.656862.4.6.1.1920",
+        "ParentRuntimeId": "42.656862.4.6.1.1919",
+        "ControlType": "ControlType.Group",
+        "ClassName": "_MainContentViewport_zbk1f_143",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,36,1054,826",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      }
+    ]
+  },
+  {
+    "Role": "assistant",
+    "AnchorRuntimeId": "42.656862.4.6.1.2289",
+    "AnchorName": "ChatGPT сказал:",
+    "YTop": -3451.0,
+    "Ancestors": [
+      {
+        "Depth": 0,
+        "RuntimeId": "42.656862.4.6.1.2289",
+        "ParentRuntimeId": "42.656862.4.6.1.884",
+        "ControlType": "ControlType.Text",
+        "ClassName": "sr-only select-none",
+        "AutomationId": "",
+        "Name": "ChatGPT сказал:",
+        "BoundingRectangle": "546,-3450,1,1",
+        "DescendantTextCount": 0,
+        "DescendantButtonCount": 0
+      },
+      {
+        "Depth": 1,
+        "RuntimeId": "42.656862.4.6.1.884",
+        "ParentRuntimeId": "42.656862.4.6.1.883",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative shrink-0",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "547,-4836,736,5519",
+        "DescendantTextCount": 421,
+        "DescendantButtonCount": 242
+      },
+      {
+        "Depth": 2,
+        "RuntimeId": "42.656862.4.6.1.883",
+        "ParentRuntimeId": "42.656862.4.6.1.569",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative flex flex-col gap-3 electron:[--color-token-description-foreground:color-mix(in_srgb,var(--color-token-foreground)_70%,transparent)]",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "547,-4836,736,5519",
+        "DescendantTextCount": 421,
+        "DescendantButtonCount": 242
+      },
+      {
+        "Depth": 3,
+        "RuntimeId": "42.656862.4.6.1.569",
+        "ParentRuntimeId": "42.656862.4.6.1.1068",
+        "ControlType": "ControlType.Group",
+        "ClassName": "mx-auto w-full max-w-(--thread-content-max-width) px-toolbar relative flex flex-1 shrink-0 flex-col pb-8",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "531,-4836,768,5551",
+        "DescendantTextCount": 421,
+        "DescendantButtonCount": 242
+      },
+      {
+        "Depth": 4,
+        "RuntimeId": "42.656862.4.6.1.1068",
+        "ParentRuntimeId": "42.656862.4.6.1.1931",
+        "ControlType": "ControlType.Group",
+        "ClassName": "thread-scroll-container relative h-full overflow-x-hidden overflow-y-auto [overflow-anchor:none] [scroll-padding-bottom:var(--thread-scroll-padding-bottom,0px)] electron:[scrollbar-gutter:stable_both-edges] pt-(--thread-content-top-inset) [container-name:thread-content] [container-type:inline-size] focus:outline-none [&:has([data-thread-scroll-footer='true']:focus-within)]:[scroll-padding-bottom:0px] flex flex-col-reverse",
+        "AutomationId": "",
+        "Name": "Вы сказали: Ты работаешь с репозиторием: https://github.com/AndrewVerhoturov1/dsh-workspace… Ghjdthm xnj bp 'njuj yt ljltkfyj b ljltkfq 13:46 Скопировать сообщение Работал на протяжении 11m 25s ChatGPT сказал: Сделано на ветке postman/github-integration-m6. Добавлено: внешний markExternalReady() и миграция схемы M4 → M6; GitHub signal ingest и восстановление после перезапуска; подавление повторов без зависимости от времени; автоматическое создание Issue и безопасная повторная отправка; режим SubmitOnly для ChatGPT bridge; тесты и документация. Проверки: Node: 42/42 PASS; PowerShell: 40/40 PASS; синтаксис PowerShell: PASS; git diff --check: PASS; runner dsh-postman-win: online, занят — false. Живой E2E заблокирован: ",
+        "BoundingRectangle": "388,83,1054,779",
+        "DescendantTextCount": 426,
+        "DescendantButtonCount": 248
+      },
+      {
+        "Depth": 5,
+        "RuntimeId": "42.656862.4.6.1.1931",
+        "ParentRuntimeId": "42.656862.4.6.1.1929",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative h-full flex-1 [content-visibility:auto]",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,83,1054,779",
+        "DescendantTextCount": 426,
+        "DescendantButtonCount": 248
+      },
+      {
+        "Depth": 6,
+        "RuntimeId": "42.656862.4.6.1.1929",
+        "ParentRuntimeId": "42.656862.4.6.1.1926",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative mx-auto flex min-h-0 w-full flex-1 flex-col",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,83,1054,779",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      },
+      {
+        "Depth": 7,
+        "RuntimeId": "42.656862.4.6.1.1926",
+        "ParentRuntimeId": "42.656862.4.6.1.1924",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative flex h-full flex-col min-h-0",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,83,1054,779",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      },
+      {
+        "Depth": 8,
+        "RuntimeId": "42.656862.4.6.1.1924",
+        "ParentRuntimeId": "42.656862.4.6.1.1922",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative h-full min-h-0",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,83,1054,779",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      },
+      {
+        "Depth": 9,
+        "RuntimeId": "42.656862.4.6.1.1922",
+        "ParentRuntimeId": "42.656862.4.6.1.1921",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative flex min-h-0 flex-1",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,83,1054,779",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      },
+      {
+        "Depth": 10,
+        "RuntimeId": "42.656862.4.6.1.1921",
+        "ParentRuntimeId": "42.656862.4.6.1.1920",
+        "ControlType": "ControlType.Group",
+        "ClassName": "_MainContentFrame_zbk1f_191",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,82,1054,780",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      },
+      {
+        "Depth": 11,
+        "RuntimeId": "42.656862.4.6.1.1920",
+        "ParentRuntimeId": "42.656862.4.6.1.1919",
+        "ControlType": "ControlType.Group",
+        "ClassName": "_MainContentViewport_zbk1f_143",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,36,1054,826",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      }
+    ]
+  },
+  {
+    "Role": "assistant",
+    "AnchorRuntimeId": "42.656862.4.6.1.2391",
+    "AnchorName": "ChatGPT сказал:",
+    "YTop": -3310.0,
+    "Ancestors": [
+      {
+        "Depth": 0,
+        "RuntimeId": "42.656862.4.6.1.2391",
+        "ParentRuntimeId": "42.656862.4.6.1.884",
+        "ControlType": "ControlType.Text",
+        "ClassName": "sr-only select-none",
+        "AutomationId": "",
+        "Name": "ChatGPT сказал:",
+        "BoundingRectangle": "546,-3309,1,1",
+        "DescendantTextCount": 0,
+        "DescendantButtonCount": 0
+      },
+      {
+        "Depth": 1,
+        "RuntimeId": "42.656862.4.6.1.884",
+        "ParentRuntimeId": "42.656862.4.6.1.883",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative shrink-0",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "547,-4836,736,5519",
+        "DescendantTextCount": 421,
+        "DescendantButtonCount": 242
+      },
+      {
+        "Depth": 2,
+        "RuntimeId": "42.656862.4.6.1.883",
+        "ParentRuntimeId": "42.656862.4.6.1.569",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative flex flex-col gap-3 electron:[--color-token-description-foreground:color-mix(in_srgb,var(--color-token-foreground)_70%,transparent)]",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "547,-4836,736,5519",
+        "DescendantTextCount": 421,
+        "DescendantButtonCount": 242
+      },
+      {
+        "Depth": 3,
+        "RuntimeId": "42.656862.4.6.1.569",
+        "ParentRuntimeId": "42.656862.4.6.1.1068",
+        "ControlType": "ControlType.Group",
+        "ClassName": "mx-auto w-full max-w-(--thread-content-max-width) px-toolbar relative flex flex-1 shrink-0 flex-col pb-8",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "531,-4836,768,5551",
+        "DescendantTextCount": 421,
+        "DescendantButtonCount": 242
+      },
+      {
+        "Depth": 4,
+        "RuntimeId": "42.656862.4.6.1.1068",
+        "ParentRuntimeId": "42.656862.4.6.1.1931",
+        "ControlType": "ControlType.Group",
+        "ClassName": "thread-scroll-container relative h-full overflow-x-hidden overflow-y-auto [overflow-anchor:none] [scroll-padding-bottom:var(--thread-scroll-padding-bottom,0px)] electron:[scrollbar-gutter:stable_both-edges] pt-(--thread-content-top-inset) [container-name:thread-content] [container-type:inline-size] focus:outline-none [&:has([data-thread-scroll-footer='true']:focus-within)]:[scroll-padding-bottom:0px] flex flex-col-reverse",
+        "AutomationId": "",
+        "Name": "Вы сказали: Ты работаешь с репозиторием: https://github.com/AndrewVerhoturov1/dsh-workspace… Ghjdthm xnj bp 'njuj yt ljltkfyj b ljltkfq 13:46 Скопировать сообщение Работал на протяжении 11m 25s ChatGPT сказал: Сделано на ветке postman/github-integration-m6. Добавлено: внешний markExternalReady() и миграция схемы M4 → M6; GitHub signal ingest и восстановление после перезапуска; подавление повторов без зависимости от времени; автоматическое создание Issue и безопасная повторная отправка; режим SubmitOnly для ChatGPT bridge; тесты и документация. Проверки: Node: 42/42 PASS; PowerShell: 40/40 PASS; синтаксис PowerShell: PASS; git diff --check: PASS; runner dsh-postman-win: online, занят — false. Живой E2E заблокирован: ",
+        "BoundingRectangle": "388,83,1054,779",
+        "DescendantTextCount": 426,
+        "DescendantButtonCount": 248
+      },
+      {
+        "Depth": 5,
+        "RuntimeId": "42.656862.4.6.1.1931",
+        "ParentRuntimeId": "42.656862.4.6.1.1929",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative h-full flex-1 [content-visibility:auto]",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,83,1054,779",
+        "DescendantTextCount": 426,
+        "DescendantButtonCount": 248
+      },
+      {
+        "Depth": 6,
+        "RuntimeId": "42.656862.4.6.1.1929",
+        "ParentRuntimeId": "42.656862.4.6.1.1926",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative mx-auto flex min-h-0 w-full flex-1 flex-col",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,83,1054,779",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      },
+      {
+        "Depth": 7,
+        "RuntimeId": "42.656862.4.6.1.1926",
+        "ParentRuntimeId": "42.656862.4.6.1.1924",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative flex h-full flex-col min-h-0",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,83,1054,779",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      },
+      {
+        "Depth": 8,
+        "RuntimeId": "42.656862.4.6.1.1924",
+        "ParentRuntimeId": "42.656862.4.6.1.1922",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative h-full min-h-0",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,83,1054,779",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      },
+      {
+        "Depth": 9,
+        "RuntimeId": "42.656862.4.6.1.1922",
+        "ParentRuntimeId": "42.656862.4.6.1.1921",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative flex min-h-0 flex-1",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,83,1054,779",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      },
+      {
+        "Depth": 10,
+        "RuntimeId": "42.656862.4.6.1.1921",
+        "ParentRuntimeId": "42.656862.4.6.1.1920",
+        "ControlType": "ControlType.Group",
+        "ClassName": "_MainContentFrame_zbk1f_191",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,82,1054,780",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      },
+      {
+        "Depth": 11,
+        "RuntimeId": "42.656862.4.6.1.1920",
+        "ParentRuntimeId": "42.656862.4.6.1.1919",
+        "ControlType": "ControlType.Group",
+        "ClassName": "_MainContentViewport_zbk1f_143",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,36,1054,826",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      }
+    ]
+  },
+  {
+    "Role": "assistant",
+    "AnchorRuntimeId": "42.656862.4.6.1.2417",
+    "AnchorName": "ChatGPT сказал:",
+    "YTop": -3169.0,
+    "Ancestors": [
+      {
+        "Depth": 0,
+        "RuntimeId": "42.656862.4.6.1.2417",
+        "ParentRuntimeId": "42.656862.4.6.1.884",
+        "ControlType": "ControlType.Text",
+        "ClassName": "sr-only select-none",
+        "AutomationId": "",
+        "Name": "ChatGPT сказал:",
+        "BoundingRectangle": "546,-3168,1,1",
+        "DescendantTextCount": 0,
+        "DescendantButtonCount": 0
+      },
+      {
+        "Depth": 1,
+        "RuntimeId": "42.656862.4.6.1.884",
+        "ParentRuntimeId": "42.656862.4.6.1.883",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative shrink-0",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "547,-4836,736,5519",
+        "DescendantTextCount": 421,
+        "DescendantButtonCount": 242
+      },
+      {
+        "Depth": 2,
+        "RuntimeId": "42.656862.4.6.1.883",
+        "ParentRuntimeId": "42.656862.4.6.1.569",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative flex flex-col gap-3 electron:[--color-token-description-foreground:color-mix(in_srgb,var(--color-token-foreground)_70%,transparent)]",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "547,-4836,736,5519",
+        "DescendantTextCount": 421,
+        "DescendantButtonCount": 242
+      },
+      {
+        "Depth": 3,
+        "RuntimeId": "42.656862.4.6.1.569",
+        "ParentRuntimeId": "42.656862.4.6.1.1068",
+        "ControlType": "ControlType.Group",
+        "ClassName": "mx-auto w-full max-w-(--thread-content-max-width) px-toolbar relative flex flex-1 shrink-0 flex-col pb-8",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "531,-4836,768,5551",
+        "DescendantTextCount": 421,
+        "DescendantButtonCount": 242
+      },
+      {
+        "Depth": 4,
+        "RuntimeId": "42.656862.4.6.1.1068",
+        "ParentRuntimeId": "42.656862.4.6.1.1931",
+        "ControlType": "ControlType.Group",
+        "ClassName": "thread-scroll-container relative h-full overflow-x-hidden overflow-y-auto [overflow-anchor:none] [scroll-padding-bottom:var(--thread-scroll-padding-bottom,0px)] electron:[scrollbar-gutter:stable_both-edges] pt-(--thread-content-top-inset) [container-name:thread-content] [container-type:inline-size] focus:outline-none [&:has([data-thread-scroll-footer='true']:focus-within)]:[scroll-padding-bottom:0px] flex flex-col-reverse",
+        "AutomationId": "",
+        "Name": "Вы сказали: Ты работаешь с репозиторием: https://github.com/AndrewVerhoturov1/dsh-workspace… Ghjdthm xnj bp 'njuj yt ljltkfyj b ljltkfq 13:46 Скопировать сообщение Работал на протяжении 11m 25s ChatGPT сказал: Сделано на ветке postman/github-integration-m6. Добавлено: внешний markExternalReady() и миграция схемы M4 → M6; GitHub signal ingest и восстановление после перезапуска; подавление повторов без зависимости от времени; автоматическое создание Issue и безопасная повторная отправка; режим SubmitOnly для ChatGPT bridge; тесты и документация. Проверки: Node: 42/42 PASS; PowerShell: 40/40 PASS; синтаксис PowerShell: PASS; git diff --check: PASS; runner dsh-postman-win: online, занят — false. Живой E2E заблокирован: ",
+        "BoundingRectangle": "388,83,1054,779",
+        "DescendantTextCount": 426,
+        "DescendantButtonCount": 248
+      },
+      {
+        "Depth": 5,
+        "RuntimeId": "42.656862.4.6.1.1931",
+        "ParentRuntimeId": "42.656862.4.6.1.1929",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative h-full flex-1 [content-visibility:auto]",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,83,1054,779",
+        "DescendantTextCount": 426,
+        "DescendantButtonCount": 248
+      },
+      {
+        "Depth": 6,
+        "RuntimeId": "42.656862.4.6.1.1929",
+        "ParentRuntimeId": "42.656862.4.6.1.1926",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative mx-auto flex min-h-0 w-full flex-1 flex-col",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,83,1054,779",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      },
+      {
+        "Depth": 7,
+        "RuntimeId": "42.656862.4.6.1.1926",
+        "ParentRuntimeId": "42.656862.4.6.1.1924",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative flex h-full flex-col min-h-0",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,83,1054,779",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      },
+      {
+        "Depth": 8,
+        "RuntimeId": "42.656862.4.6.1.1924",
+        "ParentRuntimeId": "42.656862.4.6.1.1922",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative h-full min-h-0",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,83,1054,779",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      },
+      {
+        "Depth": 9,
+        "RuntimeId": "42.656862.4.6.1.1922",
+        "ParentRuntimeId": "42.656862.4.6.1.1921",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative flex min-h-0 flex-1",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,83,1054,779",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      },
+      {
+        "Depth": 10,
+        "RuntimeId": "42.656862.4.6.1.1921",
+        "ParentRuntimeId": "42.656862.4.6.1.1920",
+        "ControlType": "ControlType.Group",
+        "ClassName": "_MainContentFrame_zbk1f_191",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,82,1054,780",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      },
+      {
+        "Depth": 11,
+        "RuntimeId": "42.656862.4.6.1.1920",
+        "ParentRuntimeId": "42.656862.4.6.1.1919",
+        "ControlType": "ControlType.Group",
+        "ClassName": "_MainContentViewport_zbk1f_143",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "388,36,1054,826",
+        "DescendantTextCount": 428,
+        "DescendantButtonCount": 260
+      }
+    ]
+  },
+  {
+    "Role": "assistant",
+    "AnchorRuntimeId": "42.656862.4.6.1.2481",
+    "AnchorName": "ChatGPT сказал:",
+    "YTop": -3006.0,
+    "Ancestors": [
+      {
+        "Depth": 0,
+        "RuntimeId": "42.656862.4.6.1.2481",
+        "ParentRuntimeId": "42.656862.4.6.1.884",
+        "ControlType": "ControlType.Text",
+        "ClassName": "sr-only select-none",
+        "AutomationId": "",
+        "Name": "ChatGPT сказал:",
+        "BoundingRectangle": "546,-3005,1,1",
+        "DescendantTextCount": 0,
+        "DescendantButtonCount": 0
+      },
+      {
+        "Depth": 1,
+        "RuntimeId": "42.656862.4.6.1.884",
+        "ParentRuntimeId": "42.656862.4.6.1.883",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative shrink-0",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "547,-4836,736,5519",
+        "DescendantTextCount": 421,
+        "DescendantButtonCount": 242
+      },
+      {
+        "Depth": 2,
+        "RuntimeId": "42.656862.4.6.1.883",
+        "ParentRuntimeId": "42.656862.4.6.1.569",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative flex flex-col gap-3 electron:[--color-token-description-foreground:color-mix(in_srgb,var(--color-token-foreground)_70%,transparent)]",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "547,-4836,736,5519",
+        "DescendantTextCount": 421,
+        "DescendantButtonCount": 242
+      },
+      {
+        "Depth": 3,
+        "RuntimeId": "42.656862.4.6.1.569",
+        "ParentRuntimeId": "42.656862.4.6.1.1068",
+        "ControlType": "ControlType.Group",
+        "ClassName": "mx-auto w-full max-w-(--thread-content-max-width) px-toolbar relative flex flex-1 shrink-0 flex-col pb-8",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "531,-4836,768,5551",
+        "DescendantTextCount": 421,
+        "DescendantButtonCount": 242
+      },
+      {
+        "Depth": 4,
+        "RuntimeId": "42.656862.4.6.1.1068",
+        "ParentRuntimeId": "42.656862.4.6.1.1931",
+        "ControlType": "ControlType.Group",
+        "ClassName": "thread-scroll-container relative h-full overflow-x-hidden overflow-y-auto [overflow-anchor:none] [scroll-padding-bottom:var(--thread-scroll-padding-bottom,0px)] electron:[scrollbar-gutter:stable_both-edges] pt-(--thread-content-top-inset) [container-name:thread-content] [container-type:inline-size] focus:outline-none [&:has([data-thread-scroll-footer='true']:focus-within)]:[scroll-padding-bottom:0px] flex flex-col-reverse",
+        "AutomationId": "",
+        "Name": "Вы сказали: Ты работаешь с репозиторием: https://github.com/AndrewVerhoturov1/dsh-workspace… Ghjdthm xnj bp 'njuj yt ljltkfyj b ljltkfq 13:46 Скопировать сообщение Работал на протяжении 11m 25s ChatGPT сказал: Сделано на ветке postman/github-integration-m6. Добавлено: внешний markExternalReady() и миграция схемы M4 → M6; GitHub signal ingest и восстановление после перезапуска; подавление повторов без зависимости от времени; автоматическое создание Issue и безопасная повторная отправка; режим SubmitOnly для ChatGPT bridge; тесты и документация. Проверки: Node: 42/42 PASS; PowerShell: 40/40 PASS; синтаксис PowerShell: PASS; git diff --check: PASS; runner dsh-postman-win: online, занят — false. Живой E2E заблокирован: ",
+        "BoundingRectangle": "388,83,1054,779",
+        "DescendantTextCount": 424,
+        "DescendantButtonCount": 248
+      },
+      {
+        "Depth": 5,
+        "RuntimeId": "42.656862.4.6.1.1931",
+        "ParentRuntimeId": "42.656862.4.6.1.1929",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative h-full flex-1 [content-visibility:auto]",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "387,82,1054,779",
+        "DescendantTextCount": 430,
+        "DescendantButtonCount": 250
+      },
+      {
+        "Depth": 6,
+        "RuntimeId": "42.656862.4.6.1.1929",
+        "ParentRuntimeId": "42.656862.4.6.1.1926",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative mx-auto flex min-h-0 w-full flex-1 flex-col",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "387,82,1054,779",
+        "DescendantTextCount": 433,
+        "DescendantButtonCount": 262
+      },
+      {
+        "Depth": 7,
+        "RuntimeId": "42.656862.4.6.1.1926",
+        "ParentRuntimeId": "42.656862.4.6.1.1924",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative flex h-full flex-col min-h-0",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "387,82,1054,779",
+        "DescendantTextCount": 433,
+        "DescendantButtonCount": 262
+      },
+      {
+        "Depth": 8,
+        "RuntimeId": "42.656862.4.6.1.1924",
+        "ParentRuntimeId": "42.656862.4.6.1.1922",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative h-full min-h-0",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "387,82,1054,779",
+        "DescendantTextCount": 433,
+        "DescendantButtonCount": 262
+      },
+      {
+        "Depth": 9,
+        "RuntimeId": "42.656862.4.6.1.1922",
+        "ParentRuntimeId": "42.656862.4.6.1.1921",
+        "ControlType": "ControlType.Group",
+        "ClassName": "relative flex min-h-0 flex-1",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "387,82,1054,779",
+        "DescendantTextCount": 433,
+        "DescendantButtonCount": 27
+      },
+      {
+        "Depth": 10,
+        "RuntimeId": "42.656862.4.6.1.1921",
+        "ParentRuntimeId": "42.656862.4.6.1.1920",
+        "ControlType": "ControlType.Group",
+        "ClassName": "_MainContentFrame_zbk1f_191",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "387,81,1054,780",
+        "DescendantTextCount": 0,
+        "DescendantButtonCount": 0
+      },
+      {
+        "Depth": 11,
+        "RuntimeId": "42.656862.4.6.1.1920",
+        "ParentRuntimeId": "42.656862.4.6.1.1919",
+        "ControlType": "ControlType.Group",
+        "ClassName": "_MainContentViewport_zbk1f_143",
+        "AutomationId": "",
+        "Name": "",
+        "BoundingRectangle": "387,35,1054,826",
+        "DescendantTextCount": 0,
+        "DescendantButtonCount": 0
+      }
+    ]
+  },
+  {
+    "Role": "assistant",
+    "AnchorRuntimeId": "42.656862.4.6.1.2503",
+    "AnchorName": "ChatGPT сказал:",
+    "YTop": -2887.0,
+    "Ancestors": [
+      {
+        "Depth": 0,
+        "RuntimeId": "42.656862.4.6.1.2503",
+        "ParentRuntimeId": null,
+        "ControlType": null,
+        "ClassName": null,
+        "AutomationId": null,
+        "Name": null,
+        "BoundingRectangle": "Empty",
+        "DescendantTextCount": 0,
+        "DescendantButtonCount": 0
+      }
+    ]
+  },
+  {
+    "Role": "assistant",
+    "AnchorRuntimeId": "42.656862.4.6.1.2529",
+    "AnchorName": "ChatGPT сказал:",
+    "YTop": -2724.0,
+    "Ancestors": [
+      {
+        "Depth": 0,
+        "RuntimeId": "42.656862.4.6.1.2529",
+        "ParentRuntimeId": null,
+        "ControlType": null,
+        "ClassName": null,
+        "AutomationId": null,
+        "Name": null,
+        "BoundingRectangle": "Empty",
+        "DescendantTextCount": 0,
+        "DescendantButtonCount": 0
+      }
+    ]
+  },
+  {
+    "Role": "assistant",
+    "AnchorRuntimeId": "42.656862.4.6.1.2823",
+    "AnchorName": "ChatGPT сказал:",
+    "YTop": -2583.0,
+    "Ancestors": [
+      {
+        "Depth": 0,
+        "RuntimeId": "42.656862.4.6.1.2823",
+        "ParentRuntimeId": null,
+        "ControlType": null,
+        "ClassName": null,
+        "AutomationId": null,
+        "Name": null,
+        "BoundingRectangle": "Empty",
+        "DescendantTextCount": 0,
+        "DescendantButtonCount": 0
+      }
+    ]
+  },
+  {
+    "Role": "assistant",
+    "AnchorRuntimeId": "42.656862.4.6.1.2982",
+    "AnchorName": "ChatGPT сказал:",
+    "YTop": -2420.0,
+    "Ancestors": [
+      {
+        "Depth": 0,
+        "RuntimeId": "42.656862.4.6.1.2982",
+        "ParentRuntimeId": null,
+        "ControlType": null,
+        "ClassName": null,
+        "AutomationId": null,
+        "Name": null,
+        "BoundingRectangle": "Empty",
+        "DescendantTextCount": 0,
+        "DescendantButtonCount": 0
+      }
+    ]
+  },
+  {
+    "Role": "assistant",
+    "AnchorRuntimeId": "42.656862.4.6.1.3041",
+    "AnchorName": "ChatGPT сказал:",
+    "YTop": -2301.0,
+    "Ancestors": [
+      {
+        "Depth": 0,
+        "RuntimeId": "42.656862.4.6.1.3041",
+        "ParentRuntimeId": null,
+        "ControlType": null,
+        "ClassName": null,
+        "AutomationId": null,
+        "Name": null,
+        "BoundingRectangle": "Empty",
+        "DescendantTextCount": 0,
+        "DescendantButtonCount": 0
+      }
+    ]
+  },
+  {
+    "Role": "assistant",
+    "AnchorRuntimeId": "42.656862.4.6.1.3100",
+    "AnchorName": "ChatGPT сказал:",
+    "YTop": -2138.0,
+    "Ancestors": [
+      {
+        "Depth": 0,
+        "RuntimeId": "42.656862.4.6.1.3100",
+        "ParentRuntimeId": null,
+        "ControlType": null,
+        "ClassName": null,
+        "AutomationId": null,
+        "Name": null,
+        "BoundingRectangle": "Empty",
+        "DescendantTextCount": 0,
+        "DescendantButtonCount": 0
+      }
+    ]
+  },
+  {
+    "Role": "assistant",
+    "AnchorRuntimeId": "42.656862.4.6.1.3119",
+    "AnchorName": "ChatGPT сказал:",
+    "YTop": -1997.0,
+    "Ancestors": [
+      {
+        "Depth": 0,
+        "RuntimeId": "42.656862.4.6.1.3119",
+        "ParentRuntimeId": null,
+        "ControlType": null,
+        "ClassName": null,
+        "AutomationId": null,
+        "Name": null,
+        "BoundingRectangle": "Empty",
+        "DescendantTextCount": 0,
+        "DescendantButtonCount": 0
+      }
+    ]
+  },
+  {
+    "Role": "assistant",
+    "AnchorRuntimeId": "42.656862.4.6.1.3179",
+    "AnchorName": "ChatGPT сказал:",
+    "YTop": -1834.0,
+    "Ancestors": [
+      {
+        "Depth": 0,
+        "RuntimeId": "42.656862.4.6.1.3179",
+        "ParentRuntimeId": null,
+        "ControlType": null,
+        "ClassName": null,
+        "AutomationId": null,
+        "Name": null,
+        "BoundingRectangle": "Empty",
+        "DescendantTextCount": 0,
+        "DescendantButtonCount": 0
+      }
+    ]
+  },
+  {
+    "Role": "assistant",
+    "AnchorRuntimeId": "42.656862.4.6.1.3197",
+    "AnchorName": "ChatGPT сказал:",
+    "YTop": -1649.0,
+    "Ancestors": [
+      {
+        "Depth": 0,
+        "RuntimeId": "42.656862.4.6.1.3197",
+        "ParentRuntimeId": null,
+        "ControlType": null,
+        "ClassName": null,
+        "AutomationId": null,
+        "Name": null,
+        "BoundingRectangle": "Empty",
+        "DescendantTextCount": 0,
+        "DescendantButtonCount": 0
+      }
+    ]
+  },
+  {
+    "Role": "assistant",
+    "AnchorRuntimeId": "42.656862.4.6.1.3217",
+    "AnchorName": "ChatGPT сказал:",
+    "YTop": -1530.0,
+    "Ancestors": [
+      {
+        "Depth": 0,
+        "RuntimeId": "42.656862.4.6.1.3217",
+        "ParentRuntimeId": null,
+        "ControlType": null,
+        "ClassName": null,
+        "AutomationId": null,
+        "Name": null,
+        "BoundingRectangle": "Empty",
+        "DescendantTextCount": 0,
+        "DescendantButtonCount": 0
+      }
+    ]
+  },
+  {
+    "Role": "assistant",
+    "AnchorRuntimeId": "42.656862.4.6.1.3276",
+    "AnchorName": "ChatGPT сказал:",
+    "YTop": -1389.0,
+    "Ancestors": [
+      {
+        "Depth": 0,
+        "RuntimeId": "42.656862.4.6.1.3276",
+        "ParentRuntimeId": null,
+        "ControlType": null,
+        "ClassName": null,
+        "AutomationId": null,
+        "Name": null,
+        "BoundingRectangle": "Empty",
+        "DescendantTextCount": 0,
+        "DescendantButtonCount": 0
+      }
+    ]
+  },
+  {
+    "Role": "assistant",
+    "AnchorRuntimeId": "42.656862.4.6.1.3411",
+    "AnchorName": "ChatGPT сказал:",
+    "YTop": -1226.0,
+    "Ancestors": [
+      {
+        "Depth": 0,
+        "RuntimeId": "42.656862.4.6.1.3411",
+        "ParentRuntimeId": null,
+        "ControlType": null,
+        "ClassName": null,
+        "AutomationId": null,
+        "Name": null,
+        "BoundingRectangle": "Empty",
+        "DescendantTextCount": 0,
+        "DescendantButtonCount": 0
+      }
+    ]
+  },
+  {
+    "Role": "assistant",
+    "AnchorRuntimeId": "42.656862.4.6.1.3431",
+    "AnchorName": "ChatGPT сказал:",
+    "YTop": -1063.0,
+    "Ancestors": [
+      {
+        "Depth": 0,
+        "RuntimeId": "42.656862.4.6.1.3431",
+        "ParentRuntimeId": null,
+        "ControlType": null,
+        "ClassName": null,
+        "AutomationId": null,
+        "Name": null,
+        "BoundingRectangle": "Empty",
+        "DescendantTextCount": 0,
+        "DescendantButtonCount": 0
+      }
+    ]
+  },
+  {
+    "Role": "assistant",
+    "AnchorRuntimeId": "42.656862.4.6.1.3511",
+    "AnchorName": "ChatGPT сказал:",
+    "YTop": -922.0,
+    "Ancestors": [
+      {
+        "Depth": 0,
+        "RuntimeId": "42.656862.4.6.1.3511",
+        "ParentRuntimeId": null,
+        "ControlType": null,
+        "ClassName": null,
+        "AutomationId": null,
+        "Name": null,
+        "BoundingRectangle": "Empty",
+        "DescendantTextCount": 0,
+        "DescendantButtonCount": 0
+      }
+    ]
+  },
+  {
+    "Role": "assistant",
+    "AnchorRuntimeId": "42.656862.4.6.1.3686",
+    "AnchorName": "ChatGPT сказал:",
+    "YTop": -781.0,
+    "Ancestors": [
+      {
+        "Depth": 0,
+        "RuntimeId": "42.656862.4.6.1.3686",
+        "ParentRuntimeId": null,
+        "ControlType": null,
+        "ClassName": null,
+        "AutomationId": null,
+        "Name": null,
+        "BoundingRectangle": "Empty",
+        "DescendantTextCount": 0,
+        "DescendantButtonCount": 0
+      }
+    ]
+  },
+  {
+    "Role": "assistant",
+    "AnchorRuntimeId": "42.656862.4.6.1.3706",
+    "AnchorName": "ChatGPT сказал:",
+    "YTop": -618.0,
+    "Ancestors": [
+      {
+        "Depth": 0,
+        "RuntimeId": "42.656862.4.6.1.3706",
+        "ParentRuntimeId": null,
+        "ControlType": null,
+        "ClassName": null,
+        "AutomationId": null,
+        "Name": null,
+        "BoundingRectangle": "Empty",
+        "DescendantTextCount": 0,
+        "DescendantButtonCount": 0
+      }
+    ]
+  },
+  {
+    "Role": "assistant",
+    "AnchorRuntimeId": "42.656862.4.6.1.3769",
+    "AnchorName": "ChatGPT сказал:",
+    "YTop": -499.0,
+    "Ancestors": [
+      {
+        "Depth": 0,
+        "RuntimeId": "42.656862.4.6.1.3769",
+        "ParentRuntimeId": null,
+        "ControlType": null,
+        "ClassName": null,
+        "AutomationId": null,
+        "Name": null,
+        "BoundingRectangle": "Empty",
+        "DescendantTextCount": 0,
+        "DescendantButtonCount": 0
+      }
+    ]
+  },
+  {
+    "Role": "assistant",
+    "AnchorRuntimeId": "42.656862.4.6.1.3852",
+    "AnchorName": "ChatGPT сказал:",
+    "YTop": -358.0,
+    "Ancestors": [
+      {
+        "Depth": 0,
+        "RuntimeId": "42.656862.4.6.1.3852",
+        "ParentRuntimeId": null,
+        "ControlType": null,
+        "ClassName": null,
+        "AutomationId": null,
+        "Name": null,
+        "BoundingRectangle": "Empty",
+        "DescendantTextCount": 0,
+        "DescendantButtonCount": 0
+      }
+    ]
+  },
+  {
+    "Role": "assistant",
+    "AnchorRuntimeId": "42.656862.4.6.1.4131",
+    "AnchorName": "ChatGPT сказал:",
+    "YTop": -217.0,
+    "Ancestors": [
+      {
+        "Depth": 0,
+        "RuntimeId": "42.656862.4.6.1.4131",
+        "ParentRuntimeId": null,
+        "ControlType": null,
+        "ClassName": null,
+        "AutomationId": null,
+        "Name": null,
+        "BoundingRectangle": "Empty",
+        "DescendantTextCount": 0,
+        "DescendantButtonCount": 0
+      }
+    ]
+  },
+  {
+    "Role": "assistant",
+    "AnchorRuntimeId": "42.656862.4.6.1.4302",
+    "AnchorName": "ChatGPT сказал:",
+    "YTop": -39.0,
+    "Ancestors": [
+      {
+        "Depth": 0,
+        "RuntimeId": "42.656862.4.6.1.4302",
+        "ParentRuntimeId": null,
+        "ControlType": null,
+        "ClassName": null,
+        "AutomationId": null,
+        "Name": null,
+        "BoundingRectangle": "Empty",
+        "DescendantTextCount": 0,
+        "DescendantButtonCount": 0
+      }
+    ]
+  },
+  {
+    "Role": "assistant",
+    "AnchorRuntimeId": "42.656862.4.6.1.5352",
+    "AnchorName": "ChatGPT сказал:",
+    "YTop": 58.0,
+    "Ancestors": [
+      {
+        "Depth": 0,
+        "RuntimeId": "42.656862.4.6.1.5352",
+        "ParentRuntimeId": null,
+        "ControlType": null,
+        "ClassName": null,
+        "AutomationId": null,
+        "Name": null,
+        "BoundingRectangle": "Empty",
+        "DescendantTextCount": 0,
+        "DescendantButtonCount": 0
+      }
+    ]
+  },
+  {
+    "Role": "assistant",
+    "AnchorRuntimeId": "42.656862.4.6.1.5552",
+    "AnchorName": "ChatGPT сказал:",
+    "YTop": 199.0,
+    "Ancestors": [
+      {
+        "Depth": 0,
+        "RuntimeId": "42.656862.4.6.1.5552",
+        "ParentRuntimeId": null,
+        "ControlType": null,
+        "ClassName": null,
+        "AutomationId": null,
+        "Name": null,
+        "BoundingRectangle": "Empty",
+        "DescendantTextCount": 0,
+        "DescendantButtonCount": 0
+      }
+    ]
+  },
+  {
+    "Role": "assistant",
+    "AnchorRuntimeId": "42.656862.4.6.1.6055",
+    "AnchorName": "ChatGPT сказал:",
+    "YTop": 318.0,
+    "Ancestors": [
+      {
+        "Depth": 0,
+        "RuntimeId": "42.656862.4.6.1.6055",
+        "ParentRuntimeId": null,
+        "ControlType": null,
+        "ClassName": null,
+        "AutomationId": null,
+        "Name": null,
+        "BoundingRectangle": "Empty",
+        "DescendantTextCount": 0,
+        "DescendantButtonCount": 0
+      }
+    ]
+  },
+  {
+    "Role": "assistant",
+    "AnchorRuntimeId": "42.656862.4.6.1.6180",
+    "AnchorName": "ChatGPT сказал:",
+    "YTop": 437.0,
+    "Ancestors": [
+      {
+        "Depth": 0,
+        "RuntimeId": "42.656862.4.6.1.6180",
+        "ParentRuntimeId": null,
+        "ControlType": null,
+        "ClassName": null,
+        "AutomationId": null,
+        "Name": null,
+        "BoundingRectangle": "Empty",
+        "DescendantTextCount": 0,
+        "DescendantButtonCount": 0
+      }
+    ]
+  },
+  {
+    "Role": "assistant",
+    "AnchorRuntimeId": "42.656862.4.6.1.6473",
+    "AnchorName": "ChatGPT сказал:",
+    "YTop": 534.0,
+    "Ancestors": [
+      {
+        "Depth": 0,
+        "RuntimeId": "42.656862.4.6.1.6473",
+        "ParentRuntimeId": null,
+        "ControlType": null,
+        "ClassName": null,
+        "AutomationId": null,
+        "Name": null,
+        "BoundingRectangle": "Empty",
+        "DescendantTextCount": 0,
+        "DescendantButtonCount": 0
+      }
+    ]
+  }
+]

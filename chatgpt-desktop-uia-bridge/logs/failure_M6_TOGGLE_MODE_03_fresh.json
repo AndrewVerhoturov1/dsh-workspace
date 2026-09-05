@@ -1,0 +1,22 @@
+{
+  "timestampUtc": "2026-08-29T16:33:13.8979080Z",
+  "sample": 3,
+  "surfaceMode": "ChatGPT",
+  "messageCount": 0,
+  "anchorNames": [],
+  "oldAnchorIntersection": 0,
+  "runtimeChanged": false,
+  "previousConversationRuntimeId": "42.2623368.4.0.0.5",
+  "currentConversationRuntimeId": "42.2623368.4.0.0.5",
+  "emptySurfaceMarker": true,
+  "stableSamples": 3,
+  "requiredStableSamples": 3,
+  "predicates": {
+    "surfaceModeConfirmed": true,
+    "messageHistoryEmpty": true,
+    "oldAnchorsAbsent": true,
+    "newChatActionConfirmed": true,
+    "structuralResetConfirmed": true,
+    "surfaceStable": true
+  }
+}

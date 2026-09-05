@@ -1,0 +1,101 @@
+- generic [ref=e1]:
+  - generic [ref=e4]:
+    - generic [ref=e7]:
+      - button "Open sidebar" [ref=e119] [cursor=pointer]
+      - button "New session" [ref=e41] [cursor=pointer]
+      - generic [ref=e47]:
+        - button "Add workspace" [ref=e61] [cursor=pointer]
+        - button "Search sessions" [ref=e125] [cursor=pointer]
+      - generic [ref=e69]:
+        - button "Worktree tasks" [ref=e72] [cursor=pointer]
+        - button [ref=e129] [cursor=pointer]
+    - generic [ref=e92]:
+      - generic [ref=e95]:
+        - generic [ref=e100]: Into the Unknown
+        - generic [ref=e101]: Preview
+      - generic [ref=e102]:
+        - button "Choose workspace" [ref=e103] [cursor=pointer]:
+          - generic [ref=e106]: .dsh
+        - button "Standard mode" [expanded] [active] [ref=e139] [cursor=pointer]
+      - generic [ref=e111]:
+        - textbox "Describe what you want to build" [ref=e147]
+        - generic [ref=e115]:
+          - generic [ref=e116]:
+            - button "Commands" [ref=e148] [cursor=pointer]
+            - 'button "Access mode, current: Full access" [ref=e153] [cursor=pointer]':
+              - generic [ref=e159]: Full access
+            - button "New session on a fresh worktree off origin/main" [ref=e164] [cursor=pointer]:
+              - generic [ref=e167]: worktree
+          - generic [ref=e117]:
+            - 'button "Режим команды: Наследовать" [ref=e170] [cursor=pointer]':
+              - generic [ref=e172]: Наследовать
+              - generic [ref=e173]: ⌄
+            - button "Select model, current GPT-5.6 Luna, reasoning effort High" [ref=e176] [cursor=pointer]:
+              - generic [ref=e177]: GPT-5.6 Luna
+              - generic [ref=e178]: High
+            - button "Send message" [disabled] [ref=e181]
+    - generic [ref=e185]:
+      - generic [ref=e186]:
+        - generic: Details
+        - button "Close details" [ref=e187] [cursor=pointer]
+      - generic [ref=e190]: Click a tool row in the message flow to view its details
+  - generic:
+    - generic:
+      - generic [ref=e191]:
+        - button "Expand bottom panel" [ref=e192] [cursor=pointer]
+        - button "Collapse sidebar" [ref=e196] [cursor=pointer]
+      - generic [ref=e204]:
+        - generic [ref=e206]:
+          - generic "Files" [ref=e207] [cursor=pointer]:
+            - button "Close" [ref=e212]
+          - button "New tab" [ref=e216] [cursor=pointer]
+        - generic [ref=e222]:
+          - generic [ref=e223]:
+            - textbox "Search files by name…" [ref=e224]
+            - button "Refresh" [ref=e225] [cursor=pointer]
+            - button "Upload files" [ref=e228] [cursor=pointer]
+            - button "Upload folder" [ref=e232] [cursor=pointer]
+          - generic [ref=e236]:
+            - generic [ref=e237] [cursor=pointer]: .dsh
+            - button ".git" [ref=e242] [cursor=pointer]
+            - button ".playwright-cli" [ref=e247] [cursor=pointer]
+            - button ".playwright-mcp" [ref=e252] [cursor=pointer]
+            - button "backup" [ref=e257] [cursor=pointer]
+            - button "change-ledger" [ref=e262] [cursor=pointer]
+            - button "chatgpt-desktop-uia-bridge" [ref=e267] [cursor=pointer]
+            - button "plugins" [ref=e272] [cursor=pointer]
+            - button "profiles" [ref=e277] [cursor=pointer]
+            - button "sessions" [ref=e282] [cursor=pointer]
+            - button "storages" [ref=e287] [cursor=pointer]
+            - button ".anonymous-user-id" [ref=e291] [cursor=pointer]
+            - button ".credentials.yaml" [ref=e295] [cursor=pointer]
+            - button ".gitignore" [ref=e299] [cursor=pointer]
+            - button ".tmp-native-auth-plugin.mjs" [ref=e303] [cursor=pointer]
+            - button ".tmp-native-auth.patch.yml" [ref=e307] [cursor=pointer]
+            - button "AGENTS.md" [ref=e311] [cursor=pointer]
+            - button "codex-oauth-runtime.log" [ref=e315] [cursor=pointer]
+            - button "codex-oauth.json" [ref=e319] [cursor=pointer]
+            - button "settings.yaml" [ref=e323] [cursor=pointer]
+            - button "tmp_newchat_probe_result.json" [ref=e327] [cursor=pointer]
+            - button "tmp_newchat_probe.ps1" [ref=e331] [cursor=pointer]
+            - button "tmp_quick_probe.ps1" [ref=e335] [cursor=pointer]
+            - button "tokenledger.sqlite" [ref=e339] [cursor=pointer]
+            - button "tokenledger.sqlite-shm" [ref=e343] [cursor=pointer]
+            - button "tokenledger.sqlite-wal" [ref=e347] [cursor=pointer]
+  - menu [ref=e351]:
+    - menuitem "Standard mode Full coding agent with file editing, shell, file and web search, skills, planning, goals, subagents, and workflows." [ref=e353] [cursor=pointer]:
+      - generic [ref=e355]:
+        - generic [ref=e356]: Standard mode
+        - generic [ref=e357]: Full coding agent with file editing, shell, file and web search, skills, planning, goals, subagents, and workflows.
+    - menuitem "PTC mode All Standard mode capabilities, with tools exposed through the Code Mode SDK so the model can combine multi-step operations in one TypeScript program." [ref=e361] [cursor=pointer]:
+      - generic [ref=e363]:
+        - generic [ref=e364]: PTC mode
+        - generic [ref=e365]: All Standard mode capabilities, with tools exposed through the Code Mode SDK so the model can combine multi-step operations in one TypeScript program.
+    - menuitem "Minimal mode Two-tool coding agent with persistent bash and str_replace_editor." [ref=e367] [cursor=pointer]:
+      - generic [ref=e369]:
+        - generic [ref=e370]: Minimal mode
+        - generic [ref=e371]: Two-tool coding agent with persistent bash and str_replace_editor.
+    - menuitem "Creator mode Built for creating custom agent presets, with all Standard mode capabilities plus runtime inspection, plugin experiments, and preset-authoring guidance." [ref=e373] [cursor=pointer]:
+      - generic [ref=e375]:
+        - generic [ref=e376]: Creator mode
+        - generic [ref=e377]: Built for creating custom agent presets, with all Standard mode capabilities plus runtime inspection, plugin experiments, and preset-authoring guidance.

@@ -1,0 +1,82 @@
+{
+  "schemaVersion": 5,
+  "suite": "FreshWithNonEmptyComposer",
+  "runId": "BE2E1B81",
+  "startedAtUtc": "2026-08-27T17:52:10.6099354Z",
+  "completedAtUtc": "2026-08-27T17:52:32.9409934Z",
+  "timeoutSeconds": 120,
+  "codeHashes": {
+    "chatgpt_chat.ps1": "e62e3efade44d1851cc5ae37ee4fb66151465ebd4c3aa14e094958e875e62345",
+    "chatgpt_bridge_test.ps1": "3724cc67050b965bc038af5f93192e79cc3df2ac59a9e69b66ba7a4ec0b55c77",
+    "chatgpt_uia_dump.ps1": "0229f164500b162d85b7a0ead51dce6d7b1613dabe755956740cb0cae28d530b"
+  },
+  "gitCommit": "2efd1b2e75069687438e0a8f58319dde682b196b",
+  "workingTreeDirty": true,
+  "metadata": {
+    "codeFiles": [
+      "chatgpt_chat.ps1",
+      "chatgpt_bridge_test.ps1",
+      "chatgpt_uia_dump.ps1"
+    ],
+    "normalization": "CRLF/CR to LF; trim terminal LF only",
+    "exactMatch": true,
+    "attempted": 1,
+    "unattempted": 0,
+    "stoppedOnFailure": false,
+    "contractError": null
+  },
+  "summary": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0,
+    "setupFailed": false
+  },
+  "attempts": [
+    {
+      "name": "FreshWithNonEmptyComposer",
+      "runId": "BE2E1B81_FreshWithNonEmptyComposer",
+      "result": "PASS",
+      "expected": "SANITIZED_BE2E1B81",
+      "actual": "SANITIZED_BE2E1B81",
+      "error": null,
+      "expectedLength": 18,
+      "actualLength": 18,
+      "expectedHash": "608f3d1758a612a5e5fb9ad8cb02fa152393b279e14399b49631dd28279171d9",
+      "actualHash": "608f3d1758a612a5e5fb9ad8cb02fa152393b279e14399b49631dd28279171d9",
+      "responseIsNull": false,
+      "chatPolicy": "fresh",
+      "surfaceModeBefore": "ChatGPT",
+      "surfaceModeAfter": "ChatGPT",
+      "chatModeConfirmed": true,
+      "freshAction": "NewChat.InvokePattern",
+      "freshActionRuntimeId": "42.458832.4.5.1.4307",
+      "freshTransitionObserved": true,
+      "freshProofLevel": "UIA_ACTION_AND_EMPTY_STATE",
+      "freshChatConfirmed": true,
+      "freshMessageCount": 0,
+      "baselineMessageCount": 0,
+      "freshComposerInitiallyEmpty": false,
+      "freshComposerSanitized": true,
+      "freshComposerClearMethod": "ValuePattern",
+      "freshComposerClearAttempts": 1,
+      "sendAttempted": true,
+      "inputMethod": "ValuePattern",
+      "inputFallbackFrom": "",
+      "inputAttemptCount": 1,
+      "clipboardRestored": false,
+      "copyRuntimeId": "42.458832.4.5.1.103446",
+      "copyTracePath": "C:\\Users\\andre\\.dsh\\chatgpt-desktop-uia-bridge\\diagnostics\\copy_trace_BE2E1B81_FreshWithNonEmptyComposer.jsonl",
+      "streamTracePath": "C:\\Users\\andre\\.dsh\\chatgpt-desktop-uia-bridge\\diagnostics\\stream_trace_BE2E1B81_FreshWithNonEmptyComposer.jsonl",
+      "assistantTracePath": null,
+      "logPath": "C:\\Users\\andre\\.dsh\\chatgpt-desktop-uia-bridge\\logs\\test_BE2E1B81_FreshWithNonEmptyComposer.log",
+      "durationMs": 22008,
+      "conversationRuntimeId": "42.1508952.4.0.0.5",
+      "oldMarkerAbsent": true,
+      "oldMarkerPresent": false,
+      "traceRowCount": 1,
+      "traceCompact": true,
+      "errorCode": null
+    }
+  ],
+  "setupAttempts": []
+}
