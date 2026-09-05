@@ -152,15 +152,38 @@ def validate_ready(data: dict[str, Any]) -> dict[str, Any]:
 def validate_test_receipt(data: dict[str, Any]) -> dict[str, Any]:
     if data.get("ok") is not True or data.get("code") != "TEST_PASSED":
         raise FinalizationError("TEST_RECEIPT_INVALID", "expected exact TEST_PASSED JSON")
-    require_string(data, "requestId")
-    require_string(data, "branch")
+    request_id = require_string(data, "requestId")
+    branch = require_string(data, "branch")
+    if branch != canonical_branch_name(request_id):
+        raise FinalizationError("TEST_BRANCH_MISMATCH", "TEST branch is not canonical for requestId")
+    require_string(data, "repository")
     require_string(data, "worktree")
-    require_string(data, "readyJsonSha256")
-    require_string(data, "worktreeFingerprint")
+    ready_path = require_string(data, "readyJson")
+    test_path = require_string(data, "testJson")
+    for field in ("readyJsonSha256", "worktreeFingerprint"):
+        value = require_string(data, field)
+        if re.fullmatch(r"[0-9a-f]{64}", value, re.IGNORECASE) is None:
+            raise FinalizationError("TEST_RECEIPT_INVALID", f"{field} must be a SHA-256")
+    changed = data.get("changedFiles")
+    if not isinstance(changed, list) or not changed or any(not isinstance(x, str) or not x for x in changed):
+        raise FinalizationError("TEST_RECEIPT_INVALID", "changedFiles must be a non-empty string array")
     command = data.get("testCommand")
-    if not isinstance(command, list) or not command or any(not isinstance(x, str) or not x for x in command):
+    resolved = data.get("resolvedArgv", data.get("resolvedCommand", command))
+    if not isinstance(command, list) or not command or any(not isinstance(x, str) for x in command):
         raise FinalizationError("TEST_RECEIPT_INVALID", "testCommand must be a non-empty string array")
-    return dict(data)
+    if not isinstance(resolved, list) or not resolved or any(not isinstance(x, str) for x in resolved):
+        raise FinalizationError("TEST_RECEIPT_INVALID", "resolvedArgv must be a non-empty string array")
+    script = data.get("testScript")
+    script_sha = data.get("testScriptSha256")
+    if script is not None:
+        if not isinstance(script, str) or not script:
+            raise FinalizationError("TEST_RECEIPT_INVALID", "testScript must be a path when present")
+        if not isinstance(script_sha, str) or re.fullmatch(r"[0-9a-f]{64}", script_sha, re.IGNORECASE) is None:
+            raise FinalizationError("TEST_RECEIPT_INVALID", "testScriptSha256 must be a SHA-256")
+    result = dict(data)
+    result["readyJson"] = ready_path
+    result["testJson"] = test_path
+    return result
 
 
 def run_process(

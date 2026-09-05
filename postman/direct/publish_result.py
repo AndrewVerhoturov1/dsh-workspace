@@ -68,7 +68,7 @@ def _open_pr_for_branch(
     gh_binary: str,
     gh_api: Callable[..., Any],
 ) -> dict[str, Any] | None:
-    value = gh_api(repository, f"repos/{repository}/pulls?state=open&per_page=100", gh_binary=gh_binary)
+    value = gh_api(repository, f"repos/{repository}/pulls?state=all&per_page=100", gh_binary=gh_binary)
     if not isinstance(value, list):
         raise common.FinalizationError("PUBLISH_GITHUB_FAILED", "open PR response must be an array")
     matches = [
@@ -124,20 +124,29 @@ def publish(
             details={"expected": branch, "actual": actual_branch},
         )
     head_before = common.run_git(worktree, "rev-parse", "HEAD").stdout.strip().lower()
-    if head_before != ready["originMain"].lower():
-        raise common.FinalizationError(
-            "PUBLISH_HEAD_MISMATCH",
-            "worktree HEAD changed after test",
-            details={"expected": ready["originMain"], "actual": head_before},
-        )
+    origin_main = ready["originMain"].lower()
+    already_committed = False
+    if head_before == origin_main:
+        paths = common.changed_paths(worktree)
+        if paths != sorted(ready["changedFiles"]):
+            raise common.FinalizationError(
+                "PUBLISH_CHANGED_FILES_MISMATCH",
+                "worktree paths differ from READY_FOR_TEST",
+                details={"expected": sorted(ready["changedFiles"]), "actual": paths},
+            )
+    else:
+        status_before = common.run_git(worktree, "status", "--porcelain", "--untracked-files=all")
+        ancestry = common.run_git(worktree, "merge-base", "--is-ancestor", origin_main, head_before, check=False)
+        committed_paths = [x for x in common.run_git(worktree, "diff", "--name-only", f"{origin_main}..{head_before}").stdout.splitlines() if x]
+        if status_before.returncode != 0 or status_before.stdout.strip() or ancestry.returncode != 0 or committed_paths != sorted(ready["changedFiles"]):
+            raise common.FinalizationError(
+                "PUBLISH_HEAD_MISMATCH",
+                "worktree contains an unrecognized commit or local changes after TEST_PASSED",
+                details={"expectedBase": origin_main, "actualHead": head_before, "committedPaths": committed_paths, "status": status_before.stdout.splitlines()},
+            )
+        paths = committed_paths
+        already_committed = True
 
-    paths = common.changed_paths(worktree)
-    if paths != sorted(ready["changedFiles"]):
-        raise common.FinalizationError(
-            "PUBLISH_CHANGED_FILES_MISMATCH",
-            "worktree paths differ from READY_FOR_TEST",
-            details={"expected": sorted(ready["changedFiles"]), "actual": paths},
-        )
     fingerprint, _ = common.fingerprint_paths(worktree, paths)
     if fingerprint != test["worktreeFingerprint"]:
         raise common.FinalizationError(
@@ -146,53 +155,56 @@ def publish(
             details={"expected": test["worktreeFingerprint"], "actual": fingerprint},
         )
 
-    diff_check = common.run_git(worktree, "diff", "--check", check=False)
-    if diff_check.returncode != 0:
-        raise common.FinalizationError(
-            "PUBLISH_DIFF_CHECK_FAILED",
-            "git diff --check failed",
-            details={"stdout": diff_check.stdout, "stderr": diff_check.stderr},
-        )
+    if not already_committed:
+        diff_check = common.run_git(worktree, "diff", "--check", check=False)
+        if diff_check.returncode != 0:
+            raise common.FinalizationError(
+                "PUBLISH_DIFF_CHECK_FAILED",
+                "git diff --check failed",
+                details={"stdout": diff_check.stdout, "stderr": diff_check.stderr},
+            )
 
-    staged_before = common.run_git(worktree, "diff", "--cached", "--name-only", "--no-renames").stdout.splitlines()
-    if [x for x in staged_before if x]:
-        raise common.FinalizationError(
-            "PUBLISH_INDEX_DIRTY",
-            "index already contains staged changes before deterministic publication",
-            details={"staged": staged_before},
-        )
+        staged_before = common.run_git(worktree, "diff", "--cached", "--name-only", "--no-renames").stdout.splitlines()
+        if [x for x in staged_before if x]:
+            raise common.FinalizationError(
+                "PUBLISH_INDEX_DIRTY",
+                "index already contains staged changes before deterministic publication",
+                details={"staged": staged_before},
+            )
 
-    common.run_git(worktree, "add", "--", *paths)
-    staged = sorted(
-        x
-        for x in common.run_git(worktree, "diff", "--cached", "--name-only", "--no-renames").stdout.splitlines()
-        if x
-    )
-    if staged != sorted(paths):
-        raise common.FinalizationError(
-            "PUBLISH_CHANGED_FILES_MISMATCH",
-            "staged paths differ from READY_FOR_TEST",
-            details={"expected": sorted(paths), "actual": staged},
+        common.run_git(worktree, "add", "--", *paths)
+        staged = sorted(
+            x
+            for x in common.run_git(worktree, "diff", "--cached", "--name-only", "--no-renames").stdout.splitlines()
+            if x
         )
+        if staged != sorted(paths):
+            raise common.FinalizationError(
+                "PUBLISH_CHANGED_FILES_MISMATCH",
+                "staged paths differ from READY_FOR_TEST",
+                details={"expected": sorted(paths), "actual": staged},
+            )
 
-    unstaged = [x for x in common.run_git(worktree, "diff", "--name-only", "--no-renames").stdout.splitlines() if x]
-    untracked = [x for x in common.run_git(worktree, "ls-files", "--others", "--exclude-standard").stdout.splitlines() if x]
-    if unstaged or untracked:
-        raise common.FinalizationError(
-            "PUBLISH_UNEXPECTED_PATH",
-            "unpublished unstaged/untracked paths remain after exact staging",
-            details={"unstaged": unstaged, "untracked": untracked},
-        )
+        unstaged = [x for x in common.run_git(worktree, "diff", "--name-only", "--no-renames").stdout.splitlines() if x]
+        untracked = [x for x in common.run_git(worktree, "ls-files", "--others", "--exclude-standard").stdout.splitlines() if x]
+        if unstaged or untracked:
+            raise common.FinalizationError(
+                "PUBLISH_UNEXPECTED_PATH",
+                "unpublished unstaged/untracked paths remain after exact staging",
+                details={"unstaged": unstaged, "untracked": untracked},
+            )
 
-    message = commit_message or f"postman: apply {request_id}"
-    commit = common.run_git(worktree, "commit", "-m", message, check=False)
-    if commit.returncode != 0:
-        raise common.FinalizationError(
-            "PUBLISH_COMMIT_FAILED",
-            "git commit failed",
-            details={"stdout": commit.stdout[-4000:], "stderr": commit.stderr[-4000:]},
-        )
-    commit_sha = common.run_git(worktree, "rev-parse", "HEAD").stdout.strip().lower()
+        message = commit_message or f"postman: apply {request_id}"
+        commit = common.run_git(worktree, "commit", "-m", message, check=False)
+        if commit.returncode != 0:
+            raise common.FinalizationError(
+                "PUBLISH_COMMIT_FAILED",
+                "git commit failed",
+                details={"stdout": commit.stdout[-4000:], "stderr": commit.stderr[-4000:]},
+            )
+        commit_sha = common.run_git(worktree, "rev-parse", "HEAD").stdout.strip().lower()
+    else:
+        commit_sha = head_before
 
     status = common.run_git(worktree, "status", "--porcelain", "--untracked-files=all").stdout
     if status.strip():
@@ -229,6 +241,13 @@ def publish(
         f"- test duration: {test.get('durationMs', 0)} ms\n\n"
         "Merge не выполнялся автоматически."
     )
+
+    if existing is not None and existing.get("state") != "open":
+        raise common.FinalizationError(
+            "PUBLISH_PR_ALREADY_CLOSED",
+            "an existing closed PR owns this task branch; refusing to create a duplicate PR",
+            details={"prNumber": existing.get("number"), "state": existing.get("state")},
+        )
 
     if existing is None:
         pr = gh_api(
@@ -294,9 +313,25 @@ def publish(
         "localBranchRetainedUntilMerge": True,
         "mergePerformed": False,
         "publishedJson": str(published_path),
+        # Presentation is a separate host/UI concern; this is not user acceptance.
+        "presentationRequired": True,
+        "presentationStatus": "PENDING",
     }
-    common.atomic_write_json(published_path, result)
-    return result
+    written = common.atomic_write_json(published_path, result)
+    if written.resolve() != published_path.resolve() or not published_path.is_file():
+        raise common.FinalizationError(
+            "PUBLISH_RECEIPT_NOT_PERSISTED",
+            "PUBLISHED receipt was not persisted at the returned path",
+            details={"publishedJson": str(published_path.resolve())},
+        )
+    persisted = common.load_json_file(published_path)
+    if persisted.get("ok") is not True or persisted.get("code") != "PUBLISHED" or Path(persisted.get("publishedJson", "")).resolve() != published_path.resolve():
+        raise common.FinalizationError(
+            "PUBLISH_RECEIPT_INVALID",
+            "persisted PUBLISHED receipt is not readable or points to another path",
+            details={"publishedJson": str(published_path.resolve())},
+        )
+    return persisted
 
 
 def _parser() -> argparse.ArgumentParser:

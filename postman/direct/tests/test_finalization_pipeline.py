@@ -60,7 +60,7 @@ class FakePRApi:
         self.pr = None
 
     def __call__(self, repository, endpoint, *, gh_binary="gh", method=None, payload=None):
-        if endpoint.endswith("/pulls?state=open&per_page=100"):
+        if endpoint.endswith("/pulls?state=open&per_page=100") or endpoint.endswith("/pulls?state=all&per_page=100"):
             return [] if self.pr is None else [self.pr]
         if endpoint.endswith("/pulls") and method == "POST":
             self.pr = {
@@ -178,7 +178,7 @@ class FinalizationPipelineTests(unittest.TestCase):
             fake = FakePRApi()
 
             def gh_api(repository, endpoint, *, gh_binary="gh", method=None, payload=None):
-                if endpoint.endswith("/pulls?state=open&per_page=100"):
+                if endpoint.endswith("/pulls?state=open&per_page=100") or endpoint.endswith("/pulls?state=all&per_page=100"):
                     return [] if fake.pr is None else [fake.pr]
                 if endpoint.endswith("/pulls") and method == "POST":
                     commit_sha = git(worktree, "rev-parse", "HEAD")
@@ -209,6 +209,14 @@ class FinalizationPipelineTests(unittest.TestCase):
             remote = git(primary, "ls-remote", "--heads", "origin", f"refs/heads/{branch}")
             self.assertIn(published["commitSha"], remote)
             self.assertIn(branch, git(primary, "branch", "--format=%(refname:short)").splitlines())
+
+            resumed = publish_result.publish(
+                ready_json=ready_path,
+                test_json=Path(receipt["testJson"]),
+                gh_api=gh_api,
+            )
+            self.assertEqual(published["commitSha"], resumed["commitSha"])
+            self.assertEqual(published["prNumber"], resumed["prNumber"])
 
     def test_test_gate_rejects_mutating_test(self):
         with tempfile.TemporaryDirectory() as td:
