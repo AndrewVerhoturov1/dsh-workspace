@@ -60,3 +60,51 @@ existing validated `resultZip`.
 - The browser process is externally owned and is not closed by the worker.
 - ZIPs are accepted only after the existing artifact validator proves trusted
   request/repository/baseCommit/filename/path metadata.
+
+## Finalization and resume
+
+After a successful transport, use the durable request state rather than starting
+another transport request:
+
+```text
+RESULT_DURABLE
+→ resume_request.ps1 -RequestId REQ_... -TestScript <exact UTF-8 script>
+→ READY_FOR_TEST
+→ TEST_PASSED
+→ PUBLISHED
+→ RESULT_PRESENTED (host/UI status, when requested)
+→ merge decision
+→ CLEANED
+```
+
+`resume_request.py` is the single state-machine entrypoint. It forwards the exact
+receipt paths returned by each stage (`readyJson`, `testJson`, `publishedJson`),
+validates every receipt in the current process, and resumes only the first missing
+stage. A valid existing receipt is never recreated. Resume never invokes Direct
+Postman or contacts Ch1 again. A corrupted or cross-request receipt fails closed.
+
+Production tests should use a UTF-8 task-script file, not a long `python -c`
+string. The script is outside the implementation worktree and its path and SHA-256
+are recorded in `test.json`; the implementation fingerprint must remain unchanged.
+
+## Explicit abandon
+
+A closed, unmerged PR is not cleaned automatically. An operator must explicitly
+run:
+
+```text
+abandon_result.ps1 -PublishedJson <exact published.json> -Reason "..." -ConfirmDiscard
+```
+
+The command verifies the exact request, PR, branch, commit, remote SHA, clean
+worktree, and unregistered Result Workspace before deleting only those owned
+resources. It writes `abandoned.json`; dirty, unknown, or mismatched resources
+fail closed. Repeating the command returns `ALREADY_ABANDONED`.
+
+## Presentation status
+
+Semantic `TEST_PASSED` proves only deterministic task assertions. It does not mean
+the UI was visually accepted. Publication may complete while presentation is
+pending; host integration records `PRESENTED`/`PRESENTATION_PENDING` separately
+with `presentation_status.ps1` (or its Python API). The report must distinguish
+semantic test status, presentation status, and user visual acceptance.
