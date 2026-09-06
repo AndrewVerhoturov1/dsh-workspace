@@ -4,18 +4,40 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>WP-018 E2E PASS</title>
+  <style>
+    #check {
+      appearance: none;
+      border: 0;
+      border-radius: 12px;
+      background: #000;
+      color: #fff;
+      padding: 12px 22px;
+      font: 600 15px/1.2 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      cursor: pointer;
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+      transition: transform 160ms ease, box-shadow 160ms ease, background-color 160ms ease;
+    }
+
+    #check:hover {
+      background: #151515;
+      transform: translateY(-1px);
+      box-shadow: 0 9px 24px rgba(0, 0, 0, 0.22);
+    }
+
+    #check:active {
+      transform: translateY(1px) scale(0.98);
+      box-shadow: 0 3px 10px rgba(0, 0, 0, 0.18);
+    }
+
+    #check:focus-visible {
+      outline: 2px solid #000;
+      outline-offset: 3px;
+    }
+  </style>
 </head>
 <body>
   <h1>WP-018 E2E PASS</h1>
-  <button id="check" type="button">Проверить</button>
-  <br>
-  <button id="red-check" type="button" style="background-color: red; color: white;">Красная проверка</button>
-  <br>
-  <button id="green-check" type="button" style="background-color: green; color: white;">Зелёная проверка</button>
-  <br>
-  <button id="purple-check" type="button" style="background-color: purple; color: white;">Фиолетовая проверка</button>
-  <br>
-  <button id="pink-check" type="button" style="background-color: pink;">Розовая проверка</button>
+  <button id="check" type="button">Продолжить</button>
   <p id="pink-result" hidden>Розовая кнопка работает</p>
   <p id="purple-result" hidden>Фиолетовая кнопка работает</p>
   <p id="green-result" hidden>Зелёная кнопка работает</p>
@@ -24,19 +46,6 @@
   <script>
     document.getElementById('check').addEventListener('click', function () {
       document.getElementById('result').hidden = false;
-    });
-    document.getElementById('red-check').addEventListener('click', function () {
-      document.getElementById('red-result').hidden = false;
-    });
-    document.getElementById('green-check').addEventListener('click', function () {
-      document.getElementById('green-result').hidden = false;
-    });
-
-    document.getElementById('purple-check').addEventListener('click', function () {
-      document.getElementById('purple-result').hidden = false;
-    });
-    document.getElementById('pink-check').addEventListener('click', function () {
-      document.getElementById('pink-result').hidden = false;
     });
   </script>
 </body>
