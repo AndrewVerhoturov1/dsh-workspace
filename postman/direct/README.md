@@ -56,13 +56,19 @@ existing validated `resultZip`.
 - A persisted direct state for a REQ blocks automatic resend.
 - GitHub publication uses authenticated `gh api` and writes only `<REQ>.md`.
 - Task content is intent-only and does not infer implementation requirements.
-- PREPARE fails closed on live conflicting Postman resources: open task PRs,
-  local/remote request branches, and registered additional worktrees.
-- Terminal historical receipts are audit history, not global locks. If an old
-  `published.json`/`abandoned.json` has no corresponding live branch or registered
-  worktree, malformed or older receipt metadata does not block a new PREPARE.
-  A live resource with ambiguous, contradictory, or missing ownership still
-  fails closed.
+- PREPARE V3 is request-scoped: unrelated branches, PRs and worktrees are audit
+  state, not a global mutex. Only identity/resource collisions for the current REQ
+  fail closed. Historical cleanup is outside the PREPARE critical path.
+- The primary checkout is never switched or fast-forwarded by PREPARE. It is used
+  only to fetch/resolve trusted `origin/main`; application happens in a dedicated
+  clean request worktree.
+- Patch payload accepts git-style or traditional unified diff. Same-path main
+  advancement for patches is decided by real `git apply`; exact whole-file payload
+  remains fail-closed on same-path advancement.
+- `git diff --check` during PREPARE is audit/warning only; PUBLISH remains the hard
+  whitespace gate before commit.
+- A semantically tested result that is already present on `origin/main` terminates
+  as `ALREADY_APPLIED` without creating an empty commit or PR.
 - The dedicated Chrome profile is `%LOCALAPPDATA%\DSH\Postman\browser-profile`.
 - The browser process is externally owned and is not closed by the worker.
 - ZIPs are accepted only after the existing artifact validator proves trusted
@@ -78,10 +84,8 @@ RESULT_DURABLE
 → resume_request.ps1 -RequestId REQ_... -TestScript <exact UTF-8 script>
 → READY_FOR_TEST
 → TEST_PASSED
-→ PUBLISHED
-→ RESULT_PRESENTED (host/UI status, when requested)
-→ merge decision
-→ CLEANED
+→ PUBLISHED → RESULT_PRESENTED → merge decision → CLEANED
+  or ALREADY_APPLIED (semantic PASS, no empty commit/PR)
 ```
 
 `resume_request.py` is the single state-machine entrypoint. It forwards the exact

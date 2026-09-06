@@ -147,6 +147,7 @@ def run_test(
         "ok": True, "code": "TEST_PASSED", "testVersion": TEST_VERSION,
         "requestId": ready["requestId"], "repository": ready["repository"], "branch": ready["branch"],
         "worktree": ready["worktree"], "changedFiles": ready["changedFiles"],
+        "alreadyApplied": ready.get("alreadyApplied") is True,
         "readyJson": str(ready_json), "readyJsonSha256": common.sha256_file(ready_json),
         "worktreeFingerprint": fingerprint_after, "testCommand": logical_command,
         "resolvedCommand": resolved, "resolvedArgv": resolved,

@@ -128,10 +128,10 @@ def merged_pr(commit: str) -> dict:
 
 
 class WP020SelfHealingTests(unittest.TestCase):
-    def test_self_heals_merged_stale_result_and_continues_prepare(self):
+    def test_maintenance_helper_still_can_cleanup_merged_owned_result(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            _, primary, base = init_repo(root)
+            _, primary, _ = init_repo(root)
             old_worktree = root / "old-result"
             git(primary, "worktree", "add", "-b", OLD_BRANCH, str(old_worktree), "main")
             (old_worktree / "base.txt").write_text("old result\n", encoding="utf-8")
@@ -139,163 +139,38 @@ class WP020SelfHealingTests(unittest.TestCase):
             git(old_worktree, "commit", "-m", "old result")
             old_commit = git(old_worktree, "rev-parse", "HEAD")
             git(old_worktree, "push", "--set-upstream", "origin", OLD_BRANCH)
-            published = old_result(root, primary, old_worktree, old_commit)
-            result_json = root / "new-result.json"
-            result_json.write_text(json.dumps({
-                "ok": True,
-                "code": "RESULT_DURABLE",
-                "state": "RESULT_DURABLE",
-                "requestId": NEW_REQ,
-                "repository": REPO,
-            }), encoding="utf-8")
-
-            def integrator(**kwargs):
-                worktree = Path(kwargs["repo_root"])
-                (worktree / "new.txt").write_text("new\n", encoding="utf-8")
-                return {
-                    "ok": True,
-                    "code": "READY_FOR_TEST",
-                    "requestId": NEW_REQ,
-                    "repository": REPO,
-                    "baseCommit": base,
-                    "originMain": base,
-                    "branch": common.canonical_branch_name(NEW_REQ),
-                    "artifactSha256": "a" * 64,
-                    "resultType": "files",
-                    "changedFiles": ["new.txt"],
-                }
-
+            old_result(root, primary, old_worktree, old_commit)
             api = FakeGitHub(merged_pr(old_commit))
-            with patch.object(common, "normalize_remote_repository", return_value=REPO):
-                ready = prepare_result.prepare(
-                    result_json=str(result_json),
-                    repo_root=primary,
-                    worktree_root=root / "worktrees",
-                    handoff_root=root / "handoff",
-                    gh_api=api,
-                    integrator=integrator,
-                )
-
-            self.assertEqual("READY_FOR_TEST", ready["code"])
-            self.assertEqual("RESULT_WORKTREE_CLEANED", ready["policyPreflight"]["selfHealingCleanup"][0]["code"])
+            result = prepare_result._classify_and_self_heal(
+                primary,
+                repository=REPO,
+                handoff_root=root / "handoff",
+                gh_binary="gh",
+                gh_api=api,
+            )
+            self.assertEqual("RESULT_WORKTREE_CLEANED", result[0]["code"])
             self.assertFalse(old_worktree.exists())
-            self.assertNotIn(OLD_BRANCH, git(primary, "branch", "--format=%(refname:short)").splitlines())
-            self.assertIn(common.canonical_branch_name(NEW_REQ), git(primary, "branch", "--format=%(refname:short)"))
-            self.assertTrue(published.exists())
 
-    def test_legacy_published_receipt_without_live_resources_is_ignored(self):
+    def test_preflight_does_not_cleanup_or_block_unrelated_postman_resources(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             _, primary, _ = init_repo(root)
-            published = legacy_result(root)
+            extra = root / "unrelated"
+            git(primary, "worktree", "add", "-b", OLD_BRANCH, str(extra), "main")
             with patch.object(common, "normalize_remote_repository", return_value=REPO):
-                result = prepare_result.preflight_policy(
-                    primary,
-                    repository=REPO,
-                    handoff_root=root / "handoff",
-                    gh_api=FakeGitHub(),
-                )
-            self.assertEqual(1, len(result["selfHealingCleanup"]))
-            self.assertEqual(
-                "PREPARE_HISTORICAL_RECEIPT_IGNORED",
-                result["selfHealingCleanup"][0]["code"],
-            )
-            self.assertFalse(result["selfHealingCleanup"][0]["liveResource"])
-            self.assertTrue(published.exists())
-
-    def test_legacy_receipt_does_not_hide_unknown_live_branch(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            _, primary, _ = init_repo(root)
-            legacy_result(root)
-            git(primary, "branch", OLD_BRANCH, "main")
-            with self.assertRaises(common.FinalizationError) as ctx:
-                with patch.object(common, "normalize_remote_repository", return_value=REPO):
-                    prepare_result.preflight_policy(
-                        primary,
-                        repository=REPO,
-                        handoff_root=root / "handoff",
-                        gh_api=FakeGitHub(),
-                    )
-            self.assertEqual("PREPARE_UNKNOWN_POSTMAN_RESOURCE", ctx.exception.code)
-            self.assertIn(OLD_BRANCH, ctx.exception.details["localBranches"])
-
-    def test_legacy_receipt_does_not_hide_unknown_worktree(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            _, primary, _ = init_repo(root)
-            legacy_result(root)
-            extra = root / "unknown"
-            git(primary, "worktree", "add", "--detach", str(extra), "main")
-            with self.assertRaises(common.FinalizationError) as ctx:
-                with patch.object(common, "normalize_remote_repository", return_value=REPO):
-                    prepare_result.preflight_policy(
-                        primary,
-                        repository=REPO,
-                        handoff_root=root / "handoff",
-                        gh_api=FakeGitHub(),
-                    )
-            self.assertEqual("PREPARE_UNKNOWN_POSTMAN_RESOURCE", ctx.exception.code)
-            self.assertIn(str(extra.resolve()), ctx.exception.details["worktrees"])
+                result = prepare_result.preflight_policy(primary, repository=REPO, handoff_root=root / "handoff", gh_api=FakeGitHub())
+            self.assertEqual("permissive-v3", result["prepareMode"])
+            self.assertEqual([], result["selfHealingCleanup"])
+            self.assertTrue(result["selfHealingDeferred"])
             self.assertTrue(extra.exists())
+            self.assertIn(OLD_BRANCH, result["localBranches"])
 
-    def test_incomplete_retained_receipt_without_live_resources_is_audit_only(self):
+    def test_preflight_does_not_fast_forward_or_switch_dirty_primary(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            _, primary, _ = init_repo(root)
-            published = legacy_result(root, retained_markers={"worktreeRetained": True, "worktreeRemoved": False})
-            with patch.object(common, "normalize_remote_repository", return_value=REPO):
-                result = prepare_result.preflight_policy(
-                    primary,
-                    repository=REPO,
-                    handoff_root=root / "handoff",
-                    gh_api=FakeGitHub(),
-                )
-            self.assertEqual(1, len(result["selfHealingCleanup"]))
-            self.assertEqual(
-                "PREPARE_HISTORICAL_RECEIPT_IGNORED",
-                result["selfHealingCleanup"][0]["code"],
-            )
-            self.assertFalse(result["selfHealingCleanup"][0]["liveResource"])
-            self.assertTrue(published.exists())
-
-    def test_open_pr_blocks_preflight(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            _, primary, _ = init_repo(root)
-            with self.assertRaises(common.FinalizationError) as ctx:
-                with patch.object(common, "normalize_remote_repository", return_value=REPO):
-                    prepare_result.preflight_policy(
-                        primary,
-                        repository=REPO,
-                        handoff_root=root / "handoff",
-                        gh_api=FakeGitHub(open_prs=[{"number": 7, "head": {"ref": OLD_BRANCH}}]),
-                    )
-            self.assertEqual("PREPARE_STALE_PR_OPEN", ctx.exception.code)
-
-    def test_unknown_worktree_blocks_without_removal(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            _, primary, _ = init_repo(root)
-            extra = root / "unknown"
-            git(primary, "worktree", "add", "--detach", str(extra), "main")
-            with self.assertRaises(common.FinalizationError) as ctx:
-                with patch.object(common, "normalize_remote_repository", return_value=REPO):
-                    prepare_result.preflight_policy(
-                        primary,
-                        repository=REPO,
-                        handoff_root=root / "handoff",
-                        gh_api=FakeGitHub(),
-                    )
-            self.assertEqual("PREPARE_UNKNOWN_POSTMAN_RESOURCE", ctx.exception.code)
-            self.assertTrue(extra.exists())
-
-    def test_dirty_main_is_preserved_across_ff_only_sync(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            bare, primary, _ = init_repo(root)
-            (primary / "local.txt").write_bytes("dirty bytes\n".encode("utf-8"))
-            before = (primary / "local.txt").read_bytes()
+            bare, primary, local_main = init_repo(root)
+            git(primary, "checkout", "-b", "user/local")
+            (primary / "local.txt").write_text("dirty\n", encoding="utf-8")
             other = root / "other"
             git(root, "clone", str(bare), str(other))
             git(other, "checkout", "-b", "main", "origin/main")
@@ -306,15 +181,12 @@ class WP020SelfHealingTests(unittest.TestCase):
             git(other, "commit", "-m", "remote")
             git(other, "push", "origin", "main")
             with patch.object(common, "normalize_remote_repository", return_value=REPO):
-                result = prepare_result.preflight_policy(
-                    primary,
-                    repository=REPO,
-                    handoff_root=root / "handoff",
-                    gh_api=FakeGitHub(),
-                )
-            self.assertEqual((primary / "local.txt").read_bytes(), before)
-            self.assertTrue((primary / "remote.txt").exists())
-            self.assertEqual(result["localMain"], result["originMain"])
+                result = prepare_result.preflight_policy(primary, repository=REPO, handoff_root=root / "handoff", gh_api=FakeGitHub())
+            self.assertEqual("user/local", git(primary, "branch", "--show-current"))
+            self.assertEqual(local_main, git(primary, "rev-parse", "refs/heads/main"))
+            self.assertFalse((primary / "remote.txt").exists())
+            self.assertTrue((primary / "local.txt").exists())
+            self.assertNotEqual(result["localMain"], result["originMain"])
 
 
 if __name__ == "__main__":

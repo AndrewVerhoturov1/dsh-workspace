@@ -110,6 +110,86 @@ def _published(path: Path, request_id: str, repository: str, ready: dict[str, An
     return data
 
 
+def _already_applied(path: Path, request_id: str, repository: str) -> dict[str, Any]:
+    data = _exact(path, code="ALREADY_APPLIED", request_id=request_id, repository=repository)
+    terminal_json = data.get("terminalJson")
+    if not isinstance(terminal_json, str) or Path(terminal_json).resolve() != path.resolve():
+        raise common.FinalizationError("RESUME_RECEIPT_INVALID", "ALREADY_APPLIED receipt path is not exact")
+    if data.get("semanticTest") != "TEST_PASSED" or data.get("publicationSkipped") is not True:
+        raise common.FinalizationError("RESUME_RECEIPT_INVALID", "ALREADY_APPLIED terminal receipt is incomplete")
+    return data
+
+
+def _finalize_already_applied(
+    *,
+    path: Path,
+    repo_root: Path,
+    ready: dict[str, Any],
+    test: dict[str, Any],
+) -> dict[str, Any]:
+    if ready.get("alreadyApplied") is not True or test.get("alreadyApplied") is not True:
+        raise common.FinalizationError("RESUME_RECEIPT_INVALID", "no-op finalization requires alreadyApplied=true in READY and TEST")
+    if ready.get("changedFiles") or test.get("changedFiles"):
+        raise common.FinalizationError("RESUME_RECEIPT_INVALID", "already-applied finalization must have no changed files")
+    worktree = Path(ready["worktree"]).resolve()
+    branch = ready["branch"]
+    actual_branch = common.run_git(worktree, "branch", "--show-current").stdout.strip()
+    head = common.run_git(worktree, "rev-parse", "HEAD").stdout.strip().lower()
+    status = common.run_git(worktree, "status", "--porcelain", "--untracked-files=all").stdout
+    if actual_branch != branch or head != ready["originMain"].lower() or status.strip():
+        raise common.FinalizationError(
+            "RESUME_ALREADY_APPLIED_WORKTREE_INVALID",
+            "already-applied worktree changed after semantic test",
+            details={"branch": actual_branch, "head": head, "status": status.splitlines()[:100]},
+        )
+    removed = common.run_git(repo_root, "worktree", "remove", str(worktree), check=False)
+    if removed.returncode != 0:
+        raise common.FinalizationError(
+            "RESUME_ALREADY_APPLIED_CLEANUP_FAILED",
+            "clean no-op worktree could not be removed",
+            details={"stderr": removed.stderr[-2000:]},
+        )
+    branch_probe = common.run_git(repo_root, "rev-parse", f"refs/heads/{branch}", check=False)
+    branch_head = branch_probe.stdout.strip().lower() if branch_probe.returncode == 0 else ""
+    if branch_head != head:
+        raise common.FinalizationError(
+            "RESUME_ALREADY_APPLIED_CLEANUP_FAILED",
+            "request branch moved before no-op cleanup",
+            details={"expected": head, "actual": branch_head, "branch": branch},
+        )
+    deleted = common.run_git(repo_root, "update-ref", "-d", f"refs/heads/{branch}", head, check=False)
+    if deleted.returncode != 0:
+        raise common.FinalizationError(
+            "RESUME_ALREADY_APPLIED_CLEANUP_FAILED",
+            "exact request branch ref could not be deleted after worktree removal",
+            details={"branch": branch, "head": head, "stderr": deleted.stderr[-2000:]},
+        )
+    common.run_git(repo_root, "worktree", "prune", check=False)
+    cleanup = {"worktreeRemoved": True, "branchRemoved": True, "branchDeletionGuardSha": head}
+    receipt = {
+        "ok": True,
+        "code": "ALREADY_APPLIED",
+        "state": "ALREADY_APPLIED",
+        "requestId": ready["requestId"],
+        "repository": ready["repository"],
+        "baseCommit": ready.get("baseCommit"),
+        "originMain": ready["originMain"],
+        "branch": branch,
+        "worktree": str(worktree),
+        "changedFiles": [],
+        "readyJson": ready["readyJson"],
+        "testJson": test["testJson"],
+        "semanticTest": "TEST_PASSED",
+        "publicationSkipped": True,
+        "presentationRequired": False,
+        "presentationStatus": "NOT_APPLICABLE",
+        "cleanup": cleanup,
+        "terminalJson": str(path.resolve()),
+    }
+    common.atomic_write_json(path, receipt)
+    return _already_applied(path, ready["requestId"], ready["repository"])
+
+
 def resume(
     *,
     request_id: str,
@@ -155,6 +235,13 @@ def resume(
     root = (handoff_root or common.default_handoff_root()).resolve()
     stage = root / request_id
     ready_path, test_path, published_path = (stage / name for name in ("ready.json", "test.json", "published.json"))
+    already_applied_path = stage / "already-applied.json"
+
+    if already_applied_path.is_file():
+        result = _already_applied(already_applied_path, request_id, expected_repository)
+        return {"ok": True, "code": "ALREADY_APPLIED", "state": "ALREADY_APPLIED",
+                "presentationRequired": False, "presentationStatus": "NOT_APPLICABLE",
+                "semanticTest": "TEST_PASSED", "receipt": result}
 
     # Published is terminal and must be returned without repeating any stage.
     if published_path.is_file():
@@ -187,6 +274,11 @@ def resume(
 
     if test is None:
         raise common.FinalizationError("RESUME_TEST_RECEIPT_INVALID", "test receipt is unavailable")
+    if ready.get("alreadyApplied") is True:
+        result = _finalize_already_applied(path=already_applied_path, repo_root=repo_root, ready=ready, test=test)
+        return {"ok": True, "code": "ALREADY_APPLIED", "state": "ALREADY_APPLIED",
+                "presentationRequired": False, "presentationStatus": "NOT_APPLICABLE",
+                "semanticTest": "TEST_PASSED", "receipt": result}
     if not published_path.is_file():
         publisher(ready_json=Path(ready["readyJson"]), test_json=Path(test["testJson"]), gh_binary=gh_binary, gh_api=gh_api)
     # Always return the exact persisted receipt, and verify its path/identity.

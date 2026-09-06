@@ -136,8 +136,10 @@ def validate_ready(data: dict[str, Any]) -> dict[str, Any]:
             details={"expected": expected_branch, "actual": data.get("branch")},
         )
     changed = data.get("changedFiles")
-    if not isinstance(changed, list) or not changed:
-        raise FinalizationError("READY_JSON_INVALID", "changedFiles must be a non-empty array")
+    if not isinstance(changed, list):
+        raise FinalizationError("READY_JSON_INVALID", "changedFiles must be an array")
+    if not changed and data.get("alreadyApplied") is not True:
+        raise FinalizationError("READY_JSON_INVALID", "empty changedFiles requires alreadyApplied=true")
     normalized = [require_repo_path(item, field="changedFiles") for item in changed]
     if len(set(normalized)) != len(normalized):
         raise FinalizationError("READY_JSON_INVALID", "changedFiles contains duplicates")
@@ -165,8 +167,10 @@ def validate_test_receipt(data: dict[str, Any]) -> dict[str, Any]:
         if re.fullmatch(r"[0-9a-f]{64}", value, re.IGNORECASE) is None:
             raise FinalizationError("TEST_RECEIPT_INVALID", f"{field} must be a SHA-256")
     changed = data.get("changedFiles")
-    if not isinstance(changed, list) or not changed or any(not isinstance(x, str) or not x for x in changed):
-        raise FinalizationError("TEST_RECEIPT_INVALID", "changedFiles must be a non-empty string array")
+    if not isinstance(changed, list) or any(not isinstance(x, str) or not x for x in changed):
+        raise FinalizationError("TEST_RECEIPT_INVALID", "changedFiles must be a string array")
+    if not changed and data.get("alreadyApplied") is not True:
+        raise FinalizationError("TEST_RECEIPT_INVALID", "empty changedFiles requires alreadyApplied=true")
     command = data.get("testCommand")
     resolved = data.get("resolvedArgv", data.get("resolvedCommand", command))
     if not isinstance(command, list) or not command or any(not isinstance(x, str) for x in command):
