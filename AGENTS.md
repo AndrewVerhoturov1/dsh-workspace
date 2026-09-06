@@ -11,7 +11,7 @@ Language. Always respond in Russian unless explicitly asked otherwise. Avoid Eng
 Relevance. Take the current date into account.
 
 Links and files
-Do not output bare URLs or paths. Format all links to web pages and local files as Markdown links. When linking to files, use an absolute path in the format supported by the current Codex environment.
+Do not output bare URLs or paths. Web URLs use normal Markdown links. In Harness Web, references to existing local files that should be clickable are formatted as Markdown inline code using the exact file-tool/local path; a basename is allowed only when it is unique among files surfaced/changed in that turn. Do not use `file://` for local-file links. For Postman result files, prefer the exact retained result-worktree path from the authoritative receipt.
 
 Playwright MCP. Для проверки локальных HTML-файлов не использовать `file://` и порт 3080. Запускать временный HTTP-сервер на свободном порту, например 4173, проверять точный URL и только затем выполнять тесты.
 
@@ -59,12 +59,18 @@ Postman global invariant: OFF by default.
 самостоятельно. Без `@Postman` Luna больше не имеет права запускать Postman.
 
 Postman local finalization invariant.
-После exact `RESULT_DURABLE` normal production path: `prepare_result.ps1` →
-`test_result.ps1` → `publish_result.ps1`. Эти deterministic boundary владеют
-соответственно Git/policy/worktree+applicator, одним task-specific test receipt и
-stage/commit/push/remote-SHA/PR. Luna не должна разлагать normal path обратно на
-множество ручных Git/gh/shell вызовов. Любой `ok=false` от boundary — fail-closed
-`STOP`; ручной fallback и новый REQ запрещены. `publish_result.ps1` не выполняет merge.
+После exact `RESULT_DURABLE` единственный normal production local-finalization entrypoint —
+`C:\Users\andre\.dsh\postman\direct\resume_request.ps1`. PREPARE, TEST и PUBLISH
+остаются внутренними deterministic стадиями resume и владеют соответственно
+Git/policy/worktree+applicator, одним task-specific test receipt и
+stage/commit/push/remote-SHA/PR. Luna не вызывает `prepare_result.ps1`,
+`test_result.ps1` или `publish_result.ps1` отдельно в normal `@Postman` flow и не
+разлагает resume обратно на ручные Git/gh/shell вызовы. Normal task test передаётся
+argv-safe через `TestScript`/`TestSpec`; `python -c` и `TestCommand` не являются normal
+path. Если test нельзя выбрать до PREPARE, первый resume без test input может вернуть
+`READY_FOR_TEST`, после чего тот же REQ продолжается вторым resume с TestScript/TestSpec.
+Любой `ok=false` — fail-closed `STOP`; ручной fallback, новый REQ и повторный Ch1
+запрещены. PUBLISH внутри resume не выполняет merge.
 
 Terminal visibility invariant.
 В обычной производственной работе Harness пользователь не должен видеть всплывающие окна PowerShell, cmd, Python, Node, Git, gh или других процессов командной строки. Любой дочерний процесс командной строки запускается без создания видимого окна консоли.

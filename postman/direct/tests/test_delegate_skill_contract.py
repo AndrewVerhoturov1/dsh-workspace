@@ -16,7 +16,7 @@ class DelegateViaPostmanSkillContract(unittest.TestCase):
         cls.agents = AGENTS.read_text(encoding="utf-8")
 
     def test_version_and_entrypoint(self):
-        self.assertIn("DIRECT_POSTMAN_SKILL_VERSION: 11", self.skill)
+        self.assertIn("DIRECT_POSTMAN_SKILL_VERSION: 12", self.skill)
         self.assertIn(r"C:\Users\andre\.dsh\postman\direct\postman.ps1", self.skill)
 
     def test_old_callable_path_is_not_present(self):
@@ -32,7 +32,7 @@ class DelegateViaPostmanSkillContract(unittest.TestCase):
             "## 8. Единственный production-вызов",
             "## 9. Разбор JSON и минимальный transport gate",
             "## 13. Не создавать Git branch до RESULT_DURABLE только ради transport",
-            "## 14. WP-018B deterministic local finalization",
+            "## 14. Unified resumable local finalization",
             "## 20. Критические инварианты",
         ):
             self.assertIn(marker, self.skill)
@@ -129,22 +129,49 @@ class DelegateViaPostmanSkillContract(unittest.TestCase):
         self.assertIn("$jsonText = & $bridge", normal)
         self.assertNotIn("$jsonText = & pwsh.exe", normal)
 
-    def test_wp018b_three_boundary_finalization_contract(self):
-        for name in ("prepare_result.ps1", "test_result.ps1", "publish_result.ps1"):
-            self.assertIn(name, self.skill)
-            self.assertIn(name, self.agents)
+    def test_unified_resume_finalization_contract(self):
+        self.assertIn(r"C:\Users\andre\.dsh\postman\direct\resume_request.ps1", self.skill)
+        self.assertIn(r"C:\Users\andre\.dsh\postman\direct\resume_request.ps1", self.agents)
         for code in ("READY_FOR_TEST", "TEST_PASSED", "PUBLISHED"):
             self.assertIn(code, self.skill)
-        self.assertIn("PREPARE → TEST → PUBLISH", self.skill)
+        self.assertIn("PREPARE/TEST/PUBLISH", self.skill)
+        self.assertIn("внутренними deterministic стадиями resume", self.agents)
+        section = self.skill.split("## 14. Unified resumable local finalization", 1)[1].split(
+            "## 15. Что Luna больше не делает вручную", 1
+        )[0]
+        self.assertIn("-TestScript", section)
+        self.assertIn("-TestSpec", section)
+        self.assertIn("НЕ вызывает", section)
+        self.assertNotIn("-TestCommand @(", section)
+        self.assertIn("запрещены `python -c`", section)
         self.assertIn("не выполняет merge", self.agents)
 
     def test_durable_handoff_resume_contract(self):
         self.assertIn(r"C:\Users\andre\AppData\Local\DSH\Postman\direct\results\<REQ>.json", self.skill)
         self.assertIn("-RequestId $requestId", self.skill)
-        self.assertIn("-ResultJsonText $jsonText", self.skill)
-        self.assertIn("Direct state нельзя передавать как `-ResultJsonText`", self.skill)
-        self.assertIn("resume не запускает Postman и не создаёт новый REQ", self.skill)
+        self.assertIn("resume_request.ps1", self.skill)
+        self.assertIn("не передавать direct state как", self.skill)
+        self.assertIn("Resume никогда не вызывает Direct Postman", self.skill)
+        self.assertIn("не создаёт новый REQ", self.skill)
         self.assertIn("PREPARE_RESUME_NOT_DURABLE", self.skill)
+        self.assertIn("идемпотентно", self.skill)
+
+    def test_clickable_changed_file_contract(self):
+        for marker in ("Кликабельные изменённые файлы", "Markdown inline code", "changedFiles", "published.worktree"):
+            self.assertIn(marker, self.skill)
+        self.assertIn("не использовать bare path, `file://`", self.skill)
+        self.assertIn("Markdown inline code", self.agents)
+        self.assertIn("exact retained result-worktree path", self.agents)
+
+    def test_normal_path_uses_argv_safe_test_input(self):
+        section = self.skill.split("## 14. Unified resumable local finalization", 1)[1].split(
+            "## 15. Что Luna больше не делает вручную", 1
+        )[0]
+        self.assertIn("-TestScript", section)
+        self.assertIn("-TestSpec", section)
+        self.assertIn("`-TestCommand` остаётся legacy", section)
+        self.assertIn("запрещены `python -c`", section)
+        self.assertIn("`TestScript`/`TestSpec`", self.agents)
 
     def test_normal_smoke_is_forbidden(self):
         self.assertIn("BrowserSmoke не является normal preflight", self.skill)
