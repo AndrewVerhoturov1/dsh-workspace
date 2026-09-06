@@ -20,7 +20,7 @@ import finalization_common as common  # noqa: E402
 import integrate_result  # noqa: E402
 import request_identity  # noqa: E402
 
-PREPARE_VERSION = 2
+PREPARE_VERSION = 3
 
 
 def _load_terminal_json(path: str) -> dict[str, Any]:
@@ -321,9 +321,14 @@ def preflight_policy(
     gh_api: Callable[..., Any] = _gh_api,
     handoff_root: Path | None = None,
 ) -> dict[str, Any]:
-    if not (repo_root / "REPO_POLICY.md").is_file():
-        raise common.FinalizationError("PREPARE_POLICY_MISSING", "REPO_POLICY.md is required")
+    """Audit the primary repository without making it a global PREPARE mutex.
 
+    PREPARE V3 needs one trustworthy thing from the primary checkout: a current
+    origin/main ref from the expected repository.  It deliberately does not
+    switch branches, fast-forward local main, enumerate/clean historical Postman
+    resources, or reject unrelated branches/worktrees/PRs.  Those are separate
+    lifecycle/maintenance concerns.
+    """
     top = Path(common.run_git(repo_root, "rev-parse", "--show-toplevel").stdout.strip()).resolve()
     if top != repo_root.resolve():
         raise common.FinalizationError(
@@ -341,69 +346,104 @@ def preflight_policy(
             details={"expected": repository, "actual": actual_repository, "remote": remote_url},
         )
 
+    # Fetch updates only Git metadata. A temporary network failure is audit-only
+    # when a valid cached origin/main exists; publication verifies remote state later.
+    # The checked-out branch and working tree bytes stay untouched.
+    fetch_result = common.run_git(repo_root, "fetch", "--quiet", "origin", check=False)
+    origin_result = common.run_git(repo_root, "rev-parse", "origin/main", check=False)
+    origin_main = origin_result.stdout.strip().lower() if origin_result.returncode == 0 else ""
+    if re.fullmatch(r"[0-9a-f]{40}", origin_main) is None:
+        raise common.FinalizationError(
+            "PREPARE_ORIGIN_MAIN_UNAVAILABLE",
+            "origin/main is unavailable and fetch did not provide a usable ref",
+            details={"fetchReturnCode": fetch_result.returncode, "fetchStderr": fetch_result.stderr[-2000:]},
+        )
+
     current_branch = common.run_git(repo_root, "branch", "--show-current").stdout.strip()
-    if current_branch != "main":
-        raise common.FinalizationError(
-            "PREPARE_POLICY_BLOCKED",
-            "primary runtime repository must be on main before finalization",
-            details={"currentBranch": current_branch},
-        )
-
-    common.run_git(repo_root, "fetch", "--quiet", "origin")
-    origin_main = common.run_git(repo_root, "rev-parse", "origin/main").stdout.strip().lower()
-    local_main, _ = _sync_main_without_overwriting_dirty(repo_root, origin_main)
-    self_healing = _classify_and_self_heal(
-        repo_root,
-        repository=repository,
-        handoff_root=handoff_root,
-        gh_binary=gh_binary,
-        gh_api=gh_api,
-    )
-
+    local_main_result = common.run_git(repo_root, "rev-parse", "refs/heads/main", check=False)
+    local_main = local_main_result.stdout.strip().lower() if local_main_result.returncode == 0 else None
     local_branches = _local_branches(repo_root)
-    remote_branches = _remote_branches(repo_root)
-    non_main_local = [x for x in local_branches if x != "main"]
-    non_main_remote = [x for x in remote_branches if x != "main"]
-    if non_main_local or non_main_remote:
-        raise common.FinalizationError(
-            "PREPARE_POLICY_BLOCKED",
-            "unclassified temporary branch exists; repository policy forbids creating another",
-            details={"localBranches": non_main_local, "remoteBranches": non_main_remote},
-        )
-
-    open_prs = gh_api(repository, f"repos/{repository}/pulls?state=open&per_page=100", gh_binary=gh_binary)
-    if not isinstance(open_prs, list):
-        raise common.FinalizationError("PREPARE_GITHUB_FAILED", "open PR response must be an array")
-    if open_prs:
-        raise common.FinalizationError(
-            "PREPARE_POLICY_BLOCKED",
-            "open pull request exists; repository policy forbids starting a new implementation branch",
-            details={"pullRequests": [p.get("number") for p in open_prs if isinstance(p, dict)]},
-        )
-
+    remote_branches = [
+        x for x in common.run_git(repo_root, "for-each-ref", "refs/remotes/origin", "--format=%(refname:short)").stdout.splitlines()
+        if x and x != "origin/HEAD"
+    ]
     worktrees = common.registered_worktree_paths(repo_root)
-    other_worktrees = [str(p) for p in worktrees if p != repo_root.resolve()]
-    if other_worktrees:
-        raise common.FinalizationError(
-            "PREPARE_POLICY_BLOCKED",
-            "additional Git worktree exists; resolve it before creating a Postman task worktree",
-            details={"worktrees": other_worktrees},
-        )
-
     dirty = common.run_git(repo_root, "status", "--porcelain", "--untracked-files=all").stdout.splitlines()
-    policy_sha = common.sha256_file(repo_root / "REPO_POLICY.md")
+    policy_path = repo_root / "REPO_POLICY.md"
+
     return {
+        "prepareMode": "permissive-v3",
         "originMain": origin_main,
+        "fetchOrigin": {
+            "status": "PASS" if fetch_result.returncode == 0 else "WARNING",
+            "returnCode": fetch_result.returncode,
+            "stderr": fetch_result.stderr[-2000:],
+        },
         "localMain": local_main,
-        "localMainBehindAllowed": False,
+        "localMainBehindAllowed": local_main is not None and local_main != origin_main,
+        "primaryBranch": current_branch,
         "primaryDirty": dirty[:100],
-        "policySha256": policy_sha,
+        "policyPresent": policy_path.is_file(),
+        "policySha256": common.sha256_file(policy_path) if policy_path.is_file() else None,
         "localBranches": local_branches,
         "remoteBranches": remote_branches,
-        "openPullRequests": [],
+        "openPullRequests": None,
         "worktrees": [str(p) for p in worktrees],
-        "selfHealingCleanup": self_healing,
+        "selfHealingCleanup": [],
+        "selfHealingDeferred": True,
+        "globalResourceChecks": "audit-only",
     }
+
+
+def _request_resource_mode(repo_root: Path, branch: str, worktree: Path, origin_main: str) -> str:
+    """Return create/attach/reuse; fail only on a current-request identity collision."""
+    registered = set(common.registered_worktree_paths(repo_root))
+    local = common.run_git(repo_root, "show-ref", "--verify", "--quiet", f"refs/heads/{branch}", check=False)
+    remote = common.run_git(repo_root, "show-ref", "--verify", "--quiet", f"refs/remotes/origin/{branch}", check=False)
+
+    if remote.returncode == 0:
+        raise common.FinalizationError(
+            "PREPARE_REQUEST_RESOURCE_EXISTS",
+            "a remote branch for the current request already exists; resume/repair its lifecycle instead of recreating PREPARE",
+            details={"branch": branch, "remote": True},
+        )
+
+    if worktree.exists():
+        if worktree not in registered:
+            raise common.FinalizationError(
+                "PREPARE_REQUEST_RESOURCE_EXISTS",
+                "the current request path exists but is not a registered Git worktree",
+                details={"branch": branch, "worktree": str(worktree)},
+            )
+        actual_branch = common.run_git(worktree, "branch", "--show-current", check=False).stdout.strip()
+        head = common.run_git(worktree, "rev-parse", "HEAD", check=False).stdout.strip().lower()
+        status = common.run_git(worktree, "status", "--porcelain", "--untracked-files=all", check=False)
+        if actual_branch == branch and head == origin_main and status.returncode == 0 and not status.stdout.strip():
+            return "reuse"
+        raise common.FinalizationError(
+            "PREPARE_REQUEST_RESOURCE_EXISTS",
+            "the current request worktree exists with non-reusable state",
+            details={"branch": branch, "worktree": str(worktree), "actualBranch": actual_branch,
+                     "head": head, "expectedHead": origin_main, "status": status.stdout.splitlines()[:100]},
+        )
+
+    if worktree in registered:
+        raise common.FinalizationError(
+            "PREPARE_REQUEST_RESOURCE_EXISTS",
+            "the current request worktree is registered but its path is unavailable",
+            details={"branch": branch, "worktree": str(worktree)},
+        )
+
+    if local.returncode == 0:
+        head = common.run_git(repo_root, "rev-parse", f"refs/heads/{branch}").stdout.strip().lower()
+        if head == origin_main:
+            return "attach"
+        raise common.FinalizationError(
+            "PREPARE_REQUEST_RESOURCE_EXISTS",
+            "the current request branch exists at an unexpected commit",
+            details={"branch": branch, "head": head, "expectedHead": origin_main},
+        )
+    return "create"
 
 
 def _cleanup_owned_clean_worktree(repo_root: Path, worktree: Path, branch: str) -> dict[str, Any]:
@@ -556,30 +596,20 @@ def prepare(
     branch = common.canonical_branch_name(request_id)
     worktree_parent = worktree_root or common.default_worktree_root()
     worktree = (worktree_parent / request_id).resolve()
-    if worktree.exists():
-        raise common.FinalizationError(
-            "PREPARE_WORKTREE_EXISTS",
-            "request worktree path already exists",
-            details={"worktree": str(worktree)},
-        )
+    resource_mode = _request_resource_mode(repo_root, branch, worktree, policy["originMain"])
 
     worktree_parent.mkdir(parents=True, exist_ok=True)
-    added = common.run_git(
-        repo_root,
-        "worktree",
-        "add",
-        "--quiet",
-        "-b",
-        branch,
-        str(worktree),
-        "origin/main",
-        check=False,
-    )
-    if added.returncode != 0:
+    if resource_mode == "create":
+        added = common.run_git(repo_root, "worktree", "add", "--quiet", "-b", branch, str(worktree), "origin/main", check=False)
+    elif resource_mode == "attach":
+        added = common.run_git(repo_root, "worktree", "add", "--quiet", str(worktree), branch, check=False)
+    else:
+        added = None
+    if added is not None and added.returncode != 0:
         raise common.FinalizationError(
             "PREPARE_WORKTREE_FAILED",
             "git worktree add failed",
-            details={"stdout": added.stdout[-2000:], "stderr": added.stderr[-2000:]},
+            details={"mode": resource_mode, "stdout": added.stdout[-2000:], "stderr": added.stderr[-2000:]},
         )
 
     try:
@@ -604,6 +634,7 @@ def prepare(
             "repoRoot": str(repo_root.resolve()),
             "worktree": str(worktree),
             "branch": branch,
+            "prepareResourceMode": resource_mode,
             "policyPreflight": policy,
         }
         root = handoff_root or common.default_handoff_root()

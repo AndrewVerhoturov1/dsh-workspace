@@ -279,23 +279,49 @@ def _read_manifest(zf: zipfile.ZipFile, result: DurableResult) -> dict[str, Any]
     return manifest
 
 
+def _patch_header_path(raw: str) -> str | None:
+    value = raw.strip()
+    if not value or value == "/dev/null":
+        return None
+    if value.startswith('"'):
+        try:
+            tokens = shlex.split(value)
+        except ValueError as exc:
+            raise IntegrationError("RESULT_PATCH_INVALID", "cannot parse quoted unified-diff path") from exc
+        if not tokens:
+            raise IntegrationError("RESULT_PATCH_INVALID", "empty unified-diff path")
+        value = tokens[0]
+    else:
+        # Traditional unified diff may append a timestamp after a TAB.
+        value = value.split("\t", 1)[0]
+    if value.startswith("a/") or value.startswith("b/"):
+        value = value[2:]
+    return _safe_repo_path(value, field="patch")
+
+
 def _parse_patch_paths(patch_text: str) -> tuple[str, ...]:
+    """Accept both git-style and traditional unified-diff headers."""
     touched: list[str] = []
     for line in patch_text.splitlines():
-        if not line.startswith("diff --git "):
+        candidates: list[str] = []
+        if line.startswith("diff --git "):
+            try:
+                parts = shlex.split(line)
+            except ValueError as exc:
+                raise IntegrationError("RESULT_PATCH_INVALID", "cannot parse diff --git header") from exc
+            if len(parts) != 4:
+                raise IntegrationError("RESULT_PATCH_INVALID", f"unsupported diff header: {line}")
+            candidates.extend((parts[2], parts[3]))
+        elif line.startswith("--- ") or line.startswith("+++ "):
+            candidates.append(line[4:])
+        else:
             continue
-        try:
-            parts = shlex.split(line)
-        except ValueError as exc:
-            raise IntegrationError("RESULT_PATCH_INVALID", "cannot parse diff --git header") from exc
-        if len(parts) != 4 or not parts[2].startswith("a/") or not parts[3].startswith("b/"):
-            raise IntegrationError("RESULT_PATCH_INVALID", f"unsupported diff header: {line}")
-        for raw in (parts[2][2:], parts[3][2:]):
-            path = _safe_repo_path(raw, field="patch")
-            if path not in touched:
+        for raw in candidates:
+            path = _patch_header_path(raw)
+            if path is not None and path not in touched:
                 touched.append(path)
     if not touched:
-        raise IntegrationError("RESULT_PATCH_INVALID", "changes.patch contains no diff --git paths")
+        raise IntegrationError("RESULT_PATCH_INVALID", "changes.patch contains no usable unified-diff paths")
     return tuple(touched)
 
 
@@ -468,8 +494,6 @@ def preflight_repo(
     if re.fullmatch(r"[0-9a-f]{40}", origin_main) is None:
         raise IntegrationError("ORIGIN_MAIN_INVALID", f"{origin_ref} did not resolve to a full commit SHA")
 
-    # The validated artifact may be based on a transport publication commit which
-    # is older than current origin/main, but it must remain in main's ancestry.
     ancestor = _run_git(repo_root, "merge-base", "--is-ancestor", result.base_commit, origin_ref, check=False)
     if ancestor.returncode != 0:
         raise IntegrationError(
@@ -486,33 +510,35 @@ def preflight_repo(
             details={"head": head, "originMain": origin_main},
         )
 
-    advancement = _run_git(
+    # Use history-touch inventory, not only final tree diff. A path that changed and
+    # later returned to identical bytes still matters for exact-file stale handling.
+    history_paths = _run_git(
         repo_root,
-        "diff",
+        "log",
+        "--format=",
         "--name-only",
         "--no-renames",
         f"{result.base_commit}..{origin_ref}",
     ).stdout.splitlines()
-    functional_advancement = [path for path in advancement if path and not _transport_only(path)]
-    conflicts = sorted(
+    advancement = sorted({path for path in history_paths if path})
+    functional_advancement = [path for path in advancement if not _transport_only(path)]
+
+    file_overlap = sorted(
         {
             changed
             for changed in functional_advancement
-            for payload in plan.payload_paths
+            for payload in plan.file_paths
             if _path_overlap(changed, payload)
         }
     )
-    if conflicts:
-        raise IntegrationError(
-            "RESULT_BASE_STALE",
-            "origin/main advanced functionally on paths touched by the implementation result",
-            details={
-                "baseCommit": result.base_commit,
-                "originMain": origin_main,
-                "conflictingPaths": conflicts,
-                "payloadPaths": list(plan.payload_paths),
-            },
-        )
+    patch_overlap = sorted(
+        {
+            changed
+            for changed in functional_advancement
+            for payload in plan.patch_paths
+            if _path_overlap(changed, payload)
+        }
+    )
 
     return {
         "branch": branch,
@@ -520,8 +546,9 @@ def preflight_repo(
         "originMain": origin_main,
         "advancement": advancement,
         "functionalAdvancement": functional_advancement,
+        "fileAdvancementOverlap": file_overlap,
+        "patchAdvancementOverlap": patch_overlap,
     }
-
 
 def _copy_manifest_files(zf: zipfile.ZipFile, repo_root: Path, file_paths: Iterable[str]) -> None:
     for path in file_paths:
@@ -533,39 +560,160 @@ def _copy_manifest_files(zf: zipfile.ZipFile, repo_root: Path, file_paths: Itera
             handle.write(data)
 
 
-def apply_artifact(zf: zipfile.ZipFile, repo_root: Path, plan: ArtifactPlan) -> list[str]:
+def _payload_matches_head(repo_root: Path, rel: str, payload: bytes) -> bool:
+    """Compare exact-file payload to HEAD using Git's path-aware normalization.
+
+    Raw worktree bytes are not authoritative on Windows because checkout may use
+    CRLF while the repository blob and artifact use LF. `git hash-object --path`
+    applies the same clean/path attributes Git uses for that repository path.
+    """
+    head_blob = _run_git(repo_root, "rev-parse", f"HEAD:{rel}", check=False)
+    if head_blob.returncode != 0:
+        return False
+
+    with tempfile.TemporaryDirectory(prefix="postman-payload-hash-") as temp_name:
+        candidate = Path(temp_name) / "payload"
+        candidate.write_bytes(payload)
+        normalized = _run_git(
+            repo_root,
+            "hash-object",
+            "--path",
+            rel,
+            str(candidate),
+            check=False,
+        )
+
+    return (
+        normalized.returncode == 0
+        and normalized.stdout.strip().lower() == head_blob.stdout.strip().lower()
+    )
+
+def apply_artifact(
+    zf: zipfile.ZipFile,
+    repo_root: Path,
+    plan: ArtifactPlan,
+    *,
+    file_advancement_overlap: Iterable[str] = (),
+) -> tuple[list[str], dict[str, Any]]:
+    # Exact-file overlap is only dangerous when the validated payload would
+    # produce a different Git blob. Never compare raw worktree bytes here:
+    # Windows CRLF checkout and .gitattributes may differ byte-for-byte while
+    # representing the same repository content.
+    file_conflicts: list[str] = []
+    already_satisfied_overlap: set[str] = set()
+    for rel in file_advancement_overlap:
+        if rel not in plan.file_paths:
+            continue
+        expected = zf.read(f"files/{rel}")
+        if _payload_matches_head(repo_root, rel, expected):
+            already_satisfied_overlap.add(rel)
+        else:
+            file_conflicts.append(rel)
+    if file_conflicts:
+        raise IntegrationError(
+            "RESULT_BASE_STALE",
+            "origin/main advanced on an exact-file payload path with different current bytes",
+            details={"conflictingPaths": sorted(file_conflicts), "filePayloadPaths": list(plan.file_paths)},
+        )
+
     patch_path: Path | None = None
+    patch_mode = "none"
+    patch_already_applied = False
     with tempfile.TemporaryDirectory(prefix="postman-integrate-") as temp_name:
         temp_root = Path(temp_name)
         if plan.patch_member is not None:
             patch_path = temp_root / "changes.patch"
             patch_path.write_bytes(zf.read(plan.patch_member))
-            _run_git(repo_root, "apply", "--check", str(patch_path))
 
-        # All deterministic checks that can fail on artifact structure happened
-        # before this point. Apply patch first, then exact manifest files.
-        if patch_path is not None:
-            _run_git(repo_root, "apply", str(patch_path))
-        _copy_manifest_files(zf, repo_root, plan.file_paths)
+            direct = _run_git(repo_root, "apply", "--check", str(patch_path), check=False)
+            if direct.returncode == 0:
+                patch_mode = "direct"
+            else:
+                reverse = _run_git(repo_root, "apply", "--reverse", "--check", str(patch_path), check=False)
+                if reverse.returncode == 0:
+                    patch_mode = "already-applied"
+                    patch_already_applied = True
+                else:
+                    zero = _run_git(repo_root, "apply", "--unidiff-zero", "--check", str(patch_path), check=False)
+                    if zero.returncode == 0:
+                        patch_mode = "unidiff-zero"
+                    else:
+                        reverse_zero = _run_git(repo_root, "apply", "--reverse", "--unidiff-zero", "--check", str(patch_path), check=False)
+                        if reverse_zero.returncode == 0:
+                            patch_mode = "already-applied-unidiff-zero"
+                            patch_already_applied = True
+                        else:
+                            threeway = _run_git(repo_root, "apply", "--3way", "--check", str(patch_path), check=False)
+                            if threeway.returncode == 0:
+                                patch_mode = "3way"
+                            else:
+                                raise IntegrationError(
+                                    "RESULT_PATCH_APPLY_FAILED",
+                                    "validated patch cannot be applied to current origin/main",
+                                    details={
+                                        "direct": direct.stderr[-2000:],
+                                        "unidiffZero": zero.stderr[-2000:],
+                                        "threeWay": threeway.stderr[-2000:],
+                                    },
+                                )
 
-    diff_check = _run_git(repo_root, "diff", "--check", check=False)
-    if diff_check.returncode != 0:
-        raise IntegrationError(
-            "INTEGRATION_DIFF_CHECK_FAILED",
-            "git diff --check failed after artifact application",
-            details={"stdout": diff_check.stdout, "stderr": diff_check.stderr},
+        if patch_path is not None and not patch_already_applied:
+            if patch_mode == "direct":
+                _run_git(repo_root, "apply", str(patch_path))
+            elif patch_mode == "unidiff-zero":
+                _run_git(repo_root, "apply", "--unidiff-zero", str(patch_path))
+            elif patch_mode == "3way":
+                _run_git(repo_root, "apply", "--3way", str(patch_path))
+                staged = [
+                    p for p in _run_git(repo_root, "diff", "--cached", "--name-only", "--no-renames").stdout.splitlines()
+                    if p
+                ]
+                if staged:
+                    unstaged = _run_git(repo_root, "restore", "--staged", "--", *staged, check=False)
+                    if unstaged.returncode != 0:
+                        raise IntegrationError(
+                            "RESULT_PATCH_APPLY_FAILED",
+                            "3-way patch applied but temporary index state could not be normalized",
+                            details={"staged": staged, "stderr": unstaged.stderr[-2000:]},
+                        )
+        _copy_manifest_files(
+            zf,
+            repo_root,
+            [rel for rel in plan.file_paths if rel not in already_satisfied_overlap],
         )
 
     changed = set(
-        path
-        for path in _run_git(repo_root, "diff", "--name-only", "--no-renames").stdout.splitlines()
-        if path
+        path for path in _run_git(repo_root, "diff", "--name-only", "--no-renames").stdout.splitlines() if path
     )
-    changed.update(
-        path
-        for path in _run_git(repo_root, "ls-files", "--others", "--exclude-standard").stdout.splitlines()
-        if path
-    )
+    untracked = [
+        path for path in _run_git(repo_root, "ls-files", "--others", "--exclude-standard").stdout.splitlines() if path
+    ]
+    changed.update(untracked)
+
+    # `git diff --check` does not inspect ordinary untracked files. PREPARE still
+    # needs to surface their whitespace problems as a warning, not as an apply blocker.
+    diff_check = _run_git(repo_root, "diff", "--check", check=False)
+    untracked_whitespace: list[str] = []
+    for rel in untracked:
+        candidate = repo_root.joinpath(*PurePosixPath(rel).parts)
+        if not candidate.is_file():
+            continue
+        try:
+            text = candidate.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            if line.endswith((" ", "\t")):
+                untracked_whitespace.append(f"{rel}:{lineno}: trailing whitespace")
+
+    warning = diff_check.returncode != 0 or bool(untracked_whitespace)
+    diff_audit = {
+        "status": "WARNING" if warning else "PASS",
+        "stdout": diff_check.stdout[-4000:],
+        "stderr": diff_check.stderr[-4000:],
+        "untrackedWhitespace": untracked_whitespace[:100],
+    }
+
     expected = set(plan.payload_paths)
     unexpected = sorted(path for path in changed if path not in expected)
     if unexpected:
@@ -574,10 +722,14 @@ def apply_artifact(zf: zipfile.ZipFile, repo_root: Path, plan: ArtifactPlan) -> 
             "artifact application changed paths outside the manifest/patch payload",
             details={"unexpectedPaths": unexpected, "expectedPaths": sorted(expected)},
         )
-    if not changed:
-        raise IntegrationError("RESULT_NO_CHANGES", "artifact application produced no repository changes")
-    return sorted(changed)
 
+    result = sorted(changed)
+    return result, {
+        "patchApplyMode": patch_mode,
+        "patchAlreadyApplied": patch_already_applied,
+        "diffCheck": diff_audit,
+        "alreadyApplied": not result,
+    }
 
 def integrate(
     *,
@@ -603,7 +755,9 @@ def integrate(
                 fetch=fetch,
                 allow_main=allow_main,
             )
-            changed = apply_artifact(zf, repo_root, plan)
+            changed, application = apply_artifact(
+                zf, repo_root, plan, file_advancement_overlap=repo["fileAdvancementOverlap"]
+            )
     except zipfile.BadZipFile as exc:
         raise IntegrationError("RESULT_ZIP_INVALID", "durable artifact is not a valid ZIP") from exc
 
@@ -620,6 +774,10 @@ def integrate(
         changedFiles=changed,
         payloadPaths=list(plan.payload_paths),
         functionalAdvancement=repo["functionalAdvancement"],
+        fileAdvancementOverlap=repo["fileAdvancementOverlap"],
+        patchAdvancementOverlap=repo["patchAdvancementOverlap"],
+        alreadyApplied=application["alreadyApplied"],
+        application=application,
         next="run task-scoped tests, then commit/push/PR according to REPO_POLICY.md",
     )
 

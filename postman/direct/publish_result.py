@@ -110,6 +110,12 @@ def publish(
     if test["readyJsonSha256"] != common.sha256_file(ready_json):
         raise common.FinalizationError("PUBLISH_TEST_RECEIPT_MISMATCH", "READY_FOR_TEST JSON changed after test")
 
+    if ready.get("alreadyApplied") is True:
+        raise common.FinalizationError(
+            "PUBLISH_NOT_REQUIRED_ALREADY_APPLIED",
+            "the tested result is already present on origin/main; resume_request must finalize it without a PR",
+        )
+
     worktree = Path(ready["worktree"]).resolve()
     repo_root = Path(ready["repoRoot"]).resolve()
     branch = ready["branch"]
