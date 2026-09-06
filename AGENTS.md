@@ -88,3 +88,7 @@ Postman UTF-8 CLI boundary invariant.
 PUBLISH обязаны запускать Python в UTF-8 mode через `-X utf8`. Диагностический JSON
 с Unicode не должен зависеть от Windows ANSI/OEM code page и не должен теряться
 из-за `UnicodeEncodeError`. Это относится и к failure-path, не только к PASS.
+Task PR merge executor.
+Когда модель уже вручную проверила PR и приняла решение, что он готов к merge, а пользователь дал команду merge, не повторять внутри merge-исполнителя тесты, CI, diff-review и прочую проверочную бюрократию. Для обычного `squash merge → cleanup` использовать `tools/finalize-task-pr/finalize_task_pr.ps1`. Скрипт является исполнителем уже принятого решения, а не reviewer. Он может обработать несколько PR последовательно и перед каждым следующим заново читает его состояние после предыдущего merge.
+
+Исполнитель сохраняет только аварийные предохранители: base должен быть `main`; primary worktree `C:\Users\andre\.dsh` не удаляется и не очищается; dirty worktree оставляется с warning; local/remote head branch удаляется только если всё ещё указывает на exact PR head SHA. Отсутствующие worktree/ветки считаются нормальным уже очищенным состоянием. Cleanup выполняется best-effort и его warning не отменяет уже успешный merge. Запрещены `reset --hard`, `stash`, `git clean` и force push.
