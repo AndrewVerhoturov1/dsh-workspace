@@ -9,7 +9,7 @@ description: >-
 
 # Finalize Task PR
 
-`FINALIZE_TASK_PR_SKILL_VERSION: 1`
+`FINALIZE_TASK_PR_SKILL_VERSION: 2`
 
 ## Назначение
 
@@ -29,7 +29,8 @@ PR уже проверен моделью
 → определить exact PR number(s)
 → один вызов finalize_task_pr.ps1
 → squash merge
-→ best-effort cleanup worktree/local branch/remote branch
+→ fetch + best-effort cleanup worktree/local branch/remote branch
+→ safe fast-forward primary main, если Git может сохранить локальные изменения
 → краткий отчёт
 ```
 
@@ -129,6 +130,17 @@ $result = $resultText | ConvertFrom-Json
 
 При нескольких PR следующий PR читается заново после предыдущего merge.
 
+После последнего PR executor один раз обрабатывает primary worktree:
+
+```text
+primary branch == main
+→ проверить fast-forward ancestry
+→ git merge --ff-only refs/remotes/origin/main
+→ UPDATED
+```
+
+Несвязанные незакоммиченные файлы этому fast-forward не мешают и сохраняются Git. Если Git не может выполнить безопасный fast-forward, merge PR остаётся успешным, а primary sync возвращает warning.
+
 Executor **не запускает** тесты/CI/review.
 
 ## Cleanup — best effort
@@ -156,7 +168,32 @@ Cleanup warning не превращает уже успешный merge в failu
 C:\Users\andre\.dsh
 ```
 
-не очищать и не перестраивать ради merge.
+не очищать, не stash-ить и не переключать автоматически ради merge.
+
+После успешного GitHub merge executor может синхронизировать его только так:
+
+```text
+current branch == main
++ main является fast-forward ancestor origin/main
+→ git merge --ff-only refs/remotes/origin/main
+```
+
+Это позволяет сохранить unrelated dirty state и одновременно получить свежий локальный `main`.
+
+Если current branch не `main`:
+
+```text
+FINALIZE_PRIMARY_NOT_MAIN
+→ primary не трогать
+```
+
+Если Git отказывается от fast-forward из-за локального пересечения или другого безопасного blocker:
+
+```text
+FINALIZE_PRIMARY_MAIN_SYNC_SKIPPED
+→ primary не трогать
+→ GitHub merge не отменять
+```
 
 Запрещены:
 
@@ -165,10 +202,9 @@ git reset --hard
 git clean
 automatic stash
 force push
+checkout/switch primary ради merge
 удаление primary worktree
 ```
-
-Локальный dirty `main` может остаться dirty; merge выполняется через GitHub и не требует checkout/reset primary worktree.
 
 ## Обработка результата
 
@@ -192,7 +228,8 @@ TASK_PRS_FINALIZED_WITH_WARNINGS
 актуальный origin/main SHA из результата
 какие worktree/branches удалены
 какие cleanup warnings остались
-mainWorkingTreeTouched=false
+primaryMainSync.status + warnings
+mainWorkingTreeTouched=true/false
 ```
 
 Не повторять пользователю уже выполненный review и не перечислять старые проверки, если это не нужно для диагностики.
@@ -206,6 +243,7 @@ mainWorkingTreeTouched=false
 5. Не делать обязательный `-WhatIf` перед merge.
 6. Отсутствующие временные ресурсы — нормальное состояние.
 7. Dirty secondary worktree не удалять; warning достаточно.
-8. Primary `C:\Users\andre\.dsh` не очищать и не удалять.
-9. Не использовать reset/stash/clean/force push.
-10. Не разлагать normal path на ручную цепочку Git/gh команд.
+8. Primary `C:\Users\andre\.dsh` не очищать, не stash-ить, не удалять и не переключать автоматически.
+9. Если primary уже на `main`, разрешён только безопасный `git merge --ff-only refs/remotes/origin/main`; его failure — warning после успешного merge.
+10. Не использовать reset/stash/clean/force push.
+11. Не разлагать normal path на ручную цепочку Git/gh команд.

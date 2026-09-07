@@ -19,17 +19,45 @@ def cp(args, code=0, out="", err=""):
     return subprocess.CompletedProcess(args=args, returncode=code, stdout=out, stderr=err)
 
 
+def real_git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", "-C", str(root), *args],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+
+
 class FakeCommands:
-    def __init__(self, root: Path, *, dirty=False, moved_local=False, moved_remote=False, already_merged=False):
+    def __init__(
+        self,
+        root: Path,
+        *,
+        dirty=False,
+        moved_local=False,
+        moved_remote=False,
+        already_merged=False,
+        primary_branch="main",
+        primary_sync_fails=False,
+        primary_diverged=False,
+        fetch_fails=False,
+    ):
         self.root = root.resolve()
         self.worktree = (root.parent / "task-worktree").resolve()
         self.dirty = dirty
         self.moved_local = moved_local
         self.moved_remote = moved_remote
         self.already_merged = already_merged
+        self.primary_branch = primary_branch
+        self.primary_sync_fails = primary_sync_fails
+        self.primary_diverged = primary_diverged
+        self.fetch_fails = fetch_fails
         self.calls = []
         self.head_sha = "a" * 40
-        self.main_sha = "b" * 40
+        self.primary_head = "b" * 40
+        self.origin_main = "c" * 40
 
     def __call__(self, args, *, cwd=None, timeout=120):
         self.calls.append(list(args))
@@ -45,12 +73,12 @@ class FakeCommands:
             }
             return cp(args, out=json.dumps(data))
         if args[:4] == ["gh", "api", "-X", "PUT"]:
-            return cp(args, out=json.dumps({"merged": True, "sha": "c" * 40}))
+            return cp(args, out=json.dumps({"merged": True, "sha": self.origin_main}))
         if args[:3] == ["git", "-C", str(self.root)] and args[3:] == ["fetch", "--prune", "origin"]:
-            return cp(args)
+            return cp(args, code=1, err="fetch failed") if self.fetch_fails else cp(args)
         if args[:3] == ["git", "-C", str(self.root)] and args[3:] == ["worktree", "list", "--porcelain"]:
             out = (
-                f"worktree {self.root}\nHEAD {self.main_sha}\nbranch refs/heads/main\n\n"
+                f"worktree {self.root}\nHEAD {self.primary_head}\nbranch refs/heads/{self.primary_branch}\n\n"
                 f"worktree {self.worktree}\nHEAD {self.head_sha}\nbranch refs/heads/feature/x\n\n"
             )
             return cp(args, out=out)
@@ -69,13 +97,28 @@ class FakeCommands:
             return cp(args, out=f"{sha}\trefs/heads/feature/x\n")
         if args[:3] == ["git", "-C", str(self.root)] and args[3:] == ["push", "origin", "--delete", "feature/x"]:
             return cp(args)
+        if args[:3] == ["git", "-C", str(self.root)] and args[3:] == ["branch", "--show-current"]:
+            return cp(args, out=self.primary_branch + "\n")
+        if args[:3] == ["git", "-C", str(self.root)] and args[3:] == ["rev-parse", "HEAD"]:
+            return cp(args, out=self.primary_head + "\n")
         if args[:3] == ["git", "-C", str(self.root)] and args[3:] == ["rev-parse", "refs/remotes/origin/main"]:
-            return cp(args, out=self.main_sha + "\n")
+            return cp(args, out=self.origin_main + "\n")
+        if args[:3] == ["git", "-C", str(self.root)] and args[3:] == [
+            "merge-base", "--is-ancestor", self.primary_head, "refs/remotes/origin/main"
+        ]:
+            return cp(args, code=1 if self.primary_diverged else 0)
+        if args[:3] == ["git", "-C", str(self.root)] and args[3:] == [
+            "merge", "--ff-only", "refs/remotes/origin/main"
+        ]:
+            if self.primary_sync_fails:
+                return cp(args, code=1, err="local changes would be overwritten")
+            self.primary_head = self.origin_main
+            return cp(args, out="Fast-forward\n")
         raise AssertionError(f"unexpected argv: {args}")
 
 
 class FinalizeTaskPrTests(unittest.TestCase):
-    def test_open_pr_merges_and_cleans(self):
+    def test_open_pr_merges_cleans_and_updates_primary_main(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td).resolve()
             fake = FakeCommands(root)
@@ -87,20 +130,24 @@ class FinalizeTaskPrTests(unittest.TestCase):
             self.assertTrue(item["mergedNow"])
             self.assertTrue(item["cleanup"]["localBranchRemoved"])
             self.assertTrue(item["cleanup"]["remoteBranchRemoved"])
+            self.assertEqual("UPDATED", result["primaryMainSync"]["status"])
+            self.assertTrue(result["mainWorkingTreeTouched"])
             flat = [" ".join(call) for call in fake.calls]
             self.assertTrue(any("merge_method=squash" in call for call in flat))
+            self.assertTrue(any("merge --ff-only refs/remotes/origin/main" in call for call in flat))
             self.assertFalse(any("reset --hard" in call or " stash" in call or " clean" in call for call in flat))
 
-    def test_already_merged_skips_merge_api_but_cleans(self):
+    def test_already_merged_skips_merge_api_but_cleans_and_syncs(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td).resolve()
             fake = FakeCommands(root, already_merged=True)
             with patch.object(mod, "run_process", side_effect=fake):
                 result = mod.finalize_many(repo_root=root, repository=mod.DEFAULT_REPOSITORY, pr_numbers=[7])
             self.assertTrue(result["results"][0]["alreadyMerged"])
+            self.assertEqual("UPDATED", result["primaryMainSync"]["status"])
             self.assertFalse(any(call[:4] == ["gh", "api", "-X", "PUT"] for call in fake.calls))
 
-    def test_dirty_worktree_is_warning_not_merge_failure(self):
+    def test_dirty_secondary_worktree_is_warning_not_merge_failure(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td).resolve()
             fake = FakeCommands(root, dirty=True)
@@ -111,6 +158,7 @@ class FinalizeTaskPrTests(unittest.TestCase):
             self.assertIn("FINALIZE_DIRTY_WORKTREE_SKIPPED", codes)
             self.assertIn("FINALIZE_LOCAL_BRANCH_IN_USE", codes)
             self.assertTrue(result["results"][0]["cleanup"]["remoteBranchRemoved"])
+            self.assertTrue(result["mainWorkingTreeTouched"])
 
     def test_moved_refs_are_left_untouched(self):
         with tempfile.TemporaryDirectory() as td:
@@ -123,6 +171,85 @@ class FinalizeTaskPrTests(unittest.TestCase):
             self.assertIn("FINALIZE_REMOTE_BRANCH_MOVED", codes)
             self.assertFalse(any(call[3:5] == ["update-ref", "-d"] for call in fake.calls if call[:1] == ["git"]))
             self.assertFalse(any(call[3:] == ["push", "origin", "--delete", "feature/x"] for call in fake.calls if call[:1] == ["git"]))
+
+    def test_primary_not_main_is_warning_and_is_not_switched(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td).resolve()
+            fake = FakeCommands(root, primary_branch="implementation/agent-team-mvp-v1")
+            with patch.object(mod, "run_process", side_effect=fake):
+                result = mod.finalize_many(repo_root=root, repository=mod.DEFAULT_REPOSITORY, pr_numbers=[7])
+            self.assertEqual("TASK_PRS_FINALIZED_WITH_WARNINGS", result["code"])
+            self.assertEqual("SKIPPED_NOT_MAIN", result["primaryMainSync"]["status"])
+            self.assertFalse(result["mainWorkingTreeTouched"])
+            codes = {w["code"] for w in result["warnings"]}
+            self.assertIn("FINALIZE_PRIMARY_NOT_MAIN", codes)
+            flat = [" ".join(call) for call in fake.calls]
+            self.assertFalse(any("merge --ff-only refs/remotes/origin/main" in call for call in flat))
+
+    def test_primary_fast_forward_failure_is_warning_not_merge_failure(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td).resolve()
+            fake = FakeCommands(root, primary_sync_fails=True)
+            with patch.object(mod, "run_process", side_effect=fake):
+                result = mod.finalize_many(repo_root=root, repository=mod.DEFAULT_REPOSITORY, pr_numbers=[7])
+            self.assertEqual("TASK_PRS_FINALIZED_WITH_WARNINGS", result["code"])
+            self.assertTrue(result["results"][0]["mergedNow"])
+            self.assertEqual("SKIPPED_FF_FAILED", result["primaryMainSync"]["status"])
+            self.assertFalse(result["mainWorkingTreeTouched"])
+            self.assertIn("FINALIZE_PRIMARY_MAIN_SYNC_SKIPPED", {w["code"] for w in result["warnings"]})
+
+    def test_primary_diverged_is_warning_without_fast_forward_attempt(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td).resolve()
+            fake = FakeCommands(root, primary_diverged=True)
+            with patch.object(mod, "run_process", side_effect=fake):
+                result = mod.finalize_many(repo_root=root, repository=mod.DEFAULT_REPOSITORY, pr_numbers=[7])
+            self.assertEqual("SKIPPED_DIVERGED", result["primaryMainSync"]["status"])
+            self.assertFalse(result["primaryMainSync"]["attempted"])
+            self.assertIn("FINALIZE_PRIMARY_MAIN_DIVERGED", {w["code"] for w in result["warnings"]})
+
+    def test_fetch_failure_skips_primary_sync(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td).resolve()
+            fake = FakeCommands(root, fetch_fails=True)
+            with patch.object(mod, "run_process", side_effect=fake):
+                result = mod.finalize_many(repo_root=root, repository=mod.DEFAULT_REPOSITORY, pr_numbers=[7])
+            self.assertEqual("SKIPPED_STALE_REMOTE_REFS", result["primaryMainSync"]["status"])
+            codes = {w["code"] for w in result["warnings"]}
+            self.assertIn("FINALIZE_FETCH_WARNING", codes)
+            self.assertIn("FINALIZE_PRIMARY_SYNC_SKIPPED_STALE_REFS", codes)
+
+    def test_sync_primary_main_preserves_unrelated_dirty_file(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td, "repo").resolve()
+            root.mkdir()
+            self.assertEqual(0, real_git(root, "init").returncode)
+            self.assertEqual(0, real_git(root, "config", "user.email", "test@example.invalid").returncode)
+            self.assertEqual(0, real_git(root, "config", "user.name", "Test").returncode)
+            self.assertEqual(0, real_git(root, "branch", "-M", "main").returncode)
+
+            (root / "app.txt").write_text("v1\n", encoding="utf-8")
+            (root / "runtime.txt").write_text("clean\n", encoding="utf-8")
+            self.assertEqual(0, real_git(root, "add", ".").returncode)
+            self.assertEqual(0, real_git(root, "commit", "-m", "base").returncode)
+            base = real_git(root, "rev-parse", "HEAD").stdout.strip()
+
+            (root / "app.txt").write_text("v2\n", encoding="utf-8")
+            self.assertEqual(0, real_git(root, "add", "app.txt").returncode)
+            self.assertEqual(0, real_git(root, "commit", "-m", "incoming").returncode)
+            incoming = real_git(root, "rev-parse", "HEAD").stdout.strip()
+            self.assertEqual(0, real_git(root, "update-ref", "refs/remotes/origin/main", incoming).returncode)
+            self.assertEqual(0, real_git(root, "reset", "--hard", base).returncode)
+
+            (root / "runtime.txt").write_text("local dirty\n", encoding="utf-8")
+            result = mod.sync_primary_main(root, dry_run=False)
+
+            self.assertEqual("UPDATED", result["status"])
+            self.assertTrue(result["updated"])
+            self.assertEqual(incoming, real_git(root, "rev-parse", "HEAD").stdout.strip())
+            self.assertEqual("v2\n", (root / "app.txt").read_text(encoding="utf-8"))
+            self.assertEqual("local dirty\n", (root / "runtime.txt").read_text(encoding="utf-8"))
+            self.assertIn("runtime.txt", real_git(root, "status", "--short").stdout)
 
     def test_wrong_base_fails_before_merge(self):
         with tempfile.TemporaryDirectory() as td:

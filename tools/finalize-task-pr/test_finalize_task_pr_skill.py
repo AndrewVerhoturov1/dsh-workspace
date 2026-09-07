@@ -14,7 +14,7 @@ class FinalizeTaskPrSkillContract(unittest.TestCase):
     def test_frontmatter_and_version(self):
         self.assertTrue(self.text.startswith("---\n"))
         self.assertIn("name: finalize-task-pr", self.text)
-        self.assertIn("FINALIZE_TASK_PR_SKILL_VERSION: 1", self.text)
+        self.assertIn("FINALIZE_TASK_PR_SKILL_VERSION: 2", self.text)
 
     def test_canonical_executor_is_explicit(self):
         self.assertIn(
@@ -35,6 +35,12 @@ class FinalizeTaskPrSkillContract(unittest.TestCase):
         self.assertIn("Dirty secondary worktree", self.text)
         self.assertIn("TASK_PRS_FINALIZED_WITH_WARNINGS", self.text)
         self.assertIn("Cleanup warning не превращает уже успешный merge в failure", self.text)
+
+    def test_primary_main_sync_contract(self):
+        self.assertIn("git merge --ff-only", self.text)
+        self.assertIn("FINALIZE_PRIMARY_NOT_MAIN", self.text)
+        self.assertIn("FINALIZE_PRIMARY_MAIN_SYNC_SKIPPED", self.text)
+        self.assertIn("mainWorkingTreeTouched", self.text)
 
     def test_destructive_fallbacks_are_forbidden(self):
         for marker in ("git reset --hard", "git clean", "automatic stash", "force push"):
