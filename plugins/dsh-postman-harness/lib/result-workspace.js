@@ -28,7 +28,7 @@ function workspaceReceiptPath(publishedPath) {
   return path.join(path.dirname(publishedPath), 'result-workspace.json')
 }
 
-export function readPublishedReceipt(publishedJson) {
+function readPublishedReceiptMetadata(publishedJson) {
   const receiptPath = fs.realpathSync(String(publishedJson))
   const value = JSON.parse(fs.readFileSync(receiptPath, 'utf8'))
   if (value?.ok !== true || value?.code !== 'PUBLISHED') {
@@ -40,6 +40,11 @@ export function readPublishedReceipt(publishedJson) {
   if (typeof value.worktree !== 'string' || value.worktree.length === 0) {
     throw new Error('published result does not contain worktree')
   }
+  return { receiptPath, value }
+}
+
+export function readPublishedReceipt(publishedJson) {
+  const { receiptPath, value } = readPublishedReceiptMetadata(publishedJson)
   const worktree = fs.realpathSync(value.worktree)
   if (!fs.statSync(worktree).isDirectory()) throw new Error('published worktree is not a directory')
   return { receiptPath, value, worktree }
@@ -81,7 +86,9 @@ export async function registerResultWorkspace(ctx, publishedJson) {
 }
 
 export async function unregisterResultWorkspace(ctx, publishedJson) {
-  const { receiptPath, value, worktree } = readPublishedReceipt(publishedJson)
+  // Cleanup is keyed by the durable receipts, not by the continued existence
+  // of the retained worktree. finalize-task-pr may already have removed it.
+  const { receiptPath, value } = readPublishedReceiptMetadata(publishedJson)
   if (!ctx.workspaceRegistry || typeof ctx.workspaceRegistry.delete !== 'function') {
     throw new Error('Harness workspaceRegistry service is unavailable')
   }
@@ -94,8 +101,11 @@ export async function unregisterResultWorkspace(ctx, publishedJson) {
   if (registration?.status !== 'RESULT_WORKSPACE_REGISTERED' && registration?.status !== 'RESULT_WORKSPACE_UNREGISTERED') {
     throw new Error('result workspace registration receipt is invalid')
   }
-  if (registration.requestId !== value.requestId || registration.worktree !== worktree) {
+  if (registration.requestId !== value.requestId || registration.publishedJson !== receiptPath) {
     throw new Error('result workspace registration receipt does not match published result')
+  }
+  if (typeof registration.worktree !== 'string' || registration.worktree.length === 0) {
+    throw new Error('result workspace registration receipt has no worktree')
   }
   if (typeof registration.workspaceId !== 'string' || registration.workspaceId.length === 0) {
     throw new Error('result workspace registration receipt has no workspaceId')
@@ -111,7 +121,8 @@ export async function unregisterResultWorkspace(ctx, publishedJson) {
   }
 
   // A presentation is UI state, not a prerequisite for removing the normal
-  // workspace registration. Cleanup remains safe if the sidebar is offline.
+  // workspace registration. Cleanup remains safe if the sidebar is offline
+  // or the physical worktree is already gone.
   await clearResultPresentation(ctx, publishedJson).catch(() => {})
 
   const result = {

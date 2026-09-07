@@ -32,6 +32,17 @@ function fixture() {
   return { root, worktree: fs.realpathSync(worktree), published }
 }
 
+function workspaceRegistryFixture() {
+  const deleted = []
+  const workspace = { id: 'workspace-postman-91' }
+  const registry = {
+    async create() { return workspace },
+    get(id) { return id === workspace.id ? workspace : undefined },
+    async delete(id) { deleted.push(id) },
+  }
+  return { deleted, workspace, registry }
+}
+
 test('readPublishedReceipt binds to retained existing worktree', () => {
   const fx = fixture()
   try {
@@ -73,21 +84,68 @@ test('registerResultWorkspace uses host workspaceRegistry.create(path, title) an
 test('unregisterResultWorkspace deletes registration only and marks sidecar', async () => {
   const fx = fixture()
   try {
-    const deleted = []
-    const workspace = { id: 'workspace-postman-91' }
-    const ctx = {
-      workspaceRegistry: {
-        async create() { return workspace },
-        get(id) { return id === workspace.id ? workspace : undefined },
-        async delete(id) { deleted.push(id) },
-      },
-    }
-    const registered = await registerResultWorkspace(ctx, fx.published)
-    const result = await unregisterResultWorkspace(ctx, fx.published)
+    const { deleted, registry } = workspaceRegistryFixture()
+    const registered = await registerResultWorkspace({ workspaceRegistry: registry }, fx.published)
+    const result = await unregisterResultWorkspace({ workspaceRegistry: registry }, fx.published)
     assert.deepEqual(deleted, [registered.workspaceId])
     assert.equal(result.status, 'RESULT_WORKSPACE_UNREGISTERED')
     assert.equal(result.workspaceRemoved, true)
     assert.ok(fs.existsSync(fx.worktree), 'unregister must not delete the worktree')
+  } finally {
+    fs.rmSync(fx.root, { recursive: true, force: true })
+  }
+})
+
+test('unregisterResultWorkspace succeeds when finalize already removed the worktree', async () => {
+  const fx = fixture()
+  try {
+    const { deleted, registry } = workspaceRegistryFixture()
+    const registered = await registerResultWorkspace({ workspaceRegistry: registry }, fx.published)
+    fs.rmSync(fx.worktree, { recursive: true, force: true })
+
+    const result = await unregisterResultWorkspace({ workspaceRegistry: registry }, fx.published)
+
+    assert.deepEqual(deleted, [registered.workspaceId])
+    assert.equal(result.status, 'RESULT_WORKSPACE_UNREGISTERED')
+    assert.equal(result.workspaceRemoved, true)
+    assert.equal(result.worktree, fx.worktree)
+  } finally {
+    fs.rmSync(fx.root, { recursive: true, force: true })
+  }
+})
+
+test('unregisterResultWorkspace remains idempotent after the worktree is gone', async () => {
+  const fx = fixture()
+  try {
+    const { deleted, registry } = workspaceRegistryFixture()
+    await registerResultWorkspace({ workspaceRegistry: registry }, fx.published)
+    fs.rmSync(fx.worktree, { recursive: true, force: true })
+
+    const first = await unregisterResultWorkspace({ workspaceRegistry: registry }, fx.published)
+    const second = await unregisterResultWorkspace({ workspaceRegistry: registry }, fx.published)
+
+    assert.equal(first.workspaceRemoved, true)
+    assert.equal(second.workspaceRemoved, true)
+    assert.deepEqual(deleted, ['workspace-postman-91'])
+  } finally {
+    fs.rmSync(fx.root, { recursive: true, force: true })
+  }
+})
+
+test('unregisterResultWorkspace still rejects a mismatched registration receipt', async () => {
+  const fx = fixture()
+  try {
+    const { registry } = workspaceRegistryFixture()
+    const registered = await registerResultWorkspace({ workspaceRegistry: registry }, fx.published)
+    const sidecar = JSON.parse(fs.readFileSync(registered.workspaceJson, 'utf8'))
+    sidecar.requestId = 'REQ_OTHER'
+    fs.writeFileSync(registered.workspaceJson, `${JSON.stringify(sidecar, null, 2)}\n`, 'utf8')
+    fs.rmSync(fx.worktree, { recursive: true, force: true })
+
+    await assert.rejects(
+      unregisterResultWorkspace({ workspaceRegistry: registry }, fx.published),
+      /does not match published result/,
+    )
   } finally {
     fs.rmSync(fx.root, { recursive: true, force: true })
   }

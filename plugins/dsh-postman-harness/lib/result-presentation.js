@@ -14,12 +14,17 @@ function presentationReceiptPath(publishedPath) {
   return path.join(path.dirname(publishedPath), 'result-presentation.json')
 }
 
-function readRetainedPublishedReceipt(publishedJson) {
+function readPublishedReceiptMetadata(publishedJson) {
   const publishedPath = fs.realpathSync(String(publishedJson))
   const value = JSON.parse(fs.readFileSync(publishedPath, 'utf8'))
   if (value?.ok !== true || value?.code !== 'PUBLISHED') throw new Error('published receipt must be successful PUBLISHED')
   if (value.worktreeRetained !== true || value.worktreeRemoved !== false) throw new Error('published receipt must retain worktree')
   if (typeof value.worktree !== 'string' || value.worktree === '') throw new Error('published receipt has no worktree')
+  return { publishedPath, value }
+}
+
+function readRetainedPublishedReceipt(publishedJson) {
+  const { publishedPath, value } = readPublishedReceiptMetadata(publishedJson)
   const worktree = fs.realpathSync(value.worktree)
   if (!fs.statSync(worktree).isDirectory()) throw new Error('published worktree is not a directory')
   return { publishedPath, value, worktree }
@@ -89,15 +94,22 @@ export async function presentResult(ctx, publishedJson, options, targetSessionId
 }
 
 export async function clearResultPresentation(ctx, publishedJson) {
-  const { publishedPath, value, worktree } = readRetainedPublishedReceipt(publishedJson)
+  // Clearing presentation is durable-receipt cleanup. It must not require the
+  // physical worktree to survive finalize-task-pr.
+  const { publishedPath, value } = readPublishedReceiptMetadata(publishedJson)
   const receiptPath = presentationReceiptPath(publishedPath)
   if (!fs.existsSync(receiptPath)) return { ok: true, status: 'RESULT_PRESENTATION_NOT_REGISTERED', requestId: value.requestId }
   const prior = JSON.parse(fs.readFileSync(receiptPath, 'utf8'))
-  if (prior?.requestId !== value.requestId || prior?.worktree !== worktree) throw new Error('result presentation receipt does not match published result')
+  if (prior?.requestId !== value.requestId || prior?.publishedJson !== publishedPath) {
+    throw new Error('result presentation receipt does not match published result')
+  }
+  if (typeof prior.worktree !== 'string' || prior.worktree.length === 0) {
+    throw new Error('result presentation receipt has no worktree')
+  }
   if (prior.cleared === true) return { ...prior, ok: true, status: 'RESULT_PRESENTATION_ALREADY_CLEARED' }
   let clearResult = null
   try {
-    clearResult = await serviceOf(ctx).clear({ sessionId: prior.targetSessionId, workspaceRoot: worktree })
+    clearResult = await serviceOf(ctx).clear({ sessionId: prior.targetSessionId, workspaceRoot: prior.worktree })
   } catch (error) {
     clearResult = { skipped: true, error: error instanceof Error ? error.message : String(error) }
   }
