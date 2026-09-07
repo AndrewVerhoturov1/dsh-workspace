@@ -1481,7 +1481,7 @@ function validateExecutionPlan(plan, squad, options) {
 }
 /** Role-scoped fallback used when a planner route fails or emits an invalid/cyclic graph. */
 function deterministicExecutionPlan(squad, task, agents, warning, effectiveExecutionMode = squad.executionMode ?? "serial") {
-	const order = squad.executionOrder ?? squad.members.filter((agentId) => (agents.get(agentId)?.invocationMode ?? "normal") !== "escalation");
+	const order = (squad.executionOrder ?? squad.members).filter((agentId) => (agents.get(agentId)?.invocationMode ?? "normal") !== "escalation");
 	if (order.length === 0) throw new Error("deterministic fallback refuses to select escalation-only members without an explicit planner decision");
 	const boundedWarning = warning === void 0 ? void 0 : boundedExcerpt(warning, 8e3);
 	return {
@@ -1948,6 +1948,7 @@ function copyRecipeIds(recipe, createId) {
 			members: recipe.squad.members.map(mapAgent),
 			...recipe.squad.executionOrder === void 0 ? {} : { executionOrder: recipe.squad.executionOrder.map(mapAgent) },
 			...recipe.squad.leaderAgentId === void 0 ? {} : { leaderAgentId: mapAgent(recipe.squad.leaderAgentId) },
+			...recipe.squad.plannerAgentId === void 0 ? {} : { plannerAgentId: mapAgent(recipe.squad.plannerAgentId) },
 			...recipe.squad.qualityGate === void 0 ? {} : { qualityGate: {
 				...recipe.squad.qualityGate,
 				reviewerAgentId: mapAgent(recipe.squad.qualityGate.reviewerAgentId),
@@ -2192,9 +2193,11 @@ var DefinitionApplicationService = class extends Service {
 			return unit.run(async () => {
 				for (const [squadId] of affected) {
 					const updated = await abortableStep(signal, () => this.squads().update(squadId, (squad) => {
-						const { leaderAgentId, ...withoutLeader } = squad;
+						const next = { ...squad };
+						if (next.leaderAgentId === id) delete next.leaderAgentId;
+						if (next.plannerAgentId === id) delete next.plannerAgentId;
 						return {
-							...leaderAgentId === id ? withoutLeader : squad,
+							...next,
 							members: squad.members.filter((memberId) => memberId !== id),
 							...squad.executionOrder === void 0 ? {} : { executionOrder: squad.executionOrder.filter((memberId) => memberId !== id) }
 						};
@@ -3142,6 +3145,18 @@ var ExecutionApplicationService = class extends DefinitionApplicationService {
 	backgroundAcceptances = /* @__PURE__ */ new Map();
 	pendingBackgroundRuns = /* @__PURE__ */ new Set();
 	usageMeter = new OfficialUsageMeter(this.ctx);
+	agentCallCounts = /* @__PURE__ */ new Map();
+	claimAgentCall(dispatchId, agentId, record) {
+		let counts = this.agentCallCounts.get(dispatchId);
+		if (counts === void 0) {
+			counts = /* @__PURE__ */ new Map();
+			this.agentCallCounts.set(dispatchId, counts);
+		}
+		const used = counts.get(agentId) ?? 0;
+		const limit = record.maxCallsPerRun;
+		if (limit !== void 0 && used >= limit) throw new AgentTeamError(`agent "${agentId}" exhausted maxCallsPerRun=${limit} for this team run`, "INVALID_DISPATCH");
+		counts.set(agentId, used + 1);
+	}
 	history() {
 		this.runHistory ??= new RunHistoryStore(this.runs());
 		return this.runHistory;
@@ -3401,11 +3416,6 @@ var ExecutionApplicationService = class extends DefinitionApplicationService {
 			provider: member.record.provider,
 			model: member.record.model
 		};
-		if (member.record.maxCallsPerRun !== void 0 && attempt > member.record.maxCallsPerRun) {
-			const failed = { agentId: member.id, agentName: member.record.name, status: "failed", output: [], attempts: attempt - 1, provider: selectedRoute.provider, model: selectedRoute.model, startedAt, endedAt: Date.now(), error: `maxCallsPerRun=${member.record.maxCallsPerRun} exhausted` };
-			if (persist) await this.updateRunMember(dispatchId, member.id, (current) => ({ ...current, status: "failed", endedAt: failed.endedAt, error: failed.error }));
-			return failed;
-		}
 		if (persist) await this.updateRunMember(dispatchId, member.id, (current) => ({
 			...current,
 			provider: selectedRoute.provider,
@@ -3446,6 +3456,7 @@ var ExecutionApplicationService = class extends DefinitionApplicationService {
 			]
 		};
 		try {
+			this.claimAgentCall(dispatchId, member.id, member.record);
 			const run = await this.ctx.subagents.start(provider, {
 				label: `${squad.name}/${member.record.name}`,
 				prompt: [{
@@ -3729,6 +3740,10 @@ var ExecutionApplicationService = class extends DefinitionApplicationService {
 		].join("\n\n");
 		try {
 			if (capabilities === void 0 || !capabilities.outputSchema || !capabilities.toolFilter || !capabilities.depthLimit) throw new Error(`planner provider "${provider}" cannot enforce structured, tool-filtered, depth-bounded planning`);
+			if (dispatchId !== void 0) {
+				if (configuredPlanner !== void 0 && squad.plannerAgentId !== void 0) this.claimAgentCall(dispatchId, squad.plannerAgentId, configuredPlanner);
+				else if (!useMainAgent && leader !== void 0 && squad.leaderAgentId !== void 0) this.claimAgentCall(dispatchId, squad.leaderAgentId, leader);
+			}
 			run = await this.ctx.subagents.start(provider, {
 				label: `${squad.name}/${useMainAgent ? "Main workflow planner" : "Squad leader planner"}`,
 				parent,
@@ -3834,6 +3849,7 @@ var ExecutionApplicationService = class extends DefinitionApplicationService {
 			return tracked ?? (run === void 0 ? void 0 : this.usageFor(run, baseline));
 		};
 		try {
+			this.claimAgentCall(dispatchId, reviewer.id, reviewer.record);
 			run = await this.ctx.subagents.start(provider, {
 				label: `${squad.name}/Quality review ${round}`,
 				parent,
@@ -4159,16 +4175,19 @@ var ExecutionApplicationService = class extends DefinitionApplicationService {
 					task: request.assignments?.find((item) => item.agentId === id)?.task ?? ""
 				};
 			});
-			const byId = new Map(baseMembers.map((member) => [member.id, member]));
+			const explicitlyAssignedIds = new Set((request.assignments ?? []).map((item) => item.agentId));
+			const executableBaseMembers = baseMembers.filter((member) => (member.record.invocationMode ?? "normal") !== "escalation" || explicitlyAssignedIds.has(member.id) || trace.selectedAgentIds?.includes(member.id) === true);
+			if (executableBaseMembers.length === 0 && plan === void 0) throw new AgentTeamError("no normal members are available; escalation-only members require an explicit planner escalation or explicit assignment", "INVALID_DISPATCH");
+			const byId = new Map(executableBaseMembers.map((member) => [member.id, member]));
 			const fallbackAssignments = deterministicExecutionPlan(squad.executionOrder === void 0 && request.memberOrder !== void 0 ? {
 				...squad,
 				executionOrder: [...request.memberOrder]
 			} : squad, request.task, agents, void 0, executionMode).assignments;
 			const fallbackById = new Map(fallbackAssignments.map((node) => [node.agentId, node.task]));
-			const nodes = plan?.assignments ?? baseMembers.map((member, index) => ({
+			const nodes = plan?.assignments ?? executableBaseMembers.map((member, index) => ({
 				agentId: member.id,
 				task: member.task.trim().length === 0 ? fallbackById.get(member.id) : member.task,
-				dependsOn: executionMode === "parallel" || index === 0 ? [] : [baseMembers[index - 1].id]
+				dependsOn: executionMode === "parallel" || index === 0 ? [] : [executableBaseMembers[index - 1].id]
 			}));
 			const executionPlan = plan ?? {
 				decision: "run",
@@ -4319,6 +4338,7 @@ var ExecutionApplicationService = class extends DefinitionApplicationService {
 			});
 			throw error;
 		} finally {
+			this.agentCallCounts.delete(dispatchId);
 			this.activeRunControllers.delete(dispatchId);
 			this.activeDispatchKeys.delete(activeKey);
 			try {
