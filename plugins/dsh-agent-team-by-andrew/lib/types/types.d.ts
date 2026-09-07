@@ -25,6 +25,10 @@ export interface AgentRecord {
     readonly provider: string;
     readonly model: string;
     readonly maxTokens?: number;
+    readonly invocationMode?: 'normal' | 'escalation';
+    readonly maxCallsPerRun?: number;
+    readonly executionTools?: boolean;
+    readonly allowTeamDispatch?: boolean;
     readonly toolScope?: AgentToolScope;
     /** Optional route used by retry-once when the primary route fails. */
     readonly fallbackProvider?: string;
@@ -65,6 +69,7 @@ export interface SquadRecord {
     readonly planningContext?: 'current' | 'recent' | 'full';
     /** Planner-only output ceiling. This never inherits an unbounded parent maximum. */
     readonly plannerMaxTokens?: number;
+    readonly plannerAgentId?: AgentId;
     /** Optional bounded reviewer -> repair owner -> reviewer loop. */
     readonly qualityGate?: SquadQualityGate;
 }
@@ -110,6 +115,7 @@ export interface SquadAssignment {
 /** One node in a validated acyclic squad plan. */
 export interface SquadPlanAssignment extends SquadAssignment {
     readonly dependsOn: AgentId[];
+    readonly escalationReason?: string;
 }
 /** User- or model-facing request resolved by {@link AgentTeamService.dispatch}. */
 export interface SquadDispatchRequest {
@@ -168,7 +174,7 @@ export interface SquadExecutionPlan {
     readonly memberOrder: AgentId[];
     readonly assignments: SquadPlanAssignment[];
     /** Normal conversation sends are planned with the parent Agent's model route. */
-    readonly planner: 'main-agent' | 'squad-leader' | 'deterministic-fallback';
+    readonly planner: 'main-agent' | 'squad-leader' | 'configured-agent' | 'deterministic-fallback';
     readonly plannerProvider?: string;
     readonly plannerModel?: string;
     readonly leaderAgentId?: AgentId;
@@ -306,6 +312,10 @@ export interface AgentExportItem {
     readonly provider: string;
     readonly model: string;
     readonly maxTokens?: number;
+    readonly invocationMode?: 'normal' | 'escalation';
+    readonly maxCallsPerRun?: number;
+    readonly executionTools?: boolean;
+    readonly allowTeamDispatch?: boolean;
     readonly toolScope?: AgentToolScope;
     readonly fallbackProvider?: string;
     readonly fallbackModel?: string;
@@ -330,6 +340,7 @@ export interface SquadExportItem {
     readonly responseMode?: 'foreground' | 'background';
     readonly planningContext?: 'current' | 'recent' | 'full';
     readonly plannerMaxTokens?: number;
+    readonly plannerAgentId?: AgentId;
     readonly qualityGate?: SquadQualityGate;
 }
 /** Versioned, self-describing dump of every durable agent/squad definition. */
