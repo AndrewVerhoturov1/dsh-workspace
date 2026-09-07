@@ -6,8 +6,16 @@
   <title>Проверка Postman</title>
   <style>
     :root {
-      color-scheme: light dark;
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color-scheme: light;
+      font-family: Arial, Helvetica, sans-serif;
+      --paper: #f0eee7;
+      --ink: #11110f;
+      --accent: #ff4d00;
+      --hairline: rgba(17, 17, 15, 0.18);
+    }
+
+    * {
+      box-sizing: border-box;
     }
 
     body {
@@ -15,41 +23,169 @@
       margin: 0;
       display: grid;
       place-items: center;
-      background: Canvas;
-      color: CanvasText;
+      padding: clamp(1rem, 3vw, 2.5rem);
+      overflow-x: hidden;
+      background: var(--paper);
+      color: var(--ink);
     }
+
+    body::before,
+    body::after {
+      content: "";
+      position: fixed;
+      z-index: -1;
+      pointer-events: none;
+    }
+
+    body::before {
+      inset: 0;
+      background:
+        linear-gradient(to right, transparent calc(50% - 0.5px), var(--hairline) 50%, transparent calc(50% + 0.5px));
+    }
+
+    body::after {
+      width: clamp(7rem, 16vw, 13rem);
+      height: clamp(7rem, 16vw, 13rem);
+      top: clamp(1rem, 4vw, 3.5rem);
+      right: clamp(-3rem, -2vw, -1rem);
+      border: 1px solid var(--ink);
+      border-radius: 50%;
+    }
+
     main {
-      width: min(90vw, 28rem);
-      padding: 2rem;
-      text-align: center;
-      border: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
-      border-radius: 1rem;
-      box-shadow: 0 0.75rem 2rem color-mix(in srgb, CanvasText 10%, transparent);
+      position: relative;
+      width: min(100%, 70rem);
+      min-height: min(78vh, 46rem);
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-rows: 1fr auto;
+      gap: clamp(2rem, 6vw, 5rem);
+      padding: clamp(1.5rem, 4.5vw, 4.5rem) 0 0;
+      border-top: 1px solid var(--ink);
+      border-bottom: 1px solid var(--ink);
+    }
+
+    main::before {
+      content: "";
+      position: absolute;
+      top: -0.4rem;
+      left: 0;
+      width: 3.5rem;
+      height: 0.4rem;
+      background: var(--accent);
     }
 
     h1 {
-      margin: 0 0 1.5rem;
-      font-size: clamp(1.8rem, 7vw, 2.6rem);
+      grid-column: 1 / -1;
+      align-self: start;
+      max-width: 8.2em;
+      margin: 0;
+      font-size: clamp(4.25rem, 12.6vw, 10.5rem);
+      font-weight: 700;
+      line-height: 0.82;
+      letter-spacing: -0.075em;
+      text-wrap: balance;
     }
+
     button {
       appearance: none;
-      border: 0;
-      border-radius: 0.65rem;
-      padding: 0.8rem 1.2rem;
+      align-self: end;
+      justify-self: start;
+      min-width: min(100%, 20rem);
+      border: 1px solid var(--ink);
+      border-radius: 0;
+      padding: 1.15rem 1.35rem;
       font: inherit;
+      font-size: 0.86rem;
       font-weight: 700;
+      letter-spacing: 0.035em;
       cursor: pointer;
-      background: ButtonFace;
-      color: ButtonText;
-      outline-offset: 0.2rem;
+      background: var(--ink);
+      color: var(--paper);
+      box-shadow: 0.4rem 0.4rem 0 var(--accent);
+      transform: translate(0, 0);
+      transition: transform 140ms ease, box-shadow 140ms ease, background 140ms ease, color 140ms ease;
+      outline-offset: 0.3rem;
+    }
+
+    button:hover {
+      background: var(--accent);
+      color: var(--ink);
+      box-shadow: 0.2rem 0.2rem 0 var(--ink);
+      transform: translate(0.2rem, 0.2rem);
+    }
+
+    button:active {
+      box-shadow: 0 0 0 var(--ink);
+      transform: translate(0.4rem, 0.4rem);
     }
 
     button:focus-visible {
-      outline: 0.2rem solid Highlight;
+      outline: 2px solid var(--accent);
+      outline-offset: 0.45rem;
     }
+
     #status {
+      align-self: end;
+      justify-self: end;
       min-height: 1.5em;
-      margin: 1.25rem 0 0;
+      margin: 0 0 0.9rem;
+      padding-left: 1.8rem;
+      font-family: "Courier New", Courier, monospace;
+      font-size: 0.78rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    #status::before {
+      content: "";
+      display: inline-block;
+      width: 0.55rem;
+      height: 0.55rem;
+      margin: 0 0.75rem 0.05rem 0;
+      border: 1px solid currentColor;
+      border-radius: 50%;
+      background: var(--accent);
+    }
+
+    @media (max-width: 42rem) {
+      body::before {
+        left: 1.25rem;
+        right: auto;
+        width: 1px;
+        background: var(--hairline);
+      }
+
+      main {
+        min-height: calc(100vh - 2rem);
+        grid-template-columns: 1fr;
+        grid-template-rows: 1fr auto auto;
+        gap: 1.75rem;
+        padding-top: clamp(2.5rem, 10vw, 4rem);
+      }
+
+      h1 {
+        grid-column: 1;
+        font-size: clamp(4rem, 20vw, 6.8rem);
+      }
+
+      button {
+        width: calc(100% - 0.4rem);
+      }
+
+      #status {
+        justify-self: start;
+        margin-bottom: 1rem;
+        padding-left: 0;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      button {
+        transition: none;
+      }
     }
   </style>
 </head>
