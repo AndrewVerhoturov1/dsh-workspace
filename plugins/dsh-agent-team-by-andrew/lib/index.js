@@ -27,10 +27,6 @@ const agentReadFields = z$1.object({
 	provider: z$1.string().trim().min(1),
 	model: z$1.string().trim().min(1),
 	maxTokens: z$1.number().int().positive().optional(),
-	invocationMode: z$1.enum(["normal", "escalation"]).optional(),
-	maxCallsPerRun: z$1.number().int().positive().max(100).optional(),
-	executionTools: z$1.boolean().optional(),
-	allowTeamDispatch: z$1.boolean().optional(),
 	toolScope: z$1.object({
 		allow: z$1.array(z$1.string().min(1)).min(1).optional(),
 		deny: z$1.array(z$1.string().min(1)).min(1).optional()
@@ -45,10 +41,6 @@ const agentWriteFields = z$1.object({
 	provider: z$1.string().trim().min(1).max(200),
 	model: z$1.string().trim().min(1).max(200),
 	maxTokens: z$1.number().int().positive().max(1e6).optional(),
-	invocationMode: z$1.enum(["normal", "escalation"]).optional(),
-	maxCallsPerRun: z$1.number().int().positive().max(100).optional(),
-	executionTools: z$1.boolean().optional(),
-	allowTeamDispatch: z$1.boolean().optional(),
 	toolScope: z$1.object({
 		allow: z$1.array(z$1.string().trim().min(1).max(200)).min(1).max(256).refine((items) => new Set(items).size === items.length, { message: "allow tools must be unique" }).optional(),
 		deny: z$1.array(z$1.string().trim().min(1).max(200)).min(1).max(256).refine((items) => new Set(items).size === items.length, { message: "deny tools must be unique" }).optional()
@@ -95,7 +87,6 @@ const squadReadFields = z$1.object({
 		"full"
 	]).optional(),
 	plannerMaxTokens: z$1.number().int().positive().optional(),
-	plannerAgentId: z$1.string().min(1).transform((value) => value).optional(),
 	qualityGate: z$1.object({
 		reviewerAgentId: z$1.string().min(1).transform((value) => value),
 		repairAgentId: z$1.string().min(1).transform((value) => value),
@@ -143,7 +134,6 @@ const squadWriteFields = z$1.object({
 		"full"
 	]).optional(),
 	plannerMaxTokens: z$1.number().int().min(256).max(8192).optional(),
-	plannerAgentId: z$1.string().min(1).transform((value) => value).optional(),
 	qualityGate: z$1.object({
 		reviewerAgentId: z$1.string().min(1).transform((value) => value),
 		repairAgentId: z$1.string().min(1).transform((value) => value),
@@ -239,8 +229,7 @@ const usageSchema = z$1.object({
 const assignmentSchema$1 = z$1.object({
 	agentId: z$1.string().min(1).transform((value) => value),
 	task: z$1.string(),
-	dependsOn: z$1.array(z$1.string().min(1).transform((value) => value)).default([]),
-	escalationReason: z$1.string().max(8e3).optional()
+	dependsOn: z$1.array(z$1.string().min(1).transform((value) => value)).default([])
 }).strict();
 const planSchema = z$1.object({
 	decision: z$1.enum(["run", "skip"]).default("run"),
@@ -251,7 +240,6 @@ const planSchema = z$1.object({
 	planner: z$1.enum([
 		"main-agent",
 		"squad-leader",
-		"configured-agent",
 		"deterministic-fallback"
 	]).default("squad-leader"),
 	plannerProvider: z$1.string().min(1).optional(),
@@ -1481,20 +1469,27 @@ function validateExecutionPlan(plan, squad, options) {
 }
 /** Role-scoped fallback used when a planner route fails or emits an invalid/cyclic graph. */
 function deterministicExecutionPlan(squad, task, agents, warning, effectiveExecutionMode = squad.executionMode ?? "serial") {
-	const order = (squad.executionOrder ?? squad.members).filter((agentId) => (agents.get(agentId)?.invocationMode ?? "normal") !== "escalation");
-	if (order.length === 0) throw new Error("deterministic fallback refuses to select escalation-only members without an explicit planner decision");
+	const order = squad.executionOrder ?? squad.members;
 	const boundedWarning = warning === void 0 ? void 0 : boundedExcerpt(warning, 8e3);
 	return {
 		decision: "run",
-		reason: boundedWarning === void 0 ? "Configured deterministic workflow." : "Planner failed validation; using normal members only.",
-		summary: boundedWarning === void 0 ? "Configured member workflow." : "Dynamic planning failed; escalation-only members remain skipped.",
+		reason: boundedWarning === void 0 ? "Configured deterministic workflow." : "Planner failed validation; using the configured deterministic workflow.",
+		summary: boundedWarning === void 0 ? "Configured member workflow." : "Dynamic planning failed; using a bounded role-scoped assignment for every configured member.",
 		memberOrder: [...order],
 		assignments: order.map((agentId, index) => {
 			const record = agents.get(agentId);
 			const name = record?.name ?? String(agentId);
 			const role = boundedExcerpt(record?.systemPrompt.trim() || `Act as ${name}.`, 8e3);
 			const goal = boundedExcerpt(task, 4e4);
-			return { agentId, task: [`Exclusive role boundary for ${name}: ${role}`, "Do only this role-specific contribution; do not replace another squad member.", `Overall goal (bounded head/tail excerpt): ${goal}`].join("\n\n").slice(0, 5e4), dependsOn: effectiveExecutionMode === "parallel" || index === 0 ? [] : [order[index - 1]] };
+			return {
+				agentId,
+				task: [
+					`Exclusive role boundary for ${name}: ${role}`,
+					"Do only this role-specific contribution; do not replace another squad member.",
+					`Overall goal (bounded head/tail excerpt): ${goal}`
+				].join("\n\n").slice(0, 5e4),
+				dependsOn: effectiveExecutionMode === "parallel" || index === 0 ? [] : [order[index - 1]]
+			};
 		}),
 		planner: "deterministic-fallback",
 		...boundedWarning === void 0 ? {} : { warning: boundedWarning }
@@ -1948,7 +1943,6 @@ function copyRecipeIds(recipe, createId) {
 			members: recipe.squad.members.map(mapAgent),
 			...recipe.squad.executionOrder === void 0 ? {} : { executionOrder: recipe.squad.executionOrder.map(mapAgent) },
 			...recipe.squad.leaderAgentId === void 0 ? {} : { leaderAgentId: mapAgent(recipe.squad.leaderAgentId) },
-			...recipe.squad.plannerAgentId === void 0 ? {} : { plannerAgentId: mapAgent(recipe.squad.plannerAgentId) },
 			...recipe.squad.qualityGate === void 0 ? {} : { qualityGate: {
 				...recipe.squad.qualityGate,
 				reviewerAgentId: mapAgent(recipe.squad.qualityGate.reviewerAgentId),
@@ -2193,11 +2187,9 @@ var DefinitionApplicationService = class extends Service {
 			return unit.run(async () => {
 				for (const [squadId] of affected) {
 					const updated = await abortableStep(signal, () => this.squads().update(squadId, (squad) => {
-						const next = { ...squad };
-						if (next.leaderAgentId === id) delete next.leaderAgentId;
-						if (next.plannerAgentId === id) delete next.plannerAgentId;
+						const { leaderAgentId, ...withoutLeader } = squad;
 						return {
-							...next,
+							...leaderAgentId === id ? withoutLeader : squad,
 							members: squad.members.filter((memberId) => memberId !== id),
 							...squad.executionOrder === void 0 ? {} : { executionOrder: squad.executionOrder.filter((memberId) => memberId !== id) }
 						};
@@ -2226,7 +2218,6 @@ var DefinitionApplicationService = class extends Service {
 		}
 		if (record.executionMode === "parallel" && record.contextMode === "chain") throw new AgentTeamError("contextMode \"chain\" requires serial execution", "INVALID_DISPATCH");
 		if (record.leaderAgentId !== void 0 && !record.members.includes(record.leaderAgentId)) throw new AgentTeamError("leaderAgentId must be one of the squad members", "INVALID_MEMBERS");
-		if (record.plannerAgentId !== void 0 && !record.members.includes(record.plannerAgentId)) throw new AgentTeamError("plannerAgentId must be one of the squad members", "INVALID_MEMBERS");
 		if (record.qualityGate !== void 0) {
 			if (record.qualityGate.reviewerAgentId === record.qualityGate.repairAgentId) throw new AgentTeamError("quality reviewer and repair owner must be different members", "INVALID_MEMBERS");
 			if (!record.members.includes(record.qualityGate.reviewerAgentId)) throw new AgentTeamError("quality reviewer must be one of the squad members", "INVALID_MEMBERS");
@@ -3145,18 +3136,6 @@ var ExecutionApplicationService = class extends DefinitionApplicationService {
 	backgroundAcceptances = /* @__PURE__ */ new Map();
 	pendingBackgroundRuns = /* @__PURE__ */ new Set();
 	usageMeter = new OfficialUsageMeter(this.ctx);
-	agentCallCounts = /* @__PURE__ */ new Map();
-	claimAgentCall(dispatchId, agentId, record) {
-		let counts = this.agentCallCounts.get(dispatchId);
-		if (counts === void 0) {
-			counts = /* @__PURE__ */ new Map();
-			this.agentCallCounts.set(dispatchId, counts);
-		}
-		const used = counts.get(agentId) ?? 0;
-		const limit = record.maxCallsPerRun;
-		if (limit !== void 0 && used >= limit) throw new AgentTeamError(`agent "${agentId}" exhausted maxCallsPerRun=${limit} for this team run`, "INVALID_DISPATCH");
-		counts.set(agentId, used + 1);
-	}
 	history() {
 		this.runHistory ??= new RunHistoryStore(this.runs());
 		return this.runHistory;
@@ -3199,7 +3178,7 @@ var ExecutionApplicationService = class extends DefinitionApplicationService {
 	}
 	promptFor(squad, member, sharedTask, chainText) {
 		return [
-			member.record.allowTeamDispatch === true ? "Execution boundary: complete only this member assignment. You may delegate a bounded subtask through dispatch_to_squad. Do not create arbitrary subagents or workflows directly." : "Execution boundary: complete only this member assignment. Do not perform or replace another member's assignment. Never dispatch a team; do not create or delegate to subagents.",
+			"Execution boundary: complete only this member assignment. Do not perform or replace another member's assignment. Never dispatch a team; do not create or delegate to subagents.",
 			member.task.length === 0 ? "Your exclusive assignment: contribute only through your configured role; do not take ownership of another member's work." : `Your exclusive assignment:\n${this.boundedExcerpt(member.task, 16e3)}`,
 			`Configured member role (authoritative):\n${this.boundedExcerpt(member.record.systemPrompt, 8e3)}`,
 			"Return a concrete bounded handoff for the main Agent to synthesize.",
@@ -3235,8 +3214,8 @@ var ExecutionApplicationService = class extends DefinitionApplicationService {
 		}
 	}
 	async dispatchFromTool(request, parent, signal) {
-		const sourceMessageId = this.latestHumanMessageId(parent) ?? (this.isDelegatedAgent(parent) ? `delegated:${parent.id}` : void 0);
-		if (sourceMessageId === void 0) throw new AgentTeamError("dispatch_to_squad could not establish a stable message identity; refusing an unsafe non-idempotent dispatch", "INVALID_DISPATCH");
+		const sourceMessageId = this.latestHumanMessageId(parent);
+		if (sourceMessageId === void 0) throw new AgentTeamError("dispatch_to_squad could not establish the current human message identity; refusing an unsafe non-idempotent dispatch", "INVALID_DISPATCH");
 		if (!await this.claimGuaranteedMessage(parent, sourceMessageId, "team")) throw new AgentTeamError("this user message has already dispatched a squad; reuse the existing result instead of starting another team", "INVALID_DISPATCH");
 		return this.dispatch(request, parent, signal, {
 			sessionId: parent.id,
@@ -3456,7 +3435,6 @@ var ExecutionApplicationService = class extends DefinitionApplicationService {
 			]
 		};
 		try {
-			this.claimAgentCall(dispatchId, member.id, member.record);
 			const run = await this.ctx.subagents.start(provider, {
 				label: `${squad.name}/${member.record.name}`,
 				prompt: [{
@@ -3473,7 +3451,7 @@ var ExecutionApplicationService = class extends DefinitionApplicationService {
 				...childToolScope === void 0 ? {} : { toolFilter: childToolScope },
 				...member.record.systemPrompt.length === 0 ? {} : { persona: member.record.systemPrompt },
 				...capabilities?.outputSchema === true ? { outputSchema: handoffSchema } : {},
-				...capabilities?.depthLimit === true ? { maxDepth: Math.min(2, Math.max(1, Number(parent.session.header.delegationDepth ?? 0) + 1)) } : {}
+				...capabilities?.depthLimit === true ? { maxDepth: 1 } : {}
 			});
 			const baseline = this.usageBaselineFor(run);
 			const previousUsage = persist ? this.runs().get(dispatchId)?.members.find((item) => item.agentId === member.id)?.usage : void 0;
@@ -3565,17 +3543,19 @@ var ExecutionApplicationService = class extends DefinitionApplicationService {
 	/** Preserve configured restrictions while hard-denying recursive team/delegation tools when present. */
 	childToolScope(record, provider, parent) {
 		const capabilities = this.ctx.subagents.getProvider?.(provider)?.capabilities;
-		if (capabilities === void 0 || capabilities.toolFilter === false || capabilities.depthLimit === false) throw new AgentTeamError(`subagent provider "${provider}" cannot enforce the child tool policy and depth limit`, "INVALID_DISPATCH");
+		if (capabilities === void 0 || capabilities.toolFilter === false || capabilities.depthLimit === false) throw new AgentTeamError(`subagent provider "${provider}" cannot enforce the recursive-tool deny list and depth limit`, "INVALID_DISPATCH");
 		const schemas = this.ctx.tools.schemas(parent);
 		const known = new Set(schemas.map((tool) => tool.name));
-		if (record.executionTools !== false) {
-			const unknownAllowed = (record.toolScope?.allow ?? []).filter((name) => !known.has(name));
-			if (unknownAllowed.length > 0) throw new AgentTeamError(`member tool allow-list is unavailable in this session: ${unknownAllowed.join(", ")}`, "INVALID_DISPATCH");
-		}
-		const teamDispatchAllowed = record.allowTeamDispatch === true && known.has("dispatch_to_squad");
+		const unknownAllowed = (record.toolScope?.allow ?? []).filter((name) => !known.has(name));
+		if (unknownAllowed.length > 0) throw new AgentTeamError(`member tool allow-list is unavailable in this session: ${unknownAllowed.join(", ")}`, "INVALID_DISPATCH");
+		const recursiveTools = /* @__PURE__ */ new Set();
+		for (const name of [
+			"dispatch_to_squad",
+			"subagent",
+			"workflow"
+		]) if (known.has(name)) recursiveTools.add(name);
 		const deny = new Set((record.toolScope?.deny ?? []).filter((name) => known.has(name)));
-		for (const name of ["subagent", "workflow"]) if (known.has(name)) deny.add(name);
-		if (!teamDispatchAllowed && known.has("dispatch_to_squad")) deny.add("dispatch_to_squad");
+		for (const name of recursiveTools) deny.add(name);
 		for (const schema of schemas) {
 			const parameters = schema.parameters;
 			if (parameters === void 0) continue;
@@ -3583,19 +3563,17 @@ var ExecutionApplicationService = class extends DefinitionApplicationService {
 			if (properties === void 0) continue;
 			const required = new Set(Array.isArray(parameters.required) ? parameters.required.filter((value) => typeof value === "string") : []);
 			const keys = Object.keys(properties);
-			if (properties["description"]?.type === "string" && required.has("description") && properties["prompt"]?.type === "string" && required.has("prompt") && keys.every((key) => key === "description" || key === "prompt" || key === "run_in_background")) deny.add(schema.name);
-			if (properties["script"]?.type === "string" && required.has("script") && properties["meta"]?.type === "object" && required.has("meta") && keys.every((key) => key === "script" || key === "meta" || key === "args")) deny.add(schema.name);
+			if (properties["description"]?.type === "string" && required.has("description") && properties["prompt"]?.type === "string" && required.has("prompt") && keys.every((key) => key === "description" || key === "prompt" || key === "run_in_background") && (properties["run_in_background"] === void 0 || properties["run_in_background"].type === "boolean")) deny.add(schema.name);
+			if (properties["script"]?.type === "string" && required.has("script") && properties["meta"]?.type === "object" && required.has("meta") && keys.every((key) => key === "script" || key === "meta" || key === "args") && (properties["args"] === void 0 || properties["args"].type === "object")) deny.add(schema.name);
 		}
-		if (record.executionTools === false) return { allow: teamDispatchAllowed ? ["dispatch_to_squad"] : [] };
 		const allow = record.toolScope?.allow;
-		const forbidden = allow?.filter((name) => deny.has(name) && !(name === "dispatch_to_squad" && teamDispatchAllowed)) ?? [];
-		if (forbidden.length > 0) throw new AgentTeamError(`member tool allow-list cannot expose forbidden delegation tools: ${forbidden.join(", ")}`, "INVALID_DISPATCH");
-		if (allow !== void 0) {
-			const nextAllow = allow.filter((name) => !deny.has(name));
-			if (teamDispatchAllowed && !nextAllow.includes("dispatch_to_squad")) nextAllow.push("dispatch_to_squad");
-			return { allow: nextAllow, ...deny.size === 0 ? {} : { deny: [...deny] } };
-		}
-		return deny.size === 0 ? void 0 : { deny: [...deny] };
+		const recursiveAllowed = allow?.filter((name) => deny.has(name)) ?? [];
+		if (recursiveAllowed.length > 0) throw new AgentTeamError(`member tool allow-list cannot expose recursive delegation tools: ${recursiveAllowed.join(", ")}`, "INVALID_DISPATCH");
+		if (allow === void 0 && deny.size === 0) return void 0;
+		return {
+			...allow === void 0 ? {} : { allow: [...allow] },
+			...deny.size === 0 ? {} : { deny: [...deny] }
+		};
 	}
 	async runMemberWithPolicy(provider, squad, member, sharedTask, chainText, parent, signal, dispatchId) {
 		const first = await this.runMember(provider, squad, member, sharedTask, chainText, parent, signal, dispatchId, 1);
@@ -3620,22 +3598,19 @@ var ExecutionApplicationService = class extends DefinitionApplicationService {
 	}
 	async createAutomaticPlan(squad, agents, task, parent, signal, useMainAgent, effectiveExecutionMode, dispatchId) {
 		if (squad.executionOrder !== void 0) return void 0;
-		const configuredPlanner = squad.plannerAgentId === void 0 ? void 0 : agents.get(squad.plannerAgentId);
 		const leader = squad.leaderAgentId === void 0 ? void 0 : agents.get(squad.leaderAgentId);
-		if (configuredPlanner === void 0 && !useMainAgent && leader === void 0) return void 0;
+		if (!useMainAgent && leader === void 0) return void 0;
 		const planningContext = squad.planningContext ?? "full";
 		const provider = planningContext === "full" ? "fork" : this.config.defaultProvider;
-		const planner = configuredPlanner !== void 0 ? "configured-agent" : useMainAgent ? "main-agent" : "squad-leader";
-		const plannerProvider = configuredPlanner?.provider ?? (useMainAgent ? parent.options.provider : leader?.provider);
-		const plannerModel = configuredPlanner?.model ?? (useMainAgent ? parent.options.model : leader?.model);
+		const planner = useMainAgent ? "main-agent" : "squad-leader";
+		const plannerProvider = useMainAgent ? parent.options.provider : leader?.provider;
+		const plannerModel = useMainAgent ? parent.options.model : leader?.model;
 		const plannerAgentOptions = {
 			...plannerProvider === void 0 ? {} : { provider: plannerProvider },
 			...plannerModel === void 0 ? {} : { model: plannerModel },
 			maxTokens: squad.plannerMaxTokens ?? 2048
 		};
 		const memberIds = squad.members.map(String);
-		const normalMemberIds = squad.members.filter((id) => (agents.get(id)?.invocationMode ?? "normal") !== "escalation").map(String);
-		const escalationMemberIds = squad.members.filter((id) => (agents.get(id)?.invocationMode ?? "normal") === "escalation").map(String);
 		const outputSchema = {
 			type: "object",
 			additionalProperties: false,
@@ -3664,7 +3639,6 @@ var ExecutionApplicationService = class extends DefinitionApplicationService {
 								enum: memberIds
 							},
 							task: { type: "string" },
-							escalationReason: { type: "string" },
 							dependsOn: {
 								type: "array",
 								items: {
@@ -3718,7 +3692,7 @@ var ExecutionApplicationService = class extends DefinitionApplicationService {
 			const allow = this.boundedExcerpt(record?.toolScope?.allow?.join(", ") ?? "all tools except denied tools", 2e3);
 			const deny = this.boundedExcerpt(record?.toolScope?.deny?.join(", ") ?? "none configured", 2e3);
 			return [
-				`- id=${id}; name=${record?.name ?? "missing"}; model=${record?.provider ?? "missing"}/${record?.model ?? "missing"}; invocation=${record?.invocationMode ?? "normal"}; maxCallsPerRun=${record?.maxCallsPerRun ?? "unlimited"}; executionTools=${record?.executionTools === false ? "off" : "on"}; teamDispatch=${record?.allowTeamDispatch === true ? "on" : "off"}`,
+				`- id=${id}; name=${record?.name ?? "missing"}; model=${record?.provider ?? "missing"}/${record?.model ?? "missing"}`,
 				`  role=${this.boundedExcerpt(record?.systemPrompt?.trim() || "No role description configured.", 2e3)}`,
 				`  tools: allow=${allow}; deny=${deny}`
 			].join("\n");
@@ -3727,8 +3701,7 @@ var ExecutionApplicationService = class extends DefinitionApplicationService {
 			[
 				"Planning contract (must follow): create a plan only; never execute work, call tools, dispatch teams, or create subagents.",
 				`${(squad.activationMode ?? "always") === "smart" ? "You may return decision=\"skip\" only for a trivial acknowledgement/format-only request or work clearly outside this team; explain why." : "Return decision=\"run\"."}`,
-				`${(squad.memberSelectionMode ?? "all") === "all" ? `Use every normal member exactly once (${normalMemberIds.join(", ") || "none"}). Escalation-only members are not mandatory.` : "Select the smallest non-empty subset of normal members needed."}`,
-				`Escalation-only members (${escalationMemberIds.join(", ") || "none"}) are excluded by default. Select one only when normal members are insufficient, and provide non-empty escalationReason.`,
+				`${(squad.memberSelectionMode ?? "all") === "all" ? `Use all ${squad.members.length} configured members exactly once.` : "Select the smallest non-empty subset of members needed."}`,
 				"For a run decision, return one concrete role-specific assignment per selected member and dependencies only on other selected members.",
 				"Split ownership so members do not all solve the entire request. Dependencies must form an acyclic graph and memberOrder must be a valid stable topological order.",
 				"The main Agent synthesizes bounded handoffs; name each expected deliverable and boundary."
@@ -3740,10 +3713,6 @@ var ExecutionApplicationService = class extends DefinitionApplicationService {
 		].join("\n\n");
 		try {
 			if (capabilities === void 0 || !capabilities.outputSchema || !capabilities.toolFilter || !capabilities.depthLimit) throw new Error(`planner provider "${provider}" cannot enforce structured, tool-filtered, depth-bounded planning`);
-			if (dispatchId !== void 0) {
-				if (configuredPlanner !== void 0 && squad.plannerAgentId !== void 0) this.claimAgentCall(dispatchId, squad.plannerAgentId, configuredPlanner);
-				else if (!useMainAgent && leader !== void 0 && squad.leaderAgentId !== void 0) this.claimAgentCall(dispatchId, squad.leaderAgentId, leader);
-			}
 			run = await this.ctx.subagents.start(provider, {
 				label: `${squad.name}/${useMainAgent ? "Main workflow planner" : "Squad leader planner"}`,
 				parent,
@@ -3771,13 +3740,9 @@ var ExecutionApplicationService = class extends DefinitionApplicationService {
 				return {
 					agentId: AgentId(value.agentId),
 					task: value.task.trim(),
-					dependsOn: value.dependsOn.map(String).map(AgentId),
-					...typeof value.escalationReason === "string" && value.escalationReason.trim() !== "" ? { escalationReason: value.escalationReason.trim().slice(0, 8e3) } : {}
+					dependsOn: value.dependsOn.map(String).map(AgentId)
 				};
 			});
-			const selected = new Set(assignments.map((item) => String(item.agentId)));
-			for (const item of assignments) if ((agents.get(item.agentId)?.invocationMode ?? "normal") === "escalation" && (item.escalationReason?.trim().length ?? 0) === 0) throw new Error(`planner selected escalation-only member "${item.agentId}" without escalationReason`);
-			if ((squad.memberSelectionMode ?? "all") === "all") { const missingNormal = normalMemberIds.filter((id) => !selected.has(id)); if (missingNormal.length > 0) throw new Error(`planner omitted required normal members: ${missingNormal.join(", ")}`); }
 			return validateExecutionPlan({
 				decision: structured.decision,
 				reason: structured.reason,
@@ -3790,7 +3755,7 @@ var ExecutionApplicationService = class extends DefinitionApplicationService {
 				...planner === "squad-leader" && squad.leaderAgentId !== void 0 ? { leaderAgentId: squad.leaderAgentId } : {},
 				...usage === void 0 ? {} : { usage }
 			}, squad, {
-				requireAllMembers: (squad.memberSelectionMode ?? "all") === "all" && escalationMemberIds.length === 0,
+				requireAllMembers: (squad.memberSelectionMode ?? "all") === "all",
 				allowSkip: (squad.activationMode ?? "always") === "smart"
 			});
 		} catch (error) {
@@ -3849,7 +3814,6 @@ var ExecutionApplicationService = class extends DefinitionApplicationService {
 			return tracked ?? (run === void 0 ? void 0 : this.usageFor(run, baseline));
 		};
 		try {
-			this.claimAgentCall(dispatchId, reviewer.id, reviewer.record);
 			run = await this.ctx.subagents.start(provider, {
 				label: `${squad.name}/Quality review ${round}`,
 				parent,
@@ -4058,8 +4022,7 @@ var ExecutionApplicationService = class extends DefinitionApplicationService {
 	* child id points to the provider-owned child Session and its descriptor.
 	*/
 	async dispatch(request, parent, signal, trace = {}) {
-		const delegatedDepth = Number(parent.session.header.delegationDepth ?? (this.isDelegatedAgent(parent) ? 1 : 0));
-		if (delegatedDepth > 1) throw new AgentTeamError("nested squad dispatch depth exceeds the MVP limit of one delegated team hop", "INVALID_DISPATCH");
+		if (this.isDelegatedAgent(parent)) throw new AgentTeamError("nested squad dispatch is blocked for delegated child sessions", "INVALID_DISPATCH");
 		if (request.task.trim().length === 0) throw new AgentTeamError("dispatch task must not be empty", "INVALID_DISPATCH");
 		if (request.task.length > 1e5 || (request.assignments?.length ?? 0) > 32 || (request.memberOrder?.length ?? 0) > 32 || request.assignments?.some((item) => item.task.length > 1e5) === true) throw new AgentTeamError("dispatch input exceeds the bounded task/member limits", "INVALID_DISPATCH");
 		const definitionSnapshot = trace.frozenDefinition ?? await this.readSquadExecutionSnapshot(request.squadId, signal);
@@ -4175,19 +4138,16 @@ var ExecutionApplicationService = class extends DefinitionApplicationService {
 					task: request.assignments?.find((item) => item.agentId === id)?.task ?? ""
 				};
 			});
-			const explicitlyAssignedIds = new Set((request.assignments ?? []).map((item) => item.agentId));
-			const executableBaseMembers = baseMembers.filter((member) => (member.record.invocationMode ?? "normal") !== "escalation" || explicitlyAssignedIds.has(member.id) || trace.selectedAgentIds?.includes(member.id) === true);
-			if (executableBaseMembers.length === 0 && plan === void 0) throw new AgentTeamError("no normal members are available; escalation-only members require an explicit planner escalation or explicit assignment", "INVALID_DISPATCH");
-			const byId = new Map(executableBaseMembers.map((member) => [member.id, member]));
+			const byId = new Map(baseMembers.map((member) => [member.id, member]));
 			const fallbackAssignments = deterministicExecutionPlan(squad.executionOrder === void 0 && request.memberOrder !== void 0 ? {
 				...squad,
 				executionOrder: [...request.memberOrder]
 			} : squad, request.task, agents, void 0, executionMode).assignments;
 			const fallbackById = new Map(fallbackAssignments.map((node) => [node.agentId, node.task]));
-			const nodes = plan?.assignments ?? executableBaseMembers.map((member, index) => ({
+			const nodes = plan?.assignments ?? baseMembers.map((member, index) => ({
 				agentId: member.id,
 				task: member.task.trim().length === 0 ? fallbackById.get(member.id) : member.task,
-				dependsOn: executionMode === "parallel" || index === 0 ? [] : [executableBaseMembers[index - 1].id]
+				dependsOn: executionMode === "parallel" || index === 0 ? [] : [baseMembers[index - 1].id]
 			}));
 			const executionPlan = plan ?? {
 				decision: "run",
@@ -4338,7 +4298,6 @@ var ExecutionApplicationService = class extends DefinitionApplicationService {
 			});
 			throw error;
 		} finally {
-			this.agentCallCounts.delete(dispatchId);
 			this.activeRunControllers.delete(dispatchId);
 			this.activeDispatchKeys.delete(activeKey);
 			try {

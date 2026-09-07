@@ -778,15 +778,6 @@ window.__ModuleLoader__.load({
 			fallbackRoute: "Запасная модель",
 			allowTools: "Разрешённые инструменты",
 			denyTools: "Запрещённые инструменты",
-			invocationPolicy: "Режим вызова",
-			normalInvocation: "Обычный участник",
-			escalationInvocation: "Только по эскалации",
-			maxCallsPerRun: "Максимум вызовов за запуск",
-			executionToolsToggle: "Исполнительные инструменты",
-			teamDispatchToggle: "Командное делегирование",
-			plannerAgent: "Отдельный планировщик",
-			conversationPlanner: "Модель основного диалога",
-			agentCallsRange: "Лимит вызовов должен быть от 1 до 100.",
 			unsaved: "Есть несохранённые изменения",
 			unsavedConfirm: "В редакторе есть несохранённые изменения. Отменить их и продолжить?",
 			savedTeam: "Команда «{name}» сохранена.",
@@ -1129,7 +1120,7 @@ window.__ModuleLoader__.load({
 				"model"
 			])) return false;
 			const record = value;
-			if (!isOptionalNumber(record.maxTokens) || !isOptionalString(record.fallbackProvider) || !isOptionalString(record.fallbackModel) || !isOptionalEnum(record.invocationMode, ["normal", "escalation"]) || !isOptionalNumber(record.maxCallsPerRun) || !(record.executionTools === void 0 || typeof record.executionTools === "boolean") || !(record.allowTeamDispatch === void 0 || typeof record.allowTeamDispatch === "boolean")) return false;
+			if (!isOptionalNumber(record.maxTokens) || !isOptionalString(record.fallbackProvider) || !isOptionalString(record.fallbackModel)) return false;
 			if (record.toolScope === void 0) return true;
 			if (typeof record.toolScope !== "object" || record.toolScope === null || Array.isArray(record.toolScope)) return false;
 			const scope = record.toolScope;
@@ -1164,7 +1155,7 @@ window.__ModuleLoader__.load({
 				"current",
 				"recent",
 				"full"
-			]) || !isOptionalNumber(record.plannerMaxTokens) || !isOptionalString(record.plannerAgentId)) return false;
+			]) || !isOptionalNumber(record.plannerMaxTokens)) return false;
 			if (record.qualityGate === void 0) return true;
 			if (!isRecordWithStrings(record.qualityGate, ["reviewerAgentId", "repairAgentId"])) return false;
 			const quality = record.qualityGate;
@@ -3352,10 +3343,6 @@ window.__ModuleLoader__.load({
 			provider: "",
 			model: "",
 			maxTokens: "",
-			invocationMode: "normal",
-			maxCallsPerRun: "",
-			executionTools: true,
-			allowTeamDispatch: false,
 			allow: "",
 			deny: "",
 			fallbackProvider: "",
@@ -3382,7 +3369,6 @@ window.__ModuleLoader__.load({
 			responseMode: "foreground",
 			planningContext: "current",
 			plannerMaxTokens: "2048",
-			plannerAgentId: "",
 			qualityEnabled: false,
 			reviewerAgentId: "",
 			repairAgentId: "",
@@ -3397,10 +3383,6 @@ window.__ModuleLoader__.load({
 				provider: agent.provider,
 				model: agent.model,
 				maxTokens: agent.maxTokens?.toString() ?? "",
-				invocationMode: agent.invocationMode ?? "normal",
-				maxCallsPerRun: agent.maxCallsPerRun?.toString() ?? "",
-				executionTools: agent.executionTools !== false,
-				allowTeamDispatch: agent.allowTeamDispatch === true,
 				allow: agent.toolScope?.allow?.join(", ") ?? "",
 				deny: agent.toolScope?.deny?.join(", ") ?? "",
 				fallbackProvider: agent.fallbackProvider ?? "",
@@ -3438,7 +3420,6 @@ window.__ModuleLoader__.load({
 				responseMode: squad.responseMode ?? "foreground",
 				planningContext: squad.planningContext ?? "inherit",
 				plannerMaxTokens: squad.plannerMaxTokens?.toString() ?? "2048",
-				plannerAgentId: squad.plannerAgentId ?? "",
 				qualityEnabled: squad.qualityGate !== void 0,
 				reviewerAgentId: squad.qualityGate?.reviewerAgentId ?? "",
 				repairAgentId: squad.qualityGate?.repairAgentId ?? "",
@@ -3458,7 +3439,6 @@ window.__ModuleLoader__.load({
 			if (draft.model === "") errors.model = "required";
 			else if (draft.model.trim().length > 200) errors.model = "routeLength";
 			if (draft.maxTokens !== "" && !isIntegerInRange(draft.maxTokens, 1, 1e6)) errors.maxTokens = "agentTokenRange";
-			if (draft.maxCallsPerRun !== "" && !isIntegerInRange(draft.maxCallsPerRun, 1, 100)) errors.maxCallsPerRun = "agentCallsRange";
 			if (draft.fallbackProvider === "" !== (draft.fallbackModel === "")) errors.fallback = "fallbackPairError";
 			else if (draft.fallbackProvider.trim().length > 200 || draft.fallbackModel.trim().length > 200) errors.fallback = "routeLength";
 			const denied = new Set(csv(draft.deny));
@@ -3514,10 +3494,6 @@ window.__ModuleLoader__.load({
 				provider: draft.provider,
 				model: draft.model,
 				...draft.maxTokens === "" ? {} : { maxTokens: Number(draft.maxTokens) },
-				invocationMode: draft.invocationMode,
-				...draft.maxCallsPerRun === "" ? {} : { maxCallsPerRun: Number(draft.maxCallsPerRun) },
-				executionTools: draft.executionTools,
-				allowTeamDispatch: draft.allowTeamDispatch,
 				...allow.length === 0 && deny.length === 0 ? {} : { toolScope: {
 					...allow.length === 0 ? {} : { allow },
 					...deny.length === 0 ? {} : { deny }
@@ -3550,7 +3526,6 @@ window.__ModuleLoader__.load({
 				responseMode: draft.responseMode,
 				...draft.planningContext === "inherit" ? {} : { planningContext: draft.planningContext },
 				plannerMaxTokens: Number(draft.plannerMaxTokens),
-				...draft.plannerAgentId === "" ? {} : { plannerAgentId: draft.plannerAgentId },
 				...draft.qualityEnabled ? { qualityGate: {
 					reviewerAgentId: draft.reviewerAgentId,
 					repairAgentId: draft.repairAgentId,
@@ -5044,11 +5019,6 @@ window.__ModuleLoader__.load({
 													}));
 												}
 											}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(SelectField, {
-							label: t("plannerAgent"),
-							value: draft.plannerAgentId,
-							options: [["", t("conversationPlanner")], ...data.agents.filter((item) => draft.members.includes(item.id)).map((item) => [item.id, item.name])],
-							onChange: (value) => { setDraft((current) => ({ ...current, plannerAgentId: value })); }
-						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(SelectField, {
 												label: t("teamLeader"),
 												value: draft.leaderAgentId,
 												options: [["", t("noLeader")], ...data.agents.filter((item) => draft.members.includes(item.id)).map((item) => [item.id, item.name])],
@@ -5589,16 +5559,7 @@ window.__ModuleLoader__.load({
 									})
 								})]
 							}),
-							/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("section", {
-				className: "atg-form-section",
-				children: [
-					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("h3", { children: t("invocationPolicy") }),
-					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", { className: "atg-two", children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(SelectField, { label: t("invocationPolicy"), value: draft.invocationMode, options: [["normal", t("normalInvocation")], ["escalation", t("escalationInvocation")]], onChange: (value) => { setDraft((current) => ({ ...current, invocationMode: value })); } }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(Field, { id: "member-max-calls", label: t("maxCallsPerRun"), value: draft.maxCallsPerRun, inputMode: "numeric", error: validation.errors.maxCallsPerRun === void 0 ? void 0 : t(validation.errors.maxCallsPerRun), onChange: (value) => { setDraft((current) => ({ ...current, maxCallsPerRun: value })); } })] }),
-					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", { className: "atg-toggle-row", children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", { type: "checkbox", checked: draft.executionTools, onChange: (event) => { setDraft((current) => ({ ...current, executionTools: event.currentTarget.checked })); } }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: t("executionToolsToggle") })] }),
-					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", { className: "atg-toggle-row", children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", { type: "checkbox", checked: draft.allowTeamDispatch, onChange: (event) => { setDraft((current) => ({ ...current, allowTeamDispatch: event.currentTarget.checked })); } }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: t("teamDispatchToggle") })] })
-				]
-			}),
-			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("details", {
+							/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("details", {
 								className: "atg-disclosure",
 								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("summary", { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("strong", { children: t("permissions") }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("small", { children: t("advanced") })] }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 									"aria-hidden": "true",
