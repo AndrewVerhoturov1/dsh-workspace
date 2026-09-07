@@ -36,11 +36,29 @@ Dry-run:
 1. Читает exact PR через GitHub CLI.
 2. Проверяет только минимальные аварийные условия: PR относится к `main`, имеет нормальную head-ветку и либо открыт, либо уже merged.
 3. Выполняет squash merge через GitHub API.
-4. Делает только `git fetch --prune origin` — локальный `main`/working tree не checkout/update/reset.
-5. Best-effort удаляет clean worktree этой head-ветки.
-6. Удаляет локальную head-ветку, только если она всё ещё указывает на exact PR head SHA и не используется оставшимся worktree.
-7. Удаляет remote head-ветку, только если она всё ещё указывает на exact PR head SHA.
-8. Возвращает один JSON.
+4. Делает `git fetch --prune origin`.
+5. После всей последовательности PR, если primary worktree уже находится на `main`, пытается безопасно fast-forward'нуть его до `origin/main` через `git merge --ff-only refs/remotes/origin/main`.
+6. Незакоммиченные изменения, которые не пересекаются с входящими изменениями `main`, Git сохраняет на месте. Если fast-forward небезопасен или невозможен, primary worktree остаётся нетронутым и возвращается warning.
+7. Best-effort удаляет clean worktree этой head-ветки.
+8. Удаляет локальную head-ветку, только если она всё ещё указывает на exact PR head SHA и не используется оставшимся worktree.
+9. Удаляет remote head-ветку, только если она всё ещё указывает на exact PR head SHA.
+10. Возвращает один JSON с отдельным `primaryMainSync`.
+
+## Синхронизация primary `main`
+
+После успешного merge и `fetch` executor делает одну best-effort попытку синхронизировать физический primary worktree `C:\Users\andre\.dsh`.
+
+Условия:
+
+- current branch primary worktree должен быть ровно `main`;
+- локальный `main` должен быть fast-forward ancestor текущего `origin/main`;
+- используется только `git merge --ff-only refs/remotes/origin/main`;
+- unrelated dirty/untracked state не очищается и не stash-ится;
+- если Git отказывается из-за пересекающихся локальных изменений, executor оставляет primary как есть и возвращает `FINALIZE_PRIMARY_MAIN_SYNC_SKIPPED`;
+- если primary находится не на `main`, executor ничего не переключает и возвращает `FINALIZE_PRIMARY_NOT_MAIN`;
+- warning локальной синхронизации не отменяет уже успешный GitHub merge.
+
+`mainWorkingTreeTouched=true` означает только одно: primary `main` реально был fast-forward'нут этим executor. `false` означает, что он либо уже был актуален, либо синхронизация была пропущена.
 
 ## Философия
 
@@ -64,7 +82,7 @@ Cleanup warning после успешного merge не откатывает me
 - `git clean`;
 - force push;
 - checkout/switch локального `main`;
-- обновление файлов dirty primary worktree;
+- принудительную перезапись или очистку локальных изменений primary worktree;
 - удаление dirty worktree;
 - удаление `C:\Users\andre\.dsh` как worktree.
 

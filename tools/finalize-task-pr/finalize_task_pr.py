@@ -3,8 +3,9 @@
 
 This is deliberately an executor, not a reviewer. It does not run tests, inspect
 PR diffs, re-check CI, or rebuild the user's merge decision. It performs squash
-merge for PRs that the caller has already approved, then cleans the matching
-worktree/branches when doing so is obviously safe.
+merge for PRs that the caller has already approved, refreshes origin refs,
+safely fast-forwards the primary main worktree when Git can preserve local
+changes, then cleans matching temporary worktree/branch resources.
 """
 from __future__ import annotations
 
@@ -159,6 +160,137 @@ def _warn(warnings: list[dict[str, Any]], code: str, message: str, **details: An
     warnings.append({"code": code, "message": message, **details})
 
 
+def _primary_branch(repo_root: Path) -> str | None:
+    cp = git(repo_root, "branch", "--show-current")
+    if cp.returncode != 0:
+        return None
+    value = cp.stdout.strip()
+    return value or None
+
+
+def _primary_head_sha(repo_root: Path) -> str | None:
+    cp = git(repo_root, "rev-parse", "HEAD")
+    if cp.returncode != 0:
+        return None
+    value = cp.stdout.strip().lower()
+    return value or None
+
+
+def sync_primary_main(
+    repo_root: Path,
+    *,
+    dry_run: bool,
+    remote_refs_fresh: bool = True,
+) -> dict[str, Any]:
+    """Best-effort fast-forward of the primary worktree without discarding local changes."""
+    warnings: list[dict[str, Any]] = []
+    branch = _primary_branch(repo_root)
+    before = _primary_head_sha(repo_root)
+    origin_main = origin_main_sha(repo_root)
+    result: dict[str, Any] = {
+        "status": "NOT_ATTEMPTED",
+        "branch": branch,
+        "before": before,
+        "originMain": origin_main,
+        "after": before,
+        "attempted": False,
+        "updated": False,
+        "warnings": warnings,
+    }
+
+    if dry_run:
+        result["status"] = "DRY_RUN"
+        return result
+
+    if not remote_refs_fresh:
+        result["status"] = "SKIPPED_STALE_REMOTE_REFS"
+        _warn(
+            warnings,
+            "FINALIZE_PRIMARY_SYNC_SKIPPED_STALE_REFS",
+            "origin refs were not refreshed successfully; primary main synchronization skipped",
+        )
+        return result
+
+    if branch is None:
+        result["status"] = "SKIPPED_UNKNOWN_BRANCH"
+        _warn(
+            warnings,
+            "FINALIZE_PRIMARY_BRANCH_UNKNOWN",
+            "cannot determine primary worktree branch; leaving it untouched",
+        )
+        return result
+
+    if branch != "main":
+        result["status"] = "SKIPPED_NOT_MAIN"
+        _warn(
+            warnings,
+            "FINALIZE_PRIMARY_NOT_MAIN",
+            "primary worktree is not on main; leaving it untouched",
+            branch=branch,
+        )
+        return result
+
+    if before is None or origin_main is None:
+        result["status"] = "SKIPPED_UNKNOWN_REF"
+        _warn(
+            warnings,
+            "FINALIZE_PRIMARY_MAIN_REF_UNKNOWN",
+            "cannot resolve primary HEAD or origin/main; leaving primary main untouched",
+            before=before,
+            originMain=origin_main,
+        )
+        return result
+
+    if before == origin_main:
+        result["status"] = "ALREADY_CURRENT"
+        result["after"] = before
+        return result
+
+    ancestor = git(repo_root, "merge-base", "--is-ancestor", before, "refs/remotes/origin/main")
+    if ancestor.returncode != 0:
+        result["status"] = "SKIPPED_DIVERGED"
+        _warn(
+            warnings,
+            "FINALIZE_PRIMARY_MAIN_DIVERGED",
+            "primary main is not a fast-forward ancestor of origin/main; leaving it untouched",
+            before=before,
+            originMain=origin_main,
+        )
+        return result
+
+    result["attempted"] = True
+    ff = git(repo_root, "merge", "--ff-only", "refs/remotes/origin/main", timeout=180)
+    if ff.returncode != 0:
+        result["status"] = "SKIPPED_FF_FAILED"
+        _warn(
+            warnings,
+            "FINALIZE_PRIMARY_MAIN_SYNC_SKIPPED",
+            "primary main could not be fast-forwarded safely; local changes were left untouched",
+            before=before,
+            originMain=origin_main,
+            stdout=ff.stdout[-2000:],
+            stderr=ff.stderr[-2000:],
+        )
+        return result
+
+    after = _primary_head_sha(repo_root)
+    result["after"] = after
+    if after != origin_main:
+        result["status"] = "SKIPPED_INCOMPLETE"
+        _warn(
+            warnings,
+            "FINALIZE_PRIMARY_MAIN_SYNC_INCOMPLETE",
+            "fast-forward command succeeded but primary HEAD does not equal origin/main",
+            expected=origin_main,
+            actual=after,
+        )
+        return result
+
+    result["status"] = "UPDATED"
+    result["updated"] = True
+    return result
+
+
 def cleanup_branch_resources(
     repo_root: Path,
     *,
@@ -299,7 +431,8 @@ def finalize_one(
         merged_now = True
         merge_sha = str(merged.get("sha") or "").lower() or None
 
-    # Refresh only refs; never checkout/reset/stash/clean the user's primary worktree.
+    # Refresh remote refs after each merge. Primary main synchronization runs once
+    # after the complete PR sequence so a batch only updates the working tree once.
     fetch_warning: dict[str, Any] | None = None
     if not dry_run:
         fetched = git(repo_root, "fetch", "--prune", "origin", timeout=180)
@@ -347,7 +480,21 @@ def finalize_many(
         # Each PR is re-read after the previous merge/fetch. No stale batch snapshot.
         results.append(finalize_one(root, repository, number, dry_run=dry_run))
 
+    last_fetch_fresh = True
+    if results and not dry_run:
+        last_fetch_fresh = not any(
+            warning.get("code") == "FINALIZE_FETCH_WARNING"
+            for warning in results[-1]["cleanup"]["warnings"]
+        )
+
+    primary_sync = sync_primary_main(
+        root,
+        dry_run=dry_run,
+        remote_refs_fresh=last_fetch_fresh,
+    )
+
     warnings = [warning for item in results for warning in item["cleanup"]["warnings"]]
+    warnings.extend(primary_sync["warnings"])
     code = "TASK_PRS_DRY_RUN" if dry_run else ("TASK_PRS_FINALIZED_WITH_WARNINGS" if warnings else "TASK_PRS_FINALIZED")
     return {
         "ok": True,
@@ -357,8 +504,9 @@ def finalize_many(
         "mergeMethod": "squash",
         "prNumbers": pr_numbers,
         "results": results,
+        "primaryMainSync": primary_sync,
         "warnings": warnings,
-        "mainWorkingTreeTouched": False,
+        "mainWorkingTreeTouched": bool(primary_sync["updated"]),
     }
 
 
