@@ -45,6 +45,52 @@ test('clear is best effort and records deterministic receipt', async () => {
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }) }
 })
 
+test('clear succeeds after finalize already removed the worktree', async () => {
+  const fx = fixture()
+  const cleared = []
+  try {
+    const ctx = {
+      get() {
+        return {
+          async present() { return { id: 'p', delivered: true } },
+          async clear(value) { cleared.push(value); return { id: 'c', delivered: true } },
+        }
+      },
+    }
+    await presentResult(ctx, fx.published, { kind: 'html', entry_path: 'docs/index.html' }, 's')
+    fs.rmSync(fx.worktree, { recursive: true, force: true })
+
+    const result = await clearResultPresentation(ctx, fx.published)
+
+    assert.equal(result.status, 'RESULT_PRESENTATION_CLEARED')
+    assert.equal(result.cleared, true)
+    assert.deepEqual(cleared, [{ sessionId: 's', workspaceRoot: fx.worktree }])
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }) }
+})
+
+test('clear remains idempotent after the worktree is gone', async () => {
+  const fx = fixture()
+  let clearCalls = 0
+  try {
+    const ctx = {
+      get() {
+        return {
+          async present() { return { id: 'p', delivered: true } },
+          async clear() { clearCalls += 1; return { id: 'c', delivered: true } },
+        }
+      },
+    }
+    await presentResult(ctx, fx.published, { kind: 'html', entry_path: 'docs/index.html' }, 's')
+    fs.rmSync(fx.worktree, { recursive: true, force: true })
+
+    await clearResultPresentation(ctx, fx.published)
+    const second = await clearResultPresentation(ctx, fx.published)
+
+    assert.equal(second.status, 'RESULT_PRESENTATION_ALREADY_CLEARED')
+    assert.equal(clearCalls, 1)
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }) }
+})
+
 test('tool requires a calling Harness agent', async () => {
   const tool = createResultPresentationTool({ get() { return { present: async () => ({}), clear: async () => ({}) } } })
   assert.equal(tool.name, 'postman_result_present')
