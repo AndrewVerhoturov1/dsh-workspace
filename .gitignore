@@ -23,6 +23,12 @@ backup/
 !plugins/dsh-better-sidebar-andrew/lib
 !plugins/dsh-better-sidebar-andrew/lib/
 !plugins/dsh-better-sidebar-andrew/lib/**
+!plugins/dsh-agent-teams-nanmicoder-by-andrew/lib
+!plugins/dsh-agent-teams-nanmicoder-by-andrew/lib/
+!plugins/dsh-agent-teams-nanmicoder-by-andrew/lib/**
+
+# Runtime state for the repository-managed Nanmicoder by Andrew fork
+**/.agent-teams-nanmicoder-by-andrew/
 
 # Локальные временные файлы инструментов
 .playwright-cli/
