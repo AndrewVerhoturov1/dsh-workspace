@@ -1,0 +1,34 @@
+- generic [ref=e4]:
+  - generic [ref=e7]:
+    - generic [ref=e8]:
+      - button "New session" [ref=e9] [cursor=pointer]
+      - button "Collapse sidebar" [ref=e38] [cursor=pointer]
+    - button "New session" [ref=e41] [cursor=pointer]:
+      - generic [ref=e44]: New Session
+    - generic [ref=e47]:
+      - generic [ref=e48]:
+        - generic [ref=e49]: Workspaces
+        - generic [ref=e51]:
+          - button "Search sessions" [ref=e52] [cursor=pointer]
+          - textbox "Search sessions..."
+        - generic [ref=e56]:
+          - button "View options" [ref=e58] [cursor=pointer]
+          - button "Add workspace" [ref=e61] [cursor=pointer]
+      - tree "Sessions" [ref=e67]:
+        - generic [ref=e68]: No sessions yet
+    - generic [ref=e69]:
+      - button "Worktree tasks" [ref=e72] [cursor=pointer]
+      - button "Settings" [ref=e78] [cursor=pointer]
+  - generic [ref=e92]:
+    - generic [ref=e95]:
+      - generic [ref=e100]: Into the Unknown
+      - generic [ref=e101]: Preview
+    - button "Choose workspace" [ref=e103] [cursor=pointer]
+    - generic [ref=e111] [cursor=pointer]:
+      - textbox "Choose workspace" [ref=e114]:
+        - /placeholder: Choose a workspace to start
+      - generic [ref=e115]:
+        - generic [ref=e116]:
+          - button "Commands" [disabled]
+        - generic [ref=e117]:
+          - button "Send message" [disabled]

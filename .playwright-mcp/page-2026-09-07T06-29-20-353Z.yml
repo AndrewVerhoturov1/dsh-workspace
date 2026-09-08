@@ -1,0 +1,139 @@
+- generic [ref=f3e1]:
+  - generic [ref=f3e4]:
+    - generic [ref=f3e7]:
+      - generic [ref=f3e8]:
+        - button "New session" [ref=f3e791] [cursor=pointer]
+        - button "Collapse sidebar" [ref=f3e820] [cursor=pointer]
+      - button "New session" [ref=f3e41] [cursor=pointer]:
+        - generic [ref=f3e821]: New Session
+      - generic [ref=f3e47]:
+        - generic [ref=f3e48]:
+          - generic [ref=f3e822]: Workspaces
+          - generic [ref=f3e824]:
+            - button "Search sessions" [ref=f3e825] [cursor=pointer]
+            - textbox "Search sessions..."
+          - generic [ref=f3e56]:
+            - button "View options" [ref=f3e830] [cursor=pointer]
+            - button "Add workspace" [ref=f3e61] [cursor=pointer]
+        - tree "Sessions" [ref=f3e834]:
+          - 'treeitem "Postman PR #104 — REQ_20260907T060331Z_7420" [ref=f3e837] [cursor=pointer]'
+          - 'treeitem "Postman PR #101 — REQ_20260907T025309Z_6245" [ref=f3e845] [cursor=pointer]'
+          - generic [ref=f3e851]:
+            - treeitem ".dsh" [expanded] [ref=f3e853] [cursor=pointer]
+            - treeitem "New Session" [selected] [ref=f3e861] [cursor=pointer]
+            - treeitem "Команда Астры 7min" [ref=f3e1138] [cursor=pointer]:
+              - generic [ref=f3e867]: Команда Астры
+              - generic [ref=f3e868]: 7min
+            - treeitem "Современный редизайн HTML с одной кнопкой 9min" [ref=f3e870] [cursor=pointer]:
+              - generic [ref=f3e872]: Современный редизайн HTML с одной кнопкой
+              - generic [ref=f3e873]: 9min
+            - treeitem "Мржим правильно 23min" [ref=f3e875] [cursor=pointer]:
+              - generic [ref=f3e877]: Мржим правильно
+              - generic [ref=f3e878]: 23min
+            - treeitem "Современный редизайн страницы Postman 4h" [ref=f3e880] [cursor=pointer]:
+              - generic [ref=f3e882]: Современный редизайн страницы Postman
+              - generic [ref=f3e883]: 4h
+            - button "Show 6 more sessions" [ref=f3e884] [cursor=pointer]
+          - treeitem "DEEPSEEK" [ref=f3e887] [cursor=pointer]
+          - treeitem "Ungrouped" [ref=f3e894] [cursor=pointer]
+      - generic [ref=f3e69]:
+        - button "Worktree tasks" [ref=f3e72] [cursor=pointer]
+        - button "Settings" [ref=f3e901] [cursor=pointer]
+    - generic [ref=f3e477]:
+      - generic [ref=f3e480]:
+        - generic [ref=f3e485]: Into the Unknown
+        - generic [ref=f3e486]: Preview
+      - generic [ref=f3e487]:
+        - button "Choose workspace" [ref=f3e488] [cursor=pointer]:
+          - generic [ref=f3e492]: .dsh
+        - button "Standard mode" [ref=f3e497] [cursor=pointer]
+      - generic [ref=f3e507]:
+        - textbox "Describe what you want to build" [ref=f3e510]
+        - generic [ref=f3e511]:
+          - generic [ref=f3e512]:
+            - button "Commands" [ref=f3e513] [cursor=pointer]
+            - 'button "Access mode, current: Full access" [ref=f3e518] [cursor=pointer]':
+              - generic [ref=f3e524]: Full access
+            - button "New session on a fresh worktree off origin/main" [ref=f3e529] [cursor=pointer]:
+              - generic [ref=f3e532]: worktree
+          - generic [ref=f3e533]:
+            - 'button "Режим команды: Наследовать" [ref=f3e536] [cursor=pointer]':
+              - generic [ref=f3e538]: Наследовать
+              - generic [aria-hidden] [ref=f3e539]: ⌄
+            - button "Select model, current DeepSeek-V4-Flash, reasoning effort High" [active] [ref=f3e1886] [cursor=pointer]:
+              - generic [ref=f3e543]: DeepSeek-V4-Flash
+              - generic [ref=f3e544]: High
+            - button "Send message" [disabled] [ref=f3e547]
+    - generic [ref=f3e550]:
+      - generic [ref=f3e551]:
+        - generic: Details
+        - button "Close details" [ref=f3e552] [cursor=pointer]
+      - generic [ref=f3e555]: Click a tool row in the message flow to view its details
+  - generic:
+    - generic:
+      - generic [ref=f3e216]:
+        - button "Expand bottom panel" [ref=f3e217] [cursor=pointer]
+        - button "Collapse sidebar" [ref=f3e221] [cursor=pointer]
+      - generic [ref=f3e229]:
+        - generic [ref=f3e231]:
+          - generic "Files" [ref=f3e556] [cursor=pointer]:
+            - button "Close" [ref=f3e561]
+          - button "New tab" [ref=f3e241] [cursor=pointer]
+        - generic [ref=f3e566]:
+          - generic [ref=f3e567]:
+            - combobox "Workspace / Worktree" [ref=f3e569]:
+              - option "main · .dsh" [selected]
+              - option "implementation/agent-team-rpc-hotfix-v1 · agent-team-rpc-hotfix-v1"
+              - option "implementation/agent-team-mvp-v1 · dsh-agent-team-mvp-v1"
+              - option "implementation/agent-team-mvp-v1-r2 · dsh-agent-team-mvp-v1-r2"
+            - textbox "Search files by name…" [ref=f3e570]
+            - button "Refresh" [ref=f3e571] [cursor=pointer]
+            - button "Upload files" [ref=f3e574] [cursor=pointer]
+            - button "Upload folder" [ref=f3e578] [cursor=pointer]
+          - generic [ref=f3e582]:
+            - generic [ref=f3e583] [cursor=pointer]: .dsh
+            - button "_codex-backups" [ref=f3e588] [cursor=pointer]
+            - button ".agents" [ref=f3e593] [cursor=pointer]
+            - button ".git" [ref=f3e598] [cursor=pointer]
+            - button ".github" [ref=f3e603] [cursor=pointer]
+            - button ".playwright-cli" [ref=f3e608] [cursor=pointer]
+            - button ".playwright-mcp" [ref=f3e613] [cursor=pointer]
+            - button ".pytest_cache" [ref=f3e618] [cursor=pointer]
+            - button ".tmp-pi-ai-catalog" [ref=f3e623] [cursor=pointer]
+            - button ".tmp-skill-v12-inspect" [ref=f3e628] [cursor=pointer]
+            - button "attachments" [ref=f3e633] [cursor=pointer]
+            - button "backup" [ref=f3e638] [cursor=pointer]
+            - button "change-ledger" [ref=f3e643] [cursor=pointer]
+            - button "chatgpt-desktop-uia-bridge" [ref=f3e648] [cursor=pointer]
+            - button "diagnostics" [ref=f3e653] [cursor=pointer]
+            - button "docs" [ref=f3e658] [cursor=pointer]
+            - button "plugins" [ref=f3e663] [cursor=pointer]
+            - button "postman" [ref=f3e668] [cursor=pointer]
+            - button "profiles" [ref=f3e673] [cursor=pointer]
+            - button "sessions" [ref=f3e678] [cursor=pointer]
+            - button "storages" [ref=f3e683] [cursor=pointer]
+            - button "system" [ref=f3e688] [cursor=pointer]
+            - button "tools" [ref=f3e693] [cursor=pointer]
+            - button "WEB_POSTMAN_WP_006_extracted" [ref=f3e698] [cursor=pointer]
+            - button "WEB_POSTMAN_WP_006_REPAIR_01_extracted" [ref=f3e703] [cursor=pointer]
+            - button ".anonymous-user-id" [ref=f3e707] [cursor=pointer]
+            - button ".credentials.yaml" [ref=f3e711] [cursor=pointer]
+            - button ".gitattributes" [ref=f3e715] [cursor=pointer]
+            - button ".gitignore" [ref=f3e719] [cursor=pointer]
+            - button ".tmp-m1-m3-auth-settings.yaml" [ref=f3e723] [cursor=pointer]
+            - button ".tmp-m1-m3-auth.patch.yml" [ref=f3e727] [cursor=pointer]
+            - button "AGENTS.md" [ref=f3e731] [cursor=pointer]
+            - button "codex-oauth-runtime.log" [ref=f3e735] [cursor=pointer]
+            - button "codex-oauth.json" [ref=f3e739] [cursor=pointer]
+            - button "GPT-CODEX-AUTH.md" [ref=f3e743] [cursor=pointer]
+            - button "handoff-QmRZCP.md" [ref=f3e747] [cursor=pointer]
+            - button "lifecycle-settings.png" [ref=f3e751] [cursor=pointer]
+            - button "LUNA_IMPLEMENTATION_PROMPT.md" [ref=f3e755] [cursor=pointer]
+            - button "postman-check.html" [ref=f3e759] [cursor=pointer]
+            - button "README.md" [ref=f3e763] [cursor=pointer]
+            - button "REPO_POLICY.md" [ref=f3e767] [cursor=pointer]
+            - button "REQ_20260906T120548Z_3566.md" [ref=f3e771] [cursor=pointer]
+            - button "settings.yaml" [ref=f3e775] [cursor=pointer]
+            - button "tokenledger.sqlite" [ref=f3e779] [cursor=pointer]
+            - button "tokenledger.sqlite-shm" [ref=f3e783] [cursor=pointer]
+            - button "tokenledger.sqlite-wal" [ref=f3e787] [cursor=pointer]

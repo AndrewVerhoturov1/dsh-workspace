@@ -1,0 +1,302 @@
+- generic [ref=f3e1]:
+  - generic [ref=f3e4]:
+    - generic [ref=f3e7]:
+      - generic [ref=f3e8]:
+        - button "New session" [ref=f3e791] [cursor=pointer]
+        - button "Collapse sidebar" [ref=f3e820] [cursor=pointer]
+      - button "New session" [ref=f3e41] [cursor=pointer]:
+        - generic [ref=f3e821]: New Session
+      - generic [ref=f3e47]:
+        - generic [ref=f3e48]:
+          - generic [ref=f3e822]: Workspaces
+          - generic [ref=f3e824]:
+            - button "Search sessions" [ref=f3e825] [cursor=pointer]
+            - textbox "Search sessions..."
+          - generic [ref=f3e56]:
+            - button "View options" [ref=f3e830] [cursor=pointer]
+            - button "Add workspace" [ref=f3e61] [cursor=pointer]
+        - tree "Sessions" [ref=f3e834]:
+          - 'treeitem "Postman PR #104 — REQ_20260907T060331Z_7420" [ref=f3e837] [cursor=pointer]'
+          - 'treeitem "Postman PR #101 — REQ_20260907T025309Z_6245" [ref=f3e845] [cursor=pointer]'
+          - generic [ref=f3e851]:
+            - treeitem ".dsh" [expanded] [ref=f3e853] [cursor=pointer]
+            - treeitem "New Session" [selected] [ref=f3e861] [cursor=pointer]
+            - treeitem "Команда Астры 7min" [ref=f3e1138] [cursor=pointer]:
+              - generic [ref=f3e867]: Команда Астры
+              - generic [ref=f3e868]: 7min
+            - treeitem "Современный редизайн HTML с одной кнопкой 9min" [ref=f3e870] [cursor=pointer]:
+              - generic [ref=f3e872]: Современный редизайн HTML с одной кнопкой
+              - generic [ref=f3e873]: 9min
+            - treeitem "Мржим правильно 23min" [ref=f3e875] [cursor=pointer]:
+              - generic [ref=f3e877]: Мржим правильно
+              - generic [ref=f3e878]: 23min
+            - treeitem "Современный редизайн страницы Postman 4h" [ref=f3e880] [cursor=pointer]:
+              - generic [ref=f3e882]: Современный редизайн страницы Postman
+              - generic [ref=f3e883]: 4h
+            - button "Show 6 more sessions" [ref=f3e884] [cursor=pointer]
+          - treeitem "DEEPSEEK" [ref=f3e887] [cursor=pointer]
+          - treeitem "Ungrouped" [ref=f3e894] [cursor=pointer]
+      - generic [ref=f3e69]:
+        - button "Worktree tasks" [ref=f3e72] [cursor=pointer]
+        - generic [ref=f3e77]:
+          - button "Settings" [expanded] [ref=f3e901] [cursor=pointer]
+          - dialog "Settings" [ref=f3e909]:
+            - navigation [ref=f3e910]:
+              - generic [ref=f3e911]: Settings
+              - generic [ref=f3e912]:
+                - button "General" [ref=f3e913] [cursor=pointer]
+                - button "Models" [ref=f3e919] [cursor=pointer]
+                - button "Plugins" [ref=f3e924] [cursor=pointer]
+                - button "Agent presets" [ref=f3e928] [cursor=pointer]
+                - button "Команды" [ref=f3e935] [cursor=pointer]
+                - button "Plugin Market" [ref=f3e941] [cursor=pointer]
+                - button "Side card" [ref=f3e947] [cursor=pointer]
+                - button "Restart" [ref=f3e949] [cursor=pointer]
+            - generic [ref=f3e955]:
+              - generic [ref=f3e956]:
+                - button "Open configuration file" [ref=f3e960] [cursor=pointer]
+                - button "Close" [ref=f3e961] [cursor=pointer]
+              - generic [ref=f3e1022]:
+                - banner [ref=f3e1023]:
+                  - generic [ref=f3e1024]:
+                    - heading "Команды" [level=2] [ref=f3e1025]
+                    - paragraph [ref=f3e1026]: Создавайте команды, участников и безопасные правила выполнения. Основные параметры просты, дополнительные открываются по мере необходимости.
+                  - button "↻ Обновить" [ref=f3e1027] [cursor=pointer]
+                - tablist "Команды" [ref=f3e1028]:
+                  - tab "Команды 0" [active] [selected] [ref=f3e1029] [cursor=pointer]:
+                    - text: Команды
+                    - generic [ref=f3e1030]: "0"
+                  - tab "Участники 1" [ref=f3e1204] [cursor=pointer]:
+                    - text: Участники
+                    - generic [ref=f3e1032]: "1"
+                  - tab "Рецепты и данные" [ref=f3e1033] [cursor=pointer]
+                - tabpanel "Команды 0" [ref=f3e1272]:
+                  - generic [ref=f3e1273]:
+                    - complementary "Список команд" [ref=f3e1274]:
+                      - button "＋ Новая команда" [ref=f3e1275] [cursor=pointer]
+                      - generic [ref=f3e1276]:
+                        - strong [ref=f3e1277]: Команд пока нет
+                        - generic [ref=f3e1278]: Начните с шаблона или создайте первую команду.
+                    - main "Редактор команды" [ref=f3e1279]:
+                      - region "Редактор команды" [ref=f3e1280]:
+                        - generic [ref=f3e1281]:
+                          - generic [ref=f3e1283]:
+                            - strong [ref=f3e1284]: Быстрые шаблоны
+                            - generic [ref=f3e1285]: Создайте редактируемую команду с настроенными маршрутами моделей.
+                          - generic [ref=f3e1286]:
+                            - button "⌘ Полная разработка" [ref=f3e1287] [cursor=pointer]:
+                              - generic [ref=f3e1288]: ⌘
+                              - strong [ref=f3e1289]: Полная разработка
+                            - button "◫ Параллельная проверка" [ref=f3e1290] [cursor=pointer]:
+                              - generic [ref=f3e1291]: ◫
+                              - strong [ref=f3e1292]: Параллельная проверка
+                            - button "◇ Проектирование продукта" [ref=f3e1293] [cursor=pointer]:
+                              - generic [ref=f3e1294]: ◇
+                              - strong [ref=f3e1295]: Проектирование продукта
+                        - generic [ref=f3e1297]:
+                          - strong [ref=f3e1298]: Новая команда
+                          - generic [ref=f3e1299]: "Участников: 0"
+                        - generic [ref=f3e1300]:
+                          - heading "Основные параметры" [level=3] [ref=f3e1301]
+                          - generic [ref=f3e1302]:
+                            - generic [ref=f3e1303]: Название команды
+                            - textbox "Название команды" [invalid] [ref=f3e1304]:
+                              - /placeholder: "Например: Команда выпуска продукта"
+                            - generic [ref=f3e1305]: 0/120
+                            - generic [ref=f3e1306]: Заполните это поле.
+                          - generic [ref=f3e1307]:
+                            - generic [ref=f3e1308]: Описание сотрудничества
+                            - textbox "Описание сотрудничества" [ref=f3e1309]:
+                              - /placeholder: Опишите, что команда делает лучше всего и как её участники взаимодействуют.
+                            - generic [ref=f3e1310]: 0/20000
+                          - alert [ref=f3e1311]: Выберите хотя бы одного участника.
+                          - generic [ref=f3e1313] [cursor=pointer]:
+                            - checkbox "R rpc-hotfix-escalation-member deepseek-official / deepseek-v4-flash" [ref=f3e1314]
+                            - generic [ref=f3e1315]: R
+                            - generic [ref=f3e1316]:
+                              - strong [ref=f3e1317]: rpc-hotfix-escalation-member
+                              - generic [ref=f3e1318]: deepseek-official / deepseek-v4-flash
+                        - group [ref=f3e1319]:
+                          - generic "Оркестрация Динамический план зависимостей" [ref=f3e1320] [cursor=pointer]:
+                            - generic [ref=f3e1321]:
+                              - strong [ref=f3e1322]: Оркестрация
+                              - generic [ref=f3e1323]: Динамический план зависимостей
+                            - generic [aria-hidden] [ref=f3e1324]: ⌄
+                          - generic [ref=f3e1325]:
+                            - generic [ref=f3e1326]:
+                              - generic [ref=f3e1327]:
+                                - generic [ref=f3e1328]: Способ запуска
+                                - combobox "Способ запуска" [ref=f3e1329]:
+                                  - option "Запускать каждый раз" [selected]
+                                  - option "Определять автоматически"
+                                  - option "Только вручную"
+                              - generic [ref=f3e1330]:
+                                - generic [ref=f3e1331]: Выбор участников
+                                - combobox "Выбор участников" [ref=f3e1332]:
+                                  - option "Все участники" [selected]
+                                  - option "Подбирать под задачу"
+                              - generic [ref=f3e1333]:
+                                - generic [ref=f3e1334]: Ответ
+                                - combobox "Ответ" [ref=f3e1335]:
+                                  - option "Дождаться завершения" [selected]
+                                  - option "Запустить в фоне"
+                            - generic [ref=f3e1336]:
+                              - generic [ref=f3e1337]:
+                                - generic [ref=f3e1338]: Способ выполнения
+                                - combobox "Способ выполнения" [ref=f3e1339]:
+                                  - 'option "Наследовать (сейчас: Последовательно)"'
+                                  - option "Последовательно" [selected]
+                                  - option "Параллельно"
+                              - generic [ref=f3e1340]:
+                                - generic [ref=f3e1341]: Контекст
+                                - combobox "Контекст" [ref=f3e1342]:
+                                  - 'option "Наследовать (сейчас: Независимый)"'
+                                  - option "Независимый"
+                                  - option "С контекстом диалога" [selected]
+                                  - option "Передавать результаты последовательно"
+                              - generic [ref=f3e1343]:
+                                - generic [ref=f3e1344]: Контекст планирования
+                                - combobox "Контекст планирования" [ref=f3e1345]:
+                                  - option "Старый режим (полный контекст)"
+                                  - option "Только текущий запрос" [selected]
+                                  - option "Недавний диалог"
+                                  - option "Весь диалог"
+                            - generic [ref=f3e1346]:
+                              - generic [ref=f3e1347]:
+                                - generic [ref=f3e1348]: Лимит токенов планировщика
+                                - textbox "Лимит токенов планировщика" [ref=f3e1349]: "2048"
+                              - generic [ref=f3e1350]:
+                                - generic [ref=f3e1351]: Отдельный планировщик
+                                - combobox "Отдельный планировщик" [ref=f3e1352]:
+                                  - option "Модель основного диалога" [selected]
+                              - generic [ref=f3e1353]:
+                                - generic [ref=f3e1354]: Запасной планировщик
+                                - combobox "Запасной планировщик" [ref=f3e1355]:
+                                  - option "Выбирать автоматически" [selected]
+                            - generic [ref=f3e1356] [cursor=pointer]:
+                              - checkbox "Фиксированный порядок Если выключено, ведущий агент создаёт граф зависимостей под текущую задачу." [ref=f3e1357]
+                              - generic [ref=f3e1358]:
+                                - strong [ref=f3e1359]: Фиксированный порядок
+                                - generic [ref=f3e1360]: Если выключено, ведущий агент создаёт граф зависимостей под текущую задачу.
+                        - group [ref=f3e1361]:
+                          - generic "Надёжность и бюджет Дополнительные параметры" [ref=f3e1362] [cursor=pointer]:
+                            - generic [ref=f3e1363]:
+                              - strong [ref=f3e1364]: Надёжность и бюджет
+                              - generic [ref=f3e1365]: Дополнительные параметры
+                            - generic [aria-hidden] [ref=f3e1366]: ⌄
+                          - option "Продолжить с другими участниками" [selected]
+                          - option "Остановить сразу"
+                          - option "Повторить один раз с запасной моделью"
+                        - group [ref=f3e1367]:
+                          - generic "Предпросмотр плана Будет вызвана модель планировщика и учтены её токены, но участники не запустятся." [ref=f3e1368] [cursor=pointer]:
+                            - generic [ref=f3e1369]:
+                              - strong [ref=f3e1370]: Предпросмотр плана
+                              - generic [ref=f3e1371]: Будет вызвана модель планировщика и учтены её токены, но участники не запустятся.
+                            - generic [aria-hidden] [ref=f3e1372]: ⌄
+                        - generic [ref=f3e1373]:
+                          - heading "Лимит краткого отчёта участника (символов)" [level=3] [ref=f3e1374]
+                          - generic [ref=f3e1375]:
+                            - generic [ref=f3e1376]: Лимит краткого отчёта участника (символов)
+                            - textbox "Лимит краткого отчёта участника (символов)" [ref=f3e1377]
+                            - generic [ref=f3e1378]: Оставьте пустым для значения 16 000. Полный вывод хранится в Центре запусков; для зависимостей и ведущей модели действуют отдельные ограничения.
+                        - group "Действия редактора" [ref=f3e1379]:
+                          - button "Отменить изменения" [disabled] [ref=f3e1380]
+                          - button "Сохранить" [disabled] [ref=f3e1381]
+    - generic [ref=f3e477]:
+      - generic [ref=f3e480]:
+        - generic [ref=f3e485]: Into the Unknown
+        - generic [ref=f3e486]: Preview
+      - generic [ref=f3e487]:
+        - button "Choose workspace" [ref=f3e488] [cursor=pointer]:
+          - generic [ref=f3e492]: .dsh
+        - button "Standard mode" [ref=f3e497] [cursor=pointer]
+      - generic [ref=f3e507]:
+        - textbox "Describe what you want to build" [ref=f3e510]
+        - generic [ref=f3e511]:
+          - generic [ref=f3e512]:
+            - button "Commands" [ref=f3e513] [cursor=pointer]
+            - 'button "Access mode, current: Full access" [ref=f3e518] [cursor=pointer]':
+              - generic [ref=f3e524]: Full access
+            - button "New session on a fresh worktree off origin/main" [ref=f3e529] [cursor=pointer]:
+              - generic [ref=f3e532]: worktree
+          - generic [ref=f3e533]:
+            - 'button "Режим команды: Наследовать" [ref=f3e536] [cursor=pointer]':
+              - generic [ref=f3e538]: Наследовать
+              - generic [aria-hidden] [ref=f3e539]: ⌄
+            - button "Select model, current GPT-5.6 Luna, reasoning effort Max" [ref=f3e542] [cursor=pointer]:
+              - generic [ref=f3e543]: GPT-5.6 Luna
+              - generic [ref=f3e544]: Max
+            - button "Send message" [disabled] [ref=f3e547]
+    - generic [ref=f3e550]:
+      - generic [ref=f3e551]:
+        - generic: Details
+        - button "Close details" [ref=f3e552] [cursor=pointer]
+      - generic [ref=f3e555]: Click a tool row in the message flow to view its details
+  - generic:
+    - generic:
+      - generic [ref=f3e216]:
+        - button "Expand bottom panel" [ref=f3e217] [cursor=pointer]
+        - button "Collapse sidebar" [ref=f3e221] [cursor=pointer]
+      - generic [ref=f3e229]:
+        - generic [ref=f3e231]:
+          - generic "Files" [ref=f3e556] [cursor=pointer]:
+            - button "Close" [ref=f3e561]
+          - button "New tab" [ref=f3e241] [cursor=pointer]
+        - generic [ref=f3e566]:
+          - generic [ref=f3e567]:
+            - combobox "Workspace / Worktree" [ref=f3e569]:
+              - option "main · .dsh" [selected]
+              - option "implementation/agent-team-rpc-hotfix-v1 · agent-team-rpc-hotfix-v1"
+              - option "implementation/agent-team-mvp-v1 · dsh-agent-team-mvp-v1"
+              - option "implementation/agent-team-mvp-v1-r2 · dsh-agent-team-mvp-v1-r2"
+            - textbox "Search files by name…" [ref=f3e570]
+            - button "Refresh" [ref=f3e571] [cursor=pointer]
+            - button "Upload files" [ref=f3e574] [cursor=pointer]
+            - button "Upload folder" [ref=f3e578] [cursor=pointer]
+          - generic [ref=f3e582]:
+            - generic [ref=f3e583] [cursor=pointer]: .dsh
+            - button "_codex-backups" [ref=f3e588] [cursor=pointer]
+            - button ".agents" [ref=f3e593] [cursor=pointer]
+            - button ".git" [ref=f3e598] [cursor=pointer]
+            - button ".github" [ref=f3e603] [cursor=pointer]
+            - button ".playwright-cli" [ref=f3e608] [cursor=pointer]
+            - button ".playwright-mcp" [ref=f3e613] [cursor=pointer]
+            - button ".pytest_cache" [ref=f3e618] [cursor=pointer]
+            - button ".tmp-pi-ai-catalog" [ref=f3e623] [cursor=pointer]
+            - button ".tmp-skill-v12-inspect" [ref=f3e628] [cursor=pointer]
+            - button "attachments" [ref=f3e633] [cursor=pointer]
+            - button "backup" [ref=f3e638] [cursor=pointer]
+            - button "change-ledger" [ref=f3e643] [cursor=pointer]
+            - button "chatgpt-desktop-uia-bridge" [ref=f3e648] [cursor=pointer]
+            - button "diagnostics" [ref=f3e653] [cursor=pointer]
+            - button "docs" [ref=f3e658] [cursor=pointer]
+            - button "plugins" [ref=f3e663] [cursor=pointer]
+            - button "postman" [ref=f3e668] [cursor=pointer]
+            - button "profiles" [ref=f3e673] [cursor=pointer]
+            - button "sessions" [ref=f3e678] [cursor=pointer]
+            - button "storages" [ref=f3e683] [cursor=pointer]
+            - button "system" [ref=f3e688] [cursor=pointer]
+            - button "tools" [ref=f3e693] [cursor=pointer]
+            - button "WEB_POSTMAN_WP_006_extracted" [ref=f3e698] [cursor=pointer]
+            - button "WEB_POSTMAN_WP_006_REPAIR_01_extracted" [ref=f3e703] [cursor=pointer]
+            - button ".anonymous-user-id" [ref=f3e707] [cursor=pointer]
+            - button ".credentials.yaml" [ref=f3e711] [cursor=pointer]
+            - button ".gitattributes" [ref=f3e715] [cursor=pointer]
+            - button ".gitignore" [ref=f3e719] [cursor=pointer]
+            - button ".tmp-m1-m3-auth-settings.yaml" [ref=f3e723] [cursor=pointer]
+            - button ".tmp-m1-m3-auth.patch.yml" [ref=f3e727] [cursor=pointer]
+            - button "AGENTS.md" [ref=f3e731] [cursor=pointer]
+            - button "codex-oauth-runtime.log" [ref=f3e735] [cursor=pointer]
+            - button "codex-oauth.json" [ref=f3e739] [cursor=pointer]
+            - button "GPT-CODEX-AUTH.md" [ref=f3e743] [cursor=pointer]
+            - button "handoff-QmRZCP.md" [ref=f3e747] [cursor=pointer]
+            - button "lifecycle-settings.png" [ref=f3e751] [cursor=pointer]
+            - button "LUNA_IMPLEMENTATION_PROMPT.md" [ref=f3e755] [cursor=pointer]
+            - button "postman-check.html" [ref=f3e759] [cursor=pointer]
+            - button "README.md" [ref=f3e763] [cursor=pointer]
+            - button "REPO_POLICY.md" [ref=f3e767] [cursor=pointer]
+            - button "REQ_20260906T120548Z_3566.md" [ref=f3e771] [cursor=pointer]
+            - button "settings.yaml" [ref=f3e775] [cursor=pointer]
+            - button "tokenledger.sqlite" [ref=f3e779] [cursor=pointer]
+            - button "tokenledger.sqlite-shm" [ref=f3e783] [cursor=pointer]
+            - button "tokenledger.sqlite-wal" [ref=f3e787] [cursor=pointer]

@@ -1,0 +1,38 @@
+{
+  "package": "POSTMAN_SKILL_V12_RESUME_CLICKABLE",
+  "repository": "AndrewVerhoturov1/dsh-workspace",
+  "baselineMain": "2f41626d457c8ed7f4265cb391c4cd45b21b58ba",
+  "githubWritesByChatGPT": false,
+  "repoFilesToChange": [
+    ".agents/skills/delegate-via-postman/SKILL.md",
+    "AGENTS.md",
+    "postman/direct/tests/test_delegate_skill_contract.py"
+  ],
+  "files": [
+    {
+      "path": "LUNA_INSTRUCTIONS.md",
+      "sha256": "7745296a82f21c0089b36285ed2776ebfe8a66e2fde5936b430e3ee812ab32f7",
+      "size": 4183
+    },
+    {
+      "path": "README.md",
+      "sha256": "a023f81973fdf47e1a5973bef4377f35bb20fdad49ee098b5038f84f14da2d07",
+      "size": 797
+    },
+    {
+      "path": "START_PROMPT.txt",
+      "sha256": "e010209d5ecf4d63ef3afac6a96c8de40cb89378559960017c047b96bd085ab9",
+      "size": 1055
+    },
+    {
+      "path": "tests/validate_v12_contract.py",
+      "sha256": "3bbb7729ebf7db3da1baf840dd0305266d313b8d2de41eac5a99e9203682cf32",
+      "size": 1251
+    },
+    {
+      "path": "tools/apply_skill_v12.py",
+      "sha256": "09efbdef4a7b7bd1285d0991c9e5aaf905bfd305e97cd5731d9f8231a8239e24",
+      "size": 27869
+    }
+  ]
+}

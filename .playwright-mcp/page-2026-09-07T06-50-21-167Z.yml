@@ -1,0 +1,205 @@
+- generic [ref=f5e1]:
+  - generic [ref=f5e4]:
+    - generic [ref=f5e7]:
+      - generic [ref=f5e8]:
+        - button "New session" [ref=f5e531] [cursor=pointer]
+        - button "Collapse sidebar" [ref=f5e560] [cursor=pointer]
+      - button "New session" [ref=f5e41] [cursor=pointer]:
+        - generic [ref=f5e561]: New Session
+      - generic [ref=f5e47]:
+        - generic [ref=f5e48]:
+          - generic [ref=f5e562]: Workspaces
+          - generic [ref=f5e564]:
+            - button "Search sessions" [ref=f5e565] [cursor=pointer]
+            - textbox "Search sessions..."
+          - generic [ref=f5e56]:
+            - button "View options" [ref=f5e570] [cursor=pointer]
+            - button "Add workspace" [ref=f5e61] [cursor=pointer]
+        - tree "Sessions" [ref=f5e574]:
+          - 'treeitem "Postman PR #104 — REQ_20260907T060331Z_7420" [ref=f5e577] [cursor=pointer]'
+          - 'treeitem "Postman PR #101 — REQ_20260907T025309Z_6245" [ref=f5e585] [cursor=pointer]'
+          - generic [ref=f5e591]:
+            - treeitem ".dsh" [expanded] [ref=f5e593] [cursor=pointer]
+            - treeitem "New Session" [selected] [ref=f5e601] [cursor=pointer]
+            - treeitem "Running Команда Астры 11min" [ref=f5e605] [cursor=pointer]:
+              - generic [ref=f5e606]: Running
+              - generic [ref=f5e617]: Команда Астры
+              - generic [ref=f5e618]: 11min
+            - treeitem "Современный редизайн HTML с одной кнопкой 34min" [ref=f5e620] [cursor=pointer]:
+              - generic [ref=f5e622]: Современный редизайн HTML с одной кнопкой
+              - generic [ref=f5e623]: 34min
+            - treeitem "Мржим правильно 48min" [ref=f5e625] [cursor=pointer]:
+              - generic [ref=f5e627]: Мржим правильно
+              - generic [ref=f5e628]: 48min
+            - treeitem "Современный редизайн страницы Postman 4h" [ref=f5e630] [cursor=pointer]:
+              - generic [ref=f5e632]: Современный редизайн страницы Postman
+              - generic [ref=f5e633]: 4h
+            - button "Show 6 more sessions" [ref=f5e634] [cursor=pointer]
+          - treeitem "DEEPSEEK" [ref=f5e637] [cursor=pointer]
+          - treeitem "Ungrouped" [ref=f5e644] [cursor=pointer]
+      - generic [ref=f5e69]:
+        - button "Worktree tasks" [ref=f5e72] [cursor=pointer]
+        - generic [ref=f5e77]:
+          - button "Settings" [expanded] [ref=f5e651] [cursor=pointer]
+          - dialog "Settings" [ref=f5e659]:
+            - navigation [ref=f5e660]:
+              - generic [ref=f5e661]: Settings
+              - generic [ref=f5e662]:
+                - button "General" [ref=f5e663] [cursor=pointer]
+                - button "Models" [ref=f5e669] [cursor=pointer]
+                - button "Plugins" [ref=f5e674] [cursor=pointer]
+                - button "Agent presets" [ref=f5e678] [cursor=pointer]
+                - button "Команды" [ref=f5e685] [cursor=pointer]
+                - button "Plugin Market" [ref=f5e691] [cursor=pointer]
+                - button "Side card" [ref=f5e697] [cursor=pointer]
+                - button "Restart" [ref=f5e699] [cursor=pointer]
+            - generic [ref=f5e705]:
+              - generic [ref=f5e706]:
+                - button "Open configuration file" [ref=f5e710] [cursor=pointer]
+                - button "Close" [active] [ref=f5e711] [cursor=pointer]
+              - generic [ref=f5e719]:
+                - generic [ref=f5e720]:
+                  - generic [ref=f5e721]:
+                    - generic [ref=f5e722]: Agent preset
+                    - generic [ref=f5e723]: Applies to sessions you start from now on. Running sessions keep the preset they began with.
+                  - button "Standard mode" [ref=f5e725] [cursor=pointer]
+                - generic [ref=f5e728]:
+                  - generic [ref=f5e729]:
+                    - generic [ref=f5e730]: Permission
+                    - generic [ref=f5e731]: Choose the default permission mode for new sessions
+                  - button "Full access" [ref=f5e733] [cursor=pointer]
+                - generic [ref=f5e736]:
+                  - generic [ref=f5e737]: Language
+                  - button "English" [ref=f5e740] [cursor=pointer]
+                - generic [ref=f5e743]:
+                  - generic [ref=f5e744]: Appearance
+                  - generic [ref=f5e745]:
+                    - button "Light" [ref=f5e746] [cursor=pointer]
+                    - button "Dark" [pressed] [ref=f5e757] [cursor=pointer]
+                    - button "System" [ref=f5e760] [cursor=pointer]
+                - generic [ref=f5e764]:
+                  - generic [ref=f5e765]:
+                    - generic [ref=f5e766]: Enter behavior while busy
+                    - generic [ref=f5e767]: Busy only; Cmd/Ctrl+Enter uses the other behavior
+                  - button "Queue" [ref=f5e769] [cursor=pointer]
+    - generic [ref=f5e92]:
+      - generic [ref=f5e95]:
+        - generic [ref=f5e100]: Into the Unknown
+        - generic [ref=f5e101]: Preview
+      - generic [ref=f5e102]:
+        - button "Choose workspace" [ref=f5e103] [cursor=pointer]:
+          - generic [ref=f5e106]: .dsh
+        - button "Standard mode" [ref=f5e139] [cursor=pointer]
+      - generic [ref=f5e111]:
+        - textbox "Describe what you want to build" [ref=f5e147]
+        - generic [ref=f5e115]:
+          - generic [ref=f5e116]:
+            - button "Commands" [ref=f5e148] [cursor=pointer]
+            - 'button "Access mode, current: Full access" [ref=f5e153] [cursor=pointer]':
+              - generic [ref=f5e159]: Full access
+            - button "New session on a fresh worktree off origin/main" [ref=f5e164] [cursor=pointer]:
+              - generic [ref=f5e167]: worktree
+          - generic [ref=f5e117]:
+            - 'button "Режим команды: Наследовать" [ref=f5e170] [cursor=pointer]':
+              - generic [ref=f5e172]: Наследовать
+              - generic [aria-hidden] [ref=f5e173]: ⌄
+            - button "Select model, current DeepSeek-V4-Flash, reasoning effort High" [ref=f5e176] [cursor=pointer]:
+              - generic [ref=f5e177]: DeepSeek-V4-Flash
+              - generic [ref=f5e178]: High
+            - button "Send message" [disabled] [ref=f5e181]
+    - generic [ref=f5e185]:
+      - generic [ref=f5e186]:
+        - generic: Details
+        - button "Close details" [ref=f5e187] [cursor=pointer]
+      - generic [ref=f5e190]: Click a tool row in the message flow to view its details
+  - generic:
+    - generic:
+      - generic [ref=f5e191]:
+        - button "Expand bottom panel" [ref=f5e192] [cursor=pointer]
+        - button "Collapse sidebar" [ref=f5e196] [cursor=pointer]
+      - generic [ref=f5e204]:
+        - generic [ref=f5e206]:
+          - generic "Files" [ref=f5e207] [cursor=pointer]:
+            - button "Close" [ref=f5e212]
+          - button "New tab" [ref=f5e216] [cursor=pointer]
+        - generic [ref=f5e222]:
+          - generic [ref=f5e223]:
+            - combobox "Workspace / Worktree" [ref=f5e225]:
+              - option "main · .dsh"
+              - option "implementation/agent-team-rpc-hotfix-v1 · agent-team-rpc-hotfix-v1" [selected]
+              - option "implementation/agent-team-mvp-v1 · dsh-agent-team-mvp-v1"
+              - option "implementation/agent-team-mvp-v1-r2 · dsh-agent-team-mvp-v1-r2"
+            - textbox "Search files by name…" [ref=f5e226]
+            - button "Refresh" [ref=f5e227] [cursor=pointer]
+            - button "Upload files" [ref=f5e230] [cursor=pointer]
+            - button "Upload folder" [ref=f5e234] [cursor=pointer]
+          - generic [ref=f5e238]:
+            - generic [ref=f5e239] [cursor=pointer]: agent-team-rpc-hotfix-v1
+            - button "_codex-backups" [ref=f5e244] [cursor=pointer]
+            - button ".agents" [ref=f5e249] [cursor=pointer]
+            - button ".github" [ref=f5e254] [cursor=pointer]
+            - button ".playwright-mcp" [ref=f5e259] [cursor=pointer]
+            - button "attachments" [ref=f5e264] [cursor=pointer]
+            - button "change-ledger" [ref=f5e269] [cursor=pointer]
+            - button "chatgpt-desktop-uia-bridge" [ref=f5e274] [cursor=pointer]
+            - button "diagnostics" [ref=f5e279] [cursor=pointer]
+            - button "docs" [ref=f5e284] [cursor=pointer]
+            - button "plugins" [ref=f5e289] [cursor=pointer]
+            - button "postman" [ref=f5e294] [cursor=pointer]
+            - button "profiles" [ref=f5e299] [cursor=pointer]
+            - button "system" [ref=f5e304] [cursor=pointer]
+            - button "tools" [ref=f5e309] [cursor=pointer]
+            - button "WEB_POSTMAN_WP_006_extracted" [ref=f5e314] [cursor=pointer]
+            - button "WEB_POSTMAN_WP_006_REPAIR_01_extracted" [ref=f5e319] [cursor=pointer]
+            - button ".git" [ref=f5e323] [cursor=pointer]
+            - button ".gitattributes" [ref=f5e327] [cursor=pointer]
+            - button ".gitignore" [ref=f5e331] [cursor=pointer]
+            - button ".tmp-m1-m3-auth-settings.yaml" [ref=f5e335] [cursor=pointer]
+            - button ".tmp-m1-m3-auth.patch.yml" [ref=f5e339] [cursor=pointer]
+            - button "AGENTS.md" [ref=f5e343] [cursor=pointer]
+            - button "GPT-CODEX-AUTH.md" [ref=f5e347] [cursor=pointer]
+            - button "handoff-QmRZCP.md" [ref=f5e351] [cursor=pointer]
+            - button "lifecycle-settings.png" [ref=f5e355] [cursor=pointer]
+            - button "LUNA_IMPLEMENTATION_PROMPT.md" [ref=f5e359] [cursor=pointer]
+            - button "postman-check.html" [ref=f5e363] [cursor=pointer]
+            - button "README.md" [ref=f5e367] [cursor=pointer]
+            - button "REPO_POLICY.md" [ref=f5e371] [cursor=pointer]
+            - button "REQ_20260901T102848Z_2974.md" [ref=f5e375] [cursor=pointer]
+            - button "REQ_20260901T201152Z_4142.md" [ref=f5e379] [cursor=pointer]
+            - button "REQ_20260901T205131Z_2292.md" [ref=f5e383] [cursor=pointer]
+            - button "REQ_20260901T213939Z_3681.md" [ref=f5e387] [cursor=pointer]
+            - button "REQ_20260901T230600Z_0142.md" [ref=f5e391] [cursor=pointer]
+            - button "REQ_20260901T233133Z_1874.md" [ref=f5e395] [cursor=pointer]
+            - button "REQ_20260902T003436Z_4353.md" [ref=f5e399] [cursor=pointer]
+            - button "REQ_20260902T013000Z_7314.md" [ref=f5e403] [cursor=pointer]
+            - button "REQ_20260902T015001Z_0141.md" [ref=f5e407] [cursor=pointer]
+            - button "REQ_20260902T020321Z_5975.md" [ref=f5e411] [cursor=pointer]
+            - button "REQ_20260902T021752Z_8191.md" [ref=f5e415] [cursor=pointer]
+            - button "REQ_20260902T021859Z_4496.md" [ref=f5e419] [cursor=pointer]
+            - button "REQ_20260902T022150Z_7466.md" [ref=f5e423] [cursor=pointer]
+            - button "REQ_20260902T041659Z_4827.md" [ref=f5e427] [cursor=pointer]
+            - button "REQ_20260902T112957Z_8262.md" [ref=f5e431] [cursor=pointer]
+            - button "REQ_20260902T113736Z_6074.md" [ref=f5e435] [cursor=pointer]
+            - button "REQ_20260902T201932Z_5328.md" [ref=f5e439] [cursor=pointer]
+            - button "REQ_20260902T203658Z_8235.md" [ref=f5e443] [cursor=pointer]
+            - button "REQ_20260903T005851Z_4149.md" [ref=f5e447] [cursor=pointer]
+            - button "REQ_20260903T013829Z_1808.md" [ref=f5e451] [cursor=pointer]
+            - button "REQ_20260903T043402Z_7925.md" [ref=f5e455] [cursor=pointer]
+            - button "REQ_20260903T044322Z_9563.md" [ref=f5e459] [cursor=pointer]
+            - button "REQ_20260903T212957Z_0994.md" [ref=f5e463] [cursor=pointer]
+            - button "REQ_20260903T234842Z_1094.md" [ref=f5e467] [cursor=pointer]
+            - button "REQ_20260904T012813Z_9750.md" [ref=f5e471] [cursor=pointer]
+            - button "REQ_20260904T023423Z_8302.md" [ref=f5e475] [cursor=pointer]
+            - button "REQ_20260905T084127Z_4659.md" [ref=f5e479] [cursor=pointer]
+            - button "REQ_20260905T085740Z_8024.md" [ref=f5e483] [cursor=pointer]
+            - button "REQ_20260905T211400Z_4140.md" [ref=f5e487] [cursor=pointer]
+            - button "REQ_20260905T211831Z_4633.md" [ref=f5e491] [cursor=pointer]
+            - button "REQ_20260905T220402Z_2630.md" [ref=f5e495] [cursor=pointer]
+            - button "REQ_20260905T220833Z_8065.md" [ref=f5e499] [cursor=pointer]
+            - button "REQ_20260905T225519Z_0315.md" [ref=f5e503] [cursor=pointer]
+            - button "REQ_20260906T120058Z_7286.md" [ref=f5e507] [cursor=pointer]
+            - button "REQ_20260906T120548Z_3566.md" [ref=f5e511] [cursor=pointer]
+            - button "REQ_20260906T200555Z_9299.md" [ref=f5e515] [cursor=pointer]
+            - button "REQ_20260907T014227Z_6916.md" [ref=f5e519] [cursor=pointer]
+            - button "REQ_20260907T020829Z_2848.md" [ref=f5e523] [cursor=pointer]
+            - button "REQ_20260907T025309Z_6245.md" [ref=f5e527] [cursor=pointer]

@@ -1,0 +1,242 @@
+- generic [ref=f1e1]:
+  - generic [ref=f1e4]:
+    - generic [ref=f1e7]:
+      - generic [ref=f1e8]:
+        - button "New session" [ref=f1e446] [cursor=pointer]
+        - button "Collapse sidebar" [ref=f1e475] [cursor=pointer]
+      - button "New session" [ref=f1e14] [cursor=pointer]:
+        - generic [ref=f1e478]: New Session
+      - generic [ref=f1e19]:
+        - generic [ref=f1e20]:
+          - generic [ref=f1e479]: Workspaces
+          - generic [ref=f1e481]:
+            - button "Search sessions" [ref=f1e482] [cursor=pointer]
+            - textbox "Search sessions..."
+          - generic [ref=f1e21]:
+            - button "View options" [ref=f1e487] [cursor=pointer]
+            - button "Add workspace" [ref=f1e22] [cursor=pointer]
+        - tree "Sessions" [ref=f1e491]:
+          - 'treeitem "Postman PR #101 — REQ_20260907T025309Z_6245" [ref=f1e494] [cursor=pointer]'
+          - generic [ref=f1e500]:
+            - treeitem ".dsh" [expanded] [ref=f1e502] [cursor=pointer]
+            - treeitem "New Session" [selected] [ref=f1e510] [cursor=pointer]
+            - treeitem "Мржим правильно 5min" [ref=f1e514] [cursor=pointer]:
+              - generic [ref=f1e516]: Мржим правильно
+              - generic [ref=f1e517]: 5min
+            - treeitem "Команда Астры 9min" [ref=f1e519] [cursor=pointer]:
+              - generic [ref=f1e521]: Команда Астры
+              - generic [ref=f1e522]: 9min
+            - treeitem "Современный редизайн страницы Postman 3h" [ref=f1e524] [cursor=pointer]:
+              - generic [ref=f1e526]: Современный редизайн страницы Postman
+              - generic [ref=f1e527]: 3h
+            - treeitem "Нужно сделать минимал 4h" [ref=f1e529] [cursor=pointer]:
+              - generic [ref=f1e531]: Нужно сделать минимал
+              - generic [ref=f1e532]: 4h
+            - button "Show 5 more sessions" [ref=f1e533] [cursor=pointer]
+          - treeitem "DEEPSEEK" [ref=f1e536] [cursor=pointer]
+          - treeitem "Ungrouped" [ref=f1e543] [cursor=pointer]
+      - generic [ref=f1e32]:
+        - button "Worktree tasks" [ref=f1e35] [cursor=pointer]
+        - generic [ref=f1e39]:
+          - button "Settings" [expanded] [ref=f1e550] [cursor=pointer]
+          - dialog "Settings" [ref=f1e558]:
+            - navigation [ref=f1e559]:
+              - generic [ref=f1e560]: Settings
+              - generic [ref=f1e561]:
+                - button "General" [ref=f1e562] [cursor=pointer]
+                - button "Models" [ref=f1e568] [cursor=pointer]
+                - button "Plugins" [ref=f1e573] [cursor=pointer]
+                - button "Agent presets" [ref=f1e577] [cursor=pointer]
+                - button "Команды" [ref=f1e584] [cursor=pointer]
+                - button "Plugin Market" [ref=f1e590] [cursor=pointer]
+                - button "Side card" [ref=f1e596] [cursor=pointer]
+                - button "Restart" [ref=f1e598] [cursor=pointer]
+            - generic [ref=f1e604]:
+              - generic [ref=f1e605]:
+                - button "Open configuration file" [ref=f1e609] [cursor=pointer]
+                - button "Close" [ref=f1e610] [cursor=pointer]
+              - generic [ref=f1e671]:
+                - banner [ref=f1e672]:
+                  - generic [ref=f1e673]:
+                    - heading "Команды" [level=2] [ref=f1e674]
+                    - paragraph [ref=f1e675]: Создавайте команды, участников и безопасные правила выполнения. Основные параметры просты, дополнительные открываются по мере необходимости.
+                  - button "↻ Обновить" [ref=f1e676] [cursor=pointer]
+                - tablist "Команды" [ref=f1e677]:
+                  - tab "Команды 0" [ref=f1e678] [cursor=pointer]:
+                    - text: Команды
+                    - generic [ref=f1e679]: "0"
+                  - tab "Участники 0" [selected] [ref=f1e680] [cursor=pointer]:
+                    - text: Участники
+                    - generic [ref=f1e681]: "0"
+                  - tab "Рецепты и данные" [ref=f1e682] [cursor=pointer]
+                - tabpanel "Участники 0" [ref=f1e787]:
+                  - generic [ref=f1e788]:
+                    - complementary "Список участников" [ref=f1e789]:
+                      - button "＋ Новый участник" [active] [ref=f1e790] [cursor=pointer]
+                      - generic [ref=f1e791]: Нет готовых участников.
+                    - main "Редактор участника" [ref=f1e792]:
+                      - region "Редактор участника" [ref=f1e793]:
+                        - generic [ref=f1e795]:
+                          - strong [ref=f1e796]: Новый участник
+                          - generic [ref=f1e797]: deepseek-official / deepseek-v4-flash
+                        - generic [ref=f1e798]:
+                          - heading "Основные параметры" [level=3] [ref=f1e799]
+                          - generic [ref=f1e800]:
+                            - generic [ref=f1e801]: Имя участника
+                            - textbox "Имя участника" [invalid] [ref=f1e802]
+                            - generic [ref=f1e803]: 0/120
+                            - generic [ref=f1e804]: Заполните это поле.
+                          - generic [ref=f1e805]:
+                            - generic [ref=f1e806]: Описание роли
+                            - textbox "Описание роли" [invalid] [ref=f1e807]
+                            - generic [ref=f1e808]: 0/50000
+                            - generic [ref=f1e809]: Заполните это поле.
+                          - generic [ref=f1e810]:
+                            - generic [ref=f1e811]:
+                              - generic [ref=f1e812]: Провайдер
+                              - combobox "Провайдер" [ref=f1e813]:
+                                - option "DeepSeek" [selected]
+                                - option "openai-codex"
+                            - generic [ref=f1e814]:
+                              - generic [ref=f1e815]: Модель
+                              - combobox "Модель" [ref=f1e816]:
+                                - option "DeepSeek-V4-Flash" [selected]
+                                - option "DeepSeek-V4-Pro"
+                                - option "DeepSeek-V4-Flash-Vision-Exp"
+                          - generic [ref=f1e817]:
+                            - generic [ref=f1e818]: Лимит выходных токенов
+                            - textbox "Лимит выходных токенов" [ref=f1e819]
+                        - group [ref=f1e820]:
+                          - generic "Надёжность и бюджет Запасная модель" [ref=f1e821] [cursor=pointer]:
+                            - generic [ref=f1e822]:
+                              - strong [ref=f1e823]: Надёжность и бюджет
+                              - generic [ref=f1e824]: Запасная модель
+                            - generic [aria-hidden] [ref=f1e825]: ⌄
+                          - option "—" [selected]
+                          - option "DeepSeek"
+                          - option "openai-codex"
+                          - option "—" [selected]
+                        - generic [ref=f1e826]:
+                          - heading "Режим вызова" [level=3] [ref=f1e827]
+                          - generic [ref=f1e828]:
+                            - generic [ref=f1e829]:
+                              - generic [ref=f1e830]: Режим вызова
+                              - combobox "Режим вызова" [ref=f1e831]:
+                                - option "Обычный участник" [selected]
+                                - option "Только по эскалации"
+                            - generic [ref=f1e832]:
+                              - generic [ref=f1e833]: Максимум вызовов за запуск
+                              - textbox "Максимум вызовов за запуск" [ref=f1e834]
+                          - generic [ref=f1e835] [cursor=pointer]:
+                            - checkbox "Исполнительные инструменты" [checked] [ref=f1e836]
+                            - generic [ref=f1e837]: Исполнительные инструменты
+                          - generic [ref=f1e838] [cursor=pointer]:
+                            - checkbox "Командное делегирование" [ref=f1e839]
+                            - generic [ref=f1e840]: Командное делегирование
+                        - group [ref=f1e841]:
+                          - generic "Разрешения инструментов Дополнительные параметры" [ref=f1e842] [cursor=pointer]:
+                            - generic [ref=f1e843]:
+                              - strong [ref=f1e844]: Разрешения инструментов
+                              - generic [ref=f1e845]: Дополнительные параметры
+                            - generic [aria-hidden] [ref=f1e846]: ⌄
+                        - group "Действия редактора" [ref=f1e847]:
+                          - button "Отменить изменения" [disabled] [ref=f1e848]
+                          - button "Сохранить" [disabled] [ref=f1e849]
+    - generic [ref=f1e53]:
+      - generic [ref=f1e56]:
+        - generic [ref=f1e61]: Into the Unknown
+        - generic [ref=f1e62]: Preview
+      - generic [ref=f1e63]:
+        - button "Choose workspace" [ref=f1e64] [cursor=pointer]:
+          - generic [ref=f1e68]: .dsh
+        - button "Standard mode" [ref=f1e73] [cursor=pointer]
+      - generic [ref=f1e83]:
+        - textbox "Describe what you want to build" [ref=f1e86]
+        - generic [ref=f1e87]:
+          - generic [ref=f1e88]:
+            - button "Commands" [ref=f1e89] [cursor=pointer]
+            - 'button "Access mode, current: Full access" [ref=f1e94] [cursor=pointer]':
+              - generic [ref=f1e100]: Full access
+            - button "New session on a fresh worktree off origin/main" [ref=f1e105] [cursor=pointer]:
+              - generic [ref=f1e108]: worktree
+          - generic [ref=f1e109]:
+            - 'button "Режим команды: Наследовать" [ref=f1e112] [cursor=pointer]':
+              - generic [ref=f1e114]: Наследовать
+              - generic [aria-hidden] [ref=f1e115]: ⌄
+            - button "Select model, current GPT-5.6 Luna, reasoning effort Max" [ref=f1e118] [cursor=pointer]:
+              - generic [ref=f1e119]: GPT-5.6 Luna
+              - generic [ref=f1e120]: Max
+            - button "Send message" [disabled] [ref=f1e123]
+    - generic [ref=f1e127]:
+      - generic [ref=f1e128]:
+        - generic: Details
+        - button "Close details" [ref=f1e129] [cursor=pointer]
+      - generic [ref=f1e132]: Click a tool row in the message flow to view its details
+  - generic:
+    - generic:
+      - generic [ref=f1e133]:
+        - button "Expand bottom panel" [ref=f1e134] [cursor=pointer]
+        - button "Collapse sidebar" [ref=f1e138] [cursor=pointer]
+      - generic [ref=f1e146]:
+        - generic [ref=f1e148]:
+          - generic "Files" [ref=f1e149] [cursor=pointer]:
+            - button "Close" [ref=f1e154]
+          - button "New tab" [ref=f1e158] [cursor=pointer]
+        - generic [ref=f1e164]:
+          - generic [ref=f1e165]:
+            - combobox "Workspace / Worktree" [ref=f1e167]:
+              - option "main · .dsh" [selected]
+              - option "implementation/agent-team-rpc-hotfix-v1 · agent-team-rpc-hotfix-v1"
+              - option "implementation/agent-team-mvp-v1 · dsh-agent-team-mvp-v1"
+              - option "implementation/agent-team-mvp-v1-r2 · dsh-agent-team-mvp-v1-r2"
+            - textbox "Search files by name…" [ref=f1e168]
+            - button "Refresh" [ref=f1e169] [cursor=pointer]
+            - button "Upload files" [ref=f1e172] [cursor=pointer]
+            - button "Upload folder" [ref=f1e176] [cursor=pointer]
+          - generic [ref=f1e180]:
+            - generic [ref=f1e181] [cursor=pointer]: .dsh
+            - button "_codex-backups" [ref=f1e186] [cursor=pointer]
+            - button ".agents" [ref=f1e191] [cursor=pointer]
+            - button ".git" [ref=f1e196] [cursor=pointer]
+            - button ".github" [ref=f1e201] [cursor=pointer]
+            - button ".playwright-cli" [ref=f1e206] [cursor=pointer]
+            - button ".playwright-mcp" [ref=f1e211] [cursor=pointer]
+            - button ".pytest_cache" [ref=f1e216] [cursor=pointer]
+            - button ".tmp-pi-ai-catalog" [ref=f1e221] [cursor=pointer]
+            - button ".tmp-skill-v12-inspect" [ref=f1e226] [cursor=pointer]
+            - button "attachments" [ref=f1e231] [cursor=pointer]
+            - button "backup" [ref=f1e236] [cursor=pointer]
+            - button "change-ledger" [ref=f1e241] [cursor=pointer]
+            - button "chatgpt-desktop-uia-bridge" [ref=f1e246] [cursor=pointer]
+            - button "diagnostics" [ref=f1e251] [cursor=pointer]
+            - button "docs" [ref=f1e256] [cursor=pointer]
+            - button "plugins" [ref=f1e261] [cursor=pointer]
+            - button "postman" [ref=f1e266] [cursor=pointer]
+            - button "profiles" [ref=f1e271] [cursor=pointer]
+            - button "sessions" [ref=f1e276] [cursor=pointer]
+            - button "storages" [ref=f1e281] [cursor=pointer]
+            - button "system" [ref=f1e286] [cursor=pointer]
+            - button "tools" [ref=f1e291] [cursor=pointer]
+            - button "WEB_POSTMAN_WP_006_extracted" [ref=f1e296] [cursor=pointer]
+            - button "WEB_POSTMAN_WP_006_REPAIR_01_extracted" [ref=f1e301] [cursor=pointer]
+            - button ".anonymous-user-id" [ref=f1e305] [cursor=pointer]
+            - button ".credentials.yaml" [ref=f1e309] [cursor=pointer]
+            - button ".gitattributes" [ref=f1e313] [cursor=pointer]
+            - button ".gitignore" [ref=f1e317] [cursor=pointer]
+            - button ".tmp-m1-m3-auth-settings.yaml" [ref=f1e321] [cursor=pointer]
+            - button ".tmp-m1-m3-auth.patch.yml" [ref=f1e325] [cursor=pointer]
+            - button "AGENTS.md" [ref=f1e329] [cursor=pointer]
+            - button "codex-oauth-runtime.log" [ref=f1e333] [cursor=pointer]
+            - button "codex-oauth.json" [ref=f1e337] [cursor=pointer]
+            - button "GPT-CODEX-AUTH.md" [ref=f1e341] [cursor=pointer]
+            - button "handoff-QmRZCP.md" [ref=f1e345] [cursor=pointer]
+            - button "lifecycle-settings.png" [ref=f1e349] [cursor=pointer]
+            - button "LUNA_IMPLEMENTATION_PROMPT.md" [ref=f1e353] [cursor=pointer]
+            - button "postman-check.html" [ref=f1e357] [cursor=pointer]
+            - button "README.md" [ref=f1e361] [cursor=pointer]
+            - button "REPO_POLICY.md" [ref=f1e365] [cursor=pointer]
+            - button "REQ_20260906T120548Z_3566.md" [ref=f1e369] [cursor=pointer]
+            - button "settings.yaml" [ref=f1e373] [cursor=pointer]
+            - button "tokenledger.sqlite" [ref=f1e377] [cursor=pointer]
+            - button "tokenledger.sqlite-shm" [ref=f1e381] [cursor=pointer]
+            - button "tokenledger.sqlite-wal" [ref=f1e385] [cursor=pointer]

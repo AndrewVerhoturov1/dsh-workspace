@@ -1,0 +1,63 @@
+- generic [ref=f4e1]:
+  - generic [ref=f4e4]:
+    - generic [ref=f4e7]:
+      - button "Open sidebar" [ref=f4e119] [cursor=pointer]
+      - button "New session" [ref=f4e41] [cursor=pointer]
+      - generic [ref=f4e47]:
+        - button "Add workspace" [ref=f4e61] [cursor=pointer]
+        - button "Search sessions" [ref=f4e125] [cursor=pointer]
+      - generic [ref=f4e69]:
+        - button "Worktree tasks" [ref=f4e72] [cursor=pointer]
+        - button [ref=f4e129] [cursor=pointer]
+    - generic [ref=f4e92]:
+      - generic [ref=f4e95]:
+        - generic [ref=f4e100]: Into the Unknown
+        - generic [ref=f4e101]: Preview
+      - generic [ref=f4e102]:
+        - button "Choose workspace" [ref=f4e103] [cursor=pointer]:
+          - generic [ref=f4e106]: .dsh
+        - button "Standard mode" [ref=f4e139] [cursor=pointer]
+      - generic [ref=f4e111]:
+        - textbox "Describe what you want to build" [active] [ref=f4e147]
+        - generic [ref=f4e115]:
+          - generic [ref=f4e116]:
+            - button "Commands" [ref=f4e148] [cursor=pointer]
+            - 'button "Access mode, current: Full access" [ref=f4e153] [cursor=pointer]':
+              - generic [ref=f4e159]: Full access
+            - button "New session on a fresh worktree off origin/main" [ref=f4e164] [cursor=pointer]:
+              - generic [ref=f4e167]: worktree
+          - generic [ref=f4e117]:
+            - 'button "Режим команды: Наследовать" [ref=f4e170] [cursor=pointer]':
+              - generic [ref=f4e172]: Наследовать
+              - generic [aria-hidden] [ref=f4e173]: ⌄
+            - button "Select model, current DeepSeek-V4-Flash, reasoning effort High" [ref=f4e176] [cursor=pointer]:
+              - generic [ref=f4e177]: DeepSeek-V4-Flash
+              - generic [ref=f4e178]: High
+            - button "Send message" [disabled] [ref=f4e181]
+    - generic [ref=f4e185]:
+      - generic [ref=f4e186]:
+        - generic: Details
+        - button "Close details" [ref=f4e187] [cursor=pointer]
+      - generic [ref=f4e190]: Click a tool row in the message flow to view its details
+  - generic:
+    - generic:
+      - generic [ref=f4e191]:
+        - button "Expand bottom panel" [ref=f4e192] [cursor=pointer]
+        - button "Collapse sidebar" [ref=f4e196] [cursor=pointer]
+      - generic [ref=f4e204]:
+        - generic [ref=f4e206]:
+          - generic "Files" [ref=f4e207] [cursor=pointer]:
+            - button "Close" [ref=f4e212]
+          - button "New tab" [ref=f4e216] [cursor=pointer]
+        - generic [ref=f4e222]:
+          - generic [ref=f4e223]:
+            - combobox "Workspace / Worktree" [ref=f4e225]:
+              - option "main · .dsh"
+              - option "implementation/agent-team-rpc-hotfix-v1 · agent-team-rpc-hotfix-v1" [selected]
+              - option "implementation/agent-team-mvp-v1 · dsh-agent-team-mvp-v1"
+              - option "implementation/agent-team-mvp-v1-r2 · dsh-agent-team-mvp-v1-r2"
+            - textbox "Search files by name…" [ref=f4e226]
+            - button "Refresh" [ref=f4e227] [cursor=pointer]
+            - button "Upload files" [ref=f4e230] [cursor=pointer]
+            - button "Upload folder" [ref=f4e234] [cursor=pointer]
+          - generic [ref=f4e238]: agent-team-rpc-hotfix-v1
