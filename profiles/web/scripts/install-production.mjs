@@ -10,10 +10,17 @@ const managedRoot = resolve(repositoryRoot, 'plugins/dsh-better-sidebar-andrew')
 const agentTeamsPackageName = 'dsh-agent-teams-nanmicoder-by-andrew'
 const forbiddenAgentTeamsNames = ['dsh-agent-team-by-andrew', '@nanmicoder/dsh-agent-teams']
 const packageManager = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
+const agentTeamsManagedRoot = resolve(repositoryRoot, `plugins/${agentTeamsPackageName}`)
+const agentTeamsLink = `link:../../plugins/${agentTeamsPackageName}`
 const canonicalManagedRoot = realpathSync(managedRoot)
+const canonicalAgentTeamsRoot = realpathSync(agentTeamsManagedRoot)
 
 if (canonicalManagedRoot.includes('.dsh-worktrees')) {
   throw new Error(`managed Better Sidebar source must be in the merged repository: ${canonicalManagedRoot}`)
+}
+
+if (canonicalAgentTeamsRoot.includes('.dsh-worktrees')) {
+  throw new Error(`managed AgentTeams source must be in the merged repository: ${canonicalAgentTeamsRoot}`)
 }
 
 function runInstall(cwd, label) {
@@ -28,6 +35,7 @@ function runInstall(cwd, label) {
 }
 
 runInstall(managedRoot, 'managed Better Sidebar install')
+runInstall(agentTeamsManagedRoot, 'managed AgentTeams install')
 
 const installedPackagePath = resolve(profileRoot, 'node_modules/dsh-better-sidebar')
 if (existsSync(installedPackagePath)) {
@@ -56,6 +64,16 @@ for (const forbiddenName of forbiddenAgentTeamsNames) {
   if (profileBundles.includes(forbiddenName) || Object.hasOwn(profileDependencies, forbiddenName)) {
     throw new Error(`web profile still references the forbidden AgentTeams identity: ${forbiddenName}`)
   }
+}
+
+const agentTeamsDependencyLink = profileDependencies[agentTeamsPackageName]
+if (agentTeamsDependencyLink !== agentTeamsLink) {
+  throw new Error(`unexpected AgentTeams link: ${agentTeamsDependencyLink ?? '<missing>'}`)
+}
+
+const declaredAgentTeamsRoot = resolve(profileRoot, agentTeamsDependencyLink.slice('link:'.length))
+if (declaredAgentTeamsRoot !== agentTeamsManagedRoot) {
+  throw new Error(`managed AgentTeams declaration resolved unexpectedly: ${declaredAgentTeamsRoot}`)
 }
 
 const link = profilePackage.dependencies?.['dsh-better-sidebar']
@@ -107,6 +125,10 @@ if (!existsSync(agentTeamsPackagePath)) {
 }
 
 const agentTeamsPackageRoot = realpathSync(agentTeamsPackagePath)
+if (agentTeamsPackageRoot !== canonicalAgentTeamsRoot || agentTeamsPackageRoot.includes('.dsh-worktrees')) {
+  throw new Error(`installed AgentTeams package resolved outside merged repository: ${agentTeamsPackageRoot}`)
+}
+
 const agentTeamsPackageJsonPath = resolve(agentTeamsPackageRoot, 'package.json')
 const agentTeamsPackageJson = JSON.parse(readFileSync(agentTeamsPackageJsonPath, 'utf8'))
 if (agentTeamsPackageJson.name !== agentTeamsPackageName || agentTeamsPackageJson.private !== true) {
@@ -135,9 +157,9 @@ for (const forbiddenName of forbiddenAgentTeamsNames) {
   }
 }
 
-const agentTeamsHostSource = readFileSync(agentTeamsHostMain, 'utf8')
-if (!agentTeamsHostSource.includes(`export const name = '${agentTeamsPackageName}'`)) {
-  throw new Error(`installed AgentTeams host entrypoint does not export ${agentTeamsPackageName}`)
+const loadedAgentTeams = await import(`${pathToFileURL(agentTeamsHostMain).href}?production-install`)
+if (loadedAgentTeams.name !== agentTeamsPackageName || typeof loadedAgentTeams.apply !== 'function') {
+  throw new Error('installed AgentTeams host plugin did not load')
 }
 
 for (const forbiddenName of forbiddenAgentTeamsNames) {
@@ -146,4 +168,4 @@ for (const forbiddenName of forbiddenAgentTeamsNames) {
   }
 }
 
-console.log(`production install verified: Better Sidebar ${hostMain}; AgentTeams ${agentTeamsHostMain}; client ${agentTeamsClientMain}`)
+console.log(`production install verified: Better Sidebar ${hostMain}; AgentTeams ${agentTeamsHostMain} (loaded ${loadedAgentTeams.name}); client ${agentTeamsClientMain}`)
