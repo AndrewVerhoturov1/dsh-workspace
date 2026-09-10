@@ -20,7 +20,8 @@
         "dsh-tokenledger",
         "dsh-branchline",
         "dsh-agent-team-by-andrew",
-        "dsh-postman-harness"
+        "dsh-postman-harness",
+        "dsh-ptc-plus"
       ]
     }
   },
@@ -34,6 +35,7 @@
     "dsh-flowglass-by-andrew": "link:../../plugins/dsh-flowglass-by-andrew",
     "dsh-notification": "^0.1.1",
     "dsh-postman-harness": "link:../../plugins/dsh-postman-harness",
+    "dsh-ptc-plus": "github:muyuanjin/dsh-ptc-plus#e850ae875a7f13bdfb8de10a7060966783f31b8b",
     "dsh-restart-web": "link:../../plugins/dsh-restart-web",
     "dsh-tokenledger": "^0.1.0",
     "dshmarket": "^1.19.0"
