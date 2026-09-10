@@ -1,0 +1,7 @@
+node_modules/
+lib/
+!lib/
+!lib/**
+*.tsbuildinfo
+.DS_Store
+.agent-teams/
