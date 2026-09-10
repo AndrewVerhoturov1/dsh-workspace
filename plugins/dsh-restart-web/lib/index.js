@@ -8,7 +8,7 @@ const { spawn } = require('node:child_process')
 
 const name = 'dsh-restart-web'
 const inject = ['webServer']
-const CANONICAL_PORT = 4173
+const CANONICAL_PORT = 3080
 const CANONICAL_PROFILE = 'web'
 const CANONICAL_WORKING_DIRECTORY = process.env.DSH_WORKING_DIRECTORY || 'C:\\Users\\andre\\.dsh'
 const LAUNCHER_ROOT = process.env.DSH_LAUNCHER_ROOT || path.join(

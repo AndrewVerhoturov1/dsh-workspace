@@ -21,14 +21,44 @@ window.__ModuleLoader__.load({
 			var st = react.useState("idle");
 			var current = st[0];
 			var setState = st[1];
+			function waitForReady(reload) {
+				var startedAt = Date.now();
+				var sawOffline = false;
+				function probe() {
+					fetch("/?dsh-restart-probe=" + Date.now(), { cache: "no-store" }).then(function (response) {
+						if (!response.ok) throw new Error("Harness is not ready");
+						return response.text();
+					}).then(function (html) {
+						var assets = html.match(/\/plugins\/[^"' ]+\/client\.js\?rev=[^"' ]+/g) || [];
+						if (!assets.length) throw new Error("Harness plugin manifest is not ready");
+						return Promise.all(assets.map(function (asset) {
+							return fetch(asset + "&dsh-restart-probe=" + Date.now(), { cache: "no-store" });
+						}));
+					}).then(function (responses) {
+						if (responses.some(function (response) { return !response.ok; })) throw new Error("Harness plugins are not ready");
+						if (sawOffline || Date.now() - startedAt >= 15000) {
+							setTimeout(reload, 750);
+							return;
+						}
+						setTimeout(probe, 750);
+					}).catch(function () {
+						sawOffline = true;
+						setTimeout(probe, 1000);
+					});
+				}
+				setTimeout(probe, 1500);
+			}
 			function doRestart() {
 				setState("restarting");
-				fetch("/api/dsh-restart", { method: "POST" }).catch(function () {}).then(function () {
-					setTimeout(function () { try { window.location.reload(); } catch (_e) {} }, 5000);
+				fetch("/api/dsh-restart", { method: "POST" }).then(function (response) {
+					if (!response.ok) throw new Error("Restart request failed");
+					waitForReady(function () { try { window.location.reload(); } catch (_e) {} });
+				}).catch(function () {
+					setState("idle");
 				});
 			}
 			var card = h("div", { className: "dsh-rst-card" }, h("div", { className: "dsh-rst-card-row" }, h("span", { className: "dsh-rst-card-txt" }, "DeepSeek Harness process"), h("button", { className: "dsh-rst-btn", onClick: function () { setState("confirming"); } }, "Restart")));
-			if (current === "restarting") return h("div", { className: "dsh-rst-page" }, h("h3", null, "Restart DeepSeek Harness"), h("div", { className: "dsh-rst-card" }, h("span", { className: "dsh-rst-card-txt" }, h("span", { className: "dsh-rst-spin" }, "↻"), " Restarting... the page will refresh in 5 seconds")));
+			if (current === "restarting") return h("div", { className: "dsh-rst-page" }, h("h3", null, "Restart DeepSeek Harness"), h("div", { className: "dsh-rst-card" }, h("span", { className: "dsh-rst-card-txt" }, h("span", { className: "dsh-rst-spin" }, "↻"), " Restarting... waiting for the server and plugins to become ready")));
 			if (current === "confirming") return h("div", { className: "dsh-rst-page" }, h("h3", null, "Restart DeepSeek Harness"), h("p", null, "Click the Restart button below to restart the DSH process."), card, h("div", { className: "dsh-rst-confirm" }, h("p", null, "Restart DeepSeek Harness now?"), h("div", { className: "dsh-rst-confirm-btns" }, h("button", { className: "dsh-rst-go", onClick: doRestart }, "Confirm restart"), h("button", { onClick: function () { setState("idle"); } }, "Cancel"))));
 			return h("div", { className: "dsh-rst-page" }, h("h3", null, "Restart DeepSeek Harness"), h("p", null, "Click the Restart button below to restart the DSH process."), card);
 		}
