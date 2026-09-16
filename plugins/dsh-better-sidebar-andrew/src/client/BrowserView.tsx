@@ -2,7 +2,7 @@
  * The built-in browser tab: an address bar plus a sandboxed iframe.
  *
  * Security model (see browser.ts + the sandbox tokens below): the iframe is
- * ALWAYS sandboxed without `allow-same-origin` (opaque origin — the visited
+ * ALWAYS sandboxed with `allow-same-origin` (the visited page keeps its own
  * page can never sit on the GUI's origin, read its storage, or reach
  * /sidebar/api) and without `allow-top-navigation` (a page must not hijack
  * the GUI). The address bar only accepts http(s) and refuses loopback /
@@ -34,14 +34,15 @@ import type { TabComponentProps } from './service.ts'
 import css from './sidebar.module.css'
 
 /**
- * The browser iframe sandbox tokens. NO allow-same-origin (opaque origin —
- * no GUI storage/API access), NO allow-top-navigation (a browsed page must
- * not hijack the GUI). allow-forms/allow-popups/allow-downloads/allow-modals
+ * The browser iframe sandbox tokens. `allow-same-origin` restores the
+ * visited site's own origin (not the GUI origin), so its normal same-origin
+ * requests and CORS behavior continue to work. NO allow-top-navigation (a
+ * browsed page must not hijack the GUI). allow-forms/allow-popups/allow-downloads/allow-modals
  * keep login flows working; allow-popups-to-escape-sandbox lets OAuth
  * popups open as normal tabs (they are cross-origin to the GUI either way).
  */
 export const BROWSER_IFRAME_SANDBOX =
-  'allow-scripts allow-forms allow-popups allow-downloads allow-modals allow-popups-to-escape-sandbox'
+  'allow-same-origin allow-scripts allow-forms allow-popups allow-downloads allow-modals allow-popups-to-escape-sandbox'
 
 export function BrowserView(props: TabComponentProps) {
   const { store, tab } = props

@@ -1,0 +1,14 @@
+﻿vssadmin 1.1 - Программа командной строки для администрирования службы теневого копирования томов
+(C) Корпорация Майкрософт (Microsoft Corportion), 2001-2013.
+
+Error: Обнаружена непредвиденная ошибка компонента службы теневого копирования томов.
+Дополнительные сведения см. в журнале событий приложения.
+
+LASTEXITCODE=2
+Command failed with exit code 2
+C:\Users\andre\.dsh\windows-diagnostic-admin\Collect-WindowsDiagnosticFollowup.ps1:17 знак:19
++   if($code -ne 0){throw "Command failed with exit code $code"}
++                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : OperationStopped: (Command failed with exit code 2:String) [], RuntimeException
+    + FullyQualifiedErrorId : Command failed with exit code 2
+ 

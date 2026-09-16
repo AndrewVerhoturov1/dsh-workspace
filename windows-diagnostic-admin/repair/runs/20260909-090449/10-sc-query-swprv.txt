@@ -1,0 +1,4 @@
+[SC] EnumQueryServicesStatus:OpenService: ошибка: 1060:
+
+Указанная служба не установлена.
+

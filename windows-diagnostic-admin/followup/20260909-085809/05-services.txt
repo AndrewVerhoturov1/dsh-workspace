@@ -1,0 +1,32 @@
+﻿
+
+Name        : AppXSvc
+DisplayName : Служба развертывания AppX (AppXSVC)
+Status      : Running
+StartType   : Manual
+CanStop     : True
+CanShutdown : True
+
+Name        : ClipSVC
+DisplayName : Служба лицензий клиента (ClipSVC)
+Status      : Stopped
+StartType   : Manual
+CanStop     : False
+CanShutdown : False
+
+Name        : StateRepository
+DisplayName : Служба репозитория состояний
+Status      : Running
+StartType   : Manual
+CanStop     : True
+CanShutdown : True
+
+Name        : VSS
+DisplayName : Теневое копирование тома
+Status      : Running
+StartType   : Manual
+CanStop     : True
+CanShutdown : True
+
+
+

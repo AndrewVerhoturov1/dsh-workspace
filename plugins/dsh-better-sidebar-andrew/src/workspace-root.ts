@@ -10,6 +10,11 @@ export interface SidebarWorkspaceTarget {
   current: boolean
 }
 
+/** Compare physical paths using the host filesystem's case rules. */
+export function sameWorkspacePath(left: string, right: string, platform: NodeJS.Platform = process.platform): boolean {
+  return platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right
+}
+
 /**
  * Resolve a UI-selected filesystem checkout without performing `git checkout`.
  * The requested path must match a real entry returned by `git worktree list
@@ -26,7 +31,7 @@ export async function resolveWorkspaceCwd(baseCwd: string, requested?: string): 
   }
   for (const entry of entries) {
     const entryReal = await realpath(entry.path).catch(() => undefined)
-    if (entryReal !== undefined && entryReal.toLowerCase() === requestedReal.toLowerCase()) return entryReal
+    if (entryReal !== undefined && sameWorkspacePath(entryReal, requestedReal)) return entryReal
   }
   throw new SidebarError('forbidden', 'selected path is not a linked git worktree', 403)
 }
@@ -41,7 +46,7 @@ export async function listWorkspaceTargets(baseCwd: string): Promise<SidebarWork
     return {
       path,
       branch: entry.branch,
-      current: path.toLowerCase() === rootReal.toLowerCase(),
+      current: sameWorkspacePath(path, rootReal),
     }
   }))
 }

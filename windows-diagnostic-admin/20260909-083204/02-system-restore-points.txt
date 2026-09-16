@@ -1,0 +1,8 @@
+Get-ComputerRestorePoint: C:\Users\andre\.dsh\windows-diagnostic-admin\Collect-WindowsDiagnosticAdmin.ps1:40
+Line |
+  40 |  … ия' '02-system-restore-points.txt' { Get-ComputerRestorePoint | Forma …
+     |                                         ~~~~~~~~~~~~~~~~~~~~~~~~
+     | The term 'Get-ComputerRestorePoint' is not recognized as a name of a cmdlet, function, script file, or
+     | executable program. Check the spelling of the name, or if a path was included, verify that the path is correct
+     | and try again.
+

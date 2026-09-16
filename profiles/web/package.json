@@ -19,21 +19,24 @@
         "dsh-notification",
         "dsh-tokenledger",
         "dsh-branchline",
-        "dsh-agent-team-by-andrew",
-        "dsh-postman-harness"
+        "dsh-postman-harness",
+        "dsh-ptc-plus"
       ]
     }
   },
   "dependencies": {
     "@anionex/dsh-turn-rewind": "^0.1.2",
+    "@deepseek-ai/dsh-client-ui-primitives": "0.1.1-rc.2",
     "@deepseek-ai/dsh-mcp-client": "0.1.1-rc.2",
-    "dsh-agent-team-by-andrew": "file:C:/Users/andre/AppData/Local/Temp/dsh-agent-team-by-andrew-pack/dsh-agent-team-by-andrew-1.0.1-andrew.1.tgz",
+    "dsh-agent-team-by-andrew": "link:../../plugins/dsh-agent-team-by-andrew",
+    "dsh-agent-teams-nanmicoder-by-andrew": "file:D:/DeepSeekHarness-Recovered/vendor/dsh-agent-teams-nanmicoder-by-andrew-0.1.10-andrew.1.tgz",
     "dsh-better-sidebar": "link:../../plugins/dsh-better-sidebar-andrew",
     "dsh-branchline": "link:D:/DEEPSEEK/dsh-branchline",
     "dsh-client-auto-continue": "^0.8.1",
     "dsh-flowglass-by-andrew": "link:../../plugins/dsh-flowglass-by-andrew",
     "dsh-notification": "^0.1.1",
     "dsh-postman-harness": "link:../../plugins/dsh-postman-harness",
+    "dsh-ptc-plus": "0.3.2",
     "dsh-restart-web": "link:../../plugins/dsh-restart-web",
     "dsh-tokenledger": "^0.1.0",
     "dshmarket": "^1.19.0"

@@ -1,8 +1,9 @@
 /**
  * Sandbox-contract tests for the two built-in web surfaces (HTML preview
- * iframe and the browser tab iframe). The iframe sandbox — opaque origin,
- * no allow-same-origin, no top-navigation — is the PRIMARY security
- * boundary of both features; these tests pin the exact attribute so a
+ * iframe and the browser tab iframe). The iframe sandbox — no GUI
+ * same-origin access, no top-navigation — is the PRIMARY security boundary
+ * of both features; the browser keeps the visited site's own origin so its
+ * same-origin/CORS behavior works. These tests pin the exact attribute so a
  * refactor cannot silently widen it. The side card settings can drop the
  * sandbox per-feature (warned); those paths render the warning bar and no
  * sandbox attribute.
@@ -133,7 +134,9 @@ describe('browser tab iframe sandbox', () => {
     const iframe = /<iframe[^>]*>/.exec(html)?.[0]
     expect(iframe).toBeDefined()
     expect(iframe).toContain(`sandbox="${BROWSER_IFRAME_SANDBOX}"`)
-    expect(BROWSER_IFRAME_SANDBOX).not.toContain('allow-same-origin')
+    // The visited page keeps its own origin so normal same-origin/CORS
+    // requests work; the parent GUI remains a different origin.
+    expect(BROWSER_IFRAME_SANDBOX).toContain('allow-same-origin')
     expect(BROWSER_IFRAME_SANDBOX).not.toContain('allow-top-navigation')
     expect(iframe).toContain('src="https://example.com/"')
     expect(iframe).toContain('referrerPolicy="no-referrer"')

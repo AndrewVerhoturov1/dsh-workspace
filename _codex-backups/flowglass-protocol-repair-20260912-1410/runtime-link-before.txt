@@ -1,0 +1,8 @@
+Flowglass protocol alias before repair
+path: C:\Users\Andrew\.dsh\plugins\dsh-flowglass-by-andrew\node_modules\@deepseek-ai\dsh-typert-protocol-current
+linkType: Junction
+target: C:\Users\Andrew\.dsh\plugins\dsh-better-sidebar-andrew\node_modules\.pnpm\node_modules\@deepseek-ai\dsh-typert-protocol
+resolvedTarget: C:\Users\Andrew\.dsh\plugins\dsh-better-sidebar-andrew\node_modules\.pnpm\@deepseek-ai+dsh-typert-pro_7b9daeef4cc7ed22295359e08653f7ec\node_modules\@deepseek-ai\dsh-typert-protocol
+packageVersion: 0.1.1-rc.1
+canonicalProfilePath: C:\Users\Andrew\.dsh\profiles\node_modules\@deepseek-ai\dsh-typert-protocol
+canonicalResolvedTarget: C:\Users\Andrew\AppData\Roaming\npm\node_modules\@deepseek-ai\dsh\node_modules\@deepseek-ai\dsh-typert-protocol

@@ -9,6 +9,19 @@ function leafName(path: string): string {
   return at === -1 ? trimmed : trimmed.slice(at + 1)
 }
 
+function isWindowsHost(): boolean {
+  if (typeof navigator === 'undefined') return false
+  const withUserAgentData = navigator as Navigator & { userAgentData?: { platform?: string } }
+  const platform = withUserAgentData.userAgentData?.platform ?? navigator.platform
+  return platform.toLowerCase().startsWith('win')
+}
+
+function sameWorkspacePath(left: string, right: string): boolean {
+  if (!isWindowsHost()) return left === right
+  return left.replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase()
+    === right.replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase()
+}
+
 export function useWorkspaceRoot(store: SidebarStore): string | undefined {
   return useSyncExternalStore(
     useCallback(listener => store.subscribe(listener), [store]),
@@ -37,7 +50,7 @@ export function WorkspaceTargetSelect(props: { scope: SessionScope; store: Sideb
     void api.gitWorktrees({ sessionId: scope.sessionId, cwd: scope.cwd }, controller.signal).then(listed => {
       setWorktrees(listed)
       setError(null)
-      if (selected !== undefined && !listed.some(entry => !entry.current && entry.path === selected)) setWorkspaceRoot(store, undefined)
+      if (selected !== undefined && !listed.some(entry => !entry.current && sameWorkspacePath(entry.path, selected))) setWorkspaceRoot(store, undefined)
     }).catch(reason => {
       if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : String(reason))
     })

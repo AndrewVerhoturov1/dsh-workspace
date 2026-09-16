@@ -7,12 +7,23 @@ function normalizedPath(value: string): string {
   return normalized.replace(/\/+$/, '')
 }
 
+function isWindowsHost(): boolean {
+  if (typeof navigator === 'undefined') return false
+  const withUserAgentData = navigator as Navigator & { userAgentData?: { platform?: string } }
+  const platform = withUserAgentData.userAgentData?.platform ?? navigator.platform
+  return platform.toLowerCase().startsWith('win')
+}
+
 /** True when `path` is the root itself or a descendant of `root`. */
 function containsPath(root: string, path: string): boolean {
   const normalizedRoot = normalizedPath(root)
   const normalizedPathValue = normalizedPath(path)
-  return normalizedPathValue.toLowerCase() === normalizedRoot.toLowerCase()
-    || normalizedPathValue.toLowerCase().startsWith(`${normalizedRoot.toLowerCase()}/`)
+  if (isWindowsHost()) {
+    const comparableRoot = normalizedRoot.toLowerCase()
+    const comparablePath = normalizedPathValue.toLowerCase()
+    return comparablePath === comparableRoot || comparablePath.startsWith(`${comparableRoot}/`)
+  }
+  return normalizedPathValue === normalizedRoot || normalizedPathValue.startsWith(`${normalizedRoot}/`)
 }
 
 /**

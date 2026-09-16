@@ -1,0 +1,19 @@
+ACL backup for D:\DeepSeekHarness-Recovered root only
+Created: 2026-09-12
+This report contains ACL metadata only; no OAuth or other secret contents.
+Owner: DESKTOP-DUJMM2G\Andrew
+Group: DESKTOP-DUJMM2G\Отсутствует
+SDDL: O:S-1-5-21-856363642-1655192833-3733996331-1001G:S-1-5-21-856363642-1655192833-3733996331-513D:AI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;S-1-5-21-856363642-1655192833-3733996331-1001)(A;ID;FA;;;BA)(A;OICIIOID;GA;;;BA)(A;ID;FA;;;SY)(A;OICIIOID;GA;;;SY)(A;ID;0x1301bf;;;AU)(A;OICIIOID;SDGXGWGR;;;AU)(A;ID;0x1200a9;;;BU)(A;OICIIOID;GXGR;;;BU)(A;OICIID;FA;;;WD)
+Access rules captured before change:
+- NT AUTHORITY\СИСТЕМА | FullControl | Allow | inherited=False | inheritance=ContainerInherit, ObjectInherit | propagation=None
+- BUILTIN\Администраторы | FullControl | Allow | inherited=False | inheritance=ContainerInherit, ObjectInherit | propagation=None
+- DESKTOP-DUJMM2G\Andrew | FullControl | Allow | inherited=False | inheritance=ContainerInherit, ObjectInherit | propagation=None
+- BUILTIN\Администраторы | FullControl | Allow | inherited=True | inheritance=None | propagation=None
+- BUILTIN\Администраторы | 268435456 | Allow | inherited=True | inheritance=ContainerInherit, ObjectInherit | propagation=InheritOnly
+- NT AUTHORITY\СИСТЕМА | FullControl | Allow | inherited=True | inheritance=None | propagation=None
+- NT AUTHORITY\СИСТЕМА | 268435456 | Allow | inherited=True | inheritance=ContainerInherit, ObjectInherit | propagation=InheritOnly
+- NT AUTHORITY\Прошедшие проверку | Modify, Synchronize | Allow | inherited=True | inheritance=None | propagation=None
+- NT AUTHORITY\Прошедшие проверку | -536805376 | Allow | inherited=True | inheritance=ContainerInherit, ObjectInherit | propagation=InheritOnly
+- BUILTIN\Пользователи | ReadAndExecute, Synchronize | Allow | inherited=True | inheritance=None | propagation=None
+- BUILTIN\Пользователи | -1610612736 | Allow | inherited=True | inheritance=ContainerInherit, ObjectInherit | propagation=InheritOnly
+- Все | FullControl | Allow | inherited=True | inheritance=ContainerInherit, ObjectInherit | propagation=None

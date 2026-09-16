@@ -1,7 +1,8 @@
 /**
  * Browser address-bar policy tests: only http(s) URLs may be navigated,
- * loopback addresses and the GUI's own origin are refused outright. The
- * iframe sandbox (opaque origin) is the primary security boundary; this
+ * loopback addresses, including the GUI's own origin, are refused outright.
+ * The iframe sandbox keeps the visited site's own origin while remaining
+ * separate from the GUI; it is the primary security boundary. This
  * policy is the address-bar gate on top of it.
  */
 import { describe, expect, it } from 'vitest'
@@ -43,17 +44,12 @@ describe('normalizeBrowserUrl', () => {
     }
   })
 
-  it('allows the GUI\'s own origin (the sandbox keeps it opaque like any site)', () => {
-    // The user may browse the GUI itself in the sidebar; its host is
-    // loopback, so the self check must win BEFORE the loopback gate.
-    expect(normalizeBrowserUrl('http://127.0.0.1:3080/sidebar', SELF)).toEqual({
-      kind: 'ok', url: 'http://127.0.0.1:3080/sidebar',
-    })
-    expect(normalizeBrowserUrl('http://127.0.0.1:3080/', SELF)).toEqual({
-      kind: 'ok', url: 'http://127.0.0.1:3080/',
-    })
-    // A different port of the same loopback host is NOT the GUI origin and
-    // stays blocked.
+  it('refuses the GUI\'s own origin as a local address', () => {
+    // The browser sandbox now keeps the visited site's own origin. Allowing
+    // the GUI origin here would let a page regain access to the GUI API.
+    expect(normalizeBrowserUrl('http://127.0.0.1:3080/sidebar', SELF)).toEqual({ kind: 'blocked', reason: 'loopback' })
+    expect(normalizeBrowserUrl('http://127.0.0.1:3080/', SELF)).toEqual({ kind: 'blocked', reason: 'loopback' })
+    // A different port of the same loopback host stays blocked as before.
     expect(normalizeBrowserUrl('http://127.0.0.1:9999/', SELF)).toEqual({ kind: 'blocked', reason: 'loopback' })
   })
 

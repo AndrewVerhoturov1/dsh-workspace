@@ -3,14 +3,13 @@
  * an http(s) URL, and refuse destinations that would be dangerous to embed
  * in the sidebar iframe. Kept dependency-free so it is unit-testable.
  *
- * The iframe sandbox (opaque origin, no allow-same-origin / top-navigation)
+ * The iframe sandbox (no top-navigation and no GUI same-origin access)
  * is the primary security boundary; this module is the address-bar gate on
  * top of it: only http/https may be navigated, and loopback addresses are
- * refused so a browsed page cannot probe local services by user action.
- * The GUI's OWN origin is explicitly ALLOWED — the user may open the GUI
- * itself in the sidebar (debugging, mirroring); the sandbox still renders
- * it in an opaque origin with no same-origin privileges, exactly like any
- * other site.
+ * refused so a browsed page cannot probe local services by user action. The
+ * sandbox keeps the visited page's own origin (`allow-same-origin`) so
+ * ordinary pages do not lose their same-origin/CORS behavior; the parent GUI
+ * remains a different origin.
  */
 
 /** Why a navigation attempt was refused. */
@@ -65,9 +64,9 @@ export function isLoopbackHostname(hostname: string): boolean {
 /**
  * Normalize one address-bar input against the navigation policy.
  * @param input - raw user text.
- * @param selfOrigin - the GUI's own origin (window.location.origin). The GUI
- * itself may be browsed in the sidebar (the sandbox keeps it opaque), so it
- * is let through BEFORE the loopback check — its host is normally loopback.
+ * @param selfOrigin - retained for the caller's existing API shape. The GUI's
+ * own origin is not exempt from the loopback gate: allowing it would put a
+ * same-origin page inside the sidebar and defeat the browser isolation.
  */
 /** Schemes that must never reach the iframe, even without `//` (javascript:,
  *  data:, file:, ...). Host:port lookalikes (example.com:8080) are NOT here —
@@ -105,15 +104,10 @@ export function normalizeBrowserUrl(input: string, selfOrigin: string): BrowserN
   // scheme (e.g. ftp://, ws:// — which carry `//` and skip the list) is
   // refused here.
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return { kind: 'blocked', reason: 'scheme' }
-  // The GUI's own origin is ALLOWED (the user may browse the GUI itself in
-  // the sidebar; the sandbox renders it in an opaque origin like any other
-  // site). It must be checked before the loopback gate because its host is
-  // normally loopback.
-  try {
-    if (url.origin === new URL(selfOrigin).origin) return { kind: 'ok', url: url.href }
-  } catch {
-    // Unparsable selfOrigin (never in practice): fall through to the loopback gate.
-  }
+  // `selfOrigin` is intentionally not an allow-list entry. Even the GUI's
+  // own loopback origin must stay blocked: with allow-same-origin on the
+  // sandboxed iframe, it would otherwise regain access to the GUI origin.
+  void selfOrigin
   if (isLoopbackHostname(url.hostname)) return { kind: 'blocked', reason: 'loopback' }
   return { kind: 'ok', url: url.href }
 }

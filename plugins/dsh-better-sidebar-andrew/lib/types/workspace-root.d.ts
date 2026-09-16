@@ -4,6 +4,8 @@ export interface SidebarWorkspaceTarget {
     branch: string;
     current: boolean;
 }
+/** Compare physical paths using the host filesystem's case rules. */
+export declare function sameWorkspacePath(left: string, right: string, platform?: NodeJS.Platform): boolean;
 /**
  * Resolve a UI-selected filesystem checkout without performing `git checkout`.
  * The requested path must match a real entry returned by `git worktree list

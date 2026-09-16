@@ -1,0 +1,17 @@
+
+Name      : AppXSvc
+Status    : Stopped
+StartType : Manual
+
+Name      : ClipSVC
+Status    : Stopped
+StartType : Manual
+
+Name      : StateRepository
+Status    : Running
+StartType : Manual
+
+Name      : VSS
+Status    : Running
+StartType : Manual
+

@@ -1,0 +1,23 @@
+﻿{
+    "Output":  "C:\\Users\\andre\\.dsh\\windows-diagnostic-admin\\followup\\20260909-085809",
+    "DurationSeconds":  15.54,
+    "Completed":  "2026-09-09T08:58:24.3930854+05:00",
+    "Succeeded":  [
+                      "SystemRestore CIM",
+                      "AppX andre",
+                      "AppX TeastWin10",
+                      "AppX all users",
+                      "Target AppX packages",
+                      "Service state",
+                      "VSS writers",
+                      "VSS providers",
+                      "Dirty state C:",
+                      "Volume C:",
+                      "Mount points",
+                      "System/Application events"
+                  ],
+    "Success":  false,
+    "FailedSteps":  [
+                        "VSS shadowstorage"
+                    ]
+}
