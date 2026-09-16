@@ -9,7 +9,7 @@
  * Commits use the user's git global identity untouched (never sets
  * user.name/user.email).
  */
-import { spawn } from 'node:child_process'
+import { spawnHidden } from './process-runner.ts'
 
 /** A parsed `git status --porcelain=v1 -z` entry. */
 export interface GitStatusEntry {
@@ -100,9 +100,8 @@ export function parseLogLines(output: string): GitLogEntry[] {
 function runGit(cwd: string, args: string[], timeoutMs = 30_000): Promise<string> {
   const full = ['-C', cwd, '--no-pager', '-c', 'color.ui=false', ...args]
   return new Promise<string>((resolvePromise, reject) => {
-    const child = spawn('git', full, {
+    const child = spawnHidden('git', full, {
       stdio: ['ignore', 'pipe', 'pipe'],
-      windowsHide: true,
       env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
     })
     let stdout = ''

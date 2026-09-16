@@ -527,6 +527,23 @@ function messageOf(error) {
 	return error instanceof Error ? error.message : String(error);
 }
 //#endregion
+//#region src/process-runner.ts
+/**
+* Add the Windows-only process visibility guard without changing POSIX
+* options. The value is deliberately forced so callers cannot accidentally
+* re-enable a console window with `windowsHide: false`.
+*/
+function windowsSafeSpawnOptions(options = {}, platform = process.platform) {
+	if (platform !== "win32") return options;
+	return {
+		...options,
+		windowsHide: true
+	};
+}
+function spawnHidden(command, args, options = {}) {
+	return spawn(command, [...args], windowsSafeSpawnOptions(options));
+}
+//#endregion
 //#region src/git.ts
 /**
 * Git operations for the sidebar source-control panel. Everything goes
@@ -597,13 +614,12 @@ function runGit(cwd, args, timeoutMs = 3e4) {
 		...args
 	];
 	return new Promise((resolvePromise, reject) => {
-		const child = spawn("git", full, {
+		const child = spawnHidden("git", full, {
 			stdio: [
 				"ignore",
 				"pipe",
 				"pipe"
 			],
-			windowsHide: true,
 			env: {
 				...process.env,
 				GIT_OPTIONAL_LOCKS: "0"
@@ -1222,7 +1238,7 @@ function validateExternalUrl(raw) {
 function launchExternal(action, value) {
 	const platform = process.platform;
 	const spec = action === "reveal" ? revealCommand(requireAbsolute(value), platform) : urlCommand(validateExternalUrl(value), platform);
-	const child = spawn(spec.command, spec.args, {
+	const child = spawnHidden(spec.command, spec.args, {
 		detached: true,
 		stdio: "ignore"
 	});
@@ -1416,6 +1432,17 @@ function depsStatus(options = {}) {
 /** Per-terminal transcript bound (bytes kept for replay). */
 const TRANSCRIPT_LIMIT$1 = 1 << 20;
 /**
+* Build node-pty options for a long-lived interactive terminal. ConPTY is
+* required for the Windows PTY path; non-Windows options remain unchanged.
+*/
+function ptySpawnOptions(options, platform = process.platform) {
+	if (platform !== "win32") return options;
+	return {
+		...options,
+		useConpty: true
+	};
+}
+/**
 * Restore the executable bit pnpm strips from node-pty's prebuilt
 * spawn-helper (the macOS helper that forks and sets up the pty). Without it
 * every spawn fails with `posix_spawnp failed`. Idempotent; mirrors
@@ -1507,13 +1534,13 @@ var PtyManager = class {
 			sessionId,
 			tabId,
 			cwd,
-			pty: this.nodePty.spawn(shell ?? this.shell, shellSpawnArgs(shellArgs ?? this.shellArgs), {
+			pty: this.nodePty.spawn(shell ?? this.shell, shellSpawnArgs(shellArgs ?? this.shellArgs), ptySpawnOptions({
 				name: "xterm-256color",
 				cols: Math.max(2, Math.floor(cols)),
 				rows: Math.max(2, Math.floor(rows)),
 				cwd,
 				env: { ...process.env }
-			}),
+			})),
 			transcript: "",
 			exited: false
 		};
@@ -1649,10 +1676,13 @@ function defaultShell(options = {}) {
 	if (platform === "win32") {
 		const envShell = env.DSH_SIDEBAR_SHELL;
 		if (envShell !== void 0 && envShell.trim() !== "") return envShell.trim();
+		const attempted = [];
 		for (const dir of windowsPwshCandidateDirs(env)) {
 			const candidate = join(dir, "pwsh.exe");
+			attempted.push(candidate);
 			if (exists(candidate)) return candidate;
 		}
+		options.onDiagnostic?.(`[dsh-better-sidebar] PowerShell 7 was not found; tried ${attempted.join(", ") || "<no candidates>"}; using powershell.exe from PATH`);
 		return "powershell.exe";
 	}
 	const envShell = env.SHELL;
@@ -1802,13 +1832,13 @@ var AgentPtyRegistry = class {
 	create(sessionId, title, command, cwd, cols = 80, rows = 24, shell, shellArgs) {
 		const uuid = randomUUID();
 		const dims = clampDims(cols, rows);
-		const pty = this.nodePty.spawn(shell ?? this.shell, shellSpawnArgs(shellArgs ?? this.shellArgs), {
+		const pty = this.nodePty.spawn(shell ?? this.shell, shellSpawnArgs(shellArgs ?? this.shellArgs), ptySpawnOptions({
 			name: "xterm-256color",
 			cols: dims.cols,
 			rows: dims.rows,
 			cwd,
 			env: { ...process.env }
-		});
+		}));
 		const handle = {
 			uuid,
 			sessionId,
@@ -3764,7 +3794,10 @@ function buildApi(ctx, ptyManager, agentPtyRegistry, resolved, terminalShell, ge
 function apply(ctx, config) {
 	ensureSpawnHelper();
 	const resolved = resolveSidebarConfig(config);
-	const terminalShell = defaultShell({ explicit: resolved.shell });
+	const terminalShell = defaultShell({
+		explicit: resolved.shell,
+		onDiagnostic: (message) => ctx.logger?.warn(message)
+	});
 	const fence = (req) => isTrustedApiRequest(req, ctx.webRuntime.trustedHosts);
 	const presentationRegistry = new SidebarPresentationRegistry();
 	const presentationService = createBetterSidebarPresentationService({

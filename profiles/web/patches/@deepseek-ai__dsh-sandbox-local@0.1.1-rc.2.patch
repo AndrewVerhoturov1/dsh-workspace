@@ -1,0 +1,14 @@
+diff --git a/lib/index.js b/lib/index.js
+index b1d1ab9a17daf74545de1780d9a6be06bcae33cf..850e9b9b60b9cbccb08e31835b40bb83c9c10094 100644
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -157,7 +157,8 @@ function defaultProbeWindowsAcl(runnerInvocation, timeoutMs) {
+ 		"0"
+ 	], {
+ 		timeout: timeoutMs,
+-		stdio: "ignore"
++		stdio: "ignore",
++		windowsHide: true
+ 	}).status === 0;
+ }
+ /**

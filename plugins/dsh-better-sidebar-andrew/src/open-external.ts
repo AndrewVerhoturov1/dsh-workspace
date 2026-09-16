@@ -9,8 +9,8 @@
  * The command builders are pure — the platform is injectable — so every
  * per-platform branch is unit-testable without spawning anything.
  */
-import { spawn } from 'node:child_process'
 import { parentOf, requireAbsolute } from './fs-tree.ts'
+import { spawnHidden } from './process-runner.ts'
 import { SidebarError } from './wire.ts'
 
 /** The two external open actions the route accepts. */
@@ -83,7 +83,7 @@ export function launchExternal(action: OpenExternalAction, value: string): { sta
   const spec = action === 'reveal'
     ? revealCommand(requireAbsolute(value), platform)
     : urlCommand(validateExternalUrl(value), platform)
-  const child = spawn(spec.command, spec.args, { detached: true, stdio: 'ignore' })
+  const child = spawnHidden(spec.command, spec.args, { detached: true, stdio: 'ignore' })
   child.on('error', () => { /* opener missing/denied: handled by the OS */ })
   child.unref()
   return { started: true }

@@ -544,7 +544,10 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
   // model-facing terminal_* tools. They must stay in lockstep, otherwise a
   // configured shell fixes one surface and silently leaves the other on the
   // platform default.
-  const terminalShell = defaultShell({ explicit: resolved.shell })
+  const terminalShell = defaultShell({
+    explicit: resolved.shell,
+    onDiagnostic: (message) => ctx.logger?.warn(message),
+  })
   // The web runtime's bind-derived trust list (boot-sampled LAN literals
   // plus --trusted-host authorities) — the authoritative source the /api
   // gateway fence derives its list from. Read per request from the live

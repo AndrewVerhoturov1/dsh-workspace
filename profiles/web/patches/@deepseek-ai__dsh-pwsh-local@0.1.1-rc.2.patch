@@ -1,0 +1,22 @@
+diff --git a/lib/index.js b/lib/index.js
+index ab9688393e15aeb90dd118c38a500d39df59ef91..f0f7af79029f2ba3843798c26bd8fd5260c64310 100644
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -268,7 +268,7 @@ var PwshLocalExecutor = class PwshLocalExecutor extends ShellExecutor {
+ 	* `@deepseek-ai/dsh-pwsh-sandbox`).
+ 	*/
+ 	argv(spec) {
+-		return [
++		const argv = [
+ 			this.pwshPath,
+ 			"-NoLogo",
+ 			"-NoProfile",
+@@ -276,6 +276,8 @@ var PwshLocalExecutor = class PwshLocalExecutor extends ShellExecutor {
+ 			"-Command",
+ 			`${ENCODING_PREAMBLE}${spec.command}`
+ 		];
++		if (process.platform === "win32") argv.splice(4, 0, "-WindowStyle", "Hidden");
++		return argv;
+ 	}
+ 	/** Map one resolved spec plus its argv onto a fully-specified subprocess spawn. */
+ 	spawnSpec(spec, stdoutMaxBytes, signal, argv) {
