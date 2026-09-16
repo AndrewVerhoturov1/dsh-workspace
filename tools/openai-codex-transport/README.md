@@ -19,7 +19,11 @@ WebSocket error
 → cause.code: SELF_SIGNED_CERT_IN_CHAIN
 ```
 
-В Windows обнаружен включённый системный прокси `127.0.0.1:10809`; порт занят процессом `xray.exe`. Это внешнее HTTPS-перехватывание или прокси с неподтверждённым корневым сертификатом. Слой намеренно не отключает проверку TLS и не добавляет бесконечные повторы.
+Причина `SELF_SIGNED_CERT_IN_CHAIN` подтверждена на Windows 10. При прямом TLS-соединении к `chatgpt.com` Node получает сертификат, выпущенный `AO Kaspersky Lab / Kaspersky Anti-Virus Personal Root Certificate`. Этот корень присутствует в `CurrentUser\Root` и `LocalMachine\Root`, но обычный набор CA Node его не использует. В результате контрольный тест дал `13 PASS / 7 SELF_SIGNED_CERT_IN_CHAIN`, а с `NODE_USE_SYSTEM_CA=1` — `20 PASS / 20`.
+
+`127.0.0.1:10809` принадлежит Happ/Xray и отвечает на HTTP CONNECT. DSH не получает этот адрес из `HTTP_PROXY`/`HTTPS_PROXY` и не меняет настройки VPN. Через явный CONNECT приходит обычная цепочка Google Trust Services. Исправление ниже действует только на окружение запускаемого DSH-процесса.
+
+Слой намеренно не отключает проверку TLS и не добавляет бесконечные повторы.
 
 Отдельно подтверждён дефект жизненного цикла: после ошибки WebSocket сессия навсегда закреплялась на SSE до завершения процесса. Теперь SSE используется только для текущего запроса, а следующий запрос снова проверяет WebSocket.
 
@@ -52,6 +56,18 @@ node tools/openai-codex-transport/apply-overlay.mjs --rollback `
 
 После переустановки DSH слой нужно применить заново. Резервная копия содержит только три изменённых файла, без ключей и содержимого `.credentials.yaml`.
 
+## Доверие к Windows CA только для DSH
+
+Репозиторный контроллер запускает дочерний DSH с `NODE_USE_SYSTEM_CA=1`. Глобальное окружение Windows, VPN, Happ/Xray, хранилища сертификатов и Kaspersky не изменяются.
+
+Проверка контроллера:
+
+```powershell
+node --test tools/deepseek-harness-launcher/dsh-process-controller.test.js
+```
+
+Откат этого изменения — обычный откат локального коммита. При штатном запуске контроллера переменная снова добавляется только в окружение DSH, а не в открытый терминал или системные настройки.
+
 ## Проверка
 
 Изолированная проверка применения и отката:
@@ -60,4 +76,4 @@ node tools/openai-codex-transport/apply-overlay.mjs --rollback `
 node tools/openai-codex-transport/test-overlay.mjs
 ```
 
-Настоящее устранение `SELF_SIGNED_CERT_IN_CHAIN` выполняется в настройках прокси/антивируса/корневого сертификата Windows и не является частью этого слоя.
+Проверка TLS остаётся включённой: используются стандартные CA Windows через штатную возможность Node, без `NODE_TLS_REJECT_UNAUTHORIZED=0`, `rejectUnauthorized=false` и без изменения VPN или системного trust store.

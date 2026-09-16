@@ -27,12 +27,14 @@ function createFixture({ state, listenerPids = [], records = {}, probe = true, s
   if (state) fs.writeFileSync(path.join(launcherRoot, 'dsh-runtime.json'), `${JSON.stringify(state)}\n`, 'utf8')
   const processRecords = new Map(Object.entries(records).map(([pid, record]) => [Number(pid), record]))
   let nextPid = spawnPid
+  let spawnOptions = null
   const deps = {
     getProcessRecord: (pid) => processRecords.get(Number(pid)) || null,
     isProcessAlive: (pid) => processRecords.has(Number(pid)),
     listListeningPids: () => [...listenerPids],
     probeHttp: async () => probe,
-    spawn: (_node, args) => {
+    spawn: (_node, args, options) => {
+      spawnOptions = options
       const pid = nextPid
       const listenerPid = spawnListenerPid || pid
       processRecords.set(listenerPid, { pid: listenerPid, commandLine: commandLine({ port: args[args.indexOf('--port') + 1] }) })
@@ -52,6 +54,7 @@ function createFixture({ state, listenerPids = [], records = {}, probe = true, s
     cleanup: () => fs.rmSync(launcherRoot, { recursive: true, force: true }),
     processRecords,
     listenerPids,
+    get spawnOptions() { return spawnOptions },
   }
 }
 
@@ -122,6 +125,10 @@ test('should start detached with the canonical 4173 command', async () => {
     const state = JSON.parse(fs.readFileSync(path.join(fixture.launcherRoot, 'dsh-runtime.json'), 'utf8'))
     assert.equal(state.port, 4173)
     assert.equal(fixture.listenerPids[0], 1205)
+    assert.equal(
+      fixture.spawnOptions.env.NODE_USE_SYSTEM_CA,
+      process.platform === 'win32' ? '1' : undefined,
+    )
   } finally { fixture.cleanup() }
 })
 

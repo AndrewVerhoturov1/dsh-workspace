@@ -304,6 +304,10 @@ function createProcessController({ config: configOverrides = {}, runtime, deps =
       detached: true,
       windowsHide: true,
       stdio: 'ignore',
+      env: {
+        ...process.env,
+        ...(process.platform === 'win32' ? { NODE_USE_SYSTEM_CA: '1' } : {}),
+      },
     })
     child.unref()
     writeState(config, { pid: child.pid })
