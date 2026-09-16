@@ -13,7 +13,7 @@ vi.mock('node:os', async (importOriginal) => {
 })
 
 import { resolveSidebarConfig } from '../src/config.ts'
-import { defaultShell, ensureSpawnHelper, shellDisplayName, shellSpawnArgs } from '../src/pty-manager.ts'
+import { defaultShell, ensureSpawnHelper, ptySpawnOptions, shellDisplayName, shellSpawnArgs } from '../src/pty-manager.ts'
 
 describe('pty helpers', () => {
   it('prefers an explicit shell, then SHELL, then the account login shell on POSIX', () => {
@@ -63,7 +63,10 @@ describe('pty helpers', () => {
     expect(fromProgramFiles.replaceAll('\\', '/')).toBe('C:/PF/PowerShell/7/pwsh.exe')
 
     // Nothing installed: keep the inbox 5.1 fallback instead of breaking.
-    expect(defaultShell({ platform: 'win32', env: {}, exists: () => false })).toBe('powershell.exe')
+    const diagnostics: string[] = []
+    expect(defaultShell({ platform: 'win32', env: {}, exists: () => false, onDiagnostic: message => diagnostics.push(message) }))
+      .toBe('powershell.exe')
+    expect(diagnostics[0]).toContain('using powershell.exe from PATH')
   })
 
   it('trims the configured shell and defaults it to auto for old documents', () => {
@@ -85,6 +88,13 @@ describe('pty helpers', () => {
   it('uses explicit shell args verbatim and keeps platform defaults when none are configured', () => {
     expect(shellSpawnArgs(['--noprofile', '--no-rc'])).toEqual(['--noprofile', '--no-rc'])
     expect(shellSpawnArgs([])).toEqual(process.platform === 'win32' ? [] : ['-l'])
+  })
+
+  it('enables ConPTY for Windows while preserving non-Windows PTY options', () => {
+    const options = { name: 'xterm-256color', cols: 80, rows: 24, cwd: '/tmp' }
+    expect(ptySpawnOptions(options, 'win32')).toEqual({ ...options, useConpty: true })
+    expect(ptySpawnOptions(options, 'linux')).toEqual(options)
+    expect(ptySpawnOptions(options, 'darwin')).toEqual(options)
   })
 
   it('restores the spawn-helper executable bit idempotently', () => {

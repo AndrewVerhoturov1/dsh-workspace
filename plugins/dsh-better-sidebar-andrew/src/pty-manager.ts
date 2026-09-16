@@ -10,12 +10,24 @@ import { chmodSync, existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { createRequire } from 'node:module'
 import { userInfo } from 'node:os'
-import type { IPty } from 'node-pty'
+import type { IPty, IPtyForkOptions, IWindowsPtyForkOptions } from 'node-pty'
 import { loadRequiredNodePty, type NodePtyModule } from './pty-deps.ts'
 import { SidebarError } from './wire.ts'
 
 /** Per-terminal transcript bound (bytes kept for replay). */
 const TRANSCRIPT_LIMIT = 1 << 20
+
+/**
+ * Build node-pty options for a long-lived interactive terminal. ConPTY is
+ * required for the Windows PTY path; non-Windows options remain unchanged.
+ */
+export function ptySpawnOptions(
+  options: IPtyForkOptions,
+  platform: NodeJS.Platform = process.platform,
+): IPtyForkOptions | IWindowsPtyForkOptions {
+  if (platform !== 'win32') return options
+  return { ...options, useConpty: true }
+}
 
 /**
  * Restore the executable bit pnpm strips from node-pty's prebuilt
@@ -153,13 +165,13 @@ export class PtyManager {
       sessionId,
       tabId,
       cwd,
-      pty: this.nodePty.spawn(shell ?? this.shell, shellSpawnArgs(shellArgs ?? this.shellArgs), {
+      pty: this.nodePty.spawn(shell ?? this.shell, shellSpawnArgs(shellArgs ?? this.shellArgs), ptySpawnOptions({
         name: 'xterm-256color',
         cols: Math.max(2, Math.floor(cols)),
         rows: Math.max(2, Math.floor(rows)),
         cwd,
         env: { ...process.env },
-      }),
+      })),
       transcript: '',
       exited: false,
     }
@@ -268,6 +280,8 @@ export interface ShellResolutionOptions {
   explicit?: string
   /** File-existence probe override (defaults to `existsSync`). */
   exists?: (path: string) => boolean
+  /** Optional diagnostic sink used when Windows falls back to inbox PowerShell. */
+  onDiagnostic?: (message: string) => void
 }
 
 /**
@@ -331,10 +345,15 @@ export function defaultShell(options: ShellResolutionOptions = {}): string {
   if (platform === 'win32') {
     const envShell = env.DSH_SIDEBAR_SHELL
     if (envShell !== undefined && envShell.trim() !== '') return envShell.trim()
+    const attempted: string[] = []
     for (const dir of windowsPwshCandidateDirs(env)) {
       const candidate = join(dir, 'pwsh.exe')
+      attempted.push(candidate)
       if (exists(candidate)) return candidate
     }
+    options.onDiagnostic?.(
+      `[dsh-better-sidebar] PowerShell 7 was not found; tried ${attempted.join(', ') || '<no candidates>'}; using powershell.exe from PATH`,
+    )
     return 'powershell.exe'
   }
   const envShell = env.SHELL

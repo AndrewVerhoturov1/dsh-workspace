@@ -1,0 +1,13 @@
+diff --git a/lib/index.js b/lib/index.js
+index ab9688393e15aeb90dd118c38a500d39df59ef91..a2ee08089e79aa43f8aacda657666c87f7cf2a13 100644
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -273,6 +273,8 @@ var PwshLocalExecutor = class PwshLocalExecutor extends ShellExecutor {
+ 			"-NoLogo",
+ 			"-NoProfile",
+ 			"-NonInteractive",
++			"-WindowStyle",
++			"Hidden",
+ 			"-Command",
+ 			`${ENCODING_PREAMBLE}${spec.command}`
+ 		];

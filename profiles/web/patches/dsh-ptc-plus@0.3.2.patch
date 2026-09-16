@@ -1,0 +1,52 @@
+diff --git a/internal/worker-cwd-virtualization.js b/internal/worker-cwd-virtualization.js
+index 3948ec70d48ad282f1644d8329599386e180c6ba..68f07b1cfe9f0d0aac9909e072022d7de5a92c2a 100644
+--- a/internal/worker-cwd-virtualization.js
++++ b/internal/worker-cwd-virtualization.js
+@@ -86,33 +86,37 @@ export function installWorkerCwdVirtualization(sessionCwd, originalRequire) {
+     next[0] = sessionPathPrefix(next[0])
+     return next
+   }
+-  const sessionChildOptions = options => (
+-    options === null || typeof options !== 'object' || options.cwd !== undefined
+-      ? options
+-      : { ...options, cwd: sessionCwd }
+-  )
++  const defaultSessionChildOptions = () => ({
++    cwd: sessionCwd,
++    ...(process.platform === 'win32' ? { windowsHide: true } : {}),
++  })
++  const sessionChildOptions = options => {
++    if (options === null || typeof options !== 'object') return options
++    const projected = options.cwd !== undefined ? options : { ...options, cwd: sessionCwd }
++    return process.platform === 'win32' ? { ...projected, windowsHide: true } : projected
++  }
+   const withDefaultOptions = (args, index) => {
+     const next = [...args]
+-    next[index] = sessionChildOptions(next[index]) ?? { cwd: sessionCwd }
++    next[index] = sessionChildOptions(next[index]) ?? defaultSessionChildOptions()
+     return next
+   }
+   const childProcessOptions = (name, args) => {
+     if (name === 'exec' || name === 'execSync') {
+       const next = [...args]
+-      if (typeof next[1] === 'function') next.splice(1, 0, { cwd: sessionCwd })
+-      else next[1] = sessionChildOptions(next[1]) ?? { cwd: sessionCwd }
++      if (typeof next[1] === 'function') next.splice(1, 0, defaultSessionChildOptions())
++      else next[1] = sessionChildOptions(next[1]) ?? defaultSessionChildOptions()
+       return next
+     }
+     if (name === 'execFile' || name === 'execFileSync') {
+       if (args.length === 1 || typeof args[1] === 'function') {
+         const next = [...args]
+-        next.splice(1, 0, { cwd: sessionCwd })
++        next.splice(1, 0, defaultSessionChildOptions())
+         return next
+       }
+       if (typeof args[2] === 'function') {
+         if (args[1] !== undefined && !Array.isArray(args[1])) return withDefaultOptions(args, 1)
+         const next = [...args]
+-        next.splice(2, 0, { cwd: sessionCwd })
++        next.splice(2, 0, defaultSessionChildOptions())
+         return next
+       }
+       if (args[1] !== undefined && !Array.isArray(args[1])) return withDefaultOptions(args, 1)

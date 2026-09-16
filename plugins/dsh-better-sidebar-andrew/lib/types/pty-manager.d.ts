@@ -1,5 +1,10 @@
-import type { IPty } from 'node-pty';
+import type { IPty, IPtyForkOptions, IWindowsPtyForkOptions } from 'node-pty';
 import { type NodePtyModule } from './pty-deps.ts';
+/**
+ * Build node-pty options for a long-lived interactive terminal. ConPTY is
+ * required for the Windows PTY path; non-Windows options remain unchanged.
+ */
+export declare function ptySpawnOptions(options: IPtyForkOptions, platform?: NodeJS.Platform): IPtyForkOptions | IWindowsPtyForkOptions;
 /**
  * Restore the executable bit pnpm strips from node-pty's prebuilt
  * spawn-helper (the macOS helper that forks and sets up the pty). Without it
@@ -133,6 +138,8 @@ export interface ShellResolutionOptions {
     explicit?: string;
     /** File-existence probe override (defaults to `existsSync`). */
     exists?: (path: string) => boolean;
+    /** Optional diagnostic sink used when Windows falls back to inbox PowerShell. */
+    onDiagnostic?: (message: string) => void;
 }
 /**
  * The interactive shell for this platform, resolved like a terminal
