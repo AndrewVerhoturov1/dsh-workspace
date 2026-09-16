@@ -9,9 +9,11 @@ worktree/branches when doing so is obviously safe.
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable, Mapping
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 from typing import Any
@@ -19,6 +21,8 @@ from typing import Any
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 DEFAULT_REPOSITORY = "AndrewVerhoturov1/dsh-workspace"
 DEFAULT_REPO_ROOT = Path(r"C:\Users\andre\.dsh")
+WINDOWS_GH_PROGRAM_FILES = Path(r"C:\Program Files\GitHub CLI\gh.exe")
+GH_NOT_FOUND_HINT = "Установите GitHub CLI или задайте DSH_GH_PATH, указывающий на существующий gh.exe."
 
 
 class FinalizeError(RuntimeError):
@@ -28,19 +32,102 @@ class FinalizeError(RuntimeError):
         self.details = details or {}
 
 
+def _existing_absolute_file(value: str | os.PathLike[str]) -> Path | None:
+    try:
+        candidate = Path(os.path.expandvars(os.fspath(value))).expanduser().resolve()
+        return candidate if candidate.is_file() else None
+    except (OSError, RuntimeError, TypeError):
+        return None
+
+
+def _env_value(env: Mapping[str, str], name: str) -> str | None:
+    value = env.get(name)
+    if value is not None:
+        return value
+    for key, candidate in env.items():
+        if key.casefold() == name.casefold():
+            return candidate
+    return None
+
+
+def _windows_gh_candidates(env: Mapping[str, str]) -> list[Path]:
+    candidates = [WINDOWS_GH_PROGRAM_FILES]
+    local_app_data = _env_value(env, "LOCALAPPDATA")
+    if local_app_data:
+        candidates.append(Path(os.path.expandvars(local_app_data)) / "Programs" / "GitHub CLI" / "gh.exe")
+    return candidates
+
+
+def resolve_gh_executable(
+    *,
+    env: Mapping[str, str] | None = None,
+    which: Callable[[str], str | None] | None = None,
+) -> str:
+    """Resolve an existing absolute GitHub CLI executable in a stable order."""
+    environment = os.environ if env is None else env
+    attempts: list[dict[str, str]] = []
+
+    configured = _env_value(environment, "DSH_GH_PATH")
+    if configured and configured.strip():
+        configured_path = configured.strip().strip('"')
+        attempts.append({"source": "DSH_GH_PATH", "path": os.path.expandvars(configured_path)})
+        resolved = _existing_absolute_file(configured_path)
+        if resolved is not None:
+            return str(resolved)
+
+    which_fn = shutil.which if which is None else which
+    try:
+        which_result = which_fn("gh")
+    except OSError as exc:
+        which_result = None
+        attempts.append({"source": "shutil.which", "path": f"<ошибка: {exc}>"})
+    if which_result:
+        attempts.append({"source": "shutil.which", "path": which_result})
+        resolved = _existing_absolute_file(which_result)
+        if resolved is not None:
+            return str(resolved)
+
+    for candidate in _windows_gh_candidates(environment):
+        attempts.append({"source": "standard Windows path", "path": str(candidate)})
+        resolved = _existing_absolute_file(candidate)
+        if resolved is not None:
+            return str(resolved)
+
+    raise FinalizeError(
+        "FINALIZE_GH_NOT_FOUND",
+        f"GitHub CLI (gh.exe) не найден. {GH_NOT_FOUND_HINT}",
+        details={
+            "executable": "gh",
+            "candidates": attempts,
+            "hint": GH_NOT_FOUND_HINT,
+        },
+    )
+
+
 def run_process(args: list[str], *, cwd: Path | None = None, timeout: int = 120) -> subprocess.CompletedProcess[str]:
     """Run argv directly, without a shell and without a visible console window."""
-    return subprocess.run(
-        args,
-        cwd=str(cwd) if cwd else None,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        capture_output=True,
-        timeout=timeout,
-        creationflags=CREATE_NO_WINDOW,
-        check=False,
-    )
+    try:
+        return subprocess.run(
+            args,
+            cwd=str(cwd) if cwd else None,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            timeout=timeout,
+            creationflags=CREATE_NO_WINDOW,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        executable = args[0] if args else ""
+        raise FinalizeError(
+            "FINALIZE_EXECUTABLE_NOT_FOUND",
+            f"Не найден исполняемый файл: {executable}",
+            details={
+                "executable": executable,
+                "argv": list(args),
+            },
+        ) from exc
 
 
 def _require_ok(cp: subprocess.CompletedProcess[str], code: str, message: str) -> subprocess.CompletedProcess[str]:
@@ -64,14 +151,14 @@ def _json_from(cp: subprocess.CompletedProcess[str], code: str, message: str) ->
     return value
 
 
-def gh_pr(repository: str, number: int, *, cwd: Path) -> dict[str, Any]:
-    cp = run_process(["gh", "api", f"repos/{repository}/pulls/{number}"], cwd=cwd)
+def gh_pr(repository: str, number: int, *, cwd: Path, gh_executable: str) -> dict[str, Any]:
+    cp = run_process([gh_executable, "api", f"repos/{repository}/pulls/{number}"], cwd=cwd)
     return _json_from(cp, "FINALIZE_PR_READ_FAILED", f"cannot read PR #{number}")
 
 
-def merge_squash(repository: str, number: int, *, cwd: Path) -> dict[str, Any]:
+def merge_squash(repository: str, number: int, *, cwd: Path, gh_executable: str) -> dict[str, Any]:
     cp = run_process(
-        ["gh", "api", "-X", "PUT", f"repos/{repository}/pulls/{number}/merge", "-f", "merge_method=squash"],
+        [gh_executable, "api", "-X", "PUT", f"repos/{repository}/pulls/{number}/merge", "-f", "merge_method=squash"],
         cwd=cwd,
         timeout=180,
     )
@@ -267,8 +354,10 @@ def finalize_one(
     number: int,
     *,
     dry_run: bool = False,
+    gh_executable: str | None = None,
 ) -> dict[str, Any]:
-    pr = gh_pr(repository, number, cwd=repo_root)
+    resolved_gh = resolve_gh_executable() if gh_executable is None else gh_executable
+    pr = gh_pr(repository, number, cwd=repo_root, gh_executable=resolved_gh)
     state = str(pr.get("state") or "").lower()
     merged_at = pr.get("merged_at")
     base = ((pr.get("base") or {}).get("ref") if isinstance(pr.get("base"), dict) else None)
@@ -295,7 +384,7 @@ def finalize_one(
     elif already_merged:
         merged_now = False
     else:
-        merged = merge_squash(repository, number, cwd=repo_root)
+        merged = merge_squash(repository, number, cwd=repo_root, gh_executable=resolved_gh)
         merged_now = True
         merge_sha = str(merged.get("sha") or "").lower() or None
 
@@ -342,10 +431,11 @@ def finalize_many(
     dry_run: bool = False,
 ) -> dict[str, Any]:
     root = resolve_repo_root(repo_root)
+    gh_executable = resolve_gh_executable()
     results: list[dict[str, Any]] = []
     for number in pr_numbers:
         # Each PR is re-read after the previous merge/fetch. No stale batch snapshot.
-        results.append(finalize_one(root, repository, number, dry_run=dry_run))
+        results.append(finalize_one(root, repository, number, dry_run=dry_run, gh_executable=gh_executable))
 
     warnings = [warning for item in results for warning in item["cleanup"]["warnings"]]
     code = "TASK_PRS_DRY_RUN" if dry_run else ("TASK_PRS_FINALIZED_WITH_WARNINGS" if warnings else "TASK_PRS_FINALIZED")
