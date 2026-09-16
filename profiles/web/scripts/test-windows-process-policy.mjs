@@ -76,6 +76,7 @@ async function testPatchContents() {
     subprocess: join(packageRoot('@deepseek-ai/dsh-subprocess-local'), 'lib', 'index.js'),
     pwsh: join(packageRoot('@deepseek-ai/dsh-pwsh-local'), 'lib', 'index.js'),
     sandbox: join(packageRoot('@deepseek-ai/dsh-pwsh-sandbox'), 'lib', 'index.js'),
+    sandboxLocal: join(packageRoot('@deepseek-ai/dsh-sandbox-local'), 'lib', 'index.js'),
     notification: join(packageRoot('dsh-notification'), 'index.js'),
   }
   const contents = Object.fromEntries(
@@ -83,8 +84,17 @@ async function testPatchContents() {
   )
   assert.match(contents.subprocess, /windowsHide: platform === "win32"/)
   assert.match(contents.subprocess, /useConpty: true/)
-  assert.match(contents.pwsh, /"-WindowStyle",\s*"Hidden"/)
+  const pwshArgv = contents.pwsh.match(/argv\(spec\) \{[\s\S]*?\n\t\}/)?.[0]
+  assert.ok(pwshArgv, 'dsh-pwsh-local argv method must be present')
+  assert.match(pwshArgv, /if \(process\.platform === "win32"\)\s+argv\.splice\(4, 0, "-WindowStyle", "Hidden"\)/)
+  assert.equal((pwshArgv.match(/"-WindowStyle"/g) ?? []).length, 1)
   assert.match(contents.sandbox, /"-WindowStyle",\s*"Hidden"/)
+  const windowsAclProbe = contents.sandboxLocal.match(/function defaultProbeWindowsAcl[\s\S]*?\n\}/)?.[0]
+  assert.ok(windowsAclProbe, 'dsh-sandbox-local Windows ACL probe must be present')
+  assert.match(windowsAclProbe, /spawnSync\(program, \[[\s\S]*?timeout: timeoutMs,\s*stdio: "ignore",\s*windowsHide: true[\s\S]*?\}\)\.status === 0/)
+  const bwrapProbe = contents.sandboxLocal.match(/function defaultProbeBwrap[\s\S]*?\n\}/)?.[0]
+  assert.ok(bwrapProbe, 'dsh-sandbox-local bwrap probe must be present')
+  assert.doesNotMatch(bwrapProbe, /windowsHide: true/)
   assert.match(contents.notification, /'-WindowStyle',\s*'Hidden'/)
   assert.match(contents.notification, /windowsHide: true/)
 }
