@@ -1,14 +1,15 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { cleanupRuntimeSandbox } from '../src/runtime/cleanup.ts'
-import { sourceFromExternalWorktree, sourceFromTask, staleSourceReason } from '../src/runtime/descriptor.ts'
+import { isPathInside, sourceFromExternalWorktree, sourceFromTask, staleSourceReason } from '../src/runtime/descriptor.ts'
 import { TaskId, type TaskView } from '../src/types.ts'
 import { createRepositoryFixture, git, removeFixture } from './helpers.ts'
-import { generateRuntimePackage } from '../src/runtime/profile-snapshot.ts'
-import { isExpectedProcessRecord } from '../src/runtime/runtime-controller.ts'
+import { defaultRuntimeRoot } from '../src/runtime/runtime-service.ts'
+import { buildWorktreePackageIndex, generateRuntimePackage } from '../src/runtime/profile-snapshot.ts'
+import { canTerminateFailedStart, canTerminateNormally, isExpectedProcessRecord, type ControllerState, type ProcessRecord } from '../src/runtime/runtime-controller.ts'
 
 function tempRoot(): string {
   return mkdtempSync(join(tmpdir(), 'branchline-runtime-'))
@@ -48,6 +49,7 @@ describe('branch runtime profile overlay', () => {
     expect(result.packageJson.dependencies?.['registry-package']).toBe('^1.2.3')
     expect(result.overrides).toEqual([{
       packageName: 'dsh-postman-harness',
+      primarySpec: 'link:../../plugins/dsh-postman-harness',
       primaryPath: primaryPlugin,
       branchPath: branchPlugin,
     }])
@@ -72,6 +74,164 @@ describe('branch runtime profile overlay', () => {
 
     expect(result.packageJson.dependencies?.expected).toBe(`link:${primaryPlugin}`)
     expect(result.overrides).toEqual([])
+  })
+})
+
+describe('branch runtime package index hardening', () => {
+  it('overrides npm dependencies by manifest name in arbitrary directories', () => {
+    const root = tempRoot()
+    const worktree = join(root, 'worktree')
+    const branchPath = join(worktree, 'plugins', 'arbitrary-directory')
+    writePackage(branchPath, 'example-plugin')
+
+    const result = generateRuntimePackage({
+      primaryPackage: { dependencies: { 'example-plugin': '^1.2.3' } },
+      primaryProfile: join(root, 'primary', 'profiles', 'web'),
+      primaryHome: join(root, 'primary'),
+      worktreePath: worktree,
+    })
+
+    expect(result.packageJson.dependencies?.['example-plugin']).toBe(`link:${branchPath}`)
+    expect(result.overrides).toEqual([{
+      packageName: 'example-plugin',
+      primarySpec: '^1.2.3',
+      branchPath,
+    }])
+  })
+
+  it('overrides a matching primary file dependency', () => {
+    const root = tempRoot()
+    const primaryHome = join(root, 'primary')
+    const primaryProfile = join(primaryHome, 'profiles', 'web')
+    const primaryPath = join(primaryHome, 'plugins', 'file-plugin')
+    const worktree = join(root, 'worktree')
+    const branchPath = join(worktree, 'packages', 'renamed-file-plugin')
+    writePackage(primaryPath, 'file-plugin')
+    writePackage(branchPath, 'file-plugin')
+
+    const result = generateRuntimePackage({
+      primaryPackage: { dependencies: { 'file-plugin': 'file:../../plugins/file-plugin' } },
+      primaryProfile,
+      primaryHome,
+      worktreePath: worktree,
+    })
+
+    expect(result.packageJson.dependencies?.['file-plugin']).toBe(`link:${branchPath}`)
+    expect(result.overrides).toEqual([{
+      packageName: 'file-plugin',
+      primarySpec: 'file:../../plugins/file-plugin',
+      primaryPath,
+      branchPath,
+    }])
+  })
+
+  it('does not add an unrelated branch package to primary dependencies', () => {
+    const root = tempRoot()
+    const worktree = join(root, 'worktree')
+    writePackage(join(worktree, 'apps', 'unrelated'), 'unrelated-package')
+
+    const result = generateRuntimePackage({
+      primaryPackage: { dependencies: { primary: '^1.0.0' } },
+      primaryProfile: join(root, 'primary', 'profiles', 'web'),
+      primaryHome: join(root, 'primary'),
+      worktreePath: worktree,
+    })
+
+    expect(result.packageJson.dependencies).toEqual({ primary: '^1.0.0' })
+    expect(result.overrides).toEqual([])
+    expect(buildWorktreePackageIndex(worktree).get('unrelated-package')).toHaveLength(1)
+  })
+
+  it('fails closed on duplicate exact package names', () => {
+    const root = tempRoot()
+    const worktree = join(root, 'worktree')
+    writePackage(join(worktree, 'plugins', 'one'), 'duplicate-plugin')
+    writePackage(join(worktree, 'packages', 'two'), 'duplicate-plugin')
+
+    expect(() => generateRuntimePackage({
+      primaryPackage: { dependencies: { 'duplicate-plugin': '^1.0.0' } },
+      primaryProfile: join(root, 'primary', 'profiles', 'web'),
+      primaryHome: join(root, 'primary'),
+      worktreePath: worktree,
+    })).toThrow(/ambiguous branch package duplicate-plugin/u)
+  })
+
+  it('ignores a symlink package whose canonical directory escapes the worktree', () => {
+    const root = tempRoot()
+    const outside = join(root, 'outside-package')
+    const worktree = join(root, 'worktree')
+    const escaped = join(worktree, 'plugins', 'escaped-link')
+    writePackage(outside, 'escape-plugin')
+    mkdirSync(join(worktree, 'plugins'), { recursive: true })
+    symlinkSync(outside, escaped, 'junction')
+
+    const result = generateRuntimePackage({
+      primaryPackage: { dependencies: { 'escape-plugin': '^1.0.0' } },
+      primaryProfile: join(root, 'primary', 'profiles', 'web'),
+      primaryHome: join(root, 'primary'),
+      worktreePath: worktree,
+    })
+
+    expect(result.packageJson.dependencies?.['escape-plugin']).toBe('^1.0.0')
+    expect(result.overrides).toEqual([])
+    expect(buildWorktreePackageIndex(worktree).get('escape-plugin')).toBeUndefined()
+  })
+})
+
+describe('branch runtime root isolation', () => {
+  it('namespaces roots by canonical primaryHome outside the home itself', () => {
+    const root = tempRoot()
+    const primaryHome = join(root, 'primary')
+    mkdirSync(primaryHome, { recursive: true })
+    const same = defaultRuntimeRoot(join(primaryHome, '.'))
+    const sameCanonical = defaultRuntimeRoot(realpathSync.native(primaryHome))
+    const different = defaultRuntimeRoot(join(root, 'other-home'))
+
+    expect(same).toBe(sameCanonical)
+    expect(different).not.toBe(same)
+    expect(isPathInside(same, primaryHome)).toBe(false)
+    expect(same).not.toContain('primary')
+    if (process.platform === 'win32') {
+      const base = join(process.env.LOCALAPPDATA ?? '', 'DSH', 'branchline-runtimes')
+      expect(same.toLowerCase().startsWith(base.toLowerCase())).toBe(true)
+    }
+  })
+})
+
+describe('failed-start cleanup decisions', () => {
+  const expected: ControllerState = {
+    runtimeId: 'brt-test',
+    pid: 123,
+    port: 4174,
+    profile: 'web',
+    cwd: 'C:\\worktree',
+    home: 'C:\\runtime\\home',
+    launcherRoot: 'C:\\runtime\\launcher',
+    dshBin: 'C:\\npm\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js',
+    nodePath: 'C:\\Program Files\\nodejs\\node.exe',
+    logPath: 'C:\\runtime\\launcher\\dsh.log',
+    startedAt: '2026-01-01T00:00:00.000Z',
+  }
+  const record: ProcessRecord = {
+    pid: 123,
+    executablePath: expected.nodePath,
+    commandLine: `"${expected.nodePath}" --expose-internals "${expected.dshBin}" --profile web --port 4174 --no-open`,
+  }
+
+  it('allows only this expected spawned process without listener ownership', () => {
+    expect(canTerminateFailedStart(expected, expected, record)).toBe(true)
+    expect(canTerminateNormally(record, expected, [])).toBe(false)
+  })
+
+  it('rejects a foreign PID and identity mismatch', () => {
+    expect(canTerminateFailedStart(expected, expected, { ...record, pid: 999 })).toBe(false)
+    expect(canTerminateFailedStart(expected, expected, { ...record, commandLine: record.commandLine.replace('--port 4174', '--port 4175') })).toBe(false)
+    expect(canTerminateFailedStart({ ...expected, startedAt: '2026-01-01T00:00:01.000Z' }, expected, record)).toBe(false)
+  })
+
+  it('keeps normal stop listener ownership strict', () => {
+    expect(canTerminateNormally(record, expected, [])).toBe(false)
+    expect(canTerminateNormally(record, expected, [expected.pid])).toBe(true)
   })
 })
 

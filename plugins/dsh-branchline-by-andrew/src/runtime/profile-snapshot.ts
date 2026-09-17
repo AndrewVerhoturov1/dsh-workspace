@@ -6,11 +6,13 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   realpathSync,
+  statSync,
   rmSync,
   writeFileSync,
 } from 'node:fs'
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { isPathInside } from './descriptor.ts'
 import { isolatedLaunchEnvironment } from './credentials-policy.ts'
 import type { BranchRuntimeOverride } from './types.ts'
@@ -27,6 +29,8 @@ export interface PreparedProfile {
   readonly profileHash: string
   readonly overrides: readonly BranchRuntimeOverride[]
 }
+
+export type WorktreePackageIndex = ReadonlyMap<string, readonly string[]>
 
 /** Copy the real user profile, rewrite local links, and install into a private node_modules. */
 export function prepareRuntimeProfile(input: {
@@ -83,26 +87,23 @@ export function generateRuntimePackage(input: {
 }): { readonly packageJson: PackageJson; readonly overrides: readonly BranchRuntimeOverride[] } {
   const dependencies = { ...(input.primaryPackage.dependencies ?? {}) }
   const overrides: BranchRuntimeOverride[] = []
+  const packageIndex = buildWorktreePackageIndex(input.worktreePath)
   for (const [packageName, spec] of Object.entries(dependencies)) {
-    if (spec.startsWith('link:')) {
-      const resolvedPrimary = resolveDependencyPath(input.primaryProfile, spec.slice('link:'.length))
-      const branchPath = matchingBranchPackage({
+    const primaryPath = primaryDependencyPath(input.primaryProfile, spec)
+    const branchPath = matchingBranchPackage(packageIndex, packageName)
+    if (branchPath !== undefined) {
+      dependencies[packageName] = `link:${branchPath}`
+      overrides.push({
         packageName,
-        primaryPath: resolvedPrimary,
-        primaryHome: input.primaryHome,
-        worktreePath: input.worktreePath,
+        primarySpec: spec,
+        ...(primaryPath === undefined ? {} : { primaryPath }),
+        branchPath,
       })
-      if (branchPath !== undefined) {
-        dependencies[packageName] = `link:${branchPath}`
-        overrides.push({ packageName, primaryPath: resolvedPrimary, branchPath })
-      } else {
-        dependencies[packageName] = `link:${resolvedPrimary}`
-      }
       continue
     }
-    if (spec.startsWith('file:')) {
-      const raw = spec.slice('file:'.length)
-      if (!isAbsolute(raw)) dependencies[packageName] = `file:${resolve(input.primaryProfile, raw)}`
+    if (primaryPath !== undefined) {
+      const prefix = spec.startsWith('link:') ? 'link:' : 'file:'
+      dependencies[packageName] = `${prefix}${primaryPath}`
     }
   }
   return {
@@ -111,32 +112,54 @@ export function generateRuntimePackage(input: {
   }
 }
 
-function matchingBranchPackage(input: {
-  readonly packageName: string
-  readonly primaryPath: string
-  readonly primaryHome: string
-  readonly worktreePath: string
-}): string | undefined {
-  const candidates: string[] = []
-  if (isPathInside(input.primaryPath, input.primaryHome)) {
-    candidates.push(resolve(input.worktreePath, relative(input.primaryHome, input.primaryPath)))
+/** Index only the worktree root and its bounded package directories. */
+export function buildWorktreePackageIndex(worktreePath: string): WorktreePackageIndex {
+  const worktree = canonicalDirectory(worktreePath)
+  const candidates = [worktree]
+  for (const group of ['plugins', 'packages', 'apps']) {
+    const groupPath = join(worktree, group)
+    if (!existsSync(groupPath)) continue
+    let canonicalGroup: string
+    try {
+      canonicalGroup = canonicalDirectory(groupPath)
+      if (!statSync(canonicalGroup).isDirectory() || !isPathInside(canonicalGroup, worktree)) continue
+    } catch { continue }
+    for (const entry of readdirSync(canonicalGroup, { withFileTypes: true })) {
+      if (entry.isDirectory() || entry.isSymbolicLink()) candidates.push(join(canonicalGroup, entry.name))
+    }
   }
-  candidates.push(
-    resolve(input.worktreePath, 'plugins', basename(input.primaryPath)),
-    resolve(input.worktreePath, 'packages', basename(input.primaryPath)),
-    resolve(input.worktreePath),
-  )
-  const worktree = canonicalDirectory(input.worktreePath)
-  for (const candidate of [...new Set(candidates)]) {
-    if (!existsSync(join(candidate, 'package.json'))) continue
+  const index = new Map<string, string[]>()
+  for (const candidate of candidates) {
+    const manifestPath = join(candidate, 'package.json')
+    if (!existsSync(manifestPath)) continue
     let canonical: string
-    try { canonical = canonicalDirectory(candidate) } catch { continue }
-    if (!isPathInside(canonical, worktree)) continue
+    try {
+      canonical = canonicalDirectory(candidate)
+      if (!statSync(canonical).isDirectory() || !isPathInside(canonical, worktree)) continue
+    } catch { continue }
     const manifest = readJson(join(canonical, 'package.json'))
-    if (manifest.name !== input.packageName) continue
-    return canonical
+    if (typeof manifest.name !== 'string' || manifest.name.trim() === '') continue
+    const paths = index.get(manifest.name) ?? []
+    if (!paths.includes(canonical)) paths.push(canonical)
+    index.set(manifest.name, paths)
   }
-  return undefined
+  return index
+}
+
+function matchingBranchPackage(index: WorktreePackageIndex, packageName: string): string | undefined {
+  const matches = index.get(packageName) ?? []
+  if (matches.length > 1) {
+    throw new Error(`branch runtime: ambiguous branch package ${packageName}: ${matches.join(', ')}`)
+  }
+  return matches[0]
+}
+
+function primaryDependencyPath(profilePath: string, spec: string): string | undefined {
+  const prefix = spec.startsWith('link:') ? 'link:' : spec.startsWith('file:') ? 'file:' : undefined
+  if (prefix === undefined) return undefined
+  const raw = spec.slice(prefix.length)
+  const absolute = isAbsolute(raw) ? resolve(raw) : resolve(profilePath, raw)
+  try { return canonicalDirectory(absolute) } catch { return absolute }
 }
 
 function installProfile(profilePath: string): void {

@@ -16,7 +16,8 @@ export interface BranchRuntimeSource {
 
 export interface BranchRuntimeOverride {
   readonly packageName: string
-  readonly primaryPath: string
+  readonly primarySpec: string
+  readonly primaryPath?: string | undefined
   readonly branchPath: string
 }
 

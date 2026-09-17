@@ -1,9 +1,10 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import {
   existsSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
   writeFileSync,
 } from 'node:fs'
@@ -31,13 +32,16 @@ export class BranchRuntimeService {
 
   constructor(
     readonly primaryHome: string,
-    runtimeRoot = defaultRuntimeRoot(),
+    runtimeRoot = defaultRuntimeRoot(primaryHome),
     readonly profileName = 'web',
     readonly portStart = 4174,
     readonly portEnd = 4214,
     controller = new BranchRuntimeController(),
   ) {
     this.runtimeRoot = resolve(runtimeRoot)
+    if (isPathInside(this.runtimeRoot, this.primaryHome)) {
+      throw new Error('branch runtime: runtime root must remain outside primary DSH_HOME')
+    }
     this.controller = controller
   }
 
@@ -246,13 +250,28 @@ export class BranchRuntimeService {
   }
 }
 
-export function defaultRuntimeRoot(): string {
-  if (process.platform === 'win32') {
-    const local = process.env.LOCALAPPDATA?.trim()
-    if (local !== undefined && local !== '') return join(local, 'DSH', 'branchline-runtimes')
+export function defaultRuntimeRoot(primaryHome: string): string {
+  const canonicalHome = canonicalPrimaryHome(primaryHome)
+  const homeId = createHash('sha256')
+    .update(`branchline-runtime-root-v1\0${canonicalHome}`)
+    .digest('hex')
+    .slice(0, 16)
+  const base = process.platform === 'win32'
+    ? join(process.env.LOCALAPPDATA?.trim() || homedir(), 'DSH', 'branchline-runtimes')
+    : (() => {
+      const home = homedir()
+      return home === '' ? join(tmpdir(), 'dsh-branchline-runtimes') : join(home, '.dsh-branchline-runtimes')
+    })()
+  const root = join(base, homeId)
+  if (isPathInside(root, canonicalHome)) {
+    throw new Error('branch runtime: default runtime root would be inside primary DSH_HOME')
   }
-  const home = homedir()
-  return home === '' ? join(tmpdir(), 'dsh-branchline-runtimes') : join(home, '.dsh-branchline-runtimes')
+  return root
+}
+
+function canonicalPrimaryHome(value: string): string {
+  const resolved = resolve(value)
+  try { return normalizePath(realpathSync.native(resolved)) } catch { return normalizePath(resolved) }
 }
 
 function makeRuntimeId(): string {

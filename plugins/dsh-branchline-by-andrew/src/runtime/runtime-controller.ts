@@ -18,7 +18,7 @@ export interface ProcessRecord {
   readonly commandLine: string
 }
 
-interface ControllerState {
+export interface ControllerState {
   readonly runtimeId: string
   readonly pid: number
   readonly port: number
@@ -117,21 +117,26 @@ export class BranchRuntimeController {
 
     const deadline = Date.now() + this.startTimeoutMs
     let authenticatedUrl: string | undefined
-    do {
-      const record = processRecord(controller.pid)
-      if (record === undefined) break
-      if (!isExpectedProcessRecord(record, controller)) {
-        throw new Error('branch runtime: spawned PID no longer matches the expected DSH command')
-      }
-      authenticatedUrl = readAuthenticatedUrl(logPath, input.port)
-      const listeners = listeningPids(input.port)
-      if (authenticatedUrl !== undefined && listeners.includes(controller.pid)) {
-        return { pid: controller.pid, port: controller.port, authenticatedUrl, logPath }
-      }
-      await sleep(200)
-    } while (Date.now() < deadline)
+    try {
+      do {
+        const record = processRecord(controller.pid)
+        if (record === undefined) break
+        if (!isExpectedProcessRecord(record, controller)) {
+          throw new Error('branch runtime: spawned PID no longer matches the expected DSH command')
+        }
+        authenticatedUrl = readAuthenticatedUrl(logPath, input.port)
+        const listeners = listeningPids(input.port)
+        if (authenticatedUrl !== undefined && listeners.includes(controller.pid)) {
+          return { pid: controller.pid, port: controller.port, authenticatedUrl, logPath }
+        }
+        await sleep(200)
+      } while (Date.now() < deadline)
+    } catch (error) {
+      await this.cleanupFailedStart(controller).catch(() => {})
+      throw error
+    }
 
-    await this.stop(input.launcherRoot).catch(() => {})
+    await this.cleanupFailedStart(controller).catch(() => {})
     throw new Error(`branch runtime: DSH did not become ready on port ${String(input.port)}`)
   }
 
@@ -142,7 +147,7 @@ export class BranchRuntimeController {
     if (record === undefined) return { state: 'STOPPED', controller }
     if (!isExpectedProcessRecord(record, controller)) return { state: 'FOREIGN_PROCESS', controller, process: record }
     const listeners = listeningPids(controller.port)
-    if (!listeners.includes(controller.pid)) return { state: 'FOREIGN_PROCESS', controller, process: record }
+    if (!canTerminateNormally(record, controller, listeners)) return { state: 'FOREIGN_PROCESS', controller, process: record }
     return { state: 'RUNNING', controller, authenticatedUrl: readAuthenticatedUrl(controller.logPath, controller.port) }
   }
 
@@ -156,21 +161,25 @@ export class BranchRuntimeController {
       throw new Error('branch runtime: refusing to stop a process whose identity cannot be proven')
     }
     const pid = current.controller.pid
-    if (process.platform === 'win32') {
-      try { execFileSync('taskkill.exe', ['/PID', String(pid), '/T'], { windowsHide: true, stdio: 'ignore' }) } catch {}
-      if (!(await waitUntil(() => processRecord(pid) === undefined, this.stopTimeoutMs))) {
-        try { execFileSync('taskkill.exe', ['/F', '/PID', String(pid), '/T'], { windowsHide: true, stdio: 'ignore' }) } catch {}
-      }
-    } else {
-      try { process.kill(pid, 'SIGTERM') } catch {}
-    }
-    if (!(await waitUntil(() => processRecord(pid) === undefined, this.stopTimeoutMs))) {
-      throw new Error(`branch runtime: timed out stopping PID ${String(pid)}`)
-    }
+    await terminateProcess(pid, this.stopTimeoutMs)
     if (listeningPids(current.controller.port).length > 0) {
       throw new Error(`branch runtime: port ${String(current.controller.port)} remained occupied after stop`)
     }
     clearControllerState(launcherRoot)
+  }
+
+  private async cleanupFailedStart(expected: ControllerState): Promise<boolean> {
+    const current = readControllerState(expected.launcherRoot)
+    if (!sameControllerState(current, expected)) return false
+    const record = processRecord(expected.pid)
+    if (record === undefined) {
+      clearControllerState(expected.launcherRoot)
+      return true
+    }
+    if (!canTerminateFailedStart(current, expected, record)) return false
+    await terminateProcess(expected.pid, this.stopTimeoutMs)
+    clearControllerState(expected.launcherRoot)
+    return true
   }
 }
 
@@ -198,6 +207,39 @@ export function isExpectedProcessRecord(record: ProcessRecord, expected: {
   if (!normalize(record.executablePath).includes(normalize(expected.nodePath))) return false
   return hasArgumentPair(record.commandLine, '--profile', expected.profile)
     && hasArgumentPair(record.commandLine, '--port', String(expected.port))
+}
+
+/** Normal stop additionally requires listener ownership; failed-start cleanup does not. */
+export function canTerminateNormally(
+  record: ProcessRecord | undefined,
+  expected: ControllerState,
+  listeners: readonly number[],
+): boolean {
+  return record !== undefined && isExpectedProcessRecord(record, expected) && listeners.includes(expected.pid)
+}
+
+/** Fail-closed decision for the child recorded by this exact start attempt. */
+export function canTerminateFailedStart(
+  launcherState: ControllerState | undefined,
+  expected: ControllerState,
+  record: ProcessRecord | undefined,
+): boolean {
+  return record !== undefined && sameControllerState(launcherState, expected) && isExpectedProcessRecord(record, expected)
+}
+
+function sameControllerState(left: ControllerState | undefined, right: ControllerState): boolean {
+  return left !== undefined
+    && left.runtimeId === right.runtimeId
+    && left.pid === right.pid
+    && left.port === right.port
+    && left.profile === right.profile
+    && left.cwd === right.cwd
+    && left.home === right.home
+    && left.launcherRoot === right.launcherRoot
+    && left.dshBin === right.dshBin
+    && left.nodePath === right.nodePath
+    && left.logPath === right.logPath
+    && left.startedAt === right.startedAt
 }
 
 function resolveDshRuntime(): { readonly nodePath: string; readonly dshBin: string } {
@@ -245,6 +287,20 @@ function readControllerState(launcherRoot: string): ControllerState | undefined 
 function clearControllerState(launcherRoot: string): void {
   rmSync(join(launcherRoot, 'dsh-runtime.json'), { force: true })
   rmSync(join(launcherRoot, 'dsh.pid'), { force: true })
+}
+
+async function terminateProcess(pid: number, timeoutMs: number): Promise<void> {
+  if (process.platform === 'win32') {
+    try { execFileSync('taskkill.exe', ['/PID', String(pid), '/T'], { windowsHide: true, stdio: 'ignore' }) } catch {}
+    if (!(await waitUntil(() => processRecord(pid) === undefined, timeoutMs))) {
+      try { execFileSync('taskkill.exe', ['/F', '/PID', String(pid), '/T'], { windowsHide: true, stdio: 'ignore' }) } catch {}
+    }
+  } else {
+    try { process.kill(pid, 'SIGTERM') } catch {}
+  }
+  if (!(await waitUntil(() => processRecord(pid) === undefined, timeoutMs))) {
+    throw new Error(`branch runtime: timed out stopping PID ${String(pid)}`)
+  }
 }
 
 function processRecord(pid: number): ProcessRecord | undefined {
