@@ -18,17 +18,8 @@ export function sourceFromTask(task: TaskView): BranchRuntimeSource {
   if (!samePath(inspected.commonDirectory, task.commonDirectory)) {
     throw new Error('branch runtime: task common directory changed')
   }
-  if (!samePath(inspected.repository, task.repository)) throw new Error('branch runtime: task repository changed before launch')
   if (inspected.head !== task.headCommit) throw new Error('branch runtime: task HEAD changed before launch')
   if (inspected.branch !== branch) throw new Error('branch runtime: task branch changed before launch')
-  const expectedChangeToken = createHash('sha256')
-    .update(String(task.id))
-    .update('\0')
-    .update(task.path)
-    .update('\0')
-    .update(inspected.sourceFingerprint)
-    .digest('hex')
-  if (expectedChangeToken !== task.changeToken) throw new Error('branch runtime: task changed before launch')
   return { ...inspected, changeToken: task.changeToken }
 }
 

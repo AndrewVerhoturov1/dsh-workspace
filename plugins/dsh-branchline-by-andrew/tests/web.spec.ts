@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { request as httpRequest } from 'node:http'
 import { join } from 'node:path'
+import { Readable } from 'node:stream'
 import { Context } from '@deepseek-ai/cordis'
 import HttpServer from '@deepseek-ai/dsh-host-webserver'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
 import * as WorktreeStudio from '../src/index.ts'
+import { registerWorktreeStudioWeb } from '../src/web.ts'
 import { createRepositoryFixture, removeFixture, type RepositoryFixture } from './helpers.ts'
 
 let context: Context | undefined
@@ -63,6 +65,63 @@ async function requestWithHost(url: string, host: string): Promise<number | unde
 }
 
 describe('branchline Web route', () => {
+  it('rejects a stale runtime.start token before calling the runtime', async () => {
+    const currentToken = 'a'.repeat(64)
+    const staleToken = 'b'.repeat(64)
+    const taskId = 'wt-00000000-0000-4000-8000-000000000001'
+    let inspectCalls = 0
+    let startCalls = 0
+    let handler: any
+    const ctx = {
+      webServer: {
+        register(options: any) {
+          handler = options.handler
+          return () => undefined
+        },
+      },
+      worktreeStudio: {
+        inspect: async (id: string) => {
+          inspectCalls += 1
+          expect(id).toBe(taskId)
+          return { task: { id, changeToken: currentToken }, review: {} }
+        },
+      },
+    }
+    const runtime = {
+      startTask: async () => {
+        startCalls += 1
+        return { runtimeId: 'must-not-start' }
+      },
+    }
+    registerWorktreeStudioWeb(ctx as any, {} as any, runtime as any)
+
+    const request: any = Object.assign(
+      Readable.from([JSON.stringify({ operation: 'runtime.start', id: taskId, changeToken: staleToken })]),
+      {
+        method: 'POST',
+        headers: {
+          host: '127.0.0.1:4173',
+          origin: 'http://127.0.0.1:4173',
+          'content-type': 'application/json',
+          'sec-fetch-site': 'same-origin',
+        },
+        socket: { remoteAddress: '127.0.0.1' },
+      },
+    )
+    let status = 0
+    let payload: any
+    const response: any = {
+      writeHead(value: number) { status = value },
+      end(value: string) { payload = JSON.parse(value) },
+    }
+
+    await handler(request, response)
+    expect(status).toBe(409)
+    expect(payload).toMatchObject({ ok: false, error: { code: 'state-conflict' } })
+    expect(inspectCalls).toBe(1)
+    expect(startCalls).toBe(0)
+  })
+
   it('serves the real loopback route and creates a task through its JSON API', async () => {
     const running = await start()
     const origin = running.baseUrl

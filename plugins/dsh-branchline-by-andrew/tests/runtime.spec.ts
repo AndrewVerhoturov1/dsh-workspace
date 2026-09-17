@@ -1,10 +1,12 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { cleanupRuntimeSandbox } from '../src/runtime/cleanup.ts'
-import { sourceFromExternalWorktree, staleSourceReason } from '../src/runtime/descriptor.ts'
+import { sourceFromExternalWorktree, sourceFromTask, staleSourceReason } from '../src/runtime/descriptor.ts'
+import { TaskId, type TaskView } from '../src/types.ts'
+import { createRepositoryFixture, git, removeFixture } from './helpers.ts'
 import { generateRuntimePackage } from '../src/runtime/profile-snapshot.ts'
 import { isExpectedProcessRecord } from '../src/runtime/runtime-controller.ts'
 
@@ -74,6 +76,57 @@ describe('branch runtime profile overlay', () => {
 })
 
 describe('branch runtime source identity', () => {
+  it('accepts a Branchline task whose linked worktree differs from its primary repository', async () => {
+    const fixture = await createRepositoryFixture()
+    const worktree = join(fixture.root, 'linked-worktree')
+    const branch = 'runtime-linked-regression'
+    git(fixture.repository, ['worktree', 'add', '-b', branch, worktree, 'HEAD'])
+
+    try {
+      const repository = git(fixture.repository, ['rev-parse', '--show-toplevel'])
+      const commonDirectory = realpathSync.native(git(fixture.repository, ['rev-parse', '--path-format=absolute', '--git-common-dir']))
+      const head = git(worktree, ['rev-parse', 'HEAD'])
+      const task: TaskView = {
+        id: TaskId('wt-00000000-0000-4000-8000-000000000001'),
+        title: 'linked worktree regression',
+        repository,
+        commonDirectory,
+        path: worktree,
+        branch,
+        baseCommit: head,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+        phase: 'active',
+        headCommit: head,
+        currentBranch: branch,
+        changes: { dirty: false, staged: 0, unstaged: 0, untracked: 0, commitsAhead: 0 },
+        exists: true,
+        changeToken: 'a'.repeat(64),
+        workspacePath: worktree,
+      }
+
+      const linkedCommonDirectory = realpathSync.native(git(worktree, ['rev-parse', '--path-format=absolute', '--git-common-dir']))
+      expect(task.repository).toBe(repository)
+      expect(task.workspacePath).toBe(worktree)
+      expect(task.path).toBe(worktree)
+      expect(task.repository).not.toBe(task.workspacePath)
+      expect(linkedCommonDirectory).toBe(commonDirectory)
+
+      const source = sourceFromTask(task)
+      expect(source).toMatchObject({
+        source: 'branchline-task',
+        worktreePath: worktree,
+        commonDirectory,
+        head,
+        branch,
+        changeToken: task.changeToken,
+      })
+    } finally {
+      git(fixture.repository, ['worktree', 'remove', '--force', worktree])
+      await removeFixture(fixture.root)
+    }
+  })
+
   it('marks an external worktree stale after content changes', () => {
     const repository = join(tempRoot(), 'repo')
     mkdirSync(repository, { recursive: true })
