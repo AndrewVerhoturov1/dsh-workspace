@@ -26,6 +26,8 @@ backup/
 
 # Локальные временные файлы инструментов
 .playwright-cli/
+.playwright-mcp/
+_codex-backups/
 .tmp/
 tmp/
 

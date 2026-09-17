@@ -20,7 +20,11 @@
         serverName: playwright
         transport: stdio
         command: npx
-        args: ['-y', '@playwright/mcp@latest', '--config', 'C:/Users/andre/.dsh/profiles/web/playwright-mcp.config.json']
+        args:
+          - '-y'
+          - '@playwright/mcp@latest'
+          - '--config'
+          - !!js process.env.USERPROFILE + '/.dsh/profiles/web/playwright-mcp.config.json'
         env: {}
         cwd: !!js process.cwd()
         failOnStartupError: false
