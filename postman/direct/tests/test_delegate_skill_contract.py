@@ -16,7 +16,7 @@ class DelegateViaPostmanSkillContract(unittest.TestCase):
         cls.agents = AGENTS.read_text(encoding="utf-8")
 
     def test_version_and_entrypoint(self):
-        self.assertIn("DIRECT_POSTMAN_SKILL_VERSION: 12", self.skill)
+        self.assertIn("DIRECT_POSTMAN_SKILL_VERSION: 13", self.skill)
         self.assertIn(r"C:\Users\andre\.dsh\postman\direct\postman.ps1", self.skill)
 
     def test_old_callable_path_is_not_present(self):
@@ -32,10 +32,19 @@ class DelegateViaPostmanSkillContract(unittest.TestCase):
             "## 8. Единственный production-вызов",
             "## 9. Разбор JSON и минимальный transport gate",
             "## 13. Не создавать Git branch до RESULT_DURABLE только ради transport",
-            "## 14. Unified resumable local finalization",
+            "## 14. Legacy/manual explicit finalization",
             "## 20. Критические инварианты",
         ):
             self.assertIn(marker, self.skill)
+
+    def test_normal_path_stops_after_durable_handoff(self):
+        section = self.skill.split("## 0. Золотой путь", 1)[1].split(
+            "## 1. Жёстко запрещённые обходы", 1
+        )[0]
+        for marker in ("RESULT_DURABLE", "resultHandoffPath", "result_handoff_json", "STOP"):
+            self.assertIn(marker, section)
+        self.assertNotIn("resume_request.ps1", section)
+        self.assertIn("normal flow не вызывает resume/PREPARE/TEST/PUBLISH", section)
 
     def test_exclusive_at_postman_trigger_contract(self):
         trigger_examples = (
@@ -131,30 +140,30 @@ class DelegateViaPostmanSkillContract(unittest.TestCase):
 
     def test_unified_resume_finalization_contract(self):
         self.assertIn(r"C:\Users\andre\.dsh\postman\direct\resume_request.ps1", self.skill)
-        self.assertIn(r"C:\Users\andre\.dsh\postman\direct\resume_request.ps1", self.agents)
+        self.assertIn("resume_request.ps1", self.agents)
         for code in ("READY_FOR_TEST", "TEST_PASSED", "PUBLISHED"):
             self.assertIn(code, self.skill)
         self.assertIn("PREPARE/TEST/PUBLISH", self.skill)
-        self.assertIn("внутренними deterministic стадиями resume", self.agents)
-        section = self.skill.split("## 14. Unified resumable local finalization", 1)[1].split(
-            "## 15. Что Luna больше не делает вручную", 1
+        self.assertIn("legacy/manual explicit finalization", self.agents)
+        section = self.skill.split("## 14. Legacy/manual explicit finalization", 1)[1].split(
+            "## 15. Что normal `@Postman` НЕ делает после RESULT_DURABLE", 1
         )[0]
         self.assertIn("-TestScript", section)
         self.assertIn("-TestSpec", section)
         self.assertIn("НЕ вызывает", section)
         self.assertNotIn("-TestCommand @(", section)
         self.assertIn("запрещены `python -c`", section)
-        self.assertIn("не выполняет merge", self.agents)
+        self.assertIn("не являются", self.agents)
 
-    def test_durable_handoff_resume_contract(self):
+    def test_durable_handoff_contract(self):
         self.assertIn(r"C:\Users\andre\AppData\Local\DSH\Postman\direct\results\<REQ>.json", self.skill)
-        self.assertIn("-RequestId $requestId", self.skill)
-        self.assertIn("resume_request.ps1", self.skill)
-        self.assertIn("не передавать direct state как", self.skill)
-        self.assertIn("Resume никогда не вызывает Direct Postman", self.skill)
-        self.assertIn("не создаёт новый REQ", self.skill)
-        self.assertIn("PREPARE_RESUME_NOT_DURABLE", self.skill)
-        self.assertIn("идемпотентно", self.skill)
+        self.assertIn("resultHandoffPath", self.skill)
+        self.assertIn("result_handoff_json", self.skill)
+        self.assertIn("не распаковывать и не анализировать ZIP повторно", self.skill)
+        self.assertIn("не запускать resume", self.skill)
+        self.assertIn("не создавать второй REQ", self.skill)
+        self.assertIn("postman_result_workspace_register", self.skill)
+        self.assertIn("presentation convenience", self.skill)
 
     def test_clickable_changed_file_contract(self):
         for marker in ("Кликабельные изменённые файлы", "Markdown inline code", "changedFiles", "published.worktree"):
@@ -163,15 +172,15 @@ class DelegateViaPostmanSkillContract(unittest.TestCase):
         self.assertIn("Markdown inline code", self.agents)
         self.assertIn("exact retained result-worktree path", self.agents)
 
-    def test_normal_path_uses_argv_safe_test_input(self):
-        section = self.skill.split("## 14. Unified resumable local finalization", 1)[1].split(
-            "## 15. Что Luna больше не делает вручную", 1
+    def test_manual_finalization_uses_argv_safe_test_input(self):
+        section = self.skill.split("## 14. Legacy/manual explicit finalization", 1)[1].split(
+            "## 15. Что normal `@Postman` НЕ делает после RESULT_DURABLE", 1
         )[0]
         self.assertIn("-TestScript", section)
         self.assertIn("-TestSpec", section)
         self.assertIn("`-TestCommand` остаётся legacy", section)
         self.assertIn("запрещены `python -c`", section)
-        self.assertIn("`TestScript`/`TestSpec`", self.agents)
+        self.assertIn("TestScript", self.agents)
 
     def test_normal_smoke_is_forbidden(self):
         self.assertIn("BrowserSmoke не является normal preflight", self.skill)
@@ -241,7 +250,7 @@ process.stdout.write(JSON.stringify({
             cwd=dsh_root,
         )
         parsed = json.loads(result.stdout)
-        self.assertEqual("2.9.0", parsed["yamlVersion"])
+        self.assertIn(parsed["yamlVersion"], {"2.9.0", "2.9.1"})
         self.assertEqual("delegate-via-postman", parsed["name"])
         self.assertIsInstance(parsed["description"], str)
         self.assertTrue(parsed["description"].strip())

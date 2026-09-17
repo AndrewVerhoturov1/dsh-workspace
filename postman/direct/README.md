@@ -18,8 +18,9 @@ Luna
 → one JSON object returned to Luna
 ```
 
-The bridge never applies the implementation ZIP. Luna remains responsible for
-safe compatibility checks, application, tests, commit/PR, and user reporting.
+The bridge never applies the implementation ZIP. Normal flow reports the exact durable
+result and optionally registers its result directory as a Harness Workspace. Application,
+tests, commit, and PR remain available only through explicit manual finalization.
 
 ## Browser smoke
 
@@ -74,29 +75,32 @@ existing validated `resultZip`.
 - ZIPs are accepted only after the existing artifact validator proves trusted
   request/repository/baseCommit/filename/path metadata.
 
-## Finalization and resume
+## Durable result and explicit finalization
 
-After a successful transport, use the durable request state rather than starting
-another transport request:
+After a successful transport, normal flow ends at the exact durable handoff:
 
 ```text
 RESULT_DURABLE
-→ resume_request.ps1 -RequestId REQ_... -TestScript <exact UTF-8 script>
-→ READY_FOR_TEST
-→ TEST_PASSED
-→ PUBLISHED → RESULT_PRESENTED → merge decision → CLEANED
-  or ALREADY_APPLIED (semantic PASS, no empty commit/PR)
+→ optionally attempt postman_result_workspace_register(
+    result_handoff_json=<exact resultHandoffPath>
+  )
+→ report REQ, exact resultZip and Workspace/registration diagnostic
+→ STOP
 ```
 
-`resume_request.py` is the single state-machine entrypoint. It forwards the exact
-receipt paths returned by each stage (`readyJson`, `testJson`, `publishedJson`),
-validates every receipt in the current process, and resumes only the first missing
-stage. A valid existing receipt is never recreated. Resume never invokes Direct
-Postman or contacts Ch1 again. A corrupted or cross-request receipt fails closed.
+Normal flow does not call `resume_request.ps1` or `integrate_result.ps1`, does not run
+PREPARE/TEST/PUBLISH, create an implementation worktree/branch/commit/PR, or unpack and
+re-analyse the ZIP. Workspace registration is presentation convenience, not an integrity gate.
+If registration fails, RESULT_DURABLE and exact resultZip remain successful outputs; do not
+create a second REQ or repeat ChatGPT/download/transport.
 
-Production tests should use a UTF-8 task-script file, not a long `python -c`
-string. The script is outside the implementation worktree and its path and SHA-256
-are recorded in `test.json`; the implementation fingerprint must remain unchanged.
+## Legacy/manual finalization
+
+The existing `resume_request.ps1` state machine remains available only for an explicit
+manual request against an already existing durable result. It can continue through
+`READY_FOR_TEST → TEST_PASSED → PUBLISHED` and retains its existing receipt and identity
+guards. Its UTF-8 `TestScript`/`TestSpec` inputs and deterministic PREPARE/TEST/PUBLISH
+stages are legacy/manual behavior, not part of normal `@Postman` flow.
 
 ## Explicit abandon
 
