@@ -754,9 +754,12 @@ Direct Web Postman не должен:
 
 ```text
 RESULT_DURABLE
-→ postman_result_workspace_register(result_handoff_json=<exact resultHandoffPath>)
+→ postman_result_workspace_register(
+     request_id=<exact REQ>,
+     result_handoff_json=<exact resultHandoffPath>
+  )
    или diagnostic ошибки регистрации
-→ сообщить REQ, exact resultZip и Workspace
+→ сообщить exact REQ, exact resultZip и Workspace
 → STOP
 ```
 
@@ -765,6 +768,8 @@ transport остаётся успешным: не создавать второ�
 не запускать resume и вернуть пользователю exact durable receipt, resultZip и diagnostic.
 Normal flow не вызывает `resume_request.ps1`, `integrate_result.ps1`, PREPARE, TEST или
 PUBLISH; не создаёт implementation worktree, branch, commit или PR и не распаковывает ZIP.
+Локальный агент не интерпретирует содержимое ZIP и не изменяет user payload: после удаления
+только `@Postman` + separator оставшийся текст передаётся verbatim без previous-context augmentation.
 
 Существующие finalization scripts не удаляются. `resume_request.ps1`,
 `prepare_result.py`, `test_result.py`, `publish_result.py` и `integrate_result.py` доступны
