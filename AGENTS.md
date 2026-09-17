@@ -58,19 +58,19 @@ Postman global invariant: OFF by default.
 Даже задачи по разработке самого Postman без `@Postman` выполняются локально Luna
 самостоятельно. Без `@Postman` Luna больше не имеет права запускать Postman.
 
-Postman local finalization invariant.
-После exact `RESULT_DURABLE` единственный normal production local-finalization entrypoint —
-`C:\Users\andre\.dsh\postman\direct\resume_request.ps1`. PREPARE, TEST и PUBLISH
-остаются внутренними deterministic стадиями resume и владеют соответственно
-Git/policy/worktree+applicator, одним task-specific test receipt и
-stage/commit/push/remote-SHA/PR. Luna не вызывает `prepare_result.ps1`,
-`test_result.ps1` или `publish_result.ps1` отдельно в normal `@Postman` flow и не
-разлагает resume обратно на ручные Git/gh/shell вызовы. Normal task test передаётся
-argv-safe через `TestScript`/`TestSpec`; `python -c` и `TestCommand` не являются normal
-path. Если test нельзя выбрать до PREPARE, первый resume без test input может вернуть
-`READY_FOR_TEST`, после чего тот же REQ продолжается вторым resume с TestScript/TestSpec.
-Любой `ok=false` — fail-closed `STOP`; ручной fallback, новый REQ и повторный Ch1
-запрещены. PUBLISH внутри resume не выполняет merge.
+Postman normal lifecycle invariant.
+После exact `RESULT_DURABLE` normal `@Postman` flow может один раз попытаться
+зарегистрировать exact durable result через `postman_result_workspace_register` и затем
+обязан остановиться. Workspace registration — presentation convenience, а не integrity gate.
+Если регистрация не удалась, transport остаётся успешным: сообщить exact resultZip и
+diagnostic, не создавать второй REQ, не повторять ChatGPT/download и не запускать resume.
+
+`resume_request.ps1`, PREPARE, TEST, PUBLISH и `integrate_result.ps1` сохраняются как
+legacy/manual explicit finalization для уже существующего durable результата. Они не являются
+частью normal `@Postman` flow. Normal flow не создаёт implementation worktree, branch,
+commit или PR и не распаковывает/анализирует ZIP. До `RESULT_DURABLE` действует strict
+fail-closed поведение; любой `ok=false` останавливает операцию без fallback, нового REQ
+или повторного Ch1. При manual finalization TestScript/TestSpec передаются argv-safe.
 
 Terminal visibility invariant.
 В обычной производственной работе Harness пользователь не должен видеть всплывающие окна PowerShell, cmd, Python, Node, Git, gh или других процессов командной строки. Любой дочерний процесс командной строки запускается без создания видимого окна консоли.

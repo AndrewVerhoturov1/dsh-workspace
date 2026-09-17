@@ -6,14 +6,14 @@ description: >-
   Direct Web Postman: сохранить пользовательский intent без технических дополнений,
   создать ровно один canonical REQ, один раз вызвать
   C:\Users\andre\.dsh\postman\direct\postman.ps1, дождаться validated RESULT_DURABLE,
-  затем безопасно применить implementation ZIP, проверить изменения и оформить их
-  по политике репозитория. Не использовать Cordis/postman_async_send, QChat или
+  сохранить validated RESULT_DURABLE, сообщить exact resultZip и остановиться. Регистрация
+  Result Workspace — необязательная presentation convenience, а не integrity gate. Не использовать Cordis/postman_async_send, QChat или
   ручную автоматизацию браузера как fallback.
 ---
 
 # Delegate via Postman — Direct Production
 
-`DIRECT_POSTMAN_SKILL_VERSION: 12`
+`DIRECT_POSTMAN_SKILL_VERSION: 13`
 
 Исторический baseline до v12: `DIRECT_POSTMAN_SKILL_VERSION: 11`.
 
@@ -23,27 +23,20 @@ description: >-
 
 ```text
 точный user intent
+→ удалить только transport prefix @Postman
 → один canonical REQ
 → один foreground-вызов Direct Postman
-→ ждать terminal JSON
+→ ждать exact terminal JSON
 → RESULT_DURABLE
-→ определить один task-scoped semantic test
-→ создать UTF-8 TestScript/TestSpec вне implementation worktree
-→ RESUME: использовать только resume_request.ps1
-→ READY_FOR_TEST → TEST_PASSED → PUBLISHED внутри resumable state machine
-→ RESULT_WORKSPACE_REGISTERED
-→ RESULT_PRESENTED (если известна пользовательская точка входа)
-→ отчёт пользователю с кликабельными ссылками на authoritative changedFiles
+→ один раз попытаться зарегистрировать exact resultHandoffPath через
+  postman_result_workspace_register(result_handoff_json=...)
+→ сообщить REQ, resultZip и Workspace (или diagnostic регистрации)
+→ STOP
 ```
 
-`resume_request.ps1` — единственный normal local-finalization entrypoint после
-`RESULT_DURABLE`. PREPARE, TEST и PUBLISH остаются внутренними детерминированными
-стадиями state machine, а не отдельными командами Luna.
-
-Если semantic test нельзя корректно определить до PREPARE, разрешены два вызова
-ТОГО ЖЕ `resume_request.ps1`: первый без test input доводит exact REQ только до
-`READY_FOR_TEST`; после создания TestScript/TestSpec второй продолжает тот же REQ до
-`PUBLISHED`. Это resume одного lifecycle, а не новый transport flow.
+После `RESULT_DURABLE` normal flow не вызывает resume/PREPARE/TEST/PUBLISH, не
+создаёт implementation worktree/branch/commit/PR и не распаковывает ZIP. Регистрация
+Workspace — только удобство показа, а не integrity gate.
 
 Не проектируй другой transport flow.
 
@@ -417,7 +410,7 @@ baseCommit и application принадлежит deterministic PREPARE/applicato
 
 После `RESULT_DURABLE` не открывать ChatGPT для визуального подтверждения.
 
-### Канонический durable handoff и resume
+### Канонический durable handoff, Workspace registration и STOP
 
 После успешного `RESULT_DURABLE` Direct Postman атомарно сохраняет канонический
 terminal JSON в deterministic path:
@@ -426,37 +419,24 @@ terminal JSON в deterministic path:
 C:\Users\andre\AppData\Local\DSH\Postman\direct\results\<REQ>.json
 ```
 
-Этот файл является durable источником истины для локального продолжения. Он
-содержит `ok=true`, `code=RESULT_DURABLE`, `state=RESULT_DURABLE`, transport identity,
-`baseCommit`, `taskPublicationCommit`, `taskUrl`, `expectedFilename`, `resultZip`,
-`sha256`, `resultRoot` и `statePath`.
+Этот файл — durable источник истины для сообщения пользователю. До этого состояния
+сохраняется строгий fail-closed transport gate: `ok=true`, exact `code/state`,
+correlation REQ и вся проверка ZIP принадлежат Direct Postman. Не реконструировать
+receipt, не распаковывать и не анализировать ZIP повторно.
 
-Normal resume entrypoint:
+После exact `RESULT_DURABLE` разрешена одна presentation-попытка:
 
 ```text
-C:\Users\andre\.dsh\postman\direct\resume_request.ps1
+postman_result_workspace_register(result_handoff_json=<exact resultHandoffPath>)
 ```
 
-Никогда не реконструировать `$jsonText` и не передавать direct state как
-`-ResultJsonText` для normal continuation. Использовать exact immutable REQ:
+При успехе сообщить `requestId`, exact `resultZip` и `workspaceId`. Если регистрация
+не удалась, transport всё равно успешен: сообщить diagnostic, не создавать второй REQ,
+не повторять ChatGPT/download и не запускать resume. Затем normal flow останавливается.
 
-```powershell
-$resumeText = & 'C:\Users\andre\.dsh\postman\direct\resume_request.ps1' `
-  -RequestId $requestId `
-  -RepoRoot 'C:\Users\andre\.dsh'
-$resume = $resumeText | ConvertFrom-Json
-```
-
-Без TestScript/TestSpec resume может вернуть `READY_FOR_TEST`. После определения
-semantic test вызвать этот же entrypoint снова с exact `-TestScript` или `-TestSpec`.
-Если valid `ready.json`/`test.json`/`published.json` уже существуют, resume проверяет
-их identity и продолжает только первую отсутствующую стадию. Valid `PUBLISHED`
-возвращается идемпотентно без повторного commit/push/PR.
-
-Resume никогда не вызывает Direct Postman, не обращается к Ч1 и не создаёт новый REQ.
-Для недоказанного legacy durable state допускается только существующий строгий
-`PREPARE_RESUME_NOT_DURABLE` fail-closed путь внутри state machine; Luna не делает
-собственную реконструкцию receipt/path.
+`resume_request.ps1`, `integrate_result.ps1` и стадии PREPARE/TEST/PUBLISH не удаляются.
+Они описаны ниже только как legacy/manual explicit finalization для уже существующего
+durable результата; они не являются частью normal `@Postman` flow.
 
 ## 10. Что Direct Postman уже доказал
 
@@ -477,8 +457,8 @@ artifact integrity
 durable storage
 ```
 
-Л1 делает только короткий local handoff gate из предыдущего раздела и переходит к
-integration.
+Л1 делает только короткий local handoff gate из предыдущего раздела, при необходимости
+пытается зарегистрировать exact durable result как Workspace и останавливается.
 
 ## 11. Failure handling
 
@@ -544,9 +524,10 @@ Git integration начинается после validated `RESULT_DURABLE`.
 
 Исключение: отдельная задача разработки/ремонта самого Postman transport.
 
-## 14. Unified resumable local finalization
+## 14. Legacy/manual explicit finalization
 
-После exact `RESULT_DURABLE` normal production entrypoint только один:
+Этот раздел не выполняется в normal `@Postman` flow. Для уже существующего durable
+результата и отдельного явного запроса пользователя допускается только один entrypoint:
 
 ```text
 C:\Users\andre\.dsh\postman\direct\resume_request.ps1
@@ -567,7 +548,7 @@ RESULT_DURABLE
 
 ### Task test input
 
-Normal production test input — argv-safe файл вне implementation worktree:
+При explicit manual finalization test input — argv-safe файл вне implementation worktree:
 
 ```text
 %LOCALAPPDATA%\DSH\Postman\handoff\<REQ>\task_test.py
@@ -610,8 +591,8 @@ $resume = $resumeText | ConvertFrom-Json
 production path Luna. В normal flow запрещены `python -c`, PowerShell command-string
 reconstruction и многострочные shell-quoting трюки.
 
-Если тест нельзя выбрать до PREPARE, сначала вызвать `resume_request.ps1` без test
-input. Exact `READY_FOR_TEST` receipt даст authoritative `worktree` и `changedFiles`.
+Если при explicit manual finalization тест нельзя выбрать до PREPARE, сначала вызвать
+`resume_request.ps1` без test input. Exact `READY_FOR_TEST` receipt даст authoritative `worktree` и `changedFiles`.
 Разрешено минимально изучить эти файлы для выбора semantic test, создать TestScript/
 TestSpec вне worktree и повторно вызвать `resume_request.ps1` для того же REQ.
 
@@ -624,13 +605,13 @@ applicator maintenance entrypoint, но Luna не вызывает его нап
 низкоуровневыми implementation/diagnostic boundary и targeted-test surface. В обычной
 пользовательской `@Postman` операции Luna их отдельно НЕ вызывает.
 
-Успех normal finalization: exact `PUBLISHED`, `semanticTest=TEST_PASSED`, один OPEN PR
+Успех manual finalization: exact `PUBLISHED`, `semanticTest=TEST_PASSED`, один OPEN PR
 в `main`, `mergePerformed=false`. Любой `ok=false`/invalid receipt — STOP без ручного
 fallback, нового REQ или повторного transport.
 
-## 15. Что Luna больше не делает вручную после RESULT_DURABLE
+## 15. Что normal `@Postman` НЕ делает после RESULT_DURABLE
 
-В normal path не запускать отдельными tool calls:
+Normal flow не запускает следующие действия ни отдельными tool calls, ни через resume:
 
 ```text
 prepare_result.ps1
@@ -651,15 +632,15 @@ gh pr create
 повторное чтение только что созданного PR
 ```
 
-Эти обязанности принадлежат `resume_request.ps1` и его внутренним
-PREPARE/TEST/PUBLISH стадиям.
+Эти действия остаются доступными только как explicit manual finalization для уже
+существующего durable результата; они не принадлежат normal `@Postman` flow.
 
 Запрещены по-прежнему `git reset --hard`, `git clean`, automatic stash, force push и
 ручная перепись artifact через LLM tools.
 
-## 16. Failure handling local finalization
+## 16. Legacy/manual finalization failure handling
 
-`resume_request.ps1` и его внутренние PREPARE/TEST/PUBLISH стадии являются
+В explicit manual finalization `resume_request.ps1` и его внутренние PREPARE/TEST/PUBLISH стадии являются
 fail-closed. Не заменять failure собственными shell-командами и не обходить resume
 низкоуровневыми boundary wrappers.
 
@@ -671,9 +652,9 @@ Dirty failure worktree сохраняется для диагностики. TES
 exact READY JSON, TestScript SHA-256 и fingerprint implementation bytes. PUBLISH не
 merge-ит PR и не удаляет remote branch.
 
-## 17. Task-specific test selection
+## 17. Legacy/manual task-specific test selection
 
-Единственное содержательное решение Л1 после RESULT_DURABLE/READY_FOR_TEST — выбрать
+Только при explicit manual finalization после RESULT_DURABLE/READY_FOR_TEST можно выбрать
 одну проверку, которая лучше всего доказывает пользовательский intent. Приоритет:
 тесты Ч1, repository-defined test, существующая project command, одна минимальная
 semantic assertion.
@@ -692,28 +673,27 @@ acceptance остаются отдельными состояниями и не 
 BrowserSmoke не является task test. Normal test path не использует `python -c` или
 `-TestCommand`; использовать `-TestScript`/`-TestSpec` через resume.
 
-## 18. Git publication boundary
+## 18. Git publication boundary for manual finalization
 
-Git publication успешна только при exact `PUBLISHED`, который доказывает commit,
+При explicit manual finalization Git publication успешна только при exact `PUBLISHED`, который доказывает commit,
 remote exact SHA, один OPEN PR `base=main` с exact head branch/SHA, удалённый task worktree
 и отсутствие автоматического merge.
 
 ## 19. Финальный отчёт
 
-При успехе сообщить как минимум:
+При normal transport сообщить как минимум:
 
 ```text
 Postman requestId
 RESULT_DURABLE
-artifact SHA256
-что было внедрено
-результаты semantic test
-presentation status
-commit SHA
-remote synchronization
-PR/link
-merge status
+exact resultZip
+resultHandoffPath
+Workspace registration status и workspaceId, если регистрация успешна
+диагностику регистрации, если она не удалась
 ```
+
+Поля semantic test, commit, remote synchronization, PR и merge относятся только к
+explicit manual finalization и не должны выдаваться как результат normal flow.
 
 ### Кликабельные изменённые файлы в Harness Web
 
@@ -765,12 +745,12 @@ terminal state
 14. Не создавать implementation branch только ради transport до результата.
 15. Пользовательский dirty worktree не очищать и не переписывать.
 16. Л1 внедряет результат Ч1, а не заменяет его собственным решением.
-17. После RESULT_DURABLE normal local-finalization entrypoint — только `resume_request.ps1`.
-18. PREPARE/TEST/PUBLISH — внутренние deterministic стадии resume; Luna не вызывает их wrappers отдельно в normal path.
-19. Normal semantic test передаётся argv-safe через `TestScript`/`TestSpec`; `python -c` и `TestCommand` не являются normal path.
-20. Resume передаёт exact `readyJson → testJson → publishedJson`, не реконструируя handoff paths.
-21. TEST требует exact `TEST_PASSED` receipt и запрещает незамеченную мутацию implementation.
-22. PUBLISH внутри resume является владельцем stage/commit/push/remote-SHA/PR и никогда не merge-ит PR автоматически.
+17. После RESULT_DURABLE normal flow останавливается после optional Workspace registration.
+18. `resume_request.ps1`, PREPARE/TEST/PUBLISH и `integrate_result.ps1` — только legacy/manual explicit finalization.
+19. Normal flow не создаёт implementation worktree/branch/commit/PR и не распаковывает ZIP.
+20. Workspace registration — presentation convenience, а не integrity gate.
+21. Ошибка Workspace registration не отменяет успешный RESULT_DURABLE и не вызывает retry.
+22. Direct Postman сам владеет strict transport validation до RESULT_DURABLE.
 23. `files/` payload копируется exact bytes; Л1 не переписывает его через LLM tools.
 24. `RESULT_DIAGNOSTIC_ONLY` не является implementation success и не разрешает automatic resend.
 25. Resume/PREPARE/TEST/PUBLISH не создают новый Postman REQ и не обращаются повторно к Ч1.
@@ -778,52 +758,34 @@ terminal state
 27. Нет validated correlated artifact → нет успешного Postman результата.
 
 
-## Result Workspace после PUBLISHED
+## Result Workspace после RESULT_DURABLE
 
-После успешного `PUBLISHED` task worktree НЕ удаляется. `published.json` содержит
-`worktree`, `worktreeRetained: true` и `resultWorkspaceRegistrationRequired: true`.
-Это exact tested PR HEAD и единственный локальный источник результата до merge;
-отдельную Preview-копию не создавать.
-
-Сразу после `PUBLISHED` вызвать ровно один раз:
+После exact successful `RESULT_DURABLE` normal flow может один раз попытаться
+зарегистрировать durable result как обычный Harness Workspace:
 
 ```text
-postman_result_workspace_register(published_json=<exact publishedJson>)
+postman_result_workspace_register(result_handoff_json=<exact resultHandoffPath>)
 ```
 
-Это НЕ transport и НЕ повторная отправка Ч1. Инструмент использует host
-`ctx.workspaceRegistry.create(worktree, title)`, записывает sibling
-`result-workspace.json` и возвращает `RESULT_WORKSPACE_REGISTERED` с `workspaceId`
-и title. Штатный Workspace feed Harness сам покажет новый Workspace без reload.
+Инструмент проверяет только receipt/layout gate, не распаковывает ZIP и не повторяет
+artifact validation. Он вызывает `ctx.workspaceRegistry.create(resultDirectory, title)`
+с рекомендуемым title `Postman <REQ> — result` и пишет
+`<resultDirectory>\\result-workspace.json` внутри exact result directory.
 
-Не использовать для Result Workspace:
+Результат регистрации содержит `source: RESULT_DURABLE`, exact `requestId`,
+`resultDirectory`, `resultZip`, `resultHandoffJson` и `workspaceId`. Это presentation
+convenience, а не integrity gate. Ошибка регистрации не отменяет transport success:
+не создавать второй REQ, не повторять ChatGPT/download, не запускать resume и сообщить
+пользователю exact RESULT_DURABLE, resultZip и diagnostic.
 
-```text
-ctx.workspaces.create
-ctx.sessions.create
-ctx.sessions.open
-custom remote event
-dsh-api-remotes patch
-lib/client.js
-Postman Chrome/CDP
-локальный preview HTTP server
-```
+После регистрации пользователь может открыть Workspace штатными средствами Harness;
+никаких новых Chrome/CDP, Session или preview-сервисов для регистрации не создавать.
 
-Обычный клик по строке Workspace только раскрывает группу. Для работы с результатом
-пользователь выбирает Workspace в штатном picker или нажимает `+ New Session` у него;
-штатный Harness выполняет `workspaces.startSession → connectWorkspace →
-sessions.create({workspaceId}) → sessions.open`, поэтому cwd новой Session равен exact
-retained worktree. Файловые/shell/launcher операции этой Session выполняются оттуда.
-
-Если регистрация Workspace после уже успешного `PUBLISHED` не удалась, не создавать
-новый REQ, не повторять PUBLISH и не удалять PR. Сообщить post-publication UX failure
-и остановиться с сохранённым worktree.
-
-После merge сначала закрыть/архивировать Result Session, затем вызвать
-`postman_result_workspace_unregister` для exact `publishedJson`. Инструмент удаляет
-только Workspace registration и помечает `result-workspace.json` как
-`RESULT_WORKSPACE_UNREGISTERED`; worktree и Session logs он не удаляет. После этого
-`cleanup_published.ps1` может удалить только clean exact worktree, только у merged PR.
-Dirty worktree, незамерженный PR или всё ещё зарегистрированный Workspace — fail-closed.
+Старый `published_json` режим остаётся совместимым: он регистрирует retained PUBLISHED
+worktree, пишет sibling `result-workspace.json` рядом с published receipt и сохраняет
+старый `clearResultPresentation` только для legacy unregister. Durable unregister не
+вызывает published-result presentation cleanup: он удаляет только Workspace registration,
+помечает свой sidecar как `RESULT_WORKSPACE_UNREGISTERED` и не удаляет result directory,
+`result.zip` или другие durable receipts.
 
 Пользователь не должен вводить git/SHA/worktree-команды или команды терминала вручную.
