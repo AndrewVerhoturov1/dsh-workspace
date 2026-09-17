@@ -135,11 +135,12 @@ export function resultWorkspaceTitle(value, worktree) {
 function normalizeInput(first, second) {
   if (first !== null && typeof first === 'object' && !Array.isArray(first)) {
     return {
+      request_id: first.request_id,
       published_json: first.published_json,
       result_handoff_json: first.result_handoff_json,
     }
   }
-  return { published_json: first, result_handoff_json: second }
+  return { request_id: undefined, published_json: first, result_handoff_json: second }
 }
 
 function resolveReceiptInput(first, second) {
@@ -150,8 +151,17 @@ function resolveReceiptInput(first, second) {
     throw new Error('exactly one of published_json or result_handoff_json is required')
   }
   return hasPublished
-    ? { source: 'PUBLISHED', path: input.published_json }
-    : { source: 'RESULT_DURABLE', path: input.result_handoff_json }
+    ? { source: 'PUBLISHED', path: input.published_json, requestId: input.request_id }
+    : { source: 'RESULT_DURABLE', path: input.result_handoff_json, requestId: input.request_id }
+}
+
+function assertDurableRequestId(receipt, value) {
+  if (!isCanonicalRequestId(receipt.requestId)) {
+    throw new Error('request_id is required for RESULT_DURABLE and must be canonical')
+  }
+  if (value.requestId !== receipt.requestId) {
+    throw new Error('durable receipt requestId does not match request_id')
+  }
 }
 
 function requireWorkspaceRegistry(ctx, operation) {
@@ -189,8 +199,9 @@ export async function registerResultWorkspace(ctx, input, resultHandoffJson) {
     return result
   }
 
-  const { receiptPath, value, resultRoot, resultZip, resultDirectory } =
-    readDurableReceipt(receipt.path)
+  const durable = readDurableReceipt(receipt.path)
+  assertDurableRequestId(receipt, durable.value)
+  const { receiptPath, value, resultRoot, resultZip, resultDirectory } = durable
   requireWorkspaceRegistry(ctx, 'create')
 
   const title = 'Postman ' + value.requestId + ' — result'
@@ -282,6 +293,7 @@ export async function unregisterResultWorkspace(ctx, input, resultHandoffJson) {
   }
 
   const receiptValue = readDurableReceipt(receipt.path)
+  assertDurableRequestId(receipt, receiptValue.value)
   requireWorkspaceRegistry(ctx, 'delete')
   const sidecarPath = durableWorkspaceReceiptPath(receiptValue.resultDirectory)
   if (!fs.existsSync(sidecarPath)) {
@@ -303,6 +315,10 @@ export async function unregisterResultWorkspace(ctx, input, resultHandoffJson) {
 
 function receiptParameters() {
   return {
+    request_id: {
+      type: 'string',
+      description: 'Exact current REQ. Required with result_handoff_json; not required with legacy published_json.',
+    },
     published_json: {
       type: 'string',
       description: 'Absolute path to the request published.json receipt.',
@@ -318,7 +334,7 @@ export function createResultWorkspaceTools(ctx) {
   return [
     defineTool({
       name: 'postman_result_workspace_register',
-      description: 'Register one retained PUBLISHED result or exact RESULT_DURABLE result as a normal Harness Workspace. This does not create a copy, unpack a ZIP, or open a new browser or Session.',
+      description: 'Register one retained PUBLISHED result or exact RESULT_DURABLE result as a normal Harness Workspace. RESULT_DURABLE requires exact current request_id. This does not create a copy, unpack a ZIP, or open a new browser or Session.',
       parameters: receiptParameters(),
       output: toolOutput(),
       async execute(args) {
@@ -327,7 +343,7 @@ export function createResultWorkspaceTools(ctx) {
     }),
     defineTool({
       name: 'postman_result_workspace_unregister',
-      description: 'Remove only the Harness Workspace registration for one PUBLISHED or RESULT_DURABLE result. It does not delete the retained result directory, ZIP, worktree, or Session logs.',
+      description: 'Remove only the Harness Workspace registration for one PUBLISHED or RESULT_DURABLE result. RESULT_DURABLE requires exact current request_id. It does not delete the retained result directory, ZIP, worktree, or Session logs.',
       parameters: receiptParameters(),
       output: toolOutput(),
       async execute(args) {

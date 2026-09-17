@@ -29,7 +29,7 @@ description: >-
 → ждать exact terminal JSON
 → RESULT_DURABLE
 → один раз попытаться зарегистрировать exact resultHandoffPath через
-  postman_result_workspace_register(result_handoff_json=...)
+  postman_result_workspace_register(request_id=<exact REQ>, result_handoff_json=...)
 → сообщить REQ, resultZip и Workspace (или diagnostic регистрации)
 → STOP
 ```
@@ -109,7 +109,7 @@ Postman, сделай X
 Надо ли нам менять Postman?
 ```
 
-### Обязательная загрузка skill до implementation
+### Обязательная загрузка skill до task-specific действий
 
 Только после exact trigger из текущего сообщения первым task-specific действием должен
 быть вызов:
@@ -118,16 +118,16 @@ Postman, сделай X
 skill(delegate-via-postman)
 ```
 
-До загрузки этого skill Luna не должна выполнять implementation-действия:
+До загрузки этого skill Luna не должна выполнять task-specific действия, которые
+интерпретируют, расширяют или выполняют пользовательский запрос:
 
 ```text
-glob по task-файлам
-read implementation-файлов
+glob/read по task-файлам
+локальное исследование для уточнения intent
 edit
 write
-создание исходников
-выбор архитектуры
-implementation shell-команды
+выбор архитектуры/технологии
+task-specific shell-команды
 frontend/design skills
 ```
 
@@ -158,36 +158,29 @@ Playwright
 
 ## 3. Разделение ролей
 
-### Ч1 — external implementation author
+### Ч1 — external task executor
 
-Ч1 выбирает:
+Ч1 самостоятельно выполняет exact payload пользователя и формирует результат/ZIP.
+Если задача требует исследования, текста, кода, файлов, архитектуры, тестов или
+документации — эти содержательные решения принадлежат Ч1, а не Л1.
 
-```text
-архитектуру
-технологии
-структуру реализации
-код
-необходимые тесты
-необходимую документацию
-```
+### Л1 — local transport agent
 
-### Л1 — local implementation agent
-
-Л1 отвечает только за:
+В normal `@Postman` flow Л1 отвечает только за:
 
 ```text
-точный user intent
-REQ
-Direct Postman invocation
-получение validated artifact
-безопасное внедрение результата
-локальную проверку
-Git/PR
-отчёт
+verbatim payload после удаления transport marker
+canonical REQ
+один Direct Postman invocation
+minimal terminal transport gate
+optional Result Workspace registration
+короткий отчёт с exact resultZip/Workspace
+STOP
 ```
 
-До получения результата Ч1 Л1 не должна самостоятельно решать, как реализовать
-пользовательскую задачу.
+Л1 не интерпретирует содержимое ответа Ч1, не применяет и не изменяет ZIP, не выбирает
+semantic test и не начинает Git/PR integration. Содержательная работа с durable
+результатом возможна только позже по отдельному explicit manual-finalization запросу.
 
 ## 4. Intent preservation
 
@@ -207,9 +200,10 @@ Git/PR
 сделай калькулятор
 ```
 
-Удалить можно только префикс `@Postman` и окружающий его пробел. Остальной
-пользовательский intent сохранять буквально по смыслу. Это правило применяется
-только к сообщению, прошедшему exclusive current-message trigger.
+Удалить можно только точный transport marker `@Postman` и непосредственно следующий
+за ним разделяющий whitespace. Все остальные символы текущего пользовательского
+сообщения передавать в `-Task` verbatim: без перефразирования, исправления,
+сокращения, дополнения или перестановки.
 
 Не добавлять от себя:
 
@@ -226,38 +220,32 @@ accessibility
 test framework
 архитектурный паттерн
 язык реализации
+факты из предыдущих сообщений
+расшифровку ссылок вроде "это", "как раньше", "те размеры"
 ```
 
-Все реальные пользовательские ограничения сохранить.
+Если exact `@Postman` payload ссылается на предыдущий контекст, Л1 НЕ разрешает эту
+ссылку самостоятельно и НЕ добавляет предыдущий контекст. Ч1 получает ровно тот
+payload, который написал оркестратор после transport marker. Оркестратор отвечает
+за self-contained prompt.
 
-Если текущее сообщение с exact `@Postman` явно ссылается на предыдущий контекст,
-разрешено добавить только минимальные факты из предыдущего контекста, без которых
-референт (`это`, `те размеры`, `как раньше`) непонятен Ч1. Предыдущее разрешение
-само по себе не является trigger для текущего сообщения.
-
-Это context resolution, а не расширение требований.
-
-Если сомневаешься, лучше передать больше исходного пользовательского текста, чем
-придумать новое требование.
-
-## 5. Не выполнять implementation work перед Ч1
+## 5. Не интерпретировать задачу до Ч1
 
 После exact `@Postman` trigger нельзя сначала:
 
 ```text
-исследовать framework
-выбирать architecture
+исследовать framework или предмет задачи
+выбирать architecture/technology
 загружать frontend-design
 писать собственный код
 создавать структуру проекта
-проводить implementation research вместо Ч1
+разрешать ссылки на предыдущий контекст
+уточнять или "улучшать" payload от имени пользователя
 ```
 
-Сначала Direct Postman.
-
-Локальное исследование до отправки разрешено только если оно необходимо, чтобы
-буквально разрешить неоднозначную пользовательскую ссылку или определить target
-repository.
+Сначала один Direct Postman с verbatim payload. До отправки разрешены только
+transport-действия из этого skill: загрузка skill, проверка bridge и создание
+canonical REQ.
 
 ## 6. Canonical production bridge
 
@@ -395,7 +383,7 @@ catch {
 }
 ```
 
-До PREPARE Luna проверяет только transport boundary:
+После завершения Direct Postman Luna проверяет только transport boundary:
 
 ```text
 $result.ok        == true
@@ -405,8 +393,9 @@ $result.requestId == exact $requestId
 ```
 
 Не выполнять вручную `Get-FileHash`, повторный manifest/base/staleness/path validation
-или отдельный `Test-Path` как normal handoff. Полная проверка ZIP, SHA-256, manifest,
-baseCommit и application принадлежит deterministic PREPARE/applicator.
+или отдельный `Test-Path` как normal handoff. Полная transport-проверка ZIP, SHA-256,
+manifest, baseCommit и artifact identity уже принадлежит Direct Postman. Application
+вообще не является частью normal `@Postman` flow.
 
 После `RESULT_DURABLE` не открывать ChatGPT для визуального подтверждения.
 
@@ -427,7 +416,7 @@ receipt, не распаковывать и не анализировать ZIP 
 После exact `RESULT_DURABLE` разрешена одна presentation-попытка:
 
 ```text
-postman_result_workspace_register(result_handoff_json=<exact resultHandoffPath>)
+postman_result_workspace_register(request_id=<exact REQ>, result_handoff_json=<exact resultHandoffPath>)
 ```
 
 При успехе сообщить `requestId`, exact `resultZip` и `workspaceId`. Если регистрация
@@ -513,14 +502,16 @@ promptSent = false
 
 Smoke не является частью обычного golden path.
 
-## 13. Не создавать Git branch до RESULT_DURABLE только ради transport
+## 13. Не начинать Git integration в normal flow
 
-Direct Postman сам публикует intent task в `main`.
+Direct Postman сам публикует transport task в `main`.
 
-Л1 не должна до получения Ч1 создавать implementation branch/worktree,
-модифицировать repository или писать implementation только ради отправки.
+Л1 не должна до или после получения Ч1 создавать implementation branch/worktree,
+модифицировать repository или писать implementation в normal `@Postman` flow.
 
-Git integration начинается после validated `RESULT_DURABLE`.
+После validated `RESULT_DURABLE` normal flow заканчивается optional Workspace
+registration и отчётом пользователю. Git integration возможна только позже по
+отдельному explicit manual-finalization запросу.
 
 Исключение: отдельная задача разработки/ремонта самого Postman transport.
 
@@ -681,21 +672,21 @@ remote exact SHA, один OPEN PR `base=main` с exact head branch/SHA, уда�
 
 ## 19. Финальный отчёт
 
-При normal transport сообщить как минимум:
+При normal transport сообщить только пользовательский минимум:
 
 ```text
-Postman requestId
 RESULT_DURABLE
-exact resultZip
-resultHandoffPath
-Workspace registration status и workspaceId, если регистрация успешна
-диагностику регистрации, если она не удалась
+exact requestId
+exact resultZip как кликабельный local path
+Workspace title/id, если регистрация успешна
+одну короткую diagnostic строку, если регистрация не удалась
 ```
 
-Поля semantic test, commit, remote synchronization, PR и merge относятся только к
-explicit manual finalization и не должны выдаваться как результат normal flow.
+`resultHandoffPath`, SHA-256, browser/CDP/validator internals, semantic test, commit,
+remote synchronization, PR и merge не показывать без диагностической необходимости.
+Они относятся к transport internals или explicit manual finalization.
 
-### Кликабельные изменённые файлы в Harness Web
+### Кликабельные изменённые файлы только при explicit manual PUBLISHED finalization
 
 Authoritative список брать только из exact `PUBLISHED` receipt `changedFiles`.
 Для каждого файла построить exact существующий локальный путь от retained
@@ -732,8 +723,8 @@ terminal state
 1. Postman OFF по умолчанию; разрешён только при exact `@Postman` в начале текущего пользовательского сообщения после необязательных начальных пробелов.
 2. Разрешение действует только для текущего сообщения и не наследуется из предыдущих сообщений.
 3. Без exact trigger не загружать `delegate-via-postman`, не создавать REQ, не вызывать Direct Postman, не использовать другие Postman transport и не обращаться к Ч1.
-4. До Ч1 не загружать implementation/design skills и не проектировать решение.
-5. User intent не расширяется собственными требованиями Л1.
+4. После trigger Л1 не интерпретирует и не расширяет payload до отправки Ч1.
+5. После удаления только `@Postman` + separator весь оставшийся текст передаётся verbatim; previous-context augmentation запрещён.
 6. Один logical request → один REQ.
 7. После начала Direct Postman invocation REQ immutable.
 8. Production transport — только `C:\Users\andre\.dsh\postman\direct\postman.ps1`.
@@ -741,21 +732,22 @@ terminal state
 10. BrowserSmoke не является normal preflight.
 11. Chrome/ChatGPT/Send/download принадлежат Direct Postman, а не Л1.
 12. После возможной отправки automatic resend запрещён.
-13. Только exact `RESULT_DURABLE` является implementation result.
+13. Только exact `RESULT_DURABLE` является успешным transport result.
 14. Не создавать implementation branch только ради transport до результата.
 15. Пользовательский dirty worktree не очищать и не переписывать.
-16. Л1 внедряет результат Ч1, а не заменяет его собственным решением.
+16. В normal flow Л1 не интерпретирует, не применяет и не изменяет результат Ч1.
 17. После RESULT_DURABLE normal flow останавливается после optional Workspace registration.
 18. `resume_request.ps1`, PREPARE/TEST/PUBLISH и `integrate_result.ps1` — только legacy/manual explicit finalization.
 19. Normal flow не создаёт implementation worktree/branch/commit/PR и не распаковывает ZIP.
 20. Workspace registration — presentation convenience, а не integrity gate.
 21. Ошибка Workspace registration не отменяет успешный RESULT_DURABLE и не вызывает retry.
 22. Direct Postman сам владеет strict transport validation до RESULT_DURABLE.
-23. `files/` payload копируется exact bytes; Л1 не переписывает его через LLM tools.
+23. Правила exact-bytes для `files/` относятся только к explicit manual finalization; normal flow не читает содержимое ZIP.
 24. `RESULT_DIAGNOSTIC_ONLY` не является implementation success и не разрешает automatic resend.
 25. Resume/PREPARE/TEST/PUBLISH не создают новый Postman REQ и не обращаются повторно к Ч1.
-26. Финальный отчёт перечисляет authoritative changedFiles кликабельными inline-code local paths из exact retained worktree.
+26. `changedFiles`/retained worktree показываются только при explicit manual PUBLISHED finalization, не в normal transport report.
 27. Нет validated correlated artifact → нет успешного Postman результата.
+28. Durable Workspace registration передаёт exact current REQ как `request_id`; receipt requestId обязан совпасть до `workspaceRegistry.create/delete`.
 
 
 ## Result Workspace после RESULT_DURABLE
@@ -764,13 +756,16 @@ terminal state
 зарегистрировать durable result как обычный Harness Workspace:
 
 ```text
-postman_result_workspace_register(result_handoff_json=<exact resultHandoffPath>)
+postman_result_workspace_register(request_id=<exact REQ>, result_handoff_json=<exact resultHandoffPath>)
 ```
 
-Инструмент проверяет только receipt/layout gate, не распаковывает ZIP и не повторяет
-artifact validation. Он вызывает `ctx.workspaceRegistry.create(resultDirectory, title)`
-с рекомендуемым title `Postman <REQ> — result` и пишет
-`<resultDirectory>\\result-workspace.json` внутри exact result directory.
+Инструмент принимает exact current `request_id` вместе с exact `resultHandoffPath`,
+проверяет совпадение `receipt.requestId == request_id` до Workspace create/delete,
+затем проверяет только receipt/layout gate. Он не распаковывает ZIP и не повторяет
+artifact validation. После identity gate он вызывает
+`ctx.workspaceRegistry.create(resultDirectory, title)` с рекомендуемым title
+`Postman <REQ> — result` и пишет `<resultDirectory>\\result-workspace.json` внутри
+exact result directory.
 
 Результат регистрации содержит `source: RESULT_DURABLE`, exact `requestId`,
 `resultDirectory`, `resultZip`, `resultHandoffJson` и `workspaceId`. Это presentation

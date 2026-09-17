@@ -18,9 +18,12 @@ Luna
 → one JSON object returned to Luna
 ```
 
-The bridge never applies the implementation ZIP. Normal flow reports the exact durable
-result and optionally registers its result directory as a Harness Workspace. Application,
-tests, commit, and PR remain available only through explicit manual finalization.
+The bridge never applies the implementation ZIP. Luna forwards the current `@Postman`
+payload verbatim after removing only the transport marker/separator, does not augment it
+from previous context, and does not inspect or interpret the returned ZIP. Normal flow
+reports the exact durable result and optionally registers its result directory as a Harness
+Workspace. Application, tests, commit, and PR remain available only through explicit manual
+finalization.
 
 ## Browser smoke
 
@@ -82,9 +85,10 @@ After a successful transport, normal flow ends at the exact durable handoff:
 ```text
 RESULT_DURABLE
 → optionally attempt postman_result_workspace_register(
+    request_id=<exact REQ>,
     result_handoff_json=<exact resultHandoffPath>
   )
-→ report REQ, exact resultZip and Workspace/registration diagnostic
+→ report exact REQ, exact resultZip and Workspace/registration diagnostic
 → STOP
 ```
 

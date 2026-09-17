@@ -123,7 +123,7 @@ test('durable handoff registers the exact resultDirectory and stores sidecar ins
   const fx = durableFixture()
   try {
     const { calls, workspaceRegistry } = registry('workspace-durable-1')
-    const result = await registerResultWorkspace({ workspaceRegistry }, { result_handoff_json: fx.resultHandoffJson })
+    const result = await registerResultWorkspace({ workspaceRegistry }, { request_id: 'REQ_20260904T000000Z_0001', result_handoff_json: fx.resultHandoffJson })
     assert.deepEqual(calls, [['create', fx.resultDirectory, 'Postman REQ_20260904T000000Z_0001 — result']])
     assert.equal(result.ok, true)
     assert.equal(result.source, 'RESULT_DURABLE')
@@ -138,6 +138,31 @@ test('durable handoff registers the exact resultDirectory and stores sidecar ins
   }
 })
 
+test('durable registration requires exact current request_id before Workspace creation', async () => {
+  const fx = durableFixture()
+  try {
+    const state = registry('workspace-durable-guard')
+    const ctx = { workspaceRegistry: state.workspaceRegistry }
+
+    await assert.rejects(
+      registerResultWorkspace(ctx, { result_handoff_json: fx.resultHandoffJson }),
+      /request_id is required for RESULT_DURABLE/,
+    )
+    assert.deepEqual(state.calls, [])
+
+    await assert.rejects(
+      registerResultWorkspace(ctx, {
+        request_id: 'REQ_20260904T000001Z_0002',
+        result_handoff_json: fx.resultHandoffJson,
+      }),
+      /durable receipt requestId does not match request_id/,
+    )
+    assert.deepEqual(state.calls, [])
+  } finally {
+    fs.rmSync(fx.root, { recursive: true, force: true })
+  }
+})
+
 test('different durable REQs have independent sidecar files', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'postman-durable-two-'))
   try {
@@ -145,8 +170,8 @@ test('different durable REQs have independent sidecar files', async () => {
     const two = durableFixture('REQ_20260904T000001Z_0002', root)
     const first = registry('workspace-one')
     const second = registry('workspace-two')
-    const resultOne = await registerResultWorkspace(first, { result_handoff_json: one.resultHandoffJson })
-    const resultTwo = await registerResultWorkspace(second, { result_handoff_json: two.resultHandoffJson })
+    const resultOne = await registerResultWorkspace(first, { request_id: 'REQ_20260904T000000Z_0001', result_handoff_json: one.resultHandoffJson })
+    const resultTwo = await registerResultWorkspace(second, { request_id: 'REQ_20260904T000001Z_0002', result_handoff_json: two.resultHandoffJson })
     assert.notEqual(resultOne.workspaceJson, resultTwo.workspaceJson)
     assert.equal(JSON.parse(fs.readFileSync(resultOne.workspaceJson, 'utf8')).requestId, one.resultDirectory.split(path.sep).pop())
     assert.equal(JSON.parse(fs.readFileSync(resultTwo.workspaceJson, 'utf8')).requestId, two.resultDirectory.split(path.sep).pop())
@@ -189,11 +214,11 @@ test('rejects durable receipt with wrong code or state', async () => {
     const value = JSON.parse(fs.readFileSync(fx.resultHandoffJson, 'utf8'))
     value.code = 'PUBLISHED'
     writeJson(fx.resultHandoffJson, value)
-    await assert.rejects(registerResultWorkspace({}, { result_handoff_json: fx.resultHandoffJson }), /exact successful RESULT_DURABLE/)
+    await assert.rejects(registerResultWorkspace({}, { request_id: 'REQ_20260904T000000Z_0001', result_handoff_json: fx.resultHandoffJson }), /exact successful RESULT_DURABLE/)
     value.code = 'RESULT_DURABLE'
     value.state = 'PUBLISHED'
     writeJson(fx.resultHandoffJson, value)
-    await assert.rejects(registerResultWorkspace({}, { result_handoff_json: fx.resultHandoffJson }), /exact successful RESULT_DURABLE/)
+    await assert.rejects(registerResultWorkspace({}, { request_id: 'REQ_20260904T000000Z_0001', result_handoff_json: fx.resultHandoffJson }), /exact successful RESULT_DURABLE/)
   } finally {
     fs.rmSync(fx.root, { recursive: true, force: true })
   }
@@ -209,7 +234,7 @@ test('rejects durable resultZip outside resultRoot/requestId', async () => {
   value.resultZip = outsideZip
   writeJson(fx.resultHandoffJson, value)
   try {
-    await assert.rejects(registerResultWorkspace({}, { result_handoff_json: fx.resultHandoffJson }), /outside resultRoot\/requestId/)
+    await assert.rejects(registerResultWorkspace({}, { request_id: 'REQ_20260904T000000Z_0001', result_handoff_json: fx.resultHandoffJson }), /outside resultRoot\/requestId/)
   } finally {
     fs.rmSync(fx.root, { recursive: true, force: true })
   }
@@ -220,8 +245,8 @@ test('durable unregister deletes only Workspace registration and preserves resul
   try {
     const state = registry('workspace-durable-1')
     const ctx = { workspaceRegistry: state.workspaceRegistry }
-    const registered = await registerResultWorkspace(ctx, { result_handoff_json: fx.resultHandoffJson })
-    const result = await unregisterResultWorkspace(ctx, { result_handoff_json: fx.resultHandoffJson })
+    const registered = await registerResultWorkspace(ctx, { request_id: 'REQ_20260904T000000Z_0001', result_handoff_json: fx.resultHandoffJson })
+    const result = await unregisterResultWorkspace(ctx, { request_id: 'REQ_20260904T000000Z_0001', result_handoff_json: fx.resultHandoffJson })
     assert.deepEqual(state.calls, [
       ['create', fx.resultDirectory, 'Postman REQ_20260904T000000Z_0001 — result'],
       ['delete', registered.workspaceId],
@@ -232,6 +257,30 @@ test('durable unregister deletes only Workspace registration and preserves resul
     assert.ok(fs.existsSync(fx.resultDirectory))
     assert.ok(fs.existsSync(fx.resultZip))
     assert.equal(JSON.parse(fs.readFileSync(result.workspaceJson, 'utf8')).status, 'RESULT_WORKSPACE_UNREGISTERED')
+  } finally {
+    fs.rmSync(fx.root, { recursive: true, force: true })
+  }
+})
+
+test('durable unregister rejects wrong request_id before Workspace deletion', async () => {
+  const fx = durableFixture()
+  try {
+    const state = registry('workspace-durable-guard')
+    const ctx = { workspaceRegistry: state.workspaceRegistry }
+    await registerResultWorkspace(ctx, {
+      request_id: 'REQ_20260904T000000Z_0001',
+      result_handoff_json: fx.resultHandoffJson,
+    })
+    assert.equal(state.calls.length, 1)
+
+    await assert.rejects(
+      unregisterResultWorkspace(ctx, {
+        request_id: 'REQ_20260904T000001Z_0002',
+        result_handoff_json: fx.resultHandoffJson,
+      }),
+      /durable receipt requestId does not match request_id/,
+    )
+    assert.deepEqual(state.calls.map((call) => call[0]), ['create'])
   } finally {
     fs.rmSync(fx.root, { recursive: true, force: true })
   }
@@ -262,6 +311,7 @@ test('tool names remain unchanged and both receipt inputs are optional', () => {
   ])
   for (const tool of tools) {
     assert.equal(tool.parameters.required, undefined)
+    assert.equal(tool.parameters.properties.request_id.type, 'string')
     assert.equal(tool.parameters.properties.published_json.type, 'string')
     assert.equal(tool.parameters.properties.result_handoff_json.type, 'string')
   }

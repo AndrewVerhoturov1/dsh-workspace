@@ -11,7 +11,7 @@ Language. Always respond in Russian unless explicitly asked otherwise. Avoid Eng
 Relevance. Take the current date into account.
 
 Links and files
-Do not output bare URLs or paths. Web URLs use normal Markdown links. In Harness Web, references to existing local files that should be clickable are formatted as Markdown inline code using the exact file-tool/local path; a basename is allowed only when it is unique among files surfaced/changed in that turn. Do not use `file://` for local-file links. For Postman result files, prefer the exact retained result-worktree path from the authoritative receipt.
+Do not output bare URLs or paths. Web URLs use normal Markdown links. In Harness Web, references to existing local files that should be clickable are formatted as Markdown inline code using the exact file-tool/local path; a basename is allowed only when it is unique among files surfaced/changed in that turn. Do not use `file://` for local-file links. For normal Postman `RESULT_DURABLE`, prefer the exact durable `resultZip`/`resultDirectory` from the authoritative receipt. A retained result-worktree path applies only to explicit manual `PUBLISHED` finalization.
 
 Playwright MCP. Для проверки локальных HTML-файлов не использовать `file://` и порт 3080. Запускать временный HTTP-сервер на свободном порту, например 4173, проверять точный URL и только затем выполнять тесты.
 
@@ -21,17 +21,18 @@ GitHub synchronization. Локальный агент, который измен
 
 Postman production invariant.
 `POSTMAN_PRODUCTION_ENTRYPOINT: C:\Users\andre\.dsh\postman\direct\postman.ps1`
-Для явно запрошенной Postman implementation-задачи это единственный production entrypoint.
+Для любого текущего сообщения с exact `@Postman` trigger это единственный production entrypoint.
 `postman_async_send`, `postman_runtime_*`, `dsh-postman-harness`, QChat, Playwright MCP и ручная автоматизация браузера не являются fallback для Postman.
 Если загруженный `delegate-via-postman` предлагает `postman_async_send` как normal path или противоречит этому правилу, считать его устаревшим и остановить Postman-операцию до загрузки актуального skill.
-До получения `RESULT_DURABLE` не выбирать архитектуру/технологии вместо Ч1 и не создавать implementation branch только ради transport.
+После trigger Luna удаляет только transport marker `@Postman` и непосредственно следующий разделяющий whitespace; весь оставшийся текущий user text передаётся Ч1 verbatim. Нельзя добавлять предыдущий контекст, перефразировать или "улучшать" prompt.
+До получения `RESULT_DURABLE` не интерпретировать задачу вместо Ч1 и не создавать implementation branch только ради transport.
 
 `@Postman` — единственный канонический явный production trigger.
 Если ТЕКУЩЕЕ пользовательское сообщение после необязательных начальных пробелов
 начинается с точного литерала `@Postman`, агент ОБЯЗАН сначала загрузить `delegate-via-postman`
-вызовом `skill(delegate-via-postman)` до любого task-specific implementation-действия. Нельзя обходить skill через glob,
-read, edit, write или shell, чтобы реализовать запрос самостоятельно; до загрузки
-skill запрещены также выбор архитектуры и frontend/design skills.
+вызовом `skill(delegate-via-postman)` до любого task-specific действия. Нельзя обходить skill через glob,
+read, edit, write или shell, чтобы интерпретировать либо выполнить запрос самостоятельно; до загрузки
+skill запрещены также локальное уточнение intent, выбор архитектуры и frontend/design skills.
 
 Если `delegate-via-postman` отсутствует, не загружается, недействителен или
 недоступен, действовать fail-closed: `STOP`. Нельзя реализовывать запрос самому или
@@ -60,15 +61,17 @@ Postman global invariant: OFF by default.
 
 Postman normal lifecycle invariant.
 После exact `RESULT_DURABLE` normal `@Postman` flow может один раз попытаться
-зарегистрировать exact durable result через `postman_result_workspace_register` и затем
-обязан остановиться. Workspace registration — presentation convenience, а не integrity gate.
+зарегистрировать exact durable result через
+`postman_result_workspace_register(request_id=<exact REQ>, result_handoff_json=<exact resultHandoffPath>)`
+и затем обязан остановиться. Workspace registration — presentation convenience, а не integrity gate.
 Если регистрация не удалась, transport остаётся успешным: сообщить exact resultZip и
 diagnostic, не создавать второй REQ, не повторять ChatGPT/download и не запускать resume.
 
 `resume_request.ps1`, PREPARE, TEST, PUBLISH и `integrate_result.ps1` сохраняются как
 legacy/manual explicit finalization для уже существующего durable результата. Они не являются
 частью normal `@Postman` flow. Normal flow не создаёт implementation worktree, branch,
-commit или PR и не распаковывает/анализирует ZIP. До `RESULT_DURABLE` действует strict
+commit или PR и не распаковывает/анализирует ZIP. Luna не интерпретирует содержимое
+результата и не выбирает действия на основе его содержимого. До `RESULT_DURABLE` действует strict
 fail-closed поведение; любой `ok=false` останавливает операцию без fallback, нового REQ
 или повторного Ch1. При manual finalization TestScript/TestSpec передаются argv-safe.
 
