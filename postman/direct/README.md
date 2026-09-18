@@ -56,6 +56,26 @@ $result = $jsonText | ConvertFrom-Json
 Success requires `ok=true`, `code=RESULT_DURABLE`, exact `requestId`, and an
 existing validated `resultZip`.
 
+## Continue an existing ChatGPT conversation
+
+Every successful browser run records its exact `/c/<conversation-id>` URL when available.
+A later request can reuse that conversation while still creating a new Postman REQ:
+
+```powershell
+$jsonText = & C:\Users\andre\.dsh\postman\direct\postman.ps1 `
+  -RequestId $newReq `
+  -ChatRequestId $oldReq `
+  -Task $task
+```
+
+Direct Postman resolves `$oldReq` from local durable/direct/worker state, opens the exact
+stored `https://chatgpt.com/c/...` URL, and then uses the same one-send observer/download
+pipeline. Old REQs created before this feature may still work when their direct/worker
+state already contains `submitProof.details.chatUrl`.
+
+There is deliberately no Search-UI fallback in this milestone. Missing stored chat URL
+returns `DIRECT_CHAT_REFERENCE_UNAVAILABLE` before Send.
+
 ## Safety
 
 - One logical request has one canonical REQ.

@@ -13,7 +13,7 @@ description: >-
 
 # Delegate via Postman — Direct Production
 
-`DIRECT_POSTMAN_SKILL_VERSION: 13`
+`DIRECT_POSTMAN_SKILL_VERSION: 14`
 
 Исторический baseline до v12: `DIRECT_POSTMAN_SKILL_VERSION: 11`.
 
@@ -86,6 +86,15 @@ Postman по умолчанию OFF. Единственный разрешающ
 @Postman <intent>       → trigger
    @Postman <intent>     → trigger
 ```
+
+Continuation того же ChatGPT conversation использует transport control сразу после marker:
+
+```text
+@Postman --chat REQ_20260917T101323Z_7008 <intent>
+```
+
+Старый REQ здесь не является новым request id и не передаётся Ч1 как часть intent.
+Каждая continuation-операция создаёт новый canonical REQ.
 
 Любая другая формулировка — НЕ trigger и не разрешает загрузку skill или запуск
 Postman. В частности, НЕ trigger:
@@ -199,6 +208,22 @@ semantic test и не начинает Git/PR integration. Содержател�
 ```text
 сделай калькулятор
 ```
+
+Для continuation-команды:
+
+```text
+@Postman --chat REQ_20260917T101323Z_7008 сравни это с новой версией
+```
+
+transport fields:
+
+```text
+chatRequestId = REQ_20260917T101323Z_7008
+payload = сравни это с новой версией
+```
+
+Удаляются только `@Postman --chat <canonical REQ>` и непосредственно следующий
+разделяющий whitespace. Остальной payload передаётся verbatim.
 
 Удалить можно только точный transport marker `@Postman` и непосредственно следующий
 за ним разделяющий whitespace. Все остальные символы текущего пользовательского
@@ -330,6 +355,18 @@ $jsonText = & $bridge `
 $bridgeExitCode = $LASTEXITCODE
 ```
 
+Для continuation того же conversation вызов отличается только одним параметром:
+
+```powershell
+$jsonText = & $bridge `
+  -RequestId $requestId `
+  -ChatRequestId $chatRequestId `
+  -Task $payload
+```
+
+`$requestId` — новый REQ этой операции. `$chatRequestId` — старый REQ, по которому
+Direct Postman находит сохранённый `conversationUrl`.
+
 Это один logical invocation.
 
 Если shell/tool требует увеличенный timeout, дать этому одному вызову достаточно
@@ -452,6 +489,15 @@ durable storage
 пытается зарегистрировать exact durable result как Workspace и останавливается.
 
 ## 11. Failure handling
+
+Для continuation отдельный terminal transport failure:
+
+```text
+DIRECT_CHAT_REFERENCE_UNAVAILABLE
+```
+
+означает, что для старого REQ нет сохранённого `/c/...` URL. В этом milestone не
+использовать Search UI/лупу, не угадывать чат и не отправлять prompt в другой conversation.
 
 Если bridge вернул `ok=false`, invalid JSON или завершился с non-zero exit — STOP.
 
@@ -750,6 +796,10 @@ terminal state
 26. `changedFiles`/retained worktree показываются только при explicit manual PUBLISHED finalization, не в normal transport report.
 27. Нет validated correlated artifact → нет успешного Postman результата.
 28. Durable Workspace registration передаёт exact current REQ как `request_id`; receipt requestId обязан совпасть до `workspaceRegistry.create/delete`.
+29. `@Postman --chat <old REQ> <intent>` открывает только сохранённый exact conversation URL; UI search fallback отсутствует.
+30. Старый REQ является только conversation reference; новая отправка всегда получает новый canonical REQ.
+31. Continuation payload не содержит `--chat` и старый REQ; Ч1 получает только новый user intent.
+32. Успешный RESULT_DURABLE сохраняет `conversationUrl`/`conversationId`, если browser transport их доказал.
 
 
 ## Result Workspace после RESULT_DURABLE

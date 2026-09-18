@@ -64,6 +64,15 @@ Postman normal lifecycle invariant.
 зарегистрировать exact durable result через
 `postman_result_workspace_register(request_id=<exact REQ>, result_handoff_json=<exact resultHandoffPath>)`
 и затем обязан остановиться. Workspace registration — presentation convenience, а не integrity gate.
+
+Postman existing-chat continuation invariant.
+Форма `@Postman --chat <canonical old REQ> <intent>` разрешает продолжить exact ChatGPT
+conversation, URL которого уже доказан и сохранён Postman. Старый REQ используется только
+как conversation lookup key; новая отправка всегда получает новый canonical REQ. В `-Task`
+передаётся только новый intent без `--chat` и старого REQ. Если URL не найден, normal path
+останавливается с `DIRECT_CHAT_REFERENCE_UNAVAILABLE`; UI Search/лупа и угадывание чата в
+этом milestone запрещены как fallback.
+
 Если регистрация не удалась, transport остаётся успешным: сообщить exact resultZip и
 diagnostic, не создавать второй REQ, не повторять ChatGPT/download и не запускать resume.
 

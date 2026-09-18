@@ -41,6 +41,7 @@ if str(WEB_DIR) not in sys.path:
     sys.path.insert(0, str(WEB_DIR))
 
 import browser_bootstrap as bootstrap  # noqa: E402
+import chat_reference  # noqa: E402
 import durable_handoff  # noqa: E402
 import task_package  # noqa: E402
 import request_identity  # noqa: E402
@@ -55,7 +56,7 @@ PUBLIC_POLICY_URL = (
     "main/policies/postman-webchat-result-artifact.md"
 )
 
-DIRECT_VERSION = 3
+DIRECT_VERSION = 4
 DEFAULT_ASSISTANT_TIMEOUT_MS = 15 * 60 * 1000
 STATE_INIT = "INIT"
 STATE_TASK_PUBLISHED = "TASK_PUBLISHED"
@@ -501,6 +502,7 @@ class DirectPostman:
         *,
         request_id: str,
         task: str,
+        chat_request_id: str | None = None,
         cdp_url: str = bootstrap.DEFAULT_CDP_URL,
         extra_allowed: Iterable[str] = (),
         extra_forbidden: Iterable[str] = (),
@@ -512,6 +514,17 @@ class DirectPostman:
                 f"request {request_id} already has direct transport state; automatic resend is forbidden",
                 details={"statePath": str(self.state_path(request_id))},
             )
+
+        chat_ref = None
+        if chat_request_id:
+            try:
+                chat_ref = chat_reference.resolve_chat_reference(
+                    self.direct_root,
+                    chat_request_id,
+                    expected_repository=self.repository,
+                )
+            except chat_reference.ChatReferenceError as exc:
+                raise DirectPostmanError(exc.code, str(exc), details=exc.details) from exc
 
         try:
             self.result_root = runtime.prepare_result_root(self.result_root)
@@ -527,6 +540,11 @@ class DirectPostman:
             STATE_INIT,
             taskSha256=_sha256_text(task),
             resultRoot=str(self.result_root),
+            **({
+                "continuedFromRequestId": chat_ref.request_id,
+                "conversationUrl": chat_ref.conversation_url,
+                "conversationId": chat_ref.conversation_id,
+            } if chat_ref is not None else {}),
         )
 
         publisher = self.publisher_factory(
@@ -599,6 +617,7 @@ class DirectPostman:
             expected_filename=expected_filename,
             expected_request=expected_request,
             cdp_url=browser.get("cdpUrl", cdp_url),
+            conversation_url=chat_ref.conversation_url if chat_ref is not None else None,
             observer_timeout_ms=DEFAULT_ASSISTANT_TIMEOUT_MS,
         )
         if not isinstance(result, dict) or result.get("code") != RESULT_DURABLE or result.get("ok") is not True:
@@ -612,6 +631,16 @@ class DirectPostman:
         sha256 = details.get("resultSha256")
         if not isinstance(result_zip, str) or not result_zip:
             raise DirectPostmanError("DIRECT_RESULT_INVALID", "durable result did not expose resultZip", details=details)
+
+        conversation_fields: dict[str, Any] = {}
+        conversation_url = details.get("conversationUrl")
+        conversation_id = details.get("conversationId")
+        if isinstance(conversation_url, str) and conversation_url:
+            conversation_fields["conversationUrl"] = conversation_url
+        if isinstance(conversation_id, str) and conversation_id:
+            conversation_fields["conversationId"] = conversation_id
+        if chat_ref is not None:
+            conversation_fields["continuedFromRequestId"] = chat_ref.request_id
 
         state_path = self.state_path(request_id)
         handoff_path = durable_handoff.handoff_path(self.direct_root, request_id)
@@ -632,6 +661,7 @@ class DirectPostman:
             statePath=str(state_path),
             resultHandoffPath=str(handoff_path.resolve()),
             handoffVersion=durable_handoff.HANDOFF_VERSION,
+            **conversation_fields,
         )
         try:
             terminal = durable_handoff.validate_terminal(
@@ -658,6 +688,7 @@ class DirectPostman:
             resultZip=result_zip,
             artifactSha256=terminal["sha256"],
             workerDetails=details,
+            **conversation_fields,
         )
         return terminal
 
@@ -677,6 +708,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--direct-root")
     parser.add_argument("--result-root")
     parser.add_argument("--cdp-url", default=bootstrap.DEFAULT_CDP_URL)
+    parser.add_argument("--chat-request-id")
     parser.add_argument("--allow-path", action="append", default=[])
     parser.add_argument("--forbid-path", action="append", default=[])
     return parser
@@ -713,6 +745,7 @@ def main(argv: list[str] | None = None) -> int:
             result = direct.run(
                 request_id=args.request_id,
                 task=task,
+                chat_request_id=args.chat_request_id,
                 cdp_url=args.cdp_url,
                 extra_allowed=args.allow_path,
                 extra_forbidden=args.forbid_path,

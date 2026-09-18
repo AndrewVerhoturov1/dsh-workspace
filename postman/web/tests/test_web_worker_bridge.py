@@ -44,6 +44,22 @@ class WebWorkerBridgeTests(unittest.TestCase):
             self.assertEqual(bridge.accept_request(REQ, "not-a-url")["code"], bridge_module.BRIDGE_INVALID_TASK_URL)
             self.assertIsNone(bridge.read_state(REQ))
 
+    def test_existing_chat_url_is_validated_before_browser_attach(self):
+        with tempfile.TemporaryDirectory() as root:
+            bridge = bridge_module.WebWorkerBridge(root=root)
+            result = bridge.run_request(
+                REQ,
+                task_url=TASK_URL,
+                prompt="POSTMAN_REQUEST_ID: " + REQ,
+                expected_filename=f"POSTMAN_{REQ}_RESULT.zip",
+                expected_request={},
+                conversation_url="https://example.com/c/not-chatgpt",
+                playwright_factory=lambda: (_ for _ in ()).throw(AssertionError("browser must not start")),
+            )
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["code"], bridge_module.BRIDGE_INVALID_CONFIG)
+            self.assertEqual(result["details"]["reason"], "invalid_conversation_url")
+
     def test_accept_is_idempotent_and_does_not_rewrite_request_id(self):
         with tempfile.TemporaryDirectory() as root:
             bridge = bridge_module.WebWorkerBridge(root=root)

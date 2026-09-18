@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Web Postman P3 fresh-chat + single-submit transport.
+"""Web Postman P3 single-submit transport for fresh or known ChatGPT chats.
 
 Scope:
 - connect to the dedicated headful Chrome through CDP;
 - create one owned Page;
-- prove a fresh ChatGPT chat before inserting anything;
+- prove either a fresh chat or an exact stored /c/... chat before inserting anything;
 - prove an empty composer;
 - insert exactly one prompt;
 - initiate exactly one Send action;
@@ -40,6 +40,7 @@ DEFAULT_TIMEOUT_MS = 30_000
 
 PAGE_OWNED = "PAGE_OWNED"
 FRESH_CHAT_CONFIRMED = "FRESH_CHAT_CONFIRMED"
+EXISTING_CHAT_CONFIRMED = "EXISTING_CHAT_CONFIRMED"
 COMPOSER_EMPTY_CONFIRMED = "COMPOSER_EMPTY_CONFIRMED"
 PROMPT_INSERTED = "PROMPT_INSERTED"
 PROMPT_SEND_STARTED = "PROMPT_SEND_STARTED"
@@ -47,6 +48,7 @@ PROMPT_SEND_CONFIRMED = "PROMPT_SEND_CONFIRMED"
 CHAT_URL_BOUND = "CHAT_URL_BOUND"
 
 FRESH_CHAT_NOT_CONFIRMED = "FRESH_CHAT_NOT_CONFIRMED"
+EXISTING_CHAT_NOT_CONFIRMED = "EXISTING_CHAT_NOT_CONFIRMED"
 COMPOSER_NOT_EMPTY = "COMPOSER_NOT_EMPTY"
 PROMPT_INSERT_FAILED = "PROMPT_INSERT_FAILED"
 PROMPT_MISMATCH = "PROMPT_MISMATCH"
@@ -264,15 +266,26 @@ def is_chatgpt_root_url(url: str) -> bool:
     return parsed.path in {"", "/"}
 
 
-def is_bound_chat_url(url: str) -> bool:
+def conversation_id_from_url(url: str) -> str | None:
     try:
         parsed = urlparse(str(url or ""))
     except Exception:
-        return False
+        return None
     host = (parsed.hostname or "").lower()
     if host not in {"chatgpt.com", "www.chatgpt.com"}:
-        return False
-    return bool(re.fullmatch(r"/c/[A-Za-z0-9_-]+", parsed.path or ""))
+        return None
+    match = re.fullmatch(r"/c/([A-Za-z0-9_-]+)", parsed.path or "")
+    return match.group(1) if match else None
+
+
+def is_bound_chat_url(url: str) -> bool:
+    return conversation_id_from_url(url) is not None
+
+
+def same_conversation_url(left: str, right: str) -> bool:
+    left_id = conversation_id_from_url(left)
+    right_id = conversation_id_from_url(right)
+    return left_id is not None and left_id == right_id
 
 
 def _locator_count(locator: Any) -> int:
@@ -794,6 +807,51 @@ def prepare_fresh_chat(page: Any, *, timeout_ms: int = DEFAULT_TIMEOUT_MS) -> di
     return {"ok": True, "code": FRESH_CHAT_CONFIRMED, "composer": composer, "details": details}
 
 
+def prepare_existing_chat(
+    page: Any,
+    conversation_url: str,
+    *,
+    timeout_ms: int = DEFAULT_TIMEOUT_MS,
+) -> dict[str, Any]:
+    if not is_bound_chat_url(conversation_url):
+        return {"ok": False, "code": SUBMIT_INVALID_CONFIG, "details": {"reason": "invalid_conversation_url"}}
+    try:
+        page.goto(conversation_url, wait_until="domcontentloaded", timeout=timeout_ms)
+    except Exception as exc:
+        return {"ok": False, "code": SUBMIT_NAVIGATION_FAILED, "details": {"message": str(exc)}}
+
+    def predicate() -> tuple[bool, dict[str, Any]]:
+        snapshot = _active_composer_groups(page)
+        groups = [group for group in snapshot["logicalCandidates"] if group["active"]]
+        preferred = [group["preferred"] for group in groups if group["preferred"]]
+        composer = max(preferred, key=lambda item: item["nestingDepth"], default=None)
+        selector = composer["selector"] if composer else None
+        page_url = str(getattr(page, "url", "") or "")
+        turns = count_conversation_turns(page)
+        if composer is None:
+            session_code, session_details = bootstrap.classify_session(page)
+            return False, {"sessionCode": session_code, "pageUrl": page_url, "turnCount": turns, **session_details}
+        empty, empty_details = _composer_empty_from_snapshot(snapshot)
+        live_composer_ready = composer["selector"] != "textarea"
+        same_chat = same_conversation_url(page_url, conversation_url)
+        return same_chat and empty and live_composer_ready, {
+            "pageUrl": page_url,
+            "turnCount": turns,
+            "composerSelector": selector,
+            "liveComposerReady": live_composer_ready,
+            "sameConversation": same_chat,
+            **empty_details,
+            "composer": composer["locator"],
+        }
+
+    ok, details = _wait_until(predicate, timeout_ms=timeout_ms)
+    composer = details.pop("composer", None)
+    if not ok:
+        code = COMPOSER_NOT_EMPTY if details.get("composerEmpty") is False else EXISTING_CHAT_NOT_CONFIRMED
+        return {"ok": False, "code": code, "details": details}
+    return {"ok": True, "code": EXISTING_CHAT_CONFIRMED, "composer": composer, "details": details}
+
+
 def insert_prompt(
     page: Any,
     composer: Any,
@@ -893,9 +951,10 @@ def submit_once(
     prompt: str,
     guard: SendGuard,
     *,
+    chat_confirmed_state: str = FRESH_CHAT_CONFIRMED,
     timeout_ms: int = DEFAULT_TIMEOUT_MS,
 ) -> dict[str, Any]:
-    transitions: list[str] = [PAGE_OWNED, FRESH_CHAT_CONFIRMED, COMPOSER_EMPTY_CONFIRMED, PROMPT_INSERTED]
+    transitions: list[str] = [PAGE_OWNED, chat_confirmed_state, COMPOSER_EMPTY_CONFIRMED, PROMPT_INSERTED]
     before_turns = collect_user_turn_texts(page)
 
     def send_control_ready() -> tuple[bool, dict[str, Any]]:
@@ -998,6 +1057,45 @@ def submit_fresh_prompt(page: Any, prompt: str, *, timeout_ms: int = DEFAULT_TIM
         )
     guard = SendGuard()
     result = submit_once(page, composer, prompt, guard, timeout_ms=timeout_ms)
+    result["details"].update(inserted.get("details", {}))
+    return result
+
+
+def submit_existing_prompt(
+    page: Any,
+    prompt: str,
+    conversation_url: str,
+    *,
+    timeout_ms: int = DEFAULT_TIMEOUT_MS,
+) -> dict[str, Any]:
+    prep = prepare_existing_chat(page, conversation_url, timeout_ms=timeout_ms)
+    if not prep["ok"]:
+        return _result(
+            prep["code"],
+            ok=False,
+            send_state=SEND_PROVEN_NOT_SENT,
+            transitions=[PAGE_OWNED],
+            recoverable=True,
+            details=prep.get("details"),
+        )
+    composer = prep["composer"]
+    inserted = insert_prompt(
+        page,
+        composer,
+        prompt,
+        timeout_ms=timeout_ms,
+        initial_composer_selector=prep.get("details", {}).get("composerSelector"),
+    )
+    if not inserted["ok"]:
+        return _result(
+            inserted["code"],
+            ok=False,
+            send_state=SEND_PROVEN_NOT_SENT,
+            transitions=[PAGE_OWNED, EXISTING_CHAT_CONFIRMED, COMPOSER_EMPTY_CONFIRMED],
+            recoverable=True,
+            details=inserted.get("details"),
+        )
+    result = submit_once(page, composer, prompt, SendGuard(), chat_confirmed_state=EXISTING_CHAT_CONFIRMED, timeout_ms=timeout_ms)
     result["details"].update(inserted.get("details", {}))
     return result
 

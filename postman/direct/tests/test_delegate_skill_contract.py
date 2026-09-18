@@ -16,7 +16,7 @@ class DelegateViaPostmanSkillContract(unittest.TestCase):
         cls.agents = AGENTS.read_text(encoding="utf-8")
 
     def test_version_and_entrypoint(self):
-        self.assertIn("DIRECT_POSTMAN_SKILL_VERSION: 13", self.skill)
+        self.assertIn("DIRECT_POSTMAN_SKILL_VERSION: 14", self.skill)
         self.assertIn(r"C:\Users\andre\.dsh\postman\direct\postman.ps1", self.skill)
 
     def test_old_callable_path_is_not_present(self):
@@ -77,6 +77,17 @@ class DelegateViaPostmanSkillContract(unittest.TestCase):
             self.assertIn(message, trigger_section)
         self.assertNotIn("Legacy-compatible triggers", trigger_section)
         self.assertNotIn("Для совместимости остаются", trigger_section)
+
+    def test_existing_chat_continuation_contract(self):
+        for marker in (
+            "@Postman --chat REQ_20260917T101323Z_7008 <intent>",
+            "-ChatRequestId $chatRequestId",
+            "DIRECT_CHAT_REFERENCE_UNAVAILABLE",
+            "новый canonical REQ",
+            "UI search fallback отсутствует",
+        ):
+            self.assertIn(marker, self.skill)
+        self.assertIn("payload = сравни это с новой версией", self.skill)
 
     def test_postman_permission_is_current_message_only(self):
         self.assertIn("Postman permission is current-message-only", self.skill)
