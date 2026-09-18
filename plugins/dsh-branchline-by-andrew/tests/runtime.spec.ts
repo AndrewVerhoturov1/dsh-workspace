@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -8,7 +8,7 @@ import { isPathInside, sourceFromExternalWorktree, sourceFromTask, staleSourceRe
 import { TaskId, type TaskView } from '../src/types.ts'
 import { createRepositoryFixture, git, removeFixture } from './helpers.ts'
 import { defaultRuntimeRoot } from '../src/runtime/runtime-service.ts'
-import { buildWorktreePackageIndex, generateRuntimePackage, packageManagerInvocation, resolvePnpm } from '../src/runtime/profile-snapshot.ts'
+import { buildWorktreePackageIndex, formatPackageManagerFailure, generateRuntimePackage, packageManagerInvocation, preserveRuntimeWorkspace, redactSensitiveOutput, resolvePnpm } from '../src/runtime/profile-snapshot.ts'
 import { canTerminateFailedStart, canTerminateNormally, isExpectedProcessRecord, type ControllerState, type ProcessRecord } from '../src/runtime/runtime-controller.ts'
 
 function tempRoot(): string {
@@ -19,6 +19,82 @@ function writePackage(path: string, name: string): void {
   mkdirSync(path, { recursive: true })
   writeFileSync(join(path, 'package.json'), `${JSON.stringify({ name }, null, 2)}\n`, 'utf8')
 }
+
+describe('branch runtime workspace snapshot', () => {
+  it('preserves primary workspace build approvals without pnpm placeholders', () => {
+    const root = tempRoot()
+    const primaryProfile = join(root, 'primary', 'profiles', 'web')
+    const runtimeProfile = join(root, 'runtime', 'profiles', 'web')
+    const workspace = [
+      'packages:',
+      '  - .',
+      '',
+      'nodeLinker: hoisted',
+      'autoInstallPeers: false',
+      '',
+      'allowBuilds:',
+      "  '@deepseek-ai/dsh-subprocess-local': true",
+      '  koffi: true',
+      '  node-pty: true',
+      '',
+    ].join('\n')
+    mkdirSync(primaryProfile, { recursive: true })
+    mkdirSync(runtimeProfile, { recursive: true })
+    writeFileSync(join(primaryProfile, 'pnpm-workspace.yaml'), workspace, 'utf8')
+    preserveRuntimeWorkspace(primaryProfile, runtimeProfile)
+
+    expect(readFileSync(join(runtimeProfile, 'pnpm-workspace.yaml'), 'utf8')).toBe(workspace)
+    expect(readFileSync(join(runtimeProfile, 'pnpm-workspace.yaml'), 'utf8')).toContain("'@deepseek-ai/dsh-subprocess-local': true")
+    expect(readFileSync(join(runtimeProfile, 'pnpm-workspace.yaml'), 'utf8')).not.toContain('set this to true or false')
+  })
+
+  it('preserves patchedDependencies and its relative patch file', () => {
+    const root = tempRoot()
+    const primaryProfile = join(root, 'primary', 'profiles', 'web')
+    const runtimeProfile = join(root, 'runtime', 'profiles', 'web')
+    const patch = join(primaryProfile, 'patches', 'example-package.patch')
+    const workspace = [
+      'packages:',
+      '  - .',
+      '',
+      'patchedDependencies:',
+      '  example-package@1.0.0: patches/example-package.patch',
+      '',
+    ].join('\n')
+    mkdirSync(primaryProfile, { recursive: true })
+    mkdirSync(runtimeProfile, { recursive: true })
+    writeFileSync(join(primaryProfile, 'pnpm-workspace.yaml'), workspace, 'utf8')
+    mkdirSync(join(primaryProfile, 'patches'), { recursive: true })
+    writeFileSync(patch, 'patch contents\n', 'utf8')
+    cpSync(primaryProfile, runtimeProfile, { recursive: true })
+    preserveRuntimeWorkspace(primaryProfile, runtimeProfile)
+
+    expect(readFileSync(join(runtimeProfile, 'pnpm-workspace.yaml'), 'utf8')).toContain('example-package@1.0.0: patches/example-package.patch')
+    expect(readFileSync(join(runtimeProfile, 'patches', 'example-package.patch'), 'utf8')).toBe('patch contents\n')
+  })
+
+  it('fails clearly when a copied workspace patch is missing', () => {
+    const root = tempRoot()
+    const primaryProfile = join(root, 'primary', 'profiles', 'web')
+    const runtimeProfile = join(root, 'runtime', 'profiles', 'web')
+    mkdirSync(primaryProfile, { recursive: true })
+    mkdirSync(runtimeProfile, { recursive: true })
+    writeFileSync(join(primaryProfile, 'pnpm-workspace.yaml'), 'patchedDependencies:\n  missing@1.0.0: patches/missing.patch\n', 'utf8')
+
+    expect(() => preserveRuntimeWorkspace(primaryProfile, runtimeProfile)).toThrow(/patch file is missing after snapshot/u)
+  })
+
+  it('creates only the minimal fallback when primary workspace is absent', () => {
+    const root = tempRoot()
+    const primaryProfile = join(root, 'primary', 'profiles', 'web')
+    const runtimeProfile = join(root, 'runtime', 'profiles', 'web')
+    mkdirSync(primaryProfile, { recursive: true })
+    mkdirSync(runtimeProfile, { recursive: true })
+    preserveRuntimeWorkspace(primaryProfile, runtimeProfile)
+
+    expect(readFileSync(join(runtimeProfile, 'pnpm-workspace.yaml'), 'utf8')).toBe('packages:\n  - .\n')
+  })
+})
 
 describe('branch runtime profile overlay', () => {
   it('overrides only a matching primary link with a package inside the worktree', () => {
@@ -336,6 +412,47 @@ describe('branch runtime process and cleanup guards', () => {
     cleanupRuntimeSandbox(runtimeRoot, sandbox)
     expect(() => readFileSync(join(sandbox, 'runtime.json'))).toThrow()
     expect(() => cleanupRuntimeSandbox(runtimeRoot, outside)).toThrow(/outside runtime root/u)
+  })
+})
+
+describe('package manager diagnostics', () => {
+  it('includes exit status and bounded stdout/stderr', () => {
+    const message = formatPackageManagerFailure({
+      status: 1,
+      signal: null,
+      stdout: Buffer.from('stdout line\n'),
+      stderr: Buffer.from('stderr line\n'),
+    })
+
+    expect(message).toContain('branch runtime: pnpm install failed with exit code 1')
+    expect(message).toContain('stdout:\nstdout line')
+    expect(message).toContain('stderr:\nstderr line')
+    expect(Buffer.byteLength(message, 'utf8')).toBeLessThan(16 * 1024 + 256)
+  })
+
+  it('redacts bearer, auth parameter, password, secret, credential and URL userinfo', () => {
+    const sample = [
+      'Authorization: Bearer authorization-secret',
+      'Bearer standalone-secret',
+      '_authToken=npm-secret',
+      'token=query-secret',
+      'password=plain-password',
+      'secret=plain-secret',
+      'credential=plain-credential',
+      'https://alice:password-in-url@example.invalid/path',
+    ].join('\n')
+    const redacted = redactSensitiveOutput(sample)
+
+    expect(redacted).toContain('Authorization: Bearer <redacted>')
+    expect(redacted).toContain('Bearer <redacted>')
+    expect(redacted).not.toContain('authorization-secret')
+    expect(redacted).not.toContain('standalone-secret')
+    expect(redacted).not.toContain('npm-secret')
+    expect(redacted).not.toContain('query-secret')
+    expect(redacted).not.toContain('plain-password')
+    expect(redacted).not.toContain('plain-secret')
+    expect(redacted).not.toContain('plain-credential')
+    expect(redacted).not.toContain('password-in-url')
   })
 })
 

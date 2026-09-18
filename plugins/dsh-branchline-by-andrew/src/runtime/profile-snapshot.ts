@@ -60,20 +60,14 @@ export function prepareRuntimeProfile(input: {
     worktreePath: input.worktreePath,
   })
   writeFileSync(runtimePackagePath, `${JSON.stringify(generated.packageJson, null, 2)}\n`, 'utf8')
-  writeFileSync(join(runtimeProfile, 'pnpm-workspace.yaml'), [
-    'packages:',
-    '  - .',
-    '',
-    'nodeLinker: hoisted',
-    'autoInstallPeers: false',
-    '',
-  ].join('\n'), 'utf8')
+  preserveRuntimeWorkspace(primaryProfile, runtimeProfile)
 
   installProfile(runtimeProfile)
   const profileHash = hashFiles([
     runtimePackagePath,
     join(runtimeProfile, 'cordis.patch.yml'),
     join(runtimeProfile, 'pnpm-lock.yaml'),
+    join(runtimeProfile, 'pnpm-workspace.yaml'),
   ])
   return { profilePath: runtimeProfile, profileHash, overrides: generated.overrides }
 }
@@ -162,12 +156,52 @@ function primaryDependencyPath(profilePath: string, spec: string): string | unde
   try { return canonicalDirectory(absolute) } catch { return absolute }
 }
 
+const WORKSPACE_FILE = 'pnpm-workspace.yaml'
+const FALLBACK_WORKSPACE = 'packages:\n  - .\n'
+
+/** Preserve the primary workspace policy, or create only the minimal fallback. */
+export function preserveRuntimeWorkspace(primaryProfile: string, runtimeProfile: string): void {
+  const primaryWorkspace = join(primaryProfile, WORKSPACE_FILE)
+  const runtimeWorkspace = join(runtimeProfile, WORKSPACE_FILE)
+  if (existsSync(primaryWorkspace)) {
+    copyFileSync(primaryWorkspace, runtimeWorkspace)
+  } else {
+    writeFileSync(runtimeWorkspace, FALLBACK_WORKSPACE, 'utf8')
+  }
+  validateWorkspacePatchFiles(runtimeProfile, readFileSync(runtimeWorkspace, 'utf8'))
+}
+
+function validateWorkspacePatchFiles(runtimeProfile: string, workspace: string): void {
+  for (const rawPath of workspacePatchPaths(workspace)) {
+    const patchPath = isAbsolute(rawPath) ? resolve(rawPath) : resolve(runtimeProfile, rawPath)
+    if (!existsSync(patchPath)) {
+      throw new Error('branch runtime: pnpm workspace patch file is missing after snapshot: ' + patchPath)
+    }
+  }
+}
+
+function workspacePatchPaths(workspace: string): readonly string[] {
+  const lines = workspace.split(/\r?\n/u)
+  const start = lines.findIndex(line => /^patchedDependencies:\s*$/u.test(line))
+  if (start < 0) return []
+  const paths: string[] = []
+  for (const line of lines.slice(start + 1)) {
+    if (line.trim() === '') continue
+    if (!/^\s/u.test(line)) break
+    const match = /^\s+[^:]+:\s*(?:"([^"]+)"|'([^']+)'|(\S+))\s*$/u.exec(line)
+    const patchPath = match?.[1] ?? match?.[2] ?? match?.[3]
+    if (patchPath !== undefined) paths.push(patchPath)
+  }
+  return paths
+}
+
 export interface PackageManagerInvocation {
   readonly program: string
   readonly args: readonly string[]
 }
 
 const INSTALL_ARGUMENTS = ['install', '--offline', '--no-frozen-lockfile'] as const
+const PACKAGE_MANAGER_DIAGNOSTIC_BYTES = 8 * 1024
 
 export function packageManagerInvocation(input: {
   readonly program: string
@@ -209,7 +243,54 @@ function installProfile(profilePath: string): void {
     stdio: ['ignore', 'pipe', 'pipe'] as ['ignore', 'pipe', 'pipe'],
     maxBuffer: 32 * 1024 * 1024,
   }
-  execFileSync(invocation.program, [...invocation.args], options)
+  try {
+    execFileSync(invocation.program, [...invocation.args], options)
+  } catch (error) {
+    throw new Error(formatPackageManagerFailure(error))
+  }
+}
+
+/** Format bounded package-manager output without exposing credential-like values. */
+export function formatPackageManagerFailure(error: unknown): string {
+  const details = error !== null && typeof error === 'object' ? error as Record<string, unknown> : {}
+  const status = typeof details.status === 'number'
+    ? 'exit code ' + String(details.status)
+    : typeof details.signal === 'string' && details.signal !== ''
+      ? 'signal ' + details.signal
+      : 'unknown status'
+  const stdout = boundedDiagnostic(redactSensitiveOutput(outputText(details.stdout)))
+  const stderr = boundedDiagnostic(redactSensitiveOutput(outputText(details.stderr)))
+  return [
+    'branch runtime: pnpm install failed with ' + status,
+    '',
+    'stdout:',
+    stdout === '' ? '<empty>' : stdout,
+    '',
+    'stderr:',
+    stderr === '' ? '<empty>' : stderr,
+  ].join('\n')
+}
+
+function outputText(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (Buffer.isBuffer(value)) return value.toString('utf8')
+  if (value instanceof Uint8Array) return Buffer.from(value).toString('utf8')
+  return value === undefined || value === null ? '' : String(value)
+}
+
+function boundedDiagnostic(value: string): string {
+  const bytes = Buffer.from(value, 'utf8')
+  return bytes.length <= PACKAGE_MANAGER_DIAGNOSTIC_BYTES
+    ? value
+    : bytes.subarray(bytes.length - PACKAGE_MANAGER_DIAGNOSTIC_BYTES).toString('utf8')
+}
+
+export function redactSensitiveOutput(value: string): string {
+  return value
+    .replace(/(\bAuthorization\s*:\s*Bearer\s+)[^\s\r\n]+/giu, '$1<redacted>')
+    .replace(/\bBearer\s+[^\s\r\n]+/giu, 'Bearer <redacted>')
+    .replace(/((?:^|[?&\s])(?:_authToken|token|password|secret|credential)\s*=\s*)[^\s&]+/giu, '$1<redacted>')
+    .replace(/(\bhttps?:\/\/)[^\s/@:]+:[^\s/@]+@/giu, '$1<redacted>:<redacted>@')
 }
 
 export function resolvePnpm(): { readonly program: string; readonly prefix: readonly string[] } {
