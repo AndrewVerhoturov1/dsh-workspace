@@ -1,8 +1,0 @@
-{
-  "Pid": 14936,
-  "Timestamp": "2026-09-09T08:58:07.3665484+05:00",
-  "ExpectedOutputRoot": "C:\\Users\\andre\\.dsh\\windows-diagnostic-admin\\followup",
-  "Status": "Started; ожидается подтверждение UAC",
-  "Collector": "C:\\Users\\andre\\.dsh\\windows-diagnostic-admin\\Collect-WindowsDiagnosticFollowup.ps1",
-  "PowerShell": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
-}

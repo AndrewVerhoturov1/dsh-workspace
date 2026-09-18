@@ -24,6 +24,9 @@ backup/
 !plugins/dsh-better-sidebar-andrew/lib/
 !plugins/dsh-better-sidebar-andrew/lib/**
 
+# Better Sidebar generated browser sourcemaps
+/plugins/dsh-better-sidebar-andrew/lib/*.js.map
+
 # Локальные временные файлы инструментов
 .playwright-cli/
 .playwright-mcp/
@@ -46,11 +49,6 @@ tmp/
 # Launcher runtime state
 /tools/deepseek-harness-launcher/dsh.pid
 /tools/deepseek-harness-launcher/dsh-runtime.json
-
-# ChatGPT UIA generated diagnostics/results
-/chatgpt-desktop-uia-bridge/logs/
-/chatgpt-desktop-uia-bridge/diagnostics/
-/chatgpt-desktop-uia-bridge/*_results.json
 
 # Repository runtime logs
 /runtime-logs/

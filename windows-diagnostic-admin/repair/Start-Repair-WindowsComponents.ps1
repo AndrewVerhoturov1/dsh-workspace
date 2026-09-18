@@ -1,5 +1,0 @@
-# ASCII only. Starts the approved repair once through UAC.
-[CmdletBinding()]
-param([string]$OutputRoot='C:\Users\andre\.dsh\windows-diagnostic-admin\repair')
-New-Item -ItemType Directory -Path $OutputRoot -Force|Out-Null;$launch=Join-Path $OutputRoot 'last-repair-launch.json'
-try{$pwsh=(Get-Command pwsh.exe -ErrorAction Stop).Source;$collector=Join-Path $PSScriptRoot 'Repair-WindowsComponents.ps1';$p=Start-Process -FilePath $pwsh -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',$collector,'-OutputRoot',$OutputRoot) -Verb RunAs -WindowStyle Hidden -PassThru;@{Timestamp=(Get-Date).ToString('o');Status='Started; waiting for UAC';Pid=$p.Id;PowerShell=$pwsh;Collector=$collector;ExpectedOutputRoot=(Join-Path $OutputRoot 'runs')}|ConvertTo-Json|Set-Content $launch -Encoding UTF8;Write-Output "PID=$($p.Id)";Write-Output "Expected output: $(Join-Path $OutputRoot 'runs')"}catch{@{Timestamp=(Get-Date).ToString('o');Status='Failed';Error=$_.Exception.Message}|ConvertTo-Json|Set-Content $launch -Encoding UTF8;throw}

@@ -1,8 +1,0 @@
-{
-  "Pid": 13364,
-  "Status": "Started; ожидается подтверждение UAC",
-  "Collector": "C:\\Users\\andre\\.dsh\\windows-diagnostic-admin\\Collect-WindowsDiagnosticAdmin.ps1",
-  "Timestamp": "2026-09-09T08:32:03.6121912+05:00",
-  "ExpectedOutputRoot": "C:\\Users\\andre\\.dsh\\windows-diagnostic-admin",
-  "PowerShell": "C:\\Users\\andre\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\native\\powershell\\pwsh.exe"
-}

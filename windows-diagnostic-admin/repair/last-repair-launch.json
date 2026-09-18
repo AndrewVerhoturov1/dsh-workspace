@@ -1,8 +1,0 @@
-{
-  "Status": "Started; waiting for UAC",
-  "Pid": 19648,
-  "Timestamp": "2026-09-09T09:04:48.5350431+05:00",
-  "PowerShell": "C:\\Users\\andre\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\native\\powershell\\pwsh.exe",
-  "Collector": "C:\\Users\\andre\\.dsh\\windows-diagnostic-admin\\repair\\Repair-WindowsComponents.ps1",
-  "ExpectedOutputRoot": "C:\\Users\\andre\\.dsh\\windows-diagnostic-admin\\repair\\runs"
-}

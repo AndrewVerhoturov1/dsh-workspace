@@ -1,37 +1,35 @@
 # dsh-workspace
 
-## Файл текущего процесса Postman
+Рабочий репозиторий локальной конфигурации и расширений DeepSeek Harness.
 
-`POSTMAN/POSTMAN_CURRENT_FLOW.md` — краткое описание актуального производственного процесса Direct Web Postman: этапов запроса, передачи в ChatGPT Web, проверки ZIP и сохранения результата.
+## Текущий production Postman
 
-## Канонические правила
+Каноническое описание текущего процесса:
 
-Перед подготовкой или применением ZIP с реализацией всегда открывайте
-[Implementation Package Workflow](https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/system/implementation-package-workflow.md).
-Это каноническая инструкция для любой модели и локального агента: в ней описаны
-роли, структура ZIP, manifest, compatibility guards, applicator, проверки,
-границы исправлений и порядок публикации.
+- [`postman/POSTMAN_CURRENT_FLOW.md`](postman/POSTMAN_CURRENT_FLOW.md) — полный production flow Direct Web Postman;
+- [`postman/direct/README.md`](postman/direct/README.md) — прямой локальный entrypoint и lifecycle запроса;
+- [`postman/web/README.md`](postman/web/README.md) — browser transport;
+- [`docs/web-postman-artifact-contract.md`](docs/web-postman-artifact-contract.md) — текущий контракт ZIP-результата.
 
-Кратко:
+Production entrypoint:
 
-1. Внешняя модель сама проектирует решение и готовит полный implementation
-   package: файлы, тесты, проверяемый patch или applicator, инструкции и ZIP.
-2. Локальный агент выполняет только `check`/dry-run, механическое внедрение в
-   отдельном clean worktree, тесты, commit, push и PR.
-3. Если пакет несовместим с текущим кодом, агент останавливается и просит
-   пересобрать ZIP; вручную переписывать пакет нельзя.
-4. Merge выполняется только после отдельного явного разрешения пользователя.
+```text
+postman/direct/postman.ps1
+```
 
-Подробные правила Git и GitHub находятся в [`REPO_POLICY.md`](REPO_POLICY.md).
+## Правила репозитория
 
-## WP-010: сохранение намерения задачи
+- [`REPO_POLICY.md`](REPO_POLICY.md) — Git/GitHub policy и границы изменений.
+- [`system/implementation-package-workflow.md`](system/implementation-package-workflow.md) — правила подготовки и применения implementation packages.
 
-Цель — сохранить намерение пользователя при передаче задачи от локального
-агента внешнему агенту.
+## Сохранение пользовательского намерения
 
-Локальный агент задаёт необходимые уточняющие вопросы, фиксирует только
-подтверждённые требования и создаёт task-файл. Он не проектирует решение,
-не добавляет требований и не меняет смысл запроса.
+- [`docs/intent-preservation-rules.md`](docs/intent-preservation-rules.md)
+- [`docs/task-package-protocol.md`](docs/task-package-protocol.md)
 
-Внешний Postman prompt содержит только канонический ключ `REQ` и ссылки на
-правила и task-файл. Полное намерение хранится в task-файле.
+Локальный transport не должен самостоятельно дополнять пользовательские требования или проектировать решение вместо внешней модели.
+
+## Codex OAuth
+
+Текущая локальная OAuth-интеграция описана в [`GPT-CODEX-AUTH.md`](GPT-CODEX-AUTH.md).
+Production web profile использует пакет `dsh-codex-oauth` и provider route `codex`.

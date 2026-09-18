@@ -1,8 +1,0 @@
-Get-AppxPackage: C:\Users\andre\.dsh\windows-diagnostic-admin\Collect-WindowsDiagnosticAdmin.ps1:66
-Line |
-  66 |  … льзователи' '41-appx-all-users-summary.csv' { Get-AppxPackage -AllUse …
-     |                                                  ~~~~~~~~~~~~~~~
-     | The 'Get-AppxPackage' command was found in the module 'Appx', but the module could not be loaded due to the
-     | following error: [Operation is not supported on this platform. (0x80131539)] For more information, run
-     | 'Import-Module Appx'.
-

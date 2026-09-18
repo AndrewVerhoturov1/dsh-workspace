@@ -1,8 +1,0 @@
-Get-AppxPackage: C:\Users\andre\.dsh\windows-diagnostic-admin\Collect-WindowsDiagnosticAdmin.ps1:65
-Line |
-  65 |  … nvoke-Step "AppX $user" "40-appx-$safe.txt" { Get-AppxPackage -User $ …
-     |                                                  ~~~~~~~~~~~~~~~
-     | The 'Get-AppxPackage' command was found in the module 'Appx', but the module could not be loaded due to the
-     | following error: [Operation is not supported on this platform. (0x80131539)] For more information, run
-     | 'Import-Module Appx'.
-

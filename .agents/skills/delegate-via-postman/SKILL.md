@@ -7,8 +7,8 @@ description: >-
   создать ровно один canonical REQ, один раз вызвать
   C:\Users\andre\.dsh\postman\direct\postman.ps1, дождаться validated RESULT_DURABLE,
   затем безопасно применить implementation ZIP, проверить изменения и оформить их
-  по политике репозитория. Не использовать Cordis/postman_async_send, QChat или
-  ручную автоматизацию браузера как fallback.
+  по политике репозитория. Не использовать Cordis/postman_async_send или ручную
+  автоматизацию браузера как fallback.
 ---
 
 # Delegate via Postman — Direct Production
@@ -59,7 +59,6 @@ postman_send
 postman_runtime_*
 dsh-postman-harness как production transport
 persistent POSTMAN agent
-QChat
 frontend-design до получения результата Ч1
 другие implementation/design skills до получения результата Ч1
 Playwright MCP
@@ -155,13 +154,10 @@ frontend/design skills
 ```text
 postman_async_send
 old Harness
-QChat
 manual browser
 Playwright
 обычная самостоятельная реализация Luna
 ```
-
-`QChat` — отдельный transport и не является fallback.
 
 ## 3. Разделение ролей
 
@@ -303,7 +299,6 @@ Direct state, worker state и browser profile остаются в `%LOCALAPPDATA
 
 Не искать альтернативный transport.
 Не переходить на Cordis.
-Не переходить на QChat.
 Не автоматизировать браузер вручную.
 
 ## 7. Создание REQ
@@ -491,7 +486,6 @@ integration.
 Не открывать ChatGPT вручную.
 Не брать визуально существующий ZIP.
 Не использовать старый Harness.
-Не использовать QChat.
 Не пытаться доделать implementation самому.
 
 Разрешено один раз прочитать exact direct state/worker state этого REQ для

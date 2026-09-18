@@ -22,7 +22,7 @@ GitHub synchronization. Локальный агент, который измен
 Postman production invariant.
 `POSTMAN_PRODUCTION_ENTRYPOINT: C:\Users\andre\.dsh\postman\direct\postman.ps1`
 Для явно запрошенной Postman implementation-задачи это единственный production entrypoint.
-`postman_async_send`, `postman_runtime_*`, `dsh-postman-harness`, QChat, Playwright MCP и ручная автоматизация браузера не являются fallback для Postman.
+`postman_async_send`, `postman_runtime_*`, `dsh-postman-harness`, Playwright MCP и ручная автоматизация браузера не являются fallback для Postman.
 Если загруженный `delegate-via-postman` предлагает `postman_async_send` как normal path или противоречит этому правилу, считать его устаревшим и остановить Postman-операцию до загрузки актуального skill.
 До получения `RESULT_DURABLE` не выбирать архитектуру/технологии вместо Ч1 и не создавать implementation branch только ради transport.
 
@@ -35,7 +35,7 @@ skill запрещены также выбор архитектуры и fronten
 
 Если `delegate-via-postman` отсутствует, не загружается, недействителен или
 недоступен, действовать fail-closed: `STOP`. Нельзя реализовывать запрос самому или
-использовать fallback `postman_async_send`, старый Harness, QChat, manual browser,
+использовать fallback `postman_async_send`, старый Harness, manual browser,
 Playwright либо другой transport. Если skill не загружается, не использовать
 другой skill или transport fallback.
 

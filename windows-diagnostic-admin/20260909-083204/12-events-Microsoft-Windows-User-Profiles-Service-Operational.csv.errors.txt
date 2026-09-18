@@ -1,7 +1,0 @@
-Get-WinEvent: C:\Users\andre\.dsh\windows-diagnostic-admin\Collect-WindowsDiagnosticAdmin.ps1:46
-Line |
-  46 |  … og" $file { Get-WinEvent -LogName $log -MaxEvents 1000 -ErrorAction S …
-     |                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-     | There is not an event log on the localhost computer that matches "Microsoft-Windows-User Profiles
-     | Service/Operational".
-

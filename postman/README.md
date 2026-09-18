@@ -1,11 +1,39 @@
-# GitHub wakeup handler
+# Direct Web Postman
 
-`github-wakeup.ps1` — единственная точка обработки события `issues: edited` для протокола `POSTMAN REQ_<id>`. Он принимает путь к официальному `GITHUB_EVENT_PATH`, извлекает только служебный заголовок Issue и атомарно сохраняет READY-сигнал вне репозитория.
+Этот каталог содержит текущий production transport между локальным Harness-агентом и ChatGPT Web.
 
-Для локальной проверки:
+## Канонический flow
 
-```powershell
-pwsh -NoProfile -File .\postman\test-github-wakeup.ps1
+Главный документ:
+
+```text
+postman/POSTMAN_CURRENT_FLOW.md
 ```
 
-Ответ Issue никогда не рассматривается как PowerShell или другой исполняемый код.
+Production entrypoint:
+
+```text
+postman/direct/postman.ps1
+```
+
+Основной путь:
+
+```text
+user intent
+→ canonical REQ
+→ Direct Postman
+→ dedicated ChatGPT Web page
+→ correlated assistant turn
+→ exact ZIP attachment
+→ validation
+→ RESULT_DURABLE
+```
+
+## Структура
+
+- `direct/` — direct CLI, durable handoff и дальнейший lifecycle результата;
+- `web/` — browser bootstrap, submit/observe/download/validation pipeline;
+- `task_package.py` — формирование task package;
+- `POSTMAN_CURRENT_FLOW.md` — актуальная production-схема и инварианты.
+
+Архивные GitHub-Issue wakeup flows и промежуточные milestone-схемы не являются частью текущего production transport.
