@@ -7,6 +7,9 @@ param(
     [AllowEmptyString()]
     [string]$Task,
 
+    [Parameter(ParameterSetName = 'Run')]
+    [string]$ChatRequestId = '',
+
     [Parameter(ParameterSetName = 'Smoke', Mandatory = $true)]
     [switch]$BrowserSmoke,
 
@@ -58,6 +61,9 @@ try {
     $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
     [System.IO.File]::WriteAllText($tmp, $Task, $utf8NoBom)
     $argsList += @('--request-id', $RequestId, '--task-file', $tmp)
+    if (-not [string]::IsNullOrWhiteSpace($ChatRequestId)) {
+        $argsList += @('--chat-request-id', $ChatRequestId)
+    }
     foreach ($path in $AllowedPath) {
         $argsList += @('--allow-path', $path)
     }

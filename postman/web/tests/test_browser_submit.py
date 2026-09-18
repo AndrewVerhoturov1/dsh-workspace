@@ -148,6 +148,13 @@ class BrowserSubmitTests(unittest.TestCase):
     def test_bound_chat_url_rejects_root(self):
         self.assertFalse(submit.is_bound_chat_url("https://chatgpt.com/"))
 
+    def test_conversation_id_is_extracted_from_bound_url(self):
+        self.assertEqual("abc-123_X", submit.conversation_id_from_url("https://chatgpt.com/c/abc-123_X"))
+        self.assertTrue(submit.same_conversation_url(
+            "https://chatgpt.com/c/abc-123_X",
+            "https://www.chatgpt.com/c/abc-123_X",
+        ))
+
     def test_prompt_sha_is_deterministic(self):
         self.assertEqual(submit.prompt_sha256("abc"), submit.prompt_sha256("abc"))
         self.assertNotEqual(submit.prompt_sha256("abc"), submit.prompt_sha256("abd"))
@@ -200,6 +207,33 @@ class BrowserSubmitTests(unittest.TestCase):
         result = submit.prepare_fresh_chat(page, timeout_ms=0)
         self.assertTrue(result["ok"])
         self.assertEqual(result["code"], submit.FRESH_CHAT_CONFIRMED)
+
+    def test_prepare_existing_chat_accepts_exact_bound_chat(self):
+        url = "https://chatgpt.com/c/existing-123"
+        page = FakePage(url=url, turn_count=4, user_turns=["old"])
+        page.bound_url = url
+        result = submit.prepare_existing_chat(page, url, timeout_ms=0)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["code"], submit.EXISTING_CHAT_CONFIRMED)
+        self.assertTrue(result["details"]["sameConversation"])
+
+    def test_prepare_existing_chat_rejects_redirect_to_other_chat(self):
+        requested = "https://chatgpt.com/c/requested"
+        page = FakePage(turn_count=2)
+        page.goto = lambda *a, **k: setattr(page, "url", "https://chatgpt.com/c/other")
+        result = submit.prepare_existing_chat(page, requested, timeout_ms=0)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["code"], submit.EXISTING_CHAT_NOT_CONFIRMED)
+
+    def test_submit_existing_prompt_appends_exactly_one_user_turn(self):
+        url = "https://chatgpt.com/c/existing-123"
+        page = FakePage(url=url, turn_count=4, user_turns=["old"])
+        page.bound_url = url
+        result = submit.submit_existing_prompt(page, "new prompt", url, timeout_ms=0)
+        self.assertTrue(result["ok"])
+        self.assertEqual(page.user_turns, ["old", "new prompt"])
+        self.assertEqual(page.click_count, 1)
+        self.assertIn(submit.EXISTING_CHAT_CONFIRMED, result["transitions"])
 
     def test_prepare_fresh_chat_navigation_failure_is_pre_send(self):
         page = FakePage(goto_error="offline")

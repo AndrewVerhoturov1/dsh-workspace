@@ -15,7 +15,7 @@ Direct Web Postman — транспортный слой между локаль
 3. зафиксировать trusted metadata задачи и `base_commit`;
 4. опубликовать task-файл в GitHub;
 5. открыть или переиспользовать выделенный Chrome с авторизованным ChatGPT Web;
-6. создать новый чат;
+6. создать новый чат либо открыть exact сохранённый `/c/...` conversation по старому REQ;
 7. отправить короткий transport prompt со ссылками на policy и task-файл;
 8. дождаться строго коррелированного assistant turn;
 9. найти строго коррелированный ZIP attachment;
@@ -51,7 +51,7 @@ postman/direct/postman_direct.py
 postman/web/web_worker_bridge.py
         │
         ├─ create owned Page
-        ├─ prove fresh ChatGPT chat
+        ├─ prove fresh ChatGPT chat OR exact stored conversation URL
         ├─ send transport prompt exactly once
         ├─ bind /c/... chat URL
         ├─ observe exact next assistant turn
@@ -100,6 +100,37 @@ REQ_20260917T134845Z_2554
 Автоматический blind resend того же `REQ` запрещён.
 
 Если persisted direct-state для `REQ` уже существует, новый автоматический transport run не должен повторно отправлять prompt.
+
+## 3.1. Продолжение существующего ChatGPT conversation
+
+Пользовательский transport syntax:
+
+```text
+@Postman --chat REQ_20260917T101323Z_7008 <новый intent>
+```
+
+Старый REQ используется только для поиска локально сохранённого `conversationUrl`.
+Новый prompt всегда получает новый canonical REQ.
+
+Lookup order:
+
+```text
+direct/results/<old REQ>.json
+→ direct/requests/<old REQ>.json
+→ workers/<old REQ>.json
+```
+
+После получения URL worker открывает exact `https://chatgpt.com/c/<conversation-id>` и
+продолжает обычный submit/observe/detect/download/validate flow. Никакой текст старой
+переписки не копируется в новый prompt: контекст уже находится в самом ChatGPT chat.
+
+Search UI через лупу в текущем milestone не используется. Если URL не найден:
+
+```text
+DIRECT_CHAT_REFERENCE_UNAVAILABLE → STOP
+```
+
+---
 
 Связанные файлы:
 

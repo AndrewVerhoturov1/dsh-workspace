@@ -268,6 +268,7 @@ class DirectPostmanUnitTests(unittest.TestCase):
             self.assertEqual(1, len(Bridge.calls))
             bridge_kwargs = Bridge.calls[0][1]
             self.assertEqual(bridge_kwargs["expected_request"]["baseCommit"], PRE)
+            self.assertIsNone(bridge_kwargs["conversation_url"])
             self.assertEqual(
                 bridge_kwargs["prompt"].splitlines(),
                 [
@@ -291,6 +292,60 @@ class DirectPostmanUnitTests(unittest.TestCase):
             self.assertEqual(handoff["statePath"], str(runner.state_path(REQ)))
             self.assertEqual(handoff["resultHandoffPath"], str(handoff_path.resolve()))
             self.assertEqual(handoff["sha256"], "c" * 64)
+
+    def test_continuation_resolves_old_req_and_passes_exact_conversation_url(self):
+        new_req = "REQ_20260902T010204Z_1235"
+        conversation_url = "https://chatgpt.com/c/existing-chat-123"
+
+        class Publisher:
+            def __init__(self, **kwargs): pass
+            def snapshot(self): return direct.TaskSnapshot(PRE, ("postman", "README.md"))
+            def publish_content(self, request_id, content, *, expected_parent, root_entries):
+                return direct.PublishedTask(
+                    request_id,
+                    f"https://raw.githubusercontent.com/{REPO}/{PUB}/{request_id}.md",
+                    PRE,
+                    PUB,
+                    tuple(root_entries),
+                )
+
+        class Bridge:
+            calls = []
+            def __init__(self, **kwargs): pass
+            def run_request(self, request_id, **kwargs):
+                self.__class__.calls.append((request_id, kwargs))
+                return {
+                    "ok": True,
+                    "code": "RESULT_DURABLE",
+                    "details": {
+                        "resultZip": r"C:\result\continued.zip",
+                        "resultSha256": "d" * 64,
+                        "conversationUrl": conversation_url,
+                        "conversationId": "existing-chat-123",
+                    },
+                }
+
+        reference = types.SimpleNamespace(
+            request_id=REQ,
+            conversation_url=conversation_url,
+            conversation_id="existing-chat-123",
+            source="durable_handoff",
+        )
+        with tempfile.TemporaryDirectory() as root, patch.object(
+            direct.chat_reference, "resolve_chat_reference", return_value=reference
+        ):
+            Bridge.calls = []
+            runner = direct.DirectPostman(
+                direct_root=Path(root) / "direct",
+                publisher_factory=Publisher,
+                bridge_factory=Bridge,
+                ensure_browser=lambda **kwargs: {"cdpUrl": "http://127.0.0.1:9222"},
+            )
+            result = runner.run(request_id=new_req, task="continue", chat_request_id=REQ)
+            self.assertEqual(Bridge.calls[0][1]["conversation_url"], conversation_url)
+            self.assertEqual(result["continuedFromRequestId"], REQ)
+            self.assertEqual(result["conversationUrl"], conversation_url)
+            self.assertEqual(result["conversationId"], "existing-chat-123")
 
     def test_existing_state_blocks_automatic_resend(self):
         with tempfile.TemporaryDirectory() as root:

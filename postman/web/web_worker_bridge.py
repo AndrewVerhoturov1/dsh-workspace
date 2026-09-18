@@ -192,6 +192,7 @@ class WebWorkerBridge:
         prompt: str,
         expected_filename: str,
         expected_request: dict[str, Any],
+        conversation_url: str | None = None,
         cdp_url: str = browser_bootstrap.DEFAULT_CDP_URL,
         timeout_ms: int = browser_submit.DEFAULT_TIMEOUT_MS,
         observer_timeout_ms: int = browser_observer.DEFAULT_TIMEOUT_MS,
@@ -216,6 +217,8 @@ class WebWorkerBridge:
             return _result(BRIDGE_INVALID_CONFIG, ok=False, details={"reason": "prompt_empty"})
         if not isinstance(expected_request, dict):
             return _result(BRIDGE_INVALID_CONFIG, ok=False, details={"reason": "expected_request_not_object"})
+        if conversation_url is not None and not browser_submit.is_bound_chat_url(conversation_url):
+            return _result(BRIDGE_INVALID_CONFIG, ok=False, details={"reason": "invalid_conversation_url"})
 
         self._write_state(request, WEB_STARTING)
         factory = playwright_factory
@@ -239,13 +242,26 @@ class WebWorkerBridge:
                     owns_context = True
                 page = context.new_page()
 
-                submitted = browser_submit.submit_fresh_prompt(page, prompt, timeout_ms=timeout_ms)
+                if conversation_url is None:
+                    submitted = browser_submit.submit_fresh_prompt(page, prompt, timeout_ms=timeout_ms)
+                else:
+                    submitted = browser_submit.submit_existing_prompt(
+                        page, prompt, conversation_url, timeout_ms=timeout_ms
+                    )
                 if not submitted.get("ok"):
                     return self._fail(request, submitted.get("code", "submit_failed"), details=submitted)
-                self._write_state(request, PROMPT_SENT, submitProof=submitted)
                 chat_url = submitted.get("details", {}).get("chatUrl")
                 if not isinstance(chat_url, str) or not browser_submit.is_bound_chat_url(chat_url):
                     return self._fail(request, "submit did not bind a chat URL", details=submitted)
+                conversation_id = browser_submit.conversation_id_from_url(chat_url)
+                self._write_state(
+                    request,
+                    PROMPT_SENT,
+                    submitProof=submitted,
+                    conversationUrl=chat_url,
+                    conversationId=conversation_id,
+                    continuedConversation=conversation_url is not None,
+                )
 
                 self._write_state(request, WAITING_ASSISTANT)
                 completed = browser_observer.observe_next_assistant(
@@ -303,6 +319,8 @@ class WebWorkerBridge:
                     resultZip=durable.get("details", {}).get("resultZip"),
                     resultSha256=durable.get("details", {}).get("sha256"),
                     durableProof=durable,
+                    conversationUrl=chat_url,
+                    conversationId=conversation_id,
                 )
                 result = {"ok": True, "code": RESULT_DURABLE, "details": record}
                 if self.on_result_durable is not None:
