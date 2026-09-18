@@ -45,7 +45,7 @@
     "dsh-better-sidebar": "link:../../plugins/dsh-better-sidebar-andrew",
     "dsh-branchline": "link:D:/DEEPSEEK/dsh-branchline",
     "dsh-client-auto-continue": "^0.8.1",
-    "dsh-codex-oauth": "file:../../vendor/dsh-codex-oauth-0.1.6.tgz",
+    "dsh-codex-oauth": "file:../../vendor/dsh-codex-oauth-0.1.7.tgz",
     "dsh-flowglass-by-andrew": "link:../../plugins/dsh-flowglass-by-andrew",
     "dsh-notification": "^0.1.1",
     "dsh-postman-harness": "link:../../plugins/dsh-postman-harness",
