@@ -13,7 +13,7 @@ description: >-
 
 # Delegate via Postman — Direct Production
 
-`DIRECT_POSTMAN_SKILL_VERSION: 14`
+`DIRECT_POSTMAN_SKILL_VERSION: 15`
 
 Исторический baseline до v12: `DIRECT_POSTMAN_SKILL_VERSION: 11`.
 
@@ -432,9 +432,10 @@ $result.requestId == exact $requestId
 ```
 
 Не выполнять вручную `Get-FileHash`, повторный manifest/base/staleness/path validation
-или отдельный `Test-Path` как normal handoff. Полная transport-проверка ZIP, SHA-256,
-manifest, baseCommit и artifact identity уже принадлежит Direct Postman. Application
-вообще не является частью normal `@Postman` flow.
+или отдельный `Test-Path` как normal handoff. Direct Postman уже проверяет normal
+transport boundary: exact correlated filename, SHA-256, безопасную ZIP-структуру/paths
+и archive limits. Manifest/repository/baseCommit/resultType/patch semantics относятся
+к downstream/manual application, а не к normal `@Postman` transport gate.
 
 После `RESULT_DURABLE` не открывать ChatGPT для визуального подтверждения.
 
@@ -477,11 +478,10 @@ Direct pipeline уже доказал:
 assistant turn
 exact expected filename
 download
-manifest
-repository/baseCommit correlation
+SHA-256
 безопасную ZIP-структуру и paths
-repository scope для code-result типов
-artifact integrity
+archive limits / ZIP-bomb protection
+отсутствие explicit conflicting string requestId в optional manifest
 durable storage
 ```
 
@@ -789,7 +789,7 @@ terminal state
 19. Normal flow не создаёт implementation worktree/branch/commit/PR и не распаковывает ZIP.
 20. Workspace registration — presentation convenience, а не integrity gate.
 21. Ошибка Workspace registration не отменяет успешный RESULT_DURABLE и не вызывает retry.
-22. Direct Postman сам владеет strict transport validation до RESULT_DURABLE.
+22. Direct Postman сам владеет minimal safety-only transport validation до RESULT_DURABLE.
 23. Правила exact-bytes для `files/` относятся только к explicit manual finalization; normal flow не читает содержимое ZIP.
 24. `RESULT_DIAGNOSTIC_ONLY` не является implementation success и не разрешает automatic resend.
 25. Resume/PREPARE/TEST/PUBLISH не создают новый Postman REQ и не обращаются повторно к Ч1.
@@ -800,6 +800,7 @@ terminal state
 30. Старый REQ является только conversation reference; новая отправка всегда получает новый canonical REQ.
 31. Continuation payload не содержит `--chat` и старый REQ; Ч1 получает только новый user intent.
 32. Успешный RESULT_DURABLE сохраняет `conversationUrl`/`conversationId`, если browser transport их доказал.
+33. `manifest.json`, `protocolVersion`, `repository`, `baseCommit`, `resultType`, `patch` и `files` не являются normal transport hard gate; только explicit conflicting string `requestId` в optional manifest остаётся reject.
 
 
 ## Result Workspace после RESULT_DURABLE

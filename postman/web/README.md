@@ -68,16 +68,12 @@ postman/web/
 - максимально pure/deterministic validation;
 - проверка ZIP container до extraction;
 - exact expected filename;
-- manifest schema/version;
-- trusted `requestId` / repository / baseCommit comparison;
-- resultType whitelist;
 - normalized path safety;
 - symlink/reparse/special entry rejection;
 - duplicate/case/Unicode collision rejection;
-- trusted allowed/forbidden scope;
 - compressed/uncompressed/entry/ratio limits;
-- patch structure/scope validation;
-- SHA-256 и безопасный content inventory.
+- CRC, SHA-256 и безопасный content inventory;
+- optional `manifest.json`: только explicit conflicting string `requestId` является hard reject.
 
 Предполагаемый вход:
 
@@ -85,8 +81,9 @@ postman/web/
 validateArtifact(zipPath, expectedRequest)
 ```
 
-Где `expectedRequest` формируется trusted Runtime и содержит ожидаемые identity,
-scope и limits.
+Где `expectedRequest` формируется trusted Runtime и содержит ожидаемые request identity,
+exact filename и limits. Repository/application metadata может присутствовать, но normal
+transport validator не использует его как content gate.
 
 Предполагаемый выход:
 
@@ -118,9 +115,9 @@ Unit tests запускаются напрямую:
 node --test postman/web/tests/artifact-validator.test.mjs
 ```
 
-Validator читает ZIP как недоверенные bytes, проверяет central/local headers,
-CRC, SHA-256, типы entries, path aliases/collisions, limits, manifest, trusted
-scope и unified diff до любого применения результата в workspace.
+Validator читает ZIP как недоверенные bytes и проверяет central/local headers,
+CRC, SHA-256, типы entries, path aliases/collisions и archive limits. Он не валидирует
+repository scope, resultType или unified diff semantics в normal transport flow.
 
 ZIP не извлекается поверх repository.
 

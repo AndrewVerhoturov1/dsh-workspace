@@ -36,7 +36,22 @@ const CRC_TABLE=(()=>{const t=new Uint32Array(256);for(let n=0;n<256;n++){let c=
 function crc32(b){let c=0xffffffff;for(const x of b)c=CRC_TABLE[(c^x)&255]^(c>>>8);return(c^0xffffffff)>>>0;}
 function hash(b){return crypto.createHash('sha256').update(b).digest('hex');}
 function bad(code,{sha256='',details={},inventory=[]}={}){return Object.freeze({ok:false,status:code,code,sha256,validatedProtocolVersion:null,inventory,warnings:[],details:Object.freeze({...details})});}
-function good(sha256,manifest,inventory){return Object.freeze({ok:true,status:ARTIFACT_VALID,code:ARTIFACT_VALID,sha256,validatedProtocolVersion:manifest.protocolVersion,requestId:manifest.requestId,repository:manifest.repository,baseCommit:manifest.baseCommit,resultType:manifest.resultType,inventory,warnings:[],details:Object.freeze({entryCount:inventory.length})});}
+function good(sha256,expectedRequest,inventory,{manifest=null,manifestPresent=false,manifestReadable=false,warnings=[]}={}){
+  return Object.freeze({
+    ok:true,
+    status:ARTIFACT_VALID,
+    code:ARTIFACT_VALID,
+    sha256,
+    validatedProtocolVersion:Number.isInteger(manifest?.protocolVersion)?manifest.protocolVersion:null,
+    requestId:expectedRequest.requestId,
+    repository:expectedRequest.repository,
+    baseCommit:expectedRequest.baseCommit,
+    resultType:typeof manifest?.resultType==='string'?manifest.resultType:null,
+    inventory,
+    warnings:Object.freeze([...warnings]),
+    details:Object.freeze({entryCount:inventory.length,manifestPresent,manifestReadable}),
+  });
+}
 
 function checkExpected(e){
   if(!e||typeof e!=='object'||Array.isArray(e))throw new TypeError('expectedRequest must be an object');
@@ -270,16 +285,37 @@ function validateDiff(text,scopes){
 function basicProbe(p,size){const fd=fs.openSync(p,'r');try{const first=Buffer.alloc(Math.min(4,size));fs.readSync(fd,first,0,first.length,0);const ts=Math.min(size,22+0xffff),tail=Buffer.alloc(ts);fs.readSync(fd,tail,0,ts,size-ts);const eo=eocdOffset(tail);if(first.length<4||eo<0)return false;const sig=first.readUInt32LE(0);if(sig!==LOCAL&&sig!==EOCD)return false;return eo+22+tail.readUInt16LE(eo+20)===tail.length;}finally{fs.closeSync(fd);}}
 
 export function validateArtifact(zipPath,expectedRequest){
-  checkExpected(expectedRequest);const limits=limitsOf(expectedRequest.limits),scopes=scopesOf(expectedRequest);let stat;try{stat=fs.statSync(zipPath);}catch(e){return bad(ERROR_CODES.BAD_ZIP,{details:{reason:'file_missing',message:e.message}});}if(!stat.isFile())return bad(ERROR_CODES.BAD_ZIP,{details:{reason:'not_file'}});if(stat.size===0)return bad(ERROR_CODES.EMPTY,{details:{reason:'zero_byte'}});if(!basicProbe(zipPath,stat.size))return bad(ERROR_CODES.BAD_ZIP,{details:{reason:'basic_probe'}});if(filenameOf(zipPath)!==expectedRequest.expectedFilename)return bad(ERROR_CODES.FILENAME_MISMATCH,{details:{actual:filenameOf(zipPath),expected:expectedRequest.expectedFilename}});if(stat.size>limits.maxCompressedBytes)return bad(ERROR_CODES.COMPRESSED_SIZE_LIMIT,{details:{actual:stat.size,limit:limits.maxCompressedBytes}});
+  checkExpected(expectedRequest);const limits=limitsOf(expectedRequest.limits);let stat;try{stat=fs.statSync(zipPath);}catch(e){return bad(ERROR_CODES.BAD_ZIP,{details:{reason:'file_missing',message:e.message}});}if(!stat.isFile())return bad(ERROR_CODES.BAD_ZIP,{details:{reason:'not_file'}});if(stat.size===0)return bad(ERROR_CODES.EMPTY,{details:{reason:'zero_byte'}});if(!basicProbe(zipPath,stat.size))return bad(ERROR_CODES.BAD_ZIP,{details:{reason:'basic_probe'}});if(filenameOf(zipPath)!==expectedRequest.expectedFilename)return bad(ERROR_CODES.FILENAME_MISMATCH,{details:{actual:filenameOf(zipPath),expected:expectedRequest.expectedFilename}});if(stat.size>limits.maxCompressedBytes)return bad(ERROR_CODES.COMPRESSED_SIZE_LIMIT,{details:{actual:stat.size,limit:limits.maxCompressedBytes}});
   let b;try{b=fs.readFileSync(zipPath);}catch(e){return bad(ERROR_CODES.BAD_ZIP,{details:{reason:'read',message:e.message}});}const zipHash=hash(b),parsed=parseCentral(b);if(parsed.error)return bad(ERROR_CODES.BAD_ZIP,{sha256:zipHash,details:parsed});if(parsed.entries.length===0)return bad(ERROR_CODES.EMPTY,{sha256:zipHash,details:{reason:'empty_zip'}});
   const exact=new Set(),collisions=new Map(),offsets=new Set(),items=[];
   for(const e of parsed.entries){const c=classify(e.rawName);if(!c.ok)return bad(c.code,{sha256:zipHash,details:{path:e.rawName,reason:c.reason}});const tc=typeCode(e,c);if(tc)return bad(tc,{sha256:zipHash,details:{path:e.rawName}});if(exact.has(c.structural))return bad(ERROR_CODES.DUPLICATE_PATH,{sha256:zipHash,details:{path:c.normalized}});exact.add(c.structural);const old=collisions.get(c.collisionKey);if(old!==undefined&&old!==c.structural)return bad(ERROR_CODES.CASE_COLLISION,{sha256:zipHash,details:{first:old,second:c.structural}});collisions.set(c.collisionKey,c.structural);if(offsets.has(e.localOffset))return bad(ERROR_CODES.BAD_ZIP,{sha256:zipHash,details:{reason:'duplicate_local_offset'}});offsets.add(e.localOffset);items.push({e,c});}
   if(items.length>limits.maxEntries)return bad(ERROR_CODES.ENTRY_LIMIT,{sha256:zipHash,details:{actual:items.length,limit:limits.maxEntries}});let totalU=0,totalC=0;for(const {e} of items){if(e.uncompressedSize>limits.maxEntryUncompressedBytes)return bad(ERROR_CODES.ENTRY_SIZE_LIMIT,{sha256:zipHash,details:{path:e.rawName,actual:e.uncompressedSize,limit:limits.maxEntryUncompressedBytes}});totalU+=e.uncompressedSize;totalC+=e.compressedSize;if(totalU>limits.maxTotalUncompressedBytes)return bad(ERROR_CODES.UNCOMPRESSED_SIZE_LIMIT,{sha256:zipHash,details:{actual:totalU,limit:limits.maxTotalUncompressedBytes}});if(e.uncompressedSize>0&&e.compressedSize===0)return bad(ERROR_CODES.ZIP_BOMB_RISK,{sha256:zipHash,details:{path:e.rawName,reason:'zero_compressed'}});const r=e.uncompressedSize===0?1:e.uncompressedSize/e.compressedSize;if(r>limits.maxCompressionRatio)return bad(ERROR_CODES.ZIP_BOMB_RISK,{sha256:zipHash,details:{path:e.rawName,ratio:r,limit:limits.maxCompressionRatio}});}const ar=totalU===0?1:(totalC===0?Infinity:totalU/totalC);if(ar>limits.maxCompressionRatio)return bad(ERROR_CODES.ZIP_BOMB_RISK,{sha256:zipHash,details:{aggregateRatio:ar,limit:limits.maxCompressionRatio}});
   const inventory=[],data=new Map(),ranges=[];for(const {e,c} of items){const r=entryData(b,e,parsed.centralOffset,limits.maxEntryUncompressedBytes);if(r.error)return bad(ERROR_CODES.BAD_ZIP,{sha256:zipHash,details:{path:c.normalized,...r}});ranges.push([e.localOffset,r.dataEnd,c.normalized]);data.set(c.normalized,r.data);inventory.push(Object.freeze({path:c.normalized,kind:c.isDirectory?'directory':'file',compressionMethod:e.method,compressedSize:e.compressedSize,uncompressedSize:e.uncompressedSize,sha256:c.isDirectory?'':hash(r.data)}));}ranges.sort((a,b)=>a[0]-b[0]);for(let i=1;i<ranges.length;i++)if(ranges[i][0]<ranges[i-1][1])return bad(ERROR_CODES.BAD_ZIP,{sha256:zipHash,details:{reason:'overlap'}});
-  if(!data.has('manifest.json')||inventory.find(x=>x.path==='manifest.json')?.kind!=='file')return bad(ERROR_CODES.MANIFEST_MISSING,{sha256:zipHash,inventory});const mt=utf8(data.get('manifest.json'));if(mt===null)return bad(ERROR_CODES.MANIFEST_INVALID,{sha256:zipHash,inventory,details:{reason:'manifest_utf8'}});let m;try{m=JSON.parse(mt);}catch(e){return bad(ERROR_CODES.MANIFEST_INVALID,{sha256:zipHash,inventory,details:{reason:'manifest_json',message:e.message}});}const mc=manifestCode(m);if(mc)return bad(mc,{sha256:zipHash,inventory});if(m.protocolVersion!==1)return bad(ERROR_CODES.PROTOCOL_VERSION_MISMATCH,{sha256:zipHash,inventory,details:{actual:m.protocolVersion,expected:1}});if(m.requestId!==expectedRequest.requestId)return bad(ERROR_CODES.REQUEST_MISMATCH,{sha256:zipHash,inventory});if(m.repository!==expectedRequest.repository)return bad(ERROR_CODES.REPOSITORY_MISMATCH,{sha256:zipHash,inventory});if(m.baseCommit.toLowerCase()!==expectedRequest.baseCommit.toLowerCase())return bad(ERROR_CODES.BASE_COMMIT_MISMATCH,{sha256:zipHash,inventory});
-  const patchRequired=m.resultType==='patch'||m.resultType==='hybrid_patch';if(patchRequired&&!data.has('changes.patch'))return bad(ERROR_CODES.PAYLOAD_MISSING,{sha256:zipHash,inventory,details:{path:'changes.patch'}});if(!patchRequired&&data.has('changes.patch'))return bad(ERROR_CODES.MANIFEST_INVALID,{sha256:zipHash,inventory,details:{reason:'unexpected_patch'}});
-  const archiveTargets=new Map();for(const p of m.files){const c=target(p);if(!c.ok)return bad(c.code,{sha256:zipHash,inventory,details:{path:p}});archiveTargets.set(`files/${c.normalized}`,c.normalized);}for(const [ap,t]of archiveTargets){const inv=inventory.find(x=>x.path===ap);if(!inv||inv.kind!=='file')return bad(ERROR_CODES.PAYLOAD_MISSING,{sha256:zipHash,inventory,details:{path:t}});}
-  const roots=new Set(['manifest.json',...(patchRequired?['changes.patch']:[])]),targetPaths=new Set(archiveTargets.keys());for(const inv of inventory){if(roots.has(inv.path))continue;if(inv.path==='files/'&&inv.kind==='directory')continue;if(inv.path.startsWith('files/')){if(inv.kind==='file'&&!targetPaths.has(inv.path))return bad(ERROR_CODES.MANIFEST_INVALID,{sha256:zipHash,inventory,details:{reason:'unlisted_payload',path:inv.path}});if(inv.kind==='directory'&&![...targetPaths].some(p=>p.startsWith(inv.path)))return bad(ERROR_CODES.MANIFEST_INVALID,{sha256:zipHash,inventory,details:{reason:'orphan_directory',path:inv.path}});continue;}return bad(ERROR_CODES.SCOPE_VIOLATION,{sha256:zipHash,inventory,details:{reason:'layout',path:inv.path}});}
-  if(m.resultType!=='artifact')for(const p of m.files){const c=target(p),sc=scopeCode(c.normalized,scopes);if(sc)return bad(sc,{sha256:zipHash,inventory,details:{path:c.normalized}});}if(patchRequired){const pt=utf8(data.get('changes.patch'));if(pt===null)return bad(ERROR_CODES.PATCH_INVALID,{sha256:zipHash,inventory,details:{reason:'patch_utf8'}});const pc=validateDiff(pt,scopes);if(pc)return bad(pc,{sha256:zipHash,inventory});}
-  return good(zipHash,m,inventory);
+  let manifest=null,manifestPresent=false,manifestReadable=false;
+  const warnings=[];
+  const manifestEntry=inventory.find(x=>x.path==='manifest.json'&&x.kind==='file');
+  if(manifestEntry){
+    manifestPresent=true;
+    const mt=utf8(data.get('manifest.json'));
+    if(mt===null){
+      warnings.push('manifest_not_utf8');
+    }else{
+      try{
+        const candidate=JSON.parse(mt);
+        if(candidate&&typeof candidate==='object'&&!Array.isArray(candidate)){
+          manifest=candidate;
+          manifestReadable=true;
+          if(typeof candidate.requestId==='string'&&candidate.requestId!==expectedRequest.requestId){
+            return bad(ERROR_CODES.REQUEST_MISMATCH,{sha256:zipHash,inventory,details:{actual:candidate.requestId,expected:expectedRequest.requestId}});
+          }
+          if('requestId' in candidate&&typeof candidate.requestId!=='string')warnings.push('manifest_request_id_not_string');
+        }else{
+          warnings.push('manifest_not_object');
+        }
+      }catch{
+        warnings.push('manifest_json_invalid');
+      }
+    }
+  }
+  return good(zipHash,expectedRequest,inventory,{manifest,manifestPresent,manifestReadable,warnings});
 }
