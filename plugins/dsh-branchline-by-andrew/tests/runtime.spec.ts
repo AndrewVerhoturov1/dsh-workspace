@@ -8,7 +8,7 @@ import { isPathInside, sourceFromExternalWorktree, sourceFromTask, staleSourceRe
 import { TaskId, type TaskView } from '../src/types.ts'
 import { createRepositoryFixture, git, removeFixture } from './helpers.ts'
 import { defaultRuntimeRoot } from '../src/runtime/runtime-service.ts'
-import { buildWorktreePackageIndex, generateRuntimePackage } from '../src/runtime/profile-snapshot.ts'
+import { buildWorktreePackageIndex, generateRuntimePackage, packageManagerInvocation, resolvePnpm } from '../src/runtime/profile-snapshot.ts'
 import { canTerminateFailedStart, canTerminateNormally, isExpectedProcessRecord, type ControllerState, type ProcessRecord } from '../src/runtime/runtime-controller.ts'
 
 function tempRoot(): string {
@@ -336,5 +336,62 @@ describe('branch runtime process and cleanup guards', () => {
     cleanupRuntimeSandbox(runtimeRoot, sandbox)
     expect(() => readFileSync(join(sandbox, 'runtime.json'))).toThrow()
     expect(() => cleanupRuntimeSandbox(runtimeRoot, outside)).toThrow(/outside runtime root/u)
+  })
+})
+
+describe('package manager process invocation', () => {
+  it('routes a Windows pnpm shim through the command processor and quotes spaces', () => {
+    const pnpm = 'C:\\Users\\Test User\\AppData\\Roaming\\npm\\pnpm.cmd'
+    const invocation = packageManagerInvocation({
+      program: pnpm,
+      prefix: [],
+      platform: 'win32',
+      comSpec: 'C:\\Windows\\System32\\cmd.exe',
+    })
+
+    expect(invocation.program).toBe('C:\\Windows\\System32\\cmd.exe')
+    expect(invocation.program.toLowerCase()).not.toMatch(/\\.cmd$/u)
+    expect(invocation.args.slice(0, 3)).toEqual(['/d', '/s', '/c'])
+    expect(invocation.args[3]).toBe('call "' + pnpm + '" install --offline --no-frozen-lockfile')
+  })
+
+  it('keeps the fixed install arguments separate and preserves the corepack prefix', () => {
+    const corepack = 'C:\\Program Files\\nodejs\\corepack.cmd'
+    const invocation = packageManagerInvocation({
+      program: corepack,
+      prefix: ['pnpm'],
+      platform: 'win32',
+      comSpec: 'cmd.exe',
+    })
+
+    expect(invocation.args[3]).toBe('call "' + corepack + '" pnpm install --offline --no-frozen-lockfile')
+  })
+
+  it('keeps direct executable invocation on non-Windows', () => {
+    expect(packageManagerInvocation({
+      program: '/usr/local/bin/pnpm',
+      prefix: [],
+      platform: 'linux',
+    })).toEqual({
+      program: '/usr/local/bin/pnpm',
+      args: ['install', '--offline', '--no-frozen-lockfile'],
+    })
+  })
+
+  it.runIf(process.platform === 'win32')('runs a version probe through the resolved launcher', () => {
+    const launcher = resolvePnpm()
+    const invocation = packageManagerInvocation({
+      ...launcher,
+      commandArgs: ['--version'],
+    })
+    const options = {
+      encoding: 'utf8' as const,
+      windowsHide: true,
+      windowsVerbatimArguments: process.platform === 'win32',
+    }
+    const version = execFileSync(invocation.program, [...invocation.args], options).trim()
+
+    expect(invocation.program.toLowerCase()).not.toMatch(/\.(cmd|bat)$/u)
+    expect(version).toMatch(/^\d+\.\d+/u)
   })
 })

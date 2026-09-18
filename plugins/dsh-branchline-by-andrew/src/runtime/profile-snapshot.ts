@@ -162,21 +162,57 @@ function primaryDependencyPath(profilePath: string, spec: string): string | unde
   try { return canonicalDirectory(absolute) } catch { return absolute }
 }
 
+export interface PackageManagerInvocation {
+  readonly program: string
+  readonly args: readonly string[]
+}
+
+const INSTALL_ARGUMENTS = ['install', '--offline', '--no-frozen-lockfile'] as const
+
+export function packageManagerInvocation(input: {
+  readonly program: string
+  readonly prefix: readonly string[]
+  readonly commandArgs?: readonly string[]
+  readonly platform?: NodeJS.Platform
+  readonly comSpec?: string
+}): PackageManagerInvocation {
+  const commandArgs = [...input.prefix, ...(input.commandArgs ?? INSTALL_ARGUMENTS)]
+  if ((input.platform ?? process.platform) !== 'win32') {
+    return { program: input.program, args: commandArgs }
+  }
+
+  const command = ['call', quoteWindowsProgram(input.program), ...commandArgs.map(quoteWindowsCommandArgument)]
+    .join(' ')
+  return {
+    program: input.comSpec || process.env.ComSpec || 'cmd.exe',
+    args: ['/d', '/s', '/c', command],
+  }
+}
+
+function quoteWindowsProgram(value: string): string {
+  return '"' + value.replace(/"/gu, '\\"') + '"'
+}
+
+function quoteWindowsCommandArgument(value: string): string {
+  if (value !== '' && /^[^\s"&|<>()^]+$/u.test(value)) return value
+  return '"' + value.replace(/"/gu, '\\"') + '"'
+}
+
 function installProfile(profilePath: string): void {
   const pnpm = resolvePnpm()
-  const args = pnpm.prefix.length === 0
-    ? ['install', '--offline', '--no-frozen-lockfile']
-    : [...pnpm.prefix, 'install', '--offline', '--no-frozen-lockfile']
-  execFileSync(pnpm.program, args, {
+  const invocation = packageManagerInvocation(pnpm)
+  const options = {
     cwd: profilePath,
     env: isolatedLaunchEnvironment(dirname(dirname(profilePath))),
     windowsHide: true,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsVerbatimArguments: process.platform === 'win32',
+    stdio: ['ignore', 'pipe', 'pipe'] as ['ignore', 'pipe', 'pipe'],
     maxBuffer: 32 * 1024 * 1024,
-  })
+  }
+  execFileSync(invocation.program, [...invocation.args], options)
 }
 
-function resolvePnpm(): { readonly program: string; readonly prefix: readonly string[] } {
+export function resolvePnpm(): { readonly program: string; readonly prefix: readonly string[] } {
   if (process.platform === 'win32') {
     const direct = firstWhere('pnpm.cmd')
     if (direct !== undefined) return { program: direct, prefix: [] }
