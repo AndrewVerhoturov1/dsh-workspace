@@ -6,14 +6,14 @@ description: >-
   Direct Web Postman: сохранить пользовательский intent без технических дополнений,
   создать ровно один canonical REQ, один раз вызвать
   C:\Users\andre\.dsh\postman\direct\postman.ps1, дождаться validated RESULT_DURABLE,
-  затем безопасно применить implementation ZIP, проверить изменения и оформить их
-  по политике репозитория. Не использовать Cordis/postman_async_send или ручную
-  автоматизацию браузера как fallback.
+  сохранить validated RESULT_DURABLE, сообщить exact resultZip и остановиться. Регистрация
+  Result Workspace — необязательная presentation convenience, а не integrity gate. Не использовать Cordis/postman_async_send, QChat или
+  ручную автоматизацию браузера как fallback.
 ---
 
 # Delegate via Postman — Direct Production
 
-`DIRECT_POSTMAN_SKILL_VERSION: 12`
+`DIRECT_POSTMAN_SKILL_VERSION: 13`
 
 Исторический baseline до v12: `DIRECT_POSTMAN_SKILL_VERSION: 11`.
 
@@ -23,27 +23,20 @@ description: >-
 
 ```text
 точный user intent
+→ удалить только transport prefix @Postman
 → один canonical REQ
 → один foreground-вызов Direct Postman
-→ ждать terminal JSON
+→ ждать exact terminal JSON
 → RESULT_DURABLE
-→ определить один task-scoped semantic test
-→ создать UTF-8 TestScript/TestSpec вне implementation worktree
-→ RESUME: использовать только resume_request.ps1
-→ READY_FOR_TEST → TEST_PASSED → PUBLISHED внутри resumable state machine
-→ RESULT_WORKSPACE_REGISTERED
-→ RESULT_PRESENTED (если известна пользовательская точка входа)
-→ отчёт пользователю с кликабельными ссылками на authoritative changedFiles
+→ один раз попытаться зарегистрировать exact resultHandoffPath через
+  postman_result_workspace_register(request_id=<exact REQ>, result_handoff_json=...)
+→ сообщить REQ, resultZip и Workspace (или diagnostic регистрации)
+→ STOP
 ```
 
-`resume_request.ps1` — единственный normal local-finalization entrypoint после
-`RESULT_DURABLE`. PREPARE, TEST и PUBLISH остаются внутренними детерминированными
-стадиями state machine, а не отдельными командами Luna.
-
-Если semantic test нельзя корректно определить до PREPARE, разрешены два вызова
-ТОГО ЖЕ `resume_request.ps1`: первый без test input доводит exact REQ только до
-`READY_FOR_TEST`; после создания TestScript/TestSpec второй продолжает тот же REQ до
-`PUBLISHED`. Это resume одного lifecycle, а не новый transport flow.
+После `RESULT_DURABLE` normal flow не вызывает resume/PREPARE/TEST/PUBLISH, не
+создаёт implementation worktree/branch/commit/PR и не распаковывает ZIP. Регистрация
+Workspace — только удобство показа, а не integrity gate.
 
 Не проектируй другой transport flow.
 
@@ -59,6 +52,7 @@ postman_send
 postman_runtime_*
 dsh-postman-harness как production transport
 persistent POSTMAN agent
+QChat
 frontend-design до получения результата Ч1
 другие implementation/design skills до получения результата Ч1
 Playwright MCP
@@ -115,7 +109,7 @@ Postman, сделай X
 Надо ли нам менять Postman?
 ```
 
-### Обязательная загрузка skill до implementation
+### Обязательная загрузка skill до task-specific действий
 
 Только после exact trigger из текущего сообщения первым task-specific действием должен
 быть вызов:
@@ -124,16 +118,16 @@ Postman, сделай X
 skill(delegate-via-postman)
 ```
 
-До загрузки этого skill Luna не должна выполнять implementation-действия:
+До загрузки этого skill Luna не должна выполнять task-specific действия, которые
+интерпретируют, расширяют или выполняют пользовательский запрос:
 
 ```text
-glob по task-файлам
-read implementation-файлов
+glob/read по task-файлам
+локальное исследование для уточнения intent
 edit
 write
-создание исходников
-выбор архитектуры
-implementation shell-команды
+выбор архитектуры/технологии
+task-specific shell-команды
 frontend/design skills
 ```
 
@@ -154,43 +148,39 @@ frontend/design skills
 ```text
 postman_async_send
 old Harness
+QChat
 manual browser
 Playwright
 обычная самостоятельная реализация Luna
 ```
 
+`QChat` — отдельный transport и не является fallback.
+
 ## 3. Разделение ролей
 
-### Ч1 — external implementation author
+### Ч1 — external task executor
 
-Ч1 выбирает:
+Ч1 самостоятельно выполняет exact payload пользователя и формирует результат/ZIP.
+Если задача требует исследования, текста, кода, файлов, архитектуры, тестов или
+документации — эти содержательные решения принадлежат Ч1, а не Л1.
 
-```text
-архитектуру
-технологии
-структуру реализации
-код
-необходимые тесты
-необходимую документацию
-```
+### Л1 — local transport agent
 
-### Л1 — local implementation agent
-
-Л1 отвечает только за:
+В normal `@Postman` flow Л1 отвечает только за:
 
 ```text
-точный user intent
-REQ
-Direct Postman invocation
-получение validated artifact
-безопасное внедрение результата
-локальную проверку
-Git/PR
-отчёт
+verbatim payload после удаления transport marker
+canonical REQ
+один Direct Postman invocation
+minimal terminal transport gate
+optional Result Workspace registration
+короткий отчёт с exact resultZip/Workspace
+STOP
 ```
 
-До получения результата Ч1 Л1 не должна самостоятельно решать, как реализовать
-пользовательскую задачу.
+Л1 не интерпретирует содержимое ответа Ч1, не применяет и не изменяет ZIP, не выбирает
+semantic test и не начинает Git/PR integration. Содержательная работа с durable
+результатом возможна только позже по отдельному explicit manual-finalization запросу.
 
 ## 4. Intent preservation
 
@@ -210,9 +200,10 @@ Git/PR
 сделай калькулятор
 ```
 
-Удалить можно только префикс `@Postman` и окружающий его пробел. Остальной
-пользовательский intent сохранять буквально по смыслу. Это правило применяется
-только к сообщению, прошедшему exclusive current-message trigger.
+Удалить можно только точный transport marker `@Postman` и непосредственно следующий
+за ним разделяющий whitespace. Все остальные символы текущего пользовательского
+сообщения передавать в `-Task` verbatim: без перефразирования, исправления,
+сокращения, дополнения или перестановки.
 
 Не добавлять от себя:
 
@@ -229,38 +220,32 @@ accessibility
 test framework
 архитектурный паттерн
 язык реализации
+факты из предыдущих сообщений
+расшифровку ссылок вроде "это", "как раньше", "те размеры"
 ```
 
-Все реальные пользовательские ограничения сохранить.
+Если exact `@Postman` payload ссылается на предыдущий контекст, Л1 НЕ разрешает эту
+ссылку самостоятельно и НЕ добавляет предыдущий контекст. Ч1 получает ровно тот
+payload, который написал оркестратор после transport marker. Оркестратор отвечает
+за self-contained prompt.
 
-Если текущее сообщение с exact `@Postman` явно ссылается на предыдущий контекст,
-разрешено добавить только минимальные факты из предыдущего контекста, без которых
-референт (`это`, `те размеры`, `как раньше`) непонятен Ч1. Предыдущее разрешение
-само по себе не является trigger для текущего сообщения.
-
-Это context resolution, а не расширение требований.
-
-Если сомневаешься, лучше передать больше исходного пользовательского текста, чем
-придумать новое требование.
-
-## 5. Не выполнять implementation work перед Ч1
+## 5. Не интерпретировать задачу до Ч1
 
 После exact `@Postman` trigger нельзя сначала:
 
 ```text
-исследовать framework
-выбирать architecture
+исследовать framework или предмет задачи
+выбирать architecture/technology
 загружать frontend-design
 писать собственный код
 создавать структуру проекта
-проводить implementation research вместо Ч1
+разрешать ссылки на предыдущий контекст
+уточнять или "улучшать" payload от имени пользователя
 ```
 
-Сначала Direct Postman.
-
-Локальное исследование до отправки разрешено только если оно необходимо, чтобы
-буквально разрешить неоднозначную пользовательскую ссылку или определить target
-repository.
+Сначала один Direct Postman с verbatim payload. До отправки разрешены только
+transport-действия из этого skill: загрузка skill, проверка bridge и создание
+canonical REQ.
 
 ## 6. Canonical production bridge
 
@@ -299,6 +284,7 @@ Direct state, worker state и browser profile остаются в `%LOCALAPPDATA
 
 Не искать альтернативный transport.
 Не переходить на Cordis.
+Не переходить на QChat.
 Не автоматизировать браузер вручную.
 
 ## 7. Создание REQ
@@ -367,20 +353,22 @@ polling. Background допустим только если конкретный 
 Luna передаёт bridge только exact user payload через `-Task`. Сам внешний prompt
 формирует Direct Postman; Luna не собирает его вручную.
 
-Канонический prompt Ч1 состоит ровно из трёх строк:
+Канонический prompt Ч1 состоит ровно из двух строк:
 
 ```text
 POSTMAN_REQUEST_ID: REQ_xxx
-policy: <policy link>
 task_file: <SHA-pinned task link>
 ```
 
-В prompt не должны находиться `repository`, `base_commit`, `expected_filename`,
-`allowed_paths_json`, `forbidden_paths_json`, user intent, result markers или
-implementation instructions. Всё это Direct Postman помещает в self-contained task-файл.
+Внешний policy-link больше не является частью production prompt: exact published
+`task_file` self-contained и содержит user intent, transport identity, universal ZIP
+contract и legacy code-result contract. В prompt не должны находиться `repository`,
+`base_commit`, `expected_filename`, `allowed_paths_json`, `forbidden_paths_json`, user
+intent, result markers или implementation instructions.
 
-`baseCommit` implementation artifact относится к snapshot `main` ДО transport-only
-публикации `REQ_xxx.md`. SHA публикации task-файла хранится отдельно как
+`baseCommit` является transport correlation snapshot. Только для repository-changing
+result он одновременно является implementation base; universal `artifact` не означает
+repository mutation. SHA публикации task-файла хранится отдельно как
 `taskPublicationCommit`. Luna не подменяет один SHA другим и не реконструирует task
 manifest вручную.
 
@@ -397,7 +385,7 @@ catch {
 }
 ```
 
-До PREPARE Luna проверяет только transport boundary:
+После завершения Direct Postman Luna проверяет только transport boundary:
 
 ```text
 $result.ok        == true
@@ -407,12 +395,13 @@ $result.requestId == exact $requestId
 ```
 
 Не выполнять вручную `Get-FileHash`, повторный manifest/base/staleness/path validation
-или отдельный `Test-Path` как normal handoff. Полная проверка ZIP, SHA-256, manifest,
-baseCommit и application принадлежит deterministic PREPARE/applicator.
+или отдельный `Test-Path` как normal handoff. Полная transport-проверка ZIP, SHA-256,
+manifest, baseCommit и artifact identity уже принадлежит Direct Postman. Application
+вообще не является частью normal `@Postman` flow.
 
 После `RESULT_DURABLE` не открывать ChatGPT для визуального подтверждения.
 
-### Канонический durable handoff и resume
+### Канонический durable handoff, Workspace registration и STOP
 
 После успешного `RESULT_DURABLE` Direct Postman атомарно сохраняет канонический
 terminal JSON в deterministic path:
@@ -421,37 +410,24 @@ terminal JSON в deterministic path:
 C:\Users\andre\AppData\Local\DSH\Postman\direct\results\<REQ>.json
 ```
 
-Этот файл является durable источником истины для локального продолжения. Он
-содержит `ok=true`, `code=RESULT_DURABLE`, `state=RESULT_DURABLE`, transport identity,
-`baseCommit`, `taskPublicationCommit`, `taskUrl`, `expectedFilename`, `resultZip`,
-`sha256`, `resultRoot` и `statePath`.
+Этот файл — durable источник истины для сообщения пользователю. До этого состояния
+сохраняется строгий fail-closed transport gate: `ok=true`, exact `code/state`,
+correlation REQ и вся проверка ZIP принадлежат Direct Postman. Не реконструировать
+receipt, не распаковывать и не анализировать ZIP повторно.
 
-Normal resume entrypoint:
+После exact `RESULT_DURABLE` разрешена одна presentation-попытка:
 
 ```text
-C:\Users\andre\.dsh\postman\direct\resume_request.ps1
+postman_result_workspace_register(request_id=<exact REQ>, result_handoff_json=<exact resultHandoffPath>)
 ```
 
-Никогда не реконструировать `$jsonText` и не передавать direct state как
-`-ResultJsonText` для normal continuation. Использовать exact immutable REQ:
+При успехе сообщить `requestId`, exact `resultZip` и `workspaceId`. Если регистрация
+не удалась, transport всё равно успешен: сообщить diagnostic, не создавать второй REQ,
+не повторять ChatGPT/download и не запускать resume. Затем normal flow останавливается.
 
-```powershell
-$resumeText = & 'C:\Users\andre\.dsh\postman\direct\resume_request.ps1' `
-  -RequestId $requestId `
-  -RepoRoot 'C:\Users\andre\.dsh'
-$resume = $resumeText | ConvertFrom-Json
-```
-
-Без TestScript/TestSpec resume может вернуть `READY_FOR_TEST`. После определения
-semantic test вызвать этот же entrypoint снова с exact `-TestScript` или `-TestSpec`.
-Если valid `ready.json`/`test.json`/`published.json` уже существуют, resume проверяет
-их identity и продолжает только первую отсутствующую стадию. Valid `PUBLISHED`
-возвращается идемпотентно без повторного commit/push/PR.
-
-Resume никогда не вызывает Direct Postman, не обращается к Ч1 и не создаёт новый REQ.
-Для недоказанного legacy durable state допускается только существующий строгий
-`PREPARE_RESUME_NOT_DURABLE` fail-closed путь внутри state machine; Luna не делает
-собственную реконструкцию receipt/path.
+`resume_request.ps1`, `integrate_result.ps1` и стадии PREPARE/TEST/PUBLISH не удаляются.
+Они описаны ниже только как legacy/manual explicit finalization для уже существующего
+durable результата; они не являются частью normal `@Postman` flow.
 
 ## 10. Что Direct Postman уже доказал
 
@@ -465,15 +441,15 @@ assistant turn
 exact expected filename
 download
 manifest
-repository
-baseCommit
-allowed/forbidden paths
+repository/baseCommit correlation
+безопасную ZIP-структуру и paths
+repository scope для code-result типов
 artifact integrity
 durable storage
 ```
 
-Л1 делает только короткий local handoff gate из предыдущего раздела и переходит к
-integration.
+Л1 делает только короткий local handoff gate из предыдущего раздела, при необходимости
+пытается зарегистрировать exact durable result как Workspace и останавливается.
 
 ## 11. Failure handling
 
@@ -486,6 +462,7 @@ integration.
 Не открывать ChatGPT вручную.
 Не брать визуально существующий ZIP.
 Не использовать старый Harness.
+Не использовать QChat.
 Не пытаться доделать implementation самому.
 
 Разрешено один раз прочитать exact direct state/worker state этого REQ для
@@ -527,20 +504,23 @@ promptSent = false
 
 Smoke не является частью обычного golden path.
 
-## 13. Не создавать Git branch до RESULT_DURABLE только ради transport
+## 13. Не начинать Git integration в normal flow
 
-Direct Postman сам публикует intent task в `main`.
+Direct Postman сам публикует transport task в `main`.
 
-Л1 не должна до получения Ч1 создавать implementation branch/worktree,
-модифицировать repository или писать implementation только ради отправки.
+Л1 не должна до или после получения Ч1 создавать implementation branch/worktree,
+модифицировать repository или писать implementation в normal `@Postman` flow.
 
-Git integration начинается после validated `RESULT_DURABLE`.
+После validated `RESULT_DURABLE` normal flow заканчивается optional Workspace
+registration и отчётом пользователю. Git integration возможна только позже по
+отдельному explicit manual-finalization запросу.
 
 Исключение: отдельная задача разработки/ремонта самого Postman transport.
 
-## 14. Unified resumable local finalization
+## 14. Legacy/manual explicit finalization
 
-После exact `RESULT_DURABLE` normal production entrypoint только один:
+Этот раздел не выполняется в normal `@Postman` flow. Для уже существующего durable
+результата и отдельного явного запроса пользователя допускается только один entrypoint:
 
 ```text
 C:\Users\andre\.dsh\postman\direct\resume_request.ps1
@@ -561,7 +541,7 @@ RESULT_DURABLE
 
 ### Task test input
 
-Normal production test input — argv-safe файл вне implementation worktree:
+При explicit manual finalization test input — argv-safe файл вне implementation worktree:
 
 ```text
 %LOCALAPPDATA%\DSH\Postman\handoff\<REQ>\task_test.py
@@ -604,8 +584,8 @@ $resume = $resumeText | ConvertFrom-Json
 production path Luna. В normal flow запрещены `python -c`, PowerShell command-string
 reconstruction и многострочные shell-quoting трюки.
 
-Если тест нельзя выбрать до PREPARE, сначала вызвать `resume_request.ps1` без test
-input. Exact `READY_FOR_TEST` receipt даст authoritative `worktree` и `changedFiles`.
+Если при explicit manual finalization тест нельзя выбрать до PREPARE, сначала вызвать
+`resume_request.ps1` без test input. Exact `READY_FOR_TEST` receipt даст authoritative `worktree` и `changedFiles`.
 Разрешено минимально изучить эти файлы для выбора semantic test, создать TestScript/
 TestSpec вне worktree и повторно вызвать `resume_request.ps1` для того же REQ.
 
@@ -618,13 +598,13 @@ applicator maintenance entrypoint, но Luna не вызывает его нап
 низкоуровневыми implementation/diagnostic boundary и targeted-test surface. В обычной
 пользовательской `@Postman` операции Luna их отдельно НЕ вызывает.
 
-Успех normal finalization: exact `PUBLISHED`, `semanticTest=TEST_PASSED`, один OPEN PR
+Успех manual finalization: exact `PUBLISHED`, `semanticTest=TEST_PASSED`, один OPEN PR
 в `main`, `mergePerformed=false`. Любой `ok=false`/invalid receipt — STOP без ручного
 fallback, нового REQ или повторного transport.
 
-## 15. Что Luna больше не делает вручную после RESULT_DURABLE
+## 15. Что normal `@Postman` НЕ делает после RESULT_DURABLE
 
-В normal path не запускать отдельными tool calls:
+Normal flow не запускает следующие действия ни отдельными tool calls, ни через resume:
 
 ```text
 prepare_result.ps1
@@ -645,15 +625,15 @@ gh pr create
 повторное чтение только что созданного PR
 ```
 
-Эти обязанности принадлежат `resume_request.ps1` и его внутренним
-PREPARE/TEST/PUBLISH стадиям.
+Эти действия остаются доступными только как explicit manual finalization для уже
+существующего durable результата; они не принадлежат normal `@Postman` flow.
 
 Запрещены по-прежнему `git reset --hard`, `git clean`, automatic stash, force push и
 ручная перепись artifact через LLM tools.
 
-## 16. Failure handling local finalization
+## 16. Legacy/manual finalization failure handling
 
-`resume_request.ps1` и его внутренние PREPARE/TEST/PUBLISH стадии являются
+В explicit manual finalization `resume_request.ps1` и его внутренние PREPARE/TEST/PUBLISH стадии являются
 fail-closed. Не заменять failure собственными shell-командами и не обходить resume
 низкоуровневыми boundary wrappers.
 
@@ -665,9 +645,9 @@ Dirty failure worktree сохраняется для диагностики. TES
 exact READY JSON, TestScript SHA-256 и fingerprint implementation bytes. PUBLISH не
 merge-ит PR и не удаляет remote branch.
 
-## 17. Task-specific test selection
+## 17. Legacy/manual task-specific test selection
 
-Единственное содержательное решение Л1 после RESULT_DURABLE/READY_FOR_TEST — выбрать
+Только при explicit manual finalization после RESULT_DURABLE/READY_FOR_TEST можно выбрать
 одну проверку, которая лучше всего доказывает пользовательский intent. Приоритет:
 тесты Ч1, repository-defined test, существующая project command, одна минимальная
 semantic assertion.
@@ -686,30 +666,29 @@ acceptance остаются отдельными состояниями и не 
 BrowserSmoke не является task test. Normal test path не использует `python -c` или
 `-TestCommand`; использовать `-TestScript`/`-TestSpec` через resume.
 
-## 18. Git publication boundary
+## 18. Git publication boundary for manual finalization
 
-Git publication успешна только при exact `PUBLISHED`, который доказывает commit,
+При explicit manual finalization Git publication успешна только при exact `PUBLISHED`, который доказывает commit,
 remote exact SHA, один OPEN PR `base=main` с exact head branch/SHA, удалённый task worktree
 и отсутствие автоматического merge.
 
 ## 19. Финальный отчёт
 
-При успехе сообщить как минимум:
+При normal transport сообщить только пользовательский минимум:
 
 ```text
-Postman requestId
 RESULT_DURABLE
-artifact SHA256
-что было внедрено
-результаты semantic test
-presentation status
-commit SHA
-remote synchronization
-PR/link
-merge status
+exact requestId
+exact resultZip как кликабельный local path
+Workspace title/id, если регистрация успешна
+одну короткую diagnostic строку, если регистрация не удалась
 ```
 
-### Кликабельные изменённые файлы в Harness Web
+`resultHandoffPath`, SHA-256, browser/CDP/validator internals, semantic test, commit,
+remote synchronization, PR и merge не показывать без диагностической необходимости.
+Они относятся к transport internals или explicit manual finalization.
+
+### Кликабельные изменённые файлы только при explicit manual PUBLISHED finalization
 
 Authoritative список брать только из exact `PUBLISHED` receipt `changedFiles`.
 Для каждого файла построить exact существующий локальный путь от retained
@@ -746,8 +725,8 @@ terminal state
 1. Postman OFF по умолчанию; разрешён только при exact `@Postman` в начале текущего пользовательского сообщения после необязательных начальных пробелов.
 2. Разрешение действует только для текущего сообщения и не наследуется из предыдущих сообщений.
 3. Без exact trigger не загружать `delegate-via-postman`, не создавать REQ, не вызывать Direct Postman, не использовать другие Postman transport и не обращаться к Ч1.
-4. До Ч1 не загружать implementation/design skills и не проектировать решение.
-5. User intent не расширяется собственными требованиями Л1.
+4. После trigger Л1 не интерпретирует и не расширяет payload до отправки Ч1.
+5. После удаления только `@Postman` + separator весь оставшийся текст передаётся verbatim; previous-context augmentation запрещён.
 6. Один logical request → один REQ.
 7. После начала Direct Postman invocation REQ immutable.
 8. Production transport — только `C:\Users\andre\.dsh\postman\direct\postman.ps1`.
@@ -755,69 +734,55 @@ terminal state
 10. BrowserSmoke не является normal preflight.
 11. Chrome/ChatGPT/Send/download принадлежат Direct Postman, а не Л1.
 12. После возможной отправки automatic resend запрещён.
-13. Только exact `RESULT_DURABLE` является implementation result.
+13. Только exact `RESULT_DURABLE` является успешным transport result.
 14. Не создавать implementation branch только ради transport до результата.
 15. Пользовательский dirty worktree не очищать и не переписывать.
-16. Л1 внедряет результат Ч1, а не заменяет его собственным решением.
-17. После RESULT_DURABLE normal local-finalization entrypoint — только `resume_request.ps1`.
-18. PREPARE/TEST/PUBLISH — внутренние deterministic стадии resume; Luna не вызывает их wrappers отдельно в normal path.
-19. Normal semantic test передаётся argv-safe через `TestScript`/`TestSpec`; `python -c` и `TestCommand` не являются normal path.
-20. Resume передаёт exact `readyJson → testJson → publishedJson`, не реконструируя handoff paths.
-21. TEST требует exact `TEST_PASSED` receipt и запрещает незамеченную мутацию implementation.
-22. PUBLISH внутри resume является владельцем stage/commit/push/remote-SHA/PR и никогда не merge-ит PR автоматически.
-23. `files/` payload копируется exact bytes; Л1 не переписывает его через LLM tools.
+16. В normal flow Л1 не интерпретирует, не применяет и не изменяет результат Ч1.
+17. После RESULT_DURABLE normal flow останавливается после optional Workspace registration.
+18. `resume_request.ps1`, PREPARE/TEST/PUBLISH и `integrate_result.ps1` — только legacy/manual explicit finalization.
+19. Normal flow не создаёт implementation worktree/branch/commit/PR и не распаковывает ZIP.
+20. Workspace registration — presentation convenience, а не integrity gate.
+21. Ошибка Workspace registration не отменяет успешный RESULT_DURABLE и не вызывает retry.
+22. Direct Postman сам владеет strict transport validation до RESULT_DURABLE.
+23. Правила exact-bytes для `files/` относятся только к explicit manual finalization; normal flow не читает содержимое ZIP.
 24. `RESULT_DIAGNOSTIC_ONLY` не является implementation success и не разрешает automatic resend.
 25. Resume/PREPARE/TEST/PUBLISH не создают новый Postman REQ и не обращаются повторно к Ч1.
-26. Финальный отчёт перечисляет authoritative changedFiles кликабельными inline-code local paths из exact retained worktree.
+26. `changedFiles`/retained worktree показываются только при explicit manual PUBLISHED finalization, не в normal transport report.
 27. Нет validated correlated artifact → нет успешного Postman результата.
+28. Durable Workspace registration передаёт exact current REQ как `request_id`; receipt requestId обязан совпасть до `workspaceRegistry.create/delete`.
 
 
-## Result Workspace после PUBLISHED
+## Result Workspace после RESULT_DURABLE
 
-После успешного `PUBLISHED` task worktree НЕ удаляется. `published.json` содержит
-`worktree`, `worktreeRetained: true` и `resultWorkspaceRegistrationRequired: true`.
-Это exact tested PR HEAD и единственный локальный источник результата до merge;
-отдельную Preview-копию не создавать.
-
-Сразу после `PUBLISHED` вызвать ровно один раз:
+После exact successful `RESULT_DURABLE` normal flow может один раз попытаться
+зарегистрировать durable result как обычный Harness Workspace:
 
 ```text
-postman_result_workspace_register(published_json=<exact publishedJson>)
+postman_result_workspace_register(request_id=<exact REQ>, result_handoff_json=<exact resultHandoffPath>)
 ```
 
-Это НЕ transport и НЕ повторная отправка Ч1. Инструмент использует host
-`ctx.workspaceRegistry.create(worktree, title)`, записывает sibling
-`result-workspace.json` и возвращает `RESULT_WORKSPACE_REGISTERED` с `workspaceId`
-и title. Штатный Workspace feed Harness сам покажет новый Workspace без reload.
+Инструмент принимает exact current `request_id` вместе с exact `resultHandoffPath`,
+проверяет совпадение `receipt.requestId == request_id` до Workspace create/delete,
+затем проверяет только receipt/layout gate. Он не распаковывает ZIP и не повторяет
+artifact validation. После identity gate он вызывает
+`ctx.workspaceRegistry.create(resultDirectory, title)` с рекомендуемым title
+`Postman <REQ> — result` и пишет `<resultDirectory>\\result-workspace.json` внутри
+exact result directory.
 
-Не использовать для Result Workspace:
+Результат регистрации содержит `source: RESULT_DURABLE`, exact `requestId`,
+`resultDirectory`, `resultZip`, `resultHandoffJson` и `workspaceId`. Это presentation
+convenience, а не integrity gate. Ошибка регистрации не отменяет transport success:
+не создавать второй REQ, не повторять ChatGPT/download, не запускать resume и сообщить
+пользователю exact RESULT_DURABLE, resultZip и diagnostic.
 
-```text
-ctx.workspaces.create
-ctx.sessions.create
-ctx.sessions.open
-custom remote event
-dsh-api-remotes patch
-lib/client.js
-Postman Chrome/CDP
-локальный preview HTTP server
-```
+После регистрации пользователь может открыть Workspace штатными средствами Harness;
+никаких новых Chrome/CDP, Session или preview-сервисов для регистрации не создавать.
 
-Обычный клик по строке Workspace только раскрывает группу. Для работы с результатом
-пользователь выбирает Workspace в штатном picker или нажимает `+ New Session` у него;
-штатный Harness выполняет `workspaces.startSession → connectWorkspace →
-sessions.create({workspaceId}) → sessions.open`, поэтому cwd новой Session равен exact
-retained worktree. Файловые/shell/launcher операции этой Session выполняются оттуда.
-
-Если регистрация Workspace после уже успешного `PUBLISHED` не удалась, не создавать
-новый REQ, не повторять PUBLISH и не удалять PR. Сообщить post-publication UX failure
-и остановиться с сохранённым worktree.
-
-После merge сначала закрыть/архивировать Result Session, затем вызвать
-`postman_result_workspace_unregister` для exact `publishedJson`. Инструмент удаляет
-только Workspace registration и помечает `result-workspace.json` как
-`RESULT_WORKSPACE_UNREGISTERED`; worktree и Session logs он не удаляет. После этого
-`cleanup_published.ps1` может удалить только clean exact worktree, только у merged PR.
-Dirty worktree, незамерженный PR или всё ещё зарегистрированный Workspace — fail-closed.
+Старый `published_json` режим остаётся совместимым: он регистрирует retained PUBLISHED
+worktree, пишет sibling `result-workspace.json` рядом с published receipt и сохраняет
+старый `clearResultPresentation` только для legacy unregister. Durable unregister не
+вызывает published-result presentation cleanup: он удаляет только Workspace registration,
+помечает свой sidecar как `RESULT_WORKSPACE_UNREGISTERED` и не удаляет result directory,
+`result.zip` или другие durable receipts.
 
 Пользователь не должен вводить git/SHA/worktree-команды или команды терминала вручную.

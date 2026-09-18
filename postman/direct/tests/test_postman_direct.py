@@ -91,12 +91,12 @@ class DirectPostmanUnitTests(unittest.TestCase):
             "\n".join(
                 (
                     f"POSTMAN_REQUEST_ID: {REQ}",
-                    f"policy: {direct.PUBLIC_POLICY_URL}",
                     f"task_file: {task_url}",
                 )
             ),
         )
-        self.assertEqual(3, len(prompt.splitlines()))
+        self.assertEqual(2, len(prompt.splitlines()))
+        self.assertNotIn("policy:", prompt)
         for forbidden in (
             "repository:",
             "base_commit:",
@@ -260,6 +260,9 @@ class DirectPostmanUnitTests(unittest.TestCase):
             self.assertIn("добавь красную кнопку", task_content)
             self.assertIn("allowed_paths_json:", task_content)
             self.assertIn("forbidden_paths_json:", task_content)
+            self.assertIn('`resultType: "artifact"`', task_content)
+            self.assertIn("не превращать его в задачу по изменению repository", task_content)
+            self.assertNotIn("Реализацию готовить против точного `base_commit`", task_content)
             self.assertIn(f"<<<POSTMAN_RESULT_BEGIN:{REQ}>>>", task_content)
 
             self.assertEqual(1, len(Bridge.calls))
@@ -269,7 +272,6 @@ class DirectPostmanUnitTests(unittest.TestCase):
                 bridge_kwargs["prompt"].splitlines(),
                 [
                     f"POSTMAN_REQUEST_ID: {REQ}",
-                    f"policy: {direct.PUBLIC_POLICY_URL}",
                     f"task_file: https://raw.githubusercontent.com/{REPO}/{PUB}/{REQ}.md",
                 ],
             )

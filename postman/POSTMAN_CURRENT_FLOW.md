@@ -128,7 +128,9 @@ branch = main
 base_commit
 ```
 
-`base_commit` — trusted implementation snapshot, против которого внешний ChatGPT должен готовить результат.
+`base_commit` — trusted transport correlation snapshot. Для repository-changing результата
+он также является implementation base. Для universal `artifact` это только identity metadata
+и не означает, что пользователь запросил изменение repository.
 
 После snapshot Postman публикует:
 
@@ -204,17 +206,17 @@ Production transport prompt должен быть коротким и ссыло
 
 ```text
 POSTMAN_REQUEST_ID: REQ_...
-policy: https://...
 task_file: https://.../REQ_....md
 ```
 
 То есть:
 
 - первая строка содержит canonical `REQ`;
-- `policy:` указывает на protocol/policy;
 - `task_file:` указывает на exact published task-файл.
 
-Task text, `base_commit`, allowed paths, forbidden paths и ZIP contract находятся в task-файле.
+Внешний policy-link больше не нужен: task-файл self-contained. User intent,
+`base_commit`, repository scope для code-result типов и universal ZIP contract находятся
+в exact SHA-pinned task-файле.
 
 Реализация:
 
@@ -579,10 +581,16 @@ ZIP не должен извлекаться непосредственно по
 Разрешённые `resultType`:
 
 ```text
+artifact
 patch
 files
 hybrid_patch
 ```
+
+`artifact` — normal universal result: `patch: null`, минимум один `files[]` deliverable,
+payload под `files/`. Его `files[]` не являются repository target paths и поэтому не
+проверяются по repository allowlist; при этом общая ZIP/path/identity validation остаётся.
+`patch`/`files`/`hybrid_patch` сохраняют прежнюю repository scope semantics.
 
 Trusted runtime metadata имеет приоритет над содержимым ZIP.
 
@@ -623,7 +631,7 @@ validation.sha256 == actual ZIP SHA-256
 
 ## 18. Durable result store
 
-После полного PASS результат атомарно публикуется в request-scoped directory.
+После успешного transport результат атомарно сохраняется в request-scoped directory.
 
 Формат:
 
@@ -749,25 +757,32 @@ Direct Web Postman не должен:
 
 ## 22. Что происходит после `RESULT_DURABLE`
 
-После successful transport ответственность возвращается локальному originating agent.
-
-Дальнейший flow:
+После exact successful transport normal `@Postman` flow может один раз попытаться
+зарегистрировать exact result directory как обычный Harness Workspace:
 
 ```text
 RESULT_DURABLE
-→ PREPARE
-→ isolated request worktree
-→ compatibility checks
-→ apply
-→ deterministic tests
-→ TEST_PASSED
-→ publish / presentation
-→ cleanup
+→ postman_result_workspace_register(
+     request_id=<exact REQ>,
+     result_handoff_json=<exact resultHandoffPath>
+  )
+   или diagnostic ошибки регистрации
+→ сообщить exact REQ, exact resultZip и Workspace
+→ STOP
 ```
 
-Для resume уже существующего durable result используется отдельный state-machine flow.
+Workspace registration — presentation convenience, а не integrity gate. При её ошибке
+transport остаётся успешным: не создавать второй REQ, не повторять ChatGPT или download,
+не запускать resume и вернуть пользователю exact durable receipt, resultZip и diagnostic.
+Normal flow не вызывает `resume_request.ps1`, `integrate_result.ps1`, PREPARE, TEST или
+PUBLISH; не создаёт implementation worktree, branch, commit или PR и не распаковывает ZIP.
+Локальный агент не интерпретирует содержимое ZIP и не изменяет user payload: после удаления
+только `@Postman` + separator оставшийся текст передаётся verbatim без previous-context augmentation.
 
-Он не должен повторно вызывать Direct Postman или ChatGPT.
+Существующие finalization scripts не удаляются. `resume_request.ps1`,
+`prepare_result.py`, `test_result.py`, `publish_result.py` и `integrate_result.py` доступны
+только как legacy/manual explicit finalization для уже существующего durable результата
+по отдельному явному запросу пользователя; это не normal `@Postman` flow.
 
 Связанные файлы:
 
