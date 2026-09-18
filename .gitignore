@@ -33,3 +33,8 @@ tmp/
 
 # Локальные настройки DSH
 /settings.yaml
+
+# Runtime-состояние Branchline
+/plugins/dsh-branchline/tasks.json
+/plugins/dsh-branchline/tasks.json.lock
+/plugins/dsh-branchline/tasks.json.operations.lock
