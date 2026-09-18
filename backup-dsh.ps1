@@ -2,6 +2,7 @@ $ErrorActionPreference = 'Stop'
 
 $source = 'C:\Users\Andrew\.dsh'
 $backupRoot = 'D:\DSH_BACKUPS\snapshots'
+$maxBackups = 7
 
 try {
     if (-not (Test-Path -LiteralPath $source -PathType Container)) {
@@ -20,6 +21,26 @@ try {
 
     if (Test-Path -LiteralPath $partial) {
         throw "Partial snapshot already exists: $partial"
+    }
+
+    # Count only DSH backup directories created by this scheme.
+    # Both completed snapshots and .partial snapshots count toward the limit.
+    $backups = @(
+        Get-ChildItem -LiteralPath $backupRoot -Directory -Force |
+            Where-Object {
+                $_.Name -match '^\d{4}-\d{2}-\d{2}_\d{4}(?:\.partial)?$'
+            } |
+            Sort-Object Name
+    )
+
+    # Before creating a new backup, keep at most 6 existing entries.
+    # The new .partial then becomes the 7th entry at most.
+    $removeCount = [Math]::Max(0, $backups.Count - ($maxBackups - 1))
+
+    if ($removeCount -gt 0) {
+        foreach ($oldBackup in ($backups | Select-Object -First $removeCount)) {
+            Remove-Item -LiteralPath $oldBackup.FullName -Recurse -Force -ErrorAction Stop
+        }
     }
 
     New-Item -ItemType Directory -Path $partial -ErrorAction Stop | Out-Null
