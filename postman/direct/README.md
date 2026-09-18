@@ -18,12 +18,14 @@ Luna
 → one JSON object returned to Luna
 ```
 
-The bridge never applies the implementation ZIP. Luna forwards the current `@Postman`
+The bridge never applies the result ZIP. Luna forwards the current `@Postman`
 payload verbatim after removing only the transport marker/separator, does not augment it
-from previous context, and does not inspect or interpret the returned ZIP. Normal flow
-reports the exact durable result and optionally registers its result directory as a Harness
-Workspace. Application, tests, commit, and PR remain available only through explicit manual
-finalization.
+from previous context, and does not inspect or interpret the returned ZIP. The published
+task file is self-contained. Ordinary text/research/file tasks use universal
+`resultType: artifact`; repository-changing tasks may still use patch/files/hybrid_patch.
+Normal flow reports the exact durable result and optionally registers its result directory
+as a Harness Workspace. Application, tests, commit, and PR remain available only through
+explicit manual finalization.
 
 ## Browser smoke
 

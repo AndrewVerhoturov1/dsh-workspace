@@ -277,9 +277,10 @@ def render_direct_task_manifest(
 ) -> str:
     """Render the self-contained task document used by Direct Web Postman.
 
-    `base_commit` is the implementation snapshot from immediately BEFORE the
-    transport-only REQ file is published. The publication commit is intentionally
-    not embedded here because doing so would create a self-referential commit hash.
+    `base_commit` is trusted transport correlation metadata captured immediately
+    BEFORE the transport-only REQ file is published. For repository-changing
+    results it is also the implementation base. For ordinary universal artifacts
+    it does not imply that the user requested code or repository changes.
     """
 
     try:
@@ -320,17 +321,21 @@ def render_direct_task_manifest(
         "",
         "## Execution contract",
         "",
-        "- Сначала прочитать policy по ссылке `policy:` из transport prompt.",
-        "- `User intent` выше является авторитетным пользовательским намерением; не заменять его догадками transport-слоя.",
-        "- GitHub использовать только как READ source: не commit, не push, не открывать PR/issues и не изменять GitHub.",
-        "- Реализацию готовить против точного `base_commit` из этого task-файла.",
-        "- Не писать вне `allowed_paths_json` и никогда не писать внутри `forbidden_paths_json`.",
-        "- Архитектуру, реализацию, необходимые тесты и документацию Ч1 выбирает самостоятельно в рамках user intent.",
+        "- Этот task-файл self-contained; выполнить `User intent` буквально и не превращать его в задачу по изменению repository без явного требования пользователя.",
+        "- `repository`, `base_commit`, `allowed_paths_json` и `forbidden_paths_json` являются transport/correlation metadata. Они не означают, что пользователь запросил код, patch или Git-операции.",
+        "- GitHub использовать только как READ source, если он действительно нужен для user intent: не commit, не push, не открывать PR/issues и не изменять GitHub.",
+        "- Для обычного текста, исследования, ответа, отчёта, медиа или произвольных файлов использовать universal `artifact` resultType.",
+        "- `allowed_paths_json` / `forbidden_paths_json` относятся только к repository-changing типам `patch`, `files`, `hybrid_patch`; для `artifact` это не target paths.",
+        "- Если user intent действительно требует repository changes, можно использовать совместимые `patch`, `files` или `hybrid_patch`.",
         "",
         "## Result contract",
         "",
-        "- Создать ровно один реальный downloadable ZIP implementation artifact по policy contract.",
+        "- Создать ровно один реальный downloadable ZIP result artifact.",
         "- Root `manifest.json` ZIP должен exact-match `requestId`, `repository` и `baseCommit` из этого task-файла.",
+        "- Для normal universal result использовать `resultType: \"artifact\"`, `patch: null` и минимум один путь в `files`.",
+        "- Для `artifact` каждый `files[]` путь является именем deliverable внутри ZIP, а не repo target; payload лежит как `files/<path>`. Для обычного ответа предпочтителен `files/result.md`.",
+        "- Не создавать `changes.patch` для `artifact`.",
+        "- `patch`, `files`, `hybrid_patch` оставлены только для задач, где пользователь действительно запросил repository changes.",
         f"- Имя ZIP должно быть ровно `{expected_value}`.",
         "- Финальный ответ Ч1 должен содержать ровно три непустые видимые строки и ничего больше:",
         "",
@@ -349,18 +354,18 @@ def build_external_prompt(
     skill_repository_url: str,
     task_url: str,
 ) -> str:
-    """Build the canonical three-line link-only prompt for the external agent.
+    """Build the canonical two-line link-only prompt for the external agent.
 
-    The prompt contains no task text, repository metadata, artifact metadata,
-    path scope, result markers, or implementation instructions. All request-
-    specific details live in the published task file.
+    `skill_repository_url` is retained as a compatibility argument for existing
+    callers, but the production browser prompt no longer depends on an external
+    policy document. The published task file is self-contained.
     """
 
     try:
         assert_canonical_request_id(request_id)
     except (TypeError, ValueError) as exc:
         raise TaskPackageError(str(exc)) from exc
-    skill_url = _https_url(skill_repository_url, "skill_repository_url")
+    _https_url(skill_repository_url, "skill_repository_url")
     published_task_url = _https_url(task_url, "task_url")
     task_path_name = unquote(urlparse(published_task_url).path.rstrip("/").rsplit("/", 1)[-1])
     if task_path_name != task_filename(request_id):
@@ -368,7 +373,6 @@ def build_external_prompt(
     return "\n".join(
         (
             f"POSTMAN_REQUEST_ID: {request_id}",
-            f"policy: {skill_url}",
             f"task_file: {published_task_url}",
         )
     )

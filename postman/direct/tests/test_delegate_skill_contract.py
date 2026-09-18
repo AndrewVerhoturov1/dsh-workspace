@@ -133,9 +133,12 @@ class DelegateViaPostmanSkillContract(unittest.TestCase):
         self.assertIn("foreground-вызов", self.skill)
 
     def test_link_only_prompt_and_task_manifest_contract(self):
-        self.assertIn("Канонический prompt Ч1 состоит ровно из трёх строк", self.skill)
-        for marker in ("POSTMAN_REQUEST_ID:", "policy:", "task_file:", "taskPublicationCommit"):
+        self.assertIn("Канонический prompt Ч1 состоит ровно из двух строк", self.skill)
+        for marker in ("POSTMAN_REQUEST_ID:", "task_file:", "taskPublicationCommit"):
             self.assertIn(marker, self.skill)
+        prompt_section = self.skill.split("Канонический prompt Ч1", 1)[1].split("## 9.", 1)[0]
+        self.assertNotIn("policy: <policy link>", prompt_section)
+        self.assertIn("self-contained", prompt_section)
         for metadata in ("repository", "base_commit", "expected_filename", "allowed_paths_json", "forbidden_paths_json"):
             self.assertIn(metadata, self.skill)
         self.assertIn("В prompt не должны находиться", self.skill)

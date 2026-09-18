@@ -196,6 +196,14 @@ function validFilesZip(target = 'docs/тест/данные.md', data = 'дан�
   ]);
 }
 
+function validArtifactZip(target = 'result.md', data = 'universal result\n') {
+  const m = manifest({ resultType: 'artifact', patch: null, files: [target] });
+  return makeZip([
+    manifestEntry(m),
+    { name: `files/${target}`, data },
+  ]);
+}
+
 function validHybridZip() {
   const m = manifest({ resultType: 'hybrid_patch', files: ['src/new.txt'] });
   return makeZip([
@@ -217,6 +225,7 @@ test('defaults match WP-001 contract', () => {
 
 for (const [name, build] of [
   ['valid manifest + patch', validPatchZip],
+  ['valid universal artifact outside repository scope', () => validArtifactZip('result.md')],
   ['valid manifest + one new Unicode file', () => validFilesZip()],
   ['valid hybrid patch + files', validHybridZip],
   ['nested repo-relative paths', () => validFilesZip('docs/a/b/c.txt')],

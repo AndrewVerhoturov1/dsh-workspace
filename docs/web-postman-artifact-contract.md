@@ -52,7 +52,7 @@ POSTMAN_REQUEST_ID: <requestId>
 
 ## 3. Production result
 
-Текущий coding-result transport ожидает ZIP artifact.
+Production Direct Postman использует один ZIP и для обычных universal results, и для coding workloads.
 
 Для одного ZIP имя выводится детерминированно:
 
@@ -93,19 +93,31 @@ Artifact принимается только из assistant turn, который
 
 ## 5. ZIP structure
 
-Implementation ZIP использует manifest и payload, достаточный для детерминированной проверки результата.
+Result ZIP использует manifest и payload, достаточный для детерминированной проверки результата.
 
 Типовая структура:
 
 ```text
 POSTMAN_<requestId>_RESULT.zip
 ├── manifest.json
-├── changes.patch          # если результат использует patch
+├── changes.patch          # только для patch/hybrid
 └── files/
-    └── <repo-relative files>
+    └── <deliverables>
 ```
 
-Содержимое ZIP является proposed implementation. Сам факт скачивания ZIP не разрешает автоматически изменять рабочий repository.
+Для `resultType=artifact` `files/` содержит результат задачи (например `files/result.md`)
+и не моделирует repository target paths. Для `files`/`hybrid_patch` `files/` сохраняет
+прежнюю repo-relative semantics.
+
+Разрешённые ZIP `resultType`: `artifact`, `patch`, `files`, `hybrid_patch`.
+`artifact` — normal universal result для текста, исследования, отчётов, медиа и любых
+произвольных deliverables: `patch` равен `null`, а `files[]` содержит минимум один
+безопасный путь deliverable внутри ZIP. Repository `allowedPaths`/`forbiddenPaths` к
+таким путям не применяются; общие identity, path-safety и archive-limit checks сохраняются.
+`patch`/`files`/`hybrid_patch` остаются совместимыми с прежней repository scope semantics.
+
+Содержимое ZIP является proposed result; для code-result это proposed implementation.
+Сам факт скачивания ZIP не разрешает автоматически изменять рабочий repository.
 
 ## 6. Trust boundaries
 
@@ -132,7 +144,9 @@ manifest identity
 
 ## 7. Path safety
 
-ZIP и patch не должны писать за пределы разрешённого repository scope.
+Для `patch`, `files` и `hybrid_patch` ZIP и patch не должны писать за пределы разрешённого
+repository scope. У `artifact` deliverable paths не являются repository target paths, но
+остаются subject to общей path-safety validation.
 
 Недопустимы:
 
@@ -194,7 +208,9 @@ Postman должен:
 
 Он не означает автоматический merge, commit или изменение production workspace.
 
-Дальнейший lifecycle выполняется отдельно локальным агентом согласно текущему Direct Postman workflow и repository policy.
+Для normal flow после `RESULT_DURABLE` дальнейшее применение не выполняется: результат
+сообщается пользователю и поток останавливается. Repository-changing result может быть
+обработан только отдельной явной manual finalization по текущей repository policy.
 
 ## 11. Что transport не делает
 

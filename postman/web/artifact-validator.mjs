@@ -29,7 +29,7 @@ const EOCD=0x06054b50, CENTRAL=0x02014b50, LOCAL=0x04034b50, UTF8_FLAG=1<<11, EN
 const UTF8 = new TextDecoder('utf-8',{fatal:true});
 const SHA_RE=/^[0-9a-f]{40}$/i, REPO_RE=/^[^/\s]+\/[^/\s]+$/, DRIVE_RE=/^[A-Za-z]:[\\/]/;
 const RESERVED=/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i;
-const RESULT_TYPES=new Set(['patch','files','hybrid_patch']);
+const RESULT_TYPES=new Set(['artifact','patch','files','hybrid_patch']);
 const MANIFEST_KEYS=new Set(['protocolVersion','requestId','repository','baseCommit','resultType','patch','files','readRef','branch','generatedAt','description','inventory']);
 
 const CRC_TABLE=(()=>{const t=new Uint32Array(256);for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=(c&1)?0xedb88320^(c>>>1):c>>>1;t[n]=c>>>0;}return t;})();
@@ -245,6 +245,7 @@ function manifestCode(m){
   if(!Number.isInteger(m.protocolVersion)||typeof m.requestId!=='string'||!m.requestId||typeof m.repository!=='string'||!REPO_RE.test(m.repository)||typeof m.baseCommit!=='string'||!SHA_RE.test(m.baseCommit)||typeof m.resultType!=='string'||!(m.patch===null||typeof m.patch==='string')||!Array.isArray(m.files)||m.files.some(x=>typeof x!=='string'||!x))return ERROR_CODES.MANIFEST_INVALID;
   for(const k of ['readRef','branch','generatedAt','description'])if(k in m&&typeof m[k]!=='string')return ERROR_CODES.MANIFEST_INVALID;if('inventory'in m&&!Array.isArray(m.inventory))return ERROR_CODES.MANIFEST_INVALID;
   if(!RESULT_TYPES.has(m.resultType))return ERROR_CODES.RESULT_TYPE_INVALID;
+  if(m.resultType==='artifact'&&(m.patch!==null||m.files.length<1))return ERROR_CODES.MANIFEST_INVALID;
   if(m.resultType==='patch'&&(m.patch!=='changes.patch'||m.files.length!==0))return ERROR_CODES.MANIFEST_INVALID;
   if(m.resultType==='files'&&(m.patch!==null||m.files.length<1))return ERROR_CODES.MANIFEST_INVALID;
   if(m.resultType==='hybrid_patch'&&(m.patch!=='changes.patch'||m.files.length<1))return ERROR_CODES.MANIFEST_INVALID;
@@ -279,6 +280,6 @@ export function validateArtifact(zipPath,expectedRequest){
   const patchRequired=m.resultType==='patch'||m.resultType==='hybrid_patch';if(patchRequired&&!data.has('changes.patch'))return bad(ERROR_CODES.PAYLOAD_MISSING,{sha256:zipHash,inventory,details:{path:'changes.patch'}});if(!patchRequired&&data.has('changes.patch'))return bad(ERROR_CODES.MANIFEST_INVALID,{sha256:zipHash,inventory,details:{reason:'unexpected_patch'}});
   const archiveTargets=new Map();for(const p of m.files){const c=target(p);if(!c.ok)return bad(c.code,{sha256:zipHash,inventory,details:{path:p}});archiveTargets.set(`files/${c.normalized}`,c.normalized);}for(const [ap,t]of archiveTargets){const inv=inventory.find(x=>x.path===ap);if(!inv||inv.kind!=='file')return bad(ERROR_CODES.PAYLOAD_MISSING,{sha256:zipHash,inventory,details:{path:t}});}
   const roots=new Set(['manifest.json',...(patchRequired?['changes.patch']:[])]),targetPaths=new Set(archiveTargets.keys());for(const inv of inventory){if(roots.has(inv.path))continue;if(inv.path==='files/'&&inv.kind==='directory')continue;if(inv.path.startsWith('files/')){if(inv.kind==='file'&&!targetPaths.has(inv.path))return bad(ERROR_CODES.MANIFEST_INVALID,{sha256:zipHash,inventory,details:{reason:'unlisted_payload',path:inv.path}});if(inv.kind==='directory'&&![...targetPaths].some(p=>p.startsWith(inv.path)))return bad(ERROR_CODES.MANIFEST_INVALID,{sha256:zipHash,inventory,details:{reason:'orphan_directory',path:inv.path}});continue;}return bad(ERROR_CODES.SCOPE_VIOLATION,{sha256:zipHash,inventory,details:{reason:'layout',path:inv.path}});}
-  for(const p of m.files){const c=target(p),sc=scopeCode(c.normalized,scopes);if(sc)return bad(sc,{sha256:zipHash,inventory,details:{path:c.normalized}});}if(patchRequired){const pt=utf8(data.get('changes.patch'));if(pt===null)return bad(ERROR_CODES.PATCH_INVALID,{sha256:zipHash,inventory,details:{reason:'patch_utf8'}});const pc=validateDiff(pt,scopes);if(pc)return bad(pc,{sha256:zipHash,inventory});}
+  if(m.resultType!=='artifact')for(const p of m.files){const c=target(p),sc=scopeCode(c.normalized,scopes);if(sc)return bad(sc,{sha256:zipHash,inventory,details:{path:c.normalized}});}if(patchRequired){const pt=utf8(data.get('changes.patch'));if(pt===null)return bad(ERROR_CODES.PATCH_INVALID,{sha256:zipHash,inventory,details:{reason:'patch_utf8'}});const pc=validateDiff(pt,scopes);if(pc)return bad(pc,{sha256:zipHash,inventory});}
   return good(zipHash,m,inventory);
 }

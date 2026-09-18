@@ -128,7 +128,9 @@ branch = main
 base_commit
 ```
 
-`base_commit` — trusted implementation snapshot, против которого внешний ChatGPT должен готовить результат.
+`base_commit` — trusted transport correlation snapshot. Для repository-changing результата
+он также является implementation base. Для universal `artifact` это только identity metadata
+и не означает, что пользователь запросил изменение repository.
 
 После snapshot Postman публикует:
 
@@ -204,17 +206,17 @@ Production transport prompt должен быть коротким и ссыло
 
 ```text
 POSTMAN_REQUEST_ID: REQ_...
-policy: https://...
 task_file: https://.../REQ_....md
 ```
 
 То есть:
 
 - первая строка содержит canonical `REQ`;
-- `policy:` указывает на protocol/policy;
 - `task_file:` указывает на exact published task-файл.
 
-Task text, `base_commit`, allowed paths, forbidden paths и ZIP contract находятся в task-файле.
+Внешний policy-link больше не нужен: task-файл self-contained. User intent,
+`base_commit`, repository scope для code-result типов и universal ZIP contract находятся
+в exact SHA-pinned task-файле.
 
 Реализация:
 
@@ -579,10 +581,16 @@ ZIP не должен извлекаться непосредственно по
 Разрешённые `resultType`:
 
 ```text
+artifact
 patch
 files
 hybrid_patch
 ```
+
+`artifact` — normal universal result: `patch: null`, минимум один `files[]` deliverable,
+payload под `files/`. Его `files[]` не являются repository target paths и поэтому не
+проверяются по repository allowlist; при этом общая ZIP/path/identity validation остаётся.
+`patch`/`files`/`hybrid_patch` сохраняют прежнюю repository scope semantics.
 
 Trusted runtime metadata имеет приоритет над содержимым ZIP.
 

@@ -353,20 +353,22 @@ polling. Background допустим только если конкретный 
 Luna передаёт bridge только exact user payload через `-Task`. Сам внешний prompt
 формирует Direct Postman; Luna не собирает его вручную.
 
-Канонический prompt Ч1 состоит ровно из трёх строк:
+Канонический prompt Ч1 состоит ровно из двух строк:
 
 ```text
 POSTMAN_REQUEST_ID: REQ_xxx
-policy: <policy link>
 task_file: <SHA-pinned task link>
 ```
 
-В prompt не должны находиться `repository`, `base_commit`, `expected_filename`,
-`allowed_paths_json`, `forbidden_paths_json`, user intent, result markers или
-implementation instructions. Всё это Direct Postman помещает в self-contained task-файл.
+Внешний policy-link больше не является частью production prompt: exact published
+`task_file` self-contained и содержит user intent, transport identity, universal ZIP
+contract и legacy code-result contract. В prompt не должны находиться `repository`,
+`base_commit`, `expected_filename`, `allowed_paths_json`, `forbidden_paths_json`, user
+intent, result markers или implementation instructions.
 
-`baseCommit` implementation artifact относится к snapshot `main` ДО transport-only
-публикации `REQ_xxx.md`. SHA публикации task-файла хранится отдельно как
+`baseCommit` является transport correlation snapshot. Только для repository-changing
+result он одновременно является implementation base; universal `artifact` не означает
+repository mutation. SHA публикации task-файла хранится отдельно как
 `taskPublicationCommit`. Luna не подменяет один SHA другим и не реконструирует task
 manifest вручную.
 
@@ -439,9 +441,9 @@ assistant turn
 exact expected filename
 download
 manifest
-repository
-baseCommit
-allowed/forbidden paths
+repository/baseCommit correlation
+безопасную ZIP-структуру и paths
+repository scope для code-result типов
 artifact integrity
 durable storage
 ```
