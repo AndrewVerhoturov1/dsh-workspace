@@ -34,6 +34,37 @@ tmp/
 # Локальные настройки DSH
 /settings.yaml
 
+# Python generated cache
+**/__pycache__/
+**/*.pyc
+
+# Runtime/user data
+/attachments/
+/change-ledger/
+/profiles/web/.dsh-market/
+
+# Launcher runtime state
+/tools/deepseek-harness-launcher/dsh.pid
+/tools/deepseek-harness-launcher/dsh-runtime.json
+
+# ChatGPT UIA generated diagnostics/results
+/chatgpt-desktop-uia-bridge/logs/
+/chatgpt-desktop-uia-bridge/diagnostics/
+/chatgpt-desktop-uia-bridge/*_results.json
+
+# Repository runtime logs
+/runtime-logs/
+
+# Local temporary inspection artifacts
+/.tmp-*/
+tmp-*.ps1
+
+# Old extracted implementation packages
+/WEB_POSTMAN_WP_*_extracted/
+
+# Profile backup files
+/profiles/web/*.bak
+
 # Runtime-состояние Branchline
 /plugins/dsh-branchline/tasks.json
 /plugins/dsh-branchline/tasks.json.lock
