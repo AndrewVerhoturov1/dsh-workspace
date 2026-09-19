@@ -26,6 +26,7 @@ Postman production invariant.
 Если загруженный `delegate-via-postman` предлагает `postman_async_send` как normal path или противоречит этому правилу, считать его устаревшим и остановить Postman-операцию до загрузки актуального skill.
 После trigger Luna удаляет только transport marker `@Postman` и непосредственно следующий разделяющий whitespace; весь оставшийся текущий user text передаётся Ч1 verbatim. Нельзя добавлять предыдущий контекст, перефразировать или "улучшать" prompt.
 До получения `RESULT_DURABLE` не интерпретировать задачу вместо Ч1 и не создавать implementation branch только ради transport.
+Luna не выполняет result-root write-probe до bridge; tool-level spawn failure не разрешает recovery через старые request states.
 
 `@Postman` — единственный канонический явный production trigger.
 Если ТЕКУЩЕЕ пользовательское сообщение после необязательных начальных пробелов

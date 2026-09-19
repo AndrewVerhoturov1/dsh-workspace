@@ -166,6 +166,35 @@ class DelegateViaPostmanSkillContract(unittest.TestCase):
         self.assertIn("$jsonText = & $bridge", normal)
         self.assertNotIn("$jsonText = & pwsh.exe", normal)
 
+    def test_luna_does_not_write_result_root_before_bridge(self):
+        normal = self.skill.split("## 8. Единственный production-вызов", 1)[1].split(
+            "## 9. Разбор JSON и минимальный transport gate", 1
+        )[0]
+        for forbidden in ("New-Item", "Set-Content", "Out-File", "Remove-Item", "write-probe"):
+            self.assertNotIn(forbidden, normal)
+        self.assertIn("Luna-side normal invocation НЕ выполняет", self.skill)
+        self.assertIn("Result-root creation и write-probe полностью принадлежат", self.skill)
+        self.assertIn("DIRECT_RESULT_ROOT_UNAVAILABLE", self.skill)
+
+    def test_production_invocation_is_direct_bridge_call(self):
+        normal = self.skill.split("## 8. Единственный production-вызов", 1)[1].split(
+            "## 9. Разбор JSON и минимальный transport gate", 1
+        )[0]
+        self.assertEqual(normal.count("$jsonText = & $bridge"), 2)
+        self.assertIn("$jsonText = & $bridge `", normal)
+        self.assertNotIn("$jsonText = & pwsh.exe", normal)
+        self.assertLess(normal.index("$bridge"), normal.index("$jsonText = & $bridge"))
+
+    def test_tool_level_spawn_failure_is_fail_closed(self):
+        self.assertIn("spawn EPERM", self.skill)
+        self.assertIn("POSTMAN_INVOCATION_NOT_STARTED", self.skill)
+        self.assertIn("Send не происходил", self.skill)
+        self.assertIn("tool-level spawn failure не разрешает recovery через старые request states", self.agents)
+        self.assertIn("запрещено читать старые `REQ_*.json`", self.skill)
+        self.assertIn("latest request", self.skill)
+        self.assertIn("вызывать `job_list`", self.skill)
+        self.assertIn("не повторять invocation", self.skill)
+
     def test_unified_resume_finalization_contract(self):
         self.assertIn(r"C:\Users\andre\.dsh\postman\direct\resume_request.ps1", self.skill)
         self.assertIn("resume_request.ps1", self.agents)
