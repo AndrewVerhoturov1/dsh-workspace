@@ -61,6 +61,15 @@ class FinalizeTaskPrSkillContract(unittest.TestCase):
             self.assertIn(marker, self.text)
         self.assertIn("Обычный task finalize никогда не обновляет local `main`", self.text)
         self.assertIn("exact PREVIEW_* code / blocker", self.text)
+        terminal_guard = """if (
+    $result.ok -eq $true -and
+    $result.code -in @(
+        'TASK_PRS_FINALIZED',
+        'TASK_PRS_FINALIZED_WITH_WARNINGS'
+    )
+) {"""
+        self.assertIn(terminal_guard, self.text)
+        self.assertNotIn("-and -not $WhatIf", self.text)
 
 
 if __name__ == "__main__":

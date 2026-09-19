@@ -211,9 +211,16 @@ $previewResult = $previewText | ConvertFrom-Json
 $resultText = & 'C:\Users\andre\.dsh\tools\finalize-task-pr\finalize_task_pr.ps1' ...
 $result = $resultText | ConvertFrom-Json
 
-if ($result.ok -eq $true -and -not $WhatIf) {
-    # Для TASK_PRS_FINALIZED и TASK_PRS_FINALIZED_WITH_WARNINGS
-    # один вызов update после завершения всей batch-операции.
+if (
+    $result.ok -eq $true -and
+    $result.code -in @(
+        'TASK_PRS_FINALIZED',
+        'TASK_PRS_FINALIZED_WITH_WARNINGS'
+    )
+) {
+    $previewText = & 'C:\Users\andre\.dsh\tools\preview-worktree\preview_worktree.ps1' `
+      -Action update
+    $previewResult = $previewText | ConvertFrom-Json
 }
 ```
 

@@ -137,6 +137,6 @@ warnings
 preview sync warning/blocker, если есть
 mainWorkingTreeTouched=false
 previewBranchDeleted=false
+```
 
 `previewWorkingTreeTouched=false` — это только поле результата promotion executor, а не утверждение о полном skill после отдельного вызова preview-worktree.
-```
