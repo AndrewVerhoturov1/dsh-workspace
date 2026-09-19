@@ -91,6 +91,15 @@ class PreviewLauncherContract(unittest.TestCase):
         for forbidden in ("reset --hard", "git clean", "git stash", "push --force", "Remove-Item"):
             self.assertNotIn(forbidden, self.prepare)
 
+    def test_prepare_normalizes_single_line_git_output_before_trim(self):
+        self.assertIn("function Get-GitSingleLine", self.prepare)
+        self.assertIn("$lines = @(Invoke-Git -RepoRoot $RepoRoot -Arguments $Arguments)", self.prepare)
+        self.assertIn("if ($lines.Count -ne 1)", self.prepare)
+        self.assertIn("return ([string]$lines[0]).Trim()", self.prepare)
+        self.assertIn("$actualTop = Get-GitSingleLine", self.prepare)
+        self.assertIn("$branch = Get-GitSingleLine", self.prepare)
+        self.assertNotIn(")[0].Trim()", self.prepare)
+
     def test_preview_workflow_documents_port_and_launcher(self):
         self.assertIn("PREVIEW_HARNESS_LAUNCHER_VERSION: 1", self.workflow)
         self.assertIn("http://127.0.0.1:4174/", self.workflow)
