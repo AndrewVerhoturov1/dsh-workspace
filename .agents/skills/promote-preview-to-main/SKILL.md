@@ -131,8 +131,12 @@ mergeSha
 originMain
 originPreview
 previewSync
+local preview HEAD после update, если доступен
+preview update code
 warnings
+preview sync warning/blocker, если есть
 mainWorkingTreeTouched=false
-previewWorkingTreeTouched=false
 previewBranchDeleted=false
+
+`previewWorkingTreeTouched=false` — это только поле результата promotion executor, а не утверждение о полном skill после отдельного вызова preview-worktree.
 ```

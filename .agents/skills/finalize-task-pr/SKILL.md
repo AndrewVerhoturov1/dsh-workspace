@@ -9,7 +9,7 @@ description: >-
 
 # Finalize Task PR
 
-`FINALIZE_TASK_PR_SKILL_VERSION: 2`
+`FINALIZE_TASK_PR_SKILL_VERSION: 3`
 
 ## Назначение
 
@@ -37,6 +37,8 @@ PR уже проверен моделью
 → проверить base=preview
 → squash merge в preview
 → best effort cleanup temporary worktree/local branch/remote branch
+→ после успешного finalize один раз обновить permanent local preview через preview_worktree.ps1 -Action update
+→ проверить результат preview update
 → краткий отчёт
 ```
 
@@ -130,6 +132,18 @@ $result = $resultText | ConvertFrom-Json
 
 Executor **не запускает** тесты/CI/review.
 
+Ответственность разделена:
+
+```text
+finalize_task_pr.ps1
+= merge + temporary cleanup + refresh remote refs
+
+preview_worktree.ps1 -Action update
+= safe synchronization permanent local preview
+```
+
+Сам finalize executor не обновляет `C:\Users\andre\.dsh-preview`.
+
 ## Cleanup — best effort
 
 Нормальные неошибочные состояния:
@@ -181,18 +195,64 @@ TASK_PRS_FINALIZED_WITH_WARNINGS
 
 Если `ok=false`, сообщить exact `code` и blocker. Не имитировать executor вручную без отдельной причины.
 
+## Синхронизация permanent preview после merge
+
+После выполнения всего вызова `finalize_task_pr.ps1` обновлять permanent local preview **один раз на всю пачку PR**, а не после каждого PR. Канонический вызов:
+
+```powershell
+$previewText = & 'C:\Users\andre\.dsh\tools\preview-worktree\preview_worktree.ps1' `
+  -Action update
+$previewResult = $previewText | ConvertFrom-Json
+```
+
+Запускать его только после:
+
+```powershell
+$resultText = & 'C:\Users\andre\.dsh\tools\finalize-task-pr\finalize_task_pr.ps1' ...
+$result = $resultText | ConvertFrom-Json
+
+if ($result.ok -eq $true -and -not $WhatIf) {
+    # Для TASK_PRS_FINALIZED и TASK_PRS_FINALIZED_WITH_WARNINGS
+    # один вызов update после завершения всей batch-операции.
+}
+```
+
+Условия обязательны:
+
+- при `TASK_PRS_FINALIZED` запускать update;
+- при `TASK_PRS_FINALIZED_WITH_WARNINGS` также запускать update: warning cleanup временной task branch не мешает синхронизации permanent preview;
+- при `TASK_PRS_DRY_RUN` (`-WhatIf`) permanent preview не изменять;
+- при `ok=false` автоматически update не запускать и не угадывать состояние частично завершённой batch-операции.
+
+`preview_worktree.ps1 -Action update` сам проверяет зарегистрированный worktree branch `preview`, clean state, делает `git fetch --prune origin`, затем только `merge --ff-only origin/preview` и проверяет равенство local preview HEAD и `origin/preview`. Он не использует reset, stash, clean, checkout/switch или force push.
+
+Если task merge уже успешен, но preview update завершился ошибкой, merge не отменять и не объявлять неуспешным. Сообщить отдельно:
+
+```text
+remote task merge succeeded
+local preview synchronization failed
+exact PREVIEW_* code / blocker
+```
+
+Автоматически не исправлять dirty `.dsh-preview`, неправильный branch/worktree, divergence или ff-only failure.
+
 ## Финальный отчёт
 
-Сообщить кратко:
+Сообщить кратко и разделить результат executor и полный результат skill:
 
 ```text
 какие PR merged
-originPreview из результата
+originPreview из результата finalize
+local preview synchronization result
+local preview HEAD после update, если доступен
+preview update code
 какие temporary worktree/branches удалены
-какие cleanup warnings остались
+cleanup warnings
+preview sync warning/blocker, если есть
 mainWorkingTreeTouched=false
-previewWorkingTreeTouched=false
 ```
+
+Поле `previewWorkingTreeTouched=false` можно сохранять только как поле результата самого `finalize_task_pr.py`: после отдельного вызова `preview_worktree.ps1` оно не описывает полный end-to-end результат skill.
 
 ## Критические инварианты
 
@@ -206,3 +266,5 @@ previewWorkingTreeTouched=false
 8. Permanent `.dsh` и `.dsh-preview` не удалять и не очищать.
 9. Не использовать reset/stash/clean/force push.
 10. Promotion в `main` выполняется только отдельным skill `promote-preview-to-main`.
+11. После успешного обычного task merge permanent local preview приводится к current `origin/preview` только через `preview-worktree -Action update`.
+12. Обычный task finalize никогда не обновляет local `main` и не изменяет `C:\Users\andre\.dsh`.
