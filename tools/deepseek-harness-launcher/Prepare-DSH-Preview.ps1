@@ -15,13 +15,21 @@ function Invoke-Git([string]$RepoRoot, [string[]]$Arguments) {
     return @($output | ForEach-Object { [string]$_ })
 }
 
+function Get-GitSingleLine([string]$RepoRoot, [string[]]$Arguments, [string]$Description) {
+    $lines = @(Invoke-Git -RepoRoot $RepoRoot -Arguments $Arguments)
+    if ($lines.Count -ne 1) {
+        throw "$Description returned $($lines.Count) lines; expected exactly one."
+    }
+    return ([string]$lines[0]).Trim()
+}
+
 $previewRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
-$actualTop = (Invoke-Git -RepoRoot $previewRoot -Arguments @('rev-parse', '--show-toplevel'))[0].Trim()
+$actualTop = Get-GitSingleLine -RepoRoot $previewRoot -Arguments @('rev-parse', '--show-toplevel') -Description 'git rev-parse --show-toplevel'
 if ([System.IO.Path]::GetFullPath($actualTop) -ne $previewRoot) {
     throw "Preview launcher must run from the repository root worktree: $previewRoot"
 }
 
-$branch = (Invoke-Git -RepoRoot $previewRoot -Arguments @('branch', '--show-current'))[0].Trim()
+$branch = Get-GitSingleLine -RepoRoot $previewRoot -Arguments @('branch', '--show-current') -Description 'git branch --show-current'
 if ($branch -ne 'preview') {
     throw "Prepare-DSH-Preview.ps1 is allowed only in the permanent preview worktree; current branch: $branch"
 }
