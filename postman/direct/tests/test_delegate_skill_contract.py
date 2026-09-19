@@ -16,7 +16,7 @@ class DelegateViaPostmanSkillContract(unittest.TestCase):
         cls.agents = AGENTS.read_text(encoding="utf-8")
 
     def test_version_and_entrypoint(self):
-        self.assertIn("DIRECT_POSTMAN_SKILL_VERSION: 15", self.skill)
+        self.assertIn("DIRECT_POSTMAN_SKILL_VERSION: 16", self.skill)
         self.assertIn("$workspace = (Get-Location).Path", self.skill)
         self.assertIn("$bridge = Join-Path $workspace 'postman\\direct\\postman.ps1'", self.skill)
         self.assertNotIn(r"C:\Users\andre\.dsh\postman\direct\postman.ps1", self.skill)
@@ -161,14 +161,14 @@ class DelegateViaPostmanSkillContract(unittest.TestCase):
         self.assertIn("DSH_POSTMAN_RESULT_ROOT", self.skill)
         self.assertIn("DIRECT_RESULT_ROOT_UNAVAILABLE", self.skill)
         normal = self.skill.split("## 8. Единственный production-вызов", 1)[1].split(
-            "## 9. Разбор JSON и минимальный transport gate", 1
+            "### Контракт orchestration-вызова `tools.pwsh`", 1
         )[0]
         self.assertIn("$jsonText = & $bridge", normal)
         self.assertNotIn("$jsonText = & pwsh.exe", normal)
 
     def test_luna_does_not_write_result_root_before_bridge(self):
         normal = self.skill.split("## 8. Единственный production-вызов", 1)[1].split(
-            "## 9. Разбор JSON и минимальный transport gate", 1
+            "### Контракт orchestration-вызова `tools.pwsh`", 1
         )[0]
         for forbidden in ("New-Item", "Set-Content", "Out-File", "Remove-Item", "write-probe"):
             self.assertNotIn(forbidden, normal)
@@ -178,7 +178,7 @@ class DelegateViaPostmanSkillContract(unittest.TestCase):
 
     def test_production_invocation_is_direct_bridge_call(self):
         normal = self.skill.split("## 8. Единственный production-вызов", 1)[1].split(
-            "## 9. Разбор JSON и минимальный transport gate", 1
+            "### Контракт orchestration-вызова `tools.pwsh`", 1
         )[0]
         self.assertEqual(normal.count("$jsonText = & $bridge"), 2)
         self.assertIn("$jsonText = & $bridge `", normal)
@@ -272,6 +272,27 @@ class DelegateViaPostmanSkillContract(unittest.TestCase):
         )
         self.assertIn("postman_async_send", self.agents)
         self.assertIn("считать его устаревшим", self.agents)
+
+    def test_tools_pwsh_normal_invocation_omits_hardcoded_workdir(self):
+        section = self.skill.split(
+            "### Контракт orchestration-вызова `tools.pwsh`", 1
+        )[1].split("### Внутренний link-only transport contract", 1)[0]
+        self.assertIn("tools.pwsh({", section)
+        typescript_block = section.split("```typescript", 1)[1].split("```", 1)[0]
+        self.assertNotIn("workdir:", typescript_block)
+        self.assertNotIn("C:\\Users\\Andrew\\.dsh", typescript_block)
+        self.assertIn("$workspace = (Get-Location).Path", section)
+        self.assertIn(r"$bridge = Join-Path $workspace 'postman\\direct\\postman.ps1'", section)
+
+    def test_tools_pwsh_req_id_avoids_js_template_interpolation(self):
+        section = self.skill.split(
+            "### Контракт orchestration-вызова `tools.pwsh`", 1
+        )[1].split("### Внутренний link-only transport contract", 1)[0]
+        self.assertIn("$requestId = 'REQ_' + $stamp + '_' + $suffix", section)
+        self.assertNotIn("$requestId = \"REQ_${stamp}_${suffix}\"", section)
+        typescript_block = section.split("```typescript", 1)[1].split("```", 1)[0]
+        self.assertNotIn("${stamp}", typescript_block)
+        self.assertNotIn("${suffix}", typescript_block)
 
     def test_frontmatter_parses_with_dsh_yaml_parser(self):
         npm = shutil.which("npm.cmd") or shutil.which("npm")
