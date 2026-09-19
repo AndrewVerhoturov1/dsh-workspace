@@ -306,6 +306,12 @@ function createProcessController({ config: configOverrides = {}, runtime, deps =
       stdio: 'ignore',
       env: {
         ...process.env,
+        DSH_WORKING_DIRECTORY: config.workingDirectory,
+        DSH_PROFILE: config.profile,
+        DSH_PORT: String(config.port),
+        DSH_LAUNCHER_ROOT: config.launcherRoot,
+        DSH_PROCESS_CONTROLLER: path.resolve(__filename),
+        DSH_RESTART_HELPER: process.env.DSH_RESTART_HELPER || path.join(path.dirname(__filename), 'Web-Restart.vbs'),
         ...(process.platform === 'win32' ? { NODE_USE_SYSTEM_CA: '1' } : {}),
       },
     })
