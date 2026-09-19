@@ -285,14 +285,12 @@ def _atomic_write_json(path: Path, value: Any) -> None:
     _atomic_write_bytes(path, payload)
 
 
-def _read_manifest_bytes(zip_path: Path) -> tuple[bytes, dict[str, Any]]:
+def _read_optional_manifest_bytes(zip_path: Path) -> bytes | None:
     with zipfile.ZipFile(zip_path, "r") as archive:
-        raw = archive.read("manifest.json")
-    text = raw.decode("utf-8", errors="strict")
-    value = json.loads(text)
-    if not isinstance(value, dict):
-        raise ValueError("manifest must be an object")
-    return raw, value
+        try:
+            return archive.read("manifest.json")
+        except KeyError:
+            return None
 
 
 def _run_validator(
@@ -365,13 +363,6 @@ def _validation_matches_trusted(
     )
 
 
-def _manifest_matches_trusted(manifest: dict[str, Any], trusted: dict[str, Any]) -> bool:
-    return (
-        manifest.get("requestId") == trusted["requestId"]
-        and manifest.get("repository") == trusted["repository"]
-        and isinstance(manifest.get("baseCommit"), str)
-        and manifest["baseCommit"].lower() == trusted["baseCommit"].lower()
-    )
 
 
 def _prepare_staging(
@@ -401,7 +392,7 @@ def _publish_durable(
     result_root: Path,
     final_dir: Path,
     staging_zip: Path,
-    manifest_bytes: bytes,
+    manifest_bytes: bytes | None,
     validation: dict[str, Any],
     metadata: dict[str, Any],
 ) -> None:
@@ -410,7 +401,8 @@ def _publish_durable(
     )
     try:
         shutil.copyfile(staging_zip, publish_dir / "result.zip")
-        _atomic_write_bytes(publish_dir / "manifest.json", manifest_bytes)
+        if manifest_bytes is not None:
+            _atomic_write_bytes(publish_dir / "manifest.json", manifest_bytes)
         _atomic_write_json(publish_dir / "validation.json", validation)
         _atomic_write_json(publish_dir / "metadata.json", metadata)
         if final_dir.exists():
@@ -659,27 +651,9 @@ def download_validated_artifact(
         )
 
     try:
-        manifest_bytes, manifest = _read_manifest_bytes(staging_zip)
-    except Exception as exc:
-        return _result(
-            ARTIFACT_INVALID,
-            ok=False,
-            details={
-                "phase": "manifest_post_validation",
-                "reason": str(exc)[:500],
-                "stagingPath": str(staging_zip),
-            },
-        )
-    if not _manifest_matches_trusted(manifest, trusted):
-        return _result(
-            ARTIFACT_INVALID,
-            ok=False,
-            details={
-                "phase": "manifest_post_validation",
-                "reason": "manifest identity mismatch after validator PASS",
-                "stagingPath": str(staging_zip),
-            },
-        )
+        manifest_bytes = _read_optional_manifest_bytes(staging_zip)
+    except Exception:
+        manifest_bytes = None
 
     metadata = {
         "protocolVersion": 1,
@@ -695,6 +669,7 @@ def download_validated_artifact(
         "downloadSuggestedFilename": suggested,
         "browserDownloadDirectory": str(browser_download_dir),
         "browserDownloadDirectoryTrusted": False,
+        "manifestPresent": manifest_bytes is not None,
         "routingAuthorityIncluded": False,
     }
 
@@ -729,7 +704,7 @@ def download_validated_artifact(
             "sha256": actual_sha256,
             "resultDirectory": str(final_dir),
             "resultZip": str(final_dir / "result.zip"),
-            "manifest": str(final_dir / "manifest.json"),
+            "manifest": str(final_dir / "manifest.json") if manifest_bytes is not None else None,
             "validation": str(final_dir / "validation.json"),
             "metadata": str(final_dir / "metadata.json"),
             "downloadStarted": True,

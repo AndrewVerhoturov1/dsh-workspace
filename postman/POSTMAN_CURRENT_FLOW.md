@@ -20,7 +20,7 @@ Direct Web Postman — транспортный слой между локаль
 8. дождаться строго коррелированного assistant turn;
 9. найти строго коррелированный ZIP attachment;
 10. скачать ZIP ровно одним кликом;
-11. провалидировать ZIP и `manifest.json`;
+11. провалидировать ZIP как безопасный correlated transport artifact;
 12. атомарно сохранить результат как `RESULT_DURABLE`;
 13. вернуть локальному агенту JSON с путём к проверенному ZIP.
 
@@ -59,7 +59,7 @@ postman/web/web_worker_bridge.py
         ├─ re-prove artifact identity
         ├─ expect_download + exactly one click
         ├─ stage ZIP
-        ├─ validate ZIP + manifest + scope
+        ├─ validate ZIP safety + integrity + SHA-256
         ├─ publish request-scoped durable result
         ▼
 RESULT_DURABLE
@@ -548,111 +548,64 @@ RESULT_STORE_CONFLICT
 
 ## 15. ZIP validation
 
-Скачивание файла ещё не означает успех.
-
-После download Postman вычисляет SHA-256 и запускает artifact validator.
+Скачивание файла ещё не означает успех. После download Postman вычисляет SHA-256 и
+запускает safety-only artifact validator.
 
 Canonical validator:
 
-- `postman/web/artifact-validator.mjs`  
+- `postman/web/artifact-validator.mjs`
   https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/postman/web/artifact-validator.mjs
 
-CLI wrapper:
+Normal hard gates:
 
-- `postman/web/artifact_validate_cli.mjs`  
-  https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/postman/web/artifact_validate_cli.mjs
+- exact expected filename;
+- readable non-empty ZIP;
+- central/local header and CRC integrity;
+- path traversal / absolute / drive / UNC / ADS rejection;
+- symlink/reparse/special entry rejection;
+- duplicate/case/Unicode collision rejection;
+- compressed/uncompressed/entry/ratio limits and ZIP-bomb protection;
+- SHA-256;
+- optional manifest: explicit conflicting string `requestId` is rejected.
 
-Validator проверяет среди прочего:
+Not normal transport gates:
 
-- ZIP structure;
-- exact filename;
-- `manifest.json` в root;
-- `protocolVersion`;
-- exact `requestId`;
-- exact repository;
-- exact `baseCommit`;
-- allowed `resultType`;
-- allowed / forbidden paths;
-- patch structure;
-- path traversal;
-- absolute paths;
-- `..`;
-- symlinks;
-- junction/reparse/special entries;
-- duplicate entries;
-- case collisions;
-- Unicode-normalization collisions;
-- archive limits;
-- compressed/uncompressed limits;
-- content inventory;
-- SHA-256.
+```text
+protocolVersion
+repository
+baseCommit
+resultType
+patch/files schema
+repository allowedPaths/forbiddenPaths
+unified diff semantics
+```
 
-ZIP не должен извлекаться непосредственно поверх repository.
+ZIP не извлекается непосредственно поверх repository.
 
 ---
 
-## 16. Manifest contract
+## 16. Optional manifest
 
-Для ZIP artifact `manifest.json` находится в корне.
+`manifest.json` не обязателен. Если он отсутствует, malformed, non-object или содержит
+unknown fields, безопасный ZIP всё равно может стать RESULT_DURABLE. Manifest metadata
+не имеет authority над trusted local request state.
 
-Минимальный пример:
-
-```json
-{
-  "protocolVersion": 1,
-  "requestId": "REQ_...",
-  "repository": "AndrewVerhoturov1/dsh-workspace",
-  "baseCommit": "<40-hex-sha>",
-  "resultType": "hybrid_patch",
-  "patch": "changes.patch",
-  "files": []
-}
-```
-
-Разрешённые `resultType`:
-
-```text
-artifact
-patch
-files
-hybrid_patch
-```
-
-`artifact` — normal universal result: `patch: null`, минимум один `files[]` deliverable,
-payload под `files/`. Его `files[]` не являются repository target paths и поэтому не
-проверяются по repository allowlist; при этом общая ZIP/path/identity validation остаётся.
-`patch`/`files`/`hybrid_patch` сохраняют прежнюю repository scope semantics.
-
-Trusted runtime metadata имеет приоритет над содержимым ZIP.
-
-Artifact не имеет права определять routing authority:
-
-```text
-origin_agent_id
-destination_agent_id
-destination_session
-delivery_target
-```
+Если manifest является JSON object и содержит строковый `requestId`, это значение не
+может противоречить exact current REQ. Остальные поля informational для normal transport.
 
 Canonical contract:
 
-- `docs/web-postman-artifact-contract.md`  
+- `docs/web-postman-artifact-contract.md`
   https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/docs/web-postman-artifact-contract.md
 
 ---
 
-## 17. Post-validation re-check
+## 17. Post-validation attestation
 
-Даже если Node validator вернул PASS, Python transport повторно проверяет identity:
-
-```text
-manifest.requestId == trusted requestId
-manifest.repository == trusted repository
-manifest.baseCommit == trusted baseCommit
-validation.sha256 == actual ZIP SHA-256
-```
-
-Это дополнительная fail-closed boundary.
+Python transport после Node PASS проверяет только сам validator result против trusted
+local request data и raw downloaded bytes: validator PASS/status, exact current requestId,
+actual ZIP SHA-256 и locally trusted metadata returned by validator. Он не перечитывает
+manifest как repository/application gate.
 
 Реализация:
 
@@ -669,9 +622,9 @@ validation.sha256 == actual ZIP SHA-256
 ```text
 <ResultRoot>\<REQ>\
 ├── result.zip
-├── manifest.json
 ├── validation.json
-└── metadata.json
+├── metadata.json
+└── manifest.json        # только если был внутри ZIP
 ```
 
 Состояние:
@@ -941,7 +894,7 @@ WebWorkerBridge.run_request(...)
 
 Direct Web Postman должен работать так:
 
-> Локальный агент создаёт уникальный `REQ`, фиксирует GitHub `base_commit`, публикует self-contained task-файл, запускает или переиспользует выделенный Chrome, создаёт новый ChatGPT Web chat, отправляет link-only transport prompt, привязывается к конкретному `/c/...` диалогу, ждёт ровно следующий assistant turn, находит внутри него строго оформленный ZIP attachment для того же `REQ`, ровно один раз скачивает его через browser download event, валидирует ZIP/manifest/SHA/scope, атомарно сохраняет `RESULT_DURABLE` и возвращает локальному агенту путь к проверенному `result.zip`.
+> Локальный агент создаёт уникальный `REQ`, фиксирует GitHub `base_commit`, публикует self-contained task-файл, запускает или переиспользует выделенный Chrome, создаёт новый ChatGPT Web chat, отправляет link-only transport prompt, привязывается к конкретному `/c/...` диалогу, ждёт ровно следующий assistant turn, находит внутри него строго оформленный ZIP attachment для того же `REQ`, ровно один раз скачивает его через browser download event, проверяет ZIP safety/integrity/SHA-256 и optional requestId correlation, атомарно сохраняет `RESULT_DURABLE` и возвращает локальному агенту путь к проверенному `result.zip`.
 
 ---
 

@@ -154,8 +154,6 @@ function expected(overrides = {}) {
     repository: REPOSITORY,
     baseCommit: BASE_COMMIT,
     expectedFilename: EXPECTED_FILENAME,
-    allowedPaths: ['docs', 'src'],
-    forbiddenPaths: ['settings.yaml', 'attachments'],
     ...overrides,
   };
 }
@@ -261,49 +259,69 @@ test('valid empty ZIP -> ARTIFACT_EMPTY', () => {
   expectCode(makeZip([]), ERROR_CODES.EMPTY);
 });
 
-test('missing root manifest -> ARTIFACT_MANIFEST_MISSING', () => {
-  expectCode(makeZip([patchEntry()]), ERROR_CODES.MANIFEST_MISSING);
+test('ZIP without manifest is transport-valid', () => {
+  const result = decision(makeZip([{ name: 'result.md', data: 'ok\n' }]));
+  assert.equal(result.ok, true, JSON.stringify(result, null, 2));
+  assert.equal(result.code, ARTIFACT_VALID);
+  assert.equal(result.details.manifestPresent, false);
 });
 
-test('malformed manifest JSON -> ARTIFACT_MANIFEST_INVALID', () => {
-  expectCode(makeZip([{ name: 'manifest.json', data: '{bad json' }, patchEntry()]), ERROR_CODES.MANIFEST_INVALID);
+test('malformed manifest JSON is informational', () => {
+  const result = decision(makeZip([{ name: 'manifest.json', data: '{bad json' }, { name: 'result.md', data: 'ok' }]));
+  assert.equal(result.ok, true, JSON.stringify(result, null, 2));
+  assert.ok(result.warnings.includes('manifest_json_invalid'));
 });
 
-test('manifest wrong field type -> ARTIFACT_MANIFEST_INVALID', () => {
-  expectCode(makeZip([manifestEntry(manifest({ requestId: 123 })), patchEntry()]), ERROR_CODES.MANIFEST_INVALID);
+test('non-object manifest is informational', () => {
+  const result = decision(makeZip([{ name: 'manifest.json', data: '[]' }, { name: 'result.md', data: 'ok' }]));
+  assert.equal(result.ok, true, JSON.stringify(result, null, 2));
+  assert.ok(result.warnings.includes('manifest_not_object'));
 });
 
-test('manifest unknown field -> ARTIFACT_MANIFEST_INVALID', () => {
-  expectCode(makeZip([manifestEntry({ ...manifest(), origin_agent_id: 'evil' }), patchEntry()]), ERROR_CODES.MANIFEST_INVALID);
+test('manifest requestId with wrong type is informational', () => {
+  const result = decision(makeZip([manifestEntry({ requestId: 123, anyFutureField: true }), { name: 'result.md', data: 'ok' }]));
+  assert.equal(result.ok, true, JSON.stringify(result, null, 2));
+  assert.ok(result.warnings.includes('manifest_request_id_not_string'));
 });
 
-test('wrong protocolVersion -> ARTIFACT_PROTOCOL_VERSION_MISMATCH', () => {
-  expectCode(makeZip([manifestEntry(manifest({ protocolVersion: 2 })), patchEntry()]), ERROR_CODES.PROTOCOL_VERSION_MISMATCH);
+test('manifest unknown fields are allowed', () => {
+  const result = decision(makeZip([manifestEntry({ requestId: REQUEST_ID, origin_agent_id: 'informational', future: { x: 1 } }), { name: 'result.md', data: 'ok' }]));
+  assert.equal(result.ok, true, JSON.stringify(result, null, 2));
 });
 
-test('wrong requestId -> ARTIFACT_REQUEST_MISMATCH', () => {
-  expectCode(makeZip([manifestEntry(manifest({ requestId: 'REQ_OTHER' })), patchEntry()]), ERROR_CODES.REQUEST_MISMATCH);
+test('protocolVersion is informational, not a transport gate', () => {
+  const result = decision(makeZip([manifestEntry({ requestId: REQUEST_ID, protocolVersion: 72 }), { name: 'result.md', data: 'ok' }]));
+  assert.equal(result.ok, true, JSON.stringify(result, null, 2));
+  assert.equal(result.validatedProtocolVersion, 72);
 });
 
-test('wrong repository -> ARTIFACT_REPOSITORY_MISMATCH', () => {
-  expectCode(makeZip([manifestEntry(manifest({ repository: 'owner/other' })), patchEntry()]), ERROR_CODES.REPOSITORY_MISMATCH);
+test('explicit wrong string requestId -> ARTIFACT_REQUEST_MISMATCH', () => {
+  expectCode(makeZip([manifestEntry({ requestId: 'REQ_OTHER' }), { name: 'result.md', data: 'ok' }]), ERROR_CODES.REQUEST_MISMATCH);
 });
 
-test('wrong baseCommit -> ARTIFACT_BASE_COMMIT_MISMATCH', () => {
-  expectCode(makeZip([manifestEntry(manifest({ baseCommit: '1'.repeat(40) })), patchEntry()]), ERROR_CODES.BASE_COMMIT_MISMATCH);
+test('repository baseCommit resultType patch and files are informational', () => {
+  const m = { requestId: REQUEST_ID, repository: 'owner/other', baseCommit: 'not-a-sha', resultType: 'mystery', patch: 'missing.patch', files: ['missing.txt'] };
+  const result = decision(makeZip([manifestEntry(m), { name: 'result.md', data: 'ok' }]));
+  assert.equal(result.ok, true, JSON.stringify(result, null, 2));
 });
 
-test('unknown resultType -> ARTIFACT_RESULT_TYPE_INVALID', () => {
-  expectCode(makeZip([manifestEntry(manifest({ resultType: 'mystery' })), patchEntry()]), ERROR_CODES.RESULT_TYPE_INVALID);
+test('minimal requestId-only manifest is valid', () => {
+  const result = decision(makeZip([manifestEntry({ requestId: REQUEST_ID }), { name: 'result.md', data: 'ok' }]));
+  assert.equal(result.ok, true, JSON.stringify(result, null, 2));
 });
 
-test('manifest references missing changes.patch -> ARTIFACT_PAYLOAD_MISSING', () => {
-  expectCode(makeZip([manifestEntry()]), ERROR_CODES.PAYLOAD_MISSING);
-});
-
-test('manifest references missing files entry -> ARTIFACT_PAYLOAD_MISSING', () => {
-  const m = manifest({ resultType: 'files', patch: null, files: ['docs/missing.txt'] });
-  expectCode(makeZip([manifestEntry(m)]), ERROR_CODES.PAYLOAD_MISSING);
+test('regression: artifact manifest without protocolVersion is valid', () => {
+  const m = {
+    requestId: REQUEST_ID,
+    repository: REPOSITORY,
+    baseCommit: BASE_COMMIT,
+    resultType: 'artifact',
+    patch: null,
+    files: ['result.md'],
+  };
+  const result = decision(makeZip([manifestEntry(m), { name: 'files/result.md', data: 'accepted\n' }]));
+  assert.equal(result.ok, true, JSON.stringify(result, null, 2));
+  assert.equal(result.validatedProtocolVersion, null);
 });
 
 test('wrong archive filename -> ARTIFACT_FILENAME_MISMATCH', () => {
@@ -385,14 +403,14 @@ test('NFC-equivalent Unicode collision -> ARTIFACT_CASE_COLLISION', () => {
   ]), ERROR_CODES.CASE_COLLISION);
 });
 
-test('path outside trusted allowlist -> ARTIFACT_SCOPE_VIOLATION', () => {
-  const m = manifest({ resultType: 'files', patch: null, files: ['secret/x.txt'] });
-  expectCode(makeZip([manifestEntry(m), { name: 'files/secret/x.txt', data: 'x' }]), ERROR_CODES.SCOPE_VIOLATION);
+test('repository allowlist does not constrain transport ZIP entries', () => {
+  const result = decision(makeZip([{ name: 'secret/x.txt', data: 'x' }]));
+  assert.equal(result.ok, true, JSON.stringify(result, null, 2));
 });
 
-test('path under trusted forbidden path -> ARTIFACT_FORBIDDEN_PATH', () => {
-  const m = manifest({ resultType: 'files', patch: null, files: ['settings.yaml'] });
-  expectCode(makeZip([manifestEntry(m), { name: 'files/settings.yaml', data: 'x' }]), ERROR_CODES.FORBIDDEN_PATH, expected({ allowedPaths: ['docs', 'src', 'settings.yaml'] }));
+test('repository forbiddenPaths do not constrain transport ZIP entries', () => {
+  const result = decision(makeZip([{ name: 'settings.yaml', data: 'x' }]), expected({ allowedPaths: ['docs'], forbiddenPaths: ['settings.yaml'] }));
+  assert.equal(result.ok, true, JSON.stringify(result, null, 2));
 });
 
 test('actual ZIP size exceeds configured limit -> ARTIFACT_COMPRESSED_SIZE_LIMIT', () => {
@@ -421,33 +439,16 @@ test('pathological compression ratio -> ARTIFACT_ZIP_BOMB_RISK', () => {
   expectCode(zip, ERROR_CODES.ZIP_BOMB_RISK, expected({ limits: { ...DEFAULT_LIMITS, maxCompressionRatio: 10 } }));
 });
 
-test('malformed unified diff -> ARTIFACT_PATCH_INVALID', () => {
-  expectCode(makeZip([manifestEntry(), patchEntry('--- a/docs/a.md\n+++ b/docs/a.md\nnot-a-hunk\n')]), ERROR_CODES.PATCH_INVALID);
+test('malformed unified diff is opaque transport payload', () => {
+  const result = decision(makeZip([manifestEntry({ requestId: REQUEST_ID }), patchEntry('not-a-diff\n')]));
+  assert.equal(result.ok, true, JSON.stringify(result, null, 2));
 });
 
-for (const [name, oldPath, newPath, code, exp] of [
-  ['absolute patch path', '/absolute', '/absolute', ERROR_CODES.ABSOLUTE_PATH, expected()],
-  ['drive patch path', 'C:/absolute', 'C:/absolute', ERROR_CODES.WINDOWS_DRIVE_PATH, expected()],
-  ['traversal patch path', '../evil', '../evil', ERROR_CODES.PATH_TRAVERSAL, expected()],
-  ['patch outside allowlist', 'secret/a.txt', 'secret/a.txt', ERROR_CODES.SCOPE_VIOLATION, expected()],
-  ['patch forbidden path', 'settings.yaml', 'settings.yaml', ERROR_CODES.FORBIDDEN_PATH, expected({ allowedPaths: ['docs', 'src', 'settings.yaml'] })],
-]) {
-  test(`${name} -> ${code}`, () => {
-    const p = [
-      `--- a/${oldPath}`,
-      `+++ b/${newPath}`,
-      '@@ -1 +1 @@',
-      '-old',
-      '+new',
-      '',
-    ].join('\n');
-    // Absolute/drive/traversal must not be hidden by a/ or b/ prefixes.
-    const actualPatch = code === ERROR_CODES.ABSOLUTE_PATH || code === ERROR_CODES.WINDOWS_DRIVE_PATH || code === ERROR_CODES.PATH_TRAVERSAL
-      ? p.replace(`a/${oldPath}`, oldPath).replace(`b/${newPath}`, newPath)
-      : p;
-    expectCode(makeZip([manifestEntry(), patchEntry(actualPatch)]), code, exp);
-  });
-}
+test('paths written inside patch text are not interpreted by transport validator', () => {
+  const patch = '--- /absolute\n+++ ../evil\nnot-a-hunk\n';
+  const result = decision(makeZip([{ name: 'changes.patch', data: patch }]));
+  assert.equal(result.ok, true, JSON.stringify(result, null, 2));
+});
 
 test('CRC mismatch is fail-closed ARTIFACT_BAD_ZIP', () => {
   expectCode(makeZip([
@@ -463,15 +464,17 @@ test('local filename mismatch is fail-closed ARTIFACT_BAD_ZIP', () => {
   ]), ERROR_CODES.BAD_ZIP);
 });
 
-test('unlisted files/ payload is rejected', () => {
-  const m = manifest({ resultType: 'files', patch: null, files: ['docs/a.txt'] });
-  expectCode(makeZip([
+test('manifest files list does not gate extra safe payloads', () => {
+  const m = { requestId: REQUEST_ID, files: ['docs/a.txt'] };
+  const result = decision(makeZip([
     manifestEntry(m),
     { name: 'files/docs/a.txt', data: 'a' },
     { name: 'files/docs/extra.txt', data: 'extra' },
-  ]), ERROR_CODES.MANIFEST_INVALID);
+  ]));
+  assert.equal(result.ok, true, JSON.stringify(result, null, 2));
 });
 
-test('unexpected root payload is rejected', () => {
-  expectCode(makeZip([manifestEntry(), patchEntry(), { name: 'surprise.txt', data: 'x' }]), ERROR_CODES.SCOPE_VIOLATION);
+test('safe root payload is allowed', () => {
+  const result = decision(makeZip([{ name: 'surprise.txt', data: 'x' }]));
+  assert.equal(result.ok, true, JSON.stringify(result, null, 2));
 });

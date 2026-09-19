@@ -100,6 +100,14 @@ def valid_zip_bytes():
     return buffer.getvalue()
 
 
+def zip_without_manifest_bytes():
+    from io import BytesIO
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_STORED) as archive:
+        archive.writestr("result.md", "NO_MANIFEST_OK\n")
+    return buffer.getvalue()
+
+
 class FakeControl:
     def __init__(self, page):
         self.page = page
@@ -414,6 +422,19 @@ class ArtifactDownloadTests(unittest.TestCase):
         self.assertTrue((final / "metadata.json").is_file())
         self.assertFalse((root / ".staging" / REQ).exists())
 
+    def test_result_without_manifest_is_durable(self):
+        page = FakePage(FakeDownload(payload=zip_without_manifest_bytes()))
+        result, _, root = self.run_download(page=page, validator=validator_ok)
+        self.assertEqual(result["code"], module.RESULT_DURABLE)
+        final = root / REQ
+        self.assertTrue((final / "result.zip").is_file())
+        self.assertFalse((final / "manifest.json").exists())
+        self.assertTrue((final / "validation.json").is_file())
+        self.assertTrue((final / "metadata.json").is_file())
+        self.assertIsNone(result["details"]["manifest"])
+        metadata = json.loads((final / "metadata.json").read_text(encoding="utf-8"))
+        self.assertFalse(metadata["manifestPresent"])
+
     def test_result_zip_hash_matches_returned_sha(self):
         result, _, root = self.run_download()
         actual = hashlib.sha256((root / REQ / "result.zip").read_bytes()).hexdigest()
@@ -495,19 +516,19 @@ class ArtifactDownloadTests(unittest.TestCase):
         self.assertEqual(result["code"], module.DOWNLOAD_PROOF_INVALID)
         self.assertEqual(page.clicks, 0)
 
-    def test_manifest_identity_mismatch_after_fake_validator_pass_is_rejected(self):
-        bad_bytes = valid_zip_bytes()
+    def test_manifest_repository_mismatch_does_not_block_durable_transport(self):
+        original = valid_zip_bytes()
         from io import BytesIO
         out = BytesIO()
-        with zipfile.ZipFile(BytesIO(bad_bytes), "r") as src, zipfile.ZipFile(out, "w", zipfile.ZIP_STORED) as dst:
+        with zipfile.ZipFile(BytesIO(original), "r") as src, zipfile.ZipFile(out, "w", zipfile.ZIP_STORED) as dst:
             manifest = json.loads(src.read("manifest.json"))
-            manifest["repository"] = "owner/evil"
+            manifest["repository"] = "owner/other"
             dst.writestr("manifest.json", json.dumps(manifest))
             dst.writestr("files/diagnostics/wp007-probe.txt", "WP007_OK\n")
         page = FakePage(FakeDownload(payload=out.getvalue()))
         result, _, root = self.run_download(page=page, validator=validator_ok)
-        self.assertEqual(result["code"], module.ARTIFACT_INVALID)
-        self.assertFalse((root / REQ).exists())
+        self.assertEqual(result["code"], module.RESULT_DURABLE)
+        self.assertTrue((root / REQ / "result.zip").is_file())
 
 
 if __name__ == "__main__":

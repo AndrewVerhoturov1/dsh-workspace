@@ -97,8 +97,9 @@ returns `DIRECT_CHAT_REFERENCE_UNAVAILABLE` before Send.
   as `ALREADY_APPLIED` without creating an empty commit or PR.
 - The dedicated Chrome profile is `%LOCALAPPDATA%\DSH\Postman\browser-profile`.
 - The browser process is externally owned and is not closed by the worker.
-- ZIPs are accepted only after the existing artifact validator proves trusted
-  request/repository/baseCommit/filename/path metadata.
+- ZIPs are accepted after exact request/filename correlation plus archive safety,
+  integrity, SHA-256 and size/ratio limits. `manifest.json` is optional; repository,
+  baseCommit, resultType, patch semantics and repository scope are not normal transport gates.
 
 ## Durable result and explicit finalization
 

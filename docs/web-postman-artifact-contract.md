@@ -93,60 +93,49 @@ Artifact принимается только из assistant turn, который
 
 ## 5. ZIP structure
 
-Result ZIP использует manifest и payload, достаточный для детерминированной проверки результата.
-
-Типовая структура:
+Normal Postman не навязывает внутреннюю schema результата. ZIP может содержать любые
+нужные deliverables в естественной безопасной структуре, например:
 
 ```text
 POSTMAN_<requestId>_RESULT.zip
-├── manifest.json
-├── changes.patch          # только для patch/hybrid
-└── files/
-    └── <deliverables>
+├── result.md
+├── notes.txt
+└── assets/
+    └── image.png
 ```
 
-Для `resultType=artifact` `files/` содержит результат задачи (например `files/result.md`)
-и не моделирует repository target paths. Для `files`/`hybrid_patch` `files/` сохраняет
-прежнюю repo-relative semantics.
-
-Разрешённые ZIP `resultType`: `artifact`, `patch`, `files`, `hybrid_patch`.
-`artifact` — normal universal result для текста, исследования, отчётов, медиа и любых
-произвольных deliverables: `patch` равен `null`, а `files[]` содержит минимум один
-безопасный путь deliverable внутри ZIP. Repository `allowedPaths`/`forbiddenPaths` к
-таким путям не применяются; общие identity, path-safety и archive-limit checks сохраняются.
-`patch`/`files`/`hybrid_patch` остаются совместимыми с прежней repository scope semantics.
+`files/`, `changes.patch`, `resultType`, `patch` и `files[]` не обязательны для transport.
+`manifest.json` также необязателен. Если он присутствует, unknown/extra fields допустимы,
+а `protocolVersion`, `repository`, `baseCommit`, `resultType`, `patch` и `files` являются
+информационными для normal transport. Единственный manifest hard reject: присутствующий
+строковый `requestId` явно не совпадает с trusted current REQ.
 
 Содержимое ZIP является proposed result; для code-result это proposed implementation.
 Сам факт скачивания ZIP не разрешает автоматически изменять рабочий repository.
+Repository/application validation выполняется только на отдельной explicit downstream boundary.
 
 ## 6. Trust boundaries
 
-Trusted значения приходят из локального request context и Direct Postman state.
+Trusted request identity приходит из локального request context и browser correlation proof,
+а не из содержимого ZIP.
 
-Не считать authority значения, полученные только из:
-
-- assistant text;
-- имени attachment без correlation proof;
-- `manifest.json` без сравнения с trusted request context;
-- заголовка ChatGPT conversation;
-- произвольного текста внутри ZIP.
-
-Как минимум должны коррелировать:
+Normal transport доказывает:
 
 ```text
-requestId
-repository
-baseCommit
-expected artifact filename
-assistant turn
-manifest identity
+exact current REQ in correlated user/assistant flow
+exact expected downloadable filename
+one browser download event
+actual ZIP SHA-256
+safe archive structure and limits
 ```
+
+`manifest.json` не является authority для repository/application decisions. Malformed,
+non-object или отсутствующий manifest не превращает безопасно скачанный ZIP в transport failure.
 
 ## 7. Path safety
 
-Для `patch`, `files` и `hybrid_patch` ZIP и patch не должны писать за пределы разрешённого
-repository scope. У `artifact` deliverable paths не являются repository target paths, но
-остаются subject to общей path-safety validation.
+Каждый archive entry остаётся subject to structural path-safety validation независимо от
+содержимого или назначения результата.
 
 Недопустимы:
 
@@ -155,26 +144,13 @@ repository scope. У `artifact` deliverable paths не являются reposito
 - UNC paths;
 - `..` traversal;
 - NTFS alternate data streams;
-- symlink/reparse/special entries, если validator не разрешает их явно;
+- symlink/reparse/special entries;
+- duplicate paths;
 - normalized/case-insensitive collisions;
-- Windows reserved path names;
-- forbidden runtime/user paths.
+- Windows reserved path names и другие extraction-unsafe path forms.
 
-К runtime/user paths относятся, в частности:
-
-```text
-.git/
-.credentials.yaml
-codex-oauth.json
-settings.yaml
-attachments/
-sessions/
-storages/
-backup/
-profiles/web/node_modules/
-```
-
-Точный список validator rules определяется текущим кодом `postman/web/` и `postman/direct/`.
+Repository `allowedPaths` / `forbiddenPaths` и содержимое unified diff не проверяются на
+normal transport boundary, потому что RESULT_DURABLE не применяет ZIP к repository.
 
 ## 8. Size and archive safety
 
