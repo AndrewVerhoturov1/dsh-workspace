@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Merge already-reviewed task PRs and perform lightweight best-effort cleanup.
+"""Squash-merge already-reviewed task PRs into preview and clean temp resources.
 
-This is deliberately an executor, not a reviewer. It does not run tests, inspect
-PR diffs, re-check CI, or rebuild the user's merge decision. It performs squash
-merge for PRs that the caller has already approved, then cleans the matching
-worktree/branches when doing so is obviously safe.
+This executor is deliberately not a reviewer. It does not run tests, inspect PR
+Diffs, re-check CI, or rebuild the user's merge decision. It only accepts PRs
+whose base is the permanent integration branch ``preview`` and it protects both
+permanent local worktrees from cleanup.
 """
 from __future__ import annotations
 
@@ -15,14 +15,16 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
-import sys
 from typing import Any
+from urllib.parse import urlparse
 
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 DEFAULT_REPOSITORY = "AndrewVerhoturov1/dsh-workspace"
 DEFAULT_REPO_ROOT = Path(r"C:\Users\andre\.dsh")
+DEFAULT_PREVIEW_ROOT = Path(r"C:\Users\andre\.dsh-preview")
 WINDOWS_GH_PROGRAM_FILES = Path(r"C:\Program Files\GitHub CLI\gh.exe")
 GH_NOT_FOUND_HINT = "Установите GitHub CLI или задайте DSH_GH_PATH, указывающий на существующий gh.exe."
+PERMANENT_BRANCHES = {"main", "preview"}
 
 
 class FinalizeError(RuntimeError):
@@ -96,16 +98,12 @@ def resolve_gh_executable(
     raise FinalizeError(
         "FINALIZE_GH_NOT_FOUND",
         f"GitHub CLI (gh.exe) не найден. {GH_NOT_FOUND_HINT}",
-        details={
-            "executable": "gh",
-            "candidates": attempts,
-            "hint": GH_NOT_FOUND_HINT,
-        },
+        details={"executable": "gh", "candidates": attempts, "hint": GH_NOT_FOUND_HINT},
     )
 
 
 def run_process(args: list[str], *, cwd: Path | None = None, timeout: int = 120) -> subprocess.CompletedProcess[str]:
-    """Run argv directly, without a shell and without a visible console window."""
+    """Run argv directly, without shell and without a visible console window."""
     try:
         return subprocess.run(
             args,
@@ -123,10 +121,7 @@ def run_process(args: list[str], *, cwd: Path | None = None, timeout: int = 120)
         raise FinalizeError(
             "FINALIZE_EXECUTABLE_NOT_FOUND",
             f"Не найден исполняемый файл: {executable}",
-            details={
-                "executable": executable,
-                "argv": list(args),
-            },
+            details={"executable": executable, "argv": list(args)},
         ) from exc
 
 
@@ -190,6 +185,40 @@ def resolve_repo_root(repo_root: Path) -> Path:
     return root
 
 
+
+def normalize_github_repository_url(url: str) -> str | None:
+    value = url.strip().replace("\\", "/").rstrip("/")
+    if value.lower().endswith(".git"):
+        value = value[:-4]
+    lower = value.lower()
+    if lower.startswith("git@github.com:"):
+        repo_path = value.split(":", 1)[1]
+    else:
+        parsed = urlparse(value)
+        if (parsed.hostname or "").lower() != "github.com":
+            return None
+        repo_path = parsed.path.lstrip("/")
+    normalized = repo_path.strip("/").lower()
+    parts = normalized.split("/")
+    if len(parts) != 2 or not all(parts):
+        return None
+    return normalized
+
+
+def assert_origin_repository(repo_root: Path, repository: str) -> str:
+    cp = git(repo_root, "remote", "get-url", "origin")
+    _require_ok(cp, "FINALIZE_ORIGIN_READ_FAILED", "cannot read origin URL")
+    url = cp.stdout.strip()
+    actual = normalize_github_repository_url(url)
+    expected = repository.lower()
+    if actual != expected:
+        raise FinalizeError(
+            "FINALIZE_ORIGIN_REPOSITORY_MISMATCH",
+            "origin does not point to the expected GitHub repository",
+            details={"expectedRepository": repository, "actualRepository": actual, "originUrl": url},
+        )
+    return url
+
 def parse_worktrees(text: str) -> list[dict[str, str]]:
     result: list[dict[str, str]] = []
     current: dict[str, str] = {}
@@ -234,8 +263,8 @@ def remote_branch_sha(repo_root: Path, branch: str) -> str | None:
     return line.split()[0].lower()
 
 
-def origin_main_sha(repo_root: Path) -> str | None:
-    cp = git(repo_root, "rev-parse", "refs/remotes/origin/main")
+def origin_preview_sha(repo_root: Path) -> str | None:
+    cp = git(repo_root, "rev-parse", "refs/remotes/origin/preview")
     if cp.returncode != 0:
         return None
     value = cp.stdout.strip().lower()
@@ -253,6 +282,7 @@ def cleanup_branch_resources(
     expected_head: str,
     same_repository: bool,
     dry_run: bool,
+    protected_worktrees: set[Path],
 ) -> dict[str, Any]:
     warnings: list[dict[str, Any]] = []
     result: dict[str, Any] = {
@@ -269,32 +299,38 @@ def cleanup_branch_resources(
     paths = worktrees_for_branch(repo_root, branch)
     remaining_worktree = False
     for path in paths:
-        if path == repo_root:
+        resolved_path = path.resolve()
+        if resolved_path in protected_worktrees:
             remaining_worktree = True
-            _warn(warnings, "FINALIZE_PRIMARY_WORKTREE_PROTECTED", "primary repository worktree is never removed", path=str(path))
+            _warn(
+                warnings,
+                "FINALIZE_PERMANENT_WORKTREE_PROTECTED",
+                "permanent repository worktree is never removed",
+                path=str(resolved_path),
+            )
             continue
-        status = git(path, "status", "--porcelain", "--untracked-files=all")
+        status = git(resolved_path, "status", "--porcelain", "--untracked-files=all")
         if status.returncode != 0:
             remaining_worktree = True
-            _warn(warnings, "FINALIZE_WORKTREE_STATUS_UNKNOWN", "could not inspect worktree; leaving it untouched", path=str(path))
+            _warn(warnings, "FINALIZE_WORKTREE_STATUS_UNKNOWN", "could not inspect worktree; leaving it untouched", path=str(resolved_path))
             continue
         if status.stdout.strip():
             remaining_worktree = True
-            _warn(warnings, "FINALIZE_DIRTY_WORKTREE_SKIPPED", "dirty worktree left untouched", path=str(path))
+            _warn(warnings, "FINALIZE_DIRTY_WORKTREE_SKIPPED", "dirty worktree left untouched", path=str(resolved_path))
             continue
         if dry_run:
-            result["worktreesRemoved"].append(str(path))
+            result["worktreesRemoved"].append(str(resolved_path))
             continue
-        removed = git(repo_root, "worktree", "remove", str(path))
+        removed = git(repo_root, "worktree", "remove", str(resolved_path))
         if removed.returncode == 0:
-            result["worktreesRemoved"].append(str(path))
+            result["worktreesRemoved"].append(str(resolved_path))
         else:
             remaining_worktree = True
             _warn(
                 warnings,
                 "FINALIZE_WORKTREE_REMOVE_FAILED",
                 "clean worktree could not be removed; continuing best-effort cleanup",
-                path=str(path),
+                path=str(resolved_path),
                 stderr=removed.stderr[-2000:],
             )
 
@@ -350,6 +386,7 @@ def cleanup_branch_resources(
 
 def finalize_one(
     repo_root: Path,
+    preview_root: Path,
     repository: str,
     number: int,
     *,
@@ -367,12 +404,15 @@ def finalize_one(
     head_repo_obj = head_obj.get("repo") if isinstance(head_obj.get("repo"), dict) else {}
     head_repo = head_repo_obj.get("full_name")
 
-    if base != "main":
-        raise FinalizeError("FINALIZE_BASE_NOT_MAIN", f"PR #{number} targets {base!r}, not main")
+    if base != "preview":
+        raise FinalizeError("FINALIZE_BASE_NOT_PREVIEW", f"PR #{number} targets {base!r}, not preview")
     if not isinstance(head, str) or not head or not head_sha:
         raise FinalizeError("FINALIZE_PR_IDENTITY_INVALID", f"PR #{number} has incomplete head identity")
-    if head == "main":
-        raise FinalizeError("FINALIZE_MAIN_BRANCH_PROTECTED", "refusing to treat main as a temporary PR branch")
+    if head in PERMANENT_BRANCHES:
+        raise FinalizeError(
+            "FINALIZE_PERMANENT_BRANCH_PROTECTED",
+            f"refusing to treat permanent branch {head!r} as a temporary task PR branch",
+        )
 
     already_merged = bool(merged_at)
     if not already_merged and state != "open":
@@ -383,12 +423,12 @@ def finalize_one(
         merged_now = not already_merged
     elif already_merged:
         merged_now = False
+        merge_sha = str(pr.get("merge_commit_sha") or "").lower() or None
     else:
         merged = merge_squash(repository, number, cwd=repo_root, gh_executable=resolved_gh)
         merged_now = True
         merge_sha = str(merged.get("sha") or "").lower() or None
 
-    # Refresh only refs; never checkout/reset/stash/clean the user's primary worktree.
     fetch_warning: dict[str, Any] | None = None
     if not dry_run:
         fetched = git(repo_root, "fetch", "--prune", "origin", timeout=180)
@@ -399,12 +439,14 @@ def finalize_one(
                 "stderr": fetched.stderr[-2000:],
             }
 
+    protected_worktrees = {repo_root.resolve(), preview_root.resolve()}
     cleanup = cleanup_branch_resources(
         repo_root,
         branch=head,
         expected_head=head_sha,
         same_repository=(head_repo == repository),
         dry_run=dry_run,
+        protected_worktrees=protected_worktrees,
     )
     if fetch_warning:
         cleanup["warnings"].insert(0, fetch_warning)
@@ -419,23 +461,34 @@ def finalize_one(
         "mergedNow": merged_now,
         "mergeSha": merge_sha,
         "cleanup": cleanup,
-        "originMain": None if dry_run else origin_main_sha(repo_root),
+        "originPreview": None if dry_run else origin_preview_sha(repo_root),
     }
 
 
 def finalize_many(
     *,
     repo_root: Path,
+    preview_root: Path,
     repository: str,
     pr_numbers: list[int],
     dry_run: bool = False,
 ) -> dict[str, Any]:
     root = resolve_repo_root(repo_root)
+    preview = preview_root.resolve()
+    origin_url = assert_origin_repository(root, repository)
     gh_executable = resolve_gh_executable()
     results: list[dict[str, Any]] = []
     for number in pr_numbers:
-        # Each PR is re-read after the previous merge/fetch. No stale batch snapshot.
-        results.append(finalize_one(root, repository, number, dry_run=dry_run, gh_executable=gh_executable))
+        results.append(
+            finalize_one(
+                root,
+                preview,
+                repository,
+                number,
+                dry_run=dry_run,
+                gh_executable=gh_executable,
+            )
+        )
 
     warnings = [warning for item in results for warning in item["cleanup"]["warnings"]]
     code = "TASK_PRS_DRY_RUN" if dry_run else ("TASK_PRS_FINALIZED_WITH_WARNINGS" if warnings else "TASK_PRS_FINALIZED")
@@ -444,18 +497,23 @@ def finalize_many(
         "code": code,
         "repository": repository,
         "repoRoot": str(root),
+        "previewRoot": str(preview),
+        "originUrl": origin_url,
+        "targetBranch": "preview",
         "mergeMethod": "squash",
         "prNumbers": pr_numbers,
         "results": results,
         "warnings": warnings,
         "mainWorkingTreeTouched": False,
+        "previewWorkingTreeTouched": False,
     }
 
 
 def parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Squash-merge already-reviewed PRs and clean their temporary Git resources")
+    p = argparse.ArgumentParser(description="Squash-merge already-reviewed task PRs into preview and clean temporary Git resources")
     p.add_argument("--pr", type=int, action="append", required=True, dest="prs", help="PR number; repeat for multiple PRs")
     p.add_argument("--repo-root", type=Path, default=DEFAULT_REPO_ROOT)
+    p.add_argument("--preview-root", type=Path, default=DEFAULT_PREVIEW_ROOT)
     p.add_argument("--repository", default=DEFAULT_REPOSITORY)
     p.add_argument("--what-if", action="store_true", help="show intended actions without merge/delete")
     return p
@@ -464,20 +522,45 @@ def parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
-        result = finalize_many(repo_root=args.repo_root, repository=args.repository, pr_numbers=args.prs, dry_run=args.what_if)
+        result = finalize_many(
+            repo_root=args.repo_root,
+            preview_root=args.preview_root,
+            repository=args.repository,
+            pr_numbers=args.prs,
+            dry_run=args.what_if,
+        )
         print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
         return 0
     except FinalizeError as exc:
         print(
             json.dumps(
-                {"ok": False, "code": exc.code, "error": str(exc), "details": exc.details, "mainWorkingTreeTouched": False},
+                {
+                    "ok": False,
+                    "code": exc.code,
+                    "error": str(exc),
+                    "details": exc.details,
+                    "mainWorkingTreeTouched": False,
+                    "previewWorkingTreeTouched": False,
+                },
                 ensure_ascii=False,
                 separators=(",", ":"),
             )
         )
         return 2
     except Exception as exc:
-        print(json.dumps({"ok": False, "code": "FINALIZE_INTERNAL_ERROR", "error": str(exc), "mainWorkingTreeTouched": False}, ensure_ascii=False, separators=(",", ":")))
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "code": "FINALIZE_INTERNAL_ERROR",
+                    "error": str(exc),
+                    "mainWorkingTreeTouched": False,
+                    "previewWorkingTreeTouched": False,
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        )
         return 3
 
 
