@@ -13,7 +13,7 @@ description: >-
 
 # Delegate via Postman — Direct Production
 
-`DIRECT_POSTMAN_SKILL_VERSION: 15`
+`DIRECT_POSTMAN_SKILL_VERSION: 16`
 
 Исторический baseline до v12: `DIRECT_POSTMAN_SKILL_VERSION: 11`.
 
@@ -330,7 +330,7 @@ REQ_YYYYMMDDTHHMMSSZ_NNNN
 ```powershell
 $stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMdd'T'HHmmss'Z'")
 $suffix = (Get-Random -Minimum 0 -Maximum 10000).ToString("0000")
-$requestId = "REQ_${stamp}_${suffix}"
+$requestId = 'REQ_' + $stamp + '_' + $suffix
 ```
 
 До первого запуска bridge можно убедиться, что direct state ещё не существует:
@@ -395,6 +395,36 @@ polling. Background допустим только если конкретный 
 это всё ещё тот же единственный invocation. Ждать завершения именно этого process,
 а не запускать новый.
 
+### Контракт orchestration-вызова `tools.pwsh`
+
+Для normal `@Postman` invocation вызывать `tools.pwsh` без поля `workdir`:
+инструмент должен использовать текущий workspace процесса. Не передавать
+hardcoded Windows-путь в `workdir`. Если отдельный рабочий каталог всё же нужен,
+использовать forward-slash form или корректно экранированную строку JavaScript;
+никогда не помещать `C:\Users\Andrew\.dsh` с одиночными обратными слешами
+в raw JavaScript string.
+
+Не заключать PowerShell `$stamp`/`$suffix` в `${stamp}`/`${suffix}` внутри
+JavaScript template literal: PTC/JavaScript попытается вычислить эти выражения.
+Безопасный production-шаблон строит команду массивом обычных строк, использует
+PowerShell concatenation для REQ и не задаёт `workdir`:
+
+```typescript
+const command = [
+  '$workspace = (Get-Location).Path',
+  "$bridge = Join-Path $workspace 'postman\\direct\\postman.ps1'",
+  "$stamp = (Get-Date).ToUniversalTime().ToString(\"yyyyMMdd'T'HHmmss'Z'\")",
+  "$suffix = (Get-Random -Minimum 0 -Maximum 10000).ToString('0000')",
+  "$requestId = 'REQ_' + $stamp + '_' + $suffix",
+  '$jsonText = & $bridge -RequestId $requestId -Task $payload',
+].join('\n');
+
+const result = await tools.pwsh({
+  command,
+  description: 'Выполнить продолжение через Direct Postman',
+  timeoutMs: 900000,
+});
+```
 
 ### Внутренний link-only transport contract
 
