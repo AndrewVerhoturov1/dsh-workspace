@@ -8,15 +8,15 @@ const { spawn } = require('node:child_process')
 
 const name = 'dsh-restart-web'
 const inject = ['webServer']
-const CANONICAL_PORT = 4173
-const CANONICAL_PROFILE = 'web'
+const CANONICAL_PORT = Number(process.env.DSH_PORT || 4173)
+const CANONICAL_PROFILE = process.env.DSH_PROFILE || 'web'
 const CANONICAL_WORKING_DIRECTORY = process.env.DSH_WORKING_DIRECTORY || 'C:\\Users\\andre\\.dsh'
 const LAUNCHER_ROOT = process.env.DSH_LAUNCHER_ROOT || path.join(
   process.env.LOCALAPPDATA || path.join(process.env.USERPROFILE || 'C:\\Users\\andre', 'AppData', 'Local'),
   'DeepSeekHarnessLauncher',
 )
 const CONTROLLER_SOURCE = path.join(LAUNCHER_ROOT, 'dsh-process-controller.js')
-const RESTART_HELPER_SOURCE = path.join(LAUNCHER_ROOT, 'Web-Restart.vbs')
+const RESTART_HELPER_SOURCE = process.env.DSH_RESTART_HELPER || path.join(LAUNCHER_ROOT, 'Web-Restart.vbs')
 
 function controllerPath() {
   const configured = process.env.DSH_PROCESS_CONTROLLER

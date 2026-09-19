@@ -231,3 +231,42 @@ feature/fix ──PR──▶ preview ──PR/merge commit──▶ main
 
 main ───────────────────▶ C:\Users\andre\.dsh
 ```
+
+## 13. Локальный запуск Harness из `preview`
+
+`PREVIEW_HARNESS_LAUNCHER_VERSION: 1`
+
+Main и preview запускаются как два независимых локальных экземпляра:
+
+```text
+main    C:\Users\andre\.dsh          http://127.0.0.1:4173/
+preview C:\Users\andre\.dsh-preview  http://127.0.0.1:4174/
+```
+
+После первого merge launcher-патча в `preview` и обновления постоянного preview worktree один раз подготовить зависимости:
+
+```powershell
+& 'C:\Users\andre\.dsh-preview\tools\deepseek-harness-launcher\Prepare-DSH-Preview.ps1'
+```
+
+Опционально, только по явному решению пользователя, можно сделать одноразовую локальную копию `settings.yaml`, `.credentials.yaml` и `codex-oauth.json` из main без перезаписи уже существующих preview-файлов:
+
+```powershell
+& 'C:\Users\andre\.dsh-preview\tools\deepseek-harness-launcher\Prepare-DSH-Preview.ps1' -SeedLocalConfig
+```
+
+`SeedLocalConfig` не копирует `sessions/`, `storages/`, `attachments/`, журналы и другие runtime/user-data.
+
+Запуск, остановка и перезапуск preview:
+
+```text
+tools\deepseek-harness-launcher\start-dsh-preview.bat
+tools\deepseek-harness-launcher\stop-dsh-preview.bat
+tools\deepseek-harness-launcher\restart-dsh-preview.bat
+```
+
+Preview launcher использует отдельные `cwd`, port `4174`, mutex и launcher state в `%LOCALAPPDATA%\DeepSeekHarnessLauncher-Preview`. Main launcher сохраняет defaults `C:\Users\andre\.dsh` + `4173`.
+
+Контроллер передаёт точную runtime identity (`cwd/profile/port/launcher-root/controller/restart-helper`) в дочерний DSH process. Поэтому встроенный `dsh-restart-web` наследует identity текущего экземпляра: Restart из preview остаётся в preview и не должен перезапускать main.
+
+Подробности: [`tools/deepseek-harness-launcher/PREVIEW-LAUNCHER.md`](../../tools/deepseek-harness-launcher/PREVIEW-LAUNCHER.md).
