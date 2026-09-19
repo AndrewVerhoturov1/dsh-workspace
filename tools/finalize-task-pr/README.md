@@ -1,15 +1,14 @@
 # finalize-task-pr
 
-Простой исполнитель уже принятого решения о merge.
+Исполнитель уже принятого решения о merge обычного task PR **в `preview`**.
 
-Он **не является reviewer** и намеренно не повторяет проверки, которые модель уже выполнила до команды пользователя «мердж»:
+Он не является reviewer и намеренно не повторяет проверки, которые модель уже выполнила до команды пользователя «мердж»:
 
 - не запускает тесты;
 - не проверяет CI;
 - не читает diff PR;
 - не пересматривает scope;
-- не проверяет старые Postman receipts;
-- не строит отдельный approval workflow.
+- не проверяет старые Postman receipts.
 
 ## Обычный вызов
 
@@ -23,9 +22,7 @@
 & 'C:\Users\andre\.dsh\tools\finalize-task-pr\finalize_task_pr.ps1' -PrNumber 97,98
 ```
 
-Каждый следующий PR читается заново уже после merge/fetch предыдущего.
-
-Dry-run:
+Dry-run только по явному запросу:
 
 ```powershell
 & 'C:\Users\andre\.dsh\tools\finalize-task-pr\finalize_task_pr.ps1' -PrNumber 98 -WhatIf
@@ -34,38 +31,49 @@ Dry-run:
 ## Что делает
 
 1. Читает exact PR через GitHub CLI.
-2. Проверяет только минимальные аварийные условия: PR относится к `main`, имеет нормальную head-ветку и либо открыт, либо уже merged.
-3. Выполняет squash merge через GitHub API.
-4. Делает только `git fetch --prune origin` — локальный `main`/working tree не checkout/update/reset.
-5. Best-effort удаляет clean worktree этой head-ветки.
-6. Удаляет локальную head-ветку, только если она всё ещё указывает на exact PR head SHA и не используется оставшимся worktree.
-7. Удаляет remote head-ветку, только если она всё ещё указывает на exact PR head SHA.
-8. Возвращает один JSON.
+2. Требует `base=preview`.
+3. Запрещает использовать `main` или `preview` как временную head branch.
+4. Выполняет squash merge через GitHub API.
+5. Делает только `git fetch --prune origin` — локальные permanent worktree не checkout/update/reset.
+6. Best-effort удаляет clean secondary worktree временной head branch.
+7. Удаляет локальную временную head branch, только если она всё ещё указывает на exact PR head SHA и не используется оставшимся worktree.
+8. Удаляет remote временную head branch, только если она всё ещё указывает на exact PR head SHA.
+9. Возвращает JSON с актуальным `originPreview`.
 
-## Философия
+## Постоянные worktree защищены
 
-После того как модель уже решила, что PR готов к merge, этот скрипт **не должен заново доказывать это решение**.
+Никогда не удалять и не очищать:
 
-Cleanup best-effort:
+```text
+C:\Users\andre\.dsh
+C:\Users\andre\.dsh-preview
+```
 
-- ветка уже отсутствует → нормально;
-- worktree уже отсутствует → нормально;
-- remote branch уже удалена → нормально;
-- dirty worktree → оставить и вернуть warning;
-- ветка после проверки кем-то сдвинута на другой SHA → оставить и вернуть warning.
+Даже если из-за ручной ошибки временная branch окажется checkout в одном из этих путей, executor оставит worktree и branch с warning.
 
-Merge failure — реальная ошибка и останавливает последовательность.
-Cleanup warning после успешного merge не откатывает merge и не мешает перейти к следующему PR.
+## Cleanup — best effort
 
-## Чего скрипт никогда не делает
+Нормальные состояния:
+
+- worktree уже отсутствует;
+- local branch уже отсутствует;
+- remote branch уже отсутствует;
+- PR уже merged.
+
+Dirty secondary worktree оставляется нетронутым с warning.
+
+Branch, которая после review сдвинулась на другой SHA, не удаляется.
+
+Cleanup warning не превращает уже успешный merge в failure.
+
+## Чего executor никогда не делает
 
 - `git reset --hard`;
 - `git stash`;
 - `git clean`;
 - force push;
-- checkout/switch локального `main`;
-- обновление файлов dirty primary worktree;
-- удаление dirty worktree;
-- удаление `C:\Users\andre\.dsh` как worktree.
+- checkout/switch `main` или `preview`;
+- обновление файлов dirty permanent worktree;
+- удаление permanent worktree.
 
-Если у результата Postman есть Harness Result Workspace/Session, модель должна закрыть/снять эту UI-регистрацию своим штатным инструментом. Этот скрипт отвечает только за GitHub merge и Git branch/worktree cleanup.
+Promotion `preview → main` этим инструментом запрещён. Для release используется `tools/promote-preview-to-main/promote_preview_to_main.ps1`.

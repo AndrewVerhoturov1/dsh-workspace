@@ -1,0 +1,52 @@
+name: Preview Branch Policy
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  preview-branch-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate PR branch route
+        shell: bash
+        env:
+          BASE_BRANCH: ${{ github.base_ref }}
+          HEAD_BRANCH: ${{ github.head_ref }}
+          PR_BODY: ${{ github.event.pull_request.body || '' }}
+        run: |
+          set -euo pipefail
+
+          echo "Base: $BASE_BRANCH"
+          echo "Head: $HEAD_BRANCH"
+
+          if [[ "$BASE_BRANCH" == "preview" ]]; then
+            if [[ "$HEAD_BRANCH" == "main" || "$HEAD_BRANCH" == "preview" ]]; then
+              echo "FAIL: task PR into preview must come from a temporary branch, not '$HEAD_BRANCH'." >&2
+              exit 1
+            fi
+            echo "PASS: temporary task branch targets preview."
+            exit 0
+          fi
+
+          if [[ "$BASE_BRANCH" == "main" ]]; then
+            if [[ "$HEAD_BRANCH" != "preview" ]]; then
+              echo "FAIL: main accepts only promotion PRs from preview." >&2
+              echo "Retarget ordinary task PRs to preview." >&2
+              exit 1
+            fi
+
+            if ! printf '%s\n' "$PR_BODY" | grep -Eiq '^MAIN_GO_APPROVED_BY_USER:[[:space:]]*yes[[:space:]]*$'; then
+              echo "FAIL: preview -> main requires explicit marker MAIN_GO_APPROVED_BY_USER: yes." >&2
+              exit 1
+            fi
+
+            echo "PASS: preview -> main promotion has explicit user-GO marker."
+            exit 0
+          fi
+
+          echo "FAIL: unsupported PR base '$BASE_BRANCH'. Canonical bases are preview for tasks and main for preview promotion." >&2
+          exit 1

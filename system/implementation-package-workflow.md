@@ -16,7 +16,7 @@ language: ru
 
 - **ChatGPT** отвечает за архитектуру и содержимое implementation package.
 - **Luna** отвечает за безопасное механическое внедрение и проверку.
-- **Пользователь** принимает решение о merge.
+- **Пользователь** принимает решение о merge и отдельно разрешает promotion `preview → main`.
 
 ## 2. Область применения
 
@@ -43,10 +43,11 @@ ChatGPT обязан:
    - готовый patch, если он надёжно применим;
    - либо deterministic applicator, если patch хрупок или изменение сложное.
 5. Зафиксировать compatibility guards.
-6. Подготовить test plan.
-7. Подготовить инструкцию Luna.
-8. Упаковать всё в единый ZIP.
-9. Не перекладывать проектирование, исправление или адаптацию реализации на Luna.
+6. Зафиксировать exact `baseBranch` и `packageBase`.
+7. Подготовить test plan.
+8. Подготовить инструкцию Luna.
+9. Упаковать всё в единый ZIP.
+10. Не перекладывать проектирование, исправление или адаптацию реализации на Luna.
 
 Если implementation package несовместим с текущим repository state, пакет возвращается ChatGPT на пересборку.
 
@@ -59,23 +60,26 @@ Luna обязана:
 3. Не исправлять package самостоятельно.
 4. Проверить repository state.
 5. Использовать отдельный clean implementation branch/worktree.
-6. Выполнить package `check`/dry-run до записи.
-7. Применить package только после успешной проверки.
-8. Запустить указанные targeted и full regression tests.
-9. Выполнить `git diff --check`.
-10. При PASS:
+6. Создать обычную implementation branch от exact `origin/preview`, если manifest не объявляет узкое migration/bootstrap исключение с другой базой.
+7. Выполнить package `check`/dry-run до записи.
+8. Применить package только после успешной проверки.
+9. Запустить указанные targeted и full regression tests.
+10. Выполнить `git diff --check`.
+11. При PASS:
     - commit;
     - push;
-    - открыть PR в `main`.
-11. Не выполнять merge без отдельного явного разрешения пользователя.
-12. При реальной несовместимости или regression — STOP и точный отчёт.
+    - открыть PR в `preview` для обычной implementation task;
+    - открыть PR в явно объявленную manifest базу только для migration/bootstrap пакета, подготовленного именно для такой операции.
+12. Не выполнять merge без отдельного явного разрешения пользователя.
+13. При реальной несовместимости или regression — STOP и точный отчёт.
 
 ### 3.3. Пользователь
 
 Пользователь:
 
 - принимает или отклоняет результат;
-- отдельно разрешает merge;
+- отдельно разрешает merge task PR в `preview`;
+- отдельно разрешает promotion `preview → main`;
 - при необходимости разрешает исключение из workflow.
 
 ## 4. Структура implementation package
@@ -90,6 +94,7 @@ PACKAGE.zip
 ├─ manifest.json
 ├─ TEST_PLAN.md
 ├─ apply_package.py
+├─ files/
 ├─ patches/
 └─ tests/
 ```
@@ -104,7 +109,9 @@ PACKAGE.zip
 {
   "package": "PACKAGE_NAME",
   "repository": "AndrewVerhoturov1/dsh-workspace",
+  "baseBranch": "preview",
   "packageBase": "<full SHA>",
+  "prBase": "preview",
   "delivery": "patch|hash-guarded-applicator|exact-files",
   "targetFiles": [],
   "expectedTargetBlobSha1": {},
@@ -114,13 +121,15 @@ PACKAGE.zip
 
 Для сложных изменений рекомендуется фиксировать exact Git blob SHA каждого исходного target-файла.
 
-## 6. Совместимость с продвинувшимся main
+Обычная package base — `preview`. `main` допустим как `baseBranch` только для явно описанного migration/bootstrap, который нельзя безопасно начать от ещё не существующего `preview`, либо для отдельной административной операции с явным user approval.
 
-Нельзя требовать `origin/main == packageBase` без необходимости.
+## 6. Совместимость с продвинувшейся базовой веткой
+
+Нельзя требовать `origin/<baseBranch> == packageBase` без необходимости.
 
 Допустимо продолжить, если одновременно:
 
-1. `packageBase` является предком текущего `origin/main`;
+1. `packageBase` является предком текущего `origin/<baseBranch>`;
 2. целевые source-файлы, на которые рассчитан package, не изменились;
 3. compatibility guards подтверждают это;
 4. package check проходит.
@@ -147,9 +156,9 @@ Transport-only advancement, например добавление `REQ_*.md`, с
 Должен проверить:
 
 - repository root;
-- non-main implementation branch/worktree;
+- implementation branch/worktree не является постоянным `main` или `preview`;
 - clean implementation worktree;
-- package base ancestry;
+- manifest `baseBranch` и package base ancestry;
 - exact target blob SHA или другой надёжный compatibility guard;
 - наличие всех source anchors;
 - возможность построить новые файлы;
@@ -170,7 +179,8 @@ Applicator не имеет права:
 - выполнять `reset --hard`;
 - выполнять `git clean`;
 - делать auto-stash;
-- менять dirty primary worktree;
+- менять dirty постоянный worktree `C:\Users\andre\.dsh`;
+- менять dirty постоянный worktree `C:\Users\andre\.dsh-preview`;
 - force-push;
 - удалять неизвестные пользовательские данные.
 
@@ -230,20 +240,30 @@ Hard STOP должен сохраняться для конкретных рис
 
 Resume должен использовать существующий durable result, если его identity и SHA подтверждены.
 
-## 12. Работа с dirty primary worktree
+## 12. Работа с постоянными worktree
 
-Dirty primary worktree:
+Постоянные worktree:
 
-- не очищается;
-- не stash-ится автоматически;
-- не reset-ится;
-- не используется как место application.
+```text
+C:\Users\andre\.dsh          → main
+C:\Users\andre\.dsh-preview → preview
+```
 
-Implementation выполняется в отдельном clean worktree от проверенного `origin/main`.
+Если любой из них dirty:
+
+- не очищать;
+- не stash-ить автоматически;
+- не reset-ить;
+- не использовать как место application;
+- не удалять.
+
+Обычная implementation выполняется в отдельном clean worktree от проверенного `origin/preview`.
+
+Migration package может использовать отдельный clean worktree от объявленного `origin/main`, только если manifest явно фиксирует это как migration/bootstrap exception.
 
 ## 13. Publication lifecycle
 
-После успешного внедрения:
+После успешного внедрения обычной task:
 
 ```text
 CHECK
@@ -253,18 +273,29 @@ CHECK
 → git diff --check
 → COMMIT
 → PUSH
-→ PR
+→ PR в preview
 ```
 
 На этом Luna останавливается.
 
-Merge:
+Migration/bootstrap package следует exact `prBase`, указанному в manifest. Такой пакет не превращает `main` обратно в обычную task base.
+
+Task merge:
 
 ```text
 только после отдельного явного разрешения пользователя
+→ squash merge в preview
 ```
 
-После merge выполняется безопасный cleanup только доказанно принадлежащих этой работе branch/worktree/resources.
+Release promotion:
+
+```text
+отдельный explicit user GO
+→ preview → main
+→ merge commit, не squash
+```
+
+После task merge выполняется безопасный cleanup только доказанно принадлежащих этой работе временных branch/worktree/resources. Постоянные `main`/`preview` и их два канонических worktree cleanup не затрагивает.
 
 ## 14. Failure contract
 
@@ -272,7 +303,8 @@ Merge:
 
 Она должна сообщить:
 
-- current `origin/main`;
+- manifest `baseBranch`;
+- current `origin/<baseBranch>`;
 - implementation branch/worktree;
 - failing guard;
 - failing source file/hash/anchor;
@@ -293,7 +325,8 @@ new REQ created=
 Ch1 contacted=
 ORCA invoked=
 mergePerformed=
-dirty primary touched=
+dirty main worktree touched=
+dirty preview worktree touched=
 ```
 
 ## 16. Канонический принцип
@@ -301,3 +334,5 @@ dirty primary touched=
 > Все implementation decisions и готовые изменения находятся в package. Luna — исполнитель и тестировщик, а не второй разработчик.
 
 > Если package не подходит к текущему коду, исправляется package, а не процесс внедрения вручную.
+
+> Обычная разработка живёт в цикле `preview → temporary task branch → preview`; `main` обновляется только отдельным promotion после explicit user GO.

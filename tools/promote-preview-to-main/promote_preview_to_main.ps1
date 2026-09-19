@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)][int[]]$PrNumber,
+    [Parameter(Mandatory = $true)][int]$PrNumber,
     [string]$RepoRoot = 'C:\Users\andre\.dsh',
     [string]$PreviewRoot = 'C:\Users\andre\.dsh-preview',
     [string]$Repository = 'AndrewVerhoturov1/dsh-workspace',
@@ -9,20 +9,18 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script = Join-Path $PSScriptRoot 'finalize_task_pr.py'
+$script = Join-Path $PSScriptRoot 'promote_preview_to_main.py'
 if (-not (Test-Path -LiteralPath $script -PathType Leaf)) {
-    throw "FINALIZE_TASK_PR_SCRIPT_MISSING: $script"
+    throw "PROMOTE_PREVIEW_SCRIPT_MISSING: $script"
 }
 
 $argsList = @(
     $script,
     '--repo-root', $RepoRoot,
     '--preview-root', $PreviewRoot,
-    '--repository', $Repository
+    '--repository', $Repository,
+    '--pr', $PrNumber.ToString()
 )
-foreach ($number in $PrNumber) {
-    $argsList += @('--pr', $number.ToString())
-}
 if ($WhatIf) {
     $argsList += '--what-if'
 }

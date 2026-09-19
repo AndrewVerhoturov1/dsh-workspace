@@ -14,21 +14,28 @@ class FinalizeTaskPrSkillContract(unittest.TestCase):
     def test_frontmatter_and_version(self):
         self.assertTrue(self.text.startswith("---\n"))
         self.assertIn("name: finalize-task-pr", self.text)
-        self.assertIn("FINALIZE_TASK_PR_SKILL_VERSION: 1", self.text)
+        self.assertIn("FINALIZE_TASK_PR_SKILL_VERSION: 2", self.text)
 
     def test_canonical_executor_is_explicit(self):
-        self.assertIn(
-            r"C:\Users\andre\.dsh\tools\finalize-task-pr\finalize_task_pr.ps1",
-            self.text,
-        )
+        self.assertIn(r"C:\Users\andre\.dsh\tools\finalize-task-pr\finalize_task_pr.ps1", self.text)
         self.assertIn("-PrNumber 99", self.text)
         self.assertIn("-PrNumber 97,98", self.text)
+
+    def test_targets_preview_not_main(self):
+        self.assertIn("base=preview", self.text)
+        self.assertIn("preview → main", self.text)
+        self.assertIn("promote-preview-to-main", self.text)
 
     def test_skill_is_executor_not_reviewer(self):
         self.assertIn("исполнитель уже принятого решения", self.text)
         for marker in ("тесты", "CI/checks", "diff review", "scope review"):
             self.assertIn(marker, self.text)
         self.assertRegex(self.text, re.compile(r"не повторять", re.I))
+
+    def test_permanent_worktrees_are_protected(self):
+        self.assertIn(r"C:\Users\andre\.dsh", self.text)
+        self.assertIn(r"C:\Users\andre\.dsh-preview", self.text)
+        self.assertIn("Permanent worktrees защищены", self.text)
 
     def test_cleanup_is_best_effort(self):
         self.assertIn("best effort", self.text.lower())
