@@ -301,9 +301,13 @@ D:\Downloads_dsh_auto
 `postman.ps1` поддерживает override через `DSH_POSTMAN_RESULT_ROOT` / `-ResultRoot`.
 Direct state, worker state и browser profile остаются в `%LOCALAPPDATA%\DSH\Postman`.
 
+Luna-side normal invocation НЕ выполняет: `New-Item` для result root, `Set-Content`,
+`Out-File`, redirection/write probe, `Remove-Item` probe или любые другие файловые
+write-preflight операции. Result-root creation и write-probe полностью принадлежат
+Direct Postman внутри bridge. Если internal result-root probe не проходит, Direct Postman
+сам возвращает `DIRECT_RESULT_ROOT_UNAVAILABLE` до GitHub publication и browser Send.
 До GitHub task publication и до browser Send Direct Postman обязан создать result root
-и выполнить write-probe. При невозможности записи: `DIRECT_RESULT_ROOT_UNAVAILABLE`
-и `STOP` до отправки prompt.
+и выполнить write-probe; Luna не дублирует эту проверку.
 
 Если вызывающий shell уже PowerShell, вызывать `postman.ps1` напрямую через `&`.
 Дополнительный nested `pwsh.exe` не является normal production path.
@@ -345,6 +349,11 @@ $state = Join-Path $env:LOCALAPPDATA "DSH\Postman\direct\requests\$requestId.jso
 ## 8. Единственный production-вызов
 
 Использовать payload из раздела Intent preservation.
+
+Перед bridge разрешены только: определить текущий workspace; `Join-Path` bridge;
+read-only `Test-Path` bridge; создать canonical REQ; read-only collision `Test-Path`
+exact candidate state; сохранить exact payload в переменную. После этого сразу вызвать
+`& $bridge` по форме ниже. Никакого result-root preflight вокруг этого вызова не добавлять.
 
 ```powershell
 $workspace = (Get-Location).Path
@@ -500,6 +509,14 @@ DIRECT_CHAT_REFERENCE_UNAVAILABLE
 
 означает, что для старого REQ нет сохранённого `/c/...` URL. В этом milestone не
 использовать Search UI/лупу, не угадывать чат и не отправлять prompt в другой conversation.
+
+Если `tools.pwsh` не породил процесс из-за tool-level shell failure, например `spawn EPERM`,
+считать это `POSTMAN_INVOCATION_NOT_STARTED` и немедленно `STOP`. Direct Postman не стартовал
+и Send не происходил. После такого failure запрещено читать старые `REQ_*.json`, выбирать
+latest request, читать старый handoff как текущий, вызывать `job_list`, делать retry/fallback,
+создавать второй REQ или автоматически повторять invocation. Сообщить только, что Direct
+Postman не стартовал и Send не происходил. Это правило имеет приоритет над общей
+диагностикой exact direct state ниже; после tool-level failure никакие request states не читаются.
 
 Если bridge вернул `ok=false`, invalid JSON или завершился с non-zero exit — STOP.
 
@@ -805,6 +822,8 @@ terminal state
 31. Continuation payload не содержит `--chat` и старый REQ; Ч1 получает только новый user intent.
 32. Успешный RESULT_DURABLE сохраняет `conversationUrl`/`conversationId`, если browser transport их доказал.
 33. `manifest.json`, `protocolVersion`, `repository`, `baseCommit`, `resultType`, `patch` и `files` не являются normal transport hard gate; только explicit conflicting string `requestId` в optional manifest остаётся reject.
+34. Luna-side normal invocation не выполняет result-root `New-Item`, `Set-Content`, `Out-File`, redirection/write probe, `Remove-Item` probe или другие файловые write-preflight операции; этим владеет Direct Postman внутри bridge.
+35. Tool-level shell failure, например `spawn EPERM`, означает `POSTMAN_INVOCATION_NOT_STARTED`: не читать старые/latest REQ states, не выполнять recovery, не повторять invocation и остановиться с сообщением, что Send не происходил.
 
 
 ## Result Workspace после RESULT_DURABLE
