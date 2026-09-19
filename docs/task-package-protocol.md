@@ -1,84 +1,145 @@
 # Task Package Protocol
 
-## Формат
+## Статус
 
-Один файл задачи:
+Этот документ описывает текущий Direct Web Postman task package и browser prompt.
 
-`REQ_<timestamp>_<digits>.md`
-
-Канонический WP-010 task-файл содержит поля в таком порядке:
-
-- `request_id` — неизменяемый ключ запроса;
-- `user_intent` — намерение пользователя без пересказа решения;
-- `confirmed_requirements` — только требования, подтверждённые пользователем;
-- `clarifications` — заданные вопросы и полученные ответы либо ещё неясные места;
-- `constraints` — только явно заданные ограничения;
-- `required_documents` — ссылки на обязательные документы;
-- `repository` и `base_commit` — контекст исходного кода;
-- `expected_output` — ожидаемый от внешнего агента результат;
-- `validation` — проверки результата.
-
-Локальный агент может запросить уточнение, но не отвечает на него за
-пользователя. При упаковке он не дополняет требования, не выбирает архитектуру
-и не меняет смысл запроса. Пустые `clarifications` или `constraints` не
-заменяются выдуманными значениями.
-
-Функция `render_intent_task_file` формирует этот формат из явно переданных
-значений и не обращается к сети, браузеру или GitHub. Старый
-`render_task_file` сохраняется для совместимости с WP-009.
-
-## Ответ внешнему агенту
-
-Внешний Postman prompt содержит только:
-
-1. первую строку `POSTMAN_REQUEST_ID: REQ_xxx`;
-2. строку `policy:` со ссылкой на общий Postman artifact policy;
-3. ссылку на task-файл.
-
-Пример первой строки:
+Source implementation:
 
 ```text
-POSTMAN_REQUEST_ID: REQ_xxx
+postman/task_package.py
 ```
 
-Полное техническое задание, repository/base metadata, path scope и result contract
-в prompt не копируются: они находятся только в task-файле.
-## Direct Postman: self-contained task manifest
+## Canonical request file
 
-Production Direct Postman использует один канонический формат внешнего prompt:
+Один production request публикует один self-contained файл:
+
+```text
+REQ_<timestamp>_<digits>.md
+```
+
+Текущий Direct manifest содержит:
+
+```text
+# POSTMAN TASK
+
+protocol_version: 1
+request_id: REQ_...
+repository: owner/repo
+base_commit: <40-hex SHA>
+expected_filename: POSTMAN_REQ_..._RESULT.zip
+allowed_paths_json: [...]
+forbidden_paths_json: [...]
+
+## User intent
+
+<exact current user intent>
+
+## Execution contract
+
+...
+
+## Result contract
+
+...
+```
+
+`repository`, `base_commit`, `allowed_paths_json` и `forbidden_paths_json` — trusted
+transport/downstream metadata. Их присутствие не означает, что пользователь попросил
+изменить repository.
+
+`allowed_paths_json` / `forbidden_paths_json` могут использоваться downstream/manual
+application workflow, но **не являются normal ZIP transport gates**.
+
+Task-файл self-contained: execution/result contract находится в нём же.
+
+## Canonical browser prompt
+
+Production browser prompt состоит **ровно из двух строк**:
 
 ```text
 POSTMAN_REQUEST_ID: REQ_xxx
-policy: https://.../postman-webchat-result-artifact.md
 task_file: https://.../<publication-sha>/REQ_xxx.md
 ```
 
-Это ровно три строки. В prompt запрещено дублировать `repository`, `base_commit`,
-`expected_filename`, `allowed_paths_json`, `forbidden_paths_json`, user intent,
-implementation instructions и result markers.
+В browser prompt больше нет отдельной строки `policy:`.
 
-Все request-specific данные находятся в опубликованном task-файле. Direct task manifest
-содержит `protocol_version`, `request_id`, `repository`, `base_commit`,
-`expected_filename`, `allowed_paths_json`, `forbidden_paths_json`, точный user intent,
-execution contract и result contract.
+Не дублировать туда:
 
-### Два разных commit SHA
+- user intent;
+- `repository`;
+- `base_commit`;
+- `expected_filename`;
+- allowed/forbidden paths;
+- implementation instructions;
+- result envelope instructions.
 
-`base_commit` в task-файле — implementation snapshot: SHA `main` непосредственно ДО
-публикации `REQ_xxx.md`.
+Все request-specific инструкции находятся в exact SHA-pinned task-файле.
 
-`taskPublicationCommit` — transport-only commit, который добавляет сам task-файл. Он
-хранится во внутреннем Direct state/result, но не помещается внутрь task-файла, потому
-что SHA коммита нельзя самоссылочно записать в содержимое этого же коммита.
+`build_external_prompt(...)` сохраняет compatibility argument старого policy/skill URL,
+но production text от него не зависит.
+
+## Intent preservation
+
+`User intent` содержит current user request без semantic augmentation локальным агентом.
+
+Normal syntax:
+
+```text
+@Postman <intent>
+```
+
+После transport marker в task передаётся exact intent.
+
+Continuation:
+
+```text
+@Postman --chat <old REQ> <new intent>
+```
+
+`<old REQ>` — transport lookup metadata. Он не становится частью нового `User intent`,
+не добавляется в browser prompt и не заменяет новый canonical REQ.
+
+## Snapshot и publication commit
+
+Есть два разных SHA:
 
 ```text
 implementationBaseCommit
 → publish REQ_xxx.md
 → taskPublicationCommit
-→ link-only prompt
 ```
 
-Artifact manifest Ч1 использует `implementationBaseCommit` как `baseCommit`. PREPARE
-допускает последующее transport-only продвижение `main` через `REQ_*.md`, если
-implementation base остаётся предком актуального `origin/main` и на payload-path не
-было функционального продвижения.
+`base_commit` внутри task-файла — snapshot `main` непосредственно **до** публикации
+transport-only REQ-файла.
+
+`taskPublicationCommit` — commit, добавивший task-файл. Он хранится в trusted local state,
+но не может быть самоссылочно записан внутрь этого же task-файла.
+
+Для ordinary universal result `base_commit` является identity metadata. Для явно
+repository-changing результата он может быть использован downstream как implementation base,
+но normal transport не проверяет patch semantics или repository scope.
+
+## Result contract
+
+Task-файл требует один реальный downloadable ZIP с exact filename:
+
+```text
+POSTMAN_<REQ>_RESULT.zip
+```
+
+Внутренняя структура ZIP может быть естественной для задачи. `files/` не обязателен.
+
+`manifest.json` необязателен. Если он присутствует и содержит строковый `requestId`,
+он должен совпадать с current REQ. Остальные manifest fields не являются обязательными
+normal transport gates.
+
+Финальный assistant turn содержит ровно три непустые видимые строки:
+
+```text
+<<<POSTMAN_RESULT_BEGIN:<REQ>>>
+POSTMAN_<REQ>_RESULT.zip
+<<<POSTMAN_RESULT_END:<REQ>>>
+```
+
+Средняя строка должна быть реальным downloadable attachment/control, а не plain text.
