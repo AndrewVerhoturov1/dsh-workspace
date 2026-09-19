@@ -37,7 +37,7 @@ function publishedFixture() {
   return { root, worktree: fs.realpathSync(worktree), published }
 }
 
-function durableFixture(requestId = 'REQ_20260904T000000Z_0001', root = null) {
+function durableFixture(requestId = 'REQ_20260904T000000Z_0001', root = null, { includeManifest = true } = {}) {
   const ownedRoot = root ?? fs.mkdtempSync(path.join(os.tmpdir(), 'postman-durable-workspace-'))
   const resultRoot = path.join(ownedRoot, 'results')
   const resultDirectory = path.join(resultRoot, requestId)
@@ -45,7 +45,8 @@ function durableFixture(requestId = 'REQ_20260904T000000Z_0001', root = null) {
   fs.mkdirSync(resultDirectory, { recursive: true })
   fs.mkdirSync(handoffDirectory, { recursive: true })
   const resultZip = path.join(resultDirectory, 'result.zip')
-  for (const name of ['manifest.json', 'validation.json', 'metadata.json']) {
+  if (includeManifest) writeJson(path.join(resultDirectory, 'manifest.json'), { name: 'manifest.json' })
+  for (const name of ['validation.json', 'metadata.json']) {
     writeJson(path.join(resultDirectory, name), { name })
   }
   fs.writeFileSync(resultZip, 'result', 'utf8')
@@ -177,6 +178,27 @@ test('different durable REQs have independent sidecar files', async () => {
     assert.equal(JSON.parse(fs.readFileSync(resultTwo.workspaceJson, 'utf8')).requestId, two.resultDirectory.split(path.sep).pop())
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('durable result without manifest passes receipt read and Workspace registration', async () => {
+  const fx = durableFixture('REQ_20260904T000000Z_0001', null, { includeManifest: false })
+  try {
+    const receipt = readDurableReceipt(fx.resultHandoffJson)
+    assert.equal(receipt.resultDirectory, fx.resultDirectory)
+    assert.equal(fs.existsSync(path.join(fx.resultDirectory, 'manifest.json')), false)
+
+    const { workspaceRegistry } = registry('workspace-durable-no-manifest')
+    const result = await registerResultWorkspace(
+      { workspaceRegistry },
+      { request_id: 'REQ_20260904T000000Z_0001', result_handoff_json: fx.resultHandoffJson },
+    )
+    assert.equal(result.ok, true)
+    assert.equal(result.status, 'RESULT_WORKSPACE_REGISTERED')
+    assert.equal(result.source, 'RESULT_DURABLE')
+    assert.equal(result.resultDirectory, fx.resultDirectory)
+  } finally {
+    fs.rmSync(fx.root, { recursive: true, force: true })
   }
 })
 

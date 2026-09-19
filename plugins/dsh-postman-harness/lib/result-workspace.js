@@ -117,7 +117,15 @@ export function readDurableReceipt(resultHandoffJson) {
     throw new Error('resultZip is outside resultRoot/requestId')
   }
 
-  for (const name of ['manifest.json', 'validation.json', 'metadata.json']) {
+  const manifestCandidate = path.join(resultDirectory, 'manifest.json')
+  try {
+    if (!fs.lstatSync(manifestCandidate).isFile()) {
+      throw new Error('manifest.json is not a file')
+    }
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error
+  }
+  for (const name of ['validation.json', 'metadata.json']) {
     const candidate = path.join(resultDirectory, name)
     if (!fs.existsSync(candidate)) throw new Error('durable result is missing ' + name)
     requireFile(candidate, name)

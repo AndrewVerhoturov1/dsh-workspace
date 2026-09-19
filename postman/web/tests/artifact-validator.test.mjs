@@ -154,8 +154,6 @@ function expected(overrides = {}) {
     repository: REPOSITORY,
     baseCommit: BASE_COMMIT,
     expectedFilename: EXPECTED_FILENAME,
-    allowedPaths: ['docs', 'src'],
-    forbiddenPaths: ['settings.yaml', 'attachments'],
     ...overrides,
   };
 }

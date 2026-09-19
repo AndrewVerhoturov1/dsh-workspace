@@ -7,18 +7,14 @@ import { TextDecoder } from 'node:util';
 export const ARTIFACT_VALID = 'ARTIFACT_VALID';
 export const ERROR_CODES = Object.freeze({
   BAD_ZIP:'ARTIFACT_BAD_ZIP', EMPTY:'ARTIFACT_EMPTY', FILENAME_MISMATCH:'ARTIFACT_FILENAME_MISMATCH',
-  MANIFEST_MISSING:'ARTIFACT_MANIFEST_MISSING', MANIFEST_INVALID:'ARTIFACT_MANIFEST_INVALID',
-  PROTOCOL_VERSION_MISMATCH:'ARTIFACT_PROTOCOL_VERSION_MISMATCH', REQUEST_MISMATCH:'ARTIFACT_REQUEST_MISMATCH',
-  REPOSITORY_MISMATCH:'ARTIFACT_REPOSITORY_MISMATCH', BASE_COMMIT_MISMATCH:'ARTIFACT_BASE_COMMIT_MISMATCH',
-  RESULT_TYPE_INVALID:'ARTIFACT_RESULT_TYPE_INVALID', PAYLOAD_MISSING:'ARTIFACT_PAYLOAD_MISSING',
+  REQUEST_MISMATCH:'ARTIFACT_REQUEST_MISMATCH',
   PATH_TRAVERSAL:'ARTIFACT_PATH_TRAVERSAL', ABSOLUTE_PATH:'ARTIFACT_ABSOLUTE_PATH',
   WINDOWS_DRIVE_PATH:'ARTIFACT_WINDOWS_DRIVE_PATH', UNC_PATH:'ARTIFACT_UNC_PATH', NTFS_ADS:'ARTIFACT_NTFS_ADS',
   SYMLINK:'ARTIFACT_SYMLINK', REPARSE_ENTRY:'ARTIFACT_REPARSE_ENTRY', DUPLICATE_PATH:'ARTIFACT_DUPLICATE_PATH',
   CASE_COLLISION:'ARTIFACT_CASE_COLLISION', WINDOWS_RESERVED_NAME:'ARTIFACT_WINDOWS_RESERVED_NAME',
-  PATH_INVALID:'ARTIFACT_PATH_INVALID', SCOPE_VIOLATION:'ARTIFACT_SCOPE_VIOLATION', FORBIDDEN_PATH:'ARTIFACT_FORBIDDEN_PATH',
+  PATH_INVALID:'ARTIFACT_PATH_INVALID',
   COMPRESSED_SIZE_LIMIT:'ARTIFACT_COMPRESSED_SIZE_LIMIT', UNCOMPRESSED_SIZE_LIMIT:'ARTIFACT_UNCOMPRESSED_SIZE_LIMIT',
   ENTRY_SIZE_LIMIT:'ARTIFACT_ENTRY_SIZE_LIMIT', ENTRY_LIMIT:'ARTIFACT_ENTRY_LIMIT', ZIP_BOMB_RISK:'ARTIFACT_ZIP_BOMB_RISK',
-  PATCH_INVALID:'ARTIFACT_PATCH_INVALID',
 });
 export const DEFAULT_LIMITS = Object.freeze({
   maxCompressedBytes:50*1024*1024, maxTotalUncompressedBytes:200*1024*1024,
@@ -29,9 +25,6 @@ const EOCD=0x06054b50, CENTRAL=0x02014b50, LOCAL=0x04034b50, UTF8_FLAG=1<<11, EN
 const UTF8 = new TextDecoder('utf-8',{fatal:true});
 const SHA_RE=/^[0-9a-f]{40}$/i, REPO_RE=/^[^/\s]+\/[^/\s]+$/, DRIVE_RE=/^[A-Za-z]:[\\/]/;
 const RESERVED=/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i;
-const RESULT_TYPES=new Set(['artifact','patch','files','hybrid_patch']);
-const MANIFEST_KEYS=new Set(['protocolVersion','requestId','repository','baseCommit','resultType','patch','files','readRef','branch','generatedAt','description','inventory']);
-
 const CRC_TABLE=(()=>{const t=new Uint32Array(256);for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=(c&1)?0xedb88320^(c>>>1):c>>>1;t[n]=c>>>0;}return t;})();
 function crc32(b){let c=0xffffffff;for(const x of b)c=CRC_TABLE[(c^x)&255]^(c>>>8);return(c^0xffffffff)>>>0;}
 function hash(b){return crypto.createHash('sha256').update(b).digest('hex');}
@@ -58,7 +51,6 @@ function checkExpected(e){
   for(const k of ['requestId','repository','baseCommit','expectedFilename'])if(typeof e[k]!=='string'||!e[k])throw new TypeError(`expectedRequest.${k} must be a non-empty string`);
   if(!SHA_RE.test(e.baseCommit))throw new TypeError('expectedRequest.baseCommit must be a full 40-hex Git SHA');
   if(!REPO_RE.test(e.repository))throw new TypeError('expectedRequest.repository must be owner/repo');
-  for(const k of ['allowedPaths','forbiddenPaths'])if(!Array.isArray(e[k])||e[k].some(v=>typeof v!=='string'||!v))throw new TypeError(`expectedRequest.${k} must be an array of non-empty strings`);
 }
 function limitsOf(o={}){const l={...DEFAULT_LIMITS,...(o||{})};for(const k of Object.keys(DEFAULT_LIMITS))if(!Number.isFinite(l[k])||l[k]<=0)throw new TypeError(`limits.${k} must be positive`);if(!Number.isInteger(l.maxEntries))throw new TypeError('limits.maxEntries must be integer');return l;}
 function filenameOf(p){return path.basename(p);}
@@ -232,12 +224,6 @@ function classify(raw,{allowDirectory=true}={}){
   const structural=parts.join('/')+(dir?'/':''), normalized=structural.normalize('NFC');
   return{ok:true,structural,normalized,collisionKey:fold(normalized),isDirectory:dir};
 }
-function target(raw){return classify(raw,{allowDirectory:false});}
-function scopeDesc(raw){const c=target(raw.replaceAll('\\','/').replace(/\/+$/u,''));if(!c.ok)throw new TypeError(`Invalid trusted scope: ${raw}`);return{normalized:c.normalized,key:fold(c.normalized)};}
-function scopesOf(e){return{allowed:e.allowedPaths.map(scopeDesc),forbidden:e.forbiddenPaths.map(scopeDesc)};}
-function within(t,s){const k=fold(t);return k===s.key||k.startsWith(`${s.key}/`);}
-function scopeCode(t,s){for(const f of s.forbidden)if(within(t,f))return ERROR_CODES.FORBIDDEN_PATH;if(!s.allowed.some(a=>within(t,a)))return ERROR_CODES.SCOPE_VIOLATION;return null;}
-
 function parseCentral(b){
   const eo=eocdOffset(b);if(eo<0||eo+22>b.length)return{error:'eocd'};
   const disk=b.readUInt16LE(eo+4), cdDisk=b.readUInt16LE(eo+6), onDisk=b.readUInt16LE(eo+8), count=b.readUInt16LE(eo+10), size=b.readUInt32LE(eo+12), off=b.readUInt32LE(eo+16), comment=b.readUInt16LE(eo+20);
@@ -254,34 +240,7 @@ function parseCentral(b){
 }
 function typeCode(e,c){const platform=e.versionMadeBy>>>8, mode=(e.externalAttrs>>>16)&0xffff, type=mode&0xf000, dos=e.externalAttrs&0xffff;if(platform===3&&type===0xa000)return ERROR_CODES.SYMLINK;if(platform===3&&type!==0&&type!==0x8000&&type!==0x4000)return ERROR_CODES.REPARSE_ENTRY;if(dos&0x0400)return ERROR_CODES.REPARSE_ENTRY;if(platform===3&&type===0x4000&&!c.isDirectory)return ERROR_CODES.REPARSE_ENTRY;if(platform===3&&type===0x8000&&c.isDirectory)return ERROR_CODES.REPARSE_ENTRY;return null;}
 function entryData(b,e,centralOffset,max){const p=e.localOffset;if(p+30>centralOffset||b.readUInt32LE(p)!==LOCAL)return{error:'local_header'};const flags=b.readUInt16LE(p+6),method=b.readUInt16LE(p+8),nl=b.readUInt16LE(p+26),xl=b.readUInt16LE(p+28),ns=p+30,ds=ns+nl+xl,de=ds+e.compressedSize;if(flags&ENCRYPTED_FLAG||method!==e.method||de>centralOffset)return{error:'local_mismatch'};if(!Buffer.from(b.subarray(ns,ns+nl)).equals(e.nameBytes))return{error:'local_name'};let data;try{data=e.method===0?Buffer.from(b.subarray(ds,de)):zlib.inflateRawSync(b.subarray(ds,de),{maxOutputLength:max+1});}catch(err){return{error:'inflate',message:err.message};}if(data.length!==e.uncompressedSize||crc32(data)!==e.crc)return{error:'size_or_crc'};return{data,dataEnd:de};}
-function manifestCode(m){
-  if(!m||typeof m!=='object'||Array.isArray(m))return ERROR_CODES.MANIFEST_INVALID;
-  for(const k of Object.keys(m))if(!MANIFEST_KEYS.has(k))return ERROR_CODES.MANIFEST_INVALID;
-  if(!Number.isInteger(m.protocolVersion)||typeof m.requestId!=='string'||!m.requestId||typeof m.repository!=='string'||!REPO_RE.test(m.repository)||typeof m.baseCommit!=='string'||!SHA_RE.test(m.baseCommit)||typeof m.resultType!=='string'||!(m.patch===null||typeof m.patch==='string')||!Array.isArray(m.files)||m.files.some(x=>typeof x!=='string'||!x))return ERROR_CODES.MANIFEST_INVALID;
-  for(const k of ['readRef','branch','generatedAt','description'])if(k in m&&typeof m[k]!=='string')return ERROR_CODES.MANIFEST_INVALID;if('inventory'in m&&!Array.isArray(m.inventory))return ERROR_CODES.MANIFEST_INVALID;
-  if(!RESULT_TYPES.has(m.resultType))return ERROR_CODES.RESULT_TYPE_INVALID;
-  if(m.resultType==='artifact'&&(m.patch!==null||m.files.length<1))return ERROR_CODES.MANIFEST_INVALID;
-  if(m.resultType==='patch'&&(m.patch!=='changes.patch'||m.files.length!==0))return ERROR_CODES.MANIFEST_INVALID;
-  if(m.resultType==='files'&&(m.patch!==null||m.files.length<1))return ERROR_CODES.MANIFEST_INVALID;
-  if(m.resultType==='hybrid_patch'&&(m.patch!=='changes.patch'||m.files.length<1))return ERROR_CODES.MANIFEST_INVALID;
-  const exact=new Set(),collisions=new Map();
-  for(const p of m.files){const c=target(p);if(!c.ok)return c.code;if(exact.has(c.structural))return ERROR_CODES.DUPLICATE_PATH;exact.add(c.structural);const old=collisions.get(c.collisionKey);if(old!==undefined&&old!==c.structural)return ERROR_CODES.CASE_COLLISION;collisions.set(c.collisionKey,c.structural);}
-  return null;
-}
 function utf8(b){try{return UTF8.decode(b);}catch{return null;}}
-function diffHeaderPath(line,prefix){let v=line.slice(prefix.length);const tab=v.indexOf('\t');if(tab>=0)v=v.slice(0,tab);v=v.trimEnd();if(!v||v.startsWith('"'))return{error:ERROR_CODES.PATCH_INVALID};if(v==='/dev/null')return{path:null};if(v.startsWith('a/')||v.startsWith('b/'))v=v.slice(2);const c=target(v);return c.ok?{path:c.normalized}:{error:c.code};}
-function validateDiff(text,scopes){
-  if(typeof text!=='string'||!text||text.includes('\u0000'))return ERROR_CODES.PATCH_INVALID;const s=text.replaceAll('\r\n','\n');if(s.includes('\r'))return ERROR_CODES.PATCH_INVALID;const lines=s.split('\n');if(lines.at(-1)==='')lines.pop();let i=0,blocks=0;
-  while(i<lines.length){
-    while(i<lines.length&&(lines[i].startsWith('diff --git ')||lines[i].startsWith('index ')||lines[i].startsWith('new file mode ')||lines[i].startsWith('deleted file mode ')||lines[i].startsWith('similarity index ')))i++;
-    const meta=[];while(i<lines.length&&/^(rename from |rename to |copy from |copy to )/u.test(lines[i])){const marker=lines[i].match(/^(rename from |rename to |copy from |copy to )/u)[0],c=target(lines[i].slice(marker.length));if(!c.ok)return c.code;meta.push(c.normalized);i++;}
-    for(const p of meta){const c=scopeCode(p,scopes);if(c)return c;}
-    if(i>=lines.length||!lines[i].startsWith('--- '))return ERROR_CODES.PATCH_INVALID;const old=diffHeaderPath(lines[i++],'--- ');if(old.error)return old.error;if(i>=lines.length||!lines[i].startsWith('+++ '))return ERROR_CODES.PATCH_INVALID;const neu=diffHeaderPath(lines[i++],'+++ ');if(neu.error)return neu.error;if(old.path===null&&neu.path===null)return ERROR_CODES.PATCH_INVALID;for(const p of [old.path,neu.path])if(p!==null){const c=scopeCode(p,scopes);if(c)return c;}
-    let hunks=0;while(i<lines.length&&lines[i].startsWith('@@ ')){const m=lines[i].match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(?:.*)$/u);if(!m)return ERROR_CODES.PATCH_INVALID;let o=m[2]===undefined?1:Number(m[2]),n=m[4]===undefined?1:Number(m[4]);i++;while(i<lines.length&&!lines[i].startsWith('@@ ')&&!lines[i].startsWith('diff --git ')&&!lines[i].startsWith('--- ')){const l=lines[i];if(l==='\\ No newline at end of file'){i++;continue;}if(l.startsWith(' ')){o--;n--;}else if(l.startsWith('-'))o--;else if(l.startsWith('+'))n--;else return ERROR_CODES.PATCH_INVALID;if(o<0||n<0)return ERROR_CODES.PATCH_INVALID;i++;if(o===0&&n===0)break;}if(o!==0||n!==0)return ERROR_CODES.PATCH_INVALID;hunks++;}
-    if(hunks===0&&meta.length===0)return ERROR_CODES.PATCH_INVALID;blocks++;
-  }
-  return blocks?null:ERROR_CODES.PATCH_INVALID;
-}
 function basicProbe(p,size){const fd=fs.openSync(p,'r');try{const first=Buffer.alloc(Math.min(4,size));fs.readSync(fd,first,0,first.length,0);const ts=Math.min(size,22+0xffff),tail=Buffer.alloc(ts);fs.readSync(fd,tail,0,ts,size-ts);const eo=eocdOffset(tail);if(first.length<4||eo<0)return false;const sig=first.readUInt32LE(0);if(sig!==LOCAL&&sig!==EOCD)return false;return eo+22+tail.readUInt16LE(eo+20)===tail.length;}finally{fs.closeSync(fd);}}
 
 export function validateArtifact(zipPath,expectedRequest){
