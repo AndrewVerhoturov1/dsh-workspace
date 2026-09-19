@@ -1,6 +1,6 @@
 {
   "name": "dsh-agent-team-by-andrew",
-  "version": "1.0.1-andrew.1",
+  "version": "1.0.1-andrew.5",
   "description": "Persistent multi-model squads for DeepSeek Harness with durable orchestration, DAG workflows, run history, and provider-reported token usage; Russian UI fork by Andrew",
   "type": "module",
   "main": "lib/index.js",
@@ -66,9 +66,9 @@
   "author": "leizihao and dsh-agent-team-gui contributors",
   "repository": {
     "type": "git",
-    "url": "file:///D:/DEEPSEEK/dsh-agent-team-by-andrew"
+    "url": "https://github.com/toolclub/dsh-agent-team-gui.git"
   },
-  "homepage": "file:///D:/DEEPSEEK/dsh-agent-team-by-andrew/README.md",
+  "homepage": "https://github.com/toolclub/dsh-agent-team-gui#readme",
   "bugs": {
     "url": "https://github.com/toolclub/dsh-agent-team-gui/issues"
   },
@@ -147,6 +147,7 @@
     "vitest": "^4.1.10"
   },
   "scripts": {
+    "prepare": "pnpm run build",
     "build": "node scripts/quality/clean-build.mjs && tsdown --config tsdown.config.ts && tsc -p tsconfig.host.json --pretty false && tsc -p tsconfig.client.json --pretty false",
     "check:whitespace": "node scripts/quality/git-whitespace.mjs",
     "typecheck": "tsc -p tsconfig.host.json --noEmit --pretty false && tsc -p tsconfig.client.json --noEmit --pretty false && tsc -p tsconfig.test.json --pretty false && tsc -p tsconfig.client-test.json --pretty false",
@@ -161,5 +162,6 @@
     "capture:readme": "node scripts/quality/capture-readme.mjs",
     "quality:doctor": "node scripts/quality/doctor.mjs",
     "preflight": "node scripts/quality/release-preflight.mjs"
-  }
+  },
+  "packageManager": "pnpm@9.15.4"
 }
