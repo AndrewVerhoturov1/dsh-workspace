@@ -1,385 +1,244 @@
-# Direct Web Postman — актуальный рабочий процесс
+# Direct Web Postman — актуальный production flow
 
-> Репозиторий: https://github.com/AndrewVerhoturov1/dsh-workspace  
-> Актуальная ветка: `main`  
-> Production entrypoint: **Direct Web Postman / WP-014R**
+> Repository: `AndrewVerhoturov1/dsh-workspace`  
+> Production entrypoint: `postman/direct/postman.ps1`  
+> Normal trigger: exact current-message `@Postman`
 
 ## 1. Назначение
 
-Direct Web Postman — транспортный слой между локальным агентом DSH и ChatGPT Web.
+Direct Web Postman — transport между локальным Harness/Luna agent и ChatGPT Web.
 
-Его задача:
+Он обязан:
 
-1. принять пользовательскую задачу от локального агента;
-2. создать уникальный `REQ`;
-3. зафиксировать trusted metadata задачи и `base_commit`;
-4. опубликовать task-файл в GitHub;
-5. открыть или переиспользовать выделенный Chrome с авторизованным ChatGPT Web;
-6. создать новый чат либо открыть exact сохранённый `/c/...` conversation по старому REQ;
-7. отправить короткий transport prompt со ссылками на policy и task-файл;
-8. дождаться строго коррелированного assistant turn;
-9. найти строго коррелированный ZIP attachment;
-10. скачать ZIP ровно одним кликом;
-11. провалидировать ZIP как безопасный correlated transport artifact;
-12. атомарно сохранить результат как `RESULT_DURABLE`;
-13. вернуть локальному агенту JSON с путём к проверенному ZIP.
+1. сохранить exact current user intent;
+2. создать один новый canonical REQ;
+3. опубликовать self-contained task-файл;
+4. отправить в ChatGPT Web canonical двухстрочный link-only prompt;
+5. доказать exact ChatGPT conversation и assistant turn;
+6. получить exact correlated ZIP;
+7. проверить transport safety/integrity/correlation;
+8. атомарно сохранить `RESULT_DURABLE`;
+9. вернуть локальному агенту exact durable metadata.
 
-Postman **не должен автоматически применять ZIP к рабочему репозиторию**.
+Postman не применяет ZIP к repository и не принимает semantic решение за пользователя.
 
----
+## 2. Source of truth
 
-## 2. Текущий production flow
+Порядок приоритета:
 
 ```text
-Локальный агент / Luna
-        │
-        ▼
-postman/direct/postman.ps1
-        │
-        ▼
-postman/direct/postman_direct.py
-        │
-        ├─ validate REQ
-        ├─ snapshot origin/main
-        ├─ derive base_commit
-        ├─ build trusted task manifest
-        ├─ publish REQ_<id>.md to GitHub main
-        │
-        ├─ ensure dedicated Chrome + CDP
-        │
-        ▼
-postman/web/web_worker_bridge.py
-        │
-        ├─ create owned Page
-        ├─ prove fresh ChatGPT chat OR exact stored conversation URL
-        ├─ send transport prompt exactly once
-        ├─ bind /c/... chat URL
-        ├─ observe exact next assistant turn
-        ├─ detect exact ZIP control
-        ├─ re-prove artifact identity
-        ├─ expect_download + exactly one click
-        ├─ stage ZIP
-        ├─ validate ZIP safety + integrity + SHA-256
-        ├─ publish request-scoped durable result
-        ▼
-RESULT_DURABLE
-        │
-        ▼
-JSON result back to local agent
+AGENTS.md
+→ .agents/skills/delegate-via-postman/SKILL.md
+→ postman/POSTMAN_CURRENT_FLOW.md
+→ docs/web-postman-artifact-contract.md
+→ module README/source/tests
 ```
 
-Основное описание:
+`postman_async_send`, старый persistent POSTMAN agent и исторические WP milestone notes
+не переопределяют этот production flow.
 
-- `postman/direct/README.md`  
-  https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/postman/direct/README.md
+## 3. Trigger и intent boundary
 
-- `postman/direct/postman.ps1`  
-  https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/postman/direct/postman.ps1
+Postman OFF by default.
 
-- `postman/direct/postman_direct.py`  
-  https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/postman/direct/postman_direct.py
+Разрешающий trigger существует только для current user message:
 
----
+```text
+^\s*@Postman(?:\s|$)
+```
 
-## 3. Request ID
+Normal:
 
-Новый production request использует immutable cross-system key:
+```text
+@Postman <intent>
+```
+
+Continuation:
+
+```text
+@Postman --chat <old REQ> <new intent>
+```
+
+Для normal request Luna удаляет только `@Postman` и непосредственно следующий separator.
+
+Для continuation `--chat <old REQ>` является transport metadata и не входит в semantic intent.
+External ChatGPT получает только `<new intent>` через новый task-файл.
+
+Previous Luna context не добавляется к payload.
+
+## 4. Orchestration boundary Luna
+
+Production entrypoint разрешается относительно current workspace:
+
+```powershell
+$workspace = (Get-Location).Path
+$bridge = Join-Path $workspace 'postman\direct\postman.ps1'
+```
+
+Hardcoded Windows username не используется.
+
+Если caller уже PowerShell, normal path вызывает `& $bridge` напрямую без nested `pwsh.exe`.
+
+Для normal `tools.pwsh` invocation:
+
+- не задавать hardcoded `workdir`;
+- не выполнять Luna-side `New-Item`/`Set-Content`/`Out-File` result-root write probe;
+- не дублировать внутренний result-root preparation Direct Postman.
+
+Если shell tool не породил process (`spawn EPERM`, invalid cwd и т.п.), это
+`POSTMAN_INVOCATION_NOT_STARTED`. Send не происходил. После этого нельзя выбирать старый/latest
+REQ как результат текущей операции и нельзя автоматически повторять invocation.
+
+## 5. Canonical REQ
+
+Формат:
 
 ```text
 REQ_YYYYMMDDTHHMMSSZ_NNNN
 ```
 
-Пример:
+Один logical invocation создаёт один новый REQ.
 
-```text
-REQ_20260917T134845Z_2554
+Continuation также создаёт новый REQ; old REQ — только lookup key.
+
+REQ строится без JavaScript-template interpolation hazard, например PowerShell concatenation:
+
+```powershell
+$requestId = 'REQ_' + $stamp + '_' + $suffix
 ```
 
-Один logical request имеет один canonical `REQ`.
+Persisted state того же REQ блокирует blind resend.
 
-Автоматический blind resend того же `REQ` запрещён.
+## 6. Snapshot и GitHub task publication
 
-Если persisted direct-state для `REQ` уже существует, новый автоматический transport run не должен повторно отправлять prompt.
+Direct Postman фиксирует trusted snapshot `origin/main` перед публикацией task-файла.
 
-## 3.1. Продолжение существующего ChatGPT conversation
-
-Пользовательский transport syntax:
+Task filename:
 
 ```text
-@Postman --chat REQ_20260917T101323Z_7008 <новый intent>
+<REQ>.md
 ```
 
-Старый REQ используется только для поиска локально сохранённого `conversationUrl`.
-Новый prompt всегда получает новый canonical REQ.
+`base_commit` внутри task-файла — snapshot до transport-only publication commit.
 
-Lookup order:
-
-```text
-direct/results/<old REQ>.json
-→ direct/requests/<old REQ>.json
-→ workers/<old REQ>.json
-```
-
-После получения URL worker открывает exact `https://chatgpt.com/c/<conversation-id>` и
-продолжает обычный submit/observe/detect/download/validate flow. Никакой текст старой
-переписки не копируется в новый prompt: контекст уже находится в самом ChatGPT chat.
-
-Search UI через лупу в текущем milestone не используется. Если URL не найден:
+Task-файл self-contained и содержит:
 
 ```text
-DIRECT_CHAT_REFERENCE_UNAVAILABLE → STOP
-```
-
----
-
-Связанные файлы:
-
-- `postman/web/request_identity.py`  
-  https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/postman/web/request_identity.py
-
-- `postman/direct/postman_direct.py`  
-  https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/postman/direct/postman_direct.py
-
----
-
-## 4. Snapshot и `base_commit`
-
-До публикации task-файла Postman должен получить текущий commit целевой ветки.
-
-Для production flow:
-
-```text
-repository = AndrewVerhoturov1/dsh-workspace
-branch = main
-```
-
-Этот commit становится:
-
-```text
+protocol_version
+request_id
+repository
 base_commit
+expected_filename
+allowed_paths_json
+forbidden_paths_json
+User intent
+Execution contract
+Result contract
 ```
 
-`base_commit` — trusted transport correlation snapshot. Для repository-changing результата
-он также является implementation base. Для universal `artifact` это только identity metadata
-и не означает, что пользователь запросил изменение repository.
+Metadata paths не означают, что пользователь запросил repository changes, и не являются
+normal ZIP validator content gates.
 
-После snapshot Postman публикует:
+## 7. Canonical browser prompt
+
+Browser prompt состоит ровно из двух строк:
 
 ```text
-REQ_<id>.md
+POSTMAN_REQUEST_ID: <REQ>
+task_file: <exact SHA-pinned task URL>
 ```
 
-Публикационный commit обязан иметь snapshot commit непосредственным родителем.
+Отдельной `policy:` строки нет.
 
-Если branch успела измениться между snapshot и публикацией, Postman должен завершиться fail-closed с publication race, а не молча использовать другую базу.
+User intent и result instructions не дублируются в browser prompt.
 
-Реализация:
+## 8. Dedicated Chrome
 
-- `GitHubTaskPublisher.snapshot()`
-- `GitHubTaskPublisher.publish_content()`
-
-Файл:
-
-- https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/postman/direct/postman_direct.py
-
----
-
-## 5. Task-файл
-
-Task-файл содержит trusted request metadata.
-
-Пример структуры:
-
-```text
-# POSTMAN TASK
-
-protocol_version: 1
-request_id: REQ_...
-repository: AndrewVerhoturov1/dsh-workspace
-base_commit: <40-hex-sha>
-expected_filename: POSTMAN_REQ_..._RESULT.zip
-allowed_paths_json: [...]
-forbidden_paths_json: [...]
-
-## User intent
-
-<исходное пользовательское намерение>
-
-## Execution contract
-
-...
-
-## Result contract
-
-...
-```
-
-Task-файл формируется здесь:
-
-- `postman/task_package.py`  
-  https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/postman/task_package.py
-
-Функция:
-
-```text
-render_direct_task_manifest(...)
-```
-
-Task-файл является self-contained описанием конкретного запроса.
-
----
-
-## 6. Transport prompt в ChatGPT Web
-
-В браузер не нужно дублировать полную задачу.
-
-Production transport prompt должен быть коротким и ссылочным:
-
-```text
-POSTMAN_REQUEST_ID: REQ_...
-task_file: https://.../REQ_....md
-```
-
-То есть:
-
-- первая строка содержит canonical `REQ`;
-- `task_file:` указывает на exact published task-файл.
-
-Внешний policy-link больше не нужен: task-файл self-contained. User intent,
-`base_commit`, repository scope для code-result типов и universal ZIP contract находятся
-в exact SHA-pinned task-файле.
-
-Реализация:
-
-- `postman/task_package.py`
-- `build_external_prompt(...)`
-
-Ссылка:
-
-- https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/postman/task_package.py
-
----
-
-## 7. Dedicated Chrome
-
-Postman использует отдельный Chrome profile.
-
-Default profile:
+Default browser profile:
 
 ```text
 %LOCALAPPDATA%\DSH\Postman\browser-profile
 ```
 
-Browser identity — это именно профиль, а не PID процесса Chrome.
-
-CDP endpoint:
+CDP endpoint текущего deployment:
 
 ```text
 http://127.0.0.1:9222
 ```
 
-Postman должен:
+Browser profile — durable browser identity. PID/Page/WebSocket IDs — runtime details.
 
-1. попытаться подключиться к уже работающему dedicated Chrome;
-2. если CDP недоступен — найти Chrome;
-3. запустить Chrome с Postman profile;
-4. дождаться CDP readiness.
+Worker создаёт owned Page и не закрывает externally-owned browser/context.
 
-Browser является externally owned.
+## 9. Fresh chat path
 
-Worker не должен закрывать весь Chrome после запроса.
-
-Связанные файлы:
-
-- `postman/web/browser_bootstrap.py`  
-  https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/postman/web/browser_bootstrap.py
-
-- `postman/direct/postman_direct.py`  
-  https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/postman/direct/postman_direct.py
-
----
-
-## 8. Новый Page и fresh chat
-
-Для каждого transport request создаётся отдельная owned Page.
-
-`WebWorkerBridge` подключается по CDP и делает новую страницу.
-
-Дальше `browser_submit.py` обязан доказать:
+Fresh request должен доказать до Send:
 
 ```text
-PAGE_OWNED
-→ root chatgpt.com route
-→ zero current conversation turns
-→ visible empty composer
-→ FRESH_CHAT_CONFIRMED
-→ COMPOSER_EMPTY_CONFIRMED
+owned Page
++ root chatgpt.com route
++ zero current conversation turns
++ visible empty composer
 ```
 
-После этого разрешена вставка prompt.
+После вставки prompt проверяются exact text и hash.
 
-Файл:
+Send разрешён один раз.
 
-- `postman/web/browser_submit.py`  
-  https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/postman/web/browser_submit.py
-
----
-
-## 9. Отправка prompt
-
-Prompt должен быть вставлен точно.
-
-После вставки проверяются:
-
-- exact prompt text;
-- SHA-256 prompt;
-- состояние composer.
-
-После начала Send разрешена **ровно одна попытка отправки**.
-
-Успех должен доказать одновременно:
+Success:
 
 ```text
 exactly one new user turn
-+
-exact prompt text
-+
-empty composer
-+
-new bound https://chatgpt.com/c/... URL
-=
-PROMPT_SEND_CONFIRMED
++ exact prompt text
++ empty composer
++ bound /c/... URL
+= PROMPT_SEND_CONFIRMED
 ```
 
-После этого send state:
-
-```text
-PROVEN_SENT
-```
-
-Если после клика Send невозможно доказать, отправился prompt или нет:
+Если Send outcome неопределён:
 
 ```text
 PROMPT_SEND_UNKNOWN
+→ no blind resend
 ```
 
-В этом состоянии автоматический resend запрещён.
+## 10. Continuation path
 
-Это критический anti-duplication invariant.
+Old REQ разрешается только в locally saved exact conversation reference.
 
----
+Lookup использует durable/direct/worker state для старого REQ.
 
-## 10. Корреляция assistant turn
-
-После `PROMPT_SEND_CONFIRMED` worker передаёт observer:
+Worker открывает exact:
 
 ```text
-exact prompt text
-+
-exact bound /c/... URL
+https://chatgpt.com/c/<conversation-id>
 ```
 
-Observer ищет:
+и должен подтвердить, что composer готов именно в этом conversation.
+
+После этого новый REQ проходит обычный send/observe/download lifecycle.
+
+Запрещено:
+
+- Search UI fallback;
+- угадывать conversation;
+- silent fresh-chat fallback;
+- отправлять old REQ или `--chat` как semantic intent.
+
+Если reference отсутствует:
+
+```text
+DIRECT_CHAT_REFERENCE_UNAVAILABLE
+→ STOP before Send
+```
+
+Если exact existing chat не подтверждён — fail closed до Send.
+
+## 11. Assistant-turn correlation
+
+Observer получает trusted user-turn/send proof и exact chat URL.
+
+Допустимый target:
 
 ```text
 exact proven user turn
@@ -387,33 +246,13 @@ exact proven user turn
 → role = assistant
 ```
 
-Нельзя:
+Старые assistant turns и глобальный поиск по body не используются.
 
-- искать ответ по всему `body`;
-- брать старый assistant turn;
-- брать attachment из другого сообщения;
-- использовать другой `/c/...` URL.
+Assistant turn должен завершить generation и стабилизировать текст до artifact detection.
 
-Lifecycle:
+## 12. Artifact envelope
 
-```text
-ASSISTANT_TURN_STARTED
-→ ASSISTANT_TURN_STREAMING
-→ ASSISTANT_TURN_COMPLETED
-```
-
-Файл:
-
-- `postman/web/browser_observer.py`  
-  https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/postman/web/browser_observer.py
-
-Production Direct Postman передаёт observer timeout около 15 минут.
-
----
-
-## 11. Контракт финального ответа ChatGPT
-
-Для ZIP result финальный assistant turn должен содержать ровно три непустые видимые строки:
+Финальный assistant turn должен содержать ровно три непустые видимые строки:
 
 ```text
 <<<POSTMAN_RESULT_BEGIN:<REQ>>>
@@ -421,154 +260,52 @@ POSTMAN_<REQ>_RESULT.zip
 <<<POSTMAN_RESULT_END:<REQ>>>
 ```
 
-Критически важно:
+Средняя строка — реальный downloadable control с exact visible filename.
 
-средняя строка должна быть **реальным downloadable attachment/control**, а не plain text.
+Нельзя принимать:
 
-Visible filename должен exact-match:
+- plain text вместо attachment;
+- generic `Download ZIP`;
+- attachment вне envelope;
+- stale attachment;
+- wrong REQ;
+- ambiguous controls.
 
-```text
-POSTMAN_<REQ>_RESULT.zip
-```
-
-Для конкретного примера:
-
-```text
-POSTMAN_REQ_20260917T134845Z_2554_RESULT.zip
-```
-
-Контракт:
-
-- один exact BEGIN marker;
-- один exact END marker;
-- один exact expected ZIP control;
-- control физически находится между BEGIN и END;
-- control находится внутри того же correlated assistant turn;
-- generic `Download ZIP` недостаточен;
-- правильное имя файла вне envelope недостаточно;
-- stale ZIP недостаточен;
-- wrong `REQ` отклоняется.
-
-Реализация:
-
-- `postman/web/artifact_detector.py`  
-  https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/postman/web/artifact_detector.py
-
----
-
-## 12. Artifact DOM proof
-
-После успешного detect worker получает identity proof, включающий данные вроде:
-
-```text
-requestId
-expectedFilename
-chatUrl
-assistantIndex
-assistantTextSha256
-turnSelector
-attachmentPath
-```
-
-Перед скачиванием P6 обязан повторно выполнить detector.
-
-Если identity изменилась:
-
-```text
-DOWNLOAD_PROOF_CHANGED
-```
-
-Никакого клика быть не должно.
-
-Это защищает от DOM race и подмены attachment между detect и download.
-
----
+Перед click identity доказывается повторно.
 
 ## 13. Download
 
-ZIP не ищется по файловой системе и не выбирается как «последний `.zip`».
-
-Запрещено:
+Правильный lifecycle:
 
 ```text
-scan Downloads directory
-choose newest ZIP
-choose last Download button
-search whole page for .zip
-```
-
-Правильный flow:
-
-```text
-exact correlated attachment
-→ page.expect_download(...)
+exact correlated control
+→ page.expect_download()
 → exactly one click
-→ exact download event
+→ browser download event
+→ suggested filename check
+→ request-scoped staging
 ```
 
-После download event проверяется:
+Нельзя искать newest ZIP в Downloads или выбирать «последнюю кнопку Download».
 
-```text
-download.suggested_filename == expected_filename
-```
+После неопределённого click blind retry запрещён.
 
-При mismatch artifact отклоняется.
-
-Повторный click автоматически не выполняется.
-
-Реализация:
-
-- `postman/web/artifact_download.py`  
-  https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/postman/web/artifact_download.py
-
----
-
-## 14. Staging
-
-Скачанный ZIP сначала сохраняется в request-scoped staging.
-
-Пример концептуально:
-
-```text
-<ResultRoot>\
-└── .staging\
-    └── <REQ>\
-        └── POSTMAN_<REQ>_RESULT.zip
-```
-
-Staging и final result path должны быть уникальны для request.
-
-Если staging/final path уже существует:
-
-```text
-RESULT_STORE_CONFLICT
-```
-
----
-
-## 15. ZIP validation
-
-Скачивание файла ещё не означает успех. После download Postman вычисляет SHA-256 и
-запускает safety-only artifact validator.
-
-Canonical validator:
-
-- `postman/web/artifact-validator.mjs`
-  https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/postman/web/artifact-validator.mjs
+## 14. Transport validator
 
 Normal hard gates:
 
-- exact expected filename;
+- exact expected filename/correlation;
 - readable non-empty ZIP;
-- central/local header and CRC integrity;
+- central/local header integrity и CRC;
 - path traversal / absolute / drive / UNC / ADS rejection;
 - symlink/reparse/special entry rejection;
 - duplicate/case/Unicode collision rejection;
-- compressed/uncompressed/entry/ratio limits and ZIP-bomb protection;
-- SHA-256;
-- optional manifest: explicit conflicting string `requestId` is rejected.
+- archive entry/count/size/ratio limits;
+- ZIP-bomb protection;
+- actual SHA-256;
+- optional manifest string `requestId` не должен конфликтовать с trusted current REQ.
 
-Not normal transport gates:
+Не являются normal hard gates:
 
 ```text
 protocolVersion
@@ -576,97 +313,124 @@ repository
 baseCommit
 resultType
 patch/files schema
-repository allowedPaths/forbiddenPaths
+allowedPaths/forbiddenPaths
 unified diff semantics
 ```
 
-ZIP не извлекается непосредственно поверх repository.
+ZIP не извлекается поверх repository.
 
----
+## 15. Optional manifest
 
-## 16. Optional manifest
+`manifest.json` необязателен.
 
-`manifest.json` не обязателен. Если он отсутствует, malformed, non-object или содержит
-unknown fields, безопасный ZIP всё равно может стать RESULT_DURABLE. Manifest metadata
-не имеет authority над trusted local request state.
+Если он:
 
-Если manifest является JSON object и содержит строковый `requestId`, это значение не
-может противоречить exact current REQ. Остальные поля informational для normal transport.
+- отсутствует;
+- malformed;
+- non-object;
+- содержит unknown fields;
 
-Canonical contract:
+это само по себе не делает transport artifact invalid.
 
-- `docs/web-postman-artifact-contract.md`
-  https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/docs/web-postman-artifact-contract.md
+Только explicit string `requestId`, конфликтующий с trusted current REQ, является manifest hard reject.
 
----
+## 16. RESULT_DURABLE
 
-## 17. Post-validation attestation
-
-Python transport после Node PASS проверяет только сам validator result против trusted
-local request data и raw downloaded bytes: validator PASS/status, exact current requestId,
-actual ZIP SHA-256 и locally trusted metadata returned by validator. Он не перечитывает
-manifest как repository/application gate.
-
-Реализация:
-
-- `postman/web/artifact_download.py`
-
----
-
-## 18. Durable result store
-
-После успешного transport результат атомарно сохраняется в request-scoped directory.
-
-Формат:
+После validator PASS результат публикуется атомарно в request-scoped directory:
 
 ```text
 <ResultRoot>\<REQ>\
-├── result.zip
-├── validation.json
-├── metadata.json
-└── manifest.json        # только если был внутри ZIP
+├─ result.zip
+├─ validation.json
+├─ metadata.json
+└─ manifest.json   # только если был в ZIP
 ```
 
-Состояние:
+Только `RESULT_DURABLE` означает successful transport.
 
-```text
-RESULT_DURABLE
-```
-
-Только `RESULT_DURABLE` означает, что Postman transport успешно завершён.
-
-Default result root задаётся через:
-
-```text
-DSH_POSTMAN_RESULT_ROOT
-```
-
-или runtime defaults.
-
-В PowerShell entrypoint Direct Postman также используется production default:
+Текущий deployment default:
 
 ```text
 D:\Downloads_dsh_auto
 ```
 
-если другой путь не задан.
+Result-root creation/write-probe принадлежит Direct Postman, а не Luna preflight.
 
-Файлы:
+## 17. Optional Result Workspace
 
-- `postman/direct/postman.ps1`  
-  https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/postman/direct/postman.ps1
+После exact `RESULT_DURABLE` normal flow может один раз попытаться:
 
-- `postman/web/runtime_support.py`  
-  https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/postman/web/runtime_support.py
+```text
+postman_result_workspace_register(
+  request_id=<exact REQ>,
+  result_handoff_json=<exact resultHandoffPath>
+)
+```
 
-- `postman/web/artifact_download.py`  
-  https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/postman/web/artifact_download.py
+Success:
 
----
+```text
+RESULT_WORKSPACE_REGISTERED
+```
 
-## 19. WebWorkerBridge state machine
+Registration требует durable result identity и обязательные durable metadata, но
+`manifest.json` для manifestless valid result не обязателен.
 
-Основные состояния transport bridge:
+Workspace registration — presentation convenience, не integrity gate.
+
+Если registration fail:
+
+```text
+RESULT_DURABLE остаётся PASS
+→ report exact resultZip + diagnostic
+→ no new REQ
+→ no repeat ChatGPT/download
+→ STOP
+```
+
+## 18. Что normal Postman не делает
+
+Normal `@Postman` не:
+
+- распаковывает ZIP;
+- анализирует semantic correctness;
+- применяет patch/files к repository;
+- запускает PREPARE/TEST/PUBLISH;
+- создаёт implementation worktree/branch/commit/PR;
+- выбирает дальнейшее действие на основе содержимого ZIP;
+- использует `postman_async_send`/`postman_runtime_*` как fallback;
+- выполняет manual browser automation как fallback.
+
+## 19. Legacy/manual finalization
+
+Существующие:
+
+```text
+resume_request.ps1
+prepare_result.py
+test_result.py
+publish_result.py
+integrate_result.py
+abandon_result.ps1
+presentation_status.py
+```
+
+остаются отдельным explicit workflow для уже существующего durable result.
+
+Они не являются normal `@Postman` flow.
+
+## 20. `dsh-postman-harness`
+
+Plugin сохраняется для auxiliary/legacy capabilities.
+
+Normal `@Postman` не идёт через persistent POSTMAN agent или `postman_async_send`.
+
+После `RESULT_DURABLE` plugin-owned Result Workspace registration может использоваться как
+presentation convenience.
+
+## 21. Production state
+
+Web bridge monotonic transport state концептуально:
 
 ```text
 ACCEPTED
@@ -677,281 +441,48 @@ ACCEPTED
 → RESULT_DURABLE
 ```
 
-Bridge хранит persisted state request-а.
+Direct layer дополнительно хранит task/browser/handoff state.
 
-Он не должен перемещать state назад.
+Нельзя переводить request назад или повторять Send по догадке.
 
-При restart уже продвинутого request-а нельзя blind resend prompt.
+## 22. Acceptance status
 
-Файл:
+2026-09-19 выполнен полный fresh + continuation E2E после production orchestration fixes.
 
-- `postman/web/web_worker_bridge.py`  
-  https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/postman/web/web_worker_bridge.py
-
----
-
-## 20. Direct Postman state machine
-
-Direct layer дополнительно хранит верхнеуровневые состояния:
+Проверено:
 
 ```text
-INIT
-→ TASK_PUBLISHED
-→ BROWSER_READY
-→ WEB_RUNNING
-→ RESULT_DURABLE
-```
-
-Ошибка:
-
-```text
-FAILED
-```
-
-После `RESULT_DURABLE` сохраняется durable handoff JSON.
-
-Файлы:
-
-- `postman/direct/postman_direct.py`  
-  https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/postman/direct/postman_direct.py
-
-- `postman/direct/durable_handoff.py`  
-  https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/postman/direct/durable_handoff.py
-
----
-
-## 21. Что Postman НЕ делает
-
-Direct Web Postman не должен:
-
-- применять ZIP поверх working tree;
-- делать blind patch apply;
-- считать assistant text trusted;
-- доверять имени файла без validator;
-- использовать model-provided routing authority;
-- выбирать «последний ZIP»;
-- повторно кликать attachment после неопределённого download;
-- повторно отправлять prompt после неопределённого Send;
-- закрывать externally-owned Chrome;
-- использовать старый user browser tab как job identity;
-- переключать основной checkout ради transport;
-- считать `RESULT_DURABLE` эквивалентом тестирования реализации.
-
----
-
-## 22. Что происходит после `RESULT_DURABLE`
-
-После exact successful transport normal `@Postman` flow может один раз попытаться
-зарегистрировать exact result directory как обычный Harness Workspace:
-
-```text
+fresh REQ → RESULT_DURABLE → Workspace registered
+continuation → new REQ
+continuedFromRequestId = old REQ
+same conversation identity
+same conversation URL
+semantic continuity
+ARTIFACT_VALID
+manifestless ZIP accepted
 RESULT_DURABLE
-→ postman_result_workspace_register(
-     request_id=<exact REQ>,
-     result_handoff_json=<exact resultHandoffPath>
-  )
-   или diagnostic ошибки регистрации
-→ сообщить exact REQ, exact resultZip и Workspace
+Workspace registered
+```
+
+Полная acceptance запись:
+
+```text
+docs/postman-production-e2e.md
+```
+
+## 23. Короткая формула
+
+```text
+exact current intent
+→ one new REQ
+→ self-contained task
+→ two-line browser prompt
+→ exact ChatGPT conversation
+→ exact next assistant turn
+→ exact ZIP control
+→ one download
+→ safety/correlation validation
+→ RESULT_DURABLE
+→ optional Workspace
 → STOP
 ```
-
-Workspace registration — presentation convenience, а не integrity gate. При её ошибке
-transport остаётся успешным: не создавать второй REQ, не повторять ChatGPT или download,
-не запускать resume и вернуть пользователю exact durable receipt, resultZip и diagnostic.
-Normal flow не вызывает `resume_request.ps1`, `integrate_result.ps1`, PREPARE, TEST или
-PUBLISH; не создаёт implementation worktree, branch, commit или PR и не распаковывает ZIP.
-Локальный агент не интерпретирует содержимое ZIP и не изменяет user payload: после удаления
-только `@Postman` + separator оставшийся текст передаётся verbatim без previous-context augmentation.
-
-Существующие finalization scripts не удаляются. `resume_request.ps1`,
-`prepare_result.py`, `test_result.py`, `publish_result.py` и `integrate_result.py` доступны
-только как legacy/manual explicit finalization для уже существующего durable результата
-по отдельному явному запросу пользователя; это не normal `@Postman` flow.
-
-Связанные файлы:
-
-- `postman/direct/resume_request.py`  
-  https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/postman/direct/resume_request.py
-
-- `postman/direct/prepare_result.py`  
-  https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/postman/direct/prepare_result.py
-
-- `postman/direct/test_result.py`  
-  https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/postman/direct/test_result.py
-
-- `postman/direct/publish_result.py`  
-  https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/postman/direct/publish_result.py
-
-- `postman/direct/integrate_result.py`  
-  https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/postman/direct/integrate_result.py
-
----
-
-## 23. Ключевые safety invariants
-
-### Send
-
-```text
-PROVEN_SENT
-→ no automatic resend
-```
-
-```text
-PROMPT_SEND_UNKNOWN
-→ no automatic resend
-```
-
-### Download
-
-```text
-exact correlated attachment
-→ exactly one click
-```
-
-После начала click:
-
-```text
-no blind retry
-```
-
-### Request
-
-```text
-one logical request
-→ one canonical REQ
-```
-
-### Browser
-
-```text
-one request
-→ one owned Page
-```
-
-### Artifact
-
-```text
-correct filename
-≠ sufficient proof
-```
-
-Нужно одновременно:
-
-```text
-correct REQ
-+ correct chat
-+ correct assistant turn
-+ exact envelope
-+ exact downloadable control
-+ exact filename
-+ exact manifest identity
-+ validator PASS
-+ durable store
-```
-
----
-
-## 24. Важное замечание по документации
-
-В `postman/web/README.md` и `docs/web-postman-artifact-contract.md` остаются исторические milestone-секции, где написано, что:
-
-```text
-WP-007 / P6 — Download + validation
-не реализован
-```
-
-Это исторический текст.
-
-В текущем production code P6 уже реализован и реально вызывается:
-
-```text
-artifact_download.download_validated_artifact(...)
-```
-
-из:
-
-```text
-WebWorkerBridge.run_request(...)
-```
-
-Поэтому для определения текущего поведения source of truth следует считать в первую очередь:
-
-1. `postman/direct/README.md`
-2. `postman/direct/postman.ps1`
-3. `postman/direct/postman_direct.py`
-4. `postman/web/web_worker_bridge.py`
-5. `postman/web/browser_submit.py`
-6. `postman/web/browser_observer.py`
-7. `postman/web/artifact_detector.py`
-8. `postman/web/artifact_download.py`
-9. `postman/web/artifact-validator.mjs`
-
-Исторические milestone-разделы README полезны как история развития, но не должны переопределять текущий executable flow.
-
----
-
-## 25. Короткая формулировка
-
-Direct Web Postman должен работать так:
-
-> Локальный агент создаёт уникальный `REQ`, фиксирует GitHub `base_commit`, публикует self-contained task-файл, запускает или переиспользует выделенный Chrome, создаёт новый ChatGPT Web chat, отправляет link-only transport prompt, привязывается к конкретному `/c/...` диалогу, ждёт ровно следующий assistant turn, находит внутри него строго оформленный ZIP attachment для того же `REQ`, ровно один раз скачивает его через browser download event, проверяет ZIP safety/integrity/SHA-256 и optional requestId correlation, атомарно сохраняет `RESULT_DURABLE` и возвращает локальному агенту путь к проверенному `result.zip`.
-
----
-
-## 26. Основные ссылки
-
-### Репозиторий
-
-https://github.com/AndrewVerhoturov1/dsh-workspace
-
-### Production Direct Postman
-
-https://github.com/AndrewVerhoturov1/dsh-workspace/tree/main/postman/direct
-
-### Browser transport
-
-https://github.com/AndrewVerhoturov1/dsh-workspace/tree/main/postman/web
-
-### Главный production README
-
-https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/postman/direct/README.md
-
-### Direct CLI
-
-https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/postman/direct/postman_direct.py
-
-### PowerShell entrypoint
-
-https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/postman/direct/postman.ps1
-
-### Web worker bridge
-
-https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/postman/web/web_worker_bridge.py
-
-### Fresh chat + submit
-
-https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/postman/web/browser_submit.py
-
-### Assistant observer
-
-https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/postman/web/browser_observer.py
-
-### Artifact detector
-
-https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/postman/web/artifact_detector.py
-
-### Download + durable store
-
-https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/postman/web/artifact_download.py
-
-### ZIP validator
-
-https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/postman/web/artifact-validator.mjs
-
-### Artifact contract
-
-https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/docs/web-postman-artifact-contract.md
-
-### Task package / transport prompt
-
-https://github.com/AndrewVerhoturov1/dsh-workspace/blob/main/postman/task_package.py

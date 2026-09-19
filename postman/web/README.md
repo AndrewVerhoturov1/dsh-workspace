@@ -1,555 +1,208 @@
-# `postman/web/` — границы будущего Web Postman
+# `postman/web/` — production browser transport
 
 ## Статус
 
-WP-006 / P5 — **COMPLETE / PASS**. Реализация объединена в canonical `main`
-через PR #54; merge SHA:
-`4ba6c68ca239a87c3383ed56cea7cbd0a10ea724`.
+`postman/web/` — действующий browser transport Direct Web Postman.
 
-Предыдущие разделы WP-001–WP-005 сохраняют историю границ и принятых
-milestone. Текущий следующий milestone: **WP-007 / P6 — Download + validation**.
+Старые WP-002…WP-007 milestone-описания являются историей разработки и не задают
+текущее production поведение. Текущая схема определяется executable modules,
+`postman/POSTMAN_CURRENT_FLOW.md` и `docs/web-postman-artifact-contract.md`.
 
-В WP-002 по-прежнему нет browser implementation, Playwright dependencies,
-production state machine, ZIP extraction/application code или интеграции с
-существующим Postman Runtime.
-
-Канонический контракт artifact/result transport находится в
-`docs/web-postman-artifact-contract.md`.
-
-## Целевая роль
-
-Будущий поток:
+Production pipeline:
 
 ```text
-Postman Runtime
-→ browser-worker
-→ browser-state
-→ ChatGPT Web on owned Page
-→ artifact-download
-→ artifact-validator
-→ result-store
-→ Postman Runtime READY
+dedicated Chrome/CDP
+→ owned Page
+→ fresh chat OR exact stored conversation
+→ exact prompt send proof
+→ exact next assistant turn
+→ exact artifact envelope/control
+→ one browser download
+→ transport validator
+→ request-scoped durable result
 ```
 
-Ни один модуль под `postman/web/` не является routing authority.
-
-Trusted mapping:
-
-```text
-REQ → origin_agent_id
-```
-
-остаётся ответственностью Postman Runtime.
-
----
-
-## Предполагаемая структура
+## Модули
 
 ```text
 postman/web/
-├── artifact-validator.mjs
-├── browser-worker.*
-├── browser-state.*
-├── artifact-download.*
-├── result-store.*
-└── tests/
-    └── artifact-validator.test.mjs
+├─ browser_bootstrap.py
+├─ browser_submit.py
+├─ browser_observer.py
+├─ request_identity.py
+├─ artifact_detector.py
+├─ artifact_download.py
+├─ artifact-validator.mjs
+├─ artifact_validate_cli.mjs
+├─ runtime_support.py
+├─ web_worker_bridge.py
+└─ tests/
 ```
 
-В WP-002 реализованы только `artifact-validator.mjs` и его unit tests.
-Остальные implementation modules остаются будущими.
+### `browser_bootstrap.py`
 
----
+Владеет dedicated Chrome/CDP bootstrap.
 
-## `artifact-validator`
-
-Ответственность:
-
-- максимально pure/deterministic validation;
-- проверка ZIP container до extraction;
-- exact expected filename;
-- normalized path safety;
-- symlink/reparse/special entry rejection;
-- duplicate/case/Unicode collision rejection;
-- compressed/uncompressed/entry/ratio limits;
-- CRC, SHA-256 и безопасный content inventory;
-- optional `manifest.json`: только explicit conflicting string `requestId` является hard reject.
-
-Предполагаемый вход:
+Default browser identity:
 
 ```text
-validateArtifact(zipPath, expectedRequest)
+%LOCALAPPDATA%\DSH\Postman\browser-profile
 ```
 
-Где `expectedRequest` формируется trusted Runtime и содержит ожидаемые request identity,
-exact filename и limits. Repository/application metadata может присутствовать, но normal
-transport validator не использует его как content gate.
+Профиль, а не PID процесса, является устойчивой browser identity. Worker не закрывает
+externally-owned Chrome/context.
 
-Предполагаемый выход:
+### `browser_submit.py`
+
+Fresh-chat path перед Send доказывает:
 
 ```text
-ValidationResult
-├── ok
-├── code
-├── sha256
-├── inventory
-├── warnings
-└── details
+owned Page
++ root ChatGPT route
++ zero current conversation turns
++ visible empty composer
 ```
 
-Ограничения:
+Continuation path открывает exact сохранённый `/c/<conversation-id>` и доказывает
+готовность того же conversation к новой отправке.
 
-- без browser;
-- без network;
-- без routing;
-- без workspace writes;
-- без extraction поверх repo;
-- один input должен давать детерминированный decision.
+После начала Send разрешена одна попытка. Success требует exact user-turn proof и bound chat URL.
+Неопределённый Send не разрешает blind resend.
 
-WP-002 реализует модуль без сторонних зависимостей. Он использует только
-стандартные модули Node.js и не требует `package.json` в `postman/web/`.
+### `browser_observer.py`
 
-Unit tests запускаются напрямую:
+Observer привязывается к доказанному user turn и exact chat URL и принимает только
+непосредственно следующий assistant turn.
 
-```powershell
-node --test postman/web/tests/artifact-validator.test.mjs
-```
+Поиск «любого похожего ответа» по всему DOM запрещён.
 
-Validator читает ZIP как недоверенные bytes и проверяет central/local headers,
-CRC, SHA-256, типы entries, path aliases/collisions и archive limits. Он не валидирует
-repository scope, resultType или unified diff semantics в normal transport flow.
+### `request_identity.py` и `artifact_detector.py`
 
-ZIP не извлекается поверх repository.
-
----
-
-## `browser-worker`
-
-Ответственность только за browser orchestration:
-
-- connect/reattach к headful Chrome через CDP;
-- создание owned dedicated Page;
-- login/session readiness;
-- fresh-chat proof;
-- composer readiness;
-- prompt insertion/send proof;
-- assistant turn lifecycle;
-- вызов artifact-download после строгой correlation;
-- recovery orchestration по persisted browser-state.
-
-Не отвечает за:
-
-- origin routing;
-- application patch/files;
-- GitHub writes;
-- validation policy internals;
-- durable result storage internals.
-
-Worker не должен использовать existing user Page как owned job Page и не должен
-закрывать externally-owned browser/context.
-
----
-
-## `browser-state`
-
-Ответственность за persisted browser/request state.
-
-Минимальные будущие данные:
-
-```text
-requestId
-workerJobId
-state
-promptSha256
-expectedArtifactFilename
-chatUrl
-owned-page correlation metadata
-send evidence
-assistant-turn correlation metadata
-download evidence
-lastError
-```
-
-Важные инварианты:
-
-```text
-PROMPT_SEND_UNKNOWN -> no blind resend
-PROVEN_SENT -> no automatic resend
-```
-
-State должен переживать worker restart. Ephemeral Page handle сам по себе не
-является durable identity.
-
-`browser-state` не хранит model-provided routing authority.
-
----
-
-## `artifact-download`
-
-Ответственность:
-
-```text
-exact correlated assistant attachment
-→ Playwright expect_download lifecycle
-→ controlled request-scoped staging path
-→ DOWNLOAD_COMPLETED
-```
-
-Этот модуль получает уже доказанный assistant-turn/attachment handle от
-browser-worker.
-
-Запрещено:
-
-- искать любой `.zip` по всему body;
-- выбирать последнюю Download button;
-- считать READY marker proof;
-- принимать файл с неправильным exact filename;
-- применять или распаковывать ZIP в repository.
-
-После download модуль передаёт raw path validator/result-store flow.
-
----
-
-## `result-store`
-
-Ответственность за durable local persistence:
-
-```text
-%LOCALAPPDATA%\DSH\Postman\results\<REQ>\
-├── result.zip
-├── validation.json
-├── metadata.json
-└── staging\
-```
-
-Обязан:
-
-- сохранять raw result детерминированно;
-- обеспечивать request-scoped paths;
-- использовать атомарную фиксацию metadata;
-- хранить calculated SHA-256;
-- различать downloaded, validated и durable states;
-- выдавать handle только после `RESULT_DURABLE`.
-
-Не отвечает за routing decision и не применяет result к workspace.
-
----
-
-## `tests/`
-
-Будущие тесты делятся минимум на:
-
-```text
-artifact validator unit tests
-browser-state unit tests
-browser correlation tests
-download lifecycle tests
-recovery tests
-single-request E2E
-concurrency/cross-correlation tests
-```
-
-WP-002 содержит artifact validator unit tests и не требует browser/network.
-Acceptance matrix включает exact machine-readable error codes для invalid
-fixtures. Case-insensitive и Unicode-NFC collisions являются hard reject, а не
-warning.
-
----
-
-## Межмодульные границы
-
-### Browser transport не валидирует policy «по памяти»
-
-`browser-worker` и `artifact-download` не должны дублировать ZIP security rules.
-Они передают raw artifact в `artifact-validator`.
-
-### Validator не знает browser
-
-`artifact-validator` не знает DOM, Page, ChatGPT, CDP или send state.
-
-### Result store не выбирает получателя
-
-`result-store` хранит результат конкретного REQ, но не решает, какому Harness
-Agent его доставить.
-
-### Runtime остаётся authority
-
-Только Postman Runtime владеет trusted request metadata и
-`REQ → origin_agent_id`.
-
-### Harness единственный применяет изменения
-
-Web Postman заканчивает работу на validated/durable result. Inspect, staging,
-apply и tests выполняет originating Harness Agent.
-
----
-
-## WP-002 границы
-
-В этом milestone не добавляются:
-
-- Playwright runner;
-- Chrome automation;
-- CDP connection code;
-- browser worker implementation;
-- artifact download implementation;
-- SQLite integration;
-- Harness integration;
-- production state machine implementation;
-- ZIP extraction/application code;
-- browser profiles;
-- runtime state;
-- diagnostics dumps;
-- новые runtime dependencies.
-
-Следующий milestone после PASS WP-002: WP-003 — Chrome/CDP
-login/session/composer bootstrap probe без отправки production prompt.
-
----
-
-## WP-003 — Browser Bootstrap
-
-WP-003 добавляет `browser_bootstrap.py` и unit tests для P2 browser bootstrap.
-
-Граница этого milestone:
-
-```text
-Chrome/CDP
-→ Playwright connect_over_cdp
-→ dedicated owned Page
-→ chatgpt.com
-→ manual session/login check
-→ visible composer
-```
-
-WP-003 не отправляет prompt, не ищет assistant turn и не скачивает artifacts.
-В attach-mode модуль не переиспользует существующую Page и не закрывает
-externally-owned browser/context. Профиль по умолчанию находится вне repository:
-`%LOCALAPPDATA%\\DSH\\Postman\\browser-profile`.
-
-### Постоянная идентичность браузера
-
-Для Web Postman постоянной идентичностью browser session является **каталог
-выделенного Chrome-профиля**, а не PID конкретного процесса Chrome:
-
-```text
-%LOCALAPPDATA%\\DSH\\Postman\\browser-profile
-```
-
-Профиль переживает закрытие и новый запуск Chrome и сохраняет локальное browser
-state, необходимое для повторного использования уже авторизованной сессии.
-PID процесса, CDP WebSocket URL и идентификаторы Page являются временными
-атрибутами конкретного запуска и не должны использоваться как durable identity.
-
-Обычный повторный запуск:
-
-```powershell
-python postman/web/browser_bootstrap.py --launch-chrome --timeout-ms 30000
-```
-
-Код Web Postman не вводит и не обрабатывает пароль, 2FA или CAPTCHA. При этом
-сам Chrome-профиль содержит cookies/session tokens и другое чувствительное
-локальное browser state. Поэтому профиль должен оставаться вне repository,
-не должен коммититься, прикладываться к artifact ZIP или целиком попадать в
-диагностические отчёты.
-
----
-
-## WP-004 — Fresh Chat + Submit
-
-WP-004 добавляет `browser_submit.py` и unit tests для P3 transport boundary.
-
-Перед отправкой worker обязан доказать одновременно:
-
-```text
-PAGE_OWNED
-→ root chatgpt.com route
-→ zero current conversation turns
-→ visible empty composer
-→ FRESH_CHAT_CONFIRMED
-→ COMPOSER_EMPTY_CONFIRMED
-```
-
-Один только видимый homepage composer не считается достаточным доказательством
-fresh chat.
-
-После вставки prompt проверяется его точный текст и SHA-256. Затем разрешена
-ровно одна попытка Send. После начала click запрещены Enter-fallback и
-автоматический повтор.
-
-Успешная отправка требует одновременного доказательства:
-
-```text
-exactly one new user turn with exact prompt text
-+ empty composer
-+ new bound /c/... URL
-= PROMPT_SEND_CONFIRMED
-```
-
-Если после начала Send хотя бы одно из этих доказательств отсутствует или
-результат click неопределён, состояние — `PROMPT_SEND_UNKNOWN`. Такой prompt
-автоматически повторно не отправляется.
-
-WP-004 ещё не наблюдает assistant turn, не ищет attachments и не скачивает ZIP.
-Persistent restart recovery для Send state остаётся отдельным последующим
-
----
-
-## WP-005 — Assistant Turn Observer
-
-WP-005 добавляет `browser_observer.py` и unit tests для P4 assistant-turn
-correlation/lifecycle.
-
-Observer начинает работу только после доказанного P3 submit и получает trusted
-pair:
-
-```text
-exact prompt text
-+
-exact bound https://chatgpt.com/c/... URL
-```
-
-Корреляция выполняется по упорядоченным conversation-turn DOM nodes:
-
-```text
-exact proven user turn
-→ immediately next conversation turn
-→ role = assistant
-```
-
-Старые assistant turns до user anchor игнорируются. Поиск response text по всему
-`body` запрещён.
-
-Lifecycle целевого assistant turn:
-
-```text
-ASSISTANT_TURN_STARTED
-→ ASSISTANT_TURN_STREAMING   (если streaming был наблюдаем)
-→ ASSISTANT_TURN_COMPLETED
-```
-
-Для `ASSISTANT_TURN_COMPLETED` целевой turn должен иметь непустой текст,
-generation control должен быть неактивен, а текст должен оставаться стабильным
-в течение заданного интервала. Изменение URL, неожиданный следующий user turn,
-неизвестная роль turn или смена identity уже привязанного assistant turn
-завершаются fail-closed состоянием.
-
-WP-005 не ищет attachments, не скачивает файлы и не применяет artifacts.
-
----
-
-## WP-006 — Artifact DOM Detection — COMPLETE / PASS
-
-WP-006 добавляет `request_identity.py`, `artifact_detector.py` и unit tests для
-P5. Новый production request использует один immutable cross-system key:
-
-```text
-REQ_YYYYMMDDTHHMMSSZ_NNNN
-```
-
-Например `REQ_20260831T043812Z_4827`. Ключ создаёт initiating Harness model до
-вызова Postman; Runtime валидирует format/uniqueness, сохраняет exact значение и
-не переименовывает его. Первая непустая строка Web ChatGPT prompt обязана быть:
-
-```text
-POSTMAN_REQUEST_ID: <REQ>
-```
-
-Detector запускается только после trusted `ASSISTANT_TURN_COMPLETED` proof из
-WP-005, заново подтверждает тот же chat/user/assistant turn и принимает ZIP
-только при exact DOM-порядке:
+Artifact должен быть физически внутри exact correlated assistant turn и внутри envelope:
 
 ```text
 <<<POSTMAN_RESULT_BEGIN:<REQ>>>
-<REAL clickable ZIP control with exact expected filename>
+POSTMAN_<REQ>_RESULT.zip
 <<<POSTMAN_RESULT_END:<REQ>>>
 ```
 
-Реальный control должен физически находиться между BEGIN и END. Generic
-`Download ZIP`, правильное имя вне envelope, stale ZIP, wrong REQ и
-неоднозначные controls отклоняются fail-closed.
+Средняя строка — реальный downloadable ZIP control с exact visible filename.
 
-Один ZIP:
+Generic download control, stale attachment, wrong REQ, filename вне envelope или неоднозначный
+control отклоняются.
 
-```text
-POSTMAN_<REQ>_RESULT.zip
-```
+### `artifact_download.py`
 
-Несколько заранее ожидаемых ZIP одного REQ:
+Download lifecycle:
 
 ```text
-POSTMAN_<REQ>_RESULT-01.zip
-POSTMAN_<REQ>_RESULT-02.zip
-```
-
-WP-006 ничего не кликает и не скачивает. `page.expect_download()`, controlled
-staging, validator и durable result store принадлежат P6/WP-007.
-
-### Формальное закрытие WP-006 / P5
-
-Финальный доказанный live request: `REQ_20260831T021012Z_5564`.
-
-```text
-PROMPT_INSERTED
-→ PROMPT_SEND_CONFIRMED
-→ PROVEN_SENT
-→ CHAT_URL_BOUND
-→ ASSISTANT_TURN_COMPLETED
-→ exact BEGIN
-→ exact real ZIP control
-→ exact END
-→ ARTIFACT_DOM_CONFIRMED
-```
-
-`visibleFilenameExact = true`, `betweenMarkers = true`,
-`downloadStarted = false`. P5 заканчивается на `ARTIFACT_DOM_CONFIRMED`.
-
-Граница P5: не кликать ZIP, не начинать download, не сохранять artifact, не
-запускать validator и не переводить Runtime в `READY`.
-
-Итоговые регрессии: request identity 6/6, WP-006/P5 38/38, WP-005/P4 44/44,
-WP-004/P3 47/47, WP-003/P2 28/28, WP-002/P1 60/60, Runtime 14/14,
-index/plugin 18/18; `git diff --check` — PASS.
-
-Request identity contract завершён: initiating model создаёт exact
-`REQ_YYYYMMDDTHHMMSSZ_NNNN`, Runtime требует `requestId`, не создаёт и не
-переписывает REQ, collision обрабатывается fail-closed, `MSG` выводится из того
-же REQ.
-
-Post-WP-006 integration confirmation: `delegate-via-postman` проверен новым
-агентом после controlled Harness restart; Runtime принял новый exact REQ в
-`ACCEPTED / WAITING`, caller-owned `message_id` отсутствовал. Это не является
-browser acceptance criterion P5.
-
-**CURRENT NEXT MILESTONE: WP-007 / P6 — Download + validation.**
-
-Вход P6: `ARTIFACT_DOM_CONFIRMED`. Ответственность P6:
-
-```text
-exact correlated artifact control
+exact correlated control
+→ re-prove identity
 → page.expect_download()
 → exactly one click
-→ browser download
-→ controlled staging path
-→ artifact validator
-→ validated result / failure
+→ exact browser download event
+→ request-scoped staging
+→ validator
+→ durable store
 ```
 
-WP-007/P6 не реализован.
+Filesystem scan по «последнему ZIP» не используется.
 
----
+### `artifact-validator.mjs`
 
-## WP-011 — Web Worker Bridge
+Normal hard gates:
 
-`web_worker_bridge.py` координирует один запрос Runtime с уже существующим
-конвейером WP-003—WP-007. Он не содержит новых браузерных селекторов или
-механизма подключения: `browser_bootstrap`, `browser_submit`,
-`browser_observer`, `artifact_detector` и `artifact_download` остаются
-единственными владельцами соответствующих шагов.
+- exact expected filename;
+- readable non-empty ZIP;
+- central/local header consistency и CRC;
+- path traversal / absolute / drive / UNC / ADS rejection;
+- symlink/reparse/special entry rejection;
+- duplicate/case/Unicode collision rejection;
+- entry/count/compressed/uncompressed/ratio limits;
+- SHA-256;
+- optional manifest string `requestId` не должен конфликтовать с trusted current REQ.
 
-На этапе `ACCEPTED` мост сохраняет неизменный `request_id`, `worker_job_id` и
-request-scoped `resultPath`. После успешного P6 `RESULT_DURABLE` возвращается
-как компактное доказательство; только затем адаптер Runtime вызывает
-производственный `markReady`, который переводит запрос в существующее
-состояние `READY`. Владелец и доставка по-прежнему определяются только
-таблицей Runtime `REQ → origin_agent_id`.
+Не являются normal transport gates:
+
+```text
+protocolVersion
+repository
+baseCommit
+resultType
+patch/files schema
+allowedPaths/forbiddenPaths
+unified diff semantics
+```
+
+`manifest.json` может отсутствовать, быть malformed/non-object или содержать unknown fields.
+Это само по себе не делает безопасный ZIP invalid.
+
+### `web_worker_bridge.py`
+
+Координирует browser pipeline для одного trusted REQ и сохраняет monotonic request state.
+
+Основные состояния:
+
+```text
+ACCEPTED
+→ WEB_STARTING
+→ PROMPT_SENT
+→ WAITING_ASSISTANT
+→ ARTIFACT_FOUND
+→ RESULT_DURABLE
+```
+
+Bridge не является repository applicator и не принимает model-provided routing authority.
+
+## Fresh и continuation
+
+Fresh request создаёт новую owned Page и новый ChatGPT conversation.
+
+Continuation получает от Direct layer exact сохранённый conversation URL старого REQ,
+открывает именно его и отправляет **новый** canonical REQ. Старый REQ используется только
+для lookup и correlation; semantic prompt содержит только новый request.
+
+Нет Search UI fallback и нет silent fresh-chat fallback.
+
+## Durable result boundary
+
+`postman/web/` заканчивает работу на validated request-scoped artifact:
+
+```text
+RESULT_DURABLE
+```
+
+Он не:
+
+- применяет ZIP к working tree;
+- запускает Git/PR lifecycle;
+- интерпретирует semantic correctness результата;
+- выбирает downstream action по содержимому ZIP.
+
+Normal post-processing и optional Result Workspace registration описаны в
+`postman/POSTMAN_CURRENT_FLOW.md`.
+
+## Tests
+
+Регрессии находятся в:
+
+```text
+postman/web/tests/
+```
+
+Особенно важны группы:
+
+```text
+browser bootstrap
+submit/send proof
+assistant observer
+artifact detector
+artifact download
+artifact validator
+runtime support
+web worker bridge
+continuation/correlation
+```
+
+Исторические milestone counts и «next milestone» не являются частью этого README:
+актуальный статус определяется текущим `main` и тестами.
