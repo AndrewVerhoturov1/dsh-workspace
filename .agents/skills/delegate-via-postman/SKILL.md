@@ -5,7 +5,7 @@ description: >-
   начальных пробелов начинается с точного литерала @Postman. Выполнить задачу через
   Direct Web Postman: сохранить пользовательский intent без технических дополнений,
   создать ровно один canonical REQ, один раз вызвать
-  C:\Users\andre\.dsh\postman\direct\postman.ps1, дождаться validated RESULT_DURABLE,
+  workspace-relative `postman\direct\postman.ps1`, дождаться validated RESULT_DURABLE,
   сохранить validated RESULT_DURABLE, сообщить exact resultZip и остановиться. Регистрация
   Result Workspace — необязательная presentation convenience, а не integrity gate. Не использовать Cordis/postman_async_send, QChat или
   ручную автоматизацию браузера как fallback.
@@ -277,13 +277,14 @@ canonical REQ.
 Единственный production entrypoint:
 
 ```text
-C:\Users\andre\.dsh\postman\direct\postman.ps1
+<current workspace>\postman\direct\postman.ps1
 ```
 
 Перед вызовом разрешена только простая проверка существования:
 
 ```powershell
-$bridge = 'C:\Users\andre\.dsh\postman\direct\postman.ps1'
+$workspace = (Get-Location).Path
+$bridge = Join-Path $workspace 'postman\direct\postman.ps1'
 if (-not (Test-Path -LiteralPath $bridge -PathType Leaf)) {
     throw 'POSTMAN_DIRECT_BRIDGE_MISSING'
 }
@@ -346,7 +347,8 @@ $state = Join-Path $env:LOCALAPPDATA "DSH\Postman\direct\requests\$requestId.jso
 Использовать payload из раздела Intent preservation.
 
 ```powershell
-$bridge = 'C:\Users\andre\.dsh\postman\direct\postman.ps1'
+$workspace = (Get-Location).Path
+$bridge = Join-Path $workspace 'postman\direct\postman.ps1'
 
 $jsonText = & $bridge `
   -RequestId $requestId `
@@ -536,7 +538,9 @@ error/reason
 исследуется неисправность browser bootstrap/CDP до новой разрешённой отправки.
 
 ```powershell
-& 'C:\Users\andre\.dsh\postman\direct\postman.ps1' `
+$workspace = (Get-Location).Path
+$bridge = Join-Path $workspace 'postman\direct\postman.ps1'
+& $bridge `
   -BrowserSmoke
 ```
 
@@ -775,7 +779,7 @@ terminal state
 5. После удаления только `@Postman` + separator весь оставшийся текст передаётся verbatim; previous-context augmentation запрещён.
 6. Один logical request → один REQ.
 7. После начала Direct Postman invocation REQ immutable.
-8. Production transport — только `C:\Users\andre\.dsh\postman\direct\postman.ps1`.
+8. Production transport — только `<current workspace>\postman\direct\postman.ps1`.
 9. `postman_async_send` и Cordis path не являются production transport.
 10. BrowserSmoke не является normal preflight.
 11. Chrome/ChatGPT/Send/download принадлежат Direct Postman, а не Л1.

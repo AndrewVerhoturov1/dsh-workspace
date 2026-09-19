@@ -17,7 +17,9 @@ class DelegateViaPostmanSkillContract(unittest.TestCase):
 
     def test_version_and_entrypoint(self):
         self.assertIn("DIRECT_POSTMAN_SKILL_VERSION: 15", self.skill)
-        self.assertIn(r"C:\Users\andre\.dsh\postman\direct\postman.ps1", self.skill)
+        self.assertIn("$workspace = (Get-Location).Path", self.skill)
+        self.assertIn("$bridge = Join-Path $workspace 'postman\\direct\\postman.ps1'", self.skill)
+        self.assertNotIn(r"C:\Users\andre\.dsh\postman\direct\postman.ps1", self.skill)
 
     def test_old_callable_path_is_not_present(self):
         # Mentioning the legacy token in a prohibition is allowed; an actual
@@ -236,7 +238,7 @@ class DelegateViaPostmanSkillContract(unittest.TestCase):
 
     def test_agents_global_invariant(self):
         self.assertIn(
-            r"POSTMAN_PRODUCTION_ENTRYPOINT: C:\Users\andre\.dsh\postman\direct\postman.ps1",
+            r"POSTMAN_PRODUCTION_ENTRYPOINT: <current workspace>\postman\direct\postman.ps1",
             self.agents,
         )
         self.assertIn("postman_async_send", self.agents)
