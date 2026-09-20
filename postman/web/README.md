@@ -49,8 +49,9 @@ Default browser identity:
 %LOCALAPPDATA%\DSH\Postman\browser-profile
 ```
 
-Профиль, а не PID процесса, является устойчивой browser identity. Worker не закрывает
-externally-owned Chrome/context.
+Профиль, а не PID процесса, является устойчивой browser identity. Worker закрывает
+только созданную им owned Page, причём до отключения Playwright/CDP. Externally-owned
+Chrome/context не закрываются.
 
 ### `browser_submit.py`
 
@@ -179,8 +180,8 @@ RESULT_DURABLE
 - интерпретирует semantic correctness результата;
 - выбирает downstream action по содержимому ZIP.
 
-Normal post-processing и optional Result Workspace registration описаны в
-`postman/POSTMAN_CURRENT_FLOW.md`.
+Normal post-processing заканчивается на RESULT_DURABLE и описан в
+`postman/POSTMAN_CURRENT_FLOW.md`; автоматическая Result Workspace registration не выполняется.
 
 ## Tests
 

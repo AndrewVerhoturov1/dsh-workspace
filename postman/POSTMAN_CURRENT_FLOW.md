@@ -169,8 +169,9 @@ http://127.0.0.1:9222
 Browser profile — durable browser identity. PID/Page/WebSocket IDs — runtime details.
 
 Dedicated Chrome запускается с нейтральной страницей `about:blank`; рабочий ChatGPT chat
-открывается только в отдельной owned Page. Worker после terminal result закрывает принадлежащую
-ему рабочую вкладку. Externally-owned browser/context не закрываются.
+открывается только в отдельной owned Page. Worker закрывает принадлежащую ему рабочую вкладку
+до отключения Playwright/CDP и подтверждает `ownedPageClosed`. Externally-owned
+browser/context не закрываются.
 
 ## 9. Fresh chat path
 
@@ -395,37 +396,20 @@ D:\Downloads_dsh_auto
 
 Result-root creation/write-probe принадлежит Direct Postman, а не Luna preflight.
 
-## 17. Optional Result Workspace
+## 17. Terminal handoff без Result Workspace
 
-После exact `RESULT_DURABLE` normal flow может один раз попытаться:
-
-```text
-postman_result_workspace_register(
-  request_id=<exact REQ>,
-  result_handoff_json=<exact resultHandoffPath>
-)
-```
-
-Success:
+После exact `RESULT_DURABLE` normal flow сообщает:
 
 ```text
-RESULT_WORKSPACE_REGISTERED
+exact requestId
+exact resultZip
 ```
 
-Registration требует durable result identity и обязательные durable metadata, но
-`manifest.json` для manifestless valid result не обязателен.
+После этого — `STOP`.
 
-Workspace registration — presentation convenience, не integrity gate.
-
-Если registration fail:
-
-```text
-RESULT_DURABLE остаётся PASS
-→ report exact resultZip + diagnostic
-→ no new REQ
-→ no repeat ChatGPT/download
-→ STOP
-```
+Normal `@Postman` не вызывает `postman_result_workspace_register(...)` и не создаёт
+Harness Workspace автоматически. Presentation/finalization, если понадобится, является
+отдельным explicit workflow вне normal transport.
 
 ## 18. Что normal Postman не делает
 
@@ -464,8 +448,7 @@ Plugin сохраняется для auxiliary/legacy capabilities.
 
 Normal `@Postman` не идёт через persistent POSTMAN agent или `postman_async_send`.
 
-После `RESULT_DURABLE` plugin-owned Result Workspace registration может использоваться как
-presentation convenience.
+После `RESULT_DURABLE` normal `@Postman` не создаёт Result Workspace автоматически.
 
 ## 21. Production state
 
