@@ -65,10 +65,9 @@ Postman global invariant: OFF by default.
 самостоятельно. Без `@Postman` Luna больше не имеет права запускать Postman.
 
 Postman normal lifecycle invariant.
-После exact `RESULT_DURABLE` normal `@Postman` flow может один раз попытаться
-зарегистрировать exact durable result через
-`postman_result_workspace_register(request_id=<exact REQ>, result_handoff_json=<exact resultHandoffPath>)`
-и затем обязан остановиться. Workspace registration — presentation convenience, а не integrity gate.
+После exact `RESULT_DURABLE` normal `@Postman` flow сообщает exact `requestId` и
+`resultZip`, затем обязан остановиться. Normal flow не вызывает
+`postman_result_workspace_register(...)` и не создаёт Result Workspace автоматически.
 
 Postman existing-chat continuation invariant.
 Форма `@Postman --chat <canonical old REQ> <intent>` разрешает продолжить exact ChatGPT
@@ -77,9 +76,6 @@ conversation, URL которого уже доказан и сохранён Pos
 передаётся только новый intent без `--chat` и старого REQ. Если URL не найден, normal path
 останавливается с `DIRECT_CHAT_REFERENCE_UNAVAILABLE`; UI Search/лупа и угадывание чата в
 этом milestone запрещены как fallback.
-
-Если регистрация не удалась, transport остаётся успешным: сообщить exact resultZip и
-diagnostic, не создавать второй REQ, не повторять ChatGPT/download и не запускать resume.
 
 `resume_request.ps1`, PREPARE, TEST, PUBLISH и `integrate_result.ps1` сохраняются как
 legacy/manual explicit finalization для уже существующего durable результата. Они не являются

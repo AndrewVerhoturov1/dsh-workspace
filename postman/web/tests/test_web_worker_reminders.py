@@ -40,8 +40,13 @@ class FakePage:
     def __init__(self) -> None:
         self.url = CHAT_URL
         self.closed = False
+        self.playwright_active = True
+        self.close_calls = 0
 
     def close(self) -> None:
+        self.close_calls += 1
+        if not self.playwright_active:
+            raise RuntimeError("Playwright already stopped before page.close()")
         self.closed = True
 
     def is_closed(self) -> bool:
@@ -81,13 +86,16 @@ class FakePlaywright:
 
 
 class FakeFactoryContext:
-    def __init__(self, playwright: FakePlaywright) -> None:
+    def __init__(self, playwright: FakePlaywright, page: FakePage) -> None:
         self.playwright = playwright
+        self.page = page
 
     def __enter__(self) -> FakePlaywright:
+        self.page.playwright_active = True
         return self.playwright
 
     def __exit__(self, exc_type, exc, tb) -> None:
+        self.page.playwright_active = False
         return None
 
 
@@ -95,9 +103,10 @@ class FakeFactory:
     def __init__(self, page: FakePage) -> None:
         context = FakeContext(page)
         self.playwright = FakePlaywright(FakeBrowser(context))
+        self.page = page
 
     def __call__(self) -> FakeFactoryContext:
-        return FakeFactoryContext(self.playwright)
+        return FakeFactoryContext(self.playwright, self.page)
 
 
 def confirmed_submit(prompt: str) -> dict:
@@ -133,6 +142,23 @@ class WebWorkerReminderTests(unittest.TestCase):
             monotonic=clock.monotonic,
             sleep=clock.sleep,
         )
+
+    def test_close_owned_page_retries_once_while_playwright_is_active(self):
+        class FlakyPage(FakePage):
+            def close(self) -> None:
+                self.close_calls += 1
+                if not self.playwright_active:
+                    raise RuntimeError("Playwright already stopped before page.close()")
+                if self.close_calls == 1:
+                    raise RuntimeError("transient close failure")
+                self.closed = True
+
+        page = FlakyPage()
+        cleanup = web_worker_bridge._close_owned_page(page)
+
+        self.assertTrue(cleanup["ownedPageClosed"])
+        self.assertEqual(cleanup["closeAttempts"], 2)
+        self.assertEqual(page.close_calls, 2)
 
     def test_three_reminders_are_attempted_at_fixed_ten_minute_offsets(self):
         clock = FakeClock()
@@ -236,6 +262,7 @@ class WebWorkerReminderTests(unittest.TestCase):
             self.assertEqual(reminder_times, [600])
             self.assertEqual(len(result["details"]["reminders"]), 1)
             self.assertTrue(result["details"]["browserCleanup"]["ownedPageClosed"])
+            self.assertEqual(result["details"]["browserCleanup"]["closeAttempts"], 1)
             self.assertTrue(page.closed)
 
     def test_rejected_zip_waits_for_first_reminder_then_durable_retry(self):
