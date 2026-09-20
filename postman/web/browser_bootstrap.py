@@ -27,6 +27,7 @@ from typing import Any, Callable
 from urllib.parse import urlparse
 
 CHATGPT_URL = "https://chatgpt.com/"
+DEFAULT_STARTUP_URL = "about:blank"
 DEFAULT_CDP_URL = "http://127.0.0.1:9222"
 DEFAULT_REMOTE_DEBUGGING_PORT = 9222
 DEFAULT_TIMEOUT_MS = 20_000
@@ -173,7 +174,7 @@ def build_chrome_command(
     profile_dir: str | Path,
     *,
     port: int = DEFAULT_REMOTE_DEBUGGING_PORT,
-    initial_url: str = CHATGPT_URL,
+    initial_url: str = DEFAULT_STARTUP_URL,
 ) -> list[str]:
     if not isinstance(port, int) or not (1 <= port <= 65535):
         raise BrowserBootstrapError(BOOTSTRAP_INVALID_CONFIG, "Invalid remote debugging port")
@@ -194,7 +195,7 @@ def start_dedicated_chrome(
     profile_dir: str | Path,
     *,
     port: int = DEFAULT_REMOTE_DEBUGGING_PORT,
-    initial_url: str = CHATGPT_URL,
+    initial_url: str = DEFAULT_STARTUP_URL,
     popen: Callable[..., Any] = subprocess.Popen,
 ) -> Any:
     profile = Path(profile_dir)

@@ -175,7 +175,8 @@ class BrowserBootstrapTests(unittest.TestCase):
         self.assertIn("--remote-debugging-port=9333", command)
         self.assertIn("--remote-debugging-address=127.0.0.1", command)
         self.assertTrue(any(item.startswith("--user-data-dir=") for item in command))
-        self.assertEqual(command[-1], bootstrap.CHATGPT_URL)
+        self.assertEqual(command[-1], bootstrap.DEFAULT_STARTUP_URL)
+        self.assertEqual(command[-1], "about:blank")
 
     def test_build_chrome_command_rejects_invalid_port(self):
         with self.assertRaises(bootstrap.BrowserBootstrapError):

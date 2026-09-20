@@ -13,7 +13,7 @@ description: >-
 
 # Delegate via Postman — Direct Production
 
-`DIRECT_POSTMAN_SKILL_VERSION: 16`
+`DIRECT_POSTMAN_SKILL_VERSION: 17`
 
 Исторический baseline до v12: `DIRECT_POSTMAN_SKILL_VERSION: 11`.
 
@@ -37,6 +37,24 @@ description: >-
 После `RESULT_DURABLE` normal flow не вызывает resume/PREPARE/TEST/PUBLISH, не
 создаёт implementation worktree/branch/commit/PR и не распаковывает ZIP. Регистрация
 Workspace — только удобство показа, а не integrity gate.
+
+После подтверждённой первоначальной отправки Direct Postman сам выполняет до трёх
+служебных напоминаний в том же ChatGPT conversation и в рамках того же REQ:
+
+```text
+10 минут → напоминание №1
+20 минут → напоминание №2
+30 минут → напоминание №3
+45 минут → если validated ZIP не получен, transport завершается с ошибкой
+```
+
+Расписание фиксированное и не зависит от того, пишет модель, молчит или вернула
+промежуточный/ошибочный ответ. Если exact ZIP уже скачан и validated раньше,
+оставшиеся напоминания отменяются. Напоминание является transport control, не создаёт
+новый REQ и не меняет исходный user intent.
+
+После terminal result Direct Postman закрывает принадлежащую ему рабочую вкладку ChatGPT.
+Dedicated Chrome и внешний browser context не закрываются.
 
 Не проектируй другой transport flow.
 
@@ -384,7 +402,7 @@ Direct Postman находит сохранённый `conversationUrl`.
 времени. Coding/ZIP request может выполняться много минут.
 
 Предпочитать один foreground-вызов с timeout не меньше внутреннего Postman timeout
-(15 минут). Не переводить обычный request в background только ради периодического
+(45 минут). Не переводить обычный request в background только ради периодического
 polling. Background допустим только если конкретный shell-tool технически не может
 ждать достаточно долго; тогда ждать завершения именно этого одного process/job.
 
@@ -422,7 +440,7 @@ const command = [
 const result = await tools.pwsh({
   command,
   description: 'Выполнить продолжение через Direct Postman',
-  timeoutMs: 900000,
+  timeoutMs: 3000000,
 });
 ```
 

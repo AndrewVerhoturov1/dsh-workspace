@@ -71,7 +71,13 @@ POSTMAN_<requestId>_RESULT-02.zip
 
 ## 4. Correlated assistant turn
 
-Artifact принимается только из assistant turn, который доказан как ответ на exact текущий request.
+Artifact принимается только из assistant turn, который доказан как ответ на разрешённый
+user anchor exact текущего request. Разрешённый anchor — первоначальный Postman prompt
+или служебное напоминание Direct Postman с тем же trusted `requestId`.
+
+Для одного REQ допускается до трёх таких служебных напоминаний по фиксированному
+расписанию 10/20/30 минут. Они не создают новый request и не меняют semantic intent.
+А произвольный новый user turn разрешённым anchor не является.
 
 Финальный assistant turn должен содержать envelope:
 
@@ -200,11 +206,15 @@ Direct/Web Postman transport не должен:
 - доверять model-provided routing metadata;
 - делать blind resend, когда состояние предыдущего send неопределённо.
 
+Фиксированное служебное напоминание с новым номером `REMINDER 1/3..3/3` не является
+blind resend исходной задачи: это заранее определённый transport control того же REQ.
+
 ## 12. Production invariants
 
 ```text
 one logical request
 = one immutable request_id
++ zero to three authorized reminder turns
 
 exact request correlation
 + exact assistant turn
