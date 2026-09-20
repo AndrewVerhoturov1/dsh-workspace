@@ -2,7 +2,24 @@
 
 ## Назначение
 
-Этот checklist определяет продуктовую готовность MVP. Он не является набором unit tests и не требует реализовывать отложенные подсистемы.
+Этот checklist определяет продуктовую готовность MVP `NodesAgent_by_Andrew`. Он не является набором unit tests и не требует реализовывать отложенные подсистемы.
+
+Перед production milestones отдельно проходит `Phase P0` HTML prototype. P0 является implementation gate, а не заменой продуктового MVP acceptance.
+
+# P0. HTML prototype implementation gate
+
+- [ ] Standalone prototype находится в `docs/subprojects/agents-nods-by-andrew/prototypes/nodes-agent-mvp/`.
+- [ ] Prototype запускается через локальный HTTP server, а не через `file://`.
+- [ ] Можно создать, выбрать, переместить и удалить AgentNode.
+- [ ] Есть Inspector с основными полями AgentNode.
+- [ ] Можно назначить один Entry Agent.
+- [ ] Authority и Communication edges создаются отдельно и визуально различаются.
+- [ ] Есть pan, zoom и fit view.
+- [ ] Mock definition/layout можно сохранить и восстановить из browser state.
+- [ ] UI показывает blocking validation examples.
+- [ ] Mock Start/Pause/Resume/Stop и runtime statuses позволяют проверить live UX.
+- [ ] `Open Chat` видим как будущая runtime action, но не притворяется реальным DSH Chat.
+- [ ] Можно просмотреть минимум `ru-RU` и `en-US` вариант интерфейса.
 
 # A. Team Editor
 
@@ -12,6 +29,7 @@
 - [ ] Есть pan, zoom и сетка/понятная canvas-навигация.
 - [ ] Можно создавать и удалять поддерживаемые связи.
 - [ ] Выбор ноды/связи открывает Inspector.
+- [ ] Production UI не хардкодит пользовательские строки в компонентах и имеет минимум `en-US`/`ru-RU` localization resources.
 
 # B. AgentNode configuration
 
@@ -20,9 +38,10 @@
 - [ ] Есть стабильный internal id.
 - [ ] Есть role/description.
 - [ ] Есть model.
-- [ ] Есть reasoning effort.
+- [ ] Есть reasoning effort, получаемый/валидируемый как model-owned capability там, где DSH это поддерживает.
 - [ ] Есть system prompt.
 - [ ] Есть расширяемая настройка Capabilities, использующая реально поддерживаемые DSH возможности.
+- [ ] Capability policy не ограничена навсегда моделью `tools[]`; при конфликте allow/deny действует `deny wins`.
 
 # C. DSH runtime integration
 
@@ -30,6 +49,7 @@
 - [ ] Для каждого AgentNode в TeamRun существует реальный DSH Agent / Session binding.
 - [ ] Один AgentRuntime сохраняет свою Session на протяжении Run.
 - [ ] Новый TeamRun не переиспользует Sessions предыдущего запуска без явной причины.
+- [ ] Runtime ownership/topology DSH не используется как скрытая замена Authority graph.
 - [ ] Open Chat открывает настоящий DSH Chat соответствующей Session.
 
 # D. Authority and Communication
@@ -44,6 +64,7 @@
 
 - [ ] Агент может отправить разрешённому агенту обычный Message без создания Task.
 - [ ] Message хранит sender, recipient, body, timestamp/status минимум.
+- [ ] Message сохраняется как orchestration fact до/вместе с доставкой.
 - [ ] Message доставляется в реальную DSH Session адресата.
 
 # F. Tasks
@@ -64,6 +85,7 @@
 - [ ] Пользователь может выбрать сохранённую схему команды.
 - [ ] Создаётся TeamRun выбранной схемы.
 - [ ] Основной пользовательский Chat направлен Entry Agent этого Run.
+- [ ] Внутренние Communication restrictions не блокируют оператору Open Chat другого AgentRuntime.
 
 # H. Validate
 
@@ -73,6 +95,7 @@
 - [ ] Проверяются dangling/missing endpoints.
 - [ ] Проверяются конфликтующие technical names.
 - [ ] Проверяется базовая доступность обязательной agent configuration там, где это возможно через DSH.
+- [ ] Проверяется model/reasoning compatibility там, где DSH предоставляет capability metadata.
 - [ ] Blocking errors запрещают Start.
 
 # I. Lifecycle
@@ -93,6 +116,7 @@
 
 - [ ] TeamDefinition сохраняется и загружается.
 - [ ] TeamLayout сохраняется отдельно от semantic definition.
+- [ ] TeamDefinition имеет revision/эквивалентную защиту от тихого concurrent overwrite.
 - [ ] TeamRun существует отдельно от TeamDefinition.
 - [ ] Run хранит AgentNode → DSH Session bindings.
 - [ ] Run связан со своими Messages, Tasks и TaskAttempts.
@@ -116,7 +140,8 @@ MVP принят, если стабильно проходит сценарий:
 12. Developer завершает Task;
 13. результат приходит Lead и сохраняется системой;
 14. Pause / Resume / Stop работают;
-15. сохранённую TeamDefinition можно использовать для нового независимого TeamRun.
+15. сохранённую TeamDefinition можно использовать для нового независимого TeamRun;
+16. основные production UI actions доступны в `ru-RU` и `en-US`.
 
 # Не блокирует MVP
 

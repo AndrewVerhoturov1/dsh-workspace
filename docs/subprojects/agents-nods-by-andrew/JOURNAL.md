@@ -25,3 +25,9 @@
 - **Что изменилось:** направление оформлено как долгоживущий подпроект `agents-nods-by-andrew`; собраны исходные документы, архитектурные границы, roadmap и acceptance checklist.
 - **Почему:** работа будет продолжаться через несколько задач, веток, PR и чатов; контекст и принятые решения должны сохраняться независимо от конкретной task branch.
 - **Результат:** готов documentation-only implementation package для механического внедрения локальным агентом.
+
+### 2026-09-21 — Зафиксировано implementation vision и имя NodesAgent_by_Andrew
+
+- **Что изменилось:** каноническим именем плагина стало `NodesAgent_by_Andrew`; зафиксирована языковая политика, разделение production layers и обязательный `Phase P0` standalone HTML UX prototype перед Cordis/DSH integration.
+- **Почему:** до production-кода необходимо проверить UX редактора и одновременно исключить случайное временное название, смешивание runtime hierarchy с Authority и позднее добавление русской локализации.
+- **Результат:** добавлен `NodesAgent_by_Andrew_MVP_Implementation_Vision.md`; roadmap начинается с P0, а следующим implementation package должен быть полностью готовый HTML prototype без реального DSH runtime.

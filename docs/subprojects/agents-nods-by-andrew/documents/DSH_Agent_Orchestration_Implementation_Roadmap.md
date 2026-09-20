@@ -2,69 +2,115 @@
 
 ## Назначение
 
-Рабочая последовательность implementation milestones после регистрации подпроекта. Это не расширяет scope MVP и не разрешает локальному агенту самостоятельно менять продуктовые решения.
+Рабочая последовательность implementation milestones для плагина `NodesAgent_by_Andrew`. Это не расширяет scope MVP и не разрешает локальному агенту самостоятельно менять продуктовые или архитектурные решения.
 
-Конкретные файлы и DSH APIs для каждого milestone должны сначала подтверждаться по актуальному коду репозитория.
+Канонический implementation approach находится в `NodesAgent_by_Andrew_MVP_Implementation_Vision.md`.
 
-# Milestone 0 — Repository integration audit
+Каждый milestone выполняется отдельной task branch и отдельным PR в `preview`.
 
-Цель: точно определить существующие точки интеграции DSH, ничего не перепроектируя.
+# Phase P0 — Standalone HTML UX Prototype
 
-Нужно найти текущие реализации:
+Цель: до production DSH integration проверить UX и visual hierarchy редактора на полностью готовом standalone prototype.
 
-- Agent creation/configuration;
-- Session creation/resume;
-- native Chat opening/routing;
-- model/reasoning configuration;
-- capabilities/tools/skills/MCP access controls;
-- cancellation/pause primitives;
-- runtime status/events;
-- persistence conventions;
-- extension/plugin UI entry points.
+Путь:
 
-Результат: короткий implementation handoff для Milestone 1 с exact paths/APIs.
-
-# Milestone 1 — Team Editor shell
+```text
+docs/subprojects/agents-nods-by-andrew/prototypes/nodes-agent-mvp/
+├─ index.html
+├─ styles.css
+├─ app.js
+└─ README.md
+```
 
 Вертикальный результат:
 
+- Canvas;
+- AgentNode create/delete/move/select;
+- Inspector;
+- Entry Agent;
+- Authority edges;
+- Communication edges;
+- validation presentation;
+- mock Save/Load в browser state;
+- mock Start/Pause/Resume/Stop;
+- mock runtime statuses;
+- видимая будущая команда Open Chat;
+- минимум `ru-RU` и `en-US` presentation.
+
+Ограничения:
+
+- нет реального DSH backend;
+- нет настоящих Agent/Session;
+- нет production storage/RPC;
+- prototype JS architecture не считается production architecture.
+
+P0 должен пройти отдельные P0 acceptance criteria из implementation vision до начала production Editor.
+
+# Milestone 1 — Plugin foundation
+
+Вертикальный результат:
+
+- `plugins/dsh-nodes-agent-by-andrew/`;
+- Cordis Host/Client integration;
+- `TeamDefinition`;
+- `TeamLayout`;
+- design storage;
+- model/tool catalog;
+- CRUD API;
+- validator;
+- localization foundation минимум `en-US`/`ru-RU`.
+
+Пока команда не исполняется. Fake TeamRun не создаётся.
+
+# Milestone 2 — Production Team Editor
+
+Вертикальный результат:
+
+- UX принятого P0 перенесён в настоящий DSH UI;
 - отдельный большой Canvas;
 - AgentNode create/delete/move/select;
 - Inspector;
-- TeamDefinition;
-- TeamLayout;
 - Save/Load;
-- базовый Validate;
-- Entry Agent field.
+- catalog-backed provider/model selection;
+- capabilities configuration;
+- Validate;
+- Entry Agent;
+- русская и английская локализация UI.
 
-Пока команда может не исполняться.
+# Milestone 3 — TeamRun and real DSH Sessions
 
-# Milestone 2 — TeamRun and real DSH sessions
+Перед реализацией подтвердить на installed workspace baseline:
+
+- continuable agent/session seam;
+- Session navigation/Open Chat seam;
+- Agent create/resume semantics;
+- required model capability metadata.
 
 Вертикальный результат:
 
 - Start создаёт TeamRun;
 - AgentRuntime для каждой ноды;
 - real DSH Agent / Session binding;
+- новый Run по умолчанию получает новые Sessions;
 - Open Chat;
 - Stop;
 - базовый live runtime status.
 
-После этого граф уже представляет настоящую команду DSH, даже до сложной кооперации.
+Authority hierarchy не должна автоматически становиться DSH parent-child runtime hierarchy.
 
-# Milestone 3 — Authority, Communication and Message Bus
+# Milestone 4 — Authority, Communication and Message Bus
 
 Вертикальный результат:
 
 - parent/child authority;
 - max-one-parent + no-cycle validation;
 - отдельная communication policy;
-- обычный Message;
-- проверка права отправки;
+- обычный durable Message;
+- runtime permission check;
 - доставка в DSH Session;
 - минимальный Messages activity view.
 
-# Milestone 4 — Minimal Tasks
+# Milestone 5 — Minimal Tasks
 
 Вертикальный результат:
 
@@ -77,7 +123,7 @@
 - result возвращается manager-у;
 - никакого global auto-scheduler.
 
-# Milestone 5 — DSH Chat entry flow
+# Milestone 6 — DSH Chat entry flow
 
 Вертикальный результат:
 
@@ -89,7 +135,7 @@
 
 После этого должен проходить полный основной demo-сценарий.
 
-# Milestone 6 — Pause / Resume and MVP hardening
+# Milestone 7 — Pause / Resume and MVP hardening
 
 Вертикальный результат:
 
