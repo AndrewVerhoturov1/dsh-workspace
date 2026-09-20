@@ -3,7 +3,7 @@
 
 This module is an orchestration boundary only. Browser behaviour remains in
 WP-003--WP-007 modules; the bridge owns request correlation, state persistence,
-and the hand-off back to Runtime after RESULT_DURABLE.
+fixed service reminders, and the hand-off back to Runtime after RESULT_DURABLE.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ import artifact_download
 import browser_bootstrap
 import browser_observer
 import browser_submit
+import reminder_policy
 import request_identity
 
 
@@ -38,6 +39,26 @@ BRIDGE_INVALID_CONFIG = "BRIDGE_INVALID_CONFIG"
 BRIDGE_PIPELINE_FAILED = "BRIDGE_PIPELINE_FAILED"
 
 _STATE_ORDER = (ACCEPTED, WEB_STARTING, PROMPT_SENT, WAITING_ASSISTANT, ARTIFACT_FOUND, RESULT_DURABLE)
+_FATAL_ARTIFACT_CODES = {
+    artifact_detector.ARTIFACT_INVALID_CONFIG,
+    artifact_detector.ARTIFACT_OBSERVER_PROOF_INVALID,
+    artifact_detector.ARTIFACT_CHAT_CORRELATION_LOST,
+    artifact_detector.ARTIFACT_TURN_IDENTITY_MISMATCH,
+}
+_REMINDER_ELIGIBLE_ARTIFACT_CODES = {
+    artifact_detector.ARTIFACT_TURN_NOT_COMPLETED,
+    artifact_detector.ARTIFACT_ENVELOPE_MISSING,
+    artifact_detector.ARTIFACT_ENVELOPE_AMBIGUOUS,
+    artifact_detector.ARTIFACT_ENVELOPE_DOM_MISMATCH,
+    artifact_detector.ARTIFACT_ATTACHMENT_NOT_FOUND,
+    artifact_detector.ARTIFACT_ATTACHMENT_OUTSIDE_ENVELOPE,
+    artifact_detector.ARTIFACT_ATTACHMENT_AMBIGUOUS,
+}
+_NONTERMINAL_OBSERVER_CODES = {
+    browser_observer.ASSISTANT_TURN_TIMEOUT,
+    browser_observer.ASSISTANT_NOT_STARTED,
+    browser_observer.ASSISTANT_STATE_UNKNOWN,
+}
 
 
 def default_postman_root() -> Path:
@@ -79,6 +100,66 @@ def _atomic_json(path: Path, value: dict[str, Any]) -> None:
             pass
 
 
+def _attach_submit_proof(
+    completed: dict[str, Any],
+    *,
+    prompt: str,
+    submitted: dict[str, Any],
+) -> dict[str, Any]:
+    completed.setdefault("details", {})
+    completed["details"].update(
+        {
+            "promptSha256": browser_submit.prompt_sha256(prompt),
+            "submitCode": submitted.get("code"),
+            "submitSendState": submitted.get("sendState"),
+            "submitCorrelationMode": submitted.get("details", {}).get("userTurnCorrelationMode", ""),
+        }
+    )
+    return completed
+
+
+def _compact_reminder_record(
+    *,
+    index: int,
+    scheduled_elapsed_ms: int,
+    attempted_elapsed_ms: int,
+    finished_elapsed_ms: int,
+    prompt: str,
+    submitted: dict[str, Any],
+) -> dict[str, Any]:
+    details = submitted.get("details") if isinstance(submitted.get("details"), dict) else {}
+    return {
+        "index": index,
+        "scheduledElapsedMs": scheduled_elapsed_ms,
+        "attemptedElapsedMs": attempted_elapsed_ms,
+        "finishedElapsedMs": finished_elapsed_ms,
+        "ok": submitted.get("ok") is True,
+        "code": str(submitted.get("code", "")),
+        "sendState": str(submitted.get("sendState", "")),
+        "promptSha256": browser_submit.prompt_sha256(prompt),
+        "userTurnCorrelationMode": str(details.get("userTurnCorrelationMode", "")),
+        "unsentPromptCleared": bool(details.get("unsentPromptCleared", False)),
+    }
+
+
+def _close_owned_page(page: Any) -> dict[str, Any]:
+    cleanup = {
+        "ownedPageCreated": page is not None,
+        "ownedPageClosed": page is None,
+        "externalBrowserClosed": False,
+    }
+    if page is None:
+        return cleanup
+    try:
+        page.close()
+        checker = getattr(page, "is_closed", None)
+        cleanup["ownedPageClosed"] = bool(checker()) if callable(checker) else True
+    except Exception as exc:
+        cleanup["ownedPageClosed"] = False
+        cleanup["closeError"] = str(exc)[:500]
+    return cleanup
+
+
 @dataclass(frozen=True)
 class BridgeRequest:
     request_id: str
@@ -96,12 +177,16 @@ class WebWorkerBridge:
         root: str | os.PathLike[str] | None = None,
         result_root: str | os.PathLike[str] | None = None,
         now: Callable[[], float] = time.time,
+        monotonic: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
         on_result_durable: Callable[[dict[str, Any]], Any] | None = None,
     ) -> None:
         postman_root = Path(root) if root is not None else default_postman_root()
         self.state_root = postman_root / "workers"
         self.result_root = Path(result_root) if result_root is not None else postman_root / "results"
         self.now = now
+        self.monotonic = monotonic
+        self.sleep = sleep
         self.on_result_durable = on_result_durable
 
     def state_path(self, request_id: str) -> Path:
@@ -128,7 +213,18 @@ class WebWorkerBridge:
         current = self.read_state(request.request_id)
         if current is not None:
             previous = current.get("state")
-            if previous in _STATE_ORDER and _STATE_ORDER.index(state) < _STATE_ORDER.index(previous):
+            retry_after_rejected_artifact = (
+                previous == ARTIFACT_FOUND
+                and state == WAITING_ASSISTANT
+                and isinstance(current.get("artifactValidation"), dict)
+                and current["artifactValidation"].get("code") == artifact_download.ARTIFACT_INVALID
+                and current["artifactValidation"].get("recoverable") is True
+            )
+            if (
+                previous in _STATE_ORDER
+                and _STATE_ORDER.index(state) < _STATE_ORDER.index(previous)
+                and not retry_after_rejected_artifact
+            ):
                 raise ValueError(f"state cannot move backwards from {previous} to {state}")
         record = {
             **(current or {}),
@@ -195,15 +291,17 @@ class WebWorkerBridge:
         conversation_url: str | None = None,
         cdp_url: str = browser_bootstrap.DEFAULT_CDP_URL,
         timeout_ms: int = browser_submit.DEFAULT_TIMEOUT_MS,
-        observer_timeout_ms: int = browser_observer.DEFAULT_TIMEOUT_MS,
+        observer_timeout_ms: int = reminder_policy.DEFAULT_OVERALL_TIMEOUT_MS,
         stable_ms: int = browser_observer.DEFAULT_STABLE_MS,
+        reminder_interval_ms: int = reminder_policy.DEFAULT_REMINDER_INTERVAL_MS,
+        max_reminders: int = reminder_policy.DEFAULT_REMINDER_COUNT,
         download_timeout_ms: int = artifact_download.DEFAULT_DOWNLOAD_TIMEOUT_MS,
         click_timeout_ms: int = artifact_download.DEFAULT_CLICK_TIMEOUT_MS,
         browser_download_dir: str = artifact_download.DEFAULT_BROWSER_DOWNLOAD_DIR,
         playwright_factory: Callable[[], Any] | None = None,
         validator_runner: Callable[[Path, dict[str, Any]], dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        """Run WP-003--WP-007 once and return the terminal bridge proof."""
+        """Run the browser pipeline once, with up to three fixed reminders."""
         accepted = self.accept_request(request_id, task_url)
         if not accepted["ok"]:
             return accepted
@@ -219,6 +317,12 @@ class WebWorkerBridge:
             return _result(BRIDGE_INVALID_CONFIG, ok=False, details={"reason": "expected_request_not_object"})
         if conversation_url is not None and not browser_submit.is_bound_chat_url(conversation_url):
             return _result(BRIDGE_INVALID_CONFIG, ok=False, details={"reason": "invalid_conversation_url"})
+        if isinstance(observer_timeout_ms, bool) or not isinstance(observer_timeout_ms, int) or observer_timeout_ms <= 0:
+            return _result(BRIDGE_INVALID_CONFIG, ok=False, details={"reason": "observer_timeout_ms_invalid"})
+        if isinstance(reminder_interval_ms, bool) or not isinstance(reminder_interval_ms, int) or reminder_interval_ms <= 0:
+            return _result(BRIDGE_INVALID_CONFIG, ok=False, details={"reason": "reminder_interval_ms_invalid"})
+        if isinstance(max_reminders, bool) or not isinstance(max_reminders, int) or max_reminders < 0:
+            return _result(BRIDGE_INVALID_CONFIG, ok=False, details={"reason": "max_reminders_invalid"})
 
         self._write_state(request, WEB_STARTING)
         factory = playwright_factory
@@ -230,6 +334,7 @@ class WebWorkerBridge:
 
         browser = context = page = None
         owns_context = False
+        terminal_result: dict[str, Any] | None = None
         try:
             with factory() as playwright:
                 normalized = browser_bootstrap.normalize_cdp_url(cdp_url)
@@ -263,83 +368,271 @@ class WebWorkerBridge:
                     continuedConversation=conversation_url is not None,
                 )
 
-                self._write_state(request, WAITING_ASSISTANT)
-                completed = browser_observer.observe_next_assistant(
-                    page,
-                    prompt,
-                    chat_url,
-                    timeout_ms=observer_timeout_ms,
-                    stable_ms=stable_ms,
-                )
-                completed.setdefault("details", {})
-                completed["details"].update(
-                    {
-                        "promptSha256": browser_submit.prompt_sha256(prompt),
-                        "submitCode": submitted.get("code"),
-                        "submitSendState": submitted.get("sendState"),
-                        "submitCorrelationMode": submitted.get("details", {}).get("userTurnCorrelationMode", ""),
-                    }
-                )
-                if not completed.get("ok"):
-                    return self._fail(request, completed.get("code", "observer_failed"), details=completed)
-
-                detected = artifact_detector.detect_artifact_dom(
-                    page,
-                    expected_prompt=prompt,
-                    expected_chat_url=chat_url,
-                    request_id=request_id,
-                    expected_filename=expected_filename,
-                    completed_observer_result=completed,
-                )
-                if not detected.get("ok"):
-                    return self._fail(request, detected.get("code", "artifact_not_found"), details=detected)
-                self._write_state(request, ARTIFACT_FOUND, observerProof=completed, artifactProof=detected)
-
-                durable = artifact_download.download_validated_artifact(
-                    page,
-                    expected_prompt=prompt,
-                    expected_chat_url=chat_url,
-                    request_id=request_id,
-                    expected_filename=expected_filename,
-                    completed_observer_result=completed,
-                    artifact_dom_result=detected,
-                    expected_request=expected_request,
-                    result_root=self.result_root,
-                    browser_download_dir=browser_download_dir,
-                    download_timeout_ms=download_timeout_ms,
-                    click_timeout_ms=click_timeout_ms,
-                    validator_runner=validator_runner,
-                )
-                if durable.get("code") != artifact_download.RESULT_DURABLE:
-                    return self._fail(request, durable.get("code", "download_failed"), details=durable)
-                record = self._write_state(
+                started_at = self.monotonic()
+                deadline = started_at + observer_timeout_ms / 1000.0
+                reminder_records: list[dict[str, Any]] = []
+                reminder_index = 0
+                current_prompt = prompt
+                current_submit = submitted
+                current_turn_processed = False
+                last_observer_code = ""
+                last_artifact_code = ""
+                reminder_policy_record = {
+                    "intervalMs": reminder_interval_ms,
+                    "maxReminders": max_reminders,
+                    "overallTimeoutMs": observer_timeout_ms,
+                }
+                self._write_state(
                     request,
-                    RESULT_DURABLE,
-                    resultPath=durable.get("details", {}).get("resultDirectory", request.result_path),
-                    resultZip=durable.get("details", {}).get("resultZip"),
-                    resultSha256=durable.get("details", {}).get("sha256"),
-                    durableProof=durable,
-                    conversationUrl=chat_url,
-                    conversationId=conversation_id,
+                    WAITING_ASSISTANT,
+                    reminderPolicy=reminder_policy_record,
+                    reminders=reminder_records,
                 )
-                result = {"ok": True, "code": RESULT_DURABLE, "details": record}
-                if self.on_result_durable is not None:
-                    self.on_result_durable(result)
-                return result
+
+                while True:
+                    now = self.monotonic()
+                    if now >= deadline:
+                        terminal_result = self._fail(
+                            request,
+                            browser_observer.ASSISTANT_TURN_TIMEOUT,
+                            details={
+                                "lastObserverCode": last_observer_code,
+                                "lastArtifactCode": last_artifact_code,
+                                "reminderPolicy": reminder_policy_record,
+                                "reminders": reminder_records,
+                            },
+                        )
+                        return terminal_result
+
+                    next_due = None
+                    if reminder_index < max_reminders:
+                        next_due = started_at + (
+                            reminder_policy.scheduled_elapsed_ms(
+                                reminder_index + 1,
+                                interval_ms=reminder_interval_ms,
+                            )
+                            / 1000.0
+                        )
+                    slice_deadline = min(deadline, next_due) if next_due is not None else deadline
+
+                    if current_turn_processed:
+                        delay = max(slice_deadline - now, 0.0)
+                        if delay > 0:
+                            self.sleep(delay)
+                    else:
+                        slice_timeout_ms = max(1, int(max(slice_deadline - now, 0.0) * 1000.0))
+                        completed = browser_observer.observe_next_assistant(
+                            page,
+                            current_prompt,
+                            chat_url,
+                            timeout_ms=slice_timeout_ms,
+                            stable_ms=stable_ms,
+                            sleep=self.sleep,
+                            monotonic=self.monotonic,
+                        )
+                        completed = _attach_submit_proof(
+                            completed,
+                            prompt=current_prompt,
+                            submitted=current_submit,
+                        )
+                        last_observer_code = str(completed.get("code", ""))
+
+                        if completed.get("ok"):
+                            detected = artifact_detector.detect_artifact_dom(
+                                page,
+                                expected_prompt=current_prompt,
+                                expected_chat_url=chat_url,
+                                request_id=request_id,
+                                expected_filename=expected_filename,
+                                completed_observer_result=completed,
+                            )
+                            last_artifact_code = str(detected.get("code", ""))
+                            if detected.get("ok"):
+                                self._write_state(
+                                    request,
+                                    ARTIFACT_FOUND,
+                                    observerProof=completed,
+                                    artifactProof=detected,
+                                    reminderPolicy=reminder_policy_record,
+                                    reminders=reminder_records,
+                                )
+
+                                durable = artifact_download.download_validated_artifact(
+                                    page,
+                                    expected_prompt=current_prompt,
+                                    expected_chat_url=chat_url,
+                                    request_id=request_id,
+                                    expected_filename=expected_filename,
+                                    completed_observer_result=completed,
+                                    artifact_dom_result=detected,
+                                    expected_request=expected_request,
+                                    result_root=self.result_root,
+                                    browser_download_dir=browser_download_dir,
+                                    download_timeout_ms=download_timeout_ms,
+                                    click_timeout_ms=click_timeout_ms,
+                                    validator_runner=validator_runner,
+                                )
+                                if durable.get("code") != artifact_download.RESULT_DURABLE:
+                                    if (
+                                        durable.get("code") == artifact_download.ARTIFACT_INVALID
+                                        and durable.get("recoverable") is True
+                                    ):
+                                        # A downloaded ZIP with rejected contents is a model/result
+                                        # failure, not a failed REQ. The next scheduled reminder may
+                                        # establish a fresh P5/P6 attempt; all other download errors
+                                        # remain fail-closed.
+                                        self._write_state(
+                                            request,
+                                            ARTIFACT_FOUND,
+                                            artifactValidation=durable,
+                                            reminderPolicy=reminder_policy_record,
+                                            reminders=reminder_records,
+                                        )
+                                        current_turn_processed = True
+                                        continue
+                                    return self._fail(request, durable.get("code", "download_failed"), details=durable)
+                                record = self._write_state(
+                                    request,
+                                    RESULT_DURABLE,
+                                    resultPath=durable.get("details", {}).get("resultDirectory", request.result_path),
+                                    resultZip=durable.get("details", {}).get("resultZip"),
+                                    resultSha256=durable.get("details", {}).get("sha256"),
+                                    durableProof=durable,
+                                    conversationUrl=chat_url,
+                                    conversationId=conversation_id,
+                                    reminderPolicy=reminder_policy_record,
+                                    reminders=reminder_records,
+                                )
+                                terminal_result = {"ok": True, "code": RESULT_DURABLE, "details": record}
+                                if self.on_result_durable is not None:
+                                    self.on_result_durable(terminal_result)
+                                return terminal_result
+
+                            artifact_code = detected.get("code")
+                            if artifact_code in _FATAL_ARTIFACT_CODES:
+                                return self._fail(
+                                    request,
+                                    artifact_code or "artifact_not_found",
+                                    details=detected,
+                                )
+                            if artifact_code not in _REMINDER_ELIGIBLE_ARTIFACT_CODES:
+                                return self._fail(
+                                    request,
+                                    artifact_code or "artifact_not_found",
+                                    details=detected,
+                                )
+
+                            # Only known model-output/result-shape failures are
+                            # eligible for the next scheduled reminder. Unknown
+                            # or internal detector failures stop immediately so
+                            # existing fail-closed tests and diagnostics never
+                            # wait for a real ten-minute reminder window.
+                            current_turn_processed = True
+                        elif completed.get("code") not in _NONTERMINAL_OBSERVER_CODES:
+                            return self._fail(
+                                request,
+                                completed.get("code", "observer_failed"),
+                                details=completed,
+                            )
+
+                    now = self.monotonic()
+                    if now >= deadline:
+                        continue
+
+                    if reminder_index < max_reminders:
+                        scheduled_elapsed = reminder_policy.scheduled_elapsed_ms(
+                            reminder_index + 1,
+                            interval_ms=reminder_interval_ms,
+                        )
+                        due = started_at + scheduled_elapsed / 1000.0
+                        if now >= due:
+                            index = reminder_index + 1
+                            reminder_prompt = reminder_policy.build_reminder_prompt(
+                                request_id,
+                                index,
+                                total=max_reminders,
+                            )
+                            attempted_elapsed = max(0, int((now - started_at) * 1000.0))
+                            reminder_submit = reminder_policy.submit_reminder(
+                                page,
+                                reminder_prompt,
+                                chat_url,
+                                timeout_ms=timeout_ms,
+                            )
+                            finished_elapsed = max(0, int((self.monotonic() - started_at) * 1000.0))
+                            reminder_records.append(
+                                _compact_reminder_record(
+                                    index=index,
+                                    scheduled_elapsed_ms=scheduled_elapsed,
+                                    attempted_elapsed_ms=attempted_elapsed,
+                                    finished_elapsed_ms=finished_elapsed,
+                                    prompt=reminder_prompt,
+                                    submitted=reminder_submit,
+                                )
+                            )
+                            send_state = reminder_submit.get("sendState")
+                            if (
+                                send_state == browser_submit.SEND_UNKNOWN
+                                or reminder_submit.get("code") == browser_submit.PROMPT_SEND_UNKNOWN
+                            ):
+                                return self._fail(
+                                    request,
+                                    "reminder send state is UNKNOWN",
+                                    details={"reminderSubmit": reminder_submit, "reminders": reminder_records},
+                                )
+                            if send_state == browser_submit.SEND_PROVEN_SENT:
+                                reminder_index += 1
+                                self._write_state(
+                                    request,
+                                    WAITING_ASSISTANT,
+                                    reminderPolicy=reminder_policy_record,
+                                    reminders=reminder_records,
+                                    lastObserverCode=last_observer_code,
+                                    lastArtifactCode=last_artifact_code,
+                                )
+                                current_prompt = reminder_prompt
+                                current_submit = reminder_submit
+                                current_turn_processed = False
+                                continue
+                            if (
+                                send_state == browser_submit.SEND_PROVEN_NOT_SENT
+                                and reminder_submit.get("details", {}).get("unsentPromptCleared") is True
+                            ):
+                                reminder_index += 1
+                                self._write_state(
+                                    request,
+                                    WAITING_ASSISTANT,
+                                    reminderPolicy=reminder_policy_record,
+                                    reminders=reminder_records,
+                                    lastObserverCode=last_observer_code,
+                                    lastArtifactCode=last_artifact_code,
+                                )
+                                continue
+                            return self._fail(
+                                request,
+                                "reminder send result was not safely continuable",
+                                details={"reminderSubmit": reminder_submit, "reminders": reminder_records},
+                            )
         except Exception as exc:
             return self._fail(request, str(exc), code=BRIDGE_PIPELINE_FAILED)
         finally:
-            if page is not None:
-                try:
-                    page.close()
-                except Exception:
-                    pass
+            cleanup = _close_owned_page(page)
             if owns_context and context is not None:
                 try:
                     context.close()
+                    cleanup["ownedContextClosed"] = True
+                except Exception as exc:
+                    cleanup["ownedContextClosed"] = False
+                    cleanup["contextCloseError"] = str(exc)[:500]
+            else:
+                cleanup["ownedContextClosed"] = False
+            # The CDP-attached browser is externally owned and is never closed.
+            if terminal_result is not None and terminal_result.get("code") == RESULT_DURABLE:
+                terminal_result.setdefault("details", {})["browserCleanup"] = cleanup
+                try:
+                    self._write_state(request, RESULT_DURABLE, browserCleanup=cleanup)
                 except Exception:
                     pass
-            # The CDP-attached browser is externally owned and is never closed.
 
     def _fail(self, request: BridgeRequest, reason: str, *, code: str = BRIDGE_PIPELINE_FAILED, details: Any = None) -> dict[str, Any]:
         record = self._write_state(request, self.read_state(request.request_id).get("state", ACCEPTED) if self.read_state(request.request_id) else ACCEPTED, lastError=str(reason)[:1000], failureCode=code)

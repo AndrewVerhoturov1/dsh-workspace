@@ -54,6 +54,33 @@ DEFAULT_DOWNLOAD_TIMEOUT_MS = 30000
 DEFAULT_CLICK_TIMEOUT_MS = 10000
 DEFAULT_VALIDATOR_TIMEOUT_SECONDS = 60
 
+# Only validator rejections that describe untrusted ZIP content are retryable.
+# Unknown validator codes remain fail-closed and keep staging for diagnostics.
+_RECOVERABLE_VALIDATOR_CODES = frozenset(
+    {
+        "ARTIFACT_BAD_ZIP",
+        "ARTIFACT_EMPTY",
+        "ARTIFACT_FILENAME_MISMATCH",
+        "ARTIFACT_REQUEST_MISMATCH",
+        "ARTIFACT_PATH_TRAVERSAL",
+        "ARTIFACT_ABSOLUTE_PATH",
+        "ARTIFACT_WINDOWS_DRIVE_PATH",
+        "ARTIFACT_UNC_PATH",
+        "ARTIFACT_NTFS_ADS",
+        "ARTIFACT_SYMLINK",
+        "ARTIFACT_REPARSE_ENTRY",
+        "ARTIFACT_DUPLICATE_PATH",
+        "ARTIFACT_CASE_COLLISION",
+        "ARTIFACT_WINDOWS_RESERVED_NAME",
+        "ARTIFACT_PATH_INVALID",
+        "ARTIFACT_COMPRESSED_SIZE_LIMIT",
+        "ARTIFACT_UNCOMPRESSED_SIZE_LIMIT",
+        "ARTIFACT_ENTRY_SIZE_LIMIT",
+        "ARTIFACT_ENTRY_LIMIT",
+        "ARTIFACT_ZIP_BOMB_RISK",
+    }
+)
+
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _SHA1_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 _REPO_RE = re.compile(r"^[^/\s]+/[^/\s]+$")
@@ -283,6 +310,17 @@ def _atomic_write_bytes(path: Path, data: bytes) -> None:
 def _atomic_write_json(path: Path, value: Any) -> None:
     payload = (json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode("utf-8")
     _atomic_write_bytes(path, payload)
+
+
+def _discard_staging(staging_dir: Path) -> None:
+    """Remove one request-scoped staging directory after content rejection."""
+    if not staging_dir.exists():
+        return
+    if _is_link_or_junction(staging_dir):
+        raise RuntimeError("staging request directory must not be a symlink/junction")
+    if _is_link_or_junction(staging_dir.parent):
+        raise RuntimeError("staging parent must not be a symlink/junction")
+    shutil.rmtree(staging_dir)
 
 
 def _read_optional_manifest_bytes(zip_path: Path) -> bytes | None:
@@ -623,17 +661,54 @@ def download_validated_artifact(
         )
 
     if validation.get("ok") is not True:
+        validator_code = validation.get("code")
+        if validator_code not in _RECOVERABLE_VALIDATOR_CODES:
+            return _result(
+                ARTIFACT_VALIDATOR_FAILED,
+                ok=False,
+                details={
+                    "phase": "validator",
+                    "reason": "validator returned an unknown rejection code",
+                    "validatorCode": validator_code,
+                    "stagingPath": str(staging_zip),
+                    "sha256": actual_sha256,
+                },
+            )
         try:
             _atomic_write_json(staging_dir / "validation.json", validation)
-        except Exception:
-            pass
+        except Exception as exc:
+            return _result(
+                RESULT_STORE_FAILED,
+                ok=False,
+                details={
+                    "phase": "validator_record",
+                    "reason": str(exc)[:500],
+                    "stagingPath": str(staging_zip),
+                    "sha256": actual_sha256,
+                },
+            )
+        try:
+            _discard_staging(staging_dir)
+        except Exception as exc:
+            return _result(
+                RESULT_STORE_FAILED,
+                ok=False,
+                details={
+                    "phase": "validator_cleanup",
+                    "reason": str(exc)[:500],
+                    "stagingPath": str(staging_zip),
+                    "sha256": actual_sha256,
+                },
+            )
         return _result(
             ARTIFACT_INVALID,
             ok=False,
+            recoverable=True,
             details={
                 "phase": "validator",
                 "validatorCode": validation.get("code"),
                 "stagingPath": str(staging_zip),
+                "stagingDiscarded": True,
                 "sha256": actual_sha256,
             },
         )
