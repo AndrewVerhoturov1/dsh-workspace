@@ -20,7 +20,7 @@ Luna
 → submit / observe / detect / download / validate
 → RESULT_DURABLE
 → one terminal JSON object back to Luna
-→ optional Result Workspace registration
+→ report exact requestId + resultZip
 → STOP
 ```
 
@@ -212,17 +212,9 @@ D:\Downloads_dsh_auto
 Он может быть переопределён через поддерживаемый Direct Postman configuration.
 Luna не должна заранее имитировать внутренний write-probe.
 
-После `RESULT_DURABLE` normal flow может один раз вызвать:
-
-```text
-postman_result_workspace_register(
-  request_id=<exact REQ>,
-  result_handoff_json=<exact resultHandoffPath>
-)
-```
-
-Workspace registration — presentation convenience, не integrity gate. Если она не удалась,
-сообщается exact `resultZip` и diagnostic; новый REQ не создаётся и transport не повторяется.
+После `RESULT_DURABLE` normal flow сообщает exact `requestId` и `resultZip` и
+останавливается. `postman_result_workspace_register(...)` normal flow не вызывает,
+Result Workspace автоматически не создаётся.
 
 ## Legacy/manual finalization
 

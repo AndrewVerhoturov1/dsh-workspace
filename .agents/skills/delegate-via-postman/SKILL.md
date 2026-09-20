@@ -6,14 +6,14 @@ description: >-
   Direct Web Postman: сохранить пользовательский intent без технических дополнений,
   создать ровно один canonical REQ, один раз вызвать
   workspace-relative `postman\direct\postman.ps1`, дождаться validated RESULT_DURABLE,
-  сохранить validated RESULT_DURABLE, сообщить exact resultZip и остановиться. Регистрация
-  Result Workspace — необязательная presentation convenience, а не integrity gate. Не использовать Cordis/postman_async_send, QChat или
+  сохранить validated RESULT_DURABLE, сообщить exact requestId и resultZip и остановиться.
+  Не создавать Result Workspace автоматически. Не использовать Cordis/postman_async_send, QChat или
   ручную автоматизацию браузера как fallback.
 ---
 
 # Delegate via Postman — Direct Production
 
-`DIRECT_POSTMAN_SKILL_VERSION: 18`
+`DIRECT_POSTMAN_SKILL_VERSION: 19`
 
 Исторический baseline до v12: `DIRECT_POSTMAN_SKILL_VERSION: 11`.
 
@@ -30,15 +30,13 @@ description: >-
 → ждать только этот job через job_output
 → exact terminal JSON
 → RESULT_DURABLE
-→ один раз попытаться зарегистрировать exact resultHandoffPath через
-  postman_result_workspace_register(request_id=<exact REQ>, result_handoff_json=...)
-→ сообщить REQ, resultZip и Workspace (или diagnostic регистрации)
+→ сообщить exact REQ и resultZip
 → STOP
 ```
 
 После `RESULT_DURABLE` normal flow не вызывает resume/PREPARE/TEST/PUBLISH, не
-создаёт implementation worktree/branch/commit/PR и не распаковывает ZIP. Регистрация
-Workspace — только удобство показа, а не integrity gate.
+создаёт implementation worktree/branch/commit/PR, не распаковывает ZIP и не создаёт
+Result Workspace. После сообщения exact `requestId` и `resultZip` normal flow завершён.
 
 После подтверждённой первоначальной отправки Direct Postman сам выполняет до трёх
 служебных напоминаний в том же ChatGPT conversation и в рамках того же REQ:
@@ -208,8 +206,7 @@ verbatim payload после удаления transport marker
 canonical REQ
 один Direct Postman invocation
 minimal terminal transport gate
-optional Result Workspace registration
-короткий отчёт с exact resultZip/Workspace
+короткий отчёт с exact requestId и resultZip
 STOP
 ```
 
@@ -555,7 +552,7 @@ transport boundary: exact correlated filename, SHA-256, безопасную ZIP
 
 После `RESULT_DURABLE` не открывать ChatGPT для визуального подтверждения.
 
-### Канонический durable handoff, Workspace registration и STOP
+### Канонический durable handoff и STOP
 
 После успешного `RESULT_DURABLE` Direct Postman атомарно сохраняет канонический
 terminal JSON в deterministic path:
@@ -569,15 +566,9 @@ C:\Users\andre\AppData\Local\DSH\Postman\direct\results\<REQ>.json
 correlation REQ и вся проверка ZIP принадлежат Direct Postman. Не реконструировать
 receipt, не распаковывать и не анализировать ZIP повторно.
 
-После exact `RESULT_DURABLE` разрешена одна presentation-попытка:
-
-```text
-postman_result_workspace_register(request_id=<exact REQ>, result_handoff_json=<exact resultHandoffPath>)
-```
-
-При успехе сообщить `requestId`, exact `resultZip` и `workspaceId`. Если регистрация
-не удалась, transport всё равно успешен: сообщить diagnostic, не создавать второй REQ,
-не повторять ChatGPT/download и не запускать resume. Затем normal flow останавливается.
+После exact `RESULT_DURABLE` сообщить пользователю exact `requestId` и exact
+`resultZip`, затем STOP. Не вызывать `postman_result_workspace_register` и не создавать
+Result Workspace автоматически.
 
 `resume_request.ps1`, `integrate_result.ps1` и стадии PREPARE/TEST/PUBLISH не удаляются.
 Они описаны ниже только как legacy/manual explicit finalization для уже существующего
@@ -858,8 +849,6 @@ remote exact SHA, один OPEN PR `base=main` с exact head branch/SHA, уда�
 RESULT_DURABLE
 exact requestId
 exact resultZip как кликабельный local path
-Workspace title/id, если регистрация успешна
-одну короткую diagnostic строку, если регистрация не удалась
 ```
 
 `resultHandoffPath`, SHA-256, browser/CDP/validator internals, semantic test, commit,
@@ -916,18 +905,18 @@ terminal state
 14. Не создавать implementation branch только ради transport до результата.
 15. Пользовательский dirty worktree не очищать и не переписывать.
 16. В normal flow Л1 не интерпретирует, не применяет и не изменяет результат Ч1.
-17. После RESULT_DURABLE normal flow останавливается после optional Workspace registration.
+17. После RESULT_DURABLE normal flow сообщает exact requestId/resultZip и сразу останавливается.
 18. `resume_request.ps1`, PREPARE/TEST/PUBLISH и `integrate_result.ps1` — только legacy/manual explicit finalization.
 19. Normal flow не создаёт implementation worktree/branch/commit/PR и не распаковывает ZIP.
-20. Workspace registration — presentation convenience, а не integrity gate.
-21. Ошибка Workspace registration не отменяет успешный RESULT_DURABLE и не вызывает retry.
+20. Normal flow не вызывает postman_result_workspace_register и не создаёт Result Workspace.
+21. Result presentation/Workspace может выполняться только отдельным explicit workflow вне normal @Postman.
 22. Direct Postman сам владеет minimal safety-only transport validation до RESULT_DURABLE.
 23. Правила exact-bytes для `files/` относятся только к explicit manual finalization; normal flow не читает содержимое ZIP.
 24. `RESULT_DIAGNOSTIC_ONLY` не является implementation success и не разрешает automatic resend.
 25. Resume/PREPARE/TEST/PUBLISH не создают новый Postman REQ и не обращаются повторно к Ч1.
 26. `changedFiles`/retained worktree показываются только при explicit manual PUBLISHED finalization, не в normal transport report.
 27. Нет validated correlated artifact → нет успешного Postman результата.
-28. Durable Workspace registration передаёт exact current REQ как `request_id`; receipt requestId обязан совпасть до `workspaceRegistry.create/delete`.
+28. После terminal RESULT_DURABLE normal flow не выполняет presentation-side effects.
 29. `@Postman --chat <old REQ> <intent>` открывает только сохранённый exact conversation URL; UI search fallback отсутствует.
 30. Старый REQ является только conversation reference; новая отправка всегда получает новый canonical REQ.
 31. Continuation payload не содержит `--chat` и старый REQ; Ч1 получает только новый user intent.
@@ -939,38 +928,12 @@ terminal state
 37. `job_output` timeout/`running` оставляет exact job живым и никогда не разрешает второй REQ/Send.
 38. Normal orchestration передаёт verbatim payload через UTF-8 Base64; `-Task` остаётся совместимым ручным wrapper-входом.
 
+## Result presentation вне normal @Postman
 
-## Result Workspace после RESULT_DURABLE
+Normal `@Postman` transport не вызывает `postman_result_workspace_register`, не создаёт
+и не удаляет Harness Workspace. Его terminal boundary — exact `RESULT_DURABLE`,
+после которого Luna сообщает exact `requestId` и `resultZip` и останавливается.
 
-После exact successful `RESULT_DURABLE` normal flow может один раз попытаться
-зарегистрировать durable result как обычный Harness Workspace:
-
-```text
-postman_result_workspace_register(request_id=<exact REQ>, result_handoff_json=<exact resultHandoffPath>)
-```
-
-Инструмент принимает exact current `request_id` вместе с exact `resultHandoffPath`,
-проверяет совпадение `receipt.requestId == request_id` до Workspace create/delete,
-затем проверяет только receipt/layout gate. Он не распаковывает ZIP и не повторяет
-artifact validation. После identity gate он вызывает
-`ctx.workspaceRegistry.create(resultDirectory, title)` с рекомендуемым title
-`Postman <REQ> — result` и пишет `<resultDirectory>\\result-workspace.json` внутри
-exact result directory.
-
-Результат регистрации содержит `source: RESULT_DURABLE`, exact `requestId`,
-`resultDirectory`, `resultZip`, `resultHandoffJson` и `workspaceId`. Это presentation
-convenience, а не integrity gate. Ошибка регистрации не отменяет transport success:
-не создавать второй REQ, не повторять ChatGPT/download, не запускать resume и сообщить
-пользователю exact RESULT_DURABLE, resultZip и diagnostic.
-
-После регистрации пользователь может открыть Workspace штатными средствами Harness;
-никаких новых Chrome/CDP, Session или preview-сервисов для регистрации не создавать.
-
-Старый `published_json` режим остаётся совместимым: он регистрирует retained PUBLISHED
-worktree, пишет sibling `result-workspace.json` рядом с published receipt и сохраняет
-старый `clearResultPresentation` только для legacy unregister. Durable unregister не
-вызывает published-result presentation cleanup: он удаляет только Workspace registration,
-помечает свой sidecar как `RESULT_WORKSPACE_UNREGISTERED` и не удаляет result directory,
-`result.zip` или другие durable receipts.
-
-Пользователь не должен вводить git/SHA/worktree-команды или команды терминала вручную.
+Если в будущем потребуется отдельное пользовательское представление durable result,
+оно должно запускаться только отдельным explicit workflow и не является частью Postman
+production transport.

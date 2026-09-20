@@ -8,6 +8,7 @@ fixed service reminders, and the hand-off back to Runtime after RESULT_DURABLE.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 from dataclasses import dataclass
 import json
 import os
@@ -146,17 +147,38 @@ def _close_owned_page(page: Any) -> dict[str, Any]:
     cleanup = {
         "ownedPageCreated": page is not None,
         "ownedPageClosed": page is None,
+        "closeAttempts": 0,
         "externalBrowserClosed": False,
     }
     if page is None:
         return cleanup
-    try:
-        page.close()
-        checker = getattr(page, "is_closed", None)
-        cleanup["ownedPageClosed"] = bool(checker()) if callable(checker) else True
-    except Exception as exc:
-        cleanup["ownedPageClosed"] = False
-        cleanup["closeError"] = str(exc)[:500]
+
+    checker = getattr(page, "is_closed", None)
+    last_error = ""
+    for attempt in (1, 2):
+        cleanup["closeAttempts"] = attempt
+        try:
+            if callable(checker) and bool(checker()):
+                cleanup["ownedPageClosed"] = True
+                break
+        except Exception:
+            pass
+
+        try:
+            page.close()
+        except Exception as exc:
+            last_error = str(exc)[:500]
+
+        try:
+            cleanup["ownedPageClosed"] = bool(checker()) if callable(checker) else True
+        except Exception:
+            cleanup["ownedPageClosed"] = not bool(last_error)
+
+        if cleanup["ownedPageClosed"]:
+            break
+
+    if not cleanup["ownedPageClosed"] and last_error:
+        cleanup["closeError"] = last_error
     return cleanup
 
 
@@ -335,8 +357,10 @@ class WebWorkerBridge:
         browser = context = page = None
         owns_context = False
         terminal_result: dict[str, Any] | None = None
+        cleanup: dict[str, Any] = {}
         try:
-            with factory() as playwright:
+            with ExitStack() as stack:
+                playwright = stack.enter_context(factory())
                 normalized = browser_bootstrap.normalize_cdp_url(cdp_url)
                 browser = playwright.chromium.connect_over_cdp(normalized)
                 contexts = list(browser.contexts)
@@ -345,6 +369,23 @@ class WebWorkerBridge:
                 else:
                     context = browser.new_context()
                     owns_context = True
+
+                def close_owned_resources() -> None:
+                    cleanup.clear()
+                    cleanup.update(_close_owned_page(page))
+                    if owns_context and context is not None:
+                        try:
+                            context.close()
+                            cleanup["ownedContextClosed"] = True
+                        except Exception as exc:
+                            cleanup["ownedContextClosed"] = False
+                            cleanup["contextCloseError"] = str(exc)[:500]
+                    else:
+                        cleanup["ownedContextClosed"] = False
+
+                # Registered after Playwright enter_context: LIFO cleanup closes the
+                # owned Page/context while the CDP connection is still alive.
+                stack.callback(close_owned_resources)
                 page = context.new_page()
 
                 if conversation_url is None:
@@ -616,17 +657,17 @@ class WebWorkerBridge:
         except Exception as exc:
             return self._fail(request, str(exc), code=BRIDGE_PIPELINE_FAILED)
         finally:
-            cleanup = _close_owned_page(page)
-            if owns_context and context is not None:
-                try:
-                    context.close()
-                    cleanup["ownedContextClosed"] = True
-                except Exception as exc:
-                    cleanup["ownedContextClosed"] = False
-                    cleanup["contextCloseError"] = str(exc)[:500]
-            else:
-                cleanup["ownedContextClosed"] = False
-            # The CDP-attached browser is externally owned and is never closed.
+            # ExitStack runs owned Page/context cleanup before the Playwright/CDP
+            # context exits. This outer finally only records the already-finished
+            # cleanup in the durable terminal state.
+            if not cleanup:
+                cleanup = {
+                    "ownedPageCreated": page is not None,
+                    "ownedPageClosed": page is None,
+                    "closeAttempts": 0,
+                    "externalBrowserClosed": False,
+                    "ownedContextClosed": False,
+                }
             if terminal_result is not None and terminal_result.get("code") == RESULT_DURABLE:
                 terminal_result.setdefault("details", {})["browserCleanup"] = cleanup
                 try:

@@ -16,7 +16,7 @@
 → exact ZIP attachment
 → download + transport validation
 → RESULT_DURABLE
-→ optional Result Workspace registration
+→ report exact requestId + resultZip
 → STOP
 ```
 
@@ -66,8 +66,9 @@ docs/postman-production-e2e.md
 
 ## Граница normal flow
 
-Normal `@Postman` заканчивается на `RESULT_DURABLE`. После него разрешена одна попытка
-`postman_result_workspace_register(...)`; ошибка регистрации не отменяет transport success.
+Normal `@Postman` заканчивается на `RESULT_DURABLE`: Luna сообщает exact `requestId`
+и `resultZip`, затем STOP. Normal flow не вызывает `postman_result_workspace_register(...)`
+и не создаёт Result Workspace автоматически.
 
 Normal flow не:
 
