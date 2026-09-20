@@ -532,30 +532,11 @@ repository mutation. SHA публикации task-файла хранится �
 `taskPublicationCommit`. Luna не подменяет один SHA другим и не реконструирует task
 manifest вручную.
 
-## 9. Разбор JSON и минимальный transport gate
+## 9. Минимальный transport gate
 
-После `completed` exact background job с `exit code: 0` распарсить terminal JSON из stdout этого job:
+Terminal JSON уже разбирается атомарно в wait-ячейке раздела 8.
 
-```typescript
-let result;
-
-try {
-  result = JSON.parse(update.text.trim());
-} catch {
-  throw new Error('POSTMAN_RESULT_JSON_INVALID');
-}
-
-if (
-  result.ok !== true ||
-  result.code !== 'RESULT_DURABLE' ||
-  result.state !== 'RESULT_DURABLE' ||
-  result.requestId !== requestId
-) {
-  throw new Error('POSTMAN_RESULT_GATE_FAILED');
-}
-```
-
-После завершения Direct Postman Luna проверяет только transport boundary:
+Успех принимается только когда:
 
 ```text
 result.ok        == true
@@ -563,6 +544,8 @@ result.code      == RESULT_DURABLE
 result.state     == RESULT_DURABLE
 result.requestId == exact requestId
 ```
+
+Повторно вызывать `job_output` или повторно разбирать terminal output после `done: true` не нужно.
 
 Не выполнять вручную `Get-FileHash`, повторный manifest/base/staleness/path validation
 или отдельный `Test-Path` как normal handoff. Direct Postman уже проверяет normal
