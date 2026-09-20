@@ -13,7 +13,7 @@ description: >-
 
 # Delegate via Postman — Direct Production
 
-`DIRECT_POSTMAN_SKILL_VERSION: 17`
+`DIRECT_POSTMAN_SKILL_VERSION: 18`
 
 Исторический baseline до v12: `DIRECT_POSTMAN_SKILL_VERSION: 11`.
 
@@ -25,8 +25,10 @@ description: >-
 точный user intent
 → удалить только transport prefix @Postman
 → один canonical REQ
-→ один foreground-вызов Direct Postman
-→ ждать exact terminal JSON
+→ один background tools.pwsh job с единственным Direct Postman invocation
+→ сохранить exact jobId
+→ ждать только этот job через job_output
+→ exact terminal JSON
 → RESULT_DURABLE
 → один раз попытаться зарегистрировать exact resultHandoffPath через
   postman_result_workspace_register(request_id=<exact REQ>, result_handoff_json=...)
@@ -349,24 +351,20 @@ Direct Postman внутри bridge. Если internal result-root probe не п�
 REQ_YYYYMMDDTHHMMSSZ_NNNN
 ```
 
-Использовать реальное текущее UTC-время:
+REQ создаётся внутри первого короткого `run_code` до background-start, чтобы exact
+`requestId` был известен отдельно от `jobId`. Использовать реальное текущее UTC-время:
 
-```powershell
-$stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMdd'T'HHmmss'Z'")
-$suffix = (Get-Random -Minimum 0 -Maximum 10000).ToString("0000")
-$requestId = 'REQ_' + $stamp + '_' + $suffix
+```typescript
+const stamp = new Date().toISOString()
+  .replace(/[-:]/g, '')
+  .replace(/\.\d{3}Z$/, 'Z');
+const suffix = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
+const requestId = `REQ_${stamp}_${suffix}`;
 ```
 
-До первого запуска bridge можно убедиться, что direct state ещё не существует:
-
-```powershell
-$state = Join-Path $env:LOCALAPPDATA "DSH\Postman\direct\requests\$requestId.json"
-```
-
-Если случайный REQ уже существует, разрешено сгенерировать другой suffix до
-запуска bridge. Максимум три локальные collision-попытки.
-
-После начала bridge invocation REQ immutable.
+После создания REQ normal orchestration сразу запускает один background job.
+После background-start exact REQ immutable. При collision/failure не создавать новый
+REQ автоматически и не повторять Send.
 
 Новый REQ для этой логической операции автоматически создавать нельзя.
 
@@ -374,85 +372,145 @@ $state = Join-Path $env:LOCALAPPDATA "DSH\Postman\direct\requests\$requestId.jso
 
 Использовать payload из раздела Intent preservation.
 
-Перед bridge разрешены только: определить текущий workspace; `Join-Path` bridge;
-read-only `Test-Path` bridge; создать canonical REQ; read-only collision `Test-Path`
-exact candidate state; сохранить exact payload в переменную. После этого сразу вызвать
-`& $bridge` по форме ниже. Никакого result-root preflight вокруг этого вызова не добавлять.
+В текущем deployment `functions.run_code` имеет hard wall limit 600000 ms, а Direct
+Postman может законно работать до 45 минут. Поэтому normal production path всегда
+запускает ровно один `tools.pwsh` job с `run_in_background: true`, сохраняет exact
+`requestId` и exact `jobId`, а затем ждёт только этот job через `job_output`.
 
-```powershell
-$workspace = (Get-Location).Path
-$bridge = Join-Path $workspace 'postman\direct\postman.ps1'
+Никакого result-root preflight и отдельного browser preflight не добавлять.
 
-$jsonText = & $bridge `
-  -RequestId $requestId `
-  -Task $payload
+Raw user payload не вставлять в PowerShell command. Перед запуском exact payload
+кодируется в UTF-8 Base64. `postman.ps1` принимает `-TaskBase64`, поэтому в shell
+команду попадает только безопасная base64-строка.
 
-$bridgeExitCode = $LASTEXITCODE
+Fresh-chat production start:
+
+```typescript
+const payload = "EXACT_PAYLOAD_AS_JSON_STRING_LITERAL";
+const { Buffer } = await import('node:buffer');
+
+const stamp = new Date().toISOString()
+  .replace(/[-:]/g, '')
+  .replace(/\.\d{3}Z$/, 'Z');
+const suffix = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
+const requestId = `REQ_${stamp}_${suffix}`;
+const taskBase64 = Buffer.from(payload, 'utf8').toString('base64');
+
+const command = [
+  "& (Join-Path (Get-Location).Path 'postman/direct/postman.ps1')",
+  `-RequestId '${requestId}'`,
+  `-TaskBase64 '${taskBase64}'`,
+].join(' ');
+
+const started = await tools.pwsh({
+  command,
+  description: 'Запустить Direct Postman в фоне',
+  run_in_background: true,
+});
+
+return { requestId, jobId: started.jobId };
 ```
 
-Для continuation того же conversation вызов отличается только одним параметром:
+Для continuation того же conversation добавить только exact transport reference:
 
-```powershell
-$jsonText = & $bridge `
-  -RequestId $requestId `
-  -ChatRequestId $chatRequestId `
-  -Task $payload
+```typescript
+const chatRequestId = "REQ_...";
+const command = [
+  "& (Join-Path (Get-Location).Path 'postman/direct/postman.ps1')",
+  `-RequestId '${requestId}'`,
+  `-ChatRequestId '${chatRequestId}'`,
+  `-TaskBase64 '${taskBase64}'`,
+].join(' ');
 ```
 
-`$requestId` — новый REQ этой операции. `$chatRequestId` — старый REQ, по которому
+`requestId` — новый REQ этой операции. `chatRequestId` — старый REQ, по которому
 Direct Postman находит сохранённый `conversationUrl`.
 
-Это один logical invocation.
+Первый `run_code` только запускает background job и возвращает
+`{requestId, jobId}`. Не ждать Postman в этой же ячейке.
 
-Если shell/tool требует увеличенный timeout, дать этому одному вызову достаточно
-времени. Coding/ZIP request может выполняться много минут.
+Дальше использовать отдельные короткоживущие `run_code` вызовы. Каждый ждёт exact job
+не более 480000 ms — с запасом относительно 600000 ms wall limit:
 
-Предпочитать один foreground-вызов с timeout не меньше внутреннего Postman timeout
-(45 минут). Не переводить обычный request в background только ради периодического
-polling. Background допустим только если конкретный shell-tool технически не может
-ждать достаточно долго; тогда ждать завершения именно этого одного process/job.
+Каждая отдельная wait-ячейка заново задаёт exact значения, полученные при запуске:
 
-Не запускать параллельно второй Postman request.
-Не создавать второй REQ.
+```typescript
+const requestId = "EXACT_REQ";
+const jobId = "EXACT_JOB_ID";
 
-Если из-за ограничения shell-tool процесс пришлось запустить background-способом,
-это всё ещё тот же единственный invocation. Ждать завершения именно этого process,
-а не запускать новый.
+const update = await tools.job_output({
+  job_id: jobId,
+  wait: true,
+  timeout_ms: 480000,
+});
+
+if (update.job.status === "running") {
+  return {
+    done: false,
+    requestId,
+    jobId,
+    status: "running",
+  };
+}
+
+if (
+  update.job.status !== "completed" ||
+  update.job.detail !== "exit code: 0"
+) {
+  throw new Error(
+    `POSTMAN_BACKGROUND_JOB_FAILED: ${update.job.status} ${update.job.detail ?? ""}`
+  );
+}
+
+let result;
+
+try {
+  result = JSON.parse(update.text.trim());
+} catch {
+  throw new Error("POSTMAN_RESULT_JSON_INVALID");
+}
+
+if (
+  result.ok !== true ||
+  result.code !== "RESULT_DURABLE" ||
+  result.state !== "RESULT_DURABLE" ||
+  result.requestId !== requestId
+) {
+  throw new Error("POSTMAN_RESULT_GATE_FAILED");
+}
+
+return {
+  done: true,
+  requestId,
+  jobId,
+  result,
+};
+```
+
+Если возвращено `done: false`, следующая отдельная `run_code` снова вставляет тот же
+exact `requestId` и `jobId` как литералы и повторяет весь этот блок. Не использовать
+`sleep`, busy polling или цикл ожидания внутри одной ячейки. Timed-out `job_output`
+оставляет background job живым.
+
+Normal path не использует `job_list`: exact `jobId` уже известен. Не запускать
+параллельно второй Postman request, не создавать второй REQ и не повторять Send.
+
+Терминальное завершение принимается только при `job.status == completed` и
+`job.detail == exit code: 0`; `killed`, `failed` или non-zero exit — terminal failure
+без retry/fallback.
 
 ### Контракт orchestration-вызова `tools.pwsh`
 
-Для normal `@Postman` invocation вызывать `tools.pwsh` без поля `workdir`:
-инструмент должен использовать текущий workspace процесса. Не передавать
-hardcoded Windows-путь в `workdir`. Если отдельный рабочий каталог всё же нужен,
-использовать forward-slash form или корректно экранированную строку JavaScript;
-никогда не помещать `C:\Users\Andrew\.dsh` с одиночными обратными слешами
-в raw JavaScript string.
+Для normal `@Postman` invocation вызывать `tools.pwsh` без поля `workdir`: используется
+текущий workspace процесса. Не передавать hardcoded Windows-путь в `workdir`.
 
-Не заключать PowerShell `$stamp`/`$suffix` в `${stamp}`/`${suffix}` внутри
-JavaScript template literal: PTC/JavaScript попытается вычислить эти выражения.
-Безопасный production-шаблон строит команду массивом обычных строк, использует
-PowerShell concatenation для REQ и не задаёт `workdir`:
-
-```typescript
-const command = [
-  '$workspace = (Get-Location).Path',
-  "$bridge = Join-Path $workspace 'postman\\direct\\postman.ps1'",
-  "$stamp = (Get-Date).ToUniversalTime().ToString(\"yyyyMMdd'T'HHmmss'Z'\")",
-  "$suffix = (Get-Random -Minimum 0 -Maximum 10000).ToString('0000')",
-  "$requestId = 'REQ_' + $stamp + '_' + $suffix",
-  '$jsonText = & $bridge -RequestId $requestId -Task $payload',
-].join('\n');
-
-const result = await tools.pwsh({
-  command,
-  description: 'Выполнить продолжение через Direct Postman',
-  timeoutMs: 3000000,
-});
-```
+Background `pwsh` по контракту DSH не использует foreground `timeoutMs`; не передавать
+`timeoutMs: 3000000`. Долгое время принадлежит background job, а ожидание разбивается
+на отдельные `job_output` waits по 480000 ms.
 
 ### Внутренний link-only transport contract
 
-Luna передаёт bridge только exact user payload через `-Task`. Сам внешний prompt
+Luna передаёт bridge только exact user payload. Normal orchestration использует `-TaskBase64`; ручной PowerShell-вызов может по-прежнему использовать `-Task`. Сам внешний prompt
 формирует Direct Postman; Luna не собирает его вручную.
 
 Канонический prompt Ч1 состоит ровно из двух строк:
@@ -474,27 +532,20 @@ repository mutation. SHA публикации task-файла хранится �
 `taskPublicationCommit`. Luna не подменяет один SHA другим и не реконструирует task
 manifest вручную.
 
-## 9. Разбор JSON и минимальный transport gate
+## 9. Минимальный transport gate
 
-После завершения Direct Postman распарсить terminal JSON:
+Terminal JSON уже разбирается атомарно в wait-ячейке раздела 8.
 
-```powershell
-try {
-    $result = $jsonText | ConvertFrom-Json
-}
-catch {
-    throw 'POSTMAN_RESULT_JSON_INVALID'
-}
-```
-
-После завершения Direct Postman Luna проверяет только transport boundary:
+Успех принимается только когда:
 
 ```text
-$result.ok        == true
-$result.code      == RESULT_DURABLE
-$result.state     == RESULT_DURABLE
-$result.requestId == exact $requestId
+result.ok        == true
+result.code      == RESULT_DURABLE
+result.state     == RESULT_DURABLE
+result.requestId == exact requestId
 ```
+
+Повторно вызывать `job_output` или повторно разбирать terminal output после `done: true` не нужно.
 
 Не выполнять вручную `Get-FileHash`, повторный manifest/base/staleness/path validation
 или отдельный `Test-Path` как normal handoff. Direct Postman уже проверяет normal
@@ -572,9 +623,15 @@ latest request, читать старый handoff как текущий, выз�
 Postman не стартовал и Send не происходил. Это правило имеет приоритет над общей
 диагностикой exact direct state ниже; после tool-level failure никакие request states не читаются.
 
-Если bridge вернул `ok=false`, invalid JSON или завершился с non-zero exit — STOP.
+После получения exact `jobId` этот job является единственным process authority текущего
+REQ. `job_output` со статусом `running` не является failure и не разрешает новый запуск.
+Если отдельная wait-ячейка `run_code` завершилась ошибкой, но exact `jobId` известен,
+разрешено снова читать только этот же job через `job_output`; новый Postman/REQ запрещён.
 
-Сохранить исходный exact REQ.
+Если background job имеет `failed`, `killed` или non-zero exit, либо bridge вернул
+`ok=false`/invalid JSON — STOP.
+
+Сохранить исходный exact REQ и exact jobId.
 
 Не создавать автоматически второй REQ.
 Не повторять Send.
@@ -877,7 +934,10 @@ terminal state
 32. Успешный RESULT_DURABLE сохраняет `conversationUrl`/`conversationId`, если browser transport их доказал.
 33. `manifest.json`, `protocolVersion`, `repository`, `baseCommit`, `resultType`, `patch` и `files` не являются normal transport hard gate; только explicit conflicting string `requestId` в optional manifest остаётся reject.
 34. Luna-side normal invocation не выполняет result-root `New-Item`, `Set-Content`, `Out-File`, redirection/write probe, `Remove-Item` probe или другие файловые write-preflight операции; этим владеет Direct Postman внутри bridge.
-35. Tool-level shell failure, например `spawn EPERM`, означает `POSTMAN_INVOCATION_NOT_STARTED`: не читать старые/latest REQ states, не выполнять recovery, не повторять invocation и остановиться с сообщением, что Send не происходил.
+35. Tool-level shell failure до получения `jobId`, например `spawn EPERM`, означает `POSTMAN_INVOCATION_NOT_STARTED`: не читать старые/latest REQ states, не выполнять recovery, не повторять invocation и остановиться с сообщением, что Send не происходил.
+36. Normal invocation создаёт ровно один background `tools.pwsh` job и сохраняет exact `jobId`.
+37. `job_output` timeout/`running` оставляет exact job живым и никогда не разрешает второй REQ/Send.
+38. Normal orchestration передаёт verbatim payload через UTF-8 Base64; `-Task` остаётся совместимым ручным wrapper-входом.
 
 
 ## Result Workspace после RESULT_DURABLE
