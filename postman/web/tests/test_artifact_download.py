@@ -378,14 +378,18 @@ class ArtifactDownloadTests(unittest.TestCase):
         result, _, _ = self.run_download(page=page)
         self.assertEqual(result["code"], module.DOWNLOAD_INTERRUPTED)
 
-    def test_validator_reject_keeps_only_staging(self):
+    def test_validator_reject_discards_staging_for_the_next_attempt(self):
         def reject(zip_path, trusted):
             return {"ok": False, "code": "ARTIFACT_BAD_ZIP", "status": "ARTIFACT_BAD_ZIP"}
         result, _, root = self.run_download(validator=reject)
         self.assertEqual(result["code"], module.ARTIFACT_INVALID)
+        self.assertTrue(result["recoverable"])
         self.assertFalse((root / REQ).exists())
-        self.assertTrue((root / ".staging" / REQ / FILENAME).is_file())
-        self.assertTrue((root / ".staging" / REQ / "validation.json").is_file())
+        self.assertFalse((root / ".staging" / REQ).exists())
+
+        retry, _, _ = self.run_download(root=root)
+        self.assertEqual(retry["code"], module.RESULT_DURABLE, retry)
+        self.assertFalse((root / ".staging" / REQ).exists())
 
     def test_validator_exception_keeps_staging(self):
         def explode(zip_path, trusted):
@@ -393,6 +397,14 @@ class ArtifactDownloadTests(unittest.TestCase):
         result, _, root = self.run_download(validator=explode)
         self.assertEqual(result["code"], module.ARTIFACT_VALIDATOR_FAILED)
         self.assertFalse((root / REQ).exists())
+        self.assertTrue((root / ".staging" / REQ / FILENAME).is_file())
+
+    def test_unknown_validator_rejection_is_not_retryable(self):
+        def unknown_rejection(zip_path, trusted):
+            return {"ok": False, "code": "INTERNAL_VALIDATOR_STATE", "status": "INTERNAL_VALIDATOR_STATE"}
+        result, _, root = self.run_download(validator=unknown_rejection)
+        self.assertEqual(result["code"], module.ARTIFACT_VALIDATOR_FAILED)
+        self.assertFalse(result.get("recoverable", False))
         self.assertTrue((root / ".staging" / REQ / FILENAME).is_file())
 
     def test_validator_sha_attestation_mismatch_rejected(self):

@@ -213,7 +213,18 @@ class WebWorkerBridge:
         current = self.read_state(request.request_id)
         if current is not None:
             previous = current.get("state")
-            if previous in _STATE_ORDER and _STATE_ORDER.index(state) < _STATE_ORDER.index(previous):
+            retry_after_rejected_artifact = (
+                previous == ARTIFACT_FOUND
+                and state == WAITING_ASSISTANT
+                and isinstance(current.get("artifactValidation"), dict)
+                and current["artifactValidation"].get("code") == artifact_download.ARTIFACT_INVALID
+                and current["artifactValidation"].get("recoverable") is True
+            )
+            if (
+                previous in _STATE_ORDER
+                and _STATE_ORDER.index(state) < _STATE_ORDER.index(previous)
+                and not retry_after_rejected_artifact
+            ):
                 raise ValueError(f"state cannot move backwards from {previous} to {state}")
         record = {
             **(current or {}),
@@ -462,6 +473,23 @@ class WebWorkerBridge:
                                     validator_runner=validator_runner,
                                 )
                                 if durable.get("code") != artifact_download.RESULT_DURABLE:
+                                    if (
+                                        durable.get("code") == artifact_download.ARTIFACT_INVALID
+                                        and durable.get("recoverable") is True
+                                    ):
+                                        # A downloaded ZIP with rejected contents is a model/result
+                                        # failure, not a failed REQ. The next scheduled reminder may
+                                        # establish a fresh P5/P6 attempt; all other download errors
+                                        # remain fail-closed.
+                                        self._write_state(
+                                            request,
+                                            ARTIFACT_FOUND,
+                                            artifactValidation=durable,
+                                            reminderPolicy=reminder_policy_record,
+                                            reminders=reminder_records,
+                                        )
+                                        current_turn_processed = True
+                                        continue
                                     return self._fail(request, durable.get("code", "download_failed"), details=durable)
                                 record = self._write_state(
                                     request,
@@ -542,20 +570,49 @@ class WebWorkerBridge:
                                     submitted=reminder_submit,
                                 )
                             )
-                            reminder_index += 1
-                            self._write_state(
-                                request,
-                                WAITING_ASSISTANT,
-                                reminderPolicy=reminder_policy_record,
-                                reminders=reminder_records,
-                                lastObserverCode=last_observer_code,
-                                lastArtifactCode=last_artifact_code,
-                            )
-                            if reminder_submit.get("ok"):
+                            send_state = reminder_submit.get("sendState")
+                            if (
+                                send_state == browser_submit.SEND_UNKNOWN
+                                or reminder_submit.get("code") == browser_submit.PROMPT_SEND_UNKNOWN
+                            ):
+                                return self._fail(
+                                    request,
+                                    "reminder send state is UNKNOWN",
+                                    details={"reminderSubmit": reminder_submit, "reminders": reminder_records},
+                                )
+                            if send_state == browser_submit.SEND_PROVEN_SENT:
+                                reminder_index += 1
+                                self._write_state(
+                                    request,
+                                    WAITING_ASSISTANT,
+                                    reminderPolicy=reminder_policy_record,
+                                    reminders=reminder_records,
+                                    lastObserverCode=last_observer_code,
+                                    lastArtifactCode=last_artifact_code,
+                                )
                                 current_prompt = reminder_prompt
                                 current_submit = reminder_submit
                                 current_turn_processed = False
-                            continue
+                                continue
+                            if (
+                                send_state == browser_submit.SEND_PROVEN_NOT_SENT
+                                and reminder_submit.get("details", {}).get("unsentPromptCleared") is True
+                            ):
+                                reminder_index += 1
+                                self._write_state(
+                                    request,
+                                    WAITING_ASSISTANT,
+                                    reminderPolicy=reminder_policy_record,
+                                    reminders=reminder_records,
+                                    lastObserverCode=last_observer_code,
+                                    lastArtifactCode=last_artifact_code,
+                                )
+                                continue
+                            return self._fail(
+                                request,
+                                "reminder send result was not safely continuable",
+                                details={"reminderSubmit": reminder_submit, "reminders": reminder_records},
+                            )
         except Exception as exc:
             return self._fail(request, str(exc), code=BRIDGE_PIPELINE_FAILED)
         finally:

@@ -238,6 +238,110 @@ class WebWorkerReminderTests(unittest.TestCase):
             self.assertTrue(result["details"]["browserCleanup"]["ownedPageClosed"])
             self.assertTrue(page.closed)
 
+    def test_rejected_zip_waits_for_first_reminder_then_durable_retry(self):
+        clock = FakeClock()
+        page = FakePage()
+        reminder_times = []
+        invalid = {
+            "ok": False,
+            "code": artifact_download.ARTIFACT_INVALID,
+            "recoverable": True,
+            "details": {"validatorCode": "ARTIFACT_BAD_ZIP", "stagingDiscarded": True},
+        }
+        durable = {
+            "ok": True,
+            "code": artifact_download.RESULT_DURABLE,
+            "details": {
+                "resultDirectory": "result-dir",
+                "resultZip": "result.zip",
+                "sha256": "d" * 64,
+            },
+        }
+
+        def send_reminder(_page, prompt, _chat_url, *, timeout_ms):
+            reminder_times.append(round(clock.monotonic()))
+            return confirmed_submit(prompt)
+
+        with tempfile.TemporaryDirectory() as root:
+            bridge = self.make_bridge(root, clock)
+            with (
+                patch.object(browser_submit, "submit_fresh_prompt", return_value=confirmed_submit(PROMPT)),
+                patch.object(browser_observer, "observe_next_assistant", return_value=completed_observer()),
+                patch.object(
+                    artifact_detector,
+                    "detect_artifact_dom",
+                    return_value={"ok": True, "code": artifact_detector.ARTIFACT_DOM_CONFIRMED, "details": {}},
+                ),
+                patch.object(artifact_download, "download_validated_artifact", side_effect=[invalid, durable]) as download,
+                patch.object(reminder_policy, "submit_reminder", side_effect=send_reminder),
+            ):
+                result = bridge.run_request(
+                    REQ,
+                    task_url=TASK_URL,
+                    prompt=PROMPT,
+                    expected_filename=FILENAME,
+                    expected_request={},
+                    playwright_factory=FakeFactory(page),
+                )
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["code"], web_worker_bridge.RESULT_DURABLE)
+        self.assertEqual(reminder_times, [600])
+        self.assertEqual(download.call_count, 2)
+        self.assertEqual(len(result["details"]["reminders"]), 1)
+        self.assertTrue(page.closed)
+
+    def test_unknown_reminder_send_stops_without_later_reminders(self):
+        clock = FakeClock()
+        page = FakePage()
+
+        def observe_timeout(_page, _prompt, _chat_url, *, timeout_ms, **_kwargs):
+            clock.sleep(timeout_ms / 1000.0)
+            return {
+                "ok": False,
+                "code": browser_observer.ASSISTANT_TURN_TIMEOUT,
+                "recoverable": True,
+                "transitions": [],
+                "details": {"chatUrl": CHAT_URL},
+            }
+
+        unknown = {
+            "ok": False,
+            "code": browser_submit.PROMPT_SEND_UNKNOWN,
+            "sendState": browser_submit.SEND_UNKNOWN,
+            "details": {},
+        }
+
+        with tempfile.TemporaryDirectory() as root:
+            bridge = self.make_bridge(root, clock)
+            with (
+                patch.object(browser_submit, "submit_fresh_prompt", return_value=confirmed_submit(PROMPT)),
+                patch.object(browser_observer, "observe_next_assistant", side_effect=observe_timeout),
+                patch.object(reminder_policy, "submit_reminder", return_value=unknown) as send_reminder,
+            ):
+                result = bridge.run_request(
+                    REQ,
+                    task_url=TASK_URL,
+                    prompt=PROMPT,
+                    expected_filename=FILENAME,
+                    expected_request={},
+                    observer_timeout_ms=45 * 60 * 1000,
+                    reminder_interval_ms=10 * 60 * 1000,
+                    max_reminders=3,
+                    playwright_factory=FakeFactory(page),
+                )
+
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["code"], web_worker_bridge.BRIDGE_PIPELINE_FAILED)
+                self.assertEqual(result["details"]["reason"], "reminder send state is UNKNOWN")
+                self.assertEqual(round(clock.monotonic()), 600)
+                send_reminder.assert_called_once()
+                self.assertEqual(
+                    bridge.read_state(REQ)["failureDetails"]["reminders"][0]["sendState"],
+                    browser_submit.SEND_UNKNOWN,
+                )
+                self.assertTrue(page.closed)
+
     def test_unknown_detector_failure_stops_immediately_without_waiting_for_reminder(self):
         clock = FakeClock()
         page = FakePage()
