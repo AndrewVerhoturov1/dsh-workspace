@@ -3,9 +3,13 @@ param(
     [Parameter(ParameterSetName = 'Run', Mandatory = $true)]
     [string]$RequestId,
 
-    [Parameter(ParameterSetName = 'Run', Mandatory = $true)]
+    [Parameter(ParameterSetName = 'Run')]
     [AllowEmptyString()]
-    [string]$Task,
+    [string]$Task = '',
+
+    [Parameter(ParameterSetName = 'Run')]
+    [AllowEmptyString()]
+    [string]$TaskBase64 = '',
 
     [Parameter(ParameterSetName = 'Run')]
     [string]$ChatRequestId = '',
@@ -52,15 +56,26 @@ if ($BrowserSmoke) {
 if ([string]::IsNullOrWhiteSpace($RequestId)) {
     throw 'RequestId must not be empty.'
 }
-if ([string]::IsNullOrWhiteSpace($Task)) {
-    throw 'Task must not be empty.'
+
+$hasTask = -not [string]::IsNullOrWhiteSpace($Task)
+$hasTaskBase64 = -not [string]::IsNullOrWhiteSpace($TaskBase64)
+if ($hasTask -eq $hasTaskBase64) {
+    throw 'Specify exactly one of -Task or -TaskBase64.'
 }
 
-$tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("postman-task-" + [Guid]::NewGuid().ToString('N') + '.txt')
+$argsList += @('--request-id', $RequestId)
+$tmp = $null
 try {
-    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
-    [System.IO.File]::WriteAllText($tmp, $Task, $utf8NoBom)
-    $argsList += @('--request-id', $RequestId, '--task-file', $tmp)
+    if ($hasTaskBase64) {
+        $argsList += @('--task-base64', $TaskBase64)
+    }
+    else {
+        $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("postman-task-" + [Guid]::NewGuid().ToString('N') + '.txt')
+        $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+        [System.IO.File]::WriteAllText($tmp, $Task, $utf8NoBom)
+        $argsList += @('--task-file', $tmp)
+    }
+
     if (-not [string]::IsNullOrWhiteSpace($ChatRequestId)) {
         $argsList += @('--chat-request-id', $ChatRequestId)
     }
@@ -70,9 +85,12 @@ try {
     foreach ($path in $ForbiddenPath) {
         $argsList += @('--forbid-path', $path)
     }
+
     & $Python '-X' 'utf8' @argsList
     exit $LASTEXITCODE
 }
 finally {
-    Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+    if ($null -ne $tmp) {
+        Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+    }
 }
