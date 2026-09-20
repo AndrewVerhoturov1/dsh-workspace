@@ -432,31 +432,71 @@ Direct Postman находит сохранённый `conversationUrl`.
 Дальше использовать отдельные короткоживущие `run_code` вызовы. Каждый ждёт exact job
 не более 480000 ms — с запасом относительно 600000 ms wall limit:
 
+Каждая отдельная wait-ячейка заново задаёт exact значения, полученные при запуске:
+
 ```typescript
+const requestId = "EXACT_REQ";
+const jobId = "EXACT_JOB_ID";
+
 const update = await tools.job_output({
-  job_id: "EXACT_JOB_ID",
+  job_id: jobId,
   wait: true,
   timeout_ms: 480000,
 });
-return update;
+
+if (update.job.status === "running") {
+  return {
+    done: false,
+    requestId,
+    jobId,
+    status: "running",
+  };
+}
+
+if (
+  update.job.status !== "completed" ||
+  update.job.detail !== "exit code: 0"
+) {
+  throw new Error(
+    `POSTMAN_BACKGROUND_JOB_FAILED: ${update.job.status} ${update.job.detail ?? ""}`
+  );
+}
+
+let result;
+
+try {
+  result = JSON.parse(update.text.trim());
+} catch {
+  throw new Error("POSTMAN_RESULT_JSON_INVALID");
+}
+
+if (
+  result.ok !== true ||
+  result.code !== "RESULT_DURABLE" ||
+  result.state !== "RESULT_DURABLE" ||
+  result.requestId !== requestId
+) {
+  throw new Error("POSTMAN_RESULT_GATE_FAILED");
+}
+
+return {
+  done: true,
+  requestId,
+  jobId,
+  result,
+};
 ```
 
-Если `update.job.status == "running"`, выполнить новый отдельный `run_code` с тем же
-`jobId`. Не использовать `sleep`, busy polling или цикл ожидания внутри одной ячейки.
-Timed-out `job_output` оставляет background job живым.
+Если возвращено `done: false`, следующая отдельная `run_code` снова вставляет тот же
+exact `requestId` и `jobId` как литералы и повторяет весь этот блок. Не использовать
+`sleep`, busy polling или цикл ожидания внутри одной ячейки. Timed-out `job_output`
+оставляет background job живым.
 
 Normal path не использует `job_list`: exact `jobId` уже известен. Не запускать
 параллельно второй Postman request, не создавать второй REQ и не повторять Send.
 
-Terminal background job принимается только если:
-
-```text
-job.status == completed
-job.detail == exit code: 0
-```
-
-После этого terminal JSON берётся из stdout exact job и проходит обычный
-`RESULT_DURABLE` gate ниже. `killed`, `failed` или non-zero exit — terminal failure
+Терминальное завершение принимается только при `job.status == completed` и
+`job.detail == exit code: 0`; `killed`, `failed` или non-zero exit — terminal failure
 без retry/fallback.
 
 ### Контракт orchestration-вызова `tools.pwsh`
