@@ -9,6 +9,7 @@ Browser-first pipeline находится в `postman/web/`.
 
 ```text
 Luna
+→ one background tools.pwsh job (`run_in_background: true`)
 → workspace-relative postman/direct/postman.ps1
 → postman/direct/postman_direct.py
 → validate new REQ
@@ -79,6 +80,40 @@ code = RESULT_DURABLE
 requestId = exact current REQ
 resultZip = existing validated durable ZIP
 ```
+
+## DSH orchestration for long requests
+
+В текущем DSH deployment одна `functions.run_code` ячейка имеет wall limit 600000 ms,
+а Direct Postman может законно работать до 45 минут. Поэтому normal `@Postman`
+orchestration не держит `postman.ps1` foreground.
+
+Правильная схема:
+
+```text
+run_code #1
+→ tools.pwsh(run_in_background=true)
+→ сохранить exact requestId + jobId
+→ run_code завершён
+
+run_code #2..N
+→ job_output(exact jobId, wait=true, timeout_ms=480000)
+→ running: новый отдельный wait того же job
+→ completed + exit code 0: разобрать terminal JSON
+```
+
+Background `pwsh` не использует foreground timeout. `job_output` timeout не убивает
+background process. Не запускать второй Postman/REQ после wait timeout.
+
+Для orchestration raw user payload передаётся через UTF-8 Base64:
+
+```powershell
+& $bridge `
+  -RequestId $requestId `
+  -TaskBase64 $taskBase64
+```
+
+`-Task` сохраняется для обычного ручного PowerShell-вызова. Указать одновременно
+`-Task` и `-TaskBase64` нельзя.
 
 ## Continue an existing ChatGPT conversation
 
