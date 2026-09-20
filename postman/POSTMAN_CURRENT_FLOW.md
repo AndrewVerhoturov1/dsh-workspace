@@ -168,7 +168,9 @@ http://127.0.0.1:9222
 
 Browser profile — durable browser identity. PID/Page/WebSocket IDs — runtime details.
 
-Worker создаёт owned Page и не закрывает externally-owned browser/context.
+Dedicated Chrome запускается с нейтральной страницей `about:blank`; рабочий ChatGPT chat
+открывается только в отдельной owned Page. Worker после terminal result закрывает принадлежащую
+ему рабочую вкладку. Externally-owned browser/context не закрываются.
 
 ## 9. Fresh chat path
 
@@ -249,6 +251,43 @@ exact proven user turn
 Старые assistant turns и глобальный поиск по body не используются.
 
 Assistant turn должен завершить generation и стабилизировать текст до artifact detection.
+
+### 11.1. Служебные напоминания
+
+Отсчёт начинается после первоначального `PROMPT_SEND_CONFIRMED`. Пока exact ZIP ещё не
+получен и не провалидирован, Direct Postman независимо от поведения модели пытается
+отправить служебное напоминание на 10-й, 20-й и 30-й минуте. После `RESULT_DURABLE`
+оставшиеся напоминания отменяются. Общий предел ожидания — 45 минут.
+
+Если ZIP скачан, но проверка содержимого возвращает `ARTIFACT_INVALID`, это не завершает
+REQ: временный `.staging/<REQ>` удаляется, чтобы не создать `RESULT_STORE_CONFLICT`, и
+процесс ждёт ближайшего запланированного напоминания для новой попытки P5/P6. Ошибки
+внутреннего валидатора, записи, доверенной аттестации, скачивания или неопределённого
+состояния остаются немедленными ошибками.
+
+Каждое напоминание отправляется в тот же exact conversation и начинается так:
+
+```text
+POSTMAN_REQUEST_ID: <тот же REQ>
+POSTMAN_TRANSPORT_CONTROL: REMINDER <1..3>/3
+```
+
+Дальше идёт фиксированный текст с просьбой продолжить исходную задачу, не начинать её
+заново, не отвечать отдельно на служебное сообщение и выдать итог строго по исходным
+правилам. Для напоминания новый REQ не создаётся, и новый semantic intent не появляется.
+
+После доказанной отправки напоминания оно становится новым разрешённым correlation anchor:
+
+```text
+exact proven reminder user turn
+→ immediately next conversation turn
+→ role = assistant
+```
+
+Произвольный новый user turn разрешённым anchor не является. При `PROVEN_SENT` цикл
+продолжается обычно. При `PROVEN_NOT_SENT` следующий срок разрешён только после
+доказанной очистки текста из поля ввода. При `UNKNOWN` REQ немедленно завершается с
+ошибкой; напоминания №2 и №3 не отправляются и служебное сообщение не повторяется вслепую.
 
 ## 12. Artifact envelope
 
@@ -478,7 +517,8 @@ exact current intent
 → self-contained task
 → two-line browser prompt
 → exact ChatGPT conversation
-→ exact next assistant turn
+→ до трёх служебных напоминаний на 10/20/30 минуте, пока нет RESULT_DURABLE
+→ exact next assistant turn текущего разрешённого anchor
 → exact ZIP control
 → one download
 → safety/correlation validation
