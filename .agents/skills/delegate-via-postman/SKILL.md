@@ -496,22 +496,32 @@ manifest вручную.
 
 После `completed` exact background job с `exit code: 0` распарсить terminal JSON из stdout этого job:
 
-```powershell
+```typescript
+let result;
+
 try {
-    $result = $jsonText | ConvertFrom-Json
+  result = JSON.parse(update.text.trim());
+} catch {
+  throw new Error('POSTMAN_RESULT_JSON_INVALID');
 }
-catch {
-    throw 'POSTMAN_RESULT_JSON_INVALID'
+
+if (
+  result.ok !== true ||
+  result.code !== 'RESULT_DURABLE' ||
+  result.state !== 'RESULT_DURABLE' ||
+  result.requestId !== requestId
+) {
+  throw new Error('POSTMAN_RESULT_GATE_FAILED');
 }
 ```
 
 После завершения Direct Postman Luna проверяет только transport boundary:
 
 ```text
-$result.ok        == true
-$result.code      == RESULT_DURABLE
-$result.state     == RESULT_DURABLE
-$result.requestId == exact $requestId
+result.ok        == true
+result.code      == RESULT_DURABLE
+result.state     == RESULT_DURABLE
+result.requestId == exact requestId
 ```
 
 Не выполнять вручную `Get-FileHash`, повторный manifest/base/staleness/path validation
