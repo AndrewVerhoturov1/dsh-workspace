@@ -119,6 +119,7 @@ AGENTS.md
 
 | Подпроект | ID | Статус | Обновлён |
 |---|---|---|---|
+| Agents Nods by Andrew | agents-nods-by-andrew | active | 2026-09-20 |
 
 ## Принцип v1
 
