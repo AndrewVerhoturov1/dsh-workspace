@@ -11,16 +11,30 @@
 Package Workflow](system/implementation-package-workflow.md).
 Агент обязан открыть этот документ **до подготовки или применения ZIP**.
 
-Короткое правило распределения ответственности:
+После bootstrap центрального runner-а обычный implementation package является
+декларативным: внешняя модель готовит решение, `manifest.json`, `changes.patch` и только
+нужные targeted tests. Она не создаёт новый applicator/diagnostics framework для каждого ZIP.
 
-- внешняя модель проектирует решение, готовит все файлы, тесты, compatibility
-  guards и deterministic applicator/patch и упаковывает их в единый ZIP;
-- локальный агент не дописывает и не перепроектирует пакет, а выполняет
-  `check`/dry-run, применяет его в отдельном clean implementation
-  branch/worktree, запускает проверки и публикует результат через PR;
-- при несовместимости пакета локальный агент останавливается и возвращает его
-  на пересборку, не исправляя пакет вручную;
+Канонический applicator находится в repository:
+
+```text
+system/implementation_package_runner.py
+```
+
+Короткое распределение ответственности:
+
+- внешняя модель проектирует и готовит patch + manifest + нужные тесты;
+- локальный агент создаёт отдельный clean implementation branch/worktree и запускает
+  центральный runner;
+- hard FAIL ограничены реальными рисками: wrong repo/protected worktree, dirty target,
+  unsafe local-data path, реально неприменимый patch или failing targeted test;
+- сдвиг `preview`, exact source SHA, exact changed-file inventory и `git diff --check`
+  сами по себе не являются blocker, если patch применяется и целевые тесты проходят;
+- после PASS локальный агент выполняет commit/push/PR в `preview` по обычной policy;
 - merge выполняется только после отдельного явного разрешения пользователя.
+
+Локальный агент не ремонтирует несовместимый patch вручную: при hard FAIL runner создаёт
+компактный diagnostics ZIP, после чего package возвращается модели на пересборку.
 
 Этот workflow дополняет настоящую политику. При конфликте применяется более
 строгое правило безопасности и защиты пользовательских данных.

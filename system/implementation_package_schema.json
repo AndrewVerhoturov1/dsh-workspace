@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dsh.local/schemas/implementation-package-v1.json",
+  "title": "DSH implementation package manifest",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schemaVersion", "package", "repository", "patch", "tests"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "package": { "type": "string", "minLength": 1 },
+    "repository": { "type": "string", "pattern": "^[^/]+/[^/]+$" },
+    "baseBranch": { "type": "string", "default": "preview" },
+    "prBase": { "type": "string", "default": "preview" },
+    "packageBase": {
+      "type": "string",
+      "description": "Informational source snapshot. The central runner does not require equality; git apply --check is the compatibility authority."
+    },
+    "patch": { "type": "string", "minLength": 1, "default": "changes.patch" },
+    "tests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["name", "command"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "command": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "cwd": { "type": "string", "default": "." },
+          "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 3600, "default": 600 }
+        }
+      }
+    }
+  }
+}
