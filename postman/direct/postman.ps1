@@ -14,6 +14,9 @@ param(
     [Parameter(ParameterSetName = 'Run')]
     [string]$ChatRequestId = '',
 
+    [Parameter(ParameterSetName = 'Run')]
+    [switch]$AutomaticContinuation,
+
     [Parameter(ParameterSetName = 'Smoke', Mandatory = $true)]
     [switch]$BrowserSmoke,
 
@@ -78,6 +81,9 @@ try {
 
     if (-not [string]::IsNullOrWhiteSpace($ChatRequestId)) {
         $argsList += @('--chat-request-id', $ChatRequestId)
+    }
+    if ($AutomaticContinuation) {
+        $argsList += '--automatic-continuation'
     }
     foreach ($path in $AllowedPath) {
         $argsList += @('--allow-path', $path)

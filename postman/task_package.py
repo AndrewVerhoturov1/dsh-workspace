@@ -332,7 +332,7 @@ def render_direct_task_manifest(
         "",
         "- Создать ровно один реальный downloadable ZIP result artifact.",
         "- Внутри ZIP положить фактический результат задачи в любой естественной безопасной структуре; каталог `files/` не обязателен.",
-        f"- `manifest.json` необязателен. Если он присутствует и содержит строковый `requestId`, значение должно быть ровно `{request_id}`.",
+        "- `manifest.json` необязателен и полностью informational для normal transport; его поля не являются ZIP hard gates.",
         "- `protocolVersion`, `repository`, `baseCommit`, `resultType`, `patch`, `files` и дополнительные manifest-поля не обязательны для normal transport.",
         "- Normal Postman не проверяет repository scope или patch semantics и не применяет содержимое ZIP автоматически.",
         "- Для обычного текстового ответа можно положить, например, `result.md` или `files/result.md`; это рекомендация, не schema requirement.",

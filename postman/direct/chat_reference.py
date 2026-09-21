@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Resolve an existing ChatGPT conversation from a prior durable Postman REQ.
+"""Resolve an existing ChatGPT conversation from a prior terminal Postman REQ.
 
 This is intentionally local-only. It never searches ChatGPT UI and never sends a
 prompt. A prior REQ is only a lookup key for a previously observed /c/... URL.
@@ -18,6 +18,9 @@ from urllib.parse import urlparse
 import request_identity
 
 RESULT_DURABLE = "RESULT_DURABLE"
+ASSISTANT_COMPLETED_NO_ARTIFACT = "ASSISTANT_COMPLETED_NO_ARTIFACT"
+ARTIFACT_REJECTED = "ARTIFACT_REJECTED"
+_TERMINAL_CHAT_STATES = {RESULT_DURABLE, ASSISTANT_COMPLETED_NO_ARTIFACT, ARTIFACT_REJECTED}
 _CHAT_PATH_RE = re.compile(r"^/c/([A-Za-z0-9_-]+)$")
 
 
@@ -34,6 +37,9 @@ class ChatReference:
     conversation_id: str
     conversation_url: str
     source: str
+    root_request_id: str = ""
+    continuation_index: int = 0
+    terminal_state: str = ""
 
 
 def normalize_conversation_url(value: object) -> tuple[str, str]:
@@ -86,9 +92,9 @@ def _eligible(value: dict[str, Any], *, request_id: str, expected_repository: st
         return False
     state = value.get("state")
     code = value.get("code")
-    if state != RESULT_DURABLE:
+    if state not in _TERMINAL_CHAT_STATES:
         return False
-    if code not in {None, RESULT_DURABLE}:
+    if code not in {None, state}:
         return False
     if value.get("ok") is False:
         return False
@@ -127,11 +133,20 @@ def resolve_chat_reference(
         except ChatReferenceError:
             invalid_urls.append(source)
             continue
+        root_request_id = value.get("rootRequestId")
+        if not isinstance(root_request_id, str) or not root_request_id:
+            root_request_id = request_id
+        continuation_index = value.get("continuationIndex")
+        if isinstance(continuation_index, bool) or not isinstance(continuation_index, int) or continuation_index < 0:
+            continuation_index = 0
         return ChatReference(
             request_id=request_id,
             conversation_id=conversation_id,
             conversation_url=conversation_url,
             source=source,
+            root_request_id=root_request_id,
+            continuation_index=continuation_index,
+            terminal_state=str(value.get("state", "")),
         )
 
     raise ChatReferenceError(
@@ -140,7 +155,7 @@ def resolve_chat_reference(
         details={
             "chatRequestId": request_id,
             "checkedSources": [source for source, _ in candidates],
-            "durableSourcesFound": seen_sources,
+            "terminalSourcesFound": seen_sources,
             "invalidConversationUrlSources": invalid_urls,
             "uiSearchAttempted": False,
         },

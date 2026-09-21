@@ -46,7 +46,13 @@ import durable_handoff  # noqa: E402
 import task_package  # noqa: E402
 import request_identity  # noqa: E402
 import runtime_support as runtime  # noqa: E402
-from web_worker_bridge import WebWorkerBridge, RESULT_DURABLE  # noqa: E402
+from web_worker_bridge import (  # noqa: E402
+    WebWorkerBridge,
+    RESULT_DURABLE,
+    ASSISTANT_COMPLETED_NO_ARTIFACT,
+    ARTIFACT_REJECTED,
+    POSTMAN_TRANSPORT_FAILED,
+)
 
 DEFAULT_REPOSITORY = "AndrewVerhoturov1/dsh-workspace"
 DEFAULT_BRANCH = "main"
@@ -56,13 +62,15 @@ PUBLIC_POLICY_URL = (
     "main/policies/postman-webchat-result-artifact.md"
 )
 
-DIRECT_VERSION = 4
+DIRECT_VERSION = 5
 DEFAULT_ASSISTANT_TIMEOUT_MS = 45 * 60 * 1000
 STATE_INIT = "INIT"
 STATE_TASK_PUBLISHED = "TASK_PUBLISHED"
 STATE_BROWSER_READY = "BROWSER_READY"
 STATE_WEB_RUNNING = "WEB_RUNNING"
 STATE_RESULT_DURABLE = "RESULT_DURABLE"
+STATE_ASSISTANT_COMPLETED_NO_ARTIFACT = "ASSISTANT_COMPLETED_NO_ARTIFACT"
+STATE_ARTIFACT_REJECTED = "ARTIFACT_REJECTED"
 STATE_FAILED = "FAILED"
 STATE_BROWSER_SMOKE_READY = "BROWSER_SMOKE_READY"
 
@@ -506,6 +514,7 @@ class DirectPostman:
         cdp_url: str = bootstrap.DEFAULT_CDP_URL,
         extra_allowed: Iterable[str] = (),
         extra_forbidden: Iterable[str] = (),
+        automatic_continuation: bool = False,
     ) -> dict[str, Any]:
         request_identity.assert_canonical_request_id(request_id)
         if self.state_path(request_id).exists():
@@ -516,6 +525,11 @@ class DirectPostman:
             )
 
         chat_ref = None
+        if automatic_continuation and not chat_request_id:
+            raise DirectPostmanError(
+                "DIRECT_INVALID_CONTINUATION",
+                "automatic continuation requires --chat-request-id",
+            )
         if chat_request_id:
             try:
                 chat_ref = chat_reference.resolve_chat_reference(
@@ -525,6 +539,18 @@ class DirectPostman:
                 )
             except chat_reference.ChatReferenceError as exc:
                 raise DirectPostmanError(exc.code, str(exc), details=exc.details) from exc
+            if automatic_continuation and getattr(chat_ref, "terminal_state", "") not in {
+                ASSISTANT_COMPLETED_NO_ARTIFACT,
+                ARTIFACT_REJECTED,
+            }:
+                raise DirectPostmanError(
+                    "DIRECT_INVALID_CONTINUATION",
+                    "automatic continuation requires a non-durable terminal handoff",
+                    details={
+                        "chatRequestId": chat_ref.request_id,
+                        "terminalState": getattr(chat_ref, "terminal_state", ""),
+                    },
+                )
 
         try:
             self.result_root = runtime.prepare_result_root(self.result_root)
@@ -535,16 +561,39 @@ class DirectPostman:
                 details={"resultRoot": str(self.result_root), "reason": str(exc)[:500]},
             ) from exc
 
+        if chat_ref is not None:
+            if automatic_continuation:
+                chain_fields = {
+                    "continuedFromRequestId": chat_ref.request_id,
+                    "parentRequestId": chat_ref.request_id,
+                    "rootRequestId": getattr(chat_ref, "root_request_id", chat_ref.request_id),
+                    "continuationIndex": int(getattr(chat_ref, "continuation_index", 0)) + 1,
+                }
+            else:
+                chain_fields = {
+                    "parentRequestId": None,
+                    "rootRequestId": request_id,
+                    "continuationIndex": 0,
+                }
+            initial_chat_fields = {
+                "conversationUrl": chat_ref.conversation_url,
+                "conversationId": chat_ref.conversation_id,
+            }
+        else:
+            chain_fields = {
+                "parentRequestId": None,
+                "rootRequestId": request_id,
+                "continuationIndex": 0,
+            }
+            initial_chat_fields = {}
+
         self._write_state(
             request_id,
             STATE_INIT,
             taskSha256=_sha256_text(task),
             resultRoot=str(self.result_root),
-            **({
-                "continuedFromRequestId": chat_ref.request_id,
-                "conversationUrl": chat_ref.conversation_url,
-                "conversationId": chat_ref.conversation_id,
-            } if chat_ref is not None else {}),
+            **chain_fields,
+            **initial_chat_fields,
         )
 
         publisher = self.publisher_factory(
@@ -620,18 +669,30 @@ class DirectPostman:
             conversation_url=chat_ref.conversation_url if chat_ref is not None else None,
             observer_timeout_ms=DEFAULT_ASSISTANT_TIMEOUT_MS,
         )
-        if not isinstance(result, dict) or result.get("code") != RESULT_DURABLE or result.get("ok") is not True:
+        if not isinstance(result, dict) or result.get("ok") is not True:
             code = result.get("code", "DIRECT_WEB_FAILED") if isinstance(result, dict) else "DIRECT_WEB_FAILED"
             details = result.get("details", {}) if isinstance(result, dict) else {"result": repr(result)}
             self._write_state(request_id, STATE_FAILED, failureCode=code, failureDetails=details)
-            raise DirectPostmanError("DIRECT_WEB_FAILED", f"Web Postman pipeline failed: {code}", details=details)
+            transport_message = str(
+                result.get("transportMessage")
+                or details.get("transportMessage")
+                or details.get("reason")
+                or code
+            )
+            transport_code = str(result.get("transportCode") or details.get("transportCode") or code)
+            transport_details = details.get("details") if isinstance(details.get("details"), dict) else details
+            raise DirectPostmanError(
+                POSTMAN_TRANSPORT_FAILED,
+                transport_message,
+                details={
+                    "transportCode": transport_code,
+                    "transportMessage": transport_message,
+                    "details": transport_details,
+                },
+            )
 
-        details = result.get("details", {})
-        result_zip = details.get("resultZip")
-        sha256 = details.get("resultSha256")
-        if not isinstance(result_zip, str) or not result_zip:
-            raise DirectPostmanError("DIRECT_RESULT_INVALID", "durable result did not expose resultZip", details=details)
-
+        bridge_code = str(result.get("code", ""))
+        details = result.get("details", {}) if isinstance(result.get("details"), dict) else {}
         conversation_fields: dict[str, Any] = {}
         conversation_url = details.get("conversationUrl")
         conversation_id = details.get("conversationId")
@@ -639,8 +700,64 @@ class DirectPostman:
             conversation_fields["conversationUrl"] = conversation_url
         if isinstance(conversation_id, str) and conversation_id:
             conversation_fields["conversationId"] = conversation_id
-        if chat_ref is not None:
-            conversation_fields["continuedFromRequestId"] = chat_ref.request_id
+        if bridge_code in {ASSISTANT_COMPLETED_NO_ARTIFACT, ARTIFACT_REJECTED}:
+            assistant_index = details.get("assistantIndex")
+            terminal = _json_result(
+                True,
+                bridge_code,
+                state=bridge_code,
+                requestId=request_id,
+                repository=self.repository,
+                baseCommit=published.prepublication_commit,
+                taskPublicationCommit=published.publication_commit,
+                taskUrl=published.task_url,
+                expectedFilename=expected_filename,
+                assistantText=str(details.get("assistantText", "")),
+                assistantTextSha256=str(details.get("assistantTextSha256", "")),
+                assistantIndex=assistant_index if isinstance(assistant_index, int) and not isinstance(assistant_index, bool) else None,
+                validationCode=str(details.get("validationCode", "")),
+                validationMessage=str(details.get("validationMessage", "")),
+                validationDetails=details.get("validationDetails") if isinstance(details.get("validationDetails"), dict) else {},
+                resultRoot=str(self.result_root),
+                statePath=str(self.state_path(request_id)),
+                browser=browser,
+                **chain_fields,
+                **conversation_fields,
+            )
+            self._write_state(
+                request_id,
+                bridge_code,
+                ok=True,
+                code=bridge_code,
+                workerDetails=details,
+                assistantText=terminal["assistantText"],
+                assistantTextSha256=terminal["assistantTextSha256"],
+                assistantIndex=terminal["assistantIndex"],
+                validationCode=terminal["validationCode"],
+                validationMessage=terminal["validationMessage"],
+                validationDetails=terminal["validationDetails"],
+                **chain_fields,
+                **conversation_fields,
+            )
+            return terminal
+
+        if bridge_code != RESULT_DURABLE:
+            self._write_state(request_id, STATE_FAILED, failureCode=bridge_code or "DIRECT_WEB_FAILED", failureDetails=details)
+            transport_message = f"Web Postman pipeline returned unsupported terminal code: {bridge_code or 'missing'}"
+            raise DirectPostmanError(
+                POSTMAN_TRANSPORT_FAILED,
+                transport_message,
+                details={
+                    "transportCode": bridge_code or "DIRECT_MISSING_TERMINAL_CODE",
+                    "transportMessage": transport_message,
+                    "details": details,
+                },
+            )
+
+        result_zip = details.get("resultZip")
+        sha256 = details.get("resultSha256")
+        if not isinstance(result_zip, str) or not result_zip:
+            raise DirectPostmanError("DIRECT_RESULT_INVALID", "durable result did not expose resultZip", details=details)
 
         state_path = self.state_path(request_id)
         handoff_path = durable_handoff.handoff_path(self.direct_root, request_id)
@@ -661,6 +778,7 @@ class DirectPostman:
             statePath=str(state_path),
             resultHandoffPath=str(handoff_path.resolve()),
             handoffVersion=durable_handoff.HANDOFF_VERSION,
+            **chain_fields,
             **conversation_fields,
         )
         try:
@@ -688,6 +806,7 @@ class DirectPostman:
             resultZip=result_zip,
             artifactSha256=terminal["sha256"],
             workerDetails=details,
+            **chain_fields,
             **conversation_fields,
         )
         return terminal
@@ -709,6 +828,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--result-root")
     parser.add_argument("--cdp-url", default=bootstrap.DEFAULT_CDP_URL)
     parser.add_argument("--chat-request-id")
+    parser.add_argument("--automatic-continuation", action="store_true", help="Continue the existing conversation and preserve chain identity")
     parser.add_argument("--allow-path", action="append", default=[])
     parser.add_argument("--forbid-path", action="append", default=[])
     return parser
@@ -727,6 +847,7 @@ def _task_from_args(args: argparse.Namespace) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    execution_request_id: str | None = None
     try:
         direct = DirectPostman(
             repository=args.repository,
@@ -742,10 +863,12 @@ def main(argv: list[str] | None = None) -> int:
             if not args.request_id:
                 raise DirectPostmanError("DIRECT_INVALID_REQUEST", "--request-id is required")
             task = _task_from_args(args)
+            execution_request_id = args.request_id
             result = direct.run(
                 request_id=args.request_id,
                 task=task,
                 chat_request_id=args.chat_request_id,
+                automatic_continuation=args.automatic_continuation,
                 cdp_url=args.cdp_url,
                 extra_allowed=args.allow_path,
                 extra_forbidden=args.forbid_path,
@@ -754,12 +877,38 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     except (DirectPostmanError, ValueError) as exc:
         code = exc.code if isinstance(exc, DirectPostmanError) else "DIRECT_INVALID_REQUEST"
-        details = exc.details if isinstance(exc, DirectPostmanError) else {}
-        result = _json_result(False, code, error=str(exc), details=details)
+        error_details = exc.details if isinstance(exc, DirectPostmanError) else {}
+        request_fields = {"requestId": args.request_id} if args.request_id else {}
+        if (
+            isinstance(exc, DirectPostmanError)
+            and execution_request_id
+            and code != POSTMAN_TRANSPORT_FAILED
+        ):
+            result = _json_result(
+                False,
+                POSTMAN_TRANSPORT_FAILED,
+                **request_fields,
+                transportCode=code,
+                transportMessage=str(exc),
+                details=error_details,
+            )
+        elif code == POSTMAN_TRANSPORT_FAILED:
+            result = _json_result(
+                False,
+                code,
+                error=str(exc),
+                **request_fields,
+                transportCode=str(error_details.get("transportCode", code)),
+                transportMessage=str(error_details.get("transportMessage", str(exc))),
+                details=error_details.get("details", {}),
+            )
+        else:
+            result = _json_result(False, code, error=str(exc), **request_fields, details=error_details)
         print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
         return 2
     except Exception as exc:  # pragma: no cover - last-resort CLI boundary
-        result = _json_result(False, "DIRECT_INTERNAL_ERROR", error=str(exc))
+        request_fields = {"requestId": args.request_id} if args.request_id else {}
+        result = _json_result(False, "DIRECT_INTERNAL_ERROR", error=str(exc), **request_fields)
         print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
         return 3
 

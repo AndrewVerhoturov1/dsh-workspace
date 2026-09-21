@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import importlib.util
+import io
 import json
 from pathlib import Path
 import subprocess
@@ -45,6 +47,9 @@ identity_stub.request_prompt_key_line = lambda req: f"POSTMAN_REQUEST_ID: {req}"
 
 bridge_stub = types.ModuleType("web_worker_bridge")
 bridge_stub.RESULT_DURABLE = "RESULT_DURABLE"
+bridge_stub.ASSISTANT_COMPLETED_NO_ARTIFACT = "ASSISTANT_COMPLETED_NO_ARTIFACT"
+bridge_stub.ARTIFACT_REJECTED = "ARTIFACT_REJECTED"
+bridge_stub.POSTMAN_TRANSPORT_FAILED = "POSTMAN_TRANSPORT_FAILED"
 class PlaceholderBridge:
     pass
 bridge_stub.WebWorkerBridge = PlaceholderBridge
@@ -295,7 +300,7 @@ class DirectPostmanUnitTests(unittest.TestCase):
             self.assertEqual(handoff["resultHandoffPath"], str(handoff_path.resolve()))
             self.assertEqual(handoff["sha256"], "c" * 64)
 
-    def test_continuation_resolves_old_req_and_passes_exact_conversation_url(self):
+    def test_automatic_continuation_after_index_three_inherits_chain(self):
         new_req = "REQ_20260902T010204Z_1235"
         conversation_url = "https://chatgpt.com/c/existing-chat-123"
 
@@ -331,7 +336,10 @@ class DirectPostmanUnitTests(unittest.TestCase):
             request_id=REQ,
             conversation_url=conversation_url,
             conversation_id="existing-chat-123",
-            source="durable_handoff",
+            source="direct_state",
+            root_request_id="REQ_20260902T010200Z_1200",
+            continuation_index=3,
+            terminal_state=direct.ASSISTANT_COMPLETED_NO_ARTIFACT,
         )
         with tempfile.TemporaryDirectory() as root, patch.object(
             direct.chat_reference, "resolve_chat_reference", return_value=reference
@@ -343,11 +351,72 @@ class DirectPostmanUnitTests(unittest.TestCase):
                 bridge_factory=Bridge,
                 ensure_browser=lambda **kwargs: {"cdpUrl": "http://127.0.0.1:9222"},
             )
-            result = runner.run(request_id=new_req, task="continue", chat_request_id=REQ)
+            result = runner.run(
+                request_id=new_req,
+                task="continue",
+                chat_request_id=REQ,
+                automatic_continuation=True,
+            )
             self.assertEqual(Bridge.calls[0][1]["conversation_url"], conversation_url)
             self.assertEqual(result["continuedFromRequestId"], REQ)
+            self.assertEqual(result["rootRequestId"], "REQ_20260902T010200Z_1200")
+            self.assertEqual(result["continuationIndex"], 4)
             self.assertEqual(result["conversationUrl"], conversation_url)
             self.assertEqual(result["conversationId"], "existing-chat-123")
+
+    def test_manual_chat_with_high_continuation_index_is_allowed(self):
+        new_req = "REQ_20260902T010205Z_1236"
+        conversation_url = "https://chatgpt.com/c/manual-chat"
+
+        class Publisher:
+            def __init__(self, **kwargs): pass
+            def snapshot(self): return direct.TaskSnapshot(PRE, ("postman", "README.md"))
+            def publish_content(self, request_id, content, *, expected_parent, root_entries):
+                return direct.PublishedTask(
+                    request_id,
+                    f"https://raw.githubusercontent.com/{REPO}/{PUB}/{request_id}.md",
+                    PRE,
+                    PUB,
+                    tuple(root_entries),
+                )
+
+        class Bridge:
+            def __init__(self, **kwargs): pass
+            def run_request(self, request_id, **kwargs):
+                return {
+                    "ok": True,
+                    "code": "RESULT_DURABLE",
+                    "details": {
+                        "resultZip": r"C:\result\manual.zip",
+                        "resultSha256": "a" * 64,
+                        "conversationUrl": conversation_url,
+                        "conversationId": "manual-chat",
+                    },
+                }
+
+        previous = types.SimpleNamespace(
+            request_id=REQ,
+            conversation_url=conversation_url,
+            conversation_id="manual-chat",
+            root_request_id="REQ_20260902T010200Z_1200",
+            continuation_index=3,
+            source="direct_state",
+        )
+        with tempfile.TemporaryDirectory() as root, patch.object(
+            direct.chat_reference, "resolve_chat_reference", return_value=previous
+        ):
+            runner = direct.DirectPostman(
+                direct_root=Path(root) / "direct",
+                publisher_factory=Publisher,
+                bridge_factory=Bridge,
+                ensure_browser=lambda **kwargs: {"cdpUrl": "http://127.0.0.1:9222"},
+            )
+            result = runner.run(request_id=new_req, task="manual intent", chat_request_id=REQ)
+
+        self.assertNotIn("continuedFromRequestId", result)
+        self.assertEqual(result["rootRequestId"], new_req)
+        self.assertEqual(result["continuationIndex"], 0)
+        self.assertEqual(result["conversationUrl"], conversation_url)
 
     def test_existing_state_blocks_automatic_resend(self):
         with tempfile.TemporaryDirectory() as root:
@@ -359,6 +428,159 @@ class DirectPostmanUnitTests(unittest.TestCase):
             with self.assertRaises(direct.DirectPostmanError) as ctx:
                 runner.run(request_id=REQ, task="x")
             self.assertEqual(ctx.exception.code, "DIRECT_REQUEST_EXISTS")
+
+    def test_no_artifact_terminal_is_returned_to_local_agent_and_can_continue_same_chat(self):
+        conversation_url = "https://chatgpt.com/c/no-artifact-chat"
+
+        class Publisher:
+            def __init__(self, **kwargs): pass
+            def snapshot(self): return direct.TaskSnapshot(PRE, ("postman", "README.md"))
+            def publish_content(self, request_id, content, *, expected_parent, root_entries):
+                return direct.PublishedTask(
+                    request_id,
+                    f"https://raw.githubusercontent.com/{REPO}/{PUB}/{request_id}.md",
+                    PRE,
+                    PUB,
+                    tuple(root_entries),
+                )
+
+        class Bridge:
+            def __init__(self, **kwargs): pass
+            def run_request(self, request_id, **kwargs):
+                return {
+                    "ok": True,
+                    "code": "ASSISTANT_COMPLETED_NO_ARTIFACT",
+                    "details": {
+                        "assistantText": "ZIP ещё не собран.",
+                        "assistantTextSha256": "e" * 64,
+                        "assistantIndex": 7,
+                        "conversationUrl": conversation_url,
+                        "conversationId": "no-artifact-chat",
+                    },
+                }
+
+        with tempfile.TemporaryDirectory() as root:
+            runner = direct.DirectPostman(
+                direct_root=Path(root) / "direct",
+                publisher_factory=Publisher,
+                bridge_factory=Bridge,
+                ensure_browser=lambda **kwargs: {"cdpUrl": "http://127.0.0.1:9222"},
+            )
+            result = runner.run(request_id=REQ, task="long task")
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["code"], "ASSISTANT_COMPLETED_NO_ARTIFACT")
+            self.assertEqual(result["state"], "ASSISTANT_COMPLETED_NO_ARTIFACT")
+            self.assertEqual(result["assistantText"], "ZIP ещё не собран.")
+            self.assertEqual(result["conversationUrl"], conversation_url)
+            self.assertEqual(result["rootRequestId"], REQ)
+            self.assertEqual(result["continuationIndex"], 0)
+            self.assertFalse(runner.result_handoff_path(REQ).exists())
+
+            state = json.loads(runner.state_path(REQ).read_text(encoding="utf-8"))
+            self.assertEqual(state["state"], "ASSISTANT_COMPLETED_NO_ARTIFACT")
+            self.assertEqual(state["code"], "ASSISTANT_COMPLETED_NO_ARTIFACT")
+            self.assertEqual(state["conversationUrl"], conversation_url)
+
+    def test_rejected_artifact_terminal_exposes_exact_validation_reason(self):
+        conversation_url = "https://chatgpt.com/c/rejected-chat"
+
+        class Publisher:
+            def __init__(self, **kwargs): pass
+            def snapshot(self): return direct.TaskSnapshot(PRE, ("postman", "README.md"))
+            def publish_content(self, request_id, content, *, expected_parent, root_entries):
+                return direct.PublishedTask(
+                    request_id,
+                    f"https://raw.githubusercontent.com/{REPO}/{PUB}/{request_id}.md",
+                    PRE,
+                    PUB,
+                    tuple(root_entries),
+                )
+
+        class Bridge:
+            def __init__(self, **kwargs): pass
+            def run_request(self, request_id, **kwargs):
+                return {
+                    "ok": True,
+                    "code": "ARTIFACT_REJECTED",
+                    "details": {
+                        "assistantText": "Готово.",
+                        "assistantTextSha256": "f" * 64,
+                        "assistantIndex": 8,
+                        "conversationUrl": conversation_url,
+                        "conversationId": "rejected-chat",
+                        "validationCode": "ARTIFACT_BAD_ZIP",
+                        "validationMessage": "ZIP is malformed or cannot be read safely",
+                        "validationDetails": {"reason": "eocd"},
+                    },
+                }
+
+        with tempfile.TemporaryDirectory() as root:
+            runner = direct.DirectPostman(
+                direct_root=Path(root) / "direct",
+                publisher_factory=Publisher,
+                bridge_factory=Bridge,
+                ensure_browser=lambda **kwargs: {"cdpUrl": "http://127.0.0.1:9222"},
+            )
+            result = runner.run(request_id=REQ, task="long task")
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["code"], "ARTIFACT_REJECTED")
+            self.assertEqual(result["validationCode"], "ARTIFACT_BAD_ZIP")
+            self.assertIn("malformed", result["validationMessage"])
+            self.assertEqual(result["validationDetails"], {"reason": "eocd"})
+            self.assertEqual(result["assistantIndex"], 8)
+            self.assertNotIn("assistantTurnIndex", result)
+            self.assertFalse(runner.result_handoff_path(REQ).exists())
+
+
+    def test_cli_transport_failure_json_preserves_exact_request_and_nonzero_exit(self):
+        failure_details = {
+            "transportCode": "BRIDGE_PIPELINE_FAILED",
+            "transportMessage": "bridge lost connection",
+            "details": {"phase": "observer", "attempt": 1},
+        }
+        with patch.object(
+            direct.DirectPostman,
+            "run",
+            side_effect=direct.DirectPostmanError(
+                direct.POSTMAN_TRANSPORT_FAILED,
+                failure_details["transportMessage"],
+                details=failure_details,
+            ),
+        ), contextlib.redirect_stdout(io.StringIO()) as stdout:
+            exit_code = direct.main(["--request-id", REQ, "--task", "intent"])
+
+        self.assertEqual(exit_code, 2)
+        payload = json.loads(stdout.getvalue())
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["code"], direct.POSTMAN_TRANSPORT_FAILED)
+        self.assertEqual(payload["requestId"], REQ)
+        self.assertEqual(payload["transportCode"], failure_details["transportCode"])
+        self.assertEqual(payload["transportMessage"], failure_details["transportMessage"])
+        self.assertEqual(payload["details"], failure_details["details"])
+
+    def test_cli_prebridge_failure_becomes_correlated_transport_failure(self):
+        failure_code = "DIRECT_BROWSER_FAILED"
+        failure_message = "dedicated Chrome failed to become ready"
+        failure_details = {"phase": "cdp", "cdpUrl": "http://127.0.0.1:9222"}
+        with patch.object(
+            direct.DirectPostman,
+            "run",
+            side_effect=direct.DirectPostmanError(
+                failure_code,
+                failure_message,
+                details=failure_details,
+            ),
+        ), contextlib.redirect_stdout(io.StringIO()) as stdout:
+            exit_code = direct.main(["--request-id", REQ, "--task", "intent"])
+
+        self.assertEqual(exit_code, 2)
+        payload = json.loads(stdout.getvalue())
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["code"], direct.POSTMAN_TRANSPORT_FAILED)
+        self.assertEqual(payload["requestId"], REQ)
+        self.assertEqual(payload["transportCode"], failure_code)
+        self.assertEqual(payload["transportMessage"], failure_message)
+        self.assertEqual(payload["details"], failure_details)
 
 
 if __name__ == "__main__":
