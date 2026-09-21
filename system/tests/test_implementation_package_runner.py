@@ -96,6 +96,78 @@ class ImplementationPackageRunnerTests(unittest.TestCase):
         self.assertEqual((self.repo / "new.txt").read_text(encoding="utf-8"), "new file\n")
         self.assertIn("?? new.txt", result["gitStatus"])
 
+    def test_new_ignored_file_blocks_before_targeted_tests(self):
+        (self.repo / ".gitignore").write_text("**/lib/\n", encoding="utf-8")
+        command(["git", "add", ".gitignore"], self.repo)
+        command(["git", "commit", "-qm", "ignore lib"], self.repo)
+        marker = self.base / "targeted-test-ran.txt"
+        patch = """diff --git a/plugin/lib/new.js b/plugin/lib/new.js
+new file mode 100644
+--- /dev/null
++++ b/plugin/lib/new.js
+@@ -0,0 +1 @@
++console.log('new');
+"""
+        package = package_zip(
+            self.base,
+            patch,
+            tests=[{
+                "name": "must not run",
+                "command": [sys.executable, "-c", "from pathlib import Path; import sys; Path(sys.argv[1]).write_text('ran')", str(marker)],
+                "timeoutSeconds": 30,
+            }],
+        )
+        result = runner.execute("apply", package, self.repo, self.diag)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["code"], "PATCH_CREATES_IGNORED_FILE")
+        self.assertEqual(result["stage"], "apply")
+        self.assertIn("plugin/lib/new.js", result["message"])
+        self.assertFalse(marker.exists())
+
+    def test_patch_gitignore_exception_allows_new_file(self):
+        (self.repo / ".gitignore").write_text("**/lib/\n", encoding="utf-8")
+        command(["git", "add", ".gitignore"], self.repo)
+        command(["git", "commit", "-qm", "ignore lib"], self.repo)
+        patch = """diff --git a/.gitignore b/.gitignore
+--- a/.gitignore
++++ b/.gitignore
+@@ -1 +1,3 @@
+ **/lib/
++!plugin/lib/
++!plugin/lib/**
+diff --git a/plugin/lib/new.js b/plugin/lib/new.js
+new file mode 100644
+--- /dev/null
++++ b/plugin/lib/new.js
+@@ -0,0 +1 @@
++console.log('new');
+"""
+        package = package_zip(self.base, patch)
+        result = runner.execute("apply", package, self.repo, self.diag)
+        self.assertTrue(result["ok"], result)
+        self.assertTrue((self.repo / "plugin" / "lib" / "new.js").is_file())
+
+    def test_tracked_file_matching_ignore_pattern_does_not_fail(self):
+        tracked = self.repo / "plugin" / "lib" / "existing.js"
+        tracked.parent.mkdir(parents=True)
+        tracked.write_text("old\n", encoding="utf-8")
+        command(["git", "add", "plugin/lib/existing.js"], self.repo)
+        command(["git", "commit", "-qm", "add tracked lib file"], self.repo)
+        (self.repo / ".gitignore").write_text("**/lib/\n", encoding="utf-8")
+        command(["git", "add", ".gitignore"], self.repo)
+        command(["git", "commit", "-qm", "ignore lib after tracking"], self.repo)
+        patch = """diff --git a/plugin/lib/existing.js b/plugin/lib/existing.js
+--- a/plugin/lib/existing.js
++++ b/plugin/lib/existing.js
+@@ -1 +1 @@
+-old
++new
+"""
+        package = package_zip(self.base, patch)
+        result = runner.execute("apply", package, self.repo, self.diag)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(tracked.read_text(encoding="utf-8"), "new\n")
+
     def test_package_base_is_informational_not_a_hard_gate(self):
         package = package_zip(self.base, PATCH_TRACKED_AND_NEW, package_base="definitely-not-current-head")
         result = runner.execute("apply", package, self.repo, self.diag)

@@ -14,6 +14,8 @@ language: ru
 
 После установки центрального runner-а внешняя модель **не должна писать новый applicator для каждого ZIP**. Обычный implementation package — декларативный: manifest + unified patch + список только нужных целевых тестов.
 
+[Implementation Package Authoring Contract](implementation-package-authoring.md) — канонический contract именно для автора package; этот workflow описывает полный lifecycle его применения.
+
 Роли:
 
 - **ChatGPT / другая внешняя модель** — проектирует решение, готовит `changes.patch`, manifest и при необходимости новые regression tests внутри patch.
@@ -103,7 +105,8 @@ Runner намеренно имеет маленький набор блокир�
 5. patch затрагивает явно локальные защищённые данные (`.git`, root `settings.yaml`, root `.env`, root `attachments/`);
 6. `git apply --check` говорит, что patch действительно не применяется;
 7. сам `git apply` завершился ошибкой;
-8. один из **объявленных targeted tests** завершился non-zero/timeout.
+8. `PATCH_CREATES_IGNORED_FILE`: после применения полного patch новый затронутый файл остаётся ignored обычным Git и потому может пройти локальные tests, но потеряться при обычном commit;
+9. один из **объявленных targeted tests** завершился non-zero/timeout.
 
 Это и есть обычные hard gates.
 
@@ -228,13 +231,16 @@ Central runner **не делает GitHub writes**.
 
 ```text
 review git status/diff на уровне задачи
-→ explicit staging нужных task files
+→ git add -A
 → commit
 → push temporary task branch
 → verify remote SHA
 → create/update PR в preview
+→ verify package-created new files exist in remote commit/PR
 → STOP без merge
 ```
+
+`git add -f` запрещён. Эта проверка после публикации не является exact-file-inventory gate до применения package.
 
 Merge — только после отдельного решения пользователя.
 
