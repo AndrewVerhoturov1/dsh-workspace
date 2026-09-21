@@ -1,0 +1,33 @@
+# Журнал подпроекта Postman
+
+## Правила
+
+- Записывать только существенные решения и этапы.
+- Не вести журнал каждого commit, теста или микрошагa.
+- Каждая запись кратко отвечает: что изменилось, почему, результат.
+
+## Записи
+
+### 2026-09-19 — Direct Web Postman закреплён как production path
+
+- **Что изменилось:** production transport сведён к Direct Web Postman, а artifact validation — к transport-safety boundary.
+- **Почему:** требовался единый fail-closed production path без старого async transport в критическом пути.
+- **Результат:** закреплены current production contracts и пройден fresh + continuation E2E.
+
+### 2026-09-20 — Зафиксированы long-running orchestration и reminders
+
+- **Что изменилось:** один REQ выполняется как один background job; reminders назначены на 10/20/30 минут при общем deadline 45 минут.
+- **Почему:** законный Postman request может выполняться дольше одного orchestration tool-call.
+- **Результат:** timeout ожидания не разрешает второй Send или новый REQ.
+
+### 2026-09-21 — Зафиксирован terminal/continuation/recovery contract
+
+- **Что изменилось:** добавлены terminal no-artifact/rejected handoff, fresh 10-second reproof, новое grace window при изменении assistant text, same-conversation recovery и разделение manual/automatic continuation без hard cap.
+- **Почему:** завершённый ответ модели нужно отличать от transport failure и безопасно продолжать только доказанный conversation.
+- **Результат:** сформирован текущий production lifecycle; `POSTMAN_TRANSPORT_FAILED` остаётся fail-closed и не продолжается автоматически.
+
+### 2026-09-21 — Postman оформлен как подпроект
+
+- **Что изменилось:** существующее направление зарегистрировано в `docs/subprojects/postman/`.
+- **Почему:** Postman развивается через множество отдельных runtime/docs/tests задач и требует долговременного контекста между ними.
+- **Результат:** `SUBPROJECT.md` хранит актуальный контекст и решения, а канонические Postman contracts остаются на существующих путях.
