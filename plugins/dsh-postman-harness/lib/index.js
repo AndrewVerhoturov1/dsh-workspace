@@ -11,11 +11,13 @@ import { WebWorkerBridge, markWebResultReady } from './web-worker-bridge.js'
 import { createGitHubTaskPublisher } from './github-task-publisher.js'
 import { createResultWorkspaceTools } from './result-workspace.js'
 import { createResultPresentationTool } from './result-presentation.js'
+import { createDirectCurrentTurnToolConfigs } from './direct-current-turn.js'
 
 export { attachTaskUrl, createAndPublishTask, createTaskPackage, renderIntentTaskFile } from './task-creation-bridge.js'
 export { WebWorkerBridge, markWebResultReady }
 export { createResultWorkspaceTools } from './result-workspace.js'
 export { clearResultPresentation, createResultPresentationTool, presentResult } from './result-presentation.js'
+export { CurrentUserTurnStore, DirectPostmanJobManager, createDirectCurrentTurnToolConfigs, parsePostmanUserTurn } from './direct-current-turn.js'
 
 export const name = 'dsh-postman-harness'
 export const inject = ['agents', 'sessionPersistence', 'systemPrompt', 'tools', 'workspaceRegistry']
@@ -593,10 +595,12 @@ export function apply(ctx, { runtime: injectedRuntime, bridge: injectedBridge, w
   const bridge = injectedBridge ?? (typeof webWorkerRunner === 'function'
     ? new WebWorkerBridge({ runtime, run: webWorkerRunner })
     : undefined)
+  const currentTurnBridge = createDirectCurrentTurnToolConfigs(ctx)
   ctx.tools.register(createPostmanSendTool(ctx, pending))
   ctx.tools.register(createPostmanAsyncSendTool(ctx, runtime, { bridge, taskPublisher: resolvedTaskPublisher }))
   for (const tool of createResultWorkspaceTools(ctx)) ctx.tools.register(tool)
   ctx.tools.register(createResultPresentationTool(ctx))
+  for (const tool of currentTurnBridge.tools) ctx.tools.register(defineTool(tool))
   ctx.on('agent/created', ({ agent }) => installPostmanAgent(ctx, agent, pending, runtime))
   ctx.on('agent/disposed', ({ agent }) => clearPendingForAgent(pending, agent.id))
   ctx.on('agent/inbox/claimed', ({ agent, message }) => {
@@ -622,6 +626,7 @@ export function apply(ctx, { runtime: injectedRuntime, bridge: injectedBridge, w
       ctx.logger.error(`[postman] persistent session startup failed: ${error instanceof Error ? error.message : String(error)}`)
     })
   ctx.effect(() => () => {
+    currentTurnBridge.dispose()
     return startup.then(() => {
       runtime.close()
       return postmanHandle?.dispose()

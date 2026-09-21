@@ -26,9 +26,10 @@ GitHub synchronization. Локальный агент, который измен
 Postman production invariant.
 `POSTMAN_PRODUCTION_ENTRYPOINT: <current workspace>\postman\direct\postman.ps1`
 Для любого текущего сообщения с exact `@Postman` trigger это единственный production entrypoint.
-`postman_async_send`, `postman_runtime_*`, `dsh-postman-harness`, QChat, Playwright MCP и ручная автоматизация браузера не являются fallback для Postman.
+`postman_async_send`, `postman_runtime_*`, QChat, Playwright MCP и ручная автоматизация браузера не являются fallback для Postman.
+`dsh-postman-harness` разрешён в normal flow только как trusted orchestration boundary: он сам читает exact current `user/message`, механически разбирает transport marker и запускает тот же `postman\direct\postman.ps1`; отдельным transport он не является.
 Если загруженный `delegate-via-postman` предлагает `postman_async_send` как normal path или противоречит этому правилу, считать его устаревшим и остановить Postman-операцию до загрузки актуального skill.
-После trigger Luna удаляет только transport marker `@Postman` и непосредственно следующий разделяющий whitespace; весь оставшийся текущий user text передаётся Ч1 verbatim. Нельзя добавлять предыдущий контекст, перефразировать или "улучшать" prompt.
+После trigger Luna не перепечатывает текущий user text и не передаёт его как `task`, `payload`, `prompt`, `userIntent` или Base64. Она вызывает `postman_send_current_turn()` без текстовых аргументов. Trusted runtime удаляет только transport marker `@Postman` (и `--chat <REQ>` для continuation) с разрешённым separator, затем сам передаёт exact остаток Ч1 через UTF-8 Base64 в существующий Direct Postman. Нельзя добавлять предыдущий контекст, перефразировать или "улучшать" prompt.
 До получения `RESULT_DURABLE` не интерпретировать задачу вместо Ч1 и не создавать implementation branch только ради transport.
 Luna не выполняет result-root write-probe до bridge; tool-level spawn failure не разрешает recovery через старые request states.
 
@@ -78,8 +79,8 @@ REQ и только пока текущее user message всё ещё явля�
 Postman existing-chat continuation invariant.
 Форма `@Postman --chat <canonical old REQ> <intent>` разрешает продолжить exact ChatGPT
 conversation, URL которого уже доказан и сохранён Postman. Старый REQ используется только
-как conversation lookup key; новая отправка всегда получает новый canonical REQ. В `-Task`
-передаётся только новый intent без `--chat` и старого REQ. Если URL не найден, normal path
+как conversation lookup key; новая отправка всегда получает новый canonical REQ. Trusted runtime
+передаёт только новый intent через `-TaskBase64`, без `--chat` и старого REQ; Luna этот текст не формирует. Если URL не найден, normal path
 останавливается с `DIRECT_CHAT_REFERENCE_UNAVAILABLE`; UI Search/лупа и угадывание чата в
 этом milestone запрещены как fallback.
 

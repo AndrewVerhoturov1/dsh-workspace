@@ -276,7 +276,7 @@ test('apply should install a scoped reply tool and fail-closed tool boundary for
   apply(ctx, { runtime })
   events.get('agent/created')({ agent: postman })
 
-  assert.equal(registeredGlobalTools.length, 5)
+  assert.equal(registeredGlobalTools.length, 8)
   assert.deepEqual(
     registeredGlobalTools.map((tool) => tool.name),
     [
@@ -285,6 +285,9 @@ test('apply should install a scoped reply tool and fail-closed tool boundary for
       'postman_result_workspace_register',
       'postman_result_workspace_unregister',
       'postman_result_present',
+      'postman_send_current_turn',
+      'postman_current_turn_status',
+      'postman_continue_last_request',
     ],
   )
   assert.equal(scopedTools.length, 5)
