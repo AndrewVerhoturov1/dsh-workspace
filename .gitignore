@@ -20,6 +20,8 @@ backup/
 **/dist/
 **/build/
 **/lib/
+!plugins/dsh-postman-harness/lib/
+!plugins/dsh-postman-harness/lib/**
 !plugins/dsh-better-sidebar-andrew/lib
 !plugins/dsh-better-sidebar-andrew/lib/
 !plugins/dsh-better-sidebar-andrew/lib/**
