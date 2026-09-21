@@ -17,9 +17,26 @@ description: >-
 
 Исторический baseline до v12: `DIRECT_POSTMAN_SKILL_VERSION: 11`.
 
+`TRUSTED_CURRENT_TURN_BOUNDARY_VERSION: 1`
+
+### Обязательный trusted current-turn override
+
+Этот блок имеет приоритет над историческими model-copy примерами разделов 0, 4, 6, 7 и 8.
+Normal `@Postman` flow не формирует пользовательский payload внутри LLM-кода. После загрузки skill Л1 использует только пустые model-facing вызовы:
+
+```text
+postman_send_current_turn()
+postman_current_turn_status()
+postman_continue_last_request()   # только для разрешённой automatic continuation
+```
+
+Эти инструменты не принимают `task`, `payload`, `prompt`, `userIntent`, `TaskBase64` или другой текст запроса. Trusted plugin получает exact current `user/message` из Harness `session/event`, сам механически разбирает `@Postman` / `--chat`, сам строит canonical REQ и UTF-8 Base64 и запускает существующий `<current workspace>\postman\direct\postman.ps1`. Direct Postman остаётся единственным transport.
+
+Л1 запрещено копировать current user message в JavaScript string/template literal, PowerShell, Base64 или tool argument. Если `postman_send_current_turn`/`postman_current_turn_status` недоступны, normal flow fail-closed: `STOP`; model-copy fallback запрещён.
+
 ## 0. Золотой путь
 
-После активации этого skill нормальный production-flow всегда такой:
+С учётом trusted override выше историческая схема ниже сохранена только как справка по lifecycle; model-copy шаги из неё не выполнять:
 
 ```text
 точный user intent
@@ -380,7 +397,9 @@ prompt. Только automatic continuation наследует `rootRequestId`, 
 
 ## 8. Единственный production-вызов
 
-Использовать payload из раздела Intent preservation.
+> **Trusted current-turn override:** normal flow выполняет `postman_send_current_turn()` и затем только `postman_current_turn_status()` без аргументов. Все model-copy JavaScript/PowerShell примеры ниже сохранены исключительно как историческая справка и НЕ являются исполняемым normal path.
+
+Использовать payload из раздела Intent preservation только внутри trusted runtime; Л1 его не воспроизводит.
 
 В текущем deployment `functions.run_code` имеет hard wall limit 600000 ms, а Direct
 Postman может законно работать до 45 минут. Поэтому каждый REQ normal production path запускает ровно один `tools.pwsh` job с
