@@ -43,7 +43,7 @@ python system/implementation_package_runner.py apply <PACKAGE.zip>
 python system/implementation_package_runner.py check <PACKAGE.zip>
 ```
 
-`apply` уже выполняет те же лёгкие проверки перед записью, поэтому `check` не является обязательной бюрократической стадией. Локальный агент может запускать сразу `apply`, если пользователь не попросил отдельный dry-run.
+`apply` уже выполняет те же лёгкие проверки перед записью, поэтому `check` не является обязательной бюрократической стадией. Локальный агент может запускать сразу `apply`, если пользователь не попросил отдельный dry-run. После `validate_patch` оба результата могут содержать `affectedPaths`: это authoritative пути фактически затрагиваемого patch, а не compatibility gate, expected inventory или проверка числа файлов. `check` остаётся dry compatibility check и не запускает post-apply проверку ignored-файлов или tests.
 
 ## 3. Формат будущего package
 
@@ -231,7 +231,8 @@ Central runner **не делает GitHub writes**.
 
 ```text
 review git status/diff на уровне задачи
-→ git add -A
+→ взять affectedPaths из exact runner result
+→ git add -A -- <affectedPaths>
 → commit
 → push temporary task branch
 → verify remote SHA
@@ -240,7 +241,7 @@ review git status/diff на уровне задачи
 → STOP без merge
 ```
 
-`git add -f` запрещён. Эта проверка после публикации не является exact-file-inventory gate до применения package.
+`affectedPaths` — staging boundary, а не compatibility gate, expected/exact inventory validation или проверка числа файлов. Локальный агент staging-ит только эти пути: посторонние untracked/generated файлы, появившиеся во время targeted tests, не входят в commit автоматически. При большом списке путей их передают Git argv-safe несколькими группами, не собирая shell-строку. `git add -f` запрещён.
 
 Merge — только после отдельного решения пользователя.
 

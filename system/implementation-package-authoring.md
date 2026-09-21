@@ -138,7 +138,7 @@ targeted/regression tests
 ↓
 при необходимости — узкие .gitignore exceptions внутри того же изменения
 ↓
-git add -A
+git add -A -- <authoring paths>
 ↓
 Git-generated staged diff
 ↓
@@ -203,13 +203,13 @@ git apply --check changes.patch
 Рекомендуемый путь в disposable authoring environment:
 
 ```text
-git add -A
-git diff --cached --binary --no-ext-diff HEAD -- .
+git add -A -- <authoring paths>
+git diff --cached --binary --no-ext-diff HEAD -- <authoring paths>
 ```
 
 Полученный вывод становится `changes.patch`.
 
-Использование temporary staging здесь допустимо: это disposable authoring environment, а не пользовательский implementation worktree.
+Использование temporary staging здесь допустимо: это disposable authoring environment, а не пользовательский implementation worktree. `<authoring paths>` — реальные пути изменения в этой disposable среде; это не `affectedPaths` runner-а и не правило publication после PASS.
 
 Нельзя использовать `git add -f` для обхода `.gitignore`.
 
@@ -296,7 +296,7 @@ git add -f ignored-file
 ↓
 обычный Git видит его
 ↓
-обычный git add -A включит его в commit
+обычный `git add -A -- <нужный путь>` включит его в commit
 ```
 
 ### 7.5. Канонический hard FAIL runner-а
@@ -595,7 +595,9 @@ IMPLEMENTATION_PACKAGE_APPLIED
 Luna выполняет:
 
 ```text
-git add -A
+взять affectedPaths из exact runner result
+↓
+git add -A -- <affectedPaths>
 ↓
 commit
 ↓
@@ -610,9 +612,7 @@ remote verify changed files
 STOP
 ```
 
-Temporary implementation worktree был clean до применения runner-а, поэтому после PASS все task-scoped изменения в нём принадлежат текущему package.
-
-`git add -A` является нормальным staging path.
+`affectedPaths` возвращается runner-ом как список фактически затронутых patch путей. Это publication/staging boundary, а не compatibility gate, expected/exact inventory validation или проверка числа файлов. После PASS Luna staging-ит только эти пути; посторонние untracked/generated файлы, созданные targeted tests, не входят в commit автоматически. При большом списке путей Luna передаёт их Git argv-safe несколькими группами, не собирая shell-строку.
 
 `git add -f` запрещён.
 
@@ -658,7 +658,7 @@ python system/implementation_package_runner.py apply <PACKAGE.zip>
 
 При FAIL остановись и верни exact stage/error и diagnostics ZIP.
 
-При PASS выполни git add -A, commit, push, verify remote SHA и создай/обнови PR в preview.
+При PASS возьми `affectedPaths` из exact runner result и выполни `git add -A -- <affectedPaths>`, затем commit, push, verify remote SHA и создай/обнови PR в preview.
 
 После push проверь, что новые package-created файлы действительно присутствуют в remote commit/PR.
 
@@ -713,7 +713,7 @@ ZIP
 → проверить каждый новый продуктовый файл
 → если файл ignored, добавить узкое .gitignore exception в это же изменение
 → убедиться, что обычный Git видит новые файлы
-→ git add -A
+→ git add -A -- <authoring paths>
 → Git-generated changes.patch
 → проверить patch на clean base
 → проверить ignored new files после полного patch
@@ -734,7 +734,8 @@ fetch current preview
     → reject ignored patch-created files
     → targeted tests
 → FAIL: diagnostics + STOP
-→ PASS: git add -A
+→ PASS: взять affectedPaths из runner result
+→ git add -A -- <affectedPaths>
 → commit
 → push
 → remote SHA verify

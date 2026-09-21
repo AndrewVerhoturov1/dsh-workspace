@@ -96,6 +96,24 @@ class ImplementationPackageRunnerTests(unittest.TestCase):
         self.assertEqual((self.repo / "new.txt").read_text(encoding="utf-8"), "new file\n")
         self.assertIn("?? new.txt", result["gitStatus"])
 
+    def test_apply_returns_only_patch_paths_when_test_creates_untracked_file(self):
+        generated = self.repo / "test-generated.txt"
+        package = package_zip(
+            self.base,
+            PATCH_TRACKED_AND_NEW,
+            tests=[{
+                "name": "create unrelated file",
+                "command": [sys.executable, "-c", "from pathlib import Path; Path('test-generated.txt').write_text('generated\\n', encoding='utf-8')"],
+                "timeoutSeconds": 30,
+            }],
+        )
+        result = runner.execute("apply", package, self.repo, self.diag)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["affectedPaths"], ["hello.txt", "new.txt"])
+        self.assertTrue(generated.is_file())
+        self.assertNotIn("test-generated.txt", result["affectedPaths"])
+        self.assertIn("?? test-generated.txt", result["gitStatus"])
+
     def test_new_ignored_file_blocks_before_targeted_tests(self):
         (self.repo / ".gitignore").write_text("**/lib/\n", encoding="utf-8")
         command(["git", "add", ".gitignore"], self.repo)

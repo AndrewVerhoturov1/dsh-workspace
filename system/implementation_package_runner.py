@@ -604,6 +604,7 @@ def execute(mode: str, package_path: Path, repo_arg: Path, diagnostics_dir: Path
                     "code": "IMPLEMENTATION_PACKAGE_CHECKED",
                     "package": state.package_name,
                     "repository": str(repo),
+                    "affectedPaths": state.affected_paths,
                     "warnings": state.warnings,
                 }
             apply_patch(repo, patch, state)
@@ -617,6 +618,7 @@ def execute(mode: str, package_path: Path, repo_arg: Path, diagnostics_dir: Path
                 "code": "IMPLEMENTATION_PACKAGE_APPLIED",
                 "package": state.package_name,
                 "repository": str(repo),
+                "affectedPaths": state.affected_paths,
                 "tests": tests,
                 "warnings": state.warnings,
                 "gitStatus": status,
