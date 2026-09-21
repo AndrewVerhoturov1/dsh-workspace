@@ -138,7 +138,8 @@ $jsonText = & $bridge `
 
 - `$oldRequestId` — только lookup key.
 - Ручной пользовательский `--ChatRequestId` всегда разрешён независимо от сохранённого `continuationIndex`.
-- Automatic continuation после non-durable terminal handoff должна передавать `-AutomaticContinuation`; только этот режим наследует цепочку и ограничивается тремя continuation.
+- Automatic continuation после non-durable terminal handoff должна передавать `-AutomaticContinuation`; только этот режим наследует chain identity и монотонно увеличивает `continuationIndex` без hard cap.
+- `POSTMAN_TRANSPORT_FAILED` не является основанием для automatic continuation и требует остановки.
 - Каждая continuation создаёт новый canonical REQ.
 - Direct Postman разрешает exact сохранённый `conversationUrl`.
 - Worker открывает exact `/c/<conversation-id>` и должен доказать, что это тот же conversation.

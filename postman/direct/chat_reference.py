@@ -39,6 +39,7 @@ class ChatReference:
     source: str
     root_request_id: str = ""
     continuation_index: int = 0
+    terminal_state: str = ""
 
 
 def normalize_conversation_url(value: object) -> tuple[str, str]:
@@ -145,6 +146,7 @@ def resolve_chat_reference(
             source=source,
             root_request_id=root_request_id,
             continuation_index=continuation_index,
+            terminal_state=str(value.get("state", "")),
         )
 
     raise ChatReferenceError(

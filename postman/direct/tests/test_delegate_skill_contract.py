@@ -16,7 +16,7 @@ class DelegateViaPostmanSkillContract(unittest.TestCase):
         cls.agents = AGENTS.read_text(encoding="utf-8")
 
     def test_version_and_entrypoint(self):
-        self.assertIn("DIRECT_POSTMAN_SKILL_VERSION: 21", self.skill)
+        self.assertIn("DIRECT_POSTMAN_SKILL_VERSION: 22", self.skill)
         self.assertIn("$workspace = (Get-Location).Path", self.skill)
         self.assertIn("$bridge = Join-Path $workspace 'postman\\direct\\postman.ps1'", self.skill)
         self.assertNotIn(r"C:\Users\andre\.dsh\postman\direct\postman.ps1", self.skill)
@@ -401,7 +401,8 @@ process.stdout.write(JSON.stringify({
             "rootRequestId",
         ):
             self.assertIn(marker, self.skill)
-        self.assertIn("ограничивается тремя continuation", self.skill)
+        self.assertIn("жёсткого числового лимита на continuation REQ нет", self.skill)
+        self.assertIn("POSTMAN_TRANSPORT_FAILED` автоматически не продолжать", self.skill)
 
 if __name__ == "__main__":
     unittest.main()

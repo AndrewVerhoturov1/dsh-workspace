@@ -300,7 +300,7 @@ class DirectPostmanUnitTests(unittest.TestCase):
             self.assertEqual(handoff["resultHandoffPath"], str(handoff_path.resolve()))
             self.assertEqual(handoff["sha256"], "c" * 64)
 
-    def test_automatic_continuation_resolves_old_req_and_inherits_chain(self):
+    def test_automatic_continuation_after_index_three_inherits_chain(self):
         new_req = "REQ_20260902T010204Z_1235"
         conversation_url = "https://chatgpt.com/c/existing-chat-123"
 
@@ -336,9 +336,10 @@ class DirectPostmanUnitTests(unittest.TestCase):
             request_id=REQ,
             conversation_url=conversation_url,
             conversation_id="existing-chat-123",
-            source="durable_handoff",
+            source="direct_state",
             root_request_id="REQ_20260902T010200Z_1200",
-            continuation_index=2,
+            continuation_index=3,
+            terminal_state=direct.ASSISTANT_COMPLETED_NO_ARTIFACT,
         )
         with tempfile.TemporaryDirectory() as root, patch.object(
             direct.chat_reference, "resolve_chat_reference", return_value=reference
@@ -359,11 +360,11 @@ class DirectPostmanUnitTests(unittest.TestCase):
             self.assertEqual(Bridge.calls[0][1]["conversation_url"], conversation_url)
             self.assertEqual(result["continuedFromRequestId"], REQ)
             self.assertEqual(result["rootRequestId"], "REQ_20260902T010200Z_1200")
-            self.assertEqual(result["continuationIndex"], 3)
+            self.assertEqual(result["continuationIndex"], 4)
             self.assertEqual(result["conversationUrl"], conversation_url)
             self.assertEqual(result["conversationId"], "existing-chat-123")
 
-    def test_manual_chat_at_continuation_limit_is_allowed(self):
+    def test_manual_chat_with_high_continuation_index_is_allowed(self):
         new_req = "REQ_20260902T010205Z_1236"
         conversation_url = "https://chatgpt.com/c/manual-chat"
 
@@ -580,32 +581,6 @@ class DirectPostmanUnitTests(unittest.TestCase):
         self.assertEqual(payload["transportCode"], failure_code)
         self.assertEqual(payload["transportMessage"], failure_message)
         self.assertEqual(payload["details"], failure_details)
-
-    def test_continuation_limit_stops_before_publication_or_send(self):
-        previous = types.SimpleNamespace(
-            request_id=REQ,
-            conversation_url="https://chatgpt.com/c/limit-chat",
-            conversation_id="limit-chat",
-            root_request_id="REQ_20260902T010200Z_1200",
-            continuation_index=3,
-            source="direct_state",
-        )
-        with tempfile.TemporaryDirectory() as root, patch.object(
-            direct.chat_reference, "resolve_chat_reference", return_value=previous
-        ):
-            runner = direct.DirectPostman(
-                direct_root=Path(root) / "direct",
-                publisher_factory=lambda **kwargs: (_ for _ in ()).throw(AssertionError("publisher must not run")),
-                ensure_browser=lambda **kwargs: (_ for _ in ()).throw(AssertionError("browser must not start")),
-            )
-            with self.assertRaises(direct.DirectPostmanError) as ctx:
-                runner.run(
-                    request_id="REQ_20260902T010204Z_1235",
-                    task="continue",
-                    chat_request_id=REQ,
-                    automatic_continuation=True,
-                )
-            self.assertEqual(ctx.exception.code, "DIRECT_CONTINUATION_LIMIT_REACHED")
 
 
 if __name__ == "__main__":

@@ -539,15 +539,16 @@ class DirectPostman:
                 )
             except chat_reference.ChatReferenceError as exc:
                 raise DirectPostmanError(exc.code, str(exc), details=exc.details) from exc
-            if automatic_continuation and int(getattr(chat_ref, "continuation_index", 0)) >= 3:
+            if automatic_continuation and getattr(chat_ref, "terminal_state", "") not in {
+                ASSISTANT_COMPLETED_NO_ARTIFACT,
+                ARTIFACT_REJECTED,
+            }:
                 raise DirectPostmanError(
-                    "DIRECT_CONTINUATION_LIMIT_REACHED",
-                    "automatic Postman continuation limit reached for this root request",
+                    "DIRECT_INVALID_CONTINUATION",
+                    "automatic continuation requires a non-durable terminal handoff",
                     details={
                         "chatRequestId": chat_ref.request_id,
-                        "rootRequestId": getattr(chat_ref, "root_request_id", chat_ref.request_id),
-                        "continuationIndex": int(getattr(chat_ref, "continuation_index", 0)),
-                        "maxContinuationIndex": 3,
+                        "terminalState": getattr(chat_ref, "terminal_state", ""),
                     },
                 )
 
@@ -827,7 +828,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--result-root")
     parser.add_argument("--cdp-url", default=bootstrap.DEFAULT_CDP_URL)
     parser.add_argument("--chat-request-id")
-    parser.add_argument("--automatic-continuation", action="store_true", help="Apply the automatic continuation chain limit")
+    parser.add_argument("--automatic-continuation", action="store_true", help="Continue the existing conversation and preserve chain identity")
     parser.add_argument("--allow-path", action="append", default=[])
     parser.add_argument("--forbid-path", action="append", default=[])
     return parser

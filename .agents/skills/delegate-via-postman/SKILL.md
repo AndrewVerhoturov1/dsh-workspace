@@ -13,7 +13,7 @@ description: >-
 
 # Delegate via Postman — Direct Production
 
-`DIRECT_POSTMAN_SKILL_VERSION: 21`
+`DIRECT_POSTMAN_SKILL_VERSION: 22`
 
 Исторический baseline до v12: `DIRECT_POSTMAN_SKILL_VERSION: 11`.
 
@@ -374,7 +374,7 @@ canonical continuation REQ в том же conversation, если из terminal �
 следует, что исходную задачу можно продолжить без решения пользователя. Такой запуск обязан
 передать explicit transport flag `-AutomaticContinuation`; режим нельзя определять по тексту
 prompt. Только automatic continuation наследует `rootRequestId`, увеличивает
-`continuationIndex` и ограничивается тремя continuation REQ для одного root request.
+`continuationIndex`; жёсткого числового лимита на continuation REQ нет: продолжать можно столько раз, сколько действительно нужно для безопасного завершения задачи без решения пользователя. `POSTMAN_TRANSPORT_FAILED` автоматически не продолжать.
 Пользовательский `@Postman --chat <REQ> <intent>` без этого флага всегда разрешён и использует
 старый REQ только как conversation reference; его `continuationIndex` не ограничивается.
 
@@ -646,7 +646,7 @@ Result Workspace автоматически.
 начинай заново. Доведи исходную задачу до полного результата и выдай итоговый ZIP.` Для
 `ARTIFACT_REJECTED` добавить только exact `validationCode`/`validationMessage` и просьбу
 пересобрать итоговый ZIP, не начиная задачу заново. Не цитировать весь старый ответ обратно:
-он уже находится в том же conversation. Не более трёх continuation для одного root request.
+он уже находится в том же conversation. Жёсткого числа continuation для одного root request нет; каждая следующая continuation по-прежнему требует однозначного безопасного решения без участия пользователя.
 
 `resume_request.ps1`, `integrate_result.ps1` и стадии PREPARE/TEST/PUBLISH не удаляются.
 Они описаны ниже только как legacy/manual explicit finalization для уже существующего
@@ -980,7 +980,7 @@ terminal state
 3. Без exact trigger не загружать `delegate-via-postman`, не создавать REQ, не вызывать Direct Postman, не использовать другие Postman transport и не обращаться к Ч1.
 4. После trigger Л1 не интерпретирует и не расширяет payload до отправки Ч1.
 5. После удаления только `@Postman` + separator весь оставшийся текст передаётся verbatim; previous-context augmentation запрещён.
-6. Один root request может состоять из исходного REQ и максимум трёх continuation REQ; каждый REQ имеет отдельный immutable identity.
+6. Один root request может состоять из исходного REQ и необходимого числа безопасных continuation REQ; `continuationIndex` монотонно растёт, а каждый REQ имеет отдельный immutable identity.
 7. После начала Direct Postman invocation REQ immutable.
 8. Production transport — только `<current workspace>\postman\direct\postman.ps1`.
 9. `postman_async_send` и Cordis path не являются production transport.

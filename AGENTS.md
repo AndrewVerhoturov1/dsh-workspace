@@ -72,7 +72,7 @@ Postman normal lifecycle invariant.
 `ARTIFACT_REJECTED` также возвращает exact validation code/message. Они не являются
 transport failure. Л1 может решить о continuation того же conversation только новым canonical
 REQ и только пока текущее user message всё ещё является разрешающим `@Postman` trigger;
-не более трёх continuation REQ на один root request. Normal flow не вызывает
+жёсткого лимита continuation REQ на один root request нет: продолжать можно столько раз, сколько действительно нужно безопасной задаче без решения пользователя. Normal flow не вызывает
 `postman_result_workspace_register(...)` и не создаёт Result Workspace автоматически.
 
 Postman existing-chat continuation invariant.
