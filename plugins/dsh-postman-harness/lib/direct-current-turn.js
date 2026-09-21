@@ -11,7 +11,7 @@ const TERMINAL_OK = new Set([
 ])
 const MAX_CAPTURE_CHARS = 1024 * 1024
 const MAX_OUTPUT_CHARS = 4 * 1024 * 1024
-const STATUS_WAIT_MS = 30_000
+const STATUS_WAIT_MS = 480_000
 
 function sha256(text) {
   return createHash('sha256').update(text, 'utf8').digest('hex')
