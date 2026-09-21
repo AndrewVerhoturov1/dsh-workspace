@@ -51,6 +51,7 @@ from web_worker_bridge import (  # noqa: E402
     RESULT_DURABLE,
     ASSISTANT_COMPLETED_NO_ARTIFACT,
     ARTIFACT_REJECTED,
+    POSTMAN_TRANSPORT_FAILED,
 )
 
 DEFAULT_REPOSITORY = "AndrewVerhoturov1/dsh-workspace"
@@ -671,7 +672,23 @@ class DirectPostman:
             code = result.get("code", "DIRECT_WEB_FAILED") if isinstance(result, dict) else "DIRECT_WEB_FAILED"
             details = result.get("details", {}) if isinstance(result, dict) else {"result": repr(result)}
             self._write_state(request_id, STATE_FAILED, failureCode=code, failureDetails=details)
-            raise DirectPostmanError("DIRECT_WEB_FAILED", f"Web Postman pipeline failed: {code}", details=details)
+            transport_message = str(
+                result.get("transportMessage")
+                or details.get("transportMessage")
+                or details.get("reason")
+                or code
+            )
+            transport_code = str(result.get("transportCode") or details.get("transportCode") or code)
+            transport_details = details.get("details") if isinstance(details.get("details"), dict) else details
+            raise DirectPostmanError(
+                POSTMAN_TRANSPORT_FAILED,
+                transport_message,
+                details={
+                    "transportCode": transport_code,
+                    "transportMessage": transport_message,
+                    "details": transport_details,
+                },
+            )
 
         bridge_code = str(result.get("code", ""))
         details = result.get("details", {}) if isinstance(result.get("details"), dict) else {}
@@ -696,9 +713,10 @@ class DirectPostman:
                 expectedFilename=expected_filename,
                 assistantText=str(details.get("assistantText", "")),
                 assistantTextSha256=str(details.get("assistantTextSha256", "")),
-                assistantTurnIndex=assistant_index if isinstance(assistant_index, int) and not isinstance(assistant_index, bool) else None,
+                assistantIndex=assistant_index if isinstance(assistant_index, int) and not isinstance(assistant_index, bool) else None,
                 validationCode=str(details.get("validationCode", "")),
                 validationMessage=str(details.get("validationMessage", "")),
+                validationDetails=details.get("validationDetails") if isinstance(details.get("validationDetails"), dict) else {},
                 resultRoot=str(self.result_root),
                 statePath=str(self.state_path(request_id)),
                 browser=browser,
@@ -713,9 +731,10 @@ class DirectPostman:
                 workerDetails=details,
                 assistantText=terminal["assistantText"],
                 assistantTextSha256=terminal["assistantTextSha256"],
-                assistantTurnIndex=terminal["assistantTurnIndex"],
+                assistantIndex=terminal["assistantIndex"],
                 validationCode=terminal["validationCode"],
                 validationMessage=terminal["validationMessage"],
+                validationDetails=terminal["validationDetails"],
                 **chain_fields,
                 **conversation_fields,
             )
@@ -723,10 +742,15 @@ class DirectPostman:
 
         if bridge_code != RESULT_DURABLE:
             self._write_state(request_id, STATE_FAILED, failureCode=bridge_code or "DIRECT_WEB_FAILED", failureDetails=details)
+            transport_message = f"Web Postman pipeline returned unsupported terminal code: {bridge_code or 'missing'}"
             raise DirectPostmanError(
-                "DIRECT_WEB_FAILED",
-                f"Web Postman pipeline returned unsupported terminal code: {bridge_code or 'missing'}",
-                details=details,
+                POSTMAN_TRANSPORT_FAILED,
+                transport_message,
+                details={
+                    "transportCode": bridge_code or "DIRECT_MISSING_TERMINAL_CODE",
+                    "transportMessage": transport_message,
+                    "details": details,
+                },
             )
 
         result_zip = details.get("resultZip")

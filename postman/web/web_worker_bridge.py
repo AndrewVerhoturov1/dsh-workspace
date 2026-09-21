@@ -36,6 +36,7 @@ ARTIFACT_FOUND = "ARTIFACT_FOUND"
 ASSISTANT_COMPLETED_NO_ARTIFACT = "ASSISTANT_COMPLETED_NO_ARTIFACT"
 ARTIFACT_REJECTED = "ARTIFACT_REJECTED"
 RESULT_DURABLE = "RESULT_DURABLE"
+POSTMAN_TRANSPORT_FAILED = "POSTMAN_TRANSPORT_FAILED"
 
 BRIDGE_INVALID_REQUEST = "BRIDGE_INVALID_REQUEST"
 BRIDGE_INVALID_TASK_URL = "BRIDGE_INVALID_TASK_URL"
@@ -535,6 +536,22 @@ class WebWorkerBridge:
                     if watch.get("artifactRejected") or not isinstance(completed, dict):
                         return {"kind": "no_result"}
 
+                    reproofed = False
+                    no_artifact_since = watch.get("noArtifactSince")
+                    if no_artifact_since is not None and (
+                        self.monotonic() - float(no_artifact_since) >= _RESULT_RECHECK_INTERVAL_MS / 1000.0
+                    ):
+                        watch["proof"] = None
+                        observed = observe_watch(watch, min(_REPROVE_TIMEOUT_MIN_MS, remaining_ms()))
+                        if observed["kind"] in {"fatal", "interrupted"}:
+                            return observed
+                        if observed["kind"] != "proof":
+                            return {"kind": "no_result"}
+                        completed = watch.get("proof")
+                        if not isinstance(completed, dict):
+                            return {"kind": "no_result"}
+                        reproofed = True
+
                     detected = artifact_detector.detect_artifact_dom(
                         page,
                         expected_prompt=str(watch["prompt"]),
@@ -587,6 +604,7 @@ class WebWorkerBridge:
                                     artifactValidation=durable,
                                     validationCode=validation_code,
                                     validationMessage=validation_message,
+                                    validationDetails=durable_details.get("validationDetails", {}),
                                     reminderPolicy=reminder_policy_record,
                                     browserRecoveryPolicy=recovery_policy_record,
                                     reminders=reminder_records,
@@ -657,10 +675,10 @@ class WebWorkerBridge:
                     if artifact_code in _REMINDER_ELIGIBLE_ARTIFACT_CODES:
                         now = self.monotonic()
                         no_artifact_since = watch.get("noArtifactSince")
-                        if no_artifact_since is None:
+                        if no_artifact_since is None and not reproofed:
                             watch["noArtifactSince"] = now
                             return {"kind": "no_result"}
-                        if now - float(no_artifact_since) < _RESULT_RECHECK_INTERVAL_MS / 1000.0:
+                        if not reproofed and now - float(no_artifact_since) < _RESULT_RECHECK_INTERVAL_MS / 1000.0:
                             return {"kind": "no_result"}
                         record = self._write_state(
                             request,
@@ -961,11 +979,24 @@ class WebWorkerBridge:
                     pass
 
     def _fail(self, request: BridgeRequest, reason: str, *, code: str = BRIDGE_PIPELINE_FAILED, details: Any = None) -> dict[str, Any]:
-        record = self._write_state(request, self.read_state(request.request_id).get("state", ACCEPTED) if self.read_state(request.request_id) else ACCEPTED, lastError=str(reason)[:1000], failureCode=code)
-        if isinstance(details, dict):
-            record["failureDetails"] = details
-            _atomic_json(self.state_path(request.request_id), record)
-        return _result(code, ok=False, details={"requestId": request.request_id, "workerJobId": request.worker_job_id, "state": record["state"], "resultPath": record["resultPath"], "reason": str(reason)[:1000]})
+        transport_message = str(reason)[:1000]
+        transport_details = dict(details) if isinstance(details, dict) else {"value": details}
+        record = self._write_state(request, self.read_state(request.request_id).get("state", ACCEPTED) if self.read_state(request.request_id) else ACCEPTED, lastError=transport_message, failureCode=code)
+        record["failureDetails"] = transport_details
+        _atomic_json(self.state_path(request.request_id), record)
+        return _result(
+            POSTMAN_TRANSPORT_FAILED,
+            ok=False,
+            details={
+                "requestId": request.request_id,
+                "workerJobId": request.worker_job_id,
+                "state": record["state"],
+                "resultPath": record["resultPath"],
+                "transportCode": code,
+                "transportMessage": transport_message,
+                "details": transport_details,
+            },
+        )
 
 
 __all__ = [
@@ -981,6 +1012,7 @@ __all__ = [
     "BRIDGE_INVALID_TASK_URL",
     "BRIDGE_INVALID_CONFIG",
     "BRIDGE_PIPELINE_FAILED",
+    "POSTMAN_TRANSPORT_FAILED",
     "BridgeRequest",
     "WebWorkerBridge",
 ]

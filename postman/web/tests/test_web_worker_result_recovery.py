@@ -304,7 +304,8 @@ class WebWorkerResultRecoveryTests(unittest.TestCase):
                     "transitions": [],
                     "details": {"chatUrl": CHAT_URL},
                 }
-            clock.sleep(5.0)
+            if observe_calls == 2:
+                clock.sleep(5.0)
             return completed_observer()
 
         with tempfile.TemporaryDirectory() as root:
@@ -332,6 +333,7 @@ class WebWorkerResultRecoveryTests(unittest.TestCase):
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["code"], web_worker_bridge.ASSISTANT_COMPLETED_NO_ARTIFACT)
         self.assertEqual(clock.monotonic(), 25.0)
+        self.assertEqual(observe_calls, 3)
         send_reminder.assert_not_called()
 
 

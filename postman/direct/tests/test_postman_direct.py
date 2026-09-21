@@ -47,6 +47,7 @@ bridge_stub = types.ModuleType("web_worker_bridge")
 bridge_stub.RESULT_DURABLE = "RESULT_DURABLE"
 bridge_stub.ASSISTANT_COMPLETED_NO_ARTIFACT = "ASSISTANT_COMPLETED_NO_ARTIFACT"
 bridge_stub.ARTIFACT_REJECTED = "ARTIFACT_REJECTED"
+bridge_stub.POSTMAN_TRANSPORT_FAILED = "POSTMAN_TRANSPORT_FAILED"
 class PlaceholderBridge:
     pass
 bridge_stub.WebWorkerBridge = PlaceholderBridge
@@ -506,6 +507,7 @@ class DirectPostmanUnitTests(unittest.TestCase):
                         "conversationId": "rejected-chat",
                         "validationCode": "ARTIFACT_BAD_ZIP",
                         "validationMessage": "ZIP is malformed or cannot be read safely",
+                        "validationDetails": {"reason": "eocd"},
                     },
                 }
 
@@ -521,6 +523,9 @@ class DirectPostmanUnitTests(unittest.TestCase):
             self.assertEqual(result["code"], "ARTIFACT_REJECTED")
             self.assertEqual(result["validationCode"], "ARTIFACT_BAD_ZIP")
             self.assertIn("malformed", result["validationMessage"])
+            self.assertEqual(result["validationDetails"], {"reason": "eocd"})
+            self.assertEqual(result["assistantIndex"], 8)
+            self.assertNotIn("assistantTurnIndex", result)
             self.assertFalse(runner.result_handoff_path(REQ).exists())
 
 
