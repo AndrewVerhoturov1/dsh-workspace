@@ -55,6 +55,7 @@ class RunState:
     failing_stderr: str = ""
     log: list[str] = field(default_factory=list)
     warnings: list[dict[str, str]] = field(default_factory=list)
+    affected_paths: list[str] = field(default_factory=list)
 
     def note(self, message: str) -> None:
         self.log.append(message)
@@ -450,6 +451,7 @@ def validate_patch(repo: Path, package_root: Path, manifest: dict[str, Any], sta
             "patch-check",
             "Patch touches protected local-data paths: " + ", ".join(protected),
         )
+    state.affected_paths = paths
     state.note("affected_paths=" + json.dumps(paths, ensure_ascii=False))
     return patch
 
@@ -464,6 +466,28 @@ def apply_patch(repo: Path, patch: Path, state: RunState) -> None:
         message="git apply failed after a successful applicability check.",
     )
     state.note("patch_applied=true")
+
+
+def reject_ignored_patch_paths(repo: Path, paths: Sequence[str], state: RunState) -> None:
+    state.stage = "apply"
+    if not paths:
+        return
+    result = git(repo, ["ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", *paths])
+    require_success(
+        result,
+        code="IGNORED_PATH_CHECK_FAILED",
+        stage="apply",
+        message="Cannot inspect patch-affected untracked ignored paths.",
+    )
+    ignored_paths = sorted({path for path in result.stdout.split("\0") if path})
+    if ignored_paths:
+        state.note("ignored_patch_paths=" + json.dumps(ignored_paths, ensure_ascii=False))
+        raise RunnerFailure(
+            "PATCH_CREATES_IGNORED_FILE",
+            "apply",
+            "Patch created Git-ignored untracked paths: " + ", ".join(ignored_paths),
+            stdout=result.stdout,
+        )
 
 
 def run_declared_tests(repo: Path, manifest: dict[str, Any], state: RunState) -> list[dict[str, Any]]:
@@ -580,9 +604,11 @@ def execute(mode: str, package_path: Path, repo_arg: Path, diagnostics_dir: Path
                     "code": "IMPLEMENTATION_PACKAGE_CHECKED",
                     "package": state.package_name,
                     "repository": str(repo),
+                    "affectedPaths": state.affected_paths,
                     "warnings": state.warnings,
                 }
             apply_patch(repo, patch, state)
+            reject_ignored_patch_paths(repo, state.affected_paths, state)
             diff_check_warning(repo, state)
             tests = run_declared_tests(repo, manifest, state)
             state.stage = "complete"
@@ -592,6 +618,7 @@ def execute(mode: str, package_path: Path, repo_arg: Path, diagnostics_dir: Path
                 "code": "IMPLEMENTATION_PACKAGE_APPLIED",
                 "package": state.package_name,
                 "repository": str(repo),
+                "affectedPaths": state.affected_paths,
                 "tests": tests,
                 "warnings": state.warnings,
                 "gitStatus": status,

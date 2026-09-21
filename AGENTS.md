@@ -23,6 +23,8 @@ Permanent worktrees. `C:\Users\andre\.dsh` — постоянный main worktre
 
 GitHub synchronization. Локальный агент, который изменил repository, не должен завершать успешную задачу с непубликованными agent-authored изменениями. После проверки task-scoped изменений он обязан выполнить `commit` и `push` текущей task branch, а затем проверить SHA удалённой ветки. Для законченной reviewable обычной работы должен существовать PR в `preview` либо быть обновлён уже существующий PR. Если публикация невозможна, итоговый статус — `BLOCKED_SYNC`, а не `PASS`. Это правило не отменяет явно установленный для внешнего или аналитического агента режим `GitHub READ ONLY`; в таком случае публикацию результата после локального применения выполняет локальный Harness/Luna agent. Подробные правила находятся в `REPO_POLICY.md`.
 
+Implementation package invariant. Перед подготовкой или применением implementation package читать `REPO_POLICY.md`, `system/implementation-package-workflow.md` и `system/implementation-package-authoring.md`. Обычный package декларативный и не приносит собственный applicator/diagnostics framework. Новый repository-owned файл не должен оставаться ignored: если он попадает под `.gitignore`, package обязан добавить в том же patch минимальное исключение. `git add -f` не использовать как обычный обход; Luna не ремонтирует package после runner FAIL.
+
 Postman production invariant.
 `POSTMAN_PRODUCTION_ENTRYPOINT: <current workspace>\postman\direct\postman.ps1`
 Для любого текущего сообщения с exact `@Postman` trigger это единственный production entrypoint.
