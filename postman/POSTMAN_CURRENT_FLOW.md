@@ -249,16 +249,32 @@ exact proven user turn
 → role = assistant
 ```
 
-Старые assistant turns и глобальный поиск по body не используются.
+Старые assistant turns из других REQ и глобальный поиск по body не используются.
+Разрешённые assistant turns текущего REQ (исходный prompt и доказанно отправленные reminders)
+не считаются навсегда закрытыми до `RESULT_DURABLE`: завершённый turn без exact ZIP
+повторно проверяется раз в 10 секунд. Если его текст изменился, observer получает свежий
+completion proof перед новой artifact-проверкой.
 
-Assistant turn должен завершить generation и стабилизировать текст до artifact detection.
+Во время generation observer опрашивает страницу раз в 3 секунды. Assistant turn должен
+завершить generation и стабилизировать текст до artifact detection.
+
+Если UI показывает `Соединение прервано` / `Connection interrupted`, это отдельное
+recoverable состояние, а не completion. Worker не отправляет reminder, reload-ит ту же
+owned Page того же conversation, ждёт подтверждённую загрузку exact chat и затем ещё
+10 секунд стабилизации. Reload не создаёт новый REQ, не повторяет исходный prompt и не
+сбрасывает общий deadline. Recovery ограничен тремя reload-попытками; после их исчерпания
+worker ждёт восстановления интерфейса без бесконечного F5.
 
 ### 11.1. Служебные напоминания
 
-Отсчёт начинается после первоначального `PROMPT_SEND_CONFIRMED`. Пока exact ZIP ещё не
-получен и не провалидирован, Direct Postman независимо от поведения модели пытается
-отправить служебное напоминание на 10-й, 20-й и 30-й минуте. После `RESULT_DURABLE`
-оставшиеся напоминания отменяются. Общий предел ожидания — 45 минут.
+Отсчёт начинается после первоначального `PROMPT_SEND_CONFIRMED`. Сроки reminders остаются
+фиксированными: 10-я, 20-я и 30-я минуты; общий предел ожидания — 45 минут. Но наступление
+срока само по себе больше не разрешает немедленный Send. Перед каждым reminder worker
+обязательно перечитывает все разрешённые assistant turns текущего REQ и ещё раз ищет exact
+RESULT. Если RESULT уже появился, он скачивается и reminder отменяется. Если действует
+connection-interruption recovery или exact chat ещё не доказан как готовый, reminder ждёт
+восстановления и не отправляется вслепую. После `RESULT_DURABLE` оставшиеся reminders
+отменяются. Reload/recovery не сдвигает расписание и не перезапускает 45-минутный отсчёт.
 
 Если ZIP скачан, но проверка содержимого возвращает `ARTIFACT_INVALID`, это не завершает
 REQ: временный `.staging/<REQ>` удаляется, чтобы не создать `RESULT_STORE_CONFLICT`, и
