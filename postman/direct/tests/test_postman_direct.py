@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import importlib.util
+import io
 import json
 from pathlib import Path
 import subprocess
@@ -528,6 +530,32 @@ class DirectPostmanUnitTests(unittest.TestCase):
             self.assertNotIn("assistantTurnIndex", result)
             self.assertFalse(runner.result_handoff_path(REQ).exists())
 
+
+    def test_cli_transport_failure_json_preserves_exact_request_and_nonzero_exit(self):
+        failure_details = {
+            "transportCode": "BRIDGE_PIPELINE_FAILED",
+            "transportMessage": "bridge lost connection",
+            "details": {"phase": "observer", "attempt": 1},
+        }
+        with patch.object(
+            direct.DirectPostman,
+            "run",
+            side_effect=direct.DirectPostmanError(
+                direct.POSTMAN_TRANSPORT_FAILED,
+                failure_details["transportMessage"],
+                details=failure_details,
+            ),
+        ), contextlib.redirect_stdout(io.StringIO()) as stdout:
+            exit_code = direct.main(["--request-id", REQ, "--task", "intent"])
+
+        self.assertEqual(exit_code, 2)
+        payload = json.loads(stdout.getvalue())
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["code"], direct.POSTMAN_TRANSPORT_FAILED)
+        self.assertEqual(payload["requestId"], REQ)
+        self.assertEqual(payload["transportCode"], failure_details["transportCode"])
+        self.assertEqual(payload["transportMessage"], failure_details["transportMessage"])
+        self.assertEqual(payload["details"], failure_details["details"])
 
     def test_continuation_limit_stops_before_publication_or_send(self):
         previous = types.SimpleNamespace(

@@ -874,12 +874,25 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     except (DirectPostmanError, ValueError) as exc:
         code = exc.code if isinstance(exc, DirectPostmanError) else "DIRECT_INVALID_REQUEST"
-        details = exc.details if isinstance(exc, DirectPostmanError) else {}
-        result = _json_result(False, code, error=str(exc), details=details)
+        error_details = exc.details if isinstance(exc, DirectPostmanError) else {}
+        request_fields = {"requestId": args.request_id} if args.request_id else {}
+        if code == POSTMAN_TRANSPORT_FAILED:
+            result = _json_result(
+                False,
+                code,
+                error=str(exc),
+                **request_fields,
+                transportCode=str(error_details.get("transportCode", code)),
+                transportMessage=str(error_details.get("transportMessage", str(exc))),
+                details=error_details.get("details", {}),
+            )
+        else:
+            result = _json_result(False, code, error=str(exc), **request_fields, details=error_details)
         print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
         return 2
     except Exception as exc:  # pragma: no cover - last-resort CLI boundary
-        result = _json_result(False, "DIRECT_INTERNAL_ERROR", error=str(exc))
+        request_fields = {"requestId": args.request_id} if args.request_id else {}
+        result = _json_result(False, "DIRECT_INTERNAL_ERROR", error=str(exc), **request_fields)
         print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
         return 3
 

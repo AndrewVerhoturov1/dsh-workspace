@@ -13,7 +13,7 @@ description: >-
 
 # Delegate via Postman — Direct Production
 
-`DIRECT_POSTMAN_SKILL_VERSION: 20`
+`DIRECT_POSTMAN_SKILL_VERSION: 21`
 
 Исторический baseline до v12: `DIRECT_POSTMAN_SKILL_VERSION: 11`.
 
@@ -29,8 +29,9 @@ description: >-
 → сохранить exact jobId
 → ждать только этот job через job_output
 → exact terminal JSON
-→ RESULT_DURABLE | ASSISTANT_COMPLETED_NO_ARTIFACT | ARTIFACT_REJECTED
+→ RESULT_DURABLE | ASSISTANT_COMPLETED_NO_ARTIFACT | ARTIFACT_REJECTED | POSTMAN_TRANSPORT_FAILED
 → durable: сообщить REQ + resultZip и STOP
+→ correlated POSTMAN_TRANSPORT_FAILED: вернуть exact failure локальной ЛLM и STOP
 → non-durable terminal: передать assistantText/причину Л1; Л1 может решить о continuation того же chat
 ```
 
@@ -470,16 +471,41 @@ if (update.job.status === "running") {
   };
 }
 
-if (
-  update.job.status !== "completed" ||
-  update.job.detail !== "exit code: 0"
-) {
+if (update.job.status !== "completed") {
   throw new Error(
     `POSTMAN_BACKGROUND_JOB_FAILED: ${update.job.status} ${update.job.detail ?? ""}`
   );
 }
 
 let result;
+
+if (update.job.detail !== "exit code: 0") {
+  try {
+    result = JSON.parse(update.text.trim());
+  } catch {
+    throw new Error("POSTMAN_BACKGROUND_JOB_FAILED");
+  }
+  if (
+    result.ok !== false ||
+    result.code !== "POSTMAN_TRANSPORT_FAILED" ||
+    result.requestId !== requestId ||
+    typeof result.transportCode !== "string" ||
+    !result.transportCode ||
+    typeof result.transportMessage !== "string" ||
+    !result.transportMessage ||
+    result.details === null ||
+    typeof result.details !== "object" ||
+    Array.isArray(result.details)
+  ) {
+    throw new Error("POSTMAN_BACKGROUND_JOB_FAILED");
+  }
+  return {
+    done: true,
+    requestId,
+    jobId,
+    result,
+  };
+}
 
 try {
   result = JSON.parse(update.text.trim());
@@ -522,9 +548,11 @@ exact `requestId` и `jobId` как литералы и повторяет ве�
 Normal path не использует `job_list`: exact `jobId` уже известен. Не запускать
 параллельно второй Postman request, не создавать второй REQ и не повторять Send.
 
-Терминальное завершение принимается только при `job.status == completed` и
-`job.detail == exit code: 0`; `killed`, `failed` или non-zero exit — terminal failure
-без retry/fallback.
+Для `job.status == completed` с `job.detail == exit code: 0` действует существующая
+success-terminal логика. Для completed non-zero exit сначала разбирается `update.text`;
+только correlated `POSTMAN_TRANSPORT_FAILED` возвращается как exact terminal failure.
+Invalid, non-correlated или non-JSON output остаётся `POSTMAN_BACKGROUND_JOB_FAILED`;
+`killed`/`failed` также остаются background failure без retry/fallback.
 
 ### Контракт orchestration-вызова `tools.pwsh`
 
@@ -563,8 +591,13 @@ manifest вручную.
 
 Terminal JSON уже разбирается атомарно в wait-ячейке раздела 8.
 
-Terminal transport handoff принимается только когда `result.ok == true`,
-`result.requestId == exact requestId` и `result.state == result.code`. Разрешённые terminal codes:
+Successful terminal handoff принимается только когда `result.ok == true`,
+`result.requestId == exact requestId` и `result.state == result.code`. Разрешённые success terminal codes:
+
+Для completed job с non-zero exit сначала разобрать `update.text`. Только JSON с
+`ok=false`, `code=POSTMAN_TRANSPORT_FAILED`, exact `requestId`, строковыми
+`transportCode`/`transportMessage` и объектом `details` возвращается как exact terminal
+failure локальной ЛLM. Он не становится `ok=true` и не меняет non-zero process exit.
 
 ```text
 RESULT_DURABLE
@@ -664,9 +697,14 @@ REQ. `job_output` со статусом `running` не является failure 
 Если отдельная wait-ячейка `run_code` завершилась ошибкой, но exact `jobId` известен,
 разрешено снова читать только этот же job через `job_output`; новый Postman/REQ запрещён.
 
-Если background job имеет `failed`, `killed` или non-zero exit, либо bridge вернул
-`ok=false`/invalid JSON — STOP. `ASSISTANT_COMPLETED_NO_ARTIFACT` и `ARTIFACT_REJECTED`
-возвращаются с `ok=true`, поэтому являются handoff, а не failure.
+Если background job имеет `failed` или `killed` — `POSTMAN_BACKGROUND_JOB_FAILED` и STOP.
+Для completed non-zero exit сначала разобрать `update.text`: correlated JSON с
+`ok=false`, `code=POSTMAN_TRANSPORT_FAILED`, exact REQ, `transportCode`,
+`transportMessage` и `details` вернуть локальной ЛLM без изменения полей. Invalid,
+non-correlated или non-JSON output — `POSTMAN_BACKGROUND_JOB_FAILED`.
+`POSTMAN_TRANSPORT_FAILED` не превращать в `ok=true` и не менять process exit.
+`ASSISTANT_COMPLETED_NO_ARTIFACT` и `ARTIFACT_REJECTED` возвращаются с `ok=true`,
+поэтому являются handoff, а не failure.
 
 Сохранить исходный exact REQ и exact jobId.
 
@@ -975,6 +1013,9 @@ terminal state
 36. Каждый REQ normal orchestration создаёт ровно один background `tools.pwsh` job и сохраняет exact `jobId`.
 37. `job_output` timeout/`running` оставляет exact job живым и никогда не разрешает второй REQ/Send.
 38. Normal orchestration передаёт verbatim payload через UTF-8 Base64; `-Task` остаётся совместимым ручным wrapper-входом.
+39. Direct CLI при `POSTMAN_TRANSPORT_FAILED` печатает exact `requestId`, сохраняет
+`transportCode`/`transportMessage`/`details` и завершает процесс с non-zero exit;
+orchestration принимает только correlated JSON этого типа при completed non-zero job.
 
 ## Result presentation вне normal @Postman
 

@@ -16,7 +16,7 @@ class DelegateViaPostmanSkillContract(unittest.TestCase):
         cls.agents = AGENTS.read_text(encoding="utf-8")
 
     def test_version_and_entrypoint(self):
-        self.assertIn("DIRECT_POSTMAN_SKILL_VERSION: 20", self.skill)
+        self.assertIn("DIRECT_POSTMAN_SKILL_VERSION: 21", self.skill)
         self.assertIn("$workspace = (Get-Location).Path", self.skill)
         self.assertIn("$bridge = Join-Path $workspace 'postman\\direct\\postman.ps1'", self.skill)
         self.assertNotIn(r"C:\Users\andre\.dsh\postman\direct\postman.ps1", self.skill)
@@ -369,6 +369,27 @@ process.stdout.write(JSON.stringify({
         self.assertIsInstance(parsed["description"], str)
         self.assertTrue(parsed["description"].strip())
         self.assertTrue(parsed["modelInvocable"])
+    def test_nonzero_correlated_transport_failure_is_parsed_before_background_failure(self):
+        section = self.skill.split("## 8. Единственный production-вызов", 1)[1].split(
+            "### Контракт orchestration-вызова `tools.pwsh`", 1
+        )[0]
+        for marker in (
+            'update.job.status !== "completed"',
+            'update.job.detail !== "exit code: 0"',
+            'result.ok !== false',
+            'result.code !== "POSTMAN_TRANSPORT_FAILED"',
+            'result.requestId !== requestId',
+            'typeof result.transportCode !== "string"',
+            'typeof result.transportMessage !== "string"',
+            'result.details === null',
+            'throw new Error("POSTMAN_BACKGROUND_JOB_FAILED")',
+        ):
+            self.assertIn(marker, section)
+        self.assertIn(
+            "только correlated `POSTMAN_TRANSPORT_FAILED` возвращается как exact terminal failure.",
+            self.skill,
+        )
+        self.assertIn("non-zero process exit", self.skill)
     def test_non_durable_terminal_handoff_contract(self):
         for marker in (
             "ASSISTANT_COMPLETED_NO_ARTIFACT",
