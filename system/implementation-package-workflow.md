@@ -6,333 +6,264 @@ language: ru
 
 ## 1. Назначение
 
-Этот документ задаёт канонический процесс подготовки и внедрения implementation-пакетов для репозитория `AndrewVerhoturov1/dsh-workspace`.
+Этот документ задаёт канонический процесс подготовки и внедрения implementation-пакетов для `AndrewVerhoturov1/dsh-workspace`.
 
 Главный принцип:
 
-> ChatGPT готовит всю реализацию, все необходимые файлы, патчи, applicator-скрипты и тесты. Luna не проектирует решение и не исправляет код самостоятельно. Luna только проверяет совместимость пакета, механически внедряет его, запускает тесты, публикует implementation branch/PR и сообщает результат.
+> Модель готовит содержимое изменения. Репозиторий владеет применением, минимальной механической проверкой и диагностикой.
 
-Цель процесса — разделить ответственность:
+После установки центрального runner-а внешняя модель **не должна писать новый applicator для каждого ZIP**. Обычный implementation package — декларативный: manifest + unified patch + список только нужных целевых тестов.
 
-- **ChatGPT** отвечает за архитектуру и содержимое implementation package.
-- **Luna** отвечает за безопасное механическое внедрение и проверку.
-- **Пользователь** принимает решение о merge и отдельно разрешает promotion `preview → main`.
+Роли:
 
-## 2. Область применения
+- **ChatGPT / другая внешняя модель** — проектирует решение, готовит `changes.patch`, manifest и при необходимости новые regression tests внутри patch.
+- **Central implementation package runner** — одинаково для всех пакетов проверяет реальную применимость patch, защищает постоянные worktree/локальные данные, применяет patch, запускает только объявленные targeted tests и создаёт компактную диагностику при FAIL.
+- **Luna / локальный агент** — создаёт отдельный clean implementation worktree, запускает центральный runner, а после PASS делает commit/push/PR. Она не чинит package вручную.
+- **Пользователь** — принимает решение о merge; promotion `preview → main` остаётся отдельным explicit действием.
 
-Этот workflow используется, когда ChatGPT готовит ZIP или другой implementation package, предназначенный для внедрения локальным агентом Luna.
+## 2. Канонический runner
 
-Он не заменяет:
-- `REPO_POLICY.md`;
-- Postman transport/artifact policy;
-- правила merge/cleanup;
-- правила Direct Postman RESULT_DURABLE lifecycle.
+Единственный обычный applicator implementation-пакетов:
 
-При конфликте с более строгим правилом безопасности репозитория применяется более строгая защита пользовательских данных.
+```text
+system/implementation_package_runner.py
+```
 
-## 3. Роли
+Обычный запуск внутри отдельного temporary implementation worktree:
 
-### 3.1. ChatGPT
+```text
+python system/implementation_package_runner.py apply <PACKAGE.zip>
+```
 
-ChatGPT обязан:
+Опциональный dry-run без записи:
 
-1. Изучить актуальную реализацию и определить точную область изменения.
-2. Подготовить все изменения самостоятельно.
-3. Подготовить необходимые regression tests.
-4. Подготовить механический способ внедрения:
-   - готовый patch, если он надёжно применим;
-   - либо deterministic applicator, если patch хрупок или изменение сложное.
-5. Зафиксировать compatibility guards.
-6. Зафиксировать exact `baseBranch` и `packageBase`.
-7. Подготовить test plan.
-8. Подготовить инструкцию Luna.
-9. Упаковать всё в единый ZIP.
-10. Не перекладывать проектирование, исправление или адаптацию реализации на Luna.
+```text
+python system/implementation_package_runner.py check <PACKAGE.zip>
+```
 
-Если implementation package несовместим с текущим repository state, пакет возвращается ChatGPT на пересборку.
+`apply` уже выполняет те же лёгкие проверки перед записью, поэтому `check` не является обязательной бюрократической стадией. Локальный агент может запускать сразу `apply`, если пользователь не попросил отдельный dry-run.
 
-### 3.2. Luna
+## 3. Формат будущего package
 
-Luna обязана:
-
-1. Не проектировать альтернативное решение.
-2. Не переписывать подготовленный код.
-3. Не исправлять package самостоятельно.
-4. Проверить repository state.
-5. Использовать отдельный clean implementation branch/worktree.
-6. Создать обычную implementation branch от exact `origin/preview`, если manifest не объявляет узкое migration/bootstrap исключение с другой базой.
-7. Выполнить package `check`/dry-run до записи.
-8. Применить package только после успешной проверки.
-9. Запустить указанные targeted и full regression tests.
-10. Выполнить `git diff --check`.
-11. При PASS:
-    - commit;
-    - push;
-    - открыть PR в `preview` для обычной implementation task;
-    - открыть PR в явно объявленную manifest базу только для migration/bootstrap пакета, подготовленного именно для такой операции.
-12. Не выполнять merge без отдельного явного разрешения пользователя.
-13. При реальной несовместимости или regression — STOP и точный отчёт.
-
-### 3.3. Пользователь
-
-Пользователь:
-
-- принимает или отклоняет результат;
-- отдельно разрешает merge task PR в `preview`;
-- отдельно разрешает promotion `preview → main`;
-- при необходимости разрешает исключение из workflow.
-
-## 4. Структура implementation package
-
-Рекомендуемый формат:
+Нормальный ZIP:
 
 ```text
 PACKAGE.zip
-├─ README.md
-├─ START_PROMPT.txt
-├─ LUNA_IMPLEMENTATION_PROMPT.md
 ├─ manifest.json
-├─ TEST_PLAN.md
-├─ apply_package.py
-├─ files/
-├─ patches/
-└─ tests/
+├─ changes.patch
+├─ README.md       # optional, для человека
+└─ TEST_PLAN.md    # optional, для человека
 ```
 
-Допускается упрощённая структура для малых задач, но роли и проверки из этого документа сохраняются.
+Никакого package-local `apply_package.py`, `run_package.py`, собственного Git workflow или собственного diagnostics framework по умолчанию нет.
 
-## 5. Manifest
+Все repository changes, включая новые файлы и новые тесты, входят в `changes.patch`.
 
-`manifest.json` должен по возможности содержать:
+### manifest.json
+
+Минимальный пример:
 
 ```json
 {
-  "package": "PACKAGE_NAME",
+  "schemaVersion": 1,
+  "package": "postman-example-fix",
   "repository": "AndrewVerhoturov1/dsh-workspace",
   "baseBranch": "preview",
-  "packageBase": "<full SHA>",
   "prBase": "preview",
-  "delivery": "patch|hash-guarded-applicator|exact-files",
-  "targetFiles": [],
-  "expectedTargetBlobSha1": {},
-  "packageFiles": []
+  "packageBase": "optional-informational-sha",
+  "patch": "changes.patch",
+  "tests": [
+    {
+      "name": "targeted postman tests",
+      "command": ["python", "-m", "unittest", "-q", "postman.direct.tests.test_example"],
+      "timeoutSeconds": 300
+    }
+  ]
 }
 ```
 
-Для сложных изменений рекомендуется фиксировать exact Git blob SHA каждого исходного target-файла.
-
-Обычная package base — `preview`. `main` допустим как `baseBranch` только для явно описанного migration/bootstrap, который нельзя безопасно начать от ещё не существующего `preview`, либо для отдельной административной операции с явным user approval.
-
-## 6. Совместимость с продвинувшейся базовой веткой
-
-Нельзя требовать `origin/<baseBranch> == packageBase` без необходимости.
-
-Допустимо продолжить, если одновременно:
-
-1. `packageBase` является предком текущего `origin/<baseBranch>`;
-2. целевые source-файлы, на которые рассчитан package, не изменились;
-3. compatibility guards подтверждают это;
-4. package check проходит.
-
-Transport-only advancement, например добавление `REQ_*.md`, само по себе не является причиной для STOP.
-
-Если целевой source-файл изменился — package не адаптируется Luna. Нужна пересборка ChatGPT.
-
-## 7. Предпочтительный applicator
-
-Для сложных изменений предпочтителен deterministic hash-guarded applicator.
-
-Он должен поддерживать минимум:
+JSON Schema находится в:
 
 ```text
---check
---apply
+system/implementation_package_schema.json
 ```
 
-### `--check`
+`command` — argv-массив. Runner запускает его напрямую с `shell=False`; shell-quoting от LLM не нужен.
 
-Не изменяет repository.
+## 4. Что является hard FAIL
 
-Должен проверить:
+Runner намеренно имеет маленький набор блокирующих проверок.
 
-- repository root;
-- implementation branch/worktree не является постоянным `main` или `preview`;
-- clean implementation worktree;
-- manifest `baseBranch` и package base ancestry;
-- exact target blob SHA или другой надёжный compatibility guard;
-- наличие всех source anchors;
-- возможность построить новые файлы;
-- syntax/compile для генерируемого кода.
+Он останавливается только при реальной проблеме:
 
-### `--apply`
+1. это не Git repository или не тот `owner/repository`;
+2. запуск идёт прямо на защищённой ветке `main`/`preview` или в постоянном worktree;
+3. temporary implementation worktree уже dirty до применения;
+4. ZIP/manifest повреждён либо пытается использовать небезопасный путь;
+5. patch затрагивает явно локальные защищённые данные (`.git`, root `settings.yaml`, root `.env`, root `attachments/`);
+6. `git apply --check` говорит, что patch действительно не применяется;
+7. сам `git apply` завершился ошибкой;
+8. один из **объявленных targeted tests** завершился non-zero/timeout.
 
-Повторяет guards и затем:
+Это и есть обычные hard gates.
 
-1. строит все новые версии файлов до записи;
-2. записывает только заранее объявленные target-файлы;
-3. создаёт только заранее объявленные новые файлы;
-4. проверяет exact changed-path inventory;
-5. выполняет `git diff --check`;
-6. при собственной ошибке записи/валидации откатывает только изменения, внесённые самим applicator.
+## 5. Что НЕ является hard FAIL
 
-Applicator не имеет права:
-- выполнять `reset --hard`;
-- выполнять `git clean`;
-- делать auto-stash;
-- менять dirty постоянный worktree `C:\Users\andre\.dsh`;
-- менять dirty постоянный worktree `C:\Users\andre\.dsh-preview`;
-- force-push;
-- удалять неизвестные пользовательские данные.
+Runner не должен останавливать нормальное внедрение из-за административных расхождений.
 
-## 8. Patch packages
+Не являются обязательным blocker:
 
-Unified patch допустим, если ChatGPT реально проверил его применение к нужной базе.
+- `origin/preview` продвинулся после создания package, если `git apply --check` всё ещё проходит;
+- `packageBase` не равен текущему HEAD;
+- исходный blob SHA изменился, если Git всё ещё может корректно применить patch;
+- exact changed-file inventory отличается от заранее записанного списка;
+- tracked/untracked представление нового файла отличается;
+- количество изменённых файлов не совпало с отдельным счётчиком;
+- отсутствует полный regression suite;
+- `git diff --check` выдал whitespace warning.
 
-Минимальная проверка перед выдачей:
+`git diff --check` выполняется для видимости, но является **warning**, а не blocker. Whitespace не должен превращать рабочее изменение в ложный FAIL.
+
+Главный compatibility authority:
 
 ```text
-git apply --check
+git apply --check changes.patch
 ```
 
-Если package зависит от hunk offsets и изменения крупные, предпочтительнее applicator с source guards.
+Если Git может применить patch и targeted tests проходят, обычный runner не придумывает дополнительные причины остановиться.
 
-Luna не должна вручную чинить reject/conflict patch.
+## 6. Почему не нужен постоянный Sol-validator
 
-## 9. Тесты
+LLM-review может быть полезен для архитектуры, но не является каноническим механическим gate.
 
-Implementation package должен содержать `TEST_PLAN.md` или эквивалентную инструкцию.
+Обычный порядок:
 
-Минимально:
+```text
+модель создаёт patch
+→ deterministic local runner
+→ git apply --check
+→ git apply
+→ targeted tests
+→ PASS
+```
 
-1. syntax/compile изменённых source-файлов;
-2. targeted tests новой функциональности;
-3. regression tests затронутого subsystem;
-4. полный canonical regression suite, если он существует;
-5. `git diff --check`.
+Sol/другая сильная модель нужна только когда есть реальный смысловой blocker или непонятный FAIL. Не нужно тратить сильную модель на постоянное повторение работы Git и тестов.
 
-Если проект содержит Node/JS validator/runtime tests, связанные с изменением, они также запускаются.
+## 7. Diagnostics при FAIL
 
-Новый regression test должен проверять не только успешный happy path, но и основные safety boundaries.
+При любом hard FAIL runner автоматически создаёт компактный ZIP во временном каталоге ОС:
 
-## 10. PREPARE-specific принцип
+```text
+failure.json
+git-status.txt
+git-diff-stat.txt
+git-diff-check.txt
+stdout.txt
+stderr.txt
+runner-log.txt
+```
 
-Для Direct Postman PREPARE действует принцип:
+Он не добавляет environment dump, системный инвентарь, содержимое repository или сам patch.
+Из stdout/stderr маскируются распространённые токены и значения sensitive environment variables.
 
-> proceed unless there is a concrete safety, ownership or application conflict.
+FAIL означает:
 
-Unrelated branch, worktree, PR или исторический receipt сами по себе не должны становиться глобальным mutex.
+```text
+STOP
+→ diagnostics ZIP
+→ package возвращается модели на исправление
+```
 
-Hard STOP должен сохраняться для конкретных рисков, например:
+Локальный агент не перепроектирует и не дописывает package вручную.
 
-- repository/request identity mismatch;
-- artifact SHA mismatch;
-- unsafe/protected path;
-- current-REQ worktree/branch ownership collision;
-- dirty или неизвестный current-REQ worktree;
-- real patch conflict;
-- whole-file stale overwrite;
-- попытка затронуть пользовательские данные;
-- невозможность доказать совместимость package.
-
-## 11. RESULT_DURABLE
-
-Если Postman уже получил валидированный `RESULT_DURABLE`, implementation/finalization package не должен без причины запускать новый Postman transport или повторно обращаться к Ch1.
-
-Resume должен использовать существующий durable result, если его identity и SHA подтверждены.
-
-## 12. Работа с постоянными worktree
+## 8. Работа с worktree
 
 Постоянные worktree:
 
 ```text
-C:\Users\andre\.dsh          → main
-C:\Users\andre\.dsh-preview → preview
+C:\Users\andre\.dsh
+C:\Users\andre\.dsh-preview
 ```
 
-Если любой из них dirty:
+Implementation package туда не применяется.
 
-- не очищать;
-- не stash-ить автоматически;
-- не reset-ить;
-- не использовать как место application;
-- не удалять.
-
-Обычная implementation выполняется в отдельном clean worktree от проверенного `origin/preview`.
-
-Migration package может использовать отдельный clean worktree от объявленного `origin/main`, только если manifest явно фиксирует это как migration/bootstrap exception.
-
-## 13. Publication lifecycle
-
-После успешного внедрения обычной task:
+Обычная схема:
 
 ```text
-CHECK
-→ APPLY
-→ TARGETED TESTS
-→ FULL REGRESSION
-→ git diff --check
-→ COMMIT
-→ PUSH
-→ PR в preview
+origin/preview
+→ отдельная temporary task branch
+→ отдельный clean worktree
+→ central runner apply
 ```
 
-На этом Luna останавливается.
+Runner не выполняет `git reset --hard`, `git clean`, auto-stash, force push и не удаляет пользовательские данные.
 
-Migration/bootstrap package следует exact `prBase`, указанному в manifest. Такой пакет не превращает `main` обратно в обычную task base.
+На FAIL dirty temporary worktree можно оставить для диагностики. Постоянные worktree не затрагиваются.
 
-Task merge:
+## 9. Тесты
+
+В manifest указываются только **относящиеся к изменению** команды.
+
+Не требуется автоматически запускать весь repository regression suite для каждой маленькой задачи.
+
+Хороший набор:
 
 ```text
-только после отдельного явного разрешения пользователя
-→ squash merge в preview
+syntax/compile, если нужен конкретному изменению
++
+новый regression test
++
+1 затронутый subsystem test, если он реально полезен
 ```
 
-Release promotion:
+Документационный package может иметь `tests: []`, если для него нет осмысленного исполняемого теста.
+
+Runner не выбирает тесты сам и не вызывает LLM.
+
+## 10. Publication после PASS
+
+Central runner **не делает GitHub writes**.
+
+После `IMPLEMENTATION_PACKAGE_APPLIED` локальный агент выполняет обычный repository lifecycle:
 
 ```text
-отдельный explicit user GO
-→ preview → main
-→ merge commit, не squash
+review git status/diff на уровне задачи
+→ explicit staging нужных task files
+→ commit
+→ push temporary task branch
+→ verify remote SHA
+→ create/update PR в preview
+→ STOP без merge
 ```
 
-После task merge выполняется безопасный cleanup только доказанно принадлежащих этой работе временных branch/worktree/resources. Постоянные `main`/`preview` и их два канонических worktree cleanup не затрагивает.
+Merge — только после отдельного решения пользователя.
 
-## 14. Failure contract
+Runner не выполняет commit/push/PR, чтобы application и публикация оставались разными границами ответственности.
 
-При несовместимости package Luna не ремонтирует его.
+## 11. Что модель должна выдавать после внедрения этой системы
 
-Она должна сообщить:
-
-- manifest `baseBranch`;
-- current `origin/<baseBranch>`;
-- implementation branch/worktree;
-- failing guard;
-- failing source file/hash/anchor;
-- failing test;
-- какие файлы были изменены до failure;
-- был ли выполнен rollback;
-- были ли commit/push/PR.
-
-После этого ChatGPT пересобирает implementation package.
-
-## 15. Обязательные status flags
-
-В финальном отчёте Luna для подобных задач желательно указывать:
+Будущему ChatGPT достаточно подготовить:
 
 ```text
-Postman invoked=
-new REQ created=
-Ch1 contacted=
-ORCA invoked=
-mergePerformed=
-dirty main worktree touched=
-dirty preview worktree touched=
+manifest.json
+changes.patch
+README.md / TEST_PLAN.md при необходимости
 ```
 
-## 16. Канонический принцип
+Перед выдачей желательно локально/в sandbox проверить, что patch синтаксически валиден. Но package не должен содержать очередной новый framework проверки.
 
-> Все implementation decisions и готовые изменения находятся в package. Luna — исполнитель и тестировщик, а не второй разработчик.
+Если package несовместим с текущим preview:
 
-> Если package не подходит к текущему коду, исправляется package, а не процесс внедрения вручную.
+```text
+git apply --check → FAIL
+```
 
-> Обычная разработка живёт в цикле `preview → temporary task branch → preview`; `main` обновляется только отдельным promotion после explicit user GO.
+это нормальный честный сигнал на пересборку patch.
+
+## 12. Канонический принцип
+
+> Строгость нужна там, где можно потерять данные или применить изменение не туда.
+
+> Совместимость проверяет Git. Работоспособность проверяют целевые тесты. Остальное не должно становиться бюрократическим blocker без конкретной причины.
+
+> Один центральный runner лучше, чем новый LLM-generated applicator в каждом ZIP.
