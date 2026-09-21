@@ -61,18 +61,11 @@ _RECOVERABLE_VALIDATOR_CODES = frozenset(
         "ARTIFACT_BAD_ZIP",
         "ARTIFACT_EMPTY",
         "ARTIFACT_FILENAME_MISMATCH",
-        "ARTIFACT_REQUEST_MISMATCH",
         "ARTIFACT_PATH_TRAVERSAL",
         "ARTIFACT_ABSOLUTE_PATH",
         "ARTIFACT_WINDOWS_DRIVE_PATH",
         "ARTIFACT_UNC_PATH",
-        "ARTIFACT_NTFS_ADS",
         "ARTIFACT_SYMLINK",
-        "ARTIFACT_REPARSE_ENTRY",
-        "ARTIFACT_DUPLICATE_PATH",
-        "ARTIFACT_CASE_COLLISION",
-        "ARTIFACT_WINDOWS_RESERVED_NAME",
-        "ARTIFACT_PATH_INVALID",
         "ARTIFACT_COMPRESSED_SIZE_LIMIT",
         "ARTIFACT_UNCOMPRESSED_SIZE_LIMIT",
         "ARTIFACT_ENTRY_SIZE_LIMIT",
@@ -390,14 +383,13 @@ def _validation_matches_trusted(
     trusted: dict[str, Any],
     actual_sha256: str,
 ) -> bool:
+    # The transport validator deliberately does not attest repository/base/manifest
+    # semantics. Request/chat/filename correlation is proven before the click.
     return (
         validation.get("ok") is True
         and validation.get("code") == ARTIFACT_VALID
         and validation.get("status") == ARTIFACT_VALID
         and validation.get("sha256") == actual_sha256
-        and validation.get("requestId") == trusted["requestId"]
-        and validation.get("repository") == trusted["repository"]
-        and str(validation.get("baseCommit", "")).lower() == trusted["baseCommit"].lower()
     )
 
 
@@ -707,6 +699,13 @@ def download_validated_artifact(
             details={
                 "phase": "validator",
                 "validatorCode": validation.get("code"),
+                "validationMessage": str(
+                    validation.get("message")
+                    or (validation.get("details", {}).get("reason") if isinstance(validation.get("details"), dict) else "")
+                    or validation.get("code")
+                    or ARTIFACT_INVALID
+                ),
+                "validationDetails": validation.get("details") if isinstance(validation.get("details"), dict) else {},
                 "stagingPath": str(staging_zip),
                 "stagingDiscarded": True,
                 "sha256": actual_sha256,

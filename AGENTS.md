@@ -65,8 +65,14 @@ Postman global invariant: OFF by default.
 самостоятельно. Без `@Postman` Luna больше не имеет права запускать Postman.
 
 Postman normal lifecycle invariant.
-После exact `RESULT_DURABLE` normal `@Postman` flow сообщает exact `requestId` и
-`resultZip`, затем обязан остановиться. Normal flow не вызывает
+Один Direct Postman REQ имеет три успешных terminal transport outcomes:
+`RESULT_DURABLE`, `ASSISTANT_COMPLETED_NO_ARTIFACT`, `ARTIFACT_REJECTED`. После exact
+`RESULT_DURABLE` normal `@Postman` flow сообщает exact `requestId` и `resultZip`, затем
+останавливается. Два non-durable terminal outcomes обязаны вернуть Л1 exact `assistantText`;
+`ARTIFACT_REJECTED` также возвращает exact validation code/message. Они не являются
+transport failure. Л1 может решить о continuation того же conversation только новым canonical
+REQ и только пока текущее user message всё ещё является разрешающим `@Postman` trigger;
+не более трёх continuation REQ на один root request. Normal flow не вызывает
 `postman_result_workspace_register(...)` и не создаёт Result Workspace автоматически.
 
 Postman existing-chat continuation invariant.
@@ -80,10 +86,11 @@ conversation, URL которого уже доказан и сохранён Pos
 `resume_request.ps1`, PREPARE, TEST, PUBLISH и `integrate_result.ps1` сохраняются как
 legacy/manual explicit finalization для уже существующего durable результата. Они не являются
 частью normal `@Postman` flow. Normal flow не создаёт implementation worktree, branch,
-commit или PR и не распаковывает/анализирует ZIP. Luna не интерпретирует содержимое
-результата и не выбирает действия на основе его содержимого. До `RESULT_DURABLE` действует strict
-fail-closed поведение; любой `ok=false` останавливает операцию без fallback, нового REQ
-или повторного Ch1. При manual finalization TestScript/TestSpec передаются argv-safe.
+commit или PR и не распаковывает/анализирует ZIP. Luna не анализирует содержимое durable ZIP.
+Для `ASSISTANT_COMPLETED_NO_ARTIFACT`/`ARTIFACT_REJECTED` она может прочитать только terminal
+assistant text и validation reason, чтобы решить о continuation без добавления новых требований.
+Настоящий transport failure (`ok=false`) остаётся strict fail-closed: STOP без fallback/повторного
+Send того же REQ. При manual finalization TestScript/TestSpec передаются argv-safe.
 
 Terminal visibility invariant.
 В обычной производственной работе Harness пользователь не должен видеть всплывающие окна PowerShell, cmd, Python, Node, Git, gh или других процессов командной строки. Любой дочерний процесс командной строки запускается без создания видимого окна консоли.

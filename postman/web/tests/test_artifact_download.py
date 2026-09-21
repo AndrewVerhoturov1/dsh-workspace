@@ -380,10 +380,19 @@ class ArtifactDownloadTests(unittest.TestCase):
 
     def test_validator_reject_discards_staging_for_the_next_attempt(self):
         def reject(zip_path, trusted):
-            return {"ok": False, "code": "ARTIFACT_BAD_ZIP", "status": "ARTIFACT_BAD_ZIP"}
+            return {
+                "ok": False,
+                "code": "ARTIFACT_BAD_ZIP",
+                "status": "ARTIFACT_BAD_ZIP",
+                "message": "ZIP central directory is missing",
+                "details": {"reason": "eocd"},
+            }
         result, _, root = self.run_download(validator=reject)
         self.assertEqual(result["code"], module.ARTIFACT_INVALID)
         self.assertTrue(result["recoverable"])
+        self.assertEqual(result["details"]["validatorCode"], "ARTIFACT_BAD_ZIP")
+        self.assertEqual(result["details"]["validationMessage"], "ZIP central directory is missing")
+        self.assertEqual(result["details"]["validationDetails"], {"reason": "eocd"})
         self.assertFalse((root / REQ).exists())
         self.assertFalse((root / ".staging" / REQ).exists())
 
@@ -416,13 +425,13 @@ class ArtifactDownloadTests(unittest.TestCase):
         self.assertEqual(result["code"], module.ARTIFACT_INVALID)
         self.assertFalse((root / REQ).exists())
 
-    def test_validator_request_attestation_mismatch_rejected(self):
+    def test_validator_request_metadata_is_not_a_transport_gate(self):
         def wrong_req(zip_path, trusted):
             value = validator_ok(zip_path, trusted)
             value["requestId"] = "REQ_OTHER"
             return value
         result, _, _ = self.run_download(validator=wrong_req)
-        self.assertEqual(result["code"], module.ARTIFACT_INVALID)
+        self.assertEqual(result["code"], module.RESULT_DURABLE)
 
     def test_valid_result_publishes_four_files(self):
         result, _, root = self.run_download()

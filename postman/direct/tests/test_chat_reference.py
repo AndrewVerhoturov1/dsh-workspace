@@ -66,6 +66,44 @@ class ChatReferenceTests(unittest.TestCase):
             self.assertEqual(ctx.exception.code, "DIRECT_CHAT_REFERENCE_UNAVAILABLE")
             self.assertFalse(ctx.exception.details["uiSearchAttempted"])
 
+    def test_resolve_accepts_completed_no_artifact_direct_state(self):
+        with tempfile.TemporaryDirectory() as root:
+            direct_root = Path(root) / "direct"
+            path = direct_root / "requests" / f"{REQ}.json"
+            path.parent.mkdir(parents=True)
+            path.write_text(json.dumps({
+                "ok": True,
+                "code": "ASSISTANT_COMPLETED_NO_ARTIFACT",
+                "state": "ASSISTANT_COMPLETED_NO_ARTIFACT",
+                "requestId": REQ,
+                "repository": REPO,
+                "conversationUrl": URL,
+                "rootRequestId": "REQ_20260917T100000Z_7000",
+                "continuationIndex": 2,
+            }), encoding="utf-8")
+            result = chat_reference.resolve_chat_reference(direct_root, REQ, expected_repository=REPO)
+            self.assertEqual(result.source, "direct_state")
+            self.assertEqual(result.conversation_url, URL)
+            self.assertEqual(result.root_request_id, "REQ_20260917T100000Z_7000")
+            self.assertEqual(result.continuation_index, 2)
+
+    def test_resolve_accepts_rejected_artifact_direct_state(self):
+        with tempfile.TemporaryDirectory() as root:
+            direct_root = Path(root) / "direct"
+            path = direct_root / "requests" / f"{REQ}.json"
+            path.parent.mkdir(parents=True)
+            path.write_text(json.dumps({
+                "ok": True,
+                "code": "ARTIFACT_REJECTED",
+                "state": "ARTIFACT_REJECTED",
+                "requestId": REQ,
+                "repository": REPO,
+                "conversationUrl": URL,
+            }), encoding="utf-8")
+            result = chat_reference.resolve_chat_reference(direct_root, REQ, expected_repository=REPO)
+            self.assertEqual(result.root_request_id, REQ)
+            self.assertEqual(result.continuation_index, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

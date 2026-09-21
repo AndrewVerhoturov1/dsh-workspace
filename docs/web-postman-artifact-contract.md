@@ -78,19 +78,21 @@ user anchor exact текущего request. Разрешённый anchor — п
 Для одного REQ допускается до трёх таких служебных напоминаний по фиксированному
 расписанию 10/20/30 минут. Они не создают новый request и не меняют semantic intent.
 Перед каждым reminder transport обязан повторно проверить уже разрешённые assistant turns
-этого REQ; найденный exact RESULT отменяет reminder. Завершённый turn без ZIP остаётся
-наблюдаемым и повторно проверяется раз в 10 секунд до durable result или дальнейшего
-разрешённого turn. Если текст turn изменился, требуется свежий completion proof.
+этого REQ; найденный exact RESULT отменяет reminder. Завершённый turn без ZIP получает одну
+контрольную повторную проверку через 10 секунд. Если exact ZIP всё ещё отсутствует, current
+REQ завершается `ASSISTANT_COMPLETED_NO_ARTIFACT` с полным assistant text. Если текст turn
+изменился, требуется свежий completion proof и новое 10-секундное окно.
 
 Видимое состояние `Соединение прервано` / `Connection interrupted` не является completion.
 В этом состоянии reminders блокируются; transport может reload-ить только ту же exact
 conversation Page, после доказанной загрузки выдерживает ещё 10 секунд стабилизации и
 заново выполняет correlation/artifact proof. Reload не создаёт новый REQ и не сбрасывает
 45-минутный deadline.
-Если скачанный ZIP не проходит проверку содержимого, `ARTIFACT_INVALID` считается
-повторяемой ошибкой результата: его staging-каталог удаляется, а следующий срок
-напоминания запускает новую попытку. Ошибки валидатора, записи, доверенной аттестации,
-скачивания и другие внутренние ошибки немедленно завершают REQ. А произвольный новый user turn
+Если скачанный ZIP не проходит minimal transport validation, staging-каталог удаляется и
+current REQ немедленно завершается `ARTIFACT_REJECTED` с точным validation code/message и
+assistant text. Решение о continuation принадлежит локальной LLM; сам REQ не ждёт следующего
+reminder после завершённого assistant-turn. Ошибки самого validator infrastructure, записи,
+скачивания и другие внутренние ошибки остаются transport failure. Произвольный новый user turn
 разрешённым anchor не является.
 
 Финальный assistant turn должен содержать envelope:
@@ -125,10 +127,10 @@ POSTMAN_<requestId>_RESULT.zip
 ```
 
 `files/`, `changes.patch`, `resultType`, `patch` и `files[]` не обязательны для transport.
-`manifest.json` также необязателен. Если он присутствует, unknown/extra fields допустимы,
-а `protocolVersion`, `repository`, `baseCommit`, `resultType`, `patch` и `files` являются
-информационными для normal transport. Единственный manifest hard reject: присутствующий
-строковый `requestId` явно не совпадает с trusted current REQ.
+`manifest.json` также необязателен и полностью informational для normal transport.
+Ни `requestId`, ни `protocolVersion`, ни `repository`, `baseCommit`, `resultType`, `patch` или
+`files` внутри manifest не являются transport hard gates. Trusted REQ identity доказывается
+browser correlation и exact expected filename до скачивания.
 
 Содержимое ZIP является proposed result; для code-result это proposed implementation.
 Сам факт скачивания ZIP не разрешает автоматически изменять рабочий repository.
@@ -157,17 +159,16 @@ non-object или отсутствующий manifest не превращает 
 Каждый archive entry остаётся subject to structural path-safety validation независимо от
 содержимого или назначения результата.
 
-Недопустимы:
+Minimal validator отклоняет только очевидно опасные structural paths:
 
 - absolute paths;
 - Windows drive paths;
 - UNC paths;
 - `..` traversal;
-- NTFS alternate data streams;
-- symlink/reparse/special entries;
-- duplicate paths;
-- normalized/case-insensitive collisions;
-- Windows reserved path names и другие extraction-unsafe path forms.
+- symlink entries.
+
+Более строгая platform-specific policy (ADS/reserved names/case/Unicode collisions и т. п.)
+не является normal Postman transport gate и при необходимости выполняется downstream.
 
 Repository `allowedPaths` / `forbiddenPaths` и содержимое unified diff не проверяются на
 normal transport boundary, потому что RESULT_DURABLE не применяет ZIP к repository.

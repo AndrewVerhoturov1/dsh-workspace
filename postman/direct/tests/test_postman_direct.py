@@ -45,6 +45,8 @@ identity_stub.request_prompt_key_line = lambda req: f"POSTMAN_REQUEST_ID: {req}"
 
 bridge_stub = types.ModuleType("web_worker_bridge")
 bridge_stub.RESULT_DURABLE = "RESULT_DURABLE"
+bridge_stub.ASSISTANT_COMPLETED_NO_ARTIFACT = "ASSISTANT_COMPLETED_NO_ARTIFACT"
+bridge_stub.ARTIFACT_REJECTED = "ARTIFACT_REJECTED"
 class PlaceholderBridge:
     pass
 bridge_stub.WebWorkerBridge = PlaceholderBridge
@@ -359,6 +361,130 @@ class DirectPostmanUnitTests(unittest.TestCase):
             with self.assertRaises(direct.DirectPostmanError) as ctx:
                 runner.run(request_id=REQ, task="x")
             self.assertEqual(ctx.exception.code, "DIRECT_REQUEST_EXISTS")
+
+    def test_no_artifact_terminal_is_returned_to_local_agent_and_can_continue_same_chat(self):
+        conversation_url = "https://chatgpt.com/c/no-artifact-chat"
+
+        class Publisher:
+            def __init__(self, **kwargs): pass
+            def snapshot(self): return direct.TaskSnapshot(PRE, ("postman", "README.md"))
+            def publish_content(self, request_id, content, *, expected_parent, root_entries):
+                return direct.PublishedTask(
+                    request_id,
+                    f"https://raw.githubusercontent.com/{REPO}/{PUB}/{request_id}.md",
+                    PRE,
+                    PUB,
+                    tuple(root_entries),
+                )
+
+        class Bridge:
+            def __init__(self, **kwargs): pass
+            def run_request(self, request_id, **kwargs):
+                return {
+                    "ok": True,
+                    "code": "ASSISTANT_COMPLETED_NO_ARTIFACT",
+                    "details": {
+                        "assistantText": "ZIP ещё не собран.",
+                        "assistantTextSha256": "e" * 64,
+                        "assistantIndex": 7,
+                        "conversationUrl": conversation_url,
+                        "conversationId": "no-artifact-chat",
+                    },
+                }
+
+        with tempfile.TemporaryDirectory() as root:
+            runner = direct.DirectPostman(
+                direct_root=Path(root) / "direct",
+                publisher_factory=Publisher,
+                bridge_factory=Bridge,
+                ensure_browser=lambda **kwargs: {"cdpUrl": "http://127.0.0.1:9222"},
+            )
+            result = runner.run(request_id=REQ, task="long task")
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["code"], "ASSISTANT_COMPLETED_NO_ARTIFACT")
+            self.assertEqual(result["state"], "ASSISTANT_COMPLETED_NO_ARTIFACT")
+            self.assertEqual(result["assistantText"], "ZIP ещё не собран.")
+            self.assertEqual(result["conversationUrl"], conversation_url)
+            self.assertEqual(result["rootRequestId"], REQ)
+            self.assertEqual(result["continuationIndex"], 0)
+            self.assertFalse(runner.result_handoff_path(REQ).exists())
+
+            state = json.loads(runner.state_path(REQ).read_text(encoding="utf-8"))
+            self.assertEqual(state["state"], "ASSISTANT_COMPLETED_NO_ARTIFACT")
+            self.assertEqual(state["code"], "ASSISTANT_COMPLETED_NO_ARTIFACT")
+            self.assertEqual(state["conversationUrl"], conversation_url)
+
+    def test_rejected_artifact_terminal_exposes_exact_validation_reason(self):
+        conversation_url = "https://chatgpt.com/c/rejected-chat"
+
+        class Publisher:
+            def __init__(self, **kwargs): pass
+            def snapshot(self): return direct.TaskSnapshot(PRE, ("postman", "README.md"))
+            def publish_content(self, request_id, content, *, expected_parent, root_entries):
+                return direct.PublishedTask(
+                    request_id,
+                    f"https://raw.githubusercontent.com/{REPO}/{PUB}/{request_id}.md",
+                    PRE,
+                    PUB,
+                    tuple(root_entries),
+                )
+
+        class Bridge:
+            def __init__(self, **kwargs): pass
+            def run_request(self, request_id, **kwargs):
+                return {
+                    "ok": True,
+                    "code": "ARTIFACT_REJECTED",
+                    "details": {
+                        "assistantText": "Готово.",
+                        "assistantTextSha256": "f" * 64,
+                        "assistantIndex": 8,
+                        "conversationUrl": conversation_url,
+                        "conversationId": "rejected-chat",
+                        "validationCode": "ARTIFACT_BAD_ZIP",
+                        "validationMessage": "ZIP is malformed or cannot be read safely",
+                    },
+                }
+
+        with tempfile.TemporaryDirectory() as root:
+            runner = direct.DirectPostman(
+                direct_root=Path(root) / "direct",
+                publisher_factory=Publisher,
+                bridge_factory=Bridge,
+                ensure_browser=lambda **kwargs: {"cdpUrl": "http://127.0.0.1:9222"},
+            )
+            result = runner.run(request_id=REQ, task="long task")
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["code"], "ARTIFACT_REJECTED")
+            self.assertEqual(result["validationCode"], "ARTIFACT_BAD_ZIP")
+            self.assertIn("malformed", result["validationMessage"])
+            self.assertFalse(runner.result_handoff_path(REQ).exists())
+
+
+    def test_continuation_limit_stops_before_publication_or_send(self):
+        previous = types.SimpleNamespace(
+            request_id=REQ,
+            conversation_url="https://chatgpt.com/c/limit-chat",
+            conversation_id="limit-chat",
+            root_request_id="REQ_20260902T010200Z_1200",
+            continuation_index=3,
+            source="direct_state",
+        )
+        with tempfile.TemporaryDirectory() as root, patch.object(
+            direct.chat_reference, "resolve_chat_reference", return_value=previous
+        ):
+            runner = direct.DirectPostman(
+                direct_root=Path(root) / "direct",
+                publisher_factory=lambda **kwargs: (_ for _ in ()).throw(AssertionError("publisher must not run")),
+                ensure_browser=lambda **kwargs: (_ for _ in ()).throw(AssertionError("browser must not start")),
+            )
+            with self.assertRaises(direct.DirectPostmanError) as ctx:
+                runner.run(
+                    request_id="REQ_20260902T010204Z_1235",
+                    task="continue",
+                    chat_request_id=REQ,
+                )
+            self.assertEqual(ctx.exception.code, "DIRECT_CONTINUATION_LIMIT_REACHED")
 
 
 if __name__ == "__main__":

@@ -4,16 +4,16 @@ description: >-
   Использовать только когда ТЕКУЩЕЕ пользовательское сообщение после необязательных
   начальных пробелов начинается с точного литерала @Postman. Выполнить задачу через
   Direct Web Postman: сохранить пользовательский intent без технических дополнений,
-  создать ровно один canonical REQ, один раз вызвать
-  workspace-relative `postman\direct\postman.ps1`, дождаться validated RESULT_DURABLE,
-  сохранить validated RESULT_DURABLE, сообщить exact requestId и resultZip и остановиться.
+  создать canonical REQ и вызвать workspace-relative `postman\direct\postman.ps1`.
+  Терминалом одного REQ может быть validated RESULT_DURABLE, завершённый текст без ZIP
+  или отклонённый ZIP; два последних результата возвращаются Л1 вместе с assistantText/причиной.
   Не создавать Result Workspace автоматически. Не использовать Cordis/postman_async_send, QChat или
   ручную автоматизацию браузера как fallback.
 ---
 
 # Delegate via Postman — Direct Production
 
-`DIRECT_POSTMAN_SKILL_VERSION: 19`
+`DIRECT_POSTMAN_SKILL_VERSION: 20`
 
 Исторический baseline до v12: `DIRECT_POSTMAN_SKILL_VERSION: 11`.
 
@@ -24,14 +24,14 @@ description: >-
 ```text
 точный user intent
 → удалить только transport prefix @Postman
-→ один canonical REQ
-→ один background tools.pwsh job с единственным Direct Postman invocation
+→ canonical REQ
+→ один background tools.pwsh job для этого REQ
 → сохранить exact jobId
 → ждать только этот job через job_output
 → exact terminal JSON
-→ RESULT_DURABLE
-→ сообщить exact REQ и resultZip
-→ STOP
+→ RESULT_DURABLE | ASSISTANT_COMPLETED_NO_ARTIFACT | ARTIFACT_REJECTED
+→ durable: сообщить REQ + resultZip и STOP
+→ non-durable terminal: передать assistantText/причину Л1; Л1 может решить о continuation того же chat
 ```
 
 После `RESULT_DURABLE` normal flow не вызывает resume/PREPARE/TEST/PUBLISH, не
@@ -48,12 +48,13 @@ Result Workspace. После сообщения exact `requestId` и `resultZip`
 45 минут → если validated ZIP не получен, transport завершается с ошибкой
 ```
 
-Расписание фиксированное и не зависит от того, пишет модель, молчит или вернула
-промежуточный/ошибочный ответ. Если exact ZIP уже скачан и validated раньше,
-оставшиеся напоминания отменяются. Если ZIP скачан, но не прошёл проверку содержимого,
-REQ не завершается: `.staging/<REQ>` удаляется, и следующая попытка выполняется после
-ближайшего планового напоминания. Ошибки внутреннего валидатора, записи, доверенной
-аттестации, скачивания и неопределённые состояния завершают REQ немедленно.
+Расписание 10/20/30 и общий 45-минутный предел сохраняются без изменений и
+нужны, пока assistant-turn ещё не завершён. Если exact ZIP уже validated раньше,
+оставшиеся напоминания отменяются. Если assistant-turn завершён и ZIP отсутствует,
+worker делает одну контрольную перепроверку через 10 секунд и возвращает
+`ASSISTANT_COMPLETED_NO_ARTIFACT`. Если ZIP скачан, но минимальная transport validation
+его отклонила, текущий REQ немедленно возвращает `ARTIFACT_REJECTED` с точной причиной;
+он не ждёт следующего reminder. Ошибки самого transport/validator infrastructure остаются failure.
 Напоминание является transport control, не создаёт новый REQ и не меняет исходный user
 intent. Для результата отправки `PROVEN_SENT` продолжает цикл, `PROVEN_NOT_SENT`
 допускается только после безопасной очистки поля ввода, а `UNKNOWN` немедленно
@@ -204,15 +205,18 @@ Playwright
 ```text
 verbatim payload после удаления transport marker
 canonical REQ
-один Direct Postman invocation
+один Direct Postman invocation на каждый REQ
 minimal terminal transport gate
-короткий отчёт с exact requestId и resultZip
+ASSISTANT_COMPLETED_NO_ARTIFACT / ARTIFACT_REJECTED handoff при необходимости
+короткий отчёт с exact requestId/resultZip либо continuation decision
 STOP
 ```
 
-Л1 не интерпретирует содержимое ответа Ч1, не применяет и не изменяет ZIP, не выбирает
-semantic test и не начинает Git/PR integration. Содержательная работа с durable
-результатом возможна только позже по отдельному explicit manual-finalization запросу.
+Л1 не анализирует содержимое durable ZIP, не применяет и не изменяет ZIP, не выбирает
+semantic test и не начинает Git/PR integration. Для двух non-durable terminal outcomes
+Л1 может прочитать только terminal assistantText и exact validation reason, чтобы решить:
+нужен ли короткий continuation того же conversation или требуется пользователь. Новые
+содержательные требования от себя добавлять нельзя.
 
 ## 4. Intent preservation
 
@@ -363,16 +367,21 @@ const requestId = `REQ_${stamp}_${suffix}`;
 После background-start exact REQ immutable. При collision/failure не создавать новый
 REQ автоматически и не повторять Send.
 
-Новый REQ для этой логической операции автоматически создавать нельзя.
+До первого terminal result новый REQ автоматически создавать нельзя. Исключение:
+после `ASSISTANT_COMPLETED_NO_ARTIFACT` или `ARTIFACT_REJECTED` Л1 может создать новый
+canonical continuation REQ в том же conversation, если из terminal текста однозначно
+следует, что исходную задачу можно продолжить без решения пользователя. Разрешено не более
+трёх continuation REQ для одного `rootRequestId`; `continuationIndex` 0 — исходный REQ.
 
 ## 8. Единственный production-вызов
 
 Использовать payload из раздела Intent preservation.
 
 В текущем deployment `functions.run_code` имеет hard wall limit 600000 ms, а Direct
-Postman может законно работать до 45 минут. Поэтому normal production path всегда
-запускает ровно один `tools.pwsh` job с `run_in_background: true`, сохраняет exact
-`requestId` и exact `jobId`, а затем ждёт только этот job через `job_output`.
+Postman может законно работать до 45 минут. Поэтому каждый REQ normal production path запускает ровно один `tools.pwsh` job с
+`run_in_background: true`, сохраняет exact `requestId` и exact `jobId`, а затем ждёт
+только этот job через `job_output`. Continuation REQ, если Л1 его выбрал после terminal
+handoff, получает отдельный новый job и `-ChatRequestId` предыдущего REQ.
 
 Никакого result-root preflight и отдельного browser preflight не добавлять.
 
@@ -467,13 +476,23 @@ try {
   throw new Error("POSTMAN_RESULT_JSON_INVALID");
 }
 
+const terminalCodes = new Set([
+  "RESULT_DURABLE",
+  "ASSISTANT_COMPLETED_NO_ARTIFACT",
+  "ARTIFACT_REJECTED",
+]);
+
 if (
   result.ok !== true ||
-  result.code !== "RESULT_DURABLE" ||
-  result.state !== "RESULT_DURABLE" ||
+  !terminalCodes.has(result.code) ||
+  result.state !== result.code ||
   result.requestId !== requestId
 ) {
   throw new Error("POSTMAN_RESULT_GATE_FAILED");
+}
+
+if (result.code === "RESULT_DURABLE" && !result.resultZip) {
+  throw new Error("POSTMAN_DURABLE_RESULT_ZIP_MISSING");
 }
 
 return {
@@ -533,21 +552,25 @@ manifest вручную.
 
 Terminal JSON уже разбирается атомарно в wait-ячейке раздела 8.
 
-Успех принимается только когда:
+Terminal transport handoff принимается только когда `result.ok == true`,
+`result.requestId == exact requestId` и `result.state == result.code`. Разрешённые terminal codes:
 
 ```text
-result.ok        == true
-result.code      == RESULT_DURABLE
-result.state     == RESULT_DURABLE
-result.requestId == exact requestId
+RESULT_DURABLE
+ASSISTANT_COMPLETED_NO_ARTIFACT
+ARTIFACT_REJECTED
 ```
+
+Для `RESULT_DURABLE` дополнительно обязателен `resultZip`. Для двух non-durable terminal
+результатов Direct Postman возвращает `assistantText`, conversation identity и, для rejection,
+`validationCode` + `validationMessage`. Это не transport failure текущего REQ.
 
 Повторно вызывать `job_output` или повторно разбирать terminal output после `done: true` не нужно.
 
 Не выполнять вручную `Get-FileHash`, повторный manifest/base/staleness/path validation
 или отдельный `Test-Path` как normal handoff. Direct Postman уже проверяет normal
-transport boundary: exact correlated filename, SHA-256, безопасную ZIP-структуру/paths
-и archive limits. Manifest/repository/baseCommit/resultType/patch semantics относятся
+transport boundary: exact correlated filename, SHA-256, readable non-empty ZIP, базовую
+path safety и простые archive limits. Manifest/repository/baseCommit/resultType/patch semantics относятся
 к downstream/manual application, а не к normal `@Postman` transport gate.
 
 После `RESULT_DURABLE` не открывать ChatGPT для визуального подтверждения.
@@ -570,6 +593,17 @@ receipt, не распаковывать и не анализировать ZIP 
 `resultZip`, затем STOP. Не вызывать `postman_result_workspace_register` и не создавать
 Result Workspace автоматически.
 
+После `ASSISTANT_COMPLETED_NO_ARTIFACT` или `ARTIFACT_REJECTED` Л1 получает terminal
+`assistantText`. Для rejection дополнительно доступны `validationCode` и `validationMessage`.
+Л1 может: (a) вернуть terminal пользователю, если Ч1 задал вопрос, запросил данные/выбор или
+сообщил настоящий blocker; либо (b) если текст однозначно означает промежуточный progress,
+создать новый canonical REQ с `-ChatRequestId <previous REQ>`. Для no-artifact использовать
+короткий intent: `Продолжи выполнение предыдущей задачи с того места, где остановился. Не
+начинай заново. Доведи исходную задачу до полного результата и выдай итоговый ZIP.` Для
+`ARTIFACT_REJECTED` добавить только exact `validationCode`/`validationMessage` и просьбу
+пересобрать итоговый ZIP, не начиная задачу заново. Не цитировать весь старый ответ обратно:
+он уже находится в том же conversation. Не более трёх continuation для одного root request.
+
 `resume_request.ps1`, `integrate_result.ps1` и стадии PREPARE/TEST/PUBLISH не удаляются.
 Они описаны ниже только как legacy/manual explicit finalization для уже существующего
 durable результата; они не являются частью normal `@Postman` flow.
@@ -588,7 +622,7 @@ download
 SHA-256
 безопасную ZIP-структуру и paths
 archive limits / ZIP-bomb protection
-отсутствие explicit conflicting string requestId в optional manifest
+минимальную безопасную ZIP-структуру без опасных traversal/absolute/symlink entries
 durable storage
 ```
 
@@ -620,12 +654,14 @@ REQ. `job_output` со статусом `running` не является failure 
 разрешено снова читать только этот же job через `job_output`; новый Postman/REQ запрещён.
 
 Если background job имеет `failed`, `killed` или non-zero exit, либо bridge вернул
-`ok=false`/invalid JSON — STOP.
+`ok=false`/invalid JSON — STOP. `ASSISTANT_COMPLETED_NO_ARTIFACT` и `ARTIFACT_REJECTED`
+возвращаются с `ok=true`, поэтому являются handoff, а не failure.
 
 Сохранить исходный exact REQ и exact jobId.
 
-Не создавать автоматически второй REQ.
-Не повторять Send.
+Не создавать второй REQ до terminal handoff. После двух разрешённых non-durable terminal
+outcomes continuation возможен только по правилу разделов 7 и 9 и всегда как новый REQ.
+Не повторять Send того же REQ.
 Не открывать ChatGPT вручную.
 Не брать визуально существующий ZIP.
 Не использовать старый Harness.
@@ -645,7 +681,8 @@ error/reason
 последнюю доказанную transport-фазу
 ```
 
-Новая отправка возможна только после нового пользовательского сообщения с exact `@Postman` trigger.
+После настоящего transport failure новая отправка возможна только после нового пользовательского
+сообщения с exact `@Postman` trigger. Non-durable terminal handoff не является transport failure.
 
 ## 12. BrowserSmoke
 
@@ -894,17 +931,17 @@ terminal state
 3. Без exact trigger не загружать `delegate-via-postman`, не создавать REQ, не вызывать Direct Postman, не использовать другие Postman transport и не обращаться к Ч1.
 4. После trigger Л1 не интерпретирует и не расширяет payload до отправки Ч1.
 5. После удаления только `@Postman` + separator весь оставшийся текст передаётся verbatim; previous-context augmentation запрещён.
-6. Один logical request → один REQ.
+6. Один root request может состоять из исходного REQ и максимум трёх continuation REQ; каждый REQ имеет отдельный immutable identity.
 7. После начала Direct Postman invocation REQ immutable.
 8. Production transport — только `<current workspace>\postman\direct\postman.ps1`.
 9. `postman_async_send` и Cordis path не являются production transport.
 10. BrowserSmoke не является normal preflight.
 11. Chrome/ChatGPT/Send/download принадлежат Direct Postman, а не Л1.
 12. После возможной отправки automatic resend запрещён.
-13. Только exact `RESULT_DURABLE` является успешным transport result.
+13. `RESULT_DURABLE` — единственный durable ZIP success; `ASSISTANT_COMPLETED_NO_ARTIFACT` и `ARTIFACT_REJECTED` — успешные terminal handoff без durable artifact.
 14. Не создавать implementation branch только ради transport до результата.
 15. Пользовательский dirty worktree не очищать и не переписывать.
-16. В normal flow Л1 не интерпретирует, не применяет и не изменяет результат Ч1.
+16. В normal flow Л1 не анализирует durable ZIP; только для двух non-durable terminal handoff она может читать `assistantText`/validation reason ради решения о continuation.
 17. После RESULT_DURABLE normal flow сообщает exact requestId/resultZip и сразу останавливается.
 18. `resume_request.ps1`, PREPARE/TEST/PUBLISH и `integrate_result.ps1` — только legacy/manual explicit finalization.
 19. Normal flow не создаёт implementation worktree/branch/commit/PR и не распаковывает ZIP.
@@ -915,7 +952,7 @@ terminal state
 24. `RESULT_DIAGNOSTIC_ONLY` не является implementation success и не разрешает automatic resend.
 25. Resume/PREPARE/TEST/PUBLISH не создают новый Postman REQ и не обращаются повторно к Ч1.
 26. `changedFiles`/retained worktree показываются только при explicit manual PUBLISHED finalization, не в normal transport report.
-27. Нет validated correlated artifact → нет успешного Postman результата.
+27. Нет validated correlated artifact → нет `RESULT_DURABLE`; это не запрещает `ASSISTANT_COMPLETED_NO_ARTIFACT` или `ARTIFACT_REJECTED` terminal handoff.
 28. После terminal RESULT_DURABLE normal flow не выполняет presentation-side effects.
 29. `@Postman --chat <old REQ> <intent>` открывает только сохранённый exact conversation URL; UI search fallback отсутствует.
 30. Старый REQ является только conversation reference; новая отправка всегда получает новый canonical REQ.
@@ -924,15 +961,17 @@ terminal state
 33. `manifest.json`, `protocolVersion`, `repository`, `baseCommit`, `resultType`, `patch` и `files` не являются normal transport hard gate; только explicit conflicting string `requestId` в optional manifest остаётся reject.
 34. Luna-side normal invocation не выполняет result-root `New-Item`, `Set-Content`, `Out-File`, redirection/write probe, `Remove-Item` probe или другие файловые write-preflight операции; этим владеет Direct Postman внутри bridge.
 35. Tool-level shell failure до получения `jobId`, например `spawn EPERM`, означает `POSTMAN_INVOCATION_NOT_STARTED`: не читать старые/latest REQ states, не выполнять recovery, не повторять invocation и остановиться с сообщением, что Send не происходил.
-36. Normal invocation создаёт ровно один background `tools.pwsh` job и сохраняет exact `jobId`.
+36. Каждый REQ normal orchestration создаёт ровно один background `tools.pwsh` job и сохраняет exact `jobId`.
 37. `job_output` timeout/`running` оставляет exact job живым и никогда не разрешает второй REQ/Send.
 38. Normal orchestration передаёт verbatim payload через UTF-8 Base64; `-Task` остаётся совместимым ручным wrapper-входом.
 
 ## Result presentation вне normal @Postman
 
 Normal `@Postman` transport не вызывает `postman_result_workspace_register`, не создаёт
-и не удаляет Harness Workspace. Его terminal boundary — exact `RESULT_DURABLE`,
+и не удаляет Harness Workspace. Durable presentation boundary — exact `RESULT_DURABLE`,
 после которого Luna сообщает exact `requestId` и `resultZip` и останавливается.
+`ASSISTANT_COMPLETED_NO_ARTIFACT` и `ARTIFACT_REJECTED` являются terminal handoff для
+решения Л1 и сами по себе не создают Result Workspace.
 
 Если в будущем потребуется отдельное пользовательское представление durable result,
 оно должно запускаться только отдельным explicit workflow и не является частью Postman

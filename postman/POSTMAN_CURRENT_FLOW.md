@@ -250,10 +250,11 @@ exact proven user turn
 ```
 
 Старые assistant turns из других REQ и глобальный поиск по body не используются.
-Разрешённые assistant turns текущего REQ (исходный prompt и доказанно отправленные reminders)
-не считаются навсегда закрытыми до `RESULT_DURABLE`: завершённый turn без exact ZIP
-повторно проверяется раз в 10 секунд. Если его текст изменился, observer получает свежий
-completion proof перед новой artifact-проверкой.
+Разрешённый assistant turn текущего REQ после completion проверяется на exact ZIP. Если ZIP
+не найден, через 10 секунд выполняется одна свежая контрольная проверка того же exact turn.
+Если ZIP всё ещё отсутствует, current REQ завершается `ASSISTANT_COMPLETED_NO_ARTIFACT` и
+возвращает полный assistant text локальному агенту. Если текст изменился, требуется свежий
+completion proof и 10-секундное окно начинается заново.
 
 Во время generation observer опрашивает страницу раз в 3 секунды. Assistant turn должен
 завершить generation и стабилизировать текст до artifact detection.
@@ -276,11 +277,11 @@ connection-interruption recovery или exact chat ещё не доказан к
 восстановления и не отправляется вслепую. После `RESULT_DURABLE` оставшиеся reminders
 отменяются. Reload/recovery не сдвигает расписание и не перезапускает 45-минутный отсчёт.
 
-Если ZIP скачан, но проверка содержимого возвращает `ARTIFACT_INVALID`, это не завершает
-REQ: временный `.staging/<REQ>` удаляется, чтобы не создать `RESULT_STORE_CONFLICT`, и
-процесс ждёт ближайшего запланированного напоминания для новой попытки P5/P6. Ошибки
-внутреннего валидатора, записи, доверенной аттестации, скачивания или неопределённого
-состояния остаются немедленными ошибками.
+Если ZIP скачан, но minimal transport validation его отклоняет, staging удаляется и current
+REQ немедленно завершается `ARTIFACT_REJECTED`. Terminal JSON содержит assistant text,
+`validationCode` и `validationMessage`; следующий action выбирает локальная LLM. Сам Postman
+не ждёт следующего reminder после уже завершённого assistant-turn. Ошибки самого validator
+infrastructure, записи, скачивания или неопределённого transport состояния остаются failure.
 
 Каждое напоминание отправляется в тот же exact conversation и начинается так:
 
@@ -348,32 +349,19 @@ exact correlated control
 
 ## 14. Transport validator
 
-Normal hard gates:
+Validator намеренно минимальный. Hard gates:
 
 - exact expected filename/correlation;
 - readable non-empty ZIP;
-- central/local header integrity и CRC;
-- path traversal / absolute / drive / UNC / ADS rejection;
-- symlink/reparse/special entry rejection;
-- duplicate/case/Unicode collision rejection;
-- archive entry/count/size/ratio limits;
-- ZIP-bomb protection;
-- actual SHA-256;
-- optional manifest string `requestId` не должен конфликтовать с trusted current REQ.
+- local/central header + CRC integrity;
+- `..` traversal, absolute, Windows drive и UNC path rejection;
+- symlink rejection;
+- простые entry/count/compressed/uncompressed/ratio limits;
+- actual SHA-256.
 
-Не являются normal hard gates:
-
-```text
-protocolVersion
-repository
-baseCommit
-resultType
-patch/files schema
-allowedPaths/forbiddenPaths
-unified diff semantics
-```
-
-ZIP не извлекается поверх repository.
+Не являются transport gates: manifest semantics, repository/baseCommit/resultType,
+patch/files schema, Unicode/case collision policy и содержательная корректность результата.
+Эти проверки принадлежат downstream агенту, если они вообще нужны конкретной задаче.
 
 ## 15. Optional manifest
 

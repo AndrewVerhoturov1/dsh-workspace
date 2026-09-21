@@ -118,6 +118,7 @@ def completed_observer() -> dict:
         "details": {
             "chatUrl": CHAT_URL,
             "assistantIndex": 1,
+            "assistantText": "Работа ещё не завершена, ZIP пока не готов.",
             "assistantTextSha256": "a" * 64,
         },
     }
@@ -180,10 +181,10 @@ class WebWorkerResultRecoveryTests(unittest.TestCase):
             patch.object(browser_recovery, "chat_ready_snapshot", return_value=ready_chat()),
         )
 
-    def test_due_reminder_runs_final_result_check_and_is_cancelled_when_zip_appears(self):
+    def test_ten_second_recheck_captures_zip_before_no_artifact_terminal(self):
         clock = FakeClock()
         page = FakePage()
-        detector_calls = [missing_artifact(), missing_artifact(), found_artifact()]
+        detector_calls = [missing_artifact(), found_artifact()]
 
         with tempfile.TemporaryDirectory() as root:
             bridge = self.make_bridge(root, clock)
@@ -204,9 +205,39 @@ class WebWorkerResultRecoveryTests(unittest.TestCase):
                 )
 
         self.assertTrue(result["ok"], result)
-        self.assertEqual(clock.monotonic(), 20.0)
+        self.assertEqual(result["code"], web_worker_bridge.RESULT_DURABLE)
+        self.assertEqual(clock.monotonic(), 10.0)
         send_reminder.assert_not_called()
         self.assertEqual(result["details"]["reminders"], [])
+
+    def test_completed_text_without_zip_returns_terminal_after_ten_second_recheck(self):
+        clock = FakeClock()
+        page = FakePage()
+
+        with tempfile.TemporaryDirectory() as root:
+            bridge = self.make_bridge(root, clock)
+            patches = self.common_patches([missing_artifact(), missing_artifact()])
+            with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patch.object(
+                reminder_policy, "submit_reminder"
+            ) as send_reminder:
+                result = bridge.run_request(
+                    REQ,
+                    task_url=TASK_URL,
+                    prompt=PROMPT,
+                    expected_filename=FILENAME,
+                    expected_request={},
+                    observer_timeout_ms=60_000,
+                    reminder_interval_ms=20_000,
+                    max_reminders=1,
+                    playwright_factory=FakeFactory(page),
+                )
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["code"], web_worker_bridge.ASSISTANT_COMPLETED_NO_ARTIFACT)
+        self.assertEqual(clock.monotonic(), 10.0)
+        self.assertEqual(result["details"]["assistantText"], "Работа ещё не завершена, ZIP пока не готов.")
+        self.assertEqual(result["details"]["expectedFilename"], FILENAME)
+        send_reminder.assert_not_called()
 
     def test_connection_interruption_recovers_same_chat_before_any_reminder(self):
         clock = FakeClock()
@@ -254,6 +285,53 @@ class WebWorkerResultRecoveryTests(unittest.TestCase):
         self.assertIs(recover.call_args.args[0], page)
         self.assertEqual(recover.call_args.args[1], CHAT_URL)
         self.assertEqual(recover.call_args.args[2], PROMPT)
+        send_reminder.assert_not_called()
+
+    def test_completed_turn_grace_blocks_due_reminder_until_no_artifact_terminal(self):
+        clock = FakeClock()
+        page = FakePage()
+        observe_calls = 0
+
+        def observe(_page, _prompt, _chat_url, *, timeout_ms, **_kwargs):
+            nonlocal observe_calls
+            observe_calls += 1
+            if observe_calls == 1:
+                clock.sleep(timeout_ms / 1000.0)
+                return {
+                    "ok": False,
+                    "code": browser_observer.ASSISTANT_TURN_TIMEOUT,
+                    "recoverable": True,
+                    "transitions": [],
+                    "details": {"chatUrl": CHAT_URL},
+                }
+            clock.sleep(5.0)
+            return completed_observer()
+
+        with tempfile.TemporaryDirectory() as root:
+            bridge = self.make_bridge(root, clock)
+            with (
+                patch.object(browser_submit, "submit_fresh_prompt", return_value=confirmed_submit(PROMPT)),
+                patch.object(browser_observer, "observe_next_assistant", side_effect=observe),
+                patch.object(browser_observer, "connection_interrupted", return_value=(False, {})),
+                patch.object(artifact_detector, "detect_artifact_dom", return_value=missing_artifact()),
+                patch.object(browser_recovery, "chat_ready_snapshot", return_value=ready_chat()),
+                patch.object(reminder_policy, "submit_reminder") as send_reminder,
+            ):
+                result = bridge.run_request(
+                    REQ,
+                    task_url=TASK_URL,
+                    prompt=PROMPT,
+                    expected_filename=FILENAME,
+                    expected_request={},
+                    observer_timeout_ms=60_000,
+                    reminder_interval_ms=20_000,
+                    max_reminders=1,
+                    playwright_factory=FakeFactory(page),
+                )
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["code"], web_worker_bridge.ASSISTANT_COMPLETED_NO_ARTIFACT)
+        self.assertEqual(clock.monotonic(), 25.0)
         send_reminder.assert_not_called()
 
 

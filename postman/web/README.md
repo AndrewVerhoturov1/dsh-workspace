@@ -127,11 +127,12 @@ Normal hard gates:
 - readable non-empty ZIP;
 - central/local header consistency и CRC;
 - path traversal / absolute / drive / UNC / ADS rejection;
-- symlink/reparse/special entry rejection;
-- duplicate/case/Unicode collision rejection;
-- entry/count/compressed/uncompressed/ratio limits;
-- SHA-256;
-- optional manifest string `requestId` не должен конфликтовать с trusted current REQ.
+- path traversal / absolute / Windows drive / UNC rejection;
+- symlink rejection;
+- простые entry/count/compressed/uncompressed/ratio limits;
+- CRC/local-header integrity и SHA-256.
+
+`manifest.json` полностью informational для transport validator и не является hard gate.
 
 Не являются normal transport gates:
 
@@ -152,22 +153,20 @@ unified diff semantics
 
 Координирует browser pipeline для одного trusted REQ и сохраняет monotonic request state.
 
-Основные состояния:
+Основные состояния включают три terminal outcomes:
 
 ```text
-ACCEPTED
-→ WEB_STARTING
-→ PROMPT_SENT
-→ WAITING_ASSISTANT
-→ ARTIFACT_FOUND
-→ RESULT_DURABLE
+RESULT_DURABLE
+ASSISTANT_COMPLETED_NO_ARTIFACT
+ARTIFACT_REJECTED
 ```
 
 Bridge не является repository applicator и не принимает model-provided routing authority.
-Пока `RESULT_DURABLE` не получен, уже доказанные assistant turns остаются наблюдаемыми:
-после завершённого ответа без ZIP они повторно проверяются раз в 10 секунд. Перед каждым
-reminder выполняется обязательная последняя проверка всех разрешённых turns; если exact
-RESULT уже появился, reminder отменяется. Во время recovery reminders блокируются.
+Завершённый assistant-turn без ZIP перепроверяется через 10 секунд; если ZIP всё ещё отсутствует,
+bridge немедленно возвращает `ASSISTANT_COMPLETED_NO_ARTIFACT` вместе с assistant text. ZIP,
+который не прошёл minimal transport validation, немедленно возвращает `ARTIFACT_REJECTED` с
+точной причиной. Reminders 10/20/30 сохраняются для ещё не завершённого assistant-turn.
+Во время recovery reminders блокируются.
 
 ## Fresh и continuation
 
