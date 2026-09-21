@@ -115,11 +115,12 @@ AGENTS.md
 
 ## Реестр
 
-На момент введения системы зарегистрированных подпроектов нет.
+Зарегистрированные подпроекты:
 
 | Подпроект | ID | Статус | Обновлён |
 |---|---|---|---|
-| Agents Nods by Andrew | agents-nods-by-andrew | active | 2026-09-20 |
+| Agents Nods by Andrew | agents-nods-by-andrew | active | 2026-09-21 |
+| Postman | postman | active | 2026-09-21 |
 
 ## Принцип v1
 
