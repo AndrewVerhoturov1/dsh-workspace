@@ -530,6 +530,13 @@ class WebWorkerBridge:
                         "expectedFilename": expected_filename,
                     }
 
+                def observer_proof_sha(proof: object) -> str:
+                    if not isinstance(proof, dict):
+                        return ""
+                    details = proof.get("details") if isinstance(proof.get("details"), dict) else {}
+                    value = details.get("assistantTextSha256")
+                    return value if isinstance(value, str) else ""
+
                 def inspect_watch(watch: dict[str, Any]) -> dict[str, Any]:
                     nonlocal last_artifact_code, terminal_result
                     completed = watch.get("proof")
@@ -537,10 +544,12 @@ class WebWorkerBridge:
                         return {"kind": "no_result"}
 
                     reproofed = False
+                    proof_changed = False
                     no_artifact_since = watch.get("noArtifactSince")
                     if no_artifact_since is not None and (
                         self.monotonic() - float(no_artifact_since) >= _RESULT_RECHECK_INTERVAL_MS / 1000.0
                     ):
+                        previous_proof = watch.get("proof")
                         watch["proof"] = None
                         observed = observe_watch(watch, min(_REPROVE_TIMEOUT_MIN_MS, remaining_ms()))
                         if observed["kind"] in {"fatal", "interrupted"}:
@@ -551,6 +560,10 @@ class WebWorkerBridge:
                         if not isinstance(completed, dict):
                             return {"kind": "no_result"}
                         reproofed = True
+                        proof_changed = (
+                            bool(observer_proof_sha(previous_proof))
+                            and observer_proof_sha(previous_proof) != observer_proof_sha(completed)
+                        )
 
                     detected = artifact_detector.detect_artifact_dom(
                         page,
@@ -675,6 +688,9 @@ class WebWorkerBridge:
                     if artifact_code in _REMINDER_ELIGIBLE_ARTIFACT_CODES:
                         now = self.monotonic()
                         no_artifact_since = watch.get("noArtifactSince")
+                        if proof_changed:
+                            watch["noArtifactSince"] = now
+                            return {"kind": "no_result"}
                         if no_artifact_since is None and not reproofed:
                             watch["noArtifactSince"] = now
                             return {"kind": "no_result"}

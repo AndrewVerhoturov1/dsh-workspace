@@ -239,6 +239,58 @@ class WebWorkerResultRecoveryTests(unittest.TestCase):
         self.assertEqual(result["details"]["expectedFilename"], FILENAME)
         send_reminder.assert_not_called()
 
+    def test_changed_completed_proof_gets_a_new_grace_window_before_terminal(self):
+        clock = FakeClock()
+        page = FakePage()
+        observe_calls = 0
+        observed_shas = []
+
+        def completed_with(text: str, sha: str) -> dict:
+            result = completed_observer()
+            result["details"]["assistantText"] = text
+            result["details"]["assistantTextSha256"] = sha
+            return result
+
+        def observe(_page, _prompt, _chat_url, *, timeout_ms, **_kwargs):
+            nonlocal observe_calls
+            observe_calls += 1
+            if observe_calls == 1:
+                return completed_with("Ответ A", "a" * 64)
+            return completed_with("Ответ B", "b" * 64)
+
+        def detect(*_args, **kwargs):
+            proof = kwargs["completed_observer_result"]
+            observed_shas.append(proof["details"]["assistantTextSha256"])
+            return missing_artifact()
+
+        with tempfile.TemporaryDirectory() as root:
+            bridge = self.make_bridge(root, clock)
+            with (
+                patch.object(browser_submit, "submit_fresh_prompt", return_value=confirmed_submit(PROMPT)),
+                patch.object(browser_observer, "observe_next_assistant", side_effect=observe),
+                patch.object(browser_observer, "connection_interrupted", return_value=(False, {})),
+                patch.object(artifact_detector, "detect_artifact_dom", side_effect=detect),
+                patch.object(browser_recovery, "chat_ready_snapshot", return_value=ready_chat()),
+                patch.object(reminder_policy, "submit_reminder") as send_reminder,
+            ):
+                result = bridge.run_request(
+                    REQ,
+                    task_url=TASK_URL,
+                    prompt=PROMPT,
+                    expected_filename=FILENAME,
+                    expected_request={},
+                    observer_timeout_ms=60_000,
+                    reminder_interval_ms=20_000,
+                    max_reminders=1,
+                    playwright_factory=FakeFactory(page),
+                )
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["code"], web_worker_bridge.ASSISTANT_COMPLETED_NO_ARTIFACT)
+        self.assertEqual(clock.monotonic(), 20.0)
+        self.assertEqual(observe_calls, 3)
+        self.assertEqual(observed_shas, ["a" * 64, "b" * 64, "b" * 64])
+        send_reminder.assert_not_called()
     def test_connection_interruption_recovers_same_chat_before_any_reminder(self):
         clock = FakeClock()
         page = FakePage()
