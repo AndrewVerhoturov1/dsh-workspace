@@ -64,8 +64,10 @@ Normal `@Postman` flow не применяет ZIP к repository, не запу�
 
 ## Правила репозитория
 
-- [`REPO_POLICY.md`](REPO_POLICY.md) — Git/GitHub policy и границы изменений.
-- [`system/implementation-package-workflow.md`](system/implementation-package-workflow.md) — отдельный downstream workflow для явного применения implementation package.
+- [`REPO_POLICY.md`](REPO_POLICY.md) — Git/GitHub policy.
+- [`system/implementation-package-workflow.md`](system/implementation-package-workflow.md) — полный lifecycle применения implementation package.
+- [`system/implementation-package-authoring.md`](system/implementation-package-authoring.md) — правила для внешней модели, которая создаёт ZIP.
+- Обычный package декларативный: `manifest.json`, `changes.patch`, `README.md`, `TEST_PLAN.md`; он не содержит собственного applicator/diagnostics framework.
 - [`docs/subprojects/INDEX.md`](docs/subprojects/INDEX.md) — упрощённая система долгоживущих подпроектов и их контекста.
 
 ## Codex OAuth

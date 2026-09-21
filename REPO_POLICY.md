@@ -7,13 +7,19 @@
 ## 0. Канонический workflow implementation-пакетов
 
 Когда внешняя модель готовит ZIP или другой implementation package для внедрения
-локальным агентом, обязательным источником правил является [Implementation
-Package Workflow](system/implementation-package-workflow.md).
-Агент обязан открыть этот документ **до подготовки или применения ZIP**.
+локальным агентом, обязательными источниками правил являются [Implementation
+Package Workflow](system/implementation-package-workflow.md) и [Implementation
+Package Authoring Contract](system/implementation-package-authoring.md). Внешняя модель
+обязана соблюдать оба документа **до подготовки package**, а локальный агент — до его применения.
 
 После bootstrap центрального runner-а обычный implementation package является
 декларативным: внешняя модель готовит решение, `manifest.json`, `changes.patch` и только
 нужные targeted tests. Она не создаёт новый applicator/diagnostics framework для каждого ZIP.
+
+Новый repository-owned файл не должен оставаться Git-ignored. Если нужный путь попадает под
+`.gitignore`, package обязан в том же `changes.patch` добавить минимальное явное исключение
+для этого пути. `git add -f` не является допустимым обычным решением; ignored file, созданный
+patch, — реальный hard FAIL.
 
 Канонический applicator находится в repository:
 
@@ -27,7 +33,8 @@ system/implementation_package_runner.py
 - локальный агент создаёт отдельный clean implementation branch/worktree и запускает
   центральный runner;
 - hard FAIL ограничены реальными рисками: wrong repo/protected worktree, dirty target,
-  unsafe local-data path, реально неприменимый patch или failing targeted test;
+  unsafe local-data path, реально неприменимый patch, patch-created ignored file или failing
+  targeted test;
 - сдвиг `preview`, exact source SHA, exact changed-file inventory и `git diff --check`
   сами по себе не являются blocker, если patch применяется и целевые тесты проходят;
 - после PASS локальный агент выполняет commit/push/PR в `preview` по обычной policy;
