@@ -137,6 +137,8 @@ $jsonText = & $bridge `
 Правила:
 
 - `$oldRequestId` — только lookup key.
+- Ручной пользовательский `--ChatRequestId` всегда разрешён независимо от сохранённого `continuationIndex`.
+- Automatic continuation после non-durable terminal handoff должна передавать `-AutomaticContinuation`; только этот режим наследует цепочку и ограничивается тремя continuation.
 - Каждая continuation создаёт новый canonical REQ.
 - Direct Postman разрешает exact сохранённый `conversationUrl`.
 - Worker открывает exact `/c/<conversation-id>` и должен доказать, что это тот же conversation.

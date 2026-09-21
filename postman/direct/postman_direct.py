@@ -513,6 +513,7 @@ class DirectPostman:
         cdp_url: str = bootstrap.DEFAULT_CDP_URL,
         extra_allowed: Iterable[str] = (),
         extra_forbidden: Iterable[str] = (),
+        automatic_continuation: bool = False,
     ) -> dict[str, Any]:
         request_identity.assert_canonical_request_id(request_id)
         if self.state_path(request_id).exists():
@@ -523,6 +524,11 @@ class DirectPostman:
             )
 
         chat_ref = None
+        if automatic_continuation and not chat_request_id:
+            raise DirectPostmanError(
+                "DIRECT_INVALID_CONTINUATION",
+                "automatic continuation requires --chat-request-id",
+            )
         if chat_request_id:
             try:
                 chat_ref = chat_reference.resolve_chat_reference(
@@ -532,7 +538,7 @@ class DirectPostman:
                 )
             except chat_reference.ChatReferenceError as exc:
                 raise DirectPostmanError(exc.code, str(exc), details=exc.details) from exc
-            if int(getattr(chat_ref, "continuation_index", 0)) >= 3:
+            if automatic_continuation and int(getattr(chat_ref, "continuation_index", 0)) >= 3:
                 raise DirectPostmanError(
                     "DIRECT_CONTINUATION_LIMIT_REACHED",
                     "automatic Postman continuation limit reached for this root request",
@@ -554,12 +560,19 @@ class DirectPostman:
             ) from exc
 
         if chat_ref is not None:
-            chain_fields = {
-                "continuedFromRequestId": chat_ref.request_id,
-                "parentRequestId": chat_ref.request_id,
-                "rootRequestId": getattr(chat_ref, "root_request_id", chat_ref.request_id),
-                "continuationIndex": int(getattr(chat_ref, "continuation_index", 0)) + 1,
-            }
+            if automatic_continuation:
+                chain_fields = {
+                    "continuedFromRequestId": chat_ref.request_id,
+                    "parentRequestId": chat_ref.request_id,
+                    "rootRequestId": getattr(chat_ref, "root_request_id", chat_ref.request_id),
+                    "continuationIndex": int(getattr(chat_ref, "continuation_index", 0)) + 1,
+                }
+            else:
+                chain_fields = {
+                    "parentRequestId": None,
+                    "rootRequestId": request_id,
+                    "continuationIndex": 0,
+                }
             initial_chat_fields = {
                 "conversationUrl": chat_ref.conversation_url,
                 "conversationId": chat_ref.conversation_id,
@@ -790,6 +803,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--result-root")
     parser.add_argument("--cdp-url", default=bootstrap.DEFAULT_CDP_URL)
     parser.add_argument("--chat-request-id")
+    parser.add_argument("--automatic-continuation", action="store_true", help="Apply the automatic continuation chain limit")
     parser.add_argument("--allow-path", action="append", default=[])
     parser.add_argument("--forbid-path", action="append", default=[])
     return parser
@@ -827,6 +841,7 @@ def main(argv: list[str] | None = None) -> int:
                 request_id=args.request_id,
                 task=task,
                 chat_request_id=args.chat_request_id,
+                automatic_continuation=args.automatic_continuation,
                 cdp_url=args.cdp_url,
                 extra_allowed=args.allow_path,
                 extra_forbidden=args.forbid_path,

@@ -380,7 +380,7 @@ process.stdout.write(JSON.stringify({
             "rootRequestId",
         ):
             self.assertIn(marker, self.skill)
-        self.assertRegex(self.skill, r"не более\s+трёх continuation")
+        self.assertIn("ограничивается тремя continuation", self.skill)
 
 if __name__ == "__main__":
     unittest.main()

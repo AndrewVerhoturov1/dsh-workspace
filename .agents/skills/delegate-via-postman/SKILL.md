@@ -370,8 +370,12 @@ REQ автоматически и не повторять Send.
 До первого terminal result новый REQ автоматически создавать нельзя. Исключение:
 после `ASSISTANT_COMPLETED_NO_ARTIFACT` или `ARTIFACT_REJECTED` Л1 может создать новый
 canonical continuation REQ в том же conversation, если из terminal текста однозначно
-следует, что исходную задачу можно продолжить без решения пользователя. Разрешено не более
-трёх continuation REQ для одного `rootRequestId`; `continuationIndex` 0 — исходный REQ.
+следует, что исходную задачу можно продолжить без решения пользователя. Такой запуск обязан
+передать explicit transport flag `-AutomaticContinuation`; режим нельзя определять по тексту
+prompt. Только automatic continuation наследует `rootRequestId`, увеличивает
+`continuationIndex` и ограничивается тремя continuation REQ для одного root request.
+Пользовательский `@Postman --chat <REQ> <intent>` без этого флага всегда разрешён и использует
+старый REQ только как conversation reference; его `continuationIndex` не ограничивается.
 
 ## 8. Единственный production-вызов
 
@@ -417,7 +421,7 @@ const started = await tools.pwsh({
 return { requestId, jobId: started.jobId };
 ```
 
-Для continuation того же conversation добавить только exact transport reference:
+Для ручного пользовательского continuation того же conversation добавить только exact transport reference (без `-AutomaticContinuation`):
 
 ```typescript
 const chatRequestId = "REQ_...";
@@ -430,7 +434,14 @@ const command = [
 ```
 
 `requestId` — новый REQ этой операции. `chatRequestId` — старый REQ, по которому
-Direct Postman находит сохранённый `conversationUrl`.
+Direct Postman находит сохранённый `conversationUrl`. Для automatic continuation после
+разрешённого non-durable terminal handoff добавить к массиву команд только отдельный флаг:
+
+```typescript
+  `-AutomaticContinuation`,
+```
+
+Этот флаг является transport mode и не выводится из текста prompt.
 
 Первый `run_code` только запускает background job и возвращает
 `{requestId, jobId}`. Не ждать Postman в этой же ячейке.
