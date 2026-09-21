@@ -22,6 +22,7 @@ import artifact_detector
 import artifact_download
 import browser_bootstrap
 import browser_observer
+import browser_recovery
 import browser_submit
 import reminder_policy
 import request_identity
@@ -59,7 +60,10 @@ _NONTERMINAL_OBSERVER_CODES = {
     browser_observer.ASSISTANT_TURN_TIMEOUT,
     browser_observer.ASSISTANT_NOT_STARTED,
     browser_observer.ASSISTANT_STATE_UNKNOWN,
+    browser_observer.USER_TURN_ANCHOR_MISSING,
 }
+_RESULT_RECHECK_INTERVAL_MS = 10_000
+_REPROVE_TIMEOUT_MIN_MS = 6_000
 
 
 def default_postman_root() -> Path:
@@ -413,9 +417,18 @@ class WebWorkerBridge:
                 deadline = started_at + observer_timeout_ms / 1000.0
                 reminder_records: list[dict[str, Any]] = []
                 reminder_index = 0
-                current_prompt = prompt
-                current_submit = submitted
-                current_turn_processed = False
+                watched_turns: list[dict[str, Any]] = [
+                    {
+                        "prompt": prompt,
+                        "submit": submitted,
+                        "proof": None,
+                        "everProved": False,
+                        "artifactRejected": False,
+                    }
+                ]
+                next_result_recheck = started_at + _RESULT_RECHECK_INTERVAL_MS / 1000.0
+                recovery_exhausted = False
+                last_recovery: dict[str, Any] | None = None
                 last_observer_code = ""
                 last_artifact_code = ""
                 reminder_policy_record = {
@@ -423,10 +436,231 @@ class WebWorkerBridge:
                     "maxReminders": max_reminders,
                     "overallTimeoutMs": observer_timeout_ms,
                 }
+                recovery_policy_record = {
+                    "generationPollMs": browser_observer.DEFAULT_POLL_MS,
+                    "resultRecheckMs": _RESULT_RECHECK_INTERVAL_MS,
+                    "reloadLoadTimeoutMs": browser_recovery.DEFAULT_LOAD_TIMEOUT_MS,
+                    "reloadSettleMs": browser_recovery.DEFAULT_SETTLE_MS,
+                    "reloadMaxAttempts": browser_recovery.DEFAULT_MAX_RELOAD_ATTEMPTS,
+                }
+
+                def remaining_ms() -> int:
+                    return max(0, int((deadline - self.monotonic()) * 1000.0))
+
+                def clear_observer_proofs() -> None:
+                    for watch in watched_turns:
+                        if not watch.get("artifactRejected"):
+                            watch["proof"] = None
+
+                def waiting_state() -> None:
+                    fields: dict[str, Any] = {
+                        "reminderPolicy": reminder_policy_record,
+                        "browserRecoveryPolicy": recovery_policy_record,
+                        "reminders": reminder_records,
+                        "lastObserverCode": last_observer_code,
+                        "lastArtifactCode": last_artifact_code,
+                    }
+                    if last_recovery is not None:
+                        fields["lastBrowserRecovery"] = last_recovery
+                    self._write_state(request, WAITING_ASSISTANT, **fields)
+
+                def observe_watch(watch: dict[str, Any], timeout_for_observer_ms: int) -> dict[str, Any]:
+                    nonlocal last_observer_code
+                    if watch.get("artifactRejected"):
+                        return {"kind": "no_result"}
+                    if timeout_for_observer_ms <= 0:
+                        return {"kind": "pending"}
+                    completed = browser_observer.observe_next_assistant(
+                        page,
+                        str(watch["prompt"]),
+                        chat_url,
+                        timeout_ms=timeout_for_observer_ms,
+                        stable_ms=stable_ms,
+                        sleep=self.sleep,
+                        monotonic=self.monotonic,
+                    )
+                    completed = _attach_submit_proof(
+                        completed,
+                        prompt=str(watch["prompt"]),
+                        submitted=watch["submit"],
+                    )
+                    last_observer_code = str(completed.get("code", ""))
+                    if completed.get("code") == browser_observer.ASSISTANT_CONNECTION_INTERRUPTED:
+                        return {"kind": "interrupted", "details": completed}
+                    if completed.get("ok"):
+                        watch["proof"] = completed
+                        watch["everProved"] = True
+                        return {"kind": "proof"}
+                    if completed.get("code") in _NONTERMINAL_OBSERVER_CODES:
+                        return {"kind": "pending"}
+                    return {
+                        "kind": "fatal",
+                        "result": self._fail(
+                            request,
+                            completed.get("code", "observer_failed"),
+                            details=completed,
+                        ),
+                    }
+
+                def inspect_watch(watch: dict[str, Any]) -> dict[str, Any]:
+                    nonlocal last_artifact_code, terminal_result
+                    completed = watch.get("proof")
+                    if watch.get("artifactRejected") or not isinstance(completed, dict):
+                        return {"kind": "no_result"}
+
+                    detected = artifact_detector.detect_artifact_dom(
+                        page,
+                        expected_prompt=str(watch["prompt"]),
+                        expected_chat_url=chat_url,
+                        request_id=request_id,
+                        expected_filename=expected_filename,
+                        completed_observer_result=completed,
+                    )
+                    last_artifact_code = str(detected.get("code", ""))
+                    if detected.get("ok"):
+                        self._write_state(
+                            request,
+                            ARTIFACT_FOUND,
+                            observerProof=completed,
+                            artifactProof=detected,
+                            reminderPolicy=reminder_policy_record,
+                            browserRecoveryPolicy=recovery_policy_record,
+                            reminders=reminder_records,
+                        )
+                        durable = artifact_download.download_validated_artifact(
+                            page,
+                            expected_prompt=str(watch["prompt"]),
+                            expected_chat_url=chat_url,
+                            request_id=request_id,
+                            expected_filename=expected_filename,
+                            completed_observer_result=completed,
+                            artifact_dom_result=detected,
+                            expected_request=expected_request,
+                            result_root=self.result_root,
+                            browser_download_dir=browser_download_dir,
+                            download_timeout_ms=download_timeout_ms,
+                            click_timeout_ms=click_timeout_ms,
+                            validator_runner=validator_runner,
+                        )
+                        if durable.get("code") != artifact_download.RESULT_DURABLE:
+                            if (
+                                durable.get("code") == artifact_download.ARTIFACT_INVALID
+                                and durable.get("recoverable") is True
+                            ):
+                                watch["artifactRejected"] = True
+                                self._write_state(
+                                    request,
+                                    ARTIFACT_FOUND,
+                                    artifactValidation=durable,
+                                    reminderPolicy=reminder_policy_record,
+                                    browserRecoveryPolicy=recovery_policy_record,
+                                    reminders=reminder_records,
+                                )
+                                return {"kind": "no_result"}
+                            return {
+                                "kind": "fatal",
+                                "result": self._fail(
+                                    request,
+                                    durable.get("code", "download_failed"),
+                                    details=durable,
+                                ),
+                            }
+
+                        record = self._write_state(
+                            request,
+                            RESULT_DURABLE,
+                            resultPath=durable.get("details", {}).get("resultDirectory", request.result_path),
+                            resultZip=durable.get("details", {}).get("resultZip"),
+                            resultSha256=durable.get("details", {}).get("sha256"),
+                            durableProof=durable,
+                            conversationUrl=chat_url,
+                            conversationId=conversation_id,
+                            reminderPolicy=reminder_policy_record,
+                            browserRecoveryPolicy=recovery_policy_record,
+                            reminders=reminder_records,
+                        )
+                        terminal_result = {"ok": True, "code": RESULT_DURABLE, "details": record}
+                        if self.on_result_durable is not None:
+                            self.on_result_durable(terminal_result)
+                        return {"kind": "terminal", "result": terminal_result}
+
+                    artifact_code = detected.get("code")
+                    artifact_details = detected.get("details") if isinstance(detected.get("details"), dict) else {}
+                    if (
+                        artifact_code == artifact_detector.ARTIFACT_TURN_IDENTITY_MISMATCH
+                        and artifact_details.get("reason") == "assistant_text_changed_after_completed_proof"
+                    ):
+                        watch["proof"] = None
+                        return {"kind": "stale_proof"}
+                    if artifact_code == artifact_detector.ARTIFACT_TURN_NOT_COMPLETED:
+                        watch["proof"] = None
+                        return {"kind": "pending"}
+                    if (
+                        artifact_code == artifact_detector.ARTIFACT_CHAT_CORRELATION_LOST
+                        and artifact_details.get("observerCode") in {
+                            browser_observer.USER_TURN_ANCHOR_MISSING,
+                            browser_observer.ASSISTANT_NOT_STARTED,
+                            browser_observer.ASSISTANT_STATE_UNKNOWN,
+                        }
+                    ):
+                        watch["proof"] = None
+                        return {"kind": "pending"}
+                    if artifact_code in _FATAL_ARTIFACT_CODES:
+                        return {
+                            "kind": "fatal",
+                            "result": self._fail(
+                                request,
+                                artifact_code or "artifact_not_found",
+                                details=detected,
+                            ),
+                        }
+                    if artifact_code in _REMINDER_ELIGIBLE_ARTIFACT_CODES:
+                        return {"kind": "no_result"}
+                    return {
+                        "kind": "fatal",
+                        "result": self._fail(
+                            request,
+                            artifact_code or "artifact_not_found",
+                            details=detected,
+                        ),
+                    }
+
+                def scan_watches(*, skip_latest_missing: bool) -> dict[str, Any]:
+                    latest = watched_turns[-1]
+                    reprove_timeout_ms = max(
+                        _REPROVE_TIMEOUT_MIN_MS,
+                        int(stable_ms) + browser_observer.DEFAULT_POLL_MS,
+                    )
+                    for watch in reversed(watched_turns):
+                        if watch.get("artifactRejected"):
+                            continue
+                        outcome = inspect_watch(watch)
+                        if outcome["kind"] in {"terminal", "fatal", "interrupted"}:
+                            return outcome
+                        if watch.get("proof") is None:
+                            if skip_latest_missing and watch is latest:
+                                continue
+                            # An older anchor that never produced a completed assistant turn
+                            # has nothing to re-prove. Re-observing it at reminder time only
+                            # delays the absolute 10/20/30 schedule. Previously proved turns
+                            # remain eligible for re-proof after reload/text changes.
+                            if watch is not latest and not watch.get("everProved"):
+                                continue
+                            timeout_for_watch = min(reprove_timeout_ms, remaining_ms())
+                            observed = observe_watch(watch, timeout_for_watch)
+                            if observed["kind"] in {"fatal", "interrupted"}:
+                                return observed
+                            if observed["kind"] == "proof":
+                                outcome = inspect_watch(watch)
+                                if outcome["kind"] in {"terminal", "fatal", "interrupted"}:
+                                    return outcome
+                    return {"kind": "no_result"}
+
                 self._write_state(
                     request,
                     WAITING_ASSISTANT,
                     reminderPolicy=reminder_policy_record,
+                    browserRecoveryPolicy=recovery_policy_record,
                     reminders=reminder_records,
                 )
 
@@ -439,11 +673,45 @@ class WebWorkerBridge:
                             details={
                                 "lastObserverCode": last_observer_code,
                                 "lastArtifactCode": last_artifact_code,
+                                "lastBrowserRecovery": last_recovery,
                                 "reminderPolicy": reminder_policy_record,
+                                "browserRecoveryPolicy": recovery_policy_record,
                                 "reminders": reminder_records,
                             },
                         )
                         return terminal_result
+
+                    interrupted, interruption_details = browser_observer.connection_interrupted(page)
+                    if interrupted:
+                        last_observer_code = browser_observer.ASSISTANT_CONNECTION_INTERRUPTED
+                        if not recovery_exhausted:
+                            recovery = browser_recovery.recover_interrupted_chat(
+                                page,
+                                chat_url,
+                                str(watched_turns[-1]["prompt"]),
+                                budget_ms=remaining_ms(),
+                                sleep=self.sleep,
+                                monotonic=self.monotonic,
+                            )
+                            last_recovery = recovery
+                            waiting_state()
+                            if recovery.get("ok"):
+                                recovery_exhausted = False
+                                clear_observer_proofs()
+                                next_result_recheck = self.monotonic()
+                                continue
+                            recovery_exhausted = True
+                        delay = min(
+                            _RESULT_RECHECK_INTERVAL_MS / 1000.0,
+                            max(deadline - self.monotonic(), 0.0),
+                        )
+                        if delay > 0:
+                            self.sleep(delay)
+                        continue
+                    if recovery_exhausted:
+                        recovery_exhausted = False
+                        clear_observer_proofs()
+                        next_result_recheck = self.monotonic()
 
                     next_due = None
                     if reminder_index < max_reminders:
@@ -454,206 +722,143 @@ class WebWorkerBridge:
                             )
                             / 1000.0
                         )
-                    slice_deadline = min(deadline, next_due) if next_due is not None else deadline
 
-                    if current_turn_processed:
-                        delay = max(slice_deadline - now, 0.0)
-                        if delay > 0:
-                            self.sleep(delay)
-                    else:
-                        slice_timeout_ms = max(1, int(max(slice_deadline - now, 0.0) * 1000.0))
-                        completed = browser_observer.observe_next_assistant(
-                            page,
-                            current_prompt,
-                            chat_url,
-                            timeout_ms=slice_timeout_ms,
-                            stable_ms=stable_ms,
-                            sleep=self.sleep,
-                            monotonic=self.monotonic,
-                        )
-                        completed = _attach_submit_proof(
-                            completed,
-                            prompt=current_prompt,
-                            submitted=current_submit,
-                        )
-                        last_observer_code = str(completed.get("code", ""))
+                    latest_watch = watched_turns[-1]
+                    latest_observed_this_cycle = False
+                    now = self.monotonic()
+                    next_event = min(
+                        deadline,
+                        next_result_recheck,
+                        next_due if next_due is not None else deadline,
+                    )
 
-                        if completed.get("ok"):
-                            detected = artifact_detector.detect_artifact_dom(
-                                page,
-                                expected_prompt=current_prompt,
-                                expected_chat_url=chat_url,
-                                request_id=request_id,
-                                expected_filename=expected_filename,
-                                completed_observer_result=completed,
-                            )
-                            last_artifact_code = str(detected.get("code", ""))
-                            if detected.get("ok"):
-                                self._write_state(
-                                    request,
-                                    ARTIFACT_FOUND,
-                                    observerProof=completed,
-                                    artifactProof=detected,
-                                    reminderPolicy=reminder_policy_record,
-                                    reminders=reminder_records,
-                                )
-
-                                durable = artifact_download.download_validated_artifact(
-                                    page,
-                                    expected_prompt=current_prompt,
-                                    expected_chat_url=chat_url,
-                                    request_id=request_id,
-                                    expected_filename=expected_filename,
-                                    completed_observer_result=completed,
-                                    artifact_dom_result=detected,
-                                    expected_request=expected_request,
-                                    result_root=self.result_root,
-                                    browser_download_dir=browser_download_dir,
-                                    download_timeout_ms=download_timeout_ms,
-                                    click_timeout_ms=click_timeout_ms,
-                                    validator_runner=validator_runner,
-                                )
-                                if durable.get("code") != artifact_download.RESULT_DURABLE:
-                                    if (
-                                        durable.get("code") == artifact_download.ARTIFACT_INVALID
-                                        and durable.get("recoverable") is True
-                                    ):
-                                        # A downloaded ZIP with rejected contents is a model/result
-                                        # failure, not a failed REQ. The next scheduled reminder may
-                                        # establish a fresh P5/P6 attempt; all other download errors
-                                        # remain fail-closed.
-                                        self._write_state(
-                                            request,
-                                            ARTIFACT_FOUND,
-                                            artifactValidation=durable,
-                                            reminderPolicy=reminder_policy_record,
-                                            reminders=reminder_records,
-                                        )
-                                        current_turn_processed = True
-                                        continue
-                                    return self._fail(request, durable.get("code", "download_failed"), details=durable)
-                                record = self._write_state(
-                                    request,
-                                    RESULT_DURABLE,
-                                    resultPath=durable.get("details", {}).get("resultDirectory", request.result_path),
-                                    resultZip=durable.get("details", {}).get("resultZip"),
-                                    resultSha256=durable.get("details", {}).get("sha256"),
-                                    durableProof=durable,
-                                    conversationUrl=chat_url,
-                                    conversationId=conversation_id,
-                                    reminderPolicy=reminder_policy_record,
-                                    reminders=reminder_records,
-                                )
-                                terminal_result = {"ok": True, "code": RESULT_DURABLE, "details": record}
-                                if self.on_result_durable is not None:
-                                    self.on_result_durable(terminal_result)
-                                return terminal_result
-
-                            artifact_code = detected.get("code")
-                            if artifact_code in _FATAL_ARTIFACT_CODES:
-                                return self._fail(
-                                    request,
-                                    artifact_code or "artifact_not_found",
-                                    details=detected,
-                                )
-                            if artifact_code not in _REMINDER_ELIGIBLE_ARTIFACT_CODES:
-                                return self._fail(
-                                    request,
-                                    artifact_code or "artifact_not_found",
-                                    details=detected,
-                                )
-
-                            # Only known model-output/result-shape failures are
-                            # eligible for the next scheduled reminder. Unknown
-                            # or internal detector failures stop immediately so
-                            # existing fail-closed tests and diagnostics never
-                            # wait for a real ten-minute reminder window.
-                            current_turn_processed = True
-                        elif completed.get("code") not in _NONTERMINAL_OBSERVER_CODES:
-                            return self._fail(
-                                request,
-                                completed.get("code", "observer_failed"),
-                                details=completed,
-                            )
+                    if latest_watch.get("proof") is None and not latest_watch.get("artifactRejected") and next_event > now:
+                        timeout_for_latest = max(1, int((next_event - now) * 1000.0))
+                        observed = observe_watch(latest_watch, timeout_for_latest)
+                        latest_observed_this_cycle = True
+                        if observed["kind"] == "fatal":
+                            return observed["result"]
+                        if observed["kind"] == "interrupted":
+                            continue
+                        if observed["kind"] == "proof":
+                            inspected = inspect_watch(latest_watch)
+                            if inspected["kind"] == "terminal":
+                                return inspected["result"]
+                            if inspected["kind"] == "fatal":
+                                return inspected["result"]
+                            if inspected["kind"] == "no_result":
+                                next_result_recheck = self.monotonic() + _RESULT_RECHECK_INTERVAL_MS / 1000.0
+                    elif next_event > now:
+                        self.sleep(next_event - now)
 
                     now = self.monotonic()
                     if now >= deadline:
                         continue
 
-                    if reminder_index < max_reminders:
-                        scheduled_elapsed = reminder_policy.scheduled_elapsed_ms(
-                            reminder_index + 1,
-                            interval_ms=reminder_interval_ms,
-                        )
-                        due = started_at + scheduled_elapsed / 1000.0
-                        if now >= due:
-                            index = reminder_index + 1
-                            reminder_prompt = reminder_policy.build_reminder_prompt(
-                                request_id,
-                                index,
-                                total=max_reminders,
-                            )
-                            attempted_elapsed = max(0, int((now - started_at) * 1000.0))
-                            reminder_submit = reminder_policy.submit_reminder(
+                    due_now = next_due is not None and now >= next_due
+                    if due_now:
+                        pre_reminder = scan_watches(skip_latest_missing=latest_observed_this_cycle)
+                        if pre_reminder["kind"] == "terminal":
+                            return pre_reminder["result"]
+                        if pre_reminder["kind"] == "fatal":
+                            return pre_reminder["result"]
+                        if pre_reminder["kind"] == "interrupted":
+                            continue
+
+                        if last_observer_code in {
+                            browser_observer.USER_TURN_ANCHOR_MISSING,
+                            browser_observer.ASSISTANT_STATE_UNKNOWN,
+                        }:
+                            ready = browser_recovery.chat_ready_snapshot(
                                 page,
-                                reminder_prompt,
                                 chat_url,
-                                timeout_ms=timeout_ms,
+                                str(watched_turns[-1]["prompt"]),
                             )
-                            finished_elapsed = max(0, int((self.monotonic() - started_at) * 1000.0))
-                            reminder_records.append(
-                                _compact_reminder_record(
-                                    index=index,
-                                    scheduled_elapsed_ms=scheduled_elapsed,
-                                    attempted_elapsed_ms=attempted_elapsed,
-                                    finished_elapsed_ms=finished_elapsed,
-                                    prompt=reminder_prompt,
-                                    submitted=reminder_submit,
+                            if not ready.get("ok"):
+                                if ready.get("details", {}).get("connectionInterrupted"):
+                                    continue
+                                delay = min(
+                                    browser_observer.DEFAULT_POLL_MS / 1000.0,
+                                    max(deadline - self.monotonic(), 0.0),
                                 )
+                                if delay > 0:
+                                    self.sleep(delay)
+                                continue
+
+                        index = reminder_index + 1
+                        reminder_prompt = reminder_policy.build_reminder_prompt(
+                            request_id,
+                            index,
+                            total=max_reminders,
+                        )
+                        attempted_elapsed = max(0, int((self.monotonic() - started_at) * 1000.0))
+                        reminder_submit = reminder_policy.submit_reminder(
+                            page,
+                            reminder_prompt,
+                            chat_url,
+                            timeout_ms=timeout_ms,
+                        )
+                        finished_elapsed = max(0, int((self.monotonic() - started_at) * 1000.0))
+                        reminder_records.append(
+                            _compact_reminder_record(
+                                index=index,
+                                scheduled_elapsed_ms=reminder_policy.scheduled_elapsed_ms(
+                                    index,
+                                    interval_ms=reminder_interval_ms,
+                                ),
+                                attempted_elapsed_ms=attempted_elapsed,
+                                finished_elapsed_ms=finished_elapsed,
+                                prompt=reminder_prompt,
+                                submitted=reminder_submit,
                             )
-                            send_state = reminder_submit.get("sendState")
-                            if (
-                                send_state == browser_submit.SEND_UNKNOWN
-                                or reminder_submit.get("code") == browser_submit.PROMPT_SEND_UNKNOWN
-                            ):
-                                return self._fail(
-                                    request,
-                                    "reminder send state is UNKNOWN",
-                                    details={"reminderSubmit": reminder_submit, "reminders": reminder_records},
-                                )
-                            if send_state == browser_submit.SEND_PROVEN_SENT:
-                                reminder_index += 1
-                                self._write_state(
-                                    request,
-                                    WAITING_ASSISTANT,
-                                    reminderPolicy=reminder_policy_record,
-                                    reminders=reminder_records,
-                                    lastObserverCode=last_observer_code,
-                                    lastArtifactCode=last_artifact_code,
-                                )
-                                current_prompt = reminder_prompt
-                                current_submit = reminder_submit
-                                current_turn_processed = False
-                                continue
-                            if (
-                                send_state == browser_submit.SEND_PROVEN_NOT_SENT
-                                and reminder_submit.get("details", {}).get("unsentPromptCleared") is True
-                            ):
-                                reminder_index += 1
-                                self._write_state(
-                                    request,
-                                    WAITING_ASSISTANT,
-                                    reminderPolicy=reminder_policy_record,
-                                    reminders=reminder_records,
-                                    lastObserverCode=last_observer_code,
-                                    lastArtifactCode=last_artifact_code,
-                                )
-                                continue
+                        )
+                        send_state = reminder_submit.get("sendState")
+                        if (
+                            send_state == browser_submit.SEND_UNKNOWN
+                            or reminder_submit.get("code") == browser_submit.PROMPT_SEND_UNKNOWN
+                        ):
                             return self._fail(
                                 request,
-                                "reminder send result was not safely continuable",
+                                "reminder send state is UNKNOWN",
                                 details={"reminderSubmit": reminder_submit, "reminders": reminder_records},
                             )
+                        if send_state == browser_submit.SEND_PROVEN_SENT:
+                            reminder_index += 1
+                            watched_turns.append(
+                                {
+                                    "prompt": reminder_prompt,
+                                    "submit": reminder_submit,
+                                    "proof": None,
+                                    "everProved": False,
+                                    "artifactRejected": False,
+                                }
+                            )
+                            next_result_recheck = self.monotonic() + _RESULT_RECHECK_INTERVAL_MS / 1000.0
+                            waiting_state()
+                            continue
+                        if (
+                            send_state == browser_submit.SEND_PROVEN_NOT_SENT
+                            and reminder_submit.get("details", {}).get("unsentPromptCleared") is True
+                        ):
+                            reminder_index += 1
+                            next_result_recheck = self.monotonic() + _RESULT_RECHECK_INTERVAL_MS / 1000.0
+                            waiting_state()
+                            continue
+                        return self._fail(
+                            request,
+                            "reminder send result was not safely continuable",
+                            details={"reminderSubmit": reminder_submit, "reminders": reminder_records},
+                        )
+
+                    if now >= next_result_recheck:
+                        rescanned = scan_watches(skip_latest_missing=latest_observed_this_cycle)
+                        next_result_recheck = self.monotonic() + _RESULT_RECHECK_INTERVAL_MS / 1000.0
+                        if rescanned["kind"] == "terminal":
+                            return rescanned["result"]
+                        if rescanned["kind"] == "fatal":
+                            return rescanned["result"]
+                        if rescanned["kind"] == "interrupted":
+                            continue
         except Exception as exc:
             return self._fail(request, str(exc), code=BRIDGE_PIPELINE_FAILED)
         finally:
