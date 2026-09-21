@@ -262,29 +262,62 @@ class WebWorkerReminderTests(unittest.TestCase):
         self.assertEqual(result["details"]["browserCleanup"]["closeAttempts"], 1)
         self.assertTrue(page.closed)
 
-    def test_rejected_zip_waits_for_first_reminder_then_durable_retry(self):
+    def test_no_artifact_requires_fresh_observer_proof_after_ten_seconds(self):
         clock = FakeClock()
         page = FakePage()
-        reminder_times = []
+        observer_calls = []
+
+        def observe(_page, _prompt, _chat_url, **_kwargs):
+            observer_calls.append(clock.monotonic())
+            result = completed_observer()
+            result["details"]["assistantText"] = "stable assistant text"
+            result["details"]["assistantTextSha256"] = "a" * 64
+            return result
+
+        missing = {"ok": False, "code": artifact_detector.ARTIFACT_ATTACHMENT_NOT_FOUND, "details": {}}
+        with tempfile.TemporaryDirectory() as root:
+            bridge = self.make_bridge(root, clock)
+            with (
+                patch.object(browser_submit, "submit_fresh_prompt", return_value=confirmed_submit(PROMPT)),
+                patch.object(browser_observer, "observe_next_assistant", side_effect=observe),
+                patch.object(browser_observer, "connection_interrupted", return_value=(False, {})),
+                patch.object(artifact_detector, "detect_artifact_dom", return_value=missing),
+                patch.object(reminder_policy, "submit_reminder") as send_reminder,
+            ):
+                result = bridge.run_request(
+                    REQ,
+                    task_url=TASK_URL,
+                    prompt=PROMPT,
+                    expected_filename=FILENAME,
+                    expected_request={},
+                    playwright_factory=FakeFactory(page),
+                    observer_timeout_ms=20_000,
+                    reminder_interval_ms=60_000,
+                    max_reminders=0,
+                )
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["code"], web_worker_bridge.ASSISTANT_COMPLETED_NO_ARTIFACT)
+        self.assertGreaterEqual(len(observer_calls), 2)
+        self.assertGreaterEqual(observer_calls[1], 10.0)
+        self.assertEqual(result["details"]["assistantIndex"], 1)
+        send_reminder.assert_not_called()
+
+    def test_rejected_zip_returns_terminal_immediately_without_reminder(self):
+        clock = FakeClock()
+        page = FakePage()
         invalid = {
             "ok": False,
             "code": artifact_download.ARTIFACT_INVALID,
             "recoverable": True,
-            "details": {"validatorCode": "ARTIFACT_BAD_ZIP", "stagingDiscarded": True},
-        }
-        durable = {
-            "ok": True,
-            "code": artifact_download.RESULT_DURABLE,
             "details": {
-                "resultDirectory": "result-dir",
-                "resultZip": "result.zip",
-                "sha256": "d" * 64,
+                "phase": "validator",
+                "validatorCode": "ARTIFACT_BAD_ZIP",
+                "validationMessage": "ZIP is malformed or cannot be read safely",
+                "validationDetails": {"reason": "eocd"},
+                "stagingDiscarded": True,
             },
         }
-
-        def send_reminder(_page, prompt, _chat_url, *, timeout_ms):
-            reminder_times.append(round(clock.monotonic()))
-            return confirmed_submit(prompt)
 
         with tempfile.TemporaryDirectory() as root:
             bridge = self.make_bridge(root, clock)
@@ -296,8 +329,8 @@ class WebWorkerReminderTests(unittest.TestCase):
                     "detect_artifact_dom",
                     return_value={"ok": True, "code": artifact_detector.ARTIFACT_DOM_CONFIRMED, "details": {}},
                 ),
-                patch.object(artifact_download, "download_validated_artifact", side_effect=[invalid, durable]) as download,
-                patch.object(reminder_policy, "submit_reminder", side_effect=send_reminder),
+                patch.object(artifact_download, "download_validated_artifact", return_value=invalid) as download,
+                patch.object(reminder_policy, "submit_reminder") as send_reminder,
             ):
                 result = bridge.run_request(
                     REQ,
@@ -309,10 +342,14 @@ class WebWorkerReminderTests(unittest.TestCase):
                 )
 
         self.assertTrue(result["ok"], result)
-        self.assertEqual(result["code"], web_worker_bridge.RESULT_DURABLE)
-        self.assertEqual(reminder_times, [600])
-        self.assertEqual(download.call_count, 2)
-        self.assertEqual(len(result["details"]["reminders"]), 1)
+        self.assertEqual(result["code"], web_worker_bridge.ARTIFACT_REJECTED)
+        self.assertEqual(result["details"]["validationCode"], "ARTIFACT_BAD_ZIP")
+        self.assertIn("malformed", result["details"]["validationMessage"])
+        self.assertEqual(result["details"]["validationDetails"], {"reason": "eocd"})
+        self.assertEqual(result["details"]["assistantIndex"], 1)
+        self.assertEqual(clock.monotonic(), 0.0)
+        download.assert_called_once()
+        send_reminder.assert_not_called()
         self.assertTrue(page.closed)
 
     def test_unknown_reminder_send_stops_without_later_reminders(self):
@@ -356,8 +393,10 @@ class WebWorkerReminderTests(unittest.TestCase):
                 )
 
                 self.assertFalse(result["ok"])
-                self.assertEqual(result["code"], web_worker_bridge.BRIDGE_PIPELINE_FAILED)
-                self.assertEqual(result["details"]["reason"], "reminder send state is UNKNOWN")
+                self.assertEqual(result["code"], web_worker_bridge.POSTMAN_TRANSPORT_FAILED)
+                self.assertEqual(result["details"]["transportCode"], web_worker_bridge.BRIDGE_PIPELINE_FAILED)
+                self.assertEqual(result["details"]["transportMessage"], "reminder send state is UNKNOWN")
+                self.assertEqual(result["details"]["details"]["reminderSubmit"]["sendState"], browser_submit.SEND_UNKNOWN)
                 self.assertEqual(round(clock.monotonic()), 600)
                 send_reminder.assert_called_once()
                 self.assertEqual(
@@ -392,8 +431,9 @@ class WebWorkerReminderTests(unittest.TestCase):
                 )
 
             self.assertFalse(result["ok"])
-            self.assertEqual(result["code"], web_worker_bridge.BRIDGE_PIPELINE_FAILED)
-            self.assertEqual(result["details"]["reason"], "EXPECTED_TEST_STOP")
+            self.assertEqual(result["code"], web_worker_bridge.POSTMAN_TRANSPORT_FAILED)
+            self.assertEqual(result["details"]["transportCode"], web_worker_bridge.BRIDGE_PIPELINE_FAILED)
+            self.assertEqual(result["details"]["transportMessage"], "EXPECTED_TEST_STOP")
             self.assertEqual(clock.monotonic(), 0.0)
             send_reminder.assert_not_called()
             self.assertTrue(page.closed)

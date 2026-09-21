@@ -180,25 +180,27 @@ class TaskPackageTests(unittest.TestCase):
         self.assertIn(f"<<<POSTMAN_RESULT_BEGIN:{REQ}>>>", content)
         self.assertIn(f"<<<POSTMAN_RESULT_END:{REQ}>>>", content)
         self.assertIn(expected_filename, content)
+        self.assertIn("manifest.json` необязателен и полностью informational", content)
+        self.assertNotIn("значение должно быть ровно", content)
 
-    def test_external_prompt_contains_only_req_and_two_links(self):
+    def test_external_prompt_contains_only_req_and_task_link(self):
         prompt = task_package.build_external_prompt(REQ, SKILL_URL, TASK_URL)
         self.assertEqual(
             prompt,
             "\n".join(
                 (
                     f"POSTMAN_REQUEST_ID: {REQ}",
-                    f"policy: {SKILL_URL}",
                     f"task_file: {TASK_URL}",
                 )
             ),
         )
         self.assertEqual(prompt.splitlines()[0], f"POSTMAN_REQUEST_ID: {REQ}")
+        self.assertNotIn(f"policy: {SKILL_URL}", prompt)
         self.assertNotIn("Keep the runtime unchanged", prompt)
         self.assertNotIn("Preserve the user's request", prompt)
         self.assertNotIn("base_commit", prompt)
         self.assertNotIn("\nrepository:", prompt)
-        self.assertEqual(3, len(prompt.splitlines()))
+        self.assertEqual(2, len(prompt.splitlines()))
         for forbidden in ("expected_filename", "allowed_paths_json", "forbidden_paths_json", "RESULT_BEGIN", "RESULT_END"):
             self.assertNotIn(forbidden, prompt)
 

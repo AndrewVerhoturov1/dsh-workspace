@@ -18,10 +18,10 @@ Luna
 → ensure dedicated Postman Chrome
 → postman/web/web_worker_bridge.py
 → submit / observe / detect / download / validate
-→ RESULT_DURABLE
+→ RESULT_DURABLE | ASSISTANT_COMPLETED_NO_ARTIFACT | ARTIFACT_REJECTED
 → one terminal JSON object back to Luna
-→ report exact requestId + resultZip
-→ STOP
+→ durable: report exact requestId + resultZip
+→ non-durable: return assistantText / validation reason for continuation decision
 ```
 
 Luna передаёт current user intent без semantic augmentation. После обычного `@Postman`
@@ -72,14 +72,16 @@ $jsonText = & $bridge `
 $result = $jsonText | ConvertFrom-Json
 ```
 
-Success требует одновременно:
+Successful terminal transport handoff requires `ok=true`, exact current `requestId` and one code:
 
 ```text
-ok = true
-code = RESULT_DURABLE
-requestId = exact current REQ
-resultZip = existing validated durable ZIP
+RESULT_DURABLE
+ASSISTANT_COMPLETED_NO_ARTIFACT
+ARTIFACT_REJECTED
 ```
+
+Only `RESULT_DURABLE` requires `resultZip`. The other two return `assistantText`; rejection
+also returns `validationCode` and `validationMessage`.
 
 ## DSH orchestration for long requests
 
@@ -135,6 +137,9 @@ $jsonText = & $bridge `
 Правила:
 
 - `$oldRequestId` — только lookup key.
+- Ручной пользовательский `--ChatRequestId` всегда разрешён независимо от сохранённого `continuationIndex`.
+- Automatic continuation после non-durable terminal handoff должна передавать `-AutomaticContinuation`; только этот режим наследует chain identity и монотонно увеличивает `continuationIndex` без hard cap.
+- `POSTMAN_TRANSPORT_FAILED` не является основанием для automatic continuation и требует остановки.
 - Каждая continuation создаёт новый canonical REQ.
 - Direct Postman разрешает exact сохранённый `conversationUrl`.
 - Worker открывает exact `/c/<conversation-id>` и должен доказать, что это тот же conversation.
@@ -183,12 +188,22 @@ External policy URL больше не является строкой browser pr
 - attachment должен принадлежать exact correlated assistant turn;
 - download выполняется одним click через browser download event;
 - expected filename должен совпадать;
-- ZIP проверяется на container integrity, path safety, collisions, special entries,
-  archive limits, CRC и SHA-256;
-- `manifest.json` необязателен;
-- если optional manifest содержит строковый `requestId`, конфликт с trusted current REQ — hard reject;
+- ZIP проходит минимальную transport validation: readable/non-empty, CRC/local-header
+  integrity, traversal/absolute/drive/UNC path rejection, symlink rejection, простые size/count/ratio
+  limits и SHA-256;
+- `manifest.json` и его поля не являются transport gates;
 - `repository`, `baseCommit`, `resultType`, patch/files schema и allowed/forbidden paths
   не являются normal transport content gates.
+
+## Completed response without durable ZIP
+
+Если correlated assistant-turn завершён, exact ZIP не найден и повторная проверка через 10 секунд
+подтверждает отсутствие ZIP, current REQ завершается `ASSISTANT_COMPLETED_NO_ARTIFACT`.
+Если ZIP найден, но minimal validator его отклонил, current REQ завершается `ARTIFACT_REJECTED`
+с точными `validationCode`/`validationMessage`. Ни один из этих случаев не ждёт следующего reminder.
+Conversation URL сохраняется, поэтому следующий новый REQ может использовать `-ChatRequestId`.
+
+Reminders 10/20/30 и 45-minute deadline сохраняются для незавершённого assistant-turn.
 
 ## Durable result
 

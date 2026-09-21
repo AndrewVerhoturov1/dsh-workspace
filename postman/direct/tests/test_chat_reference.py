@@ -20,6 +20,23 @@ URL = "https://chatgpt.com/c/861d4716-8c1b-41bc-b37e-a912e2323e70"
 
 
 class ChatReferenceTests(unittest.TestCase):
+    def test_transport_failure_is_not_eligible_for_continuation(self):
+        with tempfile.TemporaryDirectory() as root:
+            direct_root = Path(root) / "direct"
+            path = direct_root / "requests" / f"{REQ}.json"
+            path.parent.mkdir(parents=True)
+            path.write_text(json.dumps({
+                "ok": False,
+                "code": "POSTMAN_TRANSPORT_FAILED",
+                "state": "FAILED",
+                "requestId": REQ,
+                "repository": REPO,
+                "conversationUrl": URL,
+            }), encoding="utf-8")
+            with self.assertRaises(chat_reference.ChatReferenceError) as ctx:
+                chat_reference.resolve_chat_reference(direct_root, REQ, expected_repository=REPO)
+            self.assertEqual(ctx.exception.code, "DIRECT_CHAT_REFERENCE_UNAVAILABLE")
+
     def test_normalize_conversation_url(self):
         conversation_id, url = chat_reference.normalize_conversation_url(URL)
         self.assertEqual(conversation_id, "861d4716-8c1b-41bc-b37e-a912e2323e70")
@@ -65,6 +82,44 @@ class ChatReferenceTests(unittest.TestCase):
                 chat_reference.resolve_chat_reference(Path(root) / "direct", REQ, expected_repository=REPO)
             self.assertEqual(ctx.exception.code, "DIRECT_CHAT_REFERENCE_UNAVAILABLE")
             self.assertFalse(ctx.exception.details["uiSearchAttempted"])
+
+    def test_resolve_accepts_completed_no_artifact_with_high_continuation_index(self):
+        with tempfile.TemporaryDirectory() as root:
+            direct_root = Path(root) / "direct"
+            path = direct_root / "requests" / f"{REQ}.json"
+            path.parent.mkdir(parents=True)
+            path.write_text(json.dumps({
+                "ok": True,
+                "code": "ASSISTANT_COMPLETED_NO_ARTIFACT",
+                "state": "ASSISTANT_COMPLETED_NO_ARTIFACT",
+                "requestId": REQ,
+                "repository": REPO,
+                "conversationUrl": URL,
+                "rootRequestId": "REQ_20260917T100000Z_7000",
+                "continuationIndex": 3,
+            }), encoding="utf-8")
+            result = chat_reference.resolve_chat_reference(direct_root, REQ, expected_repository=REPO)
+            self.assertEqual(result.source, "direct_state")
+            self.assertEqual(result.conversation_url, URL)
+            self.assertEqual(result.root_request_id, "REQ_20260917T100000Z_7000")
+            self.assertEqual(result.continuation_index, 3)
+
+    def test_resolve_accepts_rejected_artifact_direct_state(self):
+        with tempfile.TemporaryDirectory() as root:
+            direct_root = Path(root) / "direct"
+            path = direct_root / "requests" / f"{REQ}.json"
+            path.parent.mkdir(parents=True)
+            path.write_text(json.dumps({
+                "ok": True,
+                "code": "ARTIFACT_REJECTED",
+                "state": "ARTIFACT_REJECTED",
+                "requestId": REQ,
+                "repository": REPO,
+                "conversationUrl": URL,
+            }), encoding="utf-8")
+            result = chat_reference.resolve_chat_reference(direct_root, REQ, expected_repository=REPO)
+            self.assertEqual(result.root_request_id, REQ)
+            self.assertEqual(result.continuation_index, 0)
 
 
 if __name__ == "__main__":

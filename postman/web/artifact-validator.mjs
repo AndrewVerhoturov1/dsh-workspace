@@ -5,276 +5,360 @@ import zlib from 'node:zlib';
 import { TextDecoder } from 'node:util';
 
 export const ARTIFACT_VALID = 'ARTIFACT_VALID';
+
+// Keep the public codes stable where practical, but the validator intentionally
+// emits only the small transport-safety subset used below.
 export const ERROR_CODES = Object.freeze({
-  BAD_ZIP:'ARTIFACT_BAD_ZIP', EMPTY:'ARTIFACT_EMPTY', FILENAME_MISMATCH:'ARTIFACT_FILENAME_MISMATCH',
-  REQUEST_MISMATCH:'ARTIFACT_REQUEST_MISMATCH',
-  PATH_TRAVERSAL:'ARTIFACT_PATH_TRAVERSAL', ABSOLUTE_PATH:'ARTIFACT_ABSOLUTE_PATH',
-  WINDOWS_DRIVE_PATH:'ARTIFACT_WINDOWS_DRIVE_PATH', UNC_PATH:'ARTIFACT_UNC_PATH', NTFS_ADS:'ARTIFACT_NTFS_ADS',
-  SYMLINK:'ARTIFACT_SYMLINK', REPARSE_ENTRY:'ARTIFACT_REPARSE_ENTRY', DUPLICATE_PATH:'ARTIFACT_DUPLICATE_PATH',
-  CASE_COLLISION:'ARTIFACT_CASE_COLLISION', WINDOWS_RESERVED_NAME:'ARTIFACT_WINDOWS_RESERVED_NAME',
-  PATH_INVALID:'ARTIFACT_PATH_INVALID',
-  COMPRESSED_SIZE_LIMIT:'ARTIFACT_COMPRESSED_SIZE_LIMIT', UNCOMPRESSED_SIZE_LIMIT:'ARTIFACT_UNCOMPRESSED_SIZE_LIMIT',
-  ENTRY_SIZE_LIMIT:'ARTIFACT_ENTRY_SIZE_LIMIT', ENTRY_LIMIT:'ARTIFACT_ENTRY_LIMIT', ZIP_BOMB_RISK:'ARTIFACT_ZIP_BOMB_RISK',
-});
-export const DEFAULT_LIMITS = Object.freeze({
-  maxCompressedBytes:50*1024*1024, maxTotalUncompressedBytes:200*1024*1024,
-  maxEntryUncompressedBytes:64*1024*1024, maxEntries:2000, maxCompressionRatio:100,
+  BAD_ZIP: 'ARTIFACT_BAD_ZIP',
+  EMPTY: 'ARTIFACT_EMPTY',
+  FILENAME_MISMATCH: 'ARTIFACT_FILENAME_MISMATCH',
+  PATH_TRAVERSAL: 'ARTIFACT_PATH_TRAVERSAL',
+  ABSOLUTE_PATH: 'ARTIFACT_ABSOLUTE_PATH',
+  WINDOWS_DRIVE_PATH: 'ARTIFACT_WINDOWS_DRIVE_PATH',
+  UNC_PATH: 'ARTIFACT_UNC_PATH',
+  SYMLINK: 'ARTIFACT_SYMLINK',
+  COMPRESSED_SIZE_LIMIT: 'ARTIFACT_COMPRESSED_SIZE_LIMIT',
+  UNCOMPRESSED_SIZE_LIMIT: 'ARTIFACT_UNCOMPRESSED_SIZE_LIMIT',
+  ENTRY_SIZE_LIMIT: 'ARTIFACT_ENTRY_SIZE_LIMIT',
+  ENTRY_LIMIT: 'ARTIFACT_ENTRY_LIMIT',
+  ZIP_BOMB_RISK: 'ARTIFACT_ZIP_BOMB_RISK',
+
+  // Compatibility exports retained for callers/tests that may import them.
+  REQUEST_MISMATCH: 'ARTIFACT_REQUEST_MISMATCH',
+  NTFS_ADS: 'ARTIFACT_NTFS_ADS',
+  REPARSE_ENTRY: 'ARTIFACT_REPARSE_ENTRY',
+  DUPLICATE_PATH: 'ARTIFACT_DUPLICATE_PATH',
+  CASE_COLLISION: 'ARTIFACT_CASE_COLLISION',
+  WINDOWS_RESERVED_NAME: 'ARTIFACT_WINDOWS_RESERVED_NAME',
+  PATH_INVALID: 'ARTIFACT_PATH_INVALID',
 });
 
-const EOCD=0x06054b50, CENTRAL=0x02014b50, LOCAL=0x04034b50, UTF8_FLAG=1<<11, ENCRYPTED_FLAG=1;
-const UTF8 = new TextDecoder('utf-8',{fatal:true});
-const SHA_RE=/^[0-9a-f]{40}$/i, REPO_RE=/^[^/\s]+\/[^/\s]+$/, DRIVE_RE=/^[A-Za-z]:[\\/]/;
-const RESERVED=/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i;
-const CRC_TABLE=(()=>{const t=new Uint32Array(256);for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=(c&1)?0xedb88320^(c>>>1):c>>>1;t[n]=c>>>0;}return t;})();
-function crc32(b){let c=0xffffffff;for(const x of b)c=CRC_TABLE[(c^x)&255]^(c>>>8);return(c^0xffffffff)>>>0;}
-function hash(b){return crypto.createHash('sha256').update(b).digest('hex');}
-function bad(code,{sha256='',details={},inventory=[]}={}){return Object.freeze({ok:false,status:code,code,sha256,validatedProtocolVersion:null,inventory,warnings:[],details:Object.freeze({...details})});}
-function good(sha256,expectedRequest,inventory,{manifest=null,manifestPresent=false,manifestReadable=false,warnings=[]}={}){
+export const DEFAULT_LIMITS = Object.freeze({
+  maxCompressedBytes: 50 * 1024 * 1024,
+  maxTotalUncompressedBytes: 200 * 1024 * 1024,
+  maxEntryUncompressedBytes: 64 * 1024 * 1024,
+  maxEntries: 2000,
+  maxCompressionRatio: 100,
+});
+
+const EOCD = 0x06054b50;
+const CENTRAL = 0x02014b50;
+const LOCAL = 0x04034b50;
+const UTF8_FLAG = 1 << 11;
+const ENCRYPTED_FLAG = 1;
+const UTF8 = new TextDecoder('utf-8', { fatal: true });
+const DRIVE_RE = /^[A-Za-z]:[\\/]/;
+
+const CRC_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let n = 0; n < 256; n += 1) {
+    let c = n;
+    for (let k = 0; k < 8; k += 1) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+    table[n] = c >>> 0;
+  }
+  return table;
+})();
+
+function crc32(buffer) {
+  let crc = 0xffffffff;
+  for (const byte of buffer) crc = CRC_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function hash(buffer) {
+  return crypto.createHash('sha256').update(buffer).digest('hex');
+}
+
+function messageFor(code) {
+  return ({
+    [ERROR_CODES.BAD_ZIP]: 'ZIP is malformed or cannot be read safely',
+    [ERROR_CODES.EMPTY]: 'ZIP is empty',
+    [ERROR_CODES.FILENAME_MISMATCH]: 'Downloaded filename does not match the expected Postman filename',
+    [ERROR_CODES.PATH_TRAVERSAL]: 'ZIP contains a parent-directory traversal path',
+    [ERROR_CODES.ABSOLUTE_PATH]: 'ZIP contains an absolute path',
+    [ERROR_CODES.WINDOWS_DRIVE_PATH]: 'ZIP contains a Windows drive path',
+    [ERROR_CODES.UNC_PATH]: 'ZIP contains a UNC path',
+    [ERROR_CODES.SYMLINK]: 'ZIP contains a symbolic link entry',
+    [ERROR_CODES.COMPRESSED_SIZE_LIMIT]: 'ZIP exceeds the compressed-size limit',
+    [ERROR_CODES.UNCOMPRESSED_SIZE_LIMIT]: 'ZIP exceeds the total uncompressed-size limit',
+    [ERROR_CODES.ENTRY_SIZE_LIMIT]: 'ZIP contains an entry that exceeds the per-entry size limit',
+    [ERROR_CODES.ENTRY_LIMIT]: 'ZIP contains too many entries',
+    [ERROR_CODES.ZIP_BOMB_RISK]: 'ZIP has an unsafe compression ratio',
+  })[code] ?? code;
+}
+
+function bad(code, { sha256 = '', details = {}, inventory = [] } = {}) {
   return Object.freeze({
-    ok:true,
-    status:ARTIFACT_VALID,
-    code:ARTIFACT_VALID,
+    ok: false,
+    status: code,
+    code,
+    message: messageFor(code),
     sha256,
-    validatedProtocolVersion:Number.isInteger(manifest?.protocolVersion)?manifest.protocolVersion:null,
-    requestId:expectedRequest.requestId,
-    repository:expectedRequest.repository,
-    baseCommit:expectedRequest.baseCommit,
-    resultType:typeof manifest?.resultType==='string'?manifest.resultType:null,
+    validatedProtocolVersion: null,
     inventory,
-    warnings:Object.freeze([...warnings]),
-    details:Object.freeze({entryCount:inventory.length,manifestPresent,manifestReadable}),
+    warnings: [],
+    details: Object.freeze({ ...details }),
   });
 }
 
-function checkExpected(e){
-  if(!e||typeof e!=='object'||Array.isArray(e))throw new TypeError('expectedRequest must be an object');
-  for(const k of ['requestId','repository','baseCommit','expectedFilename'])if(typeof e[k]!=='string'||!e[k])throw new TypeError(`expectedRequest.${k} must be a non-empty string`);
-  if(!SHA_RE.test(e.baseCommit))throw new TypeError('expectedRequest.baseCommit must be a full 40-hex Git SHA');
-  if(!REPO_RE.test(e.repository))throw new TypeError('expectedRequest.repository must be owner/repo');
-}
-function limitsOf(o={}){const l={...DEFAULT_LIMITS,...(o||{})};for(const k of Object.keys(DEFAULT_LIMITS))if(!Number.isFinite(l[k])||l[k]<=0)throw new TypeError(`limits.${k} must be positive`);if(!Number.isInteger(l.maxEntries))throw new TypeError('limits.maxEntries must be integer');return l;}
-function filenameOf(p){return path.basename(p);}
-function eocdOffset(b){if(b.length<22)return-1;for(let i=b.length-22;i>=Math.max(0,b.length-22-0xffff);i--)if(b.readUInt32LE(i)===EOCD)return i;return-1;}
-function decodeName(b,flags){if(flags&UTF8_FLAG){try{return UTF8.decode(b);}catch{return null;}}for(const x of b)if(x>127)return null;return b.toString('ascii');}
-/*
- * Unicode Default Case Folding (Unicode 16.0.0).
- * JavaScript has no casefold primitive: ordinary mappings use the built-in
- * lower-case mapping, while this table contains every full-fold exception
- * (including multi-code-point mappings). Cherokee is handled as ranges because
- * its default fold maps both cases to the uppercase Cherokee block.
- */
-const CASEFOLD_EXCEPTIONS = new Map([
-  [0xB5, "\u03bc"],
-  [0xDF, "ss"],
-  [0x149, "\u02bcn"],
-  [0x17F, "s"],
-  [0x1F0, "j\u030c"],
-  [0x345, "\u03b9"],
-  [0x390, "\u03b9\u0308\u0301"],
-  [0x3B0, "\u03c5\u0308\u0301"],
-  [0x3C2, "\u03c3"],
-  [0x3D0, "\u03b2"],
-  [0x3D1, "\u03b8"],
-  [0x3D5, "\u03c6"],
-  [0x3D6, "\u03c0"],
-  [0x3F0, "\u03ba"],
-  [0x3F1, "\u03c1"],
-  [0x3F5, "\u03b5"],
-  [0x587, "\u0565\u0582"],
-  [0x13F8, "\u13f0"],
-  [0x13F9, "\u13f1"],
-  [0x13FA, "\u13f2"],
-  [0x13FB, "\u13f3"],
-  [0x13FC, "\u13f4"],
-  [0x13FD, "\u13f5"],
-  [0x1C80, "\u0432"],
-  [0x1C81, "\u0434"],
-  [0x1C82, "\u043e"],
-  [0x1C83, "\u0441"],
-  [0x1C84, "\u0442"],
-  [0x1C85, "\u0442"],
-  [0x1C86, "\u044a"],
-  [0x1C87, "\u0463"],
-  [0x1C88, "\uA64B"],
-  [0x1E96, "h\u0331"],
-  [0x1E97, "t\u0308"],
-  [0x1E98, "w\u030a"],
-  [0x1E99, "y\u030a"],
-  [0x1E9A, "a\u02be"],
-  [0x1E9B, "\u1e61"],
-  [0x1E9E, "ss"],
-  [0x1F50, "\u03c5\u0313"],
-  [0x1F52, "\u03c5\u0313\u0300"],
-  [0x1F54, "\u03c5\u0313\u0301"],
-  [0x1F56, "\u03c5\u0313\u0342"],
-  [0x1F80, "\u1f00\u03b9"],
-  [0x1F81, "\u1f01\u03b9"],
-  [0x1F82, "\u1f02\u03b9"],
-  [0x1F83, "\u1f03\u03b9"],
-  [0x1F84, "\u1f04\u03b9"],
-  [0x1F85, "\u1f05\u03b9"],
-  [0x1F86, "\u1f06\u03b9"],
-  [0x1F87, "\u1f07\u03b9"],
-  [0x1F88, "\u1f00\u03b9"],
-  [0x1F89, "\u1f01\u03b9"],
-  [0x1F8A, "\u1f02\u03b9"],
-  [0x1F8B, "\u1f03\u03b9"],
-  [0x1F8C, "\u1f04\u03b9"],
-  [0x1F8D, "\u1f05\u03b9"],
-  [0x1F8E, "\u1f06\u03b9"],
-  [0x1F8F, "\u1f07\u03b9"],
-  [0x1F90, "\u1f20\u03b9"],
-  [0x1F91, "\u1f21\u03b9"],
-  [0x1F92, "\u1f22\u03b9"],
-  [0x1F93, "\u1f23\u03b9"],
-  [0x1F94, "\u1f24\u03b9"],
-  [0x1F95, "\u1f25\u03b9"],
-  [0x1F96, "\u1f26\u03b9"],
-  [0x1F97, "\u1f27\u03b9"],
-  [0x1F98, "\u1f20\u03b9"],
-  [0x1F99, "\u1f21\u03b9"],
-  [0x1F9A, "\u1f22\u03b9"],
-  [0x1F9B, "\u1f23\u03b9"],
-  [0x1F9C, "\u1f24\u03b9"],
-  [0x1F9D, "\u1f25\u03b9"],
-  [0x1F9E, "\u1f26\u03b9"],
-  [0x1F9F, "\u1f27\u03b9"],
-  [0x1FA0, "\u1f60\u03b9"],
-  [0x1FA1, "\u1f61\u03b9"],
-  [0x1FA2, "\u1f62\u03b9"],
-  [0x1FA3, "\u1f63\u03b9"],
-  [0x1FA4, "\u1f64\u03b9"],
-  [0x1FA5, "\u1f65\u03b9"],
-  [0x1FA6, "\u1f66\u03b9"],
-  [0x1FA7, "\u1f67\u03b9"],
-  [0x1FA8, "\u1f60\u03b9"],
-  [0x1FA9, "\u1f61\u03b9"],
-  [0x1FAA, "\u1f62\u03b9"],
-  [0x1FAB, "\u1f63\u03b9"],
-  [0x1FAC, "\u1f64\u03b9"],
-  [0x1FAD, "\u1f65\u03b9"],
-  [0x1FAE, "\u1f66\u03b9"],
-  [0x1FAF, "\u1f67\u03b9"],
-  [0x1FB2, "\u1f70\u03b9"],
-  [0x1FB3, "\u03b1\u03b9"],
-  [0x1FB4, "\u03ac\u03b9"],
-  [0x1FB6, "\u03b1\u0342"],
-  [0x1FB7, "\u03b1\u0342\u03b9"],
-  [0x1FBC, "\u03b1\u03b9"],
-  [0x1FBE, "\u03b9"],
-  [0x1FC2, "\u1f74\u03b9"],
-  [0x1FC3, "\u03b7\u03b9"],
-  [0x1FC4, "\u03ae\u03b9"],
-  [0x1FC6, "\u03b7\u0342"],
-  [0x1FC7, "\u03b7\u0342\u03b9"],
-  [0x1FCC, "\u03b7\u03b9"],
-  [0x1FD2, "\u03b9\u0308\u0300"],
-  [0x1FD3, "\u03b9\u0308\u0301"],
-  [0x1FD6, "\u03b9\u0342"],
-  [0x1FD7, "\u03b9\u0308\u0342"],
-  [0x1FE2, "\u03c5\u0308\u0300"],
-  [0x1FE3, "\u03c5\u0308\u0301"],
-  [0x1FE4, "\u03c1\u0313"],
-  [0x1FE6, "\u03c5\u0342"],
-  [0x1FE7, "\u03c5\u0308\u0342"],
-  [0x1FF2, "\u1f7c\u03b9"],
-  [0x1FF3, "\u03c9\u03b9"],
-  [0x1FF4, "\u03ce\u03b9"],
-  [0x1FF6, "\u03c9\u0342"],
-  [0x1FF7, "\u03c9\u0342\u03b9"],
-  [0x1FFC, "\u03c9\u03b9"],
-  [0xFB00, "ff"],
-  [0xFB01, "fi"],
-  [0xFB02, "fl"],
-  [0xFB03, "ffi"],
-  [0xFB04, "ffl"],
-  [0xFB05, "st"],
-  [0xFB06, "st"],
-  [0xFB13, "\u0574\u0576"],
-  [0xFB14, "\u0574\u0565"],
-  [0xFB15, "\u0574\u056b"],
-  [0xFB16, "\u057e\u0576"],
-  [0xFB17, "\u0574\u056d"],
-]);
-
-function fold(s){
-  const normalized=s.normalize('NFC');
-  let result='';
-  for(const character of normalized){
-    const codePoint=character.codePointAt(0);
-    if(codePoint>=0x13A0&&codePoint<=0x13F5){result+=character;continue;}
-    if(codePoint>=0xAB70&&codePoint<=0xABBF){result+=String.fromCodePoint(codePoint-0x97D0);continue;}
-    result+=CASEFOLD_EXCEPTIONS.get(codePoint)??character.toLowerCase();
-  }
-  return result;
+function good(sha256, inventory) {
+  return Object.freeze({
+    ok: true,
+    status: ARTIFACT_VALID,
+    code: ARTIFACT_VALID,
+    message: 'ZIP passed the minimal Postman transport validation',
+    sha256,
+    validatedProtocolVersion: null,
+    inventory,
+    warnings: [],
+    details: Object.freeze({ entryCount: inventory.length }),
+  });
 }
 
-function classify(raw,{allowDirectory=true}={}){
-  if(typeof raw!=='string'||!raw)return{ok:false,code:ERROR_CODES.PATH_INVALID,reason:'empty'};
-  if(/^[\\/]{2}/.test(raw))return{ok:false,code:ERROR_CODES.UNC_PATH,reason:'unc'};
-  if(DRIVE_RE.test(raw))return{ok:false,code:ERROR_CODES.WINDOWS_DRIVE_PATH,reason:'drive'};
-  if(/^[\\/]/.test(raw))return{ok:false,code:ERROR_CODES.ABSOLUTE_PATH,reason:'absolute'};
-  if(/[\u0000-\u001f\u007f]/u.test(raw))return{ok:false,code:ERROR_CODES.PATH_INVALID,reason:'control'};
-  const sep=raw.replaceAll('\\','/'), dir=sep.endsWith('/'), body=dir?sep.slice(0,-1):sep;
-  if(!body||(!allowDirectory&&dir))return{ok:false,code:ERROR_CODES.PATH_INVALID,reason:'directory'};
-  const parts=body.split('/');
-  if(parts.some(x=>x==='..'))return{ok:false,code:ERROR_CODES.PATH_TRAVERSAL,reason:'dotdot'};
-  if(parts.some(x=>x===''||x==='.'))return{ok:false,code:ERROR_CODES.PATH_INVALID,reason:'segment'};
-  for(const x of parts){if(x.includes(':'))return{ok:false,code:ERROR_CODES.NTFS_ADS,reason:'ads'};if(/[. ]$/u.test(x))return{ok:false,code:ERROR_CODES.PATH_INVALID,reason:'trailing'};if(RESERVED.test(x.split('.',1)[0]))return{ok:false,code:ERROR_CODES.WINDOWS_RESERVED_NAME,reason:'reserved'};}
-  const structural=parts.join('/')+(dir?'/':''), normalized=structural.normalize('NFC');
-  return{ok:true,structural,normalized,collisionKey:fold(normalized),isDirectory:dir};
-}
-function parseCentral(b){
-  const eo=eocdOffset(b);if(eo<0||eo+22>b.length)return{error:'eocd'};
-  const disk=b.readUInt16LE(eo+4), cdDisk=b.readUInt16LE(eo+6), onDisk=b.readUInt16LE(eo+8), count=b.readUInt16LE(eo+10), size=b.readUInt32LE(eo+12), off=b.readUInt32LE(eo+16), comment=b.readUInt16LE(eo+20);
-  if(eo+22+comment!==b.length)return{error:'trailing_data'};if(disk||cdDisk||onDisk!==count)return{error:'multi_disk'};if(count===0xffff||size===0xffffffff||off===0xffffffff)return{error:'zip64'};if(off+size!==eo)return{error:'central_bounds'};
-  const entries=[];let p=off;
-  for(let i=0;i<count;i++){
-    if(p+46>eo||b.readUInt32LE(p)!==CENTRAL)return{error:'central_header',index:i};
-    const versionMadeBy=b.readUInt16LE(p+4), versionNeeded=b.readUInt16LE(p+6), flags=b.readUInt16LE(p+8), method=b.readUInt16LE(p+10), crc=b.readUInt32LE(p+16), compressedSize=b.readUInt32LE(p+20), uncompressedSize=b.readUInt32LE(p+24), nl=b.readUInt16LE(p+28), xl=b.readUInt16LE(p+30), cl=b.readUInt16LE(p+32), diskStart=b.readUInt16LE(p+34), externalAttrs=b.readUInt32LE(p+38), localOffset=b.readUInt32LE(p+42), end=p+46+nl+xl+cl;
-    if(end>eo||diskStart)return{error:'central_entry'};if(compressedSize===0xffffffff||uncompressedSize===0xffffffff||localOffset===0xffffffff)return{error:'zip64_entry'};if(flags&ENCRYPTED_FLAG)return{error:'encrypted'};if(method!==0&&method!==8)return{error:'method'};
-    const nameBytes=Buffer.from(b.subarray(p+46,p+46+nl)),rawName=decodeName(nameBytes,flags);if(rawName===null)return{error:'filename_encoding'};
-    entries.push({versionMadeBy,versionNeeded,flags,method,crc,compressedSize,uncompressedSize,nameBytes,rawName,externalAttrs,localOffset});p=end;
-  }
-  if(p!==eo)return{error:'central_size'};return{entries,centralOffset:off};
-}
-function typeCode(e,c){const platform=e.versionMadeBy>>>8, mode=(e.externalAttrs>>>16)&0xffff, type=mode&0xf000, dos=e.externalAttrs&0xffff;if(platform===3&&type===0xa000)return ERROR_CODES.SYMLINK;if(platform===3&&type!==0&&type!==0x8000&&type!==0x4000)return ERROR_CODES.REPARSE_ENTRY;if(dos&0x0400)return ERROR_CODES.REPARSE_ENTRY;if(platform===3&&type===0x4000&&!c.isDirectory)return ERROR_CODES.REPARSE_ENTRY;if(platform===3&&type===0x8000&&c.isDirectory)return ERROR_CODES.REPARSE_ENTRY;return null;}
-function entryData(b,e,centralOffset,max){const p=e.localOffset;if(p+30>centralOffset||b.readUInt32LE(p)!==LOCAL)return{error:'local_header'};const flags=b.readUInt16LE(p+6),method=b.readUInt16LE(p+8),nl=b.readUInt16LE(p+26),xl=b.readUInt16LE(p+28),ns=p+30,ds=ns+nl+xl,de=ds+e.compressedSize;if(flags&ENCRYPTED_FLAG||method!==e.method||de>centralOffset)return{error:'local_mismatch'};if(!Buffer.from(b.subarray(ns,ns+nl)).equals(e.nameBytes))return{error:'local_name'};let data;try{data=e.method===0?Buffer.from(b.subarray(ds,de)):zlib.inflateRawSync(b.subarray(ds,de),{maxOutputLength:max+1});}catch(err){return{error:'inflate',message:err.message};}if(data.length!==e.uncompressedSize||crc32(data)!==e.crc)return{error:'size_or_crc'};return{data,dataEnd:de};}
-function utf8(b){try{return UTF8.decode(b);}catch{return null;}}
-function basicProbe(p,size){const fd=fs.openSync(p,'r');try{const first=Buffer.alloc(Math.min(4,size));fs.readSync(fd,first,0,first.length,0);const ts=Math.min(size,22+0xffff),tail=Buffer.alloc(ts);fs.readSync(fd,tail,0,ts,size-ts);const eo=eocdOffset(tail);if(first.length<4||eo<0)return false;const sig=first.readUInt32LE(0);if(sig!==LOCAL&&sig!==EOCD)return false;return eo+22+tail.readUInt16LE(eo+20)===tail.length;}finally{fs.closeSync(fd);}}
-
-export function validateArtifact(zipPath,expectedRequest){
-  checkExpected(expectedRequest);const limits=limitsOf(expectedRequest.limits);let stat;try{stat=fs.statSync(zipPath);}catch(e){return bad(ERROR_CODES.BAD_ZIP,{details:{reason:'file_missing',message:e.message}});}if(!stat.isFile())return bad(ERROR_CODES.BAD_ZIP,{details:{reason:'not_file'}});if(stat.size===0)return bad(ERROR_CODES.EMPTY,{details:{reason:'zero_byte'}});if(!basicProbe(zipPath,stat.size))return bad(ERROR_CODES.BAD_ZIP,{details:{reason:'basic_probe'}});if(filenameOf(zipPath)!==expectedRequest.expectedFilename)return bad(ERROR_CODES.FILENAME_MISMATCH,{details:{actual:filenameOf(zipPath),expected:expectedRequest.expectedFilename}});if(stat.size>limits.maxCompressedBytes)return bad(ERROR_CODES.COMPRESSED_SIZE_LIMIT,{details:{actual:stat.size,limit:limits.maxCompressedBytes}});
-  let b;try{b=fs.readFileSync(zipPath);}catch(e){return bad(ERROR_CODES.BAD_ZIP,{details:{reason:'read',message:e.message}});}const zipHash=hash(b),parsed=parseCentral(b);if(parsed.error)return bad(ERROR_CODES.BAD_ZIP,{sha256:zipHash,details:parsed});if(parsed.entries.length===0)return bad(ERROR_CODES.EMPTY,{sha256:zipHash,details:{reason:'empty_zip'}});
-  const exact=new Set(),collisions=new Map(),offsets=new Set(),items=[];
-  for(const e of parsed.entries){const c=classify(e.rawName);if(!c.ok)return bad(c.code,{sha256:zipHash,details:{path:e.rawName,reason:c.reason}});const tc=typeCode(e,c);if(tc)return bad(tc,{sha256:zipHash,details:{path:e.rawName}});if(exact.has(c.structural))return bad(ERROR_CODES.DUPLICATE_PATH,{sha256:zipHash,details:{path:c.normalized}});exact.add(c.structural);const old=collisions.get(c.collisionKey);if(old!==undefined&&old!==c.structural)return bad(ERROR_CODES.CASE_COLLISION,{sha256:zipHash,details:{first:old,second:c.structural}});collisions.set(c.collisionKey,c.structural);if(offsets.has(e.localOffset))return bad(ERROR_CODES.BAD_ZIP,{sha256:zipHash,details:{reason:'duplicate_local_offset'}});offsets.add(e.localOffset);items.push({e,c});}
-  if(items.length>limits.maxEntries)return bad(ERROR_CODES.ENTRY_LIMIT,{sha256:zipHash,details:{actual:items.length,limit:limits.maxEntries}});let totalU=0,totalC=0;for(const {e} of items){if(e.uncompressedSize>limits.maxEntryUncompressedBytes)return bad(ERROR_CODES.ENTRY_SIZE_LIMIT,{sha256:zipHash,details:{path:e.rawName,actual:e.uncompressedSize,limit:limits.maxEntryUncompressedBytes}});totalU+=e.uncompressedSize;totalC+=e.compressedSize;if(totalU>limits.maxTotalUncompressedBytes)return bad(ERROR_CODES.UNCOMPRESSED_SIZE_LIMIT,{sha256:zipHash,details:{actual:totalU,limit:limits.maxTotalUncompressedBytes}});if(e.uncompressedSize>0&&e.compressedSize===0)return bad(ERROR_CODES.ZIP_BOMB_RISK,{sha256:zipHash,details:{path:e.rawName,reason:'zero_compressed'}});const r=e.uncompressedSize===0?1:e.uncompressedSize/e.compressedSize;if(r>limits.maxCompressionRatio)return bad(ERROR_CODES.ZIP_BOMB_RISK,{sha256:zipHash,details:{path:e.rawName,ratio:r,limit:limits.maxCompressionRatio}});}const ar=totalU===0?1:(totalC===0?Infinity:totalU/totalC);if(ar>limits.maxCompressionRatio)return bad(ERROR_CODES.ZIP_BOMB_RISK,{sha256:zipHash,details:{aggregateRatio:ar,limit:limits.maxCompressionRatio}});
-  const inventory=[],data=new Map(),ranges=[];for(const {e,c} of items){const r=entryData(b,e,parsed.centralOffset,limits.maxEntryUncompressedBytes);if(r.error)return bad(ERROR_CODES.BAD_ZIP,{sha256:zipHash,details:{path:c.normalized,...r}});ranges.push([e.localOffset,r.dataEnd,c.normalized]);data.set(c.normalized,r.data);inventory.push(Object.freeze({path:c.normalized,kind:c.isDirectory?'directory':'file',compressionMethod:e.method,compressedSize:e.compressedSize,uncompressedSize:e.uncompressedSize,sha256:c.isDirectory?'':hash(r.data)}));}ranges.sort((a,b)=>a[0]-b[0]);for(let i=1;i<ranges.length;i++)if(ranges[i][0]<ranges[i-1][1])return bad(ERROR_CODES.BAD_ZIP,{sha256:zipHash,details:{reason:'overlap'}});
-  let manifest=null,manifestPresent=false,manifestReadable=false;
-  const warnings=[];
-  const manifestEntry=inventory.find(x=>x.path==='manifest.json'&&x.kind==='file');
-  if(manifestEntry){
-    manifestPresent=true;
-    const mt=utf8(data.get('manifest.json'));
-    if(mt===null){
-      warnings.push('manifest_not_utf8');
-    }else{
-      try{
-        const candidate=JSON.parse(mt);
-        if(candidate&&typeof candidate==='object'&&!Array.isArray(candidate)){
-          manifest=candidate;
-          manifestReadable=true;
-          if(typeof candidate.requestId==='string'&&candidate.requestId!==expectedRequest.requestId){
-            return bad(ERROR_CODES.REQUEST_MISMATCH,{sha256:zipHash,inventory,details:{actual:candidate.requestId,expected:expectedRequest.requestId}});
-          }
-          if('requestId' in candidate&&typeof candidate.requestId!=='string')warnings.push('manifest_request_id_not_string');
-        }else{
-          warnings.push('manifest_not_object');
-        }
-      }catch{
-        warnings.push('manifest_json_invalid');
-      }
+function limitsOf(expectedRequest = {}) {
+  const limits = { ...DEFAULT_LIMITS, ...(expectedRequest?.limits ?? {}) };
+  for (const key of Object.keys(DEFAULT_LIMITS)) {
+    if (!Number.isFinite(limits[key]) || limits[key] <= 0) {
+      throw new TypeError(`limits.${key} must be positive`);
     }
   }
-  return good(zipHash,expectedRequest,inventory,{manifest,manifestPresent,manifestReadable,warnings});
+  if (!Number.isInteger(limits.maxEntries)) throw new TypeError('limits.maxEntries must be integer');
+  return limits;
+}
+
+function checkExpected(expectedRequest) {
+  if (!expectedRequest || typeof expectedRequest !== 'object' || Array.isArray(expectedRequest)) {
+    throw new TypeError('expectedRequest must be an object');
+  }
+  if (typeof expectedRequest.expectedFilename !== 'string' || !expectedRequest.expectedFilename) {
+    throw new TypeError('expectedRequest.expectedFilename must be a non-empty string');
+  }
+}
+
+function eocdOffset(buffer) {
+  if (buffer.length < 22) return -1;
+  const start = Math.max(0, buffer.length - 22 - 0xffff);
+  for (let i = buffer.length - 22; i >= start; i -= 1) {
+    if (buffer.readUInt32LE(i) === EOCD) return i;
+  }
+  return -1;
+}
+
+function decodeName(buffer, flags) {
+  if (flags & UTF8_FLAG) {
+    try { return UTF8.decode(buffer); } catch { return null; }
+  }
+  for (const byte of buffer) if (byte > 127) return null;
+  return buffer.toString('ascii');
+}
+
+function classifyPath(raw) {
+  if (typeof raw !== 'string' || !raw) return { ok: false, code: ERROR_CODES.BAD_ZIP, reason: 'empty_name' };
+  if (/^[\\/]{2}/.test(raw)) return { ok: false, code: ERROR_CODES.UNC_PATH, reason: 'unc' };
+  if (DRIVE_RE.test(raw)) return { ok: false, code: ERROR_CODES.WINDOWS_DRIVE_PATH, reason: 'drive' };
+  if (/^[\\/]/.test(raw)) return { ok: false, code: ERROR_CODES.ABSOLUTE_PATH, reason: 'absolute' };
+
+  const normalized = raw.replaceAll('\\', '/');
+  const directory = normalized.endsWith('/');
+  const body = directory ? normalized.slice(0, -1) : normalized;
+  const parts = body.split('/');
+  if (!body || parts.some((part) => part === '')) return { ok: false, code: ERROR_CODES.BAD_ZIP, reason: 'empty_segment' };
+  if (parts.some((part) => part === '..')) return { ok: false, code: ERROR_CODES.PATH_TRAVERSAL, reason: 'dotdot' };
+  if (parts.some((part) => part === '.')) return { ok: false, code: ERROR_CODES.BAD_ZIP, reason: 'dot_segment' };
+  return { ok: true, normalized: body + (directory ? '/' : ''), isDirectory: directory };
+}
+
+function isSymlink(versionMadeBy, externalAttrs) {
+  const platform = versionMadeBy >>> 8;
+  if (platform !== 3) return false;
+  const mode = (externalAttrs >>> 16) & 0xffff;
+  return (mode & 0xf000) === 0xa000;
+}
+
+function parseCentral(buffer) {
+  const eocd = eocdOffset(buffer);
+  if (eocd < 0 || eocd + 22 > buffer.length) return { error: 'eocd' };
+
+  const disk = buffer.readUInt16LE(eocd + 4);
+  const centralDisk = buffer.readUInt16LE(eocd + 6);
+  const onDisk = buffer.readUInt16LE(eocd + 8);
+  const count = buffer.readUInt16LE(eocd + 10);
+  const centralSize = buffer.readUInt32LE(eocd + 12);
+  const centralOffset = buffer.readUInt32LE(eocd + 16);
+  const commentLength = buffer.readUInt16LE(eocd + 20);
+
+  if (eocd + 22 + commentLength !== buffer.length) return { error: 'trailing_data' };
+  if (disk !== 0 || centralDisk !== 0 || onDisk !== count) return { error: 'multi_disk' };
+  if (count === 0xffff || centralSize === 0xffffffff || centralOffset === 0xffffffff) return { error: 'zip64' };
+  if (centralOffset + centralSize !== eocd) return { error: 'central_bounds' };
+
+  const entries = [];
+  let cursor = centralOffset;
+  for (let index = 0; index < count; index += 1) {
+    if (cursor + 46 > eocd || buffer.readUInt32LE(cursor) !== CENTRAL) return { error: 'central_header', index };
+    const versionMadeBy = buffer.readUInt16LE(cursor + 4);
+    const flags = buffer.readUInt16LE(cursor + 8);
+    const method = buffer.readUInt16LE(cursor + 10);
+    const crc = buffer.readUInt32LE(cursor + 16);
+    const compressedSize = buffer.readUInt32LE(cursor + 20);
+    const uncompressedSize = buffer.readUInt32LE(cursor + 24);
+    const nameLength = buffer.readUInt16LE(cursor + 28);
+    const extraLength = buffer.readUInt16LE(cursor + 30);
+    const commentLen = buffer.readUInt16LE(cursor + 32);
+    const diskStart = buffer.readUInt16LE(cursor + 34);
+    const externalAttrs = buffer.readUInt32LE(cursor + 38);
+    const localOffset = buffer.readUInt32LE(cursor + 42);
+    const end = cursor + 46 + nameLength + extraLength + commentLen;
+    if (end > eocd || diskStart !== 0) return { error: 'central_entry', index };
+    if (flags & ENCRYPTED_FLAG) return { error: 'encrypted', index };
+    if (method !== 0 && method !== 8) return { error: 'compression_method', index };
+
+    const nameBytes = Buffer.from(buffer.subarray(cursor + 46, cursor + 46 + nameLength));
+    const rawName = decodeName(nameBytes, flags);
+    if (rawName === null) return { error: 'filename_encoding', index };
+    entries.push({
+      versionMadeBy,
+      flags,
+      method,
+      crc,
+      compressedSize,
+      uncompressedSize,
+      nameBytes,
+      rawName,
+      externalAttrs,
+      localOffset,
+    });
+    cursor = end;
+  }
+  if (cursor !== eocd) return { error: 'central_size' };
+  return { entries, centralOffset };
+}
+
+function readEntryData(buffer, entry, centralOffset, maxEntryBytes) {
+  const cursor = entry.localOffset;
+  if (cursor + 30 > centralOffset || buffer.readUInt32LE(cursor) !== LOCAL) return { error: 'local_header' };
+  const flags = buffer.readUInt16LE(cursor + 6);
+  const method = buffer.readUInt16LE(cursor + 8);
+  const nameLength = buffer.readUInt16LE(cursor + 26);
+  const extraLength = buffer.readUInt16LE(cursor + 28);
+  const nameStart = cursor + 30;
+  const dataStart = nameStart + nameLength + extraLength;
+  const dataEnd = dataStart + entry.compressedSize;
+  if ((flags & ENCRYPTED_FLAG) || method !== entry.method || dataEnd > centralOffset) return { error: 'local_mismatch' };
+  if (!Buffer.from(buffer.subarray(nameStart, nameStart + nameLength)).equals(entry.nameBytes)) return { error: 'local_name' };
+
+  let data;
+  try {
+    data = entry.method === 0
+      ? Buffer.from(buffer.subarray(dataStart, dataEnd))
+      : zlib.inflateRawSync(buffer.subarray(dataStart, dataEnd), { maxOutputLength: maxEntryBytes + 1 });
+  } catch (error) {
+    return { error: 'inflate', message: String(error?.message ?? error).slice(0, 300) };
+  }
+  if (data.length !== entry.uncompressedSize || crc32(data) !== entry.crc) return { error: 'size_or_crc' };
+  return { data };
+}
+
+export function validateArtifact(zipPath, expectedRequest) {
+  checkExpected(expectedRequest);
+  const limits = limitsOf(expectedRequest);
+
+  let stat;
+  try { stat = fs.statSync(zipPath); } catch (error) {
+    return bad(ERROR_CODES.BAD_ZIP, { details: { reason: 'file_missing', message: String(error?.message ?? error) } });
+  }
+  if (!stat.isFile()) return bad(ERROR_CODES.BAD_ZIP, { details: { reason: 'not_file' } });
+  if (stat.size === 0) return bad(ERROR_CODES.EMPTY, { details: { reason: 'zero_byte' } });
+  if (path.basename(zipPath) !== expectedRequest.expectedFilename) {
+    return bad(ERROR_CODES.FILENAME_MISMATCH, {
+      details: { actual: path.basename(zipPath), expected: expectedRequest.expectedFilename },
+    });
+  }
+  if (stat.size > limits.maxCompressedBytes) {
+    return bad(ERROR_CODES.COMPRESSED_SIZE_LIMIT, { details: { actual: stat.size, limit: limits.maxCompressedBytes } });
+  }
+
+  let buffer;
+  try { buffer = fs.readFileSync(zipPath); } catch (error) {
+    return bad(ERROR_CODES.BAD_ZIP, { details: { reason: 'read', message: String(error?.message ?? error) } });
+  }
+  const zipHash = hash(buffer);
+  const parsed = parseCentral(buffer);
+  if (parsed.error) return bad(ERROR_CODES.BAD_ZIP, { sha256: zipHash, details: parsed });
+  if (parsed.entries.length === 0) return bad(ERROR_CODES.EMPTY, { sha256: zipHash, details: { reason: 'empty_zip' } });
+  if (parsed.entries.length > limits.maxEntries) {
+    return bad(ERROR_CODES.ENTRY_LIMIT, {
+      sha256: zipHash,
+      details: { actual: parsed.entries.length, limit: limits.maxEntries },
+    });
+  }
+
+  let totalUncompressed = 0;
+  let totalCompressed = 0;
+  const inventory = [];
+
+  for (const entry of parsed.entries) {
+    const classified = classifyPath(entry.rawName);
+    if (!classified.ok) {
+      return bad(classified.code, { sha256: zipHash, inventory, details: { path: entry.rawName, reason: classified.reason } });
+    }
+    if (isSymlink(entry.versionMadeBy, entry.externalAttrs)) {
+      return bad(ERROR_CODES.SYMLINK, { sha256: zipHash, inventory, details: { path: classified.normalized } });
+    }
+    if (entry.uncompressedSize > limits.maxEntryUncompressedBytes) {
+      return bad(ERROR_CODES.ENTRY_SIZE_LIMIT, {
+        sha256: zipHash,
+        inventory,
+        details: { path: classified.normalized, actual: entry.uncompressedSize, limit: limits.maxEntryUncompressedBytes },
+      });
+    }
+
+    totalUncompressed += entry.uncompressedSize;
+    totalCompressed += entry.compressedSize;
+    if (totalUncompressed > limits.maxTotalUncompressedBytes) {
+      return bad(ERROR_CODES.UNCOMPRESSED_SIZE_LIMIT, {
+        sha256: zipHash,
+        inventory,
+        details: { actual: totalUncompressed, limit: limits.maxTotalUncompressedBytes },
+      });
+    }
+    const ratio = entry.uncompressedSize === 0
+      ? 1
+      : (entry.compressedSize === 0 ? Infinity : entry.uncompressedSize / entry.compressedSize);
+    if (ratio > limits.maxCompressionRatio) {
+      return bad(ERROR_CODES.ZIP_BOMB_RISK, {
+        sha256: zipHash,
+        inventory,
+        details: { path: classified.normalized, ratio, limit: limits.maxCompressionRatio },
+      });
+    }
+
+    const data = readEntryData(buffer, entry, parsed.centralOffset, limits.maxEntryUncompressedBytes);
+    if (data.error) {
+      return bad(ERROR_CODES.BAD_ZIP, {
+        sha256: zipHash,
+        inventory,
+        details: { path: classified.normalized, ...data },
+      });
+    }
+    inventory.push(Object.freeze({
+      path: classified.normalized,
+      kind: classified.isDirectory ? 'directory' : 'file',
+      compressedSize: entry.compressedSize,
+      uncompressedSize: entry.uncompressedSize,
+    }));
+  }
+
+  const aggregateRatio = totalUncompressed === 0
+    ? 1
+    : (totalCompressed === 0 ? Infinity : totalUncompressed / totalCompressed);
+  if (aggregateRatio > limits.maxCompressionRatio) {
+    return bad(ERROR_CODES.ZIP_BOMB_RISK, {
+      sha256: zipHash,
+      inventory,
+      details: { aggregateRatio, limit: limits.maxCompressionRatio },
+    });
+  }
+
+  return good(zipHash, inventory);
 }

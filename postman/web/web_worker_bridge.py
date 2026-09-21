@@ -33,14 +33,27 @@ WEB_STARTING = "WEB_STARTING"
 PROMPT_SENT = "PROMPT_SENT"
 WAITING_ASSISTANT = "WAITING_ASSISTANT"
 ARTIFACT_FOUND = "ARTIFACT_FOUND"
+ASSISTANT_COMPLETED_NO_ARTIFACT = "ASSISTANT_COMPLETED_NO_ARTIFACT"
+ARTIFACT_REJECTED = "ARTIFACT_REJECTED"
 RESULT_DURABLE = "RESULT_DURABLE"
+POSTMAN_TRANSPORT_FAILED = "POSTMAN_TRANSPORT_FAILED"
 
 BRIDGE_INVALID_REQUEST = "BRIDGE_INVALID_REQUEST"
 BRIDGE_INVALID_TASK_URL = "BRIDGE_INVALID_TASK_URL"
 BRIDGE_INVALID_CONFIG = "BRIDGE_INVALID_CONFIG"
 BRIDGE_PIPELINE_FAILED = "BRIDGE_PIPELINE_FAILED"
 
-_STATE_ORDER = (ACCEPTED, WEB_STARTING, PROMPT_SENT, WAITING_ASSISTANT, ARTIFACT_FOUND, RESULT_DURABLE)
+_STATE_ORDER = (
+    ACCEPTED,
+    WEB_STARTING,
+    PROMPT_SENT,
+    WAITING_ASSISTANT,
+    ARTIFACT_FOUND,
+    ASSISTANT_COMPLETED_NO_ARTIFACT,
+    ARTIFACT_REJECTED,
+    RESULT_DURABLE,
+)
+_TERMINAL_SUCCESS_CODES = {RESULT_DURABLE, ASSISTANT_COMPLETED_NO_ARTIFACT, ARTIFACT_REJECTED}
 _FATAL_ARTIFACT_CODES = {
     artifact_detector.ARTIFACT_INVALID_CONFIG,
     artifact_detector.ARTIFACT_OBSERVER_PROOF_INVALID,
@@ -424,6 +437,7 @@ class WebWorkerBridge:
                         "proof": None,
                         "everProved": False,
                         "artifactRejected": False,
+                        "noArtifactSince": None,
                     }
                 ]
                 next_result_recheck = started_at + _RESULT_RECHECK_INTERVAL_MS / 1000.0
@@ -451,6 +465,7 @@ class WebWorkerBridge:
                     for watch in watched_turns:
                         if not watch.get("artifactRejected"):
                             watch["proof"] = None
+                            watch["noArtifactSince"] = None
 
                 def waiting_state() -> None:
                     fields: dict[str, Any] = {
@@ -490,6 +505,7 @@ class WebWorkerBridge:
                     if completed.get("ok"):
                         watch["proof"] = completed
                         watch["everProved"] = True
+                        watch["noArtifactSince"] = None
                         return {"kind": "proof"}
                     if completed.get("code") in _NONTERMINAL_OBSERVER_CODES:
                         return {"kind": "pending"}
@@ -502,11 +518,52 @@ class WebWorkerBridge:
                         ),
                     }
 
+                def completed_turn_fields(completed: dict[str, Any]) -> dict[str, Any]:
+                    details = completed.get("details") if isinstance(completed.get("details"), dict) else {}
+                    assistant_index = details.get("assistantIndex")
+                    return {
+                        "assistantText": str(details.get("assistantText", "")),
+                        "assistantTextSha256": str(details.get("assistantTextSha256", "")),
+                        "assistantIndex": assistant_index if isinstance(assistant_index, int) and not isinstance(assistant_index, bool) else None,
+                        "conversationUrl": chat_url,
+                        "conversationId": conversation_id,
+                        "expectedFilename": expected_filename,
+                    }
+
+                def observer_proof_sha(proof: object) -> str:
+                    if not isinstance(proof, dict):
+                        return ""
+                    details = proof.get("details") if isinstance(proof.get("details"), dict) else {}
+                    value = details.get("assistantTextSha256")
+                    return value if isinstance(value, str) else ""
+
                 def inspect_watch(watch: dict[str, Any]) -> dict[str, Any]:
                     nonlocal last_artifact_code, terminal_result
                     completed = watch.get("proof")
                     if watch.get("artifactRejected") or not isinstance(completed, dict):
                         return {"kind": "no_result"}
+
+                    reproofed = False
+                    proof_changed = False
+                    no_artifact_since = watch.get("noArtifactSince")
+                    if no_artifact_since is not None and (
+                        self.monotonic() - float(no_artifact_since) >= _RESULT_RECHECK_INTERVAL_MS / 1000.0
+                    ):
+                        previous_proof = watch.get("proof")
+                        watch["proof"] = None
+                        observed = observe_watch(watch, min(_REPROVE_TIMEOUT_MIN_MS, remaining_ms()))
+                        if observed["kind"] in {"fatal", "interrupted"}:
+                            return observed
+                        if observed["kind"] != "proof":
+                            return {"kind": "no_result"}
+                        completed = watch.get("proof")
+                        if not isinstance(completed, dict):
+                            return {"kind": "no_result"}
+                        reproofed = True
+                        proof_changed = (
+                            bool(observer_proof_sha(previous_proof))
+                            and observer_proof_sha(previous_proof) != observer_proof_sha(completed)
+                        )
 
                     detected = artifact_detector.detect_artifact_dom(
                         page,
@@ -543,20 +600,31 @@ class WebWorkerBridge:
                             validator_runner=validator_runner,
                         )
                         if durable.get("code") != artifact_download.RESULT_DURABLE:
+                            durable_details = durable.get("details") if isinstance(durable.get("details"), dict) else {}
                             if (
                                 durable.get("code") == artifact_download.ARTIFACT_INVALID
-                                and durable.get("recoverable") is True
+                                and durable_details.get("phase") == "validator"
                             ):
-                                watch["artifactRejected"] = True
-                                self._write_state(
+                                validation_code = str(durable_details.get("validatorCode", artifact_download.ARTIFACT_INVALID))
+                                validation_message = str(
+                                    durable_details.get("validationMessage")
+                                    or durable_details.get("reason")
+                                    or validation_code
+                                )
+                                record = self._write_state(
                                     request,
-                                    ARTIFACT_FOUND,
+                                    ARTIFACT_REJECTED,
                                     artifactValidation=durable,
+                                    validationCode=validation_code,
+                                    validationMessage=validation_message,
+                                    validationDetails=durable_details.get("validationDetails", {}),
                                     reminderPolicy=reminder_policy_record,
                                     browserRecoveryPolicy=recovery_policy_record,
                                     reminders=reminder_records,
+                                    **completed_turn_fields(completed),
                                 )
-                                return {"kind": "no_result"}
+                                terminal_result = {"ok": True, "code": ARTIFACT_REJECTED, "details": record}
+                                return {"kind": "terminal", "result": terminal_result}
                             return {
                                 "kind": "fatal",
                                 "result": self._fail(
@@ -591,9 +659,11 @@ class WebWorkerBridge:
                         and artifact_details.get("reason") == "assistant_text_changed_after_completed_proof"
                     ):
                         watch["proof"] = None
+                        watch["noArtifactSince"] = None
                         return {"kind": "stale_proof"}
                     if artifact_code == artifact_detector.ARTIFACT_TURN_NOT_COMPLETED:
                         watch["proof"] = None
+                        watch["noArtifactSince"] = None
                         return {"kind": "pending"}
                     if (
                         artifact_code == artifact_detector.ARTIFACT_CHAT_CORRELATION_LOST
@@ -604,6 +674,7 @@ class WebWorkerBridge:
                         }
                     ):
                         watch["proof"] = None
+                        watch["noArtifactSince"] = None
                         return {"kind": "pending"}
                     if artifact_code in _FATAL_ARTIFACT_CODES:
                         return {
@@ -615,7 +686,32 @@ class WebWorkerBridge:
                             ),
                         }
                     if artifact_code in _REMINDER_ELIGIBLE_ARTIFACT_CODES:
-                        return {"kind": "no_result"}
+                        now = self.monotonic()
+                        no_artifact_since = watch.get("noArtifactSince")
+                        if proof_changed:
+                            watch["noArtifactSince"] = now
+                            return {"kind": "no_result"}
+                        if no_artifact_since is None and not reproofed:
+                            watch["noArtifactSince"] = now
+                            return {"kind": "no_result"}
+                        if not reproofed and now - float(no_artifact_since) < _RESULT_RECHECK_INTERVAL_MS / 1000.0:
+                            return {"kind": "no_result"}
+                        record = self._write_state(
+                            request,
+                            ASSISTANT_COMPLETED_NO_ARTIFACT,
+                            lastArtifactCode=last_artifact_code,
+                            noArtifactRecheckMs=_RESULT_RECHECK_INTERVAL_MS,
+                            reminderPolicy=reminder_policy_record,
+                            browserRecoveryPolicy=recovery_policy_record,
+                            reminders=reminder_records,
+                            **completed_turn_fields(completed),
+                        )
+                        terminal_result = {
+                            "ok": True,
+                            "code": ASSISTANT_COMPLETED_NO_ARTIFACT,
+                            "details": record,
+                        }
+                        return {"kind": "terminal", "result": terminal_result}
                     return {
                         "kind": "fatal",
                         "result": self._fail(
@@ -765,6 +861,23 @@ class WebWorkerBridge:
                         if pre_reminder["kind"] == "interrupted":
                             continue
 
+                        no_artifact_deadlines = [
+                            float(watch["noArtifactSince"]) + _RESULT_RECHECK_INTERVAL_MS / 1000.0
+                            for watch in watched_turns
+                            if watch.get("proof") is not None
+                            and watch.get("noArtifactSince") is not None
+                            and not watch.get("artifactRejected")
+                        ]
+                        if no_artifact_deadlines:
+                            grace_due = min(no_artifact_deadlines)
+                            delay = min(
+                                max(grace_due - self.monotonic(), 0.0),
+                                max(deadline - self.monotonic(), 0.0),
+                            )
+                            if delay > 0:
+                                self.sleep(delay)
+                            continue
+
                         if last_observer_code in {
                             browser_observer.USER_TURN_ANCHOR_MISSING,
                             browser_observer.ASSISTANT_STATE_UNKNOWN,
@@ -831,6 +944,7 @@ class WebWorkerBridge:
                                     "proof": None,
                                     "everProved": False,
                                     "artifactRejected": False,
+                                    "noArtifactSince": None,
                                 }
                             )
                             next_result_recheck = self.monotonic() + _RESULT_RECHECK_INTERVAL_MS / 1000.0
@@ -873,19 +987,32 @@ class WebWorkerBridge:
                     "externalBrowserClosed": False,
                     "ownedContextClosed": False,
                 }
-            if terminal_result is not None and terminal_result.get("code") == RESULT_DURABLE:
+            if terminal_result is not None and terminal_result.get("code") in _TERMINAL_SUCCESS_CODES:
                 terminal_result.setdefault("details", {})["browserCleanup"] = cleanup
                 try:
-                    self._write_state(request, RESULT_DURABLE, browserCleanup=cleanup)
+                    self._write_state(request, str(terminal_result.get("code")), browserCleanup=cleanup)
                 except Exception:
                     pass
 
     def _fail(self, request: BridgeRequest, reason: str, *, code: str = BRIDGE_PIPELINE_FAILED, details: Any = None) -> dict[str, Any]:
-        record = self._write_state(request, self.read_state(request.request_id).get("state", ACCEPTED) if self.read_state(request.request_id) else ACCEPTED, lastError=str(reason)[:1000], failureCode=code)
-        if isinstance(details, dict):
-            record["failureDetails"] = details
-            _atomic_json(self.state_path(request.request_id), record)
-        return _result(code, ok=False, details={"requestId": request.request_id, "workerJobId": request.worker_job_id, "state": record["state"], "resultPath": record["resultPath"], "reason": str(reason)[:1000]})
+        transport_message = str(reason)[:1000]
+        transport_details = dict(details) if isinstance(details, dict) else {"value": details}
+        record = self._write_state(request, self.read_state(request.request_id).get("state", ACCEPTED) if self.read_state(request.request_id) else ACCEPTED, lastError=transport_message, failureCode=code)
+        record["failureDetails"] = transport_details
+        _atomic_json(self.state_path(request.request_id), record)
+        return _result(
+            POSTMAN_TRANSPORT_FAILED,
+            ok=False,
+            details={
+                "requestId": request.request_id,
+                "workerJobId": request.worker_job_id,
+                "state": record["state"],
+                "resultPath": record["resultPath"],
+                "transportCode": code,
+                "transportMessage": transport_message,
+                "details": transport_details,
+            },
+        )
 
 
 __all__ = [
@@ -894,11 +1021,14 @@ __all__ = [
     "PROMPT_SENT",
     "WAITING_ASSISTANT",
     "ARTIFACT_FOUND",
+    "ASSISTANT_COMPLETED_NO_ARTIFACT",
+    "ARTIFACT_REJECTED",
     "RESULT_DURABLE",
     "BRIDGE_INVALID_REQUEST",
     "BRIDGE_INVALID_TASK_URL",
     "BRIDGE_INVALID_CONFIG",
     "BRIDGE_PIPELINE_FAILED",
+    "POSTMAN_TRANSPORT_FAILED",
     "BridgeRequest",
     "WebWorkerBridge",
 ]

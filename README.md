@@ -22,6 +22,8 @@ postman/direct/postman.ps1
 @Postman --chat REQ_... <новый intent>
 ```
 
+Automatic continuation после допустимого non-durable terminal handoff продолжается столько раз, сколько действительно нужно безопасной задаче без решения пользователя; `continuationIndex` служит монотонным счётчиком chain identity. `POSTMAN_TRANSPORT_FAILED` автоматически не продолжать.
+
 Normal flow:
 
 ```text

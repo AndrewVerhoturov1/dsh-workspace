@@ -17,7 +17,7 @@ class ReminderContractDocsTests(unittest.TestCase):
         cls.direct = (ROOT / "postman" / "direct" / "postman_direct.py").read_text(encoding="utf-8")
 
     def test_skill_version_and_fixed_timing_contract(self):
-        self.assertIn("DIRECT_POSTMAN_SKILL_VERSION: 17", self.skill)
+        self.assertIn("DIRECT_POSTMAN_SKILL_VERSION: 20", self.skill)
         for marker in ("10 минут", "20 минут", "30 минут", "45 минут"):
             self.assertIn(marker, self.skill)
         self.assertIn("timeoutMs: 3000000", self.skill)
@@ -25,7 +25,8 @@ class ReminderContractDocsTests(unittest.TestCase):
     def test_flow_documents_same_req_reminders_and_page_cleanup(self):
         self.assertIn("POSTMAN_TRANSPORT_CONTROL: REMINDER", self.flow)
         self.assertIn("новый REQ не создаётся", self.flow)
-        self.assertIn("10-й, 20-й и 30-й минуте", self.flow)
+        for marker in ("10-я", "20-я", "30-я"):
+            self.assertIn(marker, self.flow)
         self.assertIn("about:blank", self.flow)
         self.assertIn("закрывает принадлежащую", self.flow)
         self.assertIn("ему рабочую вкладку", self.flow)
