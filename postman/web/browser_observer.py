@@ -582,7 +582,8 @@ def observe_next_assistant(
                 recoverable=True,
                 details=last_details,
             )
-        sleep(max(poll_ms, 1) / 1000.0)
+        remaining_s = max(deadline - monotonic(), 0.0)
+        sleep(min(max(poll_ms, 1) / 1000.0, remaining_s))
 
 
 def run_submit_and_observe(

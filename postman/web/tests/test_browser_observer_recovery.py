@@ -152,5 +152,32 @@ class ObserverRecoveryTests(unittest.TestCase):
         self.assertTrue(result["recoverable"])
 
 
+    def test_observer_timeout_does_not_overshoot_three_second_poll(self):
+        page = FakePage()
+        page.turns = []
+        clock = FakeClock()
+        sleeps = []
+
+        def bounded_sleep(seconds):
+            sleeps.append(seconds)
+            clock.sleep(seconds)
+
+        result = observer.observe_next_assistant(
+            page,
+            "probe",
+            page.url,
+            timeout_ms=10_000,
+            stable_ms=0,
+            poll_ms=3_000,
+            sleep=bounded_sleep,
+            monotonic=clock.monotonic,
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["code"], observer.USER_TURN_ANCHOR_MISSING)
+        self.assertEqual(sleeps, [3.0, 3.0, 3.0, 1.0])
+        self.assertEqual(clock.monotonic(), 10.0)
+
+
 if __name__ == "__main__":
     unittest.main()
