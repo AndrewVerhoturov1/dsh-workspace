@@ -29,6 +29,7 @@ postman/web/
 ├─ browser_bootstrap.py
 ├─ browser_submit.py
 ├─ browser_observer.py
+├─ browser_recovery.py
 ├─ request_identity.py
 ├─ artifact_detector.py
 ├─ artifact_download.py
@@ -73,9 +74,18 @@ Continuation path открывает exact сохранённый `/c/<conversat
 ### `browser_observer.py`
 
 Observer привязывается к доказанному user turn и exact chat URL и принимает только
-непосредственно следующий assistant turn.
+непосредственно следующий assistant turn. Во время генерации DOM опрашивается раз в
+3 секунды. Видимое состояние `Соединение прервано` / `Connection interrupted` вне
+conversation turns считается отдельным recoverable состоянием, а не завершением ответа.
 
 Поиск «любого похожего ответа» по всему DOM запрещён.
+
+### `browser_recovery.py`
+
+Recovery используется только после доказанного connection interruption. Он reload-ит
+ту же owned Page, подтверждает тот же `/c/<conversation-id>`, live composer и trusted
+user anchor, после чего выдерживает ещё 10 секунд стабилизации. Reload не создаёт новый
+REQ, не отправляет prompt и не сбрасывает общий 45-минутный deadline.
 
 ### `request_identity.py` и `artifact_detector.py`
 
@@ -154,6 +164,10 @@ ACCEPTED
 ```
 
 Bridge не является repository applicator и не принимает model-provided routing authority.
+Пока `RESULT_DURABLE` не получен, уже доказанные assistant turns остаются наблюдаемыми:
+после завершённого ответа без ZIP они повторно проверяются раз в 10 секунд. Перед каждым
+reminder выполняется обязательная последняя проверка всех разрешённых turns; если exact
+RESULT уже появился, reminder отменяется. Во время recovery reminders блокируются.
 
 ## Fresh и continuation
 

@@ -35,11 +35,12 @@ import browser_submit as submit
 
 DEFAULT_TIMEOUT_MS = 120_000
 DEFAULT_STABLE_MS = 2_000
-DEFAULT_POLL_MS = 100
+DEFAULT_POLL_MS = 3_000
 
 ASSISTANT_TURN_STARTED = "ASSISTANT_TURN_STARTED"
 ASSISTANT_TURN_STREAMING = "ASSISTANT_TURN_STREAMING"
 ASSISTANT_TURN_COMPLETED = "ASSISTANT_TURN_COMPLETED"
+ASSISTANT_CONNECTION_INTERRUPTED = "ASSISTANT_CONNECTION_INTERRUPTED"
 
 USER_TURN_ANCHOR_MISSING = "USER_TURN_ANCHOR_MISSING"
 CHAT_CORRELATION_LOST = "CHAT_CORRELATION_LOST"
@@ -213,6 +214,77 @@ def generation_active(page: Any) -> tuple[bool, str]:
     except Exception:
         pass
     return False, ""
+
+
+_INTERRUPTION_SCOPE_JS = r"""
+(node) => {
+  const turn = node.closest('[data-testid^="conversation-turn-"], [data-message-author-role]');
+  if (turn) return {insideConversation: true, scopeText: ''};
+  let current = node;
+  for (let depth = 0; current && depth < 5; depth += 1, current = current.parentElement) {
+    const text = String(current.innerText || current.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!text || text.length > 1200) continue;
+    const lower = text.toLocaleLowerCase();
+    if (
+      lower.includes('ожидание полного ответа') ||
+      lower.includes('waiting for full response') ||
+      lower.includes('waiting for a full response')
+    ) {
+      return {insideConversation: false, scopeText: text};
+    }
+  }
+  const ownText = String(node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim();
+  return {insideConversation: false, scopeText: ownText};
+}
+"""
+
+_INTERRUPTION_HEAD_PATTERNS = (
+    re.compile(r"Соединение\s+прервано", re.I),
+    re.compile(r"Connection\s+interrupted", re.I),
+)
+
+
+def _normalize_ui_text(value: str) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip().casefold()
+
+
+def connection_interrupted(page: Any) -> tuple[bool, dict[str, Any]]:
+    """Detect the ChatGPT connection-interruption UI outside conversation turns."""
+    pairs = (
+        ("соединение прервано", "ожидание полного ответа"),
+        ("connection interrupted", "waiting for full response"),
+        ("connection interrupted", "waiting for a full response"),
+    )
+    for pattern in _INTERRUPTION_HEAD_PATTERNS:
+        try:
+            locator = page.get_by_text(pattern)
+            count = min(_locator_count(locator), 8)
+        except Exception:
+            continue
+        for index in range(count):
+            try:
+                candidate = locator.nth(index)
+                if not candidate.is_visible():
+                    continue
+            except Exception:
+                continue
+            try:
+                scope = candidate.evaluate(_INTERRUPTION_SCOPE_JS)
+            except Exception:
+                scope = {
+                    "insideConversation": False,
+                    "scopeText": _inner_text(candidate),
+                }
+            if not isinstance(scope, dict) or scope.get("insideConversation"):
+                continue
+            visible_text = str(scope.get("scopeText", ""))
+            normalized = _normalize_ui_text(visible_text)
+            if any(head in normalized and tail in normalized for head, tail in pairs):
+                return True, {
+                    "matchedText": visible_text[:500],
+                    "source": "visible_connection_interruption_ui",
+                }
+    return False, {}
 
 
 def find_user_anchor(turns: list[dict[str, Any]], expected_prompt: str) -> int | None:
@@ -416,6 +488,19 @@ def observe_next_assistant(
                 },
             )
 
+        interrupted, interruption_details = connection_interrupted(page)
+        if interrupted:
+            return _result(
+                ASSISTANT_CONNECTION_INTERRUPTED,
+                ok=False,
+                transitions=tracker.transitions,
+                recoverable=True,
+                details={
+                    "chatUrl": current_url,
+                    **interruption_details,
+                },
+            )
+
         turns, selector = snapshot_turns(page)
         correlation = correlate_next_assistant(turns, expected_prompt)
         last_code = correlation["code"]
@@ -497,7 +582,8 @@ def observe_next_assistant(
                 recoverable=True,
                 details=last_details,
             )
-        sleep(max(poll_ms, 1) / 1000.0)
+        remaining_s = max(deadline - monotonic(), 0.0)
+        sleep(min(max(poll_ms, 1) / 1000.0, remaining_s))
 
 
 def run_submit_and_observe(

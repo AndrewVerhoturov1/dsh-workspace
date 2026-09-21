@@ -212,10 +212,9 @@ class WebWorkerReminderTests(unittest.TestCase):
             stored = bridge.read_state(REQ)
             self.assertEqual(len(stored["failureDetails"]["reminders"]), 3)
 
-    def test_completed_error_response_waits_until_ten_minutes_before_reminder(self):
+    def test_completed_error_response_is_rechecked_after_ten_seconds_without_reminder(self):
         clock = FakeClock()
         page = FakePage()
-        reminder_times = []
         detector_calls = 0
 
         def detect(*_args, **_kwargs):
@@ -224,10 +223,6 @@ class WebWorkerReminderTests(unittest.TestCase):
             if detector_calls == 1:
                 return {"ok": False, "code": artifact_detector.ARTIFACT_ENVELOPE_MISSING, "details": {}}
             return {"ok": True, "code": artifact_detector.ARTIFACT_DOM_CONFIRMED, "details": {}}
-
-        def send_reminder(_page, prompt, _chat_url, *, timeout_ms):
-            reminder_times.append(round(clock.monotonic()))
-            return confirmed_submit(prompt)
 
         durable = {
             "ok": True,
@@ -244,9 +239,10 @@ class WebWorkerReminderTests(unittest.TestCase):
             with (
                 patch.object(browser_submit, "submit_fresh_prompt", return_value=confirmed_submit(PROMPT)),
                 patch.object(browser_observer, "observe_next_assistant", return_value=completed_observer()),
+                patch.object(browser_observer, "connection_interrupted", return_value=(False, {})),
                 patch.object(artifact_detector, "detect_artifact_dom", side_effect=detect),
                 patch.object(artifact_download, "download_validated_artifact", return_value=durable),
-                patch.object(reminder_policy, "submit_reminder", side_effect=send_reminder),
+                patch.object(reminder_policy, "submit_reminder") as send_reminder,
             ):
                 result = bridge.run_request(
                     REQ,
@@ -257,13 +253,14 @@ class WebWorkerReminderTests(unittest.TestCase):
                     playwright_factory=FakeFactory(page),
                 )
 
-            self.assertTrue(result["ok"])
-            self.assertEqual(result["code"], web_worker_bridge.RESULT_DURABLE)
-            self.assertEqual(reminder_times, [600])
-            self.assertEqual(len(result["details"]["reminders"]), 1)
-            self.assertTrue(result["details"]["browserCleanup"]["ownedPageClosed"])
-            self.assertEqual(result["details"]["browserCleanup"]["closeAttempts"], 1)
-            self.assertTrue(page.closed)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["code"], web_worker_bridge.RESULT_DURABLE)
+        self.assertEqual(clock.monotonic(), 10.0)
+        send_reminder.assert_not_called()
+        self.assertEqual(result["details"]["reminders"], [])
+        self.assertTrue(result["details"]["browserCleanup"]["ownedPageClosed"])
+        self.assertEqual(result["details"]["browserCleanup"]["closeAttempts"], 1)
+        self.assertTrue(page.closed)
 
     def test_rejected_zip_waits_for_first_reminder_then_durable_retry(self):
         clock = FakeClock()
