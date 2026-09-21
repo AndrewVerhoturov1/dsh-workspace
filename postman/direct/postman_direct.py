@@ -846,6 +846,7 @@ def _task_from_args(args: argparse.Namespace) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    execution_request_id: str | None = None
     try:
         direct = DirectPostman(
             repository=args.repository,
@@ -861,6 +862,7 @@ def main(argv: list[str] | None = None) -> int:
             if not args.request_id:
                 raise DirectPostmanError("DIRECT_INVALID_REQUEST", "--request-id is required")
             task = _task_from_args(args)
+            execution_request_id = args.request_id
             result = direct.run(
                 request_id=args.request_id,
                 task=task,
@@ -876,7 +878,20 @@ def main(argv: list[str] | None = None) -> int:
         code = exc.code if isinstance(exc, DirectPostmanError) else "DIRECT_INVALID_REQUEST"
         error_details = exc.details if isinstance(exc, DirectPostmanError) else {}
         request_fields = {"requestId": args.request_id} if args.request_id else {}
-        if code == POSTMAN_TRANSPORT_FAILED:
+        if (
+            isinstance(exc, DirectPostmanError)
+            and execution_request_id
+            and code != POSTMAN_TRANSPORT_FAILED
+        ):
+            result = _json_result(
+                False,
+                POSTMAN_TRANSPORT_FAILED,
+                **request_fields,
+                transportCode=code,
+                transportMessage=str(exc),
+                details=error_details,
+            )
+        elif code == POSTMAN_TRANSPORT_FAILED:
             result = _json_result(
                 False,
                 code,

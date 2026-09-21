@@ -557,6 +557,30 @@ class DirectPostmanUnitTests(unittest.TestCase):
         self.assertEqual(payload["transportMessage"], failure_details["transportMessage"])
         self.assertEqual(payload["details"], failure_details["details"])
 
+    def test_cli_prebridge_failure_becomes_correlated_transport_failure(self):
+        failure_code = "DIRECT_BROWSER_FAILED"
+        failure_message = "dedicated Chrome failed to become ready"
+        failure_details = {"phase": "cdp", "cdpUrl": "http://127.0.0.1:9222"}
+        with patch.object(
+            direct.DirectPostman,
+            "run",
+            side_effect=direct.DirectPostmanError(
+                failure_code,
+                failure_message,
+                details=failure_details,
+            ),
+        ), contextlib.redirect_stdout(io.StringIO()) as stdout:
+            exit_code = direct.main(["--request-id", REQ, "--task", "intent"])
+
+        self.assertEqual(exit_code, 2)
+        payload = json.loads(stdout.getvalue())
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["code"], direct.POSTMAN_TRANSPORT_FAILED)
+        self.assertEqual(payload["requestId"], REQ)
+        self.assertEqual(payload["transportCode"], failure_code)
+        self.assertEqual(payload["transportMessage"], failure_message)
+        self.assertEqual(payload["details"], failure_details)
+
     def test_continuation_limit_stops_before_publication_or_send(self):
         previous = types.SimpleNamespace(
             request_id=REQ,
