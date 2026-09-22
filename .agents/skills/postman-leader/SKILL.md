@@ -26,6 +26,16 @@ Leader самостоятельно:
 
 Существенную работу Leader делегирует через `postman_bridge(message=...)`.
 
+## Модель и доступ
+
+`postman_bridge` доступен только top-level Agent с preset `postman-leader`. Если tool отсутствует
+или возвращает `POSTMAN_BRIDGE_CALLER_REJECTED`, не обходить boundary через generic subagent,
+прямые Postman tools или browser automation.
+
+Harness намеренно держит model routing вне Agent presets. Поэтому preset/skill не переключают
+main-model автоматически: для роли Leader в model selector выбирать `GPT-5.6 Sol`. Bridge child
+при этом независимо и жёстко зафиксирован как `codex / gpt-5.6-luna`.
+
 ## Выбор режима
 
 Использовать `@PostmanAsk`, когда нужен текстовый результат:
@@ -95,6 +105,7 @@ final-reply invariant относится к direct user-facing `@PostmanAsk`, а
 
 ## Ошибки
 
-`POSTMAN_BRIDGE_NO_TRANSPORT`, `POSTMAN_BRIDGE_START_FAILED`, invalid terminal и настоящий
-`POSTMAN_TRANSPORT_FAILED` не разрешают blind resend. Сначала определить, был ли создан REQ и
-есть ли trusted terminal state; новый запрос создаётся только как новое осознанное решение Leader-а.
+`POSTMAN_BRIDGE_CALLER_REJECTED`, `POSTMAN_BRIDGE_NO_TRANSPORT`,
+`POSTMAN_BRIDGE_START_FAILED`, invalid terminal и настоящий `POSTMAN_TRANSPORT_FAILED`
+не разрешают blind resend. Сначала определить, был ли создан REQ и есть ли trusted terminal state;
+новый запрос создаётся только как новое осознанное решение Leader-а.

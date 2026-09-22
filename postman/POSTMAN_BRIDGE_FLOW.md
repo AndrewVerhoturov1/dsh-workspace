@@ -117,17 +117,23 @@ postman_bridge
 ```
 
 `write`, `edit`, shell, generic `subagent`, workflow и direct Postman tools скрыты runtime-ом.
-Ограничение применяется только к top-level preset Agent. Spawn child имеет `origin=subagent`, не
-наследует parent Agent restriction и получает собственный Bridge `toolFilter`.
+Сам `postman_bridge` тоже является Leader-only capability: top-level `postman-leader` получает его
+в allowlist, а любой другой root/subagent Agent получает точечный `deny: [postman_bridge]`.
+Tool body повторно проверяет caller и при обходе visibility boundary возвращает
+`POSTMAN_BRIDGE_CALLER_REJECTED` до parsing/spawn.
 
-Preset задаёт роль, но не принудительно меняет выбранную пользователем main-model route. Для роли
-Leader рекомендуется наиболее сильная доступная модель (в текущем deployment — Sol); Luna Bridge
-фиксирована кодом независимо от модели parent.
+Spawn child имеет `origin=subagent`, получает этот non-Leader deny и дополнительно собственный
+Bridge `toolFilter`, поэтому не может рекурсивно вызвать `postman_bridge`.
+
+Harness model routing намеренно находится вне Agent presets. Поэтому `postman-leader` задаёт роль
+и tool boundary, но не переключает модель автоматически: для Leader в model selector выбирается
+`GPT-5.6 Sol`. Luna Bridge фиксирована кодом независимо от модели parent.
 
 ## 9. Failure boundary
 
 Bridge никогда не делает blind resend.
 
+- caller не top-level `postman-leader` → `POSTMAN_BRIDGE_CALLER_REJECTED` до parsing/spawn;
 - malformed message → `POSTMAN_BRIDGE_MESSAGE_REJECTED` до spawn;
 - spawn/capability failure → `POSTMAN_BRIDGE_START_FAILED`;
 - child не стартовал Direct → `POSTMAN_BRIDGE_NO_TRANSPORT`;
@@ -136,5 +142,6 @@ Bridge никогда не делает blind resend.
 
 ## 10. Ordinary subagents
 
-Обычные `subagent`/`subagent_fork` capabilities Harness не изменяются. `postman_bridge` — отдельный
-специализированный tool с фиксированной Luna и отдельными ограничениями.
+Обычные `subagent`/`subagent_fork` capabilities Harness не изменяются. Для не-Leader Agents
+добавляется только точечный deny имени `postman_bridge`; остальные global tools этим deny не
+затрагиваются. `postman_bridge` остаётся отдельным специализированным tool с фиксированной Luna.

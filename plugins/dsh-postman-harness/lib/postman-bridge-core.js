@@ -1,4 +1,5 @@
 export const POSTMAN_BRIDGE_PROVIDER = 'spawn'
+export const POSTMAN_BRIDGE_TOOL_NAME = 'postman_bridge'
 export const POSTMAN_BRIDGE_AGENT_OPTIONS = Object.freeze({
   provider: 'codex',
   model: 'gpt-5.6-luna',
@@ -18,7 +19,7 @@ export const POSTMAN_LEADER_TOOL_ALLOWLIST = Object.freeze([
   'skill',
   'web_fetch',
   'web_search',
-  'postman_bridge',
+  POSTMAN_BRIDGE_TOOL_NAME,
 ])
 
 export const POSTMAN_BRIDGE_PERSONA = `You are Postman Bridge, a minimal one-shot transport subagent.
@@ -61,6 +62,17 @@ export function isTopLevelPostmanLeader(agent) {
   if ((composedPreset ?? header?.agentPreset) !== POSTMAN_LEADER_PRESET_ID) return false
   if (header?.origin === 'subagent') return false
   return (header?.delegationDepth ?? 0) === 0
+}
+
+export function postmanBridgeCallerAllowed(agent) {
+  return isTopLevelPostmanLeader(agent)
+}
+
+export function postmanBridgeRestrictionForAgent(agent) {
+  if (isTopLevelPostmanLeader(agent)) {
+    return { allow: [...POSTMAN_LEADER_TOOL_ALLOWLIST] }
+  }
+  return { deny: [POSTMAN_BRIDGE_TOOL_NAME] }
 }
 
 export async function settleTrustedPostmanStatus(readStatus, signal) {
