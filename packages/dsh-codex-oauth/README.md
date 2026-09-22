@@ -76,7 +76,7 @@ Device flow prints a one-time code plus the OpenAI device-verification URL; ente
 
 ## Use Codex
 
-The plugin registers provider route **`codex`** with the Codex catalog models (`gpt-5.x-codex` and friends, from the installed pi-ai catalog). Select `codex` / a Codex model in the Web model picker, or set the default for a headless profile in the profile's `cordis.patch.yml`:
+The plugin registers provider route **`codex`** with the Codex catalog models. The repository build keeps pi-ai 0.85.1 for transport compatibility and backfills the upstream GPT-6 Sol (`gpt-6-sol`) and GPT-6 Luna (`gpt-6-luna`) model metadata from pi-ai 0.87.1; both advertise text + image input. Select `codex` / a Codex model in the Web model picker, or set the default for a headless profile in the profile's `cordis.patch.yml`:
 
 ```yaml
 - id: agent-default-model
@@ -117,6 +117,7 @@ Override in a later patch layer (profile `cordis.patch.yml` replaces this row's 
 
 - `src/store.ts` — `FileCredentialStore`, a persistent pi-ai `CredentialStore` with serialized read-modify-write (`dsh-atomic-write`).
 - `src/auth.ts` — login/status/logout over pi-ai's `openai-codex` OAuth provider.
+- `src/catalog.ts` — a narrow catalog backfill for GPT-6 Sol/Luna; existing pi-ai entries win, so the shim becomes inert after a future catalog upgrade.
 - `src/adapter.ts` — `CodexAdapter extends LlmAdapter` (from `@deepseek-ai/dsh-llm`), registered with `ctx.llm.registerAdapter(['codex'], …)`; `stream()` resolves/refreshes auth through pi-ai, enforces provider-idle timeout, and aborts SDK work when its consumer stops.
 - `src/convert.ts` — request/stream vocabulary conversion, adapted from `@deepseek-ai/dsh-llm-pi-ai` (MIT, © DeepSeek AI) with image attachment support and provider-native replay state omitted.
 - `src/index.ts` — the Cordis function plugin (`name`/`inject`/`Config`/`apply`); registers the adapter and, when the composition mounts `ctx.commands`, the `/codex` command.
