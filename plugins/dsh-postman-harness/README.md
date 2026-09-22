@@ -56,8 +56,11 @@ child scope. Child assistant prose не используется как result a
 
 ## Postman Leader preset
 
-Web profile добавляет selectable `Postman Leader` (`postman-leader`). Runtime boundary оставляет
-его top-level Agent-у только read-only inspection + `postman_bridge`:
+Файловый preset `Postman Leader` (`postman-leader`) находится в корне репозитория в
+`.agent-presets/postman-leader/`. Встроенный `dsh-agent-presets` находит его в
+`$DSH_HOME/.agent-presets`; при проверке отдельного рабочего дерева нужно задать `DSH_HOME`
+на его корень. Runtime boundary оставляет top-level Agent-у только read-only inspection +
+`postman_bridge`:
 
 ```text
 read, glob, grep, skill, web_fetch, web_search, postman_bridge
