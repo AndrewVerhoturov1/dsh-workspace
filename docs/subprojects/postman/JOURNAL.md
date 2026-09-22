@@ -31,3 +31,9 @@
 - **Что изменилось:** существующее направление зарегистрировано в `docs/subprojects/postman/`.
 - **Почему:** Postman развивается через множество отдельных runtime/docs/tests задач и требует долговременного контекста между ними.
 - **Результат:** `SUBPROJECT.md` хранит актуальный контекст и решения, а канонические Postman contracts остаются на существующих путях.
+
+### 2026-09-22 — Добавлен отдельный text transport `@PostmanAsk`
+
+- **Что изменилось:** рядом с artifact `@Postman` спроектирован text-only `@PostmanAsk` с отдельным Direct wrapper, exact REQ-bound BEGIN/END trigger и `TEXT_RESULT_DURABLE`. Trusted current-turn Harness сам выбирает wrapper без передачи user text моделью в tool arguments.
+- **Почему:** для анализа и консультаций ZIP избыточен, но обычный завершённый текст нельзя принимать без доказанного transport trigger и паузы стабильности.
+- **Результат:** text mode переиспользует общий browser/correlation/recovery слой и существующий 10-second fresh re-proof; artifact mode и его ZIP-контракт остаются отдельными и неизменёнными.

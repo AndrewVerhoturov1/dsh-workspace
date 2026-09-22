@@ -4,11 +4,12 @@ import { join } from 'node:path'
 import { spawn as nodeSpawn } from 'node:child_process'
 
 const REQ_PATTERN = /^REQ_\d{8}T\d{6}Z_\d{4}$/
-const TERMINAL_OK = new Set([
+const ARTIFACT_TERMINAL_OK = new Set([
   'RESULT_DURABLE',
   'ASSISTANT_COMPLETED_NO_ARTIFACT',
   'ARTIFACT_REJECTED',
 ])
+const TEXT_TERMINAL_OK = new Set(['TEXT_RESULT_DURABLE'])
 const MAX_CAPTURE_CHARS = 1024 * 1024
 const MAX_OUTPUT_CHARS = 4 * 1024 * 1024
 const STATUS_WAIT_MS = 480_000
@@ -121,14 +122,15 @@ function parseError(code) {
 export function parsePostmanUserTurn(raw) {
   if (typeof raw !== 'string') throw parseError('POSTMAN_CURRENT_TURN_UNAVAILABLE')
 
-  // Initial whitespace is transport framing, then exact @Postman and at most
-  // one immediately-following separator character. Everything after that is
-  // preserved byte-for-byte at the JS-string/UTF-8 boundary.
-  const trigger = /^(\s*)@Postman(?:(\s)|$)/u.exec(raw)
+  // Initial whitespace is transport framing, then one exact production marker
+  // and at most one immediately-following separator character. Everything
+  // after that is preserved byte-for-byte at the JS-string/UTF-8 boundary.
+  const trigger = /^(\s*)@(PostmanAsk|Postman)(?:(\s)|$)/u.exec(raw)
   if (trigger === null) throw parseError('POSTMAN_TRIGGER_PARSE_FAILED')
+  const transportKind = trigger[2] === 'PostmanAsk' ? 'text' : 'artifact'
 
   const afterTrigger = raw.slice(trigger[0].length)
-  if (trigger[2] === undefined && afterTrigger === '') {
+  if (trigger[3] === undefined && afterTrigger === '') {
     throw parseError('POSTMAN_EMPTY_PAYLOAD')
   }
 
@@ -149,6 +151,7 @@ export function parsePostmanUserTurn(raw) {
     }
     return {
       mode: 'chat',
+      transportKind,
       chatRequestId: chat[1],
       payload,
       removedTransportPrefix,
@@ -161,7 +164,7 @@ export function parsePostmanUserTurn(raw) {
   if (raw !== removedTransportPrefix + payload) {
     throw parseError('POSTMAN_PAYLOAD_MISMATCH')
   }
-  return { mode: 'fresh', chatRequestId: undefined, payload, removedTransportPrefix }
+  return { mode: 'fresh', transportKind, chatRequestId: undefined, payload, removedTransportPrefix }
 }
 
 export function makeRequestId(now = () => new Date(), randomInt = cryptoRandomInt) {
@@ -216,7 +219,8 @@ function terminalGate(job) {
   }
 
   if (job.exitCode === 0) {
-    if (parsed.ok !== true || !TERMINAL_OK.has(parsed.code) || parsed.state !== parsed.code) {
+    const allowed = job.transportKind === 'text' ? TEXT_TERMINAL_OK : ARTIFACT_TERMINAL_OK
+    if (parsed.ok !== true || !allowed.has(parsed.code) || parsed.state !== parsed.code) {
       return {
         ok: false,
         code: 'POSTMAN_RESULT_GATE_FAILED',
@@ -230,6 +234,24 @@ function terminalGate(job) {
         code: 'POSTMAN_DURABLE_RESULT_ZIP_MISSING',
         requestId: job.requestId,
         transportMessage: 'RESULT_DURABLE did not contain resultZip.',
+      }
+    }
+    if (parsed.code === 'TEXT_RESULT_DURABLE') {
+      if (typeof parsed.assistantText !== 'string' || parsed.assistantText.trim() === '') {
+        return {
+          ok: false,
+          code: 'POSTMAN_TEXT_RESULT_MISSING',
+          requestId: job.requestId,
+          transportMessage: 'TEXT_RESULT_DURABLE did not contain assistantText.',
+        }
+      }
+      if (typeof parsed.assistantTextSha256 !== 'string' || parsed.assistantTextSha256 !== sha256(parsed.assistantText)) {
+        return {
+          ok: false,
+          code: 'POSTMAN_TEXT_RESULT_SHA_MISMATCH',
+          requestId: job.requestId,
+          transportMessage: 'TEXT_RESULT_DURABLE assistantText SHA-256 is invalid.',
+        }
       }
     }
     return parsed
@@ -285,12 +307,15 @@ export class DirectPostmanJobManager {
     return this.jobs.get(sessionId)
   }
 
-  async start({ sessionId, workspace, payload, chatRequestId, automaticContinuation = false, proof }) {
+  async start({ sessionId, workspace, payload, chatRequestId, automaticContinuation = false, transportKind = 'artifact', proof }) {
     const previous = this.jobs.get(sessionId)
     if (previous?.state === 'running') throw parseError('POSTMAN_CURRENT_TURN_JOB_ALREADY_RUNNING')
     if (typeof payload !== 'string' || payload.trim() === '') throw parseError('POSTMAN_EMPTY_PAYLOAD')
+    if (!['artifact', 'text'].includes(transportKind)) throw parseError('POSTMAN_RESULT_MODE_INVALID')
+    if (transportKind === 'text' && automaticContinuation) throw parseError('POSTMAN_AUTOMATIC_CONTINUATION_NOT_ALLOWED')
 
-    const bridge = join(workspace, 'postman', 'direct', 'postman.ps1')
+    const bridgeName = transportKind === 'text' ? 'postman-ask.ps1' : 'postman.ps1'
+    const bridge = join(workspace, 'postman', 'direct', bridgeName)
     if (!this.exists(bridge)) throw parseError('POSTMAN_DIRECT_BRIDGE_MISSING')
 
     const requestId = makeRequestId(this.now, this.randomInt)
@@ -320,6 +345,7 @@ export class DirectPostmanJobManager {
       startedAt: new Date().toISOString(),
       chatRequestId,
       automaticContinuation,
+      transportKind,
       proof,
       waiters: new Set(),
     }
@@ -391,6 +417,7 @@ export class DirectPostmanJobManager {
       requestId,
       jobId,
       parseMode: proof?.parseMode,
+      transportKind,
       chatRequestId: chatRequestId ?? null,
       sourceMessageLength: proof?.sourceMessageLength,
       sourceMessageSha256: proof?.sourceMessageSha256,
@@ -464,6 +491,7 @@ export class DirectPostmanJobManager {
       payload,
       chatRequestId: previous.requestId,
       automaticContinuation: true,
+      transportKind: 'artifact',
       proof: {
         parseMode: 'automatic-continuation',
         sourceMessageLength: 0,
@@ -500,7 +528,7 @@ export function createDirectCurrentTurnToolConfigs(ctx, { store, jobs } = {}) {
 
   const sendCurrent = {
     name: 'postman_send_current_turn',
-    description: 'Production @Postman orchestration. Takes NO task/prompt argument. Reads the exact current user/message captured by trusted Harness runtime, strips only transport syntax, and starts the existing Direct Postman bridge.',
+    description: 'Production @Postman/@PostmanAsk orchestration. Takes NO task/prompt argument. Reads the exact current user/message captured by trusted Harness runtime, strips only transport syntax, and starts the matching Direct Postman bridge.',
     parameters: {},
     output: toolOutput(),
     async execute(_args, exec) {
@@ -512,6 +540,7 @@ export function createDirectCurrentTurnToolConfigs(ctx, { store, jobs } = {}) {
       const parsed = parsePostmanUserTurn(record.text)
       const proof = {
         parseMode: parsed.mode,
+        transportKind: parsed.transportKind,
         sourceMessageLength: record.length,
         sourceMessageSha256: record.sha256,
         payloadLength: parsed.payload.length,
@@ -528,6 +557,7 @@ export function createDirectCurrentTurnToolConfigs(ctx, { store, jobs } = {}) {
           workspace: workspaceOf(agent),
           payload: parsed.payload,
           chatRequestId: parsed.chatRequestId,
+          transportKind: parsed.transportKind,
           proof,
         })
       } catch (error) {
