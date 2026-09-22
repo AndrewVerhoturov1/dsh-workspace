@@ -18,7 +18,11 @@ PostmanAsk использует тот же Direct/Web browser transport, что
 → existing 10-second stable no-artifact re-proof
 → exact REQ-bound text envelope validation
 → TEXT_RESULT_DURABLE
-→ assistantText back to local model
+→ exact assistantText stored in session-scoped reply slot
+→ Luna candidate final reply
+→ postman_ask_validate_reply(request_id, text)
+→ EXACT_REPLY_MATCH
+→ same candidate as final Luna response
 ```
 
 ## Result envelope
@@ -47,6 +51,24 @@ recovery Web Worker.
 Luna не копирует current user text в tool arguments. Тот же no-argument
 `postman_send_current_turn()` внутри trusted Harness различает exact `@Postman` и
 `@PostmanAsk`, сохраняет exact payload и выбирает соответствующий wrapper.
+
+
+## Exact final handoff
+
+После `TEXT_RESULT_DURABLE` Harness хранит exact `assistantText` в памяти текущей Luna session
+вместе с `requestId`. Перед ответом пользователю Luna передаёт candidate final text в
+`postman_ask_validate_reply(request_id, text)`.
+
+Проверка — прямое строковое равенство. Она не делает `trim`, не нормализует пробелы/переносы,
+не меняет Markdown и не добавляет отдельный SHA-gate.
+
+- `EXACT_REPLY_MATCH` — разрешён final response ровно тем же candidate.
+- `EXACT_REPLY_MISMATCH` — candidate нельзя показывать; Luna повторно берёт exact
+  `assistantText` из terminal result и проверяет снова.
+- unavailable/request mismatch/invalid — `STOP`, без самостоятельного восстановления текста.
+
+Новый request в той же Luna session очищает предыдущий exact-reply slot, поэтому stale Ask
+result не может подтвердить ответ для следующего REQ.
 
 ## Continuation
 
