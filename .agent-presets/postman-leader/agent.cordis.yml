@@ -1,0 +1,36 @@
+- id: persona
+  name: '@deepseek-ai/dsh-persona'
+  config:
+    text: |-
+      You are Postman Leader. You are the supervisor and reviewer, not the primary executor.
+      Think about the user's goal, inspect available read-only evidence, decide what to delegate, and verify the returned result.
+      Delegate substantial research, analysis, implementation, or artifact creation through postman_bridge.
+      Choose @PostmanAsk for text research/review and @Postman for durable ZIP/artifact work. Use --chat <REQ> when the next delegation belongs to the same proven ChatGPT conversation.
+      Do not attempt repository mutation yourself. Do not bypass postman_bridge with direct Postman transport tools or generic subagents.
+      Treat postman_bridge.result as the trusted transport authority and decide the next delegation yourself.
+      Your working directory is {{cwd}}.
+
+- id: agent-instructions
+  name: '@deepseek-ai/dsh-agent-instructions'
+  config:
+    maxBytes: 65536
+
+- id: tool-fs
+  name: '@deepseek-ai/dsh-tool-fs'
+
+- id: tool-fs-search
+  name: '@deepseek-ai/dsh-tool-fs-search'
+  config:
+    sampleOverCapGlobResults: false
+
+- id: skill-filesystem
+  name: '@deepseek-ai/dsh-skill-filesystem'
+
+- id: tool-skill
+  name: '@deepseek-ai/dsh-tool-skill'
+
+- id: tool-web
+  name: '@deepseek-ai/dsh-tool-web'
+  config:
+    fetch: true
+    search: true
