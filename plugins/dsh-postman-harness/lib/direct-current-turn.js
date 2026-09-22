@@ -1,6 +1,6 @@
 import { createHash, randomInt as cryptoRandomInt } from 'node:crypto'
-import { existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, readFileSync } from 'node:fs'
+import { basename, isAbsolute, join } from 'node:path'
 import { spawn as nodeSpawn } from 'node:child_process'
 
 const REQ_PATTERN = /^REQ_\d{8}T\d{6}Z_\d{4}$/
@@ -16,6 +16,10 @@ const STATUS_WAIT_MS = 480_000
 
 function sha256(text) {
   return createHash('sha256').update(text, 'utf8').digest('hex')
+}
+
+function sha256Bytes(value) {
+  return createHash('sha256').update(value).digest('hex')
 }
 
 function requiredAgent(exec, name) {
@@ -237,20 +241,93 @@ function terminalGate(job) {
       }
     }
     if (parsed.code === 'TEXT_RESULT_DURABLE') {
-      if (typeof parsed.assistantText !== 'string' || parsed.assistantText.trim() === '') {
-        return {
-          ok: false,
-          code: 'POSTMAN_TEXT_RESULT_MISSING',
-          requestId: job.requestId,
-          transportMessage: 'TEXT_RESULT_DURABLE did not contain assistantText.',
+      const deliveryMode = parsed.deliveryMode ?? 'inline'
+      parsed.deliveryMode = deliveryMode
+      if (deliveryMode === 'inline') {
+        if (typeof parsed.assistantText !== 'string' || parsed.assistantText.trim() === '') {
+          return {
+            ok: false,
+            code: 'POSTMAN_TEXT_RESULT_MISSING',
+            requestId: job.requestId,
+            transportMessage: 'Inline TEXT_RESULT_DURABLE did not contain assistantText.',
+          }
         }
-      }
-      if (typeof parsed.assistantTextSha256 !== 'string' || parsed.assistantTextSha256 !== sha256(parsed.assistantText)) {
+        if (typeof parsed.assistantTextSha256 !== 'string' || parsed.assistantTextSha256 !== sha256(parsed.assistantText)) {
+          return {
+            ok: false,
+            code: 'POSTMAN_TEXT_RESULT_SHA_MISMATCH',
+            requestId: job.requestId,
+            transportMessage: 'Inline TEXT_RESULT_DURABLE assistantText SHA-256 is invalid.',
+          }
+        }
+        if (parsed.resultFile !== undefined) {
+          return {
+            ok: false,
+            code: 'POSTMAN_TEXT_RESULT_INLINE_FILE_UNEXPECTED',
+            requestId: job.requestId,
+            transportMessage: 'Inline TEXT_RESULT_DURABLE must not include resultFile.',
+          }
+        }
+      } else if (deliveryMode === 'file') {
+        const expectedName = `POSTMAN_${job.requestId}_ANSWER.md`
+        if (parsed.assistantText !== undefined) {
+          return {
+            ok: false,
+            code: 'POSTMAN_TEXT_RESULT_FILE_CONTAINS_INLINE_TEXT',
+            requestId: job.requestId,
+            transportMessage: 'File TEXT_RESULT_DURABLE must not expose assistantText to Luna.',
+          }
+        }
+        if (
+          typeof parsed.resultFile !== 'string' || parsed.resultFile === '' || !isAbsolute(parsed.resultFile)
+          || parsed.resultFileName !== expectedName || basename(parsed.resultFile) !== expectedName
+          || parsed.resultMimeType !== 'text/markdown' || parsed.resultEncoding !== 'utf-8'
+          || !Number.isInteger(parsed.assistantTextLength) || parsed.assistantTextLength < 1
+          || !Number.isInteger(parsed.assistantTextByteLength) || parsed.assistantTextByteLength < 1
+          || typeof parsed.assistantTextSha256 !== 'string' || parsed.assistantTextSha256 === ''
+          || parsed.resultFileSha256 !== parsed.assistantTextSha256
+        ) {
+          return {
+            ok: false,
+            code: 'POSTMAN_TEXT_RESULT_FILE_DESCRIPTOR_INVALID',
+            requestId: job.requestId,
+            transportMessage: 'File TEXT_RESULT_DURABLE descriptor is incomplete or invalid.',
+          }
+        }
+        let bytes
+        try {
+          bytes = readFileSync(parsed.resultFile)
+        } catch (error) {
+          return {
+            ok: false,
+            code: 'POSTMAN_TEXT_RESULT_FILE_UNREADABLE',
+            requestId: job.requestId,
+            transportMessage: `PostmanAsk Markdown result could not be read: ${String(error?.message ?? error)}`,
+          }
+        }
+        if (bytes.length !== parsed.assistantTextByteLength || sha256Bytes(bytes) !== parsed.assistantTextSha256) {
+          return {
+            ok: false,
+            code: 'POSTMAN_TEXT_RESULT_FILE_SHA_MISMATCH',
+            requestId: job.requestId,
+            transportMessage: 'PostmanAsk Markdown result bytes do not match the durable descriptor.',
+          }
+        }
+        const decoded = bytes.toString('utf8')
+        if (!Buffer.from(decoded, 'utf8').equals(bytes)) {
+          return {
+            ok: false,
+            code: 'POSTMAN_TEXT_RESULT_FILE_UTF8_INVALID',
+            requestId: job.requestId,
+            transportMessage: 'PostmanAsk Markdown result is not exact valid UTF-8.',
+          }
+        }
+      } else {
         return {
           ok: false,
-          code: 'POSTMAN_TEXT_RESULT_SHA_MISMATCH',
+          code: 'POSTMAN_TEXT_RESULT_DELIVERY_MODE_INVALID',
           requestId: job.requestId,
-          transportMessage: 'TEXT_RESULT_DURABLE assistantText SHA-256 is invalid.',
+          transportMessage: 'TEXT_RESULT_DURABLE deliveryMode is invalid.',
         }
       }
     }
@@ -382,6 +459,7 @@ export class DirectPostmanJobManager {
       if (
         job.result?.ok === true
         && job.result.code === 'TEXT_RESULT_DURABLE'
+        && job.result.deliveryMode === 'inline'
         && typeof job.result.assistantText === 'string'
       ) {
         this.exactAskReplies.set(job.sessionId, Object.freeze({
@@ -622,7 +700,7 @@ export function createDirectCurrentTurnToolConfigs(ctx, { store, jobs } = {}) {
 
   const validateAskReply = {
     name: 'postman_ask_validate_reply',
-    description: 'Compare a candidate final Luna reply with the exact TEXT_RESULT_DURABLE assistantText stored for this session. Uses strict string equality with no whitespace or Markdown normalization.',
+    description: 'Inline PostmanAsk only: compare a candidate final Luna reply with the exact TEXT_RESULT_DURABLE assistantText stored for this session. File delivery must be handed off by resultFile without this validator.',
     parameters: {
       request_id: {
         type: 'string',
