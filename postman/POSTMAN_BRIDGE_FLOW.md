@@ -82,10 +82,31 @@ session и возвращает parent-у trusted terminal object.
 
 Это специально не зависит от того, как Luna сформулировала final assistant message.
 
-Для text mode authority остаётся `TEXT_RESULT_DURABLE.assistantText`. Child выполняет существующий
-`postman_ask_validate_reply` перед своим final response, но parent получает terminal data напрямую.
-Parent Leader может анализировать/суммировать этот tool result; direct user-facing exact-reply
-contract на parent supervisor response не распространяется.
+Для text mode authority — весь trusted `TEXT_RESULT_DURABLE` terminal, а способ потребления
+зависит от `deliveryMode`:
+
+```text
+deliveryMode=inline
+→ terminal содержит assistantText
+→ child вызывает postman_ask_validate_reply
+→ EXACT_REPLY_MATCH разрешает exact child final reply
+→ parent Leader получает тот же trusted terminal напрямую
+
+deliveryMode=file
+→ terminal не содержит assistantText
+→ terminal содержит проверенный resultFile descriptor
+→ child НЕ вызывает `postman_ask_validate_reply`
+→ child НЕ читает/не реконструирует resultFile
+→ bridge host возвращает descriptor parent Leader напрямую
+```
+
+Parent Leader для `inline` может анализировать/суммировать `assistantText`. Для `file` он
+использует `resultFile` как authority и, только если содержание действительно нужно для
+supervisor-решения, читает exact файл собственными `read`/`grep` выборочно. Не требуется и не
+желательно целиком rehydrate-ить большой Markdown в один model turn.
+
+Direct user-facing exact-reply/file-handoff contract относится к direct Luna response; supervisor
+Leader получает trusted terminal data и сам решает, какую часть результата нужно анализировать.
 
 ## 7. Continuation
 
