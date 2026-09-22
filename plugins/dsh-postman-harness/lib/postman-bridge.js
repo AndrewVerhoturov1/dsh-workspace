@@ -6,6 +6,7 @@ import {
   POSTMAN_BRIDGE_TOOL_ALLOWLIST,
   POSTMAN_BRIDGE_TOOL_NAME,
   buildPostmanBridgeStartRequest,
+  createPostmanBridgeBoundaryManager,
   isTopLevelPostmanLeader,
   postmanBridgeCallerAllowed,
   postmanBridgeRestrictionForAgent,
@@ -13,7 +14,7 @@ import {
 } from './postman-bridge-core.js'
 
 export const name = 'dsh-postman-harness-bridge'
-export const inject = ['subagents', 'tools']
+export const inject = ['agents', 'subagents', 'tools']
 
 function requiredAgent(exec) {
   const agent = exec?.agent
@@ -157,7 +158,17 @@ export function installPostmanLeaderBoundary(agent) {
 
 export function apply(ctx) {
   ctx.tools.register(createPostmanBridgeTool(ctx))
-  ctx.on('agent/created', ({ agent }) => installPostmanLeaderBoundary(agent))
+
+  const boundaries = createPostmanBridgeBoundaryManager(sessionId => ctx.agents.get(sessionId))
+  ctx.effect(
+    () => () => boundaries.disposeAll(),
+    'dsh-postman-harness-bridge.boundary-manager()',
+  )
+  ctx.on('agent/created', ({ agent }) => boundaries.install(agent))
+  ctx.on('agent-preset/selected', sessionId => boundaries.refreshSession(sessionId))
+  ctx.on('agent/disposed', ({ agent }) => boundaries.disposeAgent(agent))
+
+  for (const agent of ctx.agents.list()) boundaries.install(agent)
 }
 
 export const POSTMAN_BRIDGE_VISIBLE_TOOLS = POSTMAN_BRIDGE_TOOL_ALLOWLIST

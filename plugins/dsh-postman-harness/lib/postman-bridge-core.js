@@ -75,6 +75,56 @@ export function postmanBridgeRestrictionForAgent(agent) {
   return { deny: [POSTMAN_BRIDGE_TOOL_NAME] }
 }
 
+export function createPostmanBridgeBoundaryManager(lookupAgent) {
+  if (typeof lookupAgent !== 'function') throw new Error('POSTMAN_BRIDGE_AGENT_LOOKUP_REQUIRED')
+  const active = new Map()
+
+  const install = (agent) => {
+    if (agent === undefined || agent === null || typeof agent.id !== 'string' || agent.id === '') {
+      throw new Error('POSTMAN_BRIDGE_BOUNDARY_AGENT_REQUIRED')
+    }
+    if (typeof agent.ctx?.tools?.restrict !== 'function') {
+      throw new Error('POSTMAN_BRIDGE_TOOL_RESTRICTION_REQUIRED')
+    }
+
+    const dispose = agent.ctx.tools.restrict(postmanBridgeRestrictionForAgent(agent))
+    if (typeof dispose !== 'function') throw new Error('POSTMAN_BRIDGE_TOOL_RESTRICTION_DISPOSER_REQUIRED')
+
+    const previous = active.get(agent.id)
+    try {
+      previous?.dispose()
+    } catch (error) {
+      dispose()
+      throw error
+    }
+    active.set(agent.id, { agent, dispose })
+    return isTopLevelPostmanLeader(agent)
+  }
+
+  const refreshSession = (sessionId) => {
+    const agent = lookupAgent(sessionId)
+    if (agent === undefined) return false
+    install(agent)
+    return true
+  }
+
+  const disposeAgent = (agent) => {
+    const current = active.get(agent?.id)
+    if (current === undefined || current.agent !== agent) return false
+    active.delete(agent.id)
+    current.dispose()
+    return true
+  }
+
+  const disposeAll = () => {
+    const current = [...active.values()]
+    active.clear()
+    for (const entry of current) entry.dispose()
+  }
+
+  return { install, refreshSession, disposeAgent, disposeAll }
+}
+
 export async function settleTrustedPostmanStatus(readStatus, signal) {
   if (typeof readStatus !== 'function') throw new Error('POSTMAN_BRIDGE_STATUS_READER_REQUIRED')
   let checks = 0
