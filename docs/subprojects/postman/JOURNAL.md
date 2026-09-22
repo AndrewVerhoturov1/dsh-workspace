@@ -49,3 +49,10 @@
 - **Что изменилось:** 10/20/30 минут закреплены как absolute reminder checkpoints; active generation подавляет соответствующий reminder до изменения composer, а race после вставки требует доказанной очистки exact unsent текста.
 - **Почему:** long-running PostmanAsk stress-test показал, что reminder мог заполнить composer во время streaming, не найти обычный Send control и завершить REQ transport failure.
 - **Результат:** работающий assistant больше не прерывается служебным сообщением, suppressed checkpoints не накапливаются, а uncertain/неочищенное состояние остаётся fail-closed.
+
+
+### 2026-09-22 — Reminder safe-send закрывает late-send race
+
+- **Что изменилось:** reminder больше не использует generic 30-second wait для Send; введено отдельное 5-second safe-send окно с polling раз в секунду, latest same-REQ turn fingerprint и финальной pre-click reproof.
+- **Почему:** после первого streaming fix оставалась гонка: Send мог появиться только после завершения длинной generation, и просроченный reminder всё ещё мог отправиться задним числом.
+- **Результат:** generation/assistant activity в любой момент pre-click окна подавляет checkpoint, отсутствие Send за 5 секунд приводит к cleanup+skip, а UNKNOWN click или недоказанная cleanup остаются fail-closed.
