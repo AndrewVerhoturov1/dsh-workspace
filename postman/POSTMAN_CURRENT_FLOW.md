@@ -268,14 +268,29 @@ worker ждёт восстановления интерфейса без бес�
 
 ### 11.1. Служебные напоминания
 
-Отсчёт начинается после первоначального `PROMPT_SEND_CONFIRMED`. Сроки reminders остаются
-фиксированными: 10-я, 20-я и 30-я минуты; общий предел ожидания — 45 минут. Но наступление
-срока само по себе больше не разрешает немедленный Send. Перед каждым reminder worker
-обязательно перечитывает все разрешённые assistant turns текущего REQ и ещё раз ищет exact
-RESULT. Если RESULT уже появился, он скачивается и reminder отменяется. Если действует
-connection-interruption recovery или exact chat ещё не доказан как готовый, reminder ждёт
-восстановления и не отправляется вслепую. После `RESULT_DURABLE` оставшиеся reminders
-отменяются. Reload/recovery не сдвигает расписание и не перезапускает 45-минутный отсчёт.
+Отсчёт начинается после первоначального `PROMPT_SEND_CONFIRMED`. Точки reminders остаются
+фиксированными: 10-я, 20-я и 30-я минуты; общий предел ожидания — 45 минут. Это checkpoints,
+а не обязательные Send. Перед каждым checkpoint worker перечитывает все разрешённые assistant
+turns текущего REQ и ещё раз ищет exact RESULT. Если RESULT уже появился, reminder отменяется.
+Если действует connection-interruption recovery или exact chat ещё не доказан как готовый,
+reminder ждёт восстановления и не отправляется вслепую.
+
+Если в момент checkpoint ChatGPT всё ещё показывает active generation control, reminder
+подавляется без изменения composer и без нового user turn. Такой checkpoint считается
+использованным и позже не догоняется: расписание остаётся абсолютным 10/20/30, поэтому после
+долгой generation не возникает очереди просроченных reminders.
+
+Reminder не использует общий 30-секундный `submit_once()` wait для появления Send. Composer
+должен быть готов сразу, после вставки действует отдельное safe-send окно максимум 5 секунд с
+polling раз в 1 секунду. На каждом poll и ещё раз непосредственно перед единственным click
+перепроверяются exact conversation, отсутствие generation, неизменность latest same-REQ turn,
+exact unsent reminder в composer и доступность Send. Если generation появляется, assistant
+turn появляется/изменяется или Send не становится безопасно доступным за 5 секунд, текущий
+checkpoint подавляется; exact unsent reminder доказанно очищается и позже не догоняется.
+Если очистку или другое pre-click состояние доказать нельзя, transport остаётся fail-closed.
+Сам click имеет reminder-specific timeout 1 секунду; после начала click UNKNOWN по-прежнему
+запрещает retry. После `RESULT_DURABLE` оставшиеся checkpoints отменяются. Reload/recovery не
+сдвигает расписание и не перезапускает 45-минутный отсчёт.
 
 Если ZIP скачан, но minimal transport validation его отклоняет, staging удаляется и current
 REQ немедленно завершается `ARTIFACT_REJECTED`. Terminal JSON содержит assistant text,
@@ -283,7 +298,7 @@ REQ немедленно завершается `ARTIFACT_REJECTED`. Terminal JS
 не ждёт следующего reminder после уже завершённого assistant-turn. Ошибки самого validator
 infrastructure, записи, скачивания или неопределённого transport состояния остаются failure.
 
-Каждое напоминание отправляется в тот же exact conversation и начинается так:
+Каждое реально отправленное напоминание идёт в тот же exact conversation и начинается так:
 
 ```text
 POSTMAN_REQUEST_ID: <тот же REQ>
@@ -303,9 +318,12 @@ exact proven reminder user turn
 ```
 
 Произвольный новый user turn разрешённым anchor не является. При `PROVEN_SENT` цикл
-продолжается обычно. При `PROVEN_NOT_SENT` следующий срок разрешён только после
-доказанной очистки текста из поля ввода. При `UNKNOWN` REQ немедленно завершается с
-ошибкой; напоминания №2 и №3 не отправляются и служебное сообщение не повторяется вслепую.
+продолжается обычно. `REMINDER_SUPPRESSED_GENERATION_ACTIVE`,
+`REMINDER_SUPPRESSED_ASSISTANT_ACTIVITY` и `REMINDER_SUPPRESSED_SEND_NOT_READY` используют
+`PROVEN_NOT_SENT`: до вставки composer остаётся нетронутым, а после вставки продолжение
+разрешено только после доказанной очистки exact reminder. `REMINDER_SEND_GUARD_FAILED` или
+неудачная cleanup без такого proof остаются fail-closed. При `UNKNOWN` REQ немедленно
+завершается с ошибкой; служебное сообщение не повторяется вслепую.
 
 ## 12. Artifact envelope
 
@@ -504,7 +522,7 @@ exact current intent
 → self-contained task
 → two-line browser prompt
 → exact ChatGPT conversation
-→ до трёх служебных напоминаний на 10/20/30 минуте, пока нет RESULT_DURABLE
+→ checkpoints на 10/20/30 минуте; active generation подавляет reminder без Send
 → exact next assistant turn текущего разрешённого anchor
 → exact ZIP control
 → one download
