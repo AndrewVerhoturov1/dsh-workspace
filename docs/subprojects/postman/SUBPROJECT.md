@@ -10,7 +10,7 @@ updated: 2026-09-22
 
 ## Current focus
 
-Production transport теперь имеет два explicit user-facing режима поверх общего Direct/Web browser слоя: artifact `@Postman` через `postman/direct/postman.ps1` и text `@PostmanAsk` через `postman/direct/postman-ask.ps1`. Trusted current-turn Harness остаётся orchestration boundary и не является отдельным transport. Legacy/manual finalization относится только к artifact durable result.
+Production transport теперь имеет два explicit user-facing режима поверх общего Direct/Web browser слоя: artifact `@Postman` через `postman/direct/postman.ps1` и text `@PostmanAsk` через `postman/direct/postman-ask.ps1`. Trusted current-turn Harness остаётся orchestration boundary и не является отдельным transport. Для PostmanAsk он также хранит session-scoped exact reply и проверяет candidate Luna перед final response. Legacy/manual finalization относится только к artifact durable result.
 
 ## Next step
 
@@ -50,6 +50,7 @@ Production transport теперь имеет два explicit user-facing реж�
 - `@PostmanAsk` — отдельный explicit text production trigger; entrypoint — `postman/direct/postman-ask.ps1`.
 - Оба режима используют один trusted `postman_send_current_turn()` без text arguments; Harness сам различает exact current-message trigger и сохраняет exact payload.
 - PostmanAsk success — только `TEXT_RESULT_DURABLE` после exact REQ-bound BEGIN/END envelope; обычный assistant text не является result.
+- После `TEXT_RESULT_DURABLE` Harness сохраняет exact `assistantText` для текущей Luna session; final response разрешён только после strict string-equality `postman_ask_validate_reply` → `EXACT_REPLY_MATCH`.
 - PostmanAsk использует существующий Web Worker 10-second no-artifact fresh re-proof перед text-envelope validation; отдельный browser transport не создаётся.
 - Artifact terminal surface: `RESULT_DURABLE`, `ASSISTANT_COMPLETED_NO_ARTIFACT`, `ARTIFACT_REJECTED`, `POSTMAN_TRANSPORT_FAILED`; первые три являются artifact handoff, transport failure остаётся отдельным fail-closed исходом. Text success surface — `TEXT_RESULT_DURABLE`; text trigger validation failure остаётся transport failure.
 - `ASSISTANT_COMPLETED_NO_ARTIFACT` требует fresh reproof через 10 секунд; изменение assistant text/SHA запускает новое 10-секундное grace window.

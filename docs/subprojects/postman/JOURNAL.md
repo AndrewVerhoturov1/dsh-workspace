@@ -37,3 +37,9 @@
 - **Что изменилось:** рядом с artifact `@Postman` спроектирован text-only `@PostmanAsk` с отдельным Direct wrapper, exact REQ-bound BEGIN/END trigger и `TEXT_RESULT_DURABLE`. Trusted current-turn Harness сам выбирает wrapper без передачи user text моделью в tool arguments.
 - **Почему:** для анализа и консультаций ZIP избыточен, но обычный завершённый текст нельзя принимать без доказанного transport trigger и паузы стабильности.
 - **Результат:** text mode переиспользует общий browser/correlation/recovery слой и существующий 10-second fresh re-proof; artifact mode и его ZIP-контракт остаются отдельными и неизменёнными.
+
+### 2026-09-22 — Добавлена проверка точного final handoff PostmanAsk
+
+- **Что изменилось:** Harness сохраняет `TEXT_RESULT_DURABLE.assistantText` в session-scoped reply slot и проверяет candidate Luna через `postman_ask_validate_reply` прямым строковым равенством.
+- **Почему:** smoke-тест показал, что Luna может сохранить смысл, но добавить нумерацию или иначе переформатировать готовый text result.
+- **Результат:** только `EXACT_REPLY_MATCH` разрешает final response тем же candidate; mismatch не принимается, при этом browser/Direct transport PostmanAsk не меняется.

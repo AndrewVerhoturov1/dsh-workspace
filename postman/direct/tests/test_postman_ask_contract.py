@@ -51,6 +51,17 @@ class PostmanAskContractTests(unittest.TestCase):
         self.assertIn("POSTMAN_ASK_RESULT_TRIGGER_INVALID", self.bridge)
         self.assertIn("10-second", self.flow)
 
+    def test_exact_reply_validation_contract(self):
+        self.assertIn("postman_ask_validate_reply", self.harness)
+        self.assertIn("EXACT_REPLY_MATCH", self.harness)
+        self.assertIn("EXACT_REPLY_MISMATCH", self.harness)
+        self.assertIn("postman_ask_validate_reply", self.skill)
+        self.assertIn("EXACT_REPLY_MATCH", self.skill)
+        self.assertIn("прямое строковое сравнение", self.skill)
+        self.assertIn("PostmanAsk exact final-reply invariant", self.agents)
+        self.assertIn("postman_ask_validate_reply", self.agents)
+        self.assertIn("EXACT_REPLY_MATCH", self.flow)
+
     def test_agents_declares_text_entrypoint(self):
         self.assertIn("POSTMAN_ASK_PRODUCTION_ENTRYPOINT", self.agents)
         self.assertIn("delegate-via-postman-ask", self.agents)

@@ -301,6 +301,7 @@ export class DirectPostmanJobManager {
     this.randomInt = randomInt
     this.pwsh = pwsh
     this.jobs = new Map()
+    this.exactAskReplies = new Map()
   }
 
   latest(sessionId) {
@@ -313,6 +314,10 @@ export class DirectPostmanJobManager {
     if (typeof payload !== 'string' || payload.trim() === '') throw parseError('POSTMAN_EMPTY_PAYLOAD')
     if (!['artifact', 'text'].includes(transportKind)) throw parseError('POSTMAN_RESULT_MODE_INVALID')
     if (transportKind === 'text' && automaticContinuation) throw parseError('POSTMAN_AUTOMATIC_CONTINUATION_NOT_ALLOWED')
+
+    // A new request in this Luna session supersedes any exact-reply slot left
+    // by the previous PostmanAsk result.
+    this.exactAskReplies.delete(sessionId)
 
     const bridgeName = transportKind === 'text' ? 'postman-ask.ps1' : 'postman.ps1'
     const bridge = join(workspace, 'postman', 'direct', bridgeName)
@@ -374,6 +379,16 @@ export class DirectPostmanJobManager {
       job.signal = signal ?? undefined
       job.state = 'completed'
       job.result = terminalGate(job)
+      if (
+        job.result?.ok === true
+        && job.result.code === 'TEXT_RESULT_DURABLE'
+        && typeof job.result.assistantText === 'string'
+      ) {
+        this.exactAskReplies.set(job.sessionId, Object.freeze({
+          requestId: job.requestId,
+          text: job.result.assistantText,
+        }))
+      }
       job.finishedAt = new Date().toISOString()
       this.finish(job)
     }
@@ -479,6 +494,32 @@ export class DirectPostmanJobManager {
     return this.view(sessionId)
   }
 
+  validateExactAskReply(sessionId, requestId, candidate) {
+    if (typeof requestId !== 'string' || !REQ_PATTERN.test(requestId)) {
+      return { status: 'EXACT_REPLY_REQUEST_INVALID', requestId: String(requestId ?? '') }
+    }
+    const stored = this.exactAskReplies.get(sessionId)
+    if (stored === undefined) {
+      return { status: 'EXACT_REPLY_UNAVAILABLE', requestId }
+    }
+    if (stored.requestId !== requestId) {
+      return {
+        status: 'EXACT_REPLY_REQUEST_MISMATCH',
+        requestId,
+        storedRequestId: stored.requestId,
+      }
+    }
+    if (typeof candidate !== 'string' || candidate !== stored.text) {
+      return {
+        status: 'EXACT_REPLY_MISMATCH',
+        requestId,
+        expectedLength: stored.text.length,
+        candidateLength: typeof candidate === 'string' ? candidate.length : null,
+      }
+    }
+    return { status: 'EXACT_REPLY_MATCH', requestId }
+  }
+
   async continueLast(sessionId, workspace) {
     const previous = this.jobs.get(sessionId)
     if (previous === undefined || previous.state !== 'completed' || previous.result === undefined) {
@@ -505,6 +546,7 @@ export class DirectPostmanJobManager {
   }
 
   dispose() {
+    this.exactAskReplies.clear()
     // Deliberately do not kill a running Direct Postman child during plugin
     // teardown. Killing it could leave browser-send outcome ambiguous. The
     // process owns its own transport deadline and durable Direct state.
@@ -578,6 +620,28 @@ export function createDirectCurrentTurnToolConfigs(ctx, { store, jobs } = {}) {
     },
   }
 
+  const validateAskReply = {
+    name: 'postman_ask_validate_reply',
+    description: 'Compare a candidate final Luna reply with the exact TEXT_RESULT_DURABLE assistantText stored for this session. Uses strict string equality with no whitespace or Markdown normalization.',
+    parameters: {
+      request_id: {
+        type: 'string',
+        required: true,
+        description: 'Exact current PostmanAsk REQ.',
+      },
+      text: {
+        type: 'string',
+        required: true,
+        description: 'Candidate final user-visible reply to compare exactly with stored assistantText.',
+      },
+    },
+    output: toolOutput(),
+    async execute(args, exec) {
+      const agent = requiredAgent(exec, 'postman_ask_validate_reply')
+      return manager.validateExactAskReply(agent.id, args.request_id, args.text)
+    },
+  }
+
   const continueLast = {
     name: 'postman_continue_last_request',
     description: 'Start the deterministic automatic continuation for the last non-durable Postman terminal result in this session. Takes no user text and is allowed only after ASSISTANT_COMPLETED_NO_ARTIFACT or ARTIFACT_REJECTED.',
@@ -590,7 +654,7 @@ export function createDirectCurrentTurnToolConfigs(ctx, { store, jobs } = {}) {
   }
 
   return {
-    tools: [sendCurrent, statusCurrent, continueLast],
+    tools: [sendCurrent, statusCurrent, validateAskReply, continueLast],
     store: turnStore,
     jobs: manager,
     dispose() {
@@ -603,5 +667,6 @@ export function createDirectCurrentTurnToolConfigs(ctx, { store, jobs } = {}) {
 export const DIRECT_CURRENT_TURN_TOOL_NAMES = Object.freeze([
   'postman_send_current_turn',
   'postman_current_turn_status',
+  'postman_ask_validate_reply',
   'postman_continue_last_request',
 ])
