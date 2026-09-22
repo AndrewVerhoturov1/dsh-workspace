@@ -10,7 +10,7 @@ updated: 2026-09-22
 
 ## Current focus
 
-Production transport теперь имеет два explicit user-facing режима поверх общего Direct/Web browser слоя: artifact `@Postman` через `postman/direct/postman.ps1` и text `@PostmanAsk` через `postman/direct/postman-ask.ps1`. Trusted current-turn Harness остаётся orchestration boundary и не является отдельным transport. Для PostmanAsk он также хранит session-scoped exact reply и проверяет candidate Luna перед final response. Legacy/manual finalization относится только к artifact durable result.
+Production transport имеет два explicit user-facing режима поверх общего Direct/Web browser слоя: artifact `@Postman` через `postman/direct/postman.ps1` и text `@PostmanAsk` через `postman/direct/postman-ask.ps1`. Над ними существует supervisor orchestration: top-level `Postman Leader` формирует model-authored `@Postman`/`@PostmanAsk` delegation через Leader-only `postman_bridge`, fresh one-shot Luna выполняет только trusted transport, а parent читает terminal result напрямую из child scope. Trusted current-turn Harness остаётся orchestration boundary и не является отдельным transport. Legacy/manual finalization относится только к artifact durable result.
 
 ## Next step
 
@@ -20,18 +20,19 @@ Production transport теперь имеет два explicit user-facing реж�
 
 - Этот подпроект не переопределяет `AGENTS.md`, `REPO_POLICY.md`, `.agents/skills/delegate-via-postman/SKILL.md`, `postman/POSTMAN_CURRENT_FLOW.md` или `docs/web-postman-artifact-contract.md`.
 - Normal `@Postman` не распаковывает и не применяет результат, не запускает PREPARE/TEST/PUBLISH, не создаёт implementation branch/worktree/commit/PR и не выполняет merge.
-- `plugins/dsh-postman-harness/` содержит trusted current-turn orchestration boundary для обоих exact triggers; он не является альтернативным transport/fallback. Остальные legacy/manual Harness-слои не входят в normal transport.
+- `plugins/dsh-postman-harness/` содержит trusted current-turn boundary и Leader-only `postman_bridge`; Bridge не является альтернативным transport/fallback и не доступен обычным Agents.
 - Канонические Postman документы остаются на своих текущих путях; подпроект хранит только долговременный контекст и решения.
 
 ## Read first
 
 1. `AGENTS.md`
 2. `REPO_POLICY.md`
-3. `.agents/skills/delegate-via-postman/SKILL.md` и `.agents/skills/delegate-via-postman-ask/SKILL.md` — по trigger mode.
-4. `postman/POSTMAN_CURRENT_FLOW.md` для artifact flow или `postman/POSTMAN_ASK_FLOW.md` для text flow.
-5. `docs/web-postman-artifact-contract.md` — только для artifact mode.
-6. `postman/direct/README.md` или `postman/web/README.md` — по затронутому слою.
-7. `system/implementation-package-workflow.md` и `system/implementation-package-authoring.md` — для explicit implementation-package работы.
+3. `.agents/skills/delegate-via-postman/SKILL.md` и `.agents/skills/delegate-via-postman-ask/SKILL.md` — по direct trigger mode.
+4. `.agents/skills/postman-leader/SKILL.md` и `postman/POSTMAN_BRIDGE_FLOW.md` — для supervisor mode.
+5. `postman/POSTMAN_CURRENT_FLOW.md` для artifact flow или `postman/POSTMAN_ASK_FLOW.md` для text flow.
+6. `docs/web-postman-artifact-contract.md` — только для artifact mode.
+7. `postman/direct/README.md` или `postman/web/README.md` — по затронутому слою.
+8. `system/implementation-package-workflow.md` и `system/implementation-package-authoring.md` — для explicit implementation-package работы.
 
 ## Main paths
 
@@ -40,7 +41,9 @@ Production transport теперь имеет два explicit user-facing реж�
 - `postman/web/`
 - `.agents/skills/delegate-via-postman/SKILL.md`
 - `.agents/skills/delegate-via-postman-ask/SKILL.md`
+- `.agents/skills/postman-leader/SKILL.md`
 - `postman/POSTMAN_ASK_FLOW.md`
+- `postman/POSTMAN_BRIDGE_FLOW.md`
 - `docs/web-postman-artifact-contract.md`
 - `plugins/dsh-postman-harness/`
 
@@ -48,6 +51,10 @@ Production transport теперь имеет два explicit user-facing реж�
 
 - `@Postman` — explicit artifact/ZIP production trigger; entrypoint — `postman/direct/postman.ps1`.
 - `@PostmanAsk` — отдельный explicit text production trigger; entrypoint — `postman/direct/postman-ask.ps1`.
+- `postman_bridge` — отдельная supervisor capability только для top-level `postman-leader`; обычные root/subagent Agents получают runtime deny, execute path повторно проверяет caller fail-closed, а blank-session `agent-preset/selected` заменяет старый restriction на restriction текущей live composition.
+- Supervisor delegation создаёт fresh one-shot `codex / gpt-5.6-luna` child с `maxDepth = 1` и узким transport-only toolFilter; follow-up, mode и continuation выбирает parent Leader.
+- Authority supervisor result — trusted Direct terminal из exact child scope, а не Luna prose.
+- Agent presets не владеют model routing; для роли Leader `GPT-5.6 Sol` выбирается отдельно в model selector, Bridge Luna остаётся hard-fixed.
 - Оба режима используют один trusted `postman_send_current_turn()` без text arguments; Harness сам различает exact current-message trigger и сохраняет exact payload.
 - PostmanAsk success — только `TEXT_RESULT_DURABLE` после exact REQ-bound BEGIN/END envelope; обычный assistant text не является result.
 - После `TEXT_RESULT_DURABLE` Harness сохраняет exact `assistantText` для текущей Luna session; final response разрешён только после strict string-equality `postman_ask_validate_reply` → `EXACT_REPLY_MATCH`.

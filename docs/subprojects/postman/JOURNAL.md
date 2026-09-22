@@ -56,3 +56,15 @@
 - **Что изменилось:** reminder больше не использует generic 30-second wait для Send; введено отдельное 5-second safe-send окно с polling раз в секунду, latest same-REQ turn fingerprint и финальной pre-click reproof.
 - **Почему:** после первого streaming fix оставалась гонка: Send мог появиться только после завершения длинной generation, и просроченный reminder всё ещё мог отправиться задним числом.
 - **Результат:** generation/assistant activity в любой момент pre-click окна подавляет checkpoint, отсутствие Send за 5 секунд приводит к cleanup+skip, а UNKNOWN click или недоказанная cleanup остаются fail-closed.
+
+### 2026-09-22 — Postman Leader/Bridge выделен в отдельную supervisor boundary
+
+- **Что изменилось:** поверх Direct `@Postman`/`@PostmanAsk` добавлен `Postman Leader`, который создаёт model-authored delegation через `postman_bridge`; follow-up hardening делает Bridge видимым только top-level `postman-leader` и повторно проверяет caller в execute path.
+- **Почему:** сильная модель должна выбирать задачу, mode и continuation, а минимальная Luna — только безопасно запускать trusted current-turn transport; глобально видимый Bridge и неявное исключение из direct-trigger policy размывали эту границу.
+- **Результат:** fresh child всегда fixed `codex / gpt-5.6-luna`, trusted terminal читается host-ом напрямую, ordinary Agents не получают Bridge, а model routing Leader-а остаётся штатным Harness model selector (`GPT-5.6 Sol` выбирается отдельно, preset его не подменяет).
+
+### 2026-09-22 — Bridge restriction следует за сменой preset до первого turn
+
+- **Что изменилось:** Bridge boundary manager хранит один restriction на live Agent и заменяет его на `agent-preset/selected`; старый exact disposer снимается перед продолжением работы.
+- **Почему:** Harness разрешает пустой сессии переключиться `standard → postman-leader` после `agent/created`; прежний одноразовый deny оставался активным и из-за пересечения restrictions мог скрывать Bridge у уже выбранного Leader.
+- **Результат:** `standard → postman-leader → standard` корректно меняет видимость `postman_bridge`, а execute-level caller guard остаётся независимой fail-closed защитой.

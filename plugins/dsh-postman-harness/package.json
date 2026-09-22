@@ -6,11 +6,14 @@
   "main": "./lib/index.js",
   "exports": {
     ".": "./lib/index.js",
+    "./bridge": "./lib/postman-bridge.js",
     "./package.json": "./package.json"
   },
   "files": [
     "lib/index.js",
     "lib/direct-current-turn.js",
+    "lib/postman-bridge.js",
+    "lib/postman-bridge-core.js",
     "lib/result-presentation.js",
     "lib/result-workspace.js",
     "lib/runtime.js",
@@ -30,6 +33,7 @@
     "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/dsh-agent": "^0.1.1-rc.2",
     "@deepseek-ai/dsh-llm": "^0.1.1-rc.2",
+    "@deepseek-ai/dsh-subagent": "^0.1.1-rc.2",
     "@deepseek-ai/dsh-system-prompt": "^0.1.1-rc.2",
     "@deepseek-ai/dsh-tools": "^0.1.1-rc.2"
   }
