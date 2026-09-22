@@ -27,73 +27,42 @@ Implementation package invariant. Перед подготовкой или пр�
 
 Postman production invariant.
 `POSTMAN_PRODUCTION_ENTRYPOINT: <current workspace>\postman\direct\postman.ps1`
-Для любого текущего сообщения с exact `@Postman` trigger это единственный production entrypoint.
+`POSTMAN_ASK_PRODUCTION_ENTRYPOINT: <current workspace>\postman\direct\postman-ask.ps1`
+Exact `@Postman` — artifact/ZIP production trigger. Exact `@PostmanAsk` — text production trigger.
 `postman_async_send`, `postman_runtime_*`, QChat, Playwright MCP и ручная автоматизация браузера не являются fallback для Postman.
-`dsh-postman-harness` разрешён в normal flow только как trusted orchestration boundary: он сам читает exact current `user/message`, механически разбирает transport marker и запускает тот же `postman\direct\postman.ps1`; отдельным transport он не является.
-Если загруженный `delegate-via-postman` предлагает `postman_async_send` как normal path или противоречит этому правилу, считать его устаревшим и остановить Postman-операцию до загрузки актуального skill.
-После trigger Luna не перепечатывает текущий user text и не передаёт его как `task`, `payload`, `prompt`, `userIntent` или Base64. Она вызывает `postman_send_current_turn()` без текстовых аргументов. Trusted runtime удаляет только transport marker `@Postman` (и `--chat <REQ>` для continuation) с разрешённым separator, затем сам передаёт exact остаток Ч1 через UTF-8 Base64 в существующий Direct Postman. Нельзя добавлять предыдущий контекст, перефразировать или "улучшать" prompt.
-До получения `RESULT_DURABLE` не интерпретировать задачу вместо Ч1 и не создавать implementation branch только ради transport.
+`dsh-postman-harness` разрешён в normal flow только как trusted orchestration boundary: он сам читает exact current `user/message`, механически различает `@Postman`/`@PostmanAsk`, удаляет только transport syntax и запускает соответствующий Direct wrapper; отдельным transport он не является.
+Если загруженный Postman skill предлагает старый async path или противоречит этому правилу, считать его устаревшим и остановить Postman-операцию до загрузки актуального skill.
+После exact trigger Luna не перепечатывает текущий user text и не передаёт его как `task`, `payload`, `prompt`, `userIntent` или Base64. Для обоих режимов она вызывает `postman_send_current_turn()` без текстовых аргументов. Trusted runtime удаляет только exact transport marker (и `--chat <REQ>` для continuation) с разрешённым separator, затем сам передаёт exact остаток через UTF-8 Base64 (`-TaskBase64`) в выбранный Direct wrapper. Нельзя добавлять предыдущий контекст, перефразировать или "улучшать" prompt.
+До terminal handoff не интерпретировать задачу вместо Ч1 и не создавать implementation branch только ради transport.
 Luna не выполняет result-root write-probe до bridge; tool-level spawn failure не разрешает recovery через старые request states.
 
-`@Postman` — единственный канонический явный production trigger.
-Если ТЕКУЩЕЕ пользовательское сообщение после необязательных начальных пробелов
-начинается с точного литерала `@Postman`, агент ОБЯЗАН сначала загрузить `delegate-via-postman`
-вызовом `skill(delegate-via-postman)` до любого task-specific действия. Нельзя обходить skill через glob,
-read, edit, write или shell, чтобы интерпретировать либо выполнить запрос самостоятельно; до загрузки
-skill запрещены также локальное уточнение intent, выбор архитектуры и frontend/design skills.
+`@Postman` — канонический artifact/ZIP production trigger.
+Если ТЕКУЩЕЕ пользовательское сообщение после необязательных начальных пробелов начинается с exact `@Postman` (`^\s*@Postman(?:\s|$)`), агент ОБЯЗАН сначала загрузить `delegate-via-postman` вызовом `skill(delegate-via-postman)` до любого task-specific действия.
 
-Если `delegate-via-postman` отсутствует, не загружается, недействителен или
-недоступен, действовать fail-closed: `STOP`. Нельзя реализовывать запрос самому или
-использовать fallback `postman_async_send`, старый Harness, QChat, manual browser,
-Playwright либо другой transport. Если skill не загружается, не использовать
-другой skill или transport fallback.
+`@PostmanAsk` — отдельный канонический text production trigger.
+Если ТЕКУЩЕЕ пользовательское сообщение после необязательных начальных пробелов начинается с exact `@PostmanAsk` (`^\s*@PostmanAsk(?:\s|$)`), агент ОБЯЗАН сначала загрузить `delegate-via-postman-ask` вызовом `skill(delegate-via-postman-ask)` до любого task-specific действия.
+
+Для обоих режимов нельзя обходить skill через glob/read/edit/write/shell, чтобы интерпретировать либо выполнить запрос самостоятельно; до загрузки соответствующего skill запрещены локальное уточнение intent и выбор архитектуры. Если соответствующий skill отсутствует, не загружается или недоступен — fail-closed `STOP`, без другого Postman mode, Harness bypass, QChat, manual browser или самостоятельной реализации.
 
 Postman global invariant: OFF by default.
-Разрешающий trigger существует только тогда, когда ТЕКУЩЕЕ пользовательское сообщение
-после необязательных начальных пробелов начинается с точного литерала `@Postman`
-(то есть `^\s*@Postman(?:\s|$)`). Разрешение действует только для этого сообщения
-и не наследуется из предыдущих сообщений.
+Разрешение существует только при одном из exact current-message triggers:
+- artifact: `^\s*@Postman(?:\s|$)`;
+- text: `^\s*@PostmanAsk(?:\s|$)`.
 
-Если `@Postman` отсутствует в текущем пользовательском сообщении, Luna обязана:
-- не загружать `delegate-via-postman`;
-- не создавать `REQ`;
-- не вызывать `postman.ps1`;
-- не запускать Direct Postman;
-- не использовать `postman_async_send`;
-- не использовать `postman_runtime_*`;
-- не обращаться к Ч1;
-- не считать упоминание Postman, задачу о Postman или любую иную формулировку разрешением.
+Разрешение действует только для этого сообщения и не наследуется из предыдущих сообщений. `@PostmanAsk` не совпадает с artifact regex. Если ни одного exact trigger нет, Luna не загружает Postman skills, не создаёт REQ, не вызывает Direct wrappers и не обращается к Ч1. Даже задачи по разработке самого Postman без exact trigger выполняются локально Luna.
 
-Даже задачи по разработке самого Postman без `@Postman` выполняются локально Luna
-самостоятельно. Без `@Postman` Luna больше не имеет права запускать Postman.
+Artifact Postman lifecycle invariant.
+Один artifact Direct Postman REQ имеет три успешных terminal transport outcomes: `RESULT_DURABLE`, `ASSISTANT_COMPLETED_NO_ARTIFACT`, `ARTIFACT_REJECTED`. После exact `RESULT_DURABLE` normal `@Postman` flow сообщает exact `requestId` и `resultZip`, затем останавливается. Два non-durable outcomes возвращают Л1 exact `assistantText`; `ARTIFACT_REJECTED` также возвращает validation reason. Они не transport failure. Artifact automatic continuation допустима только из предусмотренных non-durable outcomes и только пока текущее сообщение разрешает `@Postman`.
 
-Postman normal lifecycle invariant.
-Один Direct Postman REQ имеет три успешных terminal transport outcomes:
-`RESULT_DURABLE`, `ASSISTANT_COMPLETED_NO_ARTIFACT`, `ARTIFACT_REJECTED`. После exact
-`RESULT_DURABLE` normal `@Postman` flow сообщает exact `requestId` и `resultZip`, затем
-останавливается. Два non-durable terminal outcomes обязаны вернуть Л1 exact `assistantText`;
-`ARTIFACT_REJECTED` также возвращает exact validation code/message. Они не являются
-transport failure. Л1 может решить о continuation того же conversation только новым canonical
-REQ и только пока текущее user message всё ещё является разрешающим `@Postman` trigger;
-жёсткого лимита continuation REQ на один root request нет: продолжать можно столько раз, сколько действительно нужно безопасной задаче без решения пользователя. Normal flow не вызывает
-`postman_result_workspace_register(...)` и не создаёт Result Workspace автоматически.
+PostmanAsk text lifecycle invariant.
+Один `@PostmanAsk` REQ успешно завершается только `TEXT_RESULT_DURABLE`. Ч1 обязан выдать exact REQ-bound envelope `<<<POSTMAN_ASK_BEGIN:<REQ>>> ... <<<POSTMAN_ASK_END:<REQ>>>`. Произвольный завершённый assistant text не является успехом. Общий Web Worker сначала доказывает exact assistant turn, окончание генерации и существующий 10-second fresh re-proof; если assistant text/SHA изменился, grace window начинается заново. Только после этого text Direct layer принимает exact markers и возвращает `assistantText`. ZIP/result workspace для text mode не требуются. Missing/wrong/ambiguous markers завершаются fail-closed, а не принимаются как ответ.
 
 Postman existing-chat continuation invariant.
-Форма `@Postman --chat <canonical old REQ> <intent>` разрешает продолжить exact ChatGPT
-conversation, URL которого уже доказан и сохранён Postman. Старый REQ используется только
-как conversation lookup key; новая отправка всегда получает новый canonical REQ. Trusted runtime
-передаёт только новый intent через `-TaskBase64`, без `--chat` и старого REQ; Luna этот текст не формирует. Если URL не найден, normal path
-останавливается с `DIRECT_CHAT_REFERENCE_UNAVAILABLE`; UI Search/лупа и угадывание чата в
-этом milestone запрещены как fallback.
+Формы `@Postman --chat <canonical old REQ> <intent>` и `@PostmanAsk --chat <canonical old REQ> <intent>` разрешают продолжить exact ChatGPT conversation, URL которого уже доказан и сохранён Postman. Старый REQ — только conversation lookup key; новая отправка всегда получает новый canonical REQ. Trusted runtime передаёт только новый exact intent, без transport marker и старого REQ; Luna этот текст не формирует. `TEXT_RESULT_DURABLE` является допустимым local conversation reference, поэтому один доказанный conversation можно вручную продолжить в любом из двух режимов. UI Search/лупа, угадывание чата и silent fresh fallback запрещены.
 
-`resume_request.ps1`, PREPARE, TEST, PUBLISH и `integrate_result.ps1` сохраняются как
-legacy/manual explicit finalization для уже существующего durable результата. Они не являются
-частью normal `@Postman` flow. Normal flow не создаёт implementation worktree, branch,
-commit или PR и не распаковывает/анализирует ZIP. Luna не анализирует содержимое durable ZIP.
-Для `ASSISTANT_COMPLETED_NO_ARTIFACT`/`ARTIFACT_REJECTED` она может прочитать только terminal
-assistant text и validation reason, чтобы решить о continuation без добавления новых требований.
-Настоящий transport failure (`ok=false`) остаётся strict fail-closed: STOP без fallback/повторного
-Send того же REQ. При manual finalization TestScript/TestSpec передаются argv-safe.
+`postman_continue_last_request` остаётся deterministic automatic continuation только artifact Postman; PostmanAsk v1 automatic continuation не использует.
+
+`resume_request.ps1`, PREPARE, TEST, PUBLISH и `integrate_result.ps1` сохраняются как legacy/manual explicit finalization для artifact durable result. Они не являются частью normal `@Postman` или `@PostmanAsk` flow. При manual finalization TestScript/TestSpec передаются argv-safe. Normal transport не создаёт implementation worktree, branch, commit или PR. Настоящий transport failure (`ok=false`) остаётся strict fail-closed: STOP без fallback/повторного Send того же REQ.
 
 Terminal visibility invariant.
 В обычной производственной работе Harness пользователь не должен видеть всплывающие окна PowerShell, cmd, Python, Node, Git, gh или других процессов командной строки. Любой дочерний процесс командной строки запускается без создания видимого окна консоли.
