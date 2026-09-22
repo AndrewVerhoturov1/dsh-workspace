@@ -43,8 +43,11 @@ Worker contract: завершённый assistant turn без ZIP проходи
 если текст/SHA изменился, grace window начинается заново. После этого Direct Ask проверяет
 text envelope.
 
-Сохраняются общие reminders 10/20/30 минут, общий deadline 45 минут и same-conversation
-recovery Web Worker.
+Сохраняются общие reminder checkpoints на 10/20/30 минутах, общий deadline 45 минут и
+same-conversation recovery Web Worker. Если ChatGPT в checkpoint всё ещё активно генерирует
+ответ, reminder подавляется без изменения composer и не отправляется позднее задним числом.
+Если generation начинается после вставки, но до Send, exact unsent reminder должен быть
+доказанно очищен; иначе transport остаётся fail-closed.
 
 ## Trusted current turn
 
