@@ -32,7 +32,7 @@ Exact `@Postman` — artifact/ZIP production trigger. Exact `@PostmanAsk` — te
 `postman_async_send`, `postman_runtime_*`, QChat, Playwright MCP и ручная автоматизация браузера не являются fallback для Postman.
 `dsh-postman-harness` разрешён в normal flow только как trusted orchestration boundary: он сам читает exact current `user/message`, механически различает `@Postman`/`@PostmanAsk`, удаляет только transport syntax и запускает соответствующий Direct wrapper; отдельным transport он не является.
 Если загруженный Postman skill предлагает старый async path или противоречит этому правилу, считать его устаревшим и остановить Postman-операцию до загрузки актуального skill.
-После exact trigger Luna не перепечатывает current user text и не передаёт его как `task`, `payload`, `prompt`, `userIntent` или Base64. Для обоих режимов она вызывает `postman_send_current_turn()` без текстовых аргументов. Trusted runtime удаляет только exact transport marker (и `--chat <REQ>` для continuation) с разрешённым separator, затем сам передаёт exact остаток через UTF-8 Base64 (`-TaskBase64`) в выбранный Direct wrapper. Нельзя добавлять предыдущий контекст, перефразировать или "улучшать" prompt.
+После exact trigger Luna не перепечатывает текущий user text и не передаёт его как `task`, `payload`, `prompt`, `userIntent` или Base64. Для обоих режимов она вызывает `postman_send_current_turn()` без текстовых аргументов. Trusted runtime удаляет только exact transport marker (и `--chat <REQ>` для continuation) с разрешённым separator, затем сам передаёт exact остаток через UTF-8 Base64 (`-TaskBase64`) в выбранный Direct wrapper. Нельзя добавлять предыдущий контекст, перефразировать или "улучшать" prompt.
 До terminal handoff не интерпретировать задачу вместо Ч1 и не создавать implementation branch только ради transport.
 Luna не выполняет result-root write-probe до bridge; tool-level spawn failure не разрешает recovery через старые request states.
 
@@ -49,7 +49,7 @@ Postman global invariant: OFF by default.
 - artifact: `^\s*@Postman(?:\s|$)`;
 - text: `^\s*@PostmanAsk(?:\s|$)`.
 
-Разрешение действует только для этого сообщения и не наследуется. `@PostmanAsk` не совпадает с artifact regex. Если ни одного exact trigger нет, Luna не загружает Postman skills, не создаёт REQ, не вызывает Direct wrappers и не обращается к Ч1. Даже задачи по разработке самого Postman без exact trigger выполняются локально Luna.
+Разрешение действует только для этого сообщения и не наследуется из предыдущих сообщений. `@PostmanAsk` не совпадает с artifact regex. Если ни одного exact trigger нет, Luna не загружает Postman skills, не создаёт REQ, не вызывает Direct wrappers и не обращается к Ч1. Даже задачи по разработке самого Postman без exact trigger выполняются локально Luna.
 
 Artifact Postman lifecycle invariant.
 Один artifact Direct Postman REQ имеет три успешных terminal transport outcomes: `RESULT_DURABLE`, `ASSISTANT_COMPLETED_NO_ARTIFACT`, `ARTIFACT_REJECTED`. После exact `RESULT_DURABLE` normal `@Postman` flow сообщает exact `requestId` и `resultZip`, затем останавливается. Два non-durable outcomes возвращают Л1 exact `assistantText`; `ARTIFACT_REJECTED` также возвращает validation reason. Они не transport failure. Artifact automatic continuation допустима только из предусмотренных non-durable outcomes и только пока текущее сообщение разрешает `@Postman`.
@@ -62,7 +62,7 @@ Postman existing-chat continuation invariant.
 
 `postman_continue_last_request` остаётся deterministic automatic continuation только artifact Postman; PostmanAsk v1 automatic continuation не использует.
 
-`resume_request.ps1`, PREPARE, TEST, PUBLISH и `integrate_result.ps1` сохраняются как legacy/manual explicit finalization для artifact durable result. Они не являются частью normal `@Postman` или `@PostmanAsk` flow. Normal transport не создаёт implementation worktree, branch, commit или PR. Настоящий transport failure (`ok=false`) остаётся strict fail-closed: STOP без fallback/повторного Send того же REQ.
+`resume_request.ps1`, PREPARE, TEST, PUBLISH и `integrate_result.ps1` сохраняются как legacy/manual explicit finalization для artifact durable result. Они не являются частью normal `@Postman` или `@PostmanAsk` flow. При manual finalization TestScript/TestSpec передаются argv-safe. Normal transport не создаёт implementation worktree, branch, commit или PR. Настоящий transport failure (`ok=false`) остаётся strict fail-closed: STOP без fallback/повторного Send того же REQ.
 
 Terminal visibility invariant.
 В обычной производственной работе Harness пользователь не должен видеть всплывающие окна PowerShell, cmd, Python, Node, Git, gh или других процессов командной строки. Любой дочерний процесс командной строки запускается без создания видимого окна консоли.
