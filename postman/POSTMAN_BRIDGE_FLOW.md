@@ -123,7 +123,12 @@ call 3 → @Postman --chat REQ_B ...   → REQ_C, same conversation, artifact mo
 
 ## 8. Postman Leader preset
 
-Web profile добавляет selectable preset `postman-leader` / `Postman Leader`.
+Preset `postman-leader` / `Postman Leader` хранится в репозитории как файловая композиция
+`.agent-presets/postman-leader/agent.cordis.yml` с описанием в `preset.yml`. Встроенный
+`dsh-agent-presets` обнаруживает такие каталоги под `$DSH_HOME/.agent-presets`; поэтому при
+проверке отдельного рабочего дерева `DSH_HOME` должен указывать на его корень. Web profile
+не загружает отдельный preset-плагин: существующий `postman-bridge` подключается на уровне
+host-композиции в bundle `dsh-postman-harness`.
 
 Top-level Agent этого preset получает runtime allowlist только для read-only inspection и Bridge:
 

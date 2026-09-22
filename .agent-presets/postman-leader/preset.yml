@@ -1,0 +1,3 @@
+name: Postman Leader
+description: Supervisor that delegates substantial work to ChatGPT Web through a fixed Luna Postman Bridge.
+order: 4

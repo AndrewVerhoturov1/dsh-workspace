@@ -230,9 +230,20 @@ test('package and composition expose bridge entrypoint and leader preset', () =>
   assert.match(bundle, /id: postman-bridge[\s\S]*name: dsh-postman-harness\/bridge/)
 
   const webPatch = readFileSync(join(repoRoot, 'profiles', 'web', 'cordis.patch.yml'), 'utf8')
-  assert.match(webPatch, /id: preset-postman-leader/)
-  assert.match(webPatch, /id: postman-leader/)
-  assert.match(webPatch, /name: Postman Leader/)
+  assert.doesNotMatch(webPatch, /preset-postman-leader|@deepseek-ai\/dsh-agent-preset/)
+
+  const leaderPresetRoot = join(repoRoot, '.agent-presets', 'postman-leader')
+  const leaderPreset = readFileSync(join(leaderPresetRoot, 'agent.cordis.yml'), 'utf8')
+  const leaderMetadata = readFileSync(join(leaderPresetRoot, 'preset.yml'), 'utf8')
+  assert.match(leaderMetadata, /^name: Postman Leader$/m)
+  assert.match(leaderMetadata, /^order: 4$/m)
+  assert.match(leaderPreset, /id: persona[\s\S]*name: '@deepseek-ai\/dsh-persona'[\s\S]*text:/)
+  assert.match(leaderPreset, /id: tool-web[\s\S]*fetch: true[\s\S]*search: true/)
+  assert.deepEqual(
+    [...leaderPreset.matchAll(/^\s*- id: ([\w-]+)\s*$/gm)].map((match) => match[1]),
+    ['persona', 'agent-instructions', 'tool-fs', 'tool-fs-search', 'skill-filesystem', 'tool-skill', 'tool-web'],
+  )
+  assert.match(leaderPreset, /You are Postman Leader\./)
 
   const bridgeSource = readFileSync(join(pluginRoot, 'lib', 'postman-bridge.js'), 'utf8')
   assert.match(bridgeSource, /POSTMAN_BRIDGE_CALLER_REJECTED/)
