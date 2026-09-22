@@ -74,3 +74,9 @@
 - **Что изменилось:** ответы до 4096 символов остаются inline без файла; любой более длинный exact PostmanAsk result атомарно сохраняется как UTF-8 Markdown и передаётся Harness/Luna только compact descriptor.
 - **Почему:** production session с ответом около 66 тысяч символов показала многократное дублирование одного текста через terminal result, exact-reply validator и chunk reassembly, из-за чего Luna тратила контекст на механическую пересылку.
 - **Результат:** большие ответы больше не проходят через model context целиком; Harness проверяет файл byte-for-byte, inline validator сохраняется только для действительно маленьких ответов.
+
+### 2026-09-23 — Postman Leader синхронизирован с file-mode PostmanAsk
+
+- **Что изменилось:** Bridge child теперь ветвится по `deliveryMode`: inline сохраняет exact-validator path, file не вызывает validator и не читает Markdown; parent Leader принимает verified file descriptor и при необходимости читает `resultFile` выборочно собственными read-only tools.
+- **Почему:** после внедрения long-result Markdown handoff supervisor persona и Leader docs всё ещё безусловно ожидали `TEXT_RESULT_DURABLE.assistantText`, которого в file-mode намеренно нет.
+- **Результат:** direct и supervisor контракты снова согласованы; большой PostmanAsk result не возвращается в Luna context, а сильный Leader может исследовать файл без полной rehydration.

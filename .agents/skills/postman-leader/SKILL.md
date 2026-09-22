@@ -9,7 +9,7 @@ description: >-
 
 # Postman Leader
 
-`POSTMAN_LEADER_SKILL_VERSION: 1`
+`POSTMAN_LEADER_SKILL_VERSION: 2`
 
 ## Роль
 
@@ -97,8 +97,17 @@ Leader доверяет `postman_bridge.result`, полученному из tru
 Текст финального сообщения Luna Bridge не является authority и не используется как источник
 результата.
 
-Для `TEXT_RESULT_DURABLE` Leader может анализировать и пересказывать `assistantText`: exact
-final-reply invariant относится к direct user-facing `@PostmanAsk`, а не к supervisor tool data.
+Для `TEXT_RESULT_DURABLE` Leader сначала проверяет `deliveryMode`:
+
+- `deliveryMode=inline` — authority содержит exact `assistantText`; Leader может анализировать,
+  цитировать в допустимых пределах и пересказывать этот текст. Direct user-facing exact-reply
+  invariant на supervisor response не распространяется.
+- `deliveryMode=file` — authority содержит проверенный descriptor (`resultFile`, длины, SHA-256),
+  а полного `assistantText` нет. Если для решения текущей supervisor-задачи нужно содержание,
+  Leader использует собственные `read`/`grep` только по exact `resultFile`, читает файл
+  выборочно/по нужным диапазонам и не загружает весь большой Markdown в один model turn без
+  необходимости. Нельзя просить Bridge child rehydrate-ить файл или считать его prose authority.
+  Если содержимое не нужно для следующего решения, достаточно descriptor metadata.
 
 Для `RESULT_DURABLE` Leader проверяет metadata/result path и решает следующий шаг. Сам Bridge
 не применяет ZIP и не запускает Git lifecycle.

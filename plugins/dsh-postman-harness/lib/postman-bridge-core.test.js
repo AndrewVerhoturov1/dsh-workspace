@@ -78,11 +78,16 @@ test('bridge request pins Luna, spawn, depth and exact message', () => {
   assert.equal(request.signal, signal)
 })
 
-test('bridge persona keeps Luna mechanical and forbids autonomous continuation', () => {
+test('bridge persona keeps Luna mechanical and branches text handoff by delivery mode', () => {
   assert.match(POSTMAN_BRIDGE_PERSONA, /minimal one-shot transport subagent/)
   assert.match(POSTMAN_BRIDGE_PERSONA, /skill\(delegate-via-postman-ask\)/)
   assert.match(POSTMAN_BRIDGE_PERSONA, /skill\(delegate-via-postman\)/)
   assert.match(POSTMAN_BRIDGE_PERSONA, /postman_send_current_turn\(\) with no arguments/)
+  assert.match(POSTMAN_BRIDGE_PERSONA, /deliveryMode=inline/)
+  assert.match(POSTMAN_BRIDGE_PERSONA, /deliveryMode=file/)
+  assert.match(POSTMAN_BRIDGE_PERSONA, /do not call postman_ask_validate_reply/)
+  assert.match(POSTMAN_BRIDGE_PERSONA, /do not read or reconstruct resultFile/)
+  assert.doesNotMatch(POSTMAN_BRIDGE_PERSONA, /For TEXT_RESULT_DURABLE, before your final response call postman_ask_validate_reply/)
   assert.match(POSTMAN_BRIDGE_PERSONA, /Never call an automatic continuation tool/)
 })
 
@@ -106,6 +111,30 @@ test('trusted status ignores child prose and waits through RUNNING', async () =>
   assert.equal(result.checks, 2)
   assert.equal(result.requestId, 'REQ_2')
   assert.equal(result.result.assistantText, 'TRUSTED')
+})
+
+test('trusted status preserves file-mode descriptor without assistantText', async () => {
+  const receipt = {
+    ok: true,
+    code: 'TEXT_RESULT_DURABLE',
+    state: 'TEXT_RESULT_DURABLE',
+    requestId: 'REQ_FILE',
+    deliveryMode: 'file',
+    resultFile: 'C:\\Users\\andre\\AppData\\Local\\DSH\\Postman\\direct\\text-results\\REQ_FILE\\POSTMAN_REQ_FILE_ANSWER.md',
+    assistantTextLength: 65925,
+    assistantTextSha256: 'a'.repeat(64),
+  }
+  const result = await settleTrustedPostmanStatus(async () => ({
+    status: 'COMPLETED',
+    requestId: 'REQ_FILE',
+    result: receipt,
+  }), new AbortController().signal)
+
+  assert.equal(result.status, 'POSTMAN_BRIDGE_TERMINAL')
+  assert.equal(result.result, receipt)
+  assert.equal(result.result.deliveryMode, 'file')
+  assert.equal(result.result.assistantText, undefined)
+  assert.equal(result.result.resultFile, receipt.resultFile)
 })
 
 test('trusted status fails closed when Luna never started Direct Postman', async () => {
@@ -217,4 +246,16 @@ test('package and composition expose bridge entrypoint and leader preset', () =>
   const agents = readFileSync(join(repoRoot, 'AGENTS.md'), 'utf8')
   assert.match(agents, /Postman Bridge supervisor invariant/)
   assert.match(agents, /POSTMAN_BRIDGE_CALLER_REJECTED/)
+
+  const leaderSkill = readFileSync(join(repoRoot, '.agents', 'skills', 'postman-leader', 'SKILL.md'), 'utf8')
+  assert.match(leaderSkill, /POSTMAN_LEADER_SKILL_VERSION: 2/)
+  assert.match(leaderSkill, /deliveryMode=inline/)
+  assert.match(leaderSkill, /deliveryMode=file/)
+  assert.match(leaderSkill, /read.*grep[\s\S]*resultFile/)
+
+  const bridgeFlow = readFileSync(join(repoRoot, 'postman', 'POSTMAN_BRIDGE_FLOW.md'), 'utf8')
+  assert.match(bridgeFlow, /deliveryMode=inline/)
+  assert.match(bridgeFlow, /deliveryMode=file/)
+  assert.match(bridgeFlow, /child НЕ вызывает `postman_ask_validate_reply`/)
+  assert.match(bridgeFlow, /bridge host возвращает descriptor parent Leader напрямую/)
 })
