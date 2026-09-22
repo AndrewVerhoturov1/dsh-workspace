@@ -2,7 +2,7 @@
 
 id: postman
 status: active
-updated: 2026-09-21
+updated: 2026-09-22
 
 ## Goal
 
@@ -10,7 +10,7 @@ updated: 2026-09-21
 
 ## Current focus
 
-Текущий production path — Direct Web Postman через `postman/direct/postman.ps1`. Normal `@Postman` ограничен transport lifecycle и terminal handoff; legacy/manual finalization и `dsh-postman-harness` остаются отдельными вспомогательными слоями.
+Production transport теперь имеет два explicit user-facing режима поверх общего Direct/Web browser слоя: artifact `@Postman` через `postman/direct/postman.ps1` и text `@PostmanAsk` через `postman/direct/postman-ask.ps1`. Trusted current-turn Harness остаётся orchestration boundary и не является отдельным transport. Legacy/manual finalization относится только к artifact durable result.
 
 ## Next step
 
@@ -20,18 +20,18 @@ updated: 2026-09-21
 
 - Этот подпроект не переопределяет `AGENTS.md`, `REPO_POLICY.md`, `.agents/skills/delegate-via-postman/SKILL.md`, `postman/POSTMAN_CURRENT_FLOW.md` или `docs/web-postman-artifact-contract.md`.
 - Normal `@Postman` не распаковывает и не применяет результат, не запускает PREPARE/TEST/PUBLISH, не создаёт implementation branch/worktree/commit/PR и не выполняет merge.
-- `plugins/dsh-postman-harness/` — auxiliary/legacy слой, а не production fallback.
+- `plugins/dsh-postman-harness/` содержит trusted current-turn orchestration boundary для обоих exact triggers; он не является альтернативным transport/fallback. Остальные legacy/manual Harness-слои не входят в normal transport.
 - Канонические Postman документы остаются на своих текущих путях; подпроект хранит только долговременный контекст и решения.
 
 ## Read first
 
 1. `AGENTS.md`
 2. `REPO_POLICY.md`
-3. `.agents/skills/delegate-via-postman/SKILL.md`
-4. `postman/POSTMAN_CURRENT_FLOW.md`
-5. `docs/web-postman-artifact-contract.md`
+3. `.agents/skills/delegate-via-postman/SKILL.md` и `.agents/skills/delegate-via-postman-ask/SKILL.md` — по trigger mode.
+4. `postman/POSTMAN_CURRENT_FLOW.md` для artifact flow или `postman/POSTMAN_ASK_FLOW.md` для text flow.
+5. `docs/web-postman-artifact-contract.md` — только для artifact mode.
 6. `postman/direct/README.md` или `postman/web/README.md` — по затронутому слою.
-7. `system/implementation-package-workflow.md` — только для explicit implementation-package/manual-finalization работы.
+7. `system/implementation-package-workflow.md` и `system/implementation-package-authoring.md` — для explicit implementation-package работы.
 
 ## Main paths
 
@@ -39,18 +39,24 @@ updated: 2026-09-21
 - `postman/direct/`
 - `postman/web/`
 - `.agents/skills/delegate-via-postman/SKILL.md`
+- `.agents/skills/delegate-via-postman-ask/SKILL.md`
+- `postman/POSTMAN_ASK_FLOW.md`
 - `docs/web-postman-artifact-contract.md`
 - `plugins/dsh-postman-harness/`
 
 ## Current decisions
 
-- `@Postman` — единственный explicit production trigger; production entrypoint — `postman/direct/postman.ps1`.
-- Terminal surface: `RESULT_DURABLE`, `ASSISTANT_COMPLETED_NO_ARTIFACT`, `ARTIFACT_REJECTED`, `POSTMAN_TRANSPORT_FAILED`; первые три являются terminal handoff, transport failure остаётся отдельным fail-closed исходом.
+- `@Postman` — explicit artifact/ZIP production trigger; entrypoint — `postman/direct/postman.ps1`.
+- `@PostmanAsk` — отдельный explicit text production trigger; entrypoint — `postman/direct/postman-ask.ps1`.
+- Оба режима используют один trusted `postman_send_current_turn()` без text arguments; Harness сам различает exact current-message trigger и сохраняет exact payload.
+- PostmanAsk success — только `TEXT_RESULT_DURABLE` после exact REQ-bound BEGIN/END envelope; обычный assistant text не является result.
+- PostmanAsk использует существующий Web Worker 10-second no-artifact fresh re-proof перед text-envelope validation; отдельный browser transport не создаётся.
+- Artifact terminal surface: `RESULT_DURABLE`, `ASSISTANT_COMPLETED_NO_ARTIFACT`, `ARTIFACT_REJECTED`, `POSTMAN_TRANSPORT_FAILED`; первые три являются artifact handoff, transport failure остаётся отдельным fail-closed исходом. Text success surface — `TEXT_RESULT_DURABLE`; text trigger validation failure остаётся transport failure.
 - `ASSISTANT_COMPLETED_NO_ARTIFACT` требует fresh reproof через 10 секунд; изменение assistant text/SHA запускает новое 10-секундное grace window.
 - ZIP, отклонённый minimal transport validator, немедленно завершает REQ как `ARTIFACT_REJECTED`.
 - Service reminders отправляются на 10-й, 20-й и 30-й минуте; общий deadline одного REQ — 45 минут.
 - Recovery выполняется в том же exact ChatGPT conversation; reload не создаёт новый REQ и не повторяет исходный prompt.
-- Manual `@Postman --chat <old REQ> <intent>` и automatic continuation — разные режимы.
+- Manual `@Postman --chat <old REQ> <intent>` / `@PostmanAsk --chat <old REQ> <intent>` используют exact сохранённый conversation; automatic continuation остаётся artifact-only.
 - Automatic continuation использует explicit `-AutomaticContinuation`, не имеет hard cap и монотонно увеличивает `continuationIndex`.
 - `POSTMAN_TRANSPORT_FAILED` автоматически не продолжается.
 - Normal Postman не выполняет automatic Result Workspace registration и сам не переходит к Git integration или merge.
