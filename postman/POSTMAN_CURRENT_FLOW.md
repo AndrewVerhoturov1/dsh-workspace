@@ -278,11 +278,19 @@ reminder ждёт восстановления и не отправляется 
 Если в момент checkpoint ChatGPT всё ещё показывает active generation control, reminder
 подавляется без изменения composer и без нового user turn. Такой checkpoint считается
 использованным и позже не догоняется: расписание остаётся абсолютным 10/20/30, поэтому после
-долгой generation не возникает очереди просроченных reminders. Если generation начинается
-между pre-check и Send уже после вставки reminder, worker не кликает Send и очищает только
-exact доказанный unsent reminder; продолжение разрешено только после доказанной очистки.
-Неудачная очистка остаётся fail-closed. После `RESULT_DURABLE` оставшиеся checkpoints
-отменяются. Reload/recovery не сдвигает расписание и не перезапускает 45-минутный отсчёт.
+долгой generation не возникает очереди просроченных reminders.
+
+Reminder не использует общий 30-секундный `submit_once()` wait для появления Send. Composer
+должен быть готов сразу, после вставки действует отдельное safe-send окно максимум 5 секунд с
+polling раз в 1 секунду. На каждом poll и ещё раз непосредственно перед единственным click
+перепроверяются exact conversation, отсутствие generation, неизменность latest same-REQ turn,
+exact unsent reminder в composer и доступность Send. Если generation появляется, assistant
+turn появляется/изменяется или Send не становится безопасно доступным за 5 секунд, текущий
+checkpoint подавляется; exact unsent reminder доказанно очищается и позже не догоняется.
+Если очистку или другое pre-click состояние доказать нельзя, transport остаётся fail-closed.
+Сам click имеет reminder-specific timeout 1 секунду; после начала click UNKNOWN по-прежнему
+запрещает retry. После `RESULT_DURABLE` оставшиеся checkpoints отменяются. Reload/recovery не
+сдвигает расписание и не перезапускает 45-минутный отсчёт.
 
 Если ZIP скачан, но minimal transport validation его отклоняет, staging удаляется и current
 REQ немедленно завершается `ARTIFACT_REJECTED`. Terminal JSON содержит assistant text,
@@ -310,10 +318,11 @@ exact proven reminder user turn
 ```
 
 Произвольный новый user turn разрешённым anchor не является. При `PROVEN_SENT` цикл
-продолжается обычно. `REMINDER_SUPPRESSED_GENERATION_ACTIVE` использует `PROVEN_NOT_SENT`:
-до вставки composer остаётся нетронутым, а при race после вставки продолжение разрешено только
-после доказанной очистки exact reminder. Другой `PROVEN_NOT_SENT` также разрешает следующий
-срок только после доказанной очистки текста из поля ввода. При `UNKNOWN` REQ немедленно
+продолжается обычно. `REMINDER_SUPPRESSED_GENERATION_ACTIVE`,
+`REMINDER_SUPPRESSED_ASSISTANT_ACTIVITY` и `REMINDER_SUPPRESSED_SEND_NOT_READY` используют
+`PROVEN_NOT_SENT`: до вставки composer остаётся нетронутым, а после вставки продолжение
+разрешено только после доказанной очистки exact reminder. `REMINDER_SEND_GUARD_FAILED` или
+неудачная cleanup без такого proof остаются fail-closed. При `UNKNOWN` REQ немедленно
 завершается с ошибкой; служебное сообщение не повторяется вслепую.
 
 ## 12. Artifact envelope

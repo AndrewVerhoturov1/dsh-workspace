@@ -46,8 +46,12 @@ text envelope.
 Сохраняются общие reminder checkpoints на 10/20/30 минутах, общий deadline 45 минут и
 same-conversation recovery Web Worker. Если ChatGPT в checkpoint всё ещё активно генерирует
 ответ, reminder подавляется без изменения composer и не отправляется позднее задним числом.
-Если generation начинается после вставки, но до Send, exact unsent reminder должен быть
-доказанно очищен; иначе transport остаётся fail-closed.
+Reminder pre-click path не использует общий 30-секундный Send wait: composer проверяется
+однократно, затем действует максимум 5-секундное safe-send окно с polling раз в секунду.
+Generation, появление/изменение assistant turn или отсутствие безопасного Send к концу окна
+подавляют checkpoint; после вставки exact unsent reminder обязан быть доказанно очищен.
+Непосредственно перед единственным click volatile proofs проверяются ещё раз; UNKNOWN и
+неподтверждённая cleanup остаются fail-closed.
 
 ## Trusted current turn
 
