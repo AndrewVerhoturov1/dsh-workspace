@@ -3,7 +3,9 @@ import { EventEmitter } from 'node:events'
 import test from 'node:test'
 
 import {
+  DIRECT_CURRENT_TURN_TOOL_NAMES,
   DirectPostmanJobManager,
+  createDirectCurrentTurnToolConfigs,
   parsePostmanUserTurn,
 } from './direct-current-turn.js'
 
@@ -148,4 +150,89 @@ test('text job rejects artifact success terminal', async () => {
   }), 'utf8'))
   child.emit('close', 0, null)
   assert.equal(manager.view('session-2').result.code, 'POSTMAN_RESULT_GATE_FAILED')
+})
+
+test('PostmanAsk exact reply slot uses strict per-session string equality', async () => {
+  const child = fakeChild()
+  const manager = new DirectPostmanJobManager({
+    exists: () => true,
+    now: () => new Date('2026-09-22T02:03:04Z'),
+    randomInt: () => 5678,
+    spawn: () => {
+      queueMicrotask(() => child.emit('spawn'))
+      return child
+    },
+    pwsh: 'pwsh.exe',
+  })
+
+  const started = await manager.start({
+    sessionId: 'session-exact',
+    workspace: 'C:\\workspace',
+    payload: 'верни точный текст',
+    transportKind: 'text',
+  })
+  const assistantText = 'Строка 1\n\nA\\B | "кавычки" | ${value} | Привет-мир'
+  const { createHash } = await import('node:crypto')
+  const assistantTextSha256 = createHash('sha256').update(assistantText, 'utf8').digest('hex')
+  child.stdout.emit('data', Buffer.from(JSON.stringify({
+    ok: true,
+    code: 'TEXT_RESULT_DURABLE',
+    state: 'TEXT_RESULT_DURABLE',
+    requestId: started.requestId,
+    assistantText,
+    assistantTextSha256,
+  }), 'utf8'))
+  child.emit('close', 0, null)
+
+  assert.deepEqual(
+    manager.validateExactAskReply('session-exact', started.requestId, assistantText),
+    { status: 'EXACT_REPLY_MATCH', requestId: started.requestId },
+  )
+  assert.equal(
+    manager.validateExactAskReply('session-exact', started.requestId, `${assistantText} `).status,
+    'EXACT_REPLY_MISMATCH',
+  )
+  assert.equal(
+    manager.validateExactAskReply('session-exact', started.requestId, `1. ${assistantText}`).status,
+    'EXACT_REPLY_MISMATCH',
+  )
+  assert.equal(
+    manager.validateExactAskReply('session-exact', started.requestId, `${assistantText}\n`).status,
+    'EXACT_REPLY_MISMATCH',
+  )
+  assert.equal(
+    manager.validateExactAskReply('another-session', started.requestId, assistantText).status,
+    'EXACT_REPLY_UNAVAILABLE',
+  )
+})
+
+test('PostmanAsk exact reply validator is part of the trusted tool surface', () => {
+  assert.ok(DIRECT_CURRENT_TURN_TOOL_NAMES.includes('postman_ask_validate_reply'))
+})
+
+test('PostmanAsk exact reply validator tool uses the calling Luna session', async () => {
+  const calls = []
+  const jobs = {
+    validateExactAskReply(sessionId, requestId, text) {
+      calls.push({ sessionId, requestId, text })
+      return { status: 'EXACT_REPLY_MATCH', requestId }
+    },
+  }
+  const bridge = createDirectCurrentTurnToolConfigs(undefined, {
+    store: { dispose() {} },
+    jobs,
+  })
+  const validator = bridge.tools.find((tool) => tool.name === 'postman_ask_validate_reply')
+  assert.ok(validator)
+
+  const result = await validator.execute(
+    { request_id: REQ, text: 'точный ответ' },
+    { agent: { id: 'session-validator' } },
+  )
+  assert.deepEqual(result, { status: 'EXACT_REPLY_MATCH', requestId: REQ })
+  assert.deepEqual(calls, [{
+    sessionId: 'session-validator',
+    requestId: REQ,
+    text: 'точный ответ',
+  }])
 })

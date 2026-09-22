@@ -9,7 +9,7 @@ description: >-
 
 # Delegate via PostmanAsk — Direct text transport
 
-`DIRECT_POSTMAN_ASK_SKILL_VERSION: 1`
+`DIRECT_POSTMAN_ASK_SKILL_VERSION: 2`
 
 ## 0. Золотой путь
 
@@ -26,7 +26,11 @@ exact current-message @PostmanAsk trigger
 → существующий 10-second fresh re-proof
 → exact REQ-bound POSTMAN_ASK BEGIN/END markers
 → TEXT_RESULT_DURABLE
-→ assistantText возвращается локальной модели
+→ Harness сохраняет exact assistantText в session-scoped reply slot
+→ Luna готовит candidate final reply ровно из assistantText
+→ postman_ask_validate_reply(request_id, text)
+→ EXACT_REPLY_MATCH
+→ тот же candidate без изменений становится final response
 ```
 
 ## 1. Trigger
@@ -164,8 +168,40 @@ conversation URL. UI Search и silent fresh fallback запрещены.
 
 Automatic continuation tool предназначен для artifact Postman и для PostmanAsk v1 не используется.
 
-## 8. Handoff локальной модели
+## 8. Exact handoff локальной модели
 
-После exact `TEXT_RESULT_DURABLE` взять `assistantText` как результат Ч1. Локальная модель
-может объяснить его пользователю или использовать дальше только в пределах текущего запроса.
-ZIP/download/validator/result workspace для text result не нужны.
+После exact `TEXT_RESULT_DURABLE` поле `assistantText` является готовым пользовательским
+ответом, а не материалом для пересказа или переформатирования. Harness сохраняет этот текст
+в session-scoped exact-reply slot, привязанный к текущему `requestId`.
+
+Перед final response Luna обязана:
+
+1. взять `assistantText` из exact terminal result;
+2. подготовить candidate, который должен полностью совпадать с `assistantText`;
+3. вызвать:
+
+```text
+postman_ask_validate_reply(
+  request_id=<exact current REQ>,
+  text=<candidate final reply>
+)
+```
+
+Validator использует прямое строковое сравнение без `trim`, нормализации whitespace,
+Markdown-преобразований или отдельного SHA-gate.
+
+Только:
+
+```text
+status=EXACT_REPLY_MATCH
+```
+
+разрешает final response. После MATCH Luna выводит ровно тот же candidate: без вступления,
+нумерации, заключения, code fence, изменения пробелов, пустых строк или Markdown.
+
+`EXACT_REPLY_MISMATCH` означает: не отвечать пользователю этим candidate, заново взять exact
+`assistantText` из terminal result и повторить проверку. `EXACT_REPLY_UNAVAILABLE`,
+`EXACT_REPLY_REQUEST_MISMATCH` и `EXACT_REPLY_REQUEST_INVALID` означают `STOP`, без
+самостоятельного восстановления текста.
+
+ZIP/download/result workspace для text result не нужны.
