@@ -1,8 +1,10 @@
-# Postman bundle: host relay capability plus one persistent, named agent.
-# The plugin owns restore-or-create after session persistence is injected.
+# Postman bundle: trusted current-turn orchestration, legacy service agent,
+# and the supervisor-facing one-shot Luna bridge capability.
 - insert:
     - id: postman-harness
       name: dsh-postman-harness
+    - id: postman-bridge
+      name: dsh-postman-harness/bridge
 
 - id: agent-loop
   config:

@@ -1,49 +1,83 @@
 # Direct Web Postman
 
-`postman/` содержит текущий production transport между локальным Harness/Luna agent и ChatGPT Web.
+`postman/` содержит production transport между локальным Harness agent и ChatGPT Web.
 
-## Канонический flow
+## Два transport mode
+
+Artifact mode:
 
 ```text
 @Postman <intent>
-→ удалить только transport marker
-→ новый canonical REQ
+→ trusted current-turn capture
 → postman/direct/postman.ps1
-→ publish self-contained REQ task
-→ двухстрочный browser prompt
 → ChatGPT Web
-→ exact correlated assistant turn
-→ exact ZIP attachment
-→ download + transport validation
-→ RESULT_DURABLE
-→ report exact requestId + resultZip
-→ STOP
+→ correlated ZIP
+→ RESULT_DURABLE | ASSISTANT_COMPLETED_NO_ARTIFACT | ARTIFACT_REJECTED
 ```
 
-Continuation:
+Text mode:
+
+```text
+@PostmanAsk <intent>
+→ trusted current-turn capture
+→ postman/direct/postman-ask.ps1
+→ ChatGPT Web
+→ exact REQ-bound text envelope
+→ TEXT_RESULT_DURABLE
+```
+
+Оба режима поддерживают manual continuation:
 
 ```text
 @Postman --chat <old REQ> <new intent>
+@PostmanAsk --chat <old REQ> <new intent>
 ```
 
-Старый REQ используется только как локальный ключ exact сохранённого ChatGPT conversation.
-Continuation всегда создаёт новый REQ, а Ч1 получает только новый intent.
+Old REQ используется только как локальный ключ доказанного ChatGPT conversation; новая отправка
+всегда получает новый REQ.
 
-## Production entrypoint
+## Supervisor mode: Postman Bridge
+
+Для обычного пользовательского запроса умная локальная модель может работать как supervisor через:
+
+```text
+postman_bridge({ message: "@PostmanAsk ..." })
+postman_bridge({ message: "@Postman ..." })
+```
+
+Bridge создаёт fresh one-shot Luna, передаёт ей exact model-authored delegation как child
+`user/message`, после чего используются те же current-turn tools и Direct wrappers. Parent получает
+trusted terminal result напрямую; Luna prose не является authority.
+
+Canonical Bridge contract:
+
+```text
+postman/POSTMAN_BRIDGE_FLOW.md
+```
+
+Strategy skill:
+
+```text
+.agents/skills/postman-leader/SKILL.md
+```
+
+## Production entrypoints
 
 ```text
 <current workspace>\postman\direct\postman.ps1
+<current workspace>\postman\direct\postman-ask.ps1
 ```
 
 Hardcoded Windows username не является частью production contract.
 
 ## Структура
 
-- `POSTMAN_CURRENT_FLOW.md` — каноническая архитектура и lifecycle.
-- `direct/` — production entrypoint, GitHub task publication, durable handoff.
-- `web/` — Chrome/CDP, submit, observer, artifact detection, download и validator.
-- `task_package.py` — self-contained task manifest и canonical двухстрочный browser prompt.
-- `tests/` и `web/tests/` — transport regression tests.
+- `POSTMAN_CURRENT_FLOW.md` — artifact transport lifecycle.
+- `POSTMAN_ASK_FLOW.md` — text transport lifecycle.
+- `POSTMAN_BRIDGE_FLOW.md` — supervisor → Luna Bridge → Direct Postman lifecycle.
+- `direct/` — production wrappers, task publication и durable handoff.
+- `web/` — Chrome/CDP, submit, observer, recovery, artifact/text correlation.
+- `tests/`, `direct/tests/`, `web/tests/` — regression tests.
 
 Artifact contract:
 
@@ -51,31 +85,14 @@ Artifact contract:
 docs/web-postman-artifact-contract.md
 ```
 
-Intent/task contracts:
+## Граница normal transport
 
-```text
-docs/intent-preservation-rules.md
-docs/task-package-protocol.md
-```
+Normal Postman не:
 
-Последний полный fresh + continuation acceptance:
+- применяет ZIP к repository;
+- запускает PREPARE/TEST/PUBLISH автоматически;
+- создаёт implementation branch/commit/PR;
+- использует `postman_async_send`/`postman_runtime_*` как fallback;
+- делает blind resend после неопределённого transport outcome.
 
-```text
-docs/postman-production-e2e.md
-```
-
-## Граница normal flow
-
-Normal `@Postman` заканчивается на `RESULT_DURABLE`: Luna сообщает exact `requestId`
-и `resultZip`, затем STOP. Normal flow не вызывает `postman_result_workspace_register(...)`
-и не создаёт Result Workspace автоматически.
-
-Normal flow не:
-
-- распаковывает и не интерпретирует ZIP;
-- применяет patch/files к repository;
-- запускает PREPARE/TEST/PUBLISH;
-- создаёт implementation worktree/branch/commit/PR;
-- использует `postman_async_send`, `postman_runtime_*` или persistent POSTMAN agent как fallback.
-
-Legacy/manual finalization сохраняется отдельно и запускается только по явному запросу пользователя.
+`postman_bridge` также не применяет artifact: следующий шаг выбирает parent Leader.

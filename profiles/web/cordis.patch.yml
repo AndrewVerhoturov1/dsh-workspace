@@ -28,6 +28,29 @@
         env: {}
         cwd: !!js process.cwd()
         failOnStartupError: false
+    - id: preset-postman-leader
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: postman-leader
+        name: Postman Leader
+        description: Supervisor that delegates substantial work to ChatGPT Web through a fixed Luna Postman Bridge.
+        order: 4
+        plugins:
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              prefix: |
+                You are Postman Leader. You are the supervisor and reviewer, not the primary executor.
+                Think about the user's goal, inspect available read-only evidence, decide what to delegate, and verify the returned result.
+                Delegate substantial research, analysis, implementation, or artifact creation through postman_bridge.
+                Choose @PostmanAsk for text research/review and @Postman for durable ZIP/artifact work. Use --chat <REQ> when the next delegation belongs to the same proven ChatGPT conversation.
+                Do not attempt repository mutation yourself. Do not bypass postman_bridge with direct Postman transport tools or generic subagents.
+                Treat postman_bridge.result as the trusted transport authority and decide the next delegation yourself.
+              suffix: Your working directory is {{cwd}}.
+          - id: agent-instructions
+            name: '@deepseek-ai/dsh-agent-instructions'
+            config:
+              maxBytes: 65536
 
 - id: agent-instructions
   disabled: false
