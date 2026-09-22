@@ -18,11 +18,9 @@ PostmanAsk использует тот же Direct/Web browser transport, что
 → existing 10-second stable no-artifact re-proof
 → exact REQ-bound text envelope validation
 → TEXT_RESULT_DURABLE
-→ exact assistantText stored in session-scoped reply slot
-→ Luna candidate final reply
-→ postman_ask_validate_reply(request_id, text)
-→ EXACT_REPLY_MATCH
-→ same candidate as final Luna response
+→ Direct выбирает deliveryMode по exact длине результата
+   ├─ inline: <= 4096 символов → exact assistantText → exact reply validator
+   └─ file:   > 4096 символов → exact UTF-8 Markdown → compact file descriptor
 ```
 
 ## Result envelope
@@ -35,6 +33,32 @@ PostmanAsk использует тот же Direct/Web browser transport, что
 
 Принимается ровно одна пара markers с current REQ. Видимый текст вне envelope и пустое тело
 запрещены. Обычный завершённый assistant text без markers не является успешным результатом.
+
+
+## Delivery mode
+
+После exact envelope Direct layer считает длину текста внутри markers.
+
+```text
+<= 4096 символов → deliveryMode=inline
+>  4096 символов → deliveryMode=file
+```
+
+`inline` предназначен только для очень маленьких ответов. Markdown-файл не создаётся,
+terminal содержит exact `assistantText`, и дальше действует существующий exact-reply validator.
+
+`file` предназначен для всех остальных ответов. Direct атомарно записывает exact UTF-8 bytes
+без BOM и без дополнительной обёртки в:
+
+```text
+<direct_root>/text-results/<REQ>/POSTMAN_<REQ>_ANSWER.md
+```
+
+File-mode terminal не содержит `assistantText`. Он содержит только compact descriptor:
+`resultFile`, exact filename, MIME `text/markdown`, encoding `utf-8`, character/byte lengths и
+SHA-256. Harness перечитывает файл до handoff и fail-closed проверяет absolute path/filename,
+UTF-8 bytes, byte length и SHA-256. Descriptor с одновременно присутствующим `assistantText`
+отклоняется, чтобы большой result не попадал в Luna context.
 
 ## Паузы
 
@@ -60,22 +84,29 @@ Luna не копирует current user text в tool arguments. Тот же no-a
 `@PostmanAsk`, сохраняет exact payload и выбирает соответствующий wrapper.
 
 
-## Exact final handoff
+## Final handoff
 
-После `TEXT_RESULT_DURABLE` Harness хранит exact `assistantText` в памяти текущей Luna session
-вместе с `requestId`. Перед ответом пользователю Luna передаёт candidate final text в
-`postman_ask_validate_reply(request_id, text)`.
+После `TEXT_RESULT_DURABLE` Luna сначала проверяет `deliveryMode`.
 
-Проверка — прямое строковое равенство. Она не делает `trim`, не нормализует пробелы/переносы,
-не меняет Markdown и не добавляет отдельный SHA-gate.
+### Inline
 
-- `EXACT_REPLY_MATCH` — разрешён final response ровно тем же candidate.
-- `EXACT_REPLY_MISMATCH` — candidate нельзя показывать; Luna повторно берёт exact
-  `assistantText` из terminal result и проверяет снова.
-- unavailable/request mismatch/invalid — `STOP`, без самостоятельного восстановления текста.
+Для `deliveryMode=inline` Harness хранит exact `assistantText` в session-scoped reply slot.
+Перед ответом Luna передаёт candidate в `postman_ask_validate_reply(request_id, text)`.
+Проверка остаётся прямым строковым равенством без `trim`, whitespace/Markdown normalization
+или дополнительного SHA-gate. Только `EXACT_REPLY_MATCH` разрешает вывести тот же candidate.
+Mismatch требует повторно взять exact `assistantText`; unavailable/request mismatch/invalid —
+`STOP`.
 
-Новый request в той же Luna session очищает предыдущий exact-reply slot, поэтому stale Ask
-result не может подтвердить ответ для следующего REQ.
+### File
+
+Для `deliveryMode=file` полного `assistantText` в terminal result и reply slot нет.
+`postman_ask_validate_reply` не вызывается. Luna не должна открывать файл, читать его кусками,
+собирать текст обратно в model context или пересказывать содержимое только ради handoff.
+Финальный ответ — короткая ссылка на exact локальный `resultFile` по общему правилу `AGENTS.md`
+(путь в Markdown inline code); можно добавить только компактные metadata вроде длины и SHA-256.
+
+Новый request в той же Luna session очищает предыдущий inline exact-reply slot, поэтому stale
+Ask result не может подтвердить ответ для следующего REQ.
 
 ## Continuation
 
