@@ -44,12 +44,17 @@ Luna не выполняет result-root write-probe до bridge; tool-level spa
 
 Для обоих режимов нельзя обходить skill через glob/read/edit/write/shell, чтобы интерпретировать либо выполнить запрос самостоятельно; до загрузки соответствующего skill запрещены локальное уточнение intent и выбор архитектуры. Если соответствующий skill отсутствует, не загружается или недоступен — fail-closed `STOP`, без другого Postman mode, Harness bypass, QChat, manual browser или самостоятельной реализации.
 
-Postman global invariant: OFF by default.
-Разрешение существует только при одном из exact current-message triggers:
+Direct Postman global invariant: OFF by default.
+Обычный direct Postman в текущем Agent разрешён только при одном из exact current-message triggers:
 - artifact: `^\s*@Postman(?:\s|$)`;
 - text: `^\s*@PostmanAsk(?:\s|$)`.
 
-Разрешение действует только для этого сообщения и не наследуется из предыдущих сообщений. `@PostmanAsk` не совпадает с artifact regex. Если ни одного exact trigger нет, Luna не загружает Postman skills, не создаёт REQ, не вызывает Direct wrappers и не обращается к Ч1. Даже задачи по разработке самого Postman без exact trigger выполняются локально Luna.
+Это разрешение действует только для текущего сообщения и не наследуется из предыдущих сообщений. `@PostmanAsk` не совпадает с artifact regex. Если ни одного exact trigger нет, обычный Agent не загружает Postman skills, не создаёт REQ, не вызывает Direct wrappers и не обращается к Ч1. Даже задачи по разработке самого Postman без exact trigger выполняются локально.
+
+Postman Bridge supervisor invariant.
+`postman_bridge` — отдельная trusted supervisor capability и не ослабляет direct current-message rule. Вызывать её может только top-level Agent, чей current composed preset равен `postman-leader`; для остальных root/subagent Agents tool скрывается runtime restriction, а прямой обход execution boundary завершается fail-closed `POSTMAN_BRIDGE_CALLER_REJECTED`.
+Postman Leader может сформировать новое model-authored delegation, exact текст которого начинается с `@Postman` или `@PostmanAsk`. Trusted `spawn` создаёт fresh one-shot Luna child и передаёт exact delegation как собственный current `user/message` child-а; только с этой новой границы действуют обычные trigger skill/no-argument current-turn invariants. Это не наследование разрешения исходного человеческого сообщения, и generic `subagent`, прямой вызов Postman tools или ручная browser automation не могут подменять `postman_bridge`.
+Bridge child всегда использует fixed `codex / gpt-5.6-luna`, `maxDepth = 1` и свой узкий `toolFilter`; он не получает `postman_bridge` или automatic continuation tool. Follow-up, `--chat`, выбор text/artifact mode и остановку решает parent Leader, а authority результата — trusted terminal, прочитанный host-ом из exact child scope, не Luna prose.
 
 Artifact Postman lifecycle invariant.
 Один artifact Direct Postman REQ имеет три успешных terminal transport outcomes: `RESULT_DURABLE`, `ASSISTANT_COMPLETED_NO_ARTIFACT`, `ARTIFACT_REJECTED`. После exact `RESULT_DURABLE` normal `@Postman` flow сообщает exact `requestId` и `resultZip`, затем останавливается. Два non-durable outcomes возвращают Л1 exact `assistantText`; `ARTIFACT_REJECTED` также возвращает validation reason. Они не transport failure. Artifact automatic continuation допустима только из предусмотренных non-durable outcomes и только пока текущее сообщение разрешает `@Postman`.

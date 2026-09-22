@@ -34,7 +34,10 @@ Bundle подключает subpath entrypoint:
 dsh-postman-harness/bridge
 ```
 
-Он регистрирует tool `postman_bridge` с одним model-facing argument `message`.
+Он регистрирует host definition `postman_bridge` с одним model-facing argument `message`.
+Runtime показывает эту capability только top-level Agent с preset `postman-leader`: всем остальным
+Agents добавляется точечный deny этого имени, а execute path повторно проверяет caller и возвращает
+`POSTMAN_BRIDGE_CALLER_REJECTED` до parsing/spawn при попытке обхода visibility boundary.
 
 Bridge жёстко фиксирует:
 
@@ -60,9 +63,11 @@ Web profile добавляет selectable `Postman Leader` (`postman-leader`). R
 read, glob, grep, skill, web_fetch, web_search, postman_bridge
 ```
 
-Ограничение не применяется к `origin=subagent`; Luna Bridge получает свой отдельный `toolFilter`.
-Preset не меняет выбранную пользователем main-model route. Для Leader рекомендуется сильная модель;
-Bridge Luna фиксирована кодом.
+Любой `origin=subagent` считается non-Leader и получает deny `postman_bridge`; Luna Bridge
+дополнительно получает свой отдельный `toolFilter`, который оставляет только transport tools.
+
+Harness model routing намеренно находится вне Agent presets. Поэтому для Leader в model selector
+выбирается `GPT-5.6 Sol`; preset сам модель не переключает. Bridge Luna фиксирована кодом.
 
 ## Legacy async runtime
 

@@ -4,9 +4,11 @@ import {
   POSTMAN_BRIDGE_PROVIDER,
   POSTMAN_BRIDGE_AGENT_OPTIONS,
   POSTMAN_BRIDGE_TOOL_ALLOWLIST,
-  POSTMAN_LEADER_TOOL_ALLOWLIST,
+  POSTMAN_BRIDGE_TOOL_NAME,
   buildPostmanBridgeStartRequest,
   isTopLevelPostmanLeader,
+  postmanBridgeCallerAllowed,
+  postmanBridgeRestrictionForAgent,
   settleTrustedPostmanStatus,
 } from './postman-bridge-core.js'
 
@@ -53,7 +55,7 @@ async function trustedStatusReader(ctx, child, signal) {
 
 export function createPostmanBridgeTool(ctx) {
   return defineTool({
-    name: 'postman_bridge',
+    name: POSTMAN_BRIDGE_TOOL_NAME,
     description: 'Delegate one model-authored exact @Postman or @PostmanAsk message through a fresh fixed Luna bridge subagent. Use @PostmanAsk for text research/review and @Postman for a durable ZIP/artifact. Use --chat <REQ> in message when continuing an already proven ChatGPT conversation. The bridge returns the trusted Direct Postman terminal receipt, not the child model prose.',
     parameters: {
       message: {
@@ -65,6 +67,13 @@ export function createPostmanBridgeTool(ctx) {
     output: output(),
     async execute(args, exec) {
       const parent = requiredAgent(exec)
+      if (!postmanBridgeCallerAllowed(parent)) {
+        return {
+          status: 'POSTMAN_BRIDGE_CALLER_REJECTED',
+          diagnostic: 'postman_bridge is available only to a top-level postman-leader agent',
+        }
+      }
+
       let parsed
       try {
         parsed = parsePostmanUserTurn(args.message)
@@ -135,12 +144,15 @@ export function createPostmanBridgeTool(ctx) {
 }
 
 export function installPostmanLeaderBoundary(agent) {
-  if (!isTopLevelPostmanLeader(agent)) return false
+  const leader = isTopLevelPostmanLeader(agent)
+  const restriction = postmanBridgeRestrictionForAgent(agent)
   agent.ctx.effect(
-    () => agent.ctx.tools.restrict({ allow: [...POSTMAN_LEADER_TOOL_ALLOWLIST] }),
-    'dsh-postman-harness-bridge.leader-tool-boundary()',
+    () => agent.ctx.tools.restrict(restriction),
+    leader
+      ? 'dsh-postman-harness-bridge.leader-tool-boundary()'
+      : 'dsh-postman-harness-bridge.non-leader-tool-boundary()',
   )
-  return true
+  return leader
 }
 
 export function apply(ctx) {

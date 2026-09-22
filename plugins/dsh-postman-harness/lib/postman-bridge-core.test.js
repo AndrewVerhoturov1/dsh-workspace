@@ -9,10 +9,13 @@ import {
   POSTMAN_BRIDGE_PERSONA,
   POSTMAN_BRIDGE_PROVIDER,
   POSTMAN_BRIDGE_TOOL_ALLOWLIST,
+  POSTMAN_BRIDGE_TOOL_NAME,
   POSTMAN_LEADER_PRESET_ID,
   POSTMAN_LEADER_TOOL_ALLOWLIST,
   buildPostmanBridgeStartRequest,
   isTopLevelPostmanLeader,
+  postmanBridgeCallerAllowed,
+  postmanBridgeRestrictionForAgent,
   settleTrustedPostmanStatus,
 } from './postman-bridge-core.js'
 
@@ -98,17 +101,39 @@ test('trusted status preserves a failed Direct terminal receipt', async () => {
   assert.equal(result.result, receipt)
 })
 
-test('leader boundary applies only to top-level postman-leader preset', () => {
+test('bridge authorization and visibility are limited to top-level postman-leader', () => {
+  assert.equal(POSTMAN_BRIDGE_TOOL_NAME, 'postman_bridge')
   assert.equal(POSTMAN_LEADER_PRESET_ID, 'postman-leader')
-  assert.equal(isTopLevelPostmanLeader(parent({ agentPreset: 'postman-leader' })), true)
-  assert.equal(isTopLevelPostmanLeader(parent({ agentPreset: 'postman-leader', origin: 'subagent', delegationDepth: 1 })), false)
-  assert.equal(isTopLevelPostmanLeader(parent({ agentPreset: 'standard' })), false)
+
+  const leader = parent({ agentPreset: 'postman-leader' })
+  const delegated = parent({ agentPreset: 'postman-leader', origin: 'subagent', delegationDepth: 1 })
+  const standard = parent({ agentPreset: 'standard' })
   const switched = parent({ agentPreset: 'standard' })
   switched.ctx = { get: () => ({ composedPreset: () => 'postman-leader' }) }
+
+  assert.equal(isTopLevelPostmanLeader(leader), true)
+  assert.equal(isTopLevelPostmanLeader(delegated), false)
+  assert.equal(isTopLevelPostmanLeader(standard), false)
   assert.equal(isTopLevelPostmanLeader(switched), true)
+
+  assert.equal(postmanBridgeCallerAllowed(leader), true)
+  assert.equal(postmanBridgeCallerAllowed(switched), true)
+  assert.equal(postmanBridgeCallerAllowed(standard), false)
+  assert.equal(postmanBridgeCallerAllowed(delegated), false)
+
   assert.deepEqual(POSTMAN_LEADER_TOOL_ALLOWLIST, [
     'read', 'glob', 'grep', 'skill', 'web_fetch', 'web_search', 'postman_bridge',
   ])
+  assert.deepEqual(postmanBridgeRestrictionForAgent(leader), {
+    allow: [...POSTMAN_LEADER_TOOL_ALLOWLIST],
+  })
+  assert.deepEqual(postmanBridgeRestrictionForAgent(standard), {
+    deny: ['postman_bridge'],
+  })
+  assert.deepEqual(postmanBridgeRestrictionForAgent(delegated), {
+    deny: ['postman_bridge'],
+  })
+
   assert.equal(POSTMAN_LEADER_TOOL_ALLOWLIST.includes('write'), false)
   assert.equal(POSTMAN_LEADER_TOOL_ALLOWLIST.includes('edit'), false)
   assert.equal(POSTMAN_LEADER_TOOL_ALLOWLIST.includes('subagent'), false)
@@ -129,4 +154,13 @@ test('package and composition expose bridge entrypoint and leader preset', () =>
   assert.match(webPatch, /id: preset-postman-leader/)
   assert.match(webPatch, /id: postman-leader/)
   assert.match(webPatch, /name: Postman Leader/)
+
+  const bridgeSource = readFileSync(join(pluginRoot, 'lib', 'postman-bridge.js'), 'utf8')
+  assert.match(bridgeSource, /POSTMAN_BRIDGE_CALLER_REJECTED/)
+  assert.match(bridgeSource, /postmanBridgeCallerAllowed\(parent\)/)
+  assert.match(bridgeSource, /postmanBridgeRestrictionForAgent\(agent\)/)
+
+  const agents = readFileSync(join(repoRoot, 'AGENTS.md'), 'utf8')
+  assert.match(agents, /Postman Bridge supervisor invariant/)
+  assert.match(agents, /POSTMAN_BRIDGE_CALLER_REJECTED/)
 })
