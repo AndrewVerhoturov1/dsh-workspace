@@ -51,7 +51,7 @@ Production transport имеет два explicit user-facing режима пов�
 
 - `@Postman` — explicit artifact/ZIP production trigger; entrypoint — `postman/direct/postman.ps1`.
 - `@PostmanAsk` — отдельный explicit text production trigger; entrypoint — `postman/direct/postman-ask.ps1`.
-- `postman_bridge` — отдельная supervisor capability только для top-level `postman-leader`; обычные root/subagent Agents получают runtime deny, а execute path повторно проверяет caller fail-closed.
+- `postman_bridge` — отдельная supervisor capability только для top-level `postman-leader`; обычные root/subagent Agents получают runtime deny, execute path повторно проверяет caller fail-closed, а blank-session `agent-preset/selected` заменяет старый restriction на restriction текущей live composition.
 - Supervisor delegation создаёт fresh one-shot `codex / gpt-5.6-luna` child с `maxDepth = 1` и узким transport-only toolFilter; follow-up, mode и continuation выбирает parent Leader.
 - Authority supervisor result — trusted Direct terminal из exact child scope, а не Luna prose.
 - Agent presets не владеют model routing; для роли Leader `GPT-5.6 Sol` выбирается отдельно в model selector, Bridge Luna остаётся hard-fixed.

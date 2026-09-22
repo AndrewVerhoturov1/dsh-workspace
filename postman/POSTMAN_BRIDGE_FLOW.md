@@ -122,6 +122,12 @@ postman_bridge
 Tool body повторно проверяет caller и при обходе visibility boundary возвращает
 `POSTMAN_BRIDGE_CALLER_REJECTED` до parsing/spawn.
 
+Один live Agent всегда имеет ровно один Bridge restriction. Поскольку Harness разрешает сменить
+preset у пустой сессии до первого turn, plugin слушает `agent-preset/selected`, заново определяет
+live composition через `ctx.agents.get(sessionId)` и заменяет предыдущий restriction, снимая его
+exact disposer. Это важно: restrictions пересекаются, поэтому простой второй allow поверх старого
+deny не сделал бы Bridge видимым после `standard → postman-leader`.
+
 Spawn child имеет `origin=subagent`, получает этот non-Leader deny и дополнительно собственный
 Bridge `toolFilter`, поэтому не может рекурсивно вызвать `postman_bridge`.
 

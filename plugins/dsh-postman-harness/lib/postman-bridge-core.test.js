@@ -13,6 +13,7 @@ import {
   POSTMAN_LEADER_PRESET_ID,
   POSTMAN_LEADER_TOOL_ALLOWLIST,
   buildPostmanBridgeStartRequest,
+  createPostmanBridgeBoundaryManager,
   isTopLevelPostmanLeader,
   postmanBridgeCallerAllowed,
   postmanBridgeRestrictionForAgent,
@@ -25,6 +26,28 @@ const repoRoot = join(pluginRoot, '..', '..')
 
 function parent(header = {}) {
   return { id: 'leader', session: { header: { id: 'leader', ...header } } }
+}
+
+function boundaryFixture(initialPreset = 'standard') {
+  let preset = initialPreset
+  const restrictions = []
+  const agent = parent({ agentPreset: initialPreset })
+  agent.ctx = {
+    get: name => name === 'agentPresets' ? { composedPreset: () => preset } : undefined,
+    tools: {
+      restrict(filter) {
+        const record = { filter, active: true }
+        restrictions.push(record)
+        return () => { record.active = false }
+      },
+    },
+  }
+  return {
+    agent,
+    setPreset(value) { preset = value },
+    activeRestrictions() { return restrictions.filter(item => item.active).map(item => item.filter) },
+    restrictions,
+  }
 }
 
 test('bridge request pins Luna, spawn, depth and exact message', () => {
@@ -140,6 +163,33 @@ test('bridge authorization and visibility are limited to top-level postman-leade
   assert.equal(POSTMAN_LEADER_TOOL_ALLOWLIST.includes('postman_send_current_turn'), false)
 })
 
+
+test('boundary manager replaces the active restriction when a blank session switches preset', () => {
+  const fixture = boundaryFixture('standard')
+  const agents = new Map([[fixture.agent.id, fixture.agent]])
+  const manager = createPostmanBridgeBoundaryManager(sessionId => agents.get(sessionId))
+
+  assert.equal(manager.install(fixture.agent), false)
+  assert.deepEqual(fixture.activeRestrictions(), [{ deny: ['postman_bridge'] }])
+
+  fixture.setPreset('postman-leader')
+  assert.equal(manager.refreshSession(fixture.agent.id), true)
+  assert.deepEqual(fixture.activeRestrictions(), [{ allow: [...POSTMAN_LEADER_TOOL_ALLOWLIST] }])
+  assert.equal(fixture.restrictions[0].active, false)
+
+  fixture.setPreset('standard')
+  assert.equal(manager.refreshSession(fixture.agent.id), true)
+  assert.deepEqual(fixture.activeRestrictions(), [{ deny: ['postman_bridge'] }])
+  assert.equal(fixture.restrictions[1].active, false)
+
+  assert.equal(manager.refreshSession('missing'), false)
+  assert.equal(manager.disposeAgent(fixture.agent), true)
+  assert.deepEqual(fixture.activeRestrictions(), [])
+  assert.equal(manager.disposeAgent(fixture.agent), false)
+
+  manager.disposeAll()
+})
+
 test('package and composition expose bridge entrypoint and leader preset', () => {
   const packageJson = JSON.parse(readFileSync(join(pluginRoot, 'package.json'), 'utf8'))
   assert.equal(packageJson.exports['./bridge'], './lib/postman-bridge.js')
@@ -158,7 +208,11 @@ test('package and composition expose bridge entrypoint and leader preset', () =>
   const bridgeSource = readFileSync(join(pluginRoot, 'lib', 'postman-bridge.js'), 'utf8')
   assert.match(bridgeSource, /POSTMAN_BRIDGE_CALLER_REJECTED/)
   assert.match(bridgeSource, /postmanBridgeCallerAllowed\(parent\)/)
-  assert.match(bridgeSource, /postmanBridgeRestrictionForAgent\(agent\)/)
+  assert.match(bridgeSource, /createPostmanBridgeBoundaryManager/)
+  assert.match(bridgeSource, /inject = \['agents', 'subagents', 'tools'\]/)
+  assert.match(bridgeSource, /agent-preset\/selected/)
+  assert.match(bridgeSource, /ctx\.agents\.get\(sessionId\)/)
+  assert.match(bridgeSource, /agent\/disposed/)
 
   const agents = readFileSync(join(repoRoot, 'AGENTS.md'), 'utf8')
   assert.match(agents, /Postman Bridge supervisor invariant/)
