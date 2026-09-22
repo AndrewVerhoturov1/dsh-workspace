@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 import browser_bootstrap as bootstrap
+import browser_observer
 import browser_submit as submit
 import request_identity as identity
 
@@ -18,6 +19,8 @@ DEFAULT_REMINDER_INTERVAL_MS = 10 * 60 * 1000
 DEFAULT_REMINDER_COUNT = 3
 DEFAULT_OVERALL_TIMEOUT_MS = 45 * 60 * 1000
 REMINDER_CONTROL = "POSTMAN_TRANSPORT_CONTROL"
+REMINDER_SUPPRESSED_GENERATION_ACTIVE = "REMINDER_SUPPRESSED_GENERATION_ACTIVE"
+REMINDER_SUPPRESSION_CLEANUP_FAILED = "REMINDER_SUPPRESSION_CLEANUP_FAILED"
 
 
 def build_reminder_prompt(
@@ -150,6 +153,34 @@ def _clear_unsent_prompt(page: Any, prompt: str, *, timeout_ms: int) -> bool:
     return bool(empty)
 
 
+def _generation_active_suppression(
+    page: Any,
+    *,
+    phase: str,
+    transitions: list[str],
+    unsent_prompt_cleared: bool,
+    composer_untouched: bool,
+) -> dict[str, Any] | None:
+    """Return a safe suppression result while ChatGPT is still generating."""
+    active, control = browser_observer.generation_active(page)
+    if not active:
+        return None
+    return _result(
+        REMINDER_SUPPRESSED_GENERATION_ACTIVE,
+        ok=False,
+        send_state=submit.SEND_PROVEN_NOT_SENT,
+        transitions=transitions,
+        recoverable=True,
+        details={
+            "generationActive": True,
+            "generationControl": control,
+            "suppressionPhase": phase,
+            "unsentPromptCleared": unsent_prompt_cleared,
+            "composerUntouched": composer_untouched,
+        },
+    )
+
+
 def submit_reminder(
     page: Any,
     prompt: str,
@@ -157,7 +188,23 @@ def submit_reminder(
     *,
     timeout_ms: int = submit.DEFAULT_TIMEOUT_MS,
 ) -> dict[str, Any]:
-    """Send one reminder in the already-proven chat without navigation."""
+    """Send or safely suppress one reminder in the already-proven chat."""
+    # During streaming the live composer itself may be temporarily unavailable.
+    # If the owned Page is still on the exact conversation and generation is
+    # visibly active, suppress before asking composer readiness to prove itself.
+    page_url = str(getattr(page, "url", "") or "")
+    if submit.same_conversation_url(page_url, conversation_url):
+        early_suppressed = _generation_active_suppression(
+            page,
+            phase="before_prepare",
+            transitions=[submit.PAGE_OWNED],
+            unsent_prompt_cleared=True,
+            composer_untouched=True,
+        )
+        if early_suppressed is not None:
+            early_suppressed["details"]["sameConversation"] = True
+            return early_suppressed
+
     prep = prepare_same_chat(page, conversation_url, timeout_ms=timeout_ms)
     if not prep.get("ok"):
         return _result(
@@ -170,6 +217,27 @@ def submit_reminder(
         )
 
     composer = prep["composer"]
+    base_transitions = [
+        submit.PAGE_OWNED,
+        submit.EXISTING_CHAT_CONFIRMED,
+        submit.COMPOSER_EMPTY_CONFIRMED,
+    ]
+
+    # A due reminder is a checkpoint, not an obligation to interrupt an
+    # assistant that is visibly still generating. Suppress the checkpoint
+    # before mutating the composer. The bridge already treats PROVEN_NOT_SENT
+    # plus a clean composer as safely continuable and advances to the next
+    # absolute 10/20/30-minute slot, so suppressed reminders never accumulate.
+    suppressed = _generation_active_suppression(
+        page,
+        phase="before_insert",
+        transitions=base_transitions,
+        unsent_prompt_cleared=True,
+        composer_untouched=True,
+    )
+    if suppressed is not None:
+        return suppressed
+
     inserted = submit.insert_prompt(
         page,
         composer,
@@ -182,14 +250,37 @@ def submit_reminder(
             inserted.get("code", submit.PROMPT_INSERT_FAILED),
             ok=False,
             send_state=submit.SEND_PROVEN_NOT_SENT,
-            transitions=[
-                submit.PAGE_OWNED,
-                submit.EXISTING_CHAT_CONFIRMED,
-                submit.COMPOSER_EMPTY_CONFIRMED,
-            ],
+            transitions=base_transitions,
             recoverable=True,
             details=inserted.get("details"),
         )
+
+    # Close the race between the pre-insert check and Send. If generation
+    # becomes active after fill(), never click anything. Clear only the exact
+    # proven-unsent reminder; failure to prove cleanup stays fail-closed.
+    post_insert = _generation_active_suppression(
+        page,
+        phase="after_insert",
+        transitions=[*base_transitions, submit.PROMPT_INSERTED],
+        unsent_prompt_cleared=False,
+        composer_untouched=False,
+    )
+    if post_insert is not None:
+        cleared = _clear_unsent_prompt(page, prompt, timeout_ms=timeout_ms)
+        if not cleared:
+            return _result(
+                REMINDER_SUPPRESSION_CLEANUP_FAILED,
+                ok=False,
+                send_state=submit.SEND_PROVEN_NOT_SENT,
+                transitions=[*base_transitions, submit.PROMPT_INSERTED],
+                recoverable=False,
+                details={
+                    **post_insert.get("details", {}),
+                    "unsentPromptCleared": False,
+                },
+            )
+        post_insert["details"]["unsentPromptCleared"] = True
+        return post_insert
 
     result = submit.submit_once(
         page,
@@ -218,6 +309,8 @@ __all__ = [
     "DEFAULT_REMINDER_COUNT",
     "DEFAULT_OVERALL_TIMEOUT_MS",
     "REMINDER_CONTROL",
+    "REMINDER_SUPPRESSED_GENERATION_ACTIVE",
+    "REMINDER_SUPPRESSION_CLEANUP_FAILED",
     "build_reminder_prompt",
     "scheduled_elapsed_ms",
     "prepare_same_chat",

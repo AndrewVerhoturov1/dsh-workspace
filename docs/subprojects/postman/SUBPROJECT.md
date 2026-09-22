@@ -55,7 +55,7 @@ Production transport теперь имеет два explicit user-facing реж�
 - Artifact terminal surface: `RESULT_DURABLE`, `ASSISTANT_COMPLETED_NO_ARTIFACT`, `ARTIFACT_REJECTED`, `POSTMAN_TRANSPORT_FAILED`; первые три являются artifact handoff, transport failure остаётся отдельным fail-closed исходом. Text success surface — `TEXT_RESULT_DURABLE`; text trigger validation failure остаётся transport failure.
 - `ASSISTANT_COMPLETED_NO_ARTIFACT` требует fresh reproof через 10 секунд; изменение assistant text/SHA запускает новое 10-секундное grace window.
 - ZIP, отклонённый minimal transport validator, немедленно завершает REQ как `ARTIFACT_REJECTED`.
-- Service reminders отправляются на 10-й, 20-й и 30-й минуте; общий deadline одного REQ — 45 минут.
+- 10/20/30 минут — absolute reminder checkpoints при общем deadline 45 минут; если assistant всё ещё активно генерирует, соответствующий checkpoint подавляется без изменения composer и не догоняется позже.
 - Recovery выполняется в том же exact ChatGPT conversation; reload не создаёт новый REQ и не повторяет исходный prompt.
 - Manual `@Postman --chat <old REQ> <intent>` / `@PostmanAsk --chat <old REQ> <intent>` используют exact сохранённый conversation; automatic continuation остаётся artifact-only.
 - Automatic continuation использует explicit `-AutomaticContinuation`, не имеет hard cap и монотонно увеличивает `continuationIndex`.

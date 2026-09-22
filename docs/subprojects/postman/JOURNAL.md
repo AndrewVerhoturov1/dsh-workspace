@@ -43,3 +43,9 @@
 - **Что изменилось:** Harness сохраняет `TEXT_RESULT_DURABLE.assistantText` в session-scoped reply slot и проверяет candidate Luna через `postman_ask_validate_reply` прямым строковым равенством.
 - **Почему:** smoke-тест показал, что Luna может сохранить смысл, но добавить нумерацию или иначе переформатировать готовый text result.
 - **Результат:** только `EXACT_REPLY_MATCH` разрешает final response тем же candidate; mismatch не принимается, при этом browser/Direct transport PostmanAsk не меняется.
+
+### 2026-09-22 — Reminders перестали вмешиваться в active generation
+
+- **Что изменилось:** 10/20/30 минут закреплены как absolute reminder checkpoints; active generation подавляет соответствующий reminder до изменения composer, а race после вставки требует доказанной очистки exact unsent текста.
+- **Почему:** long-running PostmanAsk stress-test показал, что reminder мог заполнить composer во время streaming, не найти обычный Send control и завершить REQ transport failure.
+- **Результат:** работающий assistant больше не прерывается служебным сообщением, suppressed checkpoints не накапливаются, а uncertain/неочищенное состояние остаётся fail-closed.
