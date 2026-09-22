@@ -9,7 +9,7 @@ description: >-
 
 # Delegate via PostmanAsk — Direct text transport
 
-`DIRECT_POSTMAN_ASK_SKILL_VERSION: 2`
+`DIRECT_POSTMAN_ASK_SKILL_VERSION: 3`
 
 ## 0. Золотой путь
 
@@ -26,11 +26,9 @@ exact current-message @PostmanAsk trigger
 → существующий 10-second fresh re-proof
 → exact REQ-bound POSTMAN_ASK BEGIN/END markers
 → TEXT_RESULT_DURABLE
-→ Harness сохраняет exact assistantText в session-scoped reply slot
-→ Luna готовит candidate final reply ровно из assistantText
-→ postman_ask_validate_reply(request_id, text)
-→ EXACT_REPLY_MATCH
-→ тот же candidate без изменений становится final response
+→ deliveryMode определяется Direct layer по exact длине результата
+   ├─ inline: <= 4096 символов → assistantText → exact reply validator → exact final response
+   └─ file:   > 4096 символов → exact UTF-8 Markdown → compact descriptor → file handoff
 ```
 
 ## 1. Trigger
@@ -131,19 +129,44 @@ fresh re-proof того же assistant turn. Если assistant text/SHA изм�
 
 ## 6. Terminal gate
 
-Единственный успешный PostmanAsk terminal:
+Единственный успешный PostmanAsk terminal остаётся:
 
 ```text
 ok=true
 code=TEXT_RESULT_DURABLE
 state=TEXT_RESULT_DURABLE
 requestId=<exact current REQ>
-assistantText=<text inside markers>
-assistantTextSha256=<SHA-256 assistantText>
+resultMode=text
+deliveryMode=inline|file
+assistantTextSha256=<SHA-256 exact result text>
 assistantIndex=<exact correlated assistant turn>
 conversationUrl=<exact saved chat URL>
-resultMode=text
 ```
+
+Direct layer выбирает delivery mode сам по exact длине текста внутри markers:
+
+```text
+<= 4096 символов → deliveryMode=inline
+>  4096 символов → deliveryMode=file
+```
+
+Для `inline` terminal дополнительно содержит exact `assistantText`; Markdown-файл не создаётся.
+
+Для `file` terminal НЕ содержит `assistantText`. Вместо него обязательны:
+
+```text
+resultFile=<absolute local path>
+resultFileName=POSTMAN_<REQ>_ANSWER.md
+resultMimeType=text/markdown
+resultEncoding=utf-8
+resultFileSha256=<same SHA-256 as assistantTextSha256>
+assistantTextLength=<exact character count>
+assistantTextByteLength=<exact UTF-8 byte count>
+```
+
+Harness до handoff перечитывает файл и доказывает filename, UTF-8 bytes, byte length и SHA-256.
+File-mode receipt с одновременно присутствующим `assistantText` отклоняется: большой текст не
+должен попадать в Luna context через terminal JSON.
 
 После background start ждать `postman_current_turn_status()` тем же способом, что normal
 Postman. Один timeout ожидания не разрешает второй Send.
@@ -168,16 +191,20 @@ conversation URL. UI Search и silent fresh fallback запрещены.
 
 Automatic continuation tool предназначен для artifact Postman и для PostmanAsk v1 не используется.
 
-## 8. Exact handoff локальной модели
+## 8. Handoff локальной модели
 
-После exact `TEXT_RESULT_DURABLE` поле `assistantText` является готовым пользовательским
-ответом, а не материалом для пересказа или переформатирования. Harness сохраняет этот текст
-в session-scoped exact-reply slot, привязанный к текущему `requestId`.
+После exact `TEXT_RESULT_DURABLE` Luna сначала смотрит только на `deliveryMode`.
+
+### 8.1. `deliveryMode=inline`
+
+Это режим только для очень маленького ответа (`<= 4096` символов). Поле `assistantText`
+является готовым пользовательским ответом, а не материалом для пересказа. Harness сохраняет
+его в session-scoped exact-reply slot, привязанный к текущему `requestId`.
 
 Перед final response Luna обязана:
 
 1. взять `assistantText` из exact terminal result;
-2. подготовить candidate, который должен полностью совпадать с `assistantText`;
+2. подготовить candidate, полностью совпадающий с `assistantText`;
 3. вызвать:
 
 ```text
@@ -187,21 +214,30 @@ postman_ask_validate_reply(
 )
 ```
 
-Validator использует прямое строковое сравнение без `trim`, нормализации whitespace,
-Markdown-преобразований или отдельного SHA-gate.
+Validator использует прямое строковое сравнение без `trim`, нормализации whitespace или
+Markdown-преобразований. Только `EXACT_REPLY_MATCH` разрешает final response тем же candidate
+без вступления, нумерации, заключения, code fence или изменения whitespace/Markdown.
 
-Только:
+`EXACT_REPLY_MISMATCH` требует заново взять exact `assistantText` и повторить проверку.
+`EXACT_REPLY_UNAVAILABLE`, `EXACT_REPLY_REQUEST_MISMATCH` и
+`EXACT_REPLY_REQUEST_INVALID` означают `STOP`.
 
-```text
-status=EXACT_REPLY_MATCH
-```
+### 8.2. `deliveryMode=file`
 
-разрешает final response. После MATCH Luna выводит ровно тот же candidate: без вступления,
-нумерации, заключения, code fence, изменения пробелов, пустых строк или Markdown.
+Это normal path для любого результата длиннее 4096 символов. Полного `assistantText` в
+terminal result нет и exact-reply slot для него не создаётся.
 
-`EXACT_REPLY_MISMATCH` означает: не отвечать пользователю этим candidate, заново взять exact
-`assistantText` из terminal result и повторить проверку. `EXACT_REPLY_UNAVAILABLE`,
-`EXACT_REPLY_REQUEST_MISMATCH` и `EXACT_REPLY_REQUEST_INVALID` означают `STOP`, без
-самостоятельного восстановления текста.
+Luna обязана:
 
-ZIP/download/result workspace для text result не нужны.
+1. НЕ вызывать `postman_ask_validate_reply`;
+2. НЕ открывать и не читать `resultFile` только ради повторной выдачи пользователю;
+3. НЕ читать файл кусками и не собирать большой текст обратно в model context;
+4. НЕ пересказывать содержимое файла;
+5. дать короткий handoff и показать exact `resultFile` как локальную кликабельную ссылку по
+   общему правилу `AGENTS.md` — Markdown inline code с exact local path;
+6. при желании добавить только компактные metadata: `assistantTextLength` и SHA-256.
+
+Файл уже проверен Harness byte-for-byte. Его содержимое — exact текст между PostmanAsk
+markers, записанный UTF-8 без дополнительного заголовка, обёртки или переформатирования.
+
+ZIP/result workspace для text result не нужны.

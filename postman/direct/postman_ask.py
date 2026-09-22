@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -54,6 +55,11 @@ STATE_BROWSER_READY = "ASK_BROWSER_READY"
 STATE_WEB_RUNNING = "ASK_WEB_RUNNING"
 STATE_FAILED = "ASK_FAILED"
 DEFAULT_ASSISTANT_TIMEOUT_MS = 45 * 60 * 1000
+INLINE_ASSISTANT_TEXT_MAX_CHARS = 4096
+DELIVERY_INLINE = "inline"
+DELIVERY_FILE = "file"
+TEXT_RESULT_MIME_TYPE = "text/markdown"
+TEXT_RESULT_ENCODING = "utf-8"
 
 
 def _json_result(ok: bool, code: str, **fields: Any) -> dict[str, Any]:
@@ -67,6 +73,22 @@ def _atomic_json(path: Path, value: dict[str, Any]) -> None:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
             json.dump(value, handle, ensure_ascii=False, sort_keys=True, indent=2)
             handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_name, path)
+    finally:
+        try:
+            os.unlink(temp_name)
+        except FileNotFoundError:
+            pass
+
+
+def _atomic_bytes(path: Path, value: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(value)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temp_name, path)
@@ -104,6 +126,69 @@ class DirectPostmanAsk:
     def state_path(self, request_id: str) -> Path:
         request_identity.assert_canonical_request_id(request_id)
         return self.direct_root / "requests" / f"{request_id}.json"
+
+    def result_file_path(self, request_id: str) -> Path:
+        request_identity.assert_canonical_request_id(request_id)
+        return (
+            self.direct_root
+            / "text-results"
+            / request_id
+            / f"POSTMAN_{request_id}_ANSWER.md"
+        ).resolve()
+
+    def _materialize_delivery(
+        self,
+        request_id: str,
+        assistant_text: str,
+        assistant_text_sha256: str,
+    ) -> dict[str, Any]:
+        encoded = assistant_text.encode(TEXT_RESULT_ENCODING)
+        common = {
+            "assistantTextLength": len(assistant_text),
+            "assistantTextByteLength": len(encoded),
+            "assistantTextSha256": assistant_text_sha256,
+        }
+        if len(assistant_text) <= INLINE_ASSISTANT_TEXT_MAX_CHARS:
+            return {
+                "deliveryMode": DELIVERY_INLINE,
+                "assistantText": assistant_text,
+                **common,
+            }
+
+        result_file = self.result_file_path(request_id)
+        try:
+            _atomic_bytes(result_file, encoded)
+            stored = result_file.read_bytes()
+        except OSError as exc:
+            raise DirectPostmanError(
+                "POSTMAN_ASK_RESULT_FILE_WRITE_FAILED",
+                f"failed to persist PostmanAsk Markdown result: {exc}",
+                details={"resultFile": str(result_file)},
+            ) from exc
+
+        stored_sha256 = hashlib.sha256(stored).hexdigest()
+        if stored != encoded or stored_sha256 != assistant_text_sha256:
+            raise DirectPostmanError(
+                "POSTMAN_ASK_RESULT_FILE_VERIFY_FAILED",
+                "persisted PostmanAsk Markdown result did not verify byte-for-byte",
+                details={
+                    "resultFile": str(result_file),
+                    "expectedSha256": assistant_text_sha256,
+                    "actualSha256": stored_sha256,
+                    "expectedByteLength": len(encoded),
+                    "actualByteLength": len(stored),
+                },
+            )
+
+        return {
+            "deliveryMode": DELIVERY_FILE,
+            "resultFile": str(result_file),
+            "resultFileName": result_file.name,
+            "resultMimeType": TEXT_RESULT_MIME_TYPE,
+            "resultEncoding": TEXT_RESULT_ENCODING,
+            "resultFileSha256": stored_sha256,
+            **common,
+        }
 
     def _write_state(self, request_id: str, state: str, **fields: Any) -> dict[str, Any]:
         path = self.state_path(request_id)
@@ -287,6 +372,13 @@ class DirectPostmanAsk:
         if isinstance(conversation_id, str) and conversation_id:
             final_conversation["conversationId"] = conversation_id
         assistant_index = details.get("assistantIndex")
+        assistant_text = str(parsed_details["assistantText"])
+        assistant_text_sha256 = str(parsed_details["assistantTextSha256"])
+        delivery = self._materialize_delivery(
+            request_id,
+            assistant_text,
+            assistant_text_sha256,
+        )
         terminal = _json_result(
             True,
             TEXT_RESULT_DURABLE,
@@ -297,8 +389,6 @@ class DirectPostmanAsk:
             baseCommit=published.prepublication_commit,
             taskPublicationCommit=published.publication_commit,
             taskUrl=published.task_url,
-            assistantText=str(parsed_details["assistantText"]),
-            assistantTextSha256=str(parsed_details["assistantTextSha256"]),
             assistantIndex=assistant_index if isinstance(assistant_index, int) and not isinstance(assistant_index, bool) else None,
             textSettleMs=int(details.get("noArtifactRecheckMs", 10_000)),
             statePath=str(self.state_path(request_id)),
@@ -306,19 +396,19 @@ class DirectPostmanAsk:
             parentRequestId=chat_ref.request_id if chat_ref is not None else None,
             rootRequestId=request_id,
             continuationIndex=0,
+            **delivery,
             **final_conversation,
         )
+        state_delivery = dict(delivery)
         self._write_state(
             request_id,
             TEXT_RESULT_DURABLE,
             ok=True,
             code=TEXT_RESULT_DURABLE,
-            assistantText=terminal["assistantText"],
-            assistantTextSha256=terminal["assistantTextSha256"],
             assistantIndex=terminal["assistantIndex"],
             textSettleMs=terminal["textSettleMs"],
             workerEnvelopeTextSha256=str(details.get("assistantTextSha256", "")),
-            workerDetails=details,
+            **state_delivery,
             **final_conversation,
         )
         return terminal
