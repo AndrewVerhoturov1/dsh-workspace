@@ -102,8 +102,8 @@ Probe НЕ доказывает безопасность будущего browse
 прямые Postman tools или browser automation.
 
 Harness намеренно держит model routing вне Agent presets. Для роли Leader в model selector
-выбирать Sol-модель, которую использует текущая сессия. Bridge child независимо и жёстко
-зафиксирован кодом как `codex / gpt-5.6-luna`.
+выбирать `codex / gpt-6-sol` для текущей сессии; preset не переключает модель автоматически.
+Bridge child независимо и жёстко зафиксирован кодом как `codex / gpt-6-luna`.
 
 ## Выбор режима
 

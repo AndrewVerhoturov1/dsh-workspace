@@ -26,7 +26,7 @@ export const POSTMAN_SESSION_ID = 'postman-harness-session'
 export const PLUGIN_NAME = 'dsh-postman-harness'
 const POSTMAN_AGENT_OPTIONS = Object.freeze({
   provider: 'codex',
-  model: 'gpt-5.6-luna',
+  model: 'gpt-6-luna',
 })
 const POSTMAN_CWD = 'C:/Users/andre/.dsh'
 const MESSAGE_ID_PATTERN = /^MSG_[A-Za-z0-9_-]{1,80}$/
