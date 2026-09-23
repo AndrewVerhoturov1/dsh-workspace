@@ -18,7 +18,7 @@ exact current @Postman / @PostmanAsk
 ```text
 Postman Leader
 → postman_bridge(message="@Postman..." | "@PostmanAsk...")
-→ fresh fixed gpt-5.6-luna child
+→ fresh fixed gpt-6-luna child
 → existing trusted current-turn tools
 → existing Direct Postman
 → trusted terminal returned to parent
@@ -42,7 +42,7 @@ Agents добавляется точечный deny этого имени, а ex
 Bridge жёстко фиксирует:
 
 - provider `spawn`;
-- model route `codex / gpt-5.6-luna`;
+- model route `codex / gpt-6-luna`;
 - one-shot child;
 - `maxDepth = 1`;
 - allowlist child tools: `skill`, `postman_send_current_turn`, `postman_current_turn_status`, `postman_ask_validate_reply`.
@@ -70,7 +70,7 @@ read, glob, grep, skill, web_fetch, web_search, postman_bridge
 дополнительно получает свой отдельный `toolFilter`, который оставляет только transport tools.
 
 Harness model routing намеренно находится вне Agent presets. Поэтому для Leader в model selector
-выбирается `GPT-5.6 Sol`; preset сам модель не переключает. Bridge Luna фиксирована кодом.
+выбирается `GPT-6 Sol`; preset сам модель не переключает. Bridge Luna фиксирована кодом.
 
 ## Legacy async runtime
 

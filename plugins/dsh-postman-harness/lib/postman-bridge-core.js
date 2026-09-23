@@ -3,7 +3,7 @@ export const POSTMAN_BRIDGE_TOOL_NAME = 'postman_bridge'
 export const POSTMAN_WORKER_SCOPE_PROBE_TOOL_NAME = 'postman_worker_scope_probe'
 export const POSTMAN_BRIDGE_AGENT_OPTIONS = Object.freeze({
   provider: 'codex',
-  model: 'gpt-5.6-luna',
+  model: 'gpt-6-luna',
 })
 export const POSTMAN_BRIDGE_MAX_DEPTH = 1
 export const POSTMAN_BRIDGE_TOOL_ALLOWLIST = Object.freeze([

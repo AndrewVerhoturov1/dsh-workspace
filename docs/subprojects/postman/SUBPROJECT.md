@@ -52,9 +52,9 @@ Production transport имеет два explicit user-facing режима пов�
 - `@Postman` — explicit artifact/ZIP production trigger; entrypoint — `postman/direct/postman.ps1`.
 - `@PostmanAsk` — отдельный explicit text production trigger; entrypoint — `postman/direct/postman-ask.ps1`.
 - `postman_bridge` — отдельная supervisor capability только для top-level `postman-leader`; обычные root/subagent Agents получают runtime deny, execute path повторно проверяет caller fail-closed, а blank-session `agent-preset/selected` заменяет старый restriction на restriction текущей live composition.
-- Supervisor delegation создаёт fresh one-shot `codex / gpt-5.6-luna` child с `maxDepth = 1` и узким transport-only toolFilter; follow-up, mode и continuation выбирает parent Leader.
+- Supervisor delegation создаёт fresh one-shot `codex / gpt-6-luna` child с `maxDepth = 1` и узким transport-only toolFilter; follow-up, mode и continuation выбирает parent Leader.
 - Authority supervisor result — trusted Direct terminal из exact child scope, а не Luna prose. Для text terminal parent Leader ветвится по `deliveryMode`: `inline` анализирует `assistantText`, `file` использует verified `resultFile` descriptor и при необходимости читает exact Markdown выборочно через свои `read`/`grep`; Bridge child файл не rehydrate-ит.
-- Agent presets не владеют model routing; для роли Leader `GPT-5.6 Sol` выбирается отдельно в model selector, Bridge Luna остаётся hard-fixed.
+- Agent presets не владеют model routing; для роли Leader `GPT-6 Sol` выбирается отдельно в model selector, Bridge Luna остаётся hard-fixed.
 - Оба режима используют один trusted `postman_send_current_turn()` без text arguments; Harness сам различает exact current-message trigger и сохраняет exact payload.
 - PostmanAsk success — только `TEXT_RESULT_DURABLE` после exact REQ-bound BEGIN/END envelope; обычный assistant text не является result.
 - После `TEXT_RESULT_DURABLE` Direct PostmanAsk использует size-based handoff: `<=4096` символов остаются `deliveryMode=inline` и проходят strict `postman_ask_validate_reply`; более длинный exact result атомарно сохраняется как UTF-8 `POSTMAN_<REQ>_ANSWER.md`, terminal возвращает только проверенный file descriptor без `assistantText`, а Luna не rehydrate-ит файл обратно в context.

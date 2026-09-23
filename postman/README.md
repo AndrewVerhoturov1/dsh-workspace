@@ -47,7 +47,7 @@ postman_bridge({ message: "@Postman ..." })
 
 `postman_bridge` доступен только top-level Agent с preset `postman-leader`; остальные Agents
 получают runtime deny, а execute path повторно проверяет caller fail-closed. Для Leader модель
-выбирается отдельно в model selector (`GPT-5.6 Sol`); preset намеренно не меняет model routing.
+выбирается отдельно в model selector (`GPT-6 Sol`); preset намеренно не меняет model routing.
 
 Bridge создаёт fresh one-shot Luna, передаёт ей exact model-authored delegation как child
 `user/message`, после чего используются те же current-turn tools и Direct wrappers. Parent получает

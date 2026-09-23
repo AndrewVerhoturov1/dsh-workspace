@@ -46,7 +46,7 @@ Leader их не видит.
 
 1. Проверяет, что exact Leader не видит `write`.
 2. Создаёт уникальное имя marker-файла внутри Leader `cwd`.
-3. Стартует обычный provider `spawn`, fixed `codex/gpt-5.6-luna`.
+3. Стартует обычный provider `spawn`, fixed `codex/gpt-6-luna`.
 4. Child получает `toolFilter.allow=['write']`.
 5. Host сразу измеряет настоящий child tool catalog.
 6. Luna получает фиксированную задачу вызвать `write` ровно один раз.

@@ -1,7 +1,7 @@
 # Postman Bridge — supervisor/worker flow
 
 > Model-facing capability: `postman_bridge(message=...)`
-> Bridge child: fresh one-shot `spawn`, fixed `codex / gpt-5.6-luna`
+> Bridge child: fresh one-shot `spawn`, fixed `codex / gpt-6-luna`
 > Existing transports: `@Postman` artifact and `@PostmanAsk` text
 
 ## 1. Назначение
@@ -19,7 +19,7 @@ Bridge не создаёт третий transport. После child current-turn
 Postman Leader
 → postman_bridge(message="@PostmanAsk ..." | "@Postman ...")
 → fresh spawn child
-→ fixed gpt-5.6-luna
+→ fixed gpt-6-luna
 → exact child user/message
 → child loads canonical Postman skill
 → postman_send_current_turn() with no text args
@@ -48,7 +48,7 @@ Child assistant prose не является authority результата.
 Bridge child всегда:
 
 - provider `spawn`;
-- route `codex / gpt-5.6-luna`;
+- route `codex / gpt-6-luna`;
 - `maxDepth = 1`;
 - one-shot;
 - без inherited conversation history;
@@ -159,7 +159,7 @@ Bridge `toolFilter`, поэтому не может рекурсивно выз�
 
 Harness model routing намеренно находится вне Agent presets. Поэтому `postman-leader` задаёт роль
 и tool boundary, но не переключает модель автоматически: для Leader в model selector выбирается
-`GPT-5.6 Sol`. Luna Bridge фиксирована кодом независимо от модели parent.
+`GPT-6 Sol`. Luna Bridge фиксирована кодом независимо от модели parent.
 
 ## 9. Failure boundary
 
