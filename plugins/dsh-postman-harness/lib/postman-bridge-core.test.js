@@ -10,12 +10,14 @@ import {
   POSTMAN_BRIDGE_PROVIDER,
   POSTMAN_BRIDGE_TOOL_ALLOWLIST,
   POSTMAN_BRIDGE_TOOL_NAME,
+  POSTMAN_WORKER_SCOPE_PROBE_TOOL_NAME,
   POSTMAN_LEADER_PRESET_ID,
   POSTMAN_LEADER_TOOL_ALLOWLIST,
   buildPostmanBridgeStartRequest,
   createPostmanBridgeBoundaryManager,
   isTopLevelPostmanLeader,
   postmanBridgeCallerAllowed,
+  postmanWorkerScopeProbeCallerAllowed,
   postmanBridgeRestrictionForAgent,
   settleTrustedPostmanStatus,
 } from './postman-bridge-core.js'
@@ -155,6 +157,7 @@ test('trusted status preserves a failed Direct terminal receipt', async () => {
 
 test('bridge authorization and visibility are limited to top-level postman-leader', () => {
   assert.equal(POSTMAN_BRIDGE_TOOL_NAME, 'postman_bridge')
+  assert.equal(POSTMAN_WORKER_SCOPE_PROBE_TOOL_NAME, 'postman_worker_scope_probe')
   assert.equal(POSTMAN_LEADER_PRESET_ID, 'postman-leader')
 
   const leader = parent({ agentPreset: 'postman-leader' })
@@ -172,18 +175,22 @@ test('bridge authorization and visibility are limited to top-level postman-leade
   assert.equal(postmanBridgeCallerAllowed(switched), true)
   assert.equal(postmanBridgeCallerAllowed(standard), false)
   assert.equal(postmanBridgeCallerAllowed(delegated), false)
+  assert.equal(postmanWorkerScopeProbeCallerAllowed(leader), true)
+  assert.equal(postmanWorkerScopeProbeCallerAllowed(switched), true)
+  assert.equal(postmanWorkerScopeProbeCallerAllowed(standard), false)
+  assert.equal(postmanWorkerScopeProbeCallerAllowed(delegated), false)
 
   assert.deepEqual(POSTMAN_LEADER_TOOL_ALLOWLIST, [
-    'read', 'glob', 'grep', 'skill', 'web_fetch', 'web_search', 'postman_bridge',
+    'read', 'glob', 'grep', 'skill', 'web_fetch', 'web_search', 'postman_bridge', 'postman_worker_scope_probe',
   ])
   assert.deepEqual(postmanBridgeRestrictionForAgent(leader), {
     allow: [...POSTMAN_LEADER_TOOL_ALLOWLIST],
   })
   assert.deepEqual(postmanBridgeRestrictionForAgent(standard), {
-    deny: ['postman_bridge'],
+    deny: ['postman_bridge', 'postman_worker_scope_probe'],
   })
   assert.deepEqual(postmanBridgeRestrictionForAgent(delegated), {
-    deny: ['postman_bridge'],
+    deny: ['postman_bridge', 'postman_worker_scope_probe'],
   })
 
   assert.equal(POSTMAN_LEADER_TOOL_ALLOWLIST.includes('write'), false)
@@ -199,7 +206,7 @@ test('boundary manager replaces the active restriction when a blank session swit
   const manager = createPostmanBridgeBoundaryManager(sessionId => agents.get(sessionId))
 
   assert.equal(manager.install(fixture.agent), false)
-  assert.deepEqual(fixture.activeRestrictions(), [{ deny: ['postman_bridge'] }])
+  assert.deepEqual(fixture.activeRestrictions(), [{ deny: ['postman_bridge', 'postman_worker_scope_probe'] }])
 
   fixture.setPreset('postman-leader')
   assert.equal(manager.refreshSession(fixture.agent.id), true)
@@ -208,7 +215,7 @@ test('boundary manager replaces the active restriction when a blank session swit
 
   fixture.setPreset('standard')
   assert.equal(manager.refreshSession(fixture.agent.id), true)
-  assert.deepEqual(fixture.activeRestrictions(), [{ deny: ['postman_bridge'] }])
+  assert.deepEqual(fixture.activeRestrictions(), [{ deny: ['postman_bridge', 'postman_worker_scope_probe'] }])
   assert.equal(fixture.restrictions[1].active, false)
 
   assert.equal(manager.refreshSession('missing'), false)
@@ -241,7 +248,11 @@ test('package and composition expose bridge entrypoint and leader preset', () =>
   assert.match(leaderPreset, /id: tool-web[\s\S]*fetch: true[\s\S]*search: true/)
   assert.deepEqual(
     [...leaderPreset.matchAll(/^\s*- id: ([\w-]+)\s*$/gm)].map((match) => match[1]),
-    ['persona', 'agent-instructions', 'tool-fs', 'tool-fs-search', 'skill-filesystem', 'tool-skill', 'tool-web'],
+    ['persona', 'agent-instructions', 'tool-bash', 'tool-pwsh', 'tool-fs', 'tool-fs-search', 'tool-jobs',
+      'skill-filesystem', 'tool-skill', 'tool-goal', 'planning', 'plan-mode', 'compaction',
+      'compaction-basic', 'command-compact', 'tool-result-pruner', 'delegation',
+      'tool-subagent-control', 'tool-subagent-list-agents', 'tool-subagent', 'tool-subagent-fork',
+      'workflow-worker-thread', 'tool-workflow', 'tool-ralph', 'tool-ask-user', 'tool-todo', 'tool-web'],
   )
   assert.match(leaderPreset, /You are Postman Leader\./)
 
@@ -259,10 +270,10 @@ test('package and composition expose bridge entrypoint and leader preset', () =>
   assert.match(agents, /POSTMAN_BRIDGE_CALLER_REJECTED/)
 
   const leaderSkill = readFileSync(join(repoRoot, '.agents', 'skills', 'postman-leader', 'SKILL.md'), 'utf8')
-  assert.match(leaderSkill, /POSTMAN_LEADER_SKILL_VERSION: 2/)
+  assert.match(leaderSkill, /POSTMAN_LEADER_SKILL_VERSION: 3/)
   assert.match(leaderSkill, /deliveryMode=inline/)
   assert.match(leaderSkill, /deliveryMode=file/)
-  assert.match(leaderSkill, /read.*grep[\s\S]*resultFile/)
+  assert.match(leaderSkill, /resultFile[\s\S]*read-only tools/)
 
   const bridgeFlow = readFileSync(join(repoRoot, 'postman', 'POSTMAN_BRIDGE_FLOW.md'), 'utf8')
   assert.match(bridgeFlow, /deliveryMode=inline/)
