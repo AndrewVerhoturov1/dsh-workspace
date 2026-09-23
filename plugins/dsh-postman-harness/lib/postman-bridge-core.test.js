@@ -63,8 +63,8 @@ test('bridge request pins Luna, spawn, depth and exact message', () => {
   })
 
   assert.equal(POSTMAN_BRIDGE_PROVIDER, 'spawn')
-  assert.deepEqual(request.agentOptions, { provider: 'codex', model: 'gpt-5.6-luna' })
-  assert.deepEqual(POSTMAN_BRIDGE_AGENT_OPTIONS, { provider: 'codex', model: 'gpt-5.6-luna' })
+  assert.deepEqual(request.agentOptions, { provider: 'codex', model: 'gpt-6-luna' })
+  assert.deepEqual(POSTMAN_BRIDGE_AGENT_OPTIONS, { provider: 'codex', model: 'gpt-6-luna' })
   assert.equal(request.maxDepth, POSTMAN_BRIDGE_MAX_DEPTH)
   assert.equal(request.maxDepth, 1)
   assert.deepEqual(request.toolFilter, { allow: [...POSTMAN_BRIDGE_TOOL_ALLOWLIST] })

@@ -534,7 +534,7 @@ test('restoreOrCreatePostman should create only when persistence reports no POST
   assert.deepEqual(calls[0].options, {
     sessionId: POSTMAN_SESSION_ID,
     meta: { cwd: 'C:/Users/andre/.dsh' },
-    agentOptions: { provider: 'codex', model: 'gpt-5.6-luna' },
+    agentOptions: { provider: 'codex', model: 'gpt-6-luna' },
   })
 })
 

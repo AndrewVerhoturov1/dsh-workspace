@@ -37,7 +37,7 @@ function fixture(cwd, { leak = false, write = true, stopReason = 'completed' } =
         assert.equal(provider, 'spawn')
         assert.equal(request.parent, parent)
         assert.deepEqual(request.toolFilter, { allow: ['write'] })
-        assert.deepEqual(request.agentOptions, { provider: 'codex', model: 'gpt-5.6-luna' })
+        assert.deepEqual(request.agentOptions, { provider: 'codex', model: 'gpt-6-luna' })
         assert.equal(request.maxDepth, 1)
         const [, markerName, markerText] = request.persona.match(/file_path="([^"]+)" and content="([^"]+)"/) ?? []
         assert.ok(markerName && markerText)
