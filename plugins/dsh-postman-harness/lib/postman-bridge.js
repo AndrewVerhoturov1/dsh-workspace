@@ -3,6 +3,7 @@ import { readFile, rm, stat } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { parsePostmanUserTurn } from './direct-current-turn.js'
+import { runPostmanWorkerContinuationProbe } from './postman-worker-continuation-probe.js'
 import {
   POSTMAN_BRIDGE_PROVIDER,
   POSTMAN_BRIDGE_AGENT_OPTIONS,
@@ -157,10 +158,16 @@ export function createPostmanBridgeTool(ctx) {
 export function createPostmanWorkerScopeProbeTool(ctx) {
   return defineTool({
     name: POSTMAN_WORKER_SCOPE_PROBE_TOOL_NAME,
-    description: 'EXPERIMENT ONLY. Prove whether an ordinary spawn Luna child can use the shared preset write tool while write remains hidden from the exact Postman Leader runtime catalog. The host creates a unique marker name, verifies exact marker bytes, checks child lineage/tool visibility, removes the marker, and returns evidence.',
-    parameters: {},
+    description: 'EXPERIMENT ONLY. Default scope mode preserves the original one-shot tool-scope check. mode=continuation tests two turns of one continuable spawn child (codex/gpt-5.6-luna), with a first-turn-only secret and host-verified write bytes. Not a production Worker.',
+    parameters: {
+      mode: { type: 'string', description: 'Omit for the original scope probe; use continuation for the two-turn memory experiment.' },
+    },
     output: output(),
-    async execute(_args, exec) {
+    async execute(args, exec) {
+      if (args.mode === 'continuation') return runPostmanWorkerContinuationProbe(ctx, exec)
+      if (args.mode !== undefined && args.mode !== 'scope') {
+        return { status: 'POSTMAN_WORKER_SCOPE_PROBE_MODE_INVALID' }
+      }
       const parent = requiredAgent(exec)
       if (!postmanWorkerScopeProbeCallerAllowed(parent)) {
         return {
