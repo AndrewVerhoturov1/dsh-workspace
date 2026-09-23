@@ -51,7 +51,7 @@ export async function runPostmanWorkerContinuationProbe(ctx, exec) {
   const turns = { firstAccepted: false, firstCompleted: false, secondAccepted: false,
     secondCompleted: false, sameChildSession: false, secretRepeatedInSecondTurn: secondText.includes(secret),
     childResidentAfterFirst: false, firstMessageId: null, secondMessageId: null }
-  const childEvidence = { sessionId: childId, tools: [], writeVisible: false,
+  const childEvidence = { sessionId: childId, tools: [], toolsAfterFirst: [], toolsSecondTurn: [], writeVisible: false,
     postmanBridgeVisible: false, scopeProbeVisible: false, parentSession: null,
     origin: null, delegationDepth: null, provider: MODEL.provider, model: MODEL.model }
   const cleanupErrors = []
@@ -89,6 +89,11 @@ export async function runPostmanWorkerContinuationProbe(ctx, exec) {
       else if (event.data.turn !== firstTurn) {
         secondTurn = event.data.turn
         secondTurnSessionId = session.id
+        if (ctx.agents.get(childId) === child) {
+          childEvidence.toolsSecondTurn = toolsOf(ctx, child)
+          childEvidence.postmanBridgeVisible ||= ctx.tools.get(POSTMAN_BRIDGE_TOOL_NAME, child) !== undefined
+          childEvidence.scopeProbeVisible ||= ctx.tools.get(POSTMAN_WORKER_SCOPE_PROBE_TOOL_NAME, child) !== undefined
+        }
       }
     }
     if (event.type !== 'turn/end') return
@@ -98,6 +103,7 @@ export async function runPostmanWorkerContinuationProbe(ctx, exec) {
       if (followupStarted) return finish('duplicate first-turn completion')
       followupStarted = true
       turns.childResidentAfterFirst = ctx.agents.get(childId) === child
+      if (turns.childResidentAfterFirst) childEvidence.toolsAfterFirst = toolsOf(ctx, child)
       if (!turns.childResidentAfterFirst) return finish('child disposed before continuation')
       // followup() is the official inbox delivery; the saved first-turn context
       // is never repeated in this second message or the child persona.
@@ -186,7 +192,9 @@ export async function runPostmanWorkerContinuationProbe(ctx, exec) {
   const pass = !failure && cleanup.childDisposed && cleanup.markerRemoved && cleanup.errors.length === 0 && turns.firstAccepted && turns.firstCompleted &&
     turns.secondAccepted && turns.secondCompleted && turns.sameChildSession && turns.childResidentAfterFirst &&
     !turns.secretRepeatedInSecondTurn && !leakedSecretIntoSecond && !firstTurnWrote &&
-    childEvidence.tools.length === 1 && childEvidence.tools[0] === 'write' && childEvidence.writeVisible &&
+    childEvidence.tools.length === 1 && childEvidence.tools[0] === 'write' &&
+    childEvidence.toolsAfterFirst.length === 1 && childEvidence.toolsAfterFirst[0] === 'write' &&
+    childEvidence.toolsSecondTurn.length === 1 && childEvidence.toolsSecondTurn[0] === 'write' && childEvidence.writeVisible &&
     !childEvidence.postmanBridgeVisible && !childEvidence.scopeProbeVisible &&
     childEvidence.parentSession === parent.id && childEvidence.origin === 'subagent' &&
     childEvidence.delegationDepth === 1 && writeCalled && writeSucceeded && markerExact
