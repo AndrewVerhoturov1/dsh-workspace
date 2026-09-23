@@ -19,6 +19,7 @@ import { openaiCodexProvider } from '@earendil-works/pi-ai/providers/openai-code
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import { CodexAdapter } from './adapter.js'
+import { withGpt6CodexModels } from './catalog.js'
 import { codexCommand } from './command.js'
 import { FileCredentialStore } from './store.js'
 
@@ -62,7 +63,7 @@ export const Config: Schema<Config> = Schema.object({
 export function apply(ctx: Context, config: Config): void {
   const store = new FileCredentialStore(config.storePath ?? dshHomePath('codex-oauth.json'))
   const models = createModels({ credentials: store })
-  models.setProvider(openaiCodexProvider())
+  models.setProvider(withGpt6CodexModels(openaiCodexProvider()))
   const adapter = new CodexAdapter(models, config.provider, {
     transport: config.transport,
     cacheRetention: config.cacheRetention,
