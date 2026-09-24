@@ -1,14 +1,7 @@
-# EXPERIMENTAL Postman Leader composition.
-#
-# Intent:
-# - the preset owns a broad "standard-like" capability surface;
-# - the exact top-level Leader is still narrowed by the runtime restriction in
-#   dsh-postman-harness/bridge;
-# - ordinary spawn children rejoin this preset and may receive a different,
-#   narrower child toolFilter.
-#
-# This is deliberately broader than the Leader-visible catalog. Do not treat
-# presence in this file as permission for the Leader model.
+# Shared Postman composition for the Leader and its local Worker.
+# The exact top-level Leader is narrowed by the runtime restriction in
+# dsh-postman-harness/bridge; its ordinary spawn Worker gets standard coding
+# capabilities, except for a runtime deny-only filter on postman_* controls.
 
 - id: persona
   name: '@deepseek-ai/dsh-persona'
@@ -20,7 +13,7 @@
       Choose @PostmanAsk for text research/review and @Postman for durable ZIP/artifact work. Use --chat <REQ> when the next delegation belongs to the same proven ChatGPT conversation.
       The preset intentionally contains more capabilities than you are allowed to call. Your actual permission boundary is the runtime-visible tool catalog.
       Never infer permission from this preset file and never attempt to bypass a missing tool through generic delegation.
-      postman_worker_scope_probe is a temporary diagnostic only; use it only when the human explicitly asks to test Worker scope inheritance.
+      Use postman_worker for local execution; Worker reports through the native report channel, and task acceptance does not mean completion.
       Treat postman_bridge.result as the trusted transport authority and decide the next delegation yourself.
       Your working directory is {{cwd}}.
 
@@ -40,7 +33,7 @@
   disabled: !!js process.platform !== 'win32'
 
 # Filesystem: registers read/read_image/write/edit. The Leader runtime boundary
-# keeps only read; a Worker child may later be given write/edit explicitly.
+# keeps only read; the ordinary Worker receives write/edit from this preset.
 - id: tool-fs
   name: '@deepseek-ai/dsh-tool-fs'
 
@@ -96,9 +89,7 @@
         tailChars: 1024
 
 # Delegation tools exist in the common preset composition. The runtime Leader
-# boundary still hides them. The experiment does NOT expose generic subagent to
-# the Leader model; the host-owned postman_worker_scope_probe below is the only
-# new visible diagnostic entrypoint.
+# boundary still hides them; its visible local execution entrypoint is postman_worker.
 - id: delegation
   name: cordis:group
   group: true
@@ -150,9 +141,6 @@
 - id: tool-web
   name: '@deepseek-ai/dsh-tool-web'
   config:
-    # Preserve the currently deployed Postman Leader behavior for the Leader
-    # allowlist. Do not grant this fetch capability to a Worker until its SSRF
-    # boundary is separately designed and tested.
     fetch: true
     search: true
     searchTimeoutMs: 60000
