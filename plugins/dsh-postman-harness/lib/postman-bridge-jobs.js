@@ -8,6 +8,42 @@ function diagnostic(error) {
   return text.length <= 512 ? text : text.slice(0, 509) + '...'
 }
 
+// Copy trusted data without JSON.stringify: that operation silently drops invalid fields.
+// A malformed terminal fails closed instead of losing text or artifact metadata.
+function losslessValue(value, ancestors = new Set()) {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return value
+  if (typeof value === 'number' && Number.isFinite(value) && !Object.is(value, -0)) return value
+  if (typeof value !== 'object' || ancestors.has(value)) throw new Error('POSTMAN_BRIDGE_NON_JSON_TERMINAL')
+  const array = Array.isArray(value)
+  const prototype = Object.getPrototypeOf(value)
+  if (array ? prototype !== Array.prototype : prototype !== Object.prototype && prototype !== null) {
+    throw new Error('POSTMAN_BRIDGE_NON_JSON_TERMINAL')
+  }
+  const keys = Reflect.ownKeys(value)
+  if (array && (keys.length !== value.length + 1 || keys.some(key =>
+    key !== 'length' && (typeof key !== 'string' || !/^(0|[1-9]\d*)$/.test(key) ||
+      Number(key) >= value.length)))) throw new Error('POSTMAN_BRIDGE_NON_JSON_TERMINAL')
+  const copy = array ? [] : {}
+  ancestors.add(value)
+  try {
+    for (const key of keys) {
+      if (array && key === 'length') continue
+      if (typeof key !== 'string') throw new Error('POSTMAN_BRIDGE_NON_JSON_TERMINAL')
+      const descriptor = Object.getOwnPropertyDescriptor(value, key)
+      if (!descriptor || !('value' in descriptor) || (!array && !descriptor.enumerable)) {
+        throw new Error('POSTMAN_BRIDGE_NON_JSON_TERMINAL')
+      }
+      if (array && (!descriptor.enumerable || !Object.hasOwn(value, key))) {
+        throw new Error('POSTMAN_BRIDGE_NON_JSON_TERMINAL')
+      }
+      Object.defineProperty(copy, key, { value: losslessValue(descriptor.value, ancestors),
+        enumerable: true, writable: true, configurable: true })
+    }
+    if (array && copy.length !== value.length) throw new Error('POSTMAN_BRIDGE_NON_JSON_TERMINAL')
+    return copy
+  } finally { ancestors.delete(value) }
+}
+
 function snapshot(job) {
   return {
     bridgeJobId: job.bridgeJobId, state: job.state,
@@ -67,16 +103,16 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts) {
       let childDiagnostic
       try {
         const childResult = await run.result
-        childStopReason = childResult.stopReason
+        childStopReason = childResult?.stopReason ?? null
         childDiagnostic = childResult.diagnostic
       } catch (error) {
         childDiagnostic = diagnostic(error)
       }
       const trusted = await settleTrustedPostmanStatus(
         () => trustedStatusReader(child, job.controller.signal), job.controller.signal)
-      job.requestId = trusted.requestId ?? null
-      terminal = { ...trusted, transportKind: job.transportKind, childStopReason,
-        ...(childDiagnostic === undefined ? {} : { childDiagnostic }) }
+      terminal = losslessValue({ ...trusted, transportKind: job.transportKind, childStopReason,
+        ...(childDiagnostic === undefined ? {} : { childDiagnostic }) })
+      job.requestId = terminal.requestId ?? null
     } finally {
       // A failed cleanup must not be reported as clean completion or release early.
       try { await run.dispose() }
@@ -138,26 +174,34 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts) {
     try { admission = coordinator.run(job.controller.signal, () => lifecycle(job, message)) }
     catch (error) { admission = Promise.reject(error) }
     job.completion = admission.then(async result => {
-        job.trustedTerminal = result
-        job.requestId = result.requestId ?? job.requestId ?? null
+        // Includes early lifecycle failures and invalid trusted statuses.
+        const safe = losslessValue(result)
+        job.trustedTerminal = safe
+        job.requestId = safe.requestId ?? job.requestId ?? null
         // A successful Direct publication advances the same clean task worktree.
         // Never grant an artifact if the remote branch/parent cannot be proved.
-        if (contexts && result.status === 'POSTMAN_BRIDGE_TERMINAL' && result.result?.ok === true) {
-          const synchronized = await contexts.sync(job.parentSessionId,
-            result.result.taskPublicationCommit, result.result.baseCommit)
+        if (contexts && safe.status === 'POSTMAN_BRIDGE_TERMINAL' && safe.result?.ok === true) {
+          let synchronized = false
+          let reason = 'Task branch publication cannot be synchronized safely.'
+          try {
+            synchronized = await contexts.sync(job.parentSessionId,
+              safe.result.taskPublicationCommit, safe.result.baseCommit)
+          } catch (error) { reason += ' ' + diagnostic(error) }
           if (!synchronized) {
             job.trustedTerminal = { status: 'POSTMAN_TASK_PUBLICATION_SYNC_FAILED',
-              requestId: result.requestId, diagnostic: 'Task branch publication cannot be synchronized safely.' }
+              requestId: safe.requestId, diagnostic: reason }
             job.state = 'FAILED'
             return
           }
         }
-        if (result.status === 'POSTMAN_BRIDGE_TERMINAL') {
-          try { await grants?.register(job.parentSessionId, result) }
+        // Only a trusted terminal from a fully cleaned child may authorize a grant.
+        if (safe.status === 'POSTMAN_BRIDGE_TERMINAL') {
+          try { await grants?.register(job.parentSessionId, safe) }
           catch (error) { job.grantDiagnostic = diagnostic(error) }
         }
-        job.state = result.status === 'POSTMAN_BRIDGE_TERMINAL' ? 'TERMINAL' : 'FAILED'
-      }, error => {
+        job.state = safe.status === 'POSTMAN_BRIDGE_TERMINAL' ? 'TERMINAL' : 'FAILED'
+      })
+      .catch(error => {
         job.state = 'FAILED'
         job.diagnostic = diagnostic(error)
       })
@@ -177,13 +221,17 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts) {
       return { status: 'POSTMAN_BRIDGE_RUNNING', ...common }
     }
     const terminal = job.trustedTerminal
-    return { ...common, ...(terminal ? { terminalStatus: terminal.terminalStatus,
-      trustedStatus: terminal.status, checks: terminal.checks, result: terminal.result,
-      childStopReason: terminal.childStopReason, childDiagnostic: terminal.childDiagnostic,
-      diagnostic: terminal.diagnostic } : { diagnostic: job.diagnostic }),
+    return { ...common,
       status: job.state === 'TERMINAL' ? 'POSTMAN_BRIDGE_TERMINAL' : 'POSTMAN_BRIDGE_FAILED',
-      notification: job.notification,
-      ...(job.grantDiagnostic ? { grantDiagnostic: job.grantDiagnostic } : {}) }
+      terminalStatus: terminal?.terminalStatus ?? null,
+      trustedStatus: terminal?.status ?? null,
+      checks: terminal?.checks ?? null,
+      result: terminal?.result ?? null,
+      childStopReason: terminal?.childStopReason ?? null,
+      childDiagnostic: terminal?.childDiagnostic ?? null,
+      diagnostic: terminal?.diagnostic ?? job.diagnostic ?? null,
+      notification: job.notification ?? null,
+      ...(job.grantDiagnostic === undefined ? {} : { grantDiagnostic: job.grantDiagnostic }) }
   }
 
   async function dispose() {

@@ -87,7 +87,7 @@ test('Bridge grant comes only from exact child-scoped status, not child prose', 
   await notified // Grant registration is intentionally outside coordinator lifecycle.
   const handoff = await createPostmanBridgeStatusTool(ctx, jobs).execute({ bridge_job_id: accepted.bridgeJobId }, { agent: parent })
   assert.equal(handoff.childSessionId, child.id)
-  assert.equal(handoff.result, terminal.result)
+  assert.deepEqual(handoff.result, terminal.result)
   assert.equal((await grants.resolve('A', REQ)).resultZip, terminal.result.resultZip)
   await jobs.dispose()
   assert.equal(await grants.resolve(child.id, REQ), null)
