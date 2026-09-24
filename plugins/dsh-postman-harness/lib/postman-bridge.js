@@ -67,6 +67,8 @@ export function createPostmanBridgeTool(ctx) {
       },
     },
     output: output(),
+    // Each invocation owns a fresh child/session; Direct protects shared chats and CDP startup.
+    isConcurrencySafe: () => true,
     async execute(args, exec) {
       const parent = requiredAgent(exec)
       if (!postmanBridgeCallerAllowed(parent)) {

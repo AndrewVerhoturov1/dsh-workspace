@@ -22,6 +22,7 @@ for candidate in (SCRIPT_DIR, POSTMAN_DIR, WEB_DIR):
 
 import browser_bootstrap as bootstrap  # noqa: E402
 import chat_reference  # noqa: E402
+import process_lock  # noqa: E402
 import request_identity  # noqa: E402
 import task_package  # noqa: E402
 import text_result  # noqa: E402
@@ -225,6 +226,10 @@ class DirectPostmanAsk:
         request_identity.assert_canonical_request_id(request_id)
         if not isinstance(task, str) or not task.strip():
             raise DirectPostmanError("DIRECT_INVALID_TASK", "task must be a non-empty string")
+        try:
+            process_lock.claim_request(self.direct_root, request_id)
+        except FileExistsError as exc:
+            raise DirectPostmanError("DIRECT_REQUEST_EXISTS", "request already claimed; resend forbidden") from exc
         if self.state_path(request_id).exists():
             raise DirectPostmanError(
                 "DIRECT_REQUEST_EXISTS",
@@ -266,19 +271,20 @@ class DirectPostmanAsk:
             gh_binary=self.gh_binary,
             cwd=self.repo_root,
         )
-        snapshot = publisher.snapshot()
-        task_content = text_task_package.render_direct_text_task_manifest(
-            request_id=request_id,
-            user_intent=task,
-            repository=self.repository,
-            base_commit=snapshot.prepublication_commit,
-        )
-        published = publisher.publish_content(
-            request_id,
-            task_content,
-            expected_parent=snapshot.prepublication_commit,
-            root_entries=snapshot.root_entries,
-        )
+        with process_lock.lock_publication(self.direct_root, self.repository, self.branch):
+            snapshot = publisher.snapshot()
+            task_content = text_task_package.render_direct_text_task_manifest(
+                request_id=request_id,
+                user_intent=task,
+                repository=self.repository,
+                base_commit=snapshot.prepublication_commit,
+            )
+            published = publisher.publish_content(
+                request_id,
+                task_content,
+                expected_parent=snapshot.prepublication_commit,
+                root_entries=snapshot.root_entries,
+            )
         expected_filename = request_identity.expected_artifact_filename(request_id)
         prompt = task_package.build_external_prompt(request_id, PUBLIC_POLICY_URL, published.task_url)
         self._write_state(
@@ -455,16 +461,21 @@ def main(argv: list[str] | None = None) -> int:
         )
         task = _task_from_args(args)
         execution_started = True
-        result = direct.run(
-            request_id=args.request_id,
-            task=task,
-            chat_request_id=args.chat_request_id,
-            cdp_url=args.cdp_url,
-        )
+        with process_lock.lock_chat(direct.direct_root, args.chat_request_id, direct.repository):
+            result = direct.run(
+                request_id=args.request_id,
+                task=task,
+                chat_request_id=args.chat_request_id,
+                cdp_url=args.cdp_url,
+            )
         print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
         return 0
-    except (DirectPostmanError, ValueError, text_task_package.TextTaskPackageError) as exc:
-        code = exc.code if isinstance(exc, DirectPostmanError) else "DIRECT_INVALID_REQUEST"
+    except (DirectPostmanError, ValueError, text_task_package.TextTaskPackageError,
+            chat_reference.ChatReferenceError, process_lock.ResourceBusyError) as exc:
+        code = ("DIRECT_CHAT_BUSY" if isinstance(exc, process_lock.ChatBusyError)
+                else "DIRECT_RESOURCE_BUSY" if isinstance(exc, process_lock.ResourceBusyError)
+                else exc.code if isinstance(exc, (DirectPostmanError, chat_reference.ChatReferenceError))
+                else "DIRECT_INVALID_REQUEST")
         details = exc.details if isinstance(exc, DirectPostmanError) else {}
         if execution_started:
             transport_code = str(details.get("transportCode", code))

@@ -400,7 +400,17 @@ export class DirectPostmanJobManager {
     const bridge = join(workspace, 'postman', 'direct', bridgeName)
     if (!this.exists(bridge)) throw parseError('POSTMAN_DIRECT_BRIDGE_MISSING')
 
-    const requestId = makeRequestId(this.now, this.randomInt)
+    // Child sessions share this host manager; avoid a same-second random suffix
+    // collision before either Direct process claims its immutable REQ.
+    let requestId
+    for (let attempt = 0; attempt < 32; attempt += 1) {
+      const candidate = makeRequestId(this.now, this.randomInt)
+      if (![...this.jobs.values()].some(job => job.requestId === candidate)) {
+        requestId = candidate
+        break
+      }
+    }
+    if (requestId === undefined) throw parseError('POSTMAN_REQUEST_ID_COLLISION')
     const jobId = `DIRECT_${requestId}`
     const taskBase64 = Buffer.from(payload, 'utf8').toString('base64')
     const args = [

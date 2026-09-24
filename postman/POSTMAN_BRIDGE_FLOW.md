@@ -121,6 +121,15 @@ call 3 → @Postman --chat REQ_B ...   → REQ_C, same conversation, artifact mo
 Каждый вызов создаёт новую Luna child session. Automatic artifact continuation tool child-у не
 выдаётся: решение о следующем шаге принадлежит Leader.
 
+`postman_bridge` помечен штатным `isConcurrencySafe` Harness 0.1.1-rc.2: Leader
+может в одном ходе вызвать его 2–3 раза для независимых fresh-чатов. У каждого вызова
+свои childSessionId, новый REQ, terminal и освобождение child. Worker не меняется.
+Одинаковый `--chat` (в том числе разные старые REQ одного conversation URL)
+отклоняется межпроцессной блокировкой до публикации и отправки; разные разговоры
+не блокируют друг друга. Только короткий участок GitHub-публикации задач и первый
+запуск общего Chrome/CDP последовательны; Web-наблюдение разных чатов параллельно.
+При занятом разговоре нет автоматического повтора отправки.
+
 ## 8. Postman Leader preset
 
 Preset `postman-leader` / `Postman Leader` хранится в репозитории как файловая композиция
