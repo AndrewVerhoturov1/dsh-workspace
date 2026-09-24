@@ -3,13 +3,23 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
-import { createPostmanWorkerTools, buildPostmanWorkerStartRequest,
+import { createPostmanWorkerTools, buildPostmanWorkerStartRequest, postmanWorkerDeniedTools,
   POSTMAN_WORKER_AGENT_OPTIONS, POSTMAN_WORKER_PERSONA } from './postman-worker.js'
 import { postmanBridgeRestrictionForAgent } from './postman-bridge-core.js'
 import { apply as applyBridgePlugin } from './postman-bridge.js'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const signal = new AbortController().signal
+const registeredTools = [
+  'postman_bridge', 'postman_worker', 'postman_worker_stop', 'postman_send', 'postman_reply',
+  'postman_async_send', 'postman_runtime_get_request', 'postman_runtime_accept_request',
+  'postman_runtime_list_ready', 'postman_runtime_deliver_ready', 'postman_runtime_synthetic_ready',
+  'postman_send_current_turn', 'postman_current_turn_status', 'postman_ask_validate_reply',
+  'postman_continue_last_request', 'postman_result_present',
+  'postman_result_workspace_register', 'postman_result_workspace_unregister',
+  'read', 'write', 'edit', 'pwsh', 'web_search', 'subagent', 'subagent_fork', 'report',
+]
+const registry = { schemas: () => registeredTools.map(name => ({ name })) }
 const leader = id => ({ id, session: { header: { id, agentPreset: 'postman-leader', delegationDepth: 0 } } })
 const exec = agent => ({ agent, signal })
 
@@ -19,6 +29,7 @@ function fixture() {
   let next = 0
   const ctx = {
     agents: { get: id => agents.get(id) },
+    tools: registry,
     subagents: {
       async startContinuable(spec) {
         calls.starts.push(spec)
@@ -42,21 +53,31 @@ function toolsFromPreset() {
   return { preset, rows }
 }
 
-test('Worker request pins independent Luna model and leaves child tool composition unrestricted', () => {
+test('Worker request pins Luna and denies only registered Postman tools', () => {
   const parent = leader('A')
-  const spec = buildPostmanWorkerStartRequest(parent, 'local work', signal)
+  const denied = postmanWorkerDeniedTools(registry)
+  const spec = buildPostmanWorkerStartRequest(parent, 'local work', signal, denied)
   assert.equal(spec.provider, 'spawn')
   assert.equal(spec.request.parent, parent)
   assert.equal(spec.signal, signal)
   assert.deepEqual(spec.request.prompt, [{ type: 'text', text: 'local work' }])
   assert.deepEqual(spec.request.agentOptions, { provider: 'codex', model: 'gpt-6-luna' })
   assert.deepEqual(POSTMAN_WORKER_AGENT_OPTIONS, spec.request.agentOptions)
-  assert.equal(Object.hasOwn(spec.request, 'toolFilter'), false)
+  assert.deepEqual(spec.request.toolFilter, { deny: denied })
+  assert.equal(Object.hasOwn(spec.request.toolFilter, 'allow'), false)
+  assert.ok(denied.length > 3)
+  assert.deepEqual(denied, registeredTools.filter(name => name.startsWith('postman_')))
+  assert.equal(denied.includes('report'), false)
+  assert.deepEqual(postmanWorkerDeniedTools({ schemas: () => [
+    { name: 'postman_future_control' }, { name: 'write' }, { name: 'report' },
+  ] }), ['postman_future_control'])
+  assert.throws(() => buildPostmanWorkerStartRequest(parent, 'local work', signal, []),
+    /POSTMAN_WORKER_TRANSPORT_BOUNDARY_REQUIRED/)
   assert.match(POSTMAN_WORKER_PERSONA, /report tool/)
   assert.match(POSTMAN_WORKER_PERSONA, /later tasks/)
 })
 
-test('Leader runtime boundary hides mutation, shell and delegation; child preset keeps coding tools without bridge', () => {
+test('Leader hides coding tools; Worker keeps coding and report but no Postman control tools', () => {
   const { preset, rows } = toolsFromPreset()
   for (const row of ['tool-fs', 'tool-fs-search', 'tool-pwsh', 'tool-bash',
     'tool-jobs', 'tool-subagent', 'tool-subagent-fork', 'tool-workflow', 'tool-web']) {
@@ -80,8 +101,17 @@ test('Leader runtime boundary hides mutation, shell and delegation; child preset
     assert.equal(leaderRestriction.allow.includes(name), true)
     assert.equal(childRestriction.deny.includes(name), true)
   }
-  // report is installed by Harness in the continuable child's own scope.
-  assert.equal(childRestriction.deny.includes('report'), false)
+  const workerFilter = buildPostmanWorkerStartRequest(top, 'local work', signal,
+    postmanWorkerDeniedTools(registry)).request.toolFilter
+  // Ancestor restriction and per-child denial intersect; report is scoped to the child.
+  const visibleToWorker = name => !childRestriction.deny.includes(name) &&
+    !workerFilter.deny.includes(name)
+  for (const name of ['read', 'write', 'edit', 'pwsh', 'web_search', 'subagent',
+    'subagent_fork', 'report']) assert.equal(visibleToWorker(name), true, name)
+  for (const name of registeredTools.filter(name => name.startsWith('postman_'))) {
+    assert.equal(visibleToWorker(name), false, name)
+  }
+  assert.equal(workerFilter.deny.includes('report'), false)
 })
 
 test('first task creates a child; second task follows up in the same durable Session', async () => {
@@ -96,6 +126,8 @@ test('first task creates a child; second task follows up in the same durable Ses
   assert.equal(second.workerSessionId, first.workerSessionId)
   assert.equal(second.messageId, 'followup-1')
   assert.equal(calls.starts.length, 1)
+  assert.deepEqual(calls.starts[0].request.toolFilter,
+    { deny: registeredTools.filter(name => name.startsWith('postman_')) })
   assert.equal(calls.followups.length, 1)
   assert.equal(calls.followups[0].parent, a)
   assert.deepEqual(calls.followups[0].content, [{ type: 'text', text: 'second' }])

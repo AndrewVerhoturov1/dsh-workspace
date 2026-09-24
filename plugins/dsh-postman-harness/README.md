@@ -76,9 +76,12 @@ read, glob, grep, skill, web_fetch, web_search, postman_bridge, postman_worker, 
 
 Любой `origin=subagent` считается non-Leader и получает deny всех трёх Leader-only tools. Luna Bridge
 дополнительно получает свой отдельный `toolFilter`, который оставляет только transport tools.
-Worker не имеет собственного списка разрешений: его инструменты приходят из общего preset,
-в том числе read/glob/grep/write/edit, pwsh на Windows (bash на других системах), jobs,
-web search/fetch и обычное делегирование. Модель Worker задаётся отдельно от Bridge.
+Worker не имеет собственного узкого списка разрешений: его обычные инструменты приходят из
+общего preset, в том числе read/glob/grep/write/edit, pwsh на Windows (bash на других системах),
+jobs, web search/fetch и обычное делегирование. При создании Worker host берёт зарегистрированные
+инструменты с префиксом `postman_` и задаёт только запрет на них в дочерней сессии; штатный
+`report`, установленный в собственной области child, остаётся доступен. Модель Worker задаётся
+отдельно от Bridge.
 
 Host хранит отображение точного Leader session id в durable child session id только в памяти.
 Первое задание запускает `startContinuable`, дальнейшие задания идут через `followup`.

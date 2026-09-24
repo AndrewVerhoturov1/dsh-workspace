@@ -26,7 +26,17 @@ function output() {
   }
 }
 
-export function buildPostmanWorkerStartRequest(parent, task, signal) {
+// Discover the transport/control surface from the host registry at admission.
+// This is a deny-only child filter, not a Worker coding-tool allowlist.
+export function postmanWorkerDeniedTools(tools) {
+  return tools.schemas().map(tool => tool.name).filter(name => name.startsWith('postman_'))
+}
+
+export function buildPostmanWorkerStartRequest(parent, task, signal, deniedTools) {
+  if (!Array.isArray(deniedTools) || deniedTools.length === 0 ||
+      deniedTools.some(name => typeof name !== 'string' || !name.startsWith('postman_'))) {
+    throw new Error('POSTMAN_WORKER_TRANSPORT_BOUNDARY_REQUIRED')
+  }
   return {
     provider: POSTMAN_WORKER_PROVIDER,
     label: 'Postman Worker',
@@ -36,8 +46,9 @@ export function buildPostmanWorkerStartRequest(parent, task, signal) {
       prompt: [{ type: 'text', text: task }],
       agentOptions: { ...POSTMAN_WORKER_AGENT_OPTIONS },
       persona: POSTMAN_WORKER_PERSONA,
-      // No Worker-specific toolFilter: the child receives the shared preset,
-      // except for existing host-enforced role boundaries.
+      // Only deny host Postman transport/control tools. The shared preset's
+      // coding tools and child-scoped report remain available.
+      toolFilter: { deny: [...deniedTools] },
     },
   }
 }
@@ -103,7 +114,8 @@ export function createPostmanWorkerTools(ctx) {
         let accepted
         try {
           accepted = await ctx.subagents.startContinuable(
-            buildPostmanWorkerStartRequest(parent, args.task, exec.signal))
+            buildPostmanWorkerStartRequest(parent, args.task, exec.signal,
+              postmanWorkerDeniedTools(ctx.tools)))
         } catch (error) {
           // Before inbox admission Harness rolls back the child. Keep this
           // empty slot so already queued calls can retry without losing mapping.

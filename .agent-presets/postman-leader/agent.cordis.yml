@@ -1,7 +1,7 @@
 # Shared Postman composition for the Leader and its local Worker.
 # The exact top-level Leader is narrowed by the runtime restriction in
 # dsh-postman-harness/bridge; its ordinary spawn Worker gets standard coding
-# capabilities while retaining the Bridge's Leader-only host boundary.
+# capabilities, except for a runtime deny-only filter on postman_* controls.
 
 - id: persona
   name: '@deepseek-ai/dsh-persona'
