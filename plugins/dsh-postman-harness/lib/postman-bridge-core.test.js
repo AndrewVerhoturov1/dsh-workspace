@@ -230,6 +230,7 @@ test('package and composition expose bridge entrypoint and leader preset', () =>
   assert.equal(packageJson.exports['./bridge'], './lib/postman-bridge.js')
   assert.equal(packageJson.files.includes('lib/postman-bridge.js'), true)
   assert.equal(packageJson.files.includes('lib/postman-bridge-core.js'), true)
+  assert.equal(packageJson.files.includes('lib/postman-bridge-launch-coordinator.js'), true)
   assert.equal(packageJson.files.includes('lib/postman-worker.js'), true)
   assert.equal(packageJson.peerDependencies['@deepseek-ai/dsh-subagent'], '^0.1.1-rc.2')
 
@@ -270,7 +271,7 @@ test('package and composition expose bridge entrypoint and leader preset', () =>
   assert.match(agents, /POSTMAN_BRIDGE_CALLER_REJECTED/)
 
   const leaderSkill = readFileSync(join(repoRoot, '.agents', 'skills', 'postman-leader', 'SKILL.md'), 'utf8')
-  assert.match(leaderSkill, /POSTMAN_LEADER_SKILL_VERSION: 4/)
+  assert.match(leaderSkill, /POSTMAN_LEADER_SKILL_VERSION: 5/)
   assert.match(leaderSkill, /deliveryMode=inline/)
   assert.match(leaderSkill, /deliveryMode=file/)
   assert.match(leaderSkill, /resultFile[\s\S]*read-only tools/)
