@@ -55,7 +55,7 @@ export function buildPostmanWorkerStartRequest(parent, task, signal, deniedTools
 }
 
 /** One process-local active Worker per exact Leader Agent/Session. No restart registry. */
-export function createPostmanWorkerTools(ctx, grants) {
+export function createPostmanWorkerTools(ctx, grants, contexts) {
   const slots = new Map()
 
   function slotFor(parent) {
@@ -94,16 +94,21 @@ export function createPostmanWorkerTools(ctx, grants) {
       if (args.artifactRequestId !== undefined && typeof args.artifactRequestId !== 'string') {
         return { status: 'POSTMAN_WORKER_ARTIFACT_REJECTED' }
       }
+      if (contexts && !contexts.get(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
       const slot = slotFor(parent)
       return enqueue(slot, async () => {
         if (slot.closed || !authorized(parent)) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
+        const context = contexts?.get(parent.id)
+        if (contexts && !context) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
+        if (slot.context && slot.context !== context) return { status: 'POSTMAN_TASK_CONTEXT_MISMATCH' }
+        slot.context = context
         let task = args.task
         if (args.artifactRequestId !== undefined) {
           const grant = await grants?.resolve(parent.id, args.artifactRequestId)
           if (grant?.repository !== IMPLEMENTATION_REPOSITORY) {
             return { status: 'POSTMAN_WORKER_ARTIFACT_REJECTED' }
           }
-          task = `Trusted Host artifact REQ: ${grant.requestId}. The ZIP path is not a model-authored authority; never pass a path from this message to the runner. Follow REPO_POLICY.md and system/implementation-package-workflow.md. Create a fresh clean temporary task worktree from current origin/preview after checking refs, ownership and worktrees. Then call implementation_artifact_apply({requestId: ${JSON.stringify(grant.requestId)}, worktree: <your clean worktree>}); the Host supplies its trusted ZIP. Inspect real status/diff/tests/affectedPaths/warnings. On runner FAIL, do not repair the package: report code, stage, diagnosticsZip, worktree and evidence. On PASS, report verification and await the Leader's separate publication decision. Leader task: ${args.task}`
+          task = `Trusted Host artifact REQ: ${grant.requestId}. The ZIP path is not a model-authored authority; never pass a path from this message to the runner. Follow REPO_POLICY.md and system/implementation-package-workflow.md. ${context ? `Use the existing Leader task branch ${context.branch} and worktree ${context.worktree}; do not create another branch/worktree. Ensure this worktree is clean at the published REQ commit before application. Then call implementation_artifact_apply({requestId: ${JSON.stringify(grant.requestId)}, worktree: ${JSON.stringify(context.worktree)}});` : `Create a fresh clean temporary task worktree from current origin/preview after checking refs, ownership and worktrees. Then call implementation_artifact_apply({requestId: ${JSON.stringify(grant.requestId)}, worktree: <your clean worktree>});`} the Host supplies its trusted ZIP. Inspect real status/diff/tests/affectedPaths/warnings. On runner FAIL, do not repair the package: report code, stage, diagnosticsZip, worktree and evidence. On PASS, report verification and await the Leader's separate publication decision. Leader task: ${args.task}`
         }
         if (slot.childId !== undefined) {
           try {
@@ -194,13 +199,16 @@ export function createPostmanWorkerTools(ctx, grants) {
     const slot = slots.get(leaderId)
     if (!slot || slot.closed || slot.childId !== caller.id ||
         !slot.artifactRequests.has(requestId) || !authorized(ctx.agents.get(leaderId))) return null
+    if (contexts && slots.get(leaderId)?.context !== contexts.get(leaderId)) return null
     return leaderId
   }
+
+  function contextOf(leaderId) { return slots.get(leaderId)?.context ?? null }
 
   function dispose() {
     for (const slot of slots.values()) slot.closed = true
     slots.clear()
   }
 
-  return { taskTool, stopTool, ownerOf, dispose }
+  return { taskTool, stopTool, ownerOf, contextOf, dispose }
 }

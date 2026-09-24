@@ -191,6 +191,30 @@ new file mode 100644
         result = runner.execute("apply", package, self.repo, self.diag)
         self.assertTrue(result["ok"], result)
 
+    def test_package_from_preview_applies_after_committed_transport_req(self):
+        base = command(["git", "rev-parse", "HEAD"], self.repo).stdout.strip()
+        request_id = "REQ_20260927T112233Z_1234"
+        task = self.repo / f"{request_id}.md"
+        task.write_text("transport task\n", encoding="utf-8")
+        command(["git", "add", task.name], self.repo)
+        command(["git", "commit", "-qm", "postman: publish task"], self.repo)
+        publication = command(["git", "rev-parse", "HEAD"], self.repo).stdout.strip()
+        self.assertEqual(command(["git", "rev-parse", "HEAD^"], self.repo).stdout.strip(), base)
+        package = package_zip(self.base, PATCH_TRACKED_AND_NEW, package_base=base)
+        result = runner.execute("apply", package, self.repo, self.diag)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["affectedPaths"], ["hello.txt", "new.txt"])
+        self.assertEqual(command(["git", "rev-parse", "HEAD"], self.repo).stdout.strip(), publication)
+        self.assertTrue(task.is_file())
+        # Publication is a separate decision. Remove the transport file explicitly;
+        # affectedPaths lists only package changes and cannot stage this deletion.
+        task.unlink()
+        command(["git", "add", "-A", "--", *result["affectedPaths"], task.name], self.repo)
+        command(["git", "commit", "-qm", "implementation without transport file"], self.repo)
+        self.assertNotIn(task.name, command(["git", "diff", "--name-only", base, "HEAD"], self.repo).stdout)
+        self.assertEqual(command(["git", "show", f"{publication}:{task.name}"], self.repo).stdout, "transport task\n")
+        self.assertEqual((self.repo / "new.txt").read_text(encoding="utf-8"), "new file\n")
+
     def test_dirty_worktree_is_rejected_before_apply(self):
         (self.repo / "local.txt").write_text("user data\n", encoding="utf-8")
         package = package_zip(self.base, PATCH_TRACKED_AND_NEW)

@@ -181,16 +181,16 @@ test('bridge authorization and visibility are limited to top-level postman-leade
   assert.equal(postmanBridgeCallerAllowed(delegated), false)
 
   assert.deepEqual(POSTMAN_LEADER_TOOL_ALLOWLIST, [
-    'read', 'glob', 'grep', 'skill', 'web_fetch', 'web_search', 'postman_bridge', 'postman_bridge_status', 'postman_worker', 'postman_worker_stop',
+    'read', 'glob', 'grep', 'skill', 'web_fetch', 'web_search', 'postman_task_prepare', 'postman_bridge', 'postman_bridge_status', 'postman_worker', 'postman_worker_stop',
   ])
   assert.deepEqual(postmanBridgeRestrictionForAgent(leader), {
     allow: [...POSTMAN_LEADER_TOOL_ALLOWLIST],
   })
   assert.deepEqual(postmanBridgeRestrictionForAgent(standard), {
-    deny: ['postman_bridge', 'postman_bridge_status', 'postman_worker', 'postman_worker_stop'],
+    deny: ['postman_task_prepare', 'postman_bridge', 'postman_bridge_status', 'postman_worker', 'postman_worker_stop'],
   })
   assert.deepEqual(postmanBridgeRestrictionForAgent(delegated), {
-    deny: ['postman_bridge', 'postman_bridge_status', 'postman_worker', 'postman_worker_stop'],
+    deny: ['postman_task_prepare', 'postman_bridge', 'postman_bridge_status', 'postman_worker', 'postman_worker_stop'],
   })
 
   assert.equal(POSTMAN_LEADER_TOOL_ALLOWLIST.includes('write'), false)
@@ -208,7 +208,7 @@ test('boundary manager replaces the active restriction when a blank session swit
   const manager = createPostmanBridgeBoundaryManager(sessionId => agents.get(sessionId))
 
   assert.equal(manager.install(fixture.agent), false)
-  assert.deepEqual(fixture.activeRestrictions(), [{ deny: ['postman_bridge', 'postman_bridge_status', 'postman_worker', 'postman_worker_stop'] }])
+  assert.deepEqual(fixture.activeRestrictions(), [{ deny: ['postman_task_prepare', 'postman_bridge', 'postman_bridge_status', 'postman_worker', 'postman_worker_stop'] }])
 
   fixture.setPreset('postman-leader')
   assert.equal(manager.refreshSession(fixture.agent.id), true)
@@ -217,7 +217,7 @@ test('boundary manager replaces the active restriction when a blank session swit
 
   fixture.setPreset('standard')
   assert.equal(manager.refreshSession(fixture.agent.id), true)
-  assert.deepEqual(fixture.activeRestrictions(), [{ deny: ['postman_bridge', 'postman_bridge_status', 'postman_worker', 'postman_worker_stop'] }])
+  assert.deepEqual(fixture.activeRestrictions(), [{ deny: ['postman_task_prepare', 'postman_bridge', 'postman_bridge_status', 'postman_worker', 'postman_worker_stop'] }])
   assert.equal(fixture.restrictions[1].active, false)
 
   assert.equal(manager.refreshSession('missing'), false)

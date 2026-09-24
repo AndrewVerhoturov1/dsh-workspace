@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { readFile, stat } from 'node:fs/promises'
-import { isAbsolute } from 'node:path'
+import { isAbsolute, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn, execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -117,7 +117,7 @@ export async function runImplementationPackage(grant, worktree, { python = 'pyth
 export function createImplementationArtifactApplyTool(ctx, grants, worker, options = {}) {
   return defineTool({
     name: IMPLEMENTATION_ARTIFACT_APPLY_TOOL_NAME,
-    description: 'Apply the trusted RESULT_DURABLE ZIP in an independently prepared clean worktree using the existing repository runner. Only the exact active Worker of its owning Leader may call this.',
+    description: 'Apply the trusted RESULT_DURABLE ZIP in the exact Leader-bound clean task worktree using the existing repository runner. Only the exact active Worker of its owning Leader may call this.',
     parameters: {
       requestId: { type: 'string', required: true },
       worktree: { type: 'string', required: true },
@@ -133,6 +133,15 @@ export function createImplementationArtifactApplyTool(ctx, grants, worker, optio
       if (grant === null) return { status: 'IMPLEMENTATION_ARTIFACT_GRANT_REJECTED' }
       if (typeof args?.worktree !== 'string' || !isAbsolute(args.worktree)) {
         return { status: 'IMPLEMENTATION_ARTIFACT_WORKTREE_INVALID' }
+      }
+      const context = options.taskContexts?.get(leaderId)
+      if (options.taskContexts && (!context || worker.contextOf(leaderId) !== context ||
+          resolve(args.worktree).replaceAll('\\', '/').toLowerCase() !==
+          resolve(context.worktree).replaceAll('\\', '/').toLowerCase())) {
+        return { status: 'IMPLEMENTATION_ARTIFACT_WORKTREE_REJECTED' }
+      }
+      if (options.taskContexts && !await options.taskContexts.verifyWorktree(leaderId)) {
+        return { status: 'IMPLEMENTATION_ARTIFACT_WORKTREE_REJECTED' }
       }
       if (!await (options.verifiedRepository ?? verifiedRepository)(args.worktree)) {
         return { status: 'IMPLEMENTATION_ARTIFACT_REPOSITORY_REJECTED' }

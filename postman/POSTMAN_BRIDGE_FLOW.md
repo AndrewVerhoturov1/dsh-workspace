@@ -21,13 +21,15 @@ Postman Leader
 ← POSTMAN_BRIDGE_ACCEPTED + bridgeJobId (Leader сразу свободен)
 → Host job manager / existing Launch Coordinator
 → заново получить exact live Leader по parentSessionId; если недоступен — failed job без child
+→ Host postman_task_prepare: exact origin/preview → одна опубликованная task branch + clean worktree на Leader
 → fresh spawn child
 → fixed gpt-6-luna
 → exact child user/message
 → child loads canonical Postman skill
 → postman_send_current_turn() with no text args
 → existing Direct Postman
-→ ChatGPT Web
+→ Bridge публикует REQ в task branch через Host (не в main)
+→ ChatGPT Web получает опубликованный REQ commit
 → terminal result
 → postman_current_turn_status()
 → bridge host reads the same trusted terminal directly
@@ -206,14 +208,14 @@ Bridge terminal RESULT_DURABLE
 → Host регистрирует grant для exact Leader session + REQ (trusted ZIP + SHA-256)
 → Sol отдельно авторизует REQ: postman_worker({task, artifactRequestId: "REQ_..."})
 → тот же continuable Worker получает trusted REQ, не model-authored ZIP path
-→ Worker создаёт clean task branch/worktree от текущего origin/preview
+→ Worker использует тот же Host-prepared clean worktree на опубликованном REQ commit; второй branch/worktree не создаёт
 → Worker вызывает implementation_artifact_apply({requestId: "REQ_...", worktree: "<clean worktree>"})
 → Host проверяет точного Worker, разрешает REQ в trusted ZIP и повторно сверяет SHA-256
 → Host запускает существующий system/implementation_package_runner.py
 → Worker проверяет фактический результат и отправляет report → Sol
 ```
 
-`POSTMAN_WORKER_TASK_ACCEPTED` означает только приём задания, не итог: Sol дожидается `report`. На PASS Worker сообщает результат runner и затронутые пути без автоматического commit/push/PR; на FAIL — diagnostics ZIP и STOP без локального ремонта patch. После FAIL Sol решает, исследовать ли проблему, запросить новый ZIP или остановиться. Публикация после PASS поручается отдельно по repository policy; merge требует отдельной явной команды пользователя.
+`POSTMAN_WORKER_TASK_ACCEPTED` означает только приём задания, не итог: Sol дожидается `report`. На PASS Worker сообщает результат runner и затронутые пути без автоматического commit/push/PR; на FAIL — diagnostics ZIP и STOP без локального ремонта patch. После FAIL Sol решает, исследовать ли проблему, запросить новый ZIP или остановиться. До отдельного commit/push/PR реализации REQ transport-файлы удаляются из task branch; SHA-pinned URL старых REQ и `--chat` сохраняются. `packageBase` не обязан совпадать с HEAD опубликованного REQ commit: применимость проверяет runner. Публикация после PASS поручается отдельно по repository policy; merge требует отдельной явной команды пользователя.
 
 Worker — обычный coding-agent с shell и теоретически может сам запускать локальные программы. Гарантия этой границы уже: только отдельно авторизованный Worker может использовать trusted Host grant и `implementation_artifact_apply` для exact Postman artifact; запрета на все самостоятельные локальные запуски здесь нет.
 

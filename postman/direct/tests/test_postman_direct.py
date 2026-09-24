@@ -161,6 +161,34 @@ class DirectPostmanUnitTests(unittest.TestCase):
         self.assertEqual(decoded, direct.render_intent_task(task))
         self.assertEqual(payload["branch"], "main")
 
+    def test_task_branch_publication_touches_only_bound_ref_and_pins_url(self):
+        branch = "task/postman-0123456789abcdef0123456789abcdef"
+        calls = []
+        untouched_refs = {"main": "1" * 40, "preview": PRE}
+        def fake_run(command, **kwargs):
+            calls.append(command)
+            endpoint = command[2]
+            if endpoint.endswith("/git/ref/heads/" + branch.replace("/", "%2F")):
+                result = {"object": {"sha": PRE}}
+            elif endpoint.endswith("/git/commits/" + PUB):
+                result = {"parents": [{"sha": PRE}]}
+            elif command[command.index("--method") + 1] == "PUT" if "--method" in command else False:
+                data = json.loads(kwargs["input"])
+                self.assertEqual(data["branch"], branch)
+                self.assertEqual(data["message"], "postman: publish task " + REQ)
+                result = {"commit": {"sha": PUB}}
+            elif "/contents?ref=" in endpoint:
+                result = [{"name": "README.md"}]
+            else:
+                raise AssertionError(command)
+            return subprocess.CompletedProcess(command, 0, stdout=json.dumps(result), stderr="")
+        published = direct.GitHubTaskPublisher(repository=REPO, branch=branch, run=fake_run).publish(REQ, "задача")
+        self.assertEqual(published.prepublication_commit, untouched_refs["preview"])
+        self.assertEqual(published.publication_commit, PUB)
+        self.assertTrue(published.task_url.endswith(f"/{PUB}/{REQ}.md"))
+        self.assertFalse(any("/git/ref/heads/main" in cmd[2] or "/git/ref/heads/preview" in cmd[2] for cmd in calls))
+        self.assertEqual(untouched_refs, {"main": "1" * 40, "preview": PRE})
+
     def test_ensure_browser_reuses_existing_cdp_without_launch(self):
         class Boot:
             DEFAULT_CDP_URL = "http://127.0.0.1:9222"

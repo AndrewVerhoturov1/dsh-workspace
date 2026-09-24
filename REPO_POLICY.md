@@ -30,13 +30,13 @@ system/implementation_package_runner.py
 Короткое распределение ответственности:
 
 - Sol задаёт intent, существенные архитектурные решения и ограничения; ChatGPT Web исследует код, реализует замысел в этих границах и готовит patch + manifest + нужные тесты;
-- после trusted `RESULT_DURABLE` Host хранит process-local grant по `(Leader session, REQ)` для exact ZIP/SHA; Sol отдельно авторизует REQ через `postman_worker({task, artifactRequestId})`; Worker создаёт отдельный clean implementation branch/worktree и вызывает `implementation_artifact_apply({requestId, worktree})`, а Host запускает центральный runner;
+- после trusted `RESULT_DURABLE` Host хранит process-local grant по `(Leader session, REQ)` для exact ZIP/SHA; Sol отдельно авторизует REQ через `postman_worker({task, artifactRequestId})`; Worker использует единственную Host-prepared clean task branch/worktree на опубликованном REQ commit и вызывает `implementation_artifact_apply({requestId, worktree})`, а Host запускает центральный runner;
 - hard FAIL ограничены реальными рисками: wrong repo/protected worktree, dirty target,
   unsafe local-data path, реально неприменимый patch, patch-created ignored file или failing
   targeted test;
 - сдвиг `preview`, exact source SHA, exact changed-file inventory и `git diff --check`
   сами по себе не являются blocker, если patch применяется и целевые тесты проходят;
-- PASS runner-а сначала означает отчёт Worker о проверке, а не автоматическое разрешение публиковать применённые изменения; при отдельном решении Sol о публикации Worker выполняет commit/push/PR в `preview` по обычной policy;
+- PASS runner-а сначала означает отчёт Worker о проверке, а не автоматическое разрешение публиковать применённые изменения; при отдельном решении Sol о публикации Worker сначала очищает REQ transport-файлы и явно учитывает их удаления в staging, затем выполняет отдельный commit/push/PR реализации в `preview` по обычной policy;
 - merge выполняется только после отдельного явного разрешения пользователя.
 
 Локальный агент не ремонтирует несовместимый patch вручную: при hard FAIL runner создаёт
@@ -178,7 +178,7 @@ preview
 
 Для одного и того же logical request должна существовать только одна implementation-ветка.
 
-Для Postman несколько `postman/req-*` веток могут временно сосуществовать, если каждый REQ имеет отдельный clean worktree и однозначный lifecycle. Нельзя создавать дубликат branch/worktree для того же REQ или использовать существование независимой задачи как повод удалять/переписывать её ресурсы.
+Для Postman Leader Host `postman_task_prepare` создаёт одну task branch и clean worktree от exact `origin/preview` на Leader; несколько REQ одной задачи публикуются Bridge через Host в ту же ветку. Worker использует тот же worktree на опубликованном REQ commit, не создавая branch/worktree на каждый REQ. Legacy CLI вне Leader сохраняет прежний default `main`. Перед отдельным commit/push/PR реализации REQ transport-файлы очищаются, а SHA-pinned URL прежних REQ и `--chat` продолжают работать. Нельзя создавать дубликат branch/worktree для того же Leader или использовать существование независимой задачи как повод удалять/переписывать её ресурсы.
 
 ## 7. Эксперименты
 
@@ -331,6 +331,7 @@ remote verification
 ```text
 local changes
 → verification
+→ для Postman Leader: удалить REQ transport-файлы до отдельного implementation commit
 → explicit staging of task files
 → commit
 → push current task branch to origin
