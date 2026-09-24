@@ -206,8 +206,11 @@ Postman должен:
 Он не означает автоматический merge, commit или изменение production workspace.
 
 Для normal flow после `RESULT_DURABLE` дальнейшее применение не выполняется: результат
-сообщается пользователю и поток останавливается. Repository-changing result может быть
-обработан только отдельной явной manual finalization по текущей repository policy.
+сообщается пользователю и поток останавливается. Repository-changing result может быть обработан только после отдельного решения локального агента по текущей repository policy. Legacy PREPARE/TEST/PUBLISH остаётся отдельной явной ручной финализацией, а не стадией normal transport.
+
+Для implementation package ChatGPT Web готовит декларативный ZIP по `REPO_POLICY.md`, `system/implementation-package-workflow.md` и `system/implementation-package-authoring.md`: `manifest.json`, Git-generated `changes.patch`, `README.md`, `TEST_PLAN.md`, необходимые targeted tests и, если новые repository-owned файлы иначе игнорируются Git, узкое исключение `.gitignore` в том же patch. Transport не проверяет эти package-specific требования: trusted `RESULT_DURABLE` доказывает происхождение и целостность ZIP, но не пригодность его к применению.
+
+В supervisor flow Sol отдельно решает, передавать ли exact `resultZip` тому же продолжаемому локальному Worker. Тот создаёт отдельный clean task worktree/branch и вызывает существующий `system/implementation_package_runner.py`; PASS сопровождается отчётом без автоматической публикации, FAIL — диагностикой без ручного ремонта. Ни новый runner, ни модель grants, ни обязательный merge здесь не вводятся.
 
 ## 11. Что transport не делает
 

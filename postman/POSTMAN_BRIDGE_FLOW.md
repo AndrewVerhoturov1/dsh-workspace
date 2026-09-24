@@ -176,7 +176,15 @@ Harness model routing намеренно находится вне Agent presets
 и tool boundary, но не переключает модель автоматически: для Leader в model selector выбирается
 `GPT-6 Sol`. Luna Bridge фиксирована кодом независимо от модели parent.
 
-## 9. Failure boundary
+## 9. Передача implementation package локальному Worker
+
+`RESULT_DURABLE` из exact child scope подтверждает provenance/integrity и сохранность ZIP, а не корректность implementation patch. Normal transport универсален и не требует `manifest.json`; Bridge child не применяет пакет. Sol/Leader принимает отдельное решение на основании задачи и результата, после чего может поручить **тому же** continuable `postman_worker` применение exact `resultZip`. Это не grant token, не автоматическая стадия transport и не новый runner.
+
+Для implementation package ChatGPT Web следует `REPO_POLICY.md`, `system/implementation-package-workflow.md` и `system/implementation-package-authoring.md`: декларативный ZIP содержит `manifest.json`, Git-generated `changes.patch`, `README.md`, `TEST_PLAN.md`; targeted tests, новые файлы и необходимые узкие исключения `.gitignore` входят в patch. Собственного applicator и диагностики в ZIP нет.
+
+Worker проверяет ownership/предпосылки, создаёт отдельную clean task branch/worktree от актуального `origin/preview`, вызывает существующий `system/implementation_package_runner.py apply <PACKAGE.zip>` и сообщает через штатный child-scoped `report`: PASS — результат и затронутые пути без автоматического commit/push/PR; FAIL — diagnostics ZIP и STOP без локального ремонта patch. Дальнейшая публикация после PASS должна быть отдельно поручена и соответствовать repository policy; merge требует отдельной явной команды пользователя.
+
+## 10. Failure boundary
 
 Bridge никогда не делает blind resend.
 
@@ -187,7 +195,7 @@ Bridge никогда не делает blind resend.
 - Direct terminal failure возвращается parent-у как trusted `result`;
 - cancellation после начала не разрешает автоматический второй Send.
 
-## 10. Ordinary subagents
+## 11. Ordinary subagents
 
 Обычные `subagent`/`subagent_fork` capabilities Harness не изменяются. Для не-Leader Agents
 добавляется только точечный deny имени `postman_bridge`; остальные global tools этим deny не

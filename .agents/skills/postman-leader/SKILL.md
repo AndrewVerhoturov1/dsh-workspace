@@ -123,8 +123,11 @@ Leader доверяет `postman_bridge.result`, полученному из tru
   Если содержание нужно для supervisor-решения, Leader читает только exact `resultFile`
   доступными read-only tools.
 
-Для `RESULT_DURABLE` Leader проверяет metadata/result path и решает следующий шаг.
-Сам Bridge не применяет ZIP и не запускает Git lifecycle.
+Для `RESULT_DURABLE` Leader проверяет trusted metadata, exact `resultZip` и целостность handoff. Это доказательство происхождения/сохранности результата, **не** оценка пригодности implementation package и не разрешение менять репозиторий. Normal Postman transport принимает универсальный безопасный ZIP, не проверяя `manifest.json` или patch как условия transport. Сам Bridge не применяет ZIP и не запускает Git lifecycle.
+
+Если нужен implementation package, Leader отдельно решает, применять ли его, исходя из задачи и доступных доказательств. ChatGPT Web должен подготовить декларативный ZIP по `REPO_POLICY.md`, `system/implementation-package-workflow.md` и `system/implementation-package-authoring.md`: `manifest.json`, сгенерированный Git `changes.patch`, `README.md`, `TEST_PLAN.md`, относящиеся к изменению тесты в patch и точечное исключение `.gitignore` для иначе игнорируемых новых файлов. Никакого package-local runner или модели grants.
+
+После отдельного решения Leader передаёт exact путь ZIP **тому же** continuable Worker через `postman_worker({task: ...})`. Worker проверяет предпосылки, создаёт отдельный clean task worktree/branch от актуального `origin/preview` согласно repository policy и запускает существующий `system/implementation_package_runner.py apply <PACKAGE.zip>`. На PASS Worker сообщает результат runner, затронутые пути и проверки без автоматического commit/push/PR; на FAIL сообщает diagnostics ZIP и останавливается без ручного ремонта пакета. Leader оценивает отчёт и решает следующий шаг. Публикация после PASS, если отдельно поручена, соблюдает `REPO_POLICY.md`; merge не обязателен и возможен лишь после отдельной явной команды пользователя.
 
 ## Ошибки
 

@@ -90,6 +90,14 @@ Worker отправляет результат через штатный `report
 resident Activation и забывает отображение; durable Session не удаляется. После рестарта
 Host реестр Worker не восстанавливается (ограничение MVP).
 
+## Implementation package: отдельное локальное решение
+
+Normal Direct/Postman Bridge доставляет любой безопасный ZIP; trusted `RESULT_DURABLE` доказывает происхождение, сохранность и целостность exact `resultZip`, но не проверяет его как implementation package и не выдаёт разрешения на применение. Leader (Sol) отдельно решает, поручать ли применение тому же продолжаемому Worker. Это не автоматическое действие transport и не новая модель grants.
+
+Для такого поручения ChatGPT Web готовит декларативный ZIP по `REPO_POLICY.md`, `system/implementation-package-workflow.md` и `system/implementation-package-authoring.md`: `manifest.json`, сгенерированный Git `changes.patch`, `README.md`, `TEST_PLAN.md`; относящиеся к изменению тесты и узкие исключения `.gitignore` для иначе игнорируемых новых repository-owned файлов находятся в patch. Пакет не содержит своего applicator/diagnostics framework.
+
+Worker по отдельному заданию создаёт clean task branch/worktree от актуального `origin/preview`, запускает уже существующий `system/implementation_package_runner.py apply <PACKAGE.zip>` и передаёт результат через child-scoped `report`: PASS с путями/проверками без автоматической публикации; FAIL с diagnostics ZIP, без ручного ремонта. Дальнейшая публикация — отдельное действие согласно repository policy; обязательного merge нет. Сам plugin не вводит новый runner и не запускает применение ZIP при transport handoff.
+
 Harness model routing намеренно находится вне Agent presets. Поэтому для Leader в model selector
 выбирается `GPT-6 Sol`; preset сам модель не переключает. Bridge Luna фиксирована кодом.
 

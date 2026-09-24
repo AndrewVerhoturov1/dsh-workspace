@@ -37,7 +37,7 @@ system/implementation_package_runner.py
   targeted test;
 - сдвиг `preview`, exact source SHA, exact changed-file inventory и `git diff --check`
   сами по себе не являются blocker, если patch применяется и целевые тесты проходят;
-- после PASS локальный агент выполняет commit/push/PR в `preview` по обычной policy;
+- PASS runner-а сначала означает отчёт о проверке, а не автоматическое разрешение публиковать полученный ZIP; при отдельном решении Sol о публикации локальный агент выполняет commit/push/PR в `preview` по обычной policy;
 - merge выполняется только после отдельного явного разрешения пользователя.
 
 Локальный агент не ремонтирует несовместимый patch вручную: при hard FAIL runner создаёт
@@ -458,8 +458,8 @@ return ZIP only
 ```
 
 Внешний ChatGPT или аналитический агент в таком режиме не пишет в GitHub.
-После локальной проверки и применения результата публикацию выполняет именно
-локальный Harness/Luna agent.
+После локального применения ZIP Worker возвращает отчёт; если отдельно принято решение
+публиковать результат, это делает локальный Harness/Luna agent по этой политике.
 
 Архитектурная граница:
 
@@ -472,6 +472,8 @@ Local Luna/Harness
 → validate
 → apply
 → test
+→ report to Sol
+→ separate publication decision
 → commit
 → push
 → PR to preview (обычная task)

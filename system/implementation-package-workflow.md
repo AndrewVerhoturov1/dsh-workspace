@@ -18,9 +18,9 @@ language: ru
 
 Роли:
 
-- **ChatGPT / другая внешняя модель** — проектирует решение, готовит `changes.patch`, manifest и при необходимости новые regression tests внутри patch.
+- **ChatGPT Web / другая внешняя модель** — проектирует решение и готовит декларативный ZIP: `manifest.json`, созданный Git `changes.patch`, `README.md`, `TEST_PLAN.md` и необходимые целевые тесты внутри patch. Web не обязана публиковать изменения в Git или всегда запускать все тесты; фактические проверки указываются честно.
 - **Central implementation package runner** — одинаково для всех пакетов проверяет реальную применимость patch, защищает постоянные worktree/локальные данные, применяет patch, запускает только объявленные targeted tests и создаёт компактную диагностику при FAIL.
-- **Luna / локальный агент** — создаёт отдельный clean implementation worktree, запускает центральный runner, а после PASS делает commit/push/PR. Она не чинит package вручную.
+- **Sol / локальный агент** — отдельно решает, применять ли полученный ZIP. При положительном решении поручает тому же продолжаемому Worker создать чистое временное worktree и запустить существующий runner. PASS означает отчёт, FAIL — diagnostics без ручного ремонта. Публикация будущего ZIP требует отдельного решения.
 - **Пользователь** — принимает решение о merge; promotion `preview → main` остаётся отдельным explicit действием.
 
 ## 2. Канонический runner
@@ -53,11 +53,11 @@ python system/implementation_package_runner.py check <PACKAGE.zip>
 PACKAGE.zip
 ├─ manifest.json
 ├─ changes.patch
-├─ README.md       # optional, для человека
-└─ TEST_PLAN.md    # optional, для человека
+├─ README.md
+└─ TEST_PLAN.md
 ```
 
-Никакого package-local `apply_package.py`, `run_package.py`, собственного Git workflow или собственного diagnostics framework по умолчанию нет.
+Никакого package-local runner, installer, `apply_package.py`, `run_package.py`, собственного Git workflow, diagnostics framework или Git publication нет.
 
 Все repository changes, включая новые файлы и новые тесты, входят в `changes.patch`.
 
@@ -135,9 +135,9 @@ git apply --check changes.patch
 
 Если Git может применить patch и targeted tests проходят, обычный runner не придумывает дополнительные причины остановиться.
 
-## 6. Почему не нужен постоянный Sol-validator
+## 6. Отдельное решение Sol и механическая проверка
 
-LLM-review может быть полезен для архитектуры, но не является каноническим механическим gate.
+Sol принимает отдельное смысловое решение о применении будущего ZIP; это не автоматический этап транспорта и не замена механической проверке Git и тестами.
 
 Обычный порядок:
 
@@ -150,7 +150,7 @@ LLM-review может быть полезен для архитектуры, н�
 → PASS
 ```
 
-Sol/другая сильная модель нужна только когда есть реальный смысловой blocker или непонятный FAIL. Не нужно тратить сильную модель на постоянное повторение работы Git и тестов.
+Sol не повторяет работу Git и тестов как дополнительный механический gate. После положительного решения тот же продолжаемый Worker выполняет применение через существующий runner, а не пишет новый.
 
 ## 7. Diagnostics при FAIL
 
@@ -177,7 +177,7 @@ STOP
 → package возвращается модели на исправление
 ```
 
-Локальный агент не перепроектирует и не дописывает package вручную.
+Worker не перепроектирует и не дописывает package вручную; FAIL передаётся как точные diagnostics, без ремонта.
 
 ## 8. Работа с worktree
 
@@ -194,8 +194,9 @@ Implementation package туда не применяется.
 
 ```text
 origin/preview
-→ отдельная temporary task branch
-→ отдельный clean worktree
+→ отдельное решение Sol о применении
+→ тот же продолжаемый Worker
+→ отдельная временная task branch и чистое временное worktree
 → central runner apply
 ```
 
@@ -223,11 +224,11 @@ syntax/compile, если нужен конкретному изменению
 
 Runner не выбирает тесты сам и не вызывает LLM.
 
-## 10. Publication после PASS
+## 10. Отчёт после PASS и отдельная публикация
 
 Central runner **не делает GitHub writes**.
 
-После `IMPLEMENTATION_PACKAGE_APPLIED` локальный агент выполняет обычный repository lifecycle:
+После `IMPLEMENTATION_PACKAGE_APPLIED` Worker сообщает Sol PASS и точный результат runner-а. Это не разрешение автоматически публиковать будущий ZIP. Если Sol отдельно решит публиковать проверенное изменение, локальный агент выполняет обычный repository lifecycle согласно `REPO_POLICY.md`:
 
 ```text
 review git status/diff на уровне задачи
@@ -245,7 +246,7 @@ review git status/diff на уровне задачи
 
 Merge — только после отдельного решения пользователя.
 
-Runner не выполняет commit/push/PR, чтобы application и публикация оставались разными границами ответственности.
+Runner не выполняет commit/push/PR, чтобы application и публикация оставались разными границами ответственности. Normal Postman transport универсален и лишь доставляет результат; он не создаёт worktree/ветку и не запускает runner или публикацию. Trusted `RESULT_DURABLE` с exact ZIP/SHA подтверждает только происхождение и целостность полученного файла, но не его применимость, качество, разрешение на применение или публикацию.
 
 ## 11. Что модель должна выдавать после внедрения этой системы
 
@@ -253,8 +254,9 @@ Runner не выполняет commit/push/PR, чтобы application и пуб�
 
 ```text
 manifest.json
-changes.patch
-README.md / TEST_PLAN.md при необходимости
+Git-generated changes.patch
+README.md
+TEST_PLAN.md
 ```
 
 Перед выдачей желательно локально/в sandbox проверить, что patch синтаксически валиден. Но package не должен содержать очередной новый framework проверки.
