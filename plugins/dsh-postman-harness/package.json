@@ -16,6 +16,7 @@
     "lib/postman-bridge-core.js",
     "lib/postman-bridge-launch-coordinator.js",
     "lib/postman-worker.js",
+    "lib/implementation-artifact.js",
     "lib/result-presentation.js",
     "lib/result-workspace.js",
     "lib/runtime.js",

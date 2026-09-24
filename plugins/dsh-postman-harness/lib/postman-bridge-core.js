@@ -152,6 +152,7 @@ export async function settleTrustedPostmanStatus(readStatus, signal) {
       }
       return {
         status: 'POSTMAN_BRIDGE_TERMINAL',
+        terminalStatus: status.status,
         checks,
         requestId: status.requestId ?? status.result.requestId ?? null,
         result: status.result,

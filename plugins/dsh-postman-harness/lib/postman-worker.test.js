@@ -237,7 +237,7 @@ test('bridge plugin registers both Worker tools and preserves boundary on creati
     on(name, handler) { listeners.set(name, handler) },
   }
   applyBridgePlugin(ctx)
-  assert.deepEqual([...registrations.keys()].sort(), ['postman_bridge', 'postman_worker', 'postman_worker_stop'])
+  assert.deepEqual([...registrations.keys()].sort(), ['implementation_artifact_apply', 'postman_bridge', 'postman_worker', 'postman_worker_stop'])
   assert.deepEqual(restriction.allow, postmanBridgeRestrictionForAgent(a).allow)
   assert.ok(listeners.has('agent-preset/selected'))
   assert.ok(listeners.has('agent/disposed'))

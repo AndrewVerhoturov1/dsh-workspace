@@ -145,7 +145,7 @@ Preset `postman-leader` / `Postman Leader` хранится в репозито�
 не загружает отдельный preset-плагин: существующий `postman-bridge` подключается на уровне
 host-композиции в bundle `dsh-postman-harness`.
 
-Top-level Agent этого preset получает runtime allowlist только для read-only inspection и Bridge:
+Top-level Agent этого preset получает runtime allowlist для read-only inspection, Bridge и Worker:
 
 ```text
 read
@@ -155,9 +155,11 @@ skill
 web_fetch
 web_search
 postman_bridge
+postman_worker
+postman_worker_stop
 ```
 
-`write`, `edit`, shell, generic `subagent`, workflow и direct Postman tools скрыты runtime-ом.
+`write`, `edit`, shell, generic `subagent`, workflow и direct Postman tools скрыты runtime-ом у Leader. Зарегистрированный `implementation_artifact_apply` не входит в Leader allowlist: его execute path допускает только точного активного Worker после отдельной авторизации REQ.
 Сам `postman_bridge` тоже является Leader-only capability: top-level `postman-leader` получает его
 в allowlist, а любой другой root/subagent Agent получает точечный `deny: [postman_bridge]`.
 Tool body повторно проверяет caller и при обходе visibility boundary возвращает
@@ -176,7 +178,29 @@ Harness model routing намеренно находится вне Agent presets
 и tool boundary, но не переключает модель автоматически: для Leader в model selector выбирается
 `GPT-6 Sol`. Luna Bridge фиксирована кодом независимо от модели parent.
 
-## 9. Failure boundary
+## 9. Передача implementation package локальному Worker
+
+`RESULT_DURABLE` из exact child scope подтверждает происхождение и целостность ZIP, а не корректность implementation patch. Normal transport универсален и не требует `manifest.json`; Bridge child не применяет пакет. После correlated terminal Host регистрирует process-local grant по точной сессии Leader и REQ с exact trusted ZIP и SHA-256. Grant — внутреннее доверенное соответствие, не model-provided token и не автоматическое разрешение на применение.
+
+Для implementation package ChatGPT Web следует `REPO_POLICY.md`, `system/implementation-package-workflow.md` и `system/implementation-package-authoring.md`: декларативный ZIP содержит `manifest.json`, Git-generated `changes.patch`, `README.md`, `TEST_PLAN.md`; targeted tests, новые файлы и необходимые узкие исключения `.gitignore` входят в patch. Собственного applicator и диагностики в ZIP нет.
+
+```text
+Bridge terminal RESULT_DURABLE
+→ Host регистрирует grant для exact Leader session + REQ (trusted ZIP + SHA-256)
+→ Sol отдельно авторизует REQ: postman_worker({task, artifactRequestId: "REQ_..."})
+→ тот же continuable Worker получает trusted REQ, не model-authored ZIP path
+→ Worker создаёт clean task branch/worktree от текущего origin/preview
+→ Worker вызывает implementation_artifact_apply({requestId: "REQ_...", worktree: "<clean worktree>"})
+→ Host проверяет точного Worker, разрешает REQ в trusted ZIP и повторно сверяет SHA-256
+→ Host запускает существующий system/implementation_package_runner.py
+→ Worker проверяет фактический результат и отправляет report → Sol
+```
+
+`POSTMAN_WORKER_TASK_ACCEPTED` означает только приём задания, не итог: Sol дожидается `report`. На PASS Worker сообщает результат runner и затронутые пути без автоматического commit/push/PR; на FAIL — diagnostics ZIP и STOP без локального ремонта patch. После FAIL Sol решает, исследовать ли проблему, запросить новый ZIP или остановиться. Публикация после PASS поручается отдельно по repository policy; merge требует отдельной явной команды пользователя.
+
+Worker — обычный coding-agent с shell и теоретически может сам запускать локальные программы. Гарантия этой границы уже: только отдельно авторизованный Worker может использовать trusted Host grant и `implementation_artifact_apply` для exact Postman artifact; запрета на все самостоятельные локальные запуски здесь нет.
+
+## 10. Failure boundary
 
 Bridge никогда не делает blind resend.
 
@@ -187,7 +211,7 @@ Bridge никогда не делает blind resend.
 - Direct terminal failure возвращается parent-у как trusted `result`;
 - cancellation после начала не разрешает автоматический второй Send.
 
-## 10. Ordinary subagents
+## 11. Ordinary subagents
 
 Обычные `subagent`/`subagent_fork` capabilities Harness не изменяются. Для не-Leader Agents
 добавляется только точечный deny имени `postman_bridge`; остальные global tools этим deny не
