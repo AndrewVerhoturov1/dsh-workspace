@@ -139,6 +139,32 @@ test('job manager sends exact payload only as UTF-8 Base64 to the existing Direc
   assert.equal(terminal.result.code, 'RESULT_DURABLE')
 })
 
+
+test('parallel sessions retry a colliding REQ without mixing jobs', async () => {
+  const ids = [11, 11, 12]
+  const children = []
+  const manager = new DirectPostmanJobManager({
+    exists: () => true,
+    now: () => new Date('2026-09-24T12:34:56.000Z'),
+    randomInt: () => ids.shift(),
+    spawn() {
+      const child = fakeChild()
+      children.push(child)
+      queueMicrotask(() => child.emit('spawn'))
+      return child
+    },
+  })
+  const [first, second] = await Promise.all([
+    manager.start({ sessionId: 'child-a', workspace: '/repo', payload: 'A' }),
+    manager.start({ sessionId: 'child-b', workspace: '/repo', payload: 'B' }),
+  ])
+  assert.equal(children.length, 2)
+  assert.notEqual(first.requestId, second.requestId)
+  assert.equal(manager.latest('child-a').requestId, first.requestId)
+  assert.equal(manager.latest('child-b').requestId, second.requestId)
+  children.forEach(child => child.emit('close', 2, null))
+})
+
 test('tool surface has no task/payload/prompt arguments', () => {
   const listeners = new Map()
   const bridge = createDirectCurrentTurnToolConfigs({ on(name, listener) { listeners.set(name, listener); return () => {} } }, {
@@ -147,9 +173,12 @@ test('tool surface has no task/payload/prompt arguments', () => {
   assert.deepEqual(bridge.tools.map(tool => tool.name), [
     'postman_send_current_turn',
     'postman_current_turn_status',
+    'postman_ask_validate_reply',
     'postman_continue_last_request',
   ])
-  for (const tool of bridge.tools) assert.deepEqual(tool.parameters, {})
+  for (const tool of bridge.tools.filter(tool => tool.name !== 'postman_ask_validate_reply')) {
+    assert.deepEqual(tool.parameters, {})
+  }
   bridge.dispose()
 })
 

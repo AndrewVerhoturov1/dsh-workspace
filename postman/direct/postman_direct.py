@@ -42,6 +42,7 @@ if str(WEB_DIR) not in sys.path:
 
 import browser_bootstrap as bootstrap  # noqa: E402
 import chat_reference  # noqa: E402
+import process_lock  # noqa: E402
 import durable_handoff  # noqa: E402
 import task_package  # noqa: E402
 import request_identity  # noqa: E402
@@ -418,23 +419,32 @@ def ensure_dedicated_chrome(
         if exc.code != bootstrap_module.BOOTSTRAP_CDP_UNREACHABLE:
             raise DirectPostmanError("DIRECT_BROWSER_FAILED", str(exc), details=getattr(exc, "details", {})) from exc
 
-    executable = bootstrap_module.discover_chrome_executable(explicit=chrome_executable)
-    if executable is None:
-        raise DirectPostmanError("DIRECT_CHROME_NOT_FOUND", "Google Chrome executable was not found")
-    process = bootstrap_module.start_dedicated_chrome(executable, profile)
-    try:
-        proof = bootstrap_module.wait_for_cdp(normalized, timeout_s=20.0)
-    except bootstrap_module.BrowserBootstrapError as exc:
-        raise DirectPostmanError("DIRECT_BROWSER_FAILED", str(exc), details=getattr(exc, "details", {})) from exc
-    return {
-        "launched": True,
-        "reused": False,
-        "pid": getattr(process, "pid", None),
-        "cdpUrl": normalized,
-        "profileDir": str(profile),
-        "chromeExecutable": str(executable),
-        "cdpProof": proof,
-    }
+    # Only startup is serialized, never independent Web conversations. Recheck
+    # CDP after acquiring the cross-process profile lock: another REQ may have
+    # started Chrome while we waited for the initial short probe.
+    with process_lock.exclusive_lock(profile.parent / "locks" / "postman-startup.lock", timeout_s=25.0):
+        try:
+            proof = bootstrap_module.wait_for_cdp(normalized, timeout_s=0.25)
+            return {
+                "launched": False, "reused": True, "cdpUrl": normalized,
+                "profileDir": str(profile), "cdpProof": proof,
+            }
+        except bootstrap_module.BrowserBootstrapError as exc:
+            if exc.code != bootstrap_module.BOOTSTRAP_CDP_UNREACHABLE:
+                raise DirectPostmanError("DIRECT_BROWSER_FAILED", str(exc), details=getattr(exc, "details", {})) from exc
+        executable = bootstrap_module.discover_chrome_executable(explicit=chrome_executable)
+        if executable is None:
+            raise DirectPostmanError("DIRECT_CHROME_NOT_FOUND", "Google Chrome executable was not found")
+        process = bootstrap_module.start_dedicated_chrome(executable, profile)
+        try:
+            proof = bootstrap_module.wait_for_cdp(normalized, timeout_s=20.0)
+        except bootstrap_module.BrowserBootstrapError as exc:
+            raise DirectPostmanError("DIRECT_BROWSER_FAILED", str(exc), details=getattr(exc, "details", {})) from exc
+        return {
+            "launched": True, "reused": False, "pid": getattr(process, "pid", None),
+            "cdpUrl": normalized, "profileDir": str(profile),
+            "chromeExecutable": str(executable), "cdpProof": proof,
+        }
 
 
 class DirectPostman:
@@ -517,6 +527,10 @@ class DirectPostman:
         automatic_continuation: bool = False,
     ) -> dict[str, Any]:
         request_identity.assert_canonical_request_id(request_id)
+        try:
+            process_lock.claim_request(self.direct_root, request_id)
+        except FileExistsError as exc:
+            raise DirectPostmanError("DIRECT_REQUEST_EXISTS", "request already claimed; resend forbidden") from exc
         if self.state_path(request_id).exists():
             raise DirectPostmanError(
                 "DIRECT_REQUEST_EXISTS",
@@ -602,26 +616,27 @@ class DirectPostman:
             gh_binary=self.gh_binary,
             cwd=self.repo_root,
         )
-        snapshot = publisher.snapshot()
-        expected_filename = request_identity.expected_artifact_filename(request_id)
-        allowed_paths = derive_allowed_paths(snapshot.root_entries, extra_allowed)
-        forbidden_paths = derive_forbidden_paths(extra_forbidden)
+        with process_lock.lock_publication(self.direct_root, self.repository, self.branch):
+            snapshot = publisher.snapshot()
+            expected_filename = request_identity.expected_artifact_filename(request_id)
+            allowed_paths = derive_allowed_paths(snapshot.root_entries, extra_allowed)
+            forbidden_paths = derive_forbidden_paths(extra_forbidden)
 
-        task_content = task_package.render_direct_task_manifest(
-            request_id=request_id,
-            user_intent=task,
-            repository=self.repository,
-            base_commit=snapshot.prepublication_commit,
-            expected_filename=expected_filename,
-            allowed_paths=allowed_paths,
-            forbidden_paths=forbidden_paths,
-        )
-        published = publisher.publish_content(
-            request_id,
-            task_content,
-            expected_parent=snapshot.prepublication_commit,
-            root_entries=snapshot.root_entries,
-        )
+            task_content = task_package.render_direct_task_manifest(
+                request_id=request_id,
+                user_intent=task,
+                repository=self.repository,
+                base_commit=snapshot.prepublication_commit,
+                expected_filename=expected_filename,
+                allowed_paths=allowed_paths,
+                forbidden_paths=forbidden_paths,
+            )
+            published = publisher.publish_content(
+                request_id,
+                task_content,
+                expected_parent=snapshot.prepublication_commit,
+                root_entries=snapshot.root_entries,
+            )
 
         expected_request = {
             "requestId": request_id,
@@ -864,25 +879,29 @@ def main(argv: list[str] | None = None) -> int:
                 raise DirectPostmanError("DIRECT_INVALID_REQUEST", "--request-id is required")
             task = _task_from_args(args)
             execution_request_id = args.request_id
-            result = direct.run(
-                request_id=args.request_id,
-                task=task,
-                chat_request_id=args.chat_request_id,
-                automatic_continuation=args.automatic_continuation,
-                cdp_url=args.cdp_url,
-                extra_allowed=args.allow_path,
-                extra_forbidden=args.forbid_path,
-            )
+            with process_lock.lock_chat(direct.direct_root, args.chat_request_id, direct.repository):
+                result = direct.run(
+                    request_id=args.request_id,
+                    task=task,
+                    chat_request_id=args.chat_request_id,
+                    automatic_continuation=args.automatic_continuation,
+                    cdp_url=args.cdp_url,
+                    extra_allowed=args.allow_path,
+                    extra_forbidden=args.forbid_path,
+                )
         print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
         return 0
-    except (DirectPostmanError, ValueError) as exc:
-        code = exc.code if isinstance(exc, DirectPostmanError) else "DIRECT_INVALID_REQUEST"
+    except (DirectPostmanError, ValueError, chat_reference.ChatReferenceError, process_lock.ResourceBusyError) as exc:
+        code = ("DIRECT_CHAT_BUSY" if isinstance(exc, process_lock.ChatBusyError)
+                else "DIRECT_RESOURCE_BUSY" if isinstance(exc, process_lock.ResourceBusyError)
+                else exc.code if isinstance(exc, (DirectPostmanError, chat_reference.ChatReferenceError))
+                else "DIRECT_INVALID_REQUEST")
         error_details = exc.details if isinstance(exc, DirectPostmanError) else {}
         request_fields = {"requestId": args.request_id} if args.request_id else {}
         if (
-            isinstance(exc, DirectPostmanError)
-            and execution_request_id
+            execution_request_id
             and code != POSTMAN_TRANSPORT_FAILED
+            and isinstance(exc, (DirectPostmanError, chat_reference.ChatReferenceError, process_lock.ResourceBusyError))
         ):
             result = _json_result(
                 False,

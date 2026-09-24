@@ -3,6 +3,8 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import subprocess
+import tempfile
 from pathlib import Path
 import unittest
 from contextlib import redirect_stdout
@@ -177,6 +179,16 @@ class BrowserBootstrapTests(unittest.TestCase):
         self.assertTrue(any(item.startswith("--user-data-dir=") for item in command))
         self.assertEqual(command[-1], bootstrap.DEFAULT_STARTUP_URL)
         self.assertEqual(command[-1], "about:blank")
+
+    def test_chrome_start_does_not_create_a_console_on_windows(self):
+        from unittest.mock import patch
+        captured = {}
+        def fake_popen(command, **kwargs):
+            captured.update(kwargs)
+            return object()
+        with tempfile.TemporaryDirectory() as temp, patch.object(bootstrap.os, "name", "nt"):
+            bootstrap.start_dedicated_chrome("chrome.exe", Path(temp) / "profile", popen=fake_popen)
+        self.assertTrue(captured["creationflags"] & subprocess.CREATE_NO_WINDOW)
 
     def test_build_chrome_command_rejects_invalid_port(self):
         with self.assertRaises(bootstrap.BrowserBootstrapError):
