@@ -1,6 +1,7 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { parsePostmanUserTurn } from './direct-current-turn.js'
 import { createPostmanWorkerTools } from './postman-worker.js'
+import { createPostmanBridgeLaunchCoordinator } from './postman-bridge-launch-coordinator.js'
 import {
   POSTMAN_BRIDGE_PROVIDER,
   POSTMAN_BRIDGE_AGENT_OPTIONS,
@@ -55,7 +56,8 @@ async function trustedStatusReader(ctx, child, signal) {
   return statusTool.execute({}, { agent: child, signal })
 }
 
-export function createPostmanBridgeTool(ctx) {
+export function createPostmanBridgeTool(ctx, coordinator) {
+  if (typeof coordinator?.run !== 'function') throw new Error('POSTMAN_BRIDGE_COORDINATOR_REQUIRED')
   return defineTool({
     name: POSTMAN_BRIDGE_TOOL_NAME,
     description: 'Delegate one model-authored exact @Postman or @PostmanAsk message through a fresh fixed Luna bridge subagent. Use @PostmanAsk for text research/review and @Postman for a durable ZIP/artifact. Use --chat <REQ> in message when continuing an already proven ChatGPT conversation. The bridge returns the trusted Direct Postman terminal receipt, not the child model prose.',
@@ -88,61 +90,62 @@ export function createPostmanBridgeTool(ctx) {
         }
       }
 
-      let run
-      try {
-        run = await ctx.subagents.start(POSTMAN_BRIDGE_PROVIDER, buildPostmanBridgeStartRequest({
-          parent,
-          message: args.message,
-          signal: exec.signal,
-          transportKind: parsed.transportKind,
-        }))
-      } catch (error) {
-        return {
-          status: 'POSTMAN_BRIDGE_START_FAILED',
-          transportKind: parsed.transportKind,
-          bridgeProvider: POSTMAN_BRIDGE_PROVIDER,
-          bridgeModel: POSTMAN_BRIDGE_AGENT_OPTIONS.model,
-          diagnostic: diagnostic(error),
-        }
-      }
-
-      const child = run.localAgent
-      if (child === undefined) {
-        await run.dispose().catch(() => undefined)
-        return {
-          status: 'POSTMAN_BRIDGE_CHILD_UNAVAILABLE',
-          transportKind: parsed.transportKind,
-          childSessionId: String(run.id),
-        }
-      }
-
-      let childStopReason = 'error'
-      let childDiagnostic
-      try {
+      return coordinator.run(exec.signal, async () => {
+        let run
         try {
-          const childResult = await run.result
-          childStopReason = childResult.stopReason
-          childDiagnostic = childResult.diagnostic
+          run = await ctx.subagents.start(POSTMAN_BRIDGE_PROVIDER, buildPostmanBridgeStartRequest({
+            parent,
+            message: args.message,
+            signal: exec.signal,
+            transportKind: parsed.transportKind,
+          }))
         } catch (error) {
-          childDiagnostic = diagnostic(error)
+          return {
+            status: 'POSTMAN_BRIDGE_START_FAILED',
+            transportKind: parsed.transportKind,
+            bridgeProvider: POSTMAN_BRIDGE_PROVIDER,
+            bridgeModel: POSTMAN_BRIDGE_AGENT_OPTIONS.model,
+            diagnostic: diagnostic(error),
+          }
         }
 
-        const trusted = await settleTrustedPostmanStatus(
-          () => trustedStatusReader(ctx, child, exec.signal),
-          exec.signal,
-        )
-        return {
-          ...trusted,
-          transportKind: parsed.transportKind,
-          childSessionId: String(run.id),
-          bridgeProvider: POSTMAN_BRIDGE_AGENT_OPTIONS.provider,
-          bridgeModel: POSTMAN_BRIDGE_AGENT_OPTIONS.model,
-          childStopReason,
-          ...(childDiagnostic === undefined ? {} : { childDiagnostic }),
+        try {
+          const child = run.localAgent
+          if (child === undefined) {
+            return {
+              status: 'POSTMAN_BRIDGE_CHILD_UNAVAILABLE',
+              transportKind: parsed.transportKind,
+              childSessionId: String(run.id),
+            }
+          }
+
+          let childStopReason = 'error'
+          let childDiagnostic
+          try {
+            const childResult = await run.result
+            childStopReason = childResult.stopReason
+            childDiagnostic = childResult.diagnostic
+          } catch (error) {
+            childDiagnostic = diagnostic(error)
+          }
+
+          const trusted = await settleTrustedPostmanStatus(
+            () => trustedStatusReader(ctx, child, exec.signal),
+            exec.signal,
+          )
+          return {
+            ...trusted,
+            transportKind: parsed.transportKind,
+            childSessionId: String(run.id),
+            bridgeProvider: POSTMAN_BRIDGE_AGENT_OPTIONS.provider,
+            bridgeModel: POSTMAN_BRIDGE_AGENT_OPTIONS.model,
+            childStopReason,
+            ...(childDiagnostic === undefined ? {} : { childDiagnostic }),
+          }
+        } finally {
+          await run.dispose().catch(() => undefined)
         }
-      } finally {
-        await run.dispose().catch(() => undefined)
-      }
+      })
     },
   })
 }
@@ -160,7 +163,9 @@ export function installPostmanLeaderBoundary(agent) {
 }
 
 export function apply(ctx) {
-  ctx.tools.register(createPostmanBridgeTool(ctx))
+  const coordinator = createPostmanBridgeLaunchCoordinator()
+  ctx.tools.register(createPostmanBridgeTool(ctx, coordinator))
+  ctx.effect(() => () => coordinator.dispose(), 'dsh-postman-harness-bridge.launch-coordinator()')
   const worker = createPostmanWorkerTools(ctx)
   ctx.tools.register(worker.taskTool)
   ctx.tools.register(worker.stopTool)
