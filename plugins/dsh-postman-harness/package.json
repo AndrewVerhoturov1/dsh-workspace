@@ -14,7 +14,7 @@
     "lib/direct-current-turn.js",
     "lib/postman-bridge.js",
     "lib/postman-bridge-core.js",
-    "lib/postman-worker-continuation-probe.js",
+    "lib/postman-worker.js",
     "lib/result-presentation.js",
     "lib/result-workspace.js",
     "lib/runtime.js",

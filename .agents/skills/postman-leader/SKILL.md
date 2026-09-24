@@ -1,16 +1,13 @@
 ---
 name: postman-leader
 description: >-
-  Использовать, когда локальный Harness agent должен руководить внешней работой через
-  специальный postman_bridge: сам анализировать задачу и проверять результаты, но
-  существенное исследование/реализацию делегировать в ChatGPT Web через @PostmanAsk
-  или @Postman. В экспериментальной конфигурации общий preset намеренно шире,
-  чем реальный runtime-доступ Leader.
+  Руководить работой через две отдельные линии: postman_bridge для ChatGPT Web и
+  postman_worker для локального исполнения и проверки.
 ---
 
 # Postman Leader
 
-`POSTMAN_LEADER_SKILL_VERSION: 3`
+`POSTMAN_LEADER_SKILL_VERSION: 4`
 
 ## Роль
 
@@ -25,75 +22,21 @@ Leader самостоятельно:
 - оценивает trusted terminal result;
 - решает, нужен ли следующий запрос, continuation или остановка.
 
-Существенную внешнюю работу Leader делегирует через `postman_bridge(message=...)`.
+Внешнюю работу Leader делегирует через `postman_bridge(message=...)`; локальную работу — через `postman_worker({task: "..."})`.
 
-## Preset и реальный доступ — не одно и то же
+## Разделение ролей и инструментов
 
-В экспериментальной конфигурации `postman-leader` содержит широкий набор plugin rows,
-близкий к обычному coding preset: файловые мутации, shell, generic subagent/workflow,
-jobs и другие capabilities физически присутствуют в общей preset composition.
+- Leader (Sol) руководит, оценивает результаты и выбирает следующий шаг. Его фактический каталог ограничен runtime независимо от широкого общего preset. Он видит read, glob, grep, skill, web_fetch, web_search, postman_bridge, postman_worker и postman_worker_stop, но не write, edit, pwsh, bash, subagent или workflow. Не обходить ограничения скрытыми вызовами.
+- Bridge (Luna) обслуживает только ChatGPT Web через штатный Direct Postman. Его узкий фильтр и доверенная граница не меняются.
+- Worker (Luna) — обычный продолжаемый дочерний Agent для локального исполнения, проверки и работы с репозиторием. Он получает инструменты общего preset без специального Worker-списка разрешений; postman_bridge остаётся доступным только Leader.
 
-Это НЕ означает, что top-level Leader имеет право ими пользоваться.
+## Локальный Postman Worker
 
-Авторитетная граница для Leader — его фактический runtime tool catalog после
-`agent.ctx.tools.restrict(...)`.
+Вызов `postman_worker({task: "..."})` создаёт Worker для данной точной сессии Leader, если активного Worker нет. Повторный вызов принимает следующее задание в **ту же сохранённую дочернюю сессию** через штатный followup, даже если предыдущая активация уже выгружена из памяти. Сообщения принимаются в очередь по порядку.
 
-Ожидаемый Leader-visible набор в этом эксперименте:
+`POSTMAN_WORKER_TASK_ACCEPTED` и messageId означают только приём сообщения, **не** окончание задания. Не отправлять его снова только из-за быстрого ответа инструмента. Worker должен передать содержательный итог через штатный дочерний `report`; дождаться отчёта, оценить действия, проверки и ошибки, прежде чем считать работу законченной. Финальный текст дочернего Agent не подменяет отчёт как выбранный канал результата. Отчёт не завершает Worker навсегда.
 
-```text
-read
-glob
-grep
-skill
-web_fetch
-web_search
-postman_bridge
-postman_worker_scope_probe
-```
-
-Если `write`, `edit`, `pwsh`, `bash`, `subagent`, `subagent_fork`, `workflow`,
-`todo_write` или другие скрытые capabilities неожиданно стали видимы Leader-у,
-считать эксперимент проваленным и не продолжать Worker design до исправления boundary.
-
-Не пытаться вызвать скрытый tool по имени, обходить boundary через generic subagent
-или считать содержимое preset доказательством разрешения.
-
-## Временный scope probe
-
-`postman_worker_scope_probe` — host-owned диагностический tool, а не production Worker.
-
-Использовать его только по явной просьбе человека проверить гипотезу:
-
-```text
-широкий shared preset
-+ узкий runtime restriction exact Leader
-+ ordinary spawn child
-+ собственный child toolFilter
-```
-
-Probe запускает fresh one-shot `spawn` Luna child с фиксированным `toolFilter.allow=['write']`.
-Leader сам `write` видеть не должен. Child должен увидеть `write`, создать уникальный marker
-в workspace, после чего host независимо проверяет точные байты marker и удаляет его.
-
-Успех `POSTMAN_WORKER_SCOPE_PROBE_PASS` доказывает именно следующее:
-
-- runtime restriction exact Leader не лишает ordinary spawn-child доступа к capability,
-  присутствующей в общей preset composition;
-- child может получить эту capability своим `toolFilter`;
-- Leader при этом capability не видит;
-- child остаётся обычным `origin=subagent` с правильным `parentSession` и depth.
-
-Probe НЕ доказывает безопасность будущего browser/preview Worker и не является `worker_run`.
-
-## Разделение ролей (будущая работа)
-
-- Leader (Sol) обдумывает задачу, руководит и проверяет. Общий preset не даёт ему права
-  вызывать скрытые инструменты; решает только текущий runtime-каталог.
-- Bridge (Luna) выполняет исключительно точный Direct Postman transport через
-  `postman_bridge`; его узкий фильтр не расширяется этим экспериментом.
-- Будущий Worker (Luna) будет локальным исполнителем и проверяющим. Этот probe лишь
-  выясняет, достаточен ли штатный `spawn` для его независимого набора инструментов.
-  Он не создаёт production Worker и не разрешает Leader обходить ограничения.
+`postman_worker_stop()` освобождает находящуюся в памяти активацию, убирает отображение Leader → Worker и не удаляет сохранённую сессию. Повторный stop безопасен; новое задание после stop создаёт новую дочернюю сессию. При ошибке приёма/остановки сначала разобрать статус, не отправлять задачу вслепую повторно. Состояние отображения хранится лишь до перезапуска host.
 
 ## Модель и Postman Bridge
 
@@ -103,7 +46,7 @@ Probe НЕ доказывает безопасность будущего browse
 
 Harness намеренно держит model routing вне Agent presets. Для роли Leader в model selector
 выбирать `codex / gpt-6-sol` для текущей сессии; preset не переключает модель автоматически.
-Bridge child независимо и жёстко зафиксирован кодом как `codex / gpt-6-luna`.
+Bridge child независимо и жёстко зафиксирован кодом как `codex / gpt-6-luna`. Worker тоже использует `codex / gpt-6-luna`, но его модель задаётся отдельной константой и не зависит от Bridge.
 
 ## Выбор режима
 
@@ -183,6 +126,3 @@ Leader доверяет `postman_bridge.result`, полученному из tru
 `POSTMAN_BRIDGE_START_FAILED`, invalid terminal и настоящий `POSTMAN_TRANSPORT_FAILED`
 не разрешают blind resend.
 
-`POSTMAN_WORKER_SCOPE_PROBE_*` — отдельная диагностическая ветка. Любой результат кроме
-`POSTMAN_WORKER_SCOPE_PROBE_PASS` требует остановить эксперимент и разобрать evidence,
-а не считать custom provider автоматически необходимым без анализа причины.
