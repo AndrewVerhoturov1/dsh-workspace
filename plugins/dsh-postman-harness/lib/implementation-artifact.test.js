@@ -77,12 +77,14 @@ test('Bridge grant comes only from exact child-scoped status, not child prose', 
       return { async execute() { return { status: 'COMPLETED', requestId: REQ, result: terminal.result } } }
     } },
   }
-  parent.followup = () => {}
+  let ready
+  const notified = new Promise(resolve => { ready = resolve })
+  parent.followup = () => ready()
   const jobs = createPostmanBridgeJobs(ctx, { run: (_signal, launch) => Promise.resolve().then(launch), dispose() {} }, grants)
   const bridge = createPostmanBridgeTool(ctx, jobs)
   const accepted = await bridge.execute({ message: '@Postman make package' }, { agent: parent, signal: SIGNAL })
   assert.equal(accepted.status, 'POSTMAN_BRIDGE_ACCEPTED')
-  await new Promise(resolve => setImmediate(resolve))
+  await notified // Grant registration is intentionally outside coordinator lifecycle.
   const handoff = await createPostmanBridgeStatusTool(ctx, jobs).execute({ bridge_job_id: accepted.bridgeJobId }, { agent: parent })
   assert.equal(handoff.childSessionId, child.id)
   assert.equal(handoff.result, terminal.result)

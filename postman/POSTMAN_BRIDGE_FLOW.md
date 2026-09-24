@@ -20,6 +20,7 @@ Postman Leader
 → postman_bridge(message="@PostmanAsk ..." | "@Postman ...")
 ← POSTMAN_BRIDGE_ACCEPTED + bridgeJobId (Leader сразу свободен)
 → Host job manager / existing Launch Coordinator
+→ заново получить exact live Leader по parentSessionId; если недоступен — failed job без child
 → fresh spawn child
 → fixed gpt-6-luna
 → exact child user/message
@@ -30,7 +31,8 @@ Postman Leader
 → terminal result
 → postman_current_turn_status()
 → bridge host reads the same trusted terminal directly
-→ await run.dispose(); release active slot
+→ await run.dispose(); coordinator releases active slot
+→ job manager регистрирует artifact grant при необходимости (ошибка — отдельная diagnostic)
 → Host followup POSTMAN_BRIDGE_READY (только событие)
 → parent Leader calls postman_bridge_status({bridge_job_id})
 ← trusted terminal result

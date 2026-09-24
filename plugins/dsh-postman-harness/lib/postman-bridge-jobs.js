@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import { buildPostmanBridgeStartRequest, POSTMAN_BRIDGE_PROVIDER,
+import { buildPostmanBridgeStartRequest, isTopLevelPostmanLeader, POSTMAN_BRIDGE_PROVIDER,
   settleTrustedPostmanStatus } from './postman-bridge-core.js'
 
 function diagnostic(error) {
@@ -29,9 +29,18 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants) {
     return statusTool.execute({}, { agent: child, signal })
   }
 
-  async function lifecycle(job, parent, message) {
+  async function lifecycle(job, message) {
     job.state = 'STARTING'
     job.startedAt = new Date().toISOString()
+    let parent
+    try { parent = ctx.agents.get(job.parentSessionId) }
+    catch { return { status: 'POSTMAN_BRIDGE_PARENT_UNAVAILABLE' } }
+    // Resolve at actual admission, not when the tool accepted the queued job.
+    try {
+      if (parent?.id !== job.parentSessionId || !isTopLevelPostmanLeader(parent)) {
+        return { status: 'POSTMAN_BRIDGE_PARENT_UNAVAILABLE' }
+      }
+    } catch { return { status: 'POSTMAN_BRIDGE_PARENT_UNAVAILABLE' } }
     let run
     try {
       run = await ctx.subagents.start(POSTMAN_BRIDGE_PROVIDER, buildPostmanBridgeStartRequest({
@@ -67,9 +76,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants) {
       // A failed cleanup must not be reported as clean completion or release early.
       await run.dispose()
     }
-    // Only a fully cleaned exact child terminal can authorize an artifact grant.
-    try { await grants?.register(job.parentSessionId, terminal) }
-    catch (error) { job.grantDiagnostic = diagnostic(error) }
+    // Coordinator releases its slot when this cleaned terminal is returned.
     return terminal
   }
 
@@ -81,8 +88,15 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants) {
       job.notificationDiagnostic = diagnostic(error)
       return
     }
-    if (leader?.id !== job.parentSessionId || typeof leader.followup !== 'function') {
+    try {
+      if (leader?.id !== job.parentSessionId || !isTopLevelPostmanLeader(leader) ||
+        typeof leader.followup !== 'function') {
+        job.notification = 'UNDELIVERED'
+        return
+      }
+    } catch (error) {
       job.notification = 'UNDELIVERED'
+      job.notificationDiagnostic = diagnostic(error)
       return
     }
     const text = ['POSTMAN_BRIDGE_READY', 'protocol_version: 1',
@@ -109,13 +123,18 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants) {
       notification: 'PENDING',
     }
     jobs.set(job.bridgeJobId, job)
-    // Attach both handlers immediately. Coordinator holds the active slot through child disposal.
+    // Coordinator holds the active slot only through child disposal, never through grants.
     let admission
-    try { admission = coordinator.run(job.controller.signal, () => lifecycle(job, parent, message)) }
+    try { admission = coordinator.run(job.controller.signal, () => lifecycle(job, message)) }
     catch (error) { admission = Promise.reject(error) }
-    job.completion = admission.then(result => {
+    job.completion = admission.then(async result => {
         job.trustedTerminal = result
         job.requestId = result.requestId ?? job.requestId ?? null
+        // Only a trusted terminal from a fully cleaned child may authorize a grant.
+        if (result.status === 'POSTMAN_BRIDGE_TERMINAL') {
+          try { await grants?.register(job.parentSessionId, result) }
+          catch (error) { job.grantDiagnostic = diagnostic(error) }
+        }
         job.state = result.status === 'POSTMAN_BRIDGE_TERMINAL' ? 'TERMINAL' : 'FAILED'
       }, error => {
         job.state = 'FAILED'
