@@ -18,6 +18,8 @@ Bridge не создаёт третий transport. После child current-turn
 ```text
 Postman Leader
 → postman_bridge(message="@PostmanAsk ..." | "@Postman ...")
+← POSTMAN_BRIDGE_ACCEPTED + bridgeJobId (Leader сразу свободен)
+→ Host job manager / existing Launch Coordinator
 → fresh spawn child
 → fixed gpt-6-luna
 → exact child user/message
@@ -28,7 +30,10 @@ Postman Leader
 → terminal result
 → postman_current_turn_status()
 → bridge host reads the same trusted terminal directly
-→ parent Leader
+→ await run.dispose(); release active slot
+→ Host followup POSTMAN_BRIDGE_READY (только событие)
+→ parent Leader calls postman_bridge_status({bridge_job_id})
+← trusted terminal result
 ```
 
 Child assistant prose не является authority результата.
@@ -78,7 +83,16 @@ Bridge не дублирует transport lifecycle из этих skills.
 ## 6. Trusted result handoff
 
 После settlement child run Bridge host читает `postman_current_turn_status` в scope exact child
-session и возвращает parent-у trusted terminal object.
+session, ждёт полного `run.dispose()` и сохраняет trusted terminal в process-local job registry.
+`postman_bridge` возвращает только admission, не completion: Leader сразу может читать, анализировать
+и вызывать Worker. После Host `leader.followup(POSTMAN_BRIDGE_READY)` Leader вызывает
+`postman_bridge_status({bridge_job_id})`. READY не содержит assistantText/ZIP и не является authority.
+Status доступен только точной исходной top-level Leader session; другой Leader/Bridge/Worker
+не может прочитать job. При недоставленном READY terminal остаётся доступным по сохранённому ID.
+Registry и wakeup state живут лишь в памяти plugin: перезапуск Host во время Bridge может потерять
+отображение job; durable Direct Postman result хранится отдельно. Сигнал job — собственный
+AbortController, а не exec.signal завершившегося вызова. Остановка plugin отменяет очередь,
+посылает abort работающим jobs и ждёт очистки; terminal хранится до dispose plugin.
 
 Это специально не зависит от того, как Luna сформулировала final assistant message.
 
@@ -90,14 +104,14 @@ deliveryMode=inline
 → terminal содержит assistantText
 → child вызывает postman_ask_validate_reply
 → EXACT_REPLY_MATCH разрешает exact child final reply
-→ parent Leader получает тот же trusted terminal напрямую
+→ parent Leader получает тот же trusted terminal через postman_bridge_status
 
 deliveryMode=file
 → terminal не содержит assistantText
 → terminal содержит проверенный resultFile descriptor
 → child НЕ вызывает `postman_ask_validate_reply`
 → child НЕ читает/не реконструирует resultFile
-→ bridge host возвращает descriptor parent Leader напрямую
+→ bridge host сохраняет descriptor для parent Leader; status tool возвращает его напрямую
 ```
 
 Parent Leader для `inline` может анализировать/суммировать `assistantText`. Для `file` он
@@ -122,7 +136,7 @@ call 3 → @Postman --chat REQ_B ...   → REQ_C, same conversation, artifact mo
 выдаётся: решение о следующем шаге принадлежит Leader.
 
 `postman_bridge` помечен штатным `isConcurrencySafe` Harness 0.1.1-rc.2: Leader
-может в одном ходе запланировать до трёх независимых вызовов. Один Host-side
+может в одном ходе принять несколько независимых заданий и продолжить работу без ожидания Web. Один Host-side
 координатор на жизненный цикл plugin допускает максимум три active Bridge: место
 занято от фактического запуска child до terminal и завершения cleanup. Первый
 запуск после полного простоя немедленный, следующие идут FIFO с независимой
@@ -155,6 +169,7 @@ skill
 web_fetch
 web_search
 postman_bridge
+postman_bridge_status
 postman_worker
 postman_worker_stop
 ```

@@ -8,7 +8,8 @@ import test from 'node:test'
 import { createImplementationArtifactGrants, createImplementationArtifactApplyTool,
   runImplementationPackage, verifiedRepository, IMPLEMENTATION_REPOSITORY } from './implementation-artifact.js'
 import { createPostmanWorkerTools } from './postman-worker.js'
-import { createPostmanBridgeTool } from './postman-bridge.js'
+import { createPostmanBridgeTool, createPostmanBridgeStatusTool } from './postman-bridge.js'
+import { createPostmanBridgeJobs } from './postman-bridge-jobs.js'
 
 const REQ = 'REQ_20260925T112233Z_1234'
 const SIGNAL = new AbortController().signal
@@ -68,6 +69,7 @@ test('Bridge grant comes only from exact child-scoped status, not child prose', 
   const parent = leader('A')
   const child = { id: 'bridge-child' }
   const ctx = {
+    agents: { get: id => id === parent.id ? parent : undefined },
     subagents: { async start() { return { id: child.id, localAgent: child,
       result: Promise.resolve({ stopReason: 'end_turn', diagnostic: 'untrusted child text' }),
       async dispose() {} } } },
@@ -75,10 +77,17 @@ test('Bridge grant comes only from exact child-scoped status, not child prose', 
       return { async execute() { return { status: 'COMPLETED', requestId: REQ, result: terminal.result } } }
     } },
   }
-  const bridge = createPostmanBridgeTool(ctx, { run: (_signal, launch) => launch() }, grants)
-  const handoff = await bridge.execute({ message: '@Postman make package' }, { agent: parent, signal: SIGNAL })
+  parent.followup = () => {}
+  const jobs = createPostmanBridgeJobs(ctx, { run: (_signal, launch) => Promise.resolve().then(launch), dispose() {} }, grants)
+  const bridge = createPostmanBridgeTool(ctx, jobs)
+  const accepted = await bridge.execute({ message: '@Postman make package' }, { agent: parent, signal: SIGNAL })
+  assert.equal(accepted.status, 'POSTMAN_BRIDGE_ACCEPTED')
+  await new Promise(resolve => setImmediate(resolve))
+  const handoff = await createPostmanBridgeStatusTool(ctx, jobs).execute({ bridge_job_id: accepted.bridgeJobId }, { agent: parent })
   assert.equal(handoff.childSessionId, child.id)
+  assert.equal(handoff.result, terminal.result)
   assert.equal((await grants.resolve('A', REQ)).resultZip, terminal.result.resultZip)
+  await jobs.dispose()
   assert.equal(await grants.resolve(child.id, REQ), null)
 })
 
