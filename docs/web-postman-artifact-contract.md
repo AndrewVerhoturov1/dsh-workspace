@@ -210,13 +210,13 @@ Postman должен:
 
 Для implementation package ChatGPT Web готовит декларативный ZIP по `REPO_POLICY.md`, `system/implementation-package-workflow.md` и `system/implementation-package-authoring.md`: `manifest.json`, Git-generated `changes.patch`, `README.md`, `TEST_PLAN.md`, необходимые targeted tests и, если новые repository-owned файлы иначе игнорируются Git, узкое исключение `.gitignore` в том же patch. Transport не проверяет эти package-specific требования: trusted `RESULT_DURABLE` доказывает происхождение и целостность ZIP, но не пригодность его к применению.
 
-В supervisor flow Sol отдельно решает, передавать ли exact `resultZip` тому же продолжаемому локальному Worker. Тот создаёт отдельный clean task worktree/branch и вызывает существующий `system/implementation_package_runner.py`; PASS сопровождается отчётом без автоматической публикации, FAIL — диагностикой без ручного ремонта. Ни новый runner, ни модель grants, ни обязательный merge здесь не вводятся.
+На downstream boundary trusted `RESULT_DURABLE` доказывает происхождение и целостность exact ZIP. После этого Host может сохранить его вместе с SHA-256 как process-local trusted artifact для точной сессии Leader и REQ. Sol отдельно решает использовать этот REQ через `postman_worker({task, artifactRequestId})`; Worker не получает model-authored filesystem path. При вызове `implementation_artifact_apply({requestId, worktree})` Host разрешает REQ в сохранённый ZIP, повторно проверяет SHA-256 и передаёт его существующему repository runner. Это не требование к universal ZIP иметь manifest или implementation schema, не автоматическое применение и не merge.
 
 ## 11. Что transport не делает
 
 Direct/Web Postman transport не должен:
 
-- выбирать требования или архитектуру вместо внешней модели;
+- выбирать требования или архитектуру вместо Sol и внешней модели в пределах их ответственности;
 - менять пользовательское намерение;
 - применять скачанный ZIP напрямую поверх repository без downstream workflow;
 - выбирать artifact только по времени появления;

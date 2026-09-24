@@ -2,7 +2,7 @@
 
 id: postman
 status: active
-updated: 2026-09-24
+updated: 2026-09-25
 
 ## Goal
 
@@ -14,7 +14,7 @@ Production transport имеет два explicit user-facing режима пов�
 
 ## Next step
 
-Проверить передачу декларативного ZIP из trusted RESULT_DURABLE в того же продолжаемого Worker и вызов существующего central runner в отдельном clean task worktree. Живое Web-испытание проводить отдельно от задачи реализации.
+LIVE E2E: Web implementation ZIP → RESULT_DURABLE → Host grant → Sol authorization → same continuable Worker → clean worktree → implementation_artifact_apply → existing runner → Worker report. Код этого пути реализован и проверен локальными тестами; текущий Host ещё не доказал загрузку изменённого plugin, поэтому живой Web-путь остаётся отдельной проверкой.
 
 ## Boundaries
 
@@ -68,7 +68,7 @@ Production transport имеет два explicit user-facing режима пов�
 - Manual `@Postman --chat <old REQ> <intent>` / `@PostmanAsk --chat <old REQ> <intent>` используют exact сохранённый conversation; automatic continuation остаётся artifact-only.
 - Automatic continuation использует explicit `-AutomaticContinuation`, не имеет hard cap и монотонно увеличивает `continuationIndex`.
 - `POSTMAN_TRANSPORT_FAILED` автоматически не продолжается.
-- Normal Postman transport универсален: безопасный ZIP и trusted `RESULT_DURABLE` подтверждают происхождение, целостность и сохранность, но не пригодность patch и не разрешение на применение. Sol отдельно принимает решение передать пакет локальному Worker.
-- Для implementation ZIP ChatGPT Web следует `REPO_POLICY.md`, `system/implementation-package-workflow.md` и `system/implementation-package-authoring.md`: `manifest.json`, Git-generated `changes.patch`, `README.md`, `TEST_PLAN.md`, только относящиеся к изменению тесты и узкое исключение `.gitignore` в том же patch для иначе игнорируемых новых файлов. Собственного runner или модели grants пакет не приносит.
-- Тот же continuable Worker после поручения Sol создаёт отдельные clean task branch/worktree от актуального `origin/preview` и вызывает существующий `system/implementation_package_runner.py`. На PASS сообщает результат и затронутые пути, но не публикует автоматически; на FAIL передаёт диагностику без ручного ремонта. Дальнейшая публикация — отдельное разрешённое действие согласно `REPO_POLICY.md`; merge не обязателен и требует отдельной команды.
+- Normal Postman transport универсален: безопасный ZIP и trusted `RESULT_DURABLE` подтверждают происхождение, целостность и сохранность, но не пригодность patch и не разрешение на применение. На downstream boundary Host создаёт process-local grant по exact Leader session + REQ для trusted ZIP/SHA; Sol отдельно авторизует REQ через `postman_worker({task, artifactRequestId})`.
+- Для implementation ZIP ChatGPT Web следует `REPO_POLICY.md`, `system/implementation-package-workflow.md` и `system/implementation-package-authoring.md`: `manifest.json`, Git-generated `changes.patch`, `README.md`, `TEST_PLAN.md`, только относящиеся к изменению тесты и узкое исключение `.gitignore` в том же patch для иначе игнорируемых новых файлов. Пакет не приносит собственного runner или grant-механизма: process-local Host grant принадлежит downstream orchestration.
+- Тот же continuable Worker получает trusted REQ, не model-authored ZIP path, создаёт отдельные clean task branch/worktree от актуального `origin/preview` и вызывает `implementation_artifact_apply({requestId, worktree})`. Host проверяет caller и SHA-256, подставляет сохранённый exact ZIP и запускает существующий `system/implementation_package_runner.py`. Worker проверяет результат и сообщает через `report` (приём задания — не завершение). На PASS сообщает результат и затронутые пути, но не публикует автоматически; на FAIL передаёт диагностику без ручного ремонта. Sol выбирает дальнейший шаг. Worker остаётся обычным coding-agent с shell: граница запрещает не все самостоятельные локальные запуски, а доступ неавторизованного Worker к trusted grant/tool. Публикация — отдельное действие согласно `REPO_POLICY.md`; merge требует отдельной команды.
 - Normal Postman не выполняет automatic Result Workspace registration и сам не переходит к Git integration или merge.

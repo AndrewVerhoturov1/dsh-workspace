@@ -29,15 +29,14 @@ system/implementation_package_runner.py
 
 Короткое распределение ответственности:
 
-- внешняя модель проектирует и готовит patch + manifest + нужные тесты;
-- локальный агент создаёт отдельный clean implementation branch/worktree и запускает
-  центральный runner;
+- Sol задаёт intent, существенные архитектурные решения и ограничения; ChatGPT Web исследует код, реализует замысел в этих границах и готовит patch + manifest + нужные тесты;
+- после trusted `RESULT_DURABLE` Host хранит process-local grant по `(Leader session, REQ)` для exact ZIP/SHA; Sol отдельно авторизует REQ через `postman_worker({task, artifactRequestId})`; Worker создаёт отдельный clean implementation branch/worktree и вызывает `implementation_artifact_apply({requestId, worktree})`, а Host запускает центральный runner;
 - hard FAIL ограничены реальными рисками: wrong repo/protected worktree, dirty target,
   unsafe local-data path, реально неприменимый patch, patch-created ignored file или failing
   targeted test;
 - сдвиг `preview`, exact source SHA, exact changed-file inventory и `git diff --check`
   сами по себе не являются blocker, если patch применяется и целевые тесты проходят;
-- PASS runner-а сначала означает отчёт о проверке, а не автоматическое разрешение публиковать полученный ZIP; при отдельном решении Sol о публикации локальный агент выполняет commit/push/PR в `preview` по обычной policy;
+- PASS runner-а сначала означает отчёт Worker о проверке, а не автоматическое разрешение публиковать применённые изменения; при отдельном решении Sol о публикации Worker выполняет commit/push/PR в `preview` по обычной policy;
 - merge выполняется только после отдельного явного разрешения пользователя.
 
 Локальный агент не ремонтирует несовместимый patch вручную: при hard FAIL runner создаёт

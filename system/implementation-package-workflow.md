@@ -18,9 +18,10 @@ language: ru
 
 Роли:
 
-- **ChatGPT Web / другая внешняя модель** — проектирует решение и готовит декларативный ZIP: `manifest.json`, созданный Git `changes.patch`, `README.md`, `TEST_PLAN.md` и необходимые целевые тесты внутри patch. Web не обязана публиковать изменения в Git или всегда запускать все тесты; фактические проверки указываются честно.
+- **Sol** — задаёт intent, существенные архитектурные решения и ограничения, а после результата отдельно решает, использовать ли REQ.
+- **ChatGPT Web / другая внешняя модель** — исследует код, реализует замысел Sol и принимает необходимые implementation-level решения в заданных границах; готовит декларативный ZIP: `manifest.json`, созданный Git `changes.patch`, `README.md`, `TEST_PLAN.md` и необходимые целевые тесты внутри patch. Web не обязана публиковать изменения в Git или всегда запускать все тесты; фактические проверки указываются честно.
 - **Central implementation package runner** — одинаково для всех пакетов проверяет реальную применимость patch, защищает постоянные worktree/локальные данные, применяет patch, запускает только объявленные targeted tests и создаёт компактную диагностику при FAIL.
-- **Sol / локальный агент** — отдельно решает, применять ли полученный ZIP. При положительном решении поручает тому же продолжаемому Worker создать чистое временное worktree и запустить существующий runner. PASS означает отчёт, FAIL — diagnostics без ручного ремонта. Публикация будущего ZIP требует отдельного решения.
+- **Host / Worker** — после trusted `RESULT_DURABLE` Host сохраняет process-local grant по `(Leader session, REQ)` для exact ZIP/SHA. После отдельного решения Sol допускает REQ через `postman_worker({task, artifactRequestId})`. Тот же продолжаемый Worker создаёт чистое временное worktree и вызывает `implementation_artifact_apply({requestId, worktree})`; Host повторно проверяет SHA и запускает существующий runner. PASS означает `report`, FAIL — diagnostics без ручного ремонта. Публикация применённых изменений требует отдельного решения Sol.
 - **Пользователь** — принимает решение о merge; promotion `preview → main` остаётся отдельным explicit действием.
 
 ## 2. Канонический runner
@@ -31,11 +32,13 @@ language: ru
 system/implementation_package_runner.py
 ```
 
-Обычный запуск внутри отдельного temporary implementation worktree:
+В доверенном Postman flow Worker в отдельном temporary implementation worktree вызывает:
 
 ```text
-python system/implementation_package_runner.py apply <PACKAGE.zip>
+implementation_artifact_apply({requestId: "REQ_...", worktree: "<clean worktree>"})
 ```
+
+Host подставляет сохранённый trusted ZIP из grant и запускает runner с `python -X utf8 system/implementation_package_runner.py apply <trusted ZIP> --repo <clean worktree>`. Указанный путь — внутренний аргумент Host, не выбираемый Worker из задания. Для иных явно разрешённых локальных пакетов прямой запуск runner остаётся возможным.
 
 Опциональный dry-run без записи:
 
@@ -137,7 +140,7 @@ git apply --check changes.patch
 
 ## 6. Отдельное решение Sol и механическая проверка
 
-Sol принимает отдельное смысловое решение о применении будущего ZIP; это не автоматический этап транспорта и не замена механической проверке Git и тестами.
+Sol принимает отдельное смысловое решение о применении trusted REQ для полученного ZIP; это не автоматический этап транспорта и не замена механической проверке Git и тестами.
 
 Обычный порядок:
 
@@ -150,7 +153,7 @@ Sol принимает отдельное смысловое решение о �
 → PASS
 ```
 
-Sol не повторяет работу Git и тестов как дополнительный механический gate. После положительного решения тот же продолжаемый Worker выполняет применение через существующий runner, а не пишет новый.
+Sol не повторяет работу Git и тестов как дополнительный механический gate. После положительного решения тот же продолжаемый Worker вызывает доверенный Host tool с REQ и worktree, а Host запускает существующий runner; нового runner нет.
 
 ## 7. Diagnostics при FAIL
 
@@ -174,7 +177,7 @@ FAIL означает:
 ```text
 STOP
 → diagnostics ZIP
-→ package возвращается модели на исправление
+→ Sol решает: исследовать дальше, запросить новый ZIP у модели или остановиться
 ```
 
 Worker не перепроектирует и не дописывает package вручную; FAIL передаётся как точные diagnostics, без ремонта.
@@ -194,10 +197,12 @@ Implementation package туда не применяется.
 
 ```text
 origin/preview
-→ отдельное решение Sol о применении
+→ trusted RESULT_DURABLE и process-local Host grant для exact Leader session + REQ
+→ отдельное решение Sol: postman_worker({task, artifactRequestId})
 → тот же продолжаемый Worker
 → отдельная временная task branch и чистое временное worktree
-→ central runner apply
+→ implementation_artifact_apply({requestId, worktree})
+→ Host подставляет trusted ZIP, повторно проверяет SHA и запускает central runner apply
 ```
 
 Runner не выполняет `git reset --hard`, `git clean`, auto-stash, force push и не удаляет пользовательские данные.
@@ -228,7 +233,7 @@ Runner не выбирает тесты сам и не вызывает LLM.
 
 Central runner **не делает GitHub writes**.
 
-После `IMPLEMENTATION_PACKAGE_APPLIED` Worker сообщает Sol PASS и точный результат runner-а. Это не разрешение автоматически публиковать будущий ZIP. Если Sol отдельно решит публиковать проверенное изменение, локальный агент выполняет обычный repository lifecycle согласно `REPO_POLICY.md`:
+После `IMPLEMENTATION_PACKAGE_APPLIED` Worker проверяет фактический результат и сообщает Sol PASS и точный результат runner-а через `report`. Это не разрешение автоматически публиковать применённые изменения. Если Sol отдельно решит их публиковать, локальный Worker выполняет обычный repository lifecycle согласно `REPO_POLICY.md`:
 
 ```text
 review git status/diff на уровне задачи

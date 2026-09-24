@@ -24,7 +24,7 @@ Postman Leader
 → trusted terminal returned to parent
 ```
 
-`postman_bridge` не является fallback после Direct failure и не создаёт новый transport.
+`postman_bridge` не является fallback после Direct failure и не создаёт новый transport. Normal ZIP transport остаётся универсальным: implementation schema и `manifest.json` не проверяются на transport boundary.
 
 ```text
 Postman Leader
@@ -92,11 +92,13 @@ Host реестр Worker не восстанавливается (огранич
 
 ## Implementation package: отдельное локальное решение
 
-Normal Direct/Postman Bridge доставляет любой безопасный ZIP; trusted `RESULT_DURABLE` доказывает происхождение, сохранность и целостность exact `resultZip`, но не проверяет его как implementation package и не выдаёт разрешения на применение. Leader (Sol) отдельно решает, поручать ли применение тому же продолжаемому Worker. Это не автоматическое действие transport и не новая модель grants.
+Normal Direct/Postman Bridge доставляет любой безопасный ZIP; implementation schema не проверяется transport-слоем. Только после trusted correlated `RESULT_DURABLE` Host регистрирует process-local grant по `(Leader session, requestId)`, привязывая exact `resultZip` и SHA-256. Grant доказывает происхождение/целостность artifact, но не пригодность implementation package и не разрешение применять его. Это внутреннее trusted binding, а не предоставленный моделью token или постоянная база grants. Leader (Sol) отдельно решает, авторизовать ли применение REQ тем же продолжаемым Worker через `postman_worker({task, artifactRequestId})`.
 
 Для такого поручения ChatGPT Web готовит декларативный ZIP по `REPO_POLICY.md`, `system/implementation-package-workflow.md` и `system/implementation-package-authoring.md`: `manifest.json`, сгенерированный Git `changes.patch`, `README.md`, `TEST_PLAN.md`; относящиеся к изменению тесты и узкие исключения `.gitignore` для иначе игнорируемых новых repository-owned файлов находятся в patch. Пакет не содержит своего applicator/diagnostics framework.
 
-Worker по отдельному заданию создаёт clean task branch/worktree от актуального `origin/preview`, запускает уже существующий `system/implementation_package_runner.py apply <PACKAGE.zip>` и передаёт результат через child-scoped `report`: PASS с путями/проверками без автоматической публикации; FAIL с diagnostics ZIP, без ручного ремонта. Дальнейшая публикация — отдельное действие согласно repository policy; обязательного merge нет. Сам plugin не вводит новый runner и не запускает применение ZIP при transport handoff.
+Зарегистрированный tool `implementation_artifact_apply({requestId, worktree})` предназначен для применения exact Postman artifact: он при исполнении проверяет точного активного Worker и отдельно допущенный REQ, разрешает REQ в сохранённый Host путь ZIP, повторно проверяет SHA-256 и проверяет идентичность Git repository/worktree до вызова уже существующего `system/implementation_package_runner.py`. Путь ZIP не берётся из текста задания, аргументов Worker или ZIP manifest. Runner сам проверяет clean/protected worktree и package, применяет patch, запускает targeted tests и создаёт диагностику.
+
+Worker по отдельному заданию создаёт clean task branch/worktree от актуального `origin/preview`, вызывает tool только с REQ и worktree, проверяет фактический результат и передаёт child-scoped `report`: PASS с путями/проверками без автоматической публикации; FAIL с diagnostics ZIP, без ручного ремонта. `POSTMAN_WORKER_TASK_ACCEPTED` — лишь приём задания. Worker остаётся обычным coding-agent с shell и теоретически может запускать локальные программы сам; гарантия здесь — только допущенный Worker может пользоваться trusted Host grant и этим tool для exact Postman artifact, а не запрет самостоятельного запуска программ. Публикация — отдельное действие согласно repository policy; merge требует отдельной команды. Plugin не вводит новый runner и не запускает применение ZIP при transport handoff.
 
 Harness model routing намеренно находится вне Agent presets. Поэтому для Leader в model selector
 выбирается `GPT-6 Sol`; preset сам модель не переключает. Bridge Luna фиксирована кодом.
