@@ -1,5 +1,6 @@
 export const POSTMAN_BRIDGE_PROVIDER = 'spawn'
 export const POSTMAN_BRIDGE_TOOL_NAME = 'postman_bridge'
+export const POSTMAN_BRIDGE_STATUS_TOOL_NAME = 'postman_bridge_status'
 export const POSTMAN_WORKER_TOOL_NAME = 'postman_worker'
 export const POSTMAN_WORKER_STOP_TOOL_NAME = 'postman_worker_stop'
 export const POSTMAN_BRIDGE_AGENT_OPTIONS = Object.freeze({
@@ -22,11 +23,13 @@ export const POSTMAN_LEADER_TOOL_ALLOWLIST = Object.freeze([
   'web_fetch',
   'web_search',
   POSTMAN_BRIDGE_TOOL_NAME,
+  POSTMAN_BRIDGE_STATUS_TOOL_NAME,
   POSTMAN_WORKER_TOOL_NAME,
   POSTMAN_WORKER_STOP_TOOL_NAME,
 ])
 export const POSTMAN_LEADER_ONLY_TOOL_NAMES = Object.freeze([
   POSTMAN_BRIDGE_TOOL_NAME,
+  POSTMAN_BRIDGE_STATUS_TOOL_NAME,
   POSTMAN_WORKER_TOOL_NAME,
   POSTMAN_WORKER_STOP_TOOL_NAME,
 ])
