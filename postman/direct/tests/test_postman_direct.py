@@ -193,14 +193,15 @@ class DirectPostmanUnitTests(unittest.TestCase):
             @classmethod
             def wait_for_cdp(cls, value, timeout_s=0):
                 cls.calls += 1
-                if cls.calls == 1:
+                if cls.calls <= 2:
                     raise BrowserBootstrapError(cls.BOOTSTRAP_CDP_UNREACHABLE)
                 return {"ready": True}
             @staticmethod
             def discover_chrome_executable(explicit=None): return Path("chrome.exe")
             @staticmethod
             def start_dedicated_chrome(*args, **kwargs): return types.SimpleNamespace(pid=99)
-        result = direct.ensure_dedicated_chrome(bootstrap_module=Boot)
+        with tempfile.TemporaryDirectory() as root:
+            result = direct.ensure_dedicated_chrome(bootstrap_module=Boot, profile_dir=Path(root) / "profile")
         self.assertTrue(result["launched"])
         self.assertFalse(result["reused"])
         self.assertEqual(result["pid"], 99)

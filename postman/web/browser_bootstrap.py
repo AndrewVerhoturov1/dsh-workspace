@@ -202,8 +202,8 @@ def start_dedicated_chrome(
     profile.mkdir(parents=True, exist_ok=True)
     command = build_chrome_command(executable, profile, port=port, initial_url=initial_url)
     kwargs: dict[str, Any] = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
-    if os.name == "nt" and hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
-        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    if os.name == "nt":
+        kwargs["creationflags"] = (subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW)
     return popen(command, **kwargs)
 
 
