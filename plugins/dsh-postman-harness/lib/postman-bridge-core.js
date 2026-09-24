@@ -1,6 +1,7 @@
 export const POSTMAN_BRIDGE_PROVIDER = 'spawn'
 export const POSTMAN_BRIDGE_TOOL_NAME = 'postman_bridge'
-export const POSTMAN_WORKER_SCOPE_PROBE_TOOL_NAME = 'postman_worker_scope_probe'
+export const POSTMAN_WORKER_TOOL_NAME = 'postman_worker'
+export const POSTMAN_WORKER_STOP_TOOL_NAME = 'postman_worker_stop'
 export const POSTMAN_BRIDGE_AGENT_OPTIONS = Object.freeze({
   provider: 'codex',
   model: 'gpt-6-luna',
@@ -21,11 +22,13 @@ export const POSTMAN_LEADER_TOOL_ALLOWLIST = Object.freeze([
   'web_fetch',
   'web_search',
   POSTMAN_BRIDGE_TOOL_NAME,
-  POSTMAN_WORKER_SCOPE_PROBE_TOOL_NAME,
+  POSTMAN_WORKER_TOOL_NAME,
+  POSTMAN_WORKER_STOP_TOOL_NAME,
 ])
 export const POSTMAN_LEADER_ONLY_TOOL_NAMES = Object.freeze([
   POSTMAN_BRIDGE_TOOL_NAME,
-  POSTMAN_WORKER_SCOPE_PROBE_TOOL_NAME,
+  POSTMAN_WORKER_TOOL_NAME,
+  POSTMAN_WORKER_STOP_TOOL_NAME,
 ])
 
 export const POSTMAN_BRIDGE_PERSONA = `You are Postman Bridge, a minimal one-shot transport subagent.
@@ -71,10 +74,6 @@ export function isTopLevelPostmanLeader(agent) {
 }
 
 export function postmanBridgeCallerAllowed(agent) {
-  return isTopLevelPostmanLeader(agent)
-}
-
-export function postmanWorkerScopeProbeCallerAllowed(agent) {
   return isTopLevelPostmanLeader(agent)
 }
 

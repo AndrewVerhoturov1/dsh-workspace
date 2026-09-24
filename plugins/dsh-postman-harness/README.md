@@ -13,7 +13,7 @@ exact current @Postman / @PostmanAsk
 → existing Direct Postman wrappers
 ```
 
-и отдельной supervisor capability:
+и двумя отдельными supervisor capabilities:
 
 ```text
 Postman Leader
@@ -25,6 +25,14 @@ Postman Leader
 ```
 
 `postman_bridge` не является fallback после Direct failure и не создаёт новый transport.
+
+```text
+Postman Leader
+→ postman_worker({ task })
+→ continuable spawn codex / gpt-6-luna child
+→ локальные инструменты общего preset
+→ child-scoped report в точную Leader session
+```
 
 ## Postman Bridge
 
@@ -60,14 +68,24 @@ child scope. Child assistant prose не используется как result a
 `.agent-presets/postman-leader/`. Встроенный `dsh-agent-presets` находит его в
 `$DSH_HOME/.agent-presets`; при проверке отдельного рабочего дерева нужно задать `DSH_HOME`
 на его корень. Runtime boundary оставляет top-level Agent-у только read-only inspection +
-`postman_bridge`:
+`postman_bridge`, `postman_worker`, `postman_worker_stop`:
 
 ```text
-read, glob, grep, skill, web_fetch, web_search, postman_bridge
+read, glob, grep, skill, web_fetch, web_search, postman_bridge, postman_worker, postman_worker_stop
 ```
 
-Любой `origin=subagent` считается non-Leader и получает deny `postman_bridge`; Luna Bridge
+Любой `origin=subagent` считается non-Leader и получает deny всех трёх Leader-only tools. Luna Bridge
 дополнительно получает свой отдельный `toolFilter`, который оставляет только transport tools.
+Worker не имеет собственного списка разрешений: его инструменты приходят из общего preset,
+в том числе read/glob/grep/write/edit, pwsh на Windows (bash на других системах), jobs,
+web search/fetch и обычное делегирование. Модель Worker задаётся отдельно от Bridge.
+
+Host хранит отображение точного Leader session id в durable child session id только в памяти.
+Первое задание запускает `startContinuable`, дальнейшие задания идут через `followup`.
+Ответ `POSTMAN_WORKER_TASK_ACCEPTED` подтверждает только приём, а не выполнение.
+Worker отправляет результат через штатный `report`. `postman_worker_stop` штатно освобождает
+resident Activation и забывает отображение; durable Session не удаляется. После рестарта
+Host реестр Worker не восстанавливается (ограничение MVP).
 
 Harness model routing намеренно находится вне Agent presets. Поэтому для Leader в model selector
 выбирается `GPT-6 Sol`; preset сам модель не переключает. Bridge Luna фиксирована кодом.

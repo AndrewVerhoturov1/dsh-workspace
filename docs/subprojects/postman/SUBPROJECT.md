@@ -2,7 +2,7 @@
 
 id: postman
 status: active
-updated: 2026-09-22
+updated: 2026-09-24
 
 ## Goal
 
@@ -14,13 +14,13 @@ Production transport имеет два explicit user-facing режима пов�
 
 ## Next step
 
-Для каждой следующей Postman-задачи сначала сверять изменение с текущими production invariants и менять только действительно затронутые runtime/docs/tests.
+Проверить MVP продолжаемого локального Worker живым пользовательским испытанием после загрузки изменений; не выполнять живой Web E2E в задаче реализации. Затем отдельно проектировать передачу ZIP и пакетное внедрение.
 
 ## Boundaries
 
 - Этот подпроект не переопределяет `AGENTS.md`, `REPO_POLICY.md`, `.agents/skills/delegate-via-postman/SKILL.md`, `postman/POSTMAN_CURRENT_FLOW.md` или `docs/web-postman-artifact-contract.md`.
 - Normal `@Postman` не распаковывает и не применяет результат, не запускает PREPARE/TEST/PUBLISH, не создаёт implementation branch/worktree/commit/PR и не выполняет merge.
-- `plugins/dsh-postman-harness/` содержит trusted current-turn boundary и Leader-only `postman_bridge`; Bridge не является альтернативным transport/fallback и не доступен обычным Agents.
+- `plugins/dsh-postman-harness/` содержит trusted current-turn boundary, Leader-only `postman_bridge` для Web и независимый Leader-only `postman_worker` для локальной работы; Bridge не является альтернативным transport/fallback и не доступен обычным Agents.
 - Канонические Postman документы остаются на своих текущих путях; подпроект хранит только долговременный контекст и решения.
 
 ## Read first
@@ -52,7 +52,8 @@ Production transport имеет два explicit user-facing режима пов�
 - `@Postman` — explicit artifact/ZIP production trigger; entrypoint — `postman/direct/postman.ps1`.
 - `@PostmanAsk` — отдельный explicit text production trigger; entrypoint — `postman/direct/postman-ask.ps1`.
 - `postman_bridge` — отдельная supervisor capability только для top-level `postman-leader`; обычные root/subagent Agents получают runtime deny, execute path повторно проверяет caller fail-closed, а blank-session `agent-preset/selected` заменяет старый restriction на restriction текущей live composition.
-- Supervisor delegation создаёт fresh one-shot `codex / gpt-6-luna` child с `maxDepth = 1` и узким transport-only toolFilter; follow-up, mode и continuation выбирает parent Leader.
+- Bridge delegation создаёт fresh one-shot `codex / gpt-6-luna` child с `maxDepth = 1` и узким transport-only toolFilter; follow-up, mode и continuation Web-запроса выбирает parent Leader.
+- Локальный Worker — обычный continuable `spawn` child `codex / gpt-6-luna`, с отдельной константой модели и без собственного allowlist. Один активный childId на точную Leader session хранится только в памяти host. Повторный task идёт через `followup`; stop освобождает resident Activation, но не удаляет durable Session. Отчёт Worker приходит через штатный child-scoped `report`; admission не означает выполнения.
 - Authority supervisor result — trusted Direct terminal из exact child scope, а не Luna prose. Для text terminal parent Leader ветвится по `deliveryMode`: `inline` анализирует `assistantText`, `file` использует verified `resultFile` descriptor и при необходимости читает exact Markdown выборочно через свои `read`/`grep`; Bridge child файл не rehydrate-ит.
 - Agent presets не владеют model routing; для роли Leader `GPT-6 Sol` выбирается отдельно в model selector, Bridge Luna остаётся hard-fixed.
 - Оба режима используют один trusted `postman_send_current_turn()` без text arguments; Harness сам различает exact current-message trigger и сохраняет exact payload.
