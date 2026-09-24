@@ -6,7 +6,7 @@ language: ru
 
 ## 1. Назначение
 
-Этот документ задаёт канонические правила подготовки implementation package внешней моделью для репозитория `AndrewVerhoturov1/dsh-workspace`.
+Этот документ прежде всего обращён к ChatGPT Web, который готовит implementation ZIP для репозитория `AndrewVerhoturov1/dsh-workspace`.
 
 Он применяется вместе с:
 
@@ -21,7 +21,7 @@ system/implementation_package_runner.py
 
 Главный принцип:
 
-> Внешняя модель владеет содержимым изменения. Центральный runner владеет применением, механической безопасностью и диагностикой. Luna владеет локальным Git lifecycle после PASS.
+> Sol задаёт intent, существенные архитектурные решения и ограничения. ChatGPT Web исследует код, реализует замысел в этих границах и готовит декларативный ZIP. Sol отдельно решает, авторизовать ли trusted REQ; тот же продолжаемый Worker создаёт чистое временное worktree и вызывает `implementation_artifact_apply({requestId, worktree})`. Host разрешает REQ в exact ZIP, повторно проверяет SHA-256 и запускает существующий runner. Публикация применённых изменений — отдельное решение, не следствие PASS.
 
 Внешняя модель не создаёт новый applicator, diagnostics framework или Git workflow для каждого ZIP.
 
@@ -31,24 +31,24 @@ system/implementation_package_runner.py
 
 ### 2.1. Внешняя модель
 
-Внешняя модель обязана самостоятельно:
+Sol до делегирования формулирует intent, существенные архитектурные решения и ограничения. ChatGPT Web не выбирает всю архитектуру независимо от Sol: он обязан в заданных границах самостоятельно:
 
 1. изучить актуальное состояние задачи и затрагиваемого кода;
-2. спроектировать решение;
+2. принять необходимые implementation-level решения для реализации замысла Sol;
 3. подготовить все продуктовые изменения;
 4. подготовить необходимые targeted/regression tests;
 5. сформировать корректный Git patch;
 6. сформировать `manifest.json`;
 7. подготовить короткие `README.md` и `TEST_PLAN.md`;
 8. проверить package настолько полно, насколько позволяет среда;
-9. передать пользователю готовый ZIP и короткий текст для Luna.
+9. передать готовый ZIP и SHA-256 через обычный Postman transport. Web не выбирает локальный trusted ZIP path: Postman/Host сохраняет и связывает его с REQ. Web не обязана публиковать Git-изменения или всегда запускать все тесты; она честно перечисляет фактически выполненные проверки.
 
-Модель не перекладывает на Luna:
+Модель не перекладывает на Worker:
 
-- проектирование;
+- самостоятельное изменение заданной Sol архитектуры;
 - написание недостающего кода;
 - исправление patch;
-- выбор архитектуры;
+- принятие архитектурных решений вместо Sol;
 - адаптацию package после FAIL;
 - создание дополнительных файлов, которые должны были находиться в package;
 - ручное исправление `.gitignore` после применения package.
@@ -69,15 +69,9 @@ Runner:
 
 Runner не проектирует решение и не вызывает LLM.
 
-### 2.3. Luna
+### 2.3. Sol и продолжаемый Worker
 
-Luna:
-
-- создаёт clean temporary worktree/branch;
-- запускает центральный runner;
-- не ремонтирует package;
-- после PASS делает staging, commit, push и PR;
-- не выполняет merge без отдельного разрешения пользователя.
+Sol принимает отдельное решение о применении trusted REQ, уже связанного Host с exact ZIP/SHA после `RESULT_DURABLE`. Через `postman_worker({task, artifactRequestId})` Sol авторизует того же продолжаемого Worker. Worker получает REQ без model-authored ZIP path, создаёт clean temporary worktree и вызывает `implementation_artifact_apply({requestId, worktree})`; Host повторно проверяет SHA и запускает существующий runner. Worker не ремонтирует package: при PASS проверяет результат и отправляет `report`, при FAIL сообщает точные diagnostics. Commit/push/PR применённых изменений допускаются только после отдельного решения о публикации по `REPO_POLICY.md`; merge требует отдельного разрешения пользователя.
 
 ---
 
@@ -104,7 +98,7 @@ PACKAGE.zip
 
 Package не содержит собственного механизма применения.
 
-По умолчанию запрещены:
+По умолчанию запрещены package-local runner, installer и Git publication, в частности:
 
 ```text
 apply_package.py
@@ -154,7 +148,7 @@ ZIP
 ↓
 SHA-256
 ↓
-короткий handoff для Luna
+короткий handoff результата
 ```
 
 ---
@@ -275,7 +269,7 @@ plugins/example/lib/new-file.js
 git add -f ignored-file
 ```
 
-Нельзя инструктировать Luna использовать `git add -f`.
+Нельзя инструктировать Worker или локального агента использовать `git add -f`.
 
 Причина: force-add скрывает конфликт repository policy с продуктовыми файлами и позволяет случайно протащить generated/runtime/local data.
 
@@ -313,7 +307,7 @@ PATCH_CREATES_IGNORED_FILE
 
 > Тесты могут видеть файл локально, но обычный Git commit может его потерять.
 
-При этом Luna не чинит `.gitignore` вручную. Package возвращается внешней модели на пересборку.
+При этом Worker не чинит `.gitignore` вручную. Package возвращается внешней модели на пересборку.
 
 ### 7.6. Что не считается ошибкой
 
@@ -457,7 +451,7 @@ targeted tests
 
 Не утверждать в финальном отчёте, что проверка выполнена, если она фактически не запускалась.
 
-Если среда внешней модели не позволяет выполнить Git verification, это нужно честно указать. Luna всё равно выполнит authoritative runner.
+Если среда Web не позволяет выполнить Git verification или все тесты, это нужно честно указать. После отдельного решения Sol тот же продолжаемый Worker выполнит authoritative runner.
 
 Не создавать ради этой проверки новый framework внутри ZIP.
 
@@ -558,18 +552,16 @@ auto-stash
 ```text
 STOP
 ↓
-diagnostics ZIP
+diagnostics ZIP и report Sol
 ↓
-никаких ручных исправлений Luna
+никаких ручных исправлений Worker
 ↓
-package возвращается внешней модели
+Sol решает: исследовать дальше, запросить новый ZIP через Web или остановиться
 ↓
-модель исследует точную ошибку
-↓
-выдаёт новый replacement package
+при запросе нового ZIP Web исследует точную ошибку и выдаёт replacement package
 ```
 
-Нельзя инструктировать Luna:
+Нельзя инструктировать Worker:
 
 ```text
 поправь этот файл вручную
@@ -584,7 +576,7 @@ package возвращается внешней модели
 
 ---
 
-## 18. Publication после PASS
+## 18. Отчёт после PASS и отдельная публикация
 
 После:
 
@@ -592,7 +584,7 @@ package возвращается внешней модели
 IMPLEMENTATION_PACKAGE_APPLIED
 ```
 
-Luna выполняет:
+Worker сначала проверяет фактический результат и сообщает Sol PASS и exact runner result через `report`. Только если Sol отдельно решит публиковать применённые изменения, Worker выполняет обычный Git lifecycle по `REPO_POLICY.md`:
 
 ```text
 взять affectedPaths из exact runner result
@@ -612,11 +604,11 @@ remote verify changed files
 STOP
 ```
 
-`affectedPaths` возвращается runner-ом как список фактически затронутых patch путей. Это publication/staging boundary, а не compatibility gate, expected/exact inventory validation или проверка числа файлов. После PASS Luna staging-ит только эти пути; посторонние untracked/generated файлы, созданные targeted tests, не входят в commit автоматически. При большом списке путей Luna передаёт их Git argv-safe несколькими группами, не собирая shell-строку.
+`affectedPaths` возвращается runner-ом как список фактически затронутых patch путей. Это publication/staging boundary, а не compatibility gate, expected/exact inventory validation или проверка числа файлов. При отдельной публикации агент staging-ит только эти пути; посторонние untracked/generated файлы, созданные targeted tests, не входят в commit автоматически. При большом списке путей агент передаёт их Git argv-safe несколькими группами, не собирая shell-строку.
 
 `git add -f` запрещён.
 
-После push Luna обязана убедиться, что новые файлы, созданные package, реально присутствуют в remote commit/PR. Это publication sanity check, а не exact-file-inventory gate до применения.
+После отдельно разрешённого push агент обязан убедиться, что новые файлы, созданные package, реально присутствуют в remote commit/PR. Это publication sanity check, а не exact-file-inventory gate до применения.
 
 Central runner не делает commit/push/PR сам.
 
@@ -624,9 +616,9 @@ Merge выполняется только после отдельного явн
 
 ---
 
-## 19. Финальная выдача внешней модели
+## 19. Выдача результата внешней модели
 
-После подготовки package внешняя модель должна вернуть пользователю:
+После подготовки package внешняя модель должна передать результат через обычный универсальный Postman transport (не специальный канал применения):
 
 ```text
 1. ZIP
@@ -636,31 +628,23 @@ Merge выполняется только после отдельного явн
    - git apply --check PASS/не запускался
    - ignored-new-file check PASS/не запускался
    - targeted tests PASS/не запускались
-5. короткий текст для Luna
+5. короткое описание для отдельного решения Sol
 ```
 
 Не выдавать пользователю внутренние временные authoring worktree.
 
 ---
 
-## 20. Стандартный handoff для Luna
+## 20. Стандартный handoff для Sol и Worker
 
-Обычный текст должен быть коротким:
+Это описание downstream-действий для понимания границ ответственности, а не инструкция Web искать или передавать локальный путь сохранённого ZIP. Обычный текст должен быть коротким:
 
 ```text
-Примени приложенный implementation ZIP через центральный runner.
+Trusted RESULT_DURABLE доказывает происхождение и целостность exact ZIP, но не качество или разрешение на применение. Host хранит process-local grant для точной сессии Leader и REQ с exact ZIP/SHA. Sol отдельно решает, применять ли REQ, и вызывает postman_worker({task, artifactRequestId: "REQ_..."}). Тот же продолжаемый Worker создаёт clean temporary worktree от актуального origin/preview и вызывает implementation_artifact_apply({requestId: "REQ_...", worktree: "<clean worktree>"}). Host повторно проверяет SHA, сам подставляет trusted ZIP и запускает существующий runner. Web не выбирает локальный путь ZIP, Worker не извлекает его из текста задания. Ничего в package вручную не исправляй и не добавляй дополнительные compatibility gates.
 
-Создай отдельный clean temporary branch/worktree от актуального origin/preview и выполни:
+При FAIL остановись и верни exact stage/error и diagnostics ZIP, ничего не ремонтируя.
 
-python system/implementation_package_runner.py apply <PACKAGE.zip>
-
-Ничего в package вручную не исправляй и не добавляй дополнительные compatibility gates.
-
-При FAIL остановись и верни exact stage/error и diagnostics ZIP.
-
-При PASS возьми `affectedPaths` из exact runner result и выполни `git add -A -- <affectedPaths>`, затем commit, push, verify remote SHA и создай/обнови PR в preview.
-
-После push проверь, что новые package-created файлы действительно присутствуют в remote commit/PR.
+При PASS верни отчёт и exact runner result; не публикуй автоматически. Только после отдельного решения о публикации возьми `affectedPaths` из exact runner result, выполни `git add -A -- <affectedPaths>`, затем commit, push, verify remote SHA и создай/обнови PR в preview. После push проверь наличие новых package-created файлов в remote commit/PR.
 
 Не используй git add -f.
 
@@ -704,7 +688,7 @@ ZIP
 ## 22. Golden path целиком
 
 ```text
-ВНЕШНЯЯ МОДЕЛЬ
+CHATGPT WEB / ВНЕШНЯЯ МОДЕЛЬ
 
 актуальный preview
 → понять задачу
@@ -722,19 +706,25 @@ ZIP
 → ZIP + SHA-256
 
 
-LUNA
+SOL И ТОТ ЖЕ ПРОДОЛЖАЕМЫЙ WORKER
 
-fetch current preview
-→ temporary clean branch/worktree
-→ central runner apply
+trusted RESULT_DURABLE + Host grant по Leader session/REQ для exact ZIP/SHA: только provenance/integrity
+→ отдельное решение Sol о применении REQ
+→ postman_worker({task, artifactRequestId: "REQ_..."})
+→ тот же Worker: fetch current preview
+→ clean temporary worktree
+→ implementation_artifact_apply({requestId: "REQ_...", worktree: "<clean worktree>"})
+→ Host проверяет SHA и запускает existing central runner apply
     → repository safety
     → git apply --check
     → protected paths
     → git apply
     → reject ignored patch-created files
     → targeted tests
-→ FAIL: diagnostics + STOP
-→ PASS: взять affectedPaths из runner result
+→ FAIL: diagnostics + STOP, без ремонта
+→ PASS: отчёт Sol, без автоматической публикации
+→ только при отдельном решении Sol о публикации применённых изменений
+→ взять affectedPaths из runner result
 → git add -A -- <affectedPaths>
 → commit
 → push
@@ -768,6 +758,6 @@ review
 
 > Diagnostics принадлежат центральному runner-у.
 
-> Luna механически применяет package и не ремонтирует его.
+> Sol отдельно решает о применении; тот же продолжаемый Worker механически применяет package и не ремонтирует его.
 
 > Строгий к опасным операциям, мягкий к совместимости.

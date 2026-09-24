@@ -18,9 +18,10 @@ language: ru
 
 Роли:
 
-- **ChatGPT / другая внешняя модель** — проектирует решение, готовит `changes.patch`, manifest и при необходимости новые regression tests внутри patch.
+- **Sol** — задаёт intent, существенные архитектурные решения и ограничения, а после результата отдельно решает, использовать ли REQ.
+- **ChatGPT Web / другая внешняя модель** — исследует код, реализует замысел Sol и принимает необходимые implementation-level решения в заданных границах; готовит декларативный ZIP: `manifest.json`, созданный Git `changes.patch`, `README.md`, `TEST_PLAN.md` и необходимые целевые тесты внутри patch. Web не обязана публиковать изменения в Git или всегда запускать все тесты; фактические проверки указываются честно.
 - **Central implementation package runner** — одинаково для всех пакетов проверяет реальную применимость patch, защищает постоянные worktree/локальные данные, применяет patch, запускает только объявленные targeted tests и создаёт компактную диагностику при FAIL.
-- **Luna / локальный агент** — создаёт отдельный clean implementation worktree, запускает центральный runner, а после PASS делает commit/push/PR. Она не чинит package вручную.
+- **Host / Worker** — после trusted `RESULT_DURABLE` Host сохраняет process-local grant по `(Leader session, REQ)` для exact ZIP/SHA. После отдельного решения Sol допускает REQ через `postman_worker({task, artifactRequestId})`. Тот же продолжаемый Worker создаёт чистое временное worktree и вызывает `implementation_artifact_apply({requestId, worktree})`; Host повторно проверяет SHA и запускает существующий runner. PASS означает `report`, FAIL — diagnostics без ручного ремонта. Публикация применённых изменений требует отдельного решения Sol.
 - **Пользователь** — принимает решение о merge; promotion `preview → main` остаётся отдельным explicit действием.
 
 ## 2. Канонический runner
@@ -31,11 +32,13 @@ language: ru
 system/implementation_package_runner.py
 ```
 
-Обычный запуск внутри отдельного temporary implementation worktree:
+В доверенном Postman flow Worker в отдельном temporary implementation worktree вызывает:
 
 ```text
-python system/implementation_package_runner.py apply <PACKAGE.zip>
+implementation_artifact_apply({requestId: "REQ_...", worktree: "<clean worktree>"})
 ```
+
+Host подставляет сохранённый trusted ZIP из grant и запускает runner с `python -X utf8 system/implementation_package_runner.py apply <trusted ZIP> --repo <clean worktree>`. Указанный путь — внутренний аргумент Host, не выбираемый Worker из задания. Для иных явно разрешённых локальных пакетов прямой запуск runner остаётся возможным.
 
 Опциональный dry-run без записи:
 
@@ -53,11 +56,11 @@ python system/implementation_package_runner.py check <PACKAGE.zip>
 PACKAGE.zip
 ├─ manifest.json
 ├─ changes.patch
-├─ README.md       # optional, для человека
-└─ TEST_PLAN.md    # optional, для человека
+├─ README.md
+└─ TEST_PLAN.md
 ```
 
-Никакого package-local `apply_package.py`, `run_package.py`, собственного Git workflow или собственного diagnostics framework по умолчанию нет.
+Никакого package-local runner, installer, `apply_package.py`, `run_package.py`, собственного Git workflow, diagnostics framework или Git publication нет.
 
 Все repository changes, включая новые файлы и новые тесты, входят в `changes.patch`.
 
@@ -135,9 +138,9 @@ git apply --check changes.patch
 
 Если Git может применить patch и targeted tests проходят, обычный runner не придумывает дополнительные причины остановиться.
 
-## 6. Почему не нужен постоянный Sol-validator
+## 6. Отдельное решение Sol и механическая проверка
 
-LLM-review может быть полезен для архитектуры, но не является каноническим механическим gate.
+Sol принимает отдельное смысловое решение о применении trusted REQ для полученного ZIP; это не автоматический этап транспорта и не замена механической проверке Git и тестами.
 
 Обычный порядок:
 
@@ -150,7 +153,7 @@ LLM-review может быть полезен для архитектуры, н�
 → PASS
 ```
 
-Sol/другая сильная модель нужна только когда есть реальный смысловой blocker или непонятный FAIL. Не нужно тратить сильную модель на постоянное повторение работы Git и тестов.
+Sol не повторяет работу Git и тестов как дополнительный механический gate. После положительного решения тот же продолжаемый Worker вызывает доверенный Host tool с REQ и worktree, а Host запускает существующий runner; нового runner нет.
 
 ## 7. Diagnostics при FAIL
 
@@ -174,10 +177,10 @@ FAIL означает:
 ```text
 STOP
 → diagnostics ZIP
-→ package возвращается модели на исправление
+→ Sol решает: исследовать дальше, запросить новый ZIP у модели или остановиться
 ```
 
-Локальный агент не перепроектирует и не дописывает package вручную.
+Worker не перепроектирует и не дописывает package вручную; FAIL передаётся как точные diagnostics, без ремонта.
 
 ## 8. Работа с worktree
 
@@ -194,9 +197,12 @@ Implementation package туда не применяется.
 
 ```text
 origin/preview
-→ отдельная temporary task branch
-→ отдельный clean worktree
-→ central runner apply
+→ trusted RESULT_DURABLE и process-local Host grant для exact Leader session + REQ
+→ отдельное решение Sol: postman_worker({task, artifactRequestId})
+→ тот же продолжаемый Worker
+→ отдельная временная task branch и чистое временное worktree
+→ implementation_artifact_apply({requestId, worktree})
+→ Host подставляет trusted ZIP, повторно проверяет SHA и запускает central runner apply
 ```
 
 Runner не выполняет `git reset --hard`, `git clean`, auto-stash, force push и не удаляет пользовательские данные.
@@ -223,11 +229,11 @@ syntax/compile, если нужен конкретному изменению
 
 Runner не выбирает тесты сам и не вызывает LLM.
 
-## 10. Publication после PASS
+## 10. Отчёт после PASS и отдельная публикация
 
 Central runner **не делает GitHub writes**.
 
-После `IMPLEMENTATION_PACKAGE_APPLIED` локальный агент выполняет обычный repository lifecycle:
+После `IMPLEMENTATION_PACKAGE_APPLIED` Worker проверяет фактический результат и сообщает Sol PASS и точный результат runner-а через `report`. Это не разрешение автоматически публиковать применённые изменения. Если Sol отдельно решит их публиковать, локальный Worker выполняет обычный repository lifecycle согласно `REPO_POLICY.md`:
 
 ```text
 review git status/diff на уровне задачи
@@ -245,7 +251,7 @@ review git status/diff на уровне задачи
 
 Merge — только после отдельного решения пользователя.
 
-Runner не выполняет commit/push/PR, чтобы application и публикация оставались разными границами ответственности.
+Runner не выполняет commit/push/PR, чтобы application и публикация оставались разными границами ответственности. Normal Postman transport универсален и лишь доставляет результат; он не создаёт worktree/ветку и не запускает runner или публикацию. Trusted `RESULT_DURABLE` с exact ZIP/SHA подтверждает только происхождение и целостность полученного файла, но не его применимость, качество, разрешение на применение или публикацию.
 
 ## 11. Что модель должна выдавать после внедрения этой системы
 
@@ -253,8 +259,9 @@ Runner не выполняет commit/push/PR, чтобы application и пуб�
 
 ```text
 manifest.json
-changes.patch
-README.md / TEST_PLAN.md при необходимости
+Git-generated changes.patch
+README.md
+TEST_PLAN.md
 ```
 
 Перед выдачей желательно локально/в sandbox проверить, что patch синтаксически валиден. Но package не должен содержать очередной новый framework проверки.

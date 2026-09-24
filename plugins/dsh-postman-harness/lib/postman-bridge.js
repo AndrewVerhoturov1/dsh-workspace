@@ -1,6 +1,7 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { parsePostmanUserTurn } from './direct-current-turn.js'
 import { createPostmanWorkerTools } from './postman-worker.js'
+import { createImplementationArtifactGrants, createImplementationArtifactApplyTool } from './implementation-artifact.js'
 import { createPostmanBridgeLaunchCoordinator } from './postman-bridge-launch-coordinator.js'
 import {
   POSTMAN_BRIDGE_PROVIDER,
@@ -56,7 +57,7 @@ async function trustedStatusReader(ctx, child, signal) {
   return statusTool.execute({}, { agent: child, signal })
 }
 
-export function createPostmanBridgeTool(ctx, coordinator) {
+export function createPostmanBridgeTool(ctx, coordinator, grants) {
   if (typeof coordinator?.run !== 'function') throw new Error('POSTMAN_BRIDGE_COORDINATOR_REQUIRED')
   return defineTool({
     name: POSTMAN_BRIDGE_TOOL_NAME,
@@ -133,9 +134,11 @@ export function createPostmanBridgeTool(ctx, coordinator) {
             () => trustedStatusReader(ctx, child, exec.signal),
             exec.signal,
           )
+          const terminal = { ...trusted, transportKind: parsed.transportKind }
+          // Only the trusted child-scoped Direct terminal can create a session grant.
+          await grants?.register(parent.id, terminal)
           return {
-            ...trusted,
-            transportKind: parsed.transportKind,
+            ...terminal,
             childSessionId: String(run.id),
             bridgeProvider: POSTMAN_BRIDGE_AGENT_OPTIONS.provider,
             bridgeModel: POSTMAN_BRIDGE_AGENT_OPTIONS.model,
@@ -164,11 +167,13 @@ export function installPostmanLeaderBoundary(agent) {
 
 export function apply(ctx) {
   const coordinator = createPostmanBridgeLaunchCoordinator()
-  ctx.tools.register(createPostmanBridgeTool(ctx, coordinator))
+  const grants = createImplementationArtifactGrants()
+  ctx.tools.register(createPostmanBridgeTool(ctx, coordinator, grants))
   ctx.effect(() => () => coordinator.dispose(), 'dsh-postman-harness-bridge.launch-coordinator()')
-  const worker = createPostmanWorkerTools(ctx)
+  const worker = createPostmanWorkerTools(ctx, grants)
   ctx.tools.register(worker.taskTool)
   ctx.tools.register(worker.stopTool)
+  ctx.tools.register(createImplementationArtifactApplyTool(ctx, grants, worker))
   ctx.effect(() => () => worker.dispose(), 'dsh-postman-harness-bridge.worker-mapping()')
 
   const boundaries = createPostmanBridgeBoundaryManager(sessionId => ctx.agents.get(sessionId))

@@ -1,4 +1,5 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { IMPLEMENTATION_REPOSITORY } from './implementation-artifact.js'
 import {
   POSTMAN_WORKER_TOOL_NAME,
   POSTMAN_WORKER_STOP_TOOL_NAME,
@@ -54,13 +55,13 @@ export function buildPostmanWorkerStartRequest(parent, task, signal, deniedTools
 }
 
 /** One process-local active Worker per exact Leader Agent/Session. No restart registry. */
-export function createPostmanWorkerTools(ctx) {
+export function createPostmanWorkerTools(ctx, grants) {
   const slots = new Map()
 
   function slotFor(parent) {
     let slot = slots.get(parent.id)
     if (slot === undefined) {
-      slot = { childId: undefined, closed: false, tail: Promise.resolve() }
+      slot = { childId: undefined, closed: false, artifactRequests: new Set(), tail: Promise.resolve() }
       slots.set(parent.id, slot)
     }
     return slot
@@ -81,6 +82,7 @@ export function createPostmanWorkerTools(ctx) {
     description: "Accept a local task for this Postman Leader's continuable Luna Worker. First call creates it; later calls enqueue in the same durable session. Acceptance is not completion: wait for the child-scoped report before treating the result as done.",
     parameters: {
       task: { type: 'string', required: true, description: 'The complete local task for the Worker.' },
+      artifactRequestId: { type: 'string', description: 'Trusted artifact REQ, used only after a separate Leader decision.' },
     },
     output: output(),
     async execute(args, exec) {
@@ -89,16 +91,28 @@ export function createPostmanWorkerTools(ctx) {
       if (typeof args?.task !== 'string' || args.task.trim() === '') {
         return { status: 'POSTMAN_WORKER_TASK_INVALID' }
       }
+      if (args.artifactRequestId !== undefined && typeof args.artifactRequestId !== 'string') {
+        return { status: 'POSTMAN_WORKER_ARTIFACT_REJECTED' }
+      }
       const slot = slotFor(parent)
       return enqueue(slot, async () => {
         if (slot.closed || !authorized(parent)) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
+        let task = args.task
+        if (args.artifactRequestId !== undefined) {
+          const grant = await grants?.resolve(parent.id, args.artifactRequestId)
+          if (grant?.repository !== IMPLEMENTATION_REPOSITORY) {
+            return { status: 'POSTMAN_WORKER_ARTIFACT_REJECTED' }
+          }
+          task = `Trusted Host artifact REQ: ${grant.requestId}. The ZIP path is not a model-authored authority; never pass a path from this message to the runner. Follow REPO_POLICY.md and system/implementation-package-workflow.md. Create a fresh clean temporary task worktree from current origin/preview after checking refs, ownership and worktrees. Then call implementation_artifact_apply({requestId: ${JSON.stringify(grant.requestId)}, worktree: <your clean worktree>}); the Host supplies its trusted ZIP. Inspect real status/diff/tests/affectedPaths/warnings. On runner FAIL, do not repair the package: report code, stage, diagnosticsZip, worktree and evidence. On PASS, report verification and await the Leader's separate publication decision. Leader task: ${args.task}`
+        }
         if (slot.childId !== undefined) {
           try {
             const messageId = await ctx.subagents.followup(parent, slot.childId,
-              [{ type: 'text', text: args.task }], {
+              [{ type: 'text', text: task }], {
                 source: { kind: 'coordinator', form: 'relay', senderSessionId: parent.id },
                 signal: exec.signal,
               })
+            if (args.artifactRequestId !== undefined) slot.artifactRequests.add(args.artifactRequestId)
             return {
               status: 'POSTMAN_WORKER_TASK_ACCEPTED', workerSessionId: slot.childId,
               created: false, messageId: String(messageId),
@@ -114,7 +128,7 @@ export function createPostmanWorkerTools(ctx) {
         let accepted
         try {
           accepted = await ctx.subagents.startContinuable(
-            buildPostmanWorkerStartRequest(parent, args.task, exec.signal,
+            buildPostmanWorkerStartRequest(parent, task, exec.signal,
               postmanWorkerDeniedTools(ctx.tools)))
         } catch (error) {
           // Before inbox admission Harness rolls back the child. Keep this
@@ -131,6 +145,7 @@ export function createPostmanWorkerTools(ctx) {
               diagnostic: diagnostic(error) }
           }
         }
+        if (args.artifactRequestId !== undefined) slot.artifactRequests.add(args.artifactRequestId)
         return {
           status: 'POSTMAN_WORKER_TASK_ACCEPTED', workerSessionId: slot.childId,
           created: true, messageId: String(accepted.messageId),
@@ -172,10 +187,20 @@ export function createPostmanWorkerTools(ctx) {
     },
   })
 
+  function ownerOf(caller, requestId) {
+    if (typeof caller?.id !== 'string' || caller.session?.header?.origin !== 'subagent' ||
+        caller.session.header.delegationDepth !== 1) return null
+    const leaderId = caller.session.header.parentSession
+    const slot = slots.get(leaderId)
+    if (!slot || slot.closed || slot.childId !== caller.id ||
+        !slot.artifactRequests.has(requestId) || !authorized(ctx.agents.get(leaderId))) return null
+    return leaderId
+  }
+
   function dispose() {
     for (const slot of slots.values()) slot.closed = true
     slots.clear()
   }
 
-  return { taskTool, stopTool, dispose }
+  return { taskTool, stopTool, ownerOf, dispose }
 }
