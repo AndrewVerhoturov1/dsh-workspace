@@ -102,18 +102,32 @@ USER_MESSAGE_CONTENT_SELECTORS = (
 _SEMANTIC_MESSAGE_TEXT_JS = r"""
 (root) => {
   const chunks = [];
-  const walk = (node) => {
+  const blockTags = new Set([
+    "ADDRESS", "ARTICLE", "BLOCKQUOTE", "DIV", "DL", "FIELDSET",
+    "FIGCAPTION", "FIGURE", "FOOTER", "FORM", "H1", "H2", "H3",
+    "H4", "H5", "H6", "HEADER", "LI", "MAIN", "OL", "P",
+    "PRE", "SECTION", "TABLE", "UL",
+  ]);
+  const lastCharacter = () => chunks.length ? chunks[chunks.length - 1].slice(-1) : "";
+  const blockBoundary = () => {
+    if (chunks.length && lastCharacter() !== "\\n") chunks.push("\\n");
+  };
+  const walk = (node, isRoot = false) => {
     if (node.nodeType === Node.TEXT_NODE) {
       chunks.push(node.nodeValue || "");
       return;
     }
     if (node.nodeType !== Node.ELEMENT_NODE) return;
+    const block = !isRoot && blockTags.has(node.tagName);
+    if (block) blockBoundary();
     const inlineCode = node.matches("code.user-message-inline-code");
     if (inlineCode) chunks.push("`");
     for (const child of node.childNodes) walk(child);
     if (inlineCode) chunks.push("`");
+    if (block) blockBoundary();
   };
-  walk(root);
+  walk(root, true);
+  while (chunks.length && chunks[chunks.length - 1] === "\\n") chunks.pop();
   return chunks.join("");
 }
 """

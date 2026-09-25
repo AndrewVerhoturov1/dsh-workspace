@@ -56,6 +56,8 @@ class FakeLocator:
 
     def evaluate(self, script):
         if self.kind == "bubble":
+            if "blockTags" in script and isinstance(self._text, list):
+                return "\n".join(self._text)
             return self._text
         raise RuntimeError("no DOM evaluator in fake")
 
@@ -865,6 +867,32 @@ class BrowserSubmitTests(unittest.TestCase):
         self.assertTrue(proof["requestKeyUserTurn"])
         self.assertEqual(proof["userTurnSelector"], 'main [data-user-message-bubble="true"]')
         self.assertEqual(page.click_count, 0)
+
+    def test_semantic_extractor_reconstructs_paragraph_lf_for_req_prompt(self):
+        request_id = "REQ_20260925T171137Z_2420"
+        prompt = f"POSTMAN_REQUEST_ID: {request_id}\ntask_file: exact pinned URL"
+        bubble = FakeLocator(kind="bubble", text=[f"POSTMAN_REQUEST_ID: {request_id}", "task_file: exact pinned URL"])
+        self.assertEqual(submit.read_semantic_message_text(bubble), prompt)
+        self.assertEqual(len(prompt), len(submit.read_semantic_message_text(bubble)))
+        self.assertTrue(submit._turn_contains_exact_line(
+            submit.read_semantic_message_text(bubble), submit.request_key_line_from_prompt(prompt)
+        ))
+
+    def test_semantic_extractor_keeps_inline_text_and_code_marker_order(self):
+        prompt = "POSTMAN_REQUEST_ID: REQ_20260925T171137Z_2420\ntask_file: `pinned` URL"
+        bubble = FakeLocator(kind="bubble", text=prompt)
+        self.assertEqual(submit.read_semantic_message_text(bubble), prompt)
+
+    def test_joined_req_line_does_not_correlate(self):
+        request_id = "REQ_20260925T171137Z_2420"
+        prompt = f"POSTMAN_REQUEST_ID: {request_id}\ntask_file: URL"
+        joined = f"POSTMAN_REQUEST_ID: {request_id}task_file: URL"
+        self.assertFalse(submit._turn_contains_exact_line(joined, submit.request_key_line_from_prompt(prompt)))
+        ok, proof = submit._observe_send_proof(
+            FakePage(user_turns=[joined], composer_text="", url="https://chatgpt.com/c/exact"), prompt, 0
+        )
+        self.assertFalse(ok)
+        self.assertFalse(proof["userTurnCorrelated"])
 
     def test_wrong_user_turn_text_is_unknown(self):
         page = FakePage(confirm_on_click=False)
