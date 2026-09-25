@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shutil
+import subprocess
 from pathlib import Path
 import sys
 import unittest
@@ -56,6 +58,8 @@ class FakeLocator:
 
     def evaluate(self, script):
         if self.kind == "bubble":
+            if "blockTags" in script and isinstance(self._text, list):
+                return "\n".join(self._text)
             return self._text
         raise RuntimeError("no DOM evaluator in fake")
 
@@ -154,6 +158,39 @@ class FakePage:
 
 
 class BrowserSubmitTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("node"), "Node.js is required for DOM extractor execution test")
+    def test_semantic_extractor_executes_against_minimal_dom(self):
+        script = r'''
+const vm = require("vm");
+const extract = vm.runInNewContext(process.argv[1], {Node: {TEXT_NODE: 3, ELEMENT_NODE: 1}});
+const text = value => ({nodeType: 3, nodeValue: value});
+const el = (tagName, children = [], classes = []) => ({
+  nodeType: 1, tagName, childNodes: children,
+  matches: selector => selector === "code.user-message-inline-code" && classes.includes("user-message-inline-code"),
+});
+const prompt = ["POSTMAN_REQUEST_ID: REQ_20260925T171137Z_2420", "task_file: `pinned` URL"].join(String.fromCharCode(10));
+const dom = el("ROOT", [
+  el("P", [text("POSTMAN_REQUEST_ID: REQ_20260925T171137Z_2420")]),
+  el("DIV", [el("P", [text("task_file: "), el("SPAN", [el("CODE", [text("pinned")], ["user-message-inline-code"]), text(" URL")])])]),
+  el("P", []),
+]);
+const actual = extract(dom);
+const crypto = require("crypto");
+const hash = value => crypto.createHash("sha256").update(value, "utf8").digest("hex");
+if (actual !== prompt) throw new Error(`text mismatch ${JSON.stringify(actual)}`);
+if (actual.length !== prompt.length || hash(actual) !== hash(prompt)) throw new Error("length/hash mismatch");
+const joined = extract(el("ROOT", [text("POSTMAN_REQUEST_ID: REQ_20260925T171137Z_2420task_file: URL")]));
+if (joined !== "POSTMAN_REQUEST_ID: REQ_20260925T171137Z_2420task_file: URL") throw new Error("joined text changed");
+console.log(JSON.stringify({length: actual.length, sha256: hash(actual), joined}));
+'''
+        result = subprocess.run(
+            [shutil.which("node"), "-e", script, submit._SEMANTIC_MESSAGE_TEXT_JS],
+            check=True, capture_output=True, text=True, encoding="utf-8",
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+        )
+        self.assertIn('"length":', result.stdout)
+        self.assertIn('"joined":"POSTMAN_REQUEST_ID: REQ_20260925T171137Z_2420task_file: URL"', result.stdout)
+
     def test_root_url_accepts_chatgpt_root(self):
         self.assertTrue(submit.is_chatgpt_root_url("https://chatgpt.com/"))
 
@@ -865,6 +902,32 @@ class BrowserSubmitTests(unittest.TestCase):
         self.assertTrue(proof["requestKeyUserTurn"])
         self.assertEqual(proof["userTurnSelector"], 'main [data-user-message-bubble="true"]')
         self.assertEqual(page.click_count, 0)
+
+    def test_semantic_extractor_reconstructs_paragraph_lf_for_req_prompt(self):
+        request_id = "REQ_20260925T171137Z_2420"
+        prompt = f"POSTMAN_REQUEST_ID: {request_id}\ntask_file: exact pinned URL"
+        bubble = FakeLocator(kind="bubble", text=[f"POSTMAN_REQUEST_ID: {request_id}", "task_file: exact pinned URL"])
+        self.assertEqual(submit.read_semantic_message_text(bubble), prompt)
+        self.assertEqual(len(prompt), len(submit.read_semantic_message_text(bubble)))
+        self.assertTrue(submit._turn_contains_exact_line(
+            submit.read_semantic_message_text(bubble), submit.request_key_line_from_prompt(prompt)
+        ))
+
+    def test_semantic_extractor_keeps_inline_text_and_code_marker_order(self):
+        prompt = "POSTMAN_REQUEST_ID: REQ_20260925T171137Z_2420\ntask_file: `pinned` URL"
+        bubble = FakeLocator(kind="bubble", text=prompt)
+        self.assertEqual(submit.read_semantic_message_text(bubble), prompt)
+
+    def test_joined_req_line_does_not_correlate(self):
+        request_id = "REQ_20260925T171137Z_2420"
+        prompt = f"POSTMAN_REQUEST_ID: {request_id}\ntask_file: URL"
+        joined = f"POSTMAN_REQUEST_ID: {request_id}task_file: URL"
+        self.assertFalse(submit._turn_contains_exact_line(joined, submit.request_key_line_from_prompt(prompt)))
+        ok, proof = submit._observe_send_proof(
+            FakePage(user_turns=[joined], composer_text="", url="https://chatgpt.com/c/exact"), prompt, 0
+        )
+        self.assertFalse(ok)
+        self.assertFalse(proof["userTurnCorrelated"])
 
     def test_wrong_user_turn_text_is_unknown(self):
         page = FakePage(confirm_on_click=False)
