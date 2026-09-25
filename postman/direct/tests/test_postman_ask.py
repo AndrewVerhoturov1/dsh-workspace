@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+import contextlib
+import io
+from unittest.mock import patch
 from types import SimpleNamespace
 import hashlib
 import json
@@ -180,6 +183,33 @@ class PostmanAskTests(unittest.TestCase):
             with self.assertRaises(postman_ask.DirectPostmanError) as raised:
                 self.make_runner(root).run(request_id=REQ, task="вопрос")
         self.assertEqual(raised.exception.code, "POSTMAN_ASK_UNEXPECTED_WEB_RESULT")
+
+    def test_failure_after_publication_exposes_receipt_only_from_this_run(self):
+        Bridge.result = {"ok": False, "code": "WEB_LOST", "details": {"reason": "observer"}}
+        with tempfile.TemporaryDirectory() as root:
+            runner = self.make_runner(root)
+            with self.assertRaises(postman_ask.DirectPostmanError):
+                runner.run(request_id=REQ, task="вопрос")
+            self.assertEqual(runner.publication_receipt, {
+                "requestId": REQ, "repository": "AndrewVerhoturov1/dsh-workspace", "branch": "main",
+                "taskUrl": f"https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/{PUB}/{REQ}.md",
+                "baseCommit": BASE, "taskPublicationCommit": PUB,
+            })
+            self.assertEqual(json.loads(runner.state_path(REQ).read_text(encoding="utf-8"))["taskPublicationCommit"], PUB)
+
+    def test_cli_failure_includes_same_request_publication_receipt(self):
+        receipt = {"requestId": REQ, "repository": "AndrewVerhoturov1/dsh-workspace", "branch": "main",
+                   "taskUrl": f"https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/{PUB}/{REQ}.md",
+                   "baseCommit": BASE, "taskPublicationCommit": PUB}
+        def fail_run(instance, **_kwargs):
+            instance.publication_receipt = dict(receipt)
+            raise postman_ask.DirectPostmanError("DIRECT_BROWSER_FAILED", "browser unavailable")
+        with patch.object(postman_ask.DirectPostmanAsk, "run", fail_run), contextlib.redirect_stdout(io.StringIO()) as stdout:
+            code = postman_ask.main(["--request-id", REQ, "--task", "intent"])
+        self.assertEqual(code, 2)
+        failure = json.loads(stdout.getvalue())
+        self.assertEqual(failure["code"], postman_ask.POSTMAN_TRANSPORT_FAILED)
+        self.assertEqual(failure["publicationReceipt"], receipt)
 
     def test_text_terminal_is_eligible_for_later_chat_continuation(self):
         with tempfile.TemporaryDirectory() as root:

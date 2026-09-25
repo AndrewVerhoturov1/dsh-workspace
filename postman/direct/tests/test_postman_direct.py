@@ -587,6 +587,20 @@ class DirectPostmanUnitTests(unittest.TestCase):
         self.assertEqual(payload["transportMessage"], failure_details["transportMessage"])
         self.assertEqual(payload["details"], failure_details["details"])
 
+    def test_cli_failure_includes_only_same_request_publication_receipt(self):
+        receipt = {"requestId": REQ, "repository": REPO, "branch": "main",
+                   "taskUrl": f"https://raw.githubusercontent.com/{REPO}/{PUB}/{REQ}.md",
+                   "baseCommit": PRE, "taskPublicationCommit": PUB}
+        def fail_run(instance, **_kwargs):
+            instance.publication_receipt = dict(receipt)
+            raise direct.DirectPostmanError("DIRECT_BROWSER_FAILED", "browser unavailable")
+        with patch.object(direct.DirectPostman, "run", fail_run), contextlib.redirect_stdout(io.StringIO()) as stdout:
+            code = direct.main(["--request-id", REQ, "--task", "intent"])
+        self.assertEqual(code, 2)
+        failure = json.loads(stdout.getvalue())
+        self.assertEqual(failure["code"], direct.POSTMAN_TRANSPORT_FAILED)
+        self.assertEqual(failure["publicationReceipt"], receipt)
+
     def test_cli_prebridge_failure_becomes_correlated_transport_failure(self):
         failure_code = "DIRECT_BROWSER_FAILED"
         failure_message = "dedicated Chrome failed to become ready"

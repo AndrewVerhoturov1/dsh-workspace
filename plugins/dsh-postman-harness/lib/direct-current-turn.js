@@ -1,6 +1,7 @@
 import { createHash, randomInt as cryptoRandomInt } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { basename, isAbsolute, join } from 'node:path'
+import { homedir } from 'node:os'
 import { spawn as nodeSpawn } from 'node:child_process'
 import { postmanTaskContexts, POSTMAN_TASK_BRANCH_PATTERN } from './postman-task-context.js'
 
@@ -204,6 +205,30 @@ function parseTerminalJson(stdout) {
   }
 }
 
+function validPublicationReceipt(value, job) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
+  const { requestId, repository, branch, taskUrl, baseCommit, taskPublicationCommit } = value
+  if (requestId !== job.requestId || repository !== 'AndrewVerhoturov1/dsh-workspace' ||
+      branch !== job.branch || !POSTMAN_TASK_BRANCH_PATTERN.test(branch ?? '') ||
+      !/^[0-9a-f]{40}$/.test(baseCommit ?? '') || !/^[0-9a-f]{40}$/.test(taskPublicationCommit ?? '')) return false
+  return taskUrl === 'https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/' + taskPublicationCommit + '/' + requestId + '.md'
+}
+
+function trustedPublication(job) {
+  const root = job.directRoot ?? (process.env.LOCALAPPDATA
+    ? join(process.env.LOCALAPPDATA, 'DSH', 'Postman', 'direct')
+    : join(homedir(), '.dsh', 'postman', 'direct'))
+  let state
+  try { state = JSON.parse(job.readPublicationState(join(root, 'requests', job.requestId + '.json'), 'utf8')) }
+  catch { return null }
+  if (!state || typeof state !== 'object' || Array.isArray(state) ||
+      !new Set(['FAILED', 'ASK_FAILED', 'TASK_PUBLISHED', 'ASK_TASK_PUBLISHED',
+        'BROWSER_READY', 'ASK_BROWSER_READY', 'WEB_RUNNING', 'ASK_WEB_RUNNING']).has(state.state)) return null
+  const receipt = { requestId: state.requestId, repository: state.repository, branch: state.branch,
+    taskUrl: state.taskUrl, baseCommit: state.baseCommit, taskPublicationCommit: state.taskPublicationCommit }
+  return validPublicationReceipt(receipt, job) ? receipt : null
+}
+
 function terminalGate(job) {
   const parsed = parseTerminalJson(job.stdout)
   if (parsed === undefined || parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -342,6 +367,15 @@ function terminalGate(job) {
     && typeof parsed.transportMessage === 'string' && parsed.transportMessage !== ''
     && parsed.details !== null && typeof parsed.details === 'object' && !Array.isArray(parsed.details)
   ) {
+    const checkpoint = trustedPublication(job)
+    if (parsed.publicationReceipt !== undefined &&
+        (!checkpoint || !validPublicationReceipt(parsed.publicationReceipt, job) ||
+          Object.keys(checkpoint).some(key => checkpoint[key] !== parsed.publicationReceipt[key]))) {
+      return { ok: false, code: 'POSTMAN_PUBLICATION_RECEIPT_INVALID', requestId: job.requestId,
+        transportMessage: 'Direct Postman publication receipt did not match its exact request checkpoint.' }
+    }
+    if (checkpoint) parsed.publicationReceipt = checkpoint
+    else delete parsed.publicationReceipt
     return parsed
   }
 
@@ -372,12 +406,16 @@ export class DirectPostmanJobManager {
     now = () => new Date(),
     randomInt = cryptoRandomInt,
     pwsh = process.platform === 'win32' ? 'pwsh.exe' : 'pwsh',
+    directRoot,
+    readPublicationState = readFileSync,
   } = {}) {
     this.spawn = spawn
     this.exists = exists
     this.now = now
     this.randomInt = randomInt
     this.pwsh = pwsh
+    this.directRoot = directRoot
+    this.readPublicationState = readPublicationState
     this.jobs = new Map()
     this.exactAskReplies = new Map()
   }
@@ -443,6 +481,8 @@ export class DirectPostmanJobManager {
       transportKind,
       branch,
       proof,
+      directRoot: this.directRoot,
+      readPublicationState: this.readPublicationState,
       waiters: new Set(),
     }
     this.jobs.set(sessionId, job)

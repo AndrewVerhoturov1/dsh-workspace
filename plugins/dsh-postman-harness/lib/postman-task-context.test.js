@@ -25,10 +25,15 @@ function fixture(options = {}) {
     if (verb === 'remote' && rest.join(' ') === 'get-url origin') return state.remoteUrl
     if (verb === 'fetch') return ''
     if (verb === 'rev-parse' && rest[0] === '--verify') return state.base
-    if (verb === 'worktree' && rest[0] === 'list') return state.trees.map(path => 'worktree ' + path + '\nHEAD ' + base + '\n').join('\n')
+    if (verb === 'worktree' && rest[0] === 'list') return state.trees.map(path => 'worktree ' + path + '\nHEAD ' + base + '\n' + (path === worktree ? 'branch refs/heads/' + state.branch + '\n' : 'branch refs/heads/main\n')).join('\n')
     if (verb === 'worktree' && rest[0] === 'add') { state.branch = rest[2]; return '' }
     if (verb === 'rev-parse' && rest[0] === 'HEAD') return state.head
     if (verb === 'status') return state.clean ? '' : '?? private.txt'
+    if (verb === 'rev-parse' && rest[0] === '--git-path') return resolve(repository, '.git', 'missing-' + rest[1])
+    if (verb === 'merge-base') return rest[0] === base || rest[1] === base ? base : state.head
+    if (verb === 'reset' && rest[0] === '--hard') { state.head = rest[1]; state.clean = true; return '' }
+    if (verb === 'clean' && rest[0] === '-fd') { state.clean = true; return '' }
+    if (verb === 'rev-parse' && rest[0] === '--show-toplevel' && cwd === repository) return repository
     if (verb === 'push') return ''
     if (verb === 'ls-remote') return state.branch === rest[2] ? state.remote + '\trefs/heads/' + rest[2] : ''
     if (verb === 'branch' && rest[0] === '--show-current') return state.branch
@@ -37,7 +42,7 @@ function fixture(options = {}) {
     if (verb === 'merge' && rest[0] === '--ff-only') { state.head = rest[1]; return '' }
     throw new Error('Unexpected git command: ' + JSON.stringify({ cwd, args }))
   }
-  const contexts = createPostmanTaskContexts({ gitCommand,
+  const contexts = createPostmanTaskContexts({ gitCommand, realPath: options.realPath ?? (async path => path),
     temporaryDirectory: () => resolve('C:/Users/Andrew/AppData/Local/Temp'),
     makeDirectory: async () => options.directory ?? worktree })
   return { contexts, state, calls }
@@ -153,6 +158,53 @@ test('apply guard requires unchanged bound branch and exact published HEAD', asy
   state.branch = contexts.get('A').branch
   state.clean = false
   assert.equal(await contexts.verifyWorktree('A'), false)
+})
+
+test('restore discards dirty bound tree only after explicit Leader call', async () => {
+  const f = fixture(), prepared = await f.contexts.prepare(leader('A'))
+  f.state.head = published; f.state.remote = published; f.state.clean = false
+  f.state.trees.push(worktree)
+  assert.equal((await f.contexts.restore(leader('B'))).status, 'POSTMAN_TASK_RESTORE_REJECTED')
+  assert.equal((await f.contexts.restore(leader('A'))).status, 'POSTMAN_TASK_RESTORE_REJECTED')
+  assert.equal(f.state.clean, false)
+  assert.equal(f.contexts.beginOperation('A'), true)
+  f.contexts.endOperation('A', { status: 'IMPLEMENTATION_ARTIFACT_RUNNER_RESULT', result: { ok: false } })
+  assert.equal((await f.contexts.restore(leader('A'))).status, 'TASK_CONTEXT_RESTORED')
+  assert.equal(f.state.clean, true)
+  assert.equal(f.state.head, published)
+  assert.ok(invoked(f.calls, 'reset', '--hard', published))
+  assert.ok(invoked(f.calls, 'clean', '-fd'))
+  assert.equal(prepared.worktree, worktree)
+})
+
+test('restore rejects redirected task path before discarding data', async () => {
+  const f = fixture({ realPath: async () => repository }); await f.contexts.prepare(leader('A'))
+  f.state.trees.push(worktree); f.state.clean = false
+  assert.equal(f.contexts.beginOperation('A'), true)
+  f.contexts.endOperation('A', { status: 'IMPLEMENTATION_ARTIFACT_RUNNER_RESULT', result: { ok: false } })
+  f.contexts.endOperation('A', { status: 'IMPLEMENTATION_ARTIFACT_RUNNER_RESULT', result: { ok: false } })
+  const result = await f.contexts.restore(leader('A'))
+  assert.equal(result.status, 'POSTMAN_TASK_RESTORE_REJECTED')
+  assert.equal(f.state.clean, false)
+  assert.equal(f.calls.some(call => ['reset', 'clean'].includes(call.args[0])), false)
+})
+
+test('restore rejects wrong branch, moved remote, permanent and foreign worktree', async () => {
+  for (const mutate of [
+    s => { s.branch = 'preview' },
+    s => { s.remote = '' },
+    s => { s.trees = [repository] },
+    s => { s.remoteUrl = 'https://github.com/other/repo.git' },
+  ]) {
+    const f = fixture(); await f.contexts.prepare(leader('A'))
+    f.state.trees.push(worktree); f.state.clean = false; mutate(f.state)
+    assert.equal(f.contexts.beginOperation('A'), true)
+    f.contexts.endOperation('A', { status: 'IMPLEMENTATION_ARTIFACT_RUNNER_RESULT', result: { ok: false } })
+    const result = await f.contexts.restore(leader('A'))
+    assert.equal(result.status, 'POSTMAN_TASK_RESTORE_REJECTED')
+    assert.equal(f.state.clean, false)
+    assert.equal(f.calls.some(call => call.args[0] === 'reset' || call.args[0] === 'clean'), false)
+  }
 })
 
 test('prepare refuses dirty new worktree', async () => {

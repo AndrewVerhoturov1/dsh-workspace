@@ -95,14 +95,17 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
         return { status: 'POSTMAN_WORKER_ARTIFACT_REJECTED' }
       }
       if (contexts && !contexts.get(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
+      if (typeof contexts?.isRestoring === 'function' && contexts.isRestoring(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
+      if (typeof contexts?.hasActiveOperation === 'function' && contexts.hasActiveOperation(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
       const slot = slotFor(parent)
       return enqueue(slot, async () => {
         if (slot.closed || !authorized(parent)) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
         const context = contexts?.get(parent.id)
         if (contexts && !context) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
+        // Calls admitted before restore reservation must finish; reservation blocks only new admissions.
         if (slot.context && slot.context !== context) return { status: 'POSTMAN_TASK_CONTEXT_MISMATCH' }
         slot.context = context
-        let task = args.task
+        let task = context ? `Use the existing Leader task branch ${context.branch} and worktree ${context.worktree} for repository changes; do not create another branch or worktree. Follow REPO_POLICY.md. Keep normal coding, shell, research, and web tools available as needed; do not make repository changes outside the bound worktree. Leader task: ${args.task}` : args.task
         if (args.artifactRequestId !== undefined) {
           const grant = await grants?.resolve(parent.id, args.artifactRequestId)
           if (grant?.repository !== IMPLEMENTATION_REPOSITORY) {
@@ -205,10 +208,25 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
 
   function contextOf(leaderId) { return slots.get(leaderId)?.context ?? null }
 
+  async function prepareRestore(leaderId) {
+    const slot = slots.get(leaderId)
+    if (!slot) return true
+    const pendingTasks = slot.tail
+    try { await pendingTasks } catch { return false }
+    if (slot.closed) return true
+    if (!slot.childId) return true
+    try {
+      await ctx.subagents.drainContinuableChildren(ctx.agents.get(leaderId), [slot.childId])
+      // Drain only the resident activation; keep this exact durable child mapping
+      // so the next task continues in the same Worker Session after restore.
+      return true
+    } catch { return false }
+  }
+
   function dispose() {
     for (const slot of slots.values()) slot.closed = true
     slots.clear()
   }
 
-  return { taskTool, stopTool, ownerOf, contextOf, dispose }
+  return { taskTool, stopTool, ownerOf, contextOf, prepareRestore, dispose }
 }

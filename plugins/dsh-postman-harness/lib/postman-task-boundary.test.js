@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { createPostmanTaskContexts } from './postman-task-context.js'
-import { createPostmanTaskPrepareTool, createPostmanBridgeTool } from './postman-bridge.js'
+import { createPostmanTaskPrepareTool, createPostmanTaskRestoreTool, createPostmanBridgeTool } from './postman-bridge.js'
 import { createDirectCurrentTurnToolConfigs, DirectPostmanJobManager } from './direct-current-turn.js'
 import { createPostmanWorkerTools } from './postman-worker.js'
 import { createImplementationArtifactApplyTool, createImplementationArtifactGrants, IMPLEMENTATION_REPOSITORY } from './implementation-artifact.js'
@@ -23,6 +23,7 @@ function preparedContexts() {
   const calls = []
   const contexts = createPostmanTaskContexts({
     temporaryDirectory: () => 'C:/temporary',
+    realPath: async path => path,
     makeDirectory: async () => 'C:/temporary/dsh-postman-task-test',
     async gitCommand(cwd, ...args) {
       calls.push([cwd, ...args])
@@ -81,6 +82,32 @@ test('prepare is Leader-only, binds exact repository and publishes branch from o
   assert.ok(calls.some(([, ...args]) => args.join(' ') === 'worktree add -b ' + prepared.branch + ' ' + prepared.worktree + ' ' + BASE))
   assert.ok(calls.some(([, ...args]) => args.join(' ') === 'push origin ' + BASE + ':refs/heads/' + prepared.branch))
   assert.equal((await tool.execute({}, { agent: a })).status, 'POSTMAN_TASK_CONTEXT_ALREADY_READY')
+  contexts.dispose()
+})
+
+test('restore tool is Leader-only and refuses busy Bridge or undrained Worker', async () => {
+  const { contexts } = preparedContexts(), a = leader(), other = leader('other')
+  other.session.header.agentPreset = 'standard'
+  const prepared = await contexts.prepare(a)
+  assert.equal(contexts.beginOperation(a.id), true)
+  contexts.endOperation(a.id, { status: 'IMPLEMENTATION_ARTIFACT_RUNNER_RESULT', result: { ok: false } })
+  let draining = 0, busy = false, workerReady = false
+  const worker = { async prepareRestore(id) { assert.equal(id, a.id); draining++; return workerReady } }
+  const jobs = { hasActive(id) { assert.equal(id, a.id); return busy } }
+  const ctx = { agents: { get: id => id === a.id ? a : other } }
+  const restore = createPostmanTaskRestoreTool(ctx, contexts, { jobs, worker })
+  assert.equal((await restore.execute({}, { agent: other })).status, 'POSTMAN_TASK_CALLER_REJECTED')
+  assert.equal(draining, 0)
+  busy = true
+  assert.equal((await restore.execute({}, { agent: a })).status, 'POSTMAN_TASK_CONTEXT_BUSY')
+  assert.equal(draining, 0)
+  assert.equal(contexts.get(a.id).branch, prepared.branch)
+  assert.equal(contexts.isRestoring(a.id), false)
+  busy = false
+  assert.equal((await restore.execute({}, { agent: a })).status, 'POSTMAN_TASK_CONTEXT_BUSY')
+  assert.equal(contexts.get(a.id).branch, prepared.branch)
+  assert.equal(contexts.isRestoring(a.id), false)
+  assert.equal(draining, 1)
   contexts.dispose()
 })
 

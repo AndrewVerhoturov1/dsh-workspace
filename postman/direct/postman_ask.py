@@ -123,6 +123,7 @@ class DirectPostmanAsk:
         self.bridge_factory = bridge_factory
         self.ensure_browser = ensure_browser
         self.now = now
+        self.publication_receipt: dict[str, str] | None = None
 
     def state_path(self, request_id: str) -> Path:
         request_identity.assert_canonical_request_id(request_id)
@@ -224,6 +225,7 @@ class DirectPostmanAsk:
         cdp_url: str = bootstrap.DEFAULT_CDP_URL,
     ) -> dict[str, Any]:
         request_identity.assert_canonical_request_id(request_id)
+        self.publication_receipt = None
         if not isinstance(task, str) or not task.strip():
             raise DirectPostmanError("DIRECT_INVALID_TASK", "task must be a non-empty string")
         try:
@@ -298,6 +300,11 @@ class DirectPostmanAsk:
             promptSha256=_sha256_text(prompt),
             **conversation_fields,
         )
+        self.publication_receipt = {
+            "requestId": request_id, "repository": self.repository, "branch": self.branch,
+            "taskUrl": published.task_url, "baseCommit": published.prepublication_commit,
+            "taskPublicationCommit": published.publication_commit,
+        }
 
         browser = self.ensure_browser(cdp_url=cdp_url)
         self._write_state(request_id, STATE_BROWSER_READY, browser=browser, **conversation_fields)
@@ -450,6 +457,7 @@ def _task_from_args(args: argparse.Namespace) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    direct = None
     execution_started = False
     try:
         direct = DirectPostmanAsk(
@@ -477,6 +485,10 @@ def main(argv: list[str] | None = None) -> int:
                 else exc.code if isinstance(exc, (DirectPostmanError, chat_reference.ChatReferenceError))
                 else "DIRECT_INVALID_REQUEST")
         details = exc.details if isinstance(exc, DirectPostmanError) else {}
+        publication_receipt = getattr(direct, "publication_receipt", None)
+        publication_fields = {"publicationReceipt": publication_receipt} if (
+            isinstance(publication_receipt, dict) and publication_receipt.get("requestId") == args.request_id
+        ) else {}
         if execution_started:
             transport_code = str(details.get("transportCode", code))
             transport_message = str(details.get("transportMessage", str(exc)))
@@ -488,6 +500,7 @@ def main(argv: list[str] | None = None) -> int:
                 transportCode=transport_code,
                 transportMessage=transport_message,
                 details=transport_details,
+                **publication_fields,
             )
         else:
             result = _json_result(False, code, requestId=args.request_id, error=str(exc), details=details)

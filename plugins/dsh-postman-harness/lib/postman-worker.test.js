@@ -11,7 +11,7 @@ import { apply as applyBridgePlugin } from './postman-bridge.js'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const signal = new AbortController().signal
 const registeredTools = [
-  'postman_bridge', 'postman_bridge_status', 'postman_task_prepare', 'postman_worker', 'postman_worker_stop', 'postman_send', 'postman_reply',
+  'postman_bridge', 'postman_bridge_status', 'postman_task_prepare', 'postman_task_restore', 'postman_worker', 'postman_worker_stop', 'postman_send', 'postman_reply',
   'postman_async_send', 'postman_runtime_get_request', 'postman_runtime_accept_request',
   'postman_runtime_list_ready', 'postman_runtime_deliver_ready', 'postman_runtime_synthetic_ready',
   'postman_send_current_turn', 'postman_current_turn_status', 'postman_ask_validate_reply',
@@ -237,7 +237,7 @@ test('bridge plugin registers both Worker tools and preserves boundary on creati
     on(name, handler) { listeners.set(name, handler) },
   }
   applyBridgePlugin(ctx)
-  assert.deepEqual([...registrations.keys()].sort(), ['implementation_artifact_apply', 'postman_bridge', 'postman_bridge_status', 'postman_task_prepare', 'postman_worker', 'postman_worker_stop'])
+  assert.deepEqual([...registrations.keys()].sort(), ['implementation_artifact_apply', 'postman_bridge', 'postman_bridge_status', 'postman_task_prepare', 'postman_task_restore', 'postman_worker', 'postman_worker_stop'])
   assert.deepEqual(restriction.allow, postmanBridgeRestrictionForAgent(a).allow)
   assert.ok(listeners.has('agent-preset/selected'))
   assert.ok(listeners.has('agent/disposed'))

@@ -6,7 +6,7 @@ import { createPostmanBridgeLaunchCoordinator } from './postman-bridge-launch-co
 import { createPostmanBridgeJobs } from './postman-bridge-jobs.js'
 import { postmanTaskContexts } from './postman-task-context.js'
 import {
-  POSTMAN_BRIDGE_TOOL_ALLOWLIST, POSTMAN_BRIDGE_TOOL_NAME, POSTMAN_BRIDGE_STATUS_TOOL_NAME, POSTMAN_TASK_PREPARE_TOOL_NAME,
+  POSTMAN_BRIDGE_TOOL_ALLOWLIST, POSTMAN_BRIDGE_TOOL_NAME, POSTMAN_BRIDGE_STATUS_TOOL_NAME, POSTMAN_TASK_PREPARE_TOOL_NAME, POSTMAN_TASK_RESTORE_TOOL_NAME,
   createPostmanBridgeBoundaryManager, isTopLevelPostmanLeader,
   postmanBridgeCallerAllowed, postmanBridgeRestrictionForAgent,
 } from './postman-bridge-core.js'
@@ -39,6 +39,24 @@ export function createPostmanTaskPrepareTool(ctx, contexts = postmanTaskContexts
   })
 }
 
+export function createPostmanTaskRestoreTool(ctx, contexts = postmanTaskContexts, { jobs, worker } = {}) {
+  return defineTool({
+    name: POSTMAN_TASK_RESTORE_TOOL_NAME,
+    description: 'After a runner FAIL, explicitly discard only uncommitted changes in this Leader’s existing bound temporary task worktree and restore its exact remote branch HEAD; never recreate bindings, grants, or Workers.',
+    parameters: {}, output: output(),
+    async execute(_args, exec) {
+      if (!authorized(exec, ctx)) return { status: 'POSTMAN_TASK_CALLER_REJECTED' }
+      if (!contexts.reserveRestore(exec.agent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
+      try {
+        return await contexts.restore(exec.agent, {
+          isBusy: id => Boolean(jobs?.hasActive(id)),
+          beforeRestore: async id => worker ? await worker.prepareRestore(id) : true,
+        })
+      } finally { contexts.releaseRestore(exec.agent.id) }
+    },
+  })
+}
+
 export function createPostmanBridgeTool(ctx, jobs, contexts) {
   return defineTool({
     name: POSTMAN_BRIDGE_TOOL_NAME,
@@ -50,10 +68,14 @@ export function createPostmanBridgeTool(ctx, jobs, contexts) {
     async execute(args, exec) {
       if (!authorized(exec, ctx)) return { status: 'POSTMAN_BRIDGE_CALLER_REJECTED' }
       if (exec.signal?.aborted) return { status: 'POSTMAN_BRIDGE_ADMISSION_ABORTED' }
+      if (typeof contexts?.isRestoring === 'function' && contexts.isRestoring(exec.agent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
+      if (typeof contexts?.hasActiveOperation === 'function' && contexts.hasActiveOperation(exec.agent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
       let parsed
       try { parsed = parsePostmanUserTurn(args?.message) }
       catch (error) { return { status: 'POSTMAN_BRIDGE_MESSAGE_REJECTED', diagnostic: String(error?.message ?? error) } }
       if (contexts && !contexts.get(exec.agent.id)) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
+      if (typeof contexts?.isRestoring === 'function' && contexts.isRestoring(exec.agent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
+      if (typeof contexts?.hasActiveOperation === 'function' && contexts.hasActiveOperation(exec.agent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
       return jobs.accept(exec.agent, args.message, parsed.transportKind)
     },
   })
@@ -91,9 +113,10 @@ export function apply(ctx) {
   ctx.tools.register(createPostmanBridgeStatusTool(ctx, jobs))
   ctx.effect(() => () => jobs.dispose(), 'dsh-postman-harness-bridge.background-jobs()')
   const worker = createPostmanWorkerTools(ctx, grants, postmanTaskContexts)
+  ctx.tools.register(createPostmanTaskRestoreTool(ctx, postmanTaskContexts, { jobs, worker }))
   ctx.tools.register(worker.taskTool)
   ctx.tools.register(worker.stopTool)
-  ctx.tools.register(createImplementationArtifactApplyTool(ctx, grants, worker, { taskContexts: postmanTaskContexts }))
+  ctx.tools.register(createImplementationArtifactApplyTool(ctx, grants, worker, { taskContexts: postmanTaskContexts, jobs }))
   ctx.effect(() => () => worker.dispose(), 'dsh-postman-harness-bridge.worker-mapping()')
   ctx.effect(() => () => postmanTaskContexts.dispose(), 'dsh-postman-harness-bridge.task-contexts()')
 

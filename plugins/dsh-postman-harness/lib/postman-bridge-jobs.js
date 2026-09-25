@@ -78,6 +78,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts) {
       }
     } catch { return { status: 'POSTMAN_BRIDGE_PARENT_UNAVAILABLE' } }
     if (contexts && contexts.get(parent.id) !== job.taskContext) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
+    if (typeof contexts?.hasActiveOperation === 'function' && contexts.hasActiveOperation(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
     let run
     try {
       run = await ctx.subagents.start(POSTMAN_BRIDGE_PROVIDER, buildPostmanBridgeStartRequest({
@@ -160,6 +161,8 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts) {
   function accept(parent, message, transportKind) {
     const taskContext = contexts?.get(parent.id)
     if (contexts && !taskContext) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
+    if (typeof contexts?.isRestoring === 'function' && contexts.isRestoring(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
+    if (typeof contexts?.hasActiveOperation === 'function' && contexts.hasActiveOperation(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
     if (disposed) return { status: 'POSTMAN_BRIDGE_UNAVAILABLE' }
     if (contexts && [...jobs.values()].some(job => job.parentSessionId === parent.id &&
         !['TERMINAL', 'FAILED'].includes(job.state))) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
@@ -180,22 +183,26 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts) {
         job.requestId = safe.requestId ?? job.requestId ?? null
         // A successful Direct publication advances the same clean task worktree.
         // Never grant an artifact if the remote branch/parent cannot be proved.
-        if (contexts && safe.status === 'POSTMAN_BRIDGE_TERMINAL' && safe.result?.ok === true) {
+        const publication = safe.result?.ok === true ? safe.result
+          : safe.result?.ok === false && safe.result.code === 'POSTMAN_TRANSPORT_FAILED'
+            ? safe.result.publicationReceipt : null
+        if (contexts && safe.status === 'POSTMAN_BRIDGE_TERMINAL' && publication) {
           let synchronized = false
           let reason = 'Task branch publication cannot be synchronized safely.'
           try {
             synchronized = await contexts.sync(job.parentSessionId,
-              safe.result.taskPublicationCommit, safe.result.baseCommit)
+              publication.taskPublicationCommit, publication.baseCommit)
           } catch (error) { reason += ' ' + diagnostic(error) }
           if (!synchronized) {
             job.trustedTerminal = { status: 'POSTMAN_TASK_PUBLICATION_SYNC_FAILED',
-              requestId: safe.requestId, diagnostic: reason }
+              requestId: safe.requestId, diagnostic: reason,
+              ...(safe.result?.ok === false ? { terminalStatus: safe.terminalStatus, result: safe.result } : {}) }
             job.state = 'FAILED'
             return
           }
         }
         // Only a trusted terminal from a fully cleaned child may authorize a grant.
-        if (safe.status === 'POSTMAN_BRIDGE_TERMINAL') {
+        if (safe.status === 'POSTMAN_BRIDGE_TERMINAL' && safe.result?.ok !== false) {
           try { await grants?.register(job.parentSessionId, safe) }
           catch (error) { job.grantDiagnostic = diagnostic(error) }
         }
@@ -210,6 +217,11 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts) {
         notify(job)
       })
     return { status: 'POSTMAN_BRIDGE_ACCEPTED', ...snapshot(job) }
+  }
+
+  function hasActive(parentSessionId) {
+    return [...jobs.values()].some(job => job.parentSessionId === parentSessionId &&
+      !['TERMINAL', 'FAILED'].includes(job.state))
   }
 
   function status(parent, bridgeJobId) {
@@ -243,5 +255,5 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts) {
     jobs.clear()
   }
 
-  return { accept, status, dispose }
+  return { accept, status, hasActive, dispose }
 }
