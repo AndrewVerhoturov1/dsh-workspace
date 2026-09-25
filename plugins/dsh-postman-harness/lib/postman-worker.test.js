@@ -17,7 +17,7 @@ const registeredTools = [
   'postman_send_current_turn', 'postman_current_turn_status', 'postman_ask_validate_reply',
   'postman_continue_last_request', 'postman_result_present',
   'postman_result_workspace_register', 'postman_result_workspace_unregister',
-  'read', 'write', 'edit', 'pwsh', 'web_search', 'subagent', 'subagent_fork', 'report',
+  'read', 'read_image', 'glob', 'grep', 'write', 'edit', 'pwsh', 'web_search', 'subagent', 'subagent_fork', 'report',
 ]
 const registry = { schemas: () => registeredTools.map(name => ({ name })) }
 const leader = id => ({ id, session: { header: { id, agentPreset: 'postman-leader', delegationDepth: 0 } } })
@@ -93,6 +93,8 @@ test('Leader hides coding tools; Worker keeps coding and report but no Postman c
   } } }
   const leaderRestriction = postmanBridgeRestrictionForAgent(top)
   const childRestriction = postmanBridgeRestrictionForAgent(child)
+  assert.equal(leaderRestriction.allow.includes('glob'), false)
+  assert.equal(leaderRestriction.allow.includes('web_search'), false)
   for (const name of ['write', 'edit', 'pwsh', 'bash', 'subagent', 'subagent_fork', 'workflow']) {
     assert.equal(leaderRestriction.allow.includes(name), false, name)
     assert.equal(childRestriction.deny.includes(name), false, name)
@@ -106,7 +108,7 @@ test('Leader hides coding tools; Worker keeps coding and report but no Postman c
   // Ancestor restriction and per-child denial intersect; report is scoped to the child.
   const visibleToWorker = name => !childRestriction.deny.includes(name) &&
     !workerFilter.deny.includes(name)
-  for (const name of ['read', 'write', 'edit', 'pwsh', 'web_search', 'subagent',
+  for (const name of ['read', 'read_image', 'glob', 'grep', 'write', 'edit', 'pwsh', 'web_search', 'subagent',
     'subagent_fork', 'report']) assert.equal(visibleToWorker(name), true, name)
   for (const name of registeredTools.filter(name => name.startsWith('postman_'))) {
     assert.equal(visibleToWorker(name), false, name)

@@ -163,24 +163,37 @@ Preset `postman-leader` / `Postman Leader` хранится в репозито�
 не загружает отдельный preset-плагин: существующий `postman-bridge` подключается на уровне
 host-композиции в bundle `dsh-postman-harness`.
 
-Top-level Agent этого preset получает runtime allowlist для read-only inspection, Bridge и Worker:
+Top-level Agent этого preset получает положительный runtime allowlist ровно из 17
+зарегистрированных DSH 0.1.1-rc.2 tools:
 
 ```text
+ask_user_question
+todo_write
+exit_plan_mode
+create_goal
+get_goal
+update_goal
 read
-glob
+read_image
 grep
 skill
 web_fetch
-web_search
+postman_task_prepare
+postman_task_restore
 postman_bridge
 postman_bridge_status
 postman_worker
 postman_worker_stop
 ```
 
-`write`, `edit`, shell, generic `subagent`, workflow и direct Postman tools скрыты runtime-ом у Leader. Зарегистрированный `implementation_artifact_apply` не входит в Leader allowlist: его execute path допускает только точного активного Worker после отдельной авторизации REQ.
-Сам `postman_bridge` тоже является Leader-only capability: top-level `postman-leader` получает его
-в allowlist, а любой другой root/subagent Agent получает точечный `deny: [postman_bridge]`.
+`glob` и `web_search` не входят в список Leader: они запрещены только Leader и остаются доступны Worker из общего coding preset. Positive allowlist задан поверх общего
+preset: фактический каталог Leader сокращается до этих имён независимо от остальных регистраций.
+
+`write`, `edit`, shell, generic `subagent`, workflow, `web_search` и direct Postman tools скрыты runtime-ом у Leader. Зарегистрированный `implementation_artifact_apply` не входит в Leader allowlist: его execute path допускает только точного активного Worker после отдельной авторизации REQ. Worker остаётся с широким общим coding preset без положительного Worker allowlist; его runtime deny включает все зарегистрированные `postman_*` имена и не затрагивает `report`. Bridge сохраняет отдельный неизменный allowlist из четырёх инструментов: `skill`, `postman_send_current_turn`, `postman_current_turn_status`, `postman_ask_validate_reply`.
+Leader-only остаются все шесть Host controls (`postman_task_prepare`, `postman_task_restore`,
+`postman_bridge`, `postman_bridge_status`, `postman_worker`, `postman_worker_stop`): top-level
+`postman-leader` получает их в allowlist, а любой другой root/subagent Agent получает точечный deny
+всех шести имён.
 Tool body повторно проверяет caller и при обходе visibility boundary возвращает
 `POSTMAN_BRIDGE_CALLER_REJECTED` до parsing/spawn.
 
@@ -233,5 +246,8 @@ Bridge никогда не делает blind resend.
 ## 11. Ordinary subagents
 
 Обычные `subagent`/`subagent_fork` capabilities Harness не изменяются. Для не-Leader Agents
-добавляется только точечный deny имени `postman_bridge`; остальные global tools этим deny не
-затрагиваются. `postman_bridge` остаётся отдельным специализированным tool с фиксированной Luna.
+`postmanBridgeRestrictionForAgent` добавляет точечный deny ровно шести Host controls:
+`postman_task_prepare`, `postman_task_restore`, `postman_bridge`, `postman_bridge_status`,
+`postman_worker`, `postman_worker_stop`; остальные global tools этим deny не затрагиваются.
+`glob` не запрещён Worker: он остаётся доступен ему из общего coding preset, но скрыт у Leader.
+`postman_bridge` остаётся отдельным специализированным tool с фиксированной Luna.

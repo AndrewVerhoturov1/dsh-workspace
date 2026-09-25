@@ -1,7 +1,7 @@
 # Shared Postman composition for the Leader and its local Worker.
-# The exact top-level Leader is narrowed by the runtime restriction in
-# dsh-postman-harness/bridge; its ordinary spawn Worker gets standard coding
-# capabilities, except for a runtime deny-only filter on postman_* controls.
+# The exact top-level Leader is narrowed by a positive 17-name runtime allowlist
+# in dsh-postman-harness/bridge; its ordinary spawn Worker keeps the shared coding
+# capabilities, with a deny-only filter on registered postman_* controls.
 
 - id: persona
   name: '@deepseek-ai/dsh-persona'
@@ -33,7 +33,7 @@
   disabled: !!js process.platform !== 'win32'
 
 # Filesystem: registers read/read_image/write/edit. The Leader runtime boundary
-# keeps only read; the ordinary Worker receives write/edit from this preset.
+# keeps read and read_image; the ordinary Worker receives write/edit from this preset.
 - id: tool-fs
   name: '@deepseek-ai/dsh-tool-fs'
 

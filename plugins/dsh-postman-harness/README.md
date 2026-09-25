@@ -67,20 +67,25 @@ child scope. Child assistant prose не используется как result a
 Файловый preset `Postman Leader` (`postman-leader`) находится в корне репозитория в
 `.agent-presets/postman-leader/`. Встроенный `dsh-agent-presets` находит его в
 `$DSH_HOME/.agent-presets`; при проверке отдельного рабочего дерева нужно задать `DSH_HOME`
-на его корень. Runtime boundary оставляет top-level Agent-у read-only inspection и Leader-only controls:
+на его корень. Runtime boundary даёт top-level Agent-у положительный allowlist ровно из 17
+зарегистрированных tools:
 
 ```text
-read, glob, grep, skill, web_fetch, web_search, postman_task_prepare, postman_task_restore, postman_bridge, postman_bridge_status, postman_worker, postman_worker_stop
+ask_user_question, todo_write, exit_plan_mode, create_goal, get_goal, update_goal, read, read_image, grep, skill, web_fetch, postman_task_prepare, postman_task_restore, postman_bridge, postman_bridge_status, postman_worker, postman_worker_stop
 ```
 
+`glob` и `web_search` намеренно отсутствуют; незарегистрированные имена не являются
+допустимыми aliases. Positive allowlist действует поверх общего preset.
+
 Любой `origin=subagent` считается non-Leader и получает deny всех Leader-only tools. Luna Bridge
-дополнительно получает свой отдельный `toolFilter`, который оставляет только transport tools.
+дополнительно получает свой отдельный четырёхимённый `toolFilter`: `skill`,
+`postman_send_current_turn`, `postman_current_turn_status`, `postman_ask_validate_reply`.
 Worker не имеет собственного узкого списка разрешений: его обычные инструменты приходят из
 общего preset, в том числе read/glob/grep/write/edit, pwsh на Windows (bash на других системах),
-jobs, web search/fetch и обычное делегирование. При создании Worker host берёт зарегистрированные
-инструменты с префиксом `postman_` и задаёт только запрет на них в дочерней сессии; штатный
-`report`, установленный в собственной области child, остаётся доступен. Модель Worker задаётся
-отдельно от Bridge.
+jobs, web search/fetch и обычное делегирование. При создании Worker host берёт все фактически
+зарегистрированные инструменты с префиксом `postman_` и задаёт только запрет на них в дочерней
+сессии; штатный `report`, установленный в собственной области child, остаётся доступен.
+Модель Worker задаётся отдельно от Bridge.
 
 Host хранит отображение точного Leader session id в durable child session id только в памяти.
 Первое задание запускает `startContinuable`, дальнейшие задания идут через `followup`.

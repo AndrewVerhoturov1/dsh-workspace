@@ -1,3 +1,3 @@
 name: Postman Leader
-description: Supervisor with a broad shared preset composition and a narrow runtime tool boundary; provides a continuable local Worker.
+description: Supervisor with a shared coding preset; runtime allows exactly 17 registered tools to the Leader while Worker retains broad coding tools and denies registered postman_* controls.
 order: 4
