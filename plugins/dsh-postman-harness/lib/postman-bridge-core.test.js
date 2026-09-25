@@ -15,6 +15,7 @@ import {
   POSTMAN_WORKER_STOP_TOOL_NAME,
   POSTMAN_LEADER_PRESET_ID,
   POSTMAN_LEADER_TOOL_ALLOWLIST,
+  POSTMAN_LEADER_ONLY_TOOL_NAMES,
   buildPostmanBridgeStartRequest,
   createPostmanBridgeBoundaryManager,
   isTopLevelPostmanLeader,
@@ -181,7 +182,15 @@ test('bridge authorization and visibility are limited to top-level postman-leade
   assert.equal(postmanBridgeCallerAllowed(delegated), false)
 
   assert.deepEqual(POSTMAN_LEADER_TOOL_ALLOWLIST, [
-    'read', 'glob', 'grep', 'skill', 'web_fetch', 'web_search', 'postman_task_prepare', 'postman_task_restore', 'postman_bridge', 'postman_bridge_status', 'postman_worker', 'postman_worker_stop',
+    'ask_user_question', 'todo_write', 'exit_plan_mode', 'create_goal', 'get_goal', 'update_goal',
+    'read', 'read_image', 'grep', 'skill', 'web_fetch', 'postman_task_prepare', 'postman_task_restore',
+    'postman_bridge', 'postman_bridge_status', 'postman_worker', 'postman_worker_stop',
+  ])
+  assert.equal(POSTMAN_LEADER_TOOL_ALLOWLIST.length, 17)
+  assert.equal(new Set(POSTMAN_LEADER_TOOL_ALLOWLIST).size, 17)
+  assert.deepEqual(POSTMAN_LEADER_ONLY_TOOL_NAMES, [
+    'postman_task_prepare', 'postman_task_restore', 'postman_bridge', 'postman_bridge_status',
+    'postman_worker', 'postman_worker_stop',
   ])
   assert.deepEqual(postmanBridgeRestrictionForAgent(leader), {
     allow: [...POSTMAN_LEADER_TOOL_ALLOWLIST],
@@ -195,9 +204,10 @@ test('bridge authorization and visibility are limited to top-level postman-leade
 
   assert.equal(POSTMAN_LEADER_TOOL_ALLOWLIST.includes('write'), false)
   assert.equal(POSTMAN_LEADER_TOOL_ALLOWLIST.includes('edit'), false)
-  for (const hidden of ['pwsh', 'bash', 'subagent', 'subagent_fork', 'workflow', 'todo_write']) {
+  for (const hidden of ['pwsh', 'bash', 'subagent', 'subagent_fork', 'workflow']) {
     assert.equal(POSTMAN_LEADER_TOOL_ALLOWLIST.includes(hidden), false, hidden)
   }
+  assert.equal(POSTMAN_LEADER_TOOL_ALLOWLIST.includes('todo_write'), true)
   assert.equal(POSTMAN_LEADER_TOOL_ALLOWLIST.includes('postman_send_current_turn'), false)
 })
 
@@ -250,6 +260,8 @@ test('package and composition expose bridge entrypoint and leader preset', () =>
   assert.match(leaderMetadata, /^name: Postman Leader$/m)
   assert.match(leaderMetadata, /^order: 4$/m)
   assert.match(leaderPreset, /id: persona[\s\S]*name: '@deepseek-ai\/dsh-persona'[\s\S]*text:/)
+  assert.match(leaderMetadata, /17 registered tools/i)
+  assert.match(leaderPreset, /positive 17-name runtime allowlist/)
   assert.match(leaderPreset, /id: tool-web[\s\S]*fetch: true[\s\S]*search: true/)
   assert.deepEqual(
     [...leaderPreset.matchAll(/^\s*- id: ([\w-]+)\s*$/gm)].map((match) => match[1]),
@@ -275,7 +287,10 @@ test('package and composition expose bridge entrypoint and leader preset', () =>
   assert.match(agents, /POSTMAN_BRIDGE_CALLER_REJECTED/)
 
   const leaderSkill = readFileSync(join(repoRoot, '.agents', 'skills', 'postman-leader', 'SKILL.md'), 'utf8')
-  assert.match(leaderSkill, /POSTMAN_LEADER_SKILL_VERSION: 7/)
+  assert.match(leaderSkill, /POSTMAN_LEADER_SKILL_VERSION: 8/)
+  assert.match(leaderSkill, /положительный runtime allowlist ровно из 17 зарегистрированных имён/)
+  assert.match(leaderSkill, /Worker сохраняет общий coding-tool surface preset/)
+  assert.match(leaderSkill, /Bridge получает отдельный неизменный allowlist из четырёх transport tools/)
   assert.match(leaderSkill, /artifactRequestId: "REQ_..."/)
   assert.ok(leaderSkill.includes('implementation_artifact_apply({requestId:'))
   assert.doesNotMatch(leaderSkill, /передаёт exact путь ZIP/)

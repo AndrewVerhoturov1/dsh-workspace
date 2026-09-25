@@ -18,12 +18,17 @@ export const POSTMAN_BRIDGE_TOOL_ALLOWLIST = Object.freeze([
 ])
 export const POSTMAN_LEADER_PRESET_ID = 'postman-leader'
 export const POSTMAN_LEADER_TOOL_ALLOWLIST = Object.freeze([
+  'ask_user_question',
+  'todo_write',
+  'exit_plan_mode',
+  'create_goal',
+  'get_goal',
+  'update_goal',
   'read',
-  'glob',
+  'read_image',
   'grep',
   'skill',
   'web_fetch',
-  'web_search',
   POSTMAN_TASK_PREPARE_TOOL_NAME,
   POSTMAN_TASK_RESTORE_TOOL_NAME,
   POSTMAN_BRIDGE_TOOL_NAME,

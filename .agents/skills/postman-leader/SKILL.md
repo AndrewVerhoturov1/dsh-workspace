@@ -7,7 +7,7 @@ description: >-
 
 # Postman Leader
 
-`POSTMAN_LEADER_SKILL_VERSION: 7`
+`POSTMAN_LEADER_SKILL_VERSION: 8`
 
 ## Роль
 
@@ -26,7 +26,18 @@ Leader самостоятельно:
 
 ## Разделение ролей и инструментов
 
-- Leader (Sol) руководит, оценивает результаты и выбирает следующий шаг. Его фактический каталог ограничен runtime независимо от широкого общего preset. Он видит read, glob, grep, skill, web_fetch, web_search, postman_task_prepare, postman_task_restore, postman_bridge, postman_bridge_status, postman_worker и postman_worker_stop, но не write, edit, pwsh, bash, subagent или workflow. Не обходить ограничения скрытыми вызовами.
+- Leader (Sol) руководит, оценивает результаты и выбирает следующий шаг. Фактический каталог top-level Leader задаёт положительный runtime allowlist ровно из 17 зарегистрированных имён: `ask_user_question`, `todo_write`, `exit_plan_mode`, `create_goal`, `get_goal`, `update_goal`, `read`, `read_image`, `grep`, `skill`, `web_fetch`, `postman_task_prepare`, `postman_task_restore`, `postman_bridge`, `postman_bridge_status`, `postman_worker`, `postman_worker_stop`. `glob` и `web_search` запрещены только Leader и доступны Worker из общего coding preset; не обходить список скрытыми вызовами.
+- Leader-only deny-list остаётся ровно шестью Host tools: `postman_task_prepare`, `postman_task_restore`, `postman_bridge`, `postman_bridge_status`, `postman_worker`, `postman_worker_stop`. Worker сохраняет общий coding-tool surface preset (включая glob, read/write/edit, shell, subagent/workflow, web tools и отчёт), без специального positive allowlist; runtime deny включает все зарегистрированные `postman_*` tools, но не `report` и не обычные coding tools. Bridge получает отдельный неизменный allowlist из четырёх transport tools и свой `toolFilter`; Leader allowlist Worker и Bridge не меняют.
+
+### Применение дополнительных инструментов Leader
+
+- `ask_user_question` используй, когда для безопасного или правильного продолжения действительно нужно решение/уточнение пользователя; не задавай его при достаточных вводных.
+- `todo_write` используй для списка конкретных этапов многошаговой работы, поддерживай состояния по мере выполнения; для простой однократной задачи список этапов не обязателен.
+- `exit_plan_mode` вызывай только для завершения текущего режима плана с готовым планом; это не общий инструмент завершения ответа или работы.
+- Для длинной непрерывной цели используй `create_goal`; перед каждым `update_goal` сначала вызови `get_goal` и передай точные текущие идентификатор и ревизию. После возобновления приостановленной/сохранённой сессии, если нужно продолжать цель, сначала rearm её через `update_goal` с действием resume. Не создавай цель для короткой разовой задачи.
+- `read_image` используй, когда нужно непосредственно проверить визуальное доказательство (например, снимок экрана или изображение результата); не подменяй им чтение текста.
+- `web_fetch` загружает только уже известный точный HTTP(S)-адрес. `web_search` Leader не получает: не имитируй поиск другими инструментами и запроси адрес или поручай исследование через Bridge, если он необходим.
+- `glob` Leader не получает; он запрещён только Leader. Worker сохраняет `glob` и общий coding preset.
 - Bridge (Luna) обслуживает только ChatGPT Web через штатный Direct Postman. Его узкий фильтр и доверенная граница не меняются.
 - Worker (Luna) — обычный продолжаемый дочерний Agent для локального исполнения, проверки и работы с репозиторием. Он получает инструменты общего preset без специального Worker-списка разрешений; postman_bridge остаётся доступным только Leader. Как обычный coding-agent с shell Worker теоретически может запускать локальные программы сам: граница безопасности здесь не запрещает произвольные программы, а ограничивает доступ к trusted Host grant и `implementation_artifact_apply` для exact Postman artifact отдельно авторизованным Worker.
 
