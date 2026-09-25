@@ -53,6 +53,9 @@ OBSERVER_INVALID_CONFIG = "OBSERVER_INVALID_CONFIG"
 TURN_CONTAINER_SELECTORS = (
     '[data-testid^="conversation-turn-"]',
     '[data-message-author-role="user"], [data-message-author-role="assistant"]',
+    # Current ChatGPT transcript markup (2026-09) exposes user bubbles and
+    # assistant message ids, but neither legacy turn ids nor author roles.
+    'main [data-user-message-bubble="true"], main [data-chatgpt-selection-message-id]',
 )
 
 GENERATION_CONTROL_SELECTORS = (
@@ -98,6 +101,8 @@ def _inner_text(locator: Any) -> str:
 def _turn_message_node(turn: Any) -> Any:
     """Return semantic message content, excluding user-turn UI chrome."""
     direct_role = _get_attribute(turn, "data-message-author-role").casefold()
+    if _get_attribute(turn, "data-user-message-bubble").casefold() == "true":
+        return turn
     if direct_role == "user":
         semantic, _ = submit.find_user_message_content(turn)
         return semantic if semantic is not None else turn
@@ -149,6 +154,11 @@ def infer_turn_role(turn: Any) -> str:
     role = _get_attribute(message, "data-message-author-role").casefold()
     if role in {"user", "assistant"}:
         return role
+
+    if _get_attribute(turn, "data-user-message-bubble").casefold() == "true":
+        return "user"
+    if _get_attribute(turn, "data-chatgpt-selection-message-id"):
+        return "assistant"
 
     test_id = _get_attribute(turn, "data-testid").casefold()
     if "conversation-turn-user" in test_id:

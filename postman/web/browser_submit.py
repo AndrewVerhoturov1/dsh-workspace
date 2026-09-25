@@ -70,6 +70,10 @@ TURN_SELECTORS = (
     '[data-testid^="conversation-turn-"]',
     '[data-message-author-role="user"]',
     'article[data-testid^="conversation-turn-"]',
+    # Current ChatGPT transcript markup (2026-09): user bubble and assistant
+    # message nodes no longer expose conversation-turn test ids or author roles.
+    'main [data-user-message-bubble="true"]',
+    'main [data-chatgpt-selection-message-id]',
 )
 
 USER_TURN_SELECTORS = (
@@ -77,6 +81,8 @@ USER_TURN_SELECTORS = (
     # aliases are never combined into one count.
     '[data-message-author-role="user"]',
     '[data-testid="conversation-turn-user"]',
+    # Exact visible user payload in the current ChatGPT transcript markup.
+    'main [data-user-message-bubble="true"]',
 )
 
 # ChatGPT may put controls (for example the collapsible-message toggle) inside
@@ -87,6 +93,7 @@ USER_MESSAGE_CONTENT_SELECTORS = (
     '[data-testid="user-message-content"]',
     '[data-testid="message-content"]',
     '[data-message-content]',
+    '[data-user-message-bubble="true"]',
 )
 
 # User-message rendering converts Markdown inline-code delimiters into a
@@ -296,8 +303,8 @@ def _locator_count(locator: Any) -> int:
 
 
 def count_conversation_turns(page: Any) -> int:
-    # The first selector is the preferred current ChatGPT contract. Fallbacks
-    # are only consulted if it is absent, avoiding double-counting aliases.
+    # The first selector family present is the preferred contract. Fallbacks
+    # are only consulted if absent, avoiding double-counting aliases.
     for selector in TURN_SELECTORS:
         try:
             locator = page.locator(selector)
