@@ -108,27 +108,27 @@ _SEMANTIC_MESSAGE_TEXT_JS = r"""
     "H4", "H5", "H6", "HEADER", "LI", "MAIN", "OL", "P",
     "PRE", "SECTION", "TABLE", "UL",
   ]);
-  const lastCharacter = () => chunks.length ? chunks[chunks.length - 1].slice(-1) : "";
+  let output = "";
+  const lastCharacter = () => output.slice(-1);
   const blockBoundary = () => {
-    if (chunks.length && lastCharacter() !== "\\n") chunks.push("\\n");
+    if (output && lastCharacter() !== "\n") output += "\n";
   };
   const walk = (node, isRoot = false) => {
     if (node.nodeType === Node.TEXT_NODE) {
-      chunks.push(node.nodeValue || "");
+      output += node.nodeValue || "";
       return;
     }
     if (node.nodeType !== Node.ELEMENT_NODE) return;
     const block = !isRoot && blockTags.has(node.tagName);
-    if (block) blockBoundary();
+    if (block && output) blockBoundary();
     const inlineCode = node.matches("code.user-message-inline-code");
-    if (inlineCode) chunks.push("`");
+    if (inlineCode) output += "`";
     for (const child of node.childNodes) walk(child);
-    if (inlineCode) chunks.push("`");
+    if (inlineCode) output += "`";
     if (block) blockBoundary();
   };
   walk(root, true);
-  while (chunks.length && chunks[chunks.length - 1] === "\\n") chunks.pop();
-  return chunks.join("");
+  return output.endsWith("\n") ? output.slice(0, -1) : output;
 }
 """
 
