@@ -99,7 +99,7 @@ class DelegateViaPostmanSkillContract(unittest.TestCase):
 
     def test_postman_permission_is_current_message_only(self):
         self.assertIn("Postman permission is current-message-only", self.skill)
-        self.assertIn("Разрешение действует только для этого сообщения", self.agents)
+        self.assertIn("Это разрешение действует только для текущего сообщения", self.agents)
         self.assertIn("не наследуется из предыдущих сообщений", self.agents)
 
         trigger_pattern = re.compile(r"^\s*@Postman(?:\s|$)")

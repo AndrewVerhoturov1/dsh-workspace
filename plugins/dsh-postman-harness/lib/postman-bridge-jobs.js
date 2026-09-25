@@ -54,7 +54,7 @@ function snapshot(job) {
 }
 
 /** Process-local jobs live through tool invocation and retain terminal until plugin disposal. */
-export function createPostmanBridgeJobs(ctx, coordinator, grants) {
+export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts) {
   if (typeof coordinator?.run !== 'function') throw new Error('POSTMAN_BRIDGE_COORDINATOR_REQUIRED')
   const jobs = new Map()
   let disposed = false
@@ -77,6 +77,8 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants) {
         return { status: 'POSTMAN_BRIDGE_PARENT_UNAVAILABLE' }
       }
     } catch { return { status: 'POSTMAN_BRIDGE_PARENT_UNAVAILABLE' } }
+    if (contexts && contexts.get(parent.id) !== job.taskContext) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
+    if (typeof contexts?.hasActiveOperation === 'function' && contexts.hasActiveOperation(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
     let run
     try {
       run = await ctx.subagents.start(POSTMAN_BRIDGE_PROVIDER, buildPostmanBridgeStartRequest({
@@ -86,6 +88,10 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants) {
       return { status: 'POSTMAN_BRIDGE_START_FAILED', diagnostic: diagnostic(error) }
     }
     job.childSessionId = String(run.id)
+    if (contexts && !contexts.bindChild(job.parentSessionId, job.childSessionId)) {
+      try { await run.dispose() } catch {}
+      return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
+    }
     let terminal
     try {
       const child = run.localAgent
@@ -110,7 +116,8 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants) {
       job.requestId = terminal.requestId ?? null
     } finally {
       // A failed cleanup must not be reported as clean completion or release early.
-      await run.dispose()
+      try { await run.dispose() }
+      finally { contexts?.releaseChild(job.childSessionId) }
     }
     // Coordinator releases its slot when this cleaned terminal is returned.
     return terminal
@@ -152,9 +159,15 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants) {
   }
 
   function accept(parent, message, transportKind) {
+    const taskContext = contexts?.get(parent.id)
+    if (contexts && !taskContext) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
+    if (typeof contexts?.isRestoring === 'function' && contexts.isRestoring(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
+    if (typeof contexts?.hasActiveOperation === 'function' && contexts.hasActiveOperation(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
     if (disposed) return { status: 'POSTMAN_BRIDGE_UNAVAILABLE' }
+    if (contexts && [...jobs.values()].some(job => job.parentSessionId === parent.id &&
+        !['TERMINAL', 'FAILED'].includes(job.state))) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
     const job = {
-      bridgeJobId: randomUUID(), parentSessionId: parent.id, transportKind, state: 'QUEUED',
+      bridgeJobId: randomUUID(), parentSessionId: parent.id, taskContext, transportKind, state: 'QUEUED',
       createdAt: new Date().toISOString(), controller: new AbortController(),
       notification: 'PENDING',
     }
@@ -164,12 +177,32 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants) {
     try { admission = coordinator.run(job.controller.signal, () => lifecycle(job, message)) }
     catch (error) { admission = Promise.reject(error) }
     job.completion = admission.then(async result => {
-        // Includes early lifecycle failures (parent/start/child) and invalid trusted statuses.
+        // Includes early lifecycle failures and invalid trusted statuses.
         const safe = losslessValue(result)
         job.trustedTerminal = safe
         job.requestId = safe.requestId ?? job.requestId ?? null
+        // A successful Direct publication advances the same clean task worktree.
+        // Never grant an artifact if the remote branch/parent cannot be proved.
+        const publication = safe.result?.ok === true ? safe.result
+          : safe.result?.ok === false && safe.result.code === 'POSTMAN_TRANSPORT_FAILED'
+            ? safe.result.publicationReceipt : null
+        if (contexts && safe.status === 'POSTMAN_BRIDGE_TERMINAL' && publication) {
+          let synchronized = false
+          let reason = 'Task branch publication cannot be synchronized safely.'
+          try {
+            synchronized = await contexts.sync(job.parentSessionId,
+              publication.taskPublicationCommit, publication.baseCommit)
+          } catch (error) { reason += ' ' + diagnostic(error) }
+          if (!synchronized) {
+            job.trustedTerminal = { status: 'POSTMAN_TASK_PUBLICATION_SYNC_FAILED',
+              requestId: safe.requestId, diagnostic: reason,
+              ...(safe.result?.ok === false ? { terminalStatus: safe.terminalStatus, result: safe.result } : {}) }
+            job.state = 'FAILED'
+            return
+          }
+        }
         // Only a trusted terminal from a fully cleaned child may authorize a grant.
-        if (safe.status === 'POSTMAN_BRIDGE_TERMINAL') {
+        if (safe.status === 'POSTMAN_BRIDGE_TERMINAL' && safe.result?.ok !== false) {
           try { await grants?.register(job.parentSessionId, safe) }
           catch (error) { job.grantDiagnostic = diagnostic(error) }
         }
@@ -184,6 +217,11 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants) {
         notify(job)
       })
     return { status: 'POSTMAN_BRIDGE_ACCEPTED', ...snapshot(job) }
+  }
+
+  function hasActive(parentSessionId) {
+    return [...jobs.values()].some(job => job.parentSessionId === parentSessionId &&
+      !['TERMINAL', 'FAILED'].includes(job.state))
   }
 
   function status(parent, bridgeJobId) {
@@ -217,5 +255,5 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants) {
     jobs.clear()
   }
 
-  return { accept, status, dispose }
+  return { accept, status, hasActive, dispose }
 }

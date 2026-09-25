@@ -88,6 +88,32 @@ class PostmanAskDeliveryTests(unittest.TestCase):
             self.assertEqual(result_path.read_bytes(), encoded)
             self.assertEqual(result_path.name, delivery["resultFileName"])
 
+    def test_inline_and_file_success_keep_publication_identity(self):
+        for length, expected_mode in ((4096, postman_ask.DELIVERY_INLINE),
+                                      (4097, postman_ask.DELIVERY_FILE)):
+            with self.subTest(length=length), tempfile.TemporaryDirectory() as root:
+                direct = self.make_direct(root)
+                text = "Ж" * length
+                sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
+                Bridge.result = {"ok": True, "code": postman_ask.ASSISTANT_COMPLETED_NO_ARTIFACT,
+                                 "details": {"assistantText": "envelope", "assistantIndex": 7,
+                                             "noArtifactRecheckMs": 10_000}}
+                with patch.object(postman_ask.text_result, "parse_text_envelope",
+                                  return_value={"ok": True, "details": {"assistantText": text,
+                                                                          "assistantTextSha256": sha}}):
+                    result = direct.run(request_id=REQ, task="probe")
+                self.assertEqual(result["deliveryMode"], expected_mode)
+                self.assertEqual(direct.publication_receipt["requestId"], REQ)
+                self.assertEqual(direct.publication_receipt["taskPublicationCommit"], "b" * 40)
+                self.assertEqual(direct.publication_receipt["baseCommit"], "a" * 40)
+                self.assertNotIn("publicationReceipt", result)
+                if expected_mode == postman_ask.DELIVERY_FILE:
+                    self.assertNotIn("assistantText", result)
+                    self.assertEqual(Path(result["resultFile"]).read_text(encoding="utf-8"), text)
+                else:
+                    self.assertEqual(result["assistantText"], text)
+                    self.assertNotIn("resultFile", result)
+
     def test_run_file_mode_keeps_full_text_out_of_terminal_and_state_json(self):
         with tempfile.TemporaryDirectory() as root:
             direct = self.make_direct(root)

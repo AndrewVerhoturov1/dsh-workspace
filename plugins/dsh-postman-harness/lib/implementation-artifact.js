@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { readFile, stat } from 'node:fs/promises'
-import { isAbsolute } from 'node:path'
+import { isAbsolute, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn, execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -117,7 +117,7 @@ export async function runImplementationPackage(grant, worktree, { python = 'pyth
 export function createImplementationArtifactApplyTool(ctx, grants, worker, options = {}) {
   return defineTool({
     name: IMPLEMENTATION_ARTIFACT_APPLY_TOOL_NAME,
-    description: 'Apply the trusted RESULT_DURABLE ZIP in an independently prepared clean worktree using the existing repository runner. Only the exact active Worker of its owning Leader may call this.',
+    description: 'Apply the trusted RESULT_DURABLE ZIP in the exact Leader-bound clean task worktree using the existing repository runner. Only the exact active Worker of its owning Leader may call this.',
     parameters: {
       requestId: { type: 'string', required: true },
       worktree: { type: 'string', required: true },
@@ -129,16 +129,33 @@ export function createImplementationArtifactApplyTool(ctx, grants, worker, optio
       if (leaderId === null || ctx.agents.get(caller.id) !== caller) {
         return { status: 'IMPLEMENTATION_ARTIFACT_CALLER_REJECTED' }
       }
-      const grant = await grants.resolve(leaderId, args?.requestId)
-      if (grant === null) return { status: 'IMPLEMENTATION_ARTIFACT_GRANT_REJECTED' }
-      if (typeof args?.worktree !== 'string' || !isAbsolute(args.worktree)) {
-        return { status: 'IMPLEMENTATION_ARTIFACT_WORKTREE_INVALID' }
+      const operationLock = options.taskContexts?.beginOperation
+      if (typeof operationLock === 'function' && !operationLock(leaderId, id => Boolean(options.jobs?.hasActive(id)))) {
+        return { status: 'IMPLEMENTATION_ARTIFACT_WORKTREE_BUSY' }
       }
-      if (!await (options.verifiedRepository ?? verifiedRepository)(args.worktree)) {
-        return { status: 'IMPLEMENTATION_ARTIFACT_REPOSITORY_REJECTED' }
-      }
-      // The runner validates worktree cleanliness, protected paths and package applicability.
-      return runImplementationPackage(grant, args.worktree, options)
+      let runnerOutcome
+      try {
+        const grant = await grants.resolve(leaderId, args?.requestId)
+        if (grant === null) return { status: 'IMPLEMENTATION_ARTIFACT_GRANT_REJECTED' }
+        if (typeof args?.worktree !== 'string' || !isAbsolute(args.worktree)) {
+          return { status: 'IMPLEMENTATION_ARTIFACT_WORKTREE_INVALID' }
+        }
+        const context = options.taskContexts?.get(leaderId)
+        if (options.taskContexts && (!context || worker.contextOf(leaderId) !== context ||
+            resolve(args.worktree).replaceAll('\\', '/').toLowerCase() !==
+            resolve(context.worktree).replaceAll('\\', '/').toLowerCase())) {
+          return { status: 'IMPLEMENTATION_ARTIFACT_WORKTREE_REJECTED' }
+        }
+        if (options.taskContexts && !await options.taskContexts.verifyWorktree(leaderId)) {
+          return { status: 'IMPLEMENTATION_ARTIFACT_WORKTREE_REJECTED' }
+        }
+        if (!await (options.verifiedRepository ?? verifiedRepository)(args.worktree)) {
+          return { status: 'IMPLEMENTATION_ARTIFACT_REPOSITORY_REJECTED' }
+        }
+        // The runner validates worktree cleanliness, protected paths and package applicability.
+        runnerOutcome = await runImplementationPackage(grant, args.worktree, options)
+        return runnerOutcome
+      } finally { options.taskContexts?.endOperation?.(leaderId, runnerOutcome) }
     },
   })
 }

@@ -15,7 +15,7 @@ function deferred() {
   return { promise, resolve }
 }
 
-function fixture({ onStart, onStatus, onDispose, onWake, grants, coordinator } = {}) {
+function fixture({ onStart, onStatus, onDispose, onWake, grants, coordinator, contexts } = {}) {
   const ctx = new Context()
   ctx.systemPrompt = { tools() {} }
   new ToolRuntime(ctx)
@@ -27,7 +27,7 @@ function fixture({ onStart, onStatus, onDispose, onWake, grants, coordinator } =
   const get = ctx.tools.get.bind(ctx.tools)
   ctx.tools.get = (name, agent) => name === 'postman_current_turn_status'
     ? { execute: statusReader } : get(name, agent)
-  const jobs = createPostmanBridgeJobs(ctx, coordinator ?? createPostmanBridgeLaunchCoordinator(), grants)
+  const jobs = createPostmanBridgeJobs(ctx, coordinator ?? createPostmanBridgeLaunchCoordinator(), grants, contexts)
   ctx.tools.register(createPostmanBridgeStatusTool(ctx, jobs))
   parent.followup = onWake ?? (() => {})
   let next = 0
@@ -110,6 +110,98 @@ test('artifact descriptor is retained without losing metadata', async () => {
   const accepted = f.accept()
   await tick()
   assert.deepEqual(valid(await f.read(accepted), 'POSTMAN_BRIDGE_TERMINAL').result, descriptor)
+  await f.jobs.dispose()
+})
+
+test('bound publication synchronizes before grant and reports JSON-safe failure', async () => {
+  const publication = { ok: true, code: 'RESULT_DURABLE', taskPublicationCommit: 'b'.repeat(40), baseCommit: 'a'.repeat(40) }
+  for (const acceptedSync of [true, false, 'throws']) {
+    const order = []
+    const context = { branch: 'task/postman-context' }
+    const contexts = { get: () => context, bindChild: () => true, releaseChild() {},
+      async sync(_leader, publicationCommit, baseCommit) {
+        assert.equal(publicationCommit, publication.taskPublicationCommit)
+        assert.equal(baseCommit, publication.baseCommit)
+        order.push('sync')
+        if (acceptedSync === 'throws') throw new Error('remote unavailable')
+        return acceptedSync
+      } }
+    const grants = { async register() { order.push('grant') } }
+    const f = fixture({ contexts, grants, onStatus: () => ({ status: 'COMPLETED',
+      requestId: 'REQ_SYNC', result: publication }) })
+    const accepted = f.accept()
+    await tick()
+    const reply = valid(await f.read(accepted), acceptedSync === true ? 'POSTMAN_BRIDGE_TERMINAL' : 'POSTMAN_BRIDGE_FAILED')
+    assert.deepEqual(order, acceptedSync === true ? ['sync', 'grant'] : ['sync'])
+    if (acceptedSync === true) assert.deepEqual(reply.result, publication)
+    else {
+      assert.equal(reply.result, null)
+      assert.equal(reply.trustedStatus, 'POSTMAN_TASK_PUBLICATION_SYNC_FAILED')
+      if (acceptedSync === 'throws') assert.match(reply.diagnostic, /remote unavailable/)
+    }
+    await f.jobs.dispose()
+  }
+})
+
+test('failed transport synchronizes proven publication but never grants artifact', async () => {
+  const receipt = { requestId: 'REQ_SYNC', taskPublicationCommit: 'b'.repeat(40), baseCommit: 'a'.repeat(40) }
+  const failure = { ok: false, code: 'POSTMAN_TRANSPORT_FAILED', requestId: receipt.requestId,
+    transportCode: 'WEB_LOST', transportMessage: 'lost', details: {}, publicationReceipt: receipt }
+  for (const syncResult of [true, false]) {
+    const calls = []
+    const context = {}
+    const contexts = { get: () => context, bindChild: () => true, releaseChild() {},
+      async sync(leader, publicationCommit, baseCommit) {
+        calls.push('sync')
+        assert.equal(publicationCommit, receipt.taskPublicationCommit)
+        assert.equal(baseCommit, receipt.baseCommit)
+        return syncResult
+      } }
+    const grants = { async register() { calls.push('grant') } }
+    const f = fixture({ contexts, grants, onStatus: () => ({ status: 'FAILED', requestId: receipt.requestId,
+      result: failure }) })
+    const accepted = f.accept()
+    await tick()
+    const response = valid(await f.read(accepted), syncResult ? 'POSTMAN_BRIDGE_TERMINAL' : 'POSTMAN_BRIDGE_FAILED')
+    assert.deepEqual(calls, ['sync'])
+    assert.deepEqual(response.result, failure)
+    assert.equal(response.terminalStatus, 'FAILED')
+    if (!syncResult) assert.equal(response.trustedStatus, 'POSTMAN_TASK_PUBLICATION_SYNC_FAILED')
+    await f.jobs.dispose()
+  }
+})
+
+test('three sequential publications synchronize second parent B to C without failure grants', async () => {
+  const sha = ch => ch.repeat(40)
+  const chain = [[sha('a'), sha('b')], [sha('b'), sha('c')], [sha('c'), sha('d')]]
+  const calls = []
+  const context = {}
+  let head = sha('a')
+  const contexts = { get: () => context, bindChild: () => true, releaseChild() {},
+    async sync(_leader, publicationCommit, baseCommit) {
+      calls.push([baseCommit, publicationCommit])
+      assert.equal(baseCommit, head)
+      head = publicationCommit
+      return true
+    } }
+  const grants = { async register() { throw Error('failure must never grant') } }
+  const f = fixture({ contexts, grants, onStatus: () => {
+    const index = calls.length
+    const [baseCommit, taskPublicationCommit] = chain[index]
+    const requestId = 'REQ_CHAIN_' + index
+    return { status: 'FAILED', requestId, result: { ok: false, code: 'POSTMAN_TRANSPORT_FAILED',
+      requestId, transportCode: 'WEB_LOST', transportMessage: 'lost', details: {},
+      publicationReceipt: { requestId, baseCommit, taskPublicationCommit } } }
+  } })
+  for (let i = 0; i < 3; i++) {
+    const accepted = f.accept()
+    await tick()
+    const terminal = valid(await f.read(accepted), 'POSTMAN_BRIDGE_TERMINAL')
+    assert.equal(terminal.terminalStatus, 'FAILED')
+    assert.equal(terminal.result.ok, false)
+  }
+  assert.deepEqual(calls, chain)
+  assert.equal(head, sha('d'))
   await f.jobs.dispose()
 })
 
