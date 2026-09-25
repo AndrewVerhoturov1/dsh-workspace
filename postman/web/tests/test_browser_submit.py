@@ -18,17 +18,18 @@ spec.loader.exec_module(submit)
 
 
 class FakeLocator:
-    def __init__(self, page=None, kind="generic", items=None, visible=True, enabled=True, text=""):
+    def __init__(self, page=None, kind="generic", items=None, visible=True, enabled=True, text="", attrs=None):
         self.page = page
         self.kind = kind
         self.items = list(items or [])
         self._visible = visible
         self._enabled = enabled
         self._text = text
+        self.attrs = dict(attrs or {})
         self.last = self
 
     def count(self):
-        return len(self.items) if self.items else (1 if self.kind in {"composer", "send", "body"} else 0)
+        return len(self.items) if self.items else (1 if self.kind in {"composer", "send", "body", "bubble"} else 0)
 
     def is_visible(self):
         return self._visible
@@ -42,6 +43,8 @@ class FakeLocator:
         return self.page.composer_text
 
     def inner_text(self, timeout=None):
+        if self.kind == "bubble":
+            return self._text
         if self.kind == "composer":
             return self.page.composer_text
         if self.kind == "body":
@@ -50,6 +53,14 @@ class FakeLocator:
 
     def text_content(self, timeout=None):
         return self.inner_text(timeout)
+
+    def evaluate(self, script):
+        if self.kind == "bubble":
+            return self._text
+        raise RuntimeError("no DOM evaluator in fake")
+
+    def get_attribute(self, name):
+        return self.attrs.get(name)
 
     def fill(self, text, timeout=None):
         if self.kind != "composer":
@@ -70,7 +81,8 @@ class FakeLocator:
             self.page.url = self.page.bound_url
 
     def nth(self, index):
-        return FakeLocator(text=self.items[index])
+        item = self.items[index]
+        return item if isinstance(item, FakeLocator) else FakeLocator(text=item)
 
 
 class FakePage:
@@ -120,6 +132,12 @@ class FakePage:
             return FakeLocator(self, "body")
         if selector == submit.TURN_SELECTORS[0]:
             return FakeLocator(items=["turn"] * self.turn_count)
+        if selector in submit.TURN_SELECTORS[1:3]:
+            return FakeLocator(items=[])
+        if selector == submit.TURN_SELECTORS[3]:
+            return FakeLocator(items=["turn"] * self.turn_count)
+        if selector == submit.TURN_SELECTORS[4]:
+            return FakeLocator(items=[])
         if selector in submit.USER_TURN_SELECTORS:
             return FakeLocator(items=self.user_turns)
         if selector == submit.SEND_BUTTON_SELECTORS[0]:
@@ -816,6 +834,37 @@ class BrowserSubmitTests(unittest.TestCase):
         details = submit.collect_user_turn_details(AliasPage())
         self.assertEqual(len(details), 1)
         self.assertEqual(details[0]["selector"], submit.USER_TURN_SELECTORS[0])
+
+    def test_current_chatgpt_user_bubble_proves_exact_request_key_without_retry(self):
+        request_id = "REQ_20260925T162138Z_6278"
+        prompt = f"POSTMAN_REQUEST_ID: {request_id}\ntask_file: exact pinned URL"
+
+        class CurrentMarkupLocator(FakeLocator):
+            def __init__(self, text, attrs):
+                super().__init__(kind="bubble", text=text, attrs=attrs)
+
+        class CurrentMarkupPage(FakePage):
+            def __init__(self):
+                super().__init__(composer_text="", user_turns=[], url="https://chatgpt.com/c/exact")
+                self.bubble = CurrentMarkupLocator(prompt, {"data-user-message-bubble": "true"})
+            def locator(self, selector):
+                if selector == 'main [data-user-message-bubble="true"]':
+                    return FakeLocator(items=[self.bubble])
+                if selector in submit.TURN_SELECTORS:
+                    return FakeLocator(items=[])
+                if selector in submit.USER_TURN_SELECTORS[:2]:
+                    return FakeLocator(items=[])
+                return super().locator(selector)
+
+        page = CurrentMarkupPage()
+        details = submit.collect_user_turn_details(page)
+        self.assertEqual(len(details), 1)
+        self.assertEqual(details[0]["text"], prompt)
+        ok, proof = submit._observe_send_proof(page, prompt, 0)
+        self.assertTrue(ok)
+        self.assertTrue(proof["requestKeyUserTurn"])
+        self.assertEqual(proof["userTurnSelector"], 'main [data-user-message-bubble="true"]')
+        self.assertEqual(page.click_count, 0)
 
     def test_wrong_user_turn_text_is_unknown(self):
         page = FakePage(confirm_on_click=False)

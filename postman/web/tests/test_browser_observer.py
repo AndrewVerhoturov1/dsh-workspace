@@ -77,8 +77,10 @@ class FakePage:
         return self.snapshots[min(self.step, len(self.snapshots) - 1)]
 
     def locator(self, selector):
-        if selector == observer.TURN_CONTAINER_SELECTORS[0]:
+        if selector in observer.TURN_CONTAINER_SELECTORS[:2]:
             return FakeLocator(items=self.current)
+        if selector == observer.TURN_CONTAINER_SELECTORS[2]:
+            return FakeLocator(items=[])
         if selector == observer.TURN_CONTAINER_SELECTORS[1]:
             return FakeLocator(items=[])
         if selector in observer.GENERATION_CONTROL_SELECTORS:
@@ -218,6 +220,29 @@ class ObserverTests(unittest.TestCase):
 
     def test_infer_role_unknown_fail_closed(self):
         self.assertEqual(observer.infer_turn_role(FakeLocator(text="x")), "unknown")
+
+    def test_current_chatgpt_markup_correlates_exact_req_user_and_assistant(self):
+        request_id = "REQ_20260925T162138Z_6278"
+        prompt = f"POSTMAN_REQUEST_ID: {request_id}\ntask_file: pinned"
+        answer = f"<<<POSTMAN_ASK_BEGIN:{request_id}>>>\nverified\n<<<POSTMAN_ASK_END:{request_id}>>>"
+
+        class CurrentPage:
+            def __init__(self):
+                self.nodes = [
+                    FakeLocator(text=prompt, attrs={"data-user-message-bubble": "true"}),
+                    FakeLocator(text=answer, attrs={"data-chatgpt-selection-message-id": "message-2"}),
+                ]
+            def locator(self, selector):
+                if selector == observer.TURN_CONTAINER_SELECTORS[2]:
+                    return FakeLocator(items=self.nodes)
+                return FakeLocator(items=[])
+
+        turns, selector = observer.snapshot_turns(CurrentPage())
+        self.assertEqual(selector, observer.TURN_CONTAINER_SELECTORS[2])
+        self.assertEqual([t["role"] for t in turns], ["user", "assistant"])
+        result = observer.correlate_next_assistant(turns, prompt)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["assistant"]["text"], answer)
 
     def test_snapshot_preserves_dom_order(self):
         page = FakePage([[turn("user", "u"), turn("assistant", "a")]])
