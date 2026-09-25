@@ -186,6 +186,7 @@ console.log(JSON.stringify({length: actual.length, sha256: hash(actual), joined}
         result = subprocess.run(
             [shutil.which("node"), "-e", script, submit._SEMANTIC_MESSAGE_TEXT_JS],
             check=True, capture_output=True, text=True, encoding="utf-8",
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
         )
         self.assertIn('"length":', result.stdout)
         self.assertIn('"joined":"POSTMAN_REQUEST_ID: REQ_20260925T171137Z_2420task_file: URL"', result.stdout)
