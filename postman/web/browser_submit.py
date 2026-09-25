@@ -558,7 +558,7 @@ def _composer_empty_from_snapshot(snapshot: dict[str, Any]) -> tuple[bool, dict[
     nonempty = [
         group
         for group in groups
-        if any(rep["_text"] != "" for rep in group["representations"])
+        if any(rep["_text"].strip() != "" for rep in group["representations"])
     ]
     preferred = next((group["preferred"] for group in groups if group["preferred"]), None)
     return not nonempty, {
