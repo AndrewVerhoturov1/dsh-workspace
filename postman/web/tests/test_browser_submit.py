@@ -208,6 +208,59 @@ class BrowserSubmitTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["code"], submit.FRESH_CHAT_CONFIRMED)
 
+    def test_composer_empty_proof_ignores_prosemirror_placeholder_newline(self):
+        class Node(FakeLocator):
+            def __init__(self):
+                super().__init__(kind="composer")
+
+            def evaluate(self, script):
+                return {
+                    "tag": "DIV", "id": "", "dataTestId": "",
+                    "role": "textbox", "contenteditable": "true", "ariaLabel": "Спросить ChatGPT",
+                    "visible": True, "enabled": True, "domPath": (1, 2),
+                    "nestingDepth": 2, "ancestorComposerPath": None,
+                    "inputValue": None, "innerText": "\n", "textContent": "",
+                    "semanticText": "", "paragraphText": "", "children": [],
+                }
+
+        class Page:
+            def locator(self, selector):
+                if selector in submit.COMPOSER_SNAPSHOT_SELECTORS:
+                    return Node()
+                return FakeLocator(items=[])
+
+        empty, details = submit._composer_empty_proof(Page())
+        self.assertTrue(empty)
+        self.assertTrue(details["composerEmpty"])
+        self.assertEqual(details["logicalComposerCount"], 1)
+        self.assertEqual(details["nonemptyComposerCandidateCount"], 0)
+
+    def test_composer_empty_proof_rejects_whitespace_padded_real_draft(self):
+        class Node(FakeLocator):
+            def __init__(self):
+                super().__init__(kind="composer")
+
+            def evaluate(self, script):
+                return {
+                    "tag": "DIV", "id": "", "dataTestId": "",
+                    "role": "textbox", "contenteditable": "true", "ariaLabel": "Спросить ChatGPT",
+                    "visible": True, "enabled": True, "domPath": (1, 2),
+                    "nestingDepth": 2, "ancestorComposerPath": None,
+                    "inputValue": None, "innerText": "\n draft \n", "textContent": " draft ",
+                    "semanticText": " draft ", "paragraphText": " draft ", "children": [],
+                }
+
+        class Page:
+            def locator(self, selector):
+                if selector in submit.COMPOSER_SNAPSHOT_SELECTORS:
+                    return Node()
+                return FakeLocator(items=[])
+
+        empty, details = submit._composer_empty_proof(Page())
+        self.assertFalse(empty)
+        self.assertFalse(details["composerEmpty"])
+        self.assertEqual(details["nonemptyComposerCandidateCount"], 1)
+
     def test_prepare_existing_chat_accepts_exact_bound_chat(self):
         url = "https://chatgpt.com/c/existing-123"
         page = FakePage(url=url, turn_count=4, user_turns=["old"])
