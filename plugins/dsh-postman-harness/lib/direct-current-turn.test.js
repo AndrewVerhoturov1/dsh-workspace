@@ -140,6 +140,88 @@ test('job manager sends exact payload only as UTF-8 Base64 to the existing Direc
 })
 
 
+test('failure publication receipt must match exact task branch, REQ and pinned URL', async () => {
+  for (const mutate of [null, receipt => { receipt.taskUrl += '?wrong=1' },
+    receipt => { receipt.branch = 'main' }, receipt => { receipt.requestId = 'REQ_20260922T123456Z_9999' }]) {
+    const child = fakeChild()
+    let checkpoint
+    const manager = new DirectPostmanJobManager({ exists: () => true,
+      directRoot: '/trusted', readPublicationState: path => {
+        assert.ok(path.replaceAll('\\', '/').endsWith('/trusted/requests/REQ_20260922T123456Z_0042.json'))
+        return JSON.stringify(checkpoint)
+      },
+      now: () => new Date('2026-09-22T12:34:56.000Z'), randomInt: () => 42,
+      spawn() { queueMicrotask(() => child.emit('spawn')); return child } })
+    const branch = 'task/postman-' + 'c'.repeat(32)
+    const started = await manager.start({ sessionId: 'failure', workspace: '/repo', payload: 'intent', branch })
+    const receipt = { requestId: started.requestId, repository: 'AndrewVerhoturov1/dsh-workspace', branch,
+      taskUrl: 'https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/' + 'b'.repeat(40) + '/' + started.requestId + '.md',
+      baseCommit: 'a'.repeat(40), taskPublicationCommit: 'b'.repeat(40) }
+    checkpoint = { ...receipt, state: 'FAILED' }
+    mutate?.(receipt)
+    child.stdout.emit('data', Buffer.from(JSON.stringify({ ok: false, code: 'POSTMAN_TRANSPORT_FAILED',
+      requestId: started.requestId, transportCode: 'WEB_FAILED', transportMessage: 'lost', details: {},
+      publicationReceipt: receipt })))
+    child.emit('close', 2, null)
+    const result = manager.view('failure').result
+    assert.equal(result.ok, false)
+    assert.equal(result.code, mutate ? 'POSTMAN_PUBLICATION_RECEIPT_INVALID' : 'POSTMAN_TRANSPORT_FAILED')
+    if (!mutate) assert.deepEqual(result.publicationReceipt, receipt)
+  }
+})
+
+test('failure fields never authorize publication without a matching checkpoint', async () => {
+  const branch = 'task/postman-' + 'c'.repeat(32)
+  for (const state of [null, { state: 'INIT' }, { state: 'FAILED', branch: 'task/postman-' + 'f'.repeat(32) }]) {
+    const child = fakeChild()
+    const manager = new DirectPostmanJobManager({ exists: () => true, directRoot: '/trusted',
+      now: () => new Date('2026-09-22T12:34:56.000Z'), randomInt: () => 42,
+      readPublicationState: () => { if (state === null) throw Error('missing'); return JSON.stringify(state) },
+      spawn() { queueMicrotask(() => child.emit('spawn')); return child } })
+    const started = await manager.start({ sessionId: 'no-checkpoint', workspace: '/repo', payload: 'intent', branch })
+    const receipt = { requestId: started.requestId, repository: 'AndrewVerhoturov1/dsh-workspace', branch,
+      taskUrl: 'https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/' + 'b'.repeat(40) + '/' + started.requestId + '.md',
+      baseCommit: 'a'.repeat(40), taskPublicationCommit: 'b'.repeat(40) }
+    if (state) Object.assign(state, receipt, state.branch ? { branch: state.branch } : {})
+    child.stdout.emit('data', Buffer.from(JSON.stringify({ ok: false, code: 'POSTMAN_TRANSPORT_FAILED',
+      requestId: started.requestId, transportCode: 'WEB_FAILED', transportMessage: 'lost', details: {},
+      publicationReceipt: receipt })))
+    child.emit('close', 2, null)
+    assert.equal(manager.view('no-checkpoint').result.code, 'POSTMAN_PUBLICATION_RECEIPT_INVALID')
+    assert.equal(manager.view('no-checkpoint').result.publicationReceipt, undefined)
+  }
+})
+
+test('trusted failure checkpoint binds the second parent and three sequential requests', async () => {
+  const branch = 'task/postman-' + 'c'.repeat(32)
+  const parentA = 'a'.repeat(40)
+  const parentB = 'b'.repeat(40)
+  const commits = ['c', 'd', 'e'].map(ch => ch.repeat(40))
+  const parents = [parentA, parentB, commits[1]]
+  const children = []
+  const checkpoints = new Map()
+  let suffix = 0
+  const manager = new DirectPostmanJobManager({ exists: () => true, directRoot: '/trusted',
+    now: () => new Date('2026-09-22T12:34:56.000Z'), randomInt: () => ++suffix,
+    readPublicationState: path => checkpoints.get(path.replaceAll('\\', '/')),
+    spawn() { const child = fakeChild(); children.push(child); queueMicrotask(() => child.emit('spawn')); return child } })
+  for (let i = 0; i < 3; i++) {
+    const started = await manager.start({ sessionId: 'serial', workspace: '/repo', payload: 'question ' + i,
+      transportKind: i === 2 ? 'text' : 'artifact', branch })
+    const receipt = { requestId: started.requestId, repository: 'AndrewVerhoturov1/dsh-workspace', branch,
+      taskUrl: 'https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/' + commits[i] + '/' + started.requestId + '.md',
+      baseCommit: parents[i], taskPublicationCommit: commits[i] }
+    checkpoints.set('/trusted/requests/' + started.requestId + '.json', JSON.stringify({ ...receipt,
+      state: i === 2 ? 'ASK_FAILED' : 'FAILED' }))
+    children[i].stdout.emit('data', Buffer.from(JSON.stringify({ ok: false, code: 'POSTMAN_TRANSPORT_FAILED',
+      requestId: started.requestId, transportCode: 'WEB_FAILED', transportMessage: 'lost', details: {},
+      publicationReceipt: receipt })))
+    children[i].emit('close', 2, null)
+    assert.deepEqual(manager.view('serial').result.publicationReceipt, receipt)
+  }
+  assert.equal(children.length, 3)
+})
+
 test('parallel sessions retry a colliding REQ without mixing jobs', async () => {
   const ids = [11, 11, 12]
   const children = []

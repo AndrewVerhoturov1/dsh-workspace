@@ -21,7 +21,7 @@ system/implementation_package_runner.py
 
 Главный принцип:
 
-> Sol задаёт intent, существенные архитектурные решения и ограничения. ChatGPT Web исследует код, реализует замысел в этих границах и готовит декларативный ZIP. Sol отдельно решает, авторизовать ли trusted REQ; тот же продолжаемый Worker создаёт чистое временное worktree и вызывает `implementation_artifact_apply({requestId, worktree})`. Host разрешает REQ в exact ZIP, повторно проверяет SHA-256 и запускает существующий runner. Публикация применённых изменений — отдельное решение, не следствие PASS.
+> Sol задаёт intent, существенные архитектурные решения и ограничения. ChatGPT Web исследует код, реализует замысел в этих границах и готовит декларативный ZIP. Sol отдельно решает, авторизовать ли trusted REQ; тот же продолжаемый Worker использует единственное Host-prepared clean task worktree на опубликованном REQ commit и вызывает `implementation_artifact_apply({requestId, worktree})`. Host разрешает REQ в exact ZIP, повторно проверяет SHA-256 и запускает существующий runner. Публикация применённых изменений — отдельное решение, не следствие PASS.
 
 Внешняя модель не создаёт новый applicator, diagnostics framework или Git workflow для каждого ZIP.
 
@@ -71,7 +71,7 @@ Runner не проектирует решение и не вызывает LLM.
 
 ### 2.3. Sol и продолжаемый Worker
 
-Sol принимает отдельное решение о применении trusted REQ, уже связанного Host с exact ZIP/SHA после `RESULT_DURABLE`. Через `postman_worker({task, artifactRequestId})` Sol авторизует того же продолжаемого Worker. Worker получает REQ без model-authored ZIP path, создаёт clean temporary worktree и вызывает `implementation_artifact_apply({requestId, worktree})`; Host повторно проверяет SHA и запускает существующий runner. Worker не ремонтирует package: при PASS проверяет результат и отправляет `report`, при FAIL сообщает точные diagnostics. Commit/push/PR применённых изменений допускаются только после отдельного решения о публикации по `REPO_POLICY.md`; merge требует отдельного разрешения пользователя.
+Sol принимает отдельное решение о применении trusted REQ, уже связанного Host с exact ZIP/SHA после `RESULT_DURABLE`. Через `postman_worker({task, artifactRequestId})` Sol авторизует того же продолжаемого Worker. Worker получает REQ без model-authored ZIP path, использует тот же Host-prepared clean task worktree на опубликованном REQ commit и вызывает `implementation_artifact_apply({requestId, worktree})`; Host повторно проверяет SHA и запускает существующий runner. Worker не ремонтирует package: при PASS проверяет результат и отправляет `report`, при FAIL сообщает точные diagnostics. Commit/push/PR применённых изменений допускаются только после отдельного решения о публикации по `REPO_POLICY.md`; merge требует отдельного разрешения пользователя.
 
 ---
 
@@ -165,6 +165,8 @@ SHA-256
   "prBase": "preview"
 }
 ```
+
+В Leader flow Host `postman_task_prepare` сначала создаёт и публикует одну task branch с clean worktree от exact `origin/preview`; Bridge публикует REQ commit в эту ветку через Host, а не в `main`. Web использует опубликованный REQ snapshot. Legacy CLI default `main` сохраняется только вне Leader.
 
 `packageBase` может содержать observed SHA во время подготовки, но является информационным полем.
 
@@ -584,9 +586,11 @@ Sol решает: исследовать дальше, запросить нов
 IMPLEMENTATION_PACKAGE_APPLIED
 ```
 
-Worker сначала проверяет фактический результат и сообщает Sol PASS и exact runner result через `report`. Только если Sol отдельно решит публиковать применённые изменения, Worker выполняет обычный Git lifecycle по `REPO_POLICY.md`:
+Worker сначала проверяет фактический результат и сообщает Sol PASS и exact runner result через `report`. Перед отдельным commit/push/PR реализации нужно очистить REQ transport-файлы из этой же ветки; старые SHA-pinned REQ URL и `--chat` при этом остаются действительными. Только если Sol отдельно решит публиковать применённые изменения, Worker выполняет обычный Git lifecycle по `REPO_POLICY.md`:
 
 ```text
+очистить REQ transport-файлы из task branch и явно учесть их удаления в staging
+↓
 взять affectedPaths из exact runner result
 ↓
 git add -A -- <affectedPaths>
@@ -604,7 +608,7 @@ remote verify changed files
 STOP
 ```
 
-`affectedPaths` возвращается runner-ом как список фактически затронутых patch путей. Это publication/staging boundary, а не compatibility gate, expected/exact inventory validation или проверка числа файлов. При отдельной публикации агент staging-ит только эти пути; посторонние untracked/generated файлы, созданные targeted tests, не входят в commit автоматически. При большом списке путей агент передаёт их Git argv-safe несколькими группами, не собирая shell-строку.
+`affectedPaths` возвращается runner-ом как список фактически затронутых patch путей. Удаления REQ transport-файлов не являются patch `affectedPaths`: их явно учитывают при staging, чтобы PR реализации не содержал transport-файлов. Это publication/staging boundary, а не compatibility gate, expected/exact inventory validation или проверка числа файлов. При отдельной публикации агент staging-ит только эти пути; посторонние untracked/generated файлы, созданные targeted tests, не входят в commit автоматически. При большом списке путей агент передаёт их Git argv-safe несколькими группами, не собирая shell-строку.
 
 `git add -f` запрещён.
 
@@ -640,11 +644,11 @@ Merge выполняется только после отдельного явн
 Это описание downstream-действий для понимания границ ответственности, а не инструкция Web искать или передавать локальный путь сохранённого ZIP. Обычный текст должен быть коротким:
 
 ```text
-Trusted RESULT_DURABLE доказывает происхождение и целостность exact ZIP, но не качество или разрешение на применение. Host хранит process-local grant для точной сессии Leader и REQ с exact ZIP/SHA. Sol отдельно решает, применять ли REQ, и вызывает postman_worker({task, artifactRequestId: "REQ_..."}). Тот же продолжаемый Worker создаёт clean temporary worktree от актуального origin/preview и вызывает implementation_artifact_apply({requestId: "REQ_...", worktree: "<clean worktree>"}). Host повторно проверяет SHA, сам подставляет trusted ZIP и запускает существующий runner. Web не выбирает локальный путь ZIP, Worker не извлекает его из текста задания. Ничего в package вручную не исправляй и не добавляй дополнительные compatibility gates.
+Trusted RESULT_DURABLE доказывает происхождение и целостность exact ZIP, но не качество или разрешение на применение. Host хранит process-local grant для точной сессии Leader и REQ с exact ZIP/SHA. Sol отдельно решает, применять ли REQ, и вызывает postman_worker({task, artifactRequestId: "REQ_..."}). Тот же продолжаемый Worker использует Host-prepared clean task worktree на опубликованном REQ commit (исходная branch создана от exact origin/preview) и вызывает implementation_artifact_apply({requestId: "REQ_...", worktree: "<clean worktree>"}). Host повторно проверяет SHA, сам подставляет trusted ZIP и запускает существующий runner. Web не выбирает локальный путь ZIP, Worker не извлекает его из текста задания. Ничего в package вручную не исправляй и не добавляй дополнительные compatibility gates.
 
 При FAIL остановись и верни exact stage/error и diagnostics ZIP, ничего не ремонтируя.
 
-При PASS верни отчёт и exact runner result; не публикуй автоматически. Только после отдельного решения о публикации возьми `affectedPaths` из exact runner result, выполни `git add -A -- <affectedPaths>`, затем commit, push, verify remote SHA и создай/обнови PR в preview. После push проверь наличие новых package-created файлов в remote commit/PR.
+При PASS верни отчёт и exact runner result; не публикуй автоматически. Только после отдельного решения о публикации удали REQ transport-файлы из task branch и явно учти их удаления в staging, затем возьми `affectedPaths` из exact runner result и выполни `git add -A -- <affectedPaths>`, затем commit, push, verify remote SHA и создай/обнови PR в preview. После push проверь наличие новых package-created файлов в remote commit/PR.
 
 Не используй git add -f.
 
@@ -711,8 +715,7 @@ SOL И ТОТ ЖЕ ПРОДОЛЖАЕМЫЙ WORKER
 trusted RESULT_DURABLE + Host grant по Leader session/REQ для exact ZIP/SHA: только provenance/integrity
 → отдельное решение Sol о применении REQ
 → postman_worker({task, artifactRequestId: "REQ_..."})
-→ тот же Worker: fetch current preview
-→ clean temporary worktree
+→ тот же Worker: использовать Host-prepared clean worktree на опубликованном REQ commit; вторую branch/worktree не создавать
 → implementation_artifact_apply({requestId: "REQ_...", worktree: "<clean worktree>"})
 → Host проверяет SHA и запускает existing central runner apply
     → repository safety
@@ -724,6 +727,7 @@ trusted RESULT_DURABLE + Host grant по Leader session/REQ для exact ZIP/SHA
 → FAIL: diagnostics + STOP, без ремонта
 → PASS: отчёт Sol, без автоматической публикации
 → только при отдельном решении Sol о публикации применённых изменений
+→ очистить REQ transport-файлы из той же task branch и явно учесть их удаления в staging
 → взять affectedPaths из runner result
 → git add -A -- <affectedPaths>
 → commit

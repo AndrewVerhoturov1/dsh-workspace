@@ -67,14 +67,13 @@ child scope. Child assistant prose не используется как result a
 Файловый preset `Postman Leader` (`postman-leader`) находится в корне репозитория в
 `.agent-presets/postman-leader/`. Встроенный `dsh-agent-presets` находит его в
 `$DSH_HOME/.agent-presets`; при проверке отдельного рабочего дерева нужно задать `DSH_HOME`
-на его корень. Runtime boundary оставляет top-level Agent-у только read-only inspection +
-`postman_bridge`, `postman_worker`, `postman_worker_stop`:
+на его корень. Runtime boundary оставляет top-level Agent-у read-only inspection и Leader-only controls:
 
 ```text
-read, glob, grep, skill, web_fetch, web_search, postman_bridge, postman_worker, postman_worker_stop
+read, glob, grep, skill, web_fetch, web_search, postman_task_prepare, postman_task_restore, postman_bridge, postman_bridge_status, postman_worker, postman_worker_stop
 ```
 
-Любой `origin=subagent` считается non-Leader и получает deny всех трёх Leader-only tools. Luna Bridge
+Любой `origin=subagent` считается non-Leader и получает deny всех Leader-only tools. Luna Bridge
 дополнительно получает свой отдельный `toolFilter`, который оставляет только transport tools.
 Worker не имеет собственного узкого списка разрешений: его обычные инструменты приходят из
 общего preset, в том числе read/glob/grep/write/edit, pwsh на Windows (bash на других системах),
@@ -98,7 +97,7 @@ Normal Direct/Postman Bridge доставляет любой безопасны�
 
 Зарегистрированный tool `implementation_artifact_apply({requestId, worktree})` предназначен для применения exact Postman artifact: он при исполнении проверяет точного активного Worker и отдельно допущенный REQ, разрешает REQ в сохранённый Host путь ZIP, повторно проверяет SHA-256 и проверяет идентичность Git repository/worktree до вызова уже существующего `system/implementation_package_runner.py`. Путь ZIP не берётся из текста задания, аргументов Worker или ZIP manifest. Runner сам проверяет clean/protected worktree и package, применяет patch, запускает targeted tests и создаёт диагностику.
 
-Worker по отдельному заданию создаёт clean task branch/worktree от актуального `origin/preview`, вызывает tool только с REQ и worktree, проверяет фактический результат и передаёт child-scoped `report`: PASS с путями/проверками без автоматической публикации; FAIL с diagnostics ZIP, без ручного ремонта. `POSTMAN_WORKER_TASK_ACCEPTED` — лишь приём задания. Worker остаётся обычным coding-agent с shell и теоретически может запускать локальные программы сам; гарантия здесь — только допущенный Worker может пользоваться trusted Host grant и этим tool для exact Postman artifact, а не запрет самостоятельного запуска программ. Публикация — отдельное действие согласно repository policy; merge требует отдельной команды. Plugin не вводит новый runner и не запускает применение ZIP при transport handoff.
+Host `postman_task_prepare` от exact `origin/preview` создаёт и публикует одну task branch с clean worktree на Leader до Bridge; Bridge через Host публикует REQ commit туда, не в `main`. Worker по отдельному заданию использует это же clean worktree на опубликованном REQ commit, не создаёт вторую ветку, и вызывает tool только с REQ и worktree, проверяет фактический результат и передаёт child-scoped `report`: PASS с путями/проверками без автоматической публикации; FAIL с diagnostics ZIP, без ручного ремонта. `POSTMAN_WORKER_TASK_ACCEPTED` — лишь приём задания. Worker остаётся обычным coding-agent с shell и теоретически может запускать локальные программы сам; гарантия здесь — только допущенный Worker может пользоваться trusted Host grant и этим tool для exact Postman artifact, а не запрет самостоятельного запуска программ. Перед отдельным commit/push/PR реализации из ветки убираются REQ transport-файлы; URL прежних REQ закреплены за SHA, поэтому `--chat` сохраняется. Runner допускает `packageBase != HEAD`. Публикация — отдельное действие согласно repository policy; merge требует отдельной команды. Plugin не вводит новый runner и не запускает применение ZIP при transport handoff.
 
 Harness model routing намеренно находится вне Agent presets. Поэтому для Leader в model selector
 выбирается `GPT-6 Sol`; preset сам модель не переключает. Bridge Luna фиксирована кодом.

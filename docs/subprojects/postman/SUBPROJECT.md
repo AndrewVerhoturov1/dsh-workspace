@@ -2,7 +2,7 @@
 
 id: postman
 status: active
-updated: 2026-09-25
+updated: 2026-09-27
 
 ## Goal
 
@@ -14,7 +14,7 @@ Production transport имеет два explicit user-facing режима пов�
 
 ## Next step
 
-LIVE E2E: Web implementation ZIP → RESULT_DURABLE → Host grant → Sol authorization → same continuable Worker → clean worktree → implementation_artifact_apply → existing runner → Worker report. Код этого пути реализован и проверен локальными тестами; текущий Host ещё не доказал загрузку изменённого plugin, поэтому живой Web-путь остаётся отдельной проверкой.
+LIVE E2E остаётся за пользователем: Web implementation ZIP → RESULT_DURABLE → Host grant → Sol authorization → same continuable Worker → Host-prepared clean worktree на опубликованном REQ commit → implementation_artifact_apply → existing runner → Worker report. Локально покрыты отказ runner-а → явный rollback → второй ZIP в той же ветке; живой Web-путь не запускался, а текущий Host ещё не доказал загрузку изменённого plugin.
 
 ## Boundaries
 
@@ -70,5 +70,6 @@ LIVE E2E: Web implementation ZIP → RESULT_DURABLE → Host grant → Sol autho
 - `POSTMAN_TRANSPORT_FAILED` автоматически не продолжается.
 - Normal Postman transport универсален: безопасный ZIP и trusted `RESULT_DURABLE` подтверждают происхождение, целостность и сохранность, но не пригодность patch и не разрешение на применение. На downstream boundary Host создаёт process-local grant по exact Leader session + REQ для trusted ZIP/SHA; Sol отдельно авторизует REQ через `postman_worker({task, artifactRequestId})`.
 - Для implementation ZIP ChatGPT Web следует `REPO_POLICY.md`, `system/implementation-package-workflow.md` и `system/implementation-package-authoring.md`: `manifest.json`, Git-generated `changes.patch`, `README.md`, `TEST_PLAN.md`, только относящиеся к изменению тесты и узкое исключение `.gitignore` в том же patch для иначе игнорируемых новых файлов. Пакет не приносит собственного runner или grant-механизма: process-local Host grant принадлежит downstream orchestration.
-- Тот же continuable Worker получает trusted REQ, не model-authored ZIP path, создаёт отдельные clean task branch/worktree от актуального `origin/preview` и вызывает `implementation_artifact_apply({requestId, worktree})`. Host проверяет caller и SHA-256, подставляет сохранённый exact ZIP и запускает существующий `system/implementation_package_runner.py`. Worker проверяет результат и сообщает через `report` (приём задания — не завершение). На PASS сообщает результат и затронутые пути, но не публикует автоматически; на FAIL передаёт диагностику без ручного ремонта. Sol выбирает дальнейший шаг. Worker остаётся обычным coding-agent с shell: граница запрещает не все самостоятельные локальные запуски, а доступ неавторизованного Worker к trusted grant/tool. Публикация — отдельное действие согласно `REPO_POLICY.md`; merge требует отдельной команды.
+- Тот же continuable Worker получает trusted REQ, не model-authored ZIP path, использует единственную Host-prepared task branch и тот же clean worktree на опубликованном REQ commit, не создавая вторую ветку и вызывает `implementation_artifact_apply({requestId, worktree})`. Host проверяет caller и SHA-256, подставляет сохранённый exact ZIP и запускает существующий `system/implementation_package_runner.py`. Worker проверяет результат и сообщает через `report` (приём задания — не завершение). На PASS сообщает результат и затронутые пути, но не публикует автоматически; на FAIL передаёт диагностику без ручного ремонта. Sol выбирает дальнейший шаг. Worker остаётся обычным coding-agent с shell: граница запрещает не все самостоятельные локальные запуски, а доступ неавторизованного Worker к trusted grant/tool. Публикация — отдельное действие согласно `REPO_POLICY.md`; merge требует отдельной команды.
+- Host `postman_task_prepare` создаёт и публикует единственную task branch/worktree Leader от exact `origin/preview`; Bridge через Host публикует REQ туда, а не в `main`. При необходимости Leader-only `postman_task_restore` сбрасывает только эту существующую process-local привязку к проверенному remote SHA после блокировки новых задач и завершения активных операций; постоянные worktree и потерянные Host-привязки не восстанавливаются. Перед отдельным commit/push/PR реализации удаляются REQ transport-файлы; SHA-pinned URL старых REQ и `--chat` сохраняются. Runner допускает `packageBase != HEAD`.
 - Normal Postman не выполняет automatic Result Workspace registration и сам не переходит к Git integration или merge.

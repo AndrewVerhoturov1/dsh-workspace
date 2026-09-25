@@ -475,6 +475,7 @@ class DirectPostman:
         self.publisher_factory = publisher_factory
         self.bridge_factory = bridge_factory
         self.ensure_browser = ensure_browser
+        self.publication_receipt: dict[str, str] | None = None
 
     def state_path(self, request_id: str) -> Path:
         request_identity.assert_canonical_request_id(request_id)
@@ -527,6 +528,7 @@ class DirectPostman:
         automatic_continuation: bool = False,
     ) -> dict[str, Any]:
         request_identity.assert_canonical_request_id(request_id)
+        self.publication_receipt = None
         try:
             process_lock.claim_request(self.direct_root, request_id)
         except FileExistsError as exc:
@@ -667,6 +669,11 @@ class DirectPostman:
             forbiddenPaths=forbidden_paths,
             promptSha256=_sha256_text(prompt),
         )
+        self.publication_receipt = {
+            "requestId": request_id, "repository": self.repository, "branch": self.branch,
+            "taskUrl": published.task_url, "baseCommit": published.prepublication_commit,
+            "taskPublicationCommit": published.publication_commit,
+        }
 
         browser = self.ensure_browser(cdp_url=cdp_url)
         self._write_state(request_id, STATE_BROWSER_READY, browser=browser)
@@ -862,6 +869,7 @@ def _task_from_args(args: argparse.Namespace) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    direct = None
     execution_request_id: str | None = None
     try:
         direct = DirectPostman(
@@ -897,6 +905,10 @@ def main(argv: list[str] | None = None) -> int:
                 else exc.code if isinstance(exc, (DirectPostmanError, chat_reference.ChatReferenceError))
                 else "DIRECT_INVALID_REQUEST")
         error_details = exc.details if isinstance(exc, DirectPostmanError) else {}
+        publication_receipt = getattr(direct, "publication_receipt", None)
+        publication_fields = {"publicationReceipt": publication_receipt} if (
+            isinstance(publication_receipt, dict) and publication_receipt.get("requestId") == args.request_id
+        ) else {}
         request_fields = {"requestId": args.request_id} if args.request_id else {}
         if (
             execution_request_id
@@ -910,6 +922,7 @@ def main(argv: list[str] | None = None) -> int:
                 transportCode=code,
                 transportMessage=str(exc),
                 details=error_details,
+                **publication_fields,
             )
         elif code == POSTMAN_TRANSPORT_FAILED:
             result = _json_result(
@@ -920,6 +933,7 @@ def main(argv: list[str] | None = None) -> int:
                 transportCode=str(error_details.get("transportCode", code)),
                 transportMessage=str(error_details.get("transportMessage", str(exc))),
                 details=error_details.get("details", {}),
+                **publication_fields,
             )
         else:
             result = _json_result(False, code, error=str(exc), **request_fields, details=error_details)

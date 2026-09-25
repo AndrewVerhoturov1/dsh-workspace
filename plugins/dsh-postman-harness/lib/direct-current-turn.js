@@ -1,7 +1,9 @@
 import { createHash, randomInt as cryptoRandomInt } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { basename, isAbsolute, join } from 'node:path'
+import { homedir } from 'node:os'
 import { spawn as nodeSpawn } from 'node:child_process'
+import { postmanTaskContexts, POSTMAN_TASK_BRANCH_PATTERN } from './postman-task-context.js'
 
 const REQ_PATTERN = /^REQ_\d{8}T\d{6}Z_\d{4}$/
 const ARTIFACT_TERMINAL_OK = new Set([
@@ -203,6 +205,30 @@ function parseTerminalJson(stdout) {
   }
 }
 
+function validPublicationReceipt(value, job) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
+  const { requestId, repository, branch, taskUrl, baseCommit, taskPublicationCommit } = value
+  if (requestId !== job.requestId || repository !== 'AndrewVerhoturov1/dsh-workspace' ||
+      branch !== job.branch || !POSTMAN_TASK_BRANCH_PATTERN.test(branch ?? '') ||
+      !/^[0-9a-f]{40}$/.test(baseCommit ?? '') || !/^[0-9a-f]{40}$/.test(taskPublicationCommit ?? '')) return false
+  return taskUrl === 'https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/' + taskPublicationCommit + '/' + requestId + '.md'
+}
+
+function trustedPublication(job) {
+  const root = job.directRoot ?? (process.env.LOCALAPPDATA
+    ? join(process.env.LOCALAPPDATA, 'DSH', 'Postman', 'direct')
+    : join(homedir(), '.dsh', 'postman', 'direct'))
+  let state
+  try { state = JSON.parse(job.readPublicationState(join(root, 'requests', job.requestId + '.json'), 'utf8')) }
+  catch { return null }
+  if (!state || typeof state !== 'object' || Array.isArray(state) ||
+      !new Set(['FAILED', 'ASK_FAILED', 'TASK_PUBLISHED', 'ASK_TASK_PUBLISHED',
+        'BROWSER_READY', 'ASK_BROWSER_READY', 'WEB_RUNNING', 'ASK_WEB_RUNNING']).has(state.state)) return null
+  const receipt = { requestId: state.requestId, repository: state.repository, branch: state.branch,
+    taskUrl: state.taskUrl, baseCommit: state.baseCommit, taskPublicationCommit: state.taskPublicationCommit }
+  return validPublicationReceipt(receipt, job) ? receipt : null
+}
+
 function terminalGate(job) {
   const parsed = parseTerminalJson(job.stdout)
   if (parsed === undefined || parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -341,6 +367,15 @@ function terminalGate(job) {
     && typeof parsed.transportMessage === 'string' && parsed.transportMessage !== ''
     && parsed.details !== null && typeof parsed.details === 'object' && !Array.isArray(parsed.details)
   ) {
+    const checkpoint = trustedPublication(job)
+    if (parsed.publicationReceipt !== undefined &&
+        (!checkpoint || !validPublicationReceipt(parsed.publicationReceipt, job) ||
+          Object.keys(checkpoint).some(key => checkpoint[key] !== parsed.publicationReceipt[key]))) {
+      return { ok: false, code: 'POSTMAN_PUBLICATION_RECEIPT_INVALID', requestId: job.requestId,
+        transportMessage: 'Direct Postman publication receipt did not match its exact request checkpoint.' }
+    }
+    if (checkpoint) parsed.publicationReceipt = checkpoint
+    else delete parsed.publicationReceipt
     return parsed
   }
 
@@ -371,12 +406,16 @@ export class DirectPostmanJobManager {
     now = () => new Date(),
     randomInt = cryptoRandomInt,
     pwsh = process.platform === 'win32' ? 'pwsh.exe' : 'pwsh',
+    directRoot,
+    readPublicationState = readFileSync,
   } = {}) {
     this.spawn = spawn
     this.exists = exists
     this.now = now
     this.randomInt = randomInt
     this.pwsh = pwsh
+    this.directRoot = directRoot
+    this.readPublicationState = readPublicationState
     this.jobs = new Map()
     this.exactAskReplies = new Map()
   }
@@ -385,12 +424,13 @@ export class DirectPostmanJobManager {
     return this.jobs.get(sessionId)
   }
 
-  async start({ sessionId, workspace, payload, chatRequestId, automaticContinuation = false, transportKind = 'artifact', proof }) {
+  async start({ sessionId, workspace, payload, chatRequestId, automaticContinuation = false, transportKind = 'artifact', proof, branch }) {
     const previous = this.jobs.get(sessionId)
     if (previous?.state === 'running') throw parseError('POSTMAN_CURRENT_TURN_JOB_ALREADY_RUNNING')
     if (typeof payload !== 'string' || payload.trim() === '') throw parseError('POSTMAN_EMPTY_PAYLOAD')
     if (!['artifact', 'text'].includes(transportKind)) throw parseError('POSTMAN_RESULT_MODE_INVALID')
     if (transportKind === 'text' && automaticContinuation) throw parseError('POSTMAN_AUTOMATIC_CONTINUATION_NOT_ALLOWED')
+    if (branch !== undefined && !POSTMAN_TASK_BRANCH_PATTERN.test(branch)) throw parseError('POSTMAN_TASK_BRANCH_INVALID')
 
     // A new request in this Luna session supersedes any exact-reply slot left
     // by the previous PostmanAsk result.
@@ -422,6 +462,7 @@ export class DirectPostmanJobManager {
       '-RequestId', requestId,
       '-TaskBase64', taskBase64,
     ]
+    if (branch !== undefined) args.push('-Branch', branch)
     if (chatRequestId !== undefined) args.push('-ChatRequestId', chatRequestId)
     if (automaticContinuation) args.push('-AutomaticContinuation')
 
@@ -438,7 +479,10 @@ export class DirectPostmanJobManager {
       chatRequestId,
       automaticContinuation,
       transportKind,
+      branch,
       proof,
+      directRoot: this.directRoot,
+      readPublicationState: this.readPublicationState,
       waiters: new Set(),
     }
     this.jobs.set(sessionId, job)
@@ -621,6 +665,7 @@ export class DirectPostmanJobManager {
       chatRequestId: previous.requestId,
       automaticContinuation: true,
       transportKind: 'artifact',
+      branch: previous.branch,
       proof: {
         parseMode: 'automatic-continuation',
         sourceMessageLength: 0,
@@ -652,7 +697,7 @@ function toolOutput() {
   }
 }
 
-export function createDirectCurrentTurnToolConfigs(ctx, { store, jobs } = {}) {
+export function createDirectCurrentTurnToolConfigs(ctx, { store, jobs, taskContexts = postmanTaskContexts } = {}) {
   const turnStore = store ?? new CurrentUserTurnStore(ctx)
   const manager = jobs ?? new DirectPostmanJobManager()
 
@@ -668,6 +713,10 @@ export function createDirectCurrentTurnToolConfigs(ctx, { store, jobs } = {}) {
       if (record.consumed) throw parseError('POSTMAN_CURRENT_TURN_ALREADY_USED')
       if (record.error !== undefined) throw parseError(record.error)
       const parsed = parsePostmanUserTurn(record.text)
+      const bridgeContext = taskContexts.child(agent.id)
+      if (agent.session?.header?.origin === 'subagent' && agent.session.header.delegationDepth === 1 &&
+          agent.session.header.parentSession && !bridgeContext) throw parseError('POSTMAN_TASK_CONTEXT_REQUIRED')
+      if (bridgeContext && taskContexts.get(bridgeContext.leaderSessionId) !== bridgeContext) throw parseError('POSTMAN_TASK_CONTEXT_REQUIRED')
       const proof = {
         parseMode: parsed.mode,
         transportKind: parsed.transportKind,
@@ -688,6 +737,7 @@ export function createDirectCurrentTurnToolConfigs(ctx, { store, jobs } = {}) {
           payload: parsed.payload,
           chatRequestId: parsed.chatRequestId,
           transportKind: parsed.transportKind,
+          branch: bridgeContext?.branch,
           proof,
         })
       } catch (error) {
