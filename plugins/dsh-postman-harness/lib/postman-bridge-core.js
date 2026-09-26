@@ -4,6 +4,7 @@ export const POSTMAN_BRIDGE_STATUS_TOOL_NAME = 'postman_bridge_status'
 export const POSTMAN_TASK_PREPARE_TOOL_NAME = 'postman_task_prepare'
 export const POSTMAN_TASK_RESTORE_TOOL_NAME = 'postman_task_restore'
 export const POSTMAN_WORKER_TOOL_NAME = 'postman_worker'
+export const POSTMAN_WORKER_INTERRUPT_TOOL_NAME = 'postman_worker_interrupt'
 export const POSTMAN_WORKER_STOP_TOOL_NAME = 'postman_worker_stop'
 export const POSTMAN_BRIDGE_AGENT_OPTIONS = Object.freeze({
   provider: 'codex',
@@ -34,6 +35,7 @@ export const POSTMAN_LEADER_TOOL_ALLOWLIST = Object.freeze([
   POSTMAN_BRIDGE_TOOL_NAME,
   POSTMAN_BRIDGE_STATUS_TOOL_NAME,
   POSTMAN_WORKER_TOOL_NAME,
+  POSTMAN_WORKER_INTERRUPT_TOOL_NAME,
   POSTMAN_WORKER_STOP_TOOL_NAME,
 ])
 export const POSTMAN_LEADER_ONLY_TOOL_NAMES = Object.freeze([
@@ -42,6 +44,7 @@ export const POSTMAN_LEADER_ONLY_TOOL_NAMES = Object.freeze([
   POSTMAN_BRIDGE_TOOL_NAME,
   POSTMAN_BRIDGE_STATUS_TOOL_NAME,
   POSTMAN_WORKER_TOOL_NAME,
+  POSTMAN_WORKER_INTERRUPT_TOOL_NAME,
   POSTMAN_WORKER_STOP_TOOL_NAME,
 ])
 

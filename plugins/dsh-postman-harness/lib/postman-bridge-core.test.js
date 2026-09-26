@@ -12,6 +12,7 @@ import {
   POSTMAN_BRIDGE_TOOL_NAME,
   POSTMAN_BRIDGE_STATUS_TOOL_NAME,
   POSTMAN_WORKER_TOOL_NAME,
+  POSTMAN_WORKER_INTERRUPT_TOOL_NAME,
   POSTMAN_WORKER_STOP_TOOL_NAME,
   POSTMAN_LEADER_PRESET_ID,
   POSTMAN_LEADER_TOOL_ALLOWLIST,
@@ -162,6 +163,7 @@ test('bridge authorization and visibility are limited to top-level postman-leade
   assert.equal(POSTMAN_BRIDGE_STATUS_TOOL_NAME, 'postman_bridge_status')
   assert.equal(POSTMAN_BRIDGE_TOOL_ALLOWLIST.includes(POSTMAN_BRIDGE_STATUS_TOOL_NAME), false)
   assert.equal(POSTMAN_WORKER_TOOL_NAME, 'postman_worker')
+  assert.equal(POSTMAN_WORKER_INTERRUPT_TOOL_NAME, 'postman_worker_interrupt')
   assert.equal(POSTMAN_WORKER_STOP_TOOL_NAME, 'postman_worker_stop')
   assert.equal(POSTMAN_LEADER_PRESET_ID, 'postman-leader')
 
@@ -184,22 +186,22 @@ test('bridge authorization and visibility are limited to top-level postman-leade
   assert.deepEqual(POSTMAN_LEADER_TOOL_ALLOWLIST, [
     'ask_user_question', 'todo_write', 'exit_plan_mode', 'create_goal', 'get_goal', 'update_goal',
     'read', 'read_image', 'grep', 'skill', 'web_fetch', 'postman_task_prepare', 'postman_task_restore',
-    'postman_bridge', 'postman_bridge_status', 'postman_worker', 'postman_worker_stop',
+    'postman_bridge', 'postman_bridge_status', 'postman_worker', 'postman_worker_interrupt', 'postman_worker_stop',
   ])
-  assert.equal(POSTMAN_LEADER_TOOL_ALLOWLIST.length, 17)
-  assert.equal(new Set(POSTMAN_LEADER_TOOL_ALLOWLIST).size, 17)
+  assert.equal(POSTMAN_LEADER_TOOL_ALLOWLIST.length, 18)
+  assert.equal(new Set(POSTMAN_LEADER_TOOL_ALLOWLIST).size, 18)
   assert.deepEqual(POSTMAN_LEADER_ONLY_TOOL_NAMES, [
     'postman_task_prepare', 'postman_task_restore', 'postman_bridge', 'postman_bridge_status',
-    'postman_worker', 'postman_worker_stop',
+    'postman_worker', 'postman_worker_interrupt', 'postman_worker_stop',
   ])
   assert.deepEqual(postmanBridgeRestrictionForAgent(leader), {
     allow: [...POSTMAN_LEADER_TOOL_ALLOWLIST],
   })
   assert.deepEqual(postmanBridgeRestrictionForAgent(standard), {
-    deny: ['postman_task_prepare', 'postman_task_restore', 'postman_bridge', 'postman_bridge_status', 'postman_worker', 'postman_worker_stop'],
+    deny: ['postman_task_prepare', 'postman_task_restore', 'postman_bridge', 'postman_bridge_status', 'postman_worker', 'postman_worker_interrupt', 'postman_worker_stop'],
   })
   assert.deepEqual(postmanBridgeRestrictionForAgent(delegated), {
-    deny: ['postman_task_prepare', 'postman_task_restore', 'postman_bridge', 'postman_bridge_status', 'postman_worker', 'postman_worker_stop'],
+    deny: ['postman_task_prepare', 'postman_task_restore', 'postman_bridge', 'postman_bridge_status', 'postman_worker', 'postman_worker_interrupt', 'postman_worker_stop'],
   })
 
   assert.equal(POSTMAN_LEADER_TOOL_ALLOWLIST.includes('write'), false)
@@ -218,7 +220,7 @@ test('boundary manager replaces the active restriction when a blank session swit
   const manager = createPostmanBridgeBoundaryManager(sessionId => agents.get(sessionId))
 
   assert.equal(manager.install(fixture.agent), false)
-  assert.deepEqual(fixture.activeRestrictions(), [{ deny: ['postman_task_prepare', 'postman_task_restore', 'postman_bridge', 'postman_bridge_status', 'postman_worker', 'postman_worker_stop'] }])
+  assert.deepEqual(fixture.activeRestrictions(), [{ deny: ['postman_task_prepare', 'postman_task_restore', 'postman_bridge', 'postman_bridge_status', 'postman_worker', 'postman_worker_interrupt', 'postman_worker_stop'] }])
 
   fixture.setPreset('postman-leader')
   assert.equal(manager.refreshSession(fixture.agent.id), true)
@@ -227,7 +229,7 @@ test('boundary manager replaces the active restriction when a blank session swit
 
   fixture.setPreset('standard')
   assert.equal(manager.refreshSession(fixture.agent.id), true)
-  assert.deepEqual(fixture.activeRestrictions(), [{ deny: ['postman_task_prepare', 'postman_task_restore', 'postman_bridge', 'postman_bridge_status', 'postman_worker', 'postman_worker_stop'] }])
+  assert.deepEqual(fixture.activeRestrictions(), [{ deny: ['postman_task_prepare', 'postman_task_restore', 'postman_bridge', 'postman_bridge_status', 'postman_worker', 'postman_worker_interrupt', 'postman_worker_stop'] }])
   assert.equal(fixture.restrictions[1].active, false)
 
   assert.equal(manager.refreshSession('missing'), false)
@@ -260,8 +262,8 @@ test('package and composition expose bridge entrypoint and leader preset', () =>
   assert.match(leaderMetadata, /^name: Postman Leader$/m)
   assert.match(leaderMetadata, /^order: 4$/m)
   assert.match(leaderPreset, /id: persona[\s\S]*name: '@deepseek-ai\/dsh-persona'[\s\S]*text:/)
-  assert.match(leaderMetadata, /17 registered tools/i)
-  assert.match(leaderPreset, /positive 17-name runtime allowlist/)
+  assert.match(leaderMetadata, /18 registered tools/i)
+  assert.match(leaderPreset, /positive 18-name runtime allowlist/)
   assert.match(leaderPreset, /id: tool-web[\s\S]*fetch: true[\s\S]*search: true/)
   assert.deepEqual(
     [...leaderPreset.matchAll(/^\s*- id: ([\w-]+)\s*$/gm)].map((match) => match[1]),
@@ -287,8 +289,8 @@ test('package and composition expose bridge entrypoint and leader preset', () =>
   assert.match(agents, /POSTMAN_BRIDGE_CALLER_REJECTED/)
 
   const leaderSkill = readFileSync(join(repoRoot, '.agents', 'skills', 'postman-leader', 'SKILL.md'), 'utf8')
-  assert.match(leaderSkill, /POSTMAN_LEADER_SKILL_VERSION: 9/)
-  assert.match(leaderSkill, /Top-level Leader получает positive allowlist ровно из 17 зарегистрированных инструментов/)
+  assert.match(leaderSkill, /POSTMAN_LEADER_SKILL_VERSION: 11/)
+  assert.match(leaderSkill, /Top-level Leader получает positive allowlist ровно из 18 зарегистрированных инструментов/)
   assert.match(leaderSkill, /Worker сохраняет общий coding preset/)
   assert.match(leaderSkill, /Bridge сохраняет отдельный узкий transport allowlist/)
   assert.match(leaderSkill, /artifactRequestId: "REQ_..."/)

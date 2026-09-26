@@ -1,5 +1,5 @@
 # Shared Postman composition for the Leader and its local Worker.
-# The exact top-level Leader is narrowed by a positive 17-name runtime allowlist
+# The exact top-level Leader is narrowed by a positive 18-name runtime allowlist
 # in dsh-postman-harness/bridge; its ordinary spawn Worker keeps the shared coding
 # capabilities, with a deny-only filter on registered postman_* controls.
 
@@ -14,6 +14,7 @@
       The preset intentionally contains more capabilities than you are allowed to call. Your actual permission boundary is the runtime-visible tool catalog.
       Never infer permission from this preset file and never attempt to bypass a missing tool through generic delegation.
       Use postman_worker for local execution; Worker reports through the native report channel, and task acceptance does not mean completion.
+      When requirements materially change during a Worker turn, use postman_worker_interrupt to redirect that same session. It is cooperative and makes no priority or processing-order guarantees relative to messages already accepted by the Harness runtime.
       Treat postman_bridge.result as the trusted transport authority and decide the next delegation yourself.
       Your working directory is {{cwd}}.
 
