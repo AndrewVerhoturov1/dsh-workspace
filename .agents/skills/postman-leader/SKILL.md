@@ -9,7 +9,7 @@ description: >-
 
 # Postman Leader
 
-`POSTMAN_LEADER_SKILL_VERSION: 9`
+`POSTMAN_LEADER_SKILL_VERSION: 10`
 
 ## 1. Роль Leader
 
@@ -239,6 +239,19 @@ root cause, diff summary и test results.
 
 `POSTMAN_WORKER_TASK_ACCEPTED` означает только приём задания, но после него Leader НЕ ИМЕЕТ ПРАВА использовать `postman_worker()` как status query.
 
+После `POSTMAN_WORKER_TASK_ACCEPTED`, если у Leader нет конкретной независимой supervisor-работы, Leader ОБЯЗАН прекратить активность в текущем turn при первой возможности runtime и перейти к пассивному ожиданию внешнего события.
+
+Leader НЕ ИМЕЕТ ПРАВА создавать новые reasoning/model rounds только потому, что Worker ещё не прислал `report`.
+
+Следующая содержательная активность Leader разрешена только после нового события:
+
+- Worker прислал `report`;
+- пользователь прислал новое сообщение;
+- runtime сообщил failure/blocker;
+- появилось новое внешнее evidence, которое объективно меняет задачу.
+
+Фразы или внутренние рассуждения `waiting`, `awaiting`, `checking worker`, `still running` НЕ являются полезной supervisor-работой и не являются основанием продолжать model turn.
+
 Пока Worker выполняет принятое задание, Leader-у ЗАПРЕЩЕНО:
 
 - спрашивать Worker «закончил?»;
@@ -289,6 +302,17 @@ Worker сам пробуждает Leader через `report`.
 
 Leader НЕ проверяет завершение Worker вручную.
 
+Запрет относится не только к user-facing сообщениям. Leader-у также ЗАПРЕЩЕНЫ бессодержательные внутренние reasoning-циклы вида:
+
+```text
+Waiting
+Awaiting report
+Checking whether Worker finished
+Still waiting
+```
+
+Если нового события нет, правильное состояние Leader — отсутствие новой активности.
+
 ---
 
 ## 8. Goals и idle-loop
@@ -314,6 +338,10 @@ Leader НЕ ДОЛЖЕН создавать idle model rounds ради ожид�
 
 `todo_write` используется только для значимых этапов многошаговой работы.
 
+Для простой задачи с несколькими очевидными этапами `todo_write` ЗАПРЕЩЁН, если список не нужен для управления реально сложной многоэтапной работой.
+
+`todo_write` НЕ является средством наблюдения за async runtime state.
+
 Leader ОБЯЗАН обновлять todo только при смене существенного состояния, например:
 
 ```text
@@ -329,6 +357,8 @@ Leader-у ЗАПРЕЩЕНО обновлять todo:
 - после каждого Worker message;
 - после каждого отдельного теста;
 - ради фиксации факта «Worker всё ещё работает».
+- ради состояний `Bridge running`, `Worker running`, `waiting`, `pending`, `awaiting report`;
+- отдельным model/tool cycle только ради косметического изменения списка.
 
 Для простой задачи todo не обязателен.
 
@@ -427,7 +457,16 @@ model -> read D
 
 если проверки независимы и могут быть запрошены вместе.
 
-Каждый новый model turn должен существовать потому, что появился новый результат/решение, а не из-за механического дробления работы.
+Каждый новый model turn ОБЯЗАН быть вызван хотя бы одним из событий:
+
+- новым evidence;
+- новым решением, которое действительно должен принять Leader;
+- новым сообщением пользователя;
+- Worker `report`;
+- Bridge `READY`;
+- runtime failure/blocker.
+
+Ожидание, todo bookkeeping, status prose или желание проверить «не закончил ли Worker» НЕ являются основанием для нового model turn.
 
 ---
 
@@ -442,6 +481,24 @@ Leader отправляет пользователю сообщение ТОЛЬ
 5. пользователь сам обратился с новым вопросом/указанием.
 
 Leader НЕ отправляет status-only сообщения без новой информации.
+
+Если пользователь запросил единый итог нескольких подзадач, Leader ОБЯЗАН дождаться всех необходимых результатов.
+
+Завершение только одной подзадачи НЕ является основанием для промежуточного сообщения, если одновременно выполняются все условия:
+
+- остальные необходимые подзадачи ещё выполняются;
+- завершившаяся часть не обнаружила blocker;
+- от пользователя не требуется новое решение;
+- пользователь сам не запросил промежуточный статус.
+
+Например:
+
+```text
+PostmanAsk PASS
+Postman artifact still running
+```
+
+в обычной combined-result задаче означает: Leader молчит и ждёт итог второго результата.
 
 Запрещённые примеры:
 
@@ -563,7 +620,12 @@ Leader принимает следующее решение:
 - десятки последовательных `read/grep` вместо delegation;
 - дробление независимых supervisor checks на множество model turns;
 - игнорирование прямого режима пользователя «ничего не делать»;
-- выдача `POSTMAN_WORKER_TASK_ACCEPTED` за завершённую работу.
+- выдача `POSTMAN_WORKER_TASK_ACCEPTED` за завершённую работу;
+- idle reasoning/model loop во время ожидания Worker или Bridge без нового события;
+- user-facing сообщение «ещё жду / всё ещё выполняется» без запроса статуса или blocker;
+- использование `todo_write` как async job monitor;
+- промежуточный partial-status, когда пользователь запросил единый итог и решение пользователя не требуется;
+- Host-control вызов, который по уже известному lifecycle invariant предсказуемо будет отвергнут и не несёт новой информации.
 
 Если Leader обнаружил, что собирается совершить одно из этих действий, он ОБЯЗАН остановиться и выбрать корректную supervisor-операцию.
 
@@ -604,6 +666,10 @@ postman_continue_last_request
 
 После `POSTMAN_BRIDGE_ACCEPTED` Leader НЕ polling-ит job.
 
+После `POSTMAN_BRIDGE_ACCEPTED`, если другой независимой supervisor-работы нет, Leader ОБЯЗАН прекратить активность и ждать нового внешнего события: `POSTMAN_BRIDGE_READY`, Worker `report`, сообщения пользователя, runtime failure/blocker либо нового evidence, объективно меняющего решение.
+
+Leader-у ЗАПРЕЩЕНО создавать reasoning/model loops вида `waiting for bridge`, `checking bridge`, `still running`.
+
 `POSTMAN_BRIDGE_READY` сам сигнализирует о завершении.
 
 После READY Leader вызывает:
@@ -629,7 +695,21 @@ Host coordinator сам управляет:
 
 Leader НЕ делает sleep и НЕ разносит bridge calls искусственно.
 
-Для одной task branch Host сам защищает публикации.
+### Текущий per-Leader task-context invariant
+
+В текущей task-context архитектуре одна Leader session / одна Host-bound task branch может иметь только один незавершённый Bridge job.
+
+После `POSTMAN_BRIDGE_ACCEPTED` Leader НЕ ИМЕЕТ ПРАВА вызывать следующий `postman_bridge`, пока предыдущий job не перешёл в terminal/failed через `POSTMAN_BRIDGE_READY` + `postman_bridge_status`.
+
+Это ограничение одинаково относится к `@PostmanAsk` и `@Postman`. Исторически параллельная работа поддерживалась для обоих режимов; ограничение является особенностью текущего task-context publication lifecycle, а не ограничением конкретного transport kind.
+
+`POSTMAN_TASK_CONTEXT_BUSY` НЕ является нормальным способом планирования или проверки состояния. Если Leader уже знает о своём active Bridge, он НЕ ДОЛЖЕН делать второй Bridge call только для получения `BUSY`.
+
+### Global coordinator
+
+Глобальный Host coordinator по-прежнему имеет capacity до трёх active Bridge jobs. Этот лимит относится к transport coordinator и может использоваться независимыми Leader task contexts.
+
+Не путать глобальный `max=3` с текущей per-Leader serialization.
 
 Запросы к одному доказанному ChatGPT conversation через `--chat <REQ>` должны выполняться последовательно.
 
@@ -773,7 +853,7 @@ LEADER THINK
 ↓
 DELEGATE TO WORKER / BRIDGE
 ↓
-LEADER STOPS INTERFERING
+LEADER YIELDS / STOPS ACTIVE WORK
 ↓
 REPORT / READY EVENT
 ↓
@@ -790,6 +870,8 @@ USER UPDATE or NEXT DELEGATION
 Leader delegates
 ↓
 Leader waits 20 seconds
+↓
+Leader generates "waiting" reasoning
 ↓
 Leader pings Worker
 ↓
