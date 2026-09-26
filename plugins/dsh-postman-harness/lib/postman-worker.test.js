@@ -11,7 +11,7 @@ import { apply as applyBridgePlugin } from './postman-bridge.js'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const signal = new AbortController().signal
 const registeredTools = [
-  'postman_bridge', 'postman_bridge_status', 'postman_task_prepare', 'postman_task_restore', 'postman_worker', 'postman_worker_stop', 'postman_send', 'postman_reply',
+  'postman_bridge', 'postman_bridge_status', 'postman_task_prepare', 'postman_task_restore', 'postman_worker', 'postman_worker_interrupt', 'postman_worker_stop', 'postman_send', 'postman_reply',
   'postman_async_send', 'postman_runtime_get_request', 'postman_runtime_accept_request',
   'postman_runtime_list_ready', 'postman_runtime_deliver_ready', 'postman_runtime_synthetic_ready',
   'postman_send_current_turn', 'postman_current_turn_status', 'postman_ask_validate_reply',
@@ -23,9 +23,9 @@ const registry = { schemas: () => registeredTools.map(name => ({ name })) }
 const leader = id => ({ id, session: { header: { id, agentPreset: 'postman-leader', delegationDepth: 0 } } })
 const exec = agent => ({ agent, signal })
 
-function fixture() {
+function fixture(contexts) {
   const agents = new Map()
-  const calls = { starts: [], followups: [], drains: [] }
+  const calls = { starts: [], followups: [], interrupts: [], drains: [] }
   let next = 0
   const ctx = {
     agents: { get: id => agents.get(id) },
@@ -39,12 +39,13 @@ function fixture() {
         calls.followups.push({ parent, id, content, options })
         return 'followup-' + calls.followups.length
       },
+      async interrupt(id, authority) { calls.interrupts.push({ id, authority }) },
       async drainContinuableChildren(parent, ids) {
         calls.drains.push({ parent, ids })
       },
     },
   }
-  return { ctx, agents, calls, tools: createPostmanWorkerTools(ctx) }
+  return { ctx, agents, calls, tools: createPostmanWorkerTools(ctx, undefined, contexts) }
 }
 
 function toolsFromPreset() {
@@ -99,7 +100,7 @@ test('Leader hides coding tools; Worker keeps coding and report but no Postman c
     assert.equal(leaderRestriction.allow.includes(name), false, name)
     assert.equal(childRestriction.deny.includes(name), false, name)
   }
-  for (const name of ['postman_bridge', 'postman_worker', 'postman_worker_stop']) {
+  for (const name of ['postman_bridge', 'postman_worker', 'postman_worker_interrupt', 'postman_worker_stop']) {
     assert.equal(leaderRestriction.allow.includes(name), true)
     assert.equal(childRestriction.deny.includes(name), true)
   }
@@ -134,6 +135,155 @@ test('first task creates a child; second task follows up in the same durable Ses
   assert.equal(calls.followups[0].parent, a)
   assert.deepEqual(calls.followups[0].content, [{ type: 'text', text: 'second' }])
   assert.equal(calls.followups[0].options.source.senderSessionId, 'A')
+})
+
+test('interrupt contract disclaims Harness processing-order guarantees', () => {
+  const f = fixture()
+  assert.match(f.tools.interruptTool.description, /no priority or processing-order guarantees relative to messages already accepted by the Harness runtime/)
+})
+
+test('interrupt waits for a resident Worker to become idle, then redirects the same session', async () => {
+  const context = { branch: 'task/postman-bound', worktree: 'C:/worktrees/bound' }
+  const contexts = { get: id => id === 'A' ? context : undefined, isRestoring: () => false, hasActiveOperation: () => false }
+  const f = fixture(contexts); const a = leader('A'); f.agents.set('A', a)
+  const first = await f.tools.taskTool.execute({ task: 'first' }, exec(a))
+  let markIdleStarted
+  let releaseIdle
+  const idleStarted = new Promise(resolve => { markIdleStarted = resolve })
+  const idleGate = new Promise(resolve => { releaseIdle = resolve })
+  const resident = { whenIdle() { markIdleStarted(); return idleGate } }
+  f.agents.set(first.workerSessionId, resident)
+  const interruptPromise = f.tools.interruptTool.execute({ task: 'replacement' }, exec(a))
+  await idleStarted
+  assert.deepEqual(f.calls.interrupts, [{ id: 'worker-1', authority: { kind: 'ancestor', agent: a } }])
+  assert.equal(f.calls.followups.length, 0)
+  assert.equal(f.calls.starts.length, 1)
+  assert.equal(f.calls.drains.length, 0)
+  releaseIdle()
+  const redirected = await interruptPromise
+  assert.equal(redirected.status, 'POSTMAN_WORKER_INTERRUPT_TASK_ACCEPTED')
+  assert.equal(redirected.created, false)
+  assert.equal(redirected.workerSessionId, first.workerSessionId)
+  assert.equal(redirected.messageId, 'followup-1')
+  assert.equal(redirected.interruptRequested, true)
+  assert.equal(redirected.mappingPreserved, true)
+  assert.equal(f.calls.followups[0].id, first.workerSessionId)
+  assert.match(f.calls.followups[0].content[0].text, /task\/postman-bound/)
+  assert.ok(f.calls.followups[0].content[0].text.includes('C:/worktrees/bound'))
+  assert.match(f.calls.followups[0].content[0].text, /previous turn may have been interrupted partway through/i)
+  assert.equal(f.tools.contextOf('A'), context)
+  const later = await f.tools.taskTool.execute({ task: 'later' }, exec(a))
+  assert.equal(later.created, false)
+  assert.equal(later.workerSessionId, first.workerSessionId)
+  assert.equal(f.calls.starts.length, 1)
+  assert.equal(f.calls.drains.length, 0)
+})
+
+test('cold or non-resident Worker interrupts and wakes through the same durable child id', async () => {
+  const f = fixture(); const a = leader('A'); f.agents.set('A', a)
+  const first = await f.tools.taskTool.execute({ task: 'first' }, exec(a))
+  assert.equal(f.agents.get(first.workerSessionId), undefined)
+  const redirected = await f.tools.interruptTool.execute({ task: 'redirect' }, exec(a))
+  assert.equal(redirected.status, 'POSTMAN_WORKER_INTERRUPT_TASK_ACCEPTED')
+  assert.equal(redirected.workerSessionId, first.workerSessionId)
+  assert.equal(f.calls.interrupts[0].id, first.workerSessionId)
+  assert.equal(f.calls.followups[0].id, first.workerSessionId)
+  assert.equal(f.calls.starts.length, 1)
+})
+
+test('interrupt without an active mapping never starts a Worker', async () => {
+  const f = fixture(); const a = leader('A'); f.agents.set('A', a)
+  assert.equal((await f.tools.interruptTool.execute({ task: 'redirect' }, exec(a))).status,
+    'POSTMAN_WORKER_INTERRUPT_NO_ACTIVE_WORKER')
+  assert.equal(f.calls.starts.length, 0)
+  assert.equal(f.calls.followups.length, 0)
+  await f.tools.taskTool.execute({ task: 'first' }, exec(a))
+  await f.tools.stopTool.execute({}, exec(a))
+  assert.equal((await f.tools.interruptTool.execute({ task: 'redirect' }, exec(a))).status,
+    'POSTMAN_WORKER_INTERRUPT_NO_ACTIVE_WORKER')
+  assert.equal(f.calls.starts.length, 1)
+})
+
+test('interrupt admission failure preserves mapping and ordinary follow-up can reuse it', async () => {
+  const f = fixture(); const a = leader('A'); f.agents.set('A', a)
+  const first = await f.tools.taskTool.execute({ task: 'first' }, exec(a))
+  f.ctx.subagents.interrupt = async () => { throw new Error('interrupt denied') }
+  const failed = await f.tools.interruptTool.execute({ task: 'redirect' }, exec(a))
+  assert.equal(failed.status, 'POSTMAN_WORKER_INTERRUPT_FAILED')
+  assert.equal(failed.workerSessionId, first.workerSessionId)
+  assert.equal(failed.mappingPreserved, true)
+  assert.equal(f.calls.followups.length, 0)
+  f.ctx.subagents.interrupt = async (id, authority) => { f.calls.interrupts.push({ id, authority }) }
+  const later = await f.tools.taskTool.execute({ task: 'later' }, exec(a))
+  assert.equal(later.created, false)
+  assert.equal(later.workerSessionId, first.workerSessionId)
+  assert.equal(f.calls.starts.length, 1)
+})
+
+test('redirect delivery failure after interrupt preserves mapping and does not create another Worker', async () => {
+  const f = fixture(); const a = leader('A'); f.agents.set('A', a)
+  const first = await f.tools.taskTool.execute({ task: 'first' }, exec(a))
+  f.ctx.subagents.followup = async () => { throw new Error('delivery denied') }
+  const failed = await f.tools.interruptTool.execute({ task: 'redirect' }, exec(a))
+  assert.equal(failed.status, 'POSTMAN_WORKER_INTERRUPT_DELIVERY_FAILED')
+  assert.equal(failed.workerSessionId, first.workerSessionId)
+  assert.equal(failed.interruptRequested, true)
+  assert.equal(failed.mappingPreserved, true)
+  assert.equal(f.calls.starts.length, 1)
+  f.ctx.subagents.followup = async (parent, id, content, options) => {
+    f.calls.followups.push({ parent, id, content, options })
+    return 'retry-followup'
+  }
+  const later = await f.tools.taskTool.execute({ task: 'later' }, exec(a))
+  assert.equal(later.created, false)
+  assert.equal(later.workerSessionId, first.workerSessionId)
+  assert.equal(f.calls.starts.length, 1)
+})
+
+test('non-Leader cannot interrupt another Leader Worker', async () => {
+  const f = fixture(); const a = leader('A'); f.agents.set('A', a)
+  await f.tools.taskTool.execute({ task: 'first' }, exec(a))
+  const child = { id: 'worker-child', session: { header: { agentPreset: 'postman-leader', origin: 'subagent', delegationDepth: 1 } } }
+  assert.equal((await f.tools.interruptTool.execute({ task: 'unauthorized' }, exec(child))).status,
+    'POSTMAN_WORKER_CALLER_REJECTED')
+  assert.equal(f.calls.interrupts.length, 0)
+  assert.equal(f.calls.followups.length, 0)
+})
+
+test('interrupt enforces required, busy and exact task context identity', async () => {
+  let context = { branch: 'task/one', worktree: 'C:/one' }
+  let restoring = false
+  let operation = false
+  const contexts = { get: () => context, isRestoring: () => restoring, hasActiveOperation: () => operation }
+  const f = fixture(contexts); const a = leader('A'); f.agents.set('A', a)
+  await f.tools.taskTool.execute({ task: 'first' }, exec(a))
+  context = undefined
+  assert.equal((await f.tools.interruptTool.execute({ task: 'redirect' }, exec(a))).status,
+    'POSTMAN_TASK_CONTEXT_REQUIRED')
+  context = { branch: 'task/one', worktree: 'C:/one' }
+  restoring = true
+  assert.equal((await f.tools.interruptTool.execute({ task: 'redirect' }, exec(a))).status,
+    'POSTMAN_TASK_CONTEXT_BUSY')
+  restoring = false; operation = true
+  assert.equal((await f.tools.interruptTool.execute({ task: 'redirect' }, exec(a))).status,
+    'POSTMAN_TASK_CONTEXT_BUSY')
+  operation = false; context = { branch: 'task/two', worktree: 'C:/two' }
+  assert.equal((await f.tools.interruptTool.execute({ task: 'redirect' }, exec(a))).status,
+    'POSTMAN_TASK_CONTEXT_MISMATCH')
+  assert.equal(f.calls.interrupts.length, 0)
+})
+
+test('ordinary Worker tasks retain FIFO follow-up admission without interrupting', async () => {
+  const f = fixture(); const a = leader('A'); f.agents.set('A', a)
+  await f.tools.taskTool.execute({ task: 'first' }, exec(a))
+  const second = await f.tools.taskTool.execute({ task: 'queued second' }, exec(a))
+  const third = await f.tools.taskTool.execute({ task: 'queued third' }, exec(a))
+  assert.equal(second.status, 'POSTMAN_WORKER_TASK_ACCEPTED')
+  assert.equal(third.status, 'POSTMAN_WORKER_TASK_ACCEPTED')
+  assert.equal(second.workerSessionId, third.workerSessionId)
+  assert.deepEqual(f.calls.followups.map(call => call.content[0].text), ['queued second', 'queued third'])
+  assert.equal(f.calls.interrupts.length, 0)
+  assert.equal(f.calls.starts.length, 1)
 })
 
 test('distinct Leader sessions have distinct Worker identities; unauthorized caller cannot reuse them', async () => {
@@ -225,7 +375,7 @@ test('stop queued behind admission drains the accepted child before a later task
   assert.equal(next.created, true)
 })
 
-test('bridge plugin registers both Worker tools and preserves boundary on creation', () => {
+test('bridge plugin registers all Worker tools and preserves boundary on creation', () => {
   const registrations = new Map()
   const listeners = new Map()
   const a = leader('A')
@@ -239,7 +389,7 @@ test('bridge plugin registers both Worker tools and preserves boundary on creati
     on(name, handler) { listeners.set(name, handler) },
   }
   applyBridgePlugin(ctx)
-  assert.deepEqual([...registrations.keys()].sort(), ['implementation_artifact_apply', 'postman_bridge', 'postman_bridge_status', 'postman_task_prepare', 'postman_task_restore', 'postman_worker', 'postman_worker_stop'])
+  assert.deepEqual([...registrations.keys()].sort(), ['implementation_artifact_apply', 'postman_bridge', 'postman_bridge_status', 'postman_task_prepare', 'postman_task_restore', 'postman_worker', 'postman_worker_interrupt', 'postman_worker_stop'])
   assert.deepEqual(restriction.allow, postmanBridgeRestrictionForAgent(a).allow)
   assert.ok(listeners.has('agent-preset/selected'))
   assert.ok(listeners.has('agent/disposed'))

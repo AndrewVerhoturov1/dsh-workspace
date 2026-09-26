@@ -2,6 +2,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { IMPLEMENTATION_REPOSITORY } from './implementation-artifact.js'
 import {
   POSTMAN_WORKER_TOOL_NAME,
+  POSTMAN_WORKER_INTERRUPT_TOOL_NAME,
   POSTMAN_WORKER_STOP_TOOL_NAME,
   isTopLevelPostmanLeader,
 } from './postman-bridge-core.js'
@@ -163,6 +164,108 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
     },
   })
 
+  const interruptTool = defineTool({
+    name: POSTMAN_WORKER_INTERRUPT_TOOL_NAME,
+    description: "Interrupt this Leader's existing continuable Worker turn, then wake that same durable session with a new task while preserving its mapping. Interrupt is cooperative, not a hard kill, and makes no priority or processing-order guarantees relative to messages already accepted by the Harness runtime.",
+    parameters: {
+      task: { type: 'string', required: true, description: 'The replacement task for the same Worker session.' },
+    },
+    output: output(),
+    async execute(args, exec) {
+      const parent = exec?.agent
+      if (!authorized(parent)) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
+      if (typeof args?.task !== 'string' || args.task.trim() === '') {
+        return { status: 'POSTMAN_WORKER_TASK_INVALID' }
+      }
+      if (contexts && !contexts.get(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
+      if (typeof contexts?.isRestoring === 'function' && contexts.isRestoring(parent.id)) {
+        return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
+      }
+      if (typeof contexts?.hasActiveOperation === 'function' && contexts.hasActiveOperation(parent.id)) {
+        return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
+      }
+      const slot = slots.get(parent.id)
+      if (!slot || slot.closed || !slot.childId) {
+        return { status: 'POSTMAN_WORKER_INTERRUPT_NO_ACTIVE_WORKER' }
+      }
+      return enqueue(slot, async () => {
+        if (slot.closed || !authorized(parent) || !slot.childId) {
+          return { status: 'POSTMAN_WORKER_INTERRUPT_NO_ACTIVE_WORKER' }
+        }
+        const context = contexts?.get(parent.id)
+        if (contexts && !context) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
+        if (typeof contexts?.isRestoring === 'function' && contexts.isRestoring(parent.id)) {
+          return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
+        }
+        if (typeof contexts?.hasActiveOperation === 'function' && contexts.hasActiveOperation(parent.id)) {
+          return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
+        }
+        if (slot.context && slot.context !== context) return { status: 'POSTMAN_TASK_CONTEXT_MISMATCH' }
+        slot.context = context
+
+        const childId = slot.childId
+        // Capture the resident before interrupt: cancellation is cooperative and
+        // this Activation may disappear naturally while becoming idle.
+        const resident = ctx.agents.get(childId)
+        try {
+          await ctx.subagents.interrupt(childId, { kind: 'ancestor', agent: parent })
+        } catch (error) {
+          return {
+            status: 'POSTMAN_WORKER_INTERRUPT_FAILED', workerSessionId: childId,
+            interruptRequested: false, mappingPreserved: true, diagnostic: diagnostic(error),
+          }
+        }
+
+        try {
+          if (resident && typeof resident.whenIdle !== 'function') {
+            return {
+              status: 'POSTMAN_WORKER_INTERRUPT_DELIVERY_FAILED', workerSessionId: childId,
+              interruptRequested: true, mappingPreserved: true,
+              diagnostic: 'Resident Worker does not expose whenIdle; refusing to deliver before quiescence',
+            }
+          }
+          if (resident) await resident.whenIdle()
+          if (slot.closed || !authorized(parent) || slot.childId !== childId) {
+            return {
+              status: 'POSTMAN_WORKER_INTERRUPT_DELIVERY_FAILED', workerSessionId: childId,
+              interruptRequested: true, mappingPreserved: !slot.closed,
+              diagnostic: 'Worker/Leader binding changed before redirect delivery',
+            }
+          }
+          const currentContext = contexts?.get(parent.id)
+          if ((contexts && !currentContext) || (slot.context && slot.context !== currentContext) ||
+              (typeof contexts?.isRestoring === 'function' && contexts.isRestoring(parent.id)) ||
+              (typeof contexts?.hasActiveOperation === 'function' && contexts.hasActiveOperation(parent.id))) {
+            return {
+              status: 'POSTMAN_WORKER_INTERRUPT_DELIVERY_FAILED', workerSessionId: childId,
+              interruptRequested: true, mappingPreserved: true,
+              diagnostic: 'Leader task context changed or became busy before redirect delivery',
+            }
+          }
+          const contextPrefix = currentContext
+            ? 'Use the existing Leader task branch ' + currentContext.branch + ' and worktree ' + currentContext.worktree + ' for repository changes; do not create another branch or worktree. Follow REPO_POLICY.md. Keep normal coding, shell, research, and web tools available as needed; do not make repository changes outside the bound worktree. '
+            : ''
+          const redirect = contextPrefix + 'Postman Leader requested an interrupt/redirect because requirements changed. The previous turn may have been interrupted partway through. Inspect the existing bound worktree and repository state before continuing. Preserve valid existing changes and do not assume an interrupted tool or command completed successfully. Treat the following Leader instruction as the current task: ' + args.task
+          const messageId = await ctx.subagents.followup(parent, childId,
+            [{ type: 'text', text: redirect }], {
+              source: { kind: 'coordinator', form: 'relay', senderSessionId: parent.id },
+              signal: exec.signal,
+            })
+          return {
+            status: 'POSTMAN_WORKER_INTERRUPT_TASK_ACCEPTED', workerSessionId: childId,
+            created: false, messageId: String(messageId), interruptRequested: true,
+            mappingPreserved: true,
+            model: POSTMAN_WORKER_AGENT_OPTIONS.model, provider: POSTMAN_WORKER_PROVIDER,
+          }
+        } catch (error) {
+          return {
+            status: 'POSTMAN_WORKER_INTERRUPT_DELIVERY_FAILED', workerSessionId: childId,
+            interruptRequested: true, mappingPreserved: true, diagnostic: diagnostic(error),
+          }
+        }
+      })
+    },
+  })
   const stopTool = defineTool({
     name: POSTMAN_WORKER_STOP_TOOL_NAME,
     description: 'Stop the active local Worker for this exact Postman Leader. Drain its resident Activation and forget the active mapping; keep the durable child Session. Safe to call again.',
@@ -228,5 +331,5 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
     slots.clear()
   }
 
-  return { taskTool, stopTool, ownerOf, contextOf, prepareRestore, dispose }
+  return { taskTool, interruptTool, stopTool, ownerOf, contextOf, prepareRestore, dispose }
 }

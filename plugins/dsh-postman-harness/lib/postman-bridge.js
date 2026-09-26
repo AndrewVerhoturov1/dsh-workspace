@@ -115,6 +115,7 @@ export function apply(ctx) {
   const worker = createPostmanWorkerTools(ctx, grants, postmanTaskContexts)
   ctx.tools.register(createPostmanTaskRestoreTool(ctx, postmanTaskContexts, { jobs, worker }))
   ctx.tools.register(worker.taskTool)
+  ctx.tools.register(worker.interruptTool)
   ctx.tools.register(worker.stopTool)
   ctx.tools.register(createImplementationArtifactApplyTool(ctx, grants, worker, { taskContexts: postmanTaskContexts, jobs }))
   ctx.effect(() => () => worker.dispose(), 'dsh-postman-harness-bridge.worker-mapping()')
