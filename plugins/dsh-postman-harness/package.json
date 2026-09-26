@@ -7,7 +7,8 @@
   "exports": {
     ".": "./lib/index.js",
     "./bridge": "./lib/postman-bridge.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./client": "./dist-client/client.js"
   },
   "files": [
     "lib/index.js",
@@ -25,13 +26,37 @@
     "lib/task-creation-bridge.js",
     "lib/github-task-publisher.js",
     "lib/web-worker-bridge.js",
+    "lib/client.js",
+    "lib/ptc-lab-panel.js",
+    "lib/ptc-lab-panel.css",
+    "lib/ptc-lab-browser-runtime.js",
+    "dist-client",
     "cordis.patch.yml",
     "README.md"
   ],
   "license": "MIT",
+  "dependencies": {
+    "quickjs-emscripten": "0.32.0",
+    "quickjs-emscripten-core": "0.32.0"
+  },
+  "devDependencies": {
+    "@types/react": "18.3.12",
+    "lightningcss": "1.32.0",
+    "react": "18.3.1",
+    "tsdown": "0.22.2"
+  },
+  "scripts": {
+    "build:client": "tsdown -c tsdown.config.mjs"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots"
+      ],
+      "platform": "web"
     }
   },
   "peerDependencies": {
