@@ -51,6 +51,9 @@ export async function runBrowserLabProgram({ role, program, onLog = () => {}, is
     if (isAborted()) throw new Error('Execution aborted')
     runtime = quickjs.newRuntime({ memoryLimitBytes: 16 * 1024 * 1024, maxStackSizeBytes: 512 * 1024 })
     context = runtime.newContext()
+    const requestedTimeout = Number(timeoutMs)
+    const boundedTimeout = Number.isFinite(requestedTimeout) ? Math.max(1, Math.min(requestedTimeout, 30_000)) : 5_000
+    const deadline = performance.now() + boundedTimeout
     runtime.setInterruptHandler(() => aborted || isAborted())
 
     const namespace = context.newObject()
@@ -102,15 +105,14 @@ export async function runBrowserLabProgram({ role, program, onLog = () => {}, is
     const promise = evaluated.value
     let promiseDisposed = false
     const disposePromise = () => { if (!promiseDisposed) { promiseDisposed = true; promise.dispose() } }
-    const deadline = Date.now() + timeoutMs
     let state = context.getPromiseState(promise)
-    while (state.type === 'pending' && Date.now() < deadline && !isAborted()) {
+    while (state.type === 'pending' && performance.now() < deadline && !isAborted()) {
       runtime.executePendingJobs()
       await new Promise(resolve => setTimeout(resolve, 1))
       state = context.getPromiseState(promise)
     }
     if (isAborted()) { aborted = true; disposePromise(); throw new Error('Execution aborted') }
-    if (state.type === 'pending') { timedOut = true; disposePromise(); throw new Error('Execution timed out') }
+    if (timedOut || state.type === 'pending' || performance.now() >= deadline) { timedOut = true; disposePromise(); throw new Error('Execution timed out') }
     if (state.type === 'rejected') {
       const detail = context.dump(state.error)?.message ?? 'Program rejected'
       state.error.dispose(); disposePromise()

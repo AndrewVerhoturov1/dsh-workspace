@@ -36,7 +36,7 @@ window.__ModuleLoader__.load({
 				this.cancelCurrent = void 0;
 				this.runId = 0;
 			}
-			run({ role, program, signal }) {
+			run({ role, program, signal, timeoutMs = 5e3 }) {
 				if (this.worker) return Promise.reject(/* @__PURE__ */ new Error("A lab run is already active"));
 				if (typeof Worker !== "function") return Promise.reject(/* @__PURE__ */ new Error("Browser Worker is unavailable"));
 				const worker = new Worker(new URL("/plugins/dsh-postman-harness/assets/ptc-lab-browser-worker.mjs", window.location.origin), {
@@ -47,9 +47,13 @@ window.__ModuleLoader__.load({
 				const runId = ++this.runId;
 				return new Promise((resolve) => {
 					let settled = false;
+					const requestedTimeout = Number(timeoutMs);
+					const boundedTimeout = Number.isFinite(requestedTimeout) ? Math.max(1, Math.min(requestedTimeout, 3e4)) : 5e3;
+					let watchdog;
 					const finish = (result) => {
 						if (settled) return;
 						settled = true;
+						clearTimeout(watchdog);
 						signal?.removeEventListener("abort", abort);
 						worker.terminate();
 						if (this.worker === worker) this.worker = void 0;
@@ -57,10 +61,12 @@ window.__ModuleLoader__.load({
 						resolve(result);
 					};
 					const abort = () => {
-						worker.postMessage({
-							type: "abort",
-							runId
-						});
+						try {
+							worker.postMessage({
+								type: "abort",
+								runId
+							});
+						} catch {}
 						finish({
 							logs: [],
 							error: {
@@ -69,6 +75,13 @@ window.__ModuleLoader__.load({
 							}
 						});
 					};
+					watchdog = setTimeout(() => finish({
+						logs: [],
+						error: {
+							kind: "timeout",
+							message: "QuickJS worker did not respond before its deadline"
+						}
+					}), boundedTimeout + 250);
 					this.cancelCurrent = abort;
 					worker.onmessage = (event) => {
 						if (event.data?.type === "done" && event.data.runId === runId) finish(event.data);
@@ -92,7 +105,8 @@ window.__ModuleLoader__.load({
 						type: "run",
 						runId,
 						role,
-						program
+						program,
+						timeoutMs: boundedTimeout
 					});
 				});
 			}

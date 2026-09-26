@@ -14,6 +14,8 @@ $script:AssetNames = @(
 )
 $script:ListenerProbe = $null
 $script:ProcessProbe = $null
+$script:HostReplaceProbe = $null
+$script:HostStageProbe = $null
 
 function Get-LabSha256([string]$Path) {
   (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
@@ -148,6 +150,45 @@ function Assert-InstalledPayloadThroughJunction([string]$ExpectedTarget) {
   [pscustomobject]@{ ClientPath=(Join-Path $script:ProfileJunction 'dist-client/client.js'); AssetRoot=$pinned.AssetRoot; CanonicalRoot=$pinned.AssetRoot }
 }
 
+function Restore-HostAtomically([scriptblock]$Replace = $null, [scriptblock]$Stage = $null) {
+  $directory = Split-Path -Parent $script:HostFile
+  $leaf = Split-Path -Leaf $script:HostFile
+  $operationId = [guid]::NewGuid().ToString('N')
+  $staged = Join-Path $directory ('.' + $leaf + '.ptc-rollback-' + $operationId + '.tmp')
+  $replacedBackup = Join-Path $directory ('.' + $leaf + '.ptc-pre-rollback-' + $operationId + '.bak')
+  $junctionState = 'unverified'
+  $finalHash = 'unavailable'
+  try {
+    if ($null -ne $Stage) { & $Stage $script:HostBackup $staged }
+    elseif ($null -ne $script:HostStageProbe) { & $script:HostStageProbe $script:HostBackup $staged }
+    else { Copy-Item -LiteralPath $script:HostBackup -Destination $staged -ErrorAction Stop }
+    $stagedHash = Get-LabSha256 $staged
+    if ($stagedHash -ne $script:OriginalHostSha256) { throw "staged Host SHA mismatch: $stagedHash" }
+    $replaceAction = if ($null -ne $Replace) { $Replace } else { $script:HostReplaceProbe }
+    if ($null -eq $replaceAction) { [IO.File]::Replace($staged, $script:HostFile, $replacedBackup, $true) }
+    else { & $replaceAction $staged $script:HostFile $replacedBackup }
+    $finalHash = Get-LabSha256 $script:HostFile
+    if ($finalHash -ne $script:OriginalHostSha256) { throw "final Host SHA mismatch: $finalHash" }
+    [void](Assert-ExactJunction $script:OriginalTarget)
+    $junctionState = 'verified-original'
+    [pscustomobject]@{ HostSha256=$finalHash; Junction=$script:ProfileJunction; JunctionTarget=$script:OriginalTarget; Staged=$staged }
+  } catch {
+    try { $finalHash = if (Test-Path -LiteralPath $script:HostFile -PathType Leaf) { Get-LabSha256 $script:HostFile } else { 'missing' } } catch { $finalHash = 'unreadable' }
+    try {
+      $item = Get-Item -LiteralPath $script:ProfileJunction -Force -ErrorAction Stop
+      if ($item.LinkType -eq 'Junction' -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -and [string]::Equals(([string]($item.Target | Select-Object -First 1)).TrimEnd('\\'), $script:OriginalTarget.TrimEnd('\\'), [StringComparison]::OrdinalIgnoreCase)) { $junctionState = 'verified-original' }
+      else { $junctionState = 'unexpected' }
+    } catch { $junctionState = 'missing-or-unreadable' }
+    throw "STOP: atomic Host restore failed: $($_.Exception.Message). Do NOT start Harness. FinalHostSha256=$finalHash; Junction='$script:ProfileJunction'; JunctionState=$junctionState; expectedTarget='$script:OriginalTarget'. Recover Host from the verified backup and prove SHA=$script:OriginalHostSha256 before starting."
+  } finally {
+    if (Test-Path -LiteralPath $staged) { Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue }
+    if (Test-Path -LiteralPath $replacedBackup) {
+      try { if ((Get-LabSha256 $replacedBackup) -ne $script:PatchedHostSha256) { throw 'pre-rollback Host preservation SHA mismatch' } }
+      catch { throw "STOP: replaced Host preservation backup is unverified at '$replacedBackup': $($_.Exception.Message). Do NOT start Harness." }
+    }
+  }
+}
+
 function Assert-HostState([ValidateSet('Patched','Original','Either')][string]$AllowedState) {
   if (-not (Test-Path -LiteralPath $script:HostFile -PathType Leaf) -or -not (Test-Path -LiteralPath $script:HostBackup -PathType Leaf)) {
     throw 'STOP: installed Host or exact rollback backup is missing.'
@@ -228,11 +269,19 @@ function Invoke-LabRollback([hashtable]$Configuration) {
   $hostHash = Assert-HostState Either
   if ($linkExists) { Set-ExactJunction $script:OriginalTarget $script:TaskPlugin }
   else { New-Item -ItemType Junction -Path $script:ProfileJunction -Target $script:OriginalTarget | Out-Null }
-  if ($hostHash -ne $script:OriginalHostSha256) { Copy-Item -LiteralPath $script:HostBackup -Destination $script:HostFile -Force }
-  $restoredHash = Get-LabSha256 $script:HostFile
-  if ($restoredHash -ne $script:OriginalHostSha256) { throw "STOP: Host rollback SHA mismatch after copy: $restoredHash. Do NOT start Harness." }
-  [void](Assert-ExactJunction $script:OriginalTarget)
-  [pscustomobject]@{ Status='SUCCESS'; Action='rollback'; Junction=$script:ProfileJunction; Target=$script:OriginalTarget; HostSha256=$restoredHash } | ConvertTo-Json -Compress
+  try {
+    if ($hostHash -ne $script:OriginalHostSha256) { $restore = Restore-HostAtomically }
+    else { [void](Assert-ExactJunction $script:OriginalTarget); $restore = [pscustomobject]@{HostSha256=$hostHash;Junction=$script:ProfileJunction;JunctionTarget=$script:OriginalTarget} }
+    $restoredHash = Get-LabSha256 $script:HostFile
+    if ($restoredHash -ne $script:OriginalHostSha256) { throw "final Host SHA mismatch: $restoredHash" }
+    [void](Assert-ExactJunction $script:OriginalTarget)
+    [pscustomobject]@{ Status='SUCCESS'; Action='rollback'; Junction=$script:ProfileJunction; Target=$script:OriginalTarget; HostSha256=$restoredHash } | ConvertTo-Json -Compress
+  } catch {
+    if ($_.Exception.Message -match 'Do NOT start Harness') { throw }
+    $finalHash = try { Get-LabSha256 $script:HostFile } catch { 'unavailable' }
+    $junctionTarget = try { [string]((Get-Item -LiteralPath $script:ProfileJunction -Force -ErrorAction Stop).Target | Select-Object -First 1) } catch { 'missing-or-unreadable' }
+    throw "STOP: rollback failed after junction switch: $($_.Exception.Message). Do NOT start Harness. FinalHostSha256=$finalHash; Junction='$script:ProfileJunction'; ActualTarget='$junctionTarget'; ExpectedTarget='$script:OriginalTarget'. Restore and verify Host SHA=$script:OriginalHostSha256 and exact original junction before starting."
+  }
 }
 
 Export-ModuleMember -Function Assert-NoHarnessListener, Assert-ExactJunction, Assert-TaskPayload, Assert-InstalledPayloadThroughJunction, Assert-HostState, Set-ExactJunction, Invoke-LabInstall, Invoke-LabRollback

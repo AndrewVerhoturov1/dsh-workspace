@@ -92,6 +92,27 @@ try {
   if($rollback.Status -ne 'SUCCESS' -or $rollback.Action -ne 'rollback' -or [string]$rollback.Target -ne $oldTarget){throw "Rollback end-to-end assertion failed: $($rollback|ConvertTo-Json -Compress)"}
   if(-not(Test-Path $markerOld) -or -not(Test-Path $markerNew)){throw 'Rollback altered target contents.'}
 
+  Set-Content -LiteralPath $fakeHost -Value 'patched-host' -Encoding UTF8
+  $replaceFailure = & $module {
+    param($configuration)
+    $script:ListenerProbe={ @() }; $script:ProcessProbe={ @() }
+    Set-ExactJunction $script:TaskPlugin $script:OriginalTarget
+    $script:HostReplaceProbe={ param($staged,$destination,$preserved) throw 'SIMULATED_HOST_REPLACE_FAILURE' }
+    try { Invoke-LabRollback -Configuration $configuration | Out-Null; throw 'Expected atomic Host restore STOP was not raised.' }
+    catch { if($_.Exception.Message -notmatch 'Do NOT start Harness' -or $_.Exception.Message -notmatch 'SIMULATED_HOST_REPLACE_FAILURE') { throw }; $_.Exception.Message }
+  } $configuration
+  $afterFailedRestoreHash=(Get-FileHash -LiteralPath $fakeHost -Algorithm SHA256).Hash
+  $afterFailedRestoreJunction=& $module { param($old,$link) Assert-ExactJunction $old -JunctionPath $link } $oldTarget $link
+  if($replaceFailure -notmatch 'FinalHostSha256=' -or $replaceFailure -notmatch 'JunctionState=verified-original' -or $afterFailedRestoreHash -ne $configuration.PatchedHostSha256 -or [string]$afterFailedRestoreJunction.Target -ne $oldTarget) { throw 'Atomic Host restore fault injection did not preserve explicit safe evidence.' }
+  $atomicRollback = & $module {
+    param($configuration)
+    $script:ListenerProbe={ @() }; $script:ProcessProbe={ @() }; $script:HostReplaceProbe=$null
+    Set-ExactJunction $script:TaskPlugin $script:OriginalTarget
+    Invoke-LabRollback -Configuration $configuration | ConvertFrom-Json
+  } $configuration
+  if($atomicRollback.Status -ne 'SUCCESS' -or $atomicRollback.HostSha256 -ne $configuration.OriginalHostSha256) { throw 'Successful atomic Host restore verification failed.' }
+  $script:HostReplaceProbe=$null
+
   $failure = & $module {
     param($link,$old,$plugin)
     try {$creator={param($path,$target)throw 'SIMULATED_CREATE_FAILURE'};Set-ExactJunction $plugin $old -JunctionPath $link -CreateLink $creator;throw 'Expected creation failure was not raised.'}

@@ -2126,6 +2126,9 @@ async function runBrowserLabProgram({ role, program, onLog = () => {}, isAborted
 			maxStackSizeBytes: 512 * 1024
 		});
 		context = runtime.newContext();
+		const requestedTimeout = Number(timeoutMs);
+		const boundedTimeout = Number.isFinite(requestedTimeout) ? Math.max(1, Math.min(requestedTimeout, 3e4)) : 5e3;
+		const deadline = performance.now() + boundedTimeout;
 		runtime.setInterruptHandler(() => aborted || isAborted());
 		const namespace = context.newObject();
 		for (const [name, hostFunction] of Object.entries(ROLES[role])) {
@@ -2190,9 +2193,8 @@ async function runBrowserLabProgram({ role, program, onLog = () => {}, isAborted
 				promise.dispose();
 			}
 		};
-		const deadline = Date.now() + timeoutMs;
 		let state = context.getPromiseState(promise);
-		while (state.type === "pending" && Date.now() < deadline && !isAborted()) {
+		while (state.type === "pending" && performance.now() < deadline && !isAborted()) {
 			runtime.executePendingJobs();
 			await new Promise((resolve) => setTimeout(resolve, 1));
 			state = context.getPromiseState(promise);
@@ -2202,7 +2204,7 @@ async function runBrowserLabProgram({ role, program, onLog = () => {}, isAborted
 			disposePromise();
 			throw new Error("Execution aborted");
 		}
-		if (state.type === "pending") {
+		if (timedOut || state.type === "pending" || performance.now() >= deadline) {
 			timedOut = true;
 			disposePromise();
 			throw new Error("Execution timed out");
