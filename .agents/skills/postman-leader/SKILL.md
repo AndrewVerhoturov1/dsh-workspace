@@ -170,11 +170,16 @@ root cause, diff summary и test results.
 
 Mapping — привязка к resident Worker session; она существует до её явного закрытия через `postman_worker_stop`. Не выводи отсутствие mapping из того, что Worker idle, прислал report, закончил этап, ждёт решения или что изменились требования.
 
-| Состояние | Единственная допустимая операция Leader |
+| Состояние mapping и желаемое действие | Допустимая операция Leader |
 |---|---|
-| Mapping отсутствует | `postman_worker({task: ...})` для создания Worker |
-| Mapping существует: turn работает, ожидается report или пришёл report; нужен follow-up/следующий этап/уточнение | `postman_worker_interrupt({task: ...})` тому же Worker |
-| Mapping намеренно закрыт через `postman_worker_stop` | После закрытия допустим новый `postman_worker({task: ...})` |
+| Mapping отсутствует; начать задачу | `postman_worker({task: ...})` — единственный первичный create |
+| Mapping существует, turn активен; исправить текущую работу | `postman_worker_interrupt({task: ...})` тому же Worker |
+| Mapping существует, turn активен; поставить новую фазу | `postman_worker_interrupt({task: ...})` тому же Worker; учитывай, что interrupt кооперативен и не гарантирует приоритет |
+| Mapping существует, turn завершён и получен report; продолжить задачу | `postman_worker_interrupt({task: ...})` тому же Worker |
+| Mapping существует, turn завершён и получен report; добавить проверку | Только если проверка обоснована новым evidence/решением: `postman_worker_interrupt({task: ...})`; не посылай произвольную лишнюю проверку |
+| Mapping существует; начать связанную задачу | Только если она действительно относится к существующему контексту и допустима в нём — `postman_worker_interrupt({task: ...})`; независимую задачу не присоединять, сначала завершить/закрыть текущий mapping по правилам stop |
+| Mapping существует; закрыть session | `postman_worker_stop()` только на разрешённом основании раздела 10; stop не использовать для простого переключения этапа |
+| Mapping закрыт подтверждённым `postman_worker_stop`; начать новую session | `postman_worker({task: ...})` допустим для нового первичного create |
 
 Пока mapping существует, любой повторный вызов `postman_worker()` — включая вызов с `artifactRequestId` — запрещён при любых обстоятельствах: он не проверяет состояние и не создаёт допустимый «следующий Worker», а посылает ещё одно сообщение в очередь существующей session. В частности, report, idle-состояние, переход фазы и изменение требований не снимают запрет.
 
@@ -210,21 +215,25 @@ Mapping — привязка к resident Worker session; она существу
 
 Если наступило событие, которое оправдывает дополнительную работу — содержательный report и решение о следующем этапе, существенное изменение требований пользователем или новое объективное evidence — Leader может поставить follow-up, но при сохранённом mapping обязан делать это только через `postman_worker_interrupt`. Если требуется получить report до следующего этапа, Leader ждёт его, не посылая дополнительных сообщений; затем продолжает только interrupt-вызовом. «Leader вспомнил ещё одну проверку» не является достаточным основанием.
 
-**Пример после report:** mapping по-прежнему существует, хотя Worker уже отчитался. Следующий этап передаётся interrupt тому же Worker, а не повторным вызовом `postman_worker`.
-
-Правильно:
-
-```text
-Worker report → Leader review/decision → postman_worker_interrupt({task: "Выполни следующий согласованный этап..."})
-```
+**Пример после report — запрещённый повторный вызов:** первоначально mapping не существовал, поэтому Leader создал его. Report завершил turn, но не закрыл mapping.
 
 Неправильно:
 
 ```text
-Worker report → postman_worker({task: "Выполни следующий этап..."})
+postman_worker({task: "Исследуй причину сбоя и верни report."})  # первичное создание
+Worker report
+postman_worker({task: "Теперь исправь причину."})               # запрещено: mapping всё ещё существует
 ```
 
-**Пример смены требований во время turn:** пользователь просит прекратить прежнее направление и вместо него проверить другую гипотезу. Leader передаёт заменяющее задание тому же mapping через `postman_worker_interrupt`; новый `postman_worker` не вызывает, даже если считает старый turn устаревшим. Interrupt кооперативен, поэтому не гарантирует, что новое сообщение обойдёт уже принятую очередь.
+Правильно:
+
+```text
+postman_worker({task: "Исследуй причину сбоя и верни report."})  # первичное создание
+Worker report
+postman_worker_interrupt({task: "По результатам report исправь причину и проверь её."})
+```
+
+**Пример смены требований A→B во время turn:** пользователь меняет задачу с A на B, пока Worker выполняет A. Не создавать новый Worker и не менять/перепривязывать task worktree. Leader поручает тому же Worker перейти к B через `postman_worker_interrupt`; Worker сначала проверяет, что использует существующий Host-bound worktree текущей Leader-задачи (ветка/worktree и `git status`), сохраняет уже внесённые валидные изменения A и работает дальше только в границах этого context. Если B требует другой независимой ветки/worktree или конфликтует с незавершёнными изменениями A, Worker сообщает blocker в report и ждёт решения; запрещено создавать или выбирать обходной worktree самостоятельно. Interrupt кооперативен и не гарантирует приоритет над уже принятой очередью.
 
 ---
 
@@ -455,16 +464,9 @@ Host coordinator сам управляет FIFO, максимум тремя act
 
 Для `RESULT_DURABLE` Leader проверяет trusted metadata, exact `resultZip` и integrity handoff. Это не автоматическое разрешение применять ZIP; Leader отдельно принимает решение об implementation.
 
-Для exact trusted REQ он может авторизовать того же Worker:
+Trusted artifact grant и продолжение Worker — разные операции. Host grant для exact trusted REQ передаётся через `artifactRequestId` при вызове `postman_worker({task, artifactRequestId})`; этот вызов создаёт Worker mapping, поэтому он допустим только когда mapping отсутствует. Worker затем применяет artifact через `implementation_artifact_apply({requestId, worktree})` и не выбирает произвольный ZIP path.
 
-```text
-postman_worker({
-  task: "...",
-  artifactRequestId: "REQ_..."
-})
-```
-
-Этот пример описывает форму Host grant, но вызов `postman_worker` с `artifactRequestId` разрешён только для первоначального создания при отсутствии mapping. Если mapping существует, artifact-related задание тому же Worker передаётся через `postman_worker_interrupt`; нельзя вызывать `postman_worker` повторно. Worker использует `implementation_artifact_apply` через trusted Host grant и не выбирает произвольный ZIP path. После runner result Worker проверяет фактическое состояние и возвращает report; Leader принимает следующее решение, соблюдая lifecycle mapping.
+`postman_worker_interrupt` принимает задание для существующего Worker, но не принимает `artifactRequestId` и сам по себе не выдаёт/не переносит trusted grant на REQ. Поэтому нельзя описывать interrupt как авторизацию существующего Worker для artifact apply. Если mapping уже существует, не повторяй `postman_worker` с `artifactRequestId` и не изобретай обход: поддерживаемого здесь способа привязать новый artifact grant к существующей session нет. Остановись и сообщи это ограничение Leader; дальнейший способ обработки REQ требует отдельного решения/поддержки Host. Обычное продолжение уже авторизованной задачи без нового grant передавай тому же Worker через interrupt. После runner result Worker проверяет фактическое состояние и возвращает report; Leader принимает следующее решение с соблюдением mapping lifecycle.
 
 ---
 
