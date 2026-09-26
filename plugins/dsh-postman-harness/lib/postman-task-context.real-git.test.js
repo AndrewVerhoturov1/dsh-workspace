@@ -9,10 +9,10 @@ import { createPostmanTaskContexts } from './postman-task-context.js'
 
 const exec = promisify(execFile)
 const shaPattern = /^[0-9a-f]{40}$/
-const call = async (cwd, ...args) => (await exec('git', ['-C', cwd, ...args], { windowsHide: true })).stdout.trim()
+const call = async (cwd, ...args) => (await exec('git', ['-C', cwd, ...args], { windowsHide: true, timeout: 10000 })).stdout.trim()
 const makeLeader = (id, root) => ({ id, session: { header: { cwd: root } } })
 
-test('production sync validates and fast-forwards a real temporary bare DAG', async t => {
+test('production sync validates and fast-forwards a real temporary bare DAG', { timeout: 120000 }, async t => {
   const temp = await mkdtemp(join(tmpdir(), 'postman-production-sync-'))
   try {
     const root = join(temp, 'root'), bare = join(temp, 'origin.git')
@@ -55,6 +55,55 @@ test('production sync validates and fast-forwards a real temporary bare DAG', as
     assert.equal(await call(worktree, 'rev-parse', 'HEAD'), req2)
     assert.equal(await contexts.sync(leader.id, req1, parent1), true)
     assert.equal(await call(worktree, 'rev-parse', 'HEAD'), req2, 'older receipt may not rewind local HEAD')
+
+    // Independent production-sync check of five sequential Direct-like receipts.
+    // This verifies real Git publication and out-of-order synchronization, not Bridge scheduling.
+    const receipts = [{ commit: req1, parent: parent1 }, { commit: req2, parent: parent2 }]
+    const published = [c3, req1, req2]
+    const publicationSnapshots = []
+    for (let index = 3; index <= 5; index++) {
+      const previous = published.at(-1)
+      await writeFile(join(root, 'history.txt'), `REQ ${index}`, 'utf8')
+      await call(root, 'add', 'history.txt')
+      await call(root, 'commit', '-m', `REQ ${index}`)
+      const commit = await call(root, 'rev-parse', 'HEAD')
+      const parent = await call(root, 'rev-parse', 'HEAD^')
+      assert.equal(parent, previous, `C${index} has exact previous parent`)
+      const beforePublish = await call(bare, 'rev-parse', '--verify', `refs/heads/${branch}^{commit}`).catch(() => '')
+      assert.equal(beforePublish, previous, `C${index} does not exist remotely before publication`)
+      await call(root, 'push', 'origin', `HEAD:refs/heads/${branch}`)
+      const remote = await call(bare, 'rev-parse', `refs/heads/${branch}`)
+      assert.equal(remote, commit, `remote advances monotonically to C${index}`)
+      assert.equal(await call(root, 'merge-base', previous, remote), previous)
+      publicationSnapshots.push({ commit, previousRemote: beforePublish, remote })
+      receipts.push({ commit, parent })
+      published.push(commit)
+    }
+    const receiptOrder = [2, 3, 1, 0, 4]
+    let synchronizedHead = await call(worktree, 'rev-parse', 'HEAD')
+    const snapshots = []
+    for (const receiptIndex of receiptOrder) {
+      const { commit, parent } = receipts[receiptIndex]
+      const remoteLineBefore = await call(worktree, 'ls-remote', 'origin', `refs/heads/${branch}`)
+      const [remoteBefore, remoteBranch] = remoteLineBefore.split(/\s+/)
+      assert.equal(remoteBranch, `refs/heads/${branch}`)
+      assert.equal(remoteBefore, published[5], 'all five receipts are published before out-of-order synchronization')
+      const headBefore = await call(worktree, 'rev-parse', 'HEAD')
+      assert.equal(await contexts.sync(leader.id, commit, parent), true, `sync C${receiptIndex + 1}`)
+      const headAfter = await call(worktree, 'rev-parse', 'HEAD')
+      const remoteAfter = await call(worktree, 'rev-parse', `refs/remotes/origin/${branch}`)
+      assert.equal(await call(worktree, 'merge-base', headBefore, headAfter), headBefore, 'local HEAD never rewinds')
+      assert.equal(await call(worktree, 'merge-base', commit, remoteAfter), commit, 'receipt remains in remote ancestry')
+      assert.equal(await call(worktree, 'merge-base', remoteAfter, headAfter), remoteAfter, 'local worktree contains fetched remote tip')
+      assert.ok(shaPattern.test(remoteBefore))
+      snapshots.push({ receipt: `C${receiptIndex + 1}`, before: headBefore, after: headAfter, remote: remoteAfter })
+      synchronizedHead = headAfter
+    }
+    assert.deepEqual(publicationSnapshots.map(item => item.previousRemote), [req2, published[3], published[4]])
+    assert.deepEqual(publicationSnapshots.map(item => item.remote), published.slice(3), 'each non-force push advances remote by one commit')
+    assert.equal(synchronizedHead, published[5], 'out-of-order receipts leave the local worktree at C5')
+    assert.deepEqual(snapshots.map(item => item.receipt), ['C3', 'C4', 'C2', 'C1', 'C5'])
+    assert.deepEqual(snapshots.map(item => item.remote), [published[5], published[5], published[5], published[5], published[5]])
 
     // Wrong parent and unrelated commits fail closed, without moving worktree HEAD.
     const beforeReject = await call(worktree, 'rev-parse', 'HEAD')
