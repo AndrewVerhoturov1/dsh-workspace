@@ -47,6 +47,7 @@ window.__ModuleLoader__.load({
 				const runId = ++this.runId;
 				return new Promise((resolve) => {
 					let settled = false;
+					let phase = "worker-created";
 					const requestedTimeout = Number(timeoutMs);
 					const boundedTimeout = Number.isFinite(requestedTimeout) ? Math.max(1, Math.min(requestedTimeout, 3e4)) : 5e3;
 					let watchdog;
@@ -79,12 +80,14 @@ window.__ModuleLoader__.load({
 						logs: [],
 						error: {
 							kind: "timeout",
-							message: "QuickJS worker did not respond before its deadline"
+							message: `QuickJS worker did not respond before its deadline (last phase: ${phase})`
 						}
 					}), boundedTimeout + 250);
 					this.cancelCurrent = abort;
 					worker.onmessage = (event) => {
-						if (event.data?.type === "done" && event.data.runId === runId) finish(event.data);
+						if (event.data?.runId !== runId) return;
+						if (event.data.type === "phase") phase = event.data.phase;
+						if (event.data.type === "done") finish(event.data);
 					};
 					worker.onerror = (event) => {
 						event.preventDefault();

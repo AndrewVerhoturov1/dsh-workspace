@@ -2107,7 +2107,7 @@ function jsonText(value, label, cap = MAX_RESULT_BYTES) {
 function message(error) {
 	return error instanceof Error ? error.message : String(error);
 }
-async function runBrowserLabProgram({ role, program, onLog = () => {}, isAborted = () => false, timeoutMs = 5e3 }) {
+async function runBrowserLabProgram({ role, program, onLog = () => {}, onPhase = () => {}, isAborted = () => false, timeoutMs = 5e3 }) {
 	let runtime;
 	let context;
 	let aborted = false;
@@ -2119,7 +2119,9 @@ async function runBrowserLabProgram({ role, program, onLog = () => {}, isAborted
 	try {
 		if (!Object.hasOwn(ROLES, role)) throw new Error("Unknown lab role");
 		if (typeof program !== "string" || bytes(program) > MAX_PROGRAM_BYTES) throw new Error("Program exceeds the lab input limit");
+		onPhase("loading-wasm");
 		const quickjs = await newQuickJSWASMModule(quickjsSyncVariant);
+		onPhase("quickjs-ready");
 		if (isAborted()) throw new Error("Execution aborted");
 		runtime = quickjs.newRuntime({
 			memoryLimitBytes: 16 * 1024 * 1024,
@@ -2179,6 +2181,7 @@ async function runBrowserLabProgram({ role, program, onLog = () => {}, isAborted
 		context.setProp(context.global, "console", consoleObject);
 		log.dispose();
 		consoleObject.dispose();
+		onPhase("running-program");
 		const evaluated = context.evalCode(`"use strict"; (async function __lab_main__() { ${program}\n})()`, "ptc-lab-program.js");
 		if (evaluated.error) {
 			const detail = context.dump(evaluated.error)?.message ?? "Program failed";
@@ -2260,11 +2263,18 @@ if (typeof self !== "undefined") self.onmessage = async ({ data }) => {
 	if (!data || data.type !== "run") return;
 	let aborted = false;
 	const { runId } = data;
+	const onPhase = (phase) => self.postMessage({
+		type: "phase",
+		runId,
+		phase
+	});
+	onPhase("worker-received-run");
 	self.onmessage = (event) => {
 		if (event.data?.type === "abort" && event.data.runId === runId) aborted = true;
 	};
 	const outcome = await runBrowserLabProgram({
 		...data,
+		onPhase,
 		isAborted: () => aborted
 	});
 	self.postMessage({
