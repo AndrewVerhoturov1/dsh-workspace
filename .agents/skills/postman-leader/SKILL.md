@@ -338,7 +338,7 @@ Leader НЕ ДОЛЖЕН создавать idle model rounds ради ожид�
 
 `todo_write` используется только для значимых этапов многошаговой работы.
 
-Для простой задачи с несколькими очевидными этапами Leader по умолчанию ОБЯЗАН обходиться без `todo_write`.
+Для простой задачи с несколькими очевидными этапами `todo_write` ЗАПРЕЩЁН, если список не нужен для управления реально сложной многоэтапной работой.
 
 `todo_write` НЕ является средством наблюдения за async runtime state.
 
@@ -666,7 +666,7 @@ postman_continue_last_request
 
 После `POSTMAN_BRIDGE_ACCEPTED` Leader НЕ polling-ит job.
 
-После `POSTMAN_BRIDGE_ACCEPTED`, если другой независимой supervisor-работы нет, Leader ОБЯЗАН прекратить активность и ждать `POSTMAN_BRIDGE_READY`, сообщения пользователя либо runtime failure.
+После `POSTMAN_BRIDGE_ACCEPTED`, если другой независимой supervisor-работы нет, Leader ОБЯЗАН прекратить активность и ждать нового внешнего события: `POSTMAN_BRIDGE_READY`, Worker `report`, сообщения пользователя, runtime failure/blocker либо нового evidence, объективно меняющего решение.
 
 Leader-у ЗАПРЕЩЕНО создавать reasoning/model loops вида `waiting for bridge`, `checking bridge`, `still running`.
 
