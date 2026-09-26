@@ -168,20 +168,25 @@ const el = (tagName, children = [], classes = []) => ({
   nodeType: 1, tagName, childNodes: children,
   matches: selector => selector === "code.user-message-inline-code" && classes.includes("user-message-inline-code"),
 });
-const prompt = ["POSTMAN_REQUEST_ID: REQ_20260925T171137Z_2420", "task_file: `pinned` URL"].join(String.fromCharCode(10));
-const dom = el("ROOT", [
-  el("P", [text("POSTMAN_REQUEST_ID: REQ_20260925T171137Z_2420")]),
-  el("DIV", [el("P", [text("task_file: "), el("SPAN", [el("CODE", [text("pinned")], ["user-message-inline-code"]), text(" URL")])])]),
-  el("P", []),
-]);
+const req = "POSTMAN_REQUEST_ID: REQ_20260925T175605Z_0372";
+const url = "https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/02cb47b7f1e5f80a3a1270e940bd37eb6d58a91f/REQ_20260925T175605Z_0372.md";
+const prompt = [req, "task_file: " + url].join(String.fromCharCode(10));
+// Confirmed ChatGPT shape: one P with SPAN, BR, SPAN and a link A.
+const dom = el("ROOT", [el("DIV", [el("P", [
+  el("SPAN", [text(req)]), el("BR"), el("SPAN", [text("task_file: ")]), el("A", [text(url)]),
+])])]);
 const actual = extract(dom);
 const crypto = require("crypto");
 const hash = value => crypto.createHash("sha256").update(value, "utf8").digest("hex");
 if (actual !== prompt) throw new Error(`text mismatch ${JSON.stringify(actual)}`);
 if (actual.length !== prompt.length || hash(actual) !== hash(prompt)) throw new Error("length/hash mismatch");
-const joined = extract(el("ROOT", [text("POSTMAN_REQUEST_ID: REQ_20260925T171137Z_2420task_file: URL")]));
-if (joined !== "POSTMAN_REQUEST_ID: REQ_20260925T171137Z_2420task_file: URL") throw new Error("joined text changed");
-console.log(JSON.stringify({length: actual.length, sha256: hash(actual), joined}));
+const joined = extract(el("ROOT", [text(req + "task_file: " + url)]));
+if (joined !== req + "task_file: " + url) throw new Error("joined text changed");
+const standalone = extract(el("ROOT", [el("P", [el("SPAN", [text(req)])])]));
+if (standalone !== req) throw new Error("standalone REQ changed");
+const oldFixture = extract(el("ROOT", [el("P", [text("first")]), el("DIV", [el("P", [text("second")])])]));
+if (oldFixture !== "first\nsecond") throw new Error("block fixture changed");
+console.log(JSON.stringify({length: actual.length, sha256: hash(actual), joined, standalone, oldFixture}));
 '''
         result = subprocess.run(
             [shutil.which("node"), "-e", script, submit._SEMANTIC_MESSAGE_TEXT_JS],
@@ -189,7 +194,8 @@ console.log(JSON.stringify({length: actual.length, sha256: hash(actual), joined}
             creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
         )
         self.assertIn('"length":', result.stdout)
-        self.assertIn('"joined":"POSTMAN_REQUEST_ID: REQ_20260925T171137Z_2420task_file: URL"', result.stdout)
+        self.assertIn('"standalone":"POSTMAN_REQUEST_ID: REQ_20260925T175605Z_0372"', result.stdout)
+        self.assertIn('"oldFixture":"first\\nsecond"', result.stdout)
 
     def test_root_url_accepts_chatgpt_root(self):
         self.assertTrue(submit.is_chatgpt_root_url("https://chatgpt.com/"))
@@ -872,7 +878,7 @@ console.log(JSON.stringify({length: actual.length, sha256: hash(actual), joined}
         self.assertEqual(len(details), 1)
         self.assertEqual(details[0]["selector"], submit.USER_TURN_SELECTORS[0])
 
-    def test_current_chatgpt_user_bubble_proves_exact_request_key_without_retry(self):
+    def test_current_chatgpt_user_bubble_proves_exact_prompt_without_retry(self):
         request_id = "REQ_20260925T162138Z_6278"
         prompt = f"POSTMAN_REQUEST_ID: {request_id}\ntask_file: exact pinned URL"
 
@@ -899,7 +905,7 @@ console.log(JSON.stringify({length: actual.length, sha256: hash(actual), joined}
         self.assertEqual(details[0]["text"], prompt)
         ok, proof = submit._observe_send_proof(page, prompt, 0)
         self.assertTrue(ok)
-        self.assertTrue(proof["requestKeyUserTurn"])
+        self.assertTrue(proof["exactUserTurn"])
         self.assertEqual(proof["userTurnSelector"], 'main [data-user-message-bubble="true"]')
         self.assertEqual(page.click_count, 0)
 
@@ -928,6 +934,45 @@ console.log(JSON.stringify({length: actual.length, sha256: hash(actual), joined}
         )
         self.assertFalse(ok)
         self.assertFalse(proof["userTurnCorrelated"])
+
+    def test_post_send_requires_full_content_not_just_matching_req(self):
+        req = "REQ_20260925T175605Z_0372"
+        prompt = f"POSTMAN_REQUEST_ID: {req}\ntask_file: https://example.test/original.md"
+        mutations = [
+            f"POSTMAN_REQUEST_ID: {req}\ntask_file: https://example.test/changed.md",
+            "POSTMAN_REQUEST_ID: REQ_20260925T175605Z_0373\ntask_file: https://example.test/original.md",
+        ]
+        for rendered in mutations:
+            with self.subTest(rendered=rendered):
+                ok, proof = submit._observe_send_proof(
+                    FakePage(user_turns=[rendered], composer_text="", url="https://chatgpt.com/c/exact"), prompt, 0
+                )
+                self.assertFalse(ok)
+                self.assertFalse(proof["userTurnCorrelated"])
+                self.assertEqual(proof["userTurnCorrelationMode"], "none")
+
+    def test_post_send_rejects_two_new_turns(self):
+        ok, proof = submit._observe_send_proof(
+            FakePage(user_turns=["old", "expected", "another"], composer_text="", url="https://chatgpt.com/c/exact"),
+            "expected", 1,
+        )
+        self.assertFalse(ok)
+        self.assertFalse(proof["exactUserTurn"])
+
+    def test_post_send_rejects_unbound_chat(self):
+        ok, proof = submit._observe_send_proof(
+            FakePage(user_turns=["expected"], composer_text="", url="https://chatgpt.com/"), "expected", 0
+        )
+        self.assertFalse(ok)
+        self.assertFalse(proof["chatUrlBound"])
+
+    def test_unknown_send_guard_blocks_resend(self):
+        guard = submit.SendGuard()
+        guard.begin()
+        guard.unknown()
+        with self.assertRaises(submit.SubmitError) as ctx:
+            guard.begin()
+        self.assertEqual(ctx.exception.code, submit.PROMPT_RESEND_BLOCKED)
 
     def test_wrong_user_turn_text_is_unknown(self):
         page = FakePage(confirm_on_click=False)
