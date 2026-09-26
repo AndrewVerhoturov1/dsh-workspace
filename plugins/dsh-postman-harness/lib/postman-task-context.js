@@ -154,11 +154,11 @@ export function createPostmanTaskContexts({ gitCommand = git, temporaryDirectory
     try {
       const { worktree, branch } = context
       const root = await command(worktree, 'rev-parse', '--show-toplevel')
-      const origin = await command(root, 'remote', 'get-url', 'origin')
+      const origin = await command(context.repositoryRoot, 'remote', 'get-url', 'origin')
       const worktreeOrigin = await command(worktree, 'remote', 'get-url', 'origin')
       if (contextOperations.get(leaderId) === undefined || contexts.get(leaderId) !== context || context.repository !== REPOSITORY || !BRANCH.test(branch) ||
           normalize(root) !== normalize(worktree) || normalize(await realPath(worktree)) !== normalize(worktree) ||
-          repositoryIdentity(origin) !== REPOSITORY || worktreeOrigin !== origin ||
+          repositoryIdentity(origin) !== REPOSITORY || repositoryIdentity(worktreeOrigin) !== REPOSITORY ||
           await command(worktree, 'branch', '--show-current') !== branch ||
           await command(worktree, 'symbolic-ref', '--short', 'HEAD') !== branch ||
           await command(worktree, 'status', '--porcelain=v1', '--untracked-files=all') !== '') return false

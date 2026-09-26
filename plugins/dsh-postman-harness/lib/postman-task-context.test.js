@@ -141,12 +141,27 @@ test('sync refuses dirty, foreign, unrelated remote, wrong parent and stale HEAD
   const f = fixture(); await prepare(f); assert.equal(await f.contexts.sync('A', 'invalid', base), false); assert.equal(await f.contexts.sync('A', published, 'invalid'), false)
 })
 
-test('sync rejects a changed root origin before fetch', async () => {
-  const f = fixture(); await prepare(f)
-  f.state.worktreeOriginOverride = 'https://github.com/attacker/other.git'
-  assert.equal(await f.contexts.sync('A', published, base), false)
-  assert.equal(f.calls.some(call => call.args[0] === 'fetch' && call.args[1] === 'origin' && call.args[2]?.startsWith('refs/heads/')), false)
-  assert.equal(f.state.head, base)
+test('sync accepts allowed differing GitHub URL forms and rejects foreign root or worktree origin', async t => {
+  const allowed = ['https://github.com/andrewverhoturov1/dsh-workspace.git', 'https://github.com/AndrewVerhoturov1/dsh-workspace',
+    'git@github.com:AndrewVerhoturov1/dsh-workspace.git', 'ssh://git@github.com/andrewverhoturov1/dsh-workspace']
+  for (const remoteUrl of allowed) await t.test(remoteUrl, async () => {
+    const f = fixture({ remoteUrl }); await prepare(f)
+    f.state.worktreeOriginOverride = allowed[0]
+    f.state.remote = published
+    assert.equal(await f.contexts.sync('A', published, base), true)
+  })
+  for (const [label, rootOriginOverride, worktreeOriginOverride] of [
+    ['foreign root', 'https://github.com/attacker/other.git', undefined],
+    ['foreign worktree', undefined, 'ssh://git@evil.example/andrewverhoturov1/dsh-workspace'],
+  ]) await t.test(label, async () => {
+    const f = fixture(); await prepare(f)
+    if (rootOriginOverride !== undefined) f.state.remoteUrl = rootOriginOverride
+    f.state.worktreeOriginOverride = worktreeOriginOverride
+    f.state.remote = published
+    assert.equal(await f.contexts.sync('A', published, base), false)
+    assert.equal(f.calls.some(call => call.args[0] === 'fetch' && call.args[1] === 'origin' && call.args[2]?.startsWith('refs/heads/')), false)
+    assert.equal(f.state.head, base)
+  })
 })
 
 test('apply guard requires unchanged bound branch and exact published HEAD', async () => {
