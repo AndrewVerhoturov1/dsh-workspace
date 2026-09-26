@@ -699,21 +699,15 @@ Host coordinator сам управляет:
 
 Leader НЕ делает sleep и НЕ разносит bridge calls искусственно.
 
-### Текущий per-Leader task-context invariant
+### Task-context и параллельность
 
-В текущей task-context архитектуре одна Leader session / одна Host-bound task branch может иметь только один незавершённый Bridge job.
+Одна Leader session сохраняет единственную Host-bound task branch/worktree, но допускает до трёх активных независимых Bridge jobs. Коordinator применяет общий FIFO, максимум три активных lifecycle и интервалы старта; Leader не добавляет sleep и не выстраивает вызовы искусственно.
 
-После `POSTMAN_BRIDGE_ACCEPTED` Leader НЕ ИМЕЕТ ПРАВА вызывать следующий `postman_bridge`, пока предыдущий job не перешёл в terminal/failed через `POSTMAN_BRIDGE_READY` + `postman_bridge_status`.
+Несколько Bridge одного Leader могут завершиться не по порядку. Host сериализует только короткий Git sync этого task context, проверяет lineage каждого REQ receipt к текущему удалённому tip и делает только fast-forward. Повторная обработка старого receipt допустима, если его commit уже предок доказанного tip. Sync failure остаётся fail-closed и не даёт grant для соответствующего REQ; это не повод сбрасывать или переписывать ветку.
 
-Это ограничение одинаково относится к `@PostmanAsk` и `@Postman`. Исторически параллельная работа поддерживалась для обоих режимов; ограничение является особенностью текущего task-context publication lifecycle, а не ограничением конкретного transport kind.
+`POSTMAN_TASK_CONTEXT_BUSY` остаётся корректной защитой во время restore или runner operation, но не используется как per-Leader запрет второго Bridge.
 
-`POSTMAN_TASK_CONTEXT_BUSY` НЕ является нормальным способом планирования или проверки состояния. Если Leader уже знает о своём active Bridge, он НЕ ДОЛЖЕН делать второй Bridge call только для получения `BUSY`.
-
-### Global coordinator
-
-Глобальный Host coordinator по-прежнему имеет capacity до трёх active Bridge jobs. Этот лимит относится к transport coordinator и может использоваться независимыми Leader task contexts.
-
-Не путать глобальный `max=3` с текущей per-Leader serialization.
+Запросы к одной и той же доказанной ChatGPT conversation через `--chat <REQ>` должны выполняться последовательно; независимые беседы могут работать параллельно.
 
 Запросы к одному доказанному ChatGPT conversation через `--chat <REQ>` должны выполняться последовательно.
 

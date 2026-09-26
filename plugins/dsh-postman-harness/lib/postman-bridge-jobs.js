@@ -164,8 +164,6 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts) {
     if (typeof contexts?.isRestoring === 'function' && contexts.isRestoring(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
     if (typeof contexts?.hasActiveOperation === 'function' && contexts.hasActiveOperation(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
     if (disposed) return { status: 'POSTMAN_BRIDGE_UNAVAILABLE' }
-    if (contexts && [...jobs.values()].some(job => job.parentSessionId === parent.id &&
-        !['TERMINAL', 'FAILED'].includes(job.state))) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
     const job = {
       bridgeJobId: randomUUID(), parentSessionId: parent.id, taskContext, transportKind, state: 'QUEUED',
       createdAt: new Date().toISOString(), controller: new AbortController(),
@@ -177,6 +175,15 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts) {
     try { admission = coordinator.run(job.controller.signal, () => lifecycle(job, message)) }
     catch (error) { admission = Promise.reject(error) }
     job.completion = admission.then(async result => {
+        // Keep runner/restore blocked through terminal sync; other Bridge jobs remain admissible.
+        const syncReserved = contexts?.beginSync?.(job.parentSessionId) ?? false
+        if (contexts && !syncReserved) {
+          job.trustedTerminal = { status: 'POSTMAN_TASK_PUBLICATION_SYNC_FAILED', requestId: job.requestId,
+            diagnostic: 'Task context is not available for publication synchronization.' }
+          job.state = 'FAILED'
+          return
+        }
+        try {
         // Includes early lifecycle failures and invalid trusted statuses.
         const safe = losslessValue(result)
         job.trustedTerminal = safe
@@ -207,6 +214,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts) {
           catch (error) { job.grantDiagnostic = diagnostic(error) }
         }
         job.state = safe.status === 'POSTMAN_BRIDGE_TERMINAL' ? 'TERMINAL' : 'FAILED'
+        } finally { if (syncReserved) contexts?.endSync?.(job.parentSessionId) }
       })
       .catch(error => {
         job.state = 'FAILED'

@@ -7,6 +7,10 @@ import { promisify } from 'node:util'
 
 const exec = promisify(execFile)
 const REPOSITORY = 'andrewverhoturov1/dsh-workspace'
+const repositoryIdentity = value => {
+  const match = /^(?:https?:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/]+\/[^/]+?)(?:\.git)?\/?$/i.exec(value ?? '')
+  return match?.[1].toLowerCase() ?? null
+}
 const SHA = /^[0-9a-f]{40}$/
 const BRANCH = /^task\/postman-[0-9a-f]{32}$/
 const normalize = value => resolve(value).replaceAll('\\', '/').toLowerCase()
@@ -23,6 +27,8 @@ export function createPostmanTaskContexts({ gitCommand = git, temporaryDirectory
   const children = new Map()
   const pending = new Set()
   const activeOperations = new Set()
+  const syncQueues = new Map()
+  const contextOperations = new Map()
   const runnerFailures = new Set()
   const failed = new Map()
   const command = gitCommand
@@ -39,8 +45,7 @@ export function createPostmanTaskContexts({ gitCommand = git, temporaryDirectory
       if (typeof id !== 'string' || !id || typeof cwd !== 'string' || !cwd) throw new Error('POSTMAN_TASK_REPOSITORY_UNAVAILABLE')
       const repository = await command(cwd, 'rev-parse', '--show-toplevel')
       const remote = await command(repository, 'remote', 'get-url', 'origin')
-      const match = /^(?:https?:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/]+\/[^/]+?)(?:\.git)?\/?$/i.exec(remote)
-      if (match?.[1].toLowerCase() !== REPOSITORY) throw new Error('POSTMAN_TASK_REPOSITORY_REJECTED')
+      if (repositoryIdentity(remote) !== REPOSITORY) throw new Error('POSTMAN_TASK_REPOSITORY_REJECTED')
       await command(repository, 'fetch', '--prune', 'origin')
       const baseCommit = await command(repository, 'rev-parse', '--verify', 'refs/remotes/origin/preview^{commit}')
       if (!SHA.test(baseCommit)) throw new Error('POSTMAN_TASK_BASE_INVALID')
@@ -64,7 +69,7 @@ export function createPostmanTaskContexts({ gitCommand = git, temporaryDirectory
       await command(repository, 'push', 'origin', baseCommit + ':refs/heads/' + branch)
       const remoteRef = await command(repository, 'ls-remote', '--heads', 'origin', branch)
       if (remoteRef !== baseCommit + '\trefs/heads/' + branch) throw new Error('POSTMAN_TASK_REMOTE_REF_INVALID')
-      const context = Object.freeze({ leaderSessionId: id, repository: REPOSITORY, branch, worktree, baseCommit })
+      const context = Object.freeze({ leaderSessionId: id, repository: REPOSITORY, repositoryRoot: repository, branch, worktree, baseCommit })
       contexts.set(id, context)
       return { status: 'TASK_CONTEXT_READY', ...context }
     } catch (error) {
@@ -87,9 +92,8 @@ export function createPostmanTaskContexts({ gitCommand = git, temporaryDirectory
       const repository = await command(leader.session.header.cwd, 'rev-parse', '--show-toplevel')
       const origin = await command(repository, 'remote', 'get-url', 'origin')
       const worktreeOrigin = await command(worktree, 'remote', 'get-url', 'origin')
-      const match = /^(?:https?:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/]+\/[^/]+?)(?:\.git)?\/?$/i.exec(origin)
-      if (context.repository !== REPOSITORY || match?.[1].toLowerCase() !== REPOSITORY ||
-          origin !== worktreeOrigin || !BRANCH.test(branch) || !SHA.test(baseCommit))
+      if (context.repository !== REPOSITORY || repositoryIdentity(origin) !== REPOSITORY ||
+          repositoryIdentity(worktreeOrigin) !== REPOSITORY || !BRANCH.test(branch) || !SHA.test(baseCommit))
         throw new Error('repository identity mismatch')
       const permanent = [repository, resolve(homedir(), '.dsh'), resolve(homedir(), '.dsh-preview')]
       if (permanent.some(path => normalize(path) === normalize(worktree))) throw new Error('permanent worktree')
@@ -139,21 +143,82 @@ export function createPostmanTaskContexts({ gitCommand = git, temporaryDirectory
   async function sync(leaderId, publicationCommit, expectedParent) {
     const context = get(leaderId)
     if (!context || !SHA.test(publicationCommit ?? '') || !SHA.test(expectedParent ?? '')) return false
+    // FIFO promise queue is scoped to one task context, never the repository globally.
+    const previous = syncQueues.get(leaderId) ?? Promise.resolve()
+    let release
+    const turn = new Promise(resolve => { release = resolve })
+    const queued = previous.catch(() => undefined).then(() => turn)
+    syncQueues.set(leaderId, queued)
+    contextOperations.set(leaderId, (contextOperations.get(leaderId) ?? 0) + 1)
+    await previous.catch(() => undefined)
     try {
       const { worktree, branch } = context
-      if (await command(worktree, 'branch', '--show-current') !== branch ||
+      const root = await command(worktree, 'rev-parse', '--show-toplevel')
+      const origin = await command(root, 'remote', 'get-url', 'origin')
+      const worktreeOrigin = await command(worktree, 'remote', 'get-url', 'origin')
+      if (contextOperations.get(leaderId) === undefined || contexts.get(leaderId) !== context || context.repository !== REPOSITORY || !BRANCH.test(branch) ||
+          normalize(root) !== normalize(worktree) || normalize(await realPath(worktree)) !== normalize(worktree) ||
+          repositoryIdentity(origin) !== REPOSITORY || worktreeOrigin !== origin ||
+          await command(worktree, 'branch', '--show-current') !== branch ||
+          await command(worktree, 'symbolic-ref', '--short', 'HEAD') !== branch ||
           await command(worktree, 'status', '--porcelain=v1', '--untracked-files=all') !== '') return false
-      await command(worktree, 'fetch', 'origin', 'refs/heads/' + branch + ':refs/remotes/origin/' + branch)
-      const remote = await command(worktree, 'rev-parse', 'refs/remotes/origin/' + branch)
-      if (remote !== publicationCommit) return false
-      const parent = await command(worktree, 'rev-parse', publicationCommit + '^')
-      if (parent !== expectedParent) return false
+
+      const listing = await command(root, 'worktree', 'list', '--porcelain')
+      const bindings = listing.split(/\n\s*\n/).filter(Boolean).filter(entry =>
+        entry.split(/\r?\n/).some(line => line.startsWith('worktree ') && normalize(line.slice(9)) === normalize(worktree)))
+      if (bindings.length !== 1 ||
+          !bindings[0].split(/\r?\n/).includes('branch refs/heads/' + branch)) return false
+
+      // Fetch itself provides the authoritative snapshot; an ls-remote move after it is harmless.
+      let fetch = async () => {
+        await command(worktree, 'fetch', 'origin', 'refs/heads/' + branch + ':refs/remotes/origin/' + branch)
+        return command(worktree, 'rev-parse', 'refs/remotes/origin/' + branch)
+      }
+      let remoteTip = await fetch()
+      if (!SHA.test(remoteTip)) return false
+      const resolveCommit = async sha => await command(worktree, 'rev-parse', '--verify', sha + '^{commit}') === sha
+      if (!await resolveCommit(publicationCommit) || !await resolveCommit(expectedParent) ||
+          !await resolveCommit(context.baseCommit)) return false
+      const parentLine = await command(worktree, 'rev-list', '--parents', '-n', '1', publicationCommit)
+      if (parentLine !== publicationCommit + ' ' + expectedParent) return false
+      let receiptAncestor = await command(worktree, 'merge-base', publicationCommit, remoteTip)
+      let baseAncestor = await command(worktree, 'merge-base', context.baseCommit, remoteTip)
+      if (receiptAncestor !== publicationCommit || baseAncestor !== context.baseCommit) {
+        // The exact push may race this fetch; one retry lets an append-only publisher settle.
+        remoteTip = await fetch()
+        if (!SHA.test(remoteTip)) return false
+        receiptAncestor = await command(worktree, 'merge-base', publicationCommit, remoteTip)
+        baseAncestor = await command(worktree, 'merge-base', context.baseCommit, remoteTip)
+        if (receiptAncestor !== publicationCommit || baseAncestor !== context.baseCommit) return false
+      }
       const head = await command(worktree, 'rev-parse', 'HEAD')
-      if (head !== expectedParent) return false
-      await command(worktree, 'merge', '--ff-only', publicationCommit)
-      return await command(worktree, 'rev-parse', 'HEAD') === publicationCommit &&
+      if (!SHA.test(head) || await command(worktree, 'merge-base', head, remoteTip) !== head) return false
+      if (head !== remoteTip) await command(worktree, 'merge', '--ff-only', remoteTip)
+      return await command(worktree, 'rev-parse', 'HEAD') === remoteTip &&
+        await command(worktree, 'rev-parse', 'HEAD^{tree}') !== '' &&
+        await command(worktree, 'branch', '--show-current') === branch &&
+        await command(worktree, 'symbolic-ref', '--short', 'HEAD') === branch &&
+        normalize(await command(worktree, 'rev-parse', '--show-toplevel')) === normalize(worktree) &&
         await command(worktree, 'status', '--porcelain=v1', '--untracked-files=all') === ''
     } catch { return false }
+    finally {
+      const count = contextOperations.get(leaderId) ?? 0
+      if (count <= 1) contextOperations.delete(leaderId)
+      else contextOperations.set(leaderId, count - 1)
+      release()
+      if (syncQueues.get(leaderId) === queued) syncQueues.delete(leaderId)
+    }
+  }
+
+  function beginSync(leaderId) {
+    if (!contexts.has(leaderId)) return false
+    contextOperations.set(leaderId, (contextOperations.get(leaderId) ?? 0) + 1)
+    return true
+  }
+  function endSync(leaderId) {
+    const count = contextOperations.get(leaderId) ?? 0
+    if (count <= 1) contextOperations.delete(leaderId)
+    else contextOperations.set(leaderId, count - 1)
   }
 
   async function verifyWorktree(leaderId) {
@@ -170,9 +235,11 @@ export function createPostmanTaskContexts({ gitCommand = git, temporaryDirectory
 
   function get(leaderId) { return contexts.get(leaderId) ?? null }
   function isRestoring(leaderId) { return pending.has(leaderId) }
+  // Bridge admission blocks runner work, but terminal sync is a short Git lock, not a Web-job lock.
   function hasActiveOperation(leaderId) { return activeOperations.has(leaderId) }
+  function hasSyncOperation(leaderId) { return contextOperations.has(leaderId) }
   function beginOperation(leaderId, isBusy = () => false) {
-    if (!contexts.has(leaderId) || pending.has(leaderId) || activeOperations.has(leaderId) || isBusy(leaderId)) return false
+    if (!contexts.has(leaderId) || pending.has(leaderId) || activeOperations.has(leaderId) || contextOperations.has(leaderId) || isBusy(leaderId)) return false
     activeOperations.add(leaderId)
     return true
   }
@@ -184,7 +251,7 @@ export function createPostmanTaskContexts({ gitCommand = git, temporaryDirectory
     }
   }
   function reserveRestore(leaderId) {
-    if (!contexts.has(leaderId) || pending.has(leaderId)) return false
+    if (!contexts.has(leaderId) || pending.has(leaderId) || contextOperations.has(leaderId)) return false
     pending.add(leaderId)
     return true
   }
@@ -197,8 +264,8 @@ export function createPostmanTaskContexts({ gitCommand = git, temporaryDirectory
   }
   function child(childId) { return children.get(childId) ?? null }
   function releaseChild(childId) { children.delete(childId) }
-  function dispose() { contexts.clear(); children.clear(); pending.clear(); activeOperations.clear(); runnerFailures.clear(); failed.clear() }
-  return { prepare, restore, sync, verifyWorktree, get, isRestoring, hasActiveOperation, beginOperation, endOperation, reserveRestore, releaseRestore, bindChild, child, releaseChild, dispose }
+  function dispose() { contexts.clear(); children.clear(); pending.clear(); activeOperations.clear(); syncQueues.clear(); contextOperations.clear(); runnerFailures.clear(); failed.clear() }
+  return { prepare, restore, sync, beginSync, endSync, verifyWorktree, get, isRestoring, hasActiveOperation, hasSyncOperation, beginOperation, endOperation, reserveRestore, releaseRestore, bindChild, child, releaseChild, dispose }
 }
 
 export const postmanTaskContexts = createPostmanTaskContexts()

@@ -116,9 +116,9 @@ test('artifact descriptor is retained without losing metadata', async () => {
 test('bound publication synchronizes before grant and reports JSON-safe failure', async () => {
   const publication = { ok: true, code: 'RESULT_DURABLE', taskPublicationCommit: 'b'.repeat(40), baseCommit: 'a'.repeat(40) }
   for (const acceptedSync of [true, false, 'throws']) {
-    const order = []
+    const order = [], lockEvents = []
     const context = { branch: 'task/postman-context' }
-    const contexts = { get: () => context, bindChild: () => true, releaseChild() {},
+    const contexts = { get: () => context, bindChild: () => true, releaseChild() {}, beginSync: () => { lockEvents.push('begin'); return true }, endSync: () => lockEvents.push('end'),
       async sync(_leader, publicationCommit, baseCommit) {
         assert.equal(publicationCommit, publication.taskPublicationCommit)
         assert.equal(baseCommit, publication.baseCommit)
@@ -132,6 +132,7 @@ test('bound publication synchronizes before grant and reports JSON-safe failure'
     const accepted = f.accept()
     await tick()
     const reply = valid(await f.read(accepted), acceptedSync === true ? 'POSTMAN_BRIDGE_TERMINAL' : 'POSTMAN_BRIDGE_FAILED')
+    assert.deepEqual(lockEvents, ['begin', 'end'])
     assert.deepEqual(order, acceptedSync === true ? ['sync', 'grant'] : ['sync'])
     if (acceptedSync === true) assert.deepEqual(reply.result, publication)
     else {
@@ -150,7 +151,7 @@ test('failed transport synchronizes proven publication but never grants artifact
   for (const syncResult of [true, false]) {
     const calls = []
     const context = {}
-    const contexts = { get: () => context, bindChild: () => true, releaseChild() {},
+    const contexts = { get: () => context, bindChild: () => true, releaseChild() {}, beginSync: () => true, endSync() {},
       async sync(leader, publicationCommit, baseCommit) {
         calls.push('sync')
         assert.equal(publicationCommit, receipt.taskPublicationCommit)
@@ -177,7 +178,7 @@ test('three sequential publications synchronize second parent B to C without fai
   const calls = []
   const context = {}
   let head = sha('a')
-  const contexts = { get: () => context, bindChild: () => true, releaseChild() {},
+  const contexts = { get: () => context, bindChild: () => true, releaseChild() {}, beginSync: () => true, endSync() {},
     async sync(_leader, publicationCommit, baseCommit) {
       calls.push([baseCommit, publicationCommit])
       assert.equal(baseCommit, head)

@@ -17,30 +17,32 @@ Bridge не создаёт третий transport. После child current-turn
 
 ```text
 Postman Leader
+→ Host postman_task_prepare: exact origin/preview → одна опубликованная task branch + clean worktree на Leader
 → postman_bridge(message="@PostmanAsk ..." | "@Postman ...")
 ← POSTMAN_BRIDGE_ACCEPTED + bridgeJobId (Leader сразу свободен)
 → Host job manager / existing Launch Coordinator
 → заново получить exact live Leader по parentSessionId; если недоступен — failed job без child
-→ Host postman_task_prepare: exact origin/preview → одна опубликованная task branch + clean worktree на Leader
 → fresh spawn child
 → fixed gpt-6-luna
 → exact child user/message
 → child loads canonical Postman skill
 → postman_send_current_turn() with no text args
 → existing Direct Postman
-→ Bridge публикует REQ в task branch через Host (не в main)
+→ Bridge публикует REQ в task branch через Host (не в main; Direct lock-ит краткую публикацию)
 → ChatGPT Web получает опубликованный REQ commit
-→ terminal result
 → postman_current_turn_status()
 → bridge host reads the same trusted terminal directly
 → await run.dispose(); coordinator releases active slot
-→ job manager регистрирует artifact grant при необходимости (ошибка — отдельная diagnostic)
+→ Host синхронизирует публикацию REQ в task worktree, проверяя exact receipt и fast-forward lineage
+→ job manager регистрирует artifact grant только после успешной sync (ошибка sync — grant отсутствует)
 → Host followup POSTMAN_BRIDGE_READY (только событие)
 → parent Leader calls postman_bridge_status({bridge_job_id})
 ← trusted terminal result
 ```
 
 Child assistant prose не является authority результата.
+
+Несколько независимых Bridge одной Leader session могут выполняться параллельно (не более трёх jobs глобально). Их Direct publication сериализует короткую Git-критическую секцию; после terminal Host проверяет exact receipt parent и ancestor-отношение с удалённым tip, затем fast-forward-ит только к доказанному tip. Out-of-order и повторный старый terminal безопасны, если lineage подтверждён. Неверный parent, divergence, грязное/чужое дерево или удалённый tip, не содержащий receipt, завершают sync отказом; append-only публикация после fetch допустима по зафиксированному fetched snapshot и lineage, без требования равенства с более поздним удалённым ref. Grant для REQ регистрируется только после успешной sync. Sync-lock сериализует синхронизацию и блокирует runner/restore на короткое окно, но не блокирует приём и запуск независимых Bridge jobs. Runner/restore остаются взаимоисключающими с активными Bridge.
 
 ## 3. Exact-message boundary
 
