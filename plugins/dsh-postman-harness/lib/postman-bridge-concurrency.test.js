@@ -362,7 +362,7 @@ test('queued and running jobs abort on manager disposal without unhandled reject
   assert.ok(first.bridgeJobId !== second.bridgeJobId)
 })
 
-test('same Leader mixed Ask/Ask/Postman executes FIFO, max three with jitter and REQ grants isolated', async () => {
+test('same Leader mixed Ask/Ask/Postman executes FIFO, max three with jitter and REQ grants isolated', { timeout: 8000 }, async () => {
   const timing = clock(), base = 'a'.repeat(40), commits = ['b'.repeat(40), 'c'.repeat(40), 'd'.repeat(40), 'e'.repeat(40), '1'.repeat(40)]
   // Five Direct requests publish in order on one branch; Web completion is deliberately out of order.
   const lineage = new Map([[base, null], ...commits.map((sha, index) => [sha, index ? commits[index - 1] : base])])

@@ -128,6 +128,37 @@ test('sync accepts clean receipt and fast-forwards to fetched remote tip', async
   assert.ok(invoked(f.calls, 'merge', '--ff-only', published)); assert.equal(f.state.head, published)
 })
 
+test('sync fast-forwards a local C1 through the remotely appended C2 to C5', async t => {
+  await t.test('each successful sync advances exactly to its remote snapshot', async () => {
+    const f = fixture(), context = await prepare(f)
+    const commits = ['b'.repeat(40), 'c'.repeat(40), 'd'.repeat(40), 'f'.repeat(40), '1'.repeat(40)]
+    let parent = base
+    for (const commit of commits) {
+      f.state.parents.set(commit, parent)
+      f.state.remote = commit
+      assert.equal(await f.contexts.sync('A', commit, parent), true, `sync ${commit} from ${parent}`)
+      assert.equal(f.state.head, commit, 'local bound worktree advances to fetched remote tip')
+      assert.ok(invoked(f.calls, 'merge', '--ff-only', commit))
+      parent = commit
+    }
+    assert.equal(f.state.remote, commits[4], 'remote ends at C5 after C1→C5')
+    assert.equal(f.state.head, commits[4])
+    assert.equal(context.branch, f.state.branch)
+  })
+  await t.test('delayed C1 receipt fast-forwards local C1 directly to remote C5', async () => {
+    const f = fixture(), context = await prepare(f)
+    const commits = ['b'.repeat(40), 'c'.repeat(40), 'd'.repeat(40), 'f'.repeat(40), '1'.repeat(40)]
+    for (let i = 0; i < commits.length; i++) f.state.parents.set(commits[i], i ? commits[i - 1] : base)
+    f.state.head = commits[0]
+    f.state.remote = commits[4]
+    f.state.fetched = commits[4]
+    assert.equal(await f.contexts.sync('A', commits[0], base), true)
+    assert.equal(f.state.head, commits[4])
+    assert.ok(invoked(f.calls, 'merge', '--ff-only', commits[4]))
+    assert.equal(context.branch, f.state.branch)
+  })
+})
+
 test('sync refuses dirty, foreign, unrelated remote, wrong parent and stale HEAD', async t => {
   const cases = [
     ['dirty', s => { s.clean = false }, published, base], ['foreign branch', s => { s.branch = 'preview' }, published, base],
@@ -154,8 +185,9 @@ test('sync accepts allowed differing GitHub URL forms and rejects foreign root o
     ['foreign root', 'https://github.com/attacker/other.git', undefined],
     ['foreign worktree', undefined, 'ssh://git@evil.example/andrewverhoturov1/dsh-workspace'],
   ]) await t.test(label, async () => {
-    const f = fixture(); await prepare(f)
-    if (rootOriginOverride !== undefined) f.state.remoteUrl = rootOriginOverride
+    const f = fixture(); const prepared = await f.contexts.prepare(leader('A'))
+    assert.equal(prepared.status, 'TASK_CONTEXT_READY')
+    f.state.rootOriginOverride = rootOriginOverride
     f.state.worktreeOriginOverride = worktreeOriginOverride
     f.state.remote = published
     assert.equal(await f.contexts.sync('A', published, base), false)
