@@ -119,6 +119,10 @@ _SEMANTIC_MESSAGE_TEXT_JS = r"""
       return;
     }
     if (node.nodeType !== Node.ELEMENT_NODE) return;
+    if (node.tagName === "BR") {
+      output += "\n";
+      return;
+    }
     const block = !isRoot && blockTags.has(node.tagName);
     if (block && output) blockBoundary();
     const inlineCode = node.matches("code.user-message-inline-code");
@@ -939,8 +943,9 @@ def _observe_send_proof(page: Any, prompt: str, before_user_turn_count: int) -> 
     exact_turn = new_turn and rendered_last == _normalize_text(prompt)
     request_key_line = request_key_line_from_prompt(prompt)
     request_key_turn = new_turn and _turn_contains_exact_line(rendered_last, request_key_line)
-    correlated_turn = exact_turn or request_key_turn
-    correlation_mode = "exact" if exact_turn else ("request_key" if request_key_turn else "none")
+    # REQ presence is diagnostic only; proof requires exact full rendered text.
+    correlated_turn = exact_turn
+    correlation_mode = "exact" if exact_turn else "none"
     chat_bound = is_bound_chat_url(page_url)
     last_turn = user_turn_details[-1] if user_turn_details else {}
     return correlated_turn and composer_empty and chat_bound, {
