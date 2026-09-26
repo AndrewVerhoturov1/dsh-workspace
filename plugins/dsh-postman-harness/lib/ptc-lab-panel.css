@@ -1,0 +1,7 @@
+[data-ptc-lab] { display: grid; gap: 12px; padding: 16px; color: var(--color-text-primary, inherit); }
+[data-ptc-lab] h2, [data-ptc-lab] p { margin: 0; }
+[data-ptc-lab] label { display: grid; gap: 6px; }
+[data-ptc-lab] textarea { box-sizing: border-box; width: 100%; resize: vertical; font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+[data-ptc-lab] pre { white-space: pre-wrap; overflow: auto; max-height: 240px; padding: 10px; border-radius: 6px; background: rgba(0,0,0,.22); }
+[data-ptc-lab] .ptc-lab-actions { display: flex; gap: 8px; }
+[data-ptc-lab] .ptc-lab-warning { font-size: 13px; opacity: .8; }
