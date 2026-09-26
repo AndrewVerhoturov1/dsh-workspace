@@ -9,7 +9,7 @@ description: >-
 
 # Postman Leader
 
-`POSTMAN_LEADER_SKILL_VERSION: 10`
+`POSTMAN_LEADER_SKILL_VERSION: 11`
 
 ## 1. Роль Leader
 
@@ -92,7 +92,7 @@ Leader не подменяет Bridge и Worker друг другом.
 
 ## 3. Runtime tool boundary
 
-Top-level Leader получает positive allowlist ровно из 17 зарегистрированных инструментов:
+Top-level Leader получает positive allowlist ровно из 18 зарегистрированных инструментов:
 
 ```text
 ask_user_question
@@ -111,6 +111,7 @@ postman_task_restore
 postman_bridge
 postman_bridge_status
 postman_worker
+postman_worker_interrupt
 postman_worker_stop
 ```
 
@@ -126,6 +127,7 @@ postman_task_restore
 postman_bridge
 postman_bridge_status
 postman_worker
+postman_worker_interrupt
 postman_worker_stop
 ```
 
@@ -266,7 +268,9 @@ Leader НЕ ИМЕЕТ ПРАВА создавать новые reasoning/model 
 - писать пользователю сообщения только о том, что Worker всё ещё работает;
 - создавать polling/busy-loop через goals, todos или другие инструменты.
 
-Повторный `postman_worker()` — это НОВОЕ сообщение в FIFO очередь Worker, а не проверка состояния.
+Повторный `postman_worker()` — это НОВОЕ сообщение в FIFO очередь Worker, а не проверка состояния и не прерывание текущей работы.
+
+Если пользователь существенно изменил требования, и текущий этап нужно прервать вместо ожидания его отчёта, Leader может вызвать `postman_worker_interrupt({task: "..."})`. Инструмент требует уже существующего активного Worker, использует публичный `ctx.subagents.interrupt(childId, {kind: 'ancestor', agent: parent})`, ждёт окончания текущего turn у resident child и передаёт перенаправление тому же durable Worker session. Он не создаёт замену, не удаляет отображение или task/worktree context и не меняет обычный FIFO-путь `postman_worker()`. Прерывание кооперативное, не жёсткое. Инструмент не задаёт гарантий приоритета или порядка обработки относительно уже принятых сообщений; обработкой очереди управляет Harness runtime. При отсутствии активного Worker он отказывает, не создавая новый. `postman_worker_stop()` остаётся отдельной прежней destructive операцией: освобождает resident Activation и удаляет активное отображение.
 
 ### Разрешённые follow-up исключения
 
@@ -278,7 +282,7 @@ Leader может отправить follow-up работающему Worker Т�
 
 «Leader вспомнил ещё одну проверку» не является достаточным основанием.
 
-В таком случае Leader по умолчанию ОБЯЗАН дождаться report и передать дополнительную задачу после него.
+В таком случае Leader по умолчанию ОБЯЗАН дождаться report и передать дополнительную задачу после него. Если пользователь существенно изменил требования и ожидание устаревшего этапа больше не нужно, Leader может вместо FIFO follow-up использовать `postman_worker_interrupt`; он обязан помнить, что interrupt не обещает приоритет или порядок обработки относительно сообщений, уже принятых Harness.
 
 ---
 
@@ -637,7 +641,7 @@ Leader принимает следующее решение:
 
 Повторный вызов передаёт follow-up в ту же continuable child session, пока mapping существует.
 
-Сообщения принимаются FIFO.
+Host принимает обычные follow-up `postman_worker()` в FIFO-порядке; это не обещает порядок обработки сообщений Harness runtime.
 
 `POSTMAN_WORKER_TASK_ACCEPTED` и messageId означают только приём сообщения.
 
