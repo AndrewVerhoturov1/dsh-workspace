@@ -279,7 +279,7 @@ test('send_current_turn reads captured runtime text, not model arguments, and co
       return child
     },
   })
-  const bridge = createDirectCurrentTurnToolConfigs(ctx, { jobs })
+  const bridge = createDirectCurrentTurnToolConfigs(ctx, { jobs, taskContexts: { child: () => null } })
   const raw = '@Postman\nполный prompt\n`README.md`'
   listeners.get('session/event')({ id: 's1' }, userEvent(raw, 11))
   const agent = { id: 's1', session: { header: { cwd: '/repo' } } }

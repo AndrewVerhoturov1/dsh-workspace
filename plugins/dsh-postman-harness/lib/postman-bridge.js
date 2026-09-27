@@ -4,7 +4,8 @@ import { createPostmanWorkerTools } from './postman-worker.js'
 import { createImplementationArtifactGrants, createImplementationArtifactApplyTool } from './implementation-artifact.js'
 import { createPostmanBridgeLaunchCoordinator } from './postman-bridge-launch-coordinator.js'
 import { createPostmanBridgeJobs } from './postman-bridge-jobs.js'
-import { postmanTaskContexts } from './postman-task-context.js'
+import { postmanTaskContexts, initializePostmanTaskContexts, releasePostmanTaskContexts } from './postman-task-context.js'
+import { sharedPostmanTaskRegistry, closeSharedPostmanTaskRegistry } from './postman-task-registry.js'
 import {
   POSTMAN_BRIDGE_TOOL_ALLOWLIST, POSTMAN_BRIDGE_TOOL_NAME, POSTMAN_BRIDGE_STATUS_TOOL_NAME, POSTMAN_TASK_PREPARE_TOOL_NAME, POSTMAN_TASK_RESTORE_TOOL_NAME,
   createPostmanBridgeBoundaryManager, isTopLevelPostmanLeader,
@@ -12,7 +13,7 @@ import {
 } from './postman-bridge-core.js'
 
 export const name = 'dsh-postman-harness-bridge'
-export const inject = ['agents', 'subagents', 'tools']
+export const inject = ['agents', 'subagents', 'tools', 'storageDomain']
 
 function output() {
   return {
@@ -104,22 +105,28 @@ export function installPostmanLeaderBoundary(agent) {
   return leader
 }
 
-export function apply(ctx) {
+export async function apply(ctx) {
+  const registry = await sharedPostmanTaskRegistry(ctx.storageDomain)
+  const contexts = initializePostmanTaskContexts(registry)
   const coordinator = createPostmanBridgeLaunchCoordinator()
   const grants = createImplementationArtifactGrants()
   const jobs = createPostmanBridgeJobs(ctx, coordinator, grants, postmanTaskContexts)
-  ctx.tools.register(createPostmanTaskPrepareTool(ctx))
+  ctx.tools.register(createPostmanTaskPrepareTool(ctx, contexts))
   ctx.tools.register(createPostmanBridgeTool(ctx, jobs, postmanTaskContexts))
   ctx.tools.register(createPostmanBridgeStatusTool(ctx, jobs))
-  ctx.effect(() => () => jobs.dispose(), 'dsh-postman-harness-bridge.background-jobs()')
   const worker = createPostmanWorkerTools(ctx, grants, postmanTaskContexts)
   ctx.tools.register(createPostmanTaskRestoreTool(ctx, postmanTaskContexts, { jobs, worker }))
   ctx.tools.register(worker.taskTool)
   ctx.tools.register(worker.interruptTool)
   ctx.tools.register(worker.stopTool)
   ctx.tools.register(createImplementationArtifactApplyTool(ctx, grants, worker, { taskContexts: postmanTaskContexts, jobs }))
-  ctx.effect(() => () => worker.dispose(), 'dsh-postman-harness-bridge.worker-mapping()')
-  ctx.effect(() => () => postmanTaskContexts.dispose(), 'dsh-postman-harness-bridge.task-contexts()')
+  ctx.effect(() => async () => {
+    try { await jobs.dispose() } finally {
+      worker.dispose()
+      releasePostmanTaskContexts(contexts)
+      await closeSharedPostmanTaskRegistry()
+    }
+  }, 'dsh-postman-harness-bridge.shared-service()')
 
   const boundaries = createPostmanBridgeBoundaryManager(sessionId => ctx.agents.get(sessionId))
   ctx.effect(() => () => boundaries.disposeAll(), 'dsh-postman-harness-bridge.boundary-manager()')

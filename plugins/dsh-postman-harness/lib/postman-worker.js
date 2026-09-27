@@ -1,4 +1,5 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { randomUUID } from 'node:crypto'
 import { IMPLEMENTATION_REPOSITORY } from './implementation-artifact.js'
 import {
   POSTMAN_WORKER_TOOL_NAME,
@@ -55,7 +56,7 @@ export function buildPostmanWorkerStartRequest(parent, task, signal, deniedTools
   }
 }
 
-/** One process-local active Worker per exact Leader Agent/Session. No restart registry. */
+/** Process-local slot serializes live Worker calls; the durable registry owns the exact Leader-to-child binding across restarts. */
 export function createPostmanWorkerTools(ctx, grants, contexts) {
   const slots = new Map()
 
@@ -72,6 +73,35 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
     const result = slot.tail.then(action)
     slot.tail = result.then(() => undefined, () => undefined)
     return result
+  }
+
+  const durable = typeof contexts?.record === 'function' && typeof contexts?.changeRecord === 'function'
+  const rowOf = id => durable ? contexts.record(id) : null
+  async function changeWorker(id, fn) {
+    if (durable) await contexts.changeRecord(id, row => ({ ...row, worker: fn(row.worker) }))
+  }
+  async function childExists(parent, id, signal) {
+    const entries = await ctx.subagents.listChildren(parent.id, signal)
+    const matches = entries.filter(item => item.id === id)
+    if (matches.length !== 1 || matches[0].kind !== 'child' || matches[0].mode !== 'continuable')
+      return false
+    return true
+  }
+  async function reconcile(parent, slot, signal) {
+    if (!durable || slot.childId) return null
+    const saved = rowOf(parent.id)?.worker
+    if (!saved) return null
+    if (saved.state === 'stopping' || saved.state === 'uncertain') return 'POSTMAN_WORKER_BINDING_UNCERTAIN'
+    try {
+      if (!await childExists(parent, saved.id, signal)) return 'POSTMAN_WORKER_BINDING_UNCERTAIN'
+      if (saved.state === 'intent') {
+        await changeWorker(parent.id, worker => ({ ...worker, state: 'ready', delivery: 'unknown' }))
+      }
+      slot.childId = saved.id
+      slot.artifactRequests = new Set(saved.artifactRequests)
+      return saved.delivery === 'pending' || saved.delivery === 'unknown'
+        ? 'POSTMAN_WORKER_DELIVERY_UNKNOWN' : null
+    } catch { return 'POSTMAN_WORKER_BINDING_UNCERTAIN' }
   }
 
   function authorized(parent) {
@@ -106,6 +136,10 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
         // Calls admitted before restore reservation must finish; reservation blocks only new admissions.
         if (slot.context && slot.context !== context) return { status: 'POSTMAN_TASK_CONTEXT_MISMATCH' }
         slot.context = context
+        const recovery = durable ? await reconcile(parent, slot, exec.signal) : null
+        const saved = rowOf(parent.id)?.worker
+        if (recovery || (saved && (saved.state !== 'ready' || saved.delivery !== 'none')))
+          return { status: recovery ?? 'POSTMAN_WORKER_DELIVERY_UNKNOWN', workerSessionId: saved?.id }
         let task = context ? `Use the existing Leader task branch ${context.branch} and worktree ${context.worktree} for repository changes; do not create another branch or worktree. Follow REPO_POLICY.md. Keep normal coding, shell, research, and web tools available as needed; do not make repository changes outside the bound worktree. Leader task: ${args.task}` : args.task
         if (args.artifactRequestId !== undefined) {
           const grant = await grants?.resolve(parent.id, args.artifactRequestId)
@@ -116,11 +150,15 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
         }
         if (slot.childId !== undefined) {
           try {
+            if (durable) await changeWorker(parent.id, worker => ({ ...worker, delivery: 'pending' }))
             const messageId = await ctx.subagents.followup(parent, slot.childId,
               [{ type: 'text', text: task }], {
                 source: { kind: 'coordinator', form: 'relay', senderSessionId: parent.id },
                 signal: exec.signal,
               })
+            if (durable) await changeWorker(parent.id, worker => ({ ...worker, delivery: 'none',
+              artifactRequests: args.artifactRequestId === undefined ? worker.artifactRequests
+                : [...new Set([...worker.artifactRequests, args.artifactRequestId])] }))
             if (args.artifactRequestId !== undefined) slot.artifactRequests.add(args.artifactRequestId)
             return {
               status: 'POSTMAN_WORKER_TASK_ACCEPTED', workerSessionId: slot.childId,
@@ -128,6 +166,9 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
               model: POSTMAN_WORKER_AGENT_OPTIONS.model, provider: POSTMAN_WORKER_PROVIDER,
             }
           } catch (error) {
+            if (durable && rowOf(parent.id)?.worker?.delivery === 'pending') {
+              try { await changeWorker(parent.id, worker => ({ ...worker, delivery: 'unknown' })) } catch {}
+            }
             // Preserve the mapping: admission failure does not prove that the
             // durable child is gone, and a retry must not silently create another.
             return { status: 'POSTMAN_WORKER_FOLLOWUP_FAILED', workerSessionId: slot.childId,
@@ -135,14 +176,32 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
           }
         }
         let accepted
+        const reservedId = durable ? randomUUID() : null
         try {
-          accepted = await ctx.subagents.startContinuable(
-            buildPostmanWorkerStartRequest(parent, task, exec.signal,
-              postmanWorkerDeniedTools(ctx.tools)))
+          if (durable) await changeWorker(parent.id, current => {
+            if (current) throw new Error('POSTMAN_WORKER_BINDING_EXISTS')
+            return { id: reservedId, state: 'intent', delivery: 'pending', artifactRequests: [] }
+          })
+          accepted = await ctx.subagents.startContinuable({
+            ...buildPostmanWorkerStartRequest(parent, task, exec.signal,
+              postmanWorkerDeniedTools(ctx.tools)),
+            ...(reservedId ? { childId: reservedId } : {}),
+          })
+          if (reservedId && String(accepted.childId) !== reservedId)
+            throw new Error('POSTMAN_WORKER_CHILD_ID_MISMATCH')
+          if (durable && !await childExists(parent, reservedId, exec.signal))
+            throw new Error('POSTMAN_WORKER_CHILD_NOT_VERIFIED')
+          if (durable) await changeWorker(parent.id, current => {
+            if (current?.id !== reservedId || current.state !== 'intent')
+              throw new Error('POSTMAN_WORKER_BINDING_CHANGED')
+            return { ...current, state: 'ready', delivery: 'none',
+              artifactRequests: args.artifactRequestId !== undefined ? [args.artifactRequestId] : [] }
+          })
         } catch (error) {
           // Before inbox admission Harness rolls back the child. Keep this
           // empty slot so already queued calls can retry without losing mapping.
-          return { status: 'POSTMAN_WORKER_START_FAILED', diagnostic: diagnostic(error) }
+          return { status: durable && rowOf(parent.id)?.worker ? 'POSTMAN_WORKER_BINDING_UNCERTAIN'
+            : 'POSTMAN_WORKER_START_FAILED', diagnostic: diagnostic(error) }
         }
         slot.childId = String(accepted.childId)
         if (slot.closed || !authorized(parent)) {
@@ -184,8 +243,12 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
       if (typeof contexts?.hasActiveOperation === 'function' && contexts.hasActiveOperation(parent.id)) {
         return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
       }
-      const slot = slots.get(parent.id)
-      if (!slot || slot.closed || !slot.childId) {
+      const slot = slotFor(parent)
+      const recovery = durable ? await reconcile(parent, slot, exec.signal) : null
+      const saved = rowOf(parent.id)?.worker
+      if (recovery || (saved && (saved.state !== 'ready' || saved.delivery !== 'none')))
+        return { status: recovery ?? 'POSTMAN_WORKER_DELIVERY_UNKNOWN', workerSessionId: saved?.id }
+      if (slot.closed || !slot.childId) {
         return { status: 'POSTMAN_WORKER_INTERRUPT_NO_ACTIVE_WORKER' }
       }
       return enqueue(slot, async () => {
@@ -208,8 +271,12 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
         // this Activation may disappear naturally while becoming idle.
         const resident = ctx.agents.get(childId)
         try {
+          if (durable) await changeWorker(parent.id, worker => ({ ...worker, delivery: 'pending' }))
           await ctx.subagents.interrupt(childId, { kind: 'ancestor', agent: parent })
         } catch (error) {
+          if (durable && rowOf(parent.id)?.worker?.delivery === 'pending') {
+            try { await changeWorker(parent.id, worker => ({ ...worker, delivery: 'unknown' })) } catch {}
+          }
           return {
             status: 'POSTMAN_WORKER_INTERRUPT_FAILED', workerSessionId: childId,
             interruptRequested: false, mappingPreserved: true, diagnostic: diagnostic(error),
@@ -246,11 +313,13 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
             ? 'Use the existing Leader task branch ' + currentContext.branch + ' and worktree ' + currentContext.worktree + ' for repository changes; do not create another branch or worktree. Follow REPO_POLICY.md. Keep normal coding, shell, research, and web tools available as needed; do not make repository changes outside the bound worktree. '
             : ''
           const redirect = contextPrefix + 'Postman Leader requested an interrupt/redirect because requirements changed. The previous turn may have been interrupted partway through. Inspect the existing bound worktree and repository state before continuing. Preserve valid existing changes and do not assume an interrupted tool or command completed successfully. Treat the following Leader instruction as the current task: ' + args.task
+          if (durable) await changeWorker(parent.id, worker => ({ ...worker, delivery: 'pending' }))
           const messageId = await ctx.subagents.followup(parent, childId,
             [{ type: 'text', text: redirect }], {
               source: { kind: 'coordinator', form: 'relay', senderSessionId: parent.id },
               signal: exec.signal,
             })
+          if (durable) await changeWorker(parent.id, worker => ({ ...worker, delivery: 'none' }))
           return {
             status: 'POSTMAN_WORKER_INTERRUPT_TASK_ACCEPTED', workerSessionId: childId,
             created: false, messageId: String(messageId), interruptRequested: true,
@@ -258,6 +327,9 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
             model: POSTMAN_WORKER_AGENT_OPTIONS.model, provider: POSTMAN_WORKER_PROVIDER,
           }
         } catch (error) {
+          if (durable && rowOf(parent.id)?.worker?.delivery === 'pending') {
+            try { await changeWorker(parent.id, worker => ({ ...worker, delivery: 'unknown' })) } catch {}
+          }
           return {
             status: 'POSTMAN_WORKER_INTERRUPT_DELIVERY_FAILED', workerSessionId: childId,
             interruptRequested: true, mappingPreserved: true, diagnostic: diagnostic(error),
@@ -274,12 +346,17 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
     async execute(_args, exec) {
       const parent = exec?.agent
       if (!authorized(parent)) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
-      const slot = slots.get(parent.id)
-      if (slot === undefined) return { status: 'POSTMAN_WORKER_ALREADY_STOPPED' }
+      const existed = slots.has(parent.id)
+      const slot = slotFor(parent)
+      const recovery = durable ? await reconcile(parent, slot, exec.signal) : null
+      if (recovery) return { status: recovery, workerSessionId: rowOf(parent.id)?.worker?.id }
+      if (!existed && !rowOf(parent.id)?.worker)
+        return { status: 'POSTMAN_WORKER_ALREADY_STOPPED' }
       return enqueue(slot, async () => {
         if (slot.closed) return { status: 'POSTMAN_WORKER_ALREADY_STOPPED' }
         if (!authorized(parent)) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
         const childId = slot.childId
+        if (durable && rowOf(parent.id)?.worker) await changeWorker(parent.id, worker => ({ ...worker, state: 'stopping' }))
         if (childId !== undefined) {
           try {
             await ctx.subagents.drainContinuableChildren(parent, [childId])
@@ -290,6 +367,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
               diagnostic: diagnostic(error) }
           }
         }
+        if (durable) await changeWorker(parent.id, () => null)
         slot.closed = true
         if (slots.get(parent.id) === slot) slots.delete(parent.id)
         return { status: 'POSTMAN_WORKER_STOPPED', workerSessionId: childId ?? null,
@@ -304,6 +382,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
     const leaderId = caller.session.header.parentSession
     const slot = slots.get(leaderId)
     if (!slot || slot.closed || slot.childId !== caller.id ||
+        (durable && (rowOf(leaderId)?.worker?.id !== caller.id || rowOf(leaderId)?.worker?.state !== 'ready')) ||
         !slot.artifactRequests.has(requestId) || !authorized(ctx.agents.get(leaderId))) return null
     if (contexts && slots.get(leaderId)?.context !== contexts.get(leaderId)) return null
     return leaderId
@@ -313,6 +392,10 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
 
   async function prepareRestore(leaderId) {
     const slot = slots.get(leaderId)
+    if (durable && rowOf(leaderId)?.worker && (!slot?.childId ||
+        slot.childId !== rowOf(leaderId).worker.id ||
+        rowOf(leaderId).worker.state !== 'ready' ||
+        rowOf(leaderId).worker.delivery !== 'none')) return false
     if (!slot) return true
     const pendingTasks = slot.tail
     try { await pendingTasks } catch { return false }
