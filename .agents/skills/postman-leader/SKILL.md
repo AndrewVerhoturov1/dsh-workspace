@@ -419,11 +419,11 @@ postman_continue_last_request
 
 ## 20. Bridge concurrency
 
-Host coordinator сам управляет FIFO, максимум тремя active Bridge, launch spacing, queued jobs и cleanup. Leader НЕ делает sleep и НЕ разносит bridge calls искусственно.
+Host сам управляет очередью Bridge jobs, launch spacing, cleanup и FIFO publication sync. Leader НЕ делает sleep и НЕ сериализует независимые Bridge вручную.
 
-В текущей task-context архитектуре одна Leader session / одна Host-bound task branch может иметь только один незавершённый Bridge job. После `POSTMAN_BRIDGE_ACCEPTED` Leader НЕ ИМЕЕТ ПРАВА вызывать следующий `postman_bridge`, пока предыдущий job не перешёл в terminal/failed через `POSTMAN_BRIDGE_READY` + `postman_bridge_status`. Это одинаково относится к `@PostmanAsk` и `@Postman`; ограничение связано с task-context publication lifecycle.
+Одна Leader session может иметь до **3 независимых unresolved Bridge jobs одновременно**. Независимый второй или третий `postman_bridge` можно запустить, не ожидая завершения предыдущего. `pending` и `unknown` jobs учитываются в этом лимите; четвёртый unresolved Bridge job Host отклоняет по лимиту.
 
-`POSTMAN_TASK_CONTEXT_BUSY` НЕ является нормальным способом планирования или проверки состояния. Глобальный Host coordinator сохраняет capacity до трёх jobs для независимых Leader task contexts. Не путать global `max=3` с per-Leader serialization. Запросы к одному доказанному ChatGPT conversation через `--chat <REQ>` выполняются последовательно.
+Продолжения одной и той же доказанной ChatGPT conversation через `--chat <REQ>` остаются последовательными.
 
 ---
 
