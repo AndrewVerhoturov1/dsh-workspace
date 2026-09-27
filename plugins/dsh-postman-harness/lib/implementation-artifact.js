@@ -152,10 +152,12 @@ export function createImplementationArtifactApplyTool(ctx, grants, worker, optio
         if (!await (options.verifiedRepository ?? verifiedRepository)(args.worktree)) {
           return { status: 'IMPLEMENTATION_ARTIFACT_REPOSITORY_REJECTED' }
         }
-        // The runner validates worktree cleanliness, protected paths and package applicability.
+        // Persist intent before the runner can change files. A crash without a
+        // trusted result remains unknown, never an authority for restore.
+        await options.taskContexts?.startRunner?.(leaderId, args.requestId)
         runnerOutcome = await runImplementationPackage(grant, args.worktree, options)
         return runnerOutcome
-      } finally { options.taskContexts?.endOperation?.(leaderId, runnerOutcome) }
+      } finally { await options.taskContexts?.endOperation?.(leaderId, runnerOutcome) }
     },
   })
 }

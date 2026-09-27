@@ -12,6 +12,7 @@ import { createGitHubTaskPublisher } from './github-task-publisher.js'
 import { createResultWorkspaceTools } from './result-workspace.js'
 import { createResultPresentationTool } from './result-presentation.js'
 import { createDirectCurrentTurnToolConfigs } from './direct-current-turn.js'
+import { postmanTaskContexts } from './postman-task-context.js'
 
 export { attachTaskUrl, createAndPublishTask, createTaskPackage, renderIntentTaskFile } from './task-creation-bridge.js'
 export { WebWorkerBridge, markWebResultReady }
@@ -595,7 +596,7 @@ export function apply(ctx, { runtime: injectedRuntime, bridge: injectedBridge, w
   const bridge = injectedBridge ?? (typeof webWorkerRunner === 'function'
     ? new WebWorkerBridge({ runtime, run: webWorkerRunner })
     : undefined)
-  const currentTurnBridge = createDirectCurrentTurnToolConfigs(ctx)
+  const currentTurnBridge = createDirectCurrentTurnToolConfigs(ctx, { taskContexts: postmanTaskContexts })
   ctx.tools.register(createPostmanSendTool(ctx, pending))
   ctx.tools.register(createPostmanAsyncSendTool(ctx, runtime, { bridge, taskPublisher: resolvedTaskPublisher }))
   for (const tool of createResultWorkspaceTools(ctx)) ctx.tools.register(tool)

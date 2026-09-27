@@ -90,7 +90,8 @@ test('restore tool is Leader-only and refuses busy Bridge or undrained Worker', 
   other.session.header.agentPreset = 'standard'
   const prepared = await contexts.prepare(a)
   assert.equal(contexts.beginOperation(a.id), true)
-  contexts.endOperation(a.id, { status: 'IMPLEMENTATION_ARTIFACT_RUNNER_RESULT', result: { ok: false } })
+  await contexts.startRunner(a.id, REQ)
+  await contexts.endOperation(a.id, { status: 'IMPLEMENTATION_ARTIFACT_RUNNER_RESULT', result: { ok: false } })
   let draining = 0, busy = false, workerReady = false
   const worker = { async prepareRestore(id) { assert.equal(id, a.id); draining++; return workerReady } }
   const jobs = { hasActive(id) { assert.equal(id, a.id); return busy } }
@@ -181,7 +182,8 @@ test('Worker receives exact context and REQ; apply rejects another worktree befo
       sha256: createHash('sha256').update(bytes).digest('hex') } }), true)
   const agents = new Map([[a.id, a]]), starts = []
   const ctx = { agents: { get: id => agents.get(id) }, tools: { schemas: () => [{ name: 'postman_send_current_turn' }] },
-    subagents: { async startContinuable(spec) { starts.push(spec); return { childId: 'worker-1', messageId: 'first' } } } }
+    subagents: { async startContinuable(spec) { starts.push(spec); return { childId: spec.childId, messageId: 'first' } },
+      async listChildren() { return [{ kind: 'child', mode: 'continuable', id: starts[0].childId }] } } }
   const worker = createPostmanWorkerTools(ctx, grants, contexts)
   const accepted = await worker.taskTool.execute({ task: 'Применить пакет', artifactRequestId: REQ }, { agent: a, signal })
   assert.equal(accepted.status, 'POSTMAN_WORKER_TASK_ACCEPTED')
@@ -190,7 +192,7 @@ test('Worker receives exact context and REQ; apply rejects another worktree befo
   assert.ok(prompt.includes('Leader task branch ' + prepared.branch + ' and worktree ' + prepared.worktree))
   assert.ok(prompt.includes('implementation_artifact_apply({requestId: ' + JSON.stringify(REQ) + ', worktree: ' + JSON.stringify(prepared.worktree) + '});'))
   assert.equal(prompt.includes(zip), false)
-  const w = child('worker-1'); agents.set(w.id, w)
+  const w = child(accepted.workerSessionId); agents.set(w.id, w)
   assert.equal(worker.ownerOf(w, REQ), a.id)
   let verified = 0, spawned = 0
   const apply = createImplementationArtifactApplyTool(ctx, grants, worker, { taskContexts: contexts,

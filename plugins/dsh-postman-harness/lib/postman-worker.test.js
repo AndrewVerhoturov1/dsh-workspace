@@ -7,6 +7,7 @@ import { createPostmanWorkerTools, buildPostmanWorkerStartRequest, postmanWorker
   POSTMAN_WORKER_AGENT_OPTIONS, POSTMAN_WORKER_PERSONA } from './postman-worker.js'
 import { postmanBridgeRestrictionForAgent } from './postman-bridge-core.js'
 import { apply as applyBridgePlugin } from './postman-bridge.js'
+import { createMemoryTaskRegistry } from './postman-task-registry.js'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const signal = new AbortController().signal
@@ -375,7 +376,7 @@ test('stop queued behind admission drains the accepted child before a later task
   assert.equal(next.created, true)
 })
 
-test('bridge plugin registers all Worker tools and preserves boundary on creation', () => {
+test('bridge plugin registers all Worker tools and preserves boundary on creation', async () => {
   const registrations = new Map()
   const listeners = new Map()
   const a = leader('A')
@@ -385,10 +386,14 @@ test('bridge plugin registers all Worker tools and preserves boundary on creatio
     agents: { get: id => id === a.id ? a : undefined, list: () => [a] },
     tools: { register(tool) { registrations.set(tool.name, tool) } },
     subagents: {},
+    storageDomain: { async open() { const memory = createMemoryTaskRegistry(); return {
+      table: () => ({ get: memory.get, entries: memory.entries, put: memory.create, update: memory.change }),
+      close: memory.close,
+    } } },
     effect: () => undefined,
     on(name, handler) { listeners.set(name, handler) },
   }
-  applyBridgePlugin(ctx)
+  await applyBridgePlugin(ctx)
   assert.deepEqual([...registrations.keys()].sort(), ['implementation_artifact_apply', 'postman_bridge', 'postman_bridge_status', 'postman_task_prepare', 'postman_task_restore', 'postman_worker', 'postman_worker_interrupt', 'postman_worker_stop'])
   assert.deepEqual(restriction.allow, postmanBridgeRestrictionForAgent(a).allow)
   assert.ok(listeners.has('agent-preset/selected'))
