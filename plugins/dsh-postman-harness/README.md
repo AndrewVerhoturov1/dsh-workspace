@@ -87,15 +87,15 @@ jobs, web search/fetch и обычное делегирование. При со
 сессии; штатный `report`, установленный в собственной области child, остаётся доступен.
 Модель Worker задаётся отдельно от Bridge.
 
-Host хранит отображение точного Leader session id в durable child session id только в памяти.
+Host сохраняет точную привязку Leader session id → child session id в долговременном реестре до запуска Worker; локальный слот лишь упорядочивает вызовы во время работы процесса.
 Первое задание запускает `startContinuable`, дальнейшие задания идут через `followup`.
 Ответ `POSTMAN_WORKER_TASK_ACCEPTED` подтверждает только приём, а не выполнение. Host сохраняет FIFO-порядок приёма обычных `postman_worker` follow-up; это не обещает порядок их обработки со стороны Harness runtime.
 
 При существенном изменении требований `postman_worker_interrupt({task})` кооперативно прерывает текущий turn через публичный ancestor interrupt, ждёт idle resident Worker и передаёт новое задание тому же durable child session, сохраняя mapping и task/worktree context. Обычные `postman_worker` follow-up по-прежнему принимаются через существующий FIFO-путь. Interrupt не задаёт гарантий приоритета или порядка обработки относительно уже принятых сообщений: обработкой очереди управляет Harness runtime. При отсутствии активного Worker tool отказывает и не создаёт замену. `postman_worker_stop` по-прежнему освобождает resident Activation и удаляет отображение.
 
 Worker отправляет результат через штатный `report`. `postman_worker_stop` штатно освобождает
-resident Activation и забывает отображение; durable Session не удаляется. После рестарта
-Host реестр Worker не восстанавливается (ограничение MVP).
+resident Activation и закрывает долговременную привязку; сама Session не удаляется. После рестарта
+Host проверяет точный сохранённый childId и продолжает его без создания второго Worker.
 
 ## Implementation package: отдельное локальное решение
 
@@ -105,7 +105,11 @@ Normal Direct/Postman Bridge доставляет любой безопасны�
 
 Зарегистрированный tool `implementation_artifact_apply({requestId, worktree})` предназначен для применения exact Postman artifact: он при исполнении проверяет точного активного Worker и отдельно допущенный REQ, разрешает REQ в сохранённый Host путь ZIP, повторно проверяет SHA-256 и проверяет идентичность Git repository/worktree до вызова уже существующего `system/implementation_package_runner.py`. Путь ZIP не берётся из текста задания, аргументов Worker или ZIP manifest. Runner сам проверяет clean/protected worktree и package, применяет patch, запускает targeted tests и создаёт диагностику.
 
-Host `postman_task_prepare` от exact `origin/preview` создаёт и публикует одну task branch с clean worktree на Leader до Bridge; Bridge через Host публикует REQ commit туда, не в `main`. Worker по отдельному заданию использует это же clean worktree на опубликованном REQ commit, не создаёт вторую ветку, и вызывает tool только с REQ и worktree, проверяет фактический результат и передаёт child-scoped `report`: PASS с путями/проверками без автоматической публикации; FAIL с diagnostics ZIP, без ручного ремонта. `POSTMAN_WORKER_TASK_ACCEPTED` — лишь приём задания. Worker остаётся обычным coding-agent с shell и теоретически может запускать локальные программы сам; гарантия здесь — только допущенный Worker может пользоваться trusted Host grant и этим tool для exact Postman artifact, а не запрет самостоятельного запуска программ. Перед отдельным commit/push/PR реализации из ветки убираются REQ transport-файлы; URL прежних REQ закреплены за SHA, поэтому `--chat` сохраняется. Runner допускает `packageBase != HEAD`. Публикация — отдельное действие согласно repository policy; merge требует отдельной команды. Plugin не вводит новый runner и не запускает применение ZIP при transport handoff.
+Host `postman_task_prepare` от exact `origin/preview` создаёт и публикует одну task branch с clean worktree на Leader до Bridge; До трёх независимых Bridge jobs на Leader одновременно публикуют REQ commit туда, не в `main`; Host поочерёдно проверяет lineage и fast-forward-ит опубликованные commits. Незавершённые после аварии jobs не повторяются и учитываются в лимите. Worker по отдельному заданию использует это же clean worktree на опубликованном REQ commit, не создаёт вторую ветку, и вызывает tool только с REQ и worktree, проверяет фактический результат и передаёт child-scoped `report`: PASS с путями/проверками без автоматической публикации; FAIL с diagnostics ZIP, без ручного ремонта. `POSTMAN_WORKER_TASK_ACCEPTED` — лишь приём задания. Worker остаётся обычным coding-agent с shell и теоретически может запускать локальные программы сам; гарантия здесь — только допущенный Worker может пользоваться trusted Host grant и этим tool для exact Postman artifact, а не запрет самостоятельного запуска программ. Перед отдельным commit/push/PR реализации из ветки убираются REQ transport-файлы; URL прежних REQ закреплены за SHA, поэтому `--chat` сохраняется. Runner допускает `packageBase != HEAD`. Публикация — отдельное действие согласно repository policy; merge требует отдельной команды. Plugin не вводит новый runner и не запускает применение ZIP при transport handoff.
+
+Путь task worktree по-прежнему создаётся под системным `tmpdir()`: перезапуск процесса
+сам его не удаляет, но внешний очиститель временных файлов может удалить дерево.
+Сохранность после перезагрузки машины при такой внешней очистке не гарантируется.
 
 Harness model routing намеренно находится вне Agent presets. Поэтому для Leader в model selector
 выбирается `GPT-6 Sol`; preset сам модель не переключает. Bridge Luna фиксирована кодом.

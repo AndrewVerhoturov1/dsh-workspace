@@ -75,7 +75,6 @@ export function createPostmanBridgeTool(ctx, jobs, contexts) {
       try { parsed = parsePostmanUserTurn(args?.message) }
       catch (error) { return { status: 'POSTMAN_BRIDGE_MESSAGE_REJECTED', diagnostic: String(error?.message ?? error) } }
       if (contexts && !contexts.get(exec.agent.id)) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
-      if (contexts?.record?.(exec.agent.id)?.bridge) return { status: 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN' }
       if (typeof contexts?.isRestoring === 'function' && contexts.isRestoring(exec.agent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
       if (typeof contexts?.hasActiveOperation === 'function' && contexts.hasActiveOperation(exec.agent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
       return jobs.accept(exec.agent, args.message, parsed.transportKind)

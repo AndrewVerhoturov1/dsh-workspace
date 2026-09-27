@@ -24,6 +24,8 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
   const children = new Map()
   const pending = new Set()
   const activeOperations = new Set()
+  const syncOperations = new Map()
+  const syncQueues = new Map()
   const command = gitCommand
 
   async function prepare(leader) {
@@ -128,11 +130,15 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
         throw new Error('task branch history uncertain')
       const context = Object.freeze({ leaderSessionId: id, repository: REPOSITORY,
         branch: row.branch, worktree: row.worktree, baseCommit: row.baseCommit })
-      // Interrupted runner outcome is not a trusted FAIL, even if the tree is dirty.
-      if (row.stage !== 'ready' || row.runner.state === 'running' || row.runner.state === 'restoring')
+      // Interrupted runner/Bridge outcomes are unknown, not trusted failures.
+      if (row.stage !== 'ready' || row.runner.state === 'running' || row.runner.state === 'restoring' ||
+          row.bridge?.state === 'pending' || Object.values(row.bridgeOperations ?? {}).some(op => op.state === 'pending'))
         await registry.change(id, old => ({ ...old, stage: 'ready', diagnostic: null,
           runner: ['running', 'restoring'].includes(old.runner.state)
-            ? { ...old.runner, state: 'unknown' } : old.runner }))
+            ? { ...old.runner, state: 'unknown' } : old.runner,
+          bridge: old.bridge?.state === 'pending' ? { ...old.bridge, state: 'unknown' } : old.bridge,
+          bridgeOperations: Object.fromEntries(Object.entries(old.bridgeOperations ?? {}).map(([jobId, op]) =>
+            [jobId, op.state === 'pending' ? { ...op, state: 'unknown' } : op])) }))
       contexts.set(id, context)
       return { status: 'POSTMAN_TASK_CONTEXT_ALREADY_READY', ...context }
     } catch (error) {
@@ -151,7 +157,7 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
       return { status: 'POSTMAN_TASK_RESTORE_REJECTED' }
     if (!pending.has(id) && !reserveRestore(id)) return { status: 'POSTMAN_TASK_RESTORE_REJECTED' }
     try {
-      if (activeOperations.has(id) || isBusy(id) || !await beforeRestore(id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
+      if (activeOperations.has(id) || syncOperations.has(id) || isBusy(id) || !await beforeRestore(id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
       const { branch, worktree, baseCommit } = context
       const repository = await command(leader.session.header.cwd, 'rev-parse', '--show-toplevel')
       const origin = await command(repository, 'remote', 'get-url', 'origin')
@@ -207,24 +213,76 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
     } finally { pending.delete(id) }
   }
 
+  // Reserve the mutable worktree from terminal handling until the sync completes.
+  // Other Web Bridge operations remain independent while runner/restore are blocked.
+  function beginSync(leaderId) {
+    if (!get(leaderId) || pending.has(leaderId) || activeOperations.has(leaderId)) return false
+    syncOperations.set(leaderId, (syncOperations.get(leaderId) ?? 0) + 1)
+    return true
+  }
+  function endSync(leaderId) {
+    const count = syncOperations.get(leaderId) ?? 0
+    if (count <= 1) syncOperations.delete(leaderId)
+    else syncOperations.set(leaderId, count - 1)
+  }
+
   async function sync(leaderId, publicationCommit, expectedParent) {
     const context = get(leaderId)
-    if (!context || !SHA.test(publicationCommit ?? '') || !SHA.test(expectedParent ?? '')) return false
+    if (!context || !SHA.test(publicationCommit ?? '') || !SHA.test(expectedParent ?? '') ||
+        !beginSync(leaderId)) return false
+    // Queue insertion is synchronous, before the first await. Each Leader has
+    // one FIFO chain; other Leaders' worktrees do not share a lock.
+    const previous = syncQueues.get(leaderId) ?? Promise.resolve()
+    let release
+    const turn = new Promise(resolve => { release = resolve })
+    const tail = previous.catch(() => undefined).then(() => turn)
+    syncQueues.set(leaderId, tail)
     try {
-      const { worktree, branch } = context
-      if (await command(worktree, 'branch', '--show-current') !== branch ||
+      await previous.catch(() => undefined)
+      const { worktree, branch, baseCommit } = context
+      if (get(leaderId) !== context || !BRANCH.test(branch) ||
+          normalize(await realPath(worktree)) !== normalize(worktree) ||
+          normalize(await command(worktree, 'rev-parse', '--show-toplevel')) !== normalize(worktree) ||
+          await command(worktree, 'branch', '--show-current') !== branch ||
+          await command(worktree, 'symbolic-ref', '--short', 'HEAD') !== branch ||
+          await command(worktree, 'remote', 'get-url', 'origin') !== registry.get(leaderId)?.originUrl ||
           await command(worktree, 'status', '--porcelain=v1', '--untracked-files=all') !== '') return false
-      await command(worktree, 'fetch', 'origin', 'refs/heads/' + branch + ':refs/remotes/origin/' + branch)
-      const remote = await command(worktree, 'rev-parse', 'refs/remotes/origin/' + branch)
-      if (remote !== publicationCommit) return false
-      const parent = await command(worktree, 'rev-parse', publicationCommit + '^')
-      if (parent !== expectedParent) return false
+      const listing = await command(worktree, 'worktree', 'list', '--porcelain')
+      const owned = listing.split(/\n\s*\n/).filter(Boolean).filter(entry =>
+        entry.split(/\r?\n/).some(line => line.startsWith('worktree ') && normalize(line.slice(9)) === normalize(worktree)))
+      if (owned.length !== 1 || !owned[0].split(/\r?\n/).includes('branch refs/heads/' + branch) ||
+          /(?:^|\n)(?:locked|prunable)(?: |\r?$)/m.test(owned[0])) return false
+      const fetch = async () => {
+        await command(worktree, 'fetch', 'origin', 'refs/heads/' + branch + ':refs/remotes/origin/' + branch)
+        return command(worktree, 'rev-parse', 'refs/remotes/origin/' + branch)
+      }
+      let remote = await fetch()
+      if (!SHA.test(remote)) return false
+      const exactCommit = async sha => await command(worktree, 'rev-parse', '--verify', sha + '^{commit}') === sha
+      if (!await exactCommit(baseCommit) || !await exactCommit(expectedParent) || !await exactCommit(publicationCommit) ||
+          await command(worktree, 'rev-list', '--parents', '-n', '1', publicationCommit) !== publicationCommit + ' ' + expectedParent)
+        return false
+      let published = await command(worktree, 'merge-base', publicationCommit, remote)
+      if (published !== publicationCommit) {
+        // An append-only push may race the first fetch; retry once, never publish ourselves.
+        remote = await fetch()
+        published = await command(worktree, 'merge-base', publicationCommit, remote)
+      }
+      if (published !== publicationCommit ||
+          await command(worktree, 'merge-base', baseCommit, remote) !== baseCommit) return false
       const head = await command(worktree, 'rev-parse', 'HEAD')
-      if (head !== expectedParent) return false
-      await command(worktree, 'merge', '--ff-only', publicationCommit)
-      return await command(worktree, 'rev-parse', 'HEAD') === publicationCommit &&
+      if (!SHA.test(head) || await command(worktree, 'merge-base', head, remote) !== head ||
+          await command(worktree, 'status', '--porcelain=v1', '--untracked-files=all') !== '') return false
+      if (head !== remote) await command(worktree, 'merge', '--ff-only', remote)
+      return get(leaderId) === context && await command(worktree, 'rev-parse', 'HEAD') === remote &&
+        await command(worktree, 'branch', '--show-current') === branch &&
         await command(worktree, 'status', '--porcelain=v1', '--untracked-files=all') === ''
     } catch { return false }
+    finally {
+      release()
+      if (syncQueues.get(leaderId) === tail) syncQueues.delete(leaderId)
+      endSync(leaderId)
+    }
   }
 
   async function verifyWorktree(leaderId) {
@@ -245,7 +303,7 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
   function isRestoring(leaderId) { return pending.has(leaderId) }
   function hasActiveOperation(leaderId) { return activeOperations.has(leaderId) }
   function beginOperation(leaderId, isBusy = () => false) {
-    if (!get(leaderId) || pending.has(leaderId) || activeOperations.has(leaderId) ||
+    if (!get(leaderId) || pending.has(leaderId) || activeOperations.has(leaderId) || syncOperations.has(leaderId) ||
         ['running', 'unknown', 'restoring'].includes(registry.get(leaderId)?.runner.state) || isBusy(leaderId)) return false
     activeOperations.add(leaderId)
     return true
@@ -269,7 +327,7 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
     } finally { activeOperations.delete(leaderId) }
   }
   function reserveRestore(leaderId) {
-    if (!get(leaderId) || pending.has(leaderId)) return false
+    if (!get(leaderId) || pending.has(leaderId) || syncOperations.has(leaderId) || activeOperations.has(leaderId)) return false
     pending.add(leaderId)
     return true
   }
@@ -282,8 +340,8 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
   }
   function child(childId) { return children.get(childId) ?? null }
   function releaseChild(childId) { children.delete(childId) }
-  function dispose() { contexts.clear(); children.clear(); pending.clear(); activeOperations.clear() }
-  return { prepare, recover, restore, sync, verifyWorktree, get, record, changeRecord, isRestoring, hasActiveOperation, beginOperation, startRunner, endOperation, reserveRestore, releaseRestore, bindChild, child, releaseChild, dispose }
+  function dispose() { contexts.clear(); children.clear(); pending.clear(); activeOperations.clear(); syncOperations.clear(); syncQueues.clear() }
+  return { prepare, recover, restore, sync, beginSync, endSync, verifyWorktree, get, record, changeRecord, isRestoring, hasActiveOperation, beginOperation, startRunner, endOperation, reserveRestore, releaseRestore, bindChild, child, releaseChild, dispose }
 }
 
 // Both entrypoints use one facade. Initialization is awaited before Git/child actions;

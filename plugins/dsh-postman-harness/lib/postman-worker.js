@@ -56,7 +56,7 @@ export function buildPostmanWorkerStartRequest(parent, task, signal, deniedTools
   }
 }
 
-/** One process-local active Worker per exact Leader Agent/Session. No restart registry. */
+/** Process-local slot serializes live Worker calls; the durable registry owns the exact Leader-to-child binding across restarts. */
 export function createPostmanWorkerTools(ctx, grants, contexts) {
   const slots = new Map()
 

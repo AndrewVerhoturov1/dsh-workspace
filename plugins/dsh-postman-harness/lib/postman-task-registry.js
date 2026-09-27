@@ -15,7 +15,11 @@ export const POSTMAN_TASK_DOMAIN = defineDomain({
       artifactRequests: z.array(z.string()) }).nullable(),
     runner: z.object({ state: z.enum(['none', 'running', 'failed', 'unknown', 'restoring']),
       requestId: z.string().nullable() }),
+    // Keep the legacy single marker readable; new jobs use individually keyed operations.
     bridge: z.object({ id: z.string(), state: z.enum(['pending', 'unknown']) }).nullable(),
+    bridgeOperations: z.record(z.string(), z.object({
+      state: z.enum(['pending', 'unknown']),
+    })).optional(),
   }).strict()) },
 })
 
