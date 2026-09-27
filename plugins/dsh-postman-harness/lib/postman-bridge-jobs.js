@@ -164,6 +164,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts) {
     if (typeof contexts?.isRestoring === 'function' && contexts.isRestoring(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
     if (typeof contexts?.hasActiveOperation === 'function' && contexts.hasActiveOperation(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
     if (disposed) return { status: 'POSTMAN_BRIDGE_UNAVAILABLE' }
+    if (contexts?.record?.(parent.id)?.bridge) return { status: 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN' }
     if (contexts && [...jobs.values()].some(job => job.parentSessionId === parent.id &&
         !['TERMINAL', 'FAILED'].includes(job.state))) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
     const job = {
@@ -171,6 +172,18 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts) {
       createdAt: new Date().toISOString(), controller: new AbortController(),
       notification: 'PENDING',
     }
+    if (typeof contexts?.changeRecord === 'function') {
+      return contexts.changeRecord(parent.id, row => {
+        if (row.bridge) throw new Error('POSTMAN_BRIDGE_OUTCOME_UNKNOWN')
+        return { ...row, bridge: { id: job.bridgeJobId, state: 'pending' } }
+      }).then(() => startJob(job, message), error => ({ status: error?.message === 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN'
+        ? 'POSTMAN_TASK_CONTEXT_BUSY' : 'POSTMAN_BRIDGE_ADMISSION_FAILED',
+        diagnostic: diagnostic(error) }))
+    }
+    return startJob(job, message)
+  }
+
+  function startJob(job, message) {
     jobs.set(job.bridgeJobId, job)
     // Coordinator holds the active slot only through child disposal, never through grants.
     let admission
@@ -212,7 +225,15 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts) {
         job.state = 'FAILED'
         job.diagnostic = diagnostic(error)
       })
-      .then(() => {
+      .then(async () => {
+        if (typeof contexts?.changeRecord === 'function') {
+          try {
+            await contexts.changeRecord(job.parentSessionId, row => ({ ...row,
+              bridge: row.bridge?.id === job.bridgeJobId
+                ? job.trustedTerminal ? null : { ...row.bridge, state: 'unknown' }
+                : row.bridge }))
+          } catch (error) { job.state = 'FAILED'; job.diagnostic = diagnostic(error) }
+        }
         job.finishedAt = new Date().toISOString()
         notify(job)
       })
@@ -226,7 +247,12 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts) {
 
   function status(parent, bridgeJobId) {
     const job = jobs.get(bridgeJobId)
-    if (!job || job.parentSessionId !== parent.id) return { status: 'POSTMAN_BRIDGE_JOB_NOT_FOUND' }
+    if (!job || job.parentSessionId !== parent.id) {
+      const interrupted = contexts?.record?.(parent.id)?.bridge
+      return interrupted?.id === bridgeJobId
+        ? { status: 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN', bridgeJobId, state: 'INTERRUPTED' }
+        : { status: 'POSTMAN_BRIDGE_JOB_NOT_FOUND' }
+    }
     const common = snapshot(job)
     if (job.state === 'QUEUED') return { status: 'POSTMAN_BRIDGE_QUEUED', ...common }
     if (job.state === 'STARTING' || job.state === 'RUNNING') {

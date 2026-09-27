@@ -7,6 +7,10 @@ import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import { promisify } from 'node:util'
 import { createPostmanTaskContexts } from './postman-task-context.js'
+import { createPostmanWorkerTools } from './postman-worker.js'
+import { createMemoryTaskRegistry, openPostmanTaskRegistry } from './postman-task-registry.js'
+import { JsonStorageBackend } from '@deepseek-ai/dsh-storage-json'
+import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 
 const exec = promisify(execFile)
 const REMOTE = 'https://github.com/AndrewVerhoturov1/dsh-workspace.git'
@@ -44,6 +48,79 @@ async function applyRunner(root, zip, worktree) {
   }
 }
 
+test('fresh runtime reopens JSON registry and preserves dirty real Git bytes and branch', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'postman-restart-git-'))
+  const repository = join(root, 'repo'), bare = join(root, 'origin.git')
+  await mkdir(repository)
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }))
+  await git(root, 'init', '--bare', bare)
+  await git(repository, 'init', '-b', 'preview')
+  await git(repository, 'config', 'user.email', 'test@example.com')
+  await git(repository, 'config', 'user.name', 'Restart Test')
+  await git(repository, 'remote', 'add', 'origin', REMOTE)
+  await git(repository, 'remote', 'set-url', '--push', 'origin', bare)
+  await writeFile(join(repository, 'payload.txt'), 'original\n')
+  await git(repository, 'add', 'payload.txt')
+  await git(repository, 'commit', '-m', 'base')
+  await git(repository, 'push', 'origin', 'preview')
+  const storage = new JsonStorageBackend(join(root, 'storage'))
+  const domainCtx = { storage: { backend: { get: () => storage } }, emit() {} }
+  const facility = () => new DomainFacility(domainCtx, { backend: 'json' })
+  const gitCommand = async (cwd, ...args) => {
+    if (args[0] === 'fetch' && args[1] === '--prune')
+      return git(cwd, 'fetch', '--prune', bare, '+refs/heads/*:refs/remotes/origin/*')
+    if (args[0] === 'ls-remote' && args[2] === 'origin')
+      return git(cwd, 'ls-remote', args[1], bare, ...args.slice(3))
+    return git(cwd, ...args)
+  }
+  const leader = { id: 'disk-git-leader', session: { header: { cwd: repository, agentPreset: 'postman-leader', delegationDepth: 0 } } }
+  const children = new Set(), launches = [], followups = []
+  const subagents = {
+    async listChildren() { return [...children].map(id => ({ id, kind: 'child', mode: 'continuable' })) },
+    async startContinuable(spec) { launches.push(spec.childId); children.add(spec.childId)
+      return { childId: spec.childId, messageId: 'initial' } },
+    async followup(_leader, id) { followups.push(id); return 'followup' },
+  }
+  const workerCtx = { agents: { get: id => id === leader.id ? leader : undefined },
+    tools: { schemas: () => [{ name: 'postman_bridge' }] }, subagents }
+  const task = worker => worker.taskTool.execute({ task: 'continue bound work' },
+    { agent: leader, signal: new AbortController().signal })
+  const firstRegistry = await openPostmanTaskRegistry(facility())
+  const a = createPostmanTaskContexts({ registry: firstRegistry, temporaryDirectory: () => root, gitCommand })
+  const first = await a.prepare(leader)
+  assert.equal(first.status, 'TASK_CONTEXT_READY', JSON.stringify(first))
+  const branch = first.branch, worktree = first.worktree
+  const workerA = createPostmanWorkerTools(workerCtx, undefined, a)
+  const acceptedA = await task(workerA)
+  assert.equal(acceptedA.status, 'POSTMAN_WORKER_TASK_ACCEPTED', JSON.stringify(acceptedA))
+  assert.equal(acceptedA.created, true)
+  await writeFile(join(worktree, 'payload.txt'), 'private dirty bytes\n')
+  const before = await git(worktree, 'status', '--porcelain=v1', '--untracked-files=all')
+  workerA.dispose()
+  a.dispose()
+  await firstRegistry.close()
+  const secondRegistry = await openPostmanTaskRegistry(facility())
+  const b = createPostmanTaskContexts({ registry: secondRegistry, temporaryDirectory: () => root, gitCommand })
+  const second = await b.prepare(leader)
+  assert.equal(second.status, 'POSTMAN_TASK_CONTEXT_ALREADY_READY', JSON.stringify(second))
+  assert.equal(second.branch, branch)
+  assert.equal(second.worktree, worktree)
+  const workerB = createPostmanWorkerTools(workerCtx, undefined, b)
+  const acceptedB = await task(workerB)
+  assert.equal(acceptedB.status, 'POSTMAN_WORKER_TASK_ACCEPTED', JSON.stringify(acceptedB))
+  assert.equal(acceptedB.created, false)
+  assert.equal(acceptedB.workerSessionId, acceptedA.workerSessionId)
+  assert.deepEqual(launches, [acceptedA.workerSessionId])
+  assert.deepEqual(followups, [acceptedA.workerSessionId])
+  assert.equal(await readFile(join(worktree, 'payload.txt'), 'utf8'), 'private dirty bytes\n')
+  assert.equal(await git(worktree, 'status', '--porcelain=v1', '--untracked-files=all'), before)
+  assert.equal((await b.restore(leader)).status, 'POSTMAN_TASK_RESTORE_REJECTED')
+  workerB.dispose()
+  b.dispose()
+  await secondRegistry.close()
+  await storage.close()
+})
+
 test('real runner FAIL leaves dirty patch; explicit bound restore permits ZIP #2 on same branch', async t => {
   const root = await mkdtemp(join(tmpdir(), 'postman-restore-integration-'))
   const repository = join(root, 'repo'), bare = join(root, 'origin.git')
@@ -62,8 +139,9 @@ test('real runner FAIL leaves dirty patch; explicit bound restore permits ZIP #2
   const base = await git(repository, 'rev-parse', 'HEAD')
   await git(repository, 'push', 'origin', 'preview')
 
+  const registry = createMemoryTaskRegistry()
   const contexts = createPostmanTaskContexts({
-    temporaryDirectory: () => root,
+    registry, temporaryDirectory: () => root,
     async gitCommand(cwd, ...args) {
       if (args[0] === 'fetch' && (args[1] === 'origin' || args[1] === '--prune')) {
         if (args[1] === '--prune') return git(cwd, 'fetch', '--prune', bare, '+refs/heads/*:refs/remotes/origin/*')
@@ -110,8 +188,25 @@ test('real runner FAIL leaves dirty patch; explicit bound restore permits ZIP #2
   assert.equal(await git(worktree, 'branch', '--show-current'), branch)
   assert.equal(await git(worktree, 'rev-parse', 'HEAD'), base)
 
+  const dirtyBefore = await git(worktree, 'status', '--porcelain=v1', '--untracked-files=all')
+  const cold = createPostmanTaskContexts({ registry, temporaryDirectory: () => root,
+    async gitCommand(cwd, ...args) {
+      if (args[0] === 'ls-remote' && args[2] === 'origin')
+        return git(cwd, 'ls-remote', args[1], bare, ...args.slice(3))
+      return git(cwd, ...args)
+    },
+  })
+  const recovered = await cold.prepare(leader)
+  assert.equal(recovered.status, 'POSTMAN_TASK_CONTEXT_ALREADY_READY', JSON.stringify(recovered))
+  assert.equal(recovered.branch, branch)
+  assert.equal(recovered.worktree, worktree)
+  assert.equal(await readFile(join(worktree, 'payload.txt'), 'utf8'), 'first candidate\n')
+  assert.equal(await git(worktree, 'status', '--porcelain=v1', '--untracked-files=all'), dirtyBefore)
+  assert.equal((await cold.restore(leader)).status, 'POSTMAN_TASK_RESTORE_REJECTED')
+
   assert.equal(contexts.beginOperation('integration-leader'), true)
-  contexts.endOperation('integration-leader', { status: 'IMPLEMENTATION_ARTIFACT_RUNNER_RESULT', result: failure })
+  await contexts.startRunner('integration-leader', 'REQ_20260927T120000Z_1234')
+  await contexts.endOperation('integration-leader', { status: 'IMPLEMENTATION_ARTIFACT_RUNNER_RESULT', result: failure })
   const restored = await contexts.restore(leader) // Explicit, authorized discard on this verified temporary tree only.
   assert.equal(restored.status, 'TASK_CONTEXT_RESTORED', JSON.stringify(restored))
   assert.equal(restored.branch, branch)
@@ -126,4 +221,20 @@ test('real runner FAIL leaves dirty patch; explicit bound restore permits ZIP #2
   assert.equal(await git(worktree, 'branch', '--show-current'), branch)
   assert.equal(await git(worktree, 'rev-parse', 'HEAD'), base)
   assert.equal(await git(repository, 'ls-remote', '--heads', bare, branch), base + '\trefs/heads/' + branch)
+
+  await git(worktree, 'config', 'user.email', 'test@example.com')
+  await git(worktree, 'config', 'user.name', 'Postman Worker')
+  await writeFile(join(worktree, 'private.txt'), 'local changes\n')
+  await git(worktree, 'add', 'private.txt')
+  await git(worktree, 'commit', '-m', 'local unpublished work')
+  await writeFile(join(worktree, 'payload.txt'), 'worker dirty bytes\n')
+  const localHead = await git(worktree, 'rev-parse', 'HEAD')
+  const localStatus = await git(worktree, 'status', '--porcelain=v1', '--untracked-files=all')
+  const ahead = await cold.prepare(leader)
+  assert.equal(ahead.status, 'POSTMAN_TASK_CONTEXT_ALREADY_READY', JSON.stringify(ahead))
+  assert.equal(await git(worktree, 'rev-parse', 'HEAD'), localHead)
+  assert.equal(await git(worktree, 'status', '--porcelain=v1', '--untracked-files=all'), localStatus)
+  assert.equal(await readFile(join(worktree, 'payload.txt'), 'utf8'), 'worker dirty bytes\n')
+  assert.equal(await git(repository, 'ls-remote', '--heads', bare, branch), base + '\trefs/heads/' + branch)
+  cold.dispose()
 })

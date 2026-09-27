@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { resolve } from 'node:path'
 import { createPostmanTaskContexts, POSTMAN_TASK_BRANCH_PATTERN } from './postman-task-context.js'
+import { createMemoryTaskRegistry } from './postman-task-registry.js'
 
 const base = 'a'.repeat(40)
 const published = 'b'.repeat(40)
@@ -12,6 +13,7 @@ const leader = id => ({ id, session: { header: { cwd: repository } } })
 
 function fixture(options = {}) {
   const calls = []
+  const registry = createMemoryTaskRegistry()
   const state = {
     remoteUrl: 'https://github.com/andrewverhoturov1/dsh-workspace.git',
     base, remote: base, parent: base, head: base, clean: true,
@@ -42,10 +44,10 @@ function fixture(options = {}) {
     if (verb === 'merge' && rest[0] === '--ff-only') { state.head = rest[1]; return '' }
     throw new Error('Unexpected git command: ' + JSON.stringify({ cwd, args }))
   }
-  const contexts = createPostmanTaskContexts({ gitCommand, realPath: options.realPath ?? (async path => path),
+  const contexts = createPostmanTaskContexts({ registry, gitCommand, realPath: options.realPath ?? (async path => path),
     temporaryDirectory: () => resolve('C:/Users/Andrew/AppData/Local/Temp'),
     makeDirectory: async () => options.directory ?? worktree })
-  return { contexts, state, calls }
+  return { contexts, state, calls, registry, gitCommand }
 }
 const invoked = (calls, ...args) => calls.some(call => JSON.stringify(call.args) === JSON.stringify(args))
 
@@ -168,7 +170,8 @@ test('restore discards dirty bound tree only after explicit Leader call', async 
   assert.equal((await f.contexts.restore(leader('A'))).status, 'POSTMAN_TASK_RESTORE_REJECTED')
   assert.equal(f.state.clean, false)
   assert.equal(f.contexts.beginOperation('A'), true)
-  f.contexts.endOperation('A', { status: 'IMPLEMENTATION_ARTIFACT_RUNNER_RESULT', result: { ok: false } })
+  await f.contexts.startRunner('A', 'REQ_20260927T120000Z_1234')
+  await f.contexts.endOperation('A', { status: 'IMPLEMENTATION_ARTIFACT_RUNNER_RESULT', result: { ok: false } })
   assert.equal((await f.contexts.restore(leader('A'))).status, 'TASK_CONTEXT_RESTORED')
   assert.equal(f.state.clean, true)
   assert.equal(f.state.head, published)
@@ -181,8 +184,8 @@ test('restore rejects redirected task path before discarding data', async () => 
   const f = fixture({ realPath: async () => repository }); await f.contexts.prepare(leader('A'))
   f.state.trees.push(worktree); f.state.clean = false
   assert.equal(f.contexts.beginOperation('A'), true)
-  f.contexts.endOperation('A', { status: 'IMPLEMENTATION_ARTIFACT_RUNNER_RESULT', result: { ok: false } })
-  f.contexts.endOperation('A', { status: 'IMPLEMENTATION_ARTIFACT_RUNNER_RESULT', result: { ok: false } })
+  await f.contexts.startRunner('A', 'REQ_20260927T120000Z_1234')
+  await f.contexts.endOperation('A', { status: 'IMPLEMENTATION_ARTIFACT_RUNNER_RESULT', result: { ok: false } })
   const result = await f.contexts.restore(leader('A'))
   assert.equal(result.status, 'POSTMAN_TASK_RESTORE_REJECTED')
   assert.equal(f.state.clean, false)
@@ -199,12 +202,97 @@ test('restore rejects wrong branch, moved remote, permanent and foreign worktree
     const f = fixture(); await f.contexts.prepare(leader('A'))
     f.state.trees.push(worktree); f.state.clean = false; mutate(f.state)
     assert.equal(f.contexts.beginOperation('A'), true)
-    f.contexts.endOperation('A', { status: 'IMPLEMENTATION_ARTIFACT_RUNNER_RESULT', result: { ok: false } })
+    await f.contexts.startRunner('A', 'REQ_20260927T120000Z_1234')
+    await f.contexts.endOperation('A', { status: 'IMPLEMENTATION_ARTIFACT_RUNNER_RESULT', result: { ok: false } })
     const result = await f.contexts.restore(leader('A'))
     assert.equal(result.status, 'POSTMAN_TASK_RESTORE_REJECTED')
     assert.equal(f.state.clean, false)
     assert.equal(f.calls.some(call => call.args[0] === 'reset' || call.args[0] === 'clean'), false)
   }
+})
+
+test('recovery accepts local-ahead dirty worktree without altering state', async () => {
+  const f = fixture(); const leaderA = leader('A')
+  const prepared = await f.contexts.prepare(leaderA)
+  f.state.trees.push(worktree); f.state.clean = false
+  f.state.head = published // remote is still the original base
+  const before = f.calls.length
+  const cold = createPostmanTaskContexts({ registry: f.registry, gitCommand: f.gitCommand,
+    realPath: async path => path })
+  const result = await cold.prepare(leaderA)
+  assert.equal(result.status, 'POSTMAN_TASK_CONTEXT_ALREADY_READY', JSON.stringify(result))
+  assert.equal(result.branch, prepared.branch)
+  assert.equal(result.worktree, worktree)
+  assert.equal(f.calls.slice(before).some(call => ['reset', 'clean', 'push', 'worktree'].includes(call.args[0]) &&
+    call.args[1] !== 'list'), false)
+  assert.equal(f.state.clean, false)
+})
+
+test('recovery refuses remote-ahead and divergent history without destructive actions', async () => {
+  for (const remote of [published, other]) {
+    const f = fixture(); await f.contexts.prepare(leader('A'))
+    f.state.trees.push(worktree); f.state.clean = false; f.state.remote = remote
+    const before = f.calls.length
+    const cold = createPostmanTaskContexts({ registry: f.registry, gitCommand: f.gitCommand,
+      realPath: async path => path })
+    assert.equal((await cold.prepare(leader('A'))).status, 'POSTMAN_TASK_PREPARE_UNCERTAIN')
+    assert.equal(f.calls.slice(before).some(call => ['reset', 'clean', 'push'].includes(call.args[0])), false)
+    assert.equal(f.state.clean, false)
+  }
+})
+
+test('durable prepare intent survives post-worktree crash and never makes another context', async () => {
+  const f = fixture()
+  const prepared = await f.contexts.prepare(leader('A'))
+  await f.registry.change('A', row => ({ ...row, stage: 'worktree' }))
+  f.state.trees.push(worktree)
+  const cold = createPostmanTaskContexts({ registry: f.registry, gitCommand: f.gitCommand,
+    realPath: async path => path })
+  const result = await cold.prepare(leader('A'))
+  assert.equal(result.status, 'POSTMAN_TASK_CONTEXT_ALREADY_READY', JSON.stringify(result))
+  assert.equal(result.branch, prepared.branch)
+  assert.equal(f.registry.get('A').stage, 'ready')
+  assert.equal(f.calls.filter(call => call.args[0] === 'worktree' && call.args[1] === 'add').length, 1)
+})
+
+test('unmaterialized intent fails closed without a second worktree add or push', async () => {
+  const f = fixture()
+  await f.contexts.prepare(leader('A'))
+  await f.registry.change('A', row => ({ ...row, stage: 'intent' }))
+  const before = f.calls.length
+  const cold = createPostmanTaskContexts({ registry: f.registry, gitCommand: f.gitCommand,
+    realPath: async path => path })
+  assert.equal((await cold.prepare(leader('A'))).status, 'POSTMAN_TASK_PREPARE_UNCERTAIN')
+  assert.equal(f.calls.slice(before).some(call => ['push', 'reset', 'clean'].includes(call.args[0]) ||
+    call.args[0] === 'worktree' && call.args[1] === 'add'), false)
+})
+
+test('interrupted runner is unknown after recovery and cannot authorize restore', async () => {
+  const f = fixture(); await f.contexts.prepare(leader('A'))
+  f.state.trees.push(worktree); f.state.clean = false
+  assert.equal(f.contexts.beginOperation('A'), true)
+  await f.contexts.startRunner('A', 'REQ_20260927T120000Z_1234')
+  const cold = createPostmanTaskContexts({ registry: f.registry, gitCommand: f.gitCommand,
+    realPath: async path => path })
+  assert.equal((await cold.prepare(leader('A'))).status, 'POSTMAN_TASK_CONTEXT_ALREADY_READY')
+  assert.equal(f.registry.get('A').runner.state, 'unknown')
+  assert.equal((await cold.restore(leader('A'))).status, 'POSTMAN_TASK_RESTORE_REJECTED')
+  assert.equal(f.calls.some(call => ['reset', 'clean'].includes(call.args[0])), false)
+})
+
+test('explicit runner failure survives recovery while restore remains separately authorized', async () => {
+  const f = fixture(); await f.contexts.prepare(leader('A'))
+  f.state.trees.push(worktree); f.state.clean = false
+  assert.equal(f.contexts.beginOperation('A'), true)
+  await f.contexts.startRunner('A', 'REQ_20260927T120000Z_1234')
+  await f.contexts.endOperation('A', { status: 'IMPLEMENTATION_ARTIFACT_RUNNER_RESULT', result: { ok: false } })
+  const cold = createPostmanTaskContexts({ registry: f.registry, gitCommand: f.gitCommand,
+    realPath: async path => path })
+  assert.equal((await cold.prepare(leader('A'))).status, 'POSTMAN_TASK_CONTEXT_ALREADY_READY')
+  assert.equal(f.state.clean, false)
+  assert.equal(f.registry.get('A').runner.state, 'failed')
+  assert.equal((await cold.restore(leader('A'))).status, 'TASK_CONTEXT_RESTORED')
+  assert.equal(f.registry.get('A').runner.state, 'none')
 })
 
 test('prepare refuses dirty new worktree', async () => {
