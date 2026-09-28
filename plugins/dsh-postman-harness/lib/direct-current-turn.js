@@ -7,6 +7,7 @@ import { postmanTaskContexts, POSTMAN_TASK_BRANCH_PATTERN } from './postman-task
 
 // Standalone transport publishes REQ task files to main; Leader children use their exact prepared task branch.
 const STANDALONE_TASK_PUBLICATION_BRANCH = 'main'
+const MAX_AUTOMATIC_CONTINUATIONS = 2
 
 const REQ_PATTERN = /^REQ_\d{8}T\d{6}Z_\d{4}$/
 const ARTIFACT_TERMINAL_OK = new Set([
@@ -661,6 +662,9 @@ export class DirectPostmanJobManager {
       throw parseError('POSTMAN_AUTOMATIC_CONTINUATION_NOT_ALLOWED')
     }
     const payload = continuationPayload(previous.result)
+    const index = previous.result.continuationIndex
+    if (!Number.isSafeInteger(index) || index < 0) throw parseError('POSTMAN_AUTOMATIC_CONTINUATION_NOT_ALLOWED')
+    if (index >= MAX_AUTOMATIC_CONTINUATIONS) throw parseError('POSTMAN_AUTOMATIC_CONTINUATION_LIMIT_REACHED')
     return this.start({
       sessionId,
       workspace,

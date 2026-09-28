@@ -2,7 +2,7 @@
 
 `PREVIEW_BRANCH_WORKFLOW_VERSION: 1`
 
-Этот документ описывает каноническую двухветочную модель `dsh-workspace`.
+Этот документ описывает Git-процедуру двухветочной модели `dsh-workspace`. Обязательные решения о ветках, ownership, едином Git-снимке, публикации и запретах задаёт [REPO_POLICY.md](../../REPO_POLICY.md); ниже — команды и схема их исполнения, а не дополнительный независимый набор mandates.
 
 ## 1. Постоянные ветки
 
@@ -40,19 +40,7 @@ origin/preview @ BASE_SHA
         └── feature/... | fix/... | exp/... | postman/...
 ```
 
-Обязательный порядок:
-
-1. `git fetch --prune origin`;
-2. прочитать exact `origin/preview` SHA;
-3. создать одну временную branch от этого SHA;
-4. создать отдельный clean worktree;
-5. выполнить работу и проверки;
-6. commit + push;
-7. открыть PR **в `preview`**;
-8. после отдельного user merge command — squash merge;
-9. безопасно удалить временную branch/worktree.
-
-Нельзя начинать обычную task от `main`.
+Процедура: после единого task Git-снимка и проверки ownership по [REPO_POLICY.md](../../REPO_POLICY.md) взять exact `origin/preview` SHA, создать временную branch и отдельный clean worktree от этого SHA. После работы и соразмерных проверок публиковать task PR в `preview` по политике. Отдельная команда пользователя на merge запускает `finalize-task-pr` (squash и best-effort cleanup). Это описание последовательности не заменяет preflight и запреты политики.
 
 ## 4. Локальное тестирование `preview`
 

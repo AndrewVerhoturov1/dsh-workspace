@@ -5,7 +5,7 @@
 `dsh-postman-harness` не является отдельным browser transport. Production transport остаётся в
 `postman/direct/`.
 
-Plugin владеет trusted Harness orchestration boundary:
+Этот README описывает Host architecture и tool boundaries; Direct lifecycle и automatic continuation задаёт [Current Flow](../../postman/POSTMAN_CURRENT_FLOW.md), Ask delta — [Ask Flow](../../postman/POSTMAN_ASK_FLOW.md), Leader lifecycle — [Bridge Flow](../../postman/POSTMAN_BRIDGE_FLOW.md). Plugin владеет trusted Harness orchestration boundary:
 
 ```text
 exact current @Postman / @PostmanAsk
@@ -116,10 +116,9 @@ Harness model routing намеренно находится вне Agent presets
 
 ## Основной entrypoint
 
-Основной entrypoint подключает trusted current-turn tools, Result Workspace и result presentation.
+Основной entrypoint подключает trusted current-turn tools, `postman_result_workspace_register`/`unregister` и `postman_result_present`. Result Workspace — optional отдельная capability: normal `RESULT_DURABLE` только сообщает exact REQ/ZIP и останавливается, автоматически Workspace не создаёт. Исторический `PUBLISHED` receipt остаётся поддерживаемым способом регистрации/представления; новый `RESULT_DURABLE` использует exact REQ handoff.
 Direct transport выполняется существующими wrapper-ами из `postman/direct/`; Bridge и Worker
-остаются отдельными supervisor capabilities. Старый persistent async service и его инструменты
-не регистрируются
+остаются отдельными supervisor capabilities.
 
 ## Production source of truth
 

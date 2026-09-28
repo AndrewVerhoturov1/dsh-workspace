@@ -126,7 +126,7 @@ test('bound publication synchronizes before grant and reports JSON-safe failure'
         if (acceptedSync === 'throws') throw new Error('remote unavailable')
         return acceptedSync
       } }
-    const grants = { async register() { order.push('grant') } }
+    const grants = { async register() { order.push('grant'); return true } }
     const f = fixture({ contexts, grants, onStatus: () => ({ status: 'COMPLETED',
       requestId: 'REQ_SYNC', result: publication }) })
     const accepted = f.accept()

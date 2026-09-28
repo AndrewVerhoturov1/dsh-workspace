@@ -64,6 +64,7 @@ PUBLIC_POLICY_URL = (
 
 DIRECT_VERSION = 5
 DEFAULT_ASSISTANT_TIMEOUT_MS = 45 * 60 * 1000
+MAX_AUTOMATIC_CONTINUATIONS = 2
 STATE_INIT = "INIT"
 STATE_TASK_PUBLISHED = "TASK_PUBLISHED"
 STATE_BROWSER_READY = "BROWSER_READY"
@@ -569,6 +570,12 @@ class DirectPostman:
                         "chatRequestId": chat_ref.request_id,
                         "terminalState": getattr(chat_ref, "terminal_state", ""),
                     },
+                )
+            if automatic_continuation and chat_ref.continuation_index >= MAX_AUTOMATIC_CONTINUATIONS:
+                raise DirectPostmanError(
+                    "POSTMAN_AUTOMATIC_CONTINUATION_LIMIT_REACHED",
+                    "root request chain has exhausted its automatic continuation budget",
+                    details={"chatRequestId": chat_ref.request_id, "continuationIndex": chat_ref.continuation_index},
                 )
 
         try:
