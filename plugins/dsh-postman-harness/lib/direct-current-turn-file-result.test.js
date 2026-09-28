@@ -35,6 +35,7 @@ async function completeTextJob(manager, child, sessionId, fields) {
     workspace: '/workspace',
     payload: 'probe',
     transportKind: 'text',
+    branch: 'main',
     proof: { parseMode: 'fresh' },
   })
   child.stdout.emit('data', Buffer.from(JSON.stringify({

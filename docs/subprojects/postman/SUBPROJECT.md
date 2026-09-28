@@ -10,7 +10,7 @@ updated: 2026-09-27
 
 ## Current focus
 
-Production transport имеет два explicit user-facing режима поверх общего Direct/Web browser слоя: artifact `@Postman` через `postman/direct/postman.ps1` и text `@PostmanAsk` через `postman/direct/postman-ask.ps1`. Над ними существует supervisor orchestration: top-level `Postman Leader` формирует model-authored `@Postman`/`@PostmanAsk` delegation через Leader-only `postman_bridge`, fresh one-shot Luna выполняет только trusted transport, а parent читает terminal result напрямую из child scope. Trusted current-turn Harness остаётся orchestration boundary и не является отдельным transport. Legacy/manual finalization относится только к artifact durable result.
+Production transport имеет два explicit user-facing режима поверх общего Direct/Web browser слоя: artifact `@Postman` через `postman/direct/postman.ps1` и text `@PostmanAsk` через `postman/direct/postman-ask.ps1`. Над ними существует supervisor orchestration: top-level `Postman Leader` формирует model-authored `@Postman`/`@PostmanAsk` delegation через Leader-only `postman_bridge`, fresh one-shot Luna выполняет только trusted transport, а parent читает terminal result напрямую из child scope. Trusted current-turn Harness остаётся orchestration boundary и не является отдельным transport.
 
 ## Next step
 
@@ -19,7 +19,7 @@ LIVE E2E остаётся за пользователем: Web implementation ZI
 ## Boundaries
 
 - Этот подпроект не переопределяет `AGENTS.md`, `REPO_POLICY.md`, `.agents/skills/delegate-via-postman/SKILL.md`, `postman/POSTMAN_CURRENT_FLOW.md` или `docs/web-postman-artifact-contract.md`.
-- Normal `@Postman` не распаковывает и не применяет результат, не запускает PREPARE/TEST/PUBLISH, не создаёт implementation branch/worktree/commit/PR и не выполняет merge.
+- Normal `@Postman` не распаковывает и не применяет результат, не создаёт implementation branch/worktree/commit/PR и не выполняет merge.
 - `plugins/dsh-postman-harness/` содержит trusted current-turn boundary, Leader-only `postman_bridge` для Web и независимый Leader-only `postman_worker` для локальной работы; Bridge не является альтернативным transport/fallback и не доступен обычным Agents.
 - Канонические Postman документы остаются на своих текущих путях; подпроект хранит только долговременный контекст и решения.
 

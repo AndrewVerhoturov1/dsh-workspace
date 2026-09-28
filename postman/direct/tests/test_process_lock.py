@@ -146,7 +146,7 @@ class LockTests(unittest.TestCase):
             with process_lock.lock_chat(root, REQ_A, REPO), patch.object(
                 direct.DirectPostman, "run", side_effect=AssertionError("must not send"),
             ), contextlib.redirect_stdout(io.StringIO()) as output:
-                code = direct.main(["--request-id", REQ_B, "--task", "intent",
+                code = direct.main(["--request-id", REQ_B, "--task", "intent", "--branch", "main",
                                     "--chat-request-id", REQ_A, "--direct-root", str(root)])
             self.assertEqual(code, 2)
             value = json.loads(output.getvalue())

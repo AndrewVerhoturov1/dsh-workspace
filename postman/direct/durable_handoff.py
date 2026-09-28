@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Canonical durable RESULT_DURABLE handoff and legacy-state recovery."""
+"""Canonical durable RESULT_DURABLE handoff."""
 
 from __future__ import annotations
 
@@ -183,67 +183,3 @@ def validate_terminal(
     normalized["artifactSha256"] = sha256
     return normalized
 
-
-def recover_legacy_direct_state(
-    data: dict[str, Any],
-    *,
-    request_id: str,
-    expected_repository: str,
-    direct_root: str | os.PathLike[str],
-) -> dict[str, Any]:
-    """Build a canonical handoff only from a complete RESULT_DURABLE direct state."""
-    try:
-        request_identity.assert_canonical_request_id(request_id)
-    except ValueError as exc:
-        raise DurableHandoffError("RESUME_REQUEST_INVALID", "requestId is not canonical") from exc
-    if data.get("requestId") != request_id:
-        raise DurableHandoffError(
-            "RESUME_REQUEST_MISMATCH",
-            "direct state requestId does not match requested request",
-            details={"expected": request_id, "actual": data.get("requestId")},
-        )
-    if data.get("state") != RESULT_DURABLE:
-        raise DurableHandoffError(
-            "RESUME_NOT_DURABLE",
-            "direct state is not RESULT_DURABLE",
-            details={"state": data.get("state")},
-        )
-    if data.get("code") is not None or data.get("ok") is not None:
-        raise DurableHandoffError("RESUME_INVALID", "direct state is not a legacy direct-state object")
-    if data.get("failureCode") is not None or data.get("failureDetails") is not None:
-        raise DurableHandoffError("RESUME_INVALID", "direct state contains failure information")
-    if data.get("repository") != expected_repository:
-        raise DurableHandoffError(
-            "RESUME_REPOSITORY_MISMATCH",
-            "direct state repository does not match expected repository",
-            details={"expected": expected_repository, "actual": data.get("repository")},
-        )
-
-    direct = Path(direct_root)
-    expected_state = state_path(direct, request_id)
-    expected_handoff = handoff_path(direct, request_id)
-    source = {
-        "ok": True,
-        "code": RESULT_DURABLE,
-        "state": RESULT_DURABLE,
-        "requestId": request_id,
-        "repository": expected_repository,
-        "baseCommit": data.get("baseCommit"),
-        "taskPublicationCommit": data.get("taskPublicationCommit"),
-        "taskUrl": data.get("taskUrl"),
-        "expectedFilename": data.get("expectedFilename"),
-        "resultZip": data.get("resultZip"),
-        "sha256": data.get("artifactSha256"),
-        "resultRoot": data.get("resultRoot"),
-        "statePath": str(expected_state.resolve()),
-        "resultHandoffPath": str(expected_handoff.resolve()),
-        "handoffVersion": HANDOFF_VERSION,
-        "recoveredFrom": "legacy-direct-state",
-    }
-    return validate_terminal(
-        source,
-        expected_repository=expected_repository,
-        request_id=request_id,
-        expected_state_path=expected_state,
-        expected_handoff_path=expected_handoff,
-    )

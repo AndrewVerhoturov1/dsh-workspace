@@ -28,7 +28,6 @@ import task_package  # noqa: E402
 import text_result  # noqa: E402
 import text_task_package  # noqa: E402
 from postman_direct import (  # noqa: E402
-    DEFAULT_BRANCH,
     DEFAULT_GH_BINARY,
     DEFAULT_REPOSITORY,
     PUBLIC_POLICY_URL,
@@ -105,7 +104,7 @@ class DirectPostmanAsk:
         self,
         *,
         repository: str = DEFAULT_REPOSITORY,
-        branch: str = DEFAULT_BRANCH,
+        branch: str | None = None,
         gh_binary: str = DEFAULT_GH_BINARY,
         repo_root: str | os.PathLike[str] | None = None,
         direct_root: str | os.PathLike[str] | None = None,
@@ -114,6 +113,8 @@ class DirectPostmanAsk:
         ensure_browser: Callable[..., dict[str, Any]] = ensure_dedicated_chrome,
         now: Callable[[], float] = time.time,
     ) -> None:
+        if not isinstance(branch, str) or not branch.strip():
+            raise DirectPostmanError("DIRECT_BRANCH_REQUIRED", "task publication branch must be explicit")
         self.repository = repository
         self.branch = branch
         self.gh_binary = gh_binary
@@ -435,7 +436,7 @@ def _build_parser() -> argparse.ArgumentParser:
     task_group.add_argument("--task-file")
     task_group.add_argument("--task-base64")
     parser.add_argument("--repository", default=DEFAULT_REPOSITORY)
-    parser.add_argument("--branch", default=DEFAULT_BRANCH)
+    parser.add_argument("--branch")
     parser.add_argument("--gh-binary", default=DEFAULT_GH_BINARY)
     parser.add_argument("--repo-root")
     parser.add_argument("--direct-root")
@@ -460,6 +461,8 @@ def main(argv: list[str] | None = None) -> int:
     direct = None
     execution_started = False
     try:
+        if not isinstance(args.branch, str) or not args.branch.strip():
+            raise DirectPostmanError("DIRECT_BRANCH_REQUIRED", "--branch is required for task publication")
         direct = DirectPostmanAsk(
             repository=args.repository,
             branch=args.branch,

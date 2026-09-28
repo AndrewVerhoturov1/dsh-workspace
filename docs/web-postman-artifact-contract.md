@@ -206,7 +206,7 @@ Postman должен:
 Он не означает автоматический merge, commit или изменение production workspace.
 
 Для normal flow после `RESULT_DURABLE` дальнейшее применение не выполняется: результат
-сообщается пользователю и поток останавливается. Repository-changing result может быть обработан только после отдельного решения локального агента по текущей repository policy. Legacy PREPARE/TEST/PUBLISH остаётся отдельной явной ручной финализацией, а не стадией normal transport.
+сообщается пользователю и поток останавливается. Repository-changing result может быть обработан только после отдельного решения локального агента по текущей repository policy.
 
 Для implementation package ChatGPT Web готовит декларативный ZIP по `REPO_POLICY.md`, `system/implementation-package-workflow.md` и `system/implementation-package-authoring.md`: `manifest.json`, Git-generated `changes.patch`, `README.md`, `TEST_PLAN.md`, необходимые targeted tests и, если новые repository-owned файлы иначе игнорируются Git, узкое исключение `.gitignore` в том же patch. Transport не проверяет эти package-specific требования: trusted `RESULT_DURABLE` доказывает происхождение и целостность ZIP, но не пригодность его к применению.
 

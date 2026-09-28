@@ -13,10 +13,7 @@ class PostmanUtf8CliBoundaryTests(unittest.TestCase):
     def test_canonical_wrappers_force_python_utf8_mode(self):
         expected = {
             "postman/direct/postman.ps1": 2,
-            "postman/direct/integrate_result.ps1": 1,
-            "postman/direct/prepare_result.ps1": 1,
-            "postman/direct/test_result.ps1": 1,
-            "postman/direct/publish_result.ps1": 1,
+            "postman/direct/postman-ask.ps1": 1,
         }
         for rel, count in expected.items():
             text = (ROOT / rel).read_text(encoding="utf-8")
@@ -25,6 +22,13 @@ class PostmanUtf8CliBoundaryTests(unittest.TestCase):
                 text.count("'-X' 'utf8'"),
                 f"{rel} must force Python UTF-8 mode on every canonical invocation",
             )
+
+    def test_generic_wrappers_reject_missing_branch(self):
+        for name in ("postman.ps1", "postman-ask.ps1"):
+            with self.subTest(name=name):
+                text = (ROOT / "postman" / "direct" / name).read_text(encoding="utf-8")
+                self.assertNotIn("$Branch = 'main'", text)
+                self.assertIn("Branch must be explicit for task publication.", text)
 
     def test_utf8_mode_can_emit_non_cp1251_json(self):
         payload = {"ok": False, "error": "日本 → Проверить"}
