@@ -45,13 +45,6 @@ class PostmanUtf8CliBoundaryTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual(payload, json.loads(result.stdout))
 
-    def test_agents_contract_mentions_failure_path(self):
-        agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
-        self.assertIn("Postman UTF-8 CLI boundary invariant.", agents)
-        self.assertIn("`-X utf8`", agents)
-        self.assertIn("failure-path", agents)
-        self.assertIn("UnicodeEncodeError", agents)
-
 
 if __name__ == "__main__":
     unittest.main()

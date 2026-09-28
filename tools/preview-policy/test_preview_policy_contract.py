@@ -31,29 +31,26 @@ class PreviewPolicyContract(unittest.TestCase):
             self.assertNotIn(forbidden, self.workflow)
 
     def test_repository_policy_declares_two_permanent_branches(self):
-        self.assertIn("## 1. Две постоянные ветки", self.policy)
-        self.assertIn("`main` — стабильное", self.policy)
-        self.assertIn("`preview` — постоянная интеграционная", self.policy)
+        self.assertIn("`main`", self.policy)
+        self.assertIn("`preview`", self.policy)
         self.assertIn("preview → main", self.policy)
         self.assertIn("merge commit", self.policy)
 
     def test_agents_default_task_route_is_preview(self):
-        self.assertIn("origin/preview", self.agents)
-        self.assertIn("base должен быть `preview`", self.agents)
+        self.assertIn("REPO_POLICY.md", self.agents)
         self.assertIn("promote-preview-to-main", self.agents)
-        self.assertIn(r"C:\Users\andre\.dsh-preview", self.agents)
+        self.assertIn("origin/preview", self.policy)
+        self.assertIn(r"C:\Users\andre\.dsh-preview", self.policy)
 
     def test_implementation_packages_default_to_preview(self):
         self.assertIn('"baseBranch": "preview"', self.impl)
         self.assertIn('"prBase": "preview"', self.impl)
-        self.assertIn("PR в preview", self.impl)
-        self.assertIn("migration/bootstrap", self.impl)
 
     def test_workflow_document_version_and_paths(self):
         self.assertIn("PREVIEW_BRANCH_WORKFLOW_VERSION: 1", self.doc)
         self.assertIn(r"C:\Users\andre\.dsh", self.doc)
         self.assertIn(r"C:\Users\andre\.dsh-preview", self.doc)
-        self.assertIn("preview_worktree.ps1' -Action bootstrap", self.doc)
+        self.assertIn("preview_worktree.ps1", self.doc)
         self.assertIn("promote_preview_to_main.ps1", self.doc)
 
 

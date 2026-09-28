@@ -93,7 +93,6 @@ postman_send_current_turn()
 
 Запрещены fallback:
 
-QChat
 Playwright MCP
 manual browser
 самостоятельное копирование current user text в shell

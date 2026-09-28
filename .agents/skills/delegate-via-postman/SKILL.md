@@ -7,8 +7,8 @@ description: >-
   создать canonical REQ и вызвать workspace-relative `postman\direct\postman.ps1`.
   Терминалом одного REQ может быть validated RESULT_DURABLE, завершённый текст без ZIP
   или отклонённый ZIP; два последних результата возвращаются Л1 вместе с assistantText/причиной.
-  Не создавать Result Workspace автоматически. Не использовать QChat или
-  ручную автоматизацию браузера как fallback.
+  Не создавать Result Workspace автоматически. Не использовать ручную
+  автоматизацию браузера как fallback.
 ---
 
 # Delegate via Postman — Direct Production
@@ -91,7 +91,6 @@ Dedicated Chrome и внешний browser context не закрываются.
 
 ```text
 dsh-postman-harness как production transport
-QChat
 frontend-design до получения результата Ч1
 другие implementation/design skills до получения результата Ч1
 Playwright MCP
@@ -194,13 +193,10 @@ frontend/design skills
 При таком отказе запрещены самостоятельная реализация и любой fallback:
 
 ```text
-QChat
 manual browser
 Playwright
 обычная самостоятельная реализация Luna
 ```
-
-`QChat` — отдельный transport и не является fallback.
 
 ## 3. Разделение ролей
 
@@ -353,7 +349,6 @@ Direct Postman внутри bridge. Если internal result-root probe не п�
 
 Не искать альтернативный transport.
 Не переходить на Cordis.
-Не переходить на QChat.
 Не автоматизировать браузер вручную.
 
 ## 7. Создание REQ
@@ -727,7 +722,6 @@ outcomes continuation возможен только по правилу разд
 Не открывать ChatGPT вручную.
 Не брать визуально существующий ZIP.
 Не использовать старый Harness.
-Не использовать QChat.
 Не пытаться доделать implementation самому.
 
 Разрешено один раз прочитать exact direct state/worker state этого REQ для
