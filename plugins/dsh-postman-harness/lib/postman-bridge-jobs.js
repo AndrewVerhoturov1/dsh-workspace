@@ -247,11 +247,15 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts) {
           }
         }
         // Only a trusted terminal from a fully cleaned child may authorize a grant.
+        const artifactHandoff = safe.result?.code === 'RESULT_DURABLE'
         if (safe.status === 'POSTMAN_BRIDGE_TERMINAL' && safe.result?.ok !== false) {
-          try { await grants?.register(job.parentSessionId, safe) }
-          catch (error) { job.grantDiagnostic = diagnostic(error) }
+          try {
+            const registered = await grants?.register(job.parentSessionId, safe)
+            if (artifactHandoff && registered !== true) job.grantDiagnostic = 'Artifact grant registration rejected.'
+          } catch (error) { job.grantDiagnostic = diagnostic(error) }
         }
-        job.state = safe.status === 'POSTMAN_BRIDGE_TERMINAL' ? 'TERMINAL' : 'FAILED'
+        job.state = safe.status === 'POSTMAN_BRIDGE_TERMINAL' && !(artifactHandoff && job.grantDiagnostic)
+          ? 'TERMINAL' : 'FAILED'
         } finally { if (syncReserved) contexts.endSync(job.parentSessionId) }
       })
       .catch(error => {
