@@ -33,8 +33,7 @@ Text mode:
 @PostmanAsk --chat <old REQ> <new intent>
 ```
 
-Old REQ используется только как локальный ключ доказанного ChatGPT conversation; новая отправка
-всегда получает новый REQ.
+Old REQ используется только как ключ доказанного ChatGPT conversation; новая отправка всегда получает новый REQ. Для artifact mode автоматическое продолжение разрешено только после `ASSISTANT_COMPLETED_NO_ARTIFACT` или `ARTIFACT_REJECTED`, максимум два новых REQ на root chain. Ручной `@Postman --chat` начинает новую root chain с `continuationIndex=0`; Ask не использует automatic continuation. Подробности — в [Current Flow](POSTMAN_CURRENT_FLOW.md).
 
 ## Supervisor mode: Postman Bridge
 

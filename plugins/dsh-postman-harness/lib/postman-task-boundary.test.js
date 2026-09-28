@@ -178,7 +178,8 @@ test('automatic continuation preserves exact bound branch and prior REQ', async 
   const d = directFixture(createPostmanTaskContexts())
   const first = await d.manager.start({ sessionId: 'bridge', workspace: 'C:/repo', payload: 'первое', branch: BRANCH })
   d.processes[0].stdout.emit('data', JSON.stringify({ ok: true, code: 'ASSISTANT_COMPLETED_NO_ARTIFACT',
-    state: 'ASSISTANT_COMPLETED_NO_ARTIFACT', requestId: first.requestId, assistantText: 'ещё не всё' }))
+    state: 'ASSISTANT_COMPLETED_NO_ARTIFACT', requestId: first.requestId, rootRequestId: first.requestId,
+    continuationIndex: 0, assistantText: 'ещё не всё' }))
   d.processes[0].emit('close', 0)
   const second = await d.manager.continueLast('bridge', 'C:/repo')
   assert.equal(second.chatRequestId, first.requestId)
@@ -214,6 +215,8 @@ test('Worker receives exact context and REQ; apply rejects another worktree befo
   assert.ok(prompt.includes('Trusted Host artifact REQ: ' + REQ + '.'))
   assert.ok(prompt.includes('Leader task branch ' + prepared.branch + ' and worktree ' + prepared.worktree))
   assert.ok(prompt.includes('implementation_artifact_apply({requestId: ' + JSON.stringify(REQ) + ', worktree: ' + JSON.stringify(prepared.worktree) + '});'))
+  assert.match(prompt, /central runner PASS.*authoritatively verifies declared manifest\.tests/)
+  assert.match(prompt, /do not manually rerun identical tests unless relevant/)
   assert.equal(prompt.includes(zip), false)
   const w = child(accepted.workerSessionId); agents.set(w.id, w)
   assert.equal(worker.ownerOf(w, REQ), a.id)

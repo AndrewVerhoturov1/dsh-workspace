@@ -220,6 +220,8 @@ https://chatgpt.com/c/<conversation-id>
 
 После этого новый REQ проходит обычный send/observe/download lifecycle.
 
+Automatic continuation разрешена только после `ASSISTANT_COMPLETED_NO_ARTIFACT` или `ARTIFACT_REJECTED`, если terminal text однозначно допускает продолжение без выбора пользователя. Новый REQ наследует `rootRequestId` и увеличивает `continuationIndex`; максимум два automatic continuation на root chain (индексы 1 и 2). Иные terminals, включая `POSTMAN_TRANSPORT_FAILED`, не разрешают automatic continuation. Ручной пользовательский `@Postman --chat <old REQ> <new intent>` всегда создаёт новую root chain с `continuationIndex=0`, сохраняя old REQ только как conversation lookup key. Не повторять Send прежнего REQ и не подменять неизвестный outcome новым запросом.
+
 Запрещено:
 
 - Search UI fallback;

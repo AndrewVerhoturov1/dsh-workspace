@@ -6,8 +6,7 @@
 
 ## Назначение
 
-PostmanAsk использует тот же Direct/Web browser transport, что artifact Postman, но возвращает
-текст, когда ZIP избыточен.
+PostmanAsk использует тот же Direct/Web browser transport, что artifact Postman, но возвращает текст, когда ZIP избыточен. Общие send/correlation/recovery правила определяет [Current Flow](POSTMAN_CURRENT_FLOW.md); ниже описаны только text envelope, 10-секундная re-proof, delivery и exact reply.
 
 ```text
 @PostmanAsk <intent>

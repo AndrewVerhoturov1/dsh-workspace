@@ -10,7 +10,7 @@ Postman Bridge позволяет умной основной модели ра�
 проверяет и решает, что спросить дальше, а transport operation выполняет отдельная минимальная
 Luna child session.
 
-Bridge не создаёт третий transport. После child current-turn boundary используются существующие
+Bridge не создаёт третий transport. Это Leader-specific supervisor и trusted result handoff; общий transport lifecycle описан в [Current Flow](POSTMAN_CURRENT_FLOW.md), text delta — в [Ask Flow](POSTMAN_ASK_FLOW.md). После child current-turn boundary используются существующие
 `postman/direct/postman.ps1` и `postman/direct/postman-ask.ps1` с exact task branch, переданной trusted Host.
 
 ## 2. Поток
