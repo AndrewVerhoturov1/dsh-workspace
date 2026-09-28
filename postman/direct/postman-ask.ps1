@@ -12,7 +12,7 @@ param(
     [string]$ChatRequestId = '',
 
     [string]$Repository = 'AndrewVerhoturov1/dsh-workspace',
-    [string]$Branch = 'main',
+    [string]$Branch = '',
     [string]$Python = 'python'
 )
 
@@ -21,6 +21,9 @@ $ErrorActionPreference = 'Stop'
 $bridge = Join-Path $PSScriptRoot 'postman_ask.py'
 if (-not (Test-Path -LiteralPath $bridge -PathType Leaf)) {
     throw "Direct PostmanAsk bridge not found: $bridge"
+}
+if ([string]::IsNullOrWhiteSpace($Branch)) {
+    throw 'Branch must be explicit for task publication.'
 }
 if ([string]::IsNullOrWhiteSpace($RequestId)) {
     throw 'RequestId must not be empty.'

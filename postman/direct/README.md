@@ -13,7 +13,7 @@ Luna
 → workspace-relative postman/direct/postman.ps1
 → postman/direct/postman_direct.py
 → validate new REQ
-→ snapshot origin/main
+→ snapshot явно выбранной trusted caller branch
 → publish self-contained REQ task to GitHub
 → ensure dedicated Postman Chrome
 → postman/web/web_worker_bridge.py
@@ -55,6 +55,11 @@ Tool-level shell failure до spawn, например `spawn EPERM`, означ�
 
 ## Normal request
 
+Для production вызова trusted current-turn Host сам передаёт `-Branch`: standalone transport
+намеренно выбирает `main`, Leader child — exact подготовленную task branch. Generic wrapper/CLI
+без `-Branch` не публикует task. Пример прямого PowerShell вызова ниже показывает только
+explicit branch и не заменяет trusted current-turn boundary.
+
 ```powershell
 $workspace = (Get-Location).Path
 $bridge = Join-Path $workspace 'postman\direct\postman.ps1'
@@ -67,7 +72,8 @@ $task = 'Сделай краткий отчёт по указанной теме
 
 $jsonText = & $bridge `
   -RequestId $requestId `
-  -Task $task
+  -Task $task `
+  -Branch main # explicit standalone transport target
 
 $result = $jsonText | ConvertFrom-Json
 ```
@@ -111,7 +117,8 @@ background process. Не запускать второй Postman/REQ после 
 ```powershell
 & $bridge `
   -RequestId $requestId `
-  -TaskBase64 $taskBase64
+  -TaskBase64 $taskBase64 `
+  -Branch main # explicit standalone target
 ```
 
 `-Task` сохраняется для обычного ручного PowerShell-вызова. Указать одновременно
@@ -131,7 +138,8 @@ Direct invocation:
 $jsonText = & $bridge `
   -RequestId $newRequestId `
   -ChatRequestId $oldRequestId `
-  -Task $newIntent
+  -Task $newIntent `
+  -Branch main # explicit standalone target
 ```
 
 Правила:
@@ -164,7 +172,7 @@ Smoke не публикует task и не отправляет production promp
 
 Direct Postman:
 
-1. фиксирует trusted snapshot `origin/main`;
+1. фиксирует trusted snapshot branch, явно переданной trusted Host: standalone transport использует `main`, Leader child — exact task branch из подготовленного контекста;
 2. строит self-contained `<REQ>.md`;
 3. публикует его;
 4. отправляет в ChatGPT Web только canonical двухстрочный prompt:
@@ -231,10 +239,3 @@ Luna не должна заранее имитировать внутренни�
 останавливается. `postman_result_workspace_register(...)` normal flow не вызывает,
 Result Workspace автоматически не создаётся.
 
-## Legacy/manual finalization
-
-`resume_request.ps1`, PREPARE/TEST/PUBLISH, `integrate_result.ps1`,
-`abandon_result.ps1` и presentation-finalization scripts сохраняются для отдельной
-явно запрошенной работы с уже существующим durable result.
-
-Они не являются частью normal `@Postman` lifecycle.

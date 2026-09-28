@@ -117,7 +117,7 @@ test('job manager sends exact payload only as UTF-8 Base64 to the existing Direc
     },
   })
   const payload = 'строка `x`\n```text\n${value}\\\n```\nREADME.md'
-  const started = await manager.start({ sessionId: 's1', workspace: '/repo', payload, proof: {} })
+  const started = await manager.start({ sessionId: 's1', workspace: '/repo', payload, proof: {}, branch: 'main' })
   assert.equal(started.requestId, 'REQ_20260922T123456Z_0042')
   assert.equal(invocation.command, 'pwsh-test')
   const b64Index = invocation.args.indexOf('-TaskBase64')
@@ -168,6 +168,24 @@ test('failure publication receipt must match exact task branch, REQ and pinned U
     assert.equal(result.code, mutate ? 'POSTMAN_PUBLICATION_RECEIPT_INVALID' : 'POSTMAN_TRANSPORT_FAILED')
     if (!mutate) assert.deepEqual(result.publicationReceipt, receipt)
   }
+})
+
+test('standalone main failure receipt requires the same trusted checkpoint', async () => {
+  const child = fakeChild()
+  let checkpoint
+  const manager = new DirectPostmanJobManager({ exists: () => true, directRoot: '/trusted',
+    now: () => new Date('2026-09-22T12:34:56.000Z'), randomInt: () => 42,
+    readPublicationState: () => JSON.stringify(checkpoint),
+    spawn() { queueMicrotask(() => child.emit('spawn')); return child } })
+  const started = await manager.start({ sessionId: 'standalone', workspace: '/repo', payload: 'intent', branch: 'main' })
+  const receipt = { requestId: started.requestId, repository: 'AndrewVerhoturov1/dsh-workspace', branch: 'main',
+    taskUrl: 'https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/' + 'b'.repeat(40) + '/' + started.requestId + '.md',
+    baseCommit: 'a'.repeat(40), taskPublicationCommit: 'b'.repeat(40) }
+  checkpoint = { ...receipt, state: 'FAILED' }
+  child.stdout.emit('data', JSON.stringify({ ok: false, code: 'POSTMAN_TRANSPORT_FAILED', requestId: started.requestId,
+    transportCode: 'WEB_FAILED', transportMessage: 'lost', details: {}, publicationReceipt: receipt }))
+  child.emit('close', 2)
+  assert.deepEqual(manager.view('standalone').result.publicationReceipt, receipt)
 })
 
 test('failure fields never authorize publication without a matching checkpoint', async () => {
@@ -237,8 +255,8 @@ test('parallel sessions retry a colliding REQ without mixing jobs', async () => 
     },
   })
   const [first, second] = await Promise.all([
-    manager.start({ sessionId: 'child-a', workspace: '/repo', payload: 'A' }),
-    manager.start({ sessionId: 'child-b', workspace: '/repo', payload: 'B' }),
+    manager.start({ sessionId: 'child-a', workspace: '/repo', payload: 'A', branch: 'main' }),
+    manager.start({ sessionId: 'child-b', workspace: '/repo', payload: 'B', branch: 'main' }),
   ])
   assert.equal(children.length, 2)
   assert.notEqual(first.requestId, second.requestId)
@@ -310,7 +328,7 @@ test('automatic continuation is deterministic and does not accept model-written 
       return child
     },
   })
-  const first = await manager.start({ sessionId: 's1', workspace: '/repo', payload: 'x', proof: {} })
+  const first = await manager.start({ sessionId: 's1', workspace: '/repo', payload: 'x', proof: {}, branch: 'main' })
   children[0].stdout.emit('data', Buffer.from(JSON.stringify({
     ok: true,
     code: 'ASSISTANT_COMPLETED_NO_ARTIFACT',

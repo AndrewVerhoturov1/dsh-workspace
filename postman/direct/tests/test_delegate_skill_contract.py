@@ -17,7 +17,7 @@ class DelegateViaPostmanSkillContract(unittest.TestCase):
         cls.agents = AGENTS.read_text(encoding="utf-8")
 
     def test_production_entrypoint_and_skill_identity(self):
-        self.assertIn("DIRECT_POSTMAN_SKILL_VERSION: 22", self.skill)
+        self.assertIn("DIRECT_POSTMAN_SKILL_VERSION: 23", self.skill)
         self.assertIn("name: delegate-via-postman", self.skill)
         self.assertIn(r"<current workspace>\postman\direct\postman.ps1", self.skill)
         self.assertIn("delegate-via-postman", self.agents)

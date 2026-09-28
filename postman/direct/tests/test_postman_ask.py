@@ -28,16 +28,13 @@ import text_result
 # touched files. The real repository imports the same names from production.
 bootstrap_stub = types.ModuleType("browser_bootstrap")
 bootstrap_stub.DEFAULT_CDP_URL = "http://127.0.0.1:9222"
-sys.modules["browser_bootstrap"] = bootstrap_stub
 
 task_package_stub = types.ModuleType("task_package")
 task_package_stub.build_external_prompt = lambda request_id, _policy, task_url: (
     f"POSTMAN_REQUEST_ID: {request_id}\ntask_file: {task_url}"
 )
-sys.modules["task_package"] = task_package_stub
 
 postman_direct_stub = types.ModuleType("postman_direct")
-postman_direct_stub.DEFAULT_BRANCH = "main"
 postman_direct_stub.DEFAULT_GH_BINARY = "gh"
 postman_direct_stub.DEFAULT_REPOSITORY = "AndrewVerhoturov1/dsh-workspace"
 postman_direct_stub.PUBLIC_POLICY_URL = "https://example.test/policy"
@@ -55,7 +52,6 @@ postman_direct_stub._decode_task_file = lambda value: Path(value).read_text(enco
 postman_direct_stub._sha256_text = lambda value: hashlib.sha256(value.encode("utf-8")).hexdigest()
 postman_direct_stub.default_direct_root = lambda: Path("direct")
 postman_direct_stub.ensure_dedicated_chrome = lambda **_kwargs: {"cdpUrl": bootstrap_stub.DEFAULT_CDP_URL}
-sys.modules["postman_direct"] = postman_direct_stub
 
 worker_stub = types.ModuleType("web_worker_bridge")
 worker_stub.ARTIFACT_REJECTED = "ARTIFACT_REJECTED"
@@ -63,9 +59,12 @@ worker_stub.ASSISTANT_COMPLETED_NO_ARTIFACT = "ASSISTANT_COMPLETED_NO_ARTIFACT"
 worker_stub.RESULT_DURABLE = "RESULT_DURABLE"
 worker_stub.POSTMAN_TRANSPORT_FAILED = "POSTMAN_TRANSPORT_FAILED"
 worker_stub.WebWorkerBridge = object
-sys.modules["web_worker_bridge"] = worker_stub
 
-import postman_ask
+with patch.dict(sys.modules, {
+    "browser_bootstrap": bootstrap_stub, "task_package": task_package_stub,
+    "postman_direct": postman_direct_stub, "web_worker_bridge": worker_stub,
+}):
+    import postman_ask
 
 REQ = "REQ_20260922T010203Z_1234"
 OLD_REQ = "REQ_20260921T010203Z_9999"
@@ -111,12 +110,19 @@ class Bridge:
 
 
 class PostmanAskTests(unittest.TestCase):
+    def test_cli_requires_explicit_branch_before_transport(self):
+        with patch.object(postman_ask.DirectPostmanAsk, "run", side_effect=AssertionError("must not publish")), contextlib.redirect_stdout(io.StringIO()) as stdout:
+            code = postman_ask.main(["--request-id", REQ, "--task", "intent"])
+        self.assertEqual(code, 2)
+        self.assertEqual(json.loads(stdout.getvalue())["code"], "DIRECT_BRANCH_REQUIRED")
+
     def setUp(self):
         Publisher.contents = []
         Bridge.calls = []
 
     def make_runner(self, root):
         return postman_ask.DirectPostmanAsk(
+            branch="main",
             direct_root=Path(root) / "direct",
             publisher_factory=Publisher,
             bridge_factory=Bridge,
@@ -205,7 +211,7 @@ class PostmanAskTests(unittest.TestCase):
             instance.publication_receipt = dict(receipt)
             raise postman_ask.DirectPostmanError("DIRECT_BROWSER_FAILED", "browser unavailable")
         with patch.object(postman_ask.DirectPostmanAsk, "run", fail_run), contextlib.redirect_stdout(io.StringIO()) as stdout:
-            code = postman_ask.main(["--request-id", REQ, "--task", "intent"])
+            code = postman_ask.main(["--request-id", REQ, "--task", "intent", "--branch", "main"])
         self.assertEqual(code, 2)
         failure = json.loads(stdout.getvalue())
         self.assertEqual(failure["code"], postman_ask.POSTMAN_TRANSPORT_FAILED)

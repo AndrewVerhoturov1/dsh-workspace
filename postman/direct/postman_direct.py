@@ -56,7 +56,6 @@ from web_worker_bridge import (  # noqa: E402
 )
 
 DEFAULT_REPOSITORY = "AndrewVerhoturov1/dsh-workspace"
-DEFAULT_BRANCH = "main"
 DEFAULT_GH_BINARY = os.environ.get("DSH_POSTMAN_GH_BINARY", "gh")
 PUBLIC_POLICY_URL = (
     "https://raw.githubusercontent.com/AndrewVerhoturov1/agents-andrew-instructions/"
@@ -243,11 +242,13 @@ class GitHubTaskPublisher:
         self,
         *,
         repository: str = DEFAULT_REPOSITORY,
-        branch: str = DEFAULT_BRANCH,
+        branch: str | None = None,
         gh_binary: str = DEFAULT_GH_BINARY,
         cwd: str | os.PathLike[str] | None = None,
         run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
     ) -> None:
+        if not isinstance(branch, str) or not branch.strip():
+            raise DirectPostmanError("DIRECT_BRANCH_REQUIRED", "task publication branch must be explicit")
         self.repository = repository
         self.branch = branch
         self.gh_binary = gh_binary
@@ -452,7 +453,7 @@ class DirectPostman:
         self,
         *,
         repository: str = DEFAULT_REPOSITORY,
-        branch: str = DEFAULT_BRANCH,
+        branch: str | None = None,
         gh_binary: str = DEFAULT_GH_BINARY,
         repo_root: str | os.PathLike[str] | None = None,
         direct_root: str | os.PathLike[str] | None = None,
@@ -527,6 +528,8 @@ class DirectPostman:
         extra_forbidden: Iterable[str] = (),
         automatic_continuation: bool = False,
     ) -> dict[str, Any]:
+        if not isinstance(self.branch, str) or not self.branch.strip():
+            raise DirectPostmanError("DIRECT_BRANCH_REQUIRED", "task publication branch must be explicit")
         request_identity.assert_canonical_request_id(request_id)
         self.publication_receipt = None
         try:
@@ -843,7 +846,7 @@ def _build_parser() -> argparse.ArgumentParser:
     task_group.add_argument("--task-file")
     task_group.add_argument("--task-base64")
     parser.add_argument("--repository", default=DEFAULT_REPOSITORY)
-    parser.add_argument("--branch", default=DEFAULT_BRANCH)
+    parser.add_argument("--branch")
     parser.add_argument("--gh-binary", default=DEFAULT_GH_BINARY)
     parser.add_argument("--repo-root")
     parser.add_argument("--direct-root")
@@ -872,6 +875,8 @@ def main(argv: list[str] | None = None) -> int:
     direct = None
     execution_request_id: str | None = None
     try:
+        if not args.browser_smoke and (not isinstance(args.branch, str) or not args.branch.strip()):
+            raise DirectPostmanError("DIRECT_BRANCH_REQUIRED", "--branch is required for task publication")
         direct = DirectPostman(
             repository=args.repository,
             branch=args.branch,

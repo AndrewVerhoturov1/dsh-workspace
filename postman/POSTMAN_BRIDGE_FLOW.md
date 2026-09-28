@@ -11,7 +11,7 @@ Postman Bridge позволяет умной основной модели ра�
 Luna child session.
 
 Bridge не создаёт третий transport. После child current-turn boundary используются существующие
-`postman/direct/postman.ps1` и `postman/direct/postman-ask.ps1` без изменений.
+`postman/direct/postman.ps1` и `postman/direct/postman-ask.ps1` с exact task branch, переданной trusted Host.
 
 ## 2. Поток
 
