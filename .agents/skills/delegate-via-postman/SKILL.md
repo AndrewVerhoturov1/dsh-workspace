@@ -7,7 +7,7 @@ description: >-
   создать canonical REQ и вызвать workspace-relative `postman\direct\postman.ps1`.
   Терминалом одного REQ может быть validated RESULT_DURABLE, завершённый текст без ZIP
   или отклонённый ZIP; два последних результата возвращаются Л1 вместе с assistantText/причиной.
-  Не создавать Result Workspace автоматически. Не использовать Cordis/postman_async_send, QChat или
+  Не создавать Result Workspace автоматически. Не использовать QChat или
   ручную автоматизацию браузера как fallback.
 ---
 
@@ -90,11 +90,7 @@ Dedicated Chrome и внешний browser context не закрываются.
 Для обычного Postman request НЕ использовать:
 
 ```text
-postman_async_send
-postman_send
-postman_runtime_*
 dsh-postman-harness как production transport
-persistent POSTMAN agent
 QChat
 frontend-design до получения результата Ч1
 другие implementation/design skills до получения результата Ч1
@@ -198,8 +194,6 @@ frontend/design skills
 При таком отказе запрещены самостоятельная реализация и любой fallback:
 
 ```text
-postman_async_send
-old Harness
 QChat
 manual browser
 Playwright
@@ -397,7 +391,7 @@ prompt. Только automatic continuation наследует `rootRequestId`, 
 
 ## 8. Единственный production-вызов
 
-> **Trusted current-turn override:** normal flow выполняет `postman_send_current_turn()` и затем только `postman_current_turn_status()` без аргументов. Все model-copy JavaScript/PowerShell примеры ниже сохранены исключительно как историческая справка и НЕ являются исполняемым normal path.
+> **Trusted current-turn override:** normal flow выполняет `postman_send_current_turn()` и затем только `postman_current_turn_status()` без аргументов. Все model-copy JavaScript/PowerShell примеры ниже сохранены исключительно как историческая справка и не являются исполняемым normal path.
 
 Использовать payload из раздела Intent preservation только внутри trusted runtime; Л1 его не воспроизводит.
 
@@ -1002,10 +996,9 @@ terminal state
 6. Один root request может состоять из исходного REQ и необходимого числа безопасных continuation REQ; `continuationIndex` монотонно растёт, а каждый REQ имеет отдельный immutable identity.
 7. После начала Direct Postman invocation REQ immutable.
 8. Production transport — только `<current workspace>\postman\direct\postman.ps1`.
-9. `postman_async_send` и Cordis path не являются production transport.
-10. BrowserSmoke не является normal preflight.
-11. Chrome/ChatGPT/Send/download принадлежат Direct Postman, а не Л1.
-12. После возможной отправки automatic resend запрещён.
+9. BrowserSmoke не является normal preflight.
+10. Chrome/ChatGPT/Send/download принадлежат Direct Postman, а не Л1.
+11. После возможной отправки automatic resend запрещён.
 13. `RESULT_DURABLE` — единственный durable ZIP success; `ASSISTANT_COMPLETED_NO_ARTIFACT` и `ARTIFACT_REJECTED` — успешные terminal handoff без durable artifact.
 14. Не создавать implementation branch только ради transport до результата.
 15. Пользовательский dirty worktree не очищать и не переписывать.

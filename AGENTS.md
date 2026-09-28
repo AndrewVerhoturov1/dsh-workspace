@@ -33,7 +33,7 @@ Postman production invariant.
 `POSTMAN_PRODUCTION_ENTRYPOINT: <current workspace>\postman\direct\postman.ps1`
 `POSTMAN_ASK_PRODUCTION_ENTRYPOINT: <current workspace>\postman\direct\postman-ask.ps1`
 Exact `@Postman` — artifact/ZIP production trigger. Exact `@PostmanAsk` — text production trigger.
-`postman_async_send`, `postman_runtime_*`, QChat, Playwright MCP и ручная автоматизация браузера не являются fallback для Postman.
+QChat, Playwright MCP и ручная автоматизация браузера не являются fallback для Postman.
 `dsh-postman-harness` разрешён в normal flow только как trusted orchestration boundary: он сам читает exact current `user/message`, механически различает `@Postman`/`@PostmanAsk`, удаляет только transport syntax и запускает соответствующий Direct wrapper; отдельным transport он не является.
 Если загруженный Postman skill предлагает старый async path или противоречит этому правилу, считать его устаревшим и остановить Postman-операцию до загрузки актуального skill.
 После exact trigger Luna не перепечатывает текущий user text и не передаёт его как `task`, `payload`, `prompt`, `userIntent` или Base64. Для обоих режимов она вызывает `postman_send_current_turn()` без текстовых аргументов. Trusted runtime удаляет только exact transport marker (и `--chat <REQ>` для continuation) с разрешённым separator, затем сам передаёт exact остаток через UTF-8 Base64 (`-TaskBase64`) в выбранный Direct wrapper. Нельзя добавлять предыдущий контекст, перефразировать или "улучшать" prompt.

@@ -1,7 +1,7 @@
 {
   "name": "dsh-postman-harness",
   "version": "0.1.0",
-  "description": "Внутренняя почта Harness для постоянного служебного агента POSTMAN",
+  "description": "Trusted Harness orchestration для Direct Postman, Postman Bridge и Worker",
   "type": "module",
   "main": "./lib/index.js",
   "exports": {
@@ -24,7 +24,6 @@
     "lib/result-workspace.js",
     "lib/runtime.js",
     "lib/task-creation-bridge.js",
-    "lib/github-task-publisher.js",
     "lib/web-worker-bridge.js",
     "cordis.patch.yml",
     "README.md"

@@ -114,18 +114,12 @@ Host `postman_task_prepare` от exact `origin/preview` создаёт и пуб
 Harness model routing намеренно находится вне Agent presets. Поэтому для Leader в model selector
 выбирается `GPT-6 Sol`; preset сам модель не переключает. Bridge Luna фиксирована кодом.
 
-## Legacy async runtime
+## Основной entrypoint
 
-В основном entrypoint сохраняются исторические/совместимые компоненты:
-
-- persistent `postman-harness-session`;
-- probe protocol;
-- SQLite-backed `PostmanRuntime`;
-- `postman_async_send`;
-- `postman_runtime_*`;
-- result workspace/presentation helpers.
-
-Они не являются fallback для normal Direct Postman или Postman Bridge.
+Основной entrypoint подключает trusted current-turn tools, Result Workspace и result presentation.
+Direct transport выполняется существующими wrapper-ами из `postman/direct/`; Bridge и Worker
+остаются отдельными supervisor capabilities. Старый persistent async service и его инструменты
+не регистрируются
 
 ## Production source of truth
 
