@@ -21,7 +21,7 @@ param(
     [switch]$BrowserSmoke,
 
     [string]$Repository = 'AndrewVerhoturov1/dsh-workspace',
-    [string]$Branch = 'main',
+    [string]$Branch = '',
     [string]$ResultRoot = '',
     [string]$Python = 'python',
     [string[]]$AllowedPath = @(),
@@ -46,7 +46,6 @@ if (-not (Test-Path -LiteralPath $bridge -PathType Leaf)) {
 $argsList = @(
     $bridge,
     '--repository', $Repository,
-    '--branch', $Branch,
     '--result-root', $ResultRoot
 )
 
@@ -55,6 +54,11 @@ if ($BrowserSmoke) {
     & $Python '-X' 'utf8' @argsList
     exit $LASTEXITCODE
 }
+
+if ([string]::IsNullOrWhiteSpace($Branch)) {
+    throw 'Branch must be explicit for task publication.'
+}
+$argsList += @('--branch', $Branch)
 
 if ([string]::IsNullOrWhiteSpace($RequestId)) {
     throw 'RequestId must not be empty.'

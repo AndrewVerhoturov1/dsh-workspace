@@ -60,6 +60,7 @@ test('default job remains artifact transport and routes to postman.ps1', async (
     sessionId: 'session-artifact',
     workspace: 'C:\\workspace',
     payload: 'обычная ZIP-задача',
+    branch: 'main',
   })
   assert.equal(started.transportKind, 'artifact')
   assert.match(spawned.args.find((value) => String(value).endsWith('.ps1')), /postman\.ps1$/)
@@ -98,6 +99,7 @@ test('text job routes to postman-ask.ps1 and accepts only TEXT_RESULT_DURABLE', 
     workspace: 'C:\\workspace',
     payload: 'исследуй вопрос',
     transportKind: 'text',
+    branch: 'main',
     proof: { parseMode: 'fresh' },
   })
   assert.equal(started.transportKind, 'text')
@@ -140,6 +142,7 @@ test('text job rejects artifact success terminal', async () => {
     workspace: 'C:\\workspace',
     payload: 'текст',
     transportKind: 'text',
+    branch: 'main',
   })
   child.stdout.emit('data', Buffer.from(JSON.stringify({
     ok: true,
@@ -170,6 +173,7 @@ test('PostmanAsk exact reply slot uses strict per-session string equality', asyn
     workspace: 'C:\\workspace',
     payload: 'верни точный текст',
     transportKind: 'text',
+    branch: 'main',
   })
   const assistantText = 'Строка 1\n\nA\\B | "кавычки" | ${value} | Привет-мир'
   const { createHash } = await import('node:crypto')

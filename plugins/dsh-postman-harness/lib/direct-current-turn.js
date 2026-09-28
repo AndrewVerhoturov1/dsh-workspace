@@ -5,6 +5,9 @@ import { homedir } from 'node:os'
 import { spawn as nodeSpawn } from 'node:child_process'
 import { postmanTaskContexts, POSTMAN_TASK_BRANCH_PATTERN } from './postman-task-context.js'
 
+// Standalone transport publishes REQ task files to main; Leader children use their exact prepared task branch.
+const STANDALONE_TASK_PUBLICATION_BRANCH = 'main'
+
 const REQ_PATTERN = /^REQ_\d{8}T\d{6}Z_\d{4}$/
 const ARTIFACT_TERMINAL_OK = new Set([
   'RESULT_DURABLE',
@@ -209,7 +212,7 @@ function validPublicationReceipt(value, job) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
   const { requestId, repository, branch, taskUrl, baseCommit, taskPublicationCommit } = value
   if (requestId !== job.requestId || repository !== 'AndrewVerhoturov1/dsh-workspace' ||
-      branch !== job.branch || !POSTMAN_TASK_BRANCH_PATTERN.test(branch ?? '') ||
+      branch !== job.branch || (branch !== STANDALONE_TASK_PUBLICATION_BRANCH && !POSTMAN_TASK_BRANCH_PATTERN.test(branch ?? '')) ||
       !/^[0-9a-f]{40}$/.test(baseCommit ?? '') || !/^[0-9a-f]{40}$/.test(taskPublicationCommit ?? '')) return false
   return taskUrl === 'https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/' + taskPublicationCommit + '/' + requestId + '.md'
 }
@@ -430,7 +433,7 @@ export class DirectPostmanJobManager {
     if (typeof payload !== 'string' || payload.trim() === '') throw parseError('POSTMAN_EMPTY_PAYLOAD')
     if (!['artifact', 'text'].includes(transportKind)) throw parseError('POSTMAN_RESULT_MODE_INVALID')
     if (transportKind === 'text' && automaticContinuation) throw parseError('POSTMAN_AUTOMATIC_CONTINUATION_NOT_ALLOWED')
-    if (branch !== undefined && !POSTMAN_TASK_BRANCH_PATTERN.test(branch)) throw parseError('POSTMAN_TASK_BRANCH_INVALID')
+    if (branch !== STANDALONE_TASK_PUBLICATION_BRANCH && !POSTMAN_TASK_BRANCH_PATTERN.test(branch ?? '')) throw parseError('POSTMAN_TASK_BRANCH_INVALID')
 
     // A new request in this Luna session supersedes any exact-reply slot left
     // by the previous PostmanAsk result.
@@ -462,7 +465,7 @@ export class DirectPostmanJobManager {
       '-RequestId', requestId,
       '-TaskBase64', taskBase64,
     ]
-    if (branch !== undefined) args.push('-Branch', branch)
+    args.push('-Branch', branch)
     if (chatRequestId !== undefined) args.push('-ChatRequestId', chatRequestId)
     if (automaticContinuation) args.push('-AutomaticContinuation')
 
@@ -737,7 +740,7 @@ export function createDirectCurrentTurnToolConfigs(ctx, { store, jobs, taskConte
           payload: parsed.payload,
           chatRequestId: parsed.chatRequestId,
           transportKind: parsed.transportKind,
-          branch: bridgeContext?.branch,
+          branch: bridgeContext?.branch ?? STANDALONE_TASK_PUBLICATION_BRANCH,
           proof,
         })
       } catch (error) {

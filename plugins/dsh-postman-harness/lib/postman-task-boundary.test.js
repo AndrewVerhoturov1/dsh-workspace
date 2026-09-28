@@ -151,6 +151,29 @@ test('unbound Bridge child fails closed before spawning even with model branch',
   d.config.dispose(); contexts.dispose()
 })
 
+test('standalone trusted Host explicitly selects main for artifact and text without model branch', async () => {
+  const { contexts } = preparedContexts(), d = directFixture(contexts)
+  for (const [index, marker, wrapper] of [[1, '@Postman', 'postman.ps1'], [2, '@PostmanAsk', 'postman-ask.ps1']]) {
+    const root = leader('standalone-' + index)
+    root.session.header.agentPreset = 'standard'
+    d.listeners.get('session/event')({ id: root.id }, event(marker + ' задача', index))
+    assert.equal((await d.config.tools[0].execute({ branch: BRANCH }, { agent: root })).status, 'STARTED')
+    const args = d.invocations[index - 1].args
+    assert.equal(argument(args, '-Branch'), 'main')
+    assert.match(argument(args, '-File'), new RegExp(wrapper.replace('.', '\\.') + '$'))
+    assert.equal(d.manager.latest(root.id).branch, 'main')
+    d.processes[index - 1].emit('close', 1)
+  }
+  d.config.dispose(); contexts.dispose()
+})
+
+test('manager refuses missing branch before spawning a Direct process', async () => {
+  const { contexts } = preparedContexts(), d = directFixture(contexts)
+  await assert.rejects(d.manager.start({ sessionId: 'missing', workspace: 'C:/repo', payload: 'задача' }), /POSTMAN_TASK_BRANCH_INVALID/)
+  assert.equal(d.invocations.length, 0)
+  d.config.dispose(); contexts.dispose()
+})
+
 test('automatic continuation preserves exact bound branch and prior REQ', async () => {
   const d = directFixture(createPostmanTaskContexts())
   const first = await d.manager.start({ sessionId: 'bridge', workspace: 'C:/repo', payload: 'первое', branch: BRANCH })

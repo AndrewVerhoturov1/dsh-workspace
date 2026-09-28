@@ -72,6 +72,15 @@ PRE = "a" * 40
 
 
 class DirectPostmanUnitTests(unittest.TestCase):
+    def test_cli_requires_explicit_branch_before_transport(self):
+        with patch.object(direct.DirectPostman, "run", side_effect=AssertionError("must not publish")), contextlib.redirect_stdout(io.StringIO()) as stdout:
+            code = direct.main(["--request-id", REQ, "--task", "intent"])
+        self.assertEqual(code, 2)
+        self.assertEqual(json.loads(stdout.getvalue())["code"], "DIRECT_BRANCH_REQUIRED")
+        with self.assertRaises(direct.DirectPostmanError) as ctx:
+            direct.GitHubTaskPublisher(repository=REPO)
+        self.assertEqual(ctx.exception.code, "DIRECT_BRANCH_REQUIRED")
+
     def test_intent_task_is_minimal_and_preserves_text(self):
         task = "Postman, сделай простой калькулятор в древне-японском стиле."
         rendered = direct.render_intent_task(task)
@@ -147,7 +156,7 @@ class DirectPostmanUnitTests(unittest.TestCase):
                 raise AssertionError(command)
             return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
 
-        publisher = direct.GitHubTaskPublisher(repository=REPO, run=fake_run)
+        publisher = direct.GitHubTaskPublisher(repository=REPO, branch="main", run=fake_run)
         task = "точный пользовательский текст ✅"
         published = publisher.publish(REQ, task)
         self.assertEqual(published.prepublication_commit, PRE)
@@ -270,6 +279,7 @@ class DirectPostmanUnitTests(unittest.TestCase):
             Publisher.contents = []
             Bridge.calls = []
             runner = direct.DirectPostman(
+                branch="main",
                 direct_root=Path(root) / "direct",
                 publisher_factory=Publisher,
                 bridge_factory=Bridge,
@@ -328,6 +338,16 @@ class DirectPostmanUnitTests(unittest.TestCase):
             self.assertEqual(handoff["statePath"], str(runner.state_path(REQ)))
             self.assertEqual(handoff["resultHandoffPath"], str(handoff_path.resolve()))
             self.assertEqual(handoff["sha256"], "c" * 64)
+            validated = direct.durable_handoff.validate_terminal(
+                handoff, expected_repository=REPO, request_id=REQ,
+                expected_state_path=runner.state_path(REQ), expected_handoff_path=handoff_path,
+            )
+            self.assertEqual(validated["artifactSha256"], "c" * 64)
+            with self.assertRaises(direct.durable_handoff.DurableHandoffError):
+                direct.durable_handoff.validate_terminal(
+                    {**handoff, "requestId": "REQ_20260902T010204Z_1235"},
+                    expected_repository=REPO, request_id=REQ,
+                )
 
     def test_automatic_continuation_after_index_three_inherits_chain(self):
         new_req = "REQ_20260902T010204Z_1235"
@@ -375,6 +395,7 @@ class DirectPostmanUnitTests(unittest.TestCase):
         ):
             Bridge.calls = []
             runner = direct.DirectPostman(
+                branch="main",
                 direct_root=Path(root) / "direct",
                 publisher_factory=Publisher,
                 bridge_factory=Bridge,
@@ -435,6 +456,7 @@ class DirectPostmanUnitTests(unittest.TestCase):
             direct.chat_reference, "resolve_chat_reference", return_value=previous
         ):
             runner = direct.DirectPostman(
+                branch="main",
                 direct_root=Path(root) / "direct",
                 publisher_factory=Publisher,
                 bridge_factory=Bridge,
@@ -450,6 +472,7 @@ class DirectPostmanUnitTests(unittest.TestCase):
     def test_existing_state_blocks_automatic_resend(self):
         with tempfile.TemporaryDirectory() as root:
             runner = direct.DirectPostman(
+                branch="main",
                 direct_root=root,
                 publisher_factory=lambda **kwargs: (_ for _ in ()).throw(AssertionError("publisher must not run")),
             )
@@ -490,6 +513,7 @@ class DirectPostmanUnitTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as root:
             runner = direct.DirectPostman(
+                branch="main",
                 direct_root=Path(root) / "direct",
                 publisher_factory=Publisher,
                 bridge_factory=Bridge,
@@ -545,6 +569,7 @@ class DirectPostmanUnitTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as root:
             runner = direct.DirectPostman(
+                branch="main",
                 direct_root=Path(root) / "direct",
                 publisher_factory=Publisher,
                 bridge_factory=Bridge,
@@ -576,7 +601,7 @@ class DirectPostmanUnitTests(unittest.TestCase):
                 details=failure_details,
             ),
         ), contextlib.redirect_stdout(io.StringIO()) as stdout:
-            exit_code = direct.main(["--request-id", REQ, "--task", "intent"])
+            exit_code = direct.main(["--request-id", REQ, "--task", "intent", "--branch", "main"])
 
         self.assertEqual(exit_code, 2)
         payload = json.loads(stdout.getvalue())
@@ -595,7 +620,7 @@ class DirectPostmanUnitTests(unittest.TestCase):
             instance.publication_receipt = dict(receipt)
             raise direct.DirectPostmanError("DIRECT_BROWSER_FAILED", "browser unavailable")
         with patch.object(direct.DirectPostman, "run", fail_run), contextlib.redirect_stdout(io.StringIO()) as stdout:
-            code = direct.main(["--request-id", REQ, "--task", "intent"])
+            code = direct.main(["--request-id", REQ, "--task", "intent", "--branch", "main"])
         self.assertEqual(code, 2)
         failure = json.loads(stdout.getvalue())
         self.assertEqual(failure["code"], direct.POSTMAN_TRANSPORT_FAILED)
@@ -614,7 +639,7 @@ class DirectPostmanUnitTests(unittest.TestCase):
                 details=failure_details,
             ),
         ), contextlib.redirect_stdout(io.StringIO()) as stdout:
-            exit_code = direct.main(["--request-id", REQ, "--task", "intent"])
+            exit_code = direct.main(["--request-id", REQ, "--task", "intent", "--branch", "main"])
 
         self.assertEqual(exit_code, 2)
         payload = json.loads(stdout.getvalue())

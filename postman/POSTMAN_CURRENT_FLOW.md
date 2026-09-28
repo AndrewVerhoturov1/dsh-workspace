@@ -110,7 +110,7 @@ Persisted state того же REQ блокирует blind resend.
 
 ## 6. Snapshot и GitHub task publication
 
-Direct Postman фиксирует trusted snapshot `origin/main` перед публикацией task-файла.
+Direct Postman фиксирует trusted snapshot branch, явно переданной trusted Host: standalone transport выбирает `main`, Leader child получает exact подготовленную task branch.
 
 Task filename:
 
@@ -429,8 +429,7 @@ exact resultZip
 После этого — `STOP`.
 
 Normal `@Postman` не вызывает `postman_result_workspace_register(...)` и не создаёт
-Harness Workspace автоматически. Presentation/finalization, если понадобится, является
-отдельным explicit workflow вне normal transport.
+Harness Workspace автоматически. Отдельное представление результата или применение пакета требует своего explicit workflow вне normal transport.
 
 ## 18. Что normal Postman не делает
 
@@ -439,37 +438,19 @@ Normal `@Postman` не:
 - распаковывает ZIP;
 - анализирует semantic correctness;
 - применяет patch/files к repository;
-- запускает PREPARE/TEST/PUBLISH;
+- применяет artifact автоматически;
 - создаёт implementation worktree/branch/commit/PR;
 - выбирает дальнейшее действие на основе содержимого ZIP;
 - выполняет manual browser automation как fallback.
 
-## 19. Legacy/manual finalization
-
-Существующие:
-
-```text
-resume_request.ps1
-prepare_result.py
-test_result.py
-publish_result.py
-integrate_result.py
-abandon_result.ps1
-presentation_status.py
-```
-
-остаются отдельным explicit workflow для уже существующего durable result.
-
-Они не являются normal `@Postman` flow.
-
-## 20. `dsh-postman-harness`
+## 19. `dsh-postman-harness`
 
 Plugin предоставляет trusted current-turn boundary и supervisor capabilities для Bridge/Worker.
 Старые persistent async service и send/runtime tools удалены; они не являются транспортом или fallback.
 
 После `RESULT_DURABLE` normal `@Postman` не создаёт Result Workspace автоматически.
 
-## 21. Production state
+## 20. Production state
 
 Web bridge monotonic transport state концептуально:
 
@@ -486,9 +467,9 @@ Direct layer дополнительно хранит task/browser/handoff state.
 
 Нельзя переводить request назад или повторять Send по догадке.
 
-## 22. Acceptance status
+## 21. Acceptance status
 
-2026-09-19 выполнен полный fresh + continuation E2E после production orchestration fixes.
+Историческое свидетельство: 2026-09-19 выполнен fresh + continuation E2E после production orchestration fixes. Тогда Workspace регистрировался отдельно; текущий normal flow останавливается после terminal handoff.
 
 Проверено:
 
@@ -511,7 +492,7 @@ Workspace registered
 docs/postman-production-e2e.md
 ```
 
-## 23. Короткая формула
+## 22. Короткая формула
 
 ```text
 exact current intent
@@ -525,6 +506,6 @@ exact current intent
 → one download
 → safety/correlation validation
 → RESULT_DURABLE
-→ optional Workspace
+→ сообщить exact requestId/resultZip
 → STOP
 ```

@@ -94,7 +94,7 @@ docs/web-postman-artifact-contract.md
 Normal Postman не:
 
 - применяет ZIP к repository;
-- запускает PREPARE/TEST/PUBLISH автоматически;
+- применяет artifact автоматически;
 - создаёт implementation branch/commit/PR;
 - делает blind resend после неопределённого transport outcome.
 

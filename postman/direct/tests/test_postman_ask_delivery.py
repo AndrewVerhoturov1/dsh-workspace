@@ -42,6 +42,7 @@ class Bridge:
 class PostmanAskDeliveryTests(unittest.TestCase):
     def make_direct(self, root: str) -> postman_ask.DirectPostmanAsk:
         return postman_ask.DirectPostmanAsk(
+            branch="main",
             repo_root=root,
             direct_root=root,
             publisher_factory=Publisher,
