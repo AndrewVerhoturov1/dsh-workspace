@@ -100,7 +100,7 @@ export function createPostmanBridgeStatusTool(ctx, jobs) {
 export function createPostmanChildNotifyTool(ctx, contexts, worker) {
   return defineTool({
     name: POSTMAN_CHILD_NOTIFY_TOOL_NAME,
-    description: 'Send a timely, untrusted intermediate message to the direct Postman Leader; the current step finishes before the next round.',
+    description: 'Steer an untrusted intermediate message to the direct Postman Leader at the next safe step boundary; do not cancel a running tool.',
     parameters: { message: { type: 'string', required: true, description: 'Factual intermediate update for your direct parent.' } },
     output: output(),
     execute(args, exec) {
@@ -113,7 +113,7 @@ export function createPostmanChildNotifyTool(ctx, contexts, worker) {
         return { status: 'PARENT_NOTIFICATION_CALLER_REJECTED' }
       const leader = ctx.agents.get(header.parentSession)
       if (!leader || leader.id !== header.parentSession || !isTopLevelPostmanLeader(leader) ||
-          typeof leader.followup !== 'function' ||
+          typeof leader.steer !== 'function' ||
           !((contexts?.child(child.id) != null && contexts.child(child.id) === contexts.get(leader.id)) ||
             worker?.ownsNotification(child, leader.id)))
         return { status: 'PARENT_NOTIFICATION_CALLER_REJECTED' }
@@ -121,7 +121,7 @@ export function createPostmanChildNotifyTool(ctx, contexts, worker) {
         content: [{ type: 'text', text: 'Background subagent ' + child.id + ':\n' + args.message }],
         source: { kind: 'subagent-report', form: 'relay', senderSessionId: child.id },
       })
-      leader.followup(message)
+      leader.steer(message)
       return { status: 'PARENT_NOTIFICATION_ACCEPTED', messageId: message.id }
     },
   })
