@@ -8,6 +8,8 @@ This repository contains Russian text. Always treat text files as UTF-8.
 
 Language. Always respond in Russian unless explicitly asked otherwise. Avoid English loanwords; write as clearly as you would to a high-school student.
 
+`dsh-workspace` — версионируемое, намеренно неполное отражение установки DSH в `C:\Users\Andrew\.dsh`: сюда входят нужные для работы и разработки файлы, но не секреты, учётные данные и временное/runtime-состояние. DSH — основная рабочая среда пользователя и разработки самого DSH. Веди обычную работу, разработку и ремонт внутри DSH; если два решения одинаково надёжны, предпочитай более простое и пригодное для самоподдержки из DSH. Внешний Codex допустим лишь когда DSH не может безопасно выполнить внутренний ремонт. Это правило не ослабляет защиту данных, владение Git-ресурсами, требования REQ/SHA/ZIP или иные границы доверия.
+
 Relevance. Take the current date into account.
 
 Links and files
