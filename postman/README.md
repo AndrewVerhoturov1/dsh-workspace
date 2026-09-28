@@ -96,7 +96,6 @@ Normal Postman не:
 - применяет ZIP к repository;
 - запускает PREPARE/TEST/PUBLISH автоматически;
 - создаёт implementation branch/commit/PR;
-- использует `postman_async_send`/`postman_runtime_*` как fallback;
 - делает blind resend после неопределённого transport outcome.
 
 `postman_bridge` также не применяет artifact: следующий шаг выбирает parent Leader.

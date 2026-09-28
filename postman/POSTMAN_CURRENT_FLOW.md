@@ -443,7 +443,6 @@ Normal `@Postman` не:
 - запускает PREPARE/TEST/PUBLISH;
 - создаёт implementation worktree/branch/commit/PR;
 - выбирает дальнейшее действие на основе содержимого ZIP;
-- использует `postman_async_send`/`postman_runtime_*` как fallback;
 - выполняет manual browser automation как fallback.
 
 ## 19. Legacy/manual finalization
@@ -466,9 +465,8 @@ presentation_status.py
 
 ## 20. `dsh-postman-harness`
 
-Plugin сохраняется для auxiliary/legacy capabilities.
-
-Normal `@Postman` не идёт через persistent POSTMAN agent или `postman_async_send`.
+Plugin предоставляет trusted current-turn boundary и supervisor capabilities для Bridge/Worker.
+Старые persistent async service и send/runtime tools удалены; они не являются транспортом или fallback.
 
 После `RESULT_DURABLE` normal `@Postman` не создаёт Result Workspace автоматически.
 
