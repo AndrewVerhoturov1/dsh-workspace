@@ -85,6 +85,38 @@ test('prepare is Leader-only, binds exact repository and publishes branch from o
   contexts.dispose()
 })
 
+test('pilot has existing durable task preparation and supervisor controls require live identity', async () => {
+  const { contexts } = preparedContexts()
+  const pilot = leader('pilot')
+  pilot.session.header.agentPreset = 'postman-leader-ptc'
+  const agents = new Map([[pilot.id, pilot]])
+  const ctx = { agents: { get: id => agents.get(id) } }
+  const prepare = createPostmanTaskPrepareTool(ctx, contexts)
+  const bridge = createPostmanBridgeTool(ctx, { accept: () => ({ status: 'POSTMAN_BRIDGE_ACCEPTED' }) }, contexts)
+  const restore = createPostmanTaskRestoreTool(ctx, contexts, { jobs: { hasActive: () => true } })
+  const impersonator = { ...pilot }
+  assert.equal((await prepare.execute({}, { agent: impersonator })).status, 'POSTMAN_TASK_CALLER_REJECTED')
+  const ready = await prepare.execute({}, { agent: pilot })
+  assert.equal(ready.status, 'TASK_CONTEXT_READY')
+  assert.equal(contexts.get(pilot.id).branch, ready.branch)
+  assert.equal((await bridge.execute({ message: '@PostmanAsk pilot request' }, { agent: pilot, signal })).status,
+    'POSTMAN_BRIDGE_ACCEPTED')
+  assert.equal((await restore.execute({}, { agent: pilot })).status, 'POSTMAN_TASK_RESTORE_REJECTED')
+  assert.equal((await bridge.execute({ message: '@PostmanAsk spoofed request' }, { agent: impersonator, signal })).status,
+    'POSTMAN_BRIDGE_CALLER_REJECTED')
+  for (const header of [{ agentPreset: 'standard' },
+    { agentPreset: 'postman-leader-ptc', delegationDepth: 1 },
+    { agentPreset: 'postman-leader-ptc', origin: 'subagent', delegationDepth: 0 }]) {
+    const rejected = { id: 'rejected', session: { header } }
+    agents.set(rejected.id, rejected)
+    assert.equal((await prepare.execute({}, { agent: rejected })).status, 'POSTMAN_TASK_CALLER_REJECTED')
+    assert.equal((await bridge.execute({ message: '@PostmanAsk no' }, { agent: rejected, signal })).status,
+      'POSTMAN_BRIDGE_CALLER_REJECTED')
+    assert.equal((await restore.execute({}, { agent: rejected })).status, 'POSTMAN_TASK_CALLER_REJECTED')
+  }
+  contexts.dispose()
+})
+
 test('restore tool is Leader-only and refuses busy Bridge or undrained Worker', async () => {
   const { contexts } = preparedContexts(), a = leader(), other = leader('other')
   other.session.header.agentPreset = 'standard'

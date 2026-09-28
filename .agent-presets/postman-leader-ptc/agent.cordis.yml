@@ -1,0 +1,147 @@
+# Experimental pilot: same Postman composition as production Leader and its local Worker.
+# The exact top-level Leader is narrowed by a positive 18-name runtime allowlist
+# in dsh-postman-harness/bridge; its ordinary spawn Worker keeps the shared coding
+# capabilities, with a deny-only filter on registered postman_* controls.
+
+- id: persona
+  name: '@deepseek-ai/dsh-persona'
+  config:
+    text: |-
+      You are Postman Leader. You are the supervisor and reviewer, not the primary executor.
+      Think about the user's goal, inspect evidence available through your runtime-visible tools, decide what to delegate, and verify returned results.
+      Delegate substantial external research, analysis, implementation, or artifact creation through postman_bridge.
+      Choose @PostmanAsk for text research/review and @Postman for durable ZIP/artifact work. Use --chat <REQ> when the next delegation belongs to the same proven ChatGPT conversation.
+      The preset intentionally contains more capabilities than you are allowed to call. Your actual permission boundary is the runtime-visible tool catalog.
+      Never infer permission from this preset file and never attempt to bypass a missing tool through generic delegation.
+      Use postman_worker for local execution; Worker reports through the native report channel, and task acceptance does not mean completion.
+      When requirements materially change during a Worker turn, use postman_worker_interrupt to redirect that same session. It is cooperative and makes no priority or processing-order guarantees relative to messages already accepted by the Harness runtime.
+      Treat postman_bridge.result as the trusted transport authority and decide the next delegation yourself.
+      Your working directory is {{cwd}}.
+
+- id: agent-instructions
+  name: '@deepseek-ai/dsh-agent-instructions'
+  config:
+    maxBytes: 65536
+
+# Shell exists in the shared preset composition but is intentionally hidden
+# from the exact top-level Leader by the runtime boundary.
+- id: tool-bash
+  name: '@deepseek-ai/dsh-tool-bash'
+  disabled: !!js process.platform === 'win32'
+
+- id: tool-pwsh
+  name: '@deepseek-ai/dsh-tool-pwsh'
+  disabled: !!js process.platform !== 'win32'
+
+# Filesystem: registers read/read_image/write/edit. The Leader runtime boundary
+# keeps read and read_image; the ordinary Worker receives write/edit from this preset.
+- id: tool-fs
+  name: '@deepseek-ai/dsh-tool-fs'
+
+- id: tool-fs-search
+  name: '@deepseek-ai/dsh-tool-fs-search'
+  config:
+    sampleOverCapGlobResults: false
+
+- id: tool-jobs
+  name: '@deepseek-ai/dsh-tool-jobs'
+
+- id: skill-filesystem
+  name: '@deepseek-ai/dsh-skill-filesystem'
+
+- id: tool-skill
+  name: '@deepseek-ai/dsh-tool-skill'
+
+- id: tool-goal
+  name: '@deepseek-ai/dsh-tool-goal'
+
+- id: planning
+  name: cordis:group
+  group: true
+  isolate:
+    planMode: true
+  config:
+    - id: plan-mode
+      name: '@deepseek-ai/dsh-plan-mode'
+      config:
+        section: |
+          You are in plan mode. Stay in plan mode until exit_plan_mode succeeds or the user switches the session mode.
+          Explore first with non-mutating inspection. Do not carry out implementation while plan mode is active.
+          Make the plan decision-complete and submit it through exit_plan_mode.
+
+- id: compaction
+  name: cordis:group
+  group: true
+  isolate:
+    compaction: true
+    toolResultPruner: true
+  config:
+    - id: compaction-basic
+      name: '@deepseek-ai/dsh-compaction-basic'
+
+    - id: command-compact
+      name: '@deepseek-ai/dsh-command-compact'
+
+    - id: tool-result-pruner
+      name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+      config:
+        thresholdChars: 8192
+        headChars: 4096
+        tailChars: 1024
+
+# Delegation tools exist in the common preset composition. The runtime Leader
+# boundary still hides them; its visible local execution entrypoint is postman_worker.
+- id: delegation
+  name: cordis:group
+  group: true
+  isolate:
+    workflowEngine: true
+  config:
+    - id: tool-subagent-control
+      name: '@deepseek-ai/dsh-tool-subagent-control'
+
+    - id: tool-subagent-list-agents
+      name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'
+
+    - id: tool-subagent
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: spawn
+        toolName: subagent
+        backgroundMode: continuable
+
+    - id: tool-subagent-fork
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: fork
+        toolName: subagent_fork
+        backgroundMode: continuable
+
+    - id: workflow-worker-thread
+      name: '@deepseek-ai/dsh-workflow-worker-thread'
+      config:
+        provider: spawn
+
+    - id: tool-workflow
+      name: '@deepseek-ai/dsh-tool-workflow'
+
+    - id: tool-ralph
+      name: '@deepseek-ai/dsh-tool-ralph'
+      config:
+        subagentProvider: spawn
+        maxRounds: 64
+
+- id: tool-ask-user
+  name: '@deepseek-ai/dsh-tool-ask-user'
+
+- id: tool-todo
+  name: '@deepseek-ai/dsh-tool-todo'
+  config:
+    allowParallelInProgress: true
+
+- id: tool-web
+  name: '@deepseek-ai/dsh-tool-web'
+  config:
+    fetch: true
+    search: true
+    searchTimeoutMs: 60000

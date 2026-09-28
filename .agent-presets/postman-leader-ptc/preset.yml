@@ -1,0 +1,3 @@
+name: Postman Leader PTC Experimental
+description: Experimental Postman supervisor with the current production composition and 18-tool boundary; no PTC execution capabilities yet.
+order: 5

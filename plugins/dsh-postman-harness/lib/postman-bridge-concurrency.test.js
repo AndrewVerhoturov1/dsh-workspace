@@ -46,12 +46,12 @@ function clock() {
   return { coordinator, advance }
 }
 
-function fixture({ coordinator = createPostmanBridgeLaunchCoordinator(), grants, onDispose, onStart, onStatus, onWake } = {}) {
+function fixture({ coordinator = createPostmanBridgeLaunchCoordinator(), grants, onDispose, onStart, onStatus, onWake, parentAgent = parent } = {}) {
   const pending = new Map()
   const signals = []
   const events = []
   const ctx = {
-    agents: { get: id => id === parent.id ? parent : undefined },
+    agents: { get: id => id === parentAgent.id ? parentAgent : undefined },
     subagents: { async start(_provider, request) {
       signals.push(request.signal)
       events.push('start')
@@ -70,14 +70,39 @@ function fixture({ coordinator = createPostmanBridgeLaunchCoordinator(), grants,
         result: { requestId: 'REQ_1', assistantText: 'TRUSTED' } }
     } } }, schemas: () => [{ name: 'postman_bridge_status' }, { name: 'read' }] },
   }
-  parent.followup = value => { events.push('ready'); onWake?.(value) }
+  parentAgent.followup = value => { events.push('ready'); onWake?.(value) }
   const jobs = createPostmanBridgeJobs(ctx, coordinator, grants)
   const bridge = createPostmanBridgeTool(ctx, jobs)
   const status = createPostmanBridgeStatusTool(ctx, jobs)
-  const exec = { agent: parent, signal: new AbortController().signal }
+  const exec = { agent: parentAgent, signal: new AbortController().signal }
   const read = receipt => status.execute({ bridge_job_id: receipt.bridgeJobId }, exec)
   return { ctx, jobs, bridge, status, exec, pending, signals, events, read, coordinator }
 }
+
+test('pilot supervisor owns its existing Bridge lifecycle and terminal status', async () => {
+  const pilot = { id: 'pilot-bridge', session: { header: { agentPreset: 'postman-leader-ptc', delegationDepth: 0 } } }
+  let wake
+  const f = fixture({ parentAgent: pilot, onWake: value => { wake = value },
+    onStart(request) {
+      assert.equal(request.parent, pilot)
+      assert.equal(request.agentOptions.model, 'gpt-6-luna')
+      assert.equal(request.maxDepth, 1)
+      const result = new Promise(resolve => f.pending.set('pilot-child', resolve))
+      return { id: 'pilot-child', localAgent: { id: 'pilot-child' }, result, async dispose() {} }
+    } })
+  const accepted = await f.bridge.execute({ message }, f.exec)
+  assert.equal(accepted.status, 'POSTMAN_BRIDGE_ACCEPTED')
+  await tick()
+  f.pending.get('pilot-child')({ stopReason: 'end_turn', finalText: 'UNTRUSTED' })
+  await tick()
+  assert.equal((await f.read(accepted)).result.assistantText, 'TRUSTED')
+  assert.match(JSON.stringify(wake), /POSTMAN_BRIDGE_READY/)
+  assert.doesNotMatch(JSON.stringify(wake), /TRUSTED|assistantText/)
+  f.ctx.agents.get = id => id === pilot.id ? pilot : id === parent.id ? parent : undefined
+  assert.equal((await f.status.execute({ bridge_job_id: accepted.bridgeJobId }, { agent: parent })).status,
+    'POSTMAN_BRIDGE_JOB_NOT_FOUND')
+  await f.jobs.dispose()
+})
 
 test('acceptance precedes child result and tool signal cannot cancel background job', async () => {
   const f = fixture()

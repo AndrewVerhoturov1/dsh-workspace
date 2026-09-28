@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import { buildPostmanBridgeStartRequest, isTopLevelPostmanLeader, POSTMAN_BRIDGE_PROVIDER,
+import { buildPostmanBridgeStartRequest, isTopLevelPostmanSupervisor, POSTMAN_BRIDGE_PROVIDER,
   settleTrustedPostmanStatus } from './postman-bridge-core.js'
 
 function diagnostic(error) {
@@ -74,7 +74,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts) {
     catch { return { status: 'POSTMAN_BRIDGE_PARENT_UNAVAILABLE' } }
     // Resolve at actual admission, not when the tool accepted the queued job.
     try {
-      if (parent?.id !== job.parentSessionId || !isTopLevelPostmanLeader(parent)) {
+      if (parent?.id !== job.parentSessionId || !isTopLevelPostmanSupervisor(parent)) {
         return { status: 'POSTMAN_BRIDGE_PARENT_UNAVAILABLE' }
       }
     } catch { return { status: 'POSTMAN_BRIDGE_PARENT_UNAVAILABLE' } }
@@ -133,7 +133,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts) {
       return
     }
     try {
-      if (leader?.id !== job.parentSessionId || !isTopLevelPostmanLeader(leader) ||
+      if (leader?.id !== job.parentSessionId || !isTopLevelPostmanSupervisor(leader) ||
         typeof leader.followup !== 'function') {
         job.notification = 'UNDELIVERED'
         return
