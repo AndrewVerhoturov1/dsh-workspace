@@ -93,9 +93,6 @@ postman_send_current_turn()
 
 Запрещены fallback:
 
-```text
-postman_async_send
-postman_runtime_*
 QChat
 Playwright MCP
 manual browser

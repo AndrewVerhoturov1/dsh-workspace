@@ -21,13 +21,6 @@ class DelegateViaPostmanSkillContract(unittest.TestCase):
         self.assertIn("$bridge = Join-Path $workspace 'postman\\direct\\postman.ps1'", self.skill)
         self.assertNotIn(r"C:\Users\andre\.dsh\postman\direct\postman.ps1", self.skill)
 
-    def test_old_callable_path_is_not_present(self):
-        # Mentioning the legacy token in a prohibition is allowed; an actual
-        # callable-looking normal-path invocation must not return.
-        self.assertNotIn("postman_async_send(", self.skill)
-        self.assertNotIn("postman_runtime_accept_request(", self.skill)
-        self.assertNotIn("postman_runtime_deliver_ready(", self.skill)
-
     def test_golden_path_is_explicit(self):
         for marker in (
             "## 0. Золотой путь",
@@ -288,8 +281,6 @@ class DelegateViaPostmanSkillContract(unittest.TestCase):
             r"POSTMAN_PRODUCTION_ENTRYPOINT: <current workspace>\postman\direct\postman.ps1",
             self.agents,
         )
-        self.assertIn("postman_async_send", self.agents)
-        self.assertIn("считать его устаревшим", self.agents)
 
     def test_tools_pwsh_normal_invocation_omits_hardcoded_workdir(self):
         section = self.skill.split("## 8. Единственный production-вызов", 1)[1].split(

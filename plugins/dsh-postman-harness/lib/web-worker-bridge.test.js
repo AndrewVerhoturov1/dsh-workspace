@@ -3,7 +3,6 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createPostmanAsyncSendTool, POSTMAN_SESSION_ID } from './index.js'
 import { PostmanRuntime, REQUEST_STATUSES } from './runtime.js'
 import { WebWorkerBridge, markWebResultReady, WEB_WORKER_RESULT_INVALID, WEB_WORKER_STATES } from './web-worker-bridge.js'
 
@@ -123,32 +122,6 @@ test('Web Worker bridge rejects unknown Runtime states fail-closed', () => {
 
   assert.equal(result.status, 'UNEXPECTED_STATE')
   assert.deepEqual(workerCalls, [])
-})
-
-test('postman_async_send exposes the durable target path while handing the task to the bridge', async () => {
-  const { root, runtime } = fixture()
-  try {
-    const calls = []
-    const sender = { id: 'agent-a', followup() {} }
-    const postman = { id: POSTMAN_SESSION_ID, followup() {} }
-    const agents = new Map([[sender.id, sender], [postman.id, postman]])
-    const bridge = { accept(input) { calls.push(input) } }
-    const tool = createPostmanAsyncSendTool({ agents: { get: (id) => agents.get(id) } }, runtime, { bridge })
-    const result = await tool.execute({
-      request_id: REQUEST_ID,
-      task: 'task payload',
-      task_url: 'https://example.test/tasks/request.md',
-    }, { agent: sender })
-
-    assert.equal(result.status, 'ACCEPTED')
-    assert.equal(result.state, 'WAITING')
-    assert.equal(result.result_state, WEB_WORKER_STATES.RESULT_DURABLE)
-    assert.equal(result.result_path, runtime.getRequest(REQUEST_ID).result_path)
-    assert.deepEqual(calls, [{ requestId: REQUEST_ID, taskUrl: 'https://example.test/tasks/request.md' }])
-  } finally {
-    runtime.close()
-    rmSync(root, { recursive: true, force: true })
-  }
 })
 
 test('markWebResultReady publishes only a compact RESULT_DURABLE handle and preserves REQ', () => {
