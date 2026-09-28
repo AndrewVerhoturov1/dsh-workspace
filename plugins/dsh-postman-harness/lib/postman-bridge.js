@@ -9,7 +9,7 @@ import { postmanTaskContexts, initializePostmanTaskContexts, releasePostmanTaskC
 import { sharedPostmanTaskRegistry, closeSharedPostmanTaskRegistry } from './postman-task-registry.js'
 import {
   POSTMAN_BRIDGE_TOOL_ALLOWLIST, POSTMAN_BRIDGE_TOOL_NAME, POSTMAN_BRIDGE_STATUS_TOOL_NAME, POSTMAN_CHILD_NOTIFY_TOOL_NAME, POSTMAN_TASK_PREPARE_TOOL_NAME, POSTMAN_TASK_RESTORE_TOOL_NAME,
-  createPostmanBridgeBoundaryManager, isTopLevelPostmanLeader,
+  createPostmanBridgeBoundaryManager, isTopLevelPostmanSupervisor,
   postmanBridgeCallerAllowed, postmanBridgeRestrictionForAgent,
 } from './postman-bridge-core.js'
 
@@ -112,7 +112,7 @@ export function createPostmanChildNotifyTool(ctx, contexts, worker) {
           typeof header.parentSession !== 'string' || ctx.agents.get(child.id) !== child)
         return { status: 'PARENT_NOTIFICATION_CALLER_REJECTED' }
       const leader = ctx.agents.get(header.parentSession)
-      if (!leader || leader.id !== header.parentSession || !isTopLevelPostmanLeader(leader) ||
+      if (!leader || leader.id !== header.parentSession || !isTopLevelPostmanSupervisor(leader) ||
           typeof leader.steer !== 'function' ||
           !((contexts?.child(child.id) != null && contexts.child(child.id) === contexts.get(leader.id)) ||
             worker?.ownsNotification(child, leader.id)))
@@ -128,7 +128,7 @@ export function createPostmanChildNotifyTool(ctx, contexts, worker) {
 }
 
 export function installPostmanLeaderBoundary(agent) {
-  const leader = isTopLevelPostmanLeader(agent)
+  const leader = isTopLevelPostmanSupervisor(agent)
   const restriction = postmanBridgeRestrictionForAgent(agent)
   agent.ctx.effect(() => agent.ctx.tools.restrict(restriction),
     leader ? 'dsh-postman-harness-bridge.leader-tool-boundary()'

@@ -21,7 +21,7 @@ const registeredTools = [
   'read', 'read_image', 'glob', 'grep', 'write', 'edit', 'pwsh', 'web_search', 'subagent', 'subagent_fork', 'report',
 ]
 const registry = { schemas: () => registeredTools.map(name => ({ name })) }
-const leader = id => ({ id, session: { header: { id, agentPreset: 'postman-leader', delegationDepth: 0 } } })
+const leader = (id, preset = 'postman-leader') => ({ id, session: { header: { id, agentPreset: preset, delegationDepth: 0 } } })
 const exec = agent => ({ agent, signal })
 
 function fixture(contexts) {
@@ -116,6 +116,30 @@ test('Leader hides coding tools; Worker keeps coding and report but no Postman c
     assert.equal(visibleToWorker(name), false, name)
   }
   assert.equal(workerFilter.deny.includes('report'), false)
+})
+
+test('production and pilot supervisors can use Worker, but unrelated and delegated callers cannot', async () => {
+  const f = fixture()
+  const production = leader('production')
+  const pilot = leader('pilot', 'postman-leader-ptc')
+  for (const parent of [production, pilot]) {
+    f.agents.set(parent.id, parent)
+    const result = await f.tools.taskTool.execute({ task: 'work' }, exec(parent))
+    assert.equal(result.status, 'POSTMAN_WORKER_TASK_ACCEPTED')
+    assert.equal(f.calls.starts.at(-1).request.parent, parent)
+  }
+  for (const caller of [
+    leader('standard', 'standard'), leader('unrelated', 'other-preset'),
+    { ...pilot, session: { header: { agentPreset: 'postman-leader-ptc', delegationDepth: 1 } } },
+    { ...pilot, session: { header: { agentPreset: 'postman-leader-ptc', origin: 'subagent', delegationDepth: 0 } } },
+    { id: 'pilot-child', session: { header: { agentPreset: 'postman-leader-ptc', origin: 'subagent', delegationDepth: 1, parentSession: pilot.id } } },
+  ]) {
+    assert.equal((await f.tools.taskTool.execute({ task: 'no' }, exec(caller))).status, 'POSTMAN_WORKER_CALLER_REJECTED')
+    assert.equal((await f.tools.interruptTool.execute({ task: 'no' }, exec(caller))).status, 'POSTMAN_WORKER_CALLER_REJECTED')
+    assert.equal((await f.tools.stopTool.execute({}, exec(caller))).status, 'POSTMAN_WORKER_CALLER_REJECTED')
+  }
+  assert.equal(f.calls.starts.length, 2)
+  f.tools.dispose()
 })
 
 test('first task creates a child; second task follows up in the same durable Session', async () => {
@@ -363,6 +387,58 @@ test('Bridge and Worker steer notices only to their live direct Leader', async (
   assert.equal((await tool.execute({ message: 'no steering API' }, exec(worker))).status, 'PARENT_NOTIFICATION_CALLER_REJECTED')
   assert.equal(received.length, 3)
   assert.deepEqual(followups, [])
+})
+
+test('notify_parent isolates pilot and production Worker/Bridge children by live parent and task ownership', async () => {
+  const production = leader('production'), pilot = leader('pilot', 'postman-leader-ptc')
+  const bindings = new Map([[production.id, { branch: 'task/production' }],
+    [pilot.id, { branch: 'task/pilot' }]])
+  const bridgeBindings = new Map([['bridge-production', bindings.get(production.id)],
+    ['bridge-pilot', bindings.get(pilot.id)]])
+  const contexts = { get: id => bindings.get(id), child: id => bridgeBindings.get(id) ?? null }
+  const f = fixture(contexts)
+  const received = { production: [], pilot: [] }
+  production.steer = message => received.production.push(message)
+  pilot.steer = message => received.pilot.push(message)
+  f.agents.set(production.id, production); f.agents.set(pilot.id, pilot)
+  const workerProduction = await f.tools.taskTool.execute({ task: 'production' }, exec(production))
+  const workerPilot = await f.tools.taskTool.execute({ task: 'pilot' }, exec(pilot))
+  const child = (id, parentSession) => ({ id, session: { header: {
+    origin: 'subagent', delegationDepth: 1, parentSession, agentPreset: parentSession === pilot.id
+      ? 'postman-leader-ptc' : 'postman-leader',
+  } } })
+  const children = [child(workerProduction.workerSessionId, production.id),
+    child('bridge-production', production.id), child(workerPilot.workerSessionId, pilot.id),
+    child('bridge-pilot', pilot.id)]
+  for (const item of children) f.agents.set(item.id, item)
+  const notify = createPostmanChildNotifyTool(f.ctx, contexts, f.tools)
+  for (const item of children) {
+    const result = await notify.execute({ message: item.id }, exec(item))
+    assert.equal(result.status, 'PARENT_NOTIFICATION_ACCEPTED')
+    const inbox = received[item.session.header.parentSession]
+    assert.equal(inbox.at(-1).source.senderSessionId, item.id)
+  }
+  assert.equal(received.production.length, 2)
+  assert.equal(received.pilot.length, 2)
+  for (const item of children) {
+    const other = item.session.header.parentSession === production.id ? pilot.id : production.id
+    const forged = { ...item, session: { header: { ...item.session.header, parentSession: other } } }
+    f.agents.set(item.id, forged)
+    assert.equal((await notify.execute({ message: 'cross-leader' }, exec(forged))).status,
+      'PARENT_NOTIFICATION_CALLER_REJECTED')
+    f.agents.set(item.id, item)
+  }
+  const wrongContext = bindings.get(production.id)
+  bridgeBindings.set('bridge-pilot', wrongContext)
+  assert.equal((await notify.execute({ message: 'wrong task' }, exec(children[3]))).status,
+    'PARENT_NOTIFICATION_CALLER_REJECTED')
+  assert.equal((await notify.execute({ message: 'arbitrary' }, exec(child('arbitrary', pilot.id)))).status,
+    'PARENT_NOTIFICATION_CALLER_REJECTED')
+  f.agents.set(children[2].id, { ...children[2] })
+  assert.equal((await notify.execute({ message: 'stale live identity' }, exec(children[2]))).status,
+    'PARENT_NOTIFICATION_CALLER_REJECTED')
+  assert.deepEqual([received.production.length, received.pilot.length], [2, 2])
+  f.tools.dispose()
 })
 
 test('bridge plugin registers all Worker tools and preserves boundary on creation', async () => {

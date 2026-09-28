@@ -20,6 +20,7 @@ export const POSTMAN_BRIDGE_TOOL_ALLOWLIST = Object.freeze([
   POSTMAN_CHILD_NOTIFY_TOOL_NAME,
 ])
 export const POSTMAN_LEADER_PRESET_ID = 'postman-leader'
+export const POSTMAN_PTC_LEADER_PRESET_ID = 'postman-leader-ptc'
 export const POSTMAN_LEADER_TOOL_ALLOWLIST = Object.freeze([
   'ask_user_question',
   'todo_write',
@@ -81,23 +82,35 @@ export function buildPostmanBridgeStartRequest({ parent, message, signal, transp
   }
 }
 
-export function isTopLevelPostmanLeader(agent) {
+function topLevelPostmanPreset(agent) {
   const header = agent?.session?.header
   const presets = agent?.ctx?.get?.('agentPresets')
   const composedPreset = typeof presets?.composedPreset === 'function'
     ? presets.composedPreset(agent.ctx)
     : undefined
-  if ((composedPreset ?? header?.agentPreset) !== POSTMAN_LEADER_PRESET_ID) return false
-  if (header?.origin === 'subagent') return false
-  return (header?.delegationDepth ?? 0) === 0
+  if (header?.origin === 'subagent' || (header?.delegationDepth ?? 0) !== 0) return null
+  return composedPreset ?? header?.agentPreset
+}
+
+export function isTopLevelPostmanLeader(agent) {
+  return topLevelPostmanPreset(agent) === POSTMAN_LEADER_PRESET_ID
+}
+
+export function isTopLevelPostmanPtcLeader(agent) {
+  return topLevelPostmanPreset(agent) === POSTMAN_PTC_LEADER_PRESET_ID
+}
+
+export function isTopLevelPostmanSupervisor(agent) {
+  const preset = topLevelPostmanPreset(agent)
+  return preset === POSTMAN_LEADER_PRESET_ID || preset === POSTMAN_PTC_LEADER_PRESET_ID
 }
 
 export function postmanBridgeCallerAllowed(agent) {
-  return isTopLevelPostmanLeader(agent)
+  return isTopLevelPostmanSupervisor(agent)
 }
 
 export function postmanBridgeRestrictionForAgent(agent) {
-  if (isTopLevelPostmanLeader(agent)) {
+  if (isTopLevelPostmanSupervisor(agent)) {
     return { allow: [...POSTMAN_LEADER_TOOL_ALLOWLIST] }
   }
   return { deny: [...POSTMAN_LEADER_ONLY_TOOL_NAMES] }
@@ -126,7 +139,7 @@ export function createPostmanBridgeBoundaryManager(lookupAgent) {
       throw error
     }
     active.set(agent.id, { agent, dispose })
-    return isTopLevelPostmanLeader(agent)
+    return isTopLevelPostmanSupervisor(agent)
   }
 
   const refreshSession = (sessionId) => {

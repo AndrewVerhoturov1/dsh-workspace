@@ -5,7 +5,7 @@ import {
   POSTMAN_WORKER_TOOL_NAME,
   POSTMAN_WORKER_INTERRUPT_TOOL_NAME,
   POSTMAN_WORKER_STOP_TOOL_NAME,
-  isTopLevelPostmanLeader,
+  isTopLevelPostmanSupervisor,
 } from './postman-bridge-core.js'
 
 export const POSTMAN_WORKER_PROVIDER = 'spawn'
@@ -109,7 +109,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
   }
 
   function authorized(parent) {
-    return isTopLevelPostmanLeader(parent) && ctx.agents.get(parent.id) === parent
+    return isTopLevelPostmanSupervisor(parent) && ctx.agents.get(parent.id) === parent
   }
 
   const taskTool = defineTool({
