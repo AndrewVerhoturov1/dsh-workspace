@@ -105,7 +105,10 @@ skill
 postman_send_current_turn
 postman_current_turn_status
 postman_ask_validate_reply
+notify_parent
 ```
+
+`notify_parent({message})` доступен Bridge и Worker только для фактического промежуточного сообщения своему прямому Leader. Это не доверенный результат Bridge; итог читать через `postman_bridge_status`. Worker по-прежнему использует `report` для итогов.
 
 ---
 
@@ -175,7 +178,7 @@ Mapping — привязка к resident Worker session; она существу
 | Mapping отсутствует; начать задачу, в том числе с trusted artifact REQ | `postman_worker({task: ..., artifactRequestId?: ...})` создаёт Worker |
 | Mapping существует; передать новый trusted artifact REQ | `postman_worker({task: ..., artifactRequestId: ...})` — follow-up тому же Worker, без нового create |
 | Mapping существует, turn активен; исправить текущую работу | `postman_worker_interrupt({task: ...})` тому же Worker |
-| Mapping существует, turn активен; поставить новую фазу | `postman_worker_interrupt({task: ...})` тому же Worker; учитывай, что interrupt кооперативен и не гарантирует приоритет |
+| Mapping существует, turn активен; поставить новую фазу | `postman_worker_interrupt({task: ...})` тому же Worker; текущий шаг завершается, новое задание ждёт в общей очереди |
 | Mapping существует, turn завершён и получен report; продолжить задачу | `postman_worker_interrupt({task: ...})` тому же Worker |
 | Mapping существует, turn завершён и получен report; добавить проверку | Только если проверка обоснована новым evidence/решением: `postman_worker_interrupt({task: ...})`; не посылай произвольную лишнюю проверку |
 | Mapping существует; начать связанную задачу | Только если она действительно относится к существующему контексту и допустима в нём — `postman_worker_interrupt({task: ...})`; независимую задачу не присоединять, сначала завершить/закрыть текущий mapping по правилам stop |
@@ -184,7 +187,7 @@ Mapping — привязка к resident Worker session; она существу
 
 Пока mapping существует, повторный `postman_worker({task, artifactRequestId})` разрешён только для нового trusted artifact REQ: Host проверяет grant и посылает follow-up существующему Worker. Без нового artifact grant report, idle-состояние, переход фазы и изменение требований не являются причиной повторять `postman_worker`.
 
-`postman_worker_interrupt` здесь означает направить новому turn той же привязанной Worker session задание, заменяющее или продолжающее прежнее, а не принудительно оборвать исполняемый код. Вызов требует существующего mapping. Прерывание кооперативное; нельзя обещать приоритет или порядок обработки относительно уже принятых сообщений — очередь обрабатывается runtime. Для обычного продолжения без нового artifact grant при существующем mapping Leader использует `postman_worker_interrupt`.
+`postman_worker_interrupt` здесь означает поставить задание в очередь следующего раунда той же Worker session. Вызов требует существующего mapping и не вызывает отмену модели или инструмента: текущий шаг завершается, старый раунд закрывается, следующий забирает все ожидающие сообщения в порядке поступления. Сообщения после захвата пакета остаются на следующий раунд. Для обычного продолжения без нового artifact grant при существующем mapping Leader использует `postman_worker_interrupt`.
 
 ---
 
@@ -210,7 +213,7 @@ Mapping — привязка к resident Worker session; она существу
 - писать пользователю сообщения только о том, что Worker всё ещё работает;
 - создавать polling/busy-loop через goals, todos или другие инструменты.
 
-`postman_worker_interrupt` применяют, когда требуется передать тому же Worker новое направление или продолжение и при этом сохранить mapping. Interrupt не создаёт замену, не удаляет mapping или task/worktree context и не является жёсткой отменой текущего исполнения. Он кооперативный: не обещает приоритета или порядка обработки относительно сообщений, которые runtime уже принял.
+`postman_worker_interrupt` передаёт тому же Worker новое направление или продолжение, сохраняя mapping и task/worktree context. Текущий шаг не отменяется; на ближайшей границе шага начинается новый раунд с пакетным захватом накопленных сообщений без приоритета над ранее принятыми.
 
 ### Разрешённые follow-up
 
