@@ -185,7 +185,7 @@ conversation URL. UI Search и silent fresh fallback запрещены.
 продолжить тот же conversation как новым `@PostmanAsk --chat ...`, так и обычным
 `@Postman --chat ...`, если пользователь теперь хочет ZIP.
 
-Automatic continuation tool предназначен для artifact Postman и для PostmanAsk v1 не используется.
+Automatic continuation tool предназначен для artifact Postman и для PostmanAsk v1 не используется. Общий transport contract — `postman/POSTMAN_CURRENT_FLOW.md`, отличия Ask — `postman/POSTMAN_ASK_FLOW.md`; не переносить artifact continuation на text flow.
 
 ## 8. Handoff локальной модели
 

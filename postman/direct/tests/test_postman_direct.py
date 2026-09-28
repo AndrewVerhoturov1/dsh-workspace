@@ -349,7 +349,7 @@ class DirectPostmanUnitTests(unittest.TestCase):
                     expected_repository=REPO, request_id=REQ,
                 )
 
-    def test_automatic_continuation_after_index_three_inherits_chain(self):
+    def test_first_and_second_automatic_continuations_inherit_chain(self):
         new_req = "REQ_20260902T010204Z_1235"
         conversation_url = "https://chatgpt.com/c/existing-chat-123"
 
@@ -387,7 +387,7 @@ class DirectPostmanUnitTests(unittest.TestCase):
             conversation_id="existing-chat-123",
             source="direct_state",
             root_request_id="REQ_20260902T010200Z_1200",
-            continuation_index=3,
+            continuation_index=0,
             terminal_state=direct.ASSISTANT_COMPLETED_NO_ARTIFACT,
         )
         with tempfile.TemporaryDirectory() as root, patch.object(
@@ -410,9 +410,48 @@ class DirectPostmanUnitTests(unittest.TestCase):
             self.assertEqual(Bridge.calls[0][1]["conversation_url"], conversation_url)
             self.assertEqual(result["continuedFromRequestId"], REQ)
             self.assertEqual(result["rootRequestId"], "REQ_20260902T010200Z_1200")
-            self.assertEqual(result["continuationIndex"], 4)
+            self.assertEqual(result["continuationIndex"], 1)
             self.assertEqual(result["conversationUrl"], conversation_url)
             self.assertEqual(result["conversationId"], "existing-chat-123")
+            reference.continuation_index = 1
+            reference.terminal_state = direct.ARTIFACT_REJECTED
+            second_req = "REQ_20260902T010206Z_1237"
+            second = runner.run(request_id=second_req, task="continue again", chat_request_id=REQ, automatic_continuation=True)
+            self.assertEqual(second["continuationIndex"], 2)
+            self.assertEqual(second["rootRequestId"], reference.root_request_id)
+            self.assertEqual(len(Bridge.calls), 2)
+
+    def test_third_automatic_continuation_stops_before_publication_or_browser(self):
+        reference = types.SimpleNamespace(
+            request_id=REQ, continuation_index=2, terminal_state=direct.ASSISTANT_COMPLETED_NO_ARTIFACT,
+        )
+        with tempfile.TemporaryDirectory() as root, patch.object(
+            direct.chat_reference, "resolve_chat_reference", return_value=reference
+        ):
+            runner = direct.DirectPostman(
+                branch="main", direct_root=Path(root) / "direct",
+                publisher_factory=lambda **kwargs: (_ for _ in ()).throw(AssertionError("must not publish")),
+                ensure_browser=lambda **kwargs: (_ for _ in ()).throw(AssertionError("must not send")),
+            )
+            with self.assertRaises(direct.DirectPostmanError) as ctx:
+                runner.run(request_id="REQ_20260902T010207Z_1238", task="continue",
+                           chat_request_id=REQ, automatic_continuation=True)
+            self.assertEqual(ctx.exception.code, "POSTMAN_AUTOMATIC_CONTINUATION_LIMIT_REACHED")
+
+    def test_automatic_continuation_rejects_other_terminals_before_publication(self):
+        for terminal in (direct.RESULT_DURABLE, "TEXT_RESULT_DURABLE", direct.POSTMAN_TRANSPORT_FAILED):
+            with self.subTest(terminal=terminal), tempfile.TemporaryDirectory() as root:
+                reference = types.SimpleNamespace(request_id=REQ, continuation_index=0, terminal_state=terminal)
+                with patch.object(direct.chat_reference, "resolve_chat_reference", return_value=reference):
+                    runner = direct.DirectPostman(
+                        branch="main", direct_root=Path(root) / "direct",
+                        publisher_factory=lambda **kwargs: (_ for _ in ()).throw(AssertionError("must not publish")),
+                        ensure_browser=lambda **kwargs: (_ for _ in ()).throw(AssertionError("must not send")),
+                    )
+                    with self.assertRaises(direct.DirectPostmanError) as ctx:
+                        runner.run(request_id="REQ_20260902T010207Z_1238", task="continue",
+                                   chat_request_id=REQ, automatic_continuation=True)
+                    self.assertEqual(ctx.exception.code, "DIRECT_INVALID_CONTINUATION")
 
     def test_manual_chat_with_high_continuation_index_is_allowed(self):
         new_req = "REQ_20260902T010205Z_1236"

@@ -13,6 +13,8 @@ description: >-
 
 > **Правило Worker:** если mapping отсутствует — `postman_worker` создаёт Worker. При существующем mapping новый trusted artifact REQ передаётся тому же Worker через `postman_worker({task, artifactRequestId})`; обычное продолжение без нового grant — через `postman_worker_interrupt`. После `postman_worker_stop` новый `postman_worker` снова может создать Worker.
 
+Операционные правила Leader ниже; transport lifecycle не дублируется здесь: `postman/POSTMAN_CURRENT_FLOW.md`, text delta — `postman/POSTMAN_ASK_FLOW.md`, Bridge contract — `postman/POSTMAN_BRIDGE_FLOW.md`.
+
 ## 1. Роль Leader
 
 Postman Leader — **supervisor, архитектор, reviewer и интерфейс с пользователем**.

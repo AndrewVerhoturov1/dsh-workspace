@@ -80,3 +80,9 @@
 - **Что изменилось:** Bridge child теперь ветвится по `deliveryMode`: inline сохраняет exact-validator path, file не вызывает validator и не читает Markdown; parent Leader принимает verified file descriptor и при необходимости читает `resultFile` выборочно собственными read-only tools.
 - **Почему:** после внедрения long-result Markdown handoff supervisor persona и Leader docs всё ещё безусловно ожидали `TEXT_RESULT_DURABLE.assistantText`, которого в file-mode намеренно нет.
 - **Результат:** direct и supervisor контракты снова согласованы; большой PostmanAsk result не возвращается в Luna context, а сильный Leader может исследовать файл без полной rehydration.
+
+### 2026-09-28 — Direct continuation ограничен, проверка пакета не дублируется
+
+- **Что изменилось:** Direct automatic continuation допускает не более двух новых REQ на root chain; manual `--chat` создаёт отдельную root chain. Central runner PASS с объявленными тестами на target worktree сохраняет authority до изменения релевантных входов.
+- **Почему:** исключить неограниченную автоматическую работу и повторное доказательство уже проверенного без изменения условий.
+- **Результат:** Worker follow-up и Bridge не ограничены Direct budget; результат runner reuse-ится при отдельном решении о публикации. Запись от 2026-09-21 выше описывает прежнее состояние; текущие контракты — в `postman/POSTMAN_CURRENT_FLOW.md` и `system/implementation-package-workflow.md`.

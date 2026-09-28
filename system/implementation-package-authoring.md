@@ -17,63 +17,14 @@ system/implementation_package_schema.json
 system/implementation_package_runner.py
 ```
 
-При конфликте действуют repository policy и более строгое правило защиты пользовательских данных.
+При конфликте действуют repository policy и более строгое правило защиты пользовательских данных. Полный lifecycle применения, central runner, Leader/Worker, diagnostics и отдельной публикации — в [Implementation Package Workflow](implementation-package-workflow.md). Здесь определён contract автора ZIP: Web реализует замысел Sol в заданных архитектурных границах, готовит patch/тесты/manifest и честно сообщает собственные проверки. Web не выбирает локальный trusted ZIP path, не применяет package и не создаёт для него новый applicator, diagnostics framework или Git workflow. Применение и публикация требуют отдельных решений; PASS runner-а не означает разрешения на публикацию.
 
-Главный принцип:
+## 2. Ответственность автора
 
-> Sol задаёт intent, существенные архитектурные решения и ограничения. ChatGPT Web исследует код, реализует замысел в этих границах и готовит декларативный ZIP. Sol отдельно решает, авторизовать ли trusted REQ; тот же продолжаемый Worker использует единственное Host-prepared clean task worktree на опубликованном REQ commit и вызывает `implementation_artifact_apply({requestId, worktree})`. Host разрешает REQ в exact ZIP, повторно проверяет SHA-256 и запускает существующий runner. Публикация применённых изменений — отдельное решение, не следствие PASS.
-
-Внешняя модель не создаёт новый applicator, diagnostics framework или Git workflow для каждого ZIP.
+Автор исследует актуальный код, принимает implementation-level решения в границах Sol, включает все продуктовые изменения и необходимые targeted/regression tests в patch, формирует `manifest.json`, короткие `README.md` и `TEST_PLAN.md`, проверяет package насколько позволяет среда и выдаёт ZIP с SHA-256 через обычный Postman transport. Не перекладывать недостающий код, исправление patch, тесты или `.gitignore` на Worker: при несовместимости или FAIL автор готовит replacement package. Фактически не выполненные проверки обозначать честно.
 
 ---
 
-## 2. Роли
-
-### 2.1. Внешняя модель
-
-Sol до делегирования формулирует intent, существенные архитектурные решения и ограничения. ChatGPT Web не выбирает всю архитектуру независимо от Sol: он обязан в заданных границах самостоятельно:
-
-1. изучить актуальное состояние задачи и затрагиваемого кода;
-2. принять необходимые implementation-level решения для реализации замысла Sol;
-3. подготовить все продуктовые изменения;
-4. подготовить необходимые targeted/regression tests;
-5. сформировать корректный Git patch;
-6. сформировать `manifest.json`;
-7. подготовить короткие `README.md` и `TEST_PLAN.md`;
-8. проверить package настолько полно, насколько позволяет среда;
-9. передать готовый ZIP и SHA-256 через обычный Postman transport. Web не выбирает локальный trusted ZIP path: Postman/Host сохраняет и связывает его с REQ. Web не обязана публиковать Git-изменения или всегда запускать все тесты; она честно перечисляет фактически выполненные проверки.
-
-Модель не перекладывает на Worker:
-
-- самостоятельное изменение заданной Sol архитектуры;
-- написание недостающего кода;
-- исправление patch;
-- принятие архитектурных решений вместо Sol;
-- адаптацию package после FAIL;
-- создание дополнительных файлов, которые должны были находиться в package;
-- ручное исправление `.gitignore` после применения package.
-
-Если package несовместим или неполон, его пересобирает внешняя модель.
-
-### 2.2. Central implementation package runner
-
-Runner:
-
-- проверяет repository/worktree safety;
-- проверяет `git apply --check`;
-- защищает локальные данные;
-- применяет patch;
-- проверяет, что patch не создал Git-ignored файлы, которые потеряются при обычном commit;
-- запускает только объявленные targeted tests;
-- создаёт diagnostics ZIP при hard FAIL.
-
-Runner не проектирует решение и не вызывает LLM.
-
-### 2.3. Sol и продолжаемый Worker
-
-Sol принимает отдельное решение о применении trusted REQ, уже связанного Host с exact ZIP/SHA после `RESULT_DURABLE`. Через `postman_worker({task, artifactRequestId})` Sol авторизует того же продолжаемого Worker. Worker получает REQ без model-authored ZIP path, использует тот же Host-prepared clean task worktree на опубликованном REQ commit и вызывает `implementation_artifact_apply({requestId, worktree})`; Host повторно проверяет SHA и запускает существующий runner. Worker не ремонтирует package: при PASS проверяет результат и отправляет `report`, при FAIL сообщает точные diagnostics. Commit/push/PR применённых изменений допускаются только после отдельного решения о публикации по `REPO_POLICY.md`; merge требует отдельного разрешения пользователя.
-
----
 
 ## 3. Канонический формат ZIP
 
@@ -166,7 +117,7 @@ SHA-256
 }
 ```
 
-В Leader flow Host `postman_task_prepare` сначала создаёт и публикует одну task branch с clean worktree от exact `origin/preview`; Bridge публикует REQ commit в эту ветку через Host, а не в `main`. Web использует опубликованный REQ snapshot. Legacy CLI default `main` сохраняется только вне Leader.
+В Leader flow Host `postman_task_prepare` сначала создаёт и публикует одну task branch с clean worktree от exact `origin/preview`; Bridge публикует REQ commit в эту ветку через Host, а не в `main`. Web использует опубликованный REQ snapshot. Автор package не выбирает standalone transport branch и не меняет эту границу.
 
 `packageBase` может содержать observed SHA во время подготовки, но является информационным полем.
 
@@ -388,54 +339,13 @@ syntax/compile check при необходимости
 
 ---
 
-## 10. Что является hard FAIL
+## 10. Проверки central runner
 
-Hard FAIL должен означать реальную проблему применения, безопасности или публикации.
-
-Канонические hard FAIL:
-
-1. wrong repository identity;
-2. protected branch/worktree;
-3. dirty implementation worktree до применения;
-4. повреждённый/небезопасный package;
-5. patch затрагивает protected local-data path;
-6. `git apply --check` сообщает, что patch не применяется;
-7. `git apply` фактически завершился ошибкой;
-8. patch создал новый Git-ignored файл, который обычный commit может потерять;
-9. targeted test завершился non-zero/timeout;
-10. внутренняя ошибка runner-а.
-
-Для ignored-файла канонический код:
-
-```text
-PATCH_CREATES_IGNORED_FILE
-```
+Runner и его hard FAIL/non-blocking diagnostics определены в [workflow](implementation-package-workflow.md). Для автора существенны: Git применимость patch, безопасность путей, обычная видимость новых файлов (включая `PATCH_CREATES_IGNORED_FILE`) и успех объявленных targeted tests. `packageBase` информационен; exact inventory, число файлов, продвижение `preview` и whitespace warning сами по себе не вводят новых gates.
 
 ---
 
-## 11. Что НЕ является hard FAIL
-
-Обычный package не должен блокироваться по:
-
-- exact source blob SHA;
-- равенству `packageBase` текущему HEAD;
-- exact changed-file inventory;
-- exact числу файлов;
-- expected-new-file count;
-- tracked/untracked bookkeeping само по себе;
-- продвижению `preview`;
-- отсутствию full regression suite;
-- whitespace warning от `git diff --check`.
-
-Эти данные могут быть полезны для диагностики, но не должны становиться blocker без конкретного риска.
-
-Главное правило:
-
-> Совместимость определяет Git. Работоспособность определяют targeted tests. Публикуемость новых файлов определяет обычная Git visibility без force-add.
-
----
-
-## 12. Проверка package до выдачи
+## 11. Проверка package до выдачи
 
 Желательный verification path выполняется в отдельном clean shadow/worktree.
 
@@ -453,13 +363,13 @@ targeted tests
 
 Не утверждать в финальном отчёте, что проверка выполнена, если она фактически не запускалась.
 
-Если среда Web не позволяет выполнить Git verification или все тесты, это нужно честно указать. После отдельного решения Sol тот же продолжаемый Worker выполнит authoritative runner.
+Если среда Web не позволяет выполнить Git verification или все тесты, это нужно честно указать. Shadow tests — ранняя authoring-проверка, а не итоговый PASS на реальном target worktree. После отдельного решения Sol тот же продолжаемый Worker вызовет authoritative central runner с `manifest.tests` на target worktree; его PASS при неизменных входах не требует ручного повторного запуска Worker/Sol или rerun при отдельной публикации. Полный lifecycle — в [workflow](implementation-package-workflow.md).
 
 Не создавать ради этой проверки новый framework внутри ZIP.
 
 ---
 
-## 13. README.md внутри package
+## 12. README.md внутри package
 
 README должен быть коротким.
 
@@ -478,7 +388,7 @@ README не должен дублировать полный patch или пре
 
 ---
 
-## 14. TEST_PLAN.md
+## 13. TEST_PLAN.md
 
 TEST_PLAN перечисляет те же осмысленные проверки, которые находятся в manifest.
 
@@ -496,131 +406,13 @@ TEST_PLAN перечисляет те же осмысленные проверк
 
 ---
 
-## 15. Diagnostics
+## 14. Граница применения
 
-Внешняя модель НЕ создаёт diagnostics collector.
-
-Diagnostics являются обязанностью:
-
-```text
-system/implementation_package_runner.py
-```
-
-При hard FAIL central runner создаёт компактный diagnostics ZIP с:
-
-```text
-failure.json
-stdout.txt
-stderr.txt
-git-status.txt
-git-diff-stat.txt
-git-diff-check.txt
-runner-log.txt
-```
-
-Package не дублирует эту систему.
-
-Для `PATCH_CREATES_IGNORED_FILE` диагностика должна явно содержать список затронутых ignored paths в `failure.json` или `runner-log.txt`.
+ZIP не содержит своего applicator, diagnostics collector или Git publication. Runner diagnostics, поведение Worker на FAIL/PASS, trusted REQ grant и отдельная публикация описаны в [workflow](implementation-package-workflow.md). Автор не инструктирует Worker вручную чинить patch, код, тест или `.gitignore` после FAIL: необходимое исправление входит в replacement package. Web не выбирает trusted локальный путь ZIP и не разрешает применение или merge.
 
 ---
 
-## 16. Запрещённые package-local операции
-
-Implementation package не должен:
-
-```text
-создавать branch
-создавать worktree
-commit
-push
-создавать PR
-merge
-force-push
-git reset --hard
-git clean
-auto-stash
-запускать LLM
-изменять permanent worktree
-```
-
-Эти операции принадлежат другим слоям workflow.
-
----
-
-## 17. Поведение при FAIL
-
-Если runner возвращает FAIL:
-
-```text
-STOP
-↓
-diagnostics ZIP и report Sol
-↓
-никаких ручных исправлений Worker
-↓
-Sol решает: исследовать дальше, запросить новый ZIP через Web или остановиться
-↓
-при запросе нового ZIP Web исследует точную ошибку и выдаёт replacement package
-```
-
-Нельзя инструктировать Worker:
-
-```text
-поправь этот файл вручную
-добавь недостающий import
-сделай git add -f
-подправь patch
-удали failing test
-добавь исключение в .gitignore вручную после FAIL
-```
-
-Если исправление требуется — оно должно войти в новый package.
-
----
-
-## 18. Отчёт после PASS и отдельная публикация
-
-После:
-
-```text
-IMPLEMENTATION_PACKAGE_APPLIED
-```
-
-Worker сначала проверяет фактический результат и сообщает Sol PASS и exact runner result через `report`. Перед отдельным commit/push/PR реализации нужно очистить REQ transport-файлы из этой же ветки; старые SHA-pinned REQ URL и `--chat` при этом остаются действительными. Только если Sol отдельно решит публиковать применённые изменения, Worker выполняет обычный Git lifecycle по `REPO_POLICY.md`:
-
-```text
-очистить REQ transport-файлы из task branch и явно учесть их удаления в staging
-↓
-взять affectedPaths из exact runner result
-↓
-git add -A -- <affectedPaths>
-↓
-commit
-↓
-push task branch
-↓
-verify remote SHA
-↓
-create/update PR в preview
-↓
-remote verify changed files
-↓
-STOP
-```
-
-`affectedPaths` возвращается runner-ом как список фактически затронутых patch путей. Удаления REQ transport-файлов не являются patch `affectedPaths`: их явно учитывают при staging, чтобы PR реализации не содержал transport-файлов. Это publication/staging boundary, а не compatibility gate, expected/exact inventory validation или проверка числа файлов. При отдельной публикации агент staging-ит только эти пути; посторонние untracked/generated файлы, созданные targeted tests, не входят в commit автоматически. При большом списке путей агент передаёт их Git argv-safe несколькими группами, не собирая shell-строку.
-
-`git add -f` запрещён.
-
-После отдельно разрешённого push агент обязан убедиться, что новые файлы, созданные package, реально присутствуют в remote commit/PR. Это publication sanity check, а не exact-file-inventory gate до применения.
-
-Central runner не делает commit/push/PR сам.
-
-Merge выполняется только после отдельного явного разрешения пользователя.
-
----
-
-## 19. Выдача результата внешней модели
+## 15. Выдача результата внешней модели
 
 После подготовки package внешняя модель должна передать результат через обычный универсальный Postman transport (не специальный канал применения):
 
@@ -635,133 +427,10 @@ Merge выполняется только после отдельного явн
 5. короткое описание для отдельного решения Sol
 ```
 
-Не выдавать пользователю внутренние временные authoring worktree.
+Не выдавать пользователю внутренние временные authoring worktree и не добавлять в handoff инструкции Leader/Worker по применению и Git-публикации: они определены в [workflow](implementation-package-workflow.md).
 
 ---
 
-## 20. Стандартный handoff для Sol и Worker
+## 16. Короткий принцип
 
-Это описание downstream-действий для понимания границ ответственности, а не инструкция Web искать или передавать локальный путь сохранённого ZIP. Обычный текст должен быть коротким:
-
-```text
-Trusted RESULT_DURABLE доказывает происхождение и целостность exact ZIP, но не качество или разрешение на применение. Host хранит process-local grant для точной сессии Leader и REQ с exact ZIP/SHA. Sol отдельно решает, применять ли REQ, и вызывает postman_worker({task, artifactRequestId: "REQ_..."}). Тот же продолжаемый Worker использует Host-prepared clean task worktree на опубликованном REQ commit (исходная branch создана от exact origin/preview) и вызывает implementation_artifact_apply({requestId: "REQ_...", worktree: "<clean worktree>"}). Host повторно проверяет SHA, сам подставляет trusted ZIP и запускает существующий runner. Web не выбирает локальный путь ZIP, Worker не извлекает его из текста задания. Ничего в package вручную не исправляй и не добавляй дополнительные compatibility gates.
-
-При FAIL остановись и верни exact stage/error и diagnostics ZIP, ничего не ремонтируя.
-
-При PASS верни отчёт и exact runner result; не публикуй автоматически. Только после отдельного решения о публикации удали REQ transport-файлы из task branch и явно учти их удаления в staging, затем возьми `affectedPaths` из exact runner result и выполни `git add -A -- <affectedPaths>`, затем commit, push, verify remote SHA и создай/обнови PR в preview. После push проверь наличие новых package-created файлов в remote commit/PR.
-
-Не используй git add -f.
-
-Merge не выполняй.
-```
-
-Task-specific детали добавляются только если они действительно нужны.
-
----
-
-## 21. Антипаттерны
-
-### Неправильно
-
-```text
-ZIP
-├─ apply_package.py
-├─ check_package.py
-├─ diagnostics.py
-├─ compatibility.json
-├─ hashes.json
-├─ expected-files.json
-├─ files/
-└─ patches/
-```
-
-если всё это существует только для одноразового применения package.
-
-### Правильно
-
-```text
-ZIP
-├─ manifest.json
-├─ changes.patch
-├─ README.md
-└─ TEST_PLAN.md
-```
-
----
-
-## 22. Golden path целиком
-
-```text
-CHATGPT WEB / ВНЕШНЯЯ МОДЕЛЬ
-
-актуальный preview
-→ понять задачу
-→ реализовать полное решение в disposable environment
-→ добавить нужные tests
-→ проверить каждый новый продуктовый файл
-→ если файл ignored, добавить узкое .gitignore exception в это же изменение
-→ убедиться, что обычный Git видит новые файлы
-→ git add -A -- <authoring paths>
-→ Git-generated changes.patch
-→ проверить patch на clean base
-→ проверить ignored new files после полного patch
-→ targeted tests
-→ manifest + README + TEST_PLAN
-→ ZIP + SHA-256
-
-
-SOL И ТОТ ЖЕ ПРОДОЛЖАЕМЫЙ WORKER
-
-trusted RESULT_DURABLE + Host grant по Leader session/REQ для exact ZIP/SHA: только provenance/integrity
-→ отдельное решение Sol о применении REQ
-→ postman_worker({task, artifactRequestId: "REQ_..."})
-→ тот же Worker: использовать Host-prepared clean worktree на опубликованном REQ commit; вторую branch/worktree не создавать
-→ implementation_artifact_apply({requestId: "REQ_...", worktree: "<clean worktree>"})
-→ Host проверяет SHA и запускает existing central runner apply
-    → repository safety
-    → git apply --check
-    → protected paths
-    → git apply
-    → reject ignored patch-created files
-    → targeted tests
-→ FAIL: diagnostics + STOP, без ремонта
-→ PASS: отчёт Sol, без автоматической публикации
-→ только при отдельном решении Sol о публикации применённых изменений
-→ очистить REQ transport-файлы из той же task branch и явно учесть их удаления в staging
-→ взять affectedPaths из runner result
-→ git add -A -- <affectedPaths>
-→ commit
-→ push
-→ remote SHA verify
-→ PR в preview
-→ verify package-created files present remotely
-→ STOP
-
-
-ПОЛЬЗОВАТЕЛЬ
-
-review
-→ отдельное разрешение merge
-```
-
----
-
-## 23. Канонические принципы
-
-> Один package содержит решение, а не собственную инфраструктуру внедрения.
-
-> Patch генерирует Git, а не LLM вручную.
-
-> Если продуктовый файл попадает под `.gitignore`, package обязан добавить минимальное явное исключение для repository-owned пути в том же patch.
-
-> Новый repository-owned файл обязан быть видим обычному Git без `git add -f`.
-
-> Совместимость определяет `git apply --check`.
-
-> Поведение определяют targeted tests.
-
-> Diagnostics принадлежат центральному runner-у.
-
-> Sol отдельно решает о применении; тот же продолжаемый Worker механически применяет package и не ремонтирует его.
-
-> Строгий к опасным операциям, мягкий к совместимости.
+Один декларативный package содержит реализацию, Git-generated patch и нужные тесты — не инфраструктуру внедрения. Новый repository-owned файл должен быть видим обычному Git без `git add -f`; для ignored путей добавить узкое исключение в том же patch. Ранние authoring shadow tests не заменяют authoritative runner PASS на реальном target worktree. Применение и отдельная публикация описаны в [workflow](implementation-package-workflow.md).

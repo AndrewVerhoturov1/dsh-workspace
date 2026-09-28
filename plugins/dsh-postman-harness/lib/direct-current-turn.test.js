@@ -334,6 +334,8 @@ test('automatic continuation is deterministic and does not accept model-written 
     code: 'ASSISTANT_COMPLETED_NO_ARTIFACT',
     state: 'ASSISTANT_COMPLETED_NO_ARTIFACT',
     requestId: first.requestId,
+    rootRequestId: first.requestId,
+    continuationIndex: 0,
     assistantText: 'progress',
   })))
   children[0].emit('close', 0, null)
@@ -345,4 +347,50 @@ test('automatic continuation is deterministic and does not accept model-written 
   assert.equal(args[args.indexOf('-ChatRequestId') + 1], first.requestId)
   const payload = Buffer.from(args[args.indexOf('-TaskBase64') + 1], 'base64').toString('utf8')
   assert.match(payload, /^Продолжи выполнение предыдущей задачи/)
+})
+
+test('Host permits two automatic continuations but blocks the third before child spawn', async () => {
+  const children = []
+  const manager = new DirectPostmanJobManager({
+    exists: () => true,
+    now: (() => { let n = 0; return () => new Date(Date.UTC(2026, 8, 22, 12, 34, ++n)) })(),
+    randomInt: () => 7,
+    spawn() {
+      const child = fakeChild()
+      children.push(child)
+      queueMicrotask(() => child.emit('spawn'))
+      return child
+    },
+  })
+  const terminal = (index, code = 'ASSISTANT_COMPLETED_NO_ARTIFACT') => {
+    const job = manager.latest('chain')
+    children[index].stdout.emit('data', JSON.stringify({ ok: true, code, state: code,
+      requestId: job.requestId, rootRequestId: root.requestId, continuationIndex: index }))
+    children[index].emit('close', 0, null)
+  }
+  const root = await manager.start({ sessionId: 'chain', workspace: '/repo', payload: 'intent', branch: 'main' })
+  terminal(0)
+  const first = await manager.continueLast('chain', '/repo')
+  assert.equal(first.chatRequestId, root.requestId)
+  terminal(1, 'ARTIFACT_REJECTED')
+  const second = await manager.continueLast('chain', '/repo')
+  assert.equal(second.chatRequestId, first.requestId)
+  terminal(2)
+  await assert.rejects(manager.continueLast('chain', '/repo'), /POSTMAN_AUTOMATIC_CONTINUATION_LIMIT_REACHED/)
+  assert.equal(children.length, 3)
+  assert.equal(manager.latest('chain').requestId, second.requestId)
+})
+
+test('Host refuses durable, text, and transport-failed terminals without retry', async () => {
+  const manager = new DirectPostmanJobManager({ spawn() { throw Error('must not spawn') } })
+  for (const code of ['RESULT_DURABLE', 'TEXT_RESULT_DURABLE', 'POSTMAN_TRANSPORT_FAILED']) {
+    manager.jobs.set('terminal', { state: 'completed', requestId: 'REQ_20260922T123456Z_0001',
+      result: { code, continuationIndex: 0 } })
+    await assert.rejects(manager.continueLast('terminal', '/repo'), /POSTMAN_AUTOMATIC_CONTINUATION_NOT_ALLOWED/)
+  }
+  manager.jobs.set('terminal', { state: 'completed', requestId: 'REQ_20260922T123456Z_0001',
+    result: { code: 'ASSISTANT_COMPLETED_NO_ARTIFACT', continuationIndex: 0 } })
+  await assert.rejects(manager.start({ sessionId: 'terminal', workspace: '/repo', payload: 'intent',
+    transportKind: 'text', automaticContinuation: true, branch: 'main' }),
+  /POSTMAN_AUTOMATIC_CONTINUATION_NOT_ALLOWED/)
 })

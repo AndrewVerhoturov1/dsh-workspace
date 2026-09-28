@@ -6,7 +6,7 @@
 
 Старые WP-002…WP-007 milestone-описания являются историей разработки и не задают
 текущее production поведение. Текущая схема определяется executable modules,
-`postman/POSTMAN_CURRENT_FLOW.md` и `docs/web-postman-artifact-contract.md`.
+`postman/POSTMAN_CURRENT_FLOW.md` и `docs/web-postman-artifact-contract.md`. Этот README — карта browser modules; transport lifecycle и пределы automatic continuation определяет Current Flow, не эта карта.
 
 Production pipeline:
 
