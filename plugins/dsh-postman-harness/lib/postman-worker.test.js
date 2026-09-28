@@ -330,14 +330,16 @@ test('stop queued behind admission drains the accepted child before a later task
   assert.equal(next.created, true)
 })
 
-test('Bridge and Worker notify only their live direct Leader; notices retain FIFO order', async () => {
+test('Bridge and Worker steer notices only to their live direct Leader', async () => {
   const binding = { branch: 'task/a', worktree: 'C:/a' }
   const contexts = { get: id => id === 'A' ? binding : undefined,
     child: id => id === 'bridge-1' ? binding : null }
   const f = fixture(contexts)
   const a = leader('A'); const b = leader('B')
   const received = []
-  a.followup = message => received.push(message)
+  const followups = []
+  a.steer = message => received.push(message)
+  a.followup = message => followups.push(message)
   f.agents.set('A', a); f.agents.set('B', b)
   const first = await f.tools.taskTool.execute({ task: 'first' }, exec(a))
   const child = id => ({ id, session: { header: { origin: 'subagent', delegationDepth: 1, parentSession: 'A' } } })
@@ -351,12 +353,16 @@ test('Bridge and Worker notify only their live direct Leader; notices retain FIF
   }
   assert.deepEqual(received.map(m => m.content[0].text.split(':\n').at(-1)),
     ['READY one', 'progress', 'READY two'])
-  assert.ok(received.every(m => m.source.kind === 'subagent-report'))
+  assert.ok(received.every(m => m.source.kind === 'subagent-report' && m.source.senderSessionId))
+  assert.deepEqual(followups, [])
   assert.equal((await tool.execute({ message: 'intrusion' }, exec(stranger))).status, 'PARENT_NOTIFICATION_CALLER_REJECTED')
   f.agents.delete(bridge.id)
   assert.equal((await tool.execute({ message: 'stale' }, exec(bridge))).status, 'PARENT_NOTIFICATION_CALLER_REJECTED')
   assert.equal((await tool.execute({ message: '   ' }, exec(worker))).status, 'PARENT_NOTIFICATION_INVALID')
+  a.steer = undefined
+  assert.equal((await tool.execute({ message: 'no steering API' }, exec(worker))).status, 'PARENT_NOTIFICATION_CALLER_REJECTED')
   assert.equal(received.length, 3)
+  assert.deepEqual(followups, [])
 })
 
 test('bridge plugin registers all Worker tools and preserves boundary on creation', async () => {
