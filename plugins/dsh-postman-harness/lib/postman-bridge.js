@@ -150,6 +150,7 @@ export async function apply(ctx) {
   ctx.tools.register(worker.taskTool)
   ctx.tools.register(worker.interruptTool)
   ctx.tools.register(worker.stopTool)
+  ctx.tools.register(worker.listTool)
   ctx.tools.register(createPostmanChildNotifyTool(ctx, postmanTaskContexts, worker))
   ctx.tools.register(createImplementationArtifactApplyTool(ctx, grants, worker, { taskContexts: postmanTaskContexts, jobs }))
   ctx.effect(() => async () => {

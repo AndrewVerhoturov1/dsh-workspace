@@ -103,7 +103,7 @@ test('Leader decision admits REQ to same Worker; stop keeps grant but rejects ol
   const ctx = { agents: { get: id => agents.get(id) },
     tools: { schemas: () => [{ name: 'postman_send_current_turn' }] },
     subagents: {
-      async startContinuable(spec) { starts.push(spec); return { childId: 'worker-' + starts.length, messageId: 'first' } },
+      async startContinuable(spec) { starts.push(spec); return { childId: spec.childId, messageId: 'first' } },
       async followup(...args) { followups.push(args); return 'second' },
       async drainContinuableChildren() {},
     } }
@@ -112,7 +112,7 @@ test('Leader decision admits REQ to same Worker; stop keeps grant but rejects ol
     'POSTMAN_WORKER_ARTIFACT_REJECTED')
   assert.equal(starts.length, 0)
   const old = await worker.taskTool.execute({ task: 'ordinary' }, { agent: a, signal: SIGNAL })
-  assert.equal(old.workerSessionId, 'worker-1')
+  assert.equal(old.workerSessionId, starts[0].childId)
   const child = workerAgent(old.workerSessionId, 'A'); agents.set(child.id, child)
   assert.equal(worker.ownerOf(child, REQ), null)
   const accepted = await worker.taskTool.execute({ task: 'apply artifact', artifactRequestId: REQ }, { agent: a, signal: SIGNAL })
@@ -127,7 +127,7 @@ test('Leader decision admits REQ to same Worker; stop keeps grant but rejects ol
   assert.equal(followups.length, 2)
   assert.equal(worker.ownerOf(workerAgent('worker-2', 'A'), REQ), null)
   const stale = workerAgent(child.id, 'A')
-  assert.equal(worker.ownerOf(stale, REQ), 'A') // Identity also checks the registered Agent object in apply.
+  assert.equal(worker.ownerOf(stale, REQ), null) // Exact live Agent identity is required before grant ownership.
   const mocked = { ...ctx, agents: ctx.agents }
   let launches = 0
   const tool = createImplementationArtifactApplyTool(mocked, grants, worker, {

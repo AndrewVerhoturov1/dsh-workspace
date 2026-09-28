@@ -130,7 +130,8 @@ export function createImplementationArtifactApplyTool(ctx, grants, worker, optio
         return { status: 'IMPLEMENTATION_ARTIFACT_CALLER_REJECTED' }
       }
       const operationLock = options.taskContexts?.beginOperation
-      if (typeof operationLock === 'function' && !operationLock(leaderId, id => Boolean(options.jobs?.hasActive(id)))) {
+      if (typeof operationLock === 'function' && (!worker.canRunExclusive(leaderId, caller.id) ||
+        !operationLock(leaderId, id => Boolean(options.jobs?.hasActive(id)), caller.id))) {
         return { status: 'IMPLEMENTATION_ARTIFACT_WORKTREE_BUSY' }
       }
       let runnerOutcome
@@ -141,7 +142,7 @@ export function createImplementationArtifactApplyTool(ctx, grants, worker, optio
           return { status: 'IMPLEMENTATION_ARTIFACT_WORKTREE_INVALID' }
         }
         const context = options.taskContexts?.get(leaderId)
-        if (options.taskContexts && (!context || worker.contextOf(leaderId) !== context ||
+        if (options.taskContexts && (!context || worker.contextOf(leaderId, caller.id) !== context ||
             resolve(args.worktree).replaceAll('\\', '/').toLowerCase() !==
             resolve(context.worktree).replaceAll('\\', '/').toLowerCase())) {
           return { status: 'IMPLEMENTATION_ARTIFACT_WORKTREE_REJECTED' }

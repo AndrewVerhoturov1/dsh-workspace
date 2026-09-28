@@ -412,7 +412,7 @@ test('queued and running jobs abort on manager disposal without unhandled reject
 test('Leader accepts Bridge then Worker while Web is pending', async () => {
   const f = fixture()
   const accepted = await f.bridge.execute({ message }, f.exec)
-  f.ctx.subagents.startContinuable = async () => ({ childId: 'worker-1', messageId: 'worker-message' })
+  f.ctx.subagents.startContinuable = async spec => ({ childId: spec.childId, messageId: 'worker-message' })
   const worker = createPostmanWorkerTools(f.ctx)
   const workerReceipt = await worker.taskTool.execute({ task: 'Read local files' }, f.exec)
   assert.equal(workerReceipt.status, 'POSTMAN_WORKER_TASK_ACCEPTED')

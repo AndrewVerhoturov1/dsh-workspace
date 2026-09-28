@@ -67,11 +67,11 @@ child scope. Child assistant prose не используется как result a
 Файловый preset `Postman Leader` (`postman-leader`) находится в корне репозитория в
 `.agent-presets/postman-leader/`. Встроенный `dsh-agent-presets` находит его в
 `$DSH_HOME/.agent-presets`; при проверке отдельного рабочего дерева нужно задать `DSH_HOME`
-на его корень. Runtime boundary даёт top-level Agent-у положительный allowlist ровно из 18
+на его корень. Runtime boundary даёт top-level Agent-у положительный allowlist ровно из 19
 зарегистрированных tools:
 
 ```text
-ask_user_question, todo_write, exit_plan_mode, create_goal, get_goal, update_goal, read, read_image, grep, skill, web_fetch, postman_task_prepare, postman_task_restore, postman_bridge, postman_bridge_status, postman_worker, postman_worker_interrupt, postman_worker_stop
+ask_user_question, todo_write, exit_plan_mode, create_goal, get_goal, update_goal, read, read_image, grep, skill, web_fetch, postman_task_prepare, postman_task_restore, postman_bridge, postman_bridge_status, postman_worker, postman_worker_interrupt, postman_worker_stop, postman_worker_list
 ```
 
 `glob` и `web_search` намеренно отсутствуют; незарегистрированные имена не являются
@@ -87,11 +87,10 @@ jobs, web search/fetch и обычное делегирование. При со
 сессии; штатный `report`, установленный в собственной области child, остаётся доступен.
 Модель Worker задаётся отдельно от Bridge.
 
-Host сохраняет точную привязку Leader session id → child session id в долговременном реестре до запуска Worker; локальный слот лишь упорядочивает вызовы во время работы процесса.
-Первое задание запускает `startContinuable`, дальнейшие задания идут через `followup`.
+Host сохраняет до трёх точных привязок `(Leader session id, workerSessionId)` в долговременном реестре до запуска каждого Worker. `postman_worker({task, createNew: true, label?})` создаёт независимого Worker; четвёртый возвращает `POSTMAN_WORKER_LIMIT_REACHED` до запуска. Адресные `postman_worker({task, workerSessionId, artifactRequestId?})`, `postman_worker_interrupt({workerSessionId, task})` и `postman_worker_stop({workerSessionId})` затрагивают только выбранного ребёнка. `postman_worker_list()` показывает привязки, но не статус исполнения. Без адреса старый вызов допустим при единственной привязке, при нескольких — `POSTMAN_WORKER_TARGET_REQUIRED`. Все трое используют одну task branch/worktree: пересекающиеся изменения надо координировать; sync и restore запрещены, пока есть привязки, ZIP runner допускается только без другого привязанного Worker.
 Ответ `POSTMAN_WORKER_TASK_ACCEPTED` подтверждает только приём, а не выполнение. Host сохраняет FIFO-порядок приёма обычных `postman_worker` follow-up; это не обещает порядок их обработки со стороны Harness runtime.
 
-При существенном изменении требований `postman_worker_interrupt({task})` кооперативно прерывает текущий turn через публичный ancestor interrupt, ждёт idle resident Worker и передаёт новое задание тому же durable child session, сохраняя mapping и task/worktree context. Обычные `postman_worker` follow-up по-прежнему принимаются через существующий FIFO-путь. Interrupt не задаёт гарантий приоритета или порядка обработки относительно уже принятых сообщений: обработкой очереди управляет Harness runtime. При отсутствии активного Worker tool отказывает и не создаёт замену. `postman_worker_stop` по-прежнему освобождает resident Activation и удаляет отображение.
+`postman_worker_interrupt({workerSessionId, task})` ставит follow-up в FIFO выбранной сессии без отмены текущего шага. Другие Worker не блокируются её очередью. `postman_worker_stop({workerSessionId})` освобождает только выбранную Activation и удаляет только её привязку, Session сохраняется.
 
 Worker отправляет результат через штатный `report`. `postman_worker_stop` штатно освобождает
 resident Activation и закрывает долговременную привязку; сама Session не удаляется. После рестарта
@@ -99,7 +98,7 @@ Host проверяет точный сохранённый childId и прод�
 
 ## Implementation package: отдельное локальное решение
 
-Normal Direct/Postman Bridge доставляет любой безопасный ZIP; implementation schema не проверяется transport-слоем. Только после trusted correlated `RESULT_DURABLE` Host регистрирует process-local grant по `(Leader session, requestId)`, привязывая exact `resultZip` и SHA-256. Grant доказывает происхождение/целостность artifact, но не пригодность implementation package и не разрешение применять его. Это внутреннее trusted binding, а не предоставленный моделью token или постоянная база grants. Leader (Sol) отдельно решает, авторизовать ли применение REQ тем же продолжаемым Worker через `postman_worker({task, artifactRequestId})`.
+Normal Direct/Postman Bridge доставляет любой безопасный ZIP; implementation schema не проверяется transport-слоем. Только после trusted correlated `RESULT_DURABLE` Host регистрирует process-local grant по `(Leader session, requestId)`, привязывая exact `resultZip` и SHA-256. Grant доказывает происхождение/целостность artifact, но не пригодность implementation package и не разрешение применять его. Это внутреннее trusted binding, а не предоставленный моделью token или постоянная база grants. Leader (Sol) отдельно выбирает точного Worker через `postman_worker({task, workerSessionId, artifactRequestId})`; грант одного Worker не доступен другому.
 
 Для такого поручения ChatGPT Web готовит декларативный ZIP по `REPO_POLICY.md`, `system/implementation-package-workflow.md` и `system/implementation-package-authoring.md`: `manifest.json`, сгенерированный Git `changes.patch`, `README.md`, `TEST_PLAN.md`; относящиеся к изменению тесты и узкие исключения `.gitignore` для иначе игнорируемых новых repository-owned файлов находятся в patch. Пакет не содержит своего applicator/diagnostics framework.
 

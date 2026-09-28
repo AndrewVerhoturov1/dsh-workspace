@@ -12,7 +12,7 @@ const parent = { id: 'leader-bridge', session: { header: { agentPreset: 'postman
 const row = () => ({ leaderSessionId: parent.id, repository: 'andrewverhoturov1/dsh-workspace',
   repositoryPath: 'C:/repo', originUrl: 'https://github.com/andrewverhoturov1/dsh-workspace.git',
   baseCommit: 'a'.repeat(40), branch: 'task/postman-' + 'a'.repeat(32), worktree: 'C:/task',
-  stage: 'ready', diagnostic: null, worker: { id: 'child-C', state: 'ready', delivery: 'none', artifactRequests: [] },
+  stage: 'ready', diagnostic: null, workers: { 'child-C': { id: 'child-C', label: 'C', state: 'ready', delivery: 'none', artifactRequests: [] } },
   runner: { state: 'failed', requestId: 'REQ_FAIL' }, bridge: null })
 
 function fixture(registry) {
@@ -41,7 +41,7 @@ async function exercise(registry) {
   assert.equal(cold.started, 0, 'no queued operation is replayed')
   assert.equal((await cold.jobs.accept(parent, '@PostmanAsk fourth', 'text')).status,
     'POSTMAN_BRIDGE_LIMIT_REACHED', 'unresolved jobs continue to count after restart')
-  assert.equal(registry.get(parent.id).worker.id, 'child-C')
+  assert.equal(Object.values(registry.get(parent.id).workers)[0].id, 'child-C')
   assert.equal(registry.get(parent.id).runner.state, 'failed')
   return { accepted, cold }
 }
@@ -67,7 +67,7 @@ test('three Bridge intents survive independent JSON domain lifetimes', async t =
   assert.deepEqual(accepted.map(job => cold.jobs.status(parent, job.bridgeJobId).status),
     Array(3).fill('POSTMAN_BRIDGE_OUTCOME_UNKNOWN'))
   assert.equal(cold.started, 0)
-  assert.equal(reopened.get(parent.id).worker.id, 'child-C')
+  assert.equal(Object.values(reopened.get(parent.id).workers)[0].id, 'child-C')
   await reopened.close()
   await backend.close()
 })

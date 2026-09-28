@@ -17,7 +17,7 @@ const context = Object.freeze({ leaderSessionId: leader.id, repository: 'andrewv
 async function fixture(parent = leader) {
   const registry = createMemoryTaskRegistry()
   await registry.create(parent.id, { ...context, leaderSessionId: parent.id, repositoryPath: 'C:/repo', originUrl: 'https://github.com/andrewverhoturov1/dsh-workspace.git',
-    stage: 'ready', diagnostic: null, worker: null, runner: { state: 'none', requestId: null }, bridge: null })
+    stage: 'ready', diagnostic: null, workers: {}, runner: { state: 'none', requestId: null }, bridge: null })
   const taskContext = Object.freeze({ ...context, leaderSessionId: parent.id })
   const contexts = { get: () => taskContext, record: registry.get, changeRecord: registry.change,
     isRestoring: () => false, hasActiveOperation: () => false }
@@ -43,7 +43,7 @@ test('reserved exact Worker id survives a new runtime without duplicate creation
   const first = await task(a, 'first')
   assert.equal(first.status, 'POSTMAN_WORKER_TASK_ACCEPTED')
   assert.equal(first.workerSessionId, f.calls.starts[0].childId)
-  assert.equal(f.registry.get(leader.id).worker.id, first.workerSessionId)
+  assert.equal(f.registry.get(leader.id).workers[first.workerSessionId].id, first.workerSessionId)
   a.dispose()
   const b = f.tool()
   const next = await task(b)
@@ -62,7 +62,7 @@ test('pilot supervisor reuses exact durable Worker binding after runtime restart
   assert.equal(first.status, 'POSTMAN_WORKER_TASK_ACCEPTED')
   assert.equal(first.created, true)
   assert.equal(f.calls.starts[0].request.parent, pilot)
-  assert.equal(first.workerSessionId, f.registry.get(pilot.id).worker.id)
+  assert.equal(first.workerSessionId, f.registry.get(pilot.id).workers[first.workerSessionId].id)
   before.dispose()
   const restarted = f.tool()
   const next = await task(restarted, 'pilot follow-up', pilot)
@@ -85,14 +85,14 @@ test('pilot Worker binding survives reopening the JSON storage domain', async t 
   const pilotContext = Object.freeze({ ...context, leaderSessionId: pilot.id })
   await firstRegistry.create(pilot.id, { ...pilotContext,
     repositoryPath: 'C:/repo', originUrl: 'https://github.com/andrewverhoturov1/dsh-workspace.git',
-    stage: 'ready', diagnostic: null, worker: null, runner: { state: 'none', requestId: null }, bridge: null })
+    stage: 'ready', diagnostic: null, workers: {}, runner: { state: 'none', requestId: null }, bridge: null })
   const f = await fixture(pilot)
   const contexts = registry => ({ get: () => pilotContext, record: registry.get, changeRecord: registry.change,
     isRestoring: () => false, hasActiveOperation: () => false })
   const before = createPostmanWorkerTools(f.ctx, undefined, contexts(firstRegistry))
   const first = await task(before, 'pilot initial', pilot)
   assert.equal(first.status, 'POSTMAN_WORKER_TASK_ACCEPTED')
-  assert.equal(first.workerSessionId, firstRegistry.get(pilot.id).worker.id)
+  assert.equal(first.workerSessionId, firstRegistry.get(pilot.id).workers[first.workerSessionId].id)
   before.dispose()
   await firstRegistry.close()
   const secondRegistry = await openPostmanTaskRegistry(domain())
@@ -101,7 +101,7 @@ test('pilot Worker binding survives reopening the JSON storage domain', async t 
   assert.equal(next.status, 'POSTMAN_WORKER_TASK_ACCEPTED')
   assert.equal(next.created, false)
   assert.equal(next.workerSessionId, first.workerSessionId)
-  assert.equal(secondRegistry.get(pilot.id).worker.id, first.workerSessionId)
+  assert.equal(secondRegistry.get(pilot.id).workers[first.workerSessionId].id, first.workerSessionId)
   assert.equal(f.calls.starts.length, 1)
   assert.deepEqual(f.calls.followups, [first.workerSessionId])
   restarted.dispose()
@@ -125,28 +125,28 @@ test('new trusted artifact REQ follows up existing Worker and persists authoriza
   assert.equal(next.workerSessionId, first.workerSessionId)
   assert.equal(f.calls.starts.length, 1)
   assert.deepEqual(f.calls.followups, [first.workerSessionId])
-  assert.deepEqual(f.registry.get(leader.id).worker.artifactRequests, [requestId])
+  assert.deepEqual(f.registry.get(leader.id).workers[first.workerSessionId].artifactRequests, [requestId])
 })
 
 test('crash between child acceptance and ready write never creates a second Worker', async () => {
   const f = await fixture()
   const a = f.tool()
   const first = await task(a)
-  await f.registry.change(leader.id, row => ({ ...row, worker: { ...row.worker, state: 'intent', delivery: 'pending' } }))
+  await f.registry.change(leader.id, row => ({ ...row, workers: { ...row.workers, [first.workerSessionId]: { ...row.workers[first.workerSessionId], state: 'intent', delivery: 'pending' } } }))
   a.dispose()
   const b = f.tool()
   const next = await task(b)
   assert.equal(next.status, 'POSTMAN_WORKER_DELIVERY_UNKNOWN')
   assert.equal(next.workerSessionId, first.workerSessionId)
-  assert.equal(f.registry.get(leader.id).worker.state, 'ready')
+  assert.equal(f.registry.get(leader.id).workers[first.workerSessionId].state, 'ready')
   assert.equal(f.calls.starts.length, 1)
   assert.equal(f.calls.followups.length, 0)
 })
 
 test('missing reserved child fails closed without guessing by label', async () => {
   const f = await fixture()
-  await f.registry.change(leader.id, row => ({ ...row, worker: { id: 'reserved-id', state: 'intent',
-    delivery: 'pending', artifactRequests: [] } }))
+  await f.registry.change(leader.id, row => ({ ...row, workers: { 'reserved-id': { id: 'reserved-id', label: 'reserved-id', state: 'intent',
+    delivery: 'pending', artifactRequests: [] } } }))
   f.calls.children.add('another-child')
   const result = await task(f.tool())
   assert.equal(result.status, 'POSTMAN_WORKER_BINDING_UNCERTAIN')
@@ -159,10 +159,10 @@ test('followup uncertainty is persisted before delivery and cannot replay', asyn
   const first = await task(a)
   f.ctx.subagents.followup = async () => { throw new Error('inbox uncertain') }
   assert.equal((await task(a)).status, 'POSTMAN_WORKER_FOLLOWUP_FAILED')
-  assert.equal(f.registry.get(leader.id).worker.delivery, 'unknown')
+  assert.equal(f.registry.get(leader.id).workers[first.workerSessionId].delivery, 'unknown')
   a.dispose()
   assert.equal((await task(f.tool())).status, 'POSTMAN_WORKER_DELIVERY_UNKNOWN')
   assert.equal(f.calls.starts.length, 1)
   assert.equal(f.calls.followups.length, 0)
-  assert.equal(first.workerSessionId, f.registry.get(leader.id).worker.id)
+  assert.equal(first.workerSessionId, f.registry.get(leader.id).workers[first.workerSessionId].id)
 })

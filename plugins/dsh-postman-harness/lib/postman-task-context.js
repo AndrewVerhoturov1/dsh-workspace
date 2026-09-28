@@ -26,6 +26,7 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
   const activeOperations = new Set()
   const syncOperations = new Map()
   const syncQueues = new Map()
+  const workerAdmissions = new Map()
   const command = gitCommand
 
   async function prepare(leader) {
@@ -56,7 +57,7 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
       const worktree = await makeDirectory(join(temporaryDirectory(), 'dsh-postman-task-'))
       if (permanent.some(path => normalize(path) === normalize(worktree)) || existingTrees.some(path => normalize(path) === normalize(worktree))) throw new Error('POSTMAN_TASK_PERMANENT_WORKTREE')
       const record = { leaderSessionId: id, repository: REPOSITORY, repositoryPath: repository, originUrl: remote,
-        branch, worktree, baseCommit, stage: 'intent', diagnostic: null, worker: null,
+        branch, worktree, baseCommit, stage: 'intent', diagnostic: null, workers: {},
         runner: { state: 'none', requestId: null }, bridge: null }
       await registry.create(id, record) // Durable intent precedes the first Git mutation.
       created = true
@@ -196,9 +197,12 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
           await command(worktree, 'merge-base', remote, head) !== head ||
           await command(repository, 'ls-remote', '--heads', 'origin', branch) !== remoteLine)
         throw new Error('remote task branch moved unexpectedly')
-      // A crash during explicit restore must not allow an automatic second attempt.
+      // Only after all bound Worker Activations are released may the explicit
+      // Leader restore discard runner-failed changes in this temporary tree.
+      if (Object.keys(registry.get(id)?.workers ?? {}).length > 0)
+        throw new Error('active Worker bindings prevent restore')
+      // A crash after this point must not authorize an automatic second attempt.
       await registry.change(id, row => ({ ...row, runner: { ...row.runner, state: 'restoring' } }))
-      // Explicitly discard only this Host-created temporary tree, including untracked patch files.
       await command(worktree, 'reset', '--hard', remote)
       await command(worktree, 'clean', '-fd')
       if (await command(worktree, 'rev-parse', 'HEAD') !== remote ||
@@ -216,7 +220,8 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
   // Reserve the mutable worktree from terminal handling until the sync completes.
   // Other Web Bridge operations remain independent while runner/restore are blocked.
   function beginSync(leaderId) {
-    if (!get(leaderId) || pending.has(leaderId) || activeOperations.has(leaderId)) return false
+    if (!get(leaderId) || pending.has(leaderId) || activeOperations.has(leaderId) || workerAdmissions.has(leaderId) ||
+        Object.keys(registry.get(leaderId)?.workers ?? {}).length > 0) return false
     syncOperations.set(leaderId, (syncOperations.get(leaderId) ?? 0) + 1)
     return true
   }
@@ -240,7 +245,8 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
     try {
       await previous.catch(() => undefined)
       const { worktree, branch, baseCommit } = context
-      if (get(leaderId) !== context || !BRANCH.test(branch) ||
+      if (get(leaderId) !== context || workerAdmissions.has(leaderId) ||
+          Object.keys(registry.get(leaderId)?.workers ?? {}).length > 0 || !BRANCH.test(branch) ||
           normalize(await realPath(worktree)) !== normalize(worktree) ||
           normalize(await command(worktree, 'rev-parse', '--show-toplevel')) !== normalize(worktree) ||
           await command(worktree, 'branch', '--show-current') !== branch ||
@@ -302,8 +308,24 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
   const changeRecord = (leaderId, fn) => registry.change(leaderId, fn)
   function isRestoring(leaderId) { return pending.has(leaderId) }
   function hasActiveOperation(leaderId) { return activeOperations.has(leaderId) }
-  function beginOperation(leaderId, isBusy = () => false) {
+  function hasSyncOperation(leaderId) { return syncOperations.has(leaderId) }
+  // Synchronous reservation closes the gap before durable Worker intent/delivery.
+  function beginWorkerAdmission(leaderId, token) {
+    if (!get(leaderId) || pending.has(leaderId) || activeOperations.has(leaderId) || syncOperations.has(leaderId)) return false
+    let current = workerAdmissions.get(leaderId)
+    if (!current) { current = new Set(); workerAdmissions.set(leaderId, current) }
+    current.add(token)
+    return true
+  }
+  function endWorkerAdmission(leaderId, token) {
+    const current = workerAdmissions.get(leaderId)
+    current?.delete(token)
+    if (current?.size === 0) workerAdmissions.delete(leaderId)
+  }
+  function beginOperation(leaderId, isBusy = () => false, workerId = null) {
     if (!get(leaderId) || pending.has(leaderId) || activeOperations.has(leaderId) || syncOperations.has(leaderId) ||
+        workerAdmissions.has(leaderId) || (workerId &&
+          Object.keys(registry.get(leaderId)?.workers ?? {}).some(id => id !== workerId)) ||
         ['running', 'unknown', 'restoring'].includes(registry.get(leaderId)?.runner.state) || isBusy(leaderId)) return false
     activeOperations.add(leaderId)
     return true
@@ -327,7 +349,7 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
     } finally { activeOperations.delete(leaderId) }
   }
   function reserveRestore(leaderId) {
-    if (!get(leaderId) || pending.has(leaderId) || syncOperations.has(leaderId) || activeOperations.has(leaderId)) return false
+    if (!get(leaderId) || pending.has(leaderId) || syncOperations.has(leaderId) || activeOperations.has(leaderId) || workerAdmissions.has(leaderId)) return false
     pending.add(leaderId)
     return true
   }
@@ -340,8 +362,8 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
   }
   function child(childId) { return children.get(childId) ?? null }
   function releaseChild(childId) { children.delete(childId) }
-  function dispose() { contexts.clear(); children.clear(); pending.clear(); activeOperations.clear(); syncOperations.clear(); syncQueues.clear() }
-  return { prepare, recover, restore, sync, beginSync, endSync, verifyWorktree, get, record, changeRecord, isRestoring, hasActiveOperation, beginOperation, startRunner, endOperation, reserveRestore, releaseRestore, bindChild, child, releaseChild, dispose }
+  function dispose() { contexts.clear(); children.clear(); pending.clear(); activeOperations.clear(); syncOperations.clear(); syncQueues.clear(); workerAdmissions.clear() }
+  return { prepare, recover, restore, sync, beginSync, endSync, verifyWorktree, get, record, changeRecord, isRestoring, hasActiveOperation, hasSyncOperation, beginWorkerAdmission, endWorkerAdmission, beginOperation, startRunner, endOperation, reserveRestore, releaseRestore, bindChild, child, releaseChild, dispose }
 }
 
 // Both entrypoints use one facade. Initialization is awaited before Git/child actions;
