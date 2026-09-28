@@ -8,6 +8,8 @@ This repository contains Russian text. Always treat text files as UTF-8.
 
 Language. Always respond in Russian unless explicitly asked otherwise. Avoid English loanwords; write as clearly as you would to a high-school student.
 
+Самоподдержка DSH изнутри — приоритет: обычную работу, разработку и ремонт выполняй средствами DSH, сохраняя простоту и надёжность. Codex — не главный исполнитель, а запасной путь аварийного ремонта. Это правило не ослабляет защиту данных, владение Git-ресурсами, требования REQ/SHA/ZIP или любые другие границы доверия.
+
 Relevance. Take the current date into account.
 
 Links and files
