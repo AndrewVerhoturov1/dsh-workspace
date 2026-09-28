@@ -34,8 +34,7 @@ AGENTS.md
 → module README/source/tests
 ```
 
-`postman_async_send`, старый persistent POSTMAN agent и исторические WP milestone notes
-не переопределяют этот production flow.
+Исторические WP milestone notes не переопределяют этот production flow.
 
 ## 3. Trigger и intent boundary
 

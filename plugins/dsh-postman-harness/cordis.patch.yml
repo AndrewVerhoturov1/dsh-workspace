@@ -1,4 +1,4 @@
-# Postman bundle: trusted current-turn orchestration, legacy service agent,
+# Postman bundle: trusted current-turn orchestration,
 # and the supervisor-facing one-shot Luna bridge capability.
 - insert:
     - id: postman-harness
