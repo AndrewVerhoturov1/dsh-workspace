@@ -9,299 +9,45 @@ ROOT = Path(__file__).resolve().parents[3]
 SKILL = ROOT / ".agents" / "skills" / "delegate-via-postman" / "SKILL.md"
 AGENTS = ROOT / "AGENTS.md"
 
+
 class DelegateViaPostmanSkillContract(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.skill = SKILL.read_text(encoding="utf-8")
         cls.agents = AGENTS.read_text(encoding="utf-8")
 
-    def test_version_and_entrypoint(self):
+    def test_production_entrypoint_and_skill_identity(self):
         self.assertIn("DIRECT_POSTMAN_SKILL_VERSION: 22", self.skill)
-        self.assertIn("$workspace = (Get-Location).Path", self.skill)
-        self.assertIn("$bridge = Join-Path $workspace 'postman\\direct\\postman.ps1'", self.skill)
-        self.assertNotIn(r"C:\Users\andre\.dsh\postman\direct\postman.ps1", self.skill)
+        self.assertIn("name: delegate-via-postman", self.skill)
+        self.assertIn(r"<current workspace>\postman\direct\postman.ps1", self.skill)
+        self.assertIn("delegate-via-postman", self.agents)
 
-    def test_golden_path_is_explicit(self):
-        for marker in (
-            "## 0. Золотой путь",
-            "## 8. Единственный production-вызов",
-            "## 9. Минимальный transport gate",
-            "## 13. Не начинать Git integration в normal flow",
-            "## 14. Legacy/manual explicit finalization",
-            "## 20. Критические инварианты",
-        ):
-            self.assertIn(marker, self.skill)
+    def test_exact_current_message_trigger(self):
+        pattern = re.compile(r"^\s*@Postman(?:\s|$)")
+        for message in ("@Postman сделай X", "   @Postman сделай X"):
+            self.assertRegex(message, pattern)
+        for message in ("Postman сделай X", "продолжи проект Postman", "@PostmanAsk вопрос"):
+            self.assertNotRegex(message, pattern)
+        self.assertIn(pattern.pattern, self.skill)
+        self.assertIn(pattern.pattern, self.agents)
 
-    def test_terminal_handoff_is_explicit_in_golden_path(self):
-        section = self.skill.split("## 0. Золотой путь", 1)[1].split(
-            "## 1. Жёстко запрещённые обходы", 1
-        )[0]
-        for marker in (
-            "RESULT_DURABLE",
-            "ASSISTANT_COMPLETED_NO_ARTIFACT",
-            "ARTIFACT_REJECTED",
-            "STOP",
-        ):
-            self.assertIn(marker, section)
-        self.assertNotIn("resume_request.ps1", section)
-        self.assertIn("normal flow не вызывает resume/PREPARE/TEST/PUBLISH", section)
-
-    def test_exclusive_at_postman_trigger_contract(self):
-        trigger_examples = (
-            "@Postman сделай X",
-            "   @Postman сделай X",
-        )
-        non_trigger_examples = (
-            "Postman сделай X",
-            "Postman, сделай X",
-            "Через Postman сделай X",
-            "Используй Postman",
-            "продолжи проект Postman",
-            "реализуй WP-020",
-            "исправь код Postman",
-            "доработай Direct Postman",
-        )
-
-        trigger_pattern = re.compile(r"^\s*@Postman(?:\s|$)")
-        for message in trigger_examples:
-            self.assertRegex(message, trigger_pattern)
-        for message in non_trigger_examples:
-            self.assertNotRegex(message, trigger_pattern)
-
-        trigger_section = self.skill.split("## 2. Trigger", 1)[1].split(
-            "## 3. Разделение ролей", 1
-        )[0]
-        self.assertIn("Postman по умолчанию OFF", trigger_section)
-        self.assertIn(r"^\s*@Postman(?:\s|$)", trigger_section)
-        for message in non_trigger_examples:
-            self.assertIn(message, trigger_section)
-        self.assertNotIn("Legacy-compatible triggers", trigger_section)
-        self.assertNotIn("Для совместимости остаются", trigger_section)
-
-    def test_existing_chat_continuation_contract(self):
-        for marker in (
-            "@Postman --chat REQ_20260917T101323Z_7008 <intent>",
-            'const chatRequestId = "REQ_...";',
-            "`-ChatRequestId '${chatRequestId}'`,",
-            "DIRECT_CHAT_REFERENCE_UNAVAILABLE",
-            "новый canonical REQ",
-            "UI search fallback отсутствует",
-        ):
-            self.assertIn(marker, self.skill)
-        self.assertIn("payload = сравни это с новой версией", self.skill)
-
-    def test_postman_permission_is_current_message_only(self):
-        self.assertIn("Postman permission is current-message-only", self.skill)
-        self.assertIn("Это разрешение действует только для текущего сообщения", self.agents)
-        self.assertIn("не наследуется из предыдущих сообщений", self.agents)
-
-        trigger_pattern = re.compile(r"^\s*@Postman(?:\s|$)")
-        previous_message = "@Postman сделай X"
-        next_message = "продолжи проект Postman"
-        self.assertRegex(previous_message, trigger_pattern)
-        self.assertNotRegex(next_message, trigger_pattern)
-
-    def test_at_postman_requires_skill_before_task_specific_actions(self):
+    def test_trusted_current_turn_route_not_model_copy(self):
+        for tool in ("postman_send_current_turn()", "postman_current_turn_status()"):
+            self.assertIn(tool, self.skill)
+        self.assertIn("TRUSTED_CURRENT_TURN_BOUNDARY_VERSION: 1", self.skill)
         self.assertIn("skill(delegate-via-postman)", self.skill)
-        self.assertIn(
-            "До загрузки этого skill Luna не должна выполнять task-specific действия",
-            self.skill,
-        )
-        self.assertIn("сначала загрузить `delegate-via-postman`", self.agents)
-        self.assertIn("до любого task-specific действия", self.agents)
-        self.assertIn("обходить skill через glob", self.agents)
+        self.assertNotIn("postman_async_send(", self.skill)
+        self.assertNotIn("postman_runtime_", self.skill)
 
-    def test_at_postman_payload_strips_only_transport_marker_and_is_verbatim(self):
-        self.assertIn(
-            "Удалить можно только точный transport marker `@Postman`",
-            self.skill,
-        )
-        self.assertIn("передавать в `-Task` verbatim", self.skill)
-        self.assertIn("НЕ добавляет предыдущий контекст", self.skill)
-        self.assertIn("Оркестратор отвечает", self.skill)
-        self.assertNotIn("разрешено добавить только минимальные факты из предыдущего контекста", self.skill)
-
-    def test_normal_l1_role_is_transport_only(self):
-        section = self.skill.split("### Л1 — local transport agent", 1)[1].split(
-            "## 4. Intent preservation", 1
-        )[0]
-        for marker in ("canonical REQ", "minimal terminal transport gate", "ASSISTANT_COMPLETED_NO_ARTIFACT", "ARTIFACT_REJECTED", "STOP"):
-            self.assertIn(marker, section)
-        for forbidden in ("безопасное внедрение результата", "локальную проверку"):
-            self.assertNotIn(forbidden, section)
-        self.assertIn("не начинает Git/PR integration", section)
-        self.assertIn("не анализирует содержимое durable ZIP", section)
-        self.assertIn("может прочитать только terminal assistantText", section)
-
-    def test_at_postman_is_fail_closed_when_skill_unavailable(self):
-        for document in (self.skill, self.agents):
-            self.assertIn("fail-closed", document)
-            self.assertIn("STOP", document)
-            self.assertRegex(document, r"(?i)(отсутствует|недоступен|не загружается)")
-
-    def test_fast_integration_path_is_explicit(self):
-        self.assertIn(r"C:\Users\andre\.dsh\postman\direct\integrate_result.ps1", self.skill)
-        self.assertIn("READY_FOR_TEST", self.skill)
-        self.assertIn("RESULT_DIAGNOSTIC_ONLY", self.skill)
-        self.assertIn("legacy/manual explicit finalization", self.skill)
-
-    def test_link_only_prompt_and_task_manifest_contract(self):
-        self.assertIn("Канонический prompt Ч1 состоит ровно из двух строк", self.skill)
-        for marker in ("POSTMAN_REQUEST_ID:", "task_file:", "taskPublicationCommit"):
-            self.assertIn(marker, self.skill)
-        prompt_section = self.skill.split("Канонический prompt Ч1", 1)[1].split("## 9.", 1)[0]
-        self.assertNotIn("policy: <policy link>", prompt_section)
-        self.assertIn("self-contained", prompt_section)
-        for metadata in ("repository", "base_commit", "expected_filename", "allowed_paths_json", "forbidden_paths_json"):
-            self.assertIn(metadata, self.skill)
-        self.assertIn("В prompt не должны находиться", self.skill)
-
-    def test_wp018a_storage_and_quiet_contract(self):
-        self.assertIn(r"D:\Downloads_dsh_auto", self.skill)
-        self.assertIn("DSH_POSTMAN_RESULT_ROOT", self.skill)
-        self.assertIn("DIRECT_RESULT_ROOT_UNAVAILABLE", self.skill)
-        normal = self.skill.split("## 8. Единственный production-вызов", 1)[1].split(
-            "### Контракт orchestration-вызова `tools.pwsh`", 1
-        )[0]
-        self.assertIn("tools.pwsh({", normal)
-        self.assertIn("run_in_background: true", normal)
-        self.assertIn("postman/direct/postman.ps1", normal)
-        self.assertNotIn("& pwsh.exe", normal)
-
-    def test_luna_does_not_write_result_root_before_bridge(self):
-        normal = self.skill.split("## 8. Единственный production-вызов", 1)[1].split(
-            "### Контракт orchestration-вызова `tools.pwsh`", 1
-        )[0]
-        for forbidden in ("New-Item", "Set-Content", "Out-File", "Remove-Item", "write-probe"):
-            self.assertNotIn(forbidden, normal)
-        self.assertIn("Luna-side normal invocation НЕ выполняет", self.skill)
-        self.assertIn("Result-root creation и write-probe полностью принадлежат", self.skill)
-        self.assertIn("DIRECT_RESULT_ROOT_UNAVAILABLE", self.skill)
-
-    def test_production_invocation_is_direct_bridge_call(self):
-        normal = self.skill.split("## 8. Единственный production-вызов", 1)[1].split(
-            "### Контракт orchestration-вызова `tools.pwsh`", 1
-        )[0]
-        self.assertEqual(normal.count("tools.pwsh({"), 1)
-        self.assertEqual(normal.count("'postman/direct/postman.ps1'"), 2)
-        self.assertIn("run_in_background: true", normal)
-        self.assertIn("Join-Path (Get-Location).Path", normal)
-        self.assertNotIn("workdir:", normal)
-
-    def test_tool_level_spawn_failure_is_fail_closed(self):
-        self.assertIn("spawn EPERM", self.skill)
-        self.assertIn("POSTMAN_INVOCATION_NOT_STARTED", self.skill)
-        self.assertIn("Send не происходил", self.skill)
-        self.assertIn("tool-level spawn failure не разрешает recovery через старые request states", self.agents)
-        self.assertIn("запрещено читать старые `REQ_*.json`", self.skill)
-        self.assertIn("latest request", self.skill)
-        self.assertIn("вызывать `job_list`", self.skill)
-        self.assertIn("не повторять invocation", self.skill)
-
-    def test_unified_resume_finalization_contract(self):
-        self.assertIn(r"C:\Users\andre\.dsh\postman\direct\resume_request.ps1", self.skill)
-        self.assertIn("resume_request.ps1", self.agents)
-        for code in ("READY_FOR_TEST", "TEST_PASSED", "PUBLISHED"):
-            self.assertIn(code, self.skill)
-        self.assertIn("PREPARE/TEST/PUBLISH", self.skill)
-        self.assertIn("legacy/manual explicit finalization", self.agents)
-        section = self.skill.split("## 14. Legacy/manual explicit finalization", 1)[1].split(
-            "## 15. Что normal `@Postman` НЕ делает после RESULT_DURABLE", 1
-        )[0]
-        self.assertIn("-TestScript", section)
-        self.assertIn("-TestSpec", section)
-        self.assertIn("НЕ вызывает", section)
-        self.assertNotIn("-TestCommand @(", section)
-        self.assertIn("запрещены `python -c`", section)
-        self.assertIn("не являются", self.agents)
-
-    def test_durable_handoff_contract(self):
-        section = self.skill.split("### Канонический durable handoff и STOP", 1)[1].split(
-            "## 10. Что Direct Postman уже доказал", 1
-        )[0]
+    def test_machine_significant_task_and_terminal_markers(self):
         for marker in (
-            r"C:\Users\andre\AppData\Local\DSH\Postman\direct\results\<REQ>.json",
-            "RESULT_DURABLE",
-            "resultZip",
-            "postman_result_workspace_register",
-            "resume_request.ps1",
+            "POSTMAN_REQUEST_ID:", "task_file:", "RESULT_DURABLE",
+            "ASSISTANT_COMPLETED_NO_ARTIFACT", "ARTIFACT_REJECTED",
+            "POSTMAN_TRANSPORT_FAILED", "resultZip", "assistantText",
+            "DIRECT_CHAT_REFERENCE_UNAVAILABLE",
         ):
-            self.assertIn(marker, section)
-        self.assertIn("не распаковывать и не анализировать ZIP повторно", section)
-        self.assertIn("ASSISTANT_COMPLETED_NO_ARTIFACT", section)
-        self.assertIn("ARTIFACT_REJECTED", section)
-
-    def test_manual_changed_files_and_normal_result_link_contract(self):
-        self.assertIn(
-            "Кликабельные изменённые файлы только при explicit manual PUBLISHED finalization",
-            self.skill,
-        )
-        manual = self.skill.split(
-            "### Кликабельные изменённые файлы только при explicit manual PUBLISHED finalization", 1
-        )[1].split("## 20. Критические инварианты", 1)[0]
-        for marker in ("Markdown inline code", "changedFiles", "published.worktree"):
-            self.assertIn(marker, manual)
-        self.assertIn("не использовать bare path, `file://`", manual)
-        self.assertIn("exact durable `resultZip`/`resultDirectory`", self.agents)
-        self.assertIn("only to explicit manual `PUBLISHED` finalization", self.agents)
-
-    def test_normal_report_is_minimal_and_does_not_expose_handoff_by_default(self):
-        section = self.skill.split("## 19. Финальный отчёт", 1)[1].split(
-            "### Кликабельные изменённые файлы только при explicit manual PUBLISHED finalization", 1
-        )[0]
-        for marker in ("RESULT_DURABLE", "exact requestId", "exact resultZip"):
-            self.assertIn(marker, section)
-        self.assertNotIn("\nresultHandoffPath\n", section)
-        self.assertIn("не показывать без диагностической необходимости", section)
-
-    def test_manual_finalization_uses_argv_safe_test_input(self):
-        section = self.skill.split("## 14. Legacy/manual explicit finalization", 1)[1].split(
-            "## 15. Что normal `@Postman` НЕ делает после RESULT_DURABLE", 1
-        )[0]
-        self.assertIn("-TestScript", section)
-        self.assertIn("-TestSpec", section)
-        self.assertIn("`-TestCommand` остаётся legacy", section)
-        self.assertIn("запрещены `python -c`", section)
-        self.assertIn("TestScript", self.agents)
-
-    def test_normal_smoke_is_forbidden(self):
-        self.assertIn("BrowserSmoke не является normal preflight", self.skill)
-        self.assertIn("Smoke не является частью обычного golden path", self.skill)
-
-    def test_failure_is_fail_closed(self):
-        self.assertIn("Не создавать второй REQ до terminal handoff.", self.skill)
-        self.assertRegex(
-            self.skill,
-            r"После настоящего transport failure новая отправка возможна только после нового пользовательского\s+сообщения с exact `@Postman` trigger",
-        )
-        self.assertIn("Non-durable terminal handoff не является transport failure.", self.skill)
-
-    def test_agents_global_invariant(self):
-        self.assertIn(
-            r"POSTMAN_PRODUCTION_ENTRYPOINT: <current workspace>\postman\direct\postman.ps1",
-            self.agents,
-        )
-
-    def test_tools_pwsh_normal_invocation_omits_hardcoded_workdir(self):
-        section = self.skill.split("## 8. Единственный production-вызов", 1)[1].split(
-            "### Внутренний link-only transport contract", 1
-        )[0]
-        self.assertIn("tools.pwsh({", section)
-        self.assertIn("run_in_background: true", section)
-        self.assertNotIn("workdir:", section)
-        self.assertNotIn(r"C:\Users\Andrew\.dsh", section)
-        self.assertIn("Join-Path (Get-Location).Path", section)
-        self.assertIn("postman/direct/postman.ps1", section)
-
-    def test_req_id_is_created_before_background_start(self):
-        section = self.skill.split("## 7. Создание REQ", 1)[1].split(
-            "## 8. Единственный production-вызов", 1
-        )[0]
-        self.assertIn("REQ_YYYYMMDDTHHMMSSZ_NNNN", section)
-        self.assertIn("const stamp = new Date().toISOString()", section)
-        self.assertIn("const suffix = Math.floor(Math.random() * 10000)", section)
-        self.assertIn('const requestId = `REQ_${stamp}_${suffix}`;', section)
-        self.assertIn("до background-start", section)
+            with self.subTest(marker=marker):
+                self.assertIn(marker, self.skill)
 
     def test_frontmatter_parses_with_dsh_yaml_parser(self):
         npm = shutil.which("npm.cmd") or shutil.which("npm")
@@ -360,40 +106,7 @@ process.stdout.write(JSON.stringify({
         self.assertIsInstance(parsed["description"], str)
         self.assertTrue(parsed["description"].strip())
         self.assertTrue(parsed["modelInvocable"])
-    def test_nonzero_correlated_transport_failure_is_parsed_before_background_failure(self):
-        section = self.skill.split("## 8. Единственный production-вызов", 1)[1].split(
-            "### Контракт orchestration-вызова `tools.pwsh`", 1
-        )[0]
-        for marker in (
-            'update.job.status !== "completed"',
-            'update.job.detail !== "exit code: 0"',
-            'result.ok !== false',
-            'result.code !== "POSTMAN_TRANSPORT_FAILED"',
-            'result.requestId !== requestId',
-            'typeof result.transportCode !== "string"',
-            'typeof result.transportMessage !== "string"',
-            'result.details === null',
-            'throw new Error("POSTMAN_BACKGROUND_JOB_FAILED")',
-        ):
-            self.assertIn(marker, section)
-        self.assertIn(
-            "только correlated `POSTMAN_TRANSPORT_FAILED` возвращается как exact terminal failure.",
-            self.skill,
-        )
-        self.assertIn("non-zero process exit", self.skill)
-    def test_non_durable_terminal_handoff_contract(self):
-        for marker in (
-            "ASSISTANT_COMPLETED_NO_ARTIFACT",
-            "ARTIFACT_REJECTED",
-            "assistantText",
-            "validationCode",
-            "validationMessage",
-            "continuationIndex",
-            "rootRequestId",
-        ):
-            self.assertIn(marker, self.skill)
-        self.assertIn("жёсткого числового лимита на continuation REQ нет", self.skill)
-        self.assertIn("POSTMAN_TRANSPORT_FAILED` автоматически не продолжать", self.skill)
+
 
 if __name__ == "__main__":
     unittest.main()

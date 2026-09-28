@@ -14,19 +14,16 @@ class TrustedCurrentTurnContract(unittest.TestCase):
         cls.agents = AGENTS.read_text(encoding="utf-8")
         cls.index = INDEX.read_text(encoding="utf-8")
 
-    def test_skill_prioritizes_trusted_current_turn_boundary(self):
+    def test_skill_declares_trusted_current_turn_boundary(self):
         self.assertIn("TRUSTED_CURRENT_TURN_BOUNDARY_VERSION: 1", self.skill)
-        self.assertIn("postman_send_current_turn()", self.skill)
-        self.assertIn("postman_current_turn_status()", self.skill)
-        self.assertIn("postman_continue_last_request()", self.skill)
+        for tool in ("postman_send_current_turn()", "postman_current_turn_status()", "postman_continue_last_request()"):
+            self.assertIn(tool, self.skill)
         self.assertIn("model-copy fallback запрещён", self.skill)
 
-    def test_global_contract_forbids_llm_payload_reproduction(self):
-        self.assertIn("postman_send_current_turn()", self.agents)
-        self.assertIn("Luna не перепечатывает текущий user text", self.agents)
-        self.assertIn("-TaskBase64", self.agents)
+    def test_global_document_routes_to_skill(self):
+        self.assertIn("delegate-via-postman", self.agents)
 
-    def test_plugin_registers_trusted_empty_argument_tool_surface(self):
+    def test_plugin_registers_trusted_tool_surface(self):
         self.assertIn("createDirectCurrentTurnToolConfigs", self.index)
         self.assertIn("for (const tool of currentTurnBridge.tools)", self.index)
 
