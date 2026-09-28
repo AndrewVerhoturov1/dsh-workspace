@@ -326,6 +326,27 @@ test('grant rejection leaves trusted terminal intact and records separate diagno
   await f.jobs.dispose()
 })
 
+test('false artifact grant registration is not a successful handoff', async () => {
+  const artifact = { requestId: 'REQ_20260925T112233Z_1234', ok: true, code: 'RESULT_DURABLE', state: 'RESULT_DURABLE',
+    resultZip: 'C:/result.zip' }
+  const f = fixture({ grants: { async register(owner, terminal) {
+    assert.equal(owner, parent.id)
+    assert.deepEqual(terminal.result, artifact)
+    return false
+  } }, onStatus: () => ({ status: 'COMPLETED', requestId: artifact.requestId, result: artifact }) })
+  const accepted = await f.bridge.execute({ message: '@Postman make package' }, f.exec)
+  await tick()
+  f.pending.get('child-1')({ stopReason: 'end_turn' })
+  await tick()
+  const result = await f.read(accepted)
+  assert.equal(result.status, 'POSTMAN_BRIDGE_FAILED')
+  assert.equal(result.state, 'FAILED')
+  assert.equal(result.trustedStatus, 'POSTMAN_BRIDGE_TERMINAL')
+  assert.deepEqual(result.result, artifact)
+  assert.match(result.grantDiagnostic, /grant registration rejected/i)
+  await f.jobs.dispose()
+})
+
 test('startup, missing child, reader failure become retained failures', async () => {
   for (const [onStart, onStatus, expected] of [
     [() => { throw Error('startup') }, undefined, /startup/],

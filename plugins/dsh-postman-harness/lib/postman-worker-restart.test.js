@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createPostmanWorkerTools } from './postman-worker.js'
+import { IMPLEMENTATION_REPOSITORY } from './implementation-artifact.js'
 import { createMemoryTaskRegistry } from './postman-task-registry.js'
 
 const signal = new AbortController().signal
@@ -45,6 +46,25 @@ test('reserved exact Worker id survives a new runtime without duplicate creation
   assert.equal(next.workerSessionId, first.workerSessionId)
   assert.equal(f.calls.starts.length, 1)
   assert.deepEqual(f.calls.followups, [first.workerSessionId])
+})
+
+test('new trusted artifact REQ follows up existing Worker and persists authorization', async () => {
+  const f = await fixture()
+  const requestId = 'REQ_20260925T112233Z_5678'
+  const grants = { async resolve(id, request) {
+    assert.equal(id, leader.id)
+    assert.equal(request, requestId)
+    return { repository: IMPLEMENTATION_REPOSITORY, requestId }
+  } }
+  const worker = createPostmanWorkerTools(f.ctx, grants, f.contexts)
+  const first = await task(worker, 'ordinary')
+  const next = await worker.taskTool.execute({ task: 'apply artifact', artifactRequestId: requestId }, { agent: leader, signal })
+  assert.equal(next.status, 'POSTMAN_WORKER_TASK_ACCEPTED')
+  assert.equal(next.created, false)
+  assert.equal(next.workerSessionId, first.workerSessionId)
+  assert.equal(f.calls.starts.length, 1)
+  assert.deepEqual(f.calls.followups, [first.workerSessionId])
+  assert.deepEqual(f.registry.get(leader.id).worker.artifactRequests, [requestId])
 })
 
 test('crash between child acceptance and ready write never creates a second Worker', async () => {
