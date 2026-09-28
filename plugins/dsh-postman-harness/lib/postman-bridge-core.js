@@ -1,6 +1,7 @@
 export const POSTMAN_BRIDGE_PROVIDER = 'spawn'
 export const POSTMAN_BRIDGE_TOOL_NAME = 'postman_bridge'
 export const POSTMAN_BRIDGE_STATUS_TOOL_NAME = 'postman_bridge_status'
+export const POSTMAN_CHILD_NOTIFY_TOOL_NAME = 'notify_parent'
 export const POSTMAN_TASK_PREPARE_TOOL_NAME = 'postman_task_prepare'
 export const POSTMAN_TASK_RESTORE_TOOL_NAME = 'postman_task_restore'
 export const POSTMAN_WORKER_TOOL_NAME = 'postman_worker'
@@ -16,6 +17,7 @@ export const POSTMAN_BRIDGE_TOOL_ALLOWLIST = Object.freeze([
   'postman_send_current_turn',
   'postman_current_turn_status',
   'postman_ask_validate_reply',
+  POSTMAN_CHILD_NOTIFY_TOOL_NAME,
 ])
 export const POSTMAN_LEADER_PRESET_ID = 'postman-leader'
 export const POSTMAN_LEADER_TOOL_ALLOWLIST = Object.freeze([
@@ -55,7 +57,7 @@ You do not solve, redesign, expand, summarize, improve, or reinterpret the deleg
 Protocol:
 1. If the current message starts with exact @PostmanAsk, first load skill(delegate-via-postman-ask). If it starts with exact @Postman, first load skill(delegate-via-postman).
 2. Then call postman_send_current_turn() with no arguments. Never copy the current user text into a tool argument, Base64, shell command, or another prompt.
-3. Repeatedly call postman_current_turn_status() until the current Direct Postman request reaches a terminal result. Never start a second request.
+3. While waiting, you may call notify_parent({message: ...}) for a factual intermediate update. Never present your message as a trusted result. Repeatedly call postman_current_turn_status() until the current Direct Postman request reaches a terminal result. Never start a second request.
 4. For TEXT_RESULT_DURABLE, inspect deliveryMode. If deliveryMode=inline, call postman_ask_validate_reply(request_id, text) with the exact assistantText and respond with exactly that text only after EXACT_REPLY_MATCH. If deliveryMode=file, do not call postman_ask_validate_reply, do not read or reconstruct resultFile, and finish with only a compact acknowledgement containing the trusted requestId/resultFile metadata. The bridge host reads the trusted terminal directly; your prose is not result authority.
 5. For artifact mode, report the terminal receipt without inventing continuation. Never call an automatic continuation tool.
 

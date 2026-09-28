@@ -1,4 +1,5 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { parsePostmanUserTurn } from './direct-current-turn.js'
 import { createPostmanWorkerTools } from './postman-worker.js'
 import { createImplementationArtifactGrants, createImplementationArtifactApplyTool } from './implementation-artifact.js'
@@ -7,7 +8,7 @@ import { createPostmanBridgeJobs } from './postman-bridge-jobs.js'
 import { postmanTaskContexts, initializePostmanTaskContexts, releasePostmanTaskContexts } from './postman-task-context.js'
 import { sharedPostmanTaskRegistry, closeSharedPostmanTaskRegistry } from './postman-task-registry.js'
 import {
-  POSTMAN_BRIDGE_TOOL_ALLOWLIST, POSTMAN_BRIDGE_TOOL_NAME, POSTMAN_BRIDGE_STATUS_TOOL_NAME, POSTMAN_TASK_PREPARE_TOOL_NAME, POSTMAN_TASK_RESTORE_TOOL_NAME,
+  POSTMAN_BRIDGE_TOOL_ALLOWLIST, POSTMAN_BRIDGE_TOOL_NAME, POSTMAN_BRIDGE_STATUS_TOOL_NAME, POSTMAN_CHILD_NOTIFY_TOOL_NAME, POSTMAN_TASK_PREPARE_TOOL_NAME, POSTMAN_TASK_RESTORE_TOOL_NAME,
   createPostmanBridgeBoundaryManager, isTopLevelPostmanLeader,
   postmanBridgeCallerAllowed, postmanBridgeRestrictionForAgent,
 } from './postman-bridge-core.js'
@@ -96,6 +97,36 @@ export function createPostmanBridgeStatusTool(ctx, jobs) {
   })
 }
 
+export function createPostmanChildNotifyTool(ctx, contexts, worker) {
+  return defineTool({
+    name: POSTMAN_CHILD_NOTIFY_TOOL_NAME,
+    description: 'Send a timely, untrusted intermediate message to the direct Postman Leader; the current step finishes before the next round.',
+    parameters: { message: { type: 'string', required: true, description: 'Factual intermediate update for your direct parent.' } },
+    output: output(),
+    execute(args, exec) {
+      const child = exec?.agent
+      const header = child?.session?.header
+      if (typeof args?.message !== 'string' || args.message.trim() === '')
+        return { status: 'PARENT_NOTIFICATION_INVALID' }
+      if (header?.origin !== 'subagent' || header.delegationDepth !== 1 ||
+          typeof header.parentSession !== 'string' || ctx.agents.get(child.id) !== child)
+        return { status: 'PARENT_NOTIFICATION_CALLER_REJECTED' }
+      const leader = ctx.agents.get(header.parentSession)
+      if (!leader || leader.id !== header.parentSession || !isTopLevelPostmanLeader(leader) ||
+          typeof leader.followup !== 'function' ||
+          !((contexts?.child(child.id) != null && contexts.child(child.id) === contexts.get(leader.id)) ||
+            worker?.ownsNotification(child, leader.id)))
+        return { status: 'PARENT_NOTIFICATION_CALLER_REJECTED' }
+      const message = createUserMessage({
+        content: [{ type: 'text', text: 'Background subagent ' + child.id + ':\n' + args.message }],
+        source: { kind: 'subagent-report', form: 'relay', senderSessionId: child.id },
+      })
+      leader.followup(message)
+      return { status: 'PARENT_NOTIFICATION_ACCEPTED', messageId: message.id }
+    },
+  })
+}
+
 export function installPostmanLeaderBoundary(agent) {
   const leader = isTopLevelPostmanLeader(agent)
   const restriction = postmanBridgeRestrictionForAgent(agent)
@@ -119,6 +150,7 @@ export async function apply(ctx) {
   ctx.tools.register(worker.taskTool)
   ctx.tools.register(worker.interruptTool)
   ctx.tools.register(worker.stopTool)
+  ctx.tools.register(createPostmanChildNotifyTool(ctx, postmanTaskContexts, worker))
   ctx.tools.register(createImplementationArtifactApplyTool(ctx, grants, worker, { taskContexts: postmanTaskContexts, jobs }))
   ctx.effect(() => async () => {
     try { await jobs.dispose() } finally {

@@ -76,6 +76,7 @@ test('bridge request pins Luna, spawn, depth and exact message', () => {
     'postman_send_current_turn',
     'postman_current_turn_status',
     'postman_ask_validate_reply',
+    'notify_parent',
   ])
   assert.equal(request.prompt.length, 1)
   assert.equal(request.prompt[0].type, 'text')
@@ -279,7 +280,7 @@ test('package and composition expose bridge entrypoint and leader preset', () =>
   assert.match(bridgeSource, /POSTMAN_BRIDGE_CALLER_REJECTED/)
   assert.match(bridgeSource, /postmanBridgeCallerAllowed\(agent\)/)
   assert.match(bridgeSource, /createPostmanBridgeBoundaryManager/)
-  assert.match(bridgeSource, /inject = \['agents', 'subagents', 'tools'\]/)
+  assert.match(bridgeSource, /inject = \['agents', 'subagents', 'tools', 'storageDomain'\]/)
   assert.match(bridgeSource, /agent-preset\/selected/)
   assert.match(bridgeSource, /ctx\.agents\.get\(sessionId\)/)
   assert.match(bridgeSource, /agent\/disposed/)
@@ -289,13 +290,13 @@ test('package and composition expose bridge entrypoint and leader preset', () =>
   assert.match(agents, /POSTMAN_BRIDGE_CALLER_REJECTED/)
 
   const leaderSkill = readFileSync(join(repoRoot, '.agents', 'skills', 'postman-leader', 'SKILL.md'), 'utf8')
-  assert.match(leaderSkill, /POSTMAN_LEADER_SKILL_VERSION: 11/)
+  assert.match(leaderSkill, /POSTMAN_LEADER_SKILL_VERSION: 12/)
   assert.match(leaderSkill, /Top-level Leader получает positive allowlist ровно из 18 зарегистрированных инструментов/)
   assert.match(leaderSkill, /Worker сохраняет общий coding preset/)
   assert.match(leaderSkill, /Bridge сохраняет отдельный узкий transport allowlist/)
-  assert.match(leaderSkill, /artifactRequestId: "REQ_..."/)
+  assert.match(leaderSkill, /artifactRequestId/)
   assert.ok(leaderSkill.includes('implementation_artifact_apply'))
-  assert.match(leaderSkill, /Worker не выбирает произвольный ZIP path/)
+  assert.match(leaderSkill, /trusted artifact REQ/)
   assert.match(leaderSkill, /Leader-у ЗАПРЕЩЕНО использовать `grep` по каталогу/)
 
   const bridgeFlow = readFileSync(join(repoRoot, 'postman', 'POSTMAN_BRIDGE_FLOW.md'), 'utf8')
