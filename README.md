@@ -4,75 +4,15 @@ DeepSeek Harness (DSH) в `C:\Users\Andrew\.dsh` — основная рабоч
 
 Обычную работу, разработку и ремонт веди средствами DSH. Если есть два одинаково надёжных решения, выбирай более простое и пригодное для самоподдержки из DSH. Внешний Codex — только запасной путь, когда DSH не может безопасно выполнить внутренний ремонт.
 
-## Текущий production Postman
+## Карта репозитория
 
-Production Postman — это **Direct Web Postman**. Канонический entrypoint:
+- [AGENTS.md](AGENTS.md) — короткие общие правила агента и указатели на специальные инструкции.
+- [REPO_POLICY.md](REPO_POLICY.md) — обязательные правила Git и GitHub; [процедуры](docs/workflow/PREVIEW_BRANCH_WORKFLOW.md) — отдельно.
+- `profiles/` — профили запуска DSH; `plugins/` — локальные расширения.
+- [postman/](postman/README.md) — взаимодействие с ChatGPT Web: два режима Direct Postman, оркестрация и ссылки на подробные контракты. Представление результата через Result Workspace — необязательная возможность подсистемы.
+- [system/](system/implementation-package-workflow.md) — применение пакетов реализации; [правила подготовки](system/implementation-package-authoring.md) — там же.
+- `tools/` — рабочие инструменты репозитория.
+- `docs/` — архитектура, процессы и [долгоживущие подпроекты](docs/subprojects/INDEX.md).
+- `.agents/skills/` — навыки, загружаемые только при подходящей задаче.
 
-```text
-postman/direct/postman.ps1
-```
-
-Пользовательский trigger:
-
-```text
-@Postman <intent>
-```
-
-Продолжение exact существующего ChatGPT conversation:
-
-```text
-@Postman --chat REQ_... <новый intent>
-```
-
-Automatic continuation после допустимого non-durable terminal handoff продолжается столько раз, сколько действительно нужно безопасной задаче без решения пользователя; `continuationIndex` служит монотонным счётчиком chain identity. `POSTMAN_TRANSPORT_FAILED` автоматически не продолжать.
-
-Normal flow:
-
-```text
-exact user intent
-→ новый canonical REQ
-→ Direct Postman
-→ self-contained task-файл
-→ двухстрочный browser prompt
-→ ChatGPT Web
-→ correlated ZIP
-→ transport validation
-→ RESULT_DURABLE
-→ optional Result Workspace registration
-→ STOP
-```
-
-Normal `@Postman` flow не применяет ZIP к repository, не запускает PREPARE/TEST/PUBLISH,
-не создаёт implementation branch/commit/PR и не интерпретирует содержимое результата вместо пользователя.
-
-### Source of truth
-
-Документация читается в таком порядке:
-
-1. [`AGENTS.md`](AGENTS.md) — глобальные production invariants и trigger policy.
-2. [`.agents/skills/delegate-via-postman/SKILL.md`](.agents/skills/delegate-via-postman/SKILL.md) — точный operational contract Luna.
-3. [`postman/POSTMAN_CURRENT_FLOW.md`](postman/POSTMAN_CURRENT_FLOW.md) — каноническая архитектура текущего Direct Postman.
-4. [`docs/web-postman-artifact-contract.md`](docs/web-postman-artifact-contract.md) — transport/ZIP contract.
-5. [`postman/direct/README.md`](postman/direct/README.md) — direct entrypoint и operator examples.
-6. [`postman/web/README.md`](postman/web/README.md) — browser transport modules.
-7. [`docs/task-package-protocol.md`](docs/task-package-protocol.md) — self-contained task-файл и двухстрочный browser prompt.
-8. [`docs/intent-preservation-rules.md`](docs/intent-preservation-rules.md) — сохранение exact user intent.
-
-Проверенный acceptance сценарий описан в
-[`docs/postman-production-e2e.md`](docs/postman-production-e2e.md).
-
-`plugins/dsh-postman-harness` не является production transport для `@Postman`.
-Его Result Workspace tools могут использоваться после `RESULT_DURABLE` как presentation convenience.
-
-## Правила репозитория
-
-- [`REPO_POLICY.md`](REPO_POLICY.md) — Git/GitHub policy.
-- [`system/implementation-package-workflow.md`](system/implementation-package-workflow.md) — полный lifecycle применения implementation package.
-- [`system/implementation-package-authoring.md`](system/implementation-package-authoring.md) — правила для внешней модели, которая создаёт ZIP.
-- Обычный package декларативный: `manifest.json`, `changes.patch`, `README.md`, `TEST_PLAN.md`; он не содержит собственного applicator/diagnostics framework.
-- [`docs/subprojects/INDEX.md`](docs/subprojects/INDEX.md) — упрощённая система долгоживущих подпроектов и их контекста.
-
-## Codex OAuth
-
-Текущая локальная OAuth-интеграция описана в [`GPT-CODEX-AUTH.md`](GPT-CODEX-AUTH.md).
-Production web profile использует пакет `dsh-codex-oauth` и provider route `codex`.
+Настройка Codex OAuth описана отдельно в [GPT-CODEX-AUTH.md](GPT-CODEX-AUTH.md).

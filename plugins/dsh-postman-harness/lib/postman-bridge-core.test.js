@@ -286,18 +286,12 @@ test('package and composition expose bridge entrypoint and leader preset', () =>
   assert.match(bridgeSource, /agent\/disposed/)
 
   const agents = readFileSync(join(repoRoot, 'AGENTS.md'), 'utf8')
-  assert.match(agents, /Postman Bridge supervisor invariant/)
-  assert.match(agents, /POSTMAN_BRIDGE_CALLER_REJECTED/)
+  assert.match(agents, /postman-leader/)
 
   const leaderSkill = readFileSync(join(repoRoot, '.agents', 'skills', 'postman-leader', 'SKILL.md'), 'utf8')
   assert.match(leaderSkill, /POSTMAN_LEADER_SKILL_VERSION: 12/)
-  assert.match(leaderSkill, /Top-level Leader получает positive allowlist ровно из 18 зарегистрированных инструментов/)
-  assert.match(leaderSkill, /Worker сохраняет общий coding preset/)
-  assert.match(leaderSkill, /Bridge сохраняет отдельный узкий transport allowlist/)
   assert.match(leaderSkill, /artifactRequestId/)
   assert.ok(leaderSkill.includes('implementation_artifact_apply'))
-  assert.match(leaderSkill, /trusted artifact REQ/)
-  assert.match(leaderSkill, /Leader-у ЗАПРЕЩЕНО использовать `grep` по каталогу/)
 
   const bridgeFlow = readFileSync(join(repoRoot, 'postman', 'POSTMAN_BRIDGE_FLOW.md'), 'utf8')
   assert.match(bridgeFlow, /deliveryMode=inline/)

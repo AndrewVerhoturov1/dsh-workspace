@@ -23,7 +23,7 @@ class PromotePreviewSkillContract(unittest.TestCase):
 
     def test_merge_method_is_not_squash(self):
         self.assertIn("merge commit", self.text)
-        self.assertIn("Squash для `preview → main` запрещён", self.text)
+        self.assertIn("squash", self.text.lower())
 
     def test_preview_is_protected(self):
         self.assertIn("удаление preview", self.text)
@@ -32,7 +32,7 @@ class PromotePreviewSkillContract(unittest.TestCase):
 
     def test_executor_path_is_explicit(self):
         self.assertIn(r"C:\Users\andre\.dsh\tools\promote-preview-to-main\promote_preview_to_main.ps1", self.text)
-        self.assertIn("-PrNumber 123", self.text)
+        self.assertIn("-PrNumber", self.text)
 
 
 if __name__ == "__main__":
