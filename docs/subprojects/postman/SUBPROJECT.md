@@ -2,7 +2,7 @@
 
 id: postman
 status: active
-updated: 2026-09-28
+updated: 2026-09-29
 
 ## Goal
 
@@ -13,6 +13,8 @@ updated: 2026-09-28
 Production transport имеет два explicit user-facing режима поверх общего Direct/Web browser слоя: artifact `@Postman` через `postman/direct/postman.ps1` и text `@PostmanAsk` через `postman/direct/postman-ask.ps1`. Над ними существует supervisor orchestration: top-level `Postman Leader` формирует model-authored `@Postman`/`@PostmanAsk` delegation через Leader-only `postman_bridge`, fresh one-shot Luna выполняет только trusted transport, а parent читает terminal result напрямую из child scope. Trusted current-turn Harness остаётся orchestration boundary и не является отдельным transport.
 
 ## Next step
+
+Безопасный Worker lifecycle реализован в отдельной task branch: close только после завершённого хода и native report, включённого в контекст Leader; отмена — через точный Worker ID и Host approval; `postman_yield()` уступает ход. Проверки пока относятся к временной композиции. Действующий Host и установленные пакеты не обновлены; будущему включению нужны проверка package SHA-256 и совместимости с установленным `dsh-subagent`, резервная копия и обратимый offline overlay для ложного `completed`/closing message. Не запускать live transport ради этого шага.
 
 LIVE E2E остаётся за пользователем: Web implementation ZIP → RESULT_DURABLE → Host grant → Sol authorization → same continuable Worker → Host-prepared clean worktree на опубликованном REQ commit → implementation_artifact_apply → existing runner → Worker report. Локально покрыты отказ runner-а → явный rollback → второй ZIP в той же ветке; живой Web-путь не запускался, а текущий Host ещё не доказал загрузку изменённого plugin.
 

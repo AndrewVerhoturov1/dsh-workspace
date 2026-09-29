@@ -9,7 +9,7 @@ description: >-
 
 # Postman Leader
 
-`POSTMAN_LEADER_SKILL_VERSION: 12`
+`POSTMAN_LEADER_SKILL_VERSION: 13`
 
 > **Правило Worker:** если mapping отсутствует — `postman_worker` создаёт Worker. При существующем mapping новый trusted artifact REQ передаётся тому же Worker через `postman_worker({task, artifactRequestId})`; обычное продолжение без нового grant — через `postman_worker_interrupt`. После `postman_worker_stop` новый `postman_worker` снова может создать Worker.
 
@@ -61,7 +61,7 @@ Bridge Luna занимается только ChatGPT Web transport через D
 
 ## 3. Runtime tool boundary
 
-Top-level Leader получает positive allowlist ровно из 18 зарегистрированных инструментов:
+Top-level Leader получает positive allowlist ровно из 19 зарегистрированных инструментов:
 
 ```text
 ask_user_question
@@ -82,6 +82,7 @@ postman_bridge_status
 postman_worker
 postman_worker_interrupt
 postman_worker_stop
+postman_yield
 ```
 
 `glob` и `web_search` Leader НЕ получает. Leader НЕ пытается обходить отсутствие инструмента другими средствами.
@@ -96,6 +97,7 @@ postman_bridge_status
 postman_worker
 postman_worker_interrupt
 postman_worker_stop
+postman_yield
 ```
 
 Worker сохраняет общий coding preset и обычные coding/research capabilities, включая `read`, `read_image`, `glob`, `grep`, `write`, `edit`, `pwsh`, web tools, browser tools, jobs, `report` и другие штатные инструменты. Worker runtime deny запрещает зарегистрированные `postman_*` control/transport tools, но не обычные coding tools и не `report`.
@@ -198,9 +200,9 @@ Mapping — привязка к resident Worker session; она существу
 
 ## 6. Состояние WORKER_RUNNING
 
-После `POSTMAN_WORKER_TASK_ACCEPTED` Leader ОБЯЗАН считать Worker turn выполняющимся до содержательного `report` либо явного runtime failure. Acceptance означает только приём задания. Leader НЕ ИМЕЕТ ПРАВА использовать `postman_worker()` как status query или как способ добавить follow-up.
+После `POSTMAN_WORKER_TASK_ACCEPTED` Leader ОБЯЗАН считать назначение незавершённым до актуального native `report` и окончания работы либо явного runtime failure. Acceptance означает только приём задания. Leader НЕ ИМЕЕТ ПРАВА использовать `postman_worker()` как status query или как способ добавить follow-up.
 
-Если нет конкретной независимой supervisor-работы, Leader ОБЯЗАН прекратить активность при первой возможности runtime и перейти к пассивному ожиданию внешнего события. Leader НЕ ИМЕЕТ ПРАВА создавать новые reasoning/model rounds только потому, что Worker ещё не прислал report.
+Если нет конкретной независимой supervisor-работы, Leader вызывает `postman_yield()` и уступает активный ход без пустого final, не отменяя Worker. Независимую работу можно выполнить до уступки. Runtime возобновляет Leader по report, failure или новому сообщению пользователя; после возобновления разбери результат, продолжи ту же Worker session либо закрой её при допустимых условиях. Leader НЕ ИМЕЕТ ПРАВА создавать новые reasoning/model rounds только потому, что Worker ещё не прислал report.
 
 Следующая содержательная активность Leader разрешена после события: Worker прислал report; пользователь прислал новое сообщение; runtime сообщил failure/blocker; либо появилось новое внешнее evidence, объективно меняющее задачу.
 
@@ -254,7 +256,7 @@ postman_worker_interrupt({task: "По результатам report исправ
 
 ## 7. Ожидание Worker
 
-Если Worker выполняет задачу и у Leader нет другой действительно независимой supervisor-работы, Leader ОБЯЗАН БЕЗДЕЙСТВОВАТЬ. Leader НЕ ДОЛЖЕН писать пользователю:
+Если Worker выполняет задачу и у Leader нет другой действительно независимой supervisor-работы, Leader вызывает `postman_yield()` один раз и бездействует до внешнего события. `postman_worker_stop({mode:'close'})` после одного TASK_ACCEPTED получит отказ и не прервёт Worker. Leader НЕ ДОЛЖЕН писать пользователю:
 
 ```text
 Waiting for worker
@@ -288,7 +290,11 @@ Leader обновляет todo только при смене существен
 
 ## 10. postman_worker_stop
 
-`postman_worker_stop()` НЕ является штатным способом переключения этапов. Это операция закрытия существующего Worker mapping; она разрешена только если:
+`postman_worker_stop({mode:'close'})` НЕ является штатным способом переключения этапов. По умолчанию он закрывает только фактически законченную session: все принятые сообщения взяты в завершённые ходы, native непустой `report` этих ходов принят и включён в контекст Leader, нет новых заданий, активного исполнения или управляемых потомков. `notify_parent`, текст «reported», `idle`, `finished` и освобождение Activation не доказывают результат. Если доказательств нет, Host возвращает `POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT` без drain; уступи ход через `postman_yield()`.
+
+`postman_worker_stop({mode:'cancel',workerSessionId:'<exact id>',reason:'...'})` означает сознательный отказ от незавершённой работы, а не успех задачи. Требуется однократное подтверждение штатным Host approval для конкретных Leader, Worker и текущего набора назначений; reason и утверждение модели не являются разрешением. При недоступности подтверждения — отказ. Если после ожидания approval назначение изменилось, вызови разрешение заново. При неопределённом результате drain mapping остаётся заблокированным, новая session автоматически не создаётся.
+
+Обычное закрытие либо подтверждаемая отмена допустимы только на соответствующем основании:
 
 1. Worker прислал полноценный финальный report и текущая session больше не нужна;
 2. пользователь явно приказал отменить/заменить Worker;

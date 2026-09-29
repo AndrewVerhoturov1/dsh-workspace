@@ -67,11 +67,11 @@ child scope. Child assistant prose не используется как result a
 Файловый preset `Postman Leader` (`postman-leader`) находится в корне репозитория в
 `.agent-presets/postman-leader/`. Встроенный `dsh-agent-presets` находит его в
 `$DSH_HOME/.agent-presets`; при проверке отдельного рабочего дерева нужно задать `DSH_HOME`
-на его корень. Runtime boundary даёт top-level Agent-у положительный allowlist ровно из 18
+на его корень. Runtime boundary даёт top-level Agent-у положительный allowlist ровно из 19
 зарегистрированных tools:
 
 ```text
-ask_user_question, todo_write, exit_plan_mode, create_goal, get_goal, update_goal, read, read_image, grep, skill, web_fetch, postman_task_prepare, postman_task_restore, postman_bridge, postman_bridge_status, postman_worker, postman_worker_interrupt, postman_worker_stop
+ask_user_question, todo_write, exit_plan_mode, create_goal, get_goal, update_goal, read, read_image, grep, skill, web_fetch, postman_task_prepare, postman_task_restore, postman_bridge, postman_bridge_status, postman_worker, postman_worker_interrupt, postman_worker_stop, postman_yield
 ```
 
 `glob` и `web_search` намеренно отсутствуют; незарегистрированные имена не являются
@@ -91,10 +91,9 @@ Host сохраняет точную привязку Leader session id → chil
 Первое задание запускает `startContinuable`, дальнейшие задания идут через `followup`.
 Ответ `POSTMAN_WORKER_TASK_ACCEPTED` подтверждает только приём, а не выполнение. Host сохраняет FIFO-порядок приёма обычных `postman_worker` follow-up; это не обещает порядок их обработки со стороны Harness runtime.
 
-При существенном изменении требований `postman_worker_interrupt({task})` кооперативно прерывает текущий turn через публичный ancestor interrupt, ждёт idle resident Worker и передаёт новое задание тому же durable child session, сохраняя mapping и task/worktree context. Обычные `postman_worker` follow-up по-прежнему принимаются через существующий FIFO-путь. Interrupt не задаёт гарантий приоритета или порядка обработки относительно уже принятых сообщений: обработкой очереди управляет Harness runtime. При отсутствии активного Worker tool отказывает и не создаёт замену. `postman_worker_stop` по-прежнему освобождает resident Activation и удаляет отображение.
+При существенном изменении требований `postman_worker_interrupt({task})` ставит новое задание в FIFO той же durable child session, не отменяя активный шаг модели или инструмент. Обычные `postman_worker` follow-up по-прежнему принимаются через существующий FIFO-путь. Interrupt не задаёт гарантий приоритета или порядка обработки относительно уже принятых сообщений: обработкой очереди управляет Harness runtime. При отсутствии активного Worker tool отказывает и не создаёт замену. `postman_worker_stop` освобождает resident Activation и удаляет mapping только после проверенного завершения или подтверждённой отмены.
 
-Worker отправляет результат через штатный `report`. `postman_worker_stop` штатно освобождает
-resident Activation и закрывает долговременную привязку; сама Session не удаляется. После рестарта
+Worker отправляет результат через штатный `report`. Host связывает принятые messageId с ходами и native report; `notify_parent`, `finished` и состояние idle не подтверждают завершение. `postman_worker_stop({mode:'close'})` по умолчанию отказывает, пока нет актуального отчёта в контексте Leader и завершённого исполнения; `mode:'cancel'` с точным workerSessionId требует разового Host approval, перепроверки назначения после согласия и не означает успеха пользовательской задачи. При неизвестном drain binding остаётся неопределённым. `postman_yield()` завершает только активный ход Leader через Host concludeTurn, не останавливает Worker; report/failure/новый пользовательский ввод возобновляют Leader без пустого final. Session при закрытии не удаляется. После рестарта
 Host проверяет точный сохранённый childId и продолжает его без создания второго Worker.
 
 ## Implementation package: отдельное локальное решение

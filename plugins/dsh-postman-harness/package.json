@@ -17,6 +17,7 @@
     "lib/postman-bridge-launch-coordinator.js",
     "lib/postman-bridge-jobs.js",
     "lib/postman-worker.js",
+    "lib/postman-worker-evidence.js",
     "lib/postman-task-context.js",
     "lib/postman-task-registry.js",
     "lib/implementation-artifact.js",

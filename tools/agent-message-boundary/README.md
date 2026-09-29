@@ -16,5 +16,7 @@ node tools/agent-message-boundary/apply-overlay.mjs --root $root --verify
 Проверки исходного цикла без изменения установки:
 
 ```powershell
-node --test tools/agent-message-boundary/agent-message-boundary.test.mjs
+node --test tools/agent-message-boundary/agent-message-boundary.test.mjs tools/agent-message-boundary/subagent-result-overlay.test.mjs
 ```
+
+Отдельная накладка `subagent-result-overlay.mjs` касается установленного `@deepseek-ai/dsh-subagent@0.1.1-rc.2`: если для хода отсутствует `turn/end`, успешный drain не означает успешное выполнение. Последний tool-call и текст старого хода не объявляются closing message текущего исполнения. Сценарий проверяет точный SHA-256 исходного пакета, сохраняет исходник в новом каталоге резервной копии и отказывает при повторном применении либо иной версии. Только после отдельного решения о развёртывании и остановки Host: `node tools/agent-message-boundary/subagent-result-overlay.mjs --root $root --verify`, затем `--apply --backup-dir <новый каталог копии>`; откат — вернуть `dsh-subagent-index.js` из копии. В рамках локальной разработки установка не меняется; проверен лишь offline apply на временной копии.
