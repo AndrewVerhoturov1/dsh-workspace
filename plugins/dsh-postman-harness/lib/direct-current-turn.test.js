@@ -50,7 +50,9 @@ test('image transport requires exact durable descriptor and bytes, never grants 
     const manager = new DirectPostmanJobManager({ exists: () => true, randomInt: (() => { let n = 0; return () => ++n })(),
       spawn(_command, argv) { const child = fakeChild(); children.push(child); args.push(argv); queueMicrotask(() => child.emit('spawn')); return child } })
     const descriptor = { ok: true, code: 'IMAGE_RESULT_DURABLE', state: 'IMAGE_RESULT_DURABLE', resultImage: image,
-      imageFormat: 'jpg', imageSha256: createHash('sha256').update(bytes).digest('hex'), imageByteLength: bytes.length }
+      imageFormat: 'jpg', imageSha256: createHash('sha256').update(bytes).digest('hex'), imageByteLength: bytes.length,
+      imageWidth: 20, imageHeight: 30, imageMimeType: 'image/jpeg' }
+    assert.equal(Object.hasOwn(descriptor, 'secondRequestId'), false)
     const cases = [
       [descriptor, 'IMAGE_RESULT_DURABLE'],
       [{ ...descriptor, resultZip: 'bad.zip' }, 'POSTMAN_IMAGE_RESULT_DESCRIPTOR_INVALID'],

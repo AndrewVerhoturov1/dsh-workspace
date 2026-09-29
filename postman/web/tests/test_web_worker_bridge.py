@@ -101,7 +101,6 @@ class WebWorkerBridgeTests(unittest.TestCase):
 
     def test_image_flow_uses_one_page_for_both_proven_turns_and_zip(self):
         chat = "https://chatgpt.com/c/12345678-1234-1234-1234-123456789abc"
-        second = "REQ_20260831T043821Z_0043"
         events = []
         class Page:
             closed = False
@@ -130,6 +129,9 @@ class WebWorkerBridgeTests(unittest.TestCase):
                      "details": {"assistantText": "ZIP", "assistantIndex": 3}}
         result_root = []
         pauses = []
+        def pause(seconds):
+            pauses.append(seconds)
+            events.append("pause")
         def observe(target, prompt, *_args, **kwargs):
             self.assertIs(target, page)
             events.append("observe_image" if kwargs.get("image_mode") else "observe_zip")
@@ -140,28 +142,30 @@ class WebWorkerBridgeTests(unittest.TestCase):
             self.assertEqual(kwargs["navigate"], False)
             self.assertIn("observe_image", events)
             self.assertFalse(page.closed)
-            events.append("submit_b")
+            events.append("submit_packaging")
             return submit
         def detect(target, **kwargs):
             self.assertIs(target, page)
-            self.assertEqual(kwargs["request_id"], second)
+            self.assertEqual(kwargs["request_id"], REQ)
             events.append("detect_zip")
             return {"ok": True, "code": "ARTIFACT_FOUND"}
         def download(target, **kwargs):
             self.assertIs(target, page)
-            self.assertEqual(kwargs["request_id"], second)
+            self.assertEqual(kwargs["request_id"], REQ)
             result_root.append(kwargs["result_root"])
             events.append("download_zip")
             return {"ok": True, "code": "RESULT_DURABLE", "details": {
-                "resultDirectory": str(Path(kwargs["result_root"]) / second),
-                "resultZip": str(Path(kwargs["result_root"]) / second / "result.zip"),
+                "resultDirectory": str(Path(kwargs["result_root"]) / REQ),
+                "resultZip": str(Path(kwargs["result_root"]) / REQ / "result.zip"),
                 "sha256": "c" * 64}}
         with tempfile.TemporaryDirectory() as root:
-            bridge = bridge_module.WebWorkerBridge(root=root, sleep=pauses.append,
+            bridge = bridge_module.WebWorkerBridge(root=root, sleep=pause,
                                                     on_result_durable=lambda _: events.append("grant"))
-            followup_data = {"request_id": second, "prompt": "POSTMAN_REQUEST_ID: " + second,
-                             "expected_filename": f"POSTMAN_{second}_RESULT.zip",
-                             "expected_request": {"requestId": second}}
+            def prepare():
+                events.append("publish_packaging")
+                return {"task_url": TASK_URL, "prompt": "POSTMAN_REQUEST_ID: " + REQ + "\ntask_file: " + TASK_URL,
+                        "expected_filename": f"POSTMAN_{REQ}_RESULT.zip",
+                        "expected_request": {"requestId": REQ}}
             with patch.object(bridge_module.browser_submit, "submit_fresh_prompt", side_effect=lambda *_a, **_k: (events.append("submit_a"), submit)[1]) as fresh, \
                  patch.object(bridge_module.browser_submit, "submit_existing_prompt", side_effect=followup) as existing, \
                  patch.object(bridge_module.browser_observer, "observe_next_assistant", side_effect=observe) as observer, \
@@ -171,21 +175,41 @@ class WebWorkerBridgeTests(unittest.TestCase):
                  patch.object(bridge_module.reminder_policy, "submit_reminder", side_effect=AssertionError("reminder")):
                 result = bridge.run_request(REQ, task_url=TASK_URL, prompt="image request",
                     expected_filename="unused.zip", expected_request={},
-                    playwright_factory=Factory, image_followup=followup_data)
+                    playwright_factory=Factory, image_prepare=prepare)
             self.assertEqual(result["code"], bridge_module.RESULT_DURABLE, result)
             self.assertTrue(result["ok"])
-            self.assertEqual(result["details"]["secondRequestId"], second)
+            self.assertNotIn("secondRequestId", result["details"])
             self.assertEqual(result["details"]["imageObserverProof"]["details"]["assistantImageCount"], 1)
             self.assertEqual(bridge.read_state(REQ)["state"], bridge_module.RESULT_DURABLE)
-            self.assertEqual(events, ["new_page", "submit_a", "observe_image", "submit_b",
-                                      "observe_zip", "detect_zip", "download_zip", "close"])
-            self.assertEqual(len(pauses), 5)
+            self.assertEqual(events, ["new_page", "submit_a", "observe_image", "publish_packaging", "pause",
+                                      "submit_packaging", "observe_zip", "detect_zip", "pause", "download_zip", "close"])
+            self.assertEqual(len(pauses), 2)
             self.assertTrue(all(3 <= seconds <= 7 for seconds in pauses))
             self.assertEqual((fresh.call_count, existing.call_count, observer.call_count), (1, 1, 2))
             self.assertEqual(fresh.call_args.kwargs["timeout_ms"], 90_000)
             self.assertEqual(result_root, [bridge.result_root])
             self.assertTrue(page.closed)
 
+
+    def test_image_preparatory_restart_never_resends_from_persisted_state(self):
+        for state in (bridge_module.ACCEPTED, bridge_module.WEB_STARTING,
+                      bridge_module.PROMPT_SENT, bridge_module.WAITING_ASSISTANT,
+                      bridge_module.IMAGE_TURN_COMPLETED, bridge_module.RESULT_DURABLE):
+            with self.subTest(state=state), tempfile.TemporaryDirectory() as root:
+                original = bridge_module.WebWorkerBridge(root=root)
+                request = bridge_module.BridgeRequest(REQ, "", str(original.result_path(REQ)), f"WEB_{REQ}")
+                original._write_state(request, bridge_module.ACCEPTED)
+                if state != bridge_module.ACCEPTED:
+                    original._write_state(request, state)
+                    if state == bridge_module.WEB_STARTING:
+                        original._fail(request, "uncertain browser action")
+                restarted = bridge_module.WebWorkerBridge(root=root)
+                result = restarted.run_request(REQ, task_url="", prompt="image request",
+                    expected_filename=f"POSTMAN_{REQ}_RESULT.zip", expected_request={"requestId": REQ},
+                    image_prepare=lambda: self.fail("must not publish"),
+                    playwright_factory=lambda: self.fail("must not attach or resend"))
+                self.assertEqual(result["code"], state)
+                self.assertEqual(restarted.read_state(REQ)["state"], state)
 
     def test_ordinary_mode_keeps_observer_contract_and_no_image_delay(self):
         with tempfile.TemporaryDirectory() as root:
@@ -212,6 +236,45 @@ class WebWorkerBridgeTests(unittest.TestCase):
             self.assertEqual(result["details"]["transportMessage"], "FATAL")
             self.assertNotIn("allow_empty_text", observer.call_args.kwargs)
             self.assertEqual(pauses, [])
+
+    def test_image_flow_rejects_two_ready_images_before_packaging_publication(self):
+        chat = "https://chatgpt.com/c/12345678-1234-1234-1234-123456789abc"
+        calls = []
+        pauses = []
+        class Page:
+            closed = False
+            def close(self): self.closed = True
+            def is_closed(self): return self.closed
+        page = Page()
+        class Context:
+            def new_page(self): return page
+        class Browser:
+            contexts = [Context()]
+        class Factory:
+            def __enter__(self): self.chromium = self; return self
+            def __exit__(self, *args): pass
+            def connect_over_cdp(self, url): return Browser()
+        submit = {"ok": True, "code": "SENT", "sendState": "PROVEN_SENT", "details": {"chatUrl": chat}}
+        proof = {"ok": True, "code": "ASSISTANT_TURN_COMPLETED",
+                 "details": {"assistantText": "", "assistantImageCount": 2, "assistantIndex": 1}}
+        def prepare():
+            calls.append("prepare")
+            raise AssertionError("must not publish packaging task")
+        for count in (0, 2, None, True):
+            with self.subTest(count=count), tempfile.TemporaryDirectory() as root:
+                proof["details"]["assistantImageCount"] = count
+                bridge = bridge_module.WebWorkerBridge(root=root, sleep=pauses.append)
+                with patch.object(bridge_module.browser_submit, "submit_fresh_prompt", return_value=submit), \
+                     patch.object(bridge_module.browser_observer, "observe_next_assistant", return_value=proof), \
+                     patch.object(bridge_module.browser_observer, "connection_interrupted", return_value=(False, {})):
+                    result = bridge.run_request(REQ, task_url="", prompt="image request",
+                        expected_filename="unused.zip", expected_request={},
+                        playwright_factory=Factory, image_prepare=prepare)
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["code"], bridge_module.POSTMAN_TRANSPORT_FAILED)
+                self.assertEqual(calls, [])
+                self.assertEqual(pauses, [])
+
 
 if __name__ == "__main__":
     unittest.main()

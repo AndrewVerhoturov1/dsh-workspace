@@ -76,16 +76,14 @@ def extract_validated_image(
     if zip_sha != expected_zip_sha256.lower():
         _fail("IMAGE_ZIP_CHANGED", "ZIP changed since transport validation")
 
-    candidates = [entry for entry in validated_inventory if entry["kind"] == "file"
-                  and Path(entry["path"]).suffix.lower() in _EXTENSIONS]
-    if len(candidates) != 1:
-        _fail("IMAGE_ENTRY_COUNT", "Expected exactly one PNG, JPEG, or WEBP image entry", count=len(candidates))
-    if any(entry["kind"] == "file" and Path(entry["path"]).suffix.lower() in _OTHER_IMAGE_EXTENSIONS
-           for entry in validated_inventory):
-        _fail("IMAGE_ENTRY_COUNT", "ZIP contains another image in an unsupported format")
-    chosen = candidates[0]
-    normalized_name = chosen["path"]
+    files = [entry for entry in validated_inventory if entry.get("kind") == "file"]
+    if len(files) != 1:
+        _fail("IMAGE_ENTRY_COUNT", "Expected exactly one file in the image ZIP", count=len(files))
+    chosen = files[0]
+    normalized_name = chosen.get("path", "")
     extension = Path(normalized_name).suffix.lower()
+    if extension not in _EXTENSIONS or extension in _OTHER_IMAGE_EXTENSIONS:
+        _fail("IMAGE_ENTRY_COUNT", "The only ZIP file must be PNG, JPEG, or WEBP", count=0)
     try:
         with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
             # Resolve by validated member position, not by an untrusted output path.

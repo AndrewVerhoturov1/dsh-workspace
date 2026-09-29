@@ -183,18 +183,6 @@ class TaskPackageTests(unittest.TestCase):
         self.assertIn("manifest.json` необязателен и полностью informational", content)
         self.assertNotIn("значение должно быть ровно", content)
 
-    def test_image_manifest_requests_one_image_without_zip_envelope(self):
-        content = task_package.render_image_task_manifest(
-            request_id=REQ, user_intent="Нарисуй кота ✅", repository="owner/repo",
-            base_commit=BASE_COMMIT)
-        self.assertIn("Нарисуй кота ✅", content)
-        self.assertIn("Generate exactly ONE image", content)
-        self.assertNotIn("<<<POSTMAN_RESULT_BEGIN", content)
-        self.assertNotIn("expected_filename:", content)
-        with self.assertRaises(task_package.TaskPackageError):
-            task_package.render_image_task_manifest(request_id="bad", user_intent="image",
-                repository="owner/repo", base_commit=BASE_COMMIT)
-
     def test_external_prompt_contains_only_req_and_task_link(self):
         prompt = task_package.build_external_prompt(REQ, SKILL_URL, TASK_URL)
         self.assertEqual(

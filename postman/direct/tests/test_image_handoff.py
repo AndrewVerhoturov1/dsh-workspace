@@ -21,32 +21,32 @@ class ImageHandoffTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.first = "REQ_20260929T120000Z_1234"
-        self.second = "REQ_20260929T120001Z_1235"
+        self.request_id = "REQ_20260929T120000Z_1234"
         self.results = self.root / "results"
-        directory = self.results / self.second
+        directory = self.results / self.request_id
         directory.mkdir(parents=True)
         self.image = directory / "image.png"
         self.image.write_bytes(b"image fixture bytes")
         publication = "a" * 40
-        self.state = self.root / "requests" / (self.first + ".json")
-        self.receipt = self.root / "direct-results" / (self.first + ".json")
+        self.state = self.root / "requests" / (self.request_id + ".json")
+        self.receipt = self.root / "direct-results" / (self.request_id + ".json")
         self.data = {
             "ok": True, "code": handoff.IMAGE_RESULT_DURABLE, "state": handoff.IMAGE_RESULT_DURABLE,
-            "requestId": self.first, "secondRequestId": self.second,
+            "requestId": self.request_id,
             "repository": "AndrewVerhoturov1/dsh-workspace", "baseCommit": "b" * 40,
             "taskPublicationCommit": publication,
-            "taskUrl": f"https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/{publication}/{self.first}.md",
-            "expectedFilename": f"POSTMAN_{self.first}_RESULT.zip",
+            "taskUrl": f"https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/{publication}/{self.request_id}.md",
+            "expectedFilename": f"POSTMAN_{self.request_id}_RESULT.zip",
             "resultRoot": str(self.results), "resultImage": str(self.image), "imageFormat": "png",
             "imageSha256": hashlib.sha256(self.image.read_bytes()).hexdigest(),
-            "imageByteLength": self.image.stat().st_size, "statePath": str(self.state),
+            "imageByteLength": self.image.stat().st_size, "imageWidth": 20, "imageHeight": 30,
+            "imageMimeType": "image/png", "statePath": str(self.state),
             "resultHandoffPath": str(self.receipt),
         }
 
     def validate(self, data):
         return handoff.validate_image_terminal(data, expected_repository=self.data["repository"],
-            request_id=self.first, expected_state_path=self.state, expected_handoff_path=self.receipt)
+            request_id=self.request_id, expected_state_path=self.state, expected_handoff_path=self.receipt)
 
     def test_valid_exact_image_receipt(self):
         result = self.validate(self.data)
@@ -56,8 +56,14 @@ class ImageHandoffTests(unittest.TestCase):
     def test_jpeg_extension_matches_jpg_format(self):
         jpeg = self.image.with_name("image.jpeg")
         self.image.rename(jpeg)
-        result = self.validate({**self.data, "resultImage": str(jpeg), "imageFormat": "jpg"})
+        result = self.validate({**self.data, "resultImage": str(jpeg), "imageFormat": "jpg", "imageMimeType": "image/jpeg"})
         self.assertEqual(result["resultImage"], str(jpeg))
+
+    def test_rejects_invalid_dimensions_and_mime(self):
+        for changes in ({"imageWidth": 0}, {"imageHeight": True},
+                        {"imageMimeType": "image/jpeg"}):
+            with self.subTest(changes=changes), self.assertRaises(handoff.DurableHandoffError):
+                self.validate({**self.data, **changes})
 
     def test_rejects_zip_descriptor_and_changed_bytes(self):
         with self.assertRaises(handoff.DurableHandoffError):
@@ -73,7 +79,7 @@ class ImageHandoffTests(unittest.TestCase):
         with self.assertRaises(handoff.DurableHandoffError):
             self.validate({**self.data, "resultImage": str(other)})
         with self.assertRaises(handoff.DurableHandoffError):
-            self.validate({**self.data, "secondRequestId": self.first})
+            self.validate({**self.data, "secondRequestId": "REQ_20260929T120001Z_1235"})
 
 
 if __name__ == "__main__":
