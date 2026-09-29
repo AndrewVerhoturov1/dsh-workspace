@@ -41,7 +41,7 @@ forbidden_paths_json: [...]
 
 ## Implementation author discipline
 
-... (conditional for code/repository changes; no-op otherwise)
+... (conditional only for intent changing the repository named in this task; standalone code artifacts excluded)
 
 ## Result contract
 
@@ -55,7 +55,7 @@ transport/downstream metadata. Их присутствие не означает
 `allowed_paths_json` / `forbidden_paths_json` могут использоваться downstream/manual
 application workflow, но **не являются normal ZIP transport gates**.
 
-Task-файл self-contained: execution/result contract и компактная fixed implementation-author discipline находятся в нём же. Последняя не меняет `User intent`, для non-code artifact requests является no-op и не превращает универсальный normal transport в implementation validator. Подробный канонический contract автора — [External Implementation Author](../system/postman-external-implementation-author.md). Web пишет полное изменение и необходимые tests; authoritative local apply/targeted tests остаются downstream у Worker/central runner, а не являются authoring-приёмкой Web.
+Task-файл self-contained: execution/result contract и компактная fixed implementation-author discipline находятся в нём же. Последняя не меняет `User intent` и задаёт implementation-package requirements только для intent, требующего изменить repository, указанный в task; автономный кодовый artifact без таких изменений сохраняет естественный формат результата. Универсальный normal transport не становится implementation validator. Подробный канонический contract автора — [External Implementation Author](../system/postman-external-implementation-author.md). Для repository implementation Web пишет полное изменение и необходимые tests; authoritative local apply/targeted tests остаются downstream у Worker/central runner, а не являются authoring-приёмкой Web.
 
 ## Canonical browser prompt
 

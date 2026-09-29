@@ -132,12 +132,12 @@ allowed_paths_json
 forbidden_paths_json
 User intent
 Execution contract
-Implementation author discipline (fixed; no-op для non-code intent)
+Implementation author discipline (fixed; implementation-package rules only for intent changing the named repository)
 Result contract
 ```
 
 Metadata paths не означают, что пользователь запросил repository changes, и не являются
-normal ZIP validator content gates. Fixed implementation-author discipline не изменяет exact `User intent`: для non-code artifact requests она no-op. Условия для Web содержатся в самом task, без дополнительного policy URL; подробный canonical contract — [External Implementation Author](../system/postman-external-implementation-author.md). Web готовит полный implementation и необходимые tests, а downstream Local Worker/central runner выполняют authoritative apply и targeted tests на реальном worktree. Normal transport остаётся универсальным и не становится implementation validator.
+normal ZIP validator content gates. Fixed implementation-author discipline не изменяет exact `User intent`: implementation-package requirements действуют только при запросе изменить repository, указанный в task; самостоятельный code artifact без repository changes выдаётся в естественном формате. Условия для Web содержатся в самом task, без дополнительного policy URL; подробный canonical contract — [External Implementation Author](../system/postman-external-implementation-author.md). Для repository implementation Web готовит полный implementation и необходимые tests, а downstream Local Worker/central runner выполняют authoritative apply и targeted tests на реальном worktree. Normal transport остаётся универсальным и не становится implementation validator.
 
 ## 7. Canonical browser prompt
 

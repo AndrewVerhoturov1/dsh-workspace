@@ -6,7 +6,7 @@ language: ru
 
 ## Назначение
 
-Эта инструкция применяется к внешнему ChatGPT Web, когда `User intent` требует изменения кода или repository и результат передаётся через Postman как implementation artifact.
+Эта инструкция задаёт implementation-package workflow для внешнего ChatGPT Web только тогда, когда `User intent` требует подготовить изменения кода или файлов repository, указанного в Postman task (`AndrewVerhoturov1/dsh-workspace`). Само наличие кода в результате не делает запрос repository implementation.
 
 Она дополняет, но не заменяет:
 
@@ -15,7 +15,7 @@ language: ru
 - [Implementation Package Authoring Contract](implementation-package-authoring.md);
 - transport/result contract текущего `REQ`.
 
-Если `User intent` не требует изменения кода или repository, эта инструкция не создаёт новых требований.
+Если пользователь просит отдельную программу, игру, HTML/CSS/JS-проект, скрипт, библиотеку, пример, архив исходников или другой самостоятельный code artifact без изменения указанного repository, выполнить запрос буквально в естественном формате результата. Implementation-package requirements не применяются: не навязывать Git-generated repository `changes.patch`, repository `manifest.json`, repository targeted tests или Local Worker apply path. Общие принципы достаточного объёма и отказа от лишней сложности сохраняются, но разделение Web → runner/Worker → Leader ниже относится только к repository implementation.
 
 ## Главный принцип
 

@@ -196,8 +196,8 @@ class TaskPackageTests(unittest.TestCase):
         )
         discipline = content.split("## Implementation author discipline\n\n", 1)[1].split("\n\n## Result contract", 1)[0]
         for invariant in (
-            "не требует изменения программного кода или repository, этот раздел не добавляет новых требований",
-            "минимального полного решения", "необходимые regression/targeted tests",
+            "только если `User intent` требует подготовить изменения для repository, указанного в этом task",
+            "минимального полного repository implementation", "необходимые regression/targeted tests",
             "speculative features/abstractions", "package-local runner, applicator, diagnostics",
             "Git-generated", "только относящиеся к изменению targeted tests",
             "не повторять эквивалентные проверки", "незапущенные проверки честно",
@@ -208,6 +208,22 @@ class TaskPackageTests(unittest.TestCase):
         self.assertEqual(content.split("## User intent\n\n", 1)[1].split("\n\n## Execution contract", 1)[0], "Верни изображение горы.")
         self.assertNotIn("## Implementation author discipline", self.render())
         self.assertNotIn("## Implementation author discipline", self.render_intent())
+
+    def test_direct_task_standalone_code_artifact_uses_natural_result(self):
+        intent = "Создай готовый ZIP с автономной браузерной игрой без изменения repository."
+        content = task_package.render_direct_task_manifest(
+            request_id=REQ, user_intent=intent,
+            repository="AndrewVerhoturov1/dsh-workspace", base_commit=BASE_COMMIT,
+            expected_filename=f"POSTMAN_{REQ}_RESULT.zip",
+            allowed_paths=["docs"], forbidden_paths=[".git"],
+        )
+        discipline = content.split("## Implementation author discipline\n\n", 1)[1].split("\n\n## Result contract", 1)[0]
+        self.assertEqual(content.split("## User intent\n\n", 1)[1].split("\n\n## Execution contract", 1)[0], intent)
+        self.assertIn("только если `User intent` требует подготовить изменения для repository, указанного в этом task", discipline)
+        self.assertIn("игру или другой standalone code artifact", discipline)
+        self.assertIn("без изменения этого repository, implementation-package requirements", discipline)
+        self.assertIn("repository patch, manifest, repository targeted tests и Local Worker apply path) не применяются", discipline)
+        self.assertIn("в естественном формате результата", discipline)
 
     def test_ask_task_does_not_receive_implementation_discipline(self):
         from postman.text_task_package import render_direct_text_task_manifest
