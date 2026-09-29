@@ -23,6 +23,7 @@ export const POSTMAN_BRIDGE_TOOL_ALLOWLIST = Object.freeze([
 ])
 export const POSTMAN_LEADER_PRESET_ID = 'postman-leader'
 export const POSTMAN_PTC_LEADER_PRESET_ID = 'postman-leader-ptc'
+export const POSTMAN_PTC_TOOL_NAME = 'ptc_execute'
 export const POSTMAN_LEADER_TOOL_ALLOWLIST = Object.freeze([
   'ask_user_question',
   'todo_write',
@@ -116,10 +117,13 @@ export function postmanBridgeCallerAllowed(agent) {
 }
 
 export function postmanBridgeRestrictionForAgent(agent) {
-  if (isTopLevelPostmanSupervisor(agent)) {
+  if (isTopLevelPostmanPtcLeader(agent)) {
+    return { allow: [...POSTMAN_LEADER_TOOL_ALLOWLIST, POSTMAN_PTC_TOOL_NAME] }
+  }
+  if (isTopLevelPostmanLeader(agent)) {
     return { allow: [...POSTMAN_LEADER_TOOL_ALLOWLIST] }
   }
-  return { deny: [...POSTMAN_LEADER_ONLY_TOOL_NAMES] }
+  return { deny: [...POSTMAN_LEADER_ONLY_TOOL_NAMES, POSTMAN_PTC_TOOL_NAME] }
 }
 
 export function createPostmanBridgeBoundaryManager(lookupAgent) {

@@ -16,6 +16,7 @@ import {
   POSTMAN_WORKER_STOP_TOOL_NAME,
   POSTMAN_LEADER_PRESET_ID,
   POSTMAN_PTC_LEADER_PRESET_ID,
+  POSTMAN_PTC_TOOL_NAME,
   POSTMAN_LEADER_TOOL_ALLOWLIST,
   POSTMAN_LEADER_ONLY_TOOL_NAMES,
   buildPostmanBridgeStartRequest,
@@ -203,10 +204,10 @@ test('bridge authorization and visibility are limited to exact top-level Postman
     allow: [...POSTMAN_LEADER_TOOL_ALLOWLIST],
   })
   assert.deepEqual(postmanBridgeRestrictionForAgent(standard), {
-    deny: ['postman_task_prepare', 'postman_task_restore', 'postman_bridge', 'postman_bridge_status', 'postman_worker', 'postman_worker_interrupt', 'postman_worker_stop', 'postman_yield', 'postman_worker_list'],
+    deny: [...POSTMAN_LEADER_ONLY_TOOL_NAMES, POSTMAN_PTC_TOOL_NAME],
   })
   assert.deepEqual(postmanBridgeRestrictionForAgent(delegated), {
-    deny: ['postman_task_prepare', 'postman_task_restore', 'postman_bridge', 'postman_bridge_status', 'postman_worker', 'postman_worker_interrupt', 'postman_worker_stop', 'postman_yield', 'postman_worker_list'],
+    deny: [...POSTMAN_LEADER_ONLY_TOOL_NAMES, POSTMAN_PTC_TOOL_NAME],
   })
 
   assert.equal(POSTMAN_LEADER_TOOL_ALLOWLIST.includes('write'), false)
@@ -239,9 +240,10 @@ test('production and pilot predicates keep exact trusted top-level identities se
     assert.equal(isTopLevelPostmanPtcLeader(agent), pilot, name)
     assert.equal(isTopLevelPostmanSupervisor(agent), production || pilot, name)
     assert.equal(postmanBridgeCallerAllowed(agent), production || pilot, name)
-    assert.deepEqual(postmanBridgeRestrictionForAgent(agent), production || pilot
-      ? { allow: [...POSTMAN_LEADER_TOOL_ALLOWLIST] }
-      : { deny: [...POSTMAN_LEADER_ONLY_TOOL_NAMES] }, name)
+    assert.deepEqual(postmanBridgeRestrictionForAgent(agent), pilot
+      ? { allow: [...POSTMAN_LEADER_TOOL_ALLOWLIST, POSTMAN_PTC_TOOL_NAME] }
+      : production ? { allow: [...POSTMAN_LEADER_TOOL_ALLOWLIST] }
+        : { deny: [...POSTMAN_LEADER_ONLY_TOOL_NAMES, POSTMAN_PTC_TOOL_NAME] }, name)
   }
   for (const [selected, production, pilot] of [
     ['postman-leader', true, false], ['postman-leader-ptc', false, true],
@@ -261,7 +263,7 @@ test('boundary manager replaces the active restriction when a blank session swit
   const manager = createPostmanBridgeBoundaryManager(sessionId => agents.get(sessionId))
 
   assert.equal(manager.install(fixture.agent), false)
-  assert.deepEqual(fixture.activeRestrictions(), [{ deny: ['postman_task_prepare', 'postman_task_restore', 'postman_bridge', 'postman_bridge_status', 'postman_worker', 'postman_worker_interrupt', 'postman_worker_stop', 'postman_yield', 'postman_worker_list'] }])
+  assert.deepEqual(fixture.activeRestrictions(), [{ deny: [...POSTMAN_LEADER_ONLY_TOOL_NAMES, POSTMAN_PTC_TOOL_NAME] }])
 
   fixture.setPreset('postman-leader')
   assert.equal(manager.refreshSession(fixture.agent.id), true)
@@ -270,17 +272,17 @@ test('boundary manager replaces the active restriction when a blank session swit
 
   fixture.setPreset('standard')
   assert.equal(manager.refreshSession(fixture.agent.id), true)
-  assert.deepEqual(fixture.activeRestrictions(), [{ deny: [...POSTMAN_LEADER_ONLY_TOOL_NAMES] }])
+  assert.deepEqual(fixture.activeRestrictions(), [{ deny: [...POSTMAN_LEADER_ONLY_TOOL_NAMES, POSTMAN_PTC_TOOL_NAME] }])
   assert.equal(fixture.restrictions[1].active, false)
 
   fixture.setPreset('postman-leader-ptc')
   assert.equal(manager.refreshSession(fixture.agent.id), true)
-  assert.deepEqual(fixture.activeRestrictions(), [{ allow: [...POSTMAN_LEADER_TOOL_ALLOWLIST] }])
+  assert.deepEqual(fixture.activeRestrictions(), [{ allow: [...POSTMAN_LEADER_TOOL_ALLOWLIST, POSTMAN_PTC_TOOL_NAME] }])
   assert.equal(fixture.restrictions[2].active, false)
 
   fixture.setPreset('standard')
   assert.equal(manager.refreshSession(fixture.agent.id), true)
-  assert.deepEqual(fixture.activeRestrictions(), [{ deny: [...POSTMAN_LEADER_ONLY_TOOL_NAMES] }])
+  assert.deepEqual(fixture.activeRestrictions(), [{ deny: [...POSTMAN_LEADER_ONLY_TOOL_NAMES, POSTMAN_PTC_TOOL_NAME] }])
   assert.equal(fixture.restrictions[3].active, false)
   assert.equal(fixture.restrictions.filter(item => item.active).length, 1)
 
@@ -341,7 +343,7 @@ test('package and composition expose bridge entrypoint and leader preset', () =>
     'tool-subagent-list-agents', 'tool-subagent', 'tool-subagent-fork',
     'workflow-worker-thread', 'tool-workflow', 'tool-ralph', 'tool-ask-user',
     'tool-todo', 'tool-web'])
-  assert.equal(pilotPreset.replace(/\r\n/g, '\n').replace(/^# Experimental pilot:.*\n/, ''),
+  assert.equal(pilotPreset.replace(/\r\n/g, '\n').replace(/^# Experimental pilot:.*\n/, '').replace(/^# PTC pilot:.*\n/gm, ''),
     leaderPreset.replace(/\r\n/g, '\n').replace(/^# Shared Postman composition.*\n/, ''))
   assert.doesNotMatch(pilotPreset, /ptc_execute|run_code|QuickJS|WASM|browser Worker/i)
 

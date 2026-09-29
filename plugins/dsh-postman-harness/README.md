@@ -34,6 +34,12 @@ Postman Leader
 → child-scoped report в точную Leader session
 ```
 
+## Пилот ПТС (только экспериментальный Leader)
+
+Обычный ptc_execute регистрируется в bridge entrypoint с общей жизнью QuickJS runtime. Только точный живой top-level postman-leader-ptc видит и выполняет его; production Leader, Worker и Bridge не видят. Pilot-профиль read/grep/get_goal/web_fetch пересекается с текущими штатными правами Agent. Аргументы инструмента — программа, краткое описание цели и необязательный язык; подсказка pilot формирует сигнатуры из текущих схем реестра, без глобального Code Mode. Один запуск программы не повторяется после ошибки и не меняет доверенные результаты Postman.
+
+Штатная поставка из репозитория: `node profiles/web/scripts/install-production.mjs` сначала устанавливает production-зависимости Postman-плагина через `pnpm install --offline --frozen-lockfile --prod` в `plugins/dsh-postman-harness`, затем устанавливает web-профиль с `link:../../plugins/dsh-postman-harness`. Относительное `file:../dsh-ptc` попадает в зависимости самого плагина; pnpm устанавливает ядро и транзитивный QuickJS/WASM без ручного размещения каталога или старого `node_modules`. Один архив Postman-плагина не является автономной поставкой. Чистая одноразовая проверка: `node profiles/web/scripts/test-install-production-postman-ptc.mjs`. Установка пользовательского профиля и приёмка модели здесь не выполнялись. Актуальный контракт: docs/subprojects/ptc/PTC_CONTRACT.md.
+
 ## Postman Bridge
 
 Bundle подключает subpath entrypoint:

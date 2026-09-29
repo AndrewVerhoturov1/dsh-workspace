@@ -4,7 +4,8 @@
   "scripts": {
     "install:production": "node scripts/install-production.mjs",
     "test:windows-process-policy": "node scripts/test-windows-process-policy.mjs",
-    "test:install-production-stale-link": "node scripts/test-install-production-stale-link.mjs"
+    "test:install-production-stale-link": "node scripts/test-install-production-stale-link.mjs",
+    "test:install-production-postman-ptc": "node scripts/test-install-production-postman-ptc.mjs"
   },
   "dsh": {
     "profile": {

@@ -468,7 +468,7 @@ test('bridge plugin registers all Worker tools and preserves boundary on creatio
     on(name, handler) { listeners.set(name, handler) },
   }
   await applyBridgePlugin(ctx)
-  assert.deepEqual([...registrations.keys()].sort(), ['implementation_artifact_apply', 'notify_parent', 'postman_bridge', 'postman_bridge_status', 'postman_task_prepare', 'postman_task_restore', 'postman_worker', 'postman_worker_interrupt', 'postman_worker_list', 'postman_worker_stop', 'postman_yield'])
+  assert.deepEqual([...registrations.keys()].sort(), ['implementation_artifact_apply', 'notify_parent', 'postman_bridge', 'postman_bridge_status', 'postman_task_prepare', 'postman_task_restore', 'postman_worker', 'postman_worker_interrupt', 'postman_worker_list', 'postman_worker_stop', 'postman_yield', 'ptc_execute'])
   assert.deepEqual(restriction.allow, postmanBridgeRestrictionForAgent(a).allow)
   assert.ok(listeners.has('agent-preset/selected'))
   assert.ok(listeners.has('agent/disposed'))
