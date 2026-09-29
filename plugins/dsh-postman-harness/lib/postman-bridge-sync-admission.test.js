@@ -23,7 +23,8 @@ test('terminal sync blocks runner/restore but admits next same-Leader Bridge', a
     reserveRestore: id => { if (id !== parent.id || runnerActive || restoring || syncCount || bridgeActive) return false; restoring = true; return true },
     releaseRestore: id => { if (id === parent.id) restoring = false },
     bindChild: () => true, releaseChild() {},
-    async sync() { entered.resolve(); await release.promise; return true },
+    async sync() { syncCount++; entered.resolve(); try { await release.promise; return true }
+      finally { syncCount-- } },
   }
   const coordinator = createPostmanBridgeLaunchCoordinator({ random: () => 0 })
   const ctx = { agents: { get: id => id === parent.id ? parent : null }, subagents: { async start(_provider, request) {

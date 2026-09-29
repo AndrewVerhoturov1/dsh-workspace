@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises'
+import { JsonStorageBackend } from '@deepseek-ai/dsh-storage-json'
+import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
+import { openPostmanTaskRegistry } from './postman-task-registry.js'
+import { createPostmanBridgeJobs } from './postman-bridge-jobs.js'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { execFile } from 'node:child_process'
@@ -51,7 +55,12 @@ test('production sync validates and fast-forwards a real temporary bare DAG', { 
     await writeFile(join(root, 'history.txt'), 'REQ 2', 'utf8'); await call(root, 'add', 'history.txt'); await call(root, 'commit', '-m', 'REQ 2')
     const req2 = await call(root, 'rev-parse', 'HEAD'), parent2 = req1
     await call(root, 'push', 'origin', 'HEAD:refs/heads/' + branch)
-    assert.equal(await contexts.sync(leader.id, req2, parent2), true)
+    await contexts.changeRecord(leader.id, row => ({ ...row, workers: {
+      workerA: { id: 'workerA', label: 'A', state: 'ready', delivery: 'none', artifactRequests: [] }
+    } }))
+    assert.equal(await contexts.sync(leader.id, req2, parent2), true,
+      'binding alone cannot discard an already verified publication')
+    assert.equal(contexts.record(leader.id).workers.workerA.id, 'workerA')
     assert.equal(await call(worktree, 'rev-parse', 'HEAD'), req2)
     assert.equal(await contexts.sync(leader.id, req1, parent1), true)
     assert.equal(await call(worktree, 'rev-parse', 'HEAD'), req2, 'older receipt may not rewind local HEAD')
@@ -141,3 +150,129 @@ test('production sync validates and fast-forwards a real temporary bare DAG', { 
     contexts.dispose()
   } finally { await rm(temp, { recursive: true, force: true }) }
 })
+
+// Real bare origin and JSON domain across independent plugin lifetimes. Only
+// the network-facing Git commands are redirected to the local bare repository.
+async function recoveryFixture(t) {
+  const temp = await mkdtemp(join(tmpdir(), 'postman-recover-publication-'))
+  const root = join(temp, 'root'), bare = join(temp, 'origin.git'), tree = join(temp, 'task')
+  const backend = new JsonStorageBackend(join(temp, 'storage'))
+  t.after(async () => { await backend.close(); await rm(temp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }) })
+  await exec('git', ['init', '--bare', bare])
+  await exec('git', ['init', '-b', 'preview', root])
+  await call(root, 'config', 'user.email', 'postman-test@example.invalid')
+  await call(root, 'config', 'user.name', 'Postman test')
+  await writeFile(join(root, 'history.txt'), 'A')
+  await call(root, 'add', 'history.txt'); await call(root, 'commit', '-m', 'A')
+  const base = await call(root, 'rev-parse', 'HEAD')
+  const branch = 'task/postman-' + 'c'.repeat(32)
+  const origin = 'https://github.com/AndrewVerhoturov1/dsh-workspace.git'
+  await call(root, 'remote', 'add', 'origin', origin)
+  await call(root, 'worktree', 'add', '-b', branch, tree, base)
+  await call(root, 'push', bare, base + ':refs/heads/' + branch)
+  const calls = []
+  const gitCommand = async (cwd, ...args) => {
+    calls.push(args)
+    if (args[0] === 'ls-remote' && args[2] === 'origin')
+      return call(cwd, 'ls-remote', args[1], bare, ...args.slice(3))
+    if (args[0] === 'fetch' && args[1] === 'origin')
+      return call(cwd, 'fetch', bare, ...args.slice(2))
+    return call(cwd, ...args)
+  }
+  const open = () => openPostmanTaskRegistry(new DomainFacility({
+    storage: { backend: { get: () => backend } }, emit() {},
+  }, { backend: 'json', routes: {} }))
+  const leader = makeLeader('recover-leader', root)
+  const first = await open()
+  await first.create(leader.id, { leaderSessionId: leader.id, repository: 'andrewverhoturov1/dsh-workspace',
+    repositoryPath: root, originUrl: origin, baseCommit: base, branch, worktree: tree,
+    stage: 'ready', diagnostic: null, workers: { W: { id: 'W', label: 'W', state: 'ready', delivery: 'none', artifactRequests: [] } },
+    runner: { state: 'none', requestId: null }, bridge: null })
+  const publish = async (requestId, parent = null) => {
+    const old = parent ?? await call(bare, 'rev-parse', 'refs/heads/' + branch)
+    await call(root, 'checkout', '--detach', old)
+    await writeFile(join(root, requestId + '.md'), requestId)
+    await call(root, 'add', requestId + '.md'); await call(root, 'commit', '-m', requestId)
+    const commit = await call(root, 'rev-parse', 'HEAD')
+    await call(root, 'push', bare, commit + ':refs/heads/' + branch)
+    const terminal = { status: 'POSTMAN_BRIDGE_TERMINAL', terminalStatus: 'COMPLETED',
+      transportKind: 'text', requestId, result: { ok: true, code: 'TEXT_RESULT_DURABLE',
+        requestId, repository: 'AndrewVerhoturov1/dsh-workspace', assistantText: requestId,
+        baseCommit: old, taskPublicationCommit: commit,
+        taskUrl: 'https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/' + commit + '/' + requestId + '.md' } }
+    return { old, commit, terminal }
+  }
+  return { temp, root, bare, tree, branch, base, leader, first, open, gitCommand, calls, publish }
+}
+
+const hasDestructiveGit = calls => calls.some(args => ['reset', 'clean', 'merge', 'stash', 'push'].includes(args[0]))
+
+test('recover accepts one proven delayed REQ, then cold retrySync retains result and Worker IDs', { timeout: 120000 }, async t => {
+  const f = await recoveryFixture(t)
+  const receipt = await f.publish('REQ_20260929T010101Z_0001')
+  await f.first.change(f.leader.id, row => ({ ...row, bridgeOperations: {
+    job: { state: 'received', terminal: receipt.terminal, synchronization: 'busy' } } }))
+  await f.first.close()
+  const registry = await f.open()
+  const contexts = createPostmanTaskContexts({ registry, gitCommand: f.gitCommand })
+  const before = await call(f.tree, 'rev-parse', 'HEAD')
+  assert.equal((await contexts.recover(f.leader)).status, 'POSTMAN_TASK_CONTEXT_ALREADY_READY')
+  assert.equal(await call(f.tree, 'rev-parse', 'HEAD'), before)
+  assert.equal(contexts.get(f.leader.id).worktree, f.tree)
+  assert.equal(contexts.record(f.leader.id).workers.W.id, 'W')
+  assert.equal(hasDestructiveGit(f.calls), false)
+  let sends = 0, grants = 0
+  const jobs = createPostmanBridgeJobs({ agents: { get: () => f.leader }, subagents: { start() { sends++; throw Error('Direct replay') } } },
+    { run() { sends++; throw Error('Direct replay') }, dispose() {} },
+    { async register() { grants++; return true } }, contexts, { async pauseForOperation() { return true } })
+  assert.equal((await jobs.status(f.leader, 'job')).result.requestId, receipt.terminal.requestId)
+  assert.equal((await jobs.status(f.leader, 'job', true)).synchronization, 'synchronized')
+  for (let i = 0; i < 2; i++) {
+    const result = await jobs.status(f.leader, 'job')
+    assert.equal(result.status, 'POSTMAN_BRIDGE_TERMINAL')
+    assert.deepEqual(result.result, receipt.terminal.result)
+    assert.ok(result.finishedAt)
+  }
+  assert.equal(await call(f.tree, 'rev-parse', 'HEAD'), receipt.commit)
+  assert.equal(contexts.record(f.leader.id).bridgeOperations.job, undefined)
+  assert.equal(contexts.record(f.leader.id).workers.W.id, 'W')
+  assert.equal(contexts.get(f.leader.id).branch, f.branch)
+  assert.deepEqual({ sends, grants }, { sends: 0, grants: 1 })
+  await jobs.dispose(); await registry.close()
+})
+
+test('recover verifies every delayed REQ parent and rejects missing, contradictory or divergent history', { timeout: 120000 }, async t => {
+  for (const scenario of ['two', 'missing', 'wrong-parent', 'diverged', 'foreign-branch', 'dirty']) {
+    await t.test(scenario, async t => {
+      const f = await recoveryFixture(t)
+      const a = await f.publish('REQ_20260929T010101Z_0001')
+      const b = await f.publish('REQ_20260929T010102Z_0002')
+      const operations = { first: { state: 'received', synchronization: 'busy', terminal: a.terminal },
+        second: { state: 'received', synchronization: 'busy', terminal: b.terminal } }
+      if (scenario === 'missing') delete operations.first
+      if (scenario === 'wrong-parent') operations.first.terminal.result.baseCommit = b.commit
+      if (scenario === 'foreign-branch') operations.second.terminal.result.taskUrl = 'https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/' + b.commit + '/OTHER.md'
+      if (scenario === 'diverged') {
+        await call(f.root, 'checkout', '--detach', a.commit)
+        await writeFile(join(f.root, 'foreign.txt'), 'other')
+        await call(f.root, 'add', 'foreign.txt'); await call(f.root, 'commit', '-m', 'foreign')
+        await call(f.root, 'push', '--force', f.bare, 'HEAD:refs/heads/' + f.branch)
+      }
+      await f.first.change(f.leader.id, row => ({ ...row, bridgeOperations: operations }))
+      await f.first.close()
+      const registry = await f.open()
+      if (scenario === 'dirty') await writeFile(join(f.tree, 'private.txt'), 'keep me')
+      const contexts = createPostmanTaskContexts({ registry, gitCommand: f.gitCommand })
+      const before = await call(f.tree, 'rev-parse', 'HEAD')
+      const result = await contexts.recover(f.leader)
+      assert.equal(result.status, ['two', 'dirty'].includes(scenario)
+        ? 'POSTMAN_TASK_CONTEXT_ALREADY_READY' : 'POSTMAN_TASK_PREPARE_UNCERTAIN', JSON.stringify(result))
+      assert.equal(await call(f.tree, 'rev-parse', 'HEAD'), before)
+      assert.equal(hasDestructiveGit(f.calls), false)
+      if (scenario === 'dirty') assert.equal(await readFile(join(f.tree, 'private.txt'), 'utf8'), 'keep me')
+      if (scenario === 'two') assert.equal(contexts.record(f.leader.id).workers.W.id, 'W')
+      await registry.close()
+    })
+  }
+})
+
