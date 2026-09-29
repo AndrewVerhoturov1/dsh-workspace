@@ -35,6 +35,13 @@ test('last tool call and older text cannot masquerade as latest closing message'
   assert.equal(fixed.capture(history).output, undefined)
   const current = [...history, event(2, [{ type: 'text', text: 'PARTIAL' }, { type: 'tool-call', name: 'report' }])]
   assert.deepEqual(fixed.capture(current).output, [{ type: 'text', text: 'PARTIAL' }])
+  const open = [{ type: 'turn/start', data: { turn: 3 } },
+    event(3, [{ type: 'text', text: 'Начинаю проверку' }]),
+    event(3, [{ type: 'tool-call', name: 'pwsh' }])]
+  assert.equal(fixed.capture(open).output, undefined)
+  assert.equal(fixed.reason(open), 'error')
+  assert.equal(fixed.capture([...history.slice(0, 3), ...open]).output, undefined)
+  assert.equal(fixed.reason([...history.slice(0, 3), ...open]), 'error')
   assert.throws(() => patchSubagentSource('unexpected version'), /SHA-256 mismatch/)
 })
 test('offline overlay applies to a temporary package, backs up and refuses a second application', async () => {
@@ -48,4 +55,7 @@ test('offline overlay applies to a temporary package, backs up and refuses a sec
   assert.equal(await readFile(join(folder, 'lib/index.js'), 'utf8'), patched)
   assert.equal(await readFile(join(backup, 'dsh-subagent-index.js'), 'utf8'), original)
   await assert.rejects(subagentOverlay(root, '--apply', backup), /SHA-256 mismatch/)
+  assert.equal((await subagentOverlay(root, '--rollback', backup)).status, 'ROLLED_BACK')
+  assert.equal(await readFile(join(folder, 'lib/index.js'), 'utf8'), original)
+  await assert.rejects(subagentOverlay(root, '--rollback', backup), /SHA-256 mismatch/)
 })

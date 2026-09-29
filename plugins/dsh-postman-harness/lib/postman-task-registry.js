@@ -3,6 +3,11 @@ import { z } from 'zod'
 
 // One row per exact Leader session. Writes finish on the backend before any
 // Git, child-creation, or destructive runner operation is attempted.
+const workerLifecycle = z.object({ version: z.literal(1),
+  admissions: z.array(z.object({ id: z.string(), state: z.enum(['pending', 'accepted']), messageId: z.string().nullable() })),
+  reports: z.array(z.object({ childId: z.string(), turn: z.number(), callId: z.string(), messageId: z.string() })),
+})
+
 export const POSTMAN_TASK_DOMAIN = defineDomain({
   name: 'postman_task_registry', version: 1,
   tables: { leaders: domainTable(z.object({
@@ -10,21 +15,25 @@ export const POSTMAN_TASK_DOMAIN = defineDomain({
     originUrl: z.string(), baseCommit: z.string(), branch: z.string(), worktree: z.string(),
     stage: z.enum(['intent', 'worktree', 'ready', 'uncertain']),
     diagnostic: z.string().nullable(),
-    worker: z.object({ id: z.string(), state: z.enum(['intent', 'ready', 'uncertain', 'stopping']),
+    // Optional on disk so v1 rows can be validated before their in-place migration.
+    worker: z.object({ id: z.string().min(1), state: z.enum(['intent', 'ready', 'uncertain', 'stopping']),
       delivery: z.enum(['none', 'pending', 'unknown']),
       artifactRequests: z.array(z.string()),
-      lifecycle: z.object({ version: z.literal(1),
-        admissions: z.array(z.object({ id: z.string(), state: z.enum(['pending', 'accepted']),
-          messageId: z.string().nullable() })),
-        reports: z.array(z.object({ childId: z.string(), turn: z.number(),
-          callId: z.string(), messageId: z.string() })),
-      }).optional() }).nullable(),
+      lifecycle: workerLifecycle.optional() }).nullable().optional(),
+    workers: z.record(z.string(), z.object({
+      id: z.string(), label: z.string(), state: z.enum(['intent', 'ready', 'uncertain', 'stopping']),
+      delivery: z.enum(['none', 'pending', 'unknown']),
+      artifactRequests: z.array(z.string()), lifecycle: workerLifecycle.optional(),
+    })).optional(),
     runner: z.object({ state: z.enum(['none', 'running', 'failed', 'unknown', 'restoring']),
       requestId: z.string().nullable() }),
     // Keep the legacy single marker readable; new jobs use individually keyed operations.
     bridge: z.object({ id: z.string(), state: z.enum(['pending', 'unknown']) }).nullable(),
     bridgeOperations: z.record(z.string(), z.object({
-      state: z.enum(['pending', 'unknown']),
+      state: z.enum(['pending', 'unknown', 'received']),
+      terminal: z.unknown().optional(),
+      synchronization: z.enum(['pending', 'busy', 'failed', 'synchronized', 'not-required']).optional(),
+      grantDiagnostic: z.string().optional(),
     })).optional(),
   }).strict()) },
 })
@@ -52,18 +61,49 @@ export async function closeSharedPostmanTaskRegistry() {
 export async function openPostmanTaskRegistry(storageDomain) {
   if (typeof storageDomain?.open !== 'function') throw new Error('POSTMAN_TASK_STORAGE_REQUIRED')
   const domain = await storageDomain.open(POSTMAN_TASK_DOMAIN)
-  const table = domain.table('leaders')
-  const creating = new Set()
-  return {
-    get: id => table.get(id) ?? null,
-    entries: () => [...table.entries()],
-    async create(id, record) {
-      if (table.get(id) || creating.has(id)) throw new Error('POSTMAN_TASK_BINDING_EXISTS')
-      creating.add(id)
-      try { await table.put(id, record) } finally { creating.delete(id) }
-    },
-    change: (id, fn) => table.update(id, fn),
-    close: () => domain.close(),
+  try {
+    const table = domain.table('leaders')
+    // DomainFacility has no migration hook: open v1 once with a compatible schema,
+    // then durably normalize each row before exposing the registry to callers.
+    for (const [id, row] of table.entries()) {
+      if (row.worker !== undefined && row.workers !== undefined)
+        throw new Error('POSTMAN_TASK_WORKER_MIGRATION_CONFLICT: ' + id)
+      if (row.worker !== undefined || row.workers === undefined) await table.update(id, current => {
+        const { worker, ...rest } = current
+        return { ...rest, workers: worker ? { [worker.id]: { ...worker, label: worker.id } } : {} }
+      })
+      const workers = table.get(id)?.workers
+      if (!workers || Object.entries(workers).some(([key, value]) => key !== value.id))
+        throw new Error('POSTMAN_TASK_WORKER_BINDING_INVALID: ' + id)
+    }
+    const creating = new Set()
+    return {
+      get: id => table.get(id) ?? null,
+      entries: () => [...table.entries()],
+      async create(id, record) {
+        if (table.get(id) || creating.has(id)) throw new Error('POSTMAN_TASK_BINDING_EXISTS')
+        creating.add(id)
+        if (record.worker !== undefined && record.workers !== undefined)
+          throw new Error('POSTMAN_TASK_WORKER_MIGRATION_CONFLICT')
+        const { worker, ...rest } = record
+        try { await table.put(id, { ...rest, workers: rest.workers ??
+          (worker ? { [worker.id]: { ...worker, label: worker.id } } : {}) })
+        } finally { creating.delete(id) }
+      },
+      change: (id, fn) => table.update(id, current => {
+        // A partial transform must not drop unrelated row fields or the workers map.
+        const next = fn(current)
+        if (next.worker !== undefined) throw new Error('POSTMAN_TASK_LEGACY_WORKER_WRITE_REJECTED')
+        const merged = { ...current, ...next, workers: next.workers ?? current.workers }
+        if (Object.entries(merged.workers).some(([key, value]) => key !== value.id))
+          throw new Error('POSTMAN_TASK_WORKER_BINDING_INVALID')
+        return merged
+      }),
+      close: () => domain.close(),
+    }
+  } catch (error) {
+    await domain.close()
+    throw error
   }
 }
 

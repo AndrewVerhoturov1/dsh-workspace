@@ -13,7 +13,8 @@ const worker = (admissions = ['a']) => ({ id: 'w', state: 'ready', delivery: 'no
   admissions: admissions.map(messageId => ({ id: messageId, state: 'accepted', messageId })),
   reports: [{ childId: 'w', turn: 1, callId: 'r', messageId: 'report-1' }] } })
 const child = events => ({ status: 'idle', session: { events } })
-const leader = { session: { events: [user('report-1')] } }
+const delivered = id => ({ type: 'user/message', data: { id, source: { kind: 'subagent-report', senderSessionId: 'w' } } })
+const leader = { session: { events: [delivered('report-1')] } }
 const complete = [start(1), user('a'), call(1, 'r'), result(1, 'r'), end(1)]
 test('batch claimed in one turn accepts one native final report after delivery', () => {
   assert.equal(workerEvidence(worker(['a', 'b']), child([start(1), user('a'), user('b'),
@@ -51,4 +52,23 @@ test('old report cannot finish new assignment, later turn or failed report resul
   assert.equal(workerEvidence(worker(['a', 'b']), child([start(1), user('a'), call(1, 'r'), result(1, 'r'), user('b'), end(1)]), leader).ready, false)
   assert.equal(workerEvidence(worker(), child([...complete, start(2), call(2, 'other', 'pwsh'), end(2)]), leader).ready, false)
   assert.equal(workerEvidence(worker(), child([start(1), user('a'), call(1, 'r'), result(1, 'r', true), end(1)]), leader).ready, false)
+})
+
+test('a fresh native message outside Postman admissions requires a current successful report', () => {
+  const first = [...complete, start(2), user('untracked'), call(2, 'later', 'pwsh'), result(2, 'later')]
+  for (const suffix of [[end(2)], [call(2, 'bad', 'report', ' '), result(2, 'bad'), end(2)],
+    [call(2, 'bad'), result(2, 'bad', true), end(2)]])
+    assert.equal(workerEvidence(worker(), child([...first, ...suffix]), leader).ready, false)
+  const updated = worker()
+  updated.lifecycle.reports.push({ childId: 'w', turn: 2, callId: 'fresh', messageId: 'report-2' })
+  const latest = child([...first, call(2, 'fresh'), result(2, 'fresh'), end(2)])
+  assert.equal(workerEvidence(updated, latest, leader).ready, false)
+  assert.equal(workerEvidence(updated, latest, { session: { events: [...leader.session.events, delivered('report-2')] } }).ready, true)
+})
+test('unsettled earlier tool invalidates report, text-only closing step does not', () => {
+  const w = worker()
+  assert.equal(workerEvidence(w, child([start(1), user('a'), call(1, 'work', 'pwsh'),
+    call(1, 'r'), result(1, 'r'), result(1, 'work'), end(1)]), leader).ready, false)
+  assert.equal(workerEvidence(w, child([start(1), user('a'), call(1, 'r'), result(1, 'r'),
+    { type: 'assistant/message', data: { turn: 1, message: { content: [{ type: 'text', text: 'closing' }] } } }, end(1)]), leader).ready, true)
 })

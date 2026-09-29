@@ -169,6 +169,34 @@ test('apply guard requires unchanged bound branch and exact published HEAD', asy
   assert.equal(await contexts.verifyWorktree('A'), false)
 })
 
+
+
+test('received unsynced terminal blocks runner and restore without becoming unknown', async () => {
+  const f = fixture(); await f.contexts.prepare(leader('A'))
+  await f.registry.change('A', row => ({ ...row, bridgeOperations: { request: {
+    state: 'received', synchronization: 'busy', terminal: { status: 'POSTMAN_BRIDGE_TERMINAL',
+      requestId: 'REQ_20260927T120000Z_1234', result: { ok: true, assistantText: 'verified' } }
+  } } }))
+  assert.equal(f.contexts.beginOperation('A'), false)
+  assert.equal(f.contexts.reserveRestore('A'), false)
+  assert.equal(f.registry.get('A').bridgeOperations.request.state, 'received')
+  await f.registry.change('A', row => ({ ...row, bridgeOperations: {} }))
+  assert.equal(f.contexts.beginOperation('A'), true)
+  await f.contexts.endOperation('A', { status: 'IMPLEMENTATION_ARTIFACT_RUNNER_RESULT', result: { ok: true } })
+})
+
+test('two Host runners cannot reserve the shared worktree at once', async () => {
+  const f = fixture(); await f.contexts.prepare(leader('A'))
+  assert.equal(f.contexts.beginOperation('A'), true)
+  assert.equal(f.contexts.beginOperation('A'), false)
+  await f.contexts.startRunner('A', 'REQ_20260927T120000Z_1234')
+  assert.equal(f.contexts.beginSync('A'), false)
+  assert.equal(f.contexts.beginOperation('A'), false)
+  await f.contexts.endOperation('A', { status: 'IMPLEMENTATION_ARTIFACT_RUNNER_RESULT', result: { ok: true } })
+  assert.equal(f.contexts.beginOperation('A'), true)
+  await f.contexts.endOperation('A', { status: 'IMPLEMENTATION_ARTIFACT_RUNNER_RESULT', result: { ok: true } })
+})
+
 test('restore discards dirty bound tree only after explicit Leader call', async () => {
   const f = fixture(), prepared = await f.contexts.prepare(leader('A'))
   f.state.head = published; f.state.remote = published; f.state.clean = false
@@ -248,6 +276,24 @@ test('recovery refuses remote-ahead and divergent history without destructive ac
   }
 })
 
+
+test('not-required received result cannot block runner or eligible failed-runner restore', async () => {
+  const f = fixture(); const id = 'A'
+  const prepared = await f.contexts.prepare(leader(id))
+  f.state.trees.push(worktree)
+  const cold = createPostmanTaskContexts({ registry: f.registry, gitCommand: f.gitCommand,
+    realPath: async path => path })
+  assert.equal((await cold.recover(leader(id))).status, 'POSTMAN_TASK_CONTEXT_ALREADY_READY')
+  await f.registry.change(id, row => ({ ...row, bridgeOperations: { early: {
+    state: 'received', terminal: { status: 'POSTMAN_BRIDGE_TERMINAL' }, synchronization: 'not-required' } } }))
+  assert.equal(cold.beginOperation(id), true)
+  await cold.endOperation(id, null)
+  await f.registry.change(id, row => ({ ...row, runner: { state: 'failed', requestId: 'REQ_FAIL' } }))
+  assert.equal(cold.reserveRestore(id), true)
+  cold.releaseRestore(id)
+  assert.equal(cold.get(id).branch, prepared.branch)
+})
+
 test('durable prepare intent survives post-worktree crash and never makes another context', async () => {
   const f = fixture()
   const prepared = await f.contexts.prepare(leader('A'))
@@ -313,7 +359,7 @@ test('restart reconciles each pending Bridge without changing task or Worker bin
   const prepared = await f.contexts.prepare(leaderA)
   f.state.trees.push(worktree)
   await f.registry.change('A', row => ({ ...row,
-    worker: { id: 'child-C', state: 'ready', delivery: 'none', artifactRequests: [] },
+    workers: { 'child-C': { id: 'child-C', label: 'C', state: 'ready', delivery: 'none', artifactRequests: [] } },
     bridgeOperations: Object.fromEntries(['A', 'B', 'C'].map(id => [id, { state: 'pending' }])) }))
   const before = f.calls.length
   const cold = createPostmanTaskContexts({ registry: f.registry, gitCommand: f.gitCommand,
@@ -321,9 +367,39 @@ test('restart reconciles each pending Bridge without changing task or Worker bin
   assert.equal((await cold.prepare(leaderA)).status, 'POSTMAN_TASK_CONTEXT_ALREADY_READY')
   assert.equal(cold.get('A').branch, prepared.branch)
   assert.equal(cold.get('A').worktree, prepared.worktree)
-  assert.equal(f.registry.get('A').worker.id, 'child-C')
+  assert.equal(f.registry.get('A').workers['child-C'].id, 'child-C')
   assert.deepEqual(Object.values(f.registry.get('A').bridgeOperations).map(op => op.state),
     ['unknown', 'unknown', 'unknown'])
   assert.equal(f.calls.slice(before).some(call => ['reset', 'clean', 'push', 'merge'].includes(call.args[0]) ||
     call.args[0] === 'worktree' && call.args[1] === 'add'), false)
 })
+
+
+test('clean failed runner restore retains all three exact Worker bindings', async () => {
+  const f = fixture(); await f.contexts.prepare(leader('A'))
+  f.state.trees.push(worktree)
+  assert.equal(f.contexts.beginOperation('A'), true)
+  await f.contexts.startRunner('A', 'REQ_20260927T120000Z_1234')
+  await f.contexts.endOperation('A', { status: 'IMPLEMENTATION_ARTIFACT_RUNNER_RESULT', result: { ok: false } })
+  const workers = Object.fromEntries(['A', 'B', 'C'].map(id => [id, {
+    id, label: id, state: 'ready', delivery: 'none', artifactRequests: [] }]))
+  await f.registry.change('A', row => ({ ...row, workers }))
+  const restored = await f.contexts.restore(leader('A'))
+  assert.equal(restored.status, 'TASK_CONTEXT_RESTORED')
+  assert.deepEqual(f.registry.get('A').workers, workers)
+})
+
+test('Worker bindings alone do not block sync but dirty restore still refuses unowned changes', async () => {
+  const f = fixture(); await f.contexts.prepare(leader('A'))
+  f.state.trees.push(worktree); f.state.clean = false
+  assert.equal(f.contexts.beginOperation('A'), true)
+  await f.contexts.startRunner('A', 'REQ_20260927T120000Z_1234')
+  await f.contexts.endOperation('A', { status: 'IMPLEMENTATION_ARTIFACT_RUNNER_RESULT', result: { ok: false } })
+  await f.registry.change('A', row => ({ ...row, workers: { child: { id: 'child', label: 'C', state: 'ready', delivery: 'none', artifactRequests: [] } } }))
+  assert.equal(f.contexts.beginSync('A'), true)
+  f.contexts.endSync('A')
+  assert.equal((await f.contexts.restore(leader('A'))).status, 'POSTMAN_TASK_RESTORE_REJECTED')
+  assert.equal(f.state.clean, false)
+  assert.equal(f.calls.some(call => ['reset', 'clean'].includes(call.args[0])), false)
+})
+

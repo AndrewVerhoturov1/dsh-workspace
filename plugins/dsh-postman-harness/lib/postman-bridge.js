@@ -88,11 +88,12 @@ export function createPostmanBridgeStatusTool(ctx, jobs) {
     name: POSTMAN_BRIDGE_STATUS_TOOL_NAME,
     description: 'Read the authoritative trusted Direct Postman terminal of this Leader session background Bridge job.',
     parameters: { bridge_job_id: { type: 'string', required: true,
-      description: 'Exact bridgeJobId from POSTMAN_BRIDGE_ACCEPTED or POSTMAN_BRIDGE_READY.' } },
+      description: 'Exact bridgeJobId from POSTMAN_BRIDGE_ACCEPTED or POSTMAN_BRIDGE_READY.' },
+      retrySync: { type: 'boolean', description: 'Retry only local task publication synchronization; never send Direct again.' } },
     output: output(),
     async execute(args, exec) {
       if (!authorized(exec, ctx)) return { status: 'POSTMAN_BRIDGE_CALLER_REJECTED' }
-      return jobs.status(exec.agent, args?.bridge_job_id)
+      return jobs.status(exec.agent, args?.bridge_job_id, args?.retrySync === true)
     },
   })
 }
@@ -150,28 +151,33 @@ export function installPostmanLeaderBoundary(agent) {
   return leader
 }
 
+export function installPostmanWorkerReportObserver(ctx, worker) {
+  return ctx.on('tools/post-execute', async (exec, result, next) => {
+    const decision = await next()
+    if (decision.kind === 'accept' && exec.name === 'report') {
+      try { await worker.observeReport(exec, result) } catch { /* fail closed without invalidating native delivery */ }
+    }
+    return decision
+  })
+}
+
 export async function apply(ctx) {
   const registry = await sharedPostmanTaskRegistry(ctx.storageDomain)
   const contexts = initializePostmanTaskContexts(registry)
   const coordinator = createPostmanBridgeLaunchCoordinator()
   const grants = createImplementationArtifactGrants()
-  const jobs = createPostmanBridgeJobs(ctx, coordinator, grants, postmanTaskContexts)
+  const worker = createPostmanWorkerTools(ctx, grants, postmanTaskContexts)
+  const jobs = createPostmanBridgeJobs(ctx, coordinator, grants, postmanTaskContexts, worker)
   ctx.tools.register(createPostmanTaskPrepareTool(ctx, contexts))
   ctx.tools.register(createPostmanBridgeTool(ctx, jobs, postmanTaskContexts))
   ctx.tools.register(createPostmanBridgeStatusTool(ctx, jobs))
-  const worker = createPostmanWorkerTools(ctx, grants, postmanTaskContexts)
   ctx.tools.register(createPostmanTaskRestoreTool(ctx, postmanTaskContexts, { jobs, worker }))
   ctx.tools.register(worker.taskTool)
   ctx.tools.register(worker.interruptTool)
   ctx.tools.register(worker.stopTool)
   ctx.tools.register(createPostmanYieldTool(ctx))
-  ctx.on('tools/post-execute', async (exec, result, next) => {
-    const decision = await next()
-    if (decision.kind === 'accept' && exec.name === 'report') {
-      try { await worker.observeReport(exec, result) } catch { /* report delivery may have succeeded; fail closed on missing witness */ }
-    }
-    return decision
-  })
+  installPostmanWorkerReportObserver(ctx, worker)
+  ctx.tools.register(worker.listTool)
   ctx.tools.register(createPostmanChildNotifyTool(ctx, postmanTaskContexts, worker))
   ctx.tools.register(createImplementationArtifactApplyTool(ctx, grants, worker, { taskContexts: postmanTaskContexts, jobs }))
   ctx.effect(() => async () => {

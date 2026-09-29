@@ -1,4 +1,5 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { Inbox } from '@deepseek-ai/dsh-agent'
 import { randomUUID } from 'node:crypto'
 import { IMPLEMENTATION_REPOSITORY } from './implementation-artifact.js'
 import { workerEvidence } from './postman-worker-evidence.js'
@@ -6,6 +7,7 @@ import {
   POSTMAN_WORKER_TOOL_NAME,
   POSTMAN_WORKER_INTERRUPT_TOOL_NAME,
   POSTMAN_WORKER_STOP_TOOL_NAME,
+  POSTMAN_WORKER_LIST_TOOL_NAME,
   isTopLevelPostmanSupervisor,
 } from './postman-bridge-core.js'
 
@@ -40,14 +42,14 @@ export function postmanWorkerDeniedTools(tools) {
   return tools.schemas().map(tool => tool.name).filter(name => name.startsWith('postman_'))
 }
 
-export function buildPostmanWorkerStartRequest(parent, task, signal, deniedTools) {
+export function buildPostmanWorkerStartRequest(parent, task, signal, deniedTools, label = 'Postman Worker') {
   if (!Array.isArray(deniedTools) || deniedTools.length === 0 ||
       deniedTools.some(name => typeof name !== 'string' || !name.startsWith('postman_'))) {
     throw new Error('POSTMAN_WORKER_TRANSPORT_BOUNDARY_REQUIRED')
   }
   return {
     provider: POSTMAN_WORKER_PROVIDER,
-    label: 'Postman Worker',
+    label,
     signal,
     request: {
       parent,
@@ -61,389 +63,566 @@ export function buildPostmanWorkerStartRequest(parent, task, signal, deniedTools
   }
 }
 
-/** Process-local slot serializes live Worker calls; the durable registry owns the exact Leader-to-child binding across restarts. */
+
+// One short Leader admission queue reserves membership; every child has its own
+// delivery queue. Neither queue is held until a model turn finishes.
 export function createPostmanWorkerTools(ctx, grants, contexts) {
-  const slots = new Map()
-
-  function slotFor(parent) {
-    let slot = slots.get(parent.id)
-    if (slot === undefined) {
-      slot = { childId: undefined, closed: false, artifactRequests: new Set(), tail: Promise.resolve() }
-      slots.set(parent.id, slot)
-    }
-    return slot
-  }
-
-  function enqueue(slot, action) {
-    const result = slot.tail.then(action)
-    slot.tail = result.then(() => undefined, () => undefined)
-    return result
-  }
-
+  const leaders = new Map()
+  let disposed = false
   const durable = typeof contexts?.record === 'function' && typeof contexts?.changeRecord === 'function'
   const rowOf = id => durable ? contexts.record(id) : null
   const liveWorker = id => ctx.agents.get(id)
-  // The native report result is observed only after the child-scoped tool's
-  // authorized reportFrom accepted a messageId. No report prose is stored.
+  const emptyLifecycle = () => ({ version: 1, admissions: [], reports: [] })
+  // A released Activation is not a deleted durable Session. inspect never resumes a model.
+  async function history(id, leaderId, signal) {
+    const resident = liveWorker(id)
+    let saved
+    try { saved = resident?.session ?? ctx.get?.('sessions')?.get?.(id) ??
+      (await ctx.get?.('sessionPersistence')?.inspect?.(id, signal)) } catch { return null }
+    const header = saved?.header ?? saved?.meta
+    if ((header?.id !== undefined && header.id !== id) || header?.origin !== 'subagent' ||
+        header.parentSession !== leaderId || header.delegationDepth !== 1 ||
+        !Array.isArray(saved.events)) return null
+    const seed = header.seedLength ?? 0
+    if (!Number.isSafeInteger(seed) || seed < 0 || seed > saved.events.length) return null
+    let inbox = resident?.inbox
+    if (!inbox) try { inbox = new Inbox({ header, events: saved.events }, {
+      inserted() {}, discarded() {}, claimed() {},
+    }) } catch { return null }
+    return { session: { events: saved.events.slice(seed) }, status: resident?.status ?? 'idle', inbox }
+  }
   async function observeReport(exec, result) {
     if (exec?.name !== 'report' || result?.isError ||
-        typeof result.value?.messageId !== 'string' ||
+        typeof result?.value?.messageId !== 'string' ||
         typeof exec.arguments?.output !== 'string' || !exec.arguments.output.trim()) return
-    const child = exec.agent
-    const leaderId = child?.session?.header?.parentSession
-    const saved = rowOf(leaderId)?.worker
-    if (!durable || !saved || saved.id !== child.id ||
-        child.session.header.origin !== 'subagent' ||
+    const child = exec.agent, leaderId = child?.session?.header?.parentSession
+    if (!durable || child?.session?.header?.origin !== 'subagent' ||
         child.session.header.delegationDepth !== 1 || liveWorker(child.id) !== child) return
     const call = child.session.events.findLast(event => event.type === 'tool/call' &&
       event.data.callId === exec.callId && event.data.name === 'report')
     if (!call) return
-    await changeWorker(leaderId, worker => worker?.id !== child.id ? worker : {
-      ...worker, lifecycle: {
-        ...(worker.lifecycle ?? { version: 1, admissions: [], reports: [] }),
-        reports: [...(worker.lifecycle?.reports ?? []).filter(item => item.callId !== exec.callId),
-          { childId: child.id, turn: call.data.turn, callId: exec.callId, messageId: result.value.messageId }],
-      },
+    try { await changeBinding({ id: leaderId }, child.id, current => {
+      if (!['intent', 'ready'].includes(current.state)) return current
+      return { ...current, lifecycle: { ...(current.lifecycle ?? emptyLifecycle()),
+        reports: [...(current.lifecycle?.reports ?? []).filter(item => item.callId !== exec.callId),
+          { childId: child.id, turn: call.data.turn, callId: exec.callId, messageId: result.value.messageId }] } }
+    }) } catch { /* A removed binding must never be resurrected by a late callback. */ }
+  }
+  function group(parent) {
+    let group = leaders.get(parent.id)
+    if (!group) {
+      group = { slots: new Map(), stopped: new Set(), tail: Promise.resolve() }
+      leaders.set(parent.id, group)
+    }
+    return group
+  }
+  function enqueue(holder, action) {
+    const result = holder.tail.then(action)
+    holder.tail = result.then(() => undefined, () => undefined)
+    return result
+  }
+  function authorized(parent) {
+    return !disposed && isTopLevelPostmanSupervisor(parent) && ctx.agents.get(parent.id) === parent
+  }
+  function bindings(parent, group) {
+    return durable ? rowOf(parent.id)?.workers ?? {} : Object.fromEntries(
+      [...group.slots].filter(([, slot]) => !slot.closed).map(([id, slot]) =>
+        [id, { id, label: slot.label, state: slot.state, delivery: slot.delivery, artifactRequests: [], lifecycle: slot.lifecycle }]))
+  }
+  function slotFor(group, binding) {
+    let slot = group.slots.get(binding.id)
+    if (!slot) {
+      slot = { id: binding.id, label: binding.label, state: binding.state, delivery: binding.delivery,
+        artifactRequests: new Set(), lifecycle: binding.lifecycle, context: null, closed: false, tail: Promise.resolve() }
+      group.slots.set(binding.id, slot)
+    }
+    return slot
+  }
+  async function changeBinding(parent, id, fn) {
+    if (!durable) return
+    await contexts.changeRecord(parent.id, row => {
+      const current = Object.hasOwn(row.workers ?? {}, id) ? row.workers[id] : null
+      if (!current || current.id !== id) throw new Error('POSTMAN_WORKER_BINDING_CHANGED')
+      const changed = fn(current)
+      return { ...row, workers: { ...row.workers, [id]: changed } }
     })
   }
-  async function changeWorker(id, fn) {
-    if (durable) await contexts.changeRecord(id, row => ({ ...row, worker: fn(row.worker) }))
+  function matchesContext(parent, slot) {
+    const context = contexts?.get(parent.id)
+    return !contexts || Boolean(context && (!slot.context || slot.context === context))
   }
   async function childExists(parent, id, signal) {
     const entries = await ctx.subagents.listChildren(parent.id, signal)
-    const matches = entries.filter(item => item.id === id)
-    if (matches.length !== 1 || matches[0].kind !== 'child' || matches[0].mode !== 'continuable')
-      return false
-    return true
+    const matches = entries.filter(entry => entry.id === id)
+    return matches.length === 1 && matches[0].kind === 'child' && matches[0].mode === 'continuable'
   }
   async function reconcile(parent, slot, signal) {
-    if (!durable || slot.childId) return null
-    const saved = rowOf(parent.id)?.worker
-    if (!saved) return null
+    if (!durable) return slot.state === 'uncertain' ? 'POSTMAN_WORKER_BINDING_UNCERTAIN' :
+      slot.delivery === 'unknown' ? 'POSTMAN_WORKER_DELIVERY_UNKNOWN' : null
+    const workers = rowOf(parent.id)?.workers ?? {}
+    const saved = Object.hasOwn(workers, slot.id) ? workers[slot.id] : null
+    if (!saved || saved.id !== slot.id || slot.closed) return 'POSTMAN_WORKER_TARGET_UNKNOWN'
     if (saved.state === 'stopping' || saved.state === 'uncertain') return 'POSTMAN_WORKER_BINDING_UNCERTAIN'
+    if (!slot.verified) {
+      try {
+        if (!await childExists(parent, slot.id, signal)) return 'POSTMAN_WORKER_BINDING_UNCERTAIN'
+        if (saved.state === 'intent') {
+          await changeBinding(parent, slot.id, current => {
+            if (current.state !== 'intent') throw new Error('POSTMAN_WORKER_BINDING_CHANGED')
+            return { ...current, state: 'ready', delivery: 'unknown' }
+          })
+        }
+        slot.verified = true
+      } catch { return 'POSTMAN_WORKER_BINDING_UNCERTAIN' }
+    }
+    const currentWorkers = rowOf(parent.id)?.workers ?? {}
+    const current = Object.hasOwn(currentWorkers, slot.id) ? currentWorkers[slot.id] : null
+    if (!current || current.id !== slot.id || current.state !== 'ready') return 'POSTMAN_WORKER_BINDING_UNCERTAIN'
+    slot.state = 'ready'
+    slot.label = current.label
+    slot.delivery = current.delivery
+    return current.delivery === 'none' ? null : 'POSTMAN_WORKER_DELIVERY_UNKNOWN'
+  }
+  const busy = id => contexts?.isRestoring?.(id) || contexts?.hasActiveOperation?.(id) ||
+    contexts?.hasSyncOperation?.(id)
+  async function admitted(parent, action) {
+    if (contexts?.beginWorkerAdmission) {
+      const token = Symbol('worker operation')
+      if (!contexts.beginWorkerAdmission(parent.id, token)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
+      try { return await action() } finally { contexts.endWorkerAdmission(parent.id, token) }
+    }
+    return action()
+  }
+  function select(parent, id, group) {
+    const workers = bindings(parent, group)
+    if (id !== undefined) return Object.hasOwn(workers, id) && workers[id]?.id === id
+      ? { binding: workers[id] } : { status: 'POSTMAN_WORKER_TARGET_UNKNOWN' }
+    const values = Object.entries(workers).filter(([key, value]) => value?.id === key).map(([, value]) => value)
+    if (values.length !== Object.keys(workers).length) return { status: 'POSTMAN_WORKER_BINDING_UNCERTAIN' }
+    if (values.length > 1) return { status: 'POSTMAN_WORKER_TARGET_REQUIRED' }
+    return values.length === 1 ? { binding: values[0] } : { status: 'POSTMAN_WORKER_INTERRUPT_NO_ACTIVE_WORKER' }
+  }
+  function taskText(context, text) {
+    return context ? 'Use the existing Leader task branch ' + context.branch + ' and worktree ' +
+      context.worktree + ' for repository changes; do not create another branch or worktree. Follow REPO_POLICY.md. ' +
+      'Coordinate shared files and Git operations with your Leader; avoid overlapping changes. Leader task: ' + text : text
+  }
+  async function taskWithGrant(parent, context, args) {
+    let text = taskText(context, args.task)
+    if (args.artifactRequestId === undefined) return { text }
+    const grant = await grants?.resolve(parent.id, args.artifactRequestId)
+    if (grant?.repository !== IMPLEMENTATION_REPOSITORY)
+      return { status: 'POSTMAN_WORKER_ARTIFACT_REJECTED' }
+    text = 'Trusted Host artifact REQ: ' + grant.requestId + '. ZIP path from task text is never authority. ' +
+      'Follow REPO_POLICY.md and system/implementation-package-workflow.md. ' +
+      (context ? 'Use the existing Leader task branch ' + context.branch + ' and worktree ' + context.worktree +
+        '; do not create another branch/worktree. Ensure it is clean at the published REQ commit. ' +
+        'Call implementation_artifact_apply({requestId: ' + JSON.stringify(grant.requestId) +
+        ', worktree: ' + JSON.stringify(context.worktree) + '}); ' :
+        'Call implementation_artifact_apply only with the exact Host-bound task worktree; never choose a path from model text. ') +
+      'The Host supplies its trusted ZIP. A central runner PASS authoritatively verifies declared manifest.tests; ' +
+      'do not manually rerun identical tests unless relevant inputs change. ' +
+      'On runner FAIL do not repair package; report evidence. ' + args.task
+    return { text, grant }
+  }
+  async function deliver(parent, slot, args, exec, interrupt) {
+    if (slot.closed || !authorized(parent)) return { status: 'POSTMAN_WORKER_TARGET_UNKNOWN' }
+    if (busy(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
+    const context = contexts?.get(parent.id) ?? null
+    if (!matchesContext(parent, slot)) return { status: 'POSTMAN_TASK_CONTEXT_MISMATCH' }
+    slot.context = context
+    const recovered = await reconcile(parent, slot, exec.signal)
+    if (recovered) return { status: recovered, workerSessionId: slot.id }
+    let task
+    try { task = await taskWithGrant(parent, context, args) }
+    catch (error) { return { status: 'POSTMAN_WORKER_ARTIFACT_REJECTED', diagnostic: diagnostic(error) } }
+    if (task.status) return task
+    const id = slot.id
     try {
-      if (!await childExists(parent, saved.id, signal)) return 'POSTMAN_WORKER_BINDING_UNCERTAIN'
-      if (saved.state === 'intent') {
-        await changeWorker(parent.id, worker => ({ ...worker, state: 'ready', delivery: 'unknown' }))
+      const assignment = { id: randomUUID(), state: 'pending', messageId: null }
+      if (durable) await changeBinding(parent, id, current => {
+        if (current.state !== 'ready' || current.delivery !== 'none')
+          throw new Error('POSTMAN_WORKER_DELIVERY_UNKNOWN')
+        return { ...current, delivery: 'pending', lifecycle: { ...(current.lifecycle ?? emptyLifecycle()),
+          admissions: [...(current.lifecycle?.admissions ?? []), assignment] }, artifactRequests: task.grant ?
+          [...new Set([...current.artifactRequests, args.artifactRequestId])] : current.artifactRequests }
+      })
+      slot.delivery = 'pending'
+      if (task.grant) slot.artifactRequests.add(args.artifactRequestId)
+      const messageId = await ctx.subagents.followup(parent, id, [{ type: 'text', text: task.text }], {
+        source: { kind: 'coordinator', form: 'relay', senderSessionId: parent.id }, signal: exec.signal,
+      })
+      if (durable) await changeBinding(parent, id, current => {
+        if (current.state !== 'ready' || current.delivery !== 'pending')
+          throw new Error('POSTMAN_WORKER_BINDING_CHANGED')
+        return { ...current, delivery: 'none', lifecycle: { ...current.lifecycle,
+          admissions: current.lifecycle.admissions.map(item => item.id === assignment.id ?
+            { ...item, state: 'accepted', messageId: String(messageId) } : item) } }
+      })
+      slot.delivery = 'none'
+      return { status: interrupt ? 'POSTMAN_WORKER_INTERRUPT_TASK_ACCEPTED' : 'POSTMAN_WORKER_TASK_ACCEPTED',
+        workerSessionId: id, label: slot.label, created: false, messageId: String(messageId),
+        ...(interrupt ? { interruptRequested: false, mappingPreserved: true } : {}),
+        model: POSTMAN_WORKER_AGENT_OPTIONS.model, provider: POSTMAN_WORKER_PROVIDER }
+    } catch (error) {
+      if (durable && Object.hasOwn(rowOf(parent.id)?.workers ?? {}, id) &&
+          rowOf(parent.id).workers[id].delivery === 'pending') {
+        try { await changeBinding(parent, id, current => ({ ...current, delivery: 'unknown' })) } catch {}
       }
-      slot.childId = saved.id
-      slot.artifactRequests = new Set(saved.artifactRequests)
-      return saved.delivery === 'pending' || saved.delivery === 'unknown'
-        ? 'POSTMAN_WORKER_DELIVERY_UNKNOWN' : null
-    } catch { return 'POSTMAN_WORKER_BINDING_UNCERTAIN' }
+      slot.delivery = 'unknown'
+      return { status: interrupt ? 'POSTMAN_WORKER_INTERRUPT_DELIVERY_FAILED' : 'POSTMAN_WORKER_FOLLOWUP_FAILED',
+        workerSessionId: id, diagnostic: diagnostic(error) }
+    }
   }
-
-  function authorized(parent) {
-    return isTopLevelPostmanSupervisor(parent) && ctx.agents.get(parent.id) === parent
+  async function create(parent, group, args, exec) {
+    const context = contexts?.get(parent.id) ?? null
+    if (contexts && !context) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
+    let task
+    try { task = await taskWithGrant(parent, context, args) }
+    catch (error) { return { status: 'POSTMAN_WORKER_ARTIFACT_REJECTED', diagnostic: diagnostic(error) } }
+    if (task.status) return task
+    if (!authorized(parent)) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
+    const reservedId = randomUUID()
+    const assignment = { id: randomUUID(), state: 'pending', messageId: null }
+    const label = args.label ?? 'Postman Worker'
+    // Reserve an exact child identity durably before the first DSH side effect.
+    const admission = await enqueue(group, async () => {
+      if (busy(parent.id) || !authorized(parent)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
+      if (args.createNew !== true && Object.keys(bindings(parent, group)).length)
+        return { selected: select(parent, undefined, group) }
+      if (Object.keys(bindings(parent, group)).length >= 3) return { status: 'POSTMAN_WORKER_LIMIT_REACHED' }
+      try {
+        if (durable) await contexts.changeRecord(parent.id, row => {
+          if (Object.keys(row.workers ?? {}).length >= 3) throw new Error('POSTMAN_WORKER_LIMIT_REACHED')
+          if (Object.hasOwn(row.workers ?? {}, reservedId)) throw new Error('POSTMAN_WORKER_BINDING_EXISTS')
+          return { ...row, workers: { ...row.workers,
+            [reservedId]: { id: reservedId, label, state: 'intent', delivery: 'pending',
+              artifactRequests: task.grant ? [args.artifactRequestId] : [],
+              lifecycle: { version: 1, admissions: [assignment], reports: [] } } } }
+        })
+        const slot = slotFor(group, { id: reservedId, label, state: 'intent', delivery: 'pending' })
+        slot.context = context
+        if (task.grant) slot.artifactRequests.add(args.artifactRequestId)
+        return { slot }
+      } catch (error) {
+        return { status: /POSTMAN_WORKER_LIMIT_REACHED/.test(String(error)) ?
+          'POSTMAN_WORKER_LIMIT_REACHED' : 'POSTMAN_WORKER_START_FAILED', diagnostic: diagnostic(error) }
+      }
+    })
+    if (admission.selected) {
+      if (!admission.selected.binding) return admission.selected
+      const selected = slotFor(group, admission.selected.binding)
+      return enqueue(selected, () => deliver(parent, selected, args, exec, false))
+    }
+    if (!admission.slot) return admission
+    const slot = admission.slot
+    const exactIntent = () => !durable ||
+      (Object.hasOwn(rowOf(parent.id)?.workers ?? {}, reservedId) &&
+       rowOf(parent.id).workers[reservedId]?.state === 'intent' &&
+       rowOf(parent.id).workers[reservedId]?.label === label &&
+       rowOf(parent.id).workers[reservedId]?.lifecycle?.admissions?.[0]?.id === assignment.id)
+    return enqueue(slot, async () => {
+    let readyBinding
+    if (slot.closed || !authorized(parent) || !exactIntent())
+      return { status: 'POSTMAN_WORKER_BINDING_UNCERTAIN', workerSessionId: reservedId }
+    try {
+      const accepted = await ctx.subagents.startContinuable({
+        ...buildPostmanWorkerStartRequest(parent, task.text, exec.signal, postmanWorkerDeniedTools(ctx.tools), label),
+        childId: reservedId,
+      })
+      if (String(accepted.childId) !== reservedId) throw new Error('POSTMAN_WORKER_CHILD_ID_MISMATCH')
+      if (slot.closed || !authorized(parent) || !exactIntent()) throw new Error('POSTMAN_WORKER_START_STALE')
+      if (durable && !await childExists(parent, reservedId, exec.signal))
+        throw new Error('POSTMAN_WORKER_CHILD_NOT_VERIFIED')
+      if (slot.closed || !authorized(parent) || !exactIntent()) throw new Error('POSTMAN_WORKER_START_STALE')
+      if (durable) await changeBinding(parent, reservedId, current => {
+        if (current.state !== 'intent' || current.label !== label ||
+            current.lifecycle?.admissions?.[0]?.id !== assignment.id)
+          throw new Error('POSTMAN_WORKER_BINDING_CHANGED')
+        readyBinding = { ...current, state: 'ready', delivery: 'none', lifecycle: { ...current.lifecycle,
+          admissions: current.lifecycle.admissions.map(item => item.id === assignment.id ?
+            { ...item, state: 'accepted', messageId: String(accepted.messageId) } : item) } }
+        return readyBinding
+      })
+      if (slot.closed || !authorized(parent) ||
+          (durable && rowOf(parent.id)?.workers?.[reservedId]?.lifecycle?.admissions?.[0]?.id !== assignment.id))
+        throw new Error('POSTMAN_WORKER_START_STALE')
+      slot.verified = true
+      slot.state = 'ready'
+      slot.delivery = 'none'
+      return { status: 'POSTMAN_WORKER_TASK_ACCEPTED', workerSessionId: reservedId, label,
+        created: true, messageId: String(accepted.messageId), model: POSTMAN_WORKER_AGENT_OPTIONS.model,
+        provider: POSTMAN_WORKER_PROVIDER }
+    } catch (error) {
+      // Even if DSH rolled back, do not release a persisted intent without proof.
+      // A late completion must never replace a removed or different binding.
+      // The selected drain releases only this child's Activation, preserving
+      // the Session; failure leaves the original slot uncertain.
+      try { await ctx.subagents.drainContinuableChildren(parent, [reservedId]) } catch {}
+      if (durable && Object.hasOwn(rowOf(parent.id)?.workers ?? {}, reservedId)) {
+        try { await changeBinding(parent, reservedId, current => {
+          if (current.label !== label || current.lifecycle?.admissions?.[0]?.id !== assignment.id ||
+              !['intent', 'ready'].includes(current.state))
+            throw new Error('POSTMAN_WORKER_BINDING_CHANGED')
+          return { ...current, state: 'uncertain', delivery: 'unknown' }
+        }) } catch {}
+      } else if (!durable) { slot.state = 'uncertain'; slot.delivery = 'unknown' }
+      return { status: durable ? 'POSTMAN_WORKER_BINDING_UNCERTAIN' : 'POSTMAN_WORKER_START_FAILED',
+        workerSessionId: reservedId, diagnostic: diagnostic(error) }
+    }
+    })
   }
-
+  const parameters = {
+    task: { type: 'string', required: true, description: 'Complete autonomous local task.' },
+    createNew: { type: 'boolean', description: 'Create a distinct Worker; never follow up an existing one.' },
+    workerSessionId: { type: 'string', description: 'Exact existing Worker session for an addressed task or artifact grant.' },
+    label: { type: 'string', description: 'Display name, not an authority or lookup key.' },
+    artifactRequestId: { type: 'string', description: 'Separately trusted artifact REQ.' },
+  }
   const taskTool = defineTool({
     name: POSTMAN_WORKER_TOOL_NAME,
-    description: "Accept a local task for this Postman Leader's continuable Luna Worker. First call creates it; later calls enqueue in the same durable session. Acceptance is not completion: wait for the child-scoped report before treating the result as done.",
-    parameters: {
-      task: { type: 'string', required: true, description: 'The complete local task for the Worker.' },
-      artifactRequestId: { type: 'string', description: 'Trusted artifact REQ, used only after a separate Leader decision.' },
-    },
-    output: output(),
+    description: 'Create an additional continuable Worker (up to three), or deliver a trusted artifact grant to an exact existing Worker. Acceptance is not completion.',
+    parameters, output: output(),
     async execute(args, exec) {
       const parent = exec?.agent
       if (!authorized(parent)) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
-      if (typeof args?.task !== 'string' || args.task.trim() === '') {
-        return { status: 'POSTMAN_WORKER_TASK_INVALID' }
-      }
-      if (args.artifactRequestId !== undefined && typeof args.artifactRequestId !== 'string') {
-        return { status: 'POSTMAN_WORKER_ARTIFACT_REJECTED' }
-      }
+      if (typeof args?.task !== 'string' || !args.task.trim()) return { status: 'POSTMAN_WORKER_TASK_INVALID' }
+      if ((args.createNew !== undefined && typeof args.createNew !== 'boolean') ||
+          (args.workerSessionId !== undefined && (typeof args.workerSessionId !== 'string' || !args.workerSessionId)) ||
+          (args.label !== undefined && (typeof args.label !== 'string' || !args.label.trim() || args.label.length > 120)) ||
+          (args.artifactRequestId !== undefined && typeof args.artifactRequestId !== 'string') ||
+          (args.createNew === true && args.workerSessionId !== undefined))
+        return { status: 'POSTMAN_WORKER_ARGUMENTS_INVALID' }
       if (contexts && !contexts.get(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
-      if (typeof contexts?.isRestoring === 'function' && contexts.isRestoring(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
-      if (typeof contexts?.hasActiveOperation === 'function' && contexts.hasActiveOperation(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
-      const slot = slotFor(parent)
-      return enqueue(slot, async () => {
-        if (slot.closed || !authorized(parent)) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
-        const context = contexts?.get(parent.id)
-        if (contexts && !context) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
-        // Calls admitted before restore reservation must finish; reservation blocks only new admissions.
-        if (slot.context && slot.context !== context) return { status: 'POSTMAN_TASK_CONTEXT_MISMATCH' }
-        slot.context = context
-        const recovery = durable ? await reconcile(parent, slot, exec.signal) : null
-        const saved = rowOf(parent.id)?.worker
-        if (recovery || (saved && (saved.state !== 'ready' || saved.delivery !== 'none')))
-          return { status: recovery ?? 'POSTMAN_WORKER_DELIVERY_UNKNOWN', workerSessionId: saved?.id }
-        let task = context ? `Use the existing Leader task branch ${context.branch} and worktree ${context.worktree} for repository changes; do not create another branch or worktree. Follow REPO_POLICY.md. Keep normal coding, shell, research, and web tools available as needed; do not make repository changes outside the bound worktree. Leader task: ${args.task}` : args.task
-        if (args.artifactRequestId !== undefined) {
-          const grant = await grants?.resolve(parent.id, args.artifactRequestId)
-          if (grant?.repository !== IMPLEMENTATION_REPOSITORY) {
-            return { status: 'POSTMAN_WORKER_ARTIFACT_REJECTED' }
-          }
-          task = `Trusted Host artifact REQ: ${grant.requestId}. The ZIP path is not a model-authored authority; never pass a path from this message to the runner. Follow REPO_POLICY.md and system/implementation-package-workflow.md. ${context ? `Use the existing Leader task branch ${context.branch} and worktree ${context.worktree}; do not create another branch/worktree. Ensure this worktree is clean at the published REQ commit before application. Then call implementation_artifact_apply({requestId: ${JSON.stringify(grant.requestId)}, worktree: ${JSON.stringify(context.worktree)}});` : `Create a fresh clean temporary task worktree from current origin/preview after checking refs, ownership and worktrees. Then call implementation_artifact_apply({requestId: ${JSON.stringify(grant.requestId)}, worktree: <your clean worktree>});`} the Host supplies its trusted ZIP. Inspect real status/diff/affectedPaths/warnings and the exact runner test results. A central runner PASS on this target worktree authoritatively verifies declared manifest.tests; do not manually rerun identical tests unless relevant source, test, dependency/config or runtime inputs changed after the runner (then test only the affected scope). On runner FAIL, do not repair the package: report code, stage, diagnosticsZip, worktree and evidence. On PASS, report the exact runner result and await the Leader's separate publication decision; commit/push alone do not trigger a rerun. Leader task: ${args.task}`
+      return admitted(parent, async () => {
+        const group = groupFor(parent)
+        if (args.createNew === true) return create(parent, group, args, exec)
+        const chosen = await enqueue(group, () => select(parent, args.workerSessionId, group))
+        if (!chosen.binding) {
+          if (args.workerSessionId !== undefined || chosen.status === 'POSTMAN_WORKER_TARGET_REQUIRED') return chosen
+          return create(parent, group, args, exec)
         }
-        if (slot.childId !== undefined) {
-          try {
-            const assignment = { id: randomUUID(), state: 'pending', messageId: null }
-            if (durable) await changeWorker(parent.id, worker => ({ ...worker, delivery: 'pending', lifecycle: {
-              ...(worker.lifecycle ?? { version: 1, admissions: [], reports: [] }),
-              admissions: [...(worker.lifecycle?.admissions ?? []), assignment],
-            } }))
-            const messageId = await ctx.subagents.followup(parent, slot.childId,
-              [{ type: 'text', text: task }], {
-                source: { kind: 'coordinator', form: 'relay', senderSessionId: parent.id },
-                signal: exec.signal,
-              })
-            if (durable) await changeWorker(parent.id, worker => ({ ...worker, delivery: 'none',
-              lifecycle: { ...worker.lifecycle, admissions: worker.lifecycle.admissions.map(item =>
-                item.id === assignment.id ? { ...item, state: 'accepted', messageId: String(messageId) } : item) },
-              artifactRequests: args.artifactRequestId === undefined ? worker.artifactRequests
-                : [...new Set([...worker.artifactRequests, args.artifactRequestId])] }))
-            if (args.artifactRequestId !== undefined) slot.artifactRequests.add(args.artifactRequestId)
-            return {
-              status: 'POSTMAN_WORKER_TASK_ACCEPTED', workerSessionId: slot.childId,
-              created: false, messageId: String(messageId),
-              model: POSTMAN_WORKER_AGENT_OPTIONS.model, provider: POSTMAN_WORKER_PROVIDER,
-            }
-          } catch (error) {
-            if (durable && rowOf(parent.id)?.worker?.delivery === 'pending') {
-              try { await changeWorker(parent.id, worker => ({ ...worker, delivery: 'unknown' })) } catch {}
-            }
-            // Preserve the mapping: admission failure does not prove that the
-            // durable child is gone, and a retry must not silently create another.
-            return { status: 'POSTMAN_WORKER_FOLLOWUP_FAILED', workerSessionId: slot.childId,
-              diagnostic: diagnostic(error) }
-          }
-        }
-        let accepted
-        const reservedId = durable ? randomUUID() : null
-        try {
-          if (durable) await changeWorker(parent.id, current => {
-            if (current) throw new Error('POSTMAN_WORKER_BINDING_EXISTS')
-            return { id: reservedId, state: 'intent', delivery: 'pending', artifactRequests: [],
-              lifecycle: { version: 1, admissions: [{ id: randomUUID(), state: 'pending', messageId: null }], reports: [] } }
-          })
-          accepted = await ctx.subagents.startContinuable({
-            ...buildPostmanWorkerStartRequest(parent, task, exec.signal,
-              postmanWorkerDeniedTools(ctx.tools)),
-            ...(reservedId ? { childId: reservedId } : {}),
-          })
-          if (reservedId && String(accepted.childId) !== reservedId)
-            throw new Error('POSTMAN_WORKER_CHILD_ID_MISMATCH')
-          if (durable && !await childExists(parent, reservedId, exec.signal))
-            throw new Error('POSTMAN_WORKER_CHILD_NOT_VERIFIED')
-          if (durable) await changeWorker(parent.id, current => {
-            if (current?.id !== reservedId || current.state !== 'intent')
-              throw new Error('POSTMAN_WORKER_BINDING_CHANGED')
-            return { ...current, state: 'ready', delivery: 'none',
-              lifecycle: { ...current.lifecycle, admissions: current.lifecycle.admissions.map(item =>
-                ({ ...item, state: 'accepted', messageId: String(accepted.messageId) })) },
-              artifactRequests: args.artifactRequestId !== undefined ? [args.artifactRequestId] : [] }
-          })
-        } catch (error) {
-          // Before inbox admission Harness rolls back the child. Keep this
-          // empty slot so already queued calls can retry without losing mapping.
-          return { status: durable && rowOf(parent.id)?.worker ? 'POSTMAN_WORKER_BINDING_UNCERTAIN'
-            : 'POSTMAN_WORKER_START_FAILED', diagnostic: diagnostic(error) }
-        }
-        slot.childId = String(accepted.childId)
-        if (slot.closed || !authorized(parent)) {
-          try {
-            await ctx.subagents.drainContinuableChildren(parent, [accepted.childId])
-            return { status: 'POSTMAN_WORKER_PARENT_UNAVAILABLE', workerSessionId: slot.childId }
-          } catch (error) {
-            return { status: 'POSTMAN_WORKER_PARENT_UNAVAILABLE', workerSessionId: slot.childId,
-              diagnostic: diagnostic(error) }
-          }
-        }
-        if (args.artifactRequestId !== undefined) slot.artifactRequests.add(args.artifactRequestId)
-        return {
-          status: 'POSTMAN_WORKER_TASK_ACCEPTED', workerSessionId: slot.childId,
-          created: true, messageId: String(accepted.messageId),
-          model: POSTMAN_WORKER_AGENT_OPTIONS.model, provider: POSTMAN_WORKER_PROVIDER,
-        }
+        const slot = slotFor(group, chosen.binding)
+        return enqueue(slot, () => deliver(parent, slot, args, exec, false))
       })
     },
   })
-
+  function groupFor(parent) { return group(parent) }
   const interruptTool = defineTool({
     name: POSTMAN_WORKER_INTERRUPT_TOOL_NAME,
-    description: "Queue a replacement task for this Leader's existing Worker. Finish the current model/tool step without cancellation, then start the next round with all queued messages in FIFO order.",
-    parameters: { task: { type: 'string', required: true, description: 'The next task for the same Worker session.' } },
-    output: output(),
+    description: 'Queue a follow-up for the selected continuable Worker without interrupting its current model/tool step.',
+    parameters: { workerSessionId: { type: 'string' }, task: { type: 'string', required: true } }, output: output(),
     async execute(args, exec) {
       const parent = exec?.agent
       if (!authorized(parent)) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
-      if (typeof args?.task !== 'string' || args.task.trim() === '') return { status: 'POSTMAN_WORKER_TASK_INVALID' }
+      if (typeof args?.task !== 'string' || !args.task.trim()) return { status: 'POSTMAN_WORKER_TASK_INVALID' }
+      if (args.workerSessionId !== undefined && (typeof args.workerSessionId !== 'string' || !args.workerSessionId))
+        return { status: 'POSTMAN_WORKER_TARGET_UNKNOWN' }
       if (contexts && !contexts.get(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
-      if (contexts?.isRestoring?.(parent.id) || contexts?.hasActiveOperation?.(parent.id))
-        return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
-      const slot = slotFor(parent)
-      return enqueue(slot, async () => {
-        if (slot.closed || !authorized(parent)) return { status: 'POSTMAN_WORKER_INTERRUPT_NO_ACTIVE_WORKER' }
-        const context = contexts?.get(parent.id)
-        if (contexts && !context) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
-        if (contexts?.isRestoring?.(parent.id) || contexts?.hasActiveOperation?.(parent.id))
-          return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
-        if (slot.context && slot.context !== context) return { status: 'POSTMAN_TASK_CONTEXT_MISMATCH' }
-        slot.context = context
-        const recovery = durable ? await reconcile(parent, slot, exec.signal) : null
-        const saved = rowOf(parent.id)?.worker
-        if (recovery || (saved && (saved.state !== 'ready' || saved.delivery !== 'none')))
-          return { status: recovery ?? 'POSTMAN_WORKER_DELIVERY_UNKNOWN', workerSessionId: saved?.id }
-        if (!slot.childId) return { status: 'POSTMAN_WORKER_INTERRUPT_NO_ACTIVE_WORKER' }
-        const childId = slot.childId
-        const task = (context ? 'Use the existing Leader task branch ' + context.branch +
-          ' and worktree ' + context.worktree + ' for repository changes; do not create another branch or worktree. Follow REPO_POLICY.md. ' : '') +
-          'Postman Leader follow-up for the next round (do not cancel the current model/tool step): ' + args.task
-        try {
-          const assignment = { id: randomUUID(), state: 'pending', messageId: null }
-          if (durable) await changeWorker(parent.id, worker => ({ ...worker, delivery: 'pending', lifecycle: {
-            ...(worker.lifecycle ?? { version: 1, admissions: [], reports: [] }),
-            admissions: [...(worker.lifecycle?.admissions ?? []), assignment],
-          } }))
-          const messageId = await ctx.subagents.followup(parent, childId, [{ type: 'text', text: task }], {
-            source: { kind: 'coordinator', form: 'relay', senderSessionId: parent.id }, signal: exec.signal,
-          })
-          if (durable) await changeWorker(parent.id, worker => ({ ...worker, delivery: 'none',
-            lifecycle: { ...worker.lifecycle, admissions: worker.lifecycle.admissions.map(item =>
-              item.id === assignment.id ? { ...item, state: 'accepted', messageId: String(messageId) } : item) },
-          }))
-          return { status: 'POSTMAN_WORKER_INTERRUPT_TASK_ACCEPTED', workerSessionId: childId,
-            created: false, messageId: String(messageId), interruptRequested: false,
-            mappingPreserved: true, model: POSTMAN_WORKER_AGENT_OPTIONS.model,
-            provider: POSTMAN_WORKER_PROVIDER }
-        } catch (error) {
-          if (durable && rowOf(parent.id)?.worker?.delivery === 'pending') {
-            try { await changeWorker(parent.id, worker => ({ ...worker, delivery: 'unknown' })) } catch {}
-          }
-          return { status: 'POSTMAN_WORKER_INTERRUPT_DELIVERY_FAILED', workerSessionId: childId,
-            interruptRequested: false, mappingPreserved: true, diagnostic: diagnostic(error) }
-        }
+      return admitted(parent, async () => {
+        const group = groupFor(parent)
+        const chosen = await enqueue(group, () => select(parent, args.workerSessionId, group))
+        if (!chosen.binding) return chosen
+        const slot = slotFor(group, chosen.binding)
+        return enqueue(slot, () => deliver(parent, slot, args, exec, true))
       })
     },
   })
+  // Compare only this Worker: unrelated peer activity must not invalidate approval.
+  function cancelWitness(binding) {
+    return JSON.stringify({ id: binding.id, state: binding.state,
+      admissions: binding.lifecycle?.admissions ?? null, delivery: binding.delivery,
+      artifactRequests: binding.artifactRequests })
+  }
+  async function verifyIdentity(parent, id, signal) {
+    const entries = await ctx.subagents.listChildren(parent.id, signal)
+    const matches = entries.filter(entry => entry.id === id)
+    return matches.length === 1 && matches[0].kind === 'child' && matches[0].mode === 'continuable'
+  }
+  async function closeEvidence(parent, binding, signal) {
+    if (binding.state !== 'ready' || binding.delivery !== 'none')
+      return { ready: false, reason: 'binding or admission uncertain; request approved addressed cancel' }
+    const child = await history(binding.id, parent.id, signal)
+    const evidence = workerEvidence(binding, child, parent)
+    if (!evidence.ready) return evidence
+    const descendants = await ctx.subagents.listDescendants(binding.id, signal)
+    if (descendants.some(entry => entry.kind === 'diagnostic' ||
+        (entry.kind === 'child' && entry.mode === 'continuable' &&
+          (entry.activity !== 'inactive' || ctx.agents.get(entry.id)))))
+      return { ready: false, reason: 'managed descendants running or uncertain' }
+    return evidence
+  }
   const stopTool = defineTool({
     name: POSTMAN_WORKER_STOP_TOOL_NAME,
-    description: 'Close a completed, reported Worker session, or explicitly cancel it after Host approval. Acceptance and idle status are not completion.',
+    description: 'Close an evidenced reported Worker or cancel an exact Worker after one Host approval.',
     parameters: {
-      mode: { type: 'string', enum: ['close', 'cancel'], description: 'Default close; cancel requires a fresh Host approval.' },
-      workerSessionId: { type: 'string', description: 'Exact Worker session ID, required for cancel.' },
-      reason: { type: 'string', description: 'Explanation only, not authorization.' },
-    },
-    output: output(),
+      mode: { type: 'string', enum: ['close', 'cancel'] },
+      workerSessionId: { type: 'string', description: 'Exact Worker ID; mandatory for cancel.' },
+      reason: { type: 'string', description: 'Explanation, never authorization.' },
+    }, output: output(),
     async execute(args, exec) {
       const parent = exec?.agent
       if (!authorized(parent)) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
-      const mode = args?.mode ?? 'close'
+      const mode = args?.mode ?? 'close', id = args?.workerSessionId
       if (mode !== 'close' && mode !== 'cancel') return { status: 'POSTMAN_WORKER_STOP_MODE_INVALID' }
-      const slot = slotFor(parent)
-      // The model's mode/reason is never authority. The existing Host approval
-      // channel issues a one-call grant bound to this exact assignment snapshot.
-      const before = rowOf(parent.id)?.worker
-      const witness = JSON.stringify({ id: before?.id, state: before?.state,
-        delivery: before?.delivery, admissions: before?.lifecycle?.admissions })
-      if (mode === 'cancel') {
-        if (!before || args?.workerSessionId !== before.id || !ctx.get?.('approval'))
-          return { status: 'POSTMAN_WORKER_CANCEL_APPROVAL_REQUIRED', workerSessionId: before?.id }
-        const approval = await ctx.get('approval').request({ agent: parent, toolName: POSTMAN_WORKER_STOP_TOOL_NAME,
-          callId: exec.callId, reason: 'Cancel exact Worker ' + before.id +
-            ' and assignments ' + (before.lifecycle?.admissions?.map(item => item.id).join(',') ?? 'unknown') +
-            ': ' + (args.reason ?? 'no explanation'), signal: exec.signal })
-        if (approval !== 'allowed-once')
-          return { status: 'POSTMAN_WORKER_CANCEL_APPROVAL_REQUIRED', workerSessionId: before.id }
+      if (id !== undefined && (typeof id !== 'string' || !id)) return { status: 'POSTMAN_WORKER_TARGET_UNKNOWN' }
+      if (mode === 'cancel' && !id) return { status: 'POSTMAN_WORKER_CANCEL_APPROVAL_REQUIRED' }
+      const g = groupFor(parent)
+      const chosen = await enqueue(g, () => select(parent, id, g))
+      if (!chosen.binding) {
+        if (id && g.stopped.has(id)) return { status: 'POSTMAN_WORKER_ALREADY_STOPPED', workerSessionId: id }
+        return mode === 'cancel' && chosen.status === 'POSTMAN_WORKER_TARGET_UNKNOWN' ?
+          { status: 'POSTMAN_WORKER_CANCEL_APPROVAL_REQUIRED' } : chosen
       }
-      return enqueue(slot, async () => {
-        if (slot.closed || !authorized(parent)) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
-        const saved = rowOf(parent.id)?.worker
-        if (!saved && !slot.childId) return { status: 'POSTMAN_WORKER_ALREADY_STOPPED' }
-        if (durable && !slot.childId && await reconcile(parent, slot, exec.signal))
-          return { status: 'POSTMAN_WORKER_BINDING_UNCERTAIN', workerSessionId: saved?.id }
-        const childId = slot.childId ?? saved?.id
-        if (args?.workerSessionId !== undefined && args.workerSessionId !== childId)
-          return { status: 'POSTMAN_WORKER_TARGET_REJECTED', workerSessionId: childId }
-        if (mode === 'cancel' && (args?.workerSessionId !== childId || !saved || JSON.stringify({ id: saved.id, state: saved.state,
-          delivery: saved.delivery, admissions: saved.lifecycle?.admissions }) !== witness))
-          return { status: 'POSTMAN_WORKER_CANCEL_APPROVAL_REQUIRED', workerSessionId: childId }
-        if (mode === 'close') {
-          if (saved && (saved.id !== childId || saved.state !== 'ready' || saved.delivery !== 'none'))
-            return { status: 'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT', workerSessionId: childId,
-              reason: 'binding or admission uncertain; use postman_yield or approved cancel' }
-          const child = liveWorker(childId)
-          const evidence = workerEvidence(saved, child, parent)
-          if (!evidence.ready) return { status: 'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT',
-            workerSessionId: childId, reason: evidence.reason + '; use postman_yield or approved cancel' }
-          try {
-            const descendants = await ctx.subagents.listDescendants(childId, exec.signal)
-            if (descendants.length > 0)
-              return { status: 'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT', workerSessionId: childId,
-                reason: 'managed descendants still running or uncertain; use postman_yield' }
-          } catch { return { status: 'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT', workerSessionId: childId,
-            reason: 'managed descendant state unavailable; use postman_yield' } }
-        }
-        if (mode === 'close' && !workerEvidence(saved, liveWorker(childId), parent).ready)
-          return { status: 'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT', workerSessionId: childId,
-            reason: 'Worker changed before drain; use postman_yield' }
-        if (durable) await changeWorker(parent.id, worker => ({ ...worker, state: 'stopping' }))
+      const selected = chosen.binding, slot = slotFor(g, selected)
+      let witness
+      if (mode === 'cancel') {
+        if (!durable || !ctx.get?.('approval'))
+          return { status: 'POSTMAN_WORKER_CANCEL_APPROVAL_REQUIRED', workerSessionId: id }
         try {
-          await ctx.subagents.drainContinuableChildren(parent, [childId])
+          if (!await verifyIdentity(parent, id, exec.signal))
+            return { status: 'POSTMAN_WORKER_BINDING_UNCERTAIN', workerSessionId: id }
+        } catch { return { status: 'POSTMAN_WORKER_BINDING_UNCERTAIN', workerSessionId: id } }
+        witness = cancelWitness(selected)
+        const approval = await ctx.get('approval').request({ agent: parent,
+          toolName: POSTMAN_WORKER_STOP_TOOL_NAME, callId: exec.callId,
+          reason: 'Cancel exact Leader ' + parent.id + ' Worker ' + id +
+            ' assignments ' + witness + ': ' + (args.reason ?? 'no explanation'), signal: exec.signal })
+        if (approval !== 'allowed-once')
+          return { status: 'POSTMAN_WORKER_CANCEL_APPROVAL_REQUIRED', workerSessionId: id }
+      }
+      // Per-Worker queue prevents a selected admission between validation and drain.
+      // No Leader-wide queue is held while a human or model runs.
+      return admitted(parent, () => enqueue(slot, async () => {
+        if (slot.closed || !authorized(parent)) return { status: 'POSTMAN_WORKER_TARGET_UNKNOWN' }
+        const current = bindings(parent, g)[selected.id]
+        if (!current || current.id !== selected.id || !matchesContext(parent, slot))
+          return { status: 'POSTMAN_WORKER_BINDING_UNCERTAIN', workerSessionId: selected.id }
+        if (mode === 'cancel' && cancelWitness(current) !== witness)
+          return { status: 'POSTMAN_WORKER_CANCEL_APPROVAL_REQUIRED', workerSessionId: selected.id }
+        try {
+          if (mode === 'close') {
+            const evidence = current.lifecycle ? await closeEvidence(parent, current, exec.signal) :
+              { ready: false, reason: 'no durable lifecycle witness' }
+            if (!evidence.ready) return { status: 'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT',
+              workerSessionId: selected.id, reason: evidence.reason + '; request approved addressed cancel if no report can arrive' }
+          }
+          if (!await verifyIdentity(parent, selected.id, exec.signal))
+            return { status: 'POSTMAN_WORKER_BINDING_UNCERTAIN', workerSessionId: selected.id }
+          const latest = bindings(parent, g)[selected.id]
+          if (!latest || latest.id !== selected.id ||
+              (mode === 'cancel' ? cancelWitness(latest) !== witness :
+                !(await closeEvidence(parent, latest, exec.signal)).ready))
+            return { status: mode === 'cancel' ? 'POSTMAN_WORKER_CANCEL_APPROVAL_REQUIRED' :
+              'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT', workerSessionId: selected.id }
+          if (durable) await changeBinding(parent, selected.id, entry => {
+            if (mode === 'cancel' ? cancelWitness(entry) !== witness :
+                entry.state !== 'ready' || entry.delivery !== 'none' || entry !== latest)
+              throw new Error('POSTMAN_WORKER_BINDING_CHANGED')
+            return { ...entry, state: 'stopping' }
+          })
+          slot.state = 'stopping'
+          await ctx.subagents.drainContinuableChildren(parent, [selected.id])
+          if (durable) await contexts.changeRecord(parent.id, row => {
+            if (row.workers?.[selected.id]?.state !== 'stopping') throw new Error('POSTMAN_WORKER_BINDING_CHANGED')
+            const workers = { ...row.workers }; delete workers[selected.id]
+            return { ...row, workers }
+          })
+          slot.closed = true; g.slots.delete(selected.id); g.stopped.add(selected.id)
+          return { status: mode === 'cancel' ? 'POSTMAN_WORKER_CANCELLED' : 'POSTMAN_WORKER_STOPPED',
+            workerSessionId: selected.id, residentReleased: true, mappingRemoved: true,
+            durableSessionDeleted: false, taskCompleted: false, resultReported: mode === 'close' }
         } catch (error) {
-          if (durable) await changeWorker(parent.id, worker => ({ ...worker, state: 'uncertain' }))
-          return { status: 'POSTMAN_WORKER_STOP_FAILED', workerSessionId: childId,
+          if (durable && rowOf(parent.id)?.workers?.[selected.id]?.state === 'stopping')
+            try { await changeBinding(parent, selected.id, entry => ({ ...entry, state: 'uncertain' })) } catch {}
+          slot.state = 'uncertain'
+          return { status: 'POSTMAN_WORKER_STOP_FAILED', workerSessionId: selected.id,
             outcome: 'unknown', diagnostic: diagnostic(error) }
         }
-        if (durable) await changeWorker(parent.id, () => null)
-        slot.closed = true
-        if (slots.get(parent.id) === slot) slots.delete(parent.id)
-        return { status: mode === 'cancel' ? 'POSTMAN_WORKER_CANCELLED' : 'POSTMAN_WORKER_STOPPED',
-          workerSessionId: childId, residentReleased: true, mappingRemoved: true,
-          durableSessionDeleted: false, taskCompleted: false, resultReported: mode === 'close' }
-      })
+      }))
     },
   })
-
+  const listTool = defineTool({
+    name: POSTMAN_WORKER_LIST_TOOL_NAME,
+    description: 'List this Leader’s exact Worker bindings and delivery states without mutating or probing the children.',
+    parameters: {}, output: output(),
+    execute(_args, exec) {
+      const parent = exec?.agent
+      if (!authorized(parent)) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
+      const values = Object.values(bindings(parent, groupFor(parent)))
+      return { status: 'POSTMAN_WORKER_LIST', workers: values.map(value => ({
+        workerSessionId: value.id, label: value.label, binding: value.state,
+        delivery: value.delivery, execution: 'unknown',
+      })) }
+    },
+  })
+  function liveSlot(caller, leaderId) {
+    if (disposed || typeof caller?.id !== 'string' || ctx.agents.get(caller.id) !== caller ||
+        caller.session?.header?.origin !== 'subagent' || caller.session.header.delegationDepth !== 1 ||
+        caller.session.header.parentSession !== leaderId || !authorized(ctx.agents.get(leaderId))) return null
+    const slot = leaders.get(leaderId)?.slots.get(caller.id)
+    if (!slot || slot.closed || slot.state !== 'ready' ||
+        (durable && (!Object.hasOwn(rowOf(leaderId)?.workers ?? {}, caller.id) ||
+          rowOf(leaderId).workers[caller.id]?.id !== caller.id ||
+          rowOf(leaderId).workers[caller.id].state !== 'ready')) ||
+        (contexts && slot.context !== contexts.get(leaderId))) return null
+    return slot
+  }
   function ownerOf(caller, requestId) {
-    if (typeof caller?.id !== 'string' || caller.session?.header?.origin !== 'subagent' ||
-        caller.session.header.delegationDepth !== 1) return null
-    const leaderId = caller.session.header.parentSession
-    const slot = slots.get(leaderId)
-    if (!slot || slot.closed || slot.childId !== caller.id ||
-        (durable && (rowOf(leaderId)?.worker?.id !== caller.id || rowOf(leaderId)?.worker?.state !== 'ready')) ||
-        !slot.artifactRequests.has(requestId) || !authorized(ctx.agents.get(leaderId))) return null
-    if (contexts && slots.get(leaderId)?.context !== contexts.get(leaderId)) return null
-    return leaderId
+    const leaderId = caller?.session?.header?.parentSession
+    const slot = liveSlot(caller, leaderId)
+    return slot?.artifactRequests.has(requestId) ? leaderId : null
   }
-
-  function ownsNotification(caller, leaderId) {
-    const slot = slots.get(leaderId)
-    return Boolean(slot && !slot.closed && slot.childId === caller.id &&
-      (!durable || (rowOf(leaderId)?.worker?.id === caller.id &&
-        rowOf(leaderId)?.worker?.state === 'ready')) &&
-      (!contexts || (slot.context && slot.context === contexts.get(leaderId))))
+  function ownsNotification(caller, leaderId) { return Boolean(liveSlot(caller, leaderId)) }
+  function contextOf(leaderId, childId) {
+    const slot = leaders.get(leaderId)?.slots.get(childId)
+    return slot && !slot.closed && slot.state === 'ready' &&
+      (!durable || (Object.hasOwn(rowOf(leaderId)?.workers ?? {}, childId) &&
+        rowOf(leaderId).workers[childId]?.id === childId &&
+        rowOf(leaderId).workers[childId].state === 'ready')) ? slot.context : null
   }
-
-  function contextOf(leaderId) { return slots.get(leaderId)?.context ?? null }
-
-  async function prepareRestore(leaderId) {
-    const slot = slots.get(leaderId)
-    if (durable && rowOf(leaderId)?.worker && (!slot?.childId ||
-        slot.childId !== rowOf(leaderId).worker.id ||
-        rowOf(leaderId).worker.state !== 'ready' ||
-        rowOf(leaderId).worker.delivery !== 'none')) return false
-    if (!slot) return true
-    const pendingTasks = slot.tail
-    try { await pendingTasks } catch { return false }
-    if (slot.closed) return true
-    if (!slot.childId) return true
-    const saved = rowOf(leaderId)?.worker
-    if (!workerEvidence(saved, liveWorker(slot.childId), ctx.agents.get(leaderId)).ready) return false
+  // The Host has already reserved the shared worktree before calling this.
+  // DSH's selected drain cancels a live turn; never use it as a pause.
+  // Inactive durable peers already have no resident Activation to release.
+  // The runner's caller is inside this tool and must never await itself.
+  async function pauseForOperation(leaderId, callerId = null) {
+    const parent = ctx.agents.get(leaderId)
+    if (!authorized(parent)) return false
+    const group = groupFor(parent)
+    const values = Object.values(bindings(parent, group))
+    if (values.some(value => value.state !== 'ready' || value.delivery !== 'none' ||
+        (callerId && value.id === callerId && !group.slots.has(callerId)))) return false
+    if (callerId && !values.some(value => value.id === callerId)) return false
     try {
-      await ctx.subagents.drainContinuableChildren(ctx.agents.get(leaderId), [slot.childId])
-      // Drain only the resident activation; keep this exact durable child mapping
-      // so the next task continues in the same Worker Session after restore.
-      return true
+      // DSH activity is session residency, not proof of model completion.
+      // Only inactive durable children have no resident accepted turns.
+      const entries = await ctx.subagents.listChildren(leaderId)
+      const mapped = new Set(values.map(value => value.id))
+      // A removed mapping alone cannot prove its former child is not running.
+      if (entries.some(entry => entry.activity === 'running' &&
+          entry.id !== callerId && (mapped.has(entry.id) ||
+            (entry.kind === 'child' && entry.mode === 'continuable')))) return false
+      for (const value of values) {
+        if (value.id === callerId) continue
+        const match = entries.filter(entry => entry.id === value.id)
+        if (match.length !== 1 || match[0].kind !== 'child' ||
+            match[0].mode !== 'continuable' || match[0].activity !== 'inactive' ||
+            ctx.agents.get(value.id)) return false
+      }
+      return authorized(parent) && values.every(value => {
+        const current = bindings(parent, group)[value.id]
+        return current?.id === value.id && current.state === 'ready' && current.delivery === 'none'
+      })
     } catch { return false }
   }
-
-  function dispose() {
-    for (const slot of slots.values()) slot.closed = true
-    slots.clear()
+  async function prepareRestore(leaderId) {
+    return pauseForOperation(leaderId)
   }
-
-  return { taskTool, interruptTool, stopTool, ownerOf, ownsNotification, observeReport, contextOf, prepareRestore, dispose }
+  function dispose() {
+    disposed = true
+    for (const group of leaders.values()) for (const slot of group.slots.values()) slot.closed = true
+    leaders.clear()
+  }
+  return { taskTool, interruptTool, stopTool, listTool, ownerOf, ownsNotification,
+    contextOf, observeReport, pauseForOperation, prepareRestore, dispose }
 }

@@ -131,14 +131,11 @@ test('bound publication synchronizes before grant and reports JSON-safe failure'
       requestId: 'REQ_SYNC', result: publication }) })
     const accepted = f.accept()
     await tick()
-    const reply = valid(await f.read(accepted), acceptedSync === true ? 'POSTMAN_BRIDGE_TERMINAL' : 'POSTMAN_BRIDGE_FAILED')
+    const reply = valid(await f.read(accepted), 'POSTMAN_BRIDGE_TERMINAL')
     assert.deepEqual(order, acceptedSync === true ? ['sync', 'grant'] : ['sync'])
-    if (acceptedSync === true) assert.deepEqual(reply.result, publication)
-    else {
-      assert.equal(reply.result, null)
-      assert.equal(reply.trustedStatus, 'POSTMAN_TASK_PUBLICATION_SYNC_FAILED')
-      if (acceptedSync === 'throws') assert.match(reply.diagnostic, /remote unavailable/)
-    }
+    assert.deepEqual(reply.result, publication)
+    assert.equal(reply.synchronization, acceptedSync === true ? 'synchronized' : 'busy')
+    if (acceptedSync === 'throws') assert.match(reply.syncDiagnostic, /remote unavailable/)
     await f.jobs.dispose()
   }
 })
@@ -162,11 +159,11 @@ test('failed transport synchronizes proven publication but never grants artifact
       result: failure }) })
     const accepted = f.accept()
     await tick()
-    const response = valid(await f.read(accepted), syncResult ? 'POSTMAN_BRIDGE_TERMINAL' : 'POSTMAN_BRIDGE_FAILED')
+    const response = valid(await f.read(accepted), 'POSTMAN_BRIDGE_TERMINAL')
     assert.deepEqual(calls, ['sync'])
     assert.deepEqual(response.result, failure)
     assert.equal(response.terminalStatus, 'FAILED')
-    if (!syncResult) assert.equal(response.trustedStatus, 'POSTMAN_TASK_PUBLICATION_SYNC_FAILED')
+    assert.equal(response.synchronization, syncResult ? 'synchronized' : 'busy')
     await f.jobs.dispose()
   }
 })
