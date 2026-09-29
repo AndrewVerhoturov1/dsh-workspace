@@ -66,8 +66,10 @@ export function buildPostmanWorkerStartRequest(parent, task, signal, deniedTools
 
 // One short Leader admission queue reserves membership; every child has its own
 // delivery queue. Neither queue is held until a model turn finishes.
-export function createPostmanWorkerTools(ctx, grants, contexts) {
+export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChange = () => {} } = {}) {
   const leaders = new Map()
+  const disposedParents = new WeakSet()
+  const bindingChanged = id => onBindingChange(id)
   let disposed = false
   const durable = typeof contexts?.record === 'function' && typeof contexts?.changeRecord === 'function'
   const rowOf = id => durable ? contexts.record(id) : null
@@ -122,7 +124,8 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
     return result
   }
   function authorized(parent) {
-    return !disposed && isTopLevelPostmanSupervisor(parent) && ctx.agents.get(parent.id) === parent
+    return !disposed && !disposedParents.has(parent) && isTopLevelPostmanSupervisor(parent) &&
+      ctx.agents.get(parent.id) === parent
   }
   function bindings(parent, group) {
     return durable ? rowOf(parent.id)?.workers ?? {} : Object.fromEntries(
@@ -133,7 +136,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
     let slot = group.slots.get(binding.id)
     if (!slot) {
       slot = { id: binding.id, label: binding.label, state: binding.state, delivery: binding.delivery,
-        artifactRequests: new Set(), lifecycle: binding.lifecycle, context: null, closed: false, tail: Promise.resolve() }
+        artifactRequests: new Set(), lifecycle: binding.lifecycle, context: null, parent: null, workerAgent: null, closed: false, tail: Promise.resolve() }
       group.slots.set(binding.id, slot)
     }
     return slot
@@ -162,7 +165,11 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
     const workers = rowOf(parent.id)?.workers ?? {}
     const saved = Object.hasOwn(workers, slot.id) ? workers[slot.id] : null
     if (!saved || saved.id !== slot.id || slot.closed) return 'POSTMAN_WORKER_TARGET_UNKNOWN'
-    if (saved.state === 'stopping' || saved.state === 'uncertain') return 'POSTMAN_WORKER_BINDING_UNCERTAIN'
+    if (saved.state === 'stopping' || saved.state === 'uncertain') {
+      bindingChanged(slot.id)
+      return 'POSTMAN_WORKER_BINDING_UNCERTAIN'
+    }
+    if (slot.parent !== parent) slot.verified = false
     if (!slot.verified) {
       try {
         if (!await childExists(parent, slot.id, signal)) return 'POSTMAN_WORKER_BINDING_UNCERTAIN'
@@ -179,6 +186,9 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
     const current = Object.hasOwn(currentWorkers, slot.id) ? currentWorkers[slot.id] : null
     if (!current || current.id !== slot.id || current.state !== 'ready') return 'POSTMAN_WORKER_BINDING_UNCERTAIN'
     slot.state = 'ready'
+    slot.parent = parent
+    slot.workerAgent = liveWorker(slot.id) ?? null
+    bindingChanged(slot.id)
     slot.label = current.label
     slot.delivery = current.delivery
     return current.delivery === 'none' ? null : 'POSTMAN_WORKER_DELIVERY_UNKNOWN'
@@ -348,8 +358,11 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
           (durable && rowOf(parent.id)?.workers?.[reservedId]?.lifecycle?.admissions?.[0]?.id !== assignment.id))
         throw new Error('POSTMAN_WORKER_START_STALE')
       slot.verified = true
+      slot.parent = parent
+      slot.workerAgent = liveWorker(reservedId) ?? null
       slot.state = 'ready'
       slot.delivery = 'none'
+      bindingChanged(reservedId)
       return { status: 'POSTMAN_WORKER_TASK_ACCEPTED', workerSessionId: reservedId, label,
         created: true, messageId: String(accepted.messageId), model: POSTMAN_WORKER_AGENT_OPTIONS.model,
         provider: POSTMAN_WORKER_PROVIDER }
@@ -367,6 +380,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
           return { ...current, state: 'uncertain', delivery: 'unknown' }
         }) } catch {}
       } else if (!durable) { slot.state = 'uncertain'; slot.delivery = 'unknown' }
+      bindingChanged(reservedId)
       return { status: durable ? 'POSTMAN_WORKER_BINDING_UNCERTAIN' : 'POSTMAN_WORKER_START_FAILED',
         workerSessionId: reservedId, diagnostic: diagnostic(error) }
     }
@@ -531,6 +545,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
                 return { ...entry, state: 'stopping' }
               })
               slot.state = 'stopping'
+              bindingChanged(selected.id)
               return true
             })
             if (!closed) return { status: 'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT',
@@ -541,6 +556,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
               return { ...entry, state: 'stopping' }
             })
             slot.state = 'stopping'
+            bindingChanged(selected.id)
             await ctx.subagents.drainContinuableChildren(parent, [selected.id])
           }
           if (durable) await contexts.changeRecord(parent.id, row => {
@@ -556,6 +572,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
           if (durable && rowOf(parent.id)?.workers?.[selected.id]?.state === 'stopping')
             try { await changeBinding(parent, selected.id, entry => ({ ...entry, state: 'uncertain' })) } catch {}
           slot.state = 'uncertain'
+          bindingChanged(selected.id)
           return { status: 'POSTMAN_WORKER_STOP_FAILED', workerSessionId: selected.id,
             outcome: 'unknown', diagnostic: diagnostic(error) }
         }
@@ -576,24 +593,55 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
       })) }
     },
   })
-  function liveSlot(caller, leaderId) {
+  function liveSlot(caller, leaderId, requireActivation = false) {
     if (disposed || typeof caller?.id !== 'string' || ctx.agents.get(caller.id) !== caller ||
         caller.session?.header?.origin !== 'subagent' || caller.session.header.delegationDepth !== 1 ||
         caller.session.header.parentSession !== leaderId || !authorized(ctx.agents.get(leaderId))) return null
     const slot = leaders.get(leaderId)?.slots.get(caller.id)
-    if (!slot || slot.closed || slot.state !== 'ready' ||
+    if (!slot || slot.closed || !slot.verified || slot.parent !== ctx.agents.get(leaderId) ||
+        slot.state !== 'ready' ||
         (durable && (!Object.hasOwn(rowOf(leaderId)?.workers ?? {}, caller.id) ||
           rowOf(leaderId).workers[caller.id]?.id !== caller.id ||
           rowOf(leaderId).workers[caller.id].state !== 'ready')) ||
         (contexts && slot.context !== contexts.get(leaderId))) return null
-    return slot
+    return !requireActivation || slot.workerAgent === caller ? slot : null
   }
   function ownerOf(caller, requestId) {
     const leaderId = caller?.session?.header?.parentSession
     const slot = liveSlot(caller, leaderId)
     return slot?.artifactRequests.has(requestId) ? leaderId : null
   }
+  function releaseActivation(caller) {
+    const slot = leaders.get(caller?.session?.header?.parentSession)?.slots.get(caller?.id)
+    if (!slot || slot.workerAgent !== caller) return false
+    slot.workerAgent = null
+    bindingChanged(caller.id)
+    return true
+  }
+  async function confirmActivation(caller) {
+    const leaderId = caller?.session?.header?.parentSession
+    const slot = leaders.get(leaderId)?.slots.get(caller?.id)
+    if (!slot || slot.workerAgent !== null || !liveSlot(caller, leaderId)) return false
+    // A saved session ID alone is insufficient: reconcile the actual durable child.
+    try { if (!await childExists(ctx.agents.get(leaderId), caller.id)) return false } catch { return false }
+    if (slot.workerAgent !== null || !liveSlot(caller, leaderId)) return false
+    slot.workerAgent = caller
+    bindingChanged(caller.id)
+    return true
+  }
   function ownsNotification(caller, leaderId) { return Boolean(liveSlot(caller, leaderId)) }
+  // The same exact live-slot predicate serves PTC; a saved child ID is never authority.
+  function ownsLiveWorker(caller) {
+    return Boolean(liveSlot(caller, caller?.session?.header?.parentSession, true))
+  }
+  function suspendLeader(parent) {
+    if (parent) disposedParents.add(parent)
+    for (const slot of leaders.get(parent?.id)?.slots.values() ?? []) { slot.verified = false; slot.workerAgent = null }
+    refreshLeader(parent?.id)
+  }
+  function refreshLeader(leaderId) {
+    for (const id of leaders.get(leaderId)?.slots.keys() ?? []) bindingChanged(id)
+  }
   function contextOf(leaderId, childId) {
     const slot = leaders.get(leaderId)?.slots.get(childId)
     return slot && !slot.closed && slot.state === 'ready' &&
@@ -640,9 +688,12 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
   }
   function dispose() {
     disposed = true
-    for (const group of leaders.values()) for (const slot of group.slots.values()) slot.closed = true
+    for (const group of leaders.values()) for (const slot of group.slots.values()) {
+      slot.closed = true
+      bindingChanged(slot.id)
+    }
     leaders.clear()
   }
-  return { taskTool, interruptTool, stopTool, listTool, ownerOf, ownsNotification,
+  return { taskTool, interruptTool, stopTool, listTool, ownerOf, ownsNotification, ownsLiveWorker, confirmActivation, releaseActivation, refreshLeader, suspendLeader,
     contextOf, observeReport, pauseForOperation, prepareRestore, dispose }
 }

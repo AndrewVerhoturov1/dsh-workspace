@@ -27,6 +27,9 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
   const syncOperations = new Map()
   const syncQueues = new Map()
   const workerAdmissions = new Map()
+  const contextListeners = new Set()
+  const changed = id => { for (const listener of contextListeners) listener(id) }
+  const onContextChange = listener => { contextListeners.add(listener); return () => contextListeners.delete(listener) }
   const command = gitCommand
 
   async function prepare(leader) {
@@ -74,6 +77,7 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
       const context = Object.freeze({ leaderSessionId: id, repository: REPOSITORY, branch, worktree, baseCommit })
       await registry.change(id, row => ({ ...row, stage: 'ready' }))
       contexts.set(id, context)
+      changed(id)
       return { status: 'TASK_CONTEXT_READY', ...context }
     } catch (error) {
       const diagnostic = String(error?.message ?? error)
@@ -190,11 +194,13 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
           bridgeOperations: Object.fromEntries(Object.entries(old.bridgeOperations ?? {}).map(([jobId, op]) =>
             [jobId, op.state === 'pending' ? { ...op, state: 'unknown' } : op])) }))
       contexts.set(id, context)
+      changed(id)
       return { status: 'POSTMAN_TASK_CONTEXT_ALREADY_READY', ...context }
     } catch (error) {
       const diagnostic = String(error?.message ?? error)
       try { await registry.change(id, old => ({ ...old, stage: 'uncertain', diagnostic })) } catch {}
       contexts.delete(id)
+      changed(id)
       return { status: 'POSTMAN_TASK_PREPARE_UNCERTAIN', diagnostic }
     } finally { pending.delete(id) }
   }
@@ -415,8 +421,8 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
   }
   function child(childId) { return children.get(childId) ?? null }
   function releaseChild(childId) { children.delete(childId) }
-  function dispose() { contexts.clear(); children.clear(); pending.clear(); activeOperations.clear(); syncOperations.clear(); syncQueues.clear(); workerAdmissions.clear() }
-  return { prepare, recover, restore, sync, beginSync, endSync, verifyWorktree, get, record, changeRecord, isRestoring, hasActiveOperation, hasSyncOperation, beginWorkerAdmission, endWorkerAdmission, beginOperation, startRunner, endOperation, reserveRestore, releaseRestore, bindChild, child, releaseChild, dispose }
+  function dispose() { contexts.clear(); children.clear(); pending.clear(); activeOperations.clear(); syncOperations.clear(); syncQueues.clear(); workerAdmissions.clear(); contextListeners.clear() }
+  return { prepare, recover, restore, sync, beginSync, endSync, verifyWorktree, get, record, changeRecord, onContextChange, isRestoring, hasActiveOperation, hasSyncOperation, beginWorkerAdmission, endWorkerAdmission, beginOperation, startRunner, endOperation, reserveRestore, releaseRestore, bindChild, child, releaseChild, dispose }
 }
 
 // Both entrypoints use one facade. Initialization is awaited before Git/child actions;
