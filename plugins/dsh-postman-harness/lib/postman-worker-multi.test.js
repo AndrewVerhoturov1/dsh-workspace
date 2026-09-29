@@ -71,12 +71,11 @@ test('addressed followups and stop leave peers untouched; repeated stop cannot s
   const nextB = await run(f.tools.interruptTool, { workerSessionId: b.workerSessionId, task: 'B next' })
   assert.equal(nextB.workerSessionId, b.workerSessionId)
   const stopped = await run(f.tools.stopTool, { workerSessionId: b.workerSessionId })
-  assert.equal(stopped.status, 'POSTMAN_WORKER_STOPPED')
-  assert.deepEqual(f.calls.drains.map(x => x.ids), [[b.workerSessionId]])
-  assert.equal((await run(f.tools.stopTool, { workerSessionId: b.workerSessionId })).status, 'POSTMAN_WORKER_ALREADY_STOPPED')
-  const d = await task(f.tools, { createNew: true, label: 'D' })
-  assert.equal(d.created, true)
-  assert.equal((await run(f.tools.interruptTool, { workerSessionId: b.workerSessionId, task: 'stale' })).status, 'POSTMAN_WORKER_TARGET_UNKNOWN')
+  assert.equal(stopped.status, 'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT')
+  assert.deepEqual(f.calls.drains.map(x => x.ids), [])
+  assert.equal((await run(f.tools.stopTool, { workerSessionId: b.workerSessionId })).status, 'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT')
+  assert.equal((await task(f.tools, { createNew: true, label: 'D' })).status, 'POSTMAN_WORKER_LIMIT_REACHED')
+  assert.equal((await run(f.tools.interruptTool, { workerSessionId: b.workerSessionId, task: 'still mapped' })).status, 'POSTMAN_WORKER_INTERRUPT_TASK_ACCEPTED')
   assert.equal((await task(f.tools, { createNew: true })).status, 'POSTMAN_WORKER_LIMIT_REACHED')
   release()
   assert.equal((await blockedA).workerSessionId, a.workerSessionId)
@@ -148,8 +147,8 @@ test('special inherited and missing Worker IDs never create hidden slots or gran
   }
   assert.equal(f.calls.followups.length, before)
   assert.equal((await run(f.tools.stopTool, { workerSessionId: real.workerSessionId })).status,
-    'POSTMAN_WORKER_STOPPED')
-  assert.deepEqual((await run(f.tools.listTool, {})).workers, [])
+    'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT')
+  assert.deepEqual((await run(f.tools.listTool, {})).workers.map(x => x.workerSessionId), [real.workerSessionId])
   assert.equal(await f.tools.prepareRestore(leader.id), true)
 })
 

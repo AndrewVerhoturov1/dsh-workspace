@@ -93,7 +93,7 @@ test('Bridge grant comes only from exact child-scoped status, not child prose', 
   assert.equal(await grants.resolve(child.id, REQ), null)
 })
 
-test('Leader decision admits REQ to same Worker; stop keeps grant but rejects old Worker', async t => {
+test('Leader decision admits REQ to same Worker; rejected stop keeps grant and mapping', async t => {
   const { terminal } = await artifactFixture(t)
   const grants = createImplementationArtifactGrants()
   await grants.register('A', terminal)
@@ -152,14 +152,13 @@ test('Leader decision admits REQ to same Worker; stop keeps grant but rejects ol
     'IMPLEMENTATION_ARTIFACT_GRANT_REJECTED')
   assert.equal(launches, 1)
   await writeFile(terminal.result.resultZip, 'test bytes')
-  assert.equal((await worker.stopTool.execute({}, { agent: a })).status, 'POSTMAN_WORKER_STOPPED')
+  assert.equal((await worker.stopTool.execute({}, { agent: a })).status, 'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT')
   assert.ok(await grants.resolve('A', REQ))
-  assert.equal(worker.ownerOf(child, REQ), null)
+  assert.equal(worker.ownerOf(child, REQ), 'A')
   const next = await worker.taskTool.execute({ task: 'retry', artifactRequestId: REQ }, { agent: a, signal: SIGNAL })
-  assert.equal(next.created, true)
-  assert.equal(worker.ownerOf(child, REQ), null)
-  const newChild = workerAgent(next.workerSessionId, 'A'); agents.set(newChild.id, newChild)
-  assert.equal(worker.ownerOf(newChild, REQ), 'A')
+  assert.equal(next.created, false)
+  assert.equal(next.workerSessionId, child.id)
+  assert.equal(worker.ownerOf(child, REQ), 'A')
   worker.dispose()
   assert.equal(worker.ownerOf(child, REQ), null)
 })

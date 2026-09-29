@@ -2,7 +2,7 @@
 
 id: postman
 status: active
-updated: 2026-09-28
+updated: 2026-09-29
 
 ## Goal
 
@@ -13,6 +13,8 @@ updated: 2026-09-28
 Production transport имеет два explicit user-facing режима поверх общего Direct/Web browser слоя: artifact `@Postman` через `postman/direct/postman.ps1` и text `@PostmanAsk` через `postman/direct/postman-ask.ps1`. Над ними существует supervisor orchestration: top-level `Postman Leader` формирует model-authored `@Postman`/`@PostmanAsk` delegation через Leader-only `postman_bridge`, fresh one-shot Luna выполняет только trusted transport, а parent читает terminal result напрямую из child scope. Trusted current-turn Harness остаётся orchestration boundary и не является отдельным transport.
 
 ## Next step
+
+Безопасный Worker lifecycle реализован в отдельной task branch: close только после завершённого хода и native report, включённого в контекст Leader; отмена — через точный Worker ID и Host approval; `postman_yield()` уступает ход. Проверки пока относятся к временной композиции. Действующий Host и установленные пакеты не обновлены; будущему включению нужны проверка package SHA-256 и совместимости с установленным `dsh-subagent`, резервная копия и обратимый offline overlay для ложного `completed`/closing message. Не запускать live transport ради этого шага.
 
 LIVE E2E остаётся за пользователем: Web implementation ZIP → RESULT_DURABLE → Host grant → Sol authorization → same continuable Worker → Host-prepared clean worktree на опубликованном REQ commit → implementation_artifact_apply → existing runner → Worker report. Локально покрыты отказ runner-а → явный rollback → второй ZIP в той же ветке; живой Web-путь не запускался, а текущий Host ещё не доказал загрузку изменённого plugin.
 
@@ -73,3 +75,5 @@ LIVE E2E остаётся за пользователем: Web implementation ZI
 - Тот же continuable Worker получает trusted REQ, не model-authored ZIP path, использует единственную Host-prepared task branch и тот же clean worktree на опубликованном REQ commit, не создавая вторую ветку и вызывает `implementation_artifact_apply({requestId, worktree})`. Host проверяет caller и SHA-256, подставляет сохранённый exact ZIP и запускает существующий `system/implementation_package_runner.py`. Runner PASS с `manifest.tests` на реальном target worktree authoritative при неизменных релевантных inputs: Worker inspect-ит exact result/status/diff, но не повторяет те же tests вручную. Worker сообщает через `report` (приём задания — не завершение). На PASS сообщает результат и затронутые пути, но не публикует автоматически; на FAIL передаёт диагностику без ручного ремонта. Sol выбирает дальнейший шаг. Worker остаётся обычным coding-agent с shell: граница запрещает не все самостоятельные локальные запуски, а доступ неавторизованного Worker к trusted grant/tool. Публикация — отдельное действие согласно `REPO_POLICY.md`; merge требует отдельной команды.
 - Host `postman_task_prepare` создаёт и публикует единственную task branch/worktree Leader от exact `origin/preview`; Bridge через Host публикует REQ туда, а не в `main`. При необходимости Leader-only `postman_task_restore` сбрасывает только эту существующую process-local привязку к проверенному remote SHA после блокировки новых задач и завершения активных операций; постоянные worktree не изменяются. Registry сохраняет task/Worker binding по действующему контракту; неизвестного child нельзя угадывать. Перед отдельным commit/push/PR реализации удаляются REQ transport-файлы; SHA-pinned URL старых REQ и `--chat` сохраняются. Runner допускает `packageBase != HEAD`.
 - Normal Postman не выполняет automatic Result Workspace registration и сам не переходит к Git integration или merge.
+
+PR #242 уже входит в `preview`. Разработка #246 совмещает `workers[id]` и отдельные lifecycle-свидетельства каждого Worker, не переносит устаревший drain из старого prepareRestore. Постоянные worktree и активная установка не меняются; накладка `dsh-subagent` остаётся SHA-привязанной offline-поправкой для отдельного будущего развёртывания. Историческое отсутствие `turn/end` не имеет установленной причины.

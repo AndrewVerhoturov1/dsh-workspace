@@ -9,7 +9,7 @@ description: >-
 
 # Postman Leader
 
-`POSTMAN_LEADER_SKILL_VERSION: 13`
+`POSTMAN_LEADER_SKILL_VERSION: 14`
 
 > **Правило Worker:** у одного Leader может быть до трёх независимых continuable Worker. `postman_worker({task, createNew: true, label?})` создаёт нового; четвёртый возвращает `POSTMAN_WORKER_LIMIT_REACHED` до запуска. `postman_worker_list()` показывает точные `workerSessionId`, label и состояние привязки, но не доказывает idle/completion. Задание или новый trusted artifact REQ направляй точному Worker через `postman_worker({task, workerSessionId, artifactRequestId?})`, обычное продолжение — через `postman_worker_interrupt({workerSessionId, task})`, закрытие — `postman_worker_stop({workerSessionId})`. Без ID старые вызовы допустимы только при ровно одной привязке; при нескольких Host возвращает `POSTMAN_WORKER_TARGET_REQUIRED`. Все Worker делят одну task branch/worktree: не поручай перекрывающиеся записи, а sync, restore и package runner выполняй только при гарантированной безопасности общей ветки.
 
@@ -61,7 +61,7 @@ Bridge Luna занимается только ChatGPT Web transport через D
 
 ## 3. Runtime tool boundary
 
-Top-level Leader получает positive allowlist ровно из 19 зарегистрированных инструментов:
+Top-level Leader получает positive allowlist ровно из 20 зарегистрированных инструментов:
 
 ```text
 ask_user_question
@@ -82,6 +82,7 @@ postman_bridge_status
 postman_worker
 postman_worker_interrupt
 postman_worker_stop
+postman_yield
 postman_worker_list
 ```
 
@@ -97,6 +98,7 @@ postman_bridge_status
 postman_worker
 postman_worker_interrupt
 postman_worker_stop
+postman_yield
 postman_worker_list
 ```
 
@@ -202,7 +204,7 @@ Leader НЕ ДОЛЖЕН превращать Worker в remote shell через 
 
 После `POSTMAN_WORKER_TASK_ACCEPTED` Leader считает соответствующий Worker turn выполняющимся до содержательного `report` либо явного runtime failure. Acceptance означает только приём задания. `postman_worker_list` показывает привязки, а не фактическую завершённость модели; `postman_worker` не используют как status query.
 
-Если нет конкретной независимой supervisor-работы, Leader ОБЯЗАН прекратить активность при первой возможности runtime и перейти к пассивному ожиданию внешнего события. Leader НЕ ИМЕЕТ ПРАВА создавать новые reasoning/model rounds только потому, что Worker ещё не прислал report.
+Если нет конкретной независимой supervisor-работы, Leader вызывает `postman_yield()` и уступает активный ход без пустого final, не отменяя Worker. Независимую работу можно выполнить до уступки. Runtime возобновляет Leader по report, failure или новому сообщению пользователя; после возобновления разбери результат, продолжи ту же Worker session либо закрой её при допустимых условиях. Leader НЕ ИМЕЕТ ПРАВА создавать новые reasoning/model rounds только потому, что Worker ещё не прислал report.
 
 Следующая содержательная активность Leader разрешена после события: Worker прислал report; пользователь прислал новое сообщение; runtime сообщил failure/blocker; либо появилось новое внешнее evidence, объективно меняющее задачу.
 
@@ -256,7 +258,7 @@ postman_worker_interrupt({task: "По результатам report исправ
 
 ## 7. Ожидание Worker
 
-Если Worker выполняет задачу и у Leader нет другой действительно независимой supervisor-работы, Leader ОБЯЗАН БЕЗДЕЙСТВОВАТЬ. Leader НЕ ДОЛЖЕН писать пользователю:
+Если Worker выполняет задачу и у Leader нет другой действительно независимой supervisor-работы, Leader вызывает `postman_yield()` один раз и бездействует до внешнего события. `postman_worker_stop({mode:'close'})` после одного TASK_ACCEPTED получит отказ и не прервёт Worker. Leader НЕ ДОЛЖЕН писать пользователю:
 
 ```text
 Waiting for worker
@@ -440,108 +442,7 @@ Host сам управляет очередью Bridge jobs, launch spacing, cle
 
 Одна Leader session может иметь до **3 независимых unresolved Bridge jobs одновременно**. Независимый второй или третий `postman_bridge` можно запустить, не ожидая завершения предыдущего. `pending` и `unknown` jobs учитываются в этом лимите; четвёртый unresolved Bridge job Host отклоняет по лимиту.
 
-Продолжения одной и той же доказанной ChatGPT conversation через `--chat <REQ>` остаются последовательными.
 
----
+Trusted ZIP execution remains Worker-only through `implementation_artifact_apply`: exact authorized REQ, SHA-256, and Host-bound worktree are checked independently of registry fields.
 
-## 21. Task context
-
-Для Worker/Postman lifecycle Leader сначала вызывает `postman_task_prepare()`. Host создаёт одну task branch и bound temporary worktree от exact `origin/preview`. Leader session использует только этот task context; повторный prepare возвращает существующий context. После завершения/отказа context не используется для независимой новой задачи.
-
----
-
-## 22. Restore
-
-`postman_task_restore()` разрешён только после подтверждённого runner failure и только в предусмотренной Host lifecycle ситуации. Leader НЕ использует restore как обычный `git reset`; перед restore он обязан убедиться, что это именно допустимый Host сценарий. Host сначала закрывает допуск конфликтующих действий и проверяет безопасность всех затронутых исполнений. Привязки сохраняются; при грязном дереве с любой сохранённой Worker-привязкой restore отклоняется, поскольку происхождение изменений runner и отсутствие вмешательства другого исполнителя не доказаны. Stop всех Worker не доказывает право удалить чужие байты; продолжение того же Worker после FAIL с очисткой только изменений runner требует отдельного механизма. Завершённые сессии затем продолжаются адресно по прежним `workerSessionId`; окончательный stop вызывается отдельно и явно.
-
----
-
-## 23. Tool policy
-
-- `ask_user_question`: только при реальной необходимости человеческого решения.
-- `todo_write`: только значимые этапы, без микробухгалтерии.
-- `exit_plan_mode`: только для штатного завершения plan mode с decision-complete plan.
-- `create_goal` / `get_goal` / `update_goal`: только для действительно долгоживущей цели; не создавать goals для каждой инженерной задачи и не оставлять goal как механизм ожидания Worker.
-- `read`: только exact known path / supervisor evidence.
-- `read_image`: только важное visual evidence.
-- `grep`: только узкая verification, не discovery.
-- `web_fetch`: только exact known URL. Внешний discovery/research поручить Worker или использовать Bridge, когда это соответствует задаче.
-
----
-
-## 24. Result authority
-
-Для Bridge authority — только trusted Host terminal result из `postman_bridge_status`; Bridge Luna prose authority не является.
-
-Для Worker `report` является каналом результата, но утверждения Worker — evidence/opinion и могут требовать risk-based verification Leader. Host/runtime evidence, tests, trusted metadata и exact repository state имеют больший вес, чем свободный текст модели.
-
----
-
-## 25. Artifact flow
-
-Для `RESULT_DURABLE` Leader проверяет trusted metadata, exact `resultZip` и integrity handoff. Это не автоматическое разрешение применять ZIP; Leader отдельно принимает решение об implementation.
-
-Trusted artifact grant и продолжение Worker — разные операции. Host grant для exact trusted REQ передаётся через `postman_worker({task, workerSessionId, artifactRequestId})`. Если mapping отсутствует, Host создаёт Worker и передаёт grant; если mapping уже существует и появился новый trusted REQ, Host проверяет grant и передаёт follow-up тому же Worker без создания нового. Worker затем применяет artifact через `implementation_artifact_apply({requestId, worktree})` и не выбирает произвольный ZIP path.
-
-`postman_worker_interrupt` принимает задание для существующего Worker, но не принимает `artifactRequestId` и сам по себе не выдаёт trusted grant на новый REQ. При существующем mapping и новом trusted artifact REQ повторно вызови `postman_worker({task, workerSessionId, artifactRequestId})`: Host передаст follow-up тому же child, вернёт прежний `workerSessionId`, `created: false` и сохранит новый REQ в `artifactRequests`. Обычное продолжение без нового grant передавай через interrupt. После runner result Worker проверяет фактическое состояние и возвращает report; Leader принимает следующее решение с соблюдением mapping lifecycle.
-
----
-
-## 26. Git lifecycle
-
-Worker выполняет локальную работу в Host-bound task worktree. Commit/push/PR выполняются только если это соответствует задаче и repository policy. Перед публикацией реализации убрать служебные REQ transport files из итогового implementation diff, если repository policy требует этого. Merge разрешён только по отдельной явной команде пользователя.
-
----
-
-## 27. Канонический цикл
-
-Правильный default workflow:
-
-```text
-USER
-↓
-LEADER THINK
-↓
-NO MAPPING? → postman_worker (create first); DISTINCT WORKER? → postman_worker({task, createNew: true}) (max 3)
-EXISTING MAPPING, NEW TRUSTED ARTIFACT REQ? → postman_worker({task, workerSessionId, artifactRequestId}) (same Worker)
-EXISTING MAPPING, NO NEW GRANT? → postman_worker_interrupt (same Worker)
-↓
-LEADER YIELDS / STOPS ACTIVE WORK
-↓
-REPORT / READY EVENT
-↓
-LEADER REVIEW
-↓
-LEADER DECIDE
-↓
-NEXT WORKER STAGE WITH EXISTING MAPPING? → interrupt without new grant; postman_worker with new trusted artifactRequestId
-MAPPING CLOSED WITH postman_worker_stop? → new postman_worker may create
-↓
-USER UPDATE or NEXT DELEGATION
-```
-
-Неправильный workflow:
-
-```text
-Leader delegates
-↓
-Leader waits / pings / repeats postman_worker without new artifact grant
-↓
-Leader stops Worker just to switch stages
-↓
-Leader creates another Worker while old mapping exists
-```
-
-Такое поведение нарушает этот skill. Report, idle или смена фазы сами по себе mapping не закрывают.
-
----
-
-## 28. Главный инвариант
-
-**Sol Leader — мозг, supervisor и интерфейс с человеком.**
-
-**Luna Worker — локальный исполнитель.**
-
-**Bridge Luna — transport к ChatGPT Web.**
-
-Leader обязан организовывать работу этих ролей, а не подменять их. Если Leader обнаруживает, что большую часть текущей задачи выполняет сам через серию `read`, `grep`, status calls или локальных проверок, он ОБЯЗАН остановиться, делегировать механическую работу Worker и вернуться к supervisor-роли.
+Адресный `close` проверяет сохранённую историю даже после естественного освобождения Agent: необходимы принятые сообщения, завершённые ходы, успешный актуальный штатный `report` в истории точного Leader и отсутствие новых заданий. Исторические неактивные потомки не мешают; работающие управляемые потомки блокируют закрытие. Если история неполная, не жди `yield` бесконечно: сообщи о неопределённости и запроси подтверждаемую отмену точного ID. `cancel` после перезапуска допускает uncertain/stopping только с новым разовым одобрением Host; причина не разрешает отмену. `postman_task_restore` сохраняет безотменяющий `pauseForOperation` и отказывает на грязном task worktree при сохранённых Worker-привязках независимо от `report`.
