@@ -349,6 +349,27 @@ def render_direct_task_manifest(
     return "\n".join(lines)
 
 
+def render_image_task_manifest(*, request_id: str, user_intent: str, repository: str, base_commit: str) -> str:
+    """Stage A asks for a single image in chat, not a transport artifact."""
+    try:
+        assert_canonical_request_id(request_id)
+    except (TypeError, ValueError) as exc:
+        raise TaskPackageError(str(exc)) from exc
+    intent = _document_text(user_intent, "user_intent").replace("\r\n", "\n").replace("\r", "\n")
+    repository = _required_text(repository, "repository")
+    base_commit = _required_text(base_commit, "base_commit").lower()
+    if not _SHA_RE.fullmatch(base_commit):
+        raise TaskPackageError("base_commit must be a 40-character commit SHA")
+    return "\n".join((
+        "# POSTMAN IMAGE TASK", "", f"request_id: {request_id}",
+        f"repository: {repository}", f"base_commit: {base_commit}",
+        "", "## User intent", "", intent, "", "## Image stage contract", "",
+        "Generate exactly ONE image satisfying the user intent, using the image-generation capability.",
+        "Show the generated image in this conversation. Do not create a ZIP, attachment package, or text result marker in this stage.",
+        "Do not generate multiple image variants. The next turn will package this same image unchanged.", "",
+    ))
+
+
 def build_external_prompt(
     request_id: str,
     skill_repository_url: str,

@@ -434,6 +434,8 @@ postman_continue_last_request
 
 `POSTMAN_BRIDGE_READY` сам сигнализирует о завершении. После READY Leader вызывает `postman_bridge_status({bridge_job_id: "..."})` и доверяет только проверенному terminal `result`. `synchronization: busy` означает сохранённый ответ без безопасного перехода общей рабочей папки; после разрешения занятости `postman_bridge_status({bridge_job_id: "...", retrySync: true})` повторяет только локальную синхронизацию, не Web-запрос и не REQ. При перезапуске контекст с отложенной публикацией восстанавливается лишь по точной цепочке доверенных REQ-квитанций и Git-родителей; recover не изменяет файлы. После успешного retrySync восстановленный результат остаётся доступным до остановки этого экземпляра плагина. Доказанный отказ до публикации получает `not-required` и не ждёт sync; исход без такого доказательства остаётся блокирующим. Artifact grant выдаётся лишь после успешной синхронизации и проверки ZIP. Worker-сессии сохраняются и адресно продолжаются по прежним `workerSessionId`; окончательный stop — отдельное явное решение. READY не является содержательным Web-result.
 
+Для `IMAGE_RESULT_DURABLE` полезный результат — `resultImage`; при необходимости Leader проверяет изображение через `read_image`. Промежуточный ZIP image-flow не является implementation artifact и не получает implementation grant.
+
 ---
 
 ## 20. Bridge concurrency

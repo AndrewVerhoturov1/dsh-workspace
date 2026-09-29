@@ -17,6 +17,9 @@ param(
     [Parameter(ParameterSetName = 'Run')]
     [switch]$AutomaticContinuation,
 
+    [Parameter(ParameterSetName = 'Run')]
+    [switch]$ImageMode,
+
     [Parameter(ParameterSetName = 'Smoke', Mandatory = $true)]
     [switch]$BrowserSmoke,
 
@@ -88,6 +91,9 @@ try {
     }
     if ($AutomaticContinuation) {
         $argsList += '--automatic-continuation'
+    }
+    if ($ImageMode) {
+        $argsList += '--image-mode'
     }
     foreach ($path in $AllowedPath) {
         $argsList += @('--allow-path', $path)

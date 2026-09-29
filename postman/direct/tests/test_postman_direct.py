@@ -47,6 +47,7 @@ identity_stub.request_prompt_key_line = lambda req: f"POSTMAN_REQUEST_ID: {req}"
 
 bridge_stub = types.ModuleType("web_worker_bridge")
 bridge_stub.RESULT_DURABLE = "RESULT_DURABLE"
+bridge_stub.IMAGE_TURN_COMPLETED = "IMAGE_TURN_COMPLETED"
 bridge_stub.ASSISTANT_COMPLETED_NO_ARTIFACT = "ASSISTANT_COMPLETED_NO_ARTIFACT"
 bridge_stub.ARTIFACT_REJECTED = "ARTIFACT_REJECTED"
 bridge_stub.POSTMAN_TRANSPORT_FAILED = "POSTMAN_TRANSPORT_FAILED"
@@ -72,6 +73,106 @@ PRE = "a" * 40
 
 
 class DirectPostmanUnitTests(unittest.TestCase):
+    def test_image_mode_runs_two_turns_and_returns_only_extracted_image(self):
+        second_id = "REQ_20260902T010204Z_5678"
+        class Publisher:
+            contents = []
+            def __init__(self, **kwargs): pass
+            def snapshot(self): return direct.TaskSnapshot(PRE, ("README.md",))
+            def publish_content(self, request_id, content, *, expected_parent, root_entries):
+                self.contents.append(content)
+                return direct.PublishedTask(request_id, f"https://example.test/{request_id}.md",
+                                             expected_parent, PUB, tuple(root_entries))
+        class Bridge:
+            calls = []
+            def __init__(self, **kwargs): pass
+            def run_request(self, request_id, **kwargs):
+                self.calls.append((request_id, kwargs))
+                return {"ok": True, "code": "RESULT_DURABLE", "details": {
+                    "conversationUrl": "https://chatgpt.com/c/abc", "conversationId": "abc",
+                    "secondRequestId": second_id, "resultZip": str(zip_path), "resultSha256": "c" * 64}}
+        with tempfile.TemporaryDirectory() as tmp:
+            zip_path = Path(tmp) / "results" / second_id / "result.zip"
+            zip_path.parent.mkdir(parents=True)
+            zip_path.write_bytes(b"fake")
+            (zip_path.parent / "validation.json").write_text(json.dumps({
+                "ok": True, "sha256": "c" * 64, "inventory": [{"path": "image.png", "kind": "file"}]}), encoding="utf-8")
+            runner = direct.DirectPostman(branch="preview", direct_root=Path(tmp) / "direct",
+                result_root=Path(tmp) / "results", publisher_factory=Publisher,
+                bridge_factory=Bridge, ensure_browser=lambda **_: {"cdpUrl": "http://127.0.0.1:9222"})
+            Bridge.calls = []
+            Publisher.contents = []
+            image = {"path": str(Path(tmp) / "image.png"), "format": "PNG", "sha256": "d" * 64,
+                     "bytes": 123, "width": 20, "height": 30, "mime": "image/png", "sourceEntry": "image.png"}
+            with patch.object(direct, "new_image_followup_request_id", return_value=second_id), \
+                 patch.object(direct.image_result, "extract_validated_image", return_value=image) as extract, \
+                 patch.object(direct.durable_handoff, "validate_image_terminal", side_effect=lambda terminal, **_: terminal):
+                terminal = runner.run(request_id=REQ, task="нарисуй кота", image_mode=True)
+            self.assertEqual(terminal["code"], "IMAGE_RESULT_DURABLE")
+            self.assertEqual(terminal["secondRequestId"], second_id)
+            self.assertEqual(terminal["resultImage"], image["path"])
+            self.assertNotIn("resultZip", terminal)
+            self.assertEqual(terminal["taskSha256"], direct._sha256_text(Publisher.contents[0]))
+            self.assertNotIn("RESULT_BEGIN", Publisher.contents[0])
+            self.assertIn("exactly ONE image", Publisher.contents[0])
+            self.assertEqual([x[0] for x in Bridge.calls], [REQ])
+            followup = Bridge.calls[0][1]["image_followup"]
+            self.assertEqual(followup["request_id"], second_id)
+            self.assertEqual(followup["expected_request"]["requestId"], second_id)
+            self.assertIn(f"<<<POSTMAN_RESULT_BEGIN:{second_id}>>>", followup["prompt"])
+            self.assertNotIn("baseCommit", followup["prompt"])
+            self.assertEqual(terminal["imageFormat"], "png")
+            extract.assert_called_once_with(str(zip_path), [{"path": "image.png", "kind": "file"}],
+                                            runner.result_root / second_id, expected_zip_sha256="c" * 64)
+            self.assertEqual(json.loads(runner.state_path(second_id).read_text(encoding="utf-8"))["state"], "RESULT_DURABLE")
+            self.assertEqual(json.loads(runner.result_handoff_path(REQ).read_text(encoding="utf-8"))["code"], "IMAGE_RESULT_DURABLE")
+
+    def test_image_mode_rejects_rejected_artifact_without_extraction(self):
+        class Publisher:
+            def __init__(self, **kwargs): pass
+            def snapshot(self): return direct.TaskSnapshot(PRE, ("README.md",))
+            def publish_content(self, request_id, content, *, expected_parent, root_entries):
+                return direct.PublishedTask(request_id, f"https://example.test/{request_id}.md",
+                                             expected_parent, PUB, tuple(root_entries))
+        class Bridge:
+            def __init__(self, **kwargs): pass
+            def run_request(self, request_id, **kwargs):
+                return {"ok": True, "code": "ARTIFACT_REJECTED", "details": {"validationCode": "BAD_ZIP"}}
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = direct.DirectPostman(branch="preview", direct_root=Path(tmp) / "direct",
+                result_root=Path(tmp) / "results", publisher_factory=Publisher,
+                bridge_factory=Bridge, ensure_browser=lambda **_: {"cdpUrl": "http://127.0.0.1:9222"})
+            second_id = "REQ_20260902T010204Z_5678"
+            with patch.object(direct, "new_image_followup_request_id", return_value=second_id), \
+                 patch.object(direct.image_result, "extract_validated_image") as extract:
+                with self.assertRaises(direct.DirectPostmanError) as caught:
+                    runner.run(request_id=REQ, task="image", image_mode=True)
+            self.assertEqual(caught.exception.details["transportCode"], "ARTIFACT_REJECTED")
+            extract.assert_not_called()
+            self.assertEqual(json.loads(runner.state_path(second_id).read_text(encoding="utf-8"))["state"], "FAILED")
+
+    def test_image_mode_requires_pillow_before_claiming_or_publishing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = direct.DirectPostman(branch="preview", direct_root=Path(tmp) / "direct")
+            original_import = __import__
+            def unavailable(name, *args, **kwargs):
+                if name == "PIL":
+                    raise ImportError("Pillow missing")
+                return original_import(name, *args, **kwargs)
+            with patch("builtins.__import__", side_effect=unavailable):
+                with self.assertRaises(direct.DirectPostmanError) as caught:
+                    runner.run(request_id=REQ, task="image", image_mode=True)
+            self.assertEqual(caught.exception.code, "IMAGE_DECODER_UNAVAILABLE")
+            self.assertFalse(runner.state_path(REQ).exists())
+
+    def test_image_mode_rejects_non_durable_packaging_and_manual_chat(self):
+        self.assertTrue(direct._build_parser().parse_args(["--image-mode"]).image_mode)
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = direct.DirectPostman(branch="preview", direct_root=Path(tmp))
+            with self.assertRaises(direct.DirectPostmanError) as caught:
+                runner.run(request_id=REQ, task="image", image_mode=True, chat_request_id=REQ)
+            self.assertEqual(caught.exception.code, "DIRECT_IMAGE_CHAT_UNSUPPORTED")
+
     def test_cli_requires_explicit_branch_before_transport(self):
         with patch.object(direct.DirectPostman, "run", side_effect=AssertionError("must not publish")), contextlib.redirect_stdout(io.StringIO()) as stdout:
             code = direct.main(["--request-id", REQ, "--task", "intent"])
