@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { readFile, mkdtemp, mkdir, copyFile } from 'node:fs/promises'
+import { readFile, mkdtemp, mkdir, copyFile, link } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -52,9 +52,12 @@ test('offline overlay applies to a temporary package, backs up and refuses a sec
   await mkdir(join(folder, 'lib'), { recursive: true })
   await copyFile(join(installed, 'node_modules/@deepseek-ai/dsh-subagent/package.json'), join(folder, 'package.json'))
   await copyFile(join(installed, 'node_modules/@deepseek-ai/dsh-subagent/lib/index.js'), join(folder, 'lib/index.js'))
+  const shared = join(root, 'shared-index.js')
+  await link(join(folder, 'lib/index.js'), shared)
   const backup = join(root, 'backup')
   assert.equal((await subagentOverlay(root, '--apply', backup)).status, 'APPLIED')
   assert.equal(await readFile(join(folder, 'lib/index.js'), 'utf8'), patched)
+  assert.equal(await readFile(shared, 'utf8'), original)
   assert.equal(await readFile(join(backup, 'dsh-subagent-index.js'), 'utf8'), original)
   await assert.rejects(subagentOverlay(root, '--apply', backup), /SHA-256 mismatch/)
   assert.equal((await subagentOverlay(root, '--rollback', backup)).status, 'ROLLED_BACK')
