@@ -8,7 +8,7 @@ const signal = new AbortController().signal
 const run = (tool, args) => tool.execute(args, { agent: leader, signal })
 const task = (tools, args = {}) => run(tools.taskTool, { task: 'bounded task', ...args })
 const notice = id => ({ id, session: { header: { origin: 'subagent', delegationDepth: 1, parentSession: leader.id } } })
-async function fixture({ start = null, followup = null, changeRecord = null } = {}) {
+async function fixture({ start = null, followup = null, changeRecord = null, drain = null } = {}) {
   const registry = createMemoryTaskRegistry()
   await registry.create(leader.id, { stage: 'ready', workers: {}, runner: { state: 'none' }, bridgeOperations: { job: { state: 'pending' } } })
   const context = Object.freeze({ branch: 'task/postman-test', worktree: 'C:/task' })
@@ -17,10 +17,11 @@ async function fixture({ start = null, followup = null, changeRecord = null } = 
   const calls = { starts: [], followups: [], drains: [] }
   const ctx = { agents: { get: id => agents.get(id) }, tools: { schemas: () => [{ name: 'postman_bridge' }, { name: 'postman_worker_list' }] },
     subagents: {
-      async listChildren() { return [...children].map(id => ({ id, kind: 'child', mode: 'continuable' })) },
+      async listChildren() { return [...children].map(id => ({ id, kind: 'child', mode: 'continuable',
+        activity: agents.has(id) ? 'running' : 'inactive' })) },
       async startContinuable(spec) { calls.starts.push(spec); if (start) await start(spec); children.add(spec.childId); return { childId: spec.childId, messageId: 'initial-' + calls.starts.length } },
       async followup(parent, id, content) { calls.followups.push({ parent, id, content }); if (followup) await followup(id); return 'followup-' + calls.followups.length },
-      async drainContinuableChildren(parent, ids) { calls.drains.push({ parent, ids }); children.delete(ids[0]) },
+      async drainContinuableChildren(parent, ids) { calls.drains.push({ parent, ids }); if (drain) await drain(ids[0]); children.delete(ids[0]) },
     },
   }
   const contexts = { get: () => context, record: registry.get, changeRecord: changeRecord ?? registry.change,
@@ -113,16 +114,98 @@ test('unknown exact and conflicting create arguments never redirect or create', 
   assert.equal(f.calls.starts.length, 1)
 })
 
-test('shared worktree admits package runner only without another mapped Worker', async () => {
+test('inactive peers keep exact session IDs through shared-operation pause', async () => {
   const f = await fixture()
-  const first = await task(f.tools, { createNew: true })
-  assert.equal(f.tools.canRunExclusive(leader.id, first.workerSessionId), true)
-  const second = await task(f.tools, { createNew: true })
-  assert.equal(f.tools.canRunExclusive(leader.id, first.workerSessionId), false)
+  const [a, b, c] = await Promise.all(['A', 'B', 'C'].map(label => task(f.tools, { createNew: true, label })))
+  assert.equal(await f.tools.pauseForOperation(leader.id, a.workerSessionId), true)
+  assert.deepEqual((await run(f.tools.listTool, {})).workers.map(x => x.workerSessionId),
+    [a.workerSessionId, b.workerSessionId, c.workerSessionId])
+  assert.equal((await task(f.tools, { workerSessionId: b.workerSessionId })).status, 'POSTMAN_WORKER_TASK_ACCEPTED')
+  assert.equal(await f.tools.prepareRestore(leader.id), true)
+  assert.equal((await task(f.tools, { workerSessionId: c.workerSessionId })).status, 'POSTMAN_WORKER_TASK_ACCEPTED')
+})
+
+test('removed binding is not proof that a live orphan stopped mutating files', async () => {
+  const f = await fixture()
+  f.children.add('orphan')
+  f.agents.set('orphan', { id: 'orphan' })
   assert.equal(await f.tools.prepareRestore(leader.id), false)
-  assert.equal((await run(f.tools.stopTool, { workerSessionId: second.workerSessionId })).status, 'POSTMAN_WORKER_STOPPED')
-  assert.equal(f.tools.canRunExclusive(leader.id, first.workerSessionId), true)
-  assert.equal((await run(f.tools.stopTool, { workerSessionId: first.workerSessionId })).status, 'POSTMAN_WORKER_STOPPED')
+  f.agents.delete('orphan')
   assert.equal(await f.tools.prepareRestore(leader.id), true)
 })
+
+const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done }); return { promise, resolve } }
+
+test('special inherited and missing Worker IDs never create hidden slots or grants', async () => {
+  const f = await fixture()
+  const real = await task(f.tools, { createNew: true })
+  const before = f.calls.followups.length
+  for (const id of ['__proto__', 'constructor', 'toString', 'missing']) {
+    assert.equal((await run(f.tools.interruptTool, { workerSessionId: id, task: 'wrong' })).status,
+      'POSTMAN_WORKER_TARGET_UNKNOWN')
+    assert.equal((await run(f.tools.stopTool, { workerSessionId: id })).status,
+      'POSTMAN_WORKER_TARGET_UNKNOWN')
+  }
+  assert.equal(f.calls.followups.length, before)
+  assert.equal((await run(f.tools.stopTool, { workerSessionId: real.workerSessionId })).status,
+    'POSTMAN_WORKER_STOPPED')
+  assert.deepEqual((await run(f.tools.listTool, {})).workers, [])
+  assert.equal(await f.tools.prepareRestore(leader.id), true)
+})
+
+test('late start after disposal or Leader replacement never reports acceptance', async () => {
+  for (const change of ['dispose', 'missing', 'replace']) {
+    const gate = deferred(), entered = deferred()
+    const f = await fixture({ start: async () => { entered.resolve(); await gate.promise } })
+    const launching = task(f.tools, { createNew: true })
+    await entered.promise
+    if (change === 'dispose') f.tools.dispose()
+    else if (change === 'missing') f.agents.delete(leader.id)
+    else f.agents.set(leader.id, { ...leader })
+    gate.resolve()
+    const result = await launching
+    assert.notEqual(result.status, 'POSTMAN_WORKER_TASK_ACCEPTED')
+    assert.equal(f.registry.get(leader.id).workers[result.workerSessionId].state, 'uncertain')
+    assert.deepEqual(f.calls.drains.map(x => x.ids), [[result.workerSessionId]])
+    assert.equal((await task(f.tools, { createNew: true })).status, 'POSTMAN_WORKER_CALLER_REJECTED')
+  }
+})
+
+
+test('late start cannot revive replaced exact binding or touch peer binding', async () => {
+  const gate = deferred(), entered = deferred()
+  const f = await fixture({ start: async spec => {
+    if (spec.label === 'A') { entered.resolve(); await gate.promise }
+  } })
+  const a = task(f.tools, { createNew: true, label: 'A' })
+  await entered.promise
+  const b = await task(f.tools, { createNew: true, label: 'B' })
+  const originalId = Object.keys(f.registry.get(leader.id).workers).find(id => id !== b.workerSessionId)
+  await f.registry.change(leader.id, row => ({ ...row, workers: { ...row.workers,
+    [originalId]: { ...row.workers[originalId], label: 'replacement' } } }))
+  gate.resolve()
+  assert.equal((await a).status, 'POSTMAN_WORKER_BINDING_UNCERTAIN')
+  assert.equal(f.registry.get(leader.id).workers[originalId].label, 'replacement')
+  assert.equal(f.registry.get(leader.id).workers[b.workerSessionId].state, 'ready')
+  assert.deepEqual(f.calls.drains.map(x => x.ids), [[originalId]])
+})
+
+test('failed late-child release leaves uncertain binding counted against three slots', async () => {
+  const gate = deferred(), entered = deferred()
+  const f = await fixture({ start: async spec => {
+    if (spec.label === 'A') { entered.resolve(); await gate.promise }
+  }, drain: () => { throw Error('release refused') } })
+  const a = task(f.tools, { createNew: true, label: 'A' })
+  await entered.promise
+  const [b, c] = await Promise.all(['B', 'C'].map(label => task(f.tools, { createNew: true, label })))
+  // The exact Leader is swapped during A, then restored only for querying limits.
+  f.agents.set(leader.id, { ...leader })
+  gate.resolve()
+  assert.equal((await a).status, 'POSTMAN_WORKER_BINDING_UNCERTAIN')
+  f.agents.set(leader.id, leader)
+  assert.equal((await task(f.tools, { createNew: true })).status, 'POSTMAN_WORKER_LIMIT_REACHED')
+  assert.equal(f.registry.get(leader.id).workers[b.workerSessionId].state, 'ready')
+  assert.equal(f.registry.get(leader.id).workers[c.workerSessionId].state, 'ready')
+})
+
 

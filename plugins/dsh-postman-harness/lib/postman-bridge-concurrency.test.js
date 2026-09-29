@@ -176,7 +176,7 @@ test('terminal survives unavailable live Leader without routing elsewhere', asyn
   f.ctx.agents.get = () => undefined
   f.pending.get('child-1')({ stopReason: 'end_turn' })
   await tick()
-  assert.equal(f.jobs.status(parent, accepted.bridgeJobId).notification, 'UNDELIVERED')
+  assert.equal((await f.jobs.status(parent, accepted.bridgeJobId)).notification, 'UNDELIVERED')
   f.ctx.agents.get = id => id === parent.id ? parent : undefined
   assert.equal((await f.read(accepted)).result.assistantText, 'TRUSTED')
   await f.jobs.dispose()
@@ -237,9 +237,9 @@ test('missing parent at queued launch fails without child and frees slot for nex
   await timing.advance(5000)
   assert.equal(f.signals.length, 1)
   assert.equal(f.coordinator.activeCount, 1)
-  assert.equal(f.jobs.status(parent, missing.bridgeJobId).trustedStatus,
+  assert.equal((await f.jobs.status(parent, missing.bridgeJobId)).trustedStatus,
     'POSTMAN_BRIDGE_PARENT_UNAVAILABLE')
-  assert.equal(f.jobs.status(parent, missing.bridgeJobId).notification, 'UNDELIVERED')
+  assert.equal((await f.jobs.status(parent, missing.bridgeJobId)).notification, 'UNDELIVERED')
   assert.equal(originalWakes, 0)
   const other = { id: 'other', session: { header: { agentPreset: 'postman-leader' } } }
   f.ctx.agents.get = id => id === parent.id ? parent : id === other.id ? other : undefined
@@ -270,7 +270,7 @@ test('queued parent with wrong identity or disposed Leader preset cannot start a
     await timing.advance(5000)
     assert.equal(f.signals.length, 1)
     assert.equal(f.coordinator.activeCount, 1)
-    const failed = f.jobs.status(parent, queued.bridgeJobId)
+    const failed = await f.jobs.status(parent, queued.bridgeJobId)
     assert.equal(failed.status, 'POSTMAN_BRIDGE_FAILED')
     assert.equal(failed.trustedStatus, 'POSTMAN_BRIDGE_PARENT_UNAVAILABLE')
     assert.equal(failed.notification, 'UNDELIVERED')

@@ -51,7 +51,12 @@ test('production sync validates and fast-forwards a real temporary bare DAG', { 
     await writeFile(join(root, 'history.txt'), 'REQ 2', 'utf8'); await call(root, 'add', 'history.txt'); await call(root, 'commit', '-m', 'REQ 2')
     const req2 = await call(root, 'rev-parse', 'HEAD'), parent2 = req1
     await call(root, 'push', 'origin', 'HEAD:refs/heads/' + branch)
-    assert.equal(await contexts.sync(leader.id, req2, parent2), true)
+    await contexts.changeRecord(leader.id, row => ({ ...row, workers: {
+      workerA: { id: 'workerA', label: 'A', state: 'ready', delivery: 'none', artifactRequests: [] }
+    } }))
+    assert.equal(await contexts.sync(leader.id, req2, parent2), true,
+      'binding alone cannot discard an already verified publication')
+    assert.equal(contexts.record(leader.id).workers.workerA.id, 'workerA')
     assert.equal(await call(worktree, 'rev-parse', 'HEAD'), req2)
     assert.equal(await contexts.sync(leader.id, req1, parent1), true)
     assert.equal(await call(worktree, 'rev-parse', 'HEAD'), req2, 'older receipt may not rewind local HEAD')

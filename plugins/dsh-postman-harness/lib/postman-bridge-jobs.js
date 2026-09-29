@@ -54,7 +54,7 @@ function snapshot(job) {
 }
 
 /** Process-local jobs live through tool invocation and retain terminal until plugin disposal. */
-export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts) {
+export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, worker) {
   if (typeof coordinator?.run !== 'function') throw new Error('POSTMAN_BRIDGE_COORDINATOR_REQUIRED')
   const jobs = new Map()
   const admissionTails = new Map()
@@ -184,12 +184,14 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts) {
         const row = contexts.record?.(parent.id)
         const unresolved = Object.values(row?.bridgeOperations ?? {}).filter(op =>
           op.state === 'pending' || op.state === 'unknown').length + (row?.bridge ? 1 : 0)
-        if (unresolved >= 3) return { status: 'POSTMAN_BRIDGE_LIMIT_REACHED' }
+        const awaitingSync = Object.values(row?.bridgeOperations ?? {}).filter(op => op.state === 'received').length
+        if (unresolved >= 3 || awaitingSync >= 3) return { status: 'POSTMAN_BRIDGE_LIMIT_REACHED' }
         await contexts.changeRecord(parent.id, old => {
           const operations = old.bridgeOperations ?? {}
           const count = Object.values(operations).filter(op =>
             op.state === 'pending' || op.state === 'unknown').length + (old.bridge ? 1 : 0)
-          if (count >= 3) throw new Error('POSTMAN_BRIDGE_LIMIT_REACHED')
+          const awaitingSync = Object.values(operations).filter(op => op.state === 'received').length
+          if (count >= 3 || awaitingSync >= 3) throw new Error('POSTMAN_BRIDGE_LIMIT_REACHED')
           return { ...old, bridgeOperations: { ...operations, [job.bridgeJobId]: { state: 'pending' } } }
         })
         return startJob(job, message)
@@ -206,6 +208,41 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts) {
     return result
   }
 
+  async function registerGrant(job) {
+    const terminal = job.trustedTerminal
+    if (terminal?.status !== 'POSTMAN_BRIDGE_TERMINAL' || terminal.result?.ok === false) return
+    const artifact = terminal.result?.code === 'RESULT_DURABLE'
+    job.grantDiagnostic = undefined
+    try {
+      if (await grants?.register(job.parentSessionId, terminal) !== true && artifact)
+        job.grantDiagnostic = 'Artifact grant registration rejected.'
+    } catch (error) { job.grantDiagnostic = diagnostic(error) }
+    if (artifact && job.grantDiagnostic) job.state = 'FAILED'
+  }
+
+  async function synchronize(job, publication) {
+    const leaderId = job.parentSessionId
+    let synchronized = false
+    try {
+      synchronized = await contexts.sync(leaderId, publication.taskPublicationCommit,
+        publication.baseCommit, id => worker ? worker.pauseForOperation(id) : true)
+    } catch (error) { job.syncDiagnostic = diagnostic(error) }
+    job.synchronization = synchronized ? 'synchronized' : 'busy'
+    if (!synchronized) return
+    // Grant registration is subordinate to verified publication and ZIP hash.
+    await registerGrant(job)
+    if (typeof contexts?.changeRecord === 'function') await contexts.changeRecord(leaderId, row => {
+      const op = row.bridgeOperations?.[job.bridgeJobId]
+      if (op?.state !== 'received') throw new Error('POSTMAN_BRIDGE_JOURNAL_MISSING')
+      const operations = { ...row.bridgeOperations }
+      if (job.grantDiagnostic && job.trustedTerminal.result?.code === 'RESULT_DURABLE')
+        operations[job.bridgeJobId] = { ...op, synchronization: 'synchronized', grantDiagnostic: job.grantDiagnostic }
+      else delete operations[job.bridgeJobId]
+      return { ...row, bridgeOperations: operations }
+    })
+    if (!job.grantDiagnostic && job.trustedTerminal?.status === 'POSTMAN_BRIDGE_TERMINAL') job.state = 'TERMINAL'
+  }
+
   function startJob(job, message) {
     jobs.set(job.bridgeJobId, job)
     // Coordinator holds the active slot only through child disposal, never through grants.
@@ -213,68 +250,47 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts) {
     try { admission = coordinator.run(job.controller.signal, () => lifecycle(job, message)) }
     catch (error) { admission = Promise.reject(error) }
     job.completion = admission.then(async result => {
-        // Hold the runner/restore boundary through the entire terminal path.
-        const syncReserved = contexts?.beginSync?.(job.parentSessionId) ?? false
-        if (contexts && typeof contexts.beginSync === 'function' && !syncReserved) {
-          job.trustedTerminal = { status: 'POSTMAN_TASK_PUBLICATION_SYNC_FAILED',
-            diagnostic: 'Task context unavailable for terminal synchronization.' }
-          job.state = 'FAILED'
-          return
-        }
-        try {
-        // Includes early lifecycle failures and invalid trusted statuses.
+        // A verified terminal is delivery evidence even when the shared tree is
+        // temporarily busy. Persist it before any synchronization attempt.
         const safe = losslessValue(result)
         job.trustedTerminal = safe
         job.requestId = safe.requestId ?? job.requestId ?? null
-        // A successful Direct publication advances the same clean task worktree.
-        // Never grant an artifact if the remote branch/parent cannot be proved.
+        job.state = safe.status === 'POSTMAN_BRIDGE_TERMINAL' ? 'TERMINAL' : 'FAILED'
+        if (job.state === 'TERMINAL' && typeof contexts?.changeRecord === 'function') {
+          await contexts.changeRecord(job.parentSessionId, row => {
+            if (row.bridgeOperations?.[job.bridgeJobId]?.state !== 'pending')
+              throw new Error('POSTMAN_BRIDGE_JOURNAL_MISSING')
+            return { ...row, bridgeOperations: { ...row.bridgeOperations,
+              [job.bridgeJobId]: { state: 'received', terminal: safe, synchronization: 'pending' } } }
+          })
+        }
         const publication = safe.result?.ok === true ? safe.result
           : safe.result?.ok === false && safe.result.code === 'POSTMAN_TRANSPORT_FAILED'
             ? safe.result.publicationReceipt : null
-        if (contexts && safe.status === 'POSTMAN_BRIDGE_TERMINAL' && publication) {
-          let synchronized = false
-          let reason = 'Task branch publication cannot be synchronized safely.'
-          try {
-            synchronized = await contexts.sync(job.parentSessionId,
-              publication.taskPublicationCommit, publication.baseCommit)
-          } catch (error) { reason += ' ' + diagnostic(error) }
-          if (!synchronized) {
-            job.trustedTerminal = { status: 'POSTMAN_TASK_PUBLICATION_SYNC_FAILED',
-              requestId: safe.requestId, diagnostic: reason,
-              ...(safe.result?.ok === false ? { terminalStatus: safe.terminalStatus, result: safe.result } : {}) }
-            job.state = 'FAILED'
-            return
-          }
-        }
-        // Only a trusted terminal from a fully cleaned child may authorize a grant.
-        const artifactHandoff = safe.result?.code === 'RESULT_DURABLE'
-        if (safe.status === 'POSTMAN_BRIDGE_TERMINAL' && safe.result?.ok !== false) {
-          try {
-            const registered = await grants?.register(job.parentSessionId, safe)
-            if (artifactHandoff && registered !== true) job.grantDiagnostic = 'Artifact grant registration rejected.'
-          } catch (error) { job.grantDiagnostic = diagnostic(error) }
-        }
-        job.state = safe.status === 'POSTMAN_BRIDGE_TERMINAL' && !(artifactHandoff && job.grantDiagnostic)
-          ? 'TERMINAL' : 'FAILED'
-        } finally { if (syncReserved) contexts.endSync(job.parentSessionId) }
+        job.synchronization = publication && contexts ? 'busy' : 'not-required'
+        if (job.state === 'TERMINAL' && publication && contexts)
+          await synchronize(job, publication)
+        else if (job.state === 'TERMINAL' && !contexts) await registerGrant(job)
       })
       .catch(error => {
-        job.state = 'FAILED'
+        if (job.trustedTerminal?.status !== 'POSTMAN_BRIDGE_TERMINAL') job.state = 'FAILED'
         job.diagnostic = diagnostic(error)
+        if (job.trustedTerminal?.status === 'POSTMAN_BRIDGE_TERMINAL') job.synchronization = 'busy'
       })
       .then(async () => {
         if (typeof contexts?.changeRecord === 'function') {
           try {
             await contexts.changeRecord(job.parentSessionId, row => {
               const current = row.bridgeOperations?.[job.bridgeJobId]
-              if (!current) throw new Error('POSTMAN_BRIDGE_JOURNAL_MISSING')
-              const operations = { ...row.bridgeOperations }
-              // A trusted terminal with verified sync settles this exact intent.
-              // Failed/uncertain sync is not proof that an external effect did not occur.
-              if (job.trustedTerminal?.status === 'POSTMAN_BRIDGE_TERMINAL' && job.state === 'TERMINAL')
-                delete operations[job.bridgeJobId]
-              else operations[job.bridgeJobId] = { state: 'unknown' }
-              return { ...row, bridgeOperations: operations }
+              // Received terminal is authoritative even if a later sync or grant
+              // fails. Never reinterpret it as unknown external delivery.
+              if (current?.state === 'received') return row
+              if (!current) {
+                if (job.synchronization === 'synchronized') return row
+                throw new Error('POSTMAN_BRIDGE_JOURNAL_MISSING')
+              }
+              return { ...row, bridgeOperations: { ...row.bridgeOperations,
+                [job.bridgeJobId]: { state: 'unknown' } } }
             })
           } catch (error) { job.state = 'FAILED'; job.diagnostic = diagnostic(error) }
         }
@@ -289,19 +305,45 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts) {
       !['TERMINAL', 'FAILED'].includes(job.state))
   }
 
-  function status(parent, bridgeJobId) {
+  async function status(parent, bridgeJobId, retrySync = false) {
     const job = jobs.get(bridgeJobId)
     if (!job || job.parentSessionId !== parent.id) {
       const row = contexts?.record?.(parent.id)
-      const operation = row?.bridgeOperations?.[bridgeJobId] ??
-        (row?.bridge?.id === bridgeJobId ? row.bridge : null)
+      const operation = Object.hasOwn(row?.bridgeOperations ?? {}, bridgeJobId)
+        ? row.bridgeOperations[bridgeJobId] : row?.bridge?.id === bridgeJobId ? row.bridge : null
+      if (operation?.state === 'received' && operation.terminal) {
+        // A status read after restart is a local retry, never a new Direct REQ.
+        const received = { bridgeJobId, parentSessionId: parent.id,
+          trustedTerminal: losslessValue(operation.terminal), state: 'TERMINAL',
+          synchronization: operation.synchronization ?? 'busy', grantDiagnostic: operation.grantDiagnostic }
+        const publication = received.trustedTerminal.result?.ok === true ? received.trustedTerminal.result
+          : received.trustedTerminal.result?.publicationReceipt
+        if (retrySync && (received.synchronization !== 'synchronized' || received.grantDiagnostic) && publication && contexts)
+          await synchronize(received, publication)
+        const failedGrant = received.trustedTerminal.result?.code === 'RESULT_DURABLE' && received.grantDiagnostic
+        return { status: failedGrant ? 'POSTMAN_BRIDGE_FAILED' : 'POSTMAN_BRIDGE_TERMINAL', bridgeJobId,
+          state: failedGrant ? 'FAILED' : 'TERMINAL',
+          requestId: received.trustedTerminal.requestId ?? null,
+          trustedStatus: received.trustedTerminal.status,
+          terminalStatus: received.trustedTerminal.terminalStatus ?? null,
+          checks: received.trustedTerminal.checks ?? null,
+          result: received.trustedTerminal.result ?? null,
+          synchronization: received.synchronization,
+          grantDiagnostic: received.grantDiagnostic ?? null }
+      }
       return operation
         ? { status: 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN', bridgeJobId, state: 'INTERRUPTED' }
         : { status: 'POSTMAN_BRIDGE_JOB_NOT_FOUND' }
     }
+    if (retrySync && job.finishedAt && job.trustedTerminal?.status === 'POSTMAN_BRIDGE_TERMINAL' &&
+        (job.synchronization === 'busy' || job.grantDiagnostic && job.trustedTerminal.result?.code === 'RESULT_DURABLE')) {
+      const publication = job.trustedTerminal.result.ok === true ? job.trustedTerminal.result
+        : job.trustedTerminal.result.publicationReceipt
+      if (publication) await synchronize(job, publication)
+    }
     const common = snapshot(job)
     if (job.state === 'QUEUED') return { status: 'POSTMAN_BRIDGE_QUEUED', ...common }
-    if (job.state === 'STARTING' || job.state === 'RUNNING') {
+    if (!job.finishedAt || job.state === 'STARTING' || job.state === 'RUNNING') {
       return { status: 'POSTMAN_BRIDGE_RUNNING', ...common }
     }
     const terminal = job.trustedTerminal
@@ -315,6 +357,8 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts) {
       childDiagnostic: terminal?.childDiagnostic ?? null,
       diagnostic: terminal?.diagnostic ?? job.diagnostic ?? null,
       notification: job.notification ?? null,
+      synchronization: job.synchronization ?? null,
+      syncDiagnostic: job.syncDiagnostic ?? null,
       ...(job.grantDiagnostic === undefined ? {} : { grantDiagnostic: job.grantDiagnostic }) }
   }
 

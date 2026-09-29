@@ -66,6 +66,7 @@ export function buildPostmanWorkerStartRequest(parent, task, signal, deniedTools
 // delivery queue. Neither queue is held until a model turn finishes.
 export function createPostmanWorkerTools(ctx, grants, contexts) {
   const leaders = new Map()
+  let disposed = false
   const durable = typeof contexts?.record === 'function' && typeof contexts?.changeRecord === 'function'
   const rowOf = id => durable ? contexts.record(id) : null
   function group(parent) {
@@ -82,7 +83,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
     return result
   }
   function authorized(parent) {
-    return isTopLevelPostmanSupervisor(parent) && ctx.agents.get(parent.id) === parent
+    return !disposed && isTopLevelPostmanSupervisor(parent) && ctx.agents.get(parent.id) === parent
   }
   function bindings(parent, group) {
     return durable ? rowOf(parent.id)?.workers ?? {} : Object.fromEntries(
@@ -101,8 +102,8 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
   async function changeBinding(parent, id, fn) {
     if (!durable) return
     await contexts.changeRecord(parent.id, row => {
-      const current = row.workers?.[id]
-      if (!current) throw new Error('POSTMAN_WORKER_BINDING_CHANGED')
+      const current = Object.hasOwn(row.workers ?? {}, id) ? row.workers[id] : null
+      if (!current || current.id !== id) throw new Error('POSTMAN_WORKER_BINDING_CHANGED')
       const changed = fn(current)
       return { ...row, workers: { ...row.workers, [id]: changed } }
     })
@@ -119,8 +120,9 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
   async function reconcile(parent, slot, signal) {
     if (!durable) return slot.state === 'uncertain' ? 'POSTMAN_WORKER_BINDING_UNCERTAIN' :
       slot.delivery === 'unknown' ? 'POSTMAN_WORKER_DELIVERY_UNKNOWN' : null
-    const saved = rowOf(parent.id)?.workers?.[slot.id]
-    if (!saved || slot.closed) return 'POSTMAN_WORKER_TARGET_UNKNOWN'
+    const workers = rowOf(parent.id)?.workers ?? {}
+    const saved = Object.hasOwn(workers, slot.id) ? workers[slot.id] : null
+    if (!saved || saved.id !== slot.id || slot.closed) return 'POSTMAN_WORKER_TARGET_UNKNOWN'
     if (saved.state === 'stopping' || saved.state === 'uncertain') return 'POSTMAN_WORKER_BINDING_UNCERTAIN'
     if (!slot.verified) {
       try {
@@ -134,8 +136,9 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
         slot.verified = true
       } catch { return 'POSTMAN_WORKER_BINDING_UNCERTAIN' }
     }
-    const current = rowOf(parent.id)?.workers?.[slot.id]
-    if (!current || current.state !== 'ready') return 'POSTMAN_WORKER_BINDING_UNCERTAIN'
+    const currentWorkers = rowOf(parent.id)?.workers ?? {}
+    const current = Object.hasOwn(currentWorkers, slot.id) ? currentWorkers[slot.id] : null
+    if (!current || current.id !== slot.id || current.state !== 'ready') return 'POSTMAN_WORKER_BINDING_UNCERTAIN'
     slot.state = 'ready'
     slot.label = current.label
     slot.delivery = current.delivery
@@ -153,8 +156,10 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
   }
   function select(parent, id, group) {
     const workers = bindings(parent, group)
-    if (id !== undefined) return workers[id] ? { binding: workers[id] } : { status: 'POSTMAN_WORKER_TARGET_UNKNOWN' }
-    const values = Object.values(workers)
+    if (id !== undefined) return Object.hasOwn(workers, id) && workers[id]?.id === id
+      ? { binding: workers[id] } : { status: 'POSTMAN_WORKER_TARGET_UNKNOWN' }
+    const values = Object.entries(workers).filter(([key, value]) => value?.id === key).map(([, value]) => value)
+    if (values.length !== Object.keys(workers).length) return { status: 'POSTMAN_WORKER_BINDING_UNCERTAIN' }
     if (values.length > 1) return { status: 'POSTMAN_WORKER_TARGET_REQUIRED' }
     return values.length === 1 ? { binding: values[0] } : { status: 'POSTMAN_WORKER_INTERRUPT_NO_ACTIVE_WORKER' }
   }
@@ -217,7 +222,8 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
         ...(interrupt ? { interruptRequested: false, mappingPreserved: true } : {}),
         model: POSTMAN_WORKER_AGENT_OPTIONS.model, provider: POSTMAN_WORKER_PROVIDER }
     } catch (error) {
-      if (durable && rowOf(parent.id)?.workers?.[id]?.delivery === 'pending') {
+      if (durable && Object.hasOwn(rowOf(parent.id)?.workers ?? {}, id) &&
+          rowOf(parent.id).workers[id].delivery === 'pending') {
         try { await changeBinding(parent, id, current => ({ ...current, delivery: 'unknown' })) } catch {}
       }
       slot.delivery = 'unknown'
@@ -232,6 +238,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
     try { task = await taskWithGrant(parent, context, args) }
     catch (error) { return { status: 'POSTMAN_WORKER_ARTIFACT_REJECTED', diagnostic: diagnostic(error) } }
     if (task.status) return task
+    if (!authorized(parent)) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
     const reservedId = randomUUID()
     const label = args.label ?? 'Postman Worker'
     // Reserve an exact child identity durably before the first DSH side effect.
@@ -243,7 +250,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
       try {
         if (durable) await contexts.changeRecord(parent.id, row => {
           if (Object.keys(row.workers ?? {}).length >= 3) throw new Error('POSTMAN_WORKER_LIMIT_REACHED')
-          if (row.workers?.[reservedId]) throw new Error('POSTMAN_WORKER_BINDING_EXISTS')
+          if (Object.hasOwn(row.workers ?? {}, reservedId)) throw new Error('POSTMAN_WORKER_BINDING_EXISTS')
           return { ...row, workers: { ...row.workers,
             [reservedId]: { id: reservedId, label, state: 'intent', delivery: 'pending',
               artifactRequests: task.grant ? [args.artifactRequestId] : [] } } }
@@ -264,9 +271,13 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
     }
     if (!admission.slot) return admission
     const slot = admission.slot
+    const reservedBinding = durable ? rowOf(parent.id)?.workers?.[reservedId] : null
+    const exactIntent = () => !durable ||
+      (Object.hasOwn(rowOf(parent.id)?.workers ?? {}, reservedId) &&
+       rowOf(parent.id).workers[reservedId] === reservedBinding && reservedBinding?.state === 'intent')
     return enqueue(slot, async () => {
-    if (slot.closed || !authorized(parent) ||
-        (durable && rowOf(parent.id)?.workers?.[reservedId]?.state !== 'intent'))
+    let readyBinding
+    if (slot.closed || !authorized(parent) || !exactIntent())
       return { status: 'POSTMAN_WORKER_BINDING_UNCERTAIN', workerSessionId: reservedId }
     try {
       const accepted = await ctx.subagents.startContinuable({
@@ -274,12 +285,18 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
         childId: reservedId,
       })
       if (String(accepted.childId) !== reservedId) throw new Error('POSTMAN_WORKER_CHILD_ID_MISMATCH')
+      if (slot.closed || !authorized(parent) || !exactIntent()) throw new Error('POSTMAN_WORKER_START_STALE')
       if (durable && !await childExists(parent, reservedId, exec.signal))
         throw new Error('POSTMAN_WORKER_CHILD_NOT_VERIFIED')
+      if (slot.closed || !authorized(parent) || !exactIntent()) throw new Error('POSTMAN_WORKER_START_STALE')
       if (durable) await changeBinding(parent, reservedId, current => {
-        if (current.state !== 'intent') throw new Error('POSTMAN_WORKER_BINDING_CHANGED')
-        return { ...current, state: 'ready', delivery: 'none' }
+        if (current !== reservedBinding) throw new Error('POSTMAN_WORKER_BINDING_CHANGED')
+        readyBinding = { ...current, state: 'ready', delivery: 'none' }
+        return readyBinding
       })
+      if (slot.closed || !authorized(parent) ||
+          (durable && rowOf(parent.id)?.workers?.[reservedId] !== readyBinding))
+        throw new Error('POSTMAN_WORKER_START_STALE')
       slot.verified = true
       slot.state = 'ready'
       slot.delivery = 'none'
@@ -289,9 +306,14 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
     } catch (error) {
       // Even if DSH rolled back, do not release a persisted intent without proof.
       // A late completion must never replace a removed or different binding.
-      if (durable && rowOf(parent.id)?.workers?.[reservedId]) {
+      // The selected drain releases only this child's Activation, preserving
+      // the Session; failure leaves the original slot uncertain.
+      try { await ctx.subagents.drainContinuableChildren(parent, [reservedId]) } catch {}
+      if (durable && Object.hasOwn(rowOf(parent.id)?.workers ?? {}, reservedId)) {
         try { await changeBinding(parent, reservedId, current => {
-          if (current.state !== 'intent') throw new Error('POSTMAN_WORKER_BINDING_CHANGED')
+          if ((current !== reservedBinding && current !== readyBinding) ||
+              !['intent', 'ready'].includes(current.state))
+            throw new Error('POSTMAN_WORKER_BINDING_CHANGED')
           return { ...current, state: 'uncertain', delivery: 'unknown' }
         }) } catch {}
       } else if (!durable) { slot.state = 'uncertain'; slot.delivery = 'unknown' }
@@ -387,7 +409,9 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
           await ctx.subagents.drainContinuableChildren(parent, [slot.id])
           // Remove exactly the same binding, never another Worker admitted later.
           if (durable) await contexts.changeRecord(parent.id, row => {
-            if (row.workers?.[slot.id]?.state !== 'stopping') throw new Error('POSTMAN_WORKER_BINDING_CHANGED')
+            if (!Object.hasOwn(row.workers ?? {}, slot.id) ||
+                row.workers[slot.id]?.id !== slot.id || row.workers[slot.id].state !== 'stopping')
+              throw new Error('POSTMAN_WORKER_BINDING_CHANGED')
             const workers = { ...row.workers }
             delete workers[slot.id]
             return { ...row, workers }
@@ -419,12 +443,14 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
     },
   })
   function liveSlot(caller, leaderId) {
-    if (typeof caller?.id !== 'string' || ctx.agents.get(caller.id) !== caller ||
+    if (disposed || typeof caller?.id !== 'string' || ctx.agents.get(caller.id) !== caller ||
         caller.session?.header?.origin !== 'subagent' || caller.session.header.delegationDepth !== 1 ||
         caller.session.header.parentSession !== leaderId || !authorized(ctx.agents.get(leaderId))) return null
     const slot = leaders.get(leaderId)?.slots.get(caller.id)
     if (!slot || slot.closed || slot.state !== 'ready' ||
-        (durable && rowOf(leaderId)?.workers?.[caller.id]?.state !== 'ready') ||
+        (durable && (!Object.hasOwn(rowOf(leaderId)?.workers ?? {}, caller.id) ||
+          rowOf(leaderId).workers[caller.id]?.id !== caller.id ||
+          rowOf(leaderId).workers[caller.id].state !== 'ready')) ||
         (contexts && slot.context !== contexts.get(leaderId))) return null
     return slot
   }
@@ -437,29 +463,52 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
   function contextOf(leaderId, childId) {
     const slot = leaders.get(leaderId)?.slots.get(childId)
     return slot && !slot.closed && slot.state === 'ready' &&
-      (!durable || rowOf(leaderId)?.workers?.[childId]?.state === 'ready') ? slot.context : null
+      (!durable || (Object.hasOwn(rowOf(leaderId)?.workers ?? {}, childId) &&
+        rowOf(leaderId).workers[childId]?.id === childId &&
+        rowOf(leaderId).workers[childId].state === 'ready')) ? slot.context : null
   }
-  // Conservative: a report, binding ready and delivery none are not proof of idle.
-  // A Host runner inside its caller may proceed only without other mapped Workers.
-  function canRunExclusive(leaderId, callerId) {
-    const parent = ctx.agents.get(leaderId)
-    const values = parent ? Object.values(bindings(parent, groupFor(parent))) : []
-    return values.length === 1 && values[0].id === callerId && values[0].state === 'ready' &&
-      values[0].delivery === 'none'
-  }
-  async function prepareRestore(leaderId) {
+  // The Host has already reserved the shared worktree before calling this.
+  // DSH's selected drain cancels a live turn; never use it as a pause.
+  // Inactive durable peers already have no resident Activation to release.
+  // The runner's caller is inside this tool and must never await itself.
+  async function pauseForOperation(leaderId, callerId = null) {
     const parent = ctx.agents.get(leaderId)
     if (!authorized(parent)) return false
     const group = groupFor(parent)
     const values = Object.values(bindings(parent, group))
-    // No Worker task, report or delivery flag proves its arbitrary shell writes ended.
-    if (values.length) return false
-    return [...group.slots.values()].every(slot => slot.closed)
+    if (values.some(value => value.state !== 'ready' || value.delivery !== 'none' ||
+        (callerId && value.id === callerId && !group.slots.has(callerId)))) return false
+    if (callerId && !values.some(value => value.id === callerId)) return false
+    try {
+      // DSH activity is session residency, not proof of model completion.
+      // Only inactive durable children have no resident accepted turns.
+      const entries = await ctx.subagents.listChildren(leaderId)
+      const mapped = new Set(values.map(value => value.id))
+      // A removed mapping alone cannot prove its former child is not running.
+      if (entries.some(entry => entry.activity === 'running' &&
+          entry.id !== callerId && (mapped.has(entry.id) ||
+            (entry.kind === 'child' && entry.mode === 'continuable')))) return false
+      for (const value of values) {
+        if (value.id === callerId) continue
+        const match = entries.filter(entry => entry.id === value.id)
+        if (match.length !== 1 || match[0].kind !== 'child' ||
+            match[0].mode !== 'continuable' || match[0].activity !== 'inactive' ||
+            ctx.agents.get(value.id)) return false
+      }
+      return authorized(parent) && values.every(value => {
+        const current = bindings(parent, group)[value.id]
+        return current?.id === value.id && current.state === 'ready' && current.delivery === 'none'
+      })
+    } catch { return false }
+  }
+  async function prepareRestore(leaderId) {
+    return pauseForOperation(leaderId)
   }
   function dispose() {
+    disposed = true
     for (const group of leaders.values()) for (const slot of group.slots.values()) slot.closed = true
     leaders.clear()
   }
   return { taskTool, interruptTool, stopTool, listTool, ownerOf, ownsNotification,
-    contextOf, canRunExclusive, prepareRestore, dispose }
+    contextOf, pauseForOperation, prepareRestore, dispose }
 }

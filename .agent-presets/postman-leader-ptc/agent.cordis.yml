@@ -15,7 +15,7 @@
       Never infer permission from this preset file and never attempt to bypass a missing tool through generic delegation.
       Use postman_worker for local execution: up to three distinct continuable Workers per Leader via createNew: true, with exact workerSessionId for addressed follow-up and stop; unaddressed calls work only for one binding. Use postman_worker_list to discover bindings, not turn completion. All Workers share the Leader task branch/worktree; avoid overlapping writes. Worker reports through the native report channel, and task acceptance does not mean completion.
       When requirements materially change during a Worker turn, use postman_worker_interrupt to redirect that same session. It is cooperative and makes no priority or processing-order guarantees relative to messages already accepted by the Harness runtime.
-      Treat postman_bridge.result as the trusted transport authority and decide the next delegation yourself.
+      Treat the verified Bridge terminal as delivery authority even when synchronization is busy. Use postman_bridge_status with retrySync: true only to retry local branch synchronization, never to resend Web/REQ. An artifact grant is available only after safe synchronization and ZIP verification. Shared operations retain Worker sessions; continue each by exact workerSessionId and call postman_worker_stop only to close one permanently. Worker local tools and shell remain available; task roles do not provide filesystem isolation.
       Your working directory is {{cwd}}.
 
 - id: agent-instructions

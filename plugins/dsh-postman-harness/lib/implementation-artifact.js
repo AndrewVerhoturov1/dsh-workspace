@@ -130,12 +130,15 @@ export function createImplementationArtifactApplyTool(ctx, grants, worker, optio
         return { status: 'IMPLEMENTATION_ARTIFACT_CALLER_REJECTED' }
       }
       const operationLock = options.taskContexts?.beginOperation
-      if (typeof operationLock === 'function' && (!worker.canRunExclusive(leaderId, caller.id) ||
-        !operationLock(leaderId, id => Boolean(options.jobs?.hasActive(id)), caller.id))) {
+      if (typeof operationLock === 'function' &&
+          !operationLock(leaderId, id => Boolean(options.jobs?.hasActive(id)), caller.id)) {
         return { status: 'IMPLEMENTATION_ARTIFACT_WORKTREE_BUSY' }
       }
       let runnerOutcome
       try {
+        if (typeof operationLock === 'function' &&
+            !await worker.pauseForOperation(leaderId, caller.id))
+          return { status: 'IMPLEMENTATION_ARTIFACT_WORKTREE_BUSY' }
         const grant = await grants.resolve(leaderId, args?.requestId)
         if (grant === null) return { status: 'IMPLEMENTATION_ARTIFACT_GRANT_REJECTED' }
         if (typeof args?.worktree !== 'string' || !isAbsolute(args.worktree)) {

@@ -24,7 +24,10 @@ export const POSTMAN_TASK_DOMAIN = defineDomain({
     // Keep the legacy single marker readable; new jobs use individually keyed operations.
     bridge: z.object({ id: z.string(), state: z.enum(['pending', 'unknown']) }).nullable(),
     bridgeOperations: z.record(z.string(), z.object({
-      state: z.enum(['pending', 'unknown']),
+      state: z.enum(['pending', 'unknown', 'received']),
+      terminal: z.unknown().optional(),
+      synchronization: z.enum(['pending', 'busy', 'failed', 'synchronized']).optional(),
+      grantDiagnostic: z.string().optional(),
     })).optional(),
   }).strict()) },
 })

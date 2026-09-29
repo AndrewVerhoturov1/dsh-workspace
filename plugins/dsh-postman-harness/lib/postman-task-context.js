@@ -197,10 +197,12 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
           await command(worktree, 'merge-base', remote, head) !== head ||
           await command(repository, 'ls-remote', '--heads', 'origin', branch) !== remoteLine)
         throw new Error('remote task branch moved unexpectedly')
-      // Only after all bound Worker Activations are released may the explicit
-      // Leader restore discard runner-failed changes in this temporary tree.
-      if (Object.keys(registry.get(id)?.workers ?? {}).length > 0)
-        throw new Error('active Worker bindings prevent restore')
+      // A failed package does not identify which dirty bytes belong to that
+      // runner rather than B/C. With retained Worker bindings, only an already
+      // clean tree can be restored without discarding another session's work.
+      if (Object.keys(registry.get(id)?.workers ?? {}).length > 0 &&
+          await command(worktree, 'status', '--porcelain=v1', '--untracked-files=all') !== '')
+        throw new Error('dirty Worker changes have no proven restore ownership')
       // A crash after this point must not authorize an automatic second attempt.
       await registry.change(id, row => ({ ...row, runner: { ...row.runner, state: 'restoring' } }))
       await command(worktree, 'reset', '--hard', remote)
@@ -220,8 +222,7 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
   // Reserve the mutable worktree from terminal handling until the sync completes.
   // Other Web Bridge operations remain independent while runner/restore are blocked.
   function beginSync(leaderId) {
-    if (!get(leaderId) || pending.has(leaderId) || activeOperations.has(leaderId) || workerAdmissions.has(leaderId) ||
-        Object.keys(registry.get(leaderId)?.workers ?? {}).length > 0) return false
+    if (!get(leaderId) || pending.has(leaderId) || activeOperations.has(leaderId) || workerAdmissions.has(leaderId)) return false
     syncOperations.set(leaderId, (syncOperations.get(leaderId) ?? 0) + 1)
     return true
   }
@@ -231,7 +232,7 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
     else syncOperations.set(leaderId, count - 1)
   }
 
-  async function sync(leaderId, publicationCommit, expectedParent) {
+  async function sync(leaderId, publicationCommit, expectedParent, beforeSync = async () => true) {
     const context = get(leaderId)
     if (!context || !SHA.test(publicationCommit ?? '') || !SHA.test(expectedParent ?? '') ||
         !beginSync(leaderId)) return false
@@ -246,7 +247,7 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
       await previous.catch(() => undefined)
       const { worktree, branch, baseCommit } = context
       if (get(leaderId) !== context || workerAdmissions.has(leaderId) ||
-          Object.keys(registry.get(leaderId)?.workers ?? {}).length > 0 || !BRANCH.test(branch) ||
+          !await beforeSync(leaderId) || !BRANCH.test(branch) ||
           normalize(await realPath(worktree)) !== normalize(worktree) ||
           normalize(await command(worktree, 'rev-parse', '--show-toplevel')) !== normalize(worktree) ||
           await command(worktree, 'branch', '--show-current') !== branch ||
@@ -324,9 +325,10 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
   }
   function beginOperation(leaderId, isBusy = () => false, workerId = null) {
     if (!get(leaderId) || pending.has(leaderId) || activeOperations.has(leaderId) || syncOperations.has(leaderId) ||
-        workerAdmissions.has(leaderId) || (workerId &&
-          Object.keys(registry.get(leaderId)?.workers ?? {}).some(id => id !== workerId)) ||
-        ['running', 'unknown', 'restoring'].includes(registry.get(leaderId)?.runner.state) || isBusy(leaderId)) return false
+        workerAdmissions.has(leaderId) ||
+        ['running', 'unknown', 'restoring'].includes(registry.get(leaderId)?.runner.state) ||
+        Object.values(registry.get(leaderId)?.bridgeOperations ?? {}).some(op =>
+          op.state === 'received' && op.synchronization !== 'synchronized') || isBusy(leaderId)) return false
     activeOperations.add(leaderId)
     return true
   }
@@ -349,7 +351,9 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
     } finally { activeOperations.delete(leaderId) }
   }
   function reserveRestore(leaderId) {
-    if (!get(leaderId) || pending.has(leaderId) || syncOperations.has(leaderId) || activeOperations.has(leaderId) || workerAdmissions.has(leaderId)) return false
+    if (!get(leaderId) || pending.has(leaderId) || syncOperations.has(leaderId) || activeOperations.has(leaderId) || workerAdmissions.has(leaderId) ||
+        Object.values(registry.get(leaderId)?.bridgeOperations ?? {}).some(op =>
+          op.state === 'received' && op.synchronization !== 'synchronized')) return false
     pending.add(leaderId)
     return true
   }

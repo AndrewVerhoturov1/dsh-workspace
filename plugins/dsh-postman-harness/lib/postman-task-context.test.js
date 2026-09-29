@@ -169,6 +169,34 @@ test('apply guard requires unchanged bound branch and exact published HEAD', asy
   assert.equal(await contexts.verifyWorktree('A'), false)
 })
 
+
+
+test('received unsynced terminal blocks runner and restore without becoming unknown', async () => {
+  const f = fixture(); await f.contexts.prepare(leader('A'))
+  await f.registry.change('A', row => ({ ...row, bridgeOperations: { request: {
+    state: 'received', synchronization: 'busy', terminal: { status: 'POSTMAN_BRIDGE_TERMINAL',
+      requestId: 'REQ_20260927T120000Z_1234', result: { ok: true, assistantText: 'verified' } }
+  } } }))
+  assert.equal(f.contexts.beginOperation('A'), false)
+  assert.equal(f.contexts.reserveRestore('A'), false)
+  assert.equal(f.registry.get('A').bridgeOperations.request.state, 'received')
+  await f.registry.change('A', row => ({ ...row, bridgeOperations: {} }))
+  assert.equal(f.contexts.beginOperation('A'), true)
+  await f.contexts.endOperation('A', { status: 'IMPLEMENTATION_ARTIFACT_RUNNER_RESULT', result: { ok: true } })
+})
+
+test('two Host runners cannot reserve the shared worktree at once', async () => {
+  const f = fixture(); await f.contexts.prepare(leader('A'))
+  assert.equal(f.contexts.beginOperation('A'), true)
+  assert.equal(f.contexts.beginOperation('A'), false)
+  await f.contexts.startRunner('A', 'REQ_20260927T120000Z_1234')
+  assert.equal(f.contexts.beginSync('A'), false)
+  assert.equal(f.contexts.beginOperation('A'), false)
+  await f.contexts.endOperation('A', { status: 'IMPLEMENTATION_ARTIFACT_RUNNER_RESULT', result: { ok: true } })
+  assert.equal(f.contexts.beginOperation('A'), true)
+  await f.contexts.endOperation('A', { status: 'IMPLEMENTATION_ARTIFACT_RUNNER_RESULT', result: { ok: true } })
+})
+
 test('restore discards dirty bound tree only after explicit Leader call', async () => {
   const f = fixture(), prepared = await f.contexts.prepare(leader('A'))
   f.state.head = published; f.state.remote = published; f.state.clean = false
@@ -328,14 +356,30 @@ test('restart reconciles each pending Bridge without changing task or Worker bin
     call.args[0] === 'worktree' && call.args[1] === 'add'), false)
 })
 
-test('mapped Workers reserve the shared worktree from Bridge sync and destructive restore', async () => {
+
+test('clean failed runner restore retains all three exact Worker bindings', async () => {
+  const f = fixture(); await f.contexts.prepare(leader('A'))
+  f.state.trees.push(worktree)
+  assert.equal(f.contexts.beginOperation('A'), true)
+  await f.contexts.startRunner('A', 'REQ_20260927T120000Z_1234')
+  await f.contexts.endOperation('A', { status: 'IMPLEMENTATION_ARTIFACT_RUNNER_RESULT', result: { ok: false } })
+  const workers = Object.fromEntries(['A', 'B', 'C'].map(id => [id, {
+    id, label: id, state: 'ready', delivery: 'none', artifactRequests: [] }]))
+  await f.registry.change('A', row => ({ ...row, workers }))
+  const restored = await f.contexts.restore(leader('A'))
+  assert.equal(restored.status, 'TASK_CONTEXT_RESTORED')
+  assert.deepEqual(f.registry.get('A').workers, workers)
+})
+
+test('Worker bindings alone do not block sync but dirty restore still refuses unowned changes', async () => {
   const f = fixture(); await f.contexts.prepare(leader('A'))
   f.state.trees.push(worktree); f.state.clean = false
   assert.equal(f.contexts.beginOperation('A'), true)
   await f.contexts.startRunner('A', 'REQ_20260927T120000Z_1234')
   await f.contexts.endOperation('A', { status: 'IMPLEMENTATION_ARTIFACT_RUNNER_RESULT', result: { ok: false } })
   await f.registry.change('A', row => ({ ...row, workers: { child: { id: 'child', label: 'C', state: 'ready', delivery: 'none', artifactRequests: [] } } }))
-  assert.equal(f.contexts.beginSync('A'), false)
+  assert.equal(f.contexts.beginSync('A'), true)
+  f.contexts.endSync('A')
   assert.equal((await f.contexts.restore(leader('A'))).status, 'POSTMAN_TASK_RESTORE_REJECTED')
   assert.equal(f.state.clean, false)
   assert.equal(f.calls.some(call => ['reset', 'clean'].includes(call.args[0])), false)
