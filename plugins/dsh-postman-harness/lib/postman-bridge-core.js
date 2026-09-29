@@ -116,17 +116,18 @@ export function postmanBridgeCallerAllowed(agent) {
   return isTopLevelPostmanSupervisor(agent)
 }
 
-export function postmanBridgeRestrictionForAgent(agent) {
+export function postmanBridgeRestrictionForAgent(agent, ownsPtcWorker = () => false) {
   if (isTopLevelPostmanPtcLeader(agent)) {
     return { allow: [...POSTMAN_LEADER_TOOL_ALLOWLIST, POSTMAN_PTC_TOOL_NAME] }
   }
   if (isTopLevelPostmanLeader(agent)) {
     return { allow: [...POSTMAN_LEADER_TOOL_ALLOWLIST] }
   }
-  return { deny: [...POSTMAN_LEADER_ONLY_TOOL_NAMES, POSTMAN_PTC_TOOL_NAME] }
+  return { deny: ownsPtcWorker(agent) ? [...POSTMAN_LEADER_ONLY_TOOL_NAMES] :
+    [...POSTMAN_LEADER_ONLY_TOOL_NAMES, POSTMAN_PTC_TOOL_NAME] }
 }
 
-export function createPostmanBridgeBoundaryManager(lookupAgent) {
+export function createPostmanBridgeBoundaryManager(lookupAgent, ownsPtcWorker = () => false) {
   if (typeof lookupAgent !== 'function') throw new Error('POSTMAN_BRIDGE_AGENT_LOOKUP_REQUIRED')
   const active = new Map()
 
@@ -138,7 +139,7 @@ export function createPostmanBridgeBoundaryManager(lookupAgent) {
       throw new Error('POSTMAN_BRIDGE_TOOL_RESTRICTION_REQUIRED')
     }
 
-    const dispose = agent.ctx.tools.restrict(postmanBridgeRestrictionForAgent(agent))
+    const dispose = agent.ctx.tools.restrict(postmanBridgeRestrictionForAgent(agent, ownsPtcWorker))
     if (typeof dispose !== 'function') throw new Error('POSTMAN_BRIDGE_TOOL_RESTRICTION_DISPOSER_REQUIRED')
 
     const previous = active.get(agent.id)
