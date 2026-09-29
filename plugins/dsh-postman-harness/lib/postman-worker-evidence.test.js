@@ -7,7 +7,8 @@ const end = (turn, kind = 'completed') => ({ type: 'turn/end', data: { turn, rea
 const call = (turn, callId, name = 'report', output = 'result') => ({ type: 'tool/call',
   data: { turn, callId, name, arguments: { output } } })
 const result = (turn, callId, isError = false) => ({ type: 'tool/result',
-  data: { turn, message: { callId, isError } } })
+  data: { turn, message: { source: { kind: 'tool', callId },
+    content: [{ type: 'tool-result', toolCallId: callId, isError }] } } })
 const worker = (admissions = ['a']) => ({ id: 'w', state: 'ready', delivery: 'none', lifecycle: { version: 1,
   admissions: admissions.map(messageId => ({ id: messageId, state: 'accepted', messageId })),
   reports: [{ childId: 'w', turn: 1, callId: 'r', messageId: 'report-1' }] } })

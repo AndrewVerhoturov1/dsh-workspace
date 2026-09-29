@@ -78,7 +78,8 @@ test('completed native report included in Leader context permits close, but stal
     { type: 'tool/call', data: { turn: 1, callId: 'report-call', name: 'report', arguments: { output: 'result' } } })
   await f.tools.observeReport({ agent: child, name: 'report', callId: 'report-call', arguments: { output: 'result' } },
     { value: { messageId: 'native-result' } })
-  child.session.events.push({ type: 'tool/result', data: { turn: 1, message: { callId: 'report-call', isError: false } } },
+  child.session.events.push({ type: 'tool/result', data: { turn: 1, message: { source: { kind: 'tool', callId: 'report-call' },
+      content: [{ type: 'tool-result', toolCallId: 'report-call', isError: false }] } } },
     { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } })
   assert.equal((await f.tools.stopTool.execute({}, f.exec)).status, 'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT')
   f.leader.session.events.push({ type: 'user/message', data: { id: 'native-result' } })
@@ -96,7 +97,8 @@ test('close rechecks Worker when new work arrives during descendant inspection',
     { type: 'tool/call', data: { turn: 1, callId: 'r', name: 'report', arguments: { output: 'done' } } })
   await f.tools.observeReport({ agent: child, name: 'report', callId: 'r', arguments: { output: 'done' } },
     { value: { messageId: 'report-id' } })
-  child.session.events.push({ type: 'tool/result', data: { turn: 1, message: { callId: 'r' } } },
+  child.session.events.push({ type: 'tool/result', data: { turn: 1, message: { source: { kind: 'tool', callId: 'r' },
+      content: [{ type: 'tool-result', toolCallId: 'r', isError: false }] } } },
     { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } })
   f.leader.session.events.push({ type: 'user/message', data: { id: 'report-id' } })
   f.ctx.subagents.listDescendants = async () => { child.status = 'running'; return [] }
@@ -128,7 +130,8 @@ test('close with managed descendant refuses before drain and retains mapping', a
     { type: 'tool/call', data: { turn: 1, callId: 'r', name: 'report', arguments: { output: 'done' } } })
   await f.tools.observeReport({ agent: child, name: 'report', callId: 'r', arguments: { output: 'done' } },
     { value: { messageId: 'report-id' } })
-  child.session.events.push({ type: 'tool/result', data: { turn: 1, message: { callId: 'r' } } },
+  child.session.events.push({ type: 'tool/result', data: { turn: 1, message: { source: { kind: 'tool', callId: 'r' },
+      content: [{ type: 'tool-result', toolCallId: 'r', isError: false }] } } },
     { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } })
   f.leader.session.events.push({ type: 'user/message', data: { id: 'report-id' } })
   f.ctx.subagents.listDescendants = async () => [{ kind: 'child', id: 'nested', activity: 'inactive' }]

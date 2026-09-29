@@ -28,7 +28,7 @@ export function workerEvidence(worker, child, leader) {
     } else if (event.type === 'tool/call') {
       turns.get(event.data.turn)?.calls.push({ ...event, position })
     } else if (event.type === 'tool/result') {
-      turns.get(event.data.turn)?.results.set(event.data.message?.callId, event)
+      turns.get(event.data.turn)?.results.set(event.data.message?.source?.callId, event)
     } else if (event.type === 'turn/end') {
       if (turns.has(event.data.turn)) turns.get(event.data.turn).end = event.data.reason?.kind
       if (currentTurn === event.data.turn) currentTurn = undefined
@@ -54,7 +54,8 @@ export function workerEvidence(worker, child, leader) {
         reportOutput(call))
       return index >= 0 && assigned.every(id => turn.claimedAt.get(id) < turn.calls[index].position) &&
         turn.calls.slice(index + 1).length === 0 &&
-        turn.results.has(report.callId) && !turn.results.get(report.callId).data.message?.isError
+        turn.results.has(report.callId) &&
+        turn.results.get(report.callId).data.message?.content?.[0]?.isError === false
     })
     if (!final) return { ready: false, reason: 'native final report not included in Leader context' }
   }
