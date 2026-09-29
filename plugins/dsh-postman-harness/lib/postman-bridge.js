@@ -9,7 +9,7 @@ import { createPostmanBridgeJobs } from './postman-bridge-jobs.js'
 import { postmanTaskContexts, initializePostmanTaskContexts, releasePostmanTaskContexts } from './postman-task-context.js'
 import { sharedPostmanTaskRegistry, closeSharedPostmanTaskRegistry } from './postman-task-registry.js'
 import {
-  POSTMAN_BRIDGE_TOOL_ALLOWLIST, POSTMAN_BRIDGE_TOOL_NAME, POSTMAN_BRIDGE_STATUS_TOOL_NAME, POSTMAN_CHILD_NOTIFY_TOOL_NAME, POSTMAN_TASK_PREPARE_TOOL_NAME, POSTMAN_TASK_RESTORE_TOOL_NAME,
+  POSTMAN_BRIDGE_TOOL_ALLOWLIST, POSTMAN_BRIDGE_TOOL_NAME, POSTMAN_BRIDGE_STATUS_TOOL_NAME, POSTMAN_CHILD_NOTIFY_TOOL_NAME, POSTMAN_TASK_PREPARE_TOOL_NAME, POSTMAN_TASK_RESTORE_TOOL_NAME, POSTMAN_YIELD_TOOL_NAME,
   createPostmanBridgeBoundaryManager, isTopLevelPostmanSupervisor, isTopLevelPostmanPtcLeader,
   postmanBridgeCallerAllowed, postmanBridgeRestrictionForAgent,
 } from './postman-bridge-core.js'
@@ -99,6 +99,20 @@ export function createPostmanBridgeStatusTool(ctx, jobs) {
   })
 }
 
+export function createPostmanYieldTool(ctx) {
+  return defineTool({
+    name: POSTMAN_YIELD_TOOL_NAME,
+    description: 'Finish only this active Leader turn without a user-facing final; wait for native report, failure, or user input.',
+    parameters: {}, output: output(),
+    execute(_args, exec) {
+      if (!authorized(exec, ctx)) return { status: 'POSTMAN_YIELD_CALLER_REJECTED' }
+      if (typeof exec.concludeTurn !== 'function') return { status: 'POSTMAN_YIELD_UNSUPPORTED' }
+      exec.concludeTurn()
+      return { status: 'POSTMAN_YIELDED', taskCompleted: false }
+    },
+  })
+}
+
 export function createPostmanChildNotifyTool(ctx, contexts, worker) {
   return defineTool({
     name: POSTMAN_CHILD_NOTIFY_TOOL_NAME,
@@ -138,6 +152,16 @@ export function installPostmanLeaderBoundary(agent) {
   return leader
 }
 
+export function installPostmanWorkerReportObserver(ctx, worker) {
+  return ctx.on('tools/post-execute', async (exec, result, next) => {
+    const decision = await next()
+    if (decision.kind === 'accept' && exec.name === 'report') {
+      try { await worker.observeReport(exec, result) } catch { /* fail closed without invalidating native delivery */ }
+    }
+    return decision
+  })
+}
+
 export async function apply(ctx) {
   const registry = await sharedPostmanTaskRegistry(ctx.storageDomain)
   const contexts = initializePostmanTaskContexts(registry)
@@ -154,6 +178,8 @@ export async function apply(ctx) {
   ctx.tools.register(worker.taskTool)
   ctx.tools.register(worker.interruptTool)
   ctx.tools.register(worker.stopTool)
+  ctx.tools.register(createPostmanYieldTool(ctx))
+  installPostmanWorkerReportObserver(ctx, worker)
   ctx.tools.register(worker.listTool)
   ctx.tools.register(createPostmanChildNotifyTool(ctx, postmanTaskContexts, worker))
   ctx.tools.register(createImplementationArtifactApplyTool(ctx, grants, worker, { taskContexts: postmanTaskContexts, jobs }))

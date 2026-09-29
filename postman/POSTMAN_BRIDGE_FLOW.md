@@ -267,3 +267,5 @@ Bridge никогда не делает blind resend.
 `postman_worker`, `postman_worker_interrupt`, `postman_worker_stop`, `postman_worker_list`; остальные global tools этим deny не затрагиваются.
 `glob` не запрещён Worker: он остаётся доступен ему из общего coding preset, но скрыт у Leader.
 `postman_bridge` остаётся отдельным специализированным tool с фиксированной Luna.
+
+**Совмещённый lifecycle Worker (#242 + #246):** до трёх `workers[id]` независимо делят одно Host task worktree. Адресный обычный close возможен после успешного native report, доставки в контекст точного Leader и завершения всей актуальной работы; Agent может быть уже освобождён, тогда Host только читает durable Session. Неполная история — отказ без остановки; точный `mode: "cancel"` требует нового однократного Host approval. Restore не вызывает drain и не очищает грязное дерево при сохранённых Worker-привязках. `postman_yield` уступает лишь ход Leader через `concludeTurn`, не закрывает Worker и не создаёт пустой final.

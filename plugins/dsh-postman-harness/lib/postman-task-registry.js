@@ -3,6 +3,11 @@ import { z } from 'zod'
 
 // One row per exact Leader session. Writes finish on the backend before any
 // Git, child-creation, or destructive runner operation is attempted.
+const workerLifecycle = z.object({ version: z.literal(1),
+  admissions: z.array(z.object({ id: z.string(), state: z.enum(['pending', 'accepted']), messageId: z.string().nullable() })),
+  reports: z.array(z.object({ childId: z.string(), turn: z.number(), callId: z.string(), messageId: z.string() })),
+})
+
 export const POSTMAN_TASK_DOMAIN = defineDomain({
   name: 'postman_task_registry', version: 1,
   tables: { leaders: domainTable(z.object({
@@ -13,11 +18,12 @@ export const POSTMAN_TASK_DOMAIN = defineDomain({
     // Optional on disk so v1 rows can be validated before their in-place migration.
     worker: z.object({ id: z.string().min(1), state: z.enum(['intent', 'ready', 'uncertain', 'stopping']),
       delivery: z.enum(['none', 'pending', 'unknown']),
-      artifactRequests: z.array(z.string()) }).nullable().optional(),
+      artifactRequests: z.array(z.string()),
+      lifecycle: workerLifecycle.optional() }).nullable().optional(),
     workers: z.record(z.string(), z.object({
       id: z.string(), label: z.string(), state: z.enum(['intent', 'ready', 'uncertain', 'stopping']),
       delivery: z.enum(['none', 'pending', 'unknown']),
-      artifactRequests: z.array(z.string()),
+      artifactRequests: z.array(z.string()), lifecycle: workerLifecycle.optional(),
     })).optional(),
     runner: z.object({ state: z.enum(['none', 'running', 'failed', 'unknown', 'restoring']),
       requestId: z.string().nullable() }),
