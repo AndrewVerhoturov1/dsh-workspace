@@ -23,8 +23,8 @@ export function createPtcRuntime(options = {}) {
   return makeRuntime(options, ENTRY)
 }
 // Internal test seam, deliberately absent from the package entry/exports.
-export function createPtcRuntimeForTest(executor, removeTemp = rm, spawnChild = spawn) { return makeRuntime({}, executor, removeTemp, spawnChild) }
-function makeRuntime(options, entry, removeTemp = rm, spawnChild = spawn) {
+export function createPtcRuntimeForTest(executor, removeTemp = rm, spawnChild = spawn, spawnFallback = spawn) { return makeRuntime({}, executor, removeTemp, spawnChild, spawnFallback) }
+function makeRuntime(options, entry, removeTemp = rm, spawnChild = spawn, spawnFallback = spawn) {
   if (Object.keys(plain(options)).length) throw new TypeError('No runtime options supported in v1')
   let disposed = false, disposePromise
   const active = new Set(), outstanding = new Set()
@@ -54,7 +54,7 @@ function makeRuntime(options, entry, removeTemp = rm, spawnChild = spawn) {
     if (outstanding.size>=MAX_OUTSTANDING) return Promise.resolve(outcome('limit-exceeded','maxOutstanding','Unsettled callback limit'))
     const state = { cancel:null }
     active.add(state)
-    return execute(state,{profile,bindings,program,language,signal},outstanding,entry,removeTemp,spawnChild).finally(()=>{ if (!state.uncertain) active.delete(state) })
+    return execute(state,{profile,bindings,program,language,signal},outstanding,entry,removeTemp,spawnChild,spawnFallback).finally(()=>{ if (!state.uncertain) active.delete(state) })
   }
   function dispose() {
     if (!disposePromise) {
@@ -66,7 +66,7 @@ function makeRuntime(options, entry, removeTemp = rm, spawnChild = spawn) {
   return Object.freeze({run,dispose})
 }
 
-async function execute(state,{profile,bindings,program,language,signal},outstanding,entry,removeTemp,spawnChild) {
+async function execute(state,{profile,bindings,program,language,signal},outstanding,entry,removeTemp,spawnChild,spawnFallback) {
   const limits=profile.limits, runId=randomUUID(), controller=new AbortController()
   let child, directory, preparing, reader, send, ready=false, accepted=false, finished=false
   let stderrBytes=0, count=0, nextId=1, logBytes=0, logs=[]
@@ -172,7 +172,7 @@ async function execute(state,{profile,bindings,program,language,signal},outstand
     if(process.platform==='win32') {
       // taskkill is only a fallback for this exact owned PID; no shell or inherited env.
       await Promise.race([new Promise(resolve=>{
-        try {const killer=spawn(join(process.env.SystemRoot||'C:/Windows','System32','taskkill.exe'),['/PID',String(child.pid),'/T','/F'],{windowsHide:true,stdio:'ignore',env:{SystemRoot:process.env.SystemRoot||'C:/Windows'}});killer.once('error',resolve);killer.once('close',resolve)}catch{resolve()}
+        try {const killer=spawnFallback(join(process.env.SystemRoot||'C:/Windows','System32','taskkill.exe'),['/PID',String(child.pid),'/T','/F'],{windowsHide:true,stdio:'ignore',env:{SystemRoot:process.env.SystemRoot||'C:/Windows'}});killer.once('error',resolve);killer.once('close',resolve)}catch{resolve()}
       }),new Promise(resolve=>setTimeout(resolve,STOP_MS))])
     } else try { child.kill('SIGKILL') } catch {}
     await Promise.race([closed,new Promise(resolve=>setTimeout(resolve,STOP_MS))])

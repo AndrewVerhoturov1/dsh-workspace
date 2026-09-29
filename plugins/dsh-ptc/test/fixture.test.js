@@ -5,6 +5,7 @@ import { DEFAULT_LIMITS } from '../src/profiles.js'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { rm } from 'node:fs/promises'
+import { join } from 'node:path'
 import { EventEmitter } from 'node:events'
 import { PassThrough, Writable } from 'node:stream'
 import { encodeFrame, message } from '../src/protocol.js'
@@ -108,7 +109,13 @@ test('cleanup failures cannot accompany success; original failure remains primar
 })
 
 test('an unconfirmed child exit demotes success and retains the active slot',async()=>{
-  const directories=[]
+  const directories=[], fallbackCalls=[]
+  const fakeFallback=(exe,args,options)=>{
+    fallbackCalls.push({exe,args,options})
+    const killer=new EventEmitter()
+    queueMicrotask(()=>killer.emit('close',0))
+    return killer
+  }
   const fakeSpawn=(_exe,_args,options)=>{
     directories.push(options.cwd)
     const child=new EventEmitter()
@@ -124,13 +131,21 @@ test('an unconfirmed child exit demotes success and retains the active slot',asy
     child.kill=()=>true // Reports a signal request, never confirms close.
     return child
   }
-  const r=createPtcRuntimeForTest(entry,rm,fakeSpawn)
+  const r=createPtcRuntimeForTest(entry,rm,fakeSpawn,fakeFallback)
   try {
     const x=await r.run({program:'good',profile,bindings:{echo:()=>3}})
     assert.equal(x.status,'cleanup-error',JSON.stringify(x));assert.equal(x.cleanupError.code,'unconfirmed-exit')
     const second=await r.run({program:'good',profile,bindings:{echo:()=>3}})
     assert.equal(second.status,'cleanup-error')
     assert.equal((await r.run({program:'good',profile,bindings:{echo:()=>3}})).error.code,'maxProcesses')
+    if(process.platform==='win32') {
+      assert.equal(fallbackCalls.length,2)
+      for(const call of fallbackCalls) {
+        assert.equal(call.exe,join(process.env.SystemRoot||'C:/Windows','System32','taskkill.exe'))
+        assert.deepEqual(call.args,['/PID','12345','/T','/F'])
+        assert.deepEqual(call.options,{windowsHide:true,stdio:'ignore',env:{SystemRoot:process.env.SystemRoot||'C:/Windows'}})
+      }
+    } else assert.equal(fallbackCalls.length,0)
   }finally {await r.dispose();for(const dir of directories)await rm(dir,{recursive:true,force:true})}
 })
 
