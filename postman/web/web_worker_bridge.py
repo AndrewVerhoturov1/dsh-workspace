@@ -347,30 +347,31 @@ class WebWorkerBridge:
         browser_download_dir: str = artifact_download.DEFAULT_BROWSER_DOWNLOAD_DIR,
         playwright_factory: Callable[[], Any] | None = None,
         validator_runner: Callable[[Path, dict[str, Any]], dict[str, Any]] | None = None,
-        image_followup: dict[str, Any] | None = None,
+        image_prepare: Callable[[], dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Run one browser page; image mode continues to ZIP on that same page."""
-        image_stage = image_followup is not None
+        image_stage = image_prepare is not None
         image_flow = image_stage
         if image_stage:
-            followup_id = image_followup.get("request_id")
             try:
-                request_identity.assert_canonical_request_id(followup_id)
-            except (ValueError, TypeError):
-                return _result(BRIDGE_INVALID_CONFIG, ok=False, details={"reason": "image_followup_request_id_invalid"})
-            if (followup_id == request_id or not isinstance(image_followup.get("prompt"), str)
-                    or not image_followup["prompt"] or not isinstance(image_followup.get("expected_filename"), str)
-                    or not isinstance(image_followup.get("expected_request"), dict)):
-                return _result(BRIDGE_INVALID_CONFIG, ok=False, details={"reason": "image_followup_invalid"})
-        accepted = self.accept_request(request_id, task_url)
-        if not accepted["ok"]:
-            return accepted
-        if accepted["details"].get("state") != ACCEPTED:
-            # A restart must not blindly resend a prompt after a proven or
-            # uncertain browser action. Recovery of those states belongs to a
-            # future durable browser-state milestone.
-            return accepted
-        request = BridgeRequest(request_id, task_url.strip(), accepted["details"]["resultPath"], accepted["details"]["workerJobId"])
+                request_identity.assert_canonical_request_id(request_id)
+            except (TypeError, ValueError) as exc:
+                return _result(BRIDGE_INVALID_REQUEST, ok=False, details={"reason": str(exc)})
+            # No task URL exists yet, but the preparatory turn owns this
+            # persisted worker identity. Never resend after restart or uncertainty.
+            existing = self.read_state(request_id)
+            if existing is not None:
+                return {"ok": existing.get("state") in _STATE_ORDER,
+                        "code": existing.get("state", BRIDGE_INVALID_CONFIG), "details": existing}
+            request = BridgeRequest(request_id, "", str(self.result_path(request_id)), _job_id(request_id))
+            self._write_state(request, ACCEPTED)
+        else:
+            accepted = self.accept_request(request_id, task_url)
+            if not accepted["ok"]:
+                return accepted
+            if accepted["details"].get("state") != ACCEPTED:
+                return accepted
+            request = BridgeRequest(request_id, task_url.strip(), accepted["details"]["resultPath"], accepted["details"]["workerJobId"])
         if not isinstance(prompt, str) or not prompt:
             return _result(BRIDGE_INVALID_CONFIG, ok=False, details={"reason": "prompt_empty"})
         if not isinstance(expected_request, dict):
@@ -426,8 +427,6 @@ class WebWorkerBridge:
                 stack.callback(close_owned_resources)
                 page = context.new_page()
 
-                if image_stage:
-                    self.random_pause()
                 if conversation_url is None:
                     # Image creation can delay the first /c/... URL after the user turn appears.
                     submitted = browser_submit.submit_fresh_prompt(
@@ -451,8 +450,6 @@ class WebWorkerBridge:
                     continuedConversation=conversation_url is not None,
                 )
 
-                if image_stage:
-                    self.random_pause()
                 started_at = self.monotonic()
                 deadline = started_at + observer_timeout_ms / 1000.0
                 reminder_records: list[dict[str, Any]] = []
@@ -569,7 +566,7 @@ class WebWorkerBridge:
                     return value if isinstance(value, str) else ""
 
                 def inspect_watch(watch: dict[str, Any]) -> dict[str, Any]:
-                    nonlocal last_artifact_code, terminal_result, image_stage, request_id, prompt
+                    nonlocal last_artifact_code, terminal_result, image_stage, request, prompt
                     nonlocal expected_filename, expected_request, max_reminders, reminder_index
                     nonlocal started_at, deadline, next_result_recheck
                     completed = watch.get("proof")
@@ -577,30 +574,54 @@ class WebWorkerBridge:
                         return {"kind": "no_result"}
 
                     if image_stage:
-                        # Keep the owned Page and the proven first-turn evidence;
-                        # only the technical REQ_B is new.
+                        image_details = completed.get("details") if isinstance(completed.get("details"), dict) else {}
+                        if (type(image_details.get("assistantImageCount")) is not int
+                                or image_details["assistantImageCount"] != 1):
+                            return {"kind": "fatal", "result": self._fail(
+                                request, "image preparatory turn did not prove exactly one ready image",
+                                details={"imageObserverProof": completed})}
                         self._write_state(request, IMAGE_TURN_COMPLETED,
                                           imageObserverProof=completed, conversationUrl=chat_url,
-                                          conversationId=conversation_id, secondRequestId=followup_id)
-                        self.random_pause()  # Image ready, before the next human action.
-                        self.random_pause()  # Before submitting REQ_B.
+                                          conversationId=conversation_id)
+                        try:
+                            packaging = image_prepare()
+                        except Exception as exc:
+                            return {"kind": "fatal", "result": self._fail(
+                                request, "image packaging task preparation failed",
+                                details={"reason": str(exc)[:500]})}
+                        if not isinstance(packaging, dict):
+                            return {"kind": "fatal", "result": self._fail(
+                                request, "image packaging config is not an object")}
+                        packaging_task_url = packaging.get("task_url")
+                        packaging_prompt = packaging.get("prompt")
+                        packaging_filename = packaging.get("expected_filename")
+                        packaging_expected = packaging.get("expected_request")
+                        if (not _valid_task_url(packaging_task_url)
+                                or not isinstance(packaging_prompt, str) or not packaging_prompt
+                                or not isinstance(packaging_filename, str) or not packaging_filename
+                                or not isinstance(packaging_expected, dict)
+                                or packaging_expected.get("requestId") != request_id):
+                            return {"kind": "fatal", "result": self._fail(
+                                request, "image packaging config is invalid", details={"packaging": packaging})}
+                        request = BridgeRequest(
+                            request_id, str(packaging_task_url), str(self.result_path(request_id)), _job_id(request_id))
+                        self.random_pause()  # Published task and prompt are ready; next action is Web send.
                         followup_submit = browser_submit.submit_existing_prompt(
-                            page, image_followup["prompt"], chat_url, timeout_ms=timeout_ms,
+                            page, packaging_prompt, chat_url, timeout_ms=timeout_ms,
                             navigate=False,
                         )
                         if not followup_submit.get("ok"):
                             return {"kind": "fatal", "result": self._fail(
-                                request, followup_submit.get("code", "image_followup_submit_failed"),
+                                request, followup_submit.get("code", "image_packaging_submit_failed"),
                                 details=followup_submit)}
                         followup_url = followup_submit.get("details", {}).get("chatUrl")
                         if followup_url != chat_url:
                             return {"kind": "fatal", "result": self._fail(
                                 request, "image follow-up changed conversation", details=followup_submit)}
                         image_stage = False
-                        request_id = followup_id
-                        prompt = image_followup["prompt"]
-                        expected_filename = image_followup["expected_filename"]
-                        expected_request = image_followup["expected_request"]
+                        prompt = packaging_prompt
+                        expected_filename = packaging_filename
+                        expected_request = packaging_expected
                         max_reminders = followup_reminders
                         reminder_index = 0
                         started_at = self.monotonic()
@@ -612,7 +633,7 @@ class WebWorkerBridge:
                                              "artifactRejected": False, "noArtifactSince": None}]
                         self._write_state(request, WAITING_ASSISTANT,
                                           followupSubmitProof=followup_submit,
-                                          secondRequestId=followup_id)
+                                          imageObserverProof=completed)
                         return {"kind": "continued"}
 
                     reproofed = False
@@ -657,7 +678,7 @@ class WebWorkerBridge:
                             reminders=reminder_records,
                         )
                         if image_flow:
-                            self.random_pause()
+                            self.random_pause()  # Exactly one pause after ZIP-ready proof, before download.
                         durable = artifact_download.download_validated_artifact(
                             page,
                             expected_prompt=str(watch["prompt"]),

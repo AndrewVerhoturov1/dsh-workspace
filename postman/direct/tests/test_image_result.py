@@ -45,7 +45,7 @@ class ImageResultTests(unittest.TestCase):
         self.assertFalse(self.output.exists())
 
     def test_one_image_extracts_to_fixed_name_not_archive_path(self):
-        inv, sha = self.make_zip([("nested/", b""), ("nested/picture.png", PNG), ("notes.txt", b"ignored")])
+        inv, sha = self.make_zip([("nested/", b""), ("nested/picture.png", PNG)])
         with patch.object(image_result, "_decode_image", return_value=("PNG", 1, 1)):
             result = self.extract(inv, sha)
         self.assertEqual(Path(result["path"]), self.output / "image.png")
@@ -67,6 +67,10 @@ class ImageResultTests(unittest.TestCase):
                 self.extract(inv, sha)
             self.assertEqual(raised.exception.code, "IMAGE_ENTRY_COUNT")
             self.assertEqual(raised.exception.details["count"], count)
+
+    def test_rejects_any_second_file_even_non_image(self):
+        inv, sha = self.make_zip([("a.png", PNG), ("notes.txt", b"not allowed")])
+        self.assert_code("IMAGE_ENTRY_COUNT", inv, sha)
 
     def test_rejects_second_image_in_unsupported_format(self):
         inv, sha = self.make_zip([("a.png", PNG), ("b.gif", b"GIF89a")])
