@@ -186,6 +186,7 @@ def validate_terminal(
 
 IMAGE_RESULT_DURABLE = "IMAGE_RESULT_DURABLE"
 _IMAGE_EXTENSIONS = {"png": (".png",), "jpg": (".jpg", ".jpeg"), "webp": (".webp",)}
+_IMAGE_MIME = {"png": "image/png", "jpg": "image/jpeg", "webp": "image/webp"}
 
 
 def validate_image_terminal(
@@ -196,21 +197,21 @@ def validate_image_terminal(
     expected_state_path: Path | None = None,
     expected_handoff_path: Path | None = None,
 ) -> dict[str, Any]:
-    """Validate the separate image handoff; never treat its ZIP as an implementation package."""
+    """Validate the one-request image handoff; never treat its ZIP as an implementation package."""
     if not isinstance(data, dict) or data.get("ok") is not True or data.get("code") != IMAGE_RESULT_DURABLE or data.get("state") != IMAGE_RESULT_DURABLE:
         raise DurableHandoffError("IMAGE_HANDOFF_INVALID", "handoff is not exact IMAGE_RESULT_DURABLE")
     if "resultZip" in data:
         raise DurableHandoffError("IMAGE_HANDOFF_INVALID", "image handoff must not expose a resultZip")
 
+    if "secondRequestId" in data:
+        raise DurableHandoffError("IMAGE_HANDOFF_INVALID", "image handoff must use exactly one requestId")
     actual_id = _required_string(data, "requestId")
-    second_id = _required_string(data, "secondRequestId")
     try:
         request_identity.assert_canonical_request_id(actual_id)
-        request_identity.assert_canonical_request_id(second_id)
     except ValueError as exc:
-        raise DurableHandoffError("IMAGE_HANDOFF_INVALID", "image request IDs are not canonical") from exc
-    if actual_id == second_id or (request_id is not None and actual_id != request_id):
-        raise DurableHandoffError("IMAGE_HANDOFF_INVALID", "image stages have mismatched request IDs")
+        raise DurableHandoffError("IMAGE_HANDOFF_INVALID", "image requestId is not canonical") from exc
+    if request_id is not None and actual_id != request_id:
+        raise DurableHandoffError("IMAGE_HANDOFF_INVALID", "image requestId does not match requested request")
     if _required_string(data, "repository") != expected_repository:
         raise DurableHandoffError("IMAGE_HANDOFF_INVALID", "image repository does not match")
     base_commit = _commit(data, "baseCommit")
@@ -218,9 +219,9 @@ def validate_image_terminal(
     owner, repo = expected_repository.split("/", 1)
     task_url = f"https://raw.githubusercontent.com/{owner}/{repo}/{publication_commit}/{actual_id}.md"
     if _required_string(data, "taskUrl") != task_url:
-        raise DurableHandoffError("IMAGE_HANDOFF_INVALID", "image task URL is not SHA-pinned to REQ_A")
+        raise DurableHandoffError("IMAGE_HANDOFF_INVALID", "image packaging task URL is not SHA-pinned to requestId")
     if _required_string(data, "expectedFilename") != request_identity.expected_artifact_filename(actual_id):
-        raise DurableHandoffError("IMAGE_HANDOFF_INVALID", "image task filename does not match REQ_A")
+        raise DurableHandoffError("IMAGE_HANDOFF_INVALID", "image task filename does not match requestId")
 
     fmt = _required_string(data, "imageFormat").lower()
     if fmt not in _IMAGE_EXTENSIONS:
@@ -229,27 +230,35 @@ def validate_image_terminal(
     result_root = Path(_required_string(data, "resultRoot"))
     if (not image.is_absolute() or not result_root.is_absolute()
             or image.name not in {"image" + ext for ext in _IMAGE_EXTENSIONS[fmt]}
-            or image.parent.resolve() != (result_root / second_id).resolve()
+            or image.parent.resolve() != (result_root / actual_id).resolve()
             or image.is_symlink() or not image.is_file()):
-        raise DurableHandoffError("IMAGE_HANDOFF_INVALID", "resultImage is not the durable REQ_B image")
+        raise DurableHandoffError("IMAGE_HANDOFF_INVALID", "resultImage is not the durable request image")
     expected_sha = _artifact_sha(data, "imageSha256")
     size = data.get("imageByteLength")
     if isinstance(size, bool) or not isinstance(size, int) or size <= 0 or image.stat().st_size != size:
         raise DurableHandoffError("IMAGE_HANDOFF_INVALID", "image byte length does not match")
+    width = data.get("imageWidth")
+    height = data.get("imageHeight")
+    if (isinstance(width, bool) or not isinstance(width, int) or width <= 0
+            or isinstance(height, bool) or not isinstance(height, int) or height <= 0):
+        raise DurableHandoffError("IMAGE_HANDOFF_INVALID", "image dimensions are missing or invalid")
+    if _required_string(data, "imageMimeType") != _IMAGE_MIME[fmt]:
+        raise DurableHandoffError("IMAGE_HANDOFF_INVALID", "image MIME type does not match image format")
     import hashlib
     if hashlib.sha256(image.read_bytes()).hexdigest() != expected_sha:
         raise DurableHandoffError("IMAGE_HANDOFF_INVALID", "image SHA-256 does not match")
 
     state = _required_string(data, "statePath")
     if expected_state_path is not None and not _same_path(state, expected_state_path):
-        raise DurableHandoffError("IMAGE_HANDOFF_INVALID", "image statePath does not match REQ_A")
+        raise DurableHandoffError("IMAGE_HANDOFF_INVALID", "image statePath does not match requestId")
     normalized = dict(data)
     normalized.update(baseCommit=base_commit, taskPublicationCommit=publication_commit,
-                      imageFormat=fmt, imageSha256=expected_sha)
+                      imageFormat=fmt, imageSha256=expected_sha,
+                      imageWidth=width, imageHeight=height, imageMimeType=_IMAGE_MIME[fmt])
     if expected_handoff_path is not None:
         handoff = normalized.get("resultHandoffPath")
         if handoff is not None and (not isinstance(handoff, str) or not _same_path(handoff, expected_handoff_path)):
-            raise DurableHandoffError("IMAGE_HANDOFF_INVALID", "image resultHandoffPath does not match REQ_A")
+            raise DurableHandoffError("IMAGE_HANDOFF_INVALID", "image resultHandoffPath does not match requestId")
         normalized["resultHandoffPath"] = str(expected_handoff_path.resolve())
     return normalized
 
