@@ -12,6 +12,7 @@ from contextlib import ExitStack
 from dataclasses import dataclass
 import json
 import os
+import random
 from pathlib import Path
 import tempfile
 import time
@@ -34,6 +35,7 @@ PROMPT_SENT = "PROMPT_SENT"
 WAITING_ASSISTANT = "WAITING_ASSISTANT"
 ARTIFACT_FOUND = "ARTIFACT_FOUND"
 ASSISTANT_COMPLETED_NO_ARTIFACT = "ASSISTANT_COMPLETED_NO_ARTIFACT"
+IMAGE_TURN_COMPLETED = "IMAGE_TURN_COMPLETED"
 ARTIFACT_REJECTED = "ARTIFACT_REJECTED"
 RESULT_DURABLE = "RESULT_DURABLE"
 POSTMAN_TRANSPORT_FAILED = "POSTMAN_TRANSPORT_FAILED"
@@ -48,6 +50,7 @@ _STATE_ORDER = (
     WEB_STARTING,
     PROMPT_SENT,
     WAITING_ASSISTANT,
+    IMAGE_TURN_COMPLETED,
     ARTIFACT_FOUND,
     ASSISTANT_COMPLETED_NO_ARTIFACT,
     ARTIFACT_REJECTED,
@@ -228,6 +231,10 @@ class WebWorkerBridge:
         self.sleep = sleep
         self.on_result_durable = on_result_durable
 
+    def random_pause(self) -> None:
+        """Pause at image-flow human action boundaries only."""
+        self.sleep(random.uniform(3.0, 7.0))
+
     def state_path(self, request_id: str) -> Path:
         request_identity.assert_canonical_request_id(request_id)
         return self.state_root / f"{request_id}.json"
@@ -263,6 +270,7 @@ class WebWorkerBridge:
                 previous in _STATE_ORDER
                 and _STATE_ORDER.index(state) < _STATE_ORDER.index(previous)
                 and not retry_after_rejected_artifact
+                and not (previous == IMAGE_TURN_COMPLETED and state == WAITING_ASSISTANT)
             ):
                 raise ValueError(f"state cannot move backwards from {previous} to {state}")
         record = {
@@ -339,8 +347,21 @@ class WebWorkerBridge:
         browser_download_dir: str = artifact_download.DEFAULT_BROWSER_DOWNLOAD_DIR,
         playwright_factory: Callable[[], Any] | None = None,
         validator_runner: Callable[[Path, dict[str, Any]], dict[str, Any]] | None = None,
+        image_followup: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Run the browser pipeline once, with up to three fixed reminders."""
+        """Run one browser page; image mode continues to ZIP on that same page."""
+        image_stage = image_followup is not None
+        image_flow = image_stage
+        if image_stage:
+            followup_id = image_followup.get("request_id")
+            try:
+                request_identity.assert_canonical_request_id(followup_id)
+            except (ValueError, TypeError):
+                return _result(BRIDGE_INVALID_CONFIG, ok=False, details={"reason": "image_followup_request_id_invalid"})
+            if (followup_id == request_id or not isinstance(image_followup.get("prompt"), str)
+                    or not image_followup["prompt"] or not isinstance(image_followup.get("expected_filename"), str)
+                    or not isinstance(image_followup.get("expected_request"), dict)):
+                return _result(BRIDGE_INVALID_CONFIG, ok=False, details={"reason": "image_followup_invalid"})
         accepted = self.accept_request(request_id, task_url)
         if not accepted["ok"]:
             return accepted
@@ -405,8 +426,12 @@ class WebWorkerBridge:
                 stack.callback(close_owned_resources)
                 page = context.new_page()
 
+                if image_stage:
+                    self.random_pause()
                 if conversation_url is None:
-                    submitted = browser_submit.submit_fresh_prompt(page, prompt, timeout_ms=timeout_ms)
+                    # Image creation can delay the first /c/... URL after the user turn appears.
+                    submitted = browser_submit.submit_fresh_prompt(
+                        page, prompt, timeout_ms=max(timeout_ms, 90_000) if image_stage else timeout_ms)
                 else:
                     submitted = browser_submit.submit_existing_prompt(
                         page, prompt, conversation_url, timeout_ms=timeout_ms
@@ -426,10 +451,15 @@ class WebWorkerBridge:
                     continuedConversation=conversation_url is not None,
                 )
 
+                if image_stage:
+                    self.random_pause()
                 started_at = self.monotonic()
                 deadline = started_at + observer_timeout_ms / 1000.0
                 reminder_records: list[dict[str, Any]] = []
                 reminder_index = 0
+                followup_reminders = max_reminders
+                if image_stage:
+                    max_reminders = 0
                 watched_turns: list[dict[str, Any]] = [
                     {
                         "prompt": prompt,
@@ -493,6 +523,7 @@ class WebWorkerBridge:
                         stable_ms=stable_ms,
                         sleep=self.sleep,
                         monotonic=self.monotonic,
+                        **({"image_mode": True} if image_stage else {}),
                     )
                     completed = _attach_submit_proof(
                         completed,
@@ -538,10 +569,51 @@ class WebWorkerBridge:
                     return value if isinstance(value, str) else ""
 
                 def inspect_watch(watch: dict[str, Any]) -> dict[str, Any]:
-                    nonlocal last_artifact_code, terminal_result
+                    nonlocal last_artifact_code, terminal_result, image_stage, request_id, prompt
+                    nonlocal expected_filename, expected_request, max_reminders, reminder_index
+                    nonlocal started_at, deadline, next_result_recheck
                     completed = watch.get("proof")
                     if watch.get("artifactRejected") or not isinstance(completed, dict):
                         return {"kind": "no_result"}
+
+                    if image_stage:
+                        # Keep the owned Page and the proven first-turn evidence;
+                        # only the technical REQ_B is new.
+                        self._write_state(request, IMAGE_TURN_COMPLETED,
+                                          imageObserverProof=completed, conversationUrl=chat_url,
+                                          conversationId=conversation_id, secondRequestId=followup_id)
+                        self.random_pause()  # Image ready, before the next human action.
+                        self.random_pause()  # Before submitting REQ_B.
+                        followup_submit = browser_submit.submit_existing_prompt(
+                            page, image_followup["prompt"], chat_url, timeout_ms=timeout_ms,
+                            navigate=False,
+                        )
+                        if not followup_submit.get("ok"):
+                            return {"kind": "fatal", "result": self._fail(
+                                request, followup_submit.get("code", "image_followup_submit_failed"),
+                                details=followup_submit)}
+                        followup_url = followup_submit.get("details", {}).get("chatUrl")
+                        if followup_url != chat_url:
+                            return {"kind": "fatal", "result": self._fail(
+                                request, "image follow-up changed conversation", details=followup_submit)}
+                        image_stage = False
+                        request_id = followup_id
+                        prompt = image_followup["prompt"]
+                        expected_filename = image_followup["expected_filename"]
+                        expected_request = image_followup["expected_request"]
+                        max_reminders = followup_reminders
+                        reminder_index = 0
+                        started_at = self.monotonic()
+                        deadline = started_at + observer_timeout_ms / 1000.0
+                        next_result_recheck = started_at + _RESULT_RECHECK_INTERVAL_MS / 1000.0
+                        reminder_policy_record["maxReminders"] = max_reminders
+                        watched_turns[:] = [{"prompt": prompt, "submit": followup_submit,
+                                             "proof": None, "everProved": False,
+                                             "artifactRejected": False, "noArtifactSince": None}]
+                        self._write_state(request, WAITING_ASSISTANT,
+                                          followupSubmitProof=followup_submit,
+                                          secondRequestId=followup_id)
+                        return {"kind": "continued"}
 
                     reproofed = False
                     proof_changed = False
@@ -584,6 +656,8 @@ class WebWorkerBridge:
                             browserRecoveryPolicy=recovery_policy_record,
                             reminders=reminder_records,
                         )
+                        if image_flow:
+                            self.random_pause()
                         durable = artifact_download.download_validated_artifact(
                             page,
                             expected_prompt=str(watch["prompt"]),
@@ -648,7 +722,7 @@ class WebWorkerBridge:
                             reminders=reminder_records,
                         )
                         terminal_result = {"ok": True, "code": RESULT_DURABLE, "details": record}
-                        if self.on_result_durable is not None:
+                        if self.on_result_durable is not None and not image_flow:
                             self.on_result_durable(terminal_result)
                         return {"kind": "terminal", "result": terminal_result}
 
@@ -731,7 +805,7 @@ class WebWorkerBridge:
                         if watch.get("artifactRejected"):
                             continue
                         outcome = inspect_watch(watch)
-                        if outcome["kind"] in {"terminal", "fatal", "interrupted"}:
+                        if outcome["kind"] in {"terminal", "fatal", "interrupted", "continued"}:
                             return outcome
                         if watch.get("proof") is None:
                             if skip_latest_missing and watch is latest:
@@ -748,7 +822,7 @@ class WebWorkerBridge:
                                 return observed
                             if observed["kind"] == "proof":
                                 outcome = inspect_watch(watch)
-                                if outcome["kind"] in {"terminal", "fatal", "interrupted"}:
+                                if outcome["kind"] in {"terminal", "fatal", "interrupted", "continued"}:
                                     return outcome
                     return {"kind": "no_result"}
 
@@ -838,6 +912,8 @@ class WebWorkerBridge:
                             continue
                         if observed["kind"] == "proof":
                             inspected = inspect_watch(latest_watch)
+                            if inspected["kind"] == "continued":
+                                continue
                             if inspected["kind"] == "terminal":
                                 return inspected["result"]
                             if inspected["kind"] == "fatal":
@@ -854,6 +930,8 @@ class WebWorkerBridge:
                     due_now = next_due is not None and now >= next_due
                     if due_now:
                         pre_reminder = scan_watches(skip_latest_missing=latest_observed_this_cycle)
+                        if pre_reminder["kind"] == "continued":
+                            continue
                         if pre_reminder["kind"] == "terminal":
                             return pre_reminder["result"]
                         if pre_reminder["kind"] == "fatal":
@@ -967,6 +1045,8 @@ class WebWorkerBridge:
                     if now >= next_result_recheck:
                         rescanned = scan_watches(skip_latest_missing=latest_observed_this_cycle)
                         next_result_recheck = self.monotonic() + _RESULT_RECHECK_INTERVAL_MS / 1000.0
+                        if rescanned["kind"] == "continued":
+                            continue
                         if rescanned["kind"] == "terminal":
                             return rescanned["result"]
                         if rescanned["kind"] == "fatal":
@@ -1022,6 +1102,7 @@ __all__ = [
     "WAITING_ASSISTANT",
     "ARTIFACT_FOUND",
     "ASSISTANT_COMPLETED_NO_ARTIFACT",
+    "IMAGE_TURN_COMPLETED",
     "ARTIFACT_REJECTED",
     "RESULT_DURABLE",
     "BRIDGE_INVALID_REQUEST",

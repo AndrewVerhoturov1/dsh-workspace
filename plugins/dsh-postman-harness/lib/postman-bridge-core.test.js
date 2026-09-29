@@ -88,6 +88,16 @@ test('bridge request pins Luna, spawn, depth and exact message', () => {
   assert.equal(request.signal, signal)
 })
 
+test('image bridge keeps exact prompt and image-only mode', () => {
+  const signal = new AbortController().signal
+  const message = '@PostmanImage draw a cat'
+  const request = buildPostmanBridgeStartRequest({ parent: parent(), message, signal, transportKind: 'image' })
+  assert.equal(request.label, 'Postman Image Bridge')
+  assert.deepEqual(request.prompt, [{ type: 'text', text: message }])
+  assert.match(request.persona, /IMAGE_RESULT_DURABLE/)
+  assert.match(request.persona, /Never call an automatic continuation tool/)
+})
+
 test('bridge persona keeps Luna mechanical and branches text handoff by delivery mode', () => {
   assert.match(POSTMAN_BRIDGE_PERSONA, /minimal one-shot transport subagent/)
   assert.match(POSTMAN_BRIDGE_PERSONA, /skill\(delegate-via-postman-ask\)/)

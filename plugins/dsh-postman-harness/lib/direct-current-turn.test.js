@@ -1,6 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
+import { createHash } from 'node:crypto'
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   CurrentUserTurnStore,
   DirectPostmanJobManager,
@@ -26,6 +30,51 @@ function userEvent(text, seq = 1) {
     },
   }
 }
+
+test('image parser preserves exact payload and rejects manual chat', () => {
+  const raw = '  @PostmanImage\nDraw a cat  '
+  assert.deepEqual(parsePostmanUserTurn(raw), { mode: 'fresh', transportKind: 'image',
+    chatRequestId: undefined, payload: 'Draw a cat  ', removedTransportPrefix: '  @PostmanImage\n' })
+  assert.throws(() => parsePostmanUserTurn('@PostmanImage --chat REQ_20260921T193936Z_3678 draw'), /POSTMAN_IMAGE_CHAT_NOT_ALLOWED/)
+  assert.throws(() => parsePostmanUserTurn('@PostmanImage --chat BAD draw'), /POSTMAN_IMAGE_CHAT_NOT_ALLOWED/)
+})
+
+test('image transport requires exact durable descriptor and bytes, never grants artifact continuation', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'postman-image-gate-'))
+  try {
+    const image = join(directory, 'result.JPEG')
+    const bytes = Buffer.from([0xff, 0xd8, 0xff, 0xd9])
+    writeFileSync(image, bytes)
+    const children = []
+    const args = []
+    const manager = new DirectPostmanJobManager({ exists: () => true, randomInt: (() => { let n = 0; return () => ++n })(),
+      spawn(_command, argv) { const child = fakeChild(); children.push(child); args.push(argv); queueMicrotask(() => child.emit('spawn')); return child } })
+    const descriptor = { ok: true, code: 'IMAGE_RESULT_DURABLE', state: 'IMAGE_RESULT_DURABLE', resultImage: image,
+      imageFormat: 'jpg', imageSha256: createHash('sha256').update(bytes).digest('hex'), imageByteLength: bytes.length }
+    const cases = [
+      [descriptor, 'IMAGE_RESULT_DURABLE'],
+      [{ ...descriptor, resultZip: 'bad.zip' }, 'POSTMAN_IMAGE_RESULT_DESCRIPTOR_INVALID'],
+      [{ ...descriptor, imageSha256: '0'.repeat(64) }, 'POSTMAN_IMAGE_RESULT_SHA_MISMATCH'],
+      [{ ...descriptor, imageByteLength: bytes.length + 1 }, 'POSTMAN_IMAGE_RESULT_SHA_MISMATCH'],
+      [{ ...descriptor, resultImage: join(directory, 'missing.jpeg') }, 'POSTMAN_IMAGE_RESULT_UNREADABLE'],
+      [{ ...descriptor, resultImage: join(directory, 'invalid.gif') }, 'POSTMAN_IMAGE_RESULT_DESCRIPTOR_INVALID'],
+      [{ ...descriptor, imageFormat: 'png' }, 'POSTMAN_IMAGE_RESULT_DESCRIPTOR_INVALID'],
+      [{ ...descriptor, code: 'RESULT_DURABLE', state: 'RESULT_DURABLE' }, 'POSTMAN_RESULT_GATE_FAILED'],
+    ]
+    for (const [terminal, expected] of cases) {
+      const started = await manager.start({ sessionId: 'image', workspace: '/repo', payload: 'draw', branch: 'main', transportKind: 'image' })
+      assert.equal(started.transportKind, 'image')
+      assert.equal(args.at(-1).includes('-ImageMode'), true)
+      assert.equal(args.at(-1).includes('-AutomaticContinuation'), false)
+      assert.match(args.at(-1)[args.at(-1).indexOf('-File') + 1], /postman[\\/]direct[\\/]postman\.ps1$/)
+      children.at(-1).stdout.emit('data', JSON.stringify({ ...terminal, requestId: started.requestId }))
+      children.at(-1).emit('close', 0)
+      assert.equal(manager.view('image').result.code, expected)
+      await assert.rejects(manager.continueLast('image', '/repo'), /POSTMAN_AUTOMATIC_CONTINUATION_NOT_ALLOWED/)
+    }
+    await assert.rejects(manager.start({ sessionId: 'image', workspace: '/repo', payload: 'draw', branch: 'main', transportKind: 'image', chatRequestId: 'REQ_20260921T193936Z_3678' }), /POSTMAN_IMAGE_CHAT_NOT_ALLOWED/)
+  } finally { rmSync(directory, { recursive: true, force: true }) }
+})
 
 test('fresh parser preserves long Markdown, backticks, quotes, slashes and trailing file list exactly', () => {
   const payload = [

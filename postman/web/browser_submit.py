@@ -837,13 +837,17 @@ def prepare_existing_chat(
     conversation_url: str,
     *,
     timeout_ms: int = DEFAULT_TIMEOUT_MS,
+    navigate: bool = True,
 ) -> dict[str, Any]:
     if not is_bound_chat_url(conversation_url):
         return {"ok": False, "code": SUBMIT_INVALID_CONFIG, "details": {"reason": "invalid_conversation_url"}}
-    try:
-        page.goto(conversation_url, wait_until="domcontentloaded", timeout=timeout_ms)
-    except Exception as exc:
-        return {"ok": False, "code": SUBMIT_NAVIGATION_FAILED, "details": {"message": str(exc)}}
+    if not navigate and not same_conversation_url(str(getattr(page, "url", "") or ""), conversation_url):
+        return {"ok": False, "code": EXISTING_CHAT_NOT_CONFIRMED, "details": {"reason": "current_chat_mismatch"}}
+    if navigate:
+        try:
+            page.goto(conversation_url, wait_until="domcontentloaded", timeout=timeout_ms)
+        except Exception as exc:
+            return {"ok": False, "code": SUBMIT_NAVIGATION_FAILED, "details": {"message": str(exc)}}
 
     def predicate() -> tuple[bool, dict[str, Any]]:
         snapshot = _active_composer_groups(page)
@@ -1093,8 +1097,9 @@ def submit_existing_prompt(
     conversation_url: str,
     *,
     timeout_ms: int = DEFAULT_TIMEOUT_MS,
+    navigate: bool = True,
 ) -> dict[str, Any]:
-    prep = prepare_existing_chat(page, conversation_url, timeout_ms=timeout_ms)
+    prep = prepare_existing_chat(page, conversation_url, timeout_ms=timeout_ms, navigate=navigate)
     if not prep["ok"]:
         return _result(
             prep["code"],

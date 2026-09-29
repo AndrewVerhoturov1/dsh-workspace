@@ -263,6 +263,27 @@ test('recovery accepts local-ahead dirty worktree without altering state', async
   assert.equal(f.state.clean, false)
 })
 
+test('recovery accepts one journaled IMAGE_RESULT_DURABLE publication without implementation grant', async () => {
+  const f = fixture(); const prepared = await f.contexts.prepare(leader('A'))
+  f.state.trees.push(worktree); f.state.remote = published; f.state.head = base
+  const requestId = 'REQ_20260927T120000Z_1234'
+  const terminal = { status: 'POSTMAN_BRIDGE_TERMINAL', transportKind: 'image', requestId,
+    result: { ok: true, code: 'IMAGE_RESULT_DURABLE', requestId,
+      repository: 'AndrewVerhoturov1/dsh-workspace', branch: prepared.branch,
+      baseCommit: base, taskPublicationCommit: published,
+      taskUrl: 'https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/' + published + '/' + requestId + '.md',
+      resultImage: '/tmp/result.png' } }
+  await f.registry.change('A', row => ({ ...row, bridgeOperations: { image: { state: 'received',
+    synchronization: 'pending', terminal } } }))
+  const gitCommand = async (cwd, ...args) => {
+    if (args[0] === 'rev-list' && args[1] === '--reverse') return published
+    return f.gitCommand(cwd, ...args)
+  }
+  const cold = createPostmanTaskContexts({ registry: f.registry, gitCommand, realPath: async path => path })
+  assert.equal((await cold.recover(leader('A'))).status, 'POSTMAN_TASK_CONTEXT_ALREADY_READY')
+  assert.equal(cold.get('A').branch, prepared.branch)
+})
+
 test('recovery refuses remote-ahead and divergent history without destructive actions', async () => {
   for (const remote of [published, other]) {
     const f = fixture(); await f.contexts.prepare(leader('A'))

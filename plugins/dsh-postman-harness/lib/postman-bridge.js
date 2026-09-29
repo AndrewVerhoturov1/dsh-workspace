@@ -63,9 +63,9 @@ export function createPostmanTaskRestoreTool(ctx, contexts = postmanTaskContexts
 export function createPostmanBridgeTool(ctx, jobs, contexts) {
   return defineTool({
     name: POSTMAN_BRIDGE_TOOL_NAME,
-    description: 'Accept a fresh exact @Postman or @PostmanAsk delegation in a background Bridge job. Acceptance is not a Web result; read the trusted terminal via postman_bridge_status after POSTMAN_BRIDGE_READY.',
+    description: 'Accept a fresh exact @Postman, @PostmanAsk or @PostmanImage delegation in a background Bridge job. Acceptance is not a Web result; read the trusted terminal via postman_bridge_status after POSTMAN_BRIDGE_READY.',
     parameters: { message: { type: 'string', required: true,
-      description: 'Complete model-authored delegation beginning with exact @Postman or @PostmanAsk.' } },
+      description: 'Complete model-authored delegation beginning with exact @Postman, @PostmanAsk or @PostmanImage.' } },
     output: output(),
     isConcurrencySafe: () => true,
     async execute(args, exec) {

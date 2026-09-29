@@ -16,6 +16,8 @@ const ARTIFACT_TERMINAL_OK = new Set([
   'ARTIFACT_REJECTED',
 ])
 const TEXT_TERMINAL_OK = new Set(['TEXT_RESULT_DURABLE'])
+const IMAGE_TERMINAL_OK = new Set(['IMAGE_RESULT_DURABLE'])
+const IMAGE_FORMATS = Object.freeze({ png: ['.png'], jpg: ['.jpg', '.jpeg'], webp: ['.webp'] })
 const MAX_CAPTURE_CHARS = 1024 * 1024
 const MAX_OUTPUT_CHARS = 4 * 1024 * 1024
 const STATUS_WAIT_MS = 480_000
@@ -135,9 +137,9 @@ export function parsePostmanUserTurn(raw) {
   // Initial whitespace is transport framing, then one exact production marker
   // and at most one immediately-following separator character. Everything
   // after that is preserved byte-for-byte at the JS-string/UTF-8 boundary.
-  const trigger = /^(\s*)@(PostmanAsk|Postman)(?:(\s)|$)/u.exec(raw)
+  const trigger = /^(\s*)@(PostmanImage|PostmanAsk|Postman)(?:(\s)|$)/u.exec(raw)
   if (trigger === null) throw parseError('POSTMAN_TRIGGER_PARSE_FAILED')
-  const transportKind = trigger[2] === 'PostmanAsk' ? 'text' : 'artifact'
+  const transportKind = trigger[2] === 'PostmanAsk' ? 'text' : trigger[2] === 'PostmanImage' ? 'image' : 'artifact'
 
   const afterTrigger = raw.slice(trigger[0].length)
   if (trigger[3] === undefined && afterTrigger === '') {
@@ -147,6 +149,7 @@ export function parsePostmanUserTurn(raw) {
   // If the semantic payload begins with the reserved --chat token, malformed
   // syntax fails closed instead of silently turning it into a fresh request.
   if (/^--chat(?:\s|$)/u.test(afterTrigger)) {
+    if (transportKind === 'image') throw parseError('POSTMAN_IMAGE_CHAT_NOT_ALLOWED')
     const chat = /^--chat[ \t]+(REQ_\d{8}T\d{6}Z_\d{4})(?:(\s)|$)/u.exec(afterTrigger)
     if (chat === null || !REQ_PATTERN.test(chat[1])) {
       throw parseError('POSTMAN_CHAT_TRIGGER_PARSE_FAILED')
@@ -253,7 +256,7 @@ function terminalGate(job) {
   }
 
   if (job.exitCode === 0) {
-    const allowed = job.transportKind === 'text' ? TEXT_TERMINAL_OK : ARTIFACT_TERMINAL_OK
+    const allowed = job.transportKind === 'text' ? TEXT_TERMINAL_OK : job.transportKind === 'image' ? IMAGE_TERMINAL_OK : ARTIFACT_TERMINAL_OK
     if (parsed.ok !== true || !allowed.has(parsed.code) || parsed.state !== parsed.code) {
       return {
         ok: false,
@@ -268,6 +271,26 @@ function terminalGate(job) {
         code: 'POSTMAN_DURABLE_RESULT_ZIP_MISSING',
         requestId: job.requestId,
         transportMessage: 'RESULT_DURABLE did not contain resultZip.',
+      }
+    }
+    if (parsed.code === 'IMAGE_RESULT_DURABLE') {
+      const format = parsed.imageFormat
+      const imagePath = parsed.resultImage
+      if (parsed.resultZip !== undefined || typeof imagePath !== 'string' || !isAbsolute(imagePath) ||
+          !Object.hasOwn(IMAGE_FORMATS, format) ||
+          !IMAGE_FORMATS[format].includes(basename(imagePath).slice(basename(imagePath).lastIndexOf('.')).toLowerCase()) ||
+          !/^[0-9a-f]{64}$/.test(parsed.imageSha256 ?? '') ||
+          !Number.isSafeInteger(parsed.imageByteLength) || parsed.imageByteLength < 1) {
+        return { ok: false, code: 'POSTMAN_IMAGE_RESULT_DESCRIPTOR_INVALID', requestId: job.requestId,
+          transportMessage: 'Image result descriptor is incomplete or invalid.' }
+      }
+      let bytes
+      try { bytes = readFileSync(imagePath) }
+      catch { return { ok: false, code: 'POSTMAN_IMAGE_RESULT_UNREADABLE', requestId: job.requestId,
+        transportMessage: 'Image result could not be read.' } }
+      if (bytes.length !== parsed.imageByteLength || sha256Bytes(bytes) !== parsed.imageSha256) {
+        return { ok: false, code: 'POSTMAN_IMAGE_RESULT_SHA_MISMATCH', requestId: job.requestId,
+          transportMessage: 'Image result bytes do not match its durable descriptor.' }
       }
     }
     if (parsed.code === 'TEXT_RESULT_DURABLE') {
@@ -432,8 +455,9 @@ export class DirectPostmanJobManager {
     const previous = this.jobs.get(sessionId)
     if (previous?.state === 'running') throw parseError('POSTMAN_CURRENT_TURN_JOB_ALREADY_RUNNING')
     if (typeof payload !== 'string' || payload.trim() === '') throw parseError('POSTMAN_EMPTY_PAYLOAD')
-    if (!['artifact', 'text'].includes(transportKind)) throw parseError('POSTMAN_RESULT_MODE_INVALID')
-    if (transportKind === 'text' && automaticContinuation) throw parseError('POSTMAN_AUTOMATIC_CONTINUATION_NOT_ALLOWED')
+    if (!['artifact', 'text', 'image'].includes(transportKind)) throw parseError('POSTMAN_RESULT_MODE_INVALID')
+    if (transportKind !== 'artifact' && automaticContinuation) throw parseError('POSTMAN_AUTOMATIC_CONTINUATION_NOT_ALLOWED')
+    if (transportKind === 'image' && chatRequestId !== undefined) throw parseError('POSTMAN_IMAGE_CHAT_NOT_ALLOWED')
     if (branch !== STANDALONE_TASK_PUBLICATION_BRANCH && !POSTMAN_TASK_BRANCH_PATTERN.test(branch ?? '')) throw parseError('POSTMAN_TASK_BRANCH_INVALID')
 
     // A new request in this Luna session supersedes any exact-reply slot left
@@ -469,6 +493,7 @@ export class DirectPostmanJobManager {
     args.push('-Branch', branch)
     if (chatRequestId !== undefined) args.push('-ChatRequestId', chatRequestId)
     if (automaticContinuation) args.push('-AutomaticContinuation')
+    if (transportKind === 'image') args.push('-ImageMode')
 
     const job = {
       sessionId,
@@ -710,7 +735,7 @@ export function createDirectCurrentTurnToolConfigs(ctx, { store, jobs, taskConte
 
   const sendCurrent = {
     name: 'postman_send_current_turn',
-    description: 'Production @Postman/@PostmanAsk orchestration. Takes NO task/prompt argument. Reads the exact current user/message captured by trusted Harness runtime, strips only transport syntax, and starts the matching Direct Postman bridge.',
+    description: 'Production @Postman/@PostmanAsk/@PostmanImage orchestration. Takes NO task/prompt argument. Reads the exact current user/message captured by trusted Harness runtime, strips only transport syntax, and starts the matching Direct Postman bridge.',
     parameters: {},
     output: toolOutput(),
     async execute(_args, exec) {

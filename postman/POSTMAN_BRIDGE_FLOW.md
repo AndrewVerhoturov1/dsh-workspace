@@ -2,7 +2,7 @@
 
 > Model-facing capability: `postman_bridge(message=...)`
 > Bridge child: fresh one-shot `spawn`, fixed `codex / gpt-6-luna`
-> Existing transports: `@Postman` artifact and `@PostmanAsk` text
+> Transports: `@Postman` artifact, `@PostmanAsk` text, `@PostmanImage` one image
 
 ## 1. Назначение
 
@@ -10,14 +10,14 @@ Postman Bridge позволяет умной основной модели ра�
 проверяет и решает, что спросить дальше, а transport operation выполняет отдельная минимальная
 Luna child session.
 
-Bridge не создаёт третий transport. Это Leader-specific supervisor и trusted result handoff; общий transport lifecycle описан в [Current Flow](POSTMAN_CURRENT_FLOW.md), text delta — в [Ask Flow](POSTMAN_ASK_FLOW.md). После child current-turn boundary используются существующие
+Bridge не создаёт собственного transport. Это Leader-specific supervisor и trusted result handoff; общий transport lifecycle описан в [Current Flow](POSTMAN_CURRENT_FLOW.md), text delta — в [Ask Flow](POSTMAN_ASK_FLOW.md). После child current-turn boundary используются существующие
 `postman/direct/postman.ps1` и `postman/direct/postman-ask.ps1` с exact task branch, переданной trusted Host.
 
 ## 2. Поток
 
 ```text
 Postman Leader
-→ postman_bridge(message="@PostmanAsk ..." | "@Postman ...")
+→ postman_bridge(message="@PostmanAsk ..." | "@Postman ..." | "@PostmanImage ...")
 ← POSTMAN_BRIDGE_ACCEPTED + bridgeJobId (Leader сразу свободен)
 → Host job manager / existing Launch Coordinator
 → заново получить exact live Leader по parentSessionId; если недоступен — failed job без child
@@ -25,7 +25,7 @@ Postman Leader
 → fresh spawn child
 → fixed gpt-6-luna
 → exact child user/message
-→ child loads canonical Postman skill
+→ child loads canonical skill for @Postman/@PostmanAsk; @PostmanImage uses direct transport (no separate skill)
 → postman_send_current_turn() with no text args
 → existing Direct Postman
 → Bridge публикует REQ в task branch через Host (не в main)
@@ -47,7 +47,7 @@ Child assistant prose не является authority результата.
 ## 3. Exact-message boundary
 
 `postman_bridge.message` является новым model-authored delegation от Leader-а, а не transport
-копией текущего human user message. Он обязан начинаться с exact `@Postman` или `@PostmanAsk` и
+копией текущего human user message. Он обязан начинаться с exact `@Postman`, `@PostmanAsk` или `@PostmanImage` и
 проходит существующий `parsePostmanUserTurn` до spawn.
 
 После spawn Harness создаёт child `user/message` с exact `message`. С этого момента действует
@@ -82,10 +82,11 @@ Child сначала загружает канонический skill по exac
 
 ```text
 @Postman    → delegate-via-postman
-@PostmanAsk → delegate-via-postman-ask
+@PostmanAsk   → delegate-via-postman-ask
+@PostmanImage → image transport напрямую (отдельного навыка нет)
 ```
 
-Bridge не дублирует transport lifecycle из этих skills.
+Bridge не дублирует transport lifecycle из этих skills. Для image MVP внутренние REQ_A и REQ_B обрабатывает Direct в одном вызове; финальный `IMAGE_RESULT_DURABLE` содержит путь к извлечённому изображению и не создаёт implementation grant.
 
 ## 6. Trusted result handoff
 
@@ -176,7 +177,7 @@ Preset `postman-leader` / `Postman Leader` хранится в репозито�
 не загружает отдельный preset-плагин: существующий `postman-bridge` подключается на уровне
 host-композиции в bundle `dsh-postman-harness`.
 
-Top-level Agent этого preset получает положительный runtime allowlist ровно из 19
+Top-level Agent этого preset получает положительный runtime allowlist ровно из 20
 зарегистрированных DSH 0.1.1-rc.2 tools:
 
 ```text
@@ -198,6 +199,7 @@ postman_bridge_status
 postman_worker
 postman_worker_interrupt
 postman_worker_stop
+postman_yield
 postman_worker_list
 ```
 
@@ -205,11 +207,11 @@ postman_worker_list
 preset: фактический каталог Leader сокращается до этих имён независимо от остальных регистраций.
 
 `write`, `edit`, shell, generic `subagent`, workflow, `web_search` и direct Postman tools скрыты runtime-ом у Leader. Зарегистрированный `implementation_artifact_apply` не входит в Leader allowlist: его execute path допускает только точного активного Worker после отдельной авторизации REQ. Worker остаётся с широким общим coding preset без положительного Worker allowlist; его runtime deny включает все зарегистрированные `postman_*` имена и не затрагивает `report`. Bridge сохраняет отдельный неизменный allowlist из пяти инструментов: `skill`, `postman_send_current_turn`, `postman_current_turn_status`, `postman_ask_validate_reply`, `notify_parent`.
-Leader-only остаются все восемь Host controls (`postman_task_prepare`, `postman_task_restore`,
+Leader-only остаются все девять Host controls (`postman_task_prepare`, `postman_task_restore`,
 `postman_bridge`, `postman_bridge_status`, `postman_worker`, `postman_worker_interrupt`,
-`postman_worker_stop`, `postman_worker_list`): top-level
+`postman_worker_stop`, `postman_yield`, `postman_worker_list`): top-level
 `postman-leader` получает их в allowlist, а любой другой root/subagent Agent получает точечный deny
-всех восьми имён.
+всех девяти имён.
 Tool body повторно проверяет caller и при обходе visibility boundary возвращает
 `POSTMAN_BRIDGE_CALLER_REJECTED` до parsing/spawn.
 
@@ -262,9 +264,9 @@ Bridge никогда не делает blind resend.
 ## 11. Ordinary subagents
 
 Обычные `subagent`/`subagent_fork` capabilities Harness не изменяются. Для не-Leader Agents
-`postmanBridgeRestrictionForAgent` добавляет точечный deny ровно восьми Host controls:
+`postmanBridgeRestrictionForAgent` добавляет точечный deny ровно девяти Host controls:
 `postman_task_prepare`, `postman_task_restore`, `postman_bridge`, `postman_bridge_status`,
-`postman_worker`, `postman_worker_interrupt`, `postman_worker_stop`, `postman_worker_list`; остальные global tools этим deny не затрагиваются.
+`postman_worker`, `postman_worker_interrupt`, `postman_worker_stop`, `postman_yield`, `postman_worker_list`; остальные global tools этим deny не затрагиваются.
 `glob` не запрещён Worker: он остаётся доступен ему из общего coding preset, но скрыт у Leader.
 `postman_bridge` остаётся отдельным специализированным tool с фиксированной Luna.
 
