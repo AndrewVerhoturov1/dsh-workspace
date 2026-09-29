@@ -175,13 +175,47 @@ class TaskPackageTests(unittest.TestCase):
         self.assertIn(f"expected_filename: {expected_filename}", content)
         self.assertIn('allowed_paths_json: ["docs","README.md"]', content)
         self.assertIn('forbidden_paths_json: [".git","settings.yaml"]', content)
-        self.assertIn("## User intent\n\n" + intent, content)
+        self.assertEqual(content.split("## User intent\n\n", 1)[1].split("\n\n## Execution contract", 1)[0], intent)
         self.assertIn("GitHub использовать только как READ source", content)
+        self.assertLess(content.index("## Execution contract"), content.index("## Implementation author discipline"))
+        self.assertLess(content.index("## Implementation author discipline"), content.index("## Result contract"))
         self.assertIn(f"<<<POSTMAN_RESULT_BEGIN:{REQ}>>>", content)
         self.assertIn(f"<<<POSTMAN_RESULT_END:{REQ}>>>", content)
         self.assertIn(expected_filename, content)
         self.assertIn("manifest.json` необязателен и полностью informational", content)
         self.assertNotIn("значение должно быть ровно", content)
+        self.assertIn(f"<<<POSTMAN_RESULT_BEGIN:{REQ}>>>\n{expected_filename}\n<<<POSTMAN_RESULT_END:{REQ}>>>", content)
+        self.assertIn("реальным downloadable ZIP attachment/control", content)
+
+    def test_direct_task_implementation_discipline_is_conditional_and_bounded(self):
+        content = task_package.render_direct_task_manifest(
+            request_id=REQ, user_intent="Верни изображение горы.",
+            repository="AndrewVerhoturov1/dsh-workspace", base_commit=BASE_COMMIT,
+            expected_filename=f"POSTMAN_{REQ}_RESULT.zip",
+            allowed_paths=["docs"], forbidden_paths=[".git"],
+        )
+        discipline = content.split("## Implementation author discipline\n\n", 1)[1].split("\n\n## Result contract", 1)[0]
+        for invariant in (
+            "не требует изменения программного кода или repository, этот раздел не добавляет новых требований",
+            "минимального полного решения", "необходимые regression/targeted tests",
+            "speculative features/abstractions", "package-local runner, applicator, diagnostics",
+            "Git-generated", "только относящиеся к изменению targeted tests",
+            "не повторять эквивалентные проверки", "незапущенные проверки честно",
+            "принадлежат Local Worker и central runner", "остановиться",
+        ):
+            with self.subTest(invariant=invariant):
+                self.assertIn(invariant, discipline)
+        self.assertEqual(content.split("## User intent\n\n", 1)[1].split("\n\n## Execution contract", 1)[0], "Верни изображение горы.")
+        self.assertNotIn("## Implementation author discipline", self.render())
+        self.assertNotIn("## Implementation author discipline", self.render_intent())
+
+    def test_ask_task_does_not_receive_implementation_discipline(self):
+        from postman.text_task_package import render_direct_text_task_manifest
+        content = render_direct_text_task_manifest(
+            request_id=REQ, user_intent="Ответь текстом.",
+            repository="AndrewVerhoturov1/dsh-workspace", base_commit=BASE_COMMIT,
+        )
+        self.assertNotIn("## Implementation author discipline", content)
 
     def test_external_prompt_contains_only_req_and_task_link(self):
         prompt = task_package.build_external_prompt(REQ, SKILL_URL, TASK_URL)

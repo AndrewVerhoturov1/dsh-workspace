@@ -53,6 +53,8 @@ Worker — основной локальный исполнитель. Он от
 
 Worker сам выбирает локальные инструменты и последовательность действий внутри поставленной задачи.
 
+Для **exact trusted implementation artifact REQ** его первоначальная роль на этапе применения — вызвать штатный Host/runner apply path, проверить фактический результат и вернуть evidence. PASS authoritative runner targeted tests не повторяется вручную при неизменных релевантных входах. FAIL package Worker возвращает с точной diagnostics, не переписывая молча implementation package; следующий шаг решает Leader. Это ограничение только trusted artifact workflow: в обычных локальных задачах Worker остаётся полноценным coding/research agent.
+
 ### Bridge
 
 Bridge Luna занимается только ChatGPT Web transport через Direct Postman. Leader не подменяет Bridge и Worker друг другом.

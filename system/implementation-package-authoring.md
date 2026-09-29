@@ -17,11 +17,11 @@ system/implementation_package_schema.json
 system/implementation_package_runner.py
 ```
 
-При конфликте действуют repository policy и более строгое правило защиты пользовательских данных. Полный lifecycle применения, central runner, Leader/Worker, diagnostics и отдельной публикации — в [Implementation Package Workflow](implementation-package-workflow.md). Здесь определён contract автора ZIP: Web реализует замысел Sol в заданных архитектурных границах, готовит patch/тесты/manifest и честно сообщает собственные проверки. Web не выбирает локальный trusted ZIP path, не применяет package и не создаёт для него новый applicator, diagnostics framework или Git workflow. Применение и публикация требуют отдельных решений; PASS runner-а не означает разрешения на публикацию.
+При конфликте действуют repository policy и более строгое правило защиты пользовательских данных. Полный lifecycle применения, central runner, Leader/Worker, diagnostics и отдельной публикации — в [Implementation Package Workflow](implementation-package-workflow.md). Минимальный scope и разделение authoring/local verification подробно описаны в [External Implementation Author](postman-external-implementation-author.md). Здесь определён contract автора ZIP: Web реализует замысел Sol в заданных архитектурных границах, готовит patch/тесты/manifest и честно сообщает собственные проверки. Web не выбирает локальный trusted ZIP path, не применяет package и не создаёт для него новый applicator, diagnostics framework или Git workflow. Применение и публикация требуют отдельных решений; PASS runner-а не означает разрешения на публикацию.
 
 ## 2. Ответственность автора
 
-Автор исследует актуальный код, принимает implementation-level решения в границах Sol, включает все продуктовые изменения и необходимые targeted/regression tests в patch, формирует `manifest.json`, короткие `README.md` и `TEST_PLAN.md`, проверяет package насколько позволяет среда и выдаёт ZIP с SHA-256 через обычный Postman transport. Не перекладывать недостающий код, исправление patch, тесты или `.gitignore` на Worker: при несовместимости или FAIL автор готовит replacement package. Фактически не выполненные проверки обозначать честно.
+Автор исследует актуальный код, принимает implementation-level решения в границах Sol, включает все продуктовые изменения и необходимые targeted/regression tests в patch, формирует `manifest.json`, короткие `README.md` и `TEST_PLAN.md`, выполняет разумные доступные authoring sanity checks и выдаёт ZIP с SHA-256 через обычный Postman transport. Web не перекладывает на Worker недостающий продуктовый код или архитектуру, известную логическую ошибку, написание необходимого regression test, необходимое `.gitignore` exception либо исправление заведомо неправильного patch: при FAIL package автор готовит replacement package. Это ответственность за **содержание** тестов, а не за их окончательный запуск на реальном target worktree: authoritative исполнение объявленных targeted tests принадлежит central runner / Local Worker workflow. Web не обязан воспроизводить локальную Windows/DSH-приёмку; фактически не выполненные проверки обозначает честно.
 
 ---
 
@@ -68,39 +68,19 @@ package-local compatibility framework
 
 ## 4. Golden path подготовки package
 
-Канонический путь:
+Практический путь (без обязательного второго локального runner):
 
 ```text
-актуальный origin/preview
-↓
-disposable authoring worktree/shadow
-↓
-полная реализация задачи
-↓
-targeted/regression tests
-↓
-проверка Git visibility всех новых файлов
-↓
-при необходимости — узкие .gitignore exceptions внутри того же изменения
-↓
-git add -A -- <authoring paths>
-↓
-Git-generated staged diff
-↓
-changes.patch
-↓
-проверка patch на втором clean shadow/worktree
-↓
-manifest.json
-↓
-README.md + TEST_PLAN.md
-↓
-ZIP
-↓
-SHA-256
-↓
-короткий handoff результата
+актуальный origin/preview и disposable authoring environment
+→ полная реализация с необходимыми tests и узкими .gitignore exceptions
+→ git add -A -- <authoring paths>
+→ Git-generated staged diff → changes.patch
+→ manifest.json + короткие README.md и TEST_PLAN.md
+→ разумные доступные authoring sanity checks
+→ ZIP + SHA-256 → короткий handoff
 ```
+
+Если дешёвый clean-shadow `git apply --check` естественно доступен, он полезен. Второй shadow/worktree, применение patch и полный повтор targeted tests в нём не являются обязательной стадией Web: не строй инфраструктуру ради имитации local runner. Git-generated patch и полнота package обязательны; окончательную механическую проверку выполняет central runner на target worktree.
 
 ---
 
@@ -347,19 +327,7 @@ Runner и его hard FAIL/non-blocking diagnostics определены в [wor
 
 ## 11. Проверка package до выдачи
 
-Желательный verification path выполняется в отдельном clean shadow/worktree.
-
-Минимум:
-
-```text
-git apply --check changes.patch
-↓
-git apply changes.patch
-↓
-проверка ignored patch-created files
-↓
-targeted tests
-```
+Выполняй дешёвые полезные authoring checks, если они естественно доступны: например, syntax check, относящийся regression test или clean-shadow `git apply --check changes.patch`. Второй shadow/worktree с применением patch, проверкой ignored-файлов и полным повтором targeted tests не обязателен для Web. Их authoritative выполнение на target worktree — ответственность central runner.
 
 Не утверждать в финальном отчёте, что проверка выполнена, если она фактически не запускалась.
 

@@ -14,14 +14,14 @@ language: ru
 
 После установки центрального runner-а внешняя модель **не должна писать новый applicator для каждого ZIP**. Обычный implementation package — декларативный: manifest + unified patch + список только нужных целевых тестов.
 
-[Implementation Package Authoring Contract](implementation-package-authoring.md) — канонический contract именно для автора package; этот workflow описывает полный lifecycle его применения.
+[Implementation Package Authoring Contract](implementation-package-authoring.md) задаёт format и подготовку package, а [External Implementation Author](postman-external-implementation-author.md) — минимальный scope и дисциплину внешнего автора; этот workflow описывает полный lifecycle применения.
 
 Роли:
 
 - **Sol** — задаёт intent, существенные архитектурные решения и ограничения, а после результата отдельно решает, использовать ли REQ.
-- **ChatGPT Web / другая внешняя модель** — исследует код, реализует замысел Sol и принимает необходимые implementation-level решения в заданных границах; готовит декларативный ZIP: `manifest.json`, созданный Git `changes.patch`, `README.md`, `TEST_PLAN.md` и необходимые целевые тесты внутри patch. Web не обязана публиковать изменения в Git или всегда запускать все тесты; фактические проверки указываются честно.
+- **ChatGPT Web / другая внешняя модель** — исследует нужный код, пишет полный минимальный implementation и необходимые targeted/regression tests внутри созданного Git `changes.patch`, готовит декларативный ZIP с `manifest.json`, `README.md`, `TEST_PLAN.md`. Переиспользует существующие механизмы, не добавляет speculative abstractions, соседний refactor или package-local applicator/framework. Дешёвые authoring checks допустимы; полная локальная verification, Git publication и воспроизведение Windows/DSH-среды не являются обязанностью Web. Незапущенные проверки отмечаются честно.
 - **Central implementation package runner** — одинаково для всех пакетов проверяет реальную применимость patch, защищает постоянные worktree/локальные данные, применяет patch, запускает только объявленные targeted tests и создаёт компактную диагностику при FAIL.
-- **Host / Worker** — после trusted `RESULT_DURABLE` Host сохраняет process-local grant по `(Leader session, REQ)` для exact ZIP/SHA. После отдельного решения Sol допускает REQ через `postman_worker({task, artifactRequestId})`. Тот же продолжаемый Worker использует подготовленное Host чистое task worktree на опубликованном REQ commit и вызывает `implementation_artifact_apply({requestId, worktree})`; Host повторно проверяет SHA и запускает существующий runner. PASS означает `report`, FAIL — diagnostics без ручного ремонта. Публикация применённых изменений требует отдельного решения Sol.
+- **Host / Worker** — после trusted `RESULT_DURABLE` Host сохраняет process-local grant по `(Leader session, REQ)` для exact ZIP/SHA. После отдельного решения Sol допускает REQ через `postman_worker({task, artifactRequestId})`. Тот же продолжаемый Worker использует подготовленное Host чистое task worktree на опубликованном REQ commit и вызывает `implementation_artifact_apply({requestId, worktree})`; Host повторно проверяет SHA и запускает существующий runner. Worker проверяет фактический итог, но не повторяет authoritative PASS targeted tests при неизменных входах; при FAIL возвращает точную диагностику, не переписывая package за спиной Web. Публикация применённых изменений требует отдельного решения Sol. Вне trusted artifact workflow Worker остаётся полноценным локальным coding/research agent.
 - **Пользователь** — принимает решение о merge; promotion `preview → main` остаётся отдельным explicit действием.
 
 ## 2. Канонический runner
@@ -153,7 +153,7 @@ Sol принимает отдельное смысловое решение о �
 → PASS
 ```
 
-Sol не повторяет работу Git и тестов как дополнительный механический gate. После положительного решения тот же продолжаемый Worker вызывает доверенный Host tool с REQ и worktree, а Host запускает существующий runner; нового runner нет.
+Sol оценивает лишь существенные evidence и принимает смысловое решение, не превращаясь в дополнительный CI или reviewer всего repository и не повторяя работу Git, Worker и тестов как механический gate. После положительного решения тот же продолжаемый Worker вызывает доверенный Host tool с REQ и worktree, а Host запускает существующий runner; нового runner нет.
 
 ## 7. Diagnostics при FAIL
 
