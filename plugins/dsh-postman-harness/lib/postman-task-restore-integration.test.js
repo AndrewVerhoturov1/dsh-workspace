@@ -69,6 +69,7 @@ test('fresh runtime reopens JSON registry and preserves dirty real Git bytes and
   const gitCommand = async (cwd, ...args) => {
     if (args[0] === 'fetch' && args[1] === '--prune')
       return git(cwd, 'fetch', '--prune', bare, '+refs/heads/*:refs/remotes/origin/*')
+    if (args[0] === 'fetch' && args[1] === 'origin') return git(cwd, 'fetch', bare, ...args.slice(2))
     if (args[0] === 'ls-remote' && args[2] === 'origin')
       return git(cwd, 'ls-remote', args[1], bare, ...args.slice(3))
     return git(cwd, ...args)
@@ -145,7 +146,7 @@ test('real runner FAIL leaves dirty patch; explicit bound restore permits ZIP #2
     async gitCommand(cwd, ...args) {
       if (args[0] === 'fetch' && (args[1] === 'origin' || args[1] === '--prune')) {
         if (args[1] === '--prune') return git(cwd, 'fetch', '--prune', bare, '+refs/heads/*:refs/remotes/origin/*')
-        return git(cwd, 'fetch', bare, args[2])
+        return git(cwd, 'fetch', bare, ...args.slice(2))
       }
       if (args[0] === 'ls-remote' && args[2] === 'origin')
         return git(cwd, 'ls-remote', args[1], bare, ...args.slice(3))
@@ -193,6 +194,7 @@ test('real runner FAIL leaves dirty patch; explicit bound restore permits ZIP #2
     async gitCommand(cwd, ...args) {
       if (args[0] === 'ls-remote' && args[2] === 'origin')
         return git(cwd, 'ls-remote', args[1], bare, ...args.slice(3))
+      if (args[0] === 'fetch' && args[1] === 'origin') return git(cwd, 'fetch', bare, ...args.slice(2))
       return git(cwd, ...args)
     },
   })

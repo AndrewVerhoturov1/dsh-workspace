@@ -34,7 +34,9 @@ Postman Leader
 → postman_current_turn_status()
 → bridge host reads the same trusted terminal directly
 → await run.dispose(); coordinator releases active slot
-→ job manager регистрирует artifact grant при необходимости (ошибка — отдельная diagnostic)
+→ Host сохраняет проверенный terminal в долговременном журнале Leader
+→ Host пробует безопасную синхронизацию общей ветки; при BUSY сохраняет terminal и не выдаёт grant
+→ после успешной синхронизации Host регистрирует проверенный artifact grant при необходимости
 → Host followup POSTMAN_BRIDGE_READY (только событие)
 → parent Leader calls postman_bridge_status({bridge_job_id})
 ← trusted terminal result
@@ -65,7 +67,8 @@ Bridge child всегда:
   - `skill`;
   - `postman_send_current_turn`;
   - `postman_current_turn_status`;
-  - `postman_ask_validate_reply`.
+  - `postman_ask_validate_reply`;
+  - `notify_parent` (только промежуточное сообщение, не trusted result).
 
 `postman_continue_last_request`, generic subagents, shell, filesystem mutation, GitHub, web и
 browser tools child-у не выдаются.
@@ -87,7 +90,7 @@ Bridge не дублирует transport lifecycle из этих skills.
 ## 6. Trusted result handoff
 
 После settlement child run Bridge host читает `postman_current_turn_status` в scope exact child
-session, ждёт полного `run.dispose()` и сохраняет trusted terminal в process-local job registry.
+session, ждёт полного `run.dispose()` и сохраняет trusted terminal в долговременном журнале Leader до синхронизации (и в памяти на время жизни процесса).
 `postman_bridge` возвращает только admission, не completion: Leader сразу может читать, анализировать
 и вызывать Worker. После Host `leader.followup(POSTMAN_BRIDGE_READY)` Leader вызывает
 `postman_bridge_status({bridge_job_id})`. READY не содержит assistantText/ZIP и не является authority.
@@ -100,13 +103,11 @@ Status доступен только точной исходной top-level Lea
 удалённой ветке и переходом только fast-forward. Во время применения публикации runner и
 явный restore блокируются, но другой Bridge может выполняться.
 
-После аварийного перезапуска каждое незавершённое задание имеет свой статус
-POSTMAN_BRIDGE_OUTCOME_UNKNOWN / INTERRUPTED и не запускается повторно. Неизвестный исход
+После аварийного перезапуска только задание без сохранённого проверенного terminal имеет статус
+POSTMAN_BRIDGE_OUTCOME_UNKNOWN / INTERRUPTED и не запускается повторно. Проверенный terminal остаётся доступен по тому же bridgeJobId: `postman_bridge_status({bridge_job_id, retrySync: true})` повторяет только локальную синхронизацию, не отправку Web/REQ. Неизвестный исход
 учитывается в лимите трёх: при трёх неизвестных заданиях новые допуски закрыты до
 отдельного расследования. Автоматического подтверждения или очистки такого состояния нет;
-это намеренное ограничение безопасности, а не сигнал повторить запрос. Доверенный итог
-доступен в памяти лишь до остановки plugin; долговременный журнал не выдаёт итог без
-доказательства. Сигнал живого задания — собственный AbortController, а не exec.signal
+это намеренное ограничение безопасности, а не сигнал повторить запрос. Для проверенного ответа временная занятость не превращается в unknown. После перезапуска recover допускает отстающий локальный HEAD лишь если каждый удалённый REQ-коммит от HEAD до точного remote HEAD покрыт доверенной квитанцией и проверен Git (родитель, ветка, worktree, база). Recover не изменяет рабочие файлы; отдельный retrySync требует чистого дерева и безопасно синхронизирует локально, не создавая новый REQ или Web-запрос. Восстановленный результат после успешного retrySync остаётся читаемым до остановки этого экземпляра плагина, но не архивируется бессрочно. Состояния received/pending или busy означают незавершённую синхронизацию; received/not-required — доказанный отказ до публикации без синхронизации, который не блокирует общие операции; неизвестный исход не превращается в not-required только из-за отсутствия publicationReceipt. До трёх полученных, но ещё не полностью обработанных ответов занимают отдельный ограниченный backlog; grant не выдаётся до безопасной синхронизации. Если проверка ZIP/grant не прошла после неё, diagnostic сохраняется, а `retrySync: true` повторно проверяет локальный grant без новой отправки Direct. Только неизвестный исход отправки остаётся unknown. Сигнал живого задания — собственный AbortController, а не exec.signal
 завершившегося вызова. Остановка plugin отменяет очередь, посылает abort работающим
 заданиям и ждёт очистки.
 
@@ -159,7 +160,7 @@ call 3 → @Postman --chat REQ_B ...   → REQ_C, same conversation, artifact mo
 случайной задержкой 5–15 секунд от предыдущего фактического запуска. Leader не
 делает sleep и не разносит вызовы сам; уже запущенные Bridge продолжают работу
 параллельно. У каждого вызова свои childSessionId, новый REQ, terminal и
-освобождение child. Worker не меняется.
+освобождение child. Три Worker работают в той же общей task branch/worktree; это не дополнительные Bridge слоты.
 Одинаковый `--chat` (в том числе разные старые REQ одного conversation URL)
 отклоняется межпроцессной блокировкой до публикации и отправки; разные разговоры
 не блокируют друг друга. Только короткий участок GitHub-публикации задач и первый
@@ -175,7 +176,7 @@ Preset `postman-leader` / `Postman Leader` хранится в репозито�
 не загружает отдельный preset-плагин: существующий `postman-bridge` подключается на уровне
 host-композиции в bundle `dsh-postman-harness`.
 
-Top-level Agent этого preset получает положительный runtime allowlist ровно из 17
+Top-level Agent этого preset получает положительный runtime allowlist ровно из 19
 зарегистрированных DSH 0.1.1-rc.2 tools:
 
 ```text
@@ -195,17 +196,20 @@ postman_task_restore
 postman_bridge
 postman_bridge_status
 postman_worker
+postman_worker_interrupt
 postman_worker_stop
+postman_worker_list
 ```
 
 `glob` и `web_search` не входят в список Leader: они запрещены только Leader и остаются доступны Worker из общего coding preset. Positive allowlist задан поверх общего
 preset: фактический каталог Leader сокращается до этих имён независимо от остальных регистраций.
 
-`write`, `edit`, shell, generic `subagent`, workflow, `web_search` и direct Postman tools скрыты runtime-ом у Leader. Зарегистрированный `implementation_artifact_apply` не входит в Leader allowlist: его execute path допускает только точного активного Worker после отдельной авторизации REQ. Worker остаётся с широким общим coding preset без положительного Worker allowlist; его runtime deny включает все зарегистрированные `postman_*` имена и не затрагивает `report`. Bridge сохраняет отдельный неизменный allowlist из четырёх инструментов: `skill`, `postman_send_current_turn`, `postman_current_turn_status`, `postman_ask_validate_reply`.
-Leader-only остаются все шесть Host controls (`postman_task_prepare`, `postman_task_restore`,
-`postman_bridge`, `postman_bridge_status`, `postman_worker`, `postman_worker_stop`): top-level
+`write`, `edit`, shell, generic `subagent`, workflow, `web_search` и direct Postman tools скрыты runtime-ом у Leader. Зарегистрированный `implementation_artifact_apply` не входит в Leader allowlist: его execute path допускает только точного активного Worker после отдельной авторизации REQ. Worker остаётся с широким общим coding preset без положительного Worker allowlist; его runtime deny включает все зарегистрированные `postman_*` имена и не затрагивает `report`. Bridge сохраняет отдельный неизменный allowlist из пяти инструментов: `skill`, `postman_send_current_turn`, `postman_current_turn_status`, `postman_ask_validate_reply`, `notify_parent`.
+Leader-only остаются все восемь Host controls (`postman_task_prepare`, `postman_task_restore`,
+`postman_bridge`, `postman_bridge_status`, `postman_worker`, `postman_worker_interrupt`,
+`postman_worker_stop`, `postman_worker_list`): top-level
 `postman-leader` получает их в allowlist, а любой другой root/subagent Agent получает точечный deny
-всех шести имён.
+всех восьми имён.
 Tool body повторно проверяет caller и при обходе visibility boundary возвращает
 `POSTMAN_BRIDGE_CALLER_REJECTED` до parsing/spawn.
 
@@ -231,7 +235,7 @@ Harness model routing намеренно находится вне Agent presets
 ```text
 Bridge terminal RESULT_DURABLE
 → Host регистрирует grant для exact Leader session + REQ (trusted ZIP + SHA-256)
-→ Sol отдельно авторизует REQ: postman_worker({task, artifactRequestId: "REQ_..."})
+→ Sol отдельно авторизует REQ точному Worker: postman_worker({task, workerSessionId, artifactRequestId: "REQ_..."})
 → тот же continuable Worker получает trusted REQ, не model-authored ZIP path
 → Worker использует тот же Host-prepared clean worktree на опубликованном REQ commit; второй branch/worktree не создаёт
 → Worker вызывает implementation_artifact_apply({requestId: "REQ_...", worktree: "<clean worktree>"})
@@ -240,7 +244,7 @@ Bridge terminal RESULT_DURABLE
 → Worker проверяет фактический результат и отправляет report → Sol
 ```
 
-`POSTMAN_WORKER_TASK_ACCEPTED` означает только приём задания, не итог: Sol дожидается `report`. На PASS Worker сообщает результат runner и затронутые пути без автоматического commit/push/PR; на FAIL — diagnostics ZIP и STOP без локального ремонта patch. Если runner оставил грязное временное worktree и требуется новая попытка, Leader может отдельно вызвать `postman_task_restore()`: Host проверяет существующую process-local привязку Leader, точный временный worktree/ветку, состояние Bridge/runner и точный удалённый SHA, затем явно сбрасывает только это дерево к remote HEAD. Операция необратимо удаляет все незакоммиченные изменения и не удаляет Worker/REQ/grant; при утерянной Host-привязке восстановление запрещено. После успеха тот же Worker продолжает работу и может применить второй ZIP в ту же ветку. После FAIL Sol решает, исследовать ли проблему, запросить новый ZIP или остановиться. До отдельного commit/push/PR реализации REQ transport-файлы удаляются из task branch; SHA-pinned URL старых REQ и `--chat` сохраняются. `packageBase` не обязан совпадать с HEAD опубликованного REQ commit: применимость проверяет runner. Публикация после PASS поручается отдельно по repository policy; merge требует отдельной явной команды пользователя.
+`POSTMAN_WORKER_TASK_ACCEPTED` означает только приём задания, не итог: Sol дожидается `report`. На PASS Worker сообщает результат runner и затронутые пути без автоматического commit/push/PR; на FAIL — diagnostics ZIP и STOP без локального ремонта patch. Если runner оставил грязное временное worktree и нужна новая попытка, Leader сначала получает report и отдельно вызывает `postman_task_restore()` только при доказанном разрешении удалить затрагиваемые изменения. Worker-привязки ради операции не закрываются: Host проверяет точный временный worktree/ветку, состояние Bridge/runner и удалённый SHA, после чего явно сбрасывает только это дерево к remote HEAD. Операция необратимо удаляет незакоммиченные изменения; при утерянной Host-привязке восстановление запрещено. После успеха прежние Worker продолжаются по своим `workerSessionId`; при любой сохранённой Worker-привязке и грязном дереве restore отклоняется без очистки: принадлежность байтов runner не доказана. Обычный сценарий «runner изменил файлы → FAIL → убрать только его изменения и продолжить того же Worker» пока не реализован, а остановка всех Worker не доказывает право на очистку. Требуется отдельная проверка происхождения и возможного вмешательства других исполнителей. После FAIL Sol решает, исследовать ли проблему, запросить новый ZIP или остановиться. До отдельного commit/push/PR реализации REQ transport-файлы удаляются из task branch; SHA-pinned URL старых REQ и `--chat` сохраняются. `packageBase` не обязан совпадать с HEAD опубликованного REQ commit: применимость проверяет runner. Публикация после PASS поручается отдельно по repository policy; merge требует отдельной явной команды пользователя.
 
 Worker — обычный coding-agent с shell и теоретически может сам запускать локальные программы. Гарантия этой границы уже: только отдельно авторизованный Worker может использовать trusted Host grant и `implementation_artifact_apply` для exact Postman artifact; запрета на все самостоятельные локальные запуски здесь нет.
 
@@ -258,8 +262,8 @@ Bridge никогда не делает blind resend.
 ## 11. Ordinary subagents
 
 Обычные `subagent`/`subagent_fork` capabilities Harness не изменяются. Для не-Leader Agents
-`postmanBridgeRestrictionForAgent` добавляет точечный deny ровно шести Host controls:
+`postmanBridgeRestrictionForAgent` добавляет точечный deny ровно восьми Host controls:
 `postman_task_prepare`, `postman_task_restore`, `postman_bridge`, `postman_bridge_status`,
-`postman_worker`, `postman_worker_stop`; остальные global tools этим deny не затрагиваются.
+`postman_worker`, `postman_worker_interrupt`, `postman_worker_stop`, `postman_worker_list`; остальные global tools этим deny не затрагиваются.
 `glob` не запрещён Worker: он остаётся доступен ему из общего coding preset, но скрыт у Leader.
 `postman_bridge` остаётся отдельным специализированным tool с фиксированной Luna.

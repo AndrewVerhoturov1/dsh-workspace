@@ -12,7 +12,7 @@ const parent = { id: 'leader-bridge', session: { header: { agentPreset: 'postman
 const row = () => ({ leaderSessionId: parent.id, repository: 'andrewverhoturov1/dsh-workspace',
   repositoryPath: 'C:/repo', originUrl: 'https://github.com/andrewverhoturov1/dsh-workspace.git',
   baseCommit: 'a'.repeat(40), branch: 'task/postman-' + 'a'.repeat(32), worktree: 'C:/task',
-  stage: 'ready', diagnostic: null, worker: { id: 'child-C', state: 'ready', delivery: 'none', artifactRequests: [] },
+  stage: 'ready', diagnostic: null, workers: { 'child-C': { id: 'child-C', label: 'C', state: 'ready', delivery: 'none', artifactRequests: [] } },
   runner: { state: 'failed', requestId: 'REQ_FAIL' }, bridge: null })
 
 function fixture(registry) {
@@ -36,12 +36,12 @@ async function exercise(registry) {
   assert.equal((await first.jobs.accept(parent, '@PostmanAsk fourth', 'text')).status, 'POSTMAN_BRIDGE_LIMIT_REACHED')
   const cold = fixture(registry)
   for (const job of accepted) {
-    assert.equal(cold.jobs.status(parent, job.bridgeJobId).status, 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN')
+    assert.equal((await cold.jobs.status(parent, job.bridgeJobId)).status, 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN')
   }
   assert.equal(cold.started, 0, 'no queued operation is replayed')
   assert.equal((await cold.jobs.accept(parent, '@PostmanAsk fourth', 'text')).status,
     'POSTMAN_BRIDGE_LIMIT_REACHED', 'unresolved jobs continue to count after restart')
-  assert.equal(registry.get(parent.id).worker.id, 'child-C')
+  assert.equal(Object.values(registry.get(parent.id).workers)[0].id, 'child-C')
   assert.equal(registry.get(parent.id).runner.state, 'failed')
   return { accepted, cold }
 }
@@ -64,10 +64,58 @@ test('three Bridge intents survive independent JSON domain lifetimes', async t =
   await first.close()
   const reopened = await openPostmanTaskRegistry(new DomainFacility(ctx, { backend: 'json' }))
   const cold = fixture(reopened)
-  assert.deepEqual(accepted.map(job => cold.jobs.status(parent, job.bridgeJobId).status),
+  assert.deepEqual(await Promise.all(accepted.map(async job => (await cold.jobs.status(parent, job.bridgeJobId)).status)),
     Array(3).fill('POSTMAN_BRIDGE_OUTCOME_UNKNOWN'))
   assert.equal(cold.started, 0)
-  assert.equal(reopened.get(parent.id).worker.id, 'child-C')
+  assert.equal(Object.values(reopened.get(parent.id).workers)[0].id, 'child-C')
+  await reopened.close()
+  await backend.close()
+})
+
+
+test('verified terminal persists through independent JSON-domain lifetimes', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'postman-terminal-journal-'))
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }))
+  const backend = new JsonStorageBackend(root)
+  const ctx = { storage: { backend: { get: () => backend } }, emit() {} }
+  const first = await openPostmanTaskRegistry(new DomainFacility(ctx, { backend: 'json', routes: {} }))
+  await first.create(parent.id, row())
+  const result = { ok: true, code: 'TEXT_RESULT_DURABLE', assistantText: 'persisted',
+    taskPublicationCommit: 'b'.repeat(40), baseCommit: 'a'.repeat(40) }
+  await first.change(parent.id, current => ({ ...current, bridgeOperations: { job: {
+    state: 'received', terminal: { status: 'POSTMAN_BRIDGE_TERMINAL', requestId: 'REQ_ONE',
+      terminalStatus: 'COMPLETED', transportKind: 'text', result }, synchronization: 'busy' } } }))
+  await first.close()
+  const reopened = await openPostmanTaskRegistry(new DomainFacility(ctx, { backend: 'json' }))
+  const cold = fixture(reopened)
+  const status = await cold.jobs.status(parent, 'job')
+  assert.equal(status.status, 'POSTMAN_BRIDGE_TERMINAL')
+  assert.deepEqual(status.result, result)
+  assert.equal(status.synchronization, 'busy')
+  assert.equal(cold.started, 0)
+  assert.equal(Object.values(reopened.get(parent.id).workers)[0].id, 'child-C')
+  await reopened.close()
+  await backend.close()
+})
+
+test('failed artifact grant diagnostic survives independent JSON-domain lifetime', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'postman-grant-journal-'))
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }))
+  const backend = new JsonStorageBackend(root)
+  const ctx = { storage: { backend: { get: () => backend } }, emit() {} }
+  const first = await openPostmanTaskRegistry(new DomainFacility(ctx, { backend: 'json', routes: {} }))
+  await first.create(parent.id, row())
+  await first.change(parent.id, current => ({ ...current, bridgeOperations: { artifact: {
+    state: 'received', terminal: { status: 'POSTMAN_BRIDGE_TERMINAL', requestId: 'REQ_ONE',
+      terminalStatus: 'COMPLETED', transportKind: 'artifact', result: { ok: true, code: 'RESULT_DURABLE' } },
+    synchronization: 'synchronized', grantDiagnostic: 'Artifact grant registration rejected.' } } }))
+  await first.close()
+  const reopened = await openPostmanTaskRegistry(new DomainFacility(ctx, { backend: 'json' }))
+  const cold = fixture(reopened)
+  const status = await cold.jobs.status(parent, 'artifact')
+  assert.equal(status.status, 'POSTMAN_BRIDGE_FAILED')
+  assert.equal(status.trustedStatus, 'POSTMAN_BRIDGE_TERMINAL')
+  assert.match(status.grantDiagnostic, /registration rejected/)
   await reopened.close()
   await backend.close()
 })
@@ -100,23 +148,106 @@ test('three same-Leader jobs run independently, fourth waits for a settled slot'
   assert.deepEqual([a.status, b.status, c.status], Array(3).fill('POSTMAN_BRIDGE_ACCEPTED'))
   assert.equal(starts, 3)
   assert.equal(new Set([a, b, c].map(x => x.bridgeJobId)).size, 3)
-  assert.deepEqual([a, b, c].map(x => jobs.status(parent, x.bridgeJobId).status),
+  assert.deepEqual(await Promise.all([a, b, c].map(async x => (await jobs.status(parent, x.bridgeJobId)).status)),
     Array(3).fill('POSTMAN_BRIDGE_RUNNING'))
   assert.equal((await jobs.accept(parent, '@PostmanAsk D', 'text')).status, 'POSTMAN_BRIDGE_LIMIT_REACHED')
   completions[1]({ stopReason: 'end_turn' })
   await tick(); await tick(); await tick()
-  assert.equal(jobs.status(parent, b.bridgeJobId).status, 'POSTMAN_BRIDGE_TERMINAL')
+  assert.equal((await jobs.status(parent, b.bridgeJobId)).status, 'POSTMAN_BRIDGE_TERMINAL')
   assert.equal(registry.get(parent.id).bridgeOperations[b.bridgeJobId], undefined)
-  assert.equal(jobs.status(parent, a.bridgeJobId).status, 'POSTMAN_BRIDGE_RUNNING')
+  assert.equal((await jobs.status(parent, a.bridgeJobId)).status, 'POSTMAN_BRIDGE_RUNNING')
   const d = await jobs.accept(parent, '@PostmanAsk D', 'text')
   assert.equal(d.status, 'POSTMAN_BRIDGE_ACCEPTED')
   await tick()
   assert.equal(starts, 4)
   completions[0]({ stopReason: 'end_turn' }); completions[2]({ stopReason: 'end_turn' }); completions[3]({ stopReason: 'end_turn' })
   await tick(); await tick(); await tick()
-  assert.deepEqual([a, c, d].map(x => jobs.status(parent, x.bridgeJobId).status),
+  assert.deepEqual(await Promise.all([a, c, d].map(async x => (await jobs.status(parent, x.bridgeJobId)).status)),
     Array(3).fill('POSTMAN_BRIDGE_TERMINAL'))
   assert.deepEqual(registry.get(parent.id).bridgeOperations, {})
+  await jobs.dispose()
+})
+
+
+test('proven pre-publication failure persists not-required across restarts and admission', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'postman-early-terminal-'))
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }))
+  const backend = new JsonStorageBackend(root)
+  const storage = { storage: { backend: { get: () => backend } }, emit() {} }
+  const registry = await openPostmanTaskRegistry(new DomainFacility(storage, { backend: 'json', routes: {} }))
+  await registry.create(parent.id, row())
+  const taskContext = Object.freeze({ branch: row().branch })
+  let sends = 0, syncs = 0
+  const contexts = { get: () => taskContext, record: registry.get, changeRecord: registry.change,
+    isRestoring: () => false, hasActiveOperation: () => false, bindChild: () => true, releaseChild() {},
+    async sync() { syncs++; throw Error('no publication exists') } }
+  const ctx = { agents: { get: () => parent }, subagents: { async start() {
+    sends++
+    const id = 'child-' + sends
+    return { id, localAgent: { id }, result: Promise.resolve({ stopReason: 'end_turn' }), async dispose() {} }
+  } }, tools: { get: () => ({ async execute() {
+    const requestId = 'REQ_20260929T01010' + sends + 'Z_0001'
+    return { status: 'FAILED', requestId, result: { ok: false, code: 'POSTMAN_TRANSPORT_FAILED',
+      requestId, transportCode: 'DIRECT_INVALID_TASK', transportMessage: 'rejected before publication', details: {} } }
+  } }) } }
+  const jobs = createPostmanBridgeJobs(ctx, { run: (_signal, launch) => launch(), dispose() {} }, null, contexts)
+  const receipts = []
+  for (let i = 0; i < 5; i++) {
+    const receipt = await jobs.accept(parent, '@PostmanAsk early failure ' + i, 'text')
+    assert.equal(receipt.status, 'POSTMAN_BRIDGE_ACCEPTED')
+    receipts.push(receipt)
+    for (let attempt = 0; attempt < 40 &&
+      !['not-required', 'busy'].includes(registry.get(parent.id).bridgeOperations[receipt.bridgeJobId]?.synchronization); attempt++)
+      await new Promise(resolve => setTimeout(resolve, 25))
+    const status = await jobs.status(parent, receipt.bridgeJobId)
+    assert.equal(status.synchronization, 'not-required', JSON.stringify({ status, op: registry.get(parent.id).bridgeOperations[receipt.bridgeJobId] }))
+    assert.equal(status.state, 'TERMINAL')
+    const op = registry.get(parent.id).bridgeOperations[receipt.bridgeJobId]
+    assert.equal(op.state, 'received')
+    assert.equal(op.synchronization, 'not-required')
+  }
+  assert.deepEqual({ sends, syncs }, { sends: 5, syncs: 0 })
+  await jobs.dispose(); await registry.close()
+  const reopened = await openPostmanTaskRegistry(new DomainFacility(storage, { backend: 'json' }))
+  for (const receipt of receipts) {
+    assert.equal(reopened.get(parent.id).bridgeOperations[receipt.bridgeJobId].synchronization, 'not-required')
+  }
+  const cold = createPostmanBridgeJobs({ agents: { get: () => parent } },
+    { run() { throw Error('must not resend') }, dispose() {} }, null,
+    { record: reopened.get, changeRecord: reopened.change, async sync() { throw Error('must not sync') } })
+  for (const receipt of receipts) {
+    const status = await cold.status(parent, receipt.bridgeJobId)
+    assert.equal(status.synchronization, 'not-required')
+    assert.equal((await cold.status(parent, receipt.bridgeJobId, true)).synchronization, 'not-required')
+  }
+  await cold.dispose(); await reopened.close(); await backend.close()
+})
+
+test('absence of publication proof alone retains busy received terminal and unknown intent cap', async () => {
+  const registry = createMemoryTaskRegistry()
+  await registry.create(parent.id, row())
+  const context = Object.freeze({ branch: row().branch })
+  let sends = 0
+  const jobs = createPostmanBridgeJobs({ agents: { get: () => parent }, subagents: { async start() {
+    sends++
+    return { id: 'mock-child', localAgent: { id: 'mock-child' }, result: Promise.resolve({ stopReason: 'end_turn' }), async dispose() {} }
+  } }, tools: { get: () => ({ async execute() { return { status: 'FAILED', requestId: 'REQ_UNKNOWN',
+    result: { ok: false, code: 'POSTMAN_TRANSPORT_FAILED', requestId: 'REQ_UNKNOWN',
+      transportCode: 'WEB_FAILED', transportMessage: 'publication unknown', details: {} } } } }) } },
+  { run: (_signal, launch) => launch(), dispose() {} }, null,
+  { get: () => context, record: registry.get, changeRecord: registry.change,
+    isRestoring: () => false, hasActiveOperation: () => false, bindChild: () => true, releaseChild() {},
+    async sync() { throw Error('must not sync') } })
+  const receipt = await jobs.accept(parent, '@PostmanAsk unknown', 'text')
+  await tick(); await tick(); await tick()
+  assert.equal((await jobs.status(parent, receipt.bridgeJobId)).synchronization, 'busy')
+  assert.equal(registry.get(parent.id).bridgeOperations[receipt.bridgeJobId].synchronization, 'pending')
+  assert.equal((await jobs.status(parent, receipt.bridgeJobId, true)).synchronization, 'busy')
+  assert.equal(sends, 1)
+  await registry.change(parent.id, row => ({ ...row, bridgeOperations: { ...row.bridgeOperations,
+    oldA: { state: 'unknown' }, oldB: { state: 'unknown' }, oldC: { state: 'unknown' } } }))
+  assert.equal((await jobs.accept(parent, '@PostmanAsk blocked', 'text')).status, 'POSTMAN_BRIDGE_LIMIT_REACHED')
+  assert.equal(sends, 1)
   await jobs.dispose()
 })
 
@@ -126,8 +257,8 @@ test('one interrupted job does not block an independent new Bridge', async () =>
   const f = fixture(registry)
   const accepted = await f.jobs.accept(parent, '@PostmanAsk new B', 'text')
   assert.equal(accepted.status, 'POSTMAN_BRIDGE_ACCEPTED')
-  assert.equal(f.jobs.status(parent, 'oldA').status, 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN')
-  assert.equal(f.jobs.status(parent, accepted.bridgeJobId).status, 'POSTMAN_BRIDGE_QUEUED')
+  assert.equal((await f.jobs.status(parent, 'oldA')).status, 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN')
+  assert.equal((await f.jobs.status(parent, accepted.bridgeJobId)).status, 'POSTMAN_BRIDGE_QUEUED')
   assert.equal(registry.get(parent.id).bridgeOperations.oldA.state, 'unknown')
   assert.equal(registry.get(parent.id).bridgeOperations[accepted.bridgeJobId].state, 'pending')
   assert.equal(f.started, 0)
