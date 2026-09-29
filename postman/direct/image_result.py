@@ -14,8 +14,7 @@ import warnings
 import zipfile
 
 MAX_IMAGE_BYTES = 64 * 1024 * 1024
-_EXTENSIONS = {".png": "PNG", ".jpg": "JPEG", ".jpeg": "JPEG", ".webp": "WEBP"}
-_OTHER_IMAGE_EXTENSIONS = {".gif", ".bmp", ".svg", ".tif", ".tiff", ".avif", ".heic", ".ico", ".apng"}
+_EXTENSIONS = {".png": "PNG", ".jpg": "JPEG", ".webp": "WEBP"}
 _MIME = {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp"}
 
 
@@ -57,6 +56,7 @@ def extract_validated_image(
     destination_dir: str | os.PathLike,
     *,
     expected_zip_sha256: str,
+    request_id: str,
 ) -> dict:
     """Write image.<extension> exclusively; return image path, hash and dimensions.
 
@@ -64,7 +64,6 @@ def extract_validated_image(
     Raises ImageResultError with stable IMAGE_* code; never extracts other entries.
     A pre-existing output is never overwritten. Destination directory is trusted.
     """
-    archive = Path(zip_path)
     archive = Path(zip_path)
     try:
         if archive.stat().st_size > 50 * 1024 * 1024:
@@ -77,13 +76,15 @@ def extract_validated_image(
         _fail("IMAGE_ZIP_CHANGED", "ZIP changed since transport validation")
 
     files = [entry for entry in validated_inventory if entry.get("kind") == "file"]
-    if len(files) != 1:
-        _fail("IMAGE_ENTRY_COUNT", "Expected exactly one file in the image ZIP", count=len(files))
+    if len(files) != 1 or len(validated_inventory) != 1:
+        _fail("IMAGE_ENTRY_COUNT", "Expected exactly one file and no directories in the image ZIP", count=len(files))
     chosen = files[0]
     normalized_name = chosen.get("path", "")
     extension = Path(normalized_name).suffix.lower()
-    if extension not in _EXTENSIONS or extension in _OTHER_IMAGE_EXTENSIONS:
+    if extension not in _EXTENSIONS:
         _fail("IMAGE_ENTRY_COUNT", "The only ZIP file must be PNG, JPEG, or WEBP", count=0)
+    if normalized_name != f"{request_id}_img1{extension}":
+        _fail("IMAGE_ENTRY_NAME", "Image entry must match the canonical request filename", entry=normalized_name)
     try:
         with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
             # Resolve by validated member position, not by an untrusted output path.
