@@ -134,12 +134,20 @@ def build_image_generation_prompt(user_intent: str) -> str:
     return f"Сгенерируй, пожалуйста, изображение по этому промту:\n\n{user_intent}\n\nСделай ровно одно изображение."
 
 
-IMAGE_PACKAGING_INTENT = (
-    "Упакуй ровно одно изображение из непосредственно предыдущего ответа ассистента без изменений. "
-    "Не создавай новое изображение, не заменяй его, не изменяй размеры и намеренно не перекодируй. "
-    "Создай ровно один ZIP, содержащий ровно один файл PNG, JPEG или WEBP и никаких других файлов. "
-    "Не создавай дополнительные файлы."
-)
+def build_image_packaging_intent(request_id: str) -> str:
+    """Specify the sole canonical ASCII image entry for this packaging request."""
+    request_identity.assert_canonical_request_id(request_id)
+    return (
+        "Упакуй ровно одно изображение из непосредственно предыдущего ответа ассистента без изменений. "
+        "Не создавай новое изображение, не заменяй изображение, не изменяй его размеры и не перекодируй. "
+        "ZIP должен содержать ровно один файл изображения и никаких других файлов. "
+        "Имя файла внутри ZIP строго зависит от фактического формата предыдущего изображения: "
+        f"PNG → {request_id}_img1.png; JPEG → {request_id}_img1.jpg; "
+        f"WEBP → {request_id}_img1.webp. "
+        "Имя должно содержать только ASCII: никаких пробелов, Unicode-символов или произвольных исходных имён. "
+        "Если изображение имеет другое имя, переименуй только файл, не изменяя байты изображения. "
+        "Не создавай каталогов, manifest, README, notes или других дополнительных файлов."
+    )
 
 
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
@@ -564,7 +572,7 @@ class DirectPostman:
                 forbidden_paths = derive_forbidden_paths(extra_forbidden)
                 task_content = task_package.render_direct_task_manifest(
                     request_id=request_id,
-                    user_intent=IMAGE_PACKAGING_INTENT,
+                    user_intent=build_image_packaging_intent(request_id),
                     repository=self.repository,
                     base_commit=snapshot.prepublication_commit,
                     expected_filename=expected_filename,
@@ -1027,7 +1035,8 @@ class DirectPostman:
             raise DirectPostmanError("DIRECT_IMAGE_VALIDATION_MISSING", str(exc), details={"validationPath": str(validation_path)}) from exc
         try:
             image = image_result.extract_validated_image(zip_path, validation["inventory"],
-                self.result_root / request_id, expected_zip_sha256=validation["sha256"])
+                self.result_root / request_id, expected_zip_sha256=validation["sha256"],
+                request_id=request_id)
         except image_result.ImageResultError as exc:
             self._write_state(request_id, STATE_FAILED, failureCode=exc.code)
             raise DirectPostmanError(exc.code, str(exc), details=exc.details) from exc
