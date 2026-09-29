@@ -106,6 +106,36 @@ test('close rechecks Worker when new work arrives during descendant inspection',
   assert.deepEqual(f.calls.drains, [])
   assert.equal(f.registry.get('leader').workers[id].id, id)
 })
+// Construct a completed, delivered report for stop-level evidence.
+async function completed(f, id) {
+  const child = f.agents.get(id)
+  child.inbox.hasPending = false
+  child.session.events.push({ type: 'turn/start', data: { turn: 1 } },
+    { type: 'user/message', data: { id: 'initial' } },
+    { type: 'tool/call', data: { turn: 1, callId: 'r', name: 'report', arguments: { output: 'done' } } })
+  await f.tools.observeReport({ agent: child, name: 'report', callId: 'r', arguments: { output: 'done' } },
+    { value: { messageId: 'report-id' } })
+  child.session.events.push({ type: 'tool/result', data: { turn: 1, message: { source: { callId: 'r' },
+    content: [{ isError: false }] } } },
+    { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } })
+  f.leader.session.events.push({ type: 'user/message', data: { id: 'report-id',
+    source: { kind: 'subagent-report', senderSessionId: id } } })
+  return child
+}
+
+test('ordinary close accepts a completed read error followed by the actual native report', async () => {
+  const f = fixture(), id = await start(f), child = await completed(f, id)
+  child.session.events.splice(2, 0,
+    { type: 'tool/call', data: { turn: 1, callId: 'bad', name: 'read', arguments: {} } },
+    { type: 'tool/result', data: { turn: 1, message: { source: { callId: 'bad' }, content: [{ isError: true }] } } },
+    { type: 'tool/call', data: { turn: 1, callId: 'fixed', name: 'read', arguments: {} } },
+    { type: 'tool/result', data: { turn: 1, message: { source: { callId: 'fixed' }, content: [{ isError: false }] } } })
+  const response = await f.tools.stopTool.execute({ workerSessionId: id }, f.exec)
+  assert.equal(response.status, 'POSTMAN_WORKER_STOPPED')
+  assert.equal(response.taskCompleted, false)
+  assert.equal(f.registry.get('leader').workers[id], undefined)
+})
+
 test('native report before TASK_ACCEPTED remains linked to reserved Worker', async () => {
   const f = fixture()
   await f.registry.create(f.leader.id, { workers: {} })

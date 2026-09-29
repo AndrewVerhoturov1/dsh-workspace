@@ -83,10 +83,10 @@ export function workerEvidence(worker, child, leader) {
       if (turn.actions.some(action => action.position > call.position && action.type !== 'text')) return false
       return turn.calls.every(item => item.event.data.callId === report.callId ||
         (turn.results.has(item.event.data.callId) &&
-         turn.results.get(item.event.data.callId).position < call.position &&
-         isSuccessful(turn.results.get(item.event.data.callId).event)))
+         turn.results.get(item.event.data.callId).position > item.position &&
+         turn.results.get(item.event.data.callId).position < call.position))
     })
-    if (!valid) return { ready: false, reason: 'current native final report not successfully delivered' }
+    if (!valid) return { ready: false, reason: 'current native final report or preceding work not verified' }
   }
   if (consumed.size !== assignmentIds.size ||
       [...turns.values()].every(turn => !turn.actions.length))

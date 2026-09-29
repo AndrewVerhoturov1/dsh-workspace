@@ -65,6 +65,25 @@ test('a fresh native message outside Postman admissions requires a current succe
   assert.equal(workerEvidence(updated, latest, leader).ready, false)
   assert.equal(workerEvidence(updated, latest, { session: { events: [...leader.session.events, delivered('report-2')] } }).ready, true)
 })
+test('completed ordinary tool errors may precede a delivered current report', () => {
+  const w = worker()
+  const fixed = [start(1), user('a'), call(1, 'failed', 'read'), result(1, 'failed', true),
+    call(1, 'fixed', 'read'), result(1, 'fixed'), call(1, 'r'), result(1, 'r'), end(1)]
+  const negative = [start(1), user('a'), call(1, 'missing', 'read'), result(1, 'missing', true),
+    call(1, 'r', 'report', 'file missing'), result(1, 'r'), end(1)]
+  assert.equal(workerEvidence(w, child(fixed), leader).ready, true)
+  assert.equal(workerEvidence(w, child(negative), leader).ready, true)
+  for (const events of [
+    [start(1), user('a'), call(1, 'pending', 'read'), call(1, 'r'), result(1, 'r'), end(1)],
+    [start(1), user('a'), call(1, 'late', 'read'), call(1, 'r'), result(1, 'r'), result(1, 'late', true), end(1)],
+    [start(1), user('a'), call(1, 'failed', 'read'), result(1, 'failed', true), call(1, 'r'), result(1, 'r', true), end(1)],
+    [start(1), user('a'), call(1, 'failed', 'read'), result(1, 'failed', true), call(1, 'r', 'report', ' '), result(1, 'r'), end(1)],
+    [start(1), user('a'), call(1, 'failed', 'read'), result(1, 'failed', true), call(1, 'r'), result(1, 'r'), user('later'), end(1)],
+    [start(1), user('a'), call(1, 'failed', 'read'), result(1, 'failed', true), call(1, 'r'), result(1, 'r'), call(1, 'later', 'read'), end(1)],
+  ]) assert.equal(workerEvidence(w, child(events), leader).ready, false)
+  assert.equal(workerEvidence(w, child(fixed), { session: { events: [] } }).ready, false)
+})
+
 test('unsettled earlier tool invalidates report, text-only closing step does not', () => {
   const w = worker()
   assert.equal(workerEvidence(w, child([start(1), user('a'), call(1, 'work', 'pwsh'),
