@@ -42,6 +42,11 @@ ASSISTANT_TURN_STARTED = "ASSISTANT_TURN_STARTED"
 ASSISTANT_TURN_STREAMING = "ASSISTANT_TURN_STREAMING"
 ASSISTANT_TURN_COMPLETED = "ASSISTANT_TURN_COMPLETED"
 ASSISTANT_CONNECTION_INTERRUPTED = "ASSISTANT_CONNECTION_INTERRUPTED"
+ADDITIONAL_PROCESSING = "ADDITIONAL_PROCESSING"
+WORKING = "WORKING"
+FINAL_ANSWER_STARTED = "FINAL_ANSWER_STARTED"
+FINAL_ANSWER_COMPLETED = "FINAL_ANSWER_COMPLETED"
+UNKNOWN = "UNKNOWN"
 
 USER_TURN_ANCHOR_MISSING = "USER_TURN_ANCHOR_MISSING"
 CHAT_CORRELATION_LOST = "CHAT_CORRELATION_LOST"
@@ -64,6 +69,9 @@ GENERATION_CONTROL_SELECTORS = (
     'button[data-testid="stop-generating-button"]',
     'button[aria-label="Stop generating"]',
     'button[aria-label="Stop"]',
+    'button[aria-label="Pause"]',
+    'button[aria-label="Pause generation"]',
+    'button[aria-label="Приостановить"]',
     'button[aria-label="Остановить создание"]',
     'button[aria-label="Остановить"]',
 )
@@ -247,7 +255,7 @@ def generation_active(page: Any) -> tuple[bool, str]:
     try:
         semantic = page.get_by_role(
             "button",
-            name=re.compile(r"^(stop|stop generating|остановить|остановить создание)$", re.I),
+            name=re.compile(r"^(stop|stop generating|pause|pause generation|остановить|остановить создание|приостановить)$", re.I),
         )
         if _locator_count(semantic) > 0 and semantic.first.is_visible():
             return True, "role=button[name=stop]"
@@ -258,7 +266,7 @@ def generation_active(page: Any) -> tuple[bool, str]:
 
 _INTERRUPTION_SCOPE_JS = r"""
 (node) => {
-  const turn = node.closest('[data-testid^="conversation-turn-"], [data-message-author-role]');
+  const turn = node.closest('[data-testid^="conversation-turn-"], [data-message-author-role], [data-content-search-turn-key], [data-content-search-unit-key], [data-chatgpt-selection-message-id], [data-user-message-bubble]');
   if (turn) return {insideConversation: true, scopeText: ''};
   let current = node;
   for (let depth = 0; current && depth < 5; depth += 1, current = current.parentElement) {
@@ -325,6 +333,137 @@ def connection_interrupted(page: Any) -> tuple[bool, dict[str, Any]]:
                     "source": "visible_connection_interruption_ui",
                 }
     return False, {}
+
+
+_WORKING_TURN_JS = r"""
+(node) => {
+  const scope = node.closest('[data-content-search-turn-key], [data-testid^="conversation-turn-"]');
+  return !!scope?.querySelector('[data-testid*="thinking"], [data-testid*="tool"], [data-testid*="reasoning"], [data-state="thinking"], [data-state="running"], [data-stream-phase="commentary"], [data-stream-phase="analysis"]');
+}
+"""
+
+_PHASE_EVIDENCE_JS = r"""
+(node) => {
+  const scope = node.closest('[data-content-search-turn-key], [data-testid^="conversation-turn-"]') || node;
+  const messages = [...scope.querySelectorAll('[data-message-author-role="assistant"], [data-chatgpt-selection-message-id]')];
+  if (node.matches('[data-message-author-role="assistant"], [data-chatgpt-selection-message-id]')) messages.unshift(node);
+  const unique = [...new Set(messages)];
+  const answer = unique.find(m => m.querySelector('[data-markdown-text-style="assistant-message"], .markdown.prose, [data-testid="assistant-message"]'));
+  const message = answer || unique[0] || null;
+  const rendered = answer && answer.querySelector('[data-markdown-text-style="assistant-message"], .markdown.prose, [data-testid="assistant-message"]');
+  const actionScope = scope;
+  const actions = [...(actionScope?.querySelectorAll('button') || [])];
+  const complete = actions.some(b => /^(оценить ответ|rate response|regenerate|сгенерировать ответ заново|прочитать вслух|read aloud)/i.test(b.getAttribute('aria-label') || ''));
+  // Thinking and tool UI must belong to this correlated turn, never the whole body.
+  const working = !!scope.querySelector('[data-testid*="thinking"], [data-testid*="tool"], [data-testid*="reasoning"], [data-state="thinking"], [data-state="running"], [data-stream-phase="commentary"], [data-stream-phase="analysis"]');
+  const phaseNode = scope.querySelector('[data-stream-phase]');
+  return {assistantNodeFound: !!message, assistantMessageId: message?.getAttribute('data-chatgpt-selection-message-id') || message?.getAttribute('data-message-id') || '', hasModelSlug: !!message?.getAttribute('data-message-model-slug'), modelSlugValue: message?.getAttribute('data-message-model-slug') || '', hasRenderedAnswerContainer: !!rendered && !!rendered.innerText?.trim(), answerContainerSelector: rendered ? (rendered.hasAttribute('data-markdown-text-style') ? '[data-markdown-text-style="assistant-message"]' : '.markdown.prose / [data-testid="assistant-message"]') : '', completionControlFound: complete, workingControlFound: working, streamPhase: phaseNode?.getAttribute('data-stream-phase') || ''};
+}
+"""
+
+
+def additional_processing(page: Any) -> tuple[bool, dict[str, Any]]:
+    """Recognize visible system processing UI, never transcript content."""
+    pattern = re.compile(r"наши системы выполняют дополнительную обработку|our systems are (performing|doing) additional processing", re.I)
+    try:
+        candidates = page.get_by_text(pattern)
+        count = min(_locator_count(candidates), 8)
+    except Exception:
+        return False, {}
+    for index in range(count):
+        try:
+            candidate = candidates.nth(index)
+            if not candidate.is_visible():
+                continue
+            scope = candidate.evaluate(_INTERRUPTION_SCOPE_JS)
+            if not isinstance(scope, dict) or scope.get("insideConversation"):
+                continue
+            text = _normalize_ui_text(scope.get("scopeText", ""))
+            if pattern.search(text):
+                return True, {"source": "visible_additional_processing_ui", "matchedText": text[:500]}
+        except Exception:
+            continue  # An unverified scope is never proof of a system banner.
+    return False, {}
+
+
+class AnswerPhaseTracker:
+    """Latch the final answer for one exact anchor and assistant identity."""
+
+    def __init__(self) -> None:
+        self.anchor: tuple[str, int] | None = None
+        self.assistant_id: str | None = None
+        self.final_answer_latched = False
+
+
+def inspect_answer_phase(page: Any, expected_prompt: str, expected_chat_url: str,
+                         *, tracker: AnswerPhaseTracker | None = None,
+                         image_mode: bool = False) -> dict[str, Any]:
+    """Classify only a correlated turn using structural DOM evidence."""
+    tracker = tracker if tracker is not None else AnswerPhaseTracker()
+    details: dict[str, Any] = {"chatUrl": str(getattr(page, "url", "") or ""),
+                               "phase": UNKNOWN, "phaseSource": "unproved",
+                               "finalAnswerLatched": tracker.final_answer_latched}
+    if details["chatUrl"] != expected_chat_url or not submit.is_bound_chat_url(expected_chat_url):
+        details["phaseSource"] = "chat_correlation_lost"
+        return details
+    turns, selector = snapshot_turns(page, image_mode=image_mode)
+    correlation = correlate_next_assistant(turns, expected_prompt)
+    anchor = correlation.get("anchorIndex")
+    details.update(turnSelector=selector, anchorIndex=anchor,
+                   assistantIndex=correlation.get("assistantIndex"),
+                   correlationCode=correlation["code"], turnCount=len(turns))
+    if anchor is None or correlation["code"] == CHAT_CORRELATION_LOST:
+        return details
+    if any(t.get("role") == "user" and t.get("index", -1) > anchor for t in turns):
+        details["phaseSource"] = "another_user_turn"
+        return details
+    anchor_key = (expected_prompt, anchor)
+    if tracker.anchor != anchor_key:
+        tracker.anchor = anchor_key
+        tracker.assistant_id = None
+        tracker.final_answer_latched = False
+    processing, processing_details = additional_processing(page)
+    details["additionalProcessingDetected"] = processing
+    if processing:
+        details.update(phase=ADDITIONAL_PROCESSING, phaseSource="system_banner", **processing_details)
+        details["finalAnswerLatched"] = tracker.final_answer_latched
+        return details
+    active, control = generation_active(page)
+    details.update(generationActive=active, generationControl=control)
+    if not correlation["ok"]:
+        if correlation["code"] == ASSISTANT_NOT_STARTED and anchor == len(turns) - 1:
+            try:
+                working = page.locator(selector).nth(anchor).evaluate(_WORKING_TURN_JS)
+            except Exception:
+                working = False
+            if working and not tracker.final_answer_latched:
+                details.update(phase=WORKING, phaseSource="anchored_working_ui")
+        return details
+    index = correlation["assistantIndex"]
+    try:
+        evidence = page.locator(selector).nth(index).evaluate(_PHASE_EVIDENCE_JS)
+    except Exception:
+        evidence = {}
+    if not isinstance(evidence, dict):
+        evidence = {}
+    details.update(evidence)
+    message_id = str(evidence.get("assistantMessageId") or "")
+    if tracker.assistant_id and message_id != tracker.assistant_id:
+        details["phaseSource"] = "assistant_identity_changed"
+        return details
+    if message_id and tracker.assistant_id is None:
+        tracker.assistant_id = message_id
+    if tracker.final_answer_latched:
+        details.update(phase=FINAL_ANSWER_STARTED, phaseSource="final_answer_latch", finalAnswerLatched=True)
+    elif (evidence.get("assistantNodeFound") and evidence.get("hasRenderedAnswerContainer") and
+          (message_id or evidence.get("hasModelSlug"))) or (evidence.get("streamPhase") == "final_answer" and evidence.get("assistantNodeFound") and message_id):
+        tracker.final_answer_latched = True
+        details.update(phase=FINAL_ANSWER_STARTED, phaseSource="stream_phase" if evidence.get("streamPhase") == "final_answer" else "correlated_rendered_message", finalAnswerLatched=True)
+    elif (message_id or evidence.get("hasModelSlug")) and not evidence.get("hasRenderedAnswerContainer") and (evidence.get("workingControlFound") or evidence.get("streamPhase") in {"commentary", "analysis"}):
+        details.update(phase=WORKING, phaseSource="correlated_working_ui")
+    if tracker.final_answer_latched and details["phase"] != UNKNOWN and (message_id or evidence.get("hasModelSlug")) and evidence.get("completionControlFound") and not active:
+        details.update(phase=FINAL_ANSWER_COMPLETED, phaseSource="response_actions_and_inactive_control")
+    return details
 
 
 def find_user_anchor(turns: list[dict[str, Any]], expected_prompt: str) -> int | None:
@@ -497,6 +636,7 @@ def observe_next_assistant(
     stable_ms: int = DEFAULT_STABLE_MS,
     poll_ms: int = DEFAULT_POLL_MS,
     image_mode: bool = False,
+    phase_tracker: AnswerPhaseTracker | None = None,
     sleep: Callable[[float], None] = time.sleep,
     monotonic: Callable[[], float] = time.monotonic,
 ) -> dict[str, Any]:
@@ -516,6 +656,7 @@ def observe_next_assistant(
         )
 
     tracker = AssistantLifecycleTracker(stable_ms=stable_ms)
+    phases = phase_tracker if phase_tracker is not None else AnswerPhaseTracker()
     deadline = monotonic() + max(timeout_ms, 0) / 1000.0
     last_code = ASSISTANT_NOT_STARTED
     last_details: dict[str, Any] = {}
@@ -549,6 +690,14 @@ def observe_next_assistant(
                 },
             )
 
+        phase = inspect_answer_phase(page, expected_prompt, expected_chat_url, tracker=phases, image_mode=image_mode)
+        if phase["phase"] == ADDITIONAL_PROCESSING:
+            last_code = ADDITIONAL_PROCESSING
+            last_details = phase
+            if monotonic() >= deadline:
+                return _result(ADDITIONAL_PROCESSING, ok=False, transitions=tracker.transitions, recoverable=True, details=phase)
+            sleep(min(max(poll_ms, 1) / 1000.0, max(deadline - monotonic(), 0.0)))
+            continue
         turns, selector = snapshot_turns(page, image_mode=image_mode)
         correlation = correlate_next_assistant(turns, expected_prompt)
         last_code = correlation["code"]
@@ -597,7 +746,7 @@ def observe_next_assistant(
             now_ms = monotonic() * 1000.0
             images = int(assistant.get("imageCount", 0)) if image_mode else 0
             complete = tracker.observe(
-                text, generating=active, now_ms=now_ms,
+                text, generating=active or (not image_mode and phase["phase"] not in {FINAL_ANSWER_STARTED, FINAL_ANSWER_COMPLETED}), now_ms=now_ms,
                 image_count=images, image_mode=image_mode,
             )
             if image_mode:
@@ -610,9 +759,13 @@ def observe_next_assistant(
                     "generationActive": active,
                     "generationControl": control,
                     "streamingObserved": tracker.streaming,
+                    "answerPhase": phase,
                 }
             )
             if complete:
+                if not image_mode and phase["phase"] == FINAL_ANSWER_STARTED:
+                    phase = {**phase, "phase": FINAL_ANSWER_COMPLETED, "phaseSource": "inactive_stable_final_fallback"}
+                    last_details["answerPhase"] = phase
                 return _result(
                     ASSISTANT_TURN_COMPLETED,
                     ok=True,

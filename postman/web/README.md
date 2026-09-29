@@ -74,9 +74,17 @@ Continuation path открывает exact сохранённый `/c/<conversat
 ### `browser_observer.py`
 
 Observer привязывается к доказанному user turn и exact chat URL и принимает только
-непосредственно следующий assistant turn. Во время генерации DOM опрашивается раз в
-3 секунды. Видимое состояние `Соединение прервано` / `Connection interrupted` вне
-conversation turns считается отдельным recoverable состоянием, а не завершением ответа.
+непосредственно следующий assistant turn. Структурный `inspect_answer_phase()` различает
+`WORKING`, `FINAL_ANSWER_STARTED` (защёлка), `FINAL_ANSWER_COMPLETED`, `UNKNOWN`
+(fail-closed) и `ADDITIONAL_PROCESSING` (видимый системный баннер вне transcript).
+Pause/Stop — диагностика, не доказательство фазы. В доступных завершённых CDP-ходах
+подтверждены `data-chatgpt-selection-message-id`, `data-markdown-text-style="assistant-message"`
+и кнопки действий («Оценить ответ», «Прочитать вслух»); `data-message-model-slug` отсутствовал.
+Rendered answer внутри exact turn доказывает начало финала; действия сообщения и inactive
+control усиливают completion. Живой thinking/tool поток не наблюдался, новые варианты
+разметки без доказанных признаков остаются UNKNOWN.
+`Connection interrupted` вне conversation turns остаётся отдельным recoverable состоянием
+с прежним reload; `ADDITIONAL_PROCESSING` reload не запускает.
 
 Поиск «любого похожего ответа» по всему DOM запрещён.
 
@@ -165,8 +173,11 @@ Bridge не является repository applicator и не принимает mo
 Завершённый assistant-turn без ZIP перепроверяется через 10 секунд; если ZIP всё ещё отсутствует,
 bridge немедленно возвращает `ASSISTANT_COMPLETED_NO_ARTIFACT` вместе с assistant text. ZIP,
 который не прошёл minimal transport validation, немедленно возвращает `ARTIFACT_REJECTED` с
-точной причиной. Reminders 10/20/30 сохраняются для ещё не завершённого assistant-turn.
-Во время recovery reminders блокируются.
+точной причиной. Reminders 10/20/30 допустимы при доказанном WORKING (включая reasoning/tools
+с Pause/Stop), запрещены после final latch и при UNKNOWN/ADDITIONAL_PROCESSING ждут повторной
+проверки без потребления slot. Две инъецируемые паузы 1–5 секунд разделяют решение, insert
+и финальный Send proof; после click сохраняются одноразовый SendGuard и exact user-turn proof.
+Во время connection recovery reminders блокируются.
 
 ## Fresh и continuation
 

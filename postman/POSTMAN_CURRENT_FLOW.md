@@ -257,8 +257,9 @@ exact proven user turn
 возвращает полный assistant text локальному агенту. Если текст изменился, требуется свежий
 completion proof и 10-секундное окно начинается заново.
 
-Во время generation observer опрашивает страницу раз в 3 секунды. Assistant turn должен
-завершить generation и стабилизировать текст до artifact detection.
+Observer опрашивает exact assistant turn раз в 3 секунды. Структурный финальный ответ
+и completion-действия усиливают доказательство завершения; после этого сохраняются
+inactive generation и стабильный текст exact turn до artifact detection.
 
 Если UI показывает `Соединение прервано` / `Connection interrupted`, это отдельное
 recoverable состояние, а не completion. Worker не отправляет reminder, reload-ит ту же
@@ -276,18 +277,20 @@ turns текущего REQ и ещё раз ищет exact RESULT. Если RESU
 Если действует connection-interruption recovery или exact chat ещё не доказан как готовый,
 reminder ждёт восстановления и не отправляется вслепую.
 
-Если в момент checkpoint ChatGPT всё ещё показывает active generation control, reminder
-подавляется без изменения composer и без нового user turn. Такой checkpoint считается
-использованным и позже не догоняется: расписание остаётся абсолютным 10/20/30, поэтому после
-долгой generation не возникает очереди просроченных reminders.
+Pause/Stop сам по себе не запрещает reminder. Для exact correlated хода `WORKING`
+(reasoning/tools) допускает Send; `FINAL_ANSWER_STARTED` защёлкивается и запрещает его;
+`FINAL_ANSWER_COMPLETED` запускает обработку результата. `UNKNOWN` повторно проверяется
+fail-closed без расходования slot. Видимый вне transcript баннер `ADDITIONAL_PROCESSING`
+ожидается отдельно без reload. Максимум три reminders, очередной slot не пропадает при UNKNOWN.
 
 Reminder не использует общий 30-секундный `submit_once()` wait для появления Send. Composer
 должен быть готов сразу, после вставки действует отдельное safe-send окно максимум 5 секунд с
 polling раз в 1 секунду. На каждом poll и ещё раз непосредственно перед единственным click
-перепроверяются exact conversation, отсутствие generation, неизменность latest same-REQ turn,
-exact unsent reminder в composer и доступность Send. Если generation появляется, assistant
-turn появляется/изменяется или Send не становится безопасно доступным за 5 секунд, текущий
-checkpoint подавляется; exact unsent reminder доказанно очищается и позже не догоняется.
+перепроверяются exact conversation, WORKING без final latch, trusted same-REQ anchor без
+другого user turn, exact unsent reminder в composer и доступность Send. Две инъецируемые
+случайные паузы 1–5 секунд отделяют решение от insert и insert от финального Send proof.
+Если финал начинается до click, Send не нажимается, exact unsent reminder очищается с
+доказательством пустого composer. Временный UNKNOWN не сжигает checkpoint.
 Если очистку или другое pre-click состояние доказать нельзя, transport остаётся fail-closed.
 Сам click имеет reminder-specific timeout 1 секунду; после начала click UNKNOWN по-прежнему
 запрещает retry. После `RESULT_DURABLE` оставшиеся checkpoints отменяются. Reload/recovery не
@@ -502,7 +505,7 @@ exact current intent
 → self-contained task
 → two-line browser prompt
 → exact ChatGPT conversation
-→ checkpoints на 10/20/30 минуте; active generation подавляет reminder без Send
+→ checkpoints на 10/20/30 минуте; WORKING разрешает reminder даже при Pause/Stop
 → exact next assistant turn текущего разрешённого anchor
 → exact ZIP control
 → one download
