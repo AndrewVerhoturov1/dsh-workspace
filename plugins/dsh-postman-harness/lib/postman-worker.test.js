@@ -41,6 +41,8 @@ function fixture(contexts) {
         calls.followups.push({ parent, id, content, options })
         return 'followup-' + calls.followups.length
       },
+      async listChildren() { return calls.starts.map(spec => ({ id: spec.childId, kind: 'child', mode: 'continuable' })) },
+      async listDescendants() { return [] },
       async interrupt(id, authority) { calls.interrupts.push({ id, authority }) },
       async drainContinuableChildren(parent, ids) {
         calls.drains.push({ parent, ids })
@@ -207,9 +209,9 @@ test('interrupt without an active mapping never starts a Worker', async () => {
   assert.equal(f.calls.starts.length, 0)
   assert.equal(f.calls.followups.length, 0)
   await f.tools.taskTool.execute({ task: 'first' }, exec(a))
-  await f.tools.stopTool.execute({}, exec(a))
+  assert.equal((await f.tools.stopTool.execute({}, exec(a))).status, 'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT')
   assert.equal((await f.tools.interruptTool.execute({ task: 'redirect' }, exec(a))).status,
-    'POSTMAN_WORKER_INTERRUPT_NO_ACTIVE_WORKER')
+    'POSTMAN_WORKER_INTERRUPT_TASK_ACCEPTED')
 })
 
 test('redirect delivery failure preserves the same Worker mapping', async () => {
@@ -284,18 +286,17 @@ test('distinct Leader sessions have distinct Worker identities; unauthorized cal
   assert.equal(calls.starts.length, 2)
 })
 
-test('stop drains exact resident child, removes mapping, is idempotent and permits new Worker', async () => {
+test('ordinary stop immediately after acceptance rejects without drain or new Worker', async () => {
   const { agents, calls, tools } = fixture()
   const a = leader('A'); agents.set(a.id, a)
   const first = await tools.taskTool.execute({ task: 'first' }, exec(a))
   const stopped = await tools.stopTool.execute({}, exec(a))
-  assert.deepEqual(stopped, { status: 'POSTMAN_WORKER_STOPPED', workerSessionId: first.workerSessionId,
-    residentReleased: true, mappingRemoved: true, durableSessionDeleted: false })
-  assert.deepEqual(calls.drains[0], { parent: a, ids: [first.workerSessionId] })
-  assert.equal((await tools.stopTool.execute({}, exec(a))).status, 'POSTMAN_WORKER_ALREADY_STOPPED')
+  assert.equal(stopped.status, 'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT')
+  assert.deepEqual(calls.drains, [])
+  assert.equal((await tools.stopTool.execute({}, exec(a))).status, 'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT')
   const next = await tools.taskTool.execute({ task: 'next' }, exec(a))
-  assert.equal(next.created, true)
-  assert.notEqual(next.workerSessionId, first.workerSessionId)
+  assert.equal(next.created, false)
+  assert.equal(next.workerSessionId, first.workerSessionId)
 })
 
 test('admission failures do not corrupt mapping or create a second active child', async () => {
@@ -307,7 +308,7 @@ test('admission failures do not corrupt mapping or create a second active child'
   assert.equal((await f.tools.taskTool.execute({ task: 'first' }, exec(a))).status, 'POSTMAN_WORKER_BINDING_UNCERTAIN')
   f.ctx.subagents.startContinuable = originalStart
   // An ambiguous start keeps its slot until an explicit, verified release.
-  assert.equal((await f.tools.stopTool.execute({ workerSessionId: failedStart.workerSessionId }, exec(a))).status, 'POSTMAN_WORKER_BINDING_UNCERTAIN')
+  assert.equal((await f.tools.stopTool.execute({ workerSessionId: failedStart.workerSessionId }, exec(a))).status, 'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT')
   const f2 = fixture(); f2.agents.set(a.id, a)
   const accepted = await f2.tools.taskTool.execute({ task: 'first' }, exec(a))
   f2.ctx.subagents.followup = async () => { throw new Error('not admitted') }
@@ -317,10 +318,11 @@ test('admission failures do not corrupt mapping or create a second active child'
   assert.equal(f2.calls.starts.length, 1)
   f2.ctx.subagents.drainContinuableChildren = async () => { throw new Error('release failed') }
   const stop = await f2.tools.stopTool.execute({}, exec(a))
-  assert.equal(stop.status, 'POSTMAN_WORKER_STOP_FAILED')
+  assert.equal(stop.status, 'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT')
   assert.equal(stop.workerSessionId, accepted.workerSessionId)
+  assert.deepEqual(f2.calls.drains, [])
   f2.ctx.subagents.drainContinuableChildren = async () => undefined
-  assert.equal((await f2.tools.stopTool.execute({}, exec(a))).status, 'POSTMAN_WORKER_STOPPED')
+  assert.equal((await f2.tools.stopTool.execute({}, exec(a))).status, 'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT')
 })
 
 test('concurrent admissions serialize and the durable Leader session retains its Worker', async () => {
@@ -340,7 +342,7 @@ test('concurrent admissions serialize and the durable Leader session retains its
   assert.equal((await f.tools.taskTool.execute({ task: 'stale' }, exec(a))).status, 'POSTMAN_WORKER_CALLER_REJECTED')
   f.tools.dispose()
 })
-test('stop queued behind admission drains the accepted child before a later task starts anew', async () => {
+test('stop queued behind admission cannot drain the accepted child', async () => {
   const f = fixture(); const a = leader('A'); f.agents.set(a.id, a)
   let accept
   const originalStart = f.ctx.subagents.startContinuable
@@ -354,11 +356,11 @@ test('stop queued behind admission drains the accepted child before a later task
   accept({ childId: f.calls.starts[0].childId, messageId: 'message-race' })
   const [first, stop] = await Promise.all([firstPromise, stopPromise])
   assert.equal(first.status, 'POSTMAN_WORKER_TASK_ACCEPTED')
-  assert.equal(stop.status, 'POSTMAN_WORKER_STOPPED')
-  assert.deepEqual(f.calls.drains[0].ids, [first.workerSessionId])
+  assert.equal(stop.status, 'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT')
+  assert.deepEqual(f.calls.drains, [])
   f.ctx.subagents.startContinuable = originalStart
   const next = await f.tools.taskTool.execute({ task: 'next' }, exec(a))
-  assert.equal(next.created, true)
+  assert.equal(next.created, false)
 })
 
 test('Bridge and Worker steer notices only to their live direct Leader', async () => {
@@ -466,7 +468,7 @@ test('bridge plugin registers all Worker tools and preserves boundary on creatio
     on(name, handler) { listeners.set(name, handler) },
   }
   await applyBridgePlugin(ctx)
-  assert.deepEqual([...registrations.keys()].sort(), ['implementation_artifact_apply', 'notify_parent', 'postman_bridge', 'postman_bridge_status', 'postman_task_prepare', 'postman_task_restore', 'postman_worker', 'postman_worker_interrupt', 'postman_worker_list', 'postman_worker_stop', 'ptc_execute'])
+  assert.deepEqual([...registrations.keys()].sort(), ['implementation_artifact_apply', 'notify_parent', 'postman_bridge', 'postman_bridge_status', 'postman_task_prepare', 'postman_task_restore', 'postman_worker', 'postman_worker_interrupt', 'postman_worker_list', 'postman_worker_stop', 'postman_yield', 'ptc_execute'])
   assert.deepEqual(restriction.allow, postmanBridgeRestrictionForAgent(a).allow)
   assert.ok(listeners.has('agent-preset/selected'))
   assert.ok(listeners.has('agent/disposed'))

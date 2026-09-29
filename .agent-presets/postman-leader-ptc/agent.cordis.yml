@@ -1,5 +1,5 @@
 # Experimental pilot: same Postman composition as production Leader and its local Worker.
-# The exact top-level Leader is narrowed by a positive 19-name runtime allowlist
+# The exact top-level Leader is narrowed by a positive 20-name runtime allowlist
 # in dsh-postman-harness/bridge; its ordinary spawn Worker keeps the shared coding
 # capabilities, with a deny-only filter on registered postman_* controls.
 

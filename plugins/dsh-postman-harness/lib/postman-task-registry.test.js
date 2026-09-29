@@ -95,3 +95,34 @@ test('backend rejection never returns an accepted intent', async () => {
   await assert.rejects(() => registry.create('leader', record), /disk unavailable/)
   await registry.close()
 })
+
+test('JSON reopen retains independent Worker lifecycle and Bridge/runner fields', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'postman-registry-lifecycle-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const backend = new JsonStorageBackend(root)
+  const ctx = { storage: { backend: { get: () => backend } }, emit() {} }
+  const open = () => openPostmanTaskRegistry(new DomainFacility(ctx, { backend: 'json', routes: {} }))
+  const registry = await open()
+  const a = { id: 'A', label: 'A', state: 'ready', delivery: 'none', artifactRequests: [],
+    lifecycle: { version: 1, admissions: [{ id: 'assignment', state: 'accepted', messageId: 'm' }],
+      reports: [{ childId: 'A', turn: 1, callId: 'r', messageId: 'delivered' }] } }
+  const b = { id: 'B', label: 'B', state: 'uncertain', delivery: 'unknown', artifactRequests: [] }
+  const c = { id: 'C', label: 'C', state: 'ready', delivery: 'none', artifactRequests: [] }
+  await registry.create('leader', { ...record, worker: undefined, workers: { A: a, B: b, C: c },
+    bridgeOperations: { job: { state: 'received', synchronization: 'synchronized' } } })
+  await registry.change('leader', row => ({ ...row, workers: { ...row.workers,
+    A: { ...row.workers.A, state: 'stopping' } } }))
+  await registry.close()
+  const reopened = await open()
+  assert.equal(reopened.get('leader').workers.A.lifecycle.reports[0].messageId, 'delivered')
+  assert.equal(reopened.get('leader').workers.B.lifecycle, undefined)
+  assert.equal(reopened.get('leader').workers.B.state, 'uncertain')
+  assert.equal(reopened.get('leader').workers.C.id, 'C')
+  assert.equal(reopened.get('leader').bridgeOperations.job.synchronization, 'synchronized')
+  await reopened.change('leader', row => {
+    const workers = { ...row.workers }; delete workers.A; return { workers }
+  })
+  assert.deepEqual(Object.keys(reopened.get('leader').workers), ['B', 'C'])
+  assert.equal(reopened.get('leader').runner.state, 'none')
+  await reopened.close(); await backend.close()
+})
