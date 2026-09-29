@@ -2,7 +2,7 @@
 
 id: ptc
 status: active
-updated: 2026-09-29
+updated: 2026-09-30
 
 ## Цель
 
@@ -10,7 +10,7 @@ updated: 2026-09-29
 
 ## Текущий фокус и следующий шаг
 
-Общее ядро `plugins/dsh-ptc` сохранено; один обычный `ptc_execute` через `ToolRuntime` принадлежит точному живому top-level `postman-leader-ptc` (профиль `read/grep/get_goal/web_fetch`) либо его подтверждённому текущему Worker (отдельный `read/glob/grep/web_fetch/web_search`). У Worker остальные coding tools остаются обычными, но внутри программы не доступны. Автоматические Worker-проверки проведены без модели; живая Worker-приёмка требует отдельного разрешения. Production Leader/Workers и Bridge ПТС не получают.
+Общее ядро `plugins/dsh-ptc` сохранено; один обычный `ptc_execute` через `ToolRuntime` принадлежит точному живому top-level `postman-leader-ptc` (профиль `read/grep/get_goal/web_fetch`) либо его подтверждённому текущему Worker (отдельный `read/glob/grep/web_fetch/web_search`). У Worker остальные coding tools остаются обычными, но внутри программы не доступны. Автоматические Worker-проверки проведены без модели; Stage 4 Worker live-приёмка была проведена отдельно и вскрыла ошибочную файловую базу. Этап 4.5 фиксирует Host-side границу: относительные `read/glob/grep` Worker PTC привязаны к текущему task worktree, выход через абсолютный путь, `..` и junction отклоняется. Production Leader/Workers и Bridge ПТС не получают.
 
 ## Границы и решения
 
@@ -21,7 +21,7 @@ updated: 2026-09-29
 
 ## Живые проверки и следующая граница
 
-Для experimental Leader в установленной сборке подтверждены: точный namespace, отсутствие Node globals, настоящие `read/grep/get_goal`, `maxWallMs` и новый запуск после timeout, внешний пользовательский Stop и новый запуск после abort. Вызов `web_fetch` дошёл до штатного инструмента, но web provider отсутствовал. Полная live cross-session isolation **не подтверждена**; автоматические multi-worker тесты этапа 4 её не подменяют. Живая Worker-приёмка не запускалась. Отдельное разрешение потребуется до установки/загрузки этой ветки и проверки модели; этап 5 `write/edit` не начинать.
+Для experimental Leader в установленной сборке подтверждены: точный namespace, отсутствие Node globals, настоящие `read/grep/get_goal`, `maxWallMs` и новый запуск после timeout, внешний пользовательский Stop и новый запуск после abort. Вызов `web_fetch` дошёл до штатного инструмента, но web provider отсутствовал. Stage 4 Worker live подтвердил namespace PASS, отсутствие Node globals и mutation/shell/privileged PTC functions, настоящий glob/read/grep PASS, continuable follow-up PASS, selective stop трёх Worker PASS и отсутствие PTC production Worker PASS. Одновременно `read("plugins/dsh-ptc/src/runtime.js")` прочёл `.dsh`/session cwd вместо task worktree — поэтому этап 5 был остановлен. Этап 4.5 исправляет этот Host-side дефект; его live-приёмка не проводилась, автоматическая cross-session проверка не заменяет live cross-session isolation. Отдельное разрешение потребуется до установки/загрузки ветки и модели. Этап 5 `write/edit` не начинать.
 
 ## Прочитать сначала
 

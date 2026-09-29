@@ -15,6 +15,7 @@
     "lib/postman-bridge.js",
     "lib/postman-bridge-core.js",
     "lib/ptc-adapter.js",
+    "lib/ptc-worktree-boundary.js",
     "lib/postman-bridge-launch-coordinator.js",
     "lib/postman-bridge-jobs.js",
     "lib/postman-worker.js",
