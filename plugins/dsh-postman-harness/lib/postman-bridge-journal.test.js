@@ -188,7 +188,7 @@ test('proven pre-publication failure persists not-required across restarts and a
   } }, tools: { get: () => ({ async execute() {
     const requestId = 'REQ_20260929T01010' + sends + 'Z_0001'
     return { status: 'FAILED', requestId, result: { ok: false, code: 'POSTMAN_TRANSPORT_FAILED',
-      requestId, transportCode: 'DIRECT_INVALID_TASK', transportMessage: 'rejected before publication', details: {} } }
+      requestId, transportCode: 'DIRECT_INVALID_TASK', transportMessage: 'rejected before publication', details: {}, publicationReceipt: null } }
   } }) } }
   const jobs = createPostmanBridgeJobs(ctx, { run: (_signal, launch) => launch(), dispose() {} }, null, contexts)
   const receipts = []
@@ -199,9 +199,8 @@ test('proven pre-publication failure persists not-required across restarts and a
     for (let attempt = 0; attempt < 40 &&
       !['not-required', 'busy'].includes(registry.get(parent.id).bridgeOperations[receipt.bridgeJobId]?.synchronization); attempt++)
       await new Promise(resolve => setTimeout(resolve, 25))
-    const status = await jobs.status(parent, receipt.bridgeJobId)
-    assert.equal(status.synchronization, 'not-required', JSON.stringify({ status, op: registry.get(parent.id).bridgeOperations[receipt.bridgeJobId] }))
-    assert.equal(status.state, 'TERMINAL')
+    const status = await jobs.status(parent, receipt.bridgeJobId, true)
+    assert.equal(status.synchronization, 'not-required')
     const op = registry.get(parent.id).bridgeOperations[receipt.bridgeJobId]
     assert.equal(op.state, 'received')
     assert.equal(op.synchronization, 'not-required')

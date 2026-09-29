@@ -30,13 +30,14 @@ Image MVP:
 
 ```text
 @PostmanImage <описание одной картинки>
-→ REQ_A: генерация одной картинки, завершение подтверждается ходом assistant с изображением, без текстового маркера
-→ REQ_B: на той же открытой browser page автоматическая отправка в тот же чат — упаковка только что созданной картинки без изменений в ZIP
-→ обычная проверка и загрузка ZIP → извлечение ровно одного PNG/JPEG/WEBP
-→ IMAGE_RESULT_DURABLE с resultImage, imageSha256 и метаданными изображения (REQ_A)
+→ preparatory Web turn: точный multiline user intent без Postman/REQ/GitHub metadata
+→ ожидание доказанного image-ready хода assistant
+→ один опубликованный PACKAGING task и один canonical REQ prompt в том же conversation/Page (navigate=False)
+→ обычные observer/detector/download/ZIP validator
+→ IMAGE_RESULT_DURABLE с одним requestId, resultImage, imageSha256 и метаданными изображения
 ```
 
-В репозитории нет общего механизма Python-зависимостей. Для декодирования картинки установи `Pillow>=12,<13` в тот же Python, которым запускается `postman.ps1`: `python -m pip install "Pillow>=12,<13"`. Без него image flow завершается `IMAGE_DECODER_UNAVAILABLE` и не выдаёт непроверенный результат. В ZIP допускаются посторонние не-графические файлы, но изображение должно быть ровно одно. REQ_B — внутренний ход без отдельного task commit; ZIP сохраняется как промежуточное доказательство, но не регистрируется как implementation artifact. Первая версия не поддерживает несколько картинок, редактирование, входные attachments и ручной `@PostmanImage --chat`.
+PACKAGING task использует ровно одно изображение из непосредственно предшествующего ответа assistant в том же чате; он запрещает новую генерацию/замену/изменение/resize/перекодирование и задаёт ZIP с ровно одним изображением и обычным result envelope. Для декодирования ZIP установи `Pillow>=12,<13` в Python, которым запускается `postman.ps1`; без него flow завершается `IMAGE_DECODER_UNAVAILABLE`. ZIP остаётся внутренним доказательством, не implementation artifact и не получает grant. Первая версия не поддерживает несколько картинок, редактирование, входные attachments и ручной `@PostmanImage --chat`.
 
 Artifact и text режимы поддерживают manual continuation:
 

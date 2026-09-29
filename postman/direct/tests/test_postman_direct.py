@@ -73,8 +73,7 @@ PRE = "a" * 40
 
 
 class DirectPostmanUnitTests(unittest.TestCase):
-    def test_image_mode_runs_two_turns_and_returns_only_extracted_image(self):
-        second_id = "REQ_20260902T010204Z_5678"
+    def test_image_mode_uses_one_req_and_packages_only_after_preparatory_intent(self):
         intent = "Создай ровно одно изображение: рыжий спаниэль.\nСветлый фон и мягкий свет."
         class Publisher:
             contents = []
@@ -90,10 +89,10 @@ class DirectPostmanUnitTests(unittest.TestCase):
             def run_request(self, request_id, **kwargs):
                 self.calls.append((request_id, kwargs))
                 return {"ok": True, "code": "RESULT_DURABLE", "details": {
-                    "conversationUrl": "https://chatgpt.com/c/abc", "conversationId": "abc",
-                    "secondRequestId": second_id, "resultZip": str(zip_path), "resultSha256": "c" * 64}}
+                    "requestId": request_id, "conversationUrl": "https://chatgpt.com/c/abc",
+                    "conversationId": "abc", "resultZip": str(zip_path), "resultSha256": "c" * 64}}
         with tempfile.TemporaryDirectory() as tmp:
-            zip_path = Path(tmp) / "results" / second_id / "result.zip"
+            zip_path = Path(tmp) / "results" / REQ / "result.zip"
             zip_path.parent.mkdir(parents=True)
             zip_path.write_bytes(b"fake")
             (zip_path.parent / "validation.json").write_text(json.dumps({
@@ -103,44 +102,34 @@ class DirectPostmanUnitTests(unittest.TestCase):
                 bridge_factory=Bridge, ensure_browser=lambda **_: {"cdpUrl": "http://127.0.0.1:9222"})
             Bridge.calls = []
             Publisher.contents = []
-            image = {"path": str(Path(tmp) / "image.png"), "format": "PNG", "sha256": "d" * 64,
+            image = {"path": str(Path(tmp) / "results" / REQ / "image.png"), "format": "PNG", "sha256": "d" * 64,
                      "bytes": 123, "width": 20, "height": 30, "mime": "image/png", "sourceEntry": "image.png"}
-            with patch.object(direct, "new_image_followup_request_id", return_value=second_id), \
-                 patch.object(direct.image_result, "extract_validated_image", return_value=image) as extract, \
+            image_path = Path(image["path"])
+            image_path.write_bytes(b"x" * 123)
+            with patch.object(direct.image_result, "extract_validated_image", return_value=image) as extract, \
                  patch.object(direct.durable_handoff, "validate_image_terminal", side_effect=lambda terminal, **_: terminal):
                 terminal = runner.run(request_id=REQ, task=intent, image_mode=True)
             self.assertEqual(terminal["code"], "IMAGE_RESULT_DURABLE")
-            self.assertEqual(terminal["secondRequestId"], second_id)
+            self.assertNotIn("secondRequestId", terminal)
+            self.assertEqual(terminal["requestId"], REQ)
             self.assertEqual(terminal["resultImage"], image["path"])
             self.assertNotIn("resultZip", terminal)
-            self.assertEqual(terminal["taskSha256"], direct._sha256_text(Publisher.contents[0]))
-            self.assertNotIn("RESULT_BEGIN", Publisher.contents[0])
-            self.assertIn(intent, Publisher.contents[0])
-            self.assertIn("exactly ONE image", Publisher.contents[0])
+            task = Publisher.contents[0]
+            self.assertNotIn(intent, task)
+            self.assertIn("immediately preceding assistant response", task)
+            self.assertIn("Do not generate a new image", task)
+            self.assertIn(f"POSTMAN_{REQ}_RESULT.zip", task)
             self.assertEqual([x[0] for x in Bridge.calls], [REQ])
-            first = Bridge.calls[0][1]
-            self.assertEqual(first["task_url"], f"https://example.test/{REQ}.md")
-            self.assertEqual(first["prompt"], direct.build_image_generation_prompt(REQ, intent))
-            self.assertTrue(first["prompt"].startswith(f"POSTMAN_REQUEST_ID: {REQ}\n"))
-            self.assertIn(intent, first["prompt"])
-            self.assertIn("Create exactly ONE image", first["prompt"])
-            self.assertNotIn("task_file:", first["prompt"])
-            self.assertNotIn("https://", first["prompt"])
-            followup = first["image_followup"]
-            self.assertEqual(followup["request_id"], second_id)
-            self.assertEqual(followup["expected_request"]["requestId"], second_id)
-            self.assertIn(f"<<<POSTMAN_RESULT_BEGIN:{second_id}>>>", followup["prompt"])
-            self.assertTrue(followup["prompt"].startswith(f"POSTMAN_REQUEST_ID: {second_id}\n"))
-            self.assertIn("immediately preceding assistant response", followup["prompt"])
-            self.assertIn("Do not generate another image", followup["prompt"])
-            self.assertNotIn(intent, followup["prompt"])
-            self.assertNotIn("task_file:", followup["prompt"])
-            self.assertNotIn("https://", followup["prompt"])
-            self.assertNotIn("baseCommit", followup["prompt"])
+            call = Bridge.calls[0][1]
+            self.assertEqual(call["prompt"], direct.build_external_prompt(request_id=REQ,
+                task_url=f"https://example.test/{REQ}.md", repository=REPO, base_commit=PRE,
+                expected_filename=f"POSTMAN_{REQ}_RESULT.zip", allowed_paths=["README.md"], forbidden_paths=list(direct.DEFAULT_FORBIDDEN_PATHS)))
+            self.assertEqual(call["preparatory_prompt"], direct.build_image_generation_prompt(intent))
+            self.assertEqual(call["task_url"], f"https://example.test/{REQ}.md")
+            self.assertNotIn("secondRequestId", call)
             self.assertEqual(terminal["imageFormat"], "png")
             extract.assert_called_once_with(str(zip_path), [{"path": "image.png", "kind": "file"}],
-                                            runner.result_root / second_id, expected_zip_sha256="c" * 64)
-            self.assertEqual(json.loads(runner.state_path(second_id).read_text(encoding="utf-8"))["state"], "RESULT_DURABLE")
+                                            runner.result_root / REQ, expected_zip_sha256="c" * 64)
             self.assertEqual(json.loads(runner.result_handoff_path(REQ).read_text(encoding="utf-8"))["code"], "IMAGE_RESULT_DURABLE")
 
     def test_image_mode_rejects_rejected_artifact_without_extraction(self):
@@ -158,14 +147,12 @@ class DirectPostmanUnitTests(unittest.TestCase):
             runner = direct.DirectPostman(branch="preview", direct_root=Path(tmp) / "direct",
                 result_root=Path(tmp) / "results", publisher_factory=Publisher,
                 bridge_factory=Bridge, ensure_browser=lambda **_: {"cdpUrl": "http://127.0.0.1:9222"})
-            second_id = "REQ_20260902T010204Z_5678"
-            with patch.object(direct, "new_image_followup_request_id", return_value=second_id), \
-                 patch.object(direct.image_result, "extract_validated_image") as extract:
+            with patch.object(direct.image_result, "extract_validated_image") as extract:
                 with self.assertRaises(direct.DirectPostmanError) as caught:
                     runner.run(request_id=REQ, task="image", image_mode=True)
             self.assertEqual(caught.exception.details["transportCode"], "ARTIFACT_REJECTED")
             extract.assert_not_called()
-            self.assertEqual(json.loads(runner.state_path(second_id).read_text(encoding="utf-8"))["state"], "FAILED")
+            self.assertEqual(json.loads(runner.state_path(REQ).read_text(encoding="utf-8"))["state"], "FAILED")
 
     def test_image_mode_requires_pillow_before_claiming_or_publishing(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -205,22 +192,12 @@ class DirectPostmanUnitTests(unittest.TestCase):
         for invented in ("React", "responsive", "division by zero", "framework"):
             self.assertNotIn(invented, rendered)
 
-    def test_image_generation_prompt_preserves_exact_multiline_intent(self):
+    def test_preparatory_image_prompt_wraps_exact_multiline_user_intent_without_req_metadata(self):
         intent = "  Рыжий спаниэль\n\nОдно изображение ✅\n  "
-        prompt = direct.build_image_generation_prompt(REQ, intent)
-        self.assertEqual(prompt, (
-            f"POSTMAN_REQUEST_ID: {REQ}\n\n"
-            "Create exactly ONE image satisfying this request:\n\n"
-            f"{intent}\n\n"
-            "Generate exactly one image using the image-generation capability.\n"
-            "Show the generated image in this conversation.\n"
-            "Do not generate multiple variants.\n"
-            "Do not create a ZIP or other attachment in this turn."
-        ))
-        self.assertNotIn("task_file:", prompt)
-        self.assertNotIn("https://", prompt)
-        for metadata in ("repository:", "base_commit:", "allowed_paths_json:"):
-            self.assertNotIn(metadata, prompt)
+        prompt = direct.build_image_generation_prompt(intent)
+        self.assertEqual(prompt, f"Сгенерируй, пожалуйста, изображение по этому промту:\n\n{intent}\n\nСделай ровно одно изображение.")
+        for forbidden in ("POSTMAN_REQUEST_ID", "task_file:", "REQ_", "https://", "RESULT_BEGIN", "RESULT_END"):
+            self.assertNotIn(forbidden, prompt)
 
     def test_external_prompt_is_exactly_req_policy_and_task_link(self):
         filename = f"POSTMAN_{REQ}_RESULT.zip"
@@ -799,7 +776,7 @@ class DirectPostmanUnitTests(unittest.TestCase):
         self.assertEqual(failure["code"], direct.POSTMAN_TRANSPORT_FAILED)
         self.assertEqual(failure["publicationReceipt"], receipt)
 
-    def test_cli_prebridge_failure_becomes_correlated_transport_failure(self):
+    def test_cli_prebridge_failure_keeps_publication_absence_explicit(self):
         failure_code = "DIRECT_BROWSER_FAILED"
         failure_message = "dedicated Chrome failed to become ready"
         failure_details = {"phase": "cdp", "cdpUrl": "http://127.0.0.1:9222"}
@@ -822,6 +799,8 @@ class DirectPostmanUnitTests(unittest.TestCase):
         self.assertEqual(payload["transportCode"], failure_code)
         self.assertEqual(payload["transportMessage"], failure_message)
         self.assertEqual(payload["details"], failure_details)
+        self.assertIn("publicationReceipt", payload)
+        self.assertIsNone(payload["publicationReceipt"])
 
 
 if __name__ == "__main__":

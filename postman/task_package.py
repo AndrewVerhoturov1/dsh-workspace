@@ -52,6 +52,14 @@ def _document_text(value: object, field: str) -> str:
     return value.strip()
 
 
+def expected_artifact_filename(request_id: str) -> str:
+    try:
+        assert_canonical_request_id(request_id)
+    except (TypeError, ValueError) as exc:
+        raise TaskPackageError(str(exc)) from exc
+    return f"POSTMAN_{request_id}_RESULT.zip"
+
+
 def _https_url(value: object, field: str) -> str:
     text = _required_text(value, field)
     parsed = urlparse(text)
@@ -349,24 +357,38 @@ def render_direct_task_manifest(
     return "\n".join(lines)
 
 
-def render_image_task_manifest(*, request_id: str, user_intent: str, repository: str, base_commit: str) -> str:
-    """Stage A asks for a single image in chat, not a transport artifact."""
+def render_image_packaging_task_manifest(
+    *, request_id: str, repository: str, base_commit: str, expected_filename: str,
+    allowed_paths: Iterable[str], forbidden_paths: Iterable[str],
+) -> str:
+    """Self-contained packaging-only task for the already generated conversation image."""
     try:
         assert_canonical_request_id(request_id)
     except (TypeError, ValueError) as exc:
         raise TaskPackageError(str(exc)) from exc
-    intent = _document_text(user_intent, "user_intent").replace("\r\n", "\n").replace("\r", "\n")
-    repository = _required_text(repository, "repository")
-    base_commit = _required_text(base_commit, "base_commit").lower()
-    if not _SHA_RE.fullmatch(base_commit):
+    repository_value = _required_text(repository, "repository")
+    base_commit_value = _required_text(base_commit, "base_commit").lower()
+    if not _SHA_RE.fullmatch(base_commit_value):
         raise TaskPackageError("base_commit must be a 40-character commit SHA")
+    filename = _required_text(expected_filename, "expected_filename")
+    if not validate_expected_artifact_filename(request_id, filename):
+        raise TaskPackageError("expected_filename does not match request_id")
+    allowed = _path_items(allowed_paths, "allowed_paths")
+    forbidden = _path_items(forbidden_paths, "forbidden_paths")
     return "\n".join((
-        "# POSTMAN IMAGE TASK", "", f"request_id: {request_id}",
-        f"repository: {repository}", f"base_commit: {base_commit}",
-        "", "## User intent", "", intent, "", "## Image stage contract", "",
-        "Generate exactly ONE image satisfying the user intent, using the image-generation capability.",
-        "Show the generated image in this conversation. Do not create a ZIP, attachment package, or text result marker in this stage.",
-        "Do not generate multiple image variants. The next turn will package this same image unchanged.", "",
+        "# POSTMAN IMAGE PACKAGING TASK", "", "protocol_version: 1",
+        f"request_id: {request_id}", f"repository: {repository_value}",
+        f"base_commit: {base_commit_value}", f"expected_filename: {filename}",
+        "allowed_paths_json: " + json.dumps(allowed, ensure_ascii=False, separators=(",", ":")),
+        "forbidden_paths_json: " + json.dumps(forbidden, ensure_ascii=False, separators=(",", ":")),
+        "", "## Packaging instructions", "",
+        "Use exactly the ONE image in the immediately preceding assistant response in this same ChatGPT conversation.",
+        "Do not generate a new image, replace the image, modify it, resize it, or intentionally re-encode it.",
+        f"Put exactly that one image file in a downloadable ZIP named {filename}.",
+        "Return the real downloadable ZIP using the normal Postman result envelope:", "",
+        f"<<<POSTMAN_RESULT_BEGIN:{request_id}>>>", filename,
+        f"<<<POSTMAN_RESULT_END:{request_id}>>>",
+        "The middle line must be the real downloadable ZIP control.", "",
     ))
 
 

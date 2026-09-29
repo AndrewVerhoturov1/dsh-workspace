@@ -129,44 +129,11 @@ def _sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def new_image_followup_request_id(first_request_id: str) -> str:
-    """Allocate a different canonical identity for the packaging turn."""
-    request_identity.assert_canonical_request_id(first_request_id)
-    for _ in range(32):
-        candidate = datetime.now(timezone.utc).strftime("REQ_%Y%m%dT%H%M%SZ_") + f"{secrets.randbelow(10000):04d}"
-        if candidate != first_request_id:
-            return candidate
-    raise DirectPostmanError("DIRECT_IMAGE_ID_COLLISION", "could not allocate a distinct image packaging request")
-
-
-def build_image_generation_prompt(request_id: str, user_intent: str) -> str:
-    """Put the original image intent directly in the first Web turn."""
-    request_identity.assert_canonical_request_id(request_id)
+def build_image_generation_prompt(user_intent: str) -> str:
+    """Build the preparation turn without any Postman request metadata."""
     if not isinstance(user_intent, str) or not user_intent.strip():
         raise DirectPostmanError("DIRECT_INVALID_TASK", "image intent must be a non-empty string")
-    return (
-        f"POSTMAN_REQUEST_ID: {request_id}\n\n"
-        "Create exactly ONE image satisfying this request:\n\n"
-        f"{user_intent}\n\n"
-        "Generate exactly one image using the image-generation capability.\n"
-        "Show the generated image in this conversation.\n"
-        "Do not generate multiple variants.\n"
-        "Do not create a ZIP or other attachment in this turn."
-    )
-
-
-def image_packaging_prompt(request_id: str, expected_filename: str) -> str:
-    return "\n".join((
-        f"POSTMAN_REQUEST_ID: {request_id}",
-        "Take exactly the ONE image you generated in your immediately preceding assistant response.",
-        "Do not generate another image. Do not modify, resize, intentionally re-encode, or substitute it.",
-        f"Put that image into one downloadable ZIP named {expected_filename}, containing exactly one image file.",
-        "Return it using the normal Postman result envelope:",
-        f"<<<POSTMAN_RESULT_BEGIN:{request_id}>>>",
-        expected_filename,
-        f"<<<POSTMAN_RESULT_END:{request_id}>>>",
-        "The middle line must be the real downloadable ZIP control.",
-    ))
+    return f"Сгенерируй, пожалуйста, изображение по этому промту:\n\n{user_intent}\n\nСделай ровно одно изображение."
 
 
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
@@ -686,9 +653,13 @@ class DirectPostman:
             allowed_paths = derive_allowed_paths(snapshot.root_entries, extra_allowed)
             forbidden_paths = derive_forbidden_paths(extra_forbidden)
 
-            task_content = (task_package.render_image_task_manifest(
-                request_id=request_id, user_intent=task, repository=self.repository,
+            task_content = (task_package.render_image_packaging_task_manifest(
+                request_id=request_id,
+                repository=self.repository,
                 base_commit=snapshot.prepublication_commit,
+                expected_filename=expected_filename,
+                allowed_paths=allowed_paths,
+                forbidden_paths=forbidden_paths,
             ) if image_mode else task_package.render_direct_task_manifest(
                 request_id=request_id,
                 user_intent=task,
@@ -713,18 +684,16 @@ class DirectPostman:
             "allowedPaths": allowed_paths,
             "forbiddenPaths": forbidden_paths,
         }
-        if image_mode:
-            prompt = build_image_generation_prompt(request_id, task)
-        else:
-            prompt = build_external_prompt(
-                request_id=request_id,
-                task_url=published.task_url,
-                repository=self.repository,
-                base_commit=snapshot.prepublication_commit,
-                expected_filename=expected_filename,
-                allowed_paths=allowed_paths,
-                forbidden_paths=forbidden_paths,
-            )
+        artifact_prompt = build_external_prompt(
+            request_id=request_id,
+            task_url=published.task_url,
+            repository=self.repository,
+            base_commit=snapshot.prepublication_commit,
+            expected_filename=expected_filename,
+            allowed_paths=allowed_paths,
+            forbidden_paths=forbidden_paths,
+        )
+        prompt = build_image_generation_prompt(task) if image_mode else artifact_prompt
         self._write_state(
             request_id,
             STATE_TASK_PUBLISHED,
@@ -735,7 +704,7 @@ class DirectPostman:
             expectedFilename=expected_filename,
             allowedPaths=allowed_paths,
             forbiddenPaths=forbidden_paths,
-            promptSha256=_sha256_text(prompt),
+            promptSha256=_sha256_text(artifact_prompt),
         )
         self.publication_receipt = {
             "requestId": request_id, "repository": self.repository, "branch": self.branch,
@@ -746,41 +715,20 @@ class DirectPostman:
         browser = self.ensure_browser(cdp_url=cdp_url)
         self._write_state(request_id, STATE_BROWSER_READY, browser=browser)
 
-        packaging = None
-        if image_mode:
-            second_request_id = new_image_followup_request_id(request_id)
-            try:
-                process_lock.claim_request(self.direct_root, second_request_id)
-            except FileExistsError as exc:
-                raise DirectPostmanError("DIRECT_IMAGE_ID_COLLISION", "image packaging request already claimed") from exc
-            if self.state_path(second_request_id).exists():
-                raise DirectPostmanError("DIRECT_IMAGE_ID_COLLISION", "image packaging request state already exists")
-            expected_filename_b = request_identity.expected_artifact_filename(second_request_id)
-            prompt_b = image_packaging_prompt(second_request_id, expected_filename_b)
-            packaging = {"request_id": second_request_id, "prompt": prompt_b,
-                         "expected_filename": expected_filename_b,
-                         "expected_request": {**expected_request, "requestId": second_request_id,
-                                              "expectedFilename": expected_filename_b}}
-            self._write_state(second_request_id, STATE_INIT, parentRequestId=request_id,
-                              rootRequestId=request_id, continuationIndex=1,
-                              taskUrl=published.task_url, expectedFilename=expected_filename_b,
-                              resultRoot=str(self.result_root),
-                              baseCommit=published.prepublication_commit,
-                              taskPublicationCommit=published.publication_commit,
-                              promptSha256=_sha256_text(prompt_b))
         bridge_root = self.direct_root.parent
         bridge = self.bridge_factory(root=bridge_root, result_root=self.result_root)
         self._write_state(request_id, STATE_WEB_RUNNING)
         result = bridge.run_request(
             request_id,
             task_url=published.task_url,
-            prompt=prompt,
+            prompt=artifact_prompt if image_mode else prompt,
             expected_filename=expected_filename,
             expected_request=expected_request,
+            preparatory_prompt=prompt if image_mode else None,
             cdp_url=browser.get("cdpUrl", cdp_url),
             conversation_url=chat_ref.conversation_url if chat_ref is not None else None,
             observer_timeout_ms=DEFAULT_ASSISTANT_TIMEOUT_MS,
-            **({"image_followup": packaging} if image_mode else {}),
+            **({"image_mode": True} if image_mode else {}),
         )
         if not isinstance(result, dict) or result.get("ok") is not True:
             code = result.get("code", "DIRECT_WEB_FAILED") if isinstance(result, dict) else "DIRECT_WEB_FAILED"
@@ -807,7 +755,7 @@ class DirectPostman:
         if image_mode:
             return self._finish_image_mode(
                 request_id=request_id, result=result, published=published,
-                task_content=task_content, second_request_id=second_request_id,
+                task_content=task_content,
                 browser=browser,
             )
 
@@ -934,13 +882,12 @@ class DirectPostman:
 
     def _finish_image_mode(
         self, *, request_id: str, result: dict[str, Any], published: PublishedTask,
-        task_content: str, second_request_id: str, browser: dict[str, Any],
+        task_content: str, browser: dict[str, Any],
     ) -> dict[str, Any]:
         details = result.get("details") if isinstance(result.get("details"), dict) else {}
-        if result.get("code") != RESULT_DURABLE or details.get("secondRequestId") != second_request_id:
+        if result.get("code") != RESULT_DURABLE or details.get("requestId", request_id) != request_id:
             code = str(result.get("code") or "DIRECT_IMAGE_PACKAGING_FAILED")
-            self._write_state(second_request_id, STATE_FAILED, failureCode=code, failureDetails=details)
-            self._write_state(request_id, STATE_FAILED, failureCode=code, secondRequestId=second_request_id)
+            self._write_state(request_id, STATE_FAILED, failureCode=code, failureDetails=details)
             raise DirectPostmanError(POSTMAN_TRANSPORT_FAILED, "image packaging did not produce a validated durable ZIP", details={
                 "transportCode": code, "transportMessage": "image packaging did not produce a validated durable ZIP", "details": details,
             })
@@ -957,13 +904,11 @@ class DirectPostman:
         except (OSError, ValueError) as exc:
             self._write_state(request_id, STATE_FAILED, failureCode="DIRECT_IMAGE_VALIDATION_MISSING")
             raise DirectPostmanError("DIRECT_IMAGE_VALIDATION_MISSING", str(exc), details={"validationPath": str(validation_path)}) from exc
-        self._write_state(second_request_id, STATE_RESULT_DURABLE, resultZip=zip_path,
-                          artifactSha256=validation["sha256"], workerDetails=details)
         try:
             image = image_result.extract_validated_image(zip_path, validation["inventory"],
-                self.result_root / second_request_id, expected_zip_sha256=validation["sha256"])
+                self.result_root / request_id, expected_zip_sha256=validation["sha256"])
         except image_result.ImageResultError as exc:
-            self._write_state(request_id, STATE_FAILED, failureCode=exc.code, secondRequestId=second_request_id)
+            self._write_state(request_id, STATE_FAILED, failureCode=exc.code)
             raise DirectPostmanError(exc.code, str(exc), details=exc.details) from exc
         state_path = self.state_path(request_id)
         handoff_path = self.result_handoff_path(request_id)
@@ -975,7 +920,7 @@ class DirectPostman:
             resultImage=image["path"], imageFormat={"PNG": "png", "JPEG": "jpg", "WEBP": "webp"}[image["format"]],
             imageSha256=image["sha256"], imageByteLength=image["bytes"],
             imageWidth=image["width"], imageHeight=image["height"], imageMimeType=image["mime"],
-            secondRequestId=second_request_id, sourceEntry=image["sourceEntry"],
+            sourceEntry=image["sourceEntry"],
             packagingZipSha256=validation["sha256"], resultRoot=str(self.result_root), statePath=str(state_path),
             resultHandoffPath=str(handoff_path.resolve()), handoffVersion=durable_handoff.HANDOFF_VERSION,
             parentRequestId=None, rootRequestId=request_id, continuationIndex=0,
@@ -989,7 +934,7 @@ class DirectPostman:
             raise DirectPostmanError("DIRECT_IMAGE_RESULT_INVALID", str(exc), details=exc.details) from exc
         except OSError as exc:
             raise DirectPostmanError("DIRECT_RESULT_HANDOFF_WRITE_FAILED", str(exc)) from exc
-        self._write_state(request_id, STATE_IMAGE_RESULT_DURABLE, secondRequestId=second_request_id,
+        self._write_state(request_id, STATE_IMAGE_RESULT_DURABLE,
                           resultImage=image["path"], imageSha256=image["sha256"],
                           taskSha256=_sha256_text(task_content))
         return terminal
@@ -1011,7 +956,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cdp-url", default=bootstrap.DEFAULT_CDP_URL)
     parser.add_argument("--chat-request-id")
     parser.add_argument("--automatic-continuation", action="store_true", help="Continue the existing conversation and preserve chain identity")
-    parser.add_argument("--image-mode", action="store_true", help="Generate one image, then package it in a second turn")
+    parser.add_argument("--image-mode", action="store_true", help="Generate one image, then package it using one Postman request")
     parser.add_argument("--allow-path", action="append", default=[])
     parser.add_argument("--forbid-path", action="append", default=[])
     return parser
@@ -1072,7 +1017,7 @@ def main(argv: list[str] | None = None) -> int:
         publication_receipt = getattr(direct, "publication_receipt", None)
         publication_fields = {"publicationReceipt": publication_receipt} if (
             isinstance(publication_receipt, dict) and publication_receipt.get("requestId") == args.request_id
-        ) else {}
+        ) else {"publicationReceipt": None}
         request_fields = {"requestId": args.request_id} if args.request_id else {}
         if (
             execution_request_id

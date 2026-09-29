@@ -99,91 +99,84 @@ class WebWorkerBridgeTests(unittest.TestCase):
             self.assertEqual(callback_results, [])
 
 
-    def test_image_flow_uses_one_page_for_both_proven_turns_and_zip(self):
+    def test_image_flow_sends_exact_intent_then_one_artifact_prompt_after_ready(self):
         chat = "https://chatgpt.com/c/12345678-1234-1234-1234-123456789abc"
-        second = "REQ_20260831T043821Z_0043"
         events = []
         class Page:
             closed = False
-            def close(self):
-                events.append("close")
-                self.closed = True
+            def close(self): events.append("close"); self.closed = True
             def is_closed(self): return self.closed
         page = Page()
         class Context:
-            def new_page(self):
-                events.append("new_page")
-                return page
+            def new_page(self): events.append("new_page"); return page
         class Browser:
             contexts = [Context()]
         class Factory:
-            def __enter__(self):
-                self.chromium = self
-                return self
+            def __enter__(self): self.chromium = self; return self
             def __exit__(self, *args): pass
             def connect_over_cdp(self, url): return Browser()
-        submit = {"ok": True, "code": "SENT", "sendState": "PROVEN_SENT",
-                  "details": {"chatUrl": chat}}
-        image_proof = {"ok": True, "code": "ASSISTANT_TURN_COMPLETED",
-                       "details": {"assistantText": "", "assistantImageCount": 1, "assistantIndex": 1}}
-        zip_proof = {"ok": True, "code": "ASSISTANT_TURN_COMPLETED",
-                     "details": {"assistantText": "ZIP", "assistantIndex": 3}}
-        result_root = []
+        submit = {"ok": True, "code": "SENT", "sendState": "PROVEN_SENT", "details": {"chatUrl": chat}}
+        image_proof = {"ok": True, "code": "ASSISTANT_TURN_COMPLETED", "details": {"assistantText": "", "assistantImageCount": 1, "assistantIndex": 1}}
+        zip_proof = {"ok": True, "code": "ASSISTANT_TURN_COMPLETED", "details": {"assistantText": "ZIP", "assistantIndex": 3}}
         pauses = []
+        intent = "  Нарисуй рыжего пса\n\nНа белом фоне ✅  "
+        task_url = f"https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/{'b' * 40}/{REQ}.md"
+        artifact_prompt = f"POSTMAN_REQUEST_ID: {REQ}\ntask_file: {task_url}"
         def observe(target, prompt, *_args, **kwargs):
             self.assertIs(target, page)
-            events.append("observe_image" if kwargs.get("image_mode") else "observe_zip")
+            event = "observe_image" if kwargs.get("image_mode") else "observe_zip"
+            events.append(event)
+            if event == "observe_image":
+                self.assertFalse(any(isinstance(item, tuple) and item[0] == "pause" for item in events))
+            else:
+                self.assertEqual(events[-2], "submit_artifact")
             return image_proof if kwargs.get("image_mode") else zip_proof
-        def followup(target, prompt, url, **kwargs):
-            self.assertIs(target, page)
-            self.assertEqual(url, chat)
-            self.assertEqual(kwargs["navigate"], False)
-            self.assertIn("observe_image", events)
-            self.assertFalse(page.closed)
-            events.append("submit_b")
+        def existing(target, prompt, url, **kwargs):
+            self.assertIs(target, page); self.assertEqual(url, chat)
+            self.assertIs(kwargs["navigate"], False); self.assertIn("observe_image", events)
+            events.append("submit_artifact")
             return submit
         def detect(target, **kwargs):
-            self.assertIs(target, page)
-            self.assertEqual(kwargs["request_id"], second)
-            events.append("detect_zip")
-            return {"ok": True, "code": "ARTIFACT_FOUND"}
+            self.assertIs(target, page); self.assertEqual(kwargs["request_id"], REQ)
+            self.assertEqual(events[-1], "observe_zip")
+            events.append("detect_zip"); return {"ok": True, "code": "ARTIFACT_FOUND"}
         def download(target, **kwargs):
-            self.assertIs(target, page)
-            self.assertEqual(kwargs["request_id"], second)
-            result_root.append(kwargs["result_root"])
+            self.assertIs(target, page); self.assertEqual(kwargs["request_id"], REQ)
+            self.assertEqual(events[-1][0], "pause")
             events.append("download_zip")
             return {"ok": True, "code": "RESULT_DURABLE", "details": {
-                "resultDirectory": str(Path(kwargs["result_root"]) / second),
-                "resultZip": str(Path(kwargs["result_root"]) / second / "result.zip"),
-                "sha256": "c" * 64}}
+                "resultDirectory": str(Path(kwargs["result_root"]) / REQ),
+                "resultZip": str(Path(kwargs["result_root"]) / REQ / "result.zip"), "sha256": "c" * 64}}
         with tempfile.TemporaryDirectory() as root:
-            bridge = bridge_module.WebWorkerBridge(root=root, sleep=pauses.append,
+            def record_pause(seconds):
+                pauses.append(seconds)
+                events.append(("pause", seconds))
+            bridge = bridge_module.WebWorkerBridge(root=root, sleep=record_pause,
                                                     on_result_durable=lambda _: events.append("grant"))
-            followup_data = {"request_id": second, "prompt": "POSTMAN_REQUEST_ID: " + second,
-                             "expected_filename": f"POSTMAN_{second}_RESULT.zip",
-                             "expected_request": {"requestId": second}}
-            with patch.object(bridge_module.browser_submit, "submit_fresh_prompt", side_effect=lambda *_a, **_k: (events.append("submit_a"), submit)[1]) as fresh, \
-                 patch.object(bridge_module.browser_submit, "submit_existing_prompt", side_effect=followup) as existing, \
+            with patch.object(bridge_module.browser_submit, "submit_fresh_prompt", side_effect=lambda *_a, **_k: (events.append("submit_intent"), submit)[1]) as fresh, \
+                 patch.object(bridge_module.browser_submit, "submit_existing_prompt", side_effect=existing) as subsequent, \
                  patch.object(bridge_module.browser_observer, "observe_next_assistant", side_effect=observe) as observer, \
                  patch.object(bridge_module.browser_observer, "connection_interrupted", return_value=(False, {})), \
                  patch.object(bridge_module.artifact_detector, "detect_artifact_dom", side_effect=detect), \
                  patch.object(bridge_module.artifact_download, "download_validated_artifact", side_effect=download), \
                  patch.object(bridge_module.reminder_policy, "submit_reminder", side_effect=AssertionError("reminder")):
-                result = bridge.run_request(REQ, task_url=TASK_URL, prompt="image request",
-                    expected_filename="unused.zip", expected_request={},
-                    playwright_factory=Factory, image_followup=followup_data)
+                result = bridge.run_request(REQ, task_url=task_url, prompt=artifact_prompt,
+                    preparatory_prompt=intent, image_mode=True,
+                    expected_filename=f"POSTMAN_{REQ}_RESULT.zip", expected_request={"requestId": REQ},
+                    playwright_factory=Factory)
             self.assertEqual(result["code"], bridge_module.RESULT_DURABLE, result)
-            self.assertTrue(result["ok"])
-            self.assertEqual(result["details"]["secondRequestId"], second)
-            self.assertEqual(result["details"]["imageObserverProof"]["details"]["assistantImageCount"], 1)
-            self.assertEqual(bridge.read_state(REQ)["state"], bridge_module.RESULT_DURABLE)
-            self.assertEqual(events, ["new_page", "submit_a", "observe_image", "submit_b",
-                                      "observe_zip", "detect_zip", "download_zip", "close"])
-            self.assertEqual(len(pauses), 5)
+            self.assertNotIn("secondRequestId", result["details"])
+            self.assertEqual(events, ["new_page", "submit_intent", "observe_image", ("pause", pauses[0]),
+                                      "submit_artifact", "observe_zip", "detect_zip", ("pause", pauses[1]),
+                                      "download_zip", "close"])
+            self.assertEqual(len(pauses), 2)
             self.assertTrue(all(3 <= seconds <= 7 for seconds in pauses))
-            self.assertEqual((fresh.call_count, existing.call_count, observer.call_count), (1, 1, 2))
-            self.assertEqual(fresh.call_args.kwargs["timeout_ms"], 90_000)
-            self.assertEqual(result_root, [bridge.result_root])
+            self.assertEqual((fresh.call_count, subsequent.call_count, observer.call_count), (1, 1, 2))
+            self.assertEqual(fresh.call_args.args[1], intent)
+            self.assertEqual(subsequent.call_args.args[1], artifact_prompt)
+            self.assertEqual(subsequent.call_args.args[1].splitlines(), [f"POSTMAN_REQUEST_ID: {REQ}", f"task_file: {task_url}"])
+            self.assertEqual(result["details"]["requestId"], REQ)
+            self.assertEqual(bridge.read_state(REQ)["state"], bridge_module.RESULT_DURABLE)
             self.assertTrue(page.closed)
 
 

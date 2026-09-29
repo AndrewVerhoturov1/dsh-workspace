@@ -263,6 +263,30 @@ test('recovery accepts local-ahead dirty worktree without altering state', async
   assert.equal(f.state.clean, false)
 })
 
+test('recovery accepts explicit null only for proven pre-publication failure; otherwise history uncertain', async () => {
+  for (const [transportCode, nullReceipt, expected] of [
+    ['DIRECT_INVALID_TASK', null, 'POSTMAN_TASK_CONTEXT_ALREADY_READY'],
+    ['WEB_FAILED', null, 'POSTMAN_TASK_PREPARE_UNCERTAIN'],
+    ['DIRECT_INVALID_TASK', undefined, 'POSTMAN_TASK_PREPARE_UNCERTAIN'],
+  ]) {
+    const f = fixture(); const prepared = await f.contexts.prepare(leader('null-proof'))
+    f.state.trees.push(worktree)
+    f.state.remote = transportCode === 'DIRECT_INVALID_TASK' && nullReceipt === null ? base : published
+    f.state.head = base
+    const requestId = 'REQ_20260927T120000Z_1234'
+    const failure = { status: 'POSTMAN_BRIDGE_TERMINAL', terminalStatus: 'FAILED', transportKind: 'artifact', requestId,
+      result: { ok: false, code: 'POSTMAN_TRANSPORT_FAILED', requestId, transportCode,
+        transportMessage: 'failed before publication', details: {},
+        ...(nullReceipt === undefined ? {} : { publicationReceipt: null }) } }
+    await f.registry.change('null-proof', row => ({ ...row,
+      bridgeOperations: { failure: { state: 'received', synchronization: 'pending', terminal: failure } } }))
+    const cold = createPostmanTaskContexts({ registry: f.registry, gitCommand: f.gitCommand, realPath: async path => path })
+    assert.equal((await cold.recover(leader('null-proof'))).status, expected, `${transportCode}/${String(nullReceipt)}`)
+    assert.equal(await f.gitCommand(worktree, 'rev-parse', 'HEAD'), base)
+    assert.equal(cold.get('null-proof')?.branch, expected === 'POSTMAN_TASK_CONTEXT_ALREADY_READY' ? prepared.branch : undefined)
+  }
+})
+
 test('recovery accepts one journaled IMAGE_RESULT_DURABLE publication without implementation grant', async () => {
   const f = fixture(); const prepared = await f.contexts.prepare(leader('A'))
   f.state.trees.push(worktree); f.state.remote = published; f.state.head = base

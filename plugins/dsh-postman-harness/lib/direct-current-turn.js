@@ -276,7 +276,7 @@ function terminalGate(job) {
     if (parsed.code === 'IMAGE_RESULT_DURABLE') {
       const format = parsed.imageFormat
       const imagePath = parsed.resultImage
-      if (parsed.resultZip !== undefined || typeof imagePath !== 'string' || !isAbsolute(imagePath) ||
+      if (parsed.resultZip !== undefined || parsed.secondRequestId !== undefined || typeof imagePath !== 'string' || !isAbsolute(imagePath) ||
           !Object.hasOwn(IMAGE_FORMATS, format) ||
           !IMAGE_FORMATS[format].includes(basename(imagePath).slice(basename(imagePath).lastIndexOf('.')).toLowerCase()) ||
           !/^[0-9a-f]{64}$/.test(parsed.imageSha256 ?? '') ||

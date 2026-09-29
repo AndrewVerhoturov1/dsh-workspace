@@ -35,7 +35,6 @@ PROMPT_SENT = "PROMPT_SENT"
 WAITING_ASSISTANT = "WAITING_ASSISTANT"
 ARTIFACT_FOUND = "ARTIFACT_FOUND"
 ASSISTANT_COMPLETED_NO_ARTIFACT = "ASSISTANT_COMPLETED_NO_ARTIFACT"
-IMAGE_TURN_COMPLETED = "IMAGE_TURN_COMPLETED"
 ARTIFACT_REJECTED = "ARTIFACT_REJECTED"
 RESULT_DURABLE = "RESULT_DURABLE"
 POSTMAN_TRANSPORT_FAILED = "POSTMAN_TRANSPORT_FAILED"
@@ -50,7 +49,6 @@ _STATE_ORDER = (
     WEB_STARTING,
     PROMPT_SENT,
     WAITING_ASSISTANT,
-    IMAGE_TURN_COMPLETED,
     ARTIFACT_FOUND,
     ASSISTANT_COMPLETED_NO_ARTIFACT,
     ARTIFACT_REJECTED,
@@ -270,7 +268,6 @@ class WebWorkerBridge:
                 previous in _STATE_ORDER
                 and _STATE_ORDER.index(state) < _STATE_ORDER.index(previous)
                 and not retry_after_rejected_artifact
-                and not (previous == IMAGE_TURN_COMPLETED and state == WAITING_ASSISTANT)
             ):
                 raise ValueError(f"state cannot move backwards from {previous} to {state}")
         record = {
@@ -347,21 +344,17 @@ class WebWorkerBridge:
         browser_download_dir: str = artifact_download.DEFAULT_BROWSER_DOWNLOAD_DIR,
         playwright_factory: Callable[[], Any] | None = None,
         validator_runner: Callable[[Path, dict[str, Any]], dict[str, Any]] | None = None,
-        image_followup: dict[str, Any] | None = None,
+        image_mode: bool = False,
+        preparatory_prompt: str | None = None,
     ) -> dict[str, Any]:
-        """Run one browser page; image mode continues to ZIP on that same page."""
-        image_stage = image_followup is not None
-        image_flow = image_stage
+        """Run one browser page; prove image intent, then submit one artifact REQ."""
+        image_flow = image_mode
+        image_stage = bool(image_mode and preparatory_prompt)
+        if image_mode and (not isinstance(preparatory_prompt, str) or not preparatory_prompt.strip()):
+            return _result(BRIDGE_INVALID_CONFIG, ok=False, details={"reason": "image_preparatory_prompt_invalid"})
+        artifact_prompt = prompt
         if image_stage:
-            followup_id = image_followup.get("request_id")
-            try:
-                request_identity.assert_canonical_request_id(followup_id)
-            except (ValueError, TypeError):
-                return _result(BRIDGE_INVALID_CONFIG, ok=False, details={"reason": "image_followup_request_id_invalid"})
-            if (followup_id == request_id or not isinstance(image_followup.get("prompt"), str)
-                    or not image_followup["prompt"] or not isinstance(image_followup.get("expected_filename"), str)
-                    or not isinstance(image_followup.get("expected_request"), dict)):
-                return _result(BRIDGE_INVALID_CONFIG, ok=False, details={"reason": "image_followup_invalid"})
+            prompt = preparatory_prompt
         accepted = self.accept_request(request_id, task_url)
         if not accepted["ok"]:
             return accepted
@@ -426,12 +419,9 @@ class WebWorkerBridge:
                 stack.callback(close_owned_resources)
                 page = context.new_page()
 
-                if image_stage:
-                    self.random_pause()
                 if conversation_url is None:
-                    # Image creation can delay the first /c/... URL after the user turn appears.
                     submitted = browser_submit.submit_fresh_prompt(
-                        page, prompt, timeout_ms=max(timeout_ms, 90_000) if image_stage else timeout_ms)
+                        page, prompt, timeout_ms=max(timeout_ms, 90_000) if image_flow else timeout_ms)
                 else:
                     submitted = browser_submit.submit_existing_prompt(
                         page, prompt, conversation_url, timeout_ms=timeout_ms
@@ -451,13 +441,10 @@ class WebWorkerBridge:
                     continuedConversation=conversation_url is not None,
                 )
 
-                if image_stage:
-                    self.random_pause()
                 started_at = self.monotonic()
                 deadline = started_at + observer_timeout_ms / 1000.0
                 reminder_records: list[dict[str, Any]] = []
                 reminder_index = 0
-                followup_reminders = max_reminders
                 if image_stage:
                     max_reminders = 0
                 watched_turns: list[dict[str, Any]] = [
@@ -577,42 +564,26 @@ class WebWorkerBridge:
                         return {"kind": "no_result"}
 
                     if image_stage:
-                        # Keep the owned Page and the proven first-turn evidence;
-                        # only the technical REQ_B is new.
-                        self._write_state(request, IMAGE_TURN_COMPLETED,
-                                          imageObserverProof=completed, conversationUrl=chat_url,
-                                          conversationId=conversation_id, secondRequestId=followup_id)
-                        self.random_pause()  # Image ready, before the next human action.
-                        self.random_pause()  # Before submitting REQ_B.
-                        followup_submit = browser_submit.submit_existing_prompt(
-                            page, image_followup["prompt"], chat_url, timeout_ms=timeout_ms,
-                            navigate=False,
-                        )
-                        if not followup_submit.get("ok"):
+                        self._write_state(request, WAITING_ASSISTANT, imageObserverProof=completed,
+                                          imageReady=True, conversationUrl=chat_url,
+                                          conversationId=conversation_id)
+                        self.random_pause()
+                        artifact_submit = browser_submit.submit_existing_prompt(
+                            page, artifact_prompt, chat_url, timeout_ms=timeout_ms, navigate=False)
+                        if not artifact_submit.get("ok"):
                             return {"kind": "fatal", "result": self._fail(
-                                request, followup_submit.get("code", "image_followup_submit_failed"),
-                                details=followup_submit)}
-                        followup_url = followup_submit.get("details", {}).get("chatUrl")
-                        if followup_url != chat_url:
+                                request, artifact_submit.get("code", "image_artifact_submit_failed"), details=artifact_submit)}
+                        if artifact_submit.get("details", {}).get("chatUrl") != chat_url:
                             return {"kind": "fatal", "result": self._fail(
-                                request, "image follow-up changed conversation", details=followup_submit)}
+                                request, "image artifact changed conversation", details=artifact_submit)}
                         image_stage = False
-                        request_id = followup_id
-                        prompt = image_followup["prompt"]
-                        expected_filename = image_followup["expected_filename"]
-                        expected_request = image_followup["expected_request"]
-                        max_reminders = followup_reminders
-                        reminder_index = 0
+                        prompt = artifact_prompt
+                        watched_turns[:] = [{"prompt": prompt, "submit": artifact_submit, "proof": None,
+                                             "everProved": False, "artifactRejected": False, "noArtifactSince": None}]
                         started_at = self.monotonic()
                         deadline = started_at + observer_timeout_ms / 1000.0
                         next_result_recheck = started_at + _RESULT_RECHECK_INTERVAL_MS / 1000.0
-                        reminder_policy_record["maxReminders"] = max_reminders
-                        watched_turns[:] = [{"prompt": prompt, "submit": followup_submit,
-                                             "proof": None, "everProved": False,
-                                             "artifactRejected": False, "noArtifactSince": None}]
-                        self._write_state(request, WAITING_ASSISTANT,
-                                          followupSubmitProof=followup_submit,
-                                          secondRequestId=followup_id)
+                        waiting_state()
                         return {"kind": "continued"}
 
                     reproofed = False
@@ -1102,7 +1073,6 @@ __all__ = [
     "WAITING_ASSISTANT",
     "ARTIFACT_FOUND",
     "ASSISTANT_COMPLETED_NO_ARTIFACT",
-    "IMAGE_TURN_COMPLETED",
     "ARTIFACT_REJECTED",
     "RESULT_DURABLE",
     "BRIDGE_INVALID_REQUEST",

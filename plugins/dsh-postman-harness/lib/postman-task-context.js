@@ -13,6 +13,18 @@ const BRANCH = /^task\/postman-[0-9a-f]{32}$/
 const normalize = value => resolve(value).replaceAll('\\', '/').toLowerCase()
 const fileExists = async path => { try { await stat(path); return true } catch (error) { if (error?.code === 'ENOENT') return false; throw error } }
 
+function provenPrepublicationFailure(terminal) {
+  const result = terminal?.result
+  return terminal?.status === 'POSTMAN_BRIDGE_TERMINAL' && terminal.terminalStatus === 'FAILED' &&
+    result?.ok === false && result.code === 'POSTMAN_TRANSPORT_FAILED' &&
+    result.publicationReceipt === null && result.requestId === terminal.requestId &&
+    typeof result.transportMessage === 'string' && result.transportMessage.length > 0 &&
+    result.details !== null && typeof result.details === 'object' && !Array.isArray(result.details) &&
+    ['DIRECT_INVALID_TASK', 'DIRECT_RESULT_ROOT_UNAVAILABLE',
+      'DIRECT_INVALID_CONTINUATION', 'POSTMAN_AUTOMATIC_CONTINUATION_LIMIT_REACHED']
+      .includes(result.transportCode)
+}
+
 async function git(cwd, ...args) {
   const { stdout } = await exec('git', ['-C', cwd, ...args], { windowsHide: true, timeout: 120000 })
   return stdout.trim()
@@ -151,7 +163,11 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
           const result = terminal.result
           const publication = result?.ok === true ? result :
             result?.ok === false && result.code === 'POSTMAN_TRANSPORT_FAILED' ? result.publicationReceipt : null
-          if (!publication) continue
+          if (!publication) {
+            if (result?.ok === false && result.code === 'POSTMAN_TRANSPORT_FAILED' &&
+                !provenPrepublicationFailure(terminal)) throw new Error('task publication receipt missing or unproven; history uncertain')
+            continue
+          }
           const { taskPublicationCommit: commit, baseCommit: parent } = publication
           if (!SHA.test(commit ?? '') || !SHA.test(parent ?? '') ||
               terminal.status !== 'POSTMAN_BRIDGE_TERMINAL' ||

@@ -53,6 +53,7 @@ test('image transport requires exact durable descriptor and bytes, never grants 
       imageFormat: 'jpg', imageSha256: createHash('sha256').update(bytes).digest('hex'), imageByteLength: bytes.length }
     const cases = [
       [descriptor, 'IMAGE_RESULT_DURABLE'],
+      [{ ...descriptor, secondRequestId: 'REQ_20260902T010204Z_5678' }, 'POSTMAN_IMAGE_RESULT_DESCRIPTOR_INVALID'],
       [{ ...descriptor, resultZip: 'bad.zip' }, 'POSTMAN_IMAGE_RESULT_DESCRIPTOR_INVALID'],
       [{ ...descriptor, imageSha256: '0'.repeat(64) }, 'POSTMAN_IMAGE_RESULT_SHA_MISMATCH'],
       [{ ...descriptor, imageByteLength: bytes.length + 1 }, 'POSTMAN_IMAGE_RESULT_SHA_MISMATCH'],

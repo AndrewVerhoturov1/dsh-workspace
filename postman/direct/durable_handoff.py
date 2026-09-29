@@ -203,14 +203,14 @@ def validate_image_terminal(
         raise DurableHandoffError("IMAGE_HANDOFF_INVALID", "image handoff must not expose a resultZip")
 
     actual_id = _required_string(data, "requestId")
-    second_id = _required_string(data, "secondRequestId")
     try:
         request_identity.assert_canonical_request_id(actual_id)
-        request_identity.assert_canonical_request_id(second_id)
     except ValueError as exc:
-        raise DurableHandoffError("IMAGE_HANDOFF_INVALID", "image request IDs are not canonical") from exc
-    if actual_id == second_id or (request_id is not None and actual_id != request_id):
-        raise DurableHandoffError("IMAGE_HANDOFF_INVALID", "image stages have mismatched request IDs")
+        raise DurableHandoffError("IMAGE_HANDOFF_INVALID", "image request ID is not canonical") from exc
+    if request_id is not None and actual_id != request_id:
+        raise DurableHandoffError("IMAGE_HANDOFF_INVALID", "image request ID does not match")
+    if "secondRequestId" in data:
+        raise DurableHandoffError("IMAGE_HANDOFF_INVALID", "image handoff must not expose secondRequestId")
     if _required_string(data, "repository") != expected_repository:
         raise DurableHandoffError("IMAGE_HANDOFF_INVALID", "image repository does not match")
     base_commit = _commit(data, "baseCommit")
@@ -218,9 +218,9 @@ def validate_image_terminal(
     owner, repo = expected_repository.split("/", 1)
     task_url = f"https://raw.githubusercontent.com/{owner}/{repo}/{publication_commit}/{actual_id}.md"
     if _required_string(data, "taskUrl") != task_url:
-        raise DurableHandoffError("IMAGE_HANDOFF_INVALID", "image task URL is not SHA-pinned to REQ_A")
+        raise DurableHandoffError("IMAGE_HANDOFF_INVALID", "image task URL is not SHA-pinned to requestId")
     if _required_string(data, "expectedFilename") != request_identity.expected_artifact_filename(actual_id):
-        raise DurableHandoffError("IMAGE_HANDOFF_INVALID", "image task filename does not match REQ_A")
+        raise DurableHandoffError("IMAGE_HANDOFF_INVALID", "image task filename does not match requestId")
 
     fmt = _required_string(data, "imageFormat").lower()
     if fmt not in _IMAGE_EXTENSIONS:
@@ -229,9 +229,9 @@ def validate_image_terminal(
     result_root = Path(_required_string(data, "resultRoot"))
     if (not image.is_absolute() or not result_root.is_absolute()
             or image.name not in {"image" + ext for ext in _IMAGE_EXTENSIONS[fmt]}
-            or image.parent.resolve() != (result_root / second_id).resolve()
+            or image.parent.resolve() != (result_root / actual_id).resolve()
             or image.is_symlink() or not image.is_file()):
-        raise DurableHandoffError("IMAGE_HANDOFF_INVALID", "resultImage is not the durable REQ_B image")
+        raise DurableHandoffError("IMAGE_HANDOFF_INVALID", "resultImage is not the durable image for requestId")
     expected_sha = _artifact_sha(data, "imageSha256")
     size = data.get("imageByteLength")
     if isinstance(size, bool) or not isinstance(size, int) or size <= 0 or image.stat().st_size != size:
@@ -242,14 +242,14 @@ def validate_image_terminal(
 
     state = _required_string(data, "statePath")
     if expected_state_path is not None and not _same_path(state, expected_state_path):
-        raise DurableHandoffError("IMAGE_HANDOFF_INVALID", "image statePath does not match REQ_A")
+        raise DurableHandoffError("IMAGE_HANDOFF_INVALID", "image statePath does not match requestId")
     normalized = dict(data)
     normalized.update(baseCommit=base_commit, taskPublicationCommit=publication_commit,
                       imageFormat=fmt, imageSha256=expected_sha)
     if expected_handoff_path is not None:
         handoff = normalized.get("resultHandoffPath")
         if handoff is not None and (not isinstance(handoff, str) or not _same_path(handoff, expected_handoff_path)):
-            raise DurableHandoffError("IMAGE_HANDOFF_INVALID", "image resultHandoffPath does not match REQ_A")
+            raise DurableHandoffError("IMAGE_HANDOFF_INVALID", "image resultHandoffPath does not match requestId")
         normalized["resultHandoffPath"] = str(expected_handoff_path.resolve())
     return normalized
 

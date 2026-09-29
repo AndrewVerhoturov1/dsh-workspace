@@ -22,9 +22,8 @@ class ImageHandoffTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.first = "REQ_20260929T120000Z_1234"
-        self.second = "REQ_20260929T120001Z_1235"
         self.results = self.root / "results"
-        directory = self.results / self.second
+        directory = self.results / self.first
         directory.mkdir(parents=True)
         self.image = directory / "image.png"
         self.image.write_bytes(b"image fixture bytes")
@@ -33,7 +32,7 @@ class ImageHandoffTests(unittest.TestCase):
         self.receipt = self.root / "direct-results" / (self.first + ".json")
         self.data = {
             "ok": True, "code": handoff.IMAGE_RESULT_DURABLE, "state": handoff.IMAGE_RESULT_DURABLE,
-            "requestId": self.first, "secondRequestId": self.second,
+            "requestId": self.first,
             "repository": "AndrewVerhoturov1/dsh-workspace", "baseCommit": "b" * 40,
             "taskPublicationCommit": publication,
             "taskUrl": f"https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/{publication}/{self.first}.md",
@@ -52,6 +51,7 @@ class ImageHandoffTests(unittest.TestCase):
         result = self.validate(self.data)
         self.assertEqual(result["resultImage"], str(self.image))
         self.assertEqual(result["code"], "IMAGE_RESULT_DURABLE")
+        self.assertNotIn("secondRequestId", result)
 
     def test_jpeg_extension_matches_jpg_format(self):
         jpeg = self.image.with_name("image.jpeg")
@@ -73,7 +73,7 @@ class ImageHandoffTests(unittest.TestCase):
         with self.assertRaises(handoff.DurableHandoffError):
             self.validate({**self.data, "resultImage": str(other)})
         with self.assertRaises(handoff.DurableHandoffError):
-            self.validate({**self.data, "secondRequestId": self.first})
+            self.validate({**self.data, "secondRequestId": "REQ_20260929T120001Z_1235"})
 
 
 if __name__ == "__main__":

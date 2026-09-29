@@ -183,17 +183,20 @@ class TaskPackageTests(unittest.TestCase):
         self.assertIn("manifest.json` необязателен и полностью informational", content)
         self.assertNotIn("значение должно быть ровно", content)
 
-    def test_image_manifest_requests_one_image_without_zip_envelope(self):
-        content = task_package.render_image_task_manifest(
-            request_id=REQ, user_intent="Нарисуй кота ✅", repository="owner/repo",
-            base_commit=BASE_COMMIT)
-        self.assertIn("Нарисуй кота ✅", content)
-        self.assertIn("Generate exactly ONE image", content)
-        self.assertNotIn("<<<POSTMAN_RESULT_BEGIN", content)
-        self.assertNotIn("expected_filename:", content)
+    def test_image_packaging_task_is_single_req_and_packaging_only(self):
+        content = task_package.render_image_packaging_task_manifest(
+            request_id=REQ, repository="owner/repo", base_commit=BASE_COMMIT,
+            expected_filename=f"POSTMAN_{REQ}_RESULT.zip",
+            allowed_paths=["src"], forbidden_paths=[".git"])
+        self.assertIn("immediately preceding assistant response in this same ChatGPT conversation", content)
+        self.assertIn("Do not generate a new image", content)
+        self.assertIn("modify it, resize it, or intentionally re-encode it", content)
+        self.assertIn(f"<<<POSTMAN_RESULT_BEGIN:{REQ}>>>", content)
+        self.assertNotIn("Нарисуй кота", content)
+        self.assertNotIn("Generate exactly ONE image", content)
         with self.assertRaises(task_package.TaskPackageError):
-            task_package.render_image_task_manifest(request_id="bad", user_intent="image",
-                repository="owner/repo", base_commit=BASE_COMMIT)
+            task_package.render_image_packaging_task_manifest(request_id="bad", repository="owner/repo",
+                base_commit=BASE_COMMIT, expected_filename="bad.zip", allowed_paths=[], forbidden_paths=[])
 
     def test_external_prompt_contains_only_req_and_task_link(self):
         prompt = task_package.build_external_prompt(REQ, SKILL_URL, TASK_URL)
