@@ -24,6 +24,11 @@ function fixture() {
       async listChildren() { return [...agents.keys()].filter(id => id !== leader.id).map(id => ({ id, kind: 'child', mode: 'continuable', activity: agents.has(id) ? 'running' : 'inactive' })) },
       async listDescendants() { return [] },
       async drainContinuableChildren(_parent, ids) { calls.drains.push(ids) },
+      async closeContinuableChild(parent, id, verify) {
+        if (!await verify()) return false
+        await this.drainContinuableChildren(parent, [id])
+        return true
+      },
     } }
   const tools = createPostmanWorkerTools(ctx, undefined, contexts)
   const exec = { agent: leader, signal: new AbortController().signal, callId: 'stop-1' }

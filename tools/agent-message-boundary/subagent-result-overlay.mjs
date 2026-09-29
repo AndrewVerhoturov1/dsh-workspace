@@ -24,6 +24,25 @@ export function patchSubagentSource(source) {
   next = replaceOnce(next,
     'const output = finalAssistantOutput(own);',
     'const lastStart = own.findLastIndex(event => event.type === "turn/start");\n\t\t\tconst latest = lastStart < 0 ? void 0 : own.slice(lastStart).findLast(event => event.type === "assistant/message");\n\t\t\tconst finalBlocks = latest?.data.message.content?.filter(block => block.type === "text" && block.text.trim());\n\t\t\tconst output = finalBlocks?.length ? finalBlocks : void 0;')
+  // Exact-child close shares followup's child lock and retains a process-local cutoff.
+  next = replaceOnce(next,
+    "\tactivations = /* @__PURE__ */ new Map();\n\t/** Materializations admitted before drain",
+    "\tactivations = /* @__PURE__ */ new Map();\n\tclosedChildren = /* @__PURE__ */ new Set();\n\t/** Materializations admitted before drain")
+  next = replaceOnce(next,
+    "\tasync followup(parent, childId, content, options) {\n\t\tthis.assertAdmitting(parent);",
+    "\tasync followup(parent, childId, content, options) {\n\t\tthis.assertAdmitting(parent);\n\t\tthis.assertChildOpen(childId);")
+  next = replaceOnce(next,
+    "\t\t\tconst live = await this.locks.run(childId, async () => {\n\t\t\t\tconst activation = this.activations.get(childId);",
+    "\t\t\tconst live = await this.locks.run(childId, async () => {\n\t\t\t\tthis.assertChildOpen(childId);\n\t\t\t\tconst activation = this.activations.get(childId);")
+  next = replaceOnce(next,
+    "\t\t\tthis.assertAdmitting(parent);\n\t\t\toptions.signal.throwIfAborted();",
+    "\t\t\tthis.assertAdmitting(parent);\n\t\t\tthis.assertChildOpen(childId);\n\t\t\toptions.signal.throwIfAborted();")
+  next = replaceOnce(next,
+    "\tasync drainChildren(parent, childIds) {",
+    "\tassertChildOpen(childId) {\n\t\tif (this.closedChildren.has(childId)) throw new SubagentError(`subagent \"${childId}\" is closed; the message was not accepted`, \"ACTIVATION_CLOSING\");\n\t}\n\tasync closeChild(parent, childId, verify) {\n\t\tif (this.ctx.agents.get(parent.id) !== parent) throw new SubagentError(\"selected child close requires the exact live parent agent\", \"UNAUTHORIZED\");\n\t\tconst result = await this.locks.run(childId, async () => {\n\t\t\tthis.assertChildOpen(childId);\n\t\t\tthis.assertAdmitting(parent);\n\t\t\tconst resident = this.activations.get(childId);\n\t\t\tif (resident === void 0) {\n\t\t\t\tconst saved = await this.requirePersistence().inspect(childId);\n\t\t\t\tthis.authorizeLineage(parent, childId, saved.meta.parentSession);\n\t\t\t} else if (resident.parentSession !== parent.id || !resident.ancestry.has(parent)) {\n\t\t\t\tthrow new SubagentError(\"selected child belongs to another parent\", \"UNAUTHORIZED\");\n\t\t\t}\n\t\t\tif (!await verify()) return { closed: false };\n\t\t\tthis.assertAdmitting(parent);\n\t\t\tthis.assertChildOpen(childId);\n\t\t\tconst activation = this.activations.get(childId);\n\t\t\tif (activation !== void 0 && (activation.parentSession !== parent.id || !activation.ancestry.has(parent))) throw new SubagentError(\"selected child belongs to another parent\", \"UNAUTHORIZED\");\n\t\t\tthis.closedChildren.add(childId);\n\t\t\treturn { closed: true, disposal: activation === void 0 ? void 0 : this.dispose(activation) };\n\t\t});\n\t\tif (!result.closed) return false;\n\t\tif (result.disposal !== void 0) await result.disposal;\n\t\treturn true;\n\t}\n\tasync drainChildren(parent, childIds) {")
+  next = replaceOnce(next,
+    "\tasync drainContinuableChildren(parent, childIds) {\n\t\tconst manager = this.continuations;",
+    "\tasync closeContinuableChild(parent, childId, verify) {\n\t\tconst manager = this.continuations;\n\t\tif (manager === void 0) throw new SubagentError(\"continuation manager unavailable\", \"NOT_RESUMABLE\");\n\t\treturn manager.closeChild(parent, childId, verify);\n\t}\n\tasync drainContinuableChildren(parent, childIds) {\n\t\tconst manager = this.continuations;")
   return next
 }
 export async function subagentOverlay(root, action, backupDir) {

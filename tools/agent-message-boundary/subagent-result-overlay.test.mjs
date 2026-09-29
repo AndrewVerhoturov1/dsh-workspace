@@ -18,6 +18,8 @@ function fragments(source) {
 }
 test('unknown started work, no turn and completed turn are distinct', () => {
   const baseline = fragments(original), fixed = fragments(patched)
+  assert.match(patched, /async closeContinuableChild\(parent, childId, verify\)/)
+  assert.match(patched, /this\.closedChildren\.add\(childId\)/)
   const incomplete = [{ type: 'turn/start', data: { turn: 1 } }, { type: 'tool/call', data: { name: 'pwsh' } },
     { type: 'step/start', data: { turn: 1 } }, { type: 'step/end', data: { turn: 1 } }]
   assert.equal(baseline.reason(incomplete), 'completed')

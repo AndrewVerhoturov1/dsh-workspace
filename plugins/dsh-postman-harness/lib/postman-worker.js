@@ -445,12 +445,14 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
     const child = await history(binding.id, parent.id, signal)
     const evidence = workerEvidence(binding, child, parent)
     if (!evidence.ready) return evidence
+    // Capture before the asynchronous descendant read, not after it.
+    const eventCount = child.session.events.length
     const descendants = await ctx.subagents.listDescendants(binding.id, signal)
     if (descendants.some(entry => entry.kind === 'diagnostic' ||
         (entry.kind === 'child' && entry.mode === 'continuable' &&
           (entry.activity !== 'inactive' || ctx.agents.get(entry.id)))))
       return { ready: false, reason: 'managed descendants running or uncertain' }
-    return evidence
+    return { ...evidence, eventCount }
   }
   const stopTool = defineTool({
     name: POSTMAN_WORKER_STOP_TOOL_NAME,
@@ -501,9 +503,10 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
         if (mode === 'cancel' && cancelWitness(current) !== witness)
           return { status: 'POSTMAN_WORKER_CANCEL_APPROVAL_REQUIRED', workerSessionId: selected.id }
         try {
+          const evidence = mode === 'close' ? (current.lifecycle ?
+            await closeEvidence(parent, current, exec.signal) :
+            { ready: false, reason: 'no durable lifecycle witness' }) : null
           if (mode === 'close') {
-            const evidence = current.lifecycle ? await closeEvidence(parent, current, exec.signal) :
-              { ready: false, reason: 'no durable lifecycle witness' }
             if (!evidence.ready) return { status: 'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT',
               workerSessionId: selected.id, reason: evidence.reason + '; request approved addressed cancel if no report can arrive' }
           }
@@ -511,18 +514,35 @@ export function createPostmanWorkerTools(ctx, grants, contexts) {
             return { status: 'POSTMAN_WORKER_BINDING_UNCERTAIN', workerSessionId: selected.id }
           const latest = bindings(parent, g)[selected.id]
           if (!latest || latest.id !== selected.id ||
-              (mode === 'cancel' ? cancelWitness(latest) !== witness :
-                !(await closeEvidence(parent, latest, exec.signal)).ready))
+              (mode === 'cancel' && cancelWitness(latest) !== witness))
             return { status: mode === 'cancel' ? 'POSTMAN_WORKER_CANCEL_APPROVAL_REQUIRED' :
               'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT', workerSessionId: selected.id }
-          if (durable) await changeBinding(parent, selected.id, entry => {
-            if (mode === 'cancel' ? cancelWitness(entry) !== witness :
-                entry.state !== 'ready' || entry.delivery !== 'none' || entry !== latest)
-              throw new Error('POSTMAN_WORKER_BINDING_CHANGED')
-            return { ...entry, state: 'stopping' }
-          })
-          slot.state = 'stopping'
-          await ctx.subagents.drainContinuableChildren(parent, [selected.id])
+          if (mode === 'close') {
+            // Verification and admission cutoff share the native exact-child lock.
+            // An ordinary native followup is not serialized by the Postman slot queue.
+            const closed = await ctx.subagents.closeContinuableChild(parent, selected.id, async () => {
+              const snapshot = bindings(parent, g)[selected.id]
+              if (!snapshot || snapshot.id !== selected.id || !matchesContext(parent, slot)) return false
+              const fresh = await closeEvidence(parent, snapshot, exec.signal)
+              if (!fresh.ready || fresh.eventCount !== evidence.eventCount) return false
+              if (durable) await changeBinding(parent, selected.id, entry => {
+                if (entry !== snapshot || entry.state !== 'ready' || entry.delivery !== 'none')
+                  throw new Error('POSTMAN_WORKER_BINDING_CHANGED')
+                return { ...entry, state: 'stopping' }
+              })
+              slot.state = 'stopping'
+              return true
+            })
+            if (!closed) return { status: 'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT',
+              workerSessionId: selected.id }
+          } else {
+            if (durable) await changeBinding(parent, selected.id, entry => {
+              if (cancelWitness(entry) !== witness) throw new Error('POSTMAN_WORKER_BINDING_CHANGED')
+              return { ...entry, state: 'stopping' }
+            })
+            slot.state = 'stopping'
+            await ctx.subagents.drainContinuableChildren(parent, [selected.id])
+          }
           if (durable) await contexts.changeRecord(parent.id, row => {
             if (row.workers?.[selected.id]?.state !== 'stopping') throw new Error('POSTMAN_WORKER_BINDING_CHANGED')
             const workers = { ...row.workers }; delete workers[selected.id]
