@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtemp, writeFile, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -19,7 +19,7 @@ import { createPtcAdapter, WORKER_RESEARCH_PROFILE } from './ptc-adapter.js'
 const output = { schema: { type: 'object', additionalProperties: true }, render: (_a, value) => [{ type: 'text', text: JSON.stringify(value) }] }
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done }); return { promise, resolve } }
 
-async function fixture(dir, { web = true } = {}) {
+async function fixture(dir, { web = true, worktree = dir } = {}) {
   const ctx = new Context()
   ctx.systemPrompt = { tools() {}, section() { return () => {} } }
   new ToolRuntime(ctx)
@@ -81,7 +81,8 @@ async function fixture(dir, { web = true } = {}) {
     worker = createPostmanWorkerTools(ctx, undefined, contexts, { onBindingChange: refresh })
   }
   const owns = a => worker.ownsLiveWorker(a) && isTopLevelPostmanPtcLeader(agents.get(a.session.header.parentSession))
-  adapter = createPtcAdapter(ctx, { resolveAssignment: (a, leaderProfile) => isTopLevelPostmanPtcLeader(a)
+  adapter = createPtcAdapter(ctx, { workerContextOf: a => owns(a) ? worker.ptcContextOf(a) : null,
+    resolveAssignment: (a, leaderProfile) => isTopLevelPostmanPtcLeader(a)
     ? { profile: leaderProfile, role: 'leader' } : owns(a) ? { profile: WORKER_RESEARCH_PROFILE, role: 'worker' } : null })
   ctx.tools.register(adapter.tool)
   boundaries = createPostmanBridgeBoundaryManager(id => agents.get(id), owns)
@@ -99,9 +100,9 @@ async function fixture(dir, { web = true } = {}) {
   function execute(a, program, controller = new AbortController()) {
     return ctx.tools.execute({ callId: 'root-' + ++n, name: 'ptc_execute', arguments: { program, description: 'Worker research' }, agent: a, signal: controller.signal })
   }
-  async function leader(id = 'leader', preset = 'postman-leader-ptc') {
+  async function leader(id = 'leader', preset = 'postman-leader-ptc', taskWorktree = worktree) {
     const result = await agent(id, preset)
-    const context = Object.freeze({ branch: 'task/postman-' + id, worktree: dir })
+    const context = Object.freeze({ branch: 'task/postman-' + id, worktree: taskWorktree })
     await registry.create(id, { stage: 'ready', workers: {}, runner: { state: 'none' } })
     taskContexts.set(id, context)
     return result
@@ -148,6 +149,122 @@ test('confirmed Worker gets research namespace, real read/glob/grep and controll
     assert.deepEqual(nested.map(t => t.name), ['glob', 'read', 'read', 'grep', 'web_fetch', 'web_search'])
     const outer = f.traces.findLast(t => t.name === 'ptc_execute' && t.agent === child.a)
     assert.ok(nested.every(t => t.agent === child.a && t.parent === outer.token && t.root === outer.root))
+  } finally { await f.cleanup() }
+}))
+
+test('Worker PTC relative read resolves against its Host-bound task worktree, not session cwd', () => inTemporaryDir('ptc-base-', async root => {
+  const session = join(root, 'session'), worktree = join(root, 'task')
+  await mkdir(session); await mkdir(worktree)
+  await writeFile(join(session, 'proof.txt'), 'INSTALLATION_MARKER\n', 'utf8')
+  await writeFile(join(worktree, 'proof.txt'), 'WORKTREE_MARKER\n', 'utf8')
+  const f = await fixture(session, { worktree })
+  try {
+    const leader = await f.leader(), child = await f.start(leader)
+    const result = value(await f.execute(child.a, "return (await tools.read({file_path:'proof.txt'})).lines[0].text"))
+    assert.equal(result, 'WORKTREE_MARKER')
+    const search = value(await f.execute(child.a, "const g = await tools.glob({pattern:'*.txt'}); const r = await tools.grep({pattern:'MARKER'}); return {paths:g.paths,matches:r.matches.map(x=>x.line)}"))
+    assert.equal(search.paths.length, 1)
+    assert.deepEqual(search.matches, ['WORKTREE_MARKER'])
+    assert.equal(value(await f.execute(child.a, 'return (await tools.read({file_path:' + JSON.stringify(join(worktree, 'proof.txt')) + '})).lines[0].text')), 'WORKTREE_MARKER')
+    assert.equal(f.traces.filter(t => ['read', 'glob', 'grep'].includes(t.name)).every(t => t.agent === child.a), true)
+  } finally { await f.cleanup() }
+}))
+
+test('Worker PTC rejects absolute, traversal and junction escapes before Harness dispatch', () => inTemporaryDir('ptc-escapes-', async root => {
+  const session = join(root, 'session'), task = join(root, 'task'), outside = join(root, 'outside')
+  await mkdir(session); await mkdir(task); await mkdir(outside); await mkdir(join(task, 'safe'))
+  await writeFile(join(outside, 'secret.txt'), 'OUTSIDE_SECRET\n', 'utf8')
+  await writeFile(join(root, 'outside.txt'), 'OUTSIDE_PARENT\n', 'utf8')
+  await symlink(outside, join(task, 'escape-link'), process.platform === 'win32' ? 'junction' : 'dir')
+  const f = await fixture(session, { worktree: task })
+  try {
+    const leader = await f.leader(), child = await f.start(leader)
+    for (const [name, args] of [
+      ['read', { file_path: join(outside, 'secret.txt') }],
+      ['read', { file_path: '../outside.txt' }],
+      ['read', { file_path: '../../outside.txt' }],
+      ['read', { file_path: 'safe/../../outside.txt' }],
+      ['read', { file_path: 'escape-link/secret.txt' }],
+      ['glob', { pattern: '*.txt', path: outside }],
+      ['glob', { pattern: '*.txt', path: 'escape-link' }],
+      ['grep', { pattern: 'OUTSIDE', path: '../outside.txt' }],
+      ['grep', { pattern: 'OUTSIDE', path: 'escape-link' }],
+    ]) {
+      const before = f.traces.length
+      const result = await f.execute(child.a, 'return await tools.' + name + '(' + JSON.stringify(args) + ')')
+      assert.equal(result.value.status, 'runtime-error', JSON.stringify(result.value))
+      assert.match(JSON.stringify(result.value), /PTC_FILESYSTEM_BOUNDARY_REJECTED/)
+      assert.equal(f.traces.length, before + 1, name + ' dispatched forbidden target') // only outer ptc_execute
+      assert.deepEqual(result.value.effects?.calls?.map(x => x.state), ['failed']) // guest attempt; no Host dispatch
+    }
+    // A glob pattern is a filter, never a search-root authority.
+    for (const pattern of [join(outside, 'secret.txt').replaceAll('\\', '/'), '../outside/secret.txt']) {
+      const found = value(await f.execute(child.a, 'return await tools.glob(' + JSON.stringify({ pattern }) + ')'))
+      assert.deepEqual(found.paths, [])
+    }
+    // Ripgrep's default recursion must not follow a Windows junction or POSIX directory symlink.
+    for (const [name, args] of [['glob', { pattern: '*.txt' }], ['grep', { pattern: 'OUTSIDE_SECRET' }]]) {
+      const found = value(await f.execute(child.a, 'return await tools.' + name + '(' + JSON.stringify(args) + ')'))
+      assert.doesNotMatch(JSON.stringify(found), /OUTSIDE_SECRET|secret\.txt/)
+    }
+  } finally { await f.cleanup() }
+}))
+
+test('two Leaders bind distinct Worker PTC filesystem authority', () => inTemporaryDir('ptc-two-roots-', async base => {
+  const session = join(base, 'session'), taskA = join(base, 'task-A'), taskB = join(base, 'task-B')
+  await Promise.all([mkdir(session), mkdir(taskA), mkdir(taskB)])
+  await writeFile(join(session, 'proof.txt'), 'INSTALLATION_MARKER\n', 'utf8')
+  await writeFile(join(taskA, 'proof.txt'), 'A\n', 'utf8')
+  await writeFile(join(taskB, 'proof.txt'), 'B\n', 'utf8')
+  const f = await fixture(session)
+  try {
+    const leaderA = await f.leader('leader-A', 'postman-leader-ptc', taskA)
+    const leaderB = await f.leader('leader-B', 'postman-leader-ptc', taskB)
+    const a = await f.start(leaderA), b = await f.start(leaderB)
+    const readProof = x => f.execute(x.a, "return (await tools.read({file_path:'proof.txt'})).lines[0].text")
+    assert.equal(value(await readProof(a)), 'A')
+    assert.equal(value(await readProof(b)), 'B')
+    assert.equal(value(await readProof(a)), 'A')
+  } finally { await f.cleanup() }
+}))
+
+test('three Workers retain common task root after selective stop', () => inTemporaryDir('ptc-three-root-', async base => {
+  const session = join(base, 'session'), task = join(base, 'task')
+  await mkdir(session); await mkdir(task)
+  await writeFile(join(session, 'proof.txt'), 'INSTALLATION_MARKER\n', 'utf8')
+  await writeFile(join(task, 'proof.txt'), 'SHARED_WORKTREE\n', 'utf8')
+  const f = await fixture(session, { worktree: task })
+  try {
+    const leader = await f.leader(), [a, b, c] = await Promise.all(['A', 'B', 'C'].map(label => f.start(leader, label)))
+    const readProof = x => f.execute(x.a, "return (await tools.read({file_path:'proof.txt'})).lines[0].text")
+    for (const child of [a, b, c]) assert.equal(value(await readProof(child)), 'SHARED_WORKTREE')
+    assert.equal((await f.worker.stopTool.execute({ mode:'cancel', workerSessionId:a.a.id },
+      { agent: leader.a, callId:'stop-A-root', signal: new AbortController().signal })).status, 'POSTMAN_WORKER_CANCELLED')
+    for (const child of [b, c]) assert.equal(value(await readProof(child)), 'SHARED_WORKTREE')
+  } finally { await f.cleanup() }
+}))
+
+test('replaced task context revokes active PTC before next filesystem dispatch', () => inTemporaryDir('ptc-replace-root-', async base => {
+  const task = join(base, 'task'), replacement = join(base, 'replacement')
+  await mkdir(task); await mkdir(replacement)
+  await writeFile(join(task, 'proof.txt'), 'OLD_WORKTREE\n', 'utf8')
+  await writeFile(join(replacement, 'proof.txt'), 'NEW_WORKTREE\n', 'utf8')
+  const f = await fixture(base, { worktree: task })
+  try {
+    const leader = await f.leader(), child = await f.start(leader), entered = deferred(), held = deferred()
+    f.ctx.on('tools/execute', async (exec, next) => {
+      if (exec.name === 'read' && exec.agent === child.a && exec.parent) { entered.resolve(); await held.promise }
+      return next()
+    })
+    const running = f.execute(child.a, "await tools.read({file_path:'proof.txt'}); return await tools.grep({pattern:'NEW_WORKTREE'})")
+    await entered.promise
+    f.taskContexts.set(leader.a.id, Object.freeze({ branch:'replacement', worktree:replacement }))
+    held.resolve()
+    const result = await running
+    assert.notEqual(result.value.status, 'ok')
+    assert.equal(f.traces.some(t => t.name === 'grep' && t.agent === child.a), false)
+    const after = await f.execute(child.a, "return await tools.read({file_path:'proof.txt'})")
+    assert.equal(after.value.status, 'PTC_CALLER_REJECTED')
   } finally { await f.cleanup() }
 }))
 
@@ -307,7 +424,11 @@ test('uncertain binding, parent preset, context replacement and disposal revoke 
 }))
 
 test('durable child resumes only after exact reconciliation; stale activation never regains authority', () => inTemporaryDir('ptc-resume-', async dir => {
-  const f = await fixture(dir)
+  const task = join(dir, 'task')
+  await mkdir(task)
+  await writeFile(join(dir, 'proof.txt'), 'INSTALLATION_MARKER\n', 'utf8')
+  await writeFile(join(task, 'proof.txt'), 'RESUMED_WORKTREE\n', 'utf8')
+  const f = await fixture(dir, { worktree: task })
   try {
     const leader = await f.leader(), initial = await f.start(leader)
     assert.equal(value(await f.execute(initial.a, 'return 1')), 1)
@@ -323,6 +444,7 @@ test('durable child resumes only after exact reconciliation; stale activation ne
     assert.equal(f.calls.starts.length, 1)
     assert.deepEqual(f.calls.follows, [initial.a.id])
     assert.equal(f.worker.ownsLiveWorker(resumed.a), true)
+    assert.equal(value(await f.execute(resumed.a, "return (await tools.read({file_path:'proof.txt'})).lines[0].text")), 'RESUMED_WORKTREE')
     assert.equal(value(await f.execute(resumed.a, 'return 3')), 3)
     assert.equal((await f.execute(initial.a, 'return 4')).value.status, 'PTC_CALLER_REJECTED')
   } finally { await f.cleanup() }

@@ -634,6 +634,9 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
   function ownsLiveWorker(caller) {
     return Boolean(liveSlot(caller, caller?.session?.header?.parentSession, true))
   }
+  function ptcContextOf(caller) {
+    return liveSlot(caller, caller?.session?.header?.parentSession, true)?.context ?? null
+  }
   function suspendLeader(parent) {
     if (parent) disposedParents.add(parent)
     for (const slot of leaders.get(parent?.id)?.slots.values() ?? []) { slot.verified = false; slot.workerAgent = null }
@@ -694,6 +697,6 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     }
     leaders.clear()
   }
-  return { taskTool, interruptTool, stopTool, listTool, ownerOf, ownsNotification, ownsLiveWorker, confirmActivation, releaseActivation, refreshLeader, suspendLeader,
+  return { taskTool, interruptTool, stopTool, listTool, ownerOf, ownsNotification, ownsLiveWorker, ptcContextOf, confirmActivation, releaseActivation, refreshLeader, suspendLeader,
     contextOf, observeReport, pauseForOperation, prepareRestore, dispose }
 }

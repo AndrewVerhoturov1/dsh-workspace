@@ -181,7 +181,8 @@ export async function apply(ctx) {
   const jobs = createPostmanBridgeJobs(ctx, coordinator, grants, postmanTaskContexts, worker)
   const ownsPtcWorker = agent => worker.ownsLiveWorker(agent) &&
     isTopLevelPostmanPtcLeader(ctx.agents.get(agent.session.header.parentSession))
-  ptc = createPtcAdapter(ctx, { resolveAssignment: (agent, leaderProfile) => {
+  ptc = createPtcAdapter(ctx, { workerContextOf: agent =>
+    ownsPtcWorker(agent) ? worker.ptcContextOf(agent) : null, resolveAssignment: (agent, leaderProfile) => {
     if (isTopLevelPostmanPtcLeader(agent)) return { profile: leaderProfile, role: 'leader' }
     return ownsPtcWorker(agent) ? { profile: WORKER_RESEARCH_PROFILE, role: 'worker' } : null
   } })

@@ -1,5 +1,6 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { createPtcRuntime, DEFAULT_LIMITS, validatePtcProfile } from 'dsh-ptc'
+import { guardWorkerPtcFilesystem } from './ptc-worktree-boundary.js'
 
 export const PTC_TOOL_NAME = 'ptc_execute'
 const PILOT_NAMES = Object.freeze(['read', 'grep', 'get_goal', 'web_fetch'])
@@ -24,7 +25,7 @@ const output = {
 
 // Ownership of this runtime is the owning plugin, never an individual program.
 // resolveAssignment is trusted Host code; the model cannot choose its profile or role.
-export function createPtcAdapter(ctx, { authorize, resolveAssignment, profile = PILOT_PROFILE, runtime = createPtcRuntime() }) {
+export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerContextOf, profile = PILOT_PROFILE, runtime = createPtcRuntime() }) {
   function pilotProfile(value) {
     const checked = validatePtcProfile(value)
     if (checked.tools.some(name => !PILOT_NAMES.includes(name))) throw new TypeError('PTC pilot profile tool not allowed')
@@ -72,6 +73,7 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, profile = 
     if (required(record).some(name => !available(agent, name))) return ''
     const schemas = ctx.tools.schemas(agent).filter(s => record.profile.tools.includes(s.name))
     if (record.role === 'worker') return 'PTC is for mechanical read-only research. Inside ptc_execute: read, glob, grep, and currently visible web_fetch/web_search only. ' +
+      'Relative filesystem paths inside Worker PTC are scoped to the current Host-bound task worktree; filesystem access outside it is rejected. ' +
       'Call write/edit/shell/report/notify_parent and other ordinary Worker tools separately, outside the program. ' +
       'Use await tools.name(JSON_arguments) and return JSON; current argument schemas: ' +
       JSON.stringify(schemas.map(s => ({ name: s.name, parameters: s.parameters })))
@@ -110,6 +112,9 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, profile = 
       const agent = exec?.agent, record = owners.get(agent?.id)
       if (!allowed(agent, record) || !available(agent, PTC_TOOL_NAME)) return { status: 'PTC_CALLER_REJECTED' }
       if (required(record).some(name => !available(agent, name))) return { status: 'PTC_REQUIRED_TOOL_UNAVAILABLE' }
+      const workerContext = record.role === 'worker' ? workerContextOf?.(agent) : null
+      if (record.role === 'worker' && (!workerContext || typeof workerContext.worktree !== 'string'))
+        return { status: 'PTC_CALLER_REJECTED' }
       const activeProfile = validatePtcProfile({ ...record.profile,
         tools: record.profile.tools.filter(name => available(agent, name)) })
       if (typeof args.description !== 'string' || !args.description.trim() || args.description.length > MAX_DESCRIPTION)
@@ -126,20 +131,28 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, profile = 
         bindings[name] = async (arg, call) => {
           if (call.signal.aborted || controller.signal.aborted || !allowed(agent, record) || !available(agent, name))
             throw new Error('PTC_ACCESS_REVOKED')
+          let nestedArgs = arg
+          if (record.role === 'worker' && ['read', 'glob', 'grep'].includes(name)) {
+            if (workerContextOf?.(agent) !== workerContext) throw new Error('PTC_ACCESS_REVOKED')
+            nestedArgs = await guardWorkerPtcFilesystem(name, arg, workerContext.worktree)
+            if (call.signal.aborted || controller.signal.aborted || !allowed(agent, record) ||
+                workerContextOf?.(agent) !== workerContext) throw new Error('PTC_ACCESS_REVOKED')
+          }
           const subCallId = String(exec.callId) + ':ptc:' + call.callId
-          const details = { rootCallId: exec.rootCallId, parentCallId: exec.callId, subCallId, name, arguments: arg }
+          const details = { rootCallId: exec.rootCallId, parentCallId: exec.callId, subCallId, name, arguments: nestedArgs }
           const entry = { details, settled: false }
           started.set(call.callId, entry)
           agent.session?.append('tool/code-dispatch-start', details)
           try {
             const result = await ctx.tools.execute({ callId: subCallId, rootCallId: exec.rootCallId,
-              name, arguments: arg, agent, parent: exec.token, signal: call.signal })
+              name, arguments: nestedArgs, agent, parent: exec.token, signal: call.signal })
             if (!entry.settled) {
               entry.settled = true
               agent.session?.append('tool/code-dispatch', { ...details, isError: result.isError, content: result.content })
             }
-            if (controller.signal.aborted || !allowed(agent, record) || !available(agent, name))
-              throw new Error('PTC_ACCESS_REVOKED')
+            if (controller.signal.aborted || !allowed(agent, record) || !available(agent, name) ||
+                (record.role === 'worker' && ['read', 'glob', 'grep'].includes(name) &&
+                  workerContextOf?.(agent) !== workerContext)) throw new Error('PTC_ACCESS_REVOKED')
             if (result.isError) throw new Error(result.error.message)
             for (const context of result.additionalContexts ?? []) exec.deferContext(context)
             if (result.concludesTurn) exec.concludeTurn()
