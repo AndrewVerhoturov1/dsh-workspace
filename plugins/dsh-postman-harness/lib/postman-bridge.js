@@ -1,5 +1,5 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { createPtcAdapter } from './ptc-adapter.js'
+import { createPtcAdapter, WORKER_RESEARCH_PROFILE } from './ptc-adapter.js'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { parsePostmanUserTurn } from './direct-current-turn.js'
 import { createPostmanWorkerTools } from './postman-worker.js'
@@ -167,9 +167,24 @@ export async function apply(ctx) {
   const contexts = initializePostmanTaskContexts(registry)
   const coordinator = createPostmanBridgeLaunchCoordinator()
   const grants = createImplementationArtifactGrants()
-  const worker = createPostmanWorkerTools(ctx, grants, postmanTaskContexts)
+  let boundaries, ptc
+  const refreshWorker = id => {
+    const agent = ctx.agents.get(id)
+    if (agent && boundaries && ptc) {
+      ptc.remove(agent)
+      boundaries.refreshSession(id)
+      ptc.refresh(agent)
+    }
+  }
+  const worker = createPostmanWorkerTools(ctx, grants, postmanTaskContexts, { onBindingChange: refreshWorker })
+  const stopContextWatch = contexts.onContextChange(id => worker.refreshLeader(id))
   const jobs = createPostmanBridgeJobs(ctx, coordinator, grants, postmanTaskContexts, worker)
-  const ptc = createPtcAdapter(ctx, { authorize: isTopLevelPostmanPtcLeader })
+  const ownsPtcWorker = agent => worker.ownsLiveWorker(agent) &&
+    isTopLevelPostmanPtcLeader(ctx.agents.get(agent.session.header.parentSession))
+  ptc = createPtcAdapter(ctx, { resolveAssignment: (agent, leaderProfile) => {
+    if (isTopLevelPostmanPtcLeader(agent)) return { profile: leaderProfile, role: 'leader' }
+    return ownsPtcWorker(agent) ? { profile: WORKER_RESEARCH_PROFILE, role: 'worker' } : null
+  } })
   ctx.tools.register(ptc.tool)
   ctx.tools.register(createPostmanTaskPrepareTool(ctx, contexts))
   ctx.tools.register(createPostmanBridgeTool(ctx, jobs, postmanTaskContexts))
@@ -186,17 +201,31 @@ export async function apply(ctx) {
   ctx.effect(() => async () => {
     try { await jobs.dispose() } finally {
       worker.dispose()
+      stopContextWatch()
       await ptc.dispose()
       releasePostmanTaskContexts(contexts)
       await closeSharedPostmanTaskRegistry()
     }
   }, 'dsh-postman-harness-bridge.shared-service()')
 
-  const boundaries = createPostmanBridgeBoundaryManager(sessionId => ctx.agents.get(sessionId))
+  boundaries = createPostmanBridgeBoundaryManager(sessionId => ctx.agents.get(sessionId), ownsPtcWorker)
   ctx.effect(() => () => boundaries.disposeAll(), 'dsh-postman-harness-bridge.boundary-manager()')
-  ctx.on('agent/created', ({ agent }) => { boundaries.install(agent); ptc.refresh(agent) })
-  ctx.on('agent-preset/selected', sessionId => { ptc.remove(ctx.agents.get(sessionId)); boundaries.refreshSession(sessionId); ptc.refresh(ctx.agents.get(sessionId)) })
-  ctx.on('agent/disposed', ({ agent }) => { ptc.remove(agent); boundaries.disposeAgent(agent) })
+  ctx.on('agent/created', async ({ agent }) => {
+    boundaries.install(agent)
+    await worker.confirmActivation(agent)
+    ptc.refresh(agent)
+  })
+  ctx.on('agent-preset/selected', sessionId => {
+    const agent = ctx.agents.get(sessionId)
+    ptc.remove(agent); boundaries.refreshSession(sessionId); ptc.refresh(agent)
+    for (const child of ctx.agents.list()) if (child.session?.header?.parentSession === sessionId) refreshWorker(child.id)
+  })
+  ctx.on('agent/disposed', ({ agent }) => {
+    worker.releaseActivation(agent)
+    worker.suspendLeader(agent)
+    ptc.remove(agent); boundaries.disposeAgent(agent)
+    for (const child of ctx.agents.list()) if (child.session?.header?.parentSession === agent.id) refreshWorker(child.id)
+  })
   ctx.on('tools/change', () => ptc.permissionsChanged())
   for (const agent of ctx.agents.list()) { boundaries.install(agent); ptc.refresh(agent) }
 }

@@ -1,5 +1,13 @@
 # Журнал ПТС
 
+## 2026-09-29 — Этап 4: research-only ПТС Worker
+
+От exact `origin/preview` `2beb4b48a521bcf1f94c2c9079370351e2243ccb` один `ptc_execute` расширен на точного подтверждённого Worker experimental `postman-leader-ptc` с отдельным профилем `read/glob/grep/web_fetch/web_search` (revision 1). Не менялись ядро QuickJS, обычная coding-поверхность Worker и production Leader/Workers/Bridge. Защита использует существующий `liveSlot` Worker; три независимых Worker имеют общие runtime limits, но отдельные исполнения/abort. Автоматические тесты проверяют реальный QuickJS → ToolRuntime → read/glob/grep на UTF-8 файлах, контролируемые web providers, identity/parent/root, отказ чужим Agent, три Worker, stop/revoke/resume и cold reconciliation без нового Worker. Живая Worker-приёмка не запускалась, установленный Harness не менялся.
+
+## 2026-09-29 — Факты частичной живой проверки Leader (этап 3)
+
+В установленном experimental Leader отдельно подтверждены точный PTC namespace, отсутствие Node globals, настоящие `read/grep/get_goal`, `while(true){}` → `maxWallMs`, новый запуск → `42`, внешний пользовательский Stop и следующий запуск → `42`. `web_fetch` дошёл до штатного инструмента, но web provider отсутствовал. Полная live cross-session isolation отдельно не подтверждена: автоматическую multi-worker isolation этапа 4 не считать завершением старой live-приёмки.
+
 ## 2026-09-29 — Этап 2: экспериментальный Leader
 
 От текущего origin/preview после слияния PR №245: добавлен общий адаптер ядра и ограниченный ptc_execute только точному postman-leader-ptc. Исходный Agent, родительский токен, отмена и публичный результат проходят через ToolRuntime.execute установленного DSH 0.1.1-rc.2. Профиль: read/grep/get_goal/web_fetch в пересечении с текущими правами; остальные функции не включены. Node v24.21.0, QuickJS 0.32.0. Проверки модельно-независимы, включая реальный read/grep, отмену в реальном read, определения цели/HTTP, отказ другим ролям, смену прав/пресета, очередь, подтверждение и некооперативный pending. Живая приёмка не проведена, рабочая установка не менялась. Следующий этап: отдельно разрешить проверку загрузки установленной сборки и одноразовую задачу модели в pilot, без включения production.

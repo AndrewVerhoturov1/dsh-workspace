@@ -34,9 +34,11 @@ Postman Leader
 → child-scoped report в точную Leader session
 ```
 
-## Пилот ПТС (только экспериментальный Leader)
+## Экспериментальный ПТС Leader и Worker
 
-Обычный ptc_execute регистрируется в bridge entrypoint с общей жизнью QuickJS runtime. Только точный живой top-level postman-leader-ptc видит и выполняет его; production Leader, Worker и Bridge не видят. Pilot-профиль read/grep/get_goal/web_fetch пересекается с текущими штатными правами Agent. Аргументы инструмента — программа, краткое описание цели и необязательный язык; подсказка pilot формирует сигнатуры из текущих схем реестра, без глобального Code Mode. Один запуск программы не повторяется после ошибки и не меняет доверенные результаты Postman.
+Один обычный `ptc_execute` регистрируется в bridge entrypoint с общим QuickJS runtime. Точный живой top-level `postman-leader-ptc` сохраняет прежний профиль `read/grep/get_goal/web_fetch`. Только его точный текущий, подтверждённый ready Worker получает отдельный `postman-worker-research` revision 1: `read/glob/grep/web_fetch/web_search`, пересечённые с обычной видимостью; первые три обязательны. Production Leader/Workers, Bridge, произвольные дети и дети Worker ПТС не получают. Worker сохраняет остальные обычные coding tools, но внутри PTC нет `write/edit`, shell/jobs/report/notify_parent, `postman_*` или иных полномочий. Аргументы — программа, краткое описание и необязательный язык; динамическая секция подсказки приводит реальные схемы. Исполнение одноразовое, без повтора и без изменения доверенных результатов Postman.
+
+Host сверяет exact Agent с существующим Worker `liveSlot`, живым experimental Leader, ready binding и task context. На created до ready действует deny; после подтверждения, stop, uncertainty, disposal, preset/context replacement и durable reactivation выполняется адресный refresh/отзыв. Каждый из трёх Worker имеет свой Agent и запуск; общий runtime сохраняет глобальные пределы. Вложенные вызовы идут через `ctx.tools.execute` исходного Worker и каждый раз проверяют текущие права. Автоматические тесты выполнены без модели; живую Worker-приёмку и установку этого изменения не проводили.
 
 Штатная поставка из репозитория: `node profiles/web/scripts/install-production.mjs` сначала устанавливает production-зависимости Postman-плагина через `pnpm install --offline --frozen-lockfile --prod` в `plugins/dsh-postman-harness`, затем устанавливает web-профиль с `link:../../plugins/dsh-postman-harness`. Относительное `file:../dsh-ptc` попадает в зависимости самого плагина; pnpm устанавливает ядро и транзитивный QuickJS/WASM без ручного размещения каталога или старого `node_modules`. Один архив Postman-плагина не является автономной поставкой. Чистая одноразовая проверка: `node profiles/web/scripts/test-install-production-postman-ptc.mjs`. Установка пользовательского профиля и приёмка модели здесь не выполнялись. Актуальный контракт: docs/subprojects/ptc/PTC_CONTRACT.md.
 
@@ -83,7 +85,7 @@ ask_user_question, todo_write, exit_plan_mode, create_goal, get_goal, update_goa
 `glob` и `web_search` намеренно отсутствуют; незарегистрированные имена не являются
 допустимыми aliases. Positive allowlist действует поверх общего preset.
 
-Любой `origin=subagent` считается non-Leader и получает deny всех Leader-only tools. Luna Bridge
+Любой `origin=subagent` считается non-Leader и получает deny всех Leader-only tools; исключение `ptc_execute` действует только для подтверждённого Worker experimental Leader. Luna Bridge
 дополнительно получает свой отдельный пятиимённый `toolFilter`: `skill`,
 `postman_send_current_turn`, `postman_current_turn_status`, `postman_ask_validate_reply`, `notify_parent`.
 Worker не имеет собственного узкого списка разрешений: его обычные инструменты приходят из
