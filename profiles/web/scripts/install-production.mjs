@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process'
 const profileRoot = resolve(fileURLToPath(new URL('..', import.meta.url)))
 const repositoryRoot = resolve(profileRoot, '../..')
 const managedRoot = resolve(repositoryRoot, 'plugins/dsh-better-sidebar-andrew')
+const postmanRoot = resolve(repositoryRoot, 'plugins/dsh-postman-harness')
 const packageManager = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
 const canonicalManagedRoot = realpathSync(managedRoot)
 
@@ -14,8 +15,8 @@ if (canonicalManagedRoot.includes('.dsh-worktrees')) {
   throw new Error(`managed Better Sidebar source must be in the merged repository: ${canonicalManagedRoot}`)
 }
 
-function runInstall(cwd, label) {
-  const result = spawnSync(packageManager, ['install', '--offline', '--frozen-lockfile'], {
+function runInstall(cwd, label, extraArgs = []) {
+  const result = spawnSync(packageManager, ['install', '--offline', '--frozen-lockfile', ...extraArgs], {
     cwd,
     stdio: 'inherit',
     shell: process.platform === 'win32',
@@ -39,6 +40,7 @@ if (existsSync(installedPackagePath)) {
   }
 }
 
+runInstall(postmanRoot, 'Postman plugin install', ['--prod'])
 runInstall(profileRoot, 'web profile install')
 
 const profilePackage = JSON.parse(readFileSync(resolve(profileRoot, 'package.json'), 'utf8'))

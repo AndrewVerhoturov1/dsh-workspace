@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -33,6 +33,9 @@ try {
     windowsHide: true,
   })
 
+  // Exercise the current installer even before its changes are committed.
+  copyFileSync(resolve(repositoryRoot, 'profiles/web/scripts/install-production.mjs'),
+    resolve(stagingRoot, 'profiles/web/scripts/install-production.mjs'))
   const profileRoot = resolve(stagingRoot, 'profiles/web')
   const installedPackage = resolve(profileRoot, 'node_modules/dsh-better-sidebar')
   mkdirSync(resolve(profileRoot, 'node_modules'), { recursive: true })

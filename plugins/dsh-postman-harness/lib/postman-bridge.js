@@ -1,4 +1,5 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { createPtcAdapter } from './ptc-adapter.js'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { parsePostmanUserTurn } from './direct-current-turn.js'
 import { createPostmanWorkerTools } from './postman-worker.js'
@@ -9,7 +10,7 @@ import { postmanTaskContexts, initializePostmanTaskContexts, releasePostmanTaskC
 import { sharedPostmanTaskRegistry, closeSharedPostmanTaskRegistry } from './postman-task-registry.js'
 import {
   POSTMAN_BRIDGE_TOOL_ALLOWLIST, POSTMAN_BRIDGE_TOOL_NAME, POSTMAN_BRIDGE_STATUS_TOOL_NAME, POSTMAN_CHILD_NOTIFY_TOOL_NAME, POSTMAN_TASK_PREPARE_TOOL_NAME, POSTMAN_TASK_RESTORE_TOOL_NAME,
-  createPostmanBridgeBoundaryManager, isTopLevelPostmanSupervisor,
+  createPostmanBridgeBoundaryManager, isTopLevelPostmanSupervisor, isTopLevelPostmanPtcLeader,
   postmanBridgeCallerAllowed, postmanBridgeRestrictionForAgent,
 } from './postman-bridge-core.js'
 
@@ -144,6 +145,8 @@ export async function apply(ctx) {
   const grants = createImplementationArtifactGrants()
   const worker = createPostmanWorkerTools(ctx, grants, postmanTaskContexts)
   const jobs = createPostmanBridgeJobs(ctx, coordinator, grants, postmanTaskContexts, worker)
+  const ptc = createPtcAdapter(ctx, { authorize: isTopLevelPostmanPtcLeader })
+  ctx.tools.register(ptc.tool)
   ctx.tools.register(createPostmanTaskPrepareTool(ctx, contexts))
   ctx.tools.register(createPostmanBridgeTool(ctx, jobs, postmanTaskContexts))
   ctx.tools.register(createPostmanBridgeStatusTool(ctx, jobs))
@@ -157,6 +160,7 @@ export async function apply(ctx) {
   ctx.effect(() => async () => {
     try { await jobs.dispose() } finally {
       worker.dispose()
+      await ptc.dispose()
       releasePostmanTaskContexts(contexts)
       await closeSharedPostmanTaskRegistry()
     }
@@ -164,10 +168,11 @@ export async function apply(ctx) {
 
   const boundaries = createPostmanBridgeBoundaryManager(sessionId => ctx.agents.get(sessionId))
   ctx.effect(() => () => boundaries.disposeAll(), 'dsh-postman-harness-bridge.boundary-manager()')
-  ctx.on('agent/created', ({ agent }) => boundaries.install(agent))
-  ctx.on('agent-preset/selected', sessionId => boundaries.refreshSession(sessionId))
-  ctx.on('agent/disposed', ({ agent }) => boundaries.disposeAgent(agent))
-  for (const agent of ctx.agents.list()) boundaries.install(agent)
+  ctx.on('agent/created', ({ agent }) => { boundaries.install(agent); ptc.refresh(agent) })
+  ctx.on('agent-preset/selected', sessionId => { ptc.remove(ctx.agents.get(sessionId)); boundaries.refreshSession(sessionId); ptc.refresh(ctx.agents.get(sessionId)) })
+  ctx.on('agent/disposed', ({ agent }) => { ptc.remove(agent); boundaries.disposeAgent(agent) })
+  ctx.on('tools/change', () => ptc.permissionsChanged())
+  for (const agent of ctx.agents.list()) { boundaries.install(agent); ptc.refresh(agent) }
 }
 
 export const POSTMAN_BRIDGE_VISIBLE_TOOLS = POSTMAN_BRIDGE_TOOL_ALLOWLIST
