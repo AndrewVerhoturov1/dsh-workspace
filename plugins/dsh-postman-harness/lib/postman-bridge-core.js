@@ -60,22 +60,22 @@ export const POSTMAN_BRIDGE_PERSONA = `You are Postman Bridge, a minimal one-sho
 You do not solve, redesign, expand, summarize, improve, or reinterpret the delegated task. The exact current user message is the transport message authored by your parent.
 
 Protocol:
-1. If the current message starts with exact @PostmanAsk, first load skill(delegate-via-postman-ask). If it starts with exact @Postman, first load skill(delegate-via-postman).
+1. If the current message starts with exact @PostmanAsk, first load skill(delegate-via-postman-ask). If it starts with exact @PostmanImage, use image transport directly (no Postman skill matches this marker). If it starts with exact @Postman, first load skill(delegate-via-postman).
 2. Then call postman_send_current_turn() with no arguments. Never copy the current user text into a tool argument, Base64, shell command, or another prompt.
 3. While waiting, you may call notify_parent({message: ...}) for a factual intermediate update. Never present your message as a trusted result. Repeatedly call postman_current_turn_status() until the current Direct Postman request reaches a terminal result. Never start a second request.
 4. For TEXT_RESULT_DURABLE, inspect deliveryMode. If deliveryMode=inline, call postman_ask_validate_reply(request_id, text) with the exact assistantText and respond with exactly that text only after EXACT_REPLY_MATCH. If deliveryMode=file, do not call postman_ask_validate_reply, do not read or reconstruct resultFile, and finish with only a compact acknowledgement containing the trusted requestId/resultFile metadata. The bridge host reads the trusted terminal directly; your prose is not result authority.
-5. For artifact mode, report the terminal receipt without inventing continuation. Never call an automatic continuation tool.
+5. For image mode, report IMAGE_RESULT_DURABLE with the trusted resultImage descriptor; never read or reconstruct the image, register it as an implementation artifact, or request continuation. For artifact mode, report the terminal receipt without inventing continuation. Never call an automatic continuation tool.
 
 You have no authority to choose a follow-up task. The parent Postman Leader decides whether to ask another question, continue with --chat, request an artifact, or stop.`
 
 export function buildPostmanBridgeStartRequest({ parent, message, signal, transportKind }) {
   if (parent === undefined || parent === null) throw new Error('POSTMAN_BRIDGE_PARENT_REQUIRED')
   if (typeof message !== 'string' || message.length === 0) throw new Error('POSTMAN_BRIDGE_MESSAGE_REQUIRED')
-  if (transportKind !== 'artifact' && transportKind !== 'text') throw new Error('POSTMAN_BRIDGE_MODE_INVALID')
+  if (!['artifact', 'text', 'image'].includes(transportKind)) throw new Error('POSTMAN_BRIDGE_MODE_INVALID')
   if (signal === undefined || signal === null) throw new Error('POSTMAN_BRIDGE_SIGNAL_REQUIRED')
 
   return {
-    label: transportKind === 'text' ? 'Postman Ask Bridge' : 'Postman Artifact Bridge',
+    label: transportKind === 'text' ? 'Postman Ask Bridge' : transportKind === 'image' ? 'Postman Image Bridge' : 'Postman Artifact Bridge',
     prompt: [{ type: 'text', text: message }],
     parent,
     signal,

@@ -10,9 +10,10 @@ Scope:
 - never use body-wide text as response correlation;
 - never send prompts or download artifacts.
 
-P4 completion proof is conservative: the correlated assistant turn must be
-non-empty, generation controls must be inactive, and its text must remain
-stable for a configured interval.
+P4 completion proof is conservative: the correlated assistant turn must have
+non-empty text (or, in opt-in image mode, rendered image DOM evidence),
+generation controls must be inactive, and its content must remain stable for
+a configured interval.
 """
 
 from __future__ import annotations
@@ -173,7 +174,26 @@ def extract_turn_text(turn: Any) -> str:
     return submit.read_semantic_message_text(_turn_message_node(turn))
 
 
-def snapshot_turns(page: Any) -> tuple[list[dict[str, Any]], str]:
+_IMAGE_EVIDENCE_JS = r"""
+(node) => Array.from(node.querySelectorAll("img"))
+  .filter(img => img.isConnected && img.complete && img.naturalWidth >= 64 &&
+    img.naturalHeight >= 64 && img.getClientRects().length > 0 &&
+    getComputedStyle(img).visibility !== "hidden")
+  .map(img => String(img.currentSrc || img.src || ""))
+  .filter(Boolean)
+"""
+
+
+def extract_turn_images(turn: Any) -> list[str]:
+    """Read visible, loaded image evidence only inside this assistant message."""
+    try:
+        sources = _turn_message_node(turn).evaluate(_IMAGE_EVIDENCE_JS)
+        return [source for source in sources if isinstance(source, str) and source] if isinstance(sources, list) else []
+    except Exception:
+        return []
+
+
+def snapshot_turns(page: Any, *, image_mode: bool = False) -> tuple[list[dict[str, Any]], str]:
     """Return ordered conversation turns from one selector family only.
 
     The first selector family that yields turns wins. This avoids double
@@ -188,14 +208,16 @@ def snapshot_turns(page: Any) -> tuple[list[dict[str, Any]], str]:
             turns: list[dict[str, Any]] = []
             for index in range(count):
                 node = locator.nth(index)
-                turns.append(
-                    {
-                        "index": index,
-                        "role": infer_turn_role(node),
-                        "text": extract_turn_text(node),
-                        "testId": _get_attribute(node, "data-testid"),
-                    }
-                )
+                role = infer_turn_role(node)
+                entry = {
+                    "index": index,
+                    "role": role,
+                    "text": extract_turn_text(node),
+                    "testId": _get_attribute(node, "data-testid"),
+                }
+                if image_mode and role == "assistant":
+                    entry["imageSources"] = extract_turn_images(node)
+                turns.append(entry)
             return turns, selector
         except Exception:
             continue
@@ -384,23 +406,30 @@ class AssistantLifecycleTracker:
         self.streaming = False
         self.completed = False
         self.last_text: str | None = None
+        self.last_images: tuple[str, ...] = ()
         self.stable_since_ms: float | None = None
         self.transitions: list[str] = []
 
-    def observe(self, text: str, *, generating: bool, now_ms: float) -> bool:
+    def observe(
+        self, text: str, *, generating: bool, now_ms: float,
+        image_sources: tuple[str, ...] = (), allow_empty_text: bool = False,
+    ) -> bool:
         text = _normalize_text(text)
+        images = tuple(image_sources) if allow_empty_text else ()
         if not self.started:
             self.started = True
             self.transitions.append(ASSISTANT_TURN_STARTED)
             self.last_text = text
+            self.last_images = images
             self.stable_since_ms = None if generating else now_ms
             if generating:
                 self.streaming = True
                 self.transitions.append(ASSISTANT_TURN_STREAMING)
             return False
 
-        if text != self.last_text:
+        if text != self.last_text or images != self.last_images:
             self.last_text = text
+            self.last_images = images
             self.stable_since_ms = None if generating else now_ms
             if not self.streaming:
                 self.streaming = True
@@ -416,7 +445,7 @@ class AssistantLifecycleTracker:
         stable_for = 0.0 if self.stable_since_ms is None else now_ms - self.stable_since_ms
         if (
             not generating
-            and text != ""
+            and (bool(images) if allow_empty_text else text != "")
             and self.stable_since_ms is not None
             and stable_for >= self.stable_ms
         ):
@@ -459,6 +488,8 @@ def observe_next_assistant(
     timeout_ms: int = DEFAULT_TIMEOUT_MS,
     stable_ms: int = DEFAULT_STABLE_MS,
     poll_ms: int = DEFAULT_POLL_MS,
+    image_mode: bool = False,
+    allow_empty_text: bool = False,
     sleep: Callable[[float], None] = time.sleep,
     monotonic: Callable[[], float] = time.monotonic,
 ) -> dict[str, Any]:
@@ -477,6 +508,8 @@ def observe_next_assistant(
             details={"reason": "expected_chat_url_invalid", "expectedChatUrl": expected_chat_url},
         )
 
+    # Either spelling explicitly opts into image-only completion; default is text-only.
+    image_mode = image_mode or allow_empty_text
     tracker = AssistantLifecycleTracker(stable_ms=stable_ms)
     deadline = monotonic() + max(timeout_ms, 0) / 1000.0
     last_code = ASSISTANT_NOT_STARTED
@@ -511,7 +544,7 @@ def observe_next_assistant(
                 },
             )
 
-        turns, selector = snapshot_turns(page)
+        turns, selector = snapshot_turns(page, image_mode=image_mode)
         correlation = correlate_next_assistant(turns, expected_prompt)
         last_code = correlation["code"]
         last_details = {
@@ -557,7 +590,13 @@ def observe_next_assistant(
             active, control = generation_active(page)
             text = _normalize_text(assistant.get("text", ""))
             now_ms = monotonic() * 1000.0
-            complete = tracker.observe(text, generating=active, now_ms=now_ms)
+            images = tuple(assistant.get("imageSources", ())) if image_mode else ()
+            complete = tracker.observe(
+                text, generating=active, now_ms=now_ms,
+                image_sources=images, allow_empty_text=image_mode,
+            )
+            if image_mode:
+                last_details["assistantImageCount"] = len(images)
             last_details.update(
                 {
                     "assistantText": text,

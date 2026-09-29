@@ -151,9 +151,9 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
           const { taskPublicationCommit: commit, baseCommit: parent } = publication
           if (!SHA.test(commit ?? '') || !SHA.test(parent ?? '') ||
               terminal.status !== 'POSTMAN_BRIDGE_TERMINAL' ||
-              (result?.ok === true && !['RESULT_DURABLE', 'TEXT_RESULT_DURABLE',
+              (result?.ok === true && !['RESULT_DURABLE', 'TEXT_RESULT_DURABLE', 'IMAGE_RESULT_DURABLE',
                 'ASSISTANT_COMPLETED_NO_ARTIFACT', 'ARTIFACT_REJECTED'].includes(result.code)) ||
-              !['text', 'artifact'].includes(terminal.transportKind) ||
+              !['text', 'artifact', 'image'].includes(terminal.transportKind) ||
               typeof terminal.requestId !== 'string' || !terminal.requestId ||
               (result.requestId !== undefined && result.requestId !== terminal.requestId) ||
               (publication.requestId !== undefined && publication.requestId !== terminal.requestId) ||

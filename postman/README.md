@@ -2,7 +2,7 @@
 
 `postman/` содержит production transport между локальным Harness agent и ChatGPT Web.
 
-## Два transport mode
+## Три transport mode
 
 Artifact mode:
 
@@ -26,7 +26,19 @@ Text mode:
 → TEXT_RESULT_DURABLE
 ```
 
-Оба режима поддерживают manual continuation:
+Image MVP:
+
+```text
+@PostmanImage <описание одной картинки>
+→ REQ_A: генерация одной картинки, завершение подтверждается ходом assistant с изображением, без текстового маркера
+→ REQ_B: автоматическая отправка в тот же чат — упаковка только что созданной картинки без изменений в ZIP
+→ обычная проверка и загрузка ZIP → извлечение ровно одного PNG/JPEG/WEBP
+→ IMAGE_RESULT_DURABLE с resultImage, imageSha256 и метаданными изображения (REQ_A)
+```
+
+Для декодирования картинки нужен Python-пакет `Pillow>=12,<13` в том же Python, которым запускается `postman.ps1` (`python -m pip install "Pillow>=12,<13"`). Без него image flow завершается `IMAGE_DECODER_UNAVAILABLE` и не выдаёт непроверенный результат. В ZIP допускаются посторонние не-графические файлы, но изображение должно быть ровно одно. REQ_B — внутренний ход без отдельного task commit; ZIP сохраняется как промежуточное доказательство, но не регистрируется как implementation artifact. Первая версия не поддерживает несколько картинок, редактирование, входные attachments и ручной `@PostmanImage --chat`.
+
+Artifact и text режимы поддерживают manual continuation:
 
 ```text
 @Postman --chat <old REQ> <new intent>
@@ -42,6 +54,7 @@ Old REQ используется только как ключ доказанно
 ```text
 postman_bridge({ message: "@PostmanAsk ..." })
 postman_bridge({ message: "@Postman ..." })
+postman_bridge({ message: "@PostmanImage ..." })
 ```
 
 `postman_bridge` доступен только top-level Agent с preset `postman-leader`; остальные Agents

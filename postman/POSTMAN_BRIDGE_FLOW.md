@@ -2,7 +2,7 @@
 
 > Model-facing capability: `postman_bridge(message=...)`
 > Bridge child: fresh one-shot `spawn`, fixed `codex / gpt-6-luna`
-> Existing transports: `@Postman` artifact and `@PostmanAsk` text
+> Transports: `@Postman` artifact, `@PostmanAsk` text, `@PostmanImage` one image
 
 ## 1. Назначение
 
@@ -17,7 +17,7 @@ Bridge не создаёт третий transport. Это Leader-specific superv
 
 ```text
 Postman Leader
-→ postman_bridge(message="@PostmanAsk ..." | "@Postman ...")
+→ postman_bridge(message="@PostmanAsk ..." | "@Postman ..." | "@PostmanImage ...")
 ← POSTMAN_BRIDGE_ACCEPTED + bridgeJobId (Leader сразу свободен)
 → Host job manager / existing Launch Coordinator
 → заново получить exact live Leader по parentSessionId; если недоступен — failed job без child
@@ -25,7 +25,7 @@ Postman Leader
 → fresh spawn child
 → fixed gpt-6-luna
 → exact child user/message
-→ child loads canonical Postman skill
+→ child loads canonical skill for @Postman/@PostmanAsk; @PostmanImage uses direct transport (no separate skill)
 → postman_send_current_turn() with no text args
 → existing Direct Postman
 → Bridge публикует REQ в task branch через Host (не в main)
@@ -47,7 +47,7 @@ Child assistant prose не является authority результата.
 ## 3. Exact-message boundary
 
 `postman_bridge.message` является новым model-authored delegation от Leader-а, а не transport
-копией текущего human user message. Он обязан начинаться с exact `@Postman` или `@PostmanAsk` и
+копией текущего human user message. Он обязан начинаться с exact `@Postman`, `@PostmanAsk` или `@PostmanImage` и
 проходит существующий `parsePostmanUserTurn` до spawn.
 
 После spawn Harness создаёт child `user/message` с exact `message`. С этого момента действует
@@ -82,10 +82,11 @@ Child сначала загружает канонический skill по exac
 
 ```text
 @Postman    → delegate-via-postman
-@PostmanAsk → delegate-via-postman-ask
+@PostmanAsk   → delegate-via-postman-ask
+@PostmanImage → image transport напрямую (отдельного навыка нет)
 ```
 
-Bridge не дублирует transport lifecycle из этих skills.
+Bridge не дублирует transport lifecycle из этих skills. Для image MVP внутренние REQ_A и REQ_B обрабатывает Direct в одном вызове; финальный `IMAGE_RESULT_DURABLE` содержит путь к извлечённому изображению и не создаёт implementation grant.
 
 ## 6. Trusted result handoff
 

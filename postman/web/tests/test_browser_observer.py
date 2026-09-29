@@ -26,12 +26,14 @@ class FakeLocator:
         attrs=None,
         visible=True,
         child_role="",
+        images=None,
     ):
         self.items = list(items or [])
         self._text = text
         self.attrs = dict(attrs or {})
         self._visible = visible
         self.child_role = child_role
+        self.images = list(images or [])
         self.first = self
         self.last = self
 
@@ -50,19 +52,24 @@ class FakeLocator:
     def is_visible(self):
         return self._visible
 
+    def evaluate(self, script):
+        if script == observer._IMAGE_EVIDENCE_JS:
+            return self.images
+        raise NotImplementedError(script)
+
     def locator(self, selector):
         if selector == "[data-message-author-role]" and self.child_role:
             return FakeLocator(attrs={"data-message-author-role": self.child_role})
         return FakeLocator(items=[])
 
 
-def turn(role, text, test_id=""):
+def turn(role, text, test_id="", *, images=None):
     attrs = {}
     if role:
         attrs["data-message-author-role"] = role
     if test_id:
         attrs["data-testid"] = test_id
-    return FakeLocator(text=text, attrs=attrs)
+    return FakeLocator(text=text, attrs=attrs, images=images)
 
 
 class FakePage:
@@ -342,6 +349,85 @@ class ObserverTests(unittest.TestCase):
         tracker = observer.AssistantLifecycleTracker(stable_ms=0)
         tracker.observe("done", generating=True, now_ms=0)
         self.assertFalse(tracker.observe("done", generating=True, now_ms=1000))
+
+    def test_image_mode_requires_stable_correlated_image_and_inactive_generation(self):
+        image = "https://example.test/rendered.png"
+        page = FakePage([
+            [turn("user", "probe", images=["user.png"]), turn("assistant", "", "conversation-turn-2")],
+            [turn("user", "probe"), turn("assistant", "", "conversation-turn-2", images=[image])],
+            [turn("user", "probe"), turn("assistant", "", "conversation-turn-2", images=[image])],
+            [turn("user", "probe"), turn("assistant", "", "conversation-turn-2", images=[image])],
+        ], generating=[True, True, False, False])
+        clock = FakeClock(page, increment=0.25)
+        result = observer.observe_next_assistant(
+            page, "probe", page.url, image_mode=True, timeout_ms=1500,
+            stable_ms=200, poll_ms=10, sleep=clock.sleep, monotonic=clock.monotonic,
+        )
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["details"]["assistantText"], "")
+        self.assertEqual(result["details"]["assistantImageCount"], 1)
+        self.assertEqual(result["details"]["assistantIndex"], 1)
+        self.assertFalse(result["details"]["generationActive"])
+
+    def test_image_mode_does_not_complete_status_text_without_image(self):
+        page = FakePage([[turn("user", "probe"),
+                          turn("assistant", "Creating image", "conversation-turn-2")]])
+        clock = FakeClock(page)
+        result = observer.observe_next_assistant(
+            page, "probe", page.url, image_mode=True, timeout_ms=250,
+            stable_ms=0, poll_ms=10, sleep=clock.sleep, monotonic=clock.monotonic,
+        )
+        self.assertEqual(result["code"], observer.ASSISTANT_TURN_TIMEOUT)
+
+    def test_image_mode_image_change_resets_stability(self):
+        page = FakePage([
+            [turn("user", "probe"), turn("assistant", "", "conversation-turn-2", images=["a.png"])],
+            [turn("user", "probe"), turn("assistant", "", "conversation-turn-2", images=["b.png"])],
+        ])
+        clock = FakeClock(page, increment=0.25)
+        result = observer.observe_next_assistant(
+            page, "probe", page.url, image_mode=True, timeout_ms=300,
+            stable_ms=300, poll_ms=10, sleep=clock.sleep, monotonic=clock.monotonic,
+        )
+        self.assertEqual(result["code"], observer.ASSISTANT_TURN_TIMEOUT)
+
+    def test_image_only_turn_requires_opt_in_and_real_assistant_image(self):
+        page = FakePage([[turn("user", "probe", images=["user.png"]),
+                          turn("assistant", "", "conversation-turn-2")]])
+        for flags in ({}, {"image_mode": True}, {"allow_empty_text": True}):
+            with self.subTest(flags=flags):
+                result = observer.observe_next_assistant(
+                    page, "probe", page.url, timeout_ms=0, **flags,
+                )
+                self.assertEqual(result["code"], observer.ASSISTANT_TURN_TIMEOUT)
+        image_page = FakePage([[turn("user", "probe"),
+                                turn("assistant", "", "conversation-turn-2", images=["image.png"]) ]])
+        clock = FakeClock(image_page)
+        default = observer.observe_next_assistant(
+            image_page, "probe", image_page.url, timeout_ms=250, stable_ms=0,
+            poll_ms=10, sleep=clock.sleep, monotonic=clock.monotonic,
+        )
+        self.assertEqual(default["code"], observer.ASSISTANT_TURN_TIMEOUT)
+        image_page.step = 0
+        clock.value = 0
+        allowed = observer.observe_next_assistant(
+            image_page, "probe", image_page.url, allow_empty_text=True,
+            timeout_ms=500, stable_ms=0, poll_ms=10,
+            sleep=clock.sleep, monotonic=clock.monotonic,
+        )
+        self.assertTrue(allowed["ok"])
+
+    def test_image_mode_preserves_assistant_identity_correlation(self):
+        page = FakePage([
+            [turn("user", "probe"), turn("assistant", "", "conversation-turn-2", images=["image.png"])],
+            [turn("user", "probe"), turn("assistant", "", "conversation-turn-99", images=["image.png"])],
+        ])
+        clock = FakeClock(page)
+        result = observer.observe_next_assistant(
+            page, "probe", page.url, image_mode=True, timeout_ms=500,
+            stable_ms=0, poll_ms=10, sleep=clock.sleep, monotonic=clock.monotonic,
+        )
+        self.assertEqual(result["code"], observer.CHAT_CORRELATION_LOST)
 
     def test_generation_active_detects_stop_control(self):
         page = FakePage([[turn("user", "x")]], generating=[True])

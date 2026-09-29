@@ -479,7 +479,7 @@ Host сам управляет очередью Bridge jobs, launch spacing, cle
 
 ## 25. Artifact flow
 
-Для `RESULT_DURABLE` Leader проверяет trusted metadata, exact `resultZip` и integrity handoff. Это не автоматическое разрешение применять ZIP; Leader отдельно принимает решение об implementation.
+Для `RESULT_DURABLE` Leader проверяет trusted metadata, exact `resultZip` и integrity handoff. Это не автоматическое разрешение применять ZIP; Leader отдельно принимает решение об implementation. Для `IMAGE_RESULT_DURABLE` полезный результат — exact `resultImage` с `imageSha256` и метаданными; при необходимости Leader использует `read_image` по этому пути. Промежуточный ZIP image flow не является implementation package и не получает artifact grant.
 
 Trusted artifact grant и продолжение Worker — разные операции. Host grant для exact trusted REQ передаётся через `postman_worker({task, workerSessionId, artifactRequestId})`. Если mapping отсутствует, Host создаёт Worker и передаёт grant; если mapping уже существует и появился новый trusted REQ, Host проверяет grant и передаёт follow-up тому же Worker без создания нового. Worker затем применяет artifact через `implementation_artifact_apply({requestId, worktree})` и не выбирает произвольный ZIP path.
 

@@ -12,6 +12,7 @@ from contextlib import ExitStack
 from dataclasses import dataclass
 import json
 import os
+import random
 from pathlib import Path
 import tempfile
 import time
@@ -34,6 +35,7 @@ PROMPT_SENT = "PROMPT_SENT"
 WAITING_ASSISTANT = "WAITING_ASSISTANT"
 ARTIFACT_FOUND = "ARTIFACT_FOUND"
 ASSISTANT_COMPLETED_NO_ARTIFACT = "ASSISTANT_COMPLETED_NO_ARTIFACT"
+IMAGE_TURN_COMPLETED = "IMAGE_TURN_COMPLETED"
 ARTIFACT_REJECTED = "ARTIFACT_REJECTED"
 RESULT_DURABLE = "RESULT_DURABLE"
 POSTMAN_TRANSPORT_FAILED = "POSTMAN_TRANSPORT_FAILED"
@@ -50,10 +52,11 @@ _STATE_ORDER = (
     WAITING_ASSISTANT,
     ARTIFACT_FOUND,
     ASSISTANT_COMPLETED_NO_ARTIFACT,
+    IMAGE_TURN_COMPLETED,
     ARTIFACT_REJECTED,
     RESULT_DURABLE,
 )
-_TERMINAL_SUCCESS_CODES = {RESULT_DURABLE, ASSISTANT_COMPLETED_NO_ARTIFACT, ARTIFACT_REJECTED}
+_TERMINAL_SUCCESS_CODES = {RESULT_DURABLE, ASSISTANT_COMPLETED_NO_ARTIFACT, ARTIFACT_REJECTED, IMAGE_TURN_COMPLETED}
 _FATAL_ARTIFACT_CODES = {
     artifact_detector.ARTIFACT_INVALID_CONFIG,
     artifact_detector.ARTIFACT_OBSERVER_PROOF_INVALID,
@@ -228,6 +231,10 @@ class WebWorkerBridge:
         self.sleep = sleep
         self.on_result_durable = on_result_durable
 
+    def _image_stage_pause(self) -> None:
+        """Apply human-paced jitter only to the optional image stage."""
+        self.sleep(random.uniform(3.0, 7.0))
+
     def state_path(self, request_id: str) -> Path:
         request_identity.assert_canonical_request_id(request_id)
         return self.state_root / f"{request_id}.json"
@@ -339,6 +346,7 @@ class WebWorkerBridge:
         browser_download_dir: str = artifact_download.DEFAULT_BROWSER_DOWNLOAD_DIR,
         playwright_factory: Callable[[], Any] | None = None,
         validator_runner: Callable[[Path, dict[str, Any]], dict[str, Any]] | None = None,
+        image_stage: bool = False,
     ) -> dict[str, Any]:
         """Run the browser pipeline once, with up to three fixed reminders."""
         accepted = self.accept_request(request_id, task_url)
@@ -405,6 +413,8 @@ class WebWorkerBridge:
                 stack.callback(close_owned_resources)
                 page = context.new_page()
 
+                if image_stage:
+                    self._image_stage_pause()
                 if conversation_url is None:
                     submitted = browser_submit.submit_fresh_prompt(page, prompt, timeout_ms=timeout_ms)
                 else:
@@ -426,10 +436,15 @@ class WebWorkerBridge:
                     continuedConversation=conversation_url is not None,
                 )
 
+                if image_stage:
+                    self._image_stage_pause()
                 started_at = self.monotonic()
                 deadline = started_at + observer_timeout_ms / 1000.0
                 reminder_records: list[dict[str, Any]] = []
                 reminder_index = 0
+                if image_stage:
+                    max_reminders = 0
+                image_observer_started = False
                 watched_turns: list[dict[str, Any]] = [
                     {
                         "prompt": prompt,
@@ -485,6 +500,10 @@ class WebWorkerBridge:
                         return {"kind": "no_result"}
                     if timeout_for_observer_ms <= 0:
                         return {"kind": "pending"}
+                    nonlocal image_observer_started
+                    if image_stage and not image_observer_started:
+                        image_observer_started = True
+                        self._image_stage_pause()
                     completed = browser_observer.observe_next_assistant(
                         page,
                         str(watch["prompt"]),
@@ -493,6 +512,7 @@ class WebWorkerBridge:
                         stable_ms=stable_ms,
                         sleep=self.sleep,
                         monotonic=self.monotonic,
+                        **({"allow_empty_text": True} if image_stage else {}),
                     )
                     completed = _attach_submit_proof(
                         completed,
@@ -542,6 +562,15 @@ class WebWorkerBridge:
                     completed = watch.get("proof")
                     if watch.get("artifactRejected") or not isinstance(completed, dict):
                         return {"kind": "no_result"}
+
+                    if image_stage:
+                        record = self._write_state(
+                            request, IMAGE_TURN_COMPLETED, observerProof=completed,
+                            conversationUrl=chat_url, conversationId=conversation_id,
+                            reminders=[],
+                        )
+                        terminal_result = {"ok": True, "code": IMAGE_TURN_COMPLETED, "details": record}
+                        return {"kind": "terminal", "result": terminal_result}
 
                     reproofed = False
                     proof_changed = False
@@ -1022,6 +1051,7 @@ __all__ = [
     "WAITING_ASSISTANT",
     "ARTIFACT_FOUND",
     "ASSISTANT_COMPLETED_NO_ARTIFACT",
+    "IMAGE_TURN_COMPLETED",
     "ARTIFACT_REJECTED",
     "RESULT_DURABLE",
     "BRIDGE_INVALID_REQUEST",

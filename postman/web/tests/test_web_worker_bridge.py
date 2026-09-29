@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 WEB_DIR = Path(__file__).resolve().parents[1]
 if str(WEB_DIR) not in sys.path:
@@ -97,6 +98,85 @@ class WebWorkerBridgeTests(unittest.TestCase):
             self.assertTrue(stored["resultPath"].replace("\\", "/").endswith(f"results/{REQ}"))
             self.assertEqual(callback_results, [])
 
+
+    def test_image_stage_accepts_empty_text_without_artifact_or_reminder(self):
+        chat = "https://chatgpt.com/c/12345678-1234-1234-1234-123456789abc"
+        class Page:
+            def __init__(self): self.closed = False
+            def close(self): self.closed = True
+            def is_closed(self): return self.closed
+        class Context:
+            def __init__(self): self.page = Page()
+            def new_page(self): return self.page
+        class Browser:
+            def __init__(self): self.contexts = [Context()]
+        class Factory:
+            def __enter__(self):
+                self.chromium = self
+                return self
+            def __exit__(self, *args): pass
+            def connect_over_cdp(self, url): return Browser()
+        for continued in (False, True):
+            with self.subTest(continued=continued), tempfile.TemporaryDirectory() as root:
+                pauses = []
+                callback = []
+                bridge = bridge_module.WebWorkerBridge(root=root, sleep=pauses.append,
+                                                       on_result_durable=callback.append)
+                submit = {"ok": True, "code": "SENT", "sendState": "PROVEN_SENT",
+                          "details": {"chatUrl": chat}}
+                proof = {"ok": True, "code": "ASSISTANT_TURN_COMPLETED",
+                         "details": {"assistantText": "", "assistantIndex": 1}}
+                with patch.object(bridge_module.browser_submit, "submit_fresh_prompt", return_value=submit) as fresh, \
+                     patch.object(bridge_module.browser_submit, "submit_existing_prompt", return_value=submit) as existing, \
+                     patch.object(bridge_module.browser_observer, "observe_next_assistant", return_value=proof) as observer, \
+                     patch.object(bridge_module.browser_observer, "connection_interrupted", return_value=(False, {})), \
+                     patch.object(bridge_module.artifact_detector, "detect_artifact_dom", side_effect=AssertionError("artifact inspected")), \
+                     patch.object(bridge_module.artifact_download, "download_validated_artifact", side_effect=AssertionError("download")), \
+                     patch.object(bridge_module.reminder_policy, "submit_reminder", side_effect=AssertionError("reminder")):
+                    result = bridge.run_request(REQ, task_url=TASK_URL, prompt="image request",
+                        expected_filename="unused.zip", expected_request={},
+                        conversation_url=chat if continued else None,
+                        playwright_factory=Factory, image_stage=True)
+                self.assertEqual(result["code"], bridge_module.IMAGE_TURN_COMPLETED)
+                self.assertTrue(result["ok"])
+                self.assertEqual(result["details"]["conversationUrl"], chat)
+                self.assertEqual(result["details"]["conversationId"], chat.rsplit("/", 1)[-1])
+                self.assertEqual(result["details"]["observerProof"], proof)
+                self.assertEqual(result["details"]["reminders"], [])
+                self.assertTrue(result["details"]["browserCleanup"]["ownedPageClosed"])
+                self.assertEqual(bridge.read_state(REQ)["state"], bridge_module.IMAGE_TURN_COMPLETED)
+                self.assertEqual(len(pauses), 3)
+                self.assertTrue(all(3 <= seconds <= 7 for seconds in pauses))
+                self.assertEqual(observer.call_args.kwargs["allow_empty_text"], True)
+                self.assertEqual(fresh.call_count, 0 if continued else 1)
+                self.assertEqual(existing.call_count, 1 if continued else 0)
+                self.assertEqual(callback, [])
+
+    def test_ordinary_mode_keeps_observer_contract_and_no_image_delay(self):
+        with tempfile.TemporaryDirectory() as root:
+            pauses = []
+            bridge = bridge_module.WebWorkerBridge(root=root, sleep=pauses.append)
+            class Context:
+                def __enter__(self):
+                    self.chromium = self
+                    return self
+                def __exit__(self, *args): pass
+                def connect_over_cdp(self, url): return self
+                @property
+                def contexts(self): return [self]
+                def new_page(self): return object()
+            chat = "https://chatgpt.com/c/12345678-1234-1234-1234-123456789abc"
+            with patch.object(bridge_module.browser_submit, "submit_fresh_prompt",
+                              return_value={"ok": True, "details": {"chatUrl": chat}}), \
+                 patch.object(bridge_module.browser_observer, "connection_interrupted", return_value=(False, {})), \
+                 patch.object(bridge_module.browser_observer, "observe_next_assistant",
+                              return_value={"ok": False, "code": "FATAL", "details": {}}) as observer:
+                result = bridge.run_request(REQ, task_url=TASK_URL, prompt="ordinary",
+                    expected_filename="unused.zip", expected_request={}, playwright_factory=Context)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["details"]["transportMessage"], "FATAL")
+            self.assertNotIn("allow_empty_text", observer.call_args.kwargs)
+            self.assertEqual(pauses, [])
 
 if __name__ == "__main__":
     unittest.main()
