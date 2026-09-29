@@ -97,7 +97,9 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
           row.repository !== REPOSITORY || !BRANCH.test(row.branch) || !SHA.test(row.baseCommit) ||
           !row.worktree || !row.repositoryPath || !row.originUrl) throw new Error('invalid durable binding')
       const repository = await command(cwd, 'rev-parse', '--show-toplevel')
+      const originMatch = /^(?:https?:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/]+\/[^/]+?)(?:\.git)?\/?$/i.exec(row.originUrl)
       if (normalize(repository) !== normalize(row.repositoryPath) ||
+          originMatch?.[1].toLowerCase() !== REPOSITORY ||
           await command(repository, 'remote', 'get-url', 'origin') !== row.originUrl ||
           normalize(row.worktree) === normalize(repository) ||
           [resolve(homedir(), '.dsh'), resolve(homedir(), '.dsh-preview')]
@@ -123,11 +125,58 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
       const head = await command(row.worktree, 'rev-parse', 'HEAD')
       const remoteLine = await command(repository, 'ls-remote', '--heads', 'origin', row.branch)
       const remote = remoteLine.split('\t')[0]
-      if (!SHA.test(head) || !SHA.test(remote) || remoteLine !== remote + '\trefs/heads/' + row.branch ||
+      if (!SHA.test(head) || !SHA.test(remote) || remoteLine !== remote + '\trefs/heads/' + row.branch)
+        throw new Error('task branch history uncertain')
+      // Fetch only the exact owned task ref to obtain missing objects; never update
+      // HEAD or the working files during recovery.
+      await command(row.worktree, 'fetch', 'origin', 'refs/heads/' + row.branch + ':refs/remotes/origin/' + row.branch)
+      if (await command(row.worktree, 'rev-parse', 'refs/remotes/origin/' + row.branch) !== remote ||
           await command(row.worktree, 'merge-base', head, row.baseCommit) !== row.baseCommit ||
-          await command(row.worktree, 'merge-base', remote, row.baseCommit) !== row.baseCommit ||
-          await command(row.worktree, 'merge-base', remote, head) !== remote ||
-          await command(repository, 'ls-remote', '--heads', 'origin', row.branch) !== remoteLine)
+          await command(row.worktree, 'merge-base', remote, row.baseCommit) !== row.baseCommit)
+        throw new Error('task branch history uncertain')
+      const common = await command(row.worktree, 'merge-base', remote, head)
+      if (common !== remote) {
+        if (common !== head) throw new Error('task branch history uncertain')
+        // Every remote-only commit must be one exact, locally journaled REQ
+        // publication. An ordinary fast-forward without receipts is not authority.
+        const receipts = new Map()
+        for (const op of Object.values(row.bridgeOperations ?? {})) {
+          if (op.state !== 'received' || !op.terminal ||
+              !['pending', 'busy', 'failed', 'synchronized'].includes(op.synchronization)) continue
+          const terminal = op.terminal
+          const result = terminal.result
+          const publication = result?.ok === true ? result :
+            result?.ok === false && result.code === 'POSTMAN_TRANSPORT_FAILED' ? result.publicationReceipt : null
+          if (!publication) continue
+          const { taskPublicationCommit: commit, baseCommit: parent } = publication
+          if (!SHA.test(commit ?? '') || !SHA.test(parent ?? '') ||
+              terminal.status !== 'POSTMAN_BRIDGE_TERMINAL' ||
+              (result?.ok === true && !['RESULT_DURABLE', 'TEXT_RESULT_DURABLE',
+                'ASSISTANT_COMPLETED_NO_ARTIFACT', 'ARTIFACT_REJECTED'].includes(result.code)) ||
+              !['text', 'artifact'].includes(terminal.transportKind) ||
+              typeof terminal.requestId !== 'string' || !terminal.requestId ||
+              (result.requestId !== undefined && result.requestId !== terminal.requestId) ||
+              (publication.requestId !== undefined && publication.requestId !== terminal.requestId) ||
+              typeof publication.repository !== 'string' || publication.repository.toLowerCase() !== REPOSITORY ||
+              (result.ok === false ? publication.branch !== row.branch :
+                publication.branch !== undefined && publication.branch !== row.branch) ||
+              publication.taskUrl !==
+                'https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/' + commit + '/' + terminal.requestId + '.md' ||
+              receipts.has(commit)) throw new Error('task branch history uncertain')
+          receipts.set(commit, parent)
+        }
+        const commits = (await command(row.worktree, 'rev-list', '--reverse', head + '..' + remote)).split(/\r?\n/).filter(Boolean)
+        if (!commits.length) throw new Error('task branch history uncertain')
+        let parent = head
+        for (const commit of commits) {
+          if (!SHA.test(commit) || receipts.get(commit) !== parent ||
+              await command(row.worktree, 'rev-list', '--parents', '-n', '1', commit) !== commit + ' ' + parent)
+            throw new Error('task branch history uncertain')
+          parent = commit
+        }
+        if (parent !== remote) throw new Error('task branch history uncertain')
+      }
+      if (await command(repository, 'ls-remote', '--heads', 'origin', row.branch) !== remoteLine)
         throw new Error('task branch history uncertain')
       const context = Object.freeze({ leaderSessionId: id, repository: REPOSITORY,
         branch: row.branch, worktree: row.worktree, baseCommit: row.baseCommit })
@@ -328,7 +377,7 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
         workerAdmissions.has(leaderId) ||
         ['running', 'unknown', 'restoring'].includes(registry.get(leaderId)?.runner.state) ||
         Object.values(registry.get(leaderId)?.bridgeOperations ?? {}).some(op =>
-          op.state === 'received' && op.synchronization !== 'synchronized') || isBusy(leaderId)) return false
+          op.state === 'received' && !['synchronized', 'not-required'].includes(op.synchronization)) || isBusy(leaderId)) return false
     activeOperations.add(leaderId)
     return true
   }
@@ -353,7 +402,7 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
   function reserveRestore(leaderId) {
     if (!get(leaderId) || pending.has(leaderId) || syncOperations.has(leaderId) || activeOperations.has(leaderId) || workerAdmissions.has(leaderId) ||
         Object.values(registry.get(leaderId)?.bridgeOperations ?? {}).some(op =>
-          op.state === 'received' && op.synchronization !== 'synchronized')) return false
+          op.state === 'received' && !['synchronized', 'not-required'].includes(op.synchronization))) return false
     pending.add(leaderId)
     return true
   }

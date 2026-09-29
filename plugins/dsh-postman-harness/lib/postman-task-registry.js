@@ -26,7 +26,7 @@ export const POSTMAN_TASK_DOMAIN = defineDomain({
     bridgeOperations: z.record(z.string(), z.object({
       state: z.enum(['pending', 'unknown', 'received']),
       terminal: z.unknown().optional(),
-      synchronization: z.enum(['pending', 'busy', 'failed', 'synchronized']).optional(),
+      synchronization: z.enum(['pending', 'busy', 'failed', 'synchronized', 'not-required']).optional(),
       grantDiagnostic: z.string().optional(),
     })).optional(),
   }).strict()) },

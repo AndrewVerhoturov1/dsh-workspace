@@ -81,9 +81,19 @@ test('persisted terminal survives restart and retries sync without Direct', asyn
   { async pauseForOperation() { return true } })
   const before = await cold.status(leader, receipt.bridgeJobId)
   assert.equal(before.status, 'POSTMAN_BRIDGE_TERMINAL')
-  assert.equal(before.synchronization, 'pending')
-  const recovered = await cold.status(leader, receipt.bridgeJobId, true)
+  assert.equal(before.synchronization, 'busy')
+  const [recovered, simultaneous] = await Promise.all([
+    cold.status(leader, receipt.bridgeJobId, true), cold.status(leader, receipt.bridgeJobId, true)])
   assert.equal(recovered.synchronization, 'synchronized')
+  assert.deepEqual(simultaneous.result, f.publication)
+  for (let i = 0; i < 2; i++) {
+    const again = await cold.status(leader, receipt.bridgeJobId)
+    assert.equal(again.status, 'POSTMAN_BRIDGE_TERMINAL')
+    assert.equal(again.state, 'TERMINAL')
+    assert.ok(again.finishedAt)
+    assert.deepEqual(again.result, f.publication)
+  }
+  assert.equal((await cold.status(leader, receipt.bridgeJobId, true)).synchronization, 'synchronized')
   assert.deepEqual({ sends, syncs, grants }, { sends: 0, syncs: 1, grants: 1 })
   await cold.dispose()
 })
@@ -119,7 +129,33 @@ test('verified artifact grant failure remains recoverable across restart', async
     { async pauseForOperation() { return true } })
   assert.equal((await cold.status(leader, other.bridgeJobId)).status, 'POSTMAN_BRIDGE_FAILED')
   assert.equal((await cold.status(leader, other.bridgeJobId, true)).status, 'POSTMAN_BRIDGE_TERMINAL')
+  assert.equal((await cold.status(leader, other.bridgeJobId)).status, 'POSTMAN_BRIDGE_TERMINAL')
+  assert.equal((await cold.status(leader, other.bridgeJobId, true)).status, 'POSTMAN_BRIDGE_TERMINAL')
   assert.deepEqual({ sends, grants }, { sends: 0, grants: 1 })
+  await cold.dispose()
+})
+
+
+test('cold text terminal retains result after local retry without repeated sync', async () => {
+  const f = await fixture()
+  const receipt = await f.accept()
+  await tick(); await tick(); await tick()
+  await f.jobs.dispose()
+  let sends = 0, syncs = 0
+  const cold = createPostmanBridgeJobs({ agents: { get: () => leader } },
+    { run() { sends++; throw Error('Direct replay') }, dispose() {} }, null,
+    { record: f.registry.get, changeRecord: f.registry.change,
+      async sync() { syncs++; return true } }, { async pauseForOperation() { return true } })
+  assert.equal((await cold.status(leader, receipt.bridgeJobId)).synchronization, 'busy')
+  assert.equal((await cold.status(leader, receipt.bridgeJobId, true)).synchronization, 'synchronized')
+  for (let i = 0; i < 2; i++) {
+    const status = await cold.status(leader, receipt.bridgeJobId)
+    assert.equal(status.status, 'POSTMAN_BRIDGE_TERMINAL')
+    assert.equal(status.state, 'TERMINAL')
+    assert.deepEqual(status.result, f.publication)
+  }
+  assert.equal((await cold.status(leader, receipt.bridgeJobId, true)).synchronization, 'synchronized')
+  assert.deepEqual({ sends, syncs }, { sends: 0, syncs: 1 })
   await cold.dispose()
 })
 

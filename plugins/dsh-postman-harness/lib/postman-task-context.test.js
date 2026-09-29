@@ -276,6 +276,24 @@ test('recovery refuses remote-ahead and divergent history without destructive ac
   }
 })
 
+
+test('not-required received result cannot block runner or eligible failed-runner restore', async () => {
+  const f = fixture(); const id = 'A'
+  const prepared = await f.contexts.prepare(leader(id))
+  f.state.trees.push(worktree)
+  const cold = createPostmanTaskContexts({ registry: f.registry, gitCommand: f.gitCommand,
+    realPath: async path => path })
+  assert.equal((await cold.recover(leader(id))).status, 'POSTMAN_TASK_CONTEXT_ALREADY_READY')
+  await f.registry.change(id, row => ({ ...row, bridgeOperations: { early: {
+    state: 'received', terminal: { status: 'POSTMAN_BRIDGE_TERMINAL' }, synchronization: 'not-required' } } }))
+  assert.equal(cold.beginOperation(id), true)
+  await cold.endOperation(id, null)
+  await f.registry.change(id, row => ({ ...row, runner: { state: 'failed', requestId: 'REQ_FAIL' } }))
+  assert.equal(cold.reserveRestore(id), true)
+  cold.releaseRestore(id)
+  assert.equal(cold.get(id).branch, prepared.branch)
+})
+
 test('durable prepare intent survives post-worktree crash and never makes another context', async () => {
   const f = fixture()
   const prepared = await f.contexts.prepare(leader('A'))

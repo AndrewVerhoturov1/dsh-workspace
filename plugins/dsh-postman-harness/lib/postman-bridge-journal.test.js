@@ -168,6 +168,89 @@ test('three same-Leader jobs run independently, fourth waits for a settled slot'
   await jobs.dispose()
 })
 
+
+test('proven pre-publication failure persists not-required across restarts and admission', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'postman-early-terminal-'))
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }))
+  const backend = new JsonStorageBackend(root)
+  const storage = { storage: { backend: { get: () => backend } }, emit() {} }
+  const registry = await openPostmanTaskRegistry(new DomainFacility(storage, { backend: 'json', routes: {} }))
+  await registry.create(parent.id, row())
+  const taskContext = Object.freeze({ branch: row().branch })
+  let sends = 0, syncs = 0
+  const contexts = { get: () => taskContext, record: registry.get, changeRecord: registry.change,
+    isRestoring: () => false, hasActiveOperation: () => false, bindChild: () => true, releaseChild() {},
+    async sync() { syncs++; throw Error('no publication exists') } }
+  const ctx = { agents: { get: () => parent }, subagents: { async start() {
+    sends++
+    const id = 'child-' + sends
+    return { id, localAgent: { id }, result: Promise.resolve({ stopReason: 'end_turn' }), async dispose() {} }
+  } }, tools: { get: () => ({ async execute() {
+    const requestId = 'REQ_20260929T01010' + sends + 'Z_0001'
+    return { status: 'FAILED', requestId, result: { ok: false, code: 'POSTMAN_TRANSPORT_FAILED',
+      requestId, transportCode: 'DIRECT_INVALID_TASK', transportMessage: 'rejected before publication', details: {} } }
+  } }) } }
+  const jobs = createPostmanBridgeJobs(ctx, { run: (_signal, launch) => launch(), dispose() {} }, null, contexts)
+  const receipts = []
+  for (let i = 0; i < 5; i++) {
+    const receipt = await jobs.accept(parent, '@PostmanAsk early failure ' + i, 'text')
+    assert.equal(receipt.status, 'POSTMAN_BRIDGE_ACCEPTED')
+    receipts.push(receipt)
+    for (let attempt = 0; attempt < 40 &&
+      !['not-required', 'busy'].includes(registry.get(parent.id).bridgeOperations[receipt.bridgeJobId]?.synchronization); attempt++)
+      await new Promise(resolve => setTimeout(resolve, 25))
+    const status = await jobs.status(parent, receipt.bridgeJobId)
+    assert.equal(status.synchronization, 'not-required', JSON.stringify({ status, op: registry.get(parent.id).bridgeOperations[receipt.bridgeJobId] }))
+    assert.equal(status.state, 'TERMINAL')
+    const op = registry.get(parent.id).bridgeOperations[receipt.bridgeJobId]
+    assert.equal(op.state, 'received')
+    assert.equal(op.synchronization, 'not-required')
+  }
+  assert.deepEqual({ sends, syncs }, { sends: 5, syncs: 0 })
+  await jobs.dispose(); await registry.close()
+  const reopened = await openPostmanTaskRegistry(new DomainFacility(storage, { backend: 'json' }))
+  for (const receipt of receipts) {
+    assert.equal(reopened.get(parent.id).bridgeOperations[receipt.bridgeJobId].synchronization, 'not-required')
+  }
+  const cold = createPostmanBridgeJobs({ agents: { get: () => parent } },
+    { run() { throw Error('must not resend') }, dispose() {} }, null,
+    { record: reopened.get, changeRecord: reopened.change, async sync() { throw Error('must not sync') } })
+  for (const receipt of receipts) {
+    const status = await cold.status(parent, receipt.bridgeJobId)
+    assert.equal(status.synchronization, 'not-required')
+    assert.equal((await cold.status(parent, receipt.bridgeJobId, true)).synchronization, 'not-required')
+  }
+  await cold.dispose(); await reopened.close(); await backend.close()
+})
+
+test('absence of publication proof alone retains busy received terminal and unknown intent cap', async () => {
+  const registry = createMemoryTaskRegistry()
+  await registry.create(parent.id, row())
+  const context = Object.freeze({ branch: row().branch })
+  let sends = 0
+  const jobs = createPostmanBridgeJobs({ agents: { get: () => parent }, subagents: { async start() {
+    sends++
+    return { id: 'mock-child', localAgent: { id: 'mock-child' }, result: Promise.resolve({ stopReason: 'end_turn' }), async dispose() {} }
+  } }, tools: { get: () => ({ async execute() { return { status: 'FAILED', requestId: 'REQ_UNKNOWN',
+    result: { ok: false, code: 'POSTMAN_TRANSPORT_FAILED', requestId: 'REQ_UNKNOWN',
+      transportCode: 'WEB_FAILED', transportMessage: 'publication unknown', details: {} } } } }) } },
+  { run: (_signal, launch) => launch(), dispose() {} }, null,
+  { get: () => context, record: registry.get, changeRecord: registry.change,
+    isRestoring: () => false, hasActiveOperation: () => false, bindChild: () => true, releaseChild() {},
+    async sync() { throw Error('must not sync') } })
+  const receipt = await jobs.accept(parent, '@PostmanAsk unknown', 'text')
+  await tick(); await tick(); await tick()
+  assert.equal((await jobs.status(parent, receipt.bridgeJobId)).synchronization, 'busy')
+  assert.equal(registry.get(parent.id).bridgeOperations[receipt.bridgeJobId].synchronization, 'pending')
+  assert.equal((await jobs.status(parent, receipt.bridgeJobId, true)).synchronization, 'busy')
+  assert.equal(sends, 1)
+  await registry.change(parent.id, row => ({ ...row, bridgeOperations: { ...row.bridgeOperations,
+    oldA: { state: 'unknown' }, oldB: { state: 'unknown' }, oldC: { state: 'unknown' } } }))
+  assert.equal((await jobs.accept(parent, '@PostmanAsk blocked', 'text')).status, 'POSTMAN_BRIDGE_LIMIT_REACHED')
+  assert.equal(sends, 1)
+  await jobs.dispose()
+})
+
 test('one interrupted job does not block an independent new Bridge', async () => {
   const registry = createMemoryTaskRegistry()
   await registry.create(parent.id, { ...row(), bridgeOperations: { oldA: { state: 'unknown' } } })
