@@ -75,6 +75,7 @@ PRE = "a" * 40
 class DirectPostmanUnitTests(unittest.TestCase):
     def test_image_mode_runs_two_turns_and_returns_only_extracted_image(self):
         second_id = "REQ_20260902T010204Z_5678"
+        intent = "Создай ровно одно изображение: рыжий спаниэль.\nСветлый фон и мягкий свет."
         class Publisher:
             contents = []
             def __init__(self, **kwargs): pass
@@ -107,19 +108,34 @@ class DirectPostmanUnitTests(unittest.TestCase):
             with patch.object(direct, "new_image_followup_request_id", return_value=second_id), \
                  patch.object(direct.image_result, "extract_validated_image", return_value=image) as extract, \
                  patch.object(direct.durable_handoff, "validate_image_terminal", side_effect=lambda terminal, **_: terminal):
-                terminal = runner.run(request_id=REQ, task="нарисуй кота", image_mode=True)
+                terminal = runner.run(request_id=REQ, task=intent, image_mode=True)
             self.assertEqual(terminal["code"], "IMAGE_RESULT_DURABLE")
             self.assertEqual(terminal["secondRequestId"], second_id)
             self.assertEqual(terminal["resultImage"], image["path"])
             self.assertNotIn("resultZip", terminal)
             self.assertEqual(terminal["taskSha256"], direct._sha256_text(Publisher.contents[0]))
             self.assertNotIn("RESULT_BEGIN", Publisher.contents[0])
+            self.assertIn(intent, Publisher.contents[0])
             self.assertIn("exactly ONE image", Publisher.contents[0])
             self.assertEqual([x[0] for x in Bridge.calls], [REQ])
-            followup = Bridge.calls[0][1]["image_followup"]
+            first = Bridge.calls[0][1]
+            self.assertEqual(first["task_url"], f"https://example.test/{REQ}.md")
+            self.assertEqual(first["prompt"], direct.build_image_generation_prompt(REQ, intent))
+            self.assertTrue(first["prompt"].startswith(f"POSTMAN_REQUEST_ID: {REQ}\n"))
+            self.assertIn(intent, first["prompt"])
+            self.assertIn("Create exactly ONE image", first["prompt"])
+            self.assertNotIn("task_file:", first["prompt"])
+            self.assertNotIn("https://", first["prompt"])
+            followup = first["image_followup"]
             self.assertEqual(followup["request_id"], second_id)
             self.assertEqual(followup["expected_request"]["requestId"], second_id)
             self.assertIn(f"<<<POSTMAN_RESULT_BEGIN:{second_id}>>>", followup["prompt"])
+            self.assertTrue(followup["prompt"].startswith(f"POSTMAN_REQUEST_ID: {second_id}\n"))
+            self.assertIn("immediately preceding assistant response", followup["prompt"])
+            self.assertIn("Do not generate another image", followup["prompt"])
+            self.assertNotIn(intent, followup["prompt"])
+            self.assertNotIn("task_file:", followup["prompt"])
+            self.assertNotIn("https://", followup["prompt"])
             self.assertNotIn("baseCommit", followup["prompt"])
             self.assertEqual(terminal["imageFormat"], "png")
             extract.assert_called_once_with(str(zip_path), [{"path": "image.png", "kind": "file"}],
@@ -188,6 +204,23 @@ class DirectPostmanUnitTests(unittest.TestCase):
         self.assertEqual(rendered, f"# POSTMAN TASK\n\nuser_intent:\n{task}\n")
         for invented in ("React", "responsive", "division by zero", "framework"):
             self.assertNotIn(invented, rendered)
+
+    def test_image_generation_prompt_preserves_exact_multiline_intent(self):
+        intent = "  Рыжий спаниэль\n\nОдно изображение ✅\n  "
+        prompt = direct.build_image_generation_prompt(REQ, intent)
+        self.assertEqual(prompt, (
+            f"POSTMAN_REQUEST_ID: {REQ}\n\n"
+            "Create exactly ONE image satisfying this request:\n\n"
+            f"{intent}\n\n"
+            "Generate exactly one image using the image-generation capability.\n"
+            "Show the generated image in this conversation.\n"
+            "Do not generate multiple variants.\n"
+            "Do not create a ZIP or other attachment in this turn."
+        ))
+        self.assertNotIn("task_file:", prompt)
+        self.assertNotIn("https://", prompt)
+        for metadata in ("repository:", "base_commit:", "allowed_paths_json:"):
+            self.assertNotIn(metadata, prompt)
 
     def test_external_prompt_is_exactly_req_policy_and_task_link(self):
         filename = f"POSTMAN_{REQ}_RESULT.zip"

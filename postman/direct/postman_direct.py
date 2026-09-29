@@ -139,6 +139,22 @@ def new_image_followup_request_id(first_request_id: str) -> str:
     raise DirectPostmanError("DIRECT_IMAGE_ID_COLLISION", "could not allocate a distinct image packaging request")
 
 
+def build_image_generation_prompt(request_id: str, user_intent: str) -> str:
+    """Put the original image intent directly in the first Web turn."""
+    request_identity.assert_canonical_request_id(request_id)
+    if not isinstance(user_intent, str) or not user_intent.strip():
+        raise DirectPostmanError("DIRECT_INVALID_TASK", "image intent must be a non-empty string")
+    return (
+        f"POSTMAN_REQUEST_ID: {request_id}\n\n"
+        "Create exactly ONE image satisfying this request:\n\n"
+        f"{user_intent}\n\n"
+        "Generate exactly one image using the image-generation capability.\n"
+        "Show the generated image in this conversation.\n"
+        "Do not generate multiple variants.\n"
+        "Do not create a ZIP or other attachment in this turn."
+    )
+
+
 def image_packaging_prompt(request_id: str, expected_filename: str) -> str:
     return "\n".join((
         f"POSTMAN_REQUEST_ID: {request_id}",
@@ -697,15 +713,18 @@ class DirectPostman:
             "allowedPaths": allowed_paths,
             "forbiddenPaths": forbidden_paths,
         }
-        prompt = build_external_prompt(
-            request_id=request_id,
-            task_url=published.task_url,
-            repository=self.repository,
-            base_commit=snapshot.prepublication_commit,
-            expected_filename=expected_filename,
-            allowed_paths=allowed_paths,
-            forbidden_paths=forbidden_paths,
-        )
+        if image_mode:
+            prompt = build_image_generation_prompt(request_id, task)
+        else:
+            prompt = build_external_prompt(
+                request_id=request_id,
+                task_url=published.task_url,
+                repository=self.repository,
+                base_commit=snapshot.prepublication_commit,
+                expected_filename=expected_filename,
+                allowed_paths=allowed_paths,
+                forbidden_paths=forbidden_paths,
+            )
         self._write_state(
             request_id,
             STATE_TASK_PUBLISHED,
