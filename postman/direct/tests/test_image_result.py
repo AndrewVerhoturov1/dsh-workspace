@@ -91,22 +91,17 @@ class ImageResultTests(unittest.TestCase):
             self.assert_code("IMAGE_FORMAT_MISMATCH", inv, sha)
 
     def test_real_decode_if_pillow_installed(self):
-        try:
-            from PIL import Image
-        except ImportError:
-            self.skipTest("Pillow optional; unavailable on this interpreter")
+        from PIL import Image
+        decoded = []
         for fmt, ext in (("PNG", ".png"), ("JPEG", ".jpg"), ("WEBP", ".webp")):
-            if fmt == "WEBP" and not Image.registered_extensions().get(".webp"):
-                continue
             buffer = io.BytesIO()
-            try:
-                Image.new("RGB", (2, 3), "red").save(buffer, format=fmt)
-            except OSError:
-                continue
+            Image.new("RGB", (2, 3), "red").save(buffer, format=fmt)
             inv, sha = self.make_zip([("a" + ext, buffer.getvalue())])
             result = self.extract(inv, sha)
             self.assertEqual((result["format"], result["width"], result["height"]), (fmt, 2, 3))
+            decoded.append(fmt)
             (self.output / ("image" + ext)).unlink()
+        self.assertEqual(decoded, ["PNG", "JPEG", "WEBP"])
 
 
 if __name__ == "__main__":

@@ -349,6 +349,24 @@ console.log(JSON.stringify({length: actual.length, sha256: hash(actual), joined,
         self.assertEqual(page.click_count, 1)
         self.assertIn(submit.EXISTING_CHAT_CONFIRMED, result["transitions"])
 
+    def test_existing_prompt_on_owned_page_does_not_navigate(self):
+        url = "https://chatgpt.com/c/existing-123"
+        page = FakePage(url=url, turn_count=4, user_turns=["old"])
+        page.bound_url = url
+        page.goto = lambda *args, **kwargs: self.fail("same-page continuation navigated")
+        result = submit.submit_existing_prompt(page, "technical ZIP request", url,
+                                               timeout_ms=0, navigate=False)
+        self.assertTrue(result["ok"])
+        self.assertEqual(page.user_turns, ["old", "technical ZIP request"])
+        self.assertEqual(page.click_count, 1)
+
+    def test_same_page_submission_rejects_changed_chat_before_send(self):
+        page = FakePage(url="https://chatgpt.com/c/other", user_turns=["old"])
+        result = submit.submit_existing_prompt(page, "new prompt", "https://chatgpt.com/c/existing-123",
+                                               timeout_ms=0, navigate=False)
+        self.assertEqual(result["code"], submit.EXISTING_CHAT_NOT_CONFIRMED)
+        self.assertEqual(page.click_count, 0)
+
     def test_prepare_fresh_chat_navigation_failure_is_pre_send(self):
         page = FakePage(goto_error="offline")
         result = submit.prepare_fresh_chat(page, timeout_ms=0)

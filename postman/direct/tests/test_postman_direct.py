@@ -88,11 +88,9 @@ class DirectPostmanUnitTests(unittest.TestCase):
             def __init__(self, **kwargs): pass
             def run_request(self, request_id, **kwargs):
                 self.calls.append((request_id, kwargs))
-                if kwargs.get("image_stage"):
-                    return {"ok": True, "code": "IMAGE_TURN_COMPLETED", "details": {
-                        "conversationUrl": "https://chatgpt.com/c/abc", "conversationId": "abc"}}
                 return {"ok": True, "code": "RESULT_DURABLE", "details": {
-                    "resultZip": str(zip_path), "resultSha256": "c" * 64}}
+                    "conversationUrl": "https://chatgpt.com/c/abc", "conversationId": "abc",
+                    "secondRequestId": second_id, "resultZip": str(zip_path), "resultSha256": "c" * 64}}
         with tempfile.TemporaryDirectory() as tmp:
             zip_path = Path(tmp) / "results" / second_id / "result.zip"
             zip_path.parent.mkdir(parents=True)
@@ -107,8 +105,6 @@ class DirectPostmanUnitTests(unittest.TestCase):
             image = {"path": str(Path(tmp) / "image.png"), "format": "PNG", "sha256": "d" * 64,
                      "bytes": 123, "width": 20, "height": 30, "mime": "image/png", "sourceEntry": "image.png"}
             with patch.object(direct, "new_image_followup_request_id", return_value=second_id), \
-                 patch.object(direct.secrets, "randbelow", return_value=2), \
-                 patch.object(direct.time, "sleep") as sleep, \
                  patch.object(direct.image_result, "extract_validated_image", return_value=image) as extract, \
                  patch.object(direct.durable_handoff, "validate_image_terminal", side_effect=lambda terminal, **_: terminal):
                 terminal = runner.run(request_id=REQ, task="нарисуй кота", image_mode=True)
@@ -119,12 +115,12 @@ class DirectPostmanUnitTests(unittest.TestCase):
             self.assertEqual(terminal["taskSha256"], direct._sha256_text(Publisher.contents[0]))
             self.assertNotIn("RESULT_BEGIN", Publisher.contents[0])
             self.assertIn("exactly ONE image", Publisher.contents[0])
-            self.assertEqual([x[0] for x in Bridge.calls], [REQ, second_id])
-            self.assertTrue(Bridge.calls[0][1]["image_stage"])
-            self.assertEqual(Bridge.calls[1][1]["conversation_url"], "https://chatgpt.com/c/abc")
-            self.assertEqual(Bridge.calls[1][1]["expected_request"]["requestId"], second_id)
-            self.assertIn(f"<<<POSTMAN_RESULT_BEGIN:{second_id}>>>", Bridge.calls[1][1]["prompt"])
-            sleep.assert_called_once_with(5)
+            self.assertEqual([x[0] for x in Bridge.calls], [REQ])
+            followup = Bridge.calls[0][1]["image_followup"]
+            self.assertEqual(followup["request_id"], second_id)
+            self.assertEqual(followup["expected_request"]["requestId"], second_id)
+            self.assertIn(f"<<<POSTMAN_RESULT_BEGIN:{second_id}>>>", followup["prompt"])
+            self.assertNotIn("baseCommit", followup["prompt"])
             self.assertEqual(terminal["imageFormat"], "png")
             extract.assert_called_once_with(str(zip_path), [{"path": "image.png", "kind": "file"}],
                                             runner.result_root / second_id, expected_zip_sha256="c" * 64)
@@ -141,9 +137,6 @@ class DirectPostmanUnitTests(unittest.TestCase):
         class Bridge:
             def __init__(self, **kwargs): pass
             def run_request(self, request_id, **kwargs):
-                if kwargs.get("image_stage"):
-                    return {"ok": True, "code": "IMAGE_TURN_COMPLETED", "details": {
-                        "conversationUrl": "https://chatgpt.com/c/abc"}}
                 return {"ok": True, "code": "ARTIFACT_REJECTED", "details": {"validationCode": "BAD_ZIP"}}
         with tempfile.TemporaryDirectory() as tmp:
             runner = direct.DirectPostman(branch="preview", direct_root=Path(tmp) / "direct",
@@ -151,13 +144,26 @@ class DirectPostmanUnitTests(unittest.TestCase):
                 bridge_factory=Bridge, ensure_browser=lambda **_: {"cdpUrl": "http://127.0.0.1:9222"})
             second_id = "REQ_20260902T010204Z_5678"
             with patch.object(direct, "new_image_followup_request_id", return_value=second_id), \
-                 patch.object(direct.time, "sleep"), \
                  patch.object(direct.image_result, "extract_validated_image") as extract:
                 with self.assertRaises(direct.DirectPostmanError) as caught:
                     runner.run(request_id=REQ, task="image", image_mode=True)
             self.assertEqual(caught.exception.details["transportCode"], "ARTIFACT_REJECTED")
             extract.assert_not_called()
             self.assertEqual(json.loads(runner.state_path(second_id).read_text(encoding="utf-8"))["state"], "FAILED")
+
+    def test_image_mode_requires_pillow_before_claiming_or_publishing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = direct.DirectPostman(branch="preview", direct_root=Path(tmp) / "direct")
+            original_import = __import__
+            def unavailable(name, *args, **kwargs):
+                if name == "PIL":
+                    raise ImportError("Pillow missing")
+                return original_import(name, *args, **kwargs)
+            with patch("builtins.__import__", side_effect=unavailable):
+                with self.assertRaises(direct.DirectPostmanError) as caught:
+                    runner.run(request_id=REQ, task="image", image_mode=True)
+            self.assertEqual(caught.exception.code, "IMAGE_DECODER_UNAVAILABLE")
+            self.assertFalse(runner.state_path(REQ).exists())
 
     def test_image_mode_rejects_non_durable_packaging_and_manual_chat(self):
         self.assertTrue(direct._build_parser().parse_args(["--image-mode"]).image_mode)

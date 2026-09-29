@@ -54,7 +54,7 @@ class FakeLocator:
 
     def evaluate(self, script):
         if script == observer._IMAGE_EVIDENCE_JS:
-            return self.images
+            return len(self.images)
         raise NotImplementedError(script)
 
     def locator(self, selector):
@@ -350,6 +350,26 @@ class ObserverTests(unittest.TestCase):
         tracker.observe("done", generating=True, now_ms=0)
         self.assertFalse(tracker.observe("done", generating=True, now_ms=1000))
 
+    def test_image_only_generated_gallery_is_next_correlated_assistant(self):
+        prompt = "POSTMAN_REQUEST_ID: REQ_20260929T152327Z_7835"
+        gallery = FakeLocator(attrs={"data-testid": "generated-image-gallery"}, images=["generated"])
+        class GalleryPage:
+            def locator(self, selector):
+                if 'main [data-testid="generated-image-gallery"]' in selector:
+                    return FakeLocator(items=[turn("user", prompt), gallery])
+                return FakeLocator(items=[])
+        turns, selector = observer.snapshot_turns(GalleryPage(), image_mode=True)
+        self.assertIn('generated-image-gallery', selector)
+        self.assertEqual([t["role"] for t in turns], ["user", "assistant"])
+        self.assertEqual(turns[1]["imageCount"], 1)
+        self.assertEqual(observer.correlate_next_assistant(turns, prompt)["assistantIndex"], 1)
+
+    def test_generated_gallery_evidence_is_scoped_to_correlated_turn(self):
+        script = observer._IMAGE_EVIDENCE_JS
+        self.assertIn("node.closest('[data-content-search-turn-key]')", script)
+        self.assertIn('[data-testid="generated-image-gallery"] img', script)
+        self.assertNotIn('document.querySelectorAll', script)
+
     def test_image_mode_requires_stable_correlated_image_and_inactive_generation(self):
         image = "https://example.test/rendered.png"
         page = FakePage([
@@ -379,10 +399,10 @@ class ObserverTests(unittest.TestCase):
         )
         self.assertEqual(result["code"], observer.ASSISTANT_TURN_TIMEOUT)
 
-    def test_image_mode_image_change_resets_stability(self):
+    def test_image_mode_count_change_resets_stability(self):
         page = FakePage([
             [turn("user", "probe"), turn("assistant", "", "conversation-turn-2", images=["a.png"])],
-            [turn("user", "probe"), turn("assistant", "", "conversation-turn-2", images=["b.png"])],
+            [turn("user", "probe"), turn("assistant", "", "conversation-turn-2", images=["b.png", "c.png"])],
         ])
         clock = FakeClock(page, increment=0.25)
         result = observer.observe_next_assistant(
@@ -394,7 +414,7 @@ class ObserverTests(unittest.TestCase):
     def test_image_only_turn_requires_opt_in_and_real_assistant_image(self):
         page = FakePage([[turn("user", "probe", images=["user.png"]),
                           turn("assistant", "", "conversation-turn-2")]])
-        for flags in ({}, {"image_mode": True}, {"allow_empty_text": True}):
+        for flags in ({}, {"image_mode": True}):
             with self.subTest(flags=flags):
                 result = observer.observe_next_assistant(
                     page, "probe", page.url, timeout_ms=0, **flags,
@@ -411,7 +431,7 @@ class ObserverTests(unittest.TestCase):
         image_page.step = 0
         clock.value = 0
         allowed = observer.observe_next_assistant(
-            image_page, "probe", image_page.url, allow_empty_text=True,
+            image_page, "probe", image_page.url, image_mode=True,
             timeout_ms=500, stable_ms=0, poll_ms=10,
             sleep=clock.sleep, monotonic=clock.monotonic,
         )

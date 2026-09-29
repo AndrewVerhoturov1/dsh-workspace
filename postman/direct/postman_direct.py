@@ -53,7 +53,6 @@ import runtime_support as runtime  # noqa: E402
 from web_worker_bridge import (  # noqa: E402
     WebWorkerBridge,
     RESULT_DURABLE,
-    IMAGE_TURN_COMPLETED,
     ASSISTANT_COMPLETED_NO_ARTIFACT,
     ARTIFACT_REJECTED,
     POSTMAN_TRANSPORT_FAILED,
@@ -138,6 +137,20 @@ def new_image_followup_request_id(first_request_id: str) -> str:
         if candidate != first_request_id:
             return candidate
     raise DirectPostmanError("DIRECT_IMAGE_ID_COLLISION", "could not allocate a distinct image packaging request")
+
+
+def image_packaging_prompt(request_id: str, expected_filename: str) -> str:
+    return "\n".join((
+        f"POSTMAN_REQUEST_ID: {request_id}",
+        "Take exactly the ONE image you generated in your immediately preceding assistant response.",
+        "Do not generate another image. Do not modify, resize, intentionally re-encode, or substitute it.",
+        f"Put that image into one downloadable ZIP named {expected_filename}, containing exactly one image file.",
+        "Return it using the normal Postman result envelope:",
+        f"<<<POSTMAN_RESULT_BEGIN:{request_id}>>>",
+        expected_filename,
+        f"<<<POSTMAN_RESULT_END:{request_id}>>>",
+        "The middle line must be the real downloadable ZIP control.",
+    ))
 
 
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
@@ -550,6 +563,11 @@ class DirectPostman:
         request_identity.assert_canonical_request_id(request_id)
         if image_mode and (chat_request_id or automatic_continuation):
             raise DirectPostmanError("DIRECT_IMAGE_CHAT_UNSUPPORTED", "image mode does not support --chat-request-id or automatic continuation")
+        if image_mode:
+            try:
+                from PIL import Image  # noqa: F401
+            except ImportError as exc:
+                raise DirectPostmanError("IMAGE_DECODER_UNAVAILABLE", "Pillow is required for PNG, JPEG, and WEBP decoding") from exc
         self.publication_receipt = None
         try:
             process_lock.claim_request(self.direct_root, request_id)
@@ -709,6 +727,28 @@ class DirectPostman:
         browser = self.ensure_browser(cdp_url=cdp_url)
         self._write_state(request_id, STATE_BROWSER_READY, browser=browser)
 
+        packaging = None
+        if image_mode:
+            second_request_id = new_image_followup_request_id(request_id)
+            try:
+                process_lock.claim_request(self.direct_root, second_request_id)
+            except FileExistsError as exc:
+                raise DirectPostmanError("DIRECT_IMAGE_ID_COLLISION", "image packaging request already claimed") from exc
+            if self.state_path(second_request_id).exists():
+                raise DirectPostmanError("DIRECT_IMAGE_ID_COLLISION", "image packaging request state already exists")
+            expected_filename_b = request_identity.expected_artifact_filename(second_request_id)
+            prompt_b = image_packaging_prompt(second_request_id, expected_filename_b)
+            packaging = {"request_id": second_request_id, "prompt": prompt_b,
+                         "expected_filename": expected_filename_b,
+                         "expected_request": {**expected_request, "requestId": second_request_id,
+                                              "expectedFilename": expected_filename_b}}
+            self._write_state(second_request_id, STATE_INIT, parentRequestId=request_id,
+                              rootRequestId=request_id, continuationIndex=1,
+                              taskUrl=published.task_url, expectedFilename=expected_filename_b,
+                              resultRoot=str(self.result_root),
+                              baseCommit=published.prepublication_commit,
+                              taskPublicationCommit=published.publication_commit,
+                              promptSha256=_sha256_text(prompt_b))
         bridge_root = self.direct_root.parent
         bridge = self.bridge_factory(root=bridge_root, result_root=self.result_root)
         self._write_state(request_id, STATE_WEB_RUNNING)
@@ -721,7 +761,7 @@ class DirectPostman:
             cdp_url=browser.get("cdpUrl", cdp_url),
             conversation_url=chat_ref.conversation_url if chat_ref is not None else None,
             observer_timeout_ms=DEFAULT_ASSISTANT_TIMEOUT_MS,
-            **({"image_stage": True} if image_mode else {}),
+            **({"image_followup": packaging} if image_mode else {}),
         )
         if not isinstance(result, dict) or result.get("ok") is not True:
             code = result.get("code", "DIRECT_WEB_FAILED") if isinstance(result, dict) else "DIRECT_WEB_FAILED"
@@ -747,9 +787,9 @@ class DirectPostman:
 
         if image_mode:
             return self._finish_image_mode(
-                request_id=request_id, first_result=result, published=published,
-                task_content=task_content, expected_request=expected_request,
-                browser=browser, bridge=bridge, cdp_url=cdp_url,
+                request_id=request_id, result=result, published=published,
+                task_content=task_content, second_request_id=second_request_id,
+                browser=browser,
             )
 
         bridge_code = str(result.get("code", ""))
@@ -874,81 +914,32 @@ class DirectPostman:
 
 
     def _finish_image_mode(
-        self, *, request_id: str, first_result: dict[str, Any], published: PublishedTask,
-        task_content: str, expected_request: dict[str, Any], browser: dict[str, Any],
-        bridge: WebWorkerBridge, cdp_url: str,
+        self, *, request_id: str, result: dict[str, Any], published: PublishedTask,
+        task_content: str, second_request_id: str, browser: dict[str, Any],
     ) -> dict[str, Any]:
-        first_details = first_result.get("details") if isinstance(first_result.get("details"), dict) else {}
-        if first_result.get("code") != IMAGE_TURN_COMPLETED:
-            code = str(first_result.get("code") or "DIRECT_IMAGE_STAGE_FAILED")
-            self._write_state(request_id, STATE_FAILED, failureCode=code, failureDetails=first_details)
-            raise DirectPostmanError(POSTMAN_TRANSPORT_FAILED, "image generation turn did not complete", details={
-                "transportCode": code, "transportMessage": "image generation turn did not complete", "details": first_details,
-            })
-        conversation_url = first_details.get("conversationUrl")
-        if not isinstance(conversation_url, str) or not conversation_url:
-            self._write_state(request_id, STATE_FAILED, failureCode="DIRECT_IMAGE_CONVERSATION_MISSING")
-            raise DirectPostmanError("DIRECT_IMAGE_CONVERSATION_MISSING", "image turn did not provide a bound conversation URL")
-        self._write_state(request_id, IMAGE_TURN_COMPLETED, conversationUrl=conversation_url,
-                          conversationId=first_details.get("conversationId"), firstWorkerDetails=first_details)
-        second_request_id = new_image_followup_request_id(request_id)
-        try:
-            process_lock.claim_request(self.direct_root, second_request_id)
-        except FileExistsError as exc:
-            raise DirectPostmanError("DIRECT_IMAGE_ID_COLLISION", "image packaging request already claimed") from exc
-        if self.state_path(second_request_id).exists():
-            raise DirectPostmanError("DIRECT_IMAGE_ID_COLLISION", "image packaging request state already exists")
-        expected_filename_b = request_identity.expected_artifact_filename(second_request_id)
-        second_request = {**expected_request, "requestId": second_request_id, "expectedFilename": expected_filename_b}
-        prompt_b = "\n".join((
-            f"POSTMAN_REQUEST_ID: {second_request_id}",
-            f"Package exactly the ONE image you generated in the immediately preceding turn for {request_id}, unchanged, into one downloadable ZIP named {expected_filename_b}.",
-            "Do not generate another image, alter the image, or substitute a different image. Include exactly one image file (PNG, JPEG, or WEBP) in the ZIP; no extra image files.",
-            "This is transport packaging only. Return exactly three non-empty visible lines, no other text:",
-            f"<<<POSTMAN_RESULT_BEGIN:{second_request_id}>>>",
-            expected_filename_b,
-            f"<<<POSTMAN_RESULT_END:{second_request_id}>>>",
-            f"The middle line must be the actual downloadable ZIP attachment/control named {expected_filename_b}, not plain text.",
-        ))
-        chain = {"parentRequestId": request_id, "rootRequestId": request_id, "continuationIndex": 1,
-                 "firstRequestId": request_id, "conversationUrl": conversation_url}
-        self._write_state(second_request_id, STATE_INIT, **chain, resultRoot=str(self.result_root),
-                          taskUrl=published.task_url, expectedFilename=expected_filename_b,
-                          baseCommit=published.prepublication_commit,
-                          taskPublicationCommit=published.publication_commit,
-                          promptSha256=_sha256_text(prompt_b))
-        self._write_state(request_id, "IMAGE_PACKAGING_READY", secondRequestId=second_request_id)
-        time.sleep(3 + secrets.randbelow(5))
-        self._write_state(second_request_id, STATE_WEB_RUNNING)
-        self._write_state(request_id, "IMAGE_PACKAGING_RUNNING")
-        second = bridge.run_request(second_request_id, task_url=published.task_url,
-            prompt=prompt_b, expected_filename=expected_filename_b, expected_request=second_request,
-            cdp_url=browser.get("cdpUrl", cdp_url), conversation_url=conversation_url,
-            observer_timeout_ms=DEFAULT_ASSISTANT_TIMEOUT_MS)
-        second_details = second.get("details") if isinstance(second, dict) and isinstance(second.get("details"), dict) else {}
-        second_code = str(second.get("code", "DIRECT_IMAGE_PACKAGING_FAILED")) if isinstance(second, dict) else "DIRECT_IMAGE_PACKAGING_FAILED"
-        if not isinstance(second, dict) or second.get("ok") is not True or second_code != RESULT_DURABLE:
-            self._write_state(second_request_id, STATE_FAILED, failureCode=second_code, failureDetails=second_details)
-            self._write_state(request_id, STATE_FAILED, failureCode=second_code, secondRequestId=second_request_id)
+        details = result.get("details") if isinstance(result.get("details"), dict) else {}
+        if result.get("code") != RESULT_DURABLE or details.get("secondRequestId") != second_request_id:
+            code = str(result.get("code") or "DIRECT_IMAGE_PACKAGING_FAILED")
+            self._write_state(second_request_id, STATE_FAILED, failureCode=code, failureDetails=details)
+            self._write_state(request_id, STATE_FAILED, failureCode=code, secondRequestId=second_request_id)
             raise DirectPostmanError(POSTMAN_TRANSPORT_FAILED, "image packaging did not produce a validated durable ZIP", details={
-                "transportCode": second_code, "transportMessage": "image packaging did not produce a validated durable ZIP",
-                "details": second_details,
+                "transportCode": code, "transportMessage": "image packaging did not produce a validated durable ZIP", "details": details,
             })
-        zip_path = second_details.get("resultZip")
+        zip_path = details.get("resultZip")
         if not isinstance(zip_path, str) or not zip_path:
             raise DirectPostmanError("DIRECT_IMAGE_RESULT_INVALID", "packaging turn did not expose resultZip")
         validation_path = Path(zip_path).parent / "validation.json"
         try:
             validation = json.loads(validation_path.read_text(encoding="utf-8"))
             if (not isinstance(validation, dict) or validation.get("ok") is not True
-                    or validation.get("sha256") != second_details.get("resultSha256")
+                    or validation.get("sha256") != details.get("resultSha256")
                     or not isinstance(validation.get("inventory"), list)):
                 raise ValueError("successful validation inventory/SHA does not match bridge durable result")
         except (OSError, ValueError) as exc:
             self._write_state(request_id, STATE_FAILED, failureCode="DIRECT_IMAGE_VALIDATION_MISSING")
             raise DirectPostmanError("DIRECT_IMAGE_VALIDATION_MISSING", str(exc), details={"validationPath": str(validation_path)}) from exc
         self._write_state(second_request_id, STATE_RESULT_DURABLE, resultZip=zip_path,
-                          artifactSha256=validation["sha256"], workerDetails=second_details)
+                          artifactSha256=validation["sha256"], workerDetails=details)
         try:
             image = image_result.extract_validated_image(zip_path, validation["inventory"],
                 self.result_root / second_request_id, expected_zip_sha256=validation["sha256"])
@@ -961,16 +952,15 @@ class DirectPostman:
             state=STATE_IMAGE_RESULT_DURABLE, requestId=request_id, repository=self.repository,
             baseCommit=published.prepublication_commit, taskPublicationCommit=published.publication_commit,
             taskUrl=published.task_url, taskSha256=_sha256_text(task_content),
-            publishedTaskSha256=_sha256_text(task_content),
             expectedFilename=request_identity.expected_artifact_filename(request_id),
-            resultImage=image["path"], imageFormat={"PNG": "png", "JPEG": "jpg", "WEBP": "webp"}[image["format"]], imageSha256=image["sha256"],
-            imageByteLength=image["bytes"], imageWidth=image["width"], imageHeight=image["height"],
-            imageMimeType=image["mime"], secondRequestId=second_request_id,
-            sourceEntry=image["sourceEntry"], packagingZipSha256=validation["sha256"],
-            resultRoot=str(self.result_root), statePath=str(state_path),
+            resultImage=image["path"], imageFormat={"PNG": "png", "JPEG": "jpg", "WEBP": "webp"}[image["format"]],
+            imageSha256=image["sha256"], imageByteLength=image["bytes"],
+            imageWidth=image["width"], imageHeight=image["height"], imageMimeType=image["mime"],
+            secondRequestId=second_request_id, sourceEntry=image["sourceEntry"],
+            packagingZipSha256=validation["sha256"], resultRoot=str(self.result_root), statePath=str(state_path),
             resultHandoffPath=str(handoff_path.resolve()), handoffVersion=durable_handoff.HANDOFF_VERSION,
             parentRequestId=None, rootRequestId=request_id, continuationIndex=0,
-            conversationUrl=conversation_url, conversationId=first_details.get("conversationId"), browser=browser)
+            conversationUrl=details.get("conversationUrl"), conversationId=details.get("conversationId"), browser=browser)
         try:
             terminal = durable_handoff.validate_image_terminal(terminal,
                 expected_repository=self.repository, request_id=request_id,

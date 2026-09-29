@@ -13,7 +13,6 @@ from pathlib import Path
 import warnings
 import zipfile
 
-MAX_ZIP_BYTES = 50 * 1024 * 1024
 MAX_IMAGE_BYTES = 64 * 1024 * 1024
 _EXTENSIONS = {".png": "PNG", ".jpg": "JPEG", ".jpeg": "JPEG", ".webp": "WEBP"}
 _OTHER_IMAGE_EXTENSIONS = {".gif", ".bmp", ".svg", ".tif", ".tiff", ".avif", ".heic", ".ico", ".apng"}
@@ -66,13 +65,10 @@ def extract_validated_image(
     A pre-existing output is never overwritten. Destination directory is trusted.
     """
     archive = Path(zip_path)
-    if not isinstance(expected_zip_sha256, str) or len(expected_zip_sha256) != 64 or any(c not in "0123456789abcdefABCDEF" for c in expected_zip_sha256):
-        _fail("IMAGE_VALIDATION_REQUIRED", "A validated ZIP SHA-256 is required")
-    if not isinstance(validated_inventory, list) or not validated_inventory:
-        _fail("IMAGE_VALIDATION_REQUIRED", "Validated ZIP inventory is required")
+    archive = Path(zip_path)
     try:
-        if archive.stat().st_size > MAX_ZIP_BYTES:
-            _fail("IMAGE_ZIP_CHANGED", "ZIP exceeds validated transport size limit")
+        if archive.stat().st_size > 50 * 1024 * 1024:
+            _fail("IMAGE_ZIP_CHANGED", "ZIP exceeds the validated transport limit")
         zip_bytes = archive.read_bytes()
     except OSError as exc:
         _fail("IMAGE_ZIP_UNREADABLE", "Cannot read validated ZIP", reason=str(exc)[:200])
@@ -80,39 +76,29 @@ def extract_validated_image(
     if zip_sha != expected_zip_sha256.lower():
         _fail("IMAGE_ZIP_CHANGED", "ZIP changed since transport validation")
 
-    candidates = [entry for entry in validated_inventory if isinstance(entry, dict) and entry.get("kind") == "file" and isinstance(entry.get("path"), str) and Path(entry["path"].replace(chr(92), "/")).suffix.lower() in _EXTENSIONS]
+    candidates = [entry for entry in validated_inventory if entry["kind"] == "file"
+                  and Path(entry["path"]).suffix.lower() in _EXTENSIONS]
     if len(candidates) != 1:
         _fail("IMAGE_ENTRY_COUNT", "Expected exactly one PNG, JPEG, or WEBP image entry", count=len(candidates))
-    if any(isinstance(entry, dict) and entry.get("kind") == "file" and isinstance(entry.get("path"), str)
-           and Path(entry["path"].replace(chr(92), "/")).suffix.lower() in _OTHER_IMAGE_EXTENSIONS
+    if any(entry["kind"] == "file" and Path(entry["path"]).suffix.lower() in _OTHER_IMAGE_EXTENSIONS
            for entry in validated_inventory):
         _fail("IMAGE_ENTRY_COUNT", "ZIP contains another image in an unsupported format")
     chosen = candidates[0]
     normalized_name = chosen["path"]
-    extension = Path(normalized_name.replace(chr(92), "/")).suffix.lower()
+    extension = Path(normalized_name).suffix.lower()
     try:
         with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
-            infos = zf.infolist()
-            if len(infos) != len(validated_inventory):
-                _fail("IMAGE_INVENTORY_MISMATCH", "ZIP entry count differs from validated inventory")
-            selected = None
-            for info, record in zip(infos, validated_inventory):
-                if not isinstance(record, dict) or info.filename.replace(chr(92), "/") != record.get("path") or ("directory" if info.is_dir() else "file") != record.get("kind") or info.file_size != record.get("uncompressedSize") or info.compress_size != record.get("compressedSize"):
-                    _fail("IMAGE_INVENTORY_MISMATCH", "ZIP entry differs from validated inventory")
-                if info.filename.replace(chr(92), "/") == normalized_name:
-                    if selected is not None:
-                        _fail("IMAGE_ENTRY_COUNT", "Duplicate image entry")
-                    selected = info
-            if selected is None or selected.file_size > MAX_IMAGE_BYTES:
-                _fail("IMAGE_INVENTORY_MISMATCH", "Image entry missing or too large")
+            # Resolve by validated member position, not by an untrusted output path.
+            selected = zf.infolist()[validated_inventory.index(chosen)]
+            if (selected.filename.replace(chr(92), "/") != normalized_name
+                    or selected.file_size != chosen["uncompressedSize"]):
+                _fail("IMAGE_INVENTORY_MISMATCH", "Selected image differs from validated inventory")
             with zf.open(selected) as source:
                 data = source.read(MAX_IMAGE_BYTES + 1)
-                if len(data) > MAX_IMAGE_BYTES or source.read(1):
+                if len(data) > MAX_IMAGE_BYTES:
                     _fail("IMAGE_INVENTORY_MISMATCH", "Image entry exceeds size limit")
     except (zipfile.BadZipFile, RuntimeError, OSError, EOFError) as exc:
         _fail("IMAGE_ZIP_CHANGED", "ZIP can no longer be read", reason=str(exc)[:200])
-    if len(data) != selected.file_size:
-        _fail("IMAGE_INVENTORY_MISMATCH", "Image size differs from validated inventory")
     fmt, width, height = _decode_image(data, extension)
     destination = Path(destination_dir)
     destination.mkdir(parents=True, exist_ok=True)
