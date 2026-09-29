@@ -60,8 +60,8 @@ async function execute(start) {
   if (cleanupError) result.cleanupError=cleanupError
   if (terminal) return
   terminal=true
-  // A cleanup error is an error status, not a successful completion.
-  if (cleanupError && result.status === 'ok') result={ status:'cleanup-error', error:cleanupError }
+  // Keep the cleanup detail when success is demoted; failures retain their cause.
+  if (cleanupError && result.status === 'ok') result={ status:'cleanup-error', error:cleanupError, cleanupError }
   try { await send.send(message('done',runId,result)); send.close() }
   catch { process.exitCode=1 }
   process.stdin.pause()

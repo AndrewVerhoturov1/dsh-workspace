@@ -1,8 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { FrameReader, encodeFrame, checkMessage, message, ProtocolError } from '../src/protocol.js'
+import { FrameReader, encodeFrame, checkMessage, message, writer, ProtocolError } from '../src/protocol.js'
 import { boundedJson } from '../src/json.js'
 import { DEFAULT_LIMITS } from '../src/profiles.js'
+import { PassThrough } from 'node:stream'
 const lim={...DEFAULT_LIMITS,maxMessageBytes:4096,maxTotalBridgeBytes:8192}
 const rid='test-run'
 
@@ -37,4 +38,31 @@ test('host JSON validation rejects getters, toJSON, cycles, unsafe keys and non-
   const cycle={};cycle.self=cycle;assert.throws(()=>boundedJson(cycle,lim))
   const trapped=new Proxy({}, {get(){throw Error('trap must not run')}});assert.throws(()=>boundedJson(trapped,lim),/Unsupported JSON value/)
   assert.deepEqual(boundedJson({nested:[1,'é',null]},lim).value.nested,[1,'é',null])
+})
+
+test('writer rejects pending sends on stream error or close',async()=>{
+  const stream=new PassThrough({highWaterMark:1})
+  let failed=0
+  const send=writer(stream,lim,()=>failed++)
+  const one=send.send(message('start',rid,{program:'x'.repeat(3000),language:'javascript',profile:null}))
+  const two=send.send(message('start',rid,{program:'y',language:'javascript',profile:null}))
+  const closed=new Promise(resolve=>stream.once('close',resolve))
+  stream.destroy(Error('broken pipe'))
+  await assert.rejects(one);await assert.rejects(two)
+  await closed
+  assert.equal(failed,1)
+  await assert.rejects(send.send(message('ready',rid)))
+})
+
+test('fixed envelopes do not consume user depth/nodes; payload and escaped bytes remain bounded',()=>{
+  const minimal={...lim,maxValueDepth:1,maxValueNodes:1}
+  const start=message('start',rid,{program:'return 3',language:'javascript',profile:{schemaVersion:1,id:'p',revision:1,tools:[],limits:minimal}})
+  assert.equal(checkMessage(start,'child',rid,minimal),start)
+  assert.ok(encodeFrame(start,minimal).length<minimal.maxMessageBytes+4)
+  const scalar=message('call',rid,{callId:1,name:'echo',arg:3})
+  assert.equal(checkMessage(scalar,'parent',rid,minimal),scalar)
+  assert.throws(()=>checkMessage(message('call',rid,{callId:1,name:'echo',arg:[3]}),'parent',rid,minimal),ProtocolError)
+  const escaped=message('reply',rid,{callId:1,ok:true,value:'\n'.repeat(3000)})
+  assert.throws(()=>encodeFrame(escaped,minimal),ProtocolError)
+  assert.throws(()=>checkMessage(escaped,'child',rid,minimal),ProtocolError)
 })

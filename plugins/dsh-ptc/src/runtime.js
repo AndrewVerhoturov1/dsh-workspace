@@ -6,8 +6,8 @@ import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { types } from 'node:util'
 import { validatePtcProfile, ownData, plain } from './profiles.js'
-import { boundedJson } from './json.js'
-import { FrameReader, checkMessage, message, writer, ProtocolError } from './protocol.js'
+import { boundedJson, JsonLimitError } from './json.js'
+import { FrameReader, checkMessage, encodeFrame, message, writer, ProtocolError } from './protocol.js'
 
 const ENTRY = new URL('./executor.mjs', import.meta.url)
 const MAX_PROCESSES = 2, MAX_OUTSTANDING = 64, START_MS = 3000, STOP_MS = 750
@@ -23,10 +23,10 @@ export function createPtcRuntime(options = {}) {
   return makeRuntime(options, ENTRY)
 }
 // Internal test seam, deliberately absent from the package entry/exports.
-export function createPtcRuntimeForTest(executor) { return makeRuntime({}, executor) }
-function makeRuntime(options, entry) {
+export function createPtcRuntimeForTest(executor, removeTemp = rm, spawnChild = spawn) { return makeRuntime({}, executor, removeTemp, spawnChild) }
+function makeRuntime(options, entry, removeTemp = rm, spawnChild = spawn) {
   if (Object.keys(plain(options)).length) throw new TypeError('No runtime options supported in v1')
-  let disposed = false
+  let disposed = false, disposePromise
   const active = new Set(), outstanding = new Set()
   function run(input = {}) {
     if (disposed) return Promise.resolve(outcome('invalid-input','disposed','Runtime disposed'))
@@ -54,19 +54,21 @@ function makeRuntime(options, entry) {
     if (outstanding.size>=MAX_OUTSTANDING) return Promise.resolve(outcome('limit-exceeded','maxOutstanding','Unsettled callback limit'))
     const state = { cancel:null }
     active.add(state)
-    return execute(state,{profile,bindings,program,language,signal},outstanding,entry).finally(()=>{ if (!state.uncertain) active.delete(state) })
+    return execute(state,{profile,bindings,program,language,signal},outstanding,entry,removeTemp,spawnChild).finally(()=>{ if (!state.uncertain) active.delete(state) })
   }
-  async function dispose() {
-    if (disposed) return
-    disposed=true
-    await Promise.all([...active].map(s=>s.cancel?.('cancelled','disposed','Runtime disposed')) )
+  function dispose() {
+    if (!disposePromise) {
+      disposed=true
+      disposePromise=Promise.all([...active].map(s=>s.cancel?.('cancelled','disposed','Runtime disposed'))).then(()=>{})
+    }
+    return disposePromise
   }
   return Object.freeze({run,dispose})
 }
 
-async function execute(state,{profile,bindings,program,language,signal},outstanding,entry) {
+async function execute(state,{profile,bindings,program,language,signal},outstanding,entry,removeTemp,spawnChild) {
   const limits=profile.limits, runId=randomUUID(), controller=new AbortController()
-  let child, directory, reader, send, ready=false, accepted=false, finished=false
+  let child, directory, preparing, reader, send, ready=false, accepted=false, finished=false
   let stderrBytes=0, count=0, nextId=1, logBytes=0, logs=[]
   let incoming=0, outgoing=0, wallTimer, startTimer
   const calls=new Map(), queue=[]
@@ -74,30 +76,46 @@ async function execute(state,{profile,bindings,program,language,signal},outstand
   const done=new Promise(resolve=>{resolveResult=resolve})
   function snapshot() {
     const entries=[...calls.values()].map(c=>({callId:c.id,name:c.name,state:c.state}))
-    return {calls:entries,completed:entries.filter(c=>c.state==='completed').length,failed:entries.filter(c=>c.state==='failed').length,pending:entries.filter(c=>c.state==='running'||c.state==='queued').length}
+    return {calls:entries,completed:entries.filter(c=>c.state==='completed').length,failed:entries.filter(c=>c.state==='failed').length,pending:entries.filter(c=>c.state==='running').length}
   }
   function launchQueued() {
     if(finished)return
-    while(queue.length && [...calls.values()].filter(c=>c.state==='running').length<limits.maxConcurrentToolCalls){
+    while(queue.length && [...calls.values()].filter(c=>c.state==='running'||c.state==='scheduled').length<limits.maxConcurrentToolCalls){
       const call=queue.shift()
       if(!call || call.state!=='queued')continue
-      call.state='running'
-      const token={runId,callId:call.id};outstanding.add(token)
-      // Assimilate sync throws and thenables, attaching a rejection handler immediately.
-      Promise.resolve().then(()=>{if(finished) return; return bindings[call.name](call.arg,{signal:controller.signal,runId,callId:call.id})}).then(
-        value=>finishCall(call,true,value), error=>finishCall(call,false,error)
-      ).finally(()=>outstanding.delete(token))
+      call.state='scheduled'
+      let token
+      // The callback starts only here; a combined call/done frame can close delivery first.
+      Promise.resolve().then(()=>{
+        if(finished) return
+        if(outstanding.size>=MAX_OUTSTANDING) {void finish(outcome('limit-exceeded','maxOutstanding','Unsettled callback limit'));return}
+        call.state='running'
+        token={runId,callId:call.id};outstanding.add(token)
+        return bindings[call.name](call.arg,{signal:controller.signal,runId,callId:call.id})
+      }).then(value=>{if(token)finishCall(call,true,value)},error=>{if(token)finishCall(call,false,error)})
+        .finally(()=>{if(token)outstanding.delete(token)})
     }
   }
   function finishCall(call,ok,value) {
-    if(finished || call.state!=='running')return
-    let payload
-    if(ok){
-      try { payload=boundedJson(value,limits,limits.maxMessageBytes).value;call.state='completed' }
-      catch(error){ok=false;value=error;call.state='failed'}
-    } else call.state='failed'
+    if(call.state!=='running')return
+    let reply
+    if(ok && !finished){
+      try {
+        const payload=boundedJson(value,limits).value
+        reply=message('reply',runId,{callId:call.id,ok:true,value:payload})
+        encodeFrame(reply,limits) // The envelope, including JSON escaping, must fit too.
+      } catch(error) {
+        if(error instanceof JsonLimitError || error instanceof ProtocolError){
+          call.state='failed'
+          void finish(outcome('limit-exceeded',error instanceof JsonLimitError?error.code:'maxMessageBytes',errorText(error)))
+          return
+        }
+        ok=false;value=error
+      }
+    }
+    call.state=ok?'completed':'failed'
     if(!finished){
-      const reply=message('reply',runId,{callId:call.id,ok,...(ok?{value:payload}:{error:errorText(value)})})
+      reply ||= message('reply',runId,{callId:call.id,ok:false,error:errorText(value)})
       void emit(reply).catch(error=>void finish(outcome('protocol-error','outbound',errorText(error))))
       launchQueued()
     }
@@ -115,9 +133,9 @@ async function execute(state,{profile,bindings,program,language,signal},outstand
       if(data.callId!==nextId++ || !Object.hasOwn(bindings,data.name) || !profile.tools.includes(data.name)) throw new ProtocolError('Invalid/duplicate call or ungranted name')
       try { boundedJson(data.arg,limits) } catch(error) {throw new ProtocolError('Invalid argument: '+errorText(error))}
       if(++count>limits.maxToolCalls) {void finish(outcome('limit-exceeded','maxToolCalls','Call limit'));return}
-      const running=[...calls.values()].filter(c=>c.state==='running').length
+      const running=[...calls.values()].filter(c=>c.state==='running'||c.state==='scheduled').length
       if(running>=limits.maxConcurrentToolCalls && queue.length>=limits.maxQueuedToolCalls){void finish(outcome('limit-exceeded','maxQueuedToolCalls','Queue limit'));return}
-      if(outstanding.size>=MAX_OUTSTANDING) {void finish(outcome('limit-exceeded','maxOutstanding','Unsettled callback limit'));return}
+      if(outstanding.size+[...calls.values()].filter(c=>c.state==='scheduled').length>=MAX_OUTSTANDING) {void finish(outcome('limit-exceeded','maxOutstanding','Unsettled callback limit'));return}
       const call={id:data.callId,name:data.name,arg:data.arg,state:'queued'}
       calls.set(call.id,call);queue.push(call);launchQueued();return
     }
@@ -129,7 +147,7 @@ async function execute(state,{profile,bindings,program,language,signal},outstand
     if(data.type==='done') {
       if(!['ok','syntax-error','runtime-error','invalid-output','invalid-input','cleanup-error','process-error','limit-exceeded','unawaited-calls'].includes(data.status)) throw new ProtocolError('Invalid terminal status')
       if(data.status==='ok') {boundedJson(data.value,limits); if(Buffer.byteLength(JSON.stringify(data.value),'utf8')>limits.maxOutputBytes) {void finish(outcome('limit-exceeded','maxOutputBytes','Result limit'));return}}
-      const incomplete=[...calls.values()].some(c=>c.state==='running'||c.state==='queued')
+      const incomplete=[...calls.values()].some(c=>c.state==='running'||c.state==='queued'||c.state==='scheduled')
       const result=data.status==='ok'&&incomplete?outcome('unawaited-calls','incomplete','Program returned with outstanding calls'):data.status==='ok'?{status:'ok',value:data.value}:outcome(data.status,data.error?.code||data.status,data.error?.message||data.status)
       if(data.cleanupError)result.cleanupError=data.cleanupError
       void finish(result);return
@@ -165,16 +183,22 @@ async function execute(state,{profile,bindings,program,language,signal},outstand
     finished=true;controller.abort()
     clearTimeout(wallTimer);clearTimeout(startTimer)
     signal?.removeEventListener('abort',onAbort)
-    const effects=snapshot()
+    // An abort during mkdtemp must still wait for that directory to be removed.
+    if(preparing)try{await preparing}catch{}
     const stopped=await stop()
     if(!stopped) state.uncertain=true
-    try { if(stopped && directory) await rm(directory,{recursive:true,force:true}) } catch(error) {result.cleanupError={code:'temp-cleanup',message:errorText(error)}}
+    try { if(stopped && directory) await removeTemp(directory,{recursive:true,force:true}) } catch(error) {result.cleanupError={code:'temp-cleanup',message:errorText(error)}}
     if(!stopped) {
       const failure={code:'unconfirmed-exit',message:'Child exit not confirmed after termination',pid:child?.pid}
       result.cleanupError=failure
-      if(result.status==='ok')result=outcome('cleanup-error',failure.code,failure.message,{cleanupError:failure})
     }
-    resolveResult({...result,logs,effects})
+    // Closing delivery does not freeze Host callbacks that settle during cleanup.
+    for(const call of calls.values()) if(call.state==='queued'||call.state==='scheduled')call.state='not-started'
+    if(result.cleanupError && result.status==='ok') {
+      const failure=result.cleanupError
+      result=outcome('cleanup-error',failure.code,failure.message,{cleanupError:failure})
+    }
+    resolveResult({...result,logs,effects:snapshot()})
     return done
   }
   const onAbort=()=>void finish(outcome('cancelled','aborted','AbortSignal'))
@@ -185,16 +209,19 @@ async function execute(state,{profile,bindings,program,language,signal},outstand
   if(signal?.aborted)onAbort()
   try {
     if(finished)return done
-    directory=await mkdtemp(join(tmpdir(),'dsh-ptc-'))
-    if(finished){await rm(directory,{recursive:true,force:true});return done}
-    child=spawn(process.execPath, [fileURLToPath(entry)], {cwd:directory,execArgv:[],env:process.platform==='win32'?{SystemRoot:process.env.SystemRoot||'C:/Windows',TEMP:directory,TMP:directory}:{TMPDIR:directory},stdio:['pipe','pipe','pipe'],windowsHide:true,shell:false})
+    preparing=mkdtemp(join(tmpdir(),'dsh-ptc-')).then(path=>{directory=path})
+    await preparing
+    if(finished)return done
+    child=spawnChild(process.execPath, [fileURLToPath(entry)], {cwd:directory,execArgv:[],env:process.platform==='win32'?{SystemRoot:process.env.SystemRoot||'C:/Windows',TEMP:directory,TMP:directory}:{TMPDIR:directory},stdio:['pipe','pipe','pipe'],windowsHide:true,shell:false})
     reader=new FrameReader(limits,obj=>{try {handle(obj)}catch(error){void finish(outcome('protocol-error','message',errorText(error))) }},error=>void finish(outcome('protocol-error','frame',errorText(error))))
     child.stdout.on('data',chunk=>{incoming+=chunk.length;if(incoming+outgoing>limits.maxTotalBridgeBytes){void finish(outcome('limit-exceeded','maxTotalBridgeBytes','Bridge budget'));return}reader.push(chunk)})
     child.stdout.once('end',()=>reader.end())
+    child.stdout.on('error',error=>void finish(outcome('process-error','stdout',errorText(error))))
     child.stderr.on('data',chunk=>{stderrBytes+=chunk.length;if(stderrBytes>4096)void finish(outcome('limit-exceeded','stderrBytes','stderr budget'))})
+    child.stderr.on('error',error=>void finish(outcome('process-error','stderr',errorText(error))))
     child.once('error',error=>void finish(outcome('process-error','spawn',errorText(error))))
     child.once('close',(code,why)=>{state.closed=true;if(!finished)void finish(outcome('process-error','exit',`Child exited `+code+'/'+why))})
-    send=writer(child.stdin,limits)
+    send=writer(child.stdin,limits,error=>void finish(outcome('process-error','stdin',errorText(error))))
     accepted=true
     void emit(message('start',runId,{program,language,profile})).catch(error=>void finish(outcome('protocol-error','outbound',errorText(error))))
   } catch(error){void finish(outcome('process-error','spawn',errorText(error)))}

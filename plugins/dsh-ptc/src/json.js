@@ -1,11 +1,16 @@
 import { plain, ownData, FORBIDDEN } from './profiles.js'
 import { types } from 'node:util'
 
+export class JsonLimitError extends TypeError {
+  constructor(code) { super('JSON '+code+' limit exceeded'); this.code=code }
+}
+
 // Never stringify arbitrary host values: getters and toJSON must not execute.
 export function boundedJson(value, limits, byteLimit = limits.maxMessageBytes) {
   let count = 0
   function visit(item, depth, seen) {
-    if (++count > limits.maxValueNodes || depth > limits.maxValueDepth) throw new TypeError('JSON depth or node limit exceeded')
+    if (++count > limits.maxValueNodes) throw new JsonLimitError('maxValueNodes')
+    if (depth > limits.maxValueDepth) throw new JsonLimitError('maxValueDepth')
     if (item === null || typeof item === 'string' || typeof item === 'boolean') return item
     if (typeof item === 'number' && Number.isFinite(item)) return item
     if (typeof item !== 'object' || types.isProxy(item)) throw new TypeError('Unsupported JSON value')
@@ -30,6 +35,6 @@ export function boundedJson(value, limits, byteLimit = limits.maxMessageBytes) {
   }
   const copy = visit(value, 1, new Set())
   const text = JSON.stringify(copy)
-  if (Buffer.byteLength(text, 'utf8') > byteLimit) throw new TypeError('JSON byte limit exceeded')
+  if (Buffer.byteLength(text, 'utf8') > byteLimit) throw new JsonLimitError('maxMessageBytes')
   return { value: copy, text }
 }

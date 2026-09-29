@@ -158,7 +158,25 @@ test('queue limit rejects excess parallel calls before extra callback',async()=>
   }finally{release(null);await r.dispose()}
 })
 
-test('oversized host callback value is a program-catchable error',async()=>{
-  const x=await run('try {await tools.big(null)} catch(e) {return e.message.includes("limit")}', ['big'], {big:()=> 'x'.repeat(1100000)})
-  assert.equal(x.status,'ok',JSON.stringify(x));assert.equal(x.value,true);assert.equal(x.effects.failed,1)
+test('callback response budget closes delivery even when guest catches errors',async()=>{
+  for(const big of [()=>'x'.repeat(1100000),()=> '\n'.repeat(600000)]) {
+    let effects=0
+    const x=await run('try {await tools.big(null)} catch {} return await tools.effect(null)', ['big','effect'], {big,effect:()=>{effects++;return 3}})
+    assert.equal(x.status,'limit-exceeded',JSON.stringify(x));assert.equal(x.error.code,'maxMessageBytes')
+    assert.equal(x.effects.failed,1);assert.equal(effects,0)
+  }
+  const caught=await run('try {await tools.big(null)} catch(e) {return e.message}', ['big'], {big:()=>{throw Error('ordinary failure')}})
+  assert.equal(caught.status,'ok',JSON.stringify(caught));assert.equal(caught.value,'ordinary failure')
+})
+
+test('minimum accepted value depth and nodes can still start a program',async()=>{
+  const r=createPtcRuntime();try {
+    const p=profile([],{maxValueDepth:1,maxValueNodes:1})
+    validatePtcProfile(p)
+    const x=await r.run({program:'return 3',profile:p,bindings:{}})
+    assert.equal(x.status,'ok',JSON.stringify(x));assert.equal(x.value,3)
+    const echo=profile(['echo'],{maxValueDepth:1,maxValueNodes:1})
+    const y=await r.run({program:'return await tools.echo(2)',profile:echo,bindings:{echo:v=>v+1}})
+    assert.equal(y.status,'ok',JSON.stringify(y));assert.equal(y.value,3)
+  }finally{await r.dispose()}
 })

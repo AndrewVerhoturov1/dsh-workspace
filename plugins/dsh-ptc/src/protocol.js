@@ -1,4 +1,7 @@
 import { boundedJson } from './json.js'
+import { MAX_LIMITS } from './profiles.js'
+// Fixed protocol overhead is independent of the profile's arg/value depth and nodes.
+const ENVELOPE_LIMITS = Object.freeze({ ...MAX_LIMITS, maxValueDepth: MAX_LIMITS.maxValueDepth + 4, maxValueNodes: MAX_LIMITS.maxValueNodes + 1000 })
 const SHAPES = Object.freeze({
   start: ['v','type','runId','program','language','profile'], ready: ['v','type','runId'],
   call: ['v','type','runId','callId','name','arg'],
@@ -24,7 +27,13 @@ export function checkMessage(obj, direction, runId, limits) {
   if (obj.type === 'log' && typeof obj.text !== 'string') throw new ProtocolError('Invalid log')
   if (obj.type === 'done' && (typeof obj.status !== 'string' || (Object.hasOwn(obj,'error') && (typeof obj.error !== 'object' || !obj.error || typeof obj.error.code !== 'string' || typeof obj.error.message !== 'string')) || (Object.hasOwn(obj,'cleanupError') && (typeof obj.cleanupError?.code !== 'string' || typeof obj.cleanupError?.message !== 'string')) || (obj.status === 'ok') !== Object.hasOwn(obj,'value') || (obj.status !== 'ok' && !Object.hasOwn(obj,'error')))) throw new ProtocolError('Invalid terminal')
   if (obj.type === 'start' && (typeof obj.program !== 'string' || !['javascript','typescript'].includes(obj.language))) throw new ProtocolError('Invalid start')
-  try { boundedJson(obj, limits) } catch (error) { throw new ProtocolError('Invalid message JSON: ' + error.message) }
+  // Envelopes have a fixed service budget; only arg/value use the profile's JSON budget.
+  try {
+    boundedJson(obj, ENVELOPE_LIMITS)
+    if (obj.type === 'call') boundedJson(obj.arg, limits)
+    if (obj.type === 'reply' && obj.ok) boundedJson(obj.value, limits)
+    if (obj.type === 'done' && obj.status === 'ok') boundedJson(obj.value, limits)
+  } catch (error) { throw new ProtocolError('Invalid message JSON: ' + error.message) }
   return obj
 }
 export class FrameReader {
@@ -54,25 +63,33 @@ export class FrameReader {
   end() { if (!this.failed && this.pending.length) { this.failed=true; this.onError(new ProtocolError('Truncated frame')) } }
 }
 export function encodeFrame(obj, limits) {
-  const json = boundedJson(obj, limits).text
+  const json = boundedJson(obj, ENVELOPE_LIMITS).text
   const body = Buffer.from(json, 'utf8')
   if (!body.length || body.length > limits.maxMessageBytes) throw new ProtocolError('Outbound frame limit')
   const frame = Buffer.allocUnsafe(body.length + 4)
   frame.writeUInt32BE(body.length, 0); body.copy(frame,4)
   return frame
 }
-export function writer(stream, limits) {
-  let total=0, chain=Promise.resolve(), closed=false
+export function writer(stream, limits, onFailure = () => {}) {
+  let total=0, chain=Promise.resolve(), closed=false, failure
+  let notifyClosed
+  const channelEnded=new Promise(resolve=>{notifyClosed=resolve})
+  function fail(error) {
+    if (failure || closed) return
+    failure=error; notifyClosed(error); onFailure(error)
+  }
+  stream.on('error',fail)
+  stream.on('close',()=>fail(new ProtocolError('Channel closed')))
   return { send(obj) {
-    if (closed) return Promise.reject(new ProtocolError('Channel closed'))
+    if (closed || failure) return Promise.reject(failure || new ProtocolError('Channel closed'))
     const frame=encodeFrame(obj,limits)
     total+=frame.length
     if (total>limits.maxTotalBridgeBytes) return Promise.reject(new ProtocolError('Total outgoing bridge bytes exceeded'))
-    const work=chain.then(()=>new Promise((resolve,reject)=>{
-      if (stream.destroyed || stream.writableEnded) return reject(new ProtocolError('Channel unavailable'))
+    const work=Promise.race([chain.then(()=>new Promise((resolve,reject)=>{
+      if (failure || stream.destroyed || stream.writableEnded) return reject(failure || new ProtocolError('Channel unavailable'))
       stream.write(frame,error=>error?reject(error):resolve())
-    }))
+    })),channelEnded.then(error=>Promise.reject(error))])
     chain=work.catch(()=>{})
     return work
-  }, close() { closed=true; stream.end() } }
+  }, close() { closed=true; notifyClosed(new ProtocolError('Channel closed')); stream.end() } }
 }
