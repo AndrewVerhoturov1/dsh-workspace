@@ -1,14 +1,24 @@
 #!/usr/bin/env node
 // Reversible compatibility correction for the installed dsh-subagent 0.1.1-rc.2.
 // Apply only offline after a version AND exact source fingerprint check.
-import { readFile, writeFile, mkdir, copyFile } from 'node:fs/promises'
+import { readFile, writeFile, mkdir, copyFile, rename, unlink } from 'node:fs/promises'
 import { constants } from 'node:fs'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 const version = '0.1.1-rc.2'
-const fingerprint = '80ADB031F9BFA27CE173F16BFDF4780B590E1A915E3553B05ABA62187496E036'
+const fingerprint = '555AB9189CC4BAA7CD2B527099B932497310A6A609798A4D5CFF30FA89349C5A'
 const sha = text => createHash('sha256').update(text).digest('hex').toUpperCase()
+async function replaceWithoutMutatingLinks(file, content) {
+  const temporary = `${file}.overlay-${randomUUID()}`
+  try {
+    await copyFile(file, temporary, constants.COPYFILE_EXCL)
+    await writeFile(temporary, content, 'utf8')
+    await rename(temporary, file)
+  } finally {
+    await unlink(temporary).catch(error => { if (error.code !== 'ENOENT') throw error })
+  }
+}
 const replaceOnce = (source, oldText, newText) => {
   if (source.split(oldText).length !== 2) throw new Error('dsh-subagent fragment does not match')
   return source.replace(oldText, newText)
@@ -58,7 +68,7 @@ export async function subagentOverlay(root, action, backupDir) {
     const saved = await readFile(backup, 'utf8')
     if (sha(saved) !== fingerprint || sha(original) !== sha(patchSubagentSource(saved)))
       throw new Error('dsh-subagent rollback SHA-256 mismatch')
-    await writeFile(file, saved, 'utf8')
+    await replaceWithoutMutatingLinks(file, saved)
     return { status: 'ROLLED_BACK', file, fingerprint }
   }
   const patched = patchSubagentSource(original)
@@ -67,7 +77,7 @@ export async function subagentOverlay(root, action, backupDir) {
   await mkdir(backupDir, { recursive: true })
   const backup = join(backupDir, 'dsh-subagent-index.js')
   await copyFile(file, backup, constants.COPYFILE_EXCL)
-  await writeFile(file, patched, 'utf8')
+  await replaceWithoutMutatingLinks(file, patched)
   return { status: 'APPLIED', file, backup, patchedHash: sha(patched) }
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
