@@ -73,6 +73,18 @@ PRE = "a" * 40
 
 
 class DirectPostmanUnitTests(unittest.TestCase):
+    def test_image_packaging_intent_uses_exact_canonical_request(self):
+        request_id = "REQ_20260929T224757Z_1049"
+        intent = direct.build_image_packaging_intent(request_id)
+        for ext in ("png", "jpg", "webp"):
+            self.assertIn(f"{request_id}_img1.{ext}", intent)
+        self.assertNotIn("_img1.jpeg", intent)
+        self.assertIn("никаких других файлов", intent)
+        self.assertIn("Не создавай каталогов", intent)
+        self.assertIn("Unicode-символов", intent)
+        self.assertIn("не изменяя байты изображения", intent)
+        self.assertIn("не перекодируй", intent)
+
     def test_image_mode_runs_two_turns_and_returns_only_extracted_image(self):
         intent = "Создай ровно одно изображение: рыжий спаниэль.\nСветлый фон и мягкий свет."
         class Publisher:
@@ -99,14 +111,14 @@ class DirectPostmanUnitTests(unittest.TestCase):
             zip_path.parent.mkdir(parents=True)
             zip_path.write_bytes(b"fake")
             (zip_path.parent / "validation.json").write_text(json.dumps({
-                "ok": True, "sha256": "c" * 64, "inventory": [{"path": "image.png", "kind": "file"}]}), encoding="utf-8")
+                "ok": True, "sha256": "c" * 64, "inventory": [{"path": f"{REQ}_img1.png", "kind": "file"}]}), encoding="utf-8")
             runner = direct.DirectPostman(branch="preview", direct_root=Path(tmp) / "direct",
                 result_root=Path(tmp) / "results", publisher_factory=Publisher,
                 bridge_factory=Bridge, ensure_browser=lambda **_: {"cdpUrl": "http://127.0.0.1:9222"})
             Bridge.calls = []
             Publisher.contents = []
             image = {"path": str(Path(tmp) / "image.png"), "format": "PNG", "sha256": "d" * 64,
-                     "bytes": 123, "width": 20, "height": 30, "mime": "image/png", "sourceEntry": "image.png"}
+                     "bytes": 123, "width": 20, "height": 30, "mime": "image/png", "sourceEntry": f"{REQ}_img1.png"}
             with patch.object(direct.image_result, "extract_validated_image", return_value=image) as extract, \
                  patch.object(direct.durable_handoff, "validate_image_terminal", side_effect=lambda terminal, **_: terminal):
                 terminal = runner.run(request_id=REQ, task=intent, image_mode=True)
@@ -119,6 +131,12 @@ class DirectPostmanUnitTests(unittest.TestCase):
             self.assertIn(f"<<<POSTMAN_RESULT_BEGIN:{REQ}>>>", Publisher.contents[0])
             self.assertNotIn(intent, Publisher.contents[0])
             self.assertIn("непосредственно предыдущего ответа", Publisher.contents[0])
+            for ext in ("png", "jpg", "webp"):
+                self.assertIn(f"{REQ}_img1.{ext}", Publisher.contents[0])
+            for clause in ("никаких других файлов", "Не создавай каталогов", "Unicode-символов",
+                           "не изменяя байты изображения", "не перекодируй"):
+                self.assertIn(clause, Publisher.contents[0])
+            self.assertIn(f"expected_filename: POSTMAN_{REQ}_RESULT.zip", Publisher.contents[0])
             self.assertEqual([x[0] for x in Bridge.calls], [REQ])
             first = Bridge.calls[0][1]
             self.assertEqual(first["task_url"], "")
@@ -134,8 +152,8 @@ class DirectPostmanUnitTests(unittest.TestCase):
             self.assertEqual(followup["expected_request"]["requestId"], REQ)
             self.assertEqual(followup["prompt"], f"POSTMAN_REQUEST_ID: {REQ}\ntask_file: https://example.test/{REQ}.md")
             self.assertEqual(terminal["imageFormat"], "png")
-            extract.assert_called_once_with(str(zip_path), [{"path": "image.png", "kind": "file"}],
-                                            runner.result_root / REQ, expected_zip_sha256="c" * 64)
+            extract.assert_called_once_with(str(zip_path), [{"path": f"{REQ}_img1.png", "kind": "file"}],
+                                            runner.result_root / REQ, expected_zip_sha256="c" * 64, request_id=REQ)
             self.assertEqual(json.loads(runner.result_handoff_path(REQ).read_text(encoding="utf-8"))["code"], "IMAGE_RESULT_DURABLE")
 
     def test_image_mode_rejects_rejected_artifact_without_extraction(self):
