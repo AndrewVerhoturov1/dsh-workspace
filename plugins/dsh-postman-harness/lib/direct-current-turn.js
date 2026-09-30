@@ -131,6 +131,26 @@ function parseError(code) {
   return error
 }
 
+function extractInputMetadata(payload) {
+  // Only a model-authored delegation may opt in; ordinary user text is unchanged.
+  if (!payload.startsWith('--input-files-json ')) return { payload, inputFiles: [] }
+  const newline = payload.indexOf('\n')
+  if (newline < 0) throw parseError('POSTMAN_INPUT_METADATA_INVALID')
+  let inputFiles
+  try { inputFiles = JSON.parse(payload.slice('--input-files-json '.length, newline)) }
+  catch { throw parseError('POSTMAN_INPUT_METADATA_INVALID') }
+  if (!Array.isArray(inputFiles) || !inputFiles.length || inputFiles.length > 20 ||
+      inputFiles.some(file => !file || typeof file !== 'object' || Array.isArray(file) ||
+        !Object.keys(file).every(key => ['name', 'repository', 'commit', 'path', 'sha256', 'byte_length', 'raw_url'].includes(key)) ||
+        typeof file.name !== 'string' || !file.name.trim() || typeof file.repository !== 'string' ||
+        !/^[0-9a-fA-F]{40}$/.test(file.commit) || !/^[0-9a-fA-F]{64}$/.test(file.sha256) ||
+        typeof file.path !== 'string' || !file.path || !Number.isSafeInteger(file.byte_length) || file.byte_length <= 0))
+    throw parseError('POSTMAN_INPUT_METADATA_INVALID')
+  const intent = payload.slice(newline + 1)
+  if (!intent.trim()) throw parseError('POSTMAN_EMPTY_PAYLOAD')
+  return { payload: intent, inputFiles }
+}
+
 export function parsePostmanUserTurn(raw) {
   if (typeof raw !== 'string') throw parseError('POSTMAN_CURRENT_TURN_UNAVAILABLE')
 
@@ -154,12 +174,13 @@ export function parsePostmanUserTurn(raw) {
     if (chat === null || !REQ_PATTERN.test(chat[1])) {
       throw parseError('POSTMAN_CHAT_TRIGGER_PARSE_FAILED')
     }
-    const payload = afterTrigger.slice(chat[0].length)
+    const framedPayload = afterTrigger.slice(chat[0].length)
+    const { payload, inputFiles } = extractInputMetadata(framedPayload)
     if (chat[2] === undefined || payload.trim() === '') {
       throw parseError('POSTMAN_EMPTY_PAYLOAD')
     }
     const removedTransportPrefix = raw.slice(0, trigger[0].length) + afterTrigger.slice(0, chat[0].length)
-    if (raw !== removedTransportPrefix + payload) {
+    if (raw !== removedTransportPrefix + framedPayload) {
       throw parseError('POSTMAN_PAYLOAD_MISMATCH')
     }
     return {
@@ -167,17 +188,18 @@ export function parsePostmanUserTurn(raw) {
       transportKind,
       chatRequestId: chat[1],
       payload,
+      ...(inputFiles.length ? { inputFiles } : {}),
       removedTransportPrefix,
     }
   }
 
-  const payload = afterTrigger
+  const { payload, inputFiles } = extractInputMetadata(afterTrigger)
   if (payload.trim() === '') throw parseError('POSTMAN_EMPTY_PAYLOAD')
   const removedTransportPrefix = raw.slice(0, trigger[0].length)
-  if (raw !== removedTransportPrefix + payload) {
+  if (raw !== removedTransportPrefix + afterTrigger) {
     throw parseError('POSTMAN_PAYLOAD_MISMATCH')
   }
-  return { mode: 'fresh', transportKind, chatRequestId: undefined, payload, removedTransportPrefix }
+  return { mode: 'fresh', transportKind, chatRequestId: undefined, payload, ...(inputFiles.length ? { inputFiles } : {}), removedTransportPrefix }
 }
 
 export function makeRequestId(now = () => new Date(), randomInt = cryptoRandomInt) {
@@ -451,7 +473,7 @@ export class DirectPostmanJobManager {
     return this.jobs.get(sessionId)
   }
 
-  async start({ sessionId, workspace, payload, chatRequestId, automaticContinuation = false, transportKind = 'artifact', proof, branch }) {
+  async start({ sessionId, workspace, payload, inputFiles = [], chatRequestId, automaticContinuation = false, transportKind = 'artifact', proof, branch }) {
     const previous = this.jobs.get(sessionId)
     if (previous?.state === 'running') throw parseError('POSTMAN_CURRENT_TURN_JOB_ALREADY_RUNNING')
     if (typeof payload !== 'string' || payload.trim() === '') throw parseError('POSTMAN_EMPTY_PAYLOAD')
@@ -491,6 +513,7 @@ export class DirectPostmanJobManager {
       '-TaskBase64', taskBase64,
     ]
     args.push('-Branch', branch)
+    if (inputFiles.length) args.push('-InputFilesBase64', Buffer.from(JSON.stringify(inputFiles), 'utf8').toString('base64'))
     if (chatRequestId !== undefined) args.push('-ChatRequestId', chatRequestId)
     if (automaticContinuation) args.push('-AutomaticContinuation')
     if (transportKind === 'image') args.push('-ImageMode')
@@ -749,6 +772,7 @@ export function createDirectCurrentTurnToolConfigs(ctx, { store, jobs, taskConte
       if (agent.session?.header?.origin === 'subagent' && agent.session.header.delegationDepth === 1 &&
           agent.session.header.parentSession && !bridgeContext) throw parseError('POSTMAN_TASK_CONTEXT_REQUIRED')
       if (bridgeContext && taskContexts.get(bridgeContext.leaderSessionId) !== bridgeContext) throw parseError('POSTMAN_TASK_CONTEXT_REQUIRED')
+      if (parsed.inputFiles?.length && !bridgeContext) throw parseError('POSTMAN_INPUT_METADATA_LEADER_REQUIRED')
       const proof = {
         parseMode: parsed.mode,
         transportKind: parsed.transportKind,
@@ -758,6 +782,7 @@ export function createDirectCurrentTurnToolConfigs(ctx, { store, jobs, taskConte
         payloadSha256: sha256(parsed.payload),
         removedTransportPrefixLength: parsed.removedTransportPrefix.length,
         removedTransportPrefixSha256: sha256(parsed.removedTransportPrefix),
+        ...(parsed.inputFiles?.length ? { inputMetadataSha256: sha256(JSON.stringify(parsed.inputFiles)) } : {}),
       }
       if (!turnStore.consume(agent.id, record.seq)) {
         throw parseError('POSTMAN_CURRENT_TURN_CHANGED_DURING_START')
@@ -767,6 +792,7 @@ export function createDirectCurrentTurnToolConfigs(ctx, { store, jobs, taskConte
           sessionId: agent.id,
           workspace: workspaceOf(agent),
           payload: parsed.payload,
+          inputFiles: parsed.inputFiles ?? [],
           chatRequestId: parsed.chatRequestId,
           transportKind: parsed.transportKind,
           branch: bridgeContext?.branch ?? STANDALONE_TASK_PUBLICATION_BRANCH,

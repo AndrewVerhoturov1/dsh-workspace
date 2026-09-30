@@ -11,6 +11,8 @@ param(
 
     [string]$ChatRequestId = '',
 
+    [string]$InputFilesBase64 = '',
+
     [string]$Repository = 'AndrewVerhoturov1/dsh-workspace',
     [string]$Branch = '',
     [string]$Python = 'python'
@@ -56,6 +58,9 @@ try {
 
     if (-not [string]::IsNullOrWhiteSpace($ChatRequestId)) {
         $argsList += @('--chat-request-id', $ChatRequestId)
+    }
+    if (-not [string]::IsNullOrEmpty($InputFilesBase64)) {
+        $argsList += @('--input-files-base64', $InputFilesBase64)
     }
 
     & $Python '-X' 'utf8' @argsList

@@ -10,6 +10,8 @@ Source implementation:
 postman/task_package.py
 ```
 
+Optional `## Input files` и `## Input retrieval contract` находятся между User intent и Execution contract; при отсутствии inputs их нет. См. [Postman Input Files](../postman/POSTMAN_INPUT_FILES.md). Browser prompt не содержит descriptors.
+
 ## Canonical request file
 
 Один production request публикует один self-contained файл:

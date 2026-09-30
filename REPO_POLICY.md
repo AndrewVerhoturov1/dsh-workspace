@@ -8,6 +8,8 @@
 - `C:\Users\andre\.dsh` (main) и `C:\Users\andre\.dsh-preview` (preview) — постоянные worktree. Не удалять, не очищать, не перепривязывать к временной ветке, не использовать для временной реализации. Создавай отдельный worktree.
 - `settings.yaml`, `attachments/`, browser state, секреты, учётные данные, логи, diagnostics и временные/runtime-файлы — пользовательское состояние, а не материал для автоматической уборки или commit. Не перезаписывай несвязанные изменения пользователя.
 
+Исключение для [временных Postman inputs](postman/POSTMAN_INPUT_FILES.md): отдельная Host-managed `transport/postman-inputs` содержит только явно выбранные временные файлы и не является task branch, не merge-ится и не получает обычный task PR; cleanup — non-force commit без обещания удаления истории.
+
 ## Один канонический Git-снимок
 
 Перед новой веткой выполни `git fetch --prune origin` и сними **один** переиспользуемый снимок задачи: `git status --short --branch`, текущие ветка и `HEAD`, все локальные и фактические remote refs (включая exact `origin/preview`), `git worktree list --porcelain`, связанные PR с base/head/state и ownership ресурсов. Для допуска новой ветки проверь также все незавершённые локальные и удалённые временные ветки. Сними поля снимка адресными командами (они не требуют отдельной системы учёта):

@@ -127,10 +127,15 @@ def _sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def build_image_generation_prompt(user_intent: str) -> str:
+def build_image_generation_prompt(user_intent: str, input_files: Iterable[dict[str, object]] = ()) -> str:
     """Build the non-Postman preparatory image turn from exact user intent."""
     if not isinstance(user_intent, str) or not user_intent.strip():
         raise DirectPostmanError("DIRECT_INVALID_TASK", "image intent must be a non-empty string")
+    section = task_package.render_input_files_section(input_files)
+    if section:
+        return (section + "\nСначала получи и визуально изучи перечисленные input files как visual reference. "
+                "Если получить их нельзя, не угадывай содержание и не продолжай генерацию будто они были просмотрены.\n\n"
+                + f"Сгенерируй, пожалуйста, изображение по этому промту:\n\n{user_intent}\n\nСделай ровно одно изображение.")
     return f"Сгенерируй, пожалуйста, изображение по этому промту:\n\n{user_intent}\n\nСделай ровно одно изображение."
 
 
@@ -208,6 +213,16 @@ def build_external_prompt(
 
 def _decode_task_file(path: str | os.PathLike[str]) -> str:
     return Path(path).read_text(encoding="utf-8")
+
+
+def decode_input_files_b64(value: str | None) -> list[dict[str, object]]:
+    if not value:
+        return []
+    try:
+        data = json.loads(base64.b64decode(value, validate=True).decode("utf-8"))
+        return task_package.normalize_input_files(data)
+    except (ValueError, UnicodeError) as exc:
+        raise DirectPostmanError("DIRECT_INPUT_FILES_INVALID", str(exc)) from exc
 
 
 def _decode_task_b64(value: str) -> str:
@@ -554,8 +569,9 @@ class DirectPostman:
         cdp_url: str,
         extra_allowed: Iterable[str],
         extra_forbidden: Iterable[str],
+        input_files: Iterable[dict[str, object]] = (),
     ) -> dict[str, Any]:
-        preparatory_prompt = build_image_generation_prompt(task)
+        preparatory_prompt = build_image_generation_prompt(task, input_files)
         browser = self.ensure_browser(cdp_url=cdp_url)
         self._write_state(request_id, STATE_BROWSER_READY, browser=browser)
 
@@ -681,6 +697,7 @@ class DirectPostman:
         extra_forbidden: Iterable[str] = (),
         automatic_continuation: bool = False,
         image_mode: bool = False,
+        input_files: Iterable[dict[str, object]] = (),
     ) -> dict[str, Any]:
         if not isinstance(self.branch, str) or not self.branch.strip():
             raise DirectPostmanError("DIRECT_BRANCH_REQUIRED", "task publication branch must be explicit")
@@ -789,6 +806,7 @@ class DirectPostman:
                 cdp_url=cdp_url,
                 extra_allowed=extra_allowed,
                 extra_forbidden=extra_forbidden,
+                input_files=input_files,
             )
 
         publisher = self.publisher_factory(
@@ -806,6 +824,7 @@ class DirectPostman:
             task_content = task_package.render_direct_task_manifest(
                 request_id=request_id,
                 user_intent=task,
+                input_files=input_files,
                 repository=self.repository,
                 base_commit=snapshot.prepublication_commit,
                 expected_filename=expected_filename,
@@ -1091,6 +1110,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--chat-request-id")
     parser.add_argument("--automatic-continuation", action="store_true", help="Continue the existing conversation and preserve chain identity")
     parser.add_argument("--image-mode", action="store_true", help="Generate one image, then package it in a second turn")
+    parser.add_argument("--input-files-base64")
     parser.add_argument("--allow-path", action="append", default=[])
     parser.add_argument("--forbid-path", action="append", default=[])
     return parser
@@ -1136,6 +1156,7 @@ def main(argv: list[str] | None = None) -> int:
                     chat_request_id=args.chat_request_id,
                     automatic_continuation=args.automatic_continuation,
                     image_mode=args.image_mode,
+                    input_files=decode_input_files_b64(args.input_files_base64),
                     cdp_url=args.cdp_url,
                     extra_allowed=args.allow_path,
                     extra_forbidden=args.forbid_path,

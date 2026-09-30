@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -223,6 +224,7 @@ class DirectPostmanAsk:
         request_id: str,
         task: str,
         chat_request_id: str | None = None,
+        input_files: list[dict[str, object]] | None = None,
         cdp_url: str = bootstrap.DEFAULT_CDP_URL,
     ) -> dict[str, Any]:
         request_identity.assert_canonical_request_id(request_id)
@@ -279,6 +281,7 @@ class DirectPostmanAsk:
             task_content = text_task_package.render_direct_text_task_manifest(
                 request_id=request_id,
                 user_intent=task,
+                input_files=input_files,
                 repository=self.repository,
                 base_commit=snapshot.prepublication_commit,
             )
@@ -442,6 +445,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--direct-root")
     parser.add_argument("--cdp-url", default=bootstrap.DEFAULT_CDP_URL)
     parser.add_argument("--chat-request-id")
+    parser.add_argument("--input-files-base64")
     return parser
 
 
@@ -476,6 +480,9 @@ def main(argv: list[str] | None = None) -> int:
             result = direct.run(
                 request_id=args.request_id,
                 task=task,
+                input_files=task_package.normalize_input_files(
+                    json.loads(base64.b64decode(args.input_files_base64, validate=True).decode("utf-8"))
+                ) if args.input_files_base64 else [],
                 chat_request_id=args.chat_request_id,
                 cdp_url=args.cdp_url,
             )
