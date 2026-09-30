@@ -1,5 +1,11 @@
 # Журнал ПТС
 
+## 2026-09-30 — Этап 5A: исследование и решение отложить hardening для MVP
+
+Только локальный исследовательский Windows/Node prototype использовал rooted HANDLE и `NtCreateFile`-style операции; в `ptc-adapter` его не подключали, Worker PTC `write/edit` не включали, native dependency в product не переносили. Удержание parent HANDLE закрыло конкретную старую junction-подмену после pinning. 14/14 исследовательских тестов завершились по ожиданиям, но некоторые намеренно подтвердили оставшиеся ограничения — это не Stage 5A PASS. Для строгой adversarial boundary не решены доверенное закрепление identity task root до его возможной подмены и атомарное «replace directory entry только если existing target всё ещё имеет проверенную identity/version». `dsh-fs-sandbox` не является абсолютным решением такой boundary.
+
+Решение пользователя: Stage 5A — deferred / not required for MVP, поскольку ordinary Worker уже имеет shell и обычные filesystem tools; не расширять MVP ради OS-level защиты от конкурентно враждебного ordinary Worker. Stage 5 может продолжаться отдельно на Host-side границе worktree с ограниченной моделью угроз из [PTC_CONTRACT.md](PTC_CONTRACT.md), но всё ещё не реализован. Если понадобится изоляция недоверенных Worker, вернуть rooted/descriptor mutation или sandboxing ordinary Worker отдельным security project. Исследовательский прототип не является частью продукта.
+
 ## 2026-09-30 — Этап 4.5: Host-side Worker PTC filesystem boundary
 
 Stage 4 Worker live-приёмка: настоящий Worker `ptc_execute`, корректный namespace, отсутствие Node globals и `write/edit/shell/report/notify_parent/postman_*` внутри PTC, настоящий QuickJS → Harness glob/read/grep, continuable follow-up, три Worker и selective stop, отсутствие PTC production Worker — PASS. Но relative `read("plugins/dsh-ptc/src/runtime.js")` прочёл файл в `.dsh`/session cwd вместо Host-bound task worktree. Stage 5 mutation поэтому остановлен до security/operational этапа 4.5.
