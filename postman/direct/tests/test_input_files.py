@@ -54,7 +54,11 @@ class InputFilesTest(unittest.TestCase):
         self.assertNotIn("## Input files", postman_direct.build_image_generation_prompt("Draw"))
         prompt = postman_direct.build_image_generation_prompt("Draw", [descriptor("reference.png", "img/reference.png")])
         self.assertIn("### reference.png", prompt)
-        self.assertIn("визуально изучи", prompt)
+        self.assertIn("Изображения используй как visual references", prompt)
+        mixed = postman_direct.build_image_generation_prompt("Draw", [descriptor("reference.png", "img/reference.png"), descriptor("requirements.md", "docs/requirements.md"), descriptor("sources.zip", "data/sources.zip")])
+        self.assertIn("документы, архивы и другие файлы", mixed)
+        self.assertNotIn("все input files как visual reference", mixed)
+        self.assertNotIn("requirements.md", postman_direct.build_image_packaging_intent(REQ))
         self.assertTrue(prompt.endswith("Draw\n\nСделай ровно одно изображение."))
         self.assertNotIn("reference.png", postman_direct.build_image_packaging_intent(REQ))
 
@@ -105,6 +109,23 @@ class InputFilesTest(unittest.TestCase):
             self.assertTrue(all(path.startswith("tmp/") for _, method, p in calls if method == "POST" and isinstance(p, dict) for path in [entry["path"] for entry in p.get("tree", []) if isinstance(entry, dict)]))
             with self.assertRaises(input_files.InputStageError):
                 publisher.stage([tmp])
+            attachments = Path(tmp) / "attachments"; attachments.mkdir()
+            image = attachments / "reference.png"; image.write_bytes(b"PNG-marker")
+            self.assertEqual(input_files.selected_file(str(image)), ("reference.png", b"PNG-marker"))
+            with self.assertRaises(input_files.InputStageError):
+                input_files.selected_file(str(attachments))
+            link = attachments / "linked.png"
+            try:
+                link.symlink_to(image)
+            except (OSError, NotImplementedError):
+                pass
+            else:
+                with self.assertRaises(input_files.InputStageError):
+                    input_files.selected_file(str(link))
+            for name in ("private.key", "error.log", ".env", "id_rsa"):
+                target = attachments / name; target.write_bytes(b"secret")
+                with self.assertRaises(input_files.InputStageError):
+                    input_files.selected_file(str(target))
             sensitive = Path(tmp) / "settings.yaml"; sensitive.write_text("secret")
             with self.assertRaises(input_files.InputStageError):
                 publisher.stage([str(sensitive)])

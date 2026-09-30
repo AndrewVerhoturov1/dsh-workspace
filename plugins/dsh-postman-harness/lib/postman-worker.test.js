@@ -458,7 +458,7 @@ test('bridge plugin registers all Worker tools and preserves boundary on creatio
   a.ctx = { tools: { restrict(value) { restriction = value; return () => undefined } } }
   const ctx = {
     agents: { get: id => id === a.id ? a : undefined, list: () => [a] },
-    tools: { register(tool) { registrations.set(tool.name, tool) } },
+    tools: { register(tool) { registrations.set(tool.name, tool) }, guard() { return () => undefined } },
     subagents: {},
     storageDomain: { async open() { const memory = createMemoryTaskRegistry(); return {
       table: () => ({ get: memory.get, entries: memory.entries, put: memory.create, update: memory.change }),
@@ -468,7 +468,7 @@ test('bridge plugin registers all Worker tools and preserves boundary on creatio
     on(name, handler) { listeners.set(name, handler) },
   }
   await applyBridgePlugin(ctx)
-  assert.deepEqual([...registrations.keys()].sort(), ['implementation_artifact_apply', 'notify_parent', 'postman_bridge', 'postman_bridge_status', 'postman_task_prepare', 'postman_task_restore', 'postman_worker', 'postman_worker_interrupt', 'postman_worker_list', 'postman_worker_stop', 'postman_yield', 'ptc_execute'])
+  assert.deepEqual([...registrations.keys()].sort(), ['implementation_artifact_apply', 'notify_parent', 'postman_bridge', 'postman_bridge_status', 'postman_input_files', 'postman_task_prepare', 'postman_task_restore', 'postman_worker', 'postman_worker_interrupt', 'postman_worker_list', 'postman_worker_stop', 'postman_yield', 'ptc_execute'])
   assert.deepEqual(restriction.allow, postmanBridgeRestrictionForAgent(a).allow)
   assert.ok(listeners.has('agent-preset/selected'))
   assert.ok(listeners.has('agent/disposed'))

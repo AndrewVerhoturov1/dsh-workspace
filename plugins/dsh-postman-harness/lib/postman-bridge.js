@@ -1,5 +1,6 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { createPtcAdapter, WORKER_MUTATION_PROFILE } from './ptc-adapter.js'
+import { createPostmanInputFilesTool, postmanInputGrants } from './postman-input-files.js'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { parsePostmanUserTurn } from './direct-current-turn.js'
 import { createPostmanWorkerTools } from './postman-worker.js'
@@ -11,7 +12,7 @@ import { sharedPostmanTaskRegistry, closeSharedPostmanTaskRegistry } from './pos
 import {
   POSTMAN_BRIDGE_TOOL_ALLOWLIST, POSTMAN_BRIDGE_TOOL_NAME, POSTMAN_BRIDGE_STATUS_TOOL_NAME, POSTMAN_CHILD_NOTIFY_TOOL_NAME, POSTMAN_TASK_PREPARE_TOOL_NAME, POSTMAN_TASK_RESTORE_TOOL_NAME, POSTMAN_YIELD_TOOL_NAME,
   createPostmanBridgeBoundaryManager, isTopLevelPostmanSupervisor, isTopLevelPostmanPtcLeader,
-  postmanBridgeCallerAllowed, postmanBridgeRestrictionForAgent,
+  postmanBridgeCallerAllowed, postmanBridgeRestrictionForAgent, postmanPtcDirectCallGuard,
 } from './postman-bridge-core.js'
 
 export const name = 'dsh-postman-harness-bridge'
@@ -77,6 +78,8 @@ export function createPostmanBridgeTool(ctx, jobs, contexts) {
       try { parsed = parsePostmanUserTurn(args?.message) }
       catch (error) { return { status: 'POSTMAN_BRIDGE_MESSAGE_REJECTED', diagnostic: String(error?.message ?? error) } }
       if (contexts && !contexts.get(exec.agent.id)) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
+      if (parsed.inputFiles?.length && !postmanInputGrants.owns(exec.agent, contexts.get(exec.agent.id), parsed.inputFiles))
+        return { status: 'POSTMAN_INPUT_PROVENANCE_REJECTED' }
       if (typeof contexts?.isRestoring === 'function' && contexts.isRestoring(exec.agent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
       if (typeof contexts?.hasActiveOperation === 'function' && contexts.hasActiveOperation(exec.agent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
       return jobs.accept(exec.agent, args.message, parsed.transportKind)
@@ -186,8 +189,11 @@ export async function apply(ctx) {
     if (isTopLevelPostmanPtcLeader(agent)) return { profile: leaderProfile, role: 'leader' }
     return ownsPtcWorker(agent) ? { profile: WORKER_MUTATION_PROFILE, role: 'worker' } : null
   } })
+  // Guard model-direct operations, not ordinary visibility: nested PTC calls carry the outer token.
+  ctx.tools.guard(exec => postmanPtcDirectCallGuard(exec, id => ctx.agents.get(id)))
   ctx.tools.register(ptc.tool)
   ctx.tools.register(createPostmanTaskPrepareTool(ctx, contexts))
+  ctx.tools.register(createPostmanInputFilesTool(ctx, contexts))
   ctx.tools.register(createPostmanBridgeTool(ctx, jobs, postmanTaskContexts))
   ctx.tools.register(createPostmanBridgeStatusTool(ctx, jobs))
   ctx.tools.register(createPostmanTaskRestoreTool(ctx, postmanTaskContexts, { jobs, worker }))
@@ -224,6 +230,7 @@ export async function apply(ctx) {
   ctx.on('agent/disposed', ({ agent }) => {
     worker.releaseActivation(agent)
     worker.suspendLeader(agent)
+    postmanInputGrants.release(agent)
     ptc.remove(agent); boundaries.disposeAgent(agent)
     for (const child of ctx.agents.list()) if (child.session?.header?.parentSession === agent.id) refreshWorker(child.id)
   })

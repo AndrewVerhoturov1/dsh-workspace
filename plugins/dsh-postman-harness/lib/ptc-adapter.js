@@ -1,13 +1,13 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { createPtcRuntime, DEFAULT_LIMITS, validatePtcProfile } from 'dsh-ptc'
 import { guardWorkerPtcFilesystem } from './ptc-worktree-boundary.js'
+import { POSTMAN_PTC_ONLY_LEADER_TOOLS } from './postman-bridge-core.js'
 
 export const PTC_TOOL_NAME = 'ptc_execute'
-const PILOT_NAMES = Object.freeze(['read', 'grep', 'get_goal', 'web_fetch'])
 export const PILOT_PROFILE = validatePtcProfile({
-  schemaVersion: 1, id: 'postman-leader-readonly', revision: 1,
-  tools: [...PILOT_NAMES],
-  limits: { ...DEFAULT_LIMITS, maxConcurrentToolCalls: 1 },
+  schemaVersion: 1, id: 'postman-leader-supervisor', revision: 3,
+  tools: [...POSTMAN_PTC_ONLY_LEADER_TOOLS],
+  limits: { ...DEFAULT_LIMITS, maxConcurrentToolCalls: 1, maxWallMs: 30000 },
 })
 const WORKER_NAMES = Object.freeze(['read', 'glob', 'grep', 'web_fetch', 'web_search', 'write', 'edit'])
 export const WORKER_MUTATION_PROFILE = validatePtcProfile({
@@ -28,7 +28,7 @@ const output = {
 export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerContextOf, profile = PILOT_PROFILE, runtime = createPtcRuntime() }) {
   function pilotProfile(value) {
     const checked = validatePtcProfile(value)
-    if (checked.tools.some(name => !PILOT_NAMES.includes(name))) throw new TypeError('PTC pilot profile tool not allowed')
+    if (checked.tools.some(name => !POSTMAN_PTC_ONLY_LEADER_TOOLS.includes(name))) throw new TypeError('PTC pilot profile tool not allowed')
     return checked
   }
   let current = pilotProfile(profile), disposed = false
@@ -78,10 +78,11 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
       'Use shell/jobs/report and other ordinary Worker tools outside PTC. ' +
       'Use await tools.name(JSON_arguments) and return JSON; current argument schemas: ' +
       JSON.stringify(schemas.map(s => ({ name: s.name, parameters: s.parameters })))
-    return 'Pilot PTC: ptc_execute runs a single isolated JavaScript/erasable TypeScript async-function body. ' +
-      'Use await tools.name(JSON_arguments) and return a JSON value explicitly. No persistent state or automatic retry; inspect status/effects after errors. ' +
-      'Only these nested tools are available with their current Harness argument schemas: ' +
-      JSON.stringify(schemas.map(s => ({ name: s.name, description: s.description, parameters: s.parameters })))
+    return 'This Leader is PTC-first. Batch related mechanical/data/supervisor operations in one ptc_execute program; direct PTC-managed calls are rejected. ' +
+      'PTC changes execution mode, not Postman Leader routing: follow the postman-leader skill, obtain user approval before medium/complex task preparation or delegation, and delegate repository discovery/execution to Worker/Postman as required. ' +
+      'Never poll Worker/Bridge: reports and READY arrive as later events, not within this program. ' +
+      'Use await tools.name(JSON_arguments), return compact JSON needed for the next decision, and inspect effects after errors. No persistence or automatic retry. Current nested argument schemas: ' +
+      JSON.stringify(schemas.map(s => ({ name: s.name, parameters: s.parameters })))
   }
   function remove(agent) {
     const record = owners.get(agent?.id)

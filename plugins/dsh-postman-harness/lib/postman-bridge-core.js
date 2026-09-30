@@ -8,6 +8,7 @@ export const POSTMAN_WORKER_TOOL_NAME = 'postman_worker'
 export const POSTMAN_WORKER_INTERRUPT_TOOL_NAME = 'postman_worker_interrupt'
 export const POSTMAN_WORKER_STOP_TOOL_NAME = 'postman_worker_stop'
 export const POSTMAN_YIELD_TOOL_NAME = 'postman_yield'
+export const POSTMAN_INPUT_FILES_TOOL_NAME = 'postman_input_files'
 export const POSTMAN_WORKER_LIST_TOOL_NAME = 'postman_worker_list'
 export const POSTMAN_BRIDGE_AGENT_OPTIONS = Object.freeze({
   provider: 'codex',
@@ -38,6 +39,7 @@ export const POSTMAN_LEADER_TOOL_ALLOWLIST = Object.freeze([
   'web_fetch',
   POSTMAN_TASK_PREPARE_TOOL_NAME,
   POSTMAN_TASK_RESTORE_TOOL_NAME,
+  POSTMAN_INPUT_FILES_TOOL_NAME,
   POSTMAN_BRIDGE_TOOL_NAME,
   POSTMAN_BRIDGE_STATUS_TOOL_NAME,
   POSTMAN_WORKER_TOOL_NAME,
@@ -46,9 +48,23 @@ export const POSTMAN_LEADER_TOOL_ALLOWLIST = Object.freeze([
   POSTMAN_YIELD_TOOL_NAME,
   POSTMAN_WORKER_LIST_TOOL_NAME,
 ])
+// Ordinary visibility stays intact for nested QuickJS → ToolRuntime dispatch.
+// These operations are not model-direct for the exact experimental Leader.
+export const POSTMAN_PTC_ONLY_LEADER_TOOLS = Object.freeze(POSTMAN_LEADER_TOOL_ALLOWLIST.filter(
+  name => !['skill', 'ask_user_question', 'exit_plan_mode', 'read_image', POSTMAN_YIELD_TOOL_NAME].includes(name),
+))
+
+export function postmanPtcDirectCallGuard(exec, lookupAgent) {
+  return isTopLevelPostmanPtcLeader(exec.agent) &&
+    lookupAgent(exec.agent.id) === exec.agent && exec.parent === undefined &&
+    POSTMAN_PTC_ONLY_LEADER_TOOLS.includes(exec.name)
+    ? 'POSTMAN_PTC_DIRECT_CALL_REJECTED: use ptc_execute' : undefined
+}
+
 export const POSTMAN_LEADER_ONLY_TOOL_NAMES = Object.freeze([
   POSTMAN_TASK_PREPARE_TOOL_NAME,
   POSTMAN_TASK_RESTORE_TOOL_NAME,
+  POSTMAN_INPUT_FILES_TOOL_NAME,
   POSTMAN_BRIDGE_TOOL_NAME,
   POSTMAN_BRIDGE_STATUS_TOOL_NAME,
   POSTMAN_WORKER_TOOL_NAME,

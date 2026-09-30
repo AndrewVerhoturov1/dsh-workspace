@@ -383,6 +383,7 @@ test('send_current_turn reads captured runtime text, not model arguments, and co
   bridge.dispose()
 })
 
+
 test('automatic continuation is deterministic and does not accept model-written text', async () => {
   const children = []
   const invocations = []

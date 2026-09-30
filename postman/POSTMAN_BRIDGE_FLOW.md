@@ -4,7 +4,7 @@
 > Bridge child: fresh one-shot `spawn`, fixed `codex / gpt-6-luna`
 > Transports: `@Postman` artifact, `@PostmanAsk` text, `@PostmanImage` one image
 
-Для входных файлов Leader передаёт descriptor как metadata complete delegation; Luna не получает binary tools и вызывает прежний zero-argument send. См. [Postman Input Files](POSTMAN_INPUT_FILES.md).
+Для входных файлов Leader сначала получает Host-issued descriptor через `postman_input_files` (PTC Leader — вложенным вызовом `ptc_execute`), после последнего REQ очищает свой staged bundle; затем передаёт descriptor как metadata complete delegation; Luna не получает binary tools и вызывает прежний zero-argument send. См. [Postman Input Files](POSTMAN_INPUT_FILES.md).
 
 ## 1. Назначение
 

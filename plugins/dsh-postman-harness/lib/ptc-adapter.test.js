@@ -7,7 +7,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { ToolRuntime, defineTool } from '@deepseek-ai/dsh-tools'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import { createPtcAdapter, PILOT_PROFILE } from './ptc-adapter.js'
-import { postmanBridgeRestrictionForAgent, isTopLevelPostmanPtcLeader } from './postman-bridge-core.js'
+import { postmanBridgeRestrictionForAgent, isTopLevelPostmanPtcLeader, postmanPtcDirectCallGuard, POSTMAN_PTC_ONLY_LEADER_TOOLS } from './postman-bridge-core.js'
 
 import { apply as applyFs } from '@deepseek-ai/dsh-tool-fs'
 import { applyGrepTool, RAW_OUTPUT_MAX_BYTES, GREP_MAX_MATCHES, GREP_MAX_LINE_BYTES, SEARCH_META_MAX_BYTES, SEARCH_GRACE_MS, SEARCH_STDERR_MAX_BYTES, SEARCH_TIMEOUT_MS } from '@deepseek-ai/dsh-tool-fs-search'
@@ -24,8 +24,9 @@ function fixture(dir, { real = false } = {}) {
   ctx.agentPresets = { composedPreset: agentCtx => presets.get(agentCtx) }
   ctx.agents = { get:id=>agents.get(id), list:()=>[...agents.values()] }
   const traces = []
-  ctx.on('tools/pre-execute', async (exec,next)=> { traces.push(['pre',exec.name,exec.agent,exec.parent,exec.rootCallId]); return next() })
+  ctx.on('tools/pre-execute', async (exec,next)=> { traces.push(['pre',exec.name,exec.agent,exec.parent,exec.rootCallId,exec.token]); return next() })
   ctx.on('tools/result', (exec, result)=>traces.push(['result',exec.name,exec.agent,result.isError]))
+  ctx.tools.guard(exec => postmanPtcDirectCallGuard(exec, id => agents.get(id)))
   if (real) {
     ctx.fs = new LocalFileSystem(ctx,{cwd:dir,diffBasisMaxBytes:1048576})
     ctx.subprocess = new LocalSubprocessRuntime(ctx)
@@ -150,7 +151,8 @@ test('profile intersection, invalid args, revocation and independent owners',asy
   const hint=one.sections[0].text({scope:one.a})
   assert.match(hint,/read.*grep.*get_goal.*web_fetch/)
   assert.match(hint,/parameters/)
-  assert.doesNotMatch(hint,/postman_worker.*parameters/)
+  assert.match(hint,/postman_worker.*parameters/)
+  assert.doesNotMatch(hint,/description.*parameters/)
   const two=f.agent('b')
   two.a.ctx.tools.restrict(postmanBridgeRestrictionForAgent(two.a));f.adapter.refresh(two.a)
   assert.equal((await f.execute(one.a,'return await tools.write({})')).value.status,'runtime-error')
@@ -164,8 +166,8 @@ test('profile intersection, invalid args, revocation and independent owners',asy
   hideRequired()
   const controller=new AbortController();controller.abort()
   assert.equal((await f.execute(one.a,'return 1',controller)).isError,true)
-  assert.throws(()=>f.adapter.setProfile({...PILOT_PROFILE,revision:2,tools:['write']}),/not allowed/)
-  f.adapter.setProfile({...PILOT_PROFILE,revision:2,tools:['read','grep']})
+  assert.throws(()=>f.adapter.setProfile({...PILOT_PROFILE,revision:4,tools:['write']}),/not allowed/)
+  f.adapter.setProfile({...PILOT_PROFILE,revision:4,tools:['read','grep']})
   assert.equal((await f.execute(one.a,'return 4')).value.value,4)
   f.adapter.remove(one.a)
   assert.equal((await f.execute(one.a,'return 1')).value.status,'PTC_CALLER_REJECTED')
@@ -238,5 +240,58 @@ test('noncooperative nested operation remains pending without a false success',a
   f.adapter.refresh(a)
   assert.equal((await f.execute(a,'return 14')).value.value,14)
   finish()
+  await f.adapter.dispose()
+})
+
+test('PTC-first Leader direct tools fail closed while exceptions and production stay direct', async () => {
+  const f = fixture(process.cwd()), pilot = f.agent('ptc-first'), production = f.agent('direct', 'postman-leader')
+  for (const {a} of [pilot, production]) { a.ctx.tools.restrict(postmanBridgeRestrictionForAgent(a)); f.adapter.refresh(a) }
+  assert.deepEqual(PILOT_PROFILE.tools, POSTMAN_PTC_ONLY_LEADER_TOOLS)
+  assert.equal(PILOT_PROFILE.id, 'postman-leader-supervisor')
+  assert.equal(PILOT_PROFILE.revision, 3)
+  assert.equal(PILOT_PROFILE.limits.maxWallMs, 30000)
+  assert.equal(PILOT_PROFILE.limits.maxConcurrentToolCalls, 1)
+  for (const name of ['ptc_execute', 'skill', 'ask_user_question', 'exit_plan_mode', 'read_image', 'postman_yield'])
+    assert.equal(f.ctx.tools.schemas(pilot.a).some(s => s.name === name), true, name)
+  for (const name of POSTMAN_PTC_ONLY_LEADER_TOOLS) {
+    assert.equal(f.ctx.tools.schemas(pilot.a).some(s => s.name === name), true, name)
+    const denied = await f.ctx.tools.execute({callId:'direct-'+name,name,arguments:{},agent:pilot.a,signal:new AbortController().signal})
+    assert.equal(denied.isError, true, name)
+    assert.match(denied.error.message, /POSTMAN_PTC_DIRECT_CALL_REJECTED.*ptc_execute/, name)
+    const allowed = await f.ctx.tools.execute({callId:'production-'+name,name,arguments:{},agent:production.a,signal:new AbortController().signal})
+    assert.equal(allowed.isError, false, name)
+  }
+  for (const name of ['skill', 'ask_user_question', 'exit_plan_mode', 'read_image', 'postman_yield']) {
+    const direct = await f.ctx.tools.execute({callId:'exception-'+name,name,arguments:{},agent:pilot.a,signal:new AbortController().signal})
+    assert.equal(direct.isError, false, name)
+  }
+  assert.equal(f.ctx.tools.schemas(production.a).some(s=>s.name==='ptc_execute'),false)
+  assert.equal(f.ctx.tools.schemas(pilot.a).some(s=>s.name==='run_code'),false)
+  await f.adapter.dispose()
+})
+
+test('one PTC outer call batches supervisor operations with native parent and root linkage', async () => {
+  const f=fixture(process.cwd()), {a,events}=f.agent('batch')
+  a.ctx.tools.restrict(postmanBridgeRestrictionForAgent(a)); f.adapter.refresh(a)
+  const program = "const goal = await tools.get_goal({}); const task = await tools.postman_task_prepare({}); const worker = await tools.postman_worker({task:'fixture task',createNew:true,label:'fixture'}); const workers = await tools.postman_worker_list({}); return {goal,task,worker,workers}"
+  const result=await f.execute(a,program)
+  assert.equal(result.isError,false,result.error?.message)
+  assert.equal(result.value.status,'ok',JSON.stringify(result.value))
+  assert.deepEqual(Object.keys(result.value.value),['goal','task','worker','workers'])
+  assert.deepEqual(Object.values(result.value.value).map(v=>v.name),['get_goal','postman_task_prepare','postman_worker','postman_worker_list'])
+  const outer=f.traces.filter(e=>e[0]==='pre' && e[1]==='ptc_execute')
+  const nested=f.traces.filter(e=>e[0]==='pre' && ['get_goal','postman_task_prepare','postman_worker','postman_worker_list'].includes(e[1]))
+  assert.equal(outer.length,1)
+  assert.equal(nested.length,4)
+  assert.ok(nested.every(e=>e[2]===a && e[3]===outer[0][5] && e[4]===outer[0][4]))
+  assert.equal(events.filter(e=>e.type==='tool/code-dispatch-start').length,4)
+  assert.equal(events.filter(e=>e.type==='tool/code-dispatch').length,4)
+  const optional=await f.execute(a,"return {interrupt:(await tools.postman_worker_interrupt({})).name,bridge:(await tools.postman_bridge({})).name,status:(await tools.postman_bridge_status({})).name}")
+  assert.equal(optional.value.status,'ok',JSON.stringify(optional.value))
+  assert.deepEqual(optional.value.value,{interrupt:'postman_worker_interrupt',bridge:'postman_bridge',status:'postman_bridge_status'})
+  const revoked=a.ctx.tools.restrict({deny:['postman_bridge_status']})
+  const unavailable=await f.execute(a,"return typeof tools.postman_bridge_status")
+  assert.equal(unavailable.value.value,'undefined')
+  revoked()
   await f.adapter.dispose()
 })

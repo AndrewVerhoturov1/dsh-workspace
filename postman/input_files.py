@@ -22,7 +22,7 @@ REPOSITORY = "AndrewVerhoturov1/dsh-workspace"
 BRANCH = "transport/postman-inputs"
 _SHA = re.compile(r"^[0-9a-f]{40}$")
 _BUNDLE = re.compile(r"^[0-9a-f]{32}$")
-_SENSITIVE = {"settings.yaml", ".credentials.yaml", "codex-oauth.json", "credentials", "secrets", "attachments", "sessions", "storages", "logs", "diagnostics", "profiles", "browser-state", ".git", "node_modules"}
+_SENSITIVE = {"settings.yaml", ".credentials.yaml", "codex-oauth.json", ".env", ".ssh", "id_rsa", "id_ed25519", "credentials", "secrets", "sessions", "storages", "logs", "diagnostics", "profiles", "browser-state", ".git", "node_modules"}
 
 
 class InputStageError(ValueError):
@@ -33,7 +33,10 @@ def selected_file(path: str) -> tuple[str, bytes]:
     source = Path(path)
     if not source.is_absolute() or source.is_symlink() or not source.is_file():
         raise InputStageError("select an absolute regular file, not a directory or symlink")
-    if any(part.lower() in _SENSITIVE or part.lower().endswith((".key", ".pem", ".p12", ".log")) for part in source.parts):
+    if any(parent.is_symlink() for parent in source.parents):
+        raise InputStageError("symlink path cannot be published")
+    if any(part.lower() in _SENSITIVE or part.lower().endswith((".key", ".pem", ".p12", ".log"))
+           for part in source.resolve(strict=True).parts):
         raise InputStageError("sensitive/runtime path cannot be published")
     data = source.read_bytes()
     if not data:

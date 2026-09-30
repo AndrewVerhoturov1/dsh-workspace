@@ -133,7 +133,7 @@ def build_image_generation_prompt(user_intent: str, input_files: Iterable[dict[s
         raise DirectPostmanError("DIRECT_INVALID_TASK", "image intent must be a non-empty string")
     section = task_package.render_input_files_section(input_files)
     if section:
-        return (section + "\nСначала получи и визуально изучи перечисленные input files как visual reference. "
+        return (section + "\nСначала получи и изучи все перечисленные input files. Изображения используй как visual references, когда это следует из задачи; документы, архивы и другие файлы используй как требования или контекст согласно их содержанию. "
                 "Если получить их нельзя, не угадывай содержание и не продолжай генерацию будто они были просмотрены.\n\n"
                 + f"Сгенерируй, пожалуйста, изображение по этому промту:\n\n{user_intent}\n\nСделай ровно одно изображение.")
     return f"Сгенерируй, пожалуйста, изображение по этому промту:\n\n{user_intent}\n\nСделай ровно одно изображение."
