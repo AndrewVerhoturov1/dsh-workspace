@@ -9,10 +9,10 @@ export const PILOT_PROFILE = validatePtcProfile({
   tools: [...PILOT_NAMES],
   limits: { ...DEFAULT_LIMITS, maxConcurrentToolCalls: 1 },
 })
-const RESEARCH_NAMES = Object.freeze(['read', 'glob', 'grep', 'web_fetch', 'web_search'])
-export const WORKER_RESEARCH_PROFILE = validatePtcProfile({
-  schemaVersion: 1, id: 'postman-worker-research', revision: 1,
-  tools: [...RESEARCH_NAMES],
+const WORKER_NAMES = Object.freeze(['read', 'glob', 'grep', 'web_fetch', 'web_search', 'write', 'edit'])
+export const WORKER_MUTATION_PROFILE = validatePtcProfile({
+  schemaVersion: 1, id: 'postman-worker-mutation', revision: 2,
+  tools: [...WORKER_NAMES],
   limits: { ...DEFAULT_LIMITS, maxConcurrentToolCalls: 1 },
 })
 const LEADER_REQUIRED = ['read', 'grep']
@@ -59,7 +59,7 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
     if (disposed || ctx.agents.get(agent.id) !== agent) return false
     const assignment = assignmentFor(agent, current)
     if (!assignment || !['leader', 'worker'].includes(assignment.role) ||
-        (assignment.profile !== current && assignment.profile !== WORKER_RESEARCH_PROFILE)) return false
+        (assignment.profile !== current && assignment.profile !== WORKER_MUTATION_PROFILE)) return false
     const record = { agent, profile: assignment.profile, role: assignment.role,
       revision: assignment.profile.revision, runs: new Set(), section: null }
     owners.set(agent.id, record)
@@ -72,9 +72,10 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
   function guidance(agent, record) {
     if (required(record).some(name => !available(agent, name))) return ''
     const schemas = ctx.tools.schemas(agent).filter(s => record.profile.tools.includes(s.name))
-    if (record.role === 'worker') return 'PTC is for mechanical read-only research. Inside ptc_execute: read, glob, grep, and currently visible web_fetch/web_search only. ' +
-      'Relative filesystem paths inside Worker PTC are scoped to the current Host-bound task worktree; filesystem access outside it is rejected. ' +
-      'Call write/edit/shell/report/notify_parent and other ordinary Worker tools separately, outside the program. ' +
+    if (record.role === 'worker') return 'PTC supports read, glob, grep, web_fetch, web_search, write and edit when ordinarily visible. ' +
+      'Filesystem paths inside PTC are Host-scoped to the current task worktree. Use write/edit inside PTC for mechanical multi-step filesystem work. ' +
+      'PTC mutation is not transactional. A successful write/edit remains committed even if later program code fails. There is no automatic rollback or retry. ' +
+      'Use shell/jobs/report and other ordinary Worker tools outside PTC. ' +
       'Use await tools.name(JSON_arguments) and return JSON; current argument schemas: ' +
       JSON.stringify(schemas.map(s => ({ name: s.name, parameters: s.parameters })))
     return 'Pilot PTC: ptc_execute runs a single isolated JavaScript/erasable TypeScript async-function body. ' +
@@ -102,7 +103,7 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
   }
   const tool = defineTool({
     name: PTC_TOOL_NAME,
-    description: 'Run one isolated read-only PTC program for the exact experimental Postman Leader or its confirmed Worker. Guidance lists current nested tool schemas.',
+    description: 'Run one isolated PTC program for the exact experimental Postman Leader or its confirmed Worker. Guidance lists current nested tool schemas.',
     parameters: {
       program: { type: 'string', required: true, description: 'One async-function body with explicit JSON return. No imports, Node or persistent state.' },
       description: { type: 'string', required: true, description: 'Short purpose of this one program.' },
@@ -132,10 +133,10 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
           if (call.signal.aborted || controller.signal.aborted || !allowed(agent, record) || !available(agent, name))
             throw new Error('PTC_ACCESS_REVOKED')
           let nestedArgs = arg
-          if (record.role === 'worker' && ['read', 'glob', 'grep'].includes(name)) {
+          if (record.role === 'worker' && ['read', 'glob', 'grep', 'write', 'edit'].includes(name)) {
             if (workerContextOf?.(agent) !== workerContext) throw new Error('PTC_ACCESS_REVOKED')
             nestedArgs = await guardWorkerPtcFilesystem(name, arg, workerContext.worktree)
-            if (call.signal.aborted || controller.signal.aborted || !allowed(agent, record) ||
+            if (call.signal.aborted || controller.signal.aborted || !allowed(agent, record) || !available(agent, name) ||
                 workerContextOf?.(agent) !== workerContext) throw new Error('PTC_ACCESS_REVOKED')
           }
           const subCallId = String(exec.callId) + ':ptc:' + call.callId
@@ -151,7 +152,7 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
               agent.session?.append('tool/code-dispatch', { ...details, isError: result.isError, content: result.content })
             }
             if (controller.signal.aborted || !allowed(agent, record) || !available(agent, name) ||
-                (record.role === 'worker' && ['read', 'glob', 'grep'].includes(name) &&
+                (record.role === 'worker' && ['read', 'glob', 'grep', 'write', 'edit'].includes(name) &&
                   workerContextOf?.(agent) !== workerContext)) throw new Error('PTC_ACCESS_REVOKED')
             if (result.isError) throw new Error(result.error.message)
             for (const context of result.additionalContexts ?? []) exec.deferContext(context)

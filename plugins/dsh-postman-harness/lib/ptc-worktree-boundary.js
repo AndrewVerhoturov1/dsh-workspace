@@ -8,8 +8,7 @@ const contained = (root, target) => {
 }
 
 // Existing targets resolve through realpath; for a nonexistent target the
-// nearest existing canonical ancestor establishes containment. Stage 4.5
-// dispatches only research tools, never writes.
+// nearest existing canonical ancestor establishes containment.
 export async function resolvePtcWorktreePath(worktree, requested) {
   if (typeof worktree !== 'string' || !isAbsolute(worktree) ||
       typeof requested !== 'string' || !requested.trim() || requested.includes('\0') ||
@@ -38,8 +37,8 @@ export async function resolvePtcWorktreePath(worktree, requested) {
 // Only the actual filesystem-location fields in the installed DSH schemas are
 // rewritten. Search patterns and web calls are not filesystem roots.
 export async function guardWorkerPtcFilesystem(name, args, worktree) {
-  if (!['read', 'glob', 'grep'].includes(name)) return args
-  const field = name === 'read' ? 'file_path' : 'path'
+  if (!['read', 'glob', 'grep', 'write', 'edit'].includes(name)) return args
+  const field = ['read', 'write', 'edit'].includes(name) ? 'file_path' : 'path'
   if (!args || typeof args !== 'object' || Array.isArray(args)) throw reject()
   const location = field === 'path' && args[field] === undefined ? '.' : args[field]
   const path = await resolvePtcWorktreePath(worktree, location)
