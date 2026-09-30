@@ -9,7 +9,7 @@ description: >-
 
 # Postman Leader
 
-`POSTMAN_LEADER_SKILL_VERSION: 17`
+`POSTMAN_LEADER_SKILL_VERSION: 18`
 
 > **Правило Worker:** у одного Leader может быть до трёх независимых continuable Worker. `postman_worker({task, createNew: true, label?})` создаёт нового; четвёртый возвращает `POSTMAN_WORKER_LIMIT_REACHED` до запуска. `postman_worker_list()` показывает точные `workerSessionId`, label и состояние привязки, но не доказывает idle/completion. Задание или новый trusted artifact REQ направляй точному Worker через `postman_worker({task, workerSessionId, artifactRequestId?})`, обычное продолжение — через `postman_worker_interrupt({workerSessionId, task})`, закрытие — `postman_worker_stop({workerSessionId})`. Без ID старые вызовы допустимы только при ровно одной привязке; при нескольких Host возвращает `POSTMAN_WORKER_TARGET_REQUIRED`. Все Worker делят одну task branch/worktree: не поручай перекрывающиеся записи, а sync, restore и package runner выполняй только при гарантированной безопасности общей ветки.
 
@@ -90,6 +90,12 @@ Bridge Luna занимается только ChatGPT Web transport через D
 ## 3. Runtime tool boundary
 
 Режимы исполнения: `postman-leader` — supervisor с прямыми инструментами; `postman-leader-ptc` — тот же routing/supervisor contract, но batchable data/supervisor tools доступны только внутри `ptc_execute`. Прямыми остаются `ptc_execute`, `skill`, `ask_user_question`, `exit_plan_mode`, `read_image`, `postman_yield`. **PTC меняет способ исполнения, но не выбор исполнителя и не human approval rules.** Сначала утверждение пользователя по разделу 0, только затем task preparation, Worker или Bridge. Отчёт Worker и Bridge READY — новые события следующего хода, а не ожидание в PTC-программе.
+
+### 3.1. PTC batching discipline
+
+Один `ptc_execute` выполняет максимально полный механический этап до нового содержательного решения модели, пользовательского ввода, внешнего async event (Worker report / Bridge READY) либо отдельной границы риска/approval. Окончание одного вложенного `read`/`grep` само по себе не причина создавать новый model round.
+
+Для текстового файла с несколькими страницами используй `ptc.readAllText(...)`, для заранее известных файлов — `ptc.readMany(...)`, для запросов — `ptc.grepMany(...)`. Paging происходит внутри одного `ptc_execute`. Helpers работают только через видимые ordinary `tools.read`/`tools.grep`. `maxOutputBytes` 512 KiB — потолок, не цель: возвращай компактный итог, когда полного текста не требуется. Примеры: [PTC_PATTERNS.md](PTC_PATTERNS.md).
 
 Top-level Leader получает positive allowlist ровно из 21 зарегистрированного инструмента:
 

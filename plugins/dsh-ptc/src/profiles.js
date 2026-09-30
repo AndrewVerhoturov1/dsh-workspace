@@ -1,17 +1,17 @@
 import { types } from 'node:util'
 // Profile v1 is data, not an agent role or an executable policy source.
 export const DEFAULT_LIMITS = Object.freeze({
-  maxProgramBytes: 262144, maxWallMs: 10000, quickjsMemoryBytes: 33554432,
+  maxProgramBytes: 262144, maxWallMs: 120000, quickjsMemoryBytes: 33554432,
   maxStackBytes: 524288, maxToolCalls: 64, maxConcurrentToolCalls: 4,
   maxQueuedToolCalls: 16, maxMessageBytes: 1048576,
-  maxTotalBridgeBytes: 8388608, maxOutputBytes: 65536,
+  maxTotalBridgeBytes: 8388608, maxOutputBytes: 524288,
   maxLogEntries: 256, maxValueDepth: 32, maxValueNodes: 10000,
 })
 export const MAX_LIMITS = Object.freeze({
-  maxProgramBytes: 262144, maxWallMs: 30000, quickjsMemoryBytes: 67108864,
+  maxProgramBytes: 262144, maxWallMs: 300000, quickjsMemoryBytes: 67108864,
   maxStackBytes: 1048576, maxToolCalls: 256, maxConcurrentToolCalls: 8,
   maxQueuedToolCalls: 32, maxMessageBytes: 1048576,
-  maxTotalBridgeBytes: 16777216, maxOutputBytes: 65536,
+  maxTotalBridgeBytes: 16777216, maxOutputBytes: 524288,
   maxLogEntries: 256, maxValueDepth: 32, maxValueNodes: 10000,
 })
 const MIN_LIMITS = Object.freeze({
