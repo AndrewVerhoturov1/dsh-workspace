@@ -176,7 +176,7 @@ class WebWorkerReminderTests(unittest.TestCase):
                 "details": {"chatUrl": CHAT_URL},
             }
 
-        def send_reminder(_page, prompt, _chat_url, *, timeout_ms):
+        def send_reminder(_page, prompt, _chat_url, **_kwargs):
             reminder_times.append(round(clock.monotonic()))
             reminder_prompts.append(prompt)
             return confirmed_submit(prompt)
@@ -186,6 +186,7 @@ class WebWorkerReminderTests(unittest.TestCase):
             with (
                 patch.object(browser_submit, "submit_fresh_prompt", return_value=confirmed_submit(PROMPT)),
                 patch.object(browser_observer, "observe_next_assistant", side_effect=observe_timeout),
+                patch.object(browser_observer, "inspect_answer_phase", return_value={"phase": browser_observer.WORKING}),
                 patch.object(reminder_policy, "submit_reminder", side_effect=send_reminder),
             ):
                 result = bridge.run_request(
@@ -211,6 +212,38 @@ class WebWorkerReminderTests(unittest.TestCase):
 
             stored = bridge.read_state(REQ)
             self.assertEqual(len(stored["failureDetails"]["reminders"]), 3)
+
+    def test_due_unknown_retries_same_slot_before_next_checkpoint(self):
+        clock = FakeClock()
+        page = FakePage()
+        phases = 0
+        send_times = []
+        def observe(_page, _prompt, _url, *, timeout_ms, **_kwargs):
+            clock.sleep(timeout_ms / 1000.0)
+            return {"ok": False, "code": browser_observer.ASSISTANT_TURN_TIMEOUT,
+                    "details": {"chatUrl": CHAT_URL}}
+        def phase(*_args, **_kwargs):
+            nonlocal phases
+            phases += 1
+            return {"phase": browser_observer.UNKNOWN if phases == 1 else browser_observer.WORKING}
+        def send(_page, prompt, _url, **_kwargs):
+            send_times.append(clock.monotonic())
+            return confirmed_submit(prompt)
+        with tempfile.TemporaryDirectory() as root:
+            bridge = self.make_bridge(root, clock)
+            with (patch.object(browser_submit, "submit_fresh_prompt", return_value=confirmed_submit(PROMPT)),
+                  patch.object(browser_observer, "observe_next_assistant", side_effect=observe),
+                  patch.object(browser_observer, "inspect_answer_phase", side_effect=phase),
+                  patch.object(reminder_policy, "submit_reminder", side_effect=send)):
+                result = bridge.run_request(REQ, task_url=TASK_URL, prompt=PROMPT,
+                                            expected_filename=FILENAME, expected_request={},
+                                            observer_timeout_ms=30_000, reminder_interval_ms=10_000,
+                                            max_reminders=1, playwright_factory=FakeFactory(page))
+        self.assertFalse(result["ok"])
+        self.assertEqual(len(send_times), 1)
+        self.assertGreaterEqual(send_times[0], 13.0)
+        self.assertLess(send_times[0], 20.0)
+        self.assertEqual(result["details"]["details"]["reminders"][0]["index"], 1)
 
     def test_completed_error_response_is_rechecked_after_ten_seconds_without_reminder(self):
         clock = FakeClock()
@@ -378,6 +411,7 @@ class WebWorkerReminderTests(unittest.TestCase):
             with (
                 patch.object(browser_submit, "submit_fresh_prompt", return_value=confirmed_submit(PROMPT)),
                 patch.object(browser_observer, "observe_next_assistant", side_effect=observe_timeout),
+                patch.object(browser_observer, "inspect_answer_phase", return_value={"phase": browser_observer.WORKING}),
                 patch.object(reminder_policy, "submit_reminder", return_value=unknown) as send_reminder,
             ):
                 result = bridge.run_request(

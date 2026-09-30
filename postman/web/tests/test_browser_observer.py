@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
 
 WEB_DIR = Path(__file__).resolve().parents[1]
 if str(WEB_DIR) not in sys.path:
@@ -55,6 +56,15 @@ class FakeLocator:
     def evaluate(self, script):
         if script == observer._IMAGE_EVIDENCE_JS:
             return len(self.images)
+        if script == observer._PHASE_EVIDENCE_JS:
+            assistant = self.attrs.get("data-message-author-role") == "assistant"
+            return {"assistantNodeFound": assistant, "assistantMessageId": "fake-message" if assistant else "",
+                    "hasRenderedAnswerContainer": assistant and bool(self._text),
+                    "finalUnitProven": assistant and bool(self._text),
+                    "completionControlFound": assistant and bool(self._text),
+                    "workingControlFound": False, "streamPhase": ""}
+        if script == observer._WORKING_TURN_JS:
+            return False
         raise NotImplementedError(script)
 
     def locator(self, selector):
@@ -84,12 +94,10 @@ class FakePage:
         return self.snapshots[min(self.step, len(self.snapshots) - 1)]
 
     def locator(self, selector):
-        if selector in observer.TURN_CONTAINER_SELECTORS[:2]:
+        if selector == observer.TURN_CONTAINER_SELECTORS[0]:
+            return FakeLocator(items=[])
+        if selector in observer.TURN_CONTAINER_SELECTORS[1:3]:
             return FakeLocator(items=self.current)
-        if selector == observer.TURN_CONTAINER_SELECTORS[2]:
-            return FakeLocator(items=[])
-        if selector == observer.TURN_CONTAINER_SELECTORS[1]:
-            return FakeLocator(items=[])
         if selector in observer.GENERATION_CONTROL_SELECTORS:
             active = self.generating[min(self.step, len(self.generating) - 1)]
             return FakeLocator(attrs={"x": "1"}, visible=active) if active else FakeLocator(items=[])
@@ -240,12 +248,12 @@ class ObserverTests(unittest.TestCase):
                     FakeLocator(text=answer, attrs={"data-chatgpt-selection-message-id": "message-2"}),
                 ]
             def locator(self, selector):
-                if selector == observer.TURN_CONTAINER_SELECTORS[2]:
+                if selector == observer.TURN_CONTAINER_SELECTORS[-1]:
                     return FakeLocator(items=self.nodes)
                 return FakeLocator(items=[])
 
         turns, selector = observer.snapshot_turns(CurrentPage())
-        self.assertEqual(selector, observer.TURN_CONTAINER_SELECTORS[2])
+        self.assertEqual(selector, observer.TURN_CONTAINER_SELECTORS[-1])
         self.assertEqual([t["role"] for t in turns], ["user", "assistant"])
         result = observer.correlate_next_assistant(turns, prompt)
         self.assertTrue(result["ok"])
@@ -254,7 +262,7 @@ class ObserverTests(unittest.TestCase):
     def test_snapshot_preserves_dom_order(self):
         page = FakePage([[turn("user", "u"), turn("assistant", "a")]])
         turns, selector = observer.snapshot_turns(page)
-        self.assertEqual(selector, observer.TURN_CONTAINER_SELECTORS[0])
+        self.assertEqual(selector, observer.TURN_CONTAINER_SELECTORS[1])
         self.assertEqual([t["role"] for t in turns], ["user", "assistant"])
         self.assertEqual([t["index"] for t in turns], [0, 1])
 
@@ -698,6 +706,65 @@ class ObserverTests(unittest.TestCase):
         payload = observer._json_dumps(result)
         self.assertTrue(payload.isascii())
         self.assertEqual(json.loads(payload), result)
+
+    def test_phase_latches_final_despite_idle_text_and_pause(self):
+        user = turn("user", "POSTMAN_REQUEST_ID: REQ_20260920T120000Z_1234")
+        assistant = turn("assistant", "final text")
+        page = FakePage([[user, assistant]], generating=[True])
+        tracker = observer.AnswerPhaseTracker()
+        first = observer.inspect_answer_phase(page, user._text, page.url, tracker=tracker)
+        self.assertEqual(first["phase"], observer.FINAL_ANSWER_STARTED)
+        assistant._text = ""
+        second = observer.inspect_answer_phase(page, user._text, page.url, tracker=tracker)
+        self.assertEqual(second["phase"], observer.FINAL_ANSWER_STARTED)
+        self.assertTrue(second["finalAnswerLatched"])
+        page.generating = [False]
+        assistant._text = "complete"
+        third = observer.inspect_answer_phase(page, user._text, page.url, tracker=tracker)
+        self.assertEqual(third["phase"], observer.FINAL_ANSWER_COMPLETED)
+
+    def test_tool_working_with_pause_is_not_final(self):
+        user = turn("user", "anchor")
+        assistant = turn("assistant", "tool status")
+        page = FakePage([[user, assistant]], generating=[True])
+        with patch.object(assistant, "evaluate", return_value={
+            "assistantNodeFound": True, "assistantMessageId": "tool-id",
+            "hasRenderedAnswerContainer": False, "completionControlFound": False,
+            "workingControlFound": True, "streamPhase": "commentary"}):
+            phase = observer.inspect_answer_phase(page, "anchor", page.url)
+        self.assertEqual(phase["phase"], observer.WORKING)
+        self.assertTrue(phase["generationActive"])
+        self.assertFalse(phase["finalAnswerLatched"])
+
+    def test_working_ui_with_correlated_role_needs_no_internal_id(self):
+        user = turn("user", "anchor")
+        assistant = turn("assistant", "thinking")
+        page = FakePage([[user, assistant]], generating=[True])
+        with patch.object(assistant, "evaluate", return_value={"assistantNodeFound": True,
+                           "workingControlFound": True, "hasRenderedAnswerContainer": False}):
+            phase = observer.inspect_answer_phase(page, "anchor", page.url)
+        self.assertEqual(phase["phase"], observer.WORKING)
+
+    def test_unproved_assistant_phase_is_unknown_even_with_pause(self):
+        user = turn("user", "anchor")
+        page = FakePage([[user, turn("assistant", "thinking")]], generating=[True])
+        with patch.object(page.current[1], "evaluate", return_value={}):
+            phase = observer.inspect_answer_phase(page, "anchor", page.url)
+        self.assertEqual(phase["phase"], observer.UNKNOWN)
+
+    def test_additional_processing_requires_visible_system_scope(self):
+        class Banner:
+            def __init__(self, inside=False):
+                self.inside = inside
+            def is_visible(self):
+                return True
+            def evaluate(self, _script):
+                return {"insideConversation": self.inside, "scopeText": "Наши системы выполняют дополнительную обработку"}
+        page = FakePage([[]])
+        page.get_by_text = lambda _pattern: FakeLocator(items=[Banner(True)])
+        self.assertFalse(observer.additional_processing(page)[0])  # user or assistant transcript text
+        page.get_by_text = lambda _pattern: FakeLocator(items=[Banner(False)])
+        self.assertTrue(observer.additional_processing(page)[0])
 
     def test_module_has_no_download_api(self):
         forbidden = {"download_artifact", "apply_artifact", "save_artifact", "expect_download"}

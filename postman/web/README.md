@@ -74,9 +74,22 @@ Continuation path открывает exact сохранённый `/c/<conversat
 ### `browser_observer.py`
 
 Observer привязывается к доказанному user turn и exact chat URL и принимает только
-непосредственно следующий assistant turn. Во время генерации DOM опрашивается раз в
-3 секунды. Видимое состояние `Соединение прервано` / `Connection interrupted` вне
-conversation turns считается отдельным recoverable состоянием, а не завершением ответа.
+непосредственно следующий логический ход assistant (либо turn-group того же user anchor). Структурный `inspect_answer_phase()` различает
+`WORKING`, `FINAL_ANSWER_STARTED` (защёлка), `FINAL_ANSWER_COMPLETED`, `UNKNOWN`
+(fail-closed) и `ADDITIONAL_PROCESSING` (видимый системный баннер вне transcript).
+Pause/Stop — диагностика, не доказательство фазы. В доступных завершённых CDP-ходах
+подтверждены `data-chatgpt-selection-message-id`, `data-markdown-text-style="assistant-message"`
+и кнопки действий («Оценить ответ», «Прочитать вслух»); `data-message-model-slug` отсутствовал.
+Один Markdown renderer используется и для commentary: сам по себе он не доказывает финал.
+`data-turn-key` привязывает user anchor, activity и отдельный final assistant unit к одному
+логическому ходу; смена внутреннего message ID не теряет correlation. Activity/status/reasoning
+markdown остаётся WORKING, отдельный `:assistant` unit с ролью assistant и rendered answer
+защёлкивает финал. Для completion нужны actions этого хода (прежде всего структурные
+copy/turn controls) и inactive generation. Старые renderer paths сохранены с fail-closed
+неоднозначной разметкой. Живой thinking/tool поток не наблюдался, новые варианты
+без доказанных признаков остаются UNKNOWN.
+`Connection interrupted` вне conversation turns остаётся отдельным recoverable состоянием
+с прежним reload; `ADDITIONAL_PROCESSING` reload не запускает.
 
 Поиск «любого похожего ответа» по всему DOM запрещён.
 
@@ -165,8 +178,11 @@ Bridge не является repository applicator и не принимает mo
 Завершённый assistant-turn без ZIP перепроверяется через 10 секунд; если ZIP всё ещё отсутствует,
 bridge немедленно возвращает `ASSISTANT_COMPLETED_NO_ARTIFACT` вместе с assistant text. ZIP,
 который не прошёл minimal transport validation, немедленно возвращает `ARTIFACT_REJECTED` с
-точной причиной. Reminders 10/20/30 сохраняются для ещё не завершённого assistant-turn.
-Во время recovery reminders блокируются.
+точной причиной. Reminders 10/20/30 допустимы при доказанном WORKING (включая reasoning/tools
+с Pause/Stop), запрещены после final latch и при UNKNOWN/ADDITIONAL_PROCESSING ждут повторной
+проверки без потребления slot. Две инъецируемые паузы 1–5 секунд разделяют решение, insert
+и финальный Send proof; после click сохраняются одноразовый SendGuard и exact user-turn proof.
+Во время connection recovery reminders блокируются.
 
 ## Fresh и continuation
 
