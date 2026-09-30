@@ -274,6 +274,7 @@ def render_direct_task_manifest(
     expected_filename: str,
     allowed_paths: Iterable[str],
     forbidden_paths: Iterable[str],
+    include_implementation_discipline: bool = True,
 ) -> str:
     """Render the self-contained task document used by Direct Web Postman.
 
@@ -356,6 +357,10 @@ def render_direct_task_manifest(
         f"- Средняя строка должна быть реальным downloadable ZIP attachment/control с visible filename `{expected_value}`, а не plain text.",
         "",
     ]
+    if not include_implementation_discipline:
+        start = lines.index("## Implementation author discipline")
+        end = lines.index("## Result contract")
+        del lines[start:end]
     return "\n".join(lines)
 
 

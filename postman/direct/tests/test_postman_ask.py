@@ -158,6 +158,21 @@ class PostmanAskTests(unittest.TestCase):
         self.assertIn("result_mode: text", Publisher.contents[0])
         self.assertIn(text_result.begin_marker(REQ), Publisher.contents[0])
 
+    def test_task_contains_answer_discipline_without_changing_intent_or_result_contract(self):
+        intent = "Вопрос буквально ✅\nВторая строка."
+        content = postman_ask.text_task_package.render_direct_text_task_manifest(
+            request_id=REQ, user_intent=intent, repository="AndrewVerhoturov1/dsh-workspace", base_commit=BASE,
+        )
+        self.assertIn("## User intent\n\n" + intent + "\n\n", content)
+        discipline = content.split("## Answer author discipline\n\n", 1)[1].split("\n\n## Result contract", 1)[0]
+        for phrase in ("External Web", "исследователь и автор", "`User intent`", "аудит всей темы",
+                       "качество", "Не повторять поиск", "repository changes", "patch", "ZIP",
+                       "только текст", "остановиться"):
+            self.assertIn(phrase, discipline)
+        self.assertEqual(content.count("## Answer author discipline"), 1)
+        self.assertIn("## Result contract\n\n- Сначала полностью выполнить задачу", content)
+        self.assertIn(f"{text_result.begin_marker(REQ)}\n<итоговый непустой текст>\n{text_result.end_marker(REQ)}", content)
+
     def test_plain_completed_text_is_not_success(self):
         Bridge.result = {
             "ok": True,
