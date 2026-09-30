@@ -138,8 +138,11 @@ def build_image_packaging_intent(request_id: str) -> str:
     """Specify the sole canonical ASCII image entry for this packaging request."""
     request_identity.assert_canonical_request_id(request_id)
     return (
+        "Изображение уже создано в непосредственно предыдущем ответе ассистента этого же чата. "
+        "Творческая работа закончена: теперь твоя роль — только упаковка уже созданного изображения. "
         "Упакуй ровно одно изображение из непосредственно предыдущего ответа ассистента без изменений. "
-        "Не создавай новое изображение, не заменяй изображение, не изменяй его размеры и не перекодируй. "
+        "Не генерируй новое изображение или вариант, не заменяй и не редактируй существующее, "
+        "не изменяй его размеры и не перекодируй. "
         "ZIP должен содержать ровно один файл изображения и никаких других файлов. "
         "Имя файла внутри ZIP строго зависит от фактического формата предыдущего изображения: "
         f"PNG → {request_id}_img1.png; JPEG → {request_id}_img1.jpg; "
@@ -573,6 +576,7 @@ class DirectPostman:
                 task_content = task_package.render_direct_task_manifest(
                     request_id=request_id,
                     user_intent=build_image_packaging_intent(request_id),
+                    include_implementation_discipline=False,
                     repository=self.repository,
                     base_commit=snapshot.prepublication_commit,
                     expected_filename=expected_filename,
