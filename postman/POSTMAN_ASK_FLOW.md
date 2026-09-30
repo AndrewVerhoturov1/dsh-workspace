@@ -4,6 +4,8 @@
 > Trusted orchestration tool: `postman_send_current_turn()` without text arguments
 > Production wrapper: `postman/direct/postman-ask.ps1`
 
+Optional input files размещаются в self-contained text task; `TEXT_RESULT_DURABLE` не меняется. См. [Postman Input Files](POSTMAN_INPUT_FILES.md).
+
 ## Назначение
 
 PostmanAsk использует тот же Direct/Web browser transport, что artifact Postman, но возвращает текст, когда ZIP избыточен. Общие send/correlation/recovery правила определяет [Current Flow](POSTMAN_CURRENT_FLOW.md); ниже описаны только text envelope, 10-секундная re-proof, delivery и exact reply.

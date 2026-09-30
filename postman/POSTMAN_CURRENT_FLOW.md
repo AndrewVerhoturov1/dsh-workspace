@@ -4,6 +4,8 @@
 > Production entrypoint: `postman/direct/postman.ps1`  
 > Normal trigger: exact current-message `@Postman`
 
+Входные файлы являются optional transport metadata внутри task, без изменения User intent или двухстрочного browser prompt; см. [Postman Input Files](POSTMAN_INPUT_FILES.md).
+
 ## 1. Назначение
 
 Direct Web Postman — transport между локальным Harness/Luna agent и ChatGPT Web.

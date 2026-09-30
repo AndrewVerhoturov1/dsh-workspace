@@ -1,6 +1,6 @@
 # Direct Web Postman
 
-`postman/` содержит production transport между локальным Harness agent и ChatGPT Web.
+`postman/` содержит production transport между локальным Harness agent и ChatGPT Web. Входные файлы и временная публикация описаны в [Postman Input Files](POSTMAN_INPUT_FILES.md).
 
 ## Три transport mode
 
@@ -36,7 +36,7 @@ Image MVP:
 → IMAGE_RESULT_DURABLE с resultImage, imageSha256 и метаданными изображения (REQ_A)
 ```
 
-В репозитории нет общего механизма Python-зависимостей. Для декодирования картинки установи `Pillow>=12,<13` в тот же Python, которым запускается `postman.ps1`: `python -m pip install "Pillow>=12,<13"`. Без него image flow завершается `IMAGE_DECODER_UNAVAILABLE` и не выдаёт непроверенный результат. В ZIP допускаются посторонние не-графические файлы, но изображение должно быть ровно одно. REQ_B — внутренний ход без отдельного task commit; ZIP сохраняется как промежуточное доказательство, но не регистрируется как implementation artifact. Первая версия не поддерживает несколько картинок, редактирование, входные attachments и ручной `@PostmanImage --chat`.
+В репозитории нет общего механизма Python-зависимостей. Для декодирования картинки установи `Pillow>=12,<13` в тот же Python, которым запускается `postman.ps1`: `python -m pip install "Pillow>=12,<13"`. Без него image flow завершается `IMAGE_DECODER_UNAVAILABLE` и не выдаёт непроверенный результат. В ZIP допускаются посторонние не-графические файлы, но изображение должно быть ровно одно. REQ_B — внутренний ход без отдельного task commit; ZIP сохраняется как промежуточное доказательство, но не регистрируется как implementation artifact. Первая версия не поддерживает несколько картинок, редактирование, нативную загрузку входных attachments в ChatGPT и ручной `@PostmanImage --chat`; GitHub-descriptors входных файлов поддерживаются отдельно.
 
 Artifact и text режимы поддерживают manual continuation:
 
