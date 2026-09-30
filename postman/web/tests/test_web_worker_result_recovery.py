@@ -339,6 +339,37 @@ class WebWorkerResultRecoveryTests(unittest.TestCase):
         self.assertEqual(recover.call_args.args[2], PROMPT)
         send_reminder.assert_not_called()
 
+    def test_additional_processing_waits_without_connection_reload(self):
+        clock = FakeClock()
+        page = FakePage()
+        calls = 0
+        def processing(_page, _prompt, _url, *, timeout_ms, **_kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                clock.sleep(timeout_ms / 1000.0)
+                return {"ok": False, "code": browser_observer.ADDITIONAL_PROCESSING,
+                        "details": {"phase": browser_observer.ADDITIONAL_PROCESSING}}
+            return completed_observer()
+        with tempfile.TemporaryDirectory() as root:
+            bridge = self.make_bridge(root, clock)
+            with (patch.object(browser_submit, "submit_fresh_prompt", return_value=confirmed_submit(PROMPT)),
+                  patch.object(browser_observer, "connection_interrupted", return_value=(False, {})),
+                  patch.object(browser_observer, "observe_next_assistant", side_effect=processing),
+                  patch.object(browser_observer, "inspect_answer_phase", return_value={"phase": browser_observer.ADDITIONAL_PROCESSING}),
+                  patch.object(browser_recovery, "recover_interrupted_chat") as recover,
+                  patch.object(artifact_detector, "detect_artifact_dom", return_value=found_artifact()),
+                  patch.object(artifact_download, "download_validated_artifact", return_value=durable_result()),
+                  patch.object(reminder_policy, "submit_reminder") as reminder):
+                result = bridge.run_request(REQ, task_url=TASK_URL, prompt=PROMPT,
+                                            expected_filename=FILENAME, expected_request={},
+                                            observer_timeout_ms=60_000, reminder_interval_ms=20_000,
+                                            max_reminders=1, playwright_factory=FakeFactory(page))
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["code"], web_worker_bridge.RESULT_DURABLE)
+        recover.assert_not_called()
+        reminder.assert_not_called()
+
     def test_completed_turn_grace_blocks_due_reminder_until_no_artifact_terminal(self):
         clock = FakeClock()
         page = FakePage()

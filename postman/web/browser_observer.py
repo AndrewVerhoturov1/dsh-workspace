@@ -42,6 +42,11 @@ ASSISTANT_TURN_STARTED = "ASSISTANT_TURN_STARTED"
 ASSISTANT_TURN_STREAMING = "ASSISTANT_TURN_STREAMING"
 ASSISTANT_TURN_COMPLETED = "ASSISTANT_TURN_COMPLETED"
 ASSISTANT_CONNECTION_INTERRUPTED = "ASSISTANT_CONNECTION_INTERRUPTED"
+ADDITIONAL_PROCESSING = "ADDITIONAL_PROCESSING"
+WORKING = "WORKING"
+FINAL_ANSWER_STARTED = "FINAL_ANSWER_STARTED"
+FINAL_ANSWER_COMPLETED = "FINAL_ANSWER_COMPLETED"
+UNKNOWN = "UNKNOWN"
 
 USER_TURN_ANCHOR_MISSING = "USER_TURN_ANCHOR_MISSING"
 CHAT_CORRELATION_LOST = "CHAT_CORRELATION_LOST"
@@ -52,6 +57,7 @@ OBSERVER_ATTACH_FAILED = "OBSERVER_ATTACH_FAILED"
 OBSERVER_INVALID_CONFIG = "OBSERVER_INVALID_CONFIG"
 
 TURN_CONTAINER_SELECTORS = (
+    'main [data-turn-key]',
     '[data-testid^="conversation-turn-"]',
     '[data-message-author-role="user"], [data-message-author-role="assistant"]',
     # Current ChatGPT transcript markup (2026-09) exposes user bubbles and
@@ -64,6 +70,9 @@ GENERATION_CONTROL_SELECTORS = (
     'button[data-testid="stop-generating-button"]',
     'button[aria-label="Stop generating"]',
     'button[aria-label="Stop"]',
+    'button[aria-label="Pause"]',
+    'button[aria-label="Pause generation"]',
+    'button[aria-label="Приостановить"]',
     'button[aria-label="Остановить создание"]',
     'button[aria-label="Остановить"]',
 )
@@ -158,7 +167,7 @@ def infer_turn_role(turn: Any) -> str:
 
     if _get_attribute(turn, "data-user-message-bubble").casefold() == "true":
         return "user"
-    if _get_attribute(turn, "data-chatgpt-selection-message-id"):
+    if _get_attribute(turn, "data-chatgpt-selection-message-id") or _get_attribute(turn, "data-conversation-role").casefold() == "assistant":
         return "assistant"
 
     test_id = _get_attribute(turn, "data-testid").casefold()
@@ -205,6 +214,32 @@ def snapshot_turns(page: Any, *, image_mode: bool = False) -> tuple[list[dict[st
     counting aliases that point at the same DOM nodes.
     """
     for selector in TURN_CONTAINER_SELECTORS:
+        if selector == 'main [data-turn-key]':
+            try:
+                groups = page.locator(selector)
+                turns: list[dict[str, Any]] = []
+                for group_index in range(_locator_count(groups)):
+                    group = groups.nth(group_index)
+                    key = _get_attribute(group, 'data-turn-key')
+                    if not key:
+                        continue
+                    users = group.locator('[data-user-message-bubble="true"]')
+                    if _locator_count(users):
+                        user = users.first
+                        turns.append({'index': len(turns), 'nodeIndex': group_index,
+                                      'role': 'user', 'text': extract_turn_text(user),
+                                      'groupKey': key, 'testId': key})
+                    evidence = group.evaluate(_PHASE_EVIDENCE_JS)
+                    if isinstance(evidence, dict) and (evidence.get('assistantNodeFound') or evidence.get('workingControlFound')):
+                        turns.append({'index': len(turns), 'nodeIndex': group_index,
+                                      'role': 'assistant', 'text': str(evidence.get('finalAnswerText') or ''),
+                                      'groupKey': key, 'testId': key,
+                                      'imageCount': count_turn_images(group) if image_mode else 0})
+                if turns and (not image_mode or any(t.get('role') == 'assistant' and t.get('imageCount', 0) for t in turns)):
+                    return turns, selector
+            except Exception:
+                pass
+            continue
         if image_mode and selector == TURN_CONTAINER_SELECTORS[-1]:
             selector += ', main [data-testid="generated-image-gallery"]'
         try:
@@ -247,7 +282,7 @@ def generation_active(page: Any) -> tuple[bool, str]:
     try:
         semantic = page.get_by_role(
             "button",
-            name=re.compile(r"^(stop|stop generating|остановить|остановить создание)$", re.I),
+            name=re.compile(r"^(stop|stop generating|pause|pause generation|остановить|остановить создание|приостановить)$", re.I),
         )
         if _locator_count(semantic) > 0 and semantic.first.is_visible():
             return True, "role=button[name=stop]"
@@ -258,7 +293,7 @@ def generation_active(page: Any) -> tuple[bool, str]:
 
 _INTERRUPTION_SCOPE_JS = r"""
 (node) => {
-  const turn = node.closest('[data-testid^="conversation-turn-"], [data-message-author-role]');
+  const turn = node.closest('[data-turn-key], [data-testid^="conversation-turn-"], [data-message-author-role], [data-content-search-turn-key], [data-content-search-unit-key], [data-chatgpt-selection-message-id], [data-user-message-bubble]');
   if (turn) return {insideConversation: true, scopeText: ''};
   let current = node;
   for (let depth = 0; current && depth < 5; depth += 1, current = current.parentElement) {
@@ -325,6 +360,169 @@ def connection_interrupted(page: Any) -> tuple[bool, dict[str, Any]]:
                     "source": "visible_connection_interruption_ui",
                 }
     return False, {}
+
+
+_WORKING_TURN_JS = r"""
+(node) => {
+  const scope = node.closest('[data-turn-key], [data-content-search-turn-key], [data-testid^="conversation-turn-"]') || node;
+  return !!scope.querySelector('[data-chatgpt-agent-turn-start], [data-streaming-response-status], [data-testid*="thinking"], [data-testid*="tool"], [data-testid*="reasoning"], [data-state="thinking"], [data-state="running"], [data-stream-phase="commentary"], [data-stream-phase="analysis"]');
+}
+"""
+
+_PHASE_EVIDENCE_JS = r"""
+(node) => {
+  const scope = node.closest('[data-turn-key], [data-content-search-turn-key], [data-testid^="conversation-turn-"]') || node;
+  const modern = scope.hasAttribute('data-turn-key');
+  const activity = '[data-chatgpt-agent-turn-start], [data-streaming-response-status], [data-testid*="activity"], [data-testid*="thinking"], [data-testid*="tool"], [data-testid*="reasoning"], [data-state="thinking"], [data-state="running"], [data-stream-phase="commentary"], [data-stream-phase="analysis"], [data-testid*="cot"], [data-testid*="progress"]';
+  const markdown = '[data-markdown-text-style="assistant-message"], .markdown.prose, [data-testid="assistant-message"]';
+  // The turn-start marker can wrap later final units. Only its progress
+  // descendants (or unclassified commentary inside it) are activity text.
+  const progress = '[data-streaming-response-status], [data-testid*="activity"], [data-testid*="thinking"], [data-testid*="tool"], [data-testid*="reasoning"], [data-state="thinking"], [data-state="running"], [data-stream-phase="commentary"], [data-stream-phase="analysis"], [data-testid*="cot"], [data-testid*="progress"]';
+  const insideActivity = el => !!el.closest(progress) ||
+    (!!el.closest('[data-chatgpt-agent-turn-start]') &&
+     !el.closest('[data-content-search-unit-key$=":assistant"], [data-chatgpt-search-unit-key$=":assistant"]'));
+  const units = [...scope.querySelectorAll('[data-content-search-unit-key$=":assistant"], [data-chatgpt-search-unit-key$=":assistant"], [data-message-author-role="assistant"], [data-chatgpt-selection-message-id]')];
+  if (node.matches('[data-message-author-role="assistant"], [data-chatgpt-selection-message-id]')) units.unshift(node);
+  const unique = [...new Set(units)];
+  const renderedIn = unit => [...unit.querySelectorAll(markdown)].find(m => !insideActivity(m) && !!m.innerText?.trim());
+  const answer = unique.find(unit => {
+    if (insideActivity(unit)) return false;
+    if (modern && !(unit.matches('[data-content-search-unit-key$=":assistant"], [data-chatgpt-search-unit-key$=":assistant"]') &&
+        (unit.matches('[data-conversation-role="assistant"]') || unit.querySelector('[data-conversation-role="assistant"]')))) return false;
+    if (!modern && !(unit.matches('[data-message-author-role="assistant"]') ||
+        (unit.matches('[data-chatgpt-selection-message-id]') && unit.hasAttribute('data-message-model-slug')))) return false;
+    return !!renderedIn(unit);
+  });
+  const rendered = answer && renderedIn(answer);
+  const message = answer || unique[0] || null;
+  const actions = [...scope.querySelectorAll('button[data-testid="copy-turn-action-button"], .turn-action-controls button')];
+  const followsAnswer = b => !!answer && !b.closest(progress) &&
+    !!(answer.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+  const complete = actions.some(followsAnswer) || [...scope.querySelectorAll('button')].some(b =>
+    followsAnswer(b) && /^(оценить ответ|rate response|regenerate|сгенерировать ответ заново|прочитать вслух|read aloud)/i.test(b.getAttribute('aria-label') || ''));
+  const working = insideActivity(node) || !!scope.querySelector(activity);
+  const phaseNode = scope.querySelector('[data-stream-phase]');
+  return {assistantNodeFound: !!message || working, assistantMessageId: message?.getAttribute('data-chatgpt-selection-message-id') || message?.getAttribute('data-message-id') || '', hasModelSlug: !!message?.getAttribute('data-message-model-slug'), modelSlugValue: message?.getAttribute('data-message-model-slug') || '', hasRenderedAnswerContainer: !!rendered, finalUnitProven: !!rendered, finalAnswerText: rendered?.innerText || '', answerContainerSelector: rendered ? (rendered.hasAttribute('data-markdown-text-style') ? '[data-markdown-text-style="assistant-message"]' : '.markdown.prose / [data-testid="assistant-message"]') : '', completionControlFound: !!answer && complete, workingControlFound: working, streamPhase: phaseNode?.getAttribute('data-stream-phase') || ''};
+}
+"""
+
+
+def additional_processing(page: Any) -> tuple[bool, dict[str, Any]]:
+    """Recognize visible system processing UI, never transcript content."""
+    pattern = re.compile(r"наши системы выполняют дополнительную обработку|our systems are (performing|doing) additional processing", re.I)
+    try:
+        candidates = page.get_by_text(pattern)
+        count = min(_locator_count(candidates), 8)
+    except Exception:
+        return False, {}
+    for index in range(count):
+        try:
+            candidate = candidates.nth(index)
+            if not candidate.is_visible():
+                continue
+            scope = candidate.evaluate(_INTERRUPTION_SCOPE_JS)
+            if not isinstance(scope, dict) or scope.get("insideConversation"):
+                continue
+            text = _normalize_ui_text(scope.get("scopeText", ""))
+            if pattern.search(text):
+                return True, {"source": "visible_additional_processing_ui", "matchedText": text[:500]}
+        except Exception:
+            continue  # An unverified scope is never proof of a system banner.
+    return False, {}
+
+
+class AnswerPhaseTracker:
+    """Latch the final answer for one exact user anchor and logical turn."""
+
+    def __init__(self) -> None:
+        self.anchor: tuple[str, str, tuple[str, str | int]] | None = None
+        self.turn_key: str | None = None
+        self.final_answer_latched = False
+
+
+def inspect_answer_phase(page: Any, expected_prompt: str, expected_chat_url: str,
+                         *, tracker: AnswerPhaseTracker | None = None,
+                         image_mode: bool = False) -> dict[str, Any]:
+    """Classify only a correlated turn using structural DOM evidence."""
+    tracker = tracker if tracker is not None else AnswerPhaseTracker()
+    details: dict[str, Any] = {"chatUrl": str(getattr(page, "url", "") or ""),
+                               "phase": UNKNOWN, "phaseSource": "unproved",
+                               "finalAnswerLatched": tracker.final_answer_latched}
+    if details["chatUrl"] != expected_chat_url or not submit.is_bound_chat_url(expected_chat_url):
+        details["phaseSource"] = "chat_correlation_lost"
+        return details
+    turns, selector = snapshot_turns(page, image_mode=image_mode)
+    correlation = correlate_next_assistant(turns, expected_prompt)
+    anchor = correlation.get("anchorIndex")
+    details.update(turnSelector=selector, anchorIndex=anchor,
+                   assistantIndex=correlation.get("assistantIndex"),
+                   correlationCode=correlation["code"], turnCount=len(turns))
+    if anchor is None or correlation["code"] == CHAT_CORRELATION_LOST:
+        return details
+    if any(t.get("role") == "user" and t.get("index", -1) > anchor for t in turns):
+        details["phaseSource"] = "another_user_turn"
+        return details
+    anchor_turn = turns[anchor]
+    group_key = str(anchor_turn.get("groupKey") or "")
+    anchor_key = (expected_chat_url, expected_prompt,
+                  ("group", group_key) if group_key else ("index", anchor))
+    if (group_key and tracker.turn_key and tracker.turn_key != group_key
+            and tracker.anchor and tracker.anchor[:2] == anchor_key[:2]):
+        details["phaseSource"] = "logical_turn_changed"
+        return details
+    if tracker.anchor != anchor_key:
+        tracker.anchor = anchor_key
+        tracker.turn_key = None
+        tracker.final_answer_latched = False
+    if group_key:
+        if tracker.turn_key and tracker.turn_key != group_key:
+            details["phaseSource"] = "logical_turn_changed"
+            return details
+        tracker.turn_key = group_key
+    details["logicalTurnKey"] = tracker.turn_key or ""
+    processing, processing_details = additional_processing(page)
+    details["additionalProcessingDetected"] = processing
+    if processing:
+        details.update(phase=ADDITIONAL_PROCESSING, phaseSource="system_banner", **processing_details)
+        details["finalAnswerLatched"] = tracker.final_answer_latched
+        return details
+    active, control = generation_active(page)
+    details.update(generationActive=active, generationControl=control)
+    if not correlation["ok"]:
+        if tracker.final_answer_latched and correlation["code"] == ASSISTANT_NOT_STARTED:
+            details.update(phase=FINAL_ANSWER_STARTED, phaseSource="final_answer_latch", finalAnswerLatched=True)
+            return details
+        if correlation["code"] == ASSISTANT_NOT_STARTED and anchor == len(turns) - 1:
+            try:
+                working = page.locator(selector).nth(anchor_turn.get("nodeIndex", anchor)).evaluate(_WORKING_TURN_JS)
+            except Exception:
+                working = False
+            if working and not tracker.final_answer_latched:
+                details.update(phase=WORKING, phaseSource="anchored_working_ui")
+        return details
+    index = correlation["assistantIndex"]
+    assistant_turn = turns[index]
+    if group_key and assistant_turn.get("groupKey") != group_key:
+        details["phaseSource"] = "assistant_outside_exact_turn_group"
+        return details
+    try:
+        evidence = page.locator(selector).nth(assistant_turn.get("nodeIndex", index)).evaluate(_PHASE_EVIDENCE_JS)
+    except Exception:
+        evidence = {}
+    if not isinstance(evidence, dict):
+        evidence = {}
+    details.update(evidence)
+    message_id = str(evidence.get("assistantMessageId") or "")
+    if tracker.final_answer_latched:
+        details.update(phase=FINAL_ANSWER_STARTED, phaseSource="final_answer_latch", finalAnswerLatched=True)
+    elif evidence.get("finalUnitProven"):
+        tracker.final_answer_latched = True
+        details.update(phase=FINAL_ANSWER_STARTED, phaseSource="separate_final_assistant_unit", finalAnswerLatched=True)
+    elif evidence.get("workingControlFound") and evidence.get("assistantNodeFound"):
+        details.update(phase=WORKING, phaseSource="correlated_activity_ui")
+    if tracker.final_answer_latched and details["phase"] != UNKNOWN and evidence.get("finalUnitProven") and evidence.get("completionControlFound") and not active:
+        details.update(phase=FINAL_ANSWER_COMPLETED, phaseSource="response_actions_and_inactive_control")
+    return details
 
 
 def find_user_anchor(turns: list[dict[str, Any]], expected_prompt: str) -> int | None:
@@ -497,6 +695,7 @@ def observe_next_assistant(
     stable_ms: int = DEFAULT_STABLE_MS,
     poll_ms: int = DEFAULT_POLL_MS,
     image_mode: bool = False,
+    phase_tracker: AnswerPhaseTracker | None = None,
     sleep: Callable[[float], None] = time.sleep,
     monotonic: Callable[[], float] = time.monotonic,
 ) -> dict[str, Any]:
@@ -516,6 +715,7 @@ def observe_next_assistant(
         )
 
     tracker = AssistantLifecycleTracker(stable_ms=stable_ms)
+    phases = phase_tracker if phase_tracker is not None else AnswerPhaseTracker()
     deadline = monotonic() + max(timeout_ms, 0) / 1000.0
     last_code = ASSISTANT_NOT_STARTED
     last_details: dict[str, Any] = {}
@@ -549,6 +749,14 @@ def observe_next_assistant(
                 },
             )
 
+        phase = inspect_answer_phase(page, expected_prompt, expected_chat_url, tracker=phases, image_mode=image_mode)
+        if phase["phase"] == ADDITIONAL_PROCESSING:
+            last_code = ADDITIONAL_PROCESSING
+            last_details = phase
+            if monotonic() >= deadline:
+                return _result(ADDITIONAL_PROCESSING, ok=False, transitions=tracker.transitions, recoverable=True, details=phase)
+            sleep(min(max(poll_ms, 1) / 1000.0, max(deadline - monotonic(), 0.0)))
+            continue
         turns, selector = snapshot_turns(page, image_mode=image_mode)
         correlation = correlate_next_assistant(turns, expected_prompt)
         last_code = correlation["code"]
@@ -579,7 +787,8 @@ def observe_next_assistant(
 
         if correlation["ok"]:
             assistant = correlation["assistant"]
-            identity = (correlation["assistantIndex"], assistant.get("testId", ""))
+            identity = (("group", assistant["groupKey"]) if assistant.get("groupKey")
+                        else (correlation["assistantIndex"], assistant.get("testId", "")))
             if assistant_identity is None:
                 assistant_identity = identity
             elif identity != assistant_identity:
@@ -593,11 +802,13 @@ def observe_next_assistant(
                 )
 
             active, control = generation_active(page)
-            text = _normalize_text(assistant.get("text", ""))
+            text = _normalize_text((phase.get("finalAnswerText", assistant.get("text", ""))
+                                    if phase["phase"] in {FINAL_ANSWER_STARTED, FINAL_ANSWER_COMPLETED} else "")
+                                   if not image_mode else assistant.get("text", ""))
             now_ms = monotonic() * 1000.0
             images = int(assistant.get("imageCount", 0)) if image_mode else 0
             complete = tracker.observe(
-                text, generating=active, now_ms=now_ms,
+                text, generating=active or (not image_mode and phase["phase"] not in {FINAL_ANSWER_STARTED, FINAL_ANSWER_COMPLETED}), now_ms=now_ms,
                 image_count=images, image_mode=image_mode,
             )
             if image_mode:
@@ -610,9 +821,13 @@ def observe_next_assistant(
                     "generationActive": active,
                     "generationControl": control,
                     "streamingObserved": tracker.streaming,
+                    "answerPhase": phase,
                 }
             )
             if complete:
+                if not image_mode and phase["phase"] == FINAL_ANSWER_STARTED:
+                    phase = {**phase, "phase": FINAL_ANSWER_COMPLETED, "phaseSource": "inactive_stable_final_fallback"}
+                    last_details["answerPhase"] = phase
                 return _result(
                     ASSISTANT_TURN_COMPLETED,
                     ok=True,

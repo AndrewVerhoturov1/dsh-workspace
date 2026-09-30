@@ -454,6 +454,9 @@ class WebWorkerBridge:
                 deadline = started_at + observer_timeout_ms / 1000.0
                 reminder_records: list[dict[str, Any]] = []
                 reminder_index = 0
+                next_reminder_retry = 0.0
+                phase_tracker = browser_observer.AnswerPhaseTracker()
+                last_answer_phase: dict[str, Any] = {}
                 followup_reminders = max_reminders
                 if image_stage:
                     max_reminders = 0
@@ -500,6 +503,7 @@ class WebWorkerBridge:
                         "browserRecoveryPolicy": recovery_policy_record,
                         "reminders": reminder_records,
                         "lastObserverCode": last_observer_code,
+                        "answerPhase": last_answer_phase,
                         "lastArtifactCode": last_artifact_code,
                     }
                     if last_recovery is not None:
@@ -507,7 +511,7 @@ class WebWorkerBridge:
                     self._write_state(request, WAITING_ASSISTANT, **fields)
 
                 def observe_watch(watch: dict[str, Any], timeout_for_observer_ms: int) -> dict[str, Any]:
-                    nonlocal last_observer_code
+                    nonlocal last_observer_code, last_answer_phase
                     if watch.get("artifactRejected"):
                         return {"kind": "no_result"}
                     if timeout_for_observer_ms <= 0:
@@ -520,7 +524,7 @@ class WebWorkerBridge:
                         stable_ms=stable_ms,
                         sleep=self.sleep,
                         monotonic=self.monotonic,
-                        **({"image_mode": True} if image_stage else {}),
+                        **({"image_mode": True} if image_stage else {"phase_tracker": phase_tracker if watch is watched_turns[-1] else watch.setdefault("phaseTracker", browser_observer.AnswerPhaseTracker())}),
                     )
                     completed = _attach_submit_proof(
                         completed,
@@ -528,6 +532,11 @@ class WebWorkerBridge:
                         submitted=watch["submit"],
                     )
                     last_observer_code = str(completed.get("code", ""))
+                    observed_details = completed.get("details") if isinstance(completed.get("details"), dict) else {}
+                    if isinstance(observed_details.get("answerPhase"), dict):
+                        last_answer_phase = observed_details["answerPhase"]
+                    elif completed.get("code") == browser_observer.ADDITIONAL_PROCESSING:
+                        last_answer_phase = observed_details
                     if completed.get("code") == browser_observer.ASSISTANT_CONNECTION_INTERRUPTED:
                         return {"kind": "interrupted", "details": completed}
                     if completed.get("ok"):
@@ -535,7 +544,7 @@ class WebWorkerBridge:
                         watch["everProved"] = True
                         watch["noArtifactSince"] = None
                         return {"kind": "proof"}
-                    if completed.get("code") in _NONTERMINAL_OBSERVER_CODES:
+                    if completed.get("code") in _NONTERMINAL_OBSERVER_CODES or completed.get("code") == browser_observer.ADDITIONAL_PROCESSING:
                         return {"kind": "pending"}
                     return {
                         "kind": "fatal",
@@ -624,6 +633,7 @@ class WebWorkerBridge:
                         expected_request = packaging_expected
                         max_reminders = followup_reminders
                         reminder_index = 0
+                        phase_tracker = browser_observer.AnswerPhaseTracker()
                         started_at = self.monotonic()
                         deadline = started_at + observer_timeout_ms / 1000.0
                         next_result_recheck = started_at + _RESULT_RECHECK_INTERVAL_MS / 1000.0
@@ -906,13 +916,13 @@ class WebWorkerBridge:
 
                     next_due = None
                     if reminder_index < max_reminders:
-                        next_due = started_at + (
+                        next_due = max(next_reminder_retry, started_at + (
                             reminder_policy.scheduled_elapsed_ms(
                                 reminder_index + 1,
                                 interval_ms=reminder_interval_ms,
                             )
                             / 1000.0
-                        )
+                        ))
 
                     latest_watch = watched_turns[-1]
                     latest_observed_this_cycle = False
@@ -959,7 +969,21 @@ class WebWorkerBridge:
                             return pre_reminder["result"]
                         if pre_reminder["kind"] == "interrupted":
                             continue
-
+                        grace_deadlines = [float(w["noArtifactSince"]) + _RESULT_RECHECK_INTERVAL_MS / 1000.0
+                                           for w in watched_turns if w.get("proof") is not None and w.get("noArtifactSince") is not None and not w.get("artifactRejected")]
+                        if grace_deadlines:
+                            self.sleep(min(max(min(grace_deadlines) - self.monotonic(), 0.0), max(deadline - self.monotonic(), 0.0)))
+                            continue
+                        last_answer_phase = browser_observer.inspect_answer_phase(
+                            page, str(watched_turns[-1]["prompt"]), chat_url, tracker=phase_tracker)
+                        waiting_state()
+                        if last_answer_phase["phase"] != browser_observer.WORKING:
+                            next_reminder_retry = self.monotonic() + browser_observer.DEFAULT_POLL_MS / 1000.0
+                            if last_answer_phase["phase"] in {browser_observer.FINAL_ANSWER_STARTED, browser_observer.FINAL_ANSWER_COMPLETED}:
+                                next_reminder_retry = deadline
+                            else:
+                                self.sleep(min(browser_observer.DEFAULT_POLL_MS / 1000.0, max(deadline - self.monotonic(), 0.0)))
+                            continue
                         no_artifact_deadlines = [
                             float(watch["noArtifactSince"]) + _RESULT_RECHECK_INTERVAL_MS / 1000.0
                             for watch in watched_turns
@@ -1009,6 +1033,9 @@ class WebWorkerBridge:
                             reminder_prompt,
                             chat_url,
                             timeout_ms=timeout_ms,
+                            sleep=self.sleep, monotonic=self.monotonic,
+                            anchor_prompt=str(watched_turns[-1]["prompt"]),
+                            phase_tracker=phase_tracker,
                         )
                         finished_elapsed = max(0, int((self.monotonic() - started_at) * 1000.0))
                         reminder_records.append(
@@ -1036,6 +1063,8 @@ class WebWorkerBridge:
                             )
                         if send_state == browser_submit.SEND_PROVEN_SENT:
                             reminder_index += 1
+                            next_reminder_retry = 0.0
+                            phase_tracker = browser_observer.AnswerPhaseTracker()
                             watched_turns.append(
                                 {
                                     "prompt": reminder_prompt,
@@ -1053,7 +1082,9 @@ class WebWorkerBridge:
                             send_state == browser_submit.SEND_PROVEN_NOT_SENT
                             and reminder_submit.get("details", {}).get("unsentPromptCleared") is True
                         ):
-                            reminder_index += 1
+                            phase_after_attempt = reminder_submit.get("details", {}).get("answerPhase", {}).get("phase")
+                            next_reminder_retry = (deadline if phase_after_attempt in {browser_observer.FINAL_ANSWER_STARTED, browser_observer.FINAL_ANSWER_COMPLETED}
+                                                   else self.monotonic() + browser_observer.DEFAULT_POLL_MS / 1000.0)
                             next_result_recheck = self.monotonic() + _RESULT_RECHECK_INTERVAL_MS / 1000.0
                             waiting_state()
                             continue

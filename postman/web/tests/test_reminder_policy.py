@@ -10,6 +10,7 @@ if str(WEB_DIR) not in sys.path:
     sys.path.insert(0, str(WEB_DIR))
 
 import reminder_policy
+import browser_observer
 
 
 REQ = "REQ_20260920T120000Z_1234"
@@ -137,10 +138,10 @@ class ReminderPolicyTests(unittest.TestCase):
             ),
         ):
             result = reminder_policy._req_anchor_snapshot(Page(), prompt)
-        self.assertFalse(result["safe"])
-        self.assertEqual(result["reason"], "assistant_turn_present")
+        self.assertTrue(result["safe"])
+        self.assertEqual(result["fingerprint"]["anchorIndex"], 0)
 
-    def test_active_generation_suppresses_before_composer_readiness(self):
+    def test_unknown_phase_suppresses_before_composer_readiness(self):
         prompt = reminder_policy.build_reminder_prompt(REQ, 1)
         with (
             patch.object(reminder_policy.submit, "same_conversation_url", return_value=True),
@@ -154,7 +155,7 @@ class ReminderPolicyTests(unittest.TestCase):
         ):
             result = reminder_policy.submit_reminder(Page(), prompt, CHAT_URL)
 
-        self.assertEqual(result["code"], reminder_policy.REMINDER_SUPPRESSED_GENERATION_ACTIVE)
+        self.assertEqual(result["code"], reminder_policy.REMINDER_PHASE_PENDING)
         self.assertTrue(result["details"]["composerUntouched"])
         self.assertTrue(result["details"]["unsentPromptCleared"])
         prepare.assert_not_called()
@@ -165,6 +166,7 @@ class ReminderPolicyTests(unittest.TestCase):
         with (
             patch.object(reminder_policy.submit, "same_conversation_url", return_value=True),
             patch.object(reminder_policy.browser_observer, "generation_active", return_value=(False, "")),
+            patch.object(reminder_policy.browser_observer, "inspect_answer_phase", return_value={"phase": browser_observer.FINAL_ANSWER_STARTED, "finalAnswerLatched": True}),
             patch.object(reminder_policy, "_req_anchor_snapshot", return_value=assistant_anchor()),
             patch.object(reminder_policy, "prepare_same_chat") as prepare,
             patch.object(reminder_policy.submit, "insert_prompt") as insert,
@@ -183,6 +185,7 @@ class ReminderPolicyTests(unittest.TestCase):
         with (
             patch.object(reminder_policy.submit, "same_conversation_url", return_value=True),
             patch.object(reminder_policy.browser_observer, "generation_active", return_value=(False, "")),
+            patch.object(reminder_policy.browser_observer, "inspect_answer_phase", return_value={"phase": browser_observer.WORKING}),
             patch.object(reminder_policy, "_req_anchor_snapshot", return_value=safe_anchor()),
             patch.object(
                 reminder_policy,
@@ -206,6 +209,7 @@ class ReminderPolicyTests(unittest.TestCase):
         anchor,
         send_button,
         clear=True,
+        phases=None,
         send_window_ms=5_000,
         poll_ms=1_000,
     ):
@@ -214,6 +218,7 @@ class ReminderPolicyTests(unittest.TestCase):
         with (
             patch.object(reminder_policy.submit, "same_conversation_url", return_value=True),
             patch.object(reminder_policy.browser_observer, "generation_active", side_effect=generation),
+            patch.object(reminder_policy.browser_observer, "inspect_answer_phase", side_effect=phases or (lambda *_args, **_kw: {"phase": browser_observer.WORKING, "finalAnswerLatched": False})),
             patch.object(reminder_policy, "_req_anchor_snapshot", side_effect=anchor),
             patch.object(
                 reminder_policy,
@@ -250,6 +255,7 @@ class ReminderPolicyTests(unittest.TestCase):
                 poll_ms=poll_ms,
                 sleep=clock.sleep,
                 monotonic=clock.monotonic,
+                uniform=lambda _low, _high: 0.0,
             )
         return result, clear_prompt, click_ready
 
@@ -264,7 +270,7 @@ class ReminderPolicyTests(unittest.TestCase):
 
         self.assertEqual(result["code"], reminder_policy.REMINDER_SUPPRESSED_SEND_NOT_READY)
         self.assertEqual(clock.value, 5.0)
-        self.assertEqual(clock.sleeps, [1.0, 1.0, 1.0, 1.0, 1.0])
+        self.assertEqual(clock.sleeps, [0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0])
         self.assertEqual(result["details"]["reminderPollMs"], 1_000)
         self.assertEqual(result["details"]["reminderSendWindowMs"], 5_000)
         self.assertTrue(result["details"]["unsentPromptCleared"])
@@ -284,9 +290,9 @@ class ReminderPolicyTests(unittest.TestCase):
             send_button=lambda _page: (None, None),
         )
 
-        self.assertEqual(result["code"], reminder_policy.REMINDER_SUPPRESSED_GENERATION_ACTIVE)
-        self.assertEqual(clock.value, 1.0)
-        self.assertEqual(clock.sleeps, [1.0])
+        self.assertEqual(result["code"], reminder_policy.REMINDER_SUPPRESSED_SEND_NOT_READY)
+        self.assertEqual(clock.value, 5.0)
+        self.assertEqual(clock.sleeps, [0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0])
         self.assertTrue(result["details"]["unsentPromptCleared"])
         clear_prompt.assert_called_once()
         click_ready.assert_not_called()
@@ -323,7 +329,7 @@ class ReminderPolicyTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["code"], reminder_policy.submit.PROMPT_SEND_CONFIRMED)
         self.assertEqual(result["details"]["reminderPollCount"], 1)
-        self.assertEqual(clock.sleeps, [])
+        self.assertEqual(clock.sleeps, [0.0, 0.0])
         clear_prompt.assert_not_called()
         click_ready.assert_called_once()
 
@@ -348,10 +354,58 @@ class ReminderPolicyTests(unittest.TestCase):
             send_button=lambda _page: (button, 'button[data-testid="send-button"]'),
         )
 
-        self.assertEqual(result["code"], reminder_policy.REMINDER_SUPPRESSED_GENERATION_ACTIVE)
-        self.assertEqual(result["details"]["suppressionPhase"], "pre_click")
-        clear_prompt.assert_called_once()
-        click_ready.assert_not_called()
+        self.assertEqual(result["code"], reminder_policy.submit.PROMPT_SEND_CONFIRMED)
+        clear_prompt.assert_not_called()
+        click_ready.assert_called_once()
+
+    def test_working_with_pause_clicks_after_two_injected_pauses(self):
+        clock = FakeClock()
+        button = Button()
+        result, cleared, clicked = self._run_inserted_window(
+            clock=clock, generation=lambda _page: (True, "pause"),
+            anchor=lambda _page, _prompt: safe_anchor(),
+            send_button=lambda _page: (button, "send"))
+        self.assertTrue(result["ok"])
+        self.assertEqual(clock.sleeps, [0.0, 0.0])
+        cleared.assert_not_called()
+        clicked.assert_called_once()
+
+    def test_final_after_insert_clears_exact_reminder_without_click(self):
+        clock = FakeClock()
+        calls = 0
+        def phases(*_args, **_kwargs):
+            nonlocal calls
+            calls += 1
+            return {"phase": browser_observer.WORKING if calls <= 2 else browser_observer.FINAL_ANSWER_STARTED,
+                    "finalAnswerLatched": calls > 2}
+        result, cleared, clicked = self._run_inserted_window(
+            clock=clock, generation=lambda _page: (True, "pause"),
+            anchor=lambda _page, _prompt: safe_anchor(),
+            send_button=lambda _page: (Button(), "send"), phases=phases)
+        self.assertEqual(result["code"], reminder_policy.REMINDER_SUPPRESSED_ASSISTANT_ACTIVITY)
+        self.assertTrue(result["details"]["unsentPromptCleared"])
+        cleared.assert_called_once()
+        clicked.assert_not_called()
+
+    def test_final_during_pause_before_insert_does_not_insert(self):
+        clock = FakeClock()
+        prompt = reminder_policy.build_reminder_prompt(REQ, 1)
+        calls = 0
+        def phases(*_args, **_kwargs):
+            nonlocal calls
+            calls += 1
+            return {"phase": browser_observer.WORKING if calls == 1 else browser_observer.FINAL_ANSWER_STARTED,
+                    "finalAnswerLatched": calls > 1}
+        with (patch.object(reminder_policy.submit, "same_conversation_url", return_value=True),
+              patch.object(reminder_policy.browser_observer, "inspect_answer_phase", side_effect=phases),
+              patch.object(reminder_policy, "_req_anchor_snapshot", return_value=safe_anchor()),
+              patch.object(reminder_policy, "prepare_same_chat", return_value={"ok": True, "composer": object(), "details": {}}),
+              patch.object(reminder_policy.submit, "insert_prompt") as insert):
+            result = reminder_policy.submit_reminder(Page(), prompt, CHAT_URL, sleep=clock.sleep,
+                                                       monotonic=clock.monotonic, uniform=lambda _a, _b: 3.0)
+        self.assertEqual(result["code"], reminder_policy.REMINDER_SUPPRESSED_ASSISTANT_ACTIVITY)
+        self.assertEqual(clock.sleeps, [3.0])
+        insert.assert_not_called()
 
     def test_cleanup_failure_after_window_expiry_stays_fail_closed(self):
         clock = FakeClock()
@@ -373,16 +427,14 @@ class ReminderPolicyTests(unittest.TestCase):
         clock = FakeClock()
         prompt = reminder_policy.build_reminder_prompt(REQ, 1)
         composer = object()
-        same_calls = 0
-
-        def same_conversation(_left, _right):
-            nonlocal same_calls
-            same_calls += 1
-            return same_calls < 2
+        page = Page()
+        def insert_then_navigate(*_args, **_kwargs):
+            page.url = CHAT_URL + "/unexpected"
+            return {"ok": True, "code": reminder_policy.submit.PROMPT_INSERTED, "details": {}}
 
         with (
-            patch.object(reminder_policy.submit, "same_conversation_url", side_effect=same_conversation),
             patch.object(reminder_policy.browser_observer, "generation_active", return_value=(False, "")),
+            patch.object(reminder_policy.browser_observer, "inspect_answer_phase", return_value={"phase": browser_observer.WORKING}),
             patch.object(reminder_policy, "_req_anchor_snapshot", return_value=safe_anchor()),
             patch.object(
                 reminder_policy,
@@ -397,12 +449,12 @@ class ReminderPolicyTests(unittest.TestCase):
             patch.object(
                 reminder_policy.submit,
                 "insert_prompt",
-                return_value={"ok": True, "code": reminder_policy.submit.PROMPT_INSERTED, "details": {}},
+                side_effect=insert_then_navigate,
             ),
             patch.object(reminder_policy, "_clear_unsent_prompt") as clear_prompt,
         ):
             result = reminder_policy.submit_reminder(
-                Page(), prompt, CHAT_URL, sleep=clock.sleep, monotonic=clock.monotonic
+                page, prompt, CHAT_URL, sleep=clock.sleep, monotonic=clock.monotonic, uniform=lambda _a, _b: 0.0
             )
 
         self.assertEqual(result["code"], reminder_policy.REMINDER_SEND_GUARD_FAILED)
