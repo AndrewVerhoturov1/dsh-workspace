@@ -216,6 +216,12 @@ def _p5_identity(proof: Any) -> dict[str, Any] | None:
     assistant_index = details.get("assistantIndex")
     if isinstance(assistant_index, bool) or not isinstance(assistant_index, int) or assistant_index < 0:
         return None
+    turn_node_index = details.get("turnNodeIndex", assistant_index)
+    turn_key = details.get("turnKey", "")
+    if (isinstance(turn_node_index, bool) or not isinstance(turn_node_index, int)
+            or turn_node_index < 0 or not isinstance(turn_key, str)
+            or (details["turnSelector"] == "main [data-turn-key]" and not turn_key)):
+        return None
     dom_path = attachment.get("path")
     if not isinstance(dom_path, str) or not _DOM_PATH_RE.fullmatch(dom_path):
         return None
@@ -227,6 +233,8 @@ def _p5_identity(proof: Any) -> dict[str, Any] | None:
         "expectedFilename": details["expectedFilename"],
         "chatUrl": details["chatUrl"],
         "assistantIndex": assistant_index,
+        "turnNodeIndex": turn_node_index,
+        "turnKey": turn_key,
         "assistantTextSha256": details["assistantTextSha256"],
         "turnSelector": details["turnSelector"],
         "attachmentPath": dom_path,
@@ -239,7 +247,9 @@ def _same_p5_identity(first: dict[str, Any], second: dict[str, Any]) -> bool:
 
 def _resolve_control(page: Any, proof_identity: dict[str, Any]) -> Any:
     selector = proof_identity["turnSelector"]
-    turn = page.locator(selector).nth(proof_identity["assistantIndex"])
+    turn = page.locator(selector).nth(proof_identity["turnNodeIndex"])
+    if proof_identity["turnKey"] and turn.get_attribute("data-turn-key") != proof_identity["turnKey"]:
+        raise ValueError("assistant turn group changed before download")
     control = turn
     segments = proof_identity["attachmentPath"].split("/")
     if len(segments) > 64:
