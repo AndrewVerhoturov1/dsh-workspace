@@ -144,7 +144,8 @@ class FakeCollection:
 
 
 class FakeTurn(FakeControl):
-    pass
+    def get_attribute(self, name):
+        return getattr(self.page, "turn_key", None) if name == "data-turn-key" else None
 
 
 class FakeDownload:
@@ -330,6 +331,24 @@ class ArtifactDownloadTests(unittest.TestCase):
             result, _, _ = self.run_download(page=page, root=root)
         self.assertEqual(result["code"], module.RESULT_STORE_CONFLICT)
         self.assertEqual(page.clicks, 0)
+
+    def test_grouped_turn_identity_uses_dom_index_and_rejects_change(self):
+        proof = p5_proof(assistantIndex=1, turnNodeIndex=0, turnKey="group-1",
+                         turnSelector="main [data-turn-key]")
+        identity = module._p5_identity(proof)
+        self.assertIsNotNone(identity)
+        page = FakePage()
+        page.turn_key = "group-1"
+        class StrictCollection:
+            def nth(self, index):
+                if index != 0:
+                    raise AssertionError("logical message index used as DOM index")
+                return page.turn
+        page.locator = lambda selector: StrictCollection()
+        self.assertIs(module._resolve_control(page, identity), page.turn)
+        page.turn_key = "other-group"
+        with self.assertRaisesRegex(ValueError, "group changed"):
+            module._resolve_control(page, identity)
 
     def test_exactly_one_expect_download_and_one_click(self):
         result, page, _ = self.run_download()

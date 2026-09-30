@@ -109,6 +109,9 @@ class FakeTurn:
     def evaluate(self, script, args):
         return self.proof
 
+    def get_attribute(self, name):
+        return getattr(self, "group_key", None) if name == "data-turn-key" else None
+
 
 class FakeTurnCollection:
     def __init__(self, turns):
@@ -356,6 +359,29 @@ class ArtifactDetectorTests(unittest.TestCase):
     def test_generation_restarted_after_completion_fails_closed(self):
         page = FakePage(prompt=self.PROMPT, assistant_text=envelope(self.REQ, self.FILENAME), generating=True)
         self.assertEqual(self.detect(page)["code"], detector.ARTIFACT_TURN_NOT_COMPLETED)
+
+    def test_grouped_user_and_assistant_share_one_dom_node(self):
+        page = FakePage(prompt=self.PROMPT, assistant_text=envelope(self.REQ, self.FILENAME))
+        page.turn_data[0].update(nodeIndex=0, groupKey="group-1")
+        page.turn_data[1].update(nodeIndex=0, groupKey="group-1")
+        page.turn_locators = [FakeTurn(dom_proof(candidate()))]
+        page.turn_locators[0].group_key = "group-1"
+        page.snapshot_turns = lambda: (list(page.turn_data), "main [data-turn-key]")
+        page.locator = lambda selector: FakeTurnCollection(page.turn_locators)
+        result = self.detect(page)
+        self.assertEqual(result["code"], detector.ARTIFACT_DOM_CONFIRMED)
+        self.assertEqual(result["details"]["assistantIndex"], 1)
+        self.assertEqual(result["details"]["turnNodeIndex"], 0)
+        self.assertEqual(result["details"]["turnKey"], "group-1")
+
+    def test_grouped_turn_key_change_rejects_stale_control(self):
+        page = FakePage(prompt=self.PROMPT, assistant_text=envelope(self.REQ, self.FILENAME))
+        page.turn_data[1].update(nodeIndex=0, groupKey="group-1")
+        page.turn_locators = [FakeTurn(dom_proof(candidate()))]
+        page.turn_locators[0].group_key = "different-group"
+        page.snapshot_turns = lambda: (list(page.turn_data), "main [data-turn-key]")
+        page.locator = lambda selector: FakeTurnCollection(page.turn_locators)
+        self.assertEqual(self.detect(page)["code"], detector.ARTIFACT_TURN_IDENTITY_MISMATCH)
 
     def test_valid_full_proof_confirms_dom_without_download(self):
         page = FakePage(prompt=self.PROMPT, assistant_text=envelope(self.REQ, self.FILENAME))

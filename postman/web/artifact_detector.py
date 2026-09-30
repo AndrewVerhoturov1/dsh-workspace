@@ -540,8 +540,20 @@ def detect_artifact_dom(
             details={"reason": "turn_selector_missing"},
         )
 
+    # Grouped ChatGPT turns expose user and assistant as two logical entries
+    # inside one [data-turn-key] DOM node. Never use the logical index as a
+    # locator index; preserve the group identity for the download recheck.
+    turn_node_index = assistant.get("nodeIndex", expected_index)
+    turn_key = str(assistant.get("groupKey") or "")
+    if (isinstance(turn_node_index, bool) or not isinstance(turn_node_index, int)
+            or turn_node_index < 0 or (selector == "main [data-turn-key]" and not turn_key)):
+        return _result(ARTIFACT_TURN_IDENTITY_MISMATCH, ok=False,
+                       details={"reason": "assistant_dom_identity_invalid"})
     try:
-        turn = page.locator(selector).nth(expected_index)
+        turn = page.locator(selector).nth(turn_node_index)
+        if turn_key and turn.get_attribute("data-turn-key") != turn_key:
+            return _result(ARTIFACT_TURN_IDENTITY_MISMATCH, ok=False,
+                           details={"reason": "assistant_turn_group_changed"})
     except Exception as exc:
         return _result(
             ARTIFACT_CHAT_CORRELATION_LOST,
@@ -583,6 +595,8 @@ def detect_artifact_dom(
             "expectedFilename": expected_filename,
             "chatUrl": expected_chat_url,
             "assistantIndex": expected_index,
+            "turnNodeIndex": turn_node_index,
+            "turnKey": turn_key,
             "assistantTextSha256": current_sha,
             "turnSelector": selector,
             "envelope": envelope["details"],
