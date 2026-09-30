@@ -11,7 +11,7 @@ import { sharedPostmanTaskRegistry, closeSharedPostmanTaskRegistry } from './pos
 import {
   POSTMAN_BRIDGE_TOOL_ALLOWLIST, POSTMAN_BRIDGE_TOOL_NAME, POSTMAN_BRIDGE_STATUS_TOOL_NAME, POSTMAN_CHILD_NOTIFY_TOOL_NAME, POSTMAN_TASK_PREPARE_TOOL_NAME, POSTMAN_TASK_RESTORE_TOOL_NAME, POSTMAN_YIELD_TOOL_NAME,
   createPostmanBridgeBoundaryManager, isTopLevelPostmanSupervisor, isTopLevelPostmanPtcLeader,
-  postmanBridgeCallerAllowed, postmanBridgeRestrictionForAgent,
+  postmanBridgeCallerAllowed, postmanBridgeRestrictionForAgent, postmanPtcDirectCallGuard,
 } from './postman-bridge-core.js'
 
 export const name = 'dsh-postman-harness-bridge'
@@ -186,6 +186,8 @@ export async function apply(ctx) {
     if (isTopLevelPostmanPtcLeader(agent)) return { profile: leaderProfile, role: 'leader' }
     return ownsPtcWorker(agent) ? { profile: WORKER_MUTATION_PROFILE, role: 'worker' } : null
   } })
+  // Guard model-direct operations, not ordinary visibility: nested PTC calls carry the outer token.
+  ctx.tools.guard(exec => postmanPtcDirectCallGuard(exec, id => ctx.agents.get(id)))
   ctx.tools.register(ptc.tool)
   ctx.tools.register(createPostmanTaskPrepareTool(ctx, contexts))
   ctx.tools.register(createPostmanBridgeTool(ctx, jobs, postmanTaskContexts))

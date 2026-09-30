@@ -19,6 +19,8 @@ import {
   POSTMAN_PTC_TOOL_NAME,
   POSTMAN_LEADER_TOOL_ALLOWLIST,
   POSTMAN_LEADER_ONLY_TOOL_NAMES,
+  POSTMAN_PTC_ONLY_LEADER_TOOLS,
+  postmanPtcDirectCallGuard,
   buildPostmanBridgeStartRequest,
   createPostmanBridgeBoundaryManager,
   isTopLevelPostmanLeader,
@@ -232,6 +234,25 @@ test('bridge authorization and visibility are limited to exact top-level Postman
   }
 })
 
+test('direct PTC guard applies only to exact top-level pilot and never nested dispatch', () => {
+  const pilot = parent({agentPreset:'postman-leader-ptc'})
+  const production = parent({agentPreset:'postman-leader'})
+  const delegated = parent({agentPreset:'postman-leader-ptc',origin:'subagent',delegationDepth:1})
+  const current = new Map([[pilot.id,pilot]])
+  const check = (agent,name,parentToken) => postmanPtcDirectCallGuard({agent,name,parent:parentToken}, id=>current.get(id))
+  assert.equal(POSTMAN_PTC_ONLY_LEADER_TOOLS.length,15)
+  for (const name of POSTMAN_PTC_ONLY_LEADER_TOOLS) {
+    assert.match(check(pilot,name),/POSTMAN_PTC_DIRECT_CALL_REJECTED/)
+    assert.equal(check(pilot,name,{}),undefined)
+    assert.equal(check(production,name),undefined)
+    assert.equal(check(delegated,name),undefined)
+  }
+  for (const name of ['ptc_execute','skill','ask_user_question','exit_plan_mode','read_image','postman_yield'])
+    assert.equal(check(pilot,name),undefined)
+  current.set(pilot.id,{...pilot})
+  assert.equal(check(pilot,'postman_worker'),undefined)
+})
+
 test('production and pilot predicates keep exact trusted top-level identities separate', () => {
   const cases = [
     ['production', parent({ agentPreset: 'postman-leader' }), true, false],
@@ -353,9 +374,10 @@ test('package and composition expose bridge entrypoint and leader preset', () =>
     'tool-subagent-list-agents', 'tool-subagent', 'tool-subagent-fork',
     'workflow-worker-thread', 'tool-workflow', 'tool-ralph', 'tool-ask-user',
     'tool-todo', 'tool-web'])
-  assert.equal(pilotPreset.replace(/\r\n/g, '\n').replace(/^# Experimental pilot:.*\n/, '').replace(/^# PTC pilot:.*\n/gm, ''),
-    leaderPreset.replace(/\r\n/g, '\n').replace(/^# Shared Postman composition.*\n/, ''))
-  assert.doesNotMatch(pilotPreset, /ptc_execute|run_code|QuickJS|WASM|browser Worker/i)
+  assert.match(pilotPreset, /This preset is PTC-first/)
+  assert.match(pilotPreset, /Direct calls to those tools are rejected by Host/)
+  assert.match(pilotPreset, /Follow the postman-leader skill for routing, user approvals and delegation/)
+  assert.doesNotMatch(pilotPreset, /run_code|dsh-ptc-plus|Node Worker Thread/i)
 
   const bridgeSource = readFileSync(join(pluginRoot, 'lib', 'postman-bridge.js'), 'utf8')
   assert.match(bridgeSource, /POSTMAN_BRIDGE_CALLER_REJECTED/)
@@ -370,7 +392,7 @@ test('package and composition expose bridge entrypoint and leader preset', () =>
   assert.match(agents, /postman-leader/)
 
   const leaderSkill = readFileSync(join(repoRoot, '.agents', 'skills', 'postman-leader', 'SKILL.md'), 'utf8')
-  assert.match(leaderSkill, /POSTMAN_LEADER_SKILL_VERSION: 14/)
+  assert.match(leaderSkill, /POSTMAN_LEADER_SKILL_VERSION: 16/)
   assert.match(leaderSkill, /artifactRequestId/)
   assert.ok(leaderSkill.includes('implementation_artifact_apply'))
 
