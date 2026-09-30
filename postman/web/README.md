@@ -74,15 +74,20 @@ Continuation path открывает exact сохранённый `/c/<conversat
 ### `browser_observer.py`
 
 Observer привязывается к доказанному user turn и exact chat URL и принимает только
-непосредственно следующий assistant turn. Структурный `inspect_answer_phase()` различает
+непосредственно следующий логический ход assistant (либо turn-group того же user anchor). Структурный `inspect_answer_phase()` различает
 `WORKING`, `FINAL_ANSWER_STARTED` (защёлка), `FINAL_ANSWER_COMPLETED`, `UNKNOWN`
 (fail-closed) и `ADDITIONAL_PROCESSING` (видимый системный баннер вне transcript).
 Pause/Stop — диагностика, не доказательство фазы. В доступных завершённых CDP-ходах
 подтверждены `data-chatgpt-selection-message-id`, `data-markdown-text-style="assistant-message"`
 и кнопки действий («Оценить ответ», «Прочитать вслух»); `data-message-model-slug` отсутствовал.
-Rendered answer внутри exact turn доказывает начало финала; действия сообщения и inactive
-control усиливают completion. Живой thinking/tool поток не наблюдался, новые варианты
-разметки без доказанных признаков остаются UNKNOWN.
+Один Markdown renderer используется и для commentary: сам по себе он не доказывает финал.
+`data-turn-key` привязывает user anchor, activity и отдельный final assistant unit к одному
+логическому ходу; смена внутреннего message ID не теряет correlation. Activity/status/reasoning
+markdown остаётся WORKING, отдельный `:assistant` unit с ролью assistant и rendered answer
+защёлкивает финал. Для completion нужны actions этого хода (прежде всего структурные
+copy/turn controls) и inactive generation. Старые renderer paths сохранены с fail-closed
+неоднозначной разметкой. Живой thinking/tool поток не наблюдался, новые варианты
+без доказанных признаков остаются UNKNOWN.
 `Connection interrupted` вне conversation turns остаётся отдельным recoverable состоянием
 с прежним reload; `ADDITIONAL_PROCESSING` reload не запускает.
 
