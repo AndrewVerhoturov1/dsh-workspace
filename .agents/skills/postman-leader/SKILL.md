@@ -9,7 +9,7 @@ description: >-
 
 # Postman Leader
 
-`POSTMAN_LEADER_SKILL_VERSION: 15`
+`POSTMAN_LEADER_SKILL_VERSION: 16`
 
 > **Правило Worker:** у одного Leader может быть до трёх независимых continuable Worker. `postman_worker({task, createNew: true, label?})` создаёт нового; четвёртый возвращает `POSTMAN_WORKER_LIMIT_REACHED` до запуска. `postman_worker_list()` показывает точные `workerSessionId`, label и состояние привязки, но не доказывает idle/completion. Задание или новый trusted artifact REQ направляй точному Worker через `postman_worker({task, workerSessionId, artifactRequestId?})`, обычное продолжение — через `postman_worker_interrupt({workerSessionId, task})`, закрытие — `postman_worker_stop({workerSessionId})`. Без ID старые вызовы допустимы только при ровно одной привязке; при нескольких Host возвращает `POSTMAN_WORKER_TARGET_REQUIRED`. Все Worker делят одну task branch/worktree: не поручай перекрывающиеся записи, а sync, restore и package runner выполняй только при гарантированной безопасности общей ветки.
 
@@ -84,6 +84,8 @@ Bridge Luna занимается только ChatGPT Web transport через D
 ---
 
 ## 3. Runtime tool boundary
+
+Режимы исполнения: `postman-leader` — supervisor с прямыми инструментами; `postman-leader-ptc` — тот же routing/supervisor contract, но batchable data/supervisor tools доступны только внутри `ptc_execute`. Прямыми остаются `ptc_execute`, `skill`, `ask_user_question`, `exit_plan_mode`, `read_image`, `postman_yield`. **PTC меняет способ исполнения, но не выбор исполнителя и не human approval rules.** Сначала утверждение пользователя по разделу 0, только затем task preparation, Worker или Bridge. Отчёт Worker и Bridge READY — новые события следующего хода, а не ожидание в PTC-программе.
 
 Top-level Leader получает positive allowlist ровно из 20 зарегистрированных инструментов:
 
@@ -445,7 +447,7 @@ Mapping закрывается через `postman_worker_stop` по основ�
 
 ## 19. Postman Bridge
 
-`postman_bridge` доступен только top-level `postman-leader`. Bridge child использует Luna и узкий transport tool surface. Leader НЕ вызывает напрямую:
+`postman_bridge` доступен только top-level Postman Leader (`postman-leader` напрямую, `postman-leader-ptc` внутри `ptc_execute`). Bridge child использует Luna и узкий transport tool surface. Leader НЕ вызывает напрямую:
 
 ```text
 postman_send_current_turn

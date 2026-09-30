@@ -458,7 +458,7 @@ test('bridge plugin registers all Worker tools and preserves boundary on creatio
   a.ctx = { tools: { restrict(value) { restriction = value; return () => undefined } } }
   const ctx = {
     agents: { get: id => id === a.id ? a : undefined, list: () => [a] },
-    tools: { register(tool) { registrations.set(tool.name, tool) } },
+    tools: { register(tool) { registrations.set(tool.name, tool) }, guard() { return () => undefined } },
     subagents: {},
     storageDomain: { async open() { const memory = createMemoryTaskRegistry(); return {
       table: () => ({ get: memory.get, entries: memory.entries, put: memory.create, update: memory.change }),
