@@ -133,7 +133,7 @@ test('confirmed Worker gets mutation namespace, real read/glob/grep and controll
     const parent = await f.leader(), child = await f.start(parent)
     assert.deepEqual(f.calls.early, [false])
     assert.equal(WORKER_MUTATION_PROFILE.id, 'postman-worker-mutation')
-    assert.equal(WORKER_MUTATION_PROFILE.revision, 2)
+    assert.equal(WORKER_MUTATION_PROFILE.revision, 3)
     assert.deepEqual(WORKER_MUTATION_PROFILE.tools, ['read', 'glob', 'grep', 'web_fetch', 'web_search', 'write', 'edit'])
     assert.equal(visible(f, child.a).includes('ptc_execute'), true)
     assert.ok(visible(f, child.a).includes('write'))
@@ -209,6 +209,30 @@ test('Worker PTC rejects absolute, traversal and junction escapes before Harness
       const found = value(await f.execute(child.a, 'return await tools.' + name + '(' + JSON.stringify(args) + ')'))
       assert.doesNotMatch(JSON.stringify(found), /OUTSIDE_SECRET|secret\.txt/)
     }
+  } finally { await f.cleanup() }
+}))
+
+test('Worker helper read and grep preserve the task worktree boundary', () => inTemporaryDir('ptc-helper-boundary-', async root => {
+  const session=join(root,'session'), task=join(root,'task'), outside=join(root,'outside')
+  await mkdir(session);await mkdir(task);await mkdir(outside)
+  await writeFile(join(session,'proof.txt'),'SESSION\n','utf8')
+  await writeFile(join(task,'proof.txt'),'TASK\n','utf8')
+  await writeFile(join(outside,'secret.txt'),'SECRET\n','utf8')
+  const f=await fixture(session,{worktree:task})
+  try {
+    const leader=await f.leader(), child=await f.start(leader)
+    assert.equal(value(await f.execute(child.a,"return await ptc.readAllText({file_path:'proof.txt'})")),'TASK')
+    for(const program of [
+      "return await ptc.readAllText({file_path:'../outside/secret.txt'})",
+      "return await ptc.readMany({files:['proof.txt','../outside/secret.txt']})",
+      "return await ptc.grepMany({queries:[{pattern:'SECRET',path:'../outside'}]})",
+    ]) {
+      const result=await f.execute(child.a,program)
+      assert.equal(result.value.status,'runtime-error',JSON.stringify(result.value))
+      assert.match(JSON.stringify(result.value),/PTC_FILESYSTEM_BOUNDARY_REJECTED/)
+    }
+    assert.equal(f.traces.filter(x=>x.name==='read').length,2)
+    assert.equal(f.traces.filter(x=>x.name==='grep').length,0)
   } finally { await f.cleanup() }
 }))
 
