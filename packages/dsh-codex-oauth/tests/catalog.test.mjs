@@ -24,7 +24,7 @@ function byId(models, id) {
 
 test('backfills GPT-6 Sol and Luna with upstream Codex image metadata', () => {
   const models = backfillGpt6CodexModels([astra])
-  assert.deepEqual(models.map(model => model.id), ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna'])
+  assert.deepEqual(models.map(model => model.id), ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-6.1-sol'])
 
   const expected = {
     'gpt-6-sol': {
@@ -71,12 +71,50 @@ test('backfills GPT-6 Sol and Luna with upstream Codex image metadata', () => {
   }
 })
 
+test('backfills GPT-6.1 Sol with its distinct pricing, thinking levels, and compat', () => {
+  const model = byId(backfillGpt6CodexModels([astra]), 'gpt-6.1-sol')
+  assert.equal(model.name, 'GPT-6.1 Sol')
+  assert.equal(model.api, 'openai-codex-responses')
+  assert.equal(model.provider, 'openai-codex')
+  assert.equal(model.baseUrl, 'https://chatgpt.com/backend-api')
+  assert.equal(model.reasoning, true)
+  assert.deepEqual(model.input, ['text', 'image'])
+  assert.equal(model.contextWindow, 272_000)
+  assert.equal(model.maxTokens, 128_000)
+  assert.deepEqual(
+    { input: model.cost.input, output: model.cost.output, cacheRead: model.cost.cacheRead, cacheWrite: model.cost.cacheWrite },
+    { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
+  )
+  assert.deepEqual(model.cost.tiers, [{
+    inputTokensAbove: 272_000, input: 4, output: 15, cacheRead: 0.2, cacheWrite: 5,
+  }])
+  assert.deepEqual(model.thinkingLevelMap, {
+    off: null, minimal: 'low', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max',
+  })
+  assert.deepEqual(model.compat, {
+    supportsOpenAIGrammarTools: true,
+    supportsAdditionalTools: true,
+    supportsToolSearch: true,
+    supportsMidConvoSystemMessages: true,
+  })
+})
+
 test('existing upstream catalog entries win and are not duplicated', () => {
   const upstreamLuna = { ...astra, id: 'gpt-6-luna', name: 'Upstream Luna', input: ['text'] }
   const models = backfillGpt6CodexModels([astra, upstreamLuna])
   assert.equal(models.filter(model => model.id === 'gpt-6-luna').length, 1)
   assert.equal(byId(models, 'gpt-6-luna'), upstreamLuna)
   assert.ok(byId(models, 'gpt-6-sol'))
+  assert.ok(byId(models, 'gpt-6.1-sol'))
+})
+
+test('upstream GPT-6.1 Sol is not duplicated or overwritten', () => {
+  const upstreamSol = { ...astra, id: 'gpt-6.1-sol', name: 'Upstream GPT-6.1 Sol', input: ['text'] }
+  const models = backfillGpt6CodexModels([astra, upstreamSol])
+  assert.equal(models.filter(model => model.id === 'gpt-6.1-sol').length, 1)
+  assert.equal(byId(models, 'gpt-6.1-sol'), upstreamSol)
+  assert.ok(byId(models, 'gpt-6-sol'))
+  assert.ok(byId(models, 'gpt-6-luna'))
 })
 
 test('provider wrapper changes only getModels behavior', () => {
@@ -96,5 +134,5 @@ test('provider wrapper changes only getModels behavior', () => {
   assert.equal(wrapped.auth, provider.auth)
   assert.equal(wrapped.stream, stream)
   assert.equal(wrapped.streamSimple, streamSimple)
-  assert.deepEqual(wrapped.getModels().map(model => model.id), ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna'])
+  assert.deepEqual(wrapped.getModels().map(model => model.id), ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-6.1-sol'])
 })

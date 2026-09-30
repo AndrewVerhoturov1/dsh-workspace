@@ -1,7 +1,7 @@
 /**
  * Compatibility backfill for Codex models released after the pinned pi-ai
  * catalog. The transport and OAuth implementation stay owned by pi-ai; this
- * module only supplies model metadata that pi-ai 0.87.1 added upstream.
+ * module only supplies missing model metadata.
  *
  * Existing catalog entries always win, so a future pi-ai upgrade can absorb
  * these models without duplicates or local metadata overriding upstream.
@@ -74,6 +74,38 @@ const BACKFILL_MODELS: readonly CodexModel[] = [
     cacheRead: 0.01,
     cacheWrite: 0.125,
   }),
+  {
+    id: 'gpt-6.1-sol',
+    name: 'GPT-6.1 Sol',
+    api: 'openai-codex-responses',
+    provider: 'openai-codex',
+    baseUrl: CODEX_BASE_URL,
+    reasoning: true,
+    thinkingLevelMap: {
+      off: null,
+      minimal: 'low',
+      low: 'low',
+      medium: 'medium',
+      high: 'high',
+      xhigh: 'xhigh',
+      max: 'max',
+    },
+    input: ['text', 'image'],
+    cost: withLongContextPricing({
+      input: 2,
+      output: 10,
+      cacheRead: 0.1,
+      cacheWrite: 2.5,
+    }),
+    contextWindow: CODEX_CONTEXT_WINDOW,
+    maxTokens: CODEX_MAX_TOKENS,
+    compat: {
+      supportsOpenAIGrammarTools: true,
+      supportsAdditionalTools: true,
+      supportsToolSearch: true,
+      supportsMidConvoSystemMessages: true,
+    } as CodexModel['compat'], // pi-ai 0.85.1 types predate this catalog flag.
+  },
 ]
 
 /** Add only missing GPT-6 Codex models to a pi-ai catalog. */
