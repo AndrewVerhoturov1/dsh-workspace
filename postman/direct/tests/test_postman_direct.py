@@ -130,6 +130,12 @@ class DirectPostmanUnitTests(unittest.TestCase):
             self.assertEqual(terminal["taskSha256"], direct._sha256_text(Publisher.contents[0]))
             self.assertIn(f"<<<POSTMAN_RESULT_BEGIN:{REQ}>>>", Publisher.contents[0])
             self.assertNotIn(intent, Publisher.contents[0])
+            self.assertIn("Изображение уже создано", Publisher.contents[0])
+            self.assertIn("Творческая работа закончена", Publisher.contents[0])
+            self.assertIn("только упаковка", Publisher.contents[0])
+            self.assertIn("Не генерируй новое изображение", Publisher.contents[0])
+            self.assertIn("не заменяй и не редактируй", Publisher.contents[0])
+            self.assertNotIn("## Implementation author discipline", Publisher.contents[0])
             self.assertIn("непосредственно предыдущего ответа", Publisher.contents[0])
             for ext in ("png", "jpg", "webp"):
                 self.assertIn(f"{REQ}_img1.{ext}", Publisher.contents[0])
