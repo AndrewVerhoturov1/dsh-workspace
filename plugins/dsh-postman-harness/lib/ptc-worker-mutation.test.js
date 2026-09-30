@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtemp, mkdir, writeFile, rm, symlink } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, readFile, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -9,12 +9,13 @@ import { ToolRuntime, defineTool } from '@deepseek-ai/dsh-tools'
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
 import { apply as applyFs } from '@deepseek-ai/dsh-tool-fs'
+import { apply as applyObservationPolicy } from '@deepseek-ai/dsh-fs-observation-policy'
 import { applyGlobTool, applyGrepTool, RAW_OUTPUT_MAX_BYTES, GREP_MAX_MATCHES, GREP_MAX_LINE_BYTES, SEARCH_META_MAX_BYTES, SEARCH_GRACE_MS, SEARCH_STDERR_MAX_BYTES, SEARCH_TIMEOUT_MS } from '@deepseek-ai/dsh-tool-fs-search'
 import { applyWebFetchTool, applyWebSearchTool } from '@deepseek-ai/dsh-tool-web'
 import { createMemoryTaskRegistry } from './postman-task-registry.js'
 import { createPostmanWorkerTools } from './postman-worker.js'
 import { createPostmanBridgeBoundaryManager, isTopLevelPostmanPtcLeader, POSTMAN_LEADER_TOOL_ALLOWLIST } from './postman-bridge-core.js'
-import { createPtcAdapter, WORKER_RESEARCH_PROFILE } from './ptc-adapter.js'
+import { createPtcAdapter, WORKER_MUTATION_PROFILE } from './ptc-adapter.js'
 
 const output = { schema: { type: 'object', additionalProperties: true }, render: (_a, value) => [{ type: 'text', text: JSON.stringify(value) }] }
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done }); return { promise, resolve } }
@@ -26,6 +27,7 @@ async function fixture(dir, { web = true, worktree = dir } = {}) {
   ctx.fs = new LocalFileSystem(ctx, { cwd: dir, diffBasisMaxBytes: 1048576 })
   ctx.subprocess = new LocalSubprocessRuntime(ctx)
   applyFs(ctx, { readLimit: 2000, readMaxLineLength: 2000, readMaxBytes: 51200, readStreamMinSize: 10485760 })
+  applyObservationPolicy(ctx)
   const caps = { maxMatches: GREP_MAX_MATCHES, maxLineBytes: GREP_MAX_LINE_BYTES, maxMetaBytes: SEARCH_META_MAX_BYTES,
     rawOutputMaxBytes: RAW_OUTPUT_MAX_BYTES, graceMs: SEARCH_GRACE_MS, stderrMaxBytes: SEARCH_STDERR_MAX_BYTES, timeoutMs: SEARCH_TIMEOUT_MS }
   applyGlobTool(ctx, { ...caps, maxResults: 100, sampleThreshold: 1000 })
@@ -39,7 +41,7 @@ async function fixture(dir, { web = true, worktree = dir } = {}) {
     applyWebSearchTool(ctx, 10, 4, 30000, true)
   }
   // Ordinary Worker tools remain wide, but these inert names must never enter a PTC program.
-  for (const name of ['write', 'edit', 'pwsh', 'bash', 'jobs', 'report', 'notify_parent', 'postman_bridge', 'postman_worker', 'implementation_artifact_apply', 'read_image', 'get_goal'])
+  for (const name of ['pwsh', 'bash', 'jobs', 'report', 'notify_parent', 'postman_bridge', 'postman_worker', 'implementation_artifact_apply', 'read_image', 'get_goal'])
     if (!ctx.tools.get(name)) ctx.tools.register(defineTool({ name, description: name, parameters: {}, output, execute() { return { name } } }))
   for (const name of POSTMAN_LEADER_TOOL_ALLOWLIST)
     if (!ctx.tools.get(name)) ctx.tools.register(defineTool({ name, description: name, parameters: {}, output, execute() { return { name } } }))
@@ -83,7 +85,7 @@ async function fixture(dir, { web = true, worktree = dir } = {}) {
   const owns = a => worker.ownsLiveWorker(a) && isTopLevelPostmanPtcLeader(agents.get(a.session.header.parentSession))
   adapter = createPtcAdapter(ctx, { workerContextOf: a => owns(a) ? worker.ptcContextOf(a) : null,
     resolveAssignment: (a, leaderProfile) => isTopLevelPostmanPtcLeader(a)
-    ? { profile: leaderProfile, role: 'leader' } : owns(a) ? { profile: WORKER_RESEARCH_PROFILE, role: 'worker' } : null })
+    ? { profile: leaderProfile, role: 'leader' } : owns(a) ? { profile: WORKER_MUTATION_PROFILE, role: 'worker' } : null })
   ctx.tools.register(adapter.tool)
   boundaries = createPostmanBridgeBoundaryManager(id => agents.get(id), owns)
   async function agent(id, preset = 'plain', header = {}) {
@@ -123,22 +125,22 @@ const inTemporaryDir = async (prefix, fn) => {
 const visible = (f, a) => f.ctx.tools.schemas(a).map(s => s.name)
 const value = result => { assert.equal(result.isError, false, result.error?.message); assert.equal(result.value.status, 'ok', JSON.stringify(result.value)); return result.value.value }
 
-test('confirmed Worker gets research namespace, real read/glob/grep and controlled web through Harness', () => inTemporaryDir('ptc-worker-', async dir => {
+test('confirmed Worker gets mutation namespace, real read/glob/grep and controlled web through Harness', () => inTemporaryDir('ptc-worker-', async dir => {
   await writeFile(join(dir, 'one.txt'), 'МАРКЕР один\n', 'utf8')
   await writeFile(join(dir, 'two.txt'), 'МАРКЕР два\n', 'utf8')
   const f = await fixture(dir)
   try {
     const parent = await f.leader(), child = await f.start(parent)
     assert.deepEqual(f.calls.early, [false])
-    assert.equal(WORKER_RESEARCH_PROFILE.id, 'postman-worker-research')
-    assert.equal(WORKER_RESEARCH_PROFILE.revision, 1)
-    assert.deepEqual(WORKER_RESEARCH_PROFILE.tools, ['read', 'glob', 'grep', 'web_fetch', 'web_search'])
+    assert.equal(WORKER_MUTATION_PROFILE.id, 'postman-worker-mutation')
+    assert.equal(WORKER_MUTATION_PROFILE.revision, 2)
+    assert.deepEqual(WORKER_MUTATION_PROFILE.tools, ['read', 'glob', 'grep', 'web_fetch', 'web_search', 'write', 'edit'])
     assert.equal(visible(f, child.a).includes('ptc_execute'), true)
     assert.ok(visible(f, child.a).includes('write'))
-    assert.match(child.sections[0].text({ scope: child.a }), /read, glob, grep.*web_fetch\/web_search/)
+    assert.match(child.sections[0].text({ scope: child.a }), /read, glob, grep.*web_fetch.*web_search.*write and edit/)
     const names = value(await f.execute(child.a, 'return Object.keys(tools).sort()'))
-    assert.deepEqual(names, ['glob', 'grep', 'read', 'web_fetch', 'web_search'])
-    for (const denied of ['write', 'edit', 'pwsh', 'bash', 'jobs', 'report', 'notify_parent', 'postman_worker', 'ptc_execute', 'run_code', 'read_image', 'get_goal'])
+    assert.deepEqual(names, ['edit', 'glob', 'grep', 'read', 'web_fetch', 'web_search', 'write'])
+    for (const denied of ['pwsh', 'bash', 'jobs', 'report', 'notify_parent', 'postman_worker', 'ptc_execute', 'run_code', 'read_image', 'get_goal'])
       assert.ok(!names.includes(denied), denied)
     const result = value(await f.execute(child.a, "const found = await tools.glob({pattern:'*.txt'}); const files = found.paths.sort(); const lines = []; for (const path of files) { const r = await tools.read({file_path:path}); lines.push(r.lines[0].text) } const match = await tools.grep({pattern:'МАРКЕР',path:found.root}); const web = await tools.web_fetch({url:'http://127.0.0.1/controlled'}); const search = await tools.web_search({queries:['fixture']}); return {lines,matches:match.matches.length,page:web.body.content,title:search.sources[0].title}"))
     assert.deepEqual(result.lines, ['МАРКЕР один', 'МАРКЕР два'])
@@ -286,7 +288,7 @@ test('wrong callers, forged preset, stale Worker and other Leader stay rejected'
       a.ctx.tools.register(f.adapter.tool)
       assert.equal((await f.execute(a, 'return 1')).value.status, 'PTC_CALLER_REJECTED')
     }
-    assert.deepEqual(value(await f.execute(real.a, 'return Object.keys(tools).sort()')), ['glob', 'grep', 'read', 'web_fetch', 'web_search'])
+    assert.deepEqual(value(await f.execute(real.a, 'return Object.keys(tools).sort()')), ['edit', 'glob', 'grep', 'read', 'web_fetch', 'web_search', 'write'])
     const stale = real.a
     f.agents.delete(stale.id); f.adapter.remove(stale); f.boundaries.disposeAgent(stale)
     assert.equal((await f.execute(stale, 'return 2')).value.status, 'PTC_CALLER_REJECTED')
@@ -488,14 +490,213 @@ test('cold manager restart rechecks durable child and keeps stale Agent denied',
   } finally { await f.cleanup() }
 }))
 
+
+const programCall = (name, args) => 'return await tools.' + name + '(' + JSON.stringify(args) + ')'
+const rejected = result => {
+  assert.equal(result.value.status, 'runtime-error', JSON.stringify(result.value))
+  assert.deepEqual(result.value.effects.calls.map(call => call.state), ['failed'])
+}
+
+test('real write/edit use task worktree, absolute inside and normalized paths, never session cwd', () => inTemporaryDir('ptc-mutate-base-', async root => {
+  const session = join(root, 'session'), task = join(root, 'task')
+  await mkdir(session); await mkdir(task); await mkdir(join(task, 'src'))
+  await writeFile(join(session, 'created.txt'), 'SESSION_MARKER')
+  await writeFile(join(session, 'existing.txt'), 'SESSION_MARKER')
+  await writeFile(join(task, 'existing.txt'), 'old string')
+  const f = await fixture(session, { worktree: task })
+  try {
+    const leader = await f.leader(), child = await f.start(leader)
+    const created = value(await f.execute(child.a, programCall('write', { file_path: 'created.txt', content: 'created in task' })))
+    assert.equal(created.operation, 'create')
+    assert.equal(await readFile(join(task, 'created.txt'), 'utf8'), 'created in task')
+    value(await f.execute(child.a, programCall('write', { file_path: 'src/new.txt', content: 'future with safe parent' })))
+    assert.equal(await readFile(join(task, 'src', 'new.txt'), 'utf8'), 'future with safe parent')
+    assert.equal(await readFile(join(session, 'created.txt'), 'utf8'), 'SESSION_MARKER')
+    const result = value(await f.execute(child.a, "const before=await tools.read({file_path:'existing.txt'}); const edited=await tools.edit({file_path:'existing.txt',old_string:'old string',new_string:'new string'}); const after=await tools.read({file_path:'existing.txt'}); return {before:before.lines[0].text,edited,after:after.lines[0].text}"))
+    assert.equal(result.before, 'old string'); assert.equal(result.after, 'new string')
+    assert.equal(result.edited.after, 'new string')
+    assert.equal(await readFile(join(session, 'existing.txt'), 'utf8'), 'SESSION_MARKER')
+    const absolute = value(await f.execute(child.a, programCall('write', { file_path: join(task, 'created.txt'), content: 'absolute inside' })))
+    assert.equal(absolute.operation, 'update')
+    value(await f.execute(child.a, programCall('write', { file_path: 'src/../created.txt', content: 'normalized inside' })))
+    assert.equal(await readFile(join(task, 'created.txt'), 'utf8'), 'normalized inside')
+    const outer = f.traces.filter(t => t.name === 'ptc_execute')
+    const nested = f.traces.filter(t => ['write', 'edit'].includes(t.name))
+    assert.deepEqual(nested.map(t => t.name), ['write', 'write', 'edit', 'write', 'write'])
+    assert.ok(nested.every(t => t.agent === child.a && outer.some(o => o.root === t.root && o.token === t.parent)))
+  } finally { await f.cleanup() }
+}))
+
+test('outside, traversal, existing junction and future junction reject before mutation dispatch', () => inTemporaryDir('ptc-mutate-deny-', async root => {
+  const session = join(root, 'session'), task = join(root, 'task'), outside = join(root, 'outside')
+  await mkdir(session); await mkdir(task); await mkdir(outside); await mkdir(join(task, 'safe'))
+  await writeFile(join(outside, 'old.txt'), 'OUTSIDE')
+  await writeFile(join(root, 'outside.txt'), 'PARENT')
+  await symlink(outside, join(task, 'escape-link'), process.platform === 'win32' ? 'junction' : 'dir')
+  const f = await fixture(session, { worktree: task })
+  try {
+    const leader = await f.leader(), child = await f.start(leader)
+    for (const [name, path] of [
+      ['write', join(outside, 'old.txt')], ['edit', join(outside, 'old.txt')],
+      ['write', '../outside.txt'], ['edit', 'safe/../../outside.txt'],
+      ['write', 'escape-link/old.txt'], ['edit', 'escape-link/old.txt'],
+      ['write', 'escape-link/new.txt'], ['write', 'escape-link/missing/deep.txt'],
+    ]) {
+      const before = f.traces.length
+      const args = name === 'write' ? { file_path:path, content:'MUTATED' } : { file_path:path, old_string:'OUTSIDE', new_string:'MUTATED' }
+      const result = await f.execute(child.a, programCall(name, args))
+      rejected(result)
+      assert.match(JSON.stringify(result.value), /PTC_FILESYSTEM_BOUNDARY_REJECTED/)
+      assert.equal(f.traces.length, before + 1, name + ': Host mutation dispatched')
+    }
+    assert.equal(await readFile(join(outside, 'old.txt'), 'utf8'), 'OUTSIDE')
+    assert.equal(await readFile(join(root, 'outside.txt'), 'utf8'), 'PARENT')
+  } finally { await f.cleanup() }
+}))
+
+test('stock DSH observation and edit semantics remain in ordinary ToolRuntime', () => inTemporaryDir('ptc-mutate-semantics-', async task => {
+  await writeFile(join(task, 'text.txt'), 'one one')
+  const f = await fixture(task)
+  try {
+    const leader = await f.leader(), child = await f.start(leader)
+    let result = await f.execute(child.a, programCall('edit', { file_path:'text.txt', old_string:'one', new_string:'two' }))
+    rejected(result); assert.match(JSON.stringify(result.value), /reading.*first|FS_NOT_OBSERVED/)
+    result = await f.execute(child.a, programCall('write', { file_path:'text.txt', content:'clobber' }))
+    rejected(result); assert.match(JSON.stringify(result.value), /reading.*first|FS_NOT_OBSERVED/)
+    assert.equal(await readFile(join(task, 'text.txt'), 'utf8'), 'one one')
+    value(await f.execute(child.a, "return await tools.read({file_path:'text.txt'})"))
+    result = await f.execute(child.a, programCall('edit', { file_path:'text.txt', old_string:'missing', new_string:'x' }))
+    rejected(result); assert.match(JSON.stringify(result.value), /old_string was not found|FS_EDIT_NOT_FOUND/)
+    result = await f.execute(child.a, programCall('edit', { file_path:'text.txt', old_string:'one', new_string:'x' }))
+    rejected(result); assert.match(JSON.stringify(result.value), /old_string matched 2 times|FS_AMBIGUOUS_EDIT/)
+    const edited = value(await f.execute(child.a, programCall('edit', { file_path:'text.txt', old_string:'one', new_string:'two', replace_all:true })))
+    assert.equal(edited.after, 'two two')
+    const overwritten = value(await f.execute(child.a, programCall('write', { file_path:'text.txt', content:'overwritten' })))
+    assert.equal(overwritten.operation, 'update')
+    assert.equal(overwritten.before, 'two two')
+    assert.equal(await readFile(join(task, 'text.txt'), 'utf8'), 'overwritten')
+  } finally { await f.cleanup() }
+}))
+
+test('ordinary DSH stale observation rejects out-of-band replacement', () => inTemporaryDir('ptc-mutate-stale-', async task => {
+  const path = join(task,'stale.txt')
+  await writeFile(path,'OLD')
+  const f = await fixture(task)
+  try {
+    const leader = await f.leader(), child = await f.start(leader)
+    value(await f.execute(child.a, "return await tools.read({file_path:'stale.txt'})"))
+    await writeFile(path,'CHANGED OUTSIDE')
+    const attempted = await f.execute(child.a, programCall('write',{file_path:'stale.txt',content:'PTC REPLACEMENT'}))
+    rejected(attempted)
+    assert.match(JSON.stringify(attempted.value), /stale|version|modified|changed/i)
+    assert.equal(await readFile(path,'utf8'),'CHANGED OUTSIDE')
+  } finally { await f.cleanup() }
+}))
+
+test('completed mutation survives later program failure; boundary denial remains failed', () => inTemporaryDir('ptc-mutate-effects-', async task => {
+  const f = await fixture(task)
+  try {
+    const leader = await f.leader(), child = await f.start(leader)
+    const result = await f.execute(child.a, "await tools.write({file_path:'effect.txt',content:'COMMITTED'}); throw new Error('later failure')")
+    assert.equal(result.value.status, 'runtime-error')
+    assert.deepEqual(result.value.effects.calls.map(c => c.state), ['completed'])
+    assert.equal(await readFile(join(task, 'effect.txt'), 'utf8'), 'COMMITTED')
+    assert.equal(f.traces.filter(t => t.name === 'write').length, 1)
+    const before = f.traces.length
+    const denied = await f.execute(child.a, programCall('write', {file_path:'../outside.txt', content:'no'}))
+    rejected(denied)
+    assert.equal(f.traces.length, before + 1)
+  } finally { await f.cleanup() }
+}))
+
+test('revoked context and ordinary mutation visibility deny further nested calls', () => inTemporaryDir('ptc-mutate-revoke-', async root => {
+  const task = join(root, 'task'), replacement = join(root, 'replacement')
+  await mkdir(task); await mkdir(replacement)
+  await writeFile(join(task, 'proof.txt'), 'OLD_CONTEXT')
+  const f = await fixture(root, { worktree:task })
+  try {
+    const leader = await f.leader(), child = await f.start(leader)
+    const hidden = child.a.ctx.tools.restrict({ deny:['write'] })
+    assert.equal(value(await f.execute(child.a, "return typeof tools.write")), 'undefined')
+    hidden()
+    const entered = deferred(), held = deferred()
+    f.ctx.on('tools/execute', async (exec, next) => {
+      if (exec.name === 'read' && exec.agent === child.a && exec.parent) { entered.resolve(); await held.promise }
+      return next()
+    })
+    const running = f.execute(child.a, "await tools.read({file_path:'proof.txt'}); return await tools.write({file_path:'new.txt',content:'BAD'})")
+    await entered.promise
+    f.taskContexts.set(leader.a.id, Object.freeze({ branch:'replacement', worktree:replacement }))
+    held.resolve()
+    const revoked = await running
+    assert.notEqual(revoked.value.status, 'ok')
+    assert.match(JSON.stringify(revoked.value), /PTC_ACCESS_REVOKED/)
+    assert.equal(f.traces.some(t => t.name === 'write'), false)
+    await assert.rejects(readFile(join(task, 'new.txt')), {code:'ENOENT'})
+    await assert.rejects(readFile(join(replacement, 'new.txt')), {code:'ENOENT'})
+  } finally { await f.cleanup() }
+}))
+
+test('two Leader roots and three shared Workers permit independent mutation and selective stop', () => inTemporaryDir('ptc-mutate-multi-', async root => {
+  const taskA = join(root, 'task-A'), taskB = join(root, 'task-B')
+  await mkdir(taskA); await mkdir(taskB)
+  const f = await fixture(root)
+  try {
+    const leaderA = await f.leader('leader-A','postman-leader-ptc',taskA)
+    const leaderB = await f.leader('leader-B','postman-leader-ptc',taskB)
+    const [a,b,c] = await Promise.all(['A','B','C'].map(label=>f.start(leaderA,label)))
+    const other = await f.start(leaderB)
+    for (const [child,name] of [[a,'a'],[b,'b'],[c,'c'],[other,'other']])
+      value(await f.execute(child.a, programCall('write', {file_path:name+'.txt',content:name})))
+    for (const name of ['a','b','c']) assert.equal(await readFile(join(taskA,name+'.txt'),'utf8'),name)
+    assert.equal(await readFile(join(taskB,'other.txt'),'utf8'),'other')
+    assert.equal((await f.worker.stopTool.execute({mode:'cancel',workerSessionId:a.a.id},
+      {agent:leaderA.a,callId:'stop-mutation',signal:new AbortController().signal})).status,'POSTMAN_WORKER_CANCELLED')
+    const stopped = await f.execute(a.a,programCall('write',{file_path:'no.txt',content:'NO'}))
+    assert.equal(stopped.isError, true)
+    assert.equal(f.traces.filter(t => t.name === 'write').length, 4)
+    for (const child of [b,c,other]) value(await f.execute(child.a,programCall('write',{file_path:child.a.id+'.txt',content:'YES'})))
+    assert.equal(await readFile(join(taskB,other.a.id+'.txt'),'utf8'),'YES')
+  } finally { await f.cleanup() }
+}))
+
+test('pre-dispatch abort never mutates, completed edit remains committed, started host call is pending', () => inTemporaryDir('ptc-mutate-abort-', async task => {
+  await writeFile(join(task,'existing.txt'),'BEFORE')
+  const f = await fixture(task)
+  try {
+    const leader = await f.leader(), child = await f.start(leader)
+    const pre = new AbortController(); pre.abort()
+    const cancelled = await f.execute(child.a, programCall('write',{file_path:'never.txt',content:'NO'}), pre)
+    assert.equal(cancelled.isError,true)
+    assert.equal(f.traces.some(t=>t.name==='write'),false)
+    await assert.rejects(readFile(join(task,'never.txt')),{code:'ENOENT'})
+    const edited = await f.execute(child.a, "await tools.read({file_path:'existing.txt'}); await tools.edit({file_path:'existing.txt',old_string:'BEFORE',new_string:'AFTER'}); throw new Error('later')")
+    assert.equal(edited.value.status,'runtime-error')
+    assert.deepEqual(edited.value.effects.calls.map(c=>c.state),['completed','completed'])
+    assert.equal(await readFile(join(task,'existing.txt'),'utf8'),'AFTER')
+    const entered = deferred(), held = deferred()
+    f.ctx.on('tools/execute',async (exec,next)=>{
+      if (exec.name==='write' && exec.agent===child.a && exec.parent) { entered.resolve(); await held.promise }
+      return next()
+    })
+    const running = f.execute(child.a,programCall('write',{file_path:'uncertain.txt',content:'MAYBE'}))
+    await entered.promise
+    f.adapter.remove(child.a)
+    const unknown = await running
+    assert.notEqual(unknown.value.status,'ok')
+    assert.equal(unknown.value.effects.pending,1)
+    held.resolve()
+  } finally { await f.cleanup() }
+}))
+
 test('web names are omitted when registry-invisible; unrelated registration cannot grow profile', () => inTemporaryDir('ptc-no-web-', async dir => {
   const f = await fixture(dir, { web: false })
   try {
     const leader = await f.leader(), child = await f.start(leader)
     child.a.ctx.tools.restrict({ deny: ['web_fetch'] })
-    assert.deepEqual(value(await f.execute(child.a, 'return Object.keys(tools).sort()')), ['glob', 'grep', 'read'])
+    assert.deepEqual(value(await f.execute(child.a, 'return Object.keys(tools).sort()')), ['edit', 'glob', 'grep', 'read', 'write'])
     f.ctx.tools.register(defineTool({ name: 'future_tool', description: 'future', parameters: {}, output, execute() { return {} } }))
-    assert.deepEqual(value(await f.execute(child.a, 'return Object.keys(tools).sort()')), ['glob', 'grep', 'read'])
+    assert.deepEqual(value(await f.execute(child.a, 'return Object.keys(tools).sort()')), ['edit', 'glob', 'grep', 'read', 'write'])
   } finally { await f.cleanup() }
 }))
 
