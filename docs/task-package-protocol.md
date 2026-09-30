@@ -39,6 +39,10 @@ forbidden_paths_json: [...]
 
 ...
 
+## Implementation author discipline
+
+... (conditional only for intent changing the repository named in this task; standalone code artifacts excluded)
+
 ## Result contract
 
 ...
@@ -51,7 +55,7 @@ transport/downstream metadata. Их присутствие не означает
 `allowed_paths_json` / `forbidden_paths_json` могут использоваться downstream/manual
 application workflow, но **не являются normal ZIP transport gates**.
 
-Task-файл self-contained: execution/result contract находится в нём же.
+Task-файл self-contained: execution/result contract и компактная fixed implementation-author discipline находятся в нём же. Последняя не меняет `User intent` и задаёт implementation-package requirements только для intent, требующего изменить repository, указанный в task; автономный кодовый artifact без таких изменений сохраняет естественный формат результата. Универсальный normal transport не становится implementation validator. Подробный канонический contract автора — [External Implementation Author](../system/postman-external-implementation-author.md). Для repository implementation Web пишет полное изменение и необходимые tests; authoritative local apply/targeted tests остаются downstream у Worker/central runner, а не являются authoring-приёмкой Web.
 
 ## Canonical browser prompt
 
@@ -110,8 +114,8 @@ implementationBaseCommit
 → taskPublicationCommit
 ```
 
-`base_commit` внутри task-файла — snapshot `main` непосредственно **до** публикации
-transport-only REQ-файла.
+`base_commit` внутри task-файла — snapshot выбранной trusted Host ветки непосредственно **до** публикации
+transport-only REQ-файла (standalone transport — `main`, Leader flow — подготовленная task branch).
 
 `taskPublicationCommit` — commit, добавивший task-файл. Он хранится в trusted local state,
 но не может быть самоссылочно записан внутрь этого же task-файла.
