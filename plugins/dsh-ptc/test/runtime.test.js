@@ -9,9 +9,14 @@ test('validates profile fields, names, limits, and own properties',()=>{
   for(const altered of [
     {...profile(),schemaVersion:2},{...profile(),extra:1},{...profile(),revision:NaN},
     profile(['echo','echo']),profile(['*']),profile(['constructor']),profile(['a'.repeat(65)]),
-    profile([], {maxWallMs:Infinity}),profile([], {maxMessageBytes:0}),
+    profile([], {maxWallMs:Infinity}),profile([], {maxWallMs:300001}),profile([], {maxMessageBytes:0}),
     profile([], {maxConcurrentToolCalls:65}),profile([], {maxTotalBridgeBytes:1024}),
   ])assert.throws(()=>validatePtcProfile(altered))
+  assert.equal(DEFAULT_LIMITS.maxWallMs,120000)
+  assert.equal(DEFAULT_LIMITS.maxOutputBytes,524288)
+  assert.equal(DEFAULT_LIMITS.maxMessageBytes,1048576)
+  assert.equal(validatePtcProfile(profile([],{maxWallMs:300000})).limits.maxWallMs,300000)
+  assert.ok(DEFAULT_LIMITS.maxOutputBytes + 2048 <= DEFAULT_LIMITS.maxMessageBytes)
   const inherited=Object.create({echo:()=>1})
   assert.equal(Object.hasOwn(inherited,'echo'),false)
 })
@@ -60,13 +65,31 @@ test('bounds program, result, argument, log, loops and callback accumulation',as
     const p=profile(['echo'],{maxWallMs:700})
     const cases=[
       ['while(true){}','limit-exceeded'],
-      [`return 'x'.repeat(70000)`,'limit-exceeded'],
-      [`console.log('x'.repeat(70000));return 1`,'limit-exceeded'],
+      [`return 'x'.repeat(600000)`,'limit-exceeded'],
+      [`console.log('x'.repeat(600000));return 1`,'limit-exceeded'],
       [`return await tools.echo('x'.repeat(1100000))`,'limit-exceeded'],
       ['return await tools.echo(null)','runtime-error'],
     ]
     for(const [program,status] of cases){const x=await r.run({program,profile:p,bindings:{echo:()=>undefined}});assert.equal(x.status,status,JSON.stringify(x))}
   }finally{await r.dispose()}
+})
+
+test('large canonical tool JSON is processed in guest; 512 KiB result ceiling remains enforced', async()=>{
+  const r=createPtcRuntime()
+  try {
+    const profileWithRead=profile(['read'])
+    const bindings={read:()=>({lines:[{number:1,text:'x'.repeat(110000)}],totalLines:1})}
+    const compact=await r.run({program:'const page=await tools.read({file_path:\'large.txt\'}); return {length:page.lines[0].text.length}',profile:profileWithRead,bindings})
+    assert.equal(compact.status,'ok',JSON.stringify(compact))
+    assert.deepEqual(compact.value,{length:110000})
+    assert.equal(compact.effects.completed,1)
+    const within=await r.run({program:"return 'x'.repeat(524286)",profile:profile(),bindings:{}})
+    assert.equal(within.status,'ok',JSON.stringify({status:within.status,error:within.error}))
+    assert.equal(within.value.length,524286)
+    const beyond=await r.run({program:"return 'x'.repeat(524288)",profile:profile(),bindings:{}})
+    assert.equal(beyond.status,'limit-exceeded')
+    assert.equal(beyond.error.code,'maxOutputBytes')
+  } finally { await r.dispose() }
 })
 
 test('reports unawaited calls and retains unresolved host work across runs',async()=>{

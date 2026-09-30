@@ -16,7 +16,7 @@ import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
 import { apply as applyGoal } from '@deepseek-ai/dsh-tool-goal'
 import { applyWebFetchTool } from '@deepseek-ai/dsh-tool-web'
 const output = { schema: { type:'object', additionalProperties:true }, render: (_a, value) => [{type:'text',text:JSON.stringify(value)}] }
-function fixture(dir, { real = false } = {}) {
+function fixture(dir, { real = false, readMaxBytes = 51200 } = {}) {
   const ctx = new Context()
   ctx.systemPrompt = { tools() {}, section() { return () => {} } }
   new ToolRuntime(ctx)
@@ -30,7 +30,7 @@ function fixture(dir, { real = false } = {}) {
   if (real) {
     ctx.fs = new LocalFileSystem(ctx,{cwd:dir,diffBasisMaxBytes:1048576})
     ctx.subprocess = new LocalSubprocessRuntime(ctx)
-    applyFs(ctx,{readLimit:2000,readMaxLineLength:2000,readMaxBytes:51200,readStreamMinSize:10485760})
+    applyFs(ctx,{readLimit:2000,readMaxLineLength:2000,readMaxBytes,readStreamMinSize:10485760})
     applyGrepTool(ctx,{maxMatches:GREP_MAX_MATCHES,maxLineBytes:GREP_MAX_LINE_BYTES,maxMetaBytes:SEARCH_META_MAX_BYTES,rawOutputMaxBytes:RAW_OUTPUT_MAX_BYTES,graceMs:SEARCH_GRACE_MS,stderrMaxBytes:SEARCH_STDERR_MAX_BYTES,timeoutMs:SEARCH_TIMEOUT_MS})
   } else for (const name of ['read','grep']) ctx.tools.register(defineTool({name,description:name,parameters:{},output,async execute(){return {name}}}))
   if (real) {
@@ -86,6 +86,78 @@ test('ordinary ptc_execute passes actual QuickJS to real Harness read and grep',
     assert.equal(invalid.value.effects.failed,1)
     await f.adapter.dispose()
   } finally { await rm(dir,{recursive:true,force:true}) }
+})
+
+test('helpers page and batch sequentially within one outer PTC call in JS and TS', async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'ptc-helpers-'))
+  try {
+    await writeFile(join(dir,'first.txt'),'alpha\nbeta\ngamma\ndelta\n','utf8')
+    await writeFile(join(dir,'second.txt'),'MARKER\n','utf8')
+    const f=fixture(dir,{real:true}), {a,sections}=f.agent('helpers')
+    a.ctx.tools.restrict(postmanBridgeRestrictionForAgent(a));f.adapter.refresh(a)
+    assert.match(sections[0].text({scope:a}),/ptc.readAllText.*ptc.readMany.*ptc.grepMany/)
+    for (const language of ['javascript','typescript']) {
+      const program="const first"+(language==='typescript'?': string':'')+" = await ptc.readAllText({file_path:'first.txt',page_limit:2}); const many=await ptc.readMany({files:['first.txt','second.txt'],page_limit:2}); const matches=await ptc.grepMany({queries:[{pattern:'alpha',path:'first.txt'},{pattern:'MARKER',path:'second.txt'}]}); return {first,many,matches:matches.map(x=>x.result.matches.length),names:Object.keys(ptc).sort()}"
+      const result=await f.ctx.tools.execute({callId:'helpers-'+language,name:'ptc_execute',arguments:{program,language,description:'Test sequential helpers'},agent:a,signal:new AbortController().signal})
+      assert.equal(result.isError,false,result.error?.message)
+      assert.equal(result.value.status,'ok',JSON.stringify(result.value))
+      assert.equal(result.value.value.first,'alpha\nbeta\ngamma\ndelta')
+      assert.deepEqual(result.value.value.many.map(x=>x.text),['alpha\nbeta\ngamma\ndelta','MARKER'])
+      assert.deepEqual(result.value.value.matches,[1,1])
+      assert.deepEqual(result.value.value.names,['grepMany','readAllText','readMany'])
+    }
+    const outer=f.traces.filter(x=>x[0]==='pre' && x[1]==='ptc_execute')
+    const nested=f.traces.filter(x=>x[0]==='pre' && ['read','grep'].includes(x[1]))
+    assert.equal(outer.length,2)
+    assert.equal(nested.length,14)
+    assert.deepEqual(nested.slice(0,7).map(x=>x[1]),['read','read','read','read','read','grep','grep'])
+    assert.ok(nested.every((x,i)=>x[3]===outer[Math.floor(i/7)][5]))
+    await f.adapter.dispose()
+  } finally { await rm(dir,{recursive:true,force:true}) }
+})
+
+test('real read canonical JSON above 64 KiB returns a compact summary', async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'ptc-large-read-'))
+  try {
+    await writeFile(join(dir,'large.txt'),('x'.repeat(1500)+'\n').repeat(48),'utf8')
+    const f=fixture(dir,{real:true,readMaxBytes:120000}), {a}=f.agent('large-read')
+    a.ctx.tools.restrict(postmanBridgeRestrictionForAgent(a));f.adapter.refresh(a)
+    // Raise only the fixture's ordinary read cap so its canonical JSON crosses 64 KiB.
+    // The PTC profile and 1 MiB message cap remain unchanged.
+    const result=await f.execute(a,"const first=await tools.read({file_path:'large.txt',limit:48}); return {canonicalBytes:JSON.stringify(first).length,lines:first.lines.length,last:first.lines.at(-1).number}")
+    assert.equal(result.isError,false,result.error?.message)
+    assert.equal(result.value.status,'ok',JSON.stringify(result.value))
+    assert.ok(result.value.value.canonicalBytes>65536)
+    assert.equal(result.value.value.lines,48)
+    assert.equal(result.value.value.last,48)
+    const truncated=await f.execute(a,"return await ptc.readAllText({file_path:'large.txt',page_limit:4})")
+    assert.equal(truncated.value.status,'ok',JSON.stringify(truncated.value))
+    assert.equal(truncated.value.value.length,48*1500+47)
+    await writeFile(join(dir,'long-line.txt'),'x'.repeat(2500),'utf8')
+    const lineTruncated=await f.execute(a,"return await ptc.readAllText({file_path:'long-line.txt'})")
+    assert.equal(lineTruncated.value.status,'runtime-error')
+    assert.match(lineTruncated.value.error.message,/line truncated/)
+    await f.adapter.dispose()
+  } finally { await rm(dir,{recursive:true,force:true}) }
+})
+
+test('helper exposure follows ordinary visibility and no hidden grants', async()=>{
+  const f=fixture(process.cwd()), {a}=f.agent('visibility')
+  a.ctx.tools.restrict(postmanBridgeRestrictionForAgent(a));f.adapter.refresh(a)
+  f.adapter.setProfile({...PILOT_PROFILE,revision:5,tools:['read']})
+  const first=await f.execute(a,"return {names:Object.keys(ptc),grep:typeof tools.grep}")
+  assert.equal(first.value.status,'ok',JSON.stringify(first.value))
+  assert.deepEqual(first.value.value,{names:['readAllText','readMany'],grep:'undefined'})
+  f.adapter.setProfile({...PILOT_PROFILE,revision:6,tools:['read','grep']})
+  const hidden=a.ctx.tools.restrict({deny:['grep']})
+  assert.equal((await f.execute(a,'return Object.keys(ptc)')).value.status,'PTC_REQUIRED_TOOL_UNAVAILABLE')
+  hidden()
+  const clean=await f.execute(a,"return {names:Object.keys(ptc),fs:typeof require,write:typeof tools.write}")
+  assert.equal(clean.value.status,'ok',JSON.stringify(clean.value))
+  assert.deepEqual(clean.value.value.names,['readAllText','readMany','grepMany'])
+  assert.equal(clean.value.value.fs,'undefined')
+  assert.equal(clean.value.value.write,'undefined')
+  await f.adapter.dispose()
 })
 
 test('abort during real read reaches the local filesystem provider',async()=>{
@@ -248,8 +320,9 @@ test('PTC-first Leader direct tools fail closed while exceptions and production 
   for (const {a} of [pilot, production]) { a.ctx.tools.restrict(postmanBridgeRestrictionForAgent(a)); f.adapter.refresh(a) }
   assert.deepEqual(PILOT_PROFILE.tools, POSTMAN_PTC_ONLY_LEADER_TOOLS)
   assert.equal(PILOT_PROFILE.id, 'postman-leader-supervisor')
-  assert.equal(PILOT_PROFILE.revision, 3)
-  assert.equal(PILOT_PROFILE.limits.maxWallMs, 30000)
+  assert.equal(PILOT_PROFILE.revision, 4)
+  assert.equal(PILOT_PROFILE.limits.maxWallMs, 120000)
+  assert.equal(PILOT_PROFILE.limits.maxOutputBytes, 524288)
   assert.equal(PILOT_PROFILE.limits.maxConcurrentToolCalls, 1)
   for (const name of ['ptc_execute', 'skill', 'ask_user_question', 'exit_plan_mode', 'read_image', 'postman_yield'])
     assert.equal(f.ctx.tools.schemas(pilot.a).some(s => s.name === name), true, name)

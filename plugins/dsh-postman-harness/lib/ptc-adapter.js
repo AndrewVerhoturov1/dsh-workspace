@@ -1,17 +1,18 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { createPtcRuntime, DEFAULT_LIMITS, validatePtcProfile } from 'dsh-ptc'
+import { buildPtcHelperPrelude, ptcHelperGuidance } from './ptc-helpers.js'
 import { guardWorkerPtcFilesystem } from './ptc-worktree-boundary.js'
 import { POSTMAN_PTC_ONLY_LEADER_TOOLS } from './postman-bridge-core.js'
 
 export const PTC_TOOL_NAME = 'ptc_execute'
 export const PILOT_PROFILE = validatePtcProfile({
-  schemaVersion: 1, id: 'postman-leader-supervisor', revision: 3,
+  schemaVersion: 1, id: 'postman-leader-supervisor', revision: 4,
   tools: [...POSTMAN_PTC_ONLY_LEADER_TOOLS],
-  limits: { ...DEFAULT_LIMITS, maxConcurrentToolCalls: 1, maxWallMs: 30000 },
+  limits: { ...DEFAULT_LIMITS, maxConcurrentToolCalls: 1 },
 })
 const WORKER_NAMES = Object.freeze(['read', 'glob', 'grep', 'web_fetch', 'web_search', 'write', 'edit'])
 export const WORKER_MUTATION_PROFILE = validatePtcProfile({
-  schemaVersion: 1, id: 'postman-worker-mutation', revision: 2,
+  schemaVersion: 1, id: 'postman-worker-mutation', revision: 3,
   tools: [...WORKER_NAMES],
   limits: { ...DEFAULT_LIMITS, maxConcurrentToolCalls: 1 },
 })
@@ -72,15 +73,18 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
   function guidance(agent, record) {
     if (required(record).some(name => !available(agent, name))) return ''
     const schemas = ctx.tools.schemas(agent).filter(s => record.profile.tools.includes(s.name))
+    const helperText = ptcHelperGuidance(schemas.map(s => s.name))
     if (record.role === 'worker') return 'PTC supports read, glob, grep, web_fetch, web_search, write and edit when ordinarily visible. ' +
       'Filesystem paths inside PTC are Host-scoped to the current task worktree. Use write/edit inside PTC for mechanical multi-step filesystem work. ' +
       'PTC mutation is not transactional. A successful write/edit remains committed even if later program code fails. There is no automatic rollback or retry. ' +
       'Use shell/jobs/report and other ordinary Worker tools outside PTC. ' +
+      helperText +
       'Use await tools.name(JSON_arguments) and return JSON; current argument schemas: ' +
       JSON.stringify(schemas.map(s => ({ name: s.name, parameters: s.parameters })))
     return 'This Leader is PTC-first. Batch related mechanical/data/supervisor operations in one ptc_execute program; direct PTC-managed calls are rejected. ' +
       'PTC changes execution mode, not Postman Leader routing: follow the postman-leader skill, obtain user approval before medium/complex task preparation or delegation, and delegate repository discovery/execution to Worker/Postman as required. ' +
       'Never poll Worker/Bridge: reports and READY arrive as later events, not within this program. ' +
+      helperText +
       'Use await tools.name(JSON_arguments), return compact JSON needed for the next decision, and inspect effects after errors. No persistence or automatic retry. Current nested argument schemas: ' +
       JSON.stringify(schemas.map(s => ({ name: s.name, parameters: s.parameters })))
   }
@@ -170,7 +174,9 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
         }
       }
       try {
-        const result = await runtime.run({ program: args.program, language: args.language ?? 'javascript',
+        const helperPrelude = buildPtcHelperPrelude(activeProfile.tools)
+        const program = helperPrelude ? helperPrelude + '\n' + args.program : args.program
+        const result = await runtime.run({ program, language: args.language ?? 'javascript',
           profile: activeProfile, bindings, signal: controller.signal })
         // The guest can stop while a noncooperative Host promise remains pending.
         // Close the durable event pair with an explicit unknown outcome before the turn ends.
