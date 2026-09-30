@@ -1,5 +1,5 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { createPtcAdapter, WORKER_RESEARCH_PROFILE } from './ptc-adapter.js'
+import { createPtcAdapter, WORKER_MUTATION_PROFILE } from './ptc-adapter.js'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { parsePostmanUserTurn } from './direct-current-turn.js'
 import { createPostmanWorkerTools } from './postman-worker.js'
@@ -184,7 +184,7 @@ export async function apply(ctx) {
   ptc = createPtcAdapter(ctx, { workerContextOf: agent =>
     ownsPtcWorker(agent) ? worker.ptcContextOf(agent) : null, resolveAssignment: (agent, leaderProfile) => {
     if (isTopLevelPostmanPtcLeader(agent)) return { profile: leaderProfile, role: 'leader' }
-    return ownsPtcWorker(agent) ? { profile: WORKER_RESEARCH_PROFILE, role: 'worker' } : null
+    return ownsPtcWorker(agent) ? { profile: WORKER_MUTATION_PROFILE, role: 'worker' } : null
   } })
   ctx.tools.register(ptc.tool)
   ctx.tools.register(createPostmanTaskPrepareTool(ctx, contexts))

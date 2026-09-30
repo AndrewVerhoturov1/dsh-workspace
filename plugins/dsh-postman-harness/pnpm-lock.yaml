@@ -39,6 +39,9 @@ importers:
       '@deepseek-ai/dsh-fs-local':
         specifier: 0.1.1-rc.2
         version: 0.1.1-rc.2(@deepseek-ai/cordis@4.0.4)(@deepseek-ai/dsh-fs@0.1.1-rc.2(1ba948e9e9faf3ae21a8071a15ca361b))(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.4))
+      '@deepseek-ai/dsh-fs-observation-policy':
+        specifier: 0.1.1-rc.2
+        version: 0.1.1-rc.2(@deepseek-ai/cordis@4.0.4)(@deepseek-ai/dsh-fs@0.1.1-rc.2(1ba948e9e9faf3ae21a8071a15ca361b))(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.4))
       '@deepseek-ai/dsh-scope':
         specifier: 0.1.1-rc.2
         version: 0.1.1-rc.2(@deepseek-ai/cordis@4.0.4)(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.4))
@@ -107,6 +110,13 @@ packages:
 
   '@deepseek-ai/dsh-fs-local@0.1.1-rc.2':
     resolution: {integrity: sha512-jvn1MsAMqCmt5SjRNkPjmpc+RIWrZQrBVtf/OpmKr2PaBEGqSbCkPApWDE9iSMhcuQg6k5evScOXwAsduzKOLA==}
+    peerDependencies:
+      '@deepseek-ai/cordis': ^4.0.1
+      '@deepseek-ai/dsh-fs': ^0.1.1-rc.2
+      '@deepseek-ai/dsh-invariants': ^0.1.1-rc.2
+
+  '@deepseek-ai/dsh-fs-observation-policy@0.1.1-rc.2':
+    resolution: {integrity: sha512-rlq7yu4xavkKK1Oa1/aNCOeUW7t/3OXJJOfOcZXuUgJn5f8G0AbpTDpp2CeuL1cHlKpbunGhEkKQ2N/dv7ZR9w==}
     peerDependencies:
       '@deepseek-ai/cordis': ^4.0.1
       '@deepseek-ai/dsh-fs': ^0.1.1-rc.2
@@ -634,6 +644,12 @@ snapshots:
       '@deepseek-ai/dsh-invariants': 0.1.1-rc.2(@deepseek-ai/cordis@4.0.4)
       '@deepseek-ai/schemastery': 3.18.4
       koffi: 3.3.2
+
+  '@deepseek-ai/dsh-fs-observation-policy@0.1.1-rc.2(@deepseek-ai/cordis@4.0.4)(@deepseek-ai/dsh-fs@0.1.1-rc.2(1ba948e9e9faf3ae21a8071a15ca361b))(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.4))':
+    dependencies:
+      '@deepseek-ai/cordis': 4.0.4
+      '@deepseek-ai/dsh-fs': 0.1.1-rc.2(1ba948e9e9faf3ae21a8071a15ca361b)
+      '@deepseek-ai/dsh-invariants': 0.1.1-rc.2(@deepseek-ai/cordis@4.0.4)
 
   '@deepseek-ai/dsh-fs@0.1.1-rc.2(1ba948e9e9faf3ae21a8071a15ca361b)':
     dependencies:
