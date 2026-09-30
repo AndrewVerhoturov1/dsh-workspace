@@ -4,6 +4,12 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable, Mapping
+
+try:
+    from postman.task_package import render_input_files_section
+except ModuleNotFoundError:
+    from task_package import render_input_files_section
 
 try:
     from postman.web.request_identity import assert_canonical_request_id
@@ -23,6 +29,7 @@ def render_direct_text_task_manifest(
     user_intent: str,
     repository: str,
     base_commit: str,
+    input_files: Iterable[Mapping[str, object]] | None = None,
 ) -> str:
     try:
         assert_canonical_request_id(request_id)
@@ -81,4 +88,8 @@ def render_direct_text_task_manifest(
         end,
         "",
     ]
+    section = render_input_files_section(input_files)
+    if section:
+        marker = lines.index("## Execution contract")
+        lines[marker:marker] = section.split("\n") + [""]
     return "\n".join(lines)

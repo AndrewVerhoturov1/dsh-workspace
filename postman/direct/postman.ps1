@@ -20,6 +20,9 @@ param(
     [Parameter(ParameterSetName = 'Run')]
     [switch]$ImageMode,
 
+    [Parameter(ParameterSetName = 'Run')]
+    [string]$InputFilesBase64 = '',
+
     [Parameter(ParameterSetName = 'Smoke', Mandatory = $true)]
     [switch]$BrowserSmoke,
 
@@ -94,6 +97,9 @@ try {
     }
     if ($ImageMode) {
         $argsList += '--image-mode'
+    }
+    if (-not [string]::IsNullOrEmpty($InputFilesBase64)) {
+        $argsList += @('--input-files-base64', $InputFilesBase64)
     }
     foreach ($path in $AllowedPath) {
         $argsList += @('--allow-path', $path)

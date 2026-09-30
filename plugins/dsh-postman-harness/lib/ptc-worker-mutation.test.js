@@ -293,7 +293,7 @@ test('wrong callers, forged preset, stale Worker and other Leader stay rejected'
     f.agents.delete(stale.id); f.adapter.remove(stale); f.boundaries.disposeAgent(stale)
     assert.equal((await f.execute(stale, 'return 2')).value.status, 'PTC_CALLER_REJECTED')
     assert.equal(f.worker.ownsLiveWorker(stale), false)
-    assert.deepEqual(value(await f.execute(pilot.a, 'return Object.keys(tools).sort()')), ['create_goal', 'get_goal', 'grep', 'postman_bridge', 'postman_bridge_status', 'postman_task_prepare', 'postman_task_restore', 'postman_worker', 'postman_worker_interrupt', 'postman_worker_list', 'postman_worker_stop', 'read', 'todo_write', 'update_goal', 'web_fetch'])
+    assert.deepEqual(value(await f.execute(pilot.a, 'return Object.keys(tools).sort()')), ['create_goal', 'get_goal', 'grep', 'postman_bridge', 'postman_bridge_status', 'postman_input_files', 'postman_task_prepare', 'postman_task_restore', 'postman_worker', 'postman_worker_interrupt', 'postman_worker_list', 'postman_worker_stop', 'read', 'todo_write', 'update_goal', 'web_fetch'])
     assert.equal(visible(f, prod.a).includes('ptc_execute'), false)
   } finally { await f.cleanup() }
 }))

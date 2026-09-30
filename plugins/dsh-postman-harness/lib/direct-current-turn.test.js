@@ -5,12 +5,7 @@ import { createHash } from 'node:crypto'
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import {
-  CurrentUserTurnStore,
-  DirectPostmanJobManager,
-  createDirectCurrentTurnToolConfigs,
-  parsePostmanUserTurn,
-} from './direct-current-turn.js'
+import { CurrentUserTurnStore, DirectPostmanJobManager, createDirectCurrentTurnToolConfigs, parsePostmanUserTurn } from './direct-current-turn.js'
 
 function fakeChild() {
   const child = new EventEmitter()
@@ -30,6 +25,33 @@ function userEvent(text, seq = 1) {
     },
   }
 }
+
+
+test('input descriptors are transport metadata, not semantic Luna payload', () => {
+  const file = { name: 'reference.png', repository: 'AndrewVerhoturov1/dsh-workspace',
+    commit: 'a'.repeat(40), path: 'img/reference.png', sha256: 'b'.repeat(64), byte_length: 12 }
+  const metadata = '--input-files-json ' + JSON.stringify([file]) + '\n'
+  const fresh = parsePostmanUserTurn('@PostmanImage ' + metadata + 'Draw exactly')
+  assert.equal(fresh.payload, 'Draw exactly')
+  assert.deepEqual(fresh.inputFiles, [file])
+  const chat = parsePostmanUserTurn('@PostmanAsk --chat REQ_20260921T193936Z_3678 ' + metadata + 'Describe')
+  assert.equal(chat.payload, 'Describe')
+  assert.deepEqual(chat.inputFiles, [file])
+  assert.equal(parsePostmanUserTurn('@PostmanAsk --chat REQ_20260921T193936Z_3678 Describe').inputFiles, undefined)
+  assert.throws(() => parsePostmanUserTurn('@Postman --input-files-json nope\nintent'), /POSTMAN_INPUT_METADATA_INVALID/)
+})
+
+test('Direct job forwards only descriptor JSON and keeps text intent separate', async () => {
+  const file = { name: 'note.md', repository: 'AndrewVerhoturov1/dsh-workspace', commit: 'a'.repeat(40),
+    path: 'docs/note.md', sha256: 'b'.repeat(64), byte_length: 12 }
+  let argv
+  const manager = new DirectPostmanJobManager({ exists: () => true,
+    spawn(_command, args) { argv = args; const child = fakeChild(); queueMicrotask(() => child.emit('spawn')); return child } })
+  await manager.start({ sessionId: 'input-test', workspace: '/repo', branch: 'task/postman-1234567890abcdef1234567890abcdef',
+    payload: 'Exact intent', inputFiles: [file], transportKind: 'text' })
+  assert.deepEqual(JSON.parse(Buffer.from(argv[argv.indexOf('-InputFilesBase64') + 1], 'base64').toString('utf8')), [file])
+  assert.equal(Buffer.from(argv[argv.indexOf('-TaskBase64') + 1], 'base64').toString('utf8'), 'Exact intent')
+})
 
 test('image parser preserves exact payload and rejects manual chat', () => {
   const raw = '  @PostmanImage\nDraw a cat  '
@@ -360,6 +382,7 @@ test('send_current_turn reads captured runtime text, not model arguments, and co
   await assert.rejects(bridge.tools[0].execute({}, { agent }), /POSTMAN_CURRENT_TURN_ALREADY_USED/)
   bridge.dispose()
 })
+
 
 test('automatic continuation is deterministic and does not accept model-written text', async () => {
   const children = []

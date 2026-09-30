@@ -5,7 +5,7 @@ import { POSTMAN_PTC_ONLY_LEADER_TOOLS } from './postman-bridge-core.js'
 
 export const PTC_TOOL_NAME = 'ptc_execute'
 export const PILOT_PROFILE = validatePtcProfile({
-  schemaVersion: 1, id: 'postman-leader-supervisor', revision: 2,
+  schemaVersion: 1, id: 'postman-leader-supervisor', revision: 3,
   tools: [...POSTMAN_PTC_ONLY_LEADER_TOOLS],
   limits: { ...DEFAULT_LIMITS, maxConcurrentToolCalls: 1, maxWallMs: 30000 },
 })
