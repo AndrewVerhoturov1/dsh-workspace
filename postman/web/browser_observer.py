@@ -435,7 +435,7 @@ class AnswerPhaseTracker:
     """Latch the final answer for one exact user anchor and logical turn."""
 
     def __init__(self) -> None:
-        self.anchor: tuple[str, str, int] | None = None
+        self.anchor: tuple[str, str, tuple[str, str | int]] | None = None
         self.turn_key: str | None = None
         self.final_answer_latched = False
 
@@ -464,7 +464,12 @@ def inspect_answer_phase(page: Any, expected_prompt: str, expected_chat_url: str
         return details
     anchor_turn = turns[anchor]
     group_key = str(anchor_turn.get("groupKey") or "")
-    anchor_key = (expected_chat_url, expected_prompt, anchor)
+    anchor_key = (expected_chat_url, expected_prompt,
+                  ("group", group_key) if group_key else ("index", anchor))
+    if (group_key and tracker.turn_key and tracker.turn_key != group_key
+            and tracker.anchor and tracker.anchor[:2] == anchor_key[:2]):
+        details["phaseSource"] = "logical_turn_changed"
+        return details
     if tracker.anchor != anchor_key:
         tracker.anchor = anchor_key
         tracker.turn_key = None

@@ -84,6 +84,22 @@ class TurnGroupDomTests(unittest.TestCase):
         self.page.set_content(html())  # assistant units briefly detach during hydration
         self.assertEqual(self.inspect()['phase'], observer.FINAL_ANSWER_STARTED)
 
+    def test_virtualized_anchor_index_does_not_clear_final_latch(self):
+        self.page.set_content(html(FINAL))
+        first = self.inspect()
+        self.assertEqual(first['anchorIndex'], 0)
+        self.assertEqual(first['phase'], observer.FINAL_ANSWER_STARTED)
+        self.assertTrue(first['finalAnswerLatched'])
+
+        prior = ('<main><div data-turn-key="earlier">'
+                 '<div data-user-message-bubble="true">Earlier turn</div></div></main>')
+        self.page.set_content(prior + html())  # same logical turn, no final unit this poll
+        shifted = self.inspect()
+        self.assertEqual(shifted['anchorIndex'], 1, shifted)
+        self.assertEqual(shifted['logicalTurnKey'], 'logical-1')
+        self.assertEqual(shifted['phase'], observer.FINAL_ANSWER_STARTED, shifted)
+        self.assertTrue(shifted['finalAnswerLatched'])
+
     def test_agent_turn_marker_can_wrap_separate_final(self):
         self.page.set_content(html('<div data-chatgpt-agent-turn-start>'
                                    '<div data-testid="activity-progress"><div data-markdown-text-style="assistant-message">Thinking</div></div>'
