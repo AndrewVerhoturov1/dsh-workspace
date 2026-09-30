@@ -10,7 +10,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[3]
 PACKAGE_ROOT = ROOT / "packages" / "dsh-codex-oauth"
-VENDOR = ROOT / "vendor" / "dsh-codex-oauth-0.1.8.tgz"
+VENDOR = ROOT / "vendor" / "dsh-codex-oauth-0.1.9.tgz"
 
 
 class VendoredCodexPackageTest(unittest.TestCase):
@@ -29,12 +29,12 @@ class VendoredCodexPackageTest(unittest.TestCase):
 
     def test_vendor_metadata_and_catalog_sources_match_repository(self) -> None:
         package = json.loads(self.read_vendor_text("package.json"))
-        self.assertEqual(package["version"], "0.1.8")
+        self.assertEqual(package["version"], "0.1.9")
         self.assertEqual(package["dependencies"]["@earendil-works/pi-ai"], "0.85.1")
 
         for relative in ("src/adapter.ts", "src/convert.ts", "src/index.ts", "src/catalog.ts"):
             repository_text = (PACKAGE_ROOT / relative).read_text(encoding="utf-8")
-            self.assertEqual(self.read_vendor_text(relative), repository_text, relative)
+            self.assertEqual(self.read_vendor_text(relative).replace("\r\n", "\n"), repository_text, relative)
 
     def test_image_regression_fix_is_present_for_gpt6_catalog(self) -> None:
         adapter = self.read_vendor_text("src/adapter.ts")
@@ -50,6 +50,8 @@ class VendoredCodexPackageTest(unittest.TestCase):
 
         self.assertIn("gpt6CodexModel('gpt-6-sol'", catalog)
         self.assertIn("gpt6CodexModel('gpt-6-luna'", catalog)
+        self.assertIn("id: 'gpt-6.1-sol'", catalog)
+        self.assertIn("gpt-6.1-sol", self.read_vendor_text("lib/catalog.js"))
         self.assertIn("input: ['text', 'image']", catalog)
         self.assertIn("withGpt6CodexModels(openaiCodexProvider())", index)
 
@@ -57,12 +59,12 @@ class VendoredCodexPackageTest(unittest.TestCase):
         profile = json.loads((ROOT / "profiles" / "web" / "package.json").read_text(encoding="utf-8"))
         self.assertEqual(
             profile["dependencies"]["dsh-codex-oauth"],
-            "file:../../vendor/dsh-codex-oauth-0.1.8.tgz",
+            "file:../../vendor/dsh-codex-oauth-0.1.9.tgz",
         )
 
         digest = base64.b64encode(hashlib.sha512(VENDOR.read_bytes()).digest()).decode("ascii")
         lock = (ROOT / "profiles" / "web" / "pnpm-lock.yaml").read_text(encoding="utf-8")
-        self.assertIn("dsh-codex-oauth-0.1.8.tgz", lock)
+        self.assertIn("dsh-codex-oauth-0.1.9.tgz", lock)
         self.assertIn(f"integrity: sha512-{digest}", lock)
         self.assertGreater(VENDOR.stat().st_size, 50_000)
 
