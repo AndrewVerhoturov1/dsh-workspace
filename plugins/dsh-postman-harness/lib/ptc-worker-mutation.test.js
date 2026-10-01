@@ -14,6 +14,7 @@ import { applyGlobTool, applyGrepTool, RAW_OUTPUT_MAX_BYTES, GREP_MAX_MATCHES, G
 import { applyWebFetchTool, applyWebSearchTool } from '@deepseek-ai/dsh-tool-web'
 import { createMemoryTaskRegistry } from './postman-task-registry.js'
 import { createPostmanWorkerTools } from './postman-worker.js'
+import { createPostmanChildNotifyTool } from './postman-bridge.js'
 import { createPostmanBridgeBoundaryManager, isTopLevelPostmanPtcLeader, POSTMAN_LEADER_TOOL_ALLOWLIST, postmanPtcDirectCallGuard, POSTMAN_WORKER_PTC_TOOL_NAMES } from './postman-bridge-core.js'
 import { POSTMAN_PTC_DISCIPLINE } from './ptc-discipline.js'
 import { createPtcAdapter, WORKER_MUTATION_PROFILE } from './ptc-adapter.js'
@@ -324,11 +325,16 @@ test('replaced task context revokes active PTC before next filesystem dispatch',
   } finally { await f.cleanup() }
 }))
 
-test('provisional first-turn authority is exact and revoked on stale, failed or uncertain admission', () => inTemporaryDir('ptc-provisional-', async dir => {
+test('provisional first-turn PTC and notify authority reject wrong, stale, failed or uncertain admission', () => inTemporaryDir('ptc-provisional-', async dir => {
   for(const fault of ['wrong-parent','production-parent','wrong-child','wrong-origin','wrong-depth','stale-admission','context-mismatch','failed-start','uncertain-binding','stopped','aborted','abort-after-activation']) {
     const f=await fixture(dir)
     try {
       const parent=await f.leader('leader',fault==='production-parent'?'postman-leader':'postman-leader-ptc')
+      const received = []
+      parent.a.steer = message => received.push(message)
+      const notify = createPostmanChildNotifyTool(f.ctx,{get:id=>f.taskContexts.get(id),child:()=>null},f.worker)
+      const notifyStatus = async () => (await notify.execute({message:'NEEDS_LEADER_GUIDANCE: blocker'},
+        {agent:captured.a,signal:controller.signal})).status
       let captured, early
       const controller=new AbortController()
       f.ctx.subagents.startContinuable=async spec=>{
@@ -349,6 +355,8 @@ test('provisional first-turn authority is exact and revoked on stale, failed or 
           assert.equal(visible(f,captured.a).includes('ptc_execute'),false)
           assert.equal(captured.sections.length,0)
         }
+        assert.equal(await notifyStatus(), fault==='failed-start'
+          ? 'PARENT_NOTIFICATION_ACCEPTED' : 'PARENT_NOTIFICATION_CALLER_REJECTED', fault)
         if(fault==='failed-start') throw Error('start failed after activation')
         return {childId:spec.childId,messageId:'accepted'}
       }
@@ -357,6 +365,8 @@ test('provisional first-turn authority is exact and revoked on stale, failed or 
       await f.worker.taskTool.execute({task:'test',createNew:true},{agent:parent.a,signal:controller.signal})
       assert.equal(early,['failed-start','abort-after-activation'].includes(fault),fault)
       assert.equal(f.worker.ownsLiveWorker(captured.a),false,fault)
+      assert.equal(await notifyStatus(),'PARENT_NOTIFICATION_CALLER_REJECTED',fault)
+      assert.equal(received.length,fault==='failed-start'?1:0,fault)
       f.refresh(captured.a.id)
       assert.equal(visible(f,captured.a).includes('ptc_execute'),false,fault)
       assert.equal(captured.sections.length,0,fault)

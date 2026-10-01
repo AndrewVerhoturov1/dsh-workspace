@@ -67,9 +67,12 @@ function harness({ ptc = false, interrupt = false } = {}) {
     throwError(error) { throw error },
   }
   let ptcAdapter, ptcContext
-  const operations = []
+  const operations = [], diagnostics = []
   if (ptc) {
     ptcContext = new Context()
+    ptcContext.logger.exporter({ export: message => {
+      if (message.name === 'postman-ptc') diagnostics.push({type:message.args[0],data:message.args[1]})
+    } })
     ptcContext.systemPrompt = { tools() {}, section() { return () => {} } }
     new ToolRuntime(ptcContext)
     ptcContext.agents = { get: id => id === agent.id ? agent : null }
@@ -111,7 +114,7 @@ function harness({ ptc = false, interrupt = false } = {}) {
     agentLoop: { config: { maxParallelToolCalls: 1 } },
     tools: { executionMode: () => ({ kind: 'exclusive' }), [TOOL_RUNTIME_SCHEDULER]: scheduler } }
   live = agent
-  return { agent, calls, events, queuedTurn, queuedStep, operations,
+  return { agent, calls, events, queuedTurn, queuedStep, operations, diagnostics,
     async dispose() { await ptcAdapter?.dispose(); await ptcContext?.fiber.dispose() } }
 }
 
@@ -138,8 +141,8 @@ test('model -> real ptc_execute prepare -> Worker accepted -> conclude; next mod
     assert.deepEqual(f.operations, ['postman_task_prepare', 'postman_worker'])
     assert.deepEqual(f.events.filter(e => e.type === 'tool/call').map(e => e.data.name), ['ptc_execute'])
     assert.equal(f.events.filter(e => e.type === 'turn/end').length, 1)
-    assert.equal(f.events.filter(e => e.type === 'postman/ptc-run').length, 1)
-    assert.equal(f.events.find(e => e.type === 'postman/ptc-run').data.yieldApplied, true)
+    assert.equal(f.diagnostics.filter(e => e.type === 'postman/ptc-run').length, 1)
+    assert.equal(f.diagnostics.find(e => e.type === 'postman/ptc-run').data.yieldApplied, true)
     f.queuedTurn.push({ id: 'worker-report', content: [{ type:'text',text:'Worker completed' }] })
     assert.equal(await f.agent.turn(), false)
     assert.deepEqual(f.calls, ['model', 'model'])
@@ -155,8 +158,8 @@ test('model -> PTC todo_write + Worker interrupt -> automatic WAIT with no yield
     assert.equal(f.calls.length, 1)
     assert.deepEqual(f.operations, ['todo_write','postman_worker_interrupt'])
     assert.equal(f.events.filter(e=>e.type==='tool/call' && e.data.name==='postman_yield').length, 0)
-    assert.equal(f.events.find(e=>e.type==='postman/ptc-run').data.yieldApplied, true)
-    assert.equal(f.events.find(e=>e.type==='postman/ptc-run').data.yieldRequested, false)
+    assert.equal(f.diagnostics.find(e=>e.type==='postman/ptc-run').data.yieldApplied, true)
+    assert.equal(f.diagnostics.find(e=>e.type==='postman/ptc-run').data.yieldRequested, false)
     f.queuedTurn.push({id:'worker-report',content:[{type:'text',text:'Worker result'}]})
     await f.agent.turn()
     assert.equal(f.calls.length, 2)

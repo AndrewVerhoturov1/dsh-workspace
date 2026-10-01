@@ -668,10 +668,10 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
         latest?.id !== admission.id || latest.state !== 'pending') return null
     return slot
   }
-  function ptcSlot(caller) {
+  function ptcSlot(caller, requireActivation = true) {
     const provisional = provisionalSlot(caller)
     if (provisional) return provisional.workerAgent === caller ? provisional : null
-    const slot = liveSlot(caller, caller?.session?.header?.parentSession, true)
+    const slot = liveSlot(caller, caller?.session?.header?.parentSession, requireActivation)
     const binding = rowOf(caller?.session?.header?.parentSession)?.workers?.[caller?.id]
     return slot?.delivery === 'none' && (!durable || binding?.delivery === 'none') ? slot : null
   }
@@ -692,7 +692,11 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     bindingChanged(caller.id)
     return true
   }
-  function ownsNotification(caller, leaderId) { return Boolean(liveSlot(caller, leaderId)) }
+  function ownsNotification(caller, leaderId) {
+    if (caller?.session?.header?.parentSession !== leaderId) return false
+    return Boolean(isTopLevelPostmanPtcLeader(ctx.agents.get(leaderId))
+      ? ptcSlot(caller, false) : liveSlot(caller, leaderId))
+  }
   // The same exact live-slot predicate serves PTC; a saved child ID is never authority.
   function ownsLiveWorker(caller) {
     return Boolean(ptcSlot(caller))

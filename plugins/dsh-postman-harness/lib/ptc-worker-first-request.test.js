@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { createPostmanWorkerTools } from './postman-worker.js'
+import { createPostmanChildNotifyTool } from './postman-bridge.js'
 import { createMemoryTaskRegistry } from './postman-task-registry.js'
 import { createPtcAdapter, WORKER_MUTATION_PROFILE } from './ptc-adapter.js'
 import { createPostmanBridgeBoundaryManager, isTopLevelPostmanPtcLeader, postmanPtcDirectCallGuard, POSTMAN_LEADER_TOOL_ALLOWLIST } from './postman-bridge-core.js'
@@ -29,7 +30,10 @@ const { apply: spawn } = await pkg('dsh-subagent-spawn-in-process')
 
 test('fresh Worker FIRST model request has PTC/discipline/max and batches four calls', {timeout:15000}, async t => {
   const dir = await mkdtemp(join(tmpdir(), 'ptc-first-request-'))
-  const ctx = new Context()
+  const ctx = new Context(), diagnostics = []
+  ctx.logger.exporter({ export: message => {
+    if (message.name === 'postman-ptc') diagnostics.push(message.args[1])
+  } })
   new AgentRegistry(ctx); new SessionStore(ctx); new SessionProjectionRegistry(ctx)
   new SystemPrompt(ctx, {}); new ToolRuntime(ctx)
   new LlmRuntime(ctx); new JsonlSessionPersistence(ctx, {root:join(dir,'sessions')})
@@ -38,7 +42,7 @@ test('fresh Worker FIRST model request has PTC/discipline/max and batches four c
   await writeFile(join(dir,'a.txt'),'A'); await writeFile(join(dir,'b.txt'),'B')
   const registry = createMemoryTaskRegistry(), context = Object.freeze({branch:'task/test',worktree:dir})
   await registry.create('leader', {stage:'ready',workers:{},runner:{state:'none'}})
-  const contexts = {get:id=>id==='leader'?context:null,record:registry.get,changeRecord:registry.change}
+  const contexts = {get:id=>id==='leader'?context:null,child:()=>null,record:registry.get,changeRecord:registry.change}
   let adapter, boundaries
   const refresh = id => { const a=ctx.agents.get(id); if (a && boundaries && adapter) {
     boundaries.refreshSession(id); adapter.refresh(a)
@@ -50,6 +54,7 @@ test('fresh Worker FIRST model request has PTC/discipline/max and batches four c
       owns(a)?{profile:WORKER_MUTATION_PROFILE,role:'worker'}:null})
   boundaries = createPostmanBridgeBoundaryManager(id=>ctx.agents.get(id), owns)
   ctx.tools.register(adapter.tool); ctx.tools.register(worker.taskTool)
+  ctx.tools.register(createPostmanChildNotifyTool(ctx, contexts, worker))
   ctx.tools.guard(exec=>postmanPtcDirectCallGuard(exec,id=>ctx.agents.get(id),owns))
   ctx.on('agent/created', async ({agent}) => {
     const activation=worker.confirmActivation(agent)
@@ -89,6 +94,13 @@ test('fresh Worker FIRST model request has PTC/discipline/max and batches four c
         const binding=registry.get('leader').workers[a.id]
         assert.equal(binding.delivery,'pending')
         assert.equal(binding.lifecycle.admissions.at(-1).state,'pending')
+        assert.ok(request.tools.some(s=>s.name==='notify_parent'))
+        for (const message of ['progress: still working', ' NEEDS_LEADER_GUIDANCE: blocker', 'needs_leader_guidance: blocker', 'NEEDS_LEADER_GUIDANCE: blocker']) {
+          const notification = await ctx.tools.execute({callId:'early-notify',name:'notify_parent',arguments:{message},agent:a,signal:request.signal})
+          assert.equal(notification.isError,false,notification.error?.message)
+          assert.equal(notification.value.status,message.startsWith('NEEDS_LEADER_GUIDANCE:')
+            ? 'PARENT_NOTIFICATION_ACCEPTED' : 'POSTMAN_WORKER_NOTIFICATION_REJECTED')
+        }
         const direct=await ctx.tools.execute({callId:'early-direct-read',name:'read',arguments:{file_path:'a.txt'},agent:a,signal:request.signal})
         assert.equal(direct.isError,true)
         assert.match(direct.error.message,/POSTMAN_PTC_DIRECT_CALL_REJECTED: use ptc_execute/)
@@ -113,6 +125,7 @@ test('fresh Worker FIRST model request has PTC/discipline/max and batches four c
   assert.deepEqual(nested.map(x=>x.name),['glob','read','read','grep'])
   assert.ok(nested.every(x=>x.agent===requests[0].agent && x.parent && x.root==='batch'))
   assert.deepEqual(requests[0].agent.session.events.filter(e=>e.type==='tool/call').map(e=>e.data.name),['ptc_execute'])
-  assert.equal(requests[0].agent.session.events.find(e=>e.type==='postman/ptc-run').data.nestedToolCalls,4)
+  assert.equal(requests[0].agent.session.events.some(e=>e.type==='postman/ptc-run'),false)
+  assert.equal(diagnostics.find(d=>d.sessionId===fresh.workerSessionId).nestedToolCalls,4)
   assert.equal(worker.ownsLiveWorker(released[0]),false)
 })

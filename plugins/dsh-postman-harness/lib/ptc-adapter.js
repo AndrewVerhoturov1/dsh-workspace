@@ -45,6 +45,7 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
   }
   let current = pilotProfile(profile), disposed = false
   const owners = new Map()
+  const logger = ctx.logger('postman-ptc')
   const assignmentFor = resolveAssignment ?? (agent => authorize(agent) ? { profile: current, role: 'leader' } : null)
   function allowed(agent, record) {
     if (disposed || !agent || !record || record.agent !== agent ||
@@ -229,7 +230,9 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
         return result
       } finally {
         const resultBytes = terminal?.status === 'ok' ? Buffer.byteLength(JSON.stringify(terminal.value), 'utf8') : 0
-        agent.session?.append('postman/ptc-run', {
+        // Plugin diagnostic vocabulary is not supported by native persistence.
+        // Keep efficiency metadata in the ordinary logger, never in the durable session.
+        logger.info('postman/ptc-run', { sessionId: agent.id,
           role: record.role, description: args.description, boundary: args.boundary,
           status: terminal?.status ?? 'runtime-error', durationMs: Date.now() - startedAt,
           nestedToolCalls: started.size, toolCounts,
