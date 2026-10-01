@@ -146,11 +146,17 @@ normal ZIP validator content gates. Fixed implementation-author discipline не 
 Browser prompt состоит ровно из двух строк:
 
 ```text
-POSTMAN_REQUEST_ID: <REQ>
-task_file: <exact SHA-pinned task URL>
+Выполни задание по ссылке полностью и соблюдай указанные внутри требования к результату:
+<exact SHA-pinned task URL>
 ```
 
-Отдельной `policy:` строки нет.
+Первая строка — одна из ровно 50 уникальных русских стартовых фраз в
+`web/launch_prompts.py`, отдельном от continuation/reminder pool. Выбор стабилен
+для REQ, exact полный prompt и SHA сохраняются до Send. Новый REQ, в том числе
+automatic continuation, получает новый task URL; same-REQ reminders не меняются.
+Visible protocol labels отсутствуют; REQ сохраняется в URL/task file/internal state.
+Submit/observer/detector используют exact полный user turn и bound conversation URL;
+legacy `POSTMAN_REQUEST_ID:` fallback сохранён для старых prompts. Отдельной `policy:` строки нет.
 
 User intent и result instructions не дублируются в browser prompt.
 

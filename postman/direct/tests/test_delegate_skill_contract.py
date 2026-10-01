@@ -39,9 +39,12 @@ class DelegateViaPostmanSkillContract(unittest.TestCase):
         self.assertNotIn("postman_async_send(", self.skill)
         self.assertNotIn("postman_runtime_", self.skill)
 
-    def test_machine_significant_task_and_terminal_markers(self):
+    def test_natural_launch_and_terminal_markers(self):
+        self.assertIn("50 естественных русских стартовых фраз", self.skill)
+        self.assertIn("Полный prompt и SHA сохраняются", self.skill)
+        self.assertIn("в новых launch prompts отсутствуют", self.skill)
         for marker in (
-            "POSTMAN_REQUEST_ID:", "task_file:", "RESULT_DURABLE",
+            "RESULT_DURABLE",
             "ASSISTANT_COMPLETED_NO_ARTIFACT", "ARTIFACT_REJECTED",
             "POSTMAN_TRANSPORT_FAILED", "resultZip", "assistantText",
             "DIRECT_CHAT_REFERENCE_UNAVAILABLE",

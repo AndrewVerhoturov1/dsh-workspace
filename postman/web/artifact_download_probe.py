@@ -3,8 +3,11 @@
 
 from __future__ import annotations
 
+import cdp_download
+
 import argparse
 import json
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -57,14 +60,14 @@ def run_submit_observe_detect_download(
     }
 
     try:
-        with factory() as playwright:
+        with tempfile.TemporaryDirectory(prefix="postman-cdp-") as artifacts_dir, cdp_download.locked_playwright(factory) as playwright:
             context = None
             page = None
             owns_context = False
             try:
                 try:
                     normalized = bootstrap.normalize_cdp_url(cdp_url)
-                    browser = playwright.chromium.connect_over_cdp(normalized)
+                    browser = cdp_download.connect_over_cdp(playwright, normalized, artifacts_dir=artifacts_dir)
                 except Exception as exc:
                     return _result(
                         detector.ARTIFACT_ATTACH_FAILED,
@@ -134,6 +137,7 @@ def run_submit_observe_detect_download(
                     expected_request=expected_request,
                     result_root=result_root,
                     browser_download_dir=browser_download_dir,
+                    cdp_artifacts_dir=artifacts_dir,
                     download_timeout_ms=download_timeout_ms,
                 )
                 result.setdefault("details", {})

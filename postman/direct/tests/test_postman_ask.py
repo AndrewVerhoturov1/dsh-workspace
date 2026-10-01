@@ -30,9 +30,8 @@ bootstrap_stub = types.ModuleType("browser_bootstrap")
 bootstrap_stub.DEFAULT_CDP_URL = "http://127.0.0.1:9222"
 
 task_package_stub = types.ModuleType("task_package")
-task_package_stub.build_external_prompt = lambda request_id, _policy, task_url: (
-    f"POSTMAN_REQUEST_ID: {request_id}\ntask_file: {task_url}"
-)
+from launch_prompts import build_launch_prompt
+task_package_stub.build_external_prompt = lambda request_id, _policy, task_url: build_launch_prompt(request_id, task_url)
 
 postman_direct_stub = types.ModuleType("postman_direct")
 postman_direct_stub.DEFAULT_GH_BINARY = "gh"
@@ -154,6 +153,10 @@ class PostmanAskTests(unittest.TestCase):
         self.assertEqual(result["assistantTextSha256"], hashlib.sha256(body.encode("utf-8")).hexdigest())
         self.assertEqual(result["textSettleMs"], 10_000)
         self.assertEqual(state["state"], "TEXT_RESULT_DURABLE")
+        launch = Bridge.calls[0]["prompt"]
+        self.assertEqual(launch, build_launch_prompt(REQ, Bridge.calls[0]["task_url"]))
+        self.assertEqual(state["exactPromptText"], launch)
+        self.assertEqual(state["promptSha256"], hashlib.sha256(launch.encode("utf-8")).hexdigest())
         self.assertEqual(Bridge.calls[0]["observer_timeout_ms"], 60 * 60 * 1000)
         self.assertIn("result_mode: text", Publisher.contents[0])
         self.assertIn(text_result.begin_marker(REQ), Publisher.contents[0])

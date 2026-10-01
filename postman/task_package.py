@@ -16,11 +16,13 @@ import re
 from urllib.parse import quote, unquote, urlparse
 
 try:
+    from postman.web.launch_prompts import build_launch_prompt
     from postman.web.request_identity import (
         assert_canonical_request_id,
         validate_expected_artifact_filename,
     )
 except ModuleNotFoundError:  # pragma: no cover - supports direct module loading
+    from web.launch_prompts import build_launch_prompt
     from web.request_identity import (
         assert_canonical_request_id,
         validate_expected_artifact_filename,
@@ -454,7 +456,7 @@ def build_external_prompt(
     skill_repository_url: str,
     task_url: str,
 ) -> str:
-    """Build the canonical two-line link-only prompt for the external agent.
+    """Build a natural two-line launch prompt with the exact task URL.
 
     `skill_repository_url` is retained as a compatibility argument for existing
     callers, but the production browser prompt no longer depends on an external
@@ -470,12 +472,7 @@ def build_external_prompt(
     task_path_name = unquote(urlparse(published_task_url).path.rstrip("/").rsplit("/", 1)[-1])
     if task_path_name != task_filename(request_id):
         raise TaskPackageError("task_url must point to the exact request task filename")
-    return "\n".join(
-        (
-            f"POSTMAN_REQUEST_ID: {request_id}",
-            f"task_file: {published_task_url}",
-        )
-    )
+    return build_launch_prompt(request_id, published_task_url)
 
 
 def validate_task_path(path: str, request_id: str) -> bool:
