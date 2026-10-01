@@ -6,6 +6,8 @@ import argparse
 import base64
 import hashlib
 import json
+import os
+import stat
 from pathlib import Path
 import re
 import subprocess
@@ -17,6 +19,9 @@ try:
     from postman.task_package import normalize_input_files
 except ModuleNotFoundError:
     from task_package import normalize_input_files
+
+MAX_INPUT_BYTES = 16 * 1024 * 1024
+MAX_AGGREGATE_BYTES = 48 * 1024 * 1024
 
 REPOSITORY = "AndrewVerhoturov1/dsh-workspace"
 BRANCH = "transport/postman-inputs"
@@ -38,15 +43,36 @@ def selected_file(path: str) -> tuple[str, bytes]:
     if any(part.lower() in _SENSITIVE or part.lower().endswith((".key", ".pem", ".p12", ".log"))
            for part in source.resolve(strict=True).parts):
         raise InputStageError("sensitive/runtime path cannot be published")
-    data = source.read_bytes()
+    # One bounded read: hashing, publication and private snapshot use these same bytes.
+    with source.open("rb") as handle:
+        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            raise InputStageError("select a regular file")
+        data = handle.read(MAX_INPUT_BYTES + 1)
+    if len(data) > MAX_INPUT_BYTES:
+        raise InputStageError("POSTMAN_INPUT_BUNDLE_LIMIT_EXCEEDED")
     if not data:
         raise InputStageError("empty input file")
     return source.name, data
 
 
 class GitHubInputPublisher:
-    def __init__(self, api=None):
+    def __init__(self, api=None, snapshot_dir=None):
         self.api = api or self._api
+        # Only Host supplies this private directory; never returned in a descriptor.
+        self.snapshot_dir = Path(snapshot_dir) if snapshot_dir is not None else None
+        self.materializations = []
+
+    def _materialize(self, descriptor, data, source_kind):
+        if not data or len(data) > MAX_INPUT_BYTES:
+            raise InputStageError("POSTMAN_INPUT_BUNDLE_LIMIT_EXCEEDED")
+        if self.snapshot_dir is None:  # manual descriptor-only diagnostics
+            return
+        path = self.snapshot_dir / f"{len(self.materializations) + 1:03d}.bin"
+        with path.open("xb") as handle:
+            os.chmod(path, 0o600)
+            handle.write(data)
+        self.materializations.append(dict(snapshot_path=str(path), sha256=descriptor["sha256"],
+                                         byte_length=len(data), source_kind=source_kind))
 
     @staticmethod
     def _api(endpoint, method="GET", payload=None):
@@ -89,16 +115,31 @@ class GitHubInputPublisher:
         response = self.api(f"repos/{REPOSITORY}/contents/{quote(path, safe='/')}?ref={commit}")
         if response.get("type") != "file" or response.get("encoding") != "base64":
             raise InputStageError("GitHub file unavailable")
-        data = base64.b64decode(response["content"], validate=False)
+        if response.get("size", 0) > MAX_INPUT_BYTES or len(response["content"]) > 24 * 1024 * 1024:
+            raise InputStageError("POSTMAN_INPUT_BUNDLE_LIMIT_EXCEEDED")
+        data = base64.b64decode("".join(response["content"].split()), validate=True)
+        if "size" in response and response["size"] != len(data):
+            raise InputStageError("POSTMAN_INPUT_MATERIALIZATION_MISMATCH")
         name = Path(path).name
-        return normalize_input_files([dict(name=name, repository=REPOSITORY, commit=commit, path=path,
+        descriptor = normalize_input_files([dict(name=name, repository=REPOSITORY, commit=commit, path=path,
             sha256=hashlib.sha256(data).hexdigest(), byte_length=len(data),
             raw_url=f"https://raw.githubusercontent.com/{REPOSITORY}/{commit}/{quote(path, safe='/')}")])[0]
+        self._materialize(descriptor, data, "github")
+        return descriptor
 
     def stage(self, paths):
         if not paths or len(paths) > 20:
             raise InputStageError("select 1-20 exact files")
-        selected = [selected_file(path) for path in paths]
+        selected, total = [], 0
+        for path in paths:
+            item = selected_file(path)
+            total += len(item[1])
+            if total > MAX_AGGREGATE_BYTES:
+                raise InputStageError("POSTMAN_INPUT_BUNDLE_LIMIT_EXCEEDED")
+            selected.append(item)
+        # Snapshot the selected buffers before any GitHub operation; no pathname reread.
+        for _, data in selected:
+            self._materialize({"sha256": hashlib.sha256(data).hexdigest()}, data, "local")
         bundle = uuid4().hex
         entries = []
         records = []
@@ -116,7 +157,8 @@ class GitHubInputPublisher:
             descriptors.append(dict(name=name, repository=REPOSITORY, commit=commit, path=path,
                                     raw_url=f"https://raw.githubusercontent.com/{REPOSITORY}/{commit}/{quote(path, safe='/')}",
                                     sha256=hashlib.sha256(data).hexdigest(), byte_length=len(data)))
-        return {"bundle_id": bundle, "descriptors": normalize_input_files(descriptors)}
+        descriptors = normalize_input_files(descriptors)
+        return {"bundle_id": bundle, "descriptors": descriptors}
 
     def cleanup(self, bundle):
         if not _BUNDLE.fullmatch(bundle):
@@ -154,10 +196,14 @@ def main(argv=None):
     group.add_argument("--stage", nargs="+")
     group.add_argument("--cleanup")
     group.add_argument("--existing", nargs=2, metavar=("COMMIT", "PATH"))
+    parser.add_argument("--snapshot-dir", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     try:
-        publisher = GitHubInputPublisher()
+        publisher = GitHubInputPublisher(snapshot_dir=args.snapshot_dir)
         result = publisher.stage(args.stage) if args.stage else publisher.cleanup(args.cleanup) if args.cleanup else publisher.existing(*args.existing)
+        if args.snapshot_dir:
+            result = {**result, "materializations": publisher.materializations} if args.stage else {
+                "descriptors": [result], "materializations": publisher.materializations}
         print(json.dumps(result, ensure_ascii=False))
         return 0
     except (InputStageError, KeyError, OSError, ValueError) as exc:

@@ -82,7 +82,13 @@ export function createPostmanBridgeTool(ctx, jobs, contexts) {
         return { status: 'POSTMAN_INPUT_PROVENANCE_REJECTED' }
       if (typeof contexts?.isRestoring === 'function' && contexts.isRestoring(exec.agent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
       if (typeof contexts?.hasActiveOperation === 'function' && contexts.hasActiveOperation(exec.agent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
-      return jobs.accept(exec.agent, args.message, parsed.transportKind)
+      const inputBinding = parsed.inputFiles?.length
+        ? postmanInputGrants.pin(exec.agent, contexts.get(exec.agent.id), parsed.inputFiles) : undefined
+      try {
+        const result = await jobs.accept(exec.agent, args.message, parsed.transportKind, inputBinding)
+        if (result.status !== 'POSTMAN_BRIDGE_ACCEPTED') postmanInputGrants.unpin(inputBinding)
+        return result
+      } catch (error) { postmanInputGrants.unpin(inputBinding); throw error }
     },
   })
 }
@@ -180,7 +186,10 @@ export async function apply(ctx) {
     }
   }
   const worker = createPostmanWorkerTools(ctx, grants, postmanTaskContexts, { onBindingChange: refreshWorker })
-  const stopContextWatch = contexts.onContextChange(id => worker.refreshLeader(id))
+  const stopContextWatch = contexts.onContextChange(id => {
+    postmanInputGrants.releaseStale(ctx.agents.get(id), contexts.get(id))
+    worker.refreshLeader(id)
+  })
   const jobs = createPostmanBridgeJobs(ctx, coordinator, grants, postmanTaskContexts, worker)
   const ownsPtcWorker = agent => worker.ownsLiveWorker(agent) &&
     isTopLevelPostmanPtcLeader(ctx.agents.get(agent.session.header.parentSession))
@@ -207,6 +216,7 @@ export async function apply(ctx) {
   ctx.tools.register(createImplementationArtifactApplyTool(ctx, grants, worker, { taskContexts: postmanTaskContexts, jobs }))
   ctx.effect(() => async () => {
     try { await jobs.dispose() } finally {
+      postmanInputGrants.dispose()
       worker.dispose()
       stopContextWatch()
       await ptc.dispose()

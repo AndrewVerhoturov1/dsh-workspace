@@ -45,12 +45,35 @@ test('Direct job forwards only descriptor JSON and keeps text intent separate', 
   const file = { name: 'note.md', repository: 'AndrewVerhoturov1/dsh-workspace', commit: 'a'.repeat(40),
     path: 'docs/note.md', sha256: 'b'.repeat(64), byte_length: 12 }
   let argv
+  const binding = Object.freeze({})
+  let cleaned = false
   const manager = new DirectPostmanJobManager({ exists: () => true,
+    inputGrants: { async build(record, sessionId, requestId, descriptors) {
+      assert.equal(record, binding); assert.equal(sessionId, 'input-test'); assert.deepEqual(descriptors, [file])
+      return { handoffPath: '/host-private/input-handoff.json', cleanup() { cleaned = true } }
+    } },
     spawn(_command, args) { argv = args; const child = fakeChild(); queueMicrotask(() => child.emit('spawn')); return child } })
   await manager.start({ sessionId: 'input-test', workspace: '/repo', branch: 'task/postman-1234567890abcdef1234567890abcdef',
-    payload: 'Exact intent', inputFiles: [file], transportKind: 'text' })
+    payload: 'Exact intent', inputFiles: [file], inputBinding: binding, transportKind: 'text' })
   assert.deepEqual(JSON.parse(Buffer.from(argv[argv.indexOf('-InputFilesBase64') + 1], 'base64').toString('utf8')), [file])
   assert.equal(Buffer.from(argv[argv.indexOf('-TaskBase64') + 1], 'base64').toString('utf8'), 'Exact intent')
+  assert.equal(argv[argv.indexOf('-InputBundleManifest') + 1], '/host-private/input-handoff.json')
+  assert.equal(cleaned, false)
+  manager.latest('input-test').child.emit('close', 0)
+  assert.equal(cleaned, true)
+})
+
+test('Host bundle rejection occurs before spawn and remains correlated proven-unsent status', async () => {
+  const manager = new DirectPostmanJobManager({ exists: () => true,
+    spawn() { assert.fail('must not spawn') } })
+  await assert.rejects(manager.start({ sessionId: 'forged-input', workspace: '/repo', payload: 'intent', branch: 'main',
+    inputFiles: [{ name: 'file.txt' }] }), /POSTMAN_INPUT_PROVENANCE_REJECTED/)
+  const current = manager.view('forged-input')
+  assert.equal(current.status, 'COMPLETED')
+  assert.equal(current.result.transportCode, 'POSTMAN_INPUT_PROVENANCE_REJECTED')
+  assert.equal(current.result.details.sendState, 'PROVEN_NOT_SENT')
+  assert.equal(current.result.details.inputBundlePhase, 'host-build')
+  assert.equal(current.result.requestId, current.requestId)
 })
 
 test('image parser preserves exact payload and rejects manual chat', () => {

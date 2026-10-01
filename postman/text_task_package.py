@@ -30,6 +30,7 @@ def render_direct_text_task_manifest(
     repository: str,
     base_commit: str,
     input_files: Iterable[Mapping[str, object]] | None = None,
+    native_input_request_id: str | None = None,
 ) -> str:
     try:
         assert_canonical_request_id(request_id)
@@ -88,7 +89,7 @@ def render_direct_text_task_manifest(
         end,
         "",
     ]
-    section = render_input_files_section(input_files)
+    section = render_input_files_section(input_files, native_input_request_id=native_input_request_id)
     if section:
         marker = lines.index("## Execution contract")
         lines[marker:marker] = section.split("\n") + [""]

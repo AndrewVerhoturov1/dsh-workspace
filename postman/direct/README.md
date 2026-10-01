@@ -53,6 +53,12 @@ Tool-level shell failure до spawn, например `spawn EPERM`, означ�
 не стартовал. После такого failure нельзя выбирать latest/старый REQ как результат текущей операции
 или автоматически повторять Send.
 
+## Native input ZIP boundary
+
+Для `@Postman` / `@PostmanAsk` с explicitly granted inputs Host после canonical REQ allocation создаёт и independently verifies `POSTMAN_INPUT_<REQ>.zip` из private byte snapshots. Прежний `-InputFilesBase64` сохраняет immutable provenance; новый `-InputBundleManifest` — только Host-created strict private handoff path, не model-authored source list. Direct проверяет exact REQ, descriptor digest, regular/non-symlink files, expected ZIP name, size/hash/content до browser. State хранит bundle metadata без source paths. Browser заново hash-verifies bytes и загружает native FilePayload.
+
+Input ZIP и handoff удаляются best-effort только после browser lifecycle; Host также убирает private request root при terminal/spawn failure. Cleanup не меняет уже доказанный outcome. Без inputs argv/flow прежние. Image mode намеренно сохраняет descriptor-only visual references для этого MVP. Полный contract: [POSTMAN_INPUT_FILES.md](../POSTMAN_INPUT_FILES.md).
+
 ## Normal request
 
 Для production вызова trusted current-turn Host сам передаёт `-Branch`: standalone transport

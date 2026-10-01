@@ -46,6 +46,7 @@ import process_lock  # noqa: E402
 import durable_handoff  # noqa: E402
 import image_result  # noqa: E402
 import task_package  # noqa: E402
+import input_bundle  # noqa: E402
 import request_identity  # noqa: E402
 import runtime_support as runtime  # noqa: E402
 from web_worker_bridge import (  # noqa: E402
@@ -686,7 +687,31 @@ class DirectPostman:
             browser=browser,
         )
 
-    def run(
+    def run(self, *, input_bundle_manifest=None, **kwargs):
+        self.publication_receipt = None
+        attachment = None
+        try:
+            inputs = task_package.normalize_input_files(kwargs.get("input_files", ()))
+            kwargs["input_files"] = inputs
+            if kwargs.get("image_mode"):
+                if input_bundle_manifest:
+                    input_bundle.fail("BUNDLE_HANDOFF_INVALID")
+            elif inputs or input_bundle_manifest:
+                attachment = input_bundle.read_handoff(input_bundle_manifest, kwargs["request_id"], inputs)
+            return self._run(input_attachment=attachment, **kwargs)
+        except input_bundle.InputBundleError as exc:
+            raise DirectPostmanError(exc.code, str(exc), details={"sendState": "PROVEN_NOT_SENT",
+                "inputBundlePhase": "direct-handoff" if attachment is None else "direct-pre-upload"}) from exc
+        finally:
+            if attachment is not None:
+                # After the browser lifecycle returns, never reinterpret cleanup failure as unsent.
+                for path in (attachment.path, Path(input_bundle_manifest)):
+                    try:
+                        path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+
+    def _run(
         self,
         *,
         request_id: str,
@@ -698,6 +723,7 @@ class DirectPostman:
         automatic_continuation: bool = False,
         image_mode: bool = False,
         input_files: Iterable[dict[str, object]] = (),
+        input_attachment: input_bundle.InputAttachment | None = None,
     ) -> dict[str, Any]:
         if not isinstance(self.branch, str) or not self.branch.strip():
             raise DirectPostmanError("DIRECT_BRANCH_REQUIRED", "task publication branch must be explicit")
@@ -795,6 +821,7 @@ class DirectPostman:
             STATE_INIT,
             taskSha256=_sha256_text(task),
             resultRoot=str(self.result_root),
+            **({"inputBundle": input_attachment.metadata()} if input_attachment else {}),
             **chain_fields,
             **initial_chat_fields,
         )
@@ -825,6 +852,7 @@ class DirectPostman:
                 request_id=request_id,
                 user_intent=task,
                 input_files=input_files,
+                native_input_request_id=request_id if input_attachment else None,
                 repository=self.repository,
                 base_commit=snapshot.prepublication_commit,
                 expected_filename=expected_filename,
@@ -879,8 +907,11 @@ class DirectPostman:
         bridge_root = self.direct_root.parent
         bridge = self.bridge_factory(root=bridge_root, result_root=self.result_root)
         self._write_state(request_id, STATE_WEB_RUNNING)
+        if input_attachment:
+            input_attachment.upload_bytes()
         result = bridge.run_request(
             request_id,
+            **({"input_attachment": input_attachment} if input_attachment else {}),
             task_url=published.task_url,
             prompt=prompt,
             expected_filename=expected_filename,
@@ -1111,6 +1142,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--automatic-continuation", action="store_true", help="Continue the existing conversation and preserve chain identity")
     parser.add_argument("--image-mode", action="store_true", help="Generate one image, then package it in a second turn")
     parser.add_argument("--input-files-base64")
+    parser.add_argument("--input-bundle-manifest")
     parser.add_argument("--allow-path", action="append", default=[])
     parser.add_argument("--forbid-path", action="append", default=[])
     return parser
@@ -1157,6 +1189,7 @@ def main(argv: list[str] | None = None) -> int:
                     automatic_continuation=args.automatic_continuation,
                     image_mode=args.image_mode,
                     input_files=decode_input_files_b64(args.input_files_base64),
+                    input_bundle_manifest=args.input_bundle_manifest,
                     cdp_url=args.cdp_url,
                     extra_allowed=args.allow_path,
                     extra_forbidden=args.forbid_path,

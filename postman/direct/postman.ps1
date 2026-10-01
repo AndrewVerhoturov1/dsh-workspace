@@ -23,6 +23,8 @@ param(
     [Parameter(ParameterSetName = 'Run')]
     [string]$InputFilesBase64 = '',
 
+    [string]$InputBundleManifest = '',
+
     [Parameter(ParameterSetName = 'Smoke', Mandatory = $true)]
     [switch]$BrowserSmoke,
 
@@ -100,6 +102,9 @@ try {
     }
     if (-not [string]::IsNullOrEmpty($InputFilesBase64)) {
         $argsList += @('--input-files-base64', $InputFilesBase64)
+    }
+    if (-not [string]::IsNullOrEmpty($InputBundleManifest)) {
+        $argsList += @('--input-bundle-manifest', $InputBundleManifest)
     }
     foreach ($path in $AllowedPath) {
         $argsList += @('--allow-path', $path)
