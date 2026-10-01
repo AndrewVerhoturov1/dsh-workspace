@@ -1,14 +1,18 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createHash } from 'node:crypto'
+import { Context } from '@deepseek-ai/cordis'
+import { ToolRuntime, defineTool } from '@deepseek-ai/dsh-tools'
+import { createScope } from '@deepseek-ai/dsh-scope'
+import { createPtcAdapter } from './ptc-adapter.js'
 import { mkdtempSync, writeFileSync, existsSync, rmSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { PostmanInputGrants, createPostmanInputFilesTool, postmanInputGrants } from './postman-input-files.js'
+import { basename, dirname, join } from 'node:path'
+import { CurrentAttachmentStore, PostmanInputGrants, createPostmanInputFilesTool, postmanInputGrants } from './postman-input-files.js'
 import { createPostmanBridgeTool } from './postman-bridge.js'
 import { createPostmanBridgeJobs } from './postman-bridge-jobs.js'
 import { postmanBridgeRestrictionForAgent, postmanPtcDirectCallGuard,
-  POSTMAN_INPUT_FILES_TOOL_NAME, POSTMAN_PTC_ONLY_LEADER_TOOLS } from './postman-bridge-core.js'
+  postmanBridgeCallerAllowed, POSTMAN_INPUT_FILES_TOOL_NAME, POSTMAN_PTC_ONLY_LEADER_TOOLS } from './postman-bridge-core.js'
 
 const file = Object.freeze({ name: 'reference.png', repository: 'AndrewVerhoturov1/dsh-workspace',
   commit: 'a'.repeat(40), path: 'tmp/123/reference.png', sha256: createHash('sha256').update('PNG-bytes').digest('hex'), byte_length: 9,
@@ -38,6 +42,197 @@ function fixture(preset = 'postman-leader') {
   const execute = (args, caller = agent, parent) => tool.execute(args, { agent: caller, parent, signal: new AbortController().signal })
   return { agent, task, grants, tool, calls, execute, agents }
 }
+
+const image = (data = 'PNG-bytes', name = 'reference.png') => ({
+  attachmentId: 'sha256:' + createHash('sha256').update(data).digest('hex'),
+  mediaType: 'image/png', bytes: Buffer.byteLength(data), width: 1, height: 1, name,
+})
+function currentFixture(t, { preset = 'postman-leader', resolveAttachment } = {}) {
+  const f = fixture(preset), listeners = new Map(), reads = [], publications = []
+  f.agent.session.id = f.agent.id
+  const ctx = { agents: { get: id => f.agents.get(id) }, on(name, listener) {
+    listeners.set(name, listener); return () => listeners.delete(name)
+  } }
+  const store = new CurrentAttachmentStore(ctx)
+  const taskContexts = { get: id => id === f.agent.id ? f.task : null }
+  const run = async (_root, args) => {
+    f.calls.push(args)
+    const marker = args.indexOf('--snapshot-dir'), root = args[marker + 1]
+    const paths = args.slice(1, marker)
+    const descriptors = [], materializations = []
+    for (const [index, path] of paths.entries()) {
+      const data = readFileSync(path), sha256 = createHash('sha256').update(data).digest('hex')
+      const name = basename(path), snapshot_path = join(root, String(index + 1).padStart(3, '0') + '.bin')
+      const descriptor = { ...file, name, sha256, byte_length: data.length }
+      publications.push({ name, sha256, byte_length: data.length })
+      writeFileSync(snapshot_path, data)
+      descriptors.push(descriptor); materializations.push({ snapshot_path, sha256, byte_length: data.length })
+    }
+    return { descriptors, materializations, bundle_id: 'f'.repeat(32) }
+  }
+  const tool = createPostmanInputFilesTool(ctx, taskContexts, { grants: f.grants, run, currentAttachments: store,
+    resolveAttachment: async (ref, signal) => { reads.push(ref); return resolveAttachment ? resolveAttachment(ref, signal)
+      : { ref, data: Buffer.from(ref.name === 'second.png' ? 'second-image' : 'PNG-bytes') } } })
+  const emit = (refs, session = f.agent.session, source = { kind: 'user' }, role = 'user') =>
+    listeners.get('session/event')(session, { type: 'user/message', data: { role, source,
+      content: [...refs.map(attachment => ({ type: 'image', attachment })), { type: 'text', text: 'Describe image' }] } })
+  const execute = args => tool.execute(args, { agent: f.agent, signal: new AbortController().signal })
+  t.after(() => { f.grants.dispose(); store.dispose() })
+  return { ...f, ctx, store, tool, emit, execute, reads, publications, listeners }
+}
+
+test('latest exact user image stages verified bytes without model paths or private output', async t => {
+  const f = currentFixture(t), ref = image()
+  f.emit([ref])
+  const result = await f.execute({ action: 'stage_current_attachments' })
+  assert.equal(result.status, 'POSTMAN_INPUT_READY')
+  assert.equal(result.bundleId, 'f'.repeat(32))
+  assert.deepEqual(f.reads, [ref])
+  assert.deepEqual(f.publications, [{ name: ref.name, sha256: ref.attachmentId.slice(7), byte_length: ref.bytes }])
+  assert.equal(f.grants.owns(f.agent, f.task, result.descriptors), true)
+  const source = f.calls[0][1], root = f.calls[0].at(-1)
+  assert.equal(existsSync(dirname(dirname(source))), false, 'private source root removed after stage')
+  assert.equal(existsSync(root), true, 'existing snapshot retained by grant')
+  for (const secret of [source, root, 'snapshot_path', 'PNG-bytes']) assert.equal(JSON.stringify(result).includes(secret), false)
+  assert.equal(result.descriptors[0].sha256, ref.attachmentId.slice(7))
+  assert.equal(result.descriptors[0].byte_length, ref.bytes)
+})
+
+test('approved selection keeps its existing grant when a later user message replaces attachment authority', async t => {
+  const f = currentFixture(t)
+  f.emit([image()])
+  const selected = await f.execute({ action: 'stage_current_attachments' })
+  f.emit([])
+  assert.equal((await f.execute({ action: 'stage_current_attachments' })).status, 'POSTMAN_INPUT_CURRENT_ATTACHMENT_UNAVAILABLE')
+  assert.equal(f.grants.owns(f.agent, f.task, selected.descriptors), true, 'current store is not grant revocation')
+})
+
+test('new exact user message with no attachments clears authority; synthetic inputs are ignored', async t => {
+  const f = currentFixture(t), ref = image()
+  f.emit([ref])
+  const current = f.store.get(f.agent)
+  for (const source of [{ kind: 'plugin', plugin: 'reminder' }, { kind: 'subagent' }, { kind: 'model' }]) {
+    f.emit([image('foreign')], f.agent.session, source)
+    assert.equal(f.store.get(f.agent), current)
+  }
+  f.emit([image('system')], f.agent.session, { kind: 'user' }, 'system')
+  assert.equal(f.store.get(f.agent), current)
+  f.emit([])
+  assert.equal((await f.execute({ action: 'stage_current_attachments' })).status, 'POSTMAN_INPUT_CURRENT_ATTACHMENT_UNAVAILABLE')
+  f.emit([ref], f.agent.session, { kind: 'plugin', plugin: 'synthetic' })
+  assert.equal((await f.execute({ action: 'stage_current_attachments' })).status, 'POSTMAN_INPUT_CURRENT_ATTACHMENT_UNAVAILABLE')
+  assert.equal(f.reads.length, 0); assert.equal(f.calls.length, 0)
+})
+
+test('another Leader/session handle and same-ID foreign session object confer no authority', async t => {
+  const f = currentFixture(t), ref = image(), other = { id: 'other-leader',
+    session: { id: 'other-leader', header: { agentPreset: 'postman-leader', delegationDepth: 0 } } }
+  f.agents.set(other.id, other)
+  f.emit([image()], f.agent.session)
+  f.emit([image('foreign')], other.session)
+  assert.equal((await f.execute({ action: 'stage_current_attachments', attachmentIds: [image('foreign').attachmentId] })).status,
+    'POSTMAN_INPUT_CURRENT_ATTACHMENT_MISMATCH')
+  f.emit([image('foreign')], { ...f.agent.session })
+  assert.deepEqual(f.store.get(f.agent).attachments, [ref])
+  assert.equal(f.reads.length, 0); assert.equal(f.calls.length, 0)
+})
+
+test('multiple current attachments require selection without reads; exact IDs stage only selected bytes', async t => {
+  const f = currentFixture(t), refs = [image(), image('second-image', 'second.png')]
+  f.emit(refs)
+  const selection = await f.execute({ action: 'stage_current_attachments' })
+  assert.equal(selection.status, 'POSTMAN_INPUT_CURRENT_ATTACHMENT_SELECTION_REQUIRED')
+  assert.deepEqual(selection.attachments, refs)
+  assert.equal(f.reads.length, 0); assert.equal(f.calls.length, 0)
+  const result = await f.execute({ action: 'stage_current_attachments', attachmentIds: [selection.attachments[1].attachmentId] })
+  assert.equal(result.status, 'POSTMAN_INPUT_READY')
+  assert.deepEqual(f.reads, [refs[1]])
+  assert.deepEqual(f.publications, [{ name: refs[1].name, sha256: refs[1].attachmentId.slice(7), byte_length: refs[1].bytes }])
+})
+
+test('unknown or stale current IDs reject before resolver and publication', async t => {
+  const f = currentFixture(t), stale = image('stale')
+  f.emit([stale]); f.emit([image()])
+  for (const id of [stale.attachmentId, image('unknown').attachmentId])
+    assert.equal((await f.execute({ action: 'stage_current_attachments', attachmentIds: [id] })).status,
+      'POSTMAN_INPUT_CURRENT_ATTACHMENT_MISMATCH')
+  for (const ids of [[], [image().attachmentId, image().attachmentId], Array(21).fill('id')])
+    assert.equal((await f.execute({ action: 'stage_current_attachments', attachmentIds: ids })).status, 'POSTMAN_INPUT_ARGUMENTS_INVALID')
+  assert.equal(f.reads.length, 0); assert.equal(f.calls.length, 0)
+})
+
+test('resolved byte hash or length mismatch rejects the entire selection before publication', async t => {
+  for (const data of ['WRONG!!!!', 'short']) {
+    const f = currentFixture(t, { resolveAttachment: async ref => ({ ref, data: Buffer.from(data) }) })
+    f.emit([image()])
+    assert.equal((await f.execute({ action: 'stage_current_attachments' })).status, 'POSTMAN_INPUT_CURRENT_ATTACHMENT_MISMATCH')
+    assert.equal(f.calls.length, 0)
+  }
+})
+
+test('message replacement during resolution rejects before stage; store disposal drops authority', async t => {
+  let f
+  f = currentFixture(t, { resolveAttachment: async ref => { f.emit([]); return { ref, data: Buffer.from('PNG-bytes') } } })
+  f.emit([image()])
+  assert.equal((await f.execute({ action: 'stage_current_attachments' })).status, 'POSTMAN_INPUT_CURRENT_ATTACHMENT_MISMATCH')
+  assert.equal(f.calls.length, 0)
+  f.store.dispose()
+  assert.equal(f.store.get(f.agent), undefined)
+  assert.equal(f.listeners.has('session/event'), false)
+})
+
+test('current attachment limits are applied before resolution and publication', async t => {
+  const f = currentFixture(t)
+  for (const refs of [[{ ...image(), bytes: 16 * 1024 * 1024 + 1 }],
+    Array.from({ length: 4 }, (_, n) => ({ ...image(String(n)), bytes: 16 * 1024 * 1024 }))]) {
+    f.emit(refs)
+    assert.equal((await f.execute({ action: 'stage_current_attachments', attachmentIds: refs.map(ref => ref.attachmentId) })).status,
+      'POSTMAN_INPUT_BUNDLE_LIMIT_EXCEEDED')
+  }
+  assert.equal(f.reads.length, 0); assert.equal(f.calls.length, 0)
+})
+
+test('new action dispatches through actual QuickJS PTC and Host ToolRuntime; model-direct remains denied', async t => {
+  const f = currentFixture(t, { preset: 'postman-leader-ptc' }), ctx = new Context()
+  ctx.systemPrompt = { tools() {}, section() { return () => {} } }
+  new ToolRuntime(ctx)
+  ctx.agents = { get: id => f.agents.get(id) }
+  f.agent.session.events = [{ type: 'turn/start' }]
+  f.agent.session.append = () => {}
+  f.agent.ctx = createScope(ctx, f.agent).ctx
+  const emptyOutput = { schema: { type: 'object', additionalProperties: true }, render: () => [] }
+  for (const name of postmanBridgeRestrictionForAgent(f.agent).allow) {
+    if (name === 'ptc_execute') continue
+    ctx.tools.register(name === POSTMAN_INPUT_FILES_TOOL_NAME ? f.tool : defineTool({ name, description: name,
+      parameters: {}, output: emptyOutput, async execute() { return {} } }))
+  }
+  ctx.tools.guard(exec => postmanPtcDirectCallGuard(exec, id => f.agents.get(id)))
+  const dispatches = []
+  ctx.on('tools/pre-execute', (exec, next) => { if (exec.name === POSTMAN_INPUT_FILES_TOOL_NAME) dispatches.push(exec); return next() })
+  const adapter = createPtcAdapter(ctx, { authorize: postmanBridgeCallerAllowed })
+  ctx.tools.register(adapter.tool)
+  f.agent.ctx.tools.restrict(postmanBridgeRestrictionForAgent(f.agent))
+  adapter.refresh(f.agent)
+  try {
+    f.emit([image()])
+    const direct = await ctx.tools.execute({ callId: 'direct-current', name: POSTMAN_INPUT_FILES_TOOL_NAME,
+      arguments: { action: 'stage_current_attachments' }, agent: f.agent, signal: new AbortController().signal })
+    assert.equal(direct.isError, true)
+    assert.match(direct.error.message, /PTC_DIRECT_CALL_REJECTED/)
+    assert.equal(f.calls.length, 0)
+    const nested = await ctx.tools.execute({ callId: 'ptc-current', name: 'ptc_execute', agent: f.agent,
+      signal: new AbortController().signal, arguments: { description: 'Stage current exact user attachment', boundary: 'semantic_decision',
+        program: 'return await tools.postman_input_files({action:"stage_current_attachments"})' } })
+    assert.equal(nested.isError, false, nested.error?.message)
+    assert.equal(nested.value.status, 'ok', JSON.stringify(nested.value))
+    assert.equal(nested.value.value.status, 'POSTMAN_INPUT_READY')
+    assert.equal(f.calls.length, 1)
+    const dispatch = dispatches.find(exec => exec.parent)
+    assert.equal(dispatch.agent, f.agent)
+    assert.equal(dispatch.rootCallId, 'ptc-current')
+    assert.deepEqual(dispatch.arguments, { action: 'stage_current_attachments' })
+  } finally { await adapter.dispose() }
+})
 
 test('exact production Leader receives Host descriptors, own cleanup and deterministic repeat', async () => {
   const f = fixture()

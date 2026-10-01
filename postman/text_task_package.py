@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Self-contained task renderer for text-only Direct PostmanAsk requests."""
+"""Self-contained task renderer for Direct PostmanAsk requests with text results."""
 
 from __future__ import annotations
 
@@ -66,7 +66,8 @@ def render_direct_text_task_manifest(
         "- `repository` и `base_commit` — только transport/correlation metadata.",
         "- GitHub использовать только как READ source, если он действительно нужен для user intent.",
         "- Не commit, не push, не открывать PR/issues и не изменять GitHub.",
-        "- PostmanAsk ожидает текстовый transport result; ZIP/attachment не нужен.",
+        "- PostmanAsk ожидает текстовый transport result: не создавай и не возвращай result ZIP/attachment.",
+        "- Если раздел Input files выше указывает native POSTMAN_INPUT_<REQ>.zip, это обязательный input текущей задачи и его нужно получить/прочитать по Input retrieval contract.",
         "",
         "## Answer author discipline",
         "",

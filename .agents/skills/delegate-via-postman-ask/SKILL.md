@@ -3,13 +3,13 @@ name: delegate-via-postman-ask
 description: >-
   Использовать только когда ТЕКУЩЕЕ пользовательское сообщение после необязательных
   начальных пробелов начинается с exact @PostmanAsk. Trusted Harness runtime сам читает
-  current user/message и запускает text-only Direct Postman через no-argument
+  current user/message и запускает text-result Direct Postman через no-argument
   postman_send_current_turn(). Локальная модель не копирует user text в tool arguments.
 ---
 
-# Delegate via PostmanAsk — Direct text transport
+# Delegate via PostmanAsk — Direct transport with text result
 
-`DIRECT_POSTMAN_ASK_SKILL_VERSION: 3`
+`DIRECT_POSTMAN_ASK_SKILL_VERSION: 4`
 
 ## 0. Золотой путь
 
@@ -81,6 +81,10 @@ postman_send_current_turn()
 5. передаёт exact оставшийся intent в `postman-ask.ps1` через UTF-8 Base64.
 
 Нельзя добавлять предыдущий контекст, перефразировать или улучшать prompt.
+
+### Trusted input invariant
+
+Transport metadata/input descriptors формирует parent Host/Leader; Bridge child их не изменяет. Runtime сам строит и прикладывает Host-authorized native input ZIP. Наличие input ZIP не меняет text result contract: ZIP является input, итог остаётся текстовым результатом. Никаких manual upload/path operations child не выполняет.
 
 ## 3. Production entrypoint
 
