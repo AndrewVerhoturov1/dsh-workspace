@@ -264,73 +264,112 @@ Observer опрашивает exact assistant turn раз в 3 секунды. �
 и completion-действия усиливают доказательство завершения; после этого сохраняются
 inactive generation и стабильный текст exact turn до artifact detection.
 
-Если UI показывает `Соединение прервано` / `Connection interrupted`, это отдельное
-recoverable состояние, а не completion. Worker не отправляет reminder, reload-ит ту же
-owned Page того же conversation, ждёт подтверждённую загрузку exact chat и затем ещё
-10 секунд стабилизации. Reload не создаёт новый REQ, не повторяет исходный prompt и не
-сбрасывает общий deadline. Recovery ограничен тремя reload-попытками; после их исчерпания
-worker ждёт восстановления интерфейса без бесконечного F5.
+### 11.1. Transport control, recovery и естественные продолжения
 
-### 11.1. Служебные напоминания
+После первоначального `PROMPT_SEND_CONFIRMED` request-stage имеет абсолютные checkpoints
+10/20/30/40/50 минут и soft deadline 60 минут. Reload не сдвигает расписание. Слоты —
+не очередь обязательных сообщений: `PENDING`, `SENT`, `CONSUMED_BY_RECOVERY`,
+`SUPPRESSED_FINAL`, `CANCELLED_RESULT_READY`. Все наступившие, но ещё не отправленные
+слоты consume-ятся в начале recovery; checkpoints, пересечённые внутри recovery, тоже.
+После recovery старые напоминания не догоняются, будущие сохраняют исходные времена.
 
-Отсчёт начинается после первоначального `PROMPT_SEND_CONFIRMED`. Точки reminders остаются
-фиксированными: 10-я, 20-я и 30-я минуты; общий предел ожидания — 45 минут. Это checkpoints,
-а не обязательные Send. Перед каждым checkpoint worker перечитывает все разрешённые assistant
-turns текущего REQ и ещё раз ищет exact RESULT. Если RESULT уже появился, reminder отменяется.
-Если действует connection-interruption recovery или exact chat ещё не доказан как готовый,
-reminder ждёт восстановления и не отправляется вслепую.
+В каждый момент активен максимум один transport flow. Обычный reminder допускается
+только при exact correlated `WORKING` и доказанных Send guards. Pause/Stop сам по себе
+не доказывает финал. Final-answer latch запрещает ordinary reminders; UNKNOWN остаётся
+fail-closed. Готовый exact RESULT проверяется до любого продолжения и отменяет дальнейшие
+control messages. Произвольный новый user turn не становится разрешённым anchor.
 
-Pause/Stop сам по себе не запрещает reminder. Для exact correlated хода `WORKING`
-(reasoning/tools) допускает Send; `FINAL_ANSWER_STARTED` защёлкивается и запрещает его;
-`FINAL_ANSWER_COMPLETED` запускает обработку результата. `UNKNOWN` повторно проверяется
-fail-closed без расходования slot. Видимый вне transcript баннер `ADDITIONAL_PROCESSING`
-ожидается отдельно без reload. Максимум три reminders, очередной slot не пропадает при UNKNOWN.
+Detector ищет локальные видимые candidates, не глобальный body. Headline
+«Соединение прервано» / «Connection interrupted» не требует фиксированного subtitle.
+Whitespace/case/punctuation и раздельные headline/subtitle допускаются. Обёртка
+`data-turn-key` не делает системный banner текстом transcript. Evidence включает
+role alert/status, aria-live, system wrapper, nearby retry, insideMarkdown/turn wrapper.
+Обычные literal quotes/code и user text отвергаются с reason. Strong evidence принимается
+сразу; weak подтверждается следующим poll через 1–3 секунды.
 
-Reminder не использует общий 30-секундный `submit_once()` wait для появления Send. Composer
-должен быть готов сразу, после вставки действует отдельное safe-send окно максимум 5 секунд с
-polling раз в 1 секунду. На каждом poll и ещё раз непосредственно перед единственным click
-перепроверяются exact conversation, WORKING без final latch, trusted same-REQ anchor без
-другого user turn, exact unsent reminder в composer и доступность Send. Две инъецируемые
-случайные паузы 1–5 секунд отделяют решение от insert и insert от финального Send proof.
-Если финал начинается до click, Send не нажимается, exact unsent reminder очищается с
-доказательством пустого composer. Временный UNKNOWN не сжигает checkpoint.
-Если очистку или другое pre-click состояние доказать нельзя, transport остаётся fail-closed.
-Сам click имеет reminder-specific timeout 1 секунду; после начала click UNKNOWN по-прежнему
-запрещает retry. После `RESULT_DURABLE` оставшиеся checkpoints отменяются. Reload/recovery не
-сдвигает расписание и не перезапускает 45-минутный отсчёт.
+Connection flow: `CONNECTION_INTERRUPTED → CONNECTION_RECOVERY → WORKING` либо
+`CONNECTION_RECOVERY → CONNECTION_WAITING → WORKING`. Worker reload-ит ту же owned Page,
+доказывает exact URL, исходный trusted request anchor, lineage последнего разрешённого
+user turn и live empty composer, затем выдерживает 10 секунд стабилизации. Strong и weak
+interruption evidence оба блокируют READY: требуется фактическое исчезновение banner.
+Максимум три reload-попытки в bounded cycle. Исчерпание recoverable reload/proof переводит
+flow в пассивное `CONNECTION_WAITING`: без F5, resend и обычных reminders для того же episode.
+Periodic observation проверяет результат и исчезновение interruption. Выход в WORKING —
+только после fresh same-chat/lineage/composer proof; stale observer proofs очищаются.
+Раннее исчерпание ждёт до обычного soft timeout, позднее использует только уже разрешённый
+остаток grace. Потеря exact conversation и invalid config остаются fail-closed ошибками.
+Полное исчезновение rearm-ит episode; новое появление допускает новый bounded cycle.
 
-Если ZIP скачан, но minimal transport validation его отклоняет, staging удаляется и current
-REQ немедленно завершается `ARTIFACT_REJECTED`. Terminal JSON содержит assistant text,
-`validationCode` и `validationMessage`; следующий action выбирает локальная LLM. Сам Postman
-не ждёт следующего reminder после уже завершённого assistant-turn. Ошибки самого validator
-infrastructure, записи, скачивания или неопределённого transport состояния остаются failure.
+Additional Processing распознаётся по RU/EN вариантам «Наши системы… обрабатывают…»,
+«дополнительная обработка», «Our systems… processing», «additional processing» и DOM evidence.
+Flow: `ADDITIONAL_PROCESSING → SYSTEM_STOP → SYSTEM_RELOAD → SYSTEM_CHAT_REPROOF
+→ SYSTEM_WAIT → SYSTEM_CONTINUE → WORKING`. Stop/Pause текущей генерации нажимается
+один раз, если безопасный control есть. ABSENT и UNKNOWN Stop не terminal failure;
+повторного Stop-click нет. Затем один reload exact chat и обязательный same-chat/original
+lineage/composer re-proof, случайное равномерное ожидание 10–17 секунд и повторный proof.
+Если результат уже готов или final latched, continuation не отправляется.
+Если при post-reload/post-wait proof или safe-send suppression обнаружен Connection
+interrupted, результат проверяется первым, затем заново доказываются exact chat, lineage
+и пустой composer. Additional Processing закрывается как RECOVERY_ABORTED с
+reason=serial_handoff; Connection recovery запускается следующей итерацией через
+существующий pending event, без второго active flow, повторного Stop или continuation.
+Deadline Connection cycle = min(previousRecoveryDeadline, normalNewRecoveryDeadline,
+softDeadline + 45s): handoff сохраняет предел активной recovery-цепочки, а не выдаёт
+новые 180 секунд. При нулевом остатке reload не начинается; действует существующее
+пассивное CONNECTION_WAITING в пределах исходного request deadline.
+После вставки handoff разрешён лишь при доказанной очистке unsent текста; Send UNKNOWN
+и потеря lineage остаются fail-closed. Strong/weak подтверждение и общий deadline не меняются.
 
-Каждое реально отправленное напоминание идёт в тот же exact conversation и начинается так:
+Одно непрерывное появление каждого banner — один event с request-bound identity.
+Пока он присутствует, повторный recovery не запускается. Исчезновение при обычном
+наблюдении rearm-ит detector; новое появление создаёт новый event. Сигналы внутри активного
+flow диагностируются и сохраняют confirmation timestamp другого episode, но не запускают
+второй сценарий до освобождения active flow. Малого request-wide лимита
+на реальные новые Additional Processing events нет. Активный reload/control cycle bounded
+180 секундами; пассивное CONNECTION_WAITING не продлевает общий request deadline.
 
-```text
-POSTMAN_REQUEST_ID: <тот же REQ>
-POSTMAN_TRANSPORT_CONTROL: REMINDER <1..3>/3
-```
+Обычные reminders и special system continuation выбирают случайно одну из 50 русских
+фраз в `web/continuation_prompts.py`; повторы допустимы. Видимое сообщение — только
+естественная просьба продолжить незавершённую исходную задачу с текущего места.
+REQ/control identifiers и технические заголовки в эти сообщения не вставляются.
+До composer/Send durable state сохраняет requestId, exact conversation, slot/eventId,
+templateId, exactPromptText, SHA-256 и expected user-turn relation (ordinal + hashes
+предшествующих видимых user turns). После Send доказываются exact текст, увеличение user
+count ровно на один, та же conversation и прежняя lineage; закрепляются ordinal/groupKey.
+Повторно выбранная фраза не может перепривязать более старый watch к последнему совпадению.
+Artifact proof продолжения требует internal intent и original REQ lineage; RESULT envelope
+и ZIP validation не изменены. Special continuation не расходует ordinary slot и не меняет часы.
 
-Дальше идёт фиксированный текст с просьбой продолжить исходную задачу, не начинать её
-заново, не отвечать отдельно на служебное сообщение и выдать итог строго по исходным
-правилам. Для напоминания новый REQ не создаётся, и новый semantic intent не появляется.
+Composer должен быть готов сразу. Safe-send окно максимум 5 секунд, poll 1 секунда,
+click timeout максимум 1 секунда. Две инъецируемые паузы 1–5 секунд разделяют решение,
+insert и final proof. Exact URL, текущий anchor, отсутствие постороннего user turn,
+final latch, system interruption и exact unsent text перепроверяются непосредственно
+перед единственным Send. После вставки подавленное сообщение очищается с proof.
+UNKNOWN post-click запрещает resend; неподтверждённая cleanup остаётся fail-closed.
 
-После доказанной отправки напоминания оно становится новым разрешённым correlation anchor:
+На 60 минутах обычный WORKING без результата завершается timeout. Право recovery на grace
+зафиксировано временем подтверждения `eventConfirmedAt < softDeadline`, а не временем
+возврата observer в outer loop. Pending event, подтверждённый до deadline, может начать
+текущий bounded cycle после soft deadline; впервые подтверждённый после — нет.
+Hard limit — soft + 45 секунд
+(и собственный предел cycle, если он раньше). Reload, proof, wait, Send и result observation
+используют остаток этого лимита. После cycle за soft deadline новые flows/reminders не
+начинаются: результат принимается в пределах grace, иначе timeout.
 
-```text
-exact proven reminder user turn
-→ immediately next conversation turn
-→ role = assistant
-```
+Durable/failure state содержит compact `transportEventJournal` (256 записей: начало и
+последний хвост, sequence и dropped count), фазы, active event, судьбы слотов, detector
+poll/candidate/confirmed counters, last text/evidence/reject reason, Stop outcome, reload
+attempts и same-chat proof, фактический wait, exact selected prompt и Send proof.
+Записи неизменны после добавления; snapshots не содержат гигантского DOM/body.
+Один flow имеет ровно один terminal event: `RECOVERY_COMPLETED` только на success path,
+`RECOVERY_FAILED` с reason/code при transport error (включая Send UNKNOWN),
+`RECOVERY_ABORTED` при result/final preemption, request timeout либо внешнем cleanup.
 
-Произвольный новый user turn разрешённым anchor не является. При `PROVEN_SENT` цикл
-продолжается обычно. `REMINDER_SUPPRESSED_GENERATION_ACTIVE`,
-`REMINDER_SUPPRESSED_ASSISTANT_ACTIVITY` и `REMINDER_SUPPRESSED_SEND_NOT_READY` используют
-`PROVEN_NOT_SENT`: до вставки composer остаётся нетронутым, а после вставки продолжение
-разрешено только после доказанной очистки exact reminder. `REMINDER_SEND_GUARD_FAILED` или
-неудачная cleanup без такого proof остаются fail-closed. При `UNKNOWN` REQ немедленно
-завершается с ошибкой; служебное сообщение не повторяется вслепую.
+Завершённый assistant turn без ZIP перепроверяется через 10 секунд и возвращает
+`ASSISTANT_COMPLETED_NO_ARTIFACT`; отвергнутый minimal validator ZIP немедленно даёт
+`ARTIFACT_REJECTED`. Неопределённые transport/validator infrastructure outcomes остаются
+failure. Postman не применяет artifact к repository автоматически.
+
 
 ## 12. Artifact envelope
 
@@ -508,7 +547,7 @@ exact current intent
 → self-contained task
 → two-line browser prompt
 → exact ChatGPT conversation
-→ checkpoints на 10/20/30 минуте; WORKING разрешает reminder даже при Pause/Stop
+→ checkpoints на 10/20/30/40/50 минуте; WORKING разрешает reminder даже при Pause/Stop
 → exact next assistant turn текущего разрешённого anchor
 → exact ZIP control
 → one download

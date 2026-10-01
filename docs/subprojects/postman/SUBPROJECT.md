@@ -2,7 +2,7 @@
 
 id: postman
 status: active
-updated: 2026-09-29
+updated: 2026-10-01
 
 ## Goal
 
@@ -65,7 +65,8 @@ LIVE E2E остаётся за пользователем: Web implementation ZI
 - Artifact terminal surface: `RESULT_DURABLE`, `ASSISTANT_COMPLETED_NO_ARTIFACT`, `ARTIFACT_REJECTED`, `POSTMAN_TRANSPORT_FAILED`; первые три являются artifact handoff, transport failure остаётся отдельным fail-closed исходом. Text success surface — `TEXT_RESULT_DURABLE`; text trigger validation failure остаётся transport failure.
 - `ASSISTANT_COMPLETED_NO_ARTIFACT` требует fresh reproof через 10 секунд; изменение assistant text/SHA запускает новое 10-секундное grace window.
 - ZIP, отклонённый minimal transport validator, немедленно завершает REQ как `ARTIFACT_REJECTED`.
-- 10/20/30 минут — absolute reminder checkpoints при общем deadline 45 минут; если assistant всё ещё активно генерирует, соответствующий checkpoint подавляется без изменения composer и не догоняется позже. Reminder pre-click использует отдельное 5-секундное safe-send окно с polling 1 секунда вместо generic 30-секундного Send wait; generation/assistant activity во время окна подавляет checkpoint, а click разрешён только после финальной reproof.
+- Reminders 10/20/30/40/50 — absolute slots; soft deadline 60 минут, текущий recovery начатый до него может закончиться только до soft+45s. Recovery consume-ит все наступившие pending slots без очереди догоняющих сообщений. 50 natural Russian continuation templates не показывают REQ/control identifiers; trusted state сохраняет exact text/hash/templateId, slot/eventId и доказанную user-turn relation (ordinal/prefix/groupKey). Reminder безопасен только при WORKING без final latch; 5-second Send window/poll 1s/one-shot click сохраняются.
+- Connection headline не требует subtitle; modern turn wrapper не исключает system UI. Additional Processing выполняет Stop-if-present (ABSENT/UNKNOWN без повторного click)→Reload exact chat→original task lineage/composer re-proof→uniform wait 10–17s→natural Continue. Один banner episode = один bounded cycle; disappearance re-arms, второй flow не накладывается. Durable/failure state содержит bounded 256-event журнал и detector evidence/reasons/counters.
 - Recovery выполняется в том же exact ChatGPT conversation; reload не создаёт новый REQ и не повторяет исходный prompt.
 - Manual `@Postman --chat <old REQ> <intent>` / `@PostmanAsk --chat <old REQ> <intent>` используют exact сохранённый conversation; automatic continuation остаётся artifact-only.
 - Automatic continuation использует explicit `-AutomaticContinuation` только после non-durable artifact terminal: максимум два новых REQ на root chain (`continuationIndex` 1 и 2); после исчерпания требуется отдельное решение. Ручной `--chat` начинает новую root chain с индексом 0. Worker follow-up не относится к этому пределу.

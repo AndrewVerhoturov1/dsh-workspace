@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fixed Postman reminder policy for one ChatGPT conversation.
+"""Absolute reminder slots and natural control Send for one ChatGPT conversation.
 
 The reminder is transport control for the current REQ. It does not create a
 new request and never navigates away from the already-proven conversation.
@@ -15,11 +15,12 @@ import browser_bootstrap as bootstrap
 import browser_observer
 import browser_submit as submit
 import request_identity as identity
+from continuation_prompts import choose_continuation
 
 
 DEFAULT_REMINDER_INTERVAL_MS = 10 * 60 * 1000
-DEFAULT_REMINDER_COUNT = 3
-DEFAULT_OVERALL_TIMEOUT_MS = 45 * 60 * 1000
+DEFAULT_REMINDER_COUNT = 5
+DEFAULT_OVERALL_TIMEOUT_MS = 60 * 60 * 1000
 DEFAULT_REMINDER_SEND_WINDOW_MS = 5_000
 DEFAULT_REMINDER_POLL_MS = 1_000
 DEFAULT_REMINDER_CLICK_TIMEOUT_MS = 1_000
@@ -38,7 +39,7 @@ def build_reminder_prompt(
     *,
     total: int = DEFAULT_REMINDER_COUNT,
 ) -> str:
-    """Build one deterministic service reminder for the current REQ."""
+    """Choose a natural continuation; the REQ remains internal."""
     identity.assert_canonical_request_id(request_id)
     if isinstance(reminder_index, bool) or not isinstance(reminder_index, int):
         raise ValueError("reminder_index must be an integer")
@@ -47,16 +48,7 @@ def build_reminder_prompt(
     if total < 1 or reminder_index < 1 or reminder_index > total:
         raise ValueError("reminder index is outside the configured range")
 
-    return "\n".join(
-        (
-            identity.request_prompt_key_line(request_id),
-            f"{REMINDER_CONTROL}: REMINDER {reminder_index}/{total}",
-            "Продолжай выполнение исходной задачи, если она ещё не завершена.",
-            "Не начинай исходную задачу заново.",
-            "Не отвечай отдельно на это служебное сообщение.",
-            "Итоговый результат выдай строго по правилам исходной задачи.",
-        )
-    )
+    return choose_continuation()["exactPromptText"]
 
 
 def scheduled_elapsed_ms(
@@ -186,7 +178,7 @@ def _phase_suppression(phase: dict[str, Any], *, boundary: str,
                             "composerUntouched": True, "unsentPromptCleared": True})
 
 
-def _req_anchor_snapshot(page: Any, prompt: str) -> dict[str, Any]:
+def _req_anchor_snapshot(page: Any, prompt: str, *, anchor_binding=None) -> dict[str, Any]:
     """Prove the last user anchor and its only correlated assistant turn."""
     turns, selector = browser_observer.snapshot_turns(page)
     request_key_line = submit.request_key_line_from_prompt(prompt)
@@ -208,11 +200,12 @@ def _req_anchor_snapshot(page: Any, prompt: str) -> dict[str, Any]:
         "lastTurnRole": role,
         "lastTurnTextSha256": submit.prompt_sha256(text),
     }
-    anchor = browser_observer.find_user_anchor(turns, prompt)
+    anchor = browser_observer.find_user_anchor(turns, prompt, anchor_binding=anchor_binding)
     anchor_turn = turns[anchor] if anchor is not None else None
     request_key_match = bool(anchor_turn and request_key_line and
                              submit._turn_contains_exact_line(str(anchor_turn.get("text", "")), request_key_line))
-    if not request_key_match:
+    trusted_match = request_key_match or (anchor_binding is not None and anchor is not None)
+    if not trusted_match:
         reason = "latest_user_turn_not_current_req"
     elif any(t.get("role") == "user" and t.get("index", -1) > anchor for t in turns):
         reason = "another_user_turn"
@@ -285,6 +278,8 @@ def _click_ready_reminder_once(
     transitions: list[str],
     timeout_ms: int,
     poll_ms: int,
+    conversation_url: str | None = None,
+    click_timeout_ms: int = DEFAULT_REMINDER_CLICK_TIMEOUT_MS,
 ) -> dict[str, Any]:
     """Click an already-proven Send control exactly once, then prove the user turn."""
     guard = submit.SendGuard()
@@ -300,7 +295,7 @@ def _click_ready_reminder_once(
         )
 
     send_transitions = [*transitions, submit.PROMPT_SEND_STARTED]
-    click_timeout_ms = min(max(DEFAULT_REMINDER_CLICK_TIMEOUT_MS, 1), max(timeout_ms, 1))
+    click_timeout_ms = min(max(click_timeout_ms, 1), max(timeout_ms, 1))
     try:
         button.click(timeout=click_timeout_ms)
     except Exception as exc:
@@ -320,7 +315,7 @@ def _click_ready_reminder_once(
         )
 
     ok, proof = submit._wait_until(
-        lambda: submit._observe_send_proof(page, prompt, before_turn_count),
+        lambda: submit._observe_send_proof(page, prompt, before_turn_count, conversation_url=conversation_url),
         timeout_ms=timeout_ms,
         poll_ms=poll_ms,
     )
@@ -361,6 +356,10 @@ def submit_reminder(
     uniform: Callable[[float, float], float] = random.uniform,
     anchor_prompt: str | None = None,
     phase_tracker: browser_observer.AnswerPhaseTracker | None = None,
+    anchor_binding: dict[str, Any] | None = None,
+    system_continuation: bool = False,
+    operation_deadline: float | None = None,
+    control_intent: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Send one reminder during proven WORKING in the exact REQ chat."""
     if isinstance(send_window_ms, bool) or not isinstance(send_window_ms, int) or send_window_ms < 0:
@@ -387,14 +386,45 @@ def submit_reminder(
     tracker = phase_tracker if phase_tracker is not None else browser_observer.AnswerPhaseTracker()
     expected_anchor = anchor_prompt or prompt
     def inspect() -> dict[str, Any]:
-        return browser_observer.inspect_answer_phase(page, expected_anchor, conversation_url, tracker=tracker)
+        if control_intent is not None:
+            turns, _ = browser_observer.snapshot_turns(page)
+            users = [t for t in turns if t.get("role") == "user"]
+            relation = control_intent.get("expectedUserTurnRelation", {})
+            if (control_intent.get("conversationUrl") != conversation_url
+                    or control_intent.get("exactPromptText") != prompt
+                    or relation.get("userOrdinal") != len(users)
+                    or relation.get("precedingUserHashes") != [submit.prompt_sha256(t["text"]) for t in users]):
+                return {"phase": browser_observer.UNKNOWN, "reason": "control_intent_lineage_changed"}
+        phase = browser_observer.inspect_answer_phase(page, expected_anchor, conversation_url,
+                                                     tracker=tracker, anchor_binding=anchor_binding,
+                                                     ignore_system_banner=system_continuation)
+        interrupted, evidence = browser_observer.connection_interrupted(page)
+        if interrupted or evidence.get("confidence") == "weak":
+            return {**phase, "phase": browser_observer.ASSISTANT_CONNECTION_INTERRUPTED}
+        processing, processing_evidence = browser_observer.additional_processing(page)
+        if not system_continuation and (processing or processing_evidence.get("confidence") == "weak"):
+            return {**phase, "phase": browser_observer.ADDITIONAL_PROCESSING}
+        if operation_deadline is not None and monotonic() >= operation_deadline:
+            return {**phase, "phase": browser_observer.UNKNOWN, "reason": "control_deadline"}
+        # Special recovery continuation is permitted after explicit reload/re-proof,
+        # not based on a fictitious WORKING observation. Exact anchor guards remain.
+        if system_continuation and not phase.get("finalAnswerLatched") and phase["phase"] not in {
+                browser_observer.FINAL_ANSWER_STARTED, browser_observer.FINAL_ANSWER_COMPLETED}:
+            return {**phase, "phase": browser_observer.WORKING, "systemContinuation": True}
+        return phase
+
+    def pause():
+        seconds = uniform(1.0, 5.0)
+        if operation_deadline is not None:
+            seconds = min(seconds, max(0.0, operation_deadline - monotonic()))
+        sleep(seconds)
 
     early_suppressed = _phase_suppression(inspect(), boundary="before_prepare",
                                           transitions=[submit.PAGE_OWNED], page=page)
     if early_suppressed is not None:
         return early_suppressed
 
-    baseline = _req_anchor_snapshot(page, expected_anchor)
+    baseline = _req_anchor_snapshot(page, expected_anchor, anchor_binding=anchor_binding)
     if not baseline.get("safe"):
         code = (
             REMINDER_SUPPRESSED_ASSISTANT_ACTIVITY
@@ -442,13 +472,13 @@ def submit_reminder(
         submit.COMPOSER_EMPTY_CONFIRMED,
     ]
 
-    random_ui_pause(sleep=sleep, uniform=uniform)
+    pause()
     suppressed = _phase_suppression(inspect(), boundary="before_insert",
                                     transitions=base_transitions, page=page)
     if suppressed is not None:
         return suppressed
 
-    current_anchor = _req_anchor_snapshot(page, expected_anchor)
+    current_anchor = _req_anchor_snapshot(page, expected_anchor, anchor_binding=anchor_binding)
     if not current_anchor.get("safe") or current_anchor.get("fingerprint") != baseline.get("fingerprint"):
         return _result(
             REMINDER_SUPPRESSED_ASSISTANT_ACTIVITY,
@@ -467,6 +497,12 @@ def submit_reminder(
         )
 
     insert_timeout_ms = min(max(timeout_ms, 1), max(send_window_ms, 1))
+    if operation_deadline is not None:
+        if monotonic() >= operation_deadline:
+            return _phase_suppression({"phase": browser_observer.UNKNOWN, "reason": "insert_deadline"},
+                                      boundary="before_insert", transitions=base_transitions,
+                                      page=page)
+        insert_timeout_ms = min(insert_timeout_ms, max(1, int((operation_deadline - monotonic()) * 1000)))
     inserted = submit.insert_prompt(
         page,
         composer,
@@ -488,8 +524,8 @@ def submit_reminder(
         )
 
     send_transitions = [*base_transitions, submit.PROMPT_INSERTED]
-    random_ui_pause(sleep=sleep, uniform=uniform)
-    deadline = monotonic() + send_window_ms / 1000.0
+    pause()
+    deadline = min(monotonic() + send_window_ms / 1000.0, operation_deadline) if operation_deadline is not None else monotonic() + send_window_ms / 1000.0
     poll_count = 0
 
     while True:
@@ -517,7 +553,7 @@ def submit_reminder(
         if suppressed is not None:
             return suppressed
 
-        observed_anchor = _req_anchor_snapshot(page, expected_anchor)
+        observed_anchor = _req_anchor_snapshot(page, expected_anchor, anchor_binding=anchor_binding)
         if (
             not observed_anchor.get("safe")
             or observed_anchor.get("fingerprint") != baseline.get("fingerprint")
@@ -561,7 +597,7 @@ def submit_reminder(
             before_turn_count = len(submit.collect_user_turn_texts(page))
             # Re-prove all volatile facts immediately before the only allowed
             # click. This closes the old 30-second wait-after-streaming race.
-            final_anchor = _req_anchor_snapshot(page, expected_anchor)
+            final_anchor = _req_anchor_snapshot(page, expected_anchor, anchor_binding=anchor_binding)
             final_prompt_matches, final_prompt_details = submit._exact_prompt_readback(page, prompt)
             final_button, final_selector = submit.find_send_button(page)
             final_url = str(getattr(page, "url", "") or "")
@@ -636,6 +672,11 @@ def submit_reminder(
                                                      phase="pre_click", transitions=send_transitions,
                                                      timeout_ms=timeout_ms,
                                                      details={"reason": "send_control_disappeared_before_click"})
+                if operation_deadline is not None and monotonic() >= operation_deadline:
+                    return _suppression_after_insert(page, prompt,
+                        code=REMINDER_PHASE_PENDING, phase="deadline_before_click",
+                        transitions=send_transitions, timeout_ms=timeout_ms,
+                        details={"reason": "control_deadline"})
                 result = _click_ready_reminder_once(
                     page,
                     last_button,
@@ -643,8 +684,10 @@ def submit_reminder(
                     prompt,
                     before_turn_count=before_turn_count,
                     transitions=send_transitions,
-                    timeout_ms=timeout_ms,
+                    timeout_ms=min(timeout_ms, max(1, int((operation_deadline - monotonic()) * 1000) - DEFAULT_REMINDER_CLICK_TIMEOUT_MS)) if operation_deadline is not None else timeout_ms,
                     poll_ms=poll_ms,
+                    conversation_url=conversation_url,
+                    click_timeout_ms=min(DEFAULT_REMINDER_CLICK_TIMEOUT_MS, max(1, int((operation_deadline - monotonic()) * 1000))) if operation_deadline is not None else DEFAULT_REMINDER_CLICK_TIMEOUT_MS,
                 )
                 result.setdefault("details", {}).update(inserted.get("details", {}))
                 result["details"]["reminderSendWindowMs"] = send_window_ms

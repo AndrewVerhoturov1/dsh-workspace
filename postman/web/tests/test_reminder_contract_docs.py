@@ -17,13 +17,15 @@ class ReminderContractDocsTests(unittest.TestCase):
     def test_skill_uses_trusted_current_turn(self):
         self.assertIn("postman_send_current_turn()", self.skill)
 
-    def test_flow_retains_machine_reminder_marker_and_neutral_page(self):
-        self.assertIn("POSTMAN_TRANSPORT_CONTROL: REMINDER", self.flow)
+    def test_flow_uses_natural_reminders_and_neutral_page(self):
+        self.assertNotIn("POSTMAN_TRANSPORT_CONTROL: REMINDER", self.flow)
+        self.assertIn("10/20/30/40/50", self.flow)
+        self.assertIn("50 русских", self.flow)
         self.assertIn("about:blank", self.flow)
 
     def test_runtime_constants_match_documented_timing_and_neutral_start_page(self):
         self.assertIn('DEFAULT_STARTUP_URL = "about:blank"', self.bootstrap)
-        self.assertIn("DEFAULT_ASSISTANT_TIMEOUT_MS = 45 * 60 * 1000", self.direct)
+        self.assertIn("DEFAULT_ASSISTANT_TIMEOUT_MS = 60 * 60 * 1000", self.direct)
 
 
 if __name__ == "__main__":
