@@ -4,6 +4,7 @@ import { basename, isAbsolute, join } from 'node:path'
 import { homedir } from 'node:os'
 import { spawn as nodeSpawn } from 'node:child_process'
 import { postmanTaskContexts, POSTMAN_TASK_BRANCH_PATTERN } from './postman-task-context.js'
+import { postmanInputGrants } from './postman-input-files.js'
 
 // Standalone transport publishes REQ task files to main; Leader children use their exact prepared task branch.
 const STANDALONE_TASK_PUBLICATION_BRANCH = 'main'
@@ -457,6 +458,7 @@ export class DirectPostmanJobManager {
     pwsh = process.platform === 'win32' ? 'pwsh.exe' : 'pwsh',
     directRoot,
     readPublicationState = readFileSync,
+    inputGrants = postmanInputGrants,
   } = {}) {
     this.spawn = spawn
     this.exists = exists
@@ -465,6 +467,7 @@ export class DirectPostmanJobManager {
     this.pwsh = pwsh
     this.directRoot = directRoot
     this.readPublicationState = readPublicationState
+    this.inputGrants = inputGrants
     this.jobs = new Map()
     this.exactAskReplies = new Map()
   }
@@ -473,9 +476,9 @@ export class DirectPostmanJobManager {
     return this.jobs.get(sessionId)
   }
 
-  async start({ sessionId, workspace, payload, inputFiles = [], chatRequestId, automaticContinuation = false, transportKind = 'artifact', proof, branch }) {
+  async start({ sessionId, workspace, payload, inputFiles = [], inputBinding, chatRequestId, automaticContinuation = false, transportKind = 'artifact', proof, branch }) {
     const previous = this.jobs.get(sessionId)
-    if (previous?.state === 'running') throw parseError('POSTMAN_CURRENT_TURN_JOB_ALREADY_RUNNING')
+    if (previous?.state === 'running' || previous?.state === 'starting') throw parseError('POSTMAN_CURRENT_TURN_JOB_ALREADY_RUNNING')
     if (typeof payload !== 'string' || payload.trim() === '') throw parseError('POSTMAN_EMPTY_PAYLOAD')
     if (!['artifact', 'text', 'image'].includes(transportKind)) throw parseError('POSTMAN_RESULT_MODE_INVALID')
     if (transportKind !== 'artifact' && automaticContinuation) throw parseError('POSTMAN_AUTOMATIC_CONTINUATION_NOT_ALLOWED')
@@ -539,6 +542,27 @@ export class DirectPostmanJobManager {
     }
     this.jobs.set(sessionId, job)
 
+    if (inputFiles.length && transportKind !== 'image') {
+      try {
+        job.inputBundle = await this.inputGrants.build(inputBinding, sessionId, requestId, inputFiles)
+        args.push('-InputBundleManifest', job.inputBundle.handoffPath)
+      } catch (error) {
+        // Every build failure precedes Direct spawn/publication, including helper
+        // spawn, malformed output and filesystem errors. Never lose this allocated REQ.
+        const message = String(error?.message ?? '')
+        const code = /^POSTMAN_INPUT_[A-Z_]+$/.test(message) ? message : 'POSTMAN_INPUT_BUNDLE_BUILD_FAILED'
+        job.state = 'completed'
+        job.exitCode = -1
+        job.result = { ok: false, code: 'POSTMAN_TRANSPORT_FAILED', requestId,
+          transportCode: code, transportMessage: code,
+          details: { sendState: 'PROVEN_NOT_SENT', inputBundlePhase: 'host-build' } }
+        job.finishedAt = new Date().toISOString()
+        this.finish(job)
+        const wrapped = parseError(code)
+        wrapped.cause = error
+        throw wrapped
+      }
+    }
     let child
     try {
       child = this.spawn(this.pwsh, args, {
@@ -547,6 +571,7 @@ export class DirectPostmanJobManager {
         stdio: ['ignore', 'pipe', 'pipe'],
       })
     } catch (error) {
+      job.inputBundle?.cleanup()
       this.jobs.delete(sessionId)
       const wrapped = parseError('POSTMAN_INVOCATION_NOT_STARTED')
       wrapped.cause = error
@@ -562,6 +587,7 @@ export class DirectPostmanJobManager {
       job.signal = signal ?? undefined
       job.state = 'completed'
       job.result = terminalGate(job)
+      job.inputBundle?.cleanup()
       if (
         job.result?.ok === true
         && job.result.code === 'TEXT_RESULT_DURABLE'
@@ -596,6 +622,7 @@ export class DirectPostmanJobManager {
       child.once('error', onError)
     }).catch((error) => {
       child.off?.('close', onClose)
+      job.inputBundle?.cleanup()
       this.jobs.delete(sessionId)
       const wrapped = parseError('POSTMAN_INVOCATION_NOT_STARTED')
       wrapped.cause = error
@@ -773,6 +800,8 @@ export function createDirectCurrentTurnToolConfigs(ctx, { store, jobs, taskConte
           agent.session.header.parentSession && !bridgeContext) throw parseError('POSTMAN_TASK_CONTEXT_REQUIRED')
       if (bridgeContext && taskContexts.get(bridgeContext.leaderSessionId) !== bridgeContext) throw parseError('POSTMAN_TASK_CONTEXT_REQUIRED')
       if (parsed.inputFiles?.length && !bridgeContext) throw parseError('POSTMAN_INPUT_METADATA_LEADER_REQUIRED')
+      const inputBinding = parsed.inputFiles?.length ? postmanInputGrants.child(agent, bridgeContext, parsed.inputFiles) : undefined
+      if (parsed.inputFiles?.length && !inputBinding) throw parseError('POSTMAN_INPUT_PROVENANCE_REJECTED')
       const proof = {
         parseMode: parsed.mode,
         transportKind: parsed.transportKind,
@@ -793,6 +822,7 @@ export function createDirectCurrentTurnToolConfigs(ctx, { store, jobs, taskConte
           workspace: workspaceOf(agent),
           payload: parsed.payload,
           inputFiles: parsed.inputFiles ?? [],
+          inputBinding,
           chatRequestId: parsed.chatRequestId,
           transportKind: parsed.transportKind,
           branch: bridgeContext?.branch ?? STANDALONE_TASK_PUBLICATION_BRANCH,

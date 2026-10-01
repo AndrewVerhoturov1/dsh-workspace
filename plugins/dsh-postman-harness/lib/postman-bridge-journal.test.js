@@ -188,7 +188,9 @@ test('proven pre-publication failure persists not-required across restarts and a
   } }, tools: { get: () => ({ async execute() {
     const requestId = 'REQ_20260929T01010' + sends + 'Z_0001'
     return { status: 'FAILED', requestId, result: { ok: false, code: 'POSTMAN_TRANSPORT_FAILED',
-      requestId, transportCode: 'DIRECT_INVALID_TASK', transportMessage: 'rejected before publication', details: {} } }
+      requestId, transportCode: sends % 2 ? 'DIRECT_INVALID_TASK' : 'POSTMAN_INPUT_BUNDLE_HANDOFF_INVALID',
+      transportMessage: 'rejected before publication',
+      details: sends % 2 ? {} : { sendState: 'PROVEN_NOT_SENT', inputBundlePhase: 'direct-handoff' } } }
   } }) } }
   const jobs = createPostmanBridgeJobs(ctx, { run: (_signal, launch) => launch(), dispose() {} }, null, contexts)
   const receipts = []
