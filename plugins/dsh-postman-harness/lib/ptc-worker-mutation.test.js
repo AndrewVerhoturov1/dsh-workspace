@@ -14,7 +14,7 @@ import { applyGlobTool, applyGrepTool, RAW_OUTPUT_MAX_BYTES, GREP_MAX_MATCHES, G
 import { applyWebFetchTool, applyWebSearchTool } from '@deepseek-ai/dsh-tool-web'
 import { createMemoryTaskRegistry } from './postman-task-registry.js'
 import { createPostmanWorkerTools } from './postman-worker.js'
-import { createPostmanBridgeBoundaryManager, isTopLevelPostmanPtcLeader, POSTMAN_LEADER_TOOL_ALLOWLIST } from './postman-bridge-core.js'
+import { createPostmanBridgeBoundaryManager, isTopLevelPostmanPtcLeader, POSTMAN_LEADER_TOOL_ALLOWLIST, postmanPtcDirectCallGuard, POSTMAN_WORKER_PTC_TOOL_NAMES } from './postman-bridge-core.js'
 import { POSTMAN_PTC_DISCIPLINE } from './ptc-discipline.js'
 import { createPtcAdapter, WORKER_MUTATION_PROFILE } from './ptc-adapter.js'
 
@@ -64,6 +64,8 @@ async function fixture(dir, { web = true, worktree = dir } = {}) {
       const child = await agent(spec.childId, 'plain', { origin: 'subagent', delegationDepth: 1, parentSession: spec.request.parent.id })
       created.set(spec.childId, child)
       calls.early.push(ctx.tools.schemas(child.a).some(s => s.name === 'ptc_execute'))
+      calls.earlyDiscipline ??= []
+      calls.earlyDiscipline.push(child.sections.some(s=>s.text({scope:child.a}).includes(POSTMAN_PTC_DISCIPLINE)))
       children.add(spec.childId)
       return { childId: spec.childId, messageId: 'start-' + calls.starts.length }
     },
@@ -74,7 +76,6 @@ async function fixture(dir, { web = true, worktree = dir } = {}) {
   function refresh(id) {
     const current = agents.get(id)
     if (!current || !adapter || !boundaries) return
-    adapter.remove(current)
     boundaries.refreshSession(id)
     adapter.refresh(current)
   }
@@ -88,6 +89,7 @@ async function fixture(dir, { web = true, worktree = dir } = {}) {
     resolveAssignment: (a, leaderProfile) => isTopLevelPostmanPtcLeader(a)
     ? { profile: leaderProfile, role: 'leader' } : owns(a) ? { profile: WORKER_MUTATION_PROFILE, role: 'worker' } : null })
   ctx.tools.register(adapter.tool)
+  ctx.tools.guard(exec => postmanPtcDirectCallGuard(exec, id => agents.get(id), owns))
   boundaries = createPostmanBridgeBoundaryManager(id => agents.get(id), owns)
   async function agent(id, preset = 'plain', header = {}) {
     const sections = [], events = []
@@ -96,7 +98,7 @@ async function fixture(dir, { web = true, worktree = dir } = {}) {
     a.ctx = createScope(ctx, a).ctx
     presets.set(a.ctx, preset)
     a.ctx.systemPrompt.section = section => { sections.push(section); return () => { const index = sections.indexOf(section); if (index >= 0) sections.splice(index, 1) } }
-    agents.set(id, a); boundaries.install(a); await worker.confirmActivation(a); adapter.refresh(a)
+    agents.set(id, a); const activation = worker.confirmActivation(a); boundaries.install(a); adapter.refresh(a); await activation; boundaries.refreshSession(id); adapter.refresh(a)
     return { a, sections, events }
   }
   let n = 0
@@ -132,9 +134,11 @@ test('confirmed Worker gets mutation namespace, real read/glob/grep and controll
   const f = await fixture(dir)
   try {
     const parent = await f.leader(), child = await f.start(parent)
-    assert.deepEqual(f.calls.early, [false])
+    assert.deepEqual(f.calls.early, [true])
+    assert.deepEqual(f.calls.earlyDiscipline, [true])
+    assert.equal(f.calls.starts[0].request.agentOptions.reasoningEffort, 'max')
     assert.equal(WORKER_MUTATION_PROFILE.id, 'postman-worker-mutation')
-    assert.equal(WORKER_MUTATION_PROFILE.revision, 3)
+    assert.equal(WORKER_MUTATION_PROFILE.revision, 4)
     assert.deepEqual(WORKER_MUTATION_PROFILE.tools, ['read', 'glob', 'grep', 'web_fetch', 'web_search', 'write', 'edit'])
     assert.equal(visible(f, child.a).includes('ptc_execute'), true)
     assert.ok(child.sections[0].text({scope:child.a}).includes(POSTMAN_PTC_DISCIPLINE))
@@ -155,6 +159,29 @@ test('confirmed Worker gets mutation namespace, real read/glob/grep and controll
     const outer = f.traces.findLast(t => t.name === 'ptc_execute' && t.agent === child.a)
     assert.ok(nested.every(t => t.agent === child.a && t.parent === outer.token && t.root === outer.root))
   } finally { await f.cleanup() }
+}))
+
+test('exact PTC Worker managed direct calls are rejected while other coding tools and production stay direct', () => inTemporaryDir('ptc-direct-', async dir => {
+  await writeFile(join(dir,'one.txt'),'MARKER\n','utf8')
+  const f=await fixture(dir)
+  try {
+    const leader=await f.leader(), child=await f.start(leader)
+    assert.deepEqual(WORKER_MUTATION_PROFILE.tools, [...POSTMAN_WORKER_PTC_TOOL_NAMES])
+    const args={read:{file_path:'one.txt'},glob:{pattern:'*.txt'},grep:{pattern:'MARKER'},
+      web_fetch:{url:'https://example.test'},web_search:{queries:['fixture']},
+      write:{file_path:'new.txt',content:'safe'},edit:{file_path:'one.txt',old_string:'MARKER',new_string:'NEW'}}
+    const direct=(a,name)=>f.ctx.tools.execute({callId:'direct-'+name,name,arguments:args[name]??{},agent:a,signal:new AbortController().signal})
+    for(const name of POSTMAN_WORKER_PTC_TOOL_NAMES) {
+      const r=await direct(child.a,name)
+      assert.equal(r.isError,true,name)
+      assert.match(r.error.message,/POSTMAN_PTC_DIRECT_CALL_REJECTED: use ptc_execute/)
+    }
+    for(const name of ['pwsh','bash','jobs','read_image','report']) assert.equal((await direct(child.a,name)).isError,false,name)
+    const production=await f.leader('production','postman-leader'), ordinary=await f.start(production)
+    for(const name of ['read','glob','grep','web_fetch','web_search','write','edit']) {
+      assert.equal((await direct(ordinary.a,name)).isError,false,name)
+    }
+  } finally {await f.cleanup()}
 }))
 
 test('Worker PTC relative read resolves against its Host-bound task worktree, not session cwd', () => inTemporaryDir('ptc-base-', async root => {
@@ -295,6 +322,72 @@ test('replaced task context revokes active PTC before next filesystem dispatch',
     const after = await f.execute(child.a, "return await tools.read({file_path:'proof.txt'})")
     assert.equal(after.value.status, 'PTC_CALLER_REJECTED')
   } finally { await f.cleanup() }
+}))
+
+test('provisional first-turn authority is exact and revoked on stale, failed or uncertain admission', () => inTemporaryDir('ptc-provisional-', async dir => {
+  for(const fault of ['wrong-parent','production-parent','wrong-child','wrong-origin','wrong-depth','stale-admission','context-mismatch','failed-start','uncertain-binding','stopped','aborted','abort-after-activation']) {
+    const f=await fixture(dir)
+    try {
+      const parent=await f.leader('leader',fault==='production-parent'?'postman-leader':'postman-leader-ptc')
+      let captured, early
+      const controller=new AbortController()
+      f.ctx.subagents.startContinuable=async spec=>{
+        if(fault==='stale-admission') await f.registry.change('leader',row=>({...row,workers:{...row.workers,[spec.childId]:{
+          ...row.workers[spec.childId],lifecycle:{version:1,admissions:[{id:'stale',state:'pending',messageId:null}],reports:[]}
+        }}}))
+        if(fault==='uncertain-binding') await f.registry.change('leader',row=>({...row,workers:{...row.workers,[spec.childId]:{...row.workers[spec.childId],state:'uncertain'}}}))
+        if(fault==='context-mismatch') f.taskContexts.set('leader',Object.freeze({branch:'replacement',worktree:dir}))
+        if(fault==='stopped') f.worker.dispose()
+        if(fault==='aborted') controller.abort()
+        captured=await f.agent(fault==='wrong-child'?'arbitrary-child':spec.childId,'postman-leader-ptc',{
+          origin:fault==='wrong-origin'?'user':'subagent',delegationDepth:fault==='wrong-depth'?2:1,
+          parentSession:fault==='wrong-parent'?'other-leader':'leader'
+        })
+        early=visible(f,captured.a).includes('ptc_execute')
+        if(fault==='abort-after-activation') {
+          controller.abort()
+          assert.equal(visible(f,captured.a).includes('ptc_execute'),false)
+          assert.equal(captured.sections.length,0)
+        }
+        if(fault==='failed-start') throw Error('start failed after activation')
+        return {childId:spec.childId,messageId:'accepted'}
+      }
+      // Retain the exact live child on failed drain to prove revocation, not just removal.
+      f.ctx.subagents.drainContinuableChildren=async()=>{throw Error('drain uncertain')}
+      await f.worker.taskTool.execute({task:'test',createNew:true},{agent:parent.a,signal:controller.signal})
+      assert.equal(early,['failed-start','abort-after-activation'].includes(fault),fault)
+      assert.equal(f.worker.ownsLiveWorker(captured.a),false,fault)
+      f.refresh(captured.a.id)
+      assert.equal(visible(f,captured.a).includes('ptc_execute'),false,fault)
+      assert.equal(captured.sections.length,0,fault)
+    } finally {await f.cleanup()}
+  }
+}))
+
+test('Host followup gives the exact resumed child provisional PTC before ready, with max request effort', () => inTemporaryDir('ptc-resume-first-', async dir => {
+  const f=await fixture(dir)
+  try {
+    const parent=await f.leader(), first=await f.start(parent)
+    f.worker.releaseActivation(first.a);f.adapter.remove(first.a);f.boundaries.disposeAgent(first.a);f.agents.delete(first.a.id)
+    let resumed
+    f.ctx.subagents.followup=async (_parent,id)=>{
+      resumed=await f.agent(id,'plain',{origin:'subagent',delegationDepth:1,parentSession:parent.a.id})
+      const binding=f.registry.get(parent.a.id).workers[id]
+      assert.equal(binding.delivery,'pending')
+      assert.equal(binding.lifecycle.admissions.at(-1).state,'pending')
+      assert.equal(visible(f,resumed.a).includes('ptc_execute'),true)
+      assert.ok(resumed.sections[0].text({scope:resumed.a}).includes(POSTMAN_PTC_DISCIPLINE))
+      // Real request waterfall, including a default/missing effort on native cold restore.
+      const {agentEvents}=await import('@deepseek-ai/dsh-agent')
+      const request=await agentEvents(f.ctx,resumed.a).waterfall('agent/request',{},()=>({provider:'codex',model:'gpt-6-luna'}))
+      assert.equal(request.reasoningEffort,'max')
+      return 'resumed-message'
+    }
+    const result=await f.worker.taskTool.execute({task:'resume',workerSessionId:first.a.id},{agent:parent.a,signal:new AbortController().signal})
+    assert.equal(result.status,'POSTMAN_WORKER_TASK_ACCEPTED')
+    assert.equal(f.worker.ownsLiveWorker(first.a),false)
+    assert.equal(f.worker.ownsLiveWorker(resumed.a),true)
+  } finally {await f.cleanup()}
 }))
 
 test('wrong callers, forged preset, stale Worker and other Leader stay rejected', () => inTemporaryDir('ptc-reject-', async dir => {

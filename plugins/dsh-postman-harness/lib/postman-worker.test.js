@@ -66,7 +66,7 @@ test('Worker request pins Luna and denies only registered Postman tools', () => 
   assert.equal(spec.request.parent, parent)
   assert.equal(spec.signal, signal)
   assert.deepEqual(spec.request.prompt, [{ type: 'text', text: 'local work' }])
-  assert.deepEqual(spec.request.agentOptions, { provider: 'codex', model: 'gpt-6-luna' })
+  assert.deepEqual(spec.request.agentOptions, { provider: 'codex', model: 'gpt-6-luna', reasoningEffort: 'max' })
   assert.deepEqual(POSTMAN_WORKER_AGENT_OPTIONS, spec.request.agentOptions)
   assert.deepEqual(spec.request.toolFilter, { deny: denied })
   assert.equal(Object.hasOwn(spec.request.toolFilter, 'allow'), false)
@@ -381,13 +381,13 @@ test('Bridge and Worker steer notices only to their live direct Leader', async (
   const worker = child(first.workerSessionId), bridge = child('bridge-1'), stranger = child('stranger')
   for (const item of [worker, bridge, stranger]) f.agents.set(item.id, item)
   const tool = createPostmanChildNotifyTool(f.ctx, contexts, f.tools)
-  for (const [caller, text] of [[bridge, 'READY one'], [worker, 'progress'], [bridge, 'READY two']]) {
+  for (const [caller, text] of [[bridge, 'READY one'], [worker, 'NEEDS_LEADER_GUIDANCE: blocker'], [bridge, 'READY two']]) {
     const result = await tool.execute({ message: text }, exec(caller))
     assert.equal(result.status, 'PARENT_NOTIFICATION_ACCEPTED')
     assert.equal(result.messageId, received.at(-1).id)
   }
   assert.deepEqual(received.map(m => m.content[0].text.split(':\n').at(-1)),
-    ['READY one', 'progress', 'READY two'])
+    ['READY one', 'NEEDS_LEADER_GUIDANCE: blocker', 'READY two'])
   assert.ok(received.every(m => m.source.kind === 'subagent-report' && m.source.senderSessionId))
   assert.deepEqual(followups, [])
   assert.equal((await tool.execute({ message: 'intrusion' }, exec(stranger))).status, 'PARENT_NOTIFICATION_CALLER_REJECTED')
@@ -424,7 +424,14 @@ test('notify_parent isolates pilot and production Worker/Bridge children by live
   for (const item of children) f.agents.set(item.id, item)
   const notify = createPostmanChildNotifyTool(f.ctx, contexts, f.tools)
   for (const item of children) {
-    const result = await notify.execute({ message: item.id }, exec(item))
+    const isWorker = f.tools.ownsNotification(item, item.session.header.parentSession)
+    if (isWorker) {
+      for (const message of ['progress: still working', ' NEEDS_LEADER_GUIDANCE: blocker', 'needs_leader_guidance: blocker']) {
+        assert.match((await notify.execute({message}, exec(item))).status, /POSTMAN_WORKER_NOTIFICATION_REJECTED/)
+      }
+      assert.equal(received[item.session.header.parentSession].length, 0)
+    }
+    const result = await notify.execute({ message: isWorker ? 'NEEDS_LEADER_GUIDANCE: ' + item.id : item.id }, exec(item))
     assert.equal(result.status, 'PARENT_NOTIFICATION_ACCEPTED')
     const inbox = received[item.session.header.parentSession]
     assert.equal(inbox.at(-1).source.senderSessionId, item.id)

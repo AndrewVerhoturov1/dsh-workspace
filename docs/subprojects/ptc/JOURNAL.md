@@ -1,5 +1,13 @@
 # Журнал ПТС
 
+## 2026-10-02 — Host-enforced Postman PTC efficiency fix
+
+Исходное live evidence из задания (не новая живая приёмка): Leader Program-First уже работает, но осталось `PTC async dispatch → Sol → postman_yield`. Worker: 73 Luna rounds / 70 tools / 0 PTC; 26 direct read/glob/grep были PTC-compatible. В трёх Worker turns PTC и discipline отсутствовали в первом request и появлялись со второго.
+
+Leader revision 6 автоматически concludeTurn на `external_event` после exact accepted Worker/interrupt/Bridge producer, независимо от `yield_on_success`; prepare alone WAIT не создаёт, safety gates сохранены. Worker revision 4 получает exact provisional activation текущего Host admission до первого request; общий список profile/guard технически запрещает managed model-direct calls. `gpt-6-luna reasoningEffort=max` проверен в реальном child request; notify_parent только `NEEDS_LEADER_GUIDANCE:`, Bridge factual path прежний. Discipline v2 требует batching, обрабатывает known non-success outcomes, запрещает лишние rereads; mapTextFiles отклоняет прямое удержание full text, oversized result отмечается без content. Native PTC, authority и shell-in-PTC не менялись.
+
+Автоматическая проверка без живой модели: настоящий Agent loop/ToolRuntime/QuickJS подтвердил PTC + discipline + max в первом свежем request и одну outer программу glob/read/read/grep (2 model calls: batch и результат); exact provisional resume отдельно проверен на Host followup и request waterfall. Проверка полноценного native cold resume обнаружила существующую несовместимость: persistence отвергает неизвестное диагностическое событие `postman/ptc-run`; она не исправлялась расширением native event vocabulary и не заявлена PASS. Проверки Windows / Node v24.21.0: полный core 32/32 PASS (первый параллельный прогон задел 800 ms wall budget; последовательный прошёл без изменения кода); полный Harness 342/347, без новых failures. Те же пять n2/real-cycle failures воспроизведены на exact base `3562f8187999dc546e0b7e1b72d45b944921793c` (334/339): mixed SDK Scope identity → tools.restrict requires scoped context. Clean production install + bridge/adapter/QuickJS-WASM PASS; git diff --check PASS. Установка рабочего профиля и live acceptance не проводились.
+
 ## 2026-10-01 — Program-First: эффективность model-round batching
 
 По evidence живого session archive, приведённым пользователем в задаче: underbatching — слишком много одноинструментных PTC и отдельные model rounds только ради `postman_yield`; `readMany` с per-file character cap мог переполнять model-facing output на кириллице/UTF-8, а `maxWallMs=120000` оборвал `postman_task_prepare`. Этот этап исправляет именно эффективность model-round batching без расширения authority.

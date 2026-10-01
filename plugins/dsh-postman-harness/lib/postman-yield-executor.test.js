@@ -29,7 +29,7 @@ const methods = new Function('LlmError', 'errorChain', 'BlockAssembler', 'create
 const yieldTool = createPostmanYieldTool({ agents: { get: id => id === 'leader' ? live : null } })
 let live
 
-function harness({ ptc = false } = {}) {
+function harness({ ptc = false, interrupt = false } = {}) {
   const events = [], calls = [], queuedTurn = [{ id: 'initial', content: [{ type: 'text', text: 'work' }] }]
   const queuedStep = []
   const agent = { id: 'leader', turn: methods.turn, step: methods.step,
@@ -55,8 +55,8 @@ function harness({ ptc = false } = {}) {
           if (index === 1) {
             yield { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'yield-1',
               name: ptc ? 'ptc_execute' : 'postman_yield', arguments: ptc ? JSON.stringify({
-                 description: 'Prepare, dispatch, then wait for Worker report', boundary: 'external_event', yield_on_success: true,
-                 program: "const task=ptc.expectStatus(await tools.postman_task_prepare({}),['TASK_CONTEXT_READY']); const worker=ptc.expectStatus(await tools.postman_worker({}),['POSTMAN_WORKER_TASK_ACCEPTED']); return {taskStatus:task.status,workerSessionId:worker.workerSessionId}"
+                 description: 'Dispatch, then wait for Worker report', boundary: 'external_event',
+                 program: interrupt ? "await tools.todo_write({}); const w=ptc.expectStatus(await tools.postman_worker_interrupt({}),['POSTMAN_WORKER_INTERRUPT_TASK_ACCEPTED']); return {workerSessionId:w.workerSessionId}" : "const task=ptc.expectStatus(await tools.postman_task_prepare({}),['TASK_CONTEXT_READY']); const worker=ptc.expectStatus(await tools.postman_worker({}),['POSTMAN_WORKER_TASK_ACCEPTED']); return {taskStatus:task.status,workerSessionId:worker.workerSessionId}"
                }) : '{}' } }
           } else {
             yield { type: 'block-end', index: 0, block: { type: 'text', text: 'report received' } }
@@ -74,12 +74,13 @@ function harness({ ptc = false } = {}) {
     new ToolRuntime(ptcContext)
     ptcContext.agents = { get: id => id === agent.id ? agent : null }
     agent.ctx = createScope(ptcContext, agent).ctx
-    for (const name of ['read','grep','postman_task_prepare','postman_worker']) {
+    for (const name of ['read','grep','todo_write','postman_task_prepare','postman_worker','postman_worker_interrupt']) {
       ptcContext.tools.register(defineTool({ name, description: name, parameters: {},
         output: { schema: { type:'object',additionalProperties:true }, render: (_a,value) => [{type:'text',text:JSON.stringify(value)}] },
         execute() {
           operations.push(name)
-          return name === 'postman_task_prepare' ? {status:'TASK_CONTEXT_READY'} :
+          return name === 'postman_worker_interrupt' ? {status:'POSTMAN_WORKER_INTERRUPT_TASK_ACCEPTED',workerSessionId:'worker'} :
+            name === 'postman_task_prepare' ? {status:'TASK_CONTEXT_READY'} :
             name === 'postman_worker' ? {status:'POSTMAN_WORKER_TASK_ACCEPTED',workerSessionId:'worker'} : {name}
         },
       }))
@@ -144,6 +145,22 @@ test('model -> real ptc_execute prepare -> Worker accepted -> conclude; next mod
     assert.deepEqual(f.calls, ['model', 'model'])
     assert.ok(f.events.some(e => e.type === 'user/message' && e.data.id === 'worker-report'))
     assert.ok(f.events.some(e => e.type === 'assistant/message' && e.data.message.content.some(b => b.text === 'report received')))
+  } finally { await f.dispose() }
+})
+
+test('model -> PTC todo_write + Worker interrupt -> automatic WAIT with no yield round', async () => {
+  const f = harness({ptc:true, interrupt:true})
+  try {
+    assert.equal(await f.agent.turn(), false)
+    assert.equal(f.calls.length, 1)
+    assert.deepEqual(f.operations, ['todo_write','postman_worker_interrupt'])
+    assert.equal(f.events.filter(e=>e.type==='tool/call' && e.data.name==='postman_yield').length, 0)
+    assert.equal(f.events.find(e=>e.type==='postman/ptc-run').data.yieldApplied, true)
+    assert.equal(f.events.find(e=>e.type==='postman/ptc-run').data.yieldRequested, false)
+    f.queuedTurn.push({id:'worker-report',content:[{type:'text',text:'Worker result'}]})
+    await f.agent.turn()
+    assert.equal(f.calls.length, 2)
+    assert.ok(f.events.some(e=>e.type==='user/message' && e.data.id==='worker-report'))
   } finally { await f.dispose() }
 })
 
