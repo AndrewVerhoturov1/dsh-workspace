@@ -99,6 +99,8 @@ def chat_ready_snapshot(
                      and original_anchor <= anchor_index
                      and not any(t.get("role") == "user" and t["index"] > anchor_index for t in turns))
     interrupted, interruption_details = observer.connection_interrupted(page)
+    # Recovery requires disappearance, not merely failure to reach strong confidence.
+    interruption_present = interrupted or interruption_details.get("confidence") == "weak"
 
     details = {
         "pageUrl": page_url,
@@ -109,6 +111,7 @@ def chat_ready_snapshot(
         "originalAnchorIndex": original_anchor,
         "taskLineageReady": lineage_ready,
         "connectionInterrupted": interrupted,
+        "interruptionEvidencePresent": interruption_present,
         "interruption": interruption_details,
         **composer_details,
     }
@@ -116,7 +119,7 @@ def chat_ready_snapshot(
         same_conversation
         and composer_ready
         and lineage_ready
-        and (allow_interrupted or not interrupted)
+        and (allow_interrupted or not interruption_present)
         and page_url == conversation_url
     )
     return _result(

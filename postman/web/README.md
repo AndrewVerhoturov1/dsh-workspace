@@ -99,14 +99,20 @@ Additional Processing использует RU/EN варианты текста, 
 
 Connection recovery reload-ит ту же owned Page, доказывает exact URL, original task lineage,
 последний разрешённый anchor и empty live composer, затем ждёт 10 секунд стабилизации.
-До трёх reload attempts; bounded failure не вызывает бесконечный F5 и не resend-ит prompt.
+Strong и weak interruption evidence оба блокируют recovery READY до исчезновения banner.
+До трёх reload attempts; exhaustion ведёт в CONNECTION_WAITING, не terminal failure:
+без новых reload/reminders/resend, с periodic result observation и fresh same-chat re-proof
+после исчезновения banner. Пассивное ожидание ограничено исходным request deadline.
 `system_recovery.py` обрабатывает Additional Processing: Stop-if-present один раз (ABSENT/UNKNOWN
 не требуют повторного click) → один reload → обязательный same-chat/lineage re-proof →
 random uniform wait 10–17 секунд → re-proof → natural continuation через safe Send.
 `transport_control.py` сериализует фазы и banner episodes: одно непрерывное появление = один event,
 исчезновение rearm-ит detector, второе событие не накладывает новый flow поверх active recovery.
-Cycle bounded 180 секундами; soft deadline 60 минут, только уже начатый cycle имеет grace
-до soft + 45 секунд. Новый flow за soft deadline не начинается. Готовый RESULT отменяет Send.
+Reload/control cycle bounded 180 секундами; soft deadline 60 минут. Confirmation timestamp
+до soft deadline разрешает начать pending cycle даже при позднем observer return; grace
+не позже soft + 45 секунд. Новое позднее событие не получает recovery. Готовый RESULT
+отменяет Send. Журнал различает RECOVERY_COMPLETED, RECOVERY_FAILED (reason/code) и
+RECOVERY_ABORTED (result preemption/timeout/cleanup), без ложного success в finally.
 
 ### `request_identity.py` и `artifact_detector.py`
 

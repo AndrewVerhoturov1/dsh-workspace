@@ -817,7 +817,7 @@ class WebWorkerBridge:
                             }
 
                         if control.active:
-                            control.finish_recovery(RESULT_DURABLE)
+                            control.finish_recovery(RESULT_DURABLE, status="ABORTED", reason="result_preempted_recovery")
                         control.cancel_slots("CANCELLED_RESULT_READY")
                         control.transition("FINAL_ANSWER_COMPLETED")
                         control.event("RESULT_DURABLE_FOUND", result=durable)
@@ -950,7 +950,8 @@ class WebWorkerBridge:
 
                 while True:
                     now = self.monotonic()
-                    if now >= deadline:
+                    pending_eligible = pending_control and control.can_begin_recovery(*pending_control)
+                    if now >= deadline and not pending_eligible and not (control.active and remaining_ms() > 0):
                         control.transition("TIMEOUT")
                         control.event("SOFT_DEADLINE_TIMEOUT")
                         terminal_result = self._fail(
@@ -967,6 +968,30 @@ class WebWorkerBridge:
                             },
                         )
                         return terminal_result
+
+                    if control.phase == "CONNECTION_WAITING":
+                        control.consume_slots()
+                        latest = watched_turns[-1]
+                        # A correlated result can still win while the UI is interrupted.
+                        scanned = scan_watches(skip_latest_missing=False)
+                        if scanned["kind"] in {"terminal", "fatal"}:
+                            return scanned["result"]
+                        proof = browser_recovery.chat_ready_snapshot(
+                            page, chat_url, str(latest["prompt"]), original_prompt=prompt,
+                            anchor_binding=latest.get("anchorBinding"))
+                        if proof.get("ok"):
+                            recovery_event("SAME_CHAT_CONFIRMED", proof=proof, passive=True)
+                            clear_observer_proofs()
+                            control.finish_recovery(browser_recovery.RECOVERY_READY)
+                            # Re-arm only after full absence AND exact same-chat proof.
+                            control.candidate(browser_observer.ASSISTANT_CONNECTION_INTERRUPTED, False, {})
+                            next_result_recheck = self.monotonic()
+                            waiting_state()
+                            continue
+                        waiting_state()
+                        self.sleep(min(browser_observer.DEFAULT_POLL_MS / 1000.0,
+                                       max(0.0, control.active["deadline"] - self.monotonic())))
+                        continue
 
                     signal = probe_system()
                     if signal and pending_control:
@@ -1006,7 +1031,12 @@ class WebWorkerBridge:
                         control.consume_slots()
                         waiting_state()
                         if not recovered.get("ok"):
-                            control.event("RECOVERY_FAILED", eventId=event_id, result=last_recovery)
+                            if (kind == browser_observer.ASSISTANT_CONNECTION_INTERRUPTED
+                                    and recovered.get("recoverable")):
+                                clear_observer_proofs()
+                                control.wait_for_connection(recovered.get("code"))
+                                waiting_state()
+                                continue
                             reason = recovered.get("code", "recovery_failed")
                             if self.monotonic() >= deadline:
                                 control.transition("TIMEOUT")
@@ -1063,6 +1093,8 @@ class WebWorkerBridge:
                             if scanned["kind"] in {"terminal", "fatal"}:
                                 return scanned["result"]
                         control.finish_recovery(recovered["code"])
+                        if kind == browser_observer.ASSISTANT_CONNECTION_INTERRUPTED:
+                            control.candidate(kind, False, {})
                         next_result_recheck = self.monotonic()
                         waiting_state()
                         continue
@@ -1273,7 +1305,11 @@ class WebWorkerBridge:
             if control is not None:
                 stored = self.read_state(request_id) or {}
                 if control.active:
-                    control.finish_recovery(stored.get("lastError") or stored.get("state", "aborted"))
+                    timed_out = stored.get("lastError") == browser_observer.ASSISTANT_TURN_TIMEOUT
+                    status = "FAILED" if stored.get("failureCode") and not timed_out else "ABORTED"
+                    control.finish_recovery(stored.get("lastError") or stored.get("state", "cleanup"),
+                                            status=status, code=stored.get("failureCode"),
+                                            reason="request_timeout" if timed_out else stored.get("lastError") or "terminal_or_cleanup")
                 if stored.get("failureCode"):
                     control.transition("TIMEOUT" if stored.get("lastError") == browser_observer.ASSISTANT_TURN_TIMEOUT else "FAILED")
                 elif stored.get("state") in _TERMINAL_SUCCESS_CODES:

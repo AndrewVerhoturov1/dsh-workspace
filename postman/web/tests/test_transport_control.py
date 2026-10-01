@@ -80,7 +80,7 @@ class ControlTests(unittest.TestCase):
         self.assertFalse(self.control.begin_recovery(SIGNAL, 'late'))
         self.t = 3645
         self.assertEqual(self.control.recovery_remaining_ms(), 0)
-        self.control.finish_recovery('timeout')
+        self.control.finish_recovery('timeout', status='ABORTED')
         self.candidate(False)
         self.assertIsNone(self.candidate())
         self.assertFalse(self.control.begin_recovery(SIGNAL, 'late'))
@@ -91,6 +91,51 @@ class ControlTests(unittest.TestCase):
         self.t = 200
         self.assertEqual(self.control.recovery_remaining_ms(), 0)
         self.assertEqual(self.control.soft_deadline, 3600)
+    def test_confirmation_time_not_outer_iteration_grants_grace(self):
+        self.t = 3599.9
+        event = self.candidate()
+        self.t = 3600.1
+        self.assertTrue(self.control.can_begin_recovery(SIGNAL, event))
+        self.assertTrue(self.control.begin_recovery(SIGNAL, event))
+        self.assertEqual(self.control.active['eventConfirmedAt'], 3599.9)
+        self.assertEqual(self.control.active['deadline'], 3645)
+        self.assertFalse(self.control.begin_recovery(SIGNAL, event))
+
+    def test_pending_confirmation_cannot_start_beyond_hard_deadline(self):
+        self.t = 3599.9
+        event = self.candidate()
+        self.t = 3645
+        self.assertFalse(self.control.can_begin_recovery(SIGNAL, event))
+        self.assertFalse(self.control.begin_recovery(SIGNAL, event))
+
+    def test_failed_and_aborted_recovery_never_record_completion(self):
+        for status in ('FAILED', 'ABORTED'):
+            self.candidate(False)
+            event = self.candidate()
+            self.control.begin_recovery(SIGNAL, event)
+            self.control.finish_recovery('reason', status=status, code='transport_code')
+            self.control.finish_recovery('duplicate cleanup', status=status)
+            terminal = [e for e in self.control.journal if e.get('eventId') == event
+                        and e['event'] in ('RECOVERY_COMPLETED', 'RECOVERY_FAILED', 'RECOVERY_ABORTED')]
+            self.assertEqual(len(terminal), 1)
+            self.assertEqual(terminal[0]['event'], 'RECOVERY_' + status)
+            self.assertEqual(terminal[0]['code'], 'transport_code')
+
+    def test_passive_connection_waiting_preserves_soft_time_and_consumes_slots(self):
+        self.t = 100
+        event = self.candidate()
+        self.control.begin_recovery(SIGNAL, event)
+        self.t = 110
+        self.control.wait_for_connection('exhausted')
+        self.assertEqual(self.control.phase, 'CONNECTION_WAITING')
+        self.assertEqual(self.control.active['deadline'], self.control.soft_deadline)
+        self.t = 1200
+        self.control.consume_slots()
+        self.assertEqual([s['status'] for s in self.control.slots],
+                         ['CONSUMED_BY_RECOVERY'] * 2 + ['PENDING'] * 3)
+        self.assertIsNone(self.candidate())
+        self.assertFalse(self.control.begin_recovery(SIGNAL, event))
+
     def test_bounded_journal_preserves_append_values_sequence_and_diagnostics(self):
         fields = {'status': 'before'}
         self.control.event('PROOF', proof=fields)

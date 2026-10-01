@@ -8,6 +8,12 @@
 
 ## Записи
 
+### 2026-10-01 — Review PR #294: recovery на границах UI и deadline
+
+- **Что изменилось:** weak interruption блокирует recovery READY; exhaustion reload переводит connection flow в пассивное CONNECTION_WAITING без F5/reminders. Grace привязан к confirmation timestamp, terminal journal различает COMPLETED/FAILED/ABORTED.
+- **Почему:** прежняя проверка могла принять остающийся weak banner за готовый UI, завершить REQ раньше deadline и потерять pending recovery на границе soft timeout; cleanup ошибочно журналировал success.
+- **Результат:** production Chromium regressions покрывают остающийся weak banner, exhaustion/disappearance/timeout/re-arm/result priority, поздний observer return и Send UNKNOWN без duplicate click. Общие safety guards сохранены.
+
 ### 2026-10-01 — Reminders и системный Web recovery сериализованы
 
 - **Что изменилось:** 50 natural continuation templates без visible transport headers; exact internal intent/ordinal/prefix/groupKey proof. Slots 10/20/30/40/50, soft 60m, текущий recovery hard grace +45s. Connection headline распознаётся без fixed subtitle и внутри modern turn wrappers. Additional Processing: Stop-if-present→Reload→Lineage re-proof→Uniform wait 10–17s→Exact Continue.

@@ -287,12 +287,18 @@ role alert/status, aria-live, system wrapper, nearby retry, insideMarkdown/turn 
 Обычные literal quotes/code и user text отвергаются с reason. Strong evidence принимается
 сразу; weak подтверждается следующим poll через 1–3 секунды.
 
-Connection flow: `CONNECTION_INTERRUPTED → CONNECTION_RECOVERY → WORKING`.
-Worker reload-ит ту же owned Page, доказывает exact conversation URL, исходный trusted
-request anchor, lineage последнего разрешённого user turn и live empty composer, затем
-выдерживает 10 секунд стабилизации. Максимум три reload-попытки в одном bounded cycle.
-Нет нового REQ/chat, поиска похожей conversation или resend исходного prompt.
-Неудача bounded proof завершает request диагностируемой ошибкой, а не бесконечным F5.
+Connection flow: `CONNECTION_INTERRUPTED → CONNECTION_RECOVERY → WORKING` либо
+`CONNECTION_RECOVERY → CONNECTION_WAITING → WORKING`. Worker reload-ит ту же owned Page,
+доказывает exact URL, исходный trusted request anchor, lineage последнего разрешённого
+user turn и live empty composer, затем выдерживает 10 секунд стабилизации. Strong и weak
+interruption evidence оба блокируют READY: требуется фактическое исчезновение banner.
+Максимум три reload-попытки в bounded cycle. Исчерпание recoverable reload/proof переводит
+flow в пассивное `CONNECTION_WAITING`: без F5, resend и обычных reminders для того же episode.
+Periodic observation проверяет результат и исчезновение interruption. Выход в WORKING —
+только после fresh same-chat/lineage/composer proof; stale observer proofs очищаются.
+Раннее исчерпание ждёт до обычного soft timeout, позднее использует только уже разрешённый
+остаток grace. Потеря exact conversation и invalid config остаются fail-closed ошибками.
+Полное исчезновение rearm-ит episode; новое появление допускает новый bounded cycle.
 
 Additional Processing распознаётся по RU/EN вариантам «Наши системы… обрабатывают…»,
 «дополнительная обработка», «Our systems… processing», «additional processing» и DOM evidence.
@@ -307,7 +313,8 @@ lineage/composer re-proof, случайное равномерное ожида�
 Пока он присутствует, повторный recovery не запускается. Исчезновение при обычном
 наблюдении rearm-ит detector; новое появление создаёт новый event. Сигналы внутри активного
 flow диагностируются, но не запускают второй сценарий. Малого request-wide лимита
-на реальные новые Additional Processing events нет. Каждый cycle bounded 180 секундами.
+на реальные новые Additional Processing events нет. Активный reload/control cycle bounded
+180 секундами; пассивное CONNECTION_WAITING не продлевает общий request deadline.
 
 Обычные reminders и special system continuation выбирают случайно одну из 50 русских
 фраз в `web/continuation_prompts.py`; повторы допустимы. Видимое сообщение — только
@@ -328,8 +335,11 @@ final latch, system interruption и exact unsent text перепроверяют
 перед единственным Send. После вставки подавленное сообщение очищается с proof.
 UNKNOWN post-click запрещает resend; неподтверждённая cleanup остаётся fail-closed.
 
-На 60 минутах обычный WORKING без результата завершается timeout. Только recovery,
-начавшийся до soft deadline, может закончить один текущий cycle; hard limit — soft + 45 секунд
+На 60 минутах обычный WORKING без результата завершается timeout. Право recovery на grace
+зафиксировано временем подтверждения `eventConfirmedAt < softDeadline`, а не временем
+возврата observer в outer loop. Pending event, подтверждённый до deadline, может начать
+текущий bounded cycle после soft deadline; впервые подтверждённый после — нет.
+Hard limit — soft + 45 секунд
 (и собственный предел cycle, если он раньше). Reload, proof, wait, Send и result observation
 используют остаток этого лимита. После cycle за soft deadline новые flows/reminders не
 начинаются: результат принимается в пределах grace, иначе timeout.
@@ -339,6 +349,9 @@ Durable/failure state содержит compact `transportEventJournal` (256 за
 poll/candidate/confirmed counters, last text/evidence/reject reason, Stop outcome, reload
 attempts и same-chat proof, фактический wait, exact selected prompt и Send proof.
 Записи неизменны после добавления; snapshots не содержат гигантского DOM/body.
+Один flow имеет ровно один terminal event: `RECOVERY_COMPLETED` только на success path,
+`RECOVERY_FAILED` с reason/code при transport error (включая Send UNKNOWN),
+`RECOVERY_ABORTED` при result/final preemption, request timeout либо внешнем cleanup.
 
 Завершённый assistant turn без ZIP перепроверяется через 10 секунд и возвращает
 `ASSISTANT_COMPLETED_NO_ARTIFACT`; отвергнутый minimal validator ZIP немедленно даёт
