@@ -142,6 +142,8 @@ export function createPostmanChildNotifyTool(ctx, contexts, worker) {
           !((contexts?.child(child.id) != null && contexts.child(child.id) === contexts.get(leader.id)) ||
             worker?.ownsNotification(child, leader.id)))
         return { status: 'PARENT_NOTIFICATION_CALLER_REJECTED' }
+      if (worker?.ownsNotification(child, leader.id) && !args.message.startsWith('NEEDS_LEADER_GUIDANCE:'))
+        return { status: 'POSTMAN_WORKER_NOTIFICATION_REJECTED', diagnostic: 'Use NEEDS_LEADER_GUIDANCE: only when a Leader decision is needed now; keep FYI for report' }
       const message = createUserMessage({
         content: [{ type: 'text', text: 'Background subagent ' + child.id + ':\n' + args.message }],
         source: { kind: 'subagent-report', form: 'relay', senderSessionId: child.id },
@@ -180,7 +182,6 @@ export async function apply(ctx) {
   const refreshWorker = id => {
     const agent = ctx.agents.get(id)
     if (agent && boundaries && ptc) {
-      ptc.remove(agent)
       boundaries.refreshSession(id)
       ptc.refresh(agent)
     }
@@ -199,7 +200,7 @@ export async function apply(ctx) {
     return ownsPtcWorker(agent) ? { profile: WORKER_MUTATION_PROFILE, role: 'worker' } : null
   } })
   // Guard model-direct operations, not ordinary visibility: nested PTC calls carry the outer token.
-  ctx.tools.guard(exec => postmanPtcDirectCallGuard(exec, id => ctx.agents.get(id)))
+  ctx.tools.guard(exec => postmanPtcDirectCallGuard(exec, id => ctx.agents.get(id), ownsPtcWorker))
   ctx.tools.register(ptc.tool)
   ctx.tools.register(createPostmanTaskPrepareTool(ctx, contexts))
   ctx.tools.register(createPostmanInputFilesTool(ctx, contexts))
@@ -228,8 +229,12 @@ export async function apply(ctx) {
   boundaries = createPostmanBridgeBoundaryManager(sessionId => ctx.agents.get(sessionId), ownsPtcWorker)
   ctx.effect(() => () => boundaries.disposeAll(), 'dsh-postman-harness-bridge.boundary-manager()')
   ctx.on('agent/created', async ({ agent }) => {
+    // Admission confirmation performs its provisional refresh synchronously.
+    const activation = worker.confirmActivation(agent)
     boundaries.install(agent)
-    await worker.confirmActivation(agent)
+    ptc.refresh(agent)
+    await activation
+    boundaries.refreshSession(agent.id)
     ptc.refresh(agent)
   })
   ctx.on('agent-preset/selected', sessionId => {

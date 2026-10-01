@@ -84,6 +84,15 @@ test('mapTextFiles reads sequentially, reduces each file before the next, and bo
     await assert.rejects(ptc.readAllText(options), /file_path|positive integer/)
 })
 
+test('mapTextFiles rejects direct full-text retention; readMany remains the raw reader', async () => {
+  const text = '# heading\nfull source', ptc = helper({ read: read({ a: text }) })
+  for (const mapper of [({text}) => text, ({file_path,text}) => ({file_path,text}), ({text}) => ({raw:text}), ({text}) => [text]])
+    await assert.rejects(ptc.mapTextFiles({files:['a']}, mapper), /must reduce text.*readMany/)
+  assert.deepEqual(await ptc.mapTextFiles({files:['a']}, ({file_path,text}) => ({file_path,matches:text.split('\n').filter(x=>x.startsWith('#'))})),
+    [{file_path:'a',matches:['# heading']}])
+  assert.equal((await ptc.readMany({files:['a']}))[0].text, text)
+})
+
 test('incomplete, changing or truncated ordinary reads are never presented as full text', async () => {
   const cases = [
     { totalLines: 1, lines: [] },

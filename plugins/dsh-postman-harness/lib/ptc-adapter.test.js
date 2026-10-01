@@ -47,14 +47,18 @@ function fixture(dir, { real = false, readMaxBytes = 51200, runtime, resolveAssi
   const adapter = createPtcAdapter(ctx,{authorize:isTopLevelPostmanPtcLeader, runtime, resolveAssignment, workerContextOf})
   ctx.tools.register(adapter.tool)
   function agent(id,preset='postman-leader-ptc',extra={}) {
-    const events = [], sections = []
+    const events = [], sections = [], diagnostics = []
+    ctx.logger.exporter({ export: message => {
+      if (message.name === 'postman-ptc' && message.args[1]?.sessionId === id)
+        diagnostics.push({ type: message.args[0], data: message.args[1] })
+    } })
     const a = { id, status:'running', session:{events:[{type:'turn/start'}],header:{agentPreset:preset,delegationDepth:0,cwd:dir,...extra},append(type,data){events.push({type,data})}} }
     const agentCtx=createScope(ctx, a).ctx
     a.ctx=agentCtx
     presets.set(agentCtx,preset)
     agentCtx.systemPrompt.section = s=>{sections.push(s);return ()=>sections.splice(sections.indexOf(s),1)}
     agents.set(id,a)
-    return {a,events,sections}
+    return {a,events,sections,diagnostics}
   }
   let n=0
   function execute(a,program,controller=new AbortController()) {
@@ -81,7 +85,7 @@ test('ordinary ptc_execute passes actual QuickJS to real Harness read and grep',
     assert.equal(result.value.value.body,'local controlled response')
     assert.equal(f.traces.filter(e=>e[0]==='pre' && ['read','grep','get_goal','web_fetch'].includes(e[1])).length,4)
     assert.ok(f.traces.filter(e=>e[0]==='pre' && ['read','grep'].includes(e[1])).every(e=>e[2]===a && e[3] !== undefined && e[4]===f.traces.find(e=>e[1]==='ptc_execute')[4]))
-    assert.deepEqual(events.map(e=>e.type),[...Array.from({length:4},()=>['tool/code-dispatch-start','tool/code-dispatch']).flat(), 'postman/ptc-run'])
+    assert.deepEqual(events.map(e=>e.type),[...Array.from({length:4},()=>['tool/code-dispatch-start','tool/code-dispatch']).flat()])
     const invalid=await f.execute(a,"try { await tools.read({wrong:'argument'}); return 'bypass' } catch (e) { return String(e).includes('file_path') }")
     assert.equal(invalid.value.value,true)
     assert.equal(invalid.value.effects.failed,1)
@@ -231,7 +235,7 @@ test('profile intersection, invalid args, revocation and independent owners',asy
   assert.equal((await f.execute(one.a,'return await tools.write({})')).value.status,'runtime-error')
   assert.equal((await f.execute(one.a,'return await tools.read({})')).value.value.name,'read')
   const hideOptional=one.a.ctx.tools.restrict({deny:['web_fetch']})
-  assert.doesNotMatch(one.sections[0].text({scope:one.a}),/web_fetch/)
+  assert.doesNotMatch(one.sections[0].text({scope:one.a}).split('Current nested argument schemas: ')[1],/web_fetch/)
   assert.equal((await f.execute(one.a,"return typeof tools.web_fetch")).value.value,'undefined')
   hideOptional()
   const hideRequired=one.a.ctx.tools.restrict({deny:['grep']})
@@ -308,8 +312,8 @@ test('noncooperative nested operation remains pending without a false success',a
   const result=await running
   assert.notEqual(result.value.status,'ok')
   assert.equal(result.value.effects.pending,1)
-  assert.equal(events.at(-1).type,'postman/ptc-run')
-  assert.match(events.at(-2).data.content[0].text,/pending|unknown/)
+  assert.equal(events.at(-1).type,'tool/code-dispatch')
+  assert.match(events.at(-1).data.content[0].text,/pending|unknown/)
   f.adapter.refresh(a)
   assert.equal((await f.execute(a,'return 14')).value.value,14)
   finish()
@@ -321,7 +325,7 @@ test('PTC-first Leader direct tools fail closed while exceptions and production 
   for (const {a} of [pilot, production]) { a.ctx.tools.restrict(postmanBridgeRestrictionForAgent(a)); f.adapter.refresh(a) }
   assert.deepEqual(PILOT_PROFILE.tools, POSTMAN_PTC_ONLY_LEADER_TOOLS)
   assert.equal(PILOT_PROFILE.id, 'postman-leader-supervisor')
-  assert.equal(PILOT_PROFILE.revision, 5)
+  assert.equal(PILOT_PROFILE.revision, 6)
   assert.equal(PILOT_PROFILE.limits.maxWallMs, 300000)
   assert.equal(PILOT_PROFILE.limits.maxToolCalls, 256)
   assert.equal(PILOT_PROFILE.limits.quickjsMemoryBytes, 67108864)
@@ -433,7 +437,7 @@ test('boundary required and yield_on_success is exact boolean, external_event, L
 })
 
 test('one program validates prepare and Worker acceptance, auto-concludes and records compact diagnostics', async () => {
-  const f = fixture(process.cwd()), { a, events } = f.agent('auto-yield')
+  const f = fixture(process.cwd()), { a, events, diagnostics } = f.agent('auto-yield')
   a.ctx.tools.restrict(postmanBridgeRestrictionForAgent(a)); f.adapter.refresh(a)
   const order = []
   f.ctx.on('tools/execute', async (exec, next) => {
@@ -445,23 +449,24 @@ test('one program validates prepare and Worker acceptance, auto-concludes and re
   try {
     const program = "const prep=ptc.expectStatus(await tools.postman_task_prepare({}), ['TASK_CONTEXT_READY']); const worker=ptc.expectStatus(await tools.postman_worker({}), ['POSTMAN_WORKER_TASK_ACCEPTED']); return {taskStatus:prep.status,workerSessionId:worker.workerSessionId}"
     const result = await f.ctx.tools.execute({ callId: 'auto-yield', name: 'ptc_execute', arguments: { program,
-      description: 'Dispatch then wait for Worker report', boundary: 'external_event', yield_on_success: true }, agent: a, signal: new AbortController().signal })
+      description: 'Dispatch then wait for Worker report', boundary: 'external_event' }, agent: a, signal: new AbortController().signal })
     assert.equal(result.value.status, 'ok', JSON.stringify(result.value))
     assert.equal(result.concludesTurn, true)
     assert.deepEqual(order, ['postman_task_prepare', 'postman_worker'])
-    const event = events.at(-1)
+    assert.equal(events.some(e => e.type === 'postman/ptc-run'), false)
+    const event = diagnostics.at(-1)
     assert.equal(event.type, 'postman/ptc-run')
-    assert.deepEqual({ ...event.data, toolCounts: {...event.data.toolCounts}, durationMs: 0 }, { role: 'leader', description: 'Dispatch then wait for Worker report',
+    assert.deepEqual({ ...event.data, toolCounts: {...event.data.toolCounts}, durationMs: 0 }, { sessionId: a.id, role: 'leader', description: 'Dispatch then wait for Worker report',
       boundary: 'external_event', status: 'ok', durationMs: 0, nestedToolCalls: 2,
       toolCounts: { postman_task_prepare: 1, postman_worker: 1 }, resultBytes: Buffer.byteLength(JSON.stringify(result.value.value)),
-      yieldRequested: true, yieldApplied: true, underbatchedCandidate: false })
+      yieldRequested: false, yieldApplied: true, underbatchedCandidate: false, oversizedResultCandidate: false })
     assert.ok(event.data.durationMs >= 0)
     assert.doesNotMatch(JSON.stringify(event), /program|arguments|content|taskText/)
   } finally { await f.adapter.dispose() }
 })
 
 test('error, caught failure, unawaited pending and unexpected status never auto-yield', async () => {
-  const f = fixture(process.cwd()), { a, events } = f.agent('no-yield')
+  const f = fixture(process.cwd()), { a, diagnostics } = f.agent('no-yield')
   a.ctx.tools.restrict(postmanBridgeRestrictionForAgent(a)); f.adapter.refresh(a)
   let release
   const held = new Promise(resolve => release = resolve)
@@ -479,14 +484,20 @@ test('error, caught failure, unawaited pending and unexpected status never auto-
         description: 'Stop on unexpected evidence', boundary: 'external_event', yield_on_success: true }, agent: a, signal: new AbortController().signal })
       assert.equal(!!result.concludesTurn, false, program)
     }
-    assert.ok(events.filter(event => event.type === 'postman/ptc-run').every(event => !event.data.yieldApplied))
+    assert.ok(diagnostics.length > 0)
+    assert.ok(diagnostics.every(event => !event.data.yieldApplied))
   } finally { release({ status: 'POSTMAN_WORKER_TASK_ACCEPTED' }); await f.adapter.dispose() }
 })
 
 test('auto-yield fails closed on unsuccessful runtime statuses and incomplete or unknown effects', async () => {
   let terminal
-  const runtime = { run: async () => terminal, dispose: async () => {} }
-  const f = fixture(process.cwd(), { runtime }), { a, events } = f.agent('effects')
+  const runtime = { run: async ({bindings,signal}) => {
+    await bindings.postman_worker({}, {signal,callId:'producer'})
+    return terminal
+  }, dispose: async () => {} }
+  const f = fixture(process.cwd(), { runtime }), { a, diagnostics } = f.agent('effects')
+  f.ctx.on('tools/execute', async (exec,next) => exec.parent && exec.name==='postman_worker'
+    ? {isError:false,value:{status:'POSTMAN_WORKER_TASK_ACCEPTED'}} : next())
   a.ctx.tools.restrict(postmanBridgeRestrictionForAgent(a)); f.adapter.refresh(a)
   try {
     for (terminal of [
@@ -494,12 +505,13 @@ test('auto-yield fails closed on unsuccessful runtime statuses and incomplete or
       { status: 'ok', value: 1 },
       ...['running', 'queued', 'unknown', 'failed', 'not-started'].map(state => ({ status: 'ok', value: 1,
         effects: { calls: [{ name: 'read', state }], completed: 0, pending: state === 'running' ? 1 : 0, failed: state === 'failed' ? 1 : 0 } })),
-      { status: 'ok', value: 1, cleanupError: {}, effects: { calls: [], completed: 0, pending: 0, failed: 0 } },
+      { status: 'ok', value: 1, cleanupError: {}, effects: { calls: [{name:'postman_worker',state:'completed'}], completed: 1, pending: 0, failed: 0 } },
+      { status:'ok',value:{needsModelDecision:true},effects:{calls:[{name:'postman_worker',state:'completed'}],completed:1,pending:0,failed:0} },
     ]) {
       const result = await f.ctx.tools.execute({ callId: 'effects', name: 'ptc_execute', arguments: { program: 'return 1',
         description: 'Fail closed on uncertain effects', boundary: 'external_event', yield_on_success: true }, agent: a, signal: new AbortController().signal })
       assert.equal(!!result.concludesTurn, false)
-      const event = events.at(-1).data
+      const event = diagnostics.at(-1).data
       assert.equal(event.yieldApplied, false)
       if (terminal.status === 'limit-exceeded') assert.equal(event.limitCode, 'maxWallMs')
     }
@@ -507,25 +519,55 @@ test('auto-yield fails closed on unsuccessful runtime statuses and incomplete or
 })
 
 
+test('known stop refusal remains deterministic inside PTC and bookkeeping still completes', async () => {
+  const f=fixture(process.cwd()), {a}=f.agent('known-refusal'), order=[]
+  a.ctx.tools.restrict(postmanBridgeRestrictionForAgent(a));f.adapter.refresh(a)
+  f.ctx.on('tools/execute', async (exec,next)=>{
+    if(exec.parent && exec.name==='postman_worker_stop') {order.push(exec.name);return {isError:false,value:{status:'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT'}}}
+    if(exec.parent && exec.name==='todo_write') {order.push(exec.name);return {isError:false,value:{status:'ok'}}}
+    return next()
+  })
+  try {
+    const result=await f.execute(a,"const s=ptc.expectStatus(await tools.postman_worker_stop({}),['POSTMAN_WORKER_STOPPED','POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT']); const cleanupDeferred=s.status==='POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT'; await tools.todo_write({}); return {cleanupDeferred,status:'task_complete'}")
+    assert.equal(result.value.status,'ok')
+    assert.deepEqual(result.value.value,{cleanupDeferred:true,status:'task_complete'})
+    assert.deepEqual(order,['postman_worker_stop','todo_write'])
+  } finally {await f.adapter.dispose()}
+})
+
+test('oversized model-facing PTC result is diagnostic only, without result content', async () => {
+  const f=fixture(process.cwd()), {a,diagnostics}=f.agent('large-result')
+  a.ctx.tools.restrict(postmanBridgeRestrictionForAgent(a));f.adapter.refresh(a)
+  try {
+    const result=await f.execute(a,"return {privateResult:'SECRET_RESULT_'.repeat(6000)}")
+    assert.equal(result.value.status,'ok')
+    const diagnostic=diagnostics.findLast(e=>e.type==='postman/ptc-run').data
+    assert.equal(diagnostic.oversizedResultCandidate,true)
+    assert.ok(diagnostic.resultBytes>64*1024)
+    assert.doesNotMatch(JSON.stringify(diagnostic),/SECRET_RESULT_|privateResult/)
+  } finally {await f.adapter.dispose()}
+})
+
 test('ordinary JSON refused/unknown async acceptance is not concealed by auto-yield; one-tool runs remain allowed', async () => {
-  const f = fixture(process.cwd()), { a, events } = f.agent('acceptance')
+  const f = fixture(process.cwd()), { a, diagnostics } = f.agent('acceptance')
   a.ctx.tools.restrict(postmanBridgeRestrictionForAgent(a)); f.adapter.refresh(a)
   let status
-  f.ctx.on('tools/execute', async (exec,next) => exec.parent && ['postman_worker','postman_bridge','postman_task_prepare'].includes(exec.name)
+  f.ctx.on('tools/execute', async (exec,next) => exec.parent && ['postman_worker','postman_worker_interrupt','postman_bridge','postman_task_prepare'].includes(exec.name)
     ? { isError:false,value:{status} } : next())
   try {
     for (const [name, statuses] of [
       ['postman_worker', ['POSTMAN_WORKER_BINDING_UNCERTAIN','POSTMAN_WORKER_DELIVERY_UNKNOWN','POSTMAN_WORKER_TASK_ACCEPTED_EXTRA','POSTMAN_WORKER_TASK_ACCEPTED']],
+      ['postman_worker_interrupt', ['POSTMAN_WORKER_INTERRUPT_DELIVERY_FAILED','POSTMAN_WORKER_INTERRUPT_TASK_ACCEPTED_EXTRA','POSTMAN_WORKER_INTERRUPT_TASK_ACCEPTED']],
       ['postman_bridge', ['POSTMAN_BRIDGE_START_FAILED','POSTMAN_BRIDGE_OUTCOME_UNKNOWN','POSTMAN_BRIDGE_ACCEPTED']],
       ['postman_task_prepare', ['POSTMAN_TASK_CONTEXT_BUSY','NEW_PREPARE_STATUS','TASK_CONTEXT_READY']],
-    ]) for (status of statuses) {
+    ]) for (status of statuses) for (const yieldFlag of [undefined,false,true]) {
       const result = await f.ctx.tools.execute({ callId:'acceptance',name:'ptc_execute',agent:a,signal:new AbortController().signal,
-        arguments:{program:'return await tools.'+name+'({})',description:'One dispatch is the external event boundary',boundary:'external_event',yield_on_success:true} })
+        arguments:{program:'return await tools.'+name+'({})',description:'One dispatch is the external event boundary',boundary:'external_event',...(yieldFlag===undefined?{}:{yield_on_success:yieldFlag})} })
       assert.equal(result.value.status,'ok',JSON.stringify(result.value))
-      assert.equal(!!result.concludesTurn,status === statuses.at(-1), status)
-      assert.equal(events.at(-1).data.underbatchedCandidate,true)
-      assert.equal(events.at(-1).data.nestedToolCalls,1)
-      assert.deepEqual({...events.at(-1).data.toolCounts},{[name]:1})
+      assert.equal(!!result.concludesTurn,name !== 'postman_task_prepare' && status === statuses.at(-1), status)
+      assert.equal(diagnostics.at(-1).data.underbatchedCandidate,true)
+      assert.equal(diagnostics.at(-1).data.nestedToolCalls,1)
+      assert.deepEqual({...diagnostics.at(-1).data.toolCounts},{[name]:1})
     }
   } finally { await f.adapter.dispose() }
 })
