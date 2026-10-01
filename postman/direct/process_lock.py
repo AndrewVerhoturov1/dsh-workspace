@@ -64,6 +64,13 @@ def exclusive_lock(path: str | os.PathLike[str], *, timeout_s: float = 0.0, busy
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
+def lock_cdp_download(*, timeout_s=90.0):
+    """One shared short lock for CDP attach/detach and download capture."""
+    local = os.environ.get("LOCALAPPDATA")
+    root = Path(local) / "DSH" / "Postman" if local else Path.home() / ".dsh" / "postman"
+    return exclusive_lock(root / "locks" / "cdp-download.lock", timeout_s=timeout_s)
+
+
 @contextmanager
 def lock_publication(direct_root, repository, branch):
     """Serialize the short GitHub snapshot/commit window, not Web requests."""

@@ -18,6 +18,8 @@ uncertain Send.
 
 from __future__ import annotations
 
+import cdp_download
+
 import argparse
 import hashlib
 import json
@@ -1152,7 +1154,7 @@ def run_live_submit(
         )
 
     try:
-        with factory() as playwright:
+        with cdp_download.locked_playwright(factory) as playwright:
             browser = None
             context = None
             page = None
@@ -1160,7 +1162,7 @@ def run_live_submit(
             try:
                 try:
                     normalized = bootstrap.normalize_cdp_url(cdp_url)
-                    browser = playwright.chromium.connect_over_cdp(normalized)
+                    browser = cdp_download.connect_over_cdp(playwright, normalized)
                 except Exception as exc:
                     return _result(
                         SUBMIT_ATTACH_FAILED,

@@ -18,6 +18,8 @@ a configured interval.
 
 from __future__ import annotations
 
+import cdp_download
+
 import argparse
 import hashlib
 import json
@@ -912,14 +914,14 @@ def run_submit_and_observe(
         )
 
     try:
-        with factory() as playwright:
+        with cdp_download.locked_playwright(factory) as playwright:
             context = None
             page = None
             owns_context = False
             try:
                 try:
                     normalized = bootstrap.normalize_cdp_url(cdp_url)
-                    browser = playwright.chromium.connect_over_cdp(normalized)
+                    browser = cdp_download.connect_over_cdp(playwright, normalized)
                 except Exception as exc:
                     return _result(
                         OBSERVER_ATTACH_FAILED,

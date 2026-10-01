@@ -78,7 +78,7 @@ class FakeChromium:
     def __init__(self, browser: FakeBrowser) -> None:
         self.browser = browser
 
-    def connect_over_cdp(self, _url: str) -> FakeBrowser:
+    def connect_over_cdp(self, _url: str, **kwargs) -> FakeBrowser:
         return self.browser
 
 

@@ -8,6 +8,8 @@ serialized recovery/natural continuation, and the hand-off back to Runtime after
 
 from __future__ import annotations
 
+import cdp_download
+
 from contextlib import ExitStack
 from dataclasses import dataclass
 import json
@@ -406,9 +408,10 @@ class WebWorkerBridge:
         cleanup: dict[str, Any] = {}
         try:
             with ExitStack() as stack:
-                playwright = stack.enter_context(factory())
+                artifacts_dir = stack.enter_context(tempfile.TemporaryDirectory(prefix="postman-cdp-"))
+                playwright = stack.enter_context(cdp_download.locked_playwright(factory))
                 normalized = browser_bootstrap.normalize_cdp_url(cdp_url)
-                browser = playwright.chromium.connect_over_cdp(normalized)
+                browser = cdp_download.connect_over_cdp(playwright, normalized, artifacts_dir=artifacts_dir)
                 contexts = list(browser.contexts)
                 if contexts:
                     context = contexts[0]
@@ -777,6 +780,7 @@ class WebWorkerBridge:
                             expected_request=expected_request,
                             result_root=self.result_root,
                             browser_download_dir=browser_download_dir,
+                            cdp_artifacts_dir=artifacts_dir,
                             download_timeout_ms=download_timeout_ms,
                             click_timeout_ms=click_timeout_ms,
                             validator_runner=validator_runner,

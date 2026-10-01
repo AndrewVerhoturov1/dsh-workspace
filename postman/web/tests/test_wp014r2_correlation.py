@@ -80,7 +80,7 @@ class WP014R2CorrelationTests(unittest.TestCase):
             contexts = [context]
 
         class Chromium:
-            def connect_over_cdp(self, url):
+            def connect_over_cdp(self, url, **kwargs):
                 return Browser()
 
         class Playwright:

@@ -151,7 +151,25 @@ exact correlated control
 → durable store
 ```
 
-Filesystem scan по «последнему ZIP» не используется.
+Filesystem scan по «последнему ZIP» не используется. Общий cross-process lock из
+`postman/direct/process_lock.py` защищает только CDP attach/disconnect и capture:
+повторная установка `allowAndName` в каталог текущего подключения → один click →
+`download.failure()` → физический `download.path()` → size/SHA source → `save_as()` →
+сравнение staging size/SHA. Ожидание ответа, validator и durable publish идут вне lock.
+Отсутствующий source — `DOWNLOAD_SOURCE_MISSING`; несовпадение копии —
+`DOWNLOAD_STAGING_MISMATCH`, оба transport failure без повторного click. Только
+действительно пустой source проходит к существующему `ARTIFACT_EMPTY` validator.
+
+Локальная проверка без ChatGPT и production профиля:
+
+```powershell
+$env:DSH_POSTMAN_CDP_REPRO="1"
+python -m unittest discover -s postman/web/tests -p test_cdp_download_repro.py
+```
+
+Тест выполняет пять циклов независимого B connect/disconnect после A connect,
+затем production capture A; проверяет exact bytes/SHA и отсутствие native download.
+
 
 ### `artifact-validator.mjs`
 

@@ -261,7 +261,7 @@ class TransportDomTests(unittest.TestCase):
         class Context:
             def new_page(self): return page
         class Chromium:
-            def connect_over_cdp(self, _url):
+            def connect_over_cdp(self, _url, **kwargs):
                 class Browser:
                     contexts = [Context()]
                 return Browser()

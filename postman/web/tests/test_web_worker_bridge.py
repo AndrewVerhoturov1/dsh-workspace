@@ -120,7 +120,7 @@ class WebWorkerBridgeTests(unittest.TestCase):
                 self.chromium = self
                 return self
             def __exit__(self, *args): pass
-            def connect_over_cdp(self, url): return Browser()
+            def connect_over_cdp(self, url, **kwargs): return Browser()
         submit = {"ok": True, "code": "SENT", "sendState": "PROVEN_SENT",
                   "details": {"chatUrl": chat}}
         image_proof = {"ok": True, "code": "ASSISTANT_TURN_COMPLETED",
@@ -220,7 +220,7 @@ class WebWorkerBridgeTests(unittest.TestCase):
                     self.chromium = self
                     return self
                 def __exit__(self, *args): pass
-                def connect_over_cdp(self, url): return self
+                def connect_over_cdp(self, url, **kwargs): return self
                 @property
                 def contexts(self): return [self]
                 def new_page(self): return object()
@@ -253,7 +253,7 @@ class WebWorkerBridgeTests(unittest.TestCase):
         class Factory:
             def __enter__(self): self.chromium = self; return self
             def __exit__(self, *args): pass
-            def connect_over_cdp(self, url): return Browser()
+            def connect_over_cdp(self, url, **kwargs): return Browser()
         submit = {"ok": True, "code": "SENT", "sendState": "PROVEN_SENT", "details": {"chatUrl": chat}}
         proof = {"ok": True, "code": "ASSISTANT_TURN_COMPLETED",
                  "details": {"assistantText": "", "assistantImageCount": 2, "assistantIndex": 1}}

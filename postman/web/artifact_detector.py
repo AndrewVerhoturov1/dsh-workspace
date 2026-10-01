@@ -15,6 +15,8 @@ P6 owns browser download lifecycle and artifact validation.
 
 from __future__ import annotations
 
+import cdp_download
+
 import argparse
 import json
 import re
@@ -651,14 +653,14 @@ def run_submit_observe_detect(
         )
 
     try:
-        with factory() as playwright:
+        with cdp_download.locked_playwright(factory) as playwright:
             context = None
             page = None
             owns_context = False
             try:
                 try:
                     normalized = bootstrap.normalize_cdp_url(cdp_url)
-                    browser = playwright.chromium.connect_over_cdp(normalized)
+                    browser = cdp_download.connect_over_cdp(playwright, normalized)
                 except Exception as exc:
                     return _result(
                         ARTIFACT_ATTACH_FAILED,
