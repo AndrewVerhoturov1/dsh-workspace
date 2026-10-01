@@ -28,6 +28,7 @@ import tempfile
 from typing import Any, Callable
 import zipfile
 
+import cdp_download
 import artifact_detector as detector
 import request_identity as identity
 
@@ -37,6 +38,9 @@ DOWNLOAD_STARTED = "DOWNLOAD_STARTED"
 DOWNLOAD_COMPLETED = "DOWNLOAD_COMPLETED"
 DOWNLOAD_NOT_FOUND = "DOWNLOAD_NOT_FOUND"
 DOWNLOAD_INTERRUPTED = "DOWNLOAD_INTERRUPTED"
+DOWNLOAD_SOURCE_MISSING = "DOWNLOAD_SOURCE_MISSING"
+DOWNLOAD_STAGING_MISMATCH = "DOWNLOAD_STAGING_MISMATCH"
+DOWNLOAD_BEHAVIOR_FAILED = "DOWNLOAD_BEHAVIOR_FAILED"
 DOWNLOAD_FILENAME_MISMATCH = "DOWNLOAD_FILENAME_MISMATCH"
 DOWNLOAD_PROOF_INVALID = "DOWNLOAD_PROOF_INVALID"
 DOWNLOAD_PROOF_CHANGED = "DOWNLOAD_PROOF_CHANGED"
@@ -454,6 +458,97 @@ def _publish_durable(
         raise
 
 
+def _capture_download(page, control, staging_zip, expected_filename, download_timeout_ms, click_timeout_ms):
+    """One click, prove the physical source, then attest the exact staging copy."""
+    click_attempted = False
+    try:
+        with page.expect_download(timeout=download_timeout_ms) as download_info:
+            click_attempted = True
+            control.click(timeout=click_timeout_ms)
+        download = download_info.value
+    except Exception as exc:
+        return _result(
+            DOWNLOAD_NOT_FOUND,
+            ok=False,
+            recoverable=False,
+            details={
+                "phase": "download_event",
+                "reason": str(exc)[:500],
+                "clickAttempted": click_attempted,
+                "retryAllowed": False,
+            },
+        )
+
+    suggested = str(getattr(download, "suggested_filename", "") or "")
+    if suggested != expected_filename:
+        _cancel_download_best_effort(download)
+        return _result(
+            DOWNLOAD_FILENAME_MISMATCH,
+            ok=False,
+            details={
+                "phase": "download_event",
+                "suggestedFilename": suggested[:512],
+                "expectedFilename": expected_filename,
+                "clickAttempted": True,
+                "retryAllowed": False,
+            },
+        )
+
+    try:
+        failure = _download_failure(download)
+        if failure is not None:
+            return _result(
+                DOWNLOAD_INTERRUPTED,
+                ok=False,
+                details={
+                    "phase": "download",
+                    "failure": failure,
+                    "clickAttempted": True,
+                    "retryAllowed": False,
+                },
+            )
+        try:
+            source_name = download.path()
+        except Exception as exc:
+            return _result(DOWNLOAD_SOURCE_MISSING, ok=False,
+                           details={"phase": "download_source", "reason": str(exc)[:500],
+                                    "clickAttempted": True, "retryAllowed": False})
+        source = Path(source_name) if source_name else None
+        if source is None or not source.is_file():
+            return _result(
+                DOWNLOAD_SOURCE_MISSING, ok=False,
+                details={"phase": "download_source", "sourcePath": str(source) if source else None,
+                         "clickAttempted": True, "retryAllowed": False},
+            )
+        source_size = source.stat().st_size
+        source_sha256 = _sha256_file(source)
+        download.save_as(str(staging_zip))
+        if not staging_zip.is_file():
+            raise RuntimeError("save_as completed without a staging file")
+    except Exception as exc:
+        return _result(
+            DOWNLOAD_INTERRUPTED,
+            ok=False,
+            details={
+                "phase": "download_save",
+                "reason": str(exc)[:500],
+                "clickAttempted": True,
+                "retryAllowed": False,
+            },
+        )
+
+    staging_size = staging_zip.stat().st_size
+    staging_sha256 = _sha256_file(staging_zip)
+    if staging_size != source_size or staging_sha256 != source_sha256:
+        return _result(
+            DOWNLOAD_STAGING_MISMATCH, ok=False,
+            details={"phase": "download_copy", "sourceSize": source_size,
+                     "sourceSha256": source_sha256, "stagingSize": staging_size,
+                     "stagingSha256": staging_sha256, "clickAttempted": True, "retryAllowed": False},
+        )
+    return _result(DOWNLOAD_COMPLETED, ok=True, details={"sha256": staging_sha256})
+
+
 def download_validated_artifact(
     page: Any,
     *,
@@ -466,6 +561,7 @@ def download_validated_artifact(
     expected_request: dict[str, Any],
     result_root: str | os.PathLike[str] | None = None,
     browser_download_dir: str = DEFAULT_BROWSER_DOWNLOAD_DIR,
+    cdp_artifacts_dir: str | os.PathLike[str] | None = None,
     download_timeout_ms: int = DEFAULT_DOWNLOAD_TIMEOUT_MS,
     click_timeout_ms: int = DEFAULT_CLICK_TIMEOUT_MS,
     validator_runner: Callable[[Path, dict[str, Any]], dict[str, Any]] | None = None,
@@ -577,69 +673,18 @@ def download_validated_artifact(
             },
         )
 
-    click_attempted = False
     try:
-        with page.expect_download(timeout=download_timeout_ms) as download_info:
-            click_attempted = True
-            control.click(timeout=click_timeout_ms)
-        download = download_info.value
+        with cdp_download.process_lock.lock_cdp_download():
+            with cdp_download.download_behavior(page, cdp_artifacts_dir):
+                captured = _capture_download(
+                    page, control, staging_zip, expected_filename, download_timeout_ms, click_timeout_ms)
     except Exception as exc:
-        return _result(
-            DOWNLOAD_NOT_FOUND,
-            ok=False,
-            recoverable=False,
-            details={
-                "phase": "download_event",
-                "reason": str(exc)[:500],
-                "clickAttempted": click_attempted,
-                "retryAllowed": False,
-            },
-        )
-
-    suggested = str(getattr(download, "suggested_filename", "") or "")
-    if suggested != expected_filename:
-        _cancel_download_best_effort(download)
-        return _result(
-            DOWNLOAD_FILENAME_MISMATCH,
-            ok=False,
-            details={
-                "phase": "download_event",
-                "suggestedFilename": suggested[:512],
-                "expectedFilename": expected_filename,
-                "clickAttempted": True,
-                "retryAllowed": False,
-            },
-        )
-
-    try:
-        failure = _download_failure(download)
-        if failure is not None:
-            return _result(
-                DOWNLOAD_INTERRUPTED,
-                ok=False,
-                details={
-                    "phase": "download",
-                    "failure": failure,
-                    "clickAttempted": True,
-                    "retryAllowed": False,
-                },
-            )
-        download.save_as(str(staging_zip))
-        if not staging_zip.is_file():
-            raise RuntimeError("save_as completed without a staging file")
-    except Exception as exc:
-        return _result(
-            DOWNLOAD_INTERRUPTED,
-            ok=False,
-            details={
-                "phase": "download_save",
-                "reason": str(exc)[:500],
-                "clickAttempted": True,
-                "retryAllowed": False,
-            },
-        )
-
-    actual_sha256 = _sha256_file(staging_zip)
+        return _result(DOWNLOAD_BEHAVIOR_FAILED, ok=False,
+                       details={"phase": "download_capture", "reason": str(exc)[:500],
+                                "retryAllowed": False})
+    if not captured["ok"]:
+        return captured
+    actual_sha256 = captured["details"]["sha256"]
     runner = validator_runner or _run_validator
     try:
         validation = runner(staging_zip, trusted)
@@ -750,7 +795,7 @@ def download_validated_artifact(
         "chatUrl": current["chatUrl"],
         "assistantIndex": current["assistantIndex"],
         "assistantTextSha256": current["assistantTextSha256"],
-        "downloadSuggestedFilename": suggested,
+        "downloadSuggestedFilename": expected_filename,
         "browserDownloadDirectory": str(browser_download_dir),
         "browserDownloadDirectoryTrusted": False,
         "manifestPresent": manifest_bytes is not None,

@@ -896,6 +896,17 @@ console.log(JSON.stringify({length: actual.length, sha256: hash(actual), joined,
         self.assertEqual(len(details), 1)
         self.assertEqual(details[0]["selector"], submit.USER_TURN_SELECTORS[0])
 
+    def test_natural_launch_send_proof_is_exact_without_request_key(self):
+        from launch_prompts import build_launch_prompt
+        req = "REQ_20261001T175853Z_9264"
+        prompt = build_launch_prompt(req, "https://example.test/" + req + ".md")
+        page = FakePage(composer_text="", user_turns=[prompt], url="https://chatgpt.com/c/exact")
+        ok, proof = submit._observe_send_proof(page, prompt, 0)
+        self.assertTrue(ok, proof)
+        self.assertTrue(proof["exactUserTurn"])
+        self.assertFalse(proof["requestKeyUserTurn"])
+        self.assertEqual(proof["userTurnTextSha256"], submit.prompt_sha256(prompt))
+
     def test_current_chatgpt_user_bubble_proves_exact_prompt_without_retry(self):
         request_id = "REQ_20260925T162138Z_6278"
         prompt = f"POSTMAN_REQUEST_ID: {request_id}\ntask_file: exact pinned URL"

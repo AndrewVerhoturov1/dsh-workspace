@@ -156,7 +156,9 @@ class DirectPostmanUnitTests(unittest.TestCase):
             self.assertNotIn("RESULT_BEGIN", first["prompt"])
             followup = Bridge.packaging
             self.assertEqual(followup["expected_request"]["requestId"], REQ)
-            self.assertEqual(followup["prompt"], f"POSTMAN_REQUEST_ID: {REQ}\ntask_file: https://example.test/{REQ}.md")
+            from postman.web.launch_prompts import is_launch_prompt
+            self.assertTrue(is_launch_prompt(followup["prompt"], REQ))
+            self.assertEqual(followup["prompt"].splitlines()[1], f"https://example.test/{REQ}.md")
             self.assertEqual(terminal["imageFormat"], "png")
             extract.assert_called_once_with(str(zip_path), [{"path": f"{REQ}_img1.png", "kind": "file"}],
                                             runner.result_root / REQ, expected_zip_sha256="c" * 64, request_id=REQ)
@@ -234,7 +236,7 @@ class DirectPostmanUnitTests(unittest.TestCase):
         for metadata in ("repository:", "base_commit:", "allowed_paths_json:"):
             self.assertNotIn(metadata, prompt)
 
-    def test_external_prompt_is_exactly_req_policy_and_task_link(self):
+    def test_external_prompt_is_exactly_natural_launch_and_task_link(self):
         filename = f"POSTMAN_{REQ}_RESULT.zip"
         task_url = f"https://raw.githubusercontent.com/x/y/{PUB}/{REQ}.md"
         prompt = direct.build_external_prompt(
@@ -246,15 +248,11 @@ class DirectPostmanUnitTests(unittest.TestCase):
             allowed_paths=["apps", "README.md"],
             forbidden_paths=["settings.yaml"],
         )
-        self.assertEqual(
-            prompt,
-            "\n".join(
-                (
-                    f"POSTMAN_REQUEST_ID: {REQ}",
-                    f"task_file: {task_url}",
-                )
-            ),
-        )
+        from postman.web.launch_prompts import is_launch_prompt
+        self.assertTrue(is_launch_prompt(prompt, REQ))
+        self.assertEqual(prompt.splitlines()[1], task_url)
+        for marker in ("POSTMAN_REQUEST_ID:", "task_file:", "POSTMAN_TRANSPORT_CONTROL"):
+            self.assertNotIn(marker, prompt)
         self.assertEqual(2, len(prompt.splitlines()))
         self.assertNotIn("policy:", prompt)
         for forbidden in (
@@ -461,19 +459,18 @@ class DirectPostmanUnitTests(unittest.TestCase):
             bridge_kwargs = Bridge.calls[0][1]
             self.assertEqual(bridge_kwargs["expected_request"]["baseCommit"], PRE)
             self.assertIsNone(bridge_kwargs["conversation_url"])
-            self.assertEqual(
-                bridge_kwargs["prompt"].splitlines(),
-                [
-                    f"POSTMAN_REQUEST_ID: {REQ}",
-                    f"task_file: https://raw.githubusercontent.com/{REPO}/{PUB}/{REQ}.md",
-                ],
-            )
+            from postman.web.launch_prompts import is_launch_prompt
+            self.assertTrue(is_launch_prompt(bridge_kwargs["prompt"], REQ))
+            self.assertEqual(bridge_kwargs["prompt"].splitlines()[1],
+                             f"https://raw.githubusercontent.com/{REPO}/{PUB}/{REQ}.md")
 
             self.assertTrue(runner.state_path(REQ).is_file())
             state = json.loads(runner.state_path(REQ).read_text(encoding="utf-8"))
             self.assertEqual(state["state"], "RESULT_DURABLE")
             self.assertEqual(state["baseCommit"], PRE)
             self.assertEqual(state["taskPublicationCommit"], PUB)
+            self.assertEqual(state["exactPromptText"], bridge_kwargs["prompt"])
+            self.assertEqual(state["promptSha256"], direct._sha256_text(bridge_kwargs["prompt"]))
 
             handoff_path = runner.result_handoff_path(REQ)
             self.assertTrue(handoff_path.is_file())
@@ -566,6 +563,13 @@ class DirectPostmanUnitTests(unittest.TestCase):
             self.assertEqual(second["continuationIndex"], 2)
             self.assertEqual(second["rootRequestId"], reference.root_request_id)
             self.assertEqual(len(Bridge.calls), 2)
+            from postman.web.launch_prompts import is_launch_prompt
+            for launch_req, call in Bridge.calls:
+                self.assertTrue(is_launch_prompt(call["prompt"], launch_req))
+                self.assertEqual(call["prompt"].splitlines()[1], call["task_url"])
+                state = json.loads(runner.state_path(launch_req).read_text(encoding="utf-8"))
+                self.assertEqual(state["exactPromptText"], call["prompt"])
+                self.assertEqual(state["promptSha256"], direct._sha256_text(call["prompt"]))
 
     def test_third_automatic_continuation_stops_before_publication_or_browser(self):
         reference = types.SimpleNamespace(

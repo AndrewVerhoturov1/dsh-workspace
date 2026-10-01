@@ -170,8 +170,11 @@ semantic test и не начинает Git/PR integration. Для двух non-d
 
 Внешний browser prompt формирует Direct Postman, не Л1:
 
-`POSTMAN_REQUEST_ID: <REQ>`  
-`task_file: <SHA-pinned task URL>`
+Одна из 50 естественных русских стартовых фраз из отдельного launch pool, затем
+exact SHA-pinned task URL. Полный prompt и SHA сохраняются во внутреннем state;
+REQ остаётся в task URL/file. Видимые `POSTMAN_REQUEST_ID:`, `task_file:` и
+`POSTMAN_TRANSPORT_CONTROL` в новых launch prompts отсутствуют. Legacy fallback
+для старых requests не используется для новых natural prompts.
 
 ## 5. Terminal gate и handoff
 

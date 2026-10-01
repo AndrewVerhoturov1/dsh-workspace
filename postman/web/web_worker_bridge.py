@@ -8,6 +8,8 @@ serialized recovery/natural continuation, and the hand-off back to Runtime after
 
 from __future__ import annotations
 
+import cdp_download
+
 from contextlib import ExitStack
 from dataclasses import dataclass
 import json
@@ -394,7 +396,8 @@ class WebWorkerBridge:
         if isinstance(max_reminders, bool) or not isinstance(max_reminders, int) or max_reminders < 0:
             return _result(BRIDGE_INVALID_CONFIG, ok=False, details={"reason": "max_reminders_invalid"})
 
-        self._write_state(request, WEB_STARTING)
+        self._write_state(request, WEB_STARTING, exactPromptText=prompt,
+                          promptSha256=browser_submit.prompt_sha256(prompt))
         factory = playwright_factory
         if factory is None:
             try:
@@ -409,9 +412,10 @@ class WebWorkerBridge:
         cleanup: dict[str, Any] = {}
         try:
             with ExitStack() as stack:
-                playwright = stack.enter_context(factory())
+                artifacts_dir = stack.enter_context(tempfile.TemporaryDirectory(prefix="postman-cdp-"))
+                playwright = stack.enter_context(cdp_download.locked_playwright(factory))
                 normalized = browser_bootstrap.normalize_cdp_url(cdp_url)
-                browser = playwright.chromium.connect_over_cdp(normalized)
+                browser = cdp_download.connect_over_cdp(playwright, normalized, artifacts_dir=artifacts_dir)
                 contexts = list(browser.contexts)
                 if contexts:
                     context = contexts[0]
@@ -694,6 +698,8 @@ class WebWorkerBridge:
                                 request, "image packaging config is invalid", details={"packaging": packaging})}
                         request = BridgeRequest(
                             request_id, str(packaging_task_url), str(self.result_path(request_id)), _job_id(request_id))
+                        self._write_state(request, WAITING_ASSISTANT, exactPromptText=packaging_prompt,
+                                          promptSha256=browser_submit.prompt_sha256(packaging_prompt))
                         self.random_pause()  # Published task and prompt are ready; next action is Web send.
                         followup_submit = browser_submit.submit_existing_prompt(
                             page, packaging_prompt, chat_url, timeout_ms=timeout_ms,
@@ -786,6 +792,7 @@ class WebWorkerBridge:
                             expected_request=expected_request,
                             result_root=self.result_root,
                             browser_download_dir=browser_download_dir,
+                            cdp_artifacts_dir=artifacts_dir,
                             download_timeout_ms=download_timeout_ms,
                             click_timeout_ms=click_timeout_ms,
                             validator_runner=validator_runner,

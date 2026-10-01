@@ -635,6 +635,7 @@ class DirectPostman:
                 allowedPaths=allowed_paths,
                 forbiddenPaths=forbidden_paths,
                 promptSha256=_sha256_text(prompt),
+                exactPromptText=prompt,
             )
             self.publication_receipt = {
                 "requestId": request_id,
@@ -895,6 +896,7 @@ class DirectPostman:
             allowedPaths=allowed_paths,
             forbiddenPaths=forbidden_paths,
             promptSha256=_sha256_text(prompt),
+            exactPromptText=prompt,
         )
         self.publication_receipt = {
             "requestId": request_id, "repository": self.repository, "branch": self.branch,

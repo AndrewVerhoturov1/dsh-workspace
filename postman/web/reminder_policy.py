@@ -204,7 +204,9 @@ def _req_anchor_snapshot(page: Any, prompt: str, *, anchor_binding=None) -> dict
     anchor_turn = turns[anchor] if anchor is not None else None
     request_key_match = bool(anchor_turn and request_key_line and
                              submit._turn_contains_exact_line(str(anchor_turn.get("text", "")), request_key_line))
-    trusted_match = request_key_match or (anchor_binding is not None and anchor is not None)
+    exact_match = bool(anchor_turn and browser_observer._normalize_text(anchor_turn.get("text", ""))
+                       == browser_observer._normalize_text(prompt))
+    trusted_match = exact_match or request_key_match or (anchor_binding is not None and anchor is not None)
     if not trusted_match:
         reason = "latest_user_turn_not_current_req"
     elif any(t.get("role") == "user" and t.get("index", -1) > anchor for t in turns):

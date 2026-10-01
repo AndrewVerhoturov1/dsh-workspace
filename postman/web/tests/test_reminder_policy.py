@@ -142,6 +142,19 @@ class ReminderPolicyTests(unittest.TestCase):
         self.assertTrue(result["safe"])
         self.assertEqual(result["fingerprint"]["anchorIndex"], 0)
 
+    def test_natural_launch_anchor_uses_exact_text_and_still_rejects_foreign_turn(self):
+        from launch_prompts import build_launch_prompt
+        prompt = build_launch_prompt(REQ, "https://example.test/" + REQ + ".md")
+        turns = [{"index": 0, "role": "user", "text": prompt},
+                 {"index": 1, "role": "assistant", "text": "working"}]
+        with patch.object(reminder_policy.browser_observer, "snapshot_turns", return_value=(turns, "turns")):
+            self.assertTrue(reminder_policy._req_anchor_snapshot(Page(), prompt)["safe"])
+            turns[0]["text"] = prompt.replace("https://example.test/", "https://changed.test/")
+            self.assertFalse(reminder_policy._req_anchor_snapshot(Page(), prompt)["safe"])
+            turns[0]["text"] = prompt
+            turns.append({"index": 2, "role": "user", "text": "foreign"})
+            self.assertFalse(reminder_policy._req_anchor_snapshot(Page(), prompt)["safe"])
+
     def test_unknown_phase_suppresses_before_composer_readiness(self):
         prompt = reminder_policy.build_reminder_prompt(REQ, 1)
         with (

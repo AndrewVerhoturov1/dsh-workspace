@@ -13,6 +13,8 @@ close an externally owned browser/context.
 
 from __future__ import annotations
 
+import cdp_download
+
 import argparse
 import json
 import os
@@ -326,7 +328,7 @@ def attach_and_probe(
     existing_pages_before = 0
     try:
         try:
-            browser = playwright.chromium.connect_over_cdp(normalized)
+            browser = cdp_download.connect_over_cdp(playwright, normalized)
         except Exception as exc:
             return _result(
                 BOOTSTRAP_ATTACH_FAILED,
@@ -414,7 +416,7 @@ def run_live_probe(
     except BrowserBootstrapError as exc:
         return _result(exc.code, ok=False, recoverable=exc.recoverable, details=exc.details)
     try:
-        with factory() as playwright:
+        with cdp_download.locked_playwright(factory) as playwright:
             return attach_and_probe(
                 playwright,
                 cdp_url,

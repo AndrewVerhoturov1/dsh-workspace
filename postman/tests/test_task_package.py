@@ -233,18 +233,13 @@ class TaskPackageTests(unittest.TestCase):
         )
         self.assertNotIn("## Implementation author discipline", content)
 
-    def test_external_prompt_contains_only_req_and_task_link(self):
+    def test_external_prompt_contains_only_natural_launch_and_task_link(self):
         prompt = task_package.build_external_prompt(REQ, SKILL_URL, TASK_URL)
-        self.assertEqual(
-            prompt,
-            "\n".join(
-                (
-                    f"POSTMAN_REQUEST_ID: {REQ}",
-                    f"task_file: {TASK_URL}",
-                )
-            ),
-        )
-        self.assertEqual(prompt.splitlines()[0], f"POSTMAN_REQUEST_ID: {REQ}")
+        from postman.web.launch_prompts import LAUNCH_PHRASES
+        self.assertIn(prompt.splitlines()[0], LAUNCH_PHRASES)
+        self.assertEqual(prompt.splitlines()[1], TASK_URL)
+        for marker in ("POSTMAN_REQUEST_ID:", "task_file:", "POSTMAN_TRANSPORT_CONTROL"):
+            self.assertNotIn(marker, prompt)
         self.assertNotIn(f"policy: {SKILL_URL}", prompt)
         self.assertNotIn("Keep the runtime unchanged", prompt)
         self.assertNotIn("Preserve the user's request", prompt)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 import hashlib
 import importlib.util
 import json
@@ -156,6 +157,15 @@ class FakeDownload:
         self.save_error = save_error
         self.saved_to = None
         self.cancelled = False
+        self.source_temp = tempfile.TemporaryDirectory()
+        self.source_path = Path(self.source_temp.name) / "source.zip"
+        self.source_path.write_bytes(self.payload)
+
+    def __del__(self):
+        self.source_temp.cleanup()
+
+    def path(self):
+        return self.source_path
 
     def failure(self):
         return self._failure
@@ -227,6 +237,9 @@ def validator_ok(zip_path, trusted):
 class ArtifactDownloadTests(unittest.TestCase):
     def setUp(self):
         detector_stub.current_result = p5_proof()
+        behavior = patch.object(module.cdp_download, "download_behavior", side_effect=lambda *args: nullcontext())
+        behavior.start()
+        self.addCleanup(behavior.stop)
 
     def run_download(self, page=None, proof=None, validator=validator_ok, root=None, **kwargs):
         page = page or FakePage()
@@ -396,6 +409,60 @@ class ArtifactDownloadTests(unittest.TestCase):
         page = FakePage(FakeDownload(save_error="disk full"))
         result, _, _ = self.run_download(page=page)
         self.assertEqual(result["code"], module.DOWNLOAD_INTERRUPTED)
+
+    def test_missing_physical_source_is_transport_failure_without_save_or_validator(self):
+        download = FakeDownload()
+        download.source_path.unlink()
+        def no_validator(*args):
+            self.fail("missing source must not reach artifact validator")
+        result, page, _ = self.run_download(page=FakePage(download), validator=no_validator)
+        self.assertEqual(result["code"], module.DOWNLOAD_SOURCE_MISSING)
+        self.assertFalse(result.get("recoverable", False))
+        self.assertIsNone(download.saved_to)
+        self.assertEqual(page.clicks, 1)
+
+    def test_source_path_none_is_transport_failure(self):
+        download = FakeDownload()
+        download.path = lambda: None
+        result, _, _ = self.run_download(page=FakePage(download))
+        self.assertEqual(result["code"], module.DOWNLOAD_SOURCE_MISSING)
+        self.assertIsNone(download.saved_to)
+
+    def test_nonzero_source_is_saved_with_exact_bytes_and_sha(self):
+        download = FakeDownload()
+        result, _, root = self.run_download(page=FakePage(download))
+        self.assertTrue(result["ok"], result)
+        source = download.source_path.read_bytes()
+        self.assertGreater(len(source), 0)
+        self.assertEqual((root / REQ / "result.zip").read_bytes(), source)
+        self.assertEqual(result["details"]["sha256"], hashlib.sha256(source).hexdigest())
+
+    def test_staging_size_or_sha_mismatch_is_transport_failure(self):
+        for payload in (b"", b"x" * len(valid_zip_bytes())):
+            with self.subTest(size=len(payload)):
+                download = FakeDownload()
+                download.payload = payload  # source stays intact; simulate a bad save stream.
+                def no_validator(*args):
+                    self.fail("copy mismatch must not reach artifact validator")
+                result, page, _ = self.run_download(page=FakePage(download), validator=no_validator)
+                self.assertEqual(result["code"], module.DOWNLOAD_STAGING_MISMATCH)
+                self.assertFalse(result.get("recoverable", False))
+                self.assertEqual(page.clicks, 1)
+
+    def test_true_zero_byte_source_reaches_existing_empty_validator(self):
+        result, page, _ = self.run_download(page=FakePage(FakeDownload(payload=b"")),
+                                            validator=module._run_validator)
+        self.assertEqual(result["code"], module.ARTIFACT_INVALID)
+        self.assertEqual(result["details"]["validatorCode"], "ARTIFACT_EMPTY")
+        self.assertEqual(page.clicks, 1)
+
+    def test_download_lock_released_after_error(self):
+        page = FakePage()
+        page.click_error = "failure"
+        result, _, _ = self.run_download(page=page)
+        self.assertEqual(result["code"], module.DOWNLOAD_NOT_FOUND)
+        with module.cdp_download.process_lock.lock_cdp_download(timeout_s=0):
+            pass
 
     def test_validator_reject_discards_staging_for_the_next_attempt(self):
         def reject(zip_path, trusted):

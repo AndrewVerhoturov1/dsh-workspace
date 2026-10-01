@@ -15,6 +15,9 @@ P6 owns browser download lifecycle and artifact validation.
 
 from __future__ import annotations
 
+import cdp_download
+from launch_prompts import is_launch_prompt
+
 import argparse
 import json
 import re
@@ -444,7 +447,8 @@ def detect_artifact_dom(
             and anchor_binding.get("promptSha256") == submit.prompt_sha256(expected_prompt)
             and {k: anchor_binding.get(k) for k in ("userOrdinal", "precedingUserHashes")} == control_intent.get("expectedUserTurnRelation")
         )
-    if (not prompt_lines or prompt_lines[0] != required_key_line) and not natural_control:
+    natural_launch = is_launch_prompt(expected_prompt, request_id)
+    if (not prompt_lines or prompt_lines[0] != required_key_line) and not natural_control and not natural_launch:
         return _result(
             ARTIFACT_INVALID_CONFIG,
             ok=False,
@@ -491,8 +495,14 @@ def detect_artifact_dom(
     if natural_control:
         users = [t for t in turns if t.get("role") == "user"]
         original_ordinal = control_intent.get("originalUserOrdinal")
-        if (type(original_ordinal) is not int or not 0 <= original_ordinal < len(users)
-                or submit.request_key_line_from_prompt(str(users[original_ordinal].get("text", ""))) != required_key_line):
+        original_text = (str(users[original_ordinal].get("text", ""))
+                         if type(original_ordinal) is int and 0 <= original_ordinal < len(users) else "")
+        prefix = control_intent.get("expectedUserTurnRelation", {}).get("precedingUserHashes", [])
+        exact_original = (bool(original_text) and original_ordinal < len(prefix)
+                          and submit.prompt_sha256(original_text) == prefix[original_ordinal]
+                          and is_launch_prompt(original_text, request_id))
+        if (not original_text or (not exact_original
+                and submit.request_key_line_from_prompt(original_text) != required_key_line)):
             return _result(ARTIFACT_CHAT_CORRELATION_LOST, ok=False,
                            details={"reason": "control_original_lineage_missing"})
     correlation = (observer.correlate_next_assistant(turns, expected_prompt, anchor_binding=anchor_binding)
@@ -651,14 +661,14 @@ def run_submit_observe_detect(
         )
 
     try:
-        with factory() as playwright:
+        with cdp_download.locked_playwright(factory) as playwright:
             context = None
             page = None
             owns_context = False
             try:
                 try:
                     normalized = bootstrap.normalize_cdp_url(cdp_url)
-                    browser = playwright.chromium.connect_over_cdp(normalized)
+                    browser = cdp_download.connect_over_cdp(playwright, normalized)
                 except Exception as exc:
                     return _result(
                         ARTIFACT_ATTACH_FAILED,
