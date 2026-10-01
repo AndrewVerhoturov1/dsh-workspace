@@ -112,6 +112,32 @@ class InputAttachmentTests(unittest.TestCase):
         self.assertEqual(result["details"]["sentAttachment"]["names"], [NAME])
         self.assertLess(result["transitions"].index(attachments.ATTACHMENT_READY_CONFIRMED), result["transitions"].index(submit.PROMPT_INSERTED))
 
+    def test_natural_launch_with_native_zip_preserves_exact_turn_and_hash(self):
+        from launch_prompts import build_launch_prompt
+        prompt = build_launch_prompt(REQ, f"https://example.test/{REQ}.md")
+        for existing in (False, True):
+            with self.subTest(existing=existing):
+                page = ZipPage(url="https://chatgpt.com/c/abc123", user_turns=["old prompt"]) if existing else ZipPage()
+                page.upload_result = proof(file_id="authorized-input")
+                page.sent_result = proof(file_id="authorized-input")
+                if existing:
+                    result = submit.submit_existing_prompt(page, prompt, page.url, timeout_ms=0, input_attachment=Attachment())
+                else:
+                    result = submit.submit_fresh_prompt(page, prompt, timeout_ms=0, input_attachment=Attachment())
+                self.assertTrue(result["ok"], result)
+                self.assertTrue(result["details"]["sentAttachmentConfirmed"])
+                self.assertTrue(result["details"]["exactUserTurn"])
+                self.assertEqual(result["details"]["userTurnTextSha256"], submit.prompt_sha256(prompt))
+                self.assertEqual(page.user_turns[-1], prompt)
+                self.assertEqual((page.click_count, len(page.uploads)), (1, 1))
+                before = len(page.user_turns) - 1
+                for changed in (prompt.replace("https://example.test/", "https://foreign.test/"), "Другая фраза:\n" + prompt.splitlines()[1]):
+                    page.user_turns[-1] = changed
+                    ok, details = submit._observe_send_proof(page, prompt, before, input_attachment=Attachment(), attachment_id="authorized-input")
+                    self.assertFalse(ok)
+                    self.assertTrue(details["sentAttachmentConfirmed"])
+                    self.assertFalse(details["exactUserTurn"])
+
     def test_control_unavailable_and_set_input_failure_no_send(self):
         page = ZipPage(); page.has_input = False
         self.assert_unsent(page, attachments.ATTACHMENT_CONTROL_UNAVAILABLE)
@@ -215,7 +241,7 @@ class InputAttachmentTests(unittest.TestCase):
         class Factory:
             def __enter__(self): self.chromium = self; return self
             def __exit__(self, *args): pass
-            def connect_over_cdp(self, url): return types.SimpleNamespace(contexts=[types.SimpleNamespace(new_page=lambda: Page())])
+            def connect_over_cdp(self, url, **kwargs): return types.SimpleNamespace(contexts=[types.SimpleNamespace(new_page=lambda: Page())])
         for submitted in [{"ok": False, "code": attachments.ATTACHMENT_UPLOAD_TIMEOUT, "sendState": submit.SEND_PROVEN_NOT_SENT},
                           {"ok": True, "code": submit.PROMPT_SEND_CONFIRMED, "sendState": submit.SEND_PROVEN_SENT,
                            "details": {"chatUrl": "https://chatgpt.com/c/abc123"}}]:
