@@ -2,7 +2,7 @@
 
 id: ptc
 status: active
-updated: 2026-09-30
+updated: 2026-10-01
 
 ## Цель
 
@@ -10,7 +10,9 @@ updated: 2026-09-30
 
 ## Текущий фокус и следующий шаг
 
-Общее ядро `plugins/dsh-ptc` сохранено; один обычный `ptc_execute` через `ToolRuntime` принадлежит точному живому top-level `postman-leader-ptc` (PTC-first профиль `postman-leader-supervisor` revision 4: batchable tools через `ptc_execute`) либо его подтверждённому текущему Worker (отдельный `postman-worker-mutation` revision 3: `read/glob/grep/web_fetch/web_search/write/edit`). У Worker остальные coding tools остаются обычными, но внутри программы не доступны. Автоматические Worker-проверки проведены без модели; Stage 4 Worker live-приёмка была проведена отдельно и вскрыла ошибочную файловую базу. Этапы 4.5/5 расширяют Host-side границу: относительные `read/glob/grep/write/edit` Worker PTC привязаны к текущему task worktree, выход через абсолютный путь, `..` и junction отклоняется. Production `postman-leader` остаётся direct-mode без ПТС; production Workers и Bridge ПТС не получают. PTC-first batching сокращает model turns без расширения Leader supervisor authority. Skill v18 управляет routing, batching и предварительным user approval; Worker report и Bridge READY остаются event-driven.
+Общее ядро `plugins/dsh-ptc` сохранено; один обычный `ptc_execute` через `ToolRuntime` принадлежит точному живому top-level `postman-leader-ptc` (PTC-first профиль `postman-leader-supervisor` revision 5: Program-First через `ptc_execute`, runtime-injected canonical `ptc-discipline.js`, обязательный boundary и успешный external-event auto-yield) либо его подтверждённому текущему Worker (отдельный `postman-worker-mutation` revision 3: `read/glob/grep/web_fetch/web_search/write/edit`). У Worker остальные coding tools остаются обычными, но внутри программы не доступны. Автоматические Worker-проверки проведены без модели; Stage 4 Worker live-приёмка была проведена отдельно и вскрыла ошибочную файловую базу. Этапы 4.5/5 расширяют Host-side границу: относительные `read/glob/grep/write/edit` Worker PTC привязаны к текущему task worktree, выход через абсолютный путь, `..` и junction отклоняется. Production `postman-leader` остаётся direct-mode без ПТС; production Workers и Bridge ПТС не получают. PTC-first batching сокращает model turns без расширения Leader supervisor authority. Skill v19 сохраняет routing и предварительный user approval; Worker report и Bridge READY остаются event-driven.
+
+Leader limits: 300000 ms, 256 nested calls, 64 MiB QuickJS, 16 MiB aggregate bridge, concurrency 1; final output остаётся 512 KiB. Общий runtime допускает не более 10 процессов. Helpers: exact `expectStatus`, UTF-8 byte-aware чтение до 4 MiB на файл, совокупный бюджет `readMany`, последовательный `mapTextFiles` для compact evidence. На каждый запуск — безопасное техническое событие `postman/ptc-run`, включая underbatchedCandidate; это диагностика, не запрет одного tool call. Новый этап сокращает model-round overhead, не расширяет authority и не меняет native Harness PTC. Проверяется автоматически через настоящий QuickJS/ToolRuntime и установленный Agent loop без живой модели; установка и live acceptance остаются отдельным этапом.
 
 ## Границы и решения
 

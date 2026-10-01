@@ -135,11 +135,14 @@ test('an unconfirmed child exit demotes success and retains the active slot',asy
   try {
     const x=await r.run({program:'good',profile,bindings:{echo:()=>3}})
     assert.equal(x.status,'cleanup-error',JSON.stringify(x));assert.equal(x.cleanupError.code,'unconfirmed-exit')
-    const second=await r.run({program:'good',profile,bindings:{echo:()=>3}})
-    assert.equal(second.status,'cleanup-error')
+    for (let i=1;i<10;i++) {
+      const next=await r.run({program:'good',profile,bindings:{echo:()=>3}})
+      assert.equal(next.status,'cleanup-error')
+      assert.equal(next.cleanupError.code,'unconfirmed-exit')
+    }
     assert.equal((await r.run({program:'good',profile,bindings:{echo:()=>3}})).error.code,'maxProcesses')
     if(process.platform==='win32') {
-      assert.equal(fallbackCalls.length,2)
+      assert.equal(fallbackCalls.length,10)
       for(const call of fallbackCalls) {
         assert.equal(call.exe,join(process.env.SystemRoot||'C:/Windows','System32','taskkill.exe'))
         assert.deepEqual(call.args,['/PID','12345','/T','/F'])

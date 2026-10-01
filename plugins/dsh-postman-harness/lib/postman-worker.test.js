@@ -80,6 +80,8 @@ test('Worker request pins Luna and denies only registered Postman tools', () => 
     /POSTMAN_WORKER_TRANSPORT_BOUNDARY_REQUIRED/)
   assert.match(POSTMAN_WORKER_PERSONA, /report tool/)
   assert.match(POSTMAN_WORKER_PERSONA, /later tasks/)
+  assert.match(POSTMAN_WORKER_PERSONA, /Only if you are granted Postman's own ptc_execute.*runtime-injected.*mandatory/)
+  assert.doesNotMatch(POSTMAN_WORKER_PERSONA, /# Postman PTC programming discipline/)
 })
 
 test('Leader hides coding tools; Worker keeps coding and report but no Postman control tools', () => {
