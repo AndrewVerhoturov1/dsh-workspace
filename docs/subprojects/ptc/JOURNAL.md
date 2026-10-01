@@ -1,6 +1,6 @@
 # Журнал ПТС
 
-## 2026-09-30 — Program-First: эффективность model-round batching
+## 2026-10-01 — Program-First: эффективность model-round batching
 
 По evidence живого session archive, приведённым пользователем в задаче: underbatching — слишком много одноинструментных PTC и отдельные model rounds только ради `postman_yield`; `readMany` с per-file character cap мог переполнять model-facing output на кириллице/UTF-8, а `maxWallMs=120000` оборвал `postman_task_prepare`. Этот этап исправляет именно эффективность model-round batching без расширения authority.
 

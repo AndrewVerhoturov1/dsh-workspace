@@ -185,7 +185,7 @@ For large text work:
 - grep first when a targeted search can reduce the search space;
 - read only relevant ranges when possible;
 - when complete files are genuinely required, read them inside PTC;
-- use readAllText/readMany/mapTextFiles/readSections or their current equivalents;
+- use readAllText/readMany/mapTextFiles or their current equivalents;
 - process text locally;
 - return only the material necessary for the next model decision.
 

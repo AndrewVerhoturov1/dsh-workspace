@@ -2,7 +2,7 @@
 
 id: ptc
 status: active
-updated: 2026-09-30
+updated: 2026-10-01
 
 ## Цель
 
