@@ -154,7 +154,7 @@ class PostmanAskTests(unittest.TestCase):
         self.assertEqual(result["assistantTextSha256"], hashlib.sha256(body.encode("utf-8")).hexdigest())
         self.assertEqual(result["textSettleMs"], 10_000)
         self.assertEqual(state["state"], "TEXT_RESULT_DURABLE")
-        self.assertEqual(Bridge.calls[0]["observer_timeout_ms"], 45 * 60 * 1000)
+        self.assertEqual(Bridge.calls[0]["observer_timeout_ms"], 60 * 60 * 1000)
         self.assertIn("result_mode: text", Publisher.contents[0])
         self.assertIn(text_result.begin_marker(REQ), Publisher.contents[0])
 

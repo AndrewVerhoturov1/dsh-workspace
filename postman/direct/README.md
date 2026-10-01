@@ -92,7 +92,7 @@ also returns `validationCode` and `validationMessage`.
 ## DSH orchestration for long requests
 
 В текущем DSH deployment одна `functions.run_code` ячейка имеет wall limit 600000 ms,
-а Direct Postman может законно работать до 45 минут. Поэтому normal `@Postman`
+а Direct Postman может законно работать до 60 минут (плюс максимум 45 секунд для уже начатого recovery). Поэтому normal `@Postman`
 orchestration не держит `postman.ps1` foreground.
 
 Правильная схема:
@@ -211,7 +211,10 @@ External policy URL больше не является строкой browser pr
 с точными `validationCode`/`validationMessage`. Ни один из этих случаев не ждёт следующего reminder.
 Conversation URL сохраняется, поэтому следующий новый REQ может использовать `-ChatRequestId`.
 
-Reminders 10/20/30 и 45-minute deadline сохраняются для незавершённого assistant-turn.
+Reminders 10/20/30/40/50 и 60-minute soft deadline применяются к незавершённому assistant-turn.
+Shared Web recovery: Connection reload/re-proof; Additional Processing Stop→Reload→Re-proof→Wait 10–17s→natural Continue.
+Слоты внутри recovery consumed; только текущий начатый cycle имеет hard grace до soft+45s.
+50 natural templates не показывают REQ/control metadata; exact correlation и bounded journal остаются внутри.
 
 ## Durable result
 

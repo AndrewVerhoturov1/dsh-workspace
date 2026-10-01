@@ -293,23 +293,30 @@ def generation_active(page: Any) -> tuple[bool, str]:
 
 _INTERRUPTION_SCOPE_JS = r"""
 (node) => {
-  const turn = node.closest('[data-turn-key], [data-testid^="conversation-turn-"], [data-message-author-role], [data-content-search-turn-key], [data-content-search-unit-key], [data-chatgpt-selection-message-id], [data-user-message-bubble]');
-  if (turn) return {insideConversation: true, scopeText: ''};
-  let current = node;
-  for (let depth = 0; current && depth < 5; depth += 1, current = current.parentElement) {
-    const text = String(current.innerText || current.textContent || '').replace(/\s+/g, ' ').trim();
-    if (!text || text.length > 1200) continue;
-    const lower = text.toLocaleLowerCase();
-    if (
-      lower.includes('ожидание полного ответа') ||
-      lower.includes('waiting for full response') ||
-      lower.includes('waiting for a full response')
-    ) {
-      return {insideConversation: false, scopeText: text};
-    }
+  const markdown = node.closest('[data-markdown-text-style="assistant-message"], .markdown, [data-testid="assistant-message"]');
+  const user = node.closest('[data-user-message-bubble], [data-message-author-role="user"]');
+  const quoted = node.closest('pre, code, blockquote');
+  const turn = node.closest('[data-turn-key], [data-testid^="conversation-turn-"], [data-content-search-turn-key]');
+  const semantic = node.closest('[role="alert"], [role="status"], [aria-live="polite"], [aria-live="assertive"], [data-testid*="error"], [data-testid*="alert"], [data-testid*="status"]');
+  const visible = el => el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
+  let scope = node;
+  // A local banner may split headline/subtitle/controls across siblings. Do not
+  // climb into the whole turn, transcript, or body merely to gather keywords.
+  for (let el = node.parentElement, depth = 0; el && depth < 3; el = el.parentElement, depth++) {
+    if (el === turn || el.matches('main, body') || el.querySelector('[data-user-message-bubble]')) break;
+    if (String(el.innerText || '').length > 1200) break;
+    scope = el;
+    if (el === semantic) break;
   }
-  const ownText = String(node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim();
-  return {insideConversation: false, scopeText: ownText};
+  const buttons = [...scope.querySelectorAll('button')].filter(visible);
+  const retry = buttons.some(b => /retry|reconnect|try again|повтор|переподключ/i.test((b.innerText || '') + ' ' + (b.getAttribute('aria-label') || '')));
+  return {scopeText: String(scope.innerText || node.innerText || '').slice(0, 1200),
+    ownText: String(node.innerText || ''), insideMarkdown: !!markdown,
+    insideUser: !!user, insideQuote: !!quoted, insideTurnWrapper: !!turn,
+    roleAlert: semantic?.getAttribute('role') === 'alert',
+    roleStatus: semantic?.getAttribute('role') === 'status',
+    ariaLive: !!semantic?.getAttribute('aria-live'), systemContainer: !!semantic,
+    retryControlNearby: retry};
 }
 """
 
@@ -317,49 +324,64 @@ _INTERRUPTION_HEAD_PATTERNS = (
     re.compile(r"Соединение\s+прервано", re.I),
     re.compile(r"Connection\s+interrupted", re.I),
 )
+_PROCESSING_PATTERN = re.compile(
+    r"дополнительн[а-я]*\s+обработ[а-я]*|наши\s+системы[^.!?]{0,100}обрабатывают|"
+    r"additional\s+processing|our\s+systems[^.!?]{0,100}(?:processing|process)", re.I)
 
 
 def _normalize_ui_text(value: str) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip().casefold()
 
 
-def connection_interrupted(page: Any) -> tuple[bool, dict[str, Any]]:
-    """Detect the ChatGPT connection-interruption UI outside conversation turns."""
-    pairs = (
-        ("соединение прервано", "ожидание полного ответа"),
-        ("connection interrupted", "waiting for full response"),
-        ("connection interrupted", "waiting for a full response"),
-    )
-    for pattern in _INTERRUPTION_HEAD_PATTERNS:
+def _system_banner(page: Any, patterns: tuple[Any, ...], source: str) -> tuple[bool, dict[str, Any]]:
+    candidates = []
+    for pattern in patterns:
         try:
-            locator = page.get_by_text(pattern)
-            count = min(_locator_count(locator), 8)
+            matches = page.get_by_text(pattern)
+            count = min(_locator_count(matches), 8)
         except Exception:
             continue
         for index in range(count):
             try:
-                candidate = locator.nth(index)
-                if not candidate.is_visible():
+                node = matches.nth(index)
+                if not node.is_visible():
                     continue
+                scope = node.evaluate(_INTERRUPTION_SCOPE_JS)
+                if not isinstance(scope, dict):
+                    raise ValueError("scope_unverified")
             except Exception:
+                candidates.append({"accepted": False, "reason": "scope_unverified"})
                 continue
-            try:
-                scope = candidate.evaluate(_INTERRUPTION_SCOPE_JS)
-            except Exception:
-                scope = {
-                    "insideConversation": False,
-                    "scopeText": _inner_text(candidate),
-                }
-            if not isinstance(scope, dict) or scope.get("insideConversation"):
-                continue
-            visible_text = str(scope.get("scopeText", ""))
-            normalized = _normalize_ui_text(visible_text)
-            if any(head in normalized and tail in normalized for head, tail in pairs):
-                return True, {
-                    "matchedText": visible_text[:500],
-                    "source": "visible_connection_interruption_ui",
-                }
-    return False, {}
+            text = str(scope.get("scopeText", ""))[:1200]
+            own = _normalize_ui_text(scope.get("ownText", text))
+            evidence = {key: bool(scope.get(key)) for key in
+                        ("roleAlert", "roleStatus", "ariaLive", "retryControlNearby",
+                         "systemContainer", "insideMarkdown", "insideTurnWrapper")}
+            evidence["textExact"] = bool(re.fullmatch(r"(?:соединение\s+прервано|connection\s+interrupted)[.!…]*", own))
+            evidence["textVariant"] = bool(pattern.search(own))
+            semantic = any(evidence[k] for k in ("roleAlert", "roleStatus", "ariaLive", "retryControlNearby", "systemContainer"))
+            # Compatibility scopes from older clients explicitly identify transcript.
+            transcript = scope.get("insideConversation") or scope.get("insideUser") or scope.get("insideQuote")
+            if transcript or (evidence["insideMarkdown"] and not semantic):
+                confidence, reason = "rejected", "transcript_or_literal_quote"
+            elif not pattern.search(_normalize_ui_text(text)):
+                confidence, reason = "rejected", "text_not_in_verified_scope"
+            elif semantic or (not evidence["insideMarkdown"] and len(own) < 200):
+                confidence, reason = "strong", "local_system_ui"
+            else:
+                confidence, reason = "weak", "needs_second_poll"
+            item = {"matchedText": text[:500], "source": source, "evidence": evidence,
+                    "confidence": confidence, "reason": reason, "accepted": confidence == "strong"}
+            candidates.append(item)
+    best = next((c for c in candidates if c.get("accepted")), None)
+    if best is None:
+        best = next((c for c in candidates if c.get("confidence") == "weak"), candidates[-1] if candidates else {})
+    return bool(best.get("accepted")), {**best, "candidateCount": len(candidates), "candidates": candidates[:8]}
+
+
+def connection_interrupted(page: Any) -> tuple[bool, dict[str, Any]]:
+    """Headline alone suffices outside markdown; turn layouts are not transcript."""
+    return _system_banner(page, _INTERRUPTION_HEAD_PATTERNS, "visible_connection_interruption_ui")
 
 
 _WORKING_TURN_JS = r"""
@@ -408,27 +430,8 @@ _PHASE_EVIDENCE_JS = r"""
 
 
 def additional_processing(page: Any) -> tuple[bool, dict[str, Any]]:
-    """Recognize visible system processing UI, never transcript content."""
-    pattern = re.compile(r"наши системы выполняют дополнительную обработку|our systems are (performing|doing) additional processing", re.I)
-    try:
-        candidates = page.get_by_text(pattern)
-        count = min(_locator_count(candidates), 8)
-    except Exception:
-        return False, {}
-    for index in range(count):
-        try:
-            candidate = candidates.nth(index)
-            if not candidate.is_visible():
-                continue
-            scope = candidate.evaluate(_INTERRUPTION_SCOPE_JS)
-            if not isinstance(scope, dict) or scope.get("insideConversation"):
-                continue
-            text = _normalize_ui_text(scope.get("scopeText", ""))
-            if pattern.search(text):
-                return True, {"source": "visible_additional_processing_ui", "matchedText": text[:500]}
-        except Exception:
-            continue  # An unverified scope is never proof of a system banner.
-    return False, {}
+    """Recognize local system processing UI across RU/EN wording variants."""
+    return _system_banner(page, (_PROCESSING_PATTERN,), "visible_additional_processing_ui")
 
 
 class AnswerPhaseTracker:
@@ -442,7 +445,9 @@ class AnswerPhaseTracker:
 
 def inspect_answer_phase(page: Any, expected_prompt: str, expected_chat_url: str,
                          *, tracker: AnswerPhaseTracker | None = None,
-                         image_mode: bool = False) -> dict[str, Any]:
+                         image_mode: bool = False,
+                         anchor_binding: dict[str, Any] | None = None,
+                         ignore_system_banner: bool = False) -> dict[str, Any]:
     """Classify only a correlated turn using structural DOM evidence."""
     tracker = tracker if tracker is not None else AnswerPhaseTracker()
     details: dict[str, Any] = {"chatUrl": str(getattr(page, "url", "") or ""),
@@ -452,7 +457,8 @@ def inspect_answer_phase(page: Any, expected_prompt: str, expected_chat_url: str
         details["phaseSource"] = "chat_correlation_lost"
         return details
     turns, selector = snapshot_turns(page, image_mode=image_mode)
-    correlation = correlate_next_assistant(turns, expected_prompt)
+    correlation = (correlate_next_assistant(turns, expected_prompt, anchor_binding=anchor_binding)
+                   if anchor_binding is not None else correlate_next_assistant(turns, expected_prompt))
     anchor = correlation.get("anchorIndex")
     details.update(turnSelector=selector, anchorIndex=anchor,
                    assistantIndex=correlation.get("assistantIndex"),
@@ -480,7 +486,7 @@ def inspect_answer_phase(page: Any, expected_prompt: str, expected_chat_url: str
             return details
         tracker.turn_key = group_key
     details["logicalTurnKey"] = tracker.turn_key or ""
-    processing, processing_details = additional_processing(page)
+    processing, processing_details = (additional_processing(page) if not ignore_system_banner else (False, {}))
     details["additionalProcessingDetected"] = processing
     if processing:
         details.update(phase=ADDITIONAL_PROCESSING, phaseSource="system_banner", **processing_details)
@@ -525,7 +531,8 @@ def inspect_answer_phase(page: Any, expected_prompt: str, expected_chat_url: str
     return details
 
 
-def find_user_anchor(turns: list[dict[str, Any]], expected_prompt: str) -> int | None:
+def find_user_anchor(turns: list[dict[str, Any]], expected_prompt: str,
+                     *, anchor_binding: dict[str, Any] | None = None) -> int | None:
     """Return the last correlated user turn.
 
     Prefer byte-equivalent rendered text. ChatGPT may render long Markdown
@@ -534,6 +541,23 @@ def find_user_anchor(turns: list[dict[str, Any]], expected_prompt: str) -> int |
     proven in the composer before the single Send action.
     """
     expected = _normalize_text(expected_prompt)
+    if anchor_binding is not None:
+        users = [t for t in turns if t.get("role") == "user"]
+        ordinal = anchor_binding.get("userOrdinal")
+        prefix = anchor_binding.get("precedingUserHashes")
+        if (type(ordinal) is not int or ordinal < 0 or not isinstance(prefix, list)
+                or len(prefix) != ordinal or len(users) <= ordinal
+                or anchor_binding.get("promptSha256") != submit.prompt_sha256(expected_prompt)):
+            return None
+        if [submit.prompt_sha256(str(t.get("text", ""))) for t in users[:ordinal]] != prefix:
+            return None
+        user = users[ordinal]
+        if _normalize_text(user.get("text", "")) != expected:
+            return None
+        key = anchor_binding.get("groupKey")
+        if key and user.get("groupKey") != key:
+            return None
+        return user["index"]
     exact_matches = [
         turn["index"]
         for turn in turns
@@ -557,8 +581,9 @@ def find_user_anchor(turns: list[dict[str, Any]], expected_prompt: str) -> int |
 def correlate_next_assistant(
     turns: list[dict[str, Any]],
     expected_prompt: str,
+    *, anchor_binding: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    anchor = find_user_anchor(turns, expected_prompt)
+    anchor = find_user_anchor(turns, expected_prompt, anchor_binding=anchor_binding)
     if anchor is None:
         return {
             "ok": False,
@@ -696,6 +721,8 @@ def observe_next_assistant(
     poll_ms: int = DEFAULT_POLL_MS,
     image_mode: bool = False,
     phase_tracker: AnswerPhaseTracker | None = None,
+    anchor_binding: dict[str, Any] | None = None,
+    system_probe: Callable[[], str | None] | None = None,
     sleep: Callable[[float], None] = time.sleep,
     monotonic: Callable[[], float] = time.monotonic,
 ) -> dict[str, Any]:
@@ -736,7 +763,11 @@ def observe_next_assistant(
                 },
             )
 
-        interrupted, interruption_details = connection_interrupted(page)
+        signal = system_probe() if system_probe is not None else None
+        interrupted, interruption_details = (connection_interrupted(page) if system_probe is None else (signal == ASSISTANT_CONNECTION_INTERRUPTED, {}))
+        if signal == ADDITIONAL_PROCESSING:
+            return _result(ADDITIONAL_PROCESSING, ok=False, transitions=tracker.transitions,
+                           recoverable=True, details={"chatUrl": current_url})
         if interrupted:
             return _result(
                 ASSISTANT_CONNECTION_INTERRUPTED,
@@ -749,16 +780,20 @@ def observe_next_assistant(
                 },
             )
 
-        phase = inspect_answer_phase(page, expected_prompt, expected_chat_url, tracker=phases, image_mode=image_mode)
+        phase = inspect_answer_phase(page, expected_prompt, expected_chat_url, tracker=phases, image_mode=image_mode, anchor_binding=anchor_binding,
+                                     ignore_system_banner=system_probe is not None)
         if phase["phase"] == ADDITIONAL_PROCESSING:
             last_code = ADDITIONAL_PROCESSING
             last_details = phase
-            if monotonic() >= deadline:
+            if system_probe is None:
                 return _result(ADDITIONAL_PROCESSING, ok=False, transitions=tracker.transitions, recoverable=True, details=phase)
+            if monotonic() >= deadline:
+                return _result(ASSISTANT_TURN_TIMEOUT, ok=False, transitions=tracker.transitions, recoverable=True, details=phase)
             sleep(min(max(poll_ms, 1) / 1000.0, max(deadline - monotonic(), 0.0)))
             continue
         turns, selector = snapshot_turns(page, image_mode=image_mode)
-        correlation = correlate_next_assistant(turns, expected_prompt)
+        correlation = (correlate_next_assistant(turns, expected_prompt, anchor_binding=anchor_binding)
+                   if anchor_binding is not None else correlate_next_assistant(turns, expected_prompt))
         last_code = correlation["code"]
         last_details = {
             "turnSelector": selector,

@@ -3,7 +3,7 @@
 
 This module is an orchestration boundary only. Browser behaviour remains in
 WP-003--WP-007 modules; the bridge owns request correlation, state persistence,
-fixed service reminders, and the hand-off back to Runtime after RESULT_DURABLE.
+serialized recovery/natural continuation, and the hand-off back to Runtime after RESULT_DURABLE.
 """
 
 from __future__ import annotations
@@ -27,6 +27,8 @@ import browser_recovery
 import browser_submit
 import reminder_policy
 import request_identity
+import transport_control
+import system_recovery
 
 
 ACCEPTED = "ACCEPTED"
@@ -221,6 +223,8 @@ class WebWorkerBridge:
         now: Callable[[], float] = time.time,
         monotonic: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
+        uniform: Callable[[float, float], float] = random.uniform,
+        randrange: Callable[[int], int] = random.randrange,
         on_result_durable: Callable[[dict[str, Any]], Any] | None = None,
     ) -> None:
         postman_root = Path(root) if root is not None else default_postman_root()
@@ -229,6 +233,8 @@ class WebWorkerBridge:
         self.now = now
         self.monotonic = monotonic
         self.sleep = sleep
+        self.uniform = uniform
+        self.randrange = randrange
         self.on_result_durable = on_result_durable
 
     def random_pause(self) -> None:
@@ -396,6 +402,7 @@ class WebWorkerBridge:
         browser = context = page = None
         owns_context = False
         terminal_result: dict[str, Any] | None = None
+        control = None
         cleanup: dict[str, Any] = {}
         try:
             with ExitStack() as stack:
@@ -471,7 +478,11 @@ class WebWorkerBridge:
                     }
                 ]
                 next_result_recheck = started_at + _RESULT_RECHECK_INTERVAL_MS / 1000.0
-                recovery_exhausted = False
+                control = transport_control.TransportControl(
+                    request_id, chat_url, started_at, observer_timeout_ms,
+                    reminder_interval_ms, max_reminders, monotonic=self.monotonic)
+                pending_control = None
+                result_scan_only = False
                 last_recovery: dict[str, Any] | None = None
                 last_observer_code = ""
                 last_artifact_code = ""
@@ -486,10 +497,12 @@ class WebWorkerBridge:
                     "reloadLoadTimeoutMs": browser_recovery.DEFAULT_LOAD_TIMEOUT_MS,
                     "reloadSettleMs": browser_recovery.DEFAULT_SETTLE_MS,
                     "reloadMaxAttempts": browser_recovery.DEFAULT_MAX_RELOAD_ATTEMPTS,
+                    "recoveryGraceMs": transport_control.RECOVERY_GRACE_MS,
+                    "recoveryCycleMs": transport_control.RECOVERY_CYCLE_MS,
                 }
 
                 def remaining_ms() -> int:
-                    return max(0, int((deadline - self.monotonic()) * 1000.0))
+                    return control.recovery_remaining_ms() if control.active else max(0, int((deadline - self.monotonic()) * 1000.0))
 
                 def clear_observer_proofs() -> None:
                     for watch in watched_turns:
@@ -505,13 +518,54 @@ class WebWorkerBridge:
                         "lastObserverCode": last_observer_code,
                         "answerPhase": last_answer_phase,
                         "lastArtifactCode": last_artifact_code,
+                        **control.snapshot(),
                     }
                     if last_recovery is not None:
                         fields["lastBrowserRecovery"] = last_recovery
                     self._write_state(request, WAITING_ASSISTANT, **fields)
 
+                def recovery_event(name, **fields):
+                    phases = {"SYSTEM_STOP", "SYSTEM_RELOAD", "SYSTEM_WAIT", "SYSTEM_CONTINUE"}
+                    if name in phases:
+                        control.transition(name)
+                    elif name == "CHAT_REPROOF_STARTED":
+                        control.transition("SYSTEM_CHAT_REPROOF" if control.active and control.active["kind"] == browser_observer.ADDITIONAL_PROCESSING else "CONNECTION_RECOVERY")
+                    control.consume_slots()
+                    control.event(name, **fields)
+                    waiting_state()
+
+                def probe_system():
+                    nonlocal pending_control
+                    if result_scan_only:
+                        return None
+                    if pending_control and not control.active:
+                        return pending_control[0]
+                    selected = None
+                    for kind, detector in ((browser_observer.ASSISTANT_CONNECTION_INTERRUPTED, browser_observer.connection_interrupted),
+                                           (browser_observer.ADDITIONAL_PROCESSING, browser_observer.additional_processing)):
+                        accepted, evidence = detector(page)
+                        event_id = control.candidate(kind, accepted, evidence)
+                        if event_id and selected is None:
+                            selected = (kind, event_id)
+                    if selected and not control.active:
+                        pending_control = selected
+                        return selected[0]
+                    return None
+
+                def add_control_watch(intent, sent):
+                    nonlocal phase_tracker
+                    binding = transport_control.confirmed_binding(page, intent, sent)
+                    watched_turns.append({"prompt": intent["exactPromptText"], "submit": sent,
+                                          "anchorBinding": binding, "controlIntent": intent,
+                                          "proof": None, "everProved": False,
+                                          "artifactRejected": False, "noArtifactSince": None})
+                    phase_tracker = browser_observer.AnswerPhaseTracker()
+                    control.event("CONTROL_SEND_CONFIRMED", slot=intent.get("slot"),
+                                  recoveryEventId=intent.get("recoveryEventId"),
+                                  proof=sent, anchorBinding=binding)
+
                 def observe_watch(watch: dict[str, Any], timeout_for_observer_ms: int) -> dict[str, Any]:
-                    nonlocal last_observer_code, last_answer_phase
+                    nonlocal last_observer_code, last_answer_phase, pending_control
                     if watch.get("artifactRejected"):
                         return {"kind": "no_result"}
                     if timeout_for_observer_ms <= 0:
@@ -524,6 +578,8 @@ class WebWorkerBridge:
                         stable_ms=stable_ms,
                         sleep=self.sleep,
                         monotonic=self.monotonic,
+                        system_probe=probe_system,
+                        **({"anchor_binding": watch["anchorBinding"]} if watch.get("anchorBinding") else {}),
                         **({"image_mode": True} if image_stage else {"phase_tracker": phase_tracker if watch is watched_turns[-1] else watch.setdefault("phaseTracker", browser_observer.AnswerPhaseTracker())}),
                     )
                     completed = _attach_submit_proof(
@@ -531,14 +587,29 @@ class WebWorkerBridge:
                         prompt=str(watch["prompt"]),
                         submitted=watch["submit"],
                     )
+                    if watch.get("controlIntent"):
+                        completed["details"]["controlIntent"] = watch["controlIntent"]
+                        completed["details"]["anchorBinding"] = watch["anchorBinding"]
                     last_observer_code = str(completed.get("code", ""))
                     observed_details = completed.get("details") if isinstance(completed.get("details"), dict) else {}
                     if isinstance(observed_details.get("answerPhase"), dict):
                         last_answer_phase = observed_details["answerPhase"]
+                        if last_answer_phase.get("phase") in {browser_observer.FINAL_ANSWER_STARTED, browser_observer.FINAL_ANSWER_COMPLETED}:
+                            if not control.active:
+                                control.transition(last_answer_phase["phase"])
+                            control.cancel_slots("SUPPRESSED_FINAL")
                     elif completed.get("code") == browser_observer.ADDITIONAL_PROCESSING:
                         last_answer_phase = observed_details
-                    if completed.get("code") == browser_observer.ASSISTANT_CONNECTION_INTERRUPTED:
-                        return {"kind": "interrupted", "details": completed}
+                    if completed.get("code") in {browser_observer.ASSISTANT_CONNECTION_INTERRUPTED, browser_observer.ADDITIONAL_PROCESSING}:
+                        if not control.active:
+                            if pending_control is None:
+                                # The observer may have detected an event between outer polls.
+                                kind = completed["code"]
+                                event_id = control.candidate(kind, True, {"candidateCount": 1, "source": "observer_signal"})
+                                if event_id:
+                                    pending_control = (kind, event_id)
+                            return {"kind": "interrupted", "details": completed}
+                        return {"kind": "pending"}
                     if completed.get("ok"):
                         watch["proof"] = completed
                         watch["everProved"] = True
@@ -577,7 +648,7 @@ class WebWorkerBridge:
                 def inspect_watch(watch: dict[str, Any]) -> dict[str, Any]:
                     nonlocal last_artifact_code, terminal_result, image_stage, request, prompt
                     nonlocal expected_filename, expected_request, max_reminders, reminder_index
-                    nonlocal started_at, deadline, next_result_recheck
+                    nonlocal started_at, deadline, next_result_recheck, control, phase_tracker, pending_control
                     completed = watch.get("proof")
                     if watch.get("artifactRejected") or not isinstance(completed, dict):
                         return {"kind": "no_result"}
@@ -636,6 +707,12 @@ class WebWorkerBridge:
                         phase_tracker = browser_observer.AnswerPhaseTracker()
                         started_at = self.monotonic()
                         deadline = started_at + observer_timeout_ms / 1000.0
+                        previous_journal = control.snapshot()
+                        control = transport_control.TransportControl(
+                            request_id, chat_url, started_at, observer_timeout_ms,
+                            reminder_interval_ms, max_reminders, monotonic=self.monotonic)
+                        control.event("PREVIOUS_STAGE", summary=previous_journal)
+                        pending_control = None
                         next_result_recheck = started_at + _RESULT_RECHECK_INTERVAL_MS / 1000.0
                         reminder_policy_record["maxReminders"] = max_reminders
                         watched_turns[:] = [{"prompt": prompt, "submit": followup_submit,
@@ -739,6 +816,11 @@ class WebWorkerBridge:
                                 ),
                             }
 
+                        if control.active:
+                            control.finish_recovery(RESULT_DURABLE)
+                        control.cancel_slots("CANCELLED_RESULT_READY")
+                        control.transition("FINAL_ANSWER_COMPLETED")
+                        control.event("RESULT_DURABLE_FOUND", result=durable)
                         record = self._write_state(
                             request,
                             RESULT_DURABLE,
@@ -746,6 +828,7 @@ class WebWorkerBridge:
                             resultZip=durable.get("details", {}).get("resultZip"),
                             resultSha256=durable.get("details", {}).get("sha256"),
                             durableProof=durable,
+                            **control.snapshot(),
                             conversationUrl=chat_url,
                             conversationId=conversation_id,
                             reminderPolicy=reminder_policy_record,
@@ -868,6 +951,8 @@ class WebWorkerBridge:
                 while True:
                     now = self.monotonic()
                     if now >= deadline:
+                        control.transition("TIMEOUT")
+                        control.event("SOFT_DEADLINE_TIMEOUT")
                         terminal_result = self._fail(
                             request,
                             browser_observer.ASSISTANT_TURN_TIMEOUT,
@@ -878,41 +963,112 @@ class WebWorkerBridge:
                                 "reminderPolicy": reminder_policy_record,
                                 "browserRecoveryPolicy": recovery_policy_record,
                                 "reminders": reminder_records,
+                                **control.snapshot(),
                             },
                         )
                         return terminal_result
 
-                    interrupted, interruption_details = browser_observer.connection_interrupted(page)
-                    if interrupted:
-                        last_observer_code = browser_observer.ASSISTANT_CONNECTION_INTERRUPTED
-                        if not recovery_exhausted:
-                            recovery = browser_recovery.recover_interrupted_chat(
-                                page,
-                                chat_url,
-                                str(watched_turns[-1]["prompt"]),
-                                budget_ms=remaining_ms(),
-                                sleep=self.sleep,
-                                monotonic=self.monotonic,
-                            )
-                            last_recovery = recovery
-                            waiting_state()
-                            if recovery.get("ok"):
-                                recovery_exhausted = False
-                                clear_observer_proofs()
-                                next_result_recheck = self.monotonic()
-                                continue
-                            recovery_exhausted = True
-                        delay = min(
-                            _RESULT_RECHECK_INTERVAL_MS / 1000.0,
-                            max(deadline - self.monotonic(), 0.0),
-                        )
-                        if delay > 0:
-                            self.sleep(delay)
-                        continue
-                    if recovery_exhausted:
-                        recovery_exhausted = False
+                    signal = probe_system()
+                    if signal and pending_control:
+                        kind, event_id = pending_control
+                        pending_control = None
+                        latest_phase = browser_observer.inspect_answer_phase(
+                            page, str(watched_turns[-1]["prompt"]), chat_url,
+                            tracker=phase_tracker, anchor_binding=watched_turns[-1].get("anchorBinding"),
+                            ignore_system_banner=True)
+                        if latest_phase.get("phase") == browser_observer.FINAL_ANSWER_COMPLETED:
+                            result_scan_only = True
+                            try:
+                                result_first = scan_watches(skip_latest_missing=False)
+                            finally:
+                                result_scan_only = False
+                            if result_first["kind"] in {"terminal", "fatal"}:
+                                return result_first["result"]
+                        if not control.begin_recovery(kind, event_id):
+                            continue
+                        latest = watched_turns[-1]
+                        last_observer_code = kind
+                        waiting_state()
+                        if kind == browser_observer.ASSISTANT_CONNECTION_INTERRUPTED:
+                            control.transition("CONNECTION_RECOVERY", eventId=event_id)
+                            recovered = browser_recovery.recover_interrupted_chat(
+                                page, chat_url, str(latest["prompt"]),
+                                original_prompt=prompt, anchor_binding=latest.get("anchorBinding"),
+                                budget_ms=remaining_ms(), sleep=self.sleep,
+                                monotonic=self.monotonic, on_event=recovery_event)
+                        else:
+                            recovered = system_recovery.prepare_additional_processing(
+                                page, chat_url, prompt, str(latest["prompt"]),
+                                anchor_binding=latest.get("anchorBinding"),
+                                deadline=control.active["deadline"], on_event=recovery_event,
+                                sleep=self.sleep, monotonic=self.monotonic, uniform=self.uniform)
+                        last_recovery = {**recovered, "eventId": event_id, "kind": kind}
+                        control.consume_slots()
+                        waiting_state()
+                        if not recovered.get("ok"):
+                            control.event("RECOVERY_FAILED", eventId=event_id, result=last_recovery)
+                            reason = recovered.get("code", "recovery_failed")
+                            if self.monotonic() >= deadline:
+                                control.transition("TIMEOUT")
+                                control.event("RECOVERY_DEADLINE_TIMEOUT")
+                                reason = browser_observer.ASSISTANT_TURN_TIMEOUT
+                            return self._fail(request, reason, details=control.snapshot())
                         clear_observer_proofs()
+                        # Result wins before any recovery continuation, including grace.
+                        scanned = scan_watches(skip_latest_missing=False)
+                        if scanned["kind"] in {"terminal", "fatal"}:
+                            return scanned["result"]
+                        if kind == browser_observer.ADDITIONAL_PROCESSING and remaining_ms() > 0:
+                            phase = browser_observer.inspect_answer_phase(
+                                page, str(latest["prompt"]), chat_url, tracker=phase_tracker,
+                                anchor_binding=latest.get("anchorBinding"), ignore_system_banner=True)
+                            if not phase.get("finalAnswerLatched") and phase.get("phase") not in {
+                                    browser_observer.FINAL_ANSWER_STARTED, browser_observer.FINAL_ANSWER_COMPLETED}:
+                                control.transition("SYSTEM_CONTINUE", eventId=event_id)
+                                intent = transport_control.make_intent(
+                                    page, request_id, chat_url, prompt, str(latest["prompt"]),
+                                    recovery_event_id=event_id, anchor_binding=latest.get("anchorBinding"),
+                                    randrange=self.randrange)
+                                control.intent = intent
+                                control.event("CONTINUATION_SELECTED", **intent)
+                                waiting_state()  # Durable exact text/relation BEFORE composer/Send.
+                                sent = reminder_policy.submit_reminder(
+                                    page, intent["exactPromptText"], chat_url,
+                                    timeout_ms=min(timeout_ms, remaining_ms()),
+                                    sleep=self.sleep, monotonic=self.monotonic, uniform=self.uniform,
+                                    anchor_prompt=str(latest["prompt"]), anchor_binding=latest.get("anchorBinding"),
+                                    phase_tracker=phase_tracker, system_continuation=True,
+                                    operation_deadline=control.active["deadline"], control_intent=intent)
+                                control.event("CONTINUATION_SEND_OUTCOME", proof=sent, recoveryEventId=event_id)
+                                waiting_state()
+                                if sent.get("sendState") == browser_submit.SEND_PROVEN_SENT:
+                                    add_control_watch(intent, sent)
+                                elif sent.get("sendState") == browser_submit.SEND_UNKNOWN:
+                                    return self._fail(request, "system continuation send UNKNOWN; no resend", details=control.snapshot())
+                                elif not sent.get("details", {}).get("unsentPromptCleared"):
+                                    return self._fail(request, "system continuation unsafe unsent outcome", details=control.snapshot())
+                                if remaining_ms() > 0:
+                                    scanned = scan_watches(skip_latest_missing=False)
+                                    if scanned["kind"] in {"terminal", "fatal"}:
+                                        return scanned["result"]
+                        # Text-only/no-ZIP results retain their existing 10s stable
+                        # recheck, but only within this cycle's remaining hard budget.
+                        settlements = [float(w["noArtifactSince"]) + _RESULT_RECHECK_INTERVAL_MS / 1000.0
+                                       for w in watched_turns if w.get("proof") is not None
+                                       and w.get("noArtifactSince") is not None]
+                        if settlements and remaining_ms() > 0:
+                            self.sleep(min(max(0.0, min(settlements) - self.monotonic()), remaining_ms() / 1000.0))
+                            control.consume_slots()
+                            scanned = scan_watches(skip_latest_missing=False)
+                            if scanned["kind"] in {"terminal", "fatal"}:
+                                return scanned["result"]
+                        control.finish_recovery(recovered["code"])
                         next_result_recheck = self.monotonic()
+                        waiting_state()
+                        continue
+
+                    while reminder_index < max_reminders and control.slots[reminder_index]["status"] != "PENDING":
+                        reminder_index += 1
 
                     next_due = None
                     if reminder_index < max_reminders:
@@ -974,12 +1130,18 @@ class WebWorkerBridge:
                         if grace_deadlines:
                             self.sleep(min(max(min(grace_deadlines) - self.monotonic(), 0.0), max(deadline - self.monotonic(), 0.0)))
                             continue
+                        if probe_system():
+                            continue
+                        control.event("REMINDER_SLOT_DUE", slot=reminder_index + 1)
                         last_answer_phase = browser_observer.inspect_answer_phase(
-                            page, str(watched_turns[-1]["prompt"]), chat_url, tracker=phase_tracker)
+                            page, str(watched_turns[-1]["prompt"]), chat_url, tracker=phase_tracker,
+                            anchor_binding=watched_turns[-1].get("anchorBinding"))
                         waiting_state()
                         if last_answer_phase["phase"] != browser_observer.WORKING:
                             next_reminder_retry = self.monotonic() + browser_observer.DEFAULT_POLL_MS / 1000.0
                             if last_answer_phase["phase"] in {browser_observer.FINAL_ANSWER_STARTED, browser_observer.FINAL_ANSWER_COMPLETED}:
+                                control.transition(last_answer_phase["phase"])
+                                control.cancel_slots("SUPPRESSED_FINAL")
                                 next_reminder_retry = deadline
                             else:
                                 self.sleep(min(browser_observer.DEFAULT_POLL_MS / 1000.0, max(deadline - self.monotonic(), 0.0)))
@@ -1022,20 +1184,24 @@ class WebWorkerBridge:
                                 continue
 
                         index = reminder_index + 1
-                        reminder_prompt = reminder_policy.build_reminder_prompt(
-                            request_id,
-                            index,
-                            total=max_reminders,
-                        )
+                        latest = watched_turns[-1]
+                        intent = transport_control.make_intent(
+                            page, request_id, chat_url, prompt, str(latest["prompt"]),
+                            slot=index, anchor_binding=latest.get("anchorBinding"), randrange=self.randrange)
+                        control.intent = intent
+                        control.event("REMINDER_SELECTED", **intent)
+                        waiting_state()
+                        reminder_prompt = intent["exactPromptText"]
                         attempted_elapsed = max(0, int((self.monotonic() - started_at) * 1000.0))
                         reminder_submit = reminder_policy.submit_reminder(
                             page,
                             reminder_prompt,
                             chat_url,
-                            timeout_ms=timeout_ms,
-                            sleep=self.sleep, monotonic=self.monotonic,
+                            timeout_ms=min(timeout_ms, remaining_ms()),
+                            sleep=self.sleep, monotonic=self.monotonic, uniform=self.uniform,
                             anchor_prompt=str(watched_turns[-1]["prompt"]),
-                            phase_tracker=phase_tracker,
+                            anchor_binding=watched_turns[-1].get("anchorBinding"),
+                            phase_tracker=phase_tracker, operation_deadline=deadline, control_intent=intent,
                         )
                         finished_elapsed = max(0, int((self.monotonic() - started_at) * 1000.0))
                         reminder_records.append(
@@ -1051,6 +1217,10 @@ class WebWorkerBridge:
                                 submitted=reminder_submit,
                             )
                         )
+                        reminder_records[-1].update(intent)
+                        reminder_records[-1]["sendProof"] = reminder_submit
+                        control.event("REMINDER_SEND_OUTCOME", slot=index, proof=reminder_submit)
+                        waiting_state()
                         send_state = reminder_submit.get("sendState")
                         if (
                             send_state == browser_submit.SEND_UNKNOWN
@@ -1064,17 +1234,9 @@ class WebWorkerBridge:
                         if send_state == browser_submit.SEND_PROVEN_SENT:
                             reminder_index += 1
                             next_reminder_retry = 0.0
-                            phase_tracker = browser_observer.AnswerPhaseTracker()
-                            watched_turns.append(
-                                {
-                                    "prompt": reminder_prompt,
-                                    "submit": reminder_submit,
-                                    "proof": None,
-                                    "everProved": False,
-                                    "artifactRejected": False,
-                                    "noArtifactSince": None,
-                                }
-                            )
+                            add_control_watch(intent, reminder_submit)
+                            control.slot_status(index, "SENT", templateId=intent["templateId"], promptSha256=intent["promptSha256"])
+
                             next_result_recheck = self.monotonic() + _RESULT_RECHECK_INTERVAL_MS / 1000.0
                             waiting_state()
                             continue
@@ -1108,6 +1270,20 @@ class WebWorkerBridge:
         except Exception as exc:
             return self._fail(request, str(exc), code=BRIDGE_PIPELINE_FAILED)
         finally:
+            if control is not None:
+                stored = self.read_state(request_id) or {}
+                if control.active:
+                    control.finish_recovery(stored.get("lastError") or stored.get("state", "aborted"))
+                if stored.get("failureCode"):
+                    control.transition("TIMEOUT" if stored.get("lastError") == browser_observer.ASSISTANT_TURN_TIMEOUT else "FAILED")
+                elif stored.get("state") in _TERMINAL_SUCCESS_CODES:
+                    control.cancel_slots("CANCELLED_RESULT_READY")
+                    control.transition("FINAL_ANSWER_COMPLETED")
+                    control.event("RESULT_TERMINAL", result=stored.get("state"))
+                snapshot = control.snapshot()
+                _atomic_json(self.state_path(request_id), {**stored, **snapshot})
+                if terminal_result is not None and terminal_result.get("code") in _TERMINAL_SUCCESS_CODES:
+                    terminal_result.setdefault("details", {}).update(snapshot)
             # ExitStack runs owned Page/context cleanup before the Playwright/CDP
             # context exits. This outer finally only records the already-finished
             # cleanup in the durable terminal state.

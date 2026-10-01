@@ -8,6 +8,12 @@
 
 ## Записи
 
+### 2026-10-01 — Reminders и системный Web recovery сериализованы
+
+- **Что изменилось:** 50 natural continuation templates без visible transport headers; exact internal intent/ordinal/prefix/groupKey proof. Slots 10/20/30/40/50, soft 60m, текущий recovery hard grace +45s. Connection headline распознаётся без fixed subtitle и внутри modern turn wrappers. Additional Processing: Stop-if-present→Reload→Lineage re-proof→Uniform wait 10–17s→Exact Continue.
+- **Почему:** реальные interruption пропускались, processing лишь ожидался, а reminder metadata попадала в chat. Один непрерывный banner теперь один event; active recovery consume-ит наступившие slots без догоняющей очереди.
+- **Результат:** production path и contracts синхронизированы; bounded append-only event journal сохраняет evidence/rejection/counters, фазы, Stop/reload/re-proof/wait/Send и судьбу slots. Реалистичные Chromium DOM/production bridge tests покрывают exact lineage, repeated template, no blind resend и deadline grace.
+
 ### 2026-09-19 — Direct Web Postman закреплён как production path
 
 - **Что изменилось:** production transport сведён к Direct Web Postman, а artifact validation — к transport-safety boundary.

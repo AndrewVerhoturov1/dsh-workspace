@@ -68,13 +68,19 @@ Worker contract: завершённый assistant turn без ZIP проходи
 если текст/SHA изменился, grace window начинается заново. После этого Direct Ask проверяет
 text envelope.
 
-Сохраняются общие reminder checkpoints на 10/20/30 минутах, общий deadline 45 минут и
-same-conversation recovery Web Worker. Если ChatGPT в checkpoint всё ещё активно генерирует
-ответ, reminder подавляется без изменения composer и не отправляется позднее задним числом.
+Общие reminder checkpoints: 10/20/30/40/50 минут; soft deadline 60 минут. Только уже
+начатый recovery получает текущий bounded cycle, максимум до soft + 45 секунд.
+Используется общая [transport state machine](POSTMAN_CURRENT_FLOW.md#111-transport-control-recovery-и-естественные-продолжения):
+Connection Interrupted вызывает same-chat reload/re-proof, Additional Processing —
+Stop-if-present → reload → original lineage/composer re-proof → random wait 10–17 секунд →
+natural continuation. Один banner episode обрабатывается один раз; исчезновение rearm-ит detector.
+Checkpoint внутри recovery consumed и не догоняется. Случайный выбор 1/50 русских фраз;
+видимых REQ/control заголовков нет, intent/text/hash/ordinal/prefix/groupKey сохраняются внутри.
+WORKING reasoning/tools допускает reminder; final latch и unsafe correlation запрещают.
 Reminder pre-click path не использует общий 30-секундный Send wait: composer проверяется
 однократно, затем действует максимум 5-секундное safe-send окно с polling раз в секунду.
-Generation, появление/изменение assistant turn или отсутствие безопасного Send к концу окна
-подавляют checkpoint; после вставки exact unsent reminder обязан быть доказанно очищен.
+Final answer, потеря anchor, системный recovery или отсутствие безопасного Send подавляют
+отправку; после вставки exact unsent reminder обязан быть доказанно очищен.
 Непосредственно перед единственным click volatile proofs проверяются ещё раз; UNKNOWN и
 неподтверждённая cleanup остаются fail-closed.
 

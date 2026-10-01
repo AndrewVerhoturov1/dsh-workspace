@@ -75,8 +75,12 @@ Artifact принимается только из assistant turn, который
 user anchor exact текущего request. Разрешённый anchor — первоначальный Postman prompt
 или служебное напоминание Direct Postman с тем же trusted `requestId`.
 
-Для одного REQ допускается до трёх таких служебных напоминаний по фиксированному
-расписанию 10/20/30 минут. Они не создают новый request и не меняют semantic intent.
+Для одного REQ допускается до пяти ordinary reminders по абсолютному расписанию
+10/20/30/40/50 минут. Natural control message выбирается случайно из 50 русских фраз,
+не содержит visible REQ/control metadata и не меняет исходный semantic intent.
+Trusted intent до Send сохраняет request/conversation, templateId, exact text/hash и
+user-turn relation; после Send exact count/text/prefix/URL закрепляют ordinal/groupKey.
+Result correlation натурального anchor требует этого internal proof и original REQ lineage.
 Перед каждым reminder transport обязан повторно проверить уже разрешённые assistant turns
 этого REQ; найденный exact RESULT отменяет reminder. Завершённый turn без ZIP получает одну
 контрольную повторную проверку через 10 секунд. Если exact ZIP всё ещё отсутствует, current
@@ -87,7 +91,10 @@ REQ завершается `ASSISTANT_COMPLETED_NO_ARTIFACT` с полным ass
 В этом состоянии reminders блокируются; transport может reload-ить только ту же exact
 conversation Page, после доказанной загрузки выдерживает ещё 10 секунд стабилизации и
 заново выполняет correlation/artifact proof. Reload не создаёт новый REQ и не сбрасывает
-45-минутный deadline.
+60-минутный soft deadline. Только уже начатый recovery получает один cycle с hard limit soft+45s.
+Additional Processing запускает Stop-if-present→Reload→Same-chat/original-lineage re-proof→
+random wait 10–17s→natural Continue с exact Send proof. Одно непрерывное появление banner = один event;
+исчезновение rearm-ит detector. Recovery consume-ит наступившие pending slots, очередь не догоняется.
 Если скачанный ZIP не проходит minimal transport validation, staging-каталог удаляется и
 current REQ немедленно завершается `ARTIFACT_REJECTED` с точным validation code/message и
 assistant text. Решение о continuation принадлежит локальной LLM; сам REQ не ждёт следующего
@@ -224,8 +231,8 @@ Direct/Web Postman transport не должен:
 - доверять model-provided routing metadata;
 - делать blind resend, когда состояние предыдущего send неопределённо.
 
-Фиксированное служебное напоминание с новым номером `REMINDER 1/3..3/3` не является
-blind resend исходной задачи: это заранее определённый transport control того же REQ.
+Natural reminder или special recovery continuation не является blind resend исходной задачи:
+это internally correlated transport control того же REQ без технических заголовков в чате.
 Для результата отправки допускаются только доказанные состояния: `PROVEN_SENT` продолжает
 цикл, `PROVEN_NOT_SENT` продолжает его лишь после безопасной очистки поля, а `UNKNOWN`
 немедленно завершает REQ без следующего напоминания.
@@ -235,7 +242,8 @@ blind resend исходной задачи: это заранее определ
 ```text
 one logical request
 = one immutable request_id
-+ zero to three authorized reminder turns
++ zero to five authorized ordinary reminder turns
++ internally correlated system recovery continuation turns
 
 exact request correlation
 + exact assistant turn

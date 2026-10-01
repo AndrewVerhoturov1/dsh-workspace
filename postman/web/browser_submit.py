@@ -932,7 +932,8 @@ def insert_prompt(
     }
 
 
-def _observe_send_proof(page: Any, prompt: str, before_user_turn_count: int) -> tuple[bool, dict[str, Any]]:
+def _observe_send_proof(page: Any, prompt: str, before_user_turn_count: int,
+                        *, conversation_url: str | None = None) -> tuple[bool, dict[str, Any]]:
     user_turn_details = collect_user_turn_details(page)
     user_turns = [item["text"] for item in user_turn_details]
     page_url = str(getattr(page, "url", "") or "")
@@ -950,7 +951,7 @@ def _observe_send_proof(page: Any, prompt: str, before_user_turn_count: int) -> 
     # REQ presence is diagnostic only; proof requires exact full rendered text.
     correlated_turn = exact_turn
     correlation_mode = "exact" if exact_turn else "none"
-    chat_bound = is_bound_chat_url(page_url)
+    chat_bound = is_bound_chat_url(page_url) and (conversation_url is None or page_url == conversation_url)
     last_turn = user_turn_details[-1] if user_turn_details else {}
     return correlated_turn and composer_empty and chat_bound, {
         "userTurnCountBefore": before_user_turn_count,

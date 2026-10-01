@@ -88,17 +88,25 @@ markdown остаётся WORKING, отдельный `:assistant` unit с ро�
 copy/turn controls) и inactive generation. Старые renderer paths сохранены с fail-closed
 неоднозначной разметкой. Живой thinking/tool поток не наблюдался, новые варианты
 без доказанных признаков остаются UNKNOWN.
-`Connection interrupted` вне conversation turns остаётся отдельным recoverable состоянием
-с прежним reload; `ADDITIONAL_PROCESSING` reload не запускает.
+Системные banners допускаются внутри `data-turn-key`, но literal markdown/user quotes
+не служат безусловным сигналом. Connection Interrupted headline не требует subtitle;
+alert/status/aria-live/retry усиливают evidence, weak candidate подтверждается через 1–3 секунды.
+Additional Processing использует RU/EN варианты текста, а не одну exact строку.
 
 Поиск «любого похожего ответа» по всему DOM запрещён.
 
 ### `browser_recovery.py`
 
-Recovery используется только после доказанного connection interruption. Он reload-ит
-ту же owned Page, подтверждает тот же `/c/<conversation-id>`, live composer и trusted
-user anchor, после чего выдерживает ещё 10 секунд стабилизации. Reload не создаёт новый
-REQ, не отправляет prompt и не сбрасывает общий 45-минутный deadline.
+Connection recovery reload-ит ту же owned Page, доказывает exact URL, original task lineage,
+последний разрешённый anchor и empty live composer, затем ждёт 10 секунд стабилизации.
+До трёх reload attempts; bounded failure не вызывает бесконечный F5 и не resend-ит prompt.
+`system_recovery.py` обрабатывает Additional Processing: Stop-if-present один раз (ABSENT/UNKNOWN
+не требуют повторного click) → один reload → обязательный same-chat/lineage re-proof →
+random uniform wait 10–17 секунд → re-proof → natural continuation через safe Send.
+`transport_control.py` сериализует фазы и banner episodes: одно непрерывное появление = один event,
+исчезновение rearm-ит detector, второе событие не накладывает новый flow поверх active recovery.
+Cycle bounded 180 секундами; soft deadline 60 минут, только уже начатый cycle имеет grace
+до soft + 45 секунд. Новый flow за soft deadline не начинается. Готовый RESULT отменяет Send.
 
 ### `request_identity.py` и `artifact_detector.py`
 
@@ -178,11 +186,16 @@ Bridge не является repository applicator и не принимает mo
 Завершённый assistant-turn без ZIP перепроверяется через 10 секунд; если ZIP всё ещё отсутствует,
 bridge немедленно возвращает `ASSISTANT_COMPLETED_NO_ARTIFACT` вместе с assistant text. ZIP,
 который не прошёл minimal transport validation, немедленно возвращает `ARTIFACT_REJECTED` с
-точной причиной. Reminders 10/20/30 допустимы при доказанном WORKING (включая reasoning/tools
-с Pause/Stop), запрещены после final latch и при UNKNOWN/ADDITIONAL_PROCESSING ждут повторной
-проверки без потребления slot. Две инъецируемые паузы 1–5 секунд разделяют решение, insert
-и финальный Send proof; после click сохраняются одноразовый SendGuard и exact user-turn proof.
-Во время connection recovery reminders блокируются.
+точной причиной. Reminders 10/20/30/40/50 допустимы при доказанном WORKING, запрещены после
+final latch. UNKNOWN ждёт безопасного proof, recovery consume-ит все наступившие pending slots;
+очереди после восстановления нет. `continuation_prompts.py` содержит 50 случайно выбираемых
+русских фраз без visible REQ/control identifiers. До Send durable intent сохраняет exact text,
+hash, templateId, request/conversation, slot/eventId и user-turn relation; после Send проверяются
+exact payload/count/prefix/URL и закрепляется ordinal/groupKey, даже при повторе шаблона.
+Две инъецируемые паузы 1–5 секунд разделяют решение, insert и final proof. SendGuard одноразовый,
+UNKNOWN post-click не повторяется. Durable/failure state сохраняет bounded 256-event журнал
+переходов, detector candidates/evidence/reject reason/counters, slots, Stop, reload, re-proof,
+wait и exact Send outcomes. Полная семантика: [current flow](../POSTMAN_CURRENT_FLOW.md#111-transport-control-recovery-и-естественные-продолжения).
 
 ## Fresh и continuation
 

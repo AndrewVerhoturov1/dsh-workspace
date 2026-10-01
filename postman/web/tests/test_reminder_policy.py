@@ -11,6 +11,7 @@ if str(WEB_DIR) not in sys.path:
 
 import reminder_policy
 import browser_observer
+from continuation_prompts import CONTINUATION_TEMPLATES, choose_continuation
 
 
 REQ = "REQ_20260920T120000Z_1234"
@@ -85,28 +86,28 @@ def assistant_anchor() -> dict:
 class ReminderPolicyTests(unittest.TestCase):
     def test_fixed_schedule_and_reminder_safe_send_timing(self):
         self.assertEqual(reminder_policy.DEFAULT_REMINDER_INTERVAL_MS, 600_000)
-        self.assertEqual(reminder_policy.DEFAULT_REMINDER_COUNT, 3)
-        self.assertEqual(reminder_policy.DEFAULT_OVERALL_TIMEOUT_MS, 2_700_000)
+        self.assertEqual(reminder_policy.DEFAULT_REMINDER_COUNT, 5)
+        self.assertEqual(reminder_policy.DEFAULT_OVERALL_TIMEOUT_MS, 3_600_000)
         self.assertEqual(reminder_policy.DEFAULT_REMINDER_SEND_WINDOW_MS, 5_000)
         self.assertEqual(reminder_policy.DEFAULT_REMINDER_POLL_MS, 1_000)
         self.assertEqual(reminder_policy.DEFAULT_REMINDER_CLICK_TIMEOUT_MS, 1_000)
         self.assertEqual(
-            [reminder_policy.scheduled_elapsed_ms(index) for index in (1, 2, 3)],
-            [600_000, 1_200_000, 1_800_000],
+            [reminder_policy.scheduled_elapsed_ms(index) for index in (1, 2, 3, 4, 5)],
+            [600_000, 1_200_000, 1_800_000, 2_400_000, 3_000_000],
         )
 
-    def test_reminder_keeps_same_req_and_is_explicit_transport_control(self):
-        prompt = reminder_policy.build_reminder_prompt(REQ, 2)
-        lines = prompt.splitlines()
-        self.assertEqual(lines[0], f"POSTMAN_REQUEST_ID: {REQ}")
-        self.assertEqual(lines[1], "POSTMAN_TRANSPORT_CONTROL: REMINDER 2/3")
-        self.assertIn("Продолжай выполнение исходной задачи", prompt)
-        self.assertIn("Не начинай исходную задачу заново", prompt)
-        self.assertIn("Не отвечай отдельно", prompt)
-        self.assertIn("строго по правилам исходной задачи", prompt)
+    def test_reminder_has_fifty_natural_templates_without_metadata(self):
+        self.assertEqual(len(CONTINUATION_TEMPLATES), 50)
+        self.assertEqual(len(set(CONTINUATION_TEMPLATES)), 50)
+        for i, text in enumerate(CONTINUATION_TEMPLATES):
+            self.assertEqual(choose_continuation(randrange=lambda _: i),
+                             {"templateId": i + 1, "exactPromptText": text})
+            for marker in ("POSTMAN_REQUEST_ID", "POSTMAN_TRANSPORT_CONTROL", "REMINDER", "RECOVERY", "SYSTEM", "REQ_"):
+                self.assertNotIn(marker, text)
+        self.assertIn(reminder_policy.build_reminder_prompt(REQ, 2), CONTINUATION_TEMPLATES)
 
     def test_invalid_reminder_configuration_is_rejected(self):
-        for value in (0, 4, True):
+        for value in (0, 6, True):
             with self.assertRaises(ValueError):
                 reminder_policy.build_reminder_prompt(REQ, value)
         with self.assertRaises(ValueError):
@@ -115,8 +116,8 @@ class ReminderPolicyTests(unittest.TestCase):
             reminder_policy.submit_reminder(Page(), reminder_policy.build_reminder_prompt(REQ, 1), CHAT_URL, send_window_ms=-1)
 
     def test_req_anchor_snapshot_accepts_only_latest_same_req_user_turn(self):
-        prompt = reminder_policy.build_reminder_prompt(REQ, 1)
         user_text = f"POSTMAN_REQUEST_ID: {REQ}\ntask_file: https://example.test/task.md"
+        prompt = user_text
         with patch.object(
             reminder_policy.browser_observer,
             "snapshot_turns",
@@ -264,7 +265,7 @@ class ReminderPolicyTests(unittest.TestCase):
         result, clear_prompt, click_ready = self._run_inserted_window(
             clock=clock,
             generation=lambda _page: (False, ""),
-            anchor=lambda _page, _prompt: safe_anchor(),
+            anchor=lambda _page, _prompt, **_kwargs: safe_anchor(),
             send_button=lambda _page: (None, None),
         )
 
@@ -286,7 +287,7 @@ class ReminderPolicyTests(unittest.TestCase):
         result, clear_prompt, click_ready = self._run_inserted_window(
             clock=clock,
             generation=generation,
-            anchor=lambda _page, _prompt: safe_anchor(),
+            anchor=lambda _page, _prompt, **_kwargs: safe_anchor(),
             send_button=lambda _page: (None, None),
         )
 
@@ -300,7 +301,7 @@ class ReminderPolicyTests(unittest.TestCase):
     def test_assistant_activity_during_send_window_aborts_even_if_stop_control_flickers(self):
         clock = FakeClock()
 
-        def anchor(_page, _prompt):
+        def anchor(_page, _prompt, **_kwargs):
             return assistant_anchor() if clock.monotonic() >= 1.0 else safe_anchor()
 
         result, clear_prompt, click_ready = self._run_inserted_window(
@@ -322,7 +323,7 @@ class ReminderPolicyTests(unittest.TestCase):
         result, clear_prompt, click_ready = self._run_inserted_window(
             clock=clock,
             generation=lambda _page: (False, ""),
-            anchor=lambda _page, _prompt: safe_anchor(),
+            anchor=lambda _page, _prompt, **_kwargs: safe_anchor(),
             send_button=lambda _page: (button, 'button[data-testid="send-button"]'),
         )
 
@@ -350,7 +351,7 @@ class ReminderPolicyTests(unittest.TestCase):
         result, clear_prompt, click_ready = self._run_inserted_window(
             clock=clock,
             generation=generation,
-            anchor=lambda _page, _prompt: safe_anchor(),
+            anchor=lambda _page, _prompt, **_kwargs: safe_anchor(),
             send_button=lambda _page: (button, 'button[data-testid="send-button"]'),
         )
 
@@ -363,7 +364,7 @@ class ReminderPolicyTests(unittest.TestCase):
         button = Button()
         result, cleared, clicked = self._run_inserted_window(
             clock=clock, generation=lambda _page: (True, "pause"),
-            anchor=lambda _page, _prompt: safe_anchor(),
+            anchor=lambda _page, _prompt, **_kwargs: safe_anchor(),
             send_button=lambda _page: (button, "send"))
         self.assertTrue(result["ok"])
         self.assertEqual(clock.sleeps, [0.0, 0.0])
@@ -380,7 +381,7 @@ class ReminderPolicyTests(unittest.TestCase):
                     "finalAnswerLatched": calls > 2}
         result, cleared, clicked = self._run_inserted_window(
             clock=clock, generation=lambda _page: (True, "pause"),
-            anchor=lambda _page, _prompt: safe_anchor(),
+            anchor=lambda _page, _prompt, **_kwargs: safe_anchor(),
             send_button=lambda _page: (Button(), "send"), phases=phases)
         self.assertEqual(result["code"], reminder_policy.REMINDER_SUPPRESSED_ASSISTANT_ACTIVITY)
         self.assertTrue(result["details"]["unsentPromptCleared"])
@@ -412,7 +413,7 @@ class ReminderPolicyTests(unittest.TestCase):
         result, _clear_prompt, click_ready = self._run_inserted_window(
             clock=clock,
             generation=lambda _page: (False, ""),
-            anchor=lambda _page, _prompt: safe_anchor(),
+            anchor=lambda _page, _prompt, **_kwargs: safe_anchor(),
             send_button=lambda _page: (None, None),
             clear=False,
             send_window_ms=1_000,
