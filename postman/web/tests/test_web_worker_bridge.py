@@ -102,6 +102,9 @@ class WebWorkerBridgeTests(unittest.TestCase):
     def test_image_flow_uses_one_page_for_both_proven_turns_and_zip(self):
         chat = "https://chatgpt.com/c/12345678-1234-1234-1234-123456789abc"
         events = []
+        from launch_prompts import build_launch_prompt
+        packaging_url = "https://example.test/tasks/" + REQ + ".md"
+        packaging_prompt = build_launch_prompt(REQ, packaging_url)
         class Page:
             closed = False
             def close(self):
@@ -142,6 +145,10 @@ class WebWorkerBridgeTests(unittest.TestCase):
             self.assertEqual(kwargs["navigate"], False)
             self.assertIn("observe_image", events)
             self.assertFalse(page.closed)
+            self.assertEqual(prompt, packaging_prompt)
+            before_send = bridge.read_state(REQ)
+            self.assertEqual(before_send["exactPromptText"], packaging_prompt)
+            self.assertEqual(before_send["promptSha256"], bridge_module.browser_submit.prompt_sha256(packaging_prompt))
             events.append("submit_packaging")
             return submit
         def detect(target, **kwargs):
@@ -163,7 +170,7 @@ class WebWorkerBridgeTests(unittest.TestCase):
                                                     on_result_durable=lambda _: events.append("grant"))
             def prepare():
                 events.append("publish_packaging")
-                return {"task_url": TASK_URL, "prompt": "POSTMAN_REQUEST_ID: " + REQ + "\ntask_file: " + TASK_URL,
+                return {"task_url": packaging_url, "prompt": packaging_prompt,
                         "expected_filename": f"POSTMAN_{REQ}_RESULT.zip",
                         "expected_request": {"requestId": REQ}}
             with patch.object(bridge_module.browser_submit, "submit_fresh_prompt", side_effect=lambda *_a, **_k: (events.append("submit_a"), submit)[1]) as fresh, \
@@ -181,6 +188,7 @@ class WebWorkerBridgeTests(unittest.TestCase):
             self.assertNotIn("secondRequestId", result["details"])
             self.assertEqual(result["details"]["imageObserverProof"]["details"]["assistantImageCount"], 1)
             self.assertEqual(bridge.read_state(REQ)["state"], bridge_module.RESULT_DURABLE)
+            self.assertEqual(bridge.read_state(REQ)["exactPromptText"], packaging_prompt)
             self.assertEqual(events, ["new_page", "submit_a", "observe_image", "publish_packaging", "pause",
                                       "submit_packaging", "observe_zip", "detect_zip", "pause", "download_zip", "close"])
             self.assertEqual(len(pauses), 2)

@@ -236,6 +236,17 @@ class ObserverTests(unittest.TestCase):
     def test_infer_role_unknown_fail_closed(self):
         self.assertEqual(observer.infer_turn_role(FakeLocator(text="x")), "unknown")
 
+    def test_natural_launch_requires_exact_full_user_turn_not_legacy_key(self):
+        from launch_prompts import build_launch_prompt
+        req = "REQ_20261001T175853Z_9264"
+        prompt = build_launch_prompt(req, "https://example.test/" + req + ".md")
+        turns = [{"index": 0, "role": "user", "text": prompt},
+                 {"index": 1, "role": "assistant", "text": "answer"}]
+        self.assertEqual(observer.find_user_anchor(turns, prompt), 0)
+        self.assertTrue(observer.correlate_next_assistant(turns, prompt)["ok"])
+        turns[0]["text"] = prompt + " изменено"
+        self.assertIsNone(observer.find_user_anchor(turns, prompt))
+
     def test_current_chatgpt_markup_correlates_exact_req_user_and_assistant(self):
         request_id = "REQ_20260925T162138Z_6278"
         prompt = f"POSTMAN_REQUEST_ID: {request_id}\ntask_file: pinned"

@@ -302,6 +302,7 @@ class DirectPostmanAsk:
             taskPublicationCommit=published.publication_commit,
             expectedFilename=expected_filename,
             promptSha256=_sha256_text(prompt),
+            exactPromptText=prompt,
             **conversation_fields,
         )
         self.publication_receipt = {

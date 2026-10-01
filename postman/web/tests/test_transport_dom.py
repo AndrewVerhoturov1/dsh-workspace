@@ -208,8 +208,8 @@ class TransportDomTests(unittest.TestCase):
             result = system_recovery.stop_once(self.page, timeout_ms=1000, on_event=lambda *a, **k: None)
         self.assertEqual(result['outcome'], 'UNKNOWN')
         self.assertEqual(uncertain.clicks, 1)
-    def send_natural(self, *, slot=1, binding=None, anchor=PROMPT):
-        intent = transport.make_intent(self.page, REQ, URL, PROMPT, anchor,
+    def send_natural(self, *, slot=1, binding=None, anchor=PROMPT, original=PROMPT):
+        intent = transport.make_intent(self.page, REQ, URL, original, anchor,
                                       slot=slot, anchor_binding=binding, randrange=lambda _: 7)
         self.assertEqual(intent['promptSha256'], submit.prompt_sha256(intent['exactPromptText']))
         result = reminders.submit_reminder(self.page, intent['exactPromptText'], URL,
@@ -255,6 +255,59 @@ class TransportDomTests(unittest.TestCase):
         rejected = artifact.detect_artifact_dom(self.page, expected_prompt=intent['exactPromptText'],
             expected_chat_url=URL, request_id=REQ, expected_filename=FILENAME, completed_observer_result=proof)
         self.assertFalse(rejected['ok'])
+
+    def test_natural_launch_send_control_result_preserves_exact_original_lineage(self):
+        import copy
+        from launch_prompts import LAUNCH_PHRASES, build_launch_prompt
+        task_url = 'https://example.test/tasks/' + REQ + '.md'
+        launch = build_launch_prompt(REQ, task_url)
+        self.set_html(document(turns=group(prompt='Earlier unrelated task',
+            body=final('<p>Earlier answer</p>'), key='earlier')))
+        launched = submit.submit_existing_prompt(self.page, launch, URL,
+                                                 timeout_ms=1000, navigate=False)
+        self.assertTrue(launched['ok'], launched)
+        self.assertTrue(launched['details']['exactUserTurn'])
+        self.assertFalse(launched['details']['requestKeyUserTurn'])
+        self.assertEqual(launched['details']['promptSha256'], submit.prompt_sha256(launch))
+        self.page.locator('[data-turn-key]').last.evaluate(
+            '(el, body)=>el.insertAdjacentHTML("beforeend", body)', ACTIVITY)
+        intent, sent, binding = self.send_natural(anchor=launch, original=launch)
+        self.assertEqual(intent['originalUserOrdinal'], 1)
+        self.assertEqual(intent['expectedUserTurnRelation']['precedingUserHashes'][1],
+                         submit.prompt_sha256(launch))
+        self.page.locator('[data-turn-key]').last.evaluate(
+            '(el, body)=>el.insertAdjacentHTML("beforeend", body)', final(self.envelope()))
+        proof = observer.observe_next_assistant(self.page, intent['exactPromptText'], URL,
+            anchor_binding=binding, timeout_ms=6000, stable_ms=0,
+            sleep=self.clock.sleep, monotonic=self.clock.now)
+        proof = bridge_module._attach_submit_proof(proof, prompt=intent['exactPromptText'], submitted=sent)
+        proof['details'].update(controlIntent=intent, anchorBinding=binding)
+        def detect(candidate=proof):
+            return artifact.detect_artifact_dom(self.page, expected_prompt=intent['exactPromptText'],
+                expected_chat_url=URL, request_id=REQ, expected_filename=FILENAME,
+                completed_observer_result=candidate)
+        self.assertTrue(detect()['ok'])
+        original = self.page.locator('[data-user-message-bubble]').nth(1)
+        for changed in (LAUNCH_PHRASES[(LAUNCH_PHRASES.index(launch.splitlines()[0]) + 1) % 50] + '\n' + task_url,
+                        launch.replace('/tasks/', '/altered/'),
+                        launch.replace(REQ, 'REQ_20261001T041338Z_9999')):
+            with self.subTest(changed=changed):
+                original.evaluate('(el, text)=>el.textContent=text', changed)
+                rejected = detect()
+                self.assertFalse(rejected['ok'])
+                self.assertEqual(rejected['details']['reason'], 'control_original_lineage_missing')
+        # Even a matching visible hash cannot bind a foreign REQ as the original task.
+        altered_proof = copy.deepcopy(proof)
+        altered_proof['details']['controlIntent']['expectedUserTurnRelation']['precedingUserHashes'][1] = submit.prompt_sha256(changed)
+        altered_proof['details']['anchorBinding']['precedingUserHashes'][1] = submit.prompt_sha256(changed)
+        self.assertEqual(detect(altered_proof)['details']['reason'], 'control_original_lineage_missing')
+        original.evaluate('(el, text)=>el.textContent=text', launch)
+        for ordinal in (None, -1, 99):
+            altered_proof = copy.deepcopy(proof)
+            altered_proof['details']['controlIntent']['originalUserOrdinal'] = ordinal
+            self.assertFalse(detect(altered_proof)['ok'])
+        self.assertTrue(detect()['ok'])
+        self.assertEqual(self.page.evaluate('window.sends'), 2)
 
     def run_bridge(self, *, timeout_ms=60000, interval_ms=20000, count=1, sleep=None):
         page = self.page

@@ -11,6 +11,8 @@ from unittest.mock import patch
 
 WEB_DIR = Path(__file__).resolve().parents[1]
 MODULE_PATH = WEB_DIR / "artifact_detector.py"
+if str(WEB_DIR) not in sys.path:
+    sys.path.insert(0, str(WEB_DIR))
 
 bootstrap_stub = types.ModuleType("browser_bootstrap")
 bootstrap_stub.DEFAULT_CDP_URL = "http://127.0.0.1:9222"
@@ -253,6 +255,20 @@ class ArtifactDetectorTests(unittest.TestCase):
         page = FakePage(prompt=self.PROMPT, assistant_text=envelope(self.REQ, self.FILENAME))
         result = self.detect(page, request_id="REQ_BAD")
         self.assertEqual(result["code"], detector.ARTIFACT_INVALID_CONFIG)
+
+    def test_natural_launch_exact_turn_works_without_legacy_key(self):
+        from launch_prompts import build_launch_prompt
+        prompt = build_launch_prompt(self.REQ, "https://example.test/" + self.REQ + ".md")
+        page = FakePage(prompt=prompt, assistant_text=envelope(self.REQ, self.FILENAME))
+        proof = completed_result(prompt, page)
+        result = detector.detect_artifact_dom(page, expected_prompt=prompt, expected_chat_url=page.url,
+            request_id=self.REQ, expected_filename=self.FILENAME, completed_observer_result=proof)
+        self.assertTrue(result["ok"], result)
+        self.assertNotIn("POSTMAN_REQUEST_ID", prompt)
+        page.turn_data[0]["text"] = prompt.replace("https://example.test/", "https://other.test/")
+        result = detector.detect_artifact_dom(page, expected_prompt=prompt, expected_chat_url=page.url,
+            request_id=self.REQ, expected_filename=self.FILENAME, completed_observer_result=proof)
+        self.assertEqual(result["code"], detector.ARTIFACT_CHAT_CORRELATION_LOST)
 
     def test_prompt_must_start_with_exact_request_key(self):
         wrong_prompt = "create artifact without request key"

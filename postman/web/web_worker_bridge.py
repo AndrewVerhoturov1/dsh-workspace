@@ -393,7 +393,8 @@ class WebWorkerBridge:
         if isinstance(max_reminders, bool) or not isinstance(max_reminders, int) or max_reminders < 0:
             return _result(BRIDGE_INVALID_CONFIG, ok=False, details={"reason": "max_reminders_invalid"})
 
-        self._write_state(request, WEB_STARTING)
+        self._write_state(request, WEB_STARTING, exactPromptText=prompt,
+                          promptSha256=browser_submit.prompt_sha256(prompt))
         factory = playwright_factory
         if factory is None:
             try:
@@ -688,6 +689,8 @@ class WebWorkerBridge:
                                 request, "image packaging config is invalid", details={"packaging": packaging})}
                         request = BridgeRequest(
                             request_id, str(packaging_task_url), str(self.result_path(request_id)), _job_id(request_id))
+                        self._write_state(request, WAITING_ASSISTANT, exactPromptText=packaging_prompt,
+                                          promptSha256=browser_submit.prompt_sha256(packaging_prompt))
                         self.random_pause()  # Published task and prompt are ready; next action is Web send.
                         followup_submit = browser_submit.submit_existing_prompt(
                             page, packaging_prompt, chat_url, timeout_ms=timeout_ms,

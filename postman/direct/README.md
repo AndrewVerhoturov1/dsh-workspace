@@ -175,14 +175,20 @@ Direct Postman:
 1. фиксирует trusted snapshot branch, явно переданной trusted Host: standalone transport использует `main`, Leader child — exact task branch из подготовленного контекста;
 2. строит self-contained `<REQ>.md`;
 3. публикует его;
-4. отправляет в ChatGPT Web только canonical двухстрочный prompt:
+4. отправляет в ChatGPT Web двухстрочный prompt: одну из 50 естественных русских
+стартовых фраз и exact SHA-pinned task URL. Например:
 
 ```text
-POSTMAN_REQUEST_ID: REQ_...
-task_file: <exact SHA-pinned task URL>
+Выполни задание по ссылке полностью и соблюдай указанные внутри требования к результату:
+<exact SHA-pinned task URL>
 ```
 
-External policy URL больше не является строкой browser prompt.
+Pool `postman/web/launch_prompts.py` отделён от reminder/continuation phrases. Выбор
+стабилен для REQ; полный `exactPromptText` и SHA сохраняются до Send. Видимых
+`POSTMAN_REQUEST_ID:`, `task_file:` и `POSTMAN_TRANSPORT_CONTROL` нет; REQ остаётся
+в task URL/file и internal state. Correlation требует exact полного user turn и
+сохранённого conversation URL. Legacy first-line fallback остаётся только для старых
+prompts. External policy URL не является строкой browser prompt.
 
 ## Browser/result safety
 
