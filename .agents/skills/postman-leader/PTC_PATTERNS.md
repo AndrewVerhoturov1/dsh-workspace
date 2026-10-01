@@ -4,7 +4,7 @@
 
 ## Supervisor dispatch
 
-После положенного approval одна программа может проверить goal, подготовить task, проверить точный статус через `ptc.expectStatus`, принять Worker и вернуть его ID. У вызова `boundary: "external_event", yield_on_success: true`: при подтверждённом успехе Leader turn заканчивается штатным concludeTurn. Worker report / Bridge READY возобновляют его; polling не нужен. Routing определяется SKILL.md.
+После положенного approval одна программа может проверить goal, подготовить task, проверить точный статус через `ptc.expectStatus`, принять Worker и вернуть его ID. У вызова `boundary: "external_event"`: exact accepted Worker/interrupt/Bridge producer и безопасный успех автоматически заканчивают Leader turn штатным concludeTurn; `yield_on_success` не требуется. Prepare alone не вызывает WAIT. Worker report / Bridge READY возобновляют его; polling не нужен. Routing определяется SKILL.md.
 
 ## Read large internally, return compact
 
@@ -19,6 +19,22 @@ const evidence = await ptc.mapTextFiles(
 return { evidence }
 ```
 
-Mapper делает механическое извлечение, не семантическое summarization. `readAllText` читает внутри PTC до 4 MiB UTF-8 на файл по умолчанию; `readMany` и `mapTextFiles` учитывают совокупные байты retained JSON (default 480 KiB). Явный `max_total_bytes` позволяет больше внутренних данных, но не расширяет final output: он по-прежнему ≤512 KiB. Используй `ptc.utf8Bytes`/`ptc.jsonBytes`, а не число JS characters.
+Mapper делает механическое извлечение, не семантическое summarization. Возврат полного исходного text напрямую/прямым полем отклоняется; сырые файлы при реальной необходимости — `readMany`. Перед reread проверь, достаточно ли уже имеющегося неизменённого evidence. `readAllText` читает внутри PTC до 4 MiB UTF-8 на файл по умолчанию; `readMany` и `mapTextFiles` учитывают совокупные байты retained JSON (default 480 KiB). Явный `max_total_bytes` позволяет больше внутренних данных, но не расширяет final output: он по-прежнему ≤512 KiB. Используй `ptc.utf8Bytes`/`ptc.jsonBytes`, а не число JS characters.
 
 Helpers идут через обычные доступные tools и сохраняют Worker worktree guard. Это строковый текст по линиям, не побайтная копия: финальный перевод строки не гарантируется. Усечённую ordinary read строку и неполное чтение helper не выдаёт за полный файл.
+
+## Известный отказ остаётся внутри программы
+
+В `expectStatus` перечисляй все известные outcomes с детерминированным продолжением, а не только успехи:
+
+```js
+const close = ptc.expectStatus(
+  await tools.postman_worker_stop({ workerSessionId }),
+  ['POSTMAN_WORKER_STOPPED', 'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT']
+)
+const cleanupDeferred = close.status === 'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT'
+await tools.todo_write({ todos: [{ content: cleanupDeferred ? 'Закрыть Worker после report' : 'Задача завершена', status: cleanupDeferred ? 'pending' : 'completed' }] })
+return { cleanupDeferred, status: 'task_complete' }
+```
+
+Неизвестный status по-прежнему останавливает механический этап. Новый helper не нужен.

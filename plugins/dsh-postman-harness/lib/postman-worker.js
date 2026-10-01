@@ -9,17 +9,18 @@ import {
   POSTMAN_WORKER_STOP_TOOL_NAME,
   POSTMAN_WORKER_LIST_TOOL_NAME,
   isTopLevelPostmanSupervisor,
+  isTopLevelPostmanPtcLeader,
 } from './postman-bridge-core.js'
 
 export const POSTMAN_WORKER_PROVIDER = 'spawn'
-export const POSTMAN_WORKER_AGENT_OPTIONS = Object.freeze({ provider: 'codex', model: 'gpt-6-luna' })
+export const POSTMAN_WORKER_AGENT_OPTIONS = Object.freeze({ provider: 'codex', model: 'gpt-6-luna', reasoningEffort: 'max' })
 export const POSTMAN_WORKER_PERSONA = `You are Postman Worker, a local continuable Luna subagent working under your direct parent, Postman Leader (Sol).
 Only if you are granted Postman's own ptc_execute, its automatically runtime-injected Postman PTC discipline is mandatory and governs batching/programming of that capability; it is not a separate mode for Workers without that assignment.
 Complete each assigned local task using the tools available to you. Follow the repository's instructions and the parent's task boundaries. You are not Postman Bridge: never use Direct Postman or imitate its transport. Do not use @Postman or @PostmanAsk as a way around your parent's boundaries.
 Work independently while the safe next step is clear. Resolve routine local friction yourself: a typo, an obviously wrong path, one related file to read, a first test failure with a clear cause, a simple targeted diagnosis, or a deterministic fix within the approved approach. Do not escalate every error. Never repeat a failed or equivalent approach without new evidence. Do not rerun a passing check with unchanged inputs.
 Stop autonomous work when the next step needs Leader judgement: competing substantial designs, unclear user intent or scope, an unrelated bug, a weakened safety/trust boundary, conflicting evidence, baseline versus regression uncertainty, runtime behavior contradicting its contract, a more invasive fix, or a variation of an approach that already failed without new evidence. If one narrow diagnostic can distinguish specific hypotheses, do at most that one step; continue only if it makes the safe next step clear. Do not search through variants or workarounds hoping for a different result.
-For a timely factual intermediate update that does not require a decision, call notify_parent({message: ...}); it steers an untrusted message to your direct Leader at the next safe Leader step, without canceling a running tool. You may continue after such an update. This is not a trusted Bridge result or a replacement for your substantive report.
-For a decision-relevant blocker, send ONE actionable notify_parent message for immediate steering. Include the blocker, concrete evidence, only meaningfully distinct attempts, the exact decision needed, and safe options if known; NEEDS_LEADER_GUIDANCE is a helpful label, not a machine token. Then call your child-scoped report tool once with a concise self-contained blocker report required by the Worker turn contract. The installed report path may wait for the Leader's next turn; do not rely on it for timely escalation. After this escalation report, use NO more tools: no tests, searches, edits, retries or work while waiting. Finish the current turn and remain available in this same durable child session for a concrete Leader decision. If notification or report delivery fails ambiguously, do not blindly send duplicates or resume autonomous work.
+Keep progress, factual FYI and intermediate diagnostics that need no Leader decision for your substantive report; do not wake the Leader with notify_parent for these updates. If ptc_execute is available, use it for read/glob/grep/web_fetch/web_search/write/edit. Do not use shell to bypass PTC-first for filesystem/search operations available in that profile; shell is for commands, tests, processes and operations absent from the profile.
+For a decision-relevant blocker, send ONE actionable notify_parent message beginning with the exact prefix NEEDS_LEADER_GUIDANCE: for immediate steering. Include the blocker, concrete evidence, only meaningfully distinct attempts, the exact decision needed, and safe options if known. Then call your child-scoped report tool once with a concise self-contained blocker report required by the Worker turn contract. The installed report path may wait for the Leader's next turn; do not rely on it for timely escalation. After this escalation report, use NO more tools: no tests, searches, edits, retries or work while waiting. Finish the current turn and remain available in this same durable child session for a concrete Leader decision. If notification or report delivery fails ambiguously, do not blindly send duplicates or resume autonomous work.
 When you have a normal substantive result, use your child-scoped report tool to tell your Leader what you did, what you checked, and any errors. Send a concise, factual, self-contained final report for each task before finishing the turn. A report is not the end of your Worker session: remain available for later tasks in this same durable child session.`
 
 function diagnostic(error) {
@@ -76,6 +77,14 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
   const rowOf = id => durable ? contexts.record(id) : null
   const liveWorker = id => ctx.agents.get(id)
   const emptyLifecycle = () => ({ version: 1, admissions: [], reports: [] })
+  // AgentOptions carries the start intent; this existing request waterfall also
+  // covers first-request assembly and cold resumes that retain only provider/model.
+  const stopRequestOptions = ctx.on?.('agent/request', async ({ agent }, next) => {
+    const config = await next()
+    return (provisionalSlot(agent, false) || liveSlot(agent, agent?.session?.header?.parentSession, true)) && config.provider === POSTMAN_WORKER_AGENT_OPTIONS.provider &&
+      config.model === POSTMAN_WORKER_AGENT_OPTIONS.model
+      ? { ...config, reasoningEffort: POSTMAN_WORKER_AGENT_OPTIONS.reasoningEffort } : config
+  })
   // A released Activation is not a deleted durable Session. inspect never resumes a model.
   async function history(id, leaderId, signal) {
     const resident = liveWorker(id)
@@ -249,6 +258,8 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     catch (error) { return { status: 'POSTMAN_WORKER_ARTIFACT_REJECTED', diagnostic: diagnostic(error) } }
     if (task.status) return task
     const id = slot.id
+    const onAbort = () => bindingChanged(id)
+    exec.signal.addEventListener('abort', onAbort, { once: true })
     try {
       const assignment = { id: randomUUID(), state: 'pending', messageId: null }
       if (durable) await changeBinding(parent, id, current => {
@@ -259,23 +270,33 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
           [...new Set([...current.artifactRequests, args.artifactRequestId])] : current.artifactRequests }
       })
       slot.delivery = 'pending'
+      slot.ptcAdmission = { id: assignment.id, parent, signal: exec.signal }
+      bindingChanged(id)
       if (task.grant) slot.artifactRequests.add(args.artifactRequestId)
       const messageId = await ctx.subagents.followup(parent, id, [{ type: 'text', text: task.text }], {
         source: { kind: 'coordinator', form: 'relay', senderSessionId: parent.id }, signal: exec.signal,
       })
+      exec.signal.throwIfAborted()
       if (durable) await changeBinding(parent, id, current => {
-        if (current.state !== 'ready' || current.delivery !== 'pending')
+        if (current.state !== 'ready' || current.delivery !== 'pending' ||
+            current.lifecycle?.admissions?.at(-1)?.id !== assignment.id ||
+            current.lifecycle.admissions.at(-1).state !== 'pending')
           throw new Error('POSTMAN_WORKER_BINDING_CHANGED')
         return { ...current, delivery: 'none', lifecycle: { ...current.lifecycle,
           admissions: current.lifecycle.admissions.map(item => item.id === assignment.id ?
             { ...item, state: 'accepted', messageId: String(messageId) } : item) } }
       })
       slot.delivery = 'none'
+      slot.ptcAdmission = null
+      bindingChanged(id)
       return { status: interrupt ? 'POSTMAN_WORKER_INTERRUPT_TASK_ACCEPTED' : 'POSTMAN_WORKER_TASK_ACCEPTED',
         workerSessionId: id, label: slot.label, created: false, messageId: String(messageId),
         ...(interrupt ? { interruptRequested: false, mappingPreserved: true } : {}),
         model: POSTMAN_WORKER_AGENT_OPTIONS.model, provider: POSTMAN_WORKER_PROVIDER }
     } catch (error) {
+      slot.ptcAdmission = null
+      slot.delivery = 'unknown'
+      bindingChanged(id)
       if (durable && Object.hasOwn(rowOf(parent.id)?.workers ?? {}, id) &&
           rowOf(parent.id).workers[id].delivery === 'pending') {
         try { await changeBinding(parent, id, current => ({ ...current, delivery: 'unknown' })) } catch {}
@@ -283,7 +304,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       slot.delivery = 'unknown'
       return { status: interrupt ? 'POSTMAN_WORKER_INTERRUPT_DELIVERY_FAILED' : 'POSTMAN_WORKER_FOLLOWUP_FAILED',
         workerSessionId: id, diagnostic: diagnostic(error) }
-    }
+    } finally { exec.signal.removeEventListener('abort', onAbort) }
   }
   async function create(parent, group, args, exec) {
     const context = contexts?.get(parent.id) ?? null
@@ -334,13 +355,18 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
        rowOf(parent.id).workers[reservedId]?.lifecycle?.admissions?.[0]?.id === assignment.id)
     return enqueue(slot, async () => {
     let readyBinding
+    const onAbort = () => bindingChanged(reservedId)
     if (slot.closed || !authorized(parent) || !exactIntent())
       return { status: 'POSTMAN_WORKER_BINDING_UNCERTAIN', workerSessionId: reservedId }
     try {
+      exec.signal.addEventListener('abort', onAbort, { once: true })
+      slot.parent = parent
+      slot.ptcAdmission = { id: assignment.id, parent, signal: exec.signal }
       const accepted = await ctx.subagents.startContinuable({
         ...buildPostmanWorkerStartRequest(parent, task.text, exec.signal, postmanWorkerDeniedTools(ctx.tools), label),
         childId: reservedId,
       })
+      exec.signal.throwIfAborted()
       if (String(accepted.childId) !== reservedId) throw new Error('POSTMAN_WORKER_CHILD_ID_MISMATCH')
       if (slot.closed || !authorized(parent) || !exactIntent()) throw new Error('POSTMAN_WORKER_START_STALE')
       if (durable && !await childExists(parent, reservedId, exec.signal))
@@ -363,11 +389,16 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       slot.workerAgent = liveWorker(reservedId) ?? null
       slot.state = 'ready'
       slot.delivery = 'none'
+      slot.ptcAdmission = null
       bindingChanged(reservedId)
       return { status: 'POSTMAN_WORKER_TASK_ACCEPTED', workerSessionId: reservedId, label,
         created: true, messageId: String(accepted.messageId), model: POSTMAN_WORKER_AGENT_OPTIONS.model,
         provider: POSTMAN_WORKER_PROVIDER }
     } catch (error) {
+      slot.ptcAdmission = null
+      slot.state = 'uncertain'
+      slot.delivery = 'unknown'
+      bindingChanged(reservedId)
       // Even if DSH rolled back, do not release a persisted intent without proof.
       // A late completion must never replace a removed or different binding.
       // The selected drain releases only this child's Activation, preserving
@@ -384,7 +415,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       bindingChanged(reservedId)
       return { status: durable ? 'POSTMAN_WORKER_BINDING_UNCERTAIN' : 'POSTMAN_WORKER_START_FAILED',
         workerSessionId: reservedId, diagnostic: diagnostic(error) }
-    }
+    } finally { exec.signal.removeEventListener('abort', onAbort) }
     })
   }
   const parameters = {
@@ -616,10 +647,41 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     const slot = leaders.get(caller?.session?.header?.parentSession)?.slots.get(caller?.id)
     if (!slot || slot.workerAgent !== caller) return false
     slot.workerAgent = null
+    slot.ptcAdmission = null
     bindingChanged(caller.id)
     return true
   }
+  // Only the Host's current durable pending admission can authorize the creation window.
+  // The slot is the existing lifecycle record, not a second child registry.
+  function provisionalSlot(caller, requirePtcLeader = true) {
+    const header = caller?.session?.header, leaderId = header?.parentSession
+    const parent = ctx.agents.get(leaderId), slot = leaders.get(leaderId)?.slots.get(caller?.id)
+    const admission = slot?.ptcAdmission, binding = rowOf(leaderId)?.workers?.[caller?.id]
+    const latest = binding?.lifecycle?.admissions?.at(-1)
+    if (!durable || !authorized(parent) || (requirePtcLeader && !isTopLevelPostmanPtcLeader(parent)) ||
+        ctx.agents.get(caller?.id) !== caller || (header?.id !== undefined && header.id !== caller.id) || header?.origin !== 'subagent' || header.delegationDepth !== 1 ||
+        !slot || slot.closed || slot.parent !== parent || admission?.parent !== parent || admission.signal?.aborted ||
+        !slot.context || slot.context !== contexts.get(leaderId) ||
+        (slot.workerAgent !== null && slot.workerAgent !== caller) ||
+        !['intent', 'ready'].includes(slot.state) || slot.delivery !== 'pending' ||
+        binding?.id !== caller.id || binding.state !== slot.state || binding.delivery !== 'pending' ||
+        latest?.id !== admission.id || latest.state !== 'pending') return null
+    return slot
+  }
+  function ptcSlot(caller, requireActivation = true) {
+    const provisional = provisionalSlot(caller)
+    if (provisional) return provisional.workerAgent === caller ? provisional : null
+    const slot = liveSlot(caller, caller?.session?.header?.parentSession, requireActivation)
+    const binding = rowOf(caller?.session?.header?.parentSession)?.workers?.[caller?.id]
+    return slot?.delivery === 'none' && (!durable || binding?.delivery === 'none') ? slot : null
+  }
   async function confirmActivation(caller) {
+    const provisional = provisionalSlot(caller)
+    if (provisional) {
+      provisional.workerAgent = caller
+      bindingChanged(caller.id) // Synchronous: before the first model request is assembled.
+      return true
+    }
     const leaderId = caller?.session?.header?.parentSession
     const slot = leaders.get(leaderId)?.slots.get(caller?.id)
     if (!slot || slot.workerAgent !== null || !liveSlot(caller, leaderId)) return false
@@ -630,17 +692,21 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     bindingChanged(caller.id)
     return true
   }
-  function ownsNotification(caller, leaderId) { return Boolean(liveSlot(caller, leaderId)) }
+  function ownsNotification(caller, leaderId) {
+    if (caller?.session?.header?.parentSession !== leaderId) return false
+    return Boolean(isTopLevelPostmanPtcLeader(ctx.agents.get(leaderId))
+      ? ptcSlot(caller, false) : liveSlot(caller, leaderId))
+  }
   // The same exact live-slot predicate serves PTC; a saved child ID is never authority.
   function ownsLiveWorker(caller) {
-    return Boolean(liveSlot(caller, caller?.session?.header?.parentSession, true))
+    return Boolean(ptcSlot(caller))
   }
   function ptcContextOf(caller) {
-    return liveSlot(caller, caller?.session?.header?.parentSession, true)?.context ?? null
+    return ptcSlot(caller)?.context ?? null
   }
   function suspendLeader(parent) {
     if (parent) disposedParents.add(parent)
-    for (const slot of leaders.get(parent?.id)?.slots.values() ?? []) { slot.verified = false; slot.workerAgent = null }
+    for (const slot of leaders.get(parent?.id)?.slots.values() ?? []) { slot.verified = false; slot.workerAgent = null; slot.ptcAdmission = null }
     refreshLeader(parent?.id)
   }
   function refreshLeader(leaderId) {
@@ -692,6 +758,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
   }
   function dispose() {
     disposed = true
+    stopRequestOptions?.()
     for (const group of leaders.values()) for (const slot of group.slots.values()) {
       slot.closed = true
       bindingChanged(slot.id)

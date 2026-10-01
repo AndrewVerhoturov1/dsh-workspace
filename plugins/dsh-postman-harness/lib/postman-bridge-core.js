@@ -54,10 +54,12 @@ export const POSTMAN_PTC_ONLY_LEADER_TOOLS = Object.freeze(POSTMAN_LEADER_TOOL_A
   name => !['skill', 'ask_user_question', 'exit_plan_mode', 'read_image', POSTMAN_YIELD_TOOL_NAME].includes(name),
 ))
 
-export function postmanPtcDirectCallGuard(exec, lookupAgent) {
-  return isTopLevelPostmanPtcLeader(exec.agent) &&
-    lookupAgent(exec.agent.id) === exec.agent && exec.parent === undefined &&
-    POSTMAN_PTC_ONLY_LEADER_TOOLS.includes(exec.name)
+export const POSTMAN_WORKER_PTC_TOOL_NAMES = Object.freeze(['read', 'glob', 'grep', 'web_fetch', 'web_search', 'write', 'edit'])
+
+export function postmanPtcDirectCallGuard(exec, lookupAgent, ownsPtcWorker = () => false) {
+  return lookupAgent(exec.agent?.id) === exec.agent && exec.parent === undefined &&
+    ((isTopLevelPostmanPtcLeader(exec.agent) && POSTMAN_PTC_ONLY_LEADER_TOOLS.includes(exec.name)) ||
+      (ownsPtcWorker(exec.agent) && POSTMAN_WORKER_PTC_TOOL_NAMES.includes(exec.name)))
     ? 'POSTMAN_PTC_DIRECT_CALL_REJECTED: use ptc_execute' : undefined
 }
 
