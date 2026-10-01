@@ -10,7 +10,7 @@ import { boundedJson, JsonLimitError } from './json.js'
 import { FrameReader, checkMessage, encodeFrame, message, writer, ProtocolError } from './protocol.js'
 
 const ENTRY = new URL('./executor.mjs', import.meta.url)
-const MAX_PROCESSES = 2, MAX_OUTSTANDING = 64, START_MS = 3000, STOP_MS = 750
+const MAX_PROCESSES = 10, MAX_OUTSTANDING = 64, START_MS = 3000, STOP_MS = 750
 function outcome(status, code, detail, extra = {}) {
   return { status, ...(code ? { error:{code,message:String(detail ?? code).slice(0,1024)} } : {}), ...extra }
 }

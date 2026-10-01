@@ -78,10 +78,10 @@ test('large canonical tool JSON is processed in guest; 512 KiB result ceiling re
   const r=createPtcRuntime()
   try {
     const profileWithRead=profile(['read'])
-    const bindings={read:()=>({lines:[{number:1,text:'x'.repeat(110000)}],totalLines:1})}
+    const bindings={read:()=>({lines:[{number:1,text:'я'.repeat(300000)}],totalLines:1})}
     const compact=await r.run({program:'const page=await tools.read({file_path:\'large.txt\'}); return {length:page.lines[0].text.length}',profile:profileWithRead,bindings})
     assert.equal(compact.status,'ok',JSON.stringify(compact))
-    assert.deepEqual(compact.value,{length:110000})
+    assert.deepEqual(compact.value,{length:300000})
     assert.equal(compact.effects.completed,1)
     const within=await r.run({program:"return 'x'.repeat(524286)",profile:profile(),bindings:{}})
     assert.equal(within.status,'ok',JSON.stringify({status:within.status,error:within.error}))
@@ -129,7 +129,7 @@ test('snapshots grants and isolates two concurrent profiles, aborting one',async
     p.tools[0]='extra';b.hold=()=>{throw Error('mutated')}
     const two=r.run({program:'return typeof tools.hold + await tools.echo({n:9})',profile:profile(['echo']),bindings:{echo:x=>x}})
     const third=await r.run({program:'return 1',profile:profile(),bindings:{}})
-    assert.equal(third.status,'limit-exceeded');assert.equal(third.error.code,'maxProcesses')
+    assert.equal(third.status,'ok')
     assert.equal((await two).value,'undefined[object Object]')
     controller.abort();const a=await one;assert.equal(a.status,'cancelled');assert.equal(a.effects.pending,1)
   } finally {release(1);await r.dispose()}
@@ -203,3 +203,31 @@ test('minimum accepted value depth and nodes can still start a program',async()=
     assert.equal(y.status,'ok',JSON.stringify(y));assert.equal(y.value,3)
   }finally{await r.dispose()}
 })
+
+test('ten active PTC processes are allowed; eleventh rejected; a freed slot is reusable', { timeout: 30000 }, async () => {
+  const runtime = createPtcRuntime(), releases = [], entered = [], runs = []
+  try {
+    for (let i = 0; i < 10; i++) {
+      let release, enter
+      const held = new Promise(resolve => release = resolve)
+      entered.push(new Promise(resolve => enter = resolve))
+      releases.push(release)
+      runs.push(runtime.run({ program: 'return await tools.hold(null)', profile: profile(['hold']),
+        bindings: { hold: () => { enter(); return held } } }))
+    }
+    await Promise.all(entered)
+    const denied = await runtime.run({ program: 'return 11', profile: profile(), bindings: {} })
+    assert.equal(denied.status, 'limit-exceeded')
+    assert.equal(denied.error.code, 'maxProcesses')
+    releases[0](0)
+    assert.equal((await runs[0]).status, 'ok')
+    const replacement = await runtime.run({ program: 'return 12', profile: profile(), bindings: {} })
+    assert.equal(replacement.status, 'ok')
+    assert.equal(replacement.value, 12)
+    releases.forEach((release, i) => release(i))
+    const results = await Promise.all(runs)
+    assert.ok(results.every(result => result.status === 'ok'))
+    assert.deepEqual(results.map(result => result.value), Array.from({ length: 10 }, (_, i) => i))
+  } finally { releases.forEach(release => release(null)); await runtime.dispose() }
+})
+

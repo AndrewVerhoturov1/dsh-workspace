@@ -9,7 +9,7 @@ description: >-
 
 # Postman Leader
 
-`POSTMAN_LEADER_SKILL_VERSION: 18`
+`POSTMAN_LEADER_SKILL_VERSION: 19`
 
 > **Правило Worker:** у одного Leader может быть до трёх независимых continuable Worker. `postman_worker({task, createNew: true, label?})` создаёт нового; четвёртый возвращает `POSTMAN_WORKER_LIMIT_REACHED` до запуска. `postman_worker_list()` показывает точные `workerSessionId`, label и состояние привязки, но не доказывает idle/completion. Задание или новый trusted artifact REQ направляй точному Worker через `postman_worker({task, workerSessionId, artifactRequestId?})`, обычное продолжение — через `postman_worker_interrupt({workerSessionId, task})`, закрытие — `postman_worker_stop({workerSessionId})`. Без ID старые вызовы допустимы только при ровно одной привязке; при нескольких Host возвращает `POSTMAN_WORKER_TARGET_REQUIRED`. Все Worker делят одну task branch/worktree: не поручай перекрывающиеся записи, а sync, restore и package runner выполняй только при гарантированной безопасности общей ветки.
 
@@ -91,11 +91,9 @@ Bridge Luna занимается только ChatGPT Web transport через D
 
 Режимы исполнения: `postman-leader` — supervisor с прямыми инструментами; `postman-leader-ptc` — тот же routing/supervisor contract, но batchable data/supervisor tools доступны только внутри `ptc_execute`. Прямыми остаются `ptc_execute`, `skill`, `ask_user_question`, `exit_plan_mode`, `read_image`, `postman_yield`. **PTC меняет способ исполнения, но не выбор исполнителя и не human approval rules.** Сначала утверждение пользователя по разделу 0, только затем task preparation, Worker или Bridge. Отчёт Worker и Bridge READY — новые события следующего хода, а не ожидание в PTC-программе.
 
-### 3.1. PTC batching discipline
+### 3.1. Обязательный Postman PTC Program-First
 
-Один `ptc_execute` выполняет максимально полный механический этап до нового содержательного решения модели, пользовательского ввода, внешнего async event (Worker report / Bridge READY) либо отдельной границы риска/approval. Окончание одного вложенного `read`/`grep` само по себе не причина создавать новый model round.
-
-Для текстового файла с несколькими страницами используй `ptc.readAllText(...)`, для заранее известных файлов — `ptc.readMany(...)`, для запросов — `ptc.grepMany(...)`. Paging происходит внутри одного `ptc_execute`. Helpers работают только через видимые ordinary `tools.read`/`tools.grep`. `maxOutputBytes` 512 KiB — потолок, не цель: возвращай компактный итог, когда полного текста не требуется. Примеры: [PTC_PATTERNS.md](PTC_PATTERNS.md).
+Если доступен наш `ptc_execute`, канонический обязательный протокол — автоматически внедрённый runtime текст из [ptc-discipline.js](../../../plugins/dsh-postman-harness/lib/ptc-discipline.js). Program-First обязателен: один PTC доходит до следующей реальной decision boundary; переход между заранее детерминированными операциями не создаёт новый model round. Правила routing и approval самого Leader не меняются. Справочные примеры: [PTC_PATTERNS.md](PTC_PATTERNS.md). Протокол не относится к native Harness PTC/Code Mode.
 
 Top-level Leader получает positive allowlist ровно из 21 зарегистрированного инструмента:
 
@@ -242,7 +240,7 @@ Leader НЕ ДОЛЖЕН превращать Worker в remote shell через 
 
 После `POSTMAN_WORKER_TASK_ACCEPTED` Leader считает соответствующий Worker turn выполняющимся до содержательного `report` либо явного runtime failure. Acceptance означает только приём задания. `postman_worker_list` показывает привязки, а не фактическую завершённость модели; `postman_worker` не используют как status query.
 
-Если нет конкретной независимой supervisor-работы, Leader вызывает `postman_yield()` и уступает активный ход без пустого final, не отменяя Worker. Независимую работу можно выполнить до уступки. Runtime возобновляет Leader по report, failure или новому сообщению пользователя; после возобновления разбери результат, продолжи ту же Worker session либо закрой её при допустимых условиях. Leader НЕ ИМЕЕТ ПРАВА создавать новые reasoning/model rounds только потому, что Worker ещё не прислал report.
+Если нет конкретной независимой supervisor-работы, Leader уступает активный ход: для нашего PTC использует `boundary: "external_event", yield_on_success: true` в программе dispatch, если PTC недоступен — вызывает обычный `postman_yield()`. Не создавай отдельный model round только ради yield после успешного dispatch PTC. Оба пути уступают ход без пустого final и не отменяют Worker. Независимую работу можно выполнить до уступки. Runtime возобновляет Leader по report, failure или новому сообщению пользователя; после возобновления разбери результат, продолжи ту же Worker session либо закрой её при допустимых условиях. Leader НЕ ИМЕЕТ ПРАВА создавать новые reasoning/model rounds только потому, что Worker ещё не прислал report.
 
 Следующая содержательная активность Leader разрешена после события: Worker прислал report; пользователь прислал новое сообщение; runtime сообщил failure/blocker; либо появилось новое внешнее evidence, объективно меняющее задачу.
 
@@ -296,7 +294,7 @@ postman_worker_interrupt({task: "По результатам report исправ
 
 ## 7. Ожидание Worker
 
-Если Worker выполняет задачу и у Leader нет другой действительно независимой supervisor-работы, Leader вызывает `postman_yield()` один раз и бездействует до внешнего события. `postman_worker_stop({mode:'close'})` после одного TASK_ACCEPTED получит отказ и не прервёт Worker. Leader НЕ ДОЛЖЕН писать пользователю:
+Если Worker выполняет задачу и у Leader нет другой действительно независимой supervisor-работы, Leader уступает ход через успешный PTC auto-yield либо обычный `postman_yield()` и бездействует до внешнего события. `postman_worker_stop({mode:'close'})` после одного TASK_ACCEPTED получит отказ и не прервёт Worker. Leader НЕ ДОЛЖЕН писать пользователю:
 
 ```text
 Waiting for worker

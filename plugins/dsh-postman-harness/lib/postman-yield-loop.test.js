@@ -2,6 +2,10 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { Context } from '@deepseek-ai/cordis'
+import { ToolRuntime, defineTool } from '@deepseek-ai/dsh-tools'
+import { createScope } from '@deepseek-ai/dsh-scope'
+import { createPtcAdapter } from './ptc-adapter.js'
 import { createPostmanYieldTool } from './postman-bridge.js'
 const root = join(process.env.APPDATA ?? join(process.env.USERPROFILE, 'AppData', 'Roaming'),
   'npm/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-agent-loop/lib/index.js')
@@ -64,3 +68,47 @@ test('real installed turn preserves report/user before, during and after yield',
     assert.ok(f.events.filter(e => e.type === 'user/message').some(e => e.data.id === 'report'), moment)
   }
 })
+
+test('PTC automatic conclusion preserves real events queued during dispatch and after turn end', async () => {
+  for (const moment of ['during', 'after']) {
+    const ctx = new Context(), order = []
+    ctx.systemPrompt = { tools() {}, section() { return () => {} } }
+    new ToolRuntime(ctx)
+    let adapter
+    const f = loop(['user'], async (agent, count) => {
+      if (count > 1) return { kind: 'completed' }
+      const result = await ctx.tools.execute({ callId:'ptc',name:'ptc_execute',agent,signal:agent.phase.abort.signal,
+        arguments:{description:'Dispatch and wait for real event',boundary:'external_event',yield_on_success:true,
+          program:"ptc.expectStatus(await tools.postman_task_prepare({}),['TASK_CONTEXT_READY']); const w=ptc.expectStatus(await tools.postman_worker({}),['POSTMAN_WORKER_TASK_ACCEPTED']); return {workerSessionId:w.workerSessionId}"} })
+      assert.equal(result.value.status,'ok',JSON.stringify(result.value))
+      return result.concludesTurn ? { kind:'completed' } : null
+    })
+    f.agent.session.header.agentPreset = 'postman-leader-ptc'
+    ctx.agents = { get: id => id === f.agent.id ? f.agent : null }
+    f.agent.ctx = createScope(ctx, f.agent).ctx
+    for (const name of ['read','grep','postman_task_prepare','postman_worker']) ctx.tools.register(defineTool({
+      name,description:name,parameters:{},output:{schema:{type:'object',additionalProperties:true},render:(_a,v)=>[{type:'text',text:JSON.stringify(v)}]},
+      execute() {
+        order.push(name)
+        if (name === 'postman_worker' && moment === 'during') f.agent.inbox.nextStep.push({id:'worker-report'})
+        return name === 'postman_task_prepare' ? {status:'TASK_CONTEXT_READY'} :
+          name === 'postman_worker' ? {status:'POSTMAN_WORKER_TASK_ACCEPTED',workerSessionId:'worker'} : {name}
+      },
+    }))
+    adapter = createPtcAdapter(ctx, { authorize: agent => agent === f.agent })
+    ctx.tools.register(adapter.tool); adapter.refresh(f.agent)
+    try {
+      assert.equal(await f.agent.turn(),false)
+      // A real event arriving during dispatch may trigger the next turn immediately.
+      assert.equal(f.calls.length,moment === 'during' ? 2 : 1)
+      assert.deepEqual(order,['postman_task_prepare','postman_worker'])
+      if (moment === 'after') {
+        f.nextTurn.push({id:'bridge-ready'})
+        assert.equal(await f.agent.turn(),false)
+      }
+      assert.equal(f.calls.length,2)
+      assert.ok(f.events.some(event => event.type === 'user/message' && event.data.id === (moment === 'during' ? 'worker-report' : 'bridge-ready')))
+    } finally { await adapter.dispose(); await ctx.fiber.dispose() }
+  }
+})
+
