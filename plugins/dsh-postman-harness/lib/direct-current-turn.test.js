@@ -76,6 +76,26 @@ test('Host bundle rejection occurs before spawn and remains correlated proven-un
   assert.equal(current.result.requestId, current.requestId)
 })
 
+test('Host helper infrastructure errors retain allocated REQ as proven-unsent without spawning Direct', async (t) => {
+  for (const [name, error] of [
+    ['helper spawn failure', Object.assign(new Error('spawn python ENOENT'), { code: 'ENOENT' })],
+    ['malformed helper output', new SyntaxError('Unexpected token in helper JSON')],
+  ]) await t.test(name, async () => {
+    const manager = new DirectPostmanJobManager({ exists: () => true,
+      inputGrants: { async build() { throw error } },
+      spawn() { assert.fail('must not spawn Direct') } })
+    await assert.rejects(manager.start({ sessionId: name, workspace: '/repo', payload: 'intent', branch: 'main',
+      inputFiles: [{ name: 'file.txt' }] }), /POSTMAN_INPUT_BUNDLE_BUILD_FAILED/)
+    const current = manager.view(name)
+    assert.equal(current.status, 'COMPLETED')
+    assert.equal(current.result.code, 'POSTMAN_TRANSPORT_FAILED')
+    assert.equal(current.result.requestId, manager.latest(name).requestId)
+    assert.equal(current.result.transportCode, 'POSTMAN_INPUT_BUNDLE_BUILD_FAILED')
+    assert.deepEqual(current.result.details, { sendState: 'PROVEN_NOT_SENT', inputBundlePhase: 'host-build' })
+    assert.equal(JSON.stringify(current.result).includes(error.message), false)
+  })
+})
+
 test('image parser preserves exact payload and rejects manual chat', () => {
   const raw = '  @PostmanImage\nDraw a cat  '
   assert.deepEqual(parsePostmanUserTurn(raw), { mode: 'fresh', transportKind: 'image',

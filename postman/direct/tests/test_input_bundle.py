@@ -27,7 +27,7 @@ def snapshots(root, contents):
     for i, data in enumerate(contents, 1):
         path = root / f"{i:03d}.bin"
         path.write_bytes(data)
-        records.append(dict(snapshot_path=str(path), sha256=bundle.digest(data), byte_length=len(data), source_kind="local"))
+        records.append(dict(snapshot_path=str(path), sha256=bundle.digest(data), byte_length=len(data)))
     return records
 
 
@@ -47,9 +47,11 @@ class InputBundleTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 descriptors = [descriptor(data) for data in contents]
-                result = bundle.build_bundle(REQ, descriptors, snapshots(root, contents), root)
-                attached = bundle.read_handoff(result["handoffPath"], REQ, descriptors)
-                data = attached.upload_bytes()
+                with patch.object(bundle, "verify_zip", wraps=bundle.verify_zip) as verified:
+                    result = bundle.build_bundle(REQ, descriptors, snapshots(root, contents), root)
+                    attached = bundle.read_handoff(result["handoffPath"], REQ, descriptors)
+                    data = attached.upload_bytes()
+                    self.assertEqual(verified.call_count, 1)  # Build-only contents proof; later boundaries use outer hash.
                 self.assertEqual(result["bundleSha256"], bundle.digest(data))
                 self.assertEqual(result["bundleByteLength"], len(data))
                 with zipfile.ZipFile(io.BytesIO(data)) as archive:

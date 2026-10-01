@@ -18,7 +18,7 @@ Leader переносит выданные descriptors без изменений
 
 - `stage` читает каждый exact regular file один раз (bounded read). Те же bytes дают hash/length, GitHub blob и private snapshot. Изменение исходного файла позднее не меняет ZIP.
 - `describe_existing` делает один exact commit/path fetch; decoded bytes дают descriptor и snapshot. Перед ZIP GitHub повторно не вызывается.
-- Host создаёт private temporary root и `001.bin` snapshots; grants связывают exact descriptor с snapshot hash/length/source kind/cleanup owner. ZIP читает только snapshots. Empty files, directories, symlinks и текущие sensitive/runtime paths запрещены.
+- Host создаёт private temporary root и `001.bin` snapshots; grants связывают exact descriptor с snapshot path/hash/length/cleanup owner. ZIP читает только snapshots. Empty files, directories, symlinks и текущие sensitive/runtime paths запрещены.
 - Limits: максимум 20 inputs, 16 MiB на input, 48 MiB суммарных uncompressed input bytes, 50 MiB final ZIP. Превышение не обрезается, а отвергается до Send.
 
 ## REQ bundle и handoff
@@ -36,7 +36,7 @@ Manifest содержит protocol_version=1, exact request_id, file_count; дл
 
 После закрытия writer ZIP заново читается с диска, независимо decompressed: exact inventory/order, no extra entries/directories/symlinks/encryption, strict manifest, exact descriptor mapping, every entry hash/length. Затем вычисляются ZIP hash/length. Только после proof появляется private strict handoff: version, exact REQ, input count, descriptor-set digest и attachment path/name/hash/length.
 
-Host передаёт Direct только `-InputBundleManifest` (Host-created handoff path) вместе с прежним `-InputFilesBase64`. Модель не задаёт этот аргумент. Direct повторно проверяет regular/non-symlink manifest и bundle, exact REQ/name/digest/size/hash и ZIP contents до browser. Browser ещё раз сверяет bytes и передаёт их native Playwright `set_input_files` как FilePayload; это закрывает pathname reread TOCTOU. Без inputs новый аргумент отсутствует, старый flow сохраняется.
+Host передаёт Direct только `-InputBundleManifest` (Host-created handoff path) вместе с прежним `-InputFilesBase64`. Модель не задаёт этот аргумент. Direct проверяет strict handoff metadata, regular/non-symlink files, exact REQ/name/descriptor digest и внешний ZIP size/hash до browser. Полная проверка ZIP contents выполняется только один раз после build. Browser непосредственно перед upload читает ZIP, сверяет внешний size/hash и передаёт bytes native Playwright `set_input_files` как FilePayload; это закрывает pathname reread TOCTOU. Без inputs новый аргумент отсутствует, старый flow сохраняется.
 
 ## Web proof
 
@@ -44,9 +44,9 @@ chat confirmed → composer empty → ATTACHMENT_UPLOAD_STARTED → ATTACHMENT_R
 
 Pre-Send: owned composer scope; ровно один regular-file input, ровно одна attachment card с exact ZIP filename; positive completed file control; no pending/progress/error. Filename сравнивается как data, не interpolated CSS. `set_input_files` без exception не означает успех. Prompt fill и Send-boundary повторно проверяют attachment.
 
-Post-Send: count вырос ровно на один user turn относительно baseline; exact full rendered prompt; ZIP card находится внутри того же exact user-message unit (не общего grouped user+assistant turn); count=1, exact filename, settled, no pending/error. Если DOM даёт file ID, ID тоже должен совпасть. Нельзя использовать attachment старого turn. UI не раскрывает SHA uploaded object: соответствие bytes обеспечивается verified native FilePayload, one-owned-upload и exact request-scoped filename; DOM подтверждает membership, не повторный remote hash.
+Post-Send: count вырос ровно на один user turn относительно baseline; exact full rendered prompt; ZIP card находится внутри того же exact user-message unit (не общего grouped user+assistant turn); count=1, exact filename, settled, no pending/error. Если DOM предоставляет file ID до и после Send, они должны совпасть; отсутствие ID не отменяет exact filename/card proof. Нельзя использовать attachment старого turn. UI не раскрывает SHA uploaded object: соответствие bytes обеспечивается verified native FilePayload, one-owned-upload и exact request-scoped filename; DOM подтверждает membership, не повторный remote hash.
 
-До Send control/upload/timeout/readiness/lost failures = PROVEN_NOT_SENT. После возможного click отсутствие/неопределённость attachment proof = UNKNOWN; blind reupload/resend запрещён. Existing #294 serialized system recovery, exact same-chat proof, reminders/deadline и recovery after Send не изменены. Новый owned attempt может заново upload только после proven-not-sent и fresh chat/composer proof; partial invalid UI не повторяется на той же Page.
+Любая ошибка Host ZIP build до Direct spawn (включая helper spawn, malformed JSON, filesystem failure) сохраняет allocated REQ с POSTMAN_TRANSPORT_FAILED, sendState=PROVEN_NOT_SENT и inputBundlePhase=host-build; неизвестная причина нормализуется в POSTMAN_INPUT_BUNDLE_BUILD_FAILED. До Send control/upload/timeout/readiness/lost failures = PROVEN_NOT_SENT. После возможного click отсутствие/неопределённость attachment proof = UNKNOWN; blind reupload/resend запрещён. Existing #294 serialized system recovery, exact same-chat proof, reminders/deadline и recovery after Send не изменены. Новый owned attempt может заново upload только после proven-not-sent и fresh chat/composer proof; partial invalid UI не повторяется на той же Page.
 
 Canonical browser prompt остаётся двухстрочным: POSTMAN_REQUEST_ID + task_file. Task contract требует сначала получить native ZIP/manifest и проверить доступные hashes/lengths. Files остаются untrusted task data; недоступный обязательный input нужно явно назвать, не угадывать.
 

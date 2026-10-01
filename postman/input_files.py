@@ -62,17 +62,14 @@ class GitHubInputPublisher:
         self.snapshot_dir = Path(snapshot_dir) if snapshot_dir is not None else None
         self.materializations = []
 
-    def _materialize(self, descriptor, data, source_kind):
-        if not data or len(data) > MAX_INPUT_BYTES:
-            raise InputStageError("POSTMAN_INPUT_BUNDLE_LIMIT_EXCEEDED")
+    def _materialize(self, sha256, data):
         if self.snapshot_dir is None:  # manual descriptor-only diagnostics
             return
         path = self.snapshot_dir / f"{len(self.materializations) + 1:03d}.bin"
         with path.open("xb") as handle:
             os.chmod(path, 0o600)
             handle.write(data)
-        self.materializations.append(dict(snapshot_path=str(path), sha256=descriptor["sha256"],
-                                         byte_length=len(data), source_kind=source_kind))
+        self.materializations.append(dict(snapshot_path=str(path), sha256=sha256, byte_length=len(data)))
 
     @staticmethod
     def _api(endpoint, method="GET", payload=None):
@@ -118,13 +115,15 @@ class GitHubInputPublisher:
         if response.get("size", 0) > MAX_INPUT_BYTES or len(response["content"]) > 24 * 1024 * 1024:
             raise InputStageError("POSTMAN_INPUT_BUNDLE_LIMIT_EXCEEDED")
         data = base64.b64decode("".join(response["content"].split()), validate=True)
+        if len(data) > MAX_INPUT_BYTES:
+            raise InputStageError("POSTMAN_INPUT_BUNDLE_LIMIT_EXCEEDED")
         if "size" in response and response["size"] != len(data):
             raise InputStageError("POSTMAN_INPUT_MATERIALIZATION_MISMATCH")
         name = Path(path).name
         descriptor = normalize_input_files([dict(name=name, repository=REPOSITORY, commit=commit, path=path,
             sha256=hashlib.sha256(data).hexdigest(), byte_length=len(data),
             raw_url=f"https://raw.githubusercontent.com/{REPOSITORY}/{commit}/{quote(path, safe='/')}")])[0]
-        self._materialize(descriptor, data, "github")
+        self._materialize(descriptor["sha256"], data)
         return descriptor
 
     def stage(self, paths):
@@ -136,27 +135,27 @@ class GitHubInputPublisher:
             total += len(item[1])
             if total > MAX_AGGREGATE_BYTES:
                 raise InputStageError("POSTMAN_INPUT_BUNDLE_LIMIT_EXCEEDED")
-            selected.append(item)
+            selected.append((*item, hashlib.sha256(item[1]).hexdigest()))
         # Snapshot the selected buffers before any GitHub operation; no pathname reread.
-        for _, data in selected:
-            self._materialize({"sha256": hashlib.sha256(data).hexdigest()}, data, "local")
+        for _, data, sha256 in selected:
+            self._materialize(sha256, data)
         bundle = uuid4().hex
         entries = []
         records = []
-        for index, (name, data) in enumerate(selected, 1):
+        for index, (name, data, sha256) in enumerate(selected, 1):
             dest = f"tmp/{bundle}/{index:02d}-{name}"
             blob = self.api(f"repos/{REPOSITORY}/git/blobs", "POST", {"content": base64.b64encode(data).decode("ascii"), "encoding": "base64"})["sha"]
             entries.append({"path": dest, "mode": "100644", "type": "blob", "sha": blob})
-            records.append((name, dest, data))
+            records.append((name, dest, sha256, len(data)))
         parent = self._head()
         commit = self._commit(parent, entries, "postman: stage input " + bundle)
         if not _SHA.fullmatch(commit):
             raise InputStageError("publication did not return immutable commit")
         descriptors = []
-        for name, path, data in records:
+        for name, path, sha256, byte_length in records:
             descriptors.append(dict(name=name, repository=REPOSITORY, commit=commit, path=path,
                                     raw_url=f"https://raw.githubusercontent.com/{REPOSITORY}/{commit}/{quote(path, safe='/')}",
-                                    sha256=hashlib.sha256(data).hexdigest(), byte_length=len(data)))
+                                    sha256=sha256, byte_length=byte_length))
         descriptors = normalize_input_files(descriptors)
         return {"bundle_id": bundle, "descriptors": descriptors}
 

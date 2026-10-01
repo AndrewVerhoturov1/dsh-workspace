@@ -119,15 +119,11 @@ def verify_zip(data, request_id, descriptors):
         with zipfile.ZipFile(io.BytesIO(data), "r") as archive:
             infos = archive.infolist()
             names = [i.filename for i in infos]
-            if names != inventory or len(set(names)) != len(names):
+            # Exact generated inventory already rules out duplicate/unsafe names.
+            if names != inventory:
                 fail("BUNDLE_INVALID")
-            for item in infos:
-                mode = item.external_attr >> 16
-                if (item.is_dir() or stat.S_ISLNK(mode) or (stat.S_IFMT(mode) not in {0, stat.S_IFREG})
-                        or "\\" in item.filename or ".." in item.filename or ":" in item.filename
-                        or item.filename.startswith("/") or any(ord(c) < 32 or ord(c) == 127 for c in item.filename)
-                        or item.flag_bits & 1):
-                    fail("BUNDLE_INVALID")
+            if any(item.is_dir() or stat.S_ISLNK(item.external_attr >> 16) or item.flag_bits & 1 for item in infos):
+                fail("BUNDLE_INVALID")
             if infos[0].file_size > MAX_METADATA_BYTES:
                 fail("BUNDLE_INVALID")
             manifest = strict_json(archive.read(MANIFEST), "BUNDLE_INVALID")
@@ -189,7 +185,8 @@ def read_handoff(path, request_id, descriptors):
         fail("BUNDLE_HANDOFF_INVALID")
     attachment = InputAttachment(request_id, bundle, name, item["sha256"], item["byte_length"],
                                  len(descriptors), value["descriptor_set_digest"])
-    verify_zip(attachment.upload_bytes(), request_id, descriptors)
+    # The Host verified ZIP contents once at build; outer hash binds those bytes.
+    attachment.upload_bytes()
     return attachment
 
 
@@ -224,9 +221,9 @@ def build_bundle(request_id, descriptors, materializations, directory):
         handoff_path = directory / "input-handoff.json"
         with handoff_path.open("xb") as handle:
             handle.write(canonical(handoff))
-        read_handoff(handoff_path, request_id, descriptors)
-        return {"handoffPath": str(handoff_path), **InputAttachment(request_id, bundle, bundle.name, digest(data), len(data),
-                len(descriptors), descriptor_digest(descriptors)).metadata()}
+        attachment = InputAttachment(request_id, bundle, bundle.name, handoff["attachment"]["sha256"], len(data),
+                                     len(descriptors), handoff["descriptor_set_digest"])
+        return {"handoffPath": str(handoff_path), **attachment.metadata()}
     except InputBundleError:
         raise
     except (OSError, ValueError, KeyError, TypeError, zipfile.BadZipFile):

@@ -1026,9 +1026,9 @@ def submit_once(
             return _result(SUBMIT_INVALID_CONFIG, ok=False, send_state=guard.state,
                 transitions=transitions, details={"reason": "attachment_chat_changed_before_send"})
         active, _ = find_composer(page)
-        attachment_ready, attachment_proof = attachments.before_send(active, input_attachment)
+        attachment_ready, attachment_proof = attachments.before_send(active, input_attachment, attachment_id)
         exact_prompt, prompt_proof = _exact_prompt_readback(page, prompt)
-        if not attachment_ready or not exact_prompt or (attachment_id and attachment_proof.get("ids") != [attachment_id]):
+        if not attachment_ready or not exact_prompt:
             return _result(attachments.ATTACHMENT_LOST, ok=False, send_state=guard.state,
                            transitions=transitions, details={"attachment": attachment_proof, "prompt": prompt_proof})
     try:

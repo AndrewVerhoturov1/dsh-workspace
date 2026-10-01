@@ -542,12 +542,29 @@ export class DirectPostmanJobManager {
     }
     this.jobs.set(sessionId, job)
 
-    let child
-    try {
-      if (inputFiles.length && transportKind !== 'image') {
+    if (inputFiles.length && transportKind !== 'image') {
+      try {
         job.inputBundle = await this.inputGrants.build(inputBinding, sessionId, requestId, inputFiles)
         args.push('-InputBundleManifest', job.inputBundle.handoffPath)
+      } catch (error) {
+        // Every build failure precedes Direct spawn/publication, including helper
+        // spawn, malformed output and filesystem errors. Never lose this allocated REQ.
+        const message = String(error?.message ?? '')
+        const code = /^POSTMAN_INPUT_[A-Z_]+$/.test(message) ? message : 'POSTMAN_INPUT_BUNDLE_BUILD_FAILED'
+        job.state = 'completed'
+        job.exitCode = -1
+        job.result = { ok: false, code: 'POSTMAN_TRANSPORT_FAILED', requestId,
+          transportCode: code, transportMessage: code,
+          details: { sendState: 'PROVEN_NOT_SENT', inputBundlePhase: 'host-build' } }
+        job.finishedAt = new Date().toISOString()
+        this.finish(job)
+        const wrapped = parseError(code)
+        wrapped.cause = error
+        throw wrapped
       }
+    }
+    let child
+    try {
       child = this.spawn(this.pwsh, args, {
         cwd: workspace,
         windowsHide: true,
@@ -555,18 +572,6 @@ export class DirectPostmanJobManager {
       })
     } catch (error) {
       job.inputBundle?.cleanup()
-      if (/^POSTMAN_INPUT_[A-Z_]+$/.test(String(error?.message ?? ''))) {
-        // Host build rejected before Direct spawn/publication. Keep correlated evidence
-        // for the Bridge status reader, instead of turning proven-unsent into NO_JOB.
-        job.state = 'completed'
-        job.exitCode = -1
-        job.result = { ok: false, code: 'POSTMAN_TRANSPORT_FAILED', requestId,
-          transportCode: error.message, transportMessage: error.message,
-          details: { sendState: 'PROVEN_NOT_SENT', inputBundlePhase: 'host-build' } }
-        job.finishedAt = new Date().toISOString()
-        this.finish(job)
-        throw error
-      }
       this.jobs.delete(sessionId)
       const wrapped = parseError('POSTMAN_INVOCATION_NOT_STARTED')
       wrapped.cause = error

@@ -17,7 +17,7 @@ function privateResult(root = mkdtempSync(join(tmpdir(), 'postman-grant-test-'))
   const path = join(root, '001.bin')
   writeFileSync(path, 'PNG-bytes')
   return { snapshotRoot: root, descriptors: [file], materializations: [{ snapshot_path: path,
-    sha256: file.sha256, byte_length: file.byte_length, source_kind: 'local' }] }
+    sha256: file.sha256, byte_length: file.byte_length }] }
 }
 function fixture(preset = 'postman-leader') {
   const agent = { id: 'leader', session: { header: { agentPreset: preset, delegationDepth: 0 } } }
@@ -174,13 +174,9 @@ test('actual Bridge job pins exact child and releases binding at child disposal'
   assert.equal(existsSync(result.snapshotRoot), false)
 })
 
-test('modified snapshots fail admission and later bundle verification', async () => {
+test('snapshot hash is checked once at build after exact grant admission', async () => {
   const grants = new PostmanInputGrants(), agent = { id: 'mismatch-leader' }, context = {}
   const result = privateResult()
-  writeFileSync(result.materializations[0].snapshot_path, 'WRONG!!!!')
-  assert.throws(() => grants.record(agent, context, result), /MATERIALIZATION_MISMATCH/)
-  assert.equal(grants.owns(agent, context, [file]), false)
-  writeFileSync(result.materializations[0].snapshot_path, 'PNG-bytes')
   grants.record(agent, context, result)
   const binding = grants.pin(agent, context, [file]), child = { id: 'mismatch-child' }
   grants.bindChild(binding, agent, context, child)

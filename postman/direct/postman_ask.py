@@ -229,10 +229,11 @@ class DirectPostmanAsk:
             kwargs["input_files"] = inputs
             if inputs or input_bundle_manifest:
                 attachment = input_bundle.read_handoff(input_bundle_manifest, kwargs["request_id"], inputs)
-            return self._run(input_attachment=attachment, **kwargs)
         except input_bundle.InputBundleError as exc:
             raise DirectPostmanError(exc.code, str(exc), details={"sendState": "PROVEN_NOT_SENT",
-                "inputBundlePhase": "direct-handoff" if attachment is None else "direct-pre-upload"}) from exc
+                "inputBundlePhase": "direct-handoff"}) from exc
+        try:
+            return self._run(input_attachment=attachment, **kwargs)
         finally:
             if attachment is not None:
                 for path in (attachment.path, Path(input_bundle_manifest)):
@@ -341,8 +342,6 @@ class DirectPostmanAsk:
 
         bridge = self.bridge_factory(root=self.direct_root.parent)
         self._write_state(request_id, STATE_WEB_RUNNING, **conversation_fields)
-        if input_attachment:
-            input_attachment.upload_bytes()
         result = bridge.run_request(
             request_id,
             **({"input_attachment": input_attachment} if input_attachment else {}),

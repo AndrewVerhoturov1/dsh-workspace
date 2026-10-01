@@ -178,11 +178,13 @@ class InputAttachmentTests(unittest.TestCase):
         self.assertFalse(details["exactUserTurn"])
 
     def test_file_id_must_stay_the_same_when_dom_exposes_it(self):
-        page = ZipPage(); page.upload_result = proof(file_id="file-authorized")
-        page.sent_result = proof(file_id="different-file")
-        result = self.run_submit(page)
-        self.assertFalse(result["ok"])
-        self.assertEqual(result["sendState"], submit.SEND_UNKNOWN)
+        for sent_id in ["different-file", "file-authorized", ""]:
+            with self.subTest(sent_id=sent_id):
+                page = ZipPage(); page.upload_result = proof(file_id="file-authorized")
+                page.sent_result = proof(file_id=sent_id)
+                result = self.run_submit(page)
+                self.assertEqual(result["ok"], sent_id != "different-file")
+                self.assertEqual(result["sendState"], submit.SEND_UNKNOWN if sent_id == "different-file" else submit.SEND_PROVEN_SENT)
 
     def test_modified_bundle_before_native_payload_no_send(self):
         with patch.object(Attachment, 'upload_bytes', side_effect=input_bundle.InputBundleError("POSTMAN_INPUT_BUNDLE_CONTENT_MISMATCH")):
@@ -245,6 +247,13 @@ const container=node({},[card]);
 const root=node();root.querySelectorAll=selector=>selector.includes('composer-attachments')?[container]:empty;
 const proof=extract(root,{name,sent:false});
 if(!proof.known||proof.count!==1||proof.names[0]!==name||proof.pending||proof.error)throw Error(JSON.stringify(proof));
+// Live settled filename button provides aria-label but no title/data-filename.
+const filenameButton=node({'aria-label':name});
+const ariaCard=node({'data-upload-state':'ready'},[filenameButton]);
+ariaCard.card=true;ariaCard.querySelectorAll=selector=>selector==='button[aria-label]'?[filenameButton]:empty;
+container.children=[ariaCard];
+const ariaProof=extract(root,{name,sent:false});
+if(!ariaProof.known||ariaProof.names[0]!==name||!ariaProof.settled)throw Error(JSON.stringify(ariaProof));
 container.children=[leaf];container.querySelectorAll=selector=>selector==='*'?[leaf]:empty;
 const textOnly=extract(root,{name,sent:false});if(textOnly.known)throw Error('text must not prove attachment');
 // Same-turn scope containing multiple bubbles is rejected, no previous-turn borrowing.

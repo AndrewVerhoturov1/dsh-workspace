@@ -56,32 +56,30 @@ _PROOF_JS = r"""
         [...e.querySelectorAll('button[aria-label]')].some(b => /^(Remove|Удалить) /i.test(b.getAttribute('aria-label') || '')))
     : [];
   const observedSentCards = options.sent
-    ? [...scope.querySelectorAll('button[aria-label][aria-busy]')].filter(b =>
+    ? [...scope.querySelectorAll('button[aria-label]')].filter(b =>
         !b.closest('[data-user-message-bubble="true"]') &&
         [...b.parentElement.querySelectorAll('[title]')].some(n => n.getAttribute('title') === b.getAttribute('aria-label')))
         .map(b => b.parentElement)
     : [];
   const candidates = [...new Set([...observedPreCards, ...observedSentCards,
-    ...scope.querySelectorAll('[data-testid="file-upload-preview"],[data-testid="attachment"],[data-file-id]')])].filter(visible);
+    ...scope.querySelectorAll('[data-testid="file-upload-preview"]')])].filter(visible);
   const cards = candidates.filter(e => !candidates.some(parent => parent !== e && parent.contains(e)));
   const names = cards.map(e => {
     const named = e.querySelector('[data-testid="file-name"],[data-filename]');
     return e.getAttribute('data-filename') || named?.getAttribute('data-filename') ||
       named?.textContent?.trim() ||
       [...e.querySelectorAll('[title]')].map(n => n.getAttribute('title')).find(title => title === options.name) ||
-      [...e.querySelectorAll('*')].filter(n => !n.children.length).map(n => n.textContent.trim())
-        .find(text => text === options.name) || '';
+      [...e.querySelectorAll('button[aria-label]')].map(b => b.getAttribute('aria-label')).find(label => label === options.name) || '';
   });
   const pending = [...scope.querySelectorAll('[role="progressbar"],progress,[aria-busy="true"],[data-upload-state="pending"],[data-upload-state="uploading"]')].some(visible);
   const error = [...scope.querySelectorAll('[role="alert"],[data-upload-state="error"],[data-testid="upload-error"]')].some(visible) ||
     (!options.sent && /upload failed|could not upload|unable to upload|ошибка|не удалось/i.test(scope.innerText || ''));
-  const settled = cards.length === 1 && (cards[0].getAttribute('data-upload-state') === 'ready' ||
-    [...cards[0].querySelectorAll(options.sent ? 'button[aria-label][aria-busy="false"]' : 'button[aria-label]')].some(b =>
+  const settled = cards.length === 1 && (options.sent || cards[0].getAttribute('data-upload-state') === 'ready' ||
+    [...cards[0].querySelectorAll('button[aria-label]')].some(b =>
       b.getAttribute('aria-label') === options.name && b.getAttribute('aria-busy') !== 'true' && !b.disabled));
   const ids = cards.map(e => e.getAttribute('data-file-id') || '');
   // A file-card is required. Text that merely mentions the filename is not proof.
-  const preInventory = options.sent || [...scope.querySelectorAll(':scope > * > *')].filter(visible).length === cards.length;
-  return {known:cards.length > 0 && preInventory, count:cards.length, names, ids, pending, error, settled};
+  return {known:cards.length > 0, count:cards.length, names, ids, pending, error, settled};
 }
 """
 
@@ -99,7 +97,7 @@ def snapshot(root, name, *, sent=False):
 def ready(proof, name, expected_id=None):
     return (proof.get("known") is True and proof.get("count") == 1 and proof.get("names") == [name]
             and proof.get("pending") is False and proof.get("error") is False and proof.get("settled") is True
-            and (not expected_id or proof.get("ids") == [expected_id]))
+            and (not expected_id or not any(proof.get("ids", [])) or proof.get("ids") == [expected_id]))
 
 
 def composer_scope(composer):
@@ -151,7 +149,7 @@ def upload(page, composer, attachment, *, timeout_ms, wait_until):
     return {"ok": True, "code": ATTACHMENT_READY_CONFIRMED, "details": proof}
 
 
-def before_send(composer, attachment):
+def before_send(composer, attachment, expected_id=None):
     scope = composer_scope(composer)
     proof = snapshot(scope, attachment.name) if scope is not None else {"known": False}
-    return ready(proof, attachment.name), proof
+    return ready(proof, attachment.name, expected_id), proof
