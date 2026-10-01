@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { postmanInputGrants } from './postman-input-files.js'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { buildPostmanBridgeStartRequest, isTopLevelPostmanSupervisor, POSTMAN_BRIDGE_PROVIDER,
   settleTrustedPostmanStatus } from './postman-bridge-core.js'
@@ -100,6 +101,8 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
         Promise.resolve(run.result).catch(() => undefined)
         return { status: 'POSTMAN_BRIDGE_CHILD_UNAVAILABLE' }
       }
+      if (job.inputBinding && !postmanInputGrants.bindChild(job.inputBinding, parent, job.taskContext, child))
+        return { status: 'POSTMAN_INPUT_PROVENANCE_REJECTED' }
       job.state = 'RUNNING'
       let childStopReason = 'error'
       let childDiagnostic
@@ -118,7 +121,11 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     } finally {
       // A failed cleanup must not be reported as clean completion or release early.
       try { await run.dispose() }
-      finally { contexts?.releaseChild(job.childSessionId) }
+      finally {
+        contexts?.releaseChild(job.childSessionId)
+        postmanInputGrants.unpin(job.inputBinding)
+        delete job.inputBinding
+      }
     }
     // Coordinator releases its slot when this cleaned terminal is returned.
     return terminal
@@ -159,7 +166,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     }
   }
 
-  function accept(parent, message, transportKind) {
+  function accept(parent, message, transportKind, inputBinding) {
     const taskContext = contexts?.get(parent.id)
     if (contexts && !taskContext) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
     if (typeof contexts?.isRestoring === 'function' && contexts.isRestoring(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
@@ -167,7 +174,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     if (disposed) return { status: 'POSTMAN_BRIDGE_UNAVAILABLE' }
     const job = {
       bridgeJobId: randomUUID(), parentSessionId: parent.id, taskContext, transportKind, state: 'QUEUED',
-      createdAt: new Date().toISOString(), controller: new AbortController(),
+      createdAt: new Date().toISOString(), controller: new AbortController(), inputBinding,
       notification: 'PENDING',
     }
     if (typeof contexts?.changeRecord !== 'function') {
@@ -231,9 +238,11 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
       result.publicationReceipt === undefined && result.requestId === terminal.requestId &&
       typeof result.transportMessage === 'string' && result.transportMessage.length > 0 &&
       result.details !== null && typeof result.details === 'object' && !Array.isArray(result.details) &&
-      ['DIRECT_INVALID_TASK', 'DIRECT_RESULT_ROOT_UNAVAILABLE',
+      (['DIRECT_INVALID_TASK', 'DIRECT_RESULT_ROOT_UNAVAILABLE',
         'DIRECT_INVALID_CONTINUATION', 'POSTMAN_AUTOMATIC_CONTINUATION_LIMIT_REACHED']
-        .includes(result.transportCode)
+        .includes(result.transportCode) ||
+        (result.details.sendState === 'PROVEN_NOT_SENT' && ['host-build', 'direct-handoff'].includes(result.details.inputBundlePhase) &&
+          /^POSTMAN_INPUT_[A-Z_]+$/.test(result.transportCode)))
   }
 
   function publicationOf(terminal) {
@@ -339,6 +348,8 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
             })
           } catch (error) { job.state = 'FAILED'; job.diagnostic = diagnostic(error) }
         }
+        postmanInputGrants.unpin(job.inputBinding)
+        delete job.inputBinding
         job.finishedAt = new Date().toISOString()
         notify(job)
       })
