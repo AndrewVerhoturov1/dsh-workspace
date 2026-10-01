@@ -9,7 +9,7 @@
 // This module is deliberately data-only. ptc-adapter.js is responsible for
 // injecting the text into the system prompt of an authorized Postman PTC agent.
 
-export const POSTMAN_PTC_DISCIPLINE_VERSION = 1
+export const POSTMAN_PTC_DISCIPLINE_VERSION = 2
 
 export const POSTMAN_PTC_DISCIPLINE = String.raw`
 # Postman PTC programming discipline
@@ -114,7 +114,10 @@ Preferred pattern:
 3. select the next deterministic action;
 4. continue in the same program.
 
-Use ptc.expectStatus(...) when available.
+Use ptc.expectStatus(...) when available. List ALL known outcomes whose next action
+is deterministic, including non-success statuses such as
+POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT; branch on them inside PTC rather than
+throwing just because the result is not a success. Unknown outcomes still stop.
 
 Never continue on an unknown status by guessing what it means.
 
@@ -179,6 +182,15 @@ large tool data
 -> model
 
 Do not return entire documents merely because they were read.
+
+Before every read/re-read ask: "Is this unchanged source already present in the
+current model context in sufficient detail?" Re-read only if it changed, the prior
+read was truncated/incomplete, the needed range was not read, or previously reduced
+evidence is insufficient for a genuinely new question. Do not create a persistent cache.
+
+mapTextFiles is mechanical reduction, not a raw reader: returning the original full
+text directly or as a direct result field is rejected. Use readMany when complete
+raw files are genuinely needed by the model.
 
 For large text work:
 
@@ -261,6 +273,15 @@ knew before the PTC program started.
 
 ## 11. Worker mutation pattern
 
+Worker PTC-first is mandatory when ptc_execute is available: read/glob/grep/
+web_fetch/web_search/write/edit MUST run through PTC; Host rejects model-direct
+calls. Put the first safe mechanical phase in ONE PTC program. Do not use shell
+to bypass PTC-first for these filesystem/search operations. Shell is for commands,
+tests, processes and operations absent from the Worker PTC profile. Keep FYI and
+progress for the substantive report. notify_parent is only for a decision needed
+now, with exact NEEDS_LEADER_GUIDANCE: prefix, evidence and exact decision; then
+report the blocker and stop tools until the Leader decides.
+
 For an authorized Postman Worker, a typical PTC mutation sequence may be:
 
 model
@@ -335,13 +356,17 @@ The runtime should resume the model when the real event arrives.
 
 ## 15. Automatic yield after successful dispatch
 
-When ptc_execute exposes yield_on_success, use it when and only when:
+For Leader, boundary: external_event automatically concludes the turn after a safe
+successful program with an exact accepted event producer: postman_worker,
+postman_worker_interrupt, or postman_bridge. yield_on_success is compatibility
+only; omission or false does not disable this Host rule. postman_task_prepare alone
+is NOT an event producer and does not conclude the turn.
 
-- boundary is external_event;
-- the PTC program completed successfully;
-- all required acceptance/status checks passed;
-- there is no pending or unknown effect;
-- there is no remaining independent supervisor work that should happen before waiting.
+Host still requires ok without cleanup error, abort, revoked authority,
+needsModelDecision:true, failed/pending/unknown/unsettled effects or refused/unknown
+acceptance; all nested calls must be completed. Include remaining independent
+supervisor work before waiting. No separate model decision or postman_yield call
+is needed after a safe accepted dispatch.
 
 This eliminates the wasteful sequence:
 

@@ -78,7 +78,7 @@ test('PTC automatic conclusion preserves real events queued during dispatch and 
     const f = loop(['user'], async (agent, count) => {
       if (count > 1) return { kind: 'completed' }
       const result = await ctx.tools.execute({ callId:'ptc',name:'ptc_execute',agent,signal:agent.phase.abort.signal,
-        arguments:{description:'Dispatch and wait for real event',boundary:'external_event',yield_on_success:true,
+        arguments:{description:'Dispatch and wait for real event',boundary:'external_event',
           program:"ptc.expectStatus(await tools.postman_task_prepare({}),['TASK_CONTEXT_READY']); const w=ptc.expectStatus(await tools.postman_worker({}),['POSTMAN_WORKER_TASK_ACCEPTED']); return {workerSessionId:w.workerSessionId}"} })
       assert.equal(result.value.status,'ok',JSON.stringify(result.value))
       return result.concludesTurn ? { kind:'completed' } : null

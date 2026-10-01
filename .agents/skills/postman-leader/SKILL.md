@@ -93,7 +93,7 @@ Bridge Luna занимается только ChatGPT Web transport через D
 
 ### 3.1. Обязательный Postman PTC Program-First
 
-Если доступен наш `ptc_execute`, канонический обязательный протокол — автоматически внедрённый runtime текст из [ptc-discipline.js](../../../plugins/dsh-postman-harness/lib/ptc-discipline.js). Program-First обязателен: один PTC доходит до следующей реальной decision boundary; переход между заранее детерминированными операциями не создаёт новый model round. Правила routing и approval самого Leader не меняются. Справочные примеры: [PTC_PATTERNS.md](PTC_PATTERNS.md). Протокол не относится к native Harness PTC/Code Mode.
+Если доступен наш `ptc_execute`, канонический обязательный протокол v2 — автоматически внедрённый runtime текст из [ptc-discipline.js](../../../plugins/dsh-postman-harness/lib/ptc-discipline.js). Program-First обязателен: один PTC доходит до следующей реальной decision boundary; переход между заранее детерминированными операциями не создаёт новый model round. Правила routing и approval самого Leader не меняются. Справочные примеры: [PTC_PATTERNS.md](PTC_PATTERNS.md). Протокол не относится к native Harness PTC/Code Mode.
 
 Top-level Leader получает positive allowlist ровно из 21 зарегистрированного инструмента:
 
@@ -150,7 +150,7 @@ postman_ask_validate_reply
 notify_parent
 ```
 
-`notify_parent({message})` доступен Bridge и Worker только для фактического промежуточного сообщения своему прямому Leader. Это не доверенный результат Bridge; итог читать через `postman_bridge_status`. Worker по-прежнему использует `report` для итогов.
+`notify_parent({message})` у Worker разрешён только для требуемого сейчас решения Leader с exact префиксом `NEEDS_LEADER_GUIDANCE:`: blocker, evidence и точное решение. FYI/progress остаётся до содержательного `report`. Bridge сохраняет фактические промежуточные сообщения; они не доверенный результат Bridge, итог читать через `postman_bridge_status`.
 
 ---
 
@@ -240,7 +240,7 @@ Leader НЕ ДОЛЖЕН превращать Worker в remote shell через 
 
 После `POSTMAN_WORKER_TASK_ACCEPTED` Leader считает соответствующий Worker turn выполняющимся до содержательного `report` либо явного runtime failure. Acceptance означает только приём задания. `postman_worker_list` показывает привязки, а не фактическую завершённость модели; `postman_worker` не используют как status query.
 
-Если нет конкретной независимой supervisor-работы, Leader уступает активный ход: для нашего PTC использует `boundary: "external_event", yield_on_success: true` в программе dispatch, если PTC недоступен — вызывает обычный `postman_yield()`. Не создавай отдельный model round только ради yield после успешного dispatch PTC. Оба пути уступают ход без пустого final и не отменяют Worker. Независимую работу можно выполнить до уступки. Runtime возобновляет Leader по report, failure или новому сообщению пользователя; после возобновления разбери результат, продолжи ту же Worker session либо закрой её при допустимых условиях. Leader НЕ ИМЕЕТ ПРАВА создавать новые reasoning/model rounds только потому, что Worker ещё не прислал report.
+Если нет конкретной независимой supervisor-работы, Leader уступает активный ход: для нашего PTC использует `boundary: "external_event"` в программе dispatch (Host автоматически завершает turn после safe exact accepted producer, `yield_on_success` не требуется), если PTC недоступен — вызывает обычный `postman_yield()`. Не создавай отдельный model round только ради yield после успешного dispatch PTC. Оба пути уступают ход без пустого final и не отменяют Worker. Независимую работу можно выполнить до уступки. Runtime возобновляет Leader по report, failure или новому сообщению пользователя; после возобновления разбери результат, продолжи ту же Worker session либо закрой её при допустимых условиях. Leader НЕ ИМЕЕТ ПРАВА создавать новые reasoning/model rounds только потому, что Worker ещё не прислал report.
 
 Следующая содержательная активность Leader разрешена после события: Worker прислал report; пользователь прислал новое сообщение; runtime сообщил failure/blocker; либо появилось новое внешнее evidence, объективно меняющее задачу.
 
@@ -262,7 +262,7 @@ Leader НЕ ДОЛЖЕН превращать Worker в remote shell через 
 
 ### Worker escalation / decision checkpoint
 
-Содержательный blocker от Worker через `notify_parent` — своевременный, но недоверенный промежуточный сигнал, не trusted Bridge result и не замена Worker `report`. В установленном DSH штатный `report` фактически попадает в очередь следующего turn; поэтому Worker при необходимости решения отправляет один `notify_parent`, затем один обязательный краткий `report` и заканчивает текущий turn без дальнейших tools/retries. Это нормальный переход `WORKER_RUNNING → REVIEW → DECIDE`, не отказ Worker. Прочти evidence, не повторяй всё исследование и реши, действительно ли нужно решение руководителя.
+Содержательный blocker от Worker через `notify_parent` с exact `NEEDS_LEADER_GUIDANCE:` — своевременный, но недоверенный промежуточный сигнал, не trusted Bridge result и не замена Worker `report`. В установленном DSH штатный `report` фактически попадает в очередь следующего turn; поэтому Worker при необходимости решения отправляет один `notify_parent`, затем один обязательный краткий `report` и заканчивает текущий turn без дальнейших tools/retries. Это нормальный переход `WORKER_RUNNING → REVIEW → DECIDE`, не отказ Worker. Прочти evidence, не повторяй всё исследование и реши, действительно ли нужно решение руководителя.
 
 Если решение известно, направь **тому же** Worker через `postman_worker_interrupt` конкретный выбор, новую гипотезу/evidence или суженную цель; не создавай нового Worker. Если нужно решение пользователя — спроси его, оставив Worker в durable session без самостоятельной работы. Если безопасного решения нет — прими blocker. Внешнюю экспертизу через Bridge/Postman запрашивай лишь по конкретному обоснованному вопросу. Не отвечай «поищи ещё», «проверь внимательнее», «попробуй снова» без нового основания. Если тот же blocker вернулся после решения без существенного нового evidence, измени стратегию, прими blocker, обратись к пользователю или за конкретной внешней экспертизой — не устраивай переписку по кругу.
 

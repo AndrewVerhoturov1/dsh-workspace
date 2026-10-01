@@ -119,6 +119,10 @@ const READ_HELPERS = `
     for (const filePath of options.files.slice()) {
       const text = await api.readAllText(readOptions(options, filePath))
       const result = await mapper({ file_path: filePath, text })
+      if (name === 'ptc.mapTextFiles' && (result === text ||
+          (result && typeof result === 'object' && Object.values(result).some(value => value === text)))) {
+        throw new Error('ptc.mapTextFiles must reduce text, not retain the full source text; use ptc.readMany for raw files')
+      }
       bytes += api.jsonBytes(result) + (results.length ? 1 : 0)
       if (bytes > maxTotal) throw new Error(name + ' max_total_bytes exceeded; read large internally, return compact (use mapTextFiles)')
       results.push(result)
