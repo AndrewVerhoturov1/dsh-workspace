@@ -48,6 +48,51 @@ class ControlTests(unittest.TestCase):
                                                 {'matchedText': 'Connection interrupted', 'candidateCount': 1}))
         self.assertEqual(self.control.active['kind'], SIGNAL)
         self.assertEqual(self.control.journal[-1]['event'], 'SYSTEM_SIGNAL_DEFERRED')
+    def test_deferred_confirmation_keeps_time_but_starts_only_after_release(self):
+        self.t = 3590
+        current = self.candidate()
+        self.control.begin_recovery(SIGNAL, current)
+        connection = observer.ASSISTANT_CONNECTION_INTERRUPTED
+        self.t = 3599.9
+        self.assertIsNone(self.control.candidate(connection, True,
+                                                {'matchedText': 'Connection interrupted', 'candidateCount': 1}))
+        episode = self.control.banners[connection]
+        deferred = episode['eventId']
+        self.assertEqual(episode['eventConfirmedAt'], 3599.9)
+        self.assertFalse(self.control.begin_recovery(connection, deferred))
+        self.assertEqual(self.control.active['eventId'], current)
+        self.t = 3600.1
+        self.control.finish_recovery(connection, status='ABORTED', reason='serial_handoff')
+        self.assertTrue(self.control.begin_recovery(connection, deferred))
+        self.assertEqual(self.control.active['deadline'], 3645)
+        terminal = next(e for e in self.control.journal if e['event'] == 'RECOVERY_ABORTED')
+        started = self.control.journal[-1]
+        self.assertEqual(started['event'], 'RECOVERY_STARTED')
+        self.assertLess(terminal['sequence'], started['sequence'])
+        self.assertEqual(self.control.soft_deadline, 3600)
+
+    def test_deferred_weak_signal_requires_second_poll_and_absence_rearms(self):
+        self.control.begin_recovery(SIGNAL, self.candidate())
+        connection = observer.ASSISTANT_CONNECTION_INTERRUPTED
+        evidence = {'candidateCount': 1, 'matchedText': 'Connection interrupted', 'confidence': 'weak'}
+        self.t = 20
+        self.assertIsNone(self.control.candidate(connection, False, evidence))
+        episode = self.control.banners[connection]
+        self.assertFalse(episode['confirmed'])
+        self.t = 21
+        self.assertIsNone(self.control.candidate(connection, False, evidence))
+        self.assertTrue(episode['confirmed'])
+        self.assertEqual(episode['eventConfirmedAt'], 21)
+        self.assertFalse(self.control.begin_recovery(connection, episode['eventId']))
+        self.control.candidate(connection, False, {})
+        self.control.finish_recovery('ready')
+        self.assertFalse(self.control.begin_recovery(connection, episode['eventId']))
+        self.assertIsNone(self.control.candidate(connection, False, evidence))
+        self.t = 22
+        next_event = self.control.candidate(connection, False, evidence)
+        self.assertTrue(self.control.begin_recovery(connection, next_event))
+        self.assertEqual(episode['number'], 2)
+
     def test_recovery_crosses_one_checkpoint_and_future_slots_remain(self):
         self.control.slot_status(1, 'SENT')
         self.t = 19*60 + 58

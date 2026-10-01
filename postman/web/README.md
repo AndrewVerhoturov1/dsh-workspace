@@ -106,6 +106,10 @@ Strong и weak interruption evidence оба блокируют recovery READY д
 `system_recovery.py` обрабатывает Additional Processing: Stop-if-present один раз (ABSENT/UNKNOWN
 не требуют повторного click) → один reload → обязательный same-chat/lineage re-proof →
 random uniform wait 10–17 секунд → re-proof → natural continuation через safe Send.
+Connection interrupted на границе этого flow передаёт управление последовательно:
+result-first scan → fresh same-chat/lineage/empty-composer proof → RECOVERY_ABORTED
+(reason=serial_handoff) → existing Connection recovery. Pending event сохраняет время
+confirmation; нет параллельного flow, повторного Stop/Send или нового deadline.
 `transport_control.py` сериализует фазы и banner episodes: одно непрерывное появление = один event,
 исчезновение rearm-ит detector, второе событие не накладывает новый flow поверх active recovery.
 Reload/control cycle bounded 180 секундами; soft deadline 60 минут. Confirmation timestamp

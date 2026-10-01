@@ -940,6 +940,42 @@ class WebWorkerBridge:
                                     return outcome
                     return {"kind": "no_result"}
 
+                def handoff_connection():
+                    nonlocal pending_control, next_result_recheck
+                    if not control.active or control.active["kind"] != browser_observer.ADDITIONAL_PROCESSING:
+                        return {"kind": "no_handoff"}
+                    latest = watched_turns[-1]
+                    def proof():
+                        return browser_recovery.chat_ready_snapshot(
+                            page, chat_url, str(latest["prompt"]), original_prompt=prompt,
+                            anchor_binding=latest.get("anchorBinding"), allow_interrupted=True)
+                    ready = proof()
+                    details = ready.get("details", {})
+                    if not ready.get("ok") or not details.get("interruptionEvidencePresent"):
+                        return {"kind": "no_handoff"}
+                    connection = browser_observer.ASSISTANT_CONNECTION_INTERRUPTED
+                    # Preserve confirmation time while the current flow still owns control.
+                    control.candidate(connection, details.get("connectionInterrupted", False),
+                                      details.get("interruption", {}))
+                    clear_observer_proofs()
+                    scanned = scan_watches(skip_latest_missing=False)
+                    if scanned["kind"] in {"terminal", "fatal"}:
+                        return scanned
+                    # Observation may have changed the DOM: never hand off a stale proof.
+                    ready = proof()
+                    if not ready.get("ok"):
+                        return {"kind": "no_handoff"}
+                    if not ready.get("details", {}).get("interruptionEvidencePresent"):
+                        return {"kind": "recovered", "result": ready}
+                    control.finish_recovery(connection, status="ABORTED",
+                                            reason="serial_handoff", nextKind=connection)
+                    event_id = control.banners.get(connection, {}).get("eventId")
+                    if control.can_begin_recovery(connection, event_id):
+                        pending_control = (connection, event_id)
+                    next_result_recheck = self.monotonic()
+                    waiting_state()
+                    return {"kind": "handoff"}
+
                 self._write_state(
                     request,
                     WAITING_ASSISTANT,
@@ -1030,6 +1066,15 @@ class WebWorkerBridge:
                         last_recovery = {**recovered, "eventId": event_id, "kind": kind}
                         control.consume_slots()
                         waiting_state()
+                        if recovered.get("code") != browser_recovery.RECOVERY_INVALID_CONFIG:
+                            handed = handoff_connection()
+                            if handed["kind"] in {"terminal", "fatal"}:
+                                return handed["result"]
+                            if handed["kind"] == "handoff":
+                                continue
+                            if handed["kind"] == "recovered":
+                                recovered = handed["result"]
+                                last_recovery = {**recovered, "eventId": event_id, "kind": kind}
                         if not recovered.get("ok"):
                             if (kind == browser_observer.ASSISTANT_CONNECTION_INTERRUPTED
                                     and recovered.get("recoverable")):
@@ -1077,6 +1122,12 @@ class WebWorkerBridge:
                                     return self._fail(request, "system continuation send UNKNOWN; no resend", details=control.snapshot())
                                 elif not sent.get("details", {}).get("unsentPromptCleared"):
                                     return self._fail(request, "system continuation unsafe unsent outcome", details=control.snapshot())
+                                else:
+                                    handed = handoff_connection()
+                                    if handed["kind"] in {"terminal", "fatal"}:
+                                        return handed["result"]
+                                    if handed["kind"] == "handoff":
+                                        continue
                                 if remaining_ms() > 0:
                                     scanned = scan_watches(skip_latest_missing=False)
                                     if scanned["kind"] in {"terminal", "fatal"}:

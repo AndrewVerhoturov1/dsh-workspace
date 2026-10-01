@@ -12,7 +12,7 @@
 
 - **Что изменилось:** weak interruption блокирует recovery READY; exhaustion reload переводит connection flow в пассивное CONNECTION_WAITING без F5/reminders. Grace привязан к confirmation timestamp, terminal journal различает COMPLETED/FAILED/ABORTED.
 - **Почему:** прежняя проверка могла принять остающийся weak banner за готовый UI, завершить REQ раньше deadline и потерять pending recovery на границе soft timeout; cleanup ошибочно журналировал success.
-- **Результат:** production Chromium regressions покрывают остающийся weak banner, exhaustion/disappearance/timeout/re-arm/result priority, поздний observer return и Send UNKNOWN без duplicate click. Общие safety guards сохранены.
+- **Результат:** production Chromium regressions покрывают остающийся weak banner, exhaustion/disappearance/timeout/re-arm/result priority, поздний observer return и Send UNKNOWN без duplicate click. Дополнительная правка serial handoff закрывает Additional Processing как ABORTED перед Connection recovery при interruption на границе wait/Send; result-first, fresh lineage/composer proof, weak confirmation и deadline сохранены. Общие safety guards сохранены.
 
 ### 2026-10-01 — Reminders и системный Web recovery сериализованы
 

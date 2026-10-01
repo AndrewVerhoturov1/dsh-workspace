@@ -308,11 +308,19 @@ Flow: `ADDITIONAL_PROCESSING → SYSTEM_STOP → SYSTEM_RELOAD → SYSTEM_CHAT_R
 повторного Stop-click нет. Затем один reload exact chat и обязательный same-chat/original
 lineage/composer re-proof, случайное равномерное ожидание 10–17 секунд и повторный proof.
 Если результат уже готов или final latched, continuation не отправляется.
+Если при post-reload/post-wait proof или safe-send suppression обнаружен Connection
+interrupted, результат проверяется первым, затем заново доказываются exact chat, lineage
+и пустой composer. Additional Processing закрывается как RECOVERY_ABORTED с
+reason=serial_handoff; Connection recovery запускается следующей итерацией через
+существующий pending event, без второго active flow, повторного Stop или continuation.
+После вставки handoff разрешён лишь при доказанной очистке unsent текста; Send UNKNOWN
+и потеря lineage остаются fail-closed. Strong/weak подтверждение и общий deadline не меняются.
 
 Одно непрерывное появление каждого banner — один event с request-bound identity.
 Пока он присутствует, повторный recovery не запускается. Исчезновение при обычном
 наблюдении rearm-ит detector; новое появление создаёт новый event. Сигналы внутри активного
-flow диагностируются, но не запускают второй сценарий. Малого request-wide лимита
+flow диагностируются и сохраняют confirmation timestamp другого episode, но не запускают
+второй сценарий до освобождения active flow. Малого request-wide лимита
 на реальные новые Additional Processing events нет. Активный reload/control cycle bounded
 180 секундами; пассивное CONNECTION_WAITING не продлевает общий request deadline.
 

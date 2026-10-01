@@ -320,6 +320,174 @@ class TransportDomTests(unittest.TestCase):
         phases = [e['phase'] for e in events if e['event']=='STATE_TRANSITION']
         for phase in ('ADDITIONAL_PROCESSING','SYSTEM_STOP','SYSTEM_RELOAD','SYSTEM_CHAT_REPROOF','SYSTEM_WAIT','SYSTEM_CONTINUE'):
             self.assertIn(phase, phases)
+    def test_bridge_connection_during_system_wait_hands_off_serially(self):
+        self.set_html(document(banner='<div role="status">Additional processing</div>', stop=True))
+        shown = [False]
+        def sleep(seconds):
+            self.clock.sleep(seconds)
+            if seconds == 10 and not shown[0]:
+                shown[0] = True
+                self.set_html(document(banner='<div role="alert">Connection interrupted</div>'))
+                self.route_body = document(turns=group(body=final(self.envelope())))
+        with patch.object(self.page, 'reload', wraps=self.page.reload) as reload, patch.object(
+                artifact_download, 'download_validated_artifact', return_value={
+                    'ok': True, 'code': artifact_download.RESULT_DURABLE, 'details': {}}):
+            result, state = self.run_bridge(interval_ms=5000, count=4, sleep=sleep)
+        self.assertTrue(result['ok'], result)
+        self.assertEqual(reload.call_count, 2)
+        events = state['transportEventJournal']
+        started = [e for e in events if e['event'] == 'RECOVERY_STARTED']
+        self.assertEqual([e['kind'] for e in started],
+                         [observer.ADDITIONAL_PROCESSING, observer.ASSISTANT_CONNECTION_INTERRUPTED])
+        aborted = next(e for e in events if e['event'] == 'RECOVERY_ABORTED'
+                       and e['eventId'] == started[0]['eventId'])
+        self.assertEqual(aborted['reason'], 'serial_handoff')
+        self.assertEqual(aborted['nextKind'], observer.ASSISTANT_CONNECTION_INTERRUPTED)
+        self.assertLess(aborted['sequence'], started[1]['sequence'])
+        self.assertNotIn('RECOVERY_FAILED', [e['event'] for e in events])
+        self.assertNotIn('CONTINUATION_SELECTED', [e['event'] for e in events])
+        self.assertEqual(len([e for e in events if e['event'] == 'STOP_CLICK']), 1)
+        self.assertEqual([s['status'] for s in state['reminderSlots']], ['CONSUMED_BY_RECOVERY'] * 4)
+        self.assertEqual(state['reminders'], [])
+        self.assertIsNone(state['activeFlow'])
+
+    def test_bridge_weak_connection_during_system_wait_uses_normal_confirmation(self):
+        self.set_html(document(banner='<div role="status">Additional processing</div>'))
+        shown = [False]
+        def sleep(seconds):
+            self.clock.sleep(seconds)
+            if seconds == 10 and not shown[0]:
+                shown[0] = True
+                banner = '<div>Connection interrupted. ' + 'Waiting for response. ' * 12 + '</div>'
+                self.set_html(document(banner=banner))
+                self.route_body = document(turns=group(body=final(self.envelope())))
+        with patch.object(self.page, 'reload', wraps=self.page.reload) as reload, patch.object(
+                artifact_download, 'download_validated_artifact', return_value={
+                    'ok': True, 'code': artifact_download.RESULT_DURABLE, 'details': {}}):
+            result, state = self.run_bridge(count=0, sleep=sleep)
+        self.assertTrue(result['ok'], result)
+        self.assertEqual(reload.call_count, 2)
+        confirmed = next(e for e in state['transportEventJournal'] if e['event'] == 'SYSTEM_CONFIRMED'
+                         and e['kind'] == observer.ASSISTANT_CONNECTION_INTERRUPTED)
+        self.assertTrue(confirmed['confirmedOnSecondPoll'])
+        self.assertGreaterEqual(confirmed['elapsedMs'], 11000)
+        self.assertNotIn('CONTINUATION_SELECTED', [e['event'] for e in state['transportEventJournal']])
+
+    def test_bridge_result_during_system_wait_preempts_connection_handoff(self):
+        self.set_html(document(banner='<div role="status">Additional processing</div>'))
+        shown = [False]
+        def sleep(seconds):
+            self.clock.sleep(seconds)
+            if seconds == 10 and not shown[0]:
+                shown[0] = True
+                body = '<div role="alert">Connection interrupted</div>' + final(self.envelope())
+                self.set_html(document(turns=group(body=body)))
+        with patch.object(self.page, 'reload', wraps=self.page.reload) as reload, patch.object(
+                artifact_download, 'download_validated_artifact', return_value={
+                    'ok': True, 'code': artifact_download.RESULT_DURABLE, 'details': {}}):
+            result, state = self.run_bridge(count=0, sleep=sleep)
+        self.assertTrue(result['ok'], result)
+        self.assertEqual(reload.call_count, 1)
+        events = state['transportEventJournal']
+        self.assertEqual(len([e for e in events if e['event'] == 'RECOVERY_STARTED']), 1)
+        aborted = [e for e in events if e['event'] == 'RECOVERY_ABORTED']
+        self.assertEqual(len(aborted), 1)
+        self.assertNotEqual(aborted[0]['reason'], 'serial_handoff')
+        self.assertNotIn('RECOVERY_COMPLETED', [e['event'] for e in events])
+        self.assertNotIn('CONTINUATION_SELECTED', [e['event'] for e in events])
+
+    def test_bridge_connection_after_insert_cleans_prompt_before_handoff(self):
+        self.set_html(document(banner='<div role="status">Additional processing</div>'))
+        shown = [False]
+        def sleep(seconds):
+            self.clock.sleep(seconds)
+            if not shown[0] and self.page.locator('#prompt-textarea').inner_text():
+                shown[0] = True
+                self.page.locator('main').evaluate(
+                    '(el, body)=>el.insertAdjacentHTML("beforeend", body)',
+                    '<div role="alert">Connection interrupted</div>')
+                self.route_body = document(turns=group(body=final(self.envelope())))
+        with patch.object(self.page, 'reload', wraps=self.page.reload) as reload, patch.object(
+                artifact_download, 'download_validated_artifact', return_value={
+                    'ok': True, 'code': artifact_download.RESULT_DURABLE, 'details': {}}):
+            result, state = self.run_bridge(count=0, sleep=sleep)
+        self.assertTrue(result['ok'], result)
+        self.assertEqual(reload.call_count, 2)
+        events = state['transportEventJournal']
+        sent = next(e for e in events if e['event'] == 'CONTINUATION_SEND_OUTCOME')['proof']
+        self.assertEqual(sent['sendState'], submit.SEND_PROVEN_NOT_SENT)
+        self.assertTrue(sent['details']['unsentPromptCleared'])
+        handoff = next(e for e in events if e['event'] == 'RECOVERY_ABORTED' and e['reason'] == 'serial_handoff')
+        started = [e for e in events if e['event'] == 'RECOVERY_STARTED']
+        self.assertEqual(len(started), 2)
+        self.assertLess(handoff['sequence'], started[1]['sequence'])
+        self.assertNotIn('CONTROL_SEND_CONFIRMED', [e['event'] for e in events])
+
+    def test_bridge_connection_during_system_wait_lost_lineage_fails_closed(self):
+        self.set_html(document(banner='<div role="status">Additional processing</div>'))
+        shown = [False]
+        def sleep(seconds):
+            self.clock.sleep(seconds)
+            if seconds == 10 and not shown[0]:
+                shown[0] = True
+                self.set_html(document(turns=group(prompt='foreign',
+                    body=ACTIVITY + '<div role="alert">Connection interrupted</div>')))
+        with patch.object(self.page, 'reload', wraps=self.page.reload) as reload:
+            result, state = self.run_bridge(count=0, sleep=sleep)
+        self.assertFalse(result['ok'])
+        self.assertEqual(reload.call_count, 1)
+        self.assertEqual(state['phase'], 'FAILED')
+        events = state['transportEventJournal']
+        self.assertEqual(len([e for e in events if e['event'] == 'RECOVERY_STARTED']), 1)
+        self.assertEqual(len([e for e in events if e['event'] == 'RECOVERY_FAILED']), 1)
+        self.assertNotIn('RECOVERY_COMPLETED', [e['event'] for e in events])
+        self.assertNotIn('CONTINUATION_SELECTED', [e['event'] for e in events])
+
+    def test_bridge_new_connection_during_system_wait_after_soft_deadline_no_cycle(self):
+        self.set_html(document(banner='<div role="status">Additional processing</div>'))
+        shown = [False]
+        def sleep(seconds):
+            self.clock.sleep(seconds)
+            if seconds == 10 and not shown[0]:
+                shown[0] = True
+                self.set_html(document(banner='<div role="alert">Connection interrupted</div>'))
+        with patch.object(self.page, 'reload', wraps=self.page.reload) as reload:
+            result, state = self.run_bridge(timeout_ms=5000, count=0, sleep=sleep)
+        self.assertFalse(result['ok'])
+        self.assertEqual(reload.call_count, 1)
+        self.assertEqual(state['phase'], 'TIMEOUT')
+        self.assertEqual(state['lastError'], observer.ASSISTANT_TURN_TIMEOUT)
+        events = state['transportEventJournal']
+        self.assertEqual(len([e for e in events if e['event'] == 'RECOVERY_STARTED']), 1)
+        self.assertNotIn('RECOVERY_COMPLETED', [e['event'] for e in events])
+        self.assertNotIn('RECOVERY_FAILED', [e['event'] for e in events])
+        self.assertNotIn('CONTINUATION_SELECTED', [e['event'] for e in events])
+        self.assertLessEqual(self.clock.value, 50)
+
+    def test_bridge_transient_connection_disappearing_during_handoff_scan_resumes(self):
+        self.set_html(document(banner='<div role="status">Additional processing</div>'))
+        shown = [False]
+        cleared = [False]
+        def sleep(seconds):
+            self.clock.sleep(seconds)
+            if seconds == 10 and not shown[0]:
+                shown[0] = True
+                self.set_html(document(banner='<div role="alert">Connection interrupted</div>'))
+            elif shown[0] and not cleared[0]:
+                cleared[0] = True
+                self.set_html(self.route_result_after_send())
+        with patch.object(self.page, 'reload', wraps=self.page.reload) as reload, patch.object(
+                artifact_download, 'download_validated_artifact', return_value={
+                    'ok': True, 'code': artifact_download.RESULT_DURABLE, 'details': {}}):
+            result, state = self.run_bridge(count=0, sleep=sleep)
+        self.assertTrue(result['ok'], result)
+        self.assertEqual(reload.call_count, 1)
+        events = state['transportEventJournal']
+        self.assertEqual(len([e for e in events if e['event'] == 'RECOVERY_STARTED']), 1)
+        self.assertEqual(len([e for e in events if e['event'] == 'CONTROL_SEND_CONFIRMED']), 1)
+        self.assertNotIn('RECOVERY_FAILED', [e['event'] for e in events])
+        self.assertFalse(any(e.get('reason') == 'serial_handoff' for e in events))
+
     def test_production_bridge_final_after_reload_cancels_continuation(self):
         self.set_html(document(banner='<div role="alert">Наши системы обрабатывают запрос</div>'))
         self.route_body = document(turns=group(body=final(self.envelope())))

@@ -69,10 +69,11 @@ class TransportControl:
                 self.event("SYSTEM_CANDIDATE", kind=kind, **compact)
             record["lastCandidate"] = compact
             record["lastRejectReason"] = details.get("reason") if not accepted else None
-        if self.active:
+        if self.active and self.active["kind"] == kind:
             if accepted:
                 self.event("SYSTEM_SIGNAL_DEFERRED", kind=kind, activeEventId=self.active["eventId"])
             return None
+        # Record a different episode/confirmation, but never start it in parallel.
         episode = self.banners.setdefault(kind, {"present": False, "handled": False, "number": 0})
         present = bool(accepted or confidence == "weak")
         if not present:
@@ -99,13 +100,16 @@ class TransportControl:
                 self.event("SYSTEM_CONFIRMED", kind=kind, eventId=episode["eventId"],
                            eventConfirmedAt=episode["eventConfirmedAt"],
                            eventConfirmedElapsedMs=episode["eventConfirmedElapsedMs"], **compact)
-            return episode["eventId"]
+            if not self.active:
+                return episode["eventId"]
+        if self.active and accepted:
+            self.event("SYSTEM_SIGNAL_DEFERRED", kind=kind, activeEventId=self.active["eventId"])
         return None
 
     def can_begin_recovery(self, kind, event_id):
         episode = self.banners.get(kind, {})
         confirmed_at = episode.get("eventConfirmedAt")
-        return bool(not self.active and episode.get("confirmed") and not episode.get("handled")
+        return bool(not self.active and episode.get("present") and episode.get("confirmed") and not episode.get("handled")
                     and episode.get("eventId") == event_id and confirmed_at is not None
                     and confirmed_at < self.soft_deadline
                     and self.clock() < min(confirmed_at + RECOVERY_CYCLE_MS / 1000,
