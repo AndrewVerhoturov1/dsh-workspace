@@ -17,6 +17,7 @@ import browser_recovery
 import browser_submit
 import reminder_policy
 import web_worker_bridge
+import system_recovery
 
 
 REQ = "REQ_20260921T000000Z_1234"
@@ -339,7 +340,7 @@ class WebWorkerResultRecoveryTests(unittest.TestCase):
         self.assertEqual(recover.call_args.args[2], PROMPT)
         send_reminder.assert_not_called()
 
-    def test_additional_processing_waits_without_connection_reload(self):
+    def test_additional_processing_enters_active_system_flow(self):
         clock = FakeClock()
         page = FakePage()
         calls = 0
@@ -357,7 +358,7 @@ class WebWorkerResultRecoveryTests(unittest.TestCase):
                   patch.object(browser_observer, "connection_interrupted", return_value=(False, {})),
                   patch.object(browser_observer, "observe_next_assistant", side_effect=processing),
                   patch.object(browser_observer, "inspect_answer_phase", return_value={"phase": browser_observer.ADDITIONAL_PROCESSING}),
-                  patch.object(browser_recovery, "recover_interrupted_chat") as recover,
+                  patch.object(system_recovery, "prepare_additional_processing", return_value={"ok": True, "code": browser_recovery.RECOVERY_READY}) as recover,
                   patch.object(artifact_detector, "detect_artifact_dom", return_value=found_artifact()),
                   patch.object(artifact_download, "download_validated_artifact", return_value=durable_result()),
                   patch.object(reminder_policy, "submit_reminder") as reminder):
@@ -367,7 +368,7 @@ class WebWorkerResultRecoveryTests(unittest.TestCase):
                                             max_reminders=1, playwright_factory=FakeFactory(page))
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["code"], web_worker_bridge.RESULT_DURABLE)
-        recover.assert_not_called()
+        recover.assert_called_once()
         reminder.assert_not_called()
 
     def test_completed_turn_grace_blocks_due_reminder_until_no_artifact_terminal(self):

@@ -72,6 +72,8 @@ def chat_ready_snapshot(
     page: Any,
     conversation_url: str,
     trusted_prompt: str,
+    *, original_prompt: str | None = None, anchor_binding=None,
+    allow_interrupted: bool = False,
 ) -> dict[str, Any]:
     """Read-only proof that the same conversation is hydrated and safe to inspect."""
     if not submit.is_bound_chat_url(conversation_url):
@@ -91,8 +93,14 @@ def chat_ready_snapshot(
     same_conversation = submit.same_conversation_url(page_url, conversation_url)
     composer_ready, composer_details = _active_live_composer(page)
     turns, selector = observer.snapshot_turns(page)
-    anchor_index = observer.find_user_anchor(turns, trusted_prompt)
+    anchor_index = observer.find_user_anchor(turns, trusted_prompt, anchor_binding=anchor_binding)
+    original_anchor = observer.find_user_anchor(turns, original_prompt or trusted_prompt)
+    lineage_ready = (original_anchor is not None and anchor_index is not None
+                     and original_anchor <= anchor_index
+                     and not any(t.get("role") == "user" and t["index"] > anchor_index for t in turns))
     interrupted, interruption_details = observer.connection_interrupted(page)
+    # Recovery requires disappearance, not merely failure to reach strong confidence.
+    interruption_present = interrupted or interruption_details.get("confidence") == "weak"
 
     details = {
         "pageUrl": page_url,
@@ -100,15 +108,19 @@ def chat_ready_snapshot(
         "turnSelector": selector,
         "turnCount": len(turns),
         "trustedAnchorIndex": anchor_index,
+        "originalAnchorIndex": original_anchor,
+        "taskLineageReady": lineage_ready,
         "connectionInterrupted": interrupted,
+        "interruptionEvidencePresent": interruption_present,
         "interruption": interruption_details,
         **composer_details,
     }
     ready = (
         same_conversation
         and composer_ready
-        and anchor_index is not None
-        and not interrupted
+        and lineage_ready
+        and (allow_interrupted or not interruption_present)
+        and page_url == conversation_url
     )
     return _result(
         RECOVERY_READY if ready else RECOVERY_NOT_READY,
@@ -128,6 +140,9 @@ def wait_for_chat_ready(
     poll_ms: int = DEFAULT_POLL_MS,
     sleep: Callable[[float], None] = time.sleep,
     monotonic: Callable[[], float] = time.monotonic,
+    original_prompt: str | None = None,
+    anchor_binding=None,
+    on_event: Callable[..., None] | None = None,
 ) -> dict[str, Any]:
     """Wait until the exact chat is hydrated, then give it an extra settle window."""
     if (
@@ -146,7 +161,7 @@ def wait_for_chat_ready(
         )
 
     deadline = monotonic() + timeout_ms / 1000.0
-    last = chat_ready_snapshot(page, conversation_url, trusted_prompt)
+    last = chat_ready_snapshot(page, conversation_url, trusted_prompt, original_prompt=original_prompt, anchor_binding=anchor_binding)
     while not last.get("ok"):
         if monotonic() >= deadline:
             return _result(
@@ -157,12 +172,15 @@ def wait_for_chat_ready(
             )
         remaining = max(deadline - monotonic(), 0.0)
         sleep(min(max(poll_ms, 1) / 1000.0, remaining))
-        last = chat_ready_snapshot(page, conversation_url, trusted_prompt)
+        last = chat_ready_snapshot(page, conversation_url, trusted_prompt, original_prompt=original_prompt, anchor_binding=anchor_binding)
 
     if settle_ms > 0:
-        sleep(settle_ms / 1000.0)
+        remaining = max(0.0, deadline - monotonic())
+        sleep(min(settle_ms / 1000.0, remaining))
+        if remaining < settle_ms / 1000.0:
+            return _result(RECOVERY_BUDGET_EXHAUSTED, ok=False, details={"reason": "settle_budget"})
 
-    final = chat_ready_snapshot(page, conversation_url, trusted_prompt)
+    final = chat_ready_snapshot(page, conversation_url, trusted_prompt, original_prompt=original_prompt, anchor_binding=anchor_binding)
     if not final.get("ok"):
         return _result(
             RECOVERY_NOT_READY,
@@ -191,6 +209,9 @@ def recover_interrupted_chat(
     budget_ms: int | None = None,
     sleep: Callable[[float], None] = time.sleep,
     monotonic: Callable[[], float] = time.monotonic,
+    original_prompt: str | None = None,
+    anchor_binding=None,
+    on_event: Callable[..., None] | None = None,
 ) -> dict[str, Any]:
     """Reload the same bound conversation conservatively after an interruption."""
     if not submit.is_bound_chat_url(conversation_url):
@@ -265,9 +286,15 @@ def recover_interrupted_chat(
             "delayMs": delay_ms,
             "loadTimeoutMs": attempt_timeout_ms,
         }
+        if str(getattr(page, "url", "")) != conversation_url:
+            return _result(RECOVERY_INVALID_CONFIG, ok=False, details={"reason": "conversation_changed_before_reload", "attempts": attempts})
+        if on_event:
+            on_event("RELOAD_STARTED", attempt=attempt, timeoutMs=attempt_timeout_ms)
         try:
             page.reload(wait_until="domcontentloaded", timeout=attempt_timeout_ms)
             attempt_record["reload"] = "ok"
+            if on_event:
+                on_event("CHAT_REPROOF_STARTED", attempt=attempt)
         except Exception as exc:
             attempt_record["reload"] = "failed"
             attempt_record["message"] = str(exc)[:500]
@@ -285,7 +312,7 @@ def recover_interrupted_chat(
             )
         ready_timeout_ms = load_timeout_ms
         if remaining_after_reload is not None:
-            ready_timeout_ms = max(1, min(load_timeout_ms, remaining_after_reload - settle_ms))
+            ready_timeout_ms = max(1, min(load_timeout_ms, remaining_after_reload))
 
         ready = wait_for_chat_ready(
             page,
@@ -296,10 +323,14 @@ def recover_interrupted_chat(
             poll_ms=poll_ms,
             sleep=sleep,
             monotonic=monotonic,
+            original_prompt=original_prompt, anchor_binding=anchor_binding,
         )
         attempt_record["readyCode"] = ready.get("code")
         attempt_record["readyDetails"] = ready.get("details", {})
         attempts.append(attempt_record)
+        if on_event:
+            on_event("SAME_CHAT_CONFIRMED" if ready.get("ok") else "CHAT_REPROOF_FAILED",
+                     attempt=attempt, proof=ready)
         if ready.get("ok"):
             return _result(
                 RECOVERY_READY,

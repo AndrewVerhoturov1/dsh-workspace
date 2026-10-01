@@ -16,6 +16,8 @@ import browser_observer
 import browser_submit
 import reminder_policy
 import web_worker_bridge
+import transport_control
+from continuation_prompts import choose_continuation, CONTINUATION_TEMPLATES
 
 
 REQ = "REQ_20260920T120000Z_1234"
@@ -135,7 +137,25 @@ def completed_observer() -> dict:
     }
 
 
+def mocked_intent(_page, request_id, url, original, anchor, **kwargs):
+    choice = choose_continuation(randrange=lambda _: 0)
+    return {"requestId": request_id, "conversationUrl": url, **choice,
+            "promptSha256": browser_submit.prompt_sha256(choice["exactPromptText"]),
+            "slot": kwargs.get("slot"), "recoveryEventId": kwargs.get("recovery_event_id"),
+            "expectedUserTurnRelation": {"userOrdinal": 1, "precedingUserHashes": [browser_submit.prompt_sha256(original)]}}
+
+
 class WebWorkerReminderTests(unittest.TestCase):
+    def setUp(self):
+        # These legacy tests isolate scheduling. Real Send/lineage is exercised
+        # independently against executable Chromium DOM in test_transport_dom.
+        self.intent_patch = patch.object(transport_control, "make_intent", side_effect=mocked_intent)
+        self.binding_patch = patch.object(transport_control, "confirmed_binding", return_value={"fixture": True})
+        self.intent_patch.start()
+        self.binding_patch.start()
+        self.addCleanup(self.intent_patch.stop)
+        self.addCleanup(self.binding_patch.stop)
+
     def make_bridge(self, root: str, clock: FakeClock) -> web_worker_bridge.WebWorkerBridge:
         return web_worker_bridge.WebWorkerBridge(
             root=root,
@@ -160,7 +180,7 @@ class WebWorkerReminderTests(unittest.TestCase):
         self.assertEqual(cleanup["closeAttempts"], 2)
         self.assertEqual(page.close_calls, 2)
 
-    def test_three_reminders_are_attempted_at_fixed_ten_minute_offsets(self):
+    def test_five_reminders_are_attempted_at_fixed_ten_minute_offsets(self):
         clock = FakeClock()
         page = FakePage()
         reminder_times = []
@@ -195,23 +215,21 @@ class WebWorkerReminderTests(unittest.TestCase):
                     prompt=PROMPT,
                     expected_filename=FILENAME,
                     expected_request={},
-                    observer_timeout_ms=45 * 60 * 1000,
+                    observer_timeout_ms=60 * 60 * 1000,
                     reminder_interval_ms=10 * 60 * 1000,
-                    max_reminders=3,
+                    max_reminders=5,
                     playwright_factory=FakeFactory(page),
                 )
 
             self.assertFalse(result["ok"])
-            self.assertEqual(reminder_times, [600, 1200, 1800])
-            self.assertEqual(len(reminder_prompts), 3)
-            self.assertIn("REMINDER 1/3", reminder_prompts[0])
-            self.assertIn("REMINDER 2/3", reminder_prompts[1])
-            self.assertIn("REMINDER 3/3", reminder_prompts[2])
-            self.assertEqual(round(clock.monotonic()), 2700)
+            self.assertEqual(reminder_times, [600, 1200, 1800, 2400, 3000])
+            self.assertEqual(len(reminder_prompts), 5)
+            self.assertTrue(all(p in CONTINUATION_TEMPLATES for p in reminder_prompts))
+            self.assertEqual(round(clock.monotonic()), 3600)
             self.assertTrue(page.closed)
 
             stored = bridge.read_state(REQ)
-            self.assertEqual(len(stored["failureDetails"]["reminders"]), 3)
+            self.assertEqual(len(stored["failureDetails"]["reminders"]), 5)
 
     def test_due_unknown_retries_same_slot_before_next_checkpoint(self):
         clock = FakeClock()
@@ -420,9 +438,9 @@ class WebWorkerReminderTests(unittest.TestCase):
                     prompt=PROMPT,
                     expected_filename=FILENAME,
                     expected_request={},
-                    observer_timeout_ms=45 * 60 * 1000,
+                    observer_timeout_ms=60 * 60 * 1000,
                     reminder_interval_ms=10 * 60 * 1000,
-                    max_reminders=3,
+                    max_reminders=5,
                     playwright_factory=FakeFactory(page),
                 )
 

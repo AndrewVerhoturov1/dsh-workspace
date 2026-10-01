@@ -430,7 +430,21 @@ def detect_artifact_dom(
         )
     prompt_lines = [line.strip() for line in observer._normalize_text(expected_prompt).split("\n") if line.strip()]
     required_key_line = identity.request_prompt_key_line(request_id)
-    if not prompt_lines or prompt_lines[0] != required_key_line:
+    control_intent = completed_observer_result.get("details", {}).get("controlIntent") if isinstance(completed_observer_result, dict) else None
+    anchor_binding = completed_observer_result.get("details", {}).get("anchorBinding") if isinstance(completed_observer_result, dict) else None
+    natural_control = False
+    if isinstance(control_intent, dict) and isinstance(anchor_binding, dict):
+        from continuation_prompts import CONTINUATION_TEMPLATES
+        natural_control = (
+            control_intent.get("requestId") == request_id
+            and control_intent.get("conversationUrl") == expected_chat_url
+            and control_intent.get("exactPromptText") == expected_prompt
+            and expected_prompt in CONTINUATION_TEMPLATES
+            and control_intent.get("promptSha256") == submit.prompt_sha256(expected_prompt)
+            and anchor_binding.get("promptSha256") == submit.prompt_sha256(expected_prompt)
+            and {k: anchor_binding.get(k) for k in ("userOrdinal", "precedingUserHashes")} == control_intent.get("expectedUserTurnRelation")
+        )
+    if (not prompt_lines or prompt_lines[0] != required_key_line) and not natural_control:
         return _result(
             ARTIFACT_INVALID_CONFIG,
             ok=False,
@@ -474,7 +488,15 @@ def detect_artifact_dom(
         )
 
     turns, selector = observer.snapshot_turns(page)
-    correlation = observer.correlate_next_assistant(turns, expected_prompt)
+    if natural_control:
+        users = [t for t in turns if t.get("role") == "user"]
+        original_ordinal = control_intent.get("originalUserOrdinal")
+        if (type(original_ordinal) is not int or not 0 <= original_ordinal < len(users)
+                or submit.request_key_line_from_prompt(str(users[original_ordinal].get("text", ""))) != required_key_line):
+            return _result(ARTIFACT_CHAT_CORRELATION_LOST, ok=False,
+                           details={"reason": "control_original_lineage_missing"})
+    correlation = (observer.correlate_next_assistant(turns, expected_prompt, anchor_binding=anchor_binding)
+                   if natural_control else observer.correlate_next_assistant(turns, expected_prompt))
     if not correlation.get("ok"):
         return _result(
             ARTIFACT_CHAT_CORRELATION_LOST,
