@@ -15,6 +15,7 @@ import { applyWebFetchTool, applyWebSearchTool } from '@deepseek-ai/dsh-tool-web
 import { createMemoryTaskRegistry } from './postman-task-registry.js'
 import { createPostmanWorkerTools } from './postman-worker.js'
 import { createPostmanBridgeBoundaryManager, isTopLevelPostmanPtcLeader, POSTMAN_LEADER_TOOL_ALLOWLIST } from './postman-bridge-core.js'
+import { POSTMAN_PTC_DISCIPLINE } from './ptc-discipline.js'
 import { createPtcAdapter, WORKER_MUTATION_PROFILE } from './ptc-adapter.js'
 
 const output = { schema: { type: 'object', additionalProperties: true }, render: (_a, value) => [{ type: 'text', text: JSON.stringify(value) }] }
@@ -100,7 +101,7 @@ async function fixture(dir, { web = true, worktree = dir } = {}) {
   }
   let n = 0
   function execute(a, program, controller = new AbortController()) {
-    return ctx.tools.execute({ callId: 'root-' + ++n, name: 'ptc_execute', arguments: { program, description: 'Worker research' }, agent: a, signal: controller.signal })
+    return ctx.tools.execute({ callId: 'root-' + ++n, name: 'ptc_execute', arguments: { program, description: 'Worker research', boundary: 'semantic_decision' }, agent: a, signal: controller.signal })
   }
   async function leader(id = 'leader', preset = 'postman-leader-ptc', taskWorktree = worktree) {
     const result = await agent(id, preset)
@@ -136,6 +137,8 @@ test('confirmed Worker gets mutation namespace, real read/glob/grep and controll
     assert.equal(WORKER_MUTATION_PROFILE.revision, 3)
     assert.deepEqual(WORKER_MUTATION_PROFILE.tools, ['read', 'glob', 'grep', 'web_fetch', 'web_search', 'write', 'edit'])
     assert.equal(visible(f, child.a).includes('ptc_execute'), true)
+    assert.ok(child.sections[0].text({scope:child.a}).includes(POSTMAN_PTC_DISCIPLINE))
+    assert.equal(child.sections[0].text({scope:parent.a}),'')
     assert.ok(visible(f, child.a).includes('write'))
     assert.match(child.sections[0].text({ scope: child.a }), /read, glob, grep.*web_fetch.*web_search.*write and edit/)
     const names = value(await f.execute(child.a, 'return Object.keys(tools).sort()'))
@@ -335,8 +338,10 @@ test('three Workers share runtime limits but not identity, cancellation or acces
     const pendingA = f.execute(a.a, "return await tools.read({file_path:'none'})")
     const pendingB = f.execute(b.a, "return await tools.read({file_path:'none'})")
     await entered.promise
-    const limit = await f.execute(c.a, 'return 3')
-    assert.equal(limit.value.status, 'limit-exceeded')
+    // Ten process slots now allow C while A/B remain active; authority stays per Worker.
+    const third = await f.execute(c.a, 'return 3')
+    assert.equal(third.value.status, 'ok')
+    assert.equal(third.value.value, 3)
     f.adapter.remove(a.a)
     held.resolve()
     assert.notEqual((await pendingA).value.status, 'ok')

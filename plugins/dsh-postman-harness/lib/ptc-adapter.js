@@ -1,14 +1,16 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { createPtcRuntime, DEFAULT_LIMITS, validatePtcProfile } from 'dsh-ptc'
 import { buildPtcHelperPrelude, ptcHelperGuidance } from './ptc-helpers.js'
+import { POSTMAN_PTC_DISCIPLINE } from './ptc-discipline.js'
 import { guardWorkerPtcFilesystem } from './ptc-worktree-boundary.js'
 import { POSTMAN_PTC_ONLY_LEADER_TOOLS } from './postman-bridge-core.js'
 
 export const PTC_TOOL_NAME = 'ptc_execute'
 export const PILOT_PROFILE = validatePtcProfile({
-  schemaVersion: 1, id: 'postman-leader-supervisor', revision: 4,
+  schemaVersion: 1, id: 'postman-leader-supervisor', revision: 5,
   tools: [...POSTMAN_PTC_ONLY_LEADER_TOOLS],
-  limits: { ...DEFAULT_LIMITS, maxConcurrentToolCalls: 1 },
+  limits: { ...DEFAULT_LIMITS, maxWallMs: 300000, maxToolCalls: 256,
+    quickjsMemoryBytes: 67108864, maxTotalBridgeBytes: 16777216, maxConcurrentToolCalls: 1 },
 })
 const WORKER_NAMES = Object.freeze(['read', 'glob', 'grep', 'web_fetch', 'web_search', 'write', 'edit'])
 export const WORKER_MUTATION_PROFILE = validatePtcProfile({
@@ -19,6 +21,15 @@ export const WORKER_MUTATION_PROFILE = validatePtcProfile({
 const LEADER_REQUIRED = ['read', 'grep']
 const WORKER_REQUIRED = ['read', 'glob', 'grep']
 const MAX_DESCRIPTION = 160
+const BOUNDARIES = ['semantic_decision', 'user_input', 'external_event', 'approval_boundary', 'task_complete']
+// Auto-yield must not hide a refused/unknown prepare or async dispatch returned as ordinary JSON.
+// This gate does not recover statuses or alter the tool result/authority.
+const YIELD_ACCEPTANCE = {
+  postman_task_prepare: ['TASK_CONTEXT_READY', 'POSTMAN_TASK_CONTEXT_ALREADY_READY'],
+  postman_worker: ['POSTMAN_WORKER_TASK_ACCEPTED'],
+  postman_worker_interrupt: ['POSTMAN_WORKER_INTERRUPT_TASK_ACCEPTED'],
+  postman_bridge: ['POSTMAN_BRIDGE_ACCEPTED'],
+}
 const output = {
   schema: { type: 'object', additionalProperties: true, properties: { status: { type: 'string', required: true } } },
   render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
@@ -71,9 +82,9 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
     return true
   }
   function guidance(agent, record) {
-    if (required(record).some(name => !available(agent, name))) return ''
+    if (!available(agent, PTC_TOOL_NAME) || required(record).some(name => !available(agent, name))) return ''
     const schemas = ctx.tools.schemas(agent).filter(s => record.profile.tools.includes(s.name))
-    const helperText = ptcHelperGuidance(schemas.map(s => s.name))
+    const helperText = POSTMAN_PTC_DISCIPLINE + '\n' + ptcHelperGuidance(schemas.map(s => s.name))
     if (record.role === 'worker') return 'PTC supports read, glob, grep, web_fetch, web_search, write and edit when ordinarily visible. ' +
       'Filesystem paths inside PTC are Host-scoped to the current task worktree. Use write/edit inside PTC for mechanical multi-step filesystem work. ' +
       'PTC mutation is not transactional. A successful write/edit remains committed even if later program code fails. There is no automatic rollback or retry. ' +
@@ -81,11 +92,11 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
       helperText +
       'Use await tools.name(JSON_arguments) and return JSON; current argument schemas: ' +
       JSON.stringify(schemas.map(s => ({ name: s.name, parameters: s.parameters })))
-    return 'This Leader is PTC-first. Batch related mechanical/data/supervisor operations in one ptc_execute program; direct PTC-managed calls are rejected. ' +
+    return 'This Leader uses Postman PTC; direct PTC-managed calls are rejected. ' +
       'PTC changes execution mode, not Postman Leader routing: follow the postman-leader skill, obtain user approval before medium/complex task preparation or delegation, and delegate repository discovery/execution to Worker/Postman as required. ' +
       'Never poll Worker/Bridge: reports and READY arrive as later events, not within this program. ' +
       helperText +
-      'Use await tools.name(JSON_arguments), return compact JSON needed for the next decision, and inspect effects after errors. No persistence or automatic retry. Current nested argument schemas: ' +
+      'Use await tools.name(JSON_arguments). Current nested argument schemas: ' +
       JSON.stringify(schemas.map(s => ({ name: s.name, parameters: s.parameters })))
   }
   function remove(agent) {
@@ -111,7 +122,9 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
     description: 'Run one isolated PTC program for the exact experimental Postman Leader or its confirmed Worker. Guidance lists current nested tool schemas.',
     parameters: {
       program: { type: 'string', required: true, description: 'One async-function body with explicit JSON return. No imports, Node or persistent state.' },
-      description: { type: 'string', required: true, description: 'Short purpose of this one program.' },
+      description: { type: 'string', required: true, description: 'Short purpose and why the deterministic phase ends at the declared boundary.' },
+      boundary: { type: 'string', required: true, enum: BOUNDARIES, description: 'Next genuine decision boundary; encode all safe deterministic work before it in this program.' },
+      yield_on_success: { type: 'boolean', description: 'Leader only: conclude the turn after confirmed success at external_event, without another model call for postman_yield. Defaults to false.' },
       language: { type: 'string', enum: ['javascript', 'typescript'], description: 'JavaScript by default; TypeScript supports erasable syntax only.' },
     }, output,
     async execute(args, exec) {
@@ -125,8 +138,16 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
         tools: record.profile.tools.filter(name => available(agent, name)) })
       if (typeof args.description !== 'string' || !args.description.trim() || args.description.length > MAX_DESCRIPTION)
         return { status: 'PTC_DESCRIPTION_INVALID' }
+      if (!BOUNDARIES.includes(args.boundary)) return { status: 'PTC_BOUNDARY_INVALID' }
+      if ((args.yield_on_success !== undefined && typeof args.yield_on_success !== 'boolean') ||
+          (args.yield_on_success === true && (args.boundary !== 'external_event' || record.role !== 'leader')))
+        return { status: 'PTC_YIELD_INVALID' }
+      if (args.yield_on_success === true && typeof exec.concludeTurn !== 'function')
+        return { status: 'PTC_YIELD_UNSUPPORTED' }
       if (exec.signal.aborted) return { status: 'cancelled', effects: { calls: [], completed: 0, failed: 0, pending: 0 } }
       const controller = new AbortController(), started = new Map()
+      const startedAt = Date.now(), toolCounts = Object.create(null)
+      let terminal, nestedFailed = false, acceptanceFailed = false, yieldApplied = false
       const onAbort = () => controller.abort()
       exec.signal.addEventListener('abort', onAbort, { once: true })
       const run = { controller, profile: activeProfile }
@@ -148,6 +169,7 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
           const details = { rootCallId: exec.rootCallId, parentCallId: exec.callId, subCallId, name, arguments: nestedArgs }
           const entry = { details, settled: false }
           started.set(call.callId, entry)
+          toolCounts[name] = (toolCounts[name] ?? 0) + 1
           agent.session?.append('tool/code-dispatch-start', details)
           try {
             const result = await ctx.tools.execute({ callId: subCallId, rootCallId: exec.rootCallId,
@@ -160,10 +182,12 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
                 (record.role === 'worker' && ['read', 'glob', 'grep', 'write', 'edit'].includes(name) &&
                   workerContextOf?.(agent) !== workerContext)) throw new Error('PTC_ACCESS_REVOKED')
             if (result.isError) throw new Error(result.error.message)
+            if (YIELD_ACCEPTANCE[name] && !YIELD_ACCEPTANCE[name].includes(result.value?.status)) acceptanceFailed = true
             for (const context of result.additionalContexts ?? []) exec.deferContext(context)
             if (result.concludesTurn) exec.concludeTurn()
             return result.value // Canonical public JSON, not rendered cards or execution metadata.
           } catch (error) {
+            nestedFailed = true
             if (!entry.settled) {
               entry.settled = true
               agent.session?.append('tool/code-dispatch', { ...details, isError: true,
@@ -176,17 +200,37 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
       try {
         const helperPrelude = buildPtcHelperPrelude(activeProfile.tools)
         const program = helperPrelude ? helperPrelude + '\n' + args.program : args.program
-        const result = await runtime.run({ program, language: args.language ?? 'javascript',
+        const result = terminal = await runtime.run({ program, language: args.language ?? 'javascript',
           profile: activeProfile, bindings, signal: controller.signal })
         // The guest can stop while a noncooperative Host promise remains pending.
         // Close the durable event pair with an explicit unknown outcome before the turn ends.
+        const unknownEffect = [...started.values()].some(entry => !entry.settled)
         for (const entry of started.values()) if (!entry.settled) {
           entry.settled = true
           agent.session?.append('tool/code-dispatch', { ...entry.details, isError: true,
             content: [{ type: 'text', text: 'PTC program stopped; external operation still pending, outcome unknown' }] })
         }
+        const effects = result.effects
+        const allCompleted = effects && effects.pending === 0 && effects.failed === 0 &&
+          Array.isArray(effects.calls) && effects.calls.length === started.size &&
+          effects.completed === effects.calls.length && effects.calls.every(call => call.state === 'completed')
+        if (args.yield_on_success === true && result.status === 'ok' && !result.cleanupError &&
+            allCompleted && !unknownEffect && !nestedFailed && !acceptanceFailed && !result.value?.needsModelDecision &&
+            !controller.signal.aborted && !exec.signal.aborted && allowed(agent, record) && available(agent, PTC_TOOL_NAME)) {
+          exec.concludeTurn()
+          yieldApplied = true
+        }
         return result
       } finally {
+        agent.session?.append('postman/ptc-run', {
+          role: record.role, description: args.description, boundary: args.boundary,
+          status: terminal?.status ?? 'runtime-error', durationMs: Date.now() - startedAt,
+          nestedToolCalls: started.size, toolCounts,
+          resultBytes: terminal?.status === 'ok' ? Buffer.byteLength(JSON.stringify(terminal.value), 'utf8') : 0,
+          yieldRequested: args.yield_on_success === true, yieldApplied,
+          ...(terminal?.status === 'limit-exceeded' ? { limitCode: terminal.error?.code } : {}),
+          underbatchedCandidate: started.size === 1,
+        })
         record.runs.delete(run)
         exec.signal.removeEventListener('abort', onAbort)
       }

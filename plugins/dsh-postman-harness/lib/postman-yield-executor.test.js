@@ -3,7 +3,10 @@ import test from 'node:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { BlockAssembler, createAssistantMessage, createToolResultMessage } from '@deepseek-ai/dsh-llm'
-import { TOOL_RUNTIME_SCHEDULER } from '@deepseek-ai/dsh-tools'
+import { Context } from '@deepseek-ai/cordis'
+import { createScope } from '@deepseek-ai/dsh-scope'
+import { createPtcAdapter } from './ptc-adapter.js'
+import { ToolRuntime, defineTool, TOOL_RUNTIME_SCHEDULER } from '@deepseek-ai/dsh-tools'
 import { createPostmanYieldTool } from './postman-bridge.js'
 
 // Execute the exact installed turn/step/scheduler, replacing only provider and
@@ -26,11 +29,11 @@ const methods = new Function('LlmError', 'errorChain', 'BlockAssembler', 'create
 const yieldTool = createPostmanYieldTool({ agents: { get: id => id === 'leader' ? live : null } })
 let live
 
-function harness() {
+function harness({ ptc = false } = {}) {
   const events = [], calls = [], queuedTurn = [{ id: 'initial', content: [{ type: 'text', text: 'work' }] }]
   const queuedStep = []
   const agent = { id: 'leader', turn: methods.turn, step: methods.step,
-    session: { header: { agentPreset: 'postman-leader', delegationDepth: 0 }, events,
+    session: { header: { agentPreset: ptc ? 'postman-leader-ptc' : 'postman-leader', delegationDepth: 0 }, events,
       append(type, data) { const event = { type, data, seq: events.length + 1 }; events.push(event); return event },
       deriveMessages() { return events.filter(e => e.type === 'assistant/message').map(e => e.data.message) } },
     phase: { kind: 'running', turn: 0, step: 0, abort: new AbortController() },
@@ -51,7 +54,10 @@ function harness() {
         preparedCall: { async *stream() {
           if (index === 1) {
             yield { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'yield-1',
-              name: 'postman_yield', arguments: '{}' } }
+              name: ptc ? 'ptc_execute' : 'postman_yield', arguments: ptc ? JSON.stringify({
+                 description: 'Prepare, dispatch, then wait for Worker report', boundary: 'external_event', yield_on_success: true,
+                 program: "const task=ptc.expectStatus(await tools.postman_task_prepare({}),['TASK_CONTEXT_READY']); const worker=ptc.expectStatus(await tools.postman_worker({}),['POSTMAN_WORKER_TASK_ACCEPTED']); return {taskStatus:task.status,workerSessionId:worker.workerSessionId}"
+               }) : '{}' } }
           } else {
             yield { type: 'block-end', index: 0, block: { type: 'text', text: 'report received' } }
           }
@@ -60,9 +66,38 @@ function harness() {
     },
     throwError(error) { throw error },
   }
+  let ptcAdapter, ptcContext
+  const operations = []
+  if (ptc) {
+    ptcContext = new Context()
+    ptcContext.systemPrompt = { tools() {}, section() { return () => {} } }
+    new ToolRuntime(ptcContext)
+    ptcContext.agents = { get: id => id === agent.id ? agent : null }
+    agent.ctx = createScope(ptcContext, agent).ctx
+    for (const name of ['read','grep','postman_task_prepare','postman_worker']) {
+      ptcContext.tools.register(defineTool({ name, description: name, parameters: {},
+        output: { schema: { type:'object',additionalProperties:true }, render: (_a,value) => [{type:'text',text:JSON.stringify(value)}] },
+        execute() {
+          operations.push(name)
+          return name === 'postman_task_prepare' ? {status:'TASK_CONTEXT_READY'} :
+            name === 'postman_worker' ? {status:'POSTMAN_WORKER_TASK_ACCEPTED',workerSessionId:'worker'} : {name}
+        },
+      }))
+    }
+    ptcAdapter = createPtcAdapter(ptcContext, { authorize: caller => caller === agent })
+    ptcContext.tools.register(ptcAdapter.tool); ptcAdapter.refresh(agent)
+  }
   const scheduler = {
     async prepare(exec) { return { kind: 'dispatch', exec } },
     async dispatch(exec) {
+      if (ptc) {
+        const result = await ptcContext.tools.execute({ callId:exec.callId, rootCallId:exec.rootCallId, name:exec.name,
+          arguments:exec.arguments, agent, signal:agent.phase.abort.signal })
+        assert.equal(result.isError,false,result.error?.message)
+        assert.equal(result.value.status,'ok',JSON.stringify(result.value))
+        exec.concluded = result.concludesTurn
+        return {kind:'post-result',result}
+      }
       const value = await yieldTool.execute(exec.arguments, { ...exec, concludeTurn() { exec.concluded = true } })
       assert.equal(value.status, 'POSTMAN_YIELDED')
       return { kind: 'post-result', result: { value } }
@@ -75,7 +110,8 @@ function harness() {
     agentLoop: { config: { maxParallelToolCalls: 1 } },
     tools: { executionMode: () => ({ kind: 'exclusive' }), [TOOL_RUNTIME_SCHEDULER]: scheduler } }
   live = agent
-  return { agent, calls, events, queuedTurn, queuedStep }
+  return { agent, calls, events, queuedTurn, queuedStep, operations,
+    async dispose() { await ptcAdapter?.dispose(); await ptcContext?.fiber.dispose() } }
 }
 
 test('installed stream step and scheduler execute yield, then resume only for report', async () => {
@@ -92,3 +128,22 @@ test('installed stream step and scheduler execute yield, then resume only for re
   assert.ok(f.events.some(e => e.type === 'user/message' && e.data.id === 'native-report'))
   assert.ok(f.events.some(e => e.type === 'assistant/message' && e.data.message.content.some(b => b.text === 'report received')))
 })
+
+test('model -> real ptc_execute prepare -> Worker accepted -> conclude; next model only on report', async () => {
+  const f = harness({ ptc: true })
+  try {
+    assert.equal(await f.agent.turn(), false)
+    assert.deepEqual(f.calls, ['model'])
+    assert.deepEqual(f.operations, ['postman_task_prepare', 'postman_worker'])
+    assert.deepEqual(f.events.filter(e => e.type === 'tool/call').map(e => e.data.name), ['ptc_execute'])
+    assert.equal(f.events.filter(e => e.type === 'turn/end').length, 1)
+    assert.equal(f.events.filter(e => e.type === 'postman/ptc-run').length, 1)
+    assert.equal(f.events.find(e => e.type === 'postman/ptc-run').data.yieldApplied, true)
+    f.queuedTurn.push({ id: 'worker-report', content: [{ type:'text',text:'Worker completed' }] })
+    assert.equal(await f.agent.turn(), false)
+    assert.deepEqual(f.calls, ['model', 'model'])
+    assert.ok(f.events.some(e => e.type === 'user/message' && e.data.id === 'worker-report'))
+    assert.ok(f.events.some(e => e.type === 'assistant/message' && e.data.message.content.some(b => b.text === 'report received')))
+  } finally { await f.dispose() }
+})
+
