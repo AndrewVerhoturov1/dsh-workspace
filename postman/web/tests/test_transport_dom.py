@@ -351,6 +351,50 @@ class TransportDomTests(unittest.TestCase):
         self.assertEqual(state['reminders'], [])
         self.assertIsNone(state['activeFlow'])
 
+    def test_bridge_handoff_keeps_original_cycle_deadline(self):
+        self.set_html(document(banner='<div role="status">Additional processing</div>'))
+        shown = [False]
+        def sleep(seconds):
+            self.clock.sleep(seconds)
+            if seconds == 10 and not shown[0]:
+                shown[0] = True
+                self.set_html(document(banner='<div role="alert">Connection interrupted</div>'))
+                self.route_body = document(turns=group(body=final(self.envelope())))
+        with patch.object(artifact_download, 'download_validated_artifact', return_value={
+                'ok': True, 'code': artifact_download.RESULT_DURABLE, 'details': {}}):
+            result, state = self.run_bridge(timeout_ms=600000, count=0, sleep=sleep)
+        self.assertTrue(result['ok'], result)
+        started = [e for e in state['transportEventJournal'] if e['event'] == 'RECOVERY_STARTED']
+        self.assertEqual(len(started), 2)
+        self.assertEqual(started[0]['deadline'], 180)
+        self.assertEqual(started[1]['deadline'], started[0]['deadline'])
+        self.assertGreater(started[1]['eventConfirmedAt'], started[0]['eventConfirmedAt'])
+
+    def test_bridge_handoff_with_expired_budget_does_not_reload_again(self):
+        self.set_html(document(banner='<div role="status">Additional processing</div>'))
+        shown = [False]
+        def sleep(seconds):
+            self.clock.sleep(seconds)
+            if seconds == 10 and not shown[0]:
+                shown[0] = True
+                self.clock.value = 180
+                self.set_html(document(banner='<div role="alert">Connection interrupted</div>'))
+            elif shown[0] and self.clock.value >= 200:
+                self.set_html(document(turns=group(body=final(self.envelope()))))
+        with patch.object(self.page, 'reload', wraps=self.page.reload) as reload, patch.object(
+                artifact_download, 'download_validated_artifact', return_value={
+                    'ok': True, 'code': artifact_download.RESULT_DURABLE, 'details': {}}):
+            result, state = self.run_bridge(timeout_ms=600000, count=0, sleep=sleep)
+        self.assertTrue(result['ok'], result)
+        self.assertEqual(reload.call_count, 1)
+        events = state['transportEventJournal']
+        started = [e for e in events if e['event'] == 'RECOVERY_STARTED']
+        self.assertEqual(len(started), 2)
+        self.assertEqual(started[1]['deadline'], started[0]['deadline'])
+        self.assertGreaterEqual(started[1]['startedElapsedMs'], started[0]['deadline'] * 1000)
+        self.assertIn('CONNECTION_RELOADS_EXHAUSTED', [e['event'] for e in events])
+        self.assertNotIn('CONTINUATION_SELECTED', [e['event'] for e in events])
+
     def test_bridge_weak_connection_during_system_wait_uses_normal_confirmation(self):
         self.set_html(document(banner='<div role="status">Additional processing</div>'))
         shown = [False]
@@ -364,13 +408,15 @@ class TransportDomTests(unittest.TestCase):
         with patch.object(self.page, 'reload', wraps=self.page.reload) as reload, patch.object(
                 artifact_download, 'download_validated_artifact', return_value={
                     'ok': True, 'code': artifact_download.RESULT_DURABLE, 'details': {}}):
-            result, state = self.run_bridge(count=0, sleep=sleep)
+            result, state = self.run_bridge(timeout_ms=600000, count=0, sleep=sleep)
         self.assertTrue(result['ok'], result)
         self.assertEqual(reload.call_count, 2)
         confirmed = next(e for e in state['transportEventJournal'] if e['event'] == 'SYSTEM_CONFIRMED'
                          and e['kind'] == observer.ASSISTANT_CONNECTION_INTERRUPTED)
         self.assertTrue(confirmed['confirmedOnSecondPoll'])
         self.assertGreaterEqual(confirmed['elapsedMs'], 11000)
+        started = [e for e in state['transportEventJournal'] if e['event'] == 'RECOVERY_STARTED']
+        self.assertEqual([e['deadline'] for e in started], [180, 180])
         self.assertNotIn('CONTINUATION_SELECTED', [e['event'] for e in state['transportEventJournal']])
 
     def test_bridge_result_during_system_wait_preempts_connection_handoff(self):
@@ -410,7 +456,7 @@ class TransportDomTests(unittest.TestCase):
         with patch.object(self.page, 'reload', wraps=self.page.reload) as reload, patch.object(
                 artifact_download, 'download_validated_artifact', return_value={
                     'ok': True, 'code': artifact_download.RESULT_DURABLE, 'details': {}}):
-            result, state = self.run_bridge(count=0, sleep=sleep)
+            result, state = self.run_bridge(timeout_ms=600000, count=0, sleep=sleep)
         self.assertTrue(result['ok'], result)
         self.assertEqual(reload.call_count, 2)
         events = state['transportEventJournal']
@@ -421,6 +467,7 @@ class TransportDomTests(unittest.TestCase):
         started = [e for e in events if e['event'] == 'RECOVERY_STARTED']
         self.assertEqual(len(started), 2)
         self.assertLess(handoff['sequence'], started[1]['sequence'])
+        self.assertEqual([e['deadline'] for e in started], [180, 180])
         self.assertNotIn('CONTROL_SEND_CONFIRMED', [e['event'] for e in events])
 
     def test_bridge_connection_during_system_wait_lost_lineage_fails_closed(self):

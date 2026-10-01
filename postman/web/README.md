@@ -109,7 +109,10 @@ random uniform wait 10–17 секунд → re-proof → natural continuation �
 Connection interrupted на границе этого flow передаёт управление последовательно:
 result-first scan → fresh same-chat/lineage/empty-composer proof → RECOVERY_ABORTED
 (reason=serial_handoff) → existing Connection recovery. Pending event сохраняет время
-confirmation; нет параллельного flow, повторного Stop/Send или нового deadline.
+confirmation и previousRecoveryDeadline; deadline следующего cycle ограничен
+min(previousRecoveryDeadline, normalNewRecoveryDeadline, softDeadline + 45s), без
+новых 180 секунд. При исчерпанном остатке — существующее пассивное CONNECTION_WAITING
+без reload; нет параллельного flow или повторного Stop/Send.
 `transport_control.py` сериализует фазы и banner episodes: одно непрерывное появление = один event,
 исчезновение rearm-ит detector, второе событие не накладывает новый flow поверх active recovery.
 Reload/control cycle bounded 180 секундами; soft deadline 60 минут. Confirmation timestamp

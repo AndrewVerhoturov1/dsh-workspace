@@ -71,6 +71,34 @@ class ControlTests(unittest.TestCase):
         self.assertLess(terminal['sequence'], started['sequence'])
         self.assertEqual(self.control.soft_deadline, 3600)
 
+    def test_handoff_deadline_caps_next_cycle_and_new_episode_rearms(self):
+        connection = observer.ASSISTANT_CONNECTION_INTERRUPTED
+        for started_at, confirmed_at, returned_at, previous_deadline, expected in (
+                (0, 100, 110, 180, 180),
+                (0, 100, 110, 300, 280),
+                (3590, 3599.9, 3600.1, 3645, 3645),
+                (0, 170, 181, 180, 180)):
+            with self.subTest(previous_deadline=previous_deadline, returned_at=returned_at):
+                self.setUp()
+                self.t = started_at
+                self.control.begin_recovery(SIGNAL, self.candidate())
+                self.control.active['deadline'] = previous_deadline
+                self.t = confirmed_at
+                self.control.candidate(connection, True, {'matchedText': 'Connection interrupted'})
+                episode = self.control.banners[connection]
+                episode['previousRecoveryDeadline'] = self.control.active['deadline']
+                self.t = returned_at
+                self.control.finish_recovery(connection, status='ABORTED', reason='serial_handoff')
+                self.assertTrue(self.control.begin_recovery(connection, episode['eventId']))
+                self.assertEqual(self.control.active['deadline'], expected)
+                self.assertEqual(self.control.recovery_remaining_ms(), max(0, int((expected - returned_at) * 1000)))
+                self.control.finish_recovery('ready')
+                self.control.candidate(connection, False, {})
+                if returned_at < self.control.soft_deadline:
+                    event = self.control.candidate(connection, True, {'matchedText': 'Connection interrupted'})
+                    self.assertTrue(self.control.begin_recovery(connection, event))
+                    self.assertEqual(self.control.active['deadline'], min(returned_at + 180, 3645))
+
     def test_deferred_weak_signal_requires_second_poll_and_absence_rearms(self):
         self.control.begin_recovery(SIGNAL, self.candidate())
         connection = observer.ASSISTANT_CONNECTION_INTERRUPTED

@@ -313,6 +313,10 @@ interrupted, результат проверяется первым, затем 
 и пустой composer. Additional Processing закрывается как RECOVERY_ABORTED с
 reason=serial_handoff; Connection recovery запускается следующей итерацией через
 существующий pending event, без второго active flow, повторного Stop или continuation.
+Deadline Connection cycle = min(previousRecoveryDeadline, normalNewRecoveryDeadline,
+softDeadline + 45s): handoff сохраняет предел активной recovery-цепочки, а не выдаёт
+новые 180 секунд. При нулевом остатке reload не начинается; действует существующее
+пассивное CONNECTION_WAITING в пределах исходного request deadline.
 После вставки handoff разрешён лишь при доказанной очистке unsent текста; Send UNKNOWN
 и потеря lineage остаются fail-closed. Strong/weak подтверждение и общий deadline не меняются.
 

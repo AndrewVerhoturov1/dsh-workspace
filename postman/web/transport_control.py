@@ -82,6 +82,7 @@ class TransportControl:
             episode.update(present=False, handled=False, weakSince=None)
             return None
         if not episode["present"]:
+            episode.pop("previousRecoveryDeadline", None)
             episode.update(present=True, handled=False, confirmed=False, number=episode["number"] + 1,
                            eventId=f"{self.request_id}:{kind}:{episode['number'] + 1}",
                            weakSince=self.clock(), weakText=details.get("matchedText"))
@@ -123,7 +124,8 @@ class TransportControl:
         self.active = {"kind": kind, "eventId": event_id, "startedElapsedMs": self.elapsed(),
                        "eventConfirmedAt": episode["eventConfirmedAt"],
                        "eventConfirmedElapsedMs": episode["eventConfirmedElapsedMs"],
-                       "deadline": min(episode["eventConfirmedAt"] + RECOVERY_CYCLE_MS / 1000,
+                       "deadline": min(episode.get("previousRecoveryDeadline", float("inf")),
+                                       episode["eventConfirmedAt"] + RECOVERY_CYCLE_MS / 1000,
                                        self.soft_deadline + RECOVERY_GRACE_MS / 1000)}
         self.transition(kind, eventId=event_id)
         self.event("RECOVERY_STARTED", **self.active)

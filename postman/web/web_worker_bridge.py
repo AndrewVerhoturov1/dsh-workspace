@@ -967,9 +967,12 @@ class WebWorkerBridge:
                         return {"kind": "no_handoff"}
                     if not ready.get("details", {}).get("interruptionEvidencePresent"):
                         return {"kind": "recovered", "result": ready}
+                    episode = control.banners[connection]
+                    episode["previousRecoveryDeadline"] = control.active["deadline"]
                     control.finish_recovery(connection, status="ABORTED",
-                                            reason="serial_handoff", nextKind=connection)
-                    event_id = control.banners.get(connection, {}).get("eventId")
+                                            reason="serial_handoff", nextKind=connection,
+                                            previousRecoveryDeadline=episode["previousRecoveryDeadline"])
+                    event_id = episode.get("eventId")
                     if control.can_begin_recovery(connection, event_id):
                         pending_control = (connection, event_id)
                     next_result_recheck = self.monotonic()
@@ -1052,11 +1055,17 @@ class WebWorkerBridge:
                         waiting_state()
                         if kind == browser_observer.ASSISTANT_CONNECTION_INTERRUPTED:
                             control.transition("CONNECTION_RECOVERY", eventId=event_id)
-                            recovered = browser_recovery.recover_interrupted_chat(
-                                page, chat_url, str(latest["prompt"]),
-                                original_prompt=prompt, anchor_binding=latest.get("anchorBinding"),
-                                budget_ms=remaining_ms(), sleep=self.sleep,
-                                monotonic=self.monotonic, on_event=recovery_event)
+                            budget_ms = remaining_ms()
+                            if budget_ms <= 0:
+                                # An expired handoff enters passive waiting, never a new reload cycle.
+                                recovered = {"ok": False, "recoverable": True,
+                                             "code": browser_recovery.RECOVERY_BUDGET_EXHAUSTED}
+                            else:
+                                recovered = browser_recovery.recover_interrupted_chat(
+                                    page, chat_url, str(latest["prompt"]),
+                                    original_prompt=prompt, anchor_binding=latest.get("anchorBinding"),
+                                    budget_ms=budget_ms, sleep=self.sleep,
+                                    monotonic=self.monotonic, on_event=recovery_event)
                         else:
                             recovered = system_recovery.prepare_additional_processing(
                                 page, chat_url, prompt, str(latest["prompt"]),
