@@ -22,6 +22,14 @@ dedicated Chrome/CDP
 → request-scoped durable result
 ```
 
+## Native input ZIP
+
+Optional verified Host input bundle дополняет, а не заменяет существующую Send state machine. `input_attachment.py` получает только Direct-verified request attachment, читает/сверяет ZIP bytes и загружает ровно один native Playwright FilePayload. No model filesystem paths, generic file lists или directory globs.
+
+После fresh/existing exact chat и empty composer proof: upload → exact filename/count=1 → positive completed file control/no progress/error → prompt fill → re-proof → single Send. После Send нужен ровно один новый user turn с exact full prompt и ZIP resource card в том же exact user-message unit, плюс empty composer/bound URL. DOM filename — membership proof, не remote hash; file ID совпадает, если exposed до и после Send; отсутствие ID само по себе не отменяет card proof. Filename не подставляется в CSS selector.
+
+Pre-Send failures = PROVEN_NOT_SENT. Missing/uncertain sent ZIP = PROMPT_SEND_UNKNOWN, diagnostic POSTMAN_SENT_ATTACHMENT_PROOF_UNKNOWN; не reupload/resend. Serialized system recovery, reminders и deadlines #294 не рефакторятся. Unknown UI markup fail-closed. Без inputs старый flow; reminders/automatic continuations inputs не наследуют. Selector helper и fake-DOM tests изолированы. Один isolated live acceptance прогон production helpers подтвердил PROVEN_SENT для REQ_20261001T223452Z_9498: exact prompt SHA, native ZIP в том же новом user turn, composer empty и bound URL. Runtime Leader→Bridge E2E в установленном Harness не выполнялся; до единственного Send pre-Send попытки оставались PROVEN_NOT_SENT. Details/limits/cleanup: [POSTMAN_INPUT_FILES.md](../POSTMAN_INPUT_FILES.md).
+
 ## Модули
 
 ```text

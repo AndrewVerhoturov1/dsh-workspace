@@ -26,6 +26,7 @@ import chat_reference  # noqa: E402
 import process_lock  # noqa: E402
 import request_identity  # noqa: E402
 import task_package  # noqa: E402
+import input_bundle  # noqa: E402
 import text_result  # noqa: E402
 import text_task_package  # noqa: E402
 from postman_direct import (  # noqa: E402
@@ -218,13 +219,37 @@ class DirectPostmanAsk:
         _atomic_json(path, record)
         return record
 
-    def run(
+    def run(self, *, input_bundle_manifest=None, **kwargs):
+        self.publication_receipt = None
+        attachment = None
+        try:
+            inputs = kwargs.get("input_files") or []
+            if inputs:
+                inputs = task_package.normalize_input_files(inputs)
+            kwargs["input_files"] = inputs
+            if inputs or input_bundle_manifest:
+                attachment = input_bundle.read_handoff(input_bundle_manifest, kwargs["request_id"], inputs)
+        except input_bundle.InputBundleError as exc:
+            raise DirectPostmanError(exc.code, str(exc), details={"sendState": "PROVEN_NOT_SENT",
+                "inputBundlePhase": "direct-handoff"}) from exc
+        try:
+            return self._run(input_attachment=attachment, **kwargs)
+        finally:
+            if attachment is not None:
+                for path in (attachment.path, Path(input_bundle_manifest)):
+                    try:
+                        path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+
+    def _run(
         self,
         *,
         request_id: str,
         task: str,
         chat_request_id: str | None = None,
         input_files: list[dict[str, object]] | None = None,
+        input_attachment: input_bundle.InputAttachment | None = None,
         cdp_url: str = bootstrap.DEFAULT_CDP_URL,
     ) -> dict[str, Any]:
         request_identity.assert_canonical_request_id(request_id)
@@ -264,6 +289,7 @@ class DirectPostmanAsk:
             request_id,
             STATE_INIT,
             taskSha256=_sha256_text(task),
+            **({"inputBundle": input_attachment.metadata()} if input_attachment else {}),
             parentRequestId=chat_ref.request_id if chat_ref is not None else None,
             rootRequestId=request_id,
             continuationIndex=0,
@@ -282,6 +308,7 @@ class DirectPostmanAsk:
                 request_id=request_id,
                 user_intent=task,
                 input_files=input_files,
+                native_input_request_id=request_id if input_attachment else None,
                 repository=self.repository,
                 base_commit=snapshot.prepublication_commit,
             )
@@ -318,6 +345,7 @@ class DirectPostmanAsk:
         self._write_state(request_id, STATE_WEB_RUNNING, **conversation_fields)
         result = bridge.run_request(
             request_id,
+            **({"input_attachment": input_attachment} if input_attachment else {}),
             task_url=published.task_url,
             prompt=prompt,
             expected_filename=expected_filename,
@@ -447,6 +475,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cdp-url", default=bootstrap.DEFAULT_CDP_URL)
     parser.add_argument("--chat-request-id")
     parser.add_argument("--input-files-base64")
+    parser.add_argument("--input-bundle-manifest")
     return parser
 
 
@@ -484,6 +513,7 @@ def main(argv: list[str] | None = None) -> int:
                 input_files=task_package.normalize_input_files(
                     json.loads(base64.b64decode(args.input_files_base64, validate=True).decode("utf-8"))
                 ) if args.input_files_base64 else [],
+                input_bundle_manifest=args.input_bundle_manifest,
                 chat_request_id=args.chat_request_id,
                 cdp_url=args.cdp_url,
             )

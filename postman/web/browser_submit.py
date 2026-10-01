@@ -35,6 +35,7 @@ if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
 import browser_bootstrap as bootstrap
+import input_attachment as attachments
 
 CHATGPT_URL = bootstrap.CHATGPT_URL
 DEFAULT_CDP_URL = bootstrap.DEFAULT_CDP_URL
@@ -704,7 +705,7 @@ def read_semantic_message_text(locator: Any) -> str:
         return ""
 
 
-def collect_user_turn_details(page: Any) -> list[dict[str, Any]]:
+def collect_user_turn_details(page: Any, attachment_name: str | None = None) -> list[dict[str, Any]]:
     """Collect one logical user-turn selector family, never selector aliases."""
     for selector in USER_TURN_SELECTORS:
         try:
@@ -726,6 +727,7 @@ def collect_user_turn_details(page: Any) -> list[dict[str, Any]]:
                     "textSha256": prompt_sha256(text),
                     "textStart": text[:120],
                     "textEnd": text[-120:],
+                    **({"attachment": attachments.snapshot(item, attachment_name, sent=True)} if attachment_name else {}),
                 })
             return values
         except Exception:
@@ -935,8 +937,9 @@ def insert_prompt(
 
 
 def _observe_send_proof(page: Any, prompt: str, before_user_turn_count: int,
-                        *, conversation_url: str | None = None) -> tuple[bool, dict[str, Any]]:
-    user_turn_details = collect_user_turn_details(page)
+                        *, conversation_url: str | None = None, input_attachment=None,
+                        attachment_id=None) -> tuple[bool, dict[str, Any]]:
+    user_turn_details = collect_user_turn_details(page, input_attachment.name if input_attachment else None)
     user_turns = [item["text"] for item in user_turn_details]
     page_url = str(getattr(page, "url", "") or "")
     composer_snapshot = _active_composer_groups(page)
@@ -955,7 +958,11 @@ def _observe_send_proof(page: Any, prompt: str, before_user_turn_count: int,
     correlation_mode = "exact" if exact_turn else "none"
     chat_bound = is_bound_chat_url(page_url) and (conversation_url is None or page_url == conversation_url)
     last_turn = user_turn_details[-1] if user_turn_details else {}
-    return correlated_turn and composer_empty and chat_bound, {
+    attachment_proof = last_turn.get("attachment", {})
+    attachment_matches = input_attachment is None or attachments.ready(attachment_proof, input_attachment.name, attachment_id)
+    return correlated_turn and composer_empty and chat_bound and attachment_matches, {
+        **({"sentAttachment": attachment_proof, "sentAttachmentConfirmed": new_turn and attachment_matches,
+            "inputBundle": input_attachment.metadata()} if input_attachment else {}),
         "userTurnCountBefore": before_user_turn_count,
         "userTurnCountNow": len(user_turns),
         "userTurnSelector": last_turn.get("selector", ""),
@@ -986,8 +993,14 @@ def submit_once(
     *,
     chat_confirmed_state: str = FRESH_CHAT_CONFIRMED,
     timeout_ms: int = DEFAULT_TIMEOUT_MS,
+    input_attachment=None,
+    attachment_id=None,
+    conversation_url=None,
 ) -> dict[str, Any]:
-    transitions: list[str] = [PAGE_OWNED, chat_confirmed_state, COMPOSER_EMPTY_CONFIRMED, PROMPT_INSERTED]
+    transitions: list[str] = [PAGE_OWNED, chat_confirmed_state, COMPOSER_EMPTY_CONFIRMED]
+    if input_attachment:
+        transitions.extend([attachments.ATTACHMENT_UPLOAD_STARTED, attachments.ATTACHMENT_READY_CONFIRMED])
+    transitions.append(PROMPT_INSERTED)
     before_turns = collect_user_turn_texts(page)
 
     def send_control_ready() -> tuple[bool, dict[str, Any]]:
@@ -1007,6 +1020,19 @@ def submit_once(
             details={"sendControl": selector or ""},
         )
 
+    if input_attachment:
+        current_url = str(getattr(page, "url", "") or "")
+        chat_still_owned = (is_chatgpt_root_url(current_url) and count_conversation_turns(page) == 0
+            if chat_confirmed_state == FRESH_CHAT_CONFIRMED else current_url == conversation_url)
+        if not chat_still_owned:
+            return _result(SUBMIT_INVALID_CONFIG, ok=False, send_state=guard.state,
+                transitions=transitions, details={"reason": "attachment_chat_changed_before_send"})
+        active, _ = find_composer(page)
+        attachment_ready, attachment_proof = attachments.before_send(active, input_attachment, attachment_id)
+        exact_prompt, prompt_proof = _exact_prompt_readback(page, prompt)
+        if not attachment_ready or not exact_prompt:
+            return _result(attachments.ATTACHMENT_LOST, ok=False, send_state=guard.state,
+                           transitions=transitions, details={"attachment": attachment_proof, "prompt": prompt_proof})
     try:
         guard.begin()
     except SubmitError as exc:
@@ -1033,13 +1059,17 @@ def submit_once(
         )
 
     ok, proof = _wait_until(
-        lambda: _observe_send_proof(page, prompt, len(before_turns)),
+        lambda: _observe_send_proof(page, prompt, len(before_turns),
+            **({"input_attachment": input_attachment, "attachment_id": attachment_id,
+                "conversation_url": conversation_url} if input_attachment else {})),
         timeout_ms=timeout_ms,
     )
     proof["sendControl"] = selector
     proof["promptSha256"] = prompt_sha256(prompt)
     if not ok:
         guard.unknown()
+        if input_attachment and not proof.get("sentAttachmentConfirmed"):
+            proof["attachmentCode"] = attachments.SENT_ATTACHMENT_UNKNOWN
         return _result(
             PROMPT_SEND_UNKNOWN,
             ok=False,
@@ -1060,7 +1090,7 @@ def submit_once(
     )
 
 
-def submit_fresh_prompt(page: Any, prompt: str, *, timeout_ms: int = DEFAULT_TIMEOUT_MS) -> dict[str, Any]:
+def submit_fresh_prompt(page: Any, prompt: str, *, timeout_ms: int = DEFAULT_TIMEOUT_MS, input_attachment=None) -> dict[str, Any]:
     prep = prepare_fresh_chat(page, timeout_ms=timeout_ms)
     if not prep["ok"]:
         return _result(
@@ -1072,6 +1102,15 @@ def submit_fresh_prompt(page: Any, prompt: str, *, timeout_ms: int = DEFAULT_TIM
             details=prep.get("details"),
         )
     composer = prep["composer"]
+    attachment_id = None
+    if input_attachment:
+        # Preparation has proved chat identity and an empty live composer. No Send yet.
+        uploaded = attachments.upload(page, composer, input_attachment, timeout_ms=timeout_ms, wait_until=_wait_until)
+        if not uploaded["ok"]:
+            return _result(uploaded["code"], ok=False, send_state=SEND_PROVEN_NOT_SENT,
+                transitions=[PAGE_OWNED, FRESH_CHAT_CONFIRMED, COMPOSER_EMPTY_CONFIRMED, attachments.ATTACHMENT_UPLOAD_STARTED],
+                details=uploaded.get("details"))
+        attachment_id = (uploaded["details"].get("ids") or [None])[0]
     inserted = insert_prompt(
         page,
         composer,
@@ -1089,7 +1128,8 @@ def submit_fresh_prompt(page: Any, prompt: str, *, timeout_ms: int = DEFAULT_TIM
             details=inserted.get("details"),
         )
     guard = SendGuard()
-    result = submit_once(page, composer, prompt, guard, timeout_ms=timeout_ms)
+    result = submit_once(page, composer, prompt, guard, timeout_ms=timeout_ms,
+        **({"input_attachment": input_attachment, "attachment_id": attachment_id} if input_attachment else {}))
     result["details"].update(inserted.get("details", {}))
     return result
 
@@ -1101,6 +1141,7 @@ def submit_existing_prompt(
     *,
     timeout_ms: int = DEFAULT_TIMEOUT_MS,
     navigate: bool = True,
+    input_attachment=None,
 ) -> dict[str, Any]:
     prep = prepare_existing_chat(page, conversation_url, timeout_ms=timeout_ms, navigate=navigate)
     if not prep["ok"]:
@@ -1113,6 +1154,15 @@ def submit_existing_prompt(
             details=prep.get("details"),
         )
     composer = prep["composer"]
+    attachment_id = None
+    if input_attachment:
+        # Preparation has proved chat identity and an empty live composer. No Send yet.
+        uploaded = attachments.upload(page, composer, input_attachment, timeout_ms=timeout_ms, wait_until=_wait_until)
+        if not uploaded["ok"]:
+            return _result(uploaded["code"], ok=False, send_state=SEND_PROVEN_NOT_SENT,
+                transitions=[PAGE_OWNED, EXISTING_CHAT_CONFIRMED, COMPOSER_EMPTY_CONFIRMED, attachments.ATTACHMENT_UPLOAD_STARTED],
+                details=uploaded.get("details"))
+        attachment_id = (uploaded["details"].get("ids") or [None])[0]
     inserted = insert_prompt(
         page,
         composer,
@@ -1129,7 +1179,9 @@ def submit_existing_prompt(
             recoverable=True,
             details=inserted.get("details"),
         )
-    result = submit_once(page, composer, prompt, SendGuard(), chat_confirmed_state=EXISTING_CHAT_CONFIRMED, timeout_ms=timeout_ms)
+    result = submit_once(page, composer, prompt, SendGuard(), chat_confirmed_state=EXISTING_CHAT_CONFIRMED, timeout_ms=timeout_ms,
+        **({"input_attachment": input_attachment, "attachment_id": attachment_id,
+            "conversation_url": conversation_url} if input_attachment else {}))
     result["details"].update(inserted.get("details", {}))
     return result
 

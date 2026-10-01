@@ -356,8 +356,11 @@ class WebWorkerBridge:
         playwright_factory: Callable[[], Any] | None = None,
         validator_runner: Callable[[Path, dict[str, Any]], dict[str, Any]] | None = None,
         image_prepare: Callable[[], dict[str, Any]] | None = None,
+        input_attachment=None,
     ) -> dict[str, Any]:
         """Run one browser page; image mode continues to ZIP on that same page."""
+        if input_attachment is not None and (input_attachment.request_id != request_id or image_prepare is not None):
+            return _result(BRIDGE_INVALID_CONFIG, ok=False, details={"reason": "input_attachment_binding_invalid"})
         image_stage = image_prepare is not None
         image_flow = image_stage
         if image_stage:
@@ -441,13 +444,19 @@ class WebWorkerBridge:
                 if conversation_url is None:
                     # Image creation can delay the first /c/... URL after the user turn appears.
                     submitted = browser_submit.submit_fresh_prompt(
-                        page, prompt, timeout_ms=max(timeout_ms, 90_000) if image_stage else timeout_ms)
+                        page, prompt, **({"input_attachment": input_attachment} if input_attachment else {}),
+                        timeout_ms=max(timeout_ms, 90_000) if image_stage else timeout_ms)
                 else:
                     submitted = browser_submit.submit_existing_prompt(
-                        page, prompt, conversation_url, timeout_ms=timeout_ms
+                        page, prompt, conversation_url, timeout_ms=timeout_ms,
+                        **({"input_attachment": input_attachment} if input_attachment else {})
                     )
                 if not submitted.get("ok"):
                     return self._fail(request, submitted.get("code", "submit_failed"), details=submitted)
+                if input_attachment and (submitted.get("sendState") != browser_submit.SEND_PROVEN_SENT or
+                        submitted.get("details", {}).get("sentAttachmentConfirmed") is not True):
+                    return self._fail(request, "POSTMAN_SENT_ATTACHMENT_PROOF_UNKNOWN", details={
+                        **submitted, "sendState": browser_submit.SEND_UNKNOWN})
                 chat_url = submitted.get("details", {}).get("chatUrl")
                 if not isinstance(chat_url, str) or not browser_submit.is_bound_chat_url(chat_url):
                     return self._fail(request, "submit did not bind a chat URL", details=submitted)

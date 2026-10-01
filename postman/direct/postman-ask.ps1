@@ -13,6 +13,8 @@ param(
 
     [string]$InputFilesBase64 = '',
 
+    [string]$InputBundleManifest = '',
+
     [string]$Repository = 'AndrewVerhoturov1/dsh-workspace',
     [string]$Branch = '',
     [string]$Python = 'python'
@@ -63,6 +65,9 @@ try {
         $argsList += @('--input-files-base64', $InputFilesBase64)
     }
 
+    if (-not [string]::IsNullOrEmpty($InputBundleManifest)) {
+        $argsList += @('--input-bundle-manifest', $InputBundleManifest)
+    }
     & $Python '-X' 'utf8' @argsList
     exit $LASTEXITCODE
 }
