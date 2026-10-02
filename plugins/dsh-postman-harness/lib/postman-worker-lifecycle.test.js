@@ -3,7 +3,7 @@ import test from 'node:test'
 import { createMemoryTaskRegistry } from './postman-task-registry.js'
 import { createPostmanWorkerTools } from './postman-worker.js'
 import { createPostmanYieldTool } from './postman-bridge.js'
-function fixture() {
+function fixture({ localDevelopment = false } = {}) {
   const registry = createMemoryTaskRegistry()
   const leader = { id: 'leader', session: { header: { agentPreset: 'postman-leader', delegationDepth: 0 }, events: [] } }
   const agents = new Map([[leader.id, leader]])
@@ -30,9 +30,9 @@ function fixture() {
         return true
       },
     } }
-  const tools = createPostmanWorkerTools(ctx, undefined, contexts)
+  const tools = createPostmanWorkerTools(ctx, undefined, contexts, { localDevelopment })
   const exec = { agent: leader, signal: new AbortController().signal, callId: 'stop-1' }
-  return { registry, leader, agents, calls, tools, ctx, exec, setApproval: value => { approve = value } }
+  return { registry, leader, agents, calls, tools, ctx, contexts, exec, setApproval: value => { approve = value } }
 }
 async function start(f) {
   await f.registry.create(f.leader.id, { workers: {} })
@@ -40,6 +40,60 @@ async function start(f) {
   assert.equal(accepted.status, 'POSTMAN_WORKER_TASK_ACCEPTED')
   return accepted.workerSessionId
 }
+test('localDevelopment is Host-only, default off, and cannot be enabled by tool arguments', async () => {
+  const f = fixture(), id = await start(f)
+  assert.equal((await f.tools.stopTool.execute({ mode: 'cancel', workerSessionId: id, localDevelopment: true }, f.exec)).status,
+    'POSTMAN_WORKER_CANCEL_APPROVAL_REQUIRED')
+  assert.deepEqual(f.calls.drains, [])
+})
+test('local cancellation needs no unavailable approval, releases only exact child, and never claims success', async () => {
+  const f = fixture({ localDevelopment: true }), id = await start(f)
+  f.ctx.get = () => null
+  f.agents.get(id).status = 'running'
+  const result = await f.tools.stopTool.execute({ mode: 'cancel', workerSessionId: id }, f.exec)
+  assert.equal(result.status, 'POSTMAN_WORKER_CANCELLED')
+  assert.equal(result.taskCompleted, false)
+  assert.equal(result.resultReported, false)
+  assert.equal(result.durableSessionDeleted, false)
+  assert.deepEqual(f.calls.drains, [[id]])
+  assert.equal(f.registry.get('leader').workers[id], undefined)
+  assert.deepEqual(f.calls.approvals, [])
+})
+test('local close releases idle Worker without certifying missing historical reports', async () => {
+  const f = fixture({ localDevelopment: true }), id = await start(f)
+  f.agents.get(id).inbox.hasPending = false
+  const result = await f.tools.stopTool.execute({ workerSessionId: id }, f.exec)
+  assert.equal(result.status, 'POSTMAN_WORKER_STOPPED')
+  assert.equal(result.resultReported, false)
+  assert.equal(result.taskCompleted, false)
+  assert.equal(f.registry.get('leader').workers[id], undefined)
+})
+test('local close still rejects running, queued, descendants, wrong caller and unknown target', async () => {
+  for (const scenario of ['queued', 'running', 'descendants']) {
+    const f = fixture({ localDevelopment: true }), id = await start(f)
+    if (scenario !== 'queued') f.agents.get(id).inbox.hasPending = false
+    if (scenario === 'running') f.agents.get(id).status = 'running'
+    if (scenario === 'descendants') f.ctx.subagents.listDescendants = async () =>
+      [{ kind: 'child', mode: 'continuable', activity: 'running' }]
+    assert.equal((await f.tools.stopTool.execute({ workerSessionId: id }, f.exec)).status, 'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT')
+    assert.deepEqual(f.calls.drains, [])
+  }
+  const f = fixture({ localDevelopment: true }), id = await start(f)
+  assert.equal((await f.tools.stopTool.execute({ mode: 'cancel', workerSessionId: id }, { ...f.exec, agent: { ...f.leader } })).status, 'POSTMAN_WORKER_CALLER_REJECTED')
+  await f.tools.stopTool.execute({ mode: 'cancel', workerSessionId: 'other' }, f.exec)
+  assert.deepEqual(f.calls.drains, [])
+})
+test('local restore reservation releases idle bindings, not active work', async () => {
+  const f = fixture({ localDevelopment: true }), id = await start(f)
+  f.contexts.isRestoring = () => true
+  f.ctx.subagents.drainContinuableChildren = async (_parent, ids) => { f.calls.drains.push(ids); ids.forEach(id => f.agents.delete(id)) }
+  assert.equal(await f.tools.prepareRestore('leader'), false)
+  f.agents.get(id).inbox.hasPending = false
+  assert.equal(await f.tools.prepareRestore('leader'), true)
+  assert.equal(f.registry.get('leader').workers[id], undefined)
+  assert.deepEqual(f.calls.drains, [[id]])
+})
+
 test('accepted but idle Worker cannot close, nor can forged cancel reason/force/flag', async () => {
   const f = fixture(); const id = await start(f)
   assert.equal((await f.tools.stopTool.execute({}, f.exec)).status, 'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT')
