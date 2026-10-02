@@ -375,12 +375,13 @@ class WebWorkerBridge:
             # persisted worker identity. Never resend after restart or uncertainty.
             existing = self.read_state(request_id)
             if resume_image:
-                failure = (existing or {}).get("failureDetails", {})
-                proof = failure.get("details", {})
+                failure = (existing or {}).get("imageResumeOriginalFailure") or (existing or {}).get("failureDetails", {})
+                retry_read = (existing or {}).get("lastError") == "image_resume_send_unproven"
+                proof = failure if retry_read else failure.get("details", {})
                 if (not input_attachment or not conversation_url or not existing
                         or existing.get("exactPromptText") != prompt
-                        or failure.get("code") != browser_submit.PROMPT_SEND_UNKNOWN
-                        or failure.get("sendState") != browser_submit.SEND_UNKNOWN
+                        or (not retry_read and failure.get("code") != browser_submit.PROMPT_SEND_UNKNOWN)
+                        or (not retry_read and failure.get("sendState") != browser_submit.SEND_UNKNOWN)
                         or proof.get("chatUrl") != conversation_url
                         or proof.get("exactUserTurn") is not True
                         or proof.get("userTurnCountBefore") != 0
@@ -466,9 +467,11 @@ class WebWorkerBridge:
                     if not prepared.get("ok"):
                         return self._fail(request, prepared.get("code", "image_resume_chat_unproven"),
                                           details=prepared)
-                    proven, reproved = browser_submit._observe_send_proof(
-                        page, prompt, 0, conversation_url=conversation_url,
-                        input_attachment=input_attachment)
+                    self._write_state(request, WEB_STARTING, imageResumeOriginalFailure=failure)
+                    proven, reproved = browser_submit._wait_until(
+                        lambda: browser_submit._observe_send_proof(
+                            page, prompt, 0, conversation_url=conversation_url,
+                            input_attachment=input_attachment), timeout_ms=timeout_ms)
                     if not proven:
                         return self._fail(request, "image_resume_send_unproven", details=reproved)
                     submitted = {"ok": True, "code": browser_submit.PROMPT_SEND_CONFIRMED,
