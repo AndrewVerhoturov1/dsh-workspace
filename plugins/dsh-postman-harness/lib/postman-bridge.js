@@ -1,6 +1,6 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { createPtcAdapter, WORKER_MUTATION_PROFILE } from './ptc-adapter.js'
-import { createPostmanInputFilesTool, postmanInputGrants } from './postman-input-files.js'
+import { CurrentAttachmentStore, createPostmanInputFilesTool, postmanInputGrants } from './postman-input-files.js'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { parsePostmanUserTurn } from './direct-current-turn.js'
 import { createPostmanWorkerTools } from './postman-worker.js'
@@ -16,7 +16,7 @@ import {
 } from './postman-bridge-core.js'
 
 export const name = 'dsh-postman-harness-bridge'
-export const inject = ['agents', 'subagents', 'tools', 'storageDomain']
+export const inject = ['agents', 'subagents', 'tools', 'storageDomain', 'attachments']
 
 function output() {
   return {
@@ -176,6 +176,7 @@ export function installPostmanWorkerReportObserver(ctx, worker) {
 export async function apply(ctx) {
   const registry = await sharedPostmanTaskRegistry(ctx.storageDomain)
   const contexts = initializePostmanTaskContexts(registry)
+  const currentAttachments = new CurrentAttachmentStore(ctx)
   const coordinator = createPostmanBridgeLaunchCoordinator()
   const grants = createImplementationArtifactGrants()
   let boundaries, ptc
@@ -203,7 +204,8 @@ export async function apply(ctx) {
   ctx.tools.guard(exec => postmanPtcDirectCallGuard(exec, id => ctx.agents.get(id), ownsPtcWorker))
   ctx.tools.register(ptc.tool)
   ctx.tools.register(createPostmanTaskPrepareTool(ctx, contexts))
-  ctx.tools.register(createPostmanInputFilesTool(ctx, contexts))
+  ctx.tools.register(createPostmanInputFilesTool(ctx, contexts, { currentAttachments,
+    resolveAttachment: (ref, signal) => ctx.attachments.readImage(ref, signal) }))
   ctx.tools.register(createPostmanBridgeTool(ctx, jobs, postmanTaskContexts))
   ctx.tools.register(createPostmanBridgeStatusTool(ctx, jobs))
   ctx.tools.register(createPostmanTaskRestoreTool(ctx, postmanTaskContexts, { jobs, worker }))
@@ -217,6 +219,7 @@ export async function apply(ctx) {
   ctx.tools.register(createImplementationArtifactApplyTool(ctx, grants, worker, { taskContexts: postmanTaskContexts, jobs }))
   ctx.effect(() => async () => {
     try { await jobs.dispose() } finally {
+      currentAttachments.dispose()
       postmanInputGrants.dispose()
       worker.dispose()
       stopContextWatch()
@@ -239,12 +242,14 @@ export async function apply(ctx) {
   })
   ctx.on('agent-preset/selected', sessionId => {
     const agent = ctx.agents.get(sessionId)
+    if (agent) currentAttachments.release(agent)
     ptc.remove(agent); boundaries.refreshSession(sessionId); ptc.refresh(agent)
     for (const child of ctx.agents.list()) if (child.session?.header?.parentSession === sessionId) refreshWorker(child.id)
   })
   ctx.on('agent/disposed', ({ agent }) => {
     worker.releaseActivation(agent)
     worker.suspendLeader(agent)
+    currentAttachments.release(agent)
     postmanInputGrants.release(agent)
     ptc.remove(agent); boundaries.disposeAgent(agent)
     for (const child of ctx.agents.list()) if (child.session?.header?.parentSession === agent.id) refreshWorker(child.id)

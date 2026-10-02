@@ -14,6 +14,26 @@
 
 Leader переносит выданные descriptors без изменений в `--input-files-json [{...}]` на первой transport metadata строке непосредственно после trigger separator (или после `--chat <REQ>` lookup). Затем newline и неизменённый intent. Header не является User intent. Cleanup staged bundle: `postman_input_files({action:"cleanup",bundleId:"<own bundle>"})`; чужие bundle отвергаются, повторный cleanup идемпотентен. CLI без Host snapshot-dir остаётся descriptor-only ручной диагностикой, не production Leader authority.
 
+## Current user attachment selection
+
+После public-stage consent и `postman_task_prepare()`:
+
+```js
+postman_input_files({action:"stage_current_attachments"})
+// При нескольких current attachments:
+postman_input_files({action:"stage_current_attachments",selectionIds:["<exact returned current selectionId>"]})
+```
+
+Host-only process-local store слушает `session/event` один раз за Bridge plugin lifecycle и хранит только metadata/handles последнего exact `user/message` с `role === "user"`, `source.kind === "user"` этой живой top-level Leader session. Новый user message полностью заменяет запись, включая zero attachments. System/reminder, subagent reports, synthetic messages и другая session не confer authority; после restart ничего не восстанавливается из model text. Store и его listener освобождаются при plugin disposal; bytes постоянно не хранятся.
+
+Zero current image attachments → `POSTMAN_INPUT_CURRENT_ATTACHMENT_UNAVAILABLE`. Один → auto-selection. Несколько без selectors → `POSTMAN_INPUT_CURRENT_ATTACHMENT_SELECTION_REQUIRED` с компактными metadata каждого occurrence: `selectionId`, `attachmentId`, optional `name`, `mediaType`, `bytes`, `width`, `height`; **zero byte reads / zero publication**. Host создаёт process-local ordinal `selectionId` (`"1"`, `"2"`, …) при capture и не переиспользует его для новых user turns/sessions в этом store; token действует только внутри exact current record, не persist и не восстанавливается после restart. Content-addressed `attachmentId = sha256:<bytes hash>` не изменяется и может совпадать у разных occurrences. Exact selection допускает 1–20 unique `selectionIds` из текущей записи; duplicate selectors → `POSTMAN_INPUT_ARGUMENTS_INVALID`, unknown/stale/foreign selector → `POSTMAN_INPUT_CURRENT_ATTACHMENT_MISMATCH` до resolver/publication. Resolver получает exact captured DSH ref выбранного occurrence. Arbitrary token сам по себе не authority. Модель не задаёт и не получает filesystem path; Host не ищет файлы по имени и не использует path guessing.
+
+Официальный установленный DSH API: `ctx.attachments.readImage(ref, signal)` → `StoredImageAttachment {ref,data:Uint8Array}` (`@deepseek-ai/dsh-attachment`: `AttachmentStore`). `ImageBlock.attachment` содержит immutable normalized-image reference, exact encoded length и opaque `attachmentId`, не путь. Backend проверяет digest/media/dimensions/length. Отправляются exact bytes этого Harness attachment, не реконструированный original upload или model-request variant. В установленном DSH `0.1.1-rc.2` pathless flow поддерживает только Harness image attachments PNG / JPEG / WebP / GIF через этот API. PDF, ZIP, DOCX и другие generic file attachments не поддерживаются. `POSTMAN_INPUT_CURRENT_ATTACHMENT_UNAVAILABLE` для non-image не доказывает отсутствия пользовательского файла: текущий Host resolver не умеет его читать. Не искать файл по имени в Downloads/Desktop, не угадывать local path, не привлекать Worker только для filesystem search и не выдумывать generic attachment resolver. Реально предоставленный пользователем отдельный известный local path остаётся прежним explicit `stage(paths)` workflow.
+
+Host дополнительно сверяет resolved byte length и SHA-256 для canonical `sha256:<64 lowercase hex>`, применяет 16 MiB/file и 48 MiB aggregate limits до publication. Bytes временно записываются под допустимым exact original name (без имени — Host fallback name) в отдельную private subdirectory и проходят прежний Python `--stage`. Private source root удаляется best-effort после stage. Path отсутствует в descriptors/task/diagnostics/model output. После selection вся прежняя ZIP chain неизменна: private snapshot → immutable GitHub provenance descriptor → PostmanInputGrants → exact Bridge pin/child → verified ZIP → native Web attachment.
+
+Это всё равно **public** `transport/postman-inputs`, не private upload. Выбор Postman/PostmanAsk не равен согласию на публичную GitHub history: перед staging требуется отдельное явное разрешение этих bytes через `ask_user_question` (ответ — tool result, не новый `user/message`), без повторного вопроса при уже выданном разрешении и без скрытого fallback при отказе. Cleanup удаляет current tree entry, **не стирает Git history**.
+
 ## Exact bytes / TOCTOU
 
 - `stage` читает каждый exact regular file один раз (bounded read). Те же bytes дают hash/length, GitHub blob и private snapshot. Изменение исходного файла позднее не меняет ZIP.
@@ -64,13 +84,15 @@ Canonical browser prompt остаётся двухстрочным: POSTMAN_REQU
 
 ## Fail-closed codes
 
+Current selection: `POSTMAN_INPUT_CURRENT_ATTACHMENT_UNAVAILABLE`, `POSTMAN_INPUT_CURRENT_ATTACHMENT_SELECTION_REQUIRED`, `POSTMAN_INPUT_CURRENT_ATTACHMENT_MISMATCH`.
+
 Host/Direct: `POSTMAN_INPUT_MATERIALIZATION_MISSING`, `POSTMAN_INPUT_MATERIALIZATION_MISMATCH`, `POSTMAN_INPUT_BUNDLE_LIMIT_EXCEEDED`, `POSTMAN_INPUT_BUNDLE_BUILD_FAILED`, `POSTMAN_INPUT_BUNDLE_INVALID`, `POSTMAN_INPUT_BUNDLE_CONTENT_MISMATCH`, `POSTMAN_INPUT_BUNDLE_HANDOFF_INVALID`; прежний `POSTMAN_INPUT_PROVENANCE_REJECTED` сохраняется.
 
 Browser: `POSTMAN_ATTACHMENT_CONTROL_UNAVAILABLE`, `POSTMAN_ATTACHMENT_UPLOAD_FAILED`, `POSTMAN_ATTACHMENT_UPLOAD_TIMEOUT`, `POSTMAN_ATTACHMENT_NOT_READY`, `POSTMAN_ATTACHMENT_LOST_BEFORE_SEND`. Sent proof uncertainty сохраняет `PROMPT_SEND_UNKNOWN` + diagnostic `POSTMAN_SENT_ATTACHMENT_PROOF_UNKNOWN`.
 
 ## Проверенность DOM / ограничения
 
-2026-10-01: live read-only inspection подтвердил `form[data-chatgpt-composer]`, scoped file input, `[data-composer-attachments]` и semantic filename/remove controls. Harmless verified ZIP на новой owned Page: pending → settled ready, exact prompt fill не потерял ZIP; Send не вызывался, Page закрыта. Existing sent native ZIP в старом чате подтвердил helper на exact user-unit и filename/title + aria-busy=false resource control. Новый canonical REQ не отправлялся end-to-end и GitHub writes в проверках не выполнялись. Selectors изолированы в `postman/web/input_attachment.py` и покрыты fake-DOM tests; неизвестная/изменившаяся разметка fail-closed, не simulated success.
+После #299 isolated actual Send и реальный Leader→Bridge→PostmanAsk runtime запуск `REQ_20261001T232314Z_4789` подтвердили существующую verified ZIP/native Web attachment chain. Leader запуск всё ещё требовал ручного local path для уже приложенного изображения. Новый pathless current-attachment участок покрыт регрессиями; live acceptance для него не выполнялась — отдельное explicit user approval не предоставлено. DOM selectors изолированы в `postman/web/input_attachment.py`; неизвестная/изменившаяся разметка остаётся fail-closed.
 
 Отдельный newline/framing parser finding остаётся вне scope: metadata распознаётся только в предусмотренной текущим parser позиции; ZIP changes не переписывают semantic intent parser.
 

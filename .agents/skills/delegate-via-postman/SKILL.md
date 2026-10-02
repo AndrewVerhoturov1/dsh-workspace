@@ -13,7 +13,7 @@ description: >-
 
 # Delegate via Postman — Direct Production
 
-`DIRECT_POSTMAN_SKILL_VERSION: 23`
+`DIRECT_POSTMAN_SKILL_VERSION: 24`
 
 `TRUSTED_CURRENT_TURN_BOUNDARY_VERSION: 1`
 
@@ -28,6 +28,10 @@ postman_continue_last_request()   # только разрешённая automati
 ```
 
 Trusted plugin получает exact current `user/message` из Harness, механически разбирает marker/`--chat`, создаёт canonical REQ и вызывает существующий `<current workspace>\postman\direct\postman.ps1`. Нельзя копировать current user message в JavaScript, PowerShell, Base64 или tool argument. Если `postman_send_current_turn`/`postman_current_turn_status` недоступны — `STOP`; model-copy fallback запрещён. Не запускать shell, Chrome, browser, ZIP download или Git integration вручную вместо них. Transport lifecycle (напоминания, correlation, validator и закрытие owned Page) — в `postman/POSTMAN_CURRENT_FLOW.md`.
+
+### Trusted input invariant
+
+Host-authorized descriptors могут присутствовать в transport framing: их формирует parent Host/Leader. Local transport agent / Bridge child не изменяет и не реконструирует их, не читает local paths, не строит input ZIP и не делает manual browser upload. Runtime handles input ZIP. Это не меняет exact current-message trigger и result contract.
 
 ## 1. Жёстко запрещённые обходы
 
