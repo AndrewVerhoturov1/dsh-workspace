@@ -281,6 +281,37 @@ class WebWorkerBridgeTests(unittest.TestCase):
         self.assertEqual(result["details"]["requestId"], REQ)
         self.assertNotIn("secondRequestId", result["details"])
 
+    def test_image_strong_namespace_migration_reaches_one_packaging_send(self):
+        from postman.web.tests.test_browser_observer import image_snapshot
+        result, events, proofs, count, steps = self.run_image_observer_sequence(
+            [image_snapshot(count=0, message_id="A"), image_snapshot(family="grouped", key="G"),
+             image_snapshot(family="grouped", key="G"), image_snapshot(family="grouped", key="G")],
+            [True, True, False, False])
+        self.assertEqual(result["code"], bridge_module.RESULT_DURABLE, result)
+        self.assertEqual(count, 1)  # submit_existing_prompt
+        self.assertEqual(events.count("image_prepare"), 1)
+        self.assertEqual(events.count("submit_image"), 1)
+        self.assertEqual(steps[0], 3)
+        self.assertTrue(proofs[0]["details"]["assistantIdentityProved"])
+        self.assertTrue(proofs[0]["details"]["assistantIdentityPromoted"])
+        self.assertEqual(proofs[0]["details"]["assistantImageCount"], 1)
+        self.assertEqual(events, ["submit_image", "observe_image", "image_prepare",
+                                  "submit_packaging", "observe_packaging", "zip_durable"])
+        self.assertEqual(result["details"]["requestId"], REQ)
+
+    def test_image_group_conflict_after_namespace_promotion_never_sends_packaging(self):
+        from postman.web.tests.test_browser_observer import image_snapshot
+        result, events, proofs, count, _ = self.run_image_observer_sequence(
+            [image_snapshot(count=0, message_id="A"), image_snapshot(family="grouped", key="G"),
+             image_snapshot(family="grouped", key="G"), image_snapshot(family="grouped", key="H")],
+            [True, True, True, False])
+        self.assertEqual(result["code"], bridge_module.POSTMAN_TRANSPORT_FAILED, result)
+        self.assertEqual(proofs[0]["code"], "CHAT_CORRELATION_LOST")
+        self.assertEqual(proofs[0]["details"]["reason"], "strong_identity_conflict")
+        self.assertEqual(events.count("image_prepare"), 0)
+        self.assertEqual(count, 0)  # submit_existing_prompt
+        self.assertEqual(events, ["submit_image", "observe_image"])
+
     def test_image_strong_identity_conflict_never_prepares_or_sends_packaging(self):
         from postman.web.tests.test_browser_observer import image_snapshot
         result, events, proofs, count, _ = self.run_image_observer_sequence(

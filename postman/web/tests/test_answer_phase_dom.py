@@ -177,6 +177,26 @@ class TurnGroupDomTests(unittest.TestCase):
         evidence = observer.assistant_identity_evidence(self.page.locator('[data-turn-key]'))
         self.assertTrue(evidence['identityAmbiguous'])
 
+    def test_multiple_internal_content_units_preserve_pinned_group_identity(self):
+        self.page.set_content(html(FINAL + '<div data-content-search-turn-key="A"></div>'))
+        identity = observer.AssistantIdentityTracker()
+        group = self.page.locator('[data-turn-key]')
+        evidence = observer.assistant_identity_evidence(group)
+        self.assertEqual(identity.observe(evidence, 'main [data-turn-key]', 1), (True, ''))
+        self.page.set_content(html(FINAL + '<div data-content-search-turn-key="A"></div>'
+                                   '<div data-content-search-turn-key="B"></div>'))
+        evidence = observer.assistant_identity_evidence(group)
+        self.assertTrue(evidence['identityAmbiguous'])
+        self.assertEqual(evidence['contentSearchTurnKey'], '')
+        self.assertEqual(identity.observe(evidence, 'main [data-turn-key]', 1), (True, ''))
+        self.assertEqual(identity.strong, {'groupKey': 'logical-1', 'contentSearchTurnKey': 'A'})
+        # The same ambiguous secondary units cannot mask a real group conflict.
+        self.page.set_content(html(FINAL + '<div data-content-search-turn-key="A"></div>'
+                                   '<div data-content-search-turn-key="B"></div>', key='logical-2'))
+        self.assertEqual(identity.observe(observer.assistant_identity_evidence(group),
+                                         'main [data-turn-key]', 1),
+                         (False, 'strong_identity_conflict'))
+
     def test_legacy_direct_message_id_is_strong_but_group_internal_unit_is_not(self):
         self.page.set_content('<main><div data-message-author-role="assistant" data-message-id="stable-A">x</div></main>')
         node = self.page.locator('[data-message-author-role]')

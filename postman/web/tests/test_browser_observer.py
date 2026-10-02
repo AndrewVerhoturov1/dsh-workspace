@@ -107,12 +107,13 @@ class GroupLocator(FakeLocator):
 
 
 def image_snapshot(*, prompt="probe", family="fallback", key="group-A",
-                   count=1, content_key="", test_id="conversation-turn-2"):
+                   count=1, content_key="", message_id="", test_id="conversation-turn-2"):
     if family == "grouped":
         return {observer.TURN_CONTAINER_SELECTORS[0]: [
             GroupLocator(prompt, key=key, images=["image"] * count, content_key=content_key)]}
     assistant = turn("assistant", "", test_id, images=["image"] * count)
     assistant.attrs["data-content-search-turn-key"] = content_key
+    assistant.attrs["data-message-id"] = message_id
     return {observer.TURN_CONTAINER_SELECTORS[1]: [turn("user", prompt), assistant]}
 
 
@@ -561,6 +562,56 @@ class ObserverTests(unittest.TestCase):
         self.assertEqual(result["details"]["anchorIndex"], 0)
         self.assertTrue(result["details"]["assistantIdentityPromoted"])
 
+    def test_image_strong_namespace_migration_requires_confirmation_and_new_stability(self):
+        snapshots = [image_snapshot(count=0, message_id="msg-A"),
+                     image_snapshot(family="grouped", key="turn-A"),
+                     image_snapshot(family="grouped", key="turn-A"),
+                     image_snapshot(family="grouped", key="turn-A")]
+        result, page = self.observe_images(snapshots, generating=[True, True, False, False])
+        self.assertEqual(result["code"], observer.ASSISTANT_TURN_COMPLETED, result)
+        self.assertEqual(page.step, 3)  # neither pending nor accepted promotion completes
+        self.assertEqual(result["details"]["assistantImageCount"], 1)
+        self.assertTrue(result["details"]["assistantIdentityProved"])
+        self.assertTrue(result["details"]["assistantIdentityPromoted"])
+        result, page = self.observe_images(snapshots[:2], generating=[True, False],
+                                           timeout=250, stable=0)
+        self.assertEqual(page.step, 1)
+        self.assertEqual(result["code"], observer.ASSISTANT_TURN_TIMEOUT, result)
+        self.assertFalse(result["details"]["assistantIdentityProved"])
+        self.assertEqual(result["details"]["reason"], "identity_temporarily_unproved")
+
+    def test_strong_namespace_changed_candidate_restarts_confirmation(self):
+        tracker = observer.AssistantIdentityTracker()
+        self.assertEqual(tracker.observe({"assistantMessageId": "A"}, "fallback", 1), (True, ""))
+        for key in ("G", "H"):
+            self.assertEqual(tracker.observe({"groupKey": key}, "grouped", 1),
+                             (False, "identity_temporarily_unproved"))
+            self.assertEqual(tracker.strong, {"assistantMessageId": "A"})
+        self.assertEqual(tracker.observe({"groupKey": "H"}, "grouped", 1), (True, "identity_promoted"))
+        self.assertEqual(tracker.strong, {"assistantMessageId": "A", "groupKey": "H"})
+        self.assertEqual(tracker.observe({"assistantMessageId": "B"}, "fallback", 1),
+                         (False, "strong_identity_conflict"))
+
+    def test_strong_namespace_confirmation_cannot_span_proof_gap_or_old_namespace(self):
+        for intervening in ({}, {"assistantMessageId": "A"}):
+            with self.subTest(intervening=intervening):
+                tracker = observer.AssistantIdentityTracker()
+                tracker.observe({"assistantMessageId": "A"}, "fallback", 1)
+                tracker.observe({"groupKey": "G"}, "grouped", 1)
+                tracker.observe(intervening, "fallback", 1)
+                self.assertEqual(tracker.observe({"groupKey": "G"}, "grouped", 1),
+                                 (False, "identity_temporarily_unproved"))
+                self.assertEqual(tracker.observe({"groupKey": "G"}, "grouped", 1),
+                                 (True, "identity_promoted"))
+
+    def test_group_conflict_after_strong_namespace_promotion_is_fatal(self):
+        result, _ = self.observe_images([image_snapshot(count=0, message_id="A"),
+            image_snapshot(family="grouped", key="G"), image_snapshot(family="grouped", key="G"),
+            image_snapshot(family="grouped", key="H")], generating=[True, True, True, False])
+        self.assertEqual(result["code"], observer.CHAT_CORRELATION_LOST, result)
+        self.assertEqual(result["details"]["reason"], "strong_identity_conflict")
+        self.assertNotIn(observer.ASSISTANT_TURN_COMPLETED, result["transitions"])
+
     def test_image_identity_proof_gap_cannot_complete_or_inherit_stability(self):
         snapshots = [image_snapshot(count=0), image_snapshot(family="grouped"),
                      image_snapshot(), image_snapshot(family="grouped"), image_snapshot(family="grouped")]
@@ -577,6 +628,7 @@ class ObserverTests(unittest.TestCase):
         for before, after in (
             (image_snapshot(family="grouped", key="A"), image_snapshot(family="grouped", key="B")),
             (image_snapshot(content_key="A"), image_snapshot(content_key="B")),
+            (image_snapshot(message_id="A"), image_snapshot(message_id="B")),
             (image_snapshot(family="grouped", content_key="A"), image_snapshot(family="grouped", content_key="B")),
         ):
             with self.subTest(after=after):

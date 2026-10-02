@@ -692,23 +692,37 @@ class AssistantIdentityTracker:
 
     def __init__(self) -> None:
         self.strong: dict[str, str] = {}
+        self.pending_strong: dict[str, str] = {}
         self.weak: tuple[str, int, str] | None = None
         self.promoted = False
 
     def observe(self, assistant: dict[str, Any], selector: str,
                 index: int) -> tuple[bool, str]:
-        if assistant.get("identityAmbiguous"):
-            return False, "assistant_identity_ambiguous"
         strong = {key: str(assistant[key]) for key in
                   ("groupKey", "contentSearchTurnKey", "assistantMessageId")
                   if assistant.get(key)}
+        if assistant.get("identityAmbiguous"):
+            # Multiple internal content units are not a response identity.
+            strong.pop("contentSearchTurnKey", None)
         if any(key in self.strong and self.strong[key] != value
                for key, value in strong.items()):
             return False, "strong_identity_conflict"
+        if assistant.get("identityAmbiguous") and not (
+                strong.get("groupKey") and strong["groupKey"] == self.strong.get("groupKey")):
+            return False, "assistant_identity_ambiguous"
         weak = (selector, index, str(assistant.get("testId") or ""))
         if self.strong:
             if not self.strong.keys() & strong.keys():
-                return False, "identity_temporarily_unproved"
+                # Repeated new-namespace evidence confirms semantic hydration;
+                # changed/missing candidates restart confirmation, never rebind.
+                if not strong or strong != self.pending_strong:
+                    self.pending_strong = strong
+                    return False, "identity_temporarily_unproved"
+                self.strong.update(strong)
+                self.pending_strong = {}
+                self.promoted = True
+                return True, "identity_promoted"
+            self.pending_strong = {}
             self.strong.update(strong)
             return True, ""
         if self.weak and self.weak[0] == selector and self.weak != weak:
