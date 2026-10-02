@@ -227,7 +227,7 @@ test('current-turn store records only exact single-text user messages and tracks
   store.dispose()
 })
 
-test('current-turn store fails closed for mixed/attachment content instead of reconstructing text', () => {
+test('current-turn store preserves one exact text beside attachments; ambiguous text stays unsupported', () => {
   const listeners = new Map()
   const store = new CurrentUserTurnStore({ on(name, listener) { listeners.set(name, listener); return () => {} } })
   listeners.get('session/event')({ id: 's1' }, {
@@ -238,7 +238,14 @@ test('current-turn store fails closed for mixed/attachment content instead of re
       content: [{ type: 'text', text: '@Postman x' }, { type: 'image', data: 'ignored' }],
     },
   })
-  assert.equal(store.get('s1').error, 'POSTMAN_CURRENT_TURN_UNSUPPORTED_CONTENT')
+  assert.equal(store.get('s1').text, '@Postman x')
+  assert.equal(store.get('s1').attachmentCount, 1)
+  for (const content of [[{ type: 'text', text: '@Postman' }, { type: 'text', text: 'x' }],
+    [{ type: 'image', data: 'ignored' }], [null, { type: 'text', text: '@Postman x' }]]) {
+    store.capture({ id: 's1' }, { type: 'user/message', data: { source: { kind: 'user' }, content } })
+    assert.equal(store.get('s1').error, 'POSTMAN_CURRENT_TURN_UNSUPPORTED_CONTENT')
+  }
+  store.dispose()
 })
 
 test('job manager sends exact payload only as UTF-8 Base64 to the existing Direct bridge', async () => {

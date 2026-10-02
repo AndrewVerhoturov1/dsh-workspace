@@ -28,6 +28,10 @@ function privateDirectory(kind) {
 }
 const removePrivate = path => { try { rmSync(path, { recursive: true, force: true }) } catch {} }
 
+// Shared by Leader selection and standalone trusted current-turn orchestration.
+const topLevel = agent => !!agent && agent.session?.header?.origin !== 'subagent' &&
+  (agent.session?.header?.delegationDepth ?? 0) === 0
+
 // Only live exact human messages confer current-attachment authority; never replay
 // model text or session exports. Keep handles/metadata, not attachment bytes.
 export class CurrentAttachmentStore {
@@ -41,17 +45,23 @@ export class CurrentAttachmentStore {
   capture(session, event) {
     if (event?.type !== 'user/message' || event.data?.role !== 'user' || event.data?.source?.kind !== 'user') return
     const agent = this.ctx.agents.get(session?.id)
-    if (!postmanBridgeCallerAllowed(agent) || agent.session !== session) return
+    if (!topLevel(agent) || agent.session !== session) return
     const attachments = []
     for (const block of Array.isArray(event.data.content) ? event.data.content : []) {
-      // Installed DSH supports ImageBlock + ctx.attachments.readImage only.
-      if (block?.type !== 'image' || !block.attachment) continue
-      const ref = block.attachment
-      attachments.push(Object.freeze({ selectionId: String(this.nextSelectionId++), ref,
-        attachmentId: ref.attachmentId, mediaType: ref.mediaType,
-        bytes: ref.bytes, width: ref.width, height: ref.height, ...(ref.name !== undefined ? { name: ref.name } : {}) }))
+      if (block?.type === 'text') continue
+      // Every non-text occurrence counts, even when the installed Host cannot read it.
+      // Unsupported metadata is display-only: never resolve it or interpret it as a path.
+      const supported = block?.type === 'image' && block.attachment && Object.hasOwn(IMAGE_EXTENSIONS, block.attachment.mediaType)
+      const ref = block?.attachment
+      attachments.push(Object.freeze({ selectionId: String(this.nextSelectionId++),
+        ...(supported ? { ref, attachmentId: ref.attachmentId, mediaType: ref.mediaType,
+          bytes: ref.bytes, width: ref.width, height: ref.height, ...(ref.name !== undefined ? { name: ref.name } : {}) }
+          : { supported: false, capabilityStatus: CURRENT_UNAVAILABLE,
+              ...(typeof ref?.name === 'string' ? { name: ref.name } : {}),
+              ...(typeof ref?.mediaType === 'string' ? { mediaType: ref.mediaType } : {}) }) }))
     }
-    this.records.set(session.id, Object.freeze({ session, attachments: Object.freeze(attachments) }))
+    this.records.set(session.id, Object.freeze({ session, seq: Number.isSafeInteger(event.seq) ? event.seq : -1,
+      attachments: Object.freeze(attachments) }))
   }
   get(agent) {
     const record = this.records.get(agent.id)
@@ -209,6 +219,109 @@ function pythonCommand(root, script, args) {
   })
 }
 
+// Same private stage path as the Leader tool; caller authority comes from exact
+// current-turn capture, not model arguments. The record is also the grant context.
+export async function stageStandaloneCurrentAttachments(ctx, agent, record, currentAttachments, signal, grants = postmanInputGrants) {
+  if (!topLevel(agent) || ctx.agents.get(agent.id) !== agent || currentAttachments.get(agent) !== record)
+    return { status: CURRENT_MISMATCH }
+  return snapshotInputs(ctx, { get: id => id === agent.id ? currentAttachments.get(agent) : undefined },
+    { action: 'stage_current_attachments' }, { agent, signal }, { grants, run: pythonInputCommand,
+      currentAttachments, resolveAttachment: (ref, abort) => ctx.attachments.readImage(ref, abort) })
+}
+
+async function snapshotInputs(ctx, contexts, args, exec, { grants, run, currentAttachments, resolveAttachment }) {
+  const agent = exec.agent
+  const context = contexts.get(agent.id)
+  if (!context) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
+  if (exec.signal?.aborted) return { status: 'POSTMAN_INPUT_ABORTED' }
+  const keys = Object.keys(args ?? {}).sort().join(',')
+  let operation, selected, current
+  if (args.action === 'describe_existing' && keys === 'action,commit,path,repository' &&
+      args.repository === 'AndrewVerhoturov1/dsh-workspace' && typeof args.commit === 'string' && typeof args.path === 'string')
+    operation = ['--existing', args.commit, args.path]
+  else if (args.action === 'stage' && keys === 'action,paths' && Array.isArray(args.paths) &&
+      args.paths.length >= 1 && args.paths.length <= 20 && args.paths.every(path => typeof path === 'string' && path.length > 0))
+    operation = ['--stage', ...args.paths]
+  else if (args.action === 'stage_current_attachments' && (keys === 'action' || keys === 'action,selectionIds')) {
+    const ids = args.selectionIds
+    if (ids !== undefined && (!Array.isArray(ids) || ids.length < 1 || ids.length > 20 ||
+        ids.some(id => typeof id !== 'string' || !id) || new Set(ids).size !== ids.length))
+      return { status: 'POSTMAN_INPUT_ARGUMENTS_INVALID' }
+    current = currentAttachments?.get(agent)
+    if (!current?.attachments.length) return { status: CURRENT_UNAVAILABLE, reason: 'Installed Host supports current images through readImage only; provide an explicit local file path.' }
+    if (ids === undefined && current.attachments.length > 1)
+      return { status: 'POSTMAN_INPUT_CURRENT_ATTACHMENT_SELECTION_REQUIRED',
+        attachments: current.attachments.map(({ ref, ...metadata }) => metadata) }
+    const wanted = ids ?? [current.attachments[0].selectionId]
+    const occurrences = wanted.map(id => current.attachments.find(occurrence => occurrence.selectionId === id))
+    if (occurrences.some(item => !item)) return { status: CURRENT_MISMATCH }
+    if (occurrences.some(item => !item.ref)) return { status: CURRENT_UNAVAILABLE,
+      reason: 'Installed Host supports current images through readImage only; provide an explicit local file path.' }
+    selected = occurrences.map(item => item.ref)
+  }
+  else if (args.action === 'cleanup' && keys === 'action,bundleId' && typeof args.bundleId === 'string') {
+    const owned = grants.bundle(agent, context, args.bundleId)
+    if (owned === undefined) return { status: 'POSTMAN_INPUT_BUNDLE_NOT_OWNED' }
+    if (owned === null) return { status: 'POSTMAN_INPUT_ALREADY_CLEANED', bundleId: args.bundleId }
+    const removed = owned.length
+    grants.cleaned(agent, args.bundleId)
+    return { status: 'POSTMAN_INPUT_CLEANED', bundleId: args.bundleId, removed }
+  } else return { status: 'POSTMAN_INPUT_ARGUMENTS_INVALID' }
+  let snapshotRoot, sourceRoot, retained = false
+  try {
+    if (selected) {
+      let total = 0
+      const sources = []
+      // Validate the complete selection before resolving any bytes.
+      for (const [index, ref] of selected.entries()) {
+        attachmentSourceName(ref, index + 1)
+        if (!Number.isSafeInteger(ref.bytes) || ref.bytes <= 0) throw new Error(CURRENT_MISMATCH)
+        total += ref.bytes
+        if (ref.bytes > MAX_INPUT_BYTES || total > MAX_AGGREGATE_BYTES)
+          throw new Error('POSTMAN_INPUT_BUNDLE_LIMIT_EXCEEDED')
+      }
+      sourceRoot = privateDirectory('source')
+      for (const [index, ref] of selected.entries()) {
+        let resolved
+        try { resolved = await resolveAttachment(ref, exec.signal) }
+        catch (error) { throw new Error(error?.code === 'ATTACHMENT_CORRUPT' ? CURRENT_MISMATCH : CURRENT_UNAVAILABLE) }
+        if (currentAttachments.get(agent) !== current) throw new Error(CURRENT_MISMATCH)
+        const data = resolved?.data
+        if (!(data instanceof Uint8Array) || data.byteLength !== ref.bytes ||
+            (/^sha256:[0-9a-f]{64}$/.test(ref.attachmentId) &&
+             createHash('sha256').update(data).digest('hex') !== ref.attachmentId.slice(7)))
+          throw new Error(CURRENT_MISMATCH)
+        const directory = join(sourceRoot, String(index + 1))
+        mkdirSync(directory, { mode: 0o700 })
+        const path = join(directory, attachmentSourceName(ref, index + 1))
+        writeFileSync(path, data, { mode: 0o600, flag: 'wx' })
+        sources.push(path)
+      }
+      if (contexts.get(agent.id) !== context || ctx.agents.get(agent.id) !== agent || exec.signal?.aborted)
+        return { status: 'POSTMAN_INPUT_CONTEXT_CHANGED' }
+      if (currentAttachments.get(agent) !== current) throw new Error(CURRENT_MISMATCH)
+      operation = ['--stage', ...sources]
+    }
+    snapshotRoot = privateDirectory('snapshot')
+    // Source paths never leave this selection operation. Host chooses the private root.
+    const result = await run(HOST_ROOT, [...operation, '--snapshot-dir', snapshotRoot])
+    if (contexts.get(agent.id) !== context || ctx.agents.get(agent.id) !== agent || exec.signal?.aborted)
+      return { status: 'POSTMAN_INPUT_CONTEXT_CHANGED' }
+    if (selected && currentAttachments.get(agent) !== current) throw new Error(CURRENT_MISMATCH)
+    const descriptors = result.descriptors
+    if (!Array.isArray(descriptors) || !descriptors.length) return { status: 'POSTMAN_INPUT_HOST_INVALID_RESULT' }
+    grants.record(agent, context, { descriptors, bundle_id: result.bundle_id, snapshotRoot, materializations: result.materializations })
+    retained = true
+    return { status: 'POSTMAN_INPUT_READY', descriptors, ...(result.bundle_id ? { bundleId: result.bundle_id } : {}) }
+  } catch (error) {
+    const code = String(error?.message ?? '')
+    return { status: /^POSTMAN_INPUT_[A-Z_]+$/.test(code) ? code : 'POSTMAN_INPUT_HOST_FAILED' }
+  } finally {
+    if (sourceRoot) removePrivate(sourceRoot)
+    if (snapshotRoot && !retained) removePrivate(snapshotRoot)
+  }
+}
+
 export function createPostmanInputFilesTool(ctx, contexts, { grants = postmanInputGrants, run = pythonInputCommand, currentAttachments,
   resolveAttachment = (ref, signal) => ctx.attachments.readImage(ref, signal) } = {}) {
   return defineTool({
@@ -229,91 +342,7 @@ export function createPostmanInputFilesTool(ctx, contexts, { grants = postmanInp
       const agent = exec?.agent
       if (!postmanBridgeCallerAllowed(agent) || ctx.agents.get(agent.id) !== agent)
         return { status: 'POSTMAN_INPUT_CALLER_REJECTED' }
-      const context = contexts.get(agent.id)
-      if (!context) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
-      if (exec.signal?.aborted) return { status: 'POSTMAN_INPUT_ABORTED' }
-      const keys = Object.keys(args ?? {}).sort().join(',')
-      let operation, selected, current
-      if (args.action === 'describe_existing' && keys === 'action,commit,path,repository' &&
-          args.repository === 'AndrewVerhoturov1/dsh-workspace' && typeof args.commit === 'string' && typeof args.path === 'string')
-        operation = ['--existing', args.commit, args.path]
-      else if (args.action === 'stage' && keys === 'action,paths' && Array.isArray(args.paths) &&
-          args.paths.length >= 1 && args.paths.length <= 20 && args.paths.every(path => typeof path === 'string' && path.length > 0))
-        operation = ['--stage', ...args.paths]
-      else if (args.action === 'stage_current_attachments' && (keys === 'action' || keys === 'action,selectionIds')) {
-        const ids = args.selectionIds
-        if (ids !== undefined && (!Array.isArray(ids) || ids.length < 1 || ids.length > 20 ||
-            ids.some(id => typeof id !== 'string' || !id) || new Set(ids).size !== ids.length))
-          return { status: 'POSTMAN_INPUT_ARGUMENTS_INVALID' }
-        current = currentAttachments?.get(agent)
-        if (!current?.attachments.length) return { status: CURRENT_UNAVAILABLE, reason: 'Installed Host supports current images through readImage only; provide an explicit local file path.' }
-        if (ids === undefined && current.attachments.length > 1)
-          return { status: 'POSTMAN_INPUT_CURRENT_ATTACHMENT_SELECTION_REQUIRED',
-            attachments: current.attachments.map(({ ref, ...metadata }) => metadata) }
-        const wanted = ids ?? [current.attachments[0].selectionId]
-        selected = wanted.map(id => current.attachments.find(occurrence => occurrence.selectionId === id)?.ref)
-        if (selected.some(ref => !ref)) return { status: CURRENT_MISMATCH }
-      }
-      else if (args.action === 'cleanup' && keys === 'action,bundleId' && typeof args.bundleId === 'string') {
-        const owned = grants.bundle(agent, context, args.bundleId)
-        if (owned === undefined) return { status: 'POSTMAN_INPUT_BUNDLE_NOT_OWNED' }
-        if (owned === null) return { status: 'POSTMAN_INPUT_ALREADY_CLEANED', bundleId: args.bundleId }
-        const removed = owned.length
-        grants.cleaned(agent, args.bundleId)
-        return { status: 'POSTMAN_INPUT_CLEANED', bundleId: args.bundleId, removed }
-      } else return { status: 'POSTMAN_INPUT_ARGUMENTS_INVALID' }
-      let snapshotRoot, sourceRoot, retained = false
-      try {
-        if (selected) {
-          let total = 0
-          const sources = []
-          // Validate the complete selection before resolving any bytes.
-          for (const [index, ref] of selected.entries()) {
-            attachmentSourceName(ref, index + 1)
-            if (!Number.isSafeInteger(ref.bytes) || ref.bytes <= 0) throw new Error(CURRENT_MISMATCH)
-            total += ref.bytes
-            if (ref.bytes > MAX_INPUT_BYTES || total > MAX_AGGREGATE_BYTES)
-              throw new Error('POSTMAN_INPUT_BUNDLE_LIMIT_EXCEEDED')
-          }
-          sourceRoot = privateDirectory('source')
-          for (const [index, ref] of selected.entries()) {
-            let resolved
-            try { resolved = await resolveAttachment(ref, exec.signal) }
-            catch (error) { throw new Error(error?.code === 'ATTACHMENT_CORRUPT' ? CURRENT_MISMATCH : CURRENT_UNAVAILABLE) }
-            if (currentAttachments.get(agent) !== current) throw new Error(CURRENT_MISMATCH)
-            const data = resolved?.data
-            if (!(data instanceof Uint8Array) || data.byteLength !== ref.bytes ||
-                (/^sha256:[0-9a-f]{64}$/.test(ref.attachmentId) &&
-                 createHash('sha256').update(data).digest('hex') !== ref.attachmentId.slice(7)))
-              throw new Error(CURRENT_MISMATCH)
-            const directory = join(sourceRoot, String(index + 1))
-            mkdirSync(directory, { mode: 0o700 })
-            const path = join(directory, attachmentSourceName(ref, index + 1))
-            writeFileSync(path, data, { mode: 0o600, flag: 'wx' })
-            sources.push(path)
-          }
-          if (contexts.get(agent.id) !== context || ctx.agents.get(agent.id) !== agent || exec.signal?.aborted)
-            return { status: 'POSTMAN_INPUT_CONTEXT_CHANGED' }
-          if (currentAttachments.get(agent) !== current) throw new Error(CURRENT_MISMATCH)
-          operation = ['--stage', ...sources]
-        }
-        snapshotRoot = privateDirectory('snapshot')
-        // Source paths never leave this selection operation. Host chooses the private root.
-        const result = await run(HOST_ROOT, [...operation, '--snapshot-dir', snapshotRoot])
-        if (contexts.get(agent.id) !== context || ctx.agents.get(agent.id) !== agent || exec.signal?.aborted)
-          return { status: 'POSTMAN_INPUT_CONTEXT_CHANGED' }
-        const descriptors = result.descriptors
-        if (!Array.isArray(descriptors) || !descriptors.length) return { status: 'POSTMAN_INPUT_HOST_INVALID_RESULT' }
-        grants.record(agent, context, { descriptors, bundle_id: result.bundle_id, snapshotRoot, materializations: result.materializations })
-        retained = true
-        return { status: 'POSTMAN_INPUT_READY', descriptors, ...(result.bundle_id ? { bundleId: result.bundle_id } : {}) }
-      } catch (error) {
-        const code = String(error?.message ?? '')
-        return { status: /^POSTMAN_INPUT_[A-Z_]+$/.test(code) ? code : 'POSTMAN_INPUT_HOST_FAILED' }
-      } finally {
-        if (sourceRoot) removePrivate(sourceRoot)
-        if (snapshotRoot && !retained) removePrivate(snapshotRoot)
-      }
+      return snapshotInputs(ctx, contexts, args, exec, { grants, run, currentAttachments, resolveAttachment })
     },
   })
 }

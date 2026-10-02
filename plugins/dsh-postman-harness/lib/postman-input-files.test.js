@@ -461,6 +461,29 @@ test('real private current/local stages build ZIP or image handoffs, zero GitHub
   assert.equal(calls.length, 2)
 })
 
+test('mixed image + PDF counts unsupported occurrence; only explicit image selection stages', async t => {
+  const f = currentFixture(t), ref = image()
+  f.listeners.get('session/event')(f.agent.session, { type: 'user/message', data: { role: 'user', source: { kind: 'user' },
+    content: [{ type: 'image', attachment: ref }, { type: 'file', attachment: { name: 'document.pdf', mediaType: 'application/pdf', path: 'C:/private/document.pdf' } }] } })
+  const selection = await f.execute({ action: 'stage_current_attachments' })
+  assert.equal(selection.status, 'POSTMAN_INPUT_CURRENT_ATTACHMENT_SELECTION_REQUIRED')
+  assert.equal(selection.attachments.length, 2)
+  assert.deepEqual(selection.attachments[1], { selectionId: '2', supported: false,
+    capabilityStatus: 'POSTMAN_INPUT_CURRENT_ATTACHMENT_UNAVAILABLE', name: 'document.pdf', mediaType: 'application/pdf' })
+  assert.equal(JSON.stringify(selection).includes('C:/private'), false)
+  assert.equal(f.reads.length, 0); assert.equal(f.calls.length, 0)
+  for (const selectionIds of [['2'], ['1', '2']]) {
+    const result = await f.execute({ action: 'stage_current_attachments', selectionIds })
+    assert.equal(result.status, 'POSTMAN_INPUT_CURRENT_ATTACHMENT_UNAVAILABLE')
+    assert.match(result.reason, /readImage only/)
+    assert.equal(f.reads.length, 0); assert.equal(f.calls.length, 0)
+  }
+  const selected = await f.execute({ action: 'stage_current_attachments', selectionIds: ['1'] })
+  assert.equal(selected.status, 'POSTMAN_INPUT_READY')
+  assert.deepEqual(f.reads, [ref]); assert.equal(f.calls.length, 1)
+  assert.equal(f.calls[0][0], '--stage'); assert.deepEqual(selected.descriptors.map(d => d.name), ['reference.png'])
+})
+
 test('unsupported current file API is explicit capability-unavailable, never searches or stages', async t => {
   const f = currentFixture(t)
   f.listeners.get('session/event')(f.agent.session, { type: 'user/message', data: { role: 'user', source: { kind: 'user' },

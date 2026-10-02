@@ -44,96 +44,104 @@ class NativeImageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             descriptors, made, attached = self.make_input(root)
-            intent = "Точное намерение\nбез переписывания  "
-            prompt = direct.build_image_generation_prompt(intent, descriptors)
-            page = ZipPage()
-            page.upload_result = proof(name=attached.name, file_id="reference-1")
-            page.sent_result = proof(name=attached.name, file_id="reference-1")
-            clock = FakeClock(types.SimpleNamespace(step=0))
-            submits, observations, publications = [], [], []
-            original_submit = submit.submit_fresh_prompt
-            original_existing = submit.submit_existing_prompt
-            original_observe = observer.observe_next_assistant
-            def first(target, text, **kwargs):
-                result = original_submit(target, text, **{**kwargs, "timeout_ms": 0})
-                submits.append(result)
-                self.assertEqual(result["sendState"], "PROVEN_SENT", result)
-                self.assertTrue(result["details"]["sentAttachmentConfirmed"])
-                return result
-            def second(target, text, url, **kwargs):
-                self.assertNotIn("input_attachment", kwargs)
-                result = original_existing(target, text, url, **{**kwargs, "timeout_ms": 0})
-                submits.append(result)
-                return result
-            def observe(target, text, url, **kwargs):
-                if kwargs.get("image_mode"):
-                    dom = FakePage([image_snapshot(prompt=text, message_id="generated-image")], url=url)
-                else:
-                    dom = FakePage([[turn("user", prompt), turn("assistant", "", "generated-image", images=["img"]),
-                                     turn("user", text), turn("assistant", "ZIP ready", "packaged")]], url=url)
-                local = FakeClock(dom)
-                with patch.object(observer.time, "sleep", local.sleep), patch.object(observer.time, "monotonic", local.monotonic):
-                    result = original_observe(dom, text, url, **{**kwargs, "stable_ms": 0, "timeout_ms": 1000})
-                observations.append(result)
-                return result
-            class Factory:
-                def __enter__(self): self.chromium = self; return self
-                def __exit__(self, *a): pass
-                def connect_over_cdp(self, *a, **kw): return self
-                @property
-                def contexts(self): return [self]
-                def new_page(self): return page
-            bridge_holder = []
-            def bridge_factory(**kwargs):
-                real = worker.WebWorkerBridge(**kwargs, sleep=clock.sleep, monotonic=clock.monotonic)
-                bridge_holder.append(real)
-                return types.SimpleNamespace(run_request=lambda req, **kw: real.run_request(req,
-                    **{**kw, "playwright_factory": Factory, "stable_ms": 0, "timeout_ms": 0}))
-            class Publisher:
-                def __init__(self, **kwargs): pass
-                def snapshot(self): return direct.TaskSnapshot("a" * 40, ("postman",))
-                def publish_content(self, request_id, content, **kwargs):
-                    self_state = bridge_holder[0].read_state(REQ)
-                    if self_state["state"] != "IMAGE_TURN_COMPLETED": raise AssertionError(self_state)
-                    publications.append(content)
-                    return direct.PublishedTask(request_id, f"https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/{'b' * 40}/{REQ}.md",
-                                                "a" * 40, "b" * 40, ("postman",))
-            results = root / "results"
-            def download(*args, **kwargs):
-                folder = results / REQ; folder.mkdir(parents=True)
-                archive = folder / "result.zip"
-                name = f"{REQ}_img1.png"
-                with zipfile.ZipFile(archive, "w") as zf: zf.writestr(name, PNG)
-                sha = hashlib.sha256(archive.read_bytes()).hexdigest()
-                inventory = [dict(path=name, kind="file", uncompressedSize=len(PNG))]
-                (folder / "validation.json").write_text(json.dumps(dict(ok=True, sha256=sha, inventory=inventory)), encoding="utf-8")
-                return dict(ok=True, code="RESULT_DURABLE", details=dict(resultDirectory=str(folder), resultZip=str(archive), sha256=sha))
-            runner = direct.DirectPostman(branch="task/native-inputs", repo_root=root, direct_root=root / "direct",
-                result_root=results, publisher_factory=Publisher, bridge_factory=bridge_factory,
-                ensure_browser=lambda **kw: {"cdpUrl": "http://127.0.0.1:9222"})
-            with patch.object(worker.browser_submit, "submit_fresh_prompt", side_effect=first), \
-                 patch.object(worker.browser_submit, "submit_existing_prompt", side_effect=second), \
-                 patch.object(worker.browser_observer, "observe_next_assistant", side_effect=observe), \
-                 patch.object(worker.browser_observer, "connection_interrupted", return_value=(False, {})), \
-                 patch.object(worker.browser_observer, "additional_processing", return_value=(False, {})), \
-                 patch.object(worker.artifact_detector, "detect_artifact_dom", return_value=dict(ok=True, code="ARTIFACT_FOUND")), \
-                 patch.object(worker.artifact_download, "download_validated_artifact", side_effect=download):
-                result = runner.run(request_id=REQ, task=intent, image_mode=True, input_files=descriptors, input_bundle_manifest=made["handoffPath"])
-            self.assertEqual(result["code"], "IMAGE_RESULT_DURABLE")
-            self.assertEqual(Path(result["resultImage"]).read_bytes(), PNG)
-            self.assertEqual(page.click_count, 2)
-            self.assertEqual(len(submits), 2)
-            self.assertTrue(all(item["sendState"] == "PROVEN_SENT" for item in submits))
-            self.assertEqual(page.uploads, [dict(name=attached.name, mimeType="image/png", buffer=PNG)])
-            self.assertEqual(page.user_turns[0], prompt)
-            self.assertIn(intent, prompt)
-            self.assertNotIn("raw_url", prompt)
-            self.assertNotIn("github", prompt.lower())
-            self.assertEqual(len(publications), 1)  # task-only packaging publication
-            self.assertEqual(observations[0]["details"]["assistantImageCount"], 1)
-            self.assertTrue(observations[0]["details"]["assistantIdentityProved"])
-            self.assertFalse(Path(made["handoffPath"]).exists())
-            self.assertFalse(attached.path.exists())
+            self.run_image_flow(root, descriptors, made, attached, "Точное намерение\nбез переписывания  ")
+
+    def run_image_flow(self, root, descriptors, made, attached, intent):
+        prompt = direct.build_image_generation_prompt(intent, descriptors)
+        page = ZipPage()
+        page.upload_result = proof(name=attached.name, file_id="reference-1")
+        page.sent_result = proof(name=attached.name, file_id="reference-1")
+        clock = FakeClock(types.SimpleNamespace(step=0))
+        submits, observations, publications, phases = [], [], [], []
+        original_submit = submit.submit_fresh_prompt
+        original_existing = submit.submit_existing_prompt
+        original_observe = observer.observe_next_assistant
+        def first(target, text, **kwargs):
+            phases.append("generation")
+            result = original_submit(target, text, **{**kwargs, "timeout_ms": 0})
+            submits.append(result)
+            self.assertEqual(result["sendState"], "PROVEN_SENT", result)
+            self.assertTrue(result["details"]["sentAttachmentConfirmed"])
+            return result
+        def second(target, text, url, **kwargs):
+            phases.append("packaging")
+            self.assertNotIn("input_attachment", kwargs)
+            result = original_existing(target, text, url, **{**kwargs, "timeout_ms": 0})
+            submits.append(result)
+            return result
+        def observe(target, text, url, **kwargs):
+            if kwargs.get("image_mode"):
+                dom = FakePage([image_snapshot(prompt=text, message_id="generated-image")], url=url)
+            else:
+                dom = FakePage([[turn("user", prompt), turn("assistant", "", "generated-image", images=["img"]),
+                                 turn("user", text), turn("assistant", "ZIP ready", "packaged")]], url=url)
+            local = FakeClock(dom)
+            with patch.object(observer.time, "sleep", local.sleep), patch.object(observer.time, "monotonic", local.monotonic):
+                result = original_observe(dom, text, url, **{**kwargs, "stable_ms": 0, "timeout_ms": 1000})
+            observations.append(result)
+            return result
+        class Factory:
+            def __enter__(self): self.chromium = self; return self
+            def __exit__(self, *a): pass
+            def connect_over_cdp(self, *a, **kw): return self
+            @property
+            def contexts(self): return [self]
+            def new_page(self): return page
+        bridge_holder = []
+        def bridge_factory(**kwargs):
+            real = worker.WebWorkerBridge(**kwargs, sleep=clock.sleep, monotonic=clock.monotonic)
+            bridge_holder.append(real)
+            return types.SimpleNamespace(run_request=lambda req, **kw: real.run_request(req,
+                **{**kw, "playwright_factory": Factory, "stable_ms": 0, "timeout_ms": 0}))
+        class Publisher:
+            def __init__(self, **kwargs): pass
+            def snapshot(self): return direct.TaskSnapshot("a" * 40, ("postman",))
+            def publish_content(self, request_id, content, **kwargs):
+                self_state = bridge_holder[0].read_state(REQ)
+                if self_state["state"] != "IMAGE_TURN_COMPLETED": raise AssertionError(self_state)
+                publications.append(content)
+                return direct.PublishedTask(request_id, f"https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/{'b' * 40}/{REQ}.md",
+                                            "a" * 40, "b" * 40, ("postman",))
+        results = root / "results"
+        def download(*args, **kwargs):
+            folder = results / REQ; folder.mkdir(parents=True)
+            archive = folder / "result.zip"
+            name = f"{REQ}_img1.png"
+            with zipfile.ZipFile(archive, "w") as zf: zf.writestr(name, PNG)
+            sha = hashlib.sha256(archive.read_bytes()).hexdigest()
+            inventory = [dict(path=name, kind="file", uncompressedSize=len(PNG))]
+            (folder / "validation.json").write_text(json.dumps(dict(ok=True, sha256=sha, inventory=inventory)), encoding="utf-8")
+            return dict(ok=True, code="RESULT_DURABLE", details=dict(resultDirectory=str(folder), resultZip=str(archive), sha256=sha))
+        runner = direct.DirectPostman(branch="main", repo_root=root, direct_root=root / "direct",
+            result_root=results, publisher_factory=Publisher, bridge_factory=bridge_factory,
+            ensure_browser=lambda **kw: {"cdpUrl": "http://127.0.0.1:9222"})
+        with patch.object(worker.browser_submit, "submit_fresh_prompt", side_effect=first), \
+             patch.object(worker.browser_submit, "submit_existing_prompt", side_effect=second), \
+             patch.object(worker.browser_observer, "observe_next_assistant", side_effect=observe), \
+             patch.object(worker.browser_observer, "connection_interrupted", return_value=(False, {})), \
+             patch.object(worker.browser_observer, "additional_processing", return_value=(False, {})), \
+             patch.object(worker.artifact_detector, "detect_artifact_dom", return_value=dict(ok=True, code="ARTIFACT_FOUND")), \
+             patch.object(worker.artifact_download, "download_validated_artifact", side_effect=download):
+            result = runner.run(request_id=REQ, task=intent, image_mode=True, input_files=descriptors, input_bundle_manifest=made["handoffPath"])
+        self.assertEqual(result["code"], "IMAGE_RESULT_DURABLE")
+        self.assertEqual(Path(result["resultImage"]).read_bytes(), PNG)
+        self.assertEqual(page.click_count, 2)
+        self.assertEqual(len(submits), 2)
+        self.assertEqual(phases, ["generation", "packaging"])
+        self.assertTrue(all(item["sendState"] == "PROVEN_SENT" for item in submits))
+        self.assertEqual(page.uploads, [dict(name=attached.name, mimeType="image/png", buffer=PNG)])
+        self.assertEqual(page.user_turns[0], prompt)
+        self.assertIn(intent, prompt)
+        self.assertNotIn("raw_url", prompt)
+        self.assertNotIn("github", prompt.lower())
+        self.assertEqual(len(publications), 1)  # task-only packaging publication
+        self.assertEqual(observations[0]["details"]["assistantImageCount"], 1)
+        self.assertTrue(observations[0]["details"]["assistantIdentityProved"])
+        self.assertFalse(Path(made["handoffPath"]).exists())
+        self.assertFalse(attached.path.exists())
+
+        return dict(terminal=result, generationSends=phases.count("generation"), packagingSends=phases.count("packaging"),
+                    sendStates=[item["sendState"] for item in submits], mimeType=page.uploads[0]["mimeType"])
 
     def test_image_negative_proofs_never_resend(self):
         with tempfile.TemporaryDirectory() as tmp:
