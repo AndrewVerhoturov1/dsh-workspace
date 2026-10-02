@@ -72,6 +72,10 @@ async function fixture(dir, { web = true, worktree = dir } = {}) {
     },
     async followup(_parent, id) { calls.follows.push(id); return 'follow-' + calls.follows.length },
     async drainContinuableChildren(_parent, ids) { calls.drains.push(ids); agents.delete(ids[0]); children.delete(ids[0]) },
+    async closeContinuableChild(parent, id, verify) {
+      if (!await verify()) return false
+      await this.drainContinuableChildren(parent, [id]); return true
+    },
   }
   let adapter, boundaries
   function refresh(id) {
@@ -124,7 +128,7 @@ async function fixture(dir, { web = true, worktree = dir } = {}) {
 
 const inTemporaryDir = async (prefix, fn) => {
   const dir = await mkdtemp(join(tmpdir(), prefix))
-  try { return await fn(dir) } finally { await rm(dir, { recursive: true, force: true }) }
+  try { return await fn(dir) } finally { await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }) }
 }
 const visible = (f, a) => f.ctx.tools.schemas(a).map(s => s.name)
 const value = result => { assert.equal(result.isError, false, result.error?.message); assert.equal(result.value.status, 'ok', JSON.stringify(result.value)); return result.value.value }

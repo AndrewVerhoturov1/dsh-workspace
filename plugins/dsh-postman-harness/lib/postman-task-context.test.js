@@ -49,7 +49,7 @@ function fixture(options = {}) {
     if (verb === 'merge' && rest[0] === '--ff-only') { state.head = rest[1]; return '' }
     throw new Error('Unexpected git command: ' + JSON.stringify({ cwd, args }))
   }
-  const contexts = createPostmanTaskContexts({ registry, gitCommand, realPath: options.realPath ?? (async path => path),
+  const contexts = createPostmanTaskContexts({ registry, gitCommand, localDevelopment: options.localDevelopment, preserveChanges: options.preserveChanges ?? (async () => 'fixture-recovery'), realPath: options.realPath ?? (async path => path),
     temporaryDirectory: () => resolve('C:/Users/Andrew/AppData/Local/Temp'),
     makeDirectory: async () => options.directory ?? worktree })
   return { contexts, state, calls, registry, gitCommand }
@@ -171,6 +171,35 @@ test('apply guard requires unchanged bound branch and exact published HEAD', asy
 
 
 
+test('local restore preserves changes before reset and does not forge pending terminal synchronization', async () => {
+  const calls = []
+  const f = fixture({ localDevelopment: true, preserveChanges: async snapshot => { calls.push(snapshot); return 'private-recovery' } })
+  await f.contexts.prepare(leader('A')); f.state.trees.push(worktree); f.state.clean = false
+  await f.registry.change('A', row => ({ ...row, runner: { state: 'failed', requestId: 'REQ' }, bridgeOperations: { job: { state: 'received', synchronization: 'pending' } } }))
+  assert.equal(f.contexts.reserveRestore('A'), true)
+  const restored = await f.contexts.restore(leader('A'))
+  assert.equal(restored.status, 'TASK_CONTEXT_RESTORED', JSON.stringify(restored))
+  assert.equal(restored.recoveryPath, 'private-recovery')
+  assert.equal(calls.length, 1)
+  assert.equal(f.registry.get('A').bridgeOperations.job.synchronization, 'pending')
+})
+test('local restore refuses backup failure before destructive commands', async () => {
+  const f = fixture({ localDevelopment: true, preserveChanges: async () => { throw new Error('backup unavailable') } })
+  await f.contexts.prepare(leader('A')); f.state.trees.push(worktree); f.state.clean = false
+  await f.registry.change('A', row => ({ ...row, runner: { state: 'failed', requestId: 'REQ' } }))
+  assert.equal((await f.contexts.restore(leader('A'))).status, 'POSTMAN_TASK_RESTORE_REJECTED')
+  assert.equal(f.calls.some(call => ['reset', 'clean'].includes(call.args[0])), false)
+  assert.equal(f.state.clean, false)
+})
+test('local restore of clean tree uses fast-forward, never reset or clean', async () => {
+  const f = fixture({ localDevelopment: true })
+  await f.contexts.prepare(leader('A')); f.state.trees.push(worktree); f.state.remote = published
+  await f.registry.change('A', row => ({ ...row, runner: { state: 'failed', requestId: 'REQ' } }))
+  assert.equal((await f.contexts.restore(leader('A'))).status, 'TASK_CONTEXT_RESTORED')
+  assert.ok(invoked(f.calls, 'merge', '--ff-only', published))
+  assert.equal(f.calls.some(call => ['reset', 'clean'].includes(call.args[0])), false)
+})
+
 test('received unsynced terminal blocks runner and restore without becoming unknown', async () => {
   const f = fixture(); await f.contexts.prepare(leader('A'))
   await f.registry.change('A', row => ({ ...row, bridgeOperations: { request: {
@@ -227,14 +256,14 @@ test('restore rejects redirected task path before discarding data', async () => 
   assert.equal(f.calls.some(call => ['reset', 'clean'].includes(call.args[0])), false)
 })
 
-test('restore rejects wrong branch, moved remote, permanent and foreign worktree', async () => {
-  for (const mutate of [
+test('restore rejects wrong branch, moved remote, permanent and foreign worktree in both modes', async () => {
+  for (const localDevelopment of [false, true]) for (const mutate of [
     s => { s.branch = 'preview' },
     s => { s.remote = '' },
     s => { s.trees = [repository] },
     s => { s.remoteUrl = 'https://github.com/other/repo.git' },
   ]) {
-    const f = fixture(); await f.contexts.prepare(leader('A'))
+    const f = fixture({ localDevelopment }); await f.contexts.prepare(leader('A'))
     f.state.trees.push(worktree); f.state.clean = false; mutate(f.state)
     assert.equal(f.contexts.beginOperation('A'), true)
     await f.contexts.startRunner('A', 'REQ_20260927T120000Z_1234')
@@ -361,7 +390,7 @@ test('explicit runner failure survives recovery while restore remains separately
   await f.contexts.startRunner('A', 'REQ_20260927T120000Z_1234')
   await f.contexts.endOperation('A', { status: 'IMPLEMENTATION_ARTIFACT_RUNNER_RESULT', result: { ok: false } })
   const cold = createPostmanTaskContexts({ registry: f.registry, gitCommand: f.gitCommand,
-    realPath: async path => path })
+    realPath: async path => path, preserveChanges: async () => 'fixture-recovery' })
   assert.equal((await cold.prepare(leader('A'))).status, 'POSTMAN_TASK_CONTEXT_ALREADY_READY')
   assert.equal(f.state.clean, false)
   assert.equal(f.registry.get('A').runner.state, 'failed')

@@ -71,6 +71,11 @@ test('persisted terminal survives restart and retries sync without Direct', asyn
   await tick(); await tick(); await tick()
   assert.equal(f.registry.get(leader.id).bridgeOperations[receipt.bridgeJobId].state, 'received')
   await f.jobs.dispose()
+  await f.registry.change(leader.id, row => {
+    const op = row.bridgeOperations[receipt.bridgeJobId]
+    const { transportKind, ...legacyTerminal } = op.terminal
+    return { ...row, bridgeOperations: { ...row.bridgeOperations, [receipt.bridgeJobId]: { ...op, terminal: legacyTerminal } } }
+  })
   let sends = 0, syncs = 0, grants = 0
   const contexts = { record: f.registry.get, changeRecord: f.registry.change,
     async sync(_leader, _commit, _parent, beforeSync) { syncs++; return beforeSync(leader.id) } }
@@ -82,6 +87,14 @@ test('persisted terminal survives restart and retries sync without Direct', asyn
   const before = await cold.status(leader, receipt.bridgeJobId)
   assert.equal(before.status, 'POSTMAN_BRIDGE_TERMINAL')
   assert.equal(before.synchronization, 'busy')
+  assert.equal(before.createdAt, null, 'cold journal has no createdAt; absence is JSON null, never undefined')
+  assert.equal(before.transportKind, null, 'legacy terminal lacks transportKind')
+  const assertLossless = value => {
+    if (value && typeof value === 'object') for (const entry of Object.values(value)) {
+      assert.notEqual(entry, undefined); assertLossless(entry)
+    }
+  }
+  assertLossless(before)
   const [recovered, simultaneous] = await Promise.all([
     cold.status(leader, receipt.bridgeJobId, true), cold.status(leader, receipt.bridgeJobId, true)])
   assert.equal(recovered.synchronization, 'synchronized')

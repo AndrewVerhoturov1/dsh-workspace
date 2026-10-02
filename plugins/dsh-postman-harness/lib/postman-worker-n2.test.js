@@ -29,7 +29,7 @@ const { apply: nativeReport } = await pkg('dsh-tool-subagent-report')
 const wait = () => Promise.withResolvers()
 const signal = () => new AbortController().signal
 const content = text => [{ type: 'text', text }]
-async function fixture(t) {
+async function fixture(t, options = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'postman-n2-'))
 
   const ctx = new Context()
@@ -65,7 +65,7 @@ async function fixture(t) {
     repositoryPath: dir, originUrl: 'https://github.com/AndrewVerhoturov1/dsh-workspace.git',
     branch: context.branch, worktree: dir, baseCommit: '0'.repeat(40), stage: 'ready',
     diagnostic: null, workers: {}, runner: { state: 'none', requestId: null }, bridge: null })
-  const worker = createPostmanWorkerTools(ctx, undefined, contexts)
+  const worker = createPostmanWorkerTools(ctx, undefined, contexts, options)
   ctx.tools.register(worker.taskTool); ctx.tools.register(worker.stopTool)
   installPostmanWorkerReportObserver(ctx, worker)
   const leader = ctx.agentLoop.create('leader', { provider: 'codex', model: 'gpt-6-luna' },
@@ -84,6 +84,23 @@ async function fixture(t) {
     assert.equal(ctx.agents.get(id), undefined) }
   return { ctx, contexts, registry, worker, leader, exec, start, settled, calls, startA, releasePeers, disposed }
 }
+
+test('local cancellation uses native exact-child cutoff without approval or invented success', { timeout: 10000 }, async t => {
+  const f = await fixture(t, { localDevelopment: true })
+  const a = await f.start('A'), b = await f.start('B'), c = await f.start('C')
+  f.startA.resolve(); await f.settled(a)
+  const peers = [b, c].map(id => structuredClone(f.registry.get('leader').workers[id]))
+  const before = f.calls.get(a)
+  const result = await f.worker.stopTool.execute({ mode: 'cancel', workerSessionId: a }, f.exec)
+  assert.equal(result.status, 'POSTMAN_WORKER_CANCELLED', JSON.stringify(result))
+  assert.equal(result.taskCompleted, false); assert.equal(result.resultReported, false)
+  assert.equal(result.durableSessionDeleted, false)
+  assert.equal(f.registry.get('leader').workers[a], undefined)
+  await assert.rejects(f.ctx.subagents.followup(f.leader, a, content('too late'),
+    { source: { kind: 'user' }, signal: signal() }), /closed/)
+  assert.equal(f.calls.get(a), before)
+  assert.deepEqual([b, c].map(id => f.registry.get('leader').workers[id]), peers)
+})
 
 // Cold native send wins the child lock while close is inspecting descendants.
 test('cold followup admitted before close keeps binding; subsequent reported work can close', { timeout: 10000 }, async t => {

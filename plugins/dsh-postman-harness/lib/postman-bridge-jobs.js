@@ -48,7 +48,7 @@ function losslessValue(value, ancestors = new Set()) {
 function snapshot(job) {
   return {
     bridgeJobId: job.bridgeJobId, state: job.state,
-    transportKind: job.transportKind, createdAt: job.createdAt,
+    transportKind: job.transportKind ?? null, createdAt: job.createdAt ?? null,
     startedAt: job.startedAt ?? null, finishedAt: job.finishedAt ?? null,
     childSessionId: job.childSessionId ?? null, requestId: job.requestId ?? null,
   }
