@@ -302,6 +302,27 @@ class TransportDomTests(unittest.TestCase):
         self.assertFalse(rejected['sentAttachmentConfirmed'])
         self.assertEqual(self.page.evaluate('window.sends'), 1)
 
+    def test_photo_control_waits_for_hydration_before_single_upload(self):
+        import input_attachment
+        self.set_html('<form>' + COMPOSER + '<input type="file" accept="image/*" disabled>'
+                      '<div data-composer-attachments></div></form>')
+        attachment=SimpleNamespace(name=f'POSTMAN_REFERENCE_{REQ}.png',media_type='image/png',upload_bytes=lambda:b'fixture')
+        calls=[]
+        def wait(check, **kwargs):
+            calls.append(1)
+            if len(calls)==1:
+                self.assertFalse(check()[0])
+                self.page.locator('input').evaluate('e=>e.disabled=false')
+                self.assertTrue(check()[0])
+                return True,{}
+            return True,{'known':True,'count':1,'names':[attachment.name],'pending':False,'error':False,'settled':True}
+        from unittest.mock import patch
+        with patch.object(input_attachment,'snapshot',return_value={'known':True,'count':0,'pending':False,'error':False}):
+            result=input_attachment.upload(self.page,self.page.locator('#prompt-textarea'),attachment,timeout_ms=100,wait_until=wait)
+        self.assertTrue(result['ok'],result)
+        self.assertEqual(len(calls),2)
+        self.assertEqual(self.page.locator('input').evaluate('e=>e.files.length'),1)
+
     def test_local_uploaded_conversation_reloads_read_only_never_resends(self):
         from unittest.mock import patch
         attachment = SimpleNamespace(name=f'POSTMAN_REFERENCE_{REQ}.png')

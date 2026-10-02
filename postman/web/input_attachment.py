@@ -184,6 +184,15 @@ def upload(page, composer, attachment, *, timeout_ms, wait_until):
         eligible = []
         image_only = []
         media = getattr(attachment, 'media_type', 'application/zip')
+        # Fresh composer file controls can exist while disabled during hydration.
+        # Wait read-only for the same dedicated photo control; no upload retry.
+        if media.startswith('image/'):
+            photos = scope.locator('input[type="file"][accept="image/*"]')
+            if photos.count() == 1 and not photos.nth(0).is_enabled():
+                enabled, _ = wait_until(lambda: (photos.nth(0).is_enabled(), {}), timeout_ms=timeout_ms)
+                if not enabled:
+                    return {"ok": False, "code": ATTACHMENT_CONTROL_UNAVAILABLE,
+                            "details": {"reason": "photo_input_disabled", **selection}}
         for i in range(inputs.count()):
             node = inputs.nth(i)
             accept = (node.get_attribute('accept') or '').lower()
