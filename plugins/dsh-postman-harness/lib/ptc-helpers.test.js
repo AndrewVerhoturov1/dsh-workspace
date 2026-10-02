@@ -18,7 +18,7 @@ test('expectStatus accepts exact statuses and preserves the original object', ()
   for (const result of [null, [], {}, { status: 1 }, 'READY', Object.create({ status: 'READY' })])
     assert.throws(() => ptc.expectStatus(result, ['READY']), /object with a string status/)
   for (const statuses of [null, 'READY', [], [''], [1], ['READY', null], Array(2)])
-    assert.throws(() => ptc.expectStatus({ status: 'READY' }, statuses), /non-empty list/)
+    assert.throws(() => ptc.expectStatus({ status: 'READY' }, statuses), /non-empty list|unknown or unavailable tool/)
 })
 
 test('utf8Bytes and jsonBytes count Cyrillic, emoji, escaping and lone surrogates exactly', () => {
@@ -132,3 +132,96 @@ test('actual QuickJS processes multiple >512 KiB Cyrillic files but returns comp
     assert.match(guidance, /4 MiB.*480 KiB.*512 KiB/)
   } finally { await runtime.dispose() }
 })
+
+test('expectStatus tool-name form shares exact current statuses and visibility', () => {
+  const tools={postman_worker:()=>{},postman_worker_interrupt:()=>{},postman_bridge:()=>{},postman_task_prepare:()=>{}}
+  const ptc=helper(tools)
+  const table={postman_task_prepare:['TASK_CONTEXT_READY','POSTMAN_TASK_CONTEXT_ALREADY_READY'],postman_worker:['POSTMAN_WORKER_TASK_ACCEPTED'],postman_worker_interrupt:['POSTMAN_WORKER_INTERRUPT_TASK_ACCEPTED'],postman_bridge:['POSTMAN_BRIDGE_ACCEPTED']}
+  for (const [name,statuses] of Object.entries(table)) {
+    for (const status of statuses) assert.equal(ptc.expectStatus({status},name).status,status)
+    for (const status of ['NEW_STATUS',statuses[0]+'_EXTRA',statuses[0].toLowerCase(),'POSTMAN_WORKER_INTERRUPT_ACCEPTED'])
+      assert.throws(()=>ptc.expectStatus({status},name),/unexpected status/)
+  }
+  assert.throws(()=>helper({}).expectStatus({status:'POSTMAN_BRIDGE_ACCEPTED'},'postman_bridge'),/unavailable tool/)
+})
+
+test('existing helper argument/result shapes fail clearly without iterable guesses or partial input validation', async () => {
+  let calls=0
+  const ptc=helper({grep:async()=>{calls++;return {matches:[]}}})
+  for (const options of [null,{}, {queries:Array(2)}, {queries:[{pattern:'ok'},null]}, {queries:[{pattern:1}]}])
+    await assert.rejects(ptc.grepMany(options),/queries|each query/)
+  assert.equal(calls,0)
+  const reader=helper({read:async()=>{calls++;return {totalLines:1,lines:[{number:1,text:'a'}]}}})
+  for (const options of [{files:['a',null]},{files:Array(2)},{files:['a'],page_limit:'invalid'}])
+    await assert.rejects(reader.readMany(options),/files|positive integer/)
+  assert.equal(calls,0)
+  for (const value of [null,[],{}, {matches:null}, {matches:'raw'}])
+    await assert.rejects(helper({grep:async()=>value}).grepMany({queries:[{pattern:'ok'}]}),/expected tools.grep result.*matches/)
+  const result=await ptc.grepMany({queries:[{pattern:'ok'}]})
+  assert.equal(Array.isArray(result),true);assert.equal(Array.isArray(result[0].result.matches),true)
+  for (const value of [null,[],{}, {lines:{},totalLines:1}])
+    await assert.rejects(helper({read:async()=>value}).readAllText({file_path:'a'}),/invalid.*read result/)
+  const getter={};Object.defineProperty(getter,'text',{enumerable:true,get(){throw Error('must not run')}})
+  const extra=['x'];extra.hidden='raw'
+  for (const value of [getter,extra, {toJSON:()=>({})}]) assert.throws(()=>ptc.jsonBytes(value),/JSON-compatible/)
+})
+
+test('readMany/mapTextFiles restore 480 KiB defaults; grepMany has no separate byte ceiling', async () => {
+  const budget=480*1024, text='я'.repeat(120000), ptc=helper({read:read({a:text,b:text})})
+  const many=await ptc.readMany({files:['a','b']})
+  assert.equal(many.length,2)
+  assert.equal(many[1].text,text)
+  assert.ok(ptc.jsonBytes(many)>400*1024)
+  const overhead=ptc.jsonBytes([{file_path:'edge',text:''}])
+  const edge='x'.repeat(budget-overhead)
+  assert.equal(ptc.jsonBytes(await helper({read:read({edge})}).readMany({files:['edge']})),budget)
+  await assert.rejects(helper({read:read({edge:edge+'x'})}).readMany({files:['edge']}),/max_total_bytes/)
+  await assert.rejects(ptc.readMany({files:['a','b'],max_total_bytes:400000}),/max_total_bytes/)
+  const escaped=helper({read:read({a:'"'.repeat(120000),b:'"'.repeat(120000)})})
+  assert.equal((await escaped.readMany({files:['a','b']})).length,2)
+  const map=helper({read:read({a:'source'})})
+  for (const kib of [20,50,150]) {
+    const reduced=await map.mapTextFiles({files:['a']},()=>({data:'x'.repeat(kib*1024)}))
+    assert.equal(reduced[0].data.length,kib*1024)
+  }
+  const mapOverhead=map.jsonBytes([{data:''}])
+  assert.equal(map.jsonBytes(await map.mapTextFiles({files:['a']},()=>({data:'x'.repeat(budget-mapOverhead)}))),budget)
+  await assert.rejects(map.mapTextFiles({files:['a']},()=>({data:'x'.repeat(budget-mapOverhead+1)})),/max_total_bytes/)
+  const grep=helper({grep:async()=>({matches:[{line:'"'.repeat(140000)}]})})
+  const matches=await grep.grepMany({queries:[{pattern:'x'},{pattern:'y'}]})
+  assert.equal(matches.length,2)
+  assert.ok(grep.jsonBytes(matches)>512*1024) // Internal data remains available for reduction.
+})
+
+test('actual QuickJS readMany retains formerly allowed raw data inside PTC and can return it when needed', async () => {
+  const runtime=createPtcRuntime(), text='я'.repeat(100000)
+  const profile={schemaVersion:1,id:'raw-helper-tests',revision:1,tools:['read'],limits:{...DEFAULT_LIMITS,maxConcurrentToolCalls:1}}
+  try {
+    const program=buildPtcHelperPrelude(['read'])+"return await ptc.readMany({files:['a','b']})"
+    const result=await runtime.run({program,profile,bindings:{read:read({a:text,b:text})}})
+    assert.equal(result.status,'ok',JSON.stringify({status:result.status,error:result.error}))
+    assert.equal(result.value[1].text,text)
+    assert.ok(Buffer.byteLength(JSON.stringify(result.value))>350*1024)
+  } finally {await runtime.dispose()}
+})
+
+test('mapTextFiles catches deeply wrapped full sources without rejecting empty or compact extraction', async () => {
+  const text='full source\n'.repeat(2000), ptc=helper({read:read({a:text,empty:''})})
+  for (const mapper of [({text})=>({nested:[{raw:text}]}),({text})=>({nested:{raw:'prefix:'+text+':suffix'}})])
+    await assert.rejects(ptc.mapTextFiles({files:['a'],max_total_bytes:100000},mapper),/must reduce text/)
+  const result=await ptc.mapTextFiles({files:['a']},({text})=>({chars:text.length,excerpt:text.slice(0,20)}))
+  assert.deepEqual(result,[{chars:text.length,excerpt:text.slice(0,20)}])
+  assert.deepEqual(await ptc.mapTextFiles({files:['empty']},()=>({excerpt:'',count:0})),[{excerpt:'',count:0}])
+})
+
+test('read once, reuse locally; helpers never cache across mutation or external changes', async () => {
+  let text='alpha\nbeta',calls=0
+  const ptc=helper({read:args=>{calls++;return read({a:text})(args)}})
+  const source=await ptc.readAllText({file_path:'a'})
+  assert.equal(source.includes('alpha'),true);assert.equal(source.split('\n').length,2);assert.equal(calls,1)
+  text='after edit'
+  assert.equal(await ptc.readAllText({file_path:'a'}),'after edit');assert.equal(calls,2)
+  text='external change'
+  assert.equal(await ptc.readAllText({file_path:'a'}),'external change');assert.equal(calls,3)
+})
+

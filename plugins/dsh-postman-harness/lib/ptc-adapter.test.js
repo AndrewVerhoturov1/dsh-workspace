@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { ToolRuntime, defineTool } from '@deepseek-ai/dsh-tools'
 import { createScope } from '@deepseek-ai/dsh-scope'
+import { DEFAULT_LIMITS } from 'dsh-ptc'
 import { createPtcAdapter, PILOT_PROFILE, WORKER_MUTATION_PROFILE } from './ptc-adapter.js'
 import { POSTMAN_PTC_DISCIPLINE } from './ptc-discipline.js'
 import { postmanBridgeRestrictionForAgent, isTopLevelPostmanPtcLeader, postmanPtcDirectCallGuard, POSTMAN_PTC_ONLY_LEADER_TOOLS } from './postman-bridge-core.js'
@@ -102,7 +103,7 @@ test('helpers page and batch sequentially within one outer PTC call in JS and TS
     a.ctx.tools.restrict(postmanBridgeRestrictionForAgent(a));f.adapter.refresh(a)
     assert.match(sections[0].text({scope:a}),/ptc.readAllText.*ptc.readMany.*ptc.grepMany/)
     for (const language of ['javascript','typescript']) {
-      const program="const first"+(language==='typescript'?': string':'')+" = await ptc.readAllText({file_path:'first.txt',page_limit:2}); const many=await ptc.readMany({files:['first.txt','second.txt'],page_limit:2}); const matches=await ptc.grepMany({queries:[{pattern:'alpha',path:'first.txt'},{pattern:'MARKER',path:'second.txt'}]}); return {first,many,matches:matches.map(x=>x.result.matches.length),names:Object.keys(ptc).sort()}"
+      const program="const many"+(language==='typescript'?': {file_path:string,text:string}[]':'')+" = await ptc.readMany({files:['first.txt','second.txt'],page_limit:2}); const firstText=many[0].text; const matches=await ptc.grepMany({queries:[{pattern:'alpha',path:'first.txt'},{pattern:'MARKER',path:'second.txt'}]}); return {first:firstText,many,matches:matches.map(x=>x.result.matches.length),names:Object.keys(ptc).sort()}"
       const result=await f.ctx.tools.execute({callId:'helpers-'+language,name:'ptc_execute',arguments:{program,language,description:'Test sequential helpers',boundary:'semantic_decision'},agent:a,signal:new AbortController().signal})
       assert.equal(result.isError,false,result.error?.message)
       assert.equal(result.value.status,'ok',JSON.stringify(result.value))
@@ -114,9 +115,9 @@ test('helpers page and batch sequentially within one outer PTC call in JS and TS
     const outer=f.traces.filter(x=>x[0]==='pre' && x[1]==='ptc_execute')
     const nested=f.traces.filter(x=>x[0]==='pre' && ['read','grep'].includes(x[1]))
     assert.equal(outer.length,2)
-    assert.equal(nested.length,14)
-    assert.deepEqual(nested.slice(0,7).map(x=>x[1]),['read','read','read','read','read','grep','grep'])
-    assert.ok(nested.every((x,i)=>x[3]===outer[Math.floor(i/7)][5]))
+    assert.equal(nested.length,10) // Each page is read once, then text is reused.
+    assert.deepEqual(nested.slice(0,5).map(x=>x[1]),['read','read','read','grep','grep'])
+    assert.ok(nested.every((x,i)=>x[3]===outer[Math.floor(i/5)][5]))
     await f.adapter.dispose()
   } finally { await rm(dir,{recursive:true,force:true}) }
 })
@@ -135,9 +136,12 @@ test('real read canonical JSON above 64 KiB returns a compact summary', async()=
     assert.ok(result.value.value.canonicalBytes>65536)
     assert.equal(result.value.value.lines,48)
     assert.equal(result.value.value.last,48)
-    const truncated=await f.execute(a,"return await ptc.readAllText({file_path:'large.txt',page_limit:4})")
-    assert.equal(truncated.value.status,'ok',JSON.stringify(truncated.value))
-    assert.equal(truncated.value.value.length,48*1500+47)
+    const raw=await f.execute(a,"return await ptc.readAllText({file_path:'large.txt',page_limit:4})")
+    assert.equal(raw.value.status,'ok')
+    assert.equal(raw.value.value.length,48*1500+47)
+    const reduced=await f.execute(a,"const text=await ptc.readAllText({file_path:'large.txt',page_limit:4}); return {chars:text.length,lines:text.split('\\n').length}")
+    assert.equal(reduced.value.status,'ok',JSON.stringify(reduced.value))
+    assert.deepEqual(reduced.value.value,{chars:48*1500+47,lines:48})
     await writeFile(join(dir,'long-line.txt'),'x'.repeat(2500),'utf8')
     const lineTruncated=await f.execute(a,"return await ptc.readAllText({file_path:'long-line.txt'})")
     assert.equal(lineTruncated.value.status,'runtime-error')
@@ -325,7 +329,7 @@ test('PTC-first Leader direct tools fail closed while exceptions and production 
   for (const {a} of [pilot, production]) { a.ctx.tools.restrict(postmanBridgeRestrictionForAgent(a)); f.adapter.refresh(a) }
   assert.deepEqual(PILOT_PROFILE.tools, POSTMAN_PTC_ONLY_LEADER_TOOLS)
   assert.equal(PILOT_PROFILE.id, 'postman-leader-supervisor')
-  assert.equal(PILOT_PROFILE.revision, 6)
+  assert.equal(PILOT_PROFILE.revision, 7)
   assert.equal(PILOT_PROFILE.limits.maxWallMs, 300000)
   assert.equal(PILOT_PROFILE.limits.maxToolCalls, 256)
   assert.equal(PILOT_PROFILE.limits.quickjsMemoryBytes, 67108864)
@@ -333,7 +337,7 @@ test('PTC-first Leader direct tools fail closed while exceptions and production 
   assert.equal(PILOT_PROFILE.limits.maxMessageBytes, 1048576)
   assert.equal(PILOT_PROFILE.limits.maxValueDepth, 32)
   assert.equal(PILOT_PROFILE.limits.maxValueNodes, 10000)
-  assert.equal(PILOT_PROFILE.limits.maxOutputBytes, 524288)
+  assert.equal(PILOT_PROFILE.limits.maxOutputBytes, DEFAULT_LIMITS.maxOutputBytes)
   assert.equal(PILOT_PROFILE.limits.maxConcurrentToolCalls, 1)
   for (const name of ['ptc_execute', 'skill', 'ask_user_question', 'exit_plan_mode', 'read_image', 'postman_yield'])
     assert.equal(f.ctx.tools.schemas(pilot.a).some(s => s.name === name), true, name)
@@ -535,15 +539,18 @@ test('known stop refusal remains deterministic inside PTC and bookkeeping still 
   } finally {await f.adapter.dispose()}
 })
 
-test('oversized model-facing PTC result is diagnostic only, without result content', async () => {
+test('oversized model-facing PTC result is stopped before presentation, diagnostic excludes content', async () => {
   const f=fixture(process.cwd()), {a,diagnostics}=f.agent('large-result')
   a.ctx.tools.restrict(postmanBridgeRestrictionForAgent(a));f.adapter.refresh(a)
   try {
-    const result=await f.execute(a,"return {privateResult:'SECRET_RESULT_'.repeat(6000)}")
-    assert.equal(result.value.status,'ok')
+    const result=await f.execute(a,"return {privateResult:'SECRET_RESULT_'.repeat(45000)}")
+    assert.equal(result.value.status,'limit-exceeded')
+    assert.equal(result.value.error.code,'maxOutputBytes')
+    assert.ok(Buffer.byteLength(JSON.stringify(result.value))<2048)
     const diagnostic=diagnostics.findLast(e=>e.type==='postman/ptc-run').data
     assert.equal(diagnostic.oversizedResultCandidate,true)
-    assert.ok(diagnostic.resultBytes>64*1024)
+    assert.equal(diagnostic.resultBytes,0)
+    assert.equal(diagnostic.limitCode,'maxOutputBytes')
     assert.doesNotMatch(JSON.stringify(diagnostic),/SECRET_RESULT_|privateResult/)
   } finally {await f.adapter.dispose()}
 })
@@ -570,5 +577,118 @@ test('ordinary JSON refused/unknown async acceptance is not concealed by auto-yi
       assert.deepEqual({...diagnostics.at(-1).data.toolCounts},{[name]:1})
     }
   } finally { await f.adapter.dispose() }
+})
+
+
+test('long description is cosmetic: normalize, execute once, keep real program errors', async () => {
+  const f=fixture(process.cwd()), {a,diagnostics}=f.agent('description')
+  a.ctx.tools.restrict(postmanBridgeRestrictionForAgent(a));f.adapter.refresh(a)
+  const invoke=(program,description)=>f.ctx.tools.execute({callId:'long',name:'ptc_execute',agent:a,signal:new AbortController().signal,
+    arguments:{program,description,boundary:'semantic_decision'}})
+  try {
+    const long='  Читаем данные\n   и обрабатываем 😀 '.repeat(100)
+    const result=await invoke('await tools.read({}); return {ok:true}',long)
+    assert.equal(result.value.status,'ok')
+    assert.equal(result.value.effects.completed,1)
+    assert.equal(diagnostics.at(-1).data.descriptionNormalized,true)
+    assert.ok(Array.from(diagnostics.at(-1).data.description).length<=160)
+    assert.doesNotMatch(diagnostics.at(-1).data.description,/\s{2,}/)
+    assert.equal((await invoke('throw Error("real failure")',long)).value.status,'runtime-error')
+    assert.equal((await invoke('return 1','  ')).value.status,'PTC_DESCRIPTION_INVALID')
+  } finally {await f.adapter.dispose()}
+})
+
+test('Host-maintained exact statuses avoid model-authored interrupt aliases', async () => {
+  const f=fixture(process.cwd()), {a}=f.agent('status-table')
+  a.ctx.tools.restrict(postmanBridgeRestrictionForAgent(a));f.adapter.refresh(a)
+  const statuses={postman_worker:'POSTMAN_WORKER_TASK_ACCEPTED',postman_worker_interrupt:'POSTMAN_WORKER_INTERRUPT_TASK_ACCEPTED',postman_bridge:'POSTMAN_BRIDGE_ACCEPTED'}
+  let unknown=false
+  f.ctx.on('tools/execute',async (exec,next)=>exec.parent && statuses[exec.name]?
+    {isError:false,value:{status:unknown?'NEW_STATUS':statuses[exec.name]}}:next())
+  try {
+    for (const name of Object.keys(statuses)) {
+      const args={program:'return ptc.expectStatus(await tools.'+name+'({}),'+JSON.stringify(name)+')',description:'Accept exact producer',boundary:'external_event'}
+      const invoke=()=>f.ctx.tools.execute({callId:name,name:'ptc_execute',arguments:args,agent:a,signal:new AbortController().signal})
+      const accepted=await invoke()
+      assert.equal(accepted.value.status,'ok');assert.equal(accepted.concludesTurn,true)
+      unknown=true
+      const rejected=await invoke()
+      assert.equal(rejected.value.status,'runtime-error');assert.match(rejected.value.error.message,/unexpected status: NEW_STATUS/)
+      assert.equal(!!rejected.concludesTurn,false)
+      unknown=false
+    }
+  } finally {await f.adapter.dispose()}
+})
+
+test('auto-conclude correlates exact completed effect identities, not just counters', async () => {
+  let calls
+  const runtime={run:async({bindings,signal})=>{await bindings.postman_bridge({}, {signal,callId:1});return {status:'ok',value:{},effects:{calls,completed:1,failed:0,pending:0}}},dispose:async()=>{}}
+  const f=fixture(process.cwd(),{runtime}), {a,diagnostics}=f.agent('correlation')
+  a.ctx.tools.restrict(postmanBridgeRestrictionForAgent(a));f.adapter.refresh(a)
+  f.ctx.on('tools/execute',async(exec,next)=>exec.parent && exec.name==='postman_bridge'?{isError:false,value:{status:'POSTMAN_BRIDGE_ACCEPTED',state:'QUEUED'}}:next())
+  try {
+    for (calls of [[{callId:2,name:'postman_bridge',state:'completed'}],[{callId:1,name:'postman_worker',state:'completed'}],[{callId:1,name:'postman_bridge',state:'completed'}]]) {
+      const result=await f.ctx.tools.execute({callId:'correlate',name:'ptc_execute',arguments:{program:'return {}',description:'Wait on confirmed effects',boundary:'external_event'},agent:a,signal:new AbortController().signal})
+      const accepted=calls[0].callId===1 && calls[0].name==='postman_bridge'
+      assert.equal(!!result.concludesTurn,accepted)
+      assert.equal(diagnostics.at(-1).data.yieldBlockedReason,accepted?undefined:'effects-not-confirmed')
+    }
+  } finally {await f.adapter.dispose()}
+})
+
+test('nested conclude marker never conceals a later PTC error or model decision', async () => {
+  const f=fixture(process.cwd()), {a}=f.agent('early-marker')
+  a.ctx.tools.restrict(postmanBridgeRestrictionForAgent(a));f.adapter.refresh(a)
+  a.ctx.tools.register(defineTool({name:'get_goal',description:'marker fixture',parameters:{},output,execute(_args,exec){exec.concludeTurn();return {goal:null}}}))
+  try {
+    for (const code of ['throw Error("later")','return {needsModelDecision:true}']) {
+      const result=await f.execute(a,'await tools.get_goal({}); '+code)
+      assert.equal(!!result.concludesTurn,false)
+    }
+    const success=await f.execute(a,'await tools.get_goal({}); return {ok:true}')
+    assert.equal(success.concludesTurn,true)
+  } finally {await f.adapter.dispose()}
+})
+
+test('Leader and Worker inherit standard output limits; needed larger JSON and separate logs succeed', async () => {
+  for (const role of ['leader','worker']) {
+    const f=fixture(process.cwd(), {
+      resolveAssignment: (_agent,leaderProfile)=>({profile:role==='leader'?leaderProfile:WORKER_MUTATION_PROFILE,role}),
+      workerContextOf: ()=>({worktree:process.cwd()}),
+    }), {a}=f.agent('standard-output-'+role)
+    f.ctx.tools.register(defineTool({name:'glob',description:'glob fixture',parameters:{},output,execute(){return {paths:[]}}}))
+    f.adapter.refresh(a)
+    try {
+      assert.equal(PILOT_PROFILE.limits.maxOutputBytes,DEFAULT_LIMITS.maxOutputBytes)
+      assert.equal(WORKER_MUTATION_PROFILE.limits.maxOutputBytes,DEFAULT_LIMITS.maxOutputBytes)
+      for (const kib of [20,40,50,150]) {
+        const result=await f.execute(a,"return {nested:[{data:'я'.repeat("+(kib*512)+")}]}")
+        assert.equal(result.value.status,'ok',JSON.stringify({role,kib,status:result.value.status,error:result.value.error}))
+        assert.equal(Buffer.byteLength(result.value.value.nested[0].data),kib*1024)
+      }
+      const both=await f.execute(a,"console.log('x'.repeat(300*1024));return 'y'.repeat(300*1024)")
+      assert.equal(both.value.status,'ok') // Combined size exceeds 512 KiB; budgets remain separate.
+      assert.equal(JSON.parse(both.value.logs[0]).length,300*1024)
+      assert.equal(both.value.value.length,300*1024)
+      for (const program of ["return {nested:[{raw:'x'.repeat(512*1024)}]}","console.log('x'.repeat(512*1024));return null"]) {
+        const result=await f.execute(a,program)
+        assert.equal(result.value.status,'limit-exceeded')
+        assert.equal(result.value.error.code,'maxOutputBytes')
+      }
+    } finally {await f.adapter.dispose()}
+  }
+})
+
+
+test('compact payload remains below 50 KiB even at the Leader nested-call ceiling', async () => {
+  const f=fixture(process.cwd()), {a}=f.agent('envelope')
+  a.ctx.tools.restrict(postmanBridgeRestrictionForAgent(a));f.adapter.refresh(a)
+  try {
+    const result=await f.execute(a,"for(let i=0;i<256;i++) await tools.postman_worker_interrupt({}); return {evidence:'x'.repeat(32740)}")
+    assert.equal(result.value.status,'ok',JSON.stringify(result.value))
+    assert.equal(result.value.effects.completed,256)
+    assert.ok(Buffer.byteLength(JSON.stringify(result.value))<50*1024)
+    assert.ok(Buffer.byteLength(result.content[0].text)<50*1024)
+  } finally {await f.adapter.dispose()}
 })
 

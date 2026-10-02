@@ -56,6 +56,15 @@ export const POSTMAN_PTC_ONLY_LEADER_TOOLS = Object.freeze(POSTMAN_LEADER_TOOL_A
 
 export const POSTMAN_WORKER_PTC_TOOL_NAMES = Object.freeze(['read', 'glob', 'grep', 'web_fetch', 'web_search', 'write', 'edit'])
 
+// Existing PTC protocol knowledge, shared by the Host gate and expectStatus.
+// These are exact success statuses, not fuzzy aliases or a dispatch recipe.
+export const POSTMAN_PTC_SUCCESS_STATUSES = Object.freeze({
+  postman_task_prepare: Object.freeze(['TASK_CONTEXT_READY', 'POSTMAN_TASK_CONTEXT_ALREADY_READY']),
+  postman_worker: Object.freeze(['POSTMAN_WORKER_TASK_ACCEPTED']),
+  postman_worker_interrupt: Object.freeze(['POSTMAN_WORKER_INTERRUPT_TASK_ACCEPTED']),
+  postman_bridge: Object.freeze(['POSTMAN_BRIDGE_ACCEPTED']),
+})
+
 export function postmanPtcDirectCallGuard(exec, lookupAgent, ownsPtcWorker = () => false) {
   return lookupAgent(exec.agent?.id) === exec.agent && exec.parent === undefined &&
     ((isTopLevelPostmanPtcLeader(exec.agent) && POSTMAN_PTC_ONLY_LEADER_TOOLS.includes(exec.name)) ||

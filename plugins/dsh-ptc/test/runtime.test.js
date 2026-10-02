@@ -231,3 +231,29 @@ test('ten active PTC processes are allowed; eleventh rejected; a freed slot is r
   } finally { releases.forEach(release => release(null)); await runtime.dispose() }
 })
 
+
+test('result and aggregate logs keep separate budgets with original UTF-8 JSON accounting', async () => {
+  const r=createPtcRuntime(),p=profile([],{maxOutputBytes:1024})
+  try {
+    for(const program of [
+      "console.log('x'.repeat(510));console.log('x'.repeat(510));return 'y'.repeat(1022)",
+      "console.log('\\\\'.repeat(511));return null",
+      "console.log('я'.repeat(511));return null",
+    ]) {
+      const result=await r.run({program,profile:p,bindings:{}})
+      assert.equal(result.status,'ok',JSON.stringify({status:result.status,error:result.error}))
+      assert.ok(result.logs.reduce((sum,text)=>sum+Buffer.byteLength(text,'utf8'),0)<=1024)
+    }
+    for(const program of [
+      "return {wrapped:[{raw:'x'.repeat(1100)}]}",
+      "console.log('x'.repeat(510));console.log('x'.repeat(511));return null",
+      "console.log('\\\\'.repeat(512));return null",
+      "console.log('я'.repeat(512));return null",
+    ]) {
+      const result=await r.run({program,profile:p,bindings:{}})
+      assert.equal(result.status,'limit-exceeded',JSON.stringify(result))
+      assert.equal(result.error.code,'maxOutputBytes')
+    }
+  } finally {await r.dispose()}
+})
+
