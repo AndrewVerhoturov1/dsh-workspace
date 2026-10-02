@@ -72,7 +72,9 @@ _PROOF_JS = r"""
         const props = fiber.memoizedProps;
         if (props?.sourceImage) {
           if (source || props.imageSource !== 'uploaded' || props.chatGptConversationId !== conversationId)
-            return unknown('uploaded_source_unbound');
+            return {...unknown('uploaded_source_unbound'), duplicateSource:!!source,
+              observedImageSource:props.imageSource ?? null,
+              observedConversationId:props.chatGptConversationId ?? null, expectedConversationId:conversationId};
           source = props.sourceImage;
         }
         if (props?.item) {

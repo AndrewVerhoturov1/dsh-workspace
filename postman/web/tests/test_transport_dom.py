@@ -302,6 +302,32 @@ class TransportDomTests(unittest.TestCase):
         self.assertFalse(rejected['sentAttachmentConfirmed'])
         self.assertEqual(self.page.evaluate('window.sends'), 1)
 
+    def test_local_uploaded_conversation_reloads_read_only_never_resends(self):
+        from unittest.mock import patch
+        attachment = SimpleNamespace(name=f'POSTMAN_REFERENCE_{REQ}.png')
+        self.set_html(document(turns=''))
+        self.page.locator('#prompt-textarea').fill(PROMPT)
+        local = {'exactUserTurn':True,'composerEmpty':True,'chatUrlBound':True,'chatUrl':URL,
+                 'sentAttachmentConfirmed':False,'sentAttachment':{
+                     'reason':'uploaded_source_unbound','duplicateSource':False,
+                     'observedImageSource':'uploaded','observedConversationId':'local-chatgpt:fixture'}}
+        proven = {**local,'sentAttachmentConfirmed':True}
+        guard=submit.SendGuard()
+        found={'found':True,'button':self.page.locator('[data-testid="send-button"]'),'selector':'[data-testid="send-button"]'}
+        with patch.object(submit.attachments,'before_send',return_value=(True,{})), \
+             patch.object(submit,'_wait_until',side_effect=[(True,found),(False,local),(True,proven)]), \
+             patch.object(type(self.page),'reload',return_value=None) as reload:
+            result=submit.submit_once(self.page,self.page.locator('#prompt-textarea'),PROMPT,guard,
+                timeout_ms=100,conversation_url=URL,input_attachment=attachment,
+                chat_confirmed_state=submit.CHAT_URL_BOUND)
+        self.assertEqual(result['sendState'],'PROVEN_SENT',result)
+        self.assertTrue(result['details']['sentImageReadOnlyReload'])
+        reload.assert_called_once()
+        self.assertEqual(self.page.evaluate('window.sends'),1)
+        self.assertEqual(submit.submit_once(self.page,self.page.locator('#prompt-textarea'),PROMPT,guard)['code'],
+                         submit.PROMPT_RESEND_BLOCKED)
+        self.assertEqual(self.page.evaluate('window.sends'),1)
+
     def test_live_sibling_user_thumbnail_is_not_generated_result(self):
         self.set_html(document(turns=group(body=
             '<div data-chatgpt-search-unit-key="fallback-turn-0:0:user">'
