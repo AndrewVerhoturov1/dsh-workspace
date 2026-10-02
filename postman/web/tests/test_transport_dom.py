@@ -17,6 +17,7 @@ import artifact_download
 import browser_observer as observer
 import browser_recovery as recovery
 import browser_submit as submit
+import input_attachment as attachments
 import reminder_policy as reminders
 import system_recovery
 import transport_control as transport
@@ -113,6 +114,80 @@ class TransportDomTests(unittest.TestCase):
             '<div data-testid="collapsible-user-message-content">' + literal
             + '</div><button>Показать ещё</button></div>'))
         self.assertEqual(submit.collect_user_turn_texts(self.page), [literal])
+
+    def test_current_composer_photo_control_is_unique_before_reading_bytes(self):
+        controls = '<input id="video" type="file" accept="image/*,video/*">' \
+                   '<input id="photo" type="file" accept="image/*">' \
+                   '<input id="generic" type="file">'
+        cases = [(controls, 'photo', 1), ('', None, 0),
+                 ('<input type="file" accept="application/pdf">', None, 0),
+                 (controls + '<input type="file" accept="image/*">', None, 2),
+                 ('<input type="file" accept="image/*" disabled>', None, 0),
+                 ('<input type="file"><input type="file" accept="image/*,video/*">', None, 2)]
+        for inputs, expected, eligible in cases:
+            with self.subTest(inputs=inputs):
+                self.set_html('<div class="ProseMirror" contenteditable="true" role="textbox">unrelated editor</div>'
+                    '<input type="file" accept="image/*" id="unrelated">'
+                    '<form data-chatgpt-composer data-composer-placement="thread">' + COMPOSER + inputs + '</form>')
+                composer, _ = submit.find_composer(self.page)
+                self.assertEqual(composer.get_attribute('id'), 'prompt-textarea')
+                self.assertEqual(len(submit.collect_composer_snapshots(self.page)['logicalCandidates']), 1)
+                reads, uploads = [], []
+                attachment = SimpleNamespace(name='reference.png', media_type='image/png',
+                    upload_bytes=lambda: reads.append('bytes') or b'synthetic image fixture')
+                def native_upload(node, payload, **kwargs):
+                    uploads.append(node.get_attribute('id'))
+                    self.assertEqual(reads, ['bytes'])
+                proof = {'known': True, 'count': 1, 'names': ['reference.png'],
+                         'pending': False, 'error': False, 'settled': True, 'ids': ['fixture']}
+                with patch.object(Locator, 'set_input_files', new=native_upload), \
+                     patch.object(attachments, 'snapshot', side_effect=[{'known': True, 'count': 0}, proof]):
+                    result = attachments.upload(self.page, self.page.locator('#prompt-textarea'), attachment,
+                        wait_until=lambda fn, **kw: fn(), timeout_ms=0)
+                self.assertEqual(result['ok'], expected is not None, result)
+                self.assertEqual(reads, ['bytes'] if expected else [])
+                self.assertEqual(uploads, [expected] if expected else [])
+                self.assertEqual(result['details']['eligibleCount'], eligible)
+                self.assertEqual(result['details']['scopeFileInputCount'], len(inputs.split('<input')) - 1)
+                self.assertEqual(result['details']['fileInputCount'], result['details']['scopeFileInputCount'] + 1)
+                self.assertEqual(result['details']['container'], 'active-composer-form')
+
+    def test_multiple_or_hidden_current_forms_never_select_a_composer(self):
+        form = '<form data-chatgpt-composer data-composer-placement="thread">' + COMPOSER + '</form>'
+        # Two visible current forms are ambiguous; one hidden form is inactive.
+        for forms in (form + form, form.replace('<form ', '<form hidden ')):
+            self.set_html(forms)
+            self.assertEqual(submit.find_composer(self.page), (None, None))
+
+    def test_current_user_payload_and_image_only_answer_share_exact_anchor(self):
+        prompt = self.long_image_prompt()
+        self.set_html(document(turns=group(body='<div data-testid="generated-image-gallery"></div>', key='old') +
+            '<div data-turn-key="current"><div data-user-message-bubble="true">'
+            '<div data-search-result-target style="max-height:80px;overflow:hidden">'
+            '<div><div class="text-size-chat whitespace-pre-wrap" dir="auto">' + html.escape(prompt) +
+            '</div></div></div><span aria-hidden="true">…</span><button aria-expanded="false">Показать ещё</button>'
+            '</div><div data-testid="generated-image-gallery"></div></div>'))
+        # Synthetic decoded images: no user image or third-party network.
+        self.page.evaluate('''() => {
+            const canvas = document.createElement('canvas'); canvas.width=128;canvas.height=128;
+            for (const gallery of document.querySelectorAll('[data-testid="generated-image-gallery"]')) {
+                const img = new Image();img.src=canvas.toDataURL();gallery.append(img);
+            }
+            const avatar = new Image();avatar.src=canvas.toDataURL();document.body.prepend(avatar);
+        }''')
+        self.page.wait_for_function('[...document.querySelectorAll("[data-testid=generated-image-gallery] img")].every(i=>i.complete)')
+        self.assertEqual(submit.collect_user_turn_texts(self.page), [PROMPT, prompt])
+        self.assertTrue(submit._observe_send_proof(self.page, prompt, 1, conversation_url=URL)[0])
+        result = observer.observe_next_assistant(self.page, prompt, URL, image_mode=True,
+            timeout_ms=1000, stable_ms=100, poll_ms=10, sleep=self.clock.sleep, monotonic=self.clock.now)
+        self.assertTrue(result['ok'], result)
+        self.assertEqual(result['details']['assistantText'], '')
+        self.assertEqual(result['details']['assistantImageCount'], 1)
+        self.assertEqual(result['details']['anchorIndex'], 2)
+        self.assertEqual(result['details']['assistantIndex'], 3)
+        for content in (html.escape(prompt[:100]), '<span hidden>' + html.escape(prompt) + '</span>'):
+            self.page.locator('[data-search-result-target] .whitespace-pre-wrap').evaluate('(el, text)=>el.innerHTML=text', content)
+            self.assertFalse(submit._observe_send_proof(self.page, prompt, 1, conversation_url=URL)[0])
 
     @staticmethod
     def long_image_prompt():

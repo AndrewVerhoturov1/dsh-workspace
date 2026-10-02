@@ -92,6 +92,7 @@ USER_TURN_SELECTORS = (
 # the legacy user turn or modern user bubble. These selectors identify the payload,
 # rather than the surrounding turn chrome.
 USER_MESSAGE_CONTENT_SELECTORS = (
+    '[data-search-result-target] .whitespace-pre-wrap',
     '[data-testid="collapsible-user-message-content"]',
     '[data-testid="user-message-content"]',
     '[data-testid="message-content"]',
@@ -504,9 +505,17 @@ def _merge_composer_aliases(raw: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def collect_composer_snapshots(page: Any, expected_prompt: str | None = None) -> dict[str, Any]:
     """Collect one logical composer tree and every exact read representation."""
     raw: list[dict[str, Any]] = []
+    scope = page
+    # Current thread composer has no prompt-textarea id; exclude writing/code editors.
+    forms = page.locator('form[data-chatgpt-composer][data-composer-placement="thread"]')
+    if _locator_count(forms):
+        active_forms = [forms.nth(i) for i in range(_locator_count(forms)) if _visible(forms.nth(i))]
+        if len(active_forms) != 1:
+            return {"logicalCandidates": [], "allCandidates": []}
+        scope = active_forms[0]
     for selector in COMPOSER_SNAPSHOT_SELECTORS:
         try:
-            locator = page.locator(selector)
+            locator = scope.locator(selector)
             count = _locator_count(locator)
         except Exception:
             continue

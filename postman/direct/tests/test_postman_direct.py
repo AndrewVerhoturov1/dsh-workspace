@@ -185,7 +185,28 @@ class DirectPostmanUnitTests(unittest.TestCase):
                     runner.run(request_id=REQ, task="image", image_mode=True)
             self.assertEqual(caught.exception.details["transportCode"], "ARTIFACT_REJECTED")
             extract.assert_not_called()
-            self.assertEqual(json.loads(runner.state_path(REQ).read_text(encoding="utf-8"))["state"], "FAILED")
+            state = json.loads(runner.state_path(REQ).read_text(encoding="utf-8"))
+            self.assertEqual(state["state"], "FAILED")
+            self.assertIs(state["publicationStarted"], True)
+
+    def test_image_failure_before_prepare_has_no_publication_to_sync(self):
+        class Bridge:
+            def __init__(self, **kwargs): pass
+            def run_request(self, request_id, **kwargs):
+                return {"ok": False, "code": "POSTMAN_TRANSPORT_FAILED", "details": {
+                    "transportCode": "PROMPT_SEND_UNKNOWN", "transportMessage": "unknown", "details": {"sendState": "UNKNOWN"}}}
+        with tempfile.TemporaryDirectory() as root:
+            runner = direct.DirectPostman(branch="preview", direct_root=Path(root) / "direct",
+                publisher_factory=lambda **kw: self.fail("packaging has not begun"), bridge_factory=Bridge,
+                ensure_browser=lambda **kw: {"cdpUrl": "http://127.0.0.1:9222"})
+            with self.assertRaises(direct.DirectPostmanError):
+                runner.run(request_id=REQ, task="image", image_mode=True)
+            state = json.loads(runner.state_path(REQ).read_text(encoding="utf-8"))
+            self.assertIs(state["publicationStarted"], False)
+            self.assertNotIn("taskPublicationCommit", state)
+            with self.assertRaises(direct.DirectPostmanError) as replay:
+                runner.run(request_id=REQ, task="image", image_mode=True)
+            self.assertEqual(replay.exception.code, "DIRECT_REQUEST_EXISTS")
 
     def test_image_mode_requires_pillow_before_claiming_or_publishing(self):
         with tempfile.TemporaryDirectory() as tmp:

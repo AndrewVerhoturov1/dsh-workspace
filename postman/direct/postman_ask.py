@@ -266,6 +266,7 @@ class DirectPostmanAsk:
                 f"request {request_id} already has direct transport state; automatic resend is forbidden",
                 details={"statePath": str(self.state_path(request_id))},
             )
+        self._write_state(request_id, STATE_INIT, publicationStarted=False)
 
         chat_ref = None
         if chat_request_id:
@@ -312,6 +313,7 @@ class DirectPostmanAsk:
                 repository=self.repository,
                 base_commit=snapshot.prepublication_commit,
             )
+            self._write_state(request_id, STATE_INIT, publicationStarted=True)
             published = publisher.publish_content(
                 request_id,
                 task_content,
