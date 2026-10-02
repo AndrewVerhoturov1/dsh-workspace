@@ -150,7 +150,7 @@ class InputBundleTests(unittest.TestCase):
         with patch.object(input_files, "MAX_INPUT_BYTES", 4), self.assertRaisesRegex(input_files.InputStageError, "LIMIT_EXCEEDED"):
             input_files.selected_file(str(source))
         with patch.object(input_files, "MAX_AGGREGATE_BYTES", 4), self.assertRaisesRegex(input_files.InputStageError, "LIMIT_EXCEEDED"):
-            input_files.GitHubInputPublisher(lambda *args: self.fail("publication forbidden")).stage([str(source)])
+            input_files.GitHubInputPublisher(lambda *args: self.fail("publication forbidden"), snapshot_dir=self.root).stage([str(source)])
         source.write_bytes(b"")
         with self.assertRaisesRegex(input_files.InputStageError, "empty"):
             input_files.selected_file(str(source))
@@ -187,20 +187,17 @@ class InputBundleTests(unittest.TestCase):
     def test_stage_one_read_snapshot_survives_source_mutation(self):
         source = self.root / "selected.txt"; source.write_bytes(b"authorized-A")
         private = self.root / "snapshot"; private.mkdir()
-        published = []
-        def api(endpoint, method="GET", payload=None):
-            if endpoint.endswith("git/blobs"):
-                self.assertEqual((private / "001.bin").read_bytes(), b"authorized-A")
-                published.append(base64.b64decode(payload["content"]))
-                source.write_bytes(b"changed-B")
-            if "git/ref/heads/" in endpoint: return {"object": {"sha": COMMIT}}
-            if endpoint.endswith("git/commits/" + COMMIT): return {"tree": {"sha": "c" * 40}}
-            return {"sha": "e" * 40}
-        publisher = input_files.GitHubInputPublisher(api, snapshot_dir=private)
-        with patch.object(input_files, "selected_file", wraps=input_files.selected_file) as selected:
+        publisher = input_files.GitHubInputPublisher(lambda *args: self.fail("GitHub forbidden"), snapshot_dir=private)
+        original = input_files.selected_file
+        def read_once(path):
+            item = original(path)
+            source.write_bytes(b"changed-B")
+            return item
+        with patch.object(input_files, "selected_file", side_effect=read_once) as selected:
             result = publisher.stage([str(source)])
             self.assertEqual(selected.call_count, 1)
-        self.assertEqual(published, [b"authorized-A"])
+        self.assertEqual(result["descriptors"][0]["source_kind"], "native")
+        self.assertNotIn("raw_url", result["descriptors"][0])
         request = self.root / "request"; request.mkdir()
         result_zip = bundle.build_bundle(REQ, result["descriptors"], publisher.materializations, request)
         attachment = bundle.read_handoff(result_zip["handoffPath"], REQ, result["descriptors"])
@@ -245,8 +242,12 @@ class InputBundleTests(unittest.TestCase):
         for mode in ("artifact", "text"):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
-                descriptors = [descriptor(b"exact bytes")]
-                made = bundle.build_bundle(REQ, descriptors, snapshots(root, [b"exact bytes"]), root)
+                source = root / "selected.txt"; source.write_bytes(b"exact bytes")
+                snapshot_root = root / "snapshots"; snapshot_root.mkdir()
+                staged = input_files.GitHubInputPublisher(lambda *a: self.fail("GitHub input publication"), snapshot_dir=snapshot_root)
+                selected = staged.stage([str(source)])
+                descriptors = selected["descriptors"]
+                made = bundle.build_bundle(REQ, descriptors, staged.materializations, root)
                 handoff = Path(made["handoffPath"])
                 zip_path = root / f"POSTMAN_INPUT_{REQ}.zip"
                 captured = []
@@ -266,6 +267,18 @@ class InputBundleTests(unittest.TestCase):
                         self.assertEqual(attached.request_id, REQ)
                         self.assertEqual(len(kwargs["prompt"].splitlines()), 2)
                         self.assertEqual(attached.upload_bytes(), zip_path.read_bytes())
+                        import sys
+                        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "web" / "tests"))
+                        from test_input_attachment import ZipPage, proof
+                        from postman.web import browser_submit
+                        page = ZipPage()
+                        page.upload_result = proof(name=attached.name)
+                        page.sent_result = proof(name=attached.name)
+                        sent = browser_submit.submit_fresh_prompt(page, kwargs["prompt"], timeout_ms=0, input_attachment=attached)
+                        self.assertEqual(sent["sendState"], "PROVEN_SENT", sent)
+                        self.assertTrue(sent["details"]["sentAttachmentConfirmed"])
+                        self.assertEqual(page.click_count, 1)
+                        self.assertEqual(page.uploads[0]["buffer"], zip_path.read_bytes())
                         self.assertNotIn("snapshot_path", kwargs["expected_request"])
                         if mode == "artifact":
                             return {"ok": True, "code": "ASSISTANT_COMPLETED_NO_ARTIFACT", "details": {
@@ -282,6 +295,7 @@ class InputBundleTests(unittest.TestCase):
                 direct = cls(**options)
                 terminal = direct.run(request_id=REQ, task="intent unchanged", input_files=descriptors, input_bundle_manifest=str(handoff))
                 self.assertTrue(terminal["ok"])
+                if mode == "text": self.assertEqual(terminal["code"], "TEXT_RESULT_DURABLE")
                 self.assertIn(f"POSTMAN_INPUT_{REQ}.zip", captured[0])
                 self.assertIn("## User intent\n\nintent unchanged", captured[0])
                 self.assertFalse(handoff.exists())
@@ -290,7 +304,7 @@ class InputBundleTests(unittest.TestCase):
                 self.assertEqual(state["inputBundle"]["bundleSha256"], made["bundleSha256"])
                 self.assertNotIn(str(root), json.dumps(state["inputBundle"]))
 
-    def test_task_native_contract_and_image_descriptor_exception(self):
+    def test_task_native_contract_and_image_reference(self):
         desc = descriptor(b"a")
         for render in [task_package.render_input_files_section]:
             native = render([desc], native_input_request_id=REQ)
@@ -298,9 +312,10 @@ class InputBundleTests(unittest.TestCase):
             self.assertIn("POSTMAN_INPUT_MANIFEST.json", native)
             self.assertNotIn("используй GitHub connector", native)
             self.assertIn("недоверенные task data", native)
-        image = postman_direct.build_image_generation_prompt("draw", [desc])
-        self.assertIn("GitHub connector", image)
-        self.assertNotIn("native attachment", image)
+        image = postman_direct.build_image_generation_prompt("draw", [{**desc, "name": "reference.png"}])
+        self.assertNotIn("GitHub connector", image)
+        self.assertNotIn("raw_url", image)
+        self.assertIn("приложенное изображение", image)
         text = text_task_package.render_direct_text_task_manifest(request_id=REQ, user_intent="exact", repository=REPO,
             base_commit=COMMIT, input_files=[desc], native_input_request_id=REQ)
         self.assertIn(f"POSTMAN_INPUT_{REQ}.zip", text)

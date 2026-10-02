@@ -37,7 +37,7 @@ class InputFilesTest(unittest.TestCase):
         result = render(values)
         self.assertEqual(result.count("### "), 3)
         self.assertIn("## Input retrieval contract", result)
-        self.assertIn("GitHub connector", result)
+        self.assertNotIn("GitHub connector", result)
         self.assertIn("### sources.zip\n\nrepository:", result)
         self.assertNotIn("raw_url:", result.split("### sources.zip", 1)[1])
         self.assertIn("## User intent\n\nexact intent\nsecond line\n\n## Input files", result)
@@ -51,15 +51,16 @@ class InputFilesTest(unittest.TestCase):
                 render([{**descriptor(), **change}])
 
     def test_image_first_prompt_only(self):
-        self.assertNotIn("## Input files", postman_direct.build_image_generation_prompt("Draw"))
         prompt = postman_direct.build_image_generation_prompt("Draw", [descriptor("reference.png", "img/reference.png")])
-        self.assertIn("### reference.png", prompt)
-        self.assertIn("Изображения используй как visual references", prompt)
-        mixed = postman_direct.build_image_generation_prompt("Draw", [descriptor("reference.png", "img/reference.png"), descriptor("requirements.md", "docs/requirements.md"), descriptor("sources.zip", "data/sources.zip")])
-        self.assertIn("документы, архивы и другие файлы", mixed)
-        self.assertNotIn("все input files как visual reference", mixed)
-        self.assertNotIn("requirements.md", postman_direct.build_image_packaging_intent(REQ))
+        self.assertIn("приложенное изображение как visual reference", prompt)
+        self.assertNotIn("raw_url", prompt)
+        self.assertNotIn("github", prompt.lower())
+        self.assertNotIn(SHA, prompt)
         self.assertTrue(prompt.endswith("Draw\n\nСделай ровно одно изображение."))
+        with self.assertRaisesRegex(Exception, "COUNT_UNSUPPORTED"):
+            postman_direct.build_image_generation_prompt("Draw", [descriptor(), descriptor()])
+        with self.assertRaisesRegex(Exception, "TYPE_UNSUPPORTED"):
+            postman_direct.build_image_generation_prompt("Draw", [descriptor()])
         self.assertNotIn("reference.png", postman_direct.build_image_packaging_intent(REQ))
 
     def test_existing_file_descriptor_never_stages(self):
@@ -95,7 +96,10 @@ class InputFilesTest(unittest.TestCase):
                     return {"sha": "e"*40}
                 return {}
             publisher = input_files.GitHubInputPublisher(api)
-            result = publisher.stage([str(one), str(two)])
+            with self.assertRaisesRegex(input_files.InputStageError, "PUBLIC_APPROVAL_REQUIRED"):
+                publisher.stage_public_fallback([str(one), str(two)])
+            self.assertEqual(calls, [])
+            result = publisher.stage_public_fallback([str(one), str(two)], public_fallback_confirmed=True)
             self.assertEqual(len(result["descriptors"]), 2)
             for item, data in zip(result["descriptors"], [one.read_bytes(), two.read_bytes()]):
                 self.assertEqual(item["sha256"], hashlib.sha256(data).hexdigest())

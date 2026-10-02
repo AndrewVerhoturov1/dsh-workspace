@@ -84,6 +84,8 @@ postman_send_current_turn()
 
 ### Trusted input invariant
 
+Native ChatGPT attachment is the primary input-file transport. Never publish a user/local input to GitHub merely so ChatGPT can read it when native attachment delivery is available. GitHub public staging is fallback-only and requires explicit user approval.
+
 Transport metadata/input descriptors формирует parent Host/Leader; Bridge child их не изменяет. Runtime сам строит и прикладывает Host-authorized native input ZIP. Наличие input ZIP не меняет text result contract: ZIP является input, итог остаётся текстовым результатом. Никаких manual upload/path operations child не выполняет.
 
 ## 3. Production entrypoint

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Narrow native ZIP upload/proof helpers, not an arbitrary-files API.
+"""Narrow native ZIP/image upload/proof helpers, not an arbitrary-files API.
 
 Composer scope, ready cards and an existing sent ZIP resource card were
 read/probed live without Send. Selectors stay isolated: unknown markup is NEVER
@@ -61,22 +61,31 @@ _PROOF_JS = r"""
         [...b.parentElement.querySelectorAll('[title]')].some(n => n.getAttribute('title') === b.getAttribute('aria-label')))
         .map(b => b.parentElement)
     : [];
-  const candidates = [...new Set([...observedPreCards, ...observedSentCards,
-    ...scope.querySelectorAll('[data-testid="file-upload-preview"]')])].filter(visible);
+  const imageCards = options.image
+    ? [...scope.querySelectorAll('[data-testid="image-attachment"],[data-file-id]')].filter(e =>
+        e.querySelector('img[alt],img[title]') && !e.closest('[data-user-message-bubble="true"]')) : [];
+  const candidates = [...new Set([...observedPreCards, ...observedSentCards, ...imageCards,
+    ...scope.querySelectorAll('[data-testid="file-upload-preview"],[data-testid="image-upload-preview"]')])].filter(visible);
   const cards = candidates.filter(e => !candidates.some(parent => parent !== e && parent.contains(e)));
   const names = cards.map(e => {
     const named = e.querySelector('[data-testid="file-name"],[data-filename]');
+    const image = options.image ? e.querySelector('img[alt],img[title]') : null;
     return e.getAttribute('data-filename') || named?.getAttribute('data-filename') ||
-      named?.textContent?.trim() ||
+      named?.textContent?.trim() || image?.getAttribute('alt') || image?.getAttribute('title') ||
       [...e.querySelectorAll('[title]')].map(n => n.getAttribute('title')).find(title => title === options.name) ||
-      [...e.querySelectorAll('button[aria-label]')].map(b => b.getAttribute('aria-label')).find(label => label === options.name) || '';
+      [...e.querySelectorAll('button[aria-label]')].map(b => b.getAttribute('aria-label')).find(label => label === options.name) ||
+      (options.image && !options.sent ? [...e.querySelectorAll('button[aria-label]')].map(b => b.getAttribute('aria-label'))
+        .filter(label => /^(Remove|Удалить) /.test(label || '')).map(label => label.replace(/^(Remove|Удалить) /, '')).find(label => label === options.name) : '') || '';
   });
   const pending = [...scope.querySelectorAll('[role="progressbar"],progress,[aria-busy="true"],[data-upload-state="pending"],[data-upload-state="uploading"]')].some(visible);
   const error = [...scope.querySelectorAll('[role="alert"],[data-upload-state="error"],[data-testid="upload-error"]')].some(visible) ||
     (!options.sent && /upload failed|could not upload|unable to upload|ошибка|не удалось/i.test(scope.innerText || ''));
   const settled = cards.length === 1 && (options.sent || cards[0].getAttribute('data-upload-state') === 'ready' ||
     [...cards[0].querySelectorAll('button[aria-label]')].some(b =>
-      b.getAttribute('aria-label') === options.name && b.getAttribute('aria-busy') !== 'true' && !b.disabled));
+      b.getAttribute('aria-label') === options.name && b.getAttribute('aria-busy') !== 'true' && !b.disabled) ||
+    (options.image && [...cards[0].querySelectorAll('img')].some(i => i.complete && i.naturalWidth > 0) &&
+      [...cards[0].querySelectorAll('button[aria-label]')].some(b =>
+        ['Remove ' + options.name, 'Удалить ' + options.name].includes(b.getAttribute('aria-label')) && !b.disabled)));
   const ids = cards.map(e => e.getAttribute('data-file-id') || '');
   // A file-card is required. Text that merely mentions the filename is not proof.
   return {known:cards.length > 0, count:cards.length, names, ids, pending, error, settled};
@@ -86,7 +95,7 @@ _PROOF_JS = r"""
 
 def snapshot(root, name, *, sent=False):
     try:
-        value = root.evaluate(_PROOF_JS, {"name": name, "sent": sent})
+        value = root.evaluate(_PROOF_JS, {"name": name, "sent": sent, "image": name.startswith("POSTMAN_REFERENCE_")})
         if isinstance(value, dict):
             return value
     except Exception:
@@ -124,14 +133,16 @@ def upload(page, composer, attachment, *, timeout_ms, wait_until):
         for i in range(inputs.count()):
             node = inputs.nth(i)
             accept = (node.get_attribute('accept') or '').lower()
-            if not accept or '*/*' in accept or '.zip' in accept or 'application/zip' in accept:
+            media = getattr(attachment, 'media_type', 'application/zip')
+            accepted = [token.strip() for token in accept.split(',')]
+            if not accept or '*/*' in accepted or media in accepted or Path(attachment.name).suffix.lower() in accepted or (media.startswith('image/') and 'image/*' in accepted):
                 eligible.append(node)
         if len(eligible) != 1:
             return {"ok": False, "code": ATTACHMENT_CONTROL_UNAVAILABLE, "details": {"reason": "ambiguous_or_missing_file_input"}}
         # Use freshly hash-verified bytes as a native FilePayload. Passing a pathname
         # here would permit a final TOCTOU between verification and browser file read.
         data = attachment.upload_bytes()
-        eligible[0].set_input_files({"name": attachment.name, "mimeType": "application/zip", "buffer": data}, timeout=timeout_ms)
+        eligible[0].set_input_files({"name": attachment.name, "mimeType": getattr(attachment, "media_type", "application/zip"), "buffer": data}, timeout=timeout_ms)
     except input_bundle.InputBundleError as exc:
         return {"ok": False, "code": exc.code, "details": {}}
     except Exception:
