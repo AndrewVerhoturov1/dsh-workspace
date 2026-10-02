@@ -358,6 +358,7 @@ class WebWorkerBridge:
         validator_runner: Callable[[Path, dict[str, Any]], dict[str, Any]] | None = None,
         image_prepare: Callable[[], dict[str, Any]] | None = None,
         input_attachment=None,
+        resume_image: bool = False,
     ) -> dict[str, Any]:
         """Run one browser page; image mode continues to ZIP on that same page."""
         if input_attachment is not None and (input_attachment.request_id != request_id or
@@ -373,11 +374,26 @@ class WebWorkerBridge:
             # No task URL exists yet, but the preparatory turn owns this
             # persisted worker identity. Never resend after restart or uncertainty.
             existing = self.read_state(request_id)
-            if existing is not None:
+            if resume_image:
+                failure = (existing or {}).get("failureDetails", {})
+                proof = failure.get("details", {})
+                if (not input_attachment or not conversation_url or not existing
+                        or existing.get("exactPromptText") != prompt
+                        or failure.get("code") != browser_submit.PROMPT_SEND_UNKNOWN
+                        or failure.get("sendState") != browser_submit.SEND_UNKNOWN
+                        or proof.get("chatUrl") != conversation_url
+                        or proof.get("exactUserTurn") is not True
+                        or proof.get("userTurnCountBefore") != 0
+                        or proof.get("userTurnCountNow") != 1
+                        or proof.get("inputBundle") != input_attachment.metadata()):
+                    return _result(BRIDGE_INVALID_CONFIG, ok=False,
+                                   details={"reason": "image_resume_binding_invalid"})
+            elif existing is not None:
                 return {"ok": existing.get("state") in _STATE_ORDER,
                         "code": existing.get("state", BRIDGE_INVALID_CONFIG), "details": existing}
             request = BridgeRequest(request_id, "", str(self.result_path(request_id)), _job_id(request_id))
-            self._write_state(request, ACCEPTED)
+            if not resume_image:
+                self._write_state(request, ACCEPTED)
         else:
             accepted = self.accept_request(request_id, task_url)
             if not accepted["ok"]:
@@ -443,7 +459,24 @@ class WebWorkerBridge:
                 stack.callback(close_owned_resources)
                 page = context.new_page()
 
-                if conversation_url is None:
+                if resume_image:
+                    # Explicit recovery only: no upload, fill or Send on the first turn.
+                    prepared = browser_submit.prepare_existing_chat(
+                        page, conversation_url, timeout_ms=timeout_ms)
+                    if not prepared.get("ok"):
+                        return self._fail(request, prepared.get("code", "image_resume_chat_unproven"),
+                                          details=prepared)
+                    proven, reproved = browser_submit._observe_send_proof(
+                        page, prompt, 0, conversation_url=conversation_url,
+                        input_attachment=input_attachment)
+                    if not proven:
+                        return self._fail(request, "image_resume_send_unproven", details=reproved)
+                    submitted = {"ok": True, "code": browser_submit.PROMPT_SEND_CONFIRMED,
+                                 "sendState": browser_submit.SEND_PROVEN_SENT,
+                                 "transitions": [browser_submit.PROMPT_SEND_CONFIRMED],
+                                 "details": {**reproved, "resumeReadOnly": True,
+                                             "promptSha256": browser_submit.prompt_sha256(prompt)}}
+                elif conversation_url is None:
                     # Image creation can delay the first /c/... URL after the user turn appears.
                     submitted = browser_submit.submit_fresh_prompt(
                         page, prompt, **({"input_attachment": input_attachment} if input_attachment else {}),
