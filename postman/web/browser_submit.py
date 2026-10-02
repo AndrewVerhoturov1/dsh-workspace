@@ -89,7 +89,7 @@ USER_TURN_SELECTORS = (
 )
 
 # ChatGPT may put controls (for example the collapsible-message toggle) inside
-# the role-bearing user turn. These selectors identify the message payload,
+# the legacy user turn or modern user bubble. These selectors identify the payload,
 # rather than the surrounding turn chrome.
 USER_MESSAGE_CONTENT_SELECTORS = (
     '[data-testid="collapsible-user-message-content"]',
@@ -658,14 +658,18 @@ def _visible(locator: Any) -> bool:
 
 
 def find_user_message_content(turn: Any) -> tuple[Any | None, str | None]:
-    """Find the payload node inside a role-bearing user turn.
+    """Find the payload node inside a legacy user turn or modern user bubble.
 
-    The role node is deliberately not trusted when it contains interactive
+    The user container is deliberately not trusted when it contains interactive
     controls: ChatGPT currently renders a collapsible toggle beside the exact
-    prompt. Known payload contracts are tried in order, and a plain role node
+    prompt. Known payload contracts are tried in order, and a plain container
     is used only when it has no UI-control descendants.
     """
-    if _attribute(turn, "data-message-author-role").casefold() != "user":
+    is_user_container = (
+        _attribute(turn, "data-message-author-role").casefold() == "user"
+        or _attribute(turn, "data-user-message-bubble") == "true"
+    )
+    if not is_user_container:
         return turn, None
 
     for selector in USER_MESSAGE_CONTENT_SELECTORS:

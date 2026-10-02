@@ -594,9 +594,9 @@ console.log(JSON.stringify({length: actual.length, sha256: hash(actual), joined,
         prompt = "POSTMAN_REQUEST_ID: REQ_20260831T043812Z_4827\ncreate artifact"
 
         class OuterWithUi(FakeLocator):
-            def __init__(self):
+            def __init__(self, attrs):
                 super().__init__(text=prompt + "Свернуть")
-                self.attrs = {"data-message-author-role": "user"}
+                self.attrs = attrs
                 self.payload = FakeLocator(text=prompt)
 
             def get_attribute(self, name):
@@ -620,17 +620,22 @@ console.log(JSON.stringify({length: actual.length, sha256: hash(actual), joined,
                 return self.Collection([])
 
         class Page:
+            def __init__(self, attrs):
+                self.attrs = attrs
+
             def locator(self, selector):
                 if selector == submit.USER_TURN_SELECTORS[0]:
-                    return OuterWithUi.Collection([OuterWithUi()])
+                    return OuterWithUi.Collection([OuterWithUi(self.attrs)])
                 return OuterWithUi.Collection([])
 
-        details = submit.collect_user_turn_details(Page())
-        self.assertEqual([item["text"] for item in details], [prompt])
-        self.assertEqual(
-            details[0]["semanticSelector"],
-            '[data-testid="collapsible-user-message-content"]',
-        )
+        for attrs in ({"data-message-author-role": "user"}, {"data-user-message-bubble": "true"}):
+            with self.subTest(attrs=attrs):
+                details = submit.collect_user_turn_details(Page(attrs))
+                self.assertEqual([item["text"] for item in details], [prompt])
+                self.assertEqual(
+                    details[0]["semanticSelector"],
+                    '[data-testid="collapsible-user-message-content"]',
+                )
 
     def test_composer_paragraphs_restore_exact_newlines(self):
         class ProseMirror:
