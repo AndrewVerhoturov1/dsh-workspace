@@ -286,6 +286,26 @@ test('job manager sends exact payload only as UTF-8 Base64 to the existing Direc
 })
 
 
+test('publication fact comes from owned state, never failure fields or missing receipt', async () => {
+  for (const fact of [false, true, undefined, 'false']) {
+    const child = fakeChild()
+    let state
+    const manager = new DirectPostmanJobManager({ exists: () => true,
+      readPublicationState: () => JSON.stringify(state),
+      spawn() { queueMicrotask(() => child.emit('spawn')); return child } })
+    await manager.start({ sessionId: 'image-failure', workspace: '/repo', payload: 'intent',
+      branch: 'task/postman-' + 'a'.repeat(32), transportKind: 'image' })
+    const job = manager.latest('image-failure')
+    state = { requestId: job.requestId, repository: 'AndrewVerhoturov1/dsh-workspace',
+      branch: job.branch, state: 'FAILED', publicationStarted: fact }
+    child.stdout.emit('data', Buffer.from(JSON.stringify({ ok: false, code: 'POSTMAN_TRANSPORT_FAILED',
+      requestId: job.requestId, transportCode: 'IMAGE_FAILED', transportMessage: 'failed',
+      details: {}, publicationStarted: false })))
+    child.emit('close', 2)
+    assert.equal(manager.view('image-failure').result.publicationStarted, fact === false ? false : undefined)
+  }
+})
+
 test('failure publication receipt must match exact task branch, REQ and pinned URL', async () => {
   for (const mutate of [null, receipt => { receipt.taskUrl += '?wrong=1' },
     receipt => { receipt.branch = 'main' }, receipt => { receipt.requestId = 'REQ_20260922T123456Z_9999' }]) {

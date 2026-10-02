@@ -114,7 +114,8 @@ def _turn_message_node(turn: Any) -> Any:
     """Return semantic message content, excluding user-turn UI chrome."""
     direct_role = _get_attribute(turn, "data-message-author-role").casefold()
     if _get_attribute(turn, "data-user-message-bubble").casefold() == "true":
-        return turn
+        semantic, _ = submit.find_user_message_content(turn)
+        return semantic
     if direct_role == "user":
         semantic, _ = submit.find_user_message_content(turn)
         return semantic if semantic is not None else turn

@@ -229,8 +229,8 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     if (artifact && job.grantDiagnostic) job.state = 'FAILED'
   }
 
-  // Only a correlated Direct pre-publication rejection proves that there is
-  // no task commit. Missing publicationReceipt alone is never such proof.
+  // Use the owned Direct publication fact, not an error-code list.
+  // Missing publicationReceipt alone is never proof that nothing was published.
   function noPublicationProven(terminal) {
     const result = terminal?.result
     return terminal.status === 'POSTMAN_BRIDGE_TERMINAL' && terminal.terminalStatus === 'FAILED' &&
@@ -238,11 +238,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
       result.publicationReceipt === undefined && result.requestId === terminal.requestId &&
       typeof result.transportMessage === 'string' && result.transportMessage.length > 0 &&
       result.details !== null && typeof result.details === 'object' && !Array.isArray(result.details) &&
-      (['DIRECT_INVALID_TASK', 'DIRECT_RESULT_ROOT_UNAVAILABLE',
-        'DIRECT_INVALID_CONTINUATION', 'POSTMAN_AUTOMATIC_CONTINUATION_LIMIT_REACHED']
-        .includes(result.transportCode) ||
-        (result.details.sendState === 'PROVEN_NOT_SENT' && ['host-build', 'direct-handoff'].includes(result.details.inputBundlePhase) &&
-          /^POSTMAN_INPUT_[A-Z_]+$/.test(result.transportCode)))
+      result.publicationStarted === false
   }
 
   function publicationOf(terminal) {

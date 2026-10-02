@@ -127,29 +127,45 @@ def upload(page, composer, attachment, *, timeout_ms, wait_until):
     # This attempt owns an initially empty attachment surface.
     if initial.get("known") is not True or initial.get("count") != 0 or initial.get("pending") or initial.get("error"):
         return {"ok": False, "code": ATTACHMENT_NOT_READY, "details": initial}
+    selection = {}
     try:
         inputs = scope.locator('input[type="file"]')
+        selection = {"fileInputCount": page.locator('input[type="file"]').count(),
+                     "container": "active-composer-form", "scopeFileInputCount": inputs.count(),
+                     "fileInputs": [], "eligibleCount": 0}
         eligible = []
+        image_only = []
+        media = getattr(attachment, 'media_type', 'application/zip')
         for i in range(inputs.count()):
             node = inputs.nth(i)
             accept = (node.get_attribute('accept') or '').lower()
-            media = getattr(attachment, 'media_type', 'application/zip')
+            selection["fileInputs"].append({"accept": accept, "container": "active-composer-form"})
+            if not node.is_enabled():
+                continue
             accepted = [token.strip() for token in accept.split(',')]
             if not accept or '*/*' in accepted or media in accepted or Path(attachment.name).suffix.lower() in accepted or (media.startswith('image/') and 'image/*' in accepted):
                 eligible.append(node)
+                if media.startswith('image/') and accepted == ['image/*']:
+                    image_only.append(node)
+        # Current composer owns photo/video, photo-only and generic file controls.
+        # Prefer its dedicated photo control, never the first broadly accepting input.
+        if image_only:
+            eligible = image_only
+        selection["eligibleCount"] = len(eligible)
         if len(eligible) != 1:
-            return {"ok": False, "code": ATTACHMENT_CONTROL_UNAVAILABLE, "details": {"reason": "ambiguous_or_missing_file_input"}}
+            return {"ok": False, "code": ATTACHMENT_CONTROL_UNAVAILABLE,
+                    "details": {"reason": "ambiguous_or_missing_file_input", **selection}}
         # Use freshly hash-verified bytes as a native FilePayload. Passing a pathname
         # here would permit a final TOCTOU between verification and browser file read.
         data = attachment.upload_bytes()
         eligible[0].set_input_files({"name": attachment.name, "mimeType": getattr(attachment, "media_type", "application/zip"), "buffer": data}, timeout=timeout_ms)
     except input_bundle.InputBundleError as exc:
-        return {"ok": False, "code": exc.code, "details": {}}
+        return {"ok": False, "code": exc.code, "details": selection}
     except Exception:
-        return {"ok": False, "code": ATTACHMENT_UPLOAD_FAILED, "details": {}}
+        return {"ok": False, "code": ATTACHMENT_UPLOAD_FAILED, "details": selection}
 
     def check():
-        proof = snapshot(scope, attachment.name)
+        proof = {**snapshot(scope, attachment.name), **selection}
         return ready(proof, attachment.name) or proof.get('error') is True, proof
 
     matched, proof = wait_until(check, timeout_ms=timeout_ms)
