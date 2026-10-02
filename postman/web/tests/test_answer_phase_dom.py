@@ -157,6 +157,93 @@ class TurnGroupDomTests(unittest.TestCase):
         self.page.set_content(html(ACTIVITY + '<button data-testid="copy-turn-action-button">Activity copy</button>' + FINAL))
         self.assertEqual(self.inspect()['phase'], observer.FINAL_ANSWER_STARTED)
 
+    def test_identity_evidence_is_scoped_to_assistant_content_turn(self):
+        self.page.set_content('<main><div data-turn-key="old"><div data-content-search-turn-key="foreign">'
+            '<div data-testid="generated-image-gallery"></div></div></div>'
+            '<div data-turn-key="current"><div data-user-message-bubble="true">probe</div>'
+            '<div data-content-search-turn-key="content-A"><div data-chatgpt-selection-message-id="internal-A"></div>'
+            '<div data-testid="generated-image-gallery"></div></div></div></main>')
+        gallery = self.page.locator('[data-turn-key="current"] [data-testid="generated-image-gallery"]')
+        evidence = observer.assistant_identity_evidence(gallery)
+        self.assertEqual(evidence['groupKey'], 'current')
+        self.assertEqual(evidence['contentSearchTurnKey'], 'content-A')
+        self.assertEqual(evidence['assistantMessageId'], '')
+        group = self.page.locator('[data-turn-key="current"]')
+        self.assertEqual(observer.assistant_identity_evidence(group)['contentSearchTurnKey'], 'content-A')
+
+    def test_conflicting_content_turn_keys_in_one_scoped_group_are_ambiguous(self):
+        self.page.set_content(html('<div data-content-search-turn-key="A"></div>'
+                                   '<div data-content-search-turn-key="B"></div>'))
+        evidence = observer.assistant_identity_evidence(self.page.locator('[data-turn-key]'))
+        self.assertTrue(evidence['identityAmbiguous'])
+
+    def test_multiple_internal_content_units_preserve_pinned_group_identity(self):
+        self.page.set_content(html(FINAL + '<div data-content-search-turn-key="A"></div>'))
+        identity = observer.AssistantIdentityTracker()
+        group = self.page.locator('[data-turn-key]')
+        evidence = observer.assistant_identity_evidence(group)
+        self.assertEqual(identity.observe(evidence, 'main [data-turn-key]', 1), (True, ''))
+        self.page.set_content(html(FINAL + '<div data-content-search-turn-key="A"></div>'
+                                   '<div data-content-search-turn-key="B"></div>'))
+        evidence = observer.assistant_identity_evidence(group)
+        self.assertTrue(evidence['identityAmbiguous'])
+        self.assertEqual(evidence['contentSearchTurnKey'], '')
+        self.assertEqual(identity.observe(evidence, 'main [data-turn-key]', 1), (True, ''))
+        self.assertEqual(identity.strong, {'groupKey': 'logical-1', 'contentSearchTurnKey': 'A'})
+        # The same ambiguous secondary units cannot mask a real group conflict.
+        self.page.set_content(html(FINAL + '<div data-content-search-turn-key="A"></div>'
+                                   '<div data-content-search-turn-key="B"></div>', key='logical-2'))
+        self.assertEqual(identity.observe(observer.assistant_identity_evidence(group),
+                                         'main [data-turn-key]', 1),
+                         (False, 'strong_identity_conflict'))
+
+    def test_legacy_direct_message_id_is_strong_but_group_internal_unit_is_not(self):
+        self.page.set_content('<main><div data-message-author-role="assistant" data-message-id="stable-A">x</div></main>')
+        node = self.page.locator('[data-message-author-role]')
+        self.assertEqual(observer.assistant_identity_evidence(node)['assistantMessageId'], 'stable-A')
+        self.page.set_content(html(ACTIVITY + FINAL))
+        self.assertEqual(observer.assistant_identity_evidence(self.page.locator('[data-turn-key]'))['assistantMessageId'], '')
+
+    def test_real_dom_image_hydration_requires_decoded_visible_image(self):
+        # All fixtures and image bytes are local; no live ChatGPT/network.
+        import base64
+        import struct
+        import zlib
+        def chunk(kind, payload):
+            return struct.pack('>I', len(payload)) + kind + payload + struct.pack('>I', zlib.crc32(kind + payload))
+        png = (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', 64, 64, 8, 2, 0, 0, 0))
+               + chunk(b'IDAT', zlib.compress((b'\x00' + b'\xff\x00\x00' * 64) * 64)) + chunk(b'IEND', b''))
+        img = '<img src="data:image/png;base64,' + base64.b64encode(png).decode() + '">'
+        fallback = ('<main><section data-testid="conversation-turn-1"><div data-message-author-role="user">'
+                    + PROMPT + '</div></section><section data-testid="conversation-turn-2">'
+                    '<div data-message-author-role="assistant">Creating image</div></section></main>'
+                    '<button data-testid="stop-button">Stop</button>')
+        gallery = ('<div data-content-search-turn-key="content-A"><div data-chatgpt-selection-message-id="image-unit"></div>'
+                   '<div data-testid="generated-image-gallery">' + img + '</div></div>')
+        fixtures = [fallback, html(gallery) + '<button data-testid="stop-button">Stop</button>',
+                    html(gallery), html(gallery)]
+        self.page.set_content(fixtures[0])
+        step, ticks = [0], [0.0]
+        def advance(_seconds):
+            step[0] += 1
+            ticks[0] += 0.25
+            self.page.set_content(fixtures[min(step[0], 3)])
+            self.page.locator('img').evaluate_all('(images) => Promise.all(images.map(img => img.decode()))')
+        result = observer.observe_next_assistant(self.page, PROMPT, URL, image_mode=True,
+            timeout_ms=1500, stable_ms=200, poll_ms=10, sleep=advance, monotonic=lambda: ticks[0])
+        self.assertTrue(result['ok'], result)
+        self.assertEqual(step[0], 3)
+        self.assertEqual(result['details']['assistantImageCount'], 1)
+        self.assertFalse(result['details']['generationActive'])
+        self.assertTrue(result['details']['assistantIdentityPromoted'])
+        self.page.locator('[data-user-message-bubble]').evaluate('(node, markup) => node.insertAdjacentHTML("beforeend", markup)', img)
+        self.page.locator('img').evaluate_all('(images) => Promise.all(images.map(img => img.decode()))')
+        self.assertEqual(observer.count_turn_images(self.page.locator('[data-turn-key]')), 1)
+        self.page.locator('[data-testid="generated-image-gallery"] img').evaluate('(img) => img.style.visibility = "hidden"')
+        self.assertEqual(observer.count_turn_images(self.page.locator('[data-turn-key]')), 0)
+        self.page.locator('[data-testid="generated-image-gallery"] img').evaluate('(img) => { img.style.visibility = "visible"; img.src = "data:image/png;base64,invalid"; }')
+        self.assertEqual(observer.count_turn_images(self.page.locator('[data-turn-key]')), 0)
+
 
 if __name__ == '__main__':
     unittest.main()

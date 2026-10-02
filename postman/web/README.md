@@ -101,6 +101,19 @@ copy/turn controls) и inactive generation. Старые renderer paths сохр
 alert/status/aria-live/retry усиливают evidence, weak candidate подтверждается через 1–3 секунды.
 Additional Processing использует RU/EN варианты текста, а не одну exact строку.
 
+В image mode identity закрепляется за exact conversation + доказанным user anchor +
+непосредственно следующим логическим assistant response, а не selector family. Grouped
+`data-turn-key` предпочитается уже при assistant/working evidence, до появления картинки;
+user-only group сохраняет gallery fallback. Допустима гидрация weak → strong;
+`groupKey`, scoped `data-content-search-turn-key` и стабильный direct message ID
+хранятся раздельно. Конфликт закреплённого ключа или смена weak ID в той же family —
+fail-closed. Внутренние message IDs grouped activity/final units не являются response ID.
+При временно недоказанной identity polling продолжается в обычном timeout без completion;
+promotion и пробел в доказательстве сбрасывают stability window. Только одно decoded/visible
+изображение correlated assistant, inactive generation и непрерывное окно стабильности
+дают `IMAGE_TURN_COMPLETED` → один `image_prepare()` → один packaging message в том же chat.
+Изображения user bubble и чужих turns не входят в proof; proven первый prompt не пересылается.
+
 Поиск «любого похожего ответа» по всему DOM запрещён.
 
 ### `browser_recovery.py`

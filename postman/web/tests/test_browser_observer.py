@@ -54,6 +54,11 @@ class FakeLocator:
         return self._visible
 
     def evaluate(self, script):
+        if script == observer._ASSISTANT_IDENTITY_JS:
+            return {"groupKey": self.attrs.get("data-turn-key", ""),
+                    "contentSearchTurnKey": self.attrs.get("data-content-search-turn-key", ""),
+                    "assistantMessageId": self.attrs.get("data-message-id", ""),
+                    "identityAmbiguous": False}
         if script == observer._IMAGE_EVIDENCE_JS:
             return len(self.images)
         if script == observer._PHASE_EVIDENCE_JS:
@@ -82,6 +87,36 @@ def turn(role, text, test_id="", *, images=None):
     return FakeLocator(text=text, attrs=attrs, images=images)
 
 
+class GroupLocator(FakeLocator):
+    """One modern group may expose a user, an assistant or just working UI."""
+    def __init__(self, prompt="probe", *, key="group-A", images=None,
+                 assistant=True, working=False, content_key=""):
+        super().__init__(attrs={"data-turn-key": key,
+                               "data-content-search-turn-key": content_key}, images=images)
+        self.prompt, self.assistant, self.working = prompt, assistant, working
+
+    def locator(self, selector):
+        if selector == '[data-user-message-bubble="true"]':
+            return FakeLocator(text=self.prompt, attrs={"data-user-message-bubble": "true"})
+        return super().locator(selector)
+
+    def evaluate(self, script):
+        if script == observer._PHASE_EVIDENCE_JS:
+            return {"assistantNodeFound": self.assistant, "workingControlFound": self.working}
+        return super().evaluate(script)
+
+
+def image_snapshot(*, prompt="probe", family="fallback", key="group-A",
+                   count=1, content_key="", message_id="", test_id="conversation-turn-2"):
+    if family == "grouped":
+        return {observer.TURN_CONTAINER_SELECTORS[0]: [
+            GroupLocator(prompt, key=key, images=["image"] * count, content_key=content_key)]}
+    assistant = turn("assistant", "", test_id, images=["image"] * count)
+    assistant.attrs["data-content-search-turn-key"] = content_key
+    assistant.attrs["data-message-id"] = message_id
+    return {observer.TURN_CONTAINER_SELECTORS[1]: [turn("user", prompt), assistant]}
+
+
 class FakePage:
     def __init__(self, snapshots, *, url="https://chatgpt.com/c/chat1", generating=None):
         self.snapshots = list(snapshots)
@@ -94,6 +129,8 @@ class FakePage:
         return self.snapshots[min(self.step, len(self.snapshots) - 1)]
 
     def locator(self, selector):
+        if isinstance(self.current, dict) and selector not in observer.GENERATION_CONTROL_SELECTORS:
+            return FakeLocator(items=self.current.get(selector, []))
         if selector == observer.TURN_CONTAINER_SELECTORS[0]:
             return FakeLocator(items=[])
         if selector in observer.TURN_CONTAINER_SELECTORS[1:3]:
@@ -467,6 +504,174 @@ class ObserverTests(unittest.TestCase):
             stable_ms=0, poll_ms=10, sleep=clock.sleep, monotonic=clock.monotonic,
         )
         self.assertEqual(result["code"], observer.CHAT_CORRELATION_LOST)
+
+    def test_grouped_image_family_wins_before_image_is_ready(self):
+        for assistant, working in ((True, False), (False, True)):
+            with self.subTest(assistant=assistant, working=working):
+                page = FakePage([{observer.TURN_CONTAINER_SELECTORS[0]: [
+                    GroupLocator(images=[], assistant=assistant, working=working)],
+                    **image_snapshot(count=0)}])
+                turns, selector = observer.snapshot_turns(page, image_mode=True)
+                self.assertEqual(selector, observer.TURN_CONTAINER_SELECTORS[0])
+                self.assertEqual(turns[1]["imageCount"], 0)
+                self.assertEqual(turns[1]["groupKey"], "group-A")
+
+    def test_user_only_group_keeps_image_gallery_fallback(self):
+        gallery_selector = observer.TURN_CONTAINER_SELECTORS[-1] + ', main [data-testid="generated-image-gallery"]'
+        gallery = FakeLocator(attrs={"data-testid": "generated-image-gallery",
+                                     "data-content-search-turn-key": "content-A"}, images=["image"])
+        page = FakePage([{observer.TURN_CONTAINER_SELECTORS[0]: [GroupLocator(assistant=False)],
+                          gallery_selector: [turn("user", "probe"), gallery]}])
+        turns, selector = observer.snapshot_turns(page, image_mode=True)
+        self.assertEqual(selector, gallery_selector)
+        self.assertEqual(turns[1]["contentSearchTurnKey"], "content-A")
+        clock = FakeClock(page)
+        result = observer.observe_next_assistant(page, "probe", page.url, image_mode=True,
+            timeout_ms=500, stable_ms=200, poll_ms=10, sleep=clock.sleep, monotonic=clock.monotonic)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["details"]["assistantIdentityMode"], "strong")
+
+    def observe_images(self, snapshots, *, generating=None, timeout=1500, stable=200):
+        page = FakePage(snapshots, generating=generating)
+        clock = FakeClock(page)
+        result = observer.observe_next_assistant(page, "probe", page.url, image_mode=True,
+            timeout_ms=timeout, stable_ms=stable, poll_ms=10,
+            sleep=clock.sleep, monotonic=clock.monotonic)
+        return result, page
+
+    def test_older_group_assistant_cannot_hide_current_gallery_fallback(self):
+        gallery_selector = observer.TURN_CONTAINER_SELECTORS[-1] + ', main [data-testid="generated-image-gallery"]'
+        gallery = FakeLocator(attrs={"data-testid": "generated-image-gallery"}, images=["image"])
+        page = FakePage([{observer.TURN_CONTAINER_SELECTORS[0]: [
+            GroupLocator("old", key="old", images=["old-image"]), GroupLocator(assistant=False)],
+            gallery_selector: [turn("user", "old"), turn("assistant", "old"), turn("user", "probe"), gallery]}])
+        turns, selector = observer.snapshot_turns(page, image_mode=True, expected_prompt="probe")
+        self.assertEqual(selector, gallery_selector)
+        self.assertEqual(observer.correlate_next_assistant(turns, "probe")["assistantIndex"], 3)
+
+    def test_image_identity_survives_fallback_to_grouped_hydration(self):
+        result, page = self.observe_images([image_snapshot(count=0),
+            image_snapshot(family="grouped"), image_snapshot(family="grouped"),
+            image_snapshot(family="grouped")], generating=[True, True, False, False])
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["code"], observer.ASSISTANT_TURN_COMPLETED)
+        self.assertEqual(page.step, 3)
+        self.assertEqual(result["details"]["assistantImageCount"], 1)
+        self.assertFalse(result["details"]["generationActive"])
+        self.assertEqual(result["details"]["chatUrl"], page.url)
+        self.assertEqual(result["details"]["anchorIndex"], 0)
+        self.assertTrue(result["details"]["assistantIdentityPromoted"])
+
+    def test_image_strong_namespace_migration_requires_confirmation_and_new_stability(self):
+        snapshots = [image_snapshot(count=0, message_id="msg-A"),
+                     image_snapshot(family="grouped", key="turn-A"),
+                     image_snapshot(family="grouped", key="turn-A"),
+                     image_snapshot(family="grouped", key="turn-A")]
+        result, page = self.observe_images(snapshots, generating=[True, True, False, False])
+        self.assertEqual(result["code"], observer.ASSISTANT_TURN_COMPLETED, result)
+        self.assertEqual(page.step, 3)  # neither pending nor accepted promotion completes
+        self.assertEqual(result["details"]["assistantImageCount"], 1)
+        self.assertTrue(result["details"]["assistantIdentityProved"])
+        self.assertTrue(result["details"]["assistantIdentityPromoted"])
+        result, page = self.observe_images(snapshots[:2], generating=[True, False],
+                                           timeout=250, stable=0)
+        self.assertEqual(page.step, 1)
+        self.assertEqual(result["code"], observer.ASSISTANT_TURN_TIMEOUT, result)
+        self.assertFalse(result["details"]["assistantIdentityProved"])
+        self.assertEqual(result["details"]["reason"], "identity_temporarily_unproved")
+
+    def test_strong_namespace_changed_candidate_restarts_confirmation(self):
+        tracker = observer.AssistantIdentityTracker()
+        self.assertEqual(tracker.observe({"assistantMessageId": "A"}, "fallback", 1), (True, ""))
+        for key in ("G", "H"):
+            self.assertEqual(tracker.observe({"groupKey": key}, "grouped", 1),
+                             (False, "identity_temporarily_unproved"))
+            self.assertEqual(tracker.strong, {"assistantMessageId": "A"})
+        self.assertEqual(tracker.observe({"groupKey": "H"}, "grouped", 1), (True, "identity_promoted"))
+        self.assertEqual(tracker.strong, {"assistantMessageId": "A", "groupKey": "H"})
+        self.assertEqual(tracker.observe({"assistantMessageId": "B"}, "fallback", 1),
+                         (False, "strong_identity_conflict"))
+
+    def test_strong_namespace_confirmation_cannot_span_proof_gap_or_old_namespace(self):
+        for intervening in ({}, {"assistantMessageId": "A"}):
+            with self.subTest(intervening=intervening):
+                tracker = observer.AssistantIdentityTracker()
+                tracker.observe({"assistantMessageId": "A"}, "fallback", 1)
+                tracker.observe({"groupKey": "G"}, "grouped", 1)
+                tracker.observe(intervening, "fallback", 1)
+                self.assertEqual(tracker.observe({"groupKey": "G"}, "grouped", 1),
+                                 (False, "identity_temporarily_unproved"))
+                self.assertEqual(tracker.observe({"groupKey": "G"}, "grouped", 1),
+                                 (True, "identity_promoted"))
+
+    def test_group_conflict_after_strong_namespace_promotion_is_fatal(self):
+        result, _ = self.observe_images([image_snapshot(count=0, message_id="A"),
+            image_snapshot(family="grouped", key="G"), image_snapshot(family="grouped", key="G"),
+            image_snapshot(family="grouped", key="H")], generating=[True, True, True, False])
+        self.assertEqual(result["code"], observer.CHAT_CORRELATION_LOST, result)
+        self.assertEqual(result["details"]["reason"], "strong_identity_conflict")
+        self.assertNotIn(observer.ASSISTANT_TURN_COMPLETED, result["transitions"])
+
+    def test_image_identity_proof_gap_cannot_complete_or_inherit_stability(self):
+        snapshots = [image_snapshot(count=0), image_snapshot(family="grouped"),
+                     image_snapshot(), image_snapshot(family="grouped"), image_snapshot(family="grouped")]
+        result, page = self.observe_images(snapshots, generating=[True, False, False, False, False])
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(page.step, 4)  # neither unproved poll 2 nor reappearance poll 3 can complete
+        result, _ = self.observe_images(snapshots[:3], timeout=500)
+        self.assertEqual(result["code"], observer.ASSISTANT_TURN_TIMEOUT)
+        self.assertEqual(result["details"]["reason"], "identity_temporarily_unproved")
+        self.assertFalse(result["details"]["assistantIdentityProved"])
+        self.assertNotIn(observer.ASSISTANT_TURN_COMPLETED, result["transitions"])
+
+    def test_image_strong_identity_conflicts_fail_closed_by_namespace(self):
+        for before, after in (
+            (image_snapshot(family="grouped", key="A"), image_snapshot(family="grouped", key="B")),
+            (image_snapshot(content_key="A"), image_snapshot(content_key="B")),
+            (image_snapshot(message_id="A"), image_snapshot(message_id="B")),
+            (image_snapshot(family="grouped", content_key="A"), image_snapshot(family="grouped", content_key="B")),
+        ):
+            with self.subTest(after=after):
+                result, _ = self.observe_images([before, after], stable=0)
+                self.assertEqual(result["code"], observer.CHAT_CORRELATION_LOST, result)
+                self.assertEqual(result["details"]["reason"], "strong_identity_conflict")
+                self.assertNotIn(observer.ASSISTANT_TURN_COMPLETED, result["transitions"])
+
+    def test_shared_content_key_allows_family_migration_and_adds_group_namespace(self):
+        result, _ = self.observe_images([image_snapshot(content_key="content-A"),
+            image_snapshot(family="grouped", key="different-namespace", content_key="content-A")])
+        self.assertTrue(result["ok"], result)
+
+    def test_weak_family_migration_waits_for_strong_proof(self):
+        other = observer.TURN_CONTAINER_SELECTORS[2]
+        changed = {other: [turn("user", "probe"), turn("assistant", "", "different-id", images=["image"])]}
+        result, _ = self.observe_images([image_snapshot(), changed], timeout=500, stable=0)
+        self.assertEqual(result["code"], observer.ASSISTANT_TURN_TIMEOUT, result)
+        self.assertEqual(result["details"]["reason"], "identity_temporarily_unproved")
+
+    def test_promotion_cannot_rebind_to_new_user_or_duplicate_anchor(self):
+        for later_prompt in ("unexpected", "probe"):
+            with self.subTest(later_prompt=later_prompt):
+                first = image_snapshot(count=0)
+                later = {observer.TURN_CONTAINER_SELECTORS[0]: [GroupLocator(assistant=False),
+                    GroupLocator(later_prompt, key="another", images=["image"])]}
+                result, _ = self.observe_images([first, later])
+                self.assertEqual(result["code"], observer.CHAT_CORRELATION_LOST, result)
+
+    def test_strong_identity_conflict_after_proof_gap_is_not_promotion(self):
+        result, _ = self.observe_images([image_snapshot(family="grouped", key="A"),
+            image_snapshot(), image_snapshot(family="grouped", key="B")])
+        self.assertEqual(result["code"], observer.CHAT_CORRELATION_LOST)
+        self.assertEqual(result["details"]["reason"], "strong_identity_conflict")
+
+    def test_ambiguous_identity_fails_closed(self):
+        tracker = observer.AssistantIdentityTracker()
+        self.assertEqual(tracker.observe({"identityAmbiguous": True}, "family", 1),
+                         (False, "assistant_identity_ambiguous"))
+
+    def test_stable_two_images_never_complete(self):
+        result, _ = self.observe_images([image_snapshot(count=2)], timeout=500, stable=0)
+        self.assertEqual(result["code"], observer.ASSISTANT_TURN_TIMEOUT)
 
     def test_generation_active_detects_stop_control(self):
         page = FakePage([[turn("user", "x")]], generating=[True])
