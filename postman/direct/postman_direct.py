@@ -601,6 +601,7 @@ class DirectPostman:
                     allowed_paths=allowed_paths,
                     forbidden_paths=forbidden_paths,
                 )
+                self._write_state(request_id, STATE_WEB_RUNNING, publicationStarted=True)
                 published = publisher.publish_content(
                     request_id,
                     task_content,
@@ -747,6 +748,7 @@ class DirectPostman:
                 f"request {request_id} already has direct transport state; automatic resend is forbidden",
                 details={"statePath": str(self.state_path(request_id))},
             )
+        self._write_state(request_id, STATE_INIT, publicationStarted=False)
 
         chat_ref = None
         if automatic_continuation and not chat_request_id:
@@ -822,6 +824,7 @@ class DirectPostman:
             STATE_INIT,
             taskSha256=_sha256_text(task),
             resultRoot=str(self.result_root),
+            publicationStarted=False,
             **({"inputBundle": input_attachment.metadata()} if input_attachment else {}),
             **chain_fields,
             **initial_chat_fields,
@@ -861,6 +864,7 @@ class DirectPostman:
                 allowed_paths=allowed_paths,
                 forbidden_paths=forbidden_paths,
             )
+            self._write_state(request_id, STATE_INIT, publicationStarted=True)
             published = publisher.publish_content(
                 request_id,
                 task_content,

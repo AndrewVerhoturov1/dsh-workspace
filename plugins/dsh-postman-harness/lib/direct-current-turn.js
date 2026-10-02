@@ -433,6 +433,17 @@ function terminalGate(job) {
     }
     if (checkpoint) parsed.publicationReceipt = checkpoint
     else delete parsed.publicationReceipt
+    // Only the owned Direct state, not arbitrary terminal fields, proves this fact.
+    delete parsed.publicationStarted
+    try {
+      const root = job.directRoot ?? (process.env.LOCALAPPDATA
+        ? join(process.env.LOCALAPPDATA, 'DSH', 'Postman', 'direct')
+        : join(homedir(), '.dsh', 'postman', 'direct'))
+      const state = JSON.parse(job.readPublicationState(join(root, 'requests', job.requestId + '.json'), 'utf8'))
+      if (!checkpoint && state.requestId === job.requestId && state.branch === job.branch &&
+          state.repository === 'AndrewVerhoturov1/dsh-workspace' && state.publicationStarted === false &&
+          !state.taskPublicationCommit && !state.taskUrl) parsed.publicationStarted = false
+    } catch { /* Absent or ambiguous state remains synchronization-required. */ }
     return parsed
   }
 
@@ -561,7 +572,7 @@ export class DirectPostmanJobManager {
         job.state = 'completed'
         job.exitCode = -1
         job.result = { ok: false, code: 'POSTMAN_TRANSPORT_FAILED', requestId,
-          transportCode: code, transportMessage: code,
+          transportCode: code, transportMessage: code, publicationStarted: false,
           details: { sendState: 'PROVEN_NOT_SENT', inputBundlePhase: 'host-build' } }
         job.finishedAt = new Date().toISOString()
         this.finish(job)
