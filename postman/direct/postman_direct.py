@@ -572,6 +572,7 @@ class DirectPostman:
         extra_forbidden: Iterable[str],
         input_files: Iterable[dict[str, object]] = (),
         input_attachment=None,
+        resume_image_url: str | None = None,
     ) -> dict[str, Any]:
         preparatory_prompt = build_image_generation_prompt(task, input_files)
         browser = self.ensure_browser(cdp_url=cdp_url)
@@ -665,6 +666,7 @@ class DirectPostman:
             cdp_url=browser.get("cdpUrl", cdp_url),
             observer_timeout_ms=DEFAULT_ASSISTANT_TIMEOUT_MS,
             image_prepare=prepare_packaging,
+            **({"conversation_url": resume_image_url, "resume_image": True} if resume_image_url else {}),
             **({"input_attachment": input_attachment} if input_attachment else {}),
         )
         if not isinstance(result, dict) or result.get("ok") is not True:

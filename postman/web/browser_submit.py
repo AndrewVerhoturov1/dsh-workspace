@@ -1077,6 +1077,29 @@ def submit_once(
                 "conversation_url": conversation_url} if input_attachment else {})),
         timeout_ms=timeout_ms,
     )
+    sent_image = proof.get("sentAttachment", {})
+    # Fresh uploaded components retain a local conversation id after server URL binding.
+    # Reload only for this proved transition; NEVER upload/fill/click again.
+    bound_url = str(getattr(page, "url", "") or "")
+    if (not ok and input_attachment and sent_image.get("reason") == "uploaded_source_unbound"
+            and sent_image.get("duplicateSource") is False
+            and sent_image.get("observedImageSource") == "uploaded"
+            and str(sent_image.get("observedConversationId", "")).startswith("local-chatgpt:")
+            and proof.get("exactUserTurn") is True and proof.get("composerEmpty") is True
+            and proof.get("chatUrlBound") is True and is_bound_chat_url(bound_url)
+            and proof.get("chatUrl") == bound_url
+            and (conversation_url is None or conversation_url == bound_url)):
+        before_reload = proof
+        try:
+            page.reload(wait_until="domcontentloaded", timeout=max(timeout_ms, 30_000))
+            ok, proof = _wait_until(
+                lambda: _observe_send_proof(page, prompt, len(before_turns),
+                    input_attachment=input_attachment, attachment_id=attachment_id,
+                    conversation_url=bound_url), timeout_ms=max(timeout_ms, 30_000))
+            proof["sentImageReadOnlyReload"] = True
+            proof["localConversationProofBeforeReload"] = sent_image
+        except Exception as exc:
+            ok, proof = False, {**before_reload, "readOnlyReloadError": str(exc)[:300]}
     proof["sendControl"] = selector
     proof["promptSha256"] = prompt_sha256(prompt)
     if not ok:
