@@ -231,3 +231,18 @@ test('ten active PTC processes are allowed; eleventh rejected; a freed slot is r
   } finally { releases.forEach(release => release(null)); await runtime.dispose() }
 })
 
+
+test('result and escaped logs share the output budget; arbitrary wrapping cannot evade it', async () => {
+  const r=createPtcRuntime(),p=profile([],{maxOutputBytes:1024})
+  try {
+    for(const program of ["console.log('x'.repeat(600));return 'y'.repeat(600)","console.log('\\\\'.repeat(300));return null", "return {wrapped:[{raw:'x'.repeat(1100)}]}"]) {
+      const result=await r.run({program,profile:p,bindings:{}})
+      assert.equal(result.status,'limit-exceeded',JSON.stringify(result))
+      assert.equal(result.error.code,'maxOutputBytes')
+    }
+    const compact=await r.run({program:"console.log('small');return {count:2}",profile:p,bindings:{}})
+    assert.equal(compact.status,'ok')
+    assert.ok(Buffer.byteLength(JSON.stringify(compact))<1024)
+  } finally {await r.dispose()}
+})
+

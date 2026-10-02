@@ -139,7 +139,7 @@ test('confirmed Worker gets mutation namespace, real read/glob/grep and controll
     assert.deepEqual(f.calls.earlyDiscipline, [true])
     assert.equal(f.calls.starts[0].request.agentOptions.reasoningEffort, 'max')
     assert.equal(WORKER_MUTATION_PROFILE.id, 'postman-worker-mutation')
-    assert.equal(WORKER_MUTATION_PROFILE.revision, 4)
+    assert.equal(WORKER_MUTATION_PROFILE.revision, 5)
     assert.deepEqual(WORKER_MUTATION_PROFILE.tools, ['read', 'glob', 'grep', 'web_fetch', 'web_search', 'write', 'edit'])
     assert.equal(visible(f, child.a).includes('ptc_execute'), true)
     assert.ok(child.sections[0].text({scope:child.a}).includes(POSTMAN_PTC_DISCIPLINE))
@@ -832,4 +832,19 @@ test('web names are omitted when registry-invisible; unrelated registration cann
   } finally { await f.cleanup() }
 }))
 
+
+
+test('Worker reuses one full read for multiple checks, but rereads after edit and write', () => inTemporaryDir('ptc-reuse-', async dir => {
+  await writeFile(join(dir,'proof.txt'),'alpha\nbeta')
+  const f=await fixture(dir)
+  try {
+    const leader=await f.leader(), child=await f.start(leader)
+    const before=f.traces.length
+    const result=value(await f.execute(child.a, "const text=await ptc.readAllText({file_path:'proof.txt'}); const checks={hasAlpha:text.includes('alpha'),lines:text.split('\\n').length}; await tools.edit({file_path:'proof.txt',old_string:'alpha',new_string:'gamma'}); const edited=await ptc.readAllText({file_path:'proof.txt'}); await tools.write({file_path:'proof.txt',content:'delta'}); const written=await ptc.readAllText({file_path:'proof.txt'}); return {checks,edited,written}"))
+    assert.deepEqual(result,{checks:{hasAlpha:true,lines:2},edited:'gamma\nbeta',written:'delta'})
+    assert.deepEqual(f.traces.slice(before).filter(t=>t.name!=='ptc_execute').map(t=>t.name),['read','edit','read','write','read'])
+    await writeFile(join(dir,'proof.txt'),'external change')
+    assert.equal(value(await f.execute(child.a,"return await ptc.readAllText({file_path:'proof.txt'})")),'external change')
+  } finally {await f.cleanup()}
+}))
 

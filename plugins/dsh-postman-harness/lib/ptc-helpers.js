@@ -1,6 +1,9 @@
+import { POSTMAN_PTC_SUCCESS_STATUSES } from './postman-bridge-core.js'
+
 const DEFAULT_READ_ALL_MAX_BYTES = 4 * 1024 * 1024
-// Leave room for the program's surrounding final JSON below the 512 KiB ceiling.
-const DEFAULT_RESULT_MAX_BYTES = 480 * 1024
+// Postman returns compact evidence; core/bridge input ceilings stay unchanged.
+export const PTC_MODEL_OUTPUT_MAX_BYTES = 32 * 1024
+const DEFAULT_RESULT_MAX_BYTES = 24 * 1024
 const DEFAULT_PAGE_LIMIT = 2000
 
 const COMMON_HELPERS = String.raw`
@@ -17,6 +20,10 @@ const COMMON_HELPERS = String.raw`
         ![Object.prototype, null].includes(Object.getPrototypeOf(result)) ||
         !Object.hasOwn(result, 'status') || typeof result.status !== 'string') {
       throw new TypeError('ptc.expectStatus result must be an object with a string status')
+    }
+    if (typeof allowedStatuses === 'string') {
+      if (!Object.hasOwn(successStatuses, allowedStatuses)) throw new TypeError('ptc.expectStatus unknown or unavailable tool: ' + allowedStatuses)
+      allowedStatuses = successStatuses[allowedStatuses]
     }
     if (!Array.isArray(allowedStatuses) || allowedStatuses.length === 0 ||
         Array.from(allowedStatuses).some(status => typeof status !== 'string' || status.length === 0)) {
@@ -39,16 +46,37 @@ const COMMON_HELPERS = String.raw`
     return bytes
   }
   api.jsonBytes = function jsonBytes(value) {
-    const json = JSON.stringify(value, function(key, item) {
-      const original = this[key]
-      if (original === undefined || typeof original === 'function' || typeof original === 'symbol' ||
-          typeof original === 'bigint' || (typeof original === 'number' && !Number.isFinite(original)) ||
-          (original && typeof original === 'object' && !Array.isArray(original) &&
-            ![Object.prototype, null].includes(Object.getPrototypeOf(original)))) {
+    // Match the existing JSON boundary rather than silently dropping array
+    // fields, invoking getters/toJSON or retaining exotic mapper objects.
+    let nodes = 0
+    const seen = new Set()
+    function check(item, depth) {
+      if (++nodes > 10000 || depth > 32) throw new TypeError('ptc.jsonBytes JSON depth or node limit exceeded')
+      if (item === null || ['string', 'boolean'].includes(typeof item) ||
+          (typeof item === 'number' && Number.isFinite(item))) return
+      if (!item || typeof item !== 'object' ||
+          !(Array.isArray(item) ? Object.getPrototypeOf(item) === Array.prototype : [Object.prototype, null].includes(Object.getPrototypeOf(item)))) {
         throw new TypeError('ptc.jsonBytes requires JSON-compatible data')
       }
-      return item
-    })
+      if (seen.has(item)) throw new TypeError('ptc.jsonBytes circular JSON data')
+      seen.add(item)
+      const array = Array.isArray(item), keys = Reflect.ownKeys(item)
+      if (array && (Object.getPrototypeOf(item) !== Array.prototype || keys.length !== item.length + 1))
+        throw new TypeError('ptc.jsonBytes requires JSON-compatible arrays without holes or extra fields')
+      for (const key of keys) {
+        if (array && key === 'length') continue
+        const field = Object.getOwnPropertyDescriptor(item, key)
+        if (typeof key !== 'string' || ['__proto__', 'prototype', 'constructor'].includes(key) ||
+            !field || !Object.hasOwn(field, 'value') || !field.enumerable ||
+            (array && (!/^(0|[1-9][0-9]*)$/.test(key) || Number(key) >= item.length))) {
+          throw new TypeError('ptc.jsonBytes requires JSON-compatible own data fields')
+        }
+        check(field.value, depth + 1)
+      }
+      seen.delete(item)
+    }
+    check(value, 1)
+    const json = JSON.stringify(value)
     return api.utf8Bytes(json)
   }
 `
@@ -66,7 +94,8 @@ const READ_HELPERS = `
     const parts = []
     for (;;) {
       const page = await tools.read({ file_path: filePath, offset, limit: pageLimit })
-      if (!page || !Array.isArray(page.lines) || !Number.isSafeInteger(page.totalLines) || page.totalLines < 0 ||
+      if (!page || typeof page !== 'object' || Array.isArray(page) ||
+          !Array.isArray(page.lines) || !Number.isSafeInteger(page.totalLines) || page.totalLines < 0 ||
           (totalLines !== undefined && totalLines !== page.totalLines)) {
         throw new Error('ptc.readAllText received an invalid or changing read result')
       }
@@ -106,11 +135,18 @@ const READ_HELPERS = `
         Array.from(options.files).some(path => typeof path !== 'string' || !path.trim())) {
       throw new TypeError(name + ' files must be a non-empty array of non-empty strings')
     }
+    for (const key of ['page_limit','max_bytes_per_file','max_chars_per_file'])
+      if (options[key] !== undefined) positiveInteger(options[key], key)
     return options
   }
   function readOptions(options, filePath) {
     return { file_path: filePath, page_limit: options.page_limit,
       max_bytes: options.max_bytes_per_file, max_chars: options.max_chars_per_file }
+  }
+  function retainsSource(value, text) {
+    if (typeof value === 'string') return value === text || (text.length >= 1024 && value.includes(text))
+    if (!value || typeof value !== 'object') return false
+    return Object.values(value).some(item => retainsSource(item, text))
   }
   async function collectFiles(options, mapper, name) {
     const maxTotal = options.max_total_bytes === undefined ? ${DEFAULT_RESULT_MAX_BYTES} : positiveInteger(options.max_total_bytes, 'max_total_bytes')
@@ -119,11 +155,11 @@ const READ_HELPERS = `
     for (const filePath of options.files.slice()) {
       const text = await api.readAllText(readOptions(options, filePath))
       const result = await mapper({ file_path: filePath, text })
-      if (name === 'ptc.mapTextFiles' && (result === text ||
-          (result && typeof result === 'object' && Object.values(result).some(value => value === text)))) {
-        throw new Error('ptc.mapTextFiles must reduce text, not retain the full source text; use ptc.readMany for raw files')
+      const resultBytes = api.jsonBytes(result) // Validate before walking or retaining mapper data.
+      if (name === 'ptc.mapTextFiles' && text.length > 0 && retainsSource(result, text)) {
+        throw new Error('ptc.mapTextFiles must reduce text, not retain the full source text (including nested fields); use ptc.readMany for raw files inside PTC')
       }
-      bytes += api.jsonBytes(result) + (results.length ? 1 : 0)
+      bytes += resultBytes + (results.length ? 1 : 0)
       if (bytes > maxTotal) throw new Error(name + ' max_total_bytes exceeded; read large internally, return compact (use mapTextFiles)')
       results.push(result)
     }
@@ -147,12 +183,24 @@ const GREP_HELPERS = `
       throw new TypeError('ptc.grepMany queries must be a non-empty array')
     }
 
+    const queries = Array.from(options.queries)
+    if (queries.some(query => !query || typeof query !== 'object' || Array.isArray(query) ||
+        typeof query.pattern !== 'string' || (query.path !== undefined && typeof query.path !== 'string') ||
+        (query.include !== undefined && typeof query.include !== 'string'))) {
+      throw new TypeError('ptc.grepMany each query must be an object with a string pattern and optional string path/include')
+    }
+    const maxTotal = options.max_total_bytes === undefined ? 24576 : positiveInteger(options.max_total_bytes, 'max_total_bytes')
     const results = []
-    for (const query of options.queries) {
-      if (!query || typeof query !== 'object' || Array.isArray(query)) {
-        throw new TypeError('ptc.grepMany each query must be an object')
+    let bytes = 2
+    for (const query of queries) {
+      const result = await tools.grep(query)
+      if (!result || typeof result !== 'object' || Array.isArray(result) || !Array.isArray(result.matches)) {
+        throw new TypeError('ptc.grepMany expected tools.grep result {matches: Array}; raw tool results are objects, not iterable arrays')
       }
-      results.push({ query, result: await tools.grep(query) })
+      const item = { query, result }
+      bytes += api.jsonBytes(item) + (results.length ? 1 : 0)
+      if (bytes > maxTotal) throw new Error('ptc.grepMany max_total_bytes exceeded; reduce matches inside PTC, return compact')
+      results.push(item)
     }
     return results
   }
@@ -160,7 +208,8 @@ const GREP_HELPERS = `
 
 export function buildPtcHelperPrelude(toolNames) {
   const names = new Set(toolNames)
-  const sections = [COMMON_HELPERS]
+  const successStatuses = Object.fromEntries(Object.entries(POSTMAN_PTC_SUCCESS_STATUSES).filter(([name]) => names.has(name)))
+  const sections = ['const successStatuses = ' + JSON.stringify(successStatuses) + '; Object.values(successStatuses).forEach(Object.freeze); Object.freeze(successStatuses);', COMMON_HELPERS]
   if (names.has('read')) sections.push(READ_HELPERS)
   if (names.has('grep')) sections.push(GREP_HELPERS)
   return `const ptc = (() => {
@@ -173,14 +222,18 @@ ${sections.join('\n')}
 
 export function ptcHelperGuidance(toolNames) {
   const names = new Set(toolNames)
-  const helpers = ['ptc.expectStatus(result, allowedStatuses)', 'ptc.utf8Bytes(text)', 'ptc.jsonBytes(value)']
+  const helpers = ['ptc.expectStatus(result, allowedStatusesOrVisiblePostmanToolName)', 'ptc.utf8Bytes(text)', 'ptc.jsonBytes(value)']
   if (names.has('read')) helpers.push(
     'ptc.readAllText({file_path, page_limit?, max_bytes?, max_chars?})',
     'ptc.readMany({files, page_limit?, max_bytes_per_file?, max_chars_per_file?, max_total_bytes?})',
     'ptc.mapTextFiles({files, page_limit?, max_bytes_per_file?, max_chars_per_file?, max_total_bytes?}, mapper)',
   )
-  if (names.has('grep')) helpers.push('ptc.grepMany({queries})')
+  if (names.has('grep')) helpers.push('ptc.grepMany({queries, max_total_bytes?})')
   return 'PTC helpers available: ' + helpers.join(', ') + '. ' +
-    'Full reads default to 4 MiB UTF-8 per file internally. readMany and mapTextFiles bound aggregate retained JSON to 480 KiB by default; explicit max_total_bytes allows larger internal data, not larger final output. ' +
-    'Character options remain additional compatibility bounds. Ordinary read line truncation is unrecoverable. Read large internally, return compact; final model-facing JSON remains limited to 512 KiB. '
+    'expectStatus accepts either your exact status array or a visible Postman tool name for Host-maintained exact success statuses; unknown statuses still stop. ' +
+    'Returns: readAllText -> string; readMany -> Array<{file_path,text}>; mapTextFiles -> Array<mapper JSON>; grepMany -> Array<{query,result:{matches:Array}}> (not a flat match array). ' +
+    'Raw tool values are objects: read.lines, glob.paths, grep.matches; do not iterate the whole result. ' +
+    'Full reads default to 4 MiB UTF-8 per file internally. readMany, mapTextFiles and grepMany bound aggregate retained JSON to 24 KiB by default; explicit max_total_bytes allows larger internal data, not larger final output. ' +
+    'Character options remain additional compatibility bounds. Ordinary read line truncation is unrecoverable. Read large internally, prefer mapTextFiles for mechanical reduction, return compact; Postman result plus logs share 32 KiB. ' +
+    'Read once and reuse local text for multiple checks in the same program; reread after write/edit or when freshness is needed. No helper caches files. '
 }

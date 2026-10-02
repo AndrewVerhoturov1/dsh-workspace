@@ -4,7 +4,7 @@
 
 ## Supervisor dispatch
 
-После положенного approval одна программа может проверить goal, подготовить task, проверить точный статус через `ptc.expectStatus`, принять Worker и вернуть его ID. У вызова `boundary: "external_event"`: exact accepted Worker/interrupt/Bridge producer и безопасный успех автоматически заканчивают Leader turn штатным concludeTurn; `yield_on_success` не требуется. Prepare alone не вызывает WAIT. Worker report / Bridge READY возобновляют его; polling не нужен. Routing определяется SKILL.md.
+После положенного approval одна программа может проверить goal, подготовить task, проверить точный статус через `ptc.expectStatus(result, "postman_worker")` (либо prepare/interrupt/Bridge по имени видимого инструмента; точные успешные статусы принадлежат Host), принять Worker и вернуть его ID. У вызова `boundary: "external_event"`: exact accepted Worker/interrupt/Bridge producer и безопасный успех автоматически заканчивают Leader turn штатным concludeTurn; `yield_on_success` не требуется. Prepare alone не вызывает WAIT. Worker report / Bridge READY возобновляют его; polling не нужен. Routing определяется SKILL.md.
 
 ## Read large internally, return compact
 
@@ -19,9 +19,9 @@ const evidence = await ptc.mapTextFiles(
 return { evidence }
 ```
 
-Mapper делает механическое извлечение, не семантическое summarization. Возврат полного исходного text напрямую/прямым полем отклоняется; сырые файлы при реальной необходимости — `readMany`. Перед reread проверь, достаточно ли уже имеющегося неизменённого evidence. `readAllText` читает внутри PTC до 4 MiB UTF-8 на файл по умолчанию; `readMany` и `mapTextFiles` учитывают совокупные байты retained JSON (default 480 KiB). Явный `max_total_bytes` позволяет больше внутренних данных, но не расширяет final output: он по-прежнему ≤512 KiB. Используй `ptc.utf8Bytes`/`ptc.jsonBytes`, а не число JS characters.
+Mapper делает механическое извлечение, не семантическое summarization. Полный исходный text, включая вложенные поля/массивы и большие строковые обёртки, отклоняется. `readMany` — сырой reader **внутри PTC**, не путь для больших файлов к модели. Читай один раз и анализируй локальную переменную несколькими способами; после write/edit или при необходимости внешней свежести перечитай. Helpers не кешируют файлы. `readAllText` допускает 4 MiB UTF-8 на файл; `readMany`, `mapTextFiles`, `grepMany` default retained JSON 24 KiB. Явный `max_total_bytes` расширяет внутренний объём, не output: Postman result+logs вместе ≤32 KiB. Превышение даёт maxOutputBytes, не raw spill. Используй `ptc.utf8Bytes`/`ptc.jsonBytes`, а не число JS characters.
 
-Helpers идут через обычные доступные tools и сохраняют Worker worktree guard. Это строковый текст по линиям, не побайтная копия: финальный перевод строки не гарантируется. Усечённую ordinary read строку и неполное чтение helper не выдаёт за полный файл.
+Helpers идут через обычные доступные tools и сохраняют Worker worktree guard. Это строковый текст по линиям, не побайтная копия: финальный перевод строки не гарантируется. Усечённую ordinary read строку и неполное чтение helper не выдаёт за полный файл. Формы: readAllText → string; readMany → Array<{file_path,text}>; mapTextFiles → Array<mapper JSON>; grepMany → Array<{query,result:{matches:Array}}>. Ordinary read/glob/grep — объекты lines/paths/matches, не массив целиком.
 
 ## Известный отказ остаётся внутри программы
 
