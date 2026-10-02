@@ -4,7 +4,7 @@ import { basename, isAbsolute, join } from 'node:path'
 import { homedir } from 'node:os'
 import { spawn as nodeSpawn } from 'node:child_process'
 import { postmanTaskContexts, POSTMAN_TASK_BRANCH_PATTERN } from './postman-task-context.js'
-import { postmanInputGrants } from './postman-input-files.js'
+import { CurrentAttachmentStore, postmanInputGrants, stageStandaloneCurrentAttachments } from './postman-input-files.js'
 
 // Standalone transport publishes REQ task files to main; Leader children use their exact prepared task branch.
 const STANDALONE_TASK_PUBLICATION_BRANCH = 'main'
@@ -57,10 +57,12 @@ function exactUserText(event) {
     return { error: 'POSTMAN_CURRENT_TURN_UNSUPPORTED_CONTENT' }
   }
   const textBlocks = []
-  let unsupported = false
+  let unsupported = false, attachmentCount = 0
   for (const block of data.content) {
     if (block !== null && typeof block === 'object' && block.type === 'text' && typeof block.text === 'string') {
       textBlocks.push(block.text)
+    } else if (block && typeof block === 'object' && typeof block.type === 'string' && block.type !== 'text') {
+      attachmentCount++
     } else {
       unsupported = true
     }
@@ -72,7 +74,7 @@ function exactUserText(event) {
   if (text.length > MAX_CAPTURE_CHARS) {
     return { error: 'POSTMAN_CURRENT_TURN_TOO_LARGE' }
   }
-  return { text }
+  return { text, attachmentCount }
 }
 
 export class CurrentUserTurnStore {
@@ -96,6 +98,8 @@ export class CurrentUserTurnStore {
     this.records.set(sessionId, Object.freeze({
       seq,
       text: exact.text,
+      session,
+      attachmentCount: exact.attachmentCount,
       length: exact.text.length,
       sha256: sha256(exact.text),
       consumed: false,
@@ -142,10 +146,13 @@ function extractInputMetadata(payload) {
   catch { throw parseError('POSTMAN_INPUT_METADATA_INVALID') }
   if (!Array.isArray(inputFiles) || !inputFiles.length || inputFiles.length > 20 ||
       inputFiles.some(file => !file || typeof file !== 'object' || Array.isArray(file) ||
-        !Object.keys(file).every(key => ['name', 'repository', 'commit', 'path', 'sha256', 'byte_length', 'raw_url'].includes(key)) ||
-        typeof file.name !== 'string' || !file.name.trim() || typeof file.repository !== 'string' ||
-        !/^[0-9a-fA-F]{40}$/.test(file.commit) || !/^[0-9a-fA-F]{64}$/.test(file.sha256) ||
-        typeof file.path !== 'string' || !file.path || !Number.isSafeInteger(file.byte_length) || file.byte_length <= 0))
+        !Object.keys(file).every(key => ['source_kind', 'media_type', 'name', 'repository', 'commit', 'path', 'sha256', 'byte_length', 'raw_url'].includes(key)) ||
+        typeof file.name !== 'string' || !file.name.trim() || !/^[0-9a-fA-F]{64}$/.test(file.sha256) ||
+        !Number.isSafeInteger(file.byte_length) || file.byte_length <= 0 ||
+        (file.source_kind === 'native'
+          ? ['repository', 'commit', 'path', 'raw_url'].some(key => key in file)
+          : (file.source_kind !== undefined && file.source_kind !== 'github') || typeof file.repository !== 'string' ||
+            !/^[0-9a-fA-F]{40}$/.test(file.commit) || typeof file.path !== 'string' || !file.path)))
     throw parseError('POSTMAN_INPUT_METADATA_INVALID')
   const intent = payload.slice(newline + 1)
   if (!intent.trim()) throw parseError('POSTMAN_EMPTY_PAYLOAD')
@@ -542,9 +549,9 @@ export class DirectPostmanJobManager {
     }
     this.jobs.set(sessionId, job)
 
-    if (inputFiles.length && transportKind !== 'image') {
+    if (inputFiles.length) {
       try {
-        job.inputBundle = await this.inputGrants.build(inputBinding, sessionId, requestId, inputFiles)
+        job.inputBundle = await this.inputGrants.build(inputBinding, sessionId, requestId, inputFiles, transportKind)
         args.push('-InputBundleManifest', job.inputBundle.handoffPath)
       } catch (error) {
         // Every build failure precedes Direct spawn/publication, including helper
@@ -779,9 +786,12 @@ function toolOutput() {
   }
 }
 
-export function createDirectCurrentTurnToolConfigs(ctx, { store, jobs, taskContexts = postmanTaskContexts } = {}) {
+export function createDirectCurrentTurnToolConfigs(ctx, { store, jobs, taskContexts = postmanTaskContexts,
+  currentAttachments, inputGrants = postmanInputGrants } = {}) {
   const turnStore = store ?? new CurrentUserTurnStore(ctx)
-  const manager = jobs ?? new DirectPostmanJobManager()
+  const manager = jobs ?? new DirectPostmanJobManager({ inputGrants })
+  const attachments = currentAttachments ?? (ctx?.agents?.get ? new CurrentAttachmentStore(ctx) : undefined)
+  const stopDisposed = ctx?.on?.('agent/disposed', ({ agent }) => attachments?.release(agent))
 
   const sendCurrent = {
     name: 'postman_send_current_turn',
@@ -800,28 +810,46 @@ export function createDirectCurrentTurnToolConfigs(ctx, { store, jobs, taskConte
           agent.session.header.parentSession && !bridgeContext) throw parseError('POSTMAN_TASK_CONTEXT_REQUIRED')
       if (bridgeContext && taskContexts.get(bridgeContext.leaderSessionId) !== bridgeContext) throw parseError('POSTMAN_TASK_CONTEXT_REQUIRED')
       if (parsed.inputFiles?.length && !bridgeContext) throw parseError('POSTMAN_INPUT_METADATA_LEADER_REQUIRED')
-      const inputBinding = parsed.inputFiles?.length ? postmanInputGrants.child(agent, bridgeContext, parsed.inputFiles) : undefined
-      if (parsed.inputFiles?.length && !inputBinding) throw parseError('POSTMAN_INPUT_PROVENANCE_REJECTED')
-      const proof = {
-        parseMode: parsed.mode,
-        transportKind: parsed.transportKind,
-        sourceMessageLength: record.length,
-        sourceMessageSha256: record.sha256,
-        payloadLength: parsed.payload.length,
-        payloadSha256: sha256(parsed.payload),
-        removedTransportPrefixLength: parsed.removedTransportPrefix.length,
-        removedTransportPrefixSha256: sha256(parsed.removedTransportPrefix),
-        ...(parsed.inputFiles?.length ? { inputMetadataSha256: sha256(JSON.stringify(parsed.inputFiles)) } : {}),
-      }
-      if (!turnStore.consume(agent.id, record.seq)) {
-        throw parseError('POSTMAN_CURRENT_TURN_CHANGED_DURING_START')
-      }
+      let inputFiles = parsed.inputFiles ?? []
+      let inputBinding = inputFiles.length ? inputGrants.child(agent, bridgeContext, inputFiles) : undefined
+      if (inputFiles.length && !inputBinding) throw parseError('POSTMAN_INPUT_PROVENANCE_REJECTED')
+      // Reserve this exact turn before an asynchronous read; concurrent sends cannot stage it twice.
+      if (!turnStore.consume(agent.id, record.seq)) throw parseError('POSTMAN_CURRENT_TURN_CHANGED_DURING_START')
+      let standaloneBinding, standaloneContext
       try {
+        if (record.attachmentCount) {
+          const current = attachments?.get(agent)
+          if (bridgeContext || !current || current.session !== record.session || current.seq !== record.seq ||
+              current.attachments.length !== record.attachmentCount) throw parseError('POSTMAN_INPUT_CURRENT_ATTACHMENT_MISMATCH')
+          const staged = await stageStandaloneCurrentAttachments(ctx, agent, current, attachments, exec.signal, inputGrants)
+          if (staged.status !== 'POSTMAN_INPUT_READY') {
+            turnStore.release(agent.id, record.seq)
+            return staged
+          }
+          standaloneContext = current
+          inputFiles = staged.descriptors
+          if (turnStore.get(agent.id)?.seq !== record.seq || attachments.get(agent) !== current)
+            throw parseError('POSTMAN_CURRENT_TURN_CHANGED_DURING_START')
+          standaloneBinding = inputGrants.pin(agent, current, inputFiles)
+          if (!inputGrants.bindChild(standaloneBinding, agent, current, agent)) throw parseError('POSTMAN_INPUT_PROVENANCE_REJECTED')
+          inputBinding = standaloneBinding
+        }
+        const proof = {
+          parseMode: parsed.mode,
+          transportKind: parsed.transportKind,
+          sourceMessageLength: record.length,
+          sourceMessageSha256: record.sha256,
+          payloadLength: parsed.payload.length,
+          payloadSha256: sha256(parsed.payload),
+          removedTransportPrefixLength: parsed.removedTransportPrefix.length,
+          removedTransportPrefixSha256: sha256(parsed.removedTransportPrefix),
+          ...(inputFiles.length ? { inputMetadataSha256: sha256(JSON.stringify(inputFiles)) } : {}),
+        }
         return await manager.start({
           sessionId: agent.id,
           workspace: workspaceOf(agent),
           payload: parsed.payload,
-          inputFiles: parsed.inputFiles ?? [],
+          inputFiles,
           inputBinding,
           chatRequestId: parsed.chatRequestId,
           transportKind: parsed.transportKind,
@@ -831,6 +859,10 @@ export function createDirectCurrentTurnToolConfigs(ctx, { store, jobs, taskConte
       } catch (error) {
         turnStore.release(agent.id, record.seq)
         throw error
+      } finally {
+        // The manager has finished building its independent request attachment before start returns.
+        if (standaloneBinding) inputGrants.unpin(standaloneBinding)
+        if (standaloneContext && inputGrants.owns(agent, standaloneContext, inputFiles)) inputGrants.release(agent)
       }
     },
   }
@@ -882,9 +914,12 @@ export function createDirectCurrentTurnToolConfigs(ctx, { store, jobs, taskConte
   return {
     tools: [sendCurrent, statusCurrent, validateAskReply, continueLast],
     store: turnStore,
+    currentAttachments: attachments,
     jobs: manager,
     dispose() {
       turnStore.dispose()
+      if (!currentAttachments) attachments?.dispose()
+      stopDisposed?.()
       manager.dispose()
     },
   }

@@ -11,7 +11,7 @@ export { clearResultPresentation, createResultPresentationTool, presentResult } 
 export { CurrentUserTurnStore, DirectPostmanJobManager, createDirectCurrentTurnToolConfigs, parsePostmanUserTurn } from './direct-current-turn.js'
 
 export const name = 'dsh-postman-harness'
-export const inject = ['agents', 'tools', 'workspaceRegistry']
+export const inject = ['agents', 'tools', 'workspaceRegistry', 'attachments']
 
 export const PLUGIN_NAME = 'dsh-postman-harness'
 

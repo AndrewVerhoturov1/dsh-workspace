@@ -53,11 +53,11 @@ Tool-level shell failure до spawn, например `spawn EPERM`, означ�
 не стартовал. После такого failure нельзя выбирать latest/старый REQ как результат текущей операции
 или автоматически повторять Send.
 
-## Native input ZIP boundary
+## Native input attachment boundary
 
 Для `@Postman` / `@PostmanAsk` с explicitly granted inputs Host после canonical REQ allocation создаёт и independently verifies `POSTMAN_INPUT_<REQ>.zip` из private byte snapshots. Прежний `-InputFilesBase64` сохраняет immutable provenance; новый `-InputBundleManifest` — только Host-created strict private handoff path, не model-authored source list. Direct проверяет exact REQ, descriptor digest, regular/non-symlink files, expected ZIP name и внешний size/hash до browser. Полная contents verification выполняется один раз на Host после build. State хранит bundle metadata без source paths. Browser заново hash-verifies bytes и загружает native FilePayload.
 
-Input ZIP и handoff удаляются best-effort только после browser lifecycle; Host также убирает private request root при terminal/spawn failure. Cleanup не меняет уже доказанный outcome. Без inputs argv/flow прежние. Image mode намеренно сохраняет descriptor-only visual references для этого MVP. Полный contract: [POSTMAN_INPUT_FILES.md](../POSTMAN_INPUT_FILES.md).
+Input ZIP и handoff удаляются best-effort только после browser lifecycle; Host также убирает private request root при terminal/spawn failure. Cleanup не меняет уже доказанный outcome. Без inputs argv/flow прежние. Image mode получает одну verified native PNG/JPEG/WebP/GIF reference через тот же private handoff в первом generation turn, не ZIP/raw_url. Несколько references/non-image inputs явно unsupported. Normal local/current staging не пишет в GitHub; existing GitHub file — source only, public fallback отдельно approved. Полный contract: [POSTMAN_INPUT_FILES.md](../POSTMAN_INPUT_FILES.md).
 
 ## Normal request
 

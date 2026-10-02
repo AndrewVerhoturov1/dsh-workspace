@@ -132,12 +132,12 @@ def build_image_generation_prompt(user_intent: str, input_files: Iterable[dict[s
     """Build the non-Postman preparatory image turn from exact user intent."""
     if not isinstance(user_intent, str) or not user_intent.strip():
         raise DirectPostmanError("DIRECT_INVALID_TASK", "image intent must be a non-empty string")
-    section = task_package.render_input_files_section(input_files)
-    if section:
-        return (section + "\nСначала получи и изучи все перечисленные input files. Изображения используй как visual references, когда это следует из задачи; документы, архивы и другие файлы используй как требования или контекст согласно их содержанию. "
-                "Если получить их нельзя, не угадывай содержание и не продолжай генерацию будто они были просмотрены.\n\n"
-                + f"Сгенерируй, пожалуйста, изображение по этому промту:\n\n{user_intent}\n\nСделай ровно одно изображение.")
-    return f"Сгенерируй, пожалуйста, изображение по этому промту:\n\n{user_intent}\n\nСделай ровно одно изображение."
+    inputs = task_package.normalize_input_files(input_files)
+    if inputs:
+        input_bundle.image_media(inputs)
+    reference = "Используй приложенное изображение как visual reference.\n\n" if inputs else ""
+    return reference + f"Сгенерируй, пожалуйста, изображение по этому промту:\n\n{user_intent}\n\nСделай ровно одно изображение."
+
 
 
 def build_image_packaging_intent(request_id: str) -> str:
@@ -571,6 +571,7 @@ class DirectPostman:
         extra_allowed: Iterable[str],
         extra_forbidden: Iterable[str],
         input_files: Iterable[dict[str, object]] = (),
+        input_attachment=None,
     ) -> dict[str, Any]:
         preparatory_prompt = build_image_generation_prompt(task, input_files)
         browser = self.ensure_browser(cdp_url=cdp_url)
@@ -663,6 +664,7 @@ class DirectPostman:
             cdp_url=browser.get("cdpUrl", cdp_url),
             observer_timeout_ms=DEFAULT_ASSISTANT_TIMEOUT_MS,
             image_prepare=prepare_packaging,
+            **({"input_attachment": input_attachment} if input_attachment else {}),
         )
         if not isinstance(result, dict) or result.get("ok") is not True:
             code = result.get("code", "DIRECT_WEB_FAILED") if isinstance(result, dict) else "DIRECT_WEB_FAILED"
@@ -694,11 +696,8 @@ class DirectPostman:
         try:
             inputs = task_package.normalize_input_files(kwargs.get("input_files", ()))
             kwargs["input_files"] = inputs
-            if kwargs.get("image_mode"):
-                if input_bundle_manifest:
-                    input_bundle.fail("BUNDLE_HANDOFF_INVALID")
-            elif inputs or input_bundle_manifest:
-                attachment = input_bundle.read_handoff(input_bundle_manifest, kwargs["request_id"], inputs)
+            if inputs or input_bundle_manifest:
+                attachment = input_bundle.read_handoff(input_bundle_manifest, kwargs["request_id"], inputs, image=bool(kwargs.get("image_mode")))
         except input_bundle.InputBundleError as exc:
             raise DirectPostmanError(exc.code, str(exc), details={"sendState": "PROVEN_NOT_SENT",
                 "inputBundlePhase": "direct-handoff"}) from exc
@@ -836,6 +835,7 @@ class DirectPostman:
                 extra_allowed=extra_allowed,
                 extra_forbidden=extra_forbidden,
                 input_files=input_files,
+                input_attachment=input_attachment,
             )
 
         publisher = self.publisher_factory(

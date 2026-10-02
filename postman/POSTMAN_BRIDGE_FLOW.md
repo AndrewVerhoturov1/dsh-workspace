@@ -4,7 +4,7 @@
 > Bridge child: fresh one-shot `spawn`, fixed `codex / gpt-6-luna`
 > Transports: `@Postman` artifact, `@PostmanAsk` text, `@PostmanImage` one image
 
-Для входных файлов Leader сначала получает Host-issued descriptor через `postman_input_files` (PTC Leader — вложенным вызовом `ptc_execute`), после последнего REQ очищает свой staged bundle; затем передаёт descriptor как metadata complete delegation; Luna не получает binary tools и вызывает прежний zero-argument send. См. [Postman Input Files](POSTMAN_INPUT_FILES.md).
+Для входных файлов Leader сначала получает Host-issued descriptor через `postman_input_files` (PTC Leader — вложенным вызовом `ptc_execute`), после последнего REQ очищает свой staged bundle; затем передаёт descriptor как metadata complete delegation; Luna не получает binary tools и вызывает прежний zero-argument send. Native attachment — primary input transport: private local/current bytes → ZIP для Postman/Ask, одна visual image → native image для PostmanImage. Child не публикует inputs, не строит attachments и не использует raw_url fallback. GitHub — existing immutable source или separately approved public fallback only. См. [Postman Input Files](POSTMAN_INPUT_FILES.md).
 
 ## 1. Назначение
 
@@ -27,7 +27,7 @@ Postman Leader
 → fresh spawn child
 → fixed gpt-6-luna
 → exact child user/message
-→ child loads canonical skill for @Postman/@PostmanAsk; @PostmanImage uses direct transport (no separate skill)
+→ child loads canonical delegate-via-postman / delegate-via-postman-ask / delegate-via-postman-image skill
 → postman_send_current_turn() with no text args
 → existing Direct Postman
 → Bridge публикует REQ в task branch через Host (не в main)

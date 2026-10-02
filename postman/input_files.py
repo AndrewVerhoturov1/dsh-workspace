@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Explicit, temporary GitHub publication of selected Postman input files."""
+"""Private selected inputs; GitHub is an existing source or explicit public fallback only."""
 from __future__ import annotations
 
 import argparse
@@ -39,10 +39,10 @@ def selected_file(path: str) -> tuple[str, bytes]:
     if not source.is_absolute() or source.is_symlink() or not source.is_file():
         raise InputStageError("select an absolute regular file, not a directory or symlink")
     if any(parent.is_symlink() for parent in source.parents):
-        raise InputStageError("symlink path cannot be published")
+        raise InputStageError("symlink path cannot be staged")
     if any(part.lower() in _SENSITIVE or part.lower().endswith((".key", ".pem", ".p12", ".log"))
            for part in source.resolve(strict=True).parts):
-        raise InputStageError("sensitive/runtime path cannot be published")
+        raise InputStageError("sensitive/runtime path cannot be staged")
     # One bounded read: hashing, publication and private snapshot use these same bytes.
     with source.open("rb") as handle:
         if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
@@ -53,6 +53,18 @@ def selected_file(path: str) -> tuple[str, bytes]:
     if not data:
         raise InputStageError("empty input file")
     return source.name, data
+
+
+def input_media_type(data):
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return "image/webp"
+    return "application/octet-stream"
 
 
 class GitHubInputPublisher:
@@ -120,13 +132,36 @@ class GitHubInputPublisher:
         if "size" in response and response["size"] != len(data):
             raise InputStageError("POSTMAN_INPUT_MATERIALIZATION_MISMATCH")
         name = Path(path).name
-        descriptor = normalize_input_files([dict(name=name, repository=REPOSITORY, commit=commit, path=path,
+        descriptor = normalize_input_files([dict(source_kind="github", media_type=input_media_type(data), name=name, repository=REPOSITORY, commit=commit, path=path,
             sha256=hashlib.sha256(data).hexdigest(), byte_length=len(data),
             raw_url=f"https://raw.githubusercontent.com/{REPOSITORY}/{commit}/{quote(path, safe='/')}")])[0]
         self._materialize(descriptor["sha256"], data)
         return descriptor
 
     def stage(self, paths):
+        if self.snapshot_dir is None:
+            raise InputStageError("POSTMAN_INPUT_MATERIALIZATION_MISSING")
+        if not paths or len(paths) > 20:
+            raise InputStageError("select 1-20 exact files")
+        selected, total = [], 0
+        for path in paths:
+            name, data = selected_file(path)
+            total += len(data)
+            if total > MAX_AGGREGATE_BYTES:
+                raise InputStageError("POSTMAN_INPUT_BUNDLE_LIMIT_EXCEEDED")
+            selected.append((name, data))
+        descriptors = []
+        for name, data in selected:
+            sha = hashlib.sha256(data).hexdigest()
+            descriptor = normalize_input_files([dict(source_kind="native", name=name,
+                sha256=sha, byte_length=len(data), media_type=input_media_type(data))])[0]
+            self._materialize(sha, data)
+            descriptors.append(descriptor)
+        return dict(bundle_id=uuid4().hex, descriptors=descriptors)
+
+    def stage_public_fallback(self, paths, *, public_fallback_confirmed=False):
+        if public_fallback_confirmed is not True:
+            raise InputStageError("POSTMAN_INPUT_PUBLIC_APPROVAL_REQUIRED")
         if not paths or len(paths) > 20:
             raise InputStageError("select 1-20 exact files")
         selected, total = [], 0
@@ -193,15 +228,25 @@ def main(argv=None):
     parser = argparse.ArgumentParser()
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--stage", nargs="+")
-    group.add_argument("--cleanup")
+    group.add_argument("--stage-public-fallback", nargs="+")
+    group.add_argument("--cleanup-public-fallback")
+    parser.add_argument("--public-fallback-confirmed", action="store_true")
     group.add_argument("--existing", nargs=2, metavar=("COMMIT", "PATH"))
     parser.add_argument("--snapshot-dir", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     try:
         publisher = GitHubInputPublisher(snapshot_dir=args.snapshot_dir)
-        result = publisher.stage(args.stage) if args.stage else publisher.cleanup(args.cleanup) if args.cleanup else publisher.existing(*args.existing)
+        if args.stage:
+            result = publisher.stage(args.stage)
+        elif args.stage_public_fallback:
+            result = publisher.stage_public_fallback(args.stage_public_fallback,
+                public_fallback_confirmed=args.public_fallback_confirmed)
+        elif args.cleanup_public_fallback:
+            result = publisher.cleanup(args.cleanup_public_fallback)
+        else:
+            result = publisher.existing(*args.existing)
         if args.snapshot_dir:
-            result = {**result, "materializations": publisher.materializations} if args.stage else {
+            result = {**result, "materializations": publisher.materializations} if args.stage or args.stage_public_fallback else {
                 "descriptors": [result], "materializations": publisher.materializations}
         print(json.dumps(result, ensure_ascii=False))
         return 0

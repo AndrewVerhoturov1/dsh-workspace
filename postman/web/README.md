@@ -22,9 +22,9 @@ dedicated Chrome/CDP
 → request-scoped durable result
 ```
 
-## Native input ZIP
+## Native input ZIP/image
 
-Optional verified Host input bundle дополняет, а не заменяет существующую Send state machine. `input_attachment.py` получает только Direct-verified request attachment, читает/сверяет ZIP bytes и загружает ровно один native Playwright FilePayload. No model filesystem paths, generic file lists или directory globs.
+Optional verified Host input bundle дополняет, а не заменяет существующую Send state machine. `input_attachment.py` получает только Direct-verified request attachment, читает/сверяет ZIP bytes (Postman/Ask) либо exact image bytes (PostmanImage) и загружает ровно один native Playwright FilePayload. Image MIME/card selectors scoped к composer и exact sent user turn; unknown markup fail-closed. Normal private staging не публикует bytes в GitHub; existing GitHub source доставляется native, public fallback требует отдельного approval. No model filesystem paths, generic file lists или directory globs.
 
 После fresh/existing exact chat и empty composer proof: upload → exact filename/count=1 → positive completed file control/no progress/error → prompt fill → re-proof → single Send. После Send нужен ровно один новый user turn с exact full prompt и ZIP resource card в том же exact user-message unit, плюс empty composer/bound URL. DOM filename — membership proof, не remote hash; file ID совпадает, если exposed до и после Send; отсутствие ID само по себе не отменяет card proof. Filename не подставляется в CSS selector.
 

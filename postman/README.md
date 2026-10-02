@@ -36,7 +36,7 @@ Image MVP:
 → IMAGE_RESULT_DURABLE с resultImage, imageSha256 и метаданными изображения (REQ_A)
 ```
 
-В репозитории нет общего механизма Python-зависимостей. Для декодирования картинки установи `Pillow>=12,<13` в тот же Python, которым запускается `postman.ps1`: `python -m pip install "Pillow>=12,<13"`. Без него image flow завершается `IMAGE_DECODER_UNAVAILABLE` и не выдаёт непроверенный результат. В ZIP допускаются посторонние не-графические файлы, но изображение должно быть ровно одно. REQ_B — внутренний ход без отдельного task commit; ZIP сохраняется как промежуточное доказательство, но не регистрируется как implementation artifact. Первая версия не поддерживает несколько картинок, редактирование, нативную загрузку входных attachments в ChatGPT и ручной `@PostmanImage --chat`; GitHub-descriptors входных файлов поддерживаются отдельно.
+В репозитории нет общего механизма Python-зависимостей. Для декодирования картинки установи `Pillow>=12,<13` в тот же Python, которым запускается `postman.ps1`: `python -m pip install "Pillow>=12,<13"`. Без него image flow завершается `IMAGE_DECODER_UNAVAILABLE` и не выдаёт непроверенный результат. В ZIP допускаются посторонние не-графические файлы, но изображение должно быть ровно одно. REQ_B — внутренний ход без отдельного task commit; ZIP сохраняется как промежуточное доказательство, но не регистрируется как implementation artifact. Поддерживается одна native PNG/JPEG/WebP/GIF reference image с exact bytes/SHA/card proof; несколько references, non-image inputs, редактирование и ручной `@PostmanImage --chat` пока unsupported. Normal current/local staging private; GitHub только existing immutable source или separately approved public fallback.
 
 Artifact и text режимы поддерживают manual continuation:
 

@@ -96,6 +96,29 @@ test('Host helper infrastructure errors retain allocated REQ as proven-unsent wi
   })
 })
 
+test('native descriptors parse in all three modes without GitHub coordinates', () => {
+  const file = { source_kind: 'native', name: 'reference.png', sha256: 'b'.repeat(64), byte_length: 12, media_type: 'image/png' }
+  for (const mode of ['Postman', 'PostmanAsk', 'PostmanImage']) {
+    const turn = parsePostmanUserTurn('@' + mode + ' --input-files-json ' + JSON.stringify([file]) + '\nExact intent')
+    assert.deepEqual(turn.inputFiles, [file]); assert.equal(turn.payload, 'Exact intent')
+    assert.throws(() => parsePostmanUserTurn('@' + mode + ' --input-files-json ' + JSON.stringify([{...file,path:'C:/secret'}]) + '\nintent'), /METADATA_INVALID/)
+  }
+})
+
+test('image Direct start uses Host image builder before spawn and forwards private handoff', async () => {
+  const file = { source_kind: 'native', name: 'reference.png', sha256: 'b'.repeat(64), byte_length: 12, media_type: 'image/png' }
+  let argv, built = false
+  const manager = new DirectPostmanJobManager({ exists: () => true,
+    inputGrants: { async build(record, session, req, descriptors, kind) {
+      assert.equal(kind, 'image'); assert.deepEqual(descriptors, [file]); built = true
+      return { handoffPath: '/private/image-handoff.json', cleanup() {} }
+    } }, spawn(_cmd,args) { assert.equal(built,true); argv=args; const child=fakeChild(); queueMicrotask(()=>child.emit('spawn')); return child } })
+  await manager.start({ sessionId:'native-image', workspace:'/repo', branch:'task/postman-1234567890abcdef1234567890abcdef', payload:'Exact intent', inputFiles:[file], inputBinding:{}, transportKind:'image' })
+  assert.equal(argv.includes('-ImageMode'),true)
+  assert.equal(argv[argv.indexOf('-InputBundleManifest')+1],'/private/image-handoff.json')
+  manager.latest('native-image').child.emit('close',0)
+})
+
 test('image parser preserves exact payload and rejects manual chat', () => {
   const raw = '  @PostmanImage\nDraw a cat  '
   assert.deepEqual(parsePostmanUserTurn(raw), { mode: 'fresh', transportKind: 'image',
@@ -204,7 +227,7 @@ test('current-turn store records only exact single-text user messages and tracks
   store.dispose()
 })
 
-test('current-turn store fails closed for mixed/attachment content instead of reconstructing text', () => {
+test('current-turn store preserves one exact text beside attachments; ambiguous text stays unsupported', () => {
   const listeners = new Map()
   const store = new CurrentUserTurnStore({ on(name, listener) { listeners.set(name, listener); return () => {} } })
   listeners.get('session/event')({ id: 's1' }, {
@@ -215,7 +238,14 @@ test('current-turn store fails closed for mixed/attachment content instead of re
       content: [{ type: 'text', text: '@Postman x' }, { type: 'image', data: 'ignored' }],
     },
   })
-  assert.equal(store.get('s1').error, 'POSTMAN_CURRENT_TURN_UNSUPPORTED_CONTENT')
+  assert.equal(store.get('s1').text, '@Postman x')
+  assert.equal(store.get('s1').attachmentCount, 1)
+  for (const content of [[{ type: 'text', text: '@Postman' }, { type: 'text', text: 'x' }],
+    [{ type: 'image', data: 'ignored' }], [null, { type: 'text', text: '@Postman x' }]]) {
+    store.capture({ id: 's1' }, { type: 'user/message', data: { source: { kind: 'user' }, content } })
+    assert.equal(store.get('s1').error, 'POSTMAN_CURRENT_TURN_UNSUPPORTED_CONTENT')
+  }
+  store.dispose()
 })
 
 test('job manager sends exact payload only as UTF-8 Base64 to the existing Direct bridge', async () => {
