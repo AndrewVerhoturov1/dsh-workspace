@@ -68,7 +68,7 @@ export function buildPostmanWorkerStartRequest(parent, task, signal, deniedTools
 
 // One short Leader admission queue reserves membership; every child has its own
 // delivery queue. Neither queue is held until a model turn finishes.
-export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChange = () => {} } = {}) {
+export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChange = () => {}, localDevelopment = false } = {}) {
   const leaders = new Map()
   const disposedParents = new WeakSet()
   const bindingChanged = id => onBindingChange(id)
@@ -489,7 +489,13 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     if (binding.state !== 'ready' || binding.delivery !== 'none')
       return { ready: false, reason: 'binding or admission uncertain; request approved addressed cancel' }
     const child = await history(binding.id, parent.id, signal)
-    const evidence = workerEvidence(binding, child, parent)
+    const reported = workerEvidence(binding, child, parent)
+    // Releasing a session is not certifying its task. Local mode needs runtime
+    // quiescence, not a perfect historical chain of reports.
+    const evidence = localDevelopment
+      ? { ready: child?.status === 'idle' && child.inbox?.hasPending === false,
+          reason: 'Worker active, pending, or history unavailable', resultReported: reported.ready }
+      : { ...reported, resultReported: reported.ready }
     if (!evidence.ready) return evidence
     // Capture before the asynchronous descendant read, not after it.
     const eventCount = child.session.events.length
@@ -502,7 +508,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
   }
   const stopTool = defineTool({
     name: POSTMAN_WORKER_STOP_TOOL_NAME,
-    description: 'Close an evidenced reported Worker or cancel an exact Worker after one Host approval.',
+    description: 'Release an idle Worker without claiming task success; cancel an exact Worker with Host approval unless localDevelopment is enabled.',
     parameters: {
       mode: { type: 'string', enum: ['close', 'cancel'] },
       workerSessionId: { type: 'string', description: 'Exact Worker ID; mandatory for cancel.' },
@@ -514,30 +520,32 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       const mode = args?.mode ?? 'close', id = args?.workerSessionId
       if (mode !== 'close' && mode !== 'cancel') return { status: 'POSTMAN_WORKER_STOP_MODE_INVALID' }
       if (id !== undefined && (typeof id !== 'string' || !id)) return { status: 'POSTMAN_WORKER_TARGET_UNKNOWN' }
-      if (mode === 'cancel' && !id) return { status: 'POSTMAN_WORKER_CANCEL_APPROVAL_REQUIRED' }
+      if (mode === 'cancel' && !id) return { status: localDevelopment ? 'POSTMAN_WORKER_TARGET_REQUIRED' : 'POSTMAN_WORKER_CANCEL_APPROVAL_REQUIRED' }
       const g = groupFor(parent)
       const chosen = await enqueue(g, () => select(parent, id, g))
       if (!chosen.binding) {
         if (id && g.stopped.has(id)) return { status: 'POSTMAN_WORKER_ALREADY_STOPPED', workerSessionId: id }
-        return mode === 'cancel' && chosen.status === 'POSTMAN_WORKER_TARGET_UNKNOWN' ?
+        return !localDevelopment && mode === 'cancel' && chosen.status === 'POSTMAN_WORKER_TARGET_UNKNOWN' ?
           { status: 'POSTMAN_WORKER_CANCEL_APPROVAL_REQUIRED' } : chosen
       }
       const selected = chosen.binding, slot = slotFor(g, selected)
       let witness
       if (mode === 'cancel') {
-        if (!durable || !ctx.get?.('approval'))
+        if (!durable || (!localDevelopment && !ctx.get?.('approval')))
           return { status: 'POSTMAN_WORKER_CANCEL_APPROVAL_REQUIRED', workerSessionId: id }
         try {
           if (!await verifyIdentity(parent, id, exec.signal))
             return { status: 'POSTMAN_WORKER_BINDING_UNCERTAIN', workerSessionId: id }
         } catch { return { status: 'POSTMAN_WORKER_BINDING_UNCERTAIN', workerSessionId: id } }
         witness = cancelWitness(selected)
-        const approval = await ctx.get('approval').request({ agent: parent,
-          toolName: POSTMAN_WORKER_STOP_TOOL_NAME, callId: exec.callId,
-          reason: 'Cancel exact Leader ' + parent.id + ' Worker ' + id +
-            ' assignments ' + witness + ': ' + (args.reason ?? 'no explanation'), signal: exec.signal })
-        if (approval !== 'allowed-once')
-          return { status: 'POSTMAN_WORKER_CANCEL_APPROVAL_REQUIRED', workerSessionId: id }
+        if (!localDevelopment) {
+          const approval = await ctx.get('approval').request({ agent: parent,
+            toolName: POSTMAN_WORKER_STOP_TOOL_NAME, callId: exec.callId,
+            reason: 'Cancel exact Leader ' + parent.id + ' Worker ' + id +
+              ' assignments ' + witness + ': ' + (args.reason ?? 'no explanation'), signal: exec.signal })
+          if (approval !== 'allowed-once')
+            return { status: 'POSTMAN_WORKER_CANCEL_APPROVAL_REQUIRED', workerSessionId: id }
+        }
       }
       // Per-Worker queue prevents a selected admission between validation and drain.
       // No Leader-wide queue is held while a human or model runs.
@@ -547,9 +555,9 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
         if (!current || current.id !== selected.id || !matchesContext(parent, slot))
           return { status: 'POSTMAN_WORKER_BINDING_UNCERTAIN', workerSessionId: selected.id }
         if (mode === 'cancel' && cancelWitness(current) !== witness)
-          return { status: 'POSTMAN_WORKER_CANCEL_APPROVAL_REQUIRED', workerSessionId: selected.id }
+          return { status: localDevelopment ? 'POSTMAN_WORKER_BINDING_CHANGED' : 'POSTMAN_WORKER_CANCEL_APPROVAL_REQUIRED', workerSessionId: selected.id }
         try {
-          const evidence = mode === 'close' ? (current.lifecycle ?
+          const evidence = mode === 'close' ? (localDevelopment || current.lifecycle ?
             await closeEvidence(parent, current, exec.signal) :
             { ready: false, reason: 'no durable lifecycle witness' }) : null
           if (mode === 'close') {
@@ -561,7 +569,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
           const latest = bindings(parent, g)[selected.id]
           if (!latest || latest.id !== selected.id ||
               (mode === 'cancel' && cancelWitness(latest) !== witness))
-            return { status: mode === 'cancel' ? 'POSTMAN_WORKER_CANCEL_APPROVAL_REQUIRED' :
+            return { status: mode === 'cancel' ? (localDevelopment ? 'POSTMAN_WORKER_BINDING_CHANGED' : 'POSTMAN_WORKER_CANCEL_APPROVAL_REQUIRED') :
               'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT', workerSessionId: selected.id }
           if (mode === 'close') {
             // Verification and admission cutoff share the native exact-child lock.
@@ -583,23 +591,23 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
             if (!closed) return { status: 'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT',
               workerSessionId: selected.id }
           } else {
-            if (durable) await changeBinding(parent, selected.id, entry => {
-              if (cancelWitness(entry) !== witness) throw new Error('POSTMAN_WORKER_BINDING_CHANGED')
-              return { ...entry, state: 'stopping' }
+            // Cancellation must close native admission too; drain alone allows a
+            // later cold followup to resurrect the released child.
+            const closed = await ctx.subagents.closeContinuableChild(parent, selected.id, async () => {
+              if (durable) await changeBinding(parent, selected.id, entry => {
+                if (cancelWitness(entry) !== witness) throw new Error('POSTMAN_WORKER_BINDING_CHANGED')
+                return { ...entry, state: 'stopping' }
+              })
+              slot.state = 'stopping'
+              bindingChanged(selected.id)
+              return true
             })
-            slot.state = 'stopping'
-            bindingChanged(selected.id)
-            await ctx.subagents.drainContinuableChildren(parent, [selected.id])
+            if (!closed) throw new Error('POSTMAN_WORKER_BINDING_CHANGED')
           }
-          if (durable) await contexts.changeRecord(parent.id, row => {
-            if (row.workers?.[selected.id]?.state !== 'stopping') throw new Error('POSTMAN_WORKER_BINDING_CHANGED')
-            const workers = { ...row.workers }; delete workers[selected.id]
-            return { ...row, workers }
-          })
-          slot.closed = true; g.slots.delete(selected.id); g.stopped.add(selected.id)
+          await removeBinding(parent, g, slot, selected.id)
           return { status: mode === 'cancel' ? 'POSTMAN_WORKER_CANCELLED' : 'POSTMAN_WORKER_STOPPED',
             workerSessionId: selected.id, residentReleased: true, mappingRemoved: true,
-            durableSessionDeleted: false, taskCompleted: false, resultReported: mode === 'close' }
+            durableSessionDeleted: false, taskCompleted: false, resultReported: mode === 'close' && evidence.resultReported === true }
         } catch (error) {
           if (durable && rowOf(parent.id)?.workers?.[selected.id]?.state === 'stopping')
             try { await changeBinding(parent, selected.id, entry => ({ ...entry, state: 'uncertain' })) } catch {}
@@ -753,7 +761,40 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       })
     } catch { return false }
   }
+  async function removeBinding(parent, g, slot, id) {
+    if (durable) await contexts.changeRecord(parent.id, row => {
+      if (row.workers?.[id]?.state !== 'stopping') throw new Error('POSTMAN_WORKER_BINDING_CHANGED')
+      const workers = { ...row.workers }; delete workers[id]
+      return { ...row, workers }
+    })
+    slot.closed = true; g.slots.delete(id); g.stopped.add(id)
+  }
   async function prepareRestore(leaderId) {
+    if (!localDevelopment) return pauseForOperation(leaderId)
+    // Called only after Host reserved restore: no new Postman admissions.
+    const parent = ctx.agents.get(leaderId)
+    if (!authorized(parent) || !durable || !contexts.isRestoring?.(leaderId)) return false
+    const g = groupFor(parent)
+    for (const binding of Object.values(bindings(parent, g))) {
+      const slot = slotFor(g, binding)
+      try {
+        const closed = await enqueue(slot, () => ctx.subagents.closeContinuableChild(parent, binding.id, async () => {
+          const current = bindings(parent, g)[binding.id]
+          if (!current || !matchesContext(parent, slot) ||
+              !(await closeEvidence(parent, current)).ready) return false
+          await changeBinding(parent, binding.id, entry => ({ ...entry, state: 'stopping' }))
+          slot.state = 'stopping'; bindingChanged(binding.id)
+          return true
+        }))
+        if (!closed) return false
+        await removeBinding(parent, g, slot, binding.id)
+      } catch {
+        if (rowOf(leaderId)?.workers?.[binding.id]?.state === 'stopping')
+          await changeBinding(parent, binding.id, entry => ({ ...entry, state: 'uncertain' }))
+        slot.state = 'uncertain'; bindingChanged(binding.id)
+        return false
+      }
+    }
     return pauseForOperation(leaderId)
   }
   function dispose() {

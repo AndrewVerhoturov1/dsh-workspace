@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
-import { mkdtemp, realpath, stat } from 'node:fs/promises'
+import { copyFile, cp, mkdir, mkdtemp, realpath, stat, writeFile } from 'node:fs/promises'
 import { createMemoryTaskRegistry } from './postman-task-registry.js'
 import { homedir, tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -18,8 +18,21 @@ async function git(cwd, ...args) {
   return stdout.trim()
 }
 
+// Kept outside Git and temp cleanup; never uploaded or included in tool output.
+async function preserveTaskChanges({ worktree, command, ...metadata }) {
+  const root = join(homedir(), '.dsh-recovery', 'postman')
+  await mkdir(root, { recursive: true, mode: 0o700 })
+  const backup = await mkdtemp(join(root, 'restore-'))
+  await cp(worktree, join(backup, 'files'), { recursive: true, dereference: false, verbatimSymlinks: true,
+    filter: source => normalize(source) !== normalize(join(worktree, '.git')) })
+  const index = resolve(worktree, await command(worktree, 'rev-parse', '--git-path', 'index'))
+  await copyFile(index, join(backup, 'index'))
+  await writeFile(join(backup, 'recovery.json'), JSON.stringify({ ...metadata, worktree }, null, 2), 'utf8')
+  return backup
+}
+
 /** The host injects one durable registry; tests explicitly inject an in-memory one. */
-export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(), gitCommand = git, temporaryDirectory = tmpdir, makeDirectory = mkdtemp, realPath = realpath } = {}) {
+export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(), gitCommand = git, temporaryDirectory = tmpdir, makeDirectory = mkdtemp, realPath = realpath, localDevelopment = false, preserveChanges = preserveTaskChanges } = {}) {
   const contexts = new Map()
   const children = new Map()
   const pending = new Set()
@@ -212,6 +225,7 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
     if (!context || context.leaderSessionId !== id || registry.get(id)?.runner.state !== 'failed')
       return { status: 'POSTMAN_TASK_RESTORE_REJECTED' }
     if (!pending.has(id) && !reserveRestore(id)) return { status: 'POSTMAN_TASK_RESTORE_REJECTED' }
+    let recoveryPath = null
     try {
       if (activeOperations.has(id) || syncOperations.has(id) || isBusy(id) || !await beforeRestore(id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
       const { branch, worktree, baseCommit } = context
@@ -255,22 +269,31 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
       // A failed package does not identify which dirty bytes belong to that
       // runner rather than B/C. With retained Worker bindings, only an already
       // clean tree can be restored without discarding another session's work.
-      if (Object.keys(registry.get(id)?.workers ?? {}).length > 0 &&
-          await command(worktree, 'status', '--porcelain=v1', '--untracked-files=all') !== '')
+      const dirty = await command(worktree, 'status', '--porcelain=v1', '--untracked-files=all') !== ''
+      if (!localDevelopment && Object.keys(registry.get(id)?.workers ?? {}).length > 0 && dirty)
         throw new Error('dirty Worker changes have no proven restore ownership')
+      // Do not guess which dirty bytes came from runner or user. Preserve them
+      // privately before a local reset, including untracked/ignored files and index.
+      recoveryPath = dirty
+        ? await preserveChanges({ worktree, branch, head, remote, leaderSessionId: id, command }) : null
       // A crash after this point must not authorize an automatic second attempt.
       await registry.change(id, row => ({ ...row, runner: { ...row.runner, state: 'restoring' } }))
-      await command(worktree, 'reset', '--hard', remote)
-      await command(worktree, 'clean', '-fd')
+      if (localDevelopment && !dirty) {
+        if (head !== remote) await command(worktree, 'merge', '--ff-only', remote)
+      } else {
+        await command(worktree, 'reset', '--hard', remote)
+        await command(worktree, 'clean', '-fd')
+      }
       if (await command(worktree, 'rev-parse', 'HEAD') !== remote ||
           await command(worktree, 'branch', '--show-current') !== branch ||
           await command(worktree, 'status', '--porcelain=v1', '--untracked-files=all') !== '' ||
           await command(repository, 'ls-remote', '--heads', 'origin', branch) !== remoteLine)
         throw new Error('restored task worktree could not be verified')
       await registry.change(id, row => ({ ...row, runner: { state: 'none', requestId: null } }))
-      return { status: 'TASK_CONTEXT_RESTORED', branch, worktree, head: remote }
+      return { status: 'TASK_CONTEXT_RESTORED', branch, worktree, head: remote, ...(recoveryPath ? { recoveryPath } : {}) }
     } catch (error) {
-      return { status: 'POSTMAN_TASK_RESTORE_REJECTED', diagnostic: String(error?.message ?? error) }
+      return { status: 'POSTMAN_TASK_RESTORE_REJECTED', diagnostic: String(error?.message ?? error),
+        ...(recoveryPath ? { recoveryPath } : {}) }
     } finally { pending.delete(id) }
   }
 
@@ -407,8 +430,8 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
   }
   function reserveRestore(leaderId) {
     if (!get(leaderId) || pending.has(leaderId) || syncOperations.has(leaderId) || activeOperations.has(leaderId) || workerAdmissions.has(leaderId) ||
-        Object.values(registry.get(leaderId)?.bridgeOperations ?? {}).some(op =>
-          op.state === 'received' && !['synchronized', 'not-required'].includes(op.synchronization))) return false
+        (!localDevelopment && Object.values(registry.get(leaderId)?.bridgeOperations ?? {}).some(op =>
+          op.state === 'received' && !['synchronized', 'not-required'].includes(op.synchronization)))) return false
     pending.add(leaderId)
     return true
   }
@@ -428,8 +451,8 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
 // Both entrypoints use one facade. Initialization is awaited before Git/child actions;
 // never substitute a volatile registry if the storage backend fails to open.
 let sharedContexts = null
-export function initializePostmanTaskContexts(registry) {
-  if (!sharedContexts) sharedContexts = createPostmanTaskContexts({ registry })
+export function initializePostmanTaskContexts(registry, options = {}) {
+  if (!sharedContexts) sharedContexts = createPostmanTaskContexts({ registry, ...options })
   return sharedContexts
 }
 export function releasePostmanTaskContexts(contexts) {

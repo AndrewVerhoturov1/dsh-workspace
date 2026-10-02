@@ -1,4 +1,5 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { z } from 'zod'
 import { createPtcAdapter, WORKER_MUTATION_PROFILE } from './ptc-adapter.js'
 import { CurrentAttachmentStore, createPostmanInputFilesTool, postmanInputGrants } from './postman-input-files.js'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
@@ -16,6 +17,7 @@ import {
 } from './postman-bridge-core.js'
 
 export const name = 'dsh-postman-harness-bridge'
+export const Config = z.object({ localDevelopment: z.boolean().default(false) }).default({})
 export const inject = ['agents', 'subagents', 'tools', 'storageDomain', 'attachments']
 
 function output() {
@@ -46,7 +48,7 @@ export function createPostmanTaskPrepareTool(ctx, contexts = postmanTaskContexts
 export function createPostmanTaskRestoreTool(ctx, contexts = postmanTaskContexts, { jobs, worker } = {}) {
   return defineTool({
     name: POSTMAN_TASK_RESTORE_TOOL_NAME,
-    description: 'After a runner FAIL, explicitly discard only uncommitted changes in this Leader’s existing bound temporary task worktree and restore its exact remote branch HEAD; never recreate bindings, grants, or Workers.',
+    description: 'After a runner FAIL, restore only uncommitted changes (localDevelopment preserves a private recovery copy first) in this Leader’s existing bound temporary task worktree and restore its exact remote branch HEAD; never recreate bindings, grants, or Workers.',
     parameters: {}, output: output(),
     async execute(_args, exec) {
       if (!authorized(exec, ctx)) return { status: 'POSTMAN_TASK_CALLER_REJECTED' }
@@ -173,12 +175,17 @@ export function installPostmanWorkerReportObserver(ctx, worker) {
   })
 }
 
-export async function apply(ctx) {
+export async function apply(ctx, config = {}) {
   const registry = await sharedPostmanTaskRegistry(ctx.storageDomain)
-  const contexts = initializePostmanTaskContexts(registry)
+  const contexts = initializePostmanTaskContexts(registry, { localDevelopment: config.localDevelopment === true })
   const currentAttachments = new CurrentAttachmentStore(ctx)
   const coordinator = createPostmanBridgeLaunchCoordinator()
   const grants = createImplementationArtifactGrants()
+  if (config.localDevelopment === true) ctx.get?.('systemPrompt')?.section({
+    name: 'postman-local-development', order: 130,
+    text: ({ scope } = {}) => isTopLevelPostmanSupervisor(scope) ?
+      'Host localDevelopment is explicitly enabled by the user. Within the user task, do not ask for repeated approval of local task preparation, Worker assignment, close/cancel or restore. Close releases an idle session, not a successful task. Addressed cancel needs no approval prompt and never certifies completion. Restore preserves dirty files/index in a private local recovery directory before resetting only the bound temporary worktree. Never bypass secret disclosure consent, overwrite permanent worktrees, or invent execution status.' : '',
+  })
   let boundaries, ptc
   const refreshWorker = id => {
     const agent = ctx.agents.get(id)
@@ -187,7 +194,7 @@ export async function apply(ctx) {
       ptc.refresh(agent)
     }
   }
-  const worker = createPostmanWorkerTools(ctx, grants, postmanTaskContexts, { onBindingChange: refreshWorker })
+  const worker = createPostmanWorkerTools(ctx, grants, postmanTaskContexts, { onBindingChange: refreshWorker, localDevelopment: config.localDevelopment === true })
   const stopContextWatch = contexts.onContextChange(id => {
     postmanInputGrants.releaseStale(ctx.agents.get(id), contexts.get(id))
     worker.refreshLeader(id)

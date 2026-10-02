@@ -34,3 +34,7 @@
     maxBytes: 65536
 - id: tokenledger
   disabled: true
+# Explicit user-requested local development policy, 2026-10-02.
+- id: postman-bridge
+  config:
+    localDevelopment: true
