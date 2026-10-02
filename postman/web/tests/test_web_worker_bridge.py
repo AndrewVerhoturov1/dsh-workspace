@@ -199,6 +199,116 @@ class WebWorkerBridgeTests(unittest.TestCase):
             self.assertTrue(page.closed)
 
 
+    def run_image_observer_sequence(self, snapshots, generating, *, timeout=15000, stable=200):
+        # Submit/artifact boundaries are controlled; both assistant turns use
+        # the real observer, including selector-family and identity migration.
+        from postman.web.tests.test_browser_observer import FakePage, FakeClock, turn
+        events, proofs = [], []
+        chat = "https://chatgpt.com/c/12345678-1234-1234-1234-123456789abc"
+        image_prompt, packaging_prompt = "probe", "package the preceding image"
+        page = FakePage(snapshots, url=chat, generating=generating)
+        page.closed = False
+        page.close = lambda: setattr(page, "closed", True)
+        page.is_closed = lambda: page.closed
+        clock = FakeClock(page)
+        observer_step = []
+        real_observe = bridge_module.browser_observer.observe_next_assistant
+        class Factory:
+            def __enter__(self): self.chromium = self; return self
+            def __exit__(self, *args): pass
+            def connect_over_cdp(self, *_args, **_kwargs): return self
+            @property
+            def contexts(self): return [self]
+            def new_page(self): return page
+        sent = {"ok": True, "code": "PROMPT_SEND_CONFIRMED", "sendState": "PROVEN_SENT",
+                "details": {"chatUrl": chat}}
+        def observe(target, prompt, url, **kwargs):
+            self.assertIs(target, page)
+            self.assertEqual(url, chat)
+            events.append("observe_image" if kwargs.get("image_mode") else "observe_packaging")
+            proof = real_observe(target, prompt, url, **kwargs)
+            proofs.append(proof)
+            observer_step.append(page.step)
+            return proof
+        def followup(target, prompt, url, **kwargs):
+            self.assertIs(target, page)
+            self.assertEqual((prompt, url, kwargs["navigate"]), (packaging_prompt, chat, False))
+            self.assertEqual(proofs[-1]["code"], "ASSISTANT_TURN_COMPLETED")
+            self.assertTrue(proofs[-1]["details"]["assistantIdentityProved"])
+            self.assertFalse(proofs[-1]["details"]["generationActive"])
+            events.append("submit_packaging")
+            page.snapshots = [[turn("user", image_prompt), turn("assistant", "", "image-turn"),
+                               turn("user", packaging_prompt), turn("assistant", "ZIP", "packaging-turn")]]
+            page.generating = [False]
+            page.step = 0
+            return sent
+        with tempfile.TemporaryDirectory() as root:
+            bridge = bridge_module.WebWorkerBridge(root=root, sleep=clock.sleep, monotonic=clock.monotonic)
+            def prepare():
+                self.assertEqual(bridge.read_state(REQ)["state"], bridge_module.IMAGE_TURN_COMPLETED)
+                events.append("image_prepare")
+                return {"task_url": TASK_URL, "prompt": packaging_prompt,
+                        "expected_filename": f"POSTMAN_{REQ}_RESULT.zip", "expected_request": {"requestId": REQ}}
+            with patch.object(bridge_module.browser_submit, "submit_fresh_prompt", side_effect=lambda *_a, **_kw: (events.append("submit_image"), sent)[1]) as first, \
+                 patch.object(bridge_module.browser_submit, "submit_existing_prompt", side_effect=followup) as second, \
+                 patch.object(bridge_module.browser_observer, "observe_next_assistant", side_effect=observe), \
+                 patch.object(bridge_module.browser_observer, "connection_interrupted", return_value=(False, {})), \
+                 patch.object(bridge_module.browser_observer, "additional_processing", return_value=(False, {})), \
+                 patch.object(bridge_module.artifact_detector, "detect_artifact_dom", return_value={"ok": True, "code": "ARTIFACT_FOUND"}), \
+                 patch.object(bridge_module.artifact_download, "download_validated_artifact", side_effect=lambda *_a, **_kw: (events.append("zip_durable"), {"ok": True, "code": "RESULT_DURABLE", "details": {"resultZip": "result.zip", "sha256": "a" * 64}})[1]), \
+                 patch.object(bridge_module.reminder_policy, "submit_reminder", side_effect=AssertionError("no resend")):
+                result = bridge.run_request(REQ, task_url=TASK_URL, prompt=image_prompt,
+                    expected_filename="unused.zip", expected_request={}, image_prepare=prepare,
+                    observer_timeout_ms=timeout, stable_ms=stable, max_reminders=0,
+                    playwright_factory=Factory)
+            self.assertEqual(first.call_count, 1)  # never resend a proven first prompt
+            return result, events, proofs, second.call_count, observer_step
+
+    def test_image_dom_migration_reaches_exactly_one_packaging_send(self):
+        from postman.web.tests.test_browser_observer import image_snapshot
+        result, events, proofs, second_count, steps = self.run_image_observer_sequence(
+            [image_snapshot(count=0), image_snapshot(family="grouped"),
+             image_snapshot(family="grouped"), image_snapshot(family="grouped")],
+            [True, True, False, False])
+        self.assertEqual(result["code"], bridge_module.RESULT_DURABLE, result)
+        self.assertEqual(second_count, 1)
+        self.assertEqual(events, ["submit_image", "observe_image", "image_prepare",
+                                  "submit_packaging", "observe_packaging", "zip_durable"])
+        self.assertEqual(steps[0], 3)
+        self.assertTrue(proofs[0]["details"]["assistantIdentityPromoted"])
+        self.assertEqual(proofs[0]["details"]["assistantImageCount"], 1)
+        self.assertEqual(proofs[1]["code"], "ASSISTANT_TURN_COMPLETED")
+        self.assertEqual(result["details"]["requestId"], REQ)
+        self.assertNotIn("secondRequestId", result["details"])
+
+    def test_image_strong_identity_conflict_never_prepares_or_sends_packaging(self):
+        from postman.web.tests.test_browser_observer import image_snapshot
+        result, events, proofs, count, _ = self.run_image_observer_sequence(
+            [image_snapshot(family="grouped", key="A"), image_snapshot(family="grouped", key="B")],
+            [False, False], stable=0)
+        self.assertEqual(result["code"], bridge_module.POSTMAN_TRANSPORT_FAILED)
+        self.assertEqual(proofs[0]["code"], "CHAT_CORRELATION_LOST")
+        self.assertEqual(proofs[0]["details"]["reason"], "strong_identity_conflict")
+        self.assertEqual(events, ["submit_image", "observe_image"])
+        self.assertEqual(count, 0)
+
+    def test_no_packaging_before_ready_stable_exactly_one_proved_image(self):
+        from postman.web.tests.test_browser_observer import image_snapshot
+        for name, snapshots, active in (
+            ("zero", [image_snapshot(count=0)], [False]),
+            ("active", [image_snapshot()], [True]),
+            ("two", [image_snapshot(count=2)], [False]),
+            ("unstable", [image_snapshot(count=0), image_snapshot(), image_snapshot(count=2)], [False] * 3),
+            ("unproved", [image_snapshot(family="grouped"), image_snapshot()], [False] * 2),
+        ):
+            with self.subTest(case=name):
+                result, events, proofs, count, _ = self.run_image_observer_sequence(
+                    snapshots, active, timeout=6000, stable=3500)
+                self.assertFalse(result["ok"], result)
+                self.assertNotIn("image_prepare", events)
+                self.assertEqual(count, 0)
+                self.assertTrue(all(not p["ok"] for p in proofs))
+
     def test_image_preparatory_restart_never_resends_from_persisted_state(self):
         for state in (bridge_module.ACCEPTED, bridge_module.WEB_STARTING,
                       bridge_module.PROMPT_SENT, bridge_module.WAITING_ASSISTANT,
