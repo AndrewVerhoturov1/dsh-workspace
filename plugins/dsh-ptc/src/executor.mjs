@@ -167,7 +167,7 @@ async function evaluate({ program, language, profile }) {
       let v
       try {v=encodeGuest(h,limits.maxOutputBytes)}
       catch(error) {violation=errorResult('maxOutputBytes',error);throw error}
-      const text=JSON.stringify(v), size=Buffer.byteLength(JSON.stringify(text),'utf8')+(logs?1:0)
+      const text=JSON.stringify(v), size=Buffer.byteLength(text,'utf8')
       if(logs+1>limits.maxLogEntries || bytes+size>limits.maxOutputBytes){violation=errorResult('maxOutputBytes','Output limit exceeded');throw new Error('Output limit exceeded')}
       logs++;bytes+=size
       void send.send(message('log',runId,{text})).catch(fatal)
@@ -198,8 +198,6 @@ async function evaluate({ program, language, profile }) {
       try {final=encodeGuest(state.value,limits.maxMessageBytes)}
       catch(error){return {status:'invalid-output',error:errorResult('invalid-output',error)}}
       finally {state.value.dispose()}
-      if(Buffer.byteLength(JSON.stringify(final),'utf8')+bytes>limits.maxOutputBytes)
-        return {status:'limit-exceeded',error:errorResult('maxOutputBytes','Result and logs share maxOutputBytes; reduce data inside PTC, return compact evidence')}
       return {status:'ok',value:final}
     }
     return {status:'process-error',error:errorResult('closed','Channel closed')}

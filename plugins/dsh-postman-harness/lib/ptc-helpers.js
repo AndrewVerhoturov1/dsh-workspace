@@ -1,9 +1,8 @@
 import { POSTMAN_PTC_SUCCESS_STATUSES } from './postman-bridge-core.js'
 
 const DEFAULT_READ_ALL_MAX_BYTES = 4 * 1024 * 1024
-// Postman returns compact evidence; core/bridge input ceilings stay unchanged.
-export const PTC_MODEL_OUTPUT_MAX_BYTES = 32 * 1024
-const DEFAULT_RESULT_MAX_BYTES = 24 * 1024
+// Leave room for the program's surrounding final JSON below the 512 KiB ceiling.
+const DEFAULT_RESULT_MAX_BYTES = 480 * 1024
 const DEFAULT_PAGE_LIMIT = 2000
 
 const COMMON_HELPERS = String.raw`
@@ -189,17 +188,14 @@ const GREP_HELPERS = `
         (query.include !== undefined && typeof query.include !== 'string'))) {
       throw new TypeError('ptc.grepMany each query must be an object with a string pattern and optional string path/include')
     }
-    const maxTotal = options.max_total_bytes === undefined ? 24576 : positiveInteger(options.max_total_bytes, 'max_total_bytes')
     const results = []
-    let bytes = 2
     for (const query of queries) {
       const result = await tools.grep(query)
       if (!result || typeof result !== 'object' || Array.isArray(result) || !Array.isArray(result.matches)) {
         throw new TypeError('ptc.grepMany expected tools.grep result {matches: Array}; raw tool results are objects, not iterable arrays')
       }
       const item = { query, result }
-      bytes += api.jsonBytes(item) + (results.length ? 1 : 0)
-      if (bytes > maxTotal) throw new Error('ptc.grepMany max_total_bytes exceeded; reduce matches inside PTC, return compact')
+      api.jsonBytes(item) // Validate retained JSON without a new helper-specific byte ceiling.
       results.push(item)
     }
     return results
@@ -228,12 +224,12 @@ export function ptcHelperGuidance(toolNames) {
     'ptc.readMany({files, page_limit?, max_bytes_per_file?, max_chars_per_file?, max_total_bytes?})',
     'ptc.mapTextFiles({files, page_limit?, max_bytes_per_file?, max_chars_per_file?, max_total_bytes?}, mapper)',
   )
-  if (names.has('grep')) helpers.push('ptc.grepMany({queries, max_total_bytes?})')
+  if (names.has('grep')) helpers.push('ptc.grepMany({queries})')
   return 'PTC helpers available: ' + helpers.join(', ') + '. ' +
     'expectStatus accepts either your exact status array or a visible Postman tool name for Host-maintained exact success statuses; unknown statuses still stop. ' +
     'Returns: readAllText -> string; readMany -> Array<{file_path,text}>; mapTextFiles -> Array<mapper JSON>; grepMany -> Array<{query,result:{matches:Array}}> (not a flat match array). ' +
     'Raw tool values are objects: read.lines, glob.paths, grep.matches; do not iterate the whole result. ' +
-    'Full reads default to 4 MiB UTF-8 per file internally. readMany, mapTextFiles and grepMany bound aggregate retained JSON to 24 KiB by default; explicit max_total_bytes allows larger internal data, not larger final output. ' +
-    'Character options remain additional compatibility bounds. Ordinary read line truncation is unrecoverable. Read large internally, prefer mapTextFiles for mechanical reduction, return compact; Postman result plus logs share 32 KiB. ' +
+    'Full reads default to 4 MiB UTF-8 per file internally. readMany and mapTextFiles bound aggregate retained JSON to 480 KiB by default; explicit max_total_bytes allows larger internal data, not larger final output. grepMany has no separate retained-result byte ceiling. ' +
+    'Character options remain additional compatibility bounds. Ordinary read line truncation is unrecoverable. Read large internally, prefer mapTextFiles for mechanical reduction and return compact when possible; needed larger results remain valid up to the standard 512 KiB output limit. Result and aggregate logs have separate budgets. ' +
     'Read once and reuse local text for multiple checks in the same program; reread after write/edit or when freshness is needed. No helper caches files. '
 }

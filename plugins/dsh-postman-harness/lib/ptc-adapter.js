@@ -1,6 +1,6 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { createPtcRuntime, DEFAULT_LIMITS, validatePtcProfile } from 'dsh-ptc'
-import { buildPtcHelperPrelude, ptcHelperGuidance, PTC_MODEL_OUTPUT_MAX_BYTES } from './ptc-helpers.js'
+import { buildPtcHelperPrelude, ptcHelperGuidance } from './ptc-helpers.js'
 import { POSTMAN_PTC_DISCIPLINE } from './ptc-discipline.js'
 import { guardWorkerPtcFilesystem } from './ptc-worktree-boundary.js'
 import { POSTMAN_PTC_ONLY_LEADER_TOOLS, POSTMAN_WORKER_PTC_TOOL_NAMES, POSTMAN_PTC_SUCCESS_STATUSES } from './postman-bridge-core.js'
@@ -10,12 +10,12 @@ export const PILOT_PROFILE = validatePtcProfile({
   schemaVersion: 1, id: 'postman-leader-supervisor', revision: 7,
   tools: [...POSTMAN_PTC_ONLY_LEADER_TOOLS],
   limits: { ...DEFAULT_LIMITS, maxWallMs: 300000, maxToolCalls: 256,
-    quickjsMemoryBytes: 67108864, maxTotalBridgeBytes: 16777216, maxConcurrentToolCalls: 1, maxOutputBytes: PTC_MODEL_OUTPUT_MAX_BYTES },
+    quickjsMemoryBytes: 67108864, maxTotalBridgeBytes: 16777216, maxConcurrentToolCalls: 1 },
 })
 export const WORKER_MUTATION_PROFILE = validatePtcProfile({
   schemaVersion: 1, id: 'postman-worker-mutation', revision: 5,
   tools: [...POSTMAN_WORKER_PTC_TOOL_NAMES],
-  limits: { ...DEFAULT_LIMITS, maxConcurrentToolCalls: 1, maxOutputBytes: PTC_MODEL_OUTPUT_MAX_BYTES },
+  limits: { ...DEFAULT_LIMITS, maxConcurrentToolCalls: 1 },
 })
 const LEADER_REQUIRED = ['read', 'grep']
 const WORKER_REQUIRED = ['read', 'glob', 'grep']
@@ -278,7 +278,7 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
           ...(autoConclude && yieldBlockedReason ? { yieldBlockedReason } : {}),
           status: terminal?.status ?? 'runtime-error', durationMs: Date.now() - startedAt,
           nestedToolCalls: started.size, toolCounts,
-          resultBytes, oversizedResultCandidate: resultBytes > 24 * 1024 || terminal?.error?.code === 'maxOutputBytes',
+          resultBytes, oversizedResultCandidate: resultBytes > 64 * 1024 || terminal?.error?.code === 'maxOutputBytes',
           yieldRequested: args.yield_on_success === true, yieldApplied,
           ...(terminal?.status === 'limit-exceeded' ? { limitCode: terminal.error?.code } : {}),
           underbatchedCandidate: started.size === 1,

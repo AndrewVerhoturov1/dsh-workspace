@@ -114,7 +114,7 @@ test('incomplete, changing or truncated ordinary reads are never presented as fu
 test('actual QuickJS processes multiple >512 KiB Cyrillic files but returns compact mapped evidence', async () => {
   const runtime = createPtcRuntime()
   const text = ('я'.repeat(1000) + '\n').repeat(400) + '# PTC\nWorker'
-  const profile = { schemaVersion: 1, id: 'helper-tests', revision: 1, tools: ['read'], limits: { ...DEFAULT_LIMITS, maxConcurrentToolCalls: 1, maxOutputBytes:32768 } }
+  const profile = { schemaVersion: 1, id: 'helper-tests', revision: 1, tools: ['read'], limits: { ...DEFAULT_LIMITS, maxConcurrentToolCalls: 1 } }
   try {
     const program = buildPtcHelperPrelude(['read']) + `
       const evidence = await ptc.mapTextFiles({files:['a','b'],page_limit:50}, ({file_path,text}) => ({
@@ -129,7 +129,7 @@ test('actual QuickJS processes multiple >512 KiB Cyrillic files but returns comp
     assert.ok(Buffer.byteLength(JSON.stringify(result.value)) < 1024)
     assert.equal(result.effects.completed, 18)
     const guidance = ptcHelperGuidance(['read'])
-    assert.match(guidance, /4 MiB.*24 KiB.*32 KiB/)
+    assert.match(guidance, /4 MiB.*480 KiB.*512 KiB/)
   } finally { await runtime.dispose() }
 })
 
@@ -166,18 +166,43 @@ test('existing helper argument/result shapes fail clearly without iterable guess
   for (const value of [getter,extra, {toJSON:()=>({})}]) assert.throws(()=>ptc.jsonBytes(value),/JSON-compatible/)
 })
 
-test('raw helper budgets include aggregate metadata and escaping; larger internal budgets do not increase output', async () => {
-  const text='я'.repeat(7000), ptc=helper({read:read({a:text,b:text})})
-  await assert.rejects(ptc.readMany({files:['a','b']}),/max_total_bytes/)
-  assert.equal((await ptc.readMany({files:['a','b'],max_total_bytes:40000})).length,2)
-  const grep=helper({grep:async()=>({matches:[{line:'"'.repeat(14000)}]})})
-  await assert.rejects(grep.grepMany({queries:[{pattern:'x'}]}),/max_total_bytes/)
-  assert.equal((await grep.grepMany({queries:[{pattern:'x'}],max_total_bytes:40000})).length,1)
-  const small=helper({grep:async()=>({matches:[]})})
-  const one=await small.grepMany({queries:[{pattern:'x'}]})
-  const exact=small.jsonBytes(one)
-  assert.equal((await small.grepMany({queries:[{pattern:'x'}],max_total_bytes:exact})).length,1)
-  await assert.rejects(small.grepMany({queries:[{pattern:'x'}],max_total_bytes:exact-1}),/max_total_bytes/)
+test('readMany/mapTextFiles restore 480 KiB defaults; grepMany has no separate byte ceiling', async () => {
+  const budget=480*1024, text='я'.repeat(120000), ptc=helper({read:read({a:text,b:text})})
+  const many=await ptc.readMany({files:['a','b']})
+  assert.equal(many.length,2)
+  assert.equal(many[1].text,text)
+  assert.ok(ptc.jsonBytes(many)>400*1024)
+  const overhead=ptc.jsonBytes([{file_path:'edge',text:''}])
+  const edge='x'.repeat(budget-overhead)
+  assert.equal(ptc.jsonBytes(await helper({read:read({edge})}).readMany({files:['edge']})),budget)
+  await assert.rejects(helper({read:read({edge:edge+'x'})}).readMany({files:['edge']}),/max_total_bytes/)
+  await assert.rejects(ptc.readMany({files:['a','b'],max_total_bytes:400000}),/max_total_bytes/)
+  const escaped=helper({read:read({a:'"'.repeat(120000),b:'"'.repeat(120000)})})
+  assert.equal((await escaped.readMany({files:['a','b']})).length,2)
+  const map=helper({read:read({a:'source'})})
+  for (const kib of [20,50,150]) {
+    const reduced=await map.mapTextFiles({files:['a']},()=>({data:'x'.repeat(kib*1024)}))
+    assert.equal(reduced[0].data.length,kib*1024)
+  }
+  const mapOverhead=map.jsonBytes([{data:''}])
+  assert.equal(map.jsonBytes(await map.mapTextFiles({files:['a']},()=>({data:'x'.repeat(budget-mapOverhead)}))),budget)
+  await assert.rejects(map.mapTextFiles({files:['a']},()=>({data:'x'.repeat(budget-mapOverhead+1)})),/max_total_bytes/)
+  const grep=helper({grep:async()=>({matches:[{line:'"'.repeat(140000)}]})})
+  const matches=await grep.grepMany({queries:[{pattern:'x'},{pattern:'y'}]})
+  assert.equal(matches.length,2)
+  assert.ok(grep.jsonBytes(matches)>512*1024) // Internal data remains available for reduction.
+})
+
+test('actual QuickJS readMany retains formerly allowed raw data inside PTC and can return it when needed', async () => {
+  const runtime=createPtcRuntime(), text='я'.repeat(100000)
+  const profile={schemaVersion:1,id:'raw-helper-tests',revision:1,tools:['read'],limits:{...DEFAULT_LIMITS,maxConcurrentToolCalls:1}}
+  try {
+    const program=buildPtcHelperPrelude(['read'])+"return await ptc.readMany({files:['a','b']})"
+    const result=await runtime.run({program,profile,bindings:{read:read({a:text,b:text})}})
+    assert.equal(result.status,'ok',JSON.stringify({status:result.status,error:result.error}))
+    assert.equal(result.value[1].text,text)
+    assert.ok(Buffer.byteLength(JSON.stringify(result.value))>350*1024)
+  } finally {await runtime.dispose()}
 })
 
 test('mapTextFiles catches deeply wrapped full sources without rejecting empty or compact extraction', async () => {

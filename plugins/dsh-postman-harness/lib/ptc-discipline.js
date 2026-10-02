@@ -199,8 +199,8 @@ needed. Helpers do not cache or claim that an external process cannot change fil
 
 mapTextFiles is mechanical reduction, not a raw reader: retaining the original
 full text, including nested arrays/objects and large string wrappers, is rejected.
-Use readMany for raw data INSIDE PTC, then reduce before returning. It is not a way
-to send large complete files to the model.
+Use readMany for raw data inside PTC. Prefer reduction before returning; when the
+model genuinely needs raw data, it may be returned within the standard output limit.
 
 For large text work:
 
@@ -222,11 +222,13 @@ Useful compact results include:
 - concise per-file summaries produced by deterministic extraction;
 - small excerpts that are actually needed by the model.
 
-Postman result and console logs share a 32 KiB UTF-8 JSON ceiling. Existing
-readMany/mapTextFiles/grepMany retained-result defaults are 24 KiB, leaving room for
-outer evidence. Larger max_total_bytes is INTERNAL only. Oversized output stops
-with maxOutputBytes, not a partial-success raw dump/spill. Logs are not an escape
-hatch. Choose needed fields/ranges BEFORE returning; the limit is not a target.
+Postman inherits DEFAULT_LIMITS.maxOutputBytes: 512 KiB for the result and a
+separate 512 KiB aggregate log budget. readMany/mapTextFiles retain up to 480 KiB
+of JSON by default; explicit max_total_bytes permits larger internal data without
+raising the final output limit. grepMany has no separate retained-result byte limit.
+Read large internally and return compact when possible, not at the expense of
+needed evidence: 40, 80 or 150 KiB results are valid within ordinary JSON limits.
+The output limit is a safety ceiling, not a target; do not fill it without need.
 
 ## 9. UTF-8 and result-size discipline
 

@@ -140,14 +140,13 @@ async function execute(state,{profile,bindings,program,language,signal},outstand
       calls.set(call.id,call);queue.push(call);launchQueued();return
     }
     if(data.type==='log') {
-      // Count the retained JSON string, including escaping and array separators.
-      const bytes=Buffer.byteLength(JSON.stringify(data.text),'utf8')+(logs.length?1:0)
-      if(logs.length>=limits.maxLogEntries || logBytes+bytes>limits.maxOutputBytes) {void finish(outcome('limit-exceeded','maxOutputBytes','Result and logs share maxOutputBytes; reduce data inside PTC'));return}
+      const bytes=Buffer.byteLength(data.text,'utf8')
+      if(logs.length>=limits.maxLogEntries || logBytes+bytes>limits.maxOutputBytes) {void finish(outcome('limit-exceeded','maxOutputBytes','Log limit'));return}
       logs.push(data.text);logBytes+=bytes;return
     }
     if(data.type==='done') {
       if(!['ok','syntax-error','runtime-error','invalid-output','invalid-input','cleanup-error','process-error','limit-exceeded','unawaited-calls'].includes(data.status)) throw new ProtocolError('Invalid terminal status')
-      if(data.status==='ok') {boundedJson(data.value,limits); if(Buffer.byteLength(JSON.stringify(data.value),'utf8')+logBytes>limits.maxOutputBytes) {void finish(outcome('limit-exceeded','maxOutputBytes','Result and logs share maxOutputBytes; reduce data inside PTC, return compact evidence'));return}}
+      if(data.status==='ok') {boundedJson(data.value,limits); if(Buffer.byteLength(JSON.stringify(data.value),'utf8')>limits.maxOutputBytes) {void finish(outcome('limit-exceeded','maxOutputBytes','Result limit'));return}}
       const incomplete=[...calls.values()].some(c=>c.state==='running'||c.state==='queued'||c.state==='scheduled')
       const result=data.status==='ok'&&incomplete?outcome('unawaited-calls','incomplete','Program returned with outstanding calls'):data.status==='ok'?{status:'ok',value:data.value}:outcome(data.status,data.error?.code||data.status,data.error?.message||data.status)
       if(data.cleanupError)result.cleanupError=data.cleanupError

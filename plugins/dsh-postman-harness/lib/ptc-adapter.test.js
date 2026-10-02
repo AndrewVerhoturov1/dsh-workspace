@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { ToolRuntime, defineTool } from '@deepseek-ai/dsh-tools'
 import { createScope } from '@deepseek-ai/dsh-scope'
+import { DEFAULT_LIMITS } from 'dsh-ptc'
 import { createPtcAdapter, PILOT_PROFILE, WORKER_MUTATION_PROFILE } from './ptc-adapter.js'
 import { POSTMAN_PTC_DISCIPLINE } from './ptc-discipline.js'
 import { postmanBridgeRestrictionForAgent, isTopLevelPostmanPtcLeader, postmanPtcDirectCallGuard, POSTMAN_PTC_ONLY_LEADER_TOOLS } from './postman-bridge-core.js'
@@ -135,9 +136,9 @@ test('real read canonical JSON above 64 KiB returns a compact summary', async()=
     assert.ok(result.value.value.canonicalBytes>65536)
     assert.equal(result.value.value.lines,48)
     assert.equal(result.value.value.last,48)
-    const oversized=await f.execute(a,"return await ptc.readAllText({file_path:'large.txt',page_limit:4})")
-    assert.equal(oversized.value.status,'limit-exceeded')
-    assert.equal(oversized.value.error.code,'maxOutputBytes')
+    const raw=await f.execute(a,"return await ptc.readAllText({file_path:'large.txt',page_limit:4})")
+    assert.equal(raw.value.status,'ok')
+    assert.equal(raw.value.value.length,48*1500+47)
     const reduced=await f.execute(a,"const text=await ptc.readAllText({file_path:'large.txt',page_limit:4}); return {chars:text.length,lines:text.split('\\n').length}")
     assert.equal(reduced.value.status,'ok',JSON.stringify(reduced.value))
     assert.deepEqual(reduced.value.value,{chars:48*1500+47,lines:48})
@@ -336,7 +337,7 @@ test('PTC-first Leader direct tools fail closed while exceptions and production 
   assert.equal(PILOT_PROFILE.limits.maxMessageBytes, 1048576)
   assert.equal(PILOT_PROFILE.limits.maxValueDepth, 32)
   assert.equal(PILOT_PROFILE.limits.maxValueNodes, 10000)
-  assert.equal(PILOT_PROFILE.limits.maxOutputBytes, 32768)
+  assert.equal(PILOT_PROFILE.limits.maxOutputBytes, DEFAULT_LIMITS.maxOutputBytes)
   assert.equal(PILOT_PROFILE.limits.maxConcurrentToolCalls, 1)
   for (const name of ['ptc_execute', 'skill', 'ask_user_question', 'exit_plan_mode', 'read_image', 'postman_yield'])
     assert.equal(f.ctx.tools.schemas(pilot.a).some(s => s.name === name), true, name)
@@ -542,7 +543,7 @@ test('oversized model-facing PTC result is stopped before presentation, diagnost
   const f=fixture(process.cwd()), {a,diagnostics}=f.agent('large-result')
   a.ctx.tools.restrict(postmanBridgeRestrictionForAgent(a));f.adapter.refresh(a)
   try {
-    const result=await f.execute(a,"return {privateResult:'SECRET_RESULT_'.repeat(6000)}")
+    const result=await f.execute(a,"return {privateResult:'SECRET_RESULT_'.repeat(45000)}")
     assert.equal(result.value.status,'limit-exceeded')
     assert.equal(result.value.error.code,'maxOutputBytes')
     assert.ok(Buffer.byteLength(JSON.stringify(result.value))<2048)
@@ -649,19 +650,33 @@ test('nested conclude marker never conceals a later PTC error or model decision'
   } finally {await f.adapter.dispose()}
 })
 
-test('Postman output cap covers wrapped raw data and logs while large internal input still works', async () => {
-  const f=fixture(process.cwd()), {a}=f.agent('compact-boundary')
-  a.ctx.tools.restrict(postmanBridgeRestrictionForAgent(a));f.adapter.refresh(a)
-  try {
-    assert.equal(PILOT_PROFILE.limits.maxOutputBytes,32768)
-    assert.equal(WORKER_MUTATION_PROFILE.limits.maxOutputBytes,32768)
-    for (const program of ["return {nested:[{raw:'x'.repeat(150000)}]}","console.log('x'.repeat(20000));return 'y'.repeat(20000)"]) {
-      const result=await f.execute(a,program)
-      assert.equal(result.value.status,'limit-exceeded')
-      assert.equal(result.value.error.code,'maxOutputBytes')
-      assert.ok(Buffer.byteLength(JSON.stringify(result.value))<40000)
-    }
-  } finally {await f.adapter.dispose()}
+test('Leader and Worker inherit standard output limits; needed larger JSON and separate logs succeed', async () => {
+  for (const role of ['leader','worker']) {
+    const f=fixture(process.cwd(), {
+      resolveAssignment: (_agent,leaderProfile)=>({profile:role==='leader'?leaderProfile:WORKER_MUTATION_PROFILE,role}),
+      workerContextOf: ()=>({worktree:process.cwd()}),
+    }), {a}=f.agent('standard-output-'+role)
+    f.ctx.tools.register(defineTool({name:'glob',description:'glob fixture',parameters:{},output,execute(){return {paths:[]}}}))
+    f.adapter.refresh(a)
+    try {
+      assert.equal(PILOT_PROFILE.limits.maxOutputBytes,DEFAULT_LIMITS.maxOutputBytes)
+      assert.equal(WORKER_MUTATION_PROFILE.limits.maxOutputBytes,DEFAULT_LIMITS.maxOutputBytes)
+      for (const kib of [20,40,50,150]) {
+        const result=await f.execute(a,"return {nested:[{data:'я'.repeat("+(kib*512)+")}]}")
+        assert.equal(result.value.status,'ok',JSON.stringify({role,kib,status:result.value.status,error:result.value.error}))
+        assert.equal(Buffer.byteLength(result.value.value.nested[0].data),kib*1024)
+      }
+      const both=await f.execute(a,"console.log('x'.repeat(300*1024));return 'y'.repeat(300*1024)")
+      assert.equal(both.value.status,'ok') // Combined size exceeds 512 KiB; budgets remain separate.
+      assert.equal(JSON.parse(both.value.logs[0]).length,300*1024)
+      assert.equal(both.value.value.length,300*1024)
+      for (const program of ["return {nested:[{raw:'x'.repeat(512*1024)}]}","console.log('x'.repeat(512*1024));return null"]) {
+        const result=await f.execute(a,program)
+        assert.equal(result.value.status,'limit-exceeded')
+        assert.equal(result.value.error.code,'maxOutputBytes')
+      }
+    } finally {await f.adapter.dispose()}
+  }
 })
 
 
