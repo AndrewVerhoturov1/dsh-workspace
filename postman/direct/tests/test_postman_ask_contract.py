@@ -35,6 +35,14 @@ class PostmanAskContractTests(unittest.TestCase):
         self.assertIn("PostmanAsk|Postman", self.harness)
         self.assertIn("postman-ask.ps1", self.harness)
 
+    def test_input_zip_preserves_text_result_contract(self):
+        self.assertIn("DIRECT_POSTMAN_ASK_SKILL_VERSION: 4", self.skill)
+        for invariant in ("text-result Direct Postman", "parent Host/Leader", "Bridge child их не изменяет",
+                          "не меняет text result contract", "manual upload/path operations child не выполняет"):
+            self.assertIn(invariant, self.skill)
+        self.assertNotIn("text-only Direct Postman", self.skill)
+        self.assertNotIn("Direct text transport", self.skill)
+
     def test_wrapper_forces_utf8_and_dedicated_bridge(self):
         self.assertIn("postman_ask.py", self.wrapper)
         self.assertEqual(1, self.wrapper.count("'-X' 'utf8'"))

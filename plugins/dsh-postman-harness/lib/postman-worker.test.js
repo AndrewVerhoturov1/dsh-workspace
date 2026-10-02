@@ -459,9 +459,9 @@ test('notify_parent isolates pilot and production Worker/Bridge children by live
   f.tools.dispose()
 })
 
-test('bridge plugin registers all Worker tools and preserves boundary on creation', async () => {
+test('bridge plugin registers all Worker tools and owns one disposable attachment listener', async () => {
   const registrations = new Map()
-  const listeners = new Map()
+  const listeners = new Map(), cleanups = [], subscriptions = new Map()
   const a = leader('A')
   let restriction
   a.ctx = { tools: { restrict(value) { restriction = value; return () => undefined } } }
@@ -474,13 +474,22 @@ test('bridge plugin registers all Worker tools and preserves boundary on creatio
       table: () => ({ get: memory.get, entries: memory.entries, put: memory.create, update: memory.change }),
       close: memory.close,
     } } },
-    effect: () => undefined,
-    on(name, handler) { listeners.set(name, handler) },
+    effect: factory => { cleanups.push(factory()) },
+    on(name, handler) {
+      subscriptions.set(name, (subscriptions.get(name) ?? 0) + 1)
+      listeners.set(name, handler)
+      return () => { if (listeners.get(name) === handler) listeners.delete(name) }
+    },
   }
   await applyBridgePlugin(ctx)
   assert.deepEqual([...registrations.keys()].sort(), ['implementation_artifact_apply', 'notify_parent', 'postman_bridge', 'postman_bridge_status', 'postman_input_files', 'postman_task_prepare', 'postman_task_restore', 'postman_worker', 'postman_worker_interrupt', 'postman_worker_list', 'postman_worker_stop', 'postman_yield', 'ptc_execute'])
   assert.deepEqual(restriction.allow, postmanBridgeRestrictionForAgent(a).allow)
   assert.ok(listeners.has('agent-preset/selected'))
   assert.ok(listeners.has('agent/disposed'))
+  assert.equal(subscriptions.get('session/event'), 1)
+  await registrations.get('postman_input_files').execute({ action: 'stage_current_attachments' }, exec(a))
+  assert.equal(subscriptions.get('session/event'), 1, 'tool calls never subscribe')
+  for (const cleanup of cleanups.reverse()) await cleanup?.()
+  assert.equal(listeners.has('session/event'), false)
 })
 

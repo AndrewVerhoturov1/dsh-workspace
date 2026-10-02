@@ -233,6 +233,25 @@ class TaskPackageTests(unittest.TestCase):
         )
         self.assertNotIn("## Implementation author discipline", content)
 
+    def test_ask_native_zip_is_required_input_but_never_result_zip(self):
+        from postman.text_task_package import render_direct_text_task_manifest
+        descriptor = dict(name="reference.png", repository="AndrewVerhoturov1/dsh-workspace",
+                          commit=BASE_COMMIT, path="tmp/bundle/reference.png", sha256="b" * 64, byte_length=9)
+        content = render_direct_text_task_manifest(
+            request_id=REQ, user_intent="Опиши изображение.",
+            repository=descriptor["repository"], base_commit=BASE_COMMIT,
+            input_files=[descriptor], native_input_request_id=REQ,
+        )
+        self.assertIn(f"native attachment \x60POSTMAN_INPUT_{REQ}.zip\x60", content)
+        self.assertIn("byte transport обязательных inputs этого REQ", content)
+        self.assertIn("Сначала получи и распакуй attached ZIP", content)
+        self.assertIn("это обязательный input текущей задачи", content)
+        self.assertIn("получить/прочитать по Input retrieval contract", content)
+        self.assertIn("не создавай и не возвращай result ZIP/attachment", content)
+        self.assertNotIn("ZIP/attachment не нужен", content)
+        self.assertIn(f"<<<POSTMAN_ASK_BEGIN:{REQ}>>>", content)
+        self.assertIn(f"<<<POSTMAN_ASK_END:{REQ}>>>", content)
+
     def test_external_prompt_contains_only_natural_launch_and_task_link(self):
         prompt = task_package.build_external_prompt(REQ, SKILL_URL, TASK_URL)
         from postman.web.launch_prompts import LAUNCH_PHRASES

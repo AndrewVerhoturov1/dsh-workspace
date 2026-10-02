@@ -17,10 +17,15 @@ class DelegateViaPostmanSkillContract(unittest.TestCase):
         cls.agents = AGENTS.read_text(encoding="utf-8")
 
     def test_production_entrypoint_and_skill_identity(self):
-        self.assertIn("DIRECT_POSTMAN_SKILL_VERSION: 23", self.skill)
+        self.assertIn("DIRECT_POSTMAN_SKILL_VERSION: 24", self.skill)
         self.assertIn("name: delegate-via-postman", self.skill)
         self.assertIn(r"<current workspace>\postman\direct\postman.ps1", self.skill)
         self.assertIn("delegate-via-postman", self.agents)
+
+    def test_trusted_input_zip_is_runtime_owned(self):
+        for invariant in ("Host-authorized descriptors", "не читает local paths",
+                          "не строит input ZIP", "manual browser upload", "Runtime handles input ZIP"):
+            self.assertIn(invariant, self.skill)
 
     def test_exact_current_message_trigger(self):
         pattern = re.compile(r"^\s*@Postman(?:\s|$)")
