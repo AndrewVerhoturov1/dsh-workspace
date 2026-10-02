@@ -194,7 +194,7 @@ _IMAGE_EVIDENCE_JS = r"""
   const images = new Set(node.querySelectorAll('img'));
   if (turn) turn.querySelectorAll('[data-testid="generated-image-gallery"] img')
     .forEach(img => images.add(img));
-  return [...images].filter(img => !img.closest('[data-user-message-bubble], [data-message-author-role="user"]') &&
+  return [...images].filter(img => !img.closest('[data-user-message-bubble], [data-message-author-role="user"], [data-chatgpt-search-unit-key$=":user"], [data-content-search-unit-key$=":user"]') &&
     img.isConnected && img.complete &&
     img.naturalWidth >= 64 && img.naturalHeight >= 64 &&
     img.getClientRects().length > 0 &&

@@ -302,6 +302,77 @@ class TransportDomTests(unittest.TestCase):
         self.assertFalse(rejected['sentAttachmentConfirmed'])
         self.assertEqual(self.page.evaluate('window.sends'), 1)
 
+    def test_live_sibling_user_thumbnail_is_not_generated_result(self):
+        self.set_html(document(turns=group(body=
+            '<div data-chatgpt-search-unit-key="fallback-turn-0:0:user">'
+            '<div role="button" aria-label="Приложение пользователя"><img alt="Приложение пользователя"></div></div>'
+            '<div data-testid="generated-image-gallery"><button data-testid="generated-image-preview">'
+            '<img alt="Сгенерированное изображение 1"></button></div>')))
+        self.page.evaluate('''()=>{const c=document.createElement('canvas');c.width=128;c.height=128;
+            for(const i of document.querySelectorAll('img'))i.src=c.toDataURL();}''')
+        self.page.wait_for_function('[...document.querySelectorAll("img")].every(i=>i.naturalWidth>0)')
+        turn = self.page.locator('[data-turn-key]')
+        self.assertEqual(turn.locator('img').count(), 2)
+        self.assertEqual(observer.count_turn_images(turn), 1)
+
+    def test_live_uploaded_thumbnail_requires_scoped_component_identity(self):
+        name = f'POSTMAN_REFERENCE_{REQ}.png'
+        attachment = SimpleNamespace(name=name, metadata=lambda: {})
+        prompt = 'точный исходный запрос'
+        self.set_html(document(turns='<div data-chatgpt-search-unit-key="fallback-turn-0:0:user" '
+            'data-chatgpt-search-message-ids="message-1"><div role="button" '
+            'aria-label="Приложение пользователя"><img alt="Приложение пользователя"></div>'
+            '<div data-content-search-unit-key="fallback-turn-0:0:user">'
+            '<div data-user-message-bubble="true"><div data-search-result-target>'
+            '<div class="whitespace-pre-wrap">' + prompt + '</div></div></div></div></div>'))
+        self.page.evaluate('''name => {
+            const image = document.querySelector('img');
+            const canvas = document.createElement('canvas');canvas.width=2;canvas.height=2;
+            image.src=canvas.toDataURL();
+            const scope=image.closest('[data-chatgpt-search-unit-key]');
+            const id='sediment://file_fixture1';
+            window.uploadItem={type:'user-message',messageId:'message-1',serverMessageId:'message-1',
+                images:[id],chatGptImageAttachments:[{fileId:'file_fixture1',name,mimeType:'image/png'}]};
+            window.uploadSource={src:id,id,status:'completed'};
+            window.sourceProps={sourceImage:uploadSource,imageSource:'uploaded',chatGptConversationId:'recovery-fixture'};
+            image.__reactFiber$fixture={memoizedProps:{},return:{memoizedProps:sourceProps,
+                return:{memoizedProps:{item:uploadItem,conversationId:'recovery-fixture',pendingAttachment:null},
+                    return:{stateNode:scope}}}};
+        }''', name)
+        self.page.wait_for_function('document.querySelector("img").naturalWidth > 0')
+        def proof(text=prompt):
+            return submit._observe_send_proof(self.page, text, 0, conversation_url=URL,
+                input_attachment=attachment, attachment_id='file_fixture1')
+        turns = submit.collect_user_turn_details(self.page, name)
+        self.assertEqual(turns[0]['text'], prompt)
+        self.assertEqual(turns[0]['attachment']['names'], [name])
+        self.assertTrue(proof()[0], proof())
+        self.assertTrue(proof()[1]['sentAttachmentConfirmed'])
+        for mutation, restore in [
+            ("uploadItem.chatGptImageAttachments[0].name='old.png'", "uploadItem.chatGptImageAttachments[0].name=" + repr(name)),
+            ("uploadSource.id='sediment://file_other'", "uploadSource.id='sediment://file_fixture1'"),
+            ("uploadItem.messageId='message-other'", "uploadItem.messageId='message-1'"),
+            ("sourceProps.imageSource='generated'", "sourceProps.imageSource='uploaded'"),
+            ("sourceProps.chatGptConversationId='other'", "sourceProps.chatGptConversationId='recovery-fixture'"),
+            ("uploadItem.type='assistant-message'", "uploadItem.type='user-message'")]:
+            with self.subTest(mutation=mutation):
+                self.page.evaluate(mutation)
+                self.assertFalse(proof()[0])
+                self.assertFalse(proof()[1]['sentAttachmentConfirmed'])
+                self.page.evaluate(restore)
+        self.assertFalse(proof('другой запрос')[0])
+        image = self.page.locator('img')
+        for target in ('old:user', 'next:user', 'result:assistant'):
+            with self.subTest(target=target):
+                image.evaluate('''(image,key)=>{
+                    const other=document.createElement('div');other.setAttribute('data-chatgpt-search-unit-key',key);
+                    document.querySelector('main').append(other);other.append(image.parentElement);
+                }''', target)
+                self.assertFalse(proof()[0])
+                self.assertFalse(proof()[1]['sentAttachmentConfirmed'])
+                image.evaluate('''image=>document.querySelector('[data-chatgpt-search-message-ids="message-1"]').prepend(image.parentElement)''')
+        self.assertTrue(proof()[0])
+
     def test_truncated_collapsed_payload_stays_unknown_without_resend(self):
         prompt = self.long_image_prompt()
         self.set_html(document(turns=''))

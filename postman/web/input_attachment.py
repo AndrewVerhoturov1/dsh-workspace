@@ -51,6 +51,52 @@ _PROOF_JS = r"""
     if (containers.length !== 1) return {known:containers.length === 0, count:0, names:[], pending:false, error:false, settled:false};
     scope = containers[0];
   }
+  // Live uploaded thumbnails have generic alt text, no DOM filename/file-id.
+  // Read only their own component chain, bounded by this exact user unit.
+  if (options.sent && options.image) {
+    const thumbnails = [...scope.querySelectorAll('[role="button"] > img[alt]')].filter(i =>
+      visible(i) && ['User attachment', 'Приложение пользователя'].includes(i.alt) &&
+      i.parentElement.getAttribute('aria-label') === i.alt);
+    if (thumbnails.length) {
+      const unknown = reason => ({known:false, count:0, names:[], ids:[], reason,
+        pending:false, error:false, settled:false});
+      if (thumbnails.length !== 1 || scope.querySelectorAll('img').length !== 1)
+        return unknown('ambiguous_uploaded_thumbnails');
+      const image = thumbnails[0];
+      const keys = Object.keys(image).filter(k => k.startsWith('__reactFiber$'));
+      if (keys.length !== 1) return unknown('uploaded_metadata_missing');
+      let fiber = image[keys[0]], source = null, item = null, bound = false;
+      const conversationId = location.pathname.split('/').length === 3 && location.pathname.split('/')[1] === 'c' ? location.pathname.split('/')[2] : null;
+      for (let depth = 0; fiber && depth < 64; depth++, fiber = fiber.return) {
+        if (fiber.stateNode === scope) { bound = true; break; }
+        const props = fiber.memoizedProps;
+        if (props?.sourceImage) {
+          if (source || props.imageSource !== 'uploaded' || props.chatGptConversationId !== conversationId)
+            return unknown('uploaded_source_unbound');
+          source = props.sourceImage;
+        }
+        if (props?.item) {
+          if (item || props.conversationId !== conversationId || props.pendingAttachment)
+            return unknown('uploaded_item_unbound');
+          item = props.item;
+        }
+      }
+      const messageIds = scope.getAttribute('data-chatgpt-search-message-ids');
+      const files = item?.chatGptImageAttachments;
+      const file = Array.isArray(files) && files.length === 1 ? files[0] : null;
+      if (!bound || !conversationId || item?.type !== 'user-message' ||
+          !messageIds || item.messageId !== messageIds || item.serverMessageId !== messageIds ||
+          !file || typeof file.fileId !== 'string' || !/^file_[a-zA-Z0-9]+$/.test(file.fileId) ||
+          typeof file.name !== 'string' || !file.mimeType?.startsWith('image/') ||
+          source?.id !== 'sediment://' + file.fileId || source.status !== 'completed' ||
+          !Array.isArray(item.images) || item.images.length !== 1 || item.images[0] !== source.id ||
+          source.src !== source.id)
+        return unknown('uploaded_identity_unproven');
+      return {known:true, count:1, names:[file.name], ids:[file.fileId],
+        pending:false, error:false, settled:image.complete && image.naturalWidth > 0,
+        proofStrategy:'scoped_uploaded_component', userMessageId:messageIds};
+    }
+  }
   const observedPreCards = !options.sent
     ? [...scope.querySelectorAll(':scope > * > *')].filter(e =>
         [...e.querySelectorAll('button[aria-label]')].some(b => /^(Remove|Удалить) /i.test(b.getAttribute('aria-label') || '')))
