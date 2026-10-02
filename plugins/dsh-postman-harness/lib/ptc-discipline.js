@@ -9,7 +9,7 @@
 // This module is deliberately data-only. ptc-adapter.js is responsible for
 // injecting the text into the system prompt of an authorized Postman PTC agent.
 
-export const POSTMAN_PTC_DISCIPLINE_VERSION = 2
+export const POSTMAN_PTC_DISCIPLINE_VERSION = 3
 
 export const POSTMAN_PTC_DISCIPLINE = String.raw`
 # Postman PTC programming discipline
@@ -114,7 +114,9 @@ Preferred pattern:
 3. select the next deterministic action;
 4. continue in the same program.
 
-Use ptc.expectStatus(...) when available. List ALL known outcomes whose next action
+Use ptc.expectStatus(result, visiblePostmanToolName) for the current Host-maintained
+exact success statuses of prepare/Worker/interrupt/Bridge. Do not invent acceptance
+aliases. Use an explicit exact array for other known outcomes whose next action
 is deterministic, including non-success statuses such as
 POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT; branch on them inside PTC rather than
 throwing just because the result is not a success. Unknown outcomes still stop.
@@ -188,9 +190,17 @@ current model context in sufficient detail?" Re-read only if it changed, the pri
 read was truncated/incomplete, the needed range was not read, or previously reduced
 evidence is insufficient for a genuinely new question. Do not create a persistent cache.
 
-mapTextFiles is mechanical reduction, not a raw reader: returning the original full
-text directly or as a direct result field is rejected. Use readMany when complete
-raw files are genuinely needed by the model.
+Inside ONE program, keep a completed read/range in a local variable and perform
+all already planned checks on that value. Do not read/grep/read the same unchanged
+source just to run another check: use split/filter/count on the retained text.
+Use a unique file list when repeated entries serve no purpose. After write/edit,
+a real reread is required for verification; reread also when external freshness is
+needed. Helpers do not cache or claim that an external process cannot change files.
+
+mapTextFiles is mechanical reduction, not a raw reader: retaining the original
+full text, including nested arrays/objects and large string wrappers, is rejected.
+Use readMany for raw data inside PTC. Prefer reduction before returning; when the
+model genuinely needs raw data, it may be returned within the standard output limit.
 
 For large text work:
 
@@ -212,8 +222,13 @@ Useful compact results include:
 - concise per-file summaries produced by deterministic extraction;
 - small excerpts that are actually needed by the model.
 
-The output limit is a safety ceiling, not a target.
-Do not fill it simply because it is available.
+Postman inherits DEFAULT_LIMITS.maxOutputBytes: 512 KiB for the result and a
+separate 512 KiB aggregate log budget. readMany/mapTextFiles retain up to 480 KiB
+of JSON by default; explicit max_total_bytes permits larger internal data without
+raising the final output limit. grepMany has no separate retained-result byte limit.
+Read large internally and return compact when possible, not at the expense of
+needed evidence: 40, 80 or 150 KiB results are valid within ordinary JSON limits.
+The output limit is a safety ceiling, not a target; do not fill it without need.
 
 ## 9. UTF-8 and result-size discipline
 
@@ -341,6 +356,9 @@ Otherwise return control to the model.
 ## 14. No polling loops
 
 Worker reports and Bridge READY are external events.
+A queued event during an accepted dispatch is retained for a NEW turn after the
+external boundary, not a continuation round merely to yield. Real events still
+need model judgement; PTC does not delete or semantically classify notices.
 
 Do NOT keep a PTC process alive polling:
 
@@ -435,7 +453,12 @@ them, or return them to the model/runtime as appropriate.
 
 Tool arguments and program results cross a bounded JSON boundary.
 
-Return explicit JSON-compatible data.
+Return explicit JSON-compatible data. Ordinary tools return objects, not iterable
+arrays: tools.read -> {lines:Array,totalLines}, tools.glob -> {paths:Array},
+tools.grep -> {matches:Array}. readAllText returns a string, readMany an array of
+{file_path,text}, mapTextFiles an array of mapper JSON, grepMany an array of
+{query,result:{matches:Array}}, not a flat match array. Validate unexpected shapes;
+do not guess or silently substitute [] for malformed evidence.
 
 Do not return:
 - functions;
@@ -511,7 +534,7 @@ When ptc.expectStatus is available, prefer:
 
 const prep = ptc.expectStatus(
   await tools.postman_task_prepare({}),
-  ['TASK_CONTEXT_READY', 'POSTMAN_TASK_CONTEXT_ALREADY_READY']
+  'postman_task_prepare'
 )
 
 const worker = ptc.expectStatus(
@@ -520,7 +543,7 @@ const worker = ptc.expectStatus(
     createNew: true,
     label: 'implementation'
   }),
-  ['POSTMAN_WORKER_TASK_ACCEPTED']
+  'postman_worker'
 )
 
 return {
@@ -528,8 +551,12 @@ return {
   workerSessionId: worker.workerSessionId
 }
 
-If expectStatus is not available, perform an equivalent exact allowlist check in the
-program. Do not use fuzzy matching for protocol statuses.
+The tool-name form uses only currently visible tools and shares the Host gate's
+exact success table. Worker interrupt is POSTMAN_WORKER_INTERRUPT_TASK_ACCEPTED,
+not POSTMAN_WORKER_INTERRUPT_ACCEPTED; Bridge is POSTMAN_BRIDGE_ACCEPTED. An explicit
+exact array remains supported for deterministic known non-success branches.
+If expectStatus is not available, perform an equivalent exact allowlist check.
+Do not use fuzzy matching for protocol statuses.
 
 ## 25. Canonical large-read pattern
 
