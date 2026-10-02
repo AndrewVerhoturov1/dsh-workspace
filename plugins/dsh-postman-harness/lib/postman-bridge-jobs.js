@@ -373,11 +373,16 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
           finishedAt: new Date().toISOString(), synchronization: operation.synchronization === 'pending' ? 'busy' : operation.synchronization ?? 'busy',
           grantDiagnostic: operation.grantDiagnostic, controller: new AbortController() }
         jobs.set(bridgeJobId, job)
+        // Synchronization is durable; the grant Map is not. Recheck the exact
+        // trusted ZIP once, sharing this attempt with overlapping status reads.
+        if (job.synchronization === 'synchronized' && !job.grantDiagnostic &&
+            terminal.result?.code === 'RESULT_DURABLE') job.grantRecovery = registerGrant(job)
       } else return operation
         ? { status: 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN', bridgeJobId, state: 'INTERRUPTED' }
         : { status: 'POSTMAN_BRIDGE_JOB_NOT_FOUND' }
     }
     if (job.parentSessionId !== parent.id) return { status: 'POSTMAN_BRIDGE_JOB_NOT_FOUND' }
+    if (job.grantRecovery) await job.grantRecovery
     if (retrySync && job.finishedAt && job.trustedTerminal?.status === 'POSTMAN_BRIDGE_TERMINAL' &&
         (job.synchronization === 'busy' || job.synchronization === 'pending' ||
           job.grantDiagnostic && job.trustedTerminal.result?.code === 'RESULT_DURABLE')) {
