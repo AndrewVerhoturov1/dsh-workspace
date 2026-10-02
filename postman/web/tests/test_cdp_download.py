@@ -14,6 +14,27 @@ import cdp_download
 
 
 class CdpDownloadTests(unittest.TestCase):
+    def test_windows_artifacts_inherit_acl_and_cleanup_after_error(self):
+        # Outside TemporaryDirectory: its protected 0o700 ACL is the regression.
+        with patch.object(cdp_download.sys, "platform", "win32"):
+            with patch.object(Path, "mkdir", autospec=True, wraps=Path.mkdir) as mkdir, \
+                 patch.object(cdp_download.shutil, "rmtree") as cleanup:
+                with self.assertRaisesRegex(RuntimeError, "download failure"):
+                    with cdp_download.temporary_artifacts_dir() as name:
+                        self.assertTrue(Path(name).name.startswith("postman-cdp-"))
+                        raise RuntimeError("download failure")
+                mkdir.assert_called_once_with(Path(name), mode=0o777)
+                cleanup.assert_called_once_with(Path(name))
+
+    def test_artifacts_are_unique_and_removed_after_use(self):
+        with cdp_download.temporary_artifacts_dir() as first:
+            with cdp_download.temporary_artifacts_dir() as second:
+                self.assertNotEqual(first, second)
+                (Path(first) / "download").write_bytes(b"artifact")
+                self.assertTrue(Path(second).is_dir())
+            self.assertFalse(Path(second).exists())
+        self.assertFalse(Path(first).exists())
+
     def test_three_request_bodies_can_overlap_but_cdp_mutations_cannot(self):
         child = '''
 import sys
