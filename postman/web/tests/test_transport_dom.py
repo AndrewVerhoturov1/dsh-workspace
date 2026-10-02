@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from playwright.sync_api import Locator, sync_playwright
@@ -78,6 +79,180 @@ class TransportDomTests(unittest.TestCase):
             self.page.close()
     def set_html(self, text):
         self.page.set_content(text)
+
+    def test_collapsed_modern_bubble_reads_only_long_semantic_payload(self):
+        prompt = self.long_image_prompt()
+        self.assertGreater(len(prompt), 2048)
+        for toggle in ('Показать ещё', 'Show more', '任意のラベル'):
+            with self.subTest(toggle=toggle):
+                payload = ''.join('<p>' + html.escape(line) + '</p>' for line in prompt.split('\n'))
+                self.set_html(document(turns='<div data-user-message-bubble="true">'
+                    '<div data-testid="collapsible-user-message-content" style="max-height:80px;overflow:hidden">'
+                    + payload + '</div><button>…\n' + toggle + '</button></div>'))
+                bubble = self.page.locator('[data-user-message-bubble="true"]')
+                # Playwright's chained CSS locator finds descendants, not the root itself.
+                self.assertEqual(bubble.locator('[data-user-message-bubble="true"]').count(), 0)
+                self.assertIsNone(bubble.get_attribute('data-message-author-role'))
+                semantic, selector = submit.find_user_message_content(bubble)
+                self.assertEqual(selector, '[data-testid="collapsible-user-message-content"]')
+                text = submit.read_semantic_message_text(semantic)
+                self.assertEqual(text, prompt)
+                self.assertEqual(len(text), len(prompt))
+                self.assertEqual(submit.prompt_sha256(text), submit.prompt_sha256(prompt))
+                self.assertNotIn(toggle, text)
+                self.assertNotEqual(submit.read_semantic_message_text(bubble), prompt)
+                ok, proof = submit._observe_send_proof(self.page, prompt, 0, conversation_url=URL)
+                self.assertTrue(ok, proof)
+                self.assertTrue(proof['exactUserTurn'])
+                self.assertTrue(proof['userTurnCorrelated'])
+                self.assertEqual(proof['userTurnCorrelationMode'], 'exact')
+                self.assertEqual(proof['userTurnTextSha256'], submit.prompt_sha256(prompt))
+        # UI-looking words inside the payload remain user text, not a blacklist.
+        literal = 'Пользователь написал: Показать ещё, Show more и …'
+        self.set_html(document(turns='<div data-user-message-bubble="true">'
+            '<div data-testid="collapsible-user-message-content">' + literal
+            + '</div><button>Показать ещё</button></div>'))
+        self.assertEqual(submit.collect_user_turn_texts(self.page), [literal])
+
+    @staticmethod
+    def long_image_prompt():
+        return '\n'.join([
+            f'POSTMAN_REQUEST_ID: {REQ}', '## Input files', '### image.png',
+            'repository: https://example.test/input-fixture', 'commit: ' + 'a' * 40,
+            'raw_url: https://example.test/image.png', 'Сгенерируй иллюстрацию по входному изображению.',
+            *[f'{i}. Сохрани композицию, мягкий свет, естественные цвета и детали исходного изображения.'
+              for i in range(1, 31)], 'Сделай ровно одно изображение.',
+        ])
+
+    def test_user_container_fallback_and_controls_remain_fail_closed(self):
+        for attrs in ('data-user-message-bubble="true"', 'data-message-author-role="user"'):
+            with self.subTest(attrs=attrs, case='plain'):
+                self.set_html(document(turns=f'<div {attrs}>{html.escape(PROMPT)}</div>'))
+                self.assertEqual(submit.collect_user_turn_texts(self.page), [PROMPT])
+                self.assertTrue(submit._observe_send_proof(self.page, PROMPT, 0)[0])
+            for control in ('<button>Показать ещё</button>', '<span role="button">Show more</span>',
+                            '<span data-collapsed="true">…</span>'):
+                with self.subTest(attrs=attrs, control=control):
+                    self.set_html(document(turns=f'<div {attrs}>{html.escape(PROMPT)}{control}</div>'))
+                    turn = self.page.locator('main > div')
+                    self.assertEqual(submit.find_user_message_content(turn), (None, None))
+                    self.assertEqual(submit.collect_user_turn_texts(self.page), [''])
+                    ok, proof = submit._observe_send_proof(self.page, PROMPT, 0)
+                    self.assertFalse(ok)
+                    self.assertFalse(proof['exactUserTurn'])
+                    self.assertFalse(proof['userTurnCorrelated'])
+            with self.subTest(attrs=attrs, case='dedicated payload'):
+                self.set_html(document(turns=f'<div {attrs}>'
+                    '<div data-testid="collapsible-user-message-content" hidden>hidden payload</div>'
+                    '<div data-testid="collapsible-user-message-content">' + html.escape(PROMPT)
+                    + '</div><button>Show more</button></div>'))
+                self.assertEqual(submit.collect_user_turn_texts(self.page), [PROMPT])
+                self.assertTrue(submit._observe_send_proof(self.page, PROMPT, 0)[0])
+
+    def test_long_collapsed_image_send_proves_exact_text_and_sibling_attachment(self):
+        prompt = self.long_image_prompt()
+        name = f'POSTMAN_INPUT_{REQ}.zip'
+        attachment = SimpleNamespace(name=name, metadata=lambda: {'requestId': REQ, 'displayName': name})
+        self.set_html('<main></main><form>' + COMPOSER
+            + '<div data-composer-attachments><div data-testid="file-upload-preview" '
+              'data-file-id="input-1" data-upload-state="ready" data-filename="' + name + '">'
+              '<button type="button">input image bundle</button></div></div></form>'
+              '<button data-testid="send-button">Send</button>')
+        self.page.evaluate("history.replaceState(null, '', '/')")
+        self.page.evaluate(r'''() => {
+            document.querySelector('[data-testid="send-button"]').onclick = () => {
+                const composer = document.querySelector('#prompt-textarea');
+                const turn = document.createElement('div');
+                turn.setAttribute('data-content-search-unit-key', 'image-fixture:user');
+                const bubble = document.createElement('div');
+                bubble.setAttribute('data-user-message-bubble', 'true');
+                const payload = document.createElement('div');
+                payload.setAttribute('data-testid', 'collapsible-user-message-content');
+                payload.style.cssText = 'max-height:80px;overflow:hidden';
+                payload.innerHTML = composer.innerHTML;
+                const toggle = document.createElement('button');
+                toggle.textContent = '…\nПоказать ещё';
+                bubble.append(payload, toggle);
+                turn.append(document.querySelector('[data-testid="file-upload-preview"]'), bubble);
+                document.querySelector('main').append(turn);
+                composer.innerHTML = '';
+                history.replaceState(null, '', '/c/recovery-fixture');
+                window.sends = (window.sends || 0) + 1;
+            };
+        }''')
+        self.assertEqual(submit.collect_user_turn_details(self.page), [])
+        composer, _ = submit.find_composer(self.page)
+        inserted = submit.insert_prompt(self.page, composer, prompt, timeout_ms=1000)
+        self.assertTrue(inserted['ok'], inserted)
+        self.assertEqual(inserted['details']['observedTextLength'], len(prompt))
+        self.assertEqual(inserted['details']['observedTextSha256'], submit.prompt_sha256(prompt))
+        guard = submit.SendGuard()
+        result = submit.submit_once(self.page, composer, prompt, guard, timeout_ms=1000,
+            input_attachment=attachment, attachment_id='input-1')
+        self.assertTrue(result['ok'], result)
+        self.assertEqual(result['code'], submit.PROMPT_SEND_CONFIRMED)
+        self.assertEqual(result['sendState'], submit.SEND_PROVEN_SENT)
+        self.assertEqual(self.page.evaluate('window.sends'), 1)
+        proof = result['details']
+        self.assertEqual((proof['userTurnCountBefore'], proof['userTurnCountNow']), (0, 1))
+        for key in ('exactUserTurn', 'userTurnCorrelated', 'composerEmpty', 'chatUrlBound', 'sentAttachmentConfirmed'):
+            self.assertTrue(proof[key], proof)
+        self.assertEqual(proof['userTurnCorrelationMode'], 'exact')
+        self.assertEqual(proof['userTurnTextLength'], len(prompt))
+        self.assertEqual(proof['userTurnTextSha256'], submit.prompt_sha256(prompt))
+        self.assertEqual(proof['userTurnSemanticSelector'], '[data-testid="collapsible-user-message-content"]')
+        self.assertEqual(proof['sentAttachment']['names'], [name])
+        self.assertEqual(proof['sentAttachment']['ids'], ['input-1'])
+        self.assertEqual(self.page.locator('[data-user-message-bubble] [data-testid="file-upload-preview"]').count(), 0)
+        # Exact text does not excuse a different file or borrow a previous turn's card.
+        card = self.page.locator('[data-testid="file-upload-preview"]')
+        for attr, value in (('data-filename', 'wrong.zip'), ('data-file-id', 'wrong-id')):
+            card.evaluate('(el, pair) => el.setAttribute(pair[0], pair[1])', [attr, value])
+            ok, rejected = submit._observe_send_proof(self.page, prompt, 0,
+                input_attachment=attachment, attachment_id='input-1', conversation_url=URL)
+            self.assertFalse(ok)
+            self.assertTrue(rejected['exactUserTurn'])
+            self.assertFalse(rejected['sentAttachmentConfirmed'])
+            card.evaluate('(el, pair) => el.setAttribute(pair[0], pair[1])',
+                [attr, name if attr == 'data-filename' else 'input-1'])
+        card.evaluate('''el => {
+            const previous = document.createElement('div');
+            previous.setAttribute('data-content-search-unit-key', 'previous:user');
+            document.querySelector('main').prepend(previous); previous.append(el);
+        }''')
+        ok, rejected = submit._observe_send_proof(self.page, prompt, 0,
+            input_attachment=attachment, attachment_id='input-1', conversation_url=URL)
+        self.assertFalse(ok)
+        self.assertTrue(rejected['exactUserTurn'])
+        self.assertFalse(rejected['sentAttachmentConfirmed'])
+        self.assertEqual(self.page.evaluate('window.sends'), 1)
+
+    def test_truncated_collapsed_payload_stays_unknown_without_resend(self):
+        prompt = self.long_image_prompt()
+        self.set_html(document(turns=''))
+        self.page.locator('[data-testid="send-button"]').evaluate(r'''button => {
+            button.onclick = () => {
+                const composer = document.querySelector('#prompt-textarea');
+                const bubble = document.createElement('div'); bubble.setAttribute('data-user-message-bubble', 'true');
+                const payload = document.createElement('div'); payload.setAttribute('data-testid', 'collapsible-user-message-content');
+                payload.textContent = composer.textContent.slice(0, 160);
+                const toggle = document.createElement('button'); toggle.textContent = 'Show more';
+                bubble.append(payload, toggle); document.querySelector('main').append(bubble);
+                composer.innerHTML = ''; window.sends = (window.sends || 0) + 1;
+            };
+        }''')
+        composer, _ = submit.find_composer(self.page)
+        self.assertTrue(submit.insert_prompt(self.page, composer, prompt, timeout_ms=1000)['ok'])
+        guard = submit.SendGuard()
+        result = submit.submit_once(self.page, composer, prompt, guard, timeout_ms=0)
+        self.assertEqual(result['code'], submit.PROMPT_SEND_UNKNOWN)
+        self.assertEqual(result['sendState'], submit.SEND_UNKNOWN)
+        self.assertFalse(result['details']['exactUserTurn'])
+        self.assertFalse(result['details']['userTurnCorrelated'])
+        self.assertEqual(result['details']['userTurnCorrelationMode'], 'none')
+        blocked = submit.submit_once(self.page, composer, prompt, guard, timeout_ms=0)
+        self.assertEqual(blocked['code'], submit.PROMPT_RESEND_BLOCKED)
+        self.assertEqual(self.page.evaluate('window.sends'), 1)
 
     def test_connection_headline_without_subtitle_inside_modern_turn(self):
         for headline in ('Соединение прервано', 'CONNECTION  interrupted!', 'Connection interrupted. Новый подзаголовок'):
