@@ -193,7 +193,8 @@ _IMAGE_EVIDENCE_JS = r"""
   const images = new Set(node.querySelectorAll('img'));
   if (turn) turn.querySelectorAll('[data-testid="generated-image-gallery"] img')
     .forEach(img => images.add(img));
-  return [...images].filter(img => img.isConnected && img.complete &&
+  return [...images].filter(img => !img.closest('[data-user-message-bubble], [data-message-author-role="user"]') &&
+    img.isConnected && img.complete &&
     img.naturalWidth >= 64 && img.naturalHeight >= 64 &&
     img.getClientRects().length > 0 &&
     getComputedStyle(img).visibility !== 'hidden').length;
@@ -209,7 +210,44 @@ def count_turn_images(turn: Any) -> int:
         return 0
 
 
-def snapshot_turns(page: Any, *, image_mode: bool = False) -> tuple[list[dict[str, Any]], str]:
+_ASSISTANT_IDENTITY_JS = r"""
+(node) => {
+  // Ancestors are limited to this response's semantic turn, never main/body.
+  const group = node.closest('[data-turn-key]');
+  const contentTurn = node.closest('[data-content-search-turn-key]');
+  const keys = new Set();
+  if (contentTurn) keys.add(contentTurn.getAttribute('data-content-search-turn-key'));
+  node.querySelectorAll('[data-content-search-turn-key]').forEach(el => {
+    // Do not pin user-only units or transient analysis/commentary message ids.
+    if (el.matches('[data-message-author-role="user"], [data-user-message-bubble]') ||
+        el.querySelector('[data-message-author-role="user"], [data-user-message-bubble]')) return;
+    keys.add(el.getAttribute('data-content-search-turn-key'));
+  });
+  keys.delete(''); keys.delete(null);
+  // A grouped response can contain several internal assistant units. Their
+  // message ids are not a stable response id; only direct role/message nodes
+  // outside that grouped representation provide this existing identity.
+  const message = !group && node.matches('[data-message-author-role="assistant"], [data-chatgpt-selection-message-id]') ? node : null;
+  return {groupKey: group?.getAttribute('data-turn-key') || '',
+    contentSearchTurnKey: keys.size === 1 ? [...keys][0] : '',
+    assistantMessageId: message?.getAttribute('data-chatgpt-selection-message-id') || message?.getAttribute('data-message-id') || '',
+    identityAmbiguous: keys.size > 1};
+}
+"""
+
+
+def assistant_identity_evidence(turn: Any) -> dict[str, Any]:
+    """Read only identity exposed by the scoped assistant/turn DOM."""
+    try:
+        evidence = turn.evaluate(_ASSISTANT_IDENTITY_JS)
+        return evidence if isinstance(evidence, dict) else {}
+    except Exception:
+        return {}
+
+
+def snapshot_turns(page: Any, *, image_mode: bool = False,
+                   expected_prompt: str | None = None,
+                   anchor_binding: dict[str, Any] | None = None) -> tuple[list[dict[str, Any]], str]:
     """Return ordered conversation turns from one selector family only.
 
     The first selector family that yields turns wins. This avoids double
@@ -236,8 +274,16 @@ def snapshot_turns(page: Any, *, image_mode: bool = False) -> tuple[list[dict[st
                         turns.append({'index': len(turns), 'nodeIndex': group_index,
                                       'role': 'assistant', 'text': str(evidence.get('finalAnswerText') or ''),
                                       'groupKey': key, 'testId': key,
-                                      'imageCount': count_turn_images(group) if image_mode else 0})
-                if turns and (not image_mode or any(t.get('role') == 'assistant' and t.get('imageCount', 0) for t in turns)):
+                                      'imageCount': count_turn_images(group) if image_mode else 0,
+                                      **assistant_identity_evidence(group)})
+                has_assistant = any(t.get('role') == 'assistant' for t in turns)
+                if image_mode and expected_prompt is not None:
+                    # An older group's assistant must not hide the current
+                    # image-only gallery, available only in fallback markup.
+                    current = correlate_next_assistant(
+                        turns, expected_prompt, anchor_binding=anchor_binding)
+                    has_assistant = current["ok"] or current["code"] == CHAT_CORRELATION_LOST
+                if turns and (not image_mode or has_assistant):
                     return turns, selector
             except Exception:
                 pass
@@ -260,8 +306,12 @@ def snapshot_turns(page: Any, *, image_mode: bool = False) -> tuple[list[dict[st
                     "text": extract_turn_text(node),
                     "testId": _get_attribute(node, "data-testid"),
                 }
-                if image_mode and role == "assistant":
-                    entry["imageCount"] = count_turn_images(node)
+                if role == "user":
+                    entry["groupKey"] = assistant_identity_evidence(_turn_message_node(node)).get("groupKey", "")
+                if role == "assistant":
+                    entry.update(assistant_identity_evidence(_turn_message_node(node)))
+                    if image_mode:
+                        entry["imageCount"] = count_turn_images(node)
                 turns.append(entry)
             return turns, selector
         except Exception:
@@ -458,7 +508,8 @@ def inspect_answer_phase(page: Any, expected_prompt: str, expected_chat_url: str
     if details["chatUrl"] != expected_chat_url or not submit.is_bound_chat_url(expected_chat_url):
         details["phaseSource"] = "chat_correlation_lost"
         return details
-    turns, selector = snapshot_turns(page, image_mode=image_mode)
+    turns, selector = snapshot_turns(page, image_mode=image_mode, expected_prompt=expected_prompt,
+                                         anchor_binding=anchor_binding)
     correlation = (correlate_next_assistant(turns, expected_prompt, anchor_binding=anchor_binding)
                    if anchor_binding is not None else correlate_next_assistant(turns, expected_prompt))
     anchor = correlation.get("anchorIndex")
@@ -632,6 +683,61 @@ def correlate_next_assistant(
     }
 
 
+class AssistantIdentityTracker:
+    """Keep response keys by namespace; DOM-family ids are only weak proof.
+
+    Call only after exact URL/anchor/immediately-next response correlation.
+    A missing pinned key never silently rebinds the response to a weak id.
+    """
+
+    def __init__(self) -> None:
+        self.strong: dict[str, str] = {}
+        self.pending_strong: dict[str, str] = {}
+        self.weak: tuple[str, int, str] | None = None
+        self.promoted = False
+
+    def observe(self, assistant: dict[str, Any], selector: str,
+                index: int) -> tuple[bool, str]:
+        strong = {key: str(assistant[key]) for key in
+                  ("groupKey", "contentSearchTurnKey", "assistantMessageId")
+                  if assistant.get(key)}
+        if assistant.get("identityAmbiguous"):
+            # Multiple internal content units are not a response identity.
+            strong.pop("contentSearchTurnKey", None)
+        if any(key in self.strong and self.strong[key] != value
+               for key, value in strong.items()):
+            return False, "strong_identity_conflict"
+        if assistant.get("identityAmbiguous") and not (
+                strong.get("groupKey") and strong["groupKey"] == self.strong.get("groupKey")):
+            return False, "assistant_identity_ambiguous"
+        weak = (selector, index, str(assistant.get("testId") or ""))
+        if self.strong:
+            if not self.strong.keys() & strong.keys():
+                # Repeated new-namespace evidence confirms semantic hydration;
+                # changed/missing candidates restart confirmation, never rebind.
+                if not strong or strong != self.pending_strong:
+                    self.pending_strong = strong
+                    return False, "identity_temporarily_unproved"
+                self.strong.update(strong)
+                self.pending_strong = {}
+                self.promoted = True
+                return True, "identity_promoted"
+            self.pending_strong = {}
+            self.strong.update(strong)
+            return True, ""
+        if self.weak and self.weak[0] == selector and self.weak != weak:
+            return False, "weak_identity_changed"
+        if strong:
+            self.promoted = self.weak is not None
+            self.strong.update(strong)
+            return True, "identity_promoted" if self.promoted else ""
+        if self.weak is None:
+            self.weak = weak
+        elif self.weak[0] != selector:
+            return False, "identity_temporarily_unproved"
+        return True, ""
+
+
 class AssistantLifecycleTracker:
     def __init__(self, *, stable_ms: int = DEFAULT_STABLE_MS) -> None:
         self.stable_ms = max(int(stable_ms), 0)
@@ -678,7 +784,7 @@ class AssistantLifecycleTracker:
         stable_for = 0.0 if self.stable_since_ms is None else now_ms - self.stable_since_ms
         if (
             not generating
-            and (images > 0 if image_mode else text != "")
+            and (images == 1 if image_mode else text != "")
             and self.stable_since_ms is not None
             and stable_for >= self.stable_ms
         ):
@@ -748,7 +854,8 @@ def observe_next_assistant(
     deadline = monotonic() + max(timeout_ms, 0) / 1000.0
     last_code = ASSISTANT_NOT_STARTED
     last_details: dict[str, Any] = {}
-    assistant_identity: tuple[int, str] | None = None
+    identity = AssistantIdentityTracker()
+    image_anchor: tuple[str, ...] | None = None
 
     while True:
         current_url = str(getattr(page, "url", "") or "")
@@ -793,7 +900,8 @@ def observe_next_assistant(
                 return _result(ASSISTANT_TURN_TIMEOUT, ok=False, transitions=tracker.transitions, recoverable=True, details=phase)
             sleep(min(max(poll_ms, 1) / 1000.0, max(deadline - monotonic(), 0.0)))
             continue
-        turns, selector = snapshot_turns(page, image_mode=image_mode)
+        turns, selector = snapshot_turns(page, image_mode=image_mode, expected_prompt=expected_prompt,
+                                         anchor_binding=anchor_binding)
         correlation = (correlate_next_assistant(turns, expected_prompt, anchor_binding=anchor_binding)
                    if anchor_binding is not None else correlate_next_assistant(turns, expected_prompt))
         last_code = correlation["code"]
@@ -814,6 +922,8 @@ def observe_next_assistant(
                 recoverable=True,
                 details=last_details,
             )
+        if image_mode and not correlation["ok"]:
+            tracker.stable_since_ms = None
         if correlation["code"] == ASSISTANT_STATE_UNKNOWN:
             # A new ChatGPT turn container can appear before its semantic
             # data-message-author-role is hydrated. Unknown is therefore a
@@ -824,19 +934,33 @@ def observe_next_assistant(
 
         if correlation["ok"]:
             assistant = correlation["assistant"]
-            identity = (("group", assistant["groupKey"]) if assistant.get("groupKey")
-                        else (correlation["assistantIndex"], assistant.get("testId", "")))
-            if assistant_identity is None:
-                assistant_identity = identity
-            elif identity != assistant_identity:
-                last_details["reason"] = "assistant_turn_identity_changed"
-                return _result(
-                    CHAT_CORRELATION_LOST,
-                    ok=False,
-                    transitions=tracker.transitions,
-                    recoverable=True,
-                    details=last_details,
-                )
+            anchor_index = correlation["anchorIndex"]
+            if image_mode:
+                # Selector migration may renumber assistant nodes, but must not
+                # select a later duplicate prompt or a response to another user.
+                anchor = tuple(text_sha256(t.get("text", "")) for t in turns[:anchor_index + 1]
+                               if t.get("role") == "user")
+                anchor_group = turns[anchor_index].get("groupKey")
+                if ((image_anchor is not None and anchor != image_anchor)
+                        or any(t.get("role") == "user" for t in turns[anchor_index + 1:])
+                        or (anchor_group and assistant.get("groupKey") != anchor_group)):
+                    last_details["reason"] = "image_user_anchor_relation_changed"
+                    return _result(CHAT_CORRELATION_LOST, ok=False,
+                                   transitions=tracker.transitions, recoverable=True, details=last_details)
+                image_anchor = anchor
+            identity_proved, identity_reason = identity.observe(assistant, selector, correlation["assistantIndex"])
+            last_details.update(assistantIdentityMode="strong" if identity.strong else "weak",
+                                assistantIdentityPromoted=identity.promoted,
+                                assistantIdentityProved=identity_proved)
+            if identity_reason in {"strong_identity_conflict", "weak_identity_changed", "assistant_identity_ambiguous"}:
+                last_details["reason"] = identity_reason
+                return _result(CHAT_CORRELATION_LOST, ok=False,
+                               transitions=tracker.transitions, recoverable=True, details=last_details)
+            if identity_reason or not identity_proved:
+                # Promotion and proof gaps require a new uninterrupted window.
+                tracker.stable_since_ms = None
+            if not identity_proved:
+                last_details["reason"] = identity_reason
 
             active, control = generation_active(page)
             text = _normalize_text((phase.get("finalAnswerText", assistant.get("text", ""))
@@ -845,7 +969,7 @@ def observe_next_assistant(
             now_ms = monotonic() * 1000.0
             images = int(assistant.get("imageCount", 0)) if image_mode else 0
             complete = tracker.observe(
-                text, generating=active or (not image_mode and phase["phase"] not in {FINAL_ANSWER_STARTED, FINAL_ANSWER_COMPLETED}), now_ms=now_ms,
+                text, generating=active or not identity_proved or (not image_mode and phase["phase"] not in {FINAL_ANSWER_STARTED, FINAL_ANSWER_COMPLETED}), now_ms=now_ms,
                 image_count=images, image_mode=image_mode,
             )
             if image_mode:
