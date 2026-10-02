@@ -34,6 +34,8 @@ export class CurrentAttachmentStore {
   constructor(ctx) {
     this.ctx = ctx
     this.records = new Map()
+    // Process-local ordinals are never reused across messages/sessions in this store.
+    this.nextSelectionId = 1n
     this.stop = ctx.on('session/event', (session, event) => this.capture(session, event))
   }
   capture(session, event) {
@@ -45,7 +47,8 @@ export class CurrentAttachmentStore {
       // Installed DSH supports ImageBlock + ctx.attachments.readImage only.
       if (block?.type !== 'image' || !block.attachment) continue
       const ref = block.attachment
-      attachments.push(Object.freeze({ attachmentId: ref.attachmentId, mediaType: ref.mediaType,
+      attachments.push(Object.freeze({ selectionId: String(this.nextSelectionId++), ref,
+        attachmentId: ref.attachmentId, mediaType: ref.mediaType,
         bytes: ref.bytes, width: ref.width, height: ref.height, ...(ref.name !== undefined ? { name: ref.name } : {}) }))
     }
     this.records.set(session.id, Object.freeze({ session, attachments: Object.freeze(attachments) }))
@@ -217,7 +220,7 @@ export function createPostmanInputFilesTool(ctx, contexts, { grants = postmanInp
       commit: { type: 'string', description: 'Exact existing GitHub commit.' },
       path: { type: 'string', description: 'Repository-relative path of the existing file.' },
       paths: { type: 'array', items: { type: 'string' }, description: 'Explicit absolute paths to selected regular files.' },
-      attachmentIds: { type: 'array', items: { type: 'string' }, description: 'Exact IDs from this Leader latest user message; omit only for a single attachment.' },
+      selectionIds: { type: 'array', items: { type: 'string' }, description: 'Exact Host occurrence selectors from this Leader latest user message; omit only for a single attachment.' },
       bundleId: { type: 'string', description: 'Exact bundle ID returned by stage in this Leader task context.' },
     },
     output: { schema: { type: 'object', additionalProperties: true, properties: { status: { type: 'string', required: true } } },
@@ -237,17 +240,18 @@ export function createPostmanInputFilesTool(ctx, contexts, { grants = postmanInp
       else if (args.action === 'stage' && keys === 'action,paths' && Array.isArray(args.paths) &&
           args.paths.length >= 1 && args.paths.length <= 20 && args.paths.every(path => typeof path === 'string' && path.length > 0))
         operation = ['--stage', ...args.paths]
-      else if (args.action === 'stage_current_attachments' && (keys === 'action' || keys === 'action,attachmentIds')) {
-        const ids = args.attachmentIds
+      else if (args.action === 'stage_current_attachments' && (keys === 'action' || keys === 'action,selectionIds')) {
+        const ids = args.selectionIds
         if (ids !== undefined && (!Array.isArray(ids) || ids.length < 1 || ids.length > 20 ||
             ids.some(id => typeof id !== 'string' || !id) || new Set(ids).size !== ids.length))
           return { status: 'POSTMAN_INPUT_ARGUMENTS_INVALID' }
         current = currentAttachments?.get(agent)
         if (!current?.attachments.length) return { status: CURRENT_UNAVAILABLE }
         if (ids === undefined && current.attachments.length > 1)
-          return { status: 'POSTMAN_INPUT_CURRENT_ATTACHMENT_SELECTION_REQUIRED', attachments: current.attachments }
-        const wanted = ids ?? [current.attachments[0].attachmentId]
-        selected = wanted.map(id => current.attachments.find(ref => ref.attachmentId === id))
+          return { status: 'POSTMAN_INPUT_CURRENT_ATTACHMENT_SELECTION_REQUIRED',
+            attachments: current.attachments.map(({ ref, ...metadata }) => metadata) }
+        const wanted = ids ?? [current.attachments[0].selectionId]
+        selected = wanted.map(id => current.attachments.find(occurrence => occurrence.selectionId === id)?.ref)
         if (selected.some(ref => !ref)) return { status: CURRENT_MISMATCH }
       }
       else if (args.action === 'cleanup' && keys === 'action,bundleId' && typeof args.bundleId === 'string') {

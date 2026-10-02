@@ -9,7 +9,7 @@ description: >-
 
 # Postman Leader
 
-`POSTMAN_LEADER_SKILL_VERSION: 20`
+`POSTMAN_LEADER_SKILL_VERSION: 21`
 
 > **Правило Worker:** у одного Leader может быть до трёх независимых continuable Worker. `postman_worker({task, createNew: true, label?})` создаёт нового; четвёртый возвращает `POSTMAN_WORKER_LIMIT_REACHED` до запуска. `postman_worker_list()` показывает точные `workerSessionId`, label и состояние привязки, но не доказывает idle/completion. Задание или новый trusted artifact REQ направляй точному Worker через `postman_worker({task, workerSessionId, artifactRequestId?})`, обычное продолжение — через `postman_worker_interrupt({workerSessionId, task})`, закрытие — `postman_worker_stop({workerSessionId})`. Без ID старые вызовы допустимы только при ровно одной привязке; при нескольких Host возвращает `POSTMAN_WORKER_TARGET_REQUIRED`. Все Worker делят одну task branch/worktree: не поручай перекрывающиеся записи, а sync, restore и package runner выполняй только при гарантированной безопасности общей ветки.
 
@@ -24,6 +24,8 @@ description: >-
 `stage` и `stage_current_attachments` публикуют exact selected bytes в **public GitHub** branch `transport/postman-inputs`. Cleanup удаляет current tree entry обычным commit, но **не удаляет bytes из Git history** и не обещает такого удаления. Явное поручение отправить attachment в Postman/PostmanAsk одобряет роль, **не публичную публикацию данных**. Если пользователь ещё явно не разрешил public GitHub transport для этих bytes — спроси один раз **до staging** через `ask_user_question`: штатный ответ приходит как tool result и не заменяет current user message с attachment. Если уже явно разрешил — не спрашивай повторно. При отказе остановись: скрытый fallback запрещён. Для этого правила не нужно читать весь `REPO_POLICY.md`.
 
 ### Current attachment: canonical happy path
+
+**Image-only boundary:** pathless `stage_current_attachments` сейчас поддерживает только Harness image attachments, доступные через `ctx.attachments.readImage`: PNG / JPEG / WebP / GIF. PDF, ZIP, DOCX и другие generic file attachments этим API не поддерживаются. `POSTMAN_INPUT_CURRENT_ATTACHMENT_UNAVAILABLE` для non-image не означает, что пользовательский файл отсутствует: текущий Host resolver не умеет его читать. Не ищи файл по имени в Downloads/Desktop, не угадывай local path, не привлекай Worker только для filesystem search и не выдумывай generic attachment resolver. Отдельный известный local path, реально предоставленный пользователем, остаётся прежним explicit `stage(paths)` workflow.
 
 Один attachment уже в current Harness user message:
 
@@ -40,7 +42,7 @@ user explicitly requests PostmanAsk
 
 **Никогда не спрашивай filesystem path для current attachment**, уже существующего в Harness user message. Не привлекай Worker только для поиска такого файла. Host выбирает attachment последнего exact `source.kind === "user"` user message этой Leader session; новый user message заменяет выбор, даже без вложений, и после restart authority не восстанавливается. Если новый user turn уже снял authority — попроси приложить нужный файл снова, не его путь.
 
-При нескольких attachments Host возвращает `POSTMAN_INPUT_CURRENT_ATTACHMENT_SELECTION_REQUIRED` с компактными metadata и ничего не читает/не публикует. Выбирай только однозначно требуемые user intent attachments; если выбор неоднозначен — спроси пользователя через `ask_user_question`. Повтори `postman_input_files({action:"stage_current_attachments",attachmentIds:[<exact returned current IDs>]})`. Unknown/stale/foreign ID не authority.
+При нескольких attachments Host возвращает `POSTMAN_INPUT_CURRENT_ATTACHMENT_SELECTION_REQUIRED` с компактными metadata и ничего не читает/не публикует. Выбирай только однозначно требуемые user intent attachments; если выбор неоднозначен — спроси пользователя через `ask_user_question`. Повтори `postman_input_files({action:"stage_current_attachments",selectionIds:[<exact returned current selectionIds>]})`. `selectionId` выбирает exact occurrence только текущей записи; content-addressed `attachmentId` может совпадать у нескольких occurrences и не является selector. Unknown/stale/foreign selectionId не authority.
 
 Для существующего GitHub file после `postman_task_prepare()` используй `postman_input_files({action:"describe_existing",repository:"AndrewVerhoturov1/dsh-workspace",commit,path})`. Для отдельно выбранного local file — прежний `postman_input_files({action:"stage",paths:["<exact absolute file>"]})` с тем же public-stage consent. Host возвращает `descriptors` и для staging `bundleId`; переноси их дословно и cleanup только own bundle после последнего потребителя.
 

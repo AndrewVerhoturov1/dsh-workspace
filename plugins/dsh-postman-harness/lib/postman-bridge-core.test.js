@@ -392,7 +392,7 @@ test('package and composition expose bridge entrypoint and leader preset', () =>
   assert.match(agents, /postman-leader/)
 
   const leaderSkill = readFileSync(join(repoRoot, '.agents', 'skills', 'postman-leader', 'SKILL.md'), 'utf8')
-  assert.match(leaderSkill, /POSTMAN_LEADER_SKILL_VERSION: 20/)
+  assert.match(leaderSkill, /POSTMAN_LEADER_SKILL_VERSION: 21/)
   assert.match(leaderSkill, /artifactRequestId/)
   assert.ok(leaderSkill.includes('implementation_artifact_apply'))
   assert.match(leaderSkill, /конкретной роли \*\*уже считается user approval\*\*/)
@@ -400,6 +400,21 @@ test('package and composition expose bridge entrypoint and leader preset', () =>
   assert.match(leaderSkill, /не публичную публикацию данных/)
   assert.match(leaderSkill, /public GitHub[\s\S]*до staging/)
   assert.match(leaderSkill, /stage_current_attachments/)
+  assert.ok(leaderSkill.includes('selectionIds:[<exact returned current selectionIds>]'))
+  assert.match(leaderSkill, /content-addressed `attachmentId`[\s\S]*не является selector/)
+  assert.doesNotMatch(leaderSkill, /attachmentIds/)
+  const inputDoc = readFileSync(join(repoRoot, 'postman', 'POSTMAN_INPUT_FILES.md'), 'utf8')
+  for (const instructions of [leaderSkill, inputDoc]) {
+    for (const boundary of ['ctx.attachments.readImage', 'PNG / JPEG / WebP / GIF', 'PDF, ZIP, DOCX',
+      'POSTMAN_INPUT_CURRENT_ATTACHMENT_UNAVAILABLE', 'Host resolver не умеет его читать',
+      'Downloads/Desktop', 'не угадывай local path', 'filesystem search', 'generic attachment resolver', 'stage(paths)']) {
+      // Documentation uses infinitives; the skill uses direct operational instructions.
+      assert.ok(instructions.includes(boundary) || (boundary === 'не угадывай local path' &&
+        instructions.includes('не угадывать local path')), boundary)
+    }
+  }
+  assert.ok(inputDoc.includes('selectionIds:'))
+  assert.doesNotMatch(inputDoc, /attachmentIds/)
   assert.match(leaderSkill, /Никогда не спрашивай filesystem path для current attachment/)
   assert.ok(leaderSkill.includes('@PostmanAsk --input-files-json <JSON.stringify(exact descriptors)>'))
   assert.ok(leaderSkill.includes('@PostmanAsk --chat <OLD_REQ> --input-files-json <JSON.stringify(exact descriptors)>'))

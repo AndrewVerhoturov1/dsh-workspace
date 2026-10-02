@@ -128,37 +128,69 @@ test('another Leader/session handle and same-ID foreign session object confer no
   const f = currentFixture(t), ref = image(), other = { id: 'other-leader',
     session: { id: 'other-leader', header: { agentPreset: 'postman-leader', delegationDepth: 0 } } }
   f.agents.set(other.id, other)
-  f.emit([image()], f.agent.session)
+  f.emit([ref], f.agent.session)
+  const current = f.store.get(f.agent)
   f.emit([image('foreign')], other.session)
-  assert.equal((await f.execute({ action: 'stage_current_attachments', attachmentIds: [image('foreign').attachmentId] })).status,
+  const foreignId = f.store.get(other).attachments[0].selectionId
+  assert.equal((await f.execute({ action: 'stage_current_attachments', selectionIds: [foreignId] })).status,
     'POSTMAN_INPUT_CURRENT_ATTACHMENT_MISMATCH')
   f.emit([image('foreign')], { ...f.agent.session })
-  assert.deepEqual(f.store.get(f.agent).attachments, [ref])
+  assert.equal(f.store.get(f.agent), current)
+  assert.equal(current.attachments[0].ref, ref)
   assert.equal(f.reads.length, 0); assert.equal(f.calls.length, 0)
 })
 
-test('multiple current attachments require selection without reads; exact IDs stage only selected bytes', async t => {
+test('multiple current attachments require selection without reads; exact occurrence selectors stage only selected bytes', async t => {
   const f = currentFixture(t), refs = [image(), image('second-image', 'second.png')]
   f.emit(refs)
   const selection = await f.execute({ action: 'stage_current_attachments' })
   assert.equal(selection.status, 'POSTMAN_INPUT_CURRENT_ATTACHMENT_SELECTION_REQUIRED')
-  assert.deepEqual(selection.attachments, refs)
+  assert.deepEqual(selection.attachments, refs.map((ref, index) => ({ selectionId: String(index + 1), ...ref })))
   assert.equal(f.reads.length, 0); assert.equal(f.calls.length, 0)
-  const result = await f.execute({ action: 'stage_current_attachments', attachmentIds: [selection.attachments[1].attachmentId] })
+  const result = await f.execute({ action: 'stage_current_attachments', selectionIds: [selection.attachments[1].selectionId] })
   assert.equal(result.status, 'POSTMAN_INPUT_READY')
   assert.deepEqual(f.reads, [refs[1]])
+  assert.equal(f.reads[0], refs[1], 'resolver receives exact captured ref, not metadata copy')
   assert.deepEqual(f.publications, [{ name: refs[1].name, sha256: refs[1].attachmentId.slice(7), byte_length: refs[1].bytes }])
 })
 
-test('unknown or stale current IDs reject before resolver and publication', async t => {
-  const f = currentFixture(t), stale = image('stale')
-  f.emit([stale]); f.emit([image()])
-  for (const id of [stale.attachmentId, image('unknown').attachmentId])
-    assert.equal((await f.execute({ action: 'stage_current_attachments', attachmentIds: [id] })).status,
+test('same-SHA occurrences select first, second or both exact captured refs and names', async t => {
+  for (const indexes of [[0], [1], [0, 1]]) {
+    const f = currentFixture(t), refs = [image('PNG-bytes', 'before.png'), image('PNG-bytes', 'after.png')]
+    f.emit(refs)
+    const selection = await f.execute({ action: 'stage_current_attachments' })
+    assert.equal(selection.status, 'POSTMAN_INPUT_CURRENT_ATTACHMENT_SELECTION_REQUIRED')
+    assert.deepEqual(selection.attachments, refs.map((ref, index) => ({ selectionId: String(index + 1), ...ref })))
+    assert.deepEqual(selection.attachments.map(item => item.selectionId), ['1', '2'])
+    assert.equal(selection.attachments[0].attachmentId, selection.attachments[1].attachmentId)
+    assert.equal(f.reads.length, 0); assert.equal(f.calls.length, 0); assert.equal(f.publications.length, 0)
+    const result = await f.execute({ action: 'stage_current_attachments',
+      selectionIds: indexes.map(index => selection.attachments[index].selectionId) })
+    assert.equal(result.status, 'POSTMAN_INPUT_READY')
+    assert.equal(f.reads.length, indexes.length)
+    indexes.forEach((index, n) => assert.equal(f.reads[n], refs[index], 'exact occurrence ref'))
+    assert.deepEqual(result.descriptors.map(item => item.name), indexes.map(index => refs[index].name))
+    assert.deepEqual(f.publications, indexes.map(index => ({ name: refs[index].name,
+      sha256: refs[index].attachmentId.slice(7), byte_length: refs[index].bytes })))
+  }
+})
+
+test('duplicate, unknown and stale occurrence selectors reject before resolver and publication', async t => {
+  const f = currentFixture(t), refs = [image('PNG-bytes', 'before.png'), image('PNG-bytes', 'after.png')]
+  f.emit(refs)
+  const stale = (await f.execute({ action: 'stage_current_attachments' })).attachments.map(item => item.selectionId)
+  // The new message has the same SHA/names/count; old selectors still confer no authority.
+  f.emit(refs.map(ref => ({ ...ref })))
+  const current = (await f.execute({ action: 'stage_current_attachments' })).attachments.map(item => item.selectionId)
+  assert.equal(current.some(id => stale.includes(id)), false)
+  for (const ids of [[stale[0]], [stale[1]], stale, ['unknown'], [current[0], stale[1]], [current[0], 'unknown']])
+    assert.equal((await f.execute({ action: 'stage_current_attachments', selectionIds: ids })).status,
       'POSTMAN_INPUT_CURRENT_ATTACHMENT_MISMATCH')
-  for (const ids of [[], [image().attachmentId, image().attachmentId], Array(21).fill('id')])
-    assert.equal((await f.execute({ action: 'stage_current_attachments', attachmentIds: ids })).status, 'POSTMAN_INPUT_ARGUMENTS_INVALID')
-  assert.equal(f.reads.length, 0); assert.equal(f.calls.length, 0)
+  for (const ids of [[], [current[0], current[0]], Array.from({ length: 21 }, (_, n) => String(n + 1))])
+    assert.equal((await f.execute({ action: 'stage_current_attachments', selectionIds: ids })).status, 'POSTMAN_INPUT_ARGUMENTS_INVALID')
+  assert.equal((await f.execute({ action: 'stage_current_attachments', attachmentIds: [refs[0].attachmentId] })).status,
+    'POSTMAN_INPUT_ARGUMENTS_INVALID', 'no parallel content-addressed selector API')
+  assert.equal(f.reads.length, 0); assert.equal(f.calls.length, 0); assert.equal(f.publications.length, 0)
 })
 
 test('resolved byte hash or length mismatch rejects the entire selection before publication', async t => {
@@ -186,7 +218,7 @@ test('current attachment limits are applied before resolution and publication', 
   for (const refs of [[{ ...image(), bytes: 16 * 1024 * 1024 + 1 }],
     Array.from({ length: 4 }, (_, n) => ({ ...image(String(n)), bytes: 16 * 1024 * 1024 }))]) {
     f.emit(refs)
-    assert.equal((await f.execute({ action: 'stage_current_attachments', attachmentIds: refs.map(ref => ref.attachmentId) })).status,
+    assert.equal((await f.execute({ action: 'stage_current_attachments', selectionIds: f.store.get(f.agent).attachments.map(item => item.selectionId) })).status,
       'POSTMAN_INPUT_BUNDLE_LIMIT_EXCEEDED')
   }
   assert.equal(f.reads.length, 0); assert.equal(f.calls.length, 0)
