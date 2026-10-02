@@ -48,7 +48,7 @@ const image = (data = 'PNG-bytes', name = 'reference.png') => ({
   mediaType: 'image/png', bytes: Buffer.byteLength(data), width: 1, height: 1, name,
 })
 function currentFixture(t, { preset = 'postman-leader', resolveAttachment } = {}) {
-  const f = fixture(preset), listeners = new Map(), reads = [], publications = []
+  const f = fixture(preset), listeners = new Map(), reads = [], snapshots = []
   f.agent.session.id = f.agent.id
   const ctx = { agents: { get: id => f.agents.get(id) }, on(name, listener) {
     listeners.set(name, listener); return () => listeners.delete(name)
@@ -63,8 +63,8 @@ function currentFixture(t, { preset = 'postman-leader', resolveAttachment } = {}
     for (const [index, path] of paths.entries()) {
       const data = readFileSync(path), sha256 = createHash('sha256').update(data).digest('hex')
       const name = basename(path), snapshot_path = join(root, String(index + 1).padStart(3, '0') + '.bin')
-      const descriptor = { ...file, name, sha256, byte_length: data.length }
-      publications.push({ name, sha256, byte_length: data.length })
+      const descriptor = { source_kind: 'native', name, sha256, byte_length: data.length, media_type: 'image/png' }
+      snapshots.push({ name, sha256, byte_length: data.length })
       writeFileSync(snapshot_path, data)
       descriptors.push(descriptor); materializations.push({ snapshot_path, sha256, byte_length: data.length })
     }
@@ -78,7 +78,7 @@ function currentFixture(t, { preset = 'postman-leader', resolveAttachment } = {}
       content: [...refs.map(attachment => ({ type: 'image', attachment })), { type: 'text', text: 'Describe image' }] } })
   const execute = args => tool.execute(args, { agent: f.agent, signal: new AbortController().signal })
   t.after(() => { f.grants.dispose(); store.dispose() })
-  return { ...f, ctx, store, tool, emit, execute, reads, publications, listeners }
+  return { ...f, ctx, store, tool, emit, execute, reads, snapshots, listeners }
 }
 
 test('latest exact user image stages verified bytes without model paths or private output', async t => {
@@ -88,7 +88,7 @@ test('latest exact user image stages verified bytes without model paths or priva
   assert.equal(result.status, 'POSTMAN_INPUT_READY')
   assert.equal(result.bundleId, 'f'.repeat(32))
   assert.deepEqual(f.reads, [ref])
-  assert.deepEqual(f.publications, [{ name: ref.name, sha256: ref.attachmentId.slice(7), byte_length: ref.bytes }])
+  assert.deepEqual(f.snapshots, [{ name: ref.name, sha256: ref.attachmentId.slice(7), byte_length: ref.bytes }])
   assert.equal(f.grants.owns(f.agent, f.task, result.descriptors), true)
   const source = f.calls[0][1], root = f.calls[0].at(-1)
   assert.equal(existsSync(dirname(dirname(source))), false, 'private source root removed after stage')
@@ -151,7 +151,7 @@ test('multiple current attachments require selection without reads; exact occurr
   assert.equal(result.status, 'POSTMAN_INPUT_READY')
   assert.deepEqual(f.reads, [refs[1]])
   assert.equal(f.reads[0], refs[1], 'resolver receives exact captured ref, not metadata copy')
-  assert.deepEqual(f.publications, [{ name: refs[1].name, sha256: refs[1].attachmentId.slice(7), byte_length: refs[1].bytes }])
+  assert.deepEqual(f.snapshots, [{ name: refs[1].name, sha256: refs[1].attachmentId.slice(7), byte_length: refs[1].bytes }])
 })
 
 test('same-SHA occurrences select first, second or both exact captured refs and names', async t => {
@@ -163,14 +163,14 @@ test('same-SHA occurrences select first, second or both exact captured refs and 
     assert.deepEqual(selection.attachments, refs.map((ref, index) => ({ selectionId: String(index + 1), ...ref })))
     assert.deepEqual(selection.attachments.map(item => item.selectionId), ['1', '2'])
     assert.equal(selection.attachments[0].attachmentId, selection.attachments[1].attachmentId)
-    assert.equal(f.reads.length, 0); assert.equal(f.calls.length, 0); assert.equal(f.publications.length, 0)
+    assert.equal(f.reads.length, 0); assert.equal(f.calls.length, 0); assert.equal(f.snapshots.length, 0)
     const result = await f.execute({ action: 'stage_current_attachments',
       selectionIds: indexes.map(index => selection.attachments[index].selectionId) })
     assert.equal(result.status, 'POSTMAN_INPUT_READY')
     assert.equal(f.reads.length, indexes.length)
     indexes.forEach((index, n) => assert.equal(f.reads[n], refs[index], 'exact occurrence ref'))
     assert.deepEqual(result.descriptors.map(item => item.name), indexes.map(index => refs[index].name))
-    assert.deepEqual(f.publications, indexes.map(index => ({ name: refs[index].name,
+    assert.deepEqual(f.snapshots, indexes.map(index => ({ name: refs[index].name,
       sha256: refs[index].attachmentId.slice(7), byte_length: refs[index].bytes })))
   }
 })
@@ -190,7 +190,7 @@ test('duplicate, unknown and stale occurrence selectors reject before resolver a
     assert.equal((await f.execute({ action: 'stage_current_attachments', selectionIds: ids })).status, 'POSTMAN_INPUT_ARGUMENTS_INVALID')
   assert.equal((await f.execute({ action: 'stage_current_attachments', attachmentIds: [refs[0].attachmentId] })).status,
     'POSTMAN_INPUT_ARGUMENTS_INVALID', 'no parallel content-addressed selector API')
-  assert.equal(f.reads.length, 0); assert.equal(f.calls.length, 0); assert.equal(f.publications.length, 0)
+  assert.equal(f.reads.length, 0); assert.equal(f.calls.length, 0); assert.equal(f.snapshots.length, 0)
 })
 
 test('resolved byte hash or length mismatch rejects the entire selection before publication', async t => {
@@ -280,7 +280,7 @@ test('exact production Leader receives Host descriptors, own cleanup and determi
   assert.equal((await f.execute({ action: 'cleanup', bundleId: staged.bundleId })).status, 'POSTMAN_INPUT_CLEANED')
   assert.equal((await f.execute({ action: 'cleanup', bundleId: staged.bundleId })).status, 'POSTMAN_INPUT_ALREADY_CLEANED')
   assert.equal(f.grants.owns(f.agent, f.task, [file]), false)
-  assert.deepEqual(f.calls.map(call => call[0]), ['--existing', '--stage', '--cleanup'])
+  assert.deepEqual(f.calls.map(call => call[0]), ['--existing', '--stage'])
 })
 
 test('fabrication or any altered descriptor fails exact session/task provenance', async () => {
@@ -411,5 +411,63 @@ test('snapshot hash is checked once at build after exact grant admission', async
   await assert.rejects(grants.build(binding, child.id, 'REQ_20261001T000000Z_0988', [file]), /MATERIALIZATION_MISMATCH/)
   grants.dispose()
   assert.equal(existsSync(result.snapshotRoot), false)
+})
+
+
+test('real private current/local stages build ZIP or image handoffs, zero GitHub transport and real cleanup', async t => {
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC', 'base64')
+  const ref = { ...image(), attachmentId: 'sha256:' + createHash('sha256').update(png).digest('hex'), bytes: png.length }
+  const f = fixture(), listeners = new Map()
+  f.agent.session.id = f.agent.id
+  const ctx = { agents: { get: id => f.agents.get(id) }, attachments: { async readImage(exact) { assert.equal(exact, ref); return { data: png } } },
+    on(name, fn) { listeners.set(name, fn); return () => listeners.delete(name) } }
+  const current = new CurrentAttachmentStore(ctx), calls = []
+  const { pythonInputCommand } = await import('./postman-input-files.js')
+  const tool = createPostmanInputFilesTool(ctx, { get: () => f.task }, { grants: f.grants, currentAttachments: current,
+    run(root, args) { calls.push(args); return pythonInputCommand(root, args) } })
+  const execute = args => tool.execute(args, { agent: f.agent, signal: new AbortController().signal })
+  const source = mkdtempSync(join(tmpdir(), 'postman-local-native-'))
+  t.after(() => { f.grants.dispose(); current.dispose(); rmSync(source, { recursive: true, force: true }) })
+  listeners.get('session/event')(f.agent.session, { type: 'user/message', data: { role: 'user', source: { kind: 'user' },
+    content: [{ type: 'image', attachment: ref }] } })
+  const staged = await execute({ action: 'stage_current_attachments' })
+  assert.equal(staged.status, 'POSTMAN_INPUT_READY')
+  assert.deepEqual(staged.descriptors, [{ name: 'reference.png', sha256: ref.attachmentId.slice(7), byte_length: png.length,
+    source_kind: 'native', media_type: 'image/png' }])
+  let ordinal = 1
+  for (const kind of ['artifact', 'text', 'image']) {
+    const binding = f.grants.pin(f.agent, f.task, staged.descriptors), child = { id: 'native-' + kind }
+    assert.equal(f.grants.bindChild(binding, f.agent, f.task, child), true)
+    const req = 'REQ_20261001T000000Z_0' + String(ordinal++).padStart(3, '0')
+    const made = await f.grants.build(binding, child.id, req, staged.descriptors, kind)
+    const handoff = JSON.parse(readFileSync(made.handoffPath, 'utf8'))
+    const data = readFileSync(handoff.attachment.path)
+    assert.equal(createHash('sha256').update(data).digest('hex'), handoff.attachment.sha256)
+    if (kind === 'image') { assert.deepEqual(data, png); assert.equal(made.mediaType, 'image/png') }
+    else { assert.equal(data.subarray(0, 2).toString(), 'PK'); assert.equal(made.displayName, 'POSTMAN_INPUT_' + req + '.zip') }
+    made.cleanup(); f.grants.unpin(binding)
+    assert.equal(existsSync(dirname(made.handoffPath)), false)
+  }
+  const snapshotRoot = calls[0].at(-1)
+  assert.equal((await execute({ action: 'cleanup', bundleId: staged.bundleId })).status, 'POSTMAN_INPUT_CLEANED')
+  assert.equal(existsSync(snapshotRoot), false)
+  const path = join(source, 'selected.txt'); writeFileSync(path, 'exact-local')
+  const local = await execute({ action: 'stage', paths: [path] })
+  assert.equal(local.status, 'POSTMAN_INPUT_READY')
+  assert.equal(local.descriptors[0].source_kind, 'native')
+  assert.equal(local.descriptors[0].sha256, createHash('sha256').update('exact-local').digest('hex'))
+  assert.equal(JSON.stringify(local).includes(source), false)
+  assert.equal(calls.every(args => args[0] === '--stage'), true)
+  assert.equal(calls.length, 2)
+})
+
+test('unsupported current file API is explicit capability-unavailable, never searches or stages', async t => {
+  const f = currentFixture(t)
+  f.listeners.get('session/event')(f.agent.session, { type: 'user/message', data: { role: 'user', source: { kind: 'user' },
+    content: [{ type: 'file', attachment: { name: 'document.pdf' } }] } })
+  const result = await f.execute({ action: 'stage_current_attachments' })
+  assert.equal(result.status, 'POSTMAN_INPUT_CURRENT_ATTACHMENT_UNAVAILABLE')
+  assert.match(result.reason, /supports current images.*readImage only/)
+  assert.equal(f.reads.length, 0); assert.equal(f.calls.length, 0)
 })
 

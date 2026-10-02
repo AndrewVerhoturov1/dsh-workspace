@@ -31,6 +31,8 @@ Trusted plugin получает exact current `user/message` из Harness, ме�
 
 ### Trusted input invariant
 
+Native ChatGPT attachment is the primary input-file transport. Never publish a user/local input to GitHub merely so ChatGPT can read it when native attachment delivery is available. GitHub public staging is fallback-only and requires explicit user approval.
+
 Host-authorized descriptors могут присутствовать в transport framing: их формирует parent Host/Leader. Local transport agent / Bridge child не изменяет и не реконструирует их, не читает local paths, не строит input ZIP и не делает manual browser upload. Runtime handles input ZIP. Это не меняет exact current-message trigger и result contract.
 
 ## 1. Жёстко запрещённые обходы

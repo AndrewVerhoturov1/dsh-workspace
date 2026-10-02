@@ -96,6 +96,29 @@ test('Host helper infrastructure errors retain allocated REQ as proven-unsent wi
   })
 })
 
+test('native descriptors parse in all three modes without GitHub coordinates', () => {
+  const file = { source_kind: 'native', name: 'reference.png', sha256: 'b'.repeat(64), byte_length: 12, media_type: 'image/png' }
+  for (const mode of ['Postman', 'PostmanAsk', 'PostmanImage']) {
+    const turn = parsePostmanUserTurn('@' + mode + ' --input-files-json ' + JSON.stringify([file]) + '\nExact intent')
+    assert.deepEqual(turn.inputFiles, [file]); assert.equal(turn.payload, 'Exact intent')
+    assert.throws(() => parsePostmanUserTurn('@' + mode + ' --input-files-json ' + JSON.stringify([{...file,path:'C:/secret'}]) + '\nintent'), /METADATA_INVALID/)
+  }
+})
+
+test('image Direct start uses Host image builder before spawn and forwards private handoff', async () => {
+  const file = { source_kind: 'native', name: 'reference.png', sha256: 'b'.repeat(64), byte_length: 12, media_type: 'image/png' }
+  let argv, built = false
+  const manager = new DirectPostmanJobManager({ exists: () => true,
+    inputGrants: { async build(record, session, req, descriptors, kind) {
+      assert.equal(kind, 'image'); assert.deepEqual(descriptors, [file]); built = true
+      return { handoffPath: '/private/image-handoff.json', cleanup() {} }
+    } }, spawn(_cmd,args) { assert.equal(built,true); argv=args; const child=fakeChild(); queueMicrotask(()=>child.emit('spawn')); return child } })
+  await manager.start({ sessionId:'native-image', workspace:'/repo', branch:'task/postman-1234567890abcdef1234567890abcdef', payload:'Exact intent', inputFiles:[file], inputBinding:{}, transportKind:'image' })
+  assert.equal(argv.includes('-ImageMode'),true)
+  assert.equal(argv[argv.indexOf('-InputBundleManifest')+1],'/private/image-handoff.json')
+  manager.latest('native-image').child.emit('close',0)
+})
+
 test('image parser preserves exact payload and rejects manual chat', () => {
   const raw = '  @PostmanImage\nDraw a cat  '
   assert.deepEqual(parsePostmanUserTurn(raw), { mode: 'fresh', transportKind: 'image',

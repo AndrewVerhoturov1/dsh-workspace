@@ -4,7 +4,7 @@
 > Production entrypoint: `postman/direct/postman.ps1`  
 > Normal trigger: exact current-message `@Postman`
 
-Входные файлы выбираются явно: immutable descriptors остаются provenance metadata внутри task; для `@Postman`/`@PostmanAsk` bytes идут через один verified Host-created native `POSTMAN_INPUT_<REQ>.zip`. Private snapshots и Bridge-pinned child grant исключают model path authority. User intent и двухстрочный browser prompt не меняются. Send success требует exact prompt и expected ZIP в том же новом user turn; ambiguity после возможного click = UNKNOWN/no resend. `@PostmanImage` намеренно сохраняет прежний descriptor visual-reference flow в этом MVP; см. [Postman Input Files](POSTMAN_INPUT_FILES.md).
+Входные файлы выбираются явно: immutable descriptors остаются provenance metadata внутри task; для `@Postman`/`@PostmanAsk` bytes идут через один verified Host-created native `POSTMAN_INPUT_<REQ>.zip`. Private snapshots и Bridge-pinned child grant исключают model path authority. User intent и двухстрочный browser prompt не меняются. Send success требует exact prompt и expected ZIP в том же новом user turn; ambiguity после возможного click = UNKNOWN/no resend. `@PostmanImage` передаёт одну visual reference как native image attachment с exact bytes/SHA/card proof. Normal local/current staging private и не публикует bytes в GitHub; GitHub — existing source или separately approved fallback only; см. [Postman Input Files](POSTMAN_INPUT_FILES.md).
 
 ## 1. Назначение
 

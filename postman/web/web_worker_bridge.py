@@ -27,6 +27,7 @@ import browser_bootstrap
 import browser_observer
 import browser_recovery
 import browser_submit
+import input_bundle
 import reminder_policy
 import request_identity
 import transport_control
@@ -359,7 +360,8 @@ class WebWorkerBridge:
         input_attachment=None,
     ) -> dict[str, Any]:
         """Run one browser page; image mode continues to ZIP on that same page."""
-        if input_attachment is not None and (input_attachment.request_id != request_id or image_prepare is not None):
+        if input_attachment is not None and (input_attachment.request_id != request_id or
+                (image_prepare is not None and input_attachment.media_type not in input_bundle.IMAGE_EXTENSIONS)):
             return _result(BRIDGE_INVALID_CONFIG, ok=False, details={"reason": "input_attachment_binding_invalid"})
         image_stage = image_prepare is not None
         image_flow = image_stage

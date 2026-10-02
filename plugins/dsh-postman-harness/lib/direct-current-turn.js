@@ -142,10 +142,13 @@ function extractInputMetadata(payload) {
   catch { throw parseError('POSTMAN_INPUT_METADATA_INVALID') }
   if (!Array.isArray(inputFiles) || !inputFiles.length || inputFiles.length > 20 ||
       inputFiles.some(file => !file || typeof file !== 'object' || Array.isArray(file) ||
-        !Object.keys(file).every(key => ['name', 'repository', 'commit', 'path', 'sha256', 'byte_length', 'raw_url'].includes(key)) ||
-        typeof file.name !== 'string' || !file.name.trim() || typeof file.repository !== 'string' ||
-        !/^[0-9a-fA-F]{40}$/.test(file.commit) || !/^[0-9a-fA-F]{64}$/.test(file.sha256) ||
-        typeof file.path !== 'string' || !file.path || !Number.isSafeInteger(file.byte_length) || file.byte_length <= 0))
+        !Object.keys(file).every(key => ['source_kind', 'media_type', 'name', 'repository', 'commit', 'path', 'sha256', 'byte_length', 'raw_url'].includes(key)) ||
+        typeof file.name !== 'string' || !file.name.trim() || !/^[0-9a-fA-F]{64}$/.test(file.sha256) ||
+        !Number.isSafeInteger(file.byte_length) || file.byte_length <= 0 ||
+        (file.source_kind === 'native'
+          ? ['repository', 'commit', 'path', 'raw_url'].some(key => key in file)
+          : (file.source_kind !== undefined && file.source_kind !== 'github') || typeof file.repository !== 'string' ||
+            !/^[0-9a-fA-F]{40}$/.test(file.commit) || typeof file.path !== 'string' || !file.path)))
     throw parseError('POSTMAN_INPUT_METADATA_INVALID')
   const intent = payload.slice(newline + 1)
   if (!intent.trim()) throw parseError('POSTMAN_EMPTY_PAYLOAD')
@@ -542,9 +545,9 @@ export class DirectPostmanJobManager {
     }
     this.jobs.set(sessionId, job)
 
-    if (inputFiles.length && transportKind !== 'image') {
+    if (inputFiles.length) {
       try {
-        job.inputBundle = await this.inputGrants.build(inputBinding, sessionId, requestId, inputFiles)
+        job.inputBundle = await this.inputGrants.build(inputBinding, sessionId, requestId, inputFiles, transportKind)
         args.push('-InputBundleManifest', job.inputBundle.handoffPath)
       } catch (error) {
         // Every build failure precedes Direct spawn/publication, including helper

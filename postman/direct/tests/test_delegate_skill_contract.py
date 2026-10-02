@@ -27,6 +27,19 @@ class DelegateViaPostmanSkillContract(unittest.TestCase):
                           "не строит input ZIP", "manual browser upload", "Runtime handles input ZIP"):
             self.assertIn(invariant, self.skill)
 
+    def test_native_first_in_every_skill_and_image_entrypoint(self):
+        names = ("delegate-via-postman", "delegate-via-postman-ask", "postman-leader", "delegate-via-postman-image")
+        for name in names:
+            text = (ROOT / ".agents" / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
+            self.assertIn("Native ChatGPT attachment is the primary input-file transport.", text)
+            self.assertIn("GitHub public staging is fallback-only and requires explicit user approval.", text)
+        image = (ROOT / ".agents" / "skills" / names[-1] / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn(r"^\s*@PostmanImage(?:\s|$)", image)
+        self.assertIn("postman_send_current_turn()", image)
+        self.assertIn("IMAGE_RESULT_DURABLE", image)
+        self.assertIn("UNKNOWN", image)
+        self.assertIn("delegate-via-postman-image", self.agents)
+
     def test_exact_current_message_trigger(self):
         pattern = re.compile(r"^\s*@Postman(?:\s|$)")
         for message in ("@Postman сделай X", "   @Postman сделай X"):

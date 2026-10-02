@@ -164,20 +164,20 @@ export class PostmanInputGrants {
     for (const [id, child] of this.children) if (child.binding === binding) this.children.delete(id)
     for (const entry of pin.entries) this.drop(entry)
   }
-  async build(binding, sessionId, requestId, descriptors) {
+  async build(binding, sessionId, requestId, descriptors, transportKind = 'artifact') {
     const pin = this.pins.get(binding)
     if (!pin || this.children.get(sessionId)?.binding !== binding || pin.identity !== JSON.stringify(descriptors))
       throw new Error('POSTMAN_INPUT_PROVENANCE_REJECTED')
     const directory = privateDirectory('request')
     try {
       const spec = join(directory, 'input-build.json')
-      writeFileSync(spec, JSON.stringify({ request_id: requestId, descriptors,
+      writeFileSync(spec, JSON.stringify({ request_id: requestId, descriptors, image: transportKind === 'image',
         materializations: pin.entries.map(entry => entry.snapshot) }), { mode: 0o600 })
       const result = await pythonCommand(HOST_ROOT, 'input_bundle.py', ['--build', spec])
       if (this.pins.get(binding) !== pin || this.children.get(sessionId)?.binding !== binding)
         throw new Error('POSTMAN_INPUT_PROVENANCE_REJECTED')
       rmSync(spec)
-      if (result.requestId !== requestId || result.displayName !== 'POSTMAN_INPUT_' + requestId + '.zip' ||
+      if (result.requestId !== requestId || (transportKind === 'image' ? !new RegExp('^POSTMAN_REFERENCE_' + requestId + '\\.(png|jpg|webp|gif)$').test(result.displayName) : result.displayName !== 'POSTMAN_INPUT_' + requestId + '.zip') ||
           result.handoffPath !== join(directory, 'input-handoff.json')) throw new Error('POSTMAN_INPUT_BUNDLE_HANDOFF_INVALID')
       return { ...result, cleanup: () => removePrivate(directory) }
     } catch (error) { removePrivate(directory); throw error }
@@ -213,7 +213,7 @@ export function createPostmanInputFilesTool(ctx, contexts, { grants = postmanInp
   resolveAttachment = (ref, signal) => ctx.attachments.readImage(ref, signal) } = {}) {
   return defineTool({
     name: POSTMAN_INPUT_FILES_TOOL_NAME,
-    description: 'Describe an immutable GitHub file, publicly stage exact current user attachments or selected local files, or clean up your own bundle (Git history remains).',
+    description: 'Privately snapshot exact current user image attachments or explicitly selected local files, describe an existing immutable GitHub source for native delivery, or clean up your private bundle. Never publishes input bytes.',
     parameters: {
       action: { type: 'string', required: true, enum: ['describe_existing', 'stage', 'stage_current_attachments', 'cleanup'] },
       repository: { type: 'string', description: 'Existing file repository; only AndrewVerhoturov1/dsh-workspace is supported.' },
@@ -246,7 +246,7 @@ export function createPostmanInputFilesTool(ctx, contexts, { grants = postmanInp
             ids.some(id => typeof id !== 'string' || !id) || new Set(ids).size !== ids.length))
           return { status: 'POSTMAN_INPUT_ARGUMENTS_INVALID' }
         current = currentAttachments?.get(agent)
-        if (!current?.attachments.length) return { status: CURRENT_UNAVAILABLE }
+        if (!current?.attachments.length) return { status: CURRENT_UNAVAILABLE, reason: 'Installed Host supports current images through readImage only; provide an explicit local file path.' }
         if (ids === undefined && current.attachments.length > 1)
           return { status: 'POSTMAN_INPUT_CURRENT_ATTACHMENT_SELECTION_REQUIRED',
             attachments: current.attachments.map(({ ref, ...metadata }) => metadata) }
@@ -258,7 +258,9 @@ export function createPostmanInputFilesTool(ctx, contexts, { grants = postmanInp
         const owned = grants.bundle(agent, context, args.bundleId)
         if (owned === undefined) return { status: 'POSTMAN_INPUT_BUNDLE_NOT_OWNED' }
         if (owned === null) return { status: 'POSTMAN_INPUT_ALREADY_CLEANED', bundleId: args.bundleId }
-        operation = ['--cleanup', args.bundleId]
+        const removed = owned.length
+        grants.cleaned(agent, args.bundleId)
+        return { status: 'POSTMAN_INPUT_CLEANED', bundleId: args.bundleId, removed }
       } else return { status: 'POSTMAN_INPUT_ARGUMENTS_INVALID' }
       let snapshotRoot, sourceRoot, retained = false
       try {
@@ -295,15 +297,11 @@ export function createPostmanInputFilesTool(ctx, contexts, { grants = postmanInp
           if (currentAttachments.get(agent) !== current) throw new Error(CURRENT_MISMATCH)
           operation = ['--stage', ...sources]
         }
-        snapshotRoot = args.action === 'cleanup' ? null : privateDirectory('snapshot')
+        snapshotRoot = privateDirectory('snapshot')
         // Source paths never leave this selection operation. Host chooses the private root.
-        const result = await run(HOST_ROOT, snapshotRoot ? [...operation, '--snapshot-dir', snapshotRoot] : operation)
+        const result = await run(HOST_ROOT, [...operation, '--snapshot-dir', snapshotRoot])
         if (contexts.get(agent.id) !== context || ctx.agents.get(agent.id) !== agent || exec.signal?.aborted)
           return { status: 'POSTMAN_INPUT_CONTEXT_CHANGED' }
-        if (args.action === 'cleanup') {
-          grants.cleaned(agent, args.bundleId)
-          return { status: 'POSTMAN_INPUT_CLEANED', bundleId: args.bundleId, removed: result.removed }
-        }
         const descriptors = result.descriptors
         if (!Array.isArray(descriptors) || !descriptors.length) return { status: 'POSTMAN_INPUT_HOST_INVALID_RESULT' }
         grants.record(agent, context, { descriptors, bundle_id: result.bundle_id, snapshotRoot, materializations: result.materializations })

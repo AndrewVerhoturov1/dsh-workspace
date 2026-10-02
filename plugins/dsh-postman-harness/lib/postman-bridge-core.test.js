@@ -103,6 +103,8 @@ test('image bridge keeps exact prompt and image-only mode', () => {
 test('bridge persona keeps Luna mechanical and branches text handoff by delivery mode', () => {
   assert.match(POSTMAN_BRIDGE_PERSONA, /minimal one-shot transport subagent/)
   assert.match(POSTMAN_BRIDGE_PERSONA, /skill\(delegate-via-postman-ask\)/)
+  assert.match(POSTMAN_BRIDGE_PERSONA, /skill\(delegate-via-postman-image\)/)
+  assert.match(POSTMAN_BRIDGE_PERSONA, /Native ChatGPT attachment is the primary input-file transport/)
   assert.match(POSTMAN_BRIDGE_PERSONA, /skill\(delegate-via-postman\)/)
   assert.match(POSTMAN_BRIDGE_PERSONA, /postman_send_current_turn\(\) with no arguments/)
   assert.match(POSTMAN_BRIDGE_PERSONA, /deliveryMode=inline/)
@@ -392,13 +394,14 @@ test('package and composition expose bridge entrypoint and leader preset', () =>
   assert.match(agents, /postman-leader/)
 
   const leaderSkill = readFileSync(join(repoRoot, '.agents', 'skills', 'postman-leader', 'SKILL.md'), 'utf8')
-  assert.match(leaderSkill, /POSTMAN_LEADER_SKILL_VERSION: 21/)
+  assert.match(leaderSkill, /POSTMAN_LEADER_SKILL_VERSION: 22/)
   assert.match(leaderSkill, /artifactRequestId/)
   assert.ok(leaderSkill.includes('implementation_artifact_apply'))
   assert.match(leaderSkill, /конкретной роли \*\*уже считается user approval\*\*/)
   assert.match(leaderSkill, /Не задавай повторный вопрос «Передавать в PostmanAsk\?»/)
-  assert.match(leaderSkill, /не публичную публикацию данных/)
-  assert.match(leaderSkill, /public GitHub[\s\S]*до staging/)
+  assert.match(leaderSkill, /normal private input staging не требует согласия/)
+  assert.match(leaderSkill, /native-attachment-first|Native ChatGPT attachment is the primary input-file transport/)
+  assert.match(leaderSkill, /GitHub public staging is fallback-only and requires explicit user approval/)
   assert.match(leaderSkill, /stage_current_attachments/)
   assert.ok(leaderSkill.includes('selectionIds:[<exact returned current selectionIds>]'))
   assert.match(leaderSkill, /content-addressed `attachmentId`[\s\S]*не является selector/)
@@ -415,7 +418,7 @@ test('package and composition expose bridge entrypoint and leader preset', () =>
   }
   assert.ok(inputDoc.includes('selectionIds:'))
   assert.doesNotMatch(inputDoc, /attachmentIds/)
-  assert.match(leaderSkill, /Никогда не спрашивай filesystem path для current attachment/)
+  assert.match(leaderSkill, /Не спрашивай filesystem path для поддерживаемого current image attachment/)
   assert.ok(leaderSkill.includes('@PostmanAsk --input-files-json <JSON.stringify(exact descriptors)>'))
   assert.ok(leaderSkill.includes('@PostmanAsk --chat <OLD_REQ> --input-files-json <JSON.stringify(exact descriptors)>'))
 
