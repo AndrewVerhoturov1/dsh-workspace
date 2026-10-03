@@ -124,7 +124,7 @@ test('bound publication synchronizes before grant and reports JSON-safe failure'
         assert.equal(baseCommit, publication.baseCommit)
         order.push('sync')
         if (acceptedSync === 'throws') throw new Error('remote unavailable')
-        return acceptedSync
+        return acceptedSync === false ? { ok: false, diagnostic: { code: 'WORKTREE_DIRTY' } } : acceptedSync
       } }
     const grants = { async register() { order.push('grant'); return true } }
     const f = fixture({ contexts, grants, onStatus: () => ({ status: 'COMPLETED',
@@ -135,7 +135,7 @@ test('bound publication synchronizes before grant and reports JSON-safe failure'
     assert.deepEqual(order, acceptedSync === true ? ['sync', 'grant'] : ['sync'])
     assert.deepEqual(reply.result, publication)
     assert.equal(reply.synchronization, acceptedSync === true ? 'synchronized' : 'busy')
-    if (acceptedSync === 'throws') assert.match(reply.syncDiagnostic, /remote unavailable/)
+    if (acceptedSync !== true) assert.deepEqual(reply.syncDiagnostic, { code: acceptedSync === 'throws' ? 'GIT_SYNC_FAILED' : 'WORKTREE_DIRTY' })
     await f.jobs.dispose()
   }
 })

@@ -276,3 +276,26 @@ test('backend refusal cannot create or launch an unjournaled Bridge', async () =
   assert.equal(f.started, 0)
   assert.equal(registry.get(parent.id).bridgeOperations, undefined)
 })
+
+test('old presend failure with full proof releases slot locally; missing proof remains diagnostic', async () => {
+  const registry = createMemoryTaskRegistry()
+  const ids = ['1103ac1e-6e22-4168-998d-0eed73790cfc', 'ba8a3918-31b3-4a7a-b4ea-a388634e7d1e']
+  const terminal = (requestId, extra) => ({ status: 'POSTMAN_BRIDGE_TERMINAL', terminalStatus: 'COMPLETED', requestId,
+    result: { ok: false, code: 'POSTMAN_TRANSPORT_FAILED', directVersion: 5, requestId, transportMessage: 'failed before publication', ...extra } })
+  await registry.create(parent.id, { ...row(), bridgeOperations: {
+    [ids[0]]: { state: 'received', synchronization: 'pending', terminal: terminal('REQ_20261003T102744Z_5744', { transportCode: 'DIRECT_CHAT_REFERENCE_UNAVAILABLE', details: {} }) },
+    [ids[1]]: { state: 'received', synchronization: 'pending', terminal: terminal('REQ_20261003T103121Z_0257', { transportCode: 'BRIDGE_PIPELINE_FAILED', publicationStarted: false, details: { value: null } }) },
+  } })
+  let sends = 0, syncs = 0
+  const jobs = createPostmanBridgeJobs({ agents: { get: () => parent }, subagents: { start() { sends++; throw Error('no Send') } } },
+    { run() { sends++; throw Error('no transport') }, dispose() {} }, null,
+    { record: registry.get, changeRecord: registry.change, sync() { syncs++; throw Error('no Git publication') } })
+  const unknown = await jobs.status(parent, ids[0], true)
+  assert.equal(unknown.synchronization, 'busy')
+  assert.deepEqual(unknown.syncDiagnostic, { code: 'PUBLICATION_PROOF_MISSING' })
+  assert.equal((await jobs.status(parent, ids[1], true)).synchronization, 'not-required')
+  assert.equal((await jobs.status(parent, ids[1], true)).synchronization, 'not-required')
+  assert.deepEqual({ sends, syncs }, { sends: 0, syncs: 0 })
+  await jobs.dispose()
+})
+
