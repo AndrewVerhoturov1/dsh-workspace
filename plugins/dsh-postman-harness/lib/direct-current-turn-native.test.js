@@ -17,7 +17,7 @@ function fixture(t, readImage = async () => ({ data: png }), jobs) {
   const agent = { id: 'standalone', session: { id: 'standalone', header: { cwd: root, agentPreset: 'standard', delegationDepth: 0 } } }
   const listeners = new Map(), reads = [], grants = new PostmanInputGrants()
   const ctx = { agents: { get: id => id === agent.id ? agent : undefined },
-    attachments: { async readImage(exact, signal) { reads.push(exact); assert.equal(exact, ref); return readImage(exact, signal) } },
+    attachments: { async readImage(exact, signal) { reads.push(exact); assert.equal(exact.mediaType, 'image/png'); return readImage(exact, signal) } },
     on(name, fn) { const set = listeners.get(name) ?? new Set(); listeners.set(name, set); set.add(fn); return () => set.delete(fn) } }
   const bridge = createDirectCurrentTurnToolConfigs(ctx, { jobs, inputGrants: grants,
     taskContexts: { child: () => null } })
@@ -120,3 +120,25 @@ test('standalone reservation blocks concurrent send; message replacement during 
   assert.equal(f.reads.length, 1); assert.equal(f.grants.owners.size, 0)
   assert.equal(f.bridge.store.get(f.agent.id).text, '@Postman new intent')
 })
+test('standalone Image stages and builds the exact two or seven current references', async t => {
+  for (const count of [2,7]) {
+    let f, started=0
+    const jobs={async start(options) {
+      started++
+      assert.equal(options.transportKind,'image')
+      assert.equal(options.inputFiles.length,count)
+      const req='REQ_20261003T010203Z_1234'
+      const bundle=await f.grants.build(options.inputBinding,f.agent.id,req,options.inputFiles,'image')
+      try {assert.deepEqual(bundle.names,Array.from({length:count},(_,i)=>'POSTMAN_REFERENCE_'+req+'_'+(i+1)+'.png'))}
+      finally {bundle.cleanup()}
+      return {status:'STARTED'}
+    },dispose(){}}
+    f=fixture(t,undefined,jobs)
+    const refs=Array.from({length:count},(_,i)=>({...ref,name:'reference-'+i+'.png'}))
+    f.emit('@PostmanImage exact intent',refs.map(attachment=>({type:'image',attachment})))
+    assert.equal((await f.send()).status,'STARTED')
+    assert.equal(started,1)
+    assert.deepEqual(f.reads,refs)
+  }
+})
+

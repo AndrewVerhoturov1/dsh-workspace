@@ -246,7 +246,10 @@ def _p5_identity(proof: Any) -> dict[str, Any] | None:
 
 
 def _same_p5_identity(first: dict[str, Any], second: dict[str, Any]) -> bool:
-    return first == second
+    # The fresh detector re-proves the exact envelope/control. React may replace
+    # the child node; its old DOM path is not the semantic result identity.
+    keys = ("requestId", "expectedFilename", "chatUrl", "assistantIndex", "assistantTextSha256", "turnKey")
+    return all(first[key] == second[key] for key in keys)
 
 
 def _resolve_control(page: Any, proof_identity: dict[str, Any]) -> Any:
@@ -464,7 +467,7 @@ def _capture_download(page, control, staging_zip, expected_filename, download_ti
     try:
         with page.expect_download(timeout=download_timeout_ms) as download_info:
             click_attempted = True
-            control.click(timeout=click_timeout_ms)
+            control.click(timeout=click_timeout_ms, no_wait_after=True)
         download = download_info.value
     except Exception as exc:
         return _result(
@@ -674,10 +677,9 @@ def download_validated_artifact(
         )
 
     try:
-        with cdp_download.process_lock.lock_cdp_download():
-            with cdp_download.download_behavior(page, cdp_artifacts_dir):
-                captured = _capture_download(
-                    page, control, staging_zip, expected_filename, download_timeout_ms, click_timeout_ms)
+        with cdp_download.download_behavior(page, cdp_artifacts_dir):
+            captured = _capture_download(
+                page, control, staging_zip, expected_filename, download_timeout_ms, click_timeout_ms)
     except Exception as exc:
         return _result(DOWNLOAD_BEHAVIOR_FAILED, ok=False,
                        details={"phase": "download_capture", "reason": str(exc)[:500],

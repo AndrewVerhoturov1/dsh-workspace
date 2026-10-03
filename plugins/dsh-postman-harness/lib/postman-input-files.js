@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { dirname, join, resolve } from 'node:path'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, lstatSync, rmSync, readdirSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { tmpdir, homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { POSTMAN_INPUT_FILES_TOOL_NAME, postmanBridgeCallerAllowed } from './postman-bridge-core.js'
@@ -51,8 +51,10 @@ export class CurrentAttachmentStore {
       if (block?.type === 'text') continue
       // Every non-text occurrence counts, even when the installed Host cannot read it.
       // Unsupported metadata is display-only: never resolve it or interpret it as a path.
-      const supported = block?.type === 'image' && block.attachment && Object.hasOwn(IMAGE_EXTENSIONS, block.attachment.mediaType)
       const ref = block?.attachment
+      const image = block?.type === 'image' && ref && Object.hasOwn(IMAGE_EXTENSIONS, ref.mediaType)
+      const file = block?.type === 'file' && ref && typeof this.ctx.attachments?.readFile === 'function'
+      const supported = image || file
       attachments.push(Object.freeze({ selectionId: String(this.nextSelectionId++),
         ...(supported ? { ref, attachmentId: ref.attachmentId, mediaType: ref.mediaType,
           bytes: ref.bytes, width: ref.width, height: ref.height, ...(ref.name !== undefined ? { name: ref.name } : {}) }
@@ -75,13 +77,12 @@ export class CurrentAttachmentStore {
 
 const CURRENT_UNAVAILABLE = 'POSTMAN_INPUT_CURRENT_ATTACHMENT_UNAVAILABLE'
 const CURRENT_MISMATCH = 'POSTMAN_INPUT_CURRENT_ATTACHMENT_MISMATCH'
-const MAX_INPUT_BYTES = 16 * 1024 * 1024, MAX_AGGREGATE_BYTES = 48 * 1024 * 1024
+const MAX_INPUT_BYTES = 48 * 1024 * 1024, MAX_AGGREGATE_BYTES = 144 * 1024 * 1024
 const IMAGE_EXTENSIONS = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' }
 
 function attachmentSourceName(ref, index) {
   const extension = IMAGE_EXTENSIONS[ref.mediaType]
-  if (!extension) throw new Error(CURRENT_UNAVAILABLE)
-  const name = ref.name ?? ('attachment-' + index + '.' + extension)
+  const name = ref.name ?? (extension ? 'attachment-' + index + '.' + extension : 'attachment-' + index + '.bin')
   // Preserve admissible original names exactly; never interpret a display name
   // as a path (including Windows drives/ADS/reserved names on any platform).
   if (typeof name !== 'string' || !name.trim() || name !== name.trim() || name.length > 180 ||
@@ -92,6 +93,12 @@ function attachmentSourceName(ref, index) {
 
 // Exact descriptors bind private byte snapshots. Pins are opaque process-local records,
 // never reconstructed from model text or persisted as filesystem capabilities.
+async function resolveCurrentAttachment(ctx, ref, signal) {
+  if (IMAGE_EXTENSIONS[ref.mediaType]) return ctx.attachments.readImage(ref, signal)
+  if (typeof ctx.attachments?.readFile !== 'function') throw new Error(CURRENT_UNAVAILABLE)
+  return ctx.attachments.readFile(ref, signal)
+}
+
 export class PostmanInputGrants {
   constructor() { this.owners = new Map(); this.pins = new Map(); this.children = new Map() }
   record(agent, context, result) {
@@ -187,7 +194,10 @@ export class PostmanInputGrants {
       if (this.pins.get(binding) !== pin || this.children.get(sessionId)?.binding !== binding)
         throw new Error('POSTMAN_INPUT_PROVENANCE_REJECTED')
       rmSync(spec)
-      if (result.requestId !== requestId || (transportKind === 'image' ? !new RegExp('^POSTMAN_REFERENCE_' + requestId + '\\.(png|jpg|webp|gif)$').test(result.displayName) : result.displayName !== 'POSTMAN_INPUT_' + requestId + '.zip') ||
+      const imageNames = descriptors.length === 1 ? [result.displayName] : result.names
+      const validImages = Array.isArray(imageNames) && imageNames.length === descriptors.length && imageNames.every((name,index) =>
+        typeof name === 'string' && new RegExp('^POSTMAN_REFERENCE_' + requestId + (descriptors.length > 1 ? '_' + (index+1) : '') + '\\.(png|jpg|webp|gif)$').test(name))
+      if (result.requestId !== requestId || (transportKind === 'image' ? !validImages : result.displayName !== 'POSTMAN_INPUT_' + requestId + '.zip') ||
           result.handoffPath !== join(directory, 'input-handoff.json')) throw new Error('POSTMAN_INPUT_BUNDLE_HANDOFF_INVALID')
       return { ...result, cleanup: () => removePrivate(directory) }
     } catch (error) { removePrivate(directory); throw error }
@@ -225,8 +235,9 @@ export async function stageStandaloneCurrentAttachments(ctx, agent, record, curr
   if (!topLevel(agent) || ctx.agents.get(agent.id) !== agent || currentAttachments.get(agent) !== record)
     return { status: CURRENT_MISMATCH }
   return snapshotInputs(ctx, { get: id => id === agent.id ? currentAttachments.get(agent) : undefined },
-    { action: 'stage_current_attachments' }, { agent, signal }, { grants, run: pythonInputCommand,
-      currentAttachments, resolveAttachment: (ref, abort) => ctx.attachments.readImage(ref, abort) })
+    { action: 'stage_current_attachments', ...(record.attachments.length > 1 && record.attachments.every(item=>item.ref)
+        ? {selectionIds:record.attachments.map(item=>item.selectionId)} : {}) }, { agent, signal }, { grants, run: pythonInputCommand,
+      currentAttachments, resolveAttachment: (ref, abort) => resolveCurrentAttachment(ctx, ref, abort) })
 }
 
 async function snapshotInputs(ctx, contexts, args, exec, { grants, run, currentAttachments, resolveAttachment }) {
@@ -323,18 +334,21 @@ async function snapshotInputs(ctx, contexts, args, exec, { grants, run, currentA
 }
 
 export function createPostmanInputFilesTool(ctx, contexts, { grants = postmanInputGrants, run = pythonInputCommand, currentAttachments,
-  resolveAttachment = (ref, signal) => ctx.attachments.readImage(ref, signal) } = {}) {
+  resolveAttachment = (ref, signal) => resolveCurrentAttachment(ctx, ref, signal) } = {}) {
   return defineTool({
     name: POSTMAN_INPUT_FILES_TOOL_NAME,
-    description: 'Privately snapshot exact current user image attachments or explicitly selected local files, describe an existing immutable GitHub source for native delivery, or clean up your private bundle. Never publishes input bytes.',
+    description: 'Privately snapshot exact current attachments or selected local files; locate filename metadata; pack, list or safely unpack selected ZIPs. Existing GitHub sources are read-only. Never publishes input bytes.',
     parameters: {
-      action: { type: 'string', required: true, enum: ['describe_existing', 'stage', 'stage_current_attachments', 'cleanup'] },
+      action: { type: 'string', required: true, enum: ['describe_existing', 'stage', 'stage_current_attachments', 'cleanup', 'locate', 'pack', 'list', 'unpack'] },
       repository: { type: 'string', description: 'Existing file repository; only AndrewVerhoturov1/dsh-workspace is supported.' },
       commit: { type: 'string', description: 'Exact existing GitHub commit.' },
       path: { type: 'string', description: 'Repository-relative path of the existing file.' },
       paths: { type: 'array', items: { type: 'string' }, description: 'Explicit absolute paths to selected regular files.' },
       selectionIds: { type: 'array', items: { type: 'string' }, description: 'Exact Host occurrence selectors from this Leader latest user message; omit only for a single attachment.' },
       bundleId: { type: 'string', description: 'Exact bundle ID returned by stage in this Leader task context.' },
+      filename: { type: 'string', description: 'Exact or near filename for bounded metadata search.' },
+      source: { type: 'string', description: 'Explicit absolute ZIP path for list/unpack.' },
+      destination: { type: 'string', description: 'Explicit absolute new ZIP path for pack or new directory for unpack; never overwrite.' },
     },
     output: { schema: { type: 'object', additionalProperties: true, properties: { status: { type: 'string', required: true } } },
       render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
@@ -342,6 +356,29 @@ export function createPostmanInputFilesTool(ctx, contexts, { grants = postmanInp
       const agent = exec?.agent
       if (!postmanBridgeCallerAllowed(agent) || ctx.agents.get(agent.id) !== agent)
         return { status: 'POSTMAN_INPUT_CALLER_REJECTED' }
+      if (['locate', 'pack', 'list', 'unpack'].includes(args.action)) {
+        const keys = Object.keys(args).sort().join(',')
+        let operation
+        if (args.action === 'locate' && keys === 'action,filename' && typeof args.filename === 'string') {
+          const cwd = agent.session?.header?.cwd
+          if (typeof cwd !== 'string' || !cwd) return { status:'POSTMAN_INPUT_CONTEXT_UNAVAILABLE' }
+          const roots = [cwd, ...['Downloads','Desktop','Documents'].map(name => join(homedir(),name))]
+          const result = await pythonCommand(HOST_ROOT,'archive_operations.py',['locate','--name',args.filename,'--roots',...roots])
+          const current = currentAttachments?.get(agent)
+          if (current?.attachments) result.attachments = current.attachments.filter(item => item.name?.toLowerCase() === args.filename.toLowerCase())
+            .map(({ref,...metadata}) => metadata)
+          return result
+        }
+        if (args.action === 'pack' && keys === 'action,destination,paths' && Array.isArray(args.paths) &&
+            args.paths.length >= 1 && args.paths.length <= 20 && args.paths.every(p => typeof p === 'string') && typeof args.destination === 'string')
+          operation = ['pack','--paths',...args.paths,'--destination',args.destination]
+        if (args.action === 'list' && keys === 'action,source' && typeof args.source === 'string')
+          operation = ['list','--source',args.source]
+        if (args.action === 'unpack' && keys === 'action,destination,source' && typeof args.source === 'string' && typeof args.destination === 'string')
+          operation = ['unpack','--source',args.source,'--destination',args.destination]
+        if (!operation) return { status:'POSTMAN_INPUT_ARGUMENTS_INVALID' }
+        return pythonCommand(HOST_ROOT,'archive_operations.py',operation)
+      }
       return snapshotInputs(ctx, contexts, args, exec, { grants, run, currentAttachments, resolveAttachment })
     },
   })

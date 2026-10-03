@@ -13,6 +13,11 @@ from pathlib import Path
 import warnings
 import zipfile
 
+try:
+    from postman.safe_zip import read_archive, SafeZipError
+except ModuleNotFoundError:
+    from safe_zip import read_archive, SafeZipError
+
 MAX_IMAGE_BYTES = 64 * 1024 * 1024
 _EXTENSIONS = {".png": "PNG", ".jpg": "JPEG", ".webp": "WEBP"}
 _MIME = {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp"}
@@ -86,17 +91,19 @@ def extract_validated_image(
     if normalized_name != f"{request_id}_img1{extension}":
         _fail("IMAGE_ENTRY_NAME", "Image entry must match the canonical request filename", entry=normalized_name)
     try:
-        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
-            # Resolve by validated member position, not by an untrusted output path.
-            selected = zf.infolist()[validated_inventory.index(chosen)]
-            if (selected.filename.replace(chr(92), "/") != normalized_name
-                    or selected.file_size != chosen["uncompressedSize"]):
+        chunks = []
+        def consume(name, directory, blocks):
+            if name != normalized_name or directory:
                 _fail("IMAGE_INVENTORY_MISMATCH", "Selected image differs from validated inventory")
-            with zf.open(selected) as source:
-                data = source.read(MAX_IMAGE_BYTES + 1)
-                if len(data) > MAX_IMAGE_BYTES:
-                    _fail("IMAGE_INVENTORY_MISMATCH", "Image entry exceeds size limit")
-    except (zipfile.BadZipFile, RuntimeError, OSError, EOFError) as exc:
+            chunks.extend(blocks)
+        verified = read_archive(archive, consume=consume)
+        identity = lambda entries: [{key:item.get(key) for key in ("path","kind","uncompressedSize")} for item in entries]
+        if verified["sha256"] != zip_sha or identity(verified["inventory"]) != identity(validated_inventory):
+            _fail("IMAGE_INVENTORY_MISMATCH", "ZIP differs from validated inventory")
+        data = b''.join(chunks)
+        if len(data) > MAX_IMAGE_BYTES:
+            _fail("IMAGE_INVENTORY_MISMATCH", "Image entry exceeds size limit")
+    except (SafeZipError, OSError) as exc:
         _fail("IMAGE_ZIP_CHANGED", "ZIP can no longer be read", reason=str(exc)[:200])
     fmt, width, height = _decode_image(data, extension)
     destination = Path(destination_dir)

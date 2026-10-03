@@ -152,7 +152,10 @@ def _phase_suppression(phase: dict[str, Any], *, boundary: str,
                        transitions: list[str], page: Any, prompt: str | None = None,
                        timeout_ms: int = 0) -> dict[str, Any] | None:
     state = phase.get("phase", browser_observer.UNKNOWN)
-    if state == browser_observer.WORKING and not phase.get("finalAnswerLatched"):
+    if (state not in {browser_observer.FINAL_ANSWER_STARTED, browser_observer.FINAL_ANSWER_COMPLETED,
+                          browser_observer.ASSISTANT_CONNECTION_INTERRUPTED}
+            and not phase.get("finalAnswerLatched")
+            and phase.get("reason") not in {"control_intent_lineage_changed", "control_deadline"}):
         return None
     code = (REMINDER_SUPPRESSED_ASSISTANT_ACTIVITY if state in
             {browser_observer.FINAL_ANSWER_STARTED, browser_observer.FINAL_ANSWER_COMPLETED}
@@ -183,12 +186,6 @@ def _req_anchor_snapshot(page: Any, prompt: str, *, anchor_binding=None) -> dict
 
     role = str(last.get("role", "") or "")
     text = str(last.get("text", "") or "")
-    fingerprint = {
-        "turnCount": len(turns),
-        "lastTurnIndex": last.get("index"),
-        "lastTurnRole": role,
-        "lastTurnTextSha256": submit.prompt_sha256(text),
-    }
     anchor = browser_observer.find_user_anchor(turns, prompt, anchor_binding=anchor_binding)
     anchor_turn = turns[anchor] if anchor is not None else None
     request_key_match = bool(anchor_turn and request_key_line and
@@ -352,11 +349,10 @@ def submit_reminder(
     anchor_prompt: str | None = None,
     phase_tracker: browser_observer.AnswerPhaseTracker | None = None,
     anchor_binding: dict[str, Any] | None = None,
-    system_continuation: bool = False,
     operation_deadline: float | None = None,
     control_intent: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Send one reminder during proven WORKING in the exact REQ chat."""
+    """Send one reminder in the exact REQ chat, unless final answer has begun."""
     if isinstance(send_window_ms, bool) or not isinstance(send_window_ms, int) or send_window_ms < 0:
         raise ValueError("send_window_ms must be a non-negative integer")
     if isinstance(poll_ms, bool) or not isinstance(poll_ms, int) or poll_ms <= 0:
@@ -392,22 +388,13 @@ def submit_reminder(
                 return {"phase": browser_observer.UNKNOWN, "reason": "control_intent_lineage_changed"}
         phase = browser_observer.inspect_answer_phase(page, expected_anchor, conversation_url,
                                                      tracker=tracker, anchor_binding=anchor_binding,
-                                                     ignore_system_banner=system_continuation)
+                                                     ignore_system_banner=True)
         interrupted, evidence = browser_observer.connection_interrupted(page)
         if interrupted or evidence.get("confidence") == "weak":
             return {**phase, "phase": browser_observer.ASSISTANT_CONNECTION_INTERRUPTED}
-        processing, processing_evidence = browser_observer.additional_processing(page)
-        if not system_continuation and (processing or processing_evidence.get("confidence") == "weak"):
-            return {**phase, "phase": browser_observer.ADDITIONAL_PROCESSING}
         if operation_deadline is not None and monotonic() >= operation_deadline:
-            return {**phase, "phase": browser_observer.UNKNOWN, "reason": "control_deadline"}
-        # Special recovery continuation is permitted after explicit reload/re-proof,
-        # not based on a fictitious WORKING observation. Exact anchor guards remain.
-        if system_continuation and not phase.get("finalAnswerLatched") and phase["phase"] not in {
-                browser_observer.FINAL_ANSWER_STARTED, browser_observer.FINAL_ANSWER_COMPLETED}:
-            return {**phase, "phase": browser_observer.WORKING, "systemContinuation": True}
+            return {**phase, "reason": "control_deadline"}
         return phase
-
     def pause():
         seconds = uniform(1.0, 5.0)
         if operation_deadline is not None:
@@ -553,8 +540,7 @@ def submit_reminder(
 
         observed_anchor = _req_anchor_snapshot(page, expected_anchor, anchor_binding=anchor_binding)
         if (
-            not observed_anchor.get("safe")
-            or observed_anchor.get("fingerprint") != baseline.get("fingerprint")
+            not observed_anchor.get("safe") or observed_anchor.get("fingerprint") != baseline.get("fingerprint")
         ):
             return _suppression_after_insert(
                 page,
@@ -613,8 +599,7 @@ def submit_reminder(
                     },
                 )
             if (
-                not final_anchor.get("safe")
-                or final_anchor.get("fingerprint") != baseline.get("fingerprint")
+                not final_anchor.get("safe") or final_anchor.get("fingerprint") != baseline.get("fingerprint")
             ):
                 return _suppression_after_insert(
                     page,

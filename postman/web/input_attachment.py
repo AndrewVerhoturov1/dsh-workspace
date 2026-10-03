@@ -58,44 +58,45 @@ _PROOF_JS = r"""
       visible(i) && ['User attachment', 'Приложение пользователя'].includes(i.alt) &&
       i.parentElement.getAttribute('aria-label') === i.alt);
     if (thumbnails.length) {
-      const unknown = reason => ({known:false, count:0, names:[], ids:[], reason,
-        pending:false, error:false, settled:false});
-      if (thumbnails.length !== 1 || scope.querySelectorAll('img').length !== 1)
+      const unknown = reason => ({known:false, count:0, names:[], ids:[], reason, pending:false, error:false, settled:false});
+      if (thumbnails.length < 1 || thumbnails.length > 7 || scope.querySelectorAll('img').length !== thumbnails.length)
         return unknown('ambiguous_uploaded_thumbnails');
-      const image = thumbnails[0];
-      const keys = Object.keys(image).filter(k => k.startsWith('__reactFiber$'));
-      if (keys.length !== 1) return unknown('uploaded_metadata_missing');
-      let fiber = image[keys[0]], source = null, item = null, bound = false;
       const conversationId = location.pathname.split('/').length === 3 && location.pathname.split('/')[1] === 'c' ? location.pathname.split('/')[2] : null;
-      for (let depth = 0; fiber && depth < 64; depth++, fiber = fiber.return) {
-        if (fiber.stateNode === scope) { bound = true; break; }
-        const props = fiber.memoizedProps;
-        if (props?.sourceImage) {
-          if (source || props.imageSource !== 'uploaded' || props.chatGptConversationId !== conversationId)
-            return {...unknown('uploaded_source_unbound'), duplicateSource:!!source,
-              observedImageSource:props.imageSource ?? null,
-              observedConversationId:props.chatGptConversationId ?? null, expectedConversationId:conversationId};
-          source = props.sourceImage;
-        }
-        if (props?.item) {
-          if (item || props.conversationId !== conversationId || props.pendingAttachment)
-            return unknown('uploaded_item_unbound');
-          item = props.item;
-        }
-      }
       const messageIds = scope.getAttribute('data-chatgpt-search-message-ids');
-      const files = item?.chatGptImageAttachments;
-      const file = Array.isArray(files) && files.length === 1 ? files[0] : null;
-      if (!bound || !conversationId || item?.type !== 'user-message' ||
-          !messageIds || item.messageId !== messageIds || item.serverMessageId !== messageIds ||
-          !file || typeof file.fileId !== 'string' || !/^file_[a-zA-Z0-9]+$/.test(file.fileId) ||
-          typeof file.name !== 'string' || !file.mimeType?.startsWith('image/') ||
-          source?.id !== 'sediment://' + file.fileId || source.status !== 'completed' ||
-          !Array.isArray(item.images) || item.images.length !== 1 || item.images[0] !== source.id ||
-          source.src !== source.id)
-        return unknown('uploaded_identity_unproven');
-      return {known:true, count:1, names:[file.name], ids:[file.fileId],
-        pending:false, error:false, settled:image.complete && image.naturalWidth > 0,
+      const names = [], ids = [];
+      for (const image of thumbnails) {
+        const keys = Object.keys(image).filter(k => k.startsWith('__reactFiber$'));
+        if (keys.length !== 1) return unknown('uploaded_metadata_missing');
+        let fiber = image[keys[0]], source = null, item = null, bound = false;
+        for (let depth = 0; fiber && depth < 64; depth++, fiber = fiber.return) {
+          if (fiber.stateNode === scope) { bound = true; break; }
+          const props = fiber.memoizedProps;
+          if (props?.sourceImage) {
+            if (source || props.imageSource !== 'uploaded' || props.chatGptConversationId !== conversationId)
+              return {...unknown('uploaded_source_unbound'), duplicateSource:!!source,
+                observedImageSource:props.imageSource ?? null, observedConversationId:props.chatGptConversationId ?? null,
+                expectedConversationId:conversationId};
+            source = props.sourceImage;
+          }
+          if (props?.item) {
+            if (item || props.conversationId !== conversationId || props.pendingAttachment)
+              return unknown('uploaded_item_unbound');
+            item = props.item;
+          }
+        }
+        const files = item?.chatGptImageAttachments;
+        const file = Array.isArray(files) ? files.find(f => source?.id === 'sediment://' + f.fileId) : null;
+        if (!bound || !conversationId || item?.type !== 'user-message' || !messageIds ||
+            item.messageId !== messageIds || item.serverMessageId !== messageIds || !file ||
+            files.length !== thumbnails.length || typeof file.fileId !== 'string' || !/^file_[a-zA-Z0-9]+$/.test(file.fileId) ||
+            typeof file.name !== 'string' || !file.mimeType?.startsWith('image/') || source.status !== 'completed' ||
+            !Array.isArray(item.images) || item.images.length !== thumbnails.length || !item.images.includes(source.id) || source.src !== source.id)
+          return unknown('uploaded_identity_unproven');
+        names.push(file.name); ids.push(file.fileId);
+      }
+      if (new Set(ids).size !== thumbnails.length || new Set(names).size !== thumbnails.length) return unknown('duplicate_uploaded_members');
+      return {known:true, count:thumbnails.length, names, ids, pending:false, error:false,
+        settled:thumbnails.every(image => image.complete && image.naturalWidth > 0),
         proofStrategy:'scoped_uploaded_component', userMessageId:messageIds};
     }
   }
@@ -115,25 +116,30 @@ _PROOF_JS = r"""
   const candidates = [...new Set([...observedPreCards, ...observedSentCards, ...imageCards,
     ...scope.querySelectorAll('[data-testid="file-upload-preview"],[data-testid="image-upload-preview"]')])].filter(visible);
   const cards = candidates.filter(e => !candidates.some(parent => parent !== e && parent.contains(e)));
+  const wantedNames = options.names || [options.name];
   const names = cards.map(e => {
-    const named = e.querySelector('[data-testid="file-name"],[data-filename]');
-    const image = options.image ? e.querySelector('img[alt],img[title]') : null;
-    return e.getAttribute('data-filename') || named?.getAttribute('data-filename') ||
-      named?.textContent?.trim() || image?.getAttribute('alt') || image?.getAttribute('title') ||
-      [...e.querySelectorAll('[title]')].map(n => n.getAttribute('title')).find(title => title === options.name) ||
-      [...e.querySelectorAll('button[aria-label]')].map(b => b.getAttribute('aria-label')).find(label => label === options.name) ||
-      (options.image && !options.sent ? [...e.querySelectorAll('button[aria-label]')].map(b => b.getAttribute('aria-label'))
-        .filter(label => /^(Remove|Удалить) /.test(label || '')).map(label => label.replace(/^(Remove|Удалить) /, '')).find(label => label === options.name) : '') || '';
+    const explicit = e.getAttribute('data-file-name') || e.getAttribute('data-filename');
+    if (explicit) return explicit;
+    if (options.sent && options.image) {
+      const image = e.querySelector('img[alt],img[title]');
+      return image?.getAttribute('alt') || image?.getAttribute('title') || '';
+    }
+    if (e.getAttribute('title')) return e.getAttribute('title');
+    const labels = [...e.querySelectorAll('img[alt],img[title]')].flatMap(n => [n.getAttribute('alt'),n.getAttribute('title')])
+      .concat([...e.querySelectorAll('[title]')].map(n => n.getAttribute('title')))
+      .concat([...e.querySelectorAll('button[aria-label]')].map(n => n.getAttribute('aria-label')))
+      .filter(Boolean).map(label => label.replace(/^(Remove|Удалить) /, ''));
+    return labels.find(label => wantedNames.includes(label)) || '';
   });
   const pending = [...scope.querySelectorAll('[role="progressbar"],progress,[aria-busy="true"],[data-upload-state="pending"],[data-upload-state="uploading"]')].some(visible);
   const error = [...scope.querySelectorAll('[role="alert"],[data-upload-state="error"],[data-testid="upload-error"]')].some(visible) ||
     (!options.sent && /upload failed|could not upload|unable to upload|ошибка|не удалось/i.test(scope.innerText || ''));
-  const settled = cards.length === 1 && (options.sent || cards[0].getAttribute('data-upload-state') === 'ready' ||
-    [...cards[0].querySelectorAll('button[aria-label]')].some(b =>
-      b.getAttribute('aria-label') === options.name && b.getAttribute('aria-busy') !== 'true' && !b.disabled) ||
-    (options.image && [...cards[0].querySelectorAll('img')].some(i => i.complete && i.naturalWidth > 0) &&
-      [...cards[0].querySelectorAll('button[aria-label]')].some(b =>
-        ['Remove ' + options.name, 'Удалить ' + options.name].includes(b.getAttribute('aria-label')) && !b.disabled)));
+  const settled = cards.length === wantedNames.length && cards.every((card,index) => options.sent ||
+    card.getAttribute('data-upload-state') === 'ready' || [...card.querySelectorAll('button[aria-label]')].some(b =>
+      b.getAttribute('aria-label') === names[index] && b.getAttribute('aria-busy') !== 'true' && !b.disabled) ||
+    (options.image && [...card.querySelectorAll('img')].some(i => i.complete && i.naturalWidth > 0) &&
+      [...card.querySelectorAll('button[aria-label]')].some(b =>
+        ['Remove ' + names[index], 'Удалить ' + names[index]].includes(b.getAttribute('aria-label')) && !b.disabled)));
   const ids = cards.map(e => e.getAttribute('data-file-id') || '');
   // A file-card is required. Text that merely mentions the filename is not proof.
   return {known:cards.length > 0, count:cards.length, names, ids, pending, error, settled};
@@ -143,7 +149,9 @@ _PROOF_JS = r"""
 
 def snapshot(root, name, *, sent=False):
     try:
-        value = root.evaluate(_PROOF_JS, {"name": name, "sent": sent, "image": name.startswith("POSTMAN_REFERENCE_")})
+        names = name if isinstance(name, list) else [name]
+        value = root.evaluate(_PROOF_JS, {"name": names[0], "names": names, "sent": sent,
+                                          "image": all(n.startswith("POSTMAN_REFERENCE_") for n in names)})
         if isinstance(value, dict):
             return value
     except Exception as exc:
@@ -162,9 +170,11 @@ def snapshot(root, name, *, sent=False):
 
 
 def ready(proof, name, expected_id=None):
-    return (proof.get("known") is True and proof.get("count") == 1 and proof.get("names") == [name]
+    names = name if isinstance(name, list) else [name]
+    return (proof.get("known") is True and proof.get("count") == len(names) and sorted(proof.get("names", [])) == sorted(names)
             and proof.get("pending") is False and proof.get("error") is False and proof.get("settled") is True
-            and (not expected_id or not any(proof.get("ids", [])) or proof.get("ids") == [expected_id]))
+            and (not any(expected_id if isinstance(expected_id, list) else [expected_id]) or not any(proof.get("ids", [])) or proof.get("ids") ==
+                 (expected_id if isinstance(expected_id, list) else [expected_id])))
 
 
 def composer_scope(composer):
@@ -216,7 +226,7 @@ def upload(page, composer, attachment, *, timeout_ms, wait_until):
             if not node.is_enabled():
                 continue
             accepted = [token.strip() for token in accept.split(',')]
-            if not accept or '*/*' in accepted or media in accepted or Path(attachment.name).suffix.lower() in accepted or (media.startswith('image/') and 'image/*' in accepted):
+            if not accept or '*/*' in accepted or media in accepted or Path(attachment.name[0] if isinstance(attachment.name, list) else attachment.name).suffix.lower() in accepted or (media.startswith('image/') and 'image/*' in accepted):
                 eligible.append(node)
                 if media.startswith('image/') and accepted == ['image/*']:
                     image_only.append(node)
@@ -230,8 +240,12 @@ def upload(page, composer, attachment, *, timeout_ms, wait_until):
                     "details": {"reason": "ambiguous_or_missing_file_input", **selection}}
         # Use freshly hash-verified bytes as a native FilePayload. Passing a pathname
         # here would permit a final TOCTOU between verification and browser file read.
-        data = attachment.upload_bytes()
-        eligible[0].set_input_files({"name": attachment.name, "mimeType": getattr(attachment, "media_type", "application/zip"), "buffer": data}, timeout=timeout_ms)
+        members = getattr(attachment, "members", (attachment,))
+        if len(members) > 1 and eligible[0].get_attribute("multiple") is None:
+            return {"ok": False, "code": ATTACHMENT_CONTROL_UNAVAILABLE, "details": {"reason": "multiple_images_control_required"}}
+        payload = [{"name": member.name, "mimeType": getattr(member, "media_type", "application/zip"),
+                    "buffer": member.upload_bytes()} for member in members]
+        eligible[0].set_input_files(payload if len(payload) > 1 else payload[0], timeout=timeout_ms)
         selection["setInputFilesCompleted"] = True
     except input_bundle.InputBundleError as exc:
         return {"ok": False, "code": exc.code, "details": selection}
@@ -264,15 +278,17 @@ def clear_owned(page, attachment):
         return {"cleared": False, "reason": "ownership_unproven"}
     try:
         buttons = scope.locator('button[aria-label]')
-        owned = [buttons.nth(i) for i in range(buttons.count()) if buttons.nth(i).get_attribute('aria-label')
-                 in ["Remove " + attachment.name, "Удалить " + attachment.name]]
-        if len(owned) != 1:
+        names = attachment.name if isinstance(attachment.name, list) else [attachment.name]
+        labels = [prefix + name for name in names for prefix in ("Remove ", "Удалить ")]
+        owned = [buttons.nth(i) for i in range(buttons.count()) if buttons.nth(i).get_attribute('aria-label') in labels]
+        if len(owned) != len(names):
             return {"cleared": False, "reason": "remove_control_unproven"}
         # Live UI reveals Remove on hover; never force-click an occluded control.
         images = scope.locator('img[alt]')
         if images.count() == 1:
             images.nth(0).hover(timeout=2000)
-        owned[0].click(timeout=3000)
+        for button in owned:
+            button.click(timeout=3000)
         empty = snapshot(scope, attachment.name)
         return {"cleared": empty.get("known") is True and empty.get("count") == 0}
     except Exception as exc:

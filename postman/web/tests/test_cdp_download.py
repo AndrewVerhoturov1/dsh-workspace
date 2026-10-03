@@ -90,28 +90,20 @@ with cdp_download.locked_playwright(Manager):
                 with cdp_download.locked_playwright(Manager):
                     events.append("body")
                     raise RuntimeError("failure")
-        self.assertEqual(events, ["lock", "start", "unlock", "body", "lock", "disconnect", "unlock"])
+        self.assertEqual(events, ["start", "body", "lock", "disconnect", "unlock"])
 
-    def test_override_lives_until_download_body_finishes(self):
-        events = []
-        class Session:
-            def send(self, command, params):
-                self_params.update(params)
-                events.append(command)
-            def detach(self): events.append("detach")
-        self_params = {}
+    def test_bootstrap_and_override_share_guid_directory(self):
         from types import SimpleNamespace
-        page = SimpleNamespace(context=SimpleNamespace(browser=SimpleNamespace(
-            new_browser_cdp_session=lambda: Session())))
-        with tempfile.TemporaryDirectory() as temp:
-            with self.assertRaisesRegex(RuntimeError, "copy failure"):
-                with cdp_download.download_behavior(page, temp):
-                    events.append("download/copy")
-                    raise RuntimeError("copy failure")
-            self.assertEqual(self_params["downloadPath"], str(Path(temp).resolve()))
-        self.assertEqual(self_params["behavior"], "allowAndName")
-        self.assertEqual(events, ["Browser.setDownloadBehavior", "download/copy", "detach"])
+        calls, params = [], {}
+        session = SimpleNamespace(send=lambda command, value: params.update(value), detach=lambda: calls.append('detach'))
+        browser = SimpleNamespace(new_browser_cdp_session=lambda: session)
+        def connect(endpoint, **kwargs):
+            calls.append(kwargs)
+            return browser
+        playwright = SimpleNamespace(chromium=SimpleNamespace(connect_over_cdp=connect))
+        cdp_download.connect_over_cdp(playwright, 'http://127.0.0.1:9222', artifacts_dir='ignored-request-dir')
+        page = SimpleNamespace(context=SimpleNamespace(browser=browser))
+        with cdp_download.download_behavior(page, 'other-dir'):
+            self.assertEqual(calls[0]['artifacts_dir'], params['downloadPath'])
+        self.assertEqual(calls[-1], 'detach')
 
-
-if __name__ == "__main__":
-    unittest.main()

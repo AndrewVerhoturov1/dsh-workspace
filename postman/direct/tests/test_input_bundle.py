@@ -315,7 +315,7 @@ class InputBundleTests(unittest.TestCase):
         image = postman_direct.build_image_generation_prompt("draw", [{**desc, "name": "reference.png"}])
         self.assertNotIn("GitHub connector", image)
         self.assertNotIn("raw_url", image)
-        self.assertIn("приложенное изображение", image)
+        self.assertIn("приложенные изображения", image)
         text = text_task_package.render_direct_text_task_manifest(request_id=REQ, user_intent="exact", repository=REPO,
             base_commit=COMMIT, input_files=[desc], native_input_request_id=REQ)
         self.assertIn(f"POSTMAN_INPUT_{REQ}.zip", text)

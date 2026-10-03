@@ -52,7 +52,7 @@ class PresendLockScopeTests(unittest.TestCase):
                  patch.object(observer, "inspect_answer_phase", return_value={"phase": observer.FINAL_ANSWER_STARTED, "finalAnswerLatched": True}), \
                  patch.object(observer, "connection_interrupted", return_value=(False, {})), \
                  patch.object(observer, "additional_processing", return_value=(False, {})):
-                result = reminders.submit_reminder(page, "continue", page.url, system_continuation=system)
+                result = reminders.submit_reminder(page, "continue", page.url)
                 self.assertEqual(result["sendState"], submit.SEND_PROVEN_NOT_SENT)
                 lock.assert_not_called()
 

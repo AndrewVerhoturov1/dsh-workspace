@@ -649,6 +649,22 @@ class ObserverTests(unittest.TestCase):
         self.assertEqual(result["code"], observer.ASSISTANT_TURN_TIMEOUT, result)
         self.assertEqual(result["details"]["reason"], "identity_temporarily_unproved")
 
+    def test_historical_image_reproof_uses_bound_original_not_packaging_response(self):
+        prompt="original generation"
+        original=turn("assistant","",images=["original-image"])
+        original.attrs["data-message-id"]="original-assistant"
+        binding={"userOrdinal":0,"precedingUserHashes":[],"promptSha256":observer.submit.prompt_sha256(prompt)}
+        snapshot=[turn("user",prompt),original,turn("user","package"),turn("assistant","packaging failed")]
+        for historical in (False,True):
+            page=FakePage([snapshot]);clock=FakeClock(page)
+            result=observer.observe_next_assistant(page,prompt,page.url,image_mode=True,historical_image=historical,
+                anchor_binding=binding,timeout_ms=500,stable_ms=0,poll_ms=50,sleep=clock.sleep,monotonic=clock.monotonic)
+            if historical:
+                self.assertTrue(result["ok"],result)
+                self.assertEqual(result["details"]["assistantIndex"],1)
+                self.assertEqual(result["details"]["assistantIdentity"]["assistantMessageId"],"original-assistant")
+            else:self.assertEqual(result["code"],observer.CHAT_CORRELATION_LOST)
+
     def test_promotion_cannot_rebind_to_new_user_or_duplicate_anchor(self):
         for later_prompt in ("unexpected", "probe"):
             with self.subTest(later_prompt=later_prompt):

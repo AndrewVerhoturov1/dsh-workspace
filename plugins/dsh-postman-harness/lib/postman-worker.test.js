@@ -310,7 +310,7 @@ test('admission failures do not corrupt mapping or create a second active child'
   assert.equal((await f.tools.taskTool.execute({ task: 'first' }, exec(a))).status, 'POSTMAN_WORKER_BINDING_UNCERTAIN')
   f.ctx.subagents.startContinuable = originalStart
   // An ambiguous start keeps its slot until an explicit, verified release.
-  assert.equal((await f.tools.stopTool.execute({ workerSessionId: failedStart.workerSessionId }, exec(a))).status, 'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT')
+  assert.equal((await f.tools.stopTool.execute({ mode: 'close', workerSessionId: failedStart.workerSessionId }, exec(a))).status, 'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT')
   const f2 = fixture(); f2.agents.set(a.id, a)
   const accepted = await f2.tools.taskTool.execute({ task: 'first' }, exec(a))
   f2.ctx.subagents.followup = async () => { throw new Error('not admitted') }

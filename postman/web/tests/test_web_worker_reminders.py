@@ -259,7 +259,7 @@ class WebWorkerReminderTests(unittest.TestCase):
                                             max_reminders=1, playwright_factory=FakeFactory(page))
         self.assertFalse(result["ok"])
         self.assertEqual(len(send_times), 1)
-        self.assertGreaterEqual(send_times[0], 13.0)
+        self.assertEqual(send_times[0], 10.0)  # Unknown phase no longer blocks a due reminder.
         self.assertLess(send_times[0], 20.0)
         self.assertEqual(result["details"]["details"]["reminders"][0]["index"], 1)
 

@@ -11,6 +11,8 @@ param(
 
     [string]$ChatRequestId = '',
 
+    [switch]$AutomaticContinuation,
+
     [string]$InputFilesBase64 = '',
 
     [string]$InputBundleManifest = '',
@@ -60,6 +62,9 @@ try {
 
     if (-not [string]::IsNullOrWhiteSpace($ChatRequestId)) {
         $argsList += @('--chat-request-id', $ChatRequestId)
+    }
+    if ($AutomaticContinuation) {
+        $argsList += '--automatic-continuation'
     }
     if (-not [string]::IsNullOrEmpty($InputFilesBase64)) {
         $argsList += @('--input-files-base64', $InputFilesBase64)
