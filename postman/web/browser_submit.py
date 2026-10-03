@@ -22,6 +22,7 @@ import cdp_download
 
 import argparse
 from functools import wraps
+from contextlib import nullcontext
 import os
 import hashlib
 import json
@@ -1211,48 +1212,59 @@ def clear_owned_unsent_prompt(page: Any, prompt: str, *, timeout_ms: int) -> boo
         return False
 
 
-def _presend_transaction(fn):
-    """A single short cross-process critical section for all production sends."""
+def _presend_transaction(fn=None, *, fresh=False):
+    """Keep page ownership/cleanup guards on every Send; exclude shared home drafts only."""
+    if fn is None:
+        return lambda function: _presend_transaction(function, fresh=fresh)
     @wraps(fn)
     def wrapped(page, prompt, *args, **kwargs):
-        with process_lock.lock_browser_presend():
-            diagnostic = _page_diagnostic(page)
-            transaction = {"sendAttempted": False, "fillAttempted": False, "prompt": prompt}
-            page._postman_presend = transaction
-            result = None
-            try:
-                result = fn(page, prompt, *args, **kwargs)
-            except Exception as exc:
-                if isinstance(exc, ValueError) and not transaction["fillAttempted"] and not transaction["sendAttempted"]:
-                    raise
-                unknown = transaction["sendAttempted"]
-                result = _result(PROMPT_SEND_UNKNOWN if unknown else PROMPT_INSERT_FAILED,
-                    ok=False, send_state=SEND_UNKNOWN if unknown else SEND_PROVEN_NOT_SENT,
-                    transitions=[], details={"reason": "submit_exception", "exceptionType": type(exc).__name__})
-            finally:
+        try:
+            lock = process_lock.lock_browser_presend() if fresh else nullcontext()
+            with lock:
+                diagnostic = _page_diagnostic(page)
+                transaction = {"sendAttempted": False, "fillAttempted": False, "prompt": prompt}
+                page._postman_presend = transaction
+                result = None
                 try:
-                    if result is not None and result.get("sendState") == SEND_PROVEN_NOT_SENT and not transaction["sendAttempted"]:
-                        details = result.setdefault("details", {})
-                        if transaction.get("fillAttempted"):
-                            empty, _ = _composer_empty_proof(page)
-                            details["unsentPromptCleared"] = empty or clear_owned_unsent_prompt(
-                                page, prompt, timeout_ms=kwargs.get("timeout_ms", DEFAULT_TIMEOUT_MS))
-                        attachment = transaction.get("attachment")
-                        if attachment is not None and _owned_unsent_binding(page, transaction):
-                            empty, _ = _composer_empty_proof(page)
-                            if empty:
-                                details["unsentAttachmentCleanup"] = attachments.clear_owned(page, attachment)
+                    result = fn(page, prompt, *args, **kwargs)
                 except Exception as exc:
-                    if result is not None:
-                        result.setdefault("details", {})["cleanupExceptionType"] = type(exc).__name__
+                    if isinstance(exc, ValueError) and not transaction["fillAttempted"] and not transaction["sendAttempted"]:
+                        raise
+                    unknown = transaction["sendAttempted"]
+                    result = _result(PROMPT_SEND_UNKNOWN if unknown else PROMPT_INSERT_FAILED,
+                        ok=False, send_state=SEND_UNKNOWN if unknown else SEND_PROVEN_NOT_SENT,
+                        transitions=[], details={"reason": "submit_exception", "exceptionType": type(exc).__name__})
                 finally:
-                    page._postman_presend = None
-            result.setdefault("details", {})["pageDiagnostic"] = {**diagnostic, "url": str(getattr(page, "url", "") or "")}
-            return result
+                    try:
+                        if result is not None and result.get("sendState") == SEND_PROVEN_NOT_SENT and not transaction["sendAttempted"]:
+                            details = result.setdefault("details", {})
+                            if transaction.get("fillAttempted"):
+                                empty, _ = _composer_empty_proof(page)
+                                details["unsentPromptCleared"] = empty or clear_owned_unsent_prompt(
+                                    page, prompt, timeout_ms=kwargs.get("timeout_ms", DEFAULT_TIMEOUT_MS))
+                            attachment = transaction.get("attachment")
+                            if attachment is not None and _owned_unsent_binding(page, transaction):
+                                empty, _ = _composer_empty_proof(page)
+                                if empty:
+                                    details["unsentAttachmentCleanup"] = attachments.clear_owned(page, attachment)
+                    except Exception as exc:
+                        if result is not None:
+                            result.setdefault("details", {})["cleanupExceptionType"] = type(exc).__name__
+                    finally:
+                        page._postman_presend = None
+                result.setdefault("details", {})["pageDiagnostic"] = {**diagnostic, "url": str(getattr(page, "url", "") or "")}
+                return result
+        except process_lock.ResourceBusyError:
+            # Lock admission failed before any Page access, attachment upload or fill.
+            # This is terminal, not permission to retry the original request.
+            return _result("BROWSER_PRESEND_LOCK_TIMEOUT", ok=False,
+                send_state=SEND_PROVEN_NOT_SENT, transitions=[], recoverable=False,
+                details={"reason": "fresh_presend_lock_timeout", "composerUntouched": True,
+                         "sendAttempted": False, "lockTimeoutSeconds": 180.0})
     return wrapped
 
 
-@_presend_transaction
+@_presend_transaction(fresh=True)
 def submit_fresh_prompt(page: Any, prompt: str, *, timeout_ms: int = DEFAULT_TIMEOUT_MS, input_attachment=None) -> dict[str, Any]:
     prep = prepare_fresh_chat(page, timeout_ms=timeout_ms)
     if not prep["ok"]:
