@@ -18,7 +18,7 @@ import {
 
 export const name = 'dsh-postman-harness-bridge'
 export const Config = z.object({ localDevelopment: z.boolean().default(false) }).default({})
-export const inject = ['agents', 'subagents', 'tools', 'storageDomain', 'attachments']
+export const inject = ['agents', 'subagents', 'tools', 'storageDomain', 'attachments', 'fs']
 
 function output() {
   return {
@@ -52,13 +52,10 @@ export function createPostmanTaskRestoreTool(ctx, contexts = postmanTaskContexts
     parameters: {}, output: output(),
     async execute(_args, exec) {
       if (!authorized(exec, ctx)) return { status: 'POSTMAN_TASK_CALLER_REJECTED' }
-      if (!contexts.reserveRestore(exec.agent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
-      try {
-        return await contexts.restore(exec.agent, {
-          isBusy: id => Boolean(jobs?.hasActive(id)),
-          beforeRestore: async id => worker ? await worker.prepareRestore(id) : true,
-        })
-      } finally { contexts.releaseRestore(exec.agent.id) }
+      return contexts.restore(exec.agent, {
+        isBusy: id => Boolean(jobs?.hasActive(id)),
+        beforeRestore: async id => worker ? await worker.prepareRestore(id) : true,
+      })
     },
   })
 }

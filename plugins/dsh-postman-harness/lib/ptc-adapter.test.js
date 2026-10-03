@@ -30,7 +30,7 @@ function fixture(dir, { real = false, readMaxBytes = 51200, runtime, resolveAssi
   ctx.on('tools/result', (exec, result)=>traces.push(['result',exec.name,exec.agent,result.isError]))
   ctx.tools.guard(exec => postmanPtcDirectCallGuard(exec, id => agents.get(id)))
   if (real) {
-    ctx.fs = new LocalFileSystem(ctx,{cwd:dir,diffBasisMaxBytes:1048576})
+    new LocalFileSystem(ctx,{cwd:dir,diffBasisMaxBytes:1048576})
     ctx.subprocess = new LocalSubprocessRuntime(ctx)
     applyFs(ctx,{readLimit:2000,readMaxLineLength:2000,readMaxBytes,readStreamMinSize:10485760})
     applyGrepTool(ctx,{maxMatches:GREP_MAX_MATCHES,maxLineBytes:GREP_MAX_LINE_BYTES,maxMetaBytes:SEARCH_META_MAX_BYTES,rawOutputMaxBytes:RAW_OUTPUT_MAX_BYTES,graceMs:SEARCH_GRACE_MS,stderrMaxBytes:SEARCH_STDERR_MAX_BYTES,timeoutMs:SEARCH_TIMEOUT_MS})

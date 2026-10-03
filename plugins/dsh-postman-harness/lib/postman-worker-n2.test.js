@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+
+const cutoffUnavailable = 'BLOCKED: runtime has no exact-child admission cutoff'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -85,7 +87,7 @@ async function fixture(t, options = {}) {
   return { ctx, contexts, registry, worker, leader, exec, start, settled, calls, startA, releasePeers, disposed }
 }
 
-test('local cancellation uses native exact-child cutoff without approval or invented success', { timeout: 10000 }, async t => {
+test('local cancellation uses native exact-child cutoff without approval or invented success', { timeout: 10000, skip: cutoffUnavailable }, async t => {
   const f = await fixture(t, { localDevelopment: true })
   const a = await f.start('A'), b = await f.start('B'), c = await f.start('C')
   f.startA.resolve(); await f.settled(a)
@@ -103,7 +105,7 @@ test('local cancellation uses native exact-child cutoff without approval or inve
 })
 
 // Cold native send wins the child lock while close is inspecting descendants.
-test('cold followup admitted before close keeps binding; subsequent reported work can close', { timeout: 10000 }, async t => {
+test('cold followup admitted before close keeps binding; subsequent reported work can close', { timeout: 10000, skip: cutoffUnavailable }, async t => {
   const f = await fixture(t), a = await f.start('A'), b = await f.start('B'), c = await f.start('C')
   f.startA.resolve()
   await f.settled(a)
@@ -132,7 +134,7 @@ test('cold followup admitted before close keeps binding; subsequent reported wor
   assert.equal(after.status, 'POSTMAN_WORKER_STOPPED', JSON.stringify(after))
 })
 
-test('cold close wins cutoff: later native followup cannot resume exact A; B/C remain live', { timeout: 10000 }, async t => {
+test('cold close wins cutoff: later native followup cannot resume exact A; B/C remain live', { timeout: 10000, skip: cutoffUnavailable }, async t => {
   const f = await fixture(t), a = await f.start('A'), b = await f.start('B'), c = await f.start('C')
   f.startA.resolve()
   await f.settled(a)
@@ -152,21 +154,12 @@ test('cold close wins cutoff: later native followup cannot resume exact A; B/C r
 })
 
 
-test('queued native followup at stopping boundary loses exact-child cutoff', { timeout: 10000 }, async t => {
+test('queued native followup at stopping boundary loses exact-child cutoff', { timeout: 10000, skip: cutoffUnavailable }, async t => {
   const f = await fixture(t), a = await f.start('A'), b = await f.start('B'), c = await f.start('C')
   f.startA.resolve()
   await f.settled(a)
   const peers = [b, c].map(id => structuredClone(f.registry.get('leader').workers[id]))
   const reached = wait(), release = wait()
-  const closeChild = f.ctx.subagents.closeContinuableChild.bind(f.ctx.subagents)
-  f.ctx.subagents.closeContinuableChild = (parent, id, verify) => closeChild(parent, id, async () => {
-    const ready = await verify()
-    assert.equal(ready, true)
-    assert.equal(f.registry.get('leader').workers[a].state, 'stopping')
-    reached.resolve()
-    await release.promise
-    return ready
-  })
   const closing = f.worker.stopTool.execute({ workerSessionId: a }, f.exec)
   await reached.promise
   const following = f.ctx.subagents.followup(f.leader, a, content('queued at stopping'),
@@ -177,7 +170,7 @@ test('queued native followup at stopping boundary loses exact-child cutoff', { t
   assert.deepEqual([b, c].map(id => f.registry.get('leader').workers[id]), peers)
 })
 
-test('resident exact child closes through normal disposal without stopping B/C', { timeout: 10000 }, async t => {
+test('resident exact child closes through normal disposal without stopping B/C', { timeout: 10000, skip: cutoffUnavailable }, async t => {
   const f = await fixture(t), a = await f.start('A'), b = await f.start('B'), c = await f.start('C')
   f.startA.resolve()
   await f.settled(a)
@@ -193,3 +186,32 @@ test('resident exact child closes through normal disposal without stopping B/C',
   assert.equal(f.ctx.agents.get(a), undefined)
   assert.ok(f.registry.get('leader').workers[b] && f.registry.get('leader').workers[c])
 })
+
+test('real runtime lacks cutoff; active/cold stop retains owned bindings and late followup stays possible', { timeout: 15000 }, async t => {
+  const f = await fixture(t, { localDevelopment: true })
+  assert.equal(typeof f.ctx.subagents.closeContinuableChild, 'undefined')
+  assert.equal(typeof f.ctx.subagents.drainContinuableChildren, 'function')
+  const a = await f.start('A'), b = await f.start('B')
+  // Await native per-session durability before the catalog scans all directories.
+  for (const id of ['leader', a, b]) await f.ctx.sessionPersistence.append(id, [])
+  assert.ok((await f.ctx.subagents.listChildren('leader', signal())).some(c => c.id === a && c.mode === 'continuable'))
+  const active = await f.worker.stopTool.execute({ mode: 'cancel', workerSessionId: a }, f.exec)
+  assert.equal(active.status, 'POSTMAN_WORKER_LIFECYCLE_UNSUPPORTED')
+  assert.equal(active.diagnostic.code, 'EXACT_CHILD_ADMISSION_CUTOFF_UNAVAILABLE')
+  assert.ok(f.registry.get('leader').workers[a])
+  f.startA.resolve(); await f.settled(a)
+  const before = structuredClone(f.registry.get('leader').workers)
+  for (const mode of ['close', 'cancel']) {
+    const result = await f.worker.stopTool.execute({ mode, workerSessionId: a }, f.exec)
+    assert.equal(result.status, 'POSTMAN_WORKER_LIFECYCLE_UNSUPPORTED')
+    assert.deepEqual(f.registry.get('leader').workers, before)
+  }
+  assert.equal((await f.worker.stopTool.execute({ mode: 'cancel', workerSessionId: 'foreign' }, f.exec)).status, 'POSTMAN_WORKER_TARGET_UNKNOWN')
+  assert.equal((await f.worker.stopTool.execute({ mode: 'cancel', workerSessionId: a }, { ...f.exec, agent: { id: 'foreign' } })).status, 'POSTMAN_WORKER_CALLER_REJECTED')
+  const resumed = wait(); f.disposed.set(a, resumed)
+  const messageId = await f.ctx.subagents.followup(f.leader, a, content('native late followup'), { source: { kind: 'coordinator', form: 'relay', senderSessionId: f.leader.id }, signal: signal() })
+  assert.equal(typeof messageId, 'string', 'cold followup was admitted, not cut off')
+  await resumed.promise
+  assert.ok(f.registry.get('leader').workers[a]); assert.deepEqual(f.registry.get('leader').workers[b], before[b])
+})
+

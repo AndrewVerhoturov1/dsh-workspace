@@ -557,6 +557,9 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
           }
           if (!await verifyIdentity(parent, selected.id, exec.signal))
             return { status: 'POSTMAN_WORKER_BINDING_UNCERTAIN', workerSessionId: selected.id }
+          if (typeof ctx.subagents.closeContinuableChild !== 'function')
+            return { status: 'POSTMAN_WORKER_LIFECYCLE_UNSUPPORTED', workerSessionId: selected.id,
+              diagnostic: { code: 'EXACT_CHILD_ADMISSION_CUTOFF_UNAVAILABLE' } }
           const latest = bindings(parent, g)[selected.id]
           if (!latest || latest.id !== selected.id ||
               (mode === 'cancel' && cancelWitness(latest) !== witness))
@@ -766,6 +769,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     const parent = ctx.agents.get(leaderId)
     if (!authorized(parent) || !durable || !contexts.isRestoring?.(leaderId)) return false
     const g = groupFor(parent)
+    if (Object.keys(bindings(parent, g)).length && typeof ctx.subagents.closeContinuableChild !== 'function') return false
     for (const binding of Object.values(bindings(parent, g))) {
       const slot = slotFor(g, binding)
       try {

@@ -222,12 +222,17 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
   async function restore(leader, { isBusy = () => false, beforeRestore = async () => true } = {}) {
     const id = leader?.id
     const context = get(id)
-    if (!context || context.leaderSessionId !== id || registry.get(id)?.runner.state !== 'failed')
-      return { status: 'POSTMAN_TASK_RESTORE_REJECTED' }
-    if (!pending.has(id) && !reserveRestore(id)) return { status: 'POSTMAN_TASK_RESTORE_REJECTED' }
+    if (!context) return { status: 'POSTMAN_TASK_RESTORE_REJECTED', diagnostic: { code: 'TASK_CONTEXT_REQUIRED' } }
+    if (context.leaderSessionId !== id || registry.get(id)?.leaderSessionId !== id)
+      return { status: 'POSTMAN_TASK_RESTORE_REJECTED', diagnostic: { code: 'LEADER_CONTEXT_MISMATCH' } }
+    if (registry.get(id)?.runner.state !== 'failed')
+      return { status: 'POSTMAN_TASK_RESTORE_REJECTED', diagnostic: { code: 'RUNNER_NOT_FAILED' } }
+    if (!reserveRestore(id))
+      return { status: 'POSTMAN_TASK_RESTORE_REJECTED', diagnostic: { code: 'RESTORE_RESERVATION_UNAVAILABLE' } }
     let recoveryPath = null
     try {
-      if (activeOperations.has(id) || syncOperations.has(id) || isBusy(id) || !await beforeRestore(id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
+      if (activeOperations.has(id) || syncOperations.has(id) || isBusy(id) || !await beforeRestore(id))
+        return { status: 'POSTMAN_TASK_CONTEXT_BUSY', diagnostic: { code: 'RESTORE_OPERATION_BUSY' } }
       const { branch, worktree, baseCommit } = context
       const repository = await command(leader.session.header.cwd, 'rev-parse', '--show-toplevel')
       const origin = await command(repository, 'remote', 'get-url', 'origin')
@@ -312,8 +317,11 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
 
   async function sync(leaderId, publicationCommit, expectedParent, beforeSync = async () => true) {
     const context = get(leaderId)
-    if (!context || !SHA.test(publicationCommit ?? '') || !SHA.test(expectedParent ?? '') ||
-        !beginSync(leaderId)) return false
+    const reject = code => ({ ok: false, diagnostic: { code } })
+    if (!context) return reject('TASK_CONTEXT_CHANGED')
+    if (!SHA.test(publicationCommit ?? '') || !SHA.test(expectedParent ?? '')) return reject('PUBLICATION_COMMIT_INVALID')
+    if (workerAdmissions.has(leaderId)) return reject('WORKER_ADMISSION_ACTIVE')
+    if (!beginSync(leaderId)) return reject('SYNC_ADMISSION_BUSY')
     // Queue insertion is synchronous, before the first await. Each Leader has
     // one FIFO chain; other Leaders' worktrees do not share a lock.
     const previous = syncQueues.get(leaderId) ?? Promise.resolve()
@@ -324,45 +332,53 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
     try {
       await previous.catch(() => undefined)
       const { worktree, branch, baseCommit } = context
-      if (get(leaderId) !== context || workerAdmissions.has(leaderId) ||
-          !await beforeSync(leaderId) || !BRANCH.test(branch) ||
+      if (get(leaderId) !== context) return reject('TASK_CONTEXT_CHANGED')
+      if (workerAdmissions.has(leaderId)) return reject('WORKER_ADMISSION_ACTIVE')
+      if (!await beforeSync(leaderId)) return reject('WORKER_ACTIVE')
+      if (!BRANCH.test(branch) ||
           normalize(await realPath(worktree)) !== normalize(worktree) ||
           normalize(await command(worktree, 'rev-parse', '--show-toplevel')) !== normalize(worktree) ||
           await command(worktree, 'branch', '--show-current') !== branch ||
           await command(worktree, 'symbolic-ref', '--short', 'HEAD') !== branch ||
-          await command(worktree, 'remote', 'get-url', 'origin') !== registry.get(leaderId)?.originUrl ||
-          await command(worktree, 'status', '--porcelain=v1', '--untracked-files=all') !== '') return false
+          await command(worktree, 'remote', 'get-url', 'origin') !== registry.get(leaderId)?.originUrl)
+        return reject('WORKTREE_IDENTITY_MISMATCH')
+      if (await command(worktree, 'status', '--porcelain=v1', '--untracked-files=all') !== '') return reject('WORKTREE_DIRTY')
       const listing = await command(worktree, 'worktree', 'list', '--porcelain')
       const owned = listing.split(/\n\s*\n/).filter(Boolean).filter(entry =>
         entry.split(/\r?\n/).some(line => line.startsWith('worktree ') && normalize(line.slice(9)) === normalize(worktree)))
       if (owned.length !== 1 || !owned[0].split(/\r?\n/).includes('branch refs/heads/' + branch) ||
-          /(?:^|\n)(?:locked|prunable)(?: |\r?$)/m.test(owned[0])) return false
+          /(?:^|\n)(?:locked|prunable)(?: |\r?$)/m.test(owned[0])) return reject('WORKTREE_IDENTITY_MISMATCH')
       const fetch = async () => {
         await command(worktree, 'fetch', 'origin', 'refs/heads/' + branch + ':refs/remotes/origin/' + branch)
         return command(worktree, 'rev-parse', 'refs/remotes/origin/' + branch)
       }
       let remote = await fetch()
-      if (!SHA.test(remote)) return false
-      const exactCommit = async sha => await command(worktree, 'rev-parse', '--verify', sha + '^{commit}') === sha
+      if (!SHA.test(remote)) return reject('GIT_SYNC_FAILED')
+      const exactCommit = async sha => {
+        try { return await command(worktree, 'rev-parse', '--verify', sha + '^{commit}') === sha }
+        catch { return false }
+      }
       if (!await exactCommit(baseCommit) || !await exactCommit(expectedParent) || !await exactCommit(publicationCommit) ||
           await command(worktree, 'rev-list', '--parents', '-n', '1', publicationCommit) !== publicationCommit + ' ' + expectedParent)
-        return false
+        return reject('PUBLICATION_COMMIT_INVALID')
       let published = await command(worktree, 'merge-base', publicationCommit, remote)
       if (published !== publicationCommit) {
         // An append-only push may race the first fetch; retry once, never publish ourselves.
         remote = await fetch()
         published = await command(worktree, 'merge-base', publicationCommit, remote)
       }
-      if (published !== publicationCommit ||
-          await command(worktree, 'merge-base', baseCommit, remote) !== baseCommit) return false
+      if (published !== publicationCommit) return reject('PUBLICATION_NOT_REACHABLE')
+      if (await command(worktree, 'merge-base', baseCommit, remote) !== baseCommit) return reject('PUBLICATION_COMMIT_INVALID')
       const head = await command(worktree, 'rev-parse', 'HEAD')
-      if (!SHA.test(head) || await command(worktree, 'merge-base', head, remote) !== head ||
-          await command(worktree, 'status', '--porcelain=v1', '--untracked-files=all') !== '') return false
+      if (!SHA.test(head) || await command(worktree, 'merge-base', head, remote) !== head) return reject('FAST_FORWARD_BLOCKED')
+      if (await command(worktree, 'status', '--porcelain=v1', '--untracked-files=all') !== '') return reject('WORKTREE_DIRTY')
       if (head !== remote) await command(worktree, 'merge', '--ff-only', remote)
-      return get(leaderId) === context && await command(worktree, 'rev-parse', 'HEAD') === remote &&
-        await command(worktree, 'branch', '--show-current') === branch &&
-        await command(worktree, 'status', '--porcelain=v1', '--untracked-files=all') === ''
-    } catch { return false }
+      if (get(leaderId) !== context) return reject('TASK_CONTEXT_CHANGED')
+      if (await command(worktree, 'rev-parse', 'HEAD') !== remote) return reject('GIT_SYNC_FAILED')
+      if (await command(worktree, 'branch', '--show-current') !== branch) return reject('WORKTREE_IDENTITY_MISMATCH')
+      if (await command(worktree, 'status', '--porcelain=v1', '--untracked-files=all') !== '') return reject('WORKTREE_DIRTY')
+      return true
+    } catch { return reject('GIT_SYNC_FAILED') }
     finally {
       release()
       if (syncQueues.get(leaderId) === tail) syncQueues.delete(leaderId)

@@ -122,7 +122,7 @@ test('production sync validates and fast-forwards a real temporary bare DAG', { 
 
     // Wrong parent and unrelated commits fail closed, without moving worktree HEAD.
     const beforeReject = await call(worktree, 'rev-parse', 'HEAD')
-    assert.equal(await contexts.sync(leader.id, req2, p0), false)
+    assert.equal((await contexts.sync(leader.id, req2, p0)).diagnostic.code, 'PUBLICATION_COMMIT_INVALID')
     const unrelatedRoot = join(temp, 'unrelated')
     await exec('git', ['init', '-b', 'unrelated', unrelatedRoot], { windowsHide: true })
     await call(unrelatedRoot, 'config', 'user.email', 'postman-test@example.invalid')
@@ -130,7 +130,7 @@ test('production sync validates and fast-forwards a real temporary bare DAG', { 
     await writeFile(join(unrelatedRoot, 'unrelated.txt'), 'unrelated', 'utf8')
     await call(unrelatedRoot, 'add', 'unrelated.txt'); await call(unrelatedRoot, 'commit', '-m', 'unrelated')
     const unrelated = await call(unrelatedRoot, 'rev-parse', 'HEAD')
-    assert.equal(await contexts.sync(leader.id, unrelated, p0), false)
+    assert.equal((await contexts.sync(leader.id, unrelated, p0)).diagnostic.code, 'PUBLICATION_COMMIT_INVALID')
     assert.equal(await call(worktree, 'rev-parse', 'HEAD'), beforeReject)
 
     // Remote divergence is rejected; no merge/rebase/reset is attempted.
@@ -138,12 +138,12 @@ test('production sync validates and fast-forwards a real temporary bare DAG', { 
     await writeFile(join(root, 'diverged.txt'), 'diverged', 'utf8'); await call(root, 'add', 'diverged.txt'); await call(root, 'commit', '-m', 'diverged')
     const divergence = await call(root, 'rev-parse', 'HEAD')
     await call(root, 'push', '--force', 'origin', 'HEAD:refs/heads/' + branch)
-    assert.equal(await contexts.sync(leader.id, divergence, req1), false)
+    assert.equal((await contexts.sync(leader.id, divergence, req1)).diagnostic.code, 'FAST_FORWARD_BLOCKED')
     assert.equal(await call(worktree, 'rev-parse', 'HEAD'), beforeReject)
 
     // A dirty bound worktree is refused before any mutation.
     await writeFile(join(worktree, 'private.txt'), 'keep')
-    assert.equal(await contexts.sync(leader.id, divergence, req1), false)
+    assert.equal((await contexts.sync(leader.id, divergence, req1)).diagnostic.code, 'WORKTREE_DIRTY')
     assert.equal(await call(worktree, 'rev-parse', 'HEAD'), beforeReject)
     assert.equal(await call(worktree, 'status', '--porcelain=v1', '--untracked-files=all') !== '', true)
     assert.ok(shaPattern.test(c1) && shaPattern.test(c2) && shaPattern.test(c3) && shaPattern.test(req2))
