@@ -26,6 +26,7 @@ _TERMINAL_CHAT_STATES = {
     ASSISTANT_COMPLETED_NO_ARTIFACT,
     ARTIFACT_REJECTED,
     TEXT_RESULT_DURABLE,
+    "IMAGE_RESULT_DURABLE",
 }
 _CHAT_PATH_RE = re.compile(r"^/c/([A-Za-z0-9_-]+)$")
 
@@ -46,6 +47,11 @@ class ChatReference:
     root_request_id: str = ""
     continuation_index: int = 0
     terminal_state: str = ""
+    send_proof_class: str = "UNKNOWN"
+    recovery_eligible: bool = False
+    recovery_root_request_id: str = ""
+    automatic_recovery_used: bool = False
+    image_recovery_proof: dict[str, Any] | None = None
 
 
 def normalize_conversation_url(value: object) -> tuple[str, str]:
@@ -91,20 +97,87 @@ def _nested_chat_url(value: dict[str, Any]) -> object:
     return None
 
 
-def _eligible(value: dict[str, Any], *, request_id: str, expected_repository: str) -> bool:
-    if value.get("requestId") != request_id:
-        return False
-    if value.get("repository") not in {None, expected_repository}:
+def _send_proof_class(value: dict[str, Any]) -> str:
+    for key in ("sendProof", "submitProof"):
+        proof = value.get(key)
+        if isinstance(proof, dict) and proof.get("sendState") in {"PROVEN_SENT", "PROVEN_NOT_SENT", "UNKNOWN"}:
+            return proof["sendState"]
+    proof_class = value.get("sendProofClass")
+    return proof_class if proof_class in {"PROVEN_SENT", "PROVEN_NOT_SENT", "UNKNOWN"} else "UNKNOWN"
+
+
+def _reference_eligible(value: dict[str, Any], *, request_id: str, expected_repository: str) -> bool:
+    if value.get("requestId") != request_id or value.get("repository") not in {None, expected_repository}:
         return False
     state = value.get("state")
-    code = value.get("code")
-    if state not in _TERMINAL_CHAT_STATES:
+    if state in _TERMINAL_CHAT_STATES:
+        return value.get("code") in {None, state} and value.get("ok") is not False
+    # Failed references need exact repository and conversation identity, not UI search.
+    if value.get("repository") != expected_repository or not value.get("failureCode") and state not in {"FAILED", "ASK_FAILED"}:
         return False
-    if code not in {None, state}:
+    try:
+        conversation_id, conversation_url = normalize_conversation_url(_nested_chat_url(value))
+    except ChatReferenceError:
         return False
-    if value.get("ok") is False:
+    if value.get("conversationId") != conversation_id:
         return False
-    return True
+    if _send_proof_class(value) == "PROVEN_SENT":
+        return True
+    proof = value.get("readOnlySendReproof")
+    return bool(
+        _send_proof_class(value) == "UNKNOWN" and isinstance(proof, dict)
+        and proof.get("requestId") == request_id
+        and proof.get("conversationUrl") == conversation_url
+        and proof.get("conversationId") == conversation_id
+        and proof.get("exactUserTurn") is True
+        and proof.get("promptSha256") == value.get("promptSha256")
+        and isinstance(value.get("promptSha256"), str)
+        and re.fullmatch(r"[0-9a-f]{64}", value["promptSha256"])
+    )
+
+
+def can_continue_request(value: dict[str, Any], *, request_id: str, expected_repository: str) -> bool:
+    """Automatic recovery capability; manual chat references are evaluated separately."""
+    if not _reference_eligible(value, request_id=request_id, expected_repository=expected_repository):
+        return False
+    if value.get("state") in {RESULT_DURABLE, TEXT_RESULT_DURABLE, "IMAGE_RESULT_DURABLE"}:
+        return False
+    if value.get("automaticRecoveryUsed") is True or value.get("unresolvedSendUnknown") is True:
+        return False
+    if value.get("webResultAvailable") is True or value.get("state") == "ARTIFACT_FOUND":
+        return False
+    # A completed successful terminal already attests its initial Send; retain legacy references.
+    return value.get("state") in {ASSISTANT_COMPLETED_NO_ARTIFACT, ARTIFACT_REJECTED} or (
+        _send_proof_class(value) == "PROVEN_SENT" or isinstance(value.get("readOnlySendReproof"), dict)
+    )
+
+
+def recovery_claim_path(direct_root: str | os.PathLike[str], root_request_id: str) -> Path:
+    request_identity.assert_canonical_request_id(root_request_id)
+    return Path(direct_root) / "locks" / f"recovery-{root_request_id}.claim"
+
+
+def claim_recovery(direct_root: str | os.PathLike[str], reference: ChatReference, new_request_id: str) -> dict[str, Any]:
+    """Reserve exactly one attempt durably before publication or browser mutation."""
+    request_identity.assert_canonical_request_id(new_request_id)
+    root = reference.recovery_root_request_id or reference.root_request_id or reference.request_id
+    path = recovery_claim_path(direct_root, root)
+    if reference.automatic_recovery_used or path.exists():
+        raise ChatReferenceError("POSTMAN_AUTOMATIC_CONTINUATION_LIMIT_REACHED", "automatic recovery was already consumed")
+    if not reference.recovery_eligible:
+        raise ChatReferenceError("DIRECT_INVALID_CONTINUATION", "request has no automatic recovery capability")
+    fields = {"recoveryOfRequestId": reference.request_id, "recoveryRootRequestId": root,
+              "recoveryAttempt": 1, "automaticRecoveryUsed": True}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with path.open("x", encoding="utf-8") as handle:
+            json.dump({**fields, "requestId": new_request_id}, handle, sort_keys=True)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except FileExistsError as exc:
+        raise ChatReferenceError("POSTMAN_AUTOMATIC_CONTINUATION_LIMIT_REACHED", "automatic recovery was already consumed") from exc
+    return fields
+
 
 
 def resolve_chat_reference(
@@ -128,7 +201,7 @@ def resolve_chat_reference(
     invalid_urls: list[str] = []
     for source, path in candidates:
         value = _read_json(path)
-        if value is None or not _eligible(value, request_id=request_id, expected_repository=expected_repository):
+        if value is None or not _reference_eligible(value, request_id=request_id, expected_repository=expected_repository):
             continue
         seen_sources.append(source)
         raw_url = _nested_chat_url(value)
@@ -145,6 +218,12 @@ def resolve_chat_reference(
         continuation_index = value.get("continuationIndex")
         if isinstance(continuation_index, bool) or not isinstance(continuation_index, int) or continuation_index < 0:
             continuation_index = 0
+        recovery_root = value.get("recoveryRootRequestId") or root_request_id
+        try:
+            used = value.get("automaticRecoveryUsed") is True or recovery_claim_path(root, recovery_root).exists()
+        except (TypeError, ValueError):
+            continue
+        recovery_eligible = not used and can_continue_request(value, request_id=request_id, expected_repository=expected_repository)
         return ChatReference(
             request_id=request_id,
             conversation_id=conversation_id,
@@ -153,6 +232,12 @@ def resolve_chat_reference(
             root_request_id=root_request_id,
             continuation_index=continuation_index,
             terminal_state=str(value.get("state", "")),
+            send_proof_class=_send_proof_class(value),
+            recovery_eligible=recovery_eligible,
+            recovery_root_request_id=recovery_root,
+            automatic_recovery_used=used,
+            image_recovery_proof={"observerProof": value.get("imageObserverProof"), "prompt": value.get("imageOriginalPrompt"),
+                                  "anchorBinding": value.get("imageAnchorBinding")} if value.get("imageGenerated") else None,
         )
 
     raise ChatReferenceError(

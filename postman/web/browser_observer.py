@@ -829,6 +829,7 @@ def observe_next_assistant(
     stable_ms: int = DEFAULT_STABLE_MS,
     poll_ms: int = DEFAULT_POLL_MS,
     image_mode: bool = False,
+    historical_image: bool = False,
     phase_tracker: AnswerPhaseTracker | None = None,
     anchor_binding: dict[str, Any] | None = None,
     system_probe: Callable[[], str | None] | None = None,
@@ -943,7 +944,7 @@ def observe_next_assistant(
                                if t.get("role") == "user")
                 anchor_group = turns[anchor_index].get("groupKey")
                 if ((image_anchor is not None and anchor != image_anchor)
-                        or any(t.get("role") == "user" for t in turns[anchor_index + 1:])
+                        or (not historical_image and any(t.get("role") == "user" for t in turns[anchor_index + 1:]))
                         or (anchor_group and assistant.get("groupKey") != anchor_group)):
                     last_details["reason"] = "image_user_anchor_relation_changed"
                     return _result(CHAT_CORRELATION_LOST, ok=False,
@@ -952,7 +953,8 @@ def observe_next_assistant(
             identity_proved, identity_reason = identity.observe(assistant, selector, correlation["assistantIndex"])
             last_details.update(assistantIdentityMode="strong" if identity.strong else "weak",
                                 assistantIdentityPromoted=identity.promoted,
-                                assistantIdentityProved=identity_proved)
+                                assistantIdentityProved=identity_proved,
+                                assistantIdentity=dict(identity.strong))
             if identity_reason in {"strong_identity_conflict", "weak_identity_changed", "assistant_identity_ambiguous"}:
                 last_details["reason"] = identity_reason
                 return _result(CHAT_CORRELATION_LOST, ok=False,

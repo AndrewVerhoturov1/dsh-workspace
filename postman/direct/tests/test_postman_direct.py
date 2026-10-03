@@ -120,8 +120,12 @@ class DirectPostmanUnitTests(unittest.TestCase):
             image = {"path": str(Path(tmp) / "image.png"), "format": "PNG", "sha256": "d" * 64,
                      "bytes": 123, "width": 20, "height": 30, "mime": "image/png", "sourceEntry": f"{REQ}_img1.png"}
             with patch.object(direct.image_result, "extract_validated_image", return_value=image) as extract, \
-                 patch.object(direct.durable_handoff, "validate_image_terminal", side_effect=lambda terminal, **_: terminal):
-                terminal = runner.run(request_id=REQ, task=intent, image_mode=True)
+                 patch.object(direct.durable_handoff, "validate_image_terminal", side_effect=lambda terminal, **_: terminal), \
+                 patch.object(direct.chat_reference,"resolve_chat_reference",return_value=direct.chat_reference.ChatReference(
+                    request_id="REQ_20261002T010203Z_1234",conversation_url="https://chatgpt.com/c/abc",
+                    conversation_id="abc",terminal_state="RESULT_DURABLE",source="fixture")):
+                terminal = runner.run(request_id=REQ, task=intent, image_mode=True,chat_request_id="REQ_20261002T010203Z_1234")
+            self.assertEqual(Bridge.calls[-1][1]["conversation_url"],"https://chatgpt.com/c/abc")
             self.assertEqual(terminal["code"], "IMAGE_RESULT_DURABLE")
             self.assertNotIn("secondRequestId", terminal)
             self.assertEqual(Bridge.assert_before_prepare, [])
@@ -228,7 +232,7 @@ class DirectPostmanUnitTests(unittest.TestCase):
             runner = direct.DirectPostman(branch="preview", direct_root=Path(tmp))
             with self.assertRaises(direct.DirectPostmanError) as caught:
                 runner.run(request_id=REQ, task="image", image_mode=True, chat_request_id=REQ)
-            self.assertEqual(caught.exception.code, "DIRECT_IMAGE_CHAT_UNSUPPORTED")
+            self.assertEqual(caught.exception.code, "DIRECT_CHAT_REFERENCE_UNAVAILABLE")
 
     def test_cli_requires_explicit_branch_before_transport(self):
         with patch.object(direct.DirectPostman, "run", side_effect=AssertionError("must not publish")), contextlib.redirect_stdout(io.StringIO()) as stdout:
@@ -513,7 +517,7 @@ class DirectPostmanUnitTests(unittest.TestCase):
                     expected_repository=REPO, request_id=REQ,
                 )
 
-    def test_first_and_second_automatic_continuations_inherit_chain(self):
+    def test_one_automatic_continuation_inherits_chain_and_second_is_rejected(self):
         new_req = "REQ_20260902T010204Z_1235"
         conversation_url = "https://chatgpt.com/c/existing-chat-123"
 
@@ -553,6 +557,8 @@ class DirectPostmanUnitTests(unittest.TestCase):
             root_request_id="REQ_20260902T010200Z_1200",
             continuation_index=0,
             terminal_state=direct.ASSISTANT_COMPLETED_NO_ARTIFACT,
+            recovery_root_request_id="REQ_20260902T010200Z_1200",
+            recovery_eligible=True, automatic_recovery_used=False,
         )
         with tempfile.TemporaryDirectory() as root, patch.object(
             direct.chat_reference, "resolve_chat_reference", return_value=reference
@@ -580,10 +586,10 @@ class DirectPostmanUnitTests(unittest.TestCase):
             reference.continuation_index = 1
             reference.terminal_state = direct.ARTIFACT_REJECTED
             second_req = "REQ_20260902T010206Z_1237"
-            second = runner.run(request_id=second_req, task="continue again", chat_request_id=REQ, automatic_continuation=True)
-            self.assertEqual(second["continuationIndex"], 2)
-            self.assertEqual(second["rootRequestId"], reference.root_request_id)
-            self.assertEqual(len(Bridge.calls), 2)
+            with self.assertRaises(direct.DirectPostmanError) as caught:
+                runner.run(request_id=second_req, task="continue again", chat_request_id=REQ, automatic_continuation=True)
+            self.assertEqual(caught.exception.code, "POSTMAN_AUTOMATIC_CONTINUATION_LIMIT_REACHED")
+            self.assertEqual(len(Bridge.calls), 1)
             from postman.web.launch_prompts import is_launch_prompt
             for launch_req, call in Bridge.calls:
                 self.assertTrue(is_launch_prompt(call["prompt"], launch_req))
@@ -592,9 +598,10 @@ class DirectPostmanUnitTests(unittest.TestCase):
                 self.assertEqual(state["exactPromptText"], call["prompt"])
                 self.assertEqual(state["promptSha256"], direct._sha256_text(call["prompt"]))
 
-    def test_third_automatic_continuation_stops_before_publication_or_browser(self):
+    def test_second_automatic_continuation_stops_before_publication_or_browser(self):
         reference = types.SimpleNamespace(
-            request_id=REQ, continuation_index=2, terminal_state=direct.ASSISTANT_COMPLETED_NO_ARTIFACT,
+            request_id=REQ, continuation_index=1, terminal_state=direct.ASSISTANT_COMPLETED_NO_ARTIFACT,
+            root_request_id=REQ, recovery_root_request_id=REQ, automatic_recovery_used=True, recovery_eligible=False,
         )
         with tempfile.TemporaryDirectory() as root, patch.object(
             direct.chat_reference, "resolve_chat_reference", return_value=reference
@@ -612,7 +619,8 @@ class DirectPostmanUnitTests(unittest.TestCase):
     def test_automatic_continuation_rejects_other_terminals_before_publication(self):
         for terminal in (direct.RESULT_DURABLE, "TEXT_RESULT_DURABLE", direct.POSTMAN_TRANSPORT_FAILED):
             with self.subTest(terminal=terminal), tempfile.TemporaryDirectory() as root:
-                reference = types.SimpleNamespace(request_id=REQ, continuation_index=0, terminal_state=terminal)
+                reference = types.SimpleNamespace(request_id=REQ, continuation_index=0, terminal_state=terminal,
+                    root_request_id=REQ, recovery_root_request_id=REQ, automatic_recovery_used=False, recovery_eligible=False)
                 with patch.object(direct.chat_reference, "resolve_chat_reference", return_value=reference):
                     runner = direct.DirectPostman(
                         branch="main", direct_root=Path(root) / "direct",
@@ -678,6 +686,39 @@ class DirectPostmanUnitTests(unittest.TestCase):
         self.assertEqual(result["rootRequestId"], new_req)
         self.assertEqual(result["continuationIndex"], 0)
         self.assertEqual(result["conversationUrl"], conversation_url)
+
+    def test_image_automatic_recovery_continues_generation_or_only_packages_original(self):
+        chat="https://chatgpt.com/c/original-image"
+        proof={"observerProof":{"details":{"assistantIdentity":{"assistantMessageId":"image-1"},"assistantImageCount":1}},
+               "prompt":"original generation","anchorBinding":{}}
+        for generated in (False,True):
+            with self.subTest(generated=generated), tempfile.TemporaryDirectory() as root:
+                class Publisher:
+                    def __init__(self,**kwargs):pass
+                    def snapshot(self):return direct.TaskSnapshot(PRE,("README.md",))
+                    def publish_content(self,request_id,content,**kwargs):
+                        self.content=content
+                        return direct.PublishedTask(request_id,f"https://example.test/{request_id}.md",PRE,PUB,("README.md",))
+                class Bridge:
+                    options=None
+                    def __init__(self,**kwargs):pass
+                    def run_request(self,request_id,**kwargs):
+                        type(self).options=kwargs
+                        return {"ok":False,"code":"POSTMAN_TRANSPORT_FAILED","details":{"sendProofClass":"PROVEN_NOT_SENT"}}
+                reference=direct.chat_reference.ChatReference(request_id=REQ,conversation_id="original-image",conversation_url=chat,
+                    source="direct_state",recovery_eligible=True,image_recovery_proof=proof if generated else None)
+                new_req="REQ_20261003T010204Z_1234"
+                runner=direct.DirectPostman(branch="preview",direct_root=Path(root)/"direct",publisher_factory=Publisher,
+                    bridge_factory=Bridge,ensure_browser=lambda **kw:{"cdpUrl":"http://127.0.0.1:9222"})
+                with patch.object(direct.chat_reference,"resolve_chat_reference",return_value=reference), self.assertRaises(direct.DirectPostmanError):
+                    runner.run(request_id=new_req,task="continue",image_mode=True,chat_request_id=REQ,automatic_continuation=True)
+                self.assertEqual(Bridge.options["conversation_url"],chat)
+                self.assertEqual(Bridge.options["image_recovery_proof"],proof if generated else None)
+                if generated:self.assertIsNone(Bridge.options["image_prepare"])
+                else:
+                    self.assertTrue(callable(Bridge.options["image_prepare"]))
+                    self.assertIn("Продолжи исходную задачу",Bridge.options["prompt"])
+                self.assertTrue(direct.chat_reference.recovery_claim_path(runner.direct_root,REQ).exists())
 
     def test_existing_state_blocks_automatic_resend(self):
         with tempfile.TemporaryDirectory() as root:

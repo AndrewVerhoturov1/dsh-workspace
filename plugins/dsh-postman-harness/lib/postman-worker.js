@@ -508,7 +508,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
   }
   const stopTool = defineTool({
     name: POSTMAN_WORKER_STOP_TOOL_NAME,
-    description: 'Release an idle Worker without claiming task success; cancel an exact Worker with Host approval unless localDevelopment is enabled.',
+    description: 'Stop only the selected owned Worker. No rollback, Git cleanup, or task-success claim; peers are unaffected.',
     parameters: {
       mode: { type: 'string', enum: ['close', 'cancel'] },
       workerSessionId: { type: 'string', description: 'Exact Worker ID; mandatory for cancel.' },
@@ -517,36 +517,27 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     async execute(args, exec) {
       const parent = exec?.agent
       if (!authorized(parent)) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
-      const mode = args?.mode ?? 'close', id = args?.workerSessionId
+      const id = args?.workerSessionId, mode = args?.mode ?? (id ? 'cancel' : 'close')
       if (mode !== 'close' && mode !== 'cancel') return { status: 'POSTMAN_WORKER_STOP_MODE_INVALID' }
       if (id !== undefined && (typeof id !== 'string' || !id)) return { status: 'POSTMAN_WORKER_TARGET_UNKNOWN' }
-      if (mode === 'cancel' && !id) return { status: localDevelopment ? 'POSTMAN_WORKER_TARGET_REQUIRED' : 'POSTMAN_WORKER_CANCEL_APPROVAL_REQUIRED' }
+      if (mode === 'cancel' && !id) return { status:'POSTMAN_WORKER_TARGET_REQUIRED' }
       const g = groupFor(parent)
       const chosen = await enqueue(g, () => select(parent, id, g))
       if (!chosen.binding) {
         if (id && g.stopped.has(id)) return { status: 'POSTMAN_WORKER_ALREADY_STOPPED', workerSessionId: id }
-        return !localDevelopment && mode === 'cancel' && chosen.status === 'POSTMAN_WORKER_TARGET_UNKNOWN' ?
-          { status: 'POSTMAN_WORKER_CANCEL_APPROVAL_REQUIRED' } : chosen
+        return chosen
       }
       const selected = chosen.binding, slot = slotFor(g, selected)
       let witness
       if (mode === 'cancel') {
-        if (!durable || (!localDevelopment && !ctx.get?.('approval')))
-          return { status: 'POSTMAN_WORKER_CANCEL_APPROVAL_REQUIRED', workerSessionId: id }
+        if (!durable) return { status: 'POSTMAN_WORKER_BINDING_UNCERTAIN', workerSessionId: id }
         try {
           if (!await verifyIdentity(parent, id, exec.signal))
             return { status: 'POSTMAN_WORKER_BINDING_UNCERTAIN', workerSessionId: id }
         } catch { return { status: 'POSTMAN_WORKER_BINDING_UNCERTAIN', workerSessionId: id } }
         witness = cancelWitness(selected)
-        if (!localDevelopment) {
-          const approval = await ctx.get('approval').request({ agent: parent,
-            toolName: POSTMAN_WORKER_STOP_TOOL_NAME, callId: exec.callId,
-            reason: 'Cancel exact Leader ' + parent.id + ' Worker ' + id +
-              ' assignments ' + witness + ': ' + (args.reason ?? 'no explanation'), signal: exec.signal })
-          if (approval !== 'allowed-once')
-            return { status: 'POSTMAN_WORKER_CANCEL_APPROVAL_REQUIRED', workerSessionId: id }
-        }
       }
+
       // Per-Worker queue prevents a selected admission between validation and drain.
       // No Leader-wide queue is held while a human or model runs.
       return admitted(parent, () => enqueue(slot, async () => {
@@ -555,7 +546,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
         if (!current || current.id !== selected.id || !matchesContext(parent, slot))
           return { status: 'POSTMAN_WORKER_BINDING_UNCERTAIN', workerSessionId: selected.id }
         if (mode === 'cancel' && cancelWitness(current) !== witness)
-          return { status: localDevelopment ? 'POSTMAN_WORKER_BINDING_CHANGED' : 'POSTMAN_WORKER_CANCEL_APPROVAL_REQUIRED', workerSessionId: selected.id }
+          return { status:'POSTMAN_WORKER_BINDING_CHANGED', workerSessionId:selected.id }
         try {
           const evidence = mode === 'close' ? (localDevelopment || current.lifecycle ?
             await closeEvidence(parent, current, exec.signal) :

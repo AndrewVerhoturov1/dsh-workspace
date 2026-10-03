@@ -1288,7 +1288,8 @@ def submit_fresh_prompt(page: Any, prompt: str, *, timeout_ms: int = DEFAULT_TIM
             return _result(uploaded["code"], ok=False, send_state=SEND_PROVEN_NOT_SENT,
                 transitions=[PAGE_OWNED, FRESH_CHAT_CONFIRMED, COMPOSER_EMPTY_CONFIRMED, attachments.ATTACHMENT_UPLOAD_STARTED],
                 details=uploaded.get("details"))
-        attachment_id = (uploaded["details"].get("ids") or [None])[0]
+        ids = uploaded["details"].get("ids") or []
+        attachment_id = ids if isinstance(input_attachment.name, list) else (ids or [None])[0]
     inserted = insert_prompt(
         page,
         composer,
@@ -1344,7 +1345,8 @@ def submit_existing_prompt(
             return _result(uploaded["code"], ok=False, send_state=SEND_PROVEN_NOT_SENT,
                 transitions=[PAGE_OWNED, EXISTING_CHAT_CONFIRMED, COMPOSER_EMPTY_CONFIRMED, attachments.ATTACHMENT_UPLOAD_STARTED],
                 details=uploaded.get("details"))
-        attachment_id = (uploaded["details"].get("ids") or [None])[0]
+        ids = uploaded["details"].get("ids") or []
+        attachment_id = ids if isinstance(input_attachment.name, list) else (ids or [None])[0]
     inserted = insert_prompt(
         page,
         composer,

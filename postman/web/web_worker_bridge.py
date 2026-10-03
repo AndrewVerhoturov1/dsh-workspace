@@ -31,7 +31,6 @@ import input_bundle
 import reminder_policy
 import request_identity
 import transport_control
-import system_recovery
 
 
 ACCEPTED = "ACCEPTED"
@@ -359,13 +358,14 @@ class WebWorkerBridge:
         image_prepare: Callable[[], dict[str, Any]] | None = None,
         input_attachment=None,
         resume_image: bool = False,
+        image_recovery_proof: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Run one browser page; image mode continues to ZIP on that same page."""
         if input_attachment is not None and (input_attachment.request_id != request_id or
                 (image_prepare is not None and input_attachment.media_type not in input_bundle.IMAGE_EXTENSIONS)):
             return _result(BRIDGE_INVALID_CONFIG, ok=False, details={"reason": "input_attachment_binding_invalid"})
         image_stage = image_prepare is not None
-        image_flow = image_stage
+        image_flow = image_stage or image_recovery_proof is not None
         if image_stage:
             try:
                 request_identity.assert_canonical_request_id(request_id)
@@ -416,6 +416,7 @@ class WebWorkerBridge:
             return _result(BRIDGE_INVALID_CONFIG, ok=False, details={"reason": "max_reminders_invalid"})
 
         self._write_state(request, WEB_STARTING, exactPromptText=prompt,
+                          repository=expected_request.get("repository"),
                           promptSha256=browser_submit.prompt_sha256(prompt))
         factory = playwright_factory
         if factory is None:
@@ -475,6 +476,26 @@ class WebWorkerBridge:
                     pass
                 self._write_state(request, WEB_STARTING, pageDiagnostic=diagnostic)
 
+                if image_recovery_proof is not None:
+                    # Re-prove the original image read-only; never adopt the latest image.
+                    prepared = browser_submit.prepare_existing_chat(page, conversation_url, timeout_ms=timeout_ms)
+                    saved = image_recovery_proof.get("observerProof", {})
+                    saved_details = saved.get("details", {})
+                    original_prompt = image_recovery_proof.get("prompt")
+                    binding = image_recovery_proof.get("anchorBinding")
+                    if not prepared.get("ok") or not isinstance(original_prompt, str) or not saved_details.get("assistantIdentity"):
+                        return self._fail(request, "IMAGE_PACKAGING_REPROOF_FAILED")
+                    observed = browser_observer.observe_next_assistant(page, original_prompt, conversation_url,
+                        image_mode=True, historical_image=True, anchor_binding=binding, timeout_ms=timeout_ms, stable_ms=stable_ms,
+                        sleep=self.sleep, monotonic=self.monotonic)
+                    observed_details = observed.get("details", {})
+                    identity = saved_details["assistantIdentity"]
+                    if (not observed.get("ok") or observed_details.get("assistantImageCount") != 1
+                            or observed_details.get("assistantIndex") != saved_details.get("assistantIndex")
+                            or any(observed_details.get("assistantIdentity", {}).get(key) != value for key, value in identity.items())):
+                        return self._fail(request, "IMAGE_PACKAGING_REPROOF_FAILED")
+                    self._write_state(request, WEB_STARTING, imageObserverProof=observed,
+                                      imageOriginalPrompt=original_prompt, imageAnchorBinding=binding)
                 if resume_image:
                     # Explicit recovery only: no upload, fill or Send on the first turn.
                     prepared = browser_submit.prepare_existing_chat(
@@ -504,7 +525,22 @@ class WebWorkerBridge:
                         page, prompt, conversation_url, timeout_ms=timeout_ms,
                         **({"input_attachment": input_attachment} if input_attachment else {})
                     )
+                self._write_state(request, WEB_STARTING, submitProof=submitted)
                 if not submitted.get("ok"):
+                    evidence = submitted.get("details", {})
+                    bound = evidence.get("chatUrl")
+                    before = evidence.get("userTurnCountBefore")
+                    if (submitted.get("sendState") == browser_submit.SEND_UNKNOWN and type(before) is int
+                            and browser_submit.is_bound_chat_url(bound)):
+                        # One read-only reproof; no upload, fill, click, or repeat Send.
+                        proven, proof = browser_submit._wait_until(lambda: browser_submit._observe_send_proof(
+                            page, prompt, before, conversation_url=bound, input_attachment=input_attachment),
+                            timeout_ms=min(timeout_ms, 5000))
+                        if proven:
+                            self._write_state(request, WEB_STARTING, readOnlySendReproof={
+                                "requestId": request_id, "conversationUrl": bound,
+                                "conversationId": browser_submit.conversation_id_from_url(bound),
+                                "promptSha256": browser_submit.prompt_sha256(prompt), "exactUserTurn": True})
                     return self._fail(request, submitted.get("code", "submit_failed"), details=submitted)
                 if input_attachment and (submitted.get("sendState") != browser_submit.SEND_PROVEN_SENT or
                         submitted.get("details", {}).get("sentAttachmentConfirmed") is not True):
@@ -533,10 +569,19 @@ class WebWorkerBridge:
                 followup_reminders = max_reminders
                 if image_stage:
                     max_reminders = 0
+                initial_binding = None
+                if image_stage:
+                    turns, _ = browser_observer.snapshot_turns(page, image_mode=True)
+                    users = [t for t in turns if t.get("role") == "user"]
+                    ordinal = submitted.get("details", {}).get("userTurnCountBefore")
+                    if type(ordinal) is int and ordinal == len(users) - 1:
+                        initial_binding = {"userOrdinal": ordinal, "precedingUserHashes": [browser_submit.prompt_sha256(t["text"]) for t in users[:ordinal]],
+                                           "promptSha256": browser_submit.prompt_sha256(prompt), "groupKey": users[ordinal].get("groupKey", "")}
                 watched_turns: list[dict[str, Any]] = [
                     {
                         "prompt": prompt,
                         "submit": submitted,
+                        "anchorBinding": initial_binding,
                         "proof": None,
                         "everProved": False,
                         "artifactRejected": False,
@@ -561,8 +606,8 @@ class WebWorkerBridge:
                     "generationPollMs": browser_observer.DEFAULT_POLL_MS,
                     "resultRecheckMs": _RESULT_RECHECK_INTERVAL_MS,
                     "reloadLoadTimeoutMs": browser_recovery.DEFAULT_LOAD_TIMEOUT_MS,
-                    "reloadSettleMs": browser_recovery.DEFAULT_SETTLE_MS,
-                    "reloadMaxAttempts": browser_recovery.DEFAULT_MAX_RELOAD_ATTEMPTS,
+                    "reloadSettleMs": 0,
+                    "reloadMaxAttempts": 1,
                     "recoveryGraceMs": transport_control.RECOVERY_GRACE_MS,
                     "recoveryCycleMs": transport_control.RECOVERY_CYCLE_MS,
                 }
@@ -591,12 +636,6 @@ class WebWorkerBridge:
                     self._write_state(request, WAITING_ASSISTANT, **fields)
 
                 def recovery_event(name, **fields):
-                    phases = {"SYSTEM_STOP", "SYSTEM_RELOAD", "SYSTEM_WAIT", "SYSTEM_CONTINUE"}
-                    if name in phases:
-                        control.transition(name)
-                    elif name == "CHAT_REPROOF_STARTED":
-                        control.transition("SYSTEM_CHAT_REPROOF" if control.active and control.active["kind"] == browser_observer.ADDITIONAL_PROCESSING else "CONNECTION_RECOVERY")
-                    control.consume_slots()
                     control.event(name, **fields)
                     waiting_state()
 
@@ -727,7 +766,8 @@ class WebWorkerBridge:
                                 request, "image preparatory turn did not prove exactly one ready image",
                                 details={"imageObserverProof": completed})}
                         self._write_state(request, IMAGE_TURN_COMPLETED,
-                                          imageObserverProof=completed, conversationUrl=chat_url,
+                                          imageObserverProof=completed, imageOriginalPrompt=prompt,
+                                          imageAnchorBinding=watch.get("anchorBinding"), conversationUrl=chat_url,
                                           conversationId=conversation_id)
                         try:
                             packaging = image_prepare()
@@ -1009,45 +1049,6 @@ class WebWorkerBridge:
                                     return outcome
                     return {"kind": "no_result"}
 
-                def handoff_connection():
-                    nonlocal pending_control, next_result_recheck
-                    if not control.active or control.active["kind"] != browser_observer.ADDITIONAL_PROCESSING:
-                        return {"kind": "no_handoff"}
-                    latest = watched_turns[-1]
-                    def proof():
-                        return browser_recovery.chat_ready_snapshot(
-                            page, chat_url, str(latest["prompt"]), original_prompt=prompt,
-                            anchor_binding=latest.get("anchorBinding"), allow_interrupted=True)
-                    ready = proof()
-                    details = ready.get("details", {})
-                    if not ready.get("ok") or not details.get("interruptionEvidencePresent"):
-                        return {"kind": "no_handoff"}
-                    connection = browser_observer.ASSISTANT_CONNECTION_INTERRUPTED
-                    # Preserve confirmation time while the current flow still owns control.
-                    control.candidate(connection, details.get("connectionInterrupted", False),
-                                      details.get("interruption", {}))
-                    clear_observer_proofs()
-                    scanned = scan_watches(skip_latest_missing=False)
-                    if scanned["kind"] in {"terminal", "fatal"}:
-                        return scanned
-                    # Observation may have changed the DOM: never hand off a stale proof.
-                    ready = proof()
-                    if not ready.get("ok"):
-                        return {"kind": "no_handoff"}
-                    if not ready.get("details", {}).get("interruptionEvidencePresent"):
-                        return {"kind": "recovered", "result": ready}
-                    episode = control.banners[connection]
-                    episode["previousRecoveryDeadline"] = control.active["deadline"]
-                    control.finish_recovery(connection, status="ABORTED",
-                                            reason="serial_handoff", nextKind=connection,
-                                            previousRecoveryDeadline=episode["previousRecoveryDeadline"])
-                    event_id = episode.get("eventId")
-                    if control.can_begin_recovery(connection, event_id):
-                        pending_control = (connection, event_id)
-                    next_result_recheck = self.monotonic()
-                    waiting_state()
-                    return {"kind": "handoff"}
-
                 self._write_state(
                     request,
                     WAITING_ASSISTANT,
@@ -1077,153 +1078,28 @@ class WebWorkerBridge:
                         )
                         return terminal_result
 
-                    if control.phase == "CONNECTION_WAITING":
-                        control.consume_slots()
-                        latest = watched_turns[-1]
-                        # A correlated result can still win while the UI is interrupted.
-                        scanned = scan_watches(skip_latest_missing=False)
-                        if scanned["kind"] in {"terminal", "fatal"}:
-                            return scanned["result"]
-                        proof = browser_recovery.chat_ready_snapshot(
-                            page, chat_url, str(latest["prompt"]), original_prompt=prompt,
-                            anchor_binding=latest.get("anchorBinding"))
-                        if proof.get("ok"):
-                            recovery_event("SAME_CHAT_CONFIRMED", proof=proof, passive=True)
-                            clear_observer_proofs()
-                            control.finish_recovery(browser_recovery.RECOVERY_READY)
-                            # Re-arm only after full absence AND exact same-chat proof.
-                            control.candidate(browser_observer.ASSISTANT_CONNECTION_INTERRUPTED, False, {})
-                            next_result_recheck = self.monotonic()
-                            waiting_state()
-                            continue
-                        waiting_state()
-                        self.sleep(min(browser_observer.DEFAULT_POLL_MS / 1000.0,
-                                       max(0.0, control.active["deadline"] - self.monotonic())))
-                        continue
-
                     signal = probe_system()
                     if signal and pending_control:
                         kind, event_id = pending_control
                         pending_control = None
-                        latest_phase = browser_observer.inspect_answer_phase(
-                            page, str(watched_turns[-1]["prompt"]), chat_url,
-                            tracker=phase_tracker, anchor_binding=watched_turns[-1].get("anchorBinding"),
-                            ignore_system_banner=True)
-                        if latest_phase.get("phase") == browser_observer.FINAL_ANSWER_COMPLETED:
-                            result_scan_only = True
-                            try:
-                                result_first = scan_watches(skip_latest_missing=False)
-                            finally:
-                                result_scan_only = False
-                            if result_first["kind"] in {"terminal", "fatal"}:
-                                return result_first["result"]
                         if not control.begin_recovery(kind, event_id):
                             continue
                         latest = watched_turns[-1]
-                        last_observer_code = kind
-                        waiting_state()
-                        if kind == browser_observer.ASSISTANT_CONNECTION_INTERRUPTED:
-                            control.transition("CONNECTION_RECOVERY", eventId=event_id)
-                            budget_ms = remaining_ms()
-                            if budget_ms <= 0:
-                                # An expired handoff enters passive waiting, never a new reload cycle.
-                                recovered = {"ok": False, "recoverable": True,
-                                             "code": browser_recovery.RECOVERY_BUDGET_EXHAUSTED}
-                            else:
-                                recovered = browser_recovery.recover_interrupted_chat(
-                                    page, chat_url, str(latest["prompt"]),
-                                    original_prompt=prompt, anchor_binding=latest.get("anchorBinding"),
-                                    budget_ms=budget_ms, sleep=self.sleep,
-                                    monotonic=self.monotonic, on_event=recovery_event)
-                        else:
-                            recovered = system_recovery.prepare_additional_processing(
-                                page, chat_url, prompt, str(latest["prompt"]),
-                                anchor_binding=latest.get("anchorBinding"),
-                                deadline=control.active["deadline"], on_event=recovery_event,
-                                sleep=self.sleep, monotonic=self.monotonic, uniform=self.uniform)
-                        last_recovery = {**recovered, "eventId": event_id, "kind": kind}
-                        control.consume_slots()
-                        waiting_state()
-                        if recovered.get("code") != browser_recovery.RECOVERY_INVALID_CONFIG:
-                            handed = handoff_connection()
-                            if handed["kind"] in {"terminal", "fatal"}:
-                                return handed["result"]
-                            if handed["kind"] == "handoff":
-                                continue
-                            if handed["kind"] == "recovered":
-                                recovered = handed["result"]
-                                last_recovery = {**recovered, "eventId": event_id, "kind": kind}
-                        if not recovered.get("ok"):
-                            if (kind == browser_observer.ASSISTANT_CONNECTION_INTERRUPTED
-                                    and recovered.get("recoverable")):
-                                clear_observer_proofs()
-                                control.wait_for_connection(recovered.get("code"))
-                                waiting_state()
-                                continue
-                            reason = recovered.get("code", "recovery_failed")
-                            if self.monotonic() >= deadline:
-                                control.transition("TIMEOUT")
-                                control.event("RECOVERY_DEADLINE_TIMEOUT")
-                                reason = browser_observer.ASSISTANT_TURN_TIMEOUT
-                            return self._fail(request, reason, details=control.snapshot())
-                        clear_observer_proofs()
-                        # Result wins before any recovery continuation, including grace.
-                        scanned = scan_watches(skip_latest_missing=False)
+                        # Result always wins before reload. One best-effort reload per banner.
+                        result_scan_only = True
+                        try:
+                            scanned = scan_watches(skip_latest_missing=False)
+                        finally:
+                            result_scan_only = False
                         if scanned["kind"] in {"terminal", "fatal"}:
                             return scanned["result"]
-                        if kind == browser_observer.ADDITIONAL_PROCESSING and remaining_ms() > 0:
-                            phase = browser_observer.inspect_answer_phase(
-                                page, str(latest["prompt"]), chat_url, tracker=phase_tracker,
-                                anchor_binding=latest.get("anchorBinding"), ignore_system_banner=True)
-                            if not phase.get("finalAnswerLatched") and phase.get("phase") not in {
-                                    browser_observer.FINAL_ANSWER_STARTED, browser_observer.FINAL_ANSWER_COMPLETED}:
-                                control.transition("SYSTEM_CONTINUE", eventId=event_id)
-                                intent = transport_control.make_intent(
-                                    page, request_id, chat_url, prompt, str(latest["prompt"]),
-                                    recovery_event_id=event_id, anchor_binding=latest.get("anchorBinding"),
-                                    randrange=self.randrange)
-                                control.intent = intent
-                                control.event("CONTINUATION_SELECTED", **intent)
-                                waiting_state()  # Durable exact text/relation BEFORE composer/Send.
-                                sent = reminder_policy.submit_reminder(
-                                    page, intent["exactPromptText"], chat_url,
-                                    timeout_ms=min(timeout_ms, remaining_ms()),
-                                    sleep=self.sleep, monotonic=self.monotonic, uniform=self.uniform,
-                                    anchor_prompt=str(latest["prompt"]), anchor_binding=latest.get("anchorBinding"),
-                                    phase_tracker=phase_tracker, system_continuation=True,
-                                    operation_deadline=control.active["deadline"], control_intent=intent)
-                                control.event("CONTINUATION_SEND_OUTCOME", proof=sent, recoveryEventId=event_id)
-                                waiting_state()
-                                if sent.get("sendState") == browser_submit.SEND_PROVEN_SENT:
-                                    add_control_watch(intent, sent)
-                                elif sent.get("sendState") == browser_submit.SEND_UNKNOWN:
-                                    return self._fail(request, "system continuation send UNKNOWN; no resend", details=control.snapshot())
-                                elif not sent.get("details", {}).get("unsentPromptCleared"):
-                                    return self._fail(request, "system continuation unsafe unsent outcome", details=control.snapshot())
-                                else:
-                                    handed = handoff_connection()
-                                    if handed["kind"] in {"terminal", "fatal"}:
-                                        return handed["result"]
-                                    if handed["kind"] == "handoff":
-                                        continue
-                                if remaining_ms() > 0:
-                                    scanned = scan_watches(skip_latest_missing=False)
-                                    if scanned["kind"] in {"terminal", "fatal"}:
-                                        return scanned["result"]
-                        # Text-only/no-ZIP results retain their existing 10s stable
-                        # recheck, but only within this cycle's remaining hard budget.
-                        settlements = [float(w["noArtifactSince"]) + _RESULT_RECHECK_INTERVAL_MS / 1000.0
-                                       for w in watched_turns if w.get("proof") is not None
-                                       and w.get("noArtifactSince") is not None]
-                        if settlements and remaining_ms() > 0:
-                            self.sleep(min(max(0.0, min(settlements) - self.monotonic()), remaining_ms() / 1000.0))
-                            control.consume_slots()
-                            scanned = scan_watches(skip_latest_missing=False)
-                            if scanned["kind"] in {"terminal", "fatal"}:
-                                return scanned["result"]
-                        control.finish_recovery(recovered["code"])
-                        if kind == browser_observer.ASSISTANT_CONNECTION_INTERRUPTED:
-                            control.candidate(kind, False, {})
+                        last_recovery = browser_recovery.recover_interrupted_chat(
+                            page, chat_url, str(latest["prompt"]), original_prompt=prompt,
+                            anchor_binding=latest.get("anchorBinding"), budget_ms=max(1, remaining_ms()),
+                            max_attempts=1, settle_ms=0, retry_delays_ms=(),
+                            sleep=self.sleep, monotonic=self.monotonic, on_event=recovery_event)
+                        clear_observer_proofs()
+                        control.finish_recovery(last_recovery.get("code"))
                         next_result_recheck = self.monotonic()
                         waiting_state()
                         continue
@@ -1298,7 +1174,7 @@ class WebWorkerBridge:
                             page, str(watched_turns[-1]["prompt"]), chat_url, tracker=phase_tracker,
                             anchor_binding=watched_turns[-1].get("anchorBinding"))
                         waiting_state()
-                        if last_answer_phase["phase"] != browser_observer.WORKING:
+                        if last_answer_phase["phase"] in {browser_observer.FINAL_ANSWER_STARTED, browser_observer.FINAL_ANSWER_COMPLETED}:
                             next_reminder_retry = self.monotonic() + browser_observer.DEFAULT_POLL_MS / 1000.0
                             if last_answer_phase["phase"] in {browser_observer.FINAL_ANSWER_STARTED, browser_observer.FINAL_ANSWER_COMPLETED}:
                                 control.transition(last_answer_phase["phase"])
@@ -1472,6 +1348,34 @@ class WebWorkerBridge:
         transport_details = dict(details) if isinstance(details, dict) else {"value": details}
         record = self._write_state(request, self.read_state(request.request_id).get("state", ACCEPTED) if self.read_state(request.request_id) else ACCEPTED, lastError=transport_message, failureCode=code)
         record["failureDetails"] = transport_details
+        submit_proof = record.get("submitProof") if isinstance(record.get("submitProof"), dict) else {}
+        send_state = submit_proof.get("sendState")
+        send_proof_class = ("PROVEN_SENT" if send_state == browser_submit.SEND_PROVEN_SENT else
+                            "PROVEN_NOT_SENT" if send_state == browser_submit.SEND_PROVEN_NOT_SENT else "UNKNOWN")
+        conversation_url = record.get("conversationUrl") or submit_proof.get("details", {}).get("chatUrl")
+        conversation_id = (browser_submit.conversation_id_from_url(conversation_url)
+                           if browser_submit.is_bound_chat_url(conversation_url) else None)
+        uncertain = transport_details.get("sendState") == "UNKNOWN" or any(
+            isinstance(transport_details.get(key), dict) and transport_details[key].get("sendState") == "UNKNOWN"
+            for key in ("reminderSubmit", "submit", "followupSubmit"))
+        if uncertain and record.get("readOnlySendReproof") and transport_details is not None and transport_details.get("code") == browser_submit.PROMPT_SEND_UNKNOWN:
+            uncertain = False
+        recovery_evidence = {
+            "readOnlySendReproof": record.get("readOnlySendReproof"),
+            "promptSha256": record.get("promptSha256") or submit_proof.get("details", {}).get("promptSha256"),
+            "unresolvedSendUnknown": uncertain,
+            "webResultAvailable": bool(record.get("artifactProof")),
+            "imageGenerated": isinstance(record.get("imageObserverProof"), dict),
+            "imageObserverProof": record.get("imageObserverProof"),
+            "imageOriginalPrompt": record.get("imageOriginalPrompt"),
+            "imageAnchorBinding": record.get("imageAnchorBinding"),
+            "sendProof": {"sendState": send_state, "proofClass": send_proof_class}
+                if send_state else {"proofClass": "UNKNOWN"},
+            "sendProofClass": send_proof_class,
+            "conversationUrl": conversation_url if isinstance(conversation_url, str) else None,
+            "conversationId": conversation_id if isinstance(conversation_id, str) else None,
+        }
+        record.update(recovery_evidence)
         _atomic_json(self.state_path(request.request_id), record)
         return _result(
             POSTMAN_TRANSPORT_FAILED,
@@ -1483,6 +1387,7 @@ class WebWorkerBridge:
                 "resultPath": record["resultPath"],
                 "transportCode": code,
                 "transportMessage": transport_message,
+                **recovery_evidence,
                 "details": transport_details,
             },
         )

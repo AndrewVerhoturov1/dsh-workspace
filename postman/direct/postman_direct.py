@@ -66,7 +66,6 @@ PUBLIC_POLICY_URL = (
 
 DIRECT_VERSION = 5
 DEFAULT_ASSISTANT_TIMEOUT_MS = 60 * 60 * 1000
-MAX_AUTOMATIC_CONTINUATIONS = 2
 STATE_INIT = "INIT"
 STATE_TASK_PUBLISHED = "TASK_PUBLISHED"
 STATE_BROWSER_READY = "BROWSER_READY"
@@ -135,7 +134,7 @@ def build_image_generation_prompt(user_intent: str, input_files: Iterable[dict[s
     inputs = task_package.normalize_input_files(input_files)
     if inputs:
         input_bundle.image_media(inputs)
-    reference = "Используй приложенное изображение как visual reference.\n\n" if inputs else ""
+    reference = "Используй приложенные изображения как visual references.\n\n" if inputs else ""
     return reference + f"Сгенерируй, пожалуйста, изображение по этому промту:\n\n{user_intent}\n\nСделай ровно одно изображение."
 
 
@@ -573,8 +572,12 @@ class DirectPostman:
         input_files: Iterable[dict[str, object]] = (),
         input_attachment=None,
         resume_image_url: str | None = None,
+        conversation_url: str | None = None,
+        automatic_continuation: bool = False,
+        image_recovery_proof: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        preparatory_prompt = build_image_generation_prompt(task, input_files)
+        preparatory_prompt = ("Продолжи исходную задачу с текущего места и заверши создание изображения. Сделай ровно одно изображение."
+                              if automatic_continuation else build_image_generation_prompt(task, input_files))
         browser = self.ensure_browser(cdp_url=cdp_url)
         self._write_state(request_id, STATE_BROWSER_READY, browser=browser)
 
@@ -592,9 +595,13 @@ class DirectPostman:
                 expected_filename = request_identity.expected_artifact_filename(request_id)
                 allowed_paths = derive_allowed_paths(snapshot.root_entries, extra_allowed)
                 forbidden_paths = derive_forbidden_paths(extra_forbidden)
+                packaging_intent = build_image_packaging_intent(request_id)
+                if image_recovery_proof:
+                    packaging_intent = packaging_intent.replace("непосредственно предыдущем ответе ассистента", "исходном ответе ассистента с единственным готовым изображением до попытки упаковки")
+                    packaging_intent = packaging_intent.replace("непосредственно предыдущего ответа ассистента", "исходного ответа ассистента с единственным готовым изображением, а не из ответа о сбое упаковки")
                 task_content = task_package.render_direct_task_manifest(
                     request_id=request_id,
-                    user_intent=build_image_packaging_intent(request_id),
+                    user_intent=packaging_intent,
                     include_implementation_discipline=False,
                     repository=self.repository,
                     base_commit=snapshot.prepublication_commit,
@@ -657,22 +664,29 @@ class DirectPostman:
             }
 
         bridge = self.bridge_factory(root=self.direct_root.parent, result_root=self.result_root)
+        packaging_only = automatic_continuation and image_recovery_proof is not None
+        config = prepare_packaging() if packaging_only else None
         result = bridge.run_request(
             request_id,
-            task_url="",
-            prompt=preparatory_prompt,
-            expected_filename=request_identity.expected_artifact_filename(request_id),
-            expected_request={"requestId": request_id},
+            task_url=config["task_url"] if config else "",
+            prompt=config["prompt"] if config else preparatory_prompt,
+            expected_filename=config["expected_filename"] if config else request_identity.expected_artifact_filename(request_id),
+            expected_request=config["expected_request"] if config else {"requestId": request_id, "repository": self.repository},
+            image_recovery_proof=image_recovery_proof if packaging_only else None,
+            conversation_url=conversation_url,
             cdp_url=browser.get("cdpUrl", cdp_url),
             observer_timeout_ms=DEFAULT_ASSISTANT_TIMEOUT_MS,
-            image_prepare=prepare_packaging,
+            image_prepare=None if packaging_only else prepare_packaging,
             **({"conversation_url": resume_image_url, "resume_image": True} if resume_image_url else {}),
             **({"input_attachment": input_attachment} if input_attachment else {}),
         )
         if not isinstance(result, dict) or result.get("ok") is not True:
             code = result.get("code", "DIRECT_WEB_FAILED") if isinstance(result, dict) else "DIRECT_WEB_FAILED"
             details = result.get("details", {}) if isinstance(result, dict) else {"result": repr(result)}
-            self._write_state(request_id, STATE_FAILED, failureCode=code, failureDetails=details)
+            self._write_state(request_id, STATE_FAILED, failureCode=code, failureDetails=details,
+                              **{key: details[key] for key in ("conversationUrl", "conversationId", "sendProof", "sendProofClass",
+                                  "unresolvedSendUnknown", "webResultAvailable", "readOnlySendReproof", "promptSha256", "imageGenerated", "imageObserverProof",
+                                  "imageOriginalPrompt", "imageAnchorBinding") if key in details})
             transport_message = str(result.get("transportMessage") or details.get("transportMessage")
                                     or details.get("reason") or code)
             transport_code = str(result.get("transportCode") or details.get("transportCode") or code)
@@ -732,8 +746,6 @@ class DirectPostman:
         if not isinstance(self.branch, str) or not self.branch.strip():
             raise DirectPostmanError("DIRECT_BRANCH_REQUIRED", "task publication branch must be explicit")
         request_identity.assert_canonical_request_id(request_id)
-        if image_mode and (chat_request_id or automatic_continuation):
-            raise DirectPostmanError("DIRECT_IMAGE_CHAT_UNSUPPORTED", "image mode does not support --chat-request-id or automatic continuation")
         if image_mode:
             try:
                 from PIL import Image  # noqa: F401
@@ -753,6 +765,7 @@ class DirectPostman:
         self._write_state(request_id, STATE_INIT, publicationStarted=False)
 
         chat_ref = None
+        recovery_fields = {}
         if automatic_continuation and not chat_request_id:
             raise DirectPostmanError(
                 "DIRECT_INVALID_CONTINUATION",
@@ -767,24 +780,13 @@ class DirectPostman:
                 )
             except chat_reference.ChatReferenceError as exc:
                 raise DirectPostmanError(exc.code, str(exc), details=exc.details) from exc
-            if automatic_continuation and getattr(chat_ref, "terminal_state", "") not in {
-                ASSISTANT_COMPLETED_NO_ARTIFACT,
-                ARTIFACT_REJECTED,
-            }:
-                raise DirectPostmanError(
-                    "DIRECT_INVALID_CONTINUATION",
-                    "automatic continuation requires a non-durable terminal handoff",
-                    details={
-                        "chatRequestId": chat_ref.request_id,
-                        "terminalState": getattr(chat_ref, "terminal_state", ""),
-                    },
-                )
-            if automatic_continuation and chat_ref.continuation_index >= MAX_AUTOMATIC_CONTINUATIONS:
-                raise DirectPostmanError(
-                    "POSTMAN_AUTOMATIC_CONTINUATION_LIMIT_REACHED",
-                    "root request chain has exhausted its automatic continuation budget",
-                    details={"chatRequestId": chat_ref.request_id, "continuationIndex": chat_ref.continuation_index},
-                )
+            recovery_fields = {}
+            if automatic_continuation:
+                try:
+                    recovery_fields = chat_reference.claim_recovery(self.direct_root, chat_ref, request_id)
+                except chat_reference.ChatReferenceError as exc:
+                    raise DirectPostmanError(exc.code, str(exc), details=exc.details) from exc
+                self._write_state(request_id, STATE_INIT, **recovery_fields)
 
         try:
             self.result_root = runtime.prepare_result_root(self.result_root)
@@ -841,6 +843,9 @@ class DirectPostman:
                 extra_forbidden=extra_forbidden,
                 input_files=input_files,
                 input_attachment=input_attachment,
+                conversation_url=chat_ref.conversation_url if chat_ref else None,
+                automatic_continuation=automatic_continuation,
+                image_recovery_proof=getattr(chat_ref, "image_recovery_proof", None) if automatic_continuation else None,
             )
 
         publisher = self.publisher_factory(
@@ -857,7 +862,8 @@ class DirectPostman:
 
             task_content = task_package.render_direct_task_manifest(
                 request_id=request_id,
-                user_intent=task,
+                user_intent=("Продолжи исходную незавершённую задачу с текущего места и доведи её до готового результата."
+                             if automatic_continuation else task),
                 input_files=input_files,
                 native_input_request_id=request_id if input_attachment else None,
                 repository=self.repository,
@@ -930,7 +936,10 @@ class DirectPostman:
         if not isinstance(result, dict) or result.get("ok") is not True:
             code = result.get("code", "DIRECT_WEB_FAILED") if isinstance(result, dict) else "DIRECT_WEB_FAILED"
             details = result.get("details", {}) if isinstance(result, dict) else {"result": repr(result)}
-            self._write_state(request_id, STATE_FAILED, failureCode=code, failureDetails=details)
+            self._write_state(request_id, STATE_FAILED, failureCode=code, failureDetails=details,
+                              **{key: details[key] for key in ("conversationUrl", "conversationId", "sendProof", "sendProofClass",
+                                  "unresolvedSendUnknown", "webResultAvailable", "readOnlySendReproof", "promptSha256", "imageGenerated", "imageObserverProof",
+                                  "imageOriginalPrompt", "imageAnchorBinding") if key in details})
             transport_message = str(
                 result.get("transportMessage")
                 or details.get("transportMessage")
@@ -1037,6 +1046,7 @@ class DirectPostman:
             resultHandoffPath=str(handoff_path.resolve()),
             handoffVersion=durable_handoff.HANDOFF_VERSION,
             **chain_fields,
+            **recovery_fields,
             **conversation_fields,
         )
         try:
@@ -1065,6 +1075,7 @@ class DirectPostman:
             artifactSha256=terminal["sha256"],
             workerDetails=details,
             **chain_fields,
+            **recovery_fields,
             **conversation_fields,
         )
         return terminal
@@ -1077,7 +1088,10 @@ class DirectPostman:
         details = result.get("details") if isinstance(result.get("details"), dict) else {}
         if result.get("code") != RESULT_DURABLE:
             code = str(result.get("code") or "DIRECT_IMAGE_PACKAGING_FAILED")
-            self._write_state(request_id, STATE_FAILED, failureCode=code, failureDetails=details)
+            self._write_state(request_id, STATE_FAILED, failureCode=code, failureDetails=details,
+                              **{key: details[key] for key in ("conversationUrl", "conversationId", "sendProof", "sendProofClass",
+                                  "unresolvedSendUnknown", "webResultAvailable", "readOnlySendReproof", "promptSha256", "imageGenerated", "imageObserverProof",
+                                  "imageOriginalPrompt", "imageAnchorBinding") if key in details})
             raise DirectPostmanError(POSTMAN_TRANSPORT_FAILED, "image packaging did not produce a validated durable ZIP", details={
                 "transportCode": code, "transportMessage": "image packaging did not produce a validated durable ZIP", "details": details,
             })

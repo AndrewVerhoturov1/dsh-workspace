@@ -191,7 +191,7 @@ conversation URL. UI Search и silent fresh fallback запрещены.
 продолжить тот же conversation как новым `@PostmanAsk --chat ...`, так и обычным
 `@Postman --chat ...`, если пользователь теперь хочет ZIP.
 
-Automatic continuation tool предназначен для artifact Postman и для PostmanAsk v1 не используется. Общий transport contract — `postman/POSTMAN_CURRENT_FLOW.md`, отличия Ask — `postman/POSTMAN_ASK_FLOW.md`; не переносить artifact continuation на text flow.
+Автоматическое восстановление — одна попытка на исходный REQ/root chain, во всех трёх режимах. Direct принимает решение по capability: exact locally saved conversation, доказанный original Send (`PROVEN_SENT` или read-only reproof UNKNOWN), нет unresolved Send, durable результата или уже созданного Web artifact. Перед публикацией/Send новый REQ эксклюзивно фиксирует durable `recovery-<rootREQ>.claim`; restart и конкурирующий вызов не дают вторую попытку. Новый короткий intent продолжает работу, а не повторяет исходный запрос. `PROVEN_NOT_SENT` и недоказанный UNKNOWN → STOP. Ошибка download при уже созданном Web artifact не запускает новый Web message. Ручной `--chat` остаётся независимым новым запросом. Для Image обычный `--chat` создаёт новое изображение; automatic recovery после готового изображения сначала read-only доказывает исходный image assistant identity и запускает только упаковку без generation. Recovery Ask сохраняет text mode и exact REQ-bound envelope; trusted no-argument tool не принимает model-authored text.
 
 ## 8. Handoff локальной модели
 

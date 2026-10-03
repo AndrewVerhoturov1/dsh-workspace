@@ -52,13 +52,13 @@ class InputFilesTest(unittest.TestCase):
 
     def test_image_first_prompt_only(self):
         prompt = postman_direct.build_image_generation_prompt("Draw", [descriptor("reference.png", "img/reference.png")])
-        self.assertIn("приложенное изображение как visual reference", prompt)
+        self.assertIn("приложенные изображения как visual references", prompt)
         self.assertNotIn("raw_url", prompt)
         self.assertNotIn("github", prompt.lower())
         self.assertNotIn(SHA, prompt)
         self.assertTrue(prompt.endswith("Draw\n\nСделай ровно одно изображение."))
         with self.assertRaisesRegex(Exception, "COUNT_UNSUPPORTED"):
-            postman_direct.build_image_generation_prompt("Draw", [descriptor(), descriptor()])
+            postman_direct.build_image_generation_prompt("Draw", [descriptor()] * 8)
         with self.assertRaisesRegex(Exception, "TYPE_UNSUPPORTED"):
             postman_direct.build_image_generation_prompt("Draw", [descriptor()])
         self.assertNotIn("reference.png", postman_direct.build_image_packaging_intent(REQ))

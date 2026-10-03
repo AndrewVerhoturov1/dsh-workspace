@@ -8,7 +8,6 @@ import { CurrentAttachmentStore, postmanInputGrants, stageStandaloneCurrentAttac
 
 // Standalone transport publishes REQ task files to main; Leader children use their exact prepared task branch.
 const STANDALONE_TASK_PUBLICATION_BRANCH = 'main'
-const MAX_AUTOMATIC_CONTINUATIONS = 2
 
 const REQ_PATTERN = /^REQ_\d{8}T\d{6}Z_\d{4}$/
 const ARTIFACT_TERMINAL_OK = new Set([
@@ -177,7 +176,6 @@ export function parsePostmanUserTurn(raw) {
   // If the semantic payload begins with the reserved --chat token, malformed
   // syntax fails closed instead of silently turning it into a fresh request.
   if (/^--chat(?:\s|$)/u.test(afterTrigger)) {
-    if (transportKind === 'image') throw parseError('POSTMAN_IMAGE_CHAT_NOT_ALLOWED')
     const chat = /^--chat[ \t]+(REQ_\d{8}T\d{6}Z_\d{4})(?:(\s)|$)/u.exec(afterTrigger)
     if (chat === null || !REQ_PATTERN.test(chat[1])) {
       throw parseError('POSTMAN_CHAT_TRIGGER_PARSE_FAILED')
@@ -455,18 +453,6 @@ function terminalGate(job) {
   }
 }
 
-function continuationPayload(result) {
-  if (result?.code === 'ASSISTANT_COMPLETED_NO_ARTIFACT') {
-    return 'Продолжи выполнение предыдущей задачи с того места, где остановился. Не начинай заново. Доведи исходную задачу до полного результата и выдай итоговый ZIP.'
-  }
-  if (result?.code === 'ARTIFACT_REJECTED') {
-    const code = typeof result.validationCode === 'string' ? result.validationCode : 'UNKNOWN_VALIDATION_CODE'
-    const message = typeof result.validationMessage === 'string' ? result.validationMessage : 'ZIP был отклонён transport validator.'
-    return `Продолжи выполнение предыдущей задачи с того места, где остановился. Не начинай заново. Транспорт отклонил итоговый ZIP: ${code}: ${message}. Пересобери итоговый ZIP с исправлением этой transport-проблемы и доведи исходную задачу до полного результата.`
-  }
-  throw parseError('POSTMAN_AUTOMATIC_CONTINUATION_NOT_ALLOWED')
-}
-
 export class DirectPostmanJobManager {
   constructor({
     spawn = nodeSpawn,
@@ -499,8 +485,6 @@ export class DirectPostmanJobManager {
     if (previous?.state === 'running' || previous?.state === 'starting') throw parseError('POSTMAN_CURRENT_TURN_JOB_ALREADY_RUNNING')
     if (typeof payload !== 'string' || payload.trim() === '') throw parseError('POSTMAN_EMPTY_PAYLOAD')
     if (!['artifact', 'text', 'image'].includes(transportKind)) throw parseError('POSTMAN_RESULT_MODE_INVALID')
-    if (transportKind !== 'artifact' && automaticContinuation) throw parseError('POSTMAN_AUTOMATIC_CONTINUATION_NOT_ALLOWED')
-    if (transportKind === 'image' && chatRequestId !== undefined) throw parseError('POSTMAN_IMAGE_CHAT_NOT_ALLOWED')
     if (branch !== STANDALONE_TASK_PUBLICATION_BRANCH && !POSTMAN_TASK_BRANCH_PATTERN.test(branch ?? '')) throw parseError('POSTMAN_TASK_BRANCH_INVALID')
 
     // A new request in this Luna session supersedes any exact-reply slot left
@@ -754,17 +738,19 @@ export class DirectPostmanJobManager {
     if (previous === undefined || previous.state !== 'completed' || previous.result === undefined) {
       throw parseError('POSTMAN_AUTOMATIC_CONTINUATION_NOT_ALLOWED')
     }
-    const payload = continuationPayload(previous.result)
-    const index = previous.result.continuationIndex
-    if (!Number.isSafeInteger(index) || index < 0) throw parseError('POSTMAN_AUTOMATIC_CONTINUATION_NOT_ALLOWED')
-    if (index >= MAX_AUTOMATIC_CONTINUATIONS) throw parseError('POSTMAN_AUTOMATIC_CONTINUATION_LIMIT_REACHED')
+    if (new Set(['RESULT_DURABLE', 'TEXT_RESULT_DURABLE', 'IMAGE_RESULT_DURABLE']).has(previous.result.code))
+      throw parseError('POSTMAN_AUTOMATIC_CONTINUATION_NOT_ALLOWED')
+    if (previous.automaticContinuation || previous.result.automaticRecoveryUsed === true)
+      throw parseError('POSTMAN_AUTOMATIC_CONTINUATION_LIMIT_REACHED')
+    // Direct owns the durable evidence and claim; it rejects ineligible failures before Send.
+    const payload = 'Продолжи исходную незавершённую задачу с текущего места и доведи её до готового результата.'
     return this.start({
       sessionId,
       workspace,
       payload,
       chatRequestId: previous.requestId,
       automaticContinuation: true,
-      transportKind: 'artifact',
+      transportKind: previous.transportKind ?? 'artifact',
       branch: previous.branch,
       proof: {
         parseMode: 'automatic-continuation',
@@ -913,7 +899,7 @@ export function createDirectCurrentTurnToolConfigs(ctx, { store, jobs, taskConte
 
   const continueLast = {
     name: 'postman_continue_last_request',
-    description: 'Start the deterministic automatic continuation for the last non-durable Postman terminal result in this session. Takes no user text and is allowed only after ASSISTANT_COMPLETED_NO_ARTIFACT or ARTIFACT_REJECTED.',
+    description: 'Start one automatic same-chat recovery of the last failed or non-durable request, preserving artifact/text/image mode. Takes no task text; Direct authorizes exact proven-sent capability and durably enforces one attempt.',
     parameters: {},
     output: toolOutput(),
     async execute(_args, exec) {

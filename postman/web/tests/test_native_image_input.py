@@ -15,7 +15,8 @@ sys.path[:0] = [str(WEB), str(WEB / "tests")]
 import browser_submit as submit
 import browser_observer as observer
 import web_worker_bridge as worker
-from test_input_attachment import ZipPage, proof
+from test_input_attachment import ZipPage, ZipLocator, proof
+import input_attachment
 from test_browser_observer import FakePage, FakeClock, image_snapshot, turn
 from postman import input_files, input_bundle
 from postman.direct import postman_direct as direct
@@ -28,6 +29,38 @@ PNG = _image.getvalue()
 
 
 class NativeImageTests(unittest.TestCase):
+    def test_two_and_seven_native_references_match_entire_sent_set(self):
+        for count in (2,7):
+            with self.subTest(count=count), tempfile.TemporaryDirectory() as temp:
+                root=Path(temp); snapshots=root/'snapshots';snapshots.mkdir();dest=root/'request';dest.mkdir()
+                paths=[]
+                for index in range(count):
+                    path=root/f'reference-{index}.png';path.write_bytes(PNG);paths.append(str(path))
+                stage=input_files.GitHubInputPublisher(lambda *a:self.fail('public input'),snapshot_dir=snapshots)
+                staged=stage.stage(paths)
+                made=input_bundle.build_images(REQ,staged['descriptors'],stage.materializations,dest)
+                attached=input_bundle.read_handoff(made['handoffPath'],REQ,staged['descriptors'],image=True)
+                self.assertEqual(attached.upload_bytes(),[PNG]*count)
+                page=ZipPage(confirm_on_click=True)
+                ready=dict(known=True,count=count,names=attached.name,ids=[f'file_{i}' for i in range(count)],
+                           pending=False,error=False,settled=True)
+                page.upload_result=ready;page.sent_result=ready
+                original_attribute=ZipLocator.get_attribute
+                def attribute(node,name):
+                    return 'multiple' if name=='multiple' else original_attribute(node,name)
+                with patch.object(ZipLocator,'get_attribute',new=attribute):
+                    result=submit.submit_fresh_prompt(page,'draw one image',timeout_ms=0,input_attachment=attached)
+                self.assertEqual(result['sendState'],'PROVEN_SENT',result)
+                self.assertTrue(result['details']['sentAttachmentConfirmed'])
+                self.assertEqual(page.click_count,1)
+                self.assertEqual([item['buffer'] for item in page.uploads[0]],[PNG]*count)
+                wrong={**ready,'names':attached.name[:-1]+['foreign.png']}
+                self.assertFalse(input_attachment.ready(wrong,attached.name))
+                altered=json.loads(Path(made['handoffPath']).read_text())
+                altered['attachments'].reverse();Path(made['handoffPath']).write_text(json.dumps(altered))
+                with self.assertRaises(input_bundle.InputBundleError):
+                    input_bundle.read_handoff(made['handoffPath'],REQ,staged['descriptors'],image=True)
+
     def make_input(self, root):
         source = root / "reference.png"
         source.write_bytes(PNG)
@@ -208,7 +241,7 @@ result=extract(root,{name,image:true,sent:true});if(result.count)throw Error('un
         with tempfile.TemporaryDirectory() as tmp:
             descriptors, made, attached = self.make_input(Path(tmp))
             with self.assertRaisesRegex(input_bundle.InputBundleError, "COUNT_UNSUPPORTED"):
-                input_bundle.image_media(descriptors * 2)
+                input_bundle.image_media(descriptors * 8)
             with self.assertRaisesRegex(input_bundle.InputBundleError, "TYPE_UNSUPPORTED"):
                 input_bundle.image_media([{**descriptors[0], "media_type": "application/pdf"}])
             attached.path.write_bytes(b"different")

@@ -166,8 +166,7 @@ call 3 → @Postman --chat REQ_B ...   → REQ_C, same conversation, artifact mo
 освобождение child. Три Worker работают в той же общей task branch/worktree; это не дополнительные Bridge слоты.
 Одинаковый `--chat` (в том числе разные старые REQ одного conversation URL)
 отклоняется межпроцессной блокировкой до публикации и отправки; разные разговоры
-не блокируют друг друга. Только короткий участок GitHub-публикации задач и первый
-запуск общего Chrome/CDP последовательны; Web-наблюдение разных чатов параллельно.
+не блокируют друг друга. Только короткие GitHub publication/CDP mutation участки последовательны. Web-наблюдение и downloads разных чатов параллельны; stable browser-wide GUID directory не подменяет exact page/request/download proof.
 При занятом разговоре нет автоматического повтора отправки.
 
 ## 8. Postman Leader preset

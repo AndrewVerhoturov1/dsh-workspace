@@ -35,6 +35,8 @@ class CdpDownloadReproduction(unittest.TestCase):
         payload = buffer.getvalue()
         sha = hashlib.sha256(payload).hexdigest()
         filename = "POSTMAN_REQ_20261001T175853Z_9264_RESULT.zip"
+        parallel_started = threading.Barrier(4)
+        transfer_times = {}
         class Handler(BaseHTTPRequestHandler):
             def handle(self):
                 try:
@@ -42,7 +44,21 @@ class CdpDownloadReproduction(unittest.TestCase):
                 except ConnectionResetError:
                     pass  # Chrome may cancel its unused keep-alive connection.
             def do_GET(self):
-                if self.path == "/download":
+                if self.path.startswith("/parallel/"):
+                    token = self.path.rsplit("/",1)[1]
+                    name = "POSTMAN_REQ_20261003T000000Z_000" + token + "_RESULT.zip"
+                    self.send_response(200)
+                    self.send_header("Content-Type","application/zip")
+                    self.send_header("Content-Disposition", 'attachment; filename="' + name + '"')
+                    self.send_header("Content-Length", str(len(payload)))
+                    self.end_headers()
+                    transfer_times[token] = {"start":time.monotonic()}
+                    self.wfile.write(payload[:20000]); self.wfile.flush()
+                    parallel_started.wait(timeout=15)
+                    for start in range(20000,len(payload),2048):
+                        self.wfile.write(payload[start:start+2048]); self.wfile.flush(); time.sleep(.025)
+                    transfer_times[token]["end"] = time.monotonic()
+                elif self.path == "/download":
                     self.send_response(200)
                     self.send_header("Content-Type", "application/zip")
                     self.send_header("Content-Disposition", 'attachment; filename="' + filename + '"')
@@ -129,6 +145,30 @@ class CdpDownloadReproduction(unittest.TestCase):
                             "resultSize": durable.stat().st_size, "sha256": sha, "nativeFiles": 0, "events": 1})
                     print("CDP_REPRO " + json.dumps(rows))
                     page.close()
+            from concurrent.futures import ThreadPoolExecutor
+            def capture(token):
+                name = "POSTMAN_REQ_20261003T000000Z_000" + token + "_RESULT.zip"
+                with cdp_download.locked_playwright(sync_playwright) as pw:
+                    browser = cdp_download.connect_over_cdp(pw, endpoint)
+                    page = browser.contexts[0].new_page()
+                    try:
+                        page.goto("http://127.0.0.1:" + str(server.server_port))
+                        page.locator('a').evaluate('(e,path)=>{e.href=path;e.textContent=path}', '/parallel/' + token)
+                        target = root / name
+                        with cdp_download.download_behavior(page,None):
+                            result = artifact_download._capture_download(page,page.locator('a'),target,name,30000,3000)
+                        self.assertTrue(result['ok'],result)
+                        self.assertEqual(target.read_bytes(),payload)
+                        self.assertEqual(result['details']['sha256'],sha)
+                        return {"requestId":"REQ_20261003T000000Z_000"+token,"filename":name,
+                                "sha256":sha,"clicks":1,"bytes":target.stat().st_size}
+                    finally: page.close()
+            with ThreadPoolExecutor(max_workers=4) as workers:
+                parallel = list(workers.map(capture,['1','2','3','4']))
+            overlap = min(t['end'] for t in transfer_times.values()) - max(t['start'] for t in transfer_times.values())
+            self.assertGreater(overlap,.5)
+            self.assertEqual(list(native.iterdir()),[])
+            print('CDP_PARALLEL ' + json.dumps({"overlapSeconds":overlap,"downloads":parallel}))
         finally:
             if chrome is not None:
                 chrome.terminate()

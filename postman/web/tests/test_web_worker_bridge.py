@@ -23,6 +23,32 @@ TASK_URL = "https://example.test/tasks/request.md"
 
 
 class WebWorkerBridgeTests(unittest.TestCase):
+    def test_unknown_original_send_only_readonly_reproves_before_recovery(self):
+        from types import SimpleNamespace
+        chat='https://chatgpt.com/c/send-reproof'
+        page=SimpleNamespace(close=lambda:None)
+        class Factory:
+            def __enter__(self):self.chromium=self;return self
+            def __exit__(self,*a):pass
+            def connect_over_cdp(self,*a,**kw):return self
+            @property
+            def contexts(self):return [self]
+            def new_page(self):return page
+        sent={'ok':False,'code':bridge_module.browser_submit.PROMPT_SEND_UNKNOWN,'sendState':'UNKNOWN',
+              'details':{'chatUrl':chat,'userTurnCountBefore':0}}
+        for proven in (True,False):
+            with self.subTest(proven=proven), tempfile.TemporaryDirectory() as root:
+                bridge=bridge_module.WebWorkerBridge(root=root)
+                with patch.object(bridge_module.browser_submit,'submit_fresh_prompt',return_value=sent) as first, \
+                     patch.object(bridge_module.browser_submit,'_wait_until',return_value=(proven,{})) as read_only:
+                    result=bridge.run_request(REQ,task_url=TASK_URL,prompt='exact initial',expected_filename='result.zip',
+                        expected_request={'repository':'AndrewVerhoturov1/dsh-workspace'},playwright_factory=Factory)
+                first.assert_called_once()
+                read_only.assert_called_once()
+                self.assertEqual(result['details']['unresolvedSendUnknown'],not proven)
+                self.assertEqual(result['details']['promptSha256'],bridge_module.browser_submit.prompt_sha256('exact initial'))
+                if proven:self.assertTrue(result['details']['readOnlySendReproof']['exactUserTurn'])
+
     def test_accept_persists_request_identity_and_result_path(self):
         with tempfile.TemporaryDirectory() as root:
             bridge = bridge_module.WebWorkerBridge(root=root)
@@ -385,6 +411,41 @@ class WebWorkerBridgeTests(unittest.TestCase):
             self.assertEqual(result["details"]["transportMessage"], "FATAL")
             self.assertNotIn("allow_empty_text", observer.call_args.kwargs)
             self.assertEqual(pauses, [])
+
+    def test_packaging_recovery_reproves_original_image_never_generates_or_adopts_old_image(self):
+        from types import SimpleNamespace
+        chat='https://chatgpt.com/c/image-recovery'
+        page=SimpleNamespace(close=lambda:None)
+        class Factory:
+            def __enter__(self):self.chromium=self;return self
+            def __exit__(self,*a):pass
+            def connect_over_cdp(self,*a,**kw):return self
+            @property
+            def contexts(self):return [self]
+            def new_page(self):return page
+        saved={'ok':True,'details':{'assistantIndex':3,'assistantImageCount':1,
+                                 'assistantIdentity':{'assistantMessageId':'original-image'}}}
+        recovery={'observerProof':saved,'prompt':'original draw','anchorBinding':{'userOrdinal':1}}
+        for identity,count in [('original-image',1),('wrong-image',1),('original-image',2)]:
+            with self.subTest(identity=identity,count=count), tempfile.TemporaryDirectory() as root:
+                bridge=bridge_module.WebWorkerBridge(root=root)
+                observed={'ok':True,'details':{'assistantIndex':3,'assistantImageCount':count,
+                                             'assistantIdentity':{'assistantMessageId':identity}}}
+                with patch.object(bridge_module.browser_submit,'prepare_existing_chat',return_value={'ok':True}), \
+                     patch.object(bridge_module.browser_observer,'observe_next_assistant',return_value=observed) as reproof, \
+                     patch.object(bridge_module.browser_submit,'submit_fresh_prompt',side_effect=AssertionError('generate')) as fresh, \
+                     patch.object(bridge_module.browser_submit,'submit_existing_prompt',return_value={
+                         'ok':False,'code':'PACKAGING_SENTINEL','sendState':'PROVEN_NOT_SENT'}) as packaging:
+                    result=bridge.run_request(REQ,task_url='https://example.test/task',prompt='package launch',expected_filename='result.zip',
+                        expected_request={},conversation_url=chat,image_recovery_proof=recovery,playwright_factory=Factory)
+                fresh.assert_not_called()
+                self.assertEqual(reproof.call_args.args[1],'original draw')
+                if identity=='original-image' and count==1:
+                    packaging.assert_called_once()
+                    self.assertEqual(packaging.call_args.args[1],'package launch')
+                else:
+                    packaging.assert_not_called()
+                    self.assertIn('IMAGE_PACKAGING_REPROOF_FAILED',str(result))
 
     def test_image_flow_rejects_two_ready_images_before_packaging_publication(self):
         chat = "https://chatgpt.com/c/12345678-1234-1234-1234-123456789abc"

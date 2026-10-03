@@ -155,27 +155,13 @@ class ReminderPolicyTests(unittest.TestCase):
             turns.append({"index": 2, "role": "user", "text": "foreign"})
             self.assertFalse(reminder_policy._req_anchor_snapshot(Page(), prompt)["safe"])
 
-    def test_unknown_phase_suppresses_before_composer_readiness(self):
-        prompt = reminder_policy.build_reminder_prompt(REQ, 1)
-        with (
-            patch.object(reminder_policy.submit, "same_conversation_url", return_value=True),
-            patch.object(
-                reminder_policy.browser_observer,
-                "generation_active",
-                return_value=(True, 'button[data-testid="stop-button"]'),
-            ),
-            patch.object(reminder_policy, "prepare_same_chat") as prepare,
-            patch.object(reminder_policy.submit, "insert_prompt") as insert,
-        ):
-            result = reminder_policy.submit_reminder(Page(), prompt, CHAT_URL)
+    def test_unknown_phase_is_diagnostic_not_a_readiness_gate(self):
+        kwargs = dict(boundary='fixture', transitions=[], page=Page())
+        self.assertIsNone(reminder_policy._phase_suppression({'phase':browser_observer.UNKNOWN}, **kwargs))
+        self.assertIsNone(reminder_policy._phase_suppression({'phase':browser_observer.WORKING}, **kwargs))
+        self.assertEqual(reminder_policy._phase_suppression({'phase':browser_observer.FINAL_ANSWER_STARTED}, **kwargs)['code'],
+                         reminder_policy.REMINDER_SUPPRESSED_ASSISTANT_ACTIVITY)
 
-        self.assertEqual(result["code"], reminder_policy.REMINDER_PHASE_PENDING)
-        self.assertTrue(result["details"]["composerUntouched"])
-        self.assertTrue(result["details"]["unsentPromptCleared"])
-        prepare.assert_not_called()
-        insert.assert_not_called()
-
-    def test_existing_assistant_turn_suppresses_without_touching_composer(self):
         prompt = reminder_policy.build_reminder_prompt(REQ, 1)
         with (
             patch.object(reminder_policy.submit, "same_conversation_url", return_value=True),
@@ -383,6 +369,18 @@ class ReminderPolicyTests(unittest.TestCase):
         self.assertEqual(clock.sleeps, [0.0, 0.0])
         cleared.assert_not_called()
         clicked.assert_called_once()
+
+    def test_connection_banner_after_insert_clears_owned_reminder_without_click(self):
+        calls=0
+        def phase(*args,**kwargs):
+            nonlocal calls
+            calls+=1
+            return {"phase":browser_observer.UNKNOWN if calls<=2 else browser_observer.ASSISTANT_CONNECTION_INTERRUPTED}
+        result,cleared,clicked=self._run_inserted_window(clock=FakeClock(),generation=lambda p:(False,""),
+            anchor=lambda *a,**kw:safe_anchor(),send_button=lambda p:(Button(),"send"),phases=phase)
+        self.assertEqual(result["sendState"],reminder_policy.submit.SEND_PROVEN_NOT_SENT)
+        self.assertEqual(cleared.call_count,1,result)
+        clicked.assert_not_called()
 
     def test_final_after_insert_clears_exact_reminder_without_click(self):
         clock = FakeClock()

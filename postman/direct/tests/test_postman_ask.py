@@ -109,6 +109,28 @@ class Bridge:
 
 
 class PostmanAskTests(unittest.TestCase):
+    def test_failed_sent_ask_recovers_once_and_still_validates_exact_envelope(self):
+        new_req = "REQ_20261003T010203Z_1234"
+        with tempfile.TemporaryDirectory() as root:
+            runner = self.make_runner(root)
+            runner._write_state(OLD_REQ, 'ASK_FAILED', failureCode='observer_lost',
+                sendProofClass='PROVEN_SENT', conversationUrl=URL, conversationId='postman-ask-test')
+            Bridge.result = {'ok':True, 'code':'ASSISTANT_COMPLETED_NO_ARTIFACT', 'details':{
+                'assistantText':text_result.begin_marker(new_req)+'\nготово\n'+text_result.end_marker(new_req),
+                'conversationUrl':URL,'conversationId':'postman-ask-test'}}
+            value = runner.run(request_id=new_req, task='ignored original replay', chat_request_id=OLD_REQ,
+                               automatic_continuation=True)
+            self.assertEqual(value['code'],'TEXT_RESULT_DURABLE')
+            self.assertEqual(value['assistantText'],'готово')
+            self.assertEqual(Bridge.calls[-1]['conversation_url'],URL)
+            self.assertNotIn('ignored original replay',Publisher.contents[-1])
+            restarted = self.make_runner(root)
+            with self.assertRaises(postman_ask.DirectPostmanError) as error:
+                restarted.run(request_id='REQ_20261003T010204Z_1234', task='again',
+                              chat_request_id=OLD_REQ, automatic_continuation=True)
+            self.assertEqual(error.exception.code,'POSTMAN_AUTOMATIC_CONTINUATION_LIMIT_REACHED')
+            self.assertEqual(len(Bridge.calls),1)
+
     def test_cli_requires_explicit_branch_before_transport(self):
         with patch.object(postman_ask.DirectPostmanAsk, "run", side_effect=AssertionError("must not publish")), contextlib.redirect_stdout(io.StringIO()) as stdout:
             code = postman_ask.main(["--request-id", REQ, "--task", "intent"])

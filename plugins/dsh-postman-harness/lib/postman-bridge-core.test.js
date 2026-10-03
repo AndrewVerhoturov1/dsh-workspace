@@ -408,9 +408,9 @@ test('package and composition expose bridge entrypoint and leader preset', () =>
   assert.doesNotMatch(leaderSkill, /attachmentIds/)
   const inputDoc = readFileSync(join(repoRoot, 'postman', 'POSTMAN_INPUT_FILES.md'), 'utf8')
   for (const instructions of [leaderSkill, inputDoc]) {
-    for (const boundary of ['ctx.attachments.readImage', 'PNG / JPEG / WebP / GIF', 'PDF, ZIP, DOCX',
+    for (const boundary of ['PNG / JPEG / WebP / GIF', 'PDF, ZIP, DOCX',
       'POSTMAN_INPUT_CURRENT_ATTACHMENT_UNAVAILABLE', 'Host resolver не умеет его читать',
-      'Downloads/Desktop', 'не угадывай local path', 'filesystem search', 'generic attachment resolver', 'stage(paths)']) {
+      'Downloads/Desktop', 'не угадывай local path', 'stage(paths)']) {
       // Documentation uses infinitives; the skill uses direct operational instructions.
       assert.ok(instructions.includes(boundary) || (boundary === 'не угадывай local path' &&
         instructions.includes('не угадывать local path')), boundary)

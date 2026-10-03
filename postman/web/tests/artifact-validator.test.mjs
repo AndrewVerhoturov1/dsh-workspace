@@ -125,7 +125,6 @@ test('defaults remain bounded and simple', () => {
     maxTotalUncompressedBytes: 200 * 1024 * 1024,
     maxEntryUncompressedBytes: 64 * 1024 * 1024,
     maxEntries: 2000,
-    maxCompressionRatio: 100,
   });
 });
 
@@ -210,8 +209,6 @@ test('entry count limit is enforced', () => {
   }));
 });
 
-test('pathological compression ratio is rejected', () => {
-  expectCode(makeZip([{ name: 'bomb.txt', data: 'A'.repeat(20000), method: 'deflate' }]), ERROR_CODES.ZIP_BOMB_RISK, expected({
-    limits: { ...DEFAULT_LIMITS, maxCompressionRatio: 10 },
-  }));
+test('high compression ratio passes within absolute byte limits', () => {
+  assert.equal(decision(makeZip([{ name: 'data.txt', data: 'A'.repeat(20000), method: 'deflate' }])).code, ARTIFACT_VALID);
 });
