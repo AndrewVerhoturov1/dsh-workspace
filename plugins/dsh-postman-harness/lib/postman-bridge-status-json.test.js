@@ -140,6 +140,153 @@ test('bound publication synchronizes before grant and reports JSON-safe failure'
   }
 })
 
+test('image transport failures release only with exact pre-publication proof', async () => {
+  function durableContexts(bridgeOperations = {}) {
+    const context = {}
+    let current = { bridgeOperations }
+    return {
+      context,
+      contexts: { get: () => context, record: () => current,
+        async changeRecord(_leaderId, update) { current = update(current) },
+        bindChild: () => true, releaseChild() {} },
+      record: () => current
+    }
+  }
+
+  const provenStore = durableContexts()
+  let provenCount = 0
+  const proven = fixture({ contexts: provenStore.contexts, onStatus: () => {
+    const index = ++provenCount
+    const requestId = 'REQ_PREPUBLICATION_' + index
+    return { status: index % 2 ? 'FAILED' : 'COMPLETED', requestId, result: {
+      ok: false, code: 'POSTMAN_TRANSPORT_FAILED', requestId, transportCode: 'POSTMAN_ATTACHMENT_UPLOAD_TIMEOUT',
+      transportMessage: 'pre-publication transport failure', publicationStarted: false,
+      details: { sendState: 'PROVEN_NOT_SENT' }
+    } }
+  } })
+  for (let i = 0; i < 4; i++) {
+    const accepted = await proven.jobs.accept(parent, '@PostmanImage proven failure ' + i, 'image')
+    assert.equal(accepted.status, 'POSTMAN_BRIDGE_ACCEPTED')
+    await tick(); await tick()
+    const terminal = await proven.jobs.status(parent, accepted.bridgeJobId)
+    assert.equal(terminal.terminalStatus, i % 2 ? 'COMPLETED' : 'FAILED')
+    assert.equal(terminal.synchronization, 'not-required')
+    assert.equal(provenStore.record().bridgeOperations[accepted.bridgeJobId].synchronization, 'not-required')
+  }
+  assert.equal(provenCount, 4, 'not-required failures do not consume received backlog')
+  await proven.jobs.dispose()
+
+  const incompleteStore = durableContexts()
+  let incompleteCount = 0
+  const incomplete = fixture({ contexts: incompleteStore.contexts, onStatus: () => {
+    const requestId = 'REQ_INCOMPLETE_PROOF_' + ++incompleteCount
+    return { status: 'COMPLETED', requestId, result: { ok: false, code: 'POSTMAN_TRANSPORT_FAILED', requestId,
+      transportCode: 'WEB_FAILED', transportMessage: 'missing publicationStarted proof',
+      details: { sendState: 'PROVEN_NOT_SENT' } } }
+  } })
+  for (let i = 0; i < 3; i++) {
+    const accepted = await incomplete.jobs.accept(parent, '@PostmanImage incomplete proof ' + i, 'image')
+    assert.equal(accepted.status, 'POSTMAN_BRIDGE_ACCEPTED')
+    await tick(); await tick()
+    const terminal = await incomplete.jobs.status(parent, accepted.bridgeJobId)
+    assert.equal(terminal.terminalStatus, 'COMPLETED')
+    assert.equal(terminal.synchronization, 'busy')
+    assert.equal(incompleteStore.record().bridgeOperations[accepted.bridgeJobId].synchronization, 'pending')
+  }
+  assert.equal((await incomplete.accept()).status, 'POSTMAN_BRIDGE_LIMIT_REACHED')
+  assert.equal(incompleteCount, 3, 'limit rejection occurs before another child launch')
+  await incomplete.jobs.dispose()
+
+  const stuckOperations = Object.fromEntries(['stuckA', 'stuckB', 'stuckC'].map((id, index) => {
+    const requestId = 'REQ_STUCK_COMPLETED_' + index
+    return [id, { state: 'received', synchronization: 'pending', terminal: {
+      status: 'POSTMAN_BRIDGE_TERMINAL', terminalStatus: 'COMPLETED', requestId, transportKind: 'image',
+      result: { ok: false, code: 'POSTMAN_TRANSPORT_FAILED', requestId,
+        transportCode: 'POSTMAN_ATTACHMENT_UPLOAD_TIMEOUT',
+        transportMessage: 'failed before publication', publicationStarted: false,
+        details: { sendState: 'PROVEN_NOT_SENT' } }
+    } }]
+  }))
+  const recoveryStore = durableContexts(stuckOperations)
+  let recoveryStatusReads = 0, recoveryChildStarts = 0
+  const recovery = fixture({ contexts: recoveryStore.contexts,
+    onStart: async () => {
+      recoveryChildStarts++
+      return { id: 'child-after-recovery', localAgent: { id: 'child-after-recovery' },
+        result: Promise.resolve({ stopReason: 'end_turn' }), async dispose() {} }
+    },
+    onStatus: () => {
+    recoveryStatusReads++
+    return { status: 'FAILED', requestId: 'REQ_NEW_AFTER_RECOVERY', result: { ok: false,
+      code: 'POSTMAN_TRANSPORT_FAILED', requestId: 'REQ_NEW_AFTER_RECOVERY',
+      transportCode: 'WEB_FAILED', transportMessage: 'test child only' } }
+  } })
+  const initial = await recovery.jobs.status(parent, 'stuckA')
+  assert.equal(initial.terminalStatus, 'COMPLETED')
+  assert.equal(initial.synchronization, 'busy')
+  assert.equal((await recovery.jobs.accept(parent, '@PostmanAsk cap remains full', 'text')).status, 'POSTMAN_BRIDGE_LIMIT_REACHED')
+  assert.equal(recoveryChildStarts, 0, 'full backlog launches no child')
+  assert.equal(recoveryStatusReads, 0, 'limit check does not issue Direct/Web status reads')
+
+  const recovered = await recovery.jobs.status(parent, 'stuckA', true)
+  assert.equal(recovered.terminalStatus, 'COMPLETED')
+  assert.equal(recovered.synchronization, 'not-required')
+  assert.equal(recovered.result.requestId, 'REQ_STUCK_COMPLETED_0')
+  const recoveredOperation = recoveryStore.record().bridgeOperations.stuckA
+  assert.equal(recoveredOperation.state, 'received')
+  assert.equal(recoveredOperation.synchronization, 'not-required')
+  assert.equal(recoveredOperation.terminal.terminalStatus, 'COMPLETED')
+  assert.equal(recoveryStatusReads, 0, 'retrySync resolves the saved terminal without another Direct/Web read')
+
+  const released = await recovery.jobs.accept(parent, '@PostmanAsk after recovery', 'text')
+  assert.equal(released.status, 'POSTMAN_BRIDGE_ACCEPTED', 'not-required operation releases one backlog slot')
+  await tick(); await tick()
+  assert.equal(recoveryChildStarts, 1, 'only the post-recovery acceptance starts a child')
+  await recovery.jobs.dispose()
+
+  const publication = { requestId: 'REQ_PUBLISHED_COMPLETED', baseCommit: 'a'.repeat(40),
+    taskPublicationCommit: 'b'.repeat(40) }
+  const publishedStore = durableContexts()
+  let publicationSyncs = 0
+  publishedStore.contexts.sync = async (_leader, taskPublicationCommit, baseCommit) => {
+    assert.equal(taskPublicationCommit, publication.taskPublicationCommit)
+    assert.equal(baseCommit, publication.baseCommit)
+    publicationSyncs++
+    return true
+  }
+  const published = fixture({ contexts: publishedStore.contexts, onStatus: () => ({
+    status: 'COMPLETED', requestId: publication.requestId, result: { ok: false,
+      code: 'POSTMAN_TRANSPORT_FAILED', requestId: publication.requestId, transportCode: 'WEB_LOST',
+      transportMessage: 'failed after published task commit', details: {}, publicationReceipt: publication }
+  }) })
+  const publishedReceipt = await published.jobs.accept(parent, '@PostmanImage published failure', 'image')
+  assert.equal(publishedReceipt.status, 'POSTMAN_BRIDGE_ACCEPTED')
+  await tick(); await tick()
+  const publishedTerminal = await published.jobs.status(parent, publishedReceipt.bridgeJobId)
+  assert.equal(publishedTerminal.terminalStatus, 'COMPLETED')
+  assert.equal(publishedTerminal.synchronization, 'synchronized')
+  assert.equal(publicationSyncs, 1, 'valid publication receipt stays on sync path')
+  assert.equal(publishedStore.record().bridgeOperations[publishedReceipt.bridgeJobId], undefined)
+  await published.jobs.dispose()
+
+  const unknownOperations = Object.fromEntries(['unknownA', 'unknownB', 'unknownC'].map((id, index) => {
+    const requestId = 'REQ_UNKNOWN_TERMINAL_' + index
+    return [id, { state: 'received', synchronization: 'pending', terminal: {
+      status: 'POSTMAN_BRIDGE_TERMINAL', terminalStatus: 'UNRECOGNIZED', requestId, transportKind: 'image',
+      result: { ok: false, code: 'POSTMAN_TRANSPORT_FAILED', requestId, transportCode: 'WEB_FAILED',
+        transportMessage: 'unknown terminal status', publicationStarted: false, details: { sendState: 'PROVEN_NOT_SENT' } }
+    } }]
+  }))
+  const unknownStore = durableContexts(unknownOperations)
+  const unknown = fixture({ contexts: unknownStore.contexts })
+  for (const id of ['unknownA', 'unknownB', 'unknownC']) {
+    assert.equal((await unknown.jobs.status(parent, id)).synchronization, 'busy')
+    assert.equal((await unknown.jobs.status(parent, id, true)).synchronization, 'busy')
+  }
+  assert.equal((await unknown.accept()).status, 'POSTMAN_BRIDGE_LIMIT_REACHED')
+  await unknown.jobs.dispose()
+})
+
 test('failed transport synchronizes proven publication but never grants artifact', async () => {
   const receipt = { requestId: 'REQ_SYNC', taskPublicationCommit: 'b'.repeat(40), baseCommit: 'a'.repeat(40) }
   const failure = { ok: false, code: 'POSTMAN_TRANSPORT_FAILED', requestId: receipt.requestId,
