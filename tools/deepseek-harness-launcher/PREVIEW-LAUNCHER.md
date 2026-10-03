@@ -3,8 +3,8 @@
 Постоянный preview worktree запускается отдельно от main:
 
 ```text
-main    C:\Users\andre\.dsh          http://127.0.0.1:4173/
-preview C:\Users\andre\.dsh-preview  http://127.0.0.1:4174/
+main    C:\Users\andre\.dsh          http://localhost:4173/
+preview C:\Users\andre\.dsh-preview  http://localhost:4174/
 ```
 
 ## Первый запуск
@@ -52,6 +52,8 @@ DSH_REQUIRE_PROFILE_INSTALL=1
 ```
 
 Main defaults не меняются: `.dsh` и порт `4173` остаются обычным production launcher.
+
+Запускайте Harness и его ярлыки с одинаковыми правами, обычно без прав администратора. Если Windows скрывает командную строку владельца порта, контроллер возвращает `PROCESS_METADATA_UNAVAILABLE` и не останавливает процесс по одному записанному PID. Экземпляр, запущенный от имени администратора, нужно остановить из среды с теми же правами перед обычным запуском.
 
 ## Встроенная кнопка Restart
 

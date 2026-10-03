@@ -19,7 +19,7 @@ if (-not [int]::TryParse($portText, [ref]$parsedPort) -or $parsedPort -lt 1 -or 
     throw "Invalid DSH_PORT: $portText"
 }
 $script:WebPort = $parsedPort
-$script:WebUrl = "http://127.0.0.1:$($script:WebPort)/"
+$script:WebUrl = "http://localhost:$($script:WebPort)/"
 $script:MutexName = Get-LauncherEnvValue -Name 'DSH_LAUNCHER_MUTEX' -DefaultValue 'DeepSeekHarnessLauncher.StartStop'
 $script:LauncherTitle = Get-LauncherEnvValue -Name 'DSH_LAUNCHER_TITLE' -DefaultValue 'DeepSeek Harness'
 $script:RequireProfileInstall = (Get-LauncherEnvValue -Name 'DSH_REQUIRE_PROFILE_INSTALL' -DefaultValue '0') -eq '1'
@@ -27,8 +27,8 @@ $script:RequireProfileInstall = (Get-LauncherEnvValue -Name 'DSH_REQUIRE_PROFILE
 New-Item -ItemType Directory -Path $script:LogsRoot -Force | Out-Null
 
 function Resolve-ControllerRuntime {
-    $node = Get-Command 'node.exe' -CommandType Application -ErrorAction SilentlyContinue
-    if (-not $node) { $node = Get-Command 'node' -CommandType Application -ErrorAction SilentlyContinue }
+    $node = Get-Command 'node.exe' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $node) { $node = Get-Command 'node' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1 }
     if (-not $node) { throw 'node.exe was not found in PATH.' }
     $nodePath = [string]$node.Source
     if ([string]::IsNullOrWhiteSpace($nodePath)) { $nodePath = [string]$node.Path }
@@ -65,6 +65,8 @@ function Invoke-DshController([string]$Action) {
     if ($env:DSH_PRESERVE_CHILDREN -eq '1') {
         $arguments += '--preserve-children'
     }
+    [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+    $OutputEncoding = [Console]::OutputEncoding
     $output = & $runtime.NodePath @arguments 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw (($output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine)
