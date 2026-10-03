@@ -395,6 +395,19 @@ test('package and composition expose bridge entrypoint and leader preset', () =>
 
   const leaderSkill = readFileSync(join(repoRoot, '.agents', 'skills', 'postman-leader', 'SKILL.md'), 'utf8')
   assert.match(leaderSkill, /POSTMAN_LEADER_SKILL_VERSION: 22/)
+  assert.match(leaderSkill, /существующий mapping не запрещает \x60createNew:true\x60/)
+  assert.match(leaderSkill, /может остановить выбранного Worker в любой момент/)
+  for (const forbidden of ['повторный \x60postman_worker()\x60 при существующем mapping',
+    'stop до report запрещён', 'premature stop', 'без разрешённой причины',
+    'использование stop только ради переключения этапа', 'Для новой session сначала должно отсутствовать прежнее mapping']) {
+    assert.ok(!leaderSkill.includes(forbidden), forbidden)
+  }
+  assert.match(leaderSkill, /postman_bridge_status\(\{bridge_job_id, recover:true\}\)/)
+  for (const name of ['postman-leader', 'delegate-via-postman', 'delegate-via-postman-ask', 'delegate-via-postman-image']) {
+    const policy = readFileSync(join(repoRoot, '.agents', 'skills', name, 'SKILL.md'), 'utf8')
+    assert.match(policy, /capability/)
+    assert.doesNotMatch(policy, /это не successful terminal и не повод продолжать автоматически|→ \x60STOP\x60, без fallback и blind resend/)
+  }
   assert.match(leaderSkill, /artifactRequestId/)
   assert.ok(leaderSkill.includes('implementation_artifact_apply'))
   assert.match(leaderSkill, /конкретной роли \*\*уже считается user approval\*\*/)

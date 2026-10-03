@@ -1,5 +1,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { EventEmitter } from 'node:events'
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { fileURLToPath } from 'node:url'
+import { DirectPostmanJobManager } from './direct-current-turn.js'
 import { createPostmanBridgeTool, createPostmanBridgeStatusTool } from './postman-bridge.js'
 import { createPostmanBridgeJobs } from './postman-bridge-jobs.js'
 import { createPostmanBridgeLaunchCoordinator } from './postman-bridge-launch-coordinator.js'
@@ -424,3 +431,98 @@ test('Leader accepts Bridge then Worker while Web is pending', async () => {
   assert.equal((await f.read(accepted)).status, 'POSTMAN_BRIDGE_TERMINAL')
   await f.jobs.dispose()
 })
+// Exercise the public Leader API against the real Python capability/claim, not a supplied eligibility flag.
+test('Leader Bridge recovery reaches Direct once; negative capabilities and restart remain mechanical', async t => {
+  const workspace = fileURLToPath(new URL('../../../', import.meta.url))
+  const original = 'REQ_20261003T010203Z_1234'
+  const branch = 'task/postman-' + 'a'.repeat(32)
+  for (const [name, fields, eligible, kind] of [
+    ['proven sent', {}, true, 'artifact'],
+    ['Ask proven sent', { state: 'ASK_FAILED' }, true, 'text'],
+    ['Image generation', {}, true, 'image'],
+    ['Image packaging', { imageGenerated: true }, true, 'image'],
+    ['not sent', { sendProofClass: 'PROVEN_NOT_SENT' }, false, 'artifact'],
+    ['unknown', { sendProofClass: 'UNKNOWN' }, false, 'artifact'],
+    ['unknown exact reproof', { sendProofClass: 'UNKNOWN', promptSha256: 'b'.repeat(64),
+      readOnlySendReproof: { requestId: original, conversationId: 'exact-chat',
+        conversationUrl: 'https://chatgpt.com/c/exact-chat', exactUserTurn: true, promptSha256: 'b'.repeat(64) } }, true, 'artifact'],
+    ['unresolved unknown', { unresolvedSendUnknown: true }, false, 'artifact'],
+    ['durable result', { state: 'RESULT_DURABLE', ok: true }, false, 'artifact'],
+    ['Web result download failed', { webResultAvailable: true }, false, 'artifact'],
+  ]) await t.test(name, async () => {
+    const root = mkdtempSync(join(tmpdir(), 'postman-leader-recovery-'))
+    try {
+      mkdirSync(join(root, 'requests'))
+      writeFileSync(join(root, 'requests', original + '.json'), JSON.stringify({ requestId: original,
+        repository: 'AndrewVerhoturov1/dsh-workspace', state: 'FAILED', failureCode: 'CONTROLLED_FAILURE',
+        sendProofClass: 'PROVEN_SENT', conversationId: 'exact-chat', conversationUrl: 'https://chatgpt.com/c/exact-chat', ...fields }))
+      const leader = { id: 'recovery-leader', session: { header: { cwd: workspace, agentPreset: 'postman-leader' } }, followup() {} }
+      const terminal = { status: 'COMPLETED', requestId: original, result: { ok: false,
+        code: 'POSTMAN_TRANSPORT_FAILED', requestId: original, transportCode: 'CONTROLLED_FAILURE',
+        transportMessage: 'controlled post-send failure', details: {} } }
+      const context = { branch }
+      let persisted, sends = 0, argv
+      const contexts = { get: () => context, bindChild: () => true, releaseChild() {},
+        record: () => ({ bridgeOperations: persisted }) }
+      const direct = new DirectPostmanJobManager({ directRoot: root, exists: () => true,
+        spawn(_command, args) {
+          sends++; argv = args
+          const requestId = args[args.indexOf('-RequestId') + 1]
+          // This stands in for Direct's pre-publication phase, using its actual durable claim.
+          execFileSync(process.env.POSTMAN_PYTHON ?? 'python', ['-X', 'utf8', '-c',
+            'import sys; sys.path.insert(0,sys.argv[1]); import postman_direct; import chat_reference as c; r=c.resolve_chat_reference(sys.argv[2],sys.argv[3],expected_repository="AndrewVerhoturov1/dsh-workspace"); c.claim_recovery(sys.argv[2],r,sys.argv[4])',
+            join(workspace, 'postman', 'direct'), root, original, requestId])
+          const child = new EventEmitter()
+          child.stdout = new EventEmitter(); child.stderr = new EventEmitter()
+          queueMicrotask(() => { child.emit('spawn'); setImmediate(() => {
+            child.stdout.emit('data', JSON.stringify({ ...terminal.result, requestId }))
+            child.emit('close', 1)
+          }) })
+          return child
+        } })
+      const ctx = { agents: { get: id => id === leader.id ? leader : undefined },
+        subagents: { async start() { return { id: 'bridge-child', localAgent: { id: 'bridge-child' },
+          result: Promise.resolve({ stopReason: 'end_turn' }), async dispose() {} } } },
+        tools: { get: () => ({ execute: async () => terminal }) } }
+      const coordinator = { run: (_signal, launch) => launch(), dispose() {} }
+      const jobs = createPostmanBridgeJobs(ctx, coordinator, null, contexts, null, direct)
+      const status = createPostmanBridgeStatusTool(ctx, jobs)
+      const exec = { agent: leader }
+      const first = await jobs.accept(leader, '@Postman ORIGINAL_PROMPT_MUST_NOT_REPEAT', kind)
+      await tick(); await tick()
+      const visible = await status.execute({ bridge_job_id: first.bridgeJobId }, exec)
+      assert.equal(visible.recoveryEligible, eligible, JSON.stringify(await direct.recoveryCapability(workspace, original)))
+      const recovery = await status.execute({ bridge_job_id: first.bridgeJobId, recover: true }, exec)
+      if (!eligible) {
+        assert.equal(recovery.status, 'POSTMAN_AUTOMATIC_CONTINUATION_NOT_ALLOWED')
+        assert.equal(sends, 0)
+      } else {
+        assert.equal(recovery.status, 'POSTMAN_BRIDGE_ACCEPTED')
+        await tick(); await tick()
+        assert.equal(sends, 1)
+        const newId = argv[argv.indexOf('-RequestId') + 1]
+        assert.notEqual(newId, original)
+        assert.equal(argv[argv.indexOf('-ChatRequestId') + 1], original)
+        assert.ok(argv.includes('-AutomaticContinuation'))
+        assert.equal(argv.includes('-ImageMode'), kind === 'image')
+        assert.equal(argv.find(value => value.endsWith('.ps1')).endsWith('postman-ask.ps1'), kind === 'text')
+        assert.doesNotMatch(Buffer.from(argv[argv.indexOf('-TaskBase64') + 1], 'base64').toString('utf8'), /ORIGINAL_PROMPT/)
+        const proof = await direct.recoveryCapability(workspace, original)
+        assert.equal(proof.conversation_url, 'https://chatgpt.com/c/exact-chat')
+        assert.equal(proof.automatic_recovery_used, true)
+        assert.equal((await status.execute({ bridge_job_id: first.bridgeJobId, recover: true }, exec)).status,
+          'POSTMAN_AUTOMATIC_CONTINUATION_LIMIT_REACHED')
+        persisted = { [first.bridgeJobId]: { state: 'received', synchronization: 'not-required',
+          terminal: { ...visible, status: 'POSTMAN_BRIDGE_TERMINAL', transportKind: kind } } }
+        const cold = createPostmanBridgeJobs(ctx, coordinator, null, contexts, null,
+          new DirectPostmanJobManager({ directRoot: root, spawn() { assert.fail('restart must not spawn') } }))
+        assert.equal((await createPostmanBridgeStatusTool(ctx, cold).execute({ bridge_job_id: first.bridgeJobId, recover: true }, exec)).status,
+          'POSTMAN_AUTOMATIC_CONTINUATION_LIMIT_REACHED')
+        await cold.dispose()
+        assert.equal(sends, 1)
+      }
+      await jobs.dispose()
+    } finally { rmSync(root, { recursive: true, force: true }) }
+  })
+})
+

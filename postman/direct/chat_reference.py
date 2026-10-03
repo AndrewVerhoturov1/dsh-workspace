@@ -15,6 +15,10 @@ import re
 from typing import Any
 from urllib.parse import urlparse
 
+if __name__ == "__main__":
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "web"))
+
 import request_identity
 
 RESULT_DURABLE = "RESULT_DURABLE"
@@ -251,6 +255,22 @@ def resolve_chat_reference(
             "uiSearchAttempted": False,
         },
     )
+
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Read-only exact recovery capability")
+    parser.add_argument("--direct-root", required=True)
+    parser.add_argument("--request-id", required=True)
+    args = parser.parse_args()
+    try:
+        reference = resolve_chat_reference(args.direct_root, args.request_id,
+                                           expected_repository="AndrewVerhoturov1/dsh-workspace")
+        print(json.dumps({"recovery_eligible": reference.recovery_eligible,
+                          "automatic_recovery_used": reference.automatic_recovery_used,
+                          "conversation_url": reference.conversation_url}))
+    except ChatReferenceError as exc:
+        print(json.dumps({"recovery_eligible": False, "code": exc.code}))
 
 
 __all__ = [

@@ -13,6 +13,11 @@ from pathlib import Path
 import warnings
 import zipfile
 
+try:
+    from postman.safe_zip import read_archive, SafeZipError
+except ModuleNotFoundError:
+    from safe_zip import read_archive, SafeZipError
+
 MAX_IMAGE_BYTES = 64 * 1024 * 1024
 _EXTENSIONS = {".png": "PNG", ".jpg": "JPEG", ".webp": "WEBP"}
 _MIME = {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp"}
@@ -86,7 +91,6 @@ def extract_validated_image(
     if normalized_name != f"{request_id}_img1{extension}":
         _fail("IMAGE_ENTRY_NAME", "Image entry must match the canonical request filename", entry=normalized_name)
     try:
-        from postman.safe_zip import read_archive, SafeZipError
         chunks = []
         def consume(name, directory, blocks):
             if name != normalized_name or directory:

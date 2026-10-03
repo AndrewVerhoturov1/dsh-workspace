@@ -723,7 +723,7 @@ class DirectPostman:
         finally:
             if attachment is not None:
                 # After the browser lifecycle returns, never reinterpret cleanup failure as unsent.
-                for path in (attachment.path, Path(input_bundle_manifest)):
+                for path in (*[member.path for member in getattr(attachment, "members", (attachment,))], Path(input_bundle_manifest)):
                     try:
                         path.unlink(missing_ok=True)
                     except OSError:

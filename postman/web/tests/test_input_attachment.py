@@ -89,6 +89,12 @@ class ZipPage(FakePage):
 
 
 class InputAttachmentTests(unittest.TestCase):
+    def test_two_reference_names_with_unavailable_preview_ids(self):
+        names=["ref-1.png", "ref-2.png"]
+        sent=dict(known=True,count=2,names=names,ids=["file-1","file-2"],pending=False,error=False,settled=True)
+        self.assertTrue(attachments.ready(sent,names,["",""]))
+        self.assertFalse(attachments.ready(sent,names,["foreign-1","foreign-2"]))
+
     def run_submit(self, page):
         return submit.submit_fresh_prompt(page, PROMPT, timeout_ms=0, input_attachment=Attachment())
 

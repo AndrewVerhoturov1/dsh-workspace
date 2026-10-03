@@ -73,6 +73,25 @@ PRE = "a" * 40
 
 
 class DirectPostmanUnitTests(unittest.TestCase):
+    def test_multi_image_handoff_cleanup_preserves_return_and_original_failure(self):
+        for failure in (False, True):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                members = [types.SimpleNamespace(path=root / str(index)) for index in (1, 2)]
+                for member in members: member.path.write_bytes(b"private")
+                handoff = root / "handoff.json"; handoff.write_text("{}")
+                attachment = types.SimpleNamespace(members=members)
+                runner = direct.DirectPostman(branch="preview", repo_root=root, direct_root=root / "direct", result_root=root / "results")
+                with patch.object(direct.input_bundle, "read_handoff", return_value=attachment), patch.object(runner, "_run") as run:
+                    if failure: run.side_effect = direct.DirectPostmanError("POSTMAN_TRANSPORT_FAILED", "original")
+                    else: run.return_value = {"ok": True}
+                    if failure:
+                        with self.assertRaisesRegex(direct.DirectPostmanError, "original"):
+                            runner.run(request_id=REQ, task="test", input_bundle_manifest=str(handoff))
+                    else: self.assertEqual(runner.run(request_id=REQ, task="test", input_bundle_manifest=str(handoff)), {"ok": True})
+                self.assertTrue(all(not member.path.exists() for member in members))
+                self.assertFalse(handoff.exists())
+
     def test_image_packaging_intent_uses_exact_canonical_request(self):
         request_id = "REQ_20260929T224757Z_1049"
         intent = direct.build_image_packaging_intent(request_id)

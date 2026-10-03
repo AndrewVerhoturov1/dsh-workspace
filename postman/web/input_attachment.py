@@ -173,7 +173,7 @@ def ready(proof, name, expected_id=None):
     names = name if isinstance(name, list) else [name]
     return (proof.get("known") is True and proof.get("count") == len(names) and sorted(proof.get("names", [])) == sorted(names)
             and proof.get("pending") is False and proof.get("error") is False and proof.get("settled") is True
-            and (not expected_id or not any(proof.get("ids", [])) or proof.get("ids") ==
+            and (not any(expected_id if isinstance(expected_id, list) else [expected_id]) or not any(proof.get("ids", [])) or proof.get("ids") ==
                  (expected_id if isinstance(expected_id, list) else [expected_id])))
 
 
@@ -226,7 +226,7 @@ def upload(page, composer, attachment, *, timeout_ms, wait_until):
             if not node.is_enabled():
                 continue
             accepted = [token.strip() for token in accept.split(',')]
-            if not accept or '*/*' in accepted or media in accepted or Path(attachment.name).suffix.lower() in accepted or (media.startswith('image/') and 'image/*' in accepted):
+            if not accept or '*/*' in accepted or media in accepted or Path(attachment.name[0] if isinstance(attachment.name, list) else attachment.name).suffix.lower() in accepted or (media.startswith('image/') and 'image/*' in accepted):
                 eligible.append(node)
                 if media.startswith('image/') and accepted == ['image/*']:
                     image_only.append(node)

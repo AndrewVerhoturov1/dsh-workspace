@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { postmanInputGrants } from './postman-input-files.js'
+import { DirectPostmanJobManager } from './direct-current-turn.js'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { buildPostmanBridgeStartRequest, isTopLevelPostmanSupervisor, POSTMAN_BRIDGE_PROVIDER,
   settleTrustedPostmanStatus } from './postman-bridge-core.js'
@@ -55,7 +56,7 @@ function snapshot(job) {
 }
 
 /** Process-local jobs live through tool invocation and retain terminal until plugin disposal. */
-export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, worker) {
+export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, worker, direct = new DirectPostmanJobManager()) {
   if (typeof coordinator?.run !== 'function') throw new Error('POSTMAN_BRIDGE_COORDINATOR_REQUIRED')
   const jobs = new Map()
   const admissionTails = new Map()
@@ -81,6 +82,15 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     } catch { return { status: 'POSTMAN_BRIDGE_PARENT_UNAVAILABLE' } }
     if (contexts && contexts.get(parent.id) !== job.taskContext) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
     if (typeof contexts?.hasActiveOperation === 'function' && contexts.hasActiveOperation(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
+    if (job.recoveryFrom) {
+      job.state = 'RUNNING'
+      const previous = { state: 'completed', requestId: job.recoveryFrom.requestId,
+        result: job.recoveryFrom.result, transportKind: job.transportKind, branch: job.taskContext.branch }
+      const started = await direct.continueLast(job.bridgeJobId, parent.session.header.cwd, previous)
+      job.requestId = started.requestId
+      return { ...await settleTrustedPostmanStatus(() => direct.wait(job.bridgeJobId), job.controller.signal),
+        transportKind: job.transportKind }
+    }
     let run
     try {
       run = await ctx.subagents.start(POSTMAN_BRIDGE_PROVIDER, buildPostmanBridgeStartRequest({
@@ -166,7 +176,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     }
   }
 
-  function accept(parent, message, transportKind, inputBinding) {
+  function accept(parent, message, transportKind, inputBinding, recoveryFrom) {
     const taskContext = contexts?.get(parent.id)
     if (contexts && !taskContext) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
     if (typeof contexts?.isRestoring === 'function' && contexts.isRestoring(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
@@ -175,7 +185,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     const job = {
       bridgeJobId: randomUUID(), parentSessionId: parent.id, taskContext, transportKind, state: 'QUEUED',
       createdAt: new Date().toISOString(), controller: new AbortController(), inputBinding,
-      notification: 'PENDING',
+      notification: 'PENDING', recoveryFrom,
     }
     if (typeof contexts?.changeRecord !== 'function') {
       // Unit fixtures without a durable registry retain the synchronous API.
@@ -358,7 +368,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
       !['TERMINAL', 'FAILED'].includes(job.state))
   }
 
-  async function status(parent, bridgeJobId, retrySync = false) {
+  async function status(parent, bridgeJobId, retrySync = false, recover = false) {
     let job = jobs.get(bridgeJobId)
     if (!job) {
       const row = contexts?.record?.(parent.id)
@@ -404,7 +414,18 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
       return { status: 'POSTMAN_BRIDGE_RUNNING', ...common }
     }
     const terminal = job.trustedTerminal
-    return { ...common,
+    let capability = { recovery_eligible: false }
+    if (terminal?.status === 'POSTMAN_BRIDGE_TERMINAL' &&
+        ['POSTMAN_TRANSPORT_FAILED', 'ASSISTANT_COMPLETED_NO_ARTIFACT', 'ARTIFACT_REJECTED'].includes(terminal.result?.code)) {
+      try { capability = await direct.recoveryCapability(parent.session.header.cwd, terminal.requestId) }
+      catch (error) { capability = { recovery_eligible: false, code: diagnostic(error) } }
+    }
+    if (recover) {
+      if (!capability.recovery_eligible) return { status: capability.automatic_recovery_used
+        ? 'POSTMAN_AUTOMATIC_CONTINUATION_LIMIT_REACHED' : 'POSTMAN_AUTOMATIC_CONTINUATION_NOT_ALLOWED', bridgeJobId }
+      return accept(parent, null, job.transportKind, undefined, terminal)
+    }
+    return { ...common, recoveryEligible: capability.recovery_eligible === true,
       status: job.state === 'TERMINAL' ? 'POSTMAN_BRIDGE_TERMINAL' : 'POSTMAN_BRIDGE_FAILED',
       terminalStatus: terminal?.terminalStatus ?? null,
       trustedStatus: terminal?.status ?? null,

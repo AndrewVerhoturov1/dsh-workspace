@@ -1,5 +1,7 @@
 # Postman Bridge — supervisor/worker flow
 
+После trusted terminal `postman_bridge_status({bridge_job_id})` возвращает `recoveryEligible` из существующего read-only Direct resolver. Leader может запросить `postman_bridge_status({bridge_job_id, recover:true})`: Host запускает прежний `DirectPostmanJobManager.continueLast` без child и без model-authored prompt/state. Новый Bridge job ждёт Direct обычным status/READY путём. Direct заново проверяет exact conversation/result/Send capability и фиксирует существующий durable recovery claim до публикации/Send. Повторная automatic recovery (включая restart) отклоняется до Send. `retrySync:true` по-прежнему исправляет только локальную синхронизацию публикации, не отправляет сообщение.
+
 > Model-facing capability: `postman_bridge(message=...)`
 > Bridge child: fresh one-shot `spawn`, fixed `codex / gpt-6-luna`
 > Transports: `@Postman` artifact, `@PostmanAsk` text, `@PostmanImage` one image

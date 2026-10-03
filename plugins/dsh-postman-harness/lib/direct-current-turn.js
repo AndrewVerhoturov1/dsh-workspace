@@ -2,7 +2,8 @@ import { createHash, randomInt as cryptoRandomInt } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { basename, isAbsolute, join } from 'node:path'
 import { homedir } from 'node:os'
-import { spawn as nodeSpawn } from 'node:child_process'
+import { spawn as nodeSpawn, execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { postmanTaskContexts, POSTMAN_TASK_BRANCH_PATTERN } from './postman-task-context.js'
 import { CurrentAttachmentStore, postmanInputGrants, stageStandaloneCurrentAttachments } from './postman-input-files.js'
 
@@ -733,8 +734,17 @@ export class DirectPostmanJobManager {
     return { status: 'EXACT_REPLY_MATCH', requestId }
   }
 
-  async continueLast(sessionId, workspace) {
-    const previous = this.jobs.get(sessionId)
+  async recoveryCapability(workspace, requestId) {
+    const root = this.directRoot ?? (process.env.LOCALAPPDATA
+      ? join(process.env.LOCALAPPDATA, 'DSH', 'Postman', 'direct')
+      : join(homedir(), '.dsh', 'postman', 'direct'))
+    const { stdout } = await promisify(execFile)(process.env.POSTMAN_PYTHON ?? 'python',
+      ['-X', 'utf8', join(workspace, 'postman', 'direct', 'chat_reference.py'),
+        '--direct-root', root, '--request-id', requestId], { windowsHide: true, timeout: 10000 })
+    return JSON.parse(stdout)
+  }
+
+  async continueLast(sessionId, workspace, previous = this.jobs.get(sessionId)) {
     if (previous === undefined || previous.state !== 'completed' || previous.result === undefined) {
       throw parseError('POSTMAN_AUTOMATIC_CONTINUATION_NOT_ALLOWED')
     }

@@ -20,7 +20,7 @@ class ReminderContractDocsTests(unittest.TestCase):
     def test_flow_uses_natural_reminders_and_neutral_page(self):
         self.assertNotIn("POSTMAN_TRANSPORT_CONTROL: REMINDER", self.flow)
         self.assertIn("10/20/30/40/50", self.flow)
-        self.assertIn("50 русских", self.flow)
+        self.assertIn("50 уникальных русских стартовых фраз", self.flow)
         self.assertIn("about:blank", self.flow)
 
     def test_runtime_constants_match_documented_timing_and_neutral_start_page(self):

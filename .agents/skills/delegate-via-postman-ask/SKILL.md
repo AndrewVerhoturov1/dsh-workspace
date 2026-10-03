@@ -180,7 +180,7 @@ ok=false
 code=POSTMAN_TRANSPORT_FAILED
 ```
 
-→ `STOP`, без fallback и blind resend.
+→ одна automatic recovery допустима только по trusted Direct capability из раздела 7; иначе `STOP`. Fallback и blind resend запрещены.
 
 ## 7. Existing-chat continuation
 
