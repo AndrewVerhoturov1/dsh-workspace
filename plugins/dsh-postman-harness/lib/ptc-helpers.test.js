@@ -3,7 +3,7 @@ import test from 'node:test'
 import { createPtcRuntime, DEFAULT_LIMITS } from 'dsh-ptc'
 import { buildPtcHelperPrelude, ptcHelperGuidance } from './ptc-helpers.js'
 
-const helper = tools => new Function('tools', buildPtcHelperPrelude(Object.keys(tools)) + '\nreturn ptc')(tools)
+const helper = (tools, fullTextRead = false) => new Function('tools', buildPtcHelperPrelude(Object.keys(tools), undefined, fullTextRead) + '\nreturn ptc')(tools)
 const read = documents => async ({ file_path, offset, limit }) => {
   const lines = documents[file_path].split('\n')
   return { totalLines: lines.length, lines: lines.slice(offset - 1, offset - 1 + limit).map((text, i) => ({ number: offset + i, text })) }
@@ -109,6 +109,36 @@ test('incomplete, changing or truncated ordinary reads are never presented as fu
     ? { totalLines: 2, lines: [{ number: 1, text: 'first' }] }
     : { totalLines: 3, lines: [{ number: 2, text: 'changed' }] } }).readAllText({ file_path: 'a' }), /changing/)
   assert.equal(await helper({ read: async () => ({ totalLines: 0, lines: [] }) }).readAllText({ file_path: 'empty' }), '')
+})
+
+test('internal text pages advance by received characters and reject explicit incomplete results', async()=>{
+  const calls=[], text='я😀\nsecond'
+  const reader=helper({read:async args=>{
+    calls.push(args)
+    const offset=args.__ptc_text.offset, chunk=text.slice(offset,offset+2)
+    return {version:'stable',text:chunk,nextOffset:offset+chunk.length,eof:offset+chunk.length===text.length,
+      totalChars:text.length,totalBytes:Buffer.byteLength(text),nextLine:args.offset+(chunk.includes('\n')?1:0)}
+  }},true)
+  assert.equal(await reader.readAllText({file_path:'a',page_limit:100}),text)
+  assert.deepEqual(calls.map(x=>x.__ptc_text.offset),[0,2,4,6,8])
+  for (const page of [
+    {version:'stable',text:'',nextOffset:0,eof:false,totalChars:1,totalBytes:1,nextLine:1},
+    {version:'stable',text:'a',nextOffset:1,eof:true,totalChars:2,totalBytes:2,nextLine:1},
+    {version:'stable',text:'a',nextOffset:2,eof:false,totalChars:3,totalBytes:3,nextLine:1},
+    {totalLines:1,lines:[{number:1,text:'ordinary'}]},
+  ]) await assert.rejects(helper({read:async()=>page},true).readAllText({file_path:'a'}),/incomplete/)
+  await assert.rejects(helper({read:async()=>{throw Error('ACCESS_DENIED')}},true).readAllText({file_path:'a'}),/ACCESS_DENIED/)
+  let n=0
+  await assert.rejects(helper({read:async()=>({version:''+(n++),text:'a',nextOffset:n,eof:n===2,totalChars:2,totalBytes:2,nextLine:1})},true).readAllText({file_path:'a'}),/changing.*incomplete/)
+  assert.throws(()=>helper({}).jsonBytes({files:[null,null,{testEvidence:undefined}]}),
+    {message:'value.files[2].testEvidence: undefined is not JSON-compatible.'})
+})
+
+test('ordinary short pages advance by actual lines rather than requested limit', async()=>{
+  const calls=[], source=read({a:'one\ntwo\nthree\nfour\nfive'})
+  const ptc=helper({read:args=>{calls.push(args.offset);return source({...args,limit:2})}})
+  assert.equal(await ptc.readAllText({file_path:'a',page_limit:100}),'one\ntwo\nthree\nfour\nfive')
+  assert.deepEqual(calls,[1,3,5])
 })
 
 test('actual QuickJS processes multiple >512 KiB Cyrillic files but returns compact mapped evidence', async () => {

@@ -1,5 +1,13 @@
 # Журнал ПТС
 
+## 2026-10-05 — полное внутреннее чтение и точная JSON-диагностика
+
+Самостоятельная локальная задача без субагентов, база 43ccb533d3048b1e2aae16fea398da1a980adcea, отдельный worktree. Ordinary read обрезал строки в buildWindow до canonical value; paging по строкам не мог восстановить их. Postman helper теперь получает bounded raw-text страницы ctx.fs.streamText в том же nested read после штатного body; ordinary карточка и усечения сохранены, pre/approval/guard/around/post и Worker worktree boundary не обходятся. Прогресс — по фактически полученным UTF-16 фрагментам с EOF и стабильной версией; CRLF/final-newline, 4 MiB и явные byte/character budgets сохраняют прежний line-text контракт. Нет shell, постоянного кэша или повторного исполнения программы.
+
+Три JSON-проверки объединены в descriptor-only codec dsh-ptc/json (Host/private QuickJS/helpers). Путь, тип и причина без значений сохраняются до outer результата; несовместимые данные больше не выдаются за maxMessageBytes. Настоящие byte/depth/node limits различаются, completed effects остаются после invalid-output. Getters/toJSON не вызываются, undefined/holes/exotic/extra/unsafe fields не преобразуются молча. Native Harness PTC, routing, дисциплина агента и профили не менялись.
+
+Windows / Node 24.21.0: полный core **35/35 PASS**, весь Postman PTC lib/ptc-*.test.js **95/95 PASS**; после финальной совместимости точных CRLF/EOF budgets затронутые adapter/helpers/Worker **76/76 PASS**. Включены >1 MiB single UTF-8 line с checksum, display truncation, короткие страницы, EOF/no-progress/changing/version, access/post-block/post-replacement, Worker outside boundary, JSON path/real size/depth/nodes и effects/no retry. pnpm pack обоих пакетов и git diff --check PASS. Старые несвязанные n2/real-cycle failures не воспроизводились. Установка рабочего runtime, живая модель и GUI не проверялись.
+
 ## 2026-10-02 — PR #314: восстановление исходной политики размеров
 
 По прямому требованию пользователя отменено только незапрошенное ужесточение размеров. Сравнение с точной базой `74a9cb452916bcd2eb15d0359c904fd0a4e0280b` подтвердило: Leader и Worker наследовали `DEFAULT_LIMITS.maxOutputBytes=524288`; `readMany/mapTextFiles` имели default retained JSON 480 KiB; `grepMany({queries})` не имел отдельного byte limit. Специальная Postman output-константа удалена, произвольный новый потолок не вводится. Диагностический oversizedResultCandidate снова использует исходные >64 KiB (и код maxOutputBytes), не ограничивая успешный вывод.

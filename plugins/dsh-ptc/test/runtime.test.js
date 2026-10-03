@@ -171,6 +171,41 @@ test('guest rejects unsupported JSON, mutation of global JSON, and callback effe
   }finally{await r.dispose()}
 })
 
+test('guest JSON diagnostics keep paths, limit codes and completed effects without retry', async()=>{
+  const r=createPtcRuntime();let operations=0
+  const bindings={effect:()=>{operations++;return {ok:true}}}
+  const bad="{files:[null,null,{testEvidence:undefined}],secret:'DO_NOT_PRINT'}"
+  try {
+    for (const [program,status,code] of [
+      ['await tools.effect(null); return '+bad,'invalid-output','invalid-output'],
+      ['await tools.effect(null); await tools.effect('+bad+'); return 1','runtime-error','invalid-json'],
+      ['await tools.effect(null); console.log('+bad+'); return 1','runtime-error','invalid-json'],
+    ]) {
+      const before=operations
+      const result=await r.run({program,profile:profile(['effect']),bindings})
+      assert.equal(result.status,status,JSON.stringify(result))
+      assert.equal(result.error.code,code)
+      assert.equal(result.error.message,'value.files[2].testEvidence: undefined is not JSON-compatible.')
+      assert.equal(result.effects.completed,1);assert.equal(result.effects.pending,0)
+      assert.equal(operations,before+1)
+    }
+    for (const [program,limits,code,path] of [
+      ['return {a:{b:1}}',{maxValueDepth:2},'maxValueDepth','value.a.b'],
+      ['return {a:1,b:2}',{maxValueNodes:2},'maxValueNodes','value.b'],
+      ["return 'я'.repeat(300000)",{},'maxOutputBytes','value'],
+      ["return await tools.effect('x'.repeat(1100000))",{},'maxMessageBytes','value'],
+    ]) {
+      const result=await r.run({program,profile:profile(['effect'],limits),bindings})
+      assert.equal(result.status,'limit-exceeded',JSON.stringify(result))
+      assert.equal(result.error.code,code);assert.ok(result.error.message.startsWith(path+':'))
+    }
+    const mutated=await r.run({program:"RegExp.prototype.test=()=>true;const a=[];a.extra=1;return a",profile:profile(),bindings:{}})
+    assert.equal(mutated.status,'invalid-output');assert.equal(mutated.error.message,'value.extra: extra array field is not JSON-compatible.')
+    const getter=await r.run({program:"const x={};Object.defineProperty(x,'field',{enumerable:true,get(){throw Error('DO_NOT_PRINT')}}); return {nested:x}",profile:profile(),bindings:{}})
+    assert.equal(getter.status,'invalid-output');assert.equal(getter.error.message,'value.nested.field: accessor is not JSON-compatible.')
+  } finally {await r.dispose()}
+})
+
 test('queue limit rejects excess parallel calls before extra callback',async()=>{
   const r=createPtcRuntime();let started=0,release
   const hold=new Promise(resolve=>release=resolve)

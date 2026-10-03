@@ -3,6 +3,7 @@ import { createPtcRuntime, DEFAULT_LIMITS, validatePtcProfile } from 'dsh-ptc'
 import { buildPtcHelperPrelude, ptcHelperGuidance } from './ptc-helpers.js'
 import { POSTMAN_PTC_DISCIPLINE } from './ptc-discipline.js'
 import { guardWorkerPtcFilesystem } from './ptc-worktree-boundary.js'
+import { readPtcTextPage } from './ptc-read.js'
 import { POSTMAN_PTC_ONLY_LEADER_TOOLS, POSTMAN_WORKER_PTC_TOOL_NAMES, POSTMAN_PTC_SUCCESS_STATUSES } from './postman-bridge-core.js'
 
 export const PTC_TOOL_NAME = 'ptc_execute'
@@ -39,7 +40,18 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
     return checked
   }
   let current = pilotProfile(profile), disposed = false
-  const owners = new Map()
+  const owners = new Map(), textReads = new Map()
+  const stopTextReads = ctx.on('tools/execute', async (nested, next) => {
+    const request = textReads.get(nested.parent)?.get(nested.callId)
+    if (!request || nested.name !== 'read' || nested.agent !== request.agent || nested.parent !== request.parent) return next()
+    // Reach every ordinary around/body check, not only pre-execute/guards.
+    // Keep its truthful bounded card; only the internal payload uses raw text.
+    const result = await next()
+    if (result.isError) return result
+    request.page = await readPtcTextPage(ctx, nested, request)
+    request.preview = result.value
+    return result
+  })
   // concludeTurn is a soft boundary in AgentLoop when next-step events are
   // already queued. Arm only from the authoritative successful outer result.
   // The same existing inbox then carries those events into a NEW turn.
@@ -192,10 +204,19 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
         bindings[name] = async (arg, call) => {
           if (call.signal.aborted || controller.signal.aborted || !allowed(agent, record) || !available(agent, name))
             throw new Error('PTC_ACCESS_REVOKED')
-          let nestedArgs = arg
+          let nestedArgs = arg, textRequest
+          if (name === 'read' && arg && Object.hasOwn(arg, '__ptc_text')) {
+            const options = arg.__ptc_text
+            if (!ctx.fs || !options || !Number.isSafeInteger(options.offset) || options.offset < 0 ||
+                !Number.isSafeInteger(options.maxBytes) || options.maxBytes < 1)
+              throw new Error('PTC full read unavailable or invalid; text is incomplete')
+            textRequest = { textOffset: options.offset, maxBytes: options.maxBytes,
+              maxMessageBytes: activeProfile.limits.maxMessageBytes, signal: call.signal, agent, parent: exec.token }
+            nestedArgs = { ...arg }; delete nestedArgs.__ptc_text
+          }
           if (record.role === 'worker' && ['read', 'glob', 'grep', 'write', 'edit'].includes(name)) {
             if (workerContextOf?.(agent) !== workerContext) throw new Error('PTC_ACCESS_REVOKED')
-            nestedArgs = await guardWorkerPtcFilesystem(name, arg, workerContext.worktree)
+            nestedArgs = await guardWorkerPtcFilesystem(name, nestedArgs, workerContext.worktree)
             if (call.signal.aborted || controller.signal.aborted || !allowed(agent, record) || !available(agent, name) ||
                 workerContextOf?.(agent) !== workerContext) throw new Error('PTC_ACCESS_REVOKED')
           }
@@ -205,6 +226,10 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
           started.set(call.callId, entry)
           toolCounts[name] = (toolCounts[name] ?? 0) + 1
           agent.session?.append('tool/code-dispatch-start', details)
+          if (textRequest) {
+            if (!textReads.has(exec.token)) textReads.set(exec.token, new Map())
+            textReads.get(exec.token).set(subCallId, textRequest)
+          }
           try {
             const result = await ctx.tools.execute({ callId: subCallId, rootCallId: exec.rootCallId,
               name, arguments: nestedArgs, agent, parent: exec.token, signal: call.signal })
@@ -222,6 +247,11 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
             }
             for (const context of result.additionalContexts ?? []) exec.deferContext(context)
             if (result.concludesTurn) nestedConclude = true // Apply only after the complete program is known safe.
+            if (textRequest) {
+              if (!textRequest.page || JSON.stringify(result.value) !== JSON.stringify(textRequest.preview))
+                throw new Error('PTC full read result replaced or unavailable; text is incomplete')
+              return textRequest.page
+            }
             return result.value // Canonical public JSON, not rendered cards or execution metadata.
           } catch (error) {
             nestedFailed = true
@@ -231,11 +261,15 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
                 content: [{ type: 'text', text: 'PTC nested dispatch failed; outcome not confirmed' }] })
             }
             throw error
+          } finally {
+            const requests = textReads.get(exec.token)
+            requests?.delete(subCallId)
+            if (!requests?.size) textReads.delete(exec.token)
           }
         }
       }
       try {
-        const helperPrelude = buildPtcHelperPrelude(activeProfile.tools)
+        const helperPrelude = buildPtcHelperPrelude(activeProfile.tools, activeProfile.limits, true)
         const program = helperPrelude ? helperPrelude + '\n' + args.program : args.program
         const result = terminal = await runtime.run({ program, language: args.language ?? 'javascript',
           profile: activeProfile, bindings, signal: controller.signal })
@@ -291,7 +325,7 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
   async function dispose() {
     if (disposed) return
     disposed = true
-    stopConclusionObserver(); stopExternalBoundary()
+    stopConclusionObserver(); stopExternalBoundary(); stopTextReads()
     for (const record of owners.values()) revoke(record)
     owners.clear()
     await runtime.dispose()
