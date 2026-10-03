@@ -240,8 +240,10 @@ function createProcessController({ config: configOverrides = {}, runtime, deps =
     const state = readState(config)
     const listenerPids = operations.listListeningPids(config.port)
     const candidates = [...new Set([state?.pid, ...listenerPids].filter(Boolean))]
+    const records = new Map()
     for (const pid of candidates) {
       const record = operations.getProcessRecord(pid)
+      records.set(pid, record)
       if (isDshHarnessProcess(record, resolvedRuntime, config)) {
         return {
           status: 'RUNNING',
@@ -253,12 +255,21 @@ function createProcessController({ config: configOverrides = {}, runtime, deps =
         }
       }
     }
-    const foreignPid = listenerPids.find((pid) => operations.getProcessRecord(pid))
+    const inaccessiblePid = listenerPids.find((pid) => !String(records.get(pid)?.commandLine || '').trim())
+    if (inaccessiblePid) {
+      return {
+        status: 'PROCESS_METADATA_UNAVAILABLE',
+        pid: Number(inaccessiblePid),
+        record: records.get(inaccessiblePid) || null,
+        state,
+      }
+    }
+    const foreignPid = listenerPids[0]
     if (foreignPid) {
       return {
         status: 'PORT_OCCUPIED_BY_FOREIGN_PROCESS',
         pid: Number(foreignPid),
-        record: operations.getProcessRecord(foreignPid),
+        record: records.get(foreignPid),
         state,
       }
     }
@@ -272,6 +283,14 @@ function createProcessController({ config: configOverrides = {}, runtime, deps =
     })
   }
 
+  function assertProcessAccessible(found) {
+    if (found.status === 'PROCESS_METADATA_UNAVAILABLE') {
+      throw new ProcessControllerError('PROCESS_METADATA_UNAVAILABLE',
+        `Windows не разрешила прочитать командную строку процесса PID ${found.pid} на порту ${config.port}. Если Harness запущен от имени администратора, остановите его из той же среды и запустите обычным ярлыком.`,
+        { pid: found.pid })
+    }
+  }
+
   async function waitForReady(pid) {
     const httpReady = await waitUntil(() => operations.probeHttp(config), config.startTimeoutMs)
     if (!httpReady) return null
@@ -282,6 +301,7 @@ function createProcessController({ config: configOverrides = {}, runtime, deps =
 
   async function start() {
     const found = await discover()
+    assertProcessAccessible(found)
     if (found.status === 'PORT_OCCUPIED_BY_FOREIGN_PROCESS') {
       throw new ProcessControllerError('PORT_OCCUPIED_BY_FOREIGN_PROCESS', `Порт ${config.port} занят чужим процессом PID ${found.pid}.`, { pid: found.pid })
     }
@@ -356,6 +376,7 @@ function createProcessController({ config: configOverrides = {}, runtime, deps =
 
   async function stop() {
     const found = await discover()
+    assertProcessAccessible(found)
     if (found.status === 'PORT_OCCUPIED_BY_FOREIGN_PROCESS') {
       throw new ProcessControllerError('PORT_OCCUPIED_BY_FOREIGN_PROCESS', `Порт ${config.port} занят чужим процессом PID ${found.pid}; остановка отменена.`, { pid: found.pid })
     }
@@ -373,6 +394,7 @@ function createProcessController({ config: configOverrides = {}, runtime, deps =
 
   async function restart() {
     const before = await discover()
+    assertProcessAccessible(before)
     if (before.status === 'PORT_OCCUPIED_BY_FOREIGN_PROCESS') {
       throw new ProcessControllerError('PORT_OCCUPIED_BY_FOREIGN_PROCESS', `Порт ${config.port} занят чужим процессом PID ${before.pid}; перезапуск отменён.`)
     }

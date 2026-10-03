@@ -227,8 +227,8 @@ main ───────────────────▶ C:\Users\andre
 Main и preview запускаются как два независимых локальных экземпляра:
 
 ```text
-main    C:\Users\andre\.dsh          http://127.0.0.1:4173/
-preview C:\Users\andre\.dsh-preview  http://127.0.0.1:4174/
+main    C:\Users\andre\.dsh          http://localhost:4173/
+preview C:\Users\andre\.dsh-preview  http://localhost:4174/
 ```
 
 После первого merge launcher-патча в `preview` и обновления постоянного preview worktree один раз подготовить зависимости:
