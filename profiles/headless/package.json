@@ -1,11 +1,14 @@
 {
   "name": "dsh-profile-headless",
   "private": true,
-  "dependencies": {},
+  "dependencies": {
+    "dsh-task-discipline": "link:../../plugins/dsh-task-discipline"
+  },
   "dsh": {
     "profile": {
       "bundles": [
         "@deepseek-ai/dsh-base",
+        "dsh-task-discipline",
         "@deepseek-ai/dsh-headless"
       ]
     }
