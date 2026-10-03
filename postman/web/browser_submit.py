@@ -21,6 +21,8 @@ from __future__ import annotations
 import cdp_download
 
 import argparse
+from functools import wraps
+import os
 import hashlib
 import json
 import re
@@ -36,6 +38,7 @@ if str(_SCRIPT_DIR) not in sys.path:
 
 import browser_bootstrap as bootstrap
 import input_attachment as attachments
+import process_lock
 
 CHATGPT_URL = bootstrap.CHATGPT_URL
 DEFAULT_CDP_URL = bootstrap.DEFAULT_CDP_URL
@@ -917,6 +920,16 @@ def insert_prompt(
         if resolved is not None and resolved_selector not in {"textarea", '[role="textbox"]'}:
             composer = resolved
 
+    empty, empty_details = _composer_empty_proof(page)
+    if not empty:
+        return {"ok": False, "code": COMPOSER_NOT_EMPTY, "details": empty_details}
+    transaction = getattr(page, "_postman_presend", None)
+    if isinstance(transaction, dict):
+        if transaction.get("ownedUrl") is not None and not _owned_unsent_binding(page, transaction):
+            return {"ok": False, "code": SUBMIT_INVALID_CONFIG, "details": {"reason": "chat_changed_before_fill"}}
+        transaction.setdefault("ownedUrl", str(page.url))
+        transaction.setdefault("userCount", len(collect_user_turn_texts(page)))
+        transaction["fillAttempted"] = True
     try:
         composer.fill(prompt, timeout=timeout_ms)
     except Exception as exc:
@@ -998,6 +1011,18 @@ def _observe_send_proof(page: Any, prompt: str, before_user_turn_count: int,
     }
 
 
+def _needs_sent_image_rebind(proof, bound_url, conversation_url=None):
+    image = proof.get("sentAttachment", {})
+    return (image.get("reason") == "uploaded_source_unbound"
+            and image.get("duplicateSource") is False
+            and image.get("observedImageSource") == "uploaded"
+            and str(image.get("observedConversationId", "")).startswith("local-chatgpt:")
+            and proof.get("exactUserTurn") is True and proof.get("composerEmpty") is True
+            and proof.get("chatUrlBound") is True and is_bound_chat_url(bound_url)
+            and proof.get("chatUrl") == bound_url
+            and (conversation_url is None or conversation_url == bound_url))
+
+
 def submit_once(
     page: Any,
     composer: Any,
@@ -1033,6 +1058,13 @@ def submit_once(
             details={"sendControl": selector or ""},
         )
 
+    transaction = getattr(page, "_postman_presend", None)
+    if isinstance(transaction, dict):
+        owned = _owned_unsent_binding(page, transaction)
+        exact, exact_details = _exact_prompt_readback(page, prompt)
+        if not owned or not exact or exact_details.get("logicalComposerCountAfterFill") != 1:
+            return _result(SUBMIT_INVALID_CONFIG if not owned else PROMPT_MISMATCH, ok=False, send_state=guard.state,
+                           transitions=transitions, details={"reason": "presend_ownership_or_prompt_changed"})
     if input_attachment:
         current_url = str(getattr(page, "url", "") or "")
         chat_still_owned = (is_chatgpt_root_url(current_url) and count_conversation_turns(page) == 0
@@ -1057,6 +1089,9 @@ def submit_once(
             details=exc.details,
         )
 
+    transaction = getattr(page, "_postman_presend", None)
+    if isinstance(transaction, dict):
+        transaction["sendAttempted"] = True
     transitions.append(PROMPT_SEND_STARTED)
     try:
         button.click(timeout=timeout_ms)
@@ -1071,24 +1106,23 @@ def submit_once(
             details={"message": str(exc), "sendControl": selector, "reason": "click_outcome_uncertain"},
         )
 
-    ok, proof = _wait_until(
-        lambda: _observe_send_proof(page, prompt, len(before_turns),
+    def observe_or_rebind():
+        proved, observed = _observe_send_proof(page, prompt, len(before_turns),
             **({"input_attachment": input_attachment, "attachment_id": attachment_id,
-                "conversation_url": conversation_url} if input_attachment else {})),
-        timeout_ms=timeout_ms,
-    )
+                "conversation_url": conversation_url} if input_attachment else {}))
+        # Exact sent turn + server URL already prove a local-id migration.
+        # No reason to burn the full 90s upload budget before read-only rebind.
+        return proved or bool(input_attachment and _needs_sent_image_rebind(
+            observed, str(getattr(page, "url", "") or ""), conversation_url)), observed
+
+    ok, proof = _wait_until(observe_or_rebind, timeout_ms=timeout_ms)
+    if input_attachment and _needs_sent_image_rebind(proof, str(getattr(page, "url", "") or ""), conversation_url):
+        ok = False
     sent_image = proof.get("sentAttachment", {})
     # Fresh uploaded components retain a local conversation id after server URL binding.
     # Reload only for this proved transition; NEVER upload/fill/click again.
     bound_url = str(getattr(page, "url", "") or "")
-    if (not ok and input_attachment and sent_image.get("reason") == "uploaded_source_unbound"
-            and sent_image.get("duplicateSource") is False
-            and sent_image.get("observedImageSource") == "uploaded"
-            and str(sent_image.get("observedConversationId", "")).startswith("local-chatgpt:")
-            and proof.get("exactUserTurn") is True and proof.get("composerEmpty") is True
-            and proof.get("chatUrlBound") is True and is_bound_chat_url(bound_url)
-            and proof.get("chatUrl") == bound_url
-            and (conversation_url is None or conversation_url == bound_url)):
+    if not ok and input_attachment and _needs_sent_image_rebind(proof, bound_url, conversation_url):
         before_reload = proof
         try:
             page.reload(wait_until="domcontentloaded", timeout=max(timeout_ms, 30_000))
@@ -1126,6 +1160,99 @@ def submit_once(
     )
 
 
+def _page_diagnostic(page: Any) -> dict[str, Any]:
+    """Safe local identity; never inspect other Pages or user text."""
+    value = getattr(page, "_postman_page_diagnostic", None)
+    if isinstance(value, dict):
+        return {**value, "url": str(getattr(page, "url", "") or "")}
+    context = getattr(page, "context", None)
+    value = {"pid": os.getpid(), "pageOrdinal": id(page), "createdAt": time.time(),
+             "contextIndex": 0, "contextPages": len(list(context.pages)) if context is not None else None}
+    try:
+        session = context.new_cdp_session(page)
+        try:
+            info = session.send("Target.getTargetInfo")["targetInfo"]
+            value.update({"pageId": info["targetId"], "contextId": info.get("browserContextId")})
+        finally:
+            session.detach()
+    except Exception:
+        pass
+    try:
+        page._postman_page_diagnostic = value
+    except (AttributeError, TypeError):
+        pass  # Minimal non-browser test doubles need not support attributes.
+    return {**value, "url": str(getattr(page, "url", "") or "")}
+
+
+def _owned_unsent_binding(page: Any, transaction: dict[str, Any]) -> bool:
+    return (transaction.get("sendAttempted") is False
+            and transaction.get("ownedUrl") == str(getattr(page, "url", "") or "")
+            and transaction.get("userCount") == len(collect_user_turn_texts(page)))
+
+
+def clear_owned_unsent_prompt(page: Any, prompt: str, *, timeout_ms: int) -> bool:
+    """Only this transaction's exact full draft; no partial or UNKNOWN cleanup."""
+    transaction = getattr(page, "_postman_presend", None)
+    if not isinstance(transaction, dict) or not transaction.get("fillAttempted"):
+        return False
+    if transaction.get("prompt") != prompt or not _owned_unsent_binding(page, transaction):
+        return False
+    matched, details = _exact_prompt_readback(page, prompt)
+    if not matched or details.get("logicalComposerCountAfterFill") != 1:
+        return False
+    composer, _ = find_composer(page)
+    if composer is None or read_composer_text(composer) != _normalize_text(prompt):
+        return False
+    try:
+        composer.fill("", timeout=min(max(timeout_ms, 1), 2_000))
+        empty, _ = _wait_until(lambda: _composer_empty_proof(page), timeout_ms=min(max(timeout_ms, 1), 2_000))
+        return bool(empty)
+    except Exception:
+        return False
+
+
+def _presend_transaction(fn):
+    """A single short cross-process critical section for all production sends."""
+    @wraps(fn)
+    def wrapped(page, prompt, *args, **kwargs):
+        with process_lock.lock_browser_presend():
+            diagnostic = _page_diagnostic(page)
+            transaction = {"sendAttempted": False, "fillAttempted": False, "prompt": prompt}
+            page._postman_presend = transaction
+            result = None
+            try:
+                result = fn(page, prompt, *args, **kwargs)
+            except Exception as exc:
+                if isinstance(exc, ValueError) and not transaction["fillAttempted"] and not transaction["sendAttempted"]:
+                    raise
+                unknown = transaction["sendAttempted"]
+                result = _result(PROMPT_SEND_UNKNOWN if unknown else PROMPT_INSERT_FAILED,
+                    ok=False, send_state=SEND_UNKNOWN if unknown else SEND_PROVEN_NOT_SENT,
+                    transitions=[], details={"reason": "submit_exception", "exceptionType": type(exc).__name__})
+            finally:
+                try:
+                    if result is not None and result.get("sendState") == SEND_PROVEN_NOT_SENT and not transaction["sendAttempted"]:
+                        details = result.setdefault("details", {})
+                        if transaction.get("fillAttempted"):
+                            empty, _ = _composer_empty_proof(page)
+                            details["unsentPromptCleared"] = empty or clear_owned_unsent_prompt(
+                                page, prompt, timeout_ms=kwargs.get("timeout_ms", DEFAULT_TIMEOUT_MS))
+                        attachment = transaction.get("attachment")
+                        if attachment is not None and _owned_unsent_binding(page, transaction):
+                            empty, _ = _composer_empty_proof(page)
+                            if empty:
+                                details["unsentAttachmentCleanup"] = attachments.clear_owned(page, attachment)
+                except Exception as exc:
+                    if result is not None:
+                        result.setdefault("details", {})["cleanupExceptionType"] = type(exc).__name__
+                finally:
+                    page._postman_presend = None
+            result.setdefault("details", {})["pageDiagnostic"] = {**diagnostic, "url": str(getattr(page, "url", "") or "")}
+            return result
+    return wrapped
+
+
+@_presend_transaction
 def submit_fresh_prompt(page: Any, prompt: str, *, timeout_ms: int = DEFAULT_TIMEOUT_MS, input_attachment=None) -> dict[str, Any]:
     prep = prepare_fresh_chat(page, timeout_ms=timeout_ms)
     if not prep["ok"]:
@@ -1138,6 +1265,9 @@ def submit_fresh_prompt(page: Any, prompt: str, *, timeout_ms: int = DEFAULT_TIM
             details=prep.get("details"),
         )
     composer = prep["composer"]
+    transaction = getattr(page, "_postman_presend", None)
+    if isinstance(transaction, dict):
+        transaction.update({"ownedUrl": str(page.url), "userCount": len(collect_user_turn_texts(page))})
     attachment_id = None
     if input_attachment:
         # Preparation has proved chat identity and an empty live composer. No Send yet.
@@ -1170,6 +1300,7 @@ def submit_fresh_prompt(page: Any, prompt: str, *, timeout_ms: int = DEFAULT_TIM
     return result
 
 
+@_presend_transaction
 def submit_existing_prompt(
     page: Any,
     prompt: str,
@@ -1190,6 +1321,9 @@ def submit_existing_prompt(
             details=prep.get("details"),
         )
     composer = prep["composer"]
+    transaction = getattr(page, "_postman_presend", None)
+    if isinstance(transaction, dict):
+        transaction.update({"ownedUrl": str(page.url), "userCount": len(collect_user_turn_texts(page))})
     attachment_id = None
     if input_attachment:
         # Preparation has proved chat identity and an empty live composer. No Send yet.

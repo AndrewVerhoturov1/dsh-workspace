@@ -71,6 +71,17 @@ def lock_cdp_download(*, timeout_s=90.0):
     return exclusive_lock(root / "locks" / "cdp-download.lock", timeout_s=timeout_s)
 
 
+def lock_browser_presend(*, timeout_s=180.0):
+    """Serialize draft bootstrap through send proof, never assistant/download waits.
+
+    All current production modes share the existing dedicated Chrome profile.
+    This is deliberately separate from the CDP download/attach lock.
+    """
+    local = os.environ.get("LOCALAPPDATA")
+    root = Path(local) / "DSH" / "Postman" if local else Path.home() / ".dsh" / "postman"
+    return exclusive_lock(root / "locks" / "browser-presend.lock", timeout_s=timeout_s)
+
+
 @contextmanager
 def lock_publication(direct_root, repository, branch):
     """Serialize the short GitHub snapshot/commit window, not Web requests."""
