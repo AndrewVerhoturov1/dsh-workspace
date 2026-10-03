@@ -11,6 +11,7 @@
     "profile": {
       "bundles": [
         "@deepseek-ai/dsh-base",
+        "dsh-task-discipline",
         "dsh-codex-oauth",
         "@deepseek-ai/dsh-web-app",
         "dshmarket",
@@ -52,6 +53,7 @@
     "dsh-postman-harness": "link:../../plugins/dsh-postman-harness",
     "dsh-ptc-plus": "0.3.2",
     "dsh-restart-web": "link:../../plugins/dsh-restart-web",
+    "dsh-task-discipline": "link:../../plugins/dsh-task-discipline",
     "dsh-tokenledger": "^0.1.0",
     "dshmarket": "^1.19.0"
   }

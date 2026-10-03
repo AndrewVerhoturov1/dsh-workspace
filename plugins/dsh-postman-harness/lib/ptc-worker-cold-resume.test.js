@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createPostmanWorkerTools } from './postman-worker.js'
-import { apply as postmanHarness, TASK_DISCIPLINE } from './index.js'
+import { apply as postmanHarness } from './index.js'
+import { apply as taskDiscipline, TASK_DISCIPLINE } from '../../dsh-task-discipline/index.js'
 import { openPostmanTaskRegistry } from './postman-task-registry.js'
 import { createPtcAdapter, WORKER_MUTATION_PROFILE } from './ptc-adapter.js'
 import { createPostmanBridgeBoundaryManager, isTopLevelPostmanPtcLeader, postmanPtcDirectCallGuard, POSTMAN_LEADER_TOOL_ALLOWLIST } from './postman-bridge-core.js'
@@ -39,7 +40,8 @@ async function runPhase(dir, phase) {
   const persistence = new JsonlSessionPersistence(ctx, {root:join(dir,'sessions'),compression:'none'})
   new SubagentRuntime(ctx); spawn(ctx,{providerName:'spawn'}); report(ctx,{reportDelivery:'quiet'})
   new AgentLoop(ctx,{agents:[],maxParallelToolCalls:1})
-  postmanHarness(ctx) // Actual global plugin entrypoint, reloaded in each process.
+  taskDiscipline(ctx) // Independent global plugin, reloaded in each process.
+  postmanHarness(ctx)
   const leaderRequests = []
   // Native standing preset mount/bind/reconstruction, with only a persona
   // fixture rather than unrelated production shell/browser services.

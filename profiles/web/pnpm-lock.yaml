@@ -88,6 +88,9 @@ importers:
       dsh-restart-web:
         specifier: link:../../plugins/dsh-restart-web
         version: link:../../plugins/dsh-restart-web
+      dsh-task-discipline:
+        specifier: link:../../plugins/dsh-task-discipline
+        version: link:../../plugins/dsh-task-discipline
       dsh-tokenledger:
         specifier: ^0.1.0
         version: 0.1.0(@deepseek-ai/schemastery@3.18.1)

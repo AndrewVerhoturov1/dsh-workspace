@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
-import { apply as postmanHarness, TASK_DISCIPLINE } from './index.js'
+import { join, resolve } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { apply as postmanHarness } from './index.js'
+import { apply as taskDiscipline, TASK_DISCIPLINE } from '../../dsh-task-discipline/index.js'
 import { createPostmanWorkerTools } from './postman-worker.js'
 import { createPostmanBridgeBoundaryManager, POSTMAN_LEADER_TOOL_ALLOWLIST } from './postman-bridge-core.js'
 
@@ -23,6 +24,8 @@ const { AgentLoop } = await pkg('dsh-agent-loop')
 const { SubagentRuntime } = await pkg('dsh-subagent')
 const { apply: spawn } = await pkg('dsh-subagent-spawn-in-process')
 const { apply: report } = await pkg('dsh-tool-subagent-report')
+const { default: Loader } = await pkg('cordis-plugin-loader')
+const { composeEntries, loadOverlayPatches } = await pkg('dsh-app-boot')
 
 const message = text => createUserMessage({content:[{type:'text',text}],source:{kind:'user'}})
 const assertDiscipline = request => {
@@ -38,6 +41,7 @@ test('actual production Leader, fresh Worker, next step, same Worker follow-up a
   new ToolRuntime(ctx); new LlmRuntime(ctx); new AgentLoop(ctx,{agents:[],maxParallelToolCalls:1})
   new SessionProjectionRegistry(ctx); new JsonlSessionPersistence(ctx,{root:join(dir,'sessions'),compression:'none'})
   new SubagentRuntime(ctx); spawn(ctx,{providerName:'spawn'}); report(ctx,{reportDelivery:'quiet'})
+  taskDiscipline(ctx)
   postmanHarness(ctx)
   const context = Object.freeze({branch:'task/fixture',worktree:dir})
   const contexts = {get: () => context}
@@ -109,9 +113,43 @@ test('actual production Leader, fresh Worker, next step, same Worker follow-up a
   assertDiscipline(workerRequests.at(-1).request)
   assert.ok(!session.events.some(e=>e.type==='user/message' && JSON.stringify(e.data).includes(TASK_DISCIPLINE)))
 
-  const {agent:ordinary} = await ctx.agents.create({sessionId:'ordinary',meta:{cwd:dir,agentPreset:'standard'},agentOptions:{provider:'codex',model:'sol'}})
-  ordinary.followup(message('Ordinary local task')); await ordinary.whenIdle()
-  assert.equal(requests.at(-1).agent,ordinary)
+})
+
+for (const profile of ['web', 'headless']) test(profile+' connects independent discipline to an ordinary Agent without Postman', async t => {
+  const profileRoot = new URL('../../../profiles/'+profile+'/', import.meta.url)
+  const manifest = JSON.parse(await readFile(new URL('package.json',profileRoot),'utf8'))
+  assert.equal(manifest.dsh.profile.bundles.filter(name=>name==='dsh-task-discipline').length,1)
+  assert.equal(manifest.dependencies['dsh-task-discipline'],'link:../../plugins/dsh-task-discipline')
+  const pluginRoot = resolve(fileURLToPath(profileRoot),manifest.dependencies['dsh-task-discipline'].slice(5))
+  const pluginManifest = JSON.parse(await readFile(join(pluginRoot,'package.json'),'utf8'))
+  assert.equal(pluginManifest.dependencies,undefined)
+  const entries = composeEntries([
+    loadOverlayPatches('dsh',join(pluginRoot,pluginManifest.dsh.bundle.patch)),
+    loadOverlayPatches('dsh',fileURLToPath(new URL('cordis.patch.yml',profileRoot))),
+  ]).filter(entry=>entry.name==='dsh-task-discipline')
+  assert.equal(entries.length,1); assert.notEqual(entries[0].disabled,true)
+
+  const dir = await mkdtemp(join(tmpdir(),'task-discipline-profile-')), ctx = new Context(), requests = []
+  t.after(async () => { await ctx.fiber.dispose(); await rm(dir,{recursive:true,force:true,maxRetries:5,retryDelay:100}) })
+  await mkdir(join(dir,'node_modules'))
+  await symlink(pluginRoot,join(dir,'node_modules/dsh-task-discipline'),'junction')
+  new AgentRegistry(ctx); new SessionStore(ctx); new SystemPrompt(ctx,{includeRuntimeContext:false})
+  new ToolRuntime(ctx); new LlmRuntime(ctx); new AgentLoop(ctx,{agents:[]})
+  await ctx.plugin(Loader,{baseUrl:pathToFileURL(join(dir,'package.json')).href})
+  await ctx.loader.root.update(entries); await ctx.loader.await()
+  class Model extends LlmAdapter {
+    async resolveModel(provider,id) { return {provider,id,name:id,inputModalities:['text']} }
+    async *stream(request) {
+      assertDiscipline(request); requests.push(request)
+      assert.ok(!request.tools.some(tool=>tool.name.startsWith('postman_')))
+      yield {type:'block-end',index:0,block:{type:'text',text:'done'}}; yield {type:'finish',reason:{kind:'stop'}}
+    }
+  }
+  ctx.llm.registerAdapter(['codex'],new Model())
+  const {agent} = await ctx.agents.create({sessionId:'ordinary',meta:{cwd:dir},agentOptions:{provider:'codex',model:'sol'}})
+  agent.followup(message('Ordinary local task')); await agent.whenIdle()
+  assert.equal(requests.length,1)
+  assert.ok(!JSON.stringify(agent.session.events).includes(TASK_DISCIPLINE))
 })
 
 // Deterministic wording regressions only, NOT an assertion of LLM compliance.
