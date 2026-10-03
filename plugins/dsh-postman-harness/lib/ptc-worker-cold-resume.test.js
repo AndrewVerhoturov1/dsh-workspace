@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { spawn as spawnProcess } from 'node:child_process'
-import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createPostmanWorkerTools } from './postman-worker.js'
+import { apply as postmanHarness, TASK_DISCIPLINE } from './index.js'
 import { openPostmanTaskRegistry } from './postman-task-registry.js'
 import { createPtcAdapter, WORKER_MUTATION_PROFILE } from './ptc-adapter.js'
 import { createPostmanBridgeBoundaryManager, isTopLevelPostmanPtcLeader, postmanPtcDirectCallGuard, POSTMAN_LEADER_TOOL_ALLOWLIST } from './postman-bridge-core.js'
@@ -21,13 +22,15 @@ const { JsonlSessionPersistence } = await pkg('dsh-session-persistence-jsonl')
 const { SessionProjectionRegistry } = await pkg('dsh-session-projection')
 const { SystemPrompt } = await pkg('dsh-system-prompt')
 const { ToolRuntime, defineTool } = await pkg('dsh-tools')
-const { LlmRuntime, LlmAdapter } = await pkg('dsh-llm')
+const { LlmRuntime, LlmAdapter, createUserMessage } = await pkg('dsh-llm')
 const { AgentLoop } = await pkg('dsh-agent-loop')
 const { SubagentRuntime } = await pkg('dsh-subagent')
 const { apply: spawn } = await pkg('dsh-subagent-spawn-in-process')
 const { apply: report } = await pkg('dsh-tool-subagent-report')
 const { JsonStorageBackend } = await pkg('dsh-storage-json')
 const { DomainFacility } = await pkg('dsh-storage-domain')
+const { default: Loader } = await pkg('cordis-plugin-loader')
+const { AgentPresets } = await pkg('dsh-agent-presets')
 
 async function runPhase(dir, phase) {
   const ctx = new Context(), diagnostics = [], requests = [], disposed = Promise.withResolvers(), firstRequest = Promise.withResolvers()
@@ -36,6 +39,16 @@ async function runPhase(dir, phase) {
   const persistence = new JsonlSessionPersistence(ctx, {root:join(dir,'sessions'),compression:'none'})
   new SubagentRuntime(ctx); spawn(ctx,{providerName:'spawn'}); report(ctx,{reportDelivery:'quiet'})
   new AgentLoop(ctx,{agents:[],maxParallelToolCalls:1})
+  postmanHarness(ctx) // Actual global plugin entrypoint, reloaded in each process.
+  const leaderRequests = []
+  // Native standing preset mount/bind/reconstruction, with only a persona
+  // fixture rather than unrelated production shell/browser services.
+  const presetDir = join(dir,'presets','postman-leader-ptc')
+  await mkdir(presetDir,{recursive:true})
+  await writeFile(join(presetDir,'agent.cordis.yml'),JSON.stringify([{id:'persona',name:pathToFileURL(join(installed,'node_modules/@deepseek-ai/dsh-persona/lib/index.js')).href,config:{text:'Shared preset fixture {{cwd}}'}}]))
+  await ctx.plugin(Loader,{baseUrl:pathToFileURL(join(installed,'lib/bin.js')).href})
+  new AgentPresets(ctx,{default:'postman-leader-ptc',includeUserRoot:false,roots:[{path:join(dir,'presets'),trust:'system'}]})
+  const setup = async agentCtx => { await ctx.agentPresets.mount(agentCtx,'postman-leader-ptc') }
   const backend = new JsonStorageBackend(join(dir,'tasks'))
   const domain = new DomainFacility({storage:{backend:{get:()=>backend}},emit(){}},{backend:'json',routes:{}})
   const registry = await openPostmanTaskRegistry(domain)
@@ -68,7 +81,14 @@ async function runPhase(dir, phase) {
     async resolveModel(provider,model){return {provider,id:model,name:model,inputModalities:['text'],reasoning:{efforts:[{id:'max',name:'Max'}]}}}
     async *stream(request){
       const agent=ctx.agents.currentInitiator()
-      if(agent.id==='leader'){yield {type:'block-end',index:0,block:{type:'text',text:'Worker event'}};yield {type:'finish',reason:{kind:'stop'}};return}
+      assert.equal(request.system.split(TASK_DISCIPLINE).length - 1, 1, 'one full discipline block in every actual model request')
+      // Native child persona shadows the preset persona, not other sections.
+      if(agent.id==='leader') assert.match(request.system,/Shared preset fixture/)
+      assert.ok(!JSON.stringify(request.messages).includes(TASK_DISCIPLINE), 'discipline is not conversation history')
+      assert.equal(agent.session.header.cwd, dir)
+      assert.equal(agent.session.header.agentPreset,'postman-leader-ptc')
+      assert.equal(ctx.agentPresets.composedPreset(agent.ctx),'postman-leader-ptc')
+      if(agent.id==='leader'){leaderRequests.push(request);yield {type:'block-end',index:0,block:{type:'text',text:'Worker event'}};yield {type:'finish',reason:{kind:'stop'}};return}
       requests.push({agent,request});const count=requests.length
       assert.equal(request.provider,'codex');assert.equal(request.model,'gpt-6-luna');assert.equal(request.reasoningEffort,'max')
       assert.ok(request.tools.some(s=>s.name==='ptc_execute'));assert.match(request.system,/Postman PTC programming discipline/)
@@ -93,7 +113,7 @@ async function runPhase(dir, phase) {
   try {
     let leader, inspection, workerId
     if(phase==='fresh'){
-      const handle=await ctx.agents.create({sessionId:'leader',meta:{cwd:dir,agentPreset:'postman-leader-ptc'},agentOptions:{provider:'codex',model:'gpt-6-sol'}})
+      const handle=await ctx.agents.create({setup,sessionId:'leader',meta:{cwd:dir,agentPreset:'postman-leader-ptc'},agentOptions:{provider:'codex',model:'gpt-6-sol'}})
       leader=handle.agent
     }else{
       workerId=Object.keys(registry.get('leader').workers)[0]
@@ -103,9 +123,12 @@ async function runPhase(dir, phase) {
       assert.equal(inspection.meta.id,workerId)
       assert.ok(inspection.events.some(e=>e.type==='tool/call' && e.data.name==='ptc_execute'))
       assert.equal(inspection.events.some(e=>e.type==='postman/ptc-run'),false)
-      const handle=await ctx.agents.resume({resumeSessionId:'leader',agentOptions:{provider:'codex',model:'gpt-6-sol'}})
+      const handle=await ctx.agents.resume({setup,resumeSessionId:'leader',agentOptions:{provider:'codex',model:'gpt-6-sol'}})
       leader=handle.agent
     }
+    leader.followup(createUserMessage({content:[{type:'text',text:'Verify Leader '+phase}],source:{kind:'user'}}))
+    await leader.whenIdle()
+    assert.equal(leaderRequests.length, 1, 'first top-level Leader request reached the adapter')
     const accepted=await worker.taskTool.execute({task:'Verify '+phase,...(workerId?{workerSessionId:workerId}:{createNew:true})},{agent:leader,signal:new AbortController().signal})
     assert.equal(accepted.status,'POSTMAN_WORKER_TASK_ACCEPTED',JSON.stringify(accepted))
     if(workerId)assert.equal(accepted.workerSessionId,workerId)
@@ -123,7 +146,7 @@ async function runPhase(dir, phase) {
     assert.ok(raw.includes('ptc_execute'));assert.ok(!raw.includes('postman/ptc-run'))
     if(inspection)assert.notEqual(released.session,inspection)
     await writeFile(join(dir,phase+'.json'),JSON.stringify({pid:process.pid,workerId:released.id,diskReads,modelCalls:requests.length,
-      ptc:true,discipline:true,reasoningEffort:requests[0].request.reasoningEffort,diagnostic:diagnostics.length,ptcResult:result.status}))
+      ptc:true,discipline:true,taskDiscipline:true,leaderCalls:leaderRequests.length,reasoningEffort:requests[0].request.reasoningEffort,diagnostic:diagnostics.length,ptcResult:result.status}))
   } finally {
     firstRequest.resolve();worker.dispose();boundaries.disposeAll();await adapter.dispose();await ctx.fiber.dispose();await registry.close()
   }
@@ -142,6 +165,8 @@ if(process.env.DSH_PTC_COLD_PHASE){
     const fresh=JSON.parse(await readFile(join(dir,'fresh.json'),'utf8')),resumed=JSON.parse(await readFile(join(dir,'resumed.json'),'utf8'))
     assert.notEqual(fresh.pid,resumed.pid);assert.equal(fresh.workerId,resumed.workerId)
     assert.ok(resumed.diskReads>0);assert.equal(resumed.reasoningEffort,'max');assert.equal(resumed.ptcResult,'ok')
+    assert.equal(fresh.taskDiscipline,true);assert.equal(resumed.taskDiscipline,true)
+    assert.ok(fresh.leaderCalls>0);assert.ok(resumed.leaderCalls>0)
     t.diagnostic(JSON.stringify({fresh,resumed}))
   })
 }

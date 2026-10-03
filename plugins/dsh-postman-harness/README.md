@@ -34,6 +34,16 @@ Postman Leader
 → child-scoped report в точную Leader session
 ```
 
+## Постоянная дисциплина задачи
+
+Основной глобальный entrypoint [lib/index.js](lib/index.js) регистрирует короткий `TASK_DISCIPLINE` как `systemPrompt.section({ name: "dsh:task-discipline", order: 10 })`. Этот уже подключённый bundle — место доставки общей дисциплины всем локальным агентам профиля, включая production/ПТС Leader, Worker и обычного coding-agent; роли и tool guards не меняются. Подробная политика остаётся в [TASK_CONTRACT.md](../../docs/workflow/TASK_CONTRACT.md), краткие repo-facing правила — непосредственно в [AGENTS.md](../../AGENTS.md).
+
+В Harness `0.1.1-rc.2` секции собираются перед каждым model step и передаются в `request.system`, независимо от Skill, Markdown, visible history и подавления dynamic runtime context. Одна глобальная регистрация не добавляет копии в history. Native child composition и cold resume используются без нового lifecycle; штатная замена surface не удаляет регистрацию.
+
+`node --test lib/task-discipline.test.js` проверяет реальные запросы production Leader/Worker, следующий шаг, follow-up того же Worker, замену всей surface и обычного агента; шесть маленьких wording fixtures сохраняют смысл правил. Расширенный `node --test lib/ptc-worker-cold-resume.test.js` проверяет в двух Node-процессах тот же Worker ID, native preset inheritance/reconstruction и весь блок в каждом Leader/Worker request. Адаптер модели в этих тестах детерминированный: доставка доказана, семантическое соблюдение реальной моделью остаётся вероятностным и требует будущих model evals; отдельной eval-инфраструктуры нет.
+
+Гарантия относится к композиции с включённым основным bundle и обычной сборкой секций. Штатный `complete: true` prompt override намеренно заменяет все обычные секции; соответствующего override в текущих Postman presets нет. Плагин не обходит этот Harness contract и не вводит semantic runtime guard.
+
 ## Экспериментальный ПТС Leader и Worker
 
 Один обычный `ptc_execute` регистрируется в bridge entrypoint с общим QuickJS runtime. Точный живой top-level `postman-leader-ptc` работает PTC-first с профилем `postman-leader-supervisor` revision 6: `todo_write`, цели `create/get/update`, `read/grep/web_fetch`, task prepare/restore, input files, Bridge/status и Worker/interrupt/stop/list вызываются только из `ptc_execute`. Один outer program объединяет несколько supervisor operations, сокращая model turns; Host ToolRuntime guard отвергает их model-direct вызовы и пропускает вложенные вызовы с parent outer token через штатный `ctx.tools.execute` от того же Agent и rootCallId. Прямыми остаются `ptc_execute`, `skill`, `ask_user_question`, `exit_plan_mode`, `read_image`, `postman_yield`. Production `postman-leader` остаётся direct-mode без PTC и без изменения authority. Skill v19 выше execution mode: approval для средней/сложной задачи до task preparation/делегирования, repo discovery/execution — Worker/Postman по маршруту; Worker report и Bridge READY — новые события, не polling внутри программы.
