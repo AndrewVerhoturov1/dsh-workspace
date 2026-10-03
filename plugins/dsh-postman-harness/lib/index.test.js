@@ -1,6 +1,14 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { apply, attachTaskUrl, createAndPublishTask, createTaskPackage, PLUGIN_NAME, renderIntentTaskFile } from './index.js'
+import { apply as taskDiscipline, inject as disciplineInject, TASK_DISCIPLINE } from '../../dsh-task-discipline/index.js'
+import { apply, attachTaskUrl, createAndPublishTask, createTaskPackage, inject, PLUGIN_NAME, renderIntentTaskFile } from './index.js'
+
+test('independent plugin only registers the task discipline section', () => {
+  const sections = []
+  taskDiscipline({systemPrompt:{section:section=>sections.push(section)}})
+  assert.deepEqual(disciplineInject, ['systemPrompt'])
+  assert.deepEqual(sections, [{name:'dsh:task-discipline',order:10,text:TASK_DISCIPLINE}])
+})
 
 test('package root keeps deferred task-creation helper exports', async () => {
   const requestId = 'REQ_20260831T043820Z_0042'
@@ -16,9 +24,11 @@ test('package root keeps deferred task-creation helper exports', async () => {
 
 test('apply registers modern current-turn and result tools without legacy async tools', () => {
   const registeredTools = []
+  const sections = []
   const effects = []
   const ctx = {
     tools: { register: tool => registeredTools.push(tool) },
+    systemPrompt: { section: section => sections.push(section) },
     effect(callback, name) {
       effects.push({ callback, name })
       return () => {}
@@ -26,6 +36,8 @@ test('apply registers modern current-turn and result tools without legacy async 
   }
 
   apply(ctx)
+  assert.ok(!inject.includes('systemPrompt'), 'Postman does not own general task discipline')
+  assert.deepEqual(sections, [])
 
   const names = registeredTools.map(tool => tool.name)
   assert.deepEqual(names, [
