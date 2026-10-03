@@ -20,8 +20,8 @@ try:
 except ModuleNotFoundError:
     from task_package import normalize_input_files
 
-MAX_INPUT_BYTES = 16 * 1024 * 1024
-MAX_AGGREGATE_BYTES = 48 * 1024 * 1024
+MAX_INPUT_BYTES = 48 * 1024 * 1024
+MAX_AGGREGATE_BYTES = 144 * 1024 * 1024
 
 REPOSITORY = "AndrewVerhoturov1/dsh-workspace"
 BRANCH = "transport/postman-inputs"
@@ -124,7 +124,7 @@ class GitHubInputPublisher:
         response = self.api(f"repos/{REPOSITORY}/contents/{quote(path, safe='/')}?ref={commit}")
         if response.get("type") != "file" or response.get("encoding") != "base64":
             raise InputStageError("GitHub file unavailable")
-        if response.get("size", 0) > MAX_INPUT_BYTES or len(response["content"]) > 24 * 1024 * 1024:
+        if response.get("size", 0) > MAX_INPUT_BYTES or len(response["content"]) > 72 * 1024 * 1024:
             raise InputStageError("POSTMAN_INPUT_BUNDLE_LIMIT_EXCEEDED")
         data = base64.b64decode("".join(response["content"].split()), validate=True)
         if len(data) > MAX_INPUT_BYTES:

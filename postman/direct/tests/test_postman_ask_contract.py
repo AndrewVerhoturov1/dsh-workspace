@@ -46,7 +46,7 @@ class PostmanAskContractTests(unittest.TestCase):
     def test_wrapper_forces_utf8_and_dedicated_bridge(self):
         self.assertIn("postman_ask.py", self.wrapper)
         self.assertEqual(1, self.wrapper.count("'-X' 'utf8'"))
-        self.assertNotIn("AutomaticContinuation", self.wrapper)
+        self.assertIn("AutomaticContinuation", self.wrapper)
 
     def test_bridge_requires_exact_markers(self):
         for marker in ("ASSISTANT_COMPLETED_NO_ARTIFACT", "parse_text_envelope", "TEXT_RESULT_DURABLE", "POSTMAN_ASK_RESULT_TRIGGER_INVALID"):

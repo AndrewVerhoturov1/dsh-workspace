@@ -20,7 +20,7 @@ except ModuleNotFoundError:
     from task_package import normalize_input_files
     from input_files import MAX_INPUT_BYTES, MAX_AGGREGATE_BYTES, input_media_type
 
-MAX_ZIP_BYTES = 50 * 1024 * 1024
+MAX_ZIP_BYTES = 150 * 1024 * 1024
 MAX_METADATA_BYTES = 128 * 1024
 MANIFEST = "POSTMAN_INPUT_MANIFEST.json"
 _REQ = re.compile(r"^REQ_\d{8}T\d{6}Z_\d{4}$")
@@ -174,6 +174,27 @@ def read_handoff(path, request_id, descriptors, *, image=False):
     if not path or not descriptors:
         fail("BUNDLE_HANDOFF_INVALID")
     value = strict_json(regular_bytes(path, MAX_METADATA_BYTES, "BUNDLE_HANDOFF_INVALID"), "BUNDLE_HANDOFF_INVALID")
+    if image and isinstance(value, dict) and value.get("version") == 2:
+        image_media(descriptors)
+        if (set(value) != {"version", "request_id", "input_count", "descriptor_set_digest", "attachments"}
+                or value["request_id"] != request_id or value["input_count"] != len(descriptors)
+                or value["descriptor_set_digest"] != descriptor_digest(descriptors)
+                or not isinstance(value["attachments"], list) or len(value["attachments"]) != len(descriptors)):
+            fail("BUNDLE_HANDOFF_INVALID")
+        members = []
+        for index, (item, descriptor) in enumerate(zip(value["attachments"], descriptors), 1):
+            media = image_media([descriptor])
+            name = f"POSTMAN_REFERENCE_{request_id}_{index}.{IMAGE_EXTENSIONS[media]}"
+            if (not isinstance(item, dict) or set(item) != {"path", "name", "media_type", "sha256", "byte_length"}
+                    or item["name"] != name or item["media_type"] != media or item["sha256"] != descriptor["sha256"]
+                    or type(item["byte_length"]) is not int or item["byte_length"] != descriptor["byte_length"]
+                    or Path(item["path"]).parent != Path(path).parent or Path(item["path"]).name != name):
+                fail("BUNDLE_HANDOFF_INVALID")
+            members.append(InputAttachment(request_id, Path(item["path"]), name, item["sha256"], item["byte_length"],
+                                           1, descriptor_digest([descriptor]), media))
+        result = ImageAttachments(request_id, tuple(members), descriptor_digest(descriptors))
+        result.upload_bytes()
+        return result
     if (not isinstance(value, dict) or set(value) != {"version", "request_id", "attachment", "input_count", "descriptor_set_digest"}
             or type(value["version"]) is not int or value["version"] != 1 or value["request_id"] != request_id
             or type(value["input_count"]) is not int or value["input_count"] != len(descriptors)
@@ -203,8 +224,10 @@ IMAGE_EXTENSIONS = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp
 
 
 def image_media(descriptors):
-    if len(descriptors) != 1:
+    if not 1 <= len(descriptors) <= 7:
         fail("IMAGE_REFERENCE_COUNT_UNSUPPORTED")
+    for descriptor in descriptors[1:]:
+        image_media([descriptor])
     item = descriptors[0]
     media = item.get("media_type") or {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
                                       ".webp": "image/webp", ".gif": "image/gif"}.get(Path(item["name"]).suffix.lower())
@@ -260,6 +283,51 @@ def build_image(request_id, descriptors, materializations, directory):
     return {"handoffPath": str(handoff_path), **attachment.metadata()}
 
 
+@dataclass(frozen=True)
+class ImageAttachments:
+    request_id: str
+    members: tuple[InputAttachment, ...]
+    descriptor_set_digest: str
+    media_type: str = "image/png"
+
+    @property
+    def name(self): return [item.name for item in self.members]
+
+    @property
+    def byte_length(self): return sum(item.byte_length for item in self.members)
+
+    def metadata(self):
+        return dict(requestId=self.request_id, names=self.name, inputCount=len(self.members),
+                    descriptorSetDigest=self.descriptor_set_digest, mediaType="images",
+                    attachments=[item.metadata() for item in self.members])
+
+    def upload_bytes(self): return [item.upload_bytes() for item in self.members]
+
+
+def build_images(request_id, descriptors, materializations, directory):
+    descriptors = normalize_input_files(descriptors)
+    image_media(descriptors)
+    manifest_for(request_id, descriptors)
+    if len(descriptors) != len(materializations): fail("MATERIALIZATION_MISSING")
+    members = []
+    for index, (descriptor, snapshot) in enumerate(zip(descriptors, materializations), 1):
+        root = Path(directory) / str(index)
+        root.mkdir(mode=0o700)
+        built = build_image(request_id, [descriptor], [snapshot], root)
+        item = read_handoff(built["handoffPath"], request_id, [descriptor], image=True)
+        name = f"POSTMAN_REFERENCE_{request_id}_{index}.{IMAGE_EXTENSIONS[item.media_type]}"
+        destination = Path(directory) / name
+        item.path.rename(destination)
+        members.append(dict(path=str(destination), name=name, media_type=item.media_type,
+                            sha256=item.sha256, byte_length=item.byte_length))
+    handoff = dict(version=2, request_id=request_id, input_count=len(descriptors),
+                   descriptor_set_digest=descriptor_digest(descriptors), attachments=members)
+    path = Path(directory) / 'input-handoff.json'
+    with path.open('xb') as handle:
+        path.chmod(0o600); handle.write(canonical(handoff))
+    return dict(handoffPath=str(path), requestId=request_id, inputCount=len(descriptors), names=[m['name'] for m in members])
+
+
 def build_bundle(request_id, descriptors, materializations, directory):
     try:
         descriptors = normalize_input_files(descriptors)
@@ -308,7 +376,7 @@ def main():
     args = parser.parse_args()
     try:
         spec = strict_json(regular_bytes(args.build, MAX_METADATA_BYTES, "BUNDLE_HANDOFF_INVALID"), "BUNDLE_HANDOFF_INVALID")
-        builder = build_image if spec.get("image") is True else build_bundle
+        builder = (build_images if len(spec["descriptors"]) > 1 else build_image) if spec.get("image") is True else build_bundle
         result = builder(spec["request_id"], spec["descriptors"], spec["materializations"], Path(args.build).parent)
         print(json.dumps(result))
         return 0

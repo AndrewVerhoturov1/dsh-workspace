@@ -119,12 +119,12 @@ test('image Direct start uses Host image builder before spawn and forwards priva
   manager.latest('native-image').child.emit('close',0)
 })
 
-test('image parser preserves exact payload and rejects manual chat', () => {
+test('image parser preserves exact payload and supports manual chat', () => {
   const raw = '  @PostmanImage\nDraw a cat  '
   assert.deepEqual(parsePostmanUserTurn(raw), { mode: 'fresh', transportKind: 'image',
     chatRequestId: undefined, payload: 'Draw a cat  ', removedTransportPrefix: '  @PostmanImage\n' })
-  assert.throws(() => parsePostmanUserTurn('@PostmanImage --chat REQ_20260921T193936Z_3678 draw'), /POSTMAN_IMAGE_CHAT_NOT_ALLOWED/)
-  assert.throws(() => parsePostmanUserTurn('@PostmanImage --chat BAD draw'), /POSTMAN_IMAGE_CHAT_NOT_ALLOWED/)
+  assert.equal(parsePostmanUserTurn('@PostmanImage --chat REQ_20260921T193936Z_3678 draw').chatRequestId, 'REQ_20260921T193936Z_3678')
+  assert.throws(() => parsePostmanUserTurn('@PostmanImage --chat BAD draw'), /POSTMAN_CHAT_TRIGGER_PARSE_FAILED/)
 })
 
 test('image transport requires exact durable descriptor and bytes, never grants artifact continuation', async () => {
@@ -160,9 +160,12 @@ test('image transport requires exact durable descriptor and bytes, never grants 
       children.at(-1).stdout.emit('data', JSON.stringify({ ...terminal, requestId: started.requestId }))
       children.at(-1).emit('close', 0)
       assert.equal(manager.view('image').result.code, expected)
-      await assert.rejects(manager.continueLast('image', '/repo'), /POSTMAN_AUTOMATIC_CONTINUATION_NOT_ALLOWED/)
+      if (expected === 'IMAGE_RESULT_DURABLE')
+        await assert.rejects(manager.continueLast('image', '/repo'), /POSTMAN_AUTOMATIC_CONTINUATION_NOT_ALLOWED/)
     }
-    await assert.rejects(manager.start({ sessionId: 'image', workspace: '/repo', payload: 'draw', branch: 'main', transportKind: 'image', chatRequestId: 'REQ_20260921T193936Z_3678' }), /POSTMAN_IMAGE_CHAT_NOT_ALLOWED/)
+    await manager.start({ sessionId: 'image', workspace: '/repo', payload: 'draw', branch: 'main', transportKind: 'image', chatRequestId: 'REQ_20260921T193936Z_3678' })
+    assert.ok(args.at(-1).includes('-ChatRequestId'))
+    children.at(-1).emit('close', 1)
   } finally { rmSync(directory, { recursive: true, force: true }) }
 })
 
@@ -513,10 +516,10 @@ test('automatic continuation is deterministic and does not accept model-written 
   assert.equal(args.includes('-AutomaticContinuation'), true)
   assert.equal(args[args.indexOf('-ChatRequestId') + 1], first.requestId)
   const payload = Buffer.from(args[args.indexOf('-TaskBase64') + 1], 'base64').toString('utf8')
-  assert.match(payload, /^Продолжи выполнение предыдущей задачи/)
+  assert.match(payload, /^Продолжи исходную незавершённую задачу/)
 })
 
-test('Host permits two automatic continuations but blocks the third before child spawn', async () => {
+test('Host permits one automatic recovery and blocks the second before child spawn', async () => {
   const children = []
   const manager = new DirectPostmanJobManager({
     exists: () => true,
@@ -540,24 +543,24 @@ test('Host permits two automatic continuations but blocks the third before child
   const first = await manager.continueLast('chain', '/repo')
   assert.equal(first.chatRequestId, root.requestId)
   terminal(1, 'ARTIFACT_REJECTED')
-  const second = await manager.continueLast('chain', '/repo')
-  assert.equal(second.chatRequestId, first.requestId)
-  terminal(2)
   await assert.rejects(manager.continueLast('chain', '/repo'), /POSTMAN_AUTOMATIC_CONTINUATION_LIMIT_REACHED/)
-  assert.equal(children.length, 3)
-  assert.equal(manager.latest('chain').requestId, second.requestId)
+  assert.equal(children.length, 2)
+  assert.equal(manager.latest('chain').requestId, first.requestId)
 })
 
-test('Host refuses durable, text, and transport-failed terminals without retry', async () => {
+test('Host refuses durable terminals and preserves text/image mode for recovery', async () => {
   const manager = new DirectPostmanJobManager({ spawn() { throw Error('must not spawn') } })
-  for (const code of ['RESULT_DURABLE', 'TEXT_RESULT_DURABLE', 'POSTMAN_TRANSPORT_FAILED']) {
-    manager.jobs.set('terminal', { state: 'completed', requestId: 'REQ_20260922T123456Z_0001',
-      result: { code, continuationIndex: 0 } })
-    await assert.rejects(manager.continueLast('terminal', '/repo'), /POSTMAN_AUTOMATIC_CONTINUATION_NOT_ALLOWED/)
+  for (const code of ['RESULT_DURABLE', 'TEXT_RESULT_DURABLE', 'IMAGE_RESULT_DURABLE']) {
+    manager.jobs.set('terminal', { state:'completed', requestId:'REQ_20260922T123456Z_0001', result:{code} })
+    await assert.rejects(manager.continueLast('terminal','/repo'), /POSTMAN_AUTOMATIC_CONTINUATION_NOT_ALLOWED/)
   }
-  manager.jobs.set('terminal', { state: 'completed', requestId: 'REQ_20260922T123456Z_0001',
-    result: { code: 'ASSISTANT_COMPLETED_NO_ARTIFACT', continuationIndex: 0 } })
-  await assert.rejects(manager.start({ sessionId: 'terminal', workspace: '/repo', payload: 'intent',
-    transportKind: 'text', automaticContinuation: true, branch: 'main' }),
-  /POSTMAN_AUTOMATIC_CONTINUATION_NOT_ALLOWED/)
+  manager.start = async args => args
+  for (const transportKind of ['text','image','artifact']) {
+    manager.jobs.set('terminal', { state:'completed', requestId:'REQ_20260922T123456Z_0001', transportKind,
+      branch:'main', result:{code:'POSTMAN_TRANSPORT_FAILED'} })
+    const args = await manager.continueLast('terminal','/repo')
+    assert.equal(args.transportKind, transportKind)
+    assert.equal(args.automaticContinuation,true)
+    assert.equal(args.chatRequestId,'REQ_20260922T123456Z_0001')
+  }
 })

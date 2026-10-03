@@ -101,11 +101,12 @@ export function createPostmanBridgeStatusTool(ctx, jobs) {
     description: 'Read the authoritative trusted Direct Postman terminal of this Leader session background Bridge job.',
     parameters: { bridge_job_id: { type: 'string', required: true,
       description: 'Exact bridgeJobId from POSTMAN_BRIDGE_ACCEPTED or POSTMAN_BRIDGE_READY.' },
-      retrySync: { type: 'boolean', description: 'Retry only local task publication synchronization; never send Direct again.' } },
+      retrySync: { type: 'boolean', description: 'Retry only local task publication synchronization; never send Direct again.' },
+      recover: { type: 'boolean', description: 'Request one same-chat recovery. Host reads exact Direct capability and Direct durably claims the one-shot budget; no prompt/state arguments.' } },
     output: output(),
     async execute(args, exec) {
       if (!authorized(exec, ctx)) return { status: 'POSTMAN_BRIDGE_CALLER_REJECTED' }
-      return jobs.status(exec.agent, args?.bridge_job_id, args?.retrySync === true)
+      return jobs.status(exec.agent, args?.bridge_job_id, args?.retrySync === true, args?.recover === true)
     },
   })
 }

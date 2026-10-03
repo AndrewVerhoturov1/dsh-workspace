@@ -95,7 +95,7 @@ class FakeChromium:
         self.error = error
         self.calls = []
 
-    def connect_over_cdp(self, url):
+    def connect_over_cdp(self, url, **kwargs):
         self.calls.append(url)
         if self.error:
             raise RuntimeError(self.error)

@@ -33,11 +33,8 @@ def temporary_artifacts_dir():
 
 @contextmanager
 def locked_playwright(factory):
-    # The request body is deliberately OUTSIDE the lock. Context exit disconnects
-    # Playwright and may reset Chrome download behavior, so protect that exit too.
     manager = factory()
-    with process_lock.lock_cdp_download():
-        playwright = manager.__enter__()
+    playwright = manager.__enter__()
     try:
         yield playwright
     finally:
@@ -46,23 +43,29 @@ def locked_playwright(factory):
 
 
 def connect_over_cdp(playwright, endpoint, *, artifacts_dir=None):
+    import hashlib
+    identity = hashlib.sha256(endpoint.encode("utf-8")).hexdigest()[:16]
+    directory = Path(tempfile.gettempdir()) / ("dsh-postman-downloads-" + identity)
+    directory.mkdir(mode=0o777, exist_ok=True)
+    if directory.is_symlink() or getattr(directory, "is_junction", lambda: False)():
+        raise ValueError("CDP download directory must be a regular directory")
+    # All connections use the same browser path; only download-event GUIDs locate files.
     with process_lock.lock_cdp_download():
-        if artifacts_dir is None:
-            return playwright.chromium.connect_over_cdp(endpoint)
-        return playwright.chromium.connect_over_cdp(endpoint, artifacts_dir=str(artifacts_dir))
+        browser = playwright.chromium.connect_over_cdp(endpoint, artifacts_dir=str(directory))
+    browser._postman_download_dir = directory
+    return browser
 
 
 @contextmanager
 def download_behavior(page, artifacts_dir):
-    """Reassert this connection's exact artifact directory while holding the lock."""
     session = page.context.browser.new_browser_cdp_session()
+    directory = page.context.browser._postman_download_dir
     try:
-        session.send("Browser.setDownloadBehavior", {
-            "behavior": "allowAndName",
-            "downloadPath": str(Path(artifacts_dir).resolve()),
-            "eventsEnabled": True,
-        })
-        # Detaching this session resets its override; keep it alive through copy.
+        with process_lock.lock_cdp_download():
+            session.send("Browser.setDownloadBehavior", {"behavior": "allowAndName",
+                         "downloadPath": str(directory.resolve()), "eventsEnabled": True})
         yield
     finally:
-        session.detach()
+        with process_lock.lock_cdp_download():
+            session.detach()
+

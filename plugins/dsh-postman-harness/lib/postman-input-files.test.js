@@ -81,6 +81,25 @@ function currentFixture(t, { preset = 'postman-leader', resolveAttachment } = {}
   return { ...f, ctx, store, tool, emit, execute, reads, snapshots, listeners }
 }
 
+test('available native generic readFile bytes use private staging and exact SHA', async t => {
+  const f=currentFixture(t)
+  f.ctx.attachments={readFile:async ref=>({data:Buffer.from('private PDF')})}
+  const ref={name:'document.pdf',mediaType:'application/pdf',bytes:11,
+    attachmentId:'sha256:'+createHash('sha256').update('private PDF').digest('hex')}
+  f.listeners.get('session/event')(f.agent.session,{type:'user/message',data:{role:'user',source:{kind:'user'},
+    content:[{type:'file',attachment:ref},{type:'text',text:'question'}]}})
+  const tool=createPostmanInputFilesTool(f.ctx,{get:()=>f.task},{grants:f.grants,currentAttachments:f.store,
+    run:async (root,args)=>{
+      const data=readFileSync(args[1]);assert.equal(data.toString(),'private PDF')
+      return privateResult(args[args.indexOf('--snapshot-dir')+1])
+    }})
+  const result=await tool.execute({action:'stage_current_attachments'},{agent:f.agent,signal:new AbortController().signal})
+  assert.equal(result.status,'POSTMAN_INPUT_READY')
+  ref.bytes=12
+  assert.equal((await tool.execute({action:'stage_current_attachments'},{agent:f.agent,signal:new AbortController().signal})).status,
+               'POSTMAN_INPUT_CURRENT_ATTACHMENT_MISMATCH')
+})
+
 test('latest exact user image stages verified bytes without model paths or private output', async t => {
   const f = currentFixture(t), ref = image()
   f.emit([ref])
@@ -215,8 +234,8 @@ test('message replacement during resolution rejects before stage; store disposal
 
 test('current attachment limits are applied before resolution and publication', async t => {
   const f = currentFixture(t)
-  for (const refs of [[{ ...image(), bytes: 16 * 1024 * 1024 + 1 }],
-    Array.from({ length: 4 }, (_, n) => ({ ...image(String(n)), bytes: 16 * 1024 * 1024 }))]) {
+  for (const refs of [[{ ...image(), bytes: 48 * 1024 * 1024 + 1 }],
+    Array.from({ length: 4 }, (_, n) => ({ ...image(String(n)), bytes: 48 * 1024 * 1024 }))]) {
     f.emit(refs)
     assert.equal((await f.execute({ action: 'stage_current_attachments', selectionIds: f.store.get(f.agent).attachments.map(item => item.selectionId) })).status,
       'POSTMAN_INPUT_BUNDLE_LIMIT_EXCEEDED')

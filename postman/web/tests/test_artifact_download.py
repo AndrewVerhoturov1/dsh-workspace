@@ -129,7 +129,7 @@ class FakeControl:
     def evaluate(self, script, expected_filename):
         return dict(self.snapshot)
 
-    def click(self, timeout=None):
+    def click(self, timeout=None, **kwargs):
         self.clicks += 1
         self.page.clicks += 1
         if self.page.click_error:
@@ -208,6 +208,10 @@ class FakePage:
         self.expect_error = None
         self.click_error = None
         self.path_steps = []
+        from types import SimpleNamespace
+        session = SimpleNamespace(send=lambda *a: None, detach=lambda: None)
+        self.context = SimpleNamespace(browser=SimpleNamespace(new_browser_cdp_session=lambda: session,
+                                      _postman_download_dir=Path(tempfile.gettempdir())))
 
     def locator(self, selector):
         return FakeCollection(self.turn)

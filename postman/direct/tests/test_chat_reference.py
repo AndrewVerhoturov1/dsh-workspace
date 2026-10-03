@@ -37,6 +37,46 @@ class ChatReferenceTests(unittest.TestCase):
                 chat_reference.resolve_chat_reference(direct_root, REQ, expected_repository=REPO)
             self.assertEqual(ctx.exception.code, "DIRECT_CHAT_REFERENCE_UNAVAILABLE")
 
+    def failed_record(self, **fields):
+        return {"requestId": REQ, "repository": REPO, "state": "FAILED", "ok": False,
+                "failureCode": "ASSISTANT_TURN_TIMEOUT", "conversationUrl": URL,
+                "conversationId": URL.rsplit("/", 1)[-1], "sendProofClass": "PROVEN_SENT", **fields}
+
+    def test_failed_proven_sent_reference_has_recovery_metadata(self):
+        with tempfile.TemporaryDirectory() as root:
+            direct_root = Path(root) / "direct"
+            path = direct_root / "requests" / f"{REQ}.json"
+            path.parent.mkdir(parents=True)
+            path.write_text(json.dumps(self.failed_record()), encoding="utf-8")
+            ref = chat_reference.resolve_chat_reference(direct_root, REQ, expected_repository=REPO)
+            self.assertEqual(ref.terminal_state, "FAILED")
+            self.assertEqual(ref.send_proof_class, "PROVEN_SENT")
+            self.assertTrue(ref.recovery_eligible)
+            chat_reference.claim_recovery(direct_root, ref, "REQ_20261003T101323Z_7009")
+            ref = chat_reference.resolve_chat_reference(direct_root, REQ, expected_repository=REPO)
+            self.assertFalse(ref.recovery_eligible)
+            self.assertTrue(ref.automatic_recovery_used)
+            with self.assertRaises(chat_reference.ChatReferenceError):
+                chat_reference.claim_recovery(direct_root, ref, "REQ_20261003T101324Z_7010")
+            # The reference remains valid for an explicit human continuation.
+            self.assertEqual(ref.conversation_url, URL)
+
+    def test_failed_recovery_decision_matrix(self):
+        prompt_sha = "a" * 64
+        reproof = {"requestId": REQ, "conversationUrl": URL, "conversationId": URL.rsplit("/", 1)[-1],
+                   "promptSha256": prompt_sha, "exactUserTurn": True}
+        cases = [({}, True), ({"sendProofClass": "PROVEN_NOT_SENT"}, False),
+                 ({"sendProofClass": "UNKNOWN"}, False),
+                 ({"sendProofClass": "UNKNOWN", "promptSha256": prompt_sha, "readOnlySendReproof": reproof}, True),
+                 ({"conversationUrl": None}, False), ({"conversationId": "foreign"}, False),
+                 ({"repository": "foreign/repo"}, False), ({"requestId": "REQ_20261003T101324Z_7010"}, False),
+                 ({"automaticRecoveryUsed": True}, False), ({"webResultAvailable": True}, False),
+                 ({"unresolvedSendUnknown": True}, False), ({"state": "RESULT_DURABLE", "ok": True}, False)]
+        for fields, expected in cases:
+            with self.subTest(fields=fields):
+                self.assertEqual(chat_reference.can_continue_request(self.failed_record(**fields),
+                    request_id=REQ, expected_repository=REPO), expected)
+
     def test_normalize_conversation_url(self):
         conversation_id, url = chat_reference.normalize_conversation_url(URL)
         self.assertEqual(conversation_id, "861d4716-8c1b-41bc-b37e-a912e2323e70")

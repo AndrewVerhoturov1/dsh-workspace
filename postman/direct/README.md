@@ -57,7 +57,7 @@ Tool-level shell failure до spawn, например `spawn EPERM`, означ�
 
 Для `@Postman` / `@PostmanAsk` с explicitly granted inputs Host после canonical REQ allocation создаёт и independently verifies `POSTMAN_INPUT_<REQ>.zip` из private byte snapshots. Прежний `-InputFilesBase64` сохраняет immutable provenance; новый `-InputBundleManifest` — только Host-created strict private handoff path, не model-authored source list. Direct проверяет exact REQ, descriptor digest, regular/non-symlink files, expected ZIP name и внешний size/hash до browser. Полная contents verification выполняется один раз на Host после build. State хранит bundle metadata без source paths. Browser заново hash-verifies bytes и загружает native FilePayload.
 
-Input ZIP и handoff удаляются best-effort только после browser lifecycle; Host также убирает private request root при terminal/spawn failure. Cleanup не меняет уже доказанный outcome. Без inputs argv/flow прежние. Image mode получает одну verified native PNG/JPEG/WebP/GIF reference через тот же private handoff в первом generation turn, не ZIP/raw_url. Несколько references/non-image inputs явно unsupported. Normal local/current staging не пишет в GitHub; existing GitHub file — source only, public fallback отдельно approved. Полный contract: [POSTMAN_INPUT_FILES.md](../POSTMAN_INPUT_FILES.md).
+Input ZIP и handoff удаляются best-effort только после browser lifecycle; Host также убирает private request root при terminal/spawn failure. Cleanup не меняет уже доказанный outcome. Без inputs argv/flow прежние. Image mode получает 1–7 verified native PNG/JPEG/WebP/GIF references через private handoff в первом generation turn, не ZIP/raw_url. Восемь и non-image inputs отвергаются. Normal local/current staging не пишет в GitHub; existing GitHub file — source only, public fallback отдельно approved. Полный contract: [POSTMAN_INPUT_FILES.md](../POSTMAN_INPUT_FILES.md).
 
 ## Normal request
 
@@ -152,8 +152,7 @@ $jsonText = & $bridge `
 
 - `$oldRequestId` — только lookup key.
 - Ручной пользовательский `--ChatRequestId` всегда разрешён независимо от сохранённого `continuationIndex`.
-- Automatic continuation только после `ASSISTANT_COMPLETED_NO_ARTIFACT` или `ARTIFACT_REJECTED` передаёт `-AutomaticContinuation`, наследует `rootRequestId` и увеличивает `continuationIndex` до максимума 2 в одной root chain. Ручной `@Postman --chat` создаёт новую root chain с `continuationIndex=0`, сохраняя old REQ как lookup key.
-- `POSTMAN_TRANSPORT_FAILED` не является основанием для automatic continuation и требует остановки.
+Автоматическое восстановление — одна попытка на исходный REQ/root chain, во всех трёх режимах. Direct принимает решение по capability: exact locally saved conversation, доказанный original Send (`PROVEN_SENT` или read-only reproof UNKNOWN), нет unresolved Send, durable результата или уже созданного Web artifact. Перед публикацией/Send новый REQ эксклюзивно фиксирует durable `recovery-<rootREQ>.claim`; restart и конкурирующий вызов не дают вторую попытку. Новый короткий intent продолжает работу, а не повторяет исходный запрос. `PROVEN_NOT_SENT` и недоказанный UNKNOWN → STOP. Ошибка download при уже созданном Web artifact не запускает новый Web message. Ручной `--chat` остаётся независимым новым запросом. Для Image обычный `--chat` создаёт новое изображение; automatic recovery после готового изображения сначала read-only доказывает исходный image assistant identity и запускает только упаковку без generation.
 - Каждая continuation создаёт новый canonical REQ.
 - Direct Postman разрешает exact сохранённый `conversationUrl`.
 - Worker открывает exact `/c/<conversation-id>` и должен доказать, что это тот же conversation.
@@ -224,7 +223,7 @@ prompts. External policy URL не является строкой browser prompt
 Conversation URL сохраняется, поэтому следующий новый REQ может использовать `-ChatRequestId`.
 
 Reminders 10/20/30/40/50 и 60-minute soft deadline применяются к незавершённому assistant-turn.
-Shared Web recovery: Connection reload/re-proof; Additional Processing Stop→Reload→Re-proof→Wait 10–17s→natural Continue.
+Reminders по абсолютным точкам 10/20/30/40/50 минут: empty owned composer, exact conversation/user lineage, enabled Send, no duplicate/unknown click. WORKING/UNKNOWN и изменение streaming assistant text — диагностика, не hard readiness gate. Final answer/latch подавляет reminder. Additional Processing — обычное ожидание, без Stop/reload/wait/continue. Connection interrupted → одна best-effort перезагрузка той же owned Page за непрерывное появление banner, затем обычное наблюдение; не Send, не расход reminder slots, не новый task budget. Исчезновение banner разрешает обработать новое появление. Result-first scan предшествует reload. Общий лимит 60 минут и прежний ограниченный grace +45 секунд сохранены. Completed no-artifact ответ перепроверяется через 10 секунд.
 Слоты внутри recovery consumed; только текущий начатый cycle имеет hard grace до soft+45s.
 50 natural templates не показывают REQ/control metadata; exact correlation и bounded journal остаются внутри.
 

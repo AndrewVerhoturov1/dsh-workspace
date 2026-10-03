@@ -248,6 +248,7 @@ class DirectPostmanAsk:
         request_id: str,
         task: str,
         chat_request_id: str | None = None,
+        automatic_continuation: bool = False,
         input_files: list[dict[str, object]] | None = None,
         input_attachment: input_bundle.InputAttachment | None = None,
         cdp_url: str = bootstrap.DEFAULT_CDP_URL,
@@ -269,6 +270,9 @@ class DirectPostmanAsk:
         self._write_state(request_id, STATE_INIT, publicationStarted=False)
 
         chat_ref = None
+        recovery_fields = {}
+        if automatic_continuation and not chat_request_id:
+            raise DirectPostmanError("DIRECT_INVALID_CONTINUATION", "automatic continuation requires --chat-request-id")
         if chat_request_id:
             try:
                 chat_ref = chat_reference.resolve_chat_reference(
@@ -278,6 +282,13 @@ class DirectPostmanAsk:
                 )
             except chat_reference.ChatReferenceError as exc:
                 raise DirectPostmanError(exc.code, str(exc), details=exc.details) from exc
+            if automatic_continuation:
+                try:
+                    recovery_fields = chat_reference.claim_recovery(self.direct_root, chat_ref, request_id)
+                except chat_reference.ChatReferenceError as exc:
+                    raise DirectPostmanError(exc.code, str(exc), details=exc.details) from exc
+                self._write_state(request_id, STATE_INIT, **recovery_fields)
+                task = "Продолжи исходную незавершённую задачу с текущего места и доведи её до готового текстового результата."
 
         conversation_fields: dict[str, Any] = {}
         if chat_ref is not None:
@@ -292,8 +303,9 @@ class DirectPostmanAsk:
             taskSha256=_sha256_text(task),
             **({"inputBundle": input_attachment.metadata()} if input_attachment else {}),
             parentRequestId=chat_ref.request_id if chat_ref is not None else None,
-            rootRequestId=request_id,
-            continuationIndex=0,
+            rootRequestId=(chat_ref.root_request_id or chat_ref.request_id) if automatic_continuation else request_id,
+            continuationIndex=1 if automatic_continuation else 0,
+            **recovery_fields,
             **conversation_fields,
         )
 
@@ -364,7 +376,9 @@ class DirectPostmanAsk:
         if not isinstance(result, dict) or result.get("ok") is not True:
             code = result.get("code", "DIRECT_WEB_FAILED") if isinstance(result, dict) else "DIRECT_WEB_FAILED"
             details = result.get("details", {}) if isinstance(result, dict) else {"result": repr(result)}
-            self._write_state(request_id, STATE_FAILED, failureCode=code, failureDetails=details)
+            self._write_state(request_id, STATE_FAILED, failureCode=code, failureDetails=details,
+                              **{key: details[key] for key in ("conversationUrl", "conversationId", "sendProof", "sendProofClass",
+                                  "unresolvedSendUnknown", "webResultAvailable", "readOnlySendReproof", "promptSha256") if key in details})
             transport_message = str(details.get("transportMessage") or details.get("reason") or code)
             transport_code = str(details.get("transportCode") or code)
             raise DirectPostmanError(
@@ -393,6 +407,8 @@ class DirectPostmanAsk:
                 details={"webCode": bridge_code, "workerDetails": details},
             )
 
+        self._write_state(request_id, STATE_WEB_RUNNING,
+                          **{key: details[key] for key in ("conversationUrl", "conversationId", "submitProof") if key in details})
         parsed = text_result.parse_text_envelope(details.get("assistantText", ""), request_id)
         if not parsed.get("ok"):
             parse_code = str(parsed.get("code", "TEXT_RESULT_INVALID"))
@@ -442,8 +458,9 @@ class DirectPostmanAsk:
             statePath=str(self.state_path(request_id)),
             browser=browser,
             parentRequestId=chat_ref.request_id if chat_ref is not None else None,
-            rootRequestId=request_id,
-            continuationIndex=0,
+            rootRequestId=(chat_ref.root_request_id or chat_ref.request_id) if automatic_continuation else request_id,
+            continuationIndex=1 if automatic_continuation else 0,
+            **recovery_fields,
             **delivery,
             **final_conversation,
         )
@@ -476,6 +493,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--direct-root")
     parser.add_argument("--cdp-url", default=bootstrap.DEFAULT_CDP_URL)
     parser.add_argument("--chat-request-id")
+    parser.add_argument("--automatic-continuation", action="store_true")
     parser.add_argument("--input-files-base64")
     parser.add_argument("--input-bundle-manifest")
     return parser
@@ -517,6 +535,7 @@ def main(argv: list[str] | None = None) -> int:
                 ) if args.input_files_base64 else [],
                 input_bundle_manifest=args.input_bundle_manifest,
                 chat_request_id=args.chat_request_id,
+                automatic_continuation=args.automatic_continuation,
                 cdp_url=args.cdp_url,
             )
         print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))

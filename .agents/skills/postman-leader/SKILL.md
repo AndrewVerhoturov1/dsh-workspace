@@ -42,7 +42,7 @@ user explicitly requests PostmanAsk
 → after last consuming REQ: postman_input_files({action:"cleanup",bundleId})
 ```
 
-**Не спрашивай filesystem path для поддерживаемого current image attachment**, уже существующего в Harness user message. Для unsupported generic attachment объясни capability limitation и попроси explicit local path. Не привлекай Worker только для поиска такого файла. Host выбирает attachment последнего exact `source.kind === "user"` user message этой Leader session; новый user message заменяет выбор, даже без вложений, и после restart authority не восстанавливается. Если новый user turn уже снял authority — попроси приложить нужный файл снова, не его путь.
+**Не спрашивай filesystem path для поддерживаемого current image attachment**, уже существующего в Harness user message. Для unsupported generic attachment объясни capability limitation и попроси explicit local path. Для filename без пути сначала `postman_input_files({action:"locate",filename})`: bounded metadata search, при нескольких совпадениях нужен выбор. `pack(paths,destination)`, `list(source)` и `unpack(source,destination)` того же инструмента доступны Leader без Worker; только явно выбранные файлы и новые destinations, без GitHub writes. Generic current bytes разрешены через native `readFile`, если он реально доступен; иначе объясни ограничение, не угадывай путь. Host выбирает attachment последнего exact `source.kind === "user"` user message этой Leader session; новый user message заменяет выбор, даже без вложений, и после restart authority не восстанавливается. Если новый user turn уже снял authority — попроси приложить нужный файл снова, не его путь.
 
 При нескольких attachments Host возвращает `POSTMAN_INPUT_CURRENT_ATTACHMENT_SELECTION_REQUIRED` с компактными metadata и ничего не читает/не публикует. Выбирай только однозначно требуемые user intent attachments; если выбор неоднозначен — спроси пользователя через `ask_user_question`. Повтори `postman_input_files({action:"stage_current_attachments",selectionIds:[<exact returned current selectionIds>]})`. `selectionId` выбирает exact occurrence только текущей записи; content-addressed `attachmentId` может совпадать у нескольких occurrences и не является selector. Unknown/stale/foreign selectionId не authority.
 
@@ -64,7 +64,7 @@ Continuation:
 <verbatim new semantic intent>
 ```
 
-Metadata line идёт в существующей parser position: сразу после trigger separator (включая `@PostmanImage`) либо после `--chat <OLD_REQ>`, затем newline и semantic intent. Descriptors не изменять; в каждом новом REQ, включая `--chat`, inputs перечисляются явно, без скрытого наследования. Leader **не строит ZIP**: Host после canonical REQ сам создаёт `POSTMAN_INPUT_<REQ>.zip` для Postman/Ask. Для `@PostmanImage` одна visual reference доставляется как native image attachment (PNG/JPEG/WebP/GIF), не ZIP и не raw_url. Несколько references → `POSTMAN_INPUT_IMAGE_REFERENCE_COUNT_UNSUPPORTED`, non-image → `POSTMAN_INPUT_IMAGE_REFERENCE_TYPE_UNSUPPORTED`; выбери одну картинку или уточни задачу, без fallback. Visual references are native image attachments whenever Host can resolve their bytes. Leader не управляет handoff/browser upload вручную.
+Metadata line идёт в существующей parser position: сразу после trigger separator (включая `@PostmanImage`) либо после `--chat <OLD_REQ>`, затем newline и semantic intent. Descriptors не изменять; в каждом новом REQ, включая `--chat`, inputs перечисляются явно, без скрытого наследования. Request ZIP не собирай вручную: Host после canonical REQ сам создаёт `POSTMAN_INPUT_<REQ>.zip` для Postman/Ask. Для `@PostmanImage` 1–7 visual references доставляются вместе как native images (PNG/JPEG/WebP/GIF), не ZIP и не raw_url. Восемь references или non-image отклоняются без fallback. Visual references are native image attachments whenever Host can resolve their bytes. Leader не управляет handoff/browser upload вручную.
 
 Для обычного known-good input flow **этот раздел skill достаточен**. Не читать `POSTMAN_INPUT_FILES.md`, `POSTMAN_BRIDGE_FLOW.md`, `postman/direct/README.md` или `REPO_POLICY.md` только чтобы вспомнить штатную последовательность. Читать их при диагностике, изменении transport, неизвестном статусе или реально применимом repo-policy действии.
 
@@ -232,13 +232,13 @@ grep "workspace|cwd|spawn"
 
 ### 4.3. read_image
 
-Leader использует `read_image` ТОЛЬКО когда независимая визуальная проверка существенно влияет на решение: UI/E2E evidence, screenshot ошибки, diagram, пользовательское изображение или иной visual result, который нельзя надёжно оценить по текстовому report. Если Worker может предоставить достаточное точное текстовое evidence, Leader ОБЯЗАН предпочесть текст. `read_image` дорог по контексту.
+Leader может использовать `read_image`, когда считает визуальную проверку полезной. Worker как посредник не требуется.
 
 ---
 
 ## 5. Постановка задачи Worker
 
-Перед первоначальным вызовом `postman_worker({task: ...})` Leader формулирует законченное автономное задание по [контракту задачи](../../../docs/workflow/TASK_CONTRACT.md): цель, границы, условия завершения и достаточная проверка. Пользователь форму не заполняет; исходное сообщение Direct Postman и доверенный transport не переписываются этим шаблоном. Worker возвращает штатный содержательный `report` со всеми обязательными специальными полями, без второго формата отчёта. Для дополнительного независимого Worker используй `createNew: true` при свободном слоте; при существующем mapping `postman_worker` допустим только для нового trusted `artifactRequestId` с точным `workerSessionId` и передаёт follow-up тому же Worker.
+Перед первоначальным вызовом `postman_worker({task: ...})` Leader формулирует законченное автономное задание по [контракту задачи](../../../docs/workflow/TASK_CONTRACT.md): цель, границы, условия завершения и достаточная проверка. Пользователь форму не заполняет; исходное сообщение Direct Postman и доверенный transport не переписываются этим шаблоном. Worker возвращает штатный содержательный `report` со всеми обязательными специальными полями, без второго формата отчёта. Для дополнительного независимого Worker используй `createNew: true` при свободном слоте; существующий mapping не запрещает `createNew:true`. Для нового trusted `artifactRequestId` указывай точный `workerSessionId`, чтобы передать follow-up тому же Worker.
 
 Leader НЕ ДОЛЖЕН превращать Worker в remote shell через поток микрокоманд.
 
@@ -277,11 +277,11 @@ Leader НЕ ДОЛЖЕН превращать Worker в remote shell через 
 | Mapping существует, turn активен; поставить новую фазу | `postman_worker_interrupt({workerSessionId, task: ...})` тому же Worker; текущий шаг завершается, новое задание ждёт в общей очереди |
 | Mapping существует, turn завершён и получен report; продолжить задачу | `postman_worker_interrupt({workerSessionId, task: ...})` тому же Worker |
 | Mapping существует, turn завершён и получен report; добавить проверку | Только если проверка обоснована новым evidence/решением: `postman_worker_interrupt({workerSessionId, task: ...})`; не посылай произвольную лишнюю проверку |
-| Mapping существует; начать связанную задачу | Обычное продолжение — `postman_worker_interrupt({workerSessionId, task})`; обоснованную независимую работу можно отправить в новый `postman_worker({task, createNew: true})` при свободном слоте и непересекающихся записях |
-| Mapping существует; закрыть session | `postman_worker_stop({workerSessionId})` только на разрешённом основании раздела 10; stop не использовать для простого переключения этапа |
+| Mapping существует; начать связанную задачу | На выбор: продолжить через `postman_worker_interrupt({workerSessionId, task})` или создать `postman_worker({task, createNew: true})` при свободном слоте и непересекающихся записях |
+| Mapping существует; закрыть session | `postman_worker_stop({workerSessionId})` в любой момент по решению Leader |
 | Mapping закрыт подтверждённым `postman_worker_stop`; начать новую session | `postman_worker({task: ...})` допустим для нового первичного create |
 
-Для существующего Worker указывай его `workerSessionId`; новый trusted artifact REQ допускается только после проверки Host grant. Обычное продолжение без grant посылай через `postman_worker_interrupt`. Новый Worker через `createNew: true` — отдельное обоснованное параллельное задание, а не повторное создание ради idle/report.
+Для существующего Worker указывай его `workerSessionId`; новый trusted artifact REQ допускается только после проверки Host grant. Обычное продолжение без grant посылай через `postman_worker_interrupt`. Новый Worker через `createNew:true` разрешён при свободном слоте, включая existing mapping и idle/report; максимум 3 и shared worktree conflict restrictions сохраняются.
 
 `postman_worker_interrupt` здесь означает поставить задание в очередь следующего раунда той же Worker session. Вызов требует существующего mapping и не вызывает отмену модели или инструмента: текущий шаг завершается, старый раунд закрывается, следующий забирает все ожидающие сообщения в порядке поступления. Сообщения после захвата пакета остаются на следующий раунд. Для обычного продолжения без нового artifact grant при существующем mapping Leader использует `postman_worker_interrupt`.
 
@@ -297,7 +297,7 @@ Leader НЕ ДОЛЖЕН превращать Worker в remote shell через 
 
 Фразы или внутренние рассуждения `waiting`, `awaiting`, `checking worker`, `still running` НЕ являются полезной supervisor-работой и не являются основанием продолжать model turn.
 
-Пока mapping существует, обычное новое задание без нового artifact grant передаётся через `postman_worker_interrupt` тому же Worker. Новый trusted artifact REQ передаётся через `postman_worker({task, workerSessionId, artifactRequestId})`, даже если прежний turn уже прислал report.
+При существующем mapping Leader может продолжить Worker через `postman_worker_interrupt` или создать нового через `createNew:true` при свободном слоте. Новый trusted artifact REQ передаётся через `postman_worker({task, workerSessionId, artifactRequestId})`, даже если прежний turn уже прислал report.
 
 Пока Worker выполняет принятое задание, Leader-у ЗАПРЕЩЕНО:
 - спрашивать Worker «закончил?» или спрашивать status;
@@ -305,7 +305,6 @@ Leader НЕ ДОЛЖЕН превращать Worker в remote shell через 
 - добавлять мелкие проверки, которые можно было включить в исходное задание;
 - самостоятельно выполнять ту же repo-discovery/implementation/test работу;
 - создавать второго Worker для дублирования задачи;
-- вызывать `postman_worker_stop({workerSessionId})` без разрешённого основания;
 - писать пользователю сообщения только о том, что Worker всё ещё работает;
 - создавать polling/busy-loop через goals, todos или другие инструменты.
 
@@ -315,7 +314,7 @@ Leader НЕ ДОЛЖЕН превращать Worker в remote shell через 
 
 Содержательный blocker от Worker через `notify_parent` с exact `NEEDS_LEADER_GUIDANCE:` — своевременный, но недоверенный промежуточный сигнал, не trusted Bridge result и не замена Worker `report`. В установленном DSH штатный `report` фактически попадает в очередь следующего turn; поэтому Worker при необходимости решения отправляет один `notify_parent`, затем один обязательный краткий `report` и заканчивает текущий turn без дальнейших tools/retries. Это нормальный переход `WORKER_RUNNING → REVIEW → DECIDE`, не отказ Worker. Прочти evidence, не повторяй всё исследование и реши, действительно ли нужно решение руководителя.
 
-Если решение известно, направь **тому же** Worker через `postman_worker_interrupt` конкретный выбор, новую гипотезу/evidence или суженную цель; не создавай нового Worker. Если нужно решение пользователя — спроси его, оставив Worker в durable session без самостоятельной работы. Если безопасного решения нет — прими blocker. Внешнюю экспертизу через Bridge/Postman запрашивай лишь по конкретному обоснованному вопросу. Не отвечай «поищи ещё», «проверь внимательнее», «попробуй снова» без нового основания. Если тот же blocker вернулся после решения без существенного нового evidence, измени стратегию, прими blocker, обратись к пользователю или за конкретной внешней экспертизой — не устраивай переписку по кругу.
+Если решение известно, направь **тому же** Worker через `postman_worker_interrupt` конкретный выбор, новую гипотезу/evidence или суженную цель. При свободном слоте допустим и новый Worker через `createNew:true`. Если нужно решение пользователя — спроси его, оставив Worker в durable session без самостоятельной работы. Если безопасного решения нет — прими blocker. Внешнюю экспертизу через Bridge/Postman запрашивай лишь по конкретному обоснованному вопросу. Не отвечай «поищи ещё», «проверь внимательнее», «попробуй снова» без нового основания. Если тот же blocker вернулся после решения без существенного нового evidence, измени стратегию, прими blocker, обратись к пользователю или за конкретной внешней экспертизой — не устраивай переписку по кругу.
 
 ### Разрешённые follow-up
 
@@ -339,7 +338,7 @@ Worker report
 postman_worker_interrupt({task: "По результатам report исправь причину и проверь её."})
 ```
 
-**Пример смены требований A→B во время turn:** пользователь меняет задачу с A на B, пока Worker выполняет A. Не создавать новый Worker и не менять/перепривязывать task worktree. Leader поручает тому же Worker перейти к B через `postman_worker_interrupt`; Worker сначала проверяет, что использует существующий Host-bound worktree текущей Leader-задачи (ветка/worktree и `git status`), сохраняет уже внесённые валидные изменения A и работает дальше только в границах этого context. Если B требует другой независимой ветки/worktree или конфликтует с незавершёнными изменениями A, Worker сообщает blocker в report и ждёт решения; запрещено создавать или выбирать обходной worktree самостоятельно. Interrupt кооперативен и не гарантирует приоритет над уже принятой очередью.
+**Пример смены требований A→B во время turn:** пользователь меняет задачу с A на B, пока Worker выполняет A. Можно продолжить прежнего Worker или адресно остановить его и изменить стратегию. Новый Worker через `createNew:true` допустим при свободном слоте; не менять/перепривязывать task worktree и соблюдать shared worktree conflict restrictions. Leader поручает тому же Worker перейти к B через `postman_worker_interrupt`; Worker сначала проверяет, что использует существующий Host-bound worktree текущей Leader-задачи (ветка/worktree и `git status`), сохраняет уже внесённые валидные изменения A и работает дальше только в границах этого context. Если B требует другой независимой ветки/worktree или конфликтует с незавершёнными изменениями A, Worker сообщает blocker в report и ждёт решения; запрещено создавать или выбирать обходной worktree самостоятельно. Interrupt кооперативен и не гарантирует приоритет над уже принятой очередью.
 
 ---
 
@@ -377,25 +376,15 @@ Leader обновляет todo только при смене существен
 
 ---
 
-## 10. postman_worker_stop
+## 10. Остановка Worker
 
-`postman_worker_stop({workerSessionId})` НЕ является штатным способом переключения этапов. Это операция закрытия существующего Worker mapping; она разрешена только если:
-
-1. Worker прислал полноценный финальный report и текущая session больше не нужна;
-2. пользователь явно приказал отменить/заменить Worker;
-3. Worker доказанно выполняет неправильную или опасную работу и Leader сознательно отказывается от session;
-4. runtime сообщает о неисправимом зависании/ошибке, требующей отказа от session.
-
-Leader-у ЗАПРЕЩЕНО останавливать Worker, от которого ещё ожидается результат, без перечисленного основания. Нельзя вызывать stop просто ради передачи follow-up: пока mapping нужен, используй `postman_worker_interrupt` для обычного продолжения или `postman_worker({task, workerSessionId, artifactRequestId})` для нового trusted artifact REQ. После успешного stop закрыта только выбранная привязка. При свободном слоте независимый Worker может быть создан без остановки другого, но Leader НЕ ДОЛЖЕН останавливать Worker только ради создания нового reviewer.
+Leader может остановить выбранного Worker в любой момент: `postman_worker_stop({workerSessionId})`. Host проверяет точную привязку и ownership; другие Worker не затрагиваются. Stop прекращает session, но не откатывает выполненные изменения, не очищает Git state и не означает успешное завершение задачи.
 
 ---
 
 ## 11. Continuable Worker
 
-Для последовательной локальной работы одной задачи Leader ОБЯЗАН максимально использовать существующую continuable Worker session. Пока mapping существует, обычные задания без нового artifact grant, включая продолжение после report, следующий этап и исправления, передаются через `postman_worker_interrupt`. Новый trusted artifact REQ передаётся через `postman_worker({task, workerSessionId, artifactRequestId})` тому же Worker. Новый этап сам по себе НЕ является основанием для нового Worker.
-
-Дополнительный независимый reviewer/исполнитель допустим при обоснованной параллельной работе: `postman_worker({task, createNew: true, label?})`, не более трёх привязок. Не создавай замену для простого продолжения: укажи `workerSessionId` существующего Worker. Отдельные Worker разделяют одну Host task branch/worktree; Leader разводит области записи и не запускает параллельные опасные Git-операции.
-
+Leader выбирает продолжение существующего Worker или `postman_worker({task, createNew: true})` при свободном слоте. Максимум три привязки. Для существующего Worker нужен exact `workerSessionId`; artifact REQ требует Host grant. Worker разделяют task branch/worktree: не допускай конфликтующих записей и параллельных опасных Git-операций.
 ---
 
 ## 12. Проверка результата Worker
@@ -456,15 +445,15 @@ Leader отправляет пользователю сообщение ТОЛЬ
 
 ### WORKER_RUNNING
 
-Разрешено принять пользовательское изменение задачи, Worker report и выполнять только независимую supervisor-работу, не дублирующую Worker. Запрещены polling, status ping, duplicate investigation/implementation, premature stop, waiting messages и idle goal rounds. Изменение требований и обычный follow-up без нового grant передаются через `postman_worker_interrupt`; новый trusted artifact REQ — через `postman_worker({task, workerSessionId, artifactRequestId})` тому же Worker.
+Разрешено принять пользовательское изменение задачи, Worker report и выполнять только независимую supervisor-работу, не дублирующую Worker. Запрещены polling, status ping, duplicate investigation/implementation, waiting messages и idle goal rounds. Изменение требований и обычный follow-up без нового grant передаются через `postman_worker_interrupt`; новый trusted artifact REQ — через `postman_worker({task, workerSessionId, artifactRequestId})` тому же Worker.
 
 ### REVIEW
 
-После report Leader оценивает risk level и проверяет только необходимые evidence. Наличие mapping после report не меняет правила маршрутизации: обычный следующий этап — interrupt, новый trusted artifact REQ — `postman_worker({task, workerSessionId, artifactRequestId})` тому же Worker.
+После report Leader оценивает risk level и проверяет только необходимые evidence. Наличие mapping после report не меняет правила маршрутизации: обычный следующий этап тому же Worker — interrupt; `createNew:true` допускает нового Worker при свободном слоте. Новый trusted artifact REQ — `postman_worker({task, workerSessionId, artifactRequestId})` тому же Worker.
 
 ### DECIDE
 
-Leader принимает следующее решение: принять результат, передать тому же Worker следующий этап/исправление, использовать Bridge, обратиться к пользователю или завершить работу. При существующем mapping обычное продолжение выполняется через interrupt, а новый trusted artifact REQ — через `postman_worker({task, workerSessionId, artifactRequestId})` тому же Worker. Для новой session сначала должно отсутствовать прежнее mapping после допустимого stop.
+Leader принимает следующее решение: принять результат, передать тому же Worker следующий этап/исправление, использовать Bridge, обратиться к пользователю или завершить работу. При существующем mapping обычное продолжение выполняется через interrupt, а новый trusted artifact REQ — через `postman_worker({task, workerSessionId, artifactRequestId})` тому же Worker. Новый Worker через `createNew:true` допустим при свободном слоте, даже если mapping уже существует.
 
 ---
 
@@ -475,10 +464,6 @@ Leader принимает следующее решение: принять ре
 - broad `grep` для repo discovery или использование `grep` как обход отсутствующего `glob`;
 - самостоятельное систематическое исследование репозитория либо implementation вместо Worker;
 - status ping, polling, сообщение пользователю только «жду Worker» или active goal idle-loop;
-- повторный `postman_worker()` при существующем mapping без нового trusted `artifactRequestId` — в том числе после report, на idle, для обычного нового этапа, follow-up или изменённых требований;
-- `postman_worker_stop({workerSessionId})` до report без разрешённой причины;
-- использование stop только ради переключения этапа;
-- создание нового Worker вместо continuation без основания и без предварительного закрытия прежнего mapping;
 - повторное полное исследование уже выполненной Worker работы;
 - десятки последовательных `read/grep` вместо delegation;
 - дробление независимых supervisor checks на множество model turns;
@@ -490,7 +475,7 @@ Leader принимает следующее решение: принять ре
 - промежуточный partial-status, если пользователь запросил единый итог и решение пользователя не требуется;
 - Host-control вызов, который по известному lifecycle invariant предсказуемо будет отвергнут и не несёт новой информации.
 
-При существующем mapping обычный follow-up без нового grant передаётся через `postman_worker_interrupt`; новый trusted artifact REQ — через `postman_worker({task, workerSessionId, artifactRequestId})` тому же Worker. При нарушении Leader ОБЯЗАН остановиться и выбрать корректную supervisor-операцию.
+При существующем mapping обычный follow-up выбранному Worker передаётся через `postman_worker_interrupt`; новый trusted artifact REQ — через `postman_worker({task, workerSessionId, artifactRequestId})` тому же Worker. Вместо continuation Leader может создать нового Worker через `createNew:true` при свободном слоте (максимум 3); shared worktree conflict restrictions сохраняются.
 
 ---
 
@@ -500,7 +485,7 @@ Leader принимает следующее решение: принять ре
 
 При существующем mapping обычное продолжение без нового artifact grant направляется через `postman_worker_interrupt({task: "..."})`. Для нового trusted artifact REQ разрешён `postman_worker({task: "...", workerSessionId, artifactRequestId: "..."})`: Host проверяет grant, посылает follow-up тому же child, возвращает прежний `workerSessionId` и `created: false`, затем сохраняет REQ в `artifactRequests`.
 
-Mapping закрывается через `postman_worker_stop` по основаниям раздела 10. После закрытия прежнего mapping новый `postman_worker` допустим для создания новой session. Не считать само завершение turn/report закрытием mapping.
+Mapping закрывается адресным `postman_worker_stop` в любой момент по решению Leader. После закрытия прежнего mapping новый `postman_worker` допустим для создания новой session. Не считать само завершение turn/report закрытием mapping.
 
 `POSTMAN_WORKER_TASK_ACCEPTED` и messageId означают только приём сообщения. Worker обязан вернуть содержательный результат через штатный `report`. Финальный текст child Agent не подменяет `report`. Leader сохраняет разумную дисциплину ожидания report; обычное продолжение после него идёт через interrupt, а новый trusted artifact REQ — через `postman_worker({task, workerSessionId, artifactRequestId})` при сохранённом mapping.
 
@@ -519,7 +504,7 @@ postman_continue_last_request
 
 После `POSTMAN_BRIDGE_ACCEPTED` Leader НЕ polling-ит job. Если другой независимой supervisor-работы нет, он прекращает активность и ждёт нового внешнего события: `POSTMAN_BRIDGE_READY`, Worker report, сообщения пользователя, runtime failure/blocker либо нового evidence, объективно меняющего решение. Запрещены reasoning/model loops `waiting for bridge`, `checking bridge`, `still running`.
 
-`POSTMAN_BRIDGE_READY` сам сигнализирует о завершении. После READY Leader вызывает `postman_bridge_status({bridge_job_id: "..."})` и доверяет только проверенному terminal `result`. `synchronization: busy` означает сохранённый ответ без безопасного перехода общей рабочей папки; после разрешения занятости `postman_bridge_status({bridge_job_id: "...", retrySync: true})` повторяет только локальную синхронизацию, не Web-запрос и не REQ. При перезапуске контекст с отложенной публикацией восстанавливается лишь по точной цепочке доверенных REQ-квитанций и Git-родителей; recover не изменяет файлы. После успешного retrySync восстановленный результат остаётся доступным до остановки этого экземпляра плагина. Доказанный отказ до публикации получает `not-required` и не ждёт sync; исход без такого доказательства остаётся блокирующим. Artifact grant выдаётся лишь после успешной синхронизации и проверки ZIP. Worker-сессии сохраняются и адресно продолжаются по прежним `workerSessionId`; окончательный stop — отдельное явное решение. READY не является содержательным Web-result.
+`POSTMAN_BRIDGE_READY` сам сигнализирует о завершении. После READY Leader вызывает `postman_bridge_status({bridge_job_id: "..."})` и доверяет только проверенному terminal `result`. `synchronization: busy` означает сохранённый ответ без безопасного перехода общей рабочей папки; после разрешения занятости `postman_bridge_status({bridge_job_id: "...", retrySync: true})` повторяет только локальную синхронизацию, не Web-запрос и не REQ. При перезапуске контекст с отложенной публикацией восстанавливается лишь по точной цепочке доверенных REQ-квитанций и Git-родителей; recover не изменяет файлы. После успешного retrySync восстановленный результат остаётся доступным до остановки этого экземпляра плагина. Доказанный отказ до публикации получает `not-required` и не ждёт sync; исход без такого доказательства остаётся блокирующим. Artifact grant выдаётся лишь после успешной синхронизации и проверки ZIP. Worker-сессии сохраняются и адресно продолжаются по прежним `workerSessionId`; окончательный stop — отдельное явное решение. READY не является содержательным Web-result. `POSTMAN_TRANSPORT_FAILED` сам по себе не запрещает recovery: при `recoveryEligible:true` Leader может вызвать `postman_bridge_status({bridge_job_id, recover:true})`. Host заново читает exact Direct capability и запускает существующий `continueLast` без нового Bridge child. Новый `POSTMAN_BRIDGE_ACCEPTED` читается обычным status/READY путём; Direct фиксирует durable claim до публикации/Send. Eligibility требует exact conversation, PROVEN_SENT или допустимый read-only re-proof, отсутствие unresolved UNKNOWN/useful result и свободный one-shot budget. Ни prompt, ни trusted recovery state Leader не передаёт. Download/local failure после Web/durable result — только локальное исправление, без continuation.
 
 Для `IMAGE_RESULT_DURABLE` полезный результат — `resultImage`; при необходимости Leader проверяет изображение через `read_image`. Промежуточный ZIP image-flow не является implementation artifact и не получает implementation grant.
 
@@ -534,4 +519,4 @@ Host сам управляет очередью Bridge jobs, launch spacing, cle
 
 Trusted ZIP execution remains Worker-only through `implementation_artifact_apply`: exact authorized REQ, SHA-256, and Host-bound worktree are checked independently of registry fields.
 
-Адресный `close` проверяет сохранённую историю даже после естественного освобождения Agent: необходимы принятые сообщения, завершённые ходы, успешный актуальный штатный `report` в истории точного Leader и отсутствие новых заданий. Исторические неактивные потомки не мешают; работающие управляемые потомки блокируют закрытие. Если история неполная, не жди `yield` бесконечно: сообщи о неопределённости и запроси подтверждаемую отмену точного ID. `cancel` после перезапуска допускает uncertain/stopping только с новым разовым одобрением Host; причина не разрешает отмену. `postman_task_restore` сохраняет безотменяющий `pauseForOperation` и отказывает на грязном task worktree при сохранённых Worker-привязках независимо от `report`.
+Адресный `close` проверяет сохранённую историю даже после естественного освобождения Agent: необходимы принятые сообщения, завершённые ходы, успешный актуальный штатный `report` в истории точного Leader и отсутствие новых заданий. Исторические неактивные потомки не мешают; работающие управляемые потомки блокируют закрытие. Если история неполная, не жди `yield` бесконечно: сообщи о неопределённости и запроси подтверждаемую отмену точного ID. Адресный stop/cancel допустим и до report, без специальной причины или одобрения; exact ID/ownership сохраняются. `postman_task_restore` сохраняет безотменяющий `pauseForOperation` и отказывает на грязном task worktree при сохранённых Worker-привязках независимо от `report`.

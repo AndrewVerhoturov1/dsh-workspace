@@ -40,11 +40,14 @@ async function start(f) {
   assert.equal(accepted.status, 'POSTMAN_WORKER_TASK_ACCEPTED')
   return accepted.workerSessionId
 }
-test('localDevelopment is Host-only, default off, and cannot be enabled by tool arguments', async () => {
+test('addressed stop needs no reason or approval and does not certify success', async () => {
   const f = fixture(), id = await start(f)
-  assert.equal((await f.tools.stopTool.execute({ mode: 'cancel', workerSessionId: id, localDevelopment: true }, f.exec)).status,
-    'POSTMAN_WORKER_CANCEL_APPROVAL_REQUIRED')
-  assert.deepEqual(f.calls.drains, [])
+  f.ctx.get = () => null
+  const result = await f.tools.stopTool.execute({ workerSessionId:id }, f.exec)
+  assert.equal(result.status,'POSTMAN_WORKER_CANCELLED')
+  assert.equal(result.taskCompleted,false)
+  assert.deepEqual(f.calls.drains,[[id]])
+  assert.deepEqual(f.calls.approvals,[])
 })
 test('local cancellation needs no unavailable approval, releases only exact child, and never claims success', async () => {
   const f = fixture({ localDevelopment: true }), id = await start(f)
@@ -62,7 +65,7 @@ test('local cancellation needs no unavailable approval, releases only exact chil
 test('local close releases idle Worker without certifying missing historical reports', async () => {
   const f = fixture({ localDevelopment: true }), id = await start(f)
   f.agents.get(id).inbox.hasPending = false
-  const result = await f.tools.stopTool.execute({ workerSessionId: id }, f.exec)
+  const result = await f.tools.stopTool.execute({ mode: 'close', workerSessionId: id }, f.exec)
   assert.equal(result.status, 'POSTMAN_WORKER_STOPPED')
   assert.equal(result.resultReported, false)
   assert.equal(result.taskCompleted, false)
@@ -75,7 +78,7 @@ test('local close still rejects running, queued, descendants, wrong caller and u
     if (scenario === 'running') f.agents.get(id).status = 'running'
     if (scenario === 'descendants') f.ctx.subagents.listDescendants = async () =>
       [{ kind: 'child', mode: 'continuable', activity: 'running' }]
-    assert.equal((await f.tools.stopTool.execute({ workerSessionId: id }, f.exec)).status, 'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT')
+    assert.equal((await f.tools.stopTool.execute({ mode: 'close', workerSessionId: id }, f.exec)).status, 'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT')
     assert.deepEqual(f.calls.drains, [])
   }
   const f = fixture({ localDevelopment: true }), id = await start(f)
@@ -94,22 +97,14 @@ test('local restore reservation releases idle bindings, not active work', async 
   assert.deepEqual(f.calls.drains, [[id]])
 })
 
-test('accepted but idle Worker cannot close, nor can forged cancel reason/force/flag', async () => {
-  const f = fixture(); const id = await start(f)
-  assert.equal((await f.tools.stopTool.execute({}, f.exec)).status, 'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT')
-  for (const args of [{ mode: 'cancel', workerSessionId: id, reason: 'user_cancel', force: true },
-    { mode: 'cancel', workerSessionId: 'other', reason: 'emergency' }])
-    assert.equal((await f.tools.stopTool.execute(args, f.exec)).status, 'POSTMAN_WORKER_CANCEL_APPROVAL_REQUIRED')
-  assert.deepEqual(f.calls.drains, [])
-  assert.equal(f.registry.get('leader').workers[id].id, id)
-})
-test('approval applies to exact snapshot, not a later followup', async () => {
-  const f = fixture(); const id = await start(f)
-  f.setApproval('allowed-once')
-  f.ctx.get = () => ({ request: async () => { await f.tools.interruptTool.execute({ task: 'later' }, f.exec); return 'allowed-once' } })
-  const result = await f.tools.stopTool.execute({ mode: 'cancel', workerSessionId: id }, f.exec)
-  assert.equal(result.status, 'POSTMAN_WORKER_CANCEL_APPROVAL_REQUIRED')
-  assert.deepEqual(f.calls.drains, [])
+test('explicit idle close remains guarded; addressed stop accepts active work and rejects foreign ID', async () => {
+  const f = fixture(), id = await start(f)
+  assert.equal((await f.tools.stopTool.execute({mode:'close'}, f.exec)).status,'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT')
+  await f.tools.stopTool.execute({workerSessionId:'other'}, f.exec)
+  assert.deepEqual(f.calls.drains,[])
+  f.agents.get(id).status = 'running'
+  assert.equal((await f.tools.stopTool.execute({workerSessionId:id},f.exec)).status,'POSTMAN_WORKER_CANCELLED')
+  assert.deepEqual(f.calls.drains,[[id]])
 })
 test('approved cancel frees exact Worker, retains Session and never claims task success', async () => {
   const f = fixture(); const id = await start(f); f.setApproval('allowed-once')
@@ -189,7 +184,7 @@ test('ordinary close accepts a completed read error followed by the actual nativ
     { type: 'tool/result', data: { turn: 1, message: { source: { callId: 'bad' }, content: [{ isError: true }] } } },
     { type: 'tool/call', data: { turn: 1, callId: 'fixed', name: 'read', arguments: {} } },
     { type: 'tool/result', data: { turn: 1, message: { source: { callId: 'fixed' }, content: [{ isError: false }] } } })
-  const response = await f.tools.stopTool.execute({ workerSessionId: id }, f.exec)
+  const response = await f.tools.stopTool.execute({ mode: 'close', workerSessionId: id }, f.exec)
   assert.equal(response.status, 'POSTMAN_WORKER_STOPPED')
   assert.equal(response.taskCompleted, false)
   assert.equal(f.registry.get('leader').workers[id], undefined)
@@ -262,11 +257,11 @@ test('released Agent closes using saved exact Session without another model turn
     mode: 'continuable', activity: 'inactive' }]
   child.session.events.push({ type: 'agent/inbox/spliced', data: { target: 'next-turn',
     start: 0, inserted: [{ id: 'later', role: 'user', content: [{ type: 'text', text: 'followup' }] }] } })
-  assert.equal((await f.tools.stopTool.execute({ workerSessionId: id }, f.exec)).status,
+  assert.equal((await f.tools.stopTool.execute({ mode: 'close', workerSessionId: id }, f.exec)).status,
     'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT')
   assert.deepEqual(f.calls.drains, [])
   child.session.events.pop()
-  assert.equal((await f.tools.stopTool.execute({ workerSessionId: id }, f.exec)).status, 'POSTMAN_WORKER_STOPPED')
+  assert.equal((await f.tools.stopTool.execute({ mode: 'close', workerSessionId: id }, f.exec)).status, 'POSTMAN_WORKER_STOPPED')
   assert.deepEqual(f.calls.drains, [[id]])
 })
 test('restart uncertain and failed drain permit new approved exact cancel only', async () => {
