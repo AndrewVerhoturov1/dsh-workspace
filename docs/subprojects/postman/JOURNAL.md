@@ -8,6 +8,12 @@
 
 ## Записи
 
+### 2026-10-03 — Send: shared home draft, безопасная очистка и reminder click
+
+- **Что изменилось:** короткая cross-process блокировка prepare/upload/fill/Send/proof; общий cleanup только exact owned PROVEN_NOT_SENT без попытки Send; reminder click timeout 5 секунд и безопасный тип attachment exception.
+- **Почему:** controlled stagger доказал восстановление общего home draft после hydration; конкретный второй reminder падал внутри click с бюджетом 1 секунда, не на guard. Первоначальное attachment-исключение старый snapshot потерял и его причина не выдумана.
+- **Результат:** финальный full Image batch 3/3 IMAGE_RESULT_DURABLE одновременно с ordinary/reminder и независимым /c/ чатом; UNKNOWN не очищается и не повторяется. Подробности, тесты и ограничения — [отчёт](SEND_INVESTIGATION_20261003.md).
+
 ### 2026-10-01 — Review PR #294: recovery на границах UI и deadline
 
 - **Что изменилось:** weak interruption блокирует recovery READY; exhaustion reload переводит connection flow в пассивное CONNECTION_WAITING без F5/reminders. Grace привязан к confirmation timestamp, terminal journal различает COMPLETED/FAILED/ABORTED.
