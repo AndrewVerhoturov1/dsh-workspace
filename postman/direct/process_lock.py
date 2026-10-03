@@ -72,7 +72,7 @@ def lock_cdp_download(*, timeout_s=90.0):
 
 
 def lock_browser_presend(*, timeout_s=180.0):
-    """Serialize draft bootstrap through send proof, never assistant/download waits.
+    """Serialize fresh home draft bootstrap through send proof, not existing chats.
 
     All current production modes share the existing dedicated Chrome profile.
     This is deliberately separate from the CDP download/attach lock.
