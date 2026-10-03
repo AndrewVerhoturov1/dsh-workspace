@@ -90,7 +90,7 @@ class ReminderPolicyTests(unittest.TestCase):
         self.assertEqual(reminder_policy.DEFAULT_OVERALL_TIMEOUT_MS, 3_600_000)
         self.assertEqual(reminder_policy.DEFAULT_REMINDER_SEND_WINDOW_MS, 5_000)
         self.assertEqual(reminder_policy.DEFAULT_REMINDER_POLL_MS, 1_000)
-        self.assertEqual(reminder_policy.DEFAULT_REMINDER_CLICK_TIMEOUT_MS, 1_000)
+        self.assertEqual(reminder_policy.DEFAULT_REMINDER_CLICK_TIMEOUT_MS, 5_000)
         self.assertEqual(
             [reminder_policy.scheduled_elapsed_ms(index) for index in (1, 2, 3, 4, 5)],
             [600_000, 1_200_000, 1_800_000, 2_400_000, 3_000_000],
@@ -500,7 +500,7 @@ class ReminderPolicyTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["sendState"], reminder_policy.submit.SEND_PROVEN_SENT)
         self.assertEqual(button.click_count, 1)
-        self.assertEqual(button.timeouts, [1_000])
+        self.assertEqual(button.timeouts, [5_000])
         self.assertEqual(result["details"]["reminderProofPollMs"], 1_000)
         self.assertEqual(wait_until.call_args.kwargs["poll_ms"], 1_000)
 

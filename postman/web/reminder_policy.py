@@ -23,7 +23,7 @@ DEFAULT_REMINDER_COUNT = 5
 DEFAULT_OVERALL_TIMEOUT_MS = 60 * 60 * 1000
 DEFAULT_REMINDER_SEND_WINDOW_MS = 5_000
 DEFAULT_REMINDER_POLL_MS = 1_000
-DEFAULT_REMINDER_CLICK_TIMEOUT_MS = 1_000
+DEFAULT_REMINDER_CLICK_TIMEOUT_MS = 5_000
 REMINDER_CONTROL = "POSTMAN_TRANSPORT_CONTROL"
 REMINDER_SUPPRESSED_GENERATION_ACTIVE = "REMINDER_SUPPRESSED_GENERATION_ACTIVE"  # legacy result name
 REMINDER_PHASE_PENDING = "REMINDER_PHASE_PENDING"
@@ -140,18 +140,7 @@ def prepare_same_chat(
 
 def _clear_unsent_prompt(page: Any, prompt: str, *, timeout_ms: int) -> bool:
     """Clear only a prompt that is still visibly present and proven unsent."""
-    matched, _ = submit._exact_prompt_readback(page, prompt)
-    if not matched:
-        return False
-    composer, _ = submit.find_composer(page)
-    if composer is None:
-        return False
-    try:
-        composer.fill("", timeout=min(max(timeout_ms, 1), 2_000))
-    except Exception:
-        return False
-    empty, _ = submit._composer_empty_proof(page)
-    return bool(empty)
+    return submit.clear_owned_unsent_prompt(page, prompt, timeout_ms=timeout_ms)
 
 
 def random_ui_pause(*, sleep: Callable[[float], None] = time.sleep,
@@ -298,6 +287,9 @@ def _click_ready_reminder_once(
 
     send_transitions = [*transitions, submit.PROMPT_SEND_STARTED]
     click_timeout_ms = min(max(click_timeout_ms, 1), max(timeout_ms, 1))
+    transaction = getattr(page, "_postman_presend", None)
+    if isinstance(transaction, dict):
+        transaction["sendAttempted"] = True
     try:
         button.click(timeout=click_timeout_ms)
     except Exception as exc:
@@ -345,6 +337,7 @@ def _click_ready_reminder_once(
     )
 
 
+@submit._presend_transaction
 def submit_reminder(
     page: Any,
     prompt: str,
@@ -468,6 +461,9 @@ def submit_reminder(
         )
 
     composer = prep["composer"]
+    transaction = getattr(page, "_postman_presend", None)
+    if isinstance(transaction, dict):
+        transaction.update({"ownedUrl": str(page.url), "userCount": len(submit.collect_user_turn_texts(page))})
     base_transitions = [
         submit.PAGE_OWNED,
         submit.EXISTING_CHAT_CONFIRMED,

@@ -146,8 +146,18 @@ def snapshot(root, name, *, sent=False):
         value = root.evaluate(_PROOF_JS, {"name": name, "sent": sent, "image": name.startswith("POSTMAN_REFERENCE_")})
         if isinstance(value, dict):
             return value
-    except Exception:
-        pass
+    except Exception as exc:
+        # Never expose paths, file contents or full Playwright call logs.
+        message = str(exc).lower()
+        category = next((label for needle, label in (
+            ("strict mode violation", "ambiguous_locator"),
+            ("timeout", "locator_timeout"),
+            ("execution context was destroyed", "navigation_context_destroyed"),
+            ("closed", "target_closed"), ("detached", "detached_node"),
+            ("cannot read properties", "javascript_type_error"),
+        ) if needle in message), "evaluate_error")
+        return {"known": False, "reason": "attachment_dom_unreadable",
+                "exceptionType": type(exc).__name__, "exceptionCategory": category}
     return {"known": False, "reason": "attachment_dom_unreadable"}
 
 
@@ -175,6 +185,12 @@ def upload(page, composer, attachment, *, timeout_ms, wait_until):
     # This attempt owns an initially empty attachment surface.
     if initial.get("known") is not True or initial.get("count") != 0 or initial.get("pending") or initial.get("error"):
         return {"ok": False, "code": ATTACHMENT_NOT_READY, "details": initial}
+    transaction = getattr(page, "_postman_presend", None)
+    if isinstance(transaction, dict):
+        import browser_submit
+        transaction.setdefault("ownedUrl", str(page.url))
+        transaction.setdefault("userCount", len(browser_submit.collect_user_turn_texts(page)))
+        transaction["attachment"] = attachment
     selection = {}
     try:
         inputs = scope.locator('input[type="file"]')
@@ -216,6 +232,7 @@ def upload(page, composer, attachment, *, timeout_ms, wait_until):
         # here would permit a final TOCTOU between verification and browser file read.
         data = attachment.upload_bytes()
         eligible[0].set_input_files({"name": attachment.name, "mimeType": getattr(attachment, "media_type", "application/zip"), "buffer": data}, timeout=timeout_ms)
+        selection["setInputFilesCompleted"] = True
     except input_bundle.InputBundleError as exc:
         return {"ok": False, "code": exc.code, "details": selection}
     except Exception:
@@ -231,6 +248,35 @@ def upload(page, composer, attachment, *, timeout_ms, wait_until):
     if not matched or not ready(proof, attachment.name):
         return {"ok": False, "code": ATTACHMENT_UPLOAD_TIMEOUT, "details": proof}
     return {"ok": True, "code": ATTACHMENT_READY_CONFIRMED, "details": proof}
+
+
+def clear_owned(page, attachment):
+    """Initially empty owned surface, never called after any Send attempt."""
+    import browser_submit
+    composer, _ = browser_submit.find_composer(page)
+    scope = composer_scope(composer) if composer is not None else None
+    if scope is None:
+        return {"cleared": False, "reason": "scope_unproven"}
+    proof = snapshot(scope, attachment.name)
+    if proof.get("known") is True and proof.get("count") == 0:
+        return {"cleared": True, "reason": "already_empty"}
+    if not ready(proof, attachment.name):
+        return {"cleared": False, "reason": "ownership_unproven"}
+    try:
+        buttons = scope.locator('button[aria-label]')
+        owned = [buttons.nth(i) for i in range(buttons.count()) if buttons.nth(i).get_attribute('aria-label')
+                 in ["Remove " + attachment.name, "Удалить " + attachment.name]]
+        if len(owned) != 1:
+            return {"cleared": False, "reason": "remove_control_unproven"}
+        # Live UI reveals Remove on hover; never force-click an occluded control.
+        images = scope.locator('img[alt]')
+        if images.count() == 1:
+            images.nth(0).hover(timeout=2000)
+        owned[0].click(timeout=3000)
+        empty = snapshot(scope, attachment.name)
+        return {"cleared": empty.get("known") is True and empty.get("count") == 0}
+    except Exception as exc:
+        return {"cleared": False, "exceptionType": type(exc).__name__}
 
 
 def before_send(composer, attachment, expected_id=None):

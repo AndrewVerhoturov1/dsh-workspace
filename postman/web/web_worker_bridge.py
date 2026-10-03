@@ -443,8 +443,16 @@ class WebWorkerBridge:
                     owns_context = True
 
                 def close_owned_resources() -> None:
+                    diagnostic = getattr(page, "_postman_page_diagnostic", None)
+                    if isinstance(diagnostic, dict):
+                        diagnostic = {**diagnostic, "url": str(getattr(page, "url", "") or "")}
                     cleanup.clear()
                     cleanup.update(_close_owned_page(page))
+                    if isinstance(diagnostic, dict):
+                        diagnostic = {**diagnostic, "closedAt": time.time(), "ownedPageClosed": cleanup["ownedPageClosed"]}
+                        cleanup["pageDiagnostic"] = diagnostic
+                        stored = self.read_state(request_id) or {}
+                        _atomic_json(self.state_path(request_id), {**stored, "browserCleanup": cleanup, "pageDiagnostic": diagnostic})
                     if owns_context and context is not None:
                         try:
                             context.close()
@@ -459,6 +467,13 @@ class WebWorkerBridge:
                 # owned Page/context while the CDP connection is still alive.
                 stack.callback(close_owned_resources)
                 page = context.new_page()
+                diagnostic = browser_submit._page_diagnostic(page)
+                diagnostic["requestId"] = request_id
+                try:
+                    page._postman_page_diagnostic = diagnostic
+                except (AttributeError, TypeError):
+                    pass
+                self._write_state(request, WEB_STARTING, pageDiagnostic=diagnostic)
 
                 if resume_image:
                     # Explicit recovery only: no upload, fill or Send on the first turn.
