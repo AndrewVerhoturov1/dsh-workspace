@@ -1,13 +1,13 @@
 import { stripTypeScriptTypes } from 'node:module'
 import { newQuickJSWASMModule } from 'quickjs-emscripten'
 import { FrameReader, checkMessage, message, writer } from './protocol.js'
-import { boundedJson } from './json.js'
+import { boundedJson, createJsonCodec, JsonLimitError } from './json.js'
 import { validatePtcProfile } from './profiles.js'
 
 // One process, one program. This file is a fixed trusted entry point, not a loader.
 const ABSOLUTE = { maxMessageBytes: 1048576, maxTotalBridgeBytes: 16777216, maxValueDepth: 32, maxValueNodes: 10000, maxToolCalls: 256 }
 let started = false, terminal = false, runId, limits, send, runtime, context, promise
-let nextCallId = 0, logs = 0, bytes = 0, violation = null, internalExpired = false
+let nextCallId = 0, logs = 0, bytes = 0, violation = null, violationStatus = 'limit-exceeded', internalExpired = false
 const calls = new Map()
 const stdin = new FrameReader(ABSOLUTE, data => {
   try {
@@ -56,7 +56,7 @@ async function execute(start) {
   if (result.status==='ok' && calls.size) result={status:'unawaited-calls',error:errorResult('incomplete','Program returned with outstanding calls')}
   const cleanupError=await cleanup()
   if (internalExpired) result={status:'limit-exceeded',error:errorResult('maxWallMs','QuickJS interrupt deadline')}
-  if (violation) result={status:'limit-exceeded',error:violation}
+  if (violation) result={status:violationStatus,error:violation}
   if (cleanupError) result.cleanupError=cleanupError
   if (terminal) return
   terminal=true
@@ -81,47 +81,29 @@ async function evaluate({ program, language, profile }) {
   runtime.setInterruptHandler(() => { internalExpired ||= Date.now()>=deadline; return internalExpired })
   context=runtime.newContext()
   // A private serializer closes over pristine intrinsics before model code runs.
-  const serializerSource = `(function(){
-    const keys=Reflect.ownKeys, desc=Object.getOwnPropertyDescriptor, proto=Object.getPrototypeOf;
-    const setProto=Object.setPrototypeOf, create=Object.create;
-    const json=JSON.stringify, arr=Array.isArray, finite=Number.isFinite;
-    const arrayProto=Array.prototype, objectProto=Object.prototype;
-    return function(value,maxDepth,maxNodes){
-      let nodes=0; const seen=new Set();
-      function visit(x, depth) {
-        if (++nodes>maxNodes || depth>maxDepth) throw new TypeError('JSON depth or node limit');
-        if (x===null || typeof x==='string' || typeof x==='boolean') return x;
-        if (typeof x==='number' && finite(x)) return x;
-        if (typeof x!=='object') throw new TypeError('Non-JSON value');
-        if (seen.has(x)) throw new TypeError('JSON cycle');
-        seen.add(x); let result;
-        if (arr(x)) {
-          if (proto(x)!==arrayProto || keys(x).length!==x.length+1) throw new TypeError('Nonstandard array');
-          result=[]; setProto(result,null); for(let i=0;i<x.length;i++){const d=desc(x,''+i); if(!d || !('value' in d) || !d.enumerable) throw new TypeError('Array hole/accessor');result[i]=visit(d.value,depth+1)}
-        } else {
-          if (proto(x)!==objectProto && proto(x)!==null) throw new TypeError('Nonstandard object');
-          result=create(null);
-          for(const k of keys(x)){if(typeof k!=='string' || k==='__proto__'||k==='prototype'||k==='constructor')throw new TypeError('Unsafe key');const d=desc(x,k);if(!d||!('value' in d)||!d.enumerable)throw new TypeError('Accessor/nonenumerable');result[k]=visit(d.value,depth+1)}
-        }
-        seen.delete(x); return result;
-      }
-      return json(visit(value,1));
-    };
-  })()`
+  const serializerSource = `(${createJsonCodec.toString()})().encode`
   const evalSerializer=context.evalCode(serializerSource,'ptc-internal.js')
   if (evalSerializer.error) { const err=context.dump(evalSerializer.error); evalSerializer.error.dispose(); throw new Error(text(err)) }
   const serializer=evalSerializer.value
   const jsonObject=context.getProp(context.global,'JSON')
   const parser=context.getProp(jsonObject,'parse')
   function encodeGuest(handle, maxBytes=limits.maxMessageBytes) {
-    const d=context.newNumber(limits.maxValueDepth), n=context.newNumber(limits.maxValueNodes)
+    const settings=context.newObject()
+    for (const name of ['maxValueDepth','maxValueNodes']) {
+      const h=context.newNumber(limits[name]); context.setProp(settings,name,h); h.dispose()
+    }
+    const cap=context.newNumber(maxBytes), code=context.newString(maxBytes===limits.maxOutputBytes?'maxOutputBytes':'maxMessageBytes')
     let s
     try {
-      const encoded=context.callFunction(serializer,context.undefined,handle,d,n)
-      if(encoded.error){ const e=context.dump(encoded.error);encoded.error.dispose();throw new TypeError(text(e)) }
-      try {s=context.getString(encoded.value)}finally{encoded.value.dispose()}
-    } finally {d.dispose();n.dispose()}
-    if(Buffer.byteLength(s,'utf8')>maxBytes)throw new TypeError('JSON byte limit exceeded')
+      const encoded=context.callFunction(serializer,context.undefined,handle,settings,cap,code)
+      if(encoded.error){
+        const e=context.dump(encoded.error);encoded.error.dispose()
+        if (['maxValueDepth','maxValueNodes','maxMessageBytes','maxOutputBytes'].includes(e.code)) throw new JsonLimitError(e.code,text(e))
+        throw new TypeError(text(e))
+      }
+      const h=context.getProp(encoded.value,'text')
+      try {s=context.getString(h)}finally{h.dispose();encoded.value.dispose()}
+    } finally {settings.dispose();cap.dispose();code.dispose()}
     return boundedJson(JSON.parse(s),limits,maxBytes).value
   }
   function rejectDeferred(entry, reason) {
@@ -147,7 +129,7 @@ async function evaluate({ program, language, profile }) {
       if(nextCallId>=limits.maxToolCalls) {violation=errorResult('maxToolCalls','Call limit exceeded');throw new Error('Call limit exceeded')}
       let arg
       try { arg=encodeGuest(argHandle) }
-      catch(error) {violation=errorResult('maxMessageBytes',error);throw error}
+      catch(error) {violationStatus=error instanceof JsonLimitError?'limit-exceeded':'runtime-error';violation=errorResult(error instanceof JsonLimitError?error.code:'invalid-json',error);throw error}
       const callId=++nextCallId
       const deferred=context.newPromise()
       // The returned handle and the retained deferred have independent ownership.
@@ -166,7 +148,7 @@ async function evaluate({ program, language, profile }) {
       if(violation) throw new Error('Execution limit exceeded')
       let v
       try {v=encodeGuest(h,limits.maxOutputBytes)}
-      catch(error) {violation=errorResult('maxOutputBytes',error);throw error}
+      catch(error) {violationStatus=error instanceof JsonLimitError?'limit-exceeded':'runtime-error';violation=errorResult(error instanceof JsonLimitError?error.code:'invalid-json',error);throw error}
       const text=JSON.stringify(v), size=Buffer.byteLength(text,'utf8')
       if(logs+1>limits.maxLogEntries || bytes+size>limits.maxOutputBytes){violation=errorResult('maxOutputBytes','Output limit exceeded');throw new Error('Output limit exceeded')}
       logs++;bytes+=size
@@ -193,10 +175,10 @@ async function evaluate({ program, language, profile }) {
       state=context.getPromiseState(promise)
       if(state.type==='pending') await new Promise(resolve=>setTimeout(resolve,1))
     }
-    if(state.type==='rejected'){const err=context.dump(state.error);state.error.dispose();return {status:'runtime-error',error:errorResult('runtime',err?.message||err)}}
+    if(state.type==='rejected'){const err=context.dump(state.error);state.error.dispose();const limited=['maxValueDepth','maxValueNodes','maxMessageBytes','maxOutputBytes'].includes(err?.code);return {status:limited?'limit-exceeded':'runtime-error',error:errorResult(limited?err.code:'runtime',err?.message||err)}}
     if(state.type==='fulfilled'){
-      try {final=encodeGuest(state.value,limits.maxMessageBytes)}
-      catch(error){return {status:'invalid-output',error:errorResult('invalid-output',error)}}
+      try {final=encodeGuest(state.value,limits.maxOutputBytes)}
+      catch(error){return {status:error instanceof JsonLimitError?'limit-exceeded':'invalid-output',error:errorResult(error instanceof JsonLimitError?error.code:'invalid-output',error)}}
       finally {state.value.dispose()}
       return {status:'ok',value:final}
     }

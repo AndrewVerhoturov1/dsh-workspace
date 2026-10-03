@@ -267,6 +267,13 @@ test('Worker helper read and grep preserve the task worktree boundary', () => in
       assert.match(JSON.stringify(result.value),/PTC_FILESYSTEM_BOUNDARY_REJECTED/)
     }
     assert.equal(f.traces.filter(x=>x.name==='read').length,2)
+    const long='TASK-я😀'.repeat(40000)
+    await writeFile(join(task,'long.txt'),long,'utf8')
+    await writeFile(join(session,'long.txt'),'SESSION_ONLY','utf8')
+    const mapped=value(await f.execute(child.a,"return await ptc.mapTextFiles({files:['long.txt']},({text})=>({chars:text.length,bytes:ptc.utf8Bytes(text),tail:text.slice(-8)}))"))
+    assert.deepEqual(mapped,[{chars:long.length,bytes:Buffer.byteLength(long),tail:long.slice(-8)}])
+    const outsideRead=await f.execute(child.a,"return await ptc.readAllText({file_path:'"+join(outside,'secret.txt').replaceAll('\\','/')+"'})")
+    assert.equal(outsideRead.value.status,'runtime-error');assert.match(outsideRead.value.error.message,/PTC_FILESYSTEM_BOUNDARY_REJECTED/)
     assert.equal(f.traces.filter(x=>x.name==='grep').length,0)
   } finally { await f.cleanup() }
 }))
