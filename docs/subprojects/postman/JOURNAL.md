@@ -8,6 +8,12 @@
 
 ## Записи
 
+### 2026-10-03 — Уточнение границы presend lock после #328
+
+- **Что изменилось:** общий browser-presend.lock берётся только для fresh `/`; existing/packaging/reminder/system continuation сохраняют прежний ownership/cleanup/one-shot декоратор без глобального ожидания. Admission timeout возвращает terminal PROVEN_NOT_SENT до DOM/upload/fill.
+- **Почему:** живой WORKING reminder ждал55,359с и потерял operation_deadline; A–E доказали shared draft у fresh+fresh, но не между независимыми `/c/`.
+- **Результат:** исправленный reminder отправлен во время55с Image holder; 4/4 initial Image Send с собственными attachment, waits до160,298с. Полного4/4 durable нет: поздние download/CDP сбои честно отделены. Подробности и ограничения — [отчёт](PRESEND_LOCK_BOUNDARIES_20261003.md).
+
 ### 2026-10-03 — Send: shared home draft, безопасная очистка и reminder click
 
 - **Что изменилось:** короткая cross-process блокировка prepare/upload/fill/Send/proof; общий cleanup только exact owned PROVEN_NOT_SENT без попытки Send; reminder click timeout 5 секунд и безопасный тип attachment exception.
