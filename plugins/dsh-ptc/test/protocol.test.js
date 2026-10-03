@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { FrameReader, encodeFrame, checkMessage, message, writer, ProtocolError } from '../src/protocol.js'
-import { boundedJson } from '../src/json.js'
+import { boundedJson, JsonLimitError } from '../src/json.js'
 import { DEFAULT_LIMITS } from '../src/profiles.js'
 import { PassThrough } from 'node:stream'
 const lim={...DEFAULT_LIMITS,maxMessageBytes:4096,maxTotalBridgeBytes:8192}
@@ -36,8 +36,31 @@ test('host JSON validation rejects getters, toJSON, cycles, unsafe keys and non-
   for(const v of [undefined,NaN,Infinity,3n,()=>1,Symbol(),new Date(),[,],{toJSON(){return 1}},JSON.parse('{"__proto__":1}')])assert.throws(()=>boundedJson(v,lim))
   const getter={};Object.defineProperty(getter,'x',{enumerable:true,get(){throw Error('should not execute')}});assert.throws(()=>boundedJson(getter,lim))
   const cycle={};cycle.self=cycle;assert.throws(()=>boundedJson(cycle,lim))
-  const trapped=new Proxy({}, {get(){throw Error('trap must not run')}});assert.throws(()=>boundedJson(trapped,lim),/Unsupported JSON value/)
+  const trapped=new Proxy({}, {get(){throw Error('trap must not run')}});assert.throws(()=>boundedJson(trapped,lim),/value: proxy is not JSON-compatible/)
   assert.deepEqual(boundedJson({nested:[1,'é',null]},lim).value.nested,[1,'é',null])
+})
+
+test('JSON diagnostics identify paths and distinct limits without values or getter execution', () => {
+  const bad = {files:[null, null, {testEvidence:undefined}], secret:'DO_NOT_PRINT'}
+  assert.throws(() => boundedJson(bad, lim), {message:'value.files[2].testEvidence: undefined is not JSON-compatible.'})
+  const fields = [
+    [NaN, 'non-finite number'], [1n, 'bigint'], [()=>1, 'function'], [Symbol('DO_NOT_PRINT'), 'symbol'],
+  ]
+  for (const [value, reason] of fields) assert.throws(() => boundedJson({nested:{field:value}},lim), e =>
+    e.message.startsWith('value.nested.field: ' + reason) && !e.message.includes('DO_NOT_PRINT'))
+  let accessed=0
+  const getter={};Object.defineProperty(getter,'field',{enumerable:true,get(){accessed++;return 1}})
+  assert.throws(()=>boundedJson({nested:getter},lim), /value.nested.field: accessor/)
+  assert.throws(()=>boundedJson({nested:{toJSON(){accessed++;return 1}}},lim), /value.nested.toJSON: function/)
+  assert.equal(accessed,0)
+  assert.throws(()=>boundedJson({list:[1,,3]},lim), /value.list\[1\]: array hole/)
+  const cycle={};cycle.self=cycle
+  assert.throws(()=>boundedJson({nested:cycle},lim), /value.nested.self: circular reference/)
+  for (const [value,limits,code,path] of [
+    [{a:{b:1}}, {...lim,maxValueDepth:2}, 'maxValueDepth', 'value.a.b'],
+    [{a:1,b:2}, {...lim,maxValueNodes:2}, 'maxValueNodes', 'value.b'],
+    ['я'.repeat(3000), lim, 'maxMessageBytes', 'value'],
+  ]) assert.throws(()=>boundedJson(value,limits), e => e instanceof JsonLimitError && e.code===code && e.message.startsWith(path+':'))
 })
 
 test('writer rejects pending sends on stream error or close',async()=>{

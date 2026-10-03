@@ -144,10 +144,76 @@ test('real read canonical JSON above 64 KiB returns a compact summary', async()=
     assert.deepEqual(reduced.value.value,{chars:48*1500+47,lines:48})
     await writeFile(join(dir,'long-line.txt'),'x'.repeat(2500),'utf8')
     const lineTruncated=await f.execute(a,"return await ptc.readAllText({file_path:'long-line.txt'})")
-    assert.equal(lineTruncated.value.status,'runtime-error')
-    assert.match(lineTruncated.value.error.message,/line truncated/)
+    assert.equal(lineTruncated.value.status,'ok',JSON.stringify(lineTruncated.value))
+    assert.equal(lineTruncated.value.value,'x'.repeat(2500))
     await f.adapter.dispose()
   } finally { await rm(dir,{recursive:true,force:true}) }
+})
+
+test('full PTC reads survive display caps and long UTF-8 lines; denied reads never reach internal provider', async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'ptc-full-read-'))
+  try {
+    const long='кириллица😀'.repeat(70000) // Single line larger than one bridge frame.
+    const marker='... (line truncated to 2000 chars)'
+    const text=long+'\n'+Array.from({length:45},(_,i)=>'я'.repeat(1800)+i).join('\n')+'\n'+marker+'\n'
+    await writeFile(join(dir,'large.txt'),text,'utf8')
+    const f=fixture(dir,{real:true}),{a,events}=f.agent('full-read')
+    a.ctx.tools.restrict(postmanBridgeRestrictionForAgent(a));f.adapter.refresh(a)
+    const ordinary=await f.execute(a,"const r=await tools.read({file_path:'large.txt'});return {line:r.lines[0].text,lines:r.lines.length}")
+    assert.equal(ordinary.value.status,'ok');assert.match(ordinary.value.value.line,/line truncated/)
+    let streamed=0
+    const stream=f.ctx.fs.streamText.bind(f.ctx.fs)
+    f.ctx.fs.streamText=async (...args)=>{streamed++;return stream(...args)}
+    const result=await f.execute(a,"const text=await ptc.readAllText({file_path:'large.txt',page_limit:2000});let checksum=0;for(let i=0;i<text.length;i++)checksum=(checksum*31+text.charCodeAt(i))>>>0;return {checksum,chars:text.length,bytes:ptc.utf8Bytes(text),lines:text.split('\\n').length,last:text.split('\\n').at(-1)}")
+    assert.equal(result.value.status,'ok',JSON.stringify(result.value))
+    const expected=text.slice(0,-1)
+    let checksum=0;for(let i=0;i<expected.length;i++)checksum=(checksum*31+expected.charCodeAt(i))>>>0
+    assert.deepEqual(result.value.value,{checksum,chars:expected.length,bytes:Buffer.byteLength(expected),lines:47,last:marker})
+    assert.ok(result.value.effects.completed>1) // First page is shorter than requested, including a partial line.
+    assert.equal(streamed,result.value.effects.completed)
+    assert.ok(events.filter(x=>x.type==='tool/code-dispatch').every(x=>JSON.stringify(x.data.content).length<60000))
+    assert.ok(events.some(x=>x.type==='tool/code-dispatch'&&JSON.stringify(x.data.content).includes('line truncated')))
+    const limit=await f.execute(a,"return await ptc.readAllText({file_path:'large.txt',max_bytes:100})")
+    assert.equal(limit.value.status,'runtime-error');assert.match(limit.value.error.message,/max_bytes.*incomplete/)
+    const before=streamed
+    const stop=f.ctx.tools.guard(exec=>exec.name==='read'?'FULL_READ_DENIED':undefined)
+    const denied=await f.execute(a,"return await ptc.readAllText({file_path:'large.txt'})")
+    assert.equal(denied.value.status,'runtime-error');assert.match(denied.value.error.message,/FULL_READ_DENIED/)
+    assert.equal(denied.value.effects.failed,1);assert.equal(streamed,before)
+    stop()
+    const stopPost=f.ctx.on('tools/post-execute',async(exec,_result,next)=>exec.name==='read'?{kind:'block',feedback:[{type:'text',text:'POST_READ_DENIED'}]}:next())
+    const post=await f.execute(a,"return await ptc.readAllText({file_path:'large.txt'})")
+    assert.equal(post.value.status,'runtime-error');assert.match(post.value.error.message,/POST_READ_DENIED/)
+    stopPost()
+    const replace=f.ctx.on('tools/post-execute',async(exec,result,next)=>exec.name==='read'?
+      {kind:'accept',value:{...result.value,lines:[]}}:next())
+    const replaced=await f.execute(a,"return await ptc.readAllText({file_path:'large.txt'})")
+    assert.equal(replaced.value.status,'runtime-error');assert.match(replaced.value.error.message,/replaced.*incomplete/)
+    replace()
+    for (const [source,expected] of [['я\r\n😀\r\n','я\n😀'],['one\n\n','one\n'],['','']]) {
+      await writeFile(join(dir,'edge.txt'),source,'utf8')
+      const edge=await f.execute(a,'return await ptc.readAllText('+JSON.stringify({file_path:'edge.txt',page_limit:1,max_bytes:Math.max(1,Buffer.byteLength(expected)),max_chars:Math.max(1,expected.length)})+')')
+      assert.equal(edge.value.status,'ok',JSON.stringify(edge.value));assert.equal(edge.value.value,expected)
+    }
+    await f.adapter.dispose()
+  } finally {await rm(dir,{recursive:true,force:true})}
+})
+
+test('outer PTC keeps JSON helper/final diagnostics and completed tool effects', async()=>{
+  const f=fixture(process.cwd()),{a}=f.agent('json-boundary')
+  a.ctx.tools.restrict(postmanBridgeRestrictionForAgent(a));f.adapter.refresh(a)
+  const bad="{files:[null,null,{testEvidence:undefined}],secret:'DO_NOT_PRINT'}"
+  for (const [tail,status,code] of [['return '+bad,'invalid-output','invalid-output'],['return ptc.jsonBytes('+bad+')','runtime-error','runtime']]) {
+    const result=await f.execute(a,'await tools.read({}); '+tail)
+    assert.equal(result.isError,false);assert.equal(result.value.status,status)
+    assert.equal(result.value.error.code,code)
+    assert.equal(result.value.error.message,'value.files[2].testEvidence: undefined is not JSON-compatible.')
+    assert.equal(result.value.effects.completed,1);assert.equal(result.value.effects.pending,0)
+    assert.match(result.content[0].text,/value.files\[2\].testEvidence/)
+    assert.doesNotMatch(result.content[0].text,/DO_NOT_PRINT/)
+  }
+  assert.equal(f.traces.filter(x=>x[0]==='pre'&&x[1]==='read').length,2)
+  await f.adapter.dispose()
 })
 
 test('helper exposure follows ordinary visibility and no hidden grants', async()=>{

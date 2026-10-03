@@ -1,4 +1,5 @@
 import { POSTMAN_PTC_SUCCESS_STATUSES } from './postman-bridge-core.js'
+import { createJsonCodec } from 'dsh-ptc/json'
 
 const DEFAULT_READ_ALL_MAX_BYTES = 4 * 1024 * 1024
 // Leave room for the program's surrounding final JSON below the 512 KiB ceiling.
@@ -33,51 +34,9 @@ const COMMON_HELPERS = String.raw`
   }
   api.utf8Bytes = function utf8Bytes(value) {
     if (typeof value !== 'string') throw new TypeError('ptc.utf8Bytes requires a string')
-    let bytes = 0
-    for (let i = 0; i < value.length; i++) {
-      const code = value.charCodeAt(i)
-      if (code < 0x80) bytes++
-      else if (code < 0x800) bytes += 2
-      else if (code >= 0xd800 && code <= 0xdbff && i + 1 < value.length &&
-          value.charCodeAt(i + 1) >= 0xdc00 && value.charCodeAt(i + 1) <= 0xdfff) { bytes += 4; i++ }
-      else bytes += 3
-    }
-    return bytes
+    return jsonCodec.utf8Bytes(value)
   }
-  api.jsonBytes = function jsonBytes(value) {
-    // Match the existing JSON boundary rather than silently dropping array
-    // fields, invoking getters/toJSON or retaining exotic mapper objects.
-    let nodes = 0
-    const seen = new Set()
-    function check(item, depth) {
-      if (++nodes > 10000 || depth > 32) throw new TypeError('ptc.jsonBytes JSON depth or node limit exceeded')
-      if (item === null || ['string', 'boolean'].includes(typeof item) ||
-          (typeof item === 'number' && Number.isFinite(item))) return
-      if (!item || typeof item !== 'object' ||
-          !(Array.isArray(item) ? Object.getPrototypeOf(item) === Array.prototype : [Object.prototype, null].includes(Object.getPrototypeOf(item)))) {
-        throw new TypeError('ptc.jsonBytes requires JSON-compatible data')
-      }
-      if (seen.has(item)) throw new TypeError('ptc.jsonBytes circular JSON data')
-      seen.add(item)
-      const array = Array.isArray(item), keys = Reflect.ownKeys(item)
-      if (array && (Object.getPrototypeOf(item) !== Array.prototype || keys.length !== item.length + 1))
-        throw new TypeError('ptc.jsonBytes requires JSON-compatible arrays without holes or extra fields')
-      for (const key of keys) {
-        if (array && key === 'length') continue
-        const field = Object.getOwnPropertyDescriptor(item, key)
-        if (typeof key !== 'string' || ['__proto__', 'prototype', 'constructor'].includes(key) ||
-            !field || !Object.hasOwn(field, 'value') || !field.enumerable ||
-            (array && (!/^(0|[1-9][0-9]*)$/.test(key) || Number(key) >= item.length))) {
-          throw new TypeError('ptc.jsonBytes requires JSON-compatible own data fields')
-        }
-        check(field.value, depth + 1)
-      }
-      seen.delete(item)
-    }
-    check(value, 1)
-    const json = JSON.stringify(value)
-    return api.utf8Bytes(json)
-  }
+  api.jsonBytes = value => jsonCodec.encode(value, jsonLimits, Infinity).bytes
 `
 
 const READ_HELPERS = `
@@ -89,6 +48,31 @@ const READ_HELPERS = `
     const maxBytes = options.max_bytes === undefined ? ${DEFAULT_READ_ALL_MAX_BYTES} : positiveInteger(options.max_bytes, 'max_bytes')
     // Compatibility: the old character option is an additional bound, not a byte budget.
     const maxChars = options.max_chars === undefined ? Infinity : positiveInteger(options.max_chars, 'max_chars')
+    if (fullTextRead) {
+      const parts = []
+      let textOffset = 0, lineOffset = 1, totalChars, totalBytes, version
+      for (;;) {
+        const page = await tools.read({ file_path: filePath, offset: lineOffset, limit: pageLimit,
+          __ptc_text: { offset: textOffset, maxBytes } })
+        if (!page || typeof page.text !== 'string' || typeof page.eof !== 'boolean' || typeof page.version !== 'string' ||
+            !Number.isSafeInteger(page.totalChars) || page.totalChars < 0 ||
+            !Number.isSafeInteger(page.totalBytes) || page.totalBytes < 0 ||
+            !Number.isSafeInteger(page.nextLine) || page.nextLine < lineOffset ||
+            page.nextOffset !== textOffset + page.text.length || page.nextOffset > page.totalChars ||
+            (totalChars !== undefined && (totalChars !== page.totalChars || totalBytes !== page.totalBytes || version !== page.version)) ||
+            page.eof !== (page.nextOffset === page.totalChars))
+          throw new Error('ptc.readAllText received an invalid or changing full read result; text is incomplete')
+        if (!page.eof && !page.text.length) throw new Error('ptc.readAllText made no progress; text is incomplete')
+        if (page.totalBytes > maxBytes) throw new Error('ptc.readAllText max_bytes exceeded; text is incomplete')
+        parts.push(page.text)
+        totalChars = page.totalChars; totalBytes = page.totalBytes; version = page.version
+        textOffset = page.nextOffset; lineOffset = page.nextLine
+        if (page.eof) break
+      }
+      const text = parts.join('') // Host pages already preserve the line-text contract.
+      if (text.length > maxChars) throw new Error('ptc.readAllText max_chars exceeded; text is incomplete')
+      return text
+    }
     let offset = 1, bytes = 0, chars = 0, totalLines
     const parts = []
     for (;;) {
@@ -202,7 +186,7 @@ const GREP_HELPERS = `
   }
 `
 
-export function buildPtcHelperPrelude(toolNames) {
+export function buildPtcHelperPrelude(toolNames, jsonLimits = { maxValueDepth: 32, maxValueNodes: 10000 }, fullTextRead = false) {
   const names = new Set(toolNames)
   const successStatuses = Object.fromEntries(Object.entries(POSTMAN_PTC_SUCCESS_STATUSES).filter(([name]) => names.has(name)))
   const sections = ['const successStatuses = ' + JSON.stringify(successStatuses) + '; Object.values(successStatuses).forEach(Object.freeze); Object.freeze(successStatuses);', COMMON_HELPERS]
@@ -210,6 +194,9 @@ export function buildPtcHelperPrelude(toolNames) {
   if (names.has('grep')) sections.push(GREP_HELPERS)
   return `const ptc = (() => {
   const api = Object.create(null)
+  const jsonCodec = (${createJsonCodec.toString()})()
+  const jsonLimits = ${JSON.stringify(jsonLimits)}
+  const fullTextRead = ${fullTextRead}
 ${sections.join('\n')}
   return Object.freeze(api)
 })()

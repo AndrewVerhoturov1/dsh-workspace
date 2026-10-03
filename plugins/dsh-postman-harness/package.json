@@ -18,6 +18,7 @@
     "lib/ptc-adapter.js",
     "lib/ptc-discipline.js",
     "lib/ptc-helpers.js",
+    "lib/ptc-read.js",
     "lib/ptc-worktree-boundary.js",
     "lib/postman-bridge-launch-coordinator.js",
     "lib/postman-bridge-jobs.js",
