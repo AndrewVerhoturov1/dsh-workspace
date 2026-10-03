@@ -277,6 +277,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
         [job.bridgeJobId]: { ...op, synchronization: 'not-required' } } }
     })
     job.synchronization = 'not-required'
+    job.syncDiagnostic = null
   }
 
   async function synchronize(job, publication) {
@@ -285,8 +286,13 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     try {
       synchronized = await contexts.sync(leaderId, publication.taskPublicationCommit,
         publication.baseCommit, id => worker ? worker.pauseForOperation(id) : true)
-    } catch (error) { job.syncDiagnostic = diagnostic(error) }
-    if (!synchronized) { job.synchronization = 'busy'; return }
+    } catch { synchronized = { ok: false, diagnostic: { code: 'GIT_SYNC_FAILED' } } }
+    if (synchronized !== true) {
+      job.syncDiagnostic = synchronized?.diagnostic ?? { code: 'GIT_SYNC_FAILED' }
+      job.synchronization = 'busy'
+      return
+    }
+    job.syncDiagnostic = null
     // Grant registration is subordinate to verified publication and ZIP hash.
     await registerGrant(job)
     if (typeof contexts?.changeRecord === 'function') await contexts.changeRecord(leaderId, row => {
@@ -406,7 +412,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
           job.noPublicationAttempt = attempt
           try { await attempt } finally { if (job.noPublicationAttempt === attempt) job.noPublicationAttempt = null }
         }
-      }
+      } else job.syncDiagnostic = { code: 'PUBLICATION_PROOF_MISSING' }
     }
     const common = snapshot(job)
     if (job.state === 'QUEUED') return { status: 'POSTMAN_BRIDGE_QUEUED', ...common }

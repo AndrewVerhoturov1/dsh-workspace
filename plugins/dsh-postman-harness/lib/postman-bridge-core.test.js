@@ -385,7 +385,7 @@ test('package and composition expose bridge entrypoint and leader preset', () =>
   assert.match(bridgeSource, /POSTMAN_BRIDGE_CALLER_REJECTED/)
   assert.match(bridgeSource, /postmanBridgeCallerAllowed\(agent\)/)
   assert.match(bridgeSource, /createPostmanBridgeBoundaryManager/)
-  assert.match(bridgeSource, /inject = \['agents', 'subagents', 'tools', 'storageDomain', 'attachments'\]/)
+  assert.match(bridgeSource, /inject = \['agents', 'subagents', 'tools', 'storageDomain', 'attachments', 'fs'\]/)
   assert.match(bridgeSource, /agent-preset\/selected/)
   assert.match(bridgeSource, /ctx\.agents\.get\(sessionId\)/)
   assert.match(bridgeSource, /agent\/disposed/)

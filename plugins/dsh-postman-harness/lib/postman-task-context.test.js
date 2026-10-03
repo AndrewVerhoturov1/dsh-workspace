@@ -87,7 +87,7 @@ test('prepare is idempotent for its Leader but not shared with another Leader', 
   assert.notEqual(second.branch, first.branch)
   assert.notEqual(contexts.get('leader-B'), contexts.get('leader-A'))
   assert.equal(contexts.bindChild('unknown', 'child-B'), false)
-  assert.equal(await contexts.sync('unknown', published, base), false)
+  assert.equal((await contexts.sync('unknown', published, base)).diagnostic.code, 'TASK_CONTEXT_CHANGED')
   assert.equal(contexts.bindChild('leader-A', 'child-A'), true)
   assert.equal(contexts.bindChild('leader-B', 'child-A'), false)
   assert.equal(contexts.child('child-A')?.branch, first.branch)
@@ -136,20 +136,22 @@ test('sync accepts only clean exact remote publication with expected parent', as
 })
 
 test('sync refuses dirty worktree, foreign branch, remote mismatch, parent mismatch, and stale HEAD', async () => {
-  for (const mutation of [
-    s => { s.clean = false }, s => { s.branch = 'preview' },
-    s => { s.remote = other }, s => { s.parent = other }, s => { s.head = other },
+  for (const [mutation, code] of [
+    [s => { s.clean = false }, 'WORKTREE_DIRTY'], [s => { s.branch = 'preview' }, 'WORKTREE_IDENTITY_MISMATCH'],
+    [s => { s.remote = other }, 'PUBLICATION_NOT_REACHABLE'], [s => { s.parent = other }, 'PUBLICATION_COMMIT_INVALID'],
+    [s => { s.head = other }, 'FAST_FORWARD_BLOCKED'],
   ]) {
     const { contexts, state, calls } = fixture()
     assert.equal((await contexts.prepare(leader('A'))).status, 'TASK_CONTEXT_READY')
+    state.trees.push(worktree); state.remote = published
     mutation(state)
-    assert.equal(await contexts.sync('A', published, base), false)
+    assert.equal((await contexts.sync('A', published, base)).diagnostic.code, code)
     assert.equal(calls.some(call => call.args[0] === 'merge'), false)
   }
   const { contexts } = fixture()
   assert.equal((await contexts.prepare(leader('A'))).status, 'TASK_CONTEXT_READY')
-  assert.equal(await contexts.sync('A', 'invalid', base), false)
-  assert.equal(await contexts.sync('A', published, 'invalid'), false)
+  assert.equal((await contexts.sync('A', 'invalid', base)).diagnostic.code, 'PUBLICATION_COMMIT_INVALID')
+  assert.equal((await contexts.sync('A', published, 'invalid')).diagnostic.code, 'PUBLICATION_COMMIT_INVALID')
 })
 
 test('apply guard requires unchanged bound branch and exact published HEAD', async () => {
@@ -176,7 +178,6 @@ test('local restore preserves changes before reset and does not forge pending te
   const f = fixture({ localDevelopment: true, preserveChanges: async snapshot => { calls.push(snapshot); return 'private-recovery' } })
   await f.contexts.prepare(leader('A')); f.state.trees.push(worktree); f.state.clean = false
   await f.registry.change('A', row => ({ ...row, runner: { state: 'failed', requestId: 'REQ' }, bridgeOperations: { job: { state: 'received', synchronization: 'pending' } } }))
-  assert.equal(f.contexts.reserveRestore('A'), true)
   const restored = await f.contexts.restore(leader('A'))
   assert.equal(restored.status, 'TASK_CONTEXT_RESTORED', JSON.stringify(restored))
   assert.equal(restored.recoveryPath, 'private-recovery')
@@ -451,5 +452,38 @@ test('Worker bindings alone do not block sync but dirty restore still refuses un
   assert.equal((await f.contexts.restore(leader('A'))).status, 'POSTMAN_TASK_RESTORE_REJECTED')
   assert.equal(f.state.clean, false)
   assert.equal(f.calls.some(call => ['reset', 'clean'].includes(call.args[0])), false)
+})
+
+
+test('sync explains admission, Worker activity and Git rejection without leaking error', async () => {
+  const f = fixture()
+  await f.contexts.prepare(leader('A')); f.state.trees.push(worktree); f.state.remote = published
+  assert.equal((await f.contexts.sync('A', published, base, async () => false)).diagnostic.code, 'WORKER_ACTIVE')
+  assert.equal(f.contexts.beginWorkerAdmission('A'), true)
+  assert.equal((await f.contexts.sync('A', published, base)).diagnostic.code, 'WORKER_ADMISSION_ACTIVE')
+  f.contexts.endWorkerAdmission('A')
+  assert.equal(f.contexts.reserveRestore('A'), true)
+  assert.equal((await f.contexts.sync('A', published, base)).diagnostic.code, 'SYNC_ADMISSION_BUSY')
+  f.contexts.releaseRestore('A')
+  assert.deepEqual(await f.contexts.sync('A', published, base, async () => { throw Error('auth secret C:/private') }),
+    { ok: false, diagnostic: { code: 'GIT_SYNC_FAILED' } })
+  assert.equal(f.calls.some(c => c.args[0] === 'merge'), false)
+})
+
+test('restore early rejection explains applicability and reservation, without Git', async () => {
+  const f = fixture()
+  assert.deepEqual(await f.contexts.restore(leader('A')), { status: 'POSTMAN_TASK_RESTORE_REJECTED', diagnostic: { code: 'TASK_CONTEXT_REQUIRED' } })
+  await f.contexts.prepare(leader('A'))
+  const before = f.calls.length
+  assert.equal((await f.contexts.restore(leader('A'))).diagnostic.code, 'RUNNER_NOT_FAILED')
+  await f.registry.change('A', row => ({ ...row, bridgeOperations: { failure: { state: 'received', synchronization: 'busy', terminal: { status: 'POSTMAN_TRANSPORT_FAILED' } } } }))
+  assert.equal((await f.contexts.restore(leader('A'))).diagnostic.code, 'RUNNER_NOT_FAILED', 'Bridge failure cannot authorize runner restore')
+  await f.registry.change('A', row => ({ ...row, bridgeOperations: {}, runner: { state: 'failed', requestId: null } }))
+  assert.equal(f.contexts.reserveRestore('A'), true)
+  assert.equal((await f.contexts.restore(leader('A'))).diagnostic.code, 'RESTORE_RESERVATION_UNAVAILABLE')
+  f.contexts.releaseRestore('A')
+  await f.registry.change('A', row => ({ ...row, leaderSessionId: 'other' }))
+  assert.equal((await f.contexts.restore(leader('A'))).diagnostic.code, 'LEADER_CONTEXT_MISMATCH')
+  assert.equal(f.calls.length, before)
 })
 
