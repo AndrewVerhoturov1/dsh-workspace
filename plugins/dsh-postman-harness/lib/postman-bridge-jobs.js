@@ -233,7 +233,8 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
   // Missing publicationReceipt alone is never proof that nothing was published.
   function noPublicationProven(terminal) {
     const result = terminal?.result
-    return terminal.status === 'POSTMAN_BRIDGE_TERMINAL' && terminal.terminalStatus === 'FAILED' &&
+    return terminal.status === 'POSTMAN_BRIDGE_TERMINAL' &&
+      ['FAILED', 'COMPLETED'].includes(terminal.terminalStatus) &&
       result?.ok === false && result.code === 'POSTMAN_TRANSPORT_FAILED' &&
       result.publicationReceipt === undefined && result.requestId === terminal.requestId &&
       typeof result.transportMessage === 'string' && result.transportMessage.length > 0 &&
