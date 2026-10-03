@@ -4,11 +4,31 @@ from __future__ import annotations
 from contextlib import contextmanager
 from pathlib import Path
 import sys
+import shutil
+import tempfile
+import uuid
 
 DIRECT_DIR = Path(__file__).resolve().parents[1] / "direct"
 if str(DIRECT_DIR) not in sys.path:
     sys.path.insert(0, str(DIRECT_DIR))
 import process_lock
+
+
+@contextmanager
+def temporary_artifacts_dir():
+    if sys.platform != "win32":
+        with tempfile.TemporaryDirectory(prefix="postman-cdp-") as name:
+            yield name
+        return
+    # Python 3.13+ mkdir(0o700) replaces Windows ACLs with owner/admin/system.
+    # An elevated creator may be owned by Administrators, excluding normal Chrome.
+    # Keep the user TEMP directory's inherited ACL instead; never grant Everyone.
+    path = Path(tempfile.gettempdir()) / f"postman-cdp-{uuid.uuid4().hex}"
+    path.mkdir(mode=0o777)
+    try:
+        yield str(path)
+    finally:
+        shutil.rmtree(path)
 
 
 @contextmanager

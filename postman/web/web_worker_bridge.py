@@ -431,7 +431,7 @@ class WebWorkerBridge:
         cleanup: dict[str, Any] = {}
         try:
             with ExitStack() as stack:
-                artifacts_dir = stack.enter_context(tempfile.TemporaryDirectory(prefix="postman-cdp-"))
+                artifacts_dir = stack.enter_context(cdp_download.temporary_artifacts_dir())
                 playwright = stack.enter_context(cdp_download.locked_playwright(factory))
                 normalized = browser_bootstrap.normalize_cdp_url(cdp_url)
                 browser = cdp_download.connect_over_cdp(playwright, normalized, artifacts_dir=artifacts_dir)

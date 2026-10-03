@@ -7,7 +7,6 @@ import cdp_download
 
 import argparse
 import json
-import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -60,7 +59,7 @@ def run_submit_observe_detect_download(
     }
 
     try:
-        with tempfile.TemporaryDirectory(prefix="postman-cdp-") as artifacts_dir, cdp_download.locked_playwright(factory) as playwright:
+        with cdp_download.temporary_artifacts_dir() as artifacts_dir, cdp_download.locked_playwright(factory) as playwright:
             context = None
             page = None
             owns_context = False
