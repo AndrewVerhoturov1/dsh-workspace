@@ -394,7 +394,7 @@ test('package and composition expose bridge entrypoint and leader preset', () =>
   assert.match(agents, /postman-leader/)
 
   const leaderSkill = readFileSync(join(repoRoot, '.agents', 'skills', 'postman-leader', 'SKILL.md'), 'utf8')
-  assert.match(leaderSkill, /POSTMAN_LEADER_SKILL_VERSION: 23/)
+  assert.match(leaderSkill, /POSTMAN_LEADER_SKILL_VERSION: 24/)
   assert.match(leaderSkill, /существующий mapping не запрещает \x60createNew:true\x60/)
   assert.match(leaderSkill, /может остановить выбранного Worker в любой момент/)
   for (const forbidden of ['повторный \x60postman_worker()\x60 при существующем mapping',
