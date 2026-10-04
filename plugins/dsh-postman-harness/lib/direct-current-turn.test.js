@@ -63,6 +63,30 @@ test('Direct job forwards only descriptor JSON and keeps text intent separate', 
   assert.equal(cleaned, true)
 })
 
+test('allocated REQ awaits durable callback before spawn and refuses failed storage', async () => {
+  const manager = new DirectPostmanJobManager({ exists: () => true,
+    spawn() { assert.fail('storage refusal must prevent Direct spawn') } })
+  let requestId
+  await assert.rejects(manager.start({ sessionId: 'refused', workspace: '/repo', branch: 'main',
+    payload: 'intent', transportKind: 'text', async onRequestAllocated(id) {
+      requestId = id
+      throw Error('durable storage refused')
+    } }), /durable storage refused/)
+  assert.match(requestId, /^REQ_\d{8}T\d{6}Z_\d{4}$/)
+  assert.equal(manager.latest('refused'), undefined)
+  let persisted = false
+  const successful = new DirectPostmanJobManager({ exists: () => true,
+    spawn() { assert.equal(persisted, true); const child = fakeChild(); queueMicrotask(() => child.emit('spawn')); return child } })
+  const started = await successful.start({ sessionId: 'allowed', workspace: '/repo', branch: 'main',
+    payload: 'intent', transportKind: 'text', async onRequestAllocated(id) {
+      assert.match(id, /^REQ_\d{8}T\d{6}Z_\d{4}$/)
+      await Promise.resolve()
+      persisted = true
+    } })
+  assert.equal(started.requestId, successful.latest('allowed').requestId)
+  successful.latest('allowed').child.emit('close', 1)
+})
+
 test('Host bundle rejection occurs before spawn and remains correlated proven-unsent status', async () => {
   const manager = new DirectPostmanJobManager({ exists: () => true,
     spawn() { assert.fail('must not spawn') } })

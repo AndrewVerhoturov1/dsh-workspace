@@ -481,7 +481,7 @@ export class DirectPostmanJobManager {
     return this.jobs.get(sessionId)
   }
 
-  async start({ sessionId, workspace, payload, inputFiles = [], inputBinding, chatRequestId, automaticContinuation = false, transportKind = 'artifact', proof, branch }) {
+  async start({ sessionId, workspace, payload, inputFiles = [], inputBinding, chatRequestId, automaticContinuation = false, transportKind = 'artifact', proof, branch, onRequestAllocated }) {
     const previous = this.jobs.get(sessionId)
     if (previous?.state === 'running' || previous?.state === 'starting') throw parseError('POSTMAN_CURRENT_TURN_JOB_ALREADY_RUNNING')
     if (typeof payload !== 'string' || payload.trim() === '') throw parseError('POSTMAN_EMPTY_PAYLOAD')
@@ -543,6 +543,7 @@ export class DirectPostmanJobManager {
       readPublicationState: this.readPublicationState,
       waiters: new Set(),
     }
+    if (onRequestAllocated) await onRequestAllocated(requestId) // Durable Bridge correlation precedes any Direct side effect.
     this.jobs.set(sessionId, job)
 
     if (inputFiles.length) {
@@ -734,6 +735,83 @@ export class DirectPostmanJobManager {
     return { status: 'EXACT_REPLY_MATCH', requestId }
   }
 
+  // Read-only Direct checkpoint: absence, corruption or publication ambiguity never proves a safe outcome.
+  inspectRequest(requestId, branch, transportKind) {
+    if (!REQ_PATTERN.test(requestId ?? '')) return { state: 'unknown' }
+    const root = this.directRoot ?? (process.env.LOCALAPPDATA
+      ? join(process.env.LOCALAPPDATA, 'DSH', 'Postman', 'direct')
+      : join(homedir(), '.dsh', 'postman', 'direct'))
+    try {
+      const state = JSON.parse(this.readPublicationState(join(root, 'requests', requestId + '.json'), 'utf8'))
+      if (state?.requestId !== requestId || state.repository !== 'AndrewVerhoturov1/dsh-workspace' ||
+          state.branch !== branch) return { state: 'unknown' }
+      const publication = { requestId: state.requestId, repository: state.repository, branch: state.branch,
+        taskUrl: state.taskUrl, baseCommit: state.baseCommit, taskPublicationCommit: state.taskPublicationCommit }
+      if (validPublicationReceipt(publication, { requestId, branch })) {
+        { // A durable handoff can precede its final state checkpoint after a crash.
+          const stateTerminal = ['RESULT_DURABLE', 'IMAGE_RESULT_DURABLE', 'TEXT_RESULT_DURABLE',
+            'ASSISTANT_COMPLETED_NO_ARTIFACT', 'ARTIFACT_REJECTED', 'FAILED', 'ASK_FAILED'].includes(state.state)
+          try {
+            const handoff = JSON.parse(this.readPublicationState(join(root, 'results', requestId + '.json'), 'utf8'))
+            if (handoff.ok === false && handoff.code === 'POSTMAN_TRANSPORT_FAILED' &&
+                (!stateTerminal || ['FAILED', 'ASK_FAILED'].includes(state.state)) && handoff.requestId === requestId &&
+                handoff.publicationReceipt?.requestId === requestId &&
+                handoff.publicationReceipt.repository === publication.repository &&
+                handoff.publicationReceipt.branch === branch &&
+                handoff.publicationReceipt.taskPublicationCommit === publication.taskPublicationCommit &&
+                handoff.publicationReceipt.baseCommit === publication.baseCommit &&
+                handoff.publicationReceipt.taskUrl === publication.taskUrl &&
+                typeof handoff.transportMessage === 'string' && handoff.transportMessage.length &&
+                typeof handoff.transportCode === 'string' && handoff.transportCode.length)
+              return { state: 'terminal', terminal: { status: 'POSTMAN_BRIDGE_TERMINAL',
+                terminalStatus: 'FAILED', requestId, transportKind, result: handoff }, publication }
+            if (handoff.ok === true && handoff.state === handoff.code &&
+                (!stateTerminal || state.state === handoff.code) &&
+                handoff.requestId === requestId && handoff.repository === publication.repository &&
+                handoff.branch === branch && handoff.baseCommit === publication.baseCommit &&
+                handoff.taskPublicationCommit === publication.taskPublicationCommit &&
+                handoff.taskUrl === publication.taskUrl &&
+                ((transportKind === 'text' && handoff.code === 'TEXT_RESULT_DURABLE' &&
+                  (handoff.deliveryMode === 'inline' ? typeof handoff.assistantText === 'string' &&
+                    handoff.assistantText.trim() && sha256(handoff.assistantText) === handoff.assistantTextSha256 &&
+                    (!stateTerminal || handoff.assistantText === state.assistantText && handoff.assistantTextSha256 === state.assistantTextSha256) && handoff.resultFile === undefined :
+                    handoff.deliveryMode === 'file' && handoff.assistantText === undefined &&
+                    handoff.resultFileName === 'POSTMAN_' + requestId + '_ANSWER.md' &&
+                    isAbsolute(handoff.resultFile ?? '') && basename(handoff.resultFile) === handoff.resultFileName &&
+                    handoff.resultFileSha256 === handoff.assistantTextSha256 &&
+                    (!stateTerminal || handoff.assistantTextSha256 === state.assistantTextSha256 &&
+                    handoff.resultFile === state.resultFile) && handoff.resultMimeType === 'text/markdown' &&
+                    handoff.resultEncoding === 'utf-8' &&
+                    sha256Bytes(readFileSync(handoff.resultFile)) === handoff.assistantTextSha256)) ||
+                (transportKind === 'image' && handoff.code === 'IMAGE_RESULT_DURABLE' &&
+                  isAbsolute(handoff.resultImage ?? '') && (!stateTerminal || handoff.resultImage === state.resultImage &&
+                  handoff.imageSha256 === state.imageSha256) &&
+                  sha256Bytes(readFileSync(handoff.resultImage)) === handoff.imageSha256) ||
+                (transportKind === 'artifact' &&
+                  (handoff.code === 'RESULT_DURABLE' && (!stateTerminal || handoff.resultZip === state.resultZip &&
+                    handoff.sha256 === state.artifactSha256) && /^[0-9a-f]{64}$/.test(handoff.sha256 ?? '') &&
+                    handoff.expectedFilename === 'POSTMAN_' + requestId + '_RESULT.zip' &&
+                    typeof handoff.resultZip === 'string' && isAbsolute(handoff.resultZip) &&
+                    sha256Bytes(readFileSync(handoff.resultZip)) === handoff.sha256 ||
+                   ['ASSISTANT_COMPLETED_NO_ARTIFACT', 'ARTIFACT_REJECTED'].includes(handoff.code) &&
+                    typeof handoff.assistantText === 'string' &&
+                    sha256(handoff.assistantText) === handoff.assistantTextSha256 &&
+                    (!stateTerminal || handoff.assistantText === state.assistantText &&
+                    handoff.assistantTextSha256 === state.assistantTextSha256)))))
+              return { state: 'terminal', terminal: { status: 'POSTMAN_BRIDGE_TERMINAL',
+                terminalStatus: 'COMPLETED', requestId, transportKind, result: handoff }, publication }
+          } catch { /* Failed handoff validation is ambiguous, never success. */ }
+        }
+        return { state: 'published', publication }
+      }
+      if (state.publicationStarted === false && ['FAILED', 'ASK_FAILED'].includes(state.state) &&
+          !state.taskPublicationCommit && !state.taskUrl && !state.sendProof &&
+          state.unresolvedSendUnknown !== true)
+        return { state: 'proven-not-sent' }
+      return { state: 'unknown' }
+    } catch { return { state: 'unknown' } }
+  }
+
   async recoveryCapability(workspace, requestId) {
     const root = this.directRoot ?? (process.env.LOCALAPPDATA
       ? join(process.env.LOCALAPPDATA, 'DSH', 'Postman', 'direct')
@@ -744,7 +822,7 @@ export class DirectPostmanJobManager {
     return JSON.parse(stdout)
   }
 
-  async continueLast(sessionId, workspace, previous = this.jobs.get(sessionId)) {
+  async continueLast(sessionId, workspace, previous = this.jobs.get(sessionId), onRequestAllocated) {
     if (previous === undefined || previous.state !== 'completed' || previous.result === undefined) {
       throw parseError('POSTMAN_AUTOMATIC_CONTINUATION_NOT_ALLOWED')
     }
@@ -760,6 +838,7 @@ export class DirectPostmanJobManager {
       payload,
       chatRequestId: previous.requestId,
       automaticContinuation: true,
+      onRequestAllocated,
       transportKind: previous.transportKind ?? 'artifact',
       branch: previous.branch,
       proof: {
@@ -862,6 +941,7 @@ export function createDirectCurrentTurnToolConfigs(ctx, { store, jobs, taskConte
           transportKind: parsed.transportKind,
           branch: bridgeContext?.branch ?? STANDALONE_TASK_PUBLICATION_BRANCH,
           proof,
+          ...(bridgeContext ? { onRequestAllocated: requestId => taskContexts.recordBridgeRequest(agent.id, requestId) } : {}),
         })
       } catch (error) {
         turnStore.release(agent.id, record.seq)

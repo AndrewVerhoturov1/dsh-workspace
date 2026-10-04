@@ -157,28 +157,34 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
         // Every remote-only commit must be one exact, locally journaled REQ
         // publication. An ordinary fast-forward without receipts is not authority.
         const receipts = new Map()
+        const { DirectPostmanJobManager } = await import('./direct-current-turn.js')
+        const direct = new DirectPostmanJobManager()
         for (const op of Object.values(row.bridgeOperations ?? {})) {
-          if (op.state !== 'received' || !op.terminal ||
-              !['pending', 'busy', 'failed', 'synchronized'].includes(op.synchronization)) continue
-          const terminal = op.terminal
-          const result = terminal.result
+          const proof = op.requestId && ['artifact', 'text', 'image'].includes(op.transportKind)
+            ? direct.inspectRequest(op.requestId, row.branch, op.transportKind) : null
+          const terminal = op.state === 'received' && op.terminal &&
+            ['pending', 'busy', 'failed', 'synchronized'].includes(op.synchronization) ? op.terminal
+            : proof?.state === 'terminal' ? proof.terminal : null
+          const result = terminal?.result
           const publication = result?.ok === true ? result :
-            result?.ok === false && result.code === 'POSTMAN_TRANSPORT_FAILED' ? result.publicationReceipt : null
+            result?.ok === false && result.code === 'POSTMAN_TRANSPORT_FAILED' ? result.publicationReceipt
+              : proof?.state === 'published' ? proof.publication : null
           if (!publication) continue
           const { taskPublicationCommit: commit, baseCommit: parent } = publication
           if (!SHA.test(commit ?? '') || !SHA.test(parent ?? '') ||
-              terminal.status !== 'POSTMAN_BRIDGE_TERMINAL' ||
+              (terminal && terminal.status !== 'POSTMAN_BRIDGE_TERMINAL') ||
+              (!terminal && proof?.state !== 'published') ||
               (result?.ok === true && !['RESULT_DURABLE', 'TEXT_RESULT_DURABLE', 'IMAGE_RESULT_DURABLE',
                 'ASSISTANT_COMPLETED_NO_ARTIFACT', 'ARTIFACT_REJECTED'].includes(result.code)) ||
-              !['text', 'artifact', 'image'].includes(terminal.transportKind) ||
-              typeof terminal.requestId !== 'string' || !terminal.requestId ||
-              (result.requestId !== undefined && result.requestId !== terminal.requestId) ||
-              (publication.requestId !== undefined && publication.requestId !== terminal.requestId) ||
+              !['text', 'artifact', 'image'].includes(terminal?.transportKind ?? op.transportKind) ||
+              typeof (terminal?.requestId ?? op.requestId) !== 'string' || !((terminal?.requestId ?? op.requestId)) ||
+              (result?.requestId !== undefined && result.requestId !== (terminal?.requestId ?? op.requestId)) ||
+              (publication.requestId !== undefined && publication.requestId !== (terminal?.requestId ?? op.requestId)) ||
               typeof publication.repository !== 'string' || publication.repository.toLowerCase() !== REPOSITORY ||
-              (result.ok === false ? publication.branch !== row.branch :
+              (result?.ok === false ? publication.branch !== row.branch :
                 publication.branch !== undefined && publication.branch !== row.branch) ||
               publication.taskUrl !==
-                'https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/' + commit + '/' + terminal.requestId + '.md' ||
+                'https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/' + commit + '/' + (terminal?.requestId ?? op.requestId) + '.md' ||
               receipts.has(commit)) throw new Error('task branch history uncertain')
           receipts.set(commit, parent)
         }
@@ -452,16 +458,31 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
     return true
   }
   function releaseRestore(leaderId) { pending.delete(leaderId) }
-  function bindChild(leaderId, childId) {
+  function bindChild(leaderId, childId, bridgeJobId) {
     const context = get(leaderId)
     if (!context || children.has(childId)) return false
-    children.set(childId, context)
+    children.set(childId, { context, bridgeJobId })
     return true
   }
-  function child(childId) { return children.get(childId) ?? null }
+  function child(childId) { return children.get(childId)?.context ?? null }
+  async function recordBridgeRequest(childId, requestId) {
+    const binding = children.get(childId)
+    if (!binding?.context || !get(binding.context.leaderSessionId) ||
+        get(binding.context.leaderSessionId) !== binding.context ||
+        typeof requestId !== 'string' || !/^REQ_\d{8}T\d{6}Z_\d{4}$/.test(requestId))
+      throw new Error('POSTMAN_BRIDGE_REQUEST_BINDING_MISSING')
+    if (!binding.bridgeJobId) return // Standalone/unit child has no Bridge journal to correlate.
+    await registry.change(binding.context.leaderSessionId, row => {
+      const op = row.bridgeOperations?.[binding.bridgeJobId]
+      if (!op || op.childSessionId !== childId || !['pending', 'unknown'].includes(op.state) ||
+          op.requestId && op.requestId !== requestId) throw new Error('POSTMAN_BRIDGE_REQUEST_BINDING_CHANGED')
+      return { ...row, bridgeOperations: { ...row.bridgeOperations, [binding.bridgeJobId]:
+        { ...op, requestId, phase: 'request-known' } } }
+    })
+  }
   function releaseChild(childId) { children.delete(childId) }
   function dispose() { contexts.clear(); children.clear(); pending.clear(); activeOperations.clear(); syncOperations.clear(); syncQueues.clear(); workerAdmissions.clear(); contextListeners.clear() }
-  return { prepare, recover, restore, sync, beginSync, endSync, verifyWorktree, get, record, changeRecord, onContextChange, isRestoring, hasActiveOperation, hasSyncOperation, beginWorkerAdmission, endWorkerAdmission, beginOperation, startRunner, endOperation, reserveRestore, releaseRestore, bindChild, child, releaseChild, dispose }
+  return { prepare, recover, restore, sync, beginSync, endSync, verifyWorktree, get, record, changeRecord, onContextChange, isRestoring, hasActiveOperation, hasSyncOperation, beginWorkerAdmission, endWorkerAdmission, beginOperation, startRunner, endOperation, reserveRestore, releaseRestore, bindChild, child, recordBridgeRequest, releaseChild, dispose }
 }
 
 // Both entrypoints use one facade. Initialization is awaited before Git/child actions;

@@ -27,7 +27,7 @@ index bd9741e..d7bcddd 100644
  				const activation = this.activations.get(childId);
  				if (activation === void 0) return this.coldResume(parent, childId, content, options);
  				/* v8 ignore next 3 -- the send-versus-dispose cutoff: reaching this arm needs a
-@@ -1064,6 +1066,43 @@ var SubagentContinuationManager = class {
+@@ -1064,6 +1066,74 @@ var SubagentContinuationManager = class {
  		for (const activation of targets) this.dispose(activation).catch(() => void 0);
  		await this.disposeRoots(targets, "selected activation(s)");
  	}
@@ -65,13 +65,44 @@ index bd9741e..d7bcddd 100644
 +			const inbox = new Inbox({ header: saved.meta, events: saved.events }, { inserted() {}, discarded() {}, claimed() {} });
 +			if (!saved.events.some((event) => event.type === "subagent/closed") || inbox.hasPending)
 +				throw new SubagentError("child closure was not durably drained", "CHILD_CLOSURE_UNCERTAIN");
++			this.closedChildren.delete(childId); // Cold resume now checks the durable marker.
 +			return true;
++		});
++	}
++	/** Compact exact resident idle child under the followup/close admission lock. */
++	async compactChild(parent, childId, check, signal) {
++		if (this.ctx.agents.get(parent.id) !== parent) throw new SubagentError("child compaction requires the exact live parent", "UNAUTHORIZED");
++		return this.locks.run(childId, async () => {
++			const activation = this.activations.get(childId);
++			const agent = activation?.handle?.agent;
++			if (!activation || activation.parentSession !== parent.id || !activation.ancestry.has(parent) ||
++				this.ctx.agents.get(childId) !== agent || agent?.status !== "idle" ||
++				agent.inbox?.hasPending !== false || this.closedChildren.has(childId) ||
++				agent.session.events.some((event) => event.type === "subagent/closed") ||
++				!await check(agent)) return false;
++			return { result: await agent.ctx.get("compaction").compactNow(agent, signal) };
++		});
++	}
++	async inspectClosedChild(parent, childId) {
++		if (this.ctx.agents.get(parent.id) !== parent) throw new SubagentError("closed child inspection requires the exact live parent", "UNAUTHORIZED");
++		return this.locks.run(childId, async () => {
++			const saved = await this.requirePersistence().inspect(childId);
++			this.authorizeLineage(parent, childId, saved.meta.parentSession);
++			if (saved.meta.id !== childId || saved.meta.origin !== "subagent" || saved.meta.delegationDepth !== 1 ||
++				!Number.isSafeInteger(saved.meta.seedLength ?? 0) || (saved.meta.seedLength ?? 0) < 0 ||
++				(saved.meta.seedLength ?? 0) > saved.events.length ||
++				foldSubagentDescriptor(saved.events.slice(saved.meta.seedLength ?? 0))?.mode !== "continuable" ||
++				!saved.events.slice(saved.meta.seedLength ?? 0).some((event) => event.type === "subagent/closed")) return false;
++			const inbox = new Inbox({ header: saved.meta, events: saved.events }, { inserted() {}, discarded() {}, claimed() {} });
++			const proven = !inbox.hasPending && !this.activations.has(childId) && !this.ctx.agents.get(childId);
++			if (proven) this.closedChildren.delete(childId);
++			return proven;
 +		});
 +	}
  	/** Dispose independent roots and report every branch failure after all settle. */
  	async disposeRoots(roots, failureSubject) {
  		const reasons = (await Promise.all(roots.map(async (activation) => {
-@@ -1153,6 +1192,7 @@ var SubagentContinuationManager = class {
+@@ -1153,6 +1227,7 @@ var SubagentContinuationManager = class {
  		options.signal.throwIfAborted();
  		this.assertAdmitting(parent);
  		this.authorizeLineage(parent, childId, loaded.meta.parentSession);
@@ -79,13 +110,21 @@ index bd9741e..d7bcddd 100644
  		const descriptor = foldSubagentDescriptor(loaded.events.slice(loaded.meta.seedLength ?? 0));
  		if (descriptor === void 0 || descriptor.mode !== "continuable") throw new SubagentError(`subagent "${childId}" has no supported continuation state and cannot be resumed; do not retry send_message with this id`, "NOT_RESUMABLE");
  		let activation;
-@@ -2511,6 +2551,10 @@ var SubagentRuntime = class extends Service {
+@@ -2511,6 +2586,18 @@ var SubagentRuntime = class extends Service {
  		if (manager === void 0) return;
  		await manager.drainChildren(parent, childIds);
  	}
 +	/** Atomically close one exact child admission and durably discard its queued work. */
 +	async closeContinuableChild(parent, childId, check) {
 +		return this.requireContinuations().closeChild(parent, childId, check);
++	}
++	/** Read-only durable closed-child proof without resuming the child. */
++	async inspectClosedContinuableChild(parent, childId) {
++		return this.requireContinuations().inspectClosedChild(parent, childId);
++	}
++	/** Serialize exact live idle child compaction with followup and closure. */
++	async compactContinuableChild(parent, childId, check, signal) {
++		return this.requireContinuations().compactChild(parent, childId, check, signal);
 +	}
  	/**
  	* Enumerate the parent's direct session-backed subagents without loading or

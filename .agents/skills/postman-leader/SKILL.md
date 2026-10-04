@@ -9,7 +9,7 @@ description: >-
 
 # Postman Leader
 
-`POSTMAN_LEADER_SKILL_VERSION: 24`
+`POSTMAN_LEADER_SKILL_VERSION: 25`
 
 > **Правило Worker:** у одного Leader может быть до трёх независимых continuable Luna Worker плюс один Sol Worker с отдельным лимитом. `postman_worker({task, createNew: true, label?})` создаёт нового; четвёртый возвращает `POSTMAN_WORKER_LIMIT_REACHED` до запуска. `postman_worker_list()` показывает точные `workerSessionId`, label, `workerType` (`luna` / `sol`), модель и состояние привязки, но не доказывает idle/completion. Задание или новый trusted artifact REQ направляй точному Worker через `postman_worker({task, workerSessionId, artifactRequestId?})`, обычное продолжение — через `postman_worker_interrupt({workerSessionId, task})`, закрытие — `postman_worker_stop({workerSessionId})`. Без ID task-вызов выбирает единственную привязку своего типа; interrupt/stop требуют единственной общей привязки. При неоднозначности Host возвращает `POSTMAN_WORKER_TARGET_REQUIRED`. Все Worker делят одну task branch/worktree: не поручай перекрывающиеся записи, а sync, restore и package runner выполняй только при гарантированной безопасности общей ветки.
 
@@ -150,7 +150,7 @@ Bridge Luna занимается только ChatGPT Web transport через D
 
 Если доступен наш `ptc_execute`, канонический обязательный протокол v2 — автоматически внедрённый runtime текст из [ptc-discipline.js](../../../plugins/dsh-postman-harness/lib/ptc-discipline.js). Program-First обязателен: один PTC доходит до следующей реальной decision boundary; переход между заранее детерминированными операциями не создаёт новый model round. Правила routing и approval самого Leader не меняются. Справочные примеры: [PTC_PATTERNS.md](PTC_PATTERNS.md). Протокол не относится к native Harness PTC/Code Mode.
 
-Top-level Leader получает positive allowlist ровно из 21 зарегистрированного инструмента:
+Top-level Leader получает positive allowlist ровно из 24 зарегистрированных инструментов:
 
 ```text
 ask_user_question
@@ -169,11 +169,14 @@ postman_task_restore
 postman_input_files
 postman_bridge
 postman_bridge_status
+postman_bridge_list
 postman_worker
+postman_sol_worker
 postman_worker_interrupt
 postman_worker_stop
 postman_yield
 postman_worker_list
+postman_worker_compact
 ```
 
 `glob` и `web_search` Leader НЕ получает. Leader НЕ пытается обходить отсутствие инструмента другими средствами.
@@ -186,11 +189,14 @@ postman_task_restore
 postman_input_files
 postman_bridge
 postman_bridge_status
+postman_bridge_list
 postman_worker
+postman_sol_worker
 postman_worker_interrupt
 postman_worker_stop
 postman_yield
 postman_worker_list
+postman_worker_compact
 ```
 
 Worker сохраняет общий coding preset и обычные coding/research capabilities, включая `read`, `read_image`, `glob`, `grep`, `write`, `edit`, `pwsh`, web tools, browser tools, jobs, `report` и другие штатные инструменты. Worker runtime deny запрещает зарегистрированные `postman_*` control/transport tools, но не обычные coding tools и не `report`.
@@ -494,6 +500,14 @@ Mapping закрывается адресным `postman_worker_stop` в люб�
 `POSTMAN_WORKER_TASK_ACCEPTED` и messageId означают только приём сообщения. Worker обязан вернуть содержательный результат через штатный `report`. Финальный текст child Agent не подменяет `report`. Leader сохраняет разумную дисциплину ожидания report; обычное продолжение после него идёт через interrupt, а новый trusted artifact REQ — через `postman_worker({task, workerSessionId, artifactRequestId})` при сохранённом mapping.
 
 ---
+
+### Visibility, compact и fresh context
+
+`postman_worker_list()` — только чтение привязок, quotas Luna used/3 и Sol used/1, residency, durable closed и turn/report evidence. Idle/settled не означает успех задачи. List не возобновляет детей и не очищает binding. `postman_bridge_list()` — только чтение всех Bridge operations exact Leader, correlation, publication/sync/grant diagnostics и причин occupancy; unknown остаётся unknown. Не используй list для polling.
+
+`postman_worker_compact({workerSessionId})` допускается только для exact resident idle Worker без waking queue и pending/unknown delivery. Это штатная compaction **той же Session**, не чистый контекст, не новый ID и не освобождение quota. Persisted/cold Worker ради compact не возобновляется.
+
+Для fresh context сначала безопасно retired старый exact Worker через `postman_worker_stop({workerSessionId, mode:"close"|"cancel"})`, дождись подтверждённого удаления binding; затем `postman_worker({task, createNew:true})` либо `postman_sol_worker({task, createNew:true})`. Новый ID не наследует историю старого; старый durable closed ID больше не resumable, audit history сохраняется. Для новой отдельной Sol task обязательно новое положительное `ask_user_question` по Sol contract; retirement/compact/restart разрешения не создают.
 
 ## 19. Postman Bridge
 

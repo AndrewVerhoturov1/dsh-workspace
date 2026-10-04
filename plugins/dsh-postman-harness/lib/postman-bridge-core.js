@@ -1,6 +1,7 @@
 export const POSTMAN_BRIDGE_PROVIDER = 'spawn'
 export const POSTMAN_BRIDGE_TOOL_NAME = 'postman_bridge'
 export const POSTMAN_BRIDGE_STATUS_TOOL_NAME = 'postman_bridge_status'
+export const POSTMAN_BRIDGE_LIST_TOOL_NAME = 'postman_bridge_list'
 export const POSTMAN_CHILD_NOTIFY_TOOL_NAME = 'notify_parent'
 export const POSTMAN_TASK_PREPARE_TOOL_NAME = 'postman_task_prepare'
 export const POSTMAN_TASK_RESTORE_TOOL_NAME = 'postman_task_restore'
@@ -11,6 +12,7 @@ export const POSTMAN_WORKER_STOP_TOOL_NAME = 'postman_worker_stop'
 export const POSTMAN_YIELD_TOOL_NAME = 'postman_yield'
 export const POSTMAN_INPUT_FILES_TOOL_NAME = 'postman_input_files'
 export const POSTMAN_WORKER_LIST_TOOL_NAME = 'postman_worker_list'
+export const POSTMAN_WORKER_COMPACT_TOOL_NAME = 'postman_worker_compact'
 export const POSTMAN_BRIDGE_AGENT_OPTIONS = Object.freeze({
   provider: 'codex',
   model: 'gpt-6-luna',
@@ -43,12 +45,14 @@ export const POSTMAN_LEADER_TOOL_ALLOWLIST = Object.freeze([
   POSTMAN_INPUT_FILES_TOOL_NAME,
   POSTMAN_BRIDGE_TOOL_NAME,
   POSTMAN_BRIDGE_STATUS_TOOL_NAME,
+  POSTMAN_BRIDGE_LIST_TOOL_NAME,
   POSTMAN_WORKER_TOOL_NAME,
   POSTMAN_SOL_WORKER_TOOL_NAME,
   POSTMAN_WORKER_INTERRUPT_TOOL_NAME,
   POSTMAN_WORKER_STOP_TOOL_NAME,
   POSTMAN_YIELD_TOOL_NAME,
   POSTMAN_WORKER_LIST_TOOL_NAME,
+  POSTMAN_WORKER_COMPACT_TOOL_NAME,
 ])
 // Ordinary visibility stays intact for nested QuickJS → ToolRuntime dispatch.
 // These operations are not model-direct for the exact experimental Leader.
@@ -80,12 +84,14 @@ export const POSTMAN_LEADER_ONLY_TOOL_NAMES = Object.freeze([
   POSTMAN_INPUT_FILES_TOOL_NAME,
   POSTMAN_BRIDGE_TOOL_NAME,
   POSTMAN_BRIDGE_STATUS_TOOL_NAME,
+  POSTMAN_BRIDGE_LIST_TOOL_NAME,
   POSTMAN_WORKER_TOOL_NAME,
   POSTMAN_SOL_WORKER_TOOL_NAME,
   POSTMAN_WORKER_INTERRUPT_TOOL_NAME,
   POSTMAN_WORKER_STOP_TOOL_NAME,
   POSTMAN_YIELD_TOOL_NAME,
   POSTMAN_WORKER_LIST_TOOL_NAME,
+  POSTMAN_WORKER_COMPACT_TOOL_NAME,
 ])
 
 export const POSTMAN_BRIDGE_PERSONA = `You are Postman Bridge, a minimal one-shot transport subagent.

@@ -810,7 +810,8 @@ class DirectPostmanUnitTests(unittest.TestCase):
             self.assertEqual(result["conversationUrl"], conversation_url)
             self.assertEqual(result["rootRequestId"], REQ)
             self.assertEqual(result["continuationIndex"], 0)
-            self.assertFalse(runner.result_handoff_path(REQ).exists())
+            handoff = json.loads(runner.result_handoff_path(REQ).read_text(encoding="utf-8"))
+            self.assertEqual(handoff, result)
 
             state = json.loads(runner.state_path(REQ).read_text(encoding="utf-8"))
             self.assertEqual(state["state"], "ASSISTANT_COMPLETED_NO_ARTIFACT")
@@ -866,7 +867,7 @@ class DirectPostmanUnitTests(unittest.TestCase):
             self.assertEqual(result["validationDetails"], {"reason": "eocd"})
             self.assertEqual(result["assistantIndex"], 8)
             self.assertNotIn("assistantTurnIndex", result)
-            self.assertFalse(runner.result_handoff_path(REQ).exists())
+            self.assertEqual(json.loads(runner.result_handoff_path(REQ).read_text(encoding="utf-8")), result)
 
 
     def test_cli_transport_failure_json_preserves_exact_request_and_nonzero_exit(self):
@@ -883,8 +884,9 @@ class DirectPostmanUnitTests(unittest.TestCase):
                 failure_details["transportMessage"],
                 details=failure_details,
             ),
-        ), contextlib.redirect_stdout(io.StringIO()) as stdout:
-            exit_code = direct.main(["--request-id", REQ, "--task", "intent", "--branch", "main"])
+        ), tempfile.TemporaryDirectory() as root, contextlib.redirect_stdout(io.StringIO()) as stdout:
+            exit_code = direct.main(["--request-id", REQ, "--task", "intent", "--branch", "main",
+                                     "--direct-root", root])
 
         self.assertEqual(exit_code, 2)
         payload = json.loads(stdout.getvalue())
@@ -902,12 +904,30 @@ class DirectPostmanUnitTests(unittest.TestCase):
         def fail_run(instance, **_kwargs):
             instance.publication_receipt = dict(receipt)
             raise direct.DirectPostmanError("DIRECT_BROWSER_FAILED", "browser unavailable")
-        with patch.object(direct.DirectPostman, "run", fail_run), contextlib.redirect_stdout(io.StringIO()) as stdout:
-            code = direct.main(["--request-id", REQ, "--task", "intent", "--branch", "main"])
+        with tempfile.TemporaryDirectory() as root:
+            with patch.object(direct.DirectPostman, "run", fail_run), contextlib.redirect_stdout(io.StringIO()) as stdout:
+                code = direct.main(["--request-id", REQ, "--task", "intent", "--branch", "main",
+                                    "--direct-root", root])
+            failure = json.loads(stdout.getvalue())
+            handoff = json.loads((Path(root) / "results" / f"{REQ}.json").read_text(encoding="utf-8"))
+        self.assertEqual(handoff, failure)
         self.assertEqual(code, 2)
-        failure = json.loads(stdout.getvalue())
         self.assertEqual(failure["code"], direct.POSTMAN_TRANSPORT_FAILED)
         self.assertEqual(failure["publicationReceipt"], receipt)
+
+    def test_late_failure_cannot_replace_prior_terminal_receipt(self):
+        original = {"ok": True, "code": "RESULT_DURABLE", "requestId": REQ}
+        def fail_run(instance, **_kwargs):
+            handoff = direct.durable_handoff.handoff_path(instance.direct_root, REQ)
+            direct.durable_handoff.atomic_write_json(handoff, original)
+            raise direct.DirectPostmanError("DIRECT_STATE_WRITE_FAILED", "checkpoint failed")
+        with tempfile.TemporaryDirectory() as root:
+            with patch.object(direct.DirectPostman, "run", fail_run), contextlib.redirect_stdout(io.StringIO()):
+                code = direct.main(["--request-id", REQ, "--task", "intent", "--branch", "main",
+                                    "--direct-root", root])
+            retained = json.loads((Path(root) / "results" / f"{REQ}.json").read_text(encoding="utf-8"))
+        self.assertEqual(code, 2)
+        self.assertEqual(retained, original)
 
     def test_cli_prebridge_failure_becomes_correlated_transport_failure(self):
         failure_code = "DIRECT_BROWSER_FAILED"
@@ -921,8 +941,9 @@ class DirectPostmanUnitTests(unittest.TestCase):
                 failure_message,
                 details=failure_details,
             ),
-        ), contextlib.redirect_stdout(io.StringIO()) as stdout:
-            exit_code = direct.main(["--request-id", REQ, "--task", "intent", "--branch", "main"])
+        ), tempfile.TemporaryDirectory() as root, contextlib.redirect_stdout(io.StringIO()) as stdout:
+            exit_code = direct.main(["--request-id", REQ, "--task", "intent", "--branch", "main",
+                                     "--direct-root", root])
 
         self.assertEqual(exit_code, 2)
         payload = json.loads(stdout.getvalue())

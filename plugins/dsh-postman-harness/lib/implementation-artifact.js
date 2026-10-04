@@ -46,9 +46,9 @@ async function verifiedZip(grant) {
   }
 }
 
-export function createImplementationArtifactGrants() {
-  const grants = new Map()
-  const key = (leaderId, requestId) => JSON.stringify([leaderId, requestId])
+export function createImplementationArtifactGrants(registry) {
+  if (typeof registry?.get !== 'function' || typeof registry?.change !== 'function')
+    throw new Error('IMPLEMENTATION_ARTIFACT_STORAGE_REQUIRED')
 
   async function register(leaderId, terminal) {
     const result = terminal?.result
@@ -69,18 +69,27 @@ export function createImplementationArtifactGrants() {
       expectedFilename: result.expectedFilename,
     })
     if (!await verifiedZip(grant)) return false
-    const index = key(leaderId, grant.requestId)
-    const prior = grants.get(index)
-    if (prior !== undefined && (prior.sha256 !== grant.sha256 ||
-        prior.resultZip !== grant.resultZip || prior.expectedFilename !== grant.expectedFilename)) return false
-    grants.set(index, grant)
-    return true
+    let registered = false
+    await registry.change(leaderId, row => {
+      if (row.leaderSessionId !== leaderId) return row
+      const prior = row.artifactGrants?.[grant.requestId]
+      if (prior !== undefined && (prior.sha256 !== grant.sha256 ||
+          prior.resultZip !== grant.resultZip || prior.expectedFilename !== grant.expectedFilename ||
+          prior.repository !== grant.repository)) return row
+      registered = true
+      return { ...row, artifactGrants: { ...row.artifactGrants, [grant.requestId]: grant } }
+    })
+    return registered
   }
 
   async function resolve(leaderId, requestId) {
     if (!REQUEST_ID.test(requestId ?? '')) return null
-    const grant = grants.get(key(leaderId, requestId))
-    return grant?.repository === IMPLEMENTATION_REPOSITORY && await verifiedZip(grant) ? grant : null
+    const row = registry.get(leaderId)
+    if (row?.leaderSessionId !== leaderId) return null
+    const grant = row.artifactGrants?.[requestId]
+    return grant?.requestId === requestId && grant.repository === IMPLEMENTATION_REPOSITORY &&
+      grant.expectedFilename === `POSTMAN_${requestId}_RESULT.zip` && SHA256.test(grant.sha256 ?? '') &&
+      await verifiedZip(grant) ? Object.freeze({ ...grant }) : null
   }
 
   return { register, resolve }
