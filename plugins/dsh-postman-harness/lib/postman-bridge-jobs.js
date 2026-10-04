@@ -46,16 +46,19 @@ function losslessValue(value, ancestors = new Set()) {
   } finally { ancestors.delete(value) }
 }
 
-// Legacy terminals may omit the newer operation correlation fields, but known
-// fields must agree before durable data can authorize synchronization or grants.
+// Legacy operations may omit the newer correlation fields, but terminal identity
+// is required and known fields must agree before synchronization or grants.
 function hasTrustedTerminal(operation) {
   const terminal = operation.terminal
   return terminal?.status === 'POSTMAN_BRIDGE_TERMINAL' &&
     ['COMPLETED', 'FAILED'].includes(terminal.terminalStatus) &&
-    terminal.result !== null && typeof terminal.result === 'object' &&
-    (!operation.requestId || operation.requestId === terminal.requestId) &&
-    (!operation.transportKind || operation.transportKind === terminal.transportKind) &&
-    (!terminal.result.requestId || terminal.result.requestId === terminal.requestId)
+    Object.hasOwn(terminal, 'requestId') && typeof terminal.requestId === 'string' &&
+    /^REQ_\d{8}T\d{6}Z_\d{4}$/.test(terminal.requestId) &&
+    Object.hasOwn(terminal, 'transportKind') && ['artifact', 'text', 'image'].includes(terminal.transportKind) &&
+    terminal.result !== null && typeof terminal.result === 'object' && !Array.isArray(terminal.result) &&
+    (operation.requestId === undefined || operation.requestId === terminal.requestId) &&
+    (operation.transportKind === undefined || operation.transportKind === terminal.transportKind) &&
+    (terminal.result.requestId === undefined || terminal.result.requestId === terminal.requestId)
 }
 
 function countsAgainstLimit(operation) {

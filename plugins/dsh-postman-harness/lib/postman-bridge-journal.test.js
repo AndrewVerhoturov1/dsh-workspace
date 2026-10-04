@@ -292,7 +292,7 @@ test('verified terminal persists through independent JSON-domain lifetimes', asy
   const result = { ok: true, code: 'TEXT_RESULT_DURABLE', assistantText: 'persisted',
     taskPublicationCommit: 'b'.repeat(40), baseCommit: 'a'.repeat(40) }
   await first.change(parent.id, current => ({ ...current, bridgeOperations: { job: {
-    state: 'received', terminal: { status: 'POSTMAN_BRIDGE_TERMINAL', requestId: 'REQ_ONE',
+    state: 'received', terminal: { status: 'POSTMAN_BRIDGE_TERMINAL', requestId: 'REQ_20261004T070707Z_0001',
       terminalStatus: 'COMPLETED', transportKind: 'text', result }, synchronization: 'busy' } } }))
   await first.close()
   const reopened = await openPostmanTaskRegistry(new DomainFacility(ctx, { backend: 'json' }))
@@ -315,7 +315,7 @@ test('failed artifact grant diagnostic survives independent JSON-domain lifetime
   const first = await openPostmanTaskRegistry(new DomainFacility(ctx, { backend: 'json', routes: {} }))
   await first.create(parent.id, row())
   await first.change(parent.id, current => ({ ...current, bridgeOperations: { artifact: {
-    state: 'received', terminal: { status: 'POSTMAN_BRIDGE_TERMINAL', requestId: 'REQ_ONE',
+    state: 'received', terminal: { status: 'POSTMAN_BRIDGE_TERMINAL', requestId: 'REQ_20261004T070707Z_0001',
       terminalStatus: 'COMPLETED', transportKind: 'artifact', result: { ok: true, code: 'RESULT_DURABLE' } },
     synchronization: 'synchronized', grantDiagnostic: 'Artifact grant registration rejected.' } } }))
   await first.close()
@@ -421,7 +421,13 @@ test('invalid received terminals reopen fail-closed without synchronization, gra
   }
   const terminal = { status: 'POSTMAN_BRIDGE_TERMINAL', terminalStatus: 'COMPLETED',
     requestId: 'REQ_20261004T070707Z_0001', transportKind: 'artifact', result: { ok: true, code: 'RESULT_DURABLE' } }
+  const { requestId, ...withoutRequestId } = terminal
+  const { transportKind, ...withoutTransportKind } = terminal
   const operations = {
+    missingRequest: { state: 'received', phase: 'terminal', synchronization: 'not-required', terminal: withoutRequestId },
+    missingTransport: { state: 'received', phase: 'synchronized', synchronization: 'synchronized', terminal: withoutTransportKind },
+    invalidRequest: { state: 'received', phase: 'terminal', synchronization: 'pending', terminal: { ...terminal, requestId: 'REQ_INVALID' } },
+    invalidTransport: { state: 'received', phase: 'terminal', synchronization: 'pending', terminal: { ...terminal, transportKind: 'invalid' } },
     local: { state: 'received', phase: 'terminal', synchronization: 'pending', terminal: { status: 'POSTMAN_BRIDGE_START_FAILED' } },
     falseSync: { state: 'received', phase: 'synchronized', synchronization: 'synchronized', terminal: { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' } },
     falseNotRequired: { state: 'received', phase: 'terminal', synchronization: 'not-required', terminal: { status: 'POSTMAN_BRIDGE_CHILD_UNAVAILABLE' } },
@@ -433,15 +439,19 @@ test('invalid received terminals reopen fail-closed without synchronization, gra
   await first.registry.close(); await first.backend.close()
   const second = await open()
   const unexpected = () => { throw Error('untrusted terminal must not authorize side effects') }
-  const cold = createPostmanBridgeJobs({}, { run: unexpected, dispose() {} }, { register: unexpected },
-    { get: () => ({ branch: row().branch }), record: second.registry.get, changeRecord: unexpected, sync: unexpected }, null,
-    { inspectRequest: () => ({ state: 'unknown' }) })
+  const effects = { sends: 0, syncs: 0, grants: 0 }
+  const cold = createPostmanBridgeJobs({}, { run() { effects.sends++; unexpected() }, dispose() {} },
+    { register() { effects.grants++; unexpected() } },
+    { get: () => ({ branch: row().branch }), record: second.registry.get, changeRecord: unexpected,
+      sync() { effects.syncs++; unexpected() } }, null, { inspectRequest: () => ({ state: 'unknown' }) })
   for (const id of Object.keys(operations)) {
-    assert.equal((await cold.status(parent, id, true)).status, 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN')
+    assert.equal((await cold.status(parent, id, true)).status, 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN', id)
+    assert.equal(cold.list(parent).operations.find(operation => operation.bridgeJobId === id).countsAgainstLimit, true, id)
   }
   assert.deepEqual(second.registry.get(parent.id).bridgeOperations, operations)
-  assert.equal(cold.list(parent).used, 5)
+  assert.equal(cold.list(parent).used, Object.keys(operations).length)
   assert.equal((await cold.accept(parent, '@PostmanAsk blocked', 'text')).status, 'POSTMAN_BRIDGE_LIMIT_REACHED')
+  assert.deepEqual(effects, { sends: 0, syncs: 0, grants: 0 })
   await cold.dispose(); await second.registry.close(); await second.backend.close()
 })
 
@@ -605,7 +615,7 @@ test('backend refusal cannot create or launch an unjournaled Bridge', async () =
 test('old presend failure with full proof releases slot locally; missing proof remains diagnostic', async () => {
   const registry = createMemoryTaskRegistry()
   const ids = ['1103ac1e-6e22-4168-998d-0eed73790cfc', 'ba8a3918-31b3-4a7a-b4ea-a388634e7d1e']
-  const terminal = (requestId, extra) => ({ status: 'POSTMAN_BRIDGE_TERMINAL', terminalStatus: 'COMPLETED', requestId,
+  const terminal = (requestId, extra) => ({ status: 'POSTMAN_BRIDGE_TERMINAL', terminalStatus: 'COMPLETED', requestId, transportKind: 'text',
     result: { ok: false, code: 'POSTMAN_TRANSPORT_FAILED', directVersion: 5, requestId, transportMessage: 'failed before publication', ...extra } })
   await registry.create(parent.id, { ...row(), bridgeOperations: {
     [ids[0]]: { state: 'received', synchronization: 'pending', terminal: terminal('REQ_20261003T102744Z_5744', { transportCode: 'DIRECT_CHAT_REFERENCE_UNAVAILABLE', details: {} }) },
