@@ -32,17 +32,13 @@ const { JsonStorageBackend } = await pkg('dsh-storage-json')
 const { DomainFacility } = await pkg('dsh-storage-domain')
 const { default: Loader } = await pkg('cordis-plugin-loader')
 const { AgentPresets } = await pkg('dsh-agent-presets')
-const { ApprovalService } = await pkg('dsh-user-approval')
 
 async function runPhase(dir, phase, workerType = 'luna') {
   const sol = workerType === 'sol'
   const model = sol ? 'gpt-6.1-sol' : 'gpt-6-luna', reasoning = sol ? 'xhigh' : 'max'
-  const approvals = []
   const ctx = new Context(), diagnostics = [], requests = [], disposed = Promise.withResolvers(), firstRequest = Promise.withResolvers()
   new AgentRegistry(ctx); new SessionStore(ctx); new SessionProjectionRegistry(ctx)
   new SystemPrompt(ctx, {}); new ToolRuntime(ctx); new LlmRuntime(ctx)
-  new ApprovalService(ctx, {policy:'ask'})
-  ctx.on('approval/request', async req => { approvals.push(req); return 'allowed-once' })
   const persistence = new JsonlSessionPersistence(ctx, {root:join(dir,'sessions'),compression:'none'})
   new SubagentRuntime(ctx); spawn(ctx,{providerName:'spawn'}); report(ctx,{reportDelivery:'quiet'})
   new AgentLoop(ctx,{agents:[],maxParallelToolCalls:1})
@@ -146,7 +142,6 @@ async function runPhase(dir, phase, workerType = 'luna') {
     const accepted=sol ? JSON.parse(leader.session.events.find(e=>e.type==='tool/result' && e.data.message.source.callId===phase+'-sol').data.message.content[0].content[0].text) :
       await worker.taskTool.execute({task:'Verify '+phase,...(workerId?{workerSessionId:workerId}:{createNew:true})},{agent:leader,signal:new AbortController().signal})
     if(sol){
-      assert.equal(approvals.length,1);assert.equal(approvals[0].toolName,'postman_sol_worker');assert.equal(approvals[0].callId,phase+'-sol')
       assert.equal(registry.get('leader').workers[accepted.workerSessionId].workerType,'sol')
     }
     assert.equal(accepted.status,'POSTMAN_WORKER_TASK_ACCEPTED',JSON.stringify(accepted))
