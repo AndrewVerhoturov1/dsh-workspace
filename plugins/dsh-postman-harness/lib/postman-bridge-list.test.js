@@ -9,7 +9,7 @@ test('Bridge list exact live Leader boundary is read-only, including legacy ambi
   const row = { leaderSessionId: owner.id, bridge: { id: 'legacy', state: 'pending' },
     bridgeOperations: { request: { state: 'unknown', transportKind: 'text', phase: 'request-known',
       childSessionId: 'bridge-child', requestId: 'REQ_20261004T120000Z_1234' },
-      safe: { state: 'received', phase: 'synchronized', synchronization: 'not-required' } } }
+      safe: { state: 'received', phase: 'not-sent', synchronization: 'not-required', requestId: 'REQ_20261004T120001Z_1234' } } }
   const before = structuredClone(row)
   const unexpected = () => { throw Error('list may not mutate or start an operation') }
   const ctx = { agents: { get: id => id === owner.id ? owner : id === foreign.id ? foreign : undefined },

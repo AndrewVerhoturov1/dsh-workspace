@@ -37,7 +37,7 @@ export const POSTMAN_TASK_DOMAIN = defineDomain({
     bridge: z.object({ id: z.string(), state: z.enum(['pending', 'unknown']) }).nullable(),
     bridgeOperations: z.record(z.string(), z.object({
       state: z.enum(['pending', 'unknown', 'received']),
-      phase: z.enum(['reserved', 'child-known', 'request-known', 'publication-known', 'terminal', 'synchronized']).optional(),
+      phase: z.enum(['reserved', 'child-known', 'request-known', 'publication-known', 'terminal', 'not-sent', 'synchronized']).optional(),
       transportKind: z.enum(['artifact', 'text', 'image']).optional(),
       createdAt: z.string().optional(),
       childSessionId: z.string().optional(),

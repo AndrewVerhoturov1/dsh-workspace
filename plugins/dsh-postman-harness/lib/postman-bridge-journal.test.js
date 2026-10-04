@@ -59,7 +59,7 @@ test('read-only Bridge listing distinguishes durable and legacy occupied slots',
   await registry.create(parent.id, { ...row(), bridge: { id: 'legacy', state: 'pending' }, bridgeOperations: {
     reserved: { state: 'pending', phase: 'reserved', transportKind: 'text' },
     request: { state: 'unknown', phase: 'request-known', requestId: 'REQ_20261004T010101Z_0001' },
-    completed: { state: 'received', phase: 'synchronized', synchronization: 'not-required' },
+    completed: { state: 'received', phase: 'not-sent', synchronization: 'not-required', requestId: 'REQ_20261004T010104Z_0001' },
   } })
   const jobs = createPostmanBridgeJobs({}, { run() { throw Error('read launched child') }, dispose() {} }, null,
     { record: registry.get, changeRecord() { throw Error('read mutated registry') } })
@@ -75,7 +75,7 @@ test('read-only Bridge listing distinguishes durable and legacy occupied slots',
 test('known Direct not-sent checkpoint frees slot after separate durable runtime lifetimes', async t => {
   const root = await mkdtemp(join(tmpdir(), 'postman-bridge-direct-'))
   t.after(() => rm(root, { recursive: true, force: true }))
-  const backend = new JsonStorageBackend(join(root, 'storage'))
+  let backend = new JsonStorageBackend(join(root, 'storage'))
   const facility = () => new DomainFacility({ storage: { backend: { get: () => backend } }, emit() {} }, { backend: 'json', routes: {} })
   const directRoot = join(root, 'direct')
   await mkdir(join(directRoot, 'requests'), { recursive: true })
@@ -108,7 +108,25 @@ test('known Direct not-sent checkpoint frees slot after separate durable runtime
   assert.equal((await jobs.status(parent, 'init')).status, 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN')
   assert.equal(jobs.list(parent).used, 3, 'false in INIT is not proof Direct cannot still publish')
   assert.equal(sends, 0)
+  assert.deepEqual(cold.get(parent.id).bridgeOperations.safe, {
+    state: 'received', phase: 'not-sent', transportKind: 'text', childSessionId: 'child', requestId,
+    synchronization: 'not-required',
+  })
+  assert.equal(jobs.list(parent).operations.find(op => op.bridgeJobId === 'safe').countsAgainstLimit, false)
   await jobs.dispose(); await cold.close(); await backend.close()
+  // Open the post-recovery bytes with a fresh backend and domain, not an in-memory handle.
+  backend = new JsonStorageBackend(join(root, 'storage'))
+  const reopened = await openPostmanTaskRegistry(facility())
+  const afterRestart = createPostmanBridgeJobs({},
+    { run() { sends++; throw Error('duplicate Send') }, dispose() {} }, null,
+    { record: reopened.get, changeRecord: reopened.change }, null,
+    new DirectPostmanJobManager({ directRoot }))
+  assert.equal(reopened.get(parent.id).bridgeOperations.safe.phase, 'not-sent')
+  assert.equal((await afterRestart.status(parent, 'safe')).status, 'POSTMAN_BRIDGE_NOT_SENT')
+  assert.equal(afterRestart.list(parent).operations.find(op => op.bridgeJobId === 'safe').countsAgainstLimit, false)
+  assert.equal(afterRestart.list(parent).used, 3)
+  assert.equal(sends, 0)
+  await afterRestart.dispose(); await reopened.close(); await backend.close()
 })
 
 test('Direct terminal receipt from text survives cold Bridge recovery without Send', async t => {
@@ -309,6 +327,122 @@ test('failed artifact grant diagnostic survives independent JSON-domain lifetime
   assert.match(status.grantDiagnostic, /registration rejected/)
   await reopened.close()
   await backend.close()
+})
+
+test('local lifecycle failures reopen without terminal promotion or Direct resend', async t => {
+  for (const outcome of ['before-request', 'terminal', 'proven-not-sent', 'published', 'unknown']) await t.test(outcome, async t => {
+    const root = await mkdtemp(join(tmpdir(), 'postman-local-failure-'))
+    t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }))
+    const storageRoot = join(root, 'storage'), directRoot = join(root, 'direct')
+    await mkdir(join(directRoot, 'requests'), { recursive: true })
+    await mkdir(join(directRoot, 'results'), { recursive: true })
+    const requestId = 'REQ_20261004T060606Z_0001'
+    const publication = { requestId, repository: 'AndrewVerhoturov1/dsh-workspace', branch: row().branch,
+      baseCommit: 'a'.repeat(40), taskPublicationCommit: 'b'.repeat(40),
+      taskUrl: 'https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/' + 'b'.repeat(40) + '/' + requestId + '.md' }
+    if (outcome === 'proven-not-sent') await writeFile(join(directRoot, 'requests', requestId + '.json'),
+      JSON.stringify({ requestId, repository: publication.repository, branch: publication.branch,
+        state: 'ASK_FAILED', publicationStarted: false }))
+    if (['terminal', 'published'].includes(outcome)) await writeFile(join(directRoot, 'requests', requestId + '.json'),
+      JSON.stringify({ ...publication, state: 'ASK_WEB_RUNNING', publicationStarted: true }))
+    if (outcome === 'terminal') await writeFile(join(directRoot, 'results', requestId + '.json'),
+      JSON.stringify({ ...publication, ok: true, code: 'TEXT_RESULT_DURABLE', state: 'TEXT_RESULT_DURABLE',
+        deliveryMode: 'inline', assistantText: 'authoritative answer',
+        assistantTextSha256: createHash('sha256').update('authoritative answer').digest('hex') }))
+    const open = async () => {
+      const backend = new JsonStorageBackend(storageRoot)
+      const registry = await openPostmanTaskRegistry(new DomainFacility({
+        storage: { backend: { get: () => backend } }, emit() {} }, { backend: 'json', routes: {} }))
+      return { backend, registry }
+    }
+    const first = await open()
+    await first.registry.create(parent.id, row())
+    const taskContext = Object.freeze({ branch: row().branch })
+    let bridgeJobId, sends = 0, syncs = 0, grants = 0
+    const ready = new Promise(resolve => { parent.followup = resolve })
+    const direct = new DirectPostmanJobManager({ directRoot })
+    direct.start = () => { sends++; throw Error('Direct Send forbidden') }
+    const jobs = createPostmanBridgeJobs({ agents: { get: () => parent }, subagents: { async start() {
+      if (outcome === 'before-request') throw Error('controlled local startup failure')
+      return { id: 'local-child', localAgent: { id: 'local-child' },
+        result: Promise.resolve({ stopReason: 'error' }), async dispose() {} }
+    } }, tools: { get: () => ({ async execute() {
+      // The exact request allocation is persisted before the child loses its status.
+      await first.registry.change(parent.id, current => ({ ...current, bridgeOperations: {
+        ...current.bridgeOperations, [bridgeJobId]: { ...current.bridgeOperations[bridgeJobId], requestId, phase: 'request-known' } } }))
+      return { status: 'NO_JOB' }
+    } }) } }, { run: (_signal, launch) => Promise.resolve().then(launch), dispose() {} },
+    { register() { grants++; throw Error('local failure cannot authorize grants') } },
+    { get: () => taskContext, record: first.registry.get, changeRecord: first.registry.change,
+      bindChild: () => true, releaseChild() {}, sync() { syncs++; throw Error('no local failure sync') } }, null, direct)
+    const receipt = await jobs.accept(parent, '@PostmanAsk controlled local failure', 'text')
+    bridgeJobId = receipt.bridgeJobId
+    assert.equal(receipt.status, 'POSTMAN_BRIDGE_ACCEPTED')
+    await ready
+    const operation = first.registry.get(parent.id).bridgeOperations[bridgeJobId]
+    assert.equal(operation.state, 'unknown')
+    assert.equal(operation.terminal, undefined)
+    assert.equal(operation.synchronization, undefined)
+    assert.equal(operation.phase, outcome === 'before-request' ? 'reserved' : 'request-known')
+    assert.equal(operation.requestId, outcome === 'before-request' ? undefined : requestId)
+    assert.equal(jobs.list(parent).used, 1)
+    assert.equal((await jobs.status(parent, bridgeJobId)).status, 'POSTMAN_BRIDGE_FAILED')
+    await jobs.dispose(); await first.registry.close(); await first.backend.close()
+    const second = await open()
+    let inspections = 0
+    const inspect = direct.inspectRequest.bind(direct)
+    direct.inspectRequest = (...args) => { inspections++; assert.deepEqual(args, [requestId, row().branch, 'text']); return inspect(...args) }
+    const cold = createPostmanBridgeJobs({}, { run() { sends++; throw Error('no replay') }, dispose() {} },
+      { register() { grants++; throw Error('unexpected grant') } },
+      { record: second.registry.get, changeRecord: second.registry.change,
+        sync() { syncs++; throw Error('unexpected sync') } }, null, direct)
+    const status = await cold.status(parent, bridgeJobId)
+    assert.equal(inspections, outcome === 'before-request' ? 0 : 1)
+    assert.equal(status.status, outcome === 'terminal' ? 'POSTMAN_BRIDGE_TERMINAL' :
+      outcome === 'proven-not-sent' ? 'POSTMAN_BRIDGE_NOT_SENT' : 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN')
+    if (outcome === 'terminal') {
+      assert.equal(status.result.assistantText, 'authoritative answer')
+      assert.equal(second.registry.get(parent.id).bridgeOperations[bridgeJobId].terminal.status, 'POSTMAN_BRIDGE_TERMINAL')
+    } else assert.equal(second.registry.get(parent.id).bridgeOperations[bridgeJobId].terminal, undefined)
+    assert.equal(cold.list(parent).used, outcome === 'proven-not-sent' ? 0 : 1)
+    assert.deepEqual({ sends, syncs, grants }, { sends: 0, syncs: 0, grants: 0 })
+    await cold.dispose(); await second.registry.close(); await second.backend.close()
+  })
+})
+
+test('invalid received terminals reopen fail-closed without synchronization, grants or slot release', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'postman-invalid-terminal-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const open = async () => {
+    const backend = new JsonStorageBackend(root)
+    const registry = await openPostmanTaskRegistry(new DomainFacility({
+      storage: { backend: { get: () => backend } }, emit() {} }, { backend: 'json', routes: {} }))
+    return { backend, registry }
+  }
+  const terminal = { status: 'POSTMAN_BRIDGE_TERMINAL', terminalStatus: 'COMPLETED',
+    requestId: 'REQ_20261004T070707Z_0001', transportKind: 'artifact', result: { ok: true, code: 'RESULT_DURABLE' } }
+  const operations = {
+    local: { state: 'received', phase: 'terminal', synchronization: 'pending', terminal: { status: 'POSTMAN_BRIDGE_START_FAILED' } },
+    falseSync: { state: 'received', phase: 'synchronized', synchronization: 'synchronized', terminal: { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' } },
+    falseNotRequired: { state: 'received', phase: 'terminal', synchronization: 'not-required', terminal: { status: 'POSTMAN_BRIDGE_CHILD_UNAVAILABLE' } },
+    mismatchedRequest: { state: 'received', phase: 'terminal', synchronization: 'pending', requestId: 'REQ_20261004T070707Z_0002', terminal },
+    mismatchedTransport: { state: 'received', phase: 'terminal', synchronization: 'pending', transportKind: 'text', terminal },
+  }
+  const first = await open()
+  await first.registry.create(parent.id, { ...row(), bridgeOperations: operations })
+  await first.registry.close(); await first.backend.close()
+  const second = await open()
+  const unexpected = () => { throw Error('untrusted terminal must not authorize side effects') }
+  const cold = createPostmanBridgeJobs({}, { run: unexpected, dispose() {} }, { register: unexpected },
+    { get: () => ({ branch: row().branch }), record: second.registry.get, changeRecord: unexpected, sync: unexpected }, null,
+    { inspectRequest: () => ({ state: 'unknown' }) })
+  for (const id of Object.keys(operations)) {
+    assert.equal((await cold.status(parent, id, true)).status, 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN')
+  }
+  assert.deepEqual(second.registry.get(parent.id).bridgeOperations, operations)
+  assert.equal(cold.list(parent).used, 5)
+  assert.equal((await cold.accept(parent, '@PostmanAsk blocked', 'text')).status, 'POSTMAN_BRIDGE_LIMIT_REACHED')
+  await cold.dispose(); await second.registry.close(); await second.backend.close()
 })
 
 const tick = () => new Promise(resolve => setImmediate(resolve))

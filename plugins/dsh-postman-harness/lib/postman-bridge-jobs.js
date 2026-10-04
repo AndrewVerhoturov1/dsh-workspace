@@ -46,6 +46,26 @@ function losslessValue(value, ancestors = new Set()) {
   } finally { ancestors.delete(value) }
 }
 
+// Legacy terminals may omit the newer operation correlation fields, but known
+// fields must agree before durable data can authorize synchronization or grants.
+function hasTrustedTerminal(operation) {
+  const terminal = operation.terminal
+  return terminal?.status === 'POSTMAN_BRIDGE_TERMINAL' &&
+    ['COMPLETED', 'FAILED'].includes(terminal.terminalStatus) &&
+    terminal.result !== null && typeof terminal.result === 'object' &&
+    (!operation.requestId || operation.requestId === terminal.requestId) &&
+    (!operation.transportKind || operation.transportKind === terminal.transportKind) &&
+    (!terminal.result.requestId || terminal.result.requestId === terminal.requestId)
+}
+
+function countsAgainstLimit(operation) {
+  return operation.state === 'pending' || operation.state === 'unknown' ||
+    operation.state === 'received' &&
+      (!['synchronized', 'not-required'].includes(operation.synchronization) ||
+        !hasTrustedTerminal(operation) && !(operation.phase === 'not-sent' &&
+          operation.synchronization === 'not-required' && operation.requestId && !operation.terminal))
+}
+
 function snapshot(job) {
   return {
     bridgeJobId: job.bridgeJobId, state: job.state,
@@ -221,18 +241,12 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     const admit = async () => {
       try {
         const row = contexts.record?.(parent.id)
-        const unresolved = Object.values(row?.bridgeOperations ?? {}).filter(op =>
-          op.state === 'pending' || op.state === 'unknown').length + (row?.bridge ? 1 : 0)
-        const awaitingSync = Object.values(row?.bridgeOperations ?? {}).filter(op =>
-          op.state === 'received' && !['synchronized', 'not-required'].includes(op.synchronization)).length
-        if (unresolved + awaitingSync >= 3) return { status: 'POSTMAN_BRIDGE_LIMIT_REACHED' }
+        const occupied = Object.values(row?.bridgeOperations ?? {}).filter(countsAgainstLimit).length + (row?.bridge ? 1 : 0)
+        if (occupied >= 3) return { status: 'POSTMAN_BRIDGE_LIMIT_REACHED' }
         await contexts.changeRecord(parent.id, old => {
           const operations = old.bridgeOperations ?? {}
-          const count = Object.values(operations).filter(op =>
-            op.state === 'pending' || op.state === 'unknown').length + (old.bridge ? 1 : 0)
-          const awaitingSync = Object.values(operations).filter(op =>
-            op.state === 'received' && !['synchronized', 'not-required'].includes(op.synchronization)).length
-          if (count + awaitingSync >= 3) throw new Error('POSTMAN_BRIDGE_LIMIT_REACHED')
+          const count = Object.values(operations).filter(countsAgainstLimit).length + (old.bridge ? 1 : 0)
+          if (count >= 3) throw new Error('POSTMAN_BRIDGE_LIMIT_REACHED')
           return { ...old, bridgeOperations: { ...operations, [job.bridgeJobId]: { state: 'pending', phase: 'reserved', transportKind, createdAt: job.createdAt } } }
         })
         return startJob(job, message)
@@ -343,6 +357,9 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
         job.trustedTerminal = safe
         job.requestId = safe.requestId ?? job.requestId ?? null
         job.state = safe.status === 'POSTMAN_BRIDGE_TERMINAL' ? 'TERMINAL' : 'FAILED'
+        // Local lifecycle failures are not Direct delivery authority. Retain only
+        // already journaled correlation; settlement below marks it unknown.
+        if (job.state !== 'TERMINAL') return
         if (typeof contexts?.changeRecord === 'function') {
           await contexts.changeRecord(job.parentSessionId, row => {
             const op = row.bridgeOperations?.[job.bridgeJobId]
@@ -407,7 +424,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
       const row = contexts?.record?.(parent.id)
       const operation = Object.hasOwn(row?.bridgeOperations ?? {}, bridgeJobId)
         ? row.bridgeOperations[bridgeJobId] : row?.bridge?.id === bridgeJobId ? row.bridge : null
-      if (operation?.state === 'received' && operation.terminal) {
+      if (operation?.state === 'received' && hasTrustedTerminal(operation)) {
         // Pin this one recovered owner before deleting its only durable copy.
         // Thereafter reads and overlapping retries use the same mutable object.
         const terminal = losslessValue(operation.terminal)
@@ -455,7 +472,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
         return { status: 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN', bridgeJobId, state: 'INTERRUPTED',
           requestId: operation.requestId, publication: proof.state === 'published' ? proof.publication : 'unknown' }
       } else if (operation?.state === 'received' && operation.phase === 'not-sent' &&
-                 operation.synchronization === 'not-required' && operation.requestId)
+                 operation.synchronization === 'not-required' && operation.requestId && !operation.terminal)
         return { status: 'POSTMAN_BRIDGE_NOT_SENT', bridgeJobId, requestId: operation.requestId,
           synchronization: 'not-required' }
       else return operation
@@ -531,8 +548,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
   function list(parent) {
     const row = contexts?.record?.(parent.id)
     const operations = Object.entries(row?.bridgeOperations ?? {}).map(([bridgeJobId, op]) => {
-      const countsAgainstLimit = op.state === 'pending' || op.state === 'unknown' ||
-        op.state === 'received' && !['synchronized', 'not-required'].includes(op.synchronization)
+      const occupied = countsAgainstLimit(op)
       const proof = op.requestId && ['text', 'artifact', 'image'].includes(op.transportKind) &&
         typeof direct.inspectRequest === 'function'
         ? direct.inspectRequest(op.requestId, row.branch, op.transportKind) : null
@@ -548,8 +564,8 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
           (op.transportKind ?? op.terminal?.transportKind) !== 'artifact' ||
           (op.terminal?.result?.code && op.terminal.result.code !== 'RESULT_DURABLE') ? 'not-applicable' :
             row.artifactGrants?.[op.requestId ?? op.terminal?.requestId] ? 'durable-registered' : 'pending-or-rejected',
-        countsAgainstLimit, slotReason: countsAgainstLimit
-          ? op.state === 'received' ? 'trusted terminal awaiting local synchronization or grant'
+        countsAgainstLimit: occupied, slotReason: occupied
+          ? op.state === 'received' && hasTrustedTerminal(op) ? 'trusted terminal awaiting local synchronization or grant'
             : op.requestId ? 'Direct outcome not yet proven' : 'correlation unavailable; outcome unknown'
           : 'terminal synchronized or publication proven unnecessary' }
     })
