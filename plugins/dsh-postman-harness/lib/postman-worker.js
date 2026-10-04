@@ -440,7 +440,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     const sol = workerType === 'sol'
     return defineTool({
       name: sol ? POSTMAN_SOL_WORKER_TOOL_NAME : POSTMAN_WORKER_TOOL_NAME,
-      description: sol ? 'Only on an explicit user request: create or continue the one Sol Worker (GPT-6.1 Sol, xhigh). Each task requires one-shot user approval. Use workerSessionId for follow-up; createNew rejects a second Sol Worker. Acceptance is not completion.' :
+      description: sol ? 'Only on an explicit user request: create or continue the one Sol Worker (GPT-6.1 Sol, xhigh). Before each separate task, the Leader must obtain a positive answer through ask_user_question; no additional Harness Allow once is required. Use workerSessionId for follow-up; createNew rejects a second Sol Worker. Acceptance is not completion.' :
         'Create an additional continuable Luna Worker (up to three), or deliver a trusted artifact grant to an exact existing Luna Worker. Acceptance is not completion.',
       parameters, output: output(),
       async execute(args, exec) {
@@ -454,15 +454,6 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
             (args.createNew === true && args.workerSessionId !== undefined))
           return { status: 'POSTMAN_WORKER_ARGUMENTS_INVALID' }
         if (contexts && !contexts.get(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
-        if (sol) {
-          let outcome = 'unavailable'
-          try { outcome = await ctx.get?.('approval')?.request({
-            agent: parent, toolName: POSTMAN_SOL_WORKER_TOOL_NAME, callId: exec.callId, signal: exec.signal,
-            reason: 'Запуск нового задания Sol Worker (GPT-6.1 Sol, xhigh). Разрешение действует только на этот вызов.',
-          }) ?? 'unavailable' } catch { /* Missing/broken approval never grants a task. */ }
-          if (exec.signal.aborted) outcome = 'cancelled'
-          if (outcome !== 'allowed-once') return { status: 'POSTMAN_SOL_WORKER_APPROVAL_REQUIRED', outcome }
-        }
         return admitted(parent, async () => {
           const group = groupFor(parent)
           if (args.createNew === true) return create(parent, group, args, exec, workerType)
