@@ -1,0 +1,104 @@
+diff --git a/node_modules/@deepseek-ai/dsh-subagent/lib/index.js b/node_modules/@deepseek-ai/dsh-subagent/lib/index.js
+index bd9741e..d7bcddd 100644
+--- a/node_modules/@deepseek-ai/dsh-subagent/lib/index.js
++++ b/node_modules/@deepseek-ai/dsh-subagent/lib/index.js
+@@ -3,7 +3,7 @@ import { scopeTarget } from "@deepseek-ai/dsh-scope";
+ import { assertObjectJsonSchema } from "@deepseek-ai/dsh-tools";
+ import { HarnessError, boundContextSummary, createUserMessage, errorChain } from "@deepseek-ai/dsh-llm";
+ import { randomUUID } from "node:crypto";
+-import { foldConsumedWork } from "@deepseek-ai/dsh-agent";
++import { Inbox, foldConsumedWork } from "@deepseek-ai/dsh-agent";
+ import { Session, SessionId, snapshotJsonValue } from "@deepseek-ai/dsh-session";
+ import { z } from "zod";
+ import { accessSync, constants, statSync } from "node:fs";
+@@ -729,6 +729,7 @@ var SubagentContinuationManager = class {
+ 	/** Materializations admitted before drain, tracked through publication or rollback. */
+ 	materializations = /* @__PURE__ */ new Set();
+ 	locks = new ChildLock();
++	closedChildren = /* @__PURE__ */ new Set();
+ 	/** Structural Cordis owner of every Activation handle. */
+ 	ownerCtx;
+ 	/**
+@@ -856,6 +857,7 @@ var SubagentContinuationManager = class {
+ 		this.assertAdmitting(parent);
+ 		while (true) {
+ 			const live = await this.locks.run(childId, async () => {
++				if (this.closedChildren.has(childId)) throw new SubagentError(`subagent "${childId}" is closed`, "CHILD_CLOSED");
+ 				const activation = this.activations.get(childId);
+ 				if (activation === void 0) return this.coldResume(parent, childId, content, options);
+ 				/* v8 ignore next 3 -- the send-versus-dispose cutoff: reaching this arm needs a
+@@ -1064,6 +1066,43 @@ var SubagentContinuationManager = class {
+ 		for (const activation of targets) this.dispose(activation).catch(() => void 0);
+ 		await this.disposeRoots(targets, "selected activation(s)");
+ 	}
++	/** Close one exact durable child against later native followups, then release its Activation. */
++	async closeChild(parent, childId, check) {
++		if (this.ctx.agents.get(parent.id) !== parent) throw new SubagentError("child closure requires the exact live parent", "UNAUTHORIZED");
++		return this.locks.run(childId, async () => {
++			const activation = this.activations.get(childId);
++			if (activation !== void 0 && (activation.parentSession !== parent.id || !activation.ancestry.has(parent))) throw new SubagentError("child closure requires its direct parent", "UNAUTHORIZED");
++			const persistence = this.requirePersistence();
++			const loaded = await persistence.inspect(childId);
++			this.authorizeLineage(parent, childId, loaded.meta.parentSession);
++			const descriptor = foldSubagentDescriptor(loaded.events.slice(loaded.meta.seedLength ?? 0));
++			if (descriptor?.mode !== "continuable") throw new SubagentError("child closure requires a continuable session", "NOT_RESUMABLE");
++			if (!await check()) return false;
++			this.closedChildren.add(childId);
++			if (activation !== void 0 && this.activations.get(childId) === activation &&
++				this.ctx.sessions.get(childId) === activation.handle.agent.session) {
++				activation.handle.agent.session.append("subagent/closed", {});
++				await this.dispose(activation);
++			} else {
++				const current = await persistence.inspect(childId);
++				if (!current.events.some((event) => event.type === "subagent/closed")) {
++					const inbox = new Inbox({ header: current.meta, events: current.events }, { inserted() {}, discarded() {}, claimed() {} });
++					const events = [];
++					for (const [target, count] of [["next-step", inbox.nextStep.length], ["next-turn", inbox.nextTurn.length]]) {
++						if (count) events.push({ type: "agent/inbox/spliced", seq: current.events.length + events.length,
++							time: Date.now(), data: { target, start: 0, removedCount: count, inserted: [] } });
++					}
++					events.push({ type: "subagent/closed", seq: current.events.length + events.length, time: Date.now(), data: {} });
++					await persistence.append(childId, events);
++				}
++			}
++			const saved = await persistence.inspect(childId);
++			const inbox = new Inbox({ header: saved.meta, events: saved.events }, { inserted() {}, discarded() {}, claimed() {} });
++			if (!saved.events.some((event) => event.type === "subagent/closed") || inbox.hasPending)
++				throw new SubagentError("child closure was not durably drained", "CHILD_CLOSURE_UNCERTAIN");
++			return true;
++		});
++	}
+ 	/** Dispose independent roots and report every branch failure after all settle. */
+ 	async disposeRoots(roots, failureSubject) {
+ 		const reasons = (await Promise.all(roots.map(async (activation) => {
+@@ -1153,6 +1192,7 @@ var SubagentContinuationManager = class {
+ 		options.signal.throwIfAborted();
+ 		this.assertAdmitting(parent);
+ 		this.authorizeLineage(parent, childId, loaded.meta.parentSession);
++		if (loaded.events.some((event) => event.type === "subagent/closed")) throw new SubagentError(`subagent "${childId}" is closed`, "CHILD_CLOSED");
+ 		const descriptor = foldSubagentDescriptor(loaded.events.slice(loaded.meta.seedLength ?? 0));
+ 		if (descriptor === void 0 || descriptor.mode !== "continuable") throw new SubagentError(`subagent "${childId}" has no supported continuation state and cannot be resumed; do not retry send_message with this id`, "NOT_RESUMABLE");
+ 		let activation;
+@@ -2511,6 +2551,10 @@ var SubagentRuntime = class extends Service {
+ 		if (manager === void 0) return;
+ 		await manager.drainChildren(parent, childIds);
+ 	}
++	/** Atomically close one exact child admission and durably discard its queued work. */
++	async closeContinuableChild(parent, childId, check) {
++		return this.requireContinuations().closeChild(parent, childId, check);
++	}
+ 	/**
+ 	* Enumerate the parent's direct session-backed subagents without loading or
+ 	* resuming an Agent and without any query service: the listing merges the live
+diff --git a/node_modules/@deepseek-ai/dsh-session/lib/index.js b/node_modules/@deepseek-ai/dsh-session/lib/index.js
+index 62fd0fe..90f569d 100644
+--- a/node_modules/@deepseek-ai/dsh-session/lib/index.js
++++ b/node_modules/@deepseek-ai/dsh-session/lib/index.js
+@@ -1082,6 +1082,7 @@ const KNOWN_SESSION_EVENT_TYPES = new Set([
+ 	"session/title-llm-request",
+ 	"step/end",
+ 	"step/start",
++	"subagent/closed",
+ 	"subagent/descriptor",
+ 	"team/member",
+ 	"team/message/delivered",
