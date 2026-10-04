@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdir, mkdtemp, readFile, rm, symlink } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, writeFile, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -18,6 +18,9 @@ const { SessionStore } = await pkg('dsh-session')
 const { SessionProjectionRegistry } = await pkg('dsh-session-projection')
 const { JsonlSessionPersistence } = await pkg('dsh-session-persistence-jsonl')
 const { SystemPrompt } = await pkg('dsh-system-prompt')
+const { LocalFileSystem } = await pkg('dsh-fs-local')
+const { SkillRegistry } = await pkg('dsh-skill')
+const { apply: instructions } = await pkg('dsh-agent-instructions')
 const { ToolRuntime, defineTool } = await pkg('dsh-tools')
 const { LlmRuntime, LlmAdapter, createUserMessage } = await pkg('dsh-llm')
 const { AgentLoop } = await pkg('dsh-agent-loop')
@@ -126,15 +129,20 @@ for (const profile of ['web', 'headless']) test(profile+' connects independent d
   const entries = composeEntries([
     loadOverlayPatches('dsh',join(pluginRoot,pluginManifest.dsh.bundle.patch)),
     loadOverlayPatches('dsh',fileURLToPath(new URL('cordis.patch.yml',profileRoot))),
-  ]).filter(entry=>entry.name==='dsh-task-discipline')
-  assert.equal(entries.length,1); assert.notEqual(entries[0].disabled,true)
+  ]).filter(entry=>entry.name==='dsh-task-discipline' || entry.name==='dsh-task-discipline/workspace-policy')
+  assert.equal(entries.length,2); assert.ok(entries.every(entry=>entry.disabled!==true))
 
   const dir = await mkdtemp(join(tmpdir(),'task-discipline-profile-')), ctx = new Context(), requests = []
   t.after(async () => { await ctx.fiber.dispose(); await rm(dir,{recursive:true,force:true,maxRetries:5,retryDelay:100}) })
+  await mkdir(join(dir,'.git')); await mkdir(join(dir,'docs/workflow'),{recursive:true})
+  for (const path of ['AGENTS.md','REPO_POLICY.md','docs/workflow/TASK_CONTRACT.md']) await writeFile(join(dir,path),await readFile(new URL('../../../'+path,import.meta.url),'utf8'))
   await mkdir(join(dir,'node_modules'))
   await symlink(pluginRoot,join(dir,'node_modules/dsh-task-discipline'),'junction')
   new AgentRegistry(ctx); new SessionStore(ctx); new SystemPrompt(ctx,{includeRuntimeContext:false})
   new ToolRuntime(ctx); new LlmRuntime(ctx); new AgentLoop(ctx,{agents:[]})
+  new LocalFileSystem(ctx,{cwd:dir,diffBasisMaxBytes:1048576}); new SkillRegistry(ctx)
+  instructions(ctx,{dshHome:dir,maxBytes:65536})
+  for(const name of ['write','pwsh'])ctx.tools.register(defineTool({name,description:'Fixture '+name,parameters:{},output:{schema:{type:'object',additionalProperties:true},render:(_a,v)=>[{type:'text',text:JSON.stringify(v)}]},execute:()=>({ok:true})}))
   await ctx.plugin(Loader,{baseUrl:pathToFileURL(join(dir,'package.json')).href})
   await ctx.loader.root.update(entries); await ctx.loader.await()
   class Model extends LlmAdapter {
@@ -142,6 +150,9 @@ for (const profile of ['web', 'headless']) test(profile+' connects independent d
     async *stream(request) {
       assertDiscipline(request); requests.push(request)
       assert.ok(!request.tools.some(tool=>tool.name.startsWith('postman_')))
+      const history = JSON.stringify(request.messages)
+      for(const text of ['Общие правила агента','Контракт конечной задачи','Политика репозитория'])assert.ok(history.includes(text))
+      assert.ok(!history.includes('POSTMAN_LEADER_SKILL_VERSION: 24'))
       yield {type:'block-end',index:0,block:{type:'text',text:'done'}}; yield {type:'finish',reason:{kind:'stop'}}
     }
   }

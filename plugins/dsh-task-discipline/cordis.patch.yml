@@ -1,3 +1,5 @@
 - insert:
     - id: task-discipline
       name: dsh-task-discipline
+    - id: workspace-policy
+      name: dsh-task-discipline/workspace-policy
