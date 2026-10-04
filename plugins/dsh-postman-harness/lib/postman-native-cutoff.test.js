@@ -72,8 +72,15 @@ test('exact close durably discards parked inbox and rejects later followup',
     request: { parent: leader, prompt: content('initial B'), agentOptions: { provider: 'codex', model: 'test' } } })
   await naturallyDisposed.promise
   assert.equal(ctx.agents.get(cold.childId), undefined)
+  const before = await ctx.sessionPersistence.inspect(cold.childId)
+  await ctx.sessionPersistence.append(cold.childId, [{ type: 'agent/inbox/spliced',
+    seq: before.events.length, time: Date.now(), data: { target: 'next-turn', start: 0, inserted: [
+      { id: 'parked-B', role: 'user', source: { kind: 'user' }, content: content('parked B') }] } }])
   assert.equal(await ctx.subagents.closeContinuableChild(leader, cold.childId, async () => true), true)
-  assert.ok((await ctx.sessionPersistence.inspect(cold.childId)).events.some(event => event.type === 'subagent/closed'))
+  const coldSaved = await ctx.sessionPersistence.inspect(cold.childId)
+  assert.ok(coldSaved.events.some(event => event.type === 'subagent/closed'))
+  assert.equal(new Inbox({ header: coldSaved.meta, events: coldSaved.events },
+    { inserted() {}, discarded() {}, claimed() {} }).hasPending, false)
   ctx.subagents.continuations.closedChildren.delete(cold.childId)
   await assert.rejects(ctx.subagents.followup(leader, cold.childId, content('late cold'),
     { source: { kind: 'user' }, signal: signal() }), /closed/)
