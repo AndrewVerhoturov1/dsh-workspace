@@ -5,10 +5,12 @@
   "main": "./index.js",
   "exports": {
     ".": "./index.js",
+    "./workspace-policy": "./workspace-policy.js",
     "./package.json": "./package.json"
   },
   "files": [
     "index.js",
+    "workspace-policy.js",
     "cordis.patch.yml"
   ],
   "dsh": {
