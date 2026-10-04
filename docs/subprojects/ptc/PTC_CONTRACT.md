@@ -47,7 +47,11 @@ Trusted helper prelude предоставляет `ptc.expectStatus(result, allo
 
 Полномочия PTC по-прежнему являются подмножеством ordinary authority агента; approval, routing, Bridge grants и Worker task worktree остаются прежними. Нового scheduler/workflow/DSL/REPL/retry/rollback/реестра нет.
 
-## Этап 4.5: файловая граница Worker PTC
+## Текущая файловая политика Worker PTC
+
+Luna и Sol используют task worktree как базу относительных файловых путей, но не как дополнительную границу доступа. Внешние абсолютные пути, `..` и ссылки передаются обычному DSH ToolRuntime и файловому провайдеру: чтение разрешено штатной политикой, запись зависит от `read-only` / `workspace-write` / `danger-full-access`. Exact Worker/Leader authority, идентичность task context и отзыв доступа, schema/visibility, observation/stale checks, Postman artifact и Git guards сохраняются. Leader ранее не ограничивался этой границей и не меняется; native Harness PTC не затронут. Ниже описаны исторические этапы 4.5/5: их дополнительное ограничение «только task worktree» отменено.
+
+## Этап 4.5: прежняя файловая граница Worker PTC
 
 Baseline Stage 4 live подтвердил namespace, настоящий `glob/read/grep`, продолжение Worker, адресную остановку одного из трёх и отсутствие PTC production Worker; но относительный `read` использовал session cwd (`.dsh`), а не Host-bound task worktree. Причина: штатный DSH `read` использует `agent.session.header.cwd`, `glob/grep` запускают ripgrep из того же cwd; `ctx.tools.execute` переносит исходного Agent и не принимает отдельного scoped root. Mutation-этап остановлен до устранения этой границы.
 

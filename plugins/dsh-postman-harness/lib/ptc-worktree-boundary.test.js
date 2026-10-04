@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { mkdtemp, mkdir, writeFile, symlink, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { resolvePtcWorktreePath } from './ptc-worktree-boundary.js'
 
 async function fixture(fn) {
@@ -17,7 +17,7 @@ async function fixture(fn) {
   } finally { await rm(base, { recursive: true, force: true }) }
 }
 
-const denied = /PTC_FILESYSTEM_BOUNDARY_REJECTED/
+const denied = /PTC_FILESYSTEM_PATH_INVALID/
 test('existing canonical target: relative, absolute inside and normalized internal parent', () => fixture(async ({ root }) => {
   assert.equal(await resolvePtcWorktreePath(root, 'proof.txt'), join(root, 'proof.txt'))
   assert.equal(await resolvePtcWorktreePath(root, join(root, 'proof.txt')), join(root, 'proof.txt'))
@@ -26,15 +26,14 @@ test('existing canonical target: relative, absolute inside and normalized intern
   assert.equal(await resolvePtcWorktreePath(root, 'escape-link/../proof.txt'), join(root, 'proof.txt'))
 }))
 
-test('absolute outside, parent escapes and junction targets fail closed', () => fixture(async ({ root, outside }) => {
+test('outside, parent and junction paths are delegated to ordinary filesystem policy', () => fixture(async ({ root, outside }) => {
   for (const path of [join(outside, 'secret.txt'), '../outside/secret.txt', '../../outside/secret.txt', 'safe/../../outside/secret.txt',
-    'escape-link/secret.txt', 'escape-link'])
-    await assert.rejects(resolvePtcWorktreePath(root, path), denied, path)
+    'escape-link/secret.txt', 'escape-link', 'escape-link/new.txt', '../outside/new.txt', 'escape-link/missing/deep.txt'])
+    assert.equal(await resolvePtcWorktreePath(root, path), resolve(root, path))
 }))
 
-test('future target uses canonical existing parent and never accepts junction or traversal', () => fixture(async ({ root }) => {
-  assert.equal(await resolvePtcWorktreePath(root, 'new/file.txt'), join(root, 'new', 'file.txt'))
-  await assert.rejects(resolvePtcWorktreePath(root, 'escape-link/new.txt'), denied)
-  await assert.rejects(resolvePtcWorktreePath(root, '../outside/new.txt'), denied)
-  await assert.rejects(resolvePtcWorktreePath(root, 'escape-link/missing/deep.txt'), denied)
+test('invalid path forms still fail before dispatch', () => fixture(async ({ root }) => {
+  for (const path of ['', ' ', '\0', 'C:relative.txt', null, 1])
+    await assert.rejects(resolvePtcWorktreePath(root, path), denied)
+  await assert.rejects(resolvePtcWorktreePath('relative-root', 'proof.txt'), denied)
 }))

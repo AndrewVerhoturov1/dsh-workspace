@@ -1,37 +1,14 @@
-import { lstat, realpath } from 'node:fs/promises'
-import { isAbsolute, relative, resolve, dirname, parse, sep } from 'node:path'
+import { isAbsolute, resolve } from 'node:path'
 
-const reject = () => new Error('PTC_FILESYSTEM_BOUNDARY_REJECTED: target outside current task worktree or not verifiable')
-const contained = (root, target) => {
-  const rel = relative(root, target)
-  return rel === '' || (rel !== '..' && !rel.startsWith('..' + sep) && !isAbsolute(rel))
-}
+const reject = () => new Error('PTC_FILESYSTEM_PATH_INVALID: invalid task worktree or filesystem path')
 
-// Existing targets resolve through realpath; for a nonexistent target the
-// nearest existing canonical ancestor establishes containment.
+// Keep the task worktree as the relative-path base, not an access boundary.
+// Absolute paths and links remain subject to ordinary DSH filesystem policy.
 export async function resolvePtcWorktreePath(worktree, requested) {
   if (typeof worktree !== 'string' || !isAbsolute(worktree) ||
       typeof requested !== 'string' || !requested.trim() || requested.includes('\0') ||
       (!isAbsolute(requested) && /^[a-zA-Z]:/.test(requested))) throw reject()
-  let root
-  try { root = await realpath(worktree) } catch { throw reject() }
-  const target = isAbsolute(requested) ? resolve(requested) : resolve(root, requested)
-  if (!contained(root, target)) throw reject()
-  let ancestor = target
-  for (;;) {
-    try { await lstat(ancestor) } catch (error) {
-      if (error?.code !== 'ENOENT') throw reject()
-      const parent = dirname(ancestor)
-      if (parent === ancestor || ancestor === parse(ancestor).root) throw reject()
-      ancestor = parent
-      continue
-    }
-    // An existing but dangling link must never be treated as a missing target.
-    let canonical
-    try { canonical = await realpath(ancestor) } catch { throw reject() }
-    if (!contained(root, canonical)) throw reject()
-    return target
-  }
+  return resolve(worktree, requested)
 }
 
 // Only the actual filesystem-location fields in the installed DSH schemas are
