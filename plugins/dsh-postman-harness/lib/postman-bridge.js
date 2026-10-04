@@ -182,7 +182,7 @@ export async function apply(ctx, config = {}) {
   if (config.localDevelopment === true) ctx.get?.('systemPrompt')?.section({
     name: 'postman-local-development', order: 130,
     text: ({ scope } = {}) => isTopLevelPostmanSupervisor(scope) ?
-      'Host localDevelopment is explicitly enabled by the user. Within the user task, do not ask for repeated approval of local task preparation, Worker assignment, close/cancel or restore. Close releases an idle session, not a successful task. Addressed cancel needs no approval prompt and never certifies completion. Restore preserves dirty files/index in a private local recovery directory before resetting only the bound temporary worktree. Never bypass secret disclosure consent, overwrite permanent worktrees, or invent execution status.' : '',
+      'Host localDevelopment is explicitly enabled by the user. Within the user task, do not ask for repeated approval of local task preparation, Luna Worker assignment, close/cancel or restore. Sol Worker assignments are an exception: only on an explicit user request and always through postman_sol_worker with one-shot user approval. Close releases an idle session, not a successful task. Addressed cancel needs no approval prompt and never certifies completion. Restore preserves dirty files/index in a private local recovery directory before resetting only the bound temporary worktree. Never bypass secret disclosure consent, overwrite permanent worktrees, or invent execution status.' : '',
   })
   let boundaries, ptc
   const refreshWorker = id => {
@@ -215,6 +215,7 @@ export async function apply(ctx, config = {}) {
   ctx.tools.register(createPostmanBridgeStatusTool(ctx, jobs))
   ctx.tools.register(createPostmanTaskRestoreTool(ctx, postmanTaskContexts, { jobs, worker }))
   ctx.tools.register(worker.taskTool)
+  ctx.tools.register(worker.solTaskTool)
   ctx.tools.register(worker.interruptTool)
   ctx.tools.register(worker.stopTool)
   ctx.tools.register(createPostmanYieldTool(ctx))

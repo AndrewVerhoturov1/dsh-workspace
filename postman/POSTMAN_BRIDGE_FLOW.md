@@ -180,7 +180,7 @@ Preset `postman-leader` / `Postman Leader` хранится в репозито�
 не загружает отдельный preset-плагин: существующий `postman-bridge` подключается на уровне
 host-композиции в bundle `dsh-postman-harness`.
 
-Top-level Agent этого preset получает положительный runtime allowlist ровно из 20
+Top-level Agent этого preset получает положительный runtime allowlist ровно из 22
 зарегистрированных DSH 0.1.1-rc.2 tools:
 
 ```text
@@ -197,9 +197,11 @@ skill
 web_fetch
 postman_task_prepare
 postman_task_restore
+postman_input_files
 postman_bridge
 postman_bridge_status
 postman_worker
+postman_sol_worker
 postman_worker_interrupt
 postman_worker_stop
 postman_yield
@@ -210,11 +212,11 @@ postman_worker_list
 preset: фактический каталог Leader сокращается до этих имён независимо от остальных регистраций.
 
 `write`, `edit`, shell, generic `subagent`, workflow, `web_search` и direct Postman tools скрыты runtime-ом у Leader. Зарегистрированный `implementation_artifact_apply` не входит в Leader allowlist: его execute path допускает только точного активного Worker после отдельной авторизации REQ. Worker остаётся с широким общим coding preset без положительного Worker allowlist; его runtime deny включает все зарегистрированные `postman_*` имена и не затрагивает `report`. Bridge сохраняет отдельный неизменный allowlist из пяти инструментов: `skill`, `postman_send_current_turn`, `postman_current_turn_status`, `postman_ask_validate_reply`, `notify_parent`.
-Leader-only остаются все девять Host controls (`postman_task_prepare`, `postman_task_restore`,
-`postman_bridge`, `postman_bridge_status`, `postman_worker`, `postman_worker_interrupt`,
+Leader-only остаются все одиннадцать Host controls (`postman_task_prepare`, `postman_task_restore`, `postman_input_files`,
+`postman_bridge`, `postman_bridge_status`, `postman_worker`, `postman_sol_worker`, `postman_worker_interrupt`,
 `postman_worker_stop`, `postman_yield`, `postman_worker_list`): top-level
 `postman-leader` получает их в allowlist, а любой другой root/subagent Agent получает точечный deny
-всех девяти имён.
+всех одиннадцати имён.
 Tool body повторно проверяет caller и при обходе visibility boundary возвращает
 `POSTMAN_BRIDGE_CALLER_REJECTED` до parsing/spawn.
 
@@ -230,6 +232,15 @@ Bridge `toolFilter`, поэтому не может рекурсивно выз�
 Harness model routing намеренно находится вне Agent presets. Поэтому `postman-leader` задаёт роль
 и tool boundary, но не переключает модель автоматически: для Leader в model selector выбирается
 `GPT-6 Sol`. Luna Bridge фиксирована кодом независимо от модели parent.
+
+
+### Sol Worker V1
+
+`postman_sol_worker({task, label?})` создаёт или продолжает единственного Sol Worker; для нового задания тому же ребёнку передай `workerSessionId` (и при необходимости trusted `artifactRequestId`). `createNew: true` при занятом Sol-слоте возвращает `POSTMAN_SOL_WORKER_LIMIT_REACHED`. Фиксированная модель — `codex / gpt-6.1-sol`, reasoning `xhigh`. Лимиты независимы: максимум 3 Luna + 1 Sol на Leader; pending/uncertain binding тоже занимает свой слот. Старые записи без `workerType` считаются Luna.
+
+Sol предназначен для сложной работы, но V1 разрешает его **только по прямой просьбе пользователя использовать Sol Worker**. Нет автоматической escalation Luna → Sol, выбора по сложности/размеру или после неудачи Luna. Каждое новое задание требует штатного Harness approval `allowed-once` на фактический `postman_sol_worker` call. Отказ, отмена, недоступный сервис/ответ и отключённые prompts запрещают передачу; разрешение не запоминается, следующее задание снова спрашивает пользователя. Это исключение действует и в `localDevelopment`. Обычные `postman_worker` и `postman_worker_interrupt` не передают новые задания Sol (`POSTMAN_SOL_WORKER_TOOL_REQUIRED`).
+
+У top-level production и experimental PTC Leader инструмент доступен напрямую; внутрь PTC profile не включён. После приёма без независимой работы вызывается `postman_yield()`, не polling. Sol наследует тот же task worktree, continuable durable Session, report, cold resume, coding tools, transport restrictions и Worker PTC у experimental Leader. Общие `postman_worker_list` (тип/модель) и `postman_worker_stop` работают для обоих типов без approval; stop не доказывает успеха и не удаляет durable Session.
 
 ## 9. Передача implementation package локальному Worker
 
