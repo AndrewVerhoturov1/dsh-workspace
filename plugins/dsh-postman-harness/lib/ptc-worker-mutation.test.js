@@ -5,6 +5,8 @@ const cutoffUnavailable = 'BLOCKED: runtime has no exact-child admission cutoff'
 import { mkdtemp, mkdir, writeFile, readFile, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createRequire } from 'node:module'
+import { pathToFileURL } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import { ToolRuntime, defineTool } from '@deepseek-ai/dsh-tools'
@@ -24,11 +26,17 @@ import { createPtcAdapter, WORKER_MUTATION_PROFILE } from './ptc-adapter.js'
 const output = { schema: { type: 'object', additionalProperties: true }, render: (_a, value) => [{ type: 'text', text: JSON.stringify(value) }] }
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done }); return { promise, resolve } }
 
-async function fixture(dir, { web = true, worktree = dir } = {}) {
+async function fixture(dir, { web = true, worktree = dir, sandboxMode } = {}) {
   const ctx = new Context()
-  ctx.systemPrompt = { tools() {}, section() { return () => {} } }
+  ctx.systemPrompt = { tools() {}, context() {}, section() { return () => {} } }
   new ToolRuntime(ctx)
-  new LocalFileSystem(ctx, { cwd: dir, diffBasisMaxBytes: 1048576 })
+  if (sandboxMode) {
+    const profileRequire = createRequire(pathToFileURL(join(process.env.DSH_TEST_NATIVE_ROOT, 'package.json')))
+    const { default: SandboxPolicy } = await import(pathToFileURL(profileRequire.resolve('@deepseek-ai/dsh-sandbox-policy')).href)
+    const { default: SandboxedFileSystem } = await import(pathToFileURL(profileRequire.resolve('@deepseek-ai/dsh-fs-sandbox')).href)
+    new SandboxPolicy(ctx, { mode:sandboxMode, workspaceRoot:dir })
+    new SandboxedFileSystem(ctx, { cwd:dir, diffBasisMaxBytes:1048576 })
+  } else new LocalFileSystem(ctx, { cwd: dir, diffBasisMaxBytes: 1048576 })
   ctx.subprocess = new LocalSubprocessRuntime(ctx)
   applyFs(ctx, { readLimit: 2000, readMaxLineLength: 2000, readMaxBytes: 51200, readStreamMinSize: 10485760 })
   applyObservationPolicy(ctx)
@@ -115,8 +123,8 @@ async function fixture(dir, { web = true, worktree = dir } = {}) {
     taskContexts.set(id, context)
     return result
   }
-  async function start(parent, label = 'Worker') {
-    const result = await worker.taskTool.execute({ task: 'research', createNew: true, label }, { agent: parent.a, signal: new AbortController().signal })
+  async function start(parent, label = 'Worker', type = 'luna') {
+    const result = await (type === 'sol' ? worker.solTaskTool : worker.taskTool).execute({ task: 'research', createNew: true, label }, { agent: parent.a, signal: new AbortController().signal })
     assert.equal(result.status, 'POSTMAN_WORKER_TASK_ACCEPTED', JSON.stringify(result))
     return created.get(result.workerSessionId)
   }
@@ -205,7 +213,7 @@ test('Worker PTC relative read resolves against its Host-bound task worktree, no
   } finally { await f.cleanup() }
 }))
 
-test('Worker PTC rejects absolute, traversal and junction escapes before Harness dispatch', () => inTemporaryDir('ptc-escapes-', async root => {
+test('Worker PTC delegates external absolute, parent and junction paths to Harness', () => inTemporaryDir('ptc-escapes-', async root => {
   const session = join(root, 'session'), task = join(root, 'task'), outside = join(root, 'outside')
   await mkdir(session); await mkdir(task); await mkdir(outside); await mkdir(join(task, 'safe'))
   await writeFile(join(outside, 'secret.txt'), 'OUTSIDE_SECRET\n', 'utf8')
@@ -217,7 +225,6 @@ test('Worker PTC rejects absolute, traversal and junction escapes before Harness
     for (const [name, args] of [
       ['read', { file_path: join(outside, 'secret.txt') }],
       ['read', { file_path: '../outside.txt' }],
-      ['read', { file_path: '../../outside.txt' }],
       ['read', { file_path: 'safe/../../outside.txt' }],
       ['read', { file_path: 'escape-link/secret.txt' }],
       ['glob', { pattern: '*.txt', path: outside }],
@@ -227,10 +234,9 @@ test('Worker PTC rejects absolute, traversal and junction escapes before Harness
     ]) {
       const before = f.traces.length
       const result = await f.execute(child.a, 'return await tools.' + name + '(' + JSON.stringify(args) + ')')
-      assert.equal(result.value.status, 'runtime-error', JSON.stringify(result.value))
-      assert.match(JSON.stringify(result.value), /PTC_FILESYSTEM_BOUNDARY_REJECTED/)
-      assert.equal(f.traces.length, before + 1, name + ' dispatched forbidden target') // only outer ptc_execute
-      assert.deepEqual(result.value.effects?.calls?.map(x => x.state), ['failed']) // guest attempt; no Host dispatch
+      assert.ok(value(result), name)
+      assert.equal(f.traces.length, before + 2, name + ' must reach ordinary Harness dispatch')
+      assert.deepEqual(result.value.effects?.calls?.map(x => x.state), ['completed'])
     }
     // A glob pattern is a filter, never a search-root authority.
     for (const pattern of [join(outside, 'secret.txt').replaceAll('\\', '/'), '../outside/secret.txt']) {
@@ -245,7 +251,7 @@ test('Worker PTC rejects absolute, traversal and junction escapes before Harness
   } finally { await f.cleanup() }
 }))
 
-test('Worker helper read and grep preserve the task worktree boundary', () => inTemporaryDir('ptc-helper-boundary-', async root => {
+test('Worker helpers retain the relative base and allow external paths', () => inTemporaryDir('ptc-helper-boundary-', async root => {
   const session=join(root,'session'), task=join(root,'task'), outside=join(root,'outside')
   await mkdir(session);await mkdir(task);await mkdir(outside)
   await writeFile(join(session,'proof.txt'),'SESSION\n','utf8')
@@ -261,18 +267,17 @@ test('Worker helper read and grep preserve the task worktree boundary', () => in
       "return await ptc.grepMany({queries:[{pattern:'SECRET',path:'../outside'}]})",
     ]) {
       const result=await f.execute(child.a,program)
-      assert.equal(result.value.status,'runtime-error',JSON.stringify(result.value))
-      assert.match(JSON.stringify(result.value),/PTC_FILESYSTEM_BOUNDARY_REJECTED/)
+      assert.ok(value(result))
     }
-    assert.equal(f.traces.filter(x=>x.name==='read').length,2)
+    assert.equal(f.traces.filter(x=>x.name==='read').length,4)
     const long='TASK-я😀'.repeat(40000)
     await writeFile(join(task,'long.txt'),long,'utf8')
     await writeFile(join(session,'long.txt'),'SESSION_ONLY','utf8')
     const mapped=value(await f.execute(child.a,"return await ptc.mapTextFiles({files:['long.txt']},({text})=>({chars:text.length,bytes:ptc.utf8Bytes(text),tail:text.slice(-8)}))"))
     assert.deepEqual(mapped,[{chars:long.length,bytes:Buffer.byteLength(long),tail:long.slice(-8)}])
     const outsideRead=await f.execute(child.a,"return await ptc.readAllText({file_path:'"+join(outside,'secret.txt').replaceAll('\\','/')+"'})")
-    assert.equal(outsideRead.value.status,'runtime-error');assert.match(outsideRead.value.error.message,/PTC_FILESYSTEM_BOUNDARY_REJECTED/)
-    assert.equal(f.traces.filter(x=>x.name==='grep').length,0)
+    assert.equal(value(outsideRead),'SECRET')
+    assert.equal(f.traces.filter(x=>x.name==='grep').length,1)
   } finally { await f.cleanup() }
 }))
 
@@ -632,6 +637,53 @@ test('cold manager restart rechecks durable child and keeps stale Agent denied',
 }))
 
 
+for (const mode of ['danger-full-access', 'workspace-write', 'read-only']) test('external file access for Leader, Luna and Sol preserves DSH '+mode+' policy', { skip:!process.env.DSH_TEST_NATIVE_ROOT }, () => inTemporaryDir('ptc-policy-', async root => {
+  const session=join(root,'session'), task=join(root,'task'), external=join(root,'external.txt')
+  await mkdir(session); await mkdir(task); await writeFile(external,'EXTERNAL_MARKER')
+  const f=await fixture(session,{worktree:task,sandboxMode:mode})
+  try {
+    const parent=await f.leader(), luna=await f.start(parent,'Luna','luna'), sol=await f.start(parent,'Sol','sol')
+    const production=await f.leader('production','postman-leader')
+    const direct=await f.ctx.tools.execute({callId:'leader-read',name:'read',arguments:{file_path:external},agent:production.a,signal:new AbortController().signal})
+    assert.equal(direct.isError,false); assert.equal(direct.value.lines[0].text,'EXTERNAL_MARKER')
+    assert.equal(value(await f.execute(parent.a,programCall('read',{file_path:external}))).lines[0].text,'EXTERNAL_MARKER')
+    assert.ok(!value(await f.execute(parent.a,'return Object.keys(tools)')).includes('write'))
+    for(const child of [luna,sol]) {
+      assert.equal(value(await f.execute(child.a,programCall('read',{file_path:external}))).lines[0].text,'EXTERNAL_MARKER')
+      const target=join(root,child.a.id+'.txt')
+      const written=await f.execute(child.a,programCall('write',{file_path:target,content:'CREATED'}))
+      if(mode==='read-only') { rejected(written); assert.match(JSON.stringify(written.value),/file access denied under read-only/) }
+      else { assert.equal(value(written).operation,'create'); assert.equal(await readFile(target,'utf8'),'CREATED') }
+      const trace=f.traces.findLast(t=>t.name==='write'&&t.agent===child.a)
+      assert.ok(trace.parent&&trace.root)
+    }
+  } finally { await f.cleanup() }
+}))
+
+
+test('workspace-write still denies external non-temp mutations; read-only still denies edit', { skip:!process.env.DSH_TEST_NATIVE_ROOT }, () => inTemporaryDir('ptc-policy-denied-', async root => {
+  const outside=await mkdtemp(join(process.cwd(),'.ptc-external-policy-'))
+  const path=join(outside,'existing.txt')
+  await writeFile(path,'UNCHANGED')
+  try {
+    for(const mode of ['workspace-write','read-only']) {
+      const f=await fixture(root,{sandboxMode:mode})
+      try {
+        const parent=await f.leader()
+        for(const type of ['luna','sol']) {
+          const child=await f.start(parent,type,type)
+          assert.equal(value(await f.execute(child.a,programCall('read',{file_path:path}))).lines[0].text,'UNCHANGED')
+          for(const [name,args] of [['write',{file_path:path,content:'DENIED'}],['edit',{file_path:path,old_string:'UNCHANGED',new_string:'DENIED'}]]) {
+            const result=await f.execute(child.a,programCall(name,args))
+            rejected(result); assert.match(JSON.stringify(result.value),new RegExp('file access denied under '+mode))
+            assert.equal(await readFile(path,'utf8'),'UNCHANGED')
+          }
+        }
+      } finally { await f.cleanup() }
+    }
+  } finally { await rm(outside,{recursive:true,force:true}) }
+}))
+
 const programCall = (name, args) => 'return await tools.' + name + '(' + JSON.stringify(args) + ')'
 const rejected = result => {
   assert.equal(result.value.status, 'runtime-error', JSON.stringify(result.value))
@@ -668,7 +720,7 @@ test('real write/edit use task worktree, absolute inside and normalized paths, n
   } finally { await f.cleanup() }
 }))
 
-test('outside, traversal, existing junction and future junction reject before mutation dispatch', () => inTemporaryDir('ptc-mutate-deny-', async root => {
+test('external mutation keeps observation checks and permits observed writes and future targets', () => inTemporaryDir('ptc-mutate-deny-', async root => {
   const session = join(root, 'session'), task = join(root, 'task'), outside = join(root, 'outside')
   await mkdir(session); await mkdir(task); await mkdir(outside); await mkdir(join(task, 'safe'))
   await writeFile(join(outside, 'old.txt'), 'OUTSIDE')
@@ -684,11 +736,17 @@ test('outside, traversal, existing junction and future junction reject before mu
       ['write', 'escape-link/new.txt'], ['write', 'escape-link/missing/deep.txt'],
     ]) {
       const before = f.traces.length
-      const args = name === 'write' ? { file_path:path, content:'MUTATED' } : { file_path:path, old_string:'OUTSIDE', new_string:'MUTATED' }
+      const args = name === 'write' ? { file_path:path, content:'MUTATED' } : { file_path:path, old_string:path.includes('outside.txt') ? 'PARENT' : 'OUTSIDE', new_string:'MUTATED' }
       const result = await f.execute(child.a, programCall(name, args))
-      rejected(result)
-      assert.match(JSON.stringify(result.value), /PTC_FILESYSTEM_BOUNDARY_REJECTED/)
-      assert.equal(f.traces.length, before + 1, name + ': Host mutation dispatched')
+      if (result.value.status === 'runtime-error') {
+        rejected(result)
+        assert.match(JSON.stringify(result.value), /reading.*first|FS_NOT_OBSERVED/)
+        value(await f.execute(child.a, programCall('read', { file_path:path })))
+        value(await f.execute(child.a, programCall(name, args)))
+      } else value(result)
+      if (!path.endsWith('new.txt') && !path.endsWith('deep.txt'))
+        value(await f.execute(child.a, programCall('write', { file_path:path, content:path.includes('outside.txt') ? 'PARENT' : 'OUTSIDE' })))
+      assert.ok(f.traces.length >= before + 2, name + ': ordinary Host dispatch missing')
     }
     assert.equal(await readFile(join(outside, 'old.txt'), 'utf8'), 'OUTSIDE')
     assert.equal(await readFile(join(root, 'outside.txt'), 'utf8'), 'PARENT')
@@ -734,7 +792,7 @@ test('ordinary DSH stale observation rejects out-of-band replacement', () => inT
   } finally { await f.cleanup() }
 }))
 
-test('completed mutation survives later program failure; boundary denial remains failed', () => inTemporaryDir('ptc-mutate-effects-', async task => {
+test('completed mutation survives later program failure; observation denial remains failed', () => inTemporaryDir('ptc-mutate-effects-', async task => {
   const f = await fixture(task)
   try {
     const leader = await f.leader(), child = await f.start(leader)
@@ -744,9 +802,9 @@ test('completed mutation survives later program failure; boundary denial remains
     assert.equal(await readFile(join(task, 'effect.txt'), 'utf8'), 'COMMITTED')
     assert.equal(f.traces.filter(t => t.name === 'write').length, 1)
     const before = f.traces.length
-    const denied = await f.execute(child.a, programCall('write', {file_path:'../outside.txt', content:'no'}))
+    const denied = await f.execute(child.a, programCall('edit', {file_path:'effect.txt', old_string:'missing', new_string:'no'}))
     rejected(denied)
-    assert.equal(f.traces.length, before + 1)
+    assert.equal(f.traces.length, before + 2)
   } finally { await f.cleanup() }
 }))
 

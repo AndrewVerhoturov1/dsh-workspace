@@ -129,7 +129,7 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
     const schemas = ctx.tools.schemas(agent).filter(s => record.profile.tools.includes(s.name))
     const helperText = POSTMAN_PTC_DISCIPLINE + '\n' + ptcHelperGuidance(schemas.map(s => s.name))
     if (record.role === 'worker') return 'PTC supports read, glob, grep, web_fetch, web_search, write and edit when ordinarily visible. ' +
-      'Filesystem paths inside PTC are Host-scoped to the current task worktree. Use write/edit inside PTC for mechanical multi-step filesystem work. ' +
+      'Relative filesystem paths inside PTC use the current task worktree; absolute paths and paths outside it follow ordinary DSH filesystem policy. Use write/edit inside PTC for mechanical multi-step filesystem work. ' +
       'PTC mutation is not transactional. A successful write/edit remains committed even if later program code fails. There is no automatic rollback or retry. ' +
       'Use shell/jobs/report and other ordinary Worker tools outside PTC. ' +
       helperText +
