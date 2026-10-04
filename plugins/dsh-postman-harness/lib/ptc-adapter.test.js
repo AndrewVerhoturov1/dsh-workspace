@@ -395,7 +395,7 @@ test('PTC-first Leader direct tools fail closed while exceptions and production 
   for (const {a} of [pilot, production]) { a.ctx.tools.restrict(postmanBridgeRestrictionForAgent(a)); f.adapter.refresh(a) }
   assert.deepEqual(PILOT_PROFILE.tools, POSTMAN_PTC_ONLY_LEADER_TOOLS)
   assert.equal(PILOT_PROFILE.id, 'postman-leader-supervisor')
-  assert.equal(PILOT_PROFILE.revision, 7)
+  assert.equal(PILOT_PROFILE.revision, 8)
   assert.equal(PILOT_PROFILE.limits.maxWallMs, 300000)
   assert.equal(PILOT_PROFILE.limits.maxToolCalls, 256)
   assert.equal(PILOT_PROFILE.limits.quickjsMemoryBytes, 67108864)

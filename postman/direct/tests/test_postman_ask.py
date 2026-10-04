@@ -168,7 +168,9 @@ class PostmanAskTests(unittest.TestCase):
             runner = self.make_runner(root)
             result = runner.run(request_id=REQ, task="исследуй вопрос")
             state = json.loads(runner.state_path(REQ).read_text(encoding="utf-8"))
+            handoff = json.loads((runner.direct_root / "results" / f"{REQ}.json").read_text(encoding="utf-8"))
 
+        self.assertEqual(handoff, result)
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["code"], "TEXT_RESULT_DURABLE")
         self.assertEqual(result["assistantText"], body)
@@ -250,10 +252,14 @@ class PostmanAskTests(unittest.TestCase):
         def fail_run(instance, **_kwargs):
             instance.publication_receipt = dict(receipt)
             raise postman_ask.DirectPostmanError("DIRECT_BROWSER_FAILED", "browser unavailable")
-        with patch.object(postman_ask.DirectPostmanAsk, "run", fail_run), contextlib.redirect_stdout(io.StringIO()) as stdout:
-            code = postman_ask.main(["--request-id", REQ, "--task", "intent", "--branch", "main"])
+        with tempfile.TemporaryDirectory() as root:
+            with patch.object(postman_ask.DirectPostmanAsk, "run", fail_run), contextlib.redirect_stdout(io.StringIO()) as stdout:
+                code = postman_ask.main(["--request-id", REQ, "--task", "intent", "--branch", "main",
+                                        "--direct-root", root])
+            failure = json.loads(stdout.getvalue())
+            handoff = json.loads((Path(root) / "results" / f"{REQ}.json").read_text(encoding="utf-8"))
+        self.assertEqual(handoff, failure)
         self.assertEqual(code, 2)
-        failure = json.loads(stdout.getvalue())
         self.assertEqual(failure["code"], postman_ask.POSTMAN_TRANSPORT_FAILED)
         self.assertEqual(failure["publicationReceipt"], receipt)
 

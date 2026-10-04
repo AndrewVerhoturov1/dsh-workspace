@@ -280,8 +280,8 @@ test('image transport failures release only with exact pre-publication proof', a
   const unknownStore = durableContexts(unknownOperations)
   const unknown = fixture({ contexts: unknownStore.contexts })
   for (const id of ['unknownA', 'unknownB', 'unknownC']) {
-    assert.equal((await unknown.jobs.status(parent, id)).synchronization, 'busy')
-    assert.equal((await unknown.jobs.status(parent, id, true)).synchronization, 'busy')
+    assert.equal((await unknown.jobs.status(parent, id)).status, 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN')
+    assert.equal((await unknown.jobs.status(parent, id, true)).status, 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN')
   }
   assert.equal((await unknown.accept()).status, 'POSTMAN_BRIDGE_LIMIT_REACHED')
   await unknown.jobs.dispose()

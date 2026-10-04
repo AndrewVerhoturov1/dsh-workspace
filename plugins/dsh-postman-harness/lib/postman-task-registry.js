@@ -26,12 +26,23 @@ export const POSTMAN_TASK_DOMAIN = defineDomain({
       delivery: z.enum(['none', 'pending', 'unknown']),
       artifactRequests: z.array(z.string()), lifecycle: workerLifecycle.optional(),
     })).optional(),
+    // Leader-owned authority survives Worker retirement and Bridge journal cleanup.
+    artifactGrants: z.record(z.string(), z.object({
+      requestId: z.string(), repository: z.string(), resultZip: z.string(),
+      sha256: z.string(), expectedFilename: z.string(),
+    }).strict()).optional(),
     runner: z.object({ state: z.enum(['none', 'running', 'failed', 'unknown', 'restoring']),
       requestId: z.string().nullable() }),
     // Keep the legacy single marker readable; new jobs use individually keyed operations.
     bridge: z.object({ id: z.string(), state: z.enum(['pending', 'unknown']) }).nullable(),
     bridgeOperations: z.record(z.string(), z.object({
       state: z.enum(['pending', 'unknown', 'received']),
+      phase: z.enum(['reserved', 'child-known', 'request-known', 'publication-known', 'terminal', 'not-sent', 'synchronized']).optional(),
+      transportKind: z.enum(['artifact', 'text', 'image']).optional(),
+      createdAt: z.string().optional(),
+      childSessionId: z.string().optional(),
+      requestId: z.string().optional(),
+      publication: z.unknown().optional(),
       terminal: z.unknown().optional(),
       synchronization: z.enum(['pending', 'busy', 'failed', 'synchronized', 'not-required']).optional(),
       grantDiagnostic: z.string().optional(),

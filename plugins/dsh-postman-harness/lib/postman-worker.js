@@ -9,6 +9,7 @@ import {
   POSTMAN_WORKER_INTERRUPT_TOOL_NAME,
   POSTMAN_WORKER_STOP_TOOL_NAME,
   POSTMAN_WORKER_LIST_TOOL_NAME,
+  POSTMAN_WORKER_COMPACT_TOOL_NAME,
   isTopLevelPostmanSupervisor,
   isTopLevelPostmanPtcLeader,
 } from './postman-bridge-core.js'
@@ -169,6 +170,10 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     const context = contexts?.get(parent.id)
     return !contexts || Boolean(context && (!slot.context || slot.context === context))
   }
+  async function provenClosed(parent, id) {
+    if (typeof ctx.subagents.inspectClosedContinuableChild !== 'function') return false
+    try { return await ctx.subagents.inspectClosedContinuableChild(parent, id) === true } catch { return false }
+  }
   async function childExists(parent, id, signal) {
     const entries = await ctx.subagents.listChildren(parent.id, signal)
     const matches = entries.filter(entry => entry.id === id)
@@ -181,6 +186,19 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     const saved = Object.hasOwn(workers, slot.id) ? workers[slot.id] : null
     if (!saved || saved.id !== slot.id || slot.closed) return 'POSTMAN_WORKER_TARGET_UNKNOWN'
     if (saved.state === 'stopping' || saved.state === 'uncertain') {
+      if (slot.parent !== parent) slot.verified = false
+      if (!authorized(parent) || !matchesContext(parent, slot)) return 'POSTMAN_WORKER_BINDING_UNCERTAIN'
+      const expectedContext = contexts.get(parent.id)
+      if (await provenClosed(parent, slot.id)) {
+        const current = rowOf(parent.id)?.workers?.[slot.id]
+        if (authorized(parent) && contexts.get(parent.id) === expectedContext &&
+            current?.id === slot.id && cancelWitness(current) === cancelWitness(saved) &&
+            (current.state === 'stopping' || current.state === 'uncertain')) {
+          await removeBinding(parent, groupFor(parent), slot, slot.id, cancelWitness(current), expectedContext)
+          bindingChanged(slot.id)
+          return 'POSTMAN_WORKER_CLOSED_RECONCILED'
+        }
+      }
       bindingChanged(slot.id)
       return 'POSTMAN_WORKER_BINDING_UNCERTAIN'
     }
@@ -217,6 +235,14 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       try { return await action() } finally { contexts.endWorkerAdmission(parent.id, token) }
     }
     return action()
+  }
+  async function reconcileClosedBindings(parent, group) {
+    if (!durable || !contexts?.get(parent.id)) return
+    for (const binding of Object.values(bindings(parent, group))) {
+      if (!['stopping', 'uncertain'].includes(binding.state)) continue
+      const slot = slotFor(group, binding)
+      try { await enqueue(slot, () => reconcile(parent, slot)) } catch { /* A read/write failure is not closure proof. */ }
+    }
   }
   function select(parent, id, group, workerType) {
     const workers = bindings(parent, group)
@@ -456,6 +482,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
         if (contexts && !contexts.get(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
         return admitted(parent, async () => {
           const group = groupFor(parent)
+          await reconcileClosedBindings(parent, group)
           if (args.createNew === true) return create(parent, group, args, exec, workerType)
           const chosen = await enqueue(group, () => select(parent, args.workerSessionId, group, workerType))
           if (!chosen.binding) {
@@ -539,6 +566,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       if (id !== undefined && (typeof id !== 'string' || !id)) return { status: 'POSTMAN_WORKER_TARGET_UNKNOWN' }
       if (mode === 'cancel' && !id) return { status:'POSTMAN_WORKER_TARGET_REQUIRED' }
       const g = groupFor(parent)
+      await reconcileClosedBindings(parent, g)
       const chosen = await enqueue(g, () => select(parent, id, g))
       if (!chosen.binding) {
         if (id && g.stopped.has(id)) return { status: 'POSTMAN_WORKER_ALREADY_STOPPED', workerSessionId: id }
@@ -632,17 +660,87 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
   })
   const listTool = defineTool({
     name: POSTMAN_WORKER_LIST_TOOL_NAME,
-    description: 'List this Leader’s exact Worker bindings and delivery states without mutating or probing the children.',
+    description: 'Read exact Leader Worker bindings, residency, durable closure and quota without resuming children.',
     parameters: {}, output: output(),
-    execute(_args, exec) {
+    async execute(_args, exec) {
       const parent = exec?.agent
       if (!authorized(parent)) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
       const values = Object.values(bindings(parent, groupFor(parent)))
-      return { status: 'POSTMAN_WORKER_LIST', workers: values.map(value => ({
-        workerSessionId: value.id, label: value.label, workerType: workerTypeOf(value),
-        model: workerOptions(workerTypeOf(value)).model, binding: value.state,
-        delivery: value.delivery, execution: 'unknown',
-      })) }
+      let children
+      try { children = await ctx.subagents.listChildren(parent.id, exec.signal) } catch { children = null }
+      const workers = await Promise.all(values.map(async value => {
+        const entries = children?.filter(entry => entry.id === value.id)
+        const child = entries?.length === 1 ? entries[0] : null
+        const live = liveWorker(value.id)
+        let runtime = 'unknown'
+        if (live?.session?.header?.parentSession === parent.id && live.session.header.origin === 'subagent')
+          runtime = live.status === 'running' ? 'resident-running' : live.status === 'idle' ? 'resident-idle' : 'unknown'
+        else if (entries?.length > 1 || child?.kind === 'diagnostic') runtime = 'corrupt/diagnostic'
+        else if (child?.kind === 'child' && child.mode === 'continuable')
+          runtime = child.activity === 'inactive' ? 'cold-continuable' : 'unknown'
+        else if (children && !child) runtime = 'unavailable'
+        let saved
+        try { saved = await ctx.get?.('sessionPersistence')?.inspect?.(value.id, exec.signal) } catch {}
+        const exactSaved = saved?.meta?.id === value.id && saved.meta.origin === 'subagent' &&
+          saved.meta.parentSession === parent.id && saved.meta.delegationDepth === 1 &&
+          Array.isArray(saved.events) && child?.kind === 'child' && child.mode === 'continuable'
+        if (exactSaved && saved.events.some(event => event.type === 'subagent/closed'))
+          runtime = live ? 'corrupt/diagnostic' : 'durable-closed'
+        const exactLive = live?.session?.header?.id === value.id && live.session.header.origin === 'subagent' &&
+          live.session.header.parentSession === parent.id && live.session.header.delegationDepth === 1
+        const events = exactLive ? live.session.events : exactSaved ? saved.events : null
+        const latestStart = events?.findLast(event => event.type === 'turn/start')
+        const latestEnd = events?.findLast(event => event.type === 'turn/end')
+        const turn = !latestStart ? 'unknown' : latestEnd?.data?.turn === latestStart.data?.turn
+          ? 'settled' : !latestEnd || events.indexOf(latestEnd) < events.indexOf(latestStart) ? 'open' : 'unknown'
+        const reports = value.lifecycle?.reports
+        const report = !Array.isArray(reports) || !parent.session?.events ? 'unknown'
+          : reports.some(item => parent.session.events.some(event => event.type === 'user/message' &&
+            event.data?.id === item.messageId && event.data?.source?.kind === 'subagent-report' &&
+            event.data.source.senderSessionId === value.id)) ? 'delivered' : 'absent'
+        return { workerSessionId: value.id, label: value.label, workerType: workerTypeOf(value),
+          model: workerOptions(workerTypeOf(value)).model, binding: value.state,
+          delivery: value.delivery, runtime, execution: runtime, turn, report }
+      }))
+      return { status: 'POSTMAN_WORKER_LIST', quota: {
+        luna: { used: workers.filter(value => value.workerType === 'luna').length, limit: 3 },
+        sol: { used: workers.filter(value => value.workerType === 'sol').length, limit: 1 },
+      }, workers }
+    },
+  })
+  const compactTool = defineTool({
+    name: POSTMAN_WORKER_COMPACT_TOOL_NAME,
+    description: 'Compact the exact resident idle Worker using the native compaction engine; keep its Session and slot.',
+    parameters: { workerSessionId: { type: 'string', required: true } }, output: output(),
+    async execute(args, exec) {
+      const parent = exec?.agent, id = args?.workerSessionId
+      if (!authorized(parent)) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
+      if (typeof id !== 'string' || !id) return { status: 'POSTMAN_WORKER_TARGET_UNKNOWN' }
+      const g = groupFor(parent), selected = select(parent, id, g)
+      if (!selected.binding) return selected
+      const slot = slotFor(g, selected.binding)
+      return admitted(parent, () => enqueue(slot, async () => {
+        const binding = bindings(parent, g)[id]
+        if (binding !== selected.binding || binding.state !== 'ready' || binding.delivery !== 'none' ||
+            !matchesContext(parent, slot)) return { status: 'POSTMAN_WORKER_COMPACT_BUSY', workerSessionId: id }
+        const child = liveWorker(id)
+        if (!child || child.session?.header?.parentSession !== parent.id ||
+            child.session.header.origin !== 'subagent' || child.session.header.delegationDepth !== 1)
+          return { status: 'POSTMAN_WORKER_COMPACT_NOT_RESIDENT', workerSessionId: id }
+        if (typeof ctx.subagents.compactContinuableChild !== 'function')
+          return { status: 'POSTMAN_WORKER_LIFECYCLE_UNSUPPORTED', workerSessionId: id }
+        if (child.status !== 'idle' || child.inbox?.hasPending !== false ||
+            typeof child.ctx?.get?.('compaction')?.compactNow !== 'function')
+          return { status: 'POSTMAN_WORKER_COMPACT_BUSY', workerSessionId: id }
+        try {
+          const compacted = await ctx.subagents.compactContinuableChild(parent, id, agent =>
+            agent === child && bindings(parent, g)[id] === binding && binding.state === 'ready' &&
+            binding.delivery === 'none' && matchesContext(parent, slot), exec.signal)
+          if (!compacted) return { status: 'POSTMAN_WORKER_COMPACT_BUSY', workerSessionId: id }
+          return { status: 'POSTMAN_WORKER_COMPACTED', workerSessionId: id,
+            compacted: compacted.result !== null, sameSession: true }
+        } catch (error) { return { status: 'POSTMAN_WORKER_COMPACT_FAILED', workerSessionId: id, diagnostic: diagnostic(error) } }
+      }))
     },
   })
   function liveSlot(caller, leaderId, requireActivation = false) {
@@ -773,9 +871,12 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       })
     } catch { return false }
   }
-  async function removeBinding(parent, g, slot, id) {
+  async function removeBinding(parent, g, slot, id, expected = null, expectedContext = null) {
     if (durable) await contexts.changeRecord(parent.id, row => {
-      if (row.workers?.[id]?.state !== 'stopping') throw new Error('POSTMAN_WORKER_BINDING_CHANGED')
+      if (expectedContext && (!authorized(parent) || contexts.get(parent.id) !== expectedContext))
+        throw new Error('POSTMAN_WORKER_CONTEXT_CHANGED')
+      if (expected ? cancelWitness(row.workers?.[id] ?? {}) !== expected : row.workers?.[id]?.state !== 'stopping')
+        throw new Error('POSTMAN_WORKER_BINDING_CHANGED')
       const workers = { ...row.workers }; delete workers[id]
       return { ...row, workers }
     })
@@ -819,6 +920,6 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     }
     leaders.clear()
   }
-  return { taskTool, solTaskTool, interruptTool, stopTool, listTool, ownerOf, ownsNotification, ownsLiveWorker, ptcContextOf, confirmActivation, releaseActivation, refreshLeader, suspendLeader,
+  return { taskTool, solTaskTool, interruptTool, stopTool, listTool, compactTool, ownerOf, ownsNotification, ownsLiveWorker, ptcContextOf, confirmActivation, releaseActivation, refreshLeader, suspendLeader,
     contextOf, observeReport, pauseForOperation, prepareRestore, dispose }
 }
