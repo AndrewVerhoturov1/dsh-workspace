@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createPostmanWorkerTools } from './postman-worker.js'
 import { apply as postmanHarness } from './index.js'
 import { apply as taskDiscipline, TASK_DISCIPLINE } from '../../dsh-task-discipline/index.js'
+import { apply as workspacePolicy } from '../../dsh-task-discipline/workspace-policy.js'
 import { openPostmanTaskRegistry } from './postman-task-registry.js'
 import { createPtcAdapter, WORKER_MUTATION_PROFILE } from './ptc-adapter.js'
 import { createPostmanBridgeBoundaryManager, isTopLevelPostmanPtcLeader, postmanPtcDirectCallGuard, POSTMAN_LEADER_TOOL_ALLOWLIST } from './postman-bridge-core.js'
@@ -32,6 +33,10 @@ const { JsonStorageBackend } = await pkg('dsh-storage-json')
 const { DomainFacility } = await pkg('dsh-storage-domain')
 const { default: Loader } = await pkg('cordis-plugin-loader')
 const { AgentPresets } = await pkg('dsh-agent-presets')
+const { LocalFileSystem } = await pkg('dsh-fs-local')
+const { SkillRegistry } = await pkg('dsh-skill')
+const { apply: instructions } = await pkg('dsh-agent-instructions')
+const { apply: filesystemSkills } = await pkg('dsh-skill-filesystem')
 
 async function runPhase(dir, phase, workerType = 'luna') {
   const sol = workerType === 'sol'
@@ -42,6 +47,15 @@ async function runPhase(dir, phase, workerType = 'luna') {
   const persistence = new JsonlSessionPersistence(ctx, {root:join(dir,'sessions'),compression:'none'})
   new SubagentRuntime(ctx); spawn(ctx,{providerName:'spawn'}); report(ctx,{reportDelivery:'quiet'})
   new AgentLoop(ctx,{agents:[],maxParallelToolCalls:1})
+  new LocalFileSystem(ctx,{cwd:dir,diffBasisMaxBytes:1048576}); new SkillRegistry(ctx)
+  await mkdir(join(dir,'.git'),{recursive:true}); await mkdir(join(dir,'docs/workflow'),{recursive:true})
+  for (const path of ['AGENTS.md','REPO_POLICY.md','docs/workflow/TASK_CONTRACT.md']) {
+    const text = await readFile(new URL('../../../'+path,import.meta.url),'utf8')
+    await writeFile(join(dir,path),text)
+  }
+  filesystemSkills(ctx,{includeDefaultRoots:false,customSkillDirs:[fileURLToPath(new URL('../../../.agents/skills/',import.meta.url))],watch:false})
+  instructions(ctx,{dshHome:dir,maxBytes:65536})
+  workspacePolicy(ctx)
   taskDiscipline(ctx) // Independent global plugin, reloaded in each process.
   postmanHarness(ctx)
   const leaderRequests = []
@@ -92,6 +106,11 @@ async function runPhase(dir, phase, workerType = 'luna') {
       assert.equal(agent.session.header.cwd, dir)
       assert.equal(agent.session.header.agentPreset,'postman-leader-ptc')
       assert.equal(ctx.agentPresets.composedPreset(agent.ctx),'postman-leader-ptc')
+      const history = JSON.stringify(request.messages)
+      assert.ok(history.includes('Общие правила агента'), 'actual AGENTS body in first request, including cold resume')
+      assert.ok(history.includes('Контракт конечной задачи'), 'actual TASK_CONTRACT body')
+      assert.ok(history.includes('Политика репозитория'), 'actual REPO_POLICY body')
+      assert.equal(history.includes('POSTMAN_LEADER_SKILL_VERSION: 24'),agent.id==='leader','full skill only for exact Leader, not inheriting Worker role')
       if(agent.id==='leader'){
         leaderRequests.push(request)
         const workerId = Object.keys(registry.get('leader').workers)[0]
