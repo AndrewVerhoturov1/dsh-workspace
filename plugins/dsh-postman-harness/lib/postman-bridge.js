@@ -11,7 +11,7 @@ import { createPostmanBridgeJobs } from './postman-bridge-jobs.js'
 import { postmanTaskContexts, initializePostmanTaskContexts, releasePostmanTaskContexts } from './postman-task-context.js'
 import { sharedPostmanTaskRegistry, closeSharedPostmanTaskRegistry } from './postman-task-registry.js'
 import {
-  POSTMAN_BRIDGE_TOOL_ALLOWLIST, POSTMAN_BRIDGE_TOOL_NAME, POSTMAN_BRIDGE_STATUS_TOOL_NAME, POSTMAN_CHILD_NOTIFY_TOOL_NAME, POSTMAN_TASK_PREPARE_TOOL_NAME, POSTMAN_TASK_RESTORE_TOOL_NAME, POSTMAN_YIELD_TOOL_NAME,
+  POSTMAN_BRIDGE_TOOL_ALLOWLIST, POSTMAN_BRIDGE_TOOL_NAME, POSTMAN_BRIDGE_STATUS_TOOL_NAME, POSTMAN_BRIDGE_LIST_TOOL_NAME, POSTMAN_CHILD_NOTIFY_TOOL_NAME, POSTMAN_TASK_PREPARE_TOOL_NAME, POSTMAN_TASK_RESTORE_TOOL_NAME, POSTMAN_YIELD_TOOL_NAME,
   createPostmanBridgeBoundaryManager, isTopLevelPostmanSupervisor, isTopLevelPostmanPtcLeader,
   postmanBridgeCallerAllowed, postmanBridgeRestrictionForAgent, postmanPtcDirectCallGuard,
 } from './postman-bridge-core.js'
@@ -108,6 +108,18 @@ export function createPostmanBridgeStatusTool(ctx, jobs) {
   })
 }
 
+export function createPostmanBridgeListTool(ctx, jobs) {
+  return defineTool({
+    name: POSTMAN_BRIDGE_LIST_TOOL_NAME,
+    description: 'Observe all Bridge operations and exact slot occupancy for this Leader. Read-only: no recovery, child resume, Direct Send, synchronization or grant registration.',
+    parameters: {}, output: output(),
+    async execute(_args, exec) {
+      if (!authorized(exec, ctx)) return { status: 'POSTMAN_BRIDGE_CALLER_REJECTED' }
+      return jobs.list(exec.agent)
+    },
+  })
+}
+
 export function createPostmanYieldTool(ctx) {
   return defineTool({
     name: POSTMAN_YIELD_TOOL_NAME,
@@ -178,7 +190,7 @@ export async function apply(ctx, config = {}) {
   const contexts = initializePostmanTaskContexts(registry, { localDevelopment: config.localDevelopment === true })
   const currentAttachments = new CurrentAttachmentStore(ctx)
   const coordinator = createPostmanBridgeLaunchCoordinator()
-  const grants = createImplementationArtifactGrants()
+  const grants = createImplementationArtifactGrants(registry)
   if (config.localDevelopment === true) ctx.get?.('systemPrompt')?.section({
     name: 'postman-local-development', order: 130,
     text: ({ scope } = {}) => isTopLevelPostmanSupervisor(scope) ?
@@ -213,6 +225,7 @@ export async function apply(ctx, config = {}) {
     resolveAttachment: (ref, signal) => ctx.attachments.readImage(ref, signal) }))
   ctx.tools.register(createPostmanBridgeTool(ctx, jobs, postmanTaskContexts))
   ctx.tools.register(createPostmanBridgeStatusTool(ctx, jobs))
+  ctx.tools.register(createPostmanBridgeListTool(ctx, jobs))
   ctx.tools.register(createPostmanTaskRestoreTool(ctx, postmanTaskContexts, { jobs, worker }))
   ctx.tools.register(worker.taskTool)
   ctx.tools.register(worker.solTaskTool)
@@ -221,6 +234,7 @@ export async function apply(ctx, config = {}) {
   ctx.tools.register(createPostmanYieldTool(ctx))
   installPostmanWorkerReportObserver(ctx, worker)
   ctx.tools.register(worker.listTool)
+  ctx.tools.register(worker.compactTool)
   ctx.tools.register(createPostmanChildNotifyTool(ctx, postmanTaskContexts, worker))
   ctx.tools.register(createImplementationArtifactApplyTool(ctx, grants, worker, { taskContexts: postmanTaskContexts, jobs }))
   ctx.effect(() => async () => {

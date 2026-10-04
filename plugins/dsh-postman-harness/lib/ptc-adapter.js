@@ -8,7 +8,7 @@ import { POSTMAN_PTC_ONLY_LEADER_TOOLS, POSTMAN_WORKER_PTC_TOOL_NAMES, POSTMAN_P
 
 export const PTC_TOOL_NAME = 'ptc_execute'
 export const PILOT_PROFILE = validatePtcProfile({
-  schemaVersion: 1, id: 'postman-leader-supervisor', revision: 7,
+  schemaVersion: 1, id: 'postman-leader-supervisor', revision: 8,
   tools: [...POSTMAN_PTC_ONLY_LEADER_TOOLS],
   limits: { ...DEFAULT_LIMITS, maxWallMs: 300000, maxToolCalls: 256,
     quickjsMemoryBytes: 67108864, maxTotalBridgeBytes: 16777216, maxConcurrentToolCalls: 1 },

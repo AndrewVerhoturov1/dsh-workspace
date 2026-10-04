@@ -28,6 +28,7 @@ import request_identity  # noqa: E402
 import task_package  # noqa: E402
 import input_bundle  # noqa: E402
 import text_result  # noqa: E402
+import durable_handoff  # noqa: E402
 import text_task_package  # noqa: E402
 from postman_direct import (  # noqa: E402
     DEFAULT_GH_BINARY,
@@ -449,6 +450,7 @@ class DirectPostmanAsk:
             state=TEXT_RESULT_DURABLE,
             requestId=request_id,
             repository=self.repository,
+            branch=self.branch,
             resultMode="text",
             baseCommit=published.prepublication_commit,
             taskPublicationCommit=published.publication_commit,
@@ -464,6 +466,8 @@ class DirectPostmanAsk:
             **delivery,
             **final_conversation,
         )
+        # Persist the exact completed text terminal before announcing it to the Host.
+        durable_handoff.atomic_write_json(durable_handoff.handoff_path(self.direct_root, request_id), terminal)
         state_delivery = dict(delivery)
         self._write_state(
             request_id,
@@ -566,6 +570,10 @@ def main(argv: list[str] | None = None) -> int:
             )
         else:
             result = _json_result(False, code, requestId=args.request_id, error=str(exc), details=details)
+        if execution_started and direct and result.get("code") == POSTMAN_TRANSPORT_FAILED:
+            handoff = durable_handoff.handoff_path(direct.direct_root, args.request_id)
+            if not handoff.exists():  # Never replace an earlier exact success receipt on later failure.
+                durable_handoff.atomic_write_json(handoff, result)
         print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
         return 2
     except Exception as exc:  # pragma: no cover - last-resort CLI boundary

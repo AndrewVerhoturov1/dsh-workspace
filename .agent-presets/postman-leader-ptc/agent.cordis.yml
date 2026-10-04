@@ -1,5 +1,5 @@
 # Experimental PTC-first Leader: same routing authority as production, different execution mode.
-# The exact top-level Leader retains ordinary visibility under the 22-name allowlist
+# The exact top-level Leader retains ordinary visibility under the 24-name allowlist
 # in dsh-postman-harness/bridge; its ordinary spawn Worker keeps the shared coding
 # capabilities, with a deny-only filter on registered postman_* controls.
 

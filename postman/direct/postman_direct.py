@@ -991,6 +991,7 @@ class DirectPostman:
                 **chain_fields,
                 **conversation_fields,
             )
+            durable_handoff.atomic_write_json(durable_handoff.handoff_path(self.direct_root, request_id), terminal)
             self._write_state(
                 request_id,
                 bridge_code,
@@ -1255,6 +1256,10 @@ def main(argv: list[str] | None = None) -> int:
             )
         else:
             result = _json_result(False, code, error=str(exc), **request_fields, details=error_details)
+        if execution_request_id and direct and result.get("code") == POSTMAN_TRANSPORT_FAILED:
+            handoff = durable_handoff.handoff_path(direct.direct_root, execution_request_id)
+            if not handoff.exists():  # Never replace an earlier exact success receipt on later failure.
+                durable_handoff.atomic_write_json(handoff, result)
         print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
         return 2
     except Exception as exc:  # pragma: no cover - last-resort CLI boundary

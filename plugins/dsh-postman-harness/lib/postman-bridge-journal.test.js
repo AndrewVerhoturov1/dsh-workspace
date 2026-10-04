@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { JsonStorageBackend } from '@deepseek-ai/dsh-storage-json'
 import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { createPostmanBridgeJobs } from './postman-bridge-jobs.js'
+import { DirectPostmanJobManager } from './direct-current-turn.js'
 import { openPostmanTaskRegistry, createMemoryTaskRegistry } from './postman-task-registry.js'
 
 const parent = { id: 'leader-bridge', session: { header: { agentPreset: 'postman-leader', delegationDepth: 0 } } }
@@ -50,6 +52,195 @@ test('three distinct durable Bridge intents survive runtime restart without repl
   const registry = createMemoryTaskRegistry()
   await registry.create(parent.id, row())
   await exercise(registry)
+})
+
+test('read-only Bridge listing distinguishes durable and legacy occupied slots', async () => {
+  const registry = createMemoryTaskRegistry()
+  await registry.create(parent.id, { ...row(), bridge: { id: 'legacy', state: 'pending' }, bridgeOperations: {
+    reserved: { state: 'pending', phase: 'reserved', transportKind: 'text' },
+    request: { state: 'unknown', phase: 'request-known', requestId: 'REQ_20261004T010101Z_0001' },
+    completed: { state: 'received', phase: 'synchronized', synchronization: 'not-required' },
+  } })
+  const jobs = createPostmanBridgeJobs({}, { run() { throw Error('read launched child') }, dispose() {} }, null,
+    { record: registry.get, changeRecord() { throw Error('read mutated registry') } })
+  const before = structuredClone(registry.get(parent.id))
+  const result = jobs.list(parent)
+  assert.deepEqual({ limit: result.limit, used: result.used, status: result.status },
+    { limit: 3, used: 3, status: 'POSTMAN_BRIDGE_LIST' })
+  assert.deepEqual(result.operations.map(op => op.countsAgainstLimit), [true, true, false, true])
+  assert.equal(result.operations[3].requestId, 'unknown')
+  assert.deepEqual(registry.get(parent.id), before)
+})
+
+test('known Direct not-sent checkpoint frees slot after separate durable runtime lifetimes', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'postman-bridge-direct-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const backend = new JsonStorageBackend(join(root, 'storage'))
+  const facility = () => new DomainFacility({ storage: { backend: { get: () => backend } }, emit() {} }, { backend: 'json', routes: {} })
+  const directRoot = join(root, 'direct')
+  await mkdir(join(directRoot, 'requests'), { recursive: true })
+  const first = await openPostmanTaskRegistry(facility())
+  const requestId = 'REQ_20261004T010101Z_0001'
+  await first.create(parent.id, { ...row(), bridgeOperations: {
+    safe: { state: 'unknown', phase: 'request-known', transportKind: 'text', childSessionId: 'child', requestId },
+    published: { state: 'unknown', requestId: 'REQ_20261004T010102Z_0001' },
+    legacy: { state: 'pending' },
+    init: { state: 'unknown', requestId: 'REQ_20261004T010103Z_0001', transportKind: 'text' },
+  } })
+  await first.close()
+  const publish = async (id, state) => writeFile(join(directRoot, 'requests', id + '.json'), JSON.stringify({
+    requestId: id, repository: 'AndrewVerhoturov1/dsh-workspace', branch: row().branch, ...state }), 'utf8')
+  await publish(requestId, { state: 'FAILED', publicationStarted: false })
+  await publish('REQ_20261004T010102Z_0001', { state: 'WEB_RUNNING', publicationStarted: true })
+  await publish('REQ_20261004T010103Z_0001', { state: 'ASK_INIT', publicationStarted: false })
+  const cold = await openPostmanTaskRegistry(facility())
+  let sends = 0
+  const jobs = createPostmanBridgeJobs({ agents: { get: () => parent } },
+    { run() { sends++; throw Error('duplicate Send') }, dispose() {} }, null,
+    { record: cold.get, changeRecord: cold.change }, null,
+    new DirectPostmanJobManager({ directRoot }))
+  assert.equal(jobs.list(parent).used, 4)
+  assert.equal((await jobs.status(parent, 'safe')).status, 'POSTMAN_BRIDGE_NOT_SENT')
+  assert.equal((await jobs.status(parent, 'safe')).status, 'POSTMAN_BRIDGE_NOT_SENT')
+  assert.equal(jobs.list(parent).used, 3)
+  assert.equal((await jobs.status(parent, 'published')).status, 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN')
+  assert.equal((await jobs.status(parent, 'legacy')).status, 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN')
+  assert.equal((await jobs.status(parent, 'init')).status, 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN')
+  assert.equal(jobs.list(parent).used, 3, 'false in INIT is not proof Direct cannot still publish')
+  assert.equal(sends, 0)
+  await jobs.dispose(); await cold.close(); await backend.close()
+})
+
+test('Direct terminal receipt from text survives cold Bridge recovery without Send', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'postman-direct-terminal-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const directRoot = join(root, 'direct')
+  await mkdir(join(directRoot, 'requests'), { recursive: true })
+  await mkdir(join(directRoot, 'results'), { recursive: true })
+  const id = 'REQ_20261004T020202Z_0001'
+  const sha = createHash('sha256').update('verified answer').digest('hex')
+  const publication = { requestId: id, repository: 'AndrewVerhoturov1/dsh-workspace',
+    branch: row().branch, baseCommit: 'a'.repeat(40), taskPublicationCommit: 'b'.repeat(40),
+    taskUrl: 'https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/' + 'b'.repeat(40) + '/' + id + '.md' }
+  const terminal = { ...publication, ok: true, code: 'TEXT_RESULT_DURABLE', state: 'TEXT_RESULT_DURABLE',
+    deliveryMode: 'inline', assistantText: 'verified answer', assistantTextSha256: sha }
+  await writeFile(join(directRoot, 'requests', id + '.json'), JSON.stringify({ ...publication,
+    state: 'ASK_WEB_RUNNING', publicationStarted: true }))
+  await writeFile(join(directRoot, 'results', id + '.json'), JSON.stringify(terminal))
+  const registry = createMemoryTaskRegistry()
+  await registry.create(parent.id, { ...row(), bridgeOperations: { result: {
+    state: 'unknown', transportKind: 'text', phase: 'request-known', requestId: id } } })
+  let sends = 0, syncs = 0
+  const jobs = createPostmanBridgeJobs({ agents: { get: () => parent } },
+    { run() { sends++; throw Error('duplicate Send') }, dispose() {} }, null,
+    { record: registry.get, changeRecord: registry.change,
+      async sync() { syncs++; return false } }, null, new DirectPostmanJobManager({ directRoot }))
+  const before = structuredClone(registry.get(parent.id))
+  const observed = jobs.list(parent).operations[0]
+  assert.equal(observed.publicationState, 'terminal')
+  assert.equal(observed.publication.taskPublicationCommit, publication.taskPublicationCommit)
+  assert.deepEqual(registry.get(parent.id), before, 'list does not persist recovery')
+  const statuses = await Promise.all(Array.from({ length: 3 }, () => jobs.status(parent, 'result', true)))
+  const status = statuses[0]
+  assert.deepEqual(statuses.map(item => item.result?.assistantText), Array(3).fill('verified answer'))
+  assert.equal(status.status, 'POSTMAN_BRIDGE_TERMINAL')
+  assert.equal(status.result.assistantText, 'verified answer')
+  assert.equal(registry.get(parent.id).bridgeOperations.result.phase, 'terminal')
+  assert.deepEqual({ sends, syncs }, { sends: 0, syncs: 1 })
+  await jobs.dispose()
+  await writeFile(join(directRoot, 'results', id + '.json'), JSON.stringify({ ...terminal, assistantText: 'tampered' }))
+  const another = createPostmanBridgeJobs({}, { run() { throw Error('duplicate Send') }, dispose() {} }, null,
+    { record: () => ({ ...row(), bridgeOperations: { result: { state: 'unknown', transportKind: 'text', requestId: id } } }),
+      changeRecord() { throw Error('cannot trust tampered result') } }, null,
+    new DirectPostmanJobManager({ directRoot }))
+  assert.equal((await another.status(parent, 'result')).status, 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN')
+})
+
+test('published transport failure handoff survives missing final checkpoint without resend', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'postman-failure-terminal-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  await mkdir(join(root, 'requests')); await mkdir(join(root, 'results'))
+  const id = 'REQ_20261004T040404Z_0001'
+  const publication = { requestId: id, repository: 'AndrewVerhoturov1/dsh-workspace', branch: row().branch,
+    baseCommit: 'a'.repeat(40), taskPublicationCommit: 'b'.repeat(40),
+    taskUrl: 'https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/' + 'b'.repeat(40) + '/' + id + '.md' }
+  await writeFile(join(root, 'requests', id + '.json'), JSON.stringify({ ...publication,
+    state: 'ASK_WEB_RUNNING', publicationStarted: true }))
+  await writeFile(join(root, 'results', id + '.json'), JSON.stringify({ ok: false,
+    code: 'POSTMAN_TRANSPORT_FAILED', requestId: id, transportCode: 'WEB_ABORTED',
+    transportMessage: 'web stopped', details: {}, publicationReceipt: publication }))
+  const registry = createMemoryTaskRegistry()
+  await registry.create(parent.id, { ...row(), bridgeOperations: { failed: {
+    state: 'unknown', requestId: id, phase: 'request-known', transportKind: 'text' } } })
+  let sends = 0, syncs = 0
+  const jobs = createPostmanBridgeJobs({}, { run() { sends++; throw Error('duplicate Send') }, dispose() {} }, null,
+    { record: registry.get, changeRecord: registry.change, async sync() { syncs++; return false } }, null,
+    new DirectPostmanJobManager({ directRoot: root }))
+  assert.equal(jobs.list(parent).operations[0].publicationState, 'terminal')
+  const status = await jobs.status(parent, 'failed', true)
+  assert.equal(status.result.code, 'POSTMAN_TRANSPORT_FAILED')
+  assert.equal(status.result.publicationReceipt.requestId, id)
+  assert.deepEqual({ sends, syncs }, { sends: 0, syncs: 1 })
+})
+
+test('failed durable artifact grant write preserves terminal as last authority', async () => {
+  const registry = createMemoryTaskRegistry()
+  await registry.create(parent.id, { ...row(), bridgeOperations: { artifact: {
+    state: 'received', phase: 'terminal', transportKind: 'artifact', requestId: 'REQ_20261004T030303Z_0001',
+    terminal: { status: 'POSTMAN_BRIDGE_TERMINAL', terminalStatus: 'COMPLETED',
+      requestId: 'REQ_20261004T030303Z_0001', transportKind: 'artifact', result: {
+        ok: true, code: 'RESULT_DURABLE', requestId: 'REQ_20261004T030303Z_0001',
+        taskPublicationCommit: 'b'.repeat(40), baseCommit: 'a'.repeat(40) } }, synchronization: 'pending' } } })
+  let syncs = 0, grants = 0
+  const jobs = createPostmanBridgeJobs({}, { run() { throw Error('no Direct send') }, dispose() {} },
+    { async register() { grants++; throw Error('durable storage unavailable') } },
+    { record: registry.get, changeRecord: registry.change, async sync() { syncs++; return true } })
+  const status = await jobs.status(parent, 'artifact', true)
+  assert.equal(status.status, 'POSTMAN_BRIDGE_FAILED')
+  assert.equal(status.grantDiagnostic, 'durable storage unavailable')
+  assert.equal(registry.get(parent.id).bridgeOperations.artifact.state, 'received')
+  assert.equal(registry.get(parent.id).bridgeOperations.artifact.synchronization, 'synchronized')
+  assert.equal(jobs.list(parent).used, 0)
+  await jobs.status(parent, 'artifact', true)
+  assert.deepEqual({ syncs, grants }, { syncs: 1, grants: 2 }, 'grant-only retry never replays Git sync')
+  await jobs.dispose()
+})
+
+test('all Bridge phases remain distinguishable across isolated durable lifetimes', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'postman-phase-matrix-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const backend = new JsonStorageBackend(root)
+  const facility = () => new DomainFacility({ storage: { backend: { get: () => backend } }, emit() {} }, { backend: 'json', routes: {} })
+  const phases = [
+    ['reserved', { state: 'pending', phase: 'reserved', transportKind: 'text' }, true],
+    ['child', { state: 'pending', phase: 'child-known', childSessionId: 'child-real', transportKind: 'text' }, true],
+    ['request', { state: 'unknown', phase: 'request-known', requestId: 'REQ_20261004T050501Z_0001', transportKind: 'text' }, true],
+    ['publication', { state: 'unknown', phase: 'publication-known', requestId: 'REQ_20261004T050502Z_0001',
+      transportKind: 'text', publication: { requestId: 'REQ_20261004T050502Z_0001', taskPublicationCommit: 'b'.repeat(40) } }, true],
+    ['terminal', { state: 'received', phase: 'terminal', transportKind: 'text', synchronization: 'pending',
+      terminal: { status: 'POSTMAN_BRIDGE_TERMINAL', terminalStatus: 'COMPLETED', transportKind: 'text',
+        requestId: 'REQ_20261004T050503Z_0001', result: { ok: true, code: 'TEXT_RESULT_DURABLE', assistantText: 'durable' } } }, true],
+    ['synced', { state: 'received', phase: 'synchronized', transportKind: 'text', synchronization: 'synchronized',
+      terminal: { status: 'POSTMAN_BRIDGE_TERMINAL', terminalStatus: 'COMPLETED', transportKind: 'text',
+        requestId: 'REQ_20261004T050504Z_0001', result: { ok: true, code: 'TEXT_RESULT_DURABLE' } } }, false],
+  ]
+  const first = await openPostmanTaskRegistry(facility())
+  await first.create(parent.id, { ...row(), bridgeOperations: Object.fromEntries(phases.map(([id, op]) => [id, op])) })
+  await first.close()
+  const second = await openPostmanTaskRegistry(facility())
+  let sends = 0
+  const cold = createPostmanBridgeJobs({}, { run() { sends++; throw Error('no duplicate Send') }, dispose() {} }, null,
+    { record: second.get, changeRecord: second.change })
+  const listed = cold.list(parent)
+  assert.deepEqual(listed.operations.map(op => [op.bridgeJobId, op.phase, op.countsAgainstLimit]),
+    phases.map(([id, op, busy]) => [id, op.phase, busy]))
+  assert.equal(listed.used, 5)
+  assert.deepEqual(await Promise.all(['reserved', 'child', 'request', 'publication'].map(async id =>
+    (await cold.status(parent, id)).status)), Array(4).fill('POSTMAN_BRIDGE_OUTCOME_UNKNOWN'))
+  assert.equal((await cold.status(parent, 'terminal')).status, 'POSTMAN_BRIDGE_TERMINAL')
+  assert.equal((await cold.status(parent, 'synced')).synchronization, 'synchronized')
+  assert.equal(sends, 0)
+  await cold.dispose(); await second.close(); await backend.close()
 })
 
 test('three Bridge intents survive independent JSON domain lifetimes', async t => {

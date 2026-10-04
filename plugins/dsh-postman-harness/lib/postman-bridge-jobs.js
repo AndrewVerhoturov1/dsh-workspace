@@ -60,6 +60,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
   if (typeof coordinator?.run !== 'function') throw new Error('POSTMAN_BRIDGE_COORDINATOR_REQUIRED')
   const jobs = new Map()
   const admissionTails = new Map()
+  const coldRecovery = new Map()
   let disposed = false
 
   async function trustedStatusReader(child, signal) {
@@ -86,7 +87,15 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
       job.state = 'RUNNING'
       const previous = { state: 'completed', requestId: job.recoveryFrom.requestId,
         result: job.recoveryFrom.result, transportKind: job.transportKind, branch: job.taskContext.branch }
-      const started = await direct.continueLast(job.bridgeJobId, parent.session.header.cwd, previous)
+      const started = await direct.continueLast(job.bridgeJobId, parent.session.header.cwd, previous,
+        async requestId => {
+          if (typeof contexts?.changeRecord === 'function') await contexts.changeRecord(job.parentSessionId, row => {
+            const op = row.bridgeOperations?.[job.bridgeJobId]
+            if (op?.state !== 'pending') throw new Error('POSTMAN_BRIDGE_JOURNAL_MISSING')
+            return { ...row, bridgeOperations: { ...row.bridgeOperations, [job.bridgeJobId]:
+              { ...op, requestId, phase: 'request-known' } } }
+          })
+        })
       job.requestId = started.requestId
       return { ...await settleTrustedPostmanStatus(() => direct.wait(job.bridgeJobId), job.controller.signal),
         transportKind: job.transportKind }
@@ -100,7 +109,20 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
       return { status: 'POSTMAN_BRIDGE_START_FAILED', diagnostic: diagnostic(error) }
     }
     job.childSessionId = String(run.id)
-    if (contexts && !contexts.bindChild(job.parentSessionId, job.childSessionId)) {
+    if (typeof contexts?.changeRecord === 'function') {
+      try {
+        await contexts.changeRecord(job.parentSessionId, row => {
+          const op = row.bridgeOperations?.[job.bridgeJobId]
+          if (op?.state !== 'pending') throw new Error('POSTMAN_BRIDGE_JOURNAL_MISSING')
+          return { ...row, bridgeOperations: { ...row.bridgeOperations, [job.bridgeJobId]:
+            { ...op, childSessionId: job.childSessionId, phase: 'child-known' } } }
+        })
+      } catch (error) {
+        try { await run.dispose() } catch {}
+        return { status: 'POSTMAN_BRIDGE_CHILD_BINDING_FAILED', diagnostic: diagnostic(error) }
+      }
+    }
+    if (contexts && !contexts.bindChild(job.parentSessionId, job.childSessionId, job.bridgeJobId)) {
       try { await run.dispose() } catch {}
       return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
     }
@@ -203,15 +225,15 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
           op.state === 'pending' || op.state === 'unknown').length + (row?.bridge ? 1 : 0)
         const awaitingSync = Object.values(row?.bridgeOperations ?? {}).filter(op =>
           op.state === 'received' && !['synchronized', 'not-required'].includes(op.synchronization)).length
-        if (unresolved >= 3 || awaitingSync >= 3) return { status: 'POSTMAN_BRIDGE_LIMIT_REACHED' }
+        if (unresolved + awaitingSync >= 3) return { status: 'POSTMAN_BRIDGE_LIMIT_REACHED' }
         await contexts.changeRecord(parent.id, old => {
           const operations = old.bridgeOperations ?? {}
           const count = Object.values(operations).filter(op =>
             op.state === 'pending' || op.state === 'unknown').length + (old.bridge ? 1 : 0)
           const awaitingSync = Object.values(operations).filter(op =>
             op.state === 'received' && !['synchronized', 'not-required'].includes(op.synchronization)).length
-          if (count >= 3 || awaitingSync >= 3) throw new Error('POSTMAN_BRIDGE_LIMIT_REACHED')
-          return { ...old, bridgeOperations: { ...operations, [job.bridgeJobId]: { state: 'pending' } } }
+          if (count + awaitingSync >= 3) throw new Error('POSTMAN_BRIDGE_LIMIT_REACHED')
+          return { ...old, bridgeOperations: { ...operations, [job.bridgeJobId]: { state: 'pending', phase: 'reserved', transportKind, createdAt: job.createdAt } } }
         })
         return startJob(job, message)
       } catch (error) {
@@ -274,7 +296,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
       if (op?.state !== 'received') throw new Error('POSTMAN_BRIDGE_JOURNAL_MISSING')
       if (op.synchronization === 'not-required') return row
       return { ...row, bridgeOperations: { ...row.bridgeOperations,
-        [job.bridgeJobId]: { ...op, synchronization: 'not-required' } } }
+        [job.bridgeJobId]: { ...op, phase: 'synchronized', synchronization: 'not-required' } } }
     })
     job.synchronization = 'not-required'
     job.syncDiagnostic = null
@@ -300,7 +322,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
       if (op?.state !== 'received') throw new Error('POSTMAN_BRIDGE_JOURNAL_MISSING')
       const operations = { ...row.bridgeOperations }
       if (job.grantDiagnostic && job.trustedTerminal.result?.code === 'RESULT_DURABLE')
-        operations[job.bridgeJobId] = { ...op, synchronization: 'synchronized', grantDiagnostic: job.grantDiagnostic }
+        operations[job.bridgeJobId] = { ...op, phase: 'synchronized', synchronization: 'synchronized', grantDiagnostic: job.grantDiagnostic }
       else delete operations[job.bridgeJobId]
       return { ...row, bridgeOperations: operations }
     })
@@ -321,12 +343,15 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
         job.trustedTerminal = safe
         job.requestId = safe.requestId ?? job.requestId ?? null
         job.state = safe.status === 'POSTMAN_BRIDGE_TERMINAL' ? 'TERMINAL' : 'FAILED'
-        if (job.state === 'TERMINAL' && typeof contexts?.changeRecord === 'function') {
+        if (typeof contexts?.changeRecord === 'function') {
           await contexts.changeRecord(job.parentSessionId, row => {
-            if (row.bridgeOperations?.[job.bridgeJobId]?.state !== 'pending')
+            const op = row.bridgeOperations?.[job.bridgeJobId]
+            if (op?.state !== 'pending' || op.requestId && safe.requestId && op.requestId !== safe.requestId)
               throw new Error('POSTMAN_BRIDGE_JOURNAL_MISSING')
             return { ...row, bridgeOperations: { ...row.bridgeOperations,
-              [job.bridgeJobId]: { state: 'received', terminal: safe, synchronization: 'pending' } } }
+              [job.bridgeJobId]: { ...op, state: 'received', phase: 'terminal',
+                requestId: safe.requestId ?? op.requestId, terminal: safe,
+                publication: publicationOf(safe) ?? op.publication, synchronization: 'pending' } } }
           })
         }
         const publication = publicationOf(safe)
@@ -357,7 +382,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
                 throw new Error('POSTMAN_BRIDGE_JOURNAL_MISSING')
               }
               return { ...row, bridgeOperations: { ...row.bridgeOperations,
-                [job.bridgeJobId]: { state: 'unknown' } } }
+                [job.bridgeJobId]: { ...current, state: 'unknown' } } }
             })
           } catch (error) { job.state = 'FAILED'; job.diagnostic = diagnostic(error) }
         }
@@ -377,6 +402,8 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
   async function status(parent, bridgeJobId, retrySync = false, recover = false) {
     let job = jobs.get(bridgeJobId)
     if (!job) {
+      const pending = coldRecovery.get(bridgeJobId)
+      if (pending) { await pending; return status(parent, bridgeJobId, retrySync, recover) }
       const row = contexts?.record?.(parent.id)
       const operation = Object.hasOwn(row?.bridgeOperations ?? {}, bridgeJobId)
         ? row.bridgeOperations[bridgeJobId] : row?.bridge?.id === bridgeJobId ? row.bridge : null
@@ -390,19 +417,73 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
           finishedAt: new Date().toISOString(), synchronization: operation.synchronization === 'pending' ? 'busy' : operation.synchronization ?? 'busy',
           grantDiagnostic: operation.grantDiagnostic, controller: new AbortController() }
         jobs.set(bridgeJobId, job)
-        // Synchronization is durable; the grant Map is not. Recheck the exact
-        // trusted ZIP once, sharing this attempt with overlapping status reads.
+        // Recover legacy synchronized artifacts that predate Leader-owned durable grants.
+        // Concurrent status reads share this one exact registration attempt.
         if (job.synchronization === 'synchronized' && !job.grantDiagnostic &&
-            terminal.result?.code === 'RESULT_DURABLE') job.grantRecovery = registerGrant(job)
-      } else return operation
-        ? { status: 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN', bridgeJobId, state: 'INTERRUPTED' }
+            terminal.result?.code === 'RESULT_DURABLE' &&
+            !row?.artifactGrants?.[terminal.requestId]) job.grantRecovery = registerGrant(job)
+      } else if (operation && operation.requestId && ['pending', 'unknown'].includes(operation.state) &&
+                 typeof direct.inspectRequest === 'function') {
+        const proof = direct.inspectRequest(operation.requestId, row?.branch, operation.transportKind)
+        if (proof.state === 'terminal' && typeof contexts?.changeRecord === 'function') {
+          const safe = losslessValue(proof.terminal)
+          const pending = contexts.changeRecord(parent.id, previous => {
+            const current = previous.bridgeOperations?.[bridgeJobId]
+            if (!['pending', 'unknown'].includes(current?.state) || current.requestId !== operation.requestId)
+              throw new Error('POSTMAN_BRIDGE_JOURNAL_CHANGED')
+            return { ...previous, bridgeOperations: { ...previous.bridgeOperations, [bridgeJobId]:
+              { ...current, state: 'received', phase: 'terminal', publication: proof.publication,
+                terminal: safe, synchronization: 'pending' } } }
+          })
+          coldRecovery.set(bridgeJobId, pending)
+          try { await pending } finally { coldRecovery.delete(bridgeJobId) }
+          return status(parent, bridgeJobId, retrySync, recover)
+        }
+        if (proof.state === 'proven-not-sent' && typeof contexts?.changeRecord === 'function') {
+          const pending = contexts.changeRecord(parent.id, previous => {
+            const current = previous.bridgeOperations?.[bridgeJobId]
+            if (!['pending', 'unknown'].includes(current?.state) || current.requestId !== operation.requestId)
+              throw new Error('POSTMAN_BRIDGE_JOURNAL_CHANGED')
+            return { ...previous, bridgeOperations: { ...previous.bridgeOperations, [bridgeJobId]:
+              { ...current, state: 'received', phase: 'not-sent', synchronization: 'not-required' } } }
+          })
+          coldRecovery.set(bridgeJobId, pending)
+          try { await pending } finally { coldRecovery.delete(bridgeJobId) }
+          return { status: 'POSTMAN_BRIDGE_NOT_SENT', bridgeJobId, requestId: operation.requestId,
+            synchronization: 'not-required' }
+        }
+        return { status: 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN', bridgeJobId, state: 'INTERRUPTED',
+          requestId: operation.requestId, publication: proof.state === 'published' ? proof.publication : 'unknown' }
+      } else if (operation?.state === 'received' && operation.phase === 'not-sent' &&
+                 operation.synchronization === 'not-required' && operation.requestId)
+        return { status: 'POSTMAN_BRIDGE_NOT_SENT', bridgeJobId, requestId: operation.requestId,
+          synchronization: 'not-required' }
+      else return operation
+        ? { status: 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN', bridgeJobId, state: 'INTERRUPTED',
+          requestId: operation.requestId ?? null }
         : { status: 'POSTMAN_BRIDGE_JOB_NOT_FOUND' }
     }
     if (job.parentSessionId !== parent.id) return { status: 'POSTMAN_BRIDGE_JOB_NOT_FOUND' }
     if (job.grantRecovery) await job.grantRecovery
+    if (retrySync && job.synchronization === 'synchronized' && job.grantDiagnostic &&
+        job.trustedTerminal?.result?.code === 'RESULT_DURABLE') {
+      if (!job.grantRecovery) job.grantRecovery = (async () => {
+        await registerGrant(job)
+        if (!job.grantDiagnostic && typeof contexts?.changeRecord === 'function')
+          await contexts.changeRecord(job.parentSessionId, row => {
+            const op = row.bridgeOperations?.[bridgeJobId]
+            if (!op || op.terminal?.requestId !== job.requestId || op.synchronization !== 'synchronized')
+              throw new Error('POSTMAN_BRIDGE_JOURNAL_CHANGED')
+            const operations = { ...row.bridgeOperations }
+            delete operations[bridgeJobId]
+            return { ...row, bridgeOperations: operations }
+          })
+        if (!job.grantDiagnostic) job.state = 'TERMINAL'
+      })()
+      try { await job.grantRecovery } finally { job.grantRecovery = null }
+    }
     if (retrySync && job.finishedAt && job.trustedTerminal?.status === 'POSTMAN_BRIDGE_TERMINAL' &&
-        (job.synchronization === 'busy' || job.synchronization === 'pending' ||
-          job.grantDiagnostic && job.trustedTerminal.result?.code === 'RESULT_DURABLE')) {
+        (job.synchronization === 'busy' || job.synchronization === 'pending')) {
       const publication = publicationOf(job.trustedTerminal)
       if (publication) await retryPublication(job, publication)
       else if (noPublicationProven(job.trustedTerminal)) {
@@ -446,6 +527,40 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
       ...(job.grantDiagnostic === undefined ? {} : { grantDiagnostic: job.grantDiagnostic }) }
   }
 
+  // Read-only observation: Direct inspection reads exact REQ evidence but never writes journals or grants.
+  function list(parent) {
+    const row = contexts?.record?.(parent.id)
+    const operations = Object.entries(row?.bridgeOperations ?? {}).map(([bridgeJobId, op]) => {
+      const countsAgainstLimit = op.state === 'pending' || op.state === 'unknown' ||
+        op.state === 'received' && !['synchronized', 'not-required'].includes(op.synchronization)
+      const proof = op.requestId && ['text', 'artifact', 'image'].includes(op.transportKind) &&
+        typeof direct.inspectRequest === 'function'
+        ? direct.inspectRequest(op.requestId, row.branch, op.transportKind) : null
+      return { bridgeJobId, state: op.state, phase: op.phase ?? 'unknown',
+        transportKind: op.transportKind ?? op.terminal?.transportKind ?? 'unknown',
+        createdAt: op.createdAt ?? 'unknown', childSessionId: op.childSessionId ?? 'unknown',
+        requestId: op.requestId ?? op.terminal?.requestId ?? 'unknown',
+        publication: op.publication ?? (op.terminal ? publicationOf(op.terminal) ?? 'unknown' :
+          ['published', 'terminal'].includes(proof?.state) ? proof.publication : 'unknown'),
+        publicationState: proof?.state ?? 'unknown',
+        synchronization: op.synchronization ?? 'unknown', grantDiagnostic: op.grantDiagnostic ?? null,
+        grantState: !op.terminal && !op.transportKind ? 'unknown' :
+          (op.transportKind ?? op.terminal?.transportKind) !== 'artifact' ||
+          (op.terminal?.result?.code && op.terminal.result.code !== 'RESULT_DURABLE') ? 'not-applicable' :
+            row.artifactGrants?.[op.requestId ?? op.terminal?.requestId] ? 'durable-registered' : 'pending-or-rejected',
+        countsAgainstLimit, slotReason: countsAgainstLimit
+          ? op.state === 'received' ? 'trusted terminal awaiting local synchronization or grant'
+            : op.requestId ? 'Direct outcome not yet proven' : 'correlation unavailable; outcome unknown'
+          : 'terminal synchronized or publication proven unnecessary' }
+    })
+    if (row?.bridge) operations.push({ bridgeJobId: row.bridge.id, state: row.bridge.state,
+      phase: 'unknown', transportKind: 'unknown', createdAt: 'unknown', childSessionId: 'unknown',
+      requestId: 'unknown', publication: 'unknown', publicationState: 'unknown', synchronization: 'unknown', grantDiagnostic: null, grantState: 'unknown',
+      countsAgainstLimit: true, slotReason: 'legacy correlation unavailable; outcome unknown' })
+    return { status: 'POSTMAN_BRIDGE_LIST', limit: 3,
+      used: operations.filter(op => op.countsAgainstLimit).length, operations }
+  }
+
   async function dispose() {
     if (disposed) return
     disposed = true
@@ -455,5 +570,5 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     jobs.clear()
   }
 
-  return { accept, status, hasActive, dispose }
+  return { accept, status, list, hasActive, dispose }
 }

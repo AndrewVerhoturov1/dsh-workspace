@@ -39,7 +39,7 @@ async function fixture(t, { synchronization = 'synchronized', alter = terminal =
   await first.close()
   const registry = await openPostmanTaskRegistry(new DomainFacility(domainContext, { backend: 'json' }))
   const before = structuredClone(registry.get(owner.id))
-  const grants = createImplementationArtifactGrants() // New process-local Map after restart.
+  const grants = createImplementationArtifactGrants(registry) // Authority is durable, not a new process-local Map.
   let registrations = 0, syncs = 0, sends = 0
   const agents = new Map([[owner.id, owner], [foreign.id, foreign]])
   const unexpectedSend = () => { sends++; throw Error('Direct send must not run') }
@@ -67,7 +67,10 @@ test('synchronized trusted artifact restores its lost grant after restart withou
   assert.equal((await f.grants.resolve(f.owner.id, REQ)).resultZip, f.resultZip)
   assert.equal(await f.grants.resolve(f.foreign.id, REQ), null)
   assert.deepEqual(f.counts(), { registrations: 1, syncs: 0, sends: 0 })
-  assert.deepEqual(f.registry.get(f.owner.id), f.before, 'no registry rewriting')
+  assert.deepEqual(f.registry.get(f.owner.id), { ...f.before,
+    artifactGrants: { [REQ]: { requestId: REQ, repository: IMPLEMENTATION_REPOSITORY,
+      resultZip: f.resultZip, sha256: f.terminal.result.sha256, expectedFilename: f.terminal.result.expectedFilename } },
+  }, 'only verified durable grant registration')
 })
 
 test('foreign live Leader cannot restore or resolve another Leader artifact', async t => {
@@ -77,9 +80,10 @@ test('foreign live Leader cannot restore or resolve another Leader artifact', as
   assert.equal(await f.grants.resolve(f.foreign.id, REQ), null)
   assert.equal((await f.status()).status, 'POSTMAN_BRIDGE_TERMINAL')
   assert.equal((await f.status(f.foreign, true)).status, 'POSTMAN_BRIDGE_JOB_NOT_FOUND')
+  const afterOwnerRecovery = structuredClone(f.registry.get(f.owner.id))
   const forgedOwner = leader(f.owner.id)
   assert.equal((await f.status(forgedOwner)).status, 'POSTMAN_BRIDGE_CALLER_REJECTED')
-  assert.deepEqual(f.registry.get(f.owner.id), f.before)
+  assert.deepEqual(f.registry.get(f.owner.id), afterOwnerRecovery)
 })
 
 test('substituted ZIP fails cold grant restoration despite synchronized receipt', async t => {

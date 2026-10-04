@@ -10,6 +10,13 @@ import { createImplementationArtifactGrants, createImplementationArtifactApplyTo
 import { createPostmanWorkerTools } from './postman-worker.js'
 import { createPostmanBridgeTool, createPostmanBridgeStatusTool } from './postman-bridge.js'
 import { createPostmanBridgeJobs } from './postman-bridge-jobs.js'
+import { createMemoryTaskRegistry } from './postman-task-registry.js'
+
+async function memoryGrants() {
+  const registry = createMemoryTaskRegistry()
+  for (const id of ['A', 'B']) await registry.create(id, { leaderSessionId: id })
+  return createImplementationArtifactGrants(registry)
+}
 
 const REQ = 'REQ_20260925T112233Z_1234'
 const SIGNAL = new AbortController().signal
@@ -34,7 +41,7 @@ async function artifactFixture(t) {
 
 test('only exact trusted correlated artifact and intact exact ZIP register for owning Leader', async t => {
   const { terminal, resultZip } = await artifactFixture(t)
-  const grants = createImplementationArtifactGrants()
+  const grants = await memoryGrants()
   for (const changed of [
     { status: 'POSTMAN_BRIDGE_NO_TRANSPORT' }, { terminalStatus: 'FAILED' }, { transportKind: 'text' },
     { requestId: 'REQ_20260925T112233Z_9876' }, { result: { ok: false } },
@@ -60,12 +67,12 @@ test('only exact trusted correlated artifact and intact exact ZIP register for o
   assert.equal(await grants.resolve('A', REQ), null)
   await rm(resultZip)
   assert.equal(await grants.resolve('A', REQ), null)
-  assert.equal(await createImplementationArtifactGrants().resolve('A', REQ), null)
+  assert.equal(await (await memoryGrants()).resolve('A', REQ), null)
 })
 
 test('Bridge grant comes only from exact child-scoped status, not child prose', async t => {
   const { terminal } = await artifactFixture(t)
-  const grants = createImplementationArtifactGrants()
+  const grants = await memoryGrants()
   const parent = leader('A')
   const child = { id: 'bridge-child' }
   const ctx = {
@@ -95,7 +102,7 @@ test('Bridge grant comes only from exact child-scoped status, not child prose', 
 
 test('Leader decision admits REQ to same Worker; rejected stop keeps grant and mapping', async t => {
   const { terminal } = await artifactFixture(t)
-  const grants = createImplementationArtifactGrants()
+  const grants = await memoryGrants()
   await grants.register('A', terminal)
   const agents = new Map()
   const a = leader('A'), b = leader('B'); agents.set('A', a); agents.set('B', b)
@@ -163,6 +170,25 @@ test('Leader decision admits REQ to same Worker; rejected stop keeps grant and m
   assert.equal(worker.ownerOf(child, REQ), null)
 })
 
+test('durable grant storage failures and conflicting trusted registration fail closed', async t => {
+  const { terminal } = await artifactFixture(t)
+  assert.throws(() => createImplementationArtifactGrants(), /STORAGE_REQUIRED/)
+  const registry = createMemoryTaskRegistry()
+  await registry.create('A', { leaderSessionId: 'A' })
+  const failed = createImplementationArtifactGrants({ get: registry.get, async change() { throw Error('disk unavailable') } })
+  await assert.rejects(failed.register('A', terminal), /disk unavailable/)
+  assert.equal(await failed.resolve('A', REQ), null)
+  const grants = createImplementationArtifactGrants(registry)
+  assert.equal(await grants.register('A', terminal), true)
+  assert.equal(await grants.register('A', terminal), true, 'not one-shot')
+  const before = structuredClone(registry.get('A'))
+  const otherZip = join(terminal.result.resultZip, '..', 'other.zip')
+  await writeFile(otherZip, 'test bytes')
+  assert.equal(await grants.register('A', { ...terminal, result: { ...terminal.result, resultZip: otherZip } }), false)
+  assert.deepEqual(registry.get('A'), before)
+  assert.equal((await grants.resolve('A', REQ)).resultZip, terminal.result.resultZip)
+})
+
 test('repository boundary requires exact root with expected origin', async () => {
   const root = new URL('../../../', import.meta.url)
   const { fileURLToPath } = await import('node:url')
@@ -174,7 +200,7 @@ test('repository boundary requires exact root with expected origin', async () =>
 
 test('runner invocation uses only trusted ZIP, argv-safe hidden launch and forwards PASS or FAIL', async t => {
   const { terminal } = await artifactFixture(t)
-  const grants = createImplementationArtifactGrants()
+  const grants = await memoryGrants()
   await grants.register('A', terminal)
   const grant = await grants.resolve('A', REQ)
   const cases = [{ result: { ok: true, code: 'IMPLEMENTATION_PACKAGE_APPLIED',

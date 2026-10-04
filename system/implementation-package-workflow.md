@@ -21,7 +21,7 @@ language: ru
 - **Sol** — задаёт intent, существенные архитектурные решения и ограничения, а после результата отдельно решает, использовать ли REQ.
 - **ChatGPT Web / другая внешняя модель** — исследует нужный код, пишет полный минимальный implementation и необходимые targeted/regression tests внутри созданного Git `changes.patch`, готовит декларативный ZIP с `manifest.json`, `README.md`, `TEST_PLAN.md`. Переиспользует существующие механизмы, не добавляет speculative abstractions, соседний refactor или package-local applicator/framework. Дешёвые authoring checks допустимы; полная локальная verification, Git publication и воспроизведение Windows/DSH-среды не являются обязанностью Web. Незапущенные проверки отмечаются честно.
 - **Central implementation package runner** — одинаково для всех пакетов проверяет реальную применимость patch, защищает постоянные worktree/локальные данные, применяет patch, запускает только объявленные targeted tests и создаёт компактную диагностику при FAIL.
-- **Host / Worker** — после trusted `RESULT_DURABLE` Host сохраняет process-local grant по `(Leader session, REQ)` для exact ZIP/SHA. После отдельного решения Sol допускает REQ через `postman_worker({task, artifactRequestId})`. Тот же продолжаемый Worker использует подготовленное Host чистое task worktree на опубликованном REQ commit и вызывает `implementation_artifact_apply({requestId, worktree})`; Host повторно проверяет SHA и запускает существующий runner. Worker проверяет фактический итог, но не повторяет authoritative PASS targeted tests при неизменных входах; при FAIL возвращает точную диагностику, не переписывая package за спиной Web. Публикация применённых изменений требует отдельного решения Sol. Вне trusted artifact workflow Worker остаётся полноценным локальным coding/research agent.
+- **Host / Worker** — после trusted `RESULT_DURABLE` Host сохраняет durable grant по `(Leader session, REQ)` для exact ZIP/SHA. После отдельного решения Sol допускает REQ через `postman_worker({task, artifactRequestId})`. Тот же продолжаемый Worker использует подготовленное Host чистое task worktree на опубликованном REQ commit и вызывает `implementation_artifact_apply({requestId, worktree})`; Host повторно проверяет SHA и запускает существующий runner. Worker проверяет фактический итог, но не повторяет authoritative PASS targeted tests при неизменных входах; при FAIL возвращает точную диагностику, не переписывая package за спиной Web. Публикация применённых изменений требует отдельного решения Sol. Вне trusted artifact workflow Worker остаётся полноценным локальным coding/research agent.
 - **Пользователь** — принимает решение о merge; promotion `preview → main` остаётся отдельным explicit действием.
 
 ## 2. Канонический runner
@@ -197,7 +197,7 @@ Implementation package туда не применяется.
 
 ```text
 origin/preview
-→ trusted RESULT_DURABLE и process-local Host grant для exact Leader session + REQ
+→ trusted RESULT_DURABLE и durable Host grant для exact Leader session + REQ
 → отдельное решение Sol: postman_worker({task, artifactRequestId})
 → тот же продолжаемый Worker
 → та же единственная опубликованная Host task branch и чистое worktree на REQ commit

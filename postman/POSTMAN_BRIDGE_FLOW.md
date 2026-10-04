@@ -180,7 +180,7 @@ Preset `postman-leader` / `Postman Leader` хранится в репозито�
 не загружает отдельный preset-плагин: существующий `postman-bridge` подключается на уровне
 host-композиции в bundle `dsh-postman-harness`.
 
-Top-level Agent этого preset получает положительный runtime allowlist ровно из 22
+Top-level Agent этого preset получает положительный runtime allowlist ровно из 24
 зарегистрированных DSH 0.1.1-rc.2 tools:
 
 ```text
@@ -200,23 +200,25 @@ postman_task_restore
 postman_input_files
 postman_bridge
 postman_bridge_status
+postman_bridge_list
 postman_worker
 postman_sol_worker
 postman_worker_interrupt
 postman_worker_stop
 postman_yield
 postman_worker_list
+postman_worker_compact
 ```
 
 `glob` и `web_search` не входят в список Leader: они запрещены только Leader и остаются доступны Worker из общего coding preset. Positive allowlist задан поверх общего
 preset: фактический каталог Leader сокращается до этих имён независимо от остальных регистраций.
 
 `write`, `edit`, shell, generic `subagent`, workflow, `web_search` и direct Postman tools скрыты runtime-ом у Leader. Зарегистрированный `implementation_artifact_apply` не входит в Leader allowlist: его execute path допускает только точного активного Worker после отдельной авторизации REQ. Worker остаётся с широким общим coding preset без положительного Worker allowlist; его runtime deny включает все зарегистрированные `postman_*` имена и не затрагивает `report`. Bridge сохраняет отдельный неизменный allowlist из пяти инструментов: `skill`, `postman_send_current_turn`, `postman_current_turn_status`, `postman_ask_validate_reply`, `notify_parent`.
-Leader-only остаются все одиннадцать Host controls (`postman_task_prepare`, `postman_task_restore`, `postman_input_files`,
-`postman_bridge`, `postman_bridge_status`, `postman_worker`, `postman_sol_worker`, `postman_worker_interrupt`,
-`postman_worker_stop`, `postman_yield`, `postman_worker_list`): top-level
+Leader-only остаются все тринадцать Host controls (`postman_task_prepare`, `postman_task_restore`, `postman_input_files`,
+`postman_bridge`, `postman_bridge_status`, `postman_bridge_list`, `postman_worker`, `postman_sol_worker`, `postman_worker_interrupt`,
+`postman_worker_stop`, `postman_yield`, `postman_worker_list`, `postman_worker_compact`): top-level
 `postman-leader` получает их в allowlist, а любой другой root/subagent Agent получает точечный deny
-всех одиннадцати имён.
+всех тринадцати имён.
 Tool body повторно проверяет caller и при обходе visibility boundary возвращает
 `POSTMAN_BRIDGE_CALLER_REJECTED` до parsing/spawn.
 
@@ -244,7 +246,7 @@ Sol предназначен для сложной работы, но V1 раз�
 
 ## 9. Передача implementation package локальному Worker
 
-`RESULT_DURABLE` из exact child scope подтверждает происхождение и целостность ZIP, а не корректность implementation patch. Normal transport универсален и не требует `manifest.json`; Bridge child не применяет пакет. После correlated terminal Host регистрирует process-local grant по точной сессии Leader и REQ с exact trusted ZIP и SHA-256. Grant — внутреннее доверенное соответствие, не model-provided token и не автоматическое разрешение на применение.
+`RESULT_DURABLE` из exact child scope подтверждает происхождение и целостность ZIP, а не корректность implementation patch. Normal transport универсален и не требует `manifest.json`; Bridge child не применяет пакет. После correlated terminal Host сохраняет durable Leader-owned grant по точной сессии Leader и REQ с exact trusted ZIP и SHA-256. Grant — внутреннее доверенное соответствие, не model-provided token и не автоматическое разрешение на применение.
 
 Для implementation package ChatGPT Web следует `REPO_POLICY.md`, `system/implementation-package-workflow.md` и `system/implementation-package-authoring.md`: декларативный ZIP содержит `manifest.json`, Git-generated `changes.patch`, `README.md`, `TEST_PLAN.md`; targeted tests, новые файлы и необходимые узкие исключения `.gitignore` входят в patch. Собственного applicator и диагностики в ZIP нет.
 
@@ -265,6 +267,16 @@ Bridge terminal RESULT_DURABLE
 Worker — обычный coding-agent с shell и теоретически может сам запускать локальные программы. Гарантия этой границы уже: только отдельно авторизованный Worker может использовать trusted Host grant и `implementation_artifact_apply` для exact Postman artifact; запрета на все самостоятельные локальные запуски здесь нет.
 
 Для явно включённого пользователем Host `localDevelopment: true` обычное освобождение простаивающей сессии не требует идеальной исторической цепочки report; адресная отмена собственного Worker не требует повторного approval. Освобождение не подтверждает успеха задачи. Restore под штатной блокировкой освобождает только простаивающие Worker, сохраняет грязные файлы/index и допускается при сохранённом pending terminal без подмены его статуса: затем используется отдельный retrySync. Активное/неизвестное исполнение, постоянные worktree, чужие данные и раскрытие секретов не получают разрешения. Настройка и восстановление копии описаны в [Host README](../plugins/dsh-postman-harness/README.md#явный-свободный-режим-локальной-разработки).
+
+### Durable recovery и observation
+
+Новые operations durably сохраняют известные Host transport/phase/child/REQ/publication/terminal/sync/grant facts до side effects. При restart exact requestId читается только из journal либо exact trusted terminal; authoritative Direct state восстанавливает trusted terminal и необходимые локальные действия. Доказанный `PROVEN_NOT_SENT` или `publicationStarted:false` освобождает slot только при отсутствии противоречивой publication authority; published/may-be-sent без terminal остаётся blocked. Reserved/child-only/legacy rows не replay-ятся и не удаляются по возрасту/отсутствию Agent.
+
+`postman_bridge_list()` — read-only все операции exact Leader с limit=3, used, `countsAgainstLimit` и причиной, lifecycle/correlation/publication/sync/grant. Неизвестные legacy поля — `unknown`. Чтение не запускает child, Direct, recovery, retrySync и не регистрирует grants.
+
+`postman_worker_list()` отдельно показывает binding/delivery, quotas Luna used/3 и Sol used/1, runtime residency, durable closed/unavailable/diagnostic и turn/report evidence; состояние turn не успех задачи. Compact exact resident idle Worker — `postman_worker_compact({workerSessionId})`, та же Session/ID/quota. Чистый context — успешный final retirement старого exact ID, затем `createNew:true` с новым ID; история audit остаётся, новый Sol task требует нового positive user confirmation.
+
+Artifact grant записывается в exact Leader-owned durable `artifactGrants[requestId]` **до** Bridge operation cleanup. Он переживает restart без Bridge row; resolve повторно проверяет ZIP/SHA, не является one-shot и не даёт foreign Leader authority. Cancel отзывает только Worker artifactRequests; новый exact Worker получает прежний REQ лишь через explicit обычную assignment.
 
 ## 10. Failure boundary
 

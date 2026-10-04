@@ -10,6 +10,7 @@ import { createPostmanTaskPrepareTool, createPostmanTaskRestoreTool, createPostm
 import { createDirectCurrentTurnToolConfigs, DirectPostmanJobManager } from './direct-current-turn.js'
 import { createPostmanWorkerTools } from './postman-worker.js'
 import { createImplementationArtifactApplyTool, createImplementationArtifactGrants, IMPLEMENTATION_REPOSITORY } from './implementation-artifact.js'
+import { createMemoryTaskRegistry } from './postman-task-registry.js'
 
 const BASE = 'a'.repeat(40)
 const BRANCH = 'task/postman-' + 'b'.repeat(32)
@@ -230,7 +231,9 @@ test('Worker receives exact context and REQ; apply rejects another worktree befo
   t.after(() => rm(zipdir, { recursive: true, force: true }))
   const zip = join(zipdir, 'result.zip'), bytes = Buffer.from('fixture ZIP bytes')
   await writeFile(zip, bytes)
-  const grants = createImplementationArtifactGrants()
+  const grantRegistry = createMemoryTaskRegistry()
+  await grantRegistry.create(a.id, { leaderSessionId: a.id })
+  const grants = createImplementationArtifactGrants(grantRegistry)
   assert.equal(await grants.register(a.id, { status: 'POSTMAN_BRIDGE_TERMINAL', terminalStatus: 'COMPLETED',
     transportKind: 'artifact', requestId: REQ, result: { ok: true, code: 'RESULT_DURABLE',
       state: 'RESULT_DURABLE', requestId: REQ, repository: IMPLEMENTATION_REPOSITORY,
