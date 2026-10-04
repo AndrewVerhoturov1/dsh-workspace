@@ -5,6 +5,7 @@ import { IMPLEMENTATION_REPOSITORY } from './implementation-artifact.js'
 import { workerEvidence } from './postman-worker-evidence.js'
 import {
   POSTMAN_WORKER_TOOL_NAME,
+  POSTMAN_SOL_WORKER_TOOL_NAME,
   POSTMAN_WORKER_INTERRUPT_TOOL_NAME,
   POSTMAN_WORKER_STOP_TOOL_NAME,
   POSTMAN_WORKER_LIST_TOOL_NAME,
@@ -14,6 +15,9 @@ import {
 
 export const POSTMAN_WORKER_PROVIDER = 'spawn'
 export const POSTMAN_WORKER_AGENT_OPTIONS = Object.freeze({ provider: 'codex', model: 'gpt-6-luna', reasoningEffort: 'max' })
+export const POSTMAN_SOL_WORKER_AGENT_OPTIONS = Object.freeze({ provider: 'codex', model: 'gpt-6.1-sol', reasoningEffort: 'xhigh' })
+const workerTypeOf = binding => binding.workerType ?? 'luna'
+const workerOptions = type => type === 'sol' ? POSTMAN_SOL_WORKER_AGENT_OPTIONS : POSTMAN_WORKER_AGENT_OPTIONS
 export const POSTMAN_WORKER_PERSONA = `You are Postman Worker, a local continuable Luna subagent working under your direct parent, Postman Leader (Sol).
 Only if you are granted Postman's own ptc_execute, its automatically runtime-injected Postman PTC discipline is mandatory and governs batching/programming of that capability; it is not a separate mode for Workers without that assignment.
 Complete each assigned local task using the tools available to you. Follow the repository's instructions and the parent's task boundaries. You are not Postman Bridge: never use Direct Postman or imitate its transport. Do not use @Postman or @PostmanAsk as a way around your parent's boundaries.
@@ -44,7 +48,7 @@ export function postmanWorkerDeniedTools(tools) {
   return tools.schemas().map(tool => tool.name).filter(name => name.startsWith('postman_'))
 }
 
-export function buildPostmanWorkerStartRequest(parent, task, signal, deniedTools, label = 'Postman Worker') {
+export function buildPostmanWorkerStartRequest(parent, task, signal, deniedTools, label = 'Postman Worker', workerType = 'luna') {
   if (!Array.isArray(deniedTools) || deniedTools.length === 0 ||
       deniedTools.some(name => typeof name !== 'string' || !name.startsWith('postman_'))) {
     throw new Error('POSTMAN_WORKER_TRANSPORT_BOUNDARY_REQUIRED')
@@ -56,8 +60,8 @@ export function buildPostmanWorkerStartRequest(parent, task, signal, deniedTools
     request: {
       parent,
       prompt: [{ type: 'text', text: task }],
-      agentOptions: { ...POSTMAN_WORKER_AGENT_OPTIONS },
-      persona: POSTMAN_WORKER_PERSONA,
+      agentOptions: { ...workerOptions(workerType) },
+      persona: workerType === 'sol' ? POSTMAN_WORKER_PERSONA.replace('continuable Luna subagent', 'continuable Sol subagent for complex work') : POSTMAN_WORKER_PERSONA,
       // Only deny host Postman transport/control tools. The shared preset's
       // coding tools and child-scoped report remain available.
       toolFilter: { deny: [...deniedTools] },
@@ -81,9 +85,10 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
   // covers first-request assembly and cold resumes that retain only provider/model.
   const stopRequestOptions = ctx.on?.('agent/request', async ({ agent }, next) => {
     const config = await next()
-    return (provisionalSlot(agent, false) || liveSlot(agent, agent?.session?.header?.parentSession, true)) && config.provider === POSTMAN_WORKER_AGENT_OPTIONS.provider &&
-      config.model === POSTMAN_WORKER_AGENT_OPTIONS.model
-      ? { ...config, reasoningEffort: POSTMAN_WORKER_AGENT_OPTIONS.reasoningEffort } : config
+    const slot = provisionalSlot(agent, false) || liveSlot(agent, agent?.session?.header?.parentSession, true)
+    const options = slot && workerOptions(slot.workerType)
+    return options && config.provider === options.provider && config.model === options.model
+      ? { ...config, reasoningEffort: options.reasoningEffort } : config
   })
   // A released Activation is not a deleted durable Session. inspect never resumes a model.
   async function history(id, leaderId, signal) {
@@ -140,12 +145,12 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
   function bindings(parent, group) {
     return durable ? rowOf(parent.id)?.workers ?? {} : Object.fromEntries(
       [...group.slots].filter(([, slot]) => !slot.closed).map(([id, slot]) =>
-        [id, { id, label: slot.label, state: slot.state, delivery: slot.delivery, artifactRequests: [], lifecycle: slot.lifecycle }]))
+        [id, { id, label: slot.label, workerType: slot.workerType, state: slot.state, delivery: slot.delivery, artifactRequests: [], lifecycle: slot.lifecycle }]))
   }
   function slotFor(group, binding) {
     let slot = group.slots.get(binding.id)
     if (!slot) {
-      slot = { id: binding.id, label: binding.label, state: binding.state, delivery: binding.delivery,
+      slot = { id: binding.id, label: binding.label, workerType: workerTypeOf(binding), state: binding.state, delivery: binding.delivery,
         artifactRequests: new Set(), lifecycle: binding.lifecycle, context: null, parent: null, workerAgent: null, closed: false, tail: Promise.resolve() }
       group.slots.set(binding.id, slot)
     }
@@ -213,12 +218,13 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     }
     return action()
   }
-  function select(parent, id, group) {
+  function select(parent, id, group, workerType) {
     const workers = bindings(parent, group)
     if (id !== undefined) return Object.hasOwn(workers, id) && workers[id]?.id === id
       ? { binding: workers[id] } : { status: 'POSTMAN_WORKER_TARGET_UNKNOWN' }
-    const values = Object.entries(workers).filter(([key, value]) => value?.id === key).map(([, value]) => value)
-    if (values.length !== Object.keys(workers).length) return { status: 'POSTMAN_WORKER_BINDING_UNCERTAIN' }
+    const entries = Object.entries(workers)
+    if (entries.some(([key, value]) => value?.id !== key)) return { status: 'POSTMAN_WORKER_BINDING_UNCERTAIN' }
+    const values = entries.map(([, value]) => value).filter(value => workerType === undefined || workerTypeOf(value) === workerType)
     if (values.length > 1) return { status: 'POSTMAN_WORKER_TARGET_REQUIRED' }
     return values.length === 1 ? { binding: values[0] } : { status: 'POSTMAN_WORKER_INTERRUPT_NO_ACTIVE_WORKER' }
   }
@@ -245,7 +251,9 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       'On runner FAIL do not repair package; report evidence. ' + args.task
     return { text, grant }
   }
-  async function deliver(parent, slot, args, exec, interrupt) {
+  async function deliver(parent, slot, args, exec, interrupt, workerType = 'luna') {
+    if (slot.workerType !== workerType) return { status: slot.workerType === 'sol' ?
+      'POSTMAN_SOL_WORKER_TOOL_REQUIRED' : 'POSTMAN_WORKER_TYPE_MISMATCH', workerSessionId: slot.id }
     if (slot.closed || !authorized(parent)) return { status: 'POSTMAN_WORKER_TARGET_UNKNOWN' }
     if (busy(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
     const context = contexts?.get(parent.id) ?? null
@@ -292,7 +300,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       return { status: interrupt ? 'POSTMAN_WORKER_INTERRUPT_TASK_ACCEPTED' : 'POSTMAN_WORKER_TASK_ACCEPTED',
         workerSessionId: id, label: slot.label, created: false, messageId: String(messageId),
         ...(interrupt ? { interruptRequested: false, mappingPreserved: true } : {}),
-        model: POSTMAN_WORKER_AGENT_OPTIONS.model, provider: POSTMAN_WORKER_PROVIDER }
+        workerType: slot.workerType, model: workerOptions(slot.workerType).model, provider: POSTMAN_WORKER_PROVIDER }
     } catch (error) {
       slot.ptcAdmission = null
       slot.delivery = 'unknown'
@@ -306,7 +314,10 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
         workerSessionId: id, diagnostic: diagnostic(error) }
     } finally { exec.signal.removeEventListener('abort', onAbort) }
   }
-  async function create(parent, group, args, exec) {
+  async function create(parent, group, args, exec, workerType = 'luna') {
+    const limit = workerType === 'sol' ? 1 : 3
+    const limitStatus = workerType === 'sol' ? 'POSTMAN_SOL_WORKER_LIMIT_REACHED' : 'POSTMAN_WORKER_LIMIT_REACHED'
+    const count = workers => Object.values(workers).filter(value => workerTypeOf(value) === workerType).length
     const context = contexts?.get(parent.id) ?? null
     if (contexts && !context) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
     let task
@@ -316,35 +327,35 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     if (!authorized(parent)) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
     const reservedId = randomUUID()
     const assignment = { id: randomUUID(), state: 'pending', messageId: null }
-    const label = args.label ?? 'Postman Worker'
+    const label = args.label ?? (workerType === 'sol' ? 'Postman Sol Worker' : 'Postman Worker')
     // Reserve an exact child identity durably before the first DSH side effect.
     const admission = await enqueue(group, async () => {
       if (busy(parent.id) || !authorized(parent)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
-      if (args.createNew !== true && Object.keys(bindings(parent, group)).length)
-        return { selected: select(parent, undefined, group) }
-      if (Object.keys(bindings(parent, group)).length >= 3) return { status: 'POSTMAN_WORKER_LIMIT_REACHED' }
+      if (args.createNew !== true && count(bindings(parent, group)))
+        return { selected: select(parent, undefined, group, workerType) }
+      if (count(bindings(parent, group)) >= limit) return { status: limitStatus }
       try {
         if (durable) await contexts.changeRecord(parent.id, row => {
-          if (Object.keys(row.workers ?? {}).length >= 3) throw new Error('POSTMAN_WORKER_LIMIT_REACHED')
+          if (count(row.workers ?? {}) >= limit) throw new Error(limitStatus)
           if (Object.hasOwn(row.workers ?? {}, reservedId)) throw new Error('POSTMAN_WORKER_BINDING_EXISTS')
           return { ...row, workers: { ...row.workers,
-            [reservedId]: { id: reservedId, label, state: 'intent', delivery: 'pending',
+            [reservedId]: { id: reservedId, label, workerType, state: 'intent', delivery: 'pending',
               artifactRequests: task.grant ? [args.artifactRequestId] : [],
               lifecycle: { version: 1, admissions: [assignment], reports: [] } } } }
         })
-        const slot = slotFor(group, { id: reservedId, label, state: 'intent', delivery: 'pending' })
+        const slot = slotFor(group, { id: reservedId, label, workerType, state: 'intent', delivery: 'pending' })
         slot.context = context
         if (task.grant) slot.artifactRequests.add(args.artifactRequestId)
         return { slot }
       } catch (error) {
-        return { status: /POSTMAN_WORKER_LIMIT_REACHED/.test(String(error)) ?
-          'POSTMAN_WORKER_LIMIT_REACHED' : 'POSTMAN_WORKER_START_FAILED', diagnostic: diagnostic(error) }
+        return { status: String(error).includes(limitStatus) ?
+          limitStatus : 'POSTMAN_WORKER_START_FAILED', diagnostic: diagnostic(error) }
       }
     })
     if (admission.selected) {
       if (!admission.selected.binding) return admission.selected
       const selected = slotFor(group, admission.selected.binding)
-      return enqueue(selected, () => deliver(parent, selected, args, exec, false))
+      return enqueue(selected, () => deliver(parent, selected, args, exec, false, workerType))
     }
     if (!admission.slot) return admission
     const slot = admission.slot
@@ -363,7 +374,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       slot.parent = parent
       slot.ptcAdmission = { id: assignment.id, parent, signal: exec.signal }
       const accepted = await ctx.subagents.startContinuable({
-        ...buildPostmanWorkerStartRequest(parent, task.text, exec.signal, postmanWorkerDeniedTools(ctx.tools), label),
+        ...buildPostmanWorkerStartRequest(parent, task.text, exec.signal, postmanWorkerDeniedTools(ctx.tools), label, workerType),
         childId: reservedId,
       })
       exec.signal.throwIfAborted()
@@ -392,7 +403,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       slot.ptcAdmission = null
       bindingChanged(reservedId)
       return { status: 'POSTMAN_WORKER_TASK_ACCEPTED', workerSessionId: reservedId, label,
-        created: true, messageId: String(accepted.messageId), model: POSTMAN_WORKER_AGENT_OPTIONS.model,
+        created: true, messageId: String(accepted.messageId), workerType, model: workerOptions(workerType).model,
         provider: POSTMAN_WORKER_PROVIDER }
     } catch (error) {
       slot.ptcAdmission = null
@@ -425,34 +436,49 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     label: { type: 'string', description: 'Display name, not an authority or lookup key.' },
     artifactRequestId: { type: 'string', description: 'Separately trusted artifact REQ.' },
   }
-  const taskTool = defineTool({
-    name: POSTMAN_WORKER_TOOL_NAME,
-    description: 'Create an additional continuable Worker (up to three), or deliver a trusted artifact grant to an exact existing Worker. Acceptance is not completion.',
-    parameters, output: output(),
-    async execute(args, exec) {
-      const parent = exec?.agent
-      if (!authorized(parent)) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
-      if (typeof args?.task !== 'string' || !args.task.trim()) return { status: 'POSTMAN_WORKER_TASK_INVALID' }
-      if ((args.createNew !== undefined && typeof args.createNew !== 'boolean') ||
-          (args.workerSessionId !== undefined && (typeof args.workerSessionId !== 'string' || !args.workerSessionId)) ||
-          (args.label !== undefined && (typeof args.label !== 'string' || !args.label.trim() || args.label.length > 120)) ||
-          (args.artifactRequestId !== undefined && typeof args.artifactRequestId !== 'string') ||
-          (args.createNew === true && args.workerSessionId !== undefined))
-        return { status: 'POSTMAN_WORKER_ARGUMENTS_INVALID' }
-      if (contexts && !contexts.get(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
-      return admitted(parent, async () => {
-        const group = groupFor(parent)
-        if (args.createNew === true) return create(parent, group, args, exec)
-        const chosen = await enqueue(group, () => select(parent, args.workerSessionId, group))
-        if (!chosen.binding) {
-          if (args.workerSessionId !== undefined || chosen.status === 'POSTMAN_WORKER_TARGET_REQUIRED') return chosen
-          return create(parent, group, args, exec)
+  function makeTaskTool(workerType) {
+    const sol = workerType === 'sol'
+    return defineTool({
+      name: sol ? POSTMAN_SOL_WORKER_TOOL_NAME : POSTMAN_WORKER_TOOL_NAME,
+      description: sol ? 'Only on an explicit user request: create or continue the one Sol Worker (GPT-6.1 Sol, xhigh). Each task requires one-shot user approval. Use workerSessionId for follow-up; createNew rejects a second Sol Worker. Acceptance is not completion.' :
+        'Create an additional continuable Luna Worker (up to three), or deliver a trusted artifact grant to an exact existing Luna Worker. Acceptance is not completion.',
+      parameters, output: output(),
+      async execute(args, exec) {
+        const parent = exec?.agent
+        if (!authorized(parent)) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
+        if (typeof args?.task !== 'string' || !args.task.trim()) return { status: 'POSTMAN_WORKER_TASK_INVALID' }
+        if ((args.createNew !== undefined && typeof args.createNew !== 'boolean') ||
+            (args.workerSessionId !== undefined && (typeof args.workerSessionId !== 'string' || !args.workerSessionId)) ||
+            (args.label !== undefined && (typeof args.label !== 'string' || !args.label.trim() || args.label.length > 120)) ||
+            (args.artifactRequestId !== undefined && typeof args.artifactRequestId !== 'string') ||
+            (args.createNew === true && args.workerSessionId !== undefined))
+          return { status: 'POSTMAN_WORKER_ARGUMENTS_INVALID' }
+        if (contexts && !contexts.get(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
+        if (sol) {
+          let outcome = 'unavailable'
+          try { outcome = await ctx.get?.('approval')?.request({
+            agent: parent, toolName: POSTMAN_SOL_WORKER_TOOL_NAME, callId: exec.callId, signal: exec.signal,
+            reason: 'Запуск нового задания Sol Worker (GPT-6.1 Sol, xhigh). Разрешение действует только на этот вызов.',
+          }) ?? 'unavailable' } catch { /* Missing/broken approval never grants a task. */ }
+          if (exec.signal.aborted) outcome = 'cancelled'
+          if (outcome !== 'allowed-once') return { status: 'POSTMAN_SOL_WORKER_APPROVAL_REQUIRED', outcome }
         }
-        const slot = slotFor(group, chosen.binding)
-        return enqueue(slot, () => deliver(parent, slot, args, exec, false))
-      })
-    },
-  })
+        return admitted(parent, async () => {
+          const group = groupFor(parent)
+          if (args.createNew === true) return create(parent, group, args, exec, workerType)
+          const chosen = await enqueue(group, () => select(parent, args.workerSessionId, group, workerType))
+          if (!chosen.binding) {
+            if (args.workerSessionId !== undefined || chosen.status === 'POSTMAN_WORKER_TARGET_REQUIRED') return chosen
+            return create(parent, group, args, exec, workerType)
+          }
+          const slot = slotFor(group, chosen.binding)
+          return enqueue(slot, () => deliver(parent, slot, args, exec, false, workerType))
+        })
+      },
+    })
+  }
+  const taskTool = makeTaskTool('luna')
+  const solTaskTool = makeTaskTool('sol')
   function groupFor(parent) { return group(parent) }
   const interruptTool = defineTool({
     name: POSTMAN_WORKER_INTERRUPT_TOOL_NAME,
@@ -622,7 +648,8 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       if (!authorized(parent)) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
       const values = Object.values(bindings(parent, groupFor(parent)))
       return { status: 'POSTMAN_WORKER_LIST', workers: values.map(value => ({
-        workerSessionId: value.id, label: value.label, binding: value.state,
+        workerSessionId: value.id, label: value.label, workerType: workerTypeOf(value),
+        model: workerOptions(workerTypeOf(value)).model, binding: value.state,
         delivery: value.delivery, execution: 'unknown',
       })) }
     },
@@ -801,6 +828,6 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     }
     leaders.clear()
   }
-  return { taskTool, interruptTool, stopTool, listTool, ownerOf, ownsNotification, ownsLiveWorker, ptcContextOf, confirmActivation, releaseActivation, refreshLeader, suspendLeader,
+  return { taskTool, solTaskTool, interruptTool, stopTool, listTool, ownerOf, ownsNotification, ownsLiveWorker, ptcContextOf, confirmActivation, releaseActivation, refreshLeader, suspendLeader,
     contextOf, observeReport, pauseForOperation, prepareRestore, dispose }
 }

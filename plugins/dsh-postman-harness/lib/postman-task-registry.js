@@ -21,7 +21,8 @@ export const POSTMAN_TASK_DOMAIN = defineDomain({
       artifactRequests: z.array(z.string()),
       lifecycle: workerLifecycle.optional() }).nullable().optional(),
     workers: z.record(z.string(), z.object({
-      id: z.string(), label: z.string(), state: z.enum(['intent', 'ready', 'uncertain', 'stopping']),
+      id: z.string(), label: z.string(), workerType: z.enum(['luna', 'sol']).optional(),
+      state: z.enum(['intent', 'ready', 'uncertain', 'stopping']),
       delivery: z.enum(['none', 'pending', 'unknown']),
       artifactRequests: z.array(z.string()), lifecycle: workerLifecycle.optional(),
     })).optional(),
