@@ -4,10 +4,67 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
-  <title>Как устроены плитки Carcassonne — учебный стенд</title>
+  <title>Carcassonne Web — векторная лаборатория плиток</title>
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
+
+  <section class="board-lab" id="board-lab" aria-labelledby="board-title">
+    <div class="board-lab-heading">
+      <div>
+        <p class="eyebrow">Векторная лаборатория 24 / 72</p>
+        <h1 id="board-title">Соберите поле свободно</h1>
+        <p>Выберите любую базовую плитку, поверните её и нажмите на соседнюю клетку. Проверяются все занятые ортогональные соседи; рисунок не подменяет математические края.</p>
+      </div>
+      <div class="board-top-actions">
+        <strong id="board-total">На поле: 1 · в запасе: 71</strong>
+        <button type="button" id="board-undo" class="secondary-button">Отменить последнее</button>
+        <button type="button" id="board-reset" class="secondary-button">Начать заново</button>
+      </div>
+    </div>
+
+    <div class="board-workspace">
+      <aside class="board-catalogue-panel">
+        <h2>Все типы</h2>
+        <p class="micro-note">Стартовая D уже входит в 72: в запасе у неё осталось 3.</p>
+        <div id="board-catalogue" class="board-catalogue" aria-label="Каталог 24 типов плиток"></div>
+      </aside>
+
+      <div class="board-field-panel">
+        <div class="board-field-toolbar">
+          <div class="segmented" id="board-mode-buttons" aria-label="Вид поля">
+            <button type="button" data-board-mode="structure">Обычный вид</button>
+            <button type="button" data-board-mode="exact">Точные контуры</button>
+          </div>
+          <div class="board-zoom" aria-label="Масштаб поля">
+            <button type="button" id="board-zoom-out" aria-label="Уменьшить">−</button>
+            <span id="board-zoom-value">100%</span>
+            <button type="button" id="board-zoom-in" aria-label="Увеличить">+</button>
+            <button type="button" id="board-fit">Подогнать</button>
+          </div>
+        </div>
+        <div id="board-viewport" class="board-viewport" aria-label="Свободное поле"></div>
+        <p id="board-message" class="board-message" aria-live="polite">Выберите тип и соседнюю клетку.</p>
+        <p class="micro-note">Нажмите на область уже поставленной плитки, чтобы подсветить её связный компонент через совпавшие общие края.</p>
+      </div>
+
+      <aside class="board-selection-panel">
+        <p class="step-label">Выбранная плитка</p>
+        <h2 id="board-selected-title">Город сбоку и прямая дорога</h2>
+        <p id="board-selected-count" class="micro-note">Тип D · осталось 3</p>
+        <div id="board-selected-preview" class="board-selected-preview"></div>
+        <h3>Поворот</h3>
+        <div class="segmented board-rotation-buttons" id="board-rotation-buttons" aria-label="Поворот выбранной плитки">
+          <button type="button" data-board-rotation="0">0°</button>
+          <button type="button" data-board-rotation="1">90°</button>
+          <button type="button" data-board-rotation="2">180°</button>
+          <button type="button" data-board-rotation="3">270°</button>
+        </div>
+        <p class="board-help">Полупрозрачная плитка на соседней клетке — предпросмотр. Зелёные швы совпадают, красные показывают конфликт.</p>
+        <a class="secondary-link" href="#top">Как это устроено</a>
+      </aside>
+    </div>
+  </section>
   <header class="hero" id="top">
     <div class="hero-tile" aria-label="Первый пример плитки">
       <div id="hero-tile" class="tile-host tile-host-hero"></div>
@@ -146,7 +203,7 @@
         </div>
         <div id="neighbour-stage" class="neighbour-stage"></div>
         <p id="neighbour-result" class="neighbour-result" aria-live="polite"></p>
-        <p class="warning-note">Это учебная проверка вида края. Она не доказывает, что окончательные нарисованные контуры двух плиток уже совпадают идеально. Такая геометрия ещё не утверждена.</p>
+        <p class="warning-note">Это учебное объяснение вида края. Рабочая лаборатория выше использует уже точные векторные контуры и проверяет общий шов по геометрии.</p>
       </div>
     </section>
 
@@ -263,8 +320,8 @@
 
       <div class="vector-limit-note">
         <strong>Граница этого образца.</strong>
-        <p>Математический подход проверен на шести репрезентативных типах. Полный классический математический каталог 24/72 ещё не построен и этап 1 этим PASS не завершается.</p>
-        <p>Исследовательский каталог уже подтверждает 24 типа, 72 плитки и одну стартовую. Точная новая геометрия сейчас есть только у D, U, W, F, H и A; остальные 18 типов и окончательное оформление сюда не входят.</p>
+        <p>Полный классический математический каталог 24/72 теперь доступен в лаборатории поля; этот раздел сохраняет шесть принятых учебных примеров.</p>
+        <p>Все 24 типа имеют собственные векторные математические области. Учебный блок D/U/W/F/H/A оставлен как компактное объяснение модели.</p>
       </div>
     </section>
 
@@ -324,19 +381,16 @@
             <p>Среди обсуждаемых технологий остаются векторная графика (SVG), рисование на холсте (Canvas2D) и трёхмерная графика (WebGL). Этот стенд не выбирает окончательный способ рисования.</p>
 
             <details class="deep-details">
-              <summary>Что ещё предстоит решить</summary>
+              <summary>Что остаётся за границей этой лаборатории</summary>
               <ul class="reference-list">
-                <li>Перенести точную математическую геометрию на остальные 18 типов выбранной классической базы, не смешивая её с историческими вариантами изданий.</li>
-                <li>Решить, какие исследовательские связи полей и городов войдут в окончательное описание плитки.</li>
-                <li>Определить воспроизводимую форму границ дороги, города и поля, включая безопасную область для оформления.</li>
-                <li>Проверить на небольшом рабочем примере способ рисования: SVG, Canvas2D или, только при доказанной необходимости, WebGL.</li>
-                <li>Утвердить хранение изображений для поворотов 0°/90°/180°/270° без смешения оформления с игровыми свойствами.</li>
-                <li>Окончательный набор правил оформления выбирать только по представительному работающему примеру, а не по одному статичному листу.</li>
+                <li>Игроки, очереди ходов, случайное вытягивание и фигурки не входят в этот этап.</li>
+                <li>Подсчёт очков, сохранения, сеть, ИИ и дополнения не добавляются.</li>
+                <li>Будущее художественное оформление может развиваться отдельно, но не меняет математические области, связи и края.</li>
               </ul>
             </details>
 
             <details class="deep-details">
-              <summary>12 свойств, которые нельзя потерять в будущей реализации</summary>
+              <summary>12 свойств, которые сохраняет текущая реализация</summary>
               <ol class="reference-list">
                 <li>У каждой плитки четыре допустимые стороны.</li>
                 <li>Каждая структурная часть представлена реальной областью данных.</li>
@@ -351,7 +405,7 @@
                 <li>Для каждого типа известно количество экземпляров выбранной базы.</li>
                 <li>Изменение оформления не меняет игровые свойства плитки.</li>
               </ol>
-              <p class="source-limit">Это требования для будущей проверки, а не заявление, что весь последующий этап уже пройден.</p>
+              <p class="source-limit">Эти свойства проверяются адресными тестами математического каталога и модели поля; игровой слой намеренно не входит в текущую лабораторию.</p>
             </details>
 
             <details class="deep-details">
@@ -372,7 +426,7 @@
   </main>
 
   <footer>
-    <p>Исследовательская модель: 24 типа, 72 экземпляра, один стартовый экземпляр. Пользовательская приёмка нового представления выполняется отдельно после внедрения.</p>
+    <p>Векторная лаборатория: 24 типа, 72 экземпляра, одна стартовая D. Без игроков, очков, вытягивания и сохранений.</p>
   </footer>
 
   <script type="module" src="./app.mjs"></script>

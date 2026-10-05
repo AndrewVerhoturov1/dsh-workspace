@@ -17,6 +17,16 @@ import {
   regionKindLabel,
   rotateTile,
 } from './vector-sample.mjs';
+import {
+  candidateCells,
+  connectedRegionComponent,
+  createInitialBoardState,
+  evaluatePlacement,
+  placeTile,
+  resetBoard,
+  totalRemaining,
+  undoLast,
+} from './board.mjs';
 
 const NS = 'http://www.w3.org/2000/svg';
 const SIDE_ORDER = ['N', 'E', 'S', 'W'];
@@ -31,6 +41,13 @@ const state = {
   vectorMode: 'structure',
   vectorRotation: 0,
   vectorPair: 'road',
+  board: createInitialBoardState(),
+  boardTile: 'D',
+  boardRotation: 0,
+  boardMode: 'structure',
+  boardZoom: 1,
+  boardMessage: 'Выберите тип и соседнюю клетку.',
+  boardComponent: [],
 };
 
 const portPosition = Object.freeze({
@@ -624,6 +641,15 @@ function drawExactOverlay(svg, tile) {
   svg.append(axis);
 }
 
+function drawReadableDecoration(svg, tile) {
+  const layer = svgEl('g', { class: 'vector-readable-decoration' });
+  for (const object of tile.layout.objects) {
+    if (!['shield', 'building', 'monastery-building'].includes(object.type)) continue;
+    layer.append(polygonNode(object.footprint, { class: `vector-object vector-object-${object.type}` }));
+  }
+  svg.append(layer);
+}
+
 function drawLayoutOverlay(svg, tile) {
   const layer = svgEl('g', { class: 'vector-layout-layer' });
   for (const zone of tile.layout.allowedZones) layer.append(polygonNode(zone.outer, { class: 'vector-allowed-zone' }));
@@ -680,7 +706,8 @@ function renderVectorTile(tileOrId, options = {}) {
     }));
   }
 
-  if (mode === 'exact' && !compact) drawExactOverlay(svg, tile);
+  if (mode === 'structure') drawReadableDecoration(svg, tile);
+  if (mode === 'exact') drawExactOverlay(svg, tile);
   if (mode === 'layout' && !compact) drawLayoutOverlay(svg, tile);
 
   if (!compact) {
@@ -823,6 +850,163 @@ function renderVectorSample() {
   renderVectorPair();
 }
 
+
+function boardTileName(id) {
+  return catalogueNames[id] || VECTOR_TILES[id]?.title || `Тип ${id}`;
+}
+
+function renderBoardCatalogue() {
+  const host = document.querySelector('#board-catalogue');
+  host.replaceChildren();
+  for (const tile of RESEARCH_CATALOGUE) {
+    const button = htmlEl('button', { class: `board-catalogue-item${state.boardTile === tile.id ? ' active' : ''}`, type: 'button' });
+    button.setAttribute('data-board-tile', tile.id);
+    const thumb = htmlEl('span', { class: 'board-catalogue-thumb' });
+    thumb.append(renderVectorTile(tile.id, { compact: true, mode: 'structure' }));
+    const text = htmlEl('span', { class: 'board-catalogue-text' });
+    text.append(htmlEl('strong', { text: boardTileName(tile.id) }), htmlEl('small', { text: `Осталось: ${state.board.remaining[tile.id]} из ${tile.quantity}` }));
+    button.append(thumb, text);
+    button.disabled = state.board.remaining[tile.id] <= 0;
+    button.addEventListener('click', () => {
+      state.boardTile = tile.id;
+      state.boardRotation = 0;
+      state.boardMessage = `Выбран тип ${tile.id}. Выберите соседнюю клетку.`;
+      state.boardComponent = [];
+      renderBoardLab();
+    });
+    host.append(button);
+  }
+}
+
+function boardPositionStyle(x, y, bounds) {
+  const cell = 122 * state.boardZoom;
+  return {
+    left: `${(x - bounds.minX + 1) * cell}px`,
+    top: `${(y - bounds.minY + 1) * cell}px`,
+    width: `${cell}px`,
+    height: `${cell}px`,
+  };
+}
+
+function applyStyles(node, styles) {
+  for (const [key, value] of Object.entries(styles)) node.style[key] = value;
+}
+
+function seamMarker(side, match) {
+  return htmlEl('span', { class: `board-seam board-seam-${side.toLowerCase()} ${match ? 'match' : 'mismatch'}`, title: match ? 'Шов совпадает' : 'Шов не совпадает' });
+}
+
+function renderBoardField() {
+  const viewport = document.querySelector('#board-viewport');
+  const canvas = htmlEl('div', { class: 'board-canvas' });
+  const candidates = candidateCells(state.board);
+  const all = [...state.board.placements, ...candidates];
+  const xs = all.map((p) => p.x);
+  const ys = all.map((p) => p.y);
+  const bounds = { minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) };
+  const cell = 122 * state.boardZoom;
+  canvas.style.width = `${(bounds.maxX - bounds.minX + 3) * cell}px`;
+  canvas.style.height = `${(bounds.maxY - bounds.minY + 3) * cell}px`;
+
+  const componentKeys = new Set(state.boardComponent.map((row) => `${row.x},${row.y}:${row.regionId}`));
+  for (const placement of state.board.placements) {
+    const holder = htmlEl('button', { class: `board-tile${placement.start ? ' start' : ''}`, type: 'button', title: `${boardTileName(placement.tileId)} · ${placement.rotation * 90}°` });
+    applyStyles(holder, boardPositionStyle(placement.x, placement.y, bounds));
+    const svg = renderVectorTile(placement.tileId, { compact: true, mode: state.boardMode, rotation: placement.rotation });
+    for (const path of svg.querySelectorAll('[data-region]')) {
+      const regionId = path.getAttribute('data-region');
+      if (componentKeys.has(`${placement.x},${placement.y}:${regionId}`)) path.classList.add('board-region-selected');
+      path.addEventListener('click', (event) => {
+        event.stopPropagation();
+        state.boardComponent = connectedRegionComponent(state.board, { x: placement.x, y: placement.y, regionId });
+        const region = getRegion(VECTOR_TILES[placement.tileId], regionId);
+        state.boardMessage = state.boardComponent.length
+          ? `Связанная область «${regionKindLabel(region.kind)}»: ${state.boardComponent.length} локальных областей на поле.`
+          : 'Для этой области внешнее соединение не выбрано.';
+        renderBoardField();
+        renderBoardStatus();
+      });
+    }
+    holder.append(svg, htmlEl('span', { class: 'board-tile-code', text: placement.start ? 'Старт D' : placement.tileId }));
+    canvas.append(holder);
+  }
+
+  for (const cellPos of candidates) {
+    const verdict = evaluatePlacement(state.board, { tileId: state.boardTile, rotation: state.boardRotation, ...cellPos });
+    const holder = htmlEl('button', { class: `board-candidate ${verdict.ok ? 'available' : 'blocked'}`, type: 'button', title: verdict.reason });
+    applyStyles(holder, boardPositionStyle(cellPos.x, cellPos.y, bounds));
+    holder.append(renderVectorTile(state.boardTile, { compact: true, mode: state.boardMode, rotation: state.boardRotation }));
+    for (const check of verdict.checks || []) holder.append(seamMarker(check.side, check.seam.match));
+    holder.append(htmlEl('span', { class: 'board-candidate-label', text: verdict.ok ? 'Можно поставить' : verdict.reason }));
+    holder.addEventListener('click', () => {
+      const result = placeTile(state.board, { tileId: state.boardTile, rotation: state.boardRotation, ...cellPos });
+      state.boardMessage = result.verdict.reason;
+      if (result.verdict.ok) {
+        state.board = result.state;
+        state.boardComponent = [];
+      }
+      renderBoardLab();
+    });
+    canvas.append(holder);
+  }
+  viewport.replaceChildren(canvas);
+}
+
+function renderBoardStatus() {
+  const total = totalRemaining(state.board);
+  document.querySelector('#board-total').textContent = `На поле: ${state.board.placements.length} · в запасе: ${total}`;
+  const message = document.querySelector('#board-message');
+  message.textContent = state.boardMessage;
+  message.className = `board-message ${/^Не |закончились|занята|должна/.test(state.boardMessage) ? 'bad' : ''}`;
+  document.querySelector('#board-undo').disabled = state.board.history.length === 0;
+}
+
+function renderBoardSelection() {
+  document.querySelector('#board-selected-title').textContent = boardTileName(state.boardTile);
+  document.querySelector('#board-selected-count').textContent = `Тип ${state.boardTile} · осталось ${state.board.remaining[state.boardTile]}`;
+  document.querySelector('#board-selected-preview').replaceChildren(renderVectorTile(state.boardTile, { mode: state.boardMode, rotation: state.boardRotation }));
+  setPressed('#board-rotation-buttons', 'board-rotation', state.boardRotation);
+  setPressed('#board-mode-buttons', 'board-mode', state.boardMode);
+  document.querySelector('#board-zoom-value').textContent = `${Math.round(state.boardZoom * 100)}%`;
+}
+
+function renderBoardLab() {
+  renderBoardCatalogue();
+  renderBoardSelection();
+  renderBoardField();
+  renderBoardStatus();
+}
+
+function bindBoardControls() {
+  document.querySelectorAll('#board-rotation-buttons [data-board-rotation]').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.boardRotation = Number(button.getAttribute('data-board-rotation'));
+      state.boardMessage = `Поворот: ${state.boardRotation * 90}°.`;
+      state.boardComponent = [];
+      renderBoardLab();
+    });
+  });
+  document.querySelectorAll('#board-mode-buttons [data-board-mode]').forEach((button) => {
+    button.addEventListener('click', () => { state.boardMode = button.getAttribute('data-board-mode'); renderBoardLab(); });
+  });
+  document.querySelector('#board-undo').addEventListener('click', () => {
+    const next = undoLast(state.board);
+    state.boardMessage = next === state.board ? 'Отменять пока нечего.' : 'Последняя плитка возвращена в запас.';
+    state.board = next;
+    state.boardComponent = [];
+    renderBoardLab();
+  });
+  document.querySelector('#board-reset').addEventListener('click', () => {
+    state.board = resetBoard();
+    state.boardMessage = 'Поле снова начинается с одной стартовой D.';
+    state.boardComponent = [];
+    renderBoardLab();
+  });
+  document.querySelector('#board-zoom-out').addEventListener('click', () => { state.boardZoom = Math.max(.6, +(state.boardZoom - .2).toFixed(1)); renderBoardLab(); });
+  document.querySelector('#board-zoom-in').addEventListener('click', () => { state.boardZoom = Math.min(1.6, +(state.boardZoom + .2).toFixed(1)); renderBoardLab(); });
+  document.querySelector('#board-fit').addEventListener('click', () => { state.boardZoom = .8; renderBoardLab(); });
+}
+
 function bindControls() {
   document.querySelectorAll('#part-buttons [data-part]').forEach((button) => {
     button.addEventListener('click', () => { state.part = button.dataset.part; renderPartLesson(); });
@@ -876,4 +1060,6 @@ renderCatalogue();
 renderEditions();
 renderSources();
 renderArchitecture();
+renderBoardLab();
 bindControls();
+bindBoardControls();

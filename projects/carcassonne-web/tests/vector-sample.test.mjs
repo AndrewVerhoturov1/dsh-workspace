@@ -279,6 +279,18 @@ function mainEdgeKind(profile) {
   return 'F';
 }
 
+const RESEARCH_PORT_INTERVALS = Object.freeze({
+  Nw: ['N', 0, ROAD_START], Ne: ['N', ROAD_END, TILE_SIZE],
+  En: ['E', 0, ROAD_START], Es: ['E', ROAD_END, TILE_SIZE],
+  Sw: ['S', 0, ROAD_START], Se: ['S', ROAD_END, TILE_SIZE],
+  Wn: ['W', 0, ROAD_START], Ws: ['W', ROAD_END, TILE_SIZE],
+});
+
+function expectedPortInterval(kind, port) {
+  if (RESEARCH_PORT_INTERVALS[port]) return RESEARCH_PORT_INTERVALS[port];
+  return [port, kind === 'road' ? ROAD_START : 0, kind === 'road' ? ROAD_END : TILE_SIZE];
+}
+
 function semanticSnapshot(tile) {
   return {
     regions: tile.regions,
@@ -287,7 +299,7 @@ function semanticSnapshot(tile) {
   };
 }
 
-test('six exact vector samples partition the whole square without crossings, gaps or area overlaps', () => {
+test('all 24 exact vector tiles partition the whole square without crossings, gaps or area overlaps', () => {
   for (const id of VECTOR_TILE_IDS) {
     const tile = VECTOR_TILES[id];
     assert.equal(tile.regions.length > 0, true, id);
@@ -352,7 +364,7 @@ test('local contacts, endings and shield ownership match the approved semantics 
   assert.ok(sharedBoundaryLength(getRegion(a, 'R1').outer, getRegion(a, 'M1').outer) > 0);
 });
 
-test('exact edge profiles come from contours and agree with research-side kinds for the six samples', () => {
+test('exact edge profiles come from contours and agree with research-side kinds for all 24 types', () => {
   for (const id of VECTOR_TILE_IDS) {
     const tile = VECTOR_TILES[id];
     const research = researchById(id);
@@ -475,9 +487,29 @@ test('manual decoration footprints and future meeple zones are wholly contained 
   assert.equal(monasteryBuilding.owner, 'M1');
 });
 
-test('exact six-type semantics remain a cross-check of the accepted 24/72 research catalogue, not a replacement for it', () => {
+test('all catalogue ports resolve to the exact owning local region on every edge and half-edge', () => {
+  for (const research of RESEARCH_CATALOGUE) {
+    const exact = VECTOR_TILES[research.id];
+    for (const [kind, regions] of [['city', research.cities], ['road', research.roads], ['field', research.fields]]) {
+      for (const region of regions) {
+        for (const port of region.ports) {
+          const [side, start, end] = expectedPortInterval(kind, port);
+          const profile = getEdgeProfile(exact, side);
+          assert.ok(profile.some((interval) => (
+            interval.kind === kind
+            && interval.regionId === region.id
+            && interval.start <= start
+            && interval.end >= end
+          )), `${research.id}/${region.id}/${port}: wrong local owner on ${side}`);
+        }
+      }
+    }
+  }
+});
+
+test('all 24 exact types cross-check catalogue regions, contacts, endings, shields and quantities', () => {
   assert.equal(RESEARCH_CATALOGUE.length, 24);
-  assert.equal(VECTOR_TILE_IDS.length, 6);
+  assert.equal(VECTOR_TILE_IDS.length, 24);
   for (const id of VECTOR_TILE_IDS) {
     const research = researchById(id);
     const exact = VECTOR_TILES[id];
@@ -486,30 +518,34 @@ test('exact six-type semantics remain a cross-check of the accepted 24/72 resear
     assert.deepEqual(exact.regions.filter((region) => region.kind === 'field').map((region) => region.id).sort(), research.fields.map((region) => region.id).sort(), `${id}: fields`);
     assert.deepEqual(exact.relationships.endsAt.map(({ road, target }) => [road, target]).sort(), research.roads.filter((road) => road.endsAt).map((road) => [road.id, road.endsAt]).sort(), `${id}: road endings`);
     assert.deepEqual(exact.relationships.fieldCityContacts.map(({ field, city }) => [field, city]).sort(), research.fields.flatMap((field) => field.touches.map((city) => [field.id, city])).sort(), `${id}: field-city contacts`);
+    assert.deepEqual(exact.relationships.shields.map(({ city }) => city).sort(), [...research.shields].sort(), `${id}: shields`);
+    for (const relation of exact.relationships.endsAt) assert.ok(sharedBoundaryLength(getRegion(exact, relation.road).outer, getRegion(exact, relation.target).outer) > 0, `${id}: ${relation.road} must touch ${relation.target}`);
+    for (const relation of exact.relationships.fieldCityContacts) assert.ok(sharedBoundaryLength(getRegion(exact, relation.field).outer, getRegion(exact, relation.city).outer) > 0, `${id}: ${relation.field} must touch ${relation.city}`);
   }
-  assert.equal(VECTOR_TILES.F.relationships.shields[0].city, 'C1');
-  assert.equal(researchById('F').shields[0], 'C1');
+  assert.equal(RESEARCH_CATALOGUE.reduce((sum, tile) => sum + tile.quantity, 0), 72);
+  assert.equal(RESEARCH_CATALOGUE.find((tile) => tile.id === 'D').quantity, 4);
+  assert.equal(RESEARCH_CATALOGUE.find((tile) => tile.id === 'D').startCount, 1);
 });
 
-
-test('browser section exposes exactly six samples, three views, four mathematical rotations and four computed seam examples after the accepted four lessons', async () => {
+test('browser starts with the free 24/72 board and preserves the accepted six-sample lessons secondarily', async () => {
   const html = await readFile(new URL('../index.html', import.meta.url), 'utf8');
   const app = await readFile(new URL('../app.mjs', import.meta.url), 'utf8');
   const css = await readFile(new URL('../styles.css', import.meta.url), 'utf8');
 
+  assert.ok(html.indexOf('id="board-lab"') < html.indexOf('id="top"'));
+  assert.match(html, /Соберите поле свободно/);
+  assert.match(html, /Стартовая D уже входит в 72: в запасе у неё осталось 3/);
+  assert.match(html, /Отменить последнее/);
+  assert.match(html, /Начать заново/);
+  assert.equal((html.match(/data-board-rotation=/g) || []).length, 4);
+  assert.equal((html.match(/data-board-mode=/g) || []).length, 2);
   assert.ok(html.indexOf('id="step-4"') < html.indexOf('id="vector-sample"'));
-  assert.ok(html.indexOf('id="vector-sample"') < html.indexOf('class="details-zone"'));
   assert.equal((html.match(/data-vector-tile=/g) || []).length, 6);
   assert.equal((html.match(/data-vector-mode=/g) || []).length, 3);
-  assert.equal((html.match(/data-vector-rotation=/g) || []).length, 4);
   assert.equal((html.match(/data-vector-pair=/g) || []).length, 4);
-  assert.match(html, /Устройство/);
-  assert.match(html, /Точные контуры/);
-  assert.match(html, /Места оформления/);
-  assert.match(html, /Математический подход проверен на шести репрезентативных типах/);
-  assert.match(html, /классический базовый набор: 24 типа, 72 плитки, включая одну стартовую/);
-  assert.doesNotMatch(html, /data-vector-tile="B"/);
+  assert.match(html, /Полный классический математический каталог 24\/72 теперь доступен/);
+  assert.match(app, /evaluatePlacement\(state\.board/);
+  assert.match(app, /connectedRegionComponent/);
   assert.match(app, /compareNeighbourPair\(scenario\)/);
-  assert.match(app, /rotateTile\(source, state\.vectorRotation\)/);
   assert.doesNotMatch(css, /transform\s*:\s*rotate\s*\(/i);
 });
