@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Как устроены плитки Carcassonne — учебный стенд</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <header class="hero" id="top">
+    <div class="hero-tile" aria-label="Первый пример плитки">
+      <div id="hero-tile" class="tile-host tile-host-hero"></div>
+      <p class="micro-note">Город сбоку и прямая дорога <span>· код D — только справочное обозначение</span></p>
+    </div>
+    <div class="hero-copy">
+      <p class="eyebrow">Учебный стенд</p>
+      <h1>Как устроены плитки Carcassonne</h1>
+      <p class="lead">Плитка — квадрат. На её краях находятся <strong>город</strong>, <strong>дорога</strong> или <strong>поле</strong>. Иногда в центре есть <strong>монастырь</strong>.</p>
+      <p>За четыре коротких шага покажем, что соединено внутри плитки, что происходит при повороте и почему одни соседние края подходят друг к другу, а другие нет.</p>
+      <div class="legend-pills" aria-label="Четыре понятия">
+        <span class="legend-pill city-dot">Город</span>
+        <span class="legend-pill road-dot">Дорога</span>
+        <span class="legend-pill field-dot">Поле</span>
+        <span class="legend-pill monastery-dot">Монастырь</span>
+      </div>
+      <a class="primary-button" href="#step-1">Начать с одной плитки</a>
+      <p class="honest-note">Целевая база этой стадии — классический базовый набор: 24 типа, 72 плитки, включая одну стартовую. Исторические различия других изданий оставлены в справке.</p>
+    </div>
+  </header>
+
+  <nav class="progress" aria-label="Четыре шага">
+    <a href="#step-1"><span>1</span> Что на плитке</a>
+    <a href="#step-2"><span>2</span> Что соединено</a>
+    <a href="#step-3"><span>3</span> Поворот и соседство</a>
+    <a href="#step-4"><span>4</span> Оформление</a>
+  </nav>
+
+  <main>
+    <section id="step-1" class="lesson lesson-one">
+      <div class="section-heading">
+        <p class="step-label">Шаг 1</p>
+        <h2>Что есть на плитке</h2>
+        <p>Выберите часть рисунка — мы подсветим её и покажем, где она продолжается.</p>
+      </div>
+
+      <div class="step-one-grid">
+        <div class="visual-card">
+          <div id="part-tile" class="tile-host tile-host-large"></div>
+          <p class="visual-caption">Основной пример: справа город, сверху вниз идёт дорога, а по сторонам дороги находятся два отдельных поля.</p>
+        </div>
+        <div class="part-panel">
+          <div class="segmented" id="part-buttons" aria-label="Выберите часть плитки">
+            <button type="button" data-part="city">Город</button>
+            <button type="button" data-part="road">Дорога</button>
+            <button type="button" data-part="field">Поле</button>
+            <button type="button" data-part="monastery">Монастырь</button>
+          </div>
+          <article class="explanation-card" aria-live="polite">
+            <h3 id="part-title">Город</h3>
+            <p id="part-text"></p>
+          </article>
+          <div class="monastery-example" id="monastery-example">
+            <div id="monastery-tile" class="tile-host tile-host-small"></div>
+            <div>
+              <h3>Монастырь — внутри плитки</h3>
+              <p>На примере B монастырь стоит в центре, а вокруг него находится одно связное поле. Монастырь не является четвёртым видом края.</p>
+              <p class="micro-note">код B — справочно</p>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="lesson-takeaway">У каждой стороны плитки есть основной вид: город, дорога или поле. Монастырь — отдельный объект внутри плитки и встречается не на каждой плитке.</p>
+    </section>
+
+    <section id="step-2" class="lesson">
+      <div class="section-heading">
+        <p class="step-label">Шаг 2</p>
+        <h2>Что соединено внутри</h2>
+        <p>Похожие края могут принадлежать одной общей части или нескольким разным частям. Лучше один раз увидеть это рядом.</p>
+      </div>
+
+      <div class="segmented comparison-tabs" id="comparison-tabs" aria-label="Выберите сравнение">
+        <button type="button" data-comparison="roads">Дороги</button>
+        <button type="button" data-comparison="cities">Города</button>
+        <button type="button" data-comparison="fields">Поля</button>
+      </div>
+
+      <div class="comparison-stage">
+        <article class="comparison-card">
+          <h3 id="compare-left-title"></h3>
+          <div id="compare-left" class="tile-host tile-host-compare"></div>
+          <p id="compare-left-text"></p>
+          <p id="compare-left-code" class="micro-note"></p>
+        </article>
+        <div class="comparison-message">
+          <strong id="compare-center-title"></strong>
+          <p id="compare-center-text"></p>
+          <button type="button" id="connections-toggle" class="secondary-button">Показать связи цветом</button>
+        </div>
+        <article class="comparison-card">
+          <h3 id="compare-right-title"></h3>
+          <div id="compare-right" class="tile-host tile-host-compare"></div>
+          <p id="compare-right-text"></p>
+          <p id="compare-right-code" class="micro-note"></p>
+        </article>
+      </div>
+      <p class="lesson-takeaway" id="comparison-takeaway"></p>
+    </section>
+
+    <section id="step-3" class="lesson">
+      <div class="section-heading">
+        <p class="step-label">Шаг 3</p>
+        <h2>Поворот и соседние края</h2>
+        <p>Поворот меняет направление плитки, но не меняет её внутреннее устройство.</p>
+      </div>
+
+      <div class="rotation-layout">
+        <div class="rotation-main visual-card">
+          <div id="rotation-tile" class="tile-host tile-host-large"></div>
+          <div class="segmented rotation-buttons" id="rotation-buttons" aria-label="Повернуть плитку">
+            <button type="button" data-rotation="0">0°</button>
+            <button type="button" data-rotation="1">90°</button>
+            <button type="button" data-rotation="2">180°</button>
+            <button type="button" data-rotation="3">270°</button>
+          </div>
+          <p id="rotation-description" class="visual-caption"></p>
+        </div>
+        <div>
+          <h3>Это всё та же плитка</h3>
+          <p>Мы не создаём новую плитку. Мы поворачиваем ту же самую. Город, дорога и два поля поворачиваются вместе, а их связи остаются прежними.</p>
+          <div id="rotation-previews" class="rotation-previews" aria-label="Четыре положения одной плитки"></div>
+        </div>
+      </div>
+
+      <div class="neighbour-demo">
+        <div class="neighbour-header">
+          <div>
+            <h3>А теперь поставим рядом вторую плитку</h3>
+            <p>Сначала сравниваем только вид общего края.</p>
+          </div>
+          <div class="segmented" id="neighbour-buttons">
+            <button type="button" data-neighbour="fit">Показать подходящую пару</button>
+            <button type="button" data-neighbour="miss">Показать неподходящую пару</button>
+          </div>
+        </div>
+        <div id="neighbour-stage" class="neighbour-stage"></div>
+        <p id="neighbour-result" class="neighbour-result" aria-live="polite"></p>
+        <p class="warning-note">Это учебная проверка вида края. Она не доказывает, что окончательные нарисованные контуры двух плиток уже совпадают идеально. Такая геометрия ещё не утверждена.</p>
+      </div>
+    </section>
+
+    <section id="step-4" class="lesson art-lesson">
+      <div class="section-heading">
+        <p class="step-label">Шаг 4</p>
+        <h2>Как это может выглядеть</h2>
+        <p>Эти рисунки нужны для обсуждения внешнего вида. Они не заменяют данные об устройстве плиток и не являются готовыми игровыми плитками.</p>
+      </div>
+
+      <div class="art-stage">
+        <figure class="art-figure">
+          <a id="art-full-link" href="./references/roads-fields-c.png" target="_blank" rel="noreferrer">
+            <img id="art-main-image" src="./references/roads-fields-c.png" alt="Художественный лист: дороги и поля">
+          </a>
+          <figcaption id="art-caption"></figcaption>
+        </figure>
+        <aside class="art-questions">
+          <h3 id="art-title"></h3>
+          <p id="art-status"></p>
+          <ul id="art-question-list"></ul>
+          <a id="art-open-link" class="secondary-link" href="./references/roads-fields-c.png" target="_blank" rel="noreferrer">Открыть исходное изображение крупно</a>
+        </aside>
+      </div>
+
+      <div class="art-switcher" id="art-switcher" aria-label="Выберите художественный лист">
+        <button type="button" data-art="roads">
+          <img src="./references/roads-fields-c.png" alt="Миниатюра листа с дорогами и полями">
+          <span>Дороги и поля</span>
+        </button>
+        <button type="button" data-art="cities">
+          <img src="./references/cities-c.png" alt="Миниатюра листа с городами">
+          <span>Города</span>
+        </button>
+        <button type="button" data-art="monastery">
+          <img src="./references/monastery-c.png" alt="Миниатюра листа с монастырём">
+          <span>Монастырь</span>
+        </button>
+      </div>
+    </section>
+
+    <section id="vector-sample" class="lesson vector-lesson" aria-labelledby="vector-sample-title">
+      <div class="section-heading">
+        <p class="eyebrow">Следующий этап</p>
+        <h2 id="vector-sample-title">Точная векторная основа</h2>
+        <p>Теперь у плитки есть точная математическая форма. Цветные области ниже — не готовая графика игры, а проверяемая основа, на которую позже можно положить стены, здания, деревья и текстуры.</p>
+      </div>
+
+      <div class="vector-controls">
+        <div>
+          <h3>Выберите один из шести примеров</h3>
+          <div class="segmented vector-tile-buttons" id="vector-tile-buttons" aria-label="Выберите точный пример плитки">
+            <button type="button" data-vector-tile="D">Город, дорога и два поля <span>код D</span></button>
+            <button type="button" data-vector-tile="U">Прямая дорога <span>код U</span></button>
+            <button type="button" data-vector-tile="W">Три дороги к одному месту <span>код W</span></button>
+            <button type="button" data-vector-tile="F">Один соединённый город <span>код F</span></button>
+            <button type="button" data-vector-tile="H">Два раздельных города <span>код H</span></button>
+            <button type="button" data-vector-tile="A">Монастырь и дорога <span>код A</span></button>
+          </div>
+        </div>
+        <div class="vector-control-row">
+          <div>
+            <h3>Как смотреть</h3>
+            <div class="segmented" id="vector-mode-buttons" aria-label="Выберите способ показа">
+              <button type="button" data-vector-mode="structure">Устройство</button>
+              <button type="button" data-vector-mode="exact">Точные контуры</button>
+              <button type="button" data-vector-mode="layout">Места оформления</button>
+            </div>
+          </div>
+          <div>
+            <h3>Поворот</h3>
+            <div class="segmented" id="vector-rotation-buttons" aria-label="Повернуть математическую плитку">
+              <button type="button" data-vector-rotation="0">0°</button>
+              <button type="button" data-vector-rotation="1">90°</button>
+              <button type="button" data-vector-rotation="2">180°</button>
+              <button type="button" data-vector-rotation="3">270°</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="vector-main-grid">
+        <div class="visual-card vector-visual-card">
+          <div id="vector-tile-host" class="vector-tile-host"></div>
+          <p id="vector-caption" class="visual-caption"></p>
+        </div>
+        <aside class="vector-info-card" aria-live="polite">
+          <h3 id="vector-title"></h3>
+          <p id="vector-summary"></p>
+          <div id="vector-details"></div>
+        </aside>
+      </div>
+
+      <p class="vector-model-note"><strong>Одна модель, три представления.</strong> Переключатели не создают новую плитку. Они показывают те же области и отношения обычным языком, точными координатами или условными местами будущего оформления.</p>
+
+      <div class="vector-neighbour-demo">
+        <div class="neighbour-header">
+          <div>
+            <h3>Проверим общий край</h3>
+            <p>Здесь сравнивается уже не буква вида края, а точный профиль после математического поворота и размещения плиток в общей системе координат.</p>
+          </div>
+          <div class="segmented vector-pair-buttons" id="vector-pair-buttons" aria-label="Выберите пару плиток">
+            <button type="button" data-vector-pair="road">Дорога D/U</button>
+            <button type="button" data-vector-pair="city">Город F/H</button>
+            <button type="button" data-vector-pair="field">Поле A/H</button>
+            <button type="button" data-vector-pair="wrong">Город D / поле U</button>
+          </div>
+        </div>
+        <div id="vector-pair-stage" class="vector-pair-stage"></div>
+        <div id="vector-seam-profile" class="vector-seam-profile" aria-label="Профили общего края"></div>
+        <p id="vector-pair-result" class="vector-pair-result" aria-live="polite"></p>
+        <p id="vector-pair-connections" class="micro-note"></p>
+      </div>
+
+      <div class="vector-limit-note">
+        <strong>Граница этого образца.</strong>
+        <p>Математический подход проверен на шести репрезентативных типах. Полный классический математический каталог 24/72 ещё не построен и этап 1 этим PASS не завершается.</p>
+        <p>Исследовательский каталог уже подтверждает 24 типа, 72 плитки и одну стартовую. Точная новая геометрия сейчас есть только у D, U, W, F, H и A; остальные 18 типов и окончательное оформление сюда не входят.</p>
+      </div>
+    </section>
+
+    <section class="details-zone" aria-labelledby="details-title">
+      <div class="section-heading">
+        <p class="eyebrow">Необязательная справка</p>
+        <h2 id="details-title">Хотите подробности?</h2>
+        <p>Для знакомства с плиткой это открывать не нужно. Здесь сохранены каталог, варианты изданий, источники и нерешённые технические вопросы.</p>
+      </div>
+
+      <details>
+        <summary>Все 24 типа плиток <span id="catalogue-summary"></span></summary>
+        <div class="details-body">
+          <p>Крупное название описывает плитку обычными словами. Буква — лишь справочный код исследовательского каталога.</p>
+          <div id="catalogue-grid" class="catalogue-grid"></div>
+        </div>
+      </details>
+
+      <details>
+        <summary>Издания и нерешённые различия</summary>
+        <div class="details-body">
+          <p>Текущая целевая база — классический набор из 24 типов и 72 плиток, включая одну стартовую. Остальные варианты ниже сохранены как историческая и исследовательская справка.</p>
+          <div id="edition-list" class="edition-list"></div>
+          <p id="shield-note" class="plain-note"></p>
+          <p class="plain-note">Исторические правила 2000 и 2001 годов сохранены в исследовательских данных только как объяснение развития правил, а не как режим этого стенда.</p>
+        </div>
+      </details>
+
+      <details>
+        <summary>Откуда взяты данные</summary>
+        <div class="details-body">
+          <p>Данные собраны из официальных правил, страниц издателей и дополнительных исследовательских источников. У каждого источника ниже сохранены ссылка, роль и ограничение.</p>
+          <div id="source-list" class="source-list"></div>
+        </div>
+      </details>
+
+      <details>
+        <summary>Техническая справка</summary>
+        <div class="details-body technical-help">
+          <div class="technical-explainers">
+            <article>
+              <h3>Откуда мы знаем, что части плитки соединены?</h3>
+              <p>Связи хранятся отдельно от красивого рисунка. Иначе две внешне похожие плитки легко перепутать — как один соединённый город и два раздельных города.</p>
+            </article>
+            <article>
+              <h3>Как проверять соседний край?</h3>
+              <p>Для проверки нужен ясный вид сверху. Объёмный рисунок можно показывать отдельно и не считать его доказательством точного стыка.</p>
+            </article>
+            <article>
+              <h3>Что происходит при повороте?</h3>
+              <p>Поворот внешнего вида должен идти в том же направлении, что и данные плитки. Поэтому четыре положения строятся из одной и той же структуры.</p>
+            </article>
+          </div>
+          <details class="deep-details">
+            <summary>Показать технические варианты подробнее</summary>
+            <div id="architecture-list" class="architecture-list"></div>
+            <p>Среди обсуждаемых технологий остаются векторная графика (SVG), рисование на холсте (Canvas2D) и трёхмерная графика (WebGL). Этот стенд не выбирает окончательный способ рисования.</p>
+
+            <details class="deep-details">
+              <summary>Что ещё предстоит решить</summary>
+              <ul class="reference-list">
+                <li>Перенести точную математическую геометрию на остальные 18 типов выбранной классической базы, не смешивая её с историческими вариантами изданий.</li>
+                <li>Решить, какие исследовательские связи полей и городов войдут в окончательное описание плитки.</li>
+                <li>Определить воспроизводимую форму границ дороги, города и поля, включая безопасную область для оформления.</li>
+                <li>Проверить на небольшом рабочем примере способ рисования: SVG, Canvas2D или, только при доказанной необходимости, WebGL.</li>
+                <li>Утвердить хранение изображений для поворотов 0°/90°/180°/270° без смешения оформления с игровыми свойствами.</li>
+                <li>Окончательный набор правил оформления выбирать только по представительному работающему примеру, а не по одному статичному листу.</li>
+              </ul>
+            </details>
+
+            <details class="deep-details">
+              <summary>12 свойств, которые нельзя потерять в будущей реализации</summary>
+              <ol class="reference-list">
+                <li>У каждой плитки четыре допустимые стороны.</li>
+                <li>Каждая структурная часть представлена реальной областью данных.</li>
+                <li>Четыре последовательных поворота на 90° возвращают исходную структуру.</li>
+                <li>Совместимость плиток определяется данными, а не картинкой.</li>
+                <li>Геометрия совместимых краёв должна воспроизводимо совпадать.</li>
+                <li>Заявленные дорожные соединения сохраняют свою связность и место окончания.</li>
+                <li>Города корректно различаются как соединённые и раздельные.</li>
+                <li>Поля сохраняют корректную связность и заявленные контакты с городами.</li>
+                <li>Каждая допустимая цель размещения относится к существующей области.</li>
+                <li>Каталог относится к явно выбранному базовому изданию и печати.</li>
+                <li>Для каждого типа известно количество экземпляров выбранной базы.</li>
+                <li>Изменение оформления не меняет игровые свойства плитки.</li>
+              </ol>
+              <p class="source-limit">Это требования для будущей проверки, а не заявление, что весь последующий этап уже пройден.</p>
+            </details>
+
+            <details class="deep-details">
+              <summary>Технические ссылки из исходного архитектурного сравнения</summary>
+              <p class="source-limit">Это первичная техническая документация, использованная в приложенном сравнении возможностей. Новое полное исследование технологий в этой задаче не проводилось.</p>
+              <ul class="reference-list">
+                <li><a href="https://developer.mozilla.org/en-US/docs/Web/SVG/Reference/Attribute/transform" target="_blank" rel="noreferrer">MDN: преобразования SVG</a></li>
+                <li><a href="https://developer.mozilla.org/en-US/docs/Web/API/CanvasRenderingContext2D/transform" target="_blank" rel="noreferrer">MDN: преобразования Canvas2D</a></li>
+                <li><a href="https://developer.mozilla.org/en-US/docs/Web/API/CanvasRenderingContext2D" target="_blank" rel="noreferrer">MDN: рисование Canvas2D</a></li>
+                <li><a href="https://developer.mozilla.org/en-US/docs/Web/API/WebGL_API" target="_blank" rel="noreferrer">MDN: WebGL</a></li>
+                <li><a href="https://threejs.org/docs/pages/OrthographicCamera.html" target="_blank" rel="noreferrer">Three.js: ортографическая камера</a></li>
+              </ul>
+            </details>
+          </details>
+        </div>
+      </details>
+    </section>
+  </main>
+
+  <footer>
+    <p>Исследовательская модель: 24 типа, 72 экземпляра, один стартовый экземпляр. Пользовательская приёмка нового представления выполняется отдельно после внедрения.</p>
+  </footer>
+
+  <script type="module" src="./app.mjs"></script>
+</body>
+</html>
