@@ -103,7 +103,25 @@ export function createPostmanBridgeStatusTool(ctx, jobs) {
     output: output(),
     async execute(args, exec) {
       if (!authorized(exec, ctx)) return { status: 'POSTMAN_BRIDGE_CALLER_REJECTED' }
-      return jobs.status(exec.agent, args?.bridge_job_id, args?.retrySync === true, args?.recover === true)
+      const status = await jobs.status(exec.agent, args?.bridge_job_id, args?.retrySync === true, args?.recover === true)
+      const terminalResult = status?.result
+      const details = terminalResult?.details
+      const journal = details?.transportEventJournal
+      if (Array.isArray(journal) && journal.length > 0) {
+        const summary = { eventCount: journal.length, droppedCount: journal.length }
+        const last = journal.at(-1)
+        if (last && typeof last === 'object') {
+          const fields = ['timestamp', 'eventId', 'type', 'phase', 'code', 'reason', 'templateId']
+          const event = Object.fromEntries(fields.filter(key => Object.hasOwn(last, key) &&
+            (typeof last[key] === 'string' || typeof last[key] === 'number' || typeof last[key] === 'boolean'))
+            .map(key => [key, last[key]]))
+          if (Object.keys(event).length) summary.lastEvent = event
+        }
+        const { transportEventJournal: _journal, ...compactDetails } = details
+        return { ...status, result: { ...terminalResult,
+          details: { ...compactDetails, transportEventJournalSummary: summary } } }
+      }
+      return status
     },
   })
 }

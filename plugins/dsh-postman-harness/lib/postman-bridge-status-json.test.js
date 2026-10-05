@@ -5,6 +5,8 @@ import { ToolRuntime } from '@deepseek-ai/dsh-tools'
 import { createPostmanBridgeStatusTool } from './postman-bridge.js'
 import { createPostmanBridgeJobs } from './postman-bridge-jobs.js'
 import { createPostmanBridgeLaunchCoordinator } from './postman-bridge-launch-coordinator.js'
+import { boundedJson } from '../../dsh-ptc/src/json.js'
+import { DEFAULT_LIMITS } from '../../dsh-ptc/src/profiles.js'
 
 const tick = () => new Promise(resolve => setImmediate(resolve))
 const parent = { id: 'leader-json', session: { header: { agentPreset: 'postman-leader', delegationDepth: 0 } }, followup() {} }
@@ -15,7 +17,7 @@ function deferred() {
   return { promise, resolve }
 }
 
-function fixture({ onStart, onStatus, onDispose, onWake, grants, coordinator, contexts } = {}) {
+function fixture({ onStart, onStatus, onDispose, onWake, grants, coordinator, contexts, direct } = {}) {
   const ctx = new Context()
   ctx.systemPrompt = { tools() {} }
   new ToolRuntime(ctx)
@@ -27,7 +29,7 @@ function fixture({ onStart, onStatus, onDispose, onWake, grants, coordinator, co
   const get = ctx.tools.get.bind(ctx.tools)
   ctx.tools.get = (name, agent) => name === 'postman_current_turn_status'
     ? { execute: statusReader } : get(name, agent)
-  const jobs = createPostmanBridgeJobs(ctx, coordinator ?? createPostmanBridgeLaunchCoordinator(), grants, contexts)
+  const jobs = createPostmanBridgeJobs(ctx, coordinator ?? createPostmanBridgeLaunchCoordinator(), grants, contexts, undefined, direct)
   ctx.tools.register(createPostmanBridgeStatusTool(ctx, jobs))
   parent.followup = onWake ?? (() => {})
   let next = 0
@@ -103,14 +105,81 @@ test('missing job and unauthorized caller return lossless JSON', async () => {
   await f.jobs.dispose()
 })
 
-test('artifact descriptor is retained without losing metadata', async () => {
-  const descriptor = { requestId: 'REQ_ART', resultZip: 'C:/result.zip', sha256: 'abc',
-    metadata: { files: ['manifest.json'], bytes: 7 } }
-  const f = fixture({ onStatus: () => ({ status: 'COMPLETED', requestId: 'REQ_ART', result: descriptor }) })
-  const accepted = f.accept()
-  await tick()
-  assert.deepEqual(valid(await f.read(accepted), 'POSTMAN_BRIDGE_TERMINAL').result, descriptor)
-  await f.jobs.dispose()
+test('terminal journal projection passes unchanged PTC limits and preserves trusted state', async () => {
+  for (const eventCount of [64, 256]) {
+    const journal = Array.from({ length: eventCount }, (_, index) => ({
+      timestamp: index, eventId: 'event-' + index, type: 'observe', phase: 'WORKING',
+      templateId: 'template-' + index,
+      proof: Array.from({ length: 64 }, (_unused, field) => ({ state: 'WORKING', count: field }))
+    }))
+    const terminal = { status: 'POSTMAN_BRIDGE_TERMINAL', terminalStatus: 'FAILED',
+      requestId: 'REQ_20261005T074704Z_0717', transportKind: 'artifact', result: {
+        requestId: 'REQ_20261005T074704Z_0717', code: 'POSTMAN_TRANSPORT_FAILED', error: 'ASSISTANT_TURN_TIMEOUT',
+        details: { phase: 'assistant-wait', sendState: 'PROVEN_SENT', webResultAvailable: false,
+          transportEventJournal: journal }
+      } }
+    const retainedJson = JSON.stringify(terminal)
+    assert.throws(() => boundedJson(terminal, DEFAULT_LIMITS), { code: 'maxValueNodes' })
+    const operation = { state: 'received', synchronization: 'not-required', terminal }
+    const contexts = { get: () => ({}), record: () => ({ bridgeOperations: { job: operation } }),
+      bindChild: () => true, releaseChild() {} }
+    const direct = { async recoveryCapability() { return { recovery_eligible: true } } }
+    const f = fixture({ contexts, direct })
+    const reply = valid(await f.read({ bridgeJobId: 'job' }), 'POSTMAN_BRIDGE_TERMINAL')
+    assert.equal(reply.terminalStatus, 'FAILED')
+    assert.equal(reply.requestId, 'REQ_20261005T074704Z_0717')
+    assert.equal(reply.trustedStatus, 'POSTMAN_BRIDGE_TERMINAL')
+    assert.equal(reply.recoveryEligible, true)
+    assert.equal(reply.synchronization, 'not-required')
+    assert.equal(reply.result.code, 'POSTMAN_TRANSPORT_FAILED')
+    assert.equal(reply.result.error, 'ASSISTANT_TURN_TIMEOUT')
+    assert.equal(reply.result.details.phase, 'assistant-wait')
+    assert.equal(reply.result.details.sendState, 'PROVEN_SENT')
+    assert.equal(reply.result.details.webResultAvailable, false)
+    assert.deepEqual(reply.result.details.transportEventJournalSummary, {
+      eventCount, droppedCount: eventCount, lastEvent: {
+        timestamp: eventCount - 1, eventId: 'event-' + (eventCount - 1),
+        type: 'observe', phase: 'WORKING', templateId: 'template-' + (eventCount - 1)
+      }
+    })
+    assert.equal(Object.hasOwn(reply.result.details, 'transportEventJournal'), false)
+    assert.equal(operation.terminal, terminal)
+    assert.equal(JSON.stringify(operation.terminal), retainedJson)
+    const encoded = boundedJson(reply, DEFAULT_LIMITS)
+    assert.equal(encoded.value.result.details.transportEventJournalSummary.eventCount, eventCount)
+    assert.ok(encoded.bytes < DEFAULT_LIMITS.maxOutputBytes)
+    await f.jobs.dispose()
+  }
+})
+
+test('small artifact, text and image results are retained without losing metadata', async () => {
+  const descriptors = [
+    { ok: true, requestId: 'REQ_20261005T000001Z_0001', code: 'RESULT_DURABLE', resultZip: 'C:/result.zip', sha256: 'abc',
+      metadata: { files: ['manifest.json'], bytes: 7 } },
+    { ok: true, requestId: 'REQ_20261005T000002Z_0002', code: 'TEXT_RESULT_DURABLE', deliveryMode: 'inline',
+      assistantText: 'exact trusted text', assistantTextSha256: 'abc' },
+    { ok: true, requestId: 'REQ_20261005T000003Z_0003', code: 'TEXT_RESULT_DURABLE', deliveryMode: 'file',
+      resultFile: 'C:/answer.md', resultFileSha256: 'abc', resultFileByteLength: 4097 },
+    { ok: true, requestId: 'REQ_20261005T000004Z_0004', code: 'IMAGE_RESULT_DURABLE', state: 'IMAGE_RESULT_DURABLE',
+      resultImage: 'C:/image.png', imageFormat: 'png', imageSha256: 'abc', imageByteLength: 7,
+      imageWidth: 20, imageHeight: 30, imageMimeType: 'image/png' }
+  ]
+  for (const descriptor of descriptors) {
+    const f = fixture({ grants: { async register(leaderId, terminal) {
+      assert.equal(leaderId, parent.id)
+      assert.deepEqual(terminal.result, descriptor)
+      return true
+    } }, onStatus: () => ({ status: 'COMPLETED', requestId: descriptor.requestId, result: descriptor }) })
+    const accepted = f.accept()
+    await tick()
+    const reply = valid(await f.read(accepted), 'POSTMAN_BRIDGE_TERMINAL')
+    assert.equal(reply.terminalStatus, 'COMPLETED')
+    assert.equal(reply.requestId, descriptor.requestId)
+    assert.deepEqual(reply.result, descriptor)
+    assert.equal(JSON.stringify(reply.result), JSON.stringify(descriptor))
+    boundedJson(reply, DEFAULT_LIMITS)
+    await f.jobs.dispose()
+  }
 })
 
 test('bound publication synchronizes before grant and reports JSON-safe failure', async () => {
