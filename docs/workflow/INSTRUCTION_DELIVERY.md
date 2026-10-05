@@ -32,7 +32,7 @@
 
 Уже имелись и не заменены: exact top-level Postman allowlist; trusted current user/message и одноразовое consume; точные REQ/owner/ZIP grants для artifact apply; Worker ownership, lifecycle, лимиты и target identity. Они проверяются программно, не по prose child. Не требуется новый policy framework.
 
-Не превращены в runtime: «минимальная абстракция», семантический scope, достаточность проверки и stop после acceptance — требуют понимания задачи; синтаксический validator дал бы ложные запреты. REPO_POLICY не является запретом всех опасных shell-команд: при danger-full-access shell и native Node могут обойти ToolRuntime. Доставка документа не равна OS isolation. Sol permission через ask_user_question в skill v24 сознательно model guidance после PR #342; не восстановлена отменённая confirmation subsystem.
+Не превращены в runtime: «минимальная абстракция», семантический scope, достаточность проверки и stop после acceptance — требуют понимания задачи; синтаксический validator дал бы ложные запреты. REPO_POLICY не является запретом всех опасных shell-команд: при danger-full-access shell и native Node могут обойти ToolRuntime. Доставка документа не равна OS isolation. Явная просьба пользователя использовать Sol Worker достаточна для создания и последующих заданий в выбранном Sol-маршруте, без отдельного ask_user_question. Это model guidance; автоматическая Luna → Sol escalation запрещена, отменённая confirmation subsystem не восстанавливается.
 
 ## Проверки фактического контекста
 
