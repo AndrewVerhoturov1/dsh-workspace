@@ -466,7 +466,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     const sol = workerType === 'sol'
     return defineTool({
       name: sol ? POSTMAN_SOL_WORKER_TOOL_NAME : POSTMAN_WORKER_TOOL_NAME,
-      description: sol ? 'Only on an explicit user request: create or continue the one Sol Worker (GPT-6.1 Sol, xhigh). Before each separate task, the Leader must obtain a positive answer through ask_user_question; no additional Harness Allow once is required. Use workerSessionId for follow-up; createNew rejects a second Sol Worker. Acceptance is not completion.' :
+      description: sol ? 'Only on an explicit user request: create or continue the one Sol Worker (GPT-6.1 Sol, xhigh). An explicit user request to use Sol Worker is sufficient authorization; do not ask a separate ask_user_question before creation or continuation. Follow-up and new tasks by workerSessionId require no additional user confirmation within the user-selected Sol route. Never automatically escalate Luna to Sol. Use workerSessionId for follow-up; createNew rejects a second Sol Worker. Acceptance is not completion.' :
         'Create an additional continuable Luna Worker (up to three), or deliver a trusted artifact grant to an exact existing Luna Worker. Acceptance is not completion.',
       parameters, output: output(),
       async execute(args, exec) {

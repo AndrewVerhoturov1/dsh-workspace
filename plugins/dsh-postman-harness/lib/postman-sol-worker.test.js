@@ -144,7 +144,7 @@ test('shared list/stop operate on Sol without approval and keep peer/durable ses
   restarted.dispose()
 })
 
-test('only top-level Leaders receive direct Sol tool; both personas explicitly disallow automatic escalation', async t => {
+test('only top-level Leaders receive direct Sol tool outside PTC', async t => {
   assert.ok(POSTMAN_LEADER_TOOL_ALLOWLIST.includes('postman_sol_worker'))
   assert.ok(POSTMAN_LEADER_ONLY_TOOL_NAMES.includes('postman_sol_worker'))
   assert.ok(!POSTMAN_PTC_ONLY_LEADER_TOOLS.includes('postman_sol_worker'))
@@ -154,16 +154,49 @@ test('only top-level Leaders receive direct Sol tool; both personas explicitly d
     assert.equal((await f.run(f.tools.solTaskTool, { task: 'forbidden' }, { agent })).status, 'POSTMAN_WORKER_CALLER_REJECTED')
   }
   assert.equal(f.calls.starts.length, 0)
-  for (const preset of ['postman-leader', 'postman-leader-ptc']) {
+})
+
+for (const preset of ['postman-leader', 'postman-leader-ptc']) {
+  test(preset + ' authorizes Sol by explicit user request without a separate confirmation', () => {
     const text = readFileSync(new URL('../../../.agent-presets/' + preset + '/agent.cordis.yml', import.meta.url), 'utf8')
-    assert.match(text, /only when the user explicitly asks to use Sol Worker/)
-    assert.match(text, /no automatic Luna-to-Sol escalation/)
-    assert.match(text, /Before the first Sol assignment and every new separate task.*ask_user_question/)
-    assert.match(text, /Wait for a positive answer before calling postman_sol_worker/)
-    assert.match(text, /refusal, cancellation or no answer means do not assign the task/)
-    assert.match(text, /do not request a second system Allow once/)
-  }
+    assert.match(text, /only when the user explicitly asks[^.]*Sol Worker/i)
+    assert.match(text, /explicit user request[^.]*Sol Worker[^.]*sufficient authorization/i)
+    assert.match(text, /do not ask[^.]*separate[^.]*ask_user_question[^.]*creat[^.]*continu/i)
+    assert.match(text, /follow-up[^.]*new tasks[^.]*workerSessionId[^.]*no additional[^.]*confirmation/i)
+    assert.match(text, /no automatic Luna-to-Sol escalation/i)
+    assert.doesNotMatch(text, /before[^.\n]*first Sol assignment|wait for[^.\n]*positive answer/i)
+  })
+}
+
+test('Leader skill preserves the Sol authorization contract through fresh context and restart', () => {
   const skill = readFileSync(new URL('../../../.agents/skills/postman-leader/SKILL.md', import.meta.url), 'utf8')
-  assert.match(skill, /Перед первым назначением и каждым новым отдельным заданием.*ask_user_question/)
-  assert.match(skill, /Положительного ответа достаточно.*второго системного `Allow once` нет/)
+  assert.match(skill, /только по прямой просьбе пользователя[^.]*Sol Worker/i)
+  assert.match(skill, /Прямая просьба пользователя[^.]*Sol Worker[^.]*достаточным разрешением/i)
+  assert.match(skill, /Не задавай[^.]*отдельный[^.]*ask_user_question[^.]*создани[^.]*продолжени/i)
+  assert.match(skill, /Follow-up[^.]*новые задания[^.]*workerSessionId[^.]*не требуют[^.]*подтверждения/i)
+  assert.match(skill, /автоматической escalation Luna → Sol нет/)
+  assert.match(skill, /postman_sol_worker[^.]*не обращается[^.]*ApprovalService/)
+  assert.match(skill, /Не меняй permission preset[^.]*approval: ask\/never[^.]*глобальную permission-систему Harness/)
+  assert.match(skill, /Не используй обычные[^.]*postman_worker[^.]*postman_worker_interrupt[^.]*для Sol/)
+  const freshContext = skill.slice(skill.indexOf('### Visibility, compact и fresh context'), skill.indexOf('## 19.'))
+  assert.match(freshContext, /retirement\/compact\/restart[^.]*не требуют[^.]*подтверждения[^.]*ask_user_question/)
+  assert.match(freshContext, /не разрешают[^.]*автоматически выбрать Sol/)
+  assert.doesNotMatch(skill, /Перед первым назначением[^.\n]*ask_user_question|обязательно[^.\n]*положительн[^.\n]*ask_user_question/i)
+})
+
+test('Sol tool description and localDevelopment guidance do not reintroduce a confirmation gate', async t => {
+  const f = await fixture(t)
+  const description = f.tools.solTaskTool.description
+  assert.match(description, /explicit user request[^.]*Sol Worker[^.]*sufficient authorization/i)
+  assert.match(description, /do not ask[^.]*separate[^.]*ask_user_question[^.]*creat[^.]*continu/i)
+  assert.match(description, /follow-up[^.]*new tasks[^.]*workerSessionId[^.]*no additional[^.]*confirmation/i)
+  assert.match(description, /Never automatically escalate Luna to Sol/)
+  const bridge = readFileSync(new URL('./postman-bridge.js', import.meta.url), 'utf8')
+  assert.match(bridge, /explicit user request[^.]*sufficient authorization[^.]*postman_sol_worker/i)
+  assert.match(bridge, /Do not ask[^.]*separate[^.]*ask_user_question[^.]*creat[^.]*continu/i)
+  assert.match(bridge, /follow-up[^.]*new tasks[^.]*workerSessionId[^.]*no additional[^.]*confirmation/i)
+  assert.match(bridge, /Never automatically escalate Luna to Sol/)
+  for (const text of [description, bridge]) {
+    assert.doesNotMatch(text, /(?:each|every new) separate task[^.\n]*(?:positive answer|ask_user_question)/i)
+  }
 })
