@@ -13,8 +13,12 @@ export const POSTMAN_TASK_DOMAIN = defineDomain({
   tables: { leaders: domainTable(z.object({
     leaderSessionId: z.string().min(1), repository: z.string(), repositoryPath: z.string(),
     originUrl: z.string(), baseCommit: z.string(), branch: z.string(), worktree: z.string(),
-    stage: z.enum(['intent', 'worktree', 'ready', 'uncertain']),
+    stage: z.enum(['intent', 'worktree', 'ready', 'uncertain', 'closed']),
     diagnostic: z.string().nullable(),
+    closedAt: z.string().optional(),
+    retiredTasks: z.array(z.unknown()).optional(),
+    objectives: z.record(z.string(), z.object({ id: z.string(), ownerSessionId: z.string(),
+      objective: z.string(), used: z.number().int().nonnegative(), cap: z.literal(48) }).strict()).optional(),
     // Optional on disk so v1 rows can be validated before their in-place migration.
     worker: z.object({ id: z.string().min(1), state: z.enum(['intent', 'ready', 'uncertain', 'stopping']),
       delivery: z.enum(['none', 'pending', 'unknown']),
@@ -25,7 +29,8 @@ export const POSTMAN_TASK_DOMAIN = defineDomain({
       pendingBudgets: z.record(z.string(), z.unknown()).optional(),
       budget: z.object({ assignmentId: z.string(), task: z.string(), used: z.number().int().nonnegative(),
         softLimit: z.number().int().positive(), hardLimit: z.number().int().positive(),
-        exhausted: z.boolean(), notified: z.boolean(), reported: z.boolean() }).optional(),
+        exhausted: z.boolean(), notified: z.boolean(), reported: z.boolean(),
+        rootObjectiveId: z.string().optional() }).optional(),
       state: z.enum(['intent', 'ready', 'uncertain', 'stopping']),
       delivery: z.enum(['none', 'pending', 'unknown']),
       artifactRequests: z.array(z.string()), lifecycle: workerLifecycle.optional(),
@@ -95,18 +100,42 @@ export async function openPostmanTaskRegistry(storageDomain) {
       const workers = table.get(id)?.workers
       if (!workers || Object.entries(workers).some(([key, value]) => key !== value.id))
         throw new Error('POSTMAN_TASK_WORKER_BINDING_INVALID: ' + id)
+      if ([...Object.values(workers), ...(table.get(id).retiredWorkers ?? [])].some(worker => worker.workerType !== 'sol' && !worker.budget?.rootObjectiveId))
+        await table.update(id, current => {
+          const objectives = { ...(current.objectives ?? {}) }, migrated = { ...current.workers }, retired = [...(current.retiredWorkers ?? [])]
+          for (const worker of [...Object.values(migrated), ...retired]) {
+            if (worker.workerType === 'sol' || worker.budget?.rootObjectiveId) continue
+            const ownerSessionId = worker.ownerSessionId ?? id, rootId = 'legacy:' + ownerSessionId
+            // Previous assignment costs were not recorded cumulatively. Refuse
+            // refinancing when the old audit cannot prove a remaining allowance.
+            const history = [...Object.values(current.workers), ...(current.retiredWorkers ?? [])]
+              .filter(w => (w.ownerSessionId ?? id) === ownerSessionId && w.workerType !== 'sol')
+            const unknown = history.some(w => !w.budget || (w.lifecycle?.admissions?.length ?? 0) > 1)
+            const used = Math.min(48, unknown ? 48 : history.reduce((sum, w) => sum + w.budget.used, 0))
+            objectives[rootId] ??= { id: rootId, ownerSessionId, objective: 'Legacy unresolved objective', used, cap: 48 }
+            const next = { ...worker,
+              ...(worker.budget ? { budget: { ...worker.budget, rootObjectiveId: rootId } } : {}),
+              ...(worker.pendingBudgets ? { pendingBudgets: Object.fromEntries(Object.entries(worker.pendingBudgets).map(([key, b]) => [key, { ...b, rootObjectiveId: rootId }])) } : {}) }
+            if (Object.hasOwn(migrated, worker.id)) migrated[worker.id] = next
+            else retired[retired.indexOf(worker)] = next
+          }
+          return { ...current, workers: migrated, ...(current.retiredWorkers ? { retiredWorkers: retired } : {}), objectives }
+        })
     }
     const creating = new Set()
     return {
       get: id => table.get(id) ?? null,
       entries: () => [...table.entries()],
       async create(id, record) {
-        if (table.get(id) || creating.has(id)) throw new Error('POSTMAN_TASK_BINDING_EXISTS')
+        if ((table.get(id) && table.get(id).stage !== 'closed') || creating.has(id)) throw new Error('POSTMAN_TASK_BINDING_EXISTS')
         creating.add(id)
         if (record.worker !== undefined && record.workers !== undefined)
           throw new Error('POSTMAN_TASK_WORKER_MIGRATION_CONFLICT')
         const { worker, ...rest } = record
-        try { await table.put(id, { ...rest, workers: rest.workers ??
+        try {
+          const previous = table.get(id)
+          await table.put(id, { ...rest, ...(previous ? { retiredTasks: [...(previous.retiredTasks ?? []),
+            Object.fromEntries(Object.entries(previous).filter(([key]) => key !== 'retiredTasks'))] } : {}), workers: rest.workers ??
           (worker ? { [worker.id]: { ...worker, label: worker.id } } : {}) })
         } finally { creating.delete(id) }
       },
@@ -135,8 +164,10 @@ export function createMemoryTaskRegistry() {
     get: id => records.get(id) ?? null,
     entries: () => [...records.entries()],
     async create(id, record) {
-      if (records.has(id)) throw new Error('POSTMAN_TASK_BINDING_EXISTS')
-      records.set(id, record)
+      const previous = records.get(id)
+      if (previous && previous.stage !== 'closed') throw new Error('POSTMAN_TASK_BINDING_EXISTS')
+      records.set(id, { ...record, ...(previous ? { retiredTasks: [...(previous.retiredTasks ?? []),
+        Object.fromEntries(Object.entries(previous).filter(([key]) => key !== 'retiredTasks'))] } : {}) })
     },
     async change(id, fn) {
       if (!records.has(id)) throw new Error('POSTMAN_TASK_BINDING_MISSING')

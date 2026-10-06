@@ -225,3 +225,19 @@ test('runner invocation uses only trusted ZIP, argv-safe hidden launch and forwa
     assert.equal(call.options.windowsHide, true)
   }
 })
+test('explicit task retirement revokes active artifact authority without deleting audit',async t=>{
+  const { terminal }=await artifactFixture(t)
+  const registry=createMemoryTaskRegistry()
+  await registry.create('A',{leaderSessionId:'A',stage:'ready'})
+  const grants=createImplementationArtifactGrants(registry)
+  assert.equal(await grants.register('A',terminal),true)
+  assert.ok(await grants.resolve('A',REQ))
+  await registry.change('A',row=>({...row,stage:'closed',closedAt:new Date().toISOString()}))
+  assert.equal(await grants.resolve('A',REQ),null)
+  assert.equal(await grants.register('A',terminal),false)
+  assert.ok(registry.get('A').artifactGrants[REQ])
+  await registry.create('A',{leaderSessionId:'A',stage:'ready'})
+  assert.equal(await grants.resolve('A',REQ),null)
+  assert.ok(registry.get('A').retiredTasks[0].artifactGrants[REQ])
+})
+

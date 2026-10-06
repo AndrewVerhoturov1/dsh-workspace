@@ -49,7 +49,7 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
     const id = leader?.id
     if (pending.has(id)) return { status: 'POSTMAN_TASK_PREPARE_IN_PROGRESS' }
     if (contexts.has(id) && registry.get(id)?.stage === 'ready') return { status: 'POSTMAN_TASK_CONTEXT_ALREADY_READY', ...contexts.get(id) }
-    if (registry.get(id)) return recover(leader)
+    if (registry.get(id) && registry.get(id).stage !== 'closed') return recover(leader)
     pending.add(id)
     let created = false
     try {
@@ -94,11 +94,74 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
       return { status: 'TASK_CONTEXT_READY', ...context }
     } catch (error) {
       const diagnostic = String(error?.message ?? error)
-      if (registry.get(id)) {
+      if (created) {
         try { await registry.change(id, row => ({ ...row, stage: 'uncertain', diagnostic })) } catch {}
       }
-      return { status: registry.get(id) ? 'POSTMAN_TASK_PREPARE_UNCERTAIN' : 'POSTMAN_TASK_PREPARE_FAILED', diagnostic }
+      return { status: created ? 'POSTMAN_TASK_PREPARE_UNCERTAIN' : 'POSTMAN_TASK_PREPARE_FAILED', diagnostic }
     } finally { pending.delete(id) }
+  }
+
+  // Close retires authority, not files/branches and not a task-success certificate.
+  // It deliberately needs no Git/worktree access after external merge/cleanup.
+  async function close(leader, { isBusy = () => false, beforeClose = async () => true } = {}) {
+    const id = leader?.id
+    const reject = code => ({ status: 'POSTMAN_TASK_CLOSE_REJECTED', diagnostic: { code } })
+    if (pending.has(id) || activeOperations.has(id) || syncOperations.has(id) || workerAdmissions.has(id))
+      return reject('TASK_OPERATION_BUSY')
+    const row = registry.get(id)
+    if (!row || row.leaderSessionId !== id) return reject('TASK_CONTEXT_REQUIRED')
+    if (row.stage === 'closed') return { status: 'POSTMAN_TASK_CLOSED', branch: row.branch, closedAt: row.closedAt }
+    // This synchronous reservation is shared with prepare/Bridge/Worker/runner admission.
+    pending.add(id)
+    try {
+      const stale = row.stage === 'uncertain' && row.diagnostic === 'task worktree missing'
+      const blocker = current => current.stage !== 'ready' && !(stale && current.stage === 'uncertain' &&
+          current.diagnostic === 'task worktree missing' && ['leaderSessionId', 'repository', 'repositoryPath', 'originUrl', 'branch', 'worktree', 'baseCommit']
+            .every(key => current[key] === row[key])) ? 'TASK_STATE_UNCERTAIN'
+        : Object.keys(current.workers ?? {}).length ? 'WORKER_BINDINGS_NOT_RETIRED'
+        : current.runner?.state !== 'none' ? 'RUNNER_NOT_SETTLED'
+        : current.bridge || Object.values(current.bridgeOperations ?? {}).some(op =>
+          op.state !== 'received' || op.grantDiagnostic || !['synchronized', 'not-required'].includes(op.synchronization)) ? 'BRIDGE_NOT_SETTLED'
+        : [...children.values()].some(binding => binding.context.leaderSessionId === id) ? 'CHILD_NOT_RELEASED'
+        : isBusy(id) ? 'TASK_OPERATION_BUSY' : null
+      const reason = blocker(row)
+      if (reason) return reject(reason)
+      if (!await beforeClose(id)) return reject('CHILD_CLOSURE_UNPROVEN')
+      if (stale) {
+        // Only the recovery diagnostic for a formerly ready, missing tree is
+        // eligible. Re-prove identity/absence; no Git mutation or generic uncertain close.
+        const cwd = leader?.session?.header?.cwd
+        if (!cwd || row.repository !== REPOSITORY || !BRANCH.test(row.branch) || !SHA.test(row.baseCommit) ||
+            !row.repositoryPath || !row.originUrl || !row.worktree) return reject('TASK_STATE_UNCERTAIN')
+        const repository = await command(cwd, 'rev-parse', '--show-toplevel')
+        const originMatch = /^(?:https?:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/]+\/[^/]+?)(?:\.git)?\/?$/i.exec(row.originUrl)
+        if (normalize(repository) !== normalize(row.repositoryPath) || originMatch?.[1].toLowerCase() !== REPOSITORY ||
+            await command(repository, 'remote', 'get-url', 'origin') !== row.originUrl ||
+            [repository, resolve(homedir(), '.dsh'), resolve(homedir(), '.dsh-preview')]
+              .some(path => normalize(path) === normalize(row.worktree)) || await fileExists(row.worktree))
+          return reject('TASK_STATE_UNCERTAIN')
+        const entries = (await command(repository, 'worktree', 'list', '--porcelain')).split(/\n\s*\n/).filter(Boolean)
+        // A leftover/prunable registration can retain unproven Git mutations.
+        // Completed cleanup must leave neither the old path nor its branch attached.
+        if (entries.some(entry => entry.split(/\r?\n/).some(line =>
+          line.startsWith('worktree ') && normalize(line.slice(9)) === normalize(row.worktree) ||
+          line === 'branch refs/heads/' + row.branch))) return reject('TASK_STATE_UNCERTAIN')
+        for (const marker of ['MERGE_HEAD', 'REBASE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'rebase-merge', 'rebase-apply', 'sequencer']) {
+          if (await fileExists(resolve(repository, await command(repository, 'rev-parse', '--git-path', marker))))
+            return reject('TASK_OPERATION_BUSY')
+        }
+      }
+      const closedAt = new Date().toISOString()
+      await registry.change(id, current => {
+        const reason = blocker(current)
+        if (reason) throw new Error(reason)
+        return { ...current, stage: 'closed', closedAt }
+      })
+      contexts.delete(id)
+      changed(id)
+      return { status: 'POSTMAN_TASK_CLOSED', branch: row.branch, closedAt, taskCompleted: false }
+    } catch (error) { return reject(String(error?.message ?? error)) }
+    finally { pending.delete(id) }
   }
 
   // Recovery never invokes restore(), reset, clean, merge, or a new worktree add.
@@ -106,8 +169,9 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
     const id = leader?.id
     if (pending.has(id)) return { status: 'POSTMAN_TASK_PREPARE_IN_PROGRESS' }
     const row = registry.get(id)
-    if (!row) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
+    if (!row || row.stage === 'closed') return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
     pending.add(id)
+    let repositoryVerified = false
     try {
       const cwd = leader?.session?.header?.cwd
       if (typeof cwd !== 'string' || !cwd || row.leaderSessionId !== id ||
@@ -121,6 +185,7 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
           normalize(row.worktree) === normalize(repository) ||
           [resolve(homedir(), '.dsh'), resolve(homedir(), '.dsh-preview')]
             .some(path => normalize(path) === normalize(row.worktree))) throw new Error('repository or worktree identity mismatch')
+      repositoryVerified = true
       // A reserved empty directory with no registered Git tree is not authority
       // to create a new tree in recovery: it is merely an incomplete intent.
       const listing = await command(repository, 'worktree', 'list', '--porcelain')
@@ -216,7 +281,10 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
       changed(id)
       return { status: 'POSTMAN_TASK_CONTEXT_ALREADY_READY', ...context }
     } catch (error) {
-      const diagnostic = String(error?.message ?? error)
+      let diagnostic = String(error?.message ?? error)
+      if (repositoryVerified && (diagnostic === 'task worktree ownership uncertain' || error?.code === 'ENOENT') &&
+          (row.stage === 'ready' || row.stage === 'uncertain' && row.diagnostic === 'task worktree missing') &&
+          !await fileExists(row.worktree)) diagnostic = 'task worktree missing'
       try { await registry.change(id, old => ({ ...old, stage: 'uncertain', diagnostic })) } catch {}
       contexts.delete(id)
       changed(id)
@@ -482,7 +550,7 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
   }
   function releaseChild(childId) { children.delete(childId) }
   function dispose() { contexts.clear(); children.clear(); pending.clear(); activeOperations.clear(); syncOperations.clear(); syncQueues.clear(); workerAdmissions.clear(); contextListeners.clear() }
-  return { prepare, recover, restore, sync, beginSync, endSync, verifyWorktree, get, record, changeRecord, onContextChange, isRestoring, hasActiveOperation, hasSyncOperation, beginWorkerAdmission, endWorkerAdmission, beginOperation, startRunner, endOperation, reserveRestore, releaseRestore, bindChild, child, recordBridgeRequest, releaseChild, dispose }
+  return { prepare, recover, close, restore, sync, beginSync, endSync, verifyWorktree, get, record, changeRecord, onContextChange, isRestoring, hasActiveOperation, hasSyncOperation, beginWorkerAdmission, endWorkerAdmission, beginOperation, startRunner, endOperation, reserveRestore, releaseRestore, bindChild, child, recordBridgeRequest, releaseChild, dispose }
 }
 
 // Both entrypoints use one facade. Initialization is awaited before Git/child actions;

@@ -11,7 +11,7 @@ import { createPostmanBridgeJobs } from './postman-bridge-jobs.js'
 import { postmanTaskContexts, initializePostmanTaskContexts, releasePostmanTaskContexts } from './postman-task-context.js'
 import { sharedPostmanTaskRegistry, closeSharedPostmanTaskRegistry } from './postman-task-registry.js'
 import {
-  POSTMAN_BRIDGE_TOOL_ALLOWLIST, POSTMAN_BRIDGE_TOOL_NAME, POSTMAN_BRIDGE_STATUS_TOOL_NAME, POSTMAN_BRIDGE_LIST_TOOL_NAME, POSTMAN_BRIDGE_STOP_TOOL_NAME, POSTMAN_TEAM_STATUS_TOOL_NAME, POSTMAN_CHILD_NOTIFY_TOOL_NAME, POSTMAN_TASK_PREPARE_TOOL_NAME, POSTMAN_TASK_RESTORE_TOOL_NAME, POSTMAN_YIELD_TOOL_NAME,
+  POSTMAN_BRIDGE_TOOL_ALLOWLIST, POSTMAN_BRIDGE_TOOL_NAME, POSTMAN_BRIDGE_STATUS_TOOL_NAME, POSTMAN_BRIDGE_LIST_TOOL_NAME, POSTMAN_BRIDGE_STOP_TOOL_NAME, POSTMAN_TEAM_STATUS_TOOL_NAME, POSTMAN_CHILD_NOTIFY_TOOL_NAME, POSTMAN_TASK_PREPARE_TOOL_NAME, POSTMAN_TASK_RESTORE_TOOL_NAME, POSTMAN_TASK_CLOSE_TOOL_NAME, POSTMAN_YIELD_TOOL_NAME,
   createPostmanBridgeBoundaryManager, isTopLevelPostmanSupervisor, isTopLevelPostmanPtcLeader,
   postmanBridgeCallerAllowed, postmanBridgeRestrictionForAgent, postmanPtcDirectCallGuard,
 } from './postman-bridge-core.js'
@@ -19,7 +19,7 @@ import {
 export const name = 'dsh-postman-harness-bridge'
 export const Config = z.object({
   localDevelopment: z.boolean().default(false),
-  fastBudget: z.object({softLimit: z.number().int().positive().default(12), hardLimit: z.number().int().positive().default(15)}).prefault({}),
+  fastBudget: z.object({ hardLimit: z.number().int().min(8).max(24).default(16) }).prefault({}),
 }).prefault({})
 export const inject = ['agents', 'subagents', 'tools', 'storageDomain', 'attachments', 'fs']
 
@@ -44,6 +44,33 @@ export function createPostmanTaskPrepareTool(ctx, contexts = postmanTaskContexts
     async execute(_args, exec) {
       if (!authorized(exec, ctx)) return { status: 'POSTMAN_TASK_CALLER_REJECTED' }
       return contexts.prepare(exec.agent)
+    },
+  })
+}
+
+export function createPostmanTaskCloseTool(ctx, contexts = postmanTaskContexts, { jobs } = {}) {
+  return defineTool({
+    name: POSTMAN_TASK_CLOSE_TOOL_NAME,
+    description: 'Explicitly retire this settled Leader task binding, including after external merge/cleanup removed its worktree. Retire child bindings first. Active/queued/uncertain work rejects close. No Git cleanup or success claim; this Session may then prepare an independent task.',
+    parameters: {}, output: output(),
+    async execute(_args, exec) {
+      if (!authorized(exec, ctx)) return { status: 'POSTMAN_TASK_CALLER_REJECTED' }
+      return contexts.close(exec.agent, {
+        isBusy: id => Boolean(jobs?.hasActive(id)),
+        beforeClose: async id => {
+          // Missing mappings are not proof: refuse live/queued or unreadable orphans.
+          if (typeof ctx.subagents?.listDescendants !== 'function') return false
+          const descendants = await ctx.subagents.listDescendants(id, exec.signal)
+          for (const child of descendants) {
+            if (child.kind !== 'child' || child.activity !== 'inactive' || ctx.agents.get(child.id)) return false
+            if (child.mode === 'continuable') {
+              const saved = await ctx.get?.('sessionPersistence')?.inspect?.(child.id, exec.signal)
+              if (!saved?.events?.some(event => event.type === 'subagent/closed')) return false
+            }
+          }
+          return true
+        },
+      })
     },
   })
 }
@@ -165,7 +192,7 @@ export function createPostmanTeamStatusTool(ctx, contexts, worker, jobs) {
       const id = exec.agent.id, context = contexts.get(id), row = contexts.record(id)
       return { status: 'POSTMAN_TEAM_STATUS',
         task: { contextReady: Boolean(context), branch: context?.branch ?? row?.branch ?? null,
-          ...(row ? { stage: row.stage } : {}),
+          ...(row ? { stage: row.stage, closedAt: row.closedAt ?? null } : {}),
           restoring: contexts.isRestoring(id), activeOperation: contexts.hasActiveOperation(id) },
         ...worker.teamSnapshot(exec.agent), bridge: jobs.teamSnapshot(exec.agent) }
     },
@@ -270,6 +297,7 @@ export async function apply(ctx, config = {}) {
   ctx.tools.guard(exec => postmanPtcDirectCallGuard(exec, id => ctx.agents.get(id), ownsPtcWorker))
   ctx.tools.register(ptc.tool)
   ctx.tools.register(createPostmanTaskPrepareTool(ctx, contexts))
+  ctx.tools.register(createPostmanTaskCloseTool(ctx, contexts, { jobs }))
   ctx.tools.register(createPostmanInputFilesTool(ctx, contexts, { currentAttachments,
     resolveAttachment: (ref, signal) => ctx.attachments.readImage(ref, signal) }))
   ctx.tools.register(createPostmanBridgeTool(ctx, jobs, postmanTaskContexts))

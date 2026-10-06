@@ -9,6 +9,7 @@ export const POSTMAN_TEAM_STATUS_TOOL_NAME = 'postman_team_status'
 export const POSTMAN_CHILD_NOTIFY_TOOL_NAME = 'notify_parent'
 export const POSTMAN_TASK_PREPARE_TOOL_NAME = 'postman_task_prepare'
 export const POSTMAN_TASK_RESTORE_TOOL_NAME = 'postman_task_restore'
+export const POSTMAN_TASK_CLOSE_TOOL_NAME = 'postman_task_close'
 export const POSTMAN_WORKER_TOOL_NAME = 'postman_worker'
 export const POSTMAN_SOL_WORKER_TOOL_NAME = 'postman_sol_worker'
 export const POSTMAN_WORKER_INTERRUPT_TOOL_NAME = 'postman_worker_interrupt'
@@ -52,6 +53,7 @@ export const POSTMAN_LEADER_TOOL_ALLOWLIST = Object.freeze([
   'web_fetch',
   POSTMAN_TASK_PREPARE_TOOL_NAME,
   POSTMAN_TASK_RESTORE_TOOL_NAME,
+  POSTMAN_TASK_CLOSE_TOOL_NAME,
   POSTMAN_INPUT_FILES_TOOL_NAME,
   POSTMAN_BRIDGE_TOOL_NAME,
   POSTMAN_BRIDGE_STATUS_TOOL_NAME,
@@ -88,6 +90,7 @@ export const POSTMAN_PTC_SUCCESS_STATUSES = Object.freeze({
   postman_sol_worker: Object.freeze(['POSTMAN_WORKER_TASK_ACCEPTED']),
   postman_yield: Object.freeze(['POSTMAN_YIELDED']),
   postman_task_restore: Object.freeze(['TASK_CONTEXT_RESTORED']),
+  postman_task_close: Object.freeze(['POSTMAN_TASK_CLOSED']),
   postman_team_status: Object.freeze(['POSTMAN_TEAM_STATUS']),
   postman_input_files: Object.freeze(['POSTMAN_INPUT_READY', 'POSTMAN_INPUT_CLEANED', 'POSTMAN_INPUT_ALREADY_CLEANED', 'POSTMAN_INPUT_LOCATED', 'POSTMAN_ARCHIVE_PACKED', 'POSTMAN_ARCHIVE_LISTED', 'POSTMAN_ARCHIVE_UNPACKED']),
   postman_worker_list: Object.freeze(['POSTMAN_WORKER_LIST']),
@@ -113,6 +116,7 @@ export function postmanPtcDirectCallGuard(exec, lookupAgent, ownsPtcWorker = () 
 export const POSTMAN_LEADER_ONLY_TOOL_NAMES = Object.freeze([
   POSTMAN_TASK_PREPARE_TOOL_NAME,
   POSTMAN_TASK_RESTORE_TOOL_NAME,
+  POSTMAN_TASK_CLOSE_TOOL_NAME,
   POSTMAN_INPUT_FILES_TOOL_NAME,
   POSTMAN_BRIDGE_TOOL_NAME,
   POSTMAN_BRIDGE_STATUS_TOOL_NAME,

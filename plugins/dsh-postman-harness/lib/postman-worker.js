@@ -24,7 +24,10 @@ export const POSTMAN_WORKER_PROVIDER = 'spawn'
 export const FAST_WORKER_MODEL = 'gpt-6-luna'
 export const FAST_WORKER_REASONING = 'low'
 export const POSTMAN_WORKER_AGENT_OPTIONS = Object.freeze({ provider: 'codex', model: FAST_WORKER_MODEL, reasoningEffort: FAST_WORKER_REASONING })
-export const FAST_WORKER_BUDGET = Object.freeze({ softLimit: 12, hardLimit: 15 })
+export const FAST_ROOT_CAP = 48
+const hardValid = hard => Number.isSafeInteger(hard) && hard >= 8 && hard <= 24
+const limitsFor = hardLimit => ({ hardLimit, softLimit: Math.floor(hardLimit * 0.8) })
+export const FAST_WORKER_BUDGET = Object.freeze(limitsFor(16))
 const ROLE_SKILLS = Object.freeze(Object.fromEntries(['luna', 'secretary', 'sol'].map(type => [type,
   readFileSync(new URL('../../../.agents/skills/' + (type === 'luna' ? 'postman-worker' : type === 'sol' ? 'postman-sol-worker' : 'postman-secretary') + '/SKILL.md', import.meta.url), 'utf8') ])))
 export const postmanRoleInstruction = type => ROLE_SKILLS[type]
@@ -84,8 +87,7 @@ export function buildPostmanWorkerStartRequest(parent, task, signal, deniedTools
 // One short Leader admission queue reserves membership; every child has its own
 // delivery queue. Neither queue is held until a model turn finishes.
 export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChange = () => {}, localDevelopment = false, fastBudget = FAST_WORKER_BUDGET } = {}) {
-  if (!Number.isSafeInteger(fastBudget.softLimit) || fastBudget.softLimit < 1 ||
-      !Number.isSafeInteger(fastBudget.hardLimit) || fastBudget.hardLimit <= fastBudget.softLimit)
+  if (!hardValid(fastBudget.hardLimit))
     throw new Error('POSTMAN_WORKER_BUDGET_INVALID')
   const taskContexts = contexts
   // One durable task row; exact parent-scoped projections reuse the same manager.
@@ -115,7 +117,37 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
   const rowOf = id => durable ? contexts.record(id) : null
   const liveWorker = id => ctx.agents.get(id)
   const emptyLifecycle = () => ({ version: 1, admissions: [], reports: [] })
-  const newBudget = (assignmentId, task) => ({ assignmentId, task, used: 0, ...fastBudget, exhausted: false, notified: false, reported: false })
+  const newBudget = (assignmentId, task, hard = fastBudget.hardLimit, rootObjectiveId) => ({
+    assignmentId, task, used: 0, ...limitsFor(hard), exhausted: false, notified: false, reported: false,
+    ...(rootObjectiveId ? { rootObjectiveId } : {}) })
+  const budgetArgsInvalid = args => (args.hardBudget !== undefined && !hardValid(args.hardBudget)) ||
+    (args.softLimit !== undefined || args.softBudget !== undefined) ||
+    (args.rootObjectiveId !== undefined && (typeof args.rootObjectiveId !== 'string' || !args.rootObjectiveId)) ||
+    (args.newObjective !== undefined && (typeof args.newObjective !== 'string' || !args.newObjective.trim())) ||
+    (args.rootObjectiveId !== undefined && args.newObjective !== undefined)
+  // Assignment reservation and root selection are one durable row update. Missing
+  // lineage never silently refinances an existing parent's objective.
+  function allocateBudget(row, parent, args, assignmentId, previous) {
+    const objectives = { ...(row.objectives ?? {}) }
+    let rootObjectiveId = args.rootObjectiveId ?? (args.newObjective === undefined ? previous?.rootObjectiveId : null)
+    const own = Object.values(objectives)
+    if (args.newObjective !== undefined) {
+      const objective = args.newObjective.trim()
+      rootObjectiveId = own.find(root => root.objective === objective)?.id ?? randomUUID()
+      objectives[rootObjectiveId] ??= { id: rootObjectiveId, ownerSessionId: parent.id, objective, used: 0, cap: FAST_ROOT_CAP }
+    } else if (!rootObjectiveId) {
+      if (own.length > 1) throw new Error('POSTMAN_ROOT_OBJECTIVE_REQUIRED')
+      rootObjectiveId = own[0]?.id ?? randomUUID()
+      objectives[rootObjectiveId] ??= { id: rootObjectiveId, ownerSessionId: parent.id, objective: args.task.trim(), used: 0, cap: FAST_ROOT_CAP }
+    }
+    const root = objectives[rootObjectiveId]
+    if (!root) throw new Error('POSTMAN_ROOT_OBJECTIVE_REJECTED')
+    const requested = args.hardBudget ?? fastBudget.hardLimit, remaining = root.cap - root.used
+    if (remaining < requested) throw Object.assign(new Error('POSTMAN_WORKER_OBJECTIVE_BUDGET_INSUFFICIENT'), { remaining, requested })
+    return { objectives, budget: newBudget(assignmentId, args.task, requested, rootObjectiveId) }
+  }
+  const rootOfBudget = (agent, budget) => rawRow(agent.session.header.parentSession)?.objectives?.[budget.rootObjectiveId]
+  const budgetSnapshot = (row, budget) => budget ? { ...budget, root: row?.objectives?.[budget.rootObjectiveId] ?? null } : null
   const activeSlot = agent => provisionalSlot(agent, false) || liveSlot(agent, agent?.session?.header?.parentSession, true)
   async function saveBudget(agent, slot, budget) {
     if (durable) await changeBinding({ id: agent.session.header.parentSession }, agent.id, current => {
@@ -128,14 +160,17 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     const slot = activeSlot(agent)
     if (!slot || slot.workerType === 'sol') return null
     const binding = rowOf(agent.session.header.parentSession)?.workers?.[agent.id]
-    return binding?.budget ?? slot.budget ?? { ...newBudget(binding?.lifecycle?.admissions?.at(-1)?.id ?? 'legacy:' + agent.id,
-      'Legacy assignment: return bounded facts or parent guidance'), used: agent.session.events.filter(e => e.type === 'step/start').length }
+    const budget = binding?.budget ?? slot.budget ?? { ...newBudget(binding?.lifecycle?.admissions?.at(-1)?.id ?? 'legacy:' + agent.id,
+      'Legacy assignment: return bounded facts or parent guidance', fastBudget.hardLimit, 'legacy:' + agent.session.header.parentSession), used: agent.session.events.filter(e => e.type === 'step/start').length }
+    const root = rootOfBudget(agent, budget)
+    return root?.used >= root?.cap ? { ...budget, exhausted: true } : budget
   }
   function blockerText(agent, budget) {
     const calls = agent.session.events.filter(e => e.type === 'tool/call').slice(-8).map(e => e.data.name)
     return ['NEEDS_PARENT_GUIDANCE:', 'Задача: ' + budget.task,
       'Уже сделано/проверено: только подтверждённые результаты в child history; Host не подтверждает PASS.',
-      'Что мешает закончить: FAST assignment budget exhausted (' + budget.used + '/' + budget.hardLimit + ').',
+      'Что мешает закончить: FAST budget exhausted (assignment ' + budget.used + '/' + budget.hardLimit +
+        ', root ' + (rootOfBudget(agent, budget)?.used ?? 'unknown') + '/' + FAST_ROOT_CAP + ').',
       'Что уже пробовал: ' + calls.join(', '),
       'Какое решение нужно от parent: проверить evidence и дать конкретное ограниченное назначение либо изменить routing.',
       'Безопасные варианты: закончить по достаточным evidence или вернуть blocker; task success не установлен.'].join(String.fromCharCode(10))
@@ -147,8 +182,20 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     const slot = provisionalSlot(agent, false) || liveSlot(agent, agent?.session?.header?.parentSession, true)
     if (slot && slot.workerType !== 'sol') {
       const budget = budgetOf(agent)
-      if (budget && !budget.reported) await saveBudget(agent, slot, { ...budget, used: budget.used + 1,
-        exhausted: budget.used + 1 >= budget.hardLimit })
+      if (budget && !budget.reported) {
+        if (durable) {
+          await contexts.changeRecord(agent.session.header.parentSession, row => {
+            const current = row.workers[agent.id]?.budget, root = row.objectives?.[budget.rootObjectiveId]
+            if (!current || current.assignmentId !== budget.assignmentId || !root) throw new Error('POSTMAN_ROOT_OBJECTIVE_REQUIRED')
+            if (root.used >= root.cap || current.used >= current.hardLimit) throw new Error('POSTMAN_ROOT_BUDGET_EXHAUSTED')
+            const updated = { ...current, used: current.used + 1, exhausted: current.used + 1 >= current.hardLimit || root.used + 1 >= root.cap }
+            return { ...row, workers: { ...row.workers, [agent.id]: { ...row.workers[agent.id], budget: updated } },
+              objectives: { ...row.objectives, [root.id]: { ...root, used: root.used + 1 } } }
+          })
+          slot.budget = rowOf(agent.session.header.parentSession).workers[agent.id].budget
+        }
+        else await saveBudget(agent, slot, { ...budget, used: budget.used + 1, exhausted: budget.used + 1 >= budget.hardLimit })
+      }
     }
     const options = slot && workerOptions(slot.workerType)
     return options && config.provider === options.provider && config.model === options.model
@@ -365,13 +412,16 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     exec.signal.addEventListener('abort', onAbort, { once: true })
     try {
       const assignment = { id: randomUUID(), state: 'pending', messageId: null }
-      const nextBudget = slot.workerType !== 'sol' ? newBudget(assignment.id, args.task) : null
-      if (durable) await changeBinding(parent, id, current => {
+      let nextBudget = slot.workerType !== 'sol' ? newBudget(assignment.id, args.task, args.hardBudget ?? fastBudget.hardLimit) : null
+      if (durable) await contexts.changeRecord(parent.id, row => {
+        const current = row.workers[id]
         if (current.state !== 'ready' || current.delivery !== 'none')
           throw new Error('POSTMAN_WORKER_DELIVERY_UNKNOWN')
-        return { ...current, ...(nextBudget ? {pendingBudgets: {...(current.pendingBudgets ?? {}), [assignment.id]: nextBudget}} : {}), delivery: 'pending', lifecycle: { ...(current.lifecycle ?? emptyLifecycle()),
+        const allocation = nextBudget ? allocateBudget(row, parent, args, assignment.id, Object.values(current.pendingBudgets ?? {}).at(-1) ?? current.budget) : null
+        if (allocation) nextBudget = allocation.budget
+        return { ...row, ...(allocation ? { objectives: allocation.objectives } : {}), workers: { ...row.workers, [id]: { ...current, ...(nextBudget ? {pendingBudgets: {...(current.pendingBudgets ?? {}), [assignment.id]: nextBudget}} : {}), delivery: 'pending', lifecycle: { ...(current.lifecycle ?? emptyLifecycle()),
           admissions: [...(current.lifecycle?.admissions ?? []), assignment] }, artifactRequests: task.grant ?
-          [...new Set([...current.artifactRequests, args.artifactRequestId])] : current.artifactRequests }
+          [...new Set([...current.artifactRequests, args.artifactRequestId])] : current.artifactRequests } } }
       })
       slot.delivery = 'pending'
       if (nextBudget) slot.pendingBudgets = {...(slot.pendingBudgets ?? {}), [assignment.id]: nextBudget}
@@ -400,6 +450,9 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
         workerType: slot.workerType, model: workerOptions(slot.workerType).model, provider: POSTMAN_WORKER_PROVIDER }
     } catch (error) {
       slot.ptcAdmission = null
+      if (error.message === 'POSTMAN_WORKER_OBJECTIVE_BUDGET_INSUFFICIENT')
+        return { status: error.message, workerSessionId: id, remaining: error.remaining, requested: error.requested }
+      if (/POSTMAN_ROOT_/.test(String(error))) return { status: String(error.message), workerSessionId: id }
       slot.delivery = 'unknown'
       bindingChanged(id)
       if (durable && Object.hasOwn(rowOf(parent.id)?.workers ?? {}, id) &&
@@ -425,6 +478,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     if (!authorized(parent)) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
     const reservedId = randomUUID()
     const assignment = { id: randomUUID(), state: 'pending', messageId: null }
+    let initialBudget = workerType !== 'sol' ? newBudget(assignment.id, args.task, args.hardBudget ?? fastBudget.hardLimit) : null
     const label = args.label ?? (workerType === 'sol' ? 'Postman Sol Worker' : workerType === 'secretary' ? 'Secretary' : 'Postman Worker')
     // Reserve an exact child identity durably before the first DSH side effect.
     const admission = await enqueue(group, async () => {
@@ -436,19 +490,23 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
         if (durable) await contexts.changeRecord(parent.id, row => {
           if (count(row.workers ?? {}) >= limit) throw new Error(limitStatus)
           if (Object.hasOwn(row.workers ?? {}, reservedId)) throw new Error('POSTMAN_WORKER_BINDING_EXISTS')
-          return { ...row, workers: { ...row.workers,
+          const allocation = initialBudget ? allocateBudget(row, parent, args, assignment.id, args.previousBudget) : null
+          if (allocation) initialBudget = allocation.budget
+          return { ...row, ...(allocation ? { objectives: allocation.objectives } : {}), workers: { ...row.workers,
             [reservedId]: { id: reservedId, label, workerType, ownerSessionId: parent.id, state: 'intent', delivery: 'pending',
               artifactRequests: task.grant ? [args.artifactRequestId] : [],
-              ...(workerType !== 'sol' ? { budget: newBudget(assignment.id, args.task) } : {}),
+              ...(initialBudget ? { budget: initialBudget } : {}),
               lifecycle: { version: 1, admissions: [assignment], reports: [] } } } }
         })
         const slot = slotFor(group, { id: reservedId, label, workerType, state: 'intent', delivery: 'pending' })
         slot.context = context
-        if (workerType !== 'sol') slot.budget = newBudget(assignment.id, args.task)
+        if (initialBudget) slot.budget = initialBudget
         if (task.grant) slot.artifactRequests.add(args.artifactRequestId)
         return { slot }
       } catch (error) {
-        return { status: String(error).includes(limitStatus) ?
+        if (error.message === 'POSTMAN_WORKER_OBJECTIVE_BUDGET_INSUFFICIENT')
+          return { status: error.message, remaining: error.remaining, requested: error.requested }
+        return { status: /POSTMAN_ROOT_/.test(String(error)) ? String(error.message) : String(error).includes(limitStatus) ?
           limitStatus : 'POSTMAN_WORKER_START_FAILED', diagnostic: diagnostic(error) }
       }
     })
@@ -535,6 +593,9 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     workerSessionId: { type: 'string', description: 'Exact existing Worker session for an addressed task or artifact grant.' },
     label: { type: 'string', description: 'Display name, not an authority or lookup key.' },
     artifactRequestId: { type: 'string', description: 'Separately trusted artifact REQ.' },
+    hardBudget: { type: 'number', description: 'FAST hard model-request budget: integer 8..24, default 16. Host computes soft warning; root cumulative cap 48 remains.' },
+    rootObjectiveId: { type: 'string', description: 'Exact task-team root from list for this unresolved objective, including across child replacement. Follow-up inherits it by default.' },
+    newObjective: { type: 'string', description: 'Explicit description of a genuinely independent objective, never a refinancing of unfinished work. Equal descriptions reuse the task-team root.' },
   }
   function makeTaskTool(workerType) {
     const sol = workerType === 'sol', secretary = workerType === 'secretary'
@@ -543,11 +604,13 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       description: sol ? 'Only on an explicit user request: create or continue the one Sol Worker (GPT-6.1 Sol, xhigh). An explicit user request to use Sol Worker is sufficient authorization; do not ask a separate ask_user_question before creation or continuation. Follow-up and new tasks by workerSessionId require no additional user confirmation within the user-selected Sol route. Never automatically escalate Luna to Sol. Use workerSessionId for follow-up; createNew rejects a second Sol Worker. Acceptance is not completion.' :
         secretary ? 'Create or continue the exact singleton Secretary for this Leader task. FAST facts and private operational ledger, no PTC/delegation. Acceptance is not completion.' :
         'Create or continue a Postman Worker, up to two per exact parent (Leader or Sol Worker). FAST local execution without PTC/delegation. Acceptance is not completion.',
-      parameters: secretary ? Object.fromEntries(Object.entries(parameters).filter(([name]) => name !== 'artifactRequestId')) : parameters, output: output(),
+      parameters: Object.fromEntries(Object.entries(parameters).filter(([name]) =>
+        !(secretary && name === 'artifactRequestId') && !(sol && ['hardBudget', 'rootObjectiveId', 'newObjective'].includes(name)))), output: output(),
       async execute(args, exec) {
         const parent = exec?.agent
         if (!authorized(parent) || (workerType !== 'luna' && !isTopLevelPostmanSupervisor(parent))) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
         if (secretary && Object.hasOwn(args ?? {}, 'artifactRequestId')) return { status: 'POSTMAN_WORKER_ARGUMENTS_INVALID' }
+        if (budgetArgsInvalid(args) || (sol && ['hardBudget','rootObjectiveId','newObjective'].some(name => args[name] !== undefined))) return { status: 'POSTMAN_WORKER_BUDGET_INVALID' }
         if (typeof args?.task !== 'string' || !args.task.trim()) return { status: 'POSTMAN_WORKER_TASK_INVALID' }
         if ((args.createNew !== undefined && typeof args.createNew !== 'boolean') ||
             (args.workerSessionId !== undefined && (typeof args.workerSessionId !== 'string' || !args.workerSessionId)) ||
@@ -578,10 +641,11 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
   const interruptTool = defineTool({
     name: POSTMAN_WORKER_INTERRUPT_TOOL_NAME,
     description: 'Queue a follow-up for the selected continuable Worker without interrupting its current model/tool step.',
-    parameters: { workerSessionId: { type: 'string' }, task: { type: 'string', required: true } }, output: output(),
+    parameters: { workerSessionId: { type: 'string' }, task: parameters.task, hardBudget: parameters.hardBudget, rootObjectiveId: parameters.rootObjectiveId, newObjective: parameters.newObjective }, output: output(),
     async execute(args, exec) {
       const parent = exec?.agent
       if (!authorized(parent)) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
+      if (budgetArgsInvalid(args)) return { status: 'POSTMAN_WORKER_BUDGET_INVALID' }
       if (typeof args?.task !== 'string' || !args.task.trim()) return { status: 'POSTMAN_WORKER_TASK_INVALID' }
       if (args.workerSessionId !== undefined && (typeof args.workerSessionId !== 'string' || !args.workerSessionId))
         return { status: 'POSTMAN_WORKER_TARGET_UNKNOWN' }
@@ -877,13 +941,13 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
         return { workerSessionId: value.id, label: value.label, workerType: workerTypeOf(value),
           model: workerOptions(workerTypeOf(value)).model, binding: value.state,
           delivery: value.delivery, runtime, execution: runtime, turn, report,
-          ...(workerTypeOf(value) !== 'sol' ? { budget: value.budget ?? { used: 0, ...fastBudget, exhausted: false } } : {}) }
+          ...(workerTypeOf(value) !== 'sol' ? { budget: budgetSnapshot(rawRow(parent.id), value.budget), pendingBudgets: Object.values(value.pendingBudgets ?? {}).map(b => budgetSnapshot(rawRow(parent.id), b)) } : {}) }
       }))
       return { status: 'POSTMAN_WORKER_LIST', quota: {
         secretary: { used: workers.filter(value => value.workerType === 'secretary').length, limit: isTopLevelPostmanSupervisor(parent) ? 1 : 0 },
         luna: { used: workers.filter(value => value.workerType === 'luna').length, limit: 2 },
         sol: { used: workers.filter(value => value.workerType === 'sol').length, limit: isTopLevelPostmanSupervisor(parent) ? 1 : 0 },
-      }, workers }
+      }, objectives: Object.values(rawRow(parent.id)?.objectives ?? {}), workers }
     },
   })
   const ledgerTool = defineTool({
@@ -910,10 +974,11 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
   const freshTool = defineTool({
     name: 'postman_worker_fresh',
     description: 'Retire an exact owned settled child and spawn a fresh role-preserving Session for an explicit new assignment. No history inheritance or Git reset; Secretary ledger survives. Sol user-selected route is preserved.',
-    parameters: { workerSessionId: { type: 'string', required: true }, task: { type: 'string', required: true }, label: { type: 'string' }, retireOwnedWorkers: { type: 'boolean' } }, output: output(),
+    parameters: { workerSessionId: { type: 'string', required: true }, task: { type: 'string', required: true }, hardBudget: parameters.hardBudget, rootObjectiveId: parameters.rootObjectiveId, newObjective: parameters.newObjective, label: { type: 'string' }, retireOwnedWorkers: { type: 'boolean' } }, output: output(),
     async execute(args, exec) {
       const parent = exec.agent
       if (!authorized(parent)) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
+      if (budgetArgsInvalid(args)) return { status: 'POSTMAN_WORKER_BUDGET_INVALID' }
       if (typeof args.task !== 'string' || !args.task.trim()) return { status: 'POSTMAN_WORKER_TASK_INVALID' }
       const g = groupFor(parent), id = args.workerSessionId
       const chosen = await enqueue(g, () => {
@@ -928,6 +993,11 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       })
       if (!chosen.binding) return chosen
       try { return await admitted(parent, async () => {
+          if (workerTypeOf(chosen.binding) !== 'sol' && durable) {
+            try { allocateBudget(rawRow(parent.id), parent, args, 'preflight', chosen.binding.budget) }
+            catch (error) { return { status: String(error.message), workerSessionId: id,
+              ...(error.message === 'POSTMAN_WORKER_OBJECTIVE_BUDGET_INSUFFICIENT' ? { remaining: error.remaining, requested: error.requested } : {}) } }
+          }
           if (chosen.binding.retired) {
             if (!await provenClosed(parent, id) || ctx.agents.get(id) || Object.values(rawRow(parent.id)?.workers ?? {}).some(b => b.ownerSessionId === id))
               return { status: 'POSTMAN_WORKER_BINDING_UNCERTAIN', workerSessionId: id }
@@ -935,7 +1005,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
             const closed = await stopTool.execute({workerSessionId: id, mode: 'close', cascade: args.retireOwnedWorkers === true}, exec)
             if (closed.status !== 'POSTMAN_WORKER_STOPPED') return closed
           }
-          const accepted = await create(parent, g, {task: args.task, label: args.label ?? chosen.binding.label, createNew: true}, exec, workerTypeOf(chosen.binding), id)
+          const accepted = await create(parent, g, {...args, workerSessionId: undefined, previousBudget: chosen.binding.budget, label: args.label ?? chosen.binding.label, createNew: true}, exec, workerTypeOf(chosen.binding), id)
           return {...accepted, retiredWorkerSessionId: id, fresh: accepted.status === 'POSTMAN_WORKER_TASK_ACCEPTED'}
       }) } finally {g.fresh.delete(id)}
     },
@@ -1104,7 +1174,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       if (agent.inbox.nextTurn.length === 0 && decision.messages.length) agent.inbox.splice('next-step', 0, 0, decision.messages)
       return {kind: 'enter', messages: []}
     }
-    if (budget.used < budget.hardLimit) return decision
+    if (!budget.exhausted && budget.used < budget.hardLimit) return decision
     await reportBudgetBlocker(agent, budget, payload.turn, payload.step - 1, payload.signal)
     return { kind: 'reject', reason: 'POSTMAN_WORKER_BUDGET_EXHAUSTED' }
   })
@@ -1114,9 +1184,10 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       const type = roleOf(scope)
       if (!type) return ''
       const budget = budgetOf(scope)
-      const warning = budget && budget.used >= budget.hardLimit - 1
+      const root = budget && rootOfBudget(scope, budget)
+      const warning = budget && (budget.used >= budget.hardLimit - 1 || root?.used >= FAST_ROOT_CAP - 1)
         ? 'HARD CEILING: this assignment is escalation-only. No ordinary searches/tests/edits/retries. ONE NEEDS_PARENT_GUIDANCE: notify_parent and meaningful blocker report, then stop. Exhaustion is not success.'
-        : budget && budget.used >= budget.softLimit - 1 ? 'SOFT WARNING: budget nearly exhausted. Do not start a new research branch. Finish immediately with sufficient evidence or prepare escalation.' : ''
+        : budget && (budget.used >= budget.softLimit - 1 || root?.used >= Math.floor(FAST_ROOT_CAP * 0.8) - 1) ? 'SOFT WARNING: budget nearly exhausted. Do not start a new research branch. Finish immediately with sufficient evidence or prepare escalation.' : ''
       const ledger = type === 'secretary' ? rawRow(scope.session.header.parentSession)?.secretaryLedger : null
       return ROLE_SKILLS[type] + (warning ? String.fromCharCode(10) + warning : '') +
         (ledger ? String.fromCharCode(10) + 'Current Host-private operational ledger: ' + JSON.stringify(ledger) : '')
@@ -1267,7 +1338,8 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     if (!isTopLevelPostmanSupervisor(leader) || !authorized(leader)) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
     const row = taskContexts?.record?.(leader.id) ?? {}
     const budget = b => b?.budget ? { used: b.budget.used, soft: b.budget.softLimit,
-      hard: b.budget.hardLimit, exhausted: b.budget.exhausted === true } : null
+      hard: b.budget.hardLimit, exhausted: b.budget.exhausted === true,
+      rootObjectiveId: b.budget.rootObjectiveId ?? null, rootUsed: row.objectives?.[b.budget.rootObjectiveId]?.used ?? null, rootCap: FAST_ROOT_CAP } : null
     const summary = ([id, b]) => {
       const live = ctx.agents.get(id), owner = b.ownerSessionId ?? row.leaderSessionId ?? leader.id
       const exact = b.id === id && (!live || (live.session?.header?.origin === 'subagent' && live.session.header.parentSession === owner))
