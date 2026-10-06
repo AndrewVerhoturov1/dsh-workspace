@@ -7,7 +7,7 @@ description: >-
 
 # Postman Leader
 
-`POSTMAN_LEADER_SKILL_VERSION: 29`
+`POSTMAN_LEADER_SKILL_VERSION: 30`
 
 ## 1. Role and invariants
 
@@ -71,6 +71,13 @@ Sol запускается **только по прямой просьбе по�
 ## 6. PTC supervisor discipline
 
 Перед каждым `ptc_execute` определи **next real decision boundary** и включи все deterministic supervisor mechanics до неё. Canonical HOW — Host-injected `plugins/dsh-postman-harness/lib/ptc-discipline.js`; не копируй весь протокол. Leader operational tools только внутри PTC; direct-only: skill, ask_user_question, exit_plan_mode, read_image. Sol controls direct-only у Sol, не Leader profile.
+
+**PTC = supervisor phase, not tool wrapper.** Next-tool-known: если следующий полезный tool уже можно назвать, оставь его в текущей программе до genuine boundary. Завершившийся read/status/PASS — не semantic_decision; one tool + semantic_decision presumptively underbatched, требует ясной причины, но не запрещён. Перед return выполни canonical self-check; для нового judgement предпочитай needsModelDecision + конкретный decisionQuestion + compact evidence, не «прочитать следующий файл?».
+
+- **Supervisor dispatch phase:** Leader decision → PTC: team snapshot если нужен → task prepare/readiness → все уже выбранные independent dispatch → known bookkeeping/ledger → external event / real boundary. Не wake между этими mechanics.
+- **Reconciliation/cleanup phase:** после reports Leader decision → PTC: exact critical evidence → mechanically comparable values → known lifecycle operations → ledger milestone → retire settled agents → task close когда appropriate → task complete / next real decision. Не team_status → model → close Worker → model → ledger → model → task_close без нового judgement.
+
+PTC закрывает **sufficient acceptance evidence**, не максимальное evidence. Перед ещё одной проверкой: может ли результат изменить acceptance/judgement? Если нет, не повторяй SHA/status/reread unchanged evidence, не делай child audit archaeology после sufficient trusted report и лишние evidence JSON/checksum. Независимая дешёвая mechanics → Worker, не искусственное увеличение nested calls. Description = phase goal + stop reason.
 
 Обычная phase: team_status → prepare если нужно → readiness facts → Secretary task → Worker A/B → authorized Sol/needed Bridge → known ledger/todo bookkeeping → external_event. Dispatch calls последовательны в PTC (profile concurrency=1), принятые независимые assignments выполняются параллельно. Не подменяй environment readiness значением TASK_CONTEXT_READY: prepare не устанавливает dependencies.
 

@@ -125,7 +125,8 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
     if (!assignment || !((assignment.role === 'leader' && assignment.profile === current) ||
         (assignment.role === 'sol' && assignment.profile === SOL_WORKER_PROFILE))) return false
     const record = { agent, profile: assignment.profile, role: assignment.role,
-      revision: assignment.profile.revision, runs: new Set(), section: null, tool: null }
+      revision: assignment.profile.revision, runs: new Set(), section: null, tool: null,
+      underbatchedStreak: 0, underbatchedCalls: 0 }
     owners.set(agent.id, record)
     // Pre-review Sol Sessions persist a spawn filter denying inherited PTC.
     // Bind this one Host-authorized capability in the exact Sol scope; do not
@@ -146,7 +147,15 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
     const roleText = record.role === 'sol' ?
       'This exact Sol Worker uses PTC-first for its own batchable engineering work; direct PTC-managed calls are rejected. Follow postman-sol-worker: Worker-first for independent cheap tasks, two free Workers in parallel for two independent tasks. Worker controls are direct-only, limited to your exact children; no supervisor/Bridge/Secretary/Sol creation or approval tools in PTC. Use the assigned task worktree explicitly for shell commands. ' :
       'This Leader uses Postman PTC; direct PTC-managed calls are rejected. PTC changes execution mode, not Postman Leader routing: follow the postman-leader skill, obtain user approval before medium/complex task preparation or delegation, and delegate repository discovery/execution to Worker/Postman as required. Never poll Worker/Bridge: reports and READY arrive as later events, not within this program. '
-    return roleText + helperText +
+    const efficiencyNotice = record.underbatchedStreak === 0 ? '' :
+      record.underbatchedStreak >= 2 ?
+        '\nPTC UNDERBATCH STREAK: ' + record.underbatchedStreak + '\n' +
+        'Recent successful PTC programs repeatedly returned after very small deterministic phases. ' +
+        'Do not use semantic_decision as a tool-call boundary. Batch all already-known safe mechanics before waking the model again.\n' :
+        '\nPTC EFFICIENCY NOTICE\nPrevious successful PTC used ' + record.underbatchedCalls +
+        ' nested tool call(s) and ended at semantic_decision. Verify that it actually created a NEW semantic choice. ' +
+        'If the next reads/tests/status checks were already knowable, batch them into one deterministic phase.\n'
+    return roleText + helperText + efficiencyNotice +
       'Use await tools.name(JSON_arguments). Current nested argument schemas: ' +
       JSON.stringify(schemas.map(s => ({ name: s.name, parameters: s.parameters })))
   }
@@ -170,10 +179,10 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
   }
   const tool = defineTool({
     name: PTC_TOOL_NAME,
-    description: 'Run one isolated PTC program for the exact experimental Postman Leader or managed Sol Worker. Each role has its own profile; guidance lists current nested tool schemas.',
+    description: 'Run one complete deterministic phase, not a tool wrapper, for the exact Postman Leader or managed Sol Worker. Batch known safe mechanics until a genuine decision boundary; describe the phase goal and stop reason. Each role retains its own profile.',
     parameters: {
       program: { type: 'string', required: true, description: 'One async-function body with explicit JSON return. No imports, Node or persistent state.' },
-      description: { type: 'string', required: true, description: 'Short purpose and why the deterministic phase ends at the declared boundary.' },
+      description: { type: 'string', required: true, description: 'Phase goal + stop reason, not an individual tool call; include all already-known safe mechanics before that boundary.' },
       boundary: { type: 'string', required: true, enum: BOUNDARIES, description: 'Next genuine decision boundary; encode all safe deterministic work before it in this program.' },
       yield_on_success: { type: 'boolean', description: 'Compatibility flag, Leader only. external_event automatically concludes after safe exact accepted Worker/interrupt/Bridge dispatch, even when omitted or false.' },
       language: { type: 'string', enum: ['javascript', 'typescript'], description: 'JavaScript by default; TypeScript supports erasable syntax only.' },
@@ -312,6 +321,18 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
         return result
       } finally {
         const resultBytes = terminal?.status === 'ok' ? Buffer.byteLength(JSON.stringify(terminal.value), 'utf8') : 0
+        const needsModelDecision = terminal?.value?.needsModelDecision === true
+        const decisionQuestionPresent = typeof terminal?.value?.decisionQuestion === 'string' &&
+          terminal.value.decisionQuestion.trim().length > 0
+        // Reuse the exact Host effect/acceptance gate. Do not infer semantics from
+        // evidence strings. Conservatively exempt explicit model-decision results
+        // and accepted async producers, even if their declared boundary was semantic.
+        const underbatchedCandidate = terminal?.status === 'ok' && args.boundary === 'semantic_decision' &&
+          started.size <= 1 && !yieldBlockedReason && !needsModelDecision && !eventAccepted && !nestedConclude
+        const underbatchedReason = underbatchedCandidate ? 'small-semantic-phase' : null
+        // Ephemeral exact assignment only: revoke/fresh/cold resume drops this state.
+        record.underbatchedStreak = underbatchedCandidate ? record.underbatchedStreak + 1 : 0
+        record.underbatchedCalls = underbatchedCandidate ? started.size : 0
         // Plugin diagnostic vocabulary is not supported by native persistence.
         // Keep efficiency metadata in the ordinary logger, never in the durable session.
         logger.info('postman/ptc-run', { sessionId: agent.id,
@@ -323,7 +344,9 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
           resultBytes, oversizedResultCandidate: resultBytes > 64 * 1024 || terminal?.error?.code === 'maxOutputBytes',
           yieldRequested: args.yield_on_success === true, yieldApplied,
           ...(terminal?.status === 'limit-exceeded' ? { limitCode: terminal.error?.code } : {}),
-          underbatchedCandidate: started.size === 1,
+          underbatchedCandidate, underbatchedReason, underbatchedStreak: record.underbatchedStreak,
+          ...(terminal?.status === 'ok' && args.boundary === 'semantic_decision' ?
+            { needsModelDecision, decisionQuestionPresent } : {}),
         })
         record.runs.delete(run)
         exec.signal.removeEventListener('abort', onAbort)

@@ -36,7 +36,7 @@ test('bounded Stage 3 source contract: kernel first, routing, safety and FAST bu
   assert.match(compact, /Active\/pending\/uncertain остаются blocked\/busy/)
   assert.doesNotMatch(readme, /compactNow` только для trustworthy exact resident/)
   const contract = await readFile(new URL('docs/subprojects/ptc/PTC_CONTRACT.md', root), 'utf8')
-  assert.match(contract, /Skill v29/); assert.doesNotMatch(contract, /Skill v28/)
+  assert.match(contract, /Skill v30/); assert.doesNotMatch(contract, /Skill v29/)
   assert.match(contract, /postman_task_prepare\/postman_task_restore\/postman_task_close\/postman_input_files/)
   assert.match(contract, /postman_task_close` явно retire-ит settled Leader task binding/)
   assert.match(contract, /не Git cleanup и не доказательство success/)
