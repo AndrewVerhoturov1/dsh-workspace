@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 WEB_DIR = Path(__file__).resolve().parents[1]
 if str(WEB_DIR) not in sys.path:
@@ -208,6 +208,46 @@ class WebWorkerResultRecoveryTests(unittest.TestCase):
         self.assertEqual(result["code"], web_worker_bridge.RESULT_DURABLE)
         self.assertEqual(clock.monotonic(), 10.0)
         send_reminder.assert_not_called()
+        self.assertEqual(result["details"]["reminders"], [])
+
+    def test_envelope_with_outside_sha_is_durable_without_extra_send_or_download(self):
+        clock = FakeClock()
+        page = FakePage()
+        text = "\n".join([artifact_detector.result_begin_marker(REQ), FILENAME,
+                          artifact_detector.result_end_marker(REQ), "SHA-256: " + "c" * 64])
+        completed = completed_observer()
+        completed["details"].update(assistantText=text,
+            assistantTextSha256=browser_observer.text_sha256(text),
+            submitCode=browser_submit.PROMPT_SEND_CONFIRMED,
+            submitSendState=browser_submit.PROVEN_SENT,
+            promptSha256=browser_submit.prompt_sha256(PROMPT))
+        turns = [{"index": 0, "role": "user", "text": PROMPT},
+                 {"index": 1, "role": "assistant", "text": text}]
+        turn = Mock()
+        turn.evaluate.return_value = {"beginMarkerCount": 1, "endMarkerCount": 1,
+            "candidates": [{"path": "0", "tag": "span", "role": "button",
+                            "visibleLabelExact": True, "betweenMarkers": True}]}
+        page.locator = Mock()
+        page.locator.return_value.nth.return_value = turn
+        with tempfile.TemporaryDirectory() as root:
+            bridge = self.make_bridge(root, clock)
+            with patch.object(browser_submit, "submit_fresh_prompt", return_value=confirmed_submit(PROMPT)) as send, \
+                 patch.object(browser_observer, "observe_next_assistant", return_value=completed), \
+                 patch.object(browser_observer, "snapshot_turns", return_value=(turns, '[data-testid^="conversation-turn-"]')), \
+                 patch.object(browser_observer, "generation_active", return_value=(False, "")), \
+                 patch.object(browser_observer, "connection_interrupted", return_value=(False, {})), \
+                 patch.object(artifact_download, "download_validated_artifact", return_value=durable_result()) as download, \
+                 patch.object(browser_recovery, "chat_ready_snapshot", return_value=ready_chat()), \
+                 patch.object(reminder_policy, "submit_reminder") as reminder:
+                result = bridge.run_request(REQ, task_url=TASK_URL, prompt=PROMPT,
+                    expected_filename=FILENAME, expected_request={}, observer_timeout_ms=60_000,
+                    reminder_interval_ms=20_000, max_reminders=1, playwright_factory=FakeFactory(page))
+        self.assertEqual(result["code"], web_worker_bridge.RESULT_DURABLE, result)
+        self.assertEqual(clock.monotonic(), 0.0)
+        send.assert_called_once()
+        download.assert_called_once()
+        self.assertEqual(download.call_args.kwargs["artifact_dom_result"]["code"], artifact_detector.ARTIFACT_DOM_CONFIRMED)
+        reminder.assert_not_called()
         self.assertEqual(result["details"]["reminders"], [])
 
     def test_completed_text_without_zip_returns_terminal_after_ten_second_recheck(self):

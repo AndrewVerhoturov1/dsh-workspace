@@ -446,13 +446,14 @@ def render_direct_task_manifest(
         "- Normal Postman не проверяет repository scope или patch semantics и не применяет содержимое ZIP автоматически.",
         "- Для обычного текстового ответа можно положить, например, `result.md` или `files/result.md`; это рекомендация, не schema requirement.",
         f"- Имя ZIP должно быть ровно `{expected_value}`.",
-        "- Финальный ответ Ч1 должен содержать ровно три непустые видимые строки и ничего больше:",
+        "- Финальный ответ Ч1 должен содержать единственный конверт из трёх непустых видимых строк в указанном порядке:",
         "",
         f"<<<POSTMAN_RESULT_BEGIN:{request_id}>>>",
         expected_value,
         f"<<<POSTMAN_RESULT_END:{request_id}>>>",
         "",
         f"- Средняя строка должна быть реальным downloadable ZIP attachment/control с visible filename `{expected_value}`, а не plain text.",
+        "- Пояснение или SHA-256 можно указать отдельным обычным текстом вне конверта; не добавлять SHA-256 к имени ZIP или заголовку ссылки.",
         "",
     ]
     input_section = render_input_files_section(input_files, native_input_request_id=native_input_request_id)

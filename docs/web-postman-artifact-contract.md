@@ -102,7 +102,8 @@ reminder после завершённого assistant-turn. Ошибки сам
 скачивания и другие внутренние ошибки остаются transport failure. Произвольный новый user turn
 разрешённым anchor не является.
 
-Финальный assistant turn должен содержать envelope:
+Финальный assistant turn должен содержать единственный envelope из трёх последовательных
+непустых строк; обычный текст или отдельная SHA-256 строка вне него допускаются:
 
 ```text
 <<<POSTMAN_RESULT_BEGIN:<requestId>>>
@@ -118,7 +119,9 @@ reminder после завершённого assistant-turn. Ошибки сам
 - visible filename совпадает с exact expected filename;
 - простой текст с именем файла не заменяет downloadable control;
 - ZIP из другого assistant turn не подходит;
-- последний ZIP на странице не выбирается по принципу «самый свежий» без correlation proof.
+- последний ZIP на странице не выбирается по принципу «самый свежий» без correlation proof;
+- повторные полные markers, competing markers другого REQ и повторное exact имя файла
+  не допускаются; неполный prefix вне корректного envelope не заменяет полный marker.
 
 ## 5. ZIP structure
 
@@ -157,6 +160,14 @@ one browser download event
 actual ZIP SHA-256
 safe archive structure and limits
 ```
+
+Browser `suggestedFilename` должен совпадать с canonical expected filename либо содержать
+только наблюдавшееся безопасное украшение `<expected> _SHA256_ <64 hex>_`
+(пробелы/табуляции допустимы только между именем, `_SHA256_` и digest).
+Visible control label и request-scoped staging filename остаются exact. Реальная suggestion
+сохраняется в metadata; digest в её суффиксе не является authority или доказательством bytes.
+SHA-256 вычисляется по физическому source и staging, затем проверяется ZIP validator.
+Не следует добавлять SHA к имени ZIP или заголовку ссылки.
 
 `manifest.json` не является authority для repository/application decisions. Malformed,
 non-object или отсутствующий manifest не превращает безопасно скачанный ZIP в transport failure.

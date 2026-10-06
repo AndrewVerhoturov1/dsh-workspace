@@ -186,6 +186,10 @@ class TaskPackageTests(unittest.TestCase):
         self.assertNotIn("значение должно быть ровно", content)
         self.assertIn(f"<<<POSTMAN_RESULT_BEGIN:{REQ}>>>\n{expected_filename}\n<<<POSTMAN_RESULT_END:{REQ}>>>", content)
         self.assertIn("реальным downloadable ZIP attachment/control", content)
+        self.assertIn("единственный конверт из трёх непустых видимых строк", content)
+        self.assertIn("SHA-256 можно указать отдельным обычным текстом вне конверта", content)
+        self.assertIn("не добавлять SHA-256 к имени ZIP или заголовку ссылки", content)
+        self.assertNotIn("ровно три непустые видимые строки и ничего больше", content)
 
     def test_direct_task_implementation_discipline_is_conditional_and_bounded(self):
         content = task_package.render_direct_task_manifest(
