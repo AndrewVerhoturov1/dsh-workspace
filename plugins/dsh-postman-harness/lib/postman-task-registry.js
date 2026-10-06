@@ -5,7 +5,7 @@ import { z } from 'zod'
 // Git, child-creation, or destructive runner operation is attempted.
 const workerLifecycle = z.object({ version: z.literal(1),
   admissions: z.array(z.object({ id: z.string(), state: z.enum(['pending', 'accepted']), messageId: z.string().nullable() })),
-  reports: z.array(z.object({ childId: z.string(), turn: z.number(), callId: z.string(), messageId: z.string() })),
+  reports: z.array(z.object({ childId: z.string(), turn: z.number(), callId: z.string(), messageId: z.string(), hostBudgetAfterSeq: z.number().int().nonnegative().optional() })),
 })
 
 export const POSTMAN_TASK_DOMAIN = defineDomain({
@@ -21,11 +21,18 @@ export const POSTMAN_TASK_DOMAIN = defineDomain({
       artifactRequests: z.array(z.string()),
       lifecycle: workerLifecycle.optional() }).nullable().optional(),
     workers: z.record(z.string(), z.object({
-      id: z.string(), label: z.string(), workerType: z.enum(['luna', 'sol']).optional(),
+      id: z.string(), label: z.string(), workerType: z.enum(['luna', 'sol', 'secretary']).optional(), ownerSessionId: z.string().optional(),
+      pendingBudgets: z.record(z.string(), z.unknown()).optional(),
+      budget: z.object({ assignmentId: z.string(), task: z.string(), used: z.number().int().nonnegative(),
+        softLimit: z.number().int().positive(), hardLimit: z.number().int().positive(),
+        exhausted: z.boolean(), notified: z.boolean(), reported: z.boolean() }).optional(),
       state: z.enum(['intent', 'ready', 'uncertain', 'stopping']),
       delivery: z.enum(['none', 'pending', 'unknown']),
       artifactRequests: z.array(z.string()), lifecycle: workerLifecycle.optional(),
     })).optional(),
+    secretaryLedger: z.object({ revision: z.number().int().nonnegative(), content: z.string(), updatedBy: z.string() }).optional(),
+    // Retired bindings are audit only, never quota/authority.
+    retiredWorkers: z.array(z.unknown()).optional(),
     // Leader-owned authority survives Worker retirement and Bridge journal cleanup.
     artifactGrants: z.record(z.string(), z.object({
       requestId: z.string(), repository: z.string(), resultZip: z.string(),

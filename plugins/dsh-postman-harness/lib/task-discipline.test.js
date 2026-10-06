@@ -64,7 +64,7 @@ test('actual production Leader, fresh Worker, next step, same Worker follow-up a
   for(const name of [...POSTMAN_LEADER_TOOL_ALLOWLIST,'ptc_execute']) if(!ctx.tools.get(name))
     ctx.tools.register(defineTool({name,description:name,parameters:{},output,execute:()=>({ok:true})}))
   class Model extends LlmAdapter {
-    async resolveModel(provider,id) { return {provider,id,name:id,inputModalities:['text'],reasoning:{efforts:[{id:'max',name:'Max'}]}} }
+    async resolveModel(provider,id) { return {provider,id,name:id,inputModalities:['text'],reasoning:{efforts:[{id:'low',name:'Low'},{id:'max',name:'Max'}]}} }
     async *stream(request) {
       const agent = ctx.agents.currentInitiator()
       assertDiscipline(request)

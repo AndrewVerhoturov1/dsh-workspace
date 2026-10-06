@@ -1,3 +1,3 @@
 name: Postman Leader PTC Experimental
-description: Experimental Postman supervisor with the production composition and an isolated ptc_execute pilot; children and production do not receive PTC.
+description: Experimental Postman supervisor with the production composition and an isolated ptc_execute pilot; exact managed Sol receives a separate local PTC profile; FAST children and production Leader do not receive PTC.
 order: 5

@@ -60,17 +60,30 @@ export function workerEvidence(worker, child, leader) {
     return { ready: false, reason: 'Worker has an unclosed or missing turn' }
   const reports = worker.lifecycle.reports ?? []
   for (const [turnId, turn] of turns) {
-    if (turn.end !== 'completed') return { ready: false, reason: 'Worker turn did not complete normally' }
     const assigned = [...turn.consumed].filter(id => assignmentIds.has(id))
     for (const id of assigned) consumed.add(id)
     // Every meaningful turn, including native followups outside Postman admissions,
     // needs its own final result after all work in that turn settled.
-    if (!turn.actions.length) continue
+    if (!turn.actions.length) {
+      if (turn.end !== 'completed') return {ready:false,reason:'Worker turn did not complete normally'}
+      continue
+    }
     const valid = reports.some(report => {
       if (report.childId !== worker.id || report.turn !== turnId ||
           !parentEvents.some(event => event.type === 'user/message' && idOf(event) === report.messageId &&
             event.data?.source?.kind === 'subagent-report' &&
             event.data.source.senderSessionId === worker.id)) return false
+      // Exhaustion is a delivered Host blocker, never task success. It may
+      // settle a normally completed or budget-blocked turn for exact retirement.
+      if (Number.isInteger(report.hostBudgetAfterSeq)) {
+        if (!['completed','blocked'].includes(turn.end)) return false
+        const cutoff = events.findIndex(e => e.seq === report.hostBudgetAfterSeq)
+        return cutoff >= 0 && assigned.every(id => turn.claimedAt.get(id) <= cutoff) &&
+          turn.calls.every(item => {const result = turn.results.get(item.event.data.callId);
+            return result && result.position > item.position && result.position <= cutoff}) &&
+          !turn.actions.some(action => action.position > cutoff)
+      }
+      if (turn.end !== 'completed') return false
       const call = turn.calls.find(item => item.event.data.callId === report.callId &&
         item.event.data.name === 'report' && reportOutput(item.event))
       const result = turn.results.get(report.callId)

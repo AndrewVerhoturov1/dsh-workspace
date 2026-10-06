@@ -248,7 +248,7 @@ test('Worker receives exact context and REQ; apply rejects another worktree befo
   assert.equal(accepted.status, 'POSTMAN_WORKER_TASK_ACCEPTED')
   const prompt = starts[0].request.prompt[0].text
   assert.ok(prompt.includes('Trusted Host artifact REQ: ' + REQ + '.'))
-  assert.ok(prompt.includes('Leader task branch ' + prepared.branch + ' and worktree ' + prepared.worktree))
+  assert.ok(prompt.includes('existing task branch ' + prepared.branch + ' and worktree ' + prepared.worktree))
   assert.ok(prompt.includes('implementation_artifact_apply({requestId: ' + JSON.stringify(REQ) + ', worktree: ' + JSON.stringify(prepared.worktree) + '});'))
   assert.match(prompt, /central runner PASS.*authoritatively verifies declared manifest\.tests/)
   assert.match(prompt, /do not manually rerun identical tests unless relevant/)

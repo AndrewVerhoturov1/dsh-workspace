@@ -9,7 +9,7 @@
 // This module is deliberately data-only. ptc-adapter.js is responsible for
 // injecting the text into the system prompt of an authorized Postman PTC agent.
 
-export const POSTMAN_PTC_DISCIPLINE_VERSION = 3
+export const POSTMAN_PTC_DISCIPLINE_VERSION = 4
 
 export const POSTMAN_PTC_DISCIPLINE = String.raw`
 # Postman PTC programming discipline
@@ -286,35 +286,16 @@ model
 The model should not wake merely to approve a deterministic transition it already
 knew before the PTC program started.
 
-## 11. Worker mutation pattern
+## 11. Local role execution
 
-Worker PTC-first is mandatory when ptc_execute is available: read/glob/grep/
-web_fetch/web_search/write/edit MUST run through PTC; Host rejects model-direct
-calls. Put the first safe mechanical phase in ONE PTC program. Do not use shell
-to bypass PTC-first for these filesystem/search operations. Shell is for commands,
-tests, processes and operations absent from the Worker PTC profile. Keep FYI and
-progress for the substantive report. notify_parent is only for a decision needed
-now, with exact NEEDS_LEADER_GUIDANCE: prefix, evidence and exact decision; then
-report the blocker and stop tools until the Leader decides.
+Postman PTC belongs to the exact experimental Leader and exact Host-managed Sol Worker,
+with separate profiles. Sol uses PTC-first for its own batchable engineering flow,
+and Worker-first for independent cheap subtasks (two Workers in parallel when independent).
+Sol Worker controls stay direct-only and Host checks exact parent ownership on every operation.
+PTC grants no supervisor, Bridge, Secretary, Sol creation or user-approval authority to Sol.
+Ordinary Worker and Secretary use direct tools with a finite FAST assignment budget;
+neither receives ptc_execute, Worker controls or generic delegation.
 
-For an authorized Postman Worker, a typical PTC mutation sequence may be:
-
-model
--> PTC
-   -> grep/glob
-   -> read relevant file
-   -> mechanically verify the expected old content
-   -> write/edit
-   -> reread
-   -> mechanically verify the expected new content
-   -> return compact evidence
--> model
-
-If the reread proves the exact expected change, a separate model round between edit
-and reread is wasteful.
-
-If the actual old content differs materially from the expected precondition, stop
-before mutation and return control to the model.
 
 ## 12. Side effects are not transactional
 
@@ -423,7 +404,7 @@ Never infer that a tool exists from:
 
 Do not try to reach an unavailable capability through another generic tool.
 
-Leader and Worker PTC profiles are intentionally different.
+Only the experimental Leader has a PTC profile. Child role execution is direct.
 
 ## 18. No native Harness PTC substitution
 
