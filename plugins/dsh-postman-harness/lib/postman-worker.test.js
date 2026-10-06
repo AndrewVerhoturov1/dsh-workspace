@@ -66,21 +66,22 @@ test('Worker request pins Luna and denies only registered Postman tools', () => 
   assert.equal(spec.request.parent, parent)
   assert.equal(spec.signal, signal)
   assert.deepEqual(spec.request.prompt, [{ type: 'text', text: 'local work' }])
-  assert.deepEqual(spec.request.agentOptions, { provider: 'codex', model: 'gpt-6-luna', reasoningEffort: 'max' })
+  assert.deepEqual(spec.request.agentOptions, { provider: 'codex', model: 'gpt-6-luna', reasoningEffort: 'low' })
   assert.deepEqual(POSTMAN_WORKER_AGENT_OPTIONS, spec.request.agentOptions)
   assert.deepEqual(spec.request.toolFilter, { deny: denied })
   assert.equal(Object.hasOwn(spec.request.toolFilter, 'allow'), false)
   assert.ok(denied.length > 3)
-  assert.deepEqual(denied, registeredTools.filter(name => name.startsWith('postman_')))
+  assert.deepEqual(denied.filter(name => name.startsWith('postman_')), [...new Set(registeredTools.filter(name => name.startsWith('postman_')))])
+  for (const name of ['subagent','subagent_fork']) assert.ok(denied.includes(name))
   assert.equal(denied.includes('report'), false)
   assert.deepEqual(postmanWorkerDeniedTools({ schemas: () => [
     { name: 'postman_future_control' }, { name: 'write' }, { name: 'report' },
-  ] }), ['postman_future_control'])
+  ] }).filter(name => name.startsWith('postman_')), ['postman_future_control'])
   assert.throws(() => buildPostmanWorkerStartRequest(parent, 'local work', signal, []),
     /POSTMAN_WORKER_TRANSPORT_BOUNDARY_REQUIRED/)
   assert.match(POSTMAN_WORKER_PERSONA, /report tool/)
   assert.match(POSTMAN_WORKER_PERSONA, /later tasks/)
-  assert.match(POSTMAN_WORKER_PERSONA, /Only if you are granted Postman's own ptc_execute.*runtime-injected.*mandatory/)
+  assert.match(POSTMAN_WORKER_PERSONA, /Никогда не пиши и не используй PTC/)
   assert.doesNotMatch(POSTMAN_WORKER_PERSONA, /# Postman PTC programming discipline/)
 })
 
@@ -115,8 +116,7 @@ test('Leader hides coding tools; Worker keeps coding and report but no Postman c
   // Ancestor restriction and per-child denial intersect; report is scoped to the child.
   const visibleToWorker = name => !childRestriction.deny.includes(name) &&
     !workerFilter.deny.includes(name)
-  for (const name of ['read', 'read_image', 'glob', 'grep', 'write', 'edit', 'pwsh', 'web_search', 'subagent',
-    'subagent_fork', 'report']) assert.equal(visibleToWorker(name), true, name)
+  for (const name of ['read', 'read_image', 'glob', 'grep', 'write', 'edit', 'pwsh', 'web_search', 'report']) assert.equal(visibleToWorker(name), true, name)
   for (const name of registeredTools.filter(name => name.startsWith('postman_'))) {
     assert.equal(visibleToWorker(name), false, name)
   }
@@ -164,7 +164,7 @@ test('first task creates a child; second task follows up in the same durable Ses
   assert.equal(second.messageId, 'followup-1')
   assert.equal(calls.starts.length, 1)
   assert.deepEqual(calls.starts[0].request.toolFilter,
-    { deny: registeredTools.filter(name => name.startsWith('postman_')) })
+    { deny: postmanWorkerDeniedTools(registry) })
   assert.equal(calls.followups.length, 1)
   assert.equal(calls.followups[0].parent, a)
   assert.equal(calls.followups[0].content[0].text, 'second')
@@ -482,7 +482,7 @@ test('bridge plugin registers all Worker tools and owns one disposable attachmen
     },
   }
   await applyBridgePlugin(ctx)
-  assert.deepEqual([...registrations.keys()].sort(), ['implementation_artifact_apply', 'notify_parent', 'postman_bridge', 'postman_bridge_status', 'postman_input_files', 'postman_sol_worker', 'postman_task_prepare', 'postman_task_restore', 'postman_worker', 'postman_worker_interrupt', 'postman_worker_list', 'postman_worker_stop', 'postman_yield', 'ptc_execute'])
+  assert.deepEqual([...registrations.keys()].sort(), ['implementation_artifact_apply', 'notify_parent', 'postman_bridge', 'postman_bridge_list', 'postman_bridge_status', 'postman_input_files', 'postman_secretary', 'postman_secretary_ledger', 'postman_sol_worker', 'postman_task_prepare', 'postman_task_restore', 'postman_worker', 'postman_worker_compact', 'postman_worker_fresh', 'postman_worker_interrupt', 'postman_worker_list', 'postman_worker_stop', 'postman_yield', 'ptc_execute'])
   assert.deepEqual(restriction.allow, postmanBridgeRestrictionForAgent(a).allow)
   assert.ok(listeners.has('agent-preset/selected'))
   assert.ok(listeners.has('agent/disposed'))

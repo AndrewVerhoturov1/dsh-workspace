@@ -30,32 +30,32 @@ async function fixture({ start = null, followup = null, changeRecord = null, dra
   return { tools, calls, registry, ctx, agents, children, contexts }
 }
 
-test('three independent reservations run without waiting for model completion; fourth rejects before start', async () => {
+test('two independent reservations run without waiting for model completion; third rejects before start', async () => {
   const f = await fixture()
-  const result = await Promise.all(['A', 'B', 'C', 'D'].map(label => task(f.tools, { createNew: true, label })))
+  const result = await Promise.all(['A', 'B', 'C'].map(label => task(f.tools, { createNew: true, label })))
   assert.deepEqual(result.map(x => x.status), [
     'POSTMAN_WORKER_TASK_ACCEPTED', 'POSTMAN_WORKER_TASK_ACCEPTED',
-    'POSTMAN_WORKER_TASK_ACCEPTED', 'POSTMAN_WORKER_LIMIT_REACHED'])
-  assert.equal(new Set(result.slice(0, 3).map(x => x.workerSessionId)).size, 3)
-  assert.equal(f.calls.starts.length, 3)
-  assert.equal(Object.keys(f.registry.get(leader.id).workers).length, 3)
+    'POSTMAN_WORKER_LIMIT_REACHED'])
+  assert.equal(new Set(result.slice(0, 2).map(x => x.workerSessionId)).size, 2)
+  assert.equal(f.calls.starts.length, 2)
+  assert.equal(Object.keys(f.registry.get(leader.id).workers).length, 2)
   assert.equal(f.registry.get(leader.id).bridgeOperations.job.state, 'pending')
   const listing = await run(f.tools.listTool, {})
-  assert.deepEqual(listing.quota, { luna: { used: 3, limit: 3 }, sol: { used: 0, limit: 1 } })
-  assert.deepEqual(listing.workers.map(x => x.runtime), ['cold-continuable', 'cold-continuable', 'cold-continuable'])
+  assert.deepEqual(listing.quota, { secretary: { used: 0, limit: 1 }, luna: { used: 2, limit: 2 }, sol: { used: 0, limit: 1 } })
+  assert.deepEqual(listing.workers.map(x => x.runtime), ['cold-continuable', 'cold-continuable'])
   assert.equal((await task(f.tools)).status, 'POSTMAN_WORKER_TARGET_REQUIRED')
   assert.equal((await run(f.tools.interruptTool, { task: 'next' })).status, 'POSTMAN_WORKER_TARGET_REQUIRED')
   assert.equal((await run(f.tools.stopTool, {})).status, 'POSTMAN_WORKER_TARGET_REQUIRED')
 })
 
-test('pending start reserves a slot, other starts progress and do not exceed three', async () => {
+test('pending start reserves a slot, other starts progress and do not exceed two', async () => {
   let release
   const gate = new Promise(resolve => { release = resolve })
   const f = await fixture({ start: spec => spec.label === 'A' ? gate : undefined })
   const a = task(f.tools, { createNew: true, label: 'A' })
   const others = await Promise.all(['B', 'C', 'D'].map(label => task(f.tools, { createNew: true, label })))
   assert.equal(others[0].created, true)
-  assert.equal(others[1].created, true)
+  assert.equal(others[1].status, 'POSTMAN_WORKER_LIMIT_REACHED')
   assert.equal(others[2].status, 'POSTMAN_WORKER_LIMIT_REACHED')
   assert.equal(f.registry.get(leader.id).workers[f.calls.starts[0].childId].state, 'intent')
   release()
@@ -67,7 +67,7 @@ test('addressed followups and stop leave peers untouched; repeated stop cannot s
   const gate = new Promise(resolve => { release = resolve })
   let aId
   const f = await fixture({ followup: id => id === aId ? gate : undefined })
-  const [a, b, c] = await Promise.all(['A', 'B', 'C'].map(label => task(f.tools, { createNew: true, label })))
+  const [a, b, c] = await Promise.all(['A', 'B', 'C'].map(label => label === 'C' ? run(f.tools.secretaryTool, { task: 'facts', createNew: true, label }) : task(f.tools, { createNew: true, label })))
   aId = a.workerSessionId
   const blockedA = run(f.tools.interruptTool, { workerSessionId: a.workerSessionId, task: 'A next' })
   const nextB = await run(f.tools.interruptTool, { workerSessionId: b.workerSessionId, task: 'B next' })
@@ -89,7 +89,7 @@ test('a trusted REQ belongs only to selected exact live child and disappears at 
   const requestId = 'REQ_20260925T112233Z_5678'
   const grants = { resolve: async () => ({ repository: 'AndrewVerhoturov1/dsh-workspace', requestId }) }
   const worker = createPostmanWorkerTools(f.ctx, grants, f.contexts)
-  const [a, b, c] = await Promise.all(['A', 'B', 'C'].map(label => task(worker, { createNew: true, label })))
+  const [a, b, c] = await Promise.all(['A', 'B', 'C'].map(label => label === 'C' ? run(worker.secretaryTool, { task: 'facts', createNew: true, label }) : task(worker, { createNew: true, label })))
   const childA = notice(a.workerSessionId), childB = notice(b.workerSessionId), childC = notice(c.workerSessionId)
   for (const agent of [childA, childB, childC]) f.agents.set(agent.id, agent)
   assert.equal((await task(worker, { workerSessionId: a.workerSessionId, artifactRequestId: requestId })).created, false)
@@ -101,7 +101,7 @@ test('a trusted REQ belongs only to selected exact live child and disappears at 
   worker.dispose()
   const restarted = createPostmanWorkerTools(f.ctx, grants, f.contexts)
   assert.equal(restarted.ownerOf(childA, requestId), null)
-  assert.equal((await run(restarted.interruptTool, { workerSessionId: c.workerSessionId, task: 'continue' })).status, 'POSTMAN_WORKER_INTERRUPT_TASK_ACCEPTED')
+  assert.equal((await run(restarted.secretaryTool, { workerSessionId: c.workerSessionId, task: 'continue' })).status, 'POSTMAN_WORKER_TASK_ACCEPTED')
   assert.equal(restarted.ownerOf(childA, requestId), null)
 })
 
@@ -117,13 +117,13 @@ test('unknown exact and conflicting create arguments never redirect or create', 
 
 test('inactive peers keep exact session IDs through shared-operation pause', async () => {
   const f = await fixture()
-  const [a, b, c] = await Promise.all(['A', 'B', 'C'].map(label => task(f.tools, { createNew: true, label })))
+  const [a, b, c] = await Promise.all(['A', 'B', 'C'].map(label => label === 'C' ? run(f.tools.secretaryTool, { task: 'facts', createNew: true, label }) : task(f.tools, { createNew: true, label })))
   assert.equal(await f.tools.pauseForOperation(leader.id, a.workerSessionId), true)
   assert.deepEqual((await run(f.tools.listTool, {})).workers.map(x => x.workerSessionId),
     [a.workerSessionId, b.workerSessionId, c.workerSessionId])
   assert.equal((await task(f.tools, { workerSessionId: b.workerSessionId })).status, 'POSTMAN_WORKER_TASK_ACCEPTED')
   assert.equal(await f.tools.prepareRestore(leader.id), true)
-  assert.equal((await task(f.tools, { workerSessionId: c.workerSessionId })).status, 'POSTMAN_WORKER_TASK_ACCEPTED')
+  assert.equal((await run(f.tools.secretaryTool, { task: 'facts', workerSessionId: c.workerSessionId })).status, 'POSTMAN_WORKER_TASK_ACCEPTED')
 })
 
 test('removed binding is not proof that a live orphan stopped mutating files', async () => {
@@ -191,7 +191,7 @@ test('late start cannot revive replaced exact binding or touch peer binding', as
   assert.deepEqual(f.calls.drains.map(x => x.ids), [[originalId]])
 })
 
-test('failed late-child release leaves uncertain binding counted against three slots', async () => {
+test('failed late-child release leaves uncertain binding counted against two slots', async () => {
   const gate = deferred(), entered = deferred()
   const f = await fixture({ start: async spec => {
     if (spec.label === 'A') { entered.resolve(); await gate.promise }
@@ -199,6 +199,7 @@ test('failed late-child release leaves uncertain binding counted against three s
   const a = task(f.tools, { createNew: true, label: 'A' })
   await entered.promise
   const [b, c] = await Promise.all(['B', 'C'].map(label => task(f.tools, { createNew: true, label })))
+  assert.equal(c.status, 'POSTMAN_WORKER_LIMIT_REACHED')
   // The exact Leader is swapped during A, then restored only for querying limits.
   f.agents.set(leader.id, { ...leader })
   gate.resolve()
@@ -206,7 +207,6 @@ test('failed late-child release leaves uncertain binding counted against three s
   f.agents.set(leader.id, leader)
   assert.equal((await task(f.tools, { createNew: true })).status, 'POSTMAN_WORKER_LIMIT_REACHED')
   assert.equal(f.registry.get(leader.id).workers[b.workerSessionId].state, 'ready')
-  assert.equal(f.registry.get(leader.id).workers[c.workerSessionId].state, 'ready')
 })
 
 

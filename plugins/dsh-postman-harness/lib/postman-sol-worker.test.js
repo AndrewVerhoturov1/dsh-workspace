@@ -59,30 +59,30 @@ test('Sol pins model/xhigh, shared worktree, persona and transport-only deny; Lu
   assert.deepEqual(spec.request.agentOptions, { provider: 'codex', model: 'gpt-6.1-sol', reasoningEffort: 'xhigh' })
   assert.deepEqual(spec.request.agentOptions, POSTMAN_SOL_WORKER_AGENT_OPTIONS)
   assert.ok(spec.request.prompt[0].text.includes('task/sol') && spec.request.prompt[0].text.includes('C:/task/sol'))
-  assert.match(spec.request.persona, /continuable Sol subagent/)
-  assert.match(spec.request.persona, /report tool.*later tasks/s)
+  assert.match(spec.request.persona, /Postman Sol Worker/)
+  assert.match(spec.request.persona, /Host-injected canonical role skill/)
   assert.ok(spec.request.toolFilter.deny.includes('postman_sol_worker'))
   assert.ok(!spec.request.toolFilter.deny.includes('report'))
   assert.ok(!spec.request.toolFilter.deny.includes('write'))
   await f.run(f.tools.taskTool, { task: 'ordinary', createNew: true, workerType: 'sol' })
-  assert.deepEqual(f.calls.starts[1].request.agentOptions, { provider: 'codex', model: 'gpt-6-luna', reasoningEffort: 'max' })
+  assert.deepEqual(f.calls.starts[1].request.agentOptions, { provider: 'codex', model: 'gpt-6-luna', reasoningEffort: 'low' })
 })
 
-test('one Sol plus three Luna have separate atomic reservations, including pending Sol', async t => {
+test('one Sol plus two Luna have separate atomic reservations, including pending Sol', async t => {
   const gate = Promise.withResolvers(), entered = Promise.withResolvers()
   const f = await fixture(t, { start: async spec => { if (spec.request.agentOptions.model === 'gpt-6.1-sol') { entered.resolve(); await gate.promise } } })
   const sol = f.run(f.tools.solTaskTool, { task: 'complex', createNew: true })
   await entered.promise
-  const others = await Promise.all([1, 2, 3, 4].map(n => f.run(f.tools.taskTool, { task: 'Luna ' + n, createNew: true })))
-  assert.deepEqual(others.map(r => r.status), ['POSTMAN_WORKER_TASK_ACCEPTED', 'POSTMAN_WORKER_TASK_ACCEPTED', 'POSTMAN_WORKER_TASK_ACCEPTED', 'POSTMAN_WORKER_LIMIT_REACHED'])
+  const others = await Promise.all([1, 2, 3].map(n => f.run(f.tools.taskTool, { task: 'Luna ' + n, createNew: true })))
+  assert.deepEqual(others.map(r => r.status), ['POSTMAN_WORKER_TASK_ACCEPTED', 'POSTMAN_WORKER_TASK_ACCEPTED', 'POSTMAN_WORKER_LIMIT_REACHED'])
   assert.equal((await f.run(f.tools.solTaskTool, { task: 'second Sol', createNew: true })).status, 'POSTMAN_SOL_WORKER_LIMIT_REACHED')
-  assert.equal(f.calls.starts.length, 4)
+  assert.equal(f.calls.starts.length, 3)
   gate.resolve(); const accepted = await sol
   assert.equal(accepted.created, true)
   assert.equal(Object.values(f.registry.get(f.parent.id).workers).filter(r => r.workerType === 'sol').length, 1)
   assert.equal((await f.run(f.tools.solTaskTool, { task: 'reuse without ID' })).workerSessionId, accepted.workerSessionId)
   const list = await f.run(f.tools.listTool)
-  assert.deepEqual(list.workers.map(r => [r.workerType, r.model]), [['sol', 'gpt-6.1-sol'], ...[1, 2, 3].map(() => ['luna', 'gpt-6-luna'])])
+  assert.deepEqual(list.workers.map(r => [r.workerType, r.model]), [['sol', 'gpt-6.1-sol'], ...[1, 2].map(() => ['luna', 'gpt-6-luna'])])
 })
 
 test('Sol creation and follow-up do not access the Harness approval service', async t => {
@@ -179,8 +179,8 @@ test('Leader skill preserves the Sol authorization contract through fresh contex
   assert.match(skill, /Не меняй permission preset[^.]*approval: ask\/never[^.]*глобальную permission-систему Harness/)
   assert.match(skill, /Не используй обычные[^.]*postman_worker[^.]*postman_worker_interrupt[^.]*для Sol/)
   const freshContext = skill.slice(skill.indexOf('### Visibility, compact и fresh context'), skill.indexOf('## 19.'))
-  assert.match(freshContext, /retirement\/compact\/restart[^.]*не требуют[^.]*подтверждения[^.]*ask_user_question/)
-  assert.match(freshContext, /не разрешают[^.]*автоматически выбрать Sol/)
+  assert.match(freshContext, /выбранный пользователем Sol route сохраняется[^.]*повторное user confirmation не требуется/)
+  assert.match(freshContext, /fresh не разрешает автоматический выбор Sol/)
   assert.doesNotMatch(skill, /Перед первым назначением[^.\n]*ask_user_question|обязательно[^.\n]*положительн[^.\n]*ask_user_question/i)
 })
 

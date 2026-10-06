@@ -47,6 +47,7 @@ test('native manager auto-wakes yielding Leader on Worker report and releases Ag
   const statuses = []
   ctx.on('agent/disposed', ({ agent }) => { if (agent.id !== 'leader') released.resolve(agent.id) })
   class FakeAdapter extends LlmAdapter {
+    async resolveModel(provider,model){return {provider,id:model,name:model,reasoning:{efforts:[{id:'low',name:'Low'}]}}}
     async *stream() {
       const agent = ctx.agents.currentInitiator()
       const count = (calls.get(agent.id) ?? 0) + 1
@@ -62,12 +63,15 @@ test('native manager auto-wakes yielding Leader on Worker report and releases Ag
           { agent, signal: new AbortController().signal })).status, 'POSTMAN_WORKER_LIMIT_REACHED')
         block = { type: 'tool-call', id: 'yield', name: 'postman_yield', arguments: '{}' }
       }
-      else if (agent.id !== 'leader' && count === 1) block = { type: 'tool-call', id: 'report',
+      else if (agent.id !== 'leader' && count === 1) {
+        const readiness=Promise.withResolvers();ctx.on('session/event',(s,e)=>{if(s.id==='leader'&&e.type==='tool/result'&&e.data.message?.source.callId==='yield')readiness.resolve()})
+        await readiness.promise
+        block = { type: 'tool-call', id: 'report',
         name: 'report', arguments: '{"output":"done"}' }
-      else if (agent.id === 'leader' && count === 3) {
+      } else if (agent.id === 'leader' && count === 3) {
         await released.promise
         block = { type: 'tool-call', id: 'close', name: 'postman_worker_stop',
-          arguments: JSON.stringify({ workerSessionId: await released.promise }) }
+          arguments: JSON.stringify({ workerSessionId: await released.promise, mode: 'close' }) }
       } else block = { type: 'text', text: 'done' }
       yield { type: 'block-end', index: 0, block }
       yield { type: 'finish', reason: { kind: 'stop' } }
@@ -86,14 +90,17 @@ test('native manager auto-wakes yielding Leader on Worker report and releases Ag
     branch: context.branch, worktree: dir, baseCommit: '0'.repeat(40), stage: 'ready',
     diagnostic: null, workers: {}, runner: { state: 'none', requestId: null }, bridge: null })
   const worker = createPostmanWorkerTools(ctx, undefined, contexts)
+  ctx.on('agent/created',async({agent})=>{await worker.confirmActivation(agent)})
+  const nativeStart=ctx.subagents.startContinuable.bind(ctx.subagents)
+  ctx.subagents.startContinuable=async spec=>{const accepted=await nativeStart(spec);await ctx.sessionPersistence.append(accepted.childId,[]);return accepted}
   ctx.tools.register(worker.taskTool); ctx.tools.register(worker.stopTool)
   ctx.tools.register(createPostmanYieldTool(ctx))
   installPostmanWorkerReportObserver(ctx, worker)
   const leader = ctx.agentLoop.create('leader', { provider: 'codex', model: 'gpt-6-luna' },
     { cwd: dir, agentPreset: 'postman-leader' })
   assert.equal(ctx.agents.get('leader'), leader)
-  for (const label of ['B', 'C']) {
-    // Reserve two independent real children before the model issues A's task.
+  for (const label of ['B']) {
+    // Reserve one independent real child before the model issues A's task.
     const accepted = await worker.taskTool.execute({ task: label, createNew: true, label },
       { agent: leader, signal: new AbortController().signal })
     assert.equal(accepted.status, 'POSTMAN_WORKER_TASK_ACCEPTED')
@@ -118,7 +125,7 @@ test('native manager auto-wakes yielding Leader on Worker report and releases Ag
   const peerBefore = Object.fromEntries([...peerIds].map(id => [id, structuredClone(registry.get('leader').workers[id])]))
   assert.ok(leader.session.events.some(e => e.type === 'user/message' &&
     e.data.source?.kind === 'subagent-report' && e.data.source.senderSessionId === childId))
-  assert.equal(leader.session.events.filter(e => e.type === 'turn/start').length, 3)
+  assert.equal(leader.session.events.filter(e => e.type === 'turn/start').length, 2)
   assert.equal(leader.session.events.some(e => e.type === 'assistant/message' &&
     !e.data.message.content.length), false)
   peersMayFinish.resolve()

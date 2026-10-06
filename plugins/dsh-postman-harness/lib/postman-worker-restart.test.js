@@ -178,11 +178,6 @@ test('compact admits only the exact resident idle Worker without changing bindin
     assert.equal(agent, child); assert.equal(receivedSignal, signal); calls++; return { summary: true }
   } }
   child.ctx = { get: name => name === 'compaction' ? f.ctx.compaction : undefined }
-  f.ctx.subagents.compactContinuableChild = async (parent, target, check, receivedSignal) => {
-    assert.equal(parent, leader); assert.equal(target, id)
-    if (child.status !== 'idle' || child.inbox.hasPending || !await check(child)) return false
-    return { result: await f.ctx.compaction.compactNow(child, receivedSignal) }
-  }
   const snapshot = f.registry.get(leader.id).workers[id]
   const compact = args => worker.compactTool.execute(args, { agent: leader, signal })
   assert.equal((await compact({ workerSessionId: id })).status, 'POSTMAN_WORKER_COMPACTED')
@@ -228,7 +223,7 @@ test('native delivered report admits strict close without approval or synthetic 
   const childCalls = new Map()
   class FakeAdapter extends LlmAdapter {
     async resolveModel(provider, model) {
-      return { provider, id: model, name: model, reasoning: { efforts: [{ id: 'max', name: 'Max' }] } }
+      return { provider, id: model, name: model, reasoning: { efforts: [{ id: 'low', name: 'Low' }, { id: 'max', name: 'Max' }] } }
     }
     async *stream() {
       const agent = ctx.agents.currentInitiator()
@@ -249,12 +244,14 @@ test('native delivered report admits strict close without approval or synthetic 
     isRestoring: () => false, hasActiveOperation: () => false }
   const worker = createPostmanWorkerTools(ctx, undefined, contexts)
   installPostmanWorkerReportObserver(ctx, worker)
+  ctx.on('agent/created', ({agent}) => worker.confirmActivation(agent))
   const parent = ctx.agentLoop.create('leader', { provider: 'codex', model: 'test' },
     { cwd: dir, agentPreset: 'postman-leader' })
   const accepted = await worker.taskTool.execute({ task: 'report and finish' }, { agent: parent, signal })
   assert.equal(accepted.status, 'POSTMAN_WORKER_TASK_ACCEPTED')
   const childId = accepted.workerSessionId
   await ctx.agents.get(childId).whenIdle()
+  await ctx.sessionPersistence.append(childId, [])
   const saved = await ctx.sessionPersistence.inspect(childId)
   assert.ok(saved.events.some(event => event.type === 'turn/end'))
   parent.followup({ id: 'parent-wake', role: 'user', source: { kind: 'user', form: 'direct' },
@@ -370,7 +367,7 @@ test('closed marker reconciliation frees only proven exact binding after registr
     isRestoring: () => false, hasActiveOperation: () => false })
   const a = createPostmanWorkerTools(f.ctx, undefined, contexts(first))
   const ids = []
-  for (let i = 0; i < 3; i++) ids.push((await a.taskTool.execute({ task: 'work', createNew: true }, { agent: leader, signal })).workerSessionId)
+  for (let i = 0; i < 2; i++) ids.push((await a.taskTool.execute({ task: 'work', createNew: true }, { agent: leader, signal })).workerSessionId)
   assert.equal((await a.taskTool.execute({ task: 'full', createNew: true }, { agent: leader, signal })).status, 'POSTMAN_WORKER_LIMIT_REACHED')
   const closed = ids[0]
   await first.change(leader.id, row => ({ ...row, workers: { ...row.workers,
@@ -385,9 +382,9 @@ test('closed marker reconciliation frees only proven exact binding after registr
   assert.notEqual(replacement.workerSessionId, closed)
   assert.equal(second.get(leader.id).workers[closed], undefined)
   assert.equal(second.get(leader.id).workers[ids[1]].state, 'uncertain')
-  assert.equal(Object.keys(second.get(leader.id).workers).length, 3)
+  assert.equal(Object.keys(second.get(leader.id).workers).length, 2)
   const listed = await restarted.listTool.execute({}, { agent: leader, signal })
-  assert.equal(listed.quota.luna.used, 3)
+  assert.equal(listed.quota.luna.used, 2)
   restarted.dispose(); await second.close(); await backend.close()
 })
 
@@ -423,7 +420,7 @@ test('Worker list is observational and separates live, cold, closed and diagnost
   const worker = f.tool()
   const a = await worker.taskTool.execute({ task: 'one', createNew: true }, { agent: leader, signal })
   const b = await worker.taskTool.execute({ task: 'two', createNew: true }, { agent: leader, signal })
-  const c = await worker.taskTool.execute({ task: 'three', createNew: true }, { agent: leader, signal })
+  const c = await worker.secretaryTool.execute({ task: 'facts', createNew: true }, { agent: leader, signal })
   const active = { id: a.workerSessionId, status: 'running', session: { header: {
     id: a.workerSessionId, origin: 'subagent', delegationDepth: 1, parentSession: leader.id },
     events: [{ type: 'turn/start', data: { turn: 7 } }] } }
@@ -436,7 +433,7 @@ test('Worker list is observational and separates live, cold, closed and diagnost
   const read = async () => worker.listTool.execute({}, { agent: leader, signal })
   const before = JSON.stringify(f.registry.get(leader.id).workers)
   const list = await read()
-  assert.equal(list.quota.luna.used, 3)
+  assert.equal(list.quota.luna.used, 2)
   assert.deepEqual(list.workers.map(x => x.runtime), ['resident-running', 'cold-continuable', 'corrupt/diagnostic'])
   assert.equal(list.workers[0].turn, 'open')
   assert.equal(list.workers[0].report, 'unknown')

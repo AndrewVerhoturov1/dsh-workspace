@@ -1,6 +1,6 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { z } from 'zod'
-import { createPtcAdapter, WORKER_MUTATION_PROFILE } from './ptc-adapter.js'
+import { createPtcAdapter, SOL_WORKER_PROFILE } from './ptc-adapter.js'
 import { CurrentAttachmentStore, createPostmanInputFilesTool, postmanInputGrants } from './postman-input-files.js'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { parsePostmanUserTurn } from './direct-current-turn.js'
@@ -17,7 +17,10 @@ import {
 } from './postman-bridge-core.js'
 
 export const name = 'dsh-postman-harness-bridge'
-export const Config = z.object({ localDevelopment: z.boolean().default(false) }).default({})
+export const Config = z.object({
+  localDevelopment: z.boolean().default(false),
+  fastBudget: z.object({softLimit: z.number().int().positive().default(12), hardLimit: z.number().int().positive().default(15)}).default({}),
+}).default({})
 export const inject = ['agents', 'subagents', 'tools', 'storageDomain', 'attachments', 'fs']
 
 function output() {
@@ -155,7 +158,7 @@ export function createPostmanYieldTool(ctx) {
 export function createPostmanChildNotifyTool(ctx, contexts, worker) {
   return defineTool({
     name: POSTMAN_CHILD_NOTIFY_TOOL_NAME,
-    description: 'Steer an untrusted intermediate message to the direct Postman Leader at the next safe step boundary; do not cancel a running tool.',
+    description: 'Steer one decision-relevant untrusted notification to the exact immediate Postman parent (Leader or Sol Worker); do not cancel a running tool.',
     parameters: { message: { type: 'string', required: true, description: 'Factual intermediate update for your direct parent.' } },
     output: output(),
     execute(args, exec) {
@@ -163,17 +166,17 @@ export function createPostmanChildNotifyTool(ctx, contexts, worker) {
       const header = child?.session?.header
       if (typeof args?.message !== 'string' || args.message.trim() === '')
         return { status: 'PARENT_NOTIFICATION_INVALID' }
-      if (header?.origin !== 'subagent' || header.delegationDepth !== 1 ||
+      if (header?.origin !== 'subagent' || ![1, 2].includes(header.delegationDepth) ||
           typeof header.parentSession !== 'string' || ctx.agents.get(child.id) !== child)
         return { status: 'PARENT_NOTIFICATION_CALLER_REJECTED' }
       const leader = ctx.agents.get(header.parentSession)
-      if (!leader || leader.id !== header.parentSession || !isTopLevelPostmanSupervisor(leader) ||
+      if (!leader || leader.id !== header.parentSession || !(isTopLevelPostmanSupervisor(leader) || worker?.roleOf(leader) === 'sol') ||
           typeof leader.steer !== 'function' ||
           !((contexts?.child(child.id) != null && contexts.child(child.id) === contexts.get(leader.id)) ||
             worker?.ownsNotification(child, leader.id)))
         return { status: 'PARENT_NOTIFICATION_CALLER_REJECTED' }
-      if (worker?.ownsNotification(child, leader.id) && !args.message.startsWith('NEEDS_LEADER_GUIDANCE:'))
-        return { status: 'POSTMAN_WORKER_NOTIFICATION_REJECTED', diagnostic: 'Use NEEDS_LEADER_GUIDANCE: only when a Leader decision is needed now; keep FYI for report' }
+      if (worker?.ownsNotification(child, leader.id) && !['NEEDS_LEADER_GUIDANCE:', 'NEEDS_PARENT_GUIDANCE:'].some(prefix => args.message.startsWith(prefix)))
+        return { status: 'POSTMAN_WORKER_NOTIFICATION_REJECTED', diagnostic: 'Use NEEDS_PARENT_GUIDANCE: only when an immediate parent decision is needed now; keep FYI for report' }
       const message = createUserMessage({
         content: [{ type: 'text', text: 'Background subagent ' + child.id + ':\n' + args.message }],
         source: { kind: 'subagent-report', form: 'relay', senderSessionId: child.id },
@@ -222,19 +225,16 @@ export async function apply(ctx, config = {}) {
       ptc.refresh(agent)
     }
   }
-  const worker = createPostmanWorkerTools(ctx, grants, postmanTaskContexts, { onBindingChange: refreshWorker, localDevelopment: config.localDevelopment === true })
+  const worker = createPostmanWorkerTools(ctx, grants, postmanTaskContexts, { onBindingChange: refreshWorker, localDevelopment: config.localDevelopment === true, fastBudget: config.fastBudget })
   const stopContextWatch = contexts.onContextChange(id => {
     postmanInputGrants.releaseStale(ctx.agents.get(id), contexts.get(id))
     worker.refreshLeader(id)
   })
   const jobs = createPostmanBridgeJobs(ctx, coordinator, grants, postmanTaskContexts, worker)
-  const ownsPtcWorker = agent => worker.ownsLiveWorker(agent) &&
-    isTopLevelPostmanPtcLeader(ctx.agents.get(agent.session.header.parentSession))
-  ptc = createPtcAdapter(ctx, { workerContextOf: agent =>
-    ownsPtcWorker(agent) ? worker.ptcContextOf(agent) : null, resolveAssignment: (agent, leaderProfile) => {
-    if (isTopLevelPostmanPtcLeader(agent)) return { profile: leaderProfile, role: 'leader' }
-    return ownsPtcWorker(agent) ? { profile: WORKER_MUTATION_PROFILE, role: 'worker' } : null
-  } })
+  const ownsPtcWorker = agent => worker.roleOf(agent) === 'sol' && worker.ownsLiveWorker(agent) && Boolean(worker.ptcContextOf(agent))
+  ptc = createPtcAdapter(ctx, { authorize: isTopLevelPostmanPtcLeader, workerContextOf: worker.ptcContextOf,
+    resolveAssignment: (agent, leaderProfile) => isTopLevelPostmanPtcLeader(agent) ?
+      { profile: leaderProfile, role: 'leader' } : ownsPtcWorker(agent) ? { profile: SOL_WORKER_PROFILE, role: 'sol' } : null })
   // Guard model-direct operations, not ordinary visibility: nested PTC calls carry the outer token.
   ctx.tools.guard(exec => postmanPtcDirectCallGuard(exec, id => ctx.agents.get(id), ownsPtcWorker))
   ctx.tools.register(ptc.tool)
@@ -247,6 +247,9 @@ export async function apply(ctx, config = {}) {
   ctx.tools.register(createPostmanTaskRestoreTool(ctx, postmanTaskContexts, { jobs, worker }))
   ctx.tools.register(worker.taskTool)
   ctx.tools.register(worker.solTaskTool)
+  ctx.tools.register(worker.secretaryTool)
+  ctx.tools.register(worker.ledgerTool)
+  ctx.tools.register(worker.freshTool)
   ctx.tools.register(worker.interruptTool)
   ctx.tools.register(worker.stopTool)
   ctx.tools.register(createPostmanYieldTool(ctx))
@@ -267,7 +270,7 @@ export async function apply(ctx, config = {}) {
     }
   }, 'dsh-postman-harness-bridge.shared-service()')
 
-  boundaries = createPostmanBridgeBoundaryManager(sessionId => ctx.agents.get(sessionId), ownsPtcWorker)
+  boundaries = createPostmanBridgeBoundaryManager(sessionId => ctx.agents.get(sessionId), ownsPtcWorker, worker.roleOf)
   ctx.effect(() => () => boundaries.disposeAll(), 'dsh-postman-harness-bridge.boundary-manager()')
   ctx.on('agent/created', async ({ agent }) => {
     // Admission confirmation performs its provisional refresh synchronously.
