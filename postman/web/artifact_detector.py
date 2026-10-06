@@ -213,7 +213,7 @@ def parse_result_envelope(
     request_id: str,
     expected_filename: str,
 ) -> dict[str, Any]:
-    """Require exactly BEGIN -> exact filename -> END and no extra visible text."""
+    """Require one contiguous exact envelope; allow text outside it."""
     text = observer._normalize_text(assistant_text)
     lines = [line.strip() for line in text.split("\n") if line.strip()]
     expected = [
@@ -221,14 +221,9 @@ def parse_result_envelope(
         expected_filename,
         result_end_marker(request_id),
     ]
-    if lines == expected:
-        return _result(
-            ARTIFACT_DOM_CONFIRMED,
-            ok=True,
-            details={"beginLine": 0, "artifactLine": 1, "endLine": 2},
-        )
-    begin_count = sum(line == expected[0] for line in lines)
-    end_count = sum(line == expected[2] for line in lines)
+    complete_markers = re.findall(r"<<<POSTMAN_RESULT_(?:BEGIN|END):[^<>\n]+>>>", text)
+    begin_count = complete_markers.count(expected[0])
+    end_count = complete_markers.count(expected[2])
     filename_count = sum(line == expected_filename for line in lines)
     if begin_count > 1 or end_count > 1 or filename_count > 1:
         return _result(
@@ -240,6 +235,15 @@ def parse_result_envelope(
                 "filenameLineCount": filename_count,
             },
         )
+    competing_marker = any(marker not in (expected[0], expected[2]) for marker in complete_markers)
+    if begin_count == end_count == filename_count == 1 and not competing_marker and expected[0] in lines:
+        begin_line = lines.index(expected[0])
+        if lines[begin_line:begin_line + 3] == expected:
+            return _result(
+                ARTIFACT_DOM_CONFIRMED,
+                ok=True,
+                details={"beginLine": begin_line, "artifactLine": begin_line + 1, "endLine": begin_line + 2},
+            )
     return _result(
         ARTIFACT_ENVELOPE_MISSING,
         ok=False,

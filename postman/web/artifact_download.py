@@ -483,7 +483,12 @@ def _capture_download(page, control, staging_zip, expected_filename, download_ti
         )
 
     suggested = str(getattr(download, "suggested_filename", "") or "")
-    if suggested != expected_filename:
+    # ChatGPT may append quoted SHA metadata to the native download suggestion.
+    # Only this decoration is tolerated; request identity and staging stay exact.
+    sha_decoration = re.fullmatch(
+        re.escape(expected_filename) + r"[ \t]+_SHA256_[ \t]+[0-9a-fA-F]{64}_", suggested
+    )
+    if suggested != expected_filename and sha_decoration is None:
         _cancel_download_best_effort(download)
         return _result(
             DOWNLOAD_FILENAME_MISMATCH,
@@ -549,7 +554,8 @@ def _capture_download(page, control, staging_zip, expected_filename, download_ti
                      "sourceSha256": source_sha256, "stagingSize": staging_size,
                      "stagingSha256": staging_sha256, "clickAttempted": True, "retryAllowed": False},
         )
-    return _result(DOWNLOAD_COMPLETED, ok=True, details={"sha256": staging_sha256})
+    return _result(DOWNLOAD_COMPLETED, ok=True,
+                   details={"sha256": staging_sha256, "suggestedFilename": suggested})
 
 
 def download_validated_artifact(
@@ -797,7 +803,7 @@ def download_validated_artifact(
         "chatUrl": current["chatUrl"],
         "assistantIndex": current["assistantIndex"],
         "assistantTextSha256": current["assistantTextSha256"],
-        "downloadSuggestedFilename": expected_filename,
+        "downloadSuggestedFilename": captured["details"]["suggestedFilename"],
         "browserDownloadDirectory": str(browser_download_dir),
         "browserDownloadDirectoryTrusted": False,
         "manifestPresent": manifest_bytes is not None,
