@@ -16,7 +16,7 @@ export const repositoryRoot = fileURLToPath(new URL('../../../../', import.meta.
 export async function capabilityRuntime(dir, { preset = 'postman-leader-ptc', resume = false, lateFs = false, plan = () => null } = {}) {
   const { Context } = await native('cordis')
   const { Loader, Group } = await native('cordis-plugin-loader')
-  const { AgentRegistry } = await native('dsh-agent')
+  const { AgentRegistry, installModelSelection } = await native('dsh-agent')
   const { SessionStore } = await native('dsh-session')
   const { SessionProjectionRegistry } = await native('dsh-session-projection')
   const { JsonlSessionPersistence } = await native('dsh-session-persistence-jsonl')
@@ -91,9 +91,11 @@ export async function capabilityRuntime(dir, { preset = 'postman-leader-ptc', re
   }
   ctx.llm.registerAdapter(['codex'], new Adapter())
   const setup = async agentCtx => { await ctx.agentPresets.mount(agentCtx, preset) }
-  const handle = resume ? await ctx.agents.resume({ resumeSessionId: 'leader', agentOptions: { provider: 'codex', model: 'gpt-6.1-sol' }, setup }) :
-    await ctx.agents.create({ sessionId: 'leader', agentOptions: { provider: 'codex', model: 'gpt-6.1-sol' }, meta: { cwd: dir, agentPreset: preset }, setup })
+  const handle = resume ? await ctx.agents.resume({ resumeSessionId: 'leader', agentOptions: { provider: 'codex', model: 'gpt-6.1-sol', reasoningEffort: 'xhigh' }, setup }) :
+    await ctx.agents.create({ sessionId: 'leader', agentOptions: { provider: 'codex', model: 'gpt-6.1-sol', reasoningEffort: 'xhigh' }, meta: { cwd: dir, agentPreset: preset }, setup })
   const leader = handle.agent
+  // The Web selector owns root model routing; preserve its explicit strong effort.
+  installModelSelection(leader.ctx,{current:{provider:'codex',model:'gpt-6.1-sol',reasoningEffort:'xhigh'}})
   const turn = async (agent, text = 'Exact bounded catalog smoke') => {
     const end = Promise.withResolvers()
     const stop = ctx.on('session/event', (session,event) => { if (session.id === agent.id && event.type === 'turn/end') end.resolve() })

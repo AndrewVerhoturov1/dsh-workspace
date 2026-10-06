@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { EventEmitter } from 'node:events'
+import { EventEmitter, getEventListeners } from 'node:events'
 import { createHash } from 'node:crypto'
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -570,6 +570,88 @@ test('Host permits one automatic recovery and blocks the second before child spa
   await assert.rejects(manager.continueLast('chain', '/repo'), /POSTMAN_AUTOMATIC_CONTINUATION_LIMIT_REACHED/)
   assert.equal(children.length, 2)
   assert.equal(manager.latest('chain').requestId, first.requestId)
+})
+
+
+
+test('Direct wait abort promptly cleans waiter/listener and never kills the transport', { timeout: 2000 }, async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const child = fakeChild()
+  child.kill = () => assert.fail('observation cancellation must not kill Direct')
+  const manager = new DirectPostmanJobManager({ exists: () => true,
+    spawn() { queueMicrotask(() => child.emit('spawn')); return child } })
+  t.after(() => manager.dispose())
+  await manager.start({ sessionId: 'abort-wait', workspace: '/repo', branch: 'main', payload: 'exact intent' })
+  const job = manager.latest('abort-wait'), abort = new AbortController()
+  const pending = manager.wait(job.sessionId, undefined, abort.signal)
+  assert.equal(job.waiters.size, 1)
+  assert.equal(getEventListeners(abort.signal, 'abort').length, 1)
+  abort.abort()
+  assert.equal(job.waiters.size, 0)
+  assert.equal(getEventListeners(abort.signal, 'abort').length, 0)
+  assert.deepEqual(await pending, manager.view(job.sessionId))
+  assert.equal(job.state, 'running')
+  // An already aborted post-stop observation must not create a second 480-second wait.
+  assert.equal((await manager.wait(job.sessionId, undefined, abort.signal)).status, 'RUNNING')
+  assert.equal(job.waiters.size, 0)
+  t.mock.timers.tick(480_000)
+  assert.equal(job.state, 'running')
+  child.emit('close', 1)
+  assert.equal((await manager.wait(job.sessionId, undefined, abort.signal)).status, 'COMPLETED')
+})
+
+test('Direct wait terminal and timeout clean observers; trusted terminal wins abort race', { timeout: 2000 }, async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const manager = new DirectPostmanJobManager()
+  t.after(() => manager.dispose())
+  const job = { sessionId: 'terminal-wait', state: 'running', requestId: 'REQ_20261004T010101Z_0001', waiters: new Set() }
+  manager.jobs.set(job.sessionId, job)
+  const abort = new AbortController(), timeout = manager.wait(job.sessionId, 10, abort.signal)
+  t.mock.timers.tick(10)
+  assert.equal((await timeout).status, 'RUNNING')
+  assert.equal(job.waiters.size, 0)
+  assert.equal(getEventListeners(abort.signal, 'abort').length, 0)
+  const pending = manager.wait(job.sessionId, undefined, abort.signal)
+  const terminalSignal = new AbortController().signal
+  const completed = manager.wait(job.sessionId, undefined, terminalSignal)
+  job.state = 'completed'; job.result = { ok: true, code: 'TEXT_RESULT_DURABLE', assistantText: 'trusted answer' }
+  abort.abort(); manager.finish(job)
+  assert.equal((await completed).result, job.result)
+  assert.equal(getEventListeners(terminalSignal, 'abort').length, 0)
+  assert.equal((await pending).result, job.result)
+  assert.equal((await manager.wait(job.sessionId, undefined, abort.signal)).result, job.result)
+  assert.equal(job.waiters.size, 0)
+  assert.equal(getEventListeners(abort.signal, 'abort').length, 0)
+})
+
+test('current-turn status forwards exec.signal and plugin disposal wakes Direct waiters without kill', { timeout: 2000 }, async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const child = fakeChild()
+  child.kill = () => assert.fail('plugin disposal must not kill Direct')
+  const manager = new DirectPostmanJobManager({ exists: () => true,
+    spawn() { queueMicrotask(() => child.emit('spawn')); return child } })
+  const plugin = createDirectCurrentTurnToolConfigs({}, { jobs: manager })
+  t.after(() => plugin.dispose())
+  const agent = { id: 'status-abort' }
+  await manager.start({ sessionId: agent.id, workspace: '/repo', branch: 'main', payload: 'exact intent' })
+  const status = plugin.tools.find(t => t.name === 'postman_current_turn_status')
+  const abort = new AbortController(), job = manager.latest(agent.id)
+  const pending = status.execute({}, { agent, signal: abort.signal })
+  assert.equal(job.waiters.size, 1)
+  abort.abort()
+  assert.equal(job.waiters.size, 0)
+  assert.equal((await pending).status, 'RUNNING')
+  const disposalSignal = new AbortController().signal
+  const observing = status.execute({}, { agent, signal: disposalSignal })
+  assert.equal(job.waiters.size, 1)
+  plugin.dispose()
+  assert.equal(job.waiters.size, 0)
+  assert.equal(getEventListeners(disposalSignal, 'abort').length, 0)
+  assert.equal((await observing).status, 'RUNNING')
+  assert.equal((await status.execute({}, { agent })).status, 'RUNNING')
+  assert.equal(job.state, 'running')
+  child.emit('close', 1)
+  assert.equal(manager.view(agent.id).status, 'COMPLETED')
 })
 
 test('Host refuses durable terminals and preserves text/image mode for recovery', async () => {

@@ -3,9 +3,11 @@ import test from 'node:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
 const root = process.env.DSH_ROOT ?? join(process.env.APPDATA ?? join(process.env.USERPROFILE, 'AppData', 'Roaming'), 'npm/node_modules/@deepseek-ai/dsh')
-const pkg = async name => import(pathToFileURL(join(root, 'node_modules/@deepseek-ai', name, 'lib/index.js')).href)
+const sdkRequire = createRequire(join(root, 'package.json'))
+const pkg = async name => import(pathToFileURL(sdkRequire.resolve('@deepseek-ai/' + name)).href)
 const { Context } = await pkg('cordis')
 const { AgentRegistry } = await pkg('dsh-agent')
 const { SessionStore } = await pkg('dsh-session')

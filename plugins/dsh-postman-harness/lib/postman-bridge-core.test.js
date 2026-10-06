@@ -161,6 +161,15 @@ test('trusted status preserves file-mode descriptor without assistantText', asyn
   assert.equal(result.result.resultFile, receipt.resultFile)
 })
 
+test('trusted status preserves first-class UNKNOWN without terminal fabrication or another poll', async () => {
+  let polls = 0
+  const result = await settleTrustedPostmanStatus(async () => {
+    assert.equal(++polls, 1)
+    return { status: 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN', requestId: 'REQ_UNKNOWN' }
+  })
+  assert.deepEqual(result, { status: 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN', checks: 1, requestId: 'REQ_UNKNOWN' })
+})
+
 test('trusted status fails closed when Luna never started Direct Postman', async () => {
   const result = await settleTrustedPostmanStatus(async () => ({ status: 'NO_JOB' }), new AbortController().signal)
   assert.deepEqual(result, { status: 'POSTMAN_BRIDGE_NO_TRANSPORT', checks: 1, requestId: null })
@@ -206,16 +215,16 @@ test('bridge authorization and visibility are limited to exact top-level Postman
   assert.deepEqual(POSTMAN_LEADER_TOOL_ALLOWLIST, [
     'ask_user_question', 'todo_write', 'exit_plan_mode', 'create_goal', 'get_goal', 'update_goal',
     'read', 'read_image', 'grep', 'skill', 'web_fetch', 'postman_task_prepare', 'postman_task_restore', 'postman_input_files',
-    'postman_bridge', 'postman_bridge_status', 'postman_bridge_list', 'postman_worker', 'postman_sol_worker', 'postman_worker_interrupt', 'postman_worker_stop', 'postman_yield', 'postman_worker_list', 'postman_worker_compact', 'postman_worker_fresh', 'postman_secretary', 'postman_secretary_ledger',
+    'postman_bridge', 'postman_bridge_status', 'postman_bridge_list', 'postman_bridge_stop', 'postman_team_status', 'postman_worker', 'postman_sol_worker', 'postman_worker_interrupt', 'postman_worker_stop', 'postman_yield', 'postman_worker_list', 'postman_worker_compact', 'postman_worker_fresh', 'postman_secretary', 'postman_secretary_ledger',
   ])
-  assert.equal(POSTMAN_LEADER_TOOL_ALLOWLIST.length, 27)
-  assert.equal(new Set(POSTMAN_LEADER_TOOL_ALLOWLIST).size, 27)
+  assert.equal(POSTMAN_LEADER_TOOL_ALLOWLIST.length, 29)
+  assert.equal(new Set(POSTMAN_LEADER_TOOL_ALLOWLIST).size, 29)
   assert.deepEqual(POSTMAN_LEADER_ONLY_TOOL_NAMES, [
-    'postman_task_prepare', 'postman_task_restore', 'postman_input_files', 'postman_bridge', 'postman_bridge_status', 'postman_bridge_list',
+    'postman_task_prepare', 'postman_task_restore', 'postman_input_files', 'postman_bridge', 'postman_bridge_status', 'postman_bridge_list', 'postman_bridge_stop', 'postman_team_status',
     'postman_worker', 'postman_sol_worker', 'postman_worker_interrupt', 'postman_worker_stop', 'postman_yield', 'postman_worker_list', 'postman_worker_compact', 'postman_worker_fresh', 'postman_secretary', 'postman_secretary_ledger',
   ])
   assert.deepEqual(postmanBridgeRestrictionForAgent(leader), {
-    allow: [...POSTMAN_LEADER_TOOL_ALLOWLIST],
+    allow: [...POSTMAN_LEADER_TOOL_ALLOWLIST, POSTMAN_PTC_TOOL_NAME],
   })
   assert.deepEqual(postmanBridgeRestrictionForAgent(standard), {
     deny: [...POSTMAN_LEADER_ONLY_TOOL_NAMES, POSTMAN_PTC_TOOL_NAME],
@@ -242,14 +251,14 @@ test('direct PTC guard applies only to exact top-level pilot and never nested di
   const delegated = parent({agentPreset:'postman-leader-ptc',origin:'subagent',delegationDepth:1})
   const current = new Map([[pilot.id,pilot]])
   const check = (agent,name,parentToken) => postmanPtcDirectCallGuard({agent,name,parent:parentToken}, id=>current.get(id))
-  assert.equal(POSTMAN_PTC_ONLY_LEADER_TOOLS.length,21)
+  assert.equal(POSTMAN_PTC_ONLY_LEADER_TOOLS.length,25)
   for (const name of POSTMAN_PTC_ONLY_LEADER_TOOLS) {
     assert.match(check(pilot,name),/POSTMAN_PTC_DIRECT_CALL_REJECTED/)
     assert.equal(check(pilot,name,{}),undefined)
-    assert.equal(check(production,name),undefined)
+    current.set(production.id,production); assert.match(check(production,name),/POSTMAN_PTC_DIRECT_CALL_REJECTED/); current.set(pilot.id,pilot)
     assert.equal(check(delegated,name),undefined)
   }
-  for (const name of ['ptc_execute','skill','ask_user_question','exit_plan_mode','read_image','postman_yield','postman_sol_worker'])
+  for (const name of ['ptc_execute','skill','ask_user_question','exit_plan_mode','read_image'])
     assert.equal(check(pilot,name),undefined)
   current.set(pilot.id,{...pilot})
   assert.equal(check(pilot,'postman_worker'),undefined)
@@ -257,7 +266,7 @@ test('direct PTC guard applies only to exact top-level pilot and never nested di
 
 test('production and pilot predicates keep exact trusted top-level identities separate', () => {
   const cases = [
-    ['production', parent({ agentPreset: 'postman-leader' }), true, false],
+    ['production', parent({ agentPreset: 'postman-leader' }), true, true],
     ['pilot', parent({ agentPreset: 'postman-leader-ptc' }), false, true],
     ['standard', parent({ agentPreset: 'standard' }), false, false],
     ['unrelated', parent({ agentPreset: 'another-preset' }), false, false],
@@ -275,11 +284,11 @@ test('production and pilot predicates keep exact trusted top-level identities se
     assert.equal(postmanBridgeCallerAllowed(agent), production || pilot, name)
     assert.deepEqual(postmanBridgeRestrictionForAgent(agent), pilot
       ? { allow: [...POSTMAN_LEADER_TOOL_ALLOWLIST, POSTMAN_PTC_TOOL_NAME] }
-      : production ? { allow: [...POSTMAN_LEADER_TOOL_ALLOWLIST] }
+      : production ? { allow: [...POSTMAN_LEADER_TOOL_ALLOWLIST, POSTMAN_PTC_TOOL_NAME] }
         : { deny: [...POSTMAN_LEADER_ONLY_TOOL_NAMES, POSTMAN_PTC_TOOL_NAME] }, name)
   }
   for (const [selected, production, pilot] of [
-    ['postman-leader', true, false], ['postman-leader-ptc', false, true],
+    ['postman-leader', true, true], ['postman-leader-ptc', false, true],
     ['standard', false, false], ['another-preset', false, false],
   ]) {
     const agent = parent({ agentPreset: 'standard' })
@@ -300,7 +309,7 @@ test('boundary manager replaces the active restriction when a blank session swit
 
   fixture.setPreset('postman-leader')
   assert.equal(manager.refreshSession(fixture.agent.id), true)
-  assert.deepEqual(fixture.activeRestrictions(), [{ allow: [...POSTMAN_LEADER_TOOL_ALLOWLIST] }])
+  assert.deepEqual(fixture.activeRestrictions(), [{ allow: [...POSTMAN_LEADER_TOOL_ALLOWLIST, POSTMAN_PTC_TOOL_NAME] }])
   assert.equal(fixture.restrictions[0].active, false)
 
   fixture.setPreset('standard')
@@ -349,8 +358,8 @@ test('package and composition expose bridge entrypoint and leader preset', () =>
   assert.match(leaderMetadata, /^name: Postman Leader$/m)
   assert.match(leaderMetadata, /^order: 4$/m)
   assert.match(leaderPreset, /id: persona[\s\S]*name: '@deepseek-ai\/dsh-persona'[\s\S]*text:/)
-  assert.match(leaderMetadata, /27 registered tools/i)
-  assert.match(leaderPreset, /positive 27-name runtime allowlist/)
+  assert.match(leaderMetadata, /Canonical PTC-first/i)
+  assert.match(leaderPreset, /canonical supervisor PTC-first runtime boundary/)
   assert.match(leaderPreset, /id: tool-web[\s\S]*fetch: true[\s\S]*search: true/)
   assert.deepEqual(
     [...leaderPreset.matchAll(/^\s*- id: ([\w-]+)\s*$/gm)].map((match) => match[1]),
@@ -360,12 +369,12 @@ test('package and composition expose bridge entrypoint and leader preset', () =>
       'tool-subagent-control', 'tool-subagent-list-agents', 'tool-subagent', 'tool-subagent-fork',
       'workflow-worker-thread', 'tool-workflow', 'tool-ralph', 'tool-ask-user', 'tool-todo', 'tool-web'],
   )
-  assert.match(leaderPreset, /You are Postman Leader\./)
+  assert.match(leaderPreset, /You are Postman Leader/)
 
   const pilotPresetRoot = join(repoRoot, '.agent-presets', 'postman-leader-ptc')
   const pilotMetadata = readFileSync(join(pilotPresetRoot, 'preset.yml'), 'utf8')
   const pilotPreset = readFileSync(join(pilotPresetRoot, 'agent.cordis.yml'), 'utf8')
-  assert.match(pilotMetadata, /^name: Postman Leader PTC Experimental$/m)
+  assert.match(pilotMetadata, /^name: Postman Leader PTC \(compatibility\)$/m)
   assert.match(pilotMetadata, /^order: 5$/m)
   const components = [...leaderPreset.matchAll(/^\s*- id: ([\w-]+)\s*$/gm)].map(match => match[1])
   assert.deepEqual([...pilotPreset.matchAll(/^\s*- id: ([\w-]+)\s*$/gm)].map(match => match[1]), components)
@@ -376,9 +385,9 @@ test('package and composition expose bridge entrypoint and leader preset', () =>
     'tool-subagent-list-agents', 'tool-subagent', 'tool-subagent-fork',
     'workflow-worker-thread', 'tool-workflow', 'tool-ralph', 'tool-ask-user',
     'tool-todo', 'tool-web'])
-  assert.match(pilotPreset, /This preset is PTC-first/)
-  assert.match(pilotPreset, /Direct calls to those tools are rejected by Host/)
-  assert.match(pilotPreset, /Follow the postman-leader skill for routing, user approvals and delegation/)
+  assert.equal(pilotPreset.replaceAll('\r\n','\n'), leaderPreset.replaceAll('\r\n','\n'))
+  assert.match(pilotPreset, /Direct PTC-managed calls are rejected/)
+  assert.match(pilotPreset, /Group all predetermined supervisor operations/)
   assert.doesNotMatch(pilotPreset, /run_code|dsh-ptc-plus|Node Worker Thread/i)
 
   const bridgeSource = readFileSync(join(pluginRoot, 'lib', 'postman-bridge.js'), 'utf8')
@@ -394,7 +403,7 @@ test('package and composition expose bridge entrypoint and leader preset', () =>
   assert.match(agents, /postman-leader/)
 
   const leaderSkill = readFileSync(join(repoRoot, '.agents', 'skills', 'postman-leader', 'SKILL.md'), 'utf8')
-  assert.match(leaderSkill, /POSTMAN_LEADER_SKILL_VERSION: 27/)
+  assert.match(leaderSkill, /POSTMAN_LEADER_SKILL_VERSION: 28/)
   assert.match(leaderSkill, /существующий mapping не запрещает \x60createNew:true\x60/)
   assert.match(leaderSkill, /может остановить выбранного Worker в любой момент/)
   for (const forbidden of ['повторный \x60postman_worker()\x60 при существующем mapping',

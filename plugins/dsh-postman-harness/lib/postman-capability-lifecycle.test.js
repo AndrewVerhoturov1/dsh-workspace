@@ -31,15 +31,16 @@ const report = { name: 'report', args: { output: 'bounded verified fixture evide
 
 for (const preset of ['postman-leader-ptc', 'code', 'postman-leader']) test('actual model request: ' + preset + ' creation/switch -> full PTC Leader', { timeout: 30000 }, async t => {
   const f = await fixture(t, { preset })
-  if (preset !== 'postman-leader-ptc') await f.switchPreset('postman-leader-ptc')
+  if (preset === 'code') await f.switchPreset('postman-leader-ptc')
   const r = await f.turn(f.leader)
   toolMatrix('postman-leader-ptc', leaderExpected, r)
-  assert.match(r.system, /postman-leader/);assert.match(JSON.stringify(r),/POSTMAN_LEADER_SKILL_VERSION: 27/)
+  assert.ok(r.tools.some(t=>t.name==='ask_user_question'),preset+': Leader retains user questions')
+  assert.equal(r.model,'gpt-6.1-sol'); assert.equal(r.reasoningEffort,'xhigh'); assert.match(r.system,/canonical programming discipline/); assert.match(r.system, /postman-leader/);assert.match(JSON.stringify(r),/POSTMAN_LEADER_SKILL_VERSION: 28/)
   await writeFile(join(f.dir, 'facts.txt'), 'old fact')
   const result = nested(await f.execute(f.leader, 'ptc_execute', ptc('const r=await tools.read({file_path:"facts.txt"});const g=await tools.grep({pattern:"old fact",path:"facts.txt"});return {r,g}')))
   assert.equal(result.r.lines[0].text, 'old fact'); assert.ok(result.g.matches.length)
-  for (const name of ['read','grep','postman_worker','postman_secretary','postman_bridge']) {
-    const args = name === 'read' ? {file_path:'facts.txt'} : name === 'grep' ? {pattern:'fact'} : name === 'postman_bridge' ? {message:'@PostmanAsk bounded fixture'} : {task:'bounded fixture'}
+  for (const name of ['read','grep','postman_worker','postman_secretary','postman_bridge','postman_sol_worker','postman_yield','postman_team_status','postman_bridge_stop']) {
+    const args = name === 'read' ? {file_path:'facts.txt'} : name === 'grep' ? {pattern:'fact'} : name === 'postman_bridge' ? {message:'@PostmanAsk bounded fixture'} : name==='postman_bridge_stop' ? {bridge_job_id:'foreign'} : ['postman_yield','postman_team_status'].includes(name) ? {} : {task:'bounded fixture'}
     const denied = await f.execute(f.leader, name, args)
     assert.equal(denied.isError, true, name); assert.match(denied.error.message, /POSTMAN_PTC_DIRECT_CALL_REJECTED/)
   }
@@ -75,7 +76,7 @@ test('all real child requests: Secretary/Worker/Sol functional smoke, ownership,
   t.after(()=>{solGate.resolve();ownGate.resolve()})
   const f = await fixture(t, { plan })
   await f.prepare(); await writeFile(join(f.worktree,'facts.txt'),'old fact')
-  const leaderCall = async (name,args) => name==='postman_sol_worker' ? ok(await f.execute(f.leader,name,args)) : nested(await f.execute(f.leader,'ptc_execute',ptc('return await tools.'+name+'('+JSON.stringify(args)+')')))
+  const leaderCall = async (name,args) => nested(await f.execute(f.leader,'ptc_execute',ptc('return await tools.'+name+'('+JSON.stringify(args)+')')))
   const start = async (name,parent=f.leader) => {
     const r = parent===f.leader ? await leaderCall(name,{task:'Explicit user-selected Sol Worker route; bounded fixture evidence'}) : ok(await f.execute(parent,name,{task:'bounded owned fixture evidence'}))
     assert.equal(r.status,'POSTMAN_WORKER_TASK_ACCEPTED',JSON.stringify(r));const a=name==='postman_sol_worker'?await solEntered.promise:await f.childDone(r.workerSessionId);assert.ok(a);return a
@@ -90,6 +91,7 @@ test('all real child requests: Secretary/Worker/Sol functional smoke, ownership,
   ownGate.resolve();const [own,own2]=await Promise.all(owned.map(id=>f.childDone(id)))
   const { scopeParentOf }=await native('dsh-scope')
   const ordinary=f.ctx.tools.schemas(scopeParentOf(f.leader)).map(t=>t.name).filter(n=>!POSTMAN_LEADER_ONLY_TOOL_NAMES.includes(n)&&n!=='ptc_execute'&&!DELEGATION_TOOLS.includes(n))
+  for(const name of ['ask_user_question','list_agents','exit_plan_mode'])assert.ok(ordinary.includes(name),'native inherited catalog contains '+name)
   const expected={secretary:SECRETARY_TOOLS.filter(n=>n!=='bash'),luna:sorted([...ordinary.filter(n=>!['ask_user_question','list_agents','exit_plan_mode'].includes(n)),'report']),sol:sorted([...ordinary.filter(n=>!['ask_user_question','exit_plan_mode'].includes(n)),...WORKER_CONTROL_TOOLS,'ptc_execute','report'])}
   const check=(a,label=role(a))=>{
     const entries=f.requests.filter(x=>x.agent.id===a.id)
@@ -101,7 +103,11 @@ test('all real child requests: Secretary/Worker/Sol functional smoke, ownership,
     }
     return entries.at(-1).request
   }
-  const wr=check(worker,'Worker under Leader'), ow=check(own,'Worker under Sol');assert.deepEqual(sorted(wr.tools.map(t=>t.name)),sorted(ow.tools.map(t=>t.name)));check(secretary);check(sol)
+  const wr=check(worker,'Worker under Leader')
+  for(const a of [own,own2]){const ow=check(a,'Worker under Sol');assert.deepEqual(sorted(wr.tools.map(t=>t.name)),sorted(ow.tools.map(t=>t.name)))}
+  const sr=check(secretary), solr=check(sol)
+  for(const name of ['ask_user_question','list_agents'])assert.ok(!sr.tools.some(t=>t.name===name),'Secretary: forbidden '+name)
+  assert.ok(!solr.tools.some(t=>t.name==='ask_user_question'),'Sol: no user questions')
   const admission=async(a)=>a.session.header.parentSession==='leader'?leaderCall(role(a)==='sol'?'postman_sol_worker':role(a)==='secretary'?'postman_secretary':'postman_worker',{workerSessionId:a.id,task:'next exact bounded fixture'}) : ok(await f.execute(sol,'postman_worker',{workerSessionId:a.id,task:'next exact bounded fixture'}))
   for(const a of [secretary,worker,own]) {
     const batch=role(a)==='secretary'?[{name:'read',args:{file_path:'facts.txt'}},{name:'glob',args:{pattern:'*.txt'}},{name:'grep',args:{pattern:'fact',path:'facts.txt'}},{name:'postman_secretary_ledger',args:{content:'verified fact ledger',revision:0}},{name:'postman_secretary_ledger',args:{}}]:role(a)==='sol'?[{name:'ptc_execute',args:ptc('const r=await tools.read({file_path:"facts.txt"});const g=await tools.grep({pattern:"fact",path:"facts.txt"});await tools.edit({file_path:"facts.txt",old_string:"old fact",new_string:"new fact"});const after=await tools.read({file_path:"facts.txt"});return {r,g,after,names:Object.keys(tools)}')}]:[{name:'read',args:{file_path:'facts.txt'}},{name:'glob',args:{pattern:'*.txt'}},{name:'write',args:{file_path:a.id+'.txt',content:'smoke old'}},{name:'read',args:{file_path:a.id+'.txt'}},{name:'edit',args:{file_path:a.id+'.txt',old_string:'smoke old',new_string:'smoke new'}},{name:'read',args:{file_path:a.id+'.txt'}},{name:'pwsh',args:{command:'Write-Output safe-fixture-smoke',description:'Print safe fixture smoke evidence'}}]
@@ -160,7 +166,7 @@ test('fresh real Secretary Worker Sol preserve exact catalog and ledger', {timeo
  let ledgerWritten=false
  const f=await fixture(t,{plan:a=>{if(role(a)==='secretary'&&!ledgerWritten){ledgerWritten=true;return {name:'postman_secretary_ledger',args:{content:'fresh preserves verified private ledger',revision:0}}}return a.id==='leader'?null:report}});await f.prepare()
  if(typeof f.ctx.subagents.closeContinuableChild!=='function'){t.skip('published SDK: EXACT_CHILD_ADMISSION_CUTOFF_UNAVAILABLE; installed Host is checked separately');return}
- const call=async(name,args)=>name==='postman_sol_worker'?ok(await f.execute(f.leader,name,args)):nested(await f.execute(f.leader,'ptc_execute',ptc('return await tools.'+name+'('+JSON.stringify(args)+')')))
+ const call=async(name,args)=>nested(await f.execute(f.leader,'ptc_execute',ptc('return await tools.'+name+'('+JSON.stringify(args)+')')))
  for(const name of ['postman_secretary','postman_worker','postman_sol_worker']){
   const first=await call(name,{task:'User-authorized explicit Sol Worker bounded route'});assert.equal(first.status,'POSTMAN_WORKER_TASK_ACCEPTED',JSON.stringify(first));const a=await f.childDone(first.workerSessionId)
   const expected=f.requests.find(x=>x.agent.id===a.id).request
@@ -189,7 +195,7 @@ test('Sol actual model direct controls manage only its own Worker lifecycle', {t
  f=await fixture(t,{plan});await f.prepare()
  if(typeof f.ctx.subagents.closeContinuableChild!=='function'){t.skip('published SDK exact-child close API unavailable');return}
  await f.turn(f.leader)
- const accepted=ok(await f.execute(f.leader,'postman_sol_worker',{task:'User selects explicit Sol route for owned lifecycle'}));assert.equal(accepted.status,'POSTMAN_WORKER_TASK_ACCEPTED',JSON.stringify(accepted));sol=await entered.promise
+ const accepted=nested(await f.execute(f.leader,'ptc_execute',ptc('return await tools.postman_sol_worker({task:"User selects explicit Sol route for owned lifecycle"})')));assert.equal(accepted.status,'POSTMAN_WORKER_TASK_ACCEPTED',JSON.stringify(accepted));sol=await entered.promise
  const ids=[];for(let i=0;i<2;i++){const r=ok(await f.execute(sol,'postman_worker',{task:'owned finite evidence '+i,createNew:true}));assert.equal(r.status,'POSTMAN_WORKER_TASK_ACCEPTED',JSON.stringify(r));ids.push(r.workerSessionId);await f.childDone(r.workerSessionId)}
  ;[own,second]=ids
  const {BasicCompactionEngine}=await native('dsh-compaction-basic'),h=await f.ctx.agents.resume({resumeSessionId:own,agentOptions:{provider:'codex',model:'gpt-6-luna'}})

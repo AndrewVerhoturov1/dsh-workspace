@@ -475,6 +475,7 @@ export class DirectPostmanJobManager {
     this.inputGrants = inputGrants
     this.jobs = new Map()
     this.exactAskReplies = new Map()
+    this.disposed = false
   }
 
   latest(sessionId) {
@@ -691,21 +692,23 @@ export class DirectPostmanJobManager {
     }
   }
 
-  async wait(sessionId, timeoutMs = STATUS_WAIT_MS) {
+  async wait(sessionId, timeoutMs = STATUS_WAIT_MS, signal) {
     const current = this.view(sessionId)
-    if (current.status !== 'RUNNING') return current
+    if (current.status !== 'RUNNING' || signal?.aborted || this.disposed) return current
     const job = this.jobs.get(sessionId)
     await new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        job.waiters.delete(wake)
-        resolve()
-      }, timeoutMs)
       const wake = () => {
         clearTimeout(timer)
+        job.waiters.delete(wake)
+        signal?.removeEventListener('abort', wake)
         resolve()
       }
+      const timer = setTimeout(wake, timeoutMs)
       job.waiters.add(wake)
+      signal?.addEventListener('abort', wake, { once: true })
+      if (signal?.aborted) wake()
     })
+    // Cancel only observation; the Direct process and its terminal authority survive.
     return this.view(sessionId)
   }
 
@@ -854,6 +857,8 @@ export class DirectPostmanJobManager {
   }
 
   dispose() {
+    this.disposed = true
+    for (const job of this.jobs.values()) this.finish(job)
     this.exactAskReplies.clear()
     // Deliberately do not kill a running Direct Postman child during plugin
     // teardown. Killing it could leave browser-send outcome ambiguous. The
@@ -961,7 +966,7 @@ export function createDirectCurrentTurnToolConfigs(ctx, { store, jobs, taskConte
     output: toolOutput(),
     async execute(_args, exec) {
       const agent = requiredAgent(exec, 'postman_current_turn_status')
-      return manager.wait(agent.id)
+      return manager.wait(agent.id, undefined, exec.signal)
     },
   }
 

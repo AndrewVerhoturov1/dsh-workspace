@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -11,9 +11,10 @@ const stagingRoot = mkdtempSync(join(resolve(repositoryRoot, '../..'), '.dsh-bet
 const archivePath = join(tmpdir(), `${stagingRoot.split(/[\\/]/).pop()}.tar`)
 const staleTarget = realpathSync(resolve(repositoryRoot, 'plugins/dsh-better-sidebar-andrew'))
 
-function run(command, args, cwd) {
+function run(command, args, cwd, env = process.env) {
   const result = spawnSync(command, args, {
     cwd,
+    env,
     stdio: 'inherit',
     windowsHide: true,
   })
@@ -36,6 +37,17 @@ try {
   // Exercise the current installer even before its changes are committed.
   copyFileSync(resolve(repositoryRoot, 'profiles/web/scripts/install-production.mjs'),
     resolve(stagingRoot, 'profiles/web/scripts/install-production.mjs'))
+  cpSync(resolve(repositoryRoot,'system/patches'),resolve(stagingRoot,'system/patches'),{recursive:true})
+  const sdkRoot = resolve(stagingRoot,'plugins/native-sdk')
+  mkdirSync(sdkRoot)
+  for (const name of ['package.json','pnpm-lock.yaml']) copyFileSync(resolve(repositoryRoot,'plugins/dsh-postman-harness',name),resolve(sdkRoot,name))
+  const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
+  const sdkInstall = spawnSync(pnpm,['install','--offline','--frozen-lockfile','--ignore-scripts'],{
+    cwd:sdkRoot,stdio:'inherit',shell:process.platform==='win32',windowsHide:true,
+  })
+  if (sdkInstall.error) throw sdkInstall.error
+  if (sdkInstall.status !== 0) throw new Error('isolated SDK install failed: ' + sdkInstall.status)
+  const sdkAnchor = createRequire(resolve(sdkRoot,'package.json')).resolve('@deepseek-ai/dsh/package.json')
   const profileRoot = resolve(stagingRoot, 'profiles/web')
   const installedPackage = resolve(profileRoot, 'node_modules/dsh-better-sidebar')
   mkdirSync(resolve(profileRoot, 'node_modules'), { recursive: true })
@@ -47,7 +59,7 @@ try {
   }
 
   // This is the exact production command required after a merged checkout.
-  run(process.execPath, ['profiles/web/scripts/install-production.mjs'], stagingRoot)
+  run(process.execPath, ['profiles/web/scripts/install-production.mjs'], stagingRoot,{...process.env,DSH_INSTALL_SDK:sdkAnchor})
 
   const managedRoot = realpathSync(resolve(stagingRoot, 'plugins/dsh-better-sidebar-andrew'))
   const installedRealpath = realpathSync(installedPackage)

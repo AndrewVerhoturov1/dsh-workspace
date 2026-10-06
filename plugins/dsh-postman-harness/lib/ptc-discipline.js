@@ -9,7 +9,7 @@
 // This module is deliberately data-only. ptc-adapter.js is responsible for
 // injecting the text into the system prompt of an authorized Postman PTC agent.
 
-export const POSTMAN_PTC_DISCIPLINE_VERSION = 4
+export const POSTMAN_PTC_DISCIPLINE_VERSION = 5
 
 export const POSTMAN_PTC_DISCIPLINE = String.raw`
 # Postman PTC programming discipline
@@ -357,7 +357,8 @@ The runtime should resume the model when the real event arrives.
 
 For Leader, boundary: external_event automatically concludes the turn after a safe
 successful program with an exact accepted event producer: postman_worker,
-postman_worker_interrupt, or postman_bridge. yield_on_success is compatibility
+postman_secretary, postman_sol_worker, postman_worker_fresh, postman_worker_interrupt,
+or postman_bridge. yield_on_success is compatibility
 only; omission or false does not disable this Host rule. postman_task_prepare alone
 is NOT an event producer and does not conclude the turn.
 
@@ -366,6 +367,17 @@ needsModelDecision:true, failed/pending/unknown/unsettled effects or refused/unk
 acceptance; all nested calls must be completed. Include remaining independent
 supervisor work before waiting. No separate model decision or postman_yield call
 is needed after a safe accepted dispatch.
+
+Canonical postman-leader and compatibility postman-leader-ptc share this supervisor
+profile. Use postman_team_status once for routing, never as a completion poll.
+postman_sol_worker and postman_yield are PTC-managed, not direct-only. Sol dispatch
+requires the existing explicit user-selected route; PTC grants no new authorization.
+When an explicit postman_yield is needed, call it at the end of the program and
+check exact POSTMAN_YIELDED. Host applies its nested conclude only after the complete
+outer program safely settles. A later refusal, failure, pending/unknown effect or
+revocation blocks conclusion even if the guest caught an error. Auto-yield and
+explicit yield apply the outer conclusion once, not twice. Sol engineering PTC
+does not receive these supervisor tools.
 
 This eliminates the wasteful sequence:
 

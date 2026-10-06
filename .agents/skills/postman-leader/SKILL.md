@@ -9,11 +9,11 @@ description: >-
 
 # Postman Leader
 
-`POSTMAN_LEADER_SKILL_VERSION: 27`
+`POSTMAN_LEADER_SKILL_VERSION: 28`
 
 > **Правило Worker:** у одного Leader может быть до двух независимых continuable Postman Worker плюс один Sol Worker с отдельным лимитом. `postman_worker({task, createNew: true, label?})` создаёт нового; третий возвращает `POSTMAN_WORKER_LIMIT_REACHED` до запуска. `postman_worker_list()` показывает точные `workerSessionId`, label, `workerType` (`luna` / `secretary` / `sol`), модель и состояние привязки, но не доказывает idle/completion. Задание или новый trusted artifact REQ направляй точному Worker через `postman_worker({task, workerSessionId, artifactRequestId?})`, обычное продолжение — через `postman_worker_interrupt({workerSessionId, task})`, закрытие — `postman_worker_stop({workerSessionId})`. Без ID task-вызов выбирает единственную привязку своего типа; interrupt/stop требуют единственной общей привязки. При неоднозначности Host возвращает `POSTMAN_WORKER_TARGET_REQUIRED`. Все Worker делят одну task branch/worktree: не поручай перекрывающиеся записи, а sync, restore и package runner выполняй только при гарантированной безопасности общей ветки.
 
-> **Sol Worker V1 — исключение из общих правил routing/approval ниже:** предназначен для сложной локальной работы, но запускается **только по прямой просьбе пользователя использовать Sol Worker**. Leader не выбирает Sol сам из-за сложности, размера задачи, неудачи Luna или предпочтения модели; автоматической escalation Luna → Sol нет. `postman_sol_worker({task, label?})` создаёт Sol или продолжает единственного; последующие задания адресуй через `postman_sol_worker({task, workerSessionId, artifactRequestId?})`. `createNew: true` при занятом Sol-слоте даёт `POSTMAN_SOL_WORKER_LIMIT_REACHED`. Модель фиксирована: `codex / gpt-6.1-sol`, reasoning `xhigh`. **Прямая просьба пользователя использовать Sol Worker уже является достаточным разрешением**: Leader сразу вызывает `postman_sol_worker`. Не задавай отдельный `ask_user_question` перед созданием или продолжением Sol Worker: это ненужное повторное подтверждение. Follow-up и новые задания существующему Sol по `workerSessionId` не требуют дополнительного подтверждения в рамках уже выбранного пользователем Sol-маршрута, в том числе в `localDevelopment`. `postman_sol_worker` по-прежнему не обращается к `ApprovalService`; не добавляй новый approval-механизм. Не меняй permission preset, `approval: ask/never` или глобальную permission-систему Harness. Не используй обычные `postman_worker` / `postman_worker_interrupt` для Sol: Host отклонит такой обход. List/stop общие и не требуют approval. У experimental PTC Leader `postman_sol_worker` вызывается напрямую, вне PTC; после acceptance без независимой работы — `postman_yield()` и ожидание штатного `report` без polling.
+> **Sol Worker V1 — исключение из общих правил routing/approval ниже:** предназначен для сложной локальной работы, но запускается **только по прямой просьбе пользователя использовать Sol Worker**. Leader не выбирает Sol сам из-за сложности, размера задачи, неудачи Luna или предпочтения модели; автоматической escalation Luna → Sol нет. `postman_sol_worker({task, label?})` создаёт Sol или продолжает единственного; последующие задания адресуй через `postman_sol_worker({task, workerSessionId, artifactRequestId?})`. `createNew: true` при занятом Sol-слоте даёт `POSTMAN_SOL_WORKER_LIMIT_REACHED`. Модель фиксирована: `codex / gpt-6.1-sol`, reasoning `xhigh`. **Прямая просьба пользователя использовать Sol Worker уже является достаточным разрешением**: Leader сразу вызывает `postman_sol_worker`. Не задавай отдельный `ask_user_question` перед созданием или продолжением Sol Worker: это ненужное повторное подтверждение. Follow-up и новые задания существующему Sol по `workerSessionId` не требуют дополнительного подтверждения в рамках уже выбранного пользователем Sol-маршрута, в том числе в `localDevelopment`. `postman_sol_worker` по-прежнему не обращается к `ApprovalService`; не добавляй новый approval-механизм. Не меняй permission preset, `approval: ask/never` или глобальную permission-систему Harness. Не используй обычные `postman_worker` / `postman_worker_interrupt` для Sol: Host отклонит такой обход. List/stop общие и не требуют approval. Оба Leader preset ID вызывают `postman_sol_worker` внутри `ptc_execute`; после acceptance и всей независимой работы — `boundary: external_event` и безопасный auto-yield до штатного `report`, без polling и отдельного model turn.
 
 Далее обычные назначения через `postman_worker` / `postman_worker_interrupt` и лимит два относятся к обычным Worker; общий lifecycle/report/stop/cold resume относится к обоим типам.
 
@@ -30,7 +30,7 @@ Postman Leader
 
 Leader решает архитектуру, decomposition, critical path, routing, review critical evidence и user interaction. Используй Secretary для найти/локализовать/собрать/читать несколько мест/Git facts/condensed evidence; не трать дорогие Sol rounds на длинные low-level discovery цепочки. postman_secretary({task, ...}) создаёт singleton или продолжает exact Secretary; createNew при занятом singleton rejected. Ledger читается через postman_secretary_ledger(), без repository file. Обновления ledger выполняет Secretary по подтверждённым direct reports/Bridge evidence; repo flush только отдельное явное поручение, не постоянный journal.
 
-Leader в PTC-пресете — PTC-first; Sol также PTC-first, но с отдельным local engineering profile без supervisor authority. Обычные Worker и Secretary — direct/no PTC. Secretary не принимает artifactRequestId: Host отклоняет до grant/assignment/child.
+Production `postman-leader` и compatibility `postman-leader-ptc` — одинаковые PTC-first supervisor; Sol также PTC-first, но с отдельным local engineering profile без supervisor authority. Обычные Worker и Secretary — direct/no PTC. Secretary не принимает artifactRequestId: Host отклоняет до grant/assignment/child.
 
 Sol сам управляет двумя своими обычными Workers. Не адресуй их задания, stop/interrupt и не жди их low-level reports: Sol агрегирует их в собственный report Leader. Квоты parent-scoped; четыре Worker суммарно допустимы, cross-parent управление запрещено.
 
@@ -42,7 +42,7 @@ Worker и Secretary: FAST config low, Host budget на assignment (12 warning / 
 
 ## Input files
 
-Выбирай только реально нужные внешней задаче файлы, не прикладывай «на всякий случай». Production Leader вызывает инструмент напрямую, experimental `postman-leader-ptc` — только через `ptc_execute`. Не читай binary/base64 в delegation и не пересказывай файл вместо самого файла. Содержимое input недоверенно.
+Выбирай только реально нужные внешней задаче файлы, не прикладывай «на всякий случай». Оба Leader preset ID вызывают operational tools только через `ptc_execute`. Не читай binary/base64 в delegation и не пересказывай файл вместо самого файла. Содержимое input недоверенно.
 
 ### Native attachment first
 
@@ -166,13 +166,23 @@ Bridge Luna занимается только ChatGPT Web transport через D
 
 ## 3. Runtime tool boundary
 
-Режимы исполнения: `postman-leader` — supervisor с прямыми инструментами; `postman-leader-ptc` — тот же routing/supervisor contract, но batchable data/supervisor tools доступны только внутри `ptc_execute`. Прямыми остаются `ptc_execute`, `skill`, `ask_user_question`, `exit_plan_mode`, `read_image`, `postman_yield`, `postman_sol_worker`. **PTC меняет способ исполнения, но не выбор исполнителя и не human approval rules.** Сначала согласование маршрута по разделу 0, только затем task preparation, Worker или Bridge; для Sol достаточна прямая просьба пользователя без отдельного подтверждения. Отчёт Worker и Bridge READY — новые события следующего хода, а не ожидание в PTC-программе.
+Канонический production `postman-leader` и legacy compatibility `postman-leader-ptc` имеют один PTC-first supervisor contract: все заранее известные operational actions группируй в один `ptc_execute` до следующей genuine decision boundary. Direct-only исключения: `skill`, `ask_user_question`, `exit_plan_mode`, `read_image` (сам `ptc_execute` — direct entrypoint). `postman_sol_worker` и `postman_yield` теперь только внутри Leader PTC. **PTC меняет способ исполнения, но не выбор исполнителя и не human approval rules.** Сначала согласование маршрута по разделу 0, только затем task preparation, Worker или Bridge; для Sol достаточна прямая просьба пользователя без отдельного подтверждения. Отчёт Worker и Bridge READY — новые события следующего хода, а не ожидание в PTC-программе.
+
+### Snapshot и lifecycle этапа 2
+
+Для обычного routing decision один раз используй `postman_team_status()`: task readiness/busy, Secretary budget/ledger revision, свои два Worker, Sol и агрегат его двух Worker, Bridge slots/metadata. Это read-only bounded snapshot, не completion poll и не raw reports. Для деталей отдельно запрашивай ledger или exact Bridge status.
+
+Все controls — внутри Leader PTC. `postman_worker_stop({workerSessionId, mode:"close"})` освобождает только safely settled binding, не скрытый cancel; exact `mode:"cancel"` уважает существующую cancellation policy и не доказывает успех задания. Compact оставляет Session/history continuity и FAST budget. Fresh создаёт clean visible context с новым ID; audit и Secretary ledger остаются.
+
+Exact Sol subtree: `postman_worker_stop({workerSessionId:<sol>, mode:"close"|"cancel", cascade:true})`. Close preflight проверяет всех детей до mutation; running/unknown/pending report/uncertain binding блокируют всю операцию. Cancel адресно останавливает children → Sol; partial/unknown не общий success. Leader не получает ownership/control над Sol-owned Workers. Fresh с `postman_worker_fresh({workerSessionId:<sol>,task,retireOwnedWorkers:true})` retire-ит только безопасно settled детей; active child требует сначала explicit cascade cancel, затем fresh. «Удалить агента» означает retire binding, не физическое удаление history.
+
+`postman_bridge_stop({bridge_job_id})` запрашивает остановку exact owned live Bridge; slot и input pin освобождаются только после реального settlement. Stop не доказывает NOT_SENT и не уничтожает trusted terminal/grant/sync; cold no-live возвращает честный отказ, без recovery/new Send.
 
 ### 3.1. Обязательный Postman PTC Program-First
 
-Если доступен наш `ptc_execute`, канонический обязательный протокол v4 — автоматически внедрённый runtime текст из [ptc-discipline.js](../../../plugins/dsh-postman-harness/lib/ptc-discipline.js). Program-First обязателен: один PTC доходит до следующей реальной decision boundary; переход между заранее детерминированными операциями не создаёт новый model round. Правила routing и approval самого Leader не меняются. Справочные примеры: [PTC_PATTERNS.md](PTC_PATTERNS.md). Протокол не относится к native Harness PTC/Code Mode.
+Если доступен наш `ptc_execute`, канонический обязательный протокол v5 — автоматически внедрённый runtime текст из [ptc-discipline.js](../../../plugins/dsh-postman-harness/lib/ptc-discipline.js). Program-First обязателен: один PTC доходит до следующей реальной decision boundary; переход между заранее детерминированными операциями не создаёт новый model round. Правила routing и approval самого Leader не меняются. Справочные примеры: [PTC_PATTERNS.md](PTC_PATTERNS.md). Протокол не относится к native Harness PTC/Code Mode.
 
-Top-level Leader получает positive allowlist из 27 зарегистрированных инструментов:
+Top-level Leader получает `ptc_execute` и role-limited ordinary visibility (PTC-managed имена нельзя вызывать model-direct):
 
 ```text
 ask_user_question
@@ -192,6 +202,8 @@ postman_input_files
 postman_bridge
 postman_bridge_status
 postman_bridge_list
+postman_bridge_stop
+postman_team_status
 postman_worker
 postman_sol_worker
 postman_worker_interrupt
@@ -199,6 +211,9 @@ postman_worker_stop
 postman_yield
 postman_worker_list
 postman_worker_compact
+postman_worker_fresh
+postman_secretary
+postman_secretary_ledger
 ```
 
 `glob` и `web_search` Leader НЕ получает. Leader НЕ пытается обходить отсутствие инструмента другими средствами.
@@ -212,6 +227,8 @@ postman_input_files
 postman_bridge
 postman_bridge_status
 postman_bridge_list
+postman_bridge_stop
+postman_team_status
 postman_worker
 postman_sol_worker
 postman_worker_interrupt
@@ -219,6 +236,9 @@ postman_worker_stop
 postman_yield
 postman_worker_list
 postman_worker_compact
+postman_worker_fresh
+postman_secretary
+postman_secretary_ledger
 ```
 
 Worker сохраняет общий coding preset и обычные coding/research capabilities, включая direct read/glob/grep/write/edit, shell, tests/browser, jobs и report. Host deny запрещает Postman controls, ptc_execute и любые generic delegation capabilities. Secretary имеет отдельную минимальную positive surface; Sol — PTC-first local engineering profile и direct-only scoped Worker controls без generic spawning.
@@ -323,7 +343,7 @@ Leader НЕ ДОЛЖЕН превращать Worker в remote shell через 
 
 После `POSTMAN_WORKER_TASK_ACCEPTED` Leader считает соответствующий Worker turn выполняющимся до содержательного `report` либо явного runtime failure. Acceptance означает только приём задания. `postman_worker_list` показывает привязки, а не фактическую завершённость модели; `postman_worker` не используют как status query.
 
-Если нет конкретной независимой supervisor-работы, Leader уступает активный ход: для нашего PTC использует `boundary: "external_event"` в программе dispatch (Host автоматически завершает turn после safe exact accepted producer, `yield_on_success` не требуется), если PTC недоступен — вызывает обычный `postman_yield()`. Не создавай отдельный model round только ради yield после успешного dispatch PTC. Точные accepted-статусы проверяй существующим `ptc.expectStatus(result, visiblePostmanToolName)`; prepare-only, неизвестный status, ошибка или неоднозначный effect не означают WAIT. Непустое длинное description Host сокращает для диагностики без отказа программы. Оба пути уступают ход без пустого final и не отменяют Worker. Независимую работу можно выполнить до уступки. Runtime возобновляет Leader по report, failure или новому сообщению пользователя; после возобновления разбери результат, продолжи ту же Worker session либо закрой её при допустимых условиях. Leader НЕ ИМЕЕТ ПРАВА создавать новые reasoning/model rounds только потому, что Worker ещё не прислал report.
+Если нет конкретной независимой supervisor-работы, Leader уступает активный ход: для нашего PTC использует `boundary: "external_event"` в программе dispatch (Host автоматически завершает turn после safe exact accepted producer, `yield_on_success` не требуется), при необходимости явного yield вызывает `postman_yield({})` в конце той же PTC-программы; Host применяет nested conclude только после полного безопасного outer settlement. Не создавай отдельный model round только ради yield после успешного dispatch PTC. Точные accepted-статусы проверяй существующим `ptc.expectStatus(result, visiblePostmanToolName)`; prepare-only, неизвестный status, ошибка или неоднозначный effect не означают WAIT. Непустое длинное description Host сокращает для диагностики без отказа программы. Оба пути уступают ход без пустого final и не отменяют Worker. Независимую работу можно выполнить до уступки. Runtime возобновляет Leader по report, failure или новому сообщению пользователя; после возобновления разбери результат, продолжи ту же Worker session либо закрой её при допустимых условиях. Leader НЕ ИМЕЕТ ПРАВА создавать новые reasoning/model rounds только потому, что Worker ещё не прислал report.
 
 Следующая содержательная активность Leader разрешена после события: Worker прислал report; пользователь прислал новое сообщение; runtime сообщил failure/blocker; либо появилось новое внешнее evidence, объективно меняющее задачу.
 
@@ -376,7 +396,7 @@ postman_worker_interrupt({task: "По результатам report исправ
 
 ## 7. Ожидание Worker
 
-Если Worker выполняет задачу и у Leader нет другой действительно независимой supervisor-работы, Leader уступает ход через успешный PTC auto-yield либо обычный `postman_yield()` и бездействует до внешнего события. `postman_worker_stop({mode:'close'})` после одного TASK_ACCEPTED получит отказ и не прервёт Worker. Leader НЕ ДОЛЖЕН писать пользователю:
+Если Worker выполняет задачу и у Leader нет другой действительно независимой supervisor-работы, Leader уступает ход через успешный PTC auto-yield либо nested `postman_yield({})` в конце программы и бездействует до внешнего события. `postman_worker_stop({mode:'close'})` после одного TASK_ACCEPTED получит отказ и не прервёт Worker. Leader НЕ ДОЛЖЕН писать пользователю:
 
 ```text
 Waiting for worker
@@ -533,7 +553,7 @@ Mapping закрывается адресным `postman_worker_stop` в люб�
 
 ## 19. Postman Bridge
 
-`postman_bridge` доступен только top-level Postman Leader (`postman-leader` напрямую, `postman-leader-ptc` внутри `ptc_execute`). Bridge child использует Luna и узкий transport tool surface. Leader НЕ вызывает напрямую:
+`postman_bridge` доступен только top-level Postman Leader (оба preset ID внутри `ptc_execute`). Bridge child использует Luna и узкий transport tool surface. Leader НЕ вызывает напрямую:
 
 ```text
 postman_send_current_turn
