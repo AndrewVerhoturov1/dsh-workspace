@@ -90,10 +90,15 @@ test('all real child requests: Secretary/Worker/Sol functional smoke, ownership,
   ownGate.resolve();const [own,own2]=await Promise.all(owned.map(id=>f.childDone(id)))
   const { scopeParentOf }=await native('dsh-scope')
   const ordinary=f.ctx.tools.schemas(scopeParentOf(f.leader)).map(t=>t.name).filter(n=>!POSTMAN_LEADER_ONLY_TOOL_NAMES.includes(n)&&n!=='ptc_execute'&&!DELEGATION_TOOLS.includes(n))
-  const expected={secretary:SECRETARY_TOOLS.filter(n=>n!=='bash'),luna:sorted([...ordinary,'report']),sol:sorted([...ordinary.filter(n=>!['ask_user_question','exit_plan_mode'].includes(n)),...WORKER_CONTROL_TOOLS,'ptc_execute','report'])}
+  const expected={secretary:SECRETARY_TOOLS.filter(n=>n!=='bash'),luna:sorted([...ordinary.filter(n=>!['ask_user_question','list_agents','exit_plan_mode'].includes(n)),'report']),sol:sorted([...ordinary.filter(n=>!['ask_user_question','exit_plan_mode'].includes(n)),...WORKER_CONTROL_TOOLS,'ptc_execute','report'])}
   const check=(a,label=role(a))=>{
     const entries=f.requests.filter(x=>x.agent.id===a.id)
     for(const {request} of entries){toolMatrix(label,expected[role(a)],request);assert.ok(request.system.includes(postmanRoleInstruction(role(a))));assert.equal(request.model,role(a)==='sol'?'gpt-6.1-sol':'gpt-6-luna');assert.equal(request.reasoningEffort,role(a)==='sol'?'xhigh':'low')}
+    if(role(a)==='luna')for(const {request} of entries){
+      const names=request.tools.map(t=>t.name)
+      for(const name of ['ask_user_question','list_agents','exit_plan_mode'])assert.ok(!names.includes(name),label+': forbidden '+name)
+      for(const name of ['notify_parent','report'])assert.ok(names.includes(name),label+': escalation '+name)
+    }
     return entries.at(-1).request
   }
   const wr=check(worker,'Worker under Leader'), ow=check(own,'Worker under Sol');assert.deepEqual(sorted(wr.tools.map(t=>t.name)),sorted(ow.tools.map(t=>t.name)));check(secretary);check(sol)
@@ -101,11 +106,13 @@ test('all real child requests: Secretary/Worker/Sol functional smoke, ownership,
   for(const a of [secretary,worker,own]) {
     const batch=role(a)==='secretary'?[{name:'read',args:{file_path:'facts.txt'}},{name:'glob',args:{pattern:'*.txt'}},{name:'grep',args:{pattern:'fact',path:'facts.txt'}},{name:'postman_secretary_ledger',args:{content:'verified fact ledger',revision:0}},{name:'postman_secretary_ledger',args:{}}]:role(a)==='sol'?[{name:'ptc_execute',args:ptc('const r=await tools.read({file_path:"facts.txt"});const g=await tools.grep({pattern:"fact",path:"facts.txt"});await tools.edit({file_path:"facts.txt",old_string:"old fact",new_string:"new fact"});const after=await tools.read({file_path:"facts.txt"});return {r,g,after,names:Object.keys(tools)}')}]:[{name:'read',args:{file_path:'facts.txt'}},{name:'glob',args:{pattern:'*.txt'}},{name:'write',args:{file_path:a.id+'.txt',content:'smoke old'}},{name:'read',args:{file_path:a.id+'.txt'}},{name:'edit',args:{file_path:a.id+'.txt',old_string:'smoke old',new_string:'smoke new'}},{name:'read',args:{file_path:a.id+'.txt'}},{name:'pwsh',args:{command:'Write-Output safe-fixture-smoke',description:'Print safe fixture smoke evidence'}}]
     for(const action of batch){if(action.args.file_path)action.args.file_path=join(f.worktree,action.args.file_path);if(action.name==='glob')action.args.path=f.worktree;if(action.name==='grep')action.args.path=join(f.worktree,'facts.txt')}
+    if(role(a)==='luna')batch.push({name:'notify_parent',args:{message:'NEEDS_PARENT_GUIDANCE: bounded fixture needs an immediate parent decision'}})
     queues.set(a.id,[...batch,report]);const startIndex=f.results.length
     assert.equal((await admission(a)).status,'POSTMAN_WORKER_TASK_ACCEPTED');await f.childDone(a.id);check(a)
     const results=f.results.slice(startIndex).filter(x=>x.agent.id===a.id)
     for(const r of results)assert.equal(r.result.isError,false,JSON.stringify({name:r.name,result:r.result}))
     assert.ok(results.some(r=>r.name==='report'))
+    if(role(a)==='luna'){assert.equal(results.find(r=>r.name==='notify_parent').result.value.status,'PARENT_NOTIFICATION_ACCEPTED');assert.ok(results.find(r=>r.name==='report').result.value.messageId)}
     if(role(a)==='secretary'){assert.equal(f.registry.get('leader').secretaryLedger.content,'verified fact ledger');assert.equal(results.findLast(r=>r.name==='postman_secretary_ledger').result.value.ledger.content,'verified fact ledger')}
     else if(role(a)==='sol'){const v=results.find(r=>r.name==='ptc_execute').result.value;assert.equal(v.status,'ok',JSON.stringify(v));assert.equal(v.value.after.lines[0].text,'new fact');assert.ok(v.value.names.includes('read')&&v.value.names.includes('grep'));}
     else assert.equal(await readFile(join(f.worktree,a.id+'.txt'),'utf8'),'smoke new')

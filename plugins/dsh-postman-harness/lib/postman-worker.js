@@ -54,7 +54,7 @@ export { WORKER_CONTROL_TOOLS, DELEGATION_TOOLS, SECRETARY_TOOLS } from './postm
 export function postmanWorkerDeniedTools(tools, type = 'luna', scope) {
   return [...new Set([...tools.schemas(scope).map(tool => tool.name).filter(name => name.startsWith('postman_') &&
     !(type === 'sol' && WORKER_CONTROL_TOOLS.includes(name)) && !(type === 'secretary' && name === 'postman_secretary_ledger')),
-    ...tools.schemas(scope).map(tool => tool.name).filter(name => DELEGATION_TOOLS.includes(name) || (type !== 'sol' && name === 'ptc_execute') || (type === 'secretary' && name === 'implementation_artifact_apply'))])]
+    ...tools.schemas(scope).map(tool => tool.name).filter(name => DELEGATION_TOOLS.includes(name) || (type === 'luna' && ['ask_user_question', 'list_agents', 'exit_plan_mode'].includes(name)) || (type !== 'sol' && name === 'ptc_execute') || (type === 'secretary' && name === 'implementation_artifact_apply'))])]
 }
 
 export function buildPostmanWorkerStartRequest(parent, task, signal, deniedTools, label = 'Postman Worker', workerType = 'luna') {

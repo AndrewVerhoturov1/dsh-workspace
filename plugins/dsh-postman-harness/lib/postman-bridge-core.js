@@ -185,7 +185,7 @@ export function postmanBridgeRestrictionForAgent(agent, ownsPtcWorker = () => fa
   if (role === 'secretary') return { allow: [...SECRETARY_TOOLS] }
   if (role === 'sol') return { deny: [...POSTMAN_LEADER_ONLY_TOOL_NAMES.filter(name => !WORKER_CONTROL_TOOLS.includes(name)),
     ...(ownsPtcWorker(agent) ? [] : [POSTMAN_PTC_TOOL_NAME]), 'ask_user_question', 'exit_plan_mode', ...DELEGATION_TOOLS] }
-  return { deny: [...POSTMAN_LEADER_ONLY_TOOL_NAMES, POSTMAN_PTC_TOOL_NAME, ...(role === 'luna' ? DELEGATION_TOOLS : [])] }
+  return { deny: [...POSTMAN_LEADER_ONLY_TOOL_NAMES, POSTMAN_PTC_TOOL_NAME, ...(role === 'luna' ? ['ask_user_question', 'list_agents', 'exit_plan_mode', ...DELEGATION_TOOLS] : [])] }
 }
 
 export function createPostmanBridgeBoundaryManager(lookupAgent, ownsPtcWorker = () => false, roleOf = () => null) {
