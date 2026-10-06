@@ -25,16 +25,17 @@ Helpers идут через обычные доступные tools и сохр�
 
 ## Известный отказ остаётся внутри программы
 
-В `expectStatus` перечисляй все известные outcomes с детерминированным продолжением, а не только успехи:
+`expectStatus` — только настоящий successful-path invariant. Multi-outcome lifecycle требует explicit exact branching, чтобы нормальный отказ не стал runtime-error:
 
 ```js
-const close = ptc.expectStatus(
-  await tools.postman_worker_stop({ workerSessionId }),
-  ['POSTMAN_WORKER_STOPPED', 'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT']
-)
-const cleanupDeferred = close.status === 'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT'
-await tools.todo_write({ todos: [{ content: cleanupDeferred ? 'Закрыть Worker после report' : 'Задача завершена', status: cleanupDeferred ? 'pending' : 'completed' }] })
-return { cleanupDeferred, status: 'task_complete' }
+const close = await tools.postman_worker_stop({ workerSessionId, mode: 'close' })
+if (close.status === 'POSTMAN_WORKER_STOPPED') {
+  return { cleanupDeferred: false, status: close.status }
+}
+if (close.status === 'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT') {
+  return { cleanupDeferred: true, needsModelDecision: true, evidence: close }
+}
+return { needsModelDecision: true, reason: 'unexpected_status', evidence: close }
 ```
 
 Неизвестный status по-прежнему останавливает механический этап. Новый helper не нужен.

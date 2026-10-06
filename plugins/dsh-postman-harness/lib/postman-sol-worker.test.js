@@ -305,7 +305,7 @@ test('Leader skill preserves the Sol authorization contract through fresh contex
   assert.match(skill, /postman_sol_worker[^.]*не обращается[^.]*ApprovalService/)
   assert.match(skill, /Не меняй permission preset[^.]*approval: ask\/never[^.]*глобальную permission-систему Harness/)
   assert.match(skill, /Не используй обычные[^.]*postman_worker[^.]*postman_worker_interrupt[^.]*для Sol/)
-  const freshContext = skill.slice(skill.indexOf('### Visibility, compact и fresh context'), skill.indexOf('## 19.'))
+  const freshContext = skill.slice(skill.indexOf('## 9. Lifecycle'), skill.indexOf('## 10. Bridge'))
   assert.match(freshContext, /выбранный пользователем Sol route сохраняется[^.]*повторное user confirmation не требуется/)
   assert.match(freshContext, /fresh не разрешает автоматический выбор Sol/)
   assert.doesNotMatch(skill, /Перед первым назначением[^.\n]*ask_user_question|обязательно[^.\n]*положительн[^.\n]*ask_user_question/i)

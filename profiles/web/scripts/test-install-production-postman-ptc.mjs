@@ -33,6 +33,8 @@ try {
     resolve(stagingRoot, 'profiles/web/scripts/install-production.mjs'))
 
   // Include the current role implementation and canonical sources before commit.
+  for (const source of ['plugins/dsh-postman-harness/README.md','docs/subprojects/ptc/PTC_CONTRACT.md'])
+    copyFileSync(resolve(repositoryRoot,source),resolve(stagingRoot,source))
   cpSync(resolve(repositoryRoot,'plugins/dsh-postman-harness/lib'),resolve(stagingRoot,'plugins/dsh-postman-harness/lib'),{recursive:true})
   for (const name of ['package.json','pnpm-lock.yaml'])
     copyFileSync(resolve(repositoryRoot,'plugins/dsh-postman-harness',name),resolve(stagingRoot,'plugins/dsh-postman-harness',name))
@@ -142,7 +144,7 @@ try {
   assert.equal(pluginSdkInstall.status,0,'portable capability test SDK install')
   const pluginSdkAnchor = createRequire(resolve(pluginRoot,'package.json')).resolve('@deepseek-ai/dsh/package.json')
   applyPostmanNativeChildCutoff([pluginSdkAnchor,resolve(pluginRoot,'package.json')])
-  run(process.execPath,['--test','lib/postman-capability-lifecycle.test.js','lib/postman-capability-cold.test.js','lib/postman-stage2-control.test.js','lib/postman-stage2-bridge.test.js','lib/postman-stage2-cascade.test.js','lib/postman-task-close.test.js','lib/postman-objective-budget.test.js'],pluginRoot,{...process.env,DSH_CAPABILITY_SDK:pluginSdkAnchor})
+  run(process.execPath,['--test','lib/postman-capability-lifecycle.test.js','lib/postman-capability-cold.test.js','lib/postman-stage3.test.js','lib/postman-stage2-control.test.js','lib/postman-stage2-bridge.test.js','lib/postman-stage2-cascade.test.js','lib/postman-task-close.test.js','lib/postman-objective-budget.test.js'],pluginRoot,{...process.env,DSH_CAPABILITY_SDK:pluginSdkAnchor})
   console.log('clean production install: role model-request catalogs, FAST no PTC, Leader/Sol usable PTC and QuickJS/WASM PASS')
 } finally {
   rmSync(stagingRoot, { recursive: true, force: true })

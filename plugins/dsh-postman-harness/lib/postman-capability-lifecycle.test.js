@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import {assertManagementRequest} from './fixtures/postman-stage3-contract.js'
 import test from 'node:test'
 import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -34,8 +35,10 @@ for (const preset of ['postman-leader-ptc', 'code', 'postman-leader']) test('act
   if (preset === 'code') await f.switchPreset('postman-leader-ptc')
   const r = await f.turn(f.leader)
   toolMatrix('postman-leader-ptc', leaderExpected, r)
+  assertManagementRequest('leader', r)
+  assertManagementRequest('leader', await f.turn(f.leader, 'Related management follow-up'))
   assert.ok(r.tools.some(t=>t.name==='ask_user_question'),preset+': Leader retains user questions')
-  assert.equal(r.model,'gpt-6.1-sol'); assert.equal(r.reasoningEffort,'xhigh'); assert.match(r.system,/canonical programming discipline/); assert.match(r.system, /postman-leader/);assert.match(JSON.stringify(r),/POSTMAN_LEADER_SKILL_VERSION: 28/)
+  assert.equal(r.model,'gpt-6.1-sol'); assert.equal(r.reasoningEffort,'xhigh'); assert.match(r.system,/canonical programming discipline/); assert.match(r.system, /postman-leader/);assert.match(JSON.stringify(r),/POSTMAN_LEADER_SKILL_VERSION: 29/)
   await writeFile(join(f.dir, 'facts.txt'), 'old fact')
   const result = nested(await f.execute(f.leader, 'ptc_execute', ptc('const r=await tools.read({file_path:"facts.txt"});const g=await tools.grep({pattern:"old fact",path:"facts.txt"});return {r,g}')))
   assert.equal(result.r.lines[0].text, 'old fact'); assert.ok(result.g.matches.length)
@@ -95,7 +98,7 @@ test('all real child requests: Secretary/Worker/Sol functional smoke, ownership,
   const expected={secretary:SECRETARY_TOOLS.filter(n=>n!=='bash'),luna:sorted([...ordinary.filter(n=>!['ask_user_question','list_agents','exit_plan_mode'].includes(n)),'report']),sol:sorted([...ordinary.filter(n=>!['ask_user_question','exit_plan_mode'].includes(n)),...WORKER_CONTROL_TOOLS,'ptc_execute','report'])}
   const check=(a,label=role(a))=>{
     const entries=f.requests.filter(x=>x.agent.id===a.id)
-    for(const {request} of entries){toolMatrix(label,expected[role(a)],request);assert.ok(request.system.includes(postmanRoleInstruction(role(a))));assert.equal(request.model,role(a)==='sol'?'gpt-6.1-sol':'gpt-6-luna');assert.equal(request.reasoningEffort,role(a)==='sol'?'xhigh':'low')}
+    for(const {request} of entries){assertManagementRequest(role(a),request);toolMatrix(label,expected[role(a)],request);assert.ok(request.system.includes(postmanRoleInstruction(role(a))));assert.equal(request.model,role(a)==='sol'?'gpt-6.1-sol':'gpt-6-luna');assert.equal(request.reasoningEffort,role(a)==='sol'?'xhigh':'low')}
     if(role(a)==='luna')for(const {request} of entries){
       const names=request.tools.map(t=>t.name)
       for(const name of ['ask_user_question','list_agents','exit_plan_mode'])assert.ok(!names.includes(name),label+': forbidden '+name)
@@ -174,7 +177,7 @@ test('fresh real Secretary Worker Sol preserve exact catalog and ledger', {timeo
   const fresh=await call('postman_worker_fresh',{workerSessionId:a.id,task:'fresh exact role assignment'})
   assert.equal(fresh.status,'POSTMAN_WORKER_TASK_ACCEPTED',JSON.stringify(fresh));assert.notEqual(fresh.workerSessionId,a.id)
   const b=await f.childDone(fresh.workerSessionId),actual=f.requests.find(x=>x.agent.id===b.id).request
-  toolMatrix('fresh '+name,expected.tools.map(t=>t.name),actual);assert.ok(actual.system.includes(postmanRoleInstruction(role(a))));assert.equal(actual.model,expected.model);assert.equal(actual.reasoningEffort,expected.reasoningEffort)
+  assertManagementRequest(role(a),actual);toolMatrix('fresh '+name,expected.tools.map(t=>t.name),actual);assert.ok(actual.system.includes(postmanRoleInstruction(role(a))));assert.equal(actual.model,expected.model);assert.equal(actual.reasoningEffort,expected.reasoningEffort)
   if(name==='postman_secretary')assert.ok(actual.system.includes('fresh preserves verified private ledger'))
  }
 })
@@ -201,10 +204,12 @@ test('Sol actual model direct controls manage only its own Worker lifecycle', {t
  const {BasicCompactionEngine}=await native('dsh-compaction-basic'),h=await f.ctx.agents.resume({resumeSessionId:own,agentOptions:{provider:'codex',model:'gpt-6-luna'}})
  const Summarizer=class extends BasicCompactionEngine{async summarize(){return {summary:[{type:'text',text:'owned exact facts'}],provider:'codex',model:'gpt-6-luna'}}};await h.agent.ctx.plugin(Summarizer,{auto:false}).await()
  const compact=ok(await f.execute(sol,'postman_worker_compact',{workerSessionId:own}));assert.equal(compact.status,'POSTMAN_WORKER_COMPACTED',JSON.stringify(compact));await h.dispose()
+  const continuation=ok(await f.execute(sol,'postman_worker',{workerSessionId:own,task:'Related precise post-compact owned check'}));assert.equal(continuation.status,'POSTMAN_WORKER_TASK_ACCEPTED',JSON.stringify(continuation));await f.childDone(own)
+  assertManagementRequest('luna',f.requests.filter(r=>r.agent.id===own).at(-1).request)
  gate.resolve();await f.childDone(sol.id)
  for(const [name,status]of [['postman_worker_list','POSTMAN_WORKER_LIST'],['postman_worker_stop','POSTMAN_WORKER_STOPPED'],['postman_worker_fresh','POSTMAN_WORKER_TASK_ACCEPTED']]){const r=f.results.findLast(r=>r.agent.id===sol.id&&r.name===name)?.result;assert.ok(r,name);assert.equal(r.isError,false,JSON.stringify(r));assert.equal(r.value.status,status,JSON.stringify(r.value))}
  const fresh=f.results.findLast(r=>r.agent.id===sol.id&&r.name==='postman_worker_fresh').result.value
- const old=f.requests.find(r=>r.agent.id===own).request,next=f.requests.find(r=>r.agent.id===fresh.workerSessionId).request;toolMatrix('fresh owned Worker',old.tools.map(t=>t.name),next)
+ const old=f.requests.find(r=>r.agent.id===own).request,next=f.requests.find(r=>r.agent.id===fresh.workerSessionId).request;assertManagementRequest('luna',next);toolMatrix('fresh owned Worker',old.tools.map(t=>t.name),next)
 })
 
 test('Bridge actual first request exact transport allowlist including skill; no Web Send', { timeout:30000 },async t=>{
