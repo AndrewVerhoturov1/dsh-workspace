@@ -204,10 +204,56 @@ class ArtifactDetectorTests(unittest.TestCase):
     def test_envelope_accepts_exact_three_visible_lines(self):
         self.assertTrue(detector.parse_result_envelope(envelope(self.REQ, self.FILENAME), self.REQ, self.FILENAME)["ok"])
 
-    def test_envelope_rejects_extra_text(self):
-        text = "extra\n" + envelope(self.REQ, self.FILENAME)
+    def test_envelope_accepts_text_outside_and_reports_line_indices(self):
+        text = "extra\n" + envelope(self.REQ, self.FILENAME) + "\nSHA-256: " + "c" * 64
         result = detector.parse_result_envelope(text, self.REQ, self.FILENAME)
-        self.assertEqual(result["code"], detector.ARTIFACT_ENVELOPE_MISSING)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["details"], {"beginLine": 1, "artifactLine": 2, "endLine": 3})
+
+    def test_envelope_accepts_observed_sha_and_truncated_prefix(self):
+        for req, prefix, suffix in (
+            ("REQ_20261006T101657Z_4683", "", "\nSHA-256: " + "c9056a81e0d92958cd073c80cd2174826856196269778c9121bbf8ba02b5f4d3"),
+            ("REQ_20261006T101858Z_2587", "<<<POSTMAN_RESULT_BEGIN:REQ_20261006T101858Z\n\n", ""),
+        ):
+            with self.subTest(req=req):
+                filename = detector.expected_artifact_filename(req)
+                text = prefix + envelope(req, filename).replace("\n", "\n\n") + suffix
+                self.assertTrue(detector.parse_result_envelope(text, req, filename)["ok"])
+
+    def test_envelope_rejects_noncontiguous_or_reordered_lines(self):
+        begin = detector.result_begin_marker(self.REQ)
+        end = detector.result_end_marker(self.REQ)
+        for lines in ([begin, "extra", self.FILENAME, end], [end, self.FILENAME, begin]):
+            with self.subTest(lines=lines):
+                result = detector.parse_result_envelope("\n".join(lines), self.REQ, self.FILENAME)
+                self.assertEqual(result["code"], detector.ARTIFACT_ENVELOPE_MISSING)
+
+    def test_envelope_rejects_inline_begin_instead_of_exact_line(self):
+        text = "prefix " + envelope(self.REQ, self.FILENAME)
+        self.assertEqual(detector.parse_result_envelope(text, self.REQ, self.FILENAME)["code"],
+                         detector.ARTIFACT_ENVELOPE_MISSING)
+
+    def test_envelope_rejects_competing_complete_markers(self):
+        other = "REQ_20260831T043813Z_4828"
+        for extra in (
+            detector.result_begin_marker(other),
+            detector.result_end_marker(other),
+            envelope(other, detector.expected_artifact_filename(other)),
+        ):
+            with self.subTest(extra=extra):
+                text = extra + "\n" + envelope(self.REQ, self.FILENAME)
+                self.assertEqual(detector.parse_result_envelope(text, self.REQ, self.FILENAME)["code"],
+                                 detector.ARTIFACT_ENVELOPE_MISSING)
+
+    def test_envelope_rejects_complete_marker_duplicate_inside_explanation(self):
+        text = "prefix " + detector.result_begin_marker(self.REQ) + "\n" + envelope(self.REQ, self.FILENAME)
+        self.assertEqual(detector.parse_result_envelope(text, self.REQ, self.FILENAME)["code"],
+                         detector.ARTIFACT_ENVELOPE_AMBIGUOUS)
+
+    def test_envelope_rejects_duplicate_end(self):
+        text = envelope(self.REQ, self.FILENAME) + "\n" + detector.result_end_marker(self.REQ)
+        self.assertEqual(detector.parse_result_envelope(text, self.REQ, self.FILENAME)["code"],
+                         detector.ARTIFACT_ENVELOPE_AMBIGUOUS)
 
     def test_envelope_rejects_missing_begin(self):
         text = "\n".join([self.FILENAME, detector.result_end_marker(self.REQ)])

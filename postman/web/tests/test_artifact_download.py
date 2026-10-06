@@ -404,6 +404,52 @@ class ArtifactDownloadTests(unittest.TestCase):
         self.assertTrue(download.cancelled)
         self.assertIsNone(download.saved_to)
 
+    def test_sha_decorated_suggestion_preserves_canonical_staging_and_actual_metadata(self):
+        digest = "c9056a81e0d92958cd073c80cd2174826856196269778c9121bbf8ba02b5f4d3"
+        for separator in (" ", "\t"):
+            suggested = FILENAME + separator + "_SHA256_" + separator + digest + "_"
+            with self.subTest(separator=separator):
+                download = FakeDownload(suggested=suggested)
+                def validate(zip_path, trusted):
+                    self.assertEqual(Path(zip_path).name, FILENAME)
+                    return validator_ok(zip_path, trusted)
+                result, page, root = self.run_download(page=FakePage(download), validator=validate)
+                self.assertEqual(result["code"], module.RESULT_DURABLE, result)
+                self.assertEqual(page.expect_download_calls, 1)
+                self.assertEqual(page.clicks, 1)
+                self.assertFalse(download.cancelled)
+                self.assertEqual(Path(download.saved_to).name, FILENAME)
+                actual = hashlib.sha256((root / REQ / "result.zip").read_bytes()).hexdigest()
+                self.assertEqual(result["details"]["sha256"], actual)
+                self.assertNotEqual(actual, digest)
+                metadata = json.loads((root / REQ / "metadata.json").read_text(encoding="utf-8"))
+                self.assertEqual(metadata["downloadSuggestedFilename"], suggested)
+                self.assertEqual(metadata["expectedFilename"], FILENAME)
+                self.assertEqual(metadata["artifactSha256"], actual)
+
+    def test_sha_decoration_does_not_accept_other_names_or_suffixes(self):
+        digest = "a" * 64
+        for suggested in (
+            FILENAME.replace(REQ, "REQ_20261006T094159Z_4357") + " _SHA256_ " + digest + "_",
+            "../" + FILENAME + " _SHA256_ " + digest + "_",
+            FILENAME + ".exe",
+            FILENAME + " _SHA256_ " + digest + "_.exe",
+            FILENAME + " _SHA256_ " + "a" * 63 + "_",
+            FILENAME + " _SHA256_ " + "g" * 64 + "_",
+            FILENAME + " _SHA256_ " + digest,
+            FILENAME + " _OTHER_ " + digest + "_",
+            FILENAME + "\n_SHA256_ " + digest + "_",
+        ):
+            with self.subTest(suggested=suggested):
+                download = FakeDownload(suggested=suggested)
+                result, page, _ = self.run_download(page=FakePage(download))
+                self.assertEqual(result["code"], module.DOWNLOAD_FILENAME_MISMATCH)
+                self.assertTrue(download.cancelled)
+                self.assertIsNone(download.saved_to)
+                self.assertEqual(page.clicks, 1)
+                self.assertEqual(page.expect_download_calls, 1)
+                self.assertFalse(result["details"]["retryAllowed"])
+
     def test_download_failure_rejected(self):
         page = FakePage(FakeDownload(failure="canceled"))
         result, _, _ = self.run_download(page=page)
@@ -556,6 +602,7 @@ class ArtifactDownloadTests(unittest.TestCase):
         metadata = json.loads((root / REQ / "metadata.json").read_text(encoding="utf-8"))
         self.assertEqual(metadata["browserDownloadDirectory"], r"D:\Downloads_dsh_auto")
         self.assertFalse(metadata["browserDownloadDirectoryTrusted"])
+        self.assertEqual(metadata["downloadSuggestedFilename"], FILENAME)
 
     def test_metadata_contains_no_routing_authority(self):
         _, _, root = self.run_download()
