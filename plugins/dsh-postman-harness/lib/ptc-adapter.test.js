@@ -261,11 +261,12 @@ test('abort during real read reaches the local filesystem provider',async()=>{
   } finally {await rm(dir,{recursive:true,force:true})}
 })
 
-test('pilot alone sees and executes; production, Worker, Bridge, replacement cannot',async()=>{
+test('both Leader IDs execute; ordinary roles and replacement cannot',async()=>{
   const f=fixture(process.cwd()), pilot=f.agent('pilot'), production=f.agent('production','postman-leader'), standard=f.agent('standard','standard'),worker=f.agent('worker','postman-leader-ptc',{origin:'subagent',delegationDepth:1}),bridge=f.agent('bridge','postman-leader-ptc',{origin:'subagent',delegationDepth:0})
   for(const {a} of [pilot,production,standard,worker,bridge]){ a.ctx.tools.restrict(postmanBridgeRestrictionForAgent(a)); f.adapter.refresh(a) }
   assert.equal((await f.execute(pilot.a,'return 7')).value.value,7)
-  for(const {a} of [production,standard,worker,bridge]){
+  assert.equal((await f.execute(production.a,'return 7')).value.value,7)
+  for(const {a} of [standard,worker,bridge]){
     assert.equal(f.ctx.tools.schemas(a).some(s=>s.name==='ptc_execute'),false)
     const result=await f.execute(a,'return 3')
     assert.equal(result.isError,true)
@@ -390,12 +391,12 @@ test('noncooperative nested operation remains pending without a false success',a
   await f.adapter.dispose()
 })
 
-test('PTC-first Leader direct tools fail closed while exceptions and production stay direct', async () => {
+test('PTC-first Leader direct tools fail closed for both preset IDs while UI exceptions stay direct', async () => {
   const f = fixture(process.cwd()), pilot = f.agent('ptc-first'), production = f.agent('direct', 'postman-leader')
   for (const {a} of [pilot, production]) { a.ctx.tools.restrict(postmanBridgeRestrictionForAgent(a)); f.adapter.refresh(a) }
   assert.deepEqual(PILOT_PROFILE.tools, POSTMAN_PTC_ONLY_LEADER_TOOLS)
   assert.equal(PILOT_PROFILE.id, 'postman-leader-supervisor')
-  assert.equal(PILOT_PROFILE.revision, 8)
+  assert.equal(PILOT_PROFILE.revision, 9)
   assert.equal(PILOT_PROFILE.limits.maxWallMs, 300000)
   assert.equal(PILOT_PROFILE.limits.maxToolCalls, 256)
   assert.equal(PILOT_PROFILE.limits.quickjsMemoryBytes, 67108864)
@@ -405,7 +406,7 @@ test('PTC-first Leader direct tools fail closed while exceptions and production 
   assert.equal(PILOT_PROFILE.limits.maxValueNodes, 10000)
   assert.equal(PILOT_PROFILE.limits.maxOutputBytes, DEFAULT_LIMITS.maxOutputBytes)
   assert.equal(PILOT_PROFILE.limits.maxConcurrentToolCalls, 1)
-  for (const name of ['ptc_execute', 'skill', 'ask_user_question', 'exit_plan_mode', 'read_image', 'postman_yield'])
+  for (const name of ['ptc_execute', 'skill', 'ask_user_question', 'exit_plan_mode', 'read_image'])
     assert.equal(f.ctx.tools.schemas(pilot.a).some(s => s.name === name), true, name)
   for (const name of POSTMAN_PTC_ONLY_LEADER_TOOLS) {
     assert.equal(f.ctx.tools.schemas(pilot.a).some(s => s.name === name), true, name)
@@ -413,13 +414,14 @@ test('PTC-first Leader direct tools fail closed while exceptions and production 
     assert.equal(denied.isError, true, name)
     assert.match(denied.error.message, /POSTMAN_PTC_DIRECT_CALL_REJECTED.*ptc_execute/, name)
     const allowed = await f.ctx.tools.execute({callId:'production-'+name,name,arguments:{},agent:production.a,signal:new AbortController().signal})
-    assert.equal(allowed.isError, false, name)
+    assert.equal(allowed.isError, true, name)
+    assert.match(allowed.error.message, /POSTMAN_PTC_DIRECT_CALL_REJECTED/, name)
   }
-  for (const name of ['skill', 'ask_user_question', 'exit_plan_mode', 'read_image', 'postman_yield']) {
+  for (const name of ['skill', 'ask_user_question', 'exit_plan_mode', 'read_image']) {
     const direct = await f.ctx.tools.execute({callId:'exception-'+name,name,arguments:{},agent:pilot.a,signal:new AbortController().signal})
     assert.equal(direct.isError, false, name)
   }
-  assert.equal(f.ctx.tools.schemas(production.a).some(s=>s.name==='ptc_execute'),false)
+  assert.equal(f.ctx.tools.schemas(production.a).some(s=>s.name==='ptc_execute'),true)
   assert.equal(f.ctx.tools.schemas(pilot.a).some(s=>s.name==='run_code'),false)
   await f.adapter.dispose()
 })

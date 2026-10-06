@@ -4,6 +4,8 @@ export const POSTMAN_BRIDGE_PROVIDER = 'spawn'
 export const POSTMAN_BRIDGE_TOOL_NAME = 'postman_bridge'
 export const POSTMAN_BRIDGE_STATUS_TOOL_NAME = 'postman_bridge_status'
 export const POSTMAN_BRIDGE_LIST_TOOL_NAME = 'postman_bridge_list'
+export const POSTMAN_BRIDGE_STOP_TOOL_NAME = 'postman_bridge_stop'
+export const POSTMAN_TEAM_STATUS_TOOL_NAME = 'postman_team_status'
 export const POSTMAN_CHILD_NOTIFY_TOOL_NAME = 'notify_parent'
 export const POSTMAN_TASK_PREPARE_TOOL_NAME = 'postman_task_prepare'
 export const POSTMAN_TASK_RESTORE_TOOL_NAME = 'postman_task_restore'
@@ -54,6 +56,8 @@ export const POSTMAN_LEADER_TOOL_ALLOWLIST = Object.freeze([
   POSTMAN_BRIDGE_TOOL_NAME,
   POSTMAN_BRIDGE_STATUS_TOOL_NAME,
   POSTMAN_BRIDGE_LIST_TOOL_NAME,
+  POSTMAN_BRIDGE_STOP_TOOL_NAME,
+  POSTMAN_TEAM_STATUS_TOOL_NAME,
   POSTMAN_WORKER_TOOL_NAME,
   POSTMAN_SOL_WORKER_TOOL_NAME,
   POSTMAN_WORKER_INTERRUPT_TOOL_NAME,
@@ -66,9 +70,9 @@ export const POSTMAN_LEADER_TOOL_ALLOWLIST = Object.freeze([
   POSTMAN_SECRETARY_LEDGER_TOOL_NAME,
 ])
 // Ordinary visibility stays intact for nested QuickJS → ToolRuntime dispatch.
-// These operations are not model-direct for the exact experimental Leader.
+// These operations are PTC-managed for both canonical and compatibility Leader IDs.
 export const POSTMAN_PTC_ONLY_LEADER_TOOLS = Object.freeze(POSTMAN_LEADER_TOOL_ALLOWLIST.filter(
-  name => !['skill', 'ask_user_question', 'exit_plan_mode', 'read_image', POSTMAN_YIELD_TOOL_NAME, POSTMAN_SOL_WORKER_TOOL_NAME].includes(name),
+  name => !['skill', 'ask_user_question', 'exit_plan_mode', 'read_image'].includes(name),
 ))
 
 export const POSTMAN_WORKER_PTC_TOOL_NAMES = Object.freeze(['read', 'glob', 'grep', 'web_fetch', 'web_search', 'write', 'edit'])
@@ -81,6 +85,18 @@ export const POSTMAN_SOL_PTC_TOOL_NAMES = Object.freeze([...POSTMAN_WORKER_PTC_T
 export const POSTMAN_PTC_SUCCESS_STATUSES = Object.freeze({
   postman_task_prepare: Object.freeze(['TASK_CONTEXT_READY', 'POSTMAN_TASK_CONTEXT_ALREADY_READY']),
   postman_worker: Object.freeze(['POSTMAN_WORKER_TASK_ACCEPTED']),
+  postman_sol_worker: Object.freeze(['POSTMAN_WORKER_TASK_ACCEPTED']),
+  postman_yield: Object.freeze(['POSTMAN_YIELDED']),
+  postman_task_restore: Object.freeze(['TASK_CONTEXT_RESTORED']),
+  postman_team_status: Object.freeze(['POSTMAN_TEAM_STATUS']),
+  postman_input_files: Object.freeze(['POSTMAN_INPUT_READY', 'POSTMAN_INPUT_CLEANED', 'POSTMAN_INPUT_ALREADY_CLEANED', 'POSTMAN_INPUT_LOCATED', 'POSTMAN_ARCHIVE_PACKED', 'POSTMAN_ARCHIVE_LISTED', 'POSTMAN_ARCHIVE_UNPACKED']),
+  postman_worker_list: Object.freeze(['POSTMAN_WORKER_LIST']),
+  postman_worker_stop: Object.freeze(['POSTMAN_WORKER_STOPPED', 'POSTMAN_WORKER_CANCELLED', 'POSTMAN_WORKER_ALREADY_STOPPED']),
+  postman_worker_compact: Object.freeze(['POSTMAN_WORKER_COMPACTED']),
+  postman_secretary_ledger: Object.freeze(['POSTMAN_SECRETARY_LEDGER']),
+  postman_bridge_list: Object.freeze(['POSTMAN_BRIDGE_LIST']),
+  postman_bridge_status: Object.freeze(['POSTMAN_BRIDGE_QUEUED', 'POSTMAN_BRIDGE_RUNNING', 'POSTMAN_BRIDGE_TERMINAL']),
+  postman_bridge_stop: Object.freeze(['POSTMAN_BRIDGE_STOP_REQUESTED', 'POSTMAN_BRIDGE_ALREADY_TERMINAL']),
   postman_secretary: Object.freeze(['POSTMAN_WORKER_TASK_ACCEPTED']),
   postman_worker_fresh: Object.freeze(['POSTMAN_WORKER_TASK_ACCEPTED']),
   postman_worker_interrupt: Object.freeze(['POSTMAN_WORKER_INTERRUPT_TASK_ACCEPTED']),
@@ -101,6 +117,8 @@ export const POSTMAN_LEADER_ONLY_TOOL_NAMES = Object.freeze([
   POSTMAN_BRIDGE_TOOL_NAME,
   POSTMAN_BRIDGE_STATUS_TOOL_NAME,
   POSTMAN_BRIDGE_LIST_TOOL_NAME,
+  POSTMAN_BRIDGE_STOP_TOOL_NAME,
+  POSTMAN_TEAM_STATUS_TOOL_NAME,
   POSTMAN_WORKER_TOOL_NAME,
   POSTMAN_SOL_WORKER_TOOL_NAME,
   POSTMAN_WORKER_INTERRUPT_TOOL_NAME,
@@ -162,7 +180,7 @@ export function isTopLevelPostmanLeader(agent) {
 }
 
 export function isTopLevelPostmanPtcLeader(agent) {
-  return topLevelPostmanPreset(agent) === POSTMAN_PTC_LEADER_PRESET_ID
+  return isTopLevelPostmanSupervisor(agent)
 }
 
 export function isTopLevelPostmanSupervisor(agent) {
@@ -177,9 +195,6 @@ export function postmanBridgeCallerAllowed(agent) {
 export function postmanBridgeRestrictionForAgent(agent, ownsPtcWorker = () => false, roleOf = () => null) {
   if (isTopLevelPostmanPtcLeader(agent)) {
     return { allow: [...POSTMAN_LEADER_TOOL_ALLOWLIST, POSTMAN_PTC_TOOL_NAME] }
-  }
-  if (isTopLevelPostmanLeader(agent)) {
-    return { allow: [...POSTMAN_LEADER_TOOL_ALLOWLIST] }
   }
   const role = roleOf(agent)
   if (role === 'secretary') return { allow: [...SECRETARY_TOOLS] }

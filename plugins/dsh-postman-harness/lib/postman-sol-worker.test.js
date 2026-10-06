@@ -49,6 +49,132 @@ async function fixture(t, { start } = {}) {
     options: (agent, config) => requestOptions({ agent }, async () => config) }
 }
 
+async function subtree(t) {
+  const f = await fixture(t)
+  const accepted = await f.run(f.tools.solTaskTool, { task: 'Sol subtree' })
+  const sol = { id: accepted.workerSessionId, status: 'idle', inbox: { hasPending: false }, session: {
+    header: { id: accepted.workerSessionId, origin: 'subagent', parentSession: f.parent.id, delegationDepth: 1 }, events: [] } }
+  f.agents.set(sol.id, sol); await f.tools.confirmActivation(sol)
+  const ids = []
+  for (let n = 0; n < 2; n++) {
+    const r = await f.run(f.tools.taskTool, { task: 'child ' + n, createNew: true }, { agent: sol })
+    assert.equal(r.status, 'POSTMAN_WORKER_TASK_ACCEPTED')
+    const child = { id: r.workerSessionId, status: 'idle', inbox: { hasPending: false }, session: {
+      header: { id: r.workerSessionId, origin: 'subagent', parentSession: sol.id, delegationDepth: 2 }, events: [] } }
+    f.agents.set(child.id, child); ids.push(child.id)
+  }
+  f.ctx.subagents.inspectClosedContinuableChild = async (_parent, id) => f.calls.closes.includes(id) && !f.agents.has(id)
+  return { ...f, sol, ids }
+}
+
+test('cascade close preflights every exact child before mutations and never cancels blockers', async t => {
+  for (const state of ['running', 'pending', 'unknown', 'uncertain']) {
+    const f = await subtree(t), id = f.ids[1]
+    if (state === 'running') f.agents.get(id).status = 'running'
+    if (state === 'pending') f.agents.get(id).inbox.hasPending = true
+    if (state === 'unknown') f.agents.delete(id)
+    if (state === 'uncertain') await f.registry.change(f.parent.id, row => ({ ...row, workers: { ...row.workers, [id]: { ...row.workers[id], delivery: 'unknown' } } }))
+    const result = await f.run(f.tools.stopTool, { mode: 'close', workerSessionId: f.sol.id, cascade: true })
+    assert.equal(result.status, 'POSTMAN_WORKER_CASCADE_BLOCKED')
+    assert.ok(result.blockers.some(b => b.workerSessionId === id))
+    assert.deepEqual(f.calls.closes, [])
+    assert.equal(Object.keys(f.registry.get(f.parent.id).workers).length, 3)
+  }
+})
+
+test('cascade close retires children then Sol; retains audit and Leader cannot interrupt grandchild', async t => {
+  const f = await subtree(t)
+  assert.equal((await f.run(f.tools.interruptTool, { workerSessionId: f.ids[0], task: 'foreign' })).status, 'POSTMAN_WORKER_TARGET_UNKNOWN')
+  const result = await f.run(f.tools.stopTool, { mode: 'close', workerSessionId: f.sol.id, cascade: true })
+  assert.equal(result.status, 'POSTMAN_WORKER_STOPPED')
+  assert.equal(result.taskCompleted, false)
+  assert.deepEqual(f.calls.closes, [...f.ids, f.sol.id])
+  const row = f.registry.get(f.parent.id)
+  assert.deepEqual(row.workers, {})
+  assert.equal(row.retiredWorkers.length, 3)
+  assert.ok(row.retiredWorkers.slice(0, 2).every(b => b.ownerSessionId === f.sol.id))
+})
+
+test('cascade cancel active subtree settles fully; partial release retains truthful uncertain bindings', async t => {
+  const f = await subtree(t)
+  f.sol.status = 'running'; f.agents.get(f.ids[0]).status = 'running'
+  const close = f.ctx.subagents.closeContinuableChild
+  f.ctx.subagents.closeContinuableChild = async (parent, id, check) => {
+    if (id === f.ids[1]) throw new Error('settlement failed')
+    return close(parent, id, check)
+  }
+  const partial = await f.run(f.tools.stopTool, { mode: 'cancel', workerSessionId: f.sol.id, cascade: true })
+  assert.equal(partial.status, 'POSTMAN_WORKER_CASCADE_PARTIAL')
+  assert.deepEqual(f.calls.closes, [f.ids[0]])
+  assert.equal(f.registry.get(f.parent.id).workers[f.sol.id].state, 'uncertain')
+  f.ctx.subagents.closeContinuableChild = close
+  const result = await f.run(f.tools.stopTool, { mode: 'cancel', workerSessionId: f.sol.id, cascade: true })
+  assert.equal(result.status, 'POSTMAN_WORKER_CANCELLED')
+  assert.deepEqual(f.calls.closes, [...f.ids, f.sol.id])
+  const fresh = await f.run(f.tools.freshTool, { workerSessionId: f.sol.id, task: 'new authorized Sol' })
+  assert.equal(fresh.status, 'POSTMAN_WORKER_TASK_ACCEPTED')
+  assert.notEqual(fresh.workerSessionId, f.sol.id)
+  assert.equal(fresh.workerType, 'sol')
+})
+
+test('fresh retires settled owned workers only, replaces Sol ID and retains Secretary ledger', async t => {
+  const f = await subtree(t)
+  await f.registry.change(f.parent.id, row => ({ ...row, secretaryLedger: { revision: 7, content: 'private ledger' } }))
+  const result = await f.run(f.tools.freshTool, { workerSessionId: f.sol.id, task: 'new task', retireOwnedWorkers: true })
+  assert.equal(result.status, 'POSTMAN_WORKER_TASK_ACCEPTED')
+  assert.equal(result.fresh, true); assert.notEqual(result.workerSessionId, f.sol.id)
+  assert.deepEqual(f.calls.closes, [...f.ids, f.sol.id])
+  assert.equal(f.registry.get(f.parent.id).secretaryLedger.content, 'private ledger')
+  assert.ok(!JSON.stringify(f.calls.starts.at(-1).request.prompt).includes(f.sol.id))
+})
+
+test('cascade cancel never claims full settlement for a resident child or unsupported cutoff', async t => {
+  const f = await subtree(t)
+  const close = f.ctx.subagents.closeContinuableChild
+  delete f.ctx.subagents.closeContinuableChild
+  const unsupported = await f.run(f.tools.stopTool, { mode: 'cancel', workerSessionId: f.sol.id, cascade: true })
+  assert.equal(unsupported.status, 'POSTMAN_WORKER_LIFECYCLE_UNSUPPORTED')
+  assert.equal(f.registry.get(f.parent.id).workers[f.sol.id].state, 'ready')
+  f.ctx.subagents.closeContinuableChild = async (parent, id, check) => {
+    const resident = f.agents.get(id)
+    const result = await close(parent, id, check)
+    f.agents.set(id, resident)
+    return result
+  }
+  const partial = await f.run(f.tools.stopTool, { mode: 'cancel', workerSessionId: f.sol.id, cascade: true })
+  assert.equal(partial.status, 'POSTMAN_WORKER_CASCADE_PARTIAL')
+  assert.equal(f.registry.get(f.parent.id).workers[f.ids[0]].state, 'uncertain')
+  assert.ok(f.registry.get(f.parent.id).workers[f.sol.id])
+})
+
+test('fresh active subtree rejects before retirement, cascade only accepts exact Leader Sol', async t => {
+  const f = await subtree(t)
+  f.agents.get(f.ids[0]).status = 'running'
+  const fresh = await f.run(f.tools.freshTool, { workerSessionId: f.sol.id, task: 'fresh', retireOwnedWorkers: true })
+  assert.equal(fresh.status, 'POSTMAN_WORKER_CASCADE_BLOCKED')
+  assert.deepEqual(f.calls.closes, [])
+  const wrong = await f.run(f.tools.stopTool, { workerSessionId: f.ids[0], cascade: true }, { agent: f.sol })
+  assert.equal(wrong.status, 'POSTMAN_WORKER_CASCADE_TARGET_REJECTED')
+})
+
+test('teamSnapshot reads bounded durable/live rows without recovery or private contents', async t => {
+  const f = await subtree(t)
+  await f.run(f.tools.secretaryTool, { task: 'secret facts' })
+  await f.run(f.tools.taskTool, { task: 'secret task', createNew: true })
+  await f.registry.change(f.parent.id, row => ({ ...row, secretaryLedger: { revision: 4, content: 'private ledger' } }))
+  const before = JSON.stringify(f.registry.get(f.parent.id))
+  f.ctx.subagents.listChildren = () => { throw new Error('snapshot cannot enumerate') }
+  const result = f.tools.teamSnapshot(f.parent)
+  assert.equal(result.status, 'POSTMAN_TEAM_STATUS')
+  assert.equal(result.secretary.ledgerRevision, 4)
+  assert.equal(result.workers.used, 1); assert.equal(result.sol.ownedWorkers.used, 2)
+  assert.equal(result.sol.ownedWorkers.states.idle, 2)
+  assert.deepEqual(result.workers.rows[0].budget, { used: 0, soft: 12, hard: 15, exhausted: false })
+  assert.ok(!JSON.stringify(result).includes('secret task'))
+  assert.ok(!JSON.stringify(result).includes('private ledger'))
+  assert.equal(JSON.stringify(f.registry.get(f.parent.id)), before)
+})
+
 test('Sol pins model/xhigh, shared worktree, persona and transport-only deny; Luna remains unchanged', async t => {
   const f = await fixture(t)
   const receipt = await f.run(f.tools.solTaskTool, { task: 'Complex task' }, { callId: 'exact-sol-call' })
@@ -147,7 +273,7 @@ test('shared list/stop operate on Sol without approval and keep peer/durable ses
 test('only top-level Leaders receive direct Sol tool outside PTC', async t => {
   assert.ok(POSTMAN_LEADER_TOOL_ALLOWLIST.includes('postman_sol_worker'))
   assert.ok(POSTMAN_LEADER_ONLY_TOOL_NAMES.includes('postman_sol_worker'))
-  assert.ok(!POSTMAN_PTC_ONLY_LEADER_TOOLS.includes('postman_sol_worker'))
+  assert.ok(POSTMAN_PTC_ONLY_LEADER_TOOLS.includes('postman_sol_worker'))
   const f = await fixture(t)
   for (const agent of [{ ...f.parent, id: 'foreign' }, { ...f.parent, session: { header: { agentPreset: 'standard' } } },
     { ...f.parent, session: { header: { agentPreset: 'postman-leader', origin: 'subagent', delegationDepth: 1 } } }]) {

@@ -53,6 +53,7 @@ export const POSTMAN_TASK_DOMAIN = defineDomain({
       terminal: z.unknown().optional(),
       synchronization: z.enum(['pending', 'busy', 'failed', 'synchronized', 'not-required']).optional(),
       grantDiagnostic: z.string().optional(),
+      cancellationRequested: z.boolean().optional(),
     })).optional(),
   }).strict()) },
 })

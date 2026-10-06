@@ -1,5 +1,6 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { Inbox } from '@deepseek-ai/dsh-agent'
+import { applyChildComposition, foldSubagentDescriptor } from '@deepseek-ai/dsh-subagent'
 import { scopeParentOf } from '@deepseek-ai/dsh-scope'
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
@@ -89,7 +90,8 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
   const taskContexts = contexts
   // One durable task row; exact parent-scoped projections reuse the same manager.
   const rootId = id => ctx.agents.get(id)?.session?.header?.origin === 'subagent'
-    ? ctx.agents.get(id).session.header.parentSession : id
+    ? ctx.agents.get(id).session.header.parentSession
+    : [...leaders.keys()].find(leaderId => taskContexts?.record?.(leaderId)?.workers?.[id]?.workerType === 'sol') ?? id
   const owned = (row, id) => Object.fromEntries(Object.entries(row?.workers ?? {}).filter(([, b]) =>
     (b.ownerSessionId ?? row.leaderSessionId ?? rootId(id)) === id))
   const rawRow = id => taskContexts?.record?.(rootId(id))
@@ -104,7 +106,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     changeRecord: taskContexts.changeRecord ? changeScoped : undefined,
     ...Object.fromEntries(['isRestoring', 'hasActiveOperation', 'hasSyncOperation', 'beginWorkerAdmission', 'endWorkerAdmission'].filter(name => typeof taskContexts[name] === 'function').map(name =>
       [name, (id, ...args) => taskContexts[name](rootId(id), ...args)])) }
-  const depthOf = id => (ctx.agents.get(id)?.session?.header?.delegationDepth ?? 0) + 1
+  const depthOf = id => (ctx.agents.get(id)?.session?.header?.delegationDepth ?? (rootId(id) !== id ? 1 : 0)) + 1
   const leaders = new Map()
   const disposedParents = new WeakSet()
   const bindingChanged = id => onBindingChange(id)
@@ -604,8 +606,8 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     const matches = entries.filter(entry => entry.id === id)
     return matches.length === 1 && matches[0].kind === 'child' && matches[0].mode === 'continuable'
   }
-  async function closeEvidence(parent, binding, signal) {
-    if (workerTypeOf(binding) === 'sol' && Object.values(rawRow(parent.id)?.workers ?? {}).some(value => value.ownerSessionId === binding.id))
+  async function closeEvidence(parent, binding, signal, preflightOwned = false) {
+    if (!preflightOwned && workerTypeOf(binding) === 'sol' && Object.values(rawRow(parent.id)?.workers ?? {}).some(value => value.ownerSessionId === binding.id))
       return { ready: false, reason: 'Sol must retire its own Worker bindings before closing/fresh' }
     if (binding.state !== 'ready' || binding.delivery !== 'none')
       return { ready: false, reason: 'binding or admission uncertain; request approved addressed cancel' }
@@ -621,9 +623,10 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     // Capture before the asynchronous descendant read, not after it.
     const eventCount = child.session.events.length
     const descendants = await ctx.subagents.listDescendants(binding.id, signal)
-    if (descendants.some(entry => entry.kind === 'diagnostic' ||
+    const ownedIds = preflightOwned ? new Set(Object.values(rawRow(parent.id)?.workers ?? {}).filter(b => b.ownerSessionId === binding.id).map(b => b.id)) : new Set()
+    if (descendants.some(entry => !ownedIds.has(entry.id) && (entry.kind === 'diagnostic' ||
         (entry.kind === 'child' && entry.mode === 'continuable' &&
-          (entry.activity !== 'inactive' || ctx.agents.get(entry.id)))))
+          (entry.activity !== 'inactive' || ctx.agents.get(entry.id))))))
       return { ready: false, reason: 'managed descendants running or uncertain' }
     return { ...evidence, eventCount }
   }
@@ -634,22 +637,30 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       mode: { type: 'string', enum: ['close', 'cancel'] },
       workerSessionId: { type: 'string', description: 'Exact Worker ID; mandatory for cancel.' },
       reason: { type: 'string', description: 'Explanation, never authorization.' },
+      cascade: { type: 'boolean', description: 'Exact Leader-owned Sol only; retire its exact direct ordinary Workers before Sol.' },
     }, output: output(),
-    async execute(args, exec) {
+    execute: (args, exec) => stopWorker(args, exec),
+  })
+  async function stopWorker(args, exec, hostOwned = false, slotLocked = false) {
       const parent = exec?.agent
-      if (!authorized(parent)) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
+      if (!hostOwned && !authorized(parent)) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
       const id = args?.workerSessionId, mode = args?.mode ?? (id ? 'cancel' : 'close')
       if (mode !== 'close' && mode !== 'cancel') return { status: 'POSTMAN_WORKER_STOP_MODE_INVALID' }
       if (id !== undefined && (typeof id !== 'string' || !id)) return { status: 'POSTMAN_WORKER_TARGET_UNKNOWN' }
       if (mode === 'cancel' && !id) return { status:'POSTMAN_WORKER_TARGET_REQUIRED' }
       const g = groupFor(parent)
-      await reconcileClosedBindings(parent, g)
+      if (args.cascade !== true && !slotLocked) await reconcileClosedBindings(parent, g)
       const chosen = await enqueue(g, () => select(parent, id, g))
       if (!chosen.binding) {
         if (id && g.stopped.has(id)) return { status: 'POSTMAN_WORKER_ALREADY_STOPPED', workerSessionId: id }
         return chosen
       }
       const selected = chosen.binding, slot = slotFor(g, selected)
+      if (args.cascade === true) {
+        if (!isTopLevelPostmanSupervisor(parent) || workerTypeOf(selected) !== 'sol')
+          return { status: 'POSTMAN_WORKER_CASCADE_TARGET_REJECTED', workerSessionId: selected.id }
+        return cascadeStop(parent, selected, slot, mode, exec)
+      }
       if (workerTypeOf(selected) === 'sol' && Object.values(rawRow(parent.id)?.workers ?? {}).some(value => value.ownerSessionId === selected.id))
         return {status: 'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT', workerSessionId: selected.id, reason: 'Sol must retire its own Worker bindings first'}
       let witness
@@ -664,8 +675,8 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
 
       // Per-Worker queue prevents a selected admission between validation and drain.
       // No Leader-wide queue is held while a human or model runs.
-      return admitted(parent, () => enqueue(slot, async () => {
-        if (slot.closed || !authorized(parent)) return { status: 'POSTMAN_WORKER_TARGET_UNKNOWN' }
+      const stop = async () => {
+        if (slot.closed || (!hostOwned && !authorized(parent))) return { status: 'POSTMAN_WORKER_TARGET_UNKNOWN' }
         const current = bindings(parent, g)[selected.id]
         if (!current || current.id !== selected.id || !matchesContext(parent, slot))
           return { status: 'POSTMAN_WORKER_BINDING_UNCERTAIN', workerSessionId: selected.id }
@@ -722,6 +733,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
             })
             if (!closed) throw new Error('POSTMAN_WORKER_BINDING_CHANGED')
           }
+          if (ctx.agents.get(selected.id)) throw new Error('POSTMAN_WORKER_RESIDENT_NOT_SETTLED')
           await removeBinding(parent, g, slot, selected.id)
           return { status: mode === 'cancel' ? 'POSTMAN_WORKER_CANCELLED' : 'POSTMAN_WORKER_STOPPED',
             workerSessionId: selected.id, residentReleased: true, mappingRemoved: true,
@@ -734,9 +746,94 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
           return { status: 'POSTMAN_WORKER_STOP_FAILED', workerSessionId: selected.id,
             outcome: 'unknown', diagnostic: diagnostic(error) }
         }
-      }))
-    },
-  })
+      }
+      return admitted(parent, () => slotLocked ? stop() : enqueue(slot, stop))
+  }
+  async function cascadeStop(parent, selected, slot, mode, exec) {
+    return admitted(parent, () => enqueue(slot, async () => {
+      const current = rowOf(parent.id)?.workers?.[selected.id]
+      if (!current || cancelWitness(current) !== cancelWitness(selected))
+        return { status: 'POSTMAN_WORKER_BINDING_CHANGED', workerSessionId: selected.id }
+      let sol = ctx.agents.get(selected.id), hostHandle
+      if (!sol) {
+        const saved = await history(selected.id, parent.id, exec.signal)
+        const descriptor = saved && foldSubagentDescriptor(saved.session.events)
+        if (!saved || descriptor?.mode !== 'continuable' || typeof ctx.agents.resume !== 'function' ||
+            saved.session.events.some(event => event.type === 'subagent/closed'))
+          return { status: 'POSTMAN_WORKER_CASCADE_BLOCKED', workerSessionId: selected.id,
+            blockers: [{ workerSessionId: selected.id, reason: 'exact cold Sol activation unavailable' }] }
+        try {
+          hostHandle = await ctx.agents.resume({ resumeSessionId: selected.id, agentOptions: { ...POSTMAN_SOL_WORKER_AGENT_OPTIONS },
+            signal: exec.signal, setup: childCtx => applyChildComposition(childCtx, parent, { persona: descriptor.persona, toolFilter: descriptor.toolFilter }) })
+          sol = hostHandle.agent
+          if (ctx.agents.get(sol.id) !== sol || sol.id !== selected.id || sol.session.header.origin !== 'subagent' ||
+              sol.session.header.parentSession !== parent.id || sol.session.header.delegationDepth !== depthOf(parent.id))
+            throw new Error('exact resumed Sol identity/setup unavailable')
+        } catch (error) {
+          await hostHandle?.dispose()
+          return { status: 'POSTMAN_WORKER_CASCADE_BLOCKED', workerSessionId: selected.id,
+            blockers: [{ workerSessionId: selected.id, reason: diagnostic(error) }] }
+        }
+      }
+      try {
+      const children = Object.entries(rawRow(parent.id)?.workers ?? {}).filter(([, b]) => b.ownerSessionId === selected.id)
+      const blockers = []
+      for (const [id, binding] of children) {
+        try {
+          if (binding.id !== id || workerTypeOf(binding) !== 'luna' || !await verifyIdentity(sol, id, exec.signal))
+            blockers.push({ workerSessionId: id, reason: 'exact ordinary child identity unavailable' })
+          else if (mode === 'close') {
+            const evidence = await closeEvidence(sol, binding, exec.signal)
+            if (!evidence.ready) blockers.push({ workerSessionId: id, reason: evidence.reason })
+          }
+        } catch (error) { blockers.push({ workerSessionId: id, reason: diagnostic(error) }) }
+      }
+      try {
+        if (!await verifyIdentity(parent, selected.id, exec.signal))
+          blockers.push({ workerSessionId: selected.id, reason: 'Sol identity unavailable' })
+        else if (mode === 'close') {
+          const evidence = await closeEvidence(parent, current, exec.signal, true)
+          if (!evidence.ready) blockers.push({ workerSessionId: selected.id, reason: evidence.reason })
+        }
+      } catch (error) { blockers.push({ workerSessionId: selected.id, reason: diagnostic(error) }) }
+      if (blockers.length) return { status: 'POSTMAN_WORKER_CASCADE_BLOCKED', workerSessionId: selected.id, blockers }
+      if (typeof ctx.subagents.closeContinuableChild !== 'function')
+        return { status: 'POSTMAN_WORKER_LIFECYCLE_UNSUPPORTED', workerSessionId: selected.id, diagnostic: { code: 'EXACT_CHILD_ADMISSION_CUTOFF_UNAVAILABLE' } }
+      const results = []
+      try {
+      // Revoke Sol admissions while the Host retires children. Ownership is never reassigned.
+      await changeBinding(parent, selected.id, entry => {
+        if (entry !== current) throw new Error('POSTMAN_WORKER_BINDING_CHANGED')
+        return { ...entry, state: 'stopping' }
+      })
+      bindingChanged(selected.id)
+      for (const [id] of children) {
+        const result = await stopWorker({ workerSessionId: id, mode }, { ...exec, agent: sol }, true)
+        results.push(result)
+        if (!['POSTMAN_WORKER_STOPPED', 'POSTMAN_WORKER_CANCELLED'].includes(result.status)) break
+      }
+      const remaining = Object.values(rawRow(parent.id)?.workers ?? {}).filter(b => b.ownerSessionId === selected.id)
+      if (remaining.length || results.some(r => !['POSTMAN_WORKER_STOPPED', 'POSTMAN_WORKER_CANCELLED'].includes(r.status))) {
+        await changeBinding(parent, selected.id, entry => ({ ...entry, state: 'uncertain' }))
+        bindingChanged(selected.id)
+        return { status: 'POSTMAN_WORKER_CASCADE_PARTIAL', workerSessionId: selected.id, results,
+          blockers: remaining.map(b => ({ workerSessionId: b.id, reason: 'not retired' })), taskCompleted: false }
+      }
+      await changeBinding(parent, selected.id, entry => ({ ...entry, state: current.state }))
+      // Direct Host resume is not manager-owned: release its idle handle before durable Sol closure.
+      if (hostHandle) { await hostHandle.dispose(); hostHandle = null }
+      const result = await stopWorker({ workerSessionId: selected.id, mode }, exec, false, true)
+      return { ...result, cascade: true, results, ...(results.length && !['POSTMAN_WORKER_STOPPED', 'POSTMAN_WORKER_CANCELLED'].includes(result.status)
+        ? { status: 'POSTMAN_WORKER_CASCADE_PARTIAL' } : {}) }
+      } catch (error) {
+        try { await changeBinding(parent, selected.id, entry => ({ ...entry, state: 'uncertain' })) } catch {}
+        bindingChanged(selected.id)
+        return { status: 'POSTMAN_WORKER_CASCADE_PARTIAL', workerSessionId: selected.id, results,
+          outcome: 'unknown', taskCompleted: false, diagnostic: diagnostic(error) }
+      }
+      } finally { await hostHandle?.dispose() }
+    }))
+  }
   const listTool = defineTool({
     name: POSTMAN_WORKER_LIST_TOOL_NAME,
     description: 'Read exact Leader Worker bindings, residency, durable closure and quota without resuming children.',
@@ -813,22 +910,31 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
   const freshTool = defineTool({
     name: 'postman_worker_fresh',
     description: 'Retire an exact owned settled child and spawn a fresh role-preserving Session for an explicit new assignment. No history inheritance or Git reset; Secretary ledger survives. Sol user-selected route is preserved.',
-    parameters: { workerSessionId: { type: 'string', required: true }, task: { type: 'string', required: true }, label: { type: 'string' } }, output: output(),
+    parameters: { workerSessionId: { type: 'string', required: true }, task: { type: 'string', required: true }, label: { type: 'string' }, retireOwnedWorkers: { type: 'boolean' } }, output: output(),
     async execute(args, exec) {
       const parent = exec.agent
       if (!authorized(parent)) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
       if (typeof args.task !== 'string' || !args.task.trim()) return { status: 'POSTMAN_WORKER_TASK_INVALID' }
       const g = groupFor(parent), id = args.workerSessionId
       const chosen = await enqueue(g, () => {
-        const selected = select(parent, id, g)
+        let selected = select(parent, id, g)
+        if (!selected.binding && typeof id === 'string') {
+          const retired = rawRow(parent.id)?.retiredWorkers?.findLast(b => b.id === id && (b.ownerSessionId ?? parent.id) === parent.id)
+          if (retired) selected = { binding: retired }
+        }
         if (!selected.binding) return selected
         if (g.fresh.has(id)) return {status: 'POSTMAN_WORKER_FRESH_BUSY'}
         g.fresh.set(id, workerTypeOf(selected.binding)); return selected
       })
       if (!chosen.binding) return chosen
       try { return await admitted(parent, async () => {
-          const closed = await stopTool.execute({workerSessionId: id, mode: 'close'}, exec)
-          if (closed.status !== 'POSTMAN_WORKER_STOPPED') return closed
+          if (chosen.binding.retired) {
+            if (!await provenClosed(parent, id) || ctx.agents.get(id) || Object.values(rawRow(parent.id)?.workers ?? {}).some(b => b.ownerSessionId === id))
+              return { status: 'POSTMAN_WORKER_BINDING_UNCERTAIN', workerSessionId: id }
+          } else {
+            const closed = await stopTool.execute({workerSessionId: id, mode: 'close', cascade: args.retireOwnedWorkers === true}, exec)
+            if (closed.status !== 'POSTMAN_WORKER_STOPPED') return closed
+          }
           const accepted = await create(parent, g, {task: args.task, label: args.label ?? chosen.binding.label, createNew: true}, exec, workerTypeOf(chosen.binding), id)
           return {...accepted, retiredWorkerSessionId: id, fresh: accepted.status === 'POSTMAN_WORKER_TASK_ACCEPTED'}
       }) } finally {g.fresh.delete(id)}
@@ -1139,6 +1245,36 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     }
     return pauseForOperation(leaderId)
   }
+  // Raw durable membership + exact current live state only. No recovery, journal reads or writes.
+  function teamSnapshot(leader) {
+    if (!isTopLevelPostmanSupervisor(leader) || !authorized(leader)) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
+    const row = taskContexts?.record?.(leader.id) ?? {}
+    const budget = b => b?.budget ? { used: b.budget.used, soft: b.budget.softLimit,
+      hard: b.budget.hardLimit, exhausted: b.budget.exhausted === true } : null
+    const summary = ([id, b]) => {
+      const live = ctx.agents.get(id), owner = b.ownerSessionId ?? row.leaderSessionId ?? leader.id
+      const exact = b.id === id && (!live || (live.session?.header?.origin === 'subagent' && live.session.header.parentSession === owner))
+      const state = !exact ? 'unknown' : b.state !== 'ready' || b.delivery !== 'none' ? b.state === 'ready' ? 'uncertain' : b.state
+        : live ? live.inbox?.hasPending ? 'pending' : live.status ?? 'unknown' : 'not-resident'
+      return { sessionId: id, label: String(b.label ?? '').slice(0, 160), state, budget: budget(b) }
+    }
+    const direct = Object.entries(row.workers ?? {}).filter(([, b]) => (b.ownerSessionId ?? row.leaderSessionId ?? leader.id) === leader.id)
+    const ordinary = direct.filter(([, b]) => workerTypeOf(b) === 'luna')
+    const secretary = direct.find(([, b]) => workerTypeOf(b) === 'secretary')
+    const sol = direct.find(([, b]) => workerTypeOf(b) === 'sol')
+    const children = sol ? Object.entries(row.workers ?? {}).filter(([, b]) => b.ownerSessionId === sol[0]) : []
+    const states = {}, totals = { used: 0, soft: 0, hard: 0, exhausted: 0, unknown: 0 }
+    for (const entry of children) {
+      const child = summary(entry); states[child.state] = (states[child.state] ?? 0) + 1
+      if (!child.budget) totals.unknown++
+      else { totals.used += child.budget.used; totals.soft += child.budget.soft; totals.hard += child.budget.hard; totals.exhausted += Number(child.budget.exhausted) }
+    }
+    return { status: 'POSTMAN_TEAM_STATUS',
+      secretary: { present: Boolean(secretary), ...(secretary ? summary(secretary) : { sessionId: null, state: 'absent', budget: null }), ledgerRevision: row.secretaryLedger?.revision ?? 0 },
+      workers: { used: ordinary.length, limit: 2, rows: ordinary.slice(0, 2).map(summary) },
+      sol: { present: Boolean(sol), ...(sol ? summary(sol) : { sessionId: null, state: 'absent' }),
+        ownedWorkers: { used: children.length, limit: 2, states, budget: totals } } }
+  }
   function dispose() {
     disposed = true
     stopRequestOptions?.()
@@ -1151,5 +1287,5 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     leaders.clear()
   }
   return { taskTool, solTaskTool, secretaryTool, ledgerTool, freshTool, interruptTool, stopTool, listTool, compactTool, roleOf, ownerOf, ownsNotification, ownsLiveWorker, ptcContextOf, confirmActivation, releaseActivation, refreshLeader, suspendLeader,
-    contextOf, observeReport, pauseForOperation, prepareRestore, dispose }
+    contextOf, observeReport, pauseForOperation, prepareRestore, teamSnapshot, dispose }
 }

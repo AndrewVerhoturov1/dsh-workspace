@@ -23,12 +23,14 @@ test('JSON storage persists one Leader row across independent domain lifetimes',
   const first = await openPostmanTaskRegistry(domain)
   await first.create('leader', record)
   await first.change('leader', row => ({ ...row, stage: 'ready', workers: { 'reserved-C': { id: 'reserved-C',
-    label: 'reserved-C', state: 'intent', delivery: 'pending', artifactRequests: [] } } }))
+    label: 'reserved-C', state: 'intent', delivery: 'pending', artifactRequests: [] } },
+    bridgeOperations: { cancelled: { state: 'pending', phase: 'reserved', cancellationRequested: true } } }))
   await assert.rejects(() => openPostmanTaskRegistry(domain), error => error.code === 'already-open')
   await first.close()
   const second = await openPostmanTaskRegistry(domain)
   assert.equal(second.get('leader').branch, record.branch)
   assert.equal(second.get('leader').workers['reserved-C'].id, 'reserved-C')
+  assert.equal(second.get('leader').bridgeOperations.cancelled.cancellationRequested, true)
   await second.change('leader', row => ({ ...row, runner: { state: 'failed', requestId: 'REQ_1' } }))
   await second.close()
   const third = await openPostmanTaskRegistry(new DomainFacility(ctx, { backend: 'json' }))

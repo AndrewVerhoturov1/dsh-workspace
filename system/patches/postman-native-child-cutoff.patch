@@ -88,7 +88,7 @@ index bd9741e..d7bcddd 100644
 +		return this.locks.run(childId, async () => {
 +			const saved = await this.requirePersistence().inspect(childId);
 +			this.authorizeLineage(parent, childId, saved.meta.parentSession);
-+			if (saved.meta.id !== childId || saved.meta.origin !== "subagent" || saved.meta.delegationDepth !== 1 ||
++			if (saved.meta.id !== childId || saved.meta.origin !== "subagent" || saved.meta.delegationDepth !== delegationDepthOf(parent) + 1 ||
 +				!Number.isSafeInteger(saved.meta.seedLength ?? 0) || (saved.meta.seedLength ?? 0) < 0 ||
 +				(saved.meta.seedLength ?? 0) > saved.events.length ||
 +				foldSubagentDescriptor(saved.events.slice(saved.meta.seedLength ?? 0))?.mode !== "continuable" ||

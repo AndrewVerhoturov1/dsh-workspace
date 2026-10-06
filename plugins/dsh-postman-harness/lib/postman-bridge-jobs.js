@@ -66,7 +66,8 @@ function countsAgainstLimit(operation) {
     operation.state === 'received' &&
       (!['synchronized', 'not-required'].includes(operation.synchronization) ||
         !hasTrustedTerminal(operation) && !(operation.phase === 'not-sent' &&
-          operation.synchronization === 'not-required' && operation.requestId && !operation.terminal))
+          operation.synchronization === 'not-required' &&
+          (operation.requestId || operation.cancellationRequested === true) && !operation.terminal))
 }
 
 function snapshot(job) {
@@ -90,6 +91,16 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     const statusTool = ctx.tools.get('postman_current_turn_status', child)
     if (typeof statusTool?.execute !== 'function') return { status: 'NO_JOB' }
     return statusTool.execute({}, { agent: child, signal })
+  }
+
+  // Stop cancels the Bridge child, not the separately owned Direct transport.
+  // Observe its trusted terminal even after abort; RUNNING then remains unknown.
+  function settleStatus(job, readStatus) {
+    return settleTrustedPostmanStatus(async () => {
+      const value = await readStatus()
+      return job.controller.signal.aborted && value?.status === 'RUNNING'
+        ? { status: 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN', requestId: value.requestId ?? null } : value
+    })
   }
 
   async function lifecycle(job, message) {
@@ -120,7 +131,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
           })
         })
       job.requestId = started.requestId
-      return { ...await settleTrustedPostmanStatus(() => direct.wait(job.bridgeJobId), job.controller.signal),
+      return { ...await settleStatus(job, () => direct.wait(job.bridgeJobId)),
         transportKind: job.transportKind }
     }
     let run
@@ -168,8 +179,8 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
       } catch (error) {
         childDiagnostic = diagnostic(error)
       }
-      const trusted = await settleTrustedPostmanStatus(
-        () => trustedStatusReader(child, job.controller.signal), job.controller.signal)
+      const trusted = await settleStatus(job,
+        () => trustedStatusReader(child, undefined))
       terminal = losslessValue({ ...trusted, transportKind: job.transportKind, childStopReason,
         ...(childDiagnostic === undefined ? {} : { childDiagnostic }) })
       job.requestId = terminal.requestId ?? null
@@ -402,7 +413,9 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
                 throw new Error('POSTMAN_BRIDGE_JOURNAL_MISSING')
               }
               return { ...row, bridgeOperations: { ...row.bridgeOperations,
-                [job.bridgeJobId]: { ...current, state: 'unknown' } } }
+                [job.bridgeJobId]: job.cancellationRequested && !job.startedAt
+                  ? { ...current, state: 'received', phase: 'not-sent', synchronization: 'not-required' }
+                  : { ...current, state: 'unknown' } } }
             })
           } catch (error) { job.state = 'FAILED'; job.diagnostic = diagnostic(error) }
         }
@@ -475,8 +488,9 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
         return { status: 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN', bridgeJobId, state: 'INTERRUPTED',
           requestId: operation.requestId, publication: proof.state === 'published' ? proof.publication : 'unknown' }
       } else if (operation?.state === 'received' && operation.phase === 'not-sent' &&
-                 operation.synchronization === 'not-required' && operation.requestId && !operation.terminal)
-        return { status: 'POSTMAN_BRIDGE_NOT_SENT', bridgeJobId, requestId: operation.requestId,
+                 operation.synchronization === 'not-required' &&
+                 (operation.requestId || operation.cancellationRequested === true) && !operation.terminal)
+        return { status: 'POSTMAN_BRIDGE_NOT_SENT', bridgeJobId, requestId: operation.requestId ?? null,
           synchronization: 'not-required' }
       else return operation
         ? { status: 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN', bridgeJobId, state: 'INTERRUPTED',
@@ -580,6 +594,83 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
       used: operations.filter(op => op.countsAgainstLimit).length, operations }
   }
 
+  function controlCallerAllowed(parent) {
+    try {
+      return isTopLevelPostmanSupervisor(parent) &&
+        (typeof ctx.agents?.get !== 'function' || ctx.agents.get(parent.id) === parent)
+    } catch { return false }
+  }
+
+  async function stop(parent, bridgeJobId) {
+    if (!controlCallerAllowed(parent)) return { status: 'POSTMAN_BRIDGE_CALLER_REJECTED' }
+    const job = jobs.get(bridgeJobId)
+    if (job && job.parentSessionId !== parent.id) return { status: 'POSTMAN_BRIDGE_JOB_NOT_FOUND' }
+    if (job?.trustedTerminal?.status === 'POSTMAN_BRIDGE_TERMINAL')
+      return { status: 'POSTMAN_BRIDGE_ALREADY_TERMINAL', bridgeJobId, cancellationRequested: job.cancellationRequested === true }
+    if (!job || !job.completion || job.finishedAt || disposed) {
+      const row = contexts?.record?.(parent.id)
+      const op = Object.hasOwn(row?.bridgeOperations ?? {}, bridgeJobId)
+        ? row.bridgeOperations[bridgeJobId] : row?.bridge?.id === bridgeJobId ? row.bridge : null
+      return job || op ? { status: job?.trustedTerminal?.status === 'POSTMAN_BRIDGE_TERMINAL'
+        ? 'POSTMAN_BRIDGE_ALREADY_TERMINAL' : 'POSTMAN_BRIDGE_STOP_NOT_LIVE', bridgeJobId,
+        cancellationRequested: job?.cancellationRequested === true || op?.cancellationRequested === true }
+        : { status: 'POSTMAN_BRIDGE_JOB_NOT_FOUND' }
+    }
+    let intentPersisted = false
+    let intentDiagnostic
+    if (typeof contexts?.changeRecord === 'function') {
+      try {
+        await contexts.changeRecord(parent.id, row => {
+          const op = row.bridgeOperations?.[bridgeJobId]
+          // Settlement may already have synchronized and removed this intent.
+          if (!op && job.trustedTerminal?.status === 'POSTMAN_BRIDGE_TERMINAL') return row
+          if (!op) throw new Error('POSTMAN_BRIDGE_JOURNAL_MISSING')
+          return { ...row, bridgeOperations: { ...row.bridgeOperations,
+            [bridgeJobId]: { ...op, cancellationRequested: true } } }
+        })
+        intentPersisted = true
+      } catch (error) { intentDiagnostic = diagnostic(error) }
+    }
+    job.cancellationRequested = true
+    if (job.trustedTerminal?.status === 'POSTMAN_BRIDGE_TERMINAL')
+      return { status: 'POSTMAN_BRIDGE_ALREADY_TERMINAL', bridgeJobId, cancellationRequested: true }
+    job.controller.abort()
+    return { status: 'POSTMAN_BRIDGE_STOP_REQUESTED', ...snapshot(job), cancellationRequested: true,
+      intentPersisted, ...(intentDiagnostic ? { diagnostic: intentDiagnostic } : {}) }
+  }
+
+  // Team observation must not inspect Direct, recover, synchronize or register grants.
+  function teamSnapshot(parent) {
+    if (!controlCallerAllowed(parent)) return { status: 'POSTMAN_BRIDGE_CALLER_REJECTED' }
+    const row = contexts?.record?.(parent.id)
+    const operations = []
+    const seen = new Set()
+    let used = 0
+    let total = 0
+    const add = (bridgeJobId, op, live, occupied) => {
+      seen.add(bridgeJobId)
+      total++
+      if (occupied) used++
+      if (operations.length >= 30) return
+      operations.push({ bridgeJobId, state: live?.state ?? op?.state ?? 'unknown',
+        transportKind: live?.transportKind ?? op?.transportKind ?? null,
+        requestId: live?.requestId ?? op?.requestId ?? null,
+        synchronization: live?.synchronization ?? op?.synchronization ?? null,
+        countsAgainstLimit: occupied,
+        cancellationRequested: live?.cancellationRequested === true || op?.cancellationRequested === true })
+    }
+    for (const [id, op] of Object.entries(row?.bridgeOperations ?? {})) {
+      const live = jobs.get(id)
+      add(id, op, live?.parentSessionId === parent.id ? live : null, countsAgainstLimit(op))
+    }
+    if (row?.bridge && !seen.has(row.bridge.id)) add(row.bridge.id, row.bridge, null, true)
+    for (const job of jobs.values()) {
+      if (job.parentSessionId !== parent.id || seen.has(job.bridgeJobId)) continue
+      add(job.bridgeJobId, null, job, !job.finishedAt)
+    }
+    return { status: 'POSTMAN_BRIDGE_TEAM_SNAPSHOT', used, limit: 3, operations, truncated: total > operations.length }
+  }
+
   async function dispose() {
     if (disposed) return
     disposed = true
@@ -589,5 +680,5 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     jobs.clear()
   }
 
-  return { accept, status, list, hasActive, dispose }
+  return { accept, status, list, teamSnapshot, stop, hasActive, dispose }
 }

@@ -7,12 +7,14 @@ import { readPtcTextPage } from './ptc-read.js'
 import { POSTMAN_PTC_ONLY_LEADER_TOOLS, POSTMAN_WORKER_PTC_TOOL_NAMES, POSTMAN_SOL_PTC_TOOL_NAMES, POSTMAN_PTC_SUCCESS_STATUSES } from './postman-bridge-core.js'
 
 export const PTC_TOOL_NAME = 'ptc_execute'
-export const PILOT_PROFILE = validatePtcProfile({
-  schemaVersion: 1, id: 'postman-leader-supervisor', revision: 8,
+export const LEADER_SUPERVISOR_PROFILE = validatePtcProfile({
+  schemaVersion: 1, id: 'postman-leader-supervisor', revision: 9,
   tools: [...POSTMAN_PTC_ONLY_LEADER_TOOLS],
   limits: { ...DEFAULT_LIMITS, maxWallMs: 300000, maxToolCalls: 256,
     quickjsMemoryBytes: 67108864, maxTotalBridgeBytes: 16777216, maxConcurrentToolCalls: 1 },
 })
+// Historical import compatibility; the canonical profile is no longer a pilot.
+export const PILOT_PROFILE = LEADER_SUPERVISOR_PROFILE
 export const WORKER_MUTATION_PROFILE = validatePtcProfile({
   schemaVersion: 1, id: 'postman-worker-mutation', revision: 5,
   tools: [...POSTMAN_WORKER_PTC_TOOL_NAMES],
@@ -29,7 +31,7 @@ const MAX_DESCRIPTION = 160
 const BOUNDARIES = ['semantic_decision', 'user_input', 'external_event', 'approval_boundary', 'task_complete']
 // Auto-yield must not hide a refused/unknown prepare or async dispatch returned as ordinary JSON.
 // This gate does not recover statuses or alter the tool result/authority.
-const EVENT_PRODUCERS = ['postman_worker', 'postman_secretary', 'postman_worker_fresh', 'postman_worker_interrupt', 'postman_bridge']
+const EVENT_PRODUCERS = ['postman_worker', 'postman_sol_worker', 'postman_secretary', 'postman_worker_fresh', 'postman_worker_interrupt', 'postman_bridge']
 const YIELD_ACCEPTANCE = POSTMAN_PTC_SUCCESS_STATUSES
 const output = {
   schema: { type: 'object', additionalProperties: true, properties: { status: { type: 'string', required: true } } },
@@ -38,13 +40,13 @@ const output = {
 
 // Ownership of this runtime is the owning plugin, never an individual program.
 // resolveAssignment is trusted Host code; the model cannot choose its profile or role.
-export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerContextOf, profile = PILOT_PROFILE, runtime = createPtcRuntime() }) {
-  function pilotProfile(value) {
+export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerContextOf, profile = LEADER_SUPERVISOR_PROFILE, runtime = createPtcRuntime() }) {
+  function supervisorProfile(value) {
     const checked = validatePtcProfile(value)
-    if (checked.tools.some(name => !POSTMAN_PTC_ONLY_LEADER_TOOLS.includes(name))) throw new TypeError('PTC pilot profile tool not allowed')
+    if (checked.tools.some(name => !POSTMAN_PTC_ONLY_LEADER_TOOLS.includes(name))) throw new TypeError('PTC supervisor profile tool not allowed')
     return checked
   }
-  let current = pilotProfile(profile), disposed = false
+  let current = supervisorProfile(profile), disposed = false
   const owners = new Map(), textReads = new Map()
   const stopTextReads = ctx.on('tools/execute', async (nested, next) => {
     const request = textReads.get(nested.parent)?.get(nested.callId)
@@ -154,7 +156,7 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
     owners.delete(agent.id); revoke(record); return true
   }
   function setProfile(next) {
-    const checked = pilotProfile(next)
+    const checked = supervisorProfile(next)
     current = checked
     for (const record of [...owners.values()]) if (record.role === 'leader') refresh(record.agent)
   }
@@ -301,10 +303,10 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
           nestedFailed ? 'nested-failure' : acceptanceFailed ? 'acceptance-not-confirmed' :
           !allCompleted || unknownEffect ? 'effects-not-confirmed' :
           result.value?.needsModelDecision ? 'model-decision-requested' :
-          autoConclude && !eventAccepted ? 'no-accepted-producer' : undefined
+          autoConclude && !eventAccepted && !nestedConclude ? 'no-accepted-producer' : undefined
         if ((autoConclude || nestedConclude) && !yieldBlockedReason) {
           exec.concludeTurn()
-          if (autoConclude) stagedConclusions.set(exec, record)
+          if (record.role === 'leader') stagedConclusions.set(exec, record)
           yieldApplied = true
         }
         return result
@@ -315,7 +317,7 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
         logger.info('postman/ptc-run', { sessionId: agent.id,
           role: record.role, description, boundary: args.boundary,
           ...(description !== args.description ? { descriptionNormalized: true } : {}),
-          ...(autoConclude && yieldBlockedReason ? { yieldBlockedReason } : {}),
+          ...((autoConclude || nestedConclude) && yieldBlockedReason ? { yieldBlockedReason } : {}),
           status: terminal?.status ?? 'runtime-error', durationMs: Date.now() - startedAt,
           nestedToolCalls: started.size, toolCounts,
           resultBytes, oversizedResultCandidate: resultBytes > 64 * 1024 || terminal?.error?.code === 'maxOutputBytes',
