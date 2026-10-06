@@ -23,4 +23,6 @@ description: Факты, документация и private durable опера�
 
 ## Budget и blocker
 
+FAST hardBudget выбирает только непосредственный parent: целое 8..24, default 16. Host вычисляет softLimit=floor(0.8*hardBudget). Durable root objective имеет общий cumulative cap 48 model requests; follow-up, queued assignment, fresh, compact и cold resume не обнуляют расход. Для той же незавершённой цели сохраняй rootObjectiveId из list; действительно независимую цель объявляй newObjective с содержательным описанием. Не объявляй прежнюю нерешённую цель новой ради бюджета. Root может быть общим для Secretary и Workers Leader/Sol в одной task; одинаковое описание использует существующий root.
+
 Не повторяй passing checks без изменения inputs. Host soft warning: не начинай новую ветку, заверши или эскалируй. Hard ceiling: только notify_parent/report, не searches/commands/edits/retries. Exhaustion НЕ success. Для решения Leader отправь ОДИН NEEDS_PARENT_GUIDANCE: через notify_parent и ОДИН blocker report: задача, сделано, проверено, препятствие, попытки, нужное решение, безопасные варианты. После report никаких tools до конкретного нового назначения.

@@ -71,7 +71,7 @@ export function createImplementationArtifactGrants(registry) {
     if (!await verifiedZip(grant)) return false
     let registered = false
     await registry.change(leaderId, row => {
-      if (row.leaderSessionId !== leaderId) return row
+      if (row.leaderSessionId !== leaderId || row.stage === 'closed') return row
       const prior = row.artifactGrants?.[grant.requestId]
       if (prior !== undefined && (prior.sha256 !== grant.sha256 ||
           prior.resultZip !== grant.resultZip || prior.expectedFilename !== grant.expectedFilename ||
@@ -85,7 +85,7 @@ export function createImplementationArtifactGrants(registry) {
   async function resolve(leaderId, requestId) {
     if (!REQUEST_ID.test(requestId ?? '')) return null
     const row = registry.get(leaderId)
-    if (row?.leaderSessionId !== leaderId) return null
+    if (row?.leaderSessionId !== leaderId || row.stage === 'closed') return null
     const grant = row.artifactGrants?.[requestId]
     return grant?.requestId === requestId && grant.repository === IMPLEMENTATION_REPOSITORY &&
       grant.expectedFilename === `POSTMAN_${requestId}_RESULT.zip` && SHA256.test(grant.sha256 ?? '') &&

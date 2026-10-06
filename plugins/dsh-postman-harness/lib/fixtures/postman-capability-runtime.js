@@ -69,7 +69,7 @@ export async function capabilityRuntime(dir, { preset = 'postman-leader-ptc', re
     if (command === 'remote get-url origin') return 'https://github.com/AndrewVerhoturov1/dsh-workspace.git'
     if (command === 'worktree list --porcelain') return 'worktree ' + dir + '\n\n' + (registry.get('leader')?.stage === 'ready' ? 'worktree ' + worktree + '\nbranch refs/heads/' + registry.get('leader').branch + '\n' : '')
     if (command === 'branch --show-current') return registry.get('leader')?.branch ?? ''
-    if (args[0] === 'ls-remote') return registry.get('leader') ? sha + '\trefs/heads/' + args.at(-1) : ''
+    if (args[0] === 'ls-remote') return args.at(-1) === registry.get('leader')?.branch ? sha + '\trefs/heads/' + args.at(-1) : ''
     if (args[0] === 'rev-parse' && args[1] === '--git-path') return join(dir, 'absent-' + args[2])
     if (args[0] === 'rev-parse' || args[0] === 'merge-base') return sha
     return ''
