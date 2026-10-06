@@ -1,13 +1,16 @@
 import { join } from 'node:path'
 import {randomUUID} from 'node:crypto'
 import { pathToFileURL } from 'node:url'
+import { createRequire } from 'node:module'
 import { createPostmanWorkerTools } from '../postman-worker.js'
 import { createPostmanBridgeBoundaryManager, POSTMAN_LEADER_TOOL_ALLOWLIST, isTopLevelPostmanPtcLeader, postmanPtcDirectCallGuard } from '../postman-bridge-core.js'
 import { createPostmanChildNotifyTool, installPostmanWorkerReportObserver } from '../postman-bridge.js'
 import { createPtcAdapter, SOL_WORKER_PROFILE } from '../ptc-adapter.js'
 import { openPostmanTaskRegistry } from '../postman-task-registry.js'
 const installed = process.env.DSH_ROOT ?? join(process.env.APPDATA, 'npm/node_modules/@deepseek-ai/dsh')
-const pkg = name => import(pathToFileURL(join(installed,'node_modules/@deepseek-ai',name,'lib/index.js')).href)
+const requireNative = createRequire(join(installed, 'package.json'))
+export const stage1Native = name => import(pathToFileURL(requireNative.resolve('@deepseek-ai/' + name)).href)
+const pkg = stage1Native
 const {Context} = await pkg('cordis')
 const {AgentRegistry} = await pkg('dsh-agent')
 const {SessionStore} = await pkg('dsh-session')

@@ -89,7 +89,8 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
 
   async function trustedStatusReader(child, signal) {
     const statusTool = ctx.tools.get('postman_current_turn_status', child)
-    if (typeof statusTool?.execute !== 'function') return { status: 'NO_JOB' }
+    if (typeof statusTool?.execute !== 'function') return { status: signal?.aborted
+      ? 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN' : 'NO_JOB' }
     return statusTool.execute({}, { agent: child, signal })
   }
 
@@ -98,7 +99,8 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
   function settleStatus(job, readStatus) {
     return settleTrustedPostmanStatus(async () => {
       const value = await readStatus()
-      return job.controller.signal.aborted && value?.status === 'RUNNING'
+      return job.controller.signal.aborted && (value?.status === 'RUNNING' ||
+        value?.status === 'NO_JOB' && value.requestId != null)
         ? { status: 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN', requestId: value.requestId ?? null } : value
     })
   }
@@ -413,11 +415,23 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
                 if (job.synchronization === 'synchronized') return row
                 throw new Error('POSTMAN_BRIDGE_JOURNAL_MISSING')
               }
+              // Only an actual Direct NO_JOB plus a pre-request journal proves
+              // that a started child stopped before transport. Missing tools do not.
+              const notSent = job.cancellationRequested && job.requestId == null && current.requestId == null &&
+                !current.terminal && ['reserved', 'child-known'].includes(current.phase) &&
+                (!job.startedAt || job.trustedTerminal?.status === 'POSTMAN_BRIDGE_NO_TRANSPORT')
               return { ...row, bridgeOperations: { ...row.bridgeOperations,
-                [job.bridgeJobId]: job.cancellationRequested && !job.startedAt
+                [job.bridgeJobId]: notSent
                   ? { ...current, state: 'received', phase: 'not-sent', synchronization: 'not-required' }
                   : { ...current, state: 'unknown' } } }
             })
+            if (job.cancellationRequested && job.trustedTerminal?.status !== 'POSTMAN_BRIDGE_TERMINAL') {
+              const settled = contexts.record?.(job.parentSessionId)?.bridgeOperations?.[job.bridgeJobId]
+              const notSent = settled?.state === 'received' && settled.phase === 'not-sent'
+              job.trustedTerminal = { status: notSent ? 'POSTMAN_BRIDGE_NOT_SENT' : 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN' }
+              job.synchronization = notSent ? 'not-required' : undefined
+              job.state = 'INTERRUPTED'
+            }
           } catch (error) { job.state = 'FAILED'; job.diagnostic = diagnostic(error) }
         }
         postmanInputGrants.unpin(job.inputBinding)
@@ -536,6 +550,8 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
       return { status: 'POSTMAN_BRIDGE_RUNNING', ...common }
     }
     const terminal = job.trustedTerminal
+    if (terminal?.status === 'POSTMAN_BRIDGE_NOT_SENT')
+      return { status: 'POSTMAN_BRIDGE_NOT_SENT', bridgeJobId, requestId: job.requestId, synchronization: 'not-required' }
     if (terminal?.status === 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN' && !recover)
       return { status: 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN', bridgeJobId, state: 'INTERRUPTED',
         requestId: job.requestId, publication: 'unknown' }

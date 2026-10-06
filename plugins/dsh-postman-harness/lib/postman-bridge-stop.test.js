@@ -73,6 +73,52 @@ test('queued stop persists intent and releases only after actual coordinator rej
   await f.jobs.stop(parent, first.bridgeJobId); await f.settle(); await f.jobs.dispose()
 })
 
+test('started early stop with trusted NO_JOB persists NOT_SENT and frees live and cold slots', async () => {
+  const f = fixture({ trusted: { status: 'NO_JOB' } })
+  const accepted = await f.accept(); await tick()
+  await f.jobs.stop(parent, accepted.bridgeJobId)
+  await tick()
+  assert.equal(f.coordinator.activeCount, 1, 'cleanup must finish before release')
+  await f.settle()
+  const op = f.row.bridgeOperations[accepted.bridgeJobId]
+  assert.equal(op.state, 'received')
+  assert.equal(op.phase, 'not-sent')
+  assert.equal(op.synchronization, 'not-required')
+  assert.equal(op.requestId, undefined)
+  const expected = { status: 'POSTMAN_BRIDGE_NOT_SENT', bridgeJobId: accepted.bridgeJobId,
+    requestId: null, synchronization: 'not-required' }
+  assert.deepEqual(await f.jobs.status(parent, accepted.bridgeJobId), expected)
+  assert.equal(f.jobs.teamSnapshot(parent).used, 0)
+  assert.equal(f.jobs.teamSnapshot(parent).operations[0].countsAgainstLimit, false)
+  assert.equal(f.coordinator.activeCount, 0)
+  assert.equal(f.counts.syncs, 0); assert.equal(f.counts.grants, 0)
+  const cold = createPostmanBridgeJobs({}, { run() { throw Error('no launch') }, dispose() {} }, null,
+    { record: () => structuredClone(f.row) })
+  assert.deepEqual(await cold.status(parent, accepted.bridgeJobId), expected)
+  assert.equal(cold.teamSnapshot(parent).used, 0)
+  assert.equal(cold.teamSnapshot(parent).operations[0].countsAgainstLimit, false)
+  await cold.dispose(); await f.jobs.dispose()
+})
+
+for (const reason of ['missing-tool', 'request-id', 'request-known', 'unknown-phase', 'invalid-status', 'status-error']) {
+  test('early stop remains UNKNOWN with ambiguous evidence: ' + reason, async () => {
+    const f = fixture({ trusted: { status: 'NO_JOB', ...(reason === 'request-id' ? { requestId } : {}) } })
+    if (reason === 'missing-tool') f.ctx.tools.get = () => undefined
+    if (reason === 'invalid-status') f.ctx.tools.get = () => ({ execute: async () => ({ status: 'INVALID' }) })
+    if (reason === 'status-error') f.ctx.tools.get = () => ({ execute: async () => { throw Error('status unavailable') } })
+    const accepted = await f.accept(); await tick()
+    if (reason === 'request-known' || reason === 'unknown-phase') await f.contexts.changeRecord(parent.id, row => ({ ...row,
+      bridgeOperations: { ...row.bridgeOperations, [accepted.bridgeJobId]: {
+        ...row.bridgeOperations[accepted.bridgeJobId], phase: reason === 'request-known' ? 'request-known' : 'unrecognized' } } }))
+    await f.jobs.stop(parent, accepted.bridgeJobId); await f.settle()
+    assert.equal(f.row.bridgeOperations[accepted.bridgeJobId].state, 'unknown')
+    assert.equal((await f.jobs.status(parent, accepted.bridgeJobId)).status, 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN')
+    assert.equal(f.jobs.teamSnapshot(parent).used, 1)
+    assert.equal(f.counts.syncs, 0); assert.equal(f.counts.grants, 0)
+    await f.jobs.dispose()
+  })
+}
+
 test('running potentially sent stop aborts exact controller; unknown retains durable slot through disposal', async () => {
   const f = fixture()
   const accepted = await f.accept(); await tick()

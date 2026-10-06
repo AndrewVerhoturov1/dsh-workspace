@@ -72,6 +72,40 @@ test('read-only Bridge listing distinguishes durable and legacy occupied slots',
   assert.deepEqual(registry.get(parent.id), before)
 })
 
+test('started early cancellation persists NOT_SENT across independent JSON domain lifetimes', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'postman-bridge-early-stop-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const open = () => openPostmanTaskRegistry(new DomainFacility({ storage: { backend: {
+    get: () => new JsonStorageBackend(join(dir, 'storage')) } }, emit() {} }, { backend: 'json', routes: {} }))
+  const first = await open()
+  await first.create(parent.id, row())
+  const contexts = { get: () => ({ branch: row().branch }), record: first.get, changeRecord: first.change,
+    bindChild: () => true, releaseChild() {} }
+  const task = contexts.get()
+  contexts.get = () => task
+  let resolveChild, entered
+  const started = new Promise(resolve => { entered = resolve })
+  const ctx = { agents: { get: () => parent }, subagents: { async start(_provider, req) {
+    const result = new Promise(resolve => { resolveChild = resolve })
+    req.signal.addEventListener('abort', () => resolveChild({ stopReason: 'aborted' }), { once: true })
+    entered()
+    return { id: 'early-child', localAgent: { id: 'early-child' }, result, async dispose() {} }
+  } }, tools: { get: () => ({ execute: async () => ({ status: 'NO_JOB' }) }) } }
+  const live = createPostmanBridgeJobs(ctx, { run: (_signal, run) => run(), dispose() {} }, null, contexts)
+  const accepted = await live.accept(parent, '@PostmanAsk early cancellation', 'text')
+  await started
+  await live.stop(parent, accepted.bridgeJobId)
+  await live.dispose()
+  const second = await open()
+  const cold = fixture(second)
+  assert.deepEqual(await cold.jobs.status(parent, accepted.bridgeJobId), {
+    status: 'POSTMAN_BRIDGE_NOT_SENT', bridgeJobId: accepted.bridgeJobId, requestId: null, synchronization: 'not-required' })
+  assert.equal(cold.jobs.teamSnapshot(parent).used, 0)
+  assert.equal(cold.jobs.teamSnapshot(parent).operations[0].countsAgainstLimit, false)
+  assert.equal(cold.started, 0)
+  await cold.jobs.dispose()
+})
+
 test('known Direct not-sent checkpoint frees slot after separate durable runtime lifetimes', async t => {
   const root = await mkdtemp(join(tmpdir(), 'postman-bridge-direct-'))
   t.after(() => rm(root, { recursive: true, force: true }))

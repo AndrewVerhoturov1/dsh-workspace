@@ -5,7 +5,7 @@ import {join} from 'node:path'
 import {pathToFileURL} from 'node:url'
 import {tmpdir} from 'node:os'
 import {execFileSync} from 'node:child_process'
-import {stage1Runtime} from './fixtures/postman-stage1-runtime.js'
+import {stage1Runtime,stage1Native} from './fixtures/postman-stage1-runtime.js'
 import {postmanRoleInstruction,POSTMAN_WORKER_AGENT_OPTIONS,FAST_WORKER_BUDGET} from './postman-worker.js'
 import {Config} from './postman-bridge.js'
 const fixture=async(t,opts)=>{const dir=await mkdtemp(join(tmpdir(),'postman-stage1-'));const f=await stage1Runtime(dir,opts);t.after(async()=>{await f.dispose();await rm(dir,{recursive:true,force:true,maxRetries:5,retryDelay:100})});return {...f,dir}}
@@ -165,7 +165,7 @@ test('default FAST 12/15 budget cannot silently finish without escalation report
   assert.equal(reports.filter(e=>e.data.content[0].text.includes(' reported:')).length,1)
 })
 test('stock manual compact retains exact role Session budget quota and audit',{timeout:15000},async t=>{
-  const native=async name=>import(pathToFileURL(join(process.env.DSH_ROOT??join(process.env.APPDATA,'npm/node_modules/@deepseek-ai/dsh'),'node_modules/@deepseek-ai',name,'lib/index.js')).href)
+  const native=stage1Native
   const {BasicCompactionEngine}=await native('dsh-compaction-basic'),{TokenMeter}=await native('dsh-token-meter')
   const f=await fixture(t,{plan:(a,_r,n,w)=>w.roleOf(a)==='sol'&&n%2===1?{name:'ptc_execute',args:{program:'const a=await tools.read({file_path:"known.txt"});const b=await tools.glob({pattern:"*.txt"});const c=await tools.grep({pattern:"known"});return {a,b,c}',description:'Batch known local facts before review',boundary:'semantic_decision'}}:({name:'report',args:{output:'verified evidence '.repeat(1000)}}),setupTools:ctx=>{new TokenMeter(ctx);const Summarizer=class extends BasicCompactionEngine{async summarize(){return {summary:[{type:'text',text:'summary of exact finite facts; next bounded assignment'}],provider:'codex',model:'gpt-6-luna'}}};new Summarizer(ctx,{auto:false})}})
   for(const tool of [f.worker.taskTool,f.worker.secretaryTool,f.worker.solTaskTool]){
