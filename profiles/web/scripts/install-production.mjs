@@ -3,6 +3,7 @@ import { existsSync, lstatSync, readFileSync, realpathSync, rmSync } from 'node:
 import { resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { spawnSync } from 'node:child_process'
+import { applyPostmanNativeChildCutoff } from '../../../system/patches/apply-postman-native-child-cutoff.mjs'
 
 const profileRoot = resolve(fileURLToPath(new URL('..', import.meta.url)))
 const repositoryRoot = resolve(profileRoot, '../..')
@@ -55,6 +56,15 @@ if (declaredManagedRoot !== managedRoot) {
 }
 
 const requireFromProfile = createRequire(resolve(profileRoot, 'package.json'))
+// The profile fallback identifies the actual CLI SDK; an explicit anchor also
+// permits isolated clean-install tests without touching the running installation.
+const sdkAnchor = realpathSync(process.env.DSH_INSTALL_SDK ?? requireFromProfile.resolve('@deepseek-ai/dsh/package.json'))
+const nativeTargets = applyPostmanNativeChildCutoff([sdkAnchor, resolve(postmanRoot, 'package.json')])
+const { SubagentRuntime } = await import(pathToFileURL(createRequire(sdkAnchor).resolve('@deepseek-ai/dsh-subagent')).href)
+for (const method of ['closeContinuableChild', 'inspectClosedContinuableChild', 'compactContinuableChild']) {
+  if (typeof SubagentRuntime.prototype[method] !== 'function') throw new Error('Native child cutoff API unavailable: ' + method)
+}
+console.log('native child cutoff installed: ' + nativeTargets.map(target => target.path).join(', '))
 if (!existsSync(installedPackagePath)) {
   throw new Error(`installed Better Sidebar package link is missing: ${installedPackagePath}`)
 }

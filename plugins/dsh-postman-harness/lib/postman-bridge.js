@@ -11,7 +11,7 @@ import { createPostmanBridgeJobs } from './postman-bridge-jobs.js'
 import { postmanTaskContexts, initializePostmanTaskContexts, releasePostmanTaskContexts } from './postman-task-context.js'
 import { sharedPostmanTaskRegistry, closeSharedPostmanTaskRegistry } from './postman-task-registry.js'
 import {
-  POSTMAN_BRIDGE_TOOL_ALLOWLIST, POSTMAN_BRIDGE_TOOL_NAME, POSTMAN_BRIDGE_STATUS_TOOL_NAME, POSTMAN_BRIDGE_LIST_TOOL_NAME, POSTMAN_CHILD_NOTIFY_TOOL_NAME, POSTMAN_TASK_PREPARE_TOOL_NAME, POSTMAN_TASK_RESTORE_TOOL_NAME, POSTMAN_YIELD_TOOL_NAME,
+  POSTMAN_BRIDGE_TOOL_ALLOWLIST, POSTMAN_BRIDGE_TOOL_NAME, POSTMAN_BRIDGE_STATUS_TOOL_NAME, POSTMAN_BRIDGE_LIST_TOOL_NAME, POSTMAN_BRIDGE_STOP_TOOL_NAME, POSTMAN_TEAM_STATUS_TOOL_NAME, POSTMAN_CHILD_NOTIFY_TOOL_NAME, POSTMAN_TASK_PREPARE_TOOL_NAME, POSTMAN_TASK_RESTORE_TOOL_NAME, POSTMAN_YIELD_TOOL_NAME,
   createPostmanBridgeBoundaryManager, isTopLevelPostmanSupervisor, isTopLevelPostmanPtcLeader,
   postmanBridgeCallerAllowed, postmanBridgeRestrictionForAgent, postmanPtcDirectCallGuard,
 } from './postman-bridge-core.js'
@@ -141,6 +141,37 @@ export function createPostmanBridgeListTool(ctx, jobs) {
   })
 }
 
+export function createPostmanBridgeStopTool(ctx, jobs) {
+  return defineTool({
+    name: POSTMAN_BRIDGE_STOP_TOOL_NAME,
+    description: 'Request cancellation of one exact owned live Bridge job. Not proof of NOT_SENT; trusted Direct terminal remains authoritative. No recovery or Web resend.',
+    parameters: { bridge_job_id: { type: 'string', required: true, description: 'Exact owned bridgeJobId.' } },
+    output: output(),
+    async execute(args, exec) {
+      if (!authorized(exec, ctx)) return { status: 'POSTMAN_BRIDGE_CALLER_REJECTED' }
+      return jobs.stop(exec.agent, args.bridge_job_id)
+    },
+  })
+}
+
+export function createPostmanTeamStatusTool(ctx, contexts, worker, jobs) {
+  return defineTool({
+    name: POSTMAN_TEAM_STATUS_TOOL_NAME,
+    description: 'Compact read-only snapshot of this Leader task and team for routing. No recovery, synchronization, journals, full ledger/results or completion polling; idle is not completed.',
+    parameters: {}, output: output(),
+    isConcurrencySafe: () => true,
+    execute(_args, exec) {
+      if (!authorized(exec, ctx)) return { status: 'POSTMAN_TEAM_CALLER_REJECTED' }
+      const id = exec.agent.id, context = contexts.get(id), row = contexts.record(id)
+      return { status: 'POSTMAN_TEAM_STATUS',
+        task: { contextReady: Boolean(context), branch: context?.branch ?? row?.branch ?? null,
+          ...(row ? { stage: row.stage } : {}),
+          restoring: contexts.isRestoring(id), activeOperation: contexts.hasActiveOperation(id) },
+        ...worker.teamSnapshot(exec.agent), bridge: jobs.teamSnapshot(exec.agent) }
+    },
+  })
+}
+
 export function createPostmanYieldTool(ctx) {
   return defineTool({
     name: POSTMAN_YIELD_TOOL_NAME,
@@ -244,6 +275,8 @@ export async function apply(ctx, config = {}) {
   ctx.tools.register(createPostmanBridgeTool(ctx, jobs, postmanTaskContexts))
   ctx.tools.register(createPostmanBridgeStatusTool(ctx, jobs))
   ctx.tools.register(createPostmanBridgeListTool(ctx, jobs))
+  ctx.tools.register(createPostmanBridgeStopTool(ctx, jobs))
+  ctx.tools.register(createPostmanTeamStatusTool(ctx, postmanTaskContexts, worker, jobs))
   ctx.tools.register(createPostmanTaskRestoreTool(ctx, postmanTaskContexts, { jobs, worker }))
   ctx.tools.register(worker.taskTool)
   ctx.tools.register(worker.solTaskTool)

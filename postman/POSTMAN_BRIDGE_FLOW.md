@@ -17,6 +17,14 @@ Luna child session.
 Bridge не создаёт собственного transport. Это Leader-specific supervisor и trusted result handoff; общий transport lifecycle описан в [Current Flow](POSTMAN_CURRENT_FLOW.md), text delta — в [Ask Flow](POSTMAN_ASK_FLOW.md). После child current-turn boundary используются существующие
 `postman/direct/postman.ps1` и `postman/direct/postman-ask.ps1` с exact task branch, переданной trusted Host.
 
+## Supervisor control Stage 2
+
+Оба top-level preset ID (production postman-leader и compatibility postman-leader-ptc) используют канонический supervisor PTC. Sol dispatch и yield выполняются внутри того же program; exact accepted asynchronous work с boundary: external_event auto-concludes после safe outer settlement. PTC не меняет Sol user authorization, Direct/Web timing, Send proof, UNKNOWN/recovery budget, correlation, terminal/grants или sync.
+
+postman_team_status — bounded read-only routing snapshot; не completion polling, не full ledger/journal/result и не recovery. postman_bridge_stop({bridge_job_id}) адресует только exact owning Leader live job, durable cancellation intent -> abort exact controller -> штатный cleanup. Slot и input pin удерживаются до actual settlement. Запрос stop не означает, что Web ничего не сделал или REQ не существует; потенциальный Send остаётся unknown по existing evidence, valid trusted terminal остаётся authority. Terminal/grant/sync не уничтожаются. Lost cold handle -> STOP_NOT_LIVE, без fake cancellation, Direct resend/recovery или нового Web message. Foreign ID -> JOB_NOT_FOUND без metadata.
+
+Sol subtree close/cancel/fresh — Host lifecycle, не ownership transfer; operational contract и preflight: [Host README](../plugins/dsh-postman-harness/README.md#supervisor-control-plane-stage-2).
+
 ## 2. Поток
 
 ```text
@@ -180,8 +188,8 @@ Preset `postman-leader` / `Postman Leader` хранится в репозито�
 не загружает отдельный preset-плагин: существующий `postman-bridge` подключается на уровне
 host-композиции в bundle `dsh-postman-harness`.
 
-Top-level Agent этого preset получает положительный runtime allowlist ровно из 27
-зарегистрированных DSH 0.1.1-rc.2 tools:
+Оба top-level Leader preset ID получают `ptc_execute` и role-limited ordinary visibility
+(все operational tools PTC-managed; UI exceptions direct-only):
 
 ```text
 ask_user_question
@@ -201,6 +209,8 @@ postman_input_files
 postman_bridge
 postman_bridge_status
 postman_bridge_list
+postman_bridge_stop
+postman_team_status
 postman_worker
 postman_sol_worker
 postman_worker_interrupt
@@ -239,7 +249,7 @@ Harness model routing намеренно находится вне Agent presets
 
 Sol предназначен для сложной работы, но V1 разрешает его **только по прямой просьбе пользователя использовать Sol Worker**. Нет автоматической escalation Luna → Sol, выбора по сложности/размеру или после неудачи Luna. Прямая просьба пользователя использовать Sol Worker уже является достаточным разрешением для немедленного вызова `postman_sol_worker`. Не задавай отдельный `ask_user_question` перед созданием или продолжением Sol Worker. Follow-up и новые задания по `workerSessionId` не требуют дополнительного подтверждения в рамках уже выбранного пользователем Sol-маршрута, включая `localDevelopment`. Новый approval-механизм не добавляется: инструмент по-прежнему не обращается к `ApprovalService` и не хранит подтверждения. Permission presets, `approval: ask/never` и глобальная permission-система Harness не меняются. Обычные `postman_worker` и `postman_worker_interrupt` не передают новые задания Sol (`POSTMAN_SOL_WORKER_TOOL_REQUIRED`).
 
-У top-level production и experimental PTC Leader инструмент доступен напрямую; внутрь PTC profile не включён. После приёма без независимой работы вызывается `postman_yield()`, не polling. Sol наследует тот же task worktree, continuable durable Session, report, cold resume, coding tools и transport restrictions, с отдельным local engineering PTC profile без supervisor authority; controls собственных Worker остаются direct-only с exact parent check. Общие `postman_worker_list` (тип/модель) и `postman_worker_stop` работают для обоих типов без approval; stop не доказывает успеха и не удаляет durable Session.
+У обоих top-level Leader ID инструмент только внутри supervisor PTC; после приёма и всей независимой работы boundary: external_event и безопасный auto-yield. Explicit postman_yield внутри программы gated полным outer settlement, не polling. Sol наследует тот же task worktree, continuable durable Session, report, cold resume, coding tools и transport restrictions, с отдельным local engineering PTC profile без supervisor authority; controls собственных Worker остаются direct-only с exact parent check. Общие `postman_worker_list` (тип/модель) и `postman_worker_stop` работают для обоих типов без approval; stop не доказывает успеха и не удаляет durable Session.
 
 ### Команда этапа 1: Secretary и обычный Worker
 
