@@ -34,6 +34,7 @@ for (const preset of ['postman-leader-ptc', 'code', 'postman-leader']) test('act
   if (preset === 'code') await f.switchPreset('postman-leader-ptc')
   const r = await f.turn(f.leader)
   toolMatrix('postman-leader-ptc', leaderExpected, r)
+  assert.ok(r.tools.some(t=>t.name==='ask_user_question'),preset+': Leader retains user questions')
   assert.equal(r.model,'gpt-6.1-sol'); assert.equal(r.reasoningEffort,'xhigh'); assert.match(r.system,/canonical programming discipline/); assert.match(r.system, /postman-leader/);assert.match(JSON.stringify(r),/POSTMAN_LEADER_SKILL_VERSION: 28/)
   await writeFile(join(f.dir, 'facts.txt'), 'old fact')
   const result = nested(await f.execute(f.leader, 'ptc_execute', ptc('const r=await tools.read({file_path:"facts.txt"});const g=await tools.grep({pattern:"old fact",path:"facts.txt"});return {r,g}')))
@@ -90,6 +91,7 @@ test('all real child requests: Secretary/Worker/Sol functional smoke, ownership,
   ownGate.resolve();const [own,own2]=await Promise.all(owned.map(id=>f.childDone(id)))
   const { scopeParentOf }=await native('dsh-scope')
   const ordinary=f.ctx.tools.schemas(scopeParentOf(f.leader)).map(t=>t.name).filter(n=>!POSTMAN_LEADER_ONLY_TOOL_NAMES.includes(n)&&n!=='ptc_execute'&&!DELEGATION_TOOLS.includes(n))
+  for(const name of ['ask_user_question','list_agents','exit_plan_mode'])assert.ok(ordinary.includes(name),'native inherited catalog contains '+name)
   const expected={secretary:SECRETARY_TOOLS.filter(n=>n!=='bash'),luna:sorted([...ordinary.filter(n=>!['ask_user_question','list_agents','exit_plan_mode'].includes(n)),'report']),sol:sorted([...ordinary.filter(n=>!['ask_user_question','exit_plan_mode'].includes(n)),...WORKER_CONTROL_TOOLS,'ptc_execute','report'])}
   const check=(a,label=role(a))=>{
     const entries=f.requests.filter(x=>x.agent.id===a.id)
@@ -101,7 +103,11 @@ test('all real child requests: Secretary/Worker/Sol functional smoke, ownership,
     }
     return entries.at(-1).request
   }
-  const wr=check(worker,'Worker under Leader'), ow=check(own,'Worker under Sol');assert.deepEqual(sorted(wr.tools.map(t=>t.name)),sorted(ow.tools.map(t=>t.name)));check(secretary);check(sol)
+  const wr=check(worker,'Worker under Leader')
+  for(const a of [own,own2]){const ow=check(a,'Worker under Sol');assert.deepEqual(sorted(wr.tools.map(t=>t.name)),sorted(ow.tools.map(t=>t.name)))}
+  const sr=check(secretary), solr=check(sol)
+  for(const name of ['ask_user_question','list_agents'])assert.ok(!sr.tools.some(t=>t.name===name),'Secretary: forbidden '+name)
+  assert.ok(!solr.tools.some(t=>t.name==='ask_user_question'),'Sol: no user questions')
   const admission=async(a)=>a.session.header.parentSession==='leader'?leaderCall(role(a)==='sol'?'postman_sol_worker':role(a)==='secretary'?'postman_secretary':'postman_worker',{workerSessionId:a.id,task:'next exact bounded fixture'}) : ok(await f.execute(sol,'postman_worker',{workerSessionId:a.id,task:'next exact bounded fixture'}))
   for(const a of [secretary,worker,own]) {
     const batch=role(a)==='secretary'?[{name:'read',args:{file_path:'facts.txt'}},{name:'glob',args:{pattern:'*.txt'}},{name:'grep',args:{pattern:'fact',path:'facts.txt'}},{name:'postman_secretary_ledger',args:{content:'verified fact ledger',revision:0}},{name:'postman_secretary_ledger',args:{}}]:role(a)==='sol'?[{name:'ptc_execute',args:ptc('const r=await tools.read({file_path:"facts.txt"});const g=await tools.grep({pattern:"fact",path:"facts.txt"});await tools.edit({file_path:"facts.txt",old_string:"old fact",new_string:"new fact"});const after=await tools.read({file_path:"facts.txt"});return {r,g,after,names:Object.keys(tools)}')}]:[{name:'read',args:{file_path:'facts.txt'}},{name:'glob',args:{pattern:'*.txt'}},{name:'write',args:{file_path:a.id+'.txt',content:'smoke old'}},{name:'read',args:{file_path:a.id+'.txt'}},{name:'edit',args:{file_path:a.id+'.txt',old_string:'smoke old',new_string:'smoke new'}},{name:'read',args:{file_path:a.id+'.txt'}},{name:'pwsh',args:{command:'Write-Output safe-fixture-smoke',description:'Print safe fixture smoke evidence'}}]
