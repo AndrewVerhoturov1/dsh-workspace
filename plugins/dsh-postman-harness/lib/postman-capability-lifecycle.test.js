@@ -38,7 +38,7 @@ for (const preset of ['postman-leader-ptc', 'code', 'postman-leader']) test('act
   assertManagementRequest('leader', r)
   assertManagementRequest('leader', await f.turn(f.leader, 'Related management follow-up'))
   assert.ok(r.tools.some(t=>t.name==='ask_user_question'),preset+': Leader retains user questions')
-  assert.equal(r.model,'gpt-6.1-sol'); assert.equal(r.reasoningEffort,'xhigh'); assert.match(r.system,/canonical programming discipline/); assert.match(r.system, /postman-leader/);assert.match(JSON.stringify(r),/POSTMAN_LEADER_SKILL_VERSION: 29/)
+  assert.equal(r.model,'gpt-6.1-sol'); assert.equal(r.reasoningEffort,'xhigh'); assert.match(r.system,/canonical programming discipline/); assert.match(r.system, /postman-leader/);assert.match(JSON.stringify(r),/POSTMAN_LEADER_SKILL_VERSION: 30/)
   await writeFile(join(f.dir, 'facts.txt'), 'old fact')
   const result = nested(await f.execute(f.leader, 'ptc_execute', ptc('const r=await tools.read({file_path:"facts.txt"});const g=await tools.grep({pattern:"old fact",path:"facts.txt"});return {r,g}')))
   assert.equal(result.r.lines[0].text, 'old fact'); assert.ok(result.g.matches.length)

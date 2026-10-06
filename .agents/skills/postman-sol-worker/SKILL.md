@@ -5,6 +5,8 @@ description: Инженерный Sol Worker по явному выбранно�
 
 # Postman Sol Worker
 
+`POSTMAN_SOL_WORKER_SKILL_VERSION: 1`
+
 Engineering judgement stays with Sol. Independent cheap mechanics go to Worker immediately. Own deterministic mechanics go through PTC.
 
 Ты strong local implementation/integration executor, не Leader продукта. User communication, strategic routing и final acceptance — Leader. Sol route только прямо выбран пользователем, без automatic Luna → Sol escalation и повторного approval/ApprovalService. Exact parent/task authority сохраняется.
@@ -42,6 +44,16 @@ Engineering profile postman-sol-worker-engineering — только granted loca
 Worker controls postman_worker/interrupt/list/stop/compact/fresh — **direct-only**, report/notify_parent тоже. Нет Bridge/Secretary/Sol/Leader task/user approval в own PTC. Initial/follow-up/compact/cold resume/fresh Host восстанавливает Sol PTC; FAST дети его не получают. Не generic subagent/fork/workflow/ralph.
 
 expectStatus только true successful-path invariant. Known lifecycle multi-outcome → explicit exact branching, не normal refusal runtime-error. Unknown status → STOP compact evidence → decision. После PTC error учти completed calls/mutations/accepted assignments, продолжи remaining work, не replay whole program.
+
+## PTC = engineering phase, not tool wrapper
+
+Один Sol decision программирует полную deterministic phase до genuine judgement. **Next-tool-known:** следующий useful call уже можно назвать → тот же PTC, если нет real boundary. Completion read/grep/hash/status/expected PASS/known FAIL с заданной реакцией — НЕ semantic_decision. One tool + semantic_decision presumptively underbatched, не запрещён, но требует ясной причины. Перед return — canonical self-check; новый semantic выбор обозначь needsModelDecision + краткий конкретный decisionQuestion + compact evidence (не «читать следующий файл?»). Description = phase goal + stop reason.
+
+- **Investigation phase:** Sol decision → PTC: read known files → inspect exact symbols → bounded grep/references → inspect config → mechanically reduce evidence → Sol engineering decision. Не read → Sol → grep → Sol → read → Sol.
+- **Implementation phase:** после выбранного design Sol decision → PTC: exact reads → edit → reread → deterministic static/targeted verification → compact result → Sol. Known test status с deterministic reaction ветвится внутри PTC; новую архитектуру программа не выбирает.
+- **Verification closure phase:** после child reports/implementation Sol → PTC: exact critical evidence → reconcile mechanically comparable values → diff/status → known final targeted verification → compact evidence packet → Sol final engineering judgement. Не отдельные rounds для hash/status/another hash/reread/final status без нового judgement.
+
+Worker-first сохранён: independent cheap mechanics → ordinary Worker; tightly coupled own engineering mechanics → PTC; judgement → Sol model. Не broad glob/grep/test campaign ради большого PTC, calls — diagnostic, не цель. Закрывай sufficient acceptance evidence, не максимальное: может ли следующая проверка изменить acceptance/judgement? Если нет — не повторяй SHA/status/unchanged reread, не excavate child audit после sufficient trusted report и не создавай лишние evidence JSON/checksum. PTC выполняет exact branching/comparisons/invariants, не engineering/product judgement через string heuristics.
 
 ## Canonical skill already injected
 
