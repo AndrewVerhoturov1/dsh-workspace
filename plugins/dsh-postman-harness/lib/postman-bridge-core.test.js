@@ -161,6 +161,15 @@ test('trusted status preserves file-mode descriptor without assistantText', asyn
   assert.equal(result.result.resultFile, receipt.resultFile)
 })
 
+test('trusted status preserves first-class UNKNOWN without terminal fabrication or another poll', async () => {
+  let polls = 0
+  const result = await settleTrustedPostmanStatus(async () => {
+    assert.equal(++polls, 1)
+    return { status: 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN', requestId: 'REQ_UNKNOWN' }
+  })
+  assert.deepEqual(result, { status: 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN', checks: 1, requestId: 'REQ_UNKNOWN' })
+})
+
 test('trusted status fails closed when Luna never started Direct Postman', async () => {
   const result = await settleTrustedPostmanStatus(async () => ({ status: 'NO_JOB' }), new AbortController().signal)
   assert.deepEqual(result, { status: 'POSTMAN_BRIDGE_NO_TRANSPORT', checks: 1, requestId: null })

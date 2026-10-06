@@ -293,6 +293,9 @@ export async function settleTrustedPostmanStatus(readStatus, signal) {
         result: status.result,
       }
     }
+    if (status?.status === 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN') {
+      return { status: 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN', checks, requestId: status.requestId ?? null }
+    }
     if (status?.status === 'NO_JOB') {
       return { status: 'POSTMAN_BRIDGE_NO_TRANSPORT', checks, requestId: null }
     }

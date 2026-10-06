@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { EventEmitter, getEventListeners } from 'node:events'
+import { DirectPostmanJobManager, createDirectCurrentTurnToolConfigs } from './direct-current-turn.js'
 import { createPostmanBridgeJobs } from './postman-bridge-jobs.js'
 import { createPostmanBridgeLaunchCoordinator } from './postman-bridge-launch-coordinator.js'
 
@@ -13,7 +15,7 @@ const deferred = () => {
 const requestId = 'REQ_20261004T010101Z_0001'
 const publication = { requestId, baseCommit: 'a'.repeat(40), taskPublicationCommit: 'b'.repeat(40) }
 
-function fixture({ trusted = { status: 'RUNNING', requestId }, durable = true, failIntent = false } = {}) {
+function fixture({ trusted = { status: 'RUNNING', requestId }, durable = true, failIntent = false, directManager } = {}) {
   let row = { bridgeOperations: {}, artifactGrants: { saved: { value: 'preserve' } } }
   const task = Object.freeze({ branch: 'task' })
   const runs = []
@@ -36,12 +38,12 @@ function fixture({ trusted = { status: 'RUNNING', requestId }, durable = true, f
       return { id: 'child-' + runs.length, localAgent: { id: 'child-' + runs.length }, result: end.promise,
         async dispose() { run.disposed++; await cleanup.promise } }
     } }, tools: { get() { return { async execute(_args, exec) {
-      assert.equal(exec.signal?.aborted, undefined)
+      assert.equal(exec.signal, runs.at(-1).signal)
       reads++; return trusted
     } } } } }
   const direct = { inspectRequest() { throw Error('must not inspect Direct') },
     continueLast() { throw Error('must not recover') }, recoveryCapability() { return { recovery_eligible: false } } }
-  const jobs = createPostmanBridgeJobs(ctx, coordinator, { async register() { grants++; return true } }, contexts, null, direct)
+  const jobs = createPostmanBridgeJobs(ctx, coordinator, { async register() { grants++; return true } }, contexts, null, directManager ?? direct)
   const accept = () => jobs.accept(parent, '@PostmanAsk stop test', 'text')
   const settle = async () => { for (const run of runs) { run.end.resolve({ stopReason: 'end_turn' }); run.cleanup.resolve() }; await tick() }
   return { jobs, ctx, contexts, coordinator, runs, accept, settle, get row() { return row },
@@ -212,6 +214,70 @@ test('disposal during normal RUNNING polling observes one next response then set
   assert.equal(polls, 1)
   assert.equal(f.row.bridgeOperations[accepted.bridgeJobId].state, 'unknown')
   assert.equal(f.runs[0].disposed, 1)
+})
+
+
+
+for (const action of ['stop', 'plugin disposal']) test('actual Direct wait: ' + action + ' promptly settles live/cold UNKNOWN without second wait', { timeout: 3000 }, async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const transport = new EventEmitter()
+  transport.stdout = new EventEmitter(); transport.stderr = new EventEmitter()
+  transport.kill = () => assert.fail('Bridge cancellation does not own Direct process cancellation')
+  const direct = new DirectPostmanJobManager({ exists: () => true,
+    readPublicationState() { throw Error('no durable Direct terminal') },
+    spawn() { queueMicrotask(() => transport.emit('spawn')); return transport } })
+  const plugin = createDirectCurrentTurnToolConfigs({}, { jobs: direct })
+  const statusTool = plugin.tools.find(t => t.name === 'postman_current_turn_status')
+  const f = fixture({ directManager: direct })
+  t.after(async () => { transport.emit('close', 1); plugin.dispose(); await f.settle(); await f.jobs.dispose() })
+  const accepted = await f.accept(); await tick()
+  const run = f.runs[0], child = { id: 'child-1' }
+  await direct.start({ sessionId: child.id, workspace: '/repo', branch: 'main', payload: 'exact intent' })
+  const job = direct.latest(child.id)
+  await f.contexts.changeRecord(parent.id, row => ({ ...row, bridgeOperations: { ...row.bridgeOperations,
+    [accepted.bridgeJobId]: { ...row.bridgeOperations[accepted.bridgeJobId], requestId: job.requestId, phase: 'request-known' } } }))
+  let reads = 0
+  f.ctx.tools.get = () => ({ execute(args, exec) {
+    assert.equal(exec.signal, run.signal, 'post-child status must use the same cancellation signal')
+    assert.equal(exec.signal.aborted, true, 'no post-stop unbounded status read')
+    assert.equal(++reads, 1)
+    return statusTool.execute(args, exec)
+  } })
+  // The child cannot settle until its actual current-turn status tool is unblocked.
+  const childStatus = statusTool.execute({}, { agent: child, signal: run.signal })
+  void childStatus.then(() => run.end.resolve({ stopReason: 'aborted' }))
+  assert.equal(job.waiters.size, 1)
+  let closing
+  if (action === 'stop') assert.equal((await f.jobs.stop(parent, accepted.bridgeJobId)).status, 'POSTMAN_BRIDGE_STOP_REQUESTED')
+  else closing = f.jobs.dispose()
+  assert.equal(job.waiters.size, 0, 'abort wakes child status immediately')
+  assert.equal(getEventListeners(run.signal, 'abort').length, 0)
+  assert.equal((await childStatus).status, 'RUNNING')
+  await tick()
+  assert.equal(reads, 1)
+  assert.equal(job.waiters.size, 0, 'post-child read never opens another 480-second timer')
+  assert.equal(f.coordinator.activeCount, 1, 'pending cleanup still owns the slot')
+  assert.equal(f.row.bridgeOperations[accepted.bridgeJobId].state, 'pending')
+  run.cleanup.resolve()
+  if (closing) await closing
+  else await tick()
+  assert.equal(f.coordinator.activeCount, 0)
+  assert.equal(f.row.bridgeOperations[accepted.bridgeJobId].state, 'unknown')
+  assert.equal(f.jobs.hasActive(parent.id), false)
+  const live = await f.jobs.status(parent, accepted.bridgeJobId)
+  assert.equal(live.status, 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN')
+  assert.equal(live.requestId, job.requestId)
+  assert.equal(live.result, undefined)
+  assert.equal(live.terminalStatus, undefined)
+  const before = structuredClone(f.row)
+  const cold = createPostmanBridgeJobs({}, { run() { assert.fail('no replay') }, dispose() {} },
+    { register() { assert.fail('no fabricated grant') } }, { record: () => f.row }, null, direct)
+  assert.deepEqual(await cold.status(parent, accepted.bridgeJobId), live)
+  assert.equal(cold.teamSnapshot(parent).used, 1, 'UNKNOWN durable capacity remains held')
+  assert.deepEqual(f.row, before)
+  assert.equal(job.state, 'running', 'Direct remains authoritative and alive')
+  await cold.dispose()
+  assert.equal(job.waiters.size, 0)
 })
 
 test('live fixtures without registry expose capacity and cancellation metadata', async () => {

@@ -131,7 +131,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
           })
         })
       job.requestId = started.requestId
-      return { ...await settleStatus(job, () => direct.wait(job.bridgeJobId)),
+      return { ...await settleStatus(job, () => direct.wait(job.bridgeJobId, undefined, job.controller.signal)),
         transportKind: job.transportKind }
     }
     let run
@@ -180,7 +180,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
         childDiagnostic = diagnostic(error)
       }
       const trusted = await settleStatus(job,
-        () => trustedStatusReader(child, undefined))
+        () => trustedStatusReader(child, job.controller.signal))
       terminal = losslessValue({ ...trusted, transportKind: job.transportKind, childStopReason,
         ...(childDiagnostic === undefined ? {} : { childDiagnostic }) })
       job.requestId = terminal.requestId ?? null
@@ -246,7 +246,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     if (typeof contexts?.changeRecord !== 'function') {
       // Unit fixtures without a durable registry retain the synchronous API.
       const live = [...jobs.values()].filter(item => item.parentSessionId === parent.id &&
-        !['TERMINAL', 'FAILED'].includes(item.state)).length
+        !['TERMINAL', 'FAILED', 'INTERRUPTED'].includes(item.state)).length
       return live >= 3 ? { status: 'POSTMAN_BRIDGE_LIMIT_REACHED' } : startJob(job, message)
     }
     // Serialize only durable admissions for this Leader, never Web lifecycles.
@@ -370,7 +370,8 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
         const safe = losslessValue(result)
         job.trustedTerminal = safe
         job.requestId = safe.requestId ?? job.requestId ?? null
-        job.state = safe.status === 'POSTMAN_BRIDGE_TERMINAL' ? 'TERMINAL' : 'FAILED'
+        job.state = safe.status === 'POSTMAN_BRIDGE_TERMINAL' ? 'TERMINAL'
+          : safe.status === 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN' ? 'INTERRUPTED' : 'FAILED'
         // Local lifecycle failures are not Direct delivery authority. Retain only
         // already journaled correlation; settlement below marks it unknown.
         if (job.state !== 'TERMINAL') return
@@ -429,7 +430,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
 
   function hasActive(parentSessionId) {
     return [...jobs.values()].some(job => job.parentSessionId === parentSessionId &&
-      !['TERMINAL', 'FAILED'].includes(job.state))
+      !['TERMINAL', 'FAILED', 'INTERRUPTED'].includes(job.state))
   }
 
   async function status(parent, bridgeJobId, retrySync = false, recover = false) {
@@ -535,6 +536,9 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
       return { status: 'POSTMAN_BRIDGE_RUNNING', ...common }
     }
     const terminal = job.trustedTerminal
+    if (terminal?.status === 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN' && !recover)
+      return { status: 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN', bridgeJobId, state: 'INTERRUPTED',
+        requestId: job.requestId, publication: 'unknown' }
     let capability = { recovery_eligible: false }
     if (terminal?.status === 'POSTMAN_BRIDGE_TERMINAL' &&
         ['POSTMAN_TRANSPORT_FAILED', 'ASSISTANT_COMPLETED_NO_ARTIFACT', 'ARTIFACT_REJECTED'].includes(terminal.result?.code)) {
@@ -675,6 +679,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     if (disposed) return
     disposed = true
     for (const job of jobs.values()) job.controller.abort()
+    direct.dispose?.()
     coordinator.dispose()
     await Promise.allSettled([...jobs.values()].map(job => job.completion))
     jobs.clear()
