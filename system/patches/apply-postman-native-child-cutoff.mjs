@@ -26,6 +26,8 @@ export function applyPostmanNativeChildCutoff(anchors) {
       writeFileSync(normalizedPatch, readFileSync(patch, 'utf8').replaceAll('\r', ''))
       const apply = args => spawnSync('git', ['-c', 'core.longpaths=true', 'apply', '--include=' + relative, ...args, normalizedPatch], { cwd:directory, env:{...process.env,GIT_CEILING_DIRECTORIES:dirname(directory)}, stdio:'ignore', windowsHide:true })
       if (apply(['--reverse','--check']).status === 0) continue
+      if (apply(['--check']).status !== 0 && relative.includes('/dsh-subagent/'))
+        writeFileSync(normalizedPatch, readFileSync(new URL('./postman-native-cold-compact.patch', import.meta.url), 'utf8').replaceAll('\r', ''))
       if (apply(['--check']).status !== 0 || apply([]).status !== 0) throw new Error('Native child cutoff patch mismatch: ' + path)
       prepared.at(-1).staged = staged
     }

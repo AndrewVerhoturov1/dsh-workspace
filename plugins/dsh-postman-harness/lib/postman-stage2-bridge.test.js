@@ -64,7 +64,7 @@ test('production inherited PTC Bridge stop retains input pin through actual clea
   assert.equal(existsSync(root), false); assert.equal(postmanInputGrants.child(child, context, [descriptor]), null)
   assert.equal(disposed, 1)
   const status = await call(f, 'postman_bridge_status', { bridge_job_id: accepted.bridgeJobId })
-  assert.equal(status.status, 'POSTMAN_BRIDGE_FAILED', JSON.stringify(status))
+  assert.equal(status.status, 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN', JSON.stringify(status))
   assert.equal(f.requests.length, modelRounds, 'no mechanical or remote model round after initial instruction catalog')
   const closing = f.dispose(); maintenance.resolve(); await paused; await closing
   assert.equal(disposed, 1); assert.equal(existsSync(root), false)

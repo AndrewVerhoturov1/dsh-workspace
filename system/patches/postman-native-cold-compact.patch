@@ -1,0 +1,67 @@
+diff --git a/node_modules/@deepseek-ai/dsh-subagent/lib/index.js b/node_modules/@deepseek-ai/dsh-subagent/lib/index.js
+index 753ba9babe4aa1e548cf7b1dd6eee2ccdc666f40..a0970e38f4f863dfeb2ff67df115fa0675b4d498 100644
+--- a/node_modules/@deepseek-ai/dsh-subagent/lib/index.js
++++ b/node_modules/@deepseek-ai/dsh-subagent/lib/index.js
+@@ -1104,18 +1104,45 @@ var SubagentContinuationManager = class {
+ 			return true;
+ 		});
+ 	}
+-	/** Compact exact resident idle child under the followup/close admission lock. */
++	/** Compact exact settled child under the followup/close admission lock, without submitting a turn. */
+ 	async compactChild(parent, childId, check, signal) {
+ 		if (this.ctx.agents.get(parent.id) !== parent) throw new SubagentError("child compaction requires the exact live parent", "UNAUTHORIZED");
+ 		return this.locks.run(childId, async () => {
++			signal.throwIfAborted();
++			this.assertAdmitting(parent);
+ 			const activation = this.activations.get(childId);
+-			const agent = activation?.handle?.agent;
+-			if (!activation || activation.parentSession !== parent.id || !activation.ancestry.has(parent) ||
+-				this.ctx.agents.get(childId) !== agent || agent?.status !== "idle" ||
+-				agent.inbox?.hasPending !== false || this.closedChildren.has(childId) ||
+-				agent.session.events.some((event) => event.type === "subagent/closed") ||
+-				!await check(agent)) return false;
+-			return { result: await agent.ctx.get("compaction").compactNow(agent, signal) };
++			let agent = activation?.handle?.agent, handle;
++			if (activation !== void 0) {
++				if (activation.disposal !== void 0 || activation.parentSession !== parent.id || !activation.ancestry.has(parent)) return false;
++			} else {
++				if (this.ctx.agents.get(childId) || this.closedChildren.has(childId)) return false;
++				const saved = await this.requirePersistence().inspect(childId, signal);
++				this.authorizeLineage(parent, childId, saved.meta.parentSession);
++				const seed = saved.meta.seedLength ?? 0;
++				if (saved.meta.id !== childId || saved.meta.origin !== "subagent" || saved.meta.delegationDepth !== delegationDepthOf(parent) + 1 ||
++					!Number.isSafeInteger(seed) || seed < 0 || seed > saved.events.length) return false;
++				const events = saved.events.slice(seed), descriptor = foldSubagentDescriptor(events);
++				const start = events.findLast((event) => event.type === "turn/start"), end = events.findLast((event) => event.type === "turn/end");
++				const inbox = new Inbox({ header: saved.meta, events: saved.events }, { inserted() {}, discarded() {}, claimed() {} });
++				if (descriptor?.mode !== "continuable" || events.some((event) => event.type === "subagent/closed") || inbox.hasPending ||
++					!start || !end || end.data.turn !== start.data.turn || events.indexOf(end) < events.indexOf(start)) return false;
++				// Maintenance-only Host handle: no submit, Activation watcher or model turn.
++				handle = await this.ownerCtx.agents.resume({ resumeSessionId: childId, signal,
++					agentOptions: { provider: descriptor.agentProvider, model: descriptor.agentModel },
++					setup: (childCtx) => {
++						applyChildComposition(childCtx, parent, { persona: descriptor.persona, toolFilter: descriptor.toolFilter });
++						return this.setupRegistry.apply(childCtx);
++					} });
++				agent = handle.agent;
++			}
++			try {
++				this.assertAdmitting(parent);
++				if (this.ctx.agents.get(parent.id) !== parent || this.ctx.agents.get(childId) !== agent || agent?.status !== "idle" ||
++					agent.session.header.id !== childId || agent.session.header.origin !== "subagent" || agent.session.header.parentSession !== parent.id ||
++					agent.session.header.delegationDepth !== delegationDepthOf(parent) + 1 || agent.inbox?.hasPending !== false ||
++					this.closedChildren.has(childId) || agent.session.events.some((event) => event.type === "subagent/closed") || !await check(agent)) return false;
++				return { result: await agent.ctx.get("compaction").compactNow(agent, signal) };
++			} finally { await handle?.dispose(); }
+ 		});
+ 	}
+ 	async inspectClosedChild(parent, childId) {
+@@ -2590,7 +2617,7 @@ var SubagentRuntime = class extends Service {
+ 	async inspectClosedContinuableChild(parent, childId) {
+ 		return this.requireContinuations().inspectClosedChild(parent, childId);
+ 	}
+-	/** Serialize exact live idle child compaction with followup and closure. */
++	/** Serialize exact settled child compaction with followup and closure. */
+ 	async compactContinuableChild(parent, childId, check, signal) {
+ 		return this.requireContinuations().compactChild(parent, childId, check, signal);
+ 	}
