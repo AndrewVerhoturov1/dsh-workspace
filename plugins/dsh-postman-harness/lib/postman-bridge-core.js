@@ -1,3 +1,5 @@
+import { scopeParentOf } from '@deepseek-ai/dsh-scope'
+
 export const POSTMAN_BRIDGE_PROVIDER = 'spawn'
 export const POSTMAN_BRIDGE_TOOL_NAME = 'postman_bridge'
 export const POSTMAN_BRIDGE_STATUS_TOOL_NAME = 'postman_bridge_status'
@@ -189,6 +191,7 @@ export function postmanBridgeRestrictionForAgent(agent, ownsPtcWorker = () => fa
 export function createPostmanBridgeBoundaryManager(lookupAgent, ownsPtcWorker = () => false, roleOf = () => null) {
   if (typeof lookupAgent !== 'function') throw new Error('POSTMAN_BRIDGE_AGENT_LOOKUP_REQUIRED')
   const active = new Map()
+  let updating = false
 
   const install = (agent) => {
     if (agent === undefined || agent === null || typeof agent.id !== 'string' || agent.id === '') {
@@ -198,23 +201,26 @@ export function createPostmanBridgeBoundaryManager(lookupAgent, ownsPtcWorker = 
       throw new Error('POSTMAN_BRIDGE_TOOL_RESTRICTION_REQUIRED')
     }
 
+    // restrict() accepts only currently inherited names, not agent-local report/PTC.
+    // Inspect the preset parent, BEFORE this agent's filters, never the global-only
+    // or already restricted agent surface. Recompute from canonical policy on change.
     const restriction = postmanBridgeRestrictionForAgent(agent, ownsPtcWorker, roleOf)
-    const schemas = agent.ctx?.tools?.schemas?.()
-    if (schemas) { const known = new Set(schemas.map(tool => tool.name));
+    const schemas = agent.ctx.tools.schemas?.(scopeParentOf(agent))
+    if (schemas) {
+      const known = new Set(schemas.map(tool => tool.name))
       if (restriction.allow) restriction.allow = restriction.allow.filter(name => known.has(name))
       if (restriction.deny) restriction.deny = restriction.deny.filter(name => known.has(name))
     }
-    const dispose = agent.ctx.tools.restrict(restriction)
-    if (typeof dispose !== 'function') throw new Error('POSTMAN_BRIDGE_TOOL_RESTRICTION_DISPOSER_REQUIRED')
-
+    const key = JSON.stringify(restriction)
     const previous = active.get(agent.id)
+    if (previous?.agent === agent && previous.key === key) return isTopLevelPostmanSupervisor(agent)
+    updating = true // restrict/dispose emit tools/change themselves.
     try {
-      previous?.dispose()
-    } catch (error) {
-      dispose()
-      throw error
-    }
-    active.set(agent.id, { agent, dispose })
+      const dispose = agent.ctx.tools.restrict(restriction)
+      if (typeof dispose !== 'function') throw new Error('POSTMAN_BRIDGE_TOOL_RESTRICTION_DISPOSER_REQUIRED')
+      try { previous?.dispose() } catch (error) { dispose(); throw error }
+      active.set(agent.id, { agent, dispose, key })
+    } finally { updating = false }
     return isTopLevelPostmanSupervisor(agent)
   }
 
@@ -239,7 +245,13 @@ export function createPostmanBridgeBoundaryManager(lookupAgent, ownsPtcWorker = 
     for (const entry of current) entry.dispose()
   }
 
-  return { install, refreshSession, disposeAgent, disposeAll }
+  const refreshAll = () => {
+    if (updating) return
+    for (const { agent } of [...active.values()]) {
+      if (lookupAgent(agent.id) === agent) install(agent)
+    }
+  }
+  return { install, refreshSession, refreshAll, disposeAgent, disposeAll }
 }
 
 export async function settleTrustedPostmanStatus(readStatus, signal) {

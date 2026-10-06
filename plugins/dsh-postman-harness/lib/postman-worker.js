@@ -1,5 +1,6 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { Inbox } from '@deepseek-ai/dsh-agent'
+import { scopeParentOf } from '@deepseek-ai/dsh-scope'
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { IMPLEMENTATION_REPOSITORY } from './implementation-artifact.js'
@@ -50,10 +51,10 @@ function output() {
 // Discover the transport/control surface from the host registry at admission.
 // This is a deny-only child filter, not a Worker coding-tool allowlist.
 export { WORKER_CONTROL_TOOLS, DELEGATION_TOOLS, SECRETARY_TOOLS } from './postman-bridge-core.js'
-export function postmanWorkerDeniedTools(tools, type = 'luna') {
-  return [...new Set([...tools.schemas().map(tool => tool.name).filter(name => name.startsWith('postman_') &&
+export function postmanWorkerDeniedTools(tools, type = 'luna', scope) {
+  return [...new Set([...tools.schemas(scope).map(tool => tool.name).filter(name => name.startsWith('postman_') &&
     !(type === 'sol' && WORKER_CONTROL_TOOLS.includes(name)) && !(type === 'secretary' && name === 'postman_secretary_ledger')),
-    ...tools.schemas().map(tool => tool.name).filter(name => DELEGATION_TOOLS.includes(name) || (type !== 'sol' && name === 'ptc_execute') || (type === 'secretary' && name === 'implementation_artifact_apply'))])]
+    ...tools.schemas(scope).map(tool => tool.name).filter(name => DELEGATION_TOOLS.includes(name) || (type !== 'sol' && name === 'ptc_execute') || (type === 'secretary' && name === 'implementation_artifact_apply'))])]
 }
 
 export function buildPostmanWorkerStartRequest(parent, task, signal, deniedTools, label = 'Postman Worker', workerType = 'luna') {
@@ -471,7 +472,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       slot.parent = parent
       slot.ptcAdmission = { id: assignment.id, parent, signal: exec.signal }
       const accepted = await ctx.subagents.startContinuable({
-        ...buildPostmanWorkerStartRequest(parent, task.text, exec.signal, postmanWorkerDeniedTools(ctx.tools, workerType), label, workerType),
+        ...buildPostmanWorkerStartRequest(parent, task.text, exec.signal, postmanWorkerDeniedTools(ctx.tools, workerType, scopeParentOf(parent)), label, workerType),
         childId: reservedId,
       })
       exec.signal.throwIfAborted()

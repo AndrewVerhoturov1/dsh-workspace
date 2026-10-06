@@ -34,6 +34,8 @@ try {
 
   // Include the current role implementation and canonical sources before commit.
   cpSync(resolve(repositoryRoot,'plugins/dsh-postman-harness/lib'),resolve(stagingRoot,'plugins/dsh-postman-harness/lib'),{recursive:true})
+  for (const name of ['package.json','pnpm-lock.yaml'])
+    copyFileSync(resolve(repositoryRoot,'plugins/dsh-postman-harness',name),resolve(stagingRoot,'plugins/dsh-postman-harness',name))
   for(const role of ['postman-worker','postman-secretary','postman-sol-worker'])
     cpSync(resolve(repositoryRoot,'.agents/skills',role),resolve(stagingRoot,'.agents/skills',role),{recursive:true})
   const pluginRoot = resolve(stagingRoot, 'plugins/dsh-postman-harness')
@@ -79,7 +81,17 @@ try {
   } finally {
     await runtime.dispose()
   }
-  console.log('clean production install: bridge, ptc-adapter, dsh-ptc and QuickJS/WASM PASS')
+  // Production artifacts were loaded above with only --prod dependencies. Install
+  // the pinned test SDK locally, then exercise their real plugin/preset lifecycle
+  // and first model requests. Never use the developer's APPDATA installation.
+  const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
+  const sdkInstall = spawnSync(pnpm, ['install','--offline','--frozen-lockfile','--ignore-scripts'], {
+    cwd: pluginRoot, stdio:'inherit', shell:process.platform==='win32', windowsHide:true,
+  })
+  if (sdkInstall.error) throw sdkInstall.error
+  assert.equal(sdkInstall.status,0,'portable capability test SDK install')
+  run(process.execPath,['--test','lib/postman-capability-lifecycle.test.js','lib/postman-capability-cold.test.js'],pluginRoot)
+  console.log('clean production install: role model-request catalogs, FAST no PTC, Leader/Sol usable PTC and QuickJS/WASM PASS')
 } finally {
   rmSync(stagingRoot, { recursive: true, force: true })
 }
