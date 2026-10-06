@@ -68,6 +68,74 @@ function fixture(dir, { real = false, readMaxBytes = 51200, runtime, resolveAssi
   return {ctx,agents,traces,adapter,agent,execute}
 }
 
+test('Stage 3.5A real PTC: candidate streak, reset and conservative semantic exemption', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'ptc-efficiency-'))
+  const f = fixture(dir, {real:true}), {a,sections,diagnostics,events} = f.agent('efficiency')
+  t.after(async () => {await f.adapter.dispose(); await rm(dir, {recursive:true,force:true})})
+  a.ctx.tools.restrict(postmanBridgeRestrictionForAgent(a)); f.adapter.refresh(a)
+  await writeFile(join(dir,'a.txt'),'A'); await writeFile(join(dir,'b.txt'),'B')
+  const small = "await tools.read({file_path:'a.txt'}); return {count:1}"
+  for (const streak of [1,2]) {
+    assert.equal((await f.execute(a,small)).value.status,'ok') // No hard rejection.
+    const d = diagnostics.at(-1).data
+    assert.equal(d.underbatchedCandidate,true); assert.equal(d.underbatchedStreak,streak)
+    assert.equal(d.underbatchedReason,'small-semantic-phase'); assert.equal(d.nestedToolCalls,1)
+    assert.equal(d.needsModelDecision,false); assert.equal(d.decisionQuestionPresent,false)
+  }
+  assert.match(sections[0].text({scope:a}), /PTC UNDERBATCH STREAK: 2/)
+  const batch = "await tools.read({file_path:'a.txt'}); await tools.read({file_path:'b.txt'}); await tools.grep({pattern:'A',path:'a.txt'}); return {ready:true}"
+  assert.equal((await f.execute(a,batch)).value.status,'ok')
+  assert.equal(diagnostics.at(-1).data.nestedToolCalls,3)
+  assert.equal(diagnostics.at(-1).data.underbatchedCandidate,false)
+  assert.equal(diagnostics.at(-1).data.underbatchedStreak,0)
+  assert.doesNotMatch(sections[0].text({scope:a}), /PTC EFFICIENCY NOTICE|PTC UNDERBATCH STREAK/)
+  await f.execute(a,small)
+  const unexpected = "const r=await tools.read({file_path:'a.txt'}); return {needsModelDecision:true,decisionQuestion:'Is this incompatible evidence safe to use? SECRET_QUESTION',evidence:{private:'SECRET_EVIDENCE'}}"
+  assert.equal((await f.execute(a,unexpected)).value.status,'ok')
+  const d = diagnostics.at(-1).data
+  assert.equal(d.needsModelDecision,true); assert.equal(d.decisionQuestionPresent,true)
+  assert.equal(d.underbatchedCandidate,false); assert.equal(d.underbatchedStreak,0)
+  assert.doesNotMatch(JSON.stringify(diagnostics), /SECRET_QUESTION|SECRET_EVIDENCE/)
+  // Host deliberately cannot prove prose semantic correctness. Old compact
+  // needsModelDecision results are conservatively exempt without a new protocol.
+  await f.execute(a,"await tools.read({file_path:'a.txt'}); return {needsModelDecision:true,reason:'unexpected_status'}")
+  assert.equal(diagnostics.at(-1).data.underbatchedCandidate,false)
+  assert.equal(diagnostics.at(-1).data.decisionQuestionPresent,false)
+  await f.execute(a,"await tools.read({file_path:'a.txt'}); await tools.read({file_path:'b.txt'}); return {ready:true}")
+  assert.equal(diagnostics.at(-1).data.nestedToolCalls,2)
+  assert.equal(diagnostics.at(-1).data.underbatchedCandidate,false)
+  await f.execute(a,'return {empty:true}')
+  assert.equal(diagnostics.at(-1).data.underbatchedCandidate,true)
+  assert.equal(diagnostics.at(-1).data.nestedToolCalls,0)
+  // Removal/re-assignment does not recover telemetry from durable events.
+  f.adapter.remove(a); f.adapter.refresh(a)
+  assert.doesNotMatch(sections[0].text({scope:a}), /PTC EFFICIENCY NOTICE|PTC UNDERBATCH STREAK/)
+  assert.ok(events.every(e => e.type !== 'postman/ptc-run'))
+})
+
+test('Stage 3.5A failed, pending and aborted mechanics are not candidates', async t => {
+  const f = fixture(process.cwd()), {a,diagnostics} = f.agent('efficiency-errors')
+  f.adapter.refresh(a)
+  const release = Promise.withResolvers()
+  t.after(async () => {release.resolve({name:'read'}); await f.adapter.dispose()})
+  f.ctx.on('tools/execute', async (exec,next) => exec.parent && exec.name === 'read' ?
+    exec.arguments.held ? {isError:false,value:await release.promise} : Promise.reject(new Error('unexpected read failure')) : next())
+  for (const program of ["try {await tools.read({})} catch {} return 1", 'tools.read({held:true}); return 1', "throw Error('failed phase')"]) {
+    await f.execute(a,program)
+    assert.equal(diagnostics.at(-1).data.underbatchedCandidate,false)
+    assert.equal(diagnostics.at(-1).data.underbatchedStreak,0)
+  }
+  const controller = new AbortController(), entered = Promise.withResolvers()
+  f.ctx.on('tools/pre-execute',async (exec,next)=>{if(exec.parent && exec.name==='read')entered.resolve();return next()})
+  const pending = f.execute(a,'await tools.read({held:true}); return 1',controller)
+  await entered.promise // Abort an actual run, not native pre-admission.
+  controller.abort()
+  const result = await pending
+  assert.equal(result.isError,true) // Native ToolRuntime preserves cancellation as an outer error.
+  assert.equal(diagnostics.at(-1).data.status,'cancelled')
+  assert.equal(diagnostics.at(-1).data.underbatchedCandidate,false)
+})
+
 test('ordinary ptc_execute passes actual QuickJS to real Harness read and grep',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'ptc-integration-'))
   try {
@@ -514,7 +582,8 @@ test('one program validates prepare and Worker acceptance, auto-concludes and re
     assert.deepEqual({ ...event.data, toolCounts: {...event.data.toolCounts}, durationMs: 0 }, { sessionId: a.id, role: 'leader', description: 'Dispatch then wait for Worker report',
       boundary: 'external_event', status: 'ok', durationMs: 0, nestedToolCalls: 2,
       toolCounts: { postman_task_prepare: 1, postman_worker: 1 }, resultBytes: Buffer.byteLength(JSON.stringify(result.value.value)),
-      yieldRequested: false, yieldApplied: true, underbatchedCandidate: false, oversizedResultCandidate: false })
+      yieldRequested: false, yieldApplied: true, underbatchedCandidate: false,
+      underbatchedReason: null, underbatchedStreak: 0, oversizedResultCandidate: false })
     assert.ok(event.data.durationMs >= 0)
     assert.doesNotMatch(JSON.stringify(event), /program|arguments|content|taskText/)
   } finally { await f.adapter.dispose() }
@@ -623,7 +692,7 @@ test('ordinary JSON refused/unknown async acceptance is not concealed by auto-yi
         arguments:{program:'return await tools.'+name+'({})',description:'One dispatch is the external event boundary',boundary:'external_event',...(yieldFlag===undefined?{}:{yield_on_success:yieldFlag})} })
       assert.equal(result.value.status,'ok',JSON.stringify(result.value))
       assert.equal(!!result.concludesTurn,name !== 'postman_task_prepare' && status === statuses.at(-1), status)
-      assert.equal(diagnostics.at(-1).data.underbatchedCandidate,true)
+      assert.equal(diagnostics.at(-1).data.underbatchedCandidate,false)
       assert.equal(diagnostics.at(-1).data.nestedToolCalls,1)
       assert.deepEqual({...diagnostics.at(-1).data.toolCounts},{[name]:1})
     }

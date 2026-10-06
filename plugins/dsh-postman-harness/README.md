@@ -98,7 +98,7 @@ Leader boundary external_event завершает ход после ok и exact 
 
 ## Management playbook (Stage 3)
 
-Source of truth — четыре canonical role skills в `.agents/skills/postman-{leader,worker,secretary,sol-worker}/SKILL.md`. Leader v29 структурно заменяет исторические повторы коротким Management Kernel: outcome → execution graph/critical path → prerequisites → cheap dispatch → одна deterministic PTC supervisor phase → real external event → reconciliation/critical verification → retire. Sol dispatch-first, FAST exact-path-first/no own-skill reread/soft-warning synthesis. Никакого нового scheduler/runtime; authority Stage 1/2 неизменна.
+Source of truth — четыре canonical role skills в `.agents/skills/postman-{leader,worker,secretary,sol-worker}/SKILL.md`. Leader v30 структурно заменяет исторические повторы коротким Management Kernel: outcome → execution graph/critical path → prerequisites → cheap dispatch → одна deterministic PTC supervisor phase → real external event → reconciliation/critical verification → retire. Sol dispatch-first, FAST exact-path-first/no own-skill reread/soft-warning synthesis. Никакого нового scheduler/runtime; authority Stage 1/2 неизменна.
 
 Latest base уже содержит #367 configurable/default16/root48 budgets. Stage 3 management использует explicit `hardBudget:15` (Host soft12) на FAST initial/continuation/fresh, не откатывая baseline и не расширяя budget ради discovery. Доставка правил проверяется actual native model requests, а не только Markdown: `lib/postman-capability-lifecycle.test.js` (Leader, direct roles, Sol-owned Worker, compact/continuation/fresh), `lib/postman-capability-cold.test.js` и `lib/ptc-worker-cold-resume.test.js` (cold), `lib/postman-stage3.test.js` (bounded markers/controlled exact path+command). Inert adapter доказывает доставку и механический путь, НЕ поведение настоящей Luna/Sol.
 
@@ -108,6 +108,16 @@ Product acceptance имеет один Host-selected surface: `mcp__playwright__
 
 Postman transport Chrome принадлежит внутреннему Direct/Web transport, никогда не product acceptance. SHOW_TO_USER — semantics existing product URL + snapshot/screenshot evidence, которое можно показать через Harness, НЕ новый tool и НЕ утверждение об общей сессии пользовательского Chrome. Report содержит exact URL, наблюдаемое состояние, screenshot/artifact при наличии; недоступная canonical surface/target — truthful blocker. Browser navigation в shared session упорядочена. Inventory regression: `POSTMAN_BROWSER_INVENTORY=1 node --test lib/postman-capability-browser.test.js`; она проверяет actual MCP catalogs, не живой product outcome.
 
+### Stage 3.5A — PTC Efficiency Discipline
+
+Canonical discipline v7: **PTC = одна полная deterministic phase между genuine model decisions**, не wrapper tool call. Next-tool-known, строгая positive definition semantic_decision, compact needsModelDecision + decisionQuestion и mandatory pre-return self-check. Leader v30 учит supervisor dispatch/reconciliation/cleanup; Sol skill v1 — investigation/implementation/verification closure. Version markers меняются из-за canonical semantics/phase patterns; profile revisions 9/1 и tool permissions не меняются.
+
+Existing postman/ptc-run logger диагностирует underbatchedCandidate только при runtime ok + semantic_decision + 0–1 nested calls + exact correlated completed effects, без nested failure/cleanup error/abort/revocation/refused acceptance. needsModelDecision:true консервативно исключён: Host не классифицирует prose/evidence и не доказывает legitimate judgement; presence decisionQuestion — только boolean. Accepted async producer также исключён. 2 calls сами по себе не failure; 3 calls не доказательство идеального batching.
+
+underbatchedReason=small-semantic-phase либо null; per-exact-assignment ephemeral underbatchedStreak: candidate +1, любой иной завершившийся запуск reset=0. После candidate следующий actual model request exact Leader/Sol получает короткий PTC EFFICIENCY NOTICE; streak>=2 — stronger PTC UNDERBATCH STREAK. Section динамическая, не durable task authority; revoke/fresh/cold resume уничтожают state. Worker/Secretary/Bridge notice не получают. Full result/evidence/question не логируются. **NO HARD REJECTION**, нового PTC-only runtime guard нет; существующие authority/guards/Leader auto-yield сохраняются. Worker-first и sufficient evidence важнее call count.
+
+Deterministic tests доказывают delivery, telemetry, notice injection и authority regressions, **не** хорошее batching реальной Sol/Leader. Live behavioral acceptance Stage 3.5A: **NOT RUN**, следующий live run нужен отдельно.
+
 ### Stage 3 live acceptance (без Web Send probes)
 
 Использовать отдельные безопасные task worktrees, известные команды проекта и существующий Harness browser. Live сценарии подготовлены, не объявлены выполненными детерминированными tests.
@@ -116,6 +126,18 @@ Postman transport Chrome принадлежит внутреннему Direct/We
 2. **Sol dispatch-first.** Prompt: «Я явно выбираю Sol Worker. Исправь [bounded engineering issue, exact paths]. Environment уже готова. Есть две независимые cheap checks: [repository evidence scope] и [targeted reproduction command]. Верни aggregate evidence». PASS: обе полезные Sol-owned Worker assignments dispatched в первой meaningful decision до unnecessary todo/FYI/discovery; own work через Sol PTC; exact parent ownership, no automatic escalation. Если prerequisite реально отсутствует, он раньше зависимых testers.
 3. **Lifecycle.** Prompt sequence: «Worker проверь [exact file/command]» → «По тем же facts проверь related correction [precise change]» → после report «Теперь unrelated check [different exact target]» → «Задача закончена». PASS: related same ID; compact только при реальном bloat/allowed state; unrelated fresh/new ID/без old visible history; finished safely close (Sol subtree cascade при наличии), no unnecessary churn/polling, audit/ledger preserved. Known negative lifecycle status branch не PTC runtime-error; unknown → compact evidence/model decision.
 4. **FAST exact-path + browser (дополнительный).** Prompt: «Worker прочитай [exact file], выполни [exact command] и проверь [exact product URL] через Harness browser, верни evidence». PASS: без glob/glob/grep rediscovery и own-skill reread; canonical MCP, без transport Chrome/port/profile selection; soft warning → synthesis/blocker, не новые searches. Unverified UI не PASS.
+
+Stage 3.5A: **PTC used = YES больше не достаточный критерий успеха**. Из существующих session/model/tool timings и postman/ptc-run diagnostics собирать:
+
+- Leader model steps; Sol model steps; Leader PTC runs; Sol PTC runs;
+- nested tool calls total; median nested calls/PTC; one-tool PTC count; two-tool PTC count;
+- semantic_decision PTC count; underbatchedCandidate count; max underbatched streak;
+- direct Worker follow-up count; poll/list count;
+- model generation time; tool execution time (PTC durationMs — wall phase time, не model generation).
+
+Live review: соответствует ли число дорогих model turns настоящим semantic decisions? Есть ли tiny PTC sequences без нового judgement? Вынесены ли известные mechanics в отдельные model rounds? Использованы ли Worker для независимой дешёвой работы? Не inflated ли evidence лишними checks? Нет hard SLA «4 tools/PTC» или «10 Sol turns».
+
+Только diagnostic classifications: GOOD — sufficient substantial deterministic phase + real boundary + little/no repeated tiny PTC; SUSPICIOUS — successful one-tool semantic_decision и next turn снова known deterministic call; BAD PATTERN — repeated tiny semantic_decision streak, model wakes только выбрать следующий known call. Это не user-visible protocol status.
 
 Из session/tool evidence измерить Leader/Sol/FAST model turns, time-to-first-cheap-dispatch, unnecessary one-tool PTC, Worker budget use, duplicate discovery, polling calls и active bindings после final. Сопоставить с прежними ~16 Leader turns и xhigh bookkeeping до Sol dispatch, без hard latency/turn-count SLA. Отдельно отметить reported / mechanically verified / Leader-verified, PASS/PARTIAL/BLOCKED/FAILED. Реальные semantic improvements подтверждает только live run; local tests не имитируют такое доказательство.
 

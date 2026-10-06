@@ -9,7 +9,7 @@
 // This module is deliberately data-only. ptc-adapter.js is responsible for
 // injecting the text into the system prompt of an authorized Postman PTC agent.
 
-export const POSTMAN_PTC_DISCIPLINE_VERSION = 6
+export const POSTMAN_PTC_DISCIPLINE_VERSION = 7
 
 export const POSTMAN_PTC_DISCIPLINE = String.raw`
 # Postman PTC programming discipline
@@ -39,6 +39,26 @@ Optimize for the fewest unnecessary model rounds while preserving safety and cor
 A PTC program is not a model. It may execute deterministic logic, but it must not
 pretend to make a new semantic judgement that belongs to the model.
 
+## Deterministic phase rule
+
+PTC is one complete deterministic phase between two genuine model decisions,
+not a wrapper around a tool call. One model decision MUST program the whole safe
+mechanical phase up to the next genuine boundary. Optimize expensive model boundaries,
+not ptc_execute usage or nested call count. Do not end PTC just because one tool finished.
+Completion of an individual mechanical operation is not itself a model boundary.
+
+## Next-tool-known rule
+
+If the next useful tool call is already knowable before returning to the model,
+keep it inside the current PTC program unless a genuine boundary prevents it.
+If you could name the next call before receiving the current result, it normally
+belongs in the same program. This does not require guessing a semantic decision.
+
+Bad: PTC read A -> model -> PTC read B -> model -> PTC git status,
+when B/status are needed independently of A's contents.
+Good: PTC read A -> read B -> git status -> reduce evidence -> model,
+using only the tools granted to this role.
+
 ## 2. Program-first rule
 
 Before every ptc_execute call, determine the NEXT DECISION BOUNDARY.
@@ -63,8 +83,12 @@ a valid reason by itself.
 A PTC program should normally stop only for one of these reasons:
 
 - semantic_decision:
-  New evidence requires genuine model judgement, interpretation, design choice,
-  prioritization, or reconciliation of competing evidence.
+  New evidence requires at least one genuine decision: choose between materially
+  different implementation approaches; interpret an ambiguous requirement; resolve
+  contradictory evidence; judge whether continuing after an unexpected state is safe;
+  change the execution graph or critical path; make engineering/management judgement
+  that cannot be expressed as exact deterministic branching; or decide a new scope
+  or authority question. Merely selecting the next already-known tool is not judgement.
 
 - user_input:
   The next safe step requires information or a choice from the user.
@@ -84,9 +108,38 @@ A PTC program should normally stop only for one of these reasons:
 When the ptc_execute interface exposes a boundary field, set it to the actual next
 boundary. Never invent a boundary merely to end a short program.
 
+## semantic_decision: mechanical completion is NOT a boundary
+
+None of these alone justifies semantic_decision: read/grep completed, a hash or Git
+status arrived, expected PASS, expected known FAIL with a predefined reaction,
+reading the next known file, checking the next known invariant, running an already
+selected test, rereading after edit, checking diff, obtaining another known verification
+value, or assembling the final evidence packet. If the next step is known, continue PTC.
+
+Before returning at semantic_decision, the program MUST, where applicable, identify
+what NEW decision the model now needs to make. Prefer the existing compact result:
+
+return {
+  needsModelDecision: true,
+  decisionQuestion: 'Which of the two incompatible persistence approaches should be used?',
+  evidence: compactEvidence
+}
+
+The question must be specific, brief and require reasoning, not describe a tool call.
+Bad: decisionQuestion: 'Should I read the next file?' when that file is already known.
+Do not invent a question just to escape the phase. Other legitimate compact structured
+results remain compatible: this is discipline and diagnostics, not schema rejection.
+
 ## 4. One-tool PTC is an exception
 
 A PTC program containing only one nested tool call is allowed, but it is exceptional.
+One tool + semantic_decision is presumptively underbatched and requires an especially
+clear reason; it is suspicious, not automatically an error or runtime prohibition.
+Legitimate: an async call creates external_event; an unexpected/unknown state appears;
+an actual approval/user boundary opens; an exact probe unexpectedly exposes conflicting
+evidence; or further deterministic work cannot safely be chosen.
+Illegitimate: one read succeeded -> semantic_decision -> next model turn reads the next
+already-known file. Successful read -> model -> read -> model is not normal PTC use.
 
 It is justified only when that single result itself creates a real decision boundary,
 for example:
@@ -593,6 +646,7 @@ if (!KNOWN_STATUSES.includes(result.status)) {
   return {
     needsModelDecision: true,
     reason: 'unexpected_status',
+    decisionQuestion: 'Is it safe to continue after this undocumented protocol state?',
     tool: 'some_tool',
     observedStatus: result.status,
     evidence: selectSmallRelevantFields(result)
@@ -621,6 +675,35 @@ Before sending a PTC program, verify:
 
 If answers reveal an unnecessary model boundary, rewrite the PTC program before
 executing it.
+
+## Evidence sufficiency and phase description
+
+For Leader/Sol, independent cheap mechanics go to ordinary Worker; mechanics tightly
+coupled to the current Sol engineering phase go to PTC; judgement goes to the model.
+Do not absorb a broad glob/grep/test campaign merely to raise nested call count.
+PTC closes sufficient acceptance evidence, not maximum evidence. Before another
+mechanical verification ask: can its result change acceptance or judgement? If not,
+skip it. Do not repeat SHA/Git status, reread unchanged evidence, excavate child audit
+history after a sufficient trusted report, or create extra evidence JSON/checksums
+just for confidence. Exact comparisons and known workflow branching are mechanics;
+architecture, product semantics and ambiguous requirements are not string heuristics.
+
+The ptc_execute description MUST describe the phase goal + stop reason, not one tool.
+Good: 'Establish exact role-boundary evidence; stop on conflict or one compact packet.'
+Bad: 'Read Worker skill.'
+
+## Mandatory pre-return self-check
+
+BEFORE RETURNING TO THE MODEL:
+
+1. What exact decision does the model need to make now?
+2. Could I already name the next useful tool call before returning?
+3. Are there remaining known reads/tests/verifications?
+4. Are there known statuses whose response is deterministic?
+5. Am I returning merely because one tool finished?
+
+If the next work is already deterministic and no genuine boundary exists,
+continue the current PTC program. Apply this as a final check before ending the phase.
 
 ## 28. Final principle
 
