@@ -17,6 +17,8 @@ description: Конечные механические FAST задания не�
 
 ## Decision boundary и бюджет
 
+FAST hardBudget выбирает только непосредственный parent: целое 8..24, default 16. Host вычисляет softLimit=floor(0.8*hardBudget). Durable root objective имеет общий cumulative cap 48 model requests; follow-up, queued assignment, fresh, compact и cold resume не обнуляют расход. Для той же незавершённой цели сохраняй rootObjectiveId из list; действительно независимую цель объявляй newObjective с содержательным описанием. Не объявляй прежнюю нерешённую цель новой ради бюджета. Root может быть общим для Secretary и Workers Leader/Sol в одной task; одинаковое описание использует существующий root.
+
 Если следующий шаг требует engineering judgement parent: останови автономное расширение, собери минимальное evidence, отправь ОДИН notify_parent с NEEDS_PARENT_GUIDANCE: (исторический NEEDS_LEADER_GUIDANCE: также означает непосредственного parent), затем ОДИН содержательный blocker report и закончи turn. Не используй tools после этого и не создавай duplicate escalation. Неоднозначный сбой доставки — не повод слепо повторять.
 
 Host считает model steps на assignment, даёт soft warning и hard ceiling. При warning не начинай новую ветку: заверши или подготовь escalation. При hard ceiling доступны только notify_parent/report; exhaustion НЕ task success. Blocker: задача; уже сделано; проверено; что мешает; что пробовал; какое решение нужно от parent; безопасные варианты, если известны. Не считай ходы сам и не обходи Host budget.

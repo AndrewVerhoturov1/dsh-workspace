@@ -11,16 +11,17 @@ import {Config} from './postman-bridge.js'
 const fixture=async(t,opts)=>{const dir=await mkdtemp(join(tmpdir(),'postman-stage1-'));const f=await stage1Runtime(dir,opts);t.after(async()=>{await f.dispose();await rm(dir,{recursive:true,force:true,maxRetries:5,retryDelay:100})});return {...f,dir}}
 const accepted=r=>{assert.equal(r.status,'POSTMAN_WORKER_TASK_ACCEPTED',JSON.stringify(r));return r.workerSessionId}
 test('Bridge configuration fills FAST defaults before Worker startup',{timeout:15000},async t=>{
-  for(const input of [undefined,{}, {fastBudget:{}}, {fastBudget:{softLimit:12}}, {fastBudget:{hardLimit:15}}])
-    assert.deepEqual(Config.parse(input),{localDevelopment:false,fastBudget:FAST_WORKER_BUDGET})
+  for(const input of [undefined,{}, {fastBudget:{}}, {fastBudget:{softLimit:12}}, {fastBudget:{hardLimit:16}}])
+    assert.deepEqual(Config.parse(input),{localDevelopment:false,fastBudget:{hardLimit:16}})
   const config=Config.parse({localDevelopment:true})
-  assert.deepEqual(config,{localDevelopment:true,fastBudget:FAST_WORKER_BUDGET})
-  assert.deepEqual(Config.parse({fastBudget:{softLimit:2,hardLimit:3}}).fastBudget,{softLimit:2,hardLimit:3})
+  assert.deepEqual(config,{localDevelopment:true,fastBudget:{hardLimit:16}})
+  assert.equal(Config.safeParse({fastBudget:{hardLimit:3}}).success,false)
+  assert.deepEqual(Config.parse({fastBudget:{softLimit:1,hardLimit:8}}).fastBudget,{hardLimit:8})
   const f=await fixture(t,{fastBudget:config.fastBudget})
   const id=accepted(await f.run(f.worker.taskTool,{task:'Verify parsed startup budget; report bounded facts.'}))
   await f.settled(id)
   const budget=f.registry.get('leader').workers[id].budget
-  assert.equal(budget.softLimit,12);assert.equal(budget.hardLimit,15)
+  assert.equal(budget.softLimit,12);assert.equal(budget.hardLimit,16)
 })
 for(const type of ['luna','secretary','sol']) test(type+' actual model instructions at initial, continuation, replacement and cold activation',{timeout:15000},async t=>{
   const f=await fixture(t,{plan:(a,_r,n)=>{
@@ -104,15 +105,15 @@ test('Secretary singleton private ledger clean worktree and fresh durable surviv
 })
 
 for(const type of ['luna','secretary']) test(type+' Host budget warning hard denial and new assignment reset',{timeout:15000},async t=>{
-  const f=await fixture(t,{fastBudget:{softLimit:2,hardLimit:3},plan:()=>({name:'read',args:{}})})
+  const f=await fixture(t,{fastBudget:{hardLimit:8},plan:()=>({name:'read',args:{}})})
   const tool=type==='luna'?f.worker.taskTool:f.worker.secretaryTool
   const id=accepted(await f.run(tool,{task:'Exact task; stop blocker if budget exhausted'}));const child=await f.settled(id)
   const req=f.requests.filter(x=>x.agent.id===id)
-  assert.equal(req.length,3)
-  assert.ok(req[1].request.system.includes('SOFT WARNING'))
-  assert.ok(req[2].request.system.includes('HARD CEILING'))
+  assert.equal(req.length,8)
+  assert.ok(req[5].request.system.includes('SOFT WARNING'))
+  assert.ok(req[7].request.system.includes('HARD CEILING'))
   const budget=f.registry.get('leader').workers[id].budget
-  assert.equal(budget.used,3);assert.equal(budget.exhausted,true)
+  assert.equal(budget.used,8);assert.equal(budget.exhausted,true)
   assert.equal(budget.notified,true);assert.equal(budget.reported,true)
   assert.ok(child.session.events.some(e=>e.type==='tool/result' && e.data.message.content[0].isError))
   await f.wake(f.leader)
@@ -121,7 +122,7 @@ for(const type of ['luna','secretary']) test(type+' Host budget warning hard den
   assert.equal(delivered.filter(e=>e.data.content[0].text.startsWith('Background subagent '+id+' reported:')).length,1)
   const next=await f.run(tool,{task:'New precise bounded assignment',workerSessionId:id});accepted(next);await f.settled(id)
   const b=f.registry.get('leader').workers[id].budget
-  assert.notEqual(b.assignmentId,budget.assignmentId);assert.equal(b.used,3)
+  assert.notEqual(b.assignmentId,budget.assignmentId);assert.equal(b.used,8)
   await f.wake(f.leader)
   const fresh=await f.run(f.worker.freshTool,{workerSessionId:id,task:'Precise facts after settled exhaustion'})
   const freshId=accepted(fresh);assert.notEqual(freshId,id);await f.settled(freshId)
@@ -141,7 +142,7 @@ test('all child roles force native tools even when Host default is code',{timeou
 })
 test('queued followup does not reset a running assignment budget before FIFO claim',{timeout:15000},async t=>{
   const gate=Promise.withResolvers(),entered=Promise.withResolvers()
-  const f=await fixture(t,{fastBudget:{softLimit:2,hardLimit:3},plan:async(_a,_r,n)=>{if(n===1){entered.resolve();await gate.promise}return {name:'report',args:{output:'exact finite facts'}}}})
+  const f=await fixture(t,{fastBudget:{hardLimit:8},plan:async(_a,_r,n)=>{if(n===1){entered.resolve();await gate.promise}return {name:'report',args:{output:'exact finite facts'}}}})
   const id=accepted(await f.run(f.worker.taskTool,{task:'initial bounded facts'}));await entered.promise
   const old=f.registry.get('leader').workers[id].budget
   accepted(await f.run(f.worker.taskTool,{task:'bounded next FIFO task',workerSessionId:id}))
@@ -151,14 +152,16 @@ test('queued followup does not reset a running assignment budget before FIFO cla
   const budget=f.registry.get('leader').workers[id].budget
   assert.notEqual(budget.assignmentId,old.assignmentId);assert.equal(budget.used,1);assert.equal(budget.reported,true)
   assert.equal(Object.keys(f.registry.get('leader').workers[id].pendingBudgets).length,0)
+  assert.equal(budget.rootObjectiveId,old.rootObjectiveId)
+  assert.equal(f.registry.get('leader').objectives[budget.rootObjectiveId].used,2)
 })
-test('default FAST 12/15 budget cannot silently finish without escalation report',{timeout:15000},async t=>{
-  const f=await fixture(t,{plan:(_a,_r,n)=>n<15?{name:'read',args:{}}:{text:'ignored hard report instruction'}})
+test('default FAST 12/16 budget cannot silently finish without escalation report',{timeout:15000},async t=>{
+  const f=await fixture(t,{plan:(_a,_r,n)=>n<16?{name:'read',args:{}}:{text:'ignored hard report instruction'}})
   const id=accepted(await f.run(f.worker.taskTool,{task:'Exact default-budget finite check'}));const child=await f.settled(id)
-  assert.equal(f.requests.length,15)
+  assert.equal(f.requests.length,16)
   assert.ok(f.requests[11].request.system.includes('SOFT WARNING'))
-  assert.ok(f.requests[14].request.system.includes('HARD CEILING'))
-  const b=f.registry.get('leader').workers[id].budget;assert.equal(b.used,15);assert.equal(b.notified,true);assert.equal(b.reported,true)
+  assert.ok(f.requests[15].request.system.includes('HARD CEILING'))
+  const b=f.registry.get('leader').workers[id].budget;assert.equal(b.used,16);assert.equal(b.notified,true);assert.equal(b.reported,true)
   assert.equal(child.session.events.filter(e=>e.type==='tool/call'&&e.data.name==='report').length,0)
   await f.wake(f.leader)
   const reports=f.leader.session.events.filter(e=>e.type==='user/message'&&e.data.source?.senderSessionId===id)
@@ -194,5 +197,5 @@ test('stock manual compact retains exact role Session budget quota and audit',{t
 test('canonical TASK_CONTRACT and Sol mandatory delegation instructions',()=>{
   for(const type of ['luna','secretary','sol']){const s=postmanRoleInstruction(type);for(const word of ['TASK_CONTRACT','scope','done conditions','verification','stop condition','blocker'])assert.ok(s.includes(word),type+' '+word)}
   const sol=postmanRoleInstruction('sol');for(const word of ['двух','ОБЯЗАН','параллельно','engineering decisions','агрегированный report','PTC-first','Worker-first','direct-only','model turns','latency'])assert.ok(sol.includes(word),word)
-  assert.deepEqual(FAST_WORKER_BUDGET,{softLimit:12,hardLimit:15})
+  assert.deepEqual(FAST_WORKER_BUDGET,{hardLimit:16,softLimit:12})
 })

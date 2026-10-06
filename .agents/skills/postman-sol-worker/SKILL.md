@@ -11,6 +11,8 @@ description: Инженерный Sol Worker по явному выбранно�
 
 ## Свои Postman Worker x2
 
+FAST hardBudget выбирает только непосредственный parent: целое 8..24, default 16. Host вычисляет softLimit=floor(0.8*hardBudget). Durable root objective имеет общий cumulative cap 48 model requests; follow-up, queued assignment, fresh, compact и cold resume не обнуляют расход. Для той же незавершённой цели сохраняй rootObjectiveId из list; действительно независимую цель объявляй newObjective с содержательным описанием. Не объявляй прежнюю нерешённую цель новой ради бюджета. Root может быть общим для Secretary и Workers Leader/Sol в одной task; одинаковое описание использует существующий root.
+
 У тебя до двух обычных Postman Worker: тот же FAST/min runtime, skill, direct tools, budget и lifecycle, что у Workers Leader. postman_worker/create/follow-up/list/interrupt/stop/compact/fresh управляют ТОЛЬКО exact твоими детьми. Reports возвращаются тебе. Leader их не микроменеджит; ты анализируешь и агрегируешь результаты. Secretary принадлежит Leader, не является твоим Worker, напрямую не используй его.
 
 Ты ОБЯЗАН делегировать достаточно самостоятельную механическую подзадачу:

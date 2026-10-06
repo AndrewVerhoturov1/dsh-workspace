@@ -214,13 +214,13 @@ test('bridge authorization and visibility are limited to exact top-level Postman
 
   assert.deepEqual(POSTMAN_LEADER_TOOL_ALLOWLIST, [
     'ask_user_question', 'todo_write', 'exit_plan_mode', 'create_goal', 'get_goal', 'update_goal',
-    'read', 'read_image', 'grep', 'skill', 'web_fetch', 'postman_task_prepare', 'postman_task_restore', 'postman_input_files',
+    'read', 'read_image', 'grep', 'skill', 'web_fetch', 'postman_task_prepare', 'postman_task_restore', 'postman_task_close', 'postman_input_files',
     'postman_bridge', 'postman_bridge_status', 'postman_bridge_list', 'postman_bridge_stop', 'postman_team_status', 'postman_worker', 'postman_sol_worker', 'postman_worker_interrupt', 'postman_worker_stop', 'postman_yield', 'postman_worker_list', 'postman_worker_compact', 'postman_worker_fresh', 'postman_secretary', 'postman_secretary_ledger',
   ])
-  assert.equal(POSTMAN_LEADER_TOOL_ALLOWLIST.length, 29)
-  assert.equal(new Set(POSTMAN_LEADER_TOOL_ALLOWLIST).size, 29)
+  assert.equal(POSTMAN_LEADER_TOOL_ALLOWLIST.length, 30)
+  assert.equal(new Set(POSTMAN_LEADER_TOOL_ALLOWLIST).size, 30)
   assert.deepEqual(POSTMAN_LEADER_ONLY_TOOL_NAMES, [
-    'postman_task_prepare', 'postman_task_restore', 'postman_input_files', 'postman_bridge', 'postman_bridge_status', 'postman_bridge_list', 'postman_bridge_stop', 'postman_team_status',
+    'postman_task_prepare', 'postman_task_restore', 'postman_task_close', 'postman_input_files', 'postman_bridge', 'postman_bridge_status', 'postman_bridge_list', 'postman_bridge_stop', 'postman_team_status',
     'postman_worker', 'postman_sol_worker', 'postman_worker_interrupt', 'postman_worker_stop', 'postman_yield', 'postman_worker_list', 'postman_worker_compact', 'postman_worker_fresh', 'postman_secretary', 'postman_secretary_ledger',
   ])
   assert.deepEqual(postmanBridgeRestrictionForAgent(leader), {
@@ -251,7 +251,7 @@ test('direct PTC guard applies only to exact top-level pilot and never nested di
   const delegated = parent({agentPreset:'postman-leader-ptc',origin:'subagent',delegationDepth:1})
   const current = new Map([[pilot.id,pilot]])
   const check = (agent,name,parentToken) => postmanPtcDirectCallGuard({agent,name,parent:parentToken}, id=>current.get(id))
-  assert.equal(POSTMAN_PTC_ONLY_LEADER_TOOLS.length,25)
+  assert.equal(POSTMAN_PTC_ONLY_LEADER_TOOLS.length,26)
   for (const name of POSTMAN_PTC_ONLY_LEADER_TOOLS) {
     assert.match(check(pilot,name),/POSTMAN_PTC_DIRECT_CALL_REJECTED/)
     assert.equal(check(pilot,name,{}),undefined)
