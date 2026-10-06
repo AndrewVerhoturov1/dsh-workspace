@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createPtcRuntime, DEFAULT_LIMITS } from 'dsh-ptc'
-import { buildPtcHelperPrelude, ptcHelperGuidance } from './ptc-helpers.js'
+import { aggregatePtcDiagnostics, buildPtcHelperPrelude, ptcHelperGuidance } from './ptc-helpers.js'
 
 const helper = (tools, fullTextRead = false) => new Function('tools', buildPtcHelperPrelude(Object.keys(tools), undefined, fullTextRead) + '\nreturn ptc')(tools)
 const read = documents => async ({ file_path, offset, limit }) => {
@@ -254,4 +254,95 @@ test('read once, reuse locally; helpers never cache across mutation or external 
   text='external change'
   assert.equal(await ptc.readAllText({file_path:'a'}),'external change');assert.equal(calls,3)
 })
+
+const diagnostic = (role, nestedToolCalls, fields = {}) => ({ type: 'postman/ptc-run', data: {
+  sessionId: 'session', role, description: 'Completed phase', boundary: 'semantic_decision',
+  status: 'ok', durationMs: 1, nestedToolCalls,
+  toolCounts: nestedToolCalls ? { read: nestedToolCalls } : {},
+  resultBytes: 2, oversizedResultCandidate: false, yieldRequested: false, yieldApplied: false,
+  underbatchedCandidate: false, underbatchedReason: null, underbatchedStreak: 0,
+  needsModelDecision: false, decisionQuestionPresent: false, ...fields,
+} })
+const zeroRole = () => ({ runs: 0, totalNestedToolCalls: 0, medianNestedToolCalls: 0,
+  oneToolRuns: 0, twoToolRuns: 0, semanticDecisionRuns: 0,
+  underbatchedCandidates: 0, maxUnderbatchedStreak: 0 })
+
+test('aggregatePtcDiagnostics returns independent zero statistics for empty input', () => {
+  const result = aggregatePtcDiagnostics([])
+  assert.deepEqual(result, { totalRuns: 0, byRole: { leader: zeroRole(), sol: zeroRole() } })
+  assert.notEqual(result.byRole.leader, result.byRole.sol)
+})
+
+test('aggregatePtcDiagnostics separates mixed roles and computes odd/even numeric medians', () => {
+  const records = [
+    diagnostic('leader', 10, { boundary: 'task_complete' }),
+    diagnostic('sol', 2, { boundary: 'external_event' }),
+    diagnostic('leader', 1, { underbatchedCandidate: true, underbatchedReason: 'small-semantic-phase', underbatchedStreak: 4 }),
+    diagnostic('sol', 1, { underbatchedCandidate: true, underbatchedReason: 'small-semantic-phase', underbatchedStreak: 2 }),
+    diagnostic('leader', 2, { boundary: 'user_input' }),
+    diagnostic('sol', 4, { boundary: 'approval_boundary' }),
+    diagnostic('sol', 0, { underbatchedCandidate: true, underbatchedReason: 'small-semantic-phase', underbatchedStreak: 3 }),
+  ]
+  assert.deepEqual(aggregatePtcDiagnostics(records), { totalRuns: 7, byRole: {
+    leader: { runs: 3, totalNestedToolCalls: 13, medianNestedToolCalls: 2,
+      oneToolRuns: 1, twoToolRuns: 1, semanticDecisionRuns: 1,
+      underbatchedCandidates: 1, maxUnderbatchedStreak: 4 },
+    sol: { runs: 4, totalNestedToolCalls: 7, medianNestedToolCalls: 1.5,
+      oneToolRuns: 1, twoToolRuns: 1, semanticDecisionRuns: 2,
+      underbatchedCandidates: 2, maxUnderbatchedStreak: 3 },
+  } })
+})
+
+test('aggregatePtcDiagnostics ignores other record types, roles and malformed telemetry', () => {
+  const valid = diagnostic('leader', 1)
+  const invalid = [null, undefined, 1, 'postman/ptc-run', [], {},
+    { type: 'other', data: valid.data }, { type: 'postman/ptc-run', data: null },
+    { type: 'postman/ptc-run', data: [] }, ...['worker', 'secretary', 'Leader', '__proto__'].map(role => diagnostic(role, 1)),
+  ]
+  for (const field of ['sessionId', 'status', 'role', 'boundary', 'nestedToolCalls', 'toolCounts',
+    'underbatchedCandidate', 'underbatchedReason', 'underbatchedStreak', 'needsModelDecision', 'decisionQuestionPresent']) {
+    const data = { ...valid.data }; delete data[field]
+    invalid.push({ type: valid.type, data })
+  }
+  for (const nestedToolCalls of [-1, 1.5, NaN, Infinity, '1', Number.MAX_SAFE_INTEGER + 1])
+    invalid.push(diagnostic('leader', nestedToolCalls))
+  for (const fields of [
+    { boundary: 'semantic' }, { underbatchedCandidate: 1 }, { underbatchedReason: 'guess' },
+    { underbatchedStreak: -1 }, { underbatchedStreak: 0.5 },
+    { needsModelDecision: 'true' }, { decisionQuestionPresent: 1 },
+    { toolCounts: null }, { toolCounts: [] }, { toolCounts: { read: '1' } }, { toolCounts: { read: 0 } },
+  ]) invalid.push(diagnostic('leader', 1, fields))
+  assert.deepEqual(aggregatePtcDiagnostics(invalid), aggregatePtcDiagnostics([]))
+  assert.deepEqual(aggregatePtcDiagnostics([...invalid, valid]), aggregatePtcDiagnostics([valid]))
+})
+
+test('aggregatePtcDiagnostics uses emitted flags and streaks, including failed runs and optional semantic fields', () => {
+  const records = [diagnostic('sol', 1, { needsModelDecision: true, decisionQuestionPresent: true })]
+  for (const status of ['cancelled', 'runtime-error', 'limit-exceeded']) {
+    const record = diagnostic('sol', 0, { status })
+    delete record.data.needsModelDecision; delete record.data.decisionQuestionPresent
+    records.push(record)
+  }
+  const complete = diagnostic('sol', 2, { boundary: 'task_complete' })
+  delete complete.data.needsModelDecision; delete complete.data.decisionQuestionPresent
+  records.push(complete)
+  const result = aggregatePtcDiagnostics(records)
+  assert.deepEqual(result.byRole.sol, { runs: 5, totalNestedToolCalls: 3, medianNestedToolCalls: 0,
+    oneToolRuns: 1, twoToolRuns: 1, semanticDecisionRuns: 4,
+    underbatchedCandidates: 0, maxUnderbatchedStreak: 0 })
+  assert.deepEqual(result.byRole.leader, zeroRole())
+})
+
+test('aggregatePtcDiagnostics does not mutate records or retain state or expose a guest helper', () => {
+  const record = diagnostic('leader', 2)
+  Object.freeze(record.data.toolCounts); Object.freeze(record.data); Object.freeze(record)
+  const records = Object.freeze([record]), before = JSON.stringify(records)
+  const first = aggregatePtcDiagnostics(records)
+  first.byRole.leader.runs = 100
+  assert.equal(aggregatePtcDiagnostics(records).byRole.leader.runs, 1)
+  assert.equal(aggregatePtcDiagnostics([]).totalRuns, 0)
+  assert.equal(JSON.stringify(records), before)
+  assert.equal(helper({}).aggregatePtcDiagnostics, undefined)
+})
+
 

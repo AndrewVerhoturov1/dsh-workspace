@@ -9,6 +9,7 @@ import { createScope } from '@deepseek-ai/dsh-scope'
 import { DEFAULT_LIMITS } from 'dsh-ptc'
 import { createPtcAdapter, PILOT_PROFILE, WORKER_MUTATION_PROFILE } from './ptc-adapter.js'
 import { POSTMAN_PTC_DISCIPLINE } from './ptc-discipline.js'
+import { aggregatePtcDiagnostics } from './ptc-helpers.js'
 import { postmanBridgeRestrictionForAgent, isTopLevelPostmanPtcLeader, postmanPtcDirectCallGuard, POSTMAN_PTC_ONLY_LEADER_TOOLS } from './postman-bridge-core.js'
 
 import { apply as applyFs } from '@deepseek-ai/dsh-tool-fs'
@@ -107,6 +108,12 @@ test('Stage 3.5A real PTC: candidate streak, reset and conservative semantic exe
   await f.execute(a,'return {empty:true}')
   assert.equal(diagnostics.at(-1).data.underbatchedCandidate,true)
   assert.equal(diagnostics.at(-1).data.nestedToolCalls,0)
+  const summary = aggregatePtcDiagnostics(diagnostics)
+  assert.equal(summary.totalRuns, 8)
+  assert.deepEqual(summary.byRole.leader, { runs: 8, totalNestedToolCalls: 10, medianNestedToolCalls: 1,
+    oneToolRuns: 5, twoToolRuns: 1, semanticDecisionRuns: 8,
+    underbatchedCandidates: 4, maxUnderbatchedStreak: 2 })
+  assert.equal(summary.byRole.sol.runs, 0)
   // Removal/re-assignment does not recover telemetry from durable events.
   f.adapter.remove(a); f.adapter.refresh(a)
   assert.doesNotMatch(sections[0].text({scope:a}), /PTC EFFICIENCY NOTICE|PTC UNDERBATCH STREAK/)

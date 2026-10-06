@@ -220,3 +220,46 @@ export function ptcHelperGuidance(toolNames) {
     'Character options remain additional compatibility bounds. Ordinary read line truncation is unrecoverable. Read large internally, prefer mapTextFiles for mechanical reduction and return compact when possible; needed larger results remain valid up to the standard 512 KiB output limit. Result and aggregate logs have separate budgets. ' +
     'Read once and reuse local text for multiple checks in the same program; reread after write/edit or when freshness is needed. No helper caches files. '
 }
+
+// Consume the logger capture envelope { type, data }, already filtered to one session.
+// Empty-role medians are zero; candidate/streak values are telemetry, not recomputed.
+export function aggregatePtcDiagnostics(records) {
+  const emptyRole = () => ({ runs: 0, totalNestedToolCalls: 0, medianNestedToolCalls: 0,
+    oneToolRuns: 0, twoToolRuns: 0, semanticDecisionRuns: 0,
+    underbatchedCandidates: 0, maxUnderbatchedStreak: 0 })
+  const byRole = { leader: emptyRole(), sol: emptyRole() }
+  const counts = { leader: [], sol: [] }
+  const boundaries = ['semantic_decision', 'user_input', 'external_event', 'approval_boundary', 'task_complete']
+  const object = value => value !== null && typeof value === 'object' && !Array.isArray(value)
+  const count = value => Number.isSafeInteger(value) && value >= 0
+  for (const record of records) {
+    if (!object(record) || record.type !== 'postman/ptc-run') continue
+    const data = record.data
+    if (!object(data) || !['leader', 'sol'].includes(data.role) ||
+        typeof data.sessionId !== 'string' || typeof data.status !== 'string' ||
+        !boundaries.includes(data.boundary) || !count(data.nestedToolCalls) ||
+        !object(data.toolCounts) || !Object.values(data.toolCounts).every(value => count(value) && value > 0) ||
+        typeof data.underbatchedCandidate !== 'boolean' || !count(data.underbatchedStreak) ||
+        ![null, 'small-semantic-phase'].includes(data.underbatchedReason) ||
+        (data.needsModelDecision !== undefined && typeof data.needsModelDecision !== 'boolean') ||
+        (data.decisionQuestionPresent !== undefined && typeof data.decisionQuestionPresent !== 'boolean') ||
+        (data.status === 'ok' && data.boundary === 'semantic_decision' &&
+          (typeof data.needsModelDecision !== 'boolean' || typeof data.decisionQuestionPresent !== 'boolean'))) continue
+    const role = byRole[data.role]
+    role.runs++
+    role.totalNestedToolCalls += data.nestedToolCalls
+    counts[data.role].push(data.nestedToolCalls)
+    if (data.nestedToolCalls === 1) role.oneToolRuns++
+    if (data.nestedToolCalls === 2) role.twoToolRuns++
+    if (data.boundary === 'semantic_decision') role.semanticDecisionRuns++
+    if (data.underbatchedCandidate) role.underbatchedCandidates++
+    role.maxUnderbatchedStreak = Math.max(role.maxUnderbatchedStreak, data.underbatchedStreak)
+  }
+  for (const name of ['leader', 'sol']) {
+    const values = counts[name].sort((a, b) => a - b), middle = Math.floor(values.length / 2)
+    if (values.length) byRole[name].medianNestedToolCalls = values.length % 2
+      ? values[middle] : (values[middle - 1] + values[middle]) / 2
+  }
+  return { totalRuns: byRole.leader.runs + byRole.sol.runs, byRole }
+}
+
