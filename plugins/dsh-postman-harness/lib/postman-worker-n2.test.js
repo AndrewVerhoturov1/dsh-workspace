@@ -72,12 +72,14 @@ async function fixture(t, options = {}) {
   installPostmanWorkerReportObserver(ctx, worker)
   const leader = ctx.agentLoop.create('leader', { provider: 'codex', model: 'gpt-6-luna' },
     { cwd: dir, agentPreset: 'postman-leader' })
+  await ctx.sessionPersistence.append(leader.id, [])
   const exec = { agent: leader, signal: signal() }
   t.after(async () => { startA.resolve(); releasePeers.resolve(); await ctx.fiber.dispose();
     await registry.close(); await backend.close(); await rm(dir, { recursive: true, force: true }) })
   const start = async label => {
     const result = await worker.taskTool.execute({ task: label, label, createNew: true }, exec)
     assert.equal(result.status, 'POSTMAN_WORKER_TASK_ACCEPTED', JSON.stringify(result))
+    await ctx.sessionPersistence.append(result.workerSessionId, [])
     return result.workerSessionId
   }
   const settled = async id => { if (ctx.agents.get(id)) {
@@ -189,7 +191,8 @@ test('resident exact child closes through normal disposal without stopping B/C',
 
 test('real runtime lacks cutoff; active/cold stop retains owned bindings and late followup stays possible', { timeout: 15000 }, async t => {
   const f = await fixture(t, { localDevelopment: true })
-  assert.equal(typeof f.ctx.subagents.closeContinuableChild, 'undefined')
+  // Explicitly exercise compatibility with a runtime without admission cutoff.
+  f.ctx.subagents.closeContinuableChild = undefined
   assert.equal(typeof f.ctx.subagents.drainContinuableChildren, 'function')
   const a = await f.start('A'), b = await f.start('B')
   // Await native per-session durability before the catalog scans all directories.

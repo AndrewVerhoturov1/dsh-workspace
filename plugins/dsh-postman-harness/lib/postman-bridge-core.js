@@ -13,6 +13,12 @@ export const POSTMAN_YIELD_TOOL_NAME = 'postman_yield'
 export const POSTMAN_INPUT_FILES_TOOL_NAME = 'postman_input_files'
 export const POSTMAN_WORKER_LIST_TOOL_NAME = 'postman_worker_list'
 export const POSTMAN_WORKER_COMPACT_TOOL_NAME = 'postman_worker_compact'
+export const POSTMAN_WORKER_FRESH_TOOL_NAME = 'postman_worker_fresh'
+export const POSTMAN_SECRETARY_TOOL_NAME = 'postman_secretary'
+export const POSTMAN_SECRETARY_LEDGER_TOOL_NAME = 'postman_secretary_ledger'
+export const WORKER_CONTROL_TOOLS = Object.freeze(['postman_worker', 'postman_worker_interrupt', 'postman_worker_list', 'postman_worker_stop', 'postman_worker_compact', 'postman_worker_fresh'])
+export const DELEGATION_TOOLS = Object.freeze(['subagent', 'subagent_fork', 'workflow', 'ralph', 'send_message', 'interrupt_agent'])
+export const SECRETARY_TOOLS = Object.freeze(['read', 'glob', 'grep', 'skill', 'pwsh', 'bash', 'write', 'edit', 'report', 'notify_parent', 'job_output', 'job_kill', 'job_list', 'postman_secretary_ledger'])
 export const POSTMAN_BRIDGE_AGENT_OPTIONS = Object.freeze({
   provider: 'codex',
   model: 'gpt-6-luna',
@@ -53,6 +59,9 @@ export const POSTMAN_LEADER_TOOL_ALLOWLIST = Object.freeze([
   POSTMAN_YIELD_TOOL_NAME,
   POSTMAN_WORKER_LIST_TOOL_NAME,
   POSTMAN_WORKER_COMPACT_TOOL_NAME,
+  POSTMAN_WORKER_FRESH_TOOL_NAME,
+  POSTMAN_SECRETARY_TOOL_NAME,
+  POSTMAN_SECRETARY_LEDGER_TOOL_NAME,
 ])
 // Ordinary visibility stays intact for nested QuickJS → ToolRuntime dispatch.
 // These operations are not model-direct for the exact experimental Leader.
@@ -67,6 +76,8 @@ export const POSTMAN_WORKER_PTC_TOOL_NAMES = Object.freeze(['read', 'glob', 'gre
 export const POSTMAN_PTC_SUCCESS_STATUSES = Object.freeze({
   postman_task_prepare: Object.freeze(['TASK_CONTEXT_READY', 'POSTMAN_TASK_CONTEXT_ALREADY_READY']),
   postman_worker: Object.freeze(['POSTMAN_WORKER_TASK_ACCEPTED']),
+  postman_secretary: Object.freeze(['POSTMAN_WORKER_TASK_ACCEPTED']),
+  postman_worker_fresh: Object.freeze(['POSTMAN_WORKER_TASK_ACCEPTED']),
   postman_worker_interrupt: Object.freeze(['POSTMAN_WORKER_INTERRUPT_TASK_ACCEPTED']),
   postman_bridge: Object.freeze(['POSTMAN_BRIDGE_ACCEPTED']),
 })
@@ -92,6 +103,9 @@ export const POSTMAN_LEADER_ONLY_TOOL_NAMES = Object.freeze([
   POSTMAN_YIELD_TOOL_NAME,
   POSTMAN_WORKER_LIST_TOOL_NAME,
   POSTMAN_WORKER_COMPACT_TOOL_NAME,
+  POSTMAN_WORKER_FRESH_TOOL_NAME,
+  POSTMAN_SECRETARY_TOOL_NAME,
+  POSTMAN_SECRETARY_LEDGER_TOOL_NAME,
 ])
 
 export const POSTMAN_BRIDGE_PERSONA = `You are Postman Bridge, a minimal one-shot transport subagent.
@@ -155,18 +169,21 @@ export function postmanBridgeCallerAllowed(agent) {
   return isTopLevelPostmanSupervisor(agent)
 }
 
-export function postmanBridgeRestrictionForAgent(agent, ownsPtcWorker = () => false) {
+export function postmanBridgeRestrictionForAgent(agent, ownsPtcWorker = () => false, roleOf = () => null) {
   if (isTopLevelPostmanPtcLeader(agent)) {
     return { allow: [...POSTMAN_LEADER_TOOL_ALLOWLIST, POSTMAN_PTC_TOOL_NAME] }
   }
   if (isTopLevelPostmanLeader(agent)) {
     return { allow: [...POSTMAN_LEADER_TOOL_ALLOWLIST] }
   }
-  return { deny: ownsPtcWorker(agent) ? [...POSTMAN_LEADER_ONLY_TOOL_NAMES] :
-    [...POSTMAN_LEADER_ONLY_TOOL_NAMES, POSTMAN_PTC_TOOL_NAME] }
+  const role = roleOf(agent)
+  if (role === 'secretary') return { allow: [...SECRETARY_TOOLS] }
+  if (role === 'sol') return { deny: [...POSTMAN_LEADER_ONLY_TOOL_NAMES.filter(name => !WORKER_CONTROL_TOOLS.includes(name)),
+    POSTMAN_PTC_TOOL_NAME, ...DELEGATION_TOOLS] }
+  return { deny: [...POSTMAN_LEADER_ONLY_TOOL_NAMES, POSTMAN_PTC_TOOL_NAME, ...(role === 'luna' ? DELEGATION_TOOLS : [])] }
 }
 
-export function createPostmanBridgeBoundaryManager(lookupAgent, ownsPtcWorker = () => false) {
+export function createPostmanBridgeBoundaryManager(lookupAgent, ownsPtcWorker = () => false, roleOf = () => null) {
   if (typeof lookupAgent !== 'function') throw new Error('POSTMAN_BRIDGE_AGENT_LOOKUP_REQUIRED')
   const active = new Map()
 
@@ -178,7 +195,13 @@ export function createPostmanBridgeBoundaryManager(lookupAgent, ownsPtcWorker = 
       throw new Error('POSTMAN_BRIDGE_TOOL_RESTRICTION_REQUIRED')
     }
 
-    const dispose = agent.ctx.tools.restrict(postmanBridgeRestrictionForAgent(agent, ownsPtcWorker))
+    const restriction = postmanBridgeRestrictionForAgent(agent, ownsPtcWorker, roleOf)
+    const schemas = agent.ctx?.tools?.schemas?.()
+    if (schemas) { const known = new Set(schemas.map(tool => tool.name));
+      if (restriction.allow) restriction.allow = restriction.allow.filter(name => known.has(name))
+      if (restriction.deny) restriction.deny = restriction.deny.filter(name => known.has(name))
+    }
+    const dispose = agent.ctx.tools.restrict(restriction)
     if (typeof dispose !== 'function') throw new Error('POSTMAN_BRIDGE_TOOL_RESTRICTION_DISPOSER_REQUIRED')
 
     const previous = active.get(agent.id)

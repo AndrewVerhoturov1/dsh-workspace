@@ -24,7 +24,7 @@ const MAX_DESCRIPTION = 160
 const BOUNDARIES = ['semantic_decision', 'user_input', 'external_event', 'approval_boundary', 'task_complete']
 // Auto-yield must not hide a refused/unknown prepare or async dispatch returned as ordinary JSON.
 // This gate does not recover statuses or alter the tool result/authority.
-const EVENT_PRODUCERS = ['postman_worker', 'postman_worker_interrupt', 'postman_bridge']
+const EVENT_PRODUCERS = ['postman_worker', 'postman_secretary', 'postman_worker_fresh', 'postman_worker_interrupt', 'postman_bridge']
 const YIELD_ACCEPTANCE = POSTMAN_PTC_SUCCESS_STATUSES
 const output = {
   schema: { type: 'object', additionalProperties: true, properties: { status: { type: 'string', required: true } } },
@@ -113,8 +113,7 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
     if (old) { owners.delete(agent.id); revoke(old) }
     if (disposed || ctx.agents.get(agent.id) !== agent) return false
     const assignment = assignmentFor(agent, current)
-    if (!assignment || !['leader', 'worker'].includes(assignment.role) ||
-        (assignment.profile !== current && assignment.profile !== WORKER_MUTATION_PROFILE)) return false
+    if (!assignment || assignment.role !== 'leader' || assignment.profile !== current) return false
     const record = { agent, profile: assignment.profile, role: assignment.role,
       revision: assignment.profile.revision, runs: new Set(), section: null }
     owners.set(agent.id, record)
@@ -128,13 +127,6 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
     if (!available(agent, PTC_TOOL_NAME) || required(record).some(name => !available(agent, name))) return ''
     const schemas = ctx.tools.schemas(agent).filter(s => record.profile.tools.includes(s.name))
     const helperText = POSTMAN_PTC_DISCIPLINE + '\n' + ptcHelperGuidance(schemas.map(s => s.name))
-    if (record.role === 'worker') return 'PTC supports read, glob, grep, web_fetch, web_search, write and edit when ordinarily visible. ' +
-      'Relative filesystem paths inside PTC use the current task worktree; absolute paths and paths outside it follow ordinary DSH filesystem policy. Use write/edit inside PTC for mechanical multi-step filesystem work. ' +
-      'PTC mutation is not transactional. A successful write/edit remains committed even if later program code fails. There is no automatic rollback or retry. ' +
-      'Use shell/jobs/report and other ordinary Worker tools outside PTC. ' +
-      helperText +
-      'Use await tools.name(JSON_arguments) and return JSON; current argument schemas: ' +
-      JSON.stringify(schemas.map(s => ({ name: s.name, parameters: s.parameters })))
     return 'This Leader uses Postman PTC; direct PTC-managed calls are rejected. ' +
       'PTC changes execution mode, not Postman Leader routing: follow the postman-leader skill, obtain user approval before medium/complex task preparation or delegation, and delegate repository discovery/execution to Worker/Postman as required. ' +
       'Never poll Worker/Bridge: reports and READY arrive as later events, not within this program. ' +
@@ -162,7 +154,7 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
   }
   const tool = defineTool({
     name: PTC_TOOL_NAME,
-    description: 'Run one isolated PTC program for the exact experimental Postman Leader or its Host-admitted Worker. Guidance lists current nested tool schemas.',
+    description: 'Run one isolated PTC program for the exact experimental Postman Leader. Guidance lists current nested tool schemas.',
     parameters: {
       program: { type: 'string', required: true, description: 'One async-function body with explicit JSON return. No imports, Node or persistent state.' },
       description: { type: 'string', required: true, description: 'Short purpose and why the deterministic phase ends at the declared boundary.' },

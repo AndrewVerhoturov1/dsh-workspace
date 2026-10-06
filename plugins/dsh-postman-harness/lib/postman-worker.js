@@ -1,6 +1,7 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { Inbox } from '@deepseek-ai/dsh-agent'
 import { randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { IMPLEMENTATION_REPOSITORY } from './implementation-artifact.js'
 import { workerEvidence } from './postman-worker-evidence.js'
 import {
@@ -12,21 +13,24 @@ import {
   POSTMAN_WORKER_COMPACT_TOOL_NAME,
   isTopLevelPostmanSupervisor,
   isTopLevelPostmanPtcLeader,
+  WORKER_CONTROL_TOOLS, DELEGATION_TOOLS, SECRETARY_TOOLS,
 } from './postman-bridge-core.js'
 
 export const POSTMAN_WORKER_PROVIDER = 'spawn'
-export const POSTMAN_WORKER_AGENT_OPTIONS = Object.freeze({ provider: 'codex', model: 'gpt-6-luna', reasoningEffort: 'max' })
+// Codex metadata: minimal=null (unsupported); off omits reasoning on the wire.
+// low is the lowest explicit supported reasoning effort, not the provider default.
+export const FAST_WORKER_MODEL = 'gpt-6-luna'
+export const FAST_WORKER_REASONING = 'low'
+export const POSTMAN_WORKER_AGENT_OPTIONS = Object.freeze({ provider: 'codex', model: FAST_WORKER_MODEL, reasoningEffort: FAST_WORKER_REASONING })
+export const FAST_WORKER_BUDGET = Object.freeze({ softLimit: 12, hardLimit: 15 })
+const ROLE_SKILLS = Object.freeze(Object.fromEntries(['luna', 'secretary', 'sol'].map(type => [type,
+  readFileSync(new URL('../../../.agents/skills/' + (type === 'luna' ? 'postman-worker' : type === 'sol' ? 'postman-sol-worker' : 'postman-secretary') + '/SKILL.md', import.meta.url), 'utf8') ])))
+export const postmanRoleInstruction = type => ROLE_SKILLS[type]
 export const POSTMAN_SOL_WORKER_AGENT_OPTIONS = Object.freeze({ provider: 'codex', model: 'gpt-6.1-sol', reasoningEffort: 'xhigh' })
 const workerTypeOf = binding => binding.workerType ?? 'luna'
 const workerOptions = type => type === 'sol' ? POSTMAN_SOL_WORKER_AGENT_OPTIONS : POSTMAN_WORKER_AGENT_OPTIONS
-export const POSTMAN_WORKER_PERSONA = `You are Postman Worker, a local continuable Luna subagent working under your direct parent, Postman Leader (Sol).
-Only if you are granted Postman's own ptc_execute, its automatically runtime-injected Postman PTC discipline is mandatory and governs batching/programming of that capability; it is not a separate mode for Workers without that assignment.
-Complete each assigned local task using the tools available to you. Follow the repository's instructions and the parent's task boundaries. You are not Postman Bridge: never use Direct Postman or imitate its transport. Do not use @Postman or @PostmanAsk as a way around your parent's boundaries.
-Work independently while the safe next step is clear. Resolve routine local friction yourself: a typo, an obviously wrong path, one related file to read, a first test failure with a clear cause, a simple targeted diagnosis, or a deterministic fix within the approved approach. Do not escalate every error. Never repeat a failed or equivalent approach without new evidence. Do not rerun a passing check with unchanged inputs.
-Stop autonomous work when the next step needs Leader judgement: competing substantial designs, unclear user intent or scope, an unrelated bug, a weakened safety/trust boundary, conflicting evidence, baseline versus regression uncertainty, runtime behavior contradicting its contract, a more invasive fix, or a variation of an approach that already failed without new evidence. If one narrow diagnostic can distinguish specific hypotheses, do at most that one step; continue only if it makes the safe next step clear. Do not search through variants or workarounds hoping for a different result.
-Keep progress, factual FYI and intermediate diagnostics that need no Leader decision for your substantive report; do not wake the Leader with notify_parent for these updates. If ptc_execute is available, use it for read/glob/grep/web_fetch/web_search/write/edit. Do not use shell to bypass PTC-first for filesystem/search operations available in that profile; shell is for commands, tests, processes and operations absent from the profile.
-For a decision-relevant blocker, send ONE actionable notify_parent message beginning with the exact prefix NEEDS_LEADER_GUIDANCE: for immediate steering. Include the blocker, concrete evidence, only meaningfully distinct attempts, the exact decision needed, and safe options if known. Then call your child-scoped report tool once with a concise self-contained blocker report required by the Worker turn contract. The installed report path may wait for the Leader's next turn; do not rely on it for timely escalation. After this escalation report, use NO more tools: no tests, searches, edits, retries or work while waiting. Finish the current turn and remain available in this same durable child session for a concrete Leader decision. If notification or report delivery fails ambiguously, do not blindly send duplicates or resume autonomous work.
-When you have a normal substantive result, use your child-scoped report tool to tell your Leader what you did, what you checked, and any errors. Send a concise, factual, self-contained final report for each task before finishing the turn. A report is not the end of your Worker session: remain available for later tasks in this same durable child session.`
+// Compatibility export, sourced from the canonical skill rather than a second persona.
+export const POSTMAN_WORKER_PERSONA = ROLE_SKILLS.luna
 
 function diagnostic(error) {
   const text = String(error?.message ?? error ?? 'unknown error')
@@ -45,13 +49,16 @@ function output() {
 
 // Discover the transport/control surface from the host registry at admission.
 // This is a deny-only child filter, not a Worker coding-tool allowlist.
-export function postmanWorkerDeniedTools(tools) {
-  return tools.schemas().map(tool => tool.name).filter(name => name.startsWith('postman_'))
+export { WORKER_CONTROL_TOOLS, DELEGATION_TOOLS, SECRETARY_TOOLS } from './postman-bridge-core.js'
+export function postmanWorkerDeniedTools(tools, type = 'luna') {
+  return [...new Set([...tools.schemas().map(tool => tool.name).filter(name => name.startsWith('postman_') &&
+    !(type === 'sol' && WORKER_CONTROL_TOOLS.includes(name)) && !(type === 'secretary' && name === 'postman_secretary_ledger')),
+    ...tools.schemas().map(tool => tool.name).filter(name => DELEGATION_TOOLS.includes(name) || name === 'ptc_execute' || (type === 'secretary' && name === 'implementation_artifact_apply'))])]
 }
 
 export function buildPostmanWorkerStartRequest(parent, task, signal, deniedTools, label = 'Postman Worker', workerType = 'luna') {
   if (!Array.isArray(deniedTools) || deniedTools.length === 0 ||
-      deniedTools.some(name => typeof name !== 'string' || !name.startsWith('postman_'))) {
+      deniedTools.some(name => typeof name !== 'string')) {
     throw new Error('POSTMAN_WORKER_TRANSPORT_BOUNDARY_REQUIRED')
   }
   return {
@@ -62,7 +69,8 @@ export function buildPostmanWorkerStartRequest(parent, task, signal, deniedTools
       parent,
       prompt: [{ type: 'text', text: task }],
       agentOptions: { ...workerOptions(workerType) },
-      persona: workerType === 'sol' ? POSTMAN_WORKER_PERSONA.replace('continuable Luna subagent', 'continuable Sol subagent for complex work') : POSTMAN_WORKER_PERSONA,
+      persona: 'You are ' + (workerType === 'sol' ? 'Postman Sol Worker' : workerType === 'secretary' ? 'Secretary' : 'Postman Worker') + '. Follow the Host-injected canonical role skill.',
+      maxDepth: workerType === 'sol' ? 2 : (parent.session?.header?.delegationDepth ?? 0) + 1,
       // Only deny host Postman transport/control tools. The shared preset's
       // coding tools and child-scoped report remain available.
       toolFilter: { deny: [...deniedTools] },
@@ -73,7 +81,29 @@ export function buildPostmanWorkerStartRequest(parent, task, signal, deniedTools
 
 // One short Leader admission queue reserves membership; every child has its own
 // delivery queue. Neither queue is held until a model turn finishes.
-export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChange = () => {}, localDevelopment = false } = {}) {
+export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChange = () => {}, localDevelopment = false, fastBudget = FAST_WORKER_BUDGET } = {}) {
+  if (!Number.isSafeInteger(fastBudget.softLimit) || fastBudget.softLimit < 1 ||
+      !Number.isSafeInteger(fastBudget.hardLimit) || fastBudget.hardLimit <= fastBudget.softLimit)
+    throw new Error('POSTMAN_WORKER_BUDGET_INVALID')
+  const taskContexts = contexts
+  // One durable task row; exact parent-scoped projections reuse the same manager.
+  const rootId = id => ctx.agents.get(id)?.session?.header?.origin === 'subagent'
+    ? ctx.agents.get(id).session.header.parentSession : id
+  const owned = (row, id) => Object.fromEntries(Object.entries(row?.workers ?? {}).filter(([, b]) =>
+    (b.ownerSessionId ?? row.leaderSessionId ?? rootId(id)) === id))
+  const rawRow = id => taskContexts?.record?.(rootId(id))
+  const contextAt = id => taskContexts?.get(rootId(id))
+  const changeScoped = (id, fn) => taskContexts.changeRecord(rootId(id), row => {
+    const peers = Object.fromEntries(Object.entries(row.workers ?? {}).filter(([key]) => !Object.hasOwn(owned(row, id), key)))
+    const next = fn({ ...row, workers: owned(row, id) })
+    return { ...next, workers: { ...peers, ...next.workers } }
+  })
+  if (taskContexts) contexts = { ...taskContexts, get: contextAt,
+    record: taskContexts.record ? id => { const row = rawRow(id); return row ? { ...row, workers: owned(row, id) } : null } : undefined,
+    changeRecord: taskContexts.changeRecord ? changeScoped : undefined,
+    ...Object.fromEntries(['isRestoring', 'hasActiveOperation', 'hasSyncOperation', 'beginWorkerAdmission', 'endWorkerAdmission'].filter(name => typeof taskContexts[name] === 'function').map(name =>
+      [name, (id, ...args) => taskContexts[name](rootId(id), ...args)])) }
+  const depthOf = id => (ctx.agents.get(id)?.session?.header?.delegationDepth ?? 0) + 1
   const leaders = new Map()
   const disposedParents = new WeakSet()
   const bindingChanged = id => onBindingChange(id)
@@ -82,11 +112,41 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
   const rowOf = id => durable ? contexts.record(id) : null
   const liveWorker = id => ctx.agents.get(id)
   const emptyLifecycle = () => ({ version: 1, admissions: [], reports: [] })
+  const newBudget = (assignmentId, task) => ({ assignmentId, task, used: 0, ...fastBudget, exhausted: false, notified: false, reported: false })
+  const activeSlot = agent => provisionalSlot(agent, false) || liveSlot(agent, agent?.session?.header?.parentSession, true)
+  async function saveBudget(agent, slot, budget) {
+    if (durable) await changeBinding({ id: agent.session.header.parentSession }, agent.id, current => {
+      if (current.budget && current.budget.assignmentId !== budget.assignmentId) throw new Error('POSTMAN_WORKER_ASSIGNMENT_CHANGED')
+      return { ...current, budget }
+    })
+    slot.budget = budget
+  }
+  function budgetOf(agent) {
+    const slot = activeSlot(agent)
+    if (!slot || slot.workerType === 'sol') return null
+    const binding = rowOf(agent.session.header.parentSession)?.workers?.[agent.id]
+    return binding?.budget ?? slot.budget ?? { ...newBudget(binding?.lifecycle?.admissions?.at(-1)?.id ?? 'legacy:' + agent.id,
+      'Legacy assignment: return bounded facts or parent guidance'), used: agent.session.events.filter(e => e.type === 'step/start').length }
+  }
+  function blockerText(agent, budget) {
+    const calls = agent.session.events.filter(e => e.type === 'tool/call').slice(-8).map(e => e.data.name)
+    return ['NEEDS_PARENT_GUIDANCE:', 'Задача: ' + budget.task,
+      'Уже сделано/проверено: только подтверждённые результаты в child history; Host не подтверждает PASS.',
+      'Что мешает закончить: FAST assignment budget exhausted (' + budget.used + '/' + budget.hardLimit + ').',
+      'Что уже пробовал: ' + calls.join(', '),
+      'Какое решение нужно от parent: проверить evidence и дать конкретное ограниченное назначение либо изменить routing.',
+      'Безопасные варианты: закончить по достаточным evidence или вернуть blocker; task success не установлен.'].join(String.fromCharCode(10))
+  }
   // AgentOptions carries the start intent; this existing request waterfall also
   // covers first-request assembly and cold resumes that retain only provider/model.
   const stopRequestOptions = ctx.on?.('agent/request', async ({ agent }, next) => {
     const config = await next()
     const slot = provisionalSlot(agent, false) || liveSlot(agent, agent?.session?.header?.parentSession, true)
+    if (slot && slot.workerType !== 'sol') {
+      const budget = budgetOf(agent)
+      if (budget && !budget.reported) await saveBudget(agent, slot, { ...budget, used: budget.used + 1,
+        exhausted: budget.used + 1 >= budget.hardLimit })
+    }
     const options = slot && workerOptions(slot.workerType)
     return options && config.provider === options.provider && config.model === options.model
       ? { ...config, reasoningEffort: options.reasoningEffort } : config
@@ -99,7 +159,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       (await ctx.get?.('sessionPersistence')?.inspect?.(id, signal)) } catch { return null }
     const header = saved?.header ?? saved?.meta
     if ((header?.id !== undefined && header.id !== id) || header?.origin !== 'subagent' ||
-        header.parentSession !== leaderId || header.delegationDepth !== 1 ||
+        header.parentSession !== leaderId || header.delegationDepth !== depthOf(leaderId) ||
         !Array.isArray(saved.events)) return null
     const seed = header.seedLength ?? 0
     if (!Number.isSafeInteger(seed) || seed < 0 || seed > saved.events.length) return null
@@ -115,21 +175,26 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
         typeof exec.arguments?.output !== 'string' || !exec.arguments.output.trim()) return
     const child = exec.agent, leaderId = child?.session?.header?.parentSession
     if (!durable || child?.session?.header?.origin !== 'subagent' ||
-        child.session.header.delegationDepth !== 1 || liveWorker(child.id) !== child) return
+        child.session.header.delegationDepth !== depthOf(leaderId) || liveWorker(child.id) !== child) return
     const call = child.session.events.findLast(event => event.type === 'tool/call' &&
       event.data.callId === exec.callId && event.data.name === 'report')
-    if (!call) return
+    const budget = budgetOf(child)
+    const forced = !call && budget?.exhausted && exec.callId === budget.assignmentId + ':budget-report'
+    if (!call && !forced) return
+    const turn = call?.data.turn ?? child.session.events.findLast(e => e.type === 'turn/start')?.data.turn
+    if (!Number.isInteger(turn)) return
     try { await changeBinding({ id: leaderId }, child.id, current => {
       if (!['intent', 'ready'].includes(current.state)) return current
       return { ...current, lifecycle: { ...(current.lifecycle ?? emptyLifecycle()),
         reports: [...(current.lifecycle?.reports ?? []).filter(item => item.callId !== exec.callId),
-          { childId: child.id, turn: call.data.turn, callId: exec.callId, messageId: result.value.messageId }] } }
+          { childId: child.id, turn, callId: exec.callId, messageId: result.value.messageId,
+            ...(forced ? {hostBudgetAfterSeq:child.session.events.at(-1).seq} : {}) }] } }
     }) } catch { /* A removed binding must never be resurrected by a late callback. */ }
   }
   function group(parent) {
     let group = leaders.get(parent.id)
     if (!group) {
-      group = { slots: new Map(), stopped: new Set(), tail: Promise.resolve() }
+      group = { slots: new Map(), stopped: new Set(), fresh: new Map(), tail: Promise.resolve() }
       leaders.set(parent.id, group)
     }
     return group
@@ -140,8 +205,8 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     return result
   }
   function authorized(parent) {
-    return !disposed && !disposedParents.has(parent) && isTopLevelPostmanSupervisor(parent) &&
-      ctx.agents.get(parent.id) === parent
+    return Boolean(parent) && !disposed && !disposedParents.has(parent) && ctx.agents.get(parent.id) === parent &&
+      (isTopLevelPostmanSupervisor(parent) || roleOf(parent) === 'sol')
   }
   function bindings(parent, group) {
     return durable ? rowOf(parent.id)?.workers ?? {} : Object.fromEntries(
@@ -152,7 +217,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     let slot = group.slots.get(binding.id)
     if (!slot) {
       slot = { id: binding.id, label: binding.label, workerType: workerTypeOf(binding), state: binding.state, delivery: binding.delivery,
-        artifactRequests: new Set(), lifecycle: binding.lifecycle, context: null, parent: null, workerAgent: null, closed: false, tail: Promise.resolve() }
+        artifactRequests: new Set(), lifecycle: binding.lifecycle, budget: binding.budget, context: null, parent: null, workerAgent: null, closed: false, tail: Promise.resolve() }
       group.slots.set(binding.id, slot)
     }
     return slot
@@ -262,6 +327,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
   async function taskWithGrant(parent, context, args) {
     let text = taskText(context, args.task)
     if (args.artifactRequestId === undefined) return { text }
+    if (!isTopLevelPostmanSupervisor(parent)) return { status: 'POSTMAN_WORKER_ARTIFACT_REJECTED' }
     const grant = await grants?.resolve(parent.id, args.artifactRequestId)
     if (grant?.repository !== IMPLEMENTATION_REPOSITORY)
       return { status: 'POSTMAN_WORKER_ARTIFACT_REJECTED' }
@@ -296,18 +362,20 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     exec.signal.addEventListener('abort', onAbort, { once: true })
     try {
       const assignment = { id: randomUUID(), state: 'pending', messageId: null }
+      const nextBudget = slot.workerType !== 'sol' ? newBudget(assignment.id, args.task) : null
       if (durable) await changeBinding(parent, id, current => {
         if (current.state !== 'ready' || current.delivery !== 'none')
           throw new Error('POSTMAN_WORKER_DELIVERY_UNKNOWN')
-        return { ...current, delivery: 'pending', lifecycle: { ...(current.lifecycle ?? emptyLifecycle()),
+        return { ...current, ...(nextBudget ? {pendingBudgets: {...(current.pendingBudgets ?? {}), [assignment.id]: nextBudget}} : {}), delivery: 'pending', lifecycle: { ...(current.lifecycle ?? emptyLifecycle()),
           admissions: [...(current.lifecycle?.admissions ?? []), assignment] }, artifactRequests: task.grant ?
           [...new Set([...current.artifactRequests, args.artifactRequestId])] : current.artifactRequests }
       })
       slot.delivery = 'pending'
+      if (nextBudget) slot.pendingBudgets = {...(slot.pendingBudgets ?? {}), [assignment.id]: nextBudget}
       slot.ptcAdmission = { id: assignment.id, parent, signal: exec.signal }
       bindingChanged(id)
       if (task.grant) slot.artifactRequests.add(args.artifactRequestId)
-      const messageId = await ctx.subagents.followup(parent, id, [{ type: 'text', text: task.text }], {
+      const messageId = await ctx.subagents.followup(parent, id, [{ type: 'text', text: task.text }, ...(nextBudget ? [{type:'text',text:'Host assignment: '+assignment.id}] : [])], {
         source: { kind: 'coordinator', form: 'relay', senderSessionId: parent.id }, signal: exec.signal,
       })
       exec.signal.throwIfAborted()
@@ -340,10 +408,11 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
         workerSessionId: id, diagnostic: diagnostic(error) }
     } finally { exec.signal.removeEventListener('abort', onAbort) }
   }
-  async function create(parent, group, args, exec, workerType = 'luna') {
-    const limit = workerType === 'sol' ? 1 : 3
-    const limitStatus = workerType === 'sol' ? 'POSTMAN_SOL_WORKER_LIMIT_REACHED' : 'POSTMAN_WORKER_LIMIT_REACHED'
-    const count = workers => Object.values(workers).filter(value => workerTypeOf(value) === workerType).length
+  async function create(parent, group, args, exec, workerType = 'luna', freshId = null) {
+    const limit = workerType === 'luna' ? 2 : 1
+    const limitStatus = workerType === 'sol' ? 'POSTMAN_SOL_WORKER_LIMIT_REACHED' : workerType === 'secretary' ? 'POSTMAN_SECRETARY_LIMIT_REACHED' : 'POSTMAN_WORKER_LIMIT_REACHED'
+    const count = workers => Object.values(workers).filter(value => workerTypeOf(value) === workerType).length +
+      [...group.fresh].filter(([id,type]) => id !== freshId && type === workerType && !Object.hasOwn(workers,id)).length
     const context = contexts?.get(parent.id) ?? null
     if (contexts && !context) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
     let task
@@ -353,7 +422,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     if (!authorized(parent)) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
     const reservedId = randomUUID()
     const assignment = { id: randomUUID(), state: 'pending', messageId: null }
-    const label = args.label ?? (workerType === 'sol' ? 'Postman Sol Worker' : 'Postman Worker')
+    const label = args.label ?? (workerType === 'sol' ? 'Postman Sol Worker' : workerType === 'secretary' ? 'Secretary' : 'Postman Worker')
     // Reserve an exact child identity durably before the first DSH side effect.
     const admission = await enqueue(group, async () => {
       if (busy(parent.id) || !authorized(parent)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
@@ -365,12 +434,14 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
           if (count(row.workers ?? {}) >= limit) throw new Error(limitStatus)
           if (Object.hasOwn(row.workers ?? {}, reservedId)) throw new Error('POSTMAN_WORKER_BINDING_EXISTS')
           return { ...row, workers: { ...row.workers,
-            [reservedId]: { id: reservedId, label, workerType, state: 'intent', delivery: 'pending',
+            [reservedId]: { id: reservedId, label, workerType, ownerSessionId: parent.id, state: 'intent', delivery: 'pending',
               artifactRequests: task.grant ? [args.artifactRequestId] : [],
+              ...(workerType !== 'sol' ? { budget: newBudget(assignment.id, args.task) } : {}),
               lifecycle: { version: 1, admissions: [assignment], reports: [] } } } }
         })
         const slot = slotFor(group, { id: reservedId, label, workerType, state: 'intent', delivery: 'pending' })
         slot.context = context
+        if (workerType !== 'sol') slot.budget = newBudget(assignment.id, args.task)
         if (task.grant) slot.artifactRequests.add(args.artifactRequestId)
         return { slot }
       } catch (error) {
@@ -400,7 +471,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       slot.parent = parent
       slot.ptcAdmission = { id: assignment.id, parent, signal: exec.signal }
       const accepted = await ctx.subagents.startContinuable({
-        ...buildPostmanWorkerStartRequest(parent, task.text, exec.signal, postmanWorkerDeniedTools(ctx.tools), label, workerType),
+        ...buildPostmanWorkerStartRequest(parent, task.text, exec.signal, postmanWorkerDeniedTools(ctx.tools, workerType), label, workerType),
         childId: reservedId,
       })
       exec.signal.throwIfAborted()
@@ -463,15 +534,16 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     artifactRequestId: { type: 'string', description: 'Separately trusted artifact REQ.' },
   }
   function makeTaskTool(workerType) {
-    const sol = workerType === 'sol'
+    const sol = workerType === 'sol', secretary = workerType === 'secretary'
     return defineTool({
-      name: sol ? POSTMAN_SOL_WORKER_TOOL_NAME : POSTMAN_WORKER_TOOL_NAME,
+      name: sol ? POSTMAN_SOL_WORKER_TOOL_NAME : secretary ? 'postman_secretary' : POSTMAN_WORKER_TOOL_NAME,
       description: sol ? 'Only on an explicit user request: create or continue the one Sol Worker (GPT-6.1 Sol, xhigh). An explicit user request to use Sol Worker is sufficient authorization; do not ask a separate ask_user_question before creation or continuation. Follow-up and new tasks by workerSessionId require no additional user confirmation within the user-selected Sol route. Never automatically escalate Luna to Sol. Use workerSessionId for follow-up; createNew rejects a second Sol Worker. Acceptance is not completion.' :
-        'Create an additional continuable Luna Worker (up to three), or deliver a trusted artifact grant to an exact existing Luna Worker. Acceptance is not completion.',
+        secretary ? 'Create or continue the exact singleton Secretary for this Leader task. FAST facts and private operational ledger, no PTC/delegation. Acceptance is not completion.' :
+        'Create or continue a Postman Worker, up to two per exact parent (Leader or Sol Worker). FAST local execution without PTC/delegation. Acceptance is not completion.',
       parameters, output: output(),
       async execute(args, exec) {
         const parent = exec?.agent
-        if (!authorized(parent)) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
+        if (!authorized(parent) || (workerType !== 'luna' && !isTopLevelPostmanSupervisor(parent))) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
         if (typeof args?.task !== 'string' || !args.task.trim()) return { status: 'POSTMAN_WORKER_TASK_INVALID' }
         if ((args.createNew !== undefined && typeof args.createNew !== 'boolean') ||
             (args.workerSessionId !== undefined && (typeof args.workerSessionId !== 'string' || !args.workerSessionId)) ||
@@ -497,6 +569,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
   }
   const taskTool = makeTaskTool('luna')
   const solTaskTool = makeTaskTool('sol')
+  const secretaryTool = makeTaskTool('secretary')
   function groupFor(parent) { return group(parent) }
   const interruptTool = defineTool({
     name: POSTMAN_WORKER_INTERRUPT_TOOL_NAME,
@@ -530,6 +603,8 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     return matches.length === 1 && matches[0].kind === 'child' && matches[0].mode === 'continuable'
   }
   async function closeEvidence(parent, binding, signal) {
+    if (workerTypeOf(binding) === 'sol' && Object.values(rawRow(parent.id)?.workers ?? {}).some(value => value.ownerSessionId === binding.id))
+      return { ready: false, reason: 'Sol must retire its own Worker bindings before closing/fresh' }
     if (binding.state !== 'ready' || binding.delivery !== 'none')
       return { ready: false, reason: 'binding or admission uncertain; request approved addressed cancel' }
     const child = await history(binding.id, parent.id, signal)
@@ -573,6 +648,8 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
         return chosen
       }
       const selected = chosen.binding, slot = slotFor(g, selected)
+      if (workerTypeOf(selected) === 'sol' && Object.values(rawRow(parent.id)?.workers ?? {}).some(value => value.ownerSessionId === selected.id))
+        return {status: 'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT', workerSessionId: selected.id, reason: 'Sol must retire its own Worker bindings first'}
       let witness
       if (mode === 'cancel') {
         if (!durable) return { status: 'POSTMAN_WORKER_BINDING_UNCERTAIN', workerSessionId: id }
@@ -682,12 +759,12 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
         let saved
         try { saved = await ctx.get?.('sessionPersistence')?.inspect?.(value.id, exec.signal) } catch {}
         const exactSaved = saved?.meta?.id === value.id && saved.meta.origin === 'subagent' &&
-          saved.meta.parentSession === parent.id && saved.meta.delegationDepth === 1 &&
+          saved.meta.parentSession === parent.id && saved.meta.delegationDepth === depthOf(parent.id) &&
           Array.isArray(saved.events) && child?.kind === 'child' && child.mode === 'continuable'
         if (exactSaved && saved.events.some(event => event.type === 'subagent/closed'))
           runtime = live ? 'corrupt/diagnostic' : 'durable-closed'
         const exactLive = live?.session?.header?.id === value.id && live.session.header.origin === 'subagent' &&
-          live.session.header.parentSession === parent.id && live.session.header.delegationDepth === 1
+          live.session.header.parentSession === parent.id && live.session.header.delegationDepth === depthOf(parent.id)
         const events = exactLive ? live.session.events : exactSaved ? saved.events : null
         const latestStart = events?.findLast(event => event.type === 'turn/start')
         const latestEnd = events?.findLast(event => event.type === 'turn/end')
@@ -700,12 +777,59 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
             event.data.source.senderSessionId === value.id)) ? 'delivered' : 'absent'
         return { workerSessionId: value.id, label: value.label, workerType: workerTypeOf(value),
           model: workerOptions(workerTypeOf(value)).model, binding: value.state,
-          delivery: value.delivery, runtime, execution: runtime, turn, report }
+          delivery: value.delivery, runtime, execution: runtime, turn, report,
+          ...(workerTypeOf(value) !== 'sol' ? { budget: value.budget ?? { used: 0, ...fastBudget, exhausted: false } } : {}) }
       }))
       return { status: 'POSTMAN_WORKER_LIST', quota: {
-        luna: { used: workers.filter(value => value.workerType === 'luna').length, limit: 3 },
-        sol: { used: workers.filter(value => value.workerType === 'sol').length, limit: 1 },
+        secretary: { used: workers.filter(value => value.workerType === 'secretary').length, limit: isTopLevelPostmanSupervisor(parent) ? 1 : 0 },
+        luna: { used: workers.filter(value => value.workerType === 'luna').length, limit: 2 },
+        sol: { used: workers.filter(value => value.workerType === 'sol').length, limit: isTopLevelPostmanSupervisor(parent) ? 1 : 0 },
       }, workers }
+    },
+  })
+  const ledgerTool = defineTool({
+    name: 'postman_secretary_ledger',
+    description: 'Read the exact Leader/task private durable operational ledger; only its Secretary may replace it. Never writes repository files.',
+    parameters: { content: { type: 'string', description: 'Compact whole ledger; omit to read. Facts, decisions, assignments, verification with inputs, blockers, questions, next step.' },
+      revision: { type: 'number', description: 'Exact read revision for replacement.' } }, output: output(),
+    async execute(args, exec) {
+      const agent = exec.agent, secretary = roleOf(agent) === 'secretary'
+      if (!isTopLevelPostmanSupervisor(agent) && !secretary) return { status: 'POSTMAN_SECRETARY_LEDGER_CALLER_REJECTED' }
+      const id = secretary ? agent.session.header.parentSession : agent.id
+      if (!durable || !contextAt(id)) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
+      if (args.content !== undefined) {
+        if (!secretary) return { status: 'POSTMAN_SECRETARY_LEDGER_CALLER_REJECTED' }
+        if (typeof args.content !== 'string' || args.content.length > 16000) return { status: 'POSTMAN_SECRETARY_LEDGER_INVALID' }
+        try { await taskContexts.changeRecord(id, row => {
+          if ((row.secretaryLedger?.revision ?? 0) !== args.revision) throw new Error('POSTMAN_SECRETARY_LEDGER_STALE')
+          return { ...row, secretaryLedger: { revision: args.revision + 1, content: args.content, updatedBy: agent.id } }
+        }) } catch (error) { return { status: 'POSTMAN_SECRETARY_LEDGER_UPDATE_FAILED', diagnostic: diagnostic(error) } }
+      }
+      return { status: 'POSTMAN_SECRETARY_LEDGER', ledger: taskContexts.record(id).secretaryLedger ?? { revision: 0, content: '', updatedBy: '' } }
+    },
+  })
+  const freshTool = defineTool({
+    name: 'postman_worker_fresh',
+    description: 'Retire an exact owned settled child and spawn a fresh role-preserving Session for an explicit new assignment. No history inheritance or Git reset; Secretary ledger survives. Sol user-selected route is preserved.',
+    parameters: { workerSessionId: { type: 'string', required: true }, task: { type: 'string', required: true }, label: { type: 'string' } }, output: output(),
+    async execute(args, exec) {
+      const parent = exec.agent
+      if (!authorized(parent)) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
+      if (typeof args.task !== 'string' || !args.task.trim()) return { status: 'POSTMAN_WORKER_TASK_INVALID' }
+      const g = groupFor(parent), id = args.workerSessionId
+      const chosen = await enqueue(g, () => {
+        const selected = select(parent, id, g)
+        if (!selected.binding) return selected
+        if (g.fresh.has(id)) return {status: 'POSTMAN_WORKER_FRESH_BUSY'}
+        g.fresh.set(id, workerTypeOf(selected.binding)); return selected
+      })
+      if (!chosen.binding) return chosen
+      try { return await admitted(parent, async () => {
+          const closed = await stopTool.execute({workerSessionId: id, mode: 'close'}, exec)
+          if (closed.status !== 'POSTMAN_WORKER_STOPPED') return closed
+          const accepted = await create(parent, g, {task: args.task, label: args.label ?? chosen.binding.label, createNew: true}, exec, workerTypeOf(chosen.binding), id)
+          return {...accepted, retiredWorkerSessionId: id, fresh: accepted.status === 'POSTMAN_WORKER_TASK_ACCEPTED'}
+      }) } finally {g.fresh.delete(id)}
     },
   })
   const compactTool = defineTool({
@@ -725,27 +849,24 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
             !matchesContext(parent, slot)) return { status: 'POSTMAN_WORKER_COMPACT_BUSY', workerSessionId: id }
         const child = liveWorker(id)
         if (!child || child.session?.header?.parentSession !== parent.id ||
-            child.session.header.origin !== 'subagent' || child.session.header.delegationDepth !== 1)
+            child.session.header.origin !== 'subagent' || child.session.header.delegationDepth !== depthOf(parent.id))
           return { status: 'POSTMAN_WORKER_COMPACT_NOT_RESIDENT', workerSessionId: id }
-        if (typeof ctx.subagents.compactContinuableChild !== 'function')
-          return { status: 'POSTMAN_WORKER_LIFECYCLE_UNSUPPORTED', workerSessionId: id }
         if (child.status !== 'idle' || child.inbox?.hasPending !== false ||
             typeof child.ctx?.get?.('compaction')?.compactNow !== 'function')
           return { status: 'POSTMAN_WORKER_COMPACT_BUSY', workerSessionId: id }
         try {
-          const compacted = await ctx.subagents.compactContinuableChild(parent, id, agent =>
-            agent === child && bindings(parent, g)[id] === binding && binding.state === 'ready' &&
-            binding.delivery === 'none' && matchesContext(parent, slot), exec.signal)
-          if (!compacted) return { status: 'POSTMAN_WORKER_COMPACT_BUSY', workerSessionId: id }
+          // Native compactNow reserves Agent.runMaintenance synchronously before
+          // any await, so accepted followups cannot run inside the compacted span.
+          const compacted = await child.ctx.get('compaction').compactNow(child, exec.signal)
           return { status: 'POSTMAN_WORKER_COMPACTED', workerSessionId: id,
-            compacted: compacted.result !== null, sameSession: true }
+            compacted: compacted !== null, sameSession: true }
         } catch (error) { return { status: 'POSTMAN_WORKER_COMPACT_FAILED', workerSessionId: id, diagnostic: diagnostic(error) } }
       }))
     },
   })
   function liveSlot(caller, leaderId, requireActivation = false) {
     if (disposed || typeof caller?.id !== 'string' || ctx.agents.get(caller.id) !== caller ||
-        caller.session?.header?.origin !== 'subagent' || caller.session.header.delegationDepth !== 1 ||
+        caller.session?.header?.origin !== 'subagent' || caller.session.header.delegationDepth !== depthOf(leaderId) ||
         caller.session.header.parentSession !== leaderId || !authorized(ctx.agents.get(leaderId))) return null
     const slot = leaders.get(leaderId)?.slots.get(caller.id)
     if (!slot || slot.closed || !slot.verified || slot.parent !== ctx.agents.get(leaderId) ||
@@ -771,57 +892,150 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
   }
   // Only the Host's current durable pending admission can authorize the creation window.
   // The slot is the existing lifecycle record, not a second child registry.
-  function provisionalSlot(caller, requirePtcLeader = true) {
+  function provisionalSlot(caller, requirePtcLeader = false) {
     const header = caller?.session?.header, leaderId = header?.parentSession
     const parent = ctx.agents.get(leaderId), slot = leaders.get(leaderId)?.slots.get(caller?.id)
     const admission = slot?.ptcAdmission, binding = rowOf(leaderId)?.workers?.[caller?.id]
     const latest = binding?.lifecycle?.admissions?.at(-1)
-    if (!durable || !authorized(parent) || (requirePtcLeader && !isTopLevelPostmanPtcLeader(parent)) ||
-        ctx.agents.get(caller?.id) !== caller || (header?.id !== undefined && header.id !== caller.id) || header?.origin !== 'subagent' || header.delegationDepth !== 1 ||
+    if (!authorized(parent) || (requirePtcLeader && !isTopLevelPostmanPtcLeader(parent)) ||
+        ctx.agents.get(caller?.id) !== caller || (header?.id !== undefined && header.id !== caller.id) || header?.origin !== 'subagent' || header.delegationDepth !== depthOf(leaderId) ||
         !slot || slot.closed || slot.parent !== parent || admission?.parent !== parent || admission.signal?.aborted ||
-        !slot.context || slot.context !== contexts.get(leaderId) ||
+        (contexts && (!slot.context || slot.context !== contexts.get(leaderId))) ||
         (slot.workerAgent !== null && slot.workerAgent !== caller) ||
         !['intent', 'ready'].includes(slot.state) || slot.delivery !== 'pending' ||
-        binding?.id !== caller.id || binding.state !== slot.state || binding.delivery !== 'pending' ||
-        latest?.id !== admission.id || latest.state !== 'pending') return null
+        (durable && (binding?.id !== caller.id || binding.state !== slot.state || binding.delivery !== 'pending' ||
+        latest?.id !== admission.id || latest.state !== 'pending'))) return null
     return slot
   }
-  function ptcSlot(caller, requireActivation = true) {
-    const provisional = provisionalSlot(caller)
-    if (provisional) return provisional.workerAgent === caller ? provisional : null
-    const slot = liveSlot(caller, caller?.session?.header?.parentSession, requireActivation)
-    const binding = rowOf(caller?.session?.header?.parentSession)?.workers?.[caller?.id]
-    return slot?.delivery === 'none' && (!durable || binding?.delivery === 'none') ? slot : null
+  function roleOf(caller) {
+    const slot = provisionalSlot(caller, false) || liveSlot(caller, caller?.session?.header?.parentSession)
+    return slot?.workerType ?? null
+  }
+  const stopBudgetGuard = ctx.tools.guard?.(exec => {
+    const type = roleOf(exec.agent)
+    if (type === 'secretary' && !SECRETARY_TOOLS.includes(exec.name)) return 'POSTMAN_SECRETARY_TOOL_REJECTED'
+    if (type && (DELEGATION_TOOLS.includes(exec.name) || exec.name === 'ptc_execute' ||
+      (exec.name.startsWith('postman_') && !(type === 'sol' && WORKER_CONTROL_TOOLS.includes(exec.name)) &&
+      !(type === 'secretary' && exec.name === 'postman_secretary_ledger')))) return 'POSTMAN_WORKER_TOOL_REJECTED'
+    const budget = budgetOf(exec.agent)
+    if (!budget) return
+    if (budget.reported) return 'POSTMAN_WORKER_ASSIGNMENT_REPORTED: wait for a new parent assignment'
+    if (exec.name === 'notify_parent' && budget.notified) return 'POSTMAN_WORKER_ESCALATION_ALREADY_SENT'
+    if (!budget.exhausted) return
+    if (!['notify_parent', 'report'].includes(exec.name)) return 'POSTMAN_WORKER_BUDGET_EXHAUSTED: escalation/report only'
+    const text = exec.name === 'report' ? exec.arguments?.output : exec.arguments?.message
+    if (typeof text !== 'string' || !/^(NEEDS_PARENT_GUIDANCE:|NEEDS_LEADER_GUIDANCE:)/.test(text))
+      return 'POSTMAN_WORKER_BUDGET_EXHAUSTED: meaningful blocker required, not success'
+  })
+  const stopReportConclusion = ctx.on?.('tools/execute', async (exec, next) => {
+    const result = await next()
+    if (exec.name === 'report' && roleOf(exec.agent) && !result.isError && typeof result.value?.messageId === 'string') {
+      exec.concludeTurn?.()
+      return { ...result, concludesTurn: true }
+    }
+    return result
+  })
+  const stopBudgetResult = ctx.on?.('tools/post-execute', async (exec, result, next) => {
+    const decision = await next()
+    const slot = activeSlot(exec.agent), budget = budgetOf(exec.agent)
+    if (decision.kind === 'accept' && !result.isError && slot && budget &&
+        ((exec.name === 'notify_parent' && result.value?.status === 'PARENT_NOTIFICATION_ACCEPTED') ||
+         (exec.name === 'report' && typeof result.value?.messageId === 'string')))
+      { await saveBudget(exec.agent, slot, { ...budget, ...(exec.name === 'report' ? { reported: true } : { notified: true }) })
+        if (exec.name === 'report') exec.concludeTurn?.()
+      }
+    return decision
+  })
+  // Request #hardLimit is escalation-only. If the model ignores it, no ordinary
+  // model cycle is granted: finish through the same native notify/report paths.
+  const reportBudgetBlocker = async (agent, budget, turn, step, signal) => {
+    const text = blockerText(agent, budget)
+    if (!budget.notified) await ctx.tools.execute({agent,name:'notify_parent',arguments:{message:text},callId:budget.assignmentId+':budget-notify',signal})
+    const callId = budget.assignmentId + ':budget-report'
+    // The real native report and durable exhausted/reported budget are Host
+    // evidence, never a synthetic model tool pair or a manufactured turn/end.
+    await ctx.tools.execute({agent,name:'report',arguments:{output:text},callId,signal})
+  }
+  const stopBudgetTerminal = ctx.on?.('agent/turn-stopping', async ({agent,turn,signal}) => {
+    const budget = budgetOf(agent)
+    if (budget?.exhausted && !budget.reported) await reportBudgetBlocker(agent,budget,turn,
+      agent.session.events.findLast(e=>e.type==='step/start')?.data.step ?? 1,signal)
+  })
+  const stopBudgetStep = ctx.on?.('agent/pre-step', async (payload, next) => {
+    const agent = payload.agent, slot = activeSlot(agent)
+    const binding = rowOf(agent?.session?.header?.parentSession)?.workers?.[agent?.id]
+    const pending = binding?.pendingBudgets ?? slot?.pendingBudgets ?? {}
+    const claimed = Object.keys(pending).findLast(id => payload.messages.some(message =>
+      message.content?.some(block => block.type === 'text' && block.text === 'Host assignment: ' + id)))
+    if (claimed && slot && slot.workerType !== 'sol') {
+      slot.budget = pending[claimed];const remaining = {...pending};delete remaining[claimed];slot.pendingBudgets = remaining
+      if (durable) await changeBinding({id: agent.session.header.parentSession},agent.id,current => ({...current,budget:slot.budget,pendingBudgets:remaining}))
+    }
+    const decision = await next(), budget = budgetOf(agent)
+    if (decision.kind === 'reject' || !slot || !budget) return decision
+    if (budget.reported) {
+      const reportTurn = agent.session.events.findLast(e => e.type === 'tool/call' && e.data.name === 'report')?.data.turn
+      if (reportTurn !== payload.turn) return {kind: 'reject', messages: []}
+      if (agent.inbox.nextTurn.length === 0 && decision.messages.length) agent.inbox.splice('next-step', 0, 0, decision.messages)
+      return {kind: 'enter', messages: []}
+    }
+    if (budget.used < budget.hardLimit) return decision
+    await reportBudgetBlocker(agent, budget, payload.turn, payload.step - 1, payload.signal)
+    return { kind: 'reject', reason: 'POSTMAN_WORKER_BUDGET_EXHAUSTED' }
+  })
+  const stopRoleInstruction = ctx.get?.('systemPrompt')?.section({
+    name: 'postman-role', order: 120,
+    text: ({ scope } = {}) => {
+      const type = roleOf(scope)
+      if (!type) return ''
+      const budget = budgetOf(scope)
+      const warning = budget && budget.used >= budget.hardLimit - 1
+        ? 'HARD CEILING: this assignment is escalation-only. No ordinary searches/tests/edits/retries. ONE NEEDS_PARENT_GUIDANCE: notify_parent and meaningful blocker report, then stop. Exhaustion is not success.'
+        : budget && budget.used >= budget.softLimit - 1 ? 'SOFT WARNING: budget nearly exhausted. Do not start a new research branch. Finish immediately with sufficient evidence or prepare escalation.' : ''
+      const ledger = type === 'secretary' ? rawRow(scope.session.header.parentSession)?.secretaryLedger : null
+      return ROLE_SKILLS[type] + (warning ? String.fromCharCode(10) + warning : '') +
+        (ledger ? String.fromCharCode(10) + 'Current Host-private operational ledger: ' + JSON.stringify(ledger) : '')
+    },
+  })
+  const directRoleTools = caller => {
+    const tools = caller.ctx?.tools
+    if (tools?.modeFor && tools.modeFor(caller) !== 'native') tools.presentAs('native')
   }
   async function confirmActivation(caller) {
-    const provisional = provisionalSlot(caller)
+    const provisional = provisionalSlot(caller, false)
     if (provisional) {
       provisional.workerAgent = caller
+      directRoleTools(caller)
       bindingChanged(caller.id) // Synchronous: before the first model request is assembled.
       return true
     }
     const leaderId = caller?.session?.header?.parentSession
-    const slot = leaders.get(leaderId)?.slots.get(caller?.id)
+    let slot = leaders.get(leaderId)?.slots.get(caller?.id)
+    if (!slot && authorized(ctx.agents.get(leaderId))) {
+      const binding = rowOf(leaderId)?.workers?.[caller?.id]
+      if (!binding || binding.state !== 'ready' || binding.delivery !== 'none') return false
+      slot = slotFor(groupFor(ctx.agents.get(leaderId)), binding)
+      slot.context = contexts?.get(leaderId) ?? null
+      if (await reconcile(ctx.agents.get(leaderId), slot)) return false
+    }
     if (!slot || slot.workerAgent !== null || !liveSlot(caller, leaderId)) return false
     // A saved session ID alone is insufficient: reconcile the actual durable child.
     try { if (!await childExists(ctx.agents.get(leaderId), caller.id)) return false } catch { return false }
     if (slot.workerAgent !== null || !liveSlot(caller, leaderId)) return false
     slot.workerAgent = caller
+    directRoleTools(caller)
     bindingChanged(caller.id)
     return true
   }
   function ownsNotification(caller, leaderId) {
     if (caller?.session?.header?.parentSession !== leaderId) return false
-    return Boolean(isTopLevelPostmanPtcLeader(ctx.agents.get(leaderId))
-      ? ptcSlot(caller, false) : liveSlot(caller, leaderId))
+    return Boolean(provisionalSlot(caller, false) || liveSlot(caller, leaderId))
   }
   // The same exact live-slot predicate serves PTC; a saved child ID is never authority.
   function ownsLiveWorker(caller) {
-    return Boolean(ptcSlot(caller))
+    return Boolean(provisionalSlot(caller, false) || liveSlot(caller, caller?.session?.header?.parentSession, true))
   }
-  function ptcContextOf(caller) {
-    return ptcSlot(caller)?.context ?? null
-  }
+  function ptcContextOf() { return null } // Compatibility: Workers never receive Postman PTC.
   function suspendLeader(parent) {
     if (parent) disposedParents.add(parent)
     for (const slot of leaders.get(parent?.id)?.slots.values() ?? []) { slot.verified = false; slot.workerAgent = null; slot.ptcAdmission = null }
@@ -846,6 +1060,14 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     if (!authorized(parent)) return false
     const group = groupFor(parent)
     const values = Object.values(bindings(parent, group))
+    // Caller may be Sol inside the artifact runner. Its children share this task
+    // worktree but are not the Leader slots: never ignore their mutation activity.
+    if (durable) for (const binding of Object.values(rawRow(leaderId)?.workers ?? {})) {
+      if ((binding.ownerSessionId ?? leaderId) === leaderId) continue
+      if (binding.state !== 'ready' || binding.delivery !== 'none') return false
+      const child = await history(binding.id, binding.ownerSessionId)
+      if (!child || child.status !== 'idle' || child.inbox?.hasPending) return false
+    }
     if (values.some(value => value.state !== 'ready' || value.delivery !== 'none' ||
         (callerId && value.id === callerId && !group.slots.has(callerId)))) return false
     if (callerId && !values.some(value => value.id === callerId)) return false
@@ -878,7 +1100,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       if (expected ? cancelWitness(row.workers?.[id] ?? {}) !== expected : row.workers?.[id]?.state !== 'stopping')
         throw new Error('POSTMAN_WORKER_BINDING_CHANGED')
       const workers = { ...row.workers }; delete workers[id]
-      return { ...row, workers }
+      return { ...row, workers, retiredWorkers: [...(row.retiredWorkers ?? []), { ...row.workers[id], retired: true }] }
     })
     slot.closed = true; g.slots.delete(id); g.stopped.add(id)
   }
@@ -914,12 +1136,14 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
   function dispose() {
     disposed = true
     stopRequestOptions?.()
+    stopRoleInstruction?.()
+    stopBudgetGuard?.(); stopBudgetResult?.(); stopBudgetStep?.(); stopReportConclusion?.(); stopBudgetTerminal?.()
     for (const group of leaders.values()) for (const slot of group.slots.values()) {
       slot.closed = true
       bindingChanged(slot.id)
     }
     leaders.clear()
   }
-  return { taskTool, solTaskTool, interruptTool, stopTool, listTool, compactTool, ownerOf, ownsNotification, ownsLiveWorker, ptcContextOf, confirmActivation, releaseActivation, refreshLeader, suspendLeader,
+  return { taskTool, solTaskTool, secretaryTool, ledgerTool, freshTool, interruptTool, stopTool, listTool, compactTool, roleOf, ownerOf, ownsNotification, ownsLiveWorker, ptcContextOf, confirmActivation, releaseActivation, refreshLeader, suspendLeader,
     contextOf, observeReport, pauseForOperation, prepareRestore, dispose }
 }

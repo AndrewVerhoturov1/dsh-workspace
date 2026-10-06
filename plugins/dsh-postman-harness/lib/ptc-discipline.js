@@ -286,35 +286,13 @@ model
 The model should not wake merely to approve a deterministic transition it already
 knew before the PTC program started.
 
-## 11. Worker mutation pattern
+## 11. Local role execution
 
-Worker PTC-first is mandatory when ptc_execute is available: read/glob/grep/
-web_fetch/web_search/write/edit MUST run through PTC; Host rejects model-direct
-calls. Put the first safe mechanical phase in ONE PTC program. Do not use shell
-to bypass PTC-first for these filesystem/search operations. Shell is for commands,
-tests, processes and operations absent from the Worker PTC profile. Keep FYI and
-progress for the substantive report. notify_parent is only for a decision needed
-now, with exact NEEDS_LEADER_GUIDANCE: prefix, evidence and exact decision; then
-report the blocker and stop tools until the Leader decides.
+Postman PTC belongs only to the exact experimental Leader. Worker and Secretary
+use direct tools with a finite FAST assignment budget; Sol Worker uses direct
+coding tools and delegates finite mechanical work to its own ordinary Workers.
+No child role receives ptc_execute or Worker PTC-first guidance.
 
-For an authorized Postman Worker, a typical PTC mutation sequence may be:
-
-model
--> PTC
-   -> grep/glob
-   -> read relevant file
-   -> mechanically verify the expected old content
-   -> write/edit
-   -> reread
-   -> mechanically verify the expected new content
-   -> return compact evidence
--> model
-
-If the reread proves the exact expected change, a separate model round between edit
-and reread is wasteful.
-
-If the actual old content differs materially from the expected precondition, stop
-before mutation and return control to the model.
 
 ## 12. Side effects are not transactional
 
@@ -423,7 +401,7 @@ Never infer that a tool exists from:
 
 Do not try to reach an unavailable capability through another generic tool.
 
-Leader and Worker PTC profiles are intentionally different.
+Only the experimental Leader has a PTC profile. Child role execution is direct.
 
 ## 18. No native Harness PTC substitution
 

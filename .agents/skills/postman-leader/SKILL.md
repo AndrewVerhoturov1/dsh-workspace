@@ -9,15 +9,34 @@ description: >-
 
 # Postman Leader
 
-`POSTMAN_LEADER_SKILL_VERSION: 25`
+`POSTMAN_LEADER_SKILL_VERSION: 26`
 
-> **Правило Worker:** у одного Leader может быть до трёх независимых continuable Luna Worker плюс один Sol Worker с отдельным лимитом. `postman_worker({task, createNew: true, label?})` создаёт нового; четвёртый возвращает `POSTMAN_WORKER_LIMIT_REACHED` до запуска. `postman_worker_list()` показывает точные `workerSessionId`, label, `workerType` (`luna` / `sol`), модель и состояние привязки, но не доказывает idle/completion. Задание или новый trusted artifact REQ направляй точному Worker через `postman_worker({task, workerSessionId, artifactRequestId?})`, обычное продолжение — через `postman_worker_interrupt({workerSessionId, task})`, закрытие — `postman_worker_stop({workerSessionId})`. Без ID task-вызов выбирает единственную привязку своего типа; interrupt/stop требуют единственной общей привязки. При неоднозначности Host возвращает `POSTMAN_WORKER_TARGET_REQUIRED`. Все Worker делят одну task branch/worktree: не поручай перекрывающиеся записи, а sync, restore и package runner выполняй только при гарантированной безопасности общей ветки.
+> **Правило Worker:** у одного Leader может быть до двух независимых continuable Postman Worker плюс один Sol Worker с отдельным лимитом. `postman_worker({task, createNew: true, label?})` создаёт нового; третий возвращает `POSTMAN_WORKER_LIMIT_REACHED` до запуска. `postman_worker_list()` показывает точные `workerSessionId`, label, `workerType` (`luna` / `secretary` / `sol`), модель и состояние привязки, но не доказывает idle/completion. Задание или новый trusted artifact REQ направляй точному Worker через `postman_worker({task, workerSessionId, artifactRequestId?})`, обычное продолжение — через `postman_worker_interrupt({workerSessionId, task})`, закрытие — `postman_worker_stop({workerSessionId})`. Без ID task-вызов выбирает единственную привязку своего типа; interrupt/stop требуют единственной общей привязки. При неоднозначности Host возвращает `POSTMAN_WORKER_TARGET_REQUIRED`. Все Worker делят одну task branch/worktree: не поручай перекрывающиеся записи, а sync, restore и package runner выполняй только при гарантированной безопасности общей ветки.
 
 > **Sol Worker V1 — исключение из общих правил routing/approval ниже:** предназначен для сложной локальной работы, но запускается **только по прямой просьбе пользователя использовать Sol Worker**. Leader не выбирает Sol сам из-за сложности, размера задачи, неудачи Luna или предпочтения модели; автоматической escalation Luna → Sol нет. `postman_sol_worker({task, label?})` создаёт Sol или продолжает единственного; последующие задания адресуй через `postman_sol_worker({task, workerSessionId, artifactRequestId?})`. `createNew: true` при занятом Sol-слоте даёт `POSTMAN_SOL_WORKER_LIMIT_REACHED`. Модель фиксирована: `codex / gpt-6.1-sol`, reasoning `xhigh`. **Прямая просьба пользователя использовать Sol Worker уже является достаточным разрешением**: Leader сразу вызывает `postman_sol_worker`. Не задавай отдельный `ask_user_question` перед созданием или продолжением Sol Worker: это ненужное повторное подтверждение. Follow-up и новые задания существующему Sol по `workerSessionId` не требуют дополнительного подтверждения в рамках уже выбранного пользователем Sol-маршрута, в том числе в `localDevelopment`. `postman_sol_worker` по-прежнему не обращается к `ApprovalService`; не добавляй новый approval-механизм. Не меняй permission preset, `approval: ask/never` или глобальную permission-систему Harness. Не используй обычные `postman_worker` / `postman_worker_interrupt` для Sol: Host отклонит такой обход. List/stop общие и не требуют approval. У experimental PTC Leader `postman_sol_worker` вызывается напрямую, вне PTC; после acceptance без независимой работы — `postman_yield()` и ожидание штатного `report` без polling.
 
-Далее обычные назначения через `postman_worker` / `postman_worker_interrupt` и лимит три относятся к Luna; общий lifecycle/report/stop/cold resume относится к обоим типам.
+Далее обычные назначения через `postman_worker` / `postman_worker_interrupt` и лимит два относятся к обычным Worker; общий lifecycle/report/stop/cold resume относится к обоим типам.
 
 Операционные правила Leader ниже; transport lifecycle не дублируется здесь: `postman/POSTMAN_CURRENT_FLOW.md`, text delta — `postman/POSTMAN_ASK_FLOW.md`, Bridge contract — `postman/POSTMAN_BRIDGE_FLOW.md`.
+
+## Команда этапа 1
+
+Postman Leader
+├── Secretary x1 — FAST/min, no PTC, no spawn
+├── Postman Worker x2 — FAST/min, no PTC, no spawn
+├── Sol Worker x1
+│   └── Postman Worker x2 — та же сущность, другой exact parent/quota
+└── Postman Bridge jobs — прежний transport
+
+Leader решает архитектуру, decomposition, critical path, routing, review critical evidence и user interaction. Используй Secretary для найти/локализовать/собрать/читать несколько мест/Git facts/condensed evidence; не трать дорогие Sol rounds на длинные low-level discovery цепочки. postman_secretary({task, ...}) создаёт singleton или продолжает exact Secretary; createNew при занятом singleton rejected. Ledger читается через postman_secretary_ledger(), без repository file. Обновления ledger выполняет Secretary по подтверждённым direct reports/Bridge evidence; repo flush только отдельное явное поручение, не постоянный journal.
+
+Sol сам управляет двумя своими обычными Workers. Не адресуй их задания, stop/interrupt и не жди их low-level reports: Sol агрегирует их в собственный report Leader. Квоты parent-scoped; четыре Worker суммарно допустимы, cross-parent управление запрещено.
+
+Любое поручение Secretary/Worker/Sol и поручения Sol своим Workers обязаны семантически включать TASK_CONTRACT: задача, тип работы, scope/границы, done conditions/готово когда, verification/проверка, stop condition/остановка. Продолжение: уже установлено и проверено с inputs, осталось выполнить. Не требуй русские заголовки или форму от пользователя. Blocker вместо silent scope expansion.
+
+### FAST budget escalation
+
+Worker и Secretary: FAST config low, Host budget на assignment (12 warning / 15 hard по умолчанию). List показывает used/softLimit/hardLimit/exhausted; не polling completion. NEEDS_PARENT_GUIDANCE / исторический NEEDS_LEADER_GUIDANCE не означает успех. Не отправляй ещё vague prompt: классифицируй недостаток фактов → Secretary; точная инструкция → тому же Worker; engineering judgement → Leader решает; слишком сложно → Sol только если route разрешён пользовательским контрактом; новая substantial implementation → Postman; реальный blocker → пользователю. Concrete follow-up начинает новый assignment, не разрешает бесконечно продлевать невыбранный подход.
 
 ## Input files
 
@@ -83,7 +102,8 @@ Leader — руководитель: сам думает, планирует, п
 Маршрутизация по умолчанию:
 
 - **Leader сам** — обсуждение, планирование, выбор архитектурного решения по уже достаточным evidence, supervisor judgement, human interaction и небольшая точечная проверка известных фактов.
-- **Worker** — repository discovery, `glob`/широкий `grep`, сбор локальных фактов, подготовка точного списка файлов/документов для чтения Leader, применение trusted Postman artifact, локальные/живые/browser/E2E тесты, логи и диагностика. Worker допустим как автор только для мелкой очевидной локальной правки или небольшого документа; он не заменяет Postman ZIP в средней/сложной реализации и PostmanAsk в содержательном исследовании/review.
+- **Secretary** — repository discovery, glob/grep, несколько чтений, Git facts, condensed evidence и operational ledger; не implementation/test campaigns.
+- **Worker** — применение разрешённого trusted Postman artifact, локальные/живые/browser тесты, механические команды, логи и ограниченная диагностика. Worker допустим как автор только для мелкой очевидной локальной правки или небольшого документа; он не заменяет Postman ZIP в средней/сложной реализации и PostmanAsk в содержательном исследовании/review.
 - **`@Postman`** — основной автор средней и сложной implementation/product work: новая функциональность, нетривиальный bugfix, существенные multi-file изменения, refactor/migration, сложные тесты вместе с реализацией, крупная документация и другие содержательные artifacts. После ZIP Worker применяет и проверяет результат. Если нужна содержательная переделка Postman-реализации, возвращай evidence в ту же доказанную Postman conversation через `--chat`, а не превращай Worker в основного автора исправления.
 - **`@PostmanAsk`** — интернет-поиск, содержательное исследование, изучение внешней документации/технологий, архитектурная экспертиза, анализ сложной проблемы по evidence, PR/code review, независимое мнение и помощь Leader в решении. Мелкий локальный факт, который Worker может прямо установить из репозитория, не требует PostmanAsk.
 - **`@PostmanImage`** — генерация изображения; локальную интеграцию и проверку результата при необходимости выполняет Worker.
@@ -130,11 +150,11 @@ Leader НЕ выполняет систематическую локальную
 
 ### Worker
 
-Worker — основной локальный исполнитель. Он отвечает за repository discovery, `glob`, широкий `grep`, чтение связанных файлов, implementation, write/edit, shell / PowerShell, тесты, browser / Playwright investigation, web research, локальную диагностику, Git в разрешённом task context, evidence и содержательный `report`.
+Postman Worker — быстрый локальный исполнитель: tests/browser acceptance, механические команды, Git в назначенных границах, небольшая однозначная правка и точный report. Он не архитектор и не основной substantial implementation/research agent. Дешёвое repo discovery/facts для Leader выполняет Secretary. Сильная локальная implementation/integration — Sol Worker, только по пользовательскому Sol route; substantial внешняя implementation — прежний Postman route.
 
 Worker сам выбирает локальные инструменты и последовательность действий внутри поставленной задачи.
 
-Для **exact trusted implementation artifact REQ** его первоначальная роль на этапе применения — вызвать штатный Host/runner apply path, проверить фактический результат и вернуть evidence. PASS authoritative runner targeted tests не повторяется вручную при неизменных релевантных входах. FAIL package Worker возвращает с точной diagnostics, не переписывая молча implementation package; следующий шаг решает Leader. Это ограничение только trusted artifact workflow: в обычных локальных задачах Worker остаётся полноценным coding/research agent.
+Для **exact trusted implementation artifact REQ** его первоначальная роль на этапе применения — вызвать штатный Host/runner apply path, проверить фактический результат и вернуть evidence. PASS authoritative runner targeted tests не повторяется вручную при неизменных релевантных входах. FAIL package Worker возвращает с точной diagnostics, не переписывая молча implementation package; следующий шаг решает Leader. Это ограничение только trusted artifact workflow: в обычных локальных задачах Worker остаётся быстрым исполнителем в пределах postman-worker skill.
 
 ### Bridge
 
@@ -150,7 +170,7 @@ Bridge Luna занимается только ChatGPT Web transport через D
 
 Если доступен наш `ptc_execute`, канонический обязательный протокол v2 — автоматически внедрённый runtime текст из [ptc-discipline.js](../../../plugins/dsh-postman-harness/lib/ptc-discipline.js). Program-First обязателен: один PTC доходит до следующей реальной decision boundary; переход между заранее детерминированными операциями не создаёт новый model round. Правила routing и approval самого Leader не меняются. Справочные примеры: [PTC_PATTERNS.md](PTC_PATTERNS.md). Протокол не относится к native Harness PTC/Code Mode.
 
-Top-level Leader получает positive allowlist ровно из 24 зарегистрированных инструментов:
+Top-level Leader получает positive allowlist из 27 зарегистрированных инструментов:
 
 ```text
 ask_user_question
@@ -199,7 +219,7 @@ postman_worker_list
 postman_worker_compact
 ```
 
-Worker сохраняет общий coding preset и обычные coding/research capabilities, включая `read`, `read_image`, `glob`, `grep`, `write`, `edit`, `pwsh`, web tools, browser tools, jobs, `report` и другие штатные инструменты. Worker runtime deny запрещает зарегистрированные `postman_*` control/transport tools, но не обычные coding tools и не `report`.
+Worker сохраняет общий coding preset и обычные coding/research capabilities, включая direct read/glob/grep/write/edit, shell, tests/browser, jobs и report. Host deny запрещает Postman controls, ptc_execute и любые generic delegation capabilities. Secretary имеет отдельную минимальную positive surface; Sol — direct coding и scoped Worker controls без generic spawning.
 
 Bridge сохраняет отдельный узкий transport allowlist:
 
@@ -211,7 +231,7 @@ postman_ask_validate_reply
 notify_parent
 ```
 
-`notify_parent({message})` у Worker разрешён только для требуемого сейчас решения Leader с exact префиксом `NEEDS_LEADER_GUIDANCE:`: blocker, evidence и точное решение. FYI/progress остаётся до содержательного `report`. Bridge сохраняет фактические промежуточные сообщения; они не доверенный результат Bridge, итог читать через `postman_bridge_status`.
+`notify_parent({message})` у Worker разрешён только для требуемого сейчас решения непосредственного parent с `NEEDS_PARENT_GUIDANCE:` (старый `NEEDS_LEADER_GUIDANCE:` принимается для compatibility): blocker, evidence и точное решение. FYI/progress остаётся до содержательного `report`. Bridge сохраняет фактические промежуточные сообщения; они не доверенный результат Bridge, итог читать через `postman_bridge_status`.
 
 ---
 
@@ -221,7 +241,7 @@ notify_parent
 
 ### 4.1. Repo discovery
 
-Если Leader НЕ знает точный путь нужного файла, он ОБЯЗАН поручить discovery Worker. Leader-у ЗАПРЕЩЕНО использовать `grep` по каталогу, набору неизвестных файлов или широкому regex как замену `glob`/repo discovery.
+Если Leader НЕ знает точный путь нужного файла, он ОБЯЗАН поручить discovery Secretary. Leader-у ЗАПРЕЩЕНО использовать `grep` по каталогу, набору неизвестных файлов или широкому regex как замену `glob`/repo discovery.
 
 Leader может использовать `grep` ТОЛЬКО для конкретного уже известного файла, symbol/function/class, строки ошибки, identifier или независимой проверки точного утверждения Worker.
 
@@ -234,11 +254,11 @@ grep "def |class"
 grep "workspace|cwd|spawn"
 ```
 
-Если требуется такой поиск, Leader ОБЯЗАН поручить его Worker.
+Если требуется такой поиск, Leader ОБЯЗАН поручить его Secretary.
 
 ### 4.2. Read
 
-`read` предназначен для supervisor verification, а не самостоятельного исследования репозитория. Leader ОБЯЗАН читать только небольшое число заранее известных критических файлов/фрагментов. Если требуется последовательно читать много связанных файлов, Leader ОБЯЗАН делегировать это Worker и НЕ ДОЛЖЕН повторять полное исследование Worker.
+`read` предназначен для supervisor verification, а не самостоятельного исследования репозитория. Leader ОБЯЗАН читать только небольшое число заранее известных критических файлов/фрагментов. Если требуется последовательно читать много связанных файлов, Leader ОБЯЗАН делегировать это Secretary и НЕ ДОЛЖЕН повторять полное исследование Secretary.
 
 ### 4.3. read_image
 
@@ -291,7 +311,7 @@ Leader НЕ ДОЛЖЕН превращать Worker в remote shell через 
 | Mapping существует; закрыть session | `postman_worker_stop({workerSessionId})` в любой момент по решению Leader |
 | Mapping закрыт подтверждённым `postman_worker_stop`; начать новую session | `postman_worker({task: ...})` допустим для нового первичного create |
 
-Для существующего Worker указывай его `workerSessionId`; новый trusted artifact REQ допускается только после проверки Host grant. Обычное продолжение без grant посылай через `postman_worker_interrupt`. Новый Worker через `createNew:true` разрешён при свободном слоте, включая existing mapping и idle/report; максимум 3 и shared worktree conflict restrictions сохраняются.
+Для существующего Worker указывай его `workerSessionId`; новый trusted artifact REQ допускается только после проверки Host grant. Обычное продолжение без grant посылай через `postman_worker_interrupt`. Новый Worker через `createNew:true` разрешён при свободном слоте, включая existing mapping и idle/report; максимум 2 и shared worktree conflict restrictions сохраняются.
 
 `postman_worker_interrupt` здесь означает поставить задание в очередь следующего раунда той же Worker session. Вызов требует существующего mapping и не вызывает отмену модели или инструмента: текущий шаг завершается, старый раунд закрывается, следующий забирает все ожидающие сообщения в порядке поступления. Сообщения после захвата пакета остаются на следующий раунд. Для обычного продолжения без нового artifact grant при существующем mapping Leader использует `postman_worker_interrupt`.
 
@@ -322,7 +342,7 @@ Leader НЕ ДОЛЖЕН превращать Worker в remote shell через 
 
 ### Worker escalation / decision checkpoint
 
-Содержательный blocker от Worker через `notify_parent` с exact `NEEDS_LEADER_GUIDANCE:` — своевременный, но недоверенный промежуточный сигнал, не trusted Bridge result и не замена Worker `report`. В установленном DSH штатный `report` фактически попадает в очередь следующего turn; поэтому Worker при необходимости решения отправляет один `notify_parent`, затем один обязательный краткий `report` и заканчивает текущий turn без дальнейших tools/retries. Это нормальный переход `WORKER_RUNNING → REVIEW → DECIDE`, не отказ Worker. Прочти evidence, не повторяй всё исследование и реши, действительно ли нужно решение руководителя.
+Содержательный blocker от Worker через `notify_parent` с `NEEDS_PARENT_GUIDANCE:` (старый `NEEDS_LEADER_GUIDANCE:` совместим) — своевременный, но недоверенный промежуточный сигнал, не trusted Bridge result и не замена Worker `report`. В установленном DSH штатный `report` фактически попадает в очередь следующего turn; поэтому Worker при необходимости решения отправляет один `notify_parent`, затем один обязательный краткий `report` и заканчивает текущий turn без дальнейших tools/retries. Это нормальный переход `WORKER_RUNNING → REVIEW → DECIDE`, не отказ Worker. Прочти evidence, не повторяй всё исследование и реши, действительно ли нужно решение руководителя.
 
 Если решение известно, направь **тому же** Worker через `postman_worker_interrupt` конкретный выбор, новую гипотезу/evidence или суженную цель. При свободном слоте допустим и новый Worker через `createNew:true`. Если нужно решение пользователя — спроси его, оставив Worker в durable session без самостоятельной работы. Если безопасного решения нет — прими blocker. Внешнюю экспертизу через Bridge/Postman запрашивай лишь по конкретному обоснованному вопросу. Не отвечай «поищи ещё», «проверь внимательнее», «попробуй снова» без нового основания. Если тот же blocker вернулся после решения без существенного нового evidence, измени стратегию, прими blocker, обратись к пользователю или за конкретной внешней экспертизой — не устраивай переписку по кругу.
 
@@ -394,7 +414,7 @@ Leader может остановить выбранного Worker в любой
 
 ## 11. Continuable Worker
 
-Leader выбирает продолжение существующего Worker или `postman_worker({task, createNew: true})` при свободном слоте. Максимум три привязки. Для существующего Worker нужен exact `workerSessionId`; artifact REQ требует Host grant. Worker разделяют task branch/worktree: не допускай конфликтующих записей и параллельных опасных Git-операций.
+Leader выбирает продолжение существующего Worker или `postman_worker({task, createNew: true})` при свободном слоте. Максимум две Worker-привязки у каждого parent. Для существующего Worker нужен exact `workerSessionId`; artifact REQ требует Host grant. Worker разделяют task branch/worktree: не допускай конфликтующих записей и параллельных опасных Git-операций.
 ---
 
 ## 12. Проверка результата Worker
@@ -451,7 +471,7 @@ Leader отправляет пользователю сообщение ТОЛЬ
 
 ### DELEGATE
 
-Цель: поставить автономную задачу Worker/Bridge. Leader формулирует цель, constraints, acceptance criteria и отправляет одно законченное задание. Безадресный первичный `postman_worker` создаёт Worker только при отсутствии привязок; новый независимый Worker создаётся с `createNew: true` при числе привязок менее трёх. После acceptance — `WORKER_RUNNING`.
+Цель: поставить автономную задачу Worker/Bridge. Leader формулирует цель, constraints, acceptance criteria и отправляет одно законченное задание. Безадресный первичный `postman_worker` создаёт Worker только при отсутствии привязок; новый независимый Worker создаётся с `createNew: true` при числе обычных Worker-привязок менее двух. После acceptance — `WORKER_RUNNING`.
 
 ### WORKER_RUNNING
 
@@ -503,11 +523,11 @@ Mapping закрывается адресным `postman_worker_stop` в люб�
 
 ### Visibility, compact и fresh context
 
-`postman_worker_list()` — только чтение привязок, quotas Luna used/3 и Sol used/1, residency, durable closed и turn/report evidence. Idle/settled не означает успех задачи. List не возобновляет детей и не очищает binding. `postman_bridge_list()` — только чтение всех Bridge operations exact Leader, correlation, publication/sync/grant diagnostics и причин occupancy; unknown остаётся unknown. Не используй list для polling.
+`postman_worker_list()` — только чтение привязок, quotas Secretary used/1, Worker used/2 и Sol used/1, residency, durable closed и turn/report evidence. Idle/settled не означает успех задачи. List не возобновляет детей и не очищает binding. `postman_bridge_list()` — только чтение всех Bridge operations exact Leader, correlation, publication/sync/grant diagnostics и причин occupancy; unknown остаётся unknown. Не используй list для polling.
 
 `postman_worker_compact({workerSessionId})` допускается только для exact resident idle Worker без waking queue и pending/unknown delivery. Это штатная compaction **той же Session**, не чистый контекст, не новый ID и не освобождение quota. Persisted/cold Worker ради compact не возобновляется.
 
-Для fresh context сначала безопасно retired старый exact Worker через `postman_worker_stop({workerSessionId, mode:"close"|"cancel"})`, дождись подтверждённого удаления binding; затем `postman_worker({task, createNew:true})` либо `postman_sol_worker({task, createNew:true})`. Новый ID не наследует историю старого; старый durable closed ID больше не resumable, audit history сохраняется. В уже явно выбранном пользователем Sol-маршруте новое задание, fresh context, retirement/compact/restart не требуют повторного подтверждения через `ask_user_question`; сами по себе эти операции не разрешают Leader автоматически выбрать Sol.
+Связанное продолжение → existing Session → compact при необходимости; compact не очистка. Новая несвязанная задача → Leader ОБЯЗАН выбрать compact или `postman_worker_fresh({workerSessionId, task})` до назначения. Fresh требует exact owned settled/idle Worker, закрывает старый binding, создаёт новый ID без visible history, сохраняет audit и Secretary ledger; Git reset не делает. Для Sol перед несвязанной серьёзной задачей default fresh, compact только при полезной continuity. Уже выбранный пользователем Sol route сохраняется: повторное user confirmation не требуется; fresh не разрешает автоматический выбор Sol.
 
 ## 19. Postman Bridge
 

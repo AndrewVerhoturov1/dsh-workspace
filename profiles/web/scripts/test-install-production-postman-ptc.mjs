@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, copyFileSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { existsSync, copyFileSync, cpSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -32,6 +32,10 @@ try {
   copyFileSync(resolve(repositoryRoot, 'profiles/web/scripts/install-production.mjs'),
     resolve(stagingRoot, 'profiles/web/scripts/install-production.mjs'))
 
+  // Include the current role implementation and canonical sources before commit.
+  cpSync(resolve(repositoryRoot,'plugins/dsh-postman-harness/lib'),resolve(stagingRoot,'plugins/dsh-postman-harness/lib'),{recursive:true})
+  for(const role of ['postman-worker','postman-secretary','postman-sol-worker'])
+    cpSync(resolve(repositoryRoot,'.agents/skills',role),resolve(stagingRoot,'.agents/skills',role),{recursive:true})
   const pluginRoot = resolve(stagingRoot, 'plugins/dsh-postman-harness')
   const profileRoot = resolve(stagingRoot, 'profiles/web')
   assert.equal(existsSync(resolve(pluginRoot, 'node_modules')), false)
@@ -45,6 +49,9 @@ try {
   const bridge = await import(pathToFileURL(bridgePath).href)
   assert.equal(bridge.name, 'dsh-postman-harness-bridge')
   assert.equal(typeof bridge.apply, 'function')
+  const worker=await import(pathToFileURL(resolve(pluginRoot,'lib/postman-worker.js')).href)
+  for(const role of ['luna','secretary','sol'])assert.ok(worker.postmanRoleInstruction(role).includes('TASK_CONTRACT'))
+  assert.deepEqual(worker.POSTMAN_WORKER_AGENT_OPTIONS,{provider:'codex',model:'gpt-6-luna',reasoningEffort:'low'})
   const adapter = await import(pathToFileURL(resolve(pluginRoot, 'lib/ptc-adapter.js')).href)
   assert.equal(adapter.PTC_TOOL_NAME, 'ptc_execute')
 

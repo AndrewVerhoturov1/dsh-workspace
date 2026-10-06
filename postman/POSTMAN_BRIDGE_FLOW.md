@@ -180,7 +180,7 @@ Preset `postman-leader` / `Postman Leader` хранится в репозито�
 не загружает отдельный preset-плагин: существующий `postman-bridge` подключается на уровне
 host-композиции в bundle `dsh-postman-harness`.
 
-Top-level Agent этого preset получает положительный runtime allowlist ровно из 24
+Top-level Agent этого preset получает положительный runtime allowlist ровно из 27
 зарегистрированных DSH 0.1.1-rc.2 tools:
 
 ```text
@@ -208,19 +208,16 @@ postman_worker_stop
 postman_yield
 postman_worker_list
 postman_worker_compact
+postman_worker_fresh
+postman_secretary
+postman_secretary_ledger
 ```
 
 `glob` и `web_search` не входят в список Leader: они запрещены только Leader и остаются доступны Worker из общего coding preset. Positive allowlist задан поверх общего
 preset: фактический каталог Leader сокращается до этих имён независимо от остальных регистраций.
 
 `write`, `edit`, shell, generic `subagent`, workflow, `web_search` и direct Postman tools скрыты runtime-ом у Leader. Зарегистрированный `implementation_artifact_apply` не входит в Leader allowlist: его execute path допускает только точного активного Worker после отдельной авторизации REQ. Worker остаётся с широким общим coding preset без положительного Worker allowlist; его runtime deny включает все зарегистрированные `postman_*` имена и не затрагивает `report`. Bridge сохраняет отдельный неизменный allowlist из пяти инструментов: `skill`, `postman_send_current_turn`, `postman_current_turn_status`, `postman_ask_validate_reply`, `notify_parent`.
-Leader-only остаются все тринадцать Host controls (`postman_task_prepare`, `postman_task_restore`, `postman_input_files`,
-`postman_bridge`, `postman_bridge_status`, `postman_bridge_list`, `postman_worker`, `postman_sol_worker`, `postman_worker_interrupt`,
-`postman_worker_stop`, `postman_yield`, `postman_worker_list`, `postman_worker_compact`): top-level
-`postman-leader` получает их в allowlist, а любой другой root/subagent Agent получает точечный deny
-всех тринадцати имён.
-Tool body повторно проверяет caller и при обходе visibility boundary возвращает
-`POSTMAN_BRIDGE_CALLER_REJECTED` до parsing/spawn.
+Host controls task/Bridge/Sol/Secretary принадлежат только верхнеуровневому Leader. Exact Sol получает только parent-scoped postman_worker/interrupt/stop/list/compact/fresh; exact Secretary — private postman_secretary_ledger. Обычный Worker не получает Postman controls, generic delegation или PTC; Secretary/Sol также не обходят topology через subagent/fork/workflow/ralph. Каждый tool body повторно проверяет exact Agent и ownership, не доверяя имени preset или saved ID.
 
 Один live Agent всегда имеет ровно один Bridge restriction. Поскольку Harness разрешает сменить
 preset у пустой сессии до первого turn, plugin слушает `agent-preset/selected`, заново определяет
@@ -238,11 +235,21 @@ Harness model routing намеренно находится вне Agent presets
 
 ### Sol Worker V1
 
-`postman_sol_worker({task, label?})` создаёт или продолжает единственного Sol Worker; для нового задания тому же ребёнку передай `workerSessionId` (и при необходимости trusted `artifactRequestId`). `createNew: true` при занятом Sol-слоте возвращает `POSTMAN_SOL_WORKER_LIMIT_REACHED`. Фиксированная модель — `codex / gpt-6.1-sol`, reasoning `xhigh`. Лимиты независимы: максимум 3 Luna + 1 Sol на Leader; pending/uncertain binding тоже занимает свой слот. Старые записи без `workerType` считаются Luna.
+`postman_sol_worker({task, label?})` создаёт или продолжает единственного Sol Worker; для нового задания тому же ребёнку передай `workerSessionId` (и при необходимости trusted `artifactRequestId`). `createNew: true` при занятом Sol-слоте возвращает `POSTMAN_SOL_WORKER_LIMIT_REACHED`. Фиксированная модель — `codex / gpt-6.1-sol`, reasoning `xhigh`. Лимиты независимы: Secretary ×1 + Worker ×2 + Sol ×1 на Leader; у Sol — собственные Worker ×2; pending/uncertain binding тоже занимает свой слот. Старые записи без `workerType` считаются Luna.
 
 Sol предназначен для сложной работы, но V1 разрешает его **только по прямой просьбе пользователя использовать Sol Worker**. Нет автоматической escalation Luna → Sol, выбора по сложности/размеру или после неудачи Luna. Прямая просьба пользователя использовать Sol Worker уже является достаточным разрешением для немедленного вызова `postman_sol_worker`. Не задавай отдельный `ask_user_question` перед созданием или продолжением Sol Worker. Follow-up и новые задания по `workerSessionId` не требуют дополнительного подтверждения в рамках уже выбранного пользователем Sol-маршрута, включая `localDevelopment`. Новый approval-механизм не добавляется: инструмент по-прежнему не обращается к `ApprovalService` и не хранит подтверждения. Permission presets, `approval: ask/never` и глобальная permission-система Harness не меняются. Обычные `postman_worker` и `postman_worker_interrupt` не передают новые задания Sol (`POSTMAN_SOL_WORKER_TOOL_REQUIRED`).
 
-У top-level production и experimental PTC Leader инструмент доступен напрямую; внутрь PTC profile не включён. После приёма без независимой работы вызывается `postman_yield()`, не polling. Sol наследует тот же task worktree, continuable durable Session, report, cold resume, coding tools, transport restrictions и Worker PTC у experimental Leader. Общие `postman_worker_list` (тип/модель) и `postman_worker_stop` работают для обоих типов без approval; stop не доказывает успеха и не удаляет durable Session.
+У top-level production и experimental PTC Leader инструмент доступен напрямую; внутрь PTC profile не включён. После приёма без независимой работы вызывается `postman_yield()`, не polling. Sol наследует тот же task worktree, continuable durable Session, report, cold resume, coding tools и transport restrictions, но без PTC; ему доступны только controls собственных Worker. Общие `postman_worker_list` (тип/модель) и `postman_worker_stop` работают для обоих типов без approval; stop не доказывает успеха и не удаляет durable Session.
+
+### Команда этапа 1: Secretary и обычный Worker
+
+Worker под Leader и под Sol — одна сущность codex/gpt-6-luna/low с одним каноническим postman-worker skill и прямыми coding tools. Secretary — singleton того же FAST model/effort, отдельный postman-secretary skill, факты/документация/private ledger, без browser/PTC/delegation/artifact apply. Sol — postman-sol-worker skill и обязательная передача discovery/Git facts/routine checks своим Worker; два независимых задания передаются параллельно, инженерное решение остаётся Sol. Host внедряет полный canonical role skill при каждом model request; short persona не дублирует инструкции.
+
+Host FAST budget: soft 12 / hard 15 model requests на assignment, настройка fastBudget в bridge config. Hard request допускает только содержательное NEEDS_PARENT_GUIDANCE: notify/report; следующий обычный request блокируется. Нет ложного task success/PASS или повторов. Новый конкретный parent task сбрасывает бюджет этого assignment; compact и cold resume не сбрасывают. NEEDS_LEADER_GUIDANCE: сохраняется как совместимый prefix. Parent выбирает завершение по evidence, одно ограниченное уточнение, blocker либо разрешённую смену маршрута, сохраняя TASK_CONTRACT и проверенные inputs.
+
+postman_secretary_ledger({}) — private durable ledger exact Leader/task; только Secretary заменяет content с exact revision. Goal, decisions, assignments, evidence/PASS inputs, blockers, questions и next path сохраняются без tracked file writes. Документация пишется только отдельным явным заданием. Ledger переживает fresh/restart; Leader имеет read-only доступ.
+
+Sol и Leader имеют независимые parent quotas и reports. Leader не может list/control Sol Worker descendants напрямую; Worker/Secretary никого не создают. Shared worktree guards учитывают вложенных Worker. Sol сначала завершает/закрывает собственные Worker slots перед fresh/close; stop не означает успех задачи. Уже выбранный пользователем Sol route сохраняется и не требует нового approval для fresh.
 
 ## 9. Передача implementation package локальному Worker
 
@@ -274,7 +281,7 @@ Worker — обычный coding-agent с shell и теоретически мо
 
 `postman_bridge_list()` — read-only все операции exact Leader с limit=3, used, `countsAgainstLimit` и причиной, lifecycle/correlation/publication/sync/grant. Неизвестные legacy поля — `unknown`. Чтение не запускает child, Direct, recovery, retrySync и не регистрирует grants.
 
-`postman_worker_list()` отдельно показывает binding/delivery, quotas Luna used/3 и Sol used/1, runtime residency, durable closed/unavailable/diagnostic и turn/report evidence; состояние turn не успех задачи. Compact exact resident idle Worker — `postman_worker_compact({workerSessionId})`, та же Session/ID/quota. Чистый context — успешный final retirement старого exact ID, затем `createNew:true` с новым ID; история audit остаётся. В уже явно выбранном пользователем Sol-маршруте новый Sol task не требует повторного user confirmation; fresh context сам по себе не разрешает автоматический выбор Sol.
+`postman_worker_list()` отдельно показывает binding/delivery, quotas Secretary used/1, Worker used/2 и Sol used/1 (Sol видит только своих Worker used/2), runtime residency, durable closed/unavailable/diagnostic и turn/report evidence; состояние turn не успех задачи. Compact exact resident idle Worker — `postman_worker_compact({workerSessionId})`, та же Session/ID/quota. Чистый context — `postman_worker_fresh({workerSessionId,task})`: проверенное закрытие exact owned Session, резерв квоты и новый ID того же типа без visible history; audit и private Secretary ledger остаются. В уже явно выбранном пользователем Sol-маршруте новый Sol task не требует повторного user confirmation; fresh context сам по себе не разрешает автоматический выбор Sol.
 
 Artifact grant записывается в exact Leader-owned durable `artifactGrants[requestId]` **до** Bridge operation cleanup. Он переживает restart без Bridge row; resolve повторно проверяет ZIP/SHA, не является one-shot и не даёт foreign Leader authority. Cancel отзывает только Worker artifactRequests; новый exact Worker получает прежний REQ лишь через explicit обычную assignment.
 
@@ -292,10 +299,8 @@ Bridge никогда не делает blind resend.
 ## 11. Ordinary subagents
 
 Обычные `subagent`/`subagent_fork` capabilities Harness не изменяются. Для не-Leader Agents
-`postmanBridgeRestrictionForAgent` добавляет точечный deny ровно девяти Host controls:
-`postman_task_prepare`, `postman_task_restore`, `postman_bridge`, `postman_bridge_status`,
-`postman_worker`, `postman_worker_interrupt`, `postman_worker_stop`, `postman_yield`, `postman_worker_list`; остальные global tools этим deny не затрагиваются.
+`postmanBridgeRestrictionForAgent` запрещает ordinary Agents все зарегистрированные Postman Host controls и PTC. Только точные роли Postman имеют описанные выше исключения; ordinary Agents сохраняют остальные capabilities.
 `glob` не запрещён Worker: он остаётся доступен ему из общего coding preset, но скрыт у Leader.
 `postman_bridge` остаётся отдельным специализированным tool с фиксированной Luna.
 
-**Совмещённый lifecycle Worker (#242 + #246):** до трёх `workers[id]` независимо делят одно Host task worktree. Адресный обычный close возможен после успешного native report, доставки в контекст точного Leader и завершения всей актуальной работы; Agent может быть уже освобождён, тогда Host только читает durable Session. Неполная история — отказ без остановки; точный `mode: "cancel"` требует нового однократного Host approval. Restore не вызывает drain и не очищает грязное дерево при сохранённых Worker-привязках. `postman_yield` уступает лишь ход Leader через `concludeTurn`, не закрывает Worker и не создаёт пустой final.
+**Совмещённый lifecycle Worker (#242 + #246):** обычные Worker ×2, Secretary ×1 и Sol ×1 Leader, плюс Worker ×2 Sol, независимо делят одно Host task worktree. Адресный обычный close возможен после успешного native report, доставки в контекст точного непосредственного parent и завершения всей актуальной работы; Agent может быть уже освобождён, тогда Host только читает durable Session. Неполная история — отказ без остановки; точный `mode: "cancel"` требует нового однократного Host approval. Restore не вызывает drain и не очищает грязное дерево при сохранённых Worker-привязках. `postman_yield` уступает лишь ход Leader через `concludeTurn`, не закрывает Worker и не создаёт пустой final.

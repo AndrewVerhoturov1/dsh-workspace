@@ -450,34 +450,17 @@ test('one PTC outer call batches supervisor operations with native parent and ro
   await f.adapter.dispose()
 })
 
-test('canonical discipline follows exact PTC assignment and ordinary visibility only', async () => {
-  const contexts = new Map()
-  let assigned
-  const f = fixture(process.cwd(), { resolveAssignment: (agent, profile) => isTopLevelPostmanPtcLeader(agent)
-    ? { profile, role: 'leader' } : agent === assigned ? { profile: WORKER_MUTATION_PROFILE, role: 'worker' } : null,
-    workerContextOf: agent => contexts.get(agent) })
+test('canonical discipline follows exact Leader PTC assignment; Worker assignment rejected', async () => {
+  const f=fixture(process.cwd(),{resolveAssignment:(a,p)=>isTopLevelPostmanPtcLeader(a)?{profile:p,role:'leader'}:{profile:WORKER_MUTATION_PROFILE,role:'worker'}})
   try {
-    const pilot = f.agent('discipline')
-    f.adapter.refresh(pilot.a)
-    const worker = f.agent('confirmed', 'standard')
-    assigned = worker.a; contexts.set(worker.a, { worktree: process.cwd() })
-    f.ctx.tools.register(defineTool({ name:'glob', description:'glob', parameters:{}, output, execute(){return {name:'glob'}} }))
-    f.adapter.refresh(worker.a)
-    const plain = f.agent('plain', 'standard'); f.adapter.refresh(plain.a)
-    const production = f.agent('production', 'postman-leader'); f.adapter.refresh(production.a)
-    for (const { a, sections } of [pilot, worker]) {
-      assert.ok(sections[0].text({ scope: a }).includes(POSTMAN_PTC_DISCIPLINE))
-      assert.equal(sections[0].text({ scope: plain.a }), '')
-      const hide = a.ctx.tools.restrict({ deny: ['ptc_execute'] })
-      assert.equal(sections[0].text({ scope: a }), '')
-      hide()
-    }
-    assert.equal(plain.sections.length, 0)
-    assert.equal(production.sections.length, 0)
-    assigned = null
-    assert.equal(worker.sections[0].text({ scope: worker.a }), '')
-    assert.equal((await f.execute(worker.a, 'return 1')).value.status, 'PTC_CALLER_REJECTED')
-  } finally { await f.adapter.dispose() }
+    const pilot=f.agent('discipline');f.adapter.refresh(pilot.a)
+    const worker=f.agent('worker','standard')
+    f.adapter.refresh(pilot.a);assert.equal(f.adapter.refresh(worker.a),false)
+    assert.ok(pilot.sections[0].text({scope:pilot.a}).includes(POSTMAN_PTC_DISCIPLINE))
+    const hide=pilot.a.ctx.tools.restrict({deny:['ptc_execute']});assert.equal(pilot.sections[0].text({scope:pilot.a}),'');hide()
+    assert.equal(worker.sections.length,0)
+    assert.equal((await f.execute(worker.a,'return 1')).value.status,'PTC_CALLER_REJECTED')
+  } finally {await f.adapter.dispose()}
 })
 
 test('boundary required and yield_on_success is exact boolean, external_event, Leader only', async () => {
@@ -501,7 +484,7 @@ test('boundary required and yield_on_success is exact boolean, external_event, L
       ? { role: 'worker', profile: WORKER_MUTATION_PROFILE } : null, workerContextOf: () => ({ worktree: process.cwd() }) })
     workerAdapter.refresh(w.a)
     assert.equal((await workerAdapter.tool.execute({ program: 'return 1', description: 'worker', boundary: 'external_event', yield_on_success: true },
-      { agent: w.a, signal: new AbortController().signal })).status, 'PTC_YIELD_INVALID')
+      { agent: w.a, signal: new AbortController().signal })).status, 'PTC_CALLER_REJECTED')
     await workerAdapter.dispose()
   } finally { await f.adapter.dispose() }
 })
@@ -716,8 +699,8 @@ test('nested conclude marker never conceals a later PTC error or model decision'
   } finally {await f.adapter.dispose()}
 })
 
-test('Leader and Worker inherit standard output limits; needed larger JSON and separate logs succeed', async () => {
-  for (const role of ['leader','worker']) {
+test('Leader inherits standard output limits; needed larger JSON and separate logs succeed', async () => {
+  for (const role of ['leader']) {
     const f=fixture(process.cwd(), {
       resolveAssignment: (_agent,leaderProfile)=>({profile:role==='leader'?leaderProfile:WORKER_MUTATION_PROFILE,role}),
       workerContextOf: ()=>({worktree:process.cwd()}),
