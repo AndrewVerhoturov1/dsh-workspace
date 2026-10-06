@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { capabilityRuntime } from './fixtures/postman-capability-runtime.js'
+import { capabilityRuntime, native } from './fixtures/postman-capability-runtime.js'
 import { POSTMAN_PTC_SUCCESS_STATUSES } from './postman-bridge-core.js'
 
 const ptc = (program,boundary='semantic_decision') => ({program,boundary,description:'Execute complete deterministic supervisor step before genuine decision'})
@@ -102,3 +102,71 @@ test('actual team snapshot is private bounded read-only and hides control tools 
  const forbidden=nested(await call(f,'postman_worker_interrupt',{workerSessionId:a.workerSessionId,task:'no ownership transfer'}));assert.notEqual(forbidden.status,'POSTMAN_WORKER_INTERRUPT_TASK_ACCEPTED')
  hold.resolve();await f.childDone(sol.workerSessionId)
 })
+
+test('settled non-resident Worker compact keeps Session/binding/budget/audit and continues the same Worker without a compact turn', {timeout:30000}, async t => {
+ const f = await fixture(t, {plan:a=>a.id==='leader'?null:report})
+ const { BasicCompactionEngine } = await native('dsh-compaction-basic')
+ let summaries = 0
+ const Summarizer=class extends BasicCompactionEngine {
+  async summarize(){summaries++;return {summary:[{type:'text',text:'exact settled Worker regression facts'}],provider:'codex',model:'gpt-6-luna'}}
+ }
+ f.ctx.on('agent/created', async ({agent}) => {
+  if(agent.session.header.origin==='subagent') await agent.ctx.plugin(Summarizer,{auto:false}).await()
+ })
+ await f.prepare();await f.turn(f.leader)
+ const first=nested(await call(f,'postman_worker',{task:'bounded related assignment'})),id=first.workerSessionId
+ assert.equal(first.status,'POSTMAN_WORKER_TASK_ACCEPTED',JSON.stringify(first))
+ await f.childDone(id);await f.turn(f.leader,'Consume final report before related continuation')
+ assert.equal(f.ctx.agents.get(id),undefined)
+ const before=await f.ctx.sessionPersistence.inspect(id),binding=structuredClone(f.registry.get('leader').workers[id]),requests=f.requests.length
+ const compact=nested(await call(f,'postman_worker_compact',{workerSessionId:id}))
+ assert.deepEqual(compact,{status:'POSTMAN_WORKER_COMPACTED',workerSessionId:id,compacted:true,sameSession:true})
+ assert.equal(summaries,1);assert.equal(f.requests.length,requests,'no Worker model turn for compact')
+ assert.equal(f.ctx.agents.get(id),undefined,'maintenance handle released')
+ assert.equal(f.ctx.subagents.continuations.activations.has(id),false)
+ assert.deepEqual(f.registry.get('leader').workers[id],binding,'binding, admissions, reports and budget unchanged')
+ const after=await f.ctx.sessionPersistence.inspect(id)
+ assert.equal(after.meta.id,before.meta.id);assert.equal(after.meta.parentSession,before.meta.parentSession)
+ assert.deepEqual(after.events.slice(0,before.events.length),before.events,'raw audit history retained')
+ assert.equal(after.events.filter(e=>e.type==='turn/start').length,before.events.filter(e=>e.type==='turn/start').length)
+ assert.ok(after.events.some(e=>e.type==='compaction/end'))
+ const next=nested(await call(f,'postman_worker',{workerSessionId:id,task:'continue the same related assignment'}))
+ assert.equal(next.status,'POSTMAN_WORKER_TASK_ACCEPTED',JSON.stringify(next));assert.equal(next.workerSessionId,id)
+ await f.childDone(id)
+ assert.equal(f.ctx.agents.get(id),undefined)
+ assert.ok(f.requests.filter(r=>r.agent.id===id).length>before.events.filter(e=>e.type==='turn/start').length)
+ const continued=f.registry.get('leader').workers[id]
+ assert.equal(continued.lifecycle.admissions.length,binding.lifecycle.admissions.length+1)
+ assert.deepEqual(continued.lifecycle.reports.slice(0,binding.lifecycle.reports.length),binding.lifecycle.reports)
+})
+
+test('compact rejects active, pending, unknown-delivery and wrong-lineage Workers without maintenance', {timeout:30000}, async t => {
+ const gate=Promise.withResolvers(),entered=Promise.withResolvers();t.after(()=>gate.resolve())
+ const f=await fixture(t,{plan:async a=>{if(a.id==='leader')return null;entered.resolve();await gate.promise;return report}})
+ await f.prepare();await f.turn(f.leader)
+ const first=nested(await call(f,'postman_worker',{task:'hold active Worker'})),id=first.workerSessionId
+ await entered.promise
+ const reject=async()=>{const requests=f.requests.length,before=structuredClone(f.registry.get('leader').workers[id]);
+  const result=nested(await call(f,'postman_worker_compact',{workerSessionId:id}));assert.equal(result.status,'POSTMAN_WORKER_COMPACT_BUSY',JSON.stringify(result));
+  assert.equal(f.requests.length,requests);assert.deepEqual(f.registry.get('leader').workers[id],before)}
+ await reject();gate.resolve();await f.childDone(id);await f.turn(f.leader,'Consume final active Worker report')
+ const inspect=f.ctx.sessionPersistence.inspect.bind(f.ctx.sessionPersistence)
+ for(const delivery of ['pending','unknown']) {
+  await f.registry.change('leader',r=>({...r,workers:{...r.workers,[id]:{...r.workers[id],delivery}}}))
+  await reject()
+ }
+ await f.registry.change('leader',r=>({...r,workers:{...r.workers,[id]:{...r.workers[id],delivery:'none'}}}))
+ for(const mismatch of ['pending','parent','depth','open-turn']) {
+  f.ctx.sessionPersistence.inspect=async(target,...args)=>{
+   const saved=await inspect(target,...args);if(target!==id)return saved
+   if(mismatch==='parent')return {...saved,meta:{...saved.meta,parentSession:'foreign-parent'}}
+   if(mismatch==='depth')return {...saved,meta:{...saved.meta,delegationDepth:99}}
+   const extra=mismatch==='pending'?{type:'agent/inbox/spliced',data:{target:'next-turn',start:0,inserted:[{id:'parked',role:'user',source:{kind:'user'},content:[{type:'text',text:'not settled'}]}]}}:{type:'turn/start',data:{turn:999}}
+   return {...saved,events:[...saved.events,{...extra,seq:saved.events.length,time:Date.now()}]}
+  }
+  await reject();assert.equal(f.ctx.agents.get(id),undefined)
+ }
+ f.ctx.sessionPersistence.inspect=inspect
+ const saved=await inspect(id);assert.equal(saved.events.some(e=>e.type==='compaction/start'),false)
+})
+

@@ -942,7 +942,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
   })
   const compactTool = defineTool({
     name: POSTMAN_WORKER_COMPACT_TOOL_NAME,
-    description: 'Compact the exact resident idle Worker using the native compaction engine; keep its Session and slot.',
+    description: 'Compact the exact idle or settled non-resident Worker using native compaction; keep its Session, binding and budget without a Worker turn.',
     parameters: { workerSessionId: { type: 'string', required: true } }, output: output(),
     async execute(args, exec) {
       const parent = exec?.agent, id = args?.workerSessionId
@@ -956,7 +956,24 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
         if (binding !== selected.binding || binding.state !== 'ready' || binding.delivery !== 'none' ||
             !matchesContext(parent, slot)) return { status: 'POSTMAN_WORKER_COMPACT_BUSY', workerSessionId: id }
         const child = liveWorker(id)
-        if (!child || child.session?.header?.parentSession !== parent.id ||
+        if (!child) {
+          try {
+            if (!durable || !await verifyIdentity(parent, id, exec.signal) ||
+                !workerEvidence(binding, await history(id, parent.id, exec.signal), parent).ready)
+              return { status: 'POSTMAN_WORKER_COMPACT_BUSY', workerSessionId: id }
+            if (typeof ctx.subagents.compactContinuableChild !== 'function')
+              return { status: 'POSTMAN_WORKER_LIFECYCLE_UNSUPPORTED', workerSessionId: id }
+            const compacted = await ctx.subagents.compactContinuableChild(parent, id, async agent => {
+              const current = bindings(parent, g)[id]
+              return authorized(parent) && current === binding && matchesContext(parent, slot) &&
+                workerEvidence(current, await history(agent.id, parent.id, exec.signal), parent).ready
+            }, exec.signal)
+            if (!compacted) return { status: 'POSTMAN_WORKER_COMPACT_BUSY', workerSessionId: id }
+            return { status: 'POSTMAN_WORKER_COMPACTED', workerSessionId: id,
+              compacted: compacted.result !== null, sameSession: true }
+          } catch (error) { return { status: 'POSTMAN_WORKER_COMPACT_FAILED', workerSessionId: id, diagnostic: diagnostic(error) } }
+        }
+        if (child.session?.header?.parentSession !== parent.id ||
             child.session.header.origin !== 'subagent' || child.session.header.delegationDepth !== depthOf(parent.id))
           return { status: 'POSTMAN_WORKER_COMPACT_NOT_RESIDENT', workerSessionId: id }
         if (child.status !== 'idle' || child.inbox?.hasPending !== false ||

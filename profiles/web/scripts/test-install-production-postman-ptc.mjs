@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, copyFileSync, cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { existsSync, copyFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -40,7 +40,8 @@ try {
     cpSync(resolve(repositoryRoot,'.agents/skills',role),resolve(stagingRoot,'.agents/skills',role),{recursive:true})
   for(const preset of ['postman-leader','postman-leader-ptc'])
     cpSync(resolve(repositoryRoot,'.agent-presets',preset),resolve(stagingRoot,'.agent-presets',preset),{recursive:true})
-  copyFileSync(resolve(repositoryRoot,'system/patches/postman-native-child-cutoff.patch'),resolve(stagingRoot,'system/patches/postman-native-child-cutoff.patch'))
+  for(const name of ['postman-native-child-cutoff.patch','postman-native-cold-compact.patch'])
+    copyFileSync(resolve(repositoryRoot,'system/patches',name),resolve(stagingRoot,'system/patches',name))
   copyFileSync(resolve(repositoryRoot,'system/patches/apply-postman-native-child-cutoff.mjs'),resolve(stagingRoot,'system/patches/apply-postman-native-child-cutoff.mjs'))
   const pluginRoot = resolve(stagingRoot, 'plugins/dsh-postman-harness')
   // The real installer must patch an isolated, pinned SDK on disk, not APPDATA.
@@ -65,6 +66,23 @@ try {
   const targets = applyPostmanNativeChildCutoff([sdkAnchor, resolve(pluginRoot,'package.json')])
   assert.ok(targets.length >= 2)
   for (const target of targets) { assertInStaging(target.path); assert.equal(target.updated,false,'installer already applied patch') }
+  // Exact previous Stage 2 native postimage upgrades on disk, then is idempotent.
+  const subagentTarget = targets.find(target => target.path.endsWith(join('dsh-subagent','lib','index.js')))
+  const upgradedBytes = readFileSync(subagentTarget.path)
+  const upgradeStage = mkdtempSync(join(stagingRoot,'native-upgrade-'))
+  const upgradeRelative = 'node_modules/@deepseek-ai/dsh-subagent/lib/index.js'
+  mkdirSync(resolve(upgradeStage,upgradeRelative,'..'),{recursive:true})
+  copyFileSync(subagentTarget.path,resolve(upgradeStage,upgradeRelative))
+  const upgradePatch = resolve(upgradeStage,'upgrade.patch')
+  writeFileSync(upgradePatch,readFileSync(resolve(stagingRoot,'system/patches/postman-native-cold-compact.patch'),'utf8').replaceAll('\r',''))
+  run('git',['-c','core.longpaths=true','apply','--reverse',upgradePatch],upgradeStage,{...process.env,GIT_CEILING_DIRECTORIES:stagingRoot})
+  const oldBytes = readFileSync(resolve(upgradeStage,upgradeRelative))
+  assert.equal(execFileSync('git',['hash-object','--stdin'],{input:oldBytes.toString('utf8').replaceAll('\r',''),encoding:'utf8'}).trim(),'753ba9babe4aa1e548cf7b1dd6eee2ccdc666f40')
+  // Atomic replacement, never overwrite a pnpm store hardlink.
+  rmSync(subagentTarget.path);copyFileSync(resolve(upgradeStage,upgradeRelative),subagentTarget.path)
+  assert.ok(applyPostmanNativeChildCutoff([sdkAnchor,resolve(pluginRoot,'package.json')]).some(target => target.updated))
+  assert.deepEqual(readFileSync(subagentTarget.path),upgradedBytes)
+  assert.ok(applyPostmanNativeChildCutoff([sdkAnchor,resolve(pluginRoot,'package.json')]).every(target => !target.updated))
   const { SubagentRuntime } = await import(pathToFileURL(sdkRequire.resolve('@deepseek-ai/dsh-subagent')).href)
   for (const method of ['closeContinuableChild','inspectClosedContinuableChild','compactContinuableChild'])
     assert.equal(typeof SubagentRuntime.prototype[method],'function',method)
