@@ -3,7 +3,6 @@ import test from 'node:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import './fixtures/postman-stage2-native-overlay.js'
 const { capabilityRuntime } = await import('./fixtures/postman-capability-runtime.js')
 
 const report = { name: 'report', args: { output: 'Verified bounded native cascade evidence' } }

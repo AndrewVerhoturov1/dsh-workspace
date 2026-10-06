@@ -66,7 +66,7 @@ NEEDS_PARENT_GUIDANCE: содержит задачу, что сделано/пр
 
 ### Supervisor control plane (Stage 2)
 
-Native close/closed-proof prerequisite остаётся existing `system/patches/postman-native-child-cutoff.patch`; Stage 2 изменяет лишь exact ожидаемую depth на parent+1. Unpatched SDK fail-closed, не fake close. Clean-install acceptance применяет checked-in patch in-memory через test-only loader, не меняет installed SDK и не доказывает live deployment.
+Штатный `node profiles/web/scripts/install-production.mjs` применяет `system/patches/postman-native-child-cutoff.patch` на диске к SDK действующего CLI (через profile fallback) и native peer-модулям Postman. Отдельный ручной deployment prerequisite устранён. Установщик использует обычный `git apply --check` до записи; уже применённый patch распознаётся через `git apply --reverse --check`. Несовпадение patch останавливает установку. Файлы заменяются без изменения hardlinks pnpm store. Затем проверяется наличие native close/closed-proof/compact API. Для изолированной установки `DSH_INSTALL_SDK` задаёт exact SDK package.json. Clean-install acceptance использует этот же установщик и реальные исправленные файлы без in-memory loader; active Host не перезапускался, live deployment не заявляется.
 
 Production и compatibility Leader — PTC-first без изменения выбранной Sol модели/reasoning. Один program объединяет заранее известные supervisor операции до genuine decision boundary; nested ToolRuntime сохраняет обычные checks. Sol engineering profile revision 1 не получает supervisor tools; FAST/Bridge no PTC.
 

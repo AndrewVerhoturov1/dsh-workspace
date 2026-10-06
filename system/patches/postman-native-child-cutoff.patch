@@ -1,5 +1,5 @@
 diff --git a/node_modules/@deepseek-ai/dsh-subagent/lib/index.js b/node_modules/@deepseek-ai/dsh-subagent/lib/index.js
-index bd9741e..d7bcddd 100644
+index bd9741ed440979753359abc5c479550ee5827167..753ba9babe4aa1e548cf7b1dd6eee2ccdc666f40 100644
 --- a/node_modules/@deepseek-ai/dsh-subagent/lib/index.js
 +++ b/node_modules/@deepseek-ai/dsh-subagent/lib/index.js
 @@ -3,7 +3,7 @@ import { scopeTarget } from "@deepseek-ai/dsh-scope";
@@ -130,7 +130,7 @@ index bd9741e..d7bcddd 100644
  	* Enumerate the parent's direct session-backed subagents without loading or
  	* resuming an Agent and without any query service: the listing merges the live
 diff --git a/node_modules/@deepseek-ai/dsh-session/lib/index.js b/node_modules/@deepseek-ai/dsh-session/lib/index.js
-index 62fd0fe..90f569d 100644
+index 62fd0fe17593f5b2d52b8a792add164e1f16a4d1..90f569d846a4c92545864a46df575920d3ebafd0 100644
 --- a/node_modules/@deepseek-ai/dsh-session/lib/index.js
 +++ b/node_modules/@deepseek-ai/dsh-session/lib/index.js
 @@ -1082,6 +1082,7 @@ const KNOWN_SESSION_EVENT_TYPES = new Set([
