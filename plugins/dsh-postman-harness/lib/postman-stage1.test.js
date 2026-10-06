@@ -7,8 +7,21 @@ import {tmpdir} from 'node:os'
 import {execFileSync} from 'node:child_process'
 import {stage1Runtime} from './fixtures/postman-stage1-runtime.js'
 import {postmanRoleInstruction,POSTMAN_WORKER_AGENT_OPTIONS,FAST_WORKER_BUDGET} from './postman-worker.js'
+import {Config} from './postman-bridge.js'
 const fixture=async(t,opts)=>{const dir=await mkdtemp(join(tmpdir(),'postman-stage1-'));const f=await stage1Runtime(dir,opts);t.after(async()=>{await f.dispose();await rm(dir,{recursive:true,force:true,maxRetries:5,retryDelay:100})});return {...f,dir}}
 const accepted=r=>{assert.equal(r.status,'POSTMAN_WORKER_TASK_ACCEPTED',JSON.stringify(r));return r.workerSessionId}
+test('Bridge configuration fills FAST defaults before Worker startup',{timeout:15000},async t=>{
+  for(const input of [undefined,{}, {fastBudget:{}}, {fastBudget:{softLimit:12}}, {fastBudget:{hardLimit:15}}])
+    assert.deepEqual(Config.parse(input),{localDevelopment:false,fastBudget:FAST_WORKER_BUDGET})
+  const config=Config.parse({localDevelopment:true})
+  assert.deepEqual(config,{localDevelopment:true,fastBudget:FAST_WORKER_BUDGET})
+  assert.deepEqual(Config.parse({fastBudget:{softLimit:2,hardLimit:3}}).fastBudget,{softLimit:2,hardLimit:3})
+  const f=await fixture(t,{fastBudget:config.fastBudget})
+  const id=accepted(await f.run(f.worker.taskTool,{task:'Verify parsed startup budget; report bounded facts.'}))
+  await f.settled(id)
+  const budget=f.registry.get('leader').workers[id].budget
+  assert.equal(budget.softLimit,12);assert.equal(budget.hardLimit,15)
+})
 for(const type of ['luna','secretary','sol']) test(type+' actual model instructions at initial, continuation, replacement and cold activation',{timeout:15000},async t=>{
   const f=await fixture(t,{plan:(a,_r,n)=>{
     if(n===2){const e=a.session.events.find(e=>e.surfaceOp && e.type!=='tool/result');assert.ok(e);a.session.append('user/message',{id:'compact-summary',role:'user',source:{kind:'user',form:'direct'},content:[{type:'text',text:'Compacted facts'}]}, {surfaceOp:{op:'replace',start:e.seq,end:e.seq},sourceEventSeqs:[e.seq]})}
