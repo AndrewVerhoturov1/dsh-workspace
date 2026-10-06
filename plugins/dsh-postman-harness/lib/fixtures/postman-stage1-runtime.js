@@ -2,9 +2,9 @@ import { join } from 'node:path'
 import {randomUUID} from 'node:crypto'
 import { pathToFileURL } from 'node:url'
 import { createPostmanWorkerTools } from '../postman-worker.js'
-import { createPostmanBridgeBoundaryManager, POSTMAN_LEADER_TOOL_ALLOWLIST, isTopLevelPostmanPtcLeader } from '../postman-bridge-core.js'
+import { createPostmanBridgeBoundaryManager, POSTMAN_LEADER_TOOL_ALLOWLIST, isTopLevelPostmanPtcLeader, postmanPtcDirectCallGuard } from '../postman-bridge-core.js'
 import { createPostmanChildNotifyTool, installPostmanWorkerReportObserver } from '../postman-bridge.js'
-import { createPtcAdapter } from '../ptc-adapter.js'
+import { createPtcAdapter, SOL_WORKER_PROFILE } from '../ptc-adapter.js'
 import { openPostmanTaskRegistry } from '../postman-task-registry.js'
 const installed = process.env.DSH_ROOT ?? join(process.env.APPDATA, 'npm/node_modules/@deepseek-ai/dsh')
 const pkg = name => import(pathToFileURL(join(installed,'node_modules/@deepseek-ai',name,'lib/index.js')).href)
@@ -23,7 +23,7 @@ const {apply:nativeReport} = await pkg('dsh-tool-subagent-report')
 const {JsonStorageBackend}=await pkg('dsh-storage-json')
 const {DomainFacility}=await pkg('dsh-storage-domain')
 const output={schema:{type:'object',additionalProperties:true},render:(_a,v)=>[{type:'text',text:JSON.stringify(v)}]}
-export async function stage1Runtime(dir, {registry,fastBudget,resume=false,setupTools,toolMode='native',plan=()=>({name:'report',args:{output:'bounded task done; targeted check PASS inputs fixture'}})}={}) {
+export async function stage1Runtime(dir, {registry,grants,fastBudget,resume=false,setupTools,toolMode='native',plan=()=>({name:'report',args:{output:'bounded task done; targeted check PASS inputs fixture'}})}={}) {
   if(!registry){const backend=new JsonStorageBackend(join(dir,'tasks'));const domain=new DomainFacility({storage:{backend:{get:()=>backend}},emit(){}},{backend:'json',routes:{}});registry=await openPostmanTaskRegistry(domain)}
   const ctx=new Context(), requests=[], calls=[], agents=new Map(), specs=[], ends=new Map(), completions=new Map()
   new AgentRegistry(ctx);new SessionStore(ctx);new SessionProjectionRegistry(ctx)
@@ -38,15 +38,18 @@ export async function stage1Runtime(dir, {registry,fastBudget,resume=false,setup
   const contexts={get:id=>id==='leader'?context:null,record:registry.get,changeRecord:registry.change,child:()=>null}
   let boundaries,ptc
   const refresh=id=>{const agent=ctx.agents.get(id);if(agent){boundaries?.refreshSession(id);ptc?.refresh(agent);}}
-  const worker=createPostmanWorkerTools(ctx,undefined,contexts,{onBindingChange:refresh,fastBudget})
+  const worker=createPostmanWorkerTools(ctx,grants,contexts,{onBindingChange:refresh,fastBudget})
   for(const tool of [worker.taskTool,worker.solTaskTool,worker.secretaryTool,worker.listTool,worker.stopTool,worker.interruptTool,worker.compactTool,worker.freshTool,worker.ledgerTool])ctx.tools.register(tool)
   ctx.tools.register(createPostmanChildNotifyTool(ctx,contexts,worker));installPostmanWorkerReportObserver(ctx,worker)
   if(setupTools) await setupTools(ctx)
-  for(const name of [...POSTMAN_LEADER_TOOL_ALLOWLIST,'glob','write','edit','pwsh','bash','web_search','subagent','subagent_fork','workflow','ralph','send_message','interrupt_agent','implementation_artifact_apply','mcp__playwright__browser_snapshot'])
+  for(const name of [...POSTMAN_LEADER_TOOL_ALLOWLIST,'glob','write','edit','pwsh','bash','job_output','job_kill','job_list','web_search','subagent','subagent_fork','workflow','ralph','send_message','interrupt_agent','implementation_artifact_apply','mcp__playwright__browser_snapshot'])
     if(!ctx.tools.get(name))ctx.tools.register(defineTool({name,description:name,parameters:{},output,execute(_args,exec){calls.push({name,agent:exec.agent.id});return {fixture:true}}}))
-  ptc=createPtcAdapter(ctx,{authorize:isTopLevelPostmanPtcLeader})
+  const ownsPtcSol=agent=>worker.roleOf(agent)==='sol'&&worker.ownsLiveWorker(agent)&&Boolean(worker.ptcContextOf(agent))
+  ptc=createPtcAdapter(ctx,{authorize:isTopLevelPostmanPtcLeader,workerContextOf:worker.ptcContextOf,
+    resolveAssignment:(agent,profile)=>isTopLevelPostmanPtcLeader(agent)?{role:'leader',profile}:ownsPtcSol(agent)?{role:'sol',profile:SOL_WORKER_PROFILE}:null})
+  ctx.tools.guard(exec=>postmanPtcDirectCallGuard(exec,id=>ctx.agents.get(id),ownsPtcSol))
   ctx.tools.register(ptc.tool)
-  boundaries=createPostmanBridgeBoundaryManager(id=>ctx.agents.get(id),()=>false,worker.roleOf)
+  boundaries=createPostmanBridgeBoundaryManager(id=>ctx.agents.get(id),ownsPtcSol,worker.roleOf)
   ctx.on('agent/created',async ({agent})=>{agents.set(agent.id,agent);await worker.confirmActivation(agent);boundaries.install(agent);ptc.refresh(agent)})
   ctx.on('agent/disposed',({agent})=>{worker.releaseActivation(agent);boundaries.disposeAgent(agent);ptc.remove(agent);completions.get(agent.id)?.resolve(agent)})
   ctx.on('session/event',(session,event)=>{if(event.type==='turn/end'){ends.get(session.id)?.resolve(event)}})

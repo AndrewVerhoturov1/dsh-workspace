@@ -53,7 +53,7 @@ export { WORKER_CONTROL_TOOLS, DELEGATION_TOOLS, SECRETARY_TOOLS } from './postm
 export function postmanWorkerDeniedTools(tools, type = 'luna') {
   return [...new Set([...tools.schemas().map(tool => tool.name).filter(name => name.startsWith('postman_') &&
     !(type === 'sol' && WORKER_CONTROL_TOOLS.includes(name)) && !(type === 'secretary' && name === 'postman_secretary_ledger')),
-    ...tools.schemas().map(tool => tool.name).filter(name => DELEGATION_TOOLS.includes(name) || name === 'ptc_execute' || (type === 'secretary' && name === 'implementation_artifact_apply'))])]
+    ...tools.schemas().map(tool => tool.name).filter(name => DELEGATION_TOOLS.includes(name) || (type !== 'sol' && name === 'ptc_execute') || (type === 'secretary' && name === 'implementation_artifact_apply'))])]
 }
 
 export function buildPostmanWorkerStartRequest(parent, task, signal, deniedTools, label = 'Postman Worker', workerType = 'luna') {
@@ -320,9 +320,9 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     return values.length === 1 ? { binding: values[0] } : { status: 'POSTMAN_WORKER_INTERRUPT_NO_ACTIVE_WORKER' }
   }
   function taskText(context, text) {
-    return context ? 'Use the existing Leader task branch ' + context.branch + ' and worktree ' +
+    return context ? 'Use the existing task branch ' + context.branch + ' and worktree ' +
       context.worktree + ' for repository changes; do not create another branch or worktree. Follow REPO_POLICY.md. ' +
-      'Coordinate shared files and Git operations with your Leader; avoid overlapping changes. Leader task: ' + text : text
+      'Coordinate shared files and Git operations with your immediate parent; avoid overlapping changes. Assigned task: ' + text : text
   }
   async function taskWithGrant(parent, context, args) {
     let text = taskText(context, args.task)
@@ -333,7 +333,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       return { status: 'POSTMAN_WORKER_ARTIFACT_REJECTED' }
     text = 'Trusted Host artifact REQ: ' + grant.requestId + '. ZIP path from task text is never authority. ' +
       'Follow REPO_POLICY.md and system/implementation-package-workflow.md. ' +
-      (context ? 'Use the existing Leader task branch ' + context.branch + ' and worktree ' + context.worktree +
+      (context ? 'Use the existing task branch ' + context.branch + ' and worktree ' + context.worktree +
         '; do not create another branch/worktree. Ensure it is clean at the published REQ commit. ' +
         'Call implementation_artifact_apply({requestId: ' + JSON.stringify(grant.requestId) +
         ', worktree: ' + JSON.stringify(context.worktree) + '}); ' :
@@ -540,10 +540,11 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       description: sol ? 'Only on an explicit user request: create or continue the one Sol Worker (GPT-6.1 Sol, xhigh). An explicit user request to use Sol Worker is sufficient authorization; do not ask a separate ask_user_question before creation or continuation. Follow-up and new tasks by workerSessionId require no additional user confirmation within the user-selected Sol route. Never automatically escalate Luna to Sol. Use workerSessionId for follow-up; createNew rejects a second Sol Worker. Acceptance is not completion.' :
         secretary ? 'Create or continue the exact singleton Secretary for this Leader task. FAST facts and private operational ledger, no PTC/delegation. Acceptance is not completion.' :
         'Create or continue a Postman Worker, up to two per exact parent (Leader or Sol Worker). FAST local execution without PTC/delegation. Acceptance is not completion.',
-      parameters, output: output(),
+      parameters: secretary ? Object.fromEntries(Object.entries(parameters).filter(([name]) => name !== 'artifactRequestId')) : parameters, output: output(),
       async execute(args, exec) {
         const parent = exec?.agent
         if (!authorized(parent) || (workerType !== 'luna' && !isTopLevelPostmanSupervisor(parent))) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
+        if (secretary && Object.hasOwn(args ?? {}, 'artifactRequestId')) return { status: 'POSTMAN_WORKER_ARGUMENTS_INVALID' }
         if (typeof args?.task !== 'string' || !args.task.trim()) return { status: 'POSTMAN_WORKER_TASK_INVALID' }
         if ((args.createNew !== undefined && typeof args.createNew !== 'boolean') ||
             (args.workerSessionId !== undefined && (typeof args.workerSessionId !== 'string' || !args.workerSessionId)) ||
@@ -914,7 +915,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
   const stopBudgetGuard = ctx.tools.guard?.(exec => {
     const type = roleOf(exec.agent)
     if (type === 'secretary' && !SECRETARY_TOOLS.includes(exec.name)) return 'POSTMAN_SECRETARY_TOOL_REJECTED'
-    if (type && (DELEGATION_TOOLS.includes(exec.name) || exec.name === 'ptc_execute' ||
+    if (type && (DELEGATION_TOOLS.includes(exec.name) || (type !== 'sol' && exec.name === 'ptc_execute') ||
       (exec.name.startsWith('postman_') && !(type === 'sol' && WORKER_CONTROL_TOOLS.includes(exec.name)) &&
       !(type === 'secretary' && exec.name === 'postman_secretary_ledger')))) return 'POSTMAN_WORKER_TOOL_REJECTED'
     const budget = budgetOf(exec.agent)
@@ -1035,7 +1036,11 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
   function ownsLiveWorker(caller) {
     return Boolean(provisionalSlot(caller, false) || liveSlot(caller, caller?.session?.header?.parentSession, true))
   }
-  function ptcContextOf() { return null } // Compatibility: Workers never receive Postman PTC.
+  function ptcContextOf(caller) {
+    const slot = provisionalSlot(caller, false) || liveSlot(caller, caller?.session?.header?.parentSession, true)
+    const binding = durable ? rowOf(caller?.session?.header?.parentSession)?.workers?.[caller?.id] : slot
+    return slot?.workerType === 'sol' && binding && workerTypeOf(binding) === 'sol' ? slot.context : null
+  }
   function suspendLeader(parent) {
     if (parent) disposedParents.add(parent)
     for (const slot of leaders.get(parent?.id)?.slots.values() ?? []) { slot.verified = false; slot.workerAgent = null; slot.ptcAdmission = null }

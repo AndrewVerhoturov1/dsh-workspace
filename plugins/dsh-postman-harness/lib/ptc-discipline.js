@@ -9,7 +9,7 @@
 // This module is deliberately data-only. ptc-adapter.js is responsible for
 // injecting the text into the system prompt of an authorized Postman PTC agent.
 
-export const POSTMAN_PTC_DISCIPLINE_VERSION = 3
+export const POSTMAN_PTC_DISCIPLINE_VERSION = 4
 
 export const POSTMAN_PTC_DISCIPLINE = String.raw`
 # Postman PTC programming discipline
@@ -288,10 +288,13 @@ knew before the PTC program started.
 
 ## 11. Local role execution
 
-Postman PTC belongs only to the exact experimental Leader. Worker and Secretary
-use direct tools with a finite FAST assignment budget; Sol Worker uses direct
-coding tools and delegates finite mechanical work to its own ordinary Workers.
-No child role receives ptc_execute or Worker PTC-first guidance.
+Postman PTC belongs to the exact experimental Leader and exact Host-managed Sol Worker,
+with separate profiles. Sol uses PTC-first for its own batchable engineering flow,
+and Worker-first for independent cheap subtasks (two Workers in parallel when independent).
+Sol Worker controls stay direct-only and Host checks exact parent ownership on every operation.
+PTC grants no supervisor, Bridge, Secretary, Sol creation or user-approval authority to Sol.
+Ordinary Worker and Secretary use direct tools with a finite FAST assignment budget;
+neither receives ptc_execute, Worker controls or generic delegation.
 
 
 ## 12. Side effects are not transactional

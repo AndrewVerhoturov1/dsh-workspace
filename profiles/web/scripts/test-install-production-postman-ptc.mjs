@@ -54,6 +54,11 @@ try {
   assert.deepEqual(worker.POSTMAN_WORKER_AGENT_OPTIONS,{provider:'codex',model:'gpt-6-luna',reasoningEffort:'low'})
   const adapter = await import(pathToFileURL(resolve(pluginRoot, 'lib/ptc-adapter.js')).href)
   assert.equal(adapter.PTC_TOOL_NAME, 'ptc_execute')
+  assert.equal(adapter.SOL_WORKER_PROFILE.id,'postman-sol-worker-engineering')
+  for(const name of ['read','glob','grep','write','edit','pwsh'])assert.ok(adapter.SOL_WORKER_PROFILE.tools.includes(name))
+  for(const name of ['postman_bridge','postman_secretary','postman_sol_worker','postman_worker','ask_user_question'])assert.ok(!adapter.SOL_WORKER_PROFILE.tools.includes(name))
+  assert.ok(worker.postmanRoleInstruction('sol').includes('PTC-first'))
+  assert.ok(worker.postmanRoleInstruction('sol').includes('Worker-first'))
 
   const requireFromPlugin = createRequire(bridgePath)
   const ptcPath = requireFromPlugin.resolve('dsh-ptc')

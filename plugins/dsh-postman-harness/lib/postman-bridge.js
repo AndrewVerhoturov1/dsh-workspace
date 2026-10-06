@@ -1,6 +1,6 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { z } from 'zod'
-import { createPtcAdapter } from './ptc-adapter.js'
+import { createPtcAdapter, SOL_WORKER_PROFILE } from './ptc-adapter.js'
 import { CurrentAttachmentStore, createPostmanInputFilesTool, postmanInputGrants } from './postman-input-files.js'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { parsePostmanUserTurn } from './direct-current-turn.js'
@@ -231,9 +231,10 @@ export async function apply(ctx, config = {}) {
     worker.refreshLeader(id)
   })
   const jobs = createPostmanBridgeJobs(ctx, coordinator, grants, postmanTaskContexts, worker)
-  const ownsPtcWorker = () => false // FAST roles and Sol use direct local tools.
-  ptc = createPtcAdapter(ctx, { authorize: isTopLevelPostmanPtcLeader, resolveAssignment: (agent, leaderProfile) =>
-    isTopLevelPostmanPtcLeader(agent) ? { profile: leaderProfile, role: 'leader' } : null })
+  const ownsPtcWorker = agent => worker.roleOf(agent) === 'sol' && worker.ownsLiveWorker(agent) && Boolean(worker.ptcContextOf(agent))
+  ptc = createPtcAdapter(ctx, { authorize: isTopLevelPostmanPtcLeader, workerContextOf: worker.ptcContextOf,
+    resolveAssignment: (agent, leaderProfile) => isTopLevelPostmanPtcLeader(agent) ?
+      { profile: leaderProfile, role: 'leader' } : ownsPtcWorker(agent) ? { profile: SOL_WORKER_PROFILE, role: 'sol' } : null })
   // Guard model-direct operations, not ordinary visibility: nested PTC calls carry the outer token.
   ctx.tools.guard(exec => postmanPtcDirectCallGuard(exec, id => ctx.agents.get(id), ownsPtcWorker))
   ctx.tools.register(ptc.tool)

@@ -4,7 +4,7 @@ import { buildPtcHelperPrelude, ptcHelperGuidance } from './ptc-helpers.js'
 import { POSTMAN_PTC_DISCIPLINE } from './ptc-discipline.js'
 import { guardWorkerPtcFilesystem } from './ptc-worktree-boundary.js'
 import { readPtcTextPage } from './ptc-read.js'
-import { POSTMAN_PTC_ONLY_LEADER_TOOLS, POSTMAN_WORKER_PTC_TOOL_NAMES, POSTMAN_PTC_SUCCESS_STATUSES } from './postman-bridge-core.js'
+import { POSTMAN_PTC_ONLY_LEADER_TOOLS, POSTMAN_WORKER_PTC_TOOL_NAMES, POSTMAN_SOL_PTC_TOOL_NAMES, POSTMAN_PTC_SUCCESS_STATUSES } from './postman-bridge-core.js'
 
 export const PTC_TOOL_NAME = 'ptc_execute'
 export const PILOT_PROFILE = validatePtcProfile({
@@ -17,6 +17,11 @@ export const WORKER_MUTATION_PROFILE = validatePtcProfile({
   schemaVersion: 1, id: 'postman-worker-mutation', revision: 5,
   tools: [...POSTMAN_WORKER_PTC_TOOL_NAMES],
   limits: { ...DEFAULT_LIMITS, maxConcurrentToolCalls: 1 },
+})
+export const SOL_WORKER_PROFILE = validatePtcProfile({
+  schemaVersion: 1, id: 'postman-sol-worker-engineering', revision: 1,
+  tools: [...POSTMAN_SOL_PTC_TOOL_NAMES],
+  limits: { ...DEFAULT_LIMITS, maxWallMs: 300000, maxConcurrentToolCalls: 1 },
 })
 const LEADER_REQUIRED = ['read', 'grep']
 const WORKER_REQUIRED = ['read', 'glob', 'grep']
@@ -93,7 +98,7 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
     return assignment?.profile === record.profile && assignment.role === record.role &&
       assignment.profile.revision === record.revision
   }
-  const required = record => record.role === 'worker' ? WORKER_REQUIRED : LEADER_REQUIRED
+  const required = record => record.role === 'sol' ? WORKER_REQUIRED : LEADER_REQUIRED
   function available(agent, name) {
     return !!ctx.tools.get(name, agent) && ctx.tools.schemas(agent).some(schema => schema.name === name)
   }
@@ -104,6 +109,8 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
     record.runs.clear()
     record.section?.()
     record.section = null
+    record.tool?.()
+    record.tool = null
   }
   function refresh(agent) {
     if (!agent || typeof agent.id !== 'string') return false
@@ -113,10 +120,17 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
     if (old) { owners.delete(agent.id); revoke(old) }
     if (disposed || ctx.agents.get(agent.id) !== agent) return false
     const assignment = assignmentFor(agent, current)
-    if (!assignment || assignment.role !== 'leader' || assignment.profile !== current) return false
+    if (!assignment || !((assignment.role === 'leader' && assignment.profile === current) ||
+        (assignment.role === 'sol' && assignment.profile === SOL_WORKER_PROFILE))) return false
     const record = { agent, profile: assignment.profile, role: assignment.role,
-      revision: assignment.profile.revision, runs: new Set(), section: null }
+      revision: assignment.profile.revision, runs: new Set(), section: null, tool: null }
     owners.set(agent.id, record)
+    // Pre-review Sol Sessions persist a spawn filter denying inherited PTC.
+    // Bind this one Host-authorized capability in the exact Sol scope; do not
+    // rewrite audit/descriptor, lift other filters or grant it to FAST children.
+    const descriptor = agent.session?.events?.find(event => event.type === 'subagent/descriptor')?.data
+    if (record.role === 'sol' && descriptor?.toolFilter?.deny?.includes(PTC_TOOL_NAME))
+      record.tool = agent.ctx.tools.register(tool)
     if (agent.ctx?.systemPrompt?.section) record.section = agent.ctx.systemPrompt.section({
       name: 'postman-ptc-' + record.role, order: 125,
       text: ({ scope } = {}) => scope === agent && allowed(agent, record) ? guidance(agent, record) : '',
@@ -127,10 +141,10 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
     if (!available(agent, PTC_TOOL_NAME) || required(record).some(name => !available(agent, name))) return ''
     const schemas = ctx.tools.schemas(agent).filter(s => record.profile.tools.includes(s.name))
     const helperText = POSTMAN_PTC_DISCIPLINE + '\n' + ptcHelperGuidance(schemas.map(s => s.name))
-    return 'This Leader uses Postman PTC; direct PTC-managed calls are rejected. ' +
-      'PTC changes execution mode, not Postman Leader routing: follow the postman-leader skill, obtain user approval before medium/complex task preparation or delegation, and delegate repository discovery/execution to Worker/Postman as required. ' +
-      'Never poll Worker/Bridge: reports and READY arrive as later events, not within this program. ' +
-      helperText +
+    const roleText = record.role === 'sol' ?
+      'This exact Sol Worker uses PTC-first for its own batchable engineering work; direct PTC-managed calls are rejected. Follow postman-sol-worker: Worker-first for independent cheap tasks, two free Workers in parallel for two independent tasks. Worker controls are direct-only, limited to your exact children; no supervisor/Bridge/Secretary/Sol creation or approval tools in PTC. Use the assigned task worktree explicitly for shell commands. ' :
+      'This Leader uses Postman PTC; direct PTC-managed calls are rejected. PTC changes execution mode, not Postman Leader routing: follow the postman-leader skill, obtain user approval before medium/complex task preparation or delegation, and delegate repository discovery/execution to Worker/Postman as required. Never poll Worker/Bridge: reports and READY arrive as later events, not within this program. '
+    return roleText + helperText +
       'Use await tools.name(JSON_arguments). Current nested argument schemas: ' +
       JSON.stringify(schemas.map(s => ({ name: s.name, parameters: s.parameters })))
   }
@@ -154,7 +168,7 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
   }
   const tool = defineTool({
     name: PTC_TOOL_NAME,
-    description: 'Run one isolated PTC program for the exact experimental Postman Leader. Guidance lists current nested tool schemas.',
+    description: 'Run one isolated PTC program for the exact experimental Postman Leader or managed Sol Worker. Each role has its own profile; guidance lists current nested tool schemas.',
     parameters: {
       program: { type: 'string', required: true, description: 'One async-function body with explicit JSON return. No imports, Node or persistent state.' },
       description: { type: 'string', required: true, description: 'Short purpose and why the deterministic phase ends at the declared boundary.' },
@@ -166,8 +180,8 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
       const agent = exec?.agent, record = owners.get(agent?.id)
       if (!allowed(agent, record) || !available(agent, PTC_TOOL_NAME)) return { status: 'PTC_CALLER_REJECTED' }
       if (required(record).some(name => !available(agent, name))) return { status: 'PTC_REQUIRED_TOOL_UNAVAILABLE' }
-      const workerContext = record.role === 'worker' ? workerContextOf?.(agent) : null
-      if (record.role === 'worker' && (!workerContext || typeof workerContext.worktree !== 'string'))
+      const workerContext = record.role === 'sol' ? workerContextOf?.(agent) : null
+      if (record.role === 'sol' && (!workerContext || typeof workerContext.worktree !== 'string'))
         return { status: 'PTC_CALLER_REJECTED' }
       const activeProfile = validatePtcProfile({ ...record.profile,
         tools: record.profile.tools.filter(name => available(agent, name)) })
@@ -206,7 +220,7 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
               maxMessageBytes: activeProfile.limits.maxMessageBytes, signal: call.signal, agent, parent: exec.token }
             nestedArgs = { ...arg }; delete nestedArgs.__ptc_text
           }
-          if (record.role === 'worker' && ['read', 'glob', 'grep', 'write', 'edit'].includes(name)) {
+          if (record.role === 'sol' && ['read', 'glob', 'grep', 'write', 'edit'].includes(name)) {
             if (workerContextOf?.(agent) !== workerContext) throw new Error('PTC_ACCESS_REVOKED')
             nestedArgs = await guardWorkerPtcFilesystem(name, nestedArgs, workerContext.worktree)
             if (call.signal.aborted || controller.signal.aborted || !allowed(agent, record) || !available(agent, name) ||
@@ -230,7 +244,7 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
               agent.session?.append('tool/code-dispatch', { ...details, isError: result.isError, content: result.content })
             }
             if (controller.signal.aborted || !allowed(agent, record) || !available(agent, name) ||
-                (record.role === 'worker' && ['read', 'glob', 'grep', 'write', 'edit'].includes(name) &&
+                (record.role === 'sol' && ['read', 'glob', 'grep', 'write', 'edit'].includes(name) &&
                   workerContextOf?.(agent) !== workerContext)) throw new Error('PTC_ACCESS_REVOKED')
             if (result.isError) throw new Error(result.error.message)
             if (YIELD_ACCEPTANCE[name]) {

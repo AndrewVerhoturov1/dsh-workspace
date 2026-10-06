@@ -24,8 +24,8 @@ for(const type of ['luna','secretary','sol']) test(type+' actual model instructi
   assert.ok(requests.length>=4)
   for(const {request} of requests){
     assert.ok(request.system.includes(postmanRoleInstruction(type)), 'full canonical role text in actual system request')
-    assert.equal(request.system.includes('# Postman PTC programming discipline'),false)
-    assert.equal(request.tools.some(x=>x.name==='ptc_execute'),false)
+    assert.equal(request.system.includes('# Postman PTC programming discipline'),type==='sol')
+    assert.equal(request.tools.some(x=>x.name==='ptc_execute'),type==='sol')
     assert.equal(request.model,type==='sol'?'gpt-6.1-sol':POSTMAN_WORKER_AGENT_OPTIONS.model)
     assert.equal(request.reasoningEffort,type==='sol'?'xhigh':'low')
     const names=request.tools.map(x=>x.name)
@@ -53,6 +53,11 @@ test('one Worker entity: parallel owner quotas, exact reports, no cross-parent c
     assert.equal((await f.run(tool,{task:'foreign',workerSessionId:id},actor)).status,'POSTMAN_WORKER_TARGET_UNKNOWN')
   for(const r of right){const request=f.requests.find(x=>x.agent.id===r.workerSessionId).request;const l=f.requests.find(x=>x.agent.id===left[0].workerSessionId).request
     assert.equal(request.system,l.system);assert.deepEqual(request.tools.map(x=>x.name),l.tools.map(x=>x.name));assert.equal(request.reasoningEffort,l.reasoningEffort)
+    for(const id of [r.workerSessionId,left[0].workerSessionId]){
+      const text=f.specs.find(s=>s.childId===id).request.prompt[0].text
+      assert.match(text,/Use the existing task branch/);assert.match(text,/your immediate parent/);assert.match(text,/Assigned task:/)
+      assert.doesNotMatch(text,/Leader task|your Leader|existing Leader/)
+    }
     assert.equal(f.registry.get('leader').workers[r.workerSessionId].ownerSessionId,parent.id)
     assert.ok(parent.inbox.nextStep.some(e=>e.source?.senderSessionId===r.workerSessionId))
     assert.ok(!f.leader.session.events.some(e=>e.type==='user/message'&&e.data.source?.senderSessionId===r.workerSessionId))
@@ -116,7 +121,8 @@ test('all child roles force native tools even when Host default is code',{timeou
     accepted(await f.run(tool,{workerSessionId:id,task:'next finite cold direct facts'}));await f.settled(id)
     for(const {request} of f.requests.filter(x=>x.agent.id===id)){
       assert.ok(request.tools.some(x=>x.name==='read'))
-      assert.ok(!request.tools.some(x=>['run_code','ptc_execute'].includes(x.name)))
+      assert.ok(!request.tools.some(x=>x.name==='run_code'))
+      assert.equal(request.tools.some(x=>x.name==='ptc_execute'),tool===f.worker.solTaskTool)
     }
   }
 })
@@ -148,7 +154,7 @@ test('default FAST 12/15 budget cannot silently finish without escalation report
 test('stock manual compact retains exact role Session budget quota and audit',{timeout:15000},async t=>{
   const native=async name=>import(pathToFileURL(join(process.env.DSH_ROOT??join(process.env.APPDATA,'npm/node_modules/@deepseek-ai/dsh'),'node_modules/@deepseek-ai',name,'lib/index.js')).href)
   const {BasicCompactionEngine}=await native('dsh-compaction-basic'),{TokenMeter}=await native('dsh-token-meter')
-  const f=await fixture(t,{plan:()=>({name:'report',args:{output:'verified evidence '.repeat(1000)}}),setupTools:ctx=>{new TokenMeter(ctx);const Summarizer=class extends BasicCompactionEngine{async summarize(){return {summary:[{type:'text',text:'summary of exact finite facts; next bounded assignment'}],provider:'codex',model:'gpt-6-luna'}}};new Summarizer(ctx,{auto:false})}})
+  const f=await fixture(t,{plan:(a,_r,n,w)=>w.roleOf(a)==='sol'&&n%2===1?{name:'ptc_execute',args:{program:'const a=await tools.read({file_path:"known.txt"});const b=await tools.glob({pattern:"*.txt"});const c=await tools.grep({pattern:"known"});return {a,b,c}',description:'Batch known local facts before review',boundary:'semantic_decision'}}:({name:'report',args:{output:'verified evidence '.repeat(1000)}}),setupTools:ctx=>{new TokenMeter(ctx);const Summarizer=class extends BasicCompactionEngine{async summarize(){return {summary:[{type:'text',text:'summary of exact finite facts; next bounded assignment'}],provider:'codex',model:'gpt-6-luna'}}};new Summarizer(ctx,{auto:false})}})
   for(const tool of [f.worker.taskTool,f.worker.secretaryTool,f.worker.solTaskTool]){
     const id=accepted(await f.run(tool,{task:'bounded facts '+('verified evidence '.repeat(1000))}));await f.settled(id)
     const handle=await f.ctx.agents.resume({resumeSessionId:id,agentOptions:{provider:'codex',model:tool===f.worker.solTaskTool?'gpt-6.1-sol':'gpt-6-luna'}}),resident=handle.agent
@@ -159,11 +165,21 @@ test('stock manual compact retains exact role Session budget quota and audit',{t
     assert.ok(resident.session.events.length>events);assert.ok(resident.session.surface.replaceGeneration>0)
     await handle.dispose()
     accepted(await f.run(tool,{workerSessionId:id,task:'bounded next facts'}));await f.settled(id)
-    assert.ok(f.requests.findLast(x=>x.agent.id===id).request.system.includes(postmanRoleInstruction(binding.workerType)))
+    for(const {request} of f.requests.filter(x=>x.agent.id===id)){
+      assert.ok(request.system.includes(postmanRoleInstruction(binding.workerType)))
+      assert.equal(request.tools.some(x=>x.name==='ptc_execute'),binding.workerType==='sol')
+    }
+    if(binding.workerType==='sol'){
+      const child=f.agents.get(id)
+      const ids=new Set(child.session.events.filter(e=>e.type==='tool/call'&&e.data.name==='ptc_execute').map(e=>e.data.callId))
+      const results=child.session.events.filter(e=>e.type==='tool/result').flatMap(e=>e.data.message.content).filter(b=>ids.has(b.toolCallId))
+      assert.ok(results.length>=2);for(const result of results)assert.equal(JSON.parse(result.content[0].text).status,'ok')
+      assert.ok(child.session.events.filter(e=>e.type==='tool/code-dispatch').length>=6)
+    }
   }
 })
 test('canonical TASK_CONTRACT and Sol mandatory delegation instructions',()=>{
   for(const type of ['luna','secretary','sol']){const s=postmanRoleInstruction(type);for(const word of ['TASK_CONTRACT','scope','done conditions','verification','stop condition','blocker'])assert.ok(s.includes(word),type+' '+word)}
-  const sol=postmanRoleInstruction('sol');for(const word of ['двух','ОБЯЗАН','параллельно','engineering decisions','агрегированный report'])assert.ok(sol.includes(word),word)
+  const sol=postmanRoleInstruction('sol');for(const word of ['двух','ОБЯЗАН','параллельно','engineering decisions','агрегированный report','PTC-first','Worker-first','direct-only','model turns','latency'])assert.ok(sol.includes(word),word)
   assert.deepEqual(FAST_WORKER_BUDGET,{softLimit:12,hardLimit:15})
 })

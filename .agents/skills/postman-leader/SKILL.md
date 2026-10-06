@@ -9,7 +9,7 @@ description: >-
 
 # Postman Leader
 
-`POSTMAN_LEADER_SKILL_VERSION: 26`
+`POSTMAN_LEADER_SKILL_VERSION: 27`
 
 > **Правило Worker:** у одного Leader может быть до двух независимых continuable Postman Worker плюс один Sol Worker с отдельным лимитом. `postman_worker({task, createNew: true, label?})` создаёт нового; третий возвращает `POSTMAN_WORKER_LIMIT_REACHED` до запуска. `postman_worker_list()` показывает точные `workerSessionId`, label, `workerType` (`luna` / `secretary` / `sol`), модель и состояние привязки, но не доказывает idle/completion. Задание или новый trusted artifact REQ направляй точному Worker через `postman_worker({task, workerSessionId, artifactRequestId?})`, обычное продолжение — через `postman_worker_interrupt({workerSessionId, task})`, закрытие — `postman_worker_stop({workerSessionId})`. Без ID task-вызов выбирает единственную привязку своего типа; interrupt/stop требуют единственной общей привязки. При неоднозначности Host возвращает `POSTMAN_WORKER_TARGET_REQUIRED`. Все Worker делят одну task branch/worktree: не поручай перекрывающиеся записи, а sync, restore и package runner выполняй только при гарантированной безопасности общей ветки.
 
@@ -24,11 +24,13 @@ description: >-
 Postman Leader
 ├── Secretary x1 — FAST/min, no PTC, no spawn
 ├── Postman Worker x2 — FAST/min, no PTC, no spawn
-├── Sol Worker x1
+├── Sol Worker x1 — Sol/xhigh, PTC-first для собственной batchable работы
 │   └── Postman Worker x2 — та же сущность, другой exact parent/quota
 └── Postman Bridge jobs — прежний transport
 
 Leader решает архитектуру, decomposition, critical path, routing, review critical evidence и user interaction. Используй Secretary для найти/локализовать/собрать/читать несколько мест/Git facts/condensed evidence; не трать дорогие Sol rounds на длинные low-level discovery цепочки. postman_secretary({task, ...}) создаёт singleton или продолжает exact Secretary; createNew при занятом singleton rejected. Ledger читается через postman_secretary_ledger(), без repository file. Обновления ledger выполняет Secretary по подтверждённым direct reports/Bridge evidence; repo flush только отдельное явное поручение, не постоянный journal.
+
+Leader в PTC-пресете — PTC-first; Sol также PTC-first, но с отдельным local engineering profile без supervisor authority. Обычные Worker и Secretary — direct/no PTC. Secretary не принимает artifactRequestId: Host отклоняет до grant/assignment/child.
 
 Sol сам управляет двумя своими обычными Workers. Не адресуй их задания, stop/interrupt и не жди их low-level reports: Sol агрегирует их в собственный report Leader. Квоты parent-scoped; четыре Worker суммарно допустимы, cross-parent управление запрещено.
 
@@ -168,7 +170,7 @@ Bridge Luna занимается только ChatGPT Web transport через D
 
 ### 3.1. Обязательный Postman PTC Program-First
 
-Если доступен наш `ptc_execute`, канонический обязательный протокол v2 — автоматически внедрённый runtime текст из [ptc-discipline.js](../../../plugins/dsh-postman-harness/lib/ptc-discipline.js). Program-First обязателен: один PTC доходит до следующей реальной decision boundary; переход между заранее детерминированными операциями не создаёт новый model round. Правила routing и approval самого Leader не меняются. Справочные примеры: [PTC_PATTERNS.md](PTC_PATTERNS.md). Протокол не относится к native Harness PTC/Code Mode.
+Если доступен наш `ptc_execute`, канонический обязательный протокол v4 — автоматически внедрённый runtime текст из [ptc-discipline.js](../../../plugins/dsh-postman-harness/lib/ptc-discipline.js). Program-First обязателен: один PTC доходит до следующей реальной decision boundary; переход между заранее детерминированными операциями не создаёт новый model round. Правила routing и approval самого Leader не меняются. Справочные примеры: [PTC_PATTERNS.md](PTC_PATTERNS.md). Протокол не относится к native Harness PTC/Code Mode.
 
 Top-level Leader получает positive allowlist из 27 зарегистрированных инструментов:
 
@@ -219,7 +221,7 @@ postman_worker_list
 postman_worker_compact
 ```
 
-Worker сохраняет общий coding preset и обычные coding/research capabilities, включая direct read/glob/grep/write/edit, shell, tests/browser, jobs и report. Host deny запрещает Postman controls, ptc_execute и любые generic delegation capabilities. Secretary имеет отдельную минимальную positive surface; Sol — direct coding и scoped Worker controls без generic spawning.
+Worker сохраняет общий coding preset и обычные coding/research capabilities, включая direct read/glob/grep/write/edit, shell, tests/browser, jobs и report. Host deny запрещает Postman controls, ptc_execute и любые generic delegation capabilities. Secretary имеет отдельную минимальную positive surface; Sol — PTC-first local engineering profile и direct-only scoped Worker controls без generic spawning.
 
 Bridge сохраняет отдельный узкий transport allowlist:
 
