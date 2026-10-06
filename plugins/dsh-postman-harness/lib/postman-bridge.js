@@ -295,7 +295,7 @@ export async function apply(ctx, config = {}) {
     ptc.remove(agent); boundaries.disposeAgent(agent)
     for (const child of ctx.agents.list()) if (child.session?.header?.parentSession === agent.id) refreshWorker(child.id)
   })
-  ctx.on('tools/change', () => ptc.permissionsChanged())
+  ctx.on('tools/change', () => { boundaries.refreshAll(); ptc.permissionsChanged() })
   for (const agent of ctx.agents.list()) { boundaries.install(agent); ptc.refresh(agent) }
 }
 
