@@ -114,7 +114,10 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
     // This synchronous reservation is shared with prepare/Bridge/Worker/runner admission.
     pending.add(id)
     try {
-      const blocker = current => current.stage !== 'ready' ? 'TASK_STATE_UNCERTAIN'
+      const stale = row.stage === 'uncertain' && row.diagnostic === 'task worktree missing'
+      const blocker = current => current.stage !== 'ready' && !(stale && current.stage === 'uncertain' &&
+          current.diagnostic === 'task worktree missing' && ['leaderSessionId', 'repository', 'repositoryPath', 'originUrl', 'branch', 'worktree', 'baseCommit']
+            .every(key => current[key] === row[key])) ? 'TASK_STATE_UNCERTAIN'
         : Object.keys(current.workers ?? {}).length ? 'WORKER_BINDINGS_NOT_RETIRED'
         : current.runner?.state !== 'none' ? 'RUNNER_NOT_SETTLED'
         : current.bridge || Object.values(current.bridgeOperations ?? {}).some(op =>
@@ -124,6 +127,30 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
       const reason = blocker(row)
       if (reason) return reject(reason)
       if (!await beforeClose(id)) return reject('CHILD_CLOSURE_UNPROVEN')
+      if (stale) {
+        // Only the recovery diagnostic for a formerly ready, missing tree is
+        // eligible. Re-prove identity/absence; no Git mutation or generic uncertain close.
+        const cwd = leader?.session?.header?.cwd
+        if (!cwd || row.repository !== REPOSITORY || !BRANCH.test(row.branch) || !SHA.test(row.baseCommit) ||
+            !row.repositoryPath || !row.originUrl || !row.worktree) return reject('TASK_STATE_UNCERTAIN')
+        const repository = await command(cwd, 'rev-parse', '--show-toplevel')
+        const originMatch = /^(?:https?:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/]+\/[^/]+?)(?:\.git)?\/?$/i.exec(row.originUrl)
+        if (normalize(repository) !== normalize(row.repositoryPath) || originMatch?.[1].toLowerCase() !== REPOSITORY ||
+            await command(repository, 'remote', 'get-url', 'origin') !== row.originUrl ||
+            [repository, resolve(homedir(), '.dsh'), resolve(homedir(), '.dsh-preview')]
+              .some(path => normalize(path) === normalize(row.worktree)) || await fileExists(row.worktree))
+          return reject('TASK_STATE_UNCERTAIN')
+        const entries = (await command(repository, 'worktree', 'list', '--porcelain')).split(/\n\s*\n/).filter(Boolean)
+        // A leftover/prunable registration can retain unproven Git mutations.
+        // Completed cleanup must leave neither the old path nor its branch attached.
+        if (entries.some(entry => entry.split(/\r?\n/).some(line =>
+          line.startsWith('worktree ') && normalize(line.slice(9)) === normalize(row.worktree) ||
+          line === 'branch refs/heads/' + row.branch))) return reject('TASK_STATE_UNCERTAIN')
+        for (const marker of ['MERGE_HEAD', 'REBASE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'rebase-merge', 'rebase-apply', 'sequencer']) {
+          if (await fileExists(resolve(repository, await command(repository, 'rev-parse', '--git-path', marker))))
+            return reject('TASK_OPERATION_BUSY')
+        }
+      }
       const closedAt = new Date().toISOString()
       await registry.change(id, current => {
         const reason = blocker(current)
@@ -144,6 +171,7 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
     const row = registry.get(id)
     if (!row || row.stage === 'closed') return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
     pending.add(id)
+    let repositoryVerified = false
     try {
       const cwd = leader?.session?.header?.cwd
       if (typeof cwd !== 'string' || !cwd || row.leaderSessionId !== id ||
@@ -157,6 +185,7 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
           normalize(row.worktree) === normalize(repository) ||
           [resolve(homedir(), '.dsh'), resolve(homedir(), '.dsh-preview')]
             .some(path => normalize(path) === normalize(row.worktree))) throw new Error('repository or worktree identity mismatch')
+      repositoryVerified = true
       // A reserved empty directory with no registered Git tree is not authority
       // to create a new tree in recovery: it is merely an incomplete intent.
       const listing = await command(repository, 'worktree', 'list', '--porcelain')
@@ -252,7 +281,10 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
       changed(id)
       return { status: 'POSTMAN_TASK_CONTEXT_ALREADY_READY', ...context }
     } catch (error) {
-      const diagnostic = String(error?.message ?? error)
+      let diagnostic = String(error?.message ?? error)
+      if (repositoryVerified && (diagnostic === 'task worktree ownership uncertain' || error?.code === 'ENOENT') &&
+          (row.stage === 'ready' || row.stage === 'uncertain' && row.diagnostic === 'task worktree missing') &&
+          !await fileExists(row.worktree)) diagnostic = 'task worktree missing'
       try { await registry.change(id, old => ({ ...old, stage: 'uncertain', diagnostic })) } catch {}
       contexts.delete(id)
       changed(id)

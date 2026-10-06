@@ -46,7 +46,7 @@ test('task close authorization, settled receipt and durable write failure',async
   assert.equal((await f.contexts.recover(leader)).status,'POSTMAN_TASK_CONTEXT_REQUIRED')
   assert.equal((await tool.execute({}, {agent:leader})).status,'POSTMAN_TASK_CLOSED')
 })
-test('real Git Task A merge/cleanup absent worktree durable close then Task B in same Leader', {timeout:60000},async t=>{
+test('real Git merged Task A deleted worktree restart prepare UNCERTAIN close CLOSED then Task B READY in same Leader', {timeout:60000},async t=>{
   const temp=await mkdtemp(join(tmpdir(),'postman-task-close-'))
   t.after(()=>rm(temp,{recursive:true,force:true,maxRetries:5,retryDelay:100}))
   const root=join(temp,'repo'),bare=join(temp,'origin.git')
@@ -75,7 +75,43 @@ test('real Git Task A merge/cleanup absent worktree durable close then Task B in
   await assert.rejects(stat(a.worktree),{code:'ENOENT'})
   assert.equal(registry.get('leader').stage,'ready');assert.equal(registry.get('leader').branch,a.branch)
   contexts.dispose();await registry.close();registry=await open();contexts=make()
-  assert.equal((await contexts.close(sameLeader)).status,'POSTMAN_TASK_CLOSED')
+  assert.deepEqual(await contexts.prepare(sameLeader),{status:'POSTMAN_TASK_PREPARE_UNCERTAIN',diagnostic:'task worktree missing'})
+  assert.equal(registry.get('leader').stage,'uncertain');assert.equal(contexts.get('leader'),null)
+  contexts.dispose();await registry.close();registry=await open();contexts=make() // diagnostic itself survives restart
+  const stale={...registry.get('leader'),bridgeOperations:{}}
+  const closeLeader={...sameLeader,session:{header:{...sameLeader.session.header,agentPreset:'postman-leader',origin:'root'}}}
+  let descendants=[]
+  const closeTool=createPostmanTaskCloseTool({agents:{get:id=>id==='leader'?closeLeader:null},
+    subagents:{listDescendants:async()=>descendants}},contexts)
+  for(const patch of [{diagnostic:'task branch history uncertain'}, {repositoryPath:join(temp,'foreign')},
+    {worktree:root}, {runner:{state:'unknown',requestId:'REQ'}},
+    {workers:{child:{id:'child',label:'child',state:'uncertain',delivery:'unknown',artifactRequests:[]}}},
+    {bridgeOperations:{job:{state:'unknown'}}}, {bridgeOperations:{job:{state:'received',synchronization:'pending'}}}]){
+    await registry.change('leader',()=>({...stale,...patch}))
+    const before=JSON.stringify(registry.get('leader'))
+    assert.equal((await closeTool.execute({}, {agent:closeLeader})).status,'POSTMAN_TASK_CLOSE_REJECTED')
+    assert.equal(JSON.stringify(registry.get('leader')),before)
+  }
+  await registry.change('leader',()=>stale)
+  for(const child of [{kind:'child',id:'queued',activity:'running',mode:'continuable'}, {kind:'diagnostic',id:'uncertain'},
+    {kind:'child',id:'unclosed',activity:'inactive',mode:'continuable'}]){
+    descendants=[child]
+    assert.equal((await closeTool.execute({}, {agent:closeLeader})).diagnostic.code,'CHILD_CLOSURE_UNPROVEN')
+    assert.equal(registry.get('leader').stage,'uncertain')
+  }
+  descendants=[]
+  await git(root,'worktree','add','-b',a.branch,a.worktree,a.baseCommit)
+  await rm(a.worktree,{recursive:true,force:true}) // leftover Git registration is not settled cleanup
+  assert.equal((await closeTool.execute({}, {agent:closeLeader})).status,'POSTMAN_TASK_CLOSE_REJECTED')
+  await git(root,'worktree','prune');await git(root,'branch','-D',a.branch)
+  await writeFile(a.worktree,'replacement path is not the old tree')
+  assert.equal((await closeTool.execute({}, {agent:closeLeader})).status,'POSTMAN_TASK_CLOSE_REJECTED')
+  await rm(a.worktree)
+  const marker=join(root,await git(root,'rev-parse','--git-path','MERGE_HEAD'))
+  await writeFile(marker,a.baseCommit)
+  assert.equal((await closeTool.execute({}, {agent:closeLeader})).diagnostic.code,'TASK_OPERATION_BUSY')
+  await rm(marker)
+  assert.equal((await closeTool.execute({}, {agent:closeLeader})).status,'POSTMAN_TASK_CLOSED')
   await registry.close();registry=await open();contexts=make()
   assert.equal(registry.get('leader').stage,'closed')
   const b=await contexts.prepare(sameLeader);assert.equal(b.status,'TASK_CONTEXT_READY',JSON.stringify(b))

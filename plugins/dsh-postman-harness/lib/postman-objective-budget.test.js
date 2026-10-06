@@ -43,20 +43,22 @@ for(const role of ['secretary','leader-worker','sol-worker'])test(role+' FAST bo
   b=f.registry.get('leader').workers[id].budget
   assert.equal(b.rootObjectiveId,root);assert.equal(b.used,16);assert.equal(f.registry.get('leader').objectives[root].used,40)
   await review()
-  accepted(await f.run(tool,{task:'Same objective final allowance',workerSessionId:id,hardBudget:24},parent));await f.settled(id)
+  assert.deepEqual(await f.run(tool,{task:'Cannot silently shrink assignment',workerSessionId:id,hardBudget:24},parent),
+    {status:'POSTMAN_WORKER_OBJECTIVE_BUDGET_INSUFFICIENT',workerSessionId:id,remaining:8,requested:24})
+  accepted(await f.run(tool,{task:'Same objective final allowance',workerSessionId:id,hardBudget:8},parent));await f.settled(id)
   b=f.registry.get('leader').workers[id].budget
-  assert.equal(b.hardLimit,24);assert.equal(b.used,8);assert.equal(b.exhausted,true)
+  assert.equal(b.hardLimit,8);assert.equal(b.used,8);assert.equal(b.exhausted,true)
   assert.equal(f.registry.get('leader').objectives[root].used,48)
   const before=f.requests.length
-  assert.equal((await f.run(tool,{task:'Cannot refinance',workerSessionId:id,hardBudget:24},parent)).status,'POSTMAN_ROOT_BUDGET_EXHAUSTED')
-  assert.equal((await f.run(tool,{task:'Cannot relabel same objective',workerSessionId:id,newObjective:'Exact unresolved '+role},parent)).status,'POSTMAN_ROOT_BUDGET_EXHAUSTED')
+  assert.equal((await f.run(tool,{task:'Cannot refinance',workerSessionId:id,hardBudget:24},parent)).status,'POSTMAN_WORKER_OBJECTIVE_BUDGET_INSUFFICIENT')
+  assert.equal((await f.run(tool,{task:'Cannot relabel same objective',workerSessionId:id,newObjective:'Exact unresolved '+role},parent)).status,'POSTMAN_WORKER_OBJECTIVE_BUDGET_INSUFFICIENT')
   assert.equal(f.requests.length,before)
   const list=await f.run(f.worker.listTool,{},parent),entry=list.workers.find(w=>w.workerSessionId===id)
   assert.equal(entry.budget.root.used,48);assert.equal(entry.budget.root.cap,48);assert.equal(list.objectives.find(r=>r.id===root).used,48)
   if(parent===f.leader){const team=f.worker.teamSnapshot(parent);const row=role==='secretary'?team.secretary:team.workers.rows[0];assert.equal(row.budget.rootUsed,48)}
   await review()
   const fresh=await f.run(f.worker.freshTool,{workerSessionId:id,task:'Same objective fresh Session',hardBudget:8},parent)
-  assert.equal(fresh.status,'POSTMAN_ROOT_BUDGET_EXHAUSTED')
+  assert.equal(fresh.status,'POSTMAN_WORKER_OBJECTIVE_BUDGET_INSUFFICIENT')
   const next=accepted(await f.run(tool,{task:'Actually independent objective',newObjective:'Independent '+role,hardBudget:8,workerSessionId:id},parent))
   await f.settled(next)
   const newBudget=f.registry.get('leader').workers[next].budget
@@ -93,16 +95,39 @@ test('concurrent Secretary and Worker share one root without lost costs or excee
   assert.equal(ids.reduce((sum,id)=>sum+f.registry.get('leader').workers[id].budget.used,0),48)
   assert.equal(f.requests.length,48)
 })
-test('shared root remaining allowance beats assignment hard limits across concurrent children',{timeout:15000},async t=>{
-  const f=await fixture(t,{plan:()=>({name:'read',args:{}})})
-  await f.registry.change('leader',row=>({...row,objectives:{shared:{id:'shared',ownerSessionId:'leader',objective:'Unresolved near cap',used:46,cap:48}}}))
-  const ids=await Promise.all([f.worker.taskTool,f.worker.secretaryTool].map(tool=>f.run(tool,{task:'same root limited remainder',rootObjectiveId:'shared',hardBudget:24}).then(accepted)))
-  await Promise.all(ids.map(id=>f.settled(id)))
-  assert.equal(f.registry.get('leader').objectives.shared.used,48)
-  assert.equal(f.requests.length,2)
-  assert.equal(ids.reduce((sum,id)=>sum+f.registry.get('leader').workers[id].budget.used,0),2)
-  const before=JSON.stringify(f.registry.get('leader'))
-  assert.equal((await f.run(f.worker.taskTool,{task:'no new child refinancing',createNew:true})).status,'POSTMAN_ROOT_BUDGET_EXHAUSTED')
-  assert.equal(JSON.stringify(f.registry.get('leader')),before)
+test('root 46/48 rejects requested hardBudget 24 before assignment for Secretary and Leader/Sol Workers',{timeout:20000},async t=>{
+  for(const role of ['secretary','leader-worker','sol-worker']) await t.test(role,async t=>{
+    const gate=Promise.withResolvers(),entered=Promise.withResolvers()
+    t.after(()=>gate.resolve())
+    const f=await fixture(t,{plan:async(a,_r,_n,w)=>{
+      if(w.roleOf(a)==='sol'){entered.resolve();await gate.promise}
+      return {name:'report',args:{output:'bounded exact facts'}}
+    }})
+    let parent=f.leader,solId
+    if(role==='sol-worker'){
+      solId=accepted(await f.run(f.worker.solTaskTool,{task:'explicit approved Sol route'}));await entered.promise
+      parent=f.ctx.agents.get(solId)
+    }
+    const tool=role==='secretary'?f.worker.secretaryTool:f.worker.taskTool
+    await f.registry.change('leader',row=>({...row,objectives:{shared:{id:'shared',ownerSessionId:parent.id,objective:'Unresolved near cap',used:46,cap:48}}}))
+    const before=JSON.stringify(f.registry.get('leader')),starts=f.specs.length,requests=f.requests.length
+    assert.deepEqual(await f.run(tool,{task:'same root',rootObjectiveId:'shared',hardBudget:24},parent),
+      {status:'POSTMAN_WORKER_OBJECTIVE_BUDGET_INSUFFICIENT',remaining:2,requested:24})
+    assert.equal(JSON.stringify(f.registry.get('leader')),before);assert.equal(f.specs.length,starts);assert.equal(f.requests.length,requests)
+    await f.registry.change('leader',row=>({...row,objectives:{shared:{...row.objectives.shared,used:40}}}))
+    const id=accepted(await f.run(tool,{task:'full eight-step allowance',rootObjectiveId:'shared',hardBudget:8},parent));await f.settled(id)
+    if(parent===f.leader) await f.wake(parent)
+    await f.registry.change('leader',row=>({...row,objectives:{shared:{...row.objectives.shared,used:46}}}))
+    const settled=JSON.stringify(f.registry.get('leader')),started=f.specs.length,requested=f.requests.length
+    for(const control of [tool,...(role==='secretary'?[]:[f.worker.interruptTool]),f.worker.freshTool]){
+      assert.deepEqual(await f.run(control,{workerSessionId:id,task:'same unresolved root',hardBudget:24},parent),
+        {status:'POSTMAN_WORKER_OBJECTIVE_BUDGET_INSUFFICIENT',workerSessionId:id,remaining:2,requested:24})
+      assert.equal(JSON.stringify(f.registry.get('leader')),settled)
+    }
+    assert.deepEqual(await f.run(tool,{workerSessionId:id,task:'default also requires full budget'},parent),
+      {status:'POSTMAN_WORKER_OBJECTIVE_BUDGET_INSUFFICIENT',workerSessionId:id,remaining:2,requested:16})
+    assert.equal(JSON.stringify(f.registry.get('leader')),settled);assert.equal(f.specs.length,started);assert.equal(f.requests.length,requested)
+    if(solId){gate.resolve();await f.settled(solId)}
+  })
 })
 

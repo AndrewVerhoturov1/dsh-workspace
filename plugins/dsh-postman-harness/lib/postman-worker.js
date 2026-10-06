@@ -142,8 +142,9 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     }
     const root = objectives[rootObjectiveId]
     if (!root) throw new Error('POSTMAN_ROOT_OBJECTIVE_REJECTED')
-    if (root.used >= root.cap) throw new Error('POSTMAN_ROOT_BUDGET_EXHAUSTED')
-    return { objectives, budget: newBudget(assignmentId, args.task, args.hardBudget ?? fastBudget.hardLimit, rootObjectiveId) }
+    const requested = args.hardBudget ?? fastBudget.hardLimit, remaining = root.cap - root.used
+    if (remaining < requested) throw Object.assign(new Error('POSTMAN_WORKER_OBJECTIVE_BUDGET_INSUFFICIENT'), { remaining, requested })
+    return { objectives, budget: newBudget(assignmentId, args.task, requested, rootObjectiveId) }
   }
   const rootOfBudget = (agent, budget) => rawRow(agent.session.header.parentSession)?.objectives?.[budget.rootObjectiveId]
   const budgetSnapshot = (row, budget) => budget ? { ...budget, root: row?.objectives?.[budget.rootObjectiveId] ?? null } : null
@@ -449,6 +450,8 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
         workerType: slot.workerType, model: workerOptions(slot.workerType).model, provider: POSTMAN_WORKER_PROVIDER }
     } catch (error) {
       slot.ptcAdmission = null
+      if (error.message === 'POSTMAN_WORKER_OBJECTIVE_BUDGET_INSUFFICIENT')
+        return { status: error.message, workerSessionId: id, remaining: error.remaining, requested: error.requested }
       if (/POSTMAN_ROOT_/.test(String(error))) return { status: String(error.message), workerSessionId: id }
       slot.delivery = 'unknown'
       bindingChanged(id)
@@ -501,6 +504,8 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
         if (task.grant) slot.artifactRequests.add(args.artifactRequestId)
         return { slot }
       } catch (error) {
+        if (error.message === 'POSTMAN_WORKER_OBJECTIVE_BUDGET_INSUFFICIENT')
+          return { status: error.message, remaining: error.remaining, requested: error.requested }
         return { status: /POSTMAN_ROOT_/.test(String(error)) ? String(error.message) : String(error).includes(limitStatus) ?
           limitStatus : 'POSTMAN_WORKER_START_FAILED', diagnostic: diagnostic(error) }
       }
@@ -990,7 +995,8 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       try { return await admitted(parent, async () => {
           if (workerTypeOf(chosen.binding) !== 'sol' && durable) {
             try { allocateBudget(rawRow(parent.id), parent, args, 'preflight', chosen.binding.budget) }
-            catch (error) { return { status: String(error.message), workerSessionId: id } }
+            catch (error) { return { status: String(error.message), workerSessionId: id,
+              ...(error.message === 'POSTMAN_WORKER_OBJECTIVE_BUDGET_INSUFFICIENT' ? { remaining: error.remaining, requested: error.requested } : {}) } }
           }
           if (chosen.binding.retired) {
             if (!await provenClosed(parent, id) || ctx.agents.get(id) || Object.values(rawRow(parent.id)?.workers ?? {}).some(b => b.ownerSessionId === id))
