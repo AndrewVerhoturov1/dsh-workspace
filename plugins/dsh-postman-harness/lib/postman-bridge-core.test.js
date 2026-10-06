@@ -403,7 +403,7 @@ test('package and composition expose bridge entrypoint and leader preset', () =>
   assert.match(agents, /postman-leader/)
 
   const leaderSkill = readFileSync(join(repoRoot, '.agents', 'skills', 'postman-leader', 'SKILL.md'), 'utf8')
-  assert.match(leaderSkill, /POSTMAN_LEADER_SKILL_VERSION: 28/)
+  assert.match(leaderSkill, /POSTMAN_LEADER_SKILL_VERSION: 29/)
   assert.match(leaderSkill, /существующий mapping не запрещает \x60createNew:true\x60/)
   assert.match(leaderSkill, /может остановить выбранного Worker в любой момент/)
   for (const forbidden of ['повторный \x60postman_worker()\x60 при существующем mapping',
@@ -440,7 +440,7 @@ test('package and composition expose bridge entrypoint and leader preset', () =>
   }
   assert.ok(inputDoc.includes('selectionIds:'))
   assert.doesNotMatch(inputDoc, /attachmentIds/)
-  assert.match(leaderSkill, /Не спрашивай filesystem path для поддерживаемого current image attachment/)
+  assert.match(leaderSkill, /supported current image не спрашивай path/)
   assert.ok(leaderSkill.includes('@PostmanAsk --input-files-json <JSON.stringify(exact descriptors)>'))
   assert.ok(leaderSkill.includes('@PostmanAsk --chat <OLD_REQ> --input-files-json <JSON.stringify(exact descriptors)>'))
 

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import {assertManagementRequest} from './fixtures/postman-stage3-contract.js'
 import test from 'node:test'
 import {mkdtemp,rm,readFile,writeFile} from 'node:fs/promises'
 import {join} from 'node:path'
@@ -37,6 +38,7 @@ for(const type of ['luna','secretary','sol']) test(type+' actual model instructi
   const requests=f.requests.filter(x=>x.agent.id===id)
   assert.ok(requests.length>=4)
   for(const {request} of requests){
+    assertManagementRequest(type,request)
     assert.ok(request.system.includes(postmanRoleInstruction(type)), 'full canonical role text in actual system request')
     assert.equal(request.system.includes('# Postman PTC programming discipline'),type==='sol')
     assert.equal(request.tools.some(x=>x.name==='ptc_execute'),type==='sol')
@@ -195,7 +197,11 @@ test('stock manual compact retains exact role Session budget quota and audit',{t
   }
 })
 test('canonical TASK_CONTRACT and Sol mandatory delegation instructions',()=>{
-  for(const type of ['luna','secretary','sol']){const s=postmanRoleInstruction(type);for(const word of ['TASK_CONTRACT','scope','done conditions','verification','stop condition','blocker'])assert.ok(s.includes(word),type+' '+word)}
-  const sol=postmanRoleInstruction('sol');for(const word of ['двух','ОБЯЗАН','параллельно','engineering decisions','агрегированный report','PTC-first','Worker-first','direct-only','model turns','latency'])assert.ok(sol.includes(word),word)
+  for(const type of ['luna','secretary','sol']){
+    const s=postmanRoleInstruction(type)
+    for(const marker of [/TASK_CONTRACT/,/scope/i,/done (conditions|when)/i,/verification/i,/stop( condition)?/i,/blocker/i])assert.match(s,marker,type+' '+marker)
+  }
+  const sol=postmanRoleInstruction('sol')
+  for(const marker of [/до двух/,/Обязательно передавай/,/параллельно/,/engineering judgement/i,/агрегированный report/,/PTC-first/,/Worker-first/,/direct-only/,/Dispatch-first/])assert.match(sol,marker)
   assert.deepEqual(FAST_WORKER_BUDGET,{hardLimit:16,softLimit:12})
 })

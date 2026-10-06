@@ -9,7 +9,7 @@
 // This module is deliberately data-only. ptc-adapter.js is responsible for
 // injecting the text into the system prompt of an authorized Postman PTC agent.
 
-export const POSTMAN_PTC_DISCIPLINE_VERSION = 5
+export const POSTMAN_PTC_DISCIPLINE_VERSION = 6
 
 export const POSTMAN_PTC_DISCIPLINE = String.raw`
 # Postman PTC programming discipline
@@ -114,12 +114,15 @@ Preferred pattern:
 3. select the next deterministic action;
 4. continue in the same program.
 
-Use ptc.expectStatus(result, visiblePostmanToolName) for the current Host-maintained
-exact success statuses of prepare/Worker/interrupt/Bridge. Do not invent acceptance
-aliases. Use an explicit exact array for other known outcomes whose next action
-is deterministic, including non-success statuses such as
-POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT; branch on them inside PTC rather than
-throwing just because the result is not a success. Unknown outcomes still stop.
+Use ptc.expectStatus(result, visiblePostmanToolName) only for a true successful-path
+invariant: every other outcome violates the expected path. It uses the current
+Host-maintained exact success statuses of prepare/Worker/interrupt/Bridge; do not
+invent acceptance aliases. For multi-outcome lifecycle state machines, use explicit
+exact branching on known normal outcomes (including refusals such as
+POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT or POSTMAN_WORKER_COMPACT_NOT_RESIDENT).
+Do not turn a normal negative branch into a PTC runtime-error. An explicit exact
+array may validate known outcomes before branching, but is not a replacement for
+choosing the correct next action. Unknown outcomes stop with compact evidence.
 
 Never continue on an unknown status by guessing what it means.
 
@@ -523,7 +526,7 @@ appears. Do not preemptively flood its context.
 
 ## 24. Canonical status-validation pattern
 
-When ptc.expectStatus is available, prefer:
+When ptc.expectStatus is available and the successful path is a true invariant, prefer:
 
 const prep = ptc.expectStatus(
   await tools.postman_task_prepare({}),
