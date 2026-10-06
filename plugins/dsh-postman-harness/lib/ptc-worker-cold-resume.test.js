@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import {assertManagementRequest} from './fixtures/postman-stage3-contract.js'
 import {spawn} from 'node:child_process'
 import {mkdtemp,mkdir,rm,readFile,writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
@@ -29,6 +30,7 @@ const phase=async(dir,type,resume,legacy=false)=>{
     const child=await f.settled(accepted.workerSessionId);await f.wake(f.leader)
     if(legacy)assert.ok(child.session.events.find(e=>e.type==='subagent/descriptor').data.toolFilter.deny.includes('ptc_execute'))
     const req=f.requests[0].request
+    assertManagementRequest(type,req)
     assert.ok(req.system.includes(postmanRoleInstruction(type)))
     assert.equal(req.reasoningEffort,type==='sol'?'xhigh':'low')
     assert.ok(!req.tools.some(x=>['subagent','workflow','ralph','postman_bridge'].includes(x.name)))
@@ -49,6 +51,7 @@ const phase=async(dir,type,resume,legacy=false)=>{
       const freshChild=await f.settled(fresh.workerSessionId)
       const r=f.requests.find(x=>x.agent.id===fresh.workerSessionId).request
       assert.ok(!r.messages.some(m=>JSON.stringify(m).includes('bounded initial')))
+      assertManagementRequest(type,r)
       assert.ok(r.system.includes(postmanRoleInstruction(type)))
       assert.equal(r.tools.some(x=>x.name==='ptc_execute'),type==='sol')
       if(type==='sol')assert.equal(JSON.parse(freshChild.session.events.find(e=>e.type==='tool/result').data.message.content[0].content[0].text).status,'ok')

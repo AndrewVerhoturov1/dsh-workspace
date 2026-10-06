@@ -79,9 +79,9 @@ test('Worker request pins Luna and denies only registered Postman tools', () => 
   ] }).filter(name => name.startsWith('postman_')), ['postman_future_control'])
   assert.throws(() => buildPostmanWorkerStartRequest(parent, 'local work', signal, []),
     /POSTMAN_WORKER_TRANSPORT_BOUNDARY_REQUIRED/)
-  assert.match(POSTMAN_WORKER_PERSONA, /report tool/)
-  assert.match(POSTMAN_WORKER_PERSONA, /later tasks/)
-  assert.match(POSTMAN_WORKER_PERSONA, /Никогда не пиши и не используй PTC/)
+  assert.match(POSTMAN_WORKER_PERSONA, /child-scoped report/)
+  assert.match(POSTMAN_WORKER_PERSONA, /continuation[^.]*новому назначению/)
+  assert.match(POSTMAN_WORKER_PERSONA, /Никогда[^.]*или PTC/)
   assert.doesNotMatch(POSTMAN_WORKER_PERSONA, /# Postman PTC programming discipline/)
 })
 
