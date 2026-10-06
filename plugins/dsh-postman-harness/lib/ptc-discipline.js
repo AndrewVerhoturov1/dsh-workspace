@@ -291,10 +291,10 @@ knew before the PTC program started.
 
 ## 11. Local role execution
 
-Postman PTC belongs to the exact experimental Leader and exact Host-managed Sol Worker,
-with separate profiles. Sol uses PTC-first for its own batchable engineering flow,
+The exact canonical/compat Leader uses supervisor PTC; the exact Host-managed Sol Worker
+uses a separate engineering PTC profile. Sol uses PTC-first for its own batchable engineering flow,
 and Worker-first for independent cheap subtasks (two Workers in parallel when independent).
-Sol Worker controls stay direct-only and Host checks exact parent ownership on every operation.
+Sol Worker controls, report and notify_parent stay direct-only; Host checks exact parent ownership on every operation.
 PTC grants no supervisor, Bridge, Secretary, Sol creation or user-approval authority to Sol.
 Ordinary Worker and Secretary use direct tools with a finite FAST assignment budget;
 neither receives ptc_execute, Worker controls or generic delegation.
@@ -419,7 +419,8 @@ Never infer that a tool exists from:
 
 Do not try to reach an unavailable capability through another generic tool.
 
-Only the experimental Leader has a PTC profile. Child role execution is direct.
+The separate Leader supervisor and Sol engineering profiles follow section 11;
+ordinary Worker and Secretary remain direct-only, without PTC.
 
 ## 18. No native Harness PTC substitution
 

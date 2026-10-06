@@ -33,6 +33,8 @@ try {
     resolve(stagingRoot, 'profiles/web/scripts/install-production.mjs'))
 
   // Include the current role implementation and canonical sources before commit.
+  for (const source of ['plugins/dsh-postman-harness/README.md','docs/subprojects/ptc/PTC_CONTRACT.md'])
+    copyFileSync(resolve(repositoryRoot,source),resolve(stagingRoot,source))
   cpSync(resolve(repositoryRoot,'plugins/dsh-postman-harness/lib'),resolve(stagingRoot,'plugins/dsh-postman-harness/lib'),{recursive:true})
   for (const name of ['package.json','pnpm-lock.yaml'])
     copyFileSync(resolve(repositoryRoot,'plugins/dsh-postman-harness',name),resolve(stagingRoot,'plugins/dsh-postman-harness',name))

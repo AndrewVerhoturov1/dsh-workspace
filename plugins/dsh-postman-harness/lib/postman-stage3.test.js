@@ -5,7 +5,7 @@ import {join} from 'node:path'
 import {tmpdir} from 'node:os'
 import {capabilityRuntime} from './fixtures/postman-capability-runtime.js'
 import {managementMarkers, assertManagementRequest} from './fixtures/postman-stage3-contract.js'
-import {postmanRoleInstruction} from './postman-worker.js'
+import {postmanRoleInstruction, FAST_WORKER_BUDGET, FAST_ROOT_CAP} from './postman-worker.js'
 import {POSTMAN_PTC_DISCIPLINE} from './ptc-discipline.js'
 
 const root = new URL('../../../', import.meta.url)
@@ -24,6 +24,25 @@ test('bounded Stage 3 source contract: kernel first, routing, safety and FAST bu
   assert.match(leader, /NOT_SENT \/ TERMINAL \/ OUTCOME_UNKNOWN/)
   assert.match(POSTMAN_PTC_DISCIPLINE, /true successful-path/)
   assert.match(POSTMAN_PTC_DISCIPLINE, /multi-outcome lifecycle/)
+  assert.doesNotMatch(POSTMAN_PTC_DISCIPLINE, /experimental Leader|Child role execution is direct/i)
+  assert.match(POSTMAN_PTC_DISCIPLINE, /canonical\/compat Leader uses supervisor PTC/)
+  assert.match(POSTMAN_PTC_DISCIPLINE, /Host-managed Sol Worker\s+uses a separate engineering PTC profile/)
+  assert.match(POSTMAN_PTC_DISCIPLINE, /Sol Worker controls, report and notify_parent stay direct-only/)
+  assert.match(POSTMAN_PTC_DISCIPLINE, /ordinary Worker and Secretary remain direct-only, without PTC/)
+  const readme = await readFile(new URL('plugins/dsh-postman-harness/README.md', root), 'utf8')
+  const compact = readme.split('\n').find(line => line.startsWith('`postman_worker_compact('))
+  assert.match(compact, /resident idle Worker ИЛИ proven settled non-resident durable Worker/)
+  assert.match(compact, /ту же Session\/ID, binding, FAST budget/)
+  assert.match(compact, /Active\/pending\/uncertain остаются blocked\/busy/)
+  assert.doesNotMatch(readme, /compactNow` только для trustworthy exact resident/)
+  const contract = await readFile(new URL('docs/subprojects/ptc/PTC_CONTRACT.md', root), 'utf8')
+  assert.match(contract, /Skill v29/); assert.doesNotMatch(contract, /Skill v28/)
+  assert.match(contract, /postman_task_prepare\/postman_task_restore\/postman_task_close\/postman_input_files/)
+  assert.match(contract, /postman_task_close` явно retire-ит settled Leader task binding/)
+  assert.match(contract, /не Git cleanup и не доказательство success/)
+  assert.match(contract, /runtime default — hard16; configurable `hardBudget` 8\.\.24; durable root cap48/)
+  assert.match(contract, /Stage 3 assignments явно запрашивают `hardBudget:15` → Host soft12/)
+  assert.equal(FAST_WORKER_BUDGET.hardLimit, 16); assert.equal(FAST_ROOT_CAP, 48)
   const example = leader.match(/const r = await tools.postman_worker_compact[\s\S]*?unexpected_status[^\n]*/)?.[0]
   assert.ok(example, 'known status branching example')
   assert.doesNotMatch(example, /expectStatus/)

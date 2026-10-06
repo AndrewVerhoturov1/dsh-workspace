@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import {POSTMAN_PTC_DISCIPLINE} from '../ptc-discipline.js'
 
 // Small semantic markers, not a wording snapshot. Called on actual native requests.
 export const managementMarkers = {
@@ -27,6 +28,10 @@ export function assertManagementRequest(role, request) {
   // canonical roles are system sections. Both are actual model inputs.
   const instructions = role === 'leader' ? request.system + '\n' + JSON.stringify(request.messages) : request.system
   for (const marker of managementMarkers[role]) assert.ok(marker.test(instructions), role + ': missing ' + marker)
+  if (role === 'leader' || role === 'sol') {
+    assert.ok(request.system.includes(POSTMAN_PTC_DISCIPLINE), role + ': Host-injected canonical discipline')
+    assert.doesNotMatch(request.system, /experimental Leader|Child role execution is direct/i)
+  }
   const names = request.tools.map(t => t.name)
   assert.ok(names.includes('skill'), role + ': other specialized skills stay available')
   assert.equal(names.includes('ptc_execute'), role === 'leader' || role === 'sol', role + ': PTC authority')
