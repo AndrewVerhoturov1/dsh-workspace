@@ -79,18 +79,19 @@ test('all real child requests: Secretary/Worker/Sol functional smoke, ownership,
   t.after(()=>{solGate.resolve();ownGate.resolve()})
   const f = await fixture(t, { plan })
   await f.prepare(); await writeFile(join(f.worktree,'facts.txt'),'old fact')
+  const ownCall = async (agent,name,args={}) => nested(await f.execute(agent,'ptc_execute',ptc('return await tools.'+name+'('+JSON.stringify(args)+')')))
   const leaderCall = async (name,args) => nested(await f.execute(f.leader,'ptc_execute',ptc('return await tools.'+name+'('+JSON.stringify(args)+')')))
   const start = async (name,parent=f.leader) => {
-    const r = parent===f.leader ? await leaderCall(name,{task:'Explicit user-selected Sol Worker route; bounded fixture evidence'}) : ok(await f.execute(parent,name,{task:'bounded owned fixture evidence'}))
+    const r = parent===f.leader ? await leaderCall(name,{task:'Explicit user-selected Sol Worker route; bounded fixture evidence'}) : await ownCall(parent,name,{task:'bounded owned fixture evidence'})
     assert.equal(r.status,'POSTMAN_WORKER_TASK_ACCEPTED',JSON.stringify(r));const a=name==='postman_sol_worker'?await solEntered.promise:await f.childDone(r.workerSessionId);assert.ok(a);return a
   }
   const secretary=await start('postman_secretary'), worker=await start('postman_worker'), settledSol=await start('postman_sol_worker')
   const sol=f.ctx.agents.get(settledSol.id)
   assert.ok(sol, 'native continuable Sol activation remains resident')
   const owned=[]
-  for(let i=0;i<2;i++){const r=ok(await f.execute(sol,'postman_worker',{task:'bounded concurrent owned Worker '+i,createNew:true}));assert.equal(r.status,'POSTMAN_WORKER_TASK_ACCEPTED',JSON.stringify(r));owned.push(r.workerSessionId)}
+  for(let i=0;i<2;i++){const r=await ownCall(sol,'postman_worker',{task:'bounded concurrent owned Worker '+i,createNew:true});assert.equal(r.status,'POSTMAN_WORKER_TASK_ACCEPTED',JSON.stringify(r));owned.push(r.workerSessionId)}
   assert.notEqual(owned[0],owned[1])
-  const third=ok(await f.execute(sol,'postman_worker',{task:'third disallowed owned Worker',createNew:true}));assert.equal(third.status,'POSTMAN_WORKER_LIMIT_REACHED',JSON.stringify(third))
+  const third=await ownCall(sol,'postman_worker',{task:'third disallowed owned Worker',createNew:true});assert.equal(third.status,'POSTMAN_WORKER_LIMIT_REACHED',JSON.stringify(third))
   ownGate.resolve();const [own,own2]=await Promise.all(owned.map(id=>f.childDone(id)))
   const { scopeParentOf }=await native('dsh-scope')
   const ordinary=f.ctx.tools.schemas(scopeParentOf(f.leader)).map(t=>t.name).filter(n=>!POSTMAN_LEADER_ONLY_TOOL_NAMES.includes(n)&&n!=='ptc_execute'&&!DELEGATION_TOOLS.includes(n))
@@ -111,7 +112,7 @@ test('all real child requests: Secretary/Worker/Sol functional smoke, ownership,
   const sr=check(secretary), solr=check(sol)
   for(const name of ['ask_user_question','list_agents'])assert.ok(!sr.tools.some(t=>t.name===name),'Secretary: forbidden '+name)
   assert.ok(!solr.tools.some(t=>t.name==='ask_user_question'),'Sol: no user questions')
-  const admission=async(a)=>a.session.header.parentSession==='leader'?leaderCall(role(a)==='sol'?'postman_sol_worker':role(a)==='secretary'?'postman_secretary':'postman_worker',{workerSessionId:a.id,task:'next exact bounded fixture'}) : ok(await f.execute(sol,'postman_worker',{workerSessionId:a.id,task:'next exact bounded fixture'}))
+  const admission=async(a)=>a.session.header.parentSession==='leader'?leaderCall(role(a)==='sol'?'postman_sol_worker':role(a)==='secretary'?'postman_secretary':'postman_worker',{workerSessionId:a.id,task:'next exact bounded fixture'}) : await ownCall(sol,'postman_worker',{workerSessionId:a.id,task:'next exact bounded fixture'})
   for(const a of [secretary,worker,own]) {
     const batch=role(a)==='secretary'?[{name:'read',args:{file_path:'facts.txt'}},{name:'glob',args:{pattern:'*.txt'}},{name:'grep',args:{pattern:'fact',path:'facts.txt'}},{name:'postman_secretary_ledger',args:{content:'verified fact ledger',revision:0}},{name:'postman_secretary_ledger',args:{}}]:role(a)==='sol'?[{name:'ptc_execute',args:ptc('const r=await tools.read({file_path:"facts.txt"});const g=await tools.grep({pattern:"fact",path:"facts.txt"});await tools.edit({file_path:"facts.txt",old_string:"old fact",new_string:"new fact"});const after=await tools.read({file_path:"facts.txt"});return {r,g,after,names:Object.keys(tools)}')}]:[{name:'read',args:{file_path:'facts.txt'}},{name:'glob',args:{pattern:'*.txt'}},{name:'write',args:{file_path:a.id+'.txt',content:'smoke old'}},{name:'read',args:{file_path:a.id+'.txt'}},{name:'edit',args:{file_path:a.id+'.txt',old_string:'smoke old',new_string:'smoke new'}},{name:'read',args:{file_path:a.id+'.txt'}},{name:'pwsh',args:{command:'Write-Output safe-fixture-smoke',description:'Print safe fixture smoke evidence'}}]
     for(const action of batch){if(action.args.file_path)action.args.file_path=join(f.worktree,action.args.file_path);if(action.name==='glob')action.args.path=f.worktree;if(action.name==='grep')action.args.path=join(f.worktree,'facts.txt')}
@@ -127,16 +128,16 @@ test('all real child requests: Secretary/Worker/Sol functional smoke, ownership,
     else assert.equal(await readFile(join(f.worktree,a.id+'.txt'),'utf8'),'smoke new')
   }
   await writeFile(join(f.worktree,'facts.txt'),'old fact')
-  // Guards checked during a live Sol turn; controls remain direct-only and owned.
+  // Guards checked during a live Sol turn; owned controls are PTC-only.
   queues.set(sol.id,[{text:'gate'}])
   const liveSol=sol
   for(const name of ['read','glob','grep','write','edit']){
     const args=name==='read'?{file_path:'facts.txt'}:name==='glob'?{pattern:'*.txt'}:name==='grep'?{pattern:'fact'}:name==='write'?{file_path:'unused',content:'x'}:{file_path:'facts.txt',old_string:'old',new_string:'new'}
     const r=await f.execute(liveSol,name,args);assert.equal(r.isError,true);assert.match(r.error.message,/POSTMAN_PTC_DIRECT_CALL_REJECTED/)
   }
-  const list=ok(await f.execute(liveSol,'postman_worker_list'));assert.equal(list.quota.luna.limit,2);assert.deepEqual(list.workers.map(w=>w.workerSessionId).sort(),[own.id,own2.id].sort())
+  const list=await ownCall(liveSol,'postman_worker_list');assert.equal(list.quota.luna.limit,2);assert.deepEqual(list.workers.map(w=>w.workerSessionId).sort(),[own.id,own2.id].sort())
   for(const id of [worker.id,secretary.id,sol.id,'foreign-id'])for(const name of WORKER_CONTROL_TOOLS.filter(n=>n!=='postman_worker_list')){
-    const r=ok(await f.execute(liveSol,name,{workerSessionId:id,task:'bounded foreign fixture'}));assert.equal(r.status,'POSTMAN_WORKER_TARGET_UNKNOWN',JSON.stringify({name,id,r}))
+    const r=await ownCall(liveSol,name,{workerSessionId:id,task:'bounded foreign fixture'});assert.equal(r.status,'POSTMAN_WORKER_TARGET_UNKNOWN',JSON.stringify({name,id,r}))
   }
   for(const a of [secretary,worker,own,own2]){
     const before=Object.keys(f.registry.get('leader').workers).length
@@ -144,8 +145,8 @@ test('all real child requests: Secretary/Worker/Sol functional smoke, ownership,
     for(const name of ['postman_worker','postman_secretary','postman_sol_worker','ptc_execute','subagent','workflow'])assert.equal((await f.execute(h.agent,name,{task:'forbidden child',program:'return 1',description:'forbidden',boundary:'semantic_decision'})).isError,true,name)
     assert.equal(Object.keys(f.registry.get('leader').workers).length,before);await h.dispose()
   }
-  const redirect=ok(await f.execute(sol,'postman_worker_interrupt',{workerSessionId:own2.id,task:'bounded owned redirect'}));assert.equal(redirect.status,'POSTMAN_WORKER_INTERRUPT_TASK_ACCEPTED',JSON.stringify(redirect));await f.childDone(own2.id);check(own2)
-  for(const name of WORKER_CONTROL_TOOLS)assert.ok(!POSTMAN_SOL_PTC_TOOL_NAMES.includes(name))
+  const redirect=await ownCall(sol,'postman_worker_interrupt',{workerSessionId:own2.id,task:'bounded owned redirect'});assert.equal(redirect.status,'POSTMAN_WORKER_INTERRUPT_TASK_ACCEPTED',JSON.stringify(redirect));await f.childDone(own2.id);check(own2)
+  for(const name of WORKER_CONTROL_TOOLS)assert.ok(POSTMAN_SOL_PTC_TOOL_NAMES.includes(name))
   const smoke=nested(await f.execute(liveSol,'ptc_execute',ptc('const r=await tools.read({file_path:"facts.txt"});const g=await tools.grep({pattern:"fact",path:"facts.txt"});await tools.edit({file_path:"facts.txt",old_string:"old fact",new_string:"new fact"});const after=await tools.read({file_path:"facts.txt"});return {r,g,after}'.replaceAll('\"facts.txt\"',JSON.stringify(join(f.worktree,'facts.txt'))))))
   assert.equal(smoke.after.lines[0].text,'new fact')
   holdSol=false;solGate.resolve();await f.childDone(sol.id)
@@ -158,9 +159,9 @@ test('all real child requests: Secretary/Worker/Sol functional smoke, ownership,
     const h=f.ctx.agents.get(a.id)?null:await f.ctx.agents.resume({resumeSessionId:a.id,agentOptions:{provider:'codex',model:a.options.model}})
     const resident=h?.agent ?? f.ctx.agents.get(a.id)
     const c=resident.ctx.plugin(Summarizer,{auto:false});await c.await()
-    const compact=owner===f.leader?await leaderCall('postman_worker_compact',{workerSessionId:a.id}):ok(await f.execute(owner,'postman_worker_compact',{workerSessionId:a.id}))
+    const compact=owner===f.leader?await leaderCall('postman_worker_compact',{workerSessionId:a.id}):await ownCall(owner,'postman_worker_compact',{workerSessionId:a.id})
     assert.equal(compact.status,'POSTMAN_WORKER_COMPACTED',JSON.stringify(compact));await h?.dispose()
-    const next=owner===f.leader?await admission(a):ok(await f.execute(owner,'postman_worker',{workerSessionId:a.id,task:'bounded post-compact assignment'}))
+    const next=owner===f.leader?await admission(a):await ownCall(owner,'postman_worker',{workerSessionId:a.id,task:'bounded post-compact assignment'})
     assert.equal(next.status,'POSTMAN_WORKER_TASK_ACCEPTED',JSON.stringify({role:role(a),next}));await f.childDone(a.id);check(a);await ownerHandle?.dispose()
   }
 })
@@ -182,15 +183,15 @@ test('fresh real Secretary Worker Sol preserve exact catalog and ledger', {timeo
  }
 })
 
-test('Sol actual model direct controls manage only its own Worker lifecycle', {timeout:30000},async t=>{
+test('Sol actual model nested controls manage only its own Worker lifecycle', {timeout:30000},async t=>{
  const gate=Promise.withResolvers(),entered=Promise.withResolvers();let step=0,sol,own,second,f
  t.after(()=>gate.resolve())
  const plan=async a=>{
   if(a.id==='leader')return null
   if(a.options.model!=='gpt-6.1-sol')return report
-  if(step++===0){entered.resolve(a);await gate.promise;return {name:'postman_worker_list',args:{}}}
-  if(step===2)return {name:'postman_worker_stop',args:{workerSessionId:second,mode:'close'}}
-  if(step===3)return {name:'postman_worker_fresh',args:{workerSessionId:own,task:'fresh owned finite assignment'}}
+  if(step++===0){entered.resolve(a);await gate.promise;return {name:'ptc_execute',args:ptc('return await tools.postman_worker_list({})')}}
+  if(step===2)return {name:'ptc_execute',args:ptc('return await tools.postman_worker_stop('+JSON.stringify({workerSessionId:second,mode:'close'})+')')}
+  if(step===3)return {name:'ptc_execute',args:ptc('return await tools.postman_worker_fresh('+JSON.stringify({workerSessionId:own,task:'fresh owned finite assignment'})+')')}
   const fresh=f.results.findLast(r=>r.agent.id===a.id&&r.name==='postman_worker_fresh')?.result.value
   if(fresh?.workerSessionId&&fresh.status==='POSTMAN_WORKER_TASK_ACCEPTED')await f.childDone(fresh.workerSessionId)
   return report
@@ -199,12 +200,13 @@ test('Sol actual model direct controls manage only its own Worker lifecycle', {t
  if(typeof f.ctx.subagents.closeContinuableChild!=='function'){t.skip('published SDK exact-child close API unavailable');return}
  await f.turn(f.leader)
  const accepted=nested(await f.execute(f.leader,'ptc_execute',ptc('return await tools.postman_sol_worker({task:"User selects explicit Sol route for owned lifecycle"})')));assert.equal(accepted.status,'POSTMAN_WORKER_TASK_ACCEPTED',JSON.stringify(accepted));sol=await entered.promise
- const ids=[];for(let i=0;i<2;i++){const r=ok(await f.execute(sol,'postman_worker',{task:'owned finite evidence '+i,createNew:true}));assert.equal(r.status,'POSTMAN_WORKER_TASK_ACCEPTED',JSON.stringify(r));ids.push(r.workerSessionId);await f.childDone(r.workerSessionId)}
+ const ownCall=async(agent,name,args={})=>nested(await f.execute(agent,'ptc_execute',ptc('return await tools.'+name+'('+JSON.stringify(args)+')')))
+ const ids=[];for(let i=0;i<2;i++){const r=await ownCall(sol,'postman_worker',{task:'owned finite evidence '+i,createNew:true});assert.equal(r.status,'POSTMAN_WORKER_TASK_ACCEPTED',JSON.stringify(r));ids.push(r.workerSessionId);await f.childDone(r.workerSessionId)}
  ;[own,second]=ids
  const {BasicCompactionEngine}=await native('dsh-compaction-basic'),h=await f.ctx.agents.resume({resumeSessionId:own,agentOptions:{provider:'codex',model:'gpt-6-luna'}})
  const Summarizer=class extends BasicCompactionEngine{async summarize(){return {summary:[{type:'text',text:'owned exact facts'}],provider:'codex',model:'gpt-6-luna'}}};await h.agent.ctx.plugin(Summarizer,{auto:false}).await()
- const compact=ok(await f.execute(sol,'postman_worker_compact',{workerSessionId:own}));assert.equal(compact.status,'POSTMAN_WORKER_COMPACTED',JSON.stringify(compact));await h.dispose()
-  const continuation=ok(await f.execute(sol,'postman_worker',{workerSessionId:own,task:'Related precise post-compact owned check'}));assert.equal(continuation.status,'POSTMAN_WORKER_TASK_ACCEPTED',JSON.stringify(continuation));await f.childDone(own)
+ const compact=await ownCall(sol,'postman_worker_compact',{workerSessionId:own});assert.equal(compact.status,'POSTMAN_WORKER_COMPACTED',JSON.stringify(compact));await h.dispose()
+  const continuation=await ownCall(sol,'postman_worker',{workerSessionId:own,task:'Related precise post-compact owned check'});assert.equal(continuation.status,'POSTMAN_WORKER_TASK_ACCEPTED',JSON.stringify(continuation));await f.childDone(own)
   assertManagementRequest('luna',f.requests.filter(r=>r.agent.id===own).at(-1).request)
  gate.resolve();await f.childDone(sol.id)
  for(const [name,status]of [['postman_worker_list','POSTMAN_WORKER_LIST'],['postman_worker_stop','POSTMAN_WORKER_STOPPED'],['postman_worker_fresh','POSTMAN_WORKER_TASK_ACCEPTED']]){const r=f.results.findLast(r=>r.agent.id===sol.id&&r.name===name)?.result;assert.ok(r,name);assert.equal(r.isError,false,JSON.stringify(r));assert.equal(r.value.status,status,JSON.stringify(r.value))}

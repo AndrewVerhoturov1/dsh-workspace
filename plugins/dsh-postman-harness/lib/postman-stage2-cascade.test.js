@@ -18,7 +18,7 @@ async function fixture(t, { active = false } = {}) {
     if (a.id === 'leader') return null
     if (a.options.model !== 'gpt-6.1-sol') return report
     sol = a
-    if (step++ < 2) return { name: 'postman_worker', args: { task: 'bounded native child', createNew: true } }
+    if (step++ < 2) return {name:'ptc_execute',args:{program:'return await tools.postman_worker({task:"bounded native child",createNew:true})',description:'Dispatch exact owned child before subtree reconciliation',boundary:'semantic_decision'}}
     const ids = Object.values(f.registry.get('leader').workers).filter(b => b.ownerSessionId === a.id).map(b => b.id)
     for (const id of ids) await f.childDone(id)
     if (active) { entered.resolve(a); await gate.promise }
@@ -77,7 +77,7 @@ test('actual PTC two RUNNING ordinary children reject close and fresh then stric
       return waitAbort(a.id, request.signal)
     }
     sol = a
-    if (step++ < 2) return { name: 'postman_worker', args: { task: 'running bounded native child', createNew: true } }
+    if (step++ < 2) return {name:'ptc_execute',args:{program:'return await tools.postman_worker({task:"running bounded native child",createNew:true})',description:'Dispatch exact active owned child before event',boundary:'semantic_decision'}}
     await childrenStarted.promise
     assert.equal(running.size, 2)
     started.resolve()
