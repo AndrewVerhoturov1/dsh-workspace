@@ -27,7 +27,7 @@ test('bounded Stage 3 source contract: kernel first, routing, safety and FAST bu
   assert.doesNotMatch(POSTMAN_PTC_DISCIPLINE, /experimental Leader|Child role execution is direct/i)
   assert.match(POSTMAN_PTC_DISCIPLINE, /canonical\/compat Leader uses supervisor PTC/)
   assert.match(POSTMAN_PTC_DISCIPLINE, /Host-managed Sol Worker\s+uses a separate engineering PTC profile/)
-  assert.match(POSTMAN_PTC_DISCIPLINE, /Sol Worker controls, report and notify_parent stay direct-only/)
+  assert.match(POSTMAN_PTC_DISCIPLINE, /Sol owned Worker controls are PTC-managed \/ PTC-only/)
   assert.match(POSTMAN_PTC_DISCIPLINE, /ordinary Worker and Secretary remain direct-only, without PTC/)
   const readme = await readFile(new URL('plugins/dsh-postman-harness/README.md', root), 'utf8')
   const compact = readme.split('\n').find(line => line.startsWith('`postman_worker_compact('))
@@ -94,7 +94,7 @@ test('controlled exact file + command needs no broad discovery under Leader or S
   assert.equal(direct.status, 'POSTMAN_WORKER_TASK_ACCEPTED'); await f.childDone(direct.workerSessionId)
   const acceptedSol = await call('postman_sol_worker', {task:'User explicitly selects Sol Worker. Bounded controlled evidence aggregation, no implementation.'})
   assert.equal(acceptedSol.status, 'POSTMAN_WORKER_TASK_ACCEPTED'); const sol = await entered.promise
-  const owned = value(await f.execute(sol, 'postman_worker', assignment))
+  const owned = value(await f.execute(sol,'ptc_execute',{program:'return await tools.postman_worker('+JSON.stringify(assignment)+')',description:'Dispatch owned bounded check before review',boundary:'semantic_decision'})).value
   assert.equal(owned.status, 'POSTMAN_WORKER_TASK_ACCEPTED'); await f.childDone(owned.workerSessionId)
   for (const id of [direct.workerSessionId, owned.workerSessionId]) {
     const actions = f.results.filter(r => r.agent.id === id)

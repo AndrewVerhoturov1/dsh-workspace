@@ -78,9 +78,10 @@ export const POSTMAN_PTC_ONLY_LEADER_TOOLS = Object.freeze(POSTMAN_LEADER_TOOL_A
 ))
 
 export const POSTMAN_WORKER_PTC_TOOL_NAMES = Object.freeze(['read', 'glob', 'grep', 'web_fetch', 'web_search', 'write', 'edit'])
-// Sol's local execution only. Worker controls stay direct and parent-scoped.
+// Sol engineering mechanics and exact owned ordinary Worker controls.
 export const POSTMAN_SOL_PTC_TOOL_NAMES = Object.freeze([...POSTMAN_WORKER_PTC_TOOL_NAMES,
-  'read_image', 'pwsh', 'bash', 'job_output', 'job_kill', 'job_list', 'implementation_artifact_apply'])
+  'read_image', 'pwsh', 'bash', 'job_output', 'job_kill', 'job_list', 'implementation_artifact_apply',
+  ...WORKER_CONTROL_TOOLS])
 
 // Existing PTC protocol knowledge, shared by the Host gate and expectStatus.
 // These are exact success statuses, not fuzzy aliases or a dispatch recipe.

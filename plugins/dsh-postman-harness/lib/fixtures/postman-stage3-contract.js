@@ -20,8 +20,10 @@ export const managementMarkers = {
     /первой meaningful Sol decision/, /оба сразу/, /Dispatch first/,
     /PTC-first/, /Worker-first/, /Exact-path-first delegation/,
     /Canonical skill already injected/, /skill\(postman-sol-worker\)/,
-    /direct-only/, /environment readiness/, /SHOW_TO_USER/, /POSTMAN_SOL_WORKER_SKILL_VERSION: 1/,
-    /PTC = engineering phase, not tool wrapper/, /Investigation phase/, /Implementation phase/, /Verification closure phase/],
+    /direct-only/, /environment readiness/, /SHOW_TO_USER/, /POSTMAN_SOL_WORKER_SKILL_VERSION: 2/,
+    /PTC = engineering phase, not tool wrapper/, /Investigation phase/, /Implementation phase/, /Verification closure phase/,
+     /PTC-managed \/ PTC-only/, /ONE PTC/, /external_event/, /реальные owned Worker reports/,
+     /terminal assignment result, не progress\/FYI/, /generic child report guidance/, /report завершает turn/, /decision-relevant escalation/, /не FYI\/progress\/обычный completion/],
 }
 
 export function assertManagementRequest(role, request) {
@@ -38,6 +40,7 @@ export function assertManagementRequest(role, request) {
       assert.match(request.system, marker, role + ': Stage 3.5A discipline')
     assert.doesNotMatch(request.system, /experimental Leader|Child role execution is direct/i)
   }
+  if (role === 'sol') assert.doesNotMatch(request.system, /Worker controls[^\n.]*direct-only|direct postman_worker/)
   if (role === 'luna' || role === 'secretary') {
     assert.ok(!request.system.includes(POSTMAN_PTC_DISCIPLINE), role + ': no canonical PTC discipline')
     assert.doesNotMatch(request.system, /PTC EFFICIENCY NOTICE|PTC UNDERBATCH STREAK|Deterministic phase rule/)

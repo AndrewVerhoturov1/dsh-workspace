@@ -87,7 +87,7 @@ test('actual team snapshot is private bounded read-only and hides control tools 
  await f.childDone(secretary.workerSessionId);await f.childDone(worker.workerSessionId)
  const sol=nested(await call(f,'postman_sol_worker',{task:'User explicitly selected Sol Worker private task'}))
  await solEntered.promise
- const a=ok(await f.execute(solAgent,'postman_worker',{task:'private owned A',createNew:true})),b=ok(await f.execute(solAgent,'postman_worker',{task:'private owned B',createNew:true}))
+ const a=nested(await f.execute(solAgent,'ptc_execute',ptc("return await tools.postman_worker({task:'private owned A',createNew:true})"))),b=nested(await f.execute(solAgent,'ptc_execute',ptc("return await tools.postman_worker({task:'private owned B',createNew:true})")))
  assert.equal(a.status,'POSTMAN_WORKER_TASK_ACCEPTED',JSON.stringify(a));assert.equal(b.status,'POSTMAN_WORKER_TASK_ACCEPTED',JSON.stringify(b));ownGate.resolve()
  await f.childDone(a.workerSessionId);await f.childDone(b.workerSessionId)
  await f.registry.change('leader',r=>({...r,secretaryLedger:{revision:9,content:'do not expose private ledger'},bridgeOperations:Object.fromEntries(Array.from({length:80},(_,i)=>['job-'+i,{state:'unknown',phase:'request-known',transportKind:'text',requestId:'REQ_20261006T000000Z_'+String(i).padStart(4,'0'),cancellationRequested:i===0,terminal:{status:'FAKE',hugeJournal:'NEVER EXPOSE'},publication:{huge:'NEVER EXPOSE'}}]))}))

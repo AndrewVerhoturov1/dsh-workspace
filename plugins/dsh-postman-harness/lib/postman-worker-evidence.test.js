@@ -91,3 +91,19 @@ test('unsettled earlier tool invalidates report, text-only closing step does not
   assert.equal(workerEvidence(w, child([start(1), user('a'), call(1, 'r'), result(1, 'r'),
     { type: 'assistant/message', data: { turn: 1, message: { content: [{ type: 'text', text: 'closing' }] } } }, end(1)]), leader).ready, true)
 })
+
+test('Sol settlementOnly separates terminal lifecycle from successful retirement proof',()=>{
+  const settled=(w,c)=>workerEvidence(w,c,{session:{events:[]}},{settlementOnly:true}).ready
+  for(const kind of ['completed','blocked','aborted','error']){
+    const c=child([start(1),user('a'),call(1,'work','read'),result(1,'work',true),end(1,kind)])
+    assert.equal(settled(worker(),c),true)
+    assert.equal(workerEvidence(worker(),c,leader).ready,false,'strict retirement evidence unchanged')
+  }
+  for(const c of [child([start(1),user('a')]),child([start(1),user('a'),call(1,'pending','read'),end(1)]),
+    child([start(1),user('a'),end(1,'unknown')]),{...child(complete),status:'running'},
+    {...child(complete),inbox:{hasPending:true}},child([start(1),end(1)])])assert.equal(settled(worker(),c),false)
+  assert.equal(settled(worker(['a','b']),child(complete)),false)
+  assert.equal(settled({...worker(),delivery:'unknown'},child(complete)),false)
+  assert.equal(settled({...worker(),delivery:'pending'},child(complete)),false)
+})
+

@@ -30,7 +30,7 @@ test('actual production Playwright MCP inventory is equal for Workers and Sol, a
   const r=await call(row===w?'postman_worker':'postman_secretary',{workerSessionId:row.workerSessionId,task:'bounded post-MCP inventory'});assert.equal(r.status,'POSTMAN_WORKER_TASK_ACCEPTED',JSON.stringify(r));await f.childDone(row.workerSessionId)
  }
  const sr=await call('postman_sol_worker',{task:'User selected explicit Sol route, bounded browser inventory'});assert.equal(sr.status,'POSTMAN_WORKER_TASK_ACCEPTED',JSON.stringify(sr));const sol=await entered.promise
- const own=value(await f.execute(sol,'postman_worker',{task:'bounded owned browser inventory'}));assert.equal(own.status,'POSTMAN_WORKER_TASK_ACCEPTED',JSON.stringify(own));await f.childDone(own.workerSessionId)
+ const own=nested(await f.execute(sol,'ptc_execute',{program:"return await tools.postman_worker({task:'bounded owned browser inventory'})",description:'Dispatch owned inventory before review',boundary:'semantic_decision'}));assert.equal(own.status,'POSTMAN_WORKER_TASK_ACCEPTED',JSON.stringify(own));await f.childDone(own.workerSessionId)
  const latest=id=>f.requests.filter(x=>x.agent.id===id).at(-1).request
  for(const id of [w.workerSessionId,own.workerSessionId,sol.id])assert.deepEqual(names(latest(id)),inventory)
  assert.deepEqual(names(latest(s.workerSessionId)),[]);assert.deepEqual(names(await f.turn(f.leader)),[])

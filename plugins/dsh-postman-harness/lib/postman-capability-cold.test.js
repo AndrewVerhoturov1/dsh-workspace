@@ -28,7 +28,7 @@ for (const preset of ['postman-leader', 'postman-leader-ptc']) test(preset + ': 
   assert.equal(r.status,'POSTMAN_WORKER_TASK_ACCEPTED',JSON.stringify(r))
   const a=type==='sol'?await entered.promise:await f.childDone(r.workerSessionId);remember(a,type,name)
   if(type==='sol'){
-   const owned=value(await f.execute(a,'postman_worker',{task:'bounded owned cold facts'}));assert.equal(owned.status,'POSTMAN_WORKER_TASK_ACCEPTED',JSON.stringify(owned))
+   const owned=nested(await f.execute(a,'ptc_execute',ptc("return await tools.postman_worker({task:'bounded owned cold facts'})")));assert.equal(owned.status,'POSTMAN_WORKER_TASK_ACCEPTED',JSON.stringify(owned))
    remember(await f.childDone(owned.workerSessionId),'luna','postman_worker',a.id);gate.resolve();await f.childDone(a.id)
   }
  }
@@ -43,7 +43,7 @@ for (const preset of ['postman-leader', 'postman-leader-ptc']) test(preset + ': 
  let liveSol
  for(const e of entries){
   const args={workerSessionId:e.id,task:'bounded cold durable facts'}
-  const r=e.owner!=='leader'?value(await f.execute(liveSol,e.name,args)):await leaderCall(f,e.name,args)
+  const r=e.owner!=='leader'?nested(await f.execute(liveSol,'ptc_execute',ptc('return await tools.'+e.name+'('+JSON.stringify(args)+')'))):await leaderCall(f,e.name,args)
   assert.equal(r.status,'POSTMAN_WORKER_TASK_ACCEPTED',JSON.stringify(r));if(e.type==='sol')liveSol=await entered.promise;else await f.childDone(e.id)
   const request=f.requests.find(x=>x.agent.id===e.id).request
   assert.deepEqual(names(request),e.expected,JSON.stringify({role:e.type,owner:e.owner,expected:e.expected,actual:names(request)}))

@@ -9,7 +9,7 @@
 // This module is deliberately data-only. ptc-adapter.js is responsible for
 // injecting the text into the system prompt of an authorized Postman PTC agent.
 
-export const POSTMAN_PTC_DISCIPLINE_VERSION = 7
+export const POSTMAN_PTC_DISCIPLINE_VERSION = 8
 
 export const POSTMAN_PTC_DISCIPLINE = String.raw`
 # Postman PTC programming discipline
@@ -347,7 +347,15 @@ knew before the PTC program started.
 The exact canonical/compat Leader uses supervisor PTC; the exact Host-managed Sol Worker
 uses a separate engineering PTC profile. Sol uses PTC-first for its own batchable engineering flow,
 and Worker-first for independent cheap subtasks (two Workers in parallel when independent).
-Sol Worker controls, report and notify_parent stay direct-only; Host checks exact parent ownership on every operation.
+Sol owned Worker controls are PTC-managed / PTC-only; Host checks exact parent ownership
+on every ordinary nested operation. Once dispatch/continue/cleanup is decided, keep
+that mechanical control-plane work in the current PTC phase: dispatch two independent
+useful Workers, finish known own engineering mechanics, then external_event.
+Do not create a Worker merely for batching. report and notify_parent stay direct-only.
+Sol report is the terminal assignment result, not progress/FYI; active/pending/uncertain
+owned work blocks report, settled bindings need not be closed just to report.
+notify_parent is only NEEDS_PARENT_GUIDANCE / decision-relevant escalation, never
+"Workers launched", "continuing", FYI, or ordinary completion.
 PTC grants no supervisor, Bridge, Secretary, Sol creation or user-approval authority to Sol.
 Ordinary Worker and Secretary use direct tools with a finite FAST assignment budget;
 neither receives ptc_execute, Worker controls or generic delegation.
@@ -417,6 +425,11 @@ postman_secretary, postman_sol_worker, postman_worker_fresh, postman_worker_inte
 or postman_bridge. yield_on_success is compatibility
 only; omission or false does not disable this Host rule. postman_task_prepare alone
 is NOT an event producer and does not conclude the turn.
+
+For exact Sol, the same safe external_event rule accepts only its owned Worker
+postman_worker, postman_worker_interrupt or postman_worker_fresh producer.
+list/stop/compact alone are not future completion producers. Actual owned reports
+resume Sol once through the existing inbox; no polling or extra waiting round.
 
 Host still requires ok without cleanup error, abort, revoked authority,
 needsModelDecision:true, failed/pending/unknown/unsettled effects or refused/unknown
