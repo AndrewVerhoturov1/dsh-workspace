@@ -118,6 +118,59 @@ test('actual PTC two RUNNING ordinary children reject close and fresh then stric
   }
 })
 
+test('partial cascade failure retains intent, reconciles live Sol, retries exact remaining work', { timeout: 30000 }, async t => {
+  const f = await fixture(t)
+  const children = Object.values(f.registry.get('leader').workers).filter(b=>b.ownerSessionId===f.id)
+  const close = f.ctx.subagents.closeContinuableChild.bind(f.ctx.subagents)
+  let failed = false
+  f.ctx.subagents.closeContinuableChild = async (parent,id,check) => {
+    if (id === children[1].id && !failed) { failed = true; throw new Error('Injected failure after first child stop') }
+    return close(parent,id,check)
+  }
+  const partial = await call(f,'postman_worker_stop',{workerSessionId:f.id,mode:'cancel',cascade:true})
+  assert.equal(partial.status,'POSTMAN_WORKER_CASCADE_PARTIAL',JSON.stringify(partial))
+  const binding = f.registry.get('leader').workers[f.id]
+  assert.equal(binding.state,'uncertain'); assert.equal(binding.lifecycle.stop.mode,'cancel')
+  assert.deepEqual(binding.lifecycle.stop.childIds,children.map(b=>b.id))
+  assert.equal(Object.hasOwn(f.registry.get('leader').workers,children[0].id),false)
+  const list = await call(f,'postman_worker_list',{})
+  assert.equal(list.quota.sol.used,1); assert.equal(list.workers.find(b=>b.workerSessionId===f.id).binding,'ready')
+  const stopped = await call(f,'postman_worker_stop',{workerSessionId:f.id,mode:'cancel',cascade:true})
+  assert.equal(stopped.status,'POSTMAN_WORKER_CANCELLED',JSON.stringify(stopped))
+  assert.equal((await call(f,'postman_worker_list',{})).quota.sol.used,0)
+})
+
+test('failed bookkeeping after native Sol closure reconciles on cold Host restart and frees slot', { timeout: 30000 }, async t => {
+  const f = await fixture(t)
+  const close = f.ctx.subagents.closeContinuableChild.bind(f.ctx.subagents)
+  f.ctx.subagents.closeContinuableChild = async (parent,id,check) => {
+    const closed = await close(parent,id,check)
+    if (id===f.id) throw new Error('Interrupted after durable native closure')
+    return closed
+  }
+  const partial = await call(f,'postman_worker_stop',{workerSessionId:f.id,mode:'cancel',cascade:true})
+  assert.equal(partial.status,'POSTMAN_WORKER_CASCADE_PARTIAL',JSON.stringify(partial))
+  assert.equal(f.registry.get('leader').workers[f.id].state,'uncertain')
+  assert.equal(await f.ctx.subagents.inspectClosedContinuableChild(f.leader,f.id),true)
+  await f.dispose()
+  const g = await capabilityRuntime(f.leader.session.header.cwd,{preset:'postman-leader',resume:true})
+  t.after(()=>g.dispose())
+  assert.ok(['TASK_CONTEXT_READY','POSTMAN_TASK_CONTEXT_ALREADY_READY'].includes((await g.prepare()).status)); await g.turn(g.leader)
+  const list = await call(g,'postman_worker_list',{})
+  assert.equal(list.quota.sol.used,0); assert.deepEqual(g.registry.get('leader').workers,{})
+  assert.ok(g.registry.get('leader').retiredWorkers.some(b=>b.id===f.id))
+})
+
+test('insufficient native reconciliation evidence never frees uncertain Sol slot', { timeout: 30000 }, async t => {
+  const f=await fixture(t)
+  await f.contexts.changeRecord('leader',row=>({...row,workers:{...row.workers,[f.id]:{...row.workers[f.id],state:'uncertain'}}}))
+  f.ctx.subagents.inspectClosedContinuableChild=async()=>false
+  f.ctx.subagents.inspectOpenContinuableChild=async()=>false
+  const list=await call(f,'postman_worker_list',{})
+  assert.equal(list.quota.sol.used,1); assert.equal(list.workers.find(b=>b.workerSessionId===f.id).binding,'uncertain')
+  assert.equal((await call(f,'postman_sol_worker',{task:'New substantial Sol',createNew:true})).status,'POSTMAN_SOL_WORKER_LIMIT_REACHED')
+})
+
 test('actual PTC fresh retires settled subtree and fresh after explicit cascade cancel retains role', { timeout: 30000 }, async t => {
   for (const cancel of [false, true]) {
     const f = await fixture(t)

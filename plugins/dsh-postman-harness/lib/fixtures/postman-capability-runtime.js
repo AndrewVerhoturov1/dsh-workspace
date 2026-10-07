@@ -43,7 +43,9 @@ export async function capabilityRuntime(dir, { preset = 'postman-leader-ptc', re
   } }
   new AgentRegistry(ctx); new SessionStore(ctx); new SessionProjectionRegistry(ctx)
   new SystemPrompt(ctx, {}); new ToolRuntime(ctx, { mode: 'native' }); new LlmRuntime(ctx)
-  new JsonlSessionPersistence(ctx, { root: join(dir, 'sessions'), compression:'none' }); new SubagentRuntime(ctx)
+  new JsonlSessionPersistence(ctx, { root: join(dir, 'sessions'), compression:'none' })
+  // Production uses a plugin fiber: bare new() masks missing-inject failures.
+  await ctx.plugin(SubagentRuntime).await()
   new AgentLoop(ctx, { agents: [] })
   const backend = new JsonStorageBackend(join(dir, 'tasks'))
   ctx.provide('storageDomain', new DomainFacility({ storage: { backend: { get: () => backend } }, emit() {} }, { backend: 'json', routes: {} }))

@@ -24,6 +24,29 @@ const fixture = async (t, options) => {
   t.after(async () => { await f.dispose(); await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }) })
   return { ...f, dir }
 }
+test('exact Sol actual model call executes ptc_execute on initial and cold continuation', { timeout: 30000 }, async t => {
+  const seen = new WeakSet()
+  const f = await fixture(t, { plan: (agent, request) => {
+    if (agent.id === 'leader') return null
+    assert.ok(request.tools.some(tool => tool.name === 'ptc_execute'))
+    const first = !seen.has(agent); seen.add(agent)
+    return first ? { name: 'ptc_execute', args: ptc('return {executed: true}') } : report
+  } })
+  await f.prepare(); await f.turn(f.leader)
+  const created = nested(await f.execute(f.leader, 'ptc_execute', ptc('return await tools.postman_sol_worker({task:"Approved first substantial Sol task"})')))
+  const id = created.workerSessionId
+  await f.childDone(id)
+  assert.equal(f.ctx.agents.get(id), undefined)
+  const resumed = nested(await f.execute(f.leader, 'ptc_execute', ptc('return await tools.postman_sol_worker('+JSON.stringify({workerSessionId:id,task:'Already established: first result. Still needed: cold PTC execution. Next decision boundary: conclude verified capability.'})+')')))
+  assert.equal(resumed.workerSessionId, id)
+  await f.childDone(id)
+  const runs = f.results.filter(result => result.agent.id === id && result.name === 'ptc_execute')
+  assert.equal(runs.length, 2)
+  for (const run of runs) assert.deepEqual(nested(run.result), {executed:true})
+  const agents = [...new Set(f.requests.filter(r => r.agent.id === id).map(r => r.agent))]
+  assert.equal(agents.length, 2); assert.notEqual(agents[0], agents[1])
+})
+
 const leaderExpected = [...POSTMAN_LEADER_TOOL_ALLOWLIST, 'ptc_execute']
 const ok = r => { assert.equal(r.isError, false, JSON.stringify(r)); return r.value }
 const nested = r => { const v = ok(r); assert.equal(v.status, 'ok', JSON.stringify(v)); return v.value }
@@ -47,6 +70,71 @@ for (const preset of ['postman-leader-ptc', 'code', 'postman-leader']) test('act
     const denied = await f.execute(f.leader, name, args)
     assert.equal(denied.isError, true, name); assert.match(denied.error.message, /POSTMAN_PTC_DIRECT_CALL_REJECTED/)
   }
+})
+
+test('controlled delivered Leader policy: first task direct, same-task continue, existing Sol new task compact first', { timeout: 30000 }, async t => {
+  const f=await fixture(t,{plan:agent=>agent.id==='leader'?null:report}), {BasicCompactionEngine}=await native('dsh-compaction-basic')
+  const Summarizer=class extends BasicCompactionEngine {
+    async summarize(){return {summary:[{type:'text',text:'Settled Sol evidence retained'}],provider:'codex',model:'gpt-6.1-sol'}}
+  }
+  f.ctx.on('agent/created',async({agent})=>{
+    if(agent.options.model==='gpt-6.1-sol' && agent.session.header.origin==='subagent') await agent.ctx.plugin(Summarizer,{auto:false}).await()
+  })
+  await f.prepare(); assertManagementRequest('leader',await f.turn(f.leader))
+  const dispatch=async program=>nested(await f.execute(f.leader,'ptc_execute',ptc(program)))
+  const first=await dispatch('return await tools.postman_sol_worker({task:"Approved new substantial task"})')
+  const id=first.workerSessionId; await f.childDone(id)
+  const follow=await dispatch('return await tools.postman_sol_worker('+JSON.stringify({workerSessionId:id,task:'Already established: initial evidence. Still needed: exact synthesis. Next decision boundary: settle same task.'})+')')
+  assert.equal(follow.workerSessionId,id); await f.childDone(id); await f.turn(f.leader,'Consume settled Sol evidence before new approved task')
+  assert.equal(f.results.filter(r=>r.name==='postman_worker_compact').length,0)
+  const next=await dispatch('const c=await tools.postman_worker_compact({workerSessionId:'+JSON.stringify(id)+'}); if(c.status!=="POSTMAN_WORKER_COMPACTED")return c; return await tools.postman_sol_worker({workerSessionId:'+JSON.stringify(id)+',task:"Approved different substantial task after compact"});')
+  assert.equal(next.status,'POSTMAN_WORKER_TASK_ACCEPTED',JSON.stringify(next)); assert.equal(next.workerSessionId,id); await f.childDone(id)
+  const sequence=f.results.filter(r=>r.agent===f.leader&&['postman_sol_worker','postman_worker_compact'].includes(r.name)).map(r=>r.name)
+  assert.deepEqual(sequence,['postman_sol_worker','postman_sol_worker','postman_worker_compact','postman_sol_worker'])
+  assert.ok(!f.ctx.tools.schemas(f.leader).some(t=>/clean/.test(t.name)))
+})
+
+test('uncertain Sol quota does not block independent artifact text or image Bridge admission', { timeout: 30000 }, async t => {
+  const f=await fixture(t);await f.prepare();assertManagementRequest('leader',await f.turn(f.leader))
+  await f.contexts.changeRecord('leader',row=>({...row,workers:{oldSol:{id:'oldSol',label:'unproven old Sol',workerType:'sol',ownerSessionId:'leader',state:'uncertain',delivery:'none',artifactRequests:[]}}}))
+  for(const message of ['@Postman independent ZIP','@PostmanAsk independent text','@PostmanImage independent image']) {
+    const result=nested(await f.execute(f.leader,'ptc_execute',ptc('return await tools.postman_bridge({message:'+JSON.stringify(message)+'})')))
+    assert.equal(result.status,'POSTMAN_BRIDGE_ACCEPTED',JSON.stringify(result))
+  }
+  const list=nested(await f.execute(f.leader,'ptc_execute',ptc('return await tools.postman_bridge_list({})')))
+  assert.equal(list.operations.length,3)
+  assert.equal(f.registry.get('leader').workers.oldSol.state,'uncertain')
+})
+
+test('advertised Sol PTC call racing real stop returns exact authority rejection, not unknown tool', { timeout: 30000 }, async t => {
+  const entered = Promise.withResolvers(), release = Promise.withResolvers(), executed = Promise.withResolvers()
+  t.after(() => release.resolve())
+  const f = await fixture(t, { plan: async (agent, request) => {
+    if (agent.id === 'leader') return null
+    assert.ok(request.tools.some(tool => tool.name === 'ptc_execute'))
+    entered.resolve(agent); await release.promise
+    return {name:'ptc_execute', args:ptc('return {mustNotRun: true}')}
+  } })
+  await f.prepare(); await f.turn(f.leader)
+  const created = nested(await f.execute(f.leader, 'ptc_execute', ptc('return await tools.postman_sol_worker({task:"Approved Sol task before cancellation"})')))
+  const sol = await entered.promise
+  const observe = f.ctx.on('tools/result', (exec, result) => {
+    if (exec.agent === sol && exec.name === 'ptc_execute') executed.resolve(result)
+  })
+  t.after(observe)
+  const close = f.ctx.subagents.closeContinuableChild.bind(f.ctx.subagents)
+  f.ctx.subagents.closeContinuableChild = (parent, id, check) => close(parent,id,async () => {
+    const accepted = await check()
+    if (accepted && id === sol.id) {
+      release.resolve()
+      const result = await executed.promise
+      assert.equal(result.isError, false, JSON.stringify(result))
+      assert.equal(result.value.status, 'PTC_CALLER_REJECTED')
+    }
+    return accepted
+  })
+  const stopped = nested(await f.execute(f.leader, 'ptc_execute', ptc('return await tools.postman_worker_stop('+JSON.stringify({workerSessionId:created.workerSessionId,mode:'cancel'})+')')))
+  assert.equal(stopped.status,'POSTMAN_WORKER_CANCELLED',JSON.stringify(stopped))
 })
 
 test('late registration: allowed Leader and forbidden Worker/Secretary tools affect actual requests', { timeout: 30000 }, async t => {

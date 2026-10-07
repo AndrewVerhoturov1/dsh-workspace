@@ -1,0 +1,43 @@
+diff --git a/node_modules/@deepseek-ai/dsh-subagent/lib/index.js b/node_modules/@deepseek-ai/dsh-subagent/lib/index.js
+--- a/node_modules/@deepseek-ai/dsh-subagent/lib/index.js
++++ b/node_modules/@deepseek-ai/dsh-subagent/lib/index.js
+@@ -1163,5 +1163,26 @@
+ 		});
+ 	}
++	/** Exact open admission evidence, serialized with native close/followup. */
++	async inspectOpenChild(parent, childId) {
++		if (this.ctx.agents.get(parent.id) !== parent) return false;
++		return this.locks.run(childId, async () => {
++			if (this.closedChildren.has(childId)) return false;
++			const activation = this.activations.get(childId), agent = this.ctx.agents.get(childId);
++			if (activation && (activation.disposal || activation.parentSession !== parent.id || !activation.ancestry.has(parent))) return false;
++			const saved = agent?.session ?? await this.requirePersistence().inspect(childId);
++			const header = saved.header ?? saved.meta, seed = header.seedLength ?? 0;
++			if (header.id !== childId || header.origin !== "subagent" || header.parentSession !== parent.id ||
++				header.delegationDepth !== delegationDepthOf(parent) + 1 || !Number.isSafeInteger(seed) || seed < 0 || seed > saved.events.length) return false;
++			const events = saved.events.slice(seed);
++			if (foldSubagentDescriptor(events)?.mode !== "continuable" || events.some(event => event.type === "subagent/closed")) return false;
++			if (agent) return activation?.handle.agent === agent && this.ctx.sessions.get(childId) === agent.session &&
++				["idle", "running"].includes(agent.status);
++			if (activation) return false;
++			const inbox = new Inbox({ header, events: saved.events }, { inserted() {}, discarded() {}, claimed() {} });
++			const start = events.findLast(event => event.type === "turn/start"), end = events.findLast(event => event.type === "turn/end");
++			return !inbox.hasPending && !!start && end?.data.turn === start.data.turn && events.indexOf(end) > events.indexOf(start);
++		});
++	}
+ 	/** Dispose independent roots and report every branch failure after all settle. */
+ 	async disposeRoots(roots, failureSubject) {
+ 		const reasons = (await Promise.all(roots.map(async (activation) => {
+@@ -2492,3 +2513,3 @@
+ 		this.emitLifecycle = createLifecycleEmitter(this.ctx, (parent) => scopeTarget(this, parent));
+-		ctx.inject(["agents"], (childCtx) => {
++		ctx.inject(["agents", "sessions"], (childCtx) => {
+ 			const manager = new SubagentContinuationManager(childCtx, {
+@@ -2617,4 +2638,7 @@
+ 	async inspectClosedContinuableChild(parent, childId) {
+ 		return this.requireContinuations().inspectClosedChild(parent, childId);
+ 	}
++	async inspectOpenContinuableChild(parent, childId) {
++		return this.requireContinuations().inspectOpenChild(parent, childId);
++	}
+ 	/** Serialize exact settled child compaction with followup and closure. */
