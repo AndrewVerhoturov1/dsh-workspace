@@ -9,6 +9,7 @@ export const managementMarkers = {
   leader: [/POSTMAN_LEADER_SKILL_VERSION: 31/, /Management Kernel/, /execution graph/i,
     /critical path/i, /dispatch first/i, /environment readiness/i, /Exact-path-first delegation/,
     /Known-status branching/, /retire unused agents/, /REPORT RECEIVED/, /VERIFIED BY LEADER/,
+    /not a required first step/, /no ritual snapshot or standalone model round/, /continuation_blocked/, 
     /external_event/, /один active implementation writer/, /Canonical Harness browser/,
     /PTC = supervisor phase, not tool wrapper/, /Supervisor dispatch phase/, /Reconciliation\/cleanup phase/, /sufficient acceptance evidence/, /Leader routing decision/, /execution plan/, /явное user approval/,
     /Truly trivial read-only\/factual/, /До approval/, /не делегируй составление первого плана/,

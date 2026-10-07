@@ -3,6 +3,7 @@ import test from 'node:test'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { capabilityRuntime } from './fixtures/postman-capability-runtime.js'
 
 // Real production Host, QuickJS, native continuable children, report and inbox.
@@ -72,4 +73,62 @@ for (const queued of [false, true]) test('Leader re-enters external_event for ex
   assert.equal(saved.events.filter(e=>e.type==='turn/end').length,1)
   assert.equal(f.ctx.agents.get(ids[0]),undefined)
   assert.equal(f.leader.session.events.some(e=>e.type==='assistant/message'&&!e.data.message.content.length),false)
+})
+// Delayed authoritative native settlement after an already consumed terminal
+// report. No fake notice, timer, polling, new scheduler or live provider.
+for (const scenario of ['baseline','defer','conflicting-output','sol-defer']) test('real report then delayed settlement while B active, ' + scenario, {timeout:45000}, async t => {
+  const deferSettlements=scenario!=='baseline', redundant=scenario==='defer'||scenario==='sol-defer', solParent=scenario==='sol-defer'
+  const dir = await mkdtemp(join(tmpdir(),'postman-report-settled-'))
+  const reports = [Promise.withResolvers(), Promise.withResolvers()]
+  const releaseSettlement = Promise.withResolvers(), reportDelivered = Promise.withResolvers()
+  const ends = Array.from({length:5},()=>Promise.withResolvers()), ids=[]
+  let f,supervisor,solId
+  const ptc = (program,boundary='external_event') => ({name:'ptc_execute',args:{program,boundary,description:'Process exact report, retain other active work, then safe cleanup'}})
+  t.after(async()=>{reports.forEach(g=>g.resolve());releaseSettlement.resolve();await f?.dispose();await rm(dir,{recursive:true,force:true,maxRetries:5})})
+  f=await capabilityRuntime(dir,{preset:'postman-leader',reportDelivery:'next-step',deferSettlements,plan:async(a,r,n)=>{
+    if(solParent && a.id==='leader') return null
+    if(a.id==='leader' || a.id===solId) {
+      supervisor=a
+      if(n===1) return ptc('const a=await tools.postman_worker({task:"A",createNew:true});const b=await tools.postman_worker({task:"B",createNew:true});return {a,b}')
+      if(solParent && f.registry.get('leader').workers[solId]?.lifecycle?.reports.length) return null
+      if(solParent && n===4) return {name:'report',args:{output:'PASS owned child settlement/cleanup verified'}}
+      if(f.registry.get('leader').stage==='closed') return {text:'Exact settlement facts and cleanup verified'}
+      const bReport=a.session.events.some(e=>e.type==='user/message'&&e.data.source?.kind==='subagent-report'&&e.data.source.senderSessionId===ids[1])
+      if(!bReport) return ptc('return {handled:"A",stillWaiting:"B"}')
+      await Promise.all(ids.map(id=>f.childDone(id)))
+      return ptc('const c=await tools.postman_worker_compact({workerSessionId:'+JSON.stringify(ids[0])+'});if(c.status!=="POSTMAN_WORKER_COMPACTED")return {status:"cleanup_blocked",c};const a=await tools.postman_worker_stop({workerSessionId:'+JSON.stringify(ids[0])+',mode:"close"});if(a.status!=="POSTMAN_WORKER_STOPPED")return {status:"cleanup_blocked",a};const b=await tools.postman_worker_stop({workerSessionId:'+JSON.stringify(ids[1])+',mode:"close"});if(b.status!=="POSTMAN_WORKER_STOPPED")return {status:"cleanup_blocked",b};const refused=await tools.postman_worker_compact({workerSessionId:'+JSON.stringify(ids[0])+'});if(refused.status!=="POSTMAN_WORKER_TARGET_UNKNOWN")return {status:"cleanup_blocked",refused};const q=await tools.postman_worker_list({});if(q.quota.luna.used!==0||q.workers.length)return {status:"cleanup_blocked",q};'+(solParent?'return {c,a,b,refused,q}':'const closed=await tools.postman_task_close({});return {c,a,b,refused,q,closed}'), 'task_complete')
+    }
+    await reports[ids.indexOf(a.id)].promise
+    return {name:'report',args:{output:'PASS exact bounded report '+ids.indexOf(a.id)}}
+  }})
+  f.ctx.on('session/event',(s,e)=>{if(s.id===(solParent?solId:'leader')&&e.type==='turn/end')ends[e.data.turn-1]?.resolve()})
+  const start=f.ctx.subagents.startContinuable.bind(f.ctx.subagents)
+  f.ctx.subagents.startContinuable=async spec=>{if(solParent && !solId)solId=spec.childId;else ids.push(spec.childId);return start(spec)}
+  f.ctx.on('tools/execute',async(exec,next)=>{
+    const result=await next()
+    if(exec.name==='report'&&exec.agent.id===ids[0]){reportDelivered.resolve();await releaseSettlement.promise}
+    return result
+  })
+  await f.prepare();await f.turn(f.leader,'Approved bounded duplicate-settlement smoke')
+  if(solParent) {await f.execute(f.leader,'ptc_execute',{program:'return await tools.postman_sol_worker({task:"Approved managed Sol smoke"})',boundary:'external_event',description:'Create exact managed Sol for owned child smoke'});await ends[0].promise}
+  reports[0].resolve();await reportDelivered.promise;await ends[1].promise;await supervisor.whenIdle()
+  assert.equal(f.requests.filter(r=>r.agent===supervisor).length,2)
+  const child=f.ctx.agents.get(ids[0])
+  assert.ok(child,'report does not certify native settlement')
+  assert.ok(!child.session.events.some(e=>e.type==='turn/end'))
+  if(scenario==='conflicting-output') child.session.append('assistant/message',{turn:1,step:1,message:{role:'assistant',content:[{type:'text',text:'A conflicting closing result after report'}],id:randomUUID(),source:{kind:'model',provider:'codex',model:'gpt-6-luna'}}},{surfaceOp:'append'})
+  releaseSettlement.resolve();await f.childDone(ids[0]);await supervisor.whenIdle()
+  assert.equal(f.requests.filter(r=>r.agent===supervisor).length,redundant?2:3,'only redundant A settlement judgement disappears')
+  if(redundant) assert.equal(supervisor.inbox.nextStep.filter(m=>m.source?.kind==='subagent-settled').length,1,'durable fact retained without wake')
+  reports[1].resolve();await f.childDone(ids[1]);await ends[redundant?2:3].promise;await supervisor.whenIdle()
+  // task_complete has one normal result review, unrelated to settlement suppression.
+  const requests=f.requests.filter(r=>r.agent===supervisor)
+  const cleanup=f.results.find(r=>r.agent===supervisor&&r.name==='postman_task_close')
+  if(solParent){await f.childDone(solId);assert.deepEqual(Object.keys(f.registry.get('leader').workers),[solId])}
+  else {assert.equal(cleanup.result.value.status,'POSTMAN_TASK_CLOSED',JSON.stringify(cleanup.result));assert.deepEqual(Object.keys(f.registry.get('leader').workers),[])}
+  for(const id of ids){
+    assert.equal(supervisor.session.events.filter(e=>e.type==='user/message'&&e.data.source?.kind==='subagent-report'&&e.data.source.senderSessionId===id).length,1)
+    assert.equal(supervisor.session.events.filter(e=>e.type==='user/message'&&e.data.source?.kind==='subagent-settled'&&e.data.source.senderSessionId===id).length,1)
+  }
+  console.log(JSON.stringify({scenario:'A-report/A-settled/B-active',case:scenario,deferSettlements,modelRequests:requests.length,trace:supervisor.session.events.filter(e=>e.type==='user/message'&&['subagent-report','subagent-settled'].includes(e.data.source?.kind)).map(e=>e.data.source.kind+':'+ids.indexOf(e.data.source.senderSessionId)),cleanup:solParent?'owned-children-retired':cleanup.result.value.status}))
 })

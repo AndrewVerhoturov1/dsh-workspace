@@ -1,0 +1,17 @@
+diff --git a/node_modules/@deepseek-ai/dsh-subagent/lib/index.js b/node_modules/@deepseek-ai/dsh-subagent/lib/index.js
+--- a/node_modules/@deepseek-ai/dsh-subagent/lib/index.js
++++ b/node_modules/@deepseek-ai/dsh-subagent/lib/index.js
+@@ -1632,6 +1632,13 @@
+ 			if (this.closingTeardownFor(parent) !== void 0) {
+ 				parent.inject(message);
+ 				return;
+ 			}
++			// Exact managed Postman may retain a redundant terminal fact without
++			// waking an idle parent already waiting for other authoritative work.
++			if (terminal.stopReason === "completed" &&
++				this.ctx.bail("postman/subagent-settlement-defer", parent, activation.handle.agent, terminal) === true) {
++				parent.inject(message);
++				return;
++			}
+ 			this.sendWaking(parent, message, () => {
+ 				if (parent.status === "idle") parent.followup(message);

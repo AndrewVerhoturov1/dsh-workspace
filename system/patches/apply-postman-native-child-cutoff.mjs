@@ -51,6 +51,11 @@ export function applyPostmanNativeChildCutoff(anchors) {
         writeFileSync(normalizedPatch, readFileSync(new URL('./postman-native-scoped-compact.patch', import.meta.url), 'utf8').replaceAll('\r', ''))
         if (apply(['--check']).status !== 0 || apply([]).status !== 0) throw new Error('Native scoped compaction patch mismatch: ' + path)
         changed ||= !scopedInstalled
+        writeFileSync(normalizedPatch, readFileSync(new URL('./postman-native-settlement.patch', import.meta.url), 'utf8').replaceAll('\r', ''))
+        if (apply(['--reverse','--check']).status !== 0) {
+          if (apply(['--check']).status !== 0 || apply([]).status !== 0) throw new Error('Native settlement patch mismatch: ' + path)
+          changed = true
+        }
       }
       if (changed) prepared.at(-1).staged = staged
     }

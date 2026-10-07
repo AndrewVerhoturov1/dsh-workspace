@@ -269,6 +269,8 @@ export async function apply(ctx, config = {}) {
     }
   }
   const worker = createPostmanWorkerTools(ctx, grants, postmanTaskContexts, { onBindingChange: refreshWorker, localDevelopment: config.localDevelopment === true, fastBudget: config.fastBudget })
+  // Workspace policy asks the same exact current Host role predicate used by PTC.
+  ctx.on('postman/workspace-role', agent => worker.roleOf(agent))
   const stopContextWatch = contexts.onContextChange(id => {
     postmanInputGrants.releaseStale(ctx.agents.get(id), contexts.get(id))
     worker.refreshLeader(id)
@@ -279,6 +281,9 @@ export async function apply(ctx, config = {}) {
     hasActiveWork: (agent, role) => worker.hasActiveWork(agent) || role === 'leader' && jobs.hasActiveWork(agent),
     resolveAssignment: (agent, leaderProfile) => isTopLevelPostmanPtcLeader(agent) ?
       { profile: leaderProfile, role: 'leader' } : ownsPtcWorker(agent) ? { profile: SOL_WORKER_PROFILE, role: 'sol' } : null })
+  ctx.on('postman/subagent-settlement-defer', (parent, child, terminal) =>
+    ptc.isWaitingForExternalEvent(parent) && worker.canDeferSettlement(parent, child, terminal) &&
+    (worker.hasActiveWork(parent) || isTopLevelPostmanPtcLeader(parent) && jobs.hasActiveWork(parent)) ? true : undefined)
   // Guard model-direct operations, not ordinary visibility: nested PTC calls carry the outer token.
   ctx.tools.guard(exec => postmanPtcDirectCallGuard(exec, id => ctx.agents.get(id), ownsPtcWorker))
   ctx.tools.register(ptc.tool)
