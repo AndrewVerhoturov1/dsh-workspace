@@ -5,7 +5,7 @@ import {join} from 'node:path'
 import {tmpdir} from 'node:os'
 import {capabilityRuntime} from './fixtures/postman-capability-runtime.js'
 import {managementMarkers, assertManagementRequest, obsoleteSolPermission} from './fixtures/postman-stage3-contract.js'
-import {postmanRoleInstruction, FAST_WORKER_BUDGET, FAST_ROOT_CAP} from './postman-worker.js'
+import {postmanRoleInstruction, FAST_WORKER_BUDGET} from './postman-worker.js'
 import {POSTMAN_PTC_DISCIPLINE} from './ptc-discipline.js'
 
 const root = new URL('../../../', import.meta.url)
@@ -49,9 +49,9 @@ test('bounded Stage 3 source contract: kernel first, routing, safety and FAST bu
   assert.match(contract, /postman_task_prepare\/postman_task_restore\/postman_task_close\/postman_input_files/)
   assert.match(contract, /postman_task_close` явно retire-ит settled Leader task binding/)
   assert.match(contract, /не Git cleanup и не доказательство success/)
-  assert.match(contract, /runtime default — hard16; configurable `hardBudget` 8\.\.24; durable root cap48/)
+  assert.match(contract, /runtime default — hard16; configurable `hardBudget` 8\.\.24; независимый budget каждого assignment/)
   assert.match(contract, /Stage 3 assignments явно запрашивают `hardBudget:15` → Host soft12/)
-  assert.equal(FAST_WORKER_BUDGET.hardLimit, 16); assert.equal(FAST_ROOT_CAP, 48)
+  assert.equal(FAST_WORKER_BUDGET.hardLimit, 16)
   const example = leader.match(/const r = await tools.postman_worker_compact[\s\S]*?unexpected_status[^\n]*/)?.[0]
   assert.ok(example, 'known status branching example')
   assert.doesNotMatch(example, /expectStatus/)

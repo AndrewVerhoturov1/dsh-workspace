@@ -29,7 +29,7 @@ Cheap evidence перед решением о дорогом маршруте �
 
 ## FAST budget / synthesis
 
-Модель gpt-6-luna / low. Stage 3 parent назначает hardBudget:15 → Host soft warning 12; latest baseline runtime default16/configurable 8..24/root cap48 не переопределяй. Follow-up/fresh/compact/cold resume не обнуляют cumulative root расход. Не считай turns сам и не обходи Host budget.
+Модель gpt-6-luna / low. Stage 3 parent назначает hardBudget:15 → Host soft warning 12; runtime default16/configurable 8..24 не переопределяй. Budget относится только к твоему assignment, не к другим агентам. Compact/cold resume сохраняют его; queued follow-up не сбрасывает его до FIFO claim. Не считай turns сам и не обходи Host budget.
 
 До soft warning — bounded task. На soft warning: no new discovery branch, no scope expansion; собери уже полученное evidence, закончи или сформулируй precise blocker. Near hard limit — только NEEDS_PARENT_GUIDANCE: established facts, attempts, exact blocker, specific decision/help needed, options. Не последний glob/grep «для уверенности». Exhaustion не task success.
 

@@ -3,131 +3,100 @@ import test from 'node:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { stage1Runtime } from './fixtures/postman-stage1-runtime.js'
+import { stage1Runtime, stage1Native } from './fixtures/postman-stage1-runtime.js'
 const fixture=async(t,opts={})=>{
-  const dir=await mkdtemp(join(tmpdir(),'postman-objective-'))
+  const dir=await mkdtemp(join(tmpdir(),'postman-assignment-budget-'))
   const f=await stage1Runtime(dir,opts)
   t.after(async()=>{await f.dispose();await f.registry.close();await rm(dir,{recursive:true,force:true,maxRetries:5,retryDelay:100})})
   return {...f,dir}
 }
 const accepted=r=>{assert.equal(r.status,'POSTMAN_WORKER_TASK_ACCEPTED',JSON.stringify(r));return r.workerSessionId}
-for(const role of ['secretary','leader-worker','sol-worker'])test(role+' FAST bounds, Host soft warning, inherited cumulative cap 48',{timeout:20000},async t=>{
-  const gate=Promise.withResolvers(),entered=Promise.withResolvers()
-  t.after(()=>gate.resolve())
-  const f=await fixture(t,{plan:async(a,_r,_n,w)=>{
-    if(w.roleOf(a)==='sol'){entered.resolve();await gate.promise;return {name:'report',args:{output:'Sol aggregated evidence'}}}
-    const budget=w.roleOf(a)!=='sol' && f.registry.get('leader').workers[a.id]?.budget
-    if(role==='sol-worker' && budget?.exhausted) return {name:'report',args:{output:'NEEDS_PARENT_GUIDANCE: exact hard boundary; verified reads; need parent decision, not task success'}}
-    return {name:'read',args:{}}
-  }})
-  let parent=f.leader,solId
-  const review=async()=>{if(parent===f.leader) await f.wake(parent)}
-  if(role==='sol-worker'){
-    solId=accepted(await f.run(f.worker.solTaskTool,{task:'explicit approved Sol route'}));await entered.promise
-    parent=f.ctx.agents.get(solId)
-  }
-  const tool=role==='secretary'?f.worker.secretaryTool:f.worker.taskTool
-  for(const hardBudget of [7,25,8.5,NaN])if(!Number.isNaN(hardBudget)){
-    assert.equal((await f.run(tool,{task:'invalid budget',hardBudget},parent)).status,'POSTMAN_WORKER_BUDGET_INVALID')
-  }
-  assert.equal((await f.run(tool,{task:'parent cannot choose soft',hardBudget:8,softLimit:1},parent)).status,'POSTMAN_WORKER_BUDGET_INVALID')
-  assert.equal(Object.keys(f.registry.get('leader').workers).length,solId?1:0)
-  const id=accepted(await f.run(tool,{task:'Unresolved exact objective',newObjective:'Exact unresolved '+role,hardBudget:24},parent))
-  await f.settled(id)
-  let b=f.registry.get('leader').workers[id].budget,root=b.rootObjectiveId
-  assert.equal(b.hardLimit,24);assert.equal(b.softLimit,19);assert.equal(b.used,24)
-  const req=f.requests.filter(r=>r.agent.id===id)
-  assert.ok(req[18].request.system.includes('SOFT WARNING'));assert.ok(req[23].request.system.includes('HARD CEILING'))
-  await review()
-  accepted(await f.run(tool,{task:'Precise follow-up, not a new objective',workerSessionId:id,hardBudget:16},parent));await f.settled(id)
-  b=f.registry.get('leader').workers[id].budget
-  assert.equal(b.rootObjectiveId,root);assert.equal(b.used,16);assert.equal(f.registry.get('leader').objectives[root].used,40)
-  await review()
-  assert.deepEqual(await f.run(tool,{task:'Cannot silently shrink assignment',workerSessionId:id,hardBudget:24},parent),
-    {status:'POSTMAN_WORKER_OBJECTIVE_BUDGET_INSUFFICIENT',workerSessionId:id,remaining:8,requested:24})
-  accepted(await f.run(tool,{task:'Same objective final allowance',workerSessionId:id,hardBudget:8},parent));await f.settled(id)
-  b=f.registry.get('leader').workers[id].budget
-  assert.equal(b.hardLimit,8);assert.equal(b.used,8);assert.equal(b.exhausted,true)
-  assert.equal(f.registry.get('leader').objectives[root].used,48)
-  const before=f.requests.length
-  assert.equal((await f.run(tool,{task:'Cannot refinance',workerSessionId:id,hardBudget:24},parent)).status,'POSTMAN_WORKER_OBJECTIVE_BUDGET_INSUFFICIENT')
-  assert.equal((await f.run(tool,{task:'Cannot relabel same objective',workerSessionId:id,newObjective:'Exact unresolved '+role},parent)).status,'POSTMAN_WORKER_OBJECTIVE_BUDGET_INSUFFICIENT')
-  assert.equal(f.requests.length,before)
-  const list=await f.run(f.worker.listTool,{},parent),entry=list.workers.find(w=>w.workerSessionId===id)
-  assert.equal(entry.budget.root.used,48);assert.equal(entry.budget.root.cap,48);assert.equal(list.objectives.find(r=>r.id===root).used,48)
-  if(parent===f.leader){const team=f.worker.teamSnapshot(parent);const row=role==='secretary'?team.secretary:team.workers.rows[0];assert.equal(row.budget.rootUsed,48)}
-  await review()
-  const fresh=await f.run(f.worker.freshTool,{workerSessionId:id,task:'Same objective fresh Session',hardBudget:8},parent)
-  assert.equal(fresh.status,'POSTMAN_WORKER_OBJECTIVE_BUDGET_INSUFFICIENT')
-  const next=accepted(await f.run(tool,{task:'Actually independent objective',newObjective:'Independent '+role,hardBudget:8,workerSessionId:id},parent))
-  await f.settled(next)
-  const newBudget=f.registry.get('leader').workers[next].budget
-  assert.notEqual(newBudget.rootObjectiveId,root);assert.equal(newBudget.softLimit,6);assert.equal(newBudget.hardLimit,8)
-  assert.equal(f.registry.get('leader').objectives[root].used,48)
-  assert.equal(f.registry.get('leader').objectives[newBudget.rootObjectiveId].used,8)
-  if(solId){gate.resolve();await f.settled(solId)}
-})
-test('root cost survives cold registry reopen and fresh child; independent objective requires explicit declaration',{timeout:20000},async t=>{
-  const f=await fixture(t)
-  const id=accepted(await f.run(f.worker.taskTool,{task:'bounded exact facts',newObjective:'Root A'}));await f.settled(id);await f.wake(f.leader)
-  const root=f.registry.get('leader').workers[id].budget.rootObjectiveId
-  await f.dispose();await f.registry.close()
-  const resumed=await stage1Runtime(f.dir,{resume:true})
-  t.after(async()=>{await resumed.dispose();await resumed.registry.close()})
-  assert.equal(resumed.registry.get('leader').objectives[root].used,1)
-  accepted(await resumed.run(resumed.worker.taskTool,{workerSessionId:id,task:'Same root after cold resume'}));await resumed.settled(id);await resumed.wake(resumed.leader)
-  assert.equal(resumed.registry.get('leader').objectives[root].used,2)
-  const next=accepted(await resumed.run(resumed.worker.freshTool,{workerSessionId:id,task:'Same root fresh',hardBudget:8}));await resumed.settled(next)
-  assert.equal(resumed.registry.get('leader').workers[next].budget.rootObjectiveId,root)
-  assert.equal(resumed.registry.get('leader').objectives[root].used,3)
-  accepted(await resumed.run(resumed.worker.secretaryTool,{task:'Independent facts',newObjective:'Root B'}))
-  const before=resumed.specs.length
-  assert.equal((await resumed.run(resumed.worker.taskTool,{task:'ambiguous new child',createNew:true})).status,'POSTMAN_ROOT_OBJECTIVE_REQUIRED')
-  assert.equal(resumed.specs.length,before)
-  assert.equal((await resumed.run(resumed.worker.taskTool,{task:'foreign root',workerSessionId:next,rootObjectiveId:'foreign'})).status,'POSTMAN_ROOT_OBJECTIVE_REJECTED')
-})
-test('concurrent Secretary and Worker share one root without lost costs or exceeding cap',{timeout:15000},async t=>{
+
+test('Worker hardBudget 8 stops at its own limit; FAST schemas expose only assignment budget',{timeout:20000},async t=>{
   const f=await fixture(t,{plan:()=>({name:'read',args:{}})})
-  const ids=await Promise.all([f.worker.secretaryTool,f.worker.taskTool].map(tool=>f.run(tool,{task:'same unresolved objective',newObjective:'Shared root',hardBudget:24}).then(accepted)))
-  await Promise.all(ids.map(id=>f.settled(id)))
-  const roots=Object.values(f.registry.get('leader').objectives)
-  assert.equal(roots.length,1);assert.equal(roots[0].used,48)
-  assert.equal(ids.reduce((sum,id)=>sum+f.registry.get('leader').workers[id].budget.used,0),48)
-  assert.equal(f.requests.length,48)
-})
-test('root 46/48 rejects requested hardBudget 24 before assignment for Secretary and Leader/Sol Workers',{timeout:20000},async t=>{
-  for(const role of ['secretary','leader-worker','sol-worker']) await t.test(role,async t=>{
-    const gate=Promise.withResolvers(),entered=Promise.withResolvers()
-    t.after(()=>gate.resolve())
-    const f=await fixture(t,{plan:async(a,_r,_n,w)=>{
-      if(w.roleOf(a)==='sol'){entered.resolve();await gate.promise}
-      return {name:'report',args:{output:'bounded exact facts'}}
-    }})
-    let parent=f.leader,solId
-    if(role==='sol-worker'){
-      solId=accepted(await f.run(f.worker.solTaskTool,{task:'explicit approved Sol route'}));await entered.promise
-      parent=f.ctx.agents.get(solId)
-    }
-    const tool=role==='secretary'?f.worker.secretaryTool:f.worker.taskTool
-    await f.registry.change('leader',row=>({...row,objectives:{shared:{id:'shared',ownerSessionId:parent.id,objective:'Unresolved near cap',used:46,cap:48}}}))
-    const before=JSON.stringify(f.registry.get('leader')),starts=f.specs.length,requests=f.requests.length
-    assert.deepEqual(await f.run(tool,{task:'same root',rootObjectiveId:'shared',hardBudget:24},parent),
-      {status:'POSTMAN_WORKER_OBJECTIVE_BUDGET_INSUFFICIENT',remaining:2,requested:24})
-    assert.equal(JSON.stringify(f.registry.get('leader')),before);assert.equal(f.specs.length,starts);assert.equal(f.requests.length,requests)
-    await f.registry.change('leader',row=>({...row,objectives:{shared:{...row.objectives.shared,used:40}}}))
-    const id=accepted(await f.run(tool,{task:'full eight-step allowance',rootObjectiveId:'shared',hardBudget:8},parent));await f.settled(id)
-    if(parent===f.leader) await f.wake(parent)
-    await f.registry.change('leader',row=>({...row,objectives:{shared:{...row.objectives.shared,used:46}}}))
-    const settled=JSON.stringify(f.registry.get('leader')),started=f.specs.length,requested=f.requests.length
-    for(const control of [tool,...(role==='secretary'?[]:[f.worker.interruptTool]),f.worker.freshTool]){
-      assert.deepEqual(await f.run(control,{workerSessionId:id,task:'same unresolved root',hardBudget:24},parent),
-        {status:'POSTMAN_WORKER_OBJECTIVE_BUDGET_INSUFFICIENT',workerSessionId:id,remaining:2,requested:24})
-      assert.equal(JSON.stringify(f.registry.get('leader')),settled)
-    }
-    assert.deepEqual(await f.run(tool,{workerSessionId:id,task:'default also requires full budget'},parent),
-      {status:'POSTMAN_WORKER_OBJECTIVE_BUDGET_INSUFFICIENT',workerSessionId:id,remaining:2,requested:16})
-    assert.equal(JSON.stringify(f.registry.get('leader')),settled);assert.equal(f.specs.length,started);assert.equal(f.requests.length,requested)
-    if(solId){gate.resolve();await f.settled(solId)}
-  })
+  for(const tool of [f.worker.taskTool,f.worker.secretaryTool,f.worker.interruptTool,f.worker.freshTool]){
+    assert.ok(tool.parameters.properties.hardBudget)
+    assert.equal(Object.hasOwn(tool.parameters.properties,'rootObjectiveId'),false)
+    assert.equal(Object.hasOwn(tool.parameters.properties,'newObjective'),false)
+  }
+  assert.equal(Object.hasOwn(f.worker.solTaskTool.parameters.properties,'hardBudget'),false)
+  assert.equal((await f.run(f.worker.solTaskTool,{task:'Sol has no FAST budget',hardBudget:8})).status,'POSTMAN_WORKER_BUDGET_INVALID')
+  for(const hardBudget of [7,25,8.5])
+    assert.equal((await f.run(f.worker.taskTool,{task:'invalid budget',hardBudget})).status,'POSTMAN_WORKER_BUDGET_INVALID')
+  assert.equal((await f.run(f.worker.taskTool,{task:'no parent soft limit',hardBudget:8,softLimit:1})).status,'POSTMAN_WORKER_BUDGET_INVALID')
+  const id=accepted(await f.run(f.worker.taskTool,{task:'Exact bounded check',hardBudget:8}))
+  const child=await f.settled(id),requests=f.requests.filter(r=>r.agent.id===id)
+  assert.equal(requests.length,8)
+  assert.ok(requests[5].request.system.includes('SOFT WARNING'))
+  assert.ok(requests[7].request.system.includes('HARD CEILING'))
+  const budget=f.registry.get('leader').workers[id].budget
+  assert.equal(budget.hardLimit,8);assert.equal(budget.softLimit,6);assert.equal(budget.used,8)
+  assert.equal(budget.exhausted,true);assert.equal(budget.notified,true);assert.equal(budget.reported,true)
+  assert.ok(child.session.events.some(e=>e.type==='tool/result' && e.data.message.content[0].isError))
+  await f.wake(f.leader)
+  const text=JSON.stringify(f.leader.session.events)
+  assert.ok(text.includes('FAST assignment budget exhausted (8/8)'))
+  assert.doesNotMatch(text,/root exhausted|root cumulative/);assert.ok(!text.includes('/48'))
+  const second=accepted(await f.run(f.worker.taskTool,{task:'Second Worker full allowance',createNew:true,hardBudget:24}))
+  await f.settled(second)
+  assert.notEqual(second,id)
+  assert.equal(f.registry.get('leader').workers[second].budget.hardLimit,24)
+  assert.equal(f.registry.get('leader').workers[second].budget.used,24)
+  assert.deepEqual(f.registry.get('leader').workers[id].budget,budget)
 })
 
+test('Secretary, two Leader Workers and two Sol-owned Workers have independent 15-request budgets',{timeout:20000},async t=>{
+  const solGate=Promise.withResolvers(),solEntered=Promise.withResolvers(),gates=new Map()
+  t.after(()=>{solGate.resolve();for(const gate of gates.values())gate.release.resolve()})
+  const f=await fixture(t,{plan:async(a,_r,n,w)=>{
+    if(w.roleOf(a)==='sol'){solEntered.resolve(a);await solGate.promise;return {name:'report',args:{output:'Sol aggregated bounded evidence'}}}
+    const budget=f.registry.get('leader').workers[a.id].budget
+    if(n===1){const gate=gates.get(budget.task);gate.entered.resolve();await gate.release.promise}
+    return budget.exhausted?{name:'report',args:{output:'NEEDS_PARENT_GUIDANCE: own assignment limit; verified reads; need parent decision, not success'}}:{name:'read',args:{}}
+  }})
+  const solId=accepted(await f.run(f.worker.solTaskTool,{task:'Approved Sol route'})),sol=await solEntered.promise
+  const assignments=[['Secretary',f.worker.secretaryTool,f.leader],['Leader A',f.worker.taskTool,f.leader],['Leader B',f.worker.taskTool,f.leader],['Sol A',f.worker.taskTool,sol],['Sol B',f.worker.taskTool,sol]]
+  const ids=[]
+  for(const [task,tool,parent] of assignments){
+    const gate={entered:Promise.withResolvers(),release:Promise.withResolvers()};gates.set(task,gate)
+    ids.push(accepted(await f.run(tool,{task,createNew:true,hardBudget:15},parent)));await gate.entered.promise
+  }
+  for(let i=0;i<ids.length;i++){
+    const peers=ids.filter(id=>id!==ids[i]).map(id=>[id,f.registry.get('leader').workers[id].budget])
+    gates.get(assignments[i][0]).release.resolve();await f.settled(ids[i])
+    const budget=f.registry.get('leader').workers[ids[i]].budget
+    assert.equal(budget.hardLimit,15);assert.equal(budget.softLimit,12);assert.equal(budget.used,15);assert.equal(budget.exhausted,true)
+    for(const [id,before] of peers)assert.deepEqual(f.registry.get('leader').workers[id].budget,before)
+    assert.equal(f.requests.filter(r=>r.agent.id===ids[i]).length,15)
+  }
+  assert.equal(ids.reduce((sum,id)=>sum+f.registry.get('leader').workers[id].budget.used,0),75)
+  assert.equal(Object.hasOwn(f.registry.get('leader'),'objectives'),false)
+  const list=await f.run(f.worker.listTool)
+  assert.equal(Object.hasOwn(list,'objectives'),false)
+  for(const row of list.workers.filter(w=>w.workerType!=='sol'))assert.equal(Object.hasOwn(row.budget,'root'),false)
+  assert.deepEqual(f.worker.teamSnapshot(f.leader).secretary.budget,{used:15,soft:12,hard:15,exhausted:true})
+  solGate.resolve();await f.settled(solId)
+})
+
+test('existing storage drops obsolete team fields and preserves current and pending assignment budgets',{timeout:20000},async t=>{
+  const f=await fixture(t)
+  const id=accepted(await f.run(f.worker.taskTool,{task:'Bounded facts',hardBudget:15}));await f.settled(id);await f.wake(f.leader)
+  const budget=f.registry.get('leader').workers[id].budget
+  const obsolete={...budget,rootObjectiveId:'old',exhausted:true}
+  await f.registry.change('leader',row=>({...row,objectives:{old:{id:'old',ownerSessionId:'leader',objective:'old',used:48,cap:48}},
+    workers:{...row.workers,[id]:{...row.workers[id],budget:obsolete,pendingBudgets:{pending:obsolete}}},
+    retiredWorkers:[{...row.workers[id],id:'retired',budget:obsolete}]}))
+  await f.dispose();await f.registry.close()
+  const { JsonStorageBackend }=await stage1Native('dsh-storage-json')
+  const { DomainFacility }=await stage1Native('dsh-storage-domain')
+  const { openPostmanTaskRegistry }=await import('./postman-task-registry.js')
+  const backend=new JsonStorageBackend(join(f.dir,'tasks'))
+  const registry=await openPostmanTaskRegistry(new DomainFacility({storage:{backend:{get:()=>backend}},emit(){}},{backend:'json'}))
+  t.after(async()=>{await registry.close();await backend.close()})
+  const row=registry.get('leader')
+  assert.equal(Object.hasOwn(row,'objectives'),false)
+  assert.deepEqual(row.workers[id].budget,budget)
+  assert.deepEqual(row.workers[id].pendingBudgets.pending,budget)
+  assert.deepEqual(row.retiredWorkers[0].budget,budget)
+  assert.equal(row.runner.state,'none');assert.equal(row.workers[id].ownerSessionId,'leader')
+})

@@ -128,29 +128,4 @@ test('JSON reopen retains independent Worker lifecycle and Bridge/runner fields'
   assert.equal(reopened.get('leader').runner.state, 'none')
   await reopened.close(); await backend.close()
 })
-test('legacy FAST cumulative budget migration counts provable work, refuses unknown history and retains retired roots', async t => {
-  const root = await mkdtemp(join(tmpdir(), 'postman-root-migration-'))
-  t.after(() => rm(root, { recursive: true, force: true }))
-  const backend = new JsonStorageBackend(root)
-  const facility = () => new DomainFacility({ storage: { backend: { get: () => backend } }, emit() {} }, { backend: 'json' })
-  const budget = { assignmentId:'a',task:'unresolved',used:7,softLimit:12,hardLimit:15,exhausted:false,notified:false,reported:true }
-  const worker = { id:'worker',label:'worker',workerType:'luna',ownerSessionId:'leader',state:'ready',delivery:'none',artifactRequests:[],budget,
-    lifecycle:{version:1,admissions:[{id:'a',state:'accepted',messageId:'m'}],reports:[]} }
-  const first = await openPostmanTaskRegistry(facility())
-  await first.create('leader', { ...record, worker:undefined, workers:{worker}, retiredWorkers:[{...worker,id:'retired',retired:true}] })
-  await first.create('unknown', { ...record, leaderSessionId:'unknown', worker:undefined, workers:{worker:{...worker,ownerSessionId:'unknown',lifecycle:{...worker.lifecycle,admissions:[...worker.lifecycle.admissions,{id:'b',state:'accepted',messageId:'m2'}]}}} })
-  await first.create('retired-only', { ...record, leaderSessionId:'retired-only', worker:undefined,workers:{},retiredWorkers:[{...worker,ownerSessionId:'retired-only',retired:true}] })
-  await first.close()
-  const migrated = await openPostmanTaskRegistry(facility())
-  assert.equal(migrated.get('leader').objectives['legacy:leader'].used,14)
-  assert.equal(migrated.get('leader').workers.worker.budget.rootObjectiveId,'legacy:leader')
-  assert.equal(migrated.get('leader').retiredWorkers[0].budget.rootObjectiveId,'legacy:leader')
-  assert.equal(migrated.get('unknown').objectives['legacy:unknown'].used,48)
-  assert.equal(migrated.get('retired-only').objectives['legacy:retired-only'].used,7)
-  await migrated.close()
-  const again = await openPostmanTaskRegistry(facility())
-  assert.equal(again.get('leader').objectives['legacy:leader'].used,14)
-  assert.equal(again.get('unknown').objectives['legacy:unknown'].used,48)
-  await again.close(); await backend.close()
-})
 

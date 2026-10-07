@@ -154,8 +154,6 @@ test('queued followup does not reset a running assignment budget before FIFO cla
   const budget=f.registry.get('leader').workers[id].budget
   assert.notEqual(budget.assignmentId,old.assignmentId);assert.equal(budget.used,1);assert.equal(budget.reported,true)
   assert.equal(Object.keys(f.registry.get('leader').workers[id].pendingBudgets).length,0)
-  assert.equal(budget.rootObjectiveId,old.rootObjectiveId)
-  assert.equal(f.registry.get('leader').objectives[budget.rootObjectiveId].used,2)
 })
 test('default FAST 12/16 budget cannot silently finish without escalation report',{timeout:15000},async t=>{
   const f=await fixture(t,{plan:(_a,_r,n)=>n<16?{name:'read',args:{}}:{text:'ignored hard report instruction'}})

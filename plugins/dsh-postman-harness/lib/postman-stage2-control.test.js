@@ -43,8 +43,7 @@ for(const preset of ['postman-leader','postman-leader-ptc']) test(preset+': one 
  assert.notEqual(v.value.a.workerSessionId,v.value.b.workerSessionId)
  const team=v.value.after;assert.equal(team.status,'POSTMAN_TEAM_STATUS');assert.equal(team.task.contextReady,true)
  assert.equal(team.workers.used,2);assert.equal(team.workers.limit,2);assert.equal(team.sol.present,true);assert.equal(team.sol.ownedWorkers.limit,2)
- assert.deepEqual(team.secretary.budget,{used:1,soft:12,hard:16,exhausted:false,
-   rootObjectiveId:f.registry.get("leader").workers[v.value.secretary.workerSessionId].budget.rootObjectiveId,rootUsed:3,rootCap:48})
+ assert.deepEqual(team.secretary.budget,{used:1,soft:12,hard:16,exhausted:false})
  assert.ok(Object.values(f.registry.get('leader').workers).every(b=>b.ownerSessionId==='leader'))
  hold.resolve();await Promise.all(['secretary','a','b','sol'].map(k=>f.childDone(v.value[k].workerSessionId)))
 })

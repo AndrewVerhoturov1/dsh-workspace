@@ -31,7 +31,7 @@ Engineering judgement stays with Sol. Independent cheap mechanics go to Worker i
 
 Assignment короткий, однозначный: Objective, Work type, Scope/boundaries, Done when, Verification, Stop condition, Established facts/context. **Exact-path-first delegation:** дай уже known file/symbol/test command/expected status, запрети не discovery вообще, а ненужное повторное discovery известного target. Constraint только с источником: user/TASK_CONTRACT/repo policy/security/shared-worktree/explicit scope.
 
-Stage 3 Worker initial/continuation/fresh: `hardBudget:15` → Host soft12. Latest baseline configurable8..24/default16/root cap48 не меняй. rootObjectiveId для той же незавершённой цели; newObjective только независимая цель, не bypass. Lifecycle/follow-up не сбрасывают cumulative расход.
+Stage 3 Worker initial/continuation/fresh: `hardBudget:15` → Host soft12. Runtime configurable8..24/default16 не меняй. Каждый Worker assignment имеет независимый budget; compact/cold resume сохраняют budget текущего assignment, queued follow-up не сбрасывает его до FIFO claim.
 
 FAST escalation: missing fact → другой bounded Worker (или запрос Leader о Secretary facts); choice → Sol решает; precise correction → same Worker continuation; scope/authority/реальный blocker → Leader. Не vague «продолжай», не бесконечная discovery branch. Soft warning → synthesis, near hard → precise NEEDS_PARENT_GUIDANCE, не ещё grep.
 
