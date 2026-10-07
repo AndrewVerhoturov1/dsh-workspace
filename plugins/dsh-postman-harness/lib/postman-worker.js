@@ -1123,6 +1123,22 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       return 'POSTMAN_WORKER_BUDGET_EXHAUSTED: meaningful blocker required, not success'
   })
   const stopReportConclusion = ctx.on?.('tools/execute', async (exec, next) => {
+    if (exec.name === 'report' && roleOf(exec.agent) === 'sol') {
+      const parent = exec.agent, group = groupFor(parent)
+      const owned = bindings(parent, group), entries = Object.entries(owned)
+      // Reuse authoritative admission/report/turn settlement, including cold history.
+      // An idle binding alone is not proof; a settled binding need not be closed.
+      const children = await Promise.all(entries.map(([id]) => history(id, parent.id, exec.signal)))
+      const current = bindings(parent, group)
+      if (exec.signal.aborted || roleOf(parent) !== 'sol' ||
+          Object.keys(current).length !== entries.length || entries.some(([id, binding], index) => {
+            const child = children[index], resident = liveWorker(id)
+            return current[id] !== binding ||
+              (resident && (resident.status !== 'idle' || resident.inbox?.hasPending !== false ||
+                resident.session.events.at(-1) !== child?.session.events.at(-1))) ||
+              !workerEvidence(binding, child, parent, { settlementOnly: true }).ready
+          })) throw new Error('POSTMAN_SOL_REPORT_REJECTED: owned Worker work is not settled; report is the terminal assignment result')
+    }
     const result = await next()
     if (exec.name === 'report' && roleOf(exec.agent) && !result.isError && typeof result.value?.messageId === 'string') {
       exec.concludeTurn?.()

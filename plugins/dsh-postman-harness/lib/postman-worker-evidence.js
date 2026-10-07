@@ -11,7 +11,7 @@ const isSuccessful = result => result?.data?.message?.content?.[0]?.isError === 
 const meaningful = event => event.type === 'assistant/message' &&
   event.data?.message?.content?.some(block => block.type === 'text' && block.text.trim())
 
-export function workerEvidence(worker, child, leader) {
+export function workerEvidence(worker, child, leader, { settlementOnly = false } = {}) {
   const admissions = worker?.lifecycle?.version === 1 ? worker.lifecycle.admissions : null
   if (!Array.isArray(admissions) || !admissions.length || !Array.isArray(child?.session?.events) ||
       !Array.isArray(leader?.session?.events))
@@ -62,6 +62,16 @@ export function workerEvidence(worker, child, leader) {
   for (const [turnId, turn] of turns) {
     const assigned = [...turn.consumed].filter(id => assignmentIds.has(id))
     for (const id of assigned) consumed.add(id)
+    // Sol terminal reporting needs known lifecycle settlement, not task-success or
+    // retirement evidence. A completed/failed/cancelled child may be aggregated as
+    // a blocker; it need not have delivered a successful final report to aggregate its settled outcome.
+    if (settlementOnly) {
+      if (!['completed', 'blocked', 'aborted', 'error'].includes(turn.end) ||
+          turn.calls.some(item => { const result = turn.results.get(item.event.data.callId)
+            return !result || result.position <= item.position }))
+        return { ready: false, reason: 'Worker outcome or tool work not settled' }
+      continue
+    }
     // Every meaningful turn, including native followups outside Postman admissions,
     // needs its own final result after all work in that turn settled.
     if (!turn.actions.length) {
@@ -104,5 +114,5 @@ export function workerEvidence(worker, child, leader) {
   if (consumed.size !== assignmentIds.size ||
       [...turns.values()].every(turn => !turn.actions.length))
     return { ready: false, reason: 'accepted assignment remains unclaimed' }
-  return { ready: true, reason: 'all current turns completed with delivered native reports' }
+  return { ready: true, reason: settlementOnly ? 'all accepted work and current turns settled' : 'all current turns completed with delivered native reports' }
 }

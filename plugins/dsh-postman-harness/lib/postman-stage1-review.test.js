@@ -62,7 +62,7 @@ test('Secretary artifactRequestId rejects before resolution, new or existing ass
   assert.deepEqual(f.registry.get('leader'),before);assert.equal(resolutions,0)
 })
 
-test('Sol PTC namespace is local-only; controls direct-only and foreign ownership is rechecked even with parent token',{timeout:20000},async t=>{
+test('Sol PTC includes owned controls; model-direct rejected and foreign ownership rechecked',{timeout:20000},async t=>{
   const entered=Promise.withResolvers(),gate=Promise.withResolvers()
   const f=await fixture(t,()=>({plan:async(a,_r,_n,w)=>{if(w.roleOf(a)==='sol'){entered.resolve();await gate.promise}return {name:'report',args:{output:'bounded owned evidence'}}}}))
   try {
@@ -76,19 +76,19 @@ test('Sol PTC namespace is local-only; controls direct-only and foreign ownershi
   assert.equal(batch.isError,false);assert.equal(batch.value.status,'ok',JSON.stringify(batch.value))
   assert.deepEqual(batch.value.value.names,[...POSTMAN_SOL_PTC_TOOL_NAMES].sort());assert.equal(batch.value.effects.completed,3)
   assert.deepEqual(SOL_WORKER_PROFILE.tools,[...POSTMAN_SOL_PTC_TOOL_NAMES])
-  const absent=[...WORKER_CONTROL_TOOLS,'postman_bridge','postman_secretary','postman_sol_worker','postman_task_prepare','postman_task_restore','postman_input_files','ask_user_question','exit_plan_mode','create_goal','update_goal','subagent','workflow','report','notify_parent']
+  const absent=['postman_bridge','postman_secretary','postman_sol_worker','postman_task_prepare','postman_task_restore','postman_input_files','ask_user_question','exit_plan_mode','create_goal','update_goal','subagent','workflow','report','notify_parent']
   const rejected=await execute('ptc_execute',ptcArgs('const names='+JSON.stringify(absent)+';return names.map(name=>({name,present:typeof tools[name]!=="undefined"}))'))
   assert.equal(rejected.value.status,'ok');assert.ok(rejected.value.value.every(x=>!x.present))
-  for(const id of [own,foreign,secretary,solId,'foreign-sol-child']){
-    const bypass=await execute('ptc_execute',ptcArgs('return await tools.postman_worker({task:"bypass",workerSessionId:'+JSON.stringify(id)+'})'))
-    assert.equal(bypass.value.status,'runtime-error')
+  for(const name of WORKER_CONTROL_TOOLS){
+    const direct=await execute(name,{task:'use PTC',workerSessionId:own})
+    assert.equal(direct.isError,true);assert.match(direct.error.message,/POSTMAN_PTC_DIRECT_CALL_REJECTED/)
   }
   const direct=await execute('read',{file_path:'known.txt'});assert.equal(direct.isError,true);assert.match(direct.error.message,/POSTMAN_PTC_DIRECT_CALL_REJECTED/)
   for(const id of [foreign,secretary,solId,'foreign-sol-child'])for(const tool of [f.worker.taskTool,f.worker.interruptTool,f.worker.stopTool,f.worker.compactTool,f.worker.freshTool]){
     const args={workerSessionId:id,task:'foreign'}
     assert.equal((await f.run(tool,args,sol)).status,'POSTMAN_WORKER_TARGET_UNKNOWN')
-    const nested=await execute(tool.name,args,sol,{})
-    assert.equal(nested.isError,false,nested.error?.message);assert.equal(nested.value.status,'POSTMAN_WORKER_TARGET_UNKNOWN')
+    const nested=await execute('ptc_execute',ptcArgs('return await tools.'+tool.name+'('+JSON.stringify(args)+')'))
+    assert.equal(nested.isError,false,nested.error?.message);assert.equal(nested.value.status,'ok');assert.equal(nested.value.value.status,'POSTMAN_WORKER_TARGET_UNKNOWN')
   }
   accepted(await f.run(f.worker.taskTool,{workerSessionId:own,task:'next exact owned task'},sol));await f.settled(own)
   for(const tool of [f.worker.secretaryTool,f.worker.solTaskTool])assert.equal((await f.run(tool,{task:'not supervisor'},sol)).status,'POSTMAN_WORKER_CALLER_REJECTED')

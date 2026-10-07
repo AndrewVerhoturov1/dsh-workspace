@@ -7,7 +7,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { ToolRuntime, defineTool } from '@deepseek-ai/dsh-tools'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import { DEFAULT_LIMITS } from 'dsh-ptc'
-import { createPtcAdapter, PILOT_PROFILE, WORKER_MUTATION_PROFILE } from './ptc-adapter.js'
+import { createPtcAdapter, PILOT_PROFILE, WORKER_MUTATION_PROFILE, SOL_WORKER_PROFILE } from './ptc-adapter.js'
 import { POSTMAN_PTC_DISCIPLINE } from './ptc-discipline.js'
 import { postmanBridgeRestrictionForAgent, isTopLevelPostmanPtcLeader, postmanPtcDirectCallGuard, POSTMAN_PTC_ONLY_LEADER_TOOLS } from './postman-bridge-core.js'
 
@@ -28,7 +28,7 @@ function fixture(dir, { real = false, readMaxBytes = 51200, runtime, resolveAssi
   const traces = []
   ctx.on('tools/pre-execute', async (exec,next)=> { traces.push(['pre',exec.name,exec.agent,exec.parent,exec.rootCallId,exec.token]); return next() })
   ctx.on('tools/result', (exec, result)=>traces.push(['result',exec.name,exec.agent,result.isError]))
-  ctx.tools.guard(exec => postmanPtcDirectCallGuard(exec, id => agents.get(id)))
+  ctx.tools.guard(exec => postmanPtcDirectCallGuard(exec, id => agents.get(id), agent => resolveAssignment?.(agent)?.role === 'sol'))
   if (real) {
     new LocalFileSystem(ctx,{cwd:dir,diffBasisMaxBytes:1048576})
     ctx.subprocess = new LocalSubprocessRuntime(ctx)
@@ -533,7 +533,7 @@ test('canonical discipline follows exact Leader PTC assignment; Worker assignmen
   } finally {await f.adapter.dispose()}
 })
 
-test('boundary required and yield_on_success is exact boolean, external_event, Leader only', async () => {
+test('boundary required and yield_on_success is exact boolean, external_event', async () => {
   const f = fixture(process.cwd()), { a } = f.agent('validation')
   a.ctx.tools.restrict(postmanBridgeRestrictionForAgent(a)); f.adapter.refresh(a)
   const invoke = args => f.ctx.tools.execute({ callId: 'validation', name: 'ptc_execute',
@@ -582,7 +582,7 @@ test('one program validates prepare and Worker acceptance, auto-concludes and re
     assert.deepEqual({ ...event.data, toolCounts: {...event.data.toolCounts}, durationMs: 0 }, { sessionId: a.id, role: 'leader', description: 'Dispatch then wait for Worker report',
       boundary: 'external_event', status: 'ok', durationMs: 0, nestedToolCalls: 2,
       toolCounts: { postman_task_prepare: 1, postman_worker: 1 }, resultBytes: Buffer.byteLength(JSON.stringify(result.value.value)),
-      yieldRequested: false, yieldApplied: true, underbatchedCandidate: false,
+      yieldRequested: false, yieldApplied: true, smallSemanticPhase: false, thinSemanticPhase: false, underbatchedCandidate: false,
       underbatchedReason: null, underbatchedStreak: 0, oversizedResultCandidate: false })
     assert.ok(event.data.durationMs >= 0)
     assert.doesNotMatch(JSON.stringify(event), /program|arguments|content|taskText/)
@@ -810,5 +810,90 @@ test('compact payload remains below 50 KiB even at the Leader nested-call ceilin
     assert.ok(Buffer.byteLength(JSON.stringify(result.value))<50*1024)
     assert.ok(Buffer.byteLength(result.content[0].text)<50*1024)
   } finally {await f.adapter.dispose()}
+})
+
+
+const solFixture = (runtime) => {
+  const context={worktree:process.cwd()}
+  const f=fixture(process.cwd(),{runtime,workerContextOf:()=>context,
+    resolveAssignment:a=>a.id==='sol-gate'?{role:'sol',profile:SOL_WORKER_PROFILE}:null})
+  f.ctx.tools.register(defineTool({name:'glob',description:'glob',parameters:{},output,execute:()=>({paths:[]})}))
+  const {a,diagnostics}=f.agent('sol-gate','standard',{origin:'subagent',parentSession:'leader',delegationDepth:1})
+  f.adapter.refresh(a)
+  const invoke=(program,controller=new AbortController(),boundary='external_event')=>f.ctx.tools.execute({
+    agent:a,name:'ptc_execute',arguments:{program,description:'Prove exact owned producer safety before event boundary',boundary},
+    callId:'sol-'+Math.random(),signal:controller.signal})
+  return {...f,a,diagnostics,invoke}
+}
+
+test('Stage 3.5B exact Sol uses only accepted owned event producers; direct controls rejected',async t=>{
+  const f=solFixture();t.after(()=>f.adapter.dispose())
+  let status
+  f.ctx.on('tools/execute',async(exec,next)=>exec.parent&&exec.name.startsWith('postman_worker')?{isError:false,value:{status}}:next())
+  for(const name of ['postman_worker','postman_worker_interrupt','postman_worker_list','postman_worker_stop','postman_worker_compact','postman_worker_fresh']){
+    const direct=await f.ctx.tools.execute({agent:f.a,name,arguments:{},callId:'direct',signal:new AbortController().signal})
+    assert.equal(direct.isError,true);assert.match(direct.error.message,/PTC_DIRECT_CALL_REJECTED/)
+  }
+  for(const [name,accepted] of [['postman_worker','POSTMAN_WORKER_TASK_ACCEPTED'],['postman_worker_interrupt','POSTMAN_WORKER_INTERRUPT_TASK_ACCEPTED'],['postman_worker_fresh','POSTMAN_WORKER_TASK_ACCEPTED']]){
+    for(status of ['POSTMAN_WORKER_BINDING_UNCERTAIN','POSTMAN_WORKER_DELIVERY_UNKNOWN',accepted+'_UNKNOWN',accepted]){
+      const r=await f.invoke('return await tools.'+name+'({})')
+      assert.equal(r.value.status,'ok');assert.equal(r.concludesTurn===true,status===accepted)
+      const d=f.diagnostics.at(-1).data;assert.equal(d.smallSemanticPhase,false);assert.equal(d.thinSemanticPhase,false)
+    }
+  }
+  for(const [name,accepted] of [['postman_worker_list','POSTMAN_WORKER_LIST'],['postman_worker_stop','POSTMAN_WORKER_STOPPED'],['postman_worker_compact','POSTMAN_WORKER_COMPACTED']]){
+    status=accepted;const r=await f.invoke('return await tools.'+name+'({})');assert.equal(r.value.status,'ok');assert.equal(!!r.concludesTurn,false)
+    assert.equal(f.diagnostics.at(-1).data.yieldBlockedReason,'no-accepted-producer')
+  }
+  assert.equal(!!(await f.invoke('return await tools.read({file_path:"known"})')).concludesTurn,false)
+  status='POSTMAN_WORKER_TASK_ACCEPTED'
+  const decision=await f.invoke('await tools.postman_worker({});return {needsModelDecision:true,decisionQuestion:"real choice"}')
+  assert.equal(!!decision.concludesTurn,false);assert.equal(f.diagnostics.at(-1).data.yieldBlockedReason,'model-decision-requested')
+})
+
+test('Stage 3.5B exact Sol fails closed on correlated effects/cleanup/runtime errors',async t=>{
+  let terminal
+  const runtime={run:async({bindings,signal})=>{await bindings.postman_worker({}, {signal,callId:'producer'});return terminal},dispose:async()=>{}}
+  const f=solFixture(runtime);t.after(()=>f.adapter.dispose())
+  f.ctx.on('tools/execute',async(exec,next)=>exec.parent&&exec.name==='postman_worker'?{isError:false,value:{status:'POSTMAN_WORKER_TASK_ACCEPTED'}}:next())
+  const effect={name:'postman_worker',callId:'producer',state:'completed'}
+  const safe={status:'ok',value:{},effects:{calls:[effect],completed:1,pending:0,failed:0}}
+  for(terminal of [
+    {status:'cancelled'},{status:'runtime-error'},{status:'unknown'},
+    {...safe,cleanupError:{}},{...safe,effects:undefined},
+    ...['pending','unknown','failed','not-started'].map(state=>({...safe,effects:{calls:[{...effect,state}],completed:0,pending:state==='pending'?1:0,failed:state==='failed'?1:0}})),
+    {...safe,effects:{...safe.effects,calls:[{...effect,name:'read'}]}},
+    {...safe,effects:{...safe.effects,calls:[{...effect,callId:'foreign'}]}},
+    {...safe,effects:{...safe.effects,calls:[effect,effect],completed:2}},
+  ]){
+    const r=await f.invoke('ignored');assert.equal(!!r.concludesTurn,false,JSON.stringify(terminal));assert.equal(f.diagnostics.at(-1).data.smallSemanticPhase,false)
+  }
+  terminal=safe;assert.equal((await f.invoke('ignored')).concludesTurn,true)
+})
+
+test('Stage 3.5B Sol actual nested failure/pending/abort/revocation never auto-concludes',{timeout:20000},async t=>{
+  const f=solFixture(),held=Promise.withResolvers();t.after(async()=>{held.resolve();await f.adapter.dispose()})
+  f.ctx.on('tools/execute',async(exec,next)=>{
+    if(!exec.parent)return next()
+    if(exec.name==='postman_worker')return {isError:false,value:{status:'POSTMAN_WORKER_TASK_ACCEPTED'}}
+    if(exec.name==='read'){
+      if(exec.arguments.held){await held.promise;return {isError:false,value:{}}}
+      throw Error('actual nested failure')
+    }
+    return next()
+  })
+  for(const program of ['await tools.postman_worker({});try{await tools.read({})}catch{}return {}',
+    'await tools.postman_worker({});tools.read({file_path:"held.txt",held:true});return {}']){
+    const r=await f.invoke(program);assert.equal(!!r.concludesTurn,false);assert.equal(f.diagnostics.at(-1).data.yieldApplied,false)
+  }
+  for(const revoke of [false,true]){
+    const gate=Promise.withResolvers(),controller=new AbortController()
+    const stop=f.ctx.on('tools/pre-execute',async(exec,next)=>{if(exec.parent&&exec.name==='read')gate.resolve();return next()})
+    const pending=f.invoke('await tools.postman_worker({});await tools.read({file_path:"held.txt",held:true});return {}',controller)
+    await gate.promise
+    if(revoke)f.adapter.remove(f.a);else controller.abort()
+    const r=await pending;assert.equal(!!r.concludesTurn,false);assert.equal(f.diagnostics.at(-1).data.yieldApplied,false)
+    stop()
+  }
 })
 

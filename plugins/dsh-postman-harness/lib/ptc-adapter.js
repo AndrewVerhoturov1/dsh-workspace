@@ -21,7 +21,7 @@ export const WORKER_MUTATION_PROFILE = validatePtcProfile({
   limits: { ...DEFAULT_LIMITS, maxConcurrentToolCalls: 1 },
 })
 export const SOL_WORKER_PROFILE = validatePtcProfile({
-  schemaVersion: 1, id: 'postman-sol-worker-engineering', revision: 1,
+  schemaVersion: 1, id: 'postman-sol-worker-engineering', revision: 2,
   tools: [...POSTMAN_SOL_PTC_TOOL_NAMES],
   limits: { ...DEFAULT_LIMITS, maxWallMs: 300000, maxConcurrentToolCalls: 1 },
 })
@@ -31,7 +31,10 @@ const MAX_DESCRIPTION = 160
 const BOUNDARIES = ['semantic_decision', 'user_input', 'external_event', 'approval_boundary', 'task_complete']
 // Auto-yield must not hide a refused/unknown prepare or async dispatch returned as ordinary JSON.
 // This gate does not recover statuses or alter the tool result/authority.
-const EVENT_PRODUCERS = ['postman_worker', 'postman_sol_worker', 'postman_secretary', 'postman_worker_fresh', 'postman_worker_interrupt', 'postman_bridge']
+const EVENT_PRODUCERS = {
+  leader: ['postman_worker', 'postman_sol_worker', 'postman_secretary', 'postman_worker_fresh', 'postman_worker_interrupt', 'postman_bridge'],
+  sol: ['postman_worker', 'postman_worker_fresh', 'postman_worker_interrupt'],
+}
 const YIELD_ACCEPTANCE = POSTMAN_PTC_SUCCESS_STATUSES
 const output = {
   schema: { type: 'object', additionalProperties: true, properties: { status: { type: 'string', required: true } } },
@@ -78,7 +81,7 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
     if (waitingTurn === undefined) return decision
     if (waitingTurn !== turn) { externalTurns.delete(agent); return decision }
     const record = owners.get(agent.id)
-    if (decision.kind !== 'reject' && allowed(agent, record) && record.role === 'leader' &&
+    if (decision.kind !== 'reject' && allowed(agent, record) &&
         agent.inbox.nextTurn.length === 0) {
       // Preserve the accepted policy/context additions too: some are one-shot.
       // Restore at the front of the same durable queue, retaining identity,
@@ -145,7 +148,7 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
     const schemas = ctx.tools.schemas(agent).filter(s => record.profile.tools.includes(s.name))
     const helperText = POSTMAN_PTC_DISCIPLINE + '\n' + ptcHelperGuidance(schemas.map(s => s.name))
     const roleText = record.role === 'sol' ?
-      'This exact Sol Worker uses PTC-first for its own batchable engineering work; direct PTC-managed calls are rejected. Follow postman-sol-worker: Worker-first for independent cheap tasks, two free Workers in parallel for two independent tasks. Worker controls are direct-only, limited to your exact children; no supervisor/Bridge/Secretary/Sol creation or approval tools in PTC. Use the assigned task worktree explicitly for shell commands. ' :
+      'This exact Sol Worker uses PTC-first for its own batchable engineering work; direct PTC-managed calls are rejected. Follow postman-sol-worker: Worker-first for independent cheap tasks, two free Workers in parallel for two independent tasks. Owned Worker controls are PTC-managed, limited to your exact children. Dispatch two independent useful Workers in one PTC phase, then finish already-known own engineering mechanics; external_event waits for actual owned Worker reports and safely auto-concludes the turn. report is the final assignment result, not progress; notify_parent is only decision-relevant NEEDS_PARENT_GUIDANCE escalation. Both remain direct-only. No supervisor/Bridge/Secretary/Sol creation or approval tools in PTC. Use the assigned task worktree explicitly for shell commands. ' :
       'This Leader uses Postman PTC; direct PTC-managed calls are rejected. PTC changes execution mode, not Postman Leader routing: follow the postman-leader skill, obtain user approval before medium/complex task preparation or delegation, and delegate repository discovery/execution to Worker/Postman as required. Never poll Worker/Bridge: reports and READY arrive as later events, not within this program. '
     const efficiencyNotice = record.underbatchedStreak === 0 ? '' :
       record.underbatchedStreak >= 2 ?
@@ -184,7 +187,7 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
       program: { type: 'string', required: true, description: 'One async-function body with explicit JSON return. No imports, Node or persistent state.' },
       description: { type: 'string', required: true, description: 'Phase goal + stop reason, not an individual tool call; include all already-known safe mechanics before that boundary.' },
       boundary: { type: 'string', required: true, enum: BOUNDARIES, description: 'Next genuine decision boundary; encode all safe deterministic work before it in this program.' },
-      yield_on_success: { type: 'boolean', description: 'Compatibility flag, Leader only. external_event automatically concludes after safe exact accepted Worker/interrupt/Bridge dispatch, even when omitted or false.' },
+      yield_on_success: { type: 'boolean', description: 'Compatibility flag. Leader/Sol external_event automatically concludes after safe exact role-permitted accepted dispatch, even when omitted or false.' },
       language: { type: 'string', enum: ['javascript', 'typescript'], description: 'JavaScript by default; TypeScript supports erasable syntax only.' },
     }, output,
     async execute(args, exec) {
@@ -202,9 +205,9 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
       const description = Array.from(args.description.trim().replace(/\s+/g, ' ')).slice(0, MAX_DESCRIPTION).join('')
       if (!BOUNDARIES.includes(args.boundary)) return { status: 'PTC_BOUNDARY_INVALID' }
       if ((args.yield_on_success !== undefined && typeof args.yield_on_success !== 'boolean') ||
-          (args.yield_on_success === true && (args.boundary !== 'external_event' || record.role !== 'leader')))
+          (args.yield_on_success === true && args.boundary !== 'external_event'))
         return { status: 'PTC_YIELD_INVALID' }
-      const autoConclude = record.role === 'leader' && args.boundary === 'external_event'
+      const autoConclude = args.boundary === 'external_event'
       if (autoConclude && typeof exec.concludeTurn !== 'function')
         return { status: 'PTC_YIELD_UNSUPPORTED' }
       if (exec.signal.aborted) return { status: 'cancelled', effects: { calls: [], completed: 0, failed: 0, pending: 0 } }
@@ -260,7 +263,7 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
             if (result.isError) throw new Error(result.error.message)
             if (YIELD_ACCEPTANCE[name]) {
               if (!YIELD_ACCEPTANCE[name].includes(result.value?.status)) acceptanceFailed = true
-              else if (EVENT_PRODUCERS.includes(name)) eventAccepted = true
+              else if (EVENT_PRODUCERS[record.role].includes(name)) eventAccepted = true
             }
             for (const context of result.additionalContexts ?? []) exec.deferContext(context)
             if (result.concludesTurn) nestedConclude = true // Apply only after the complete program is known safe.
@@ -315,7 +318,7 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
           autoConclude && !eventAccepted && !nestedConclude ? 'no-accepted-producer' : undefined
         if ((autoConclude || nestedConclude) && !yieldBlockedReason) {
           exec.concludeTurn()
-          if (record.role === 'leader') stagedConclusions.set(exec, record)
+          stagedConclusions.set(exec, record)
           yieldApplied = true
         }
         return result
@@ -327,8 +330,11 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
         // Reuse the exact Host effect/acceptance gate. Do not infer semantics from
         // evidence strings. Conservatively exempt explicit model-decision results
         // and accepted async producers, even if their declared boundary was semantic.
-        const underbatchedCandidate = terminal?.status === 'ok' && args.boundary === 'semantic_decision' &&
-          started.size <= 1 && !yieldBlockedReason && !needsModelDecision && !eventAccepted && !nestedConclude
+        const safeSemanticPhase = terminal?.status === 'ok' && args.boundary === 'semantic_decision' &&
+          (!yieldBlockedReason || yieldBlockedReason === 'model-decision-requested')
+        const smallSemanticPhase = safeSemanticPhase && started.size <= 1
+        const thinSemanticPhase = safeSemanticPhase && started.size <= 2
+        const underbatchedCandidate = smallSemanticPhase && !needsModelDecision && !eventAccepted && !nestedConclude
         const underbatchedReason = underbatchedCandidate ? 'small-semantic-phase' : null
         // Ephemeral exact assignment only: revoke/fresh/cold resume drops this state.
         record.underbatchedStreak = underbatchedCandidate ? record.underbatchedStreak + 1 : 0
@@ -344,6 +350,7 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
           resultBytes, oversizedResultCandidate: resultBytes > 64 * 1024 || terminal?.error?.code === 'maxOutputBytes',
           yieldRequested: args.yield_on_success === true, yieldApplied,
           ...(terminal?.status === 'limit-exceeded' ? { limitCode: terminal.error?.code } : {}),
+          smallSemanticPhase, thinSemanticPhase,
           underbatchedCandidate, underbatchedReason, underbatchedStreak: record.underbatchedStreak,
           ...(terminal?.status === 'ok' && args.boundary === 'semantic_decision' ?
             { needsModelDecision, decisionQuestionPresent } : {}),

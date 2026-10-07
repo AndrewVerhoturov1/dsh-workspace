@@ -63,15 +63,15 @@ test('Stage 3.5A exact Sol gets next-request feedback; FAST and Leader do not in
   const accepted=await dispatch('postman_sol_worker',{task:'Explicit user-selected Sol Worker. Controlled bounded exact evidence.'})
   const sol=await warned.promise
   assert.equal(accepted.workerSessionId,sol.id)
-  const own=await f.execute(sol,'postman_worker',{task:'Bounded owned FAST facts',hardBudget:15})
-  assert.equal(own.isError,false,JSON.stringify(own));await f.childDone(own.value.workerSessionId)
+  const own=ok(await f.execute(sol,'ptc_execute',ptc("return await tools.postman_worker({task:'Bounded owned FAST facts',hardBudget:15})").args))
+  await f.childDone(own.workerSessionId)
   for(const name of ['postman_worker','postman_secretary']) {
     const child=await dispatch(name,{task:'Bounded FAST facts',hardBudget:15});await f.childDone(child.workerSessionId)
   }
   gate.resolve();await f.childDone(sol.id)
   const runs=diagnostics.filter(d=>d.sessionId===sol.id)
   assert.deepEqual(runs.map(d=>[d.nestedToolCalls,d.underbatchedCandidate,d.underbatchedStreak]),
-    [[1,true,1],[1,true,2],[3,false,0]])
+    [[1,true,1],[1,true,2],[1,false,0],[3,false,0]])
   assert.ok(diagnostics.filter(d=>d.role==='leader').every(d=>!d.underbatchedCandidate)) // accepted async dispatch exemption
-  assert.ok(f.requests.some(r=>r.agent.id===own.value.workerSessionId))
+  assert.ok(f.requests.some(r=>r.agent.id===own.workerSessionId))
 })
