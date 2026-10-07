@@ -28,9 +28,17 @@ export function applyPostmanNativeChildCutoff(anchors) {
       let changed = false, lifecycleInstalled = false, scopedInstalled = false
       // Peel only our own overlays in reverse order in the private staging copy.
       if (relative.includes('/dsh-subagent/')) {
-        writeFileSync(normalizedPatch, readFileSync(new URL('./postman-native-scoped-compact.patch', import.meta.url), 'utf8').replaceAll('\r', ''))
+        const scopedPatch = readFileSync(new URL('./postman-native-scoped-compact.patch', import.meta.url), 'utf8').replaceAll('\r', '')
+        writeFileSync(normalizedPatch, scopedPatch)
         scopedInstalled = apply(['--reverse','--check']).status === 0
-        if (scopedInstalled && apply(['--reverse']).status !== 0) throw new Error('Native scoped compaction unstage mismatch: ' + path)
+        if (scopedInstalled) {
+          if (apply(['--reverse']).status !== 0) throw new Error('Native scoped compaction unstage mismatch: ' + path)
+        } else {
+          // Upgrade the previous overlay that accessed an uninjected Cordis property.
+          writeFileSync(normalizedPatch, scopedPatch.replace('this.ownerCtx.get("agentPresets")', 'this.ownerCtx.agentPresets'))
+          if (apply(['--reverse','--check']).status === 0 && apply(['--reverse']).status !== 0)
+            throw new Error('Native previous scoped compaction unstage mismatch: ' + path)
+        }
         writeFileSync(normalizedPatch, readFileSync(new URL('./postman-native-lifecycle.patch', import.meta.url), 'utf8').replaceAll('\r', ''))
         lifecycleInstalled = apply(['--reverse','--check']).status === 0
         if (lifecycleInstalled && apply(['--reverse']).status !== 0) throw new Error('Native lifecycle unstage mismatch: ' + path)

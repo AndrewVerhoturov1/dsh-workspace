@@ -71,6 +71,14 @@ try {
   // Exact previous Stage 2 native postimage upgrades on disk, then is idempotent.
   const subagentTarget = targets.find(target => target.path.endsWith(join('dsh-subagent','lib','index.js')))
   const upgradedBytes = readFileSync(subagentTarget.path)
+  // The current live scoped overlay must upgrade without losing lifecycle changes.
+  const scopedLookup = 'this.ownerCtx.get("agentPresets")'
+  assert.equal(upgradedBytes.toString('utf8').split(scopedLookup).length, 2)
+  const previousScoped = upgradedBytes.toString('utf8').replace(scopedLookup, 'this.ownerCtx.agentPresets')
+  rmSync(subagentTarget.path); writeFileSync(subagentTarget.path, previousScoped)
+  assert.ok(applyPostmanNativeChildCutoff([sdkAnchor,resolve(pluginRoot,'package.json')]).some(target=>target.updated))
+  assert.deepEqual(readFileSync(subagentTarget.path),upgradedBytes)
+  assert.ok(applyPostmanNativeChildCutoff([sdkAnchor,resolve(pluginRoot,'package.json')]).every(target=>!target.updated))
   const upgradeStage = mkdtempSync(join(stagingRoot,'native-upgrade-'))
   const upgradeRelative = 'node_modules/@deepseek-ai/dsh-subagent/lib/index.js'
   mkdirSync(resolve(upgradeStage,upgradeRelative,'..'),{recursive:true})
