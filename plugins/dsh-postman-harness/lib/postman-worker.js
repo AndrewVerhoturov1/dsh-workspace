@@ -1327,6 +1327,25 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     return pauseForOperation(leaderId)
   }
   // Raw durable membership + exact current live state only. No recovery, journal reads or writes.
+  // Read only the existing exact admission/activation state; never materialize,
+  // reconcile or poll a cold binding just to justify an event boundary.
+  function hasActiveWork(parent) {
+    if (!authorized(parent)) return false
+    const group = leaders.get(parent.id)
+    if (!group) return false
+    return Object.entries(bindings(parent, group)).some(([id, binding]) => {
+      const child = liveWorker(id), slot = child && liveSlot(child, parent.id, true)
+      const admission = binding.lifecycle?.admissions?.at(-1)
+      if (!slot || binding.id !== id || binding.state !== 'ready' || binding.delivery !== 'none' ||
+          slot.delivery !== 'none' || admission?.state !== 'accepted' || !admission.messageId ||
+          binding.budget?.reported || slot.budget?.reported) return false
+      if (child.phase?.kind === 'running' && child.phase.abort?.signal.aborted === false &&
+          !binding.lifecycle?.reports?.some(report => report.turn === child.phase.turn)) return true
+      // An event-waiting Sol still owns its active children; their native reports
+      // wake that same Sol, which delivers its terminal report to this Leader.
+      return slot.workerType === 'sol' && child.phase?.kind === 'idle' && hasActiveWork(child)
+    })
+  }
   function teamSnapshot(leader) {
     if (!isTopLevelPostmanSupervisor(leader) || !authorized(leader)) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
     const row = taskContexts?.record?.(leader.id) ?? {}
@@ -1368,5 +1387,5 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     leaders.clear()
   }
   return { taskTool, solTaskTool, secretaryTool, ledgerTool, freshTool, interruptTool, stopTool, listTool, compactTool, roleOf, ownerOf, ownsNotification, ownsLiveWorker, ptcContextOf, confirmActivation, releaseActivation, refreshLeader, suspendLeader,
-    contextOf, observeReport, pauseForOperation, prepareRestore, teamSnapshot, dispose }
+    contextOf, observeReport, pauseForOperation, prepareRestore, teamSnapshot, hasActiveWork, dispose }
 }

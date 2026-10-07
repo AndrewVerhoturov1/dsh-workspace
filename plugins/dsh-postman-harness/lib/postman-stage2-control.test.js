@@ -61,21 +61,27 @@ test('Sol create/continuation accepted in PTC, direct rejected and exact success
  assert.deepEqual(POSTMAN_PTC_SUCCESS_STATUSES.postman_sol_worker,['POSTMAN_WORKER_TASK_ACCEPTED'])
 })
 
-test('explicit nested yield is applied once only after safe complete outer settlement', {timeout:30000},async t=>{
- const f=await fixture(t,{plan:a=>a.id==='leader'?null:report});await f.turn(f.leader)
- const exec=async(program,boundary='semantic_decision')=>{let count=0;const r=await f.ctx.tools.execute({agent:f.leader,name:'ptc_execute',arguments:ptc(program,boundary),callId:randomUUID(),signal:new AbortController().signal,concludeTurn(){count++}});return {v:ok(r),count:r.concludesTurn?1:0}}
- const happy=await exec('const t=await tools.postman_team_status({});const y=ptc.expectStatus(await tools.postman_yield({}),"postman_yield");return {t,y}')
- assert.equal(happy.v.status,'ok');assert.equal(happy.v.value.y.status,'POSTMAN_YIELDED');assert.equal(happy.count,1,JSON.stringify(f.diagnostics.at(-1)));assert.equal(f.diagnostics.at(-1).yieldApplied,true,JSON.stringify(f.diagnostics.at(-1)))
- const missing=await exec('await tools.postman_yield({});try{await tools.read({file_path:"absent"})}catch(e){}return {}')
- assert.equal(missing.count,0);assert.notEqual(missing.v.yieldApplied,true)
- const refused=await exec('await tools.postman_yield({});return await tools.postman_bridge_stop({bridge_job_id:"foreign"})')
- assert.equal(refused.v.status,'ok');assert.equal(refused.count,0);assert.match(f.diagnostics.at(-1).yieldBlockedReason,/acceptance-not-confirmed/)
- const pending=await exec('await tools.postman_yield({});tools.read({file_path:"absent"});return {}')
- assert.equal(pending.count,0);assert.notEqual(pending.v.yieldApplied,true)
- await f.prepare()
- const both=await exec('const a=await tools.postman_worker({task:"bounded work"});await tools.postman_yield({});return a','external_event')
- assert.equal(both.v.status,'ok');assert.equal(both.count,1);assert.equal(f.diagnostics.at(-1).yieldApplied,true,JSON.stringify(f.diagnostics.at(-1)));await f.childDone(both.v.value.workerSessionId)
- const direct=await f.execute(f.leader,'postman_yield',{});assert.equal(direct.isError,true);assert.match(direct.error.message,/POSTMAN_PTC_DIRECT_CALL_REJECTED/)
+test('existing Worker wake-source fails closed on uncertain/stale/settled work and unsafe outer effects', {timeout:30000},async t=>{
+ const gate=Promise.withResolvers(),entered=Promise.withResolvers();t.after(()=>gate.resolve())
+ const f=await fixture(t,{plan:async a=>{if(a.id==='leader')return null;entered.resolve(a);await gate.promise;return report}})
+ await f.turn(f.leader);await f.prepare()
+ const wait=async(program='return {}')=>{const r=await f.execute(f.leader,'ptc_execute',ptc(program,'external_event'));assert.equal(r.isError,false,JSON.stringify(r));return r}
+ assert.notEqual((await wait()).concludesTurn,true,'no producer or active work')
+ const accepted=nested(await call(f,'postman_worker',{task:'hold exact active worker'})),id=accepted.workerSessionId,child=await entered.promise
+ assert.equal((await wait()).concludesTurn,true,'existing work requires no dispatch or status call')
+ const saved=structuredClone(f.registry.get('leader').workers[id])
+ for(const delta of [{state:'uncertain'},{state:'stopping'},{state:'intent'},{delivery:'unknown'},{delivery:'pending'},
+  {ownerSessionId:'foreign'}, {lifecycle:{version:1,admissions:[],reports:[]}},
+  {lifecycle:{...saved.lifecycle,admissions:saved.lifecycle.admissions.map(a=>({...a,state:'pending'}))}}]){
+  await f.registry.change('leader',row=>({...row,workers:{...row.workers,[id]:{...saved,...delta}}}))
+  assert.notEqual((await wait()).concludesTurn,true,JSON.stringify(delta))
+ }
+ await f.registry.change('leader',row=>({...row,workers:{...row.workers,[id]:saved}}))
+ for(const program of ['return {needsModelDecision:true}','try{await tools.read({file_path:"absent"})}catch(e){}return {}',
+  'return await tools.postman_bridge_stop({bridge_job_id:"foreign"})','tools.read({file_path:"absent"});return {}']) assert.notEqual((await wait(program)).concludesTurn,true,program)
+ gate.resolve();await f.childDone(id);await f.turn(f.leader,'Consume final report')
+ assert.notEqual((await wait()).concludesTurn,true,'retained settled binding is not a wake source')
+ assert.equal(f.registry.get('leader').workers[id].state,'ready')
 })
 
 test('actual team snapshot is private bounded read-only and hides control tools from FAST/Sol roles', {timeout:30000},async t=>{

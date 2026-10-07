@@ -365,7 +365,7 @@ test('stop queued behind admission cannot drain the accepted child', async () =>
   assert.equal(next.created, false)
 })
 
-test('Bridge and Worker steer notices only to their live direct Leader', async () => {
+test('only Worker decision escalation steers its live direct Leader; Bridge FYI rejected', async () => {
   const binding = { branch: 'task/a', worktree: 'C:/a' }
   const contexts = { get: id => id === 'A' ? binding : undefined,
     child: id => id === 'bridge-1' ? binding : null }
@@ -383,11 +383,11 @@ test('Bridge and Worker steer notices only to their live direct Leader', async (
   const tool = createPostmanChildNotifyTool(f.ctx, contexts, f.tools)
   for (const [caller, text] of [[bridge, 'READY one'], [worker, 'NEEDS_LEADER_GUIDANCE: blocker'], [bridge, 'READY two']]) {
     const result = await tool.execute({ message: text }, exec(caller))
-    assert.equal(result.status, 'PARENT_NOTIFICATION_ACCEPTED')
-    assert.equal(result.messageId, received.at(-1).id)
+    assert.equal(result.status, caller === worker ? 'PARENT_NOTIFICATION_ACCEPTED' : 'PARENT_NOTIFICATION_CALLER_REJECTED')
+    if (caller === worker) assert.equal(result.messageId, received.at(-1).id)
   }
   assert.deepEqual(received.map(m => m.content[0].text.split(':\n').at(-1)),
-    ['READY one', 'NEEDS_LEADER_GUIDANCE: blocker', 'READY two'])
+    ['NEEDS_LEADER_GUIDANCE: blocker'])
   assert.ok(received.every(m => m.source.kind === 'subagent-report' && m.source.senderSessionId))
   assert.deepEqual(followups, [])
   assert.equal((await tool.execute({ message: 'intrusion' }, exec(stranger))).status, 'PARENT_NOTIFICATION_CALLER_REJECTED')
@@ -396,7 +396,7 @@ test('Bridge and Worker steer notices only to their live direct Leader', async (
   assert.equal((await tool.execute({ message: '   ' }, exec(worker))).status, 'PARENT_NOTIFICATION_INVALID')
   a.steer = undefined
   assert.equal((await tool.execute({ message: 'no steering API' }, exec(worker))).status, 'PARENT_NOTIFICATION_CALLER_REJECTED')
-  assert.equal(received.length, 3)
+  assert.equal(received.length, 1)
   assert.deepEqual(followups, [])
 })
 
@@ -432,12 +432,13 @@ test('notify_parent isolates pilot and production Worker/Bridge children by live
       assert.equal(received[item.session.header.parentSession].length, 0)
     }
     const result = await notify.execute({ message: isWorker ? 'NEEDS_LEADER_GUIDANCE: ' + item.id : item.id }, exec(item))
-    assert.equal(result.status, 'PARENT_NOTIFICATION_ACCEPTED')
+    assert.equal(result.status, isWorker ? 'PARENT_NOTIFICATION_ACCEPTED' : 'PARENT_NOTIFICATION_CALLER_REJECTED')
+    if (!isWorker) continue
     const inbox = received[item.session.header.parentSession]
     assert.equal(inbox.at(-1).source.senderSessionId, item.id)
   }
-  assert.equal(received.production.length, 2)
-  assert.equal(received.pilot.length, 2)
+  assert.equal(received.production.length, 1)
+  assert.equal(received.pilot.length, 1)
   for (const item of children) {
     const other = item.session.header.parentSession === production.id ? pilot.id : production.id
     const forged = { ...item, session: { header: { ...item.session.header, parentSession: other } } }
@@ -455,7 +456,7 @@ test('notify_parent isolates pilot and production Worker/Bridge children by live
   f.agents.set(children[2].id, { ...children[2] })
   assert.equal((await notify.execute({ message: 'stale live identity' }, exec(children[2]))).status,
     'PARENT_NOTIFICATION_CALLER_REJECTED')
-  assert.deepEqual([received.production.length, received.pilot.length], [2, 2])
+  assert.deepEqual([received.production.length, received.pilot.length], [1, 1])
   f.tools.dispose()
 })
 
@@ -482,7 +483,7 @@ test('bridge plugin registers all Worker tools and owns one disposable attachmen
     },
   }
   await applyBridgePlugin(ctx)
-  assert.deepEqual([...registrations.keys()].sort(), ['implementation_artifact_apply', 'notify_parent', 'postman_bridge', 'postman_bridge_list', 'postman_bridge_status', 'postman_bridge_stop', 'postman_input_files', 'postman_secretary', 'postman_secretary_ledger', 'postman_sol_worker', 'postman_task_close', 'postman_task_prepare', 'postman_task_restore', 'postman_team_status', 'postman_worker', 'postman_worker_compact', 'postman_worker_fresh', 'postman_worker_interrupt', 'postman_worker_list', 'postman_worker_stop', 'postman_yield', 'ptc_execute'])
+  assert.deepEqual([...registrations.keys()].sort(), ['implementation_artifact_apply', 'notify_parent', 'postman_bridge', 'postman_bridge_list', 'postman_bridge_status', 'postman_bridge_stop', 'postman_input_files', 'postman_secretary', 'postman_secretary_ledger', 'postman_sol_worker', 'postman_task_close', 'postman_task_prepare', 'postman_task_restore', 'postman_team_status', 'postman_worker', 'postman_worker_compact', 'postman_worker_fresh', 'postman_worker_interrupt', 'postman_worker_list', 'postman_worker_stop', 'ptc_execute'])
   assert.deepEqual(restriction.allow, postmanBridgeRestrictionForAgent(a).allow)
   assert.ok(listeners.has('agent-preset/selected'))
   assert.ok(listeners.has('agent/disposed'))

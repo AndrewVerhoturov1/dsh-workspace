@@ -333,7 +333,7 @@ model
 -> model
 -> PTC postman_worker
 -> model
--> postman_yield
+-> redundant waiting round
 
 Good (after explicit plan approval):
 
@@ -434,35 +434,37 @@ The runtime should resume the model when the real event arrives.
 For Leader, boundary: external_event automatically concludes the turn after a safe
 successful program with an exact accepted event producer: postman_worker,
 postman_secretary, postman_sol_worker, postman_worker_fresh, postman_worker_interrupt,
-or postman_bridge. yield_on_success is compatibility
+or postman_bridge. It also safely concludes without a new dispatch when Host
+proves existing exact active Worker/Bridge work can deliver the next event. Use
+external_event again after handling one report/READY while other work remains;
+no status/list polling is needed to prove a wake source. Settled, failed, uncertain,
+stale or merely bound work and arbitrary background processes do not qualify.
+yield_on_success is compatibility
 only; omission or false does not disable this Host rule. postman_task_prepare alone
 is NOT an event producer and does not conclude the turn.
 
 For exact Sol, the same safe external_event rule accepts only its owned Worker
-postman_worker, postman_worker_interrupt or postman_worker_fresh producer.
+postman_worker, postman_worker_interrupt or postman_worker_fresh producer, or
+Host-proven existing active exact owned Worker work. Foreign Workers do not qualify.
 list/stop/compact alone are not future completion producers. Actual owned reports
 resume Sol once through the existing inbox; no polling or extra waiting round.
 
 Host still requires ok without cleanup error, abort, revoked authority,
 needsModelDecision:true, failed/pending/unknown/unsettled effects or refused/unknown
 acceptance; all nested calls must be completed. Include remaining independent
-supervisor work before waiting. No separate model decision or postman_yield call
-is needed after a safe accepted dispatch.
+supervisor work before waiting. No separate model decision or manual wait tool
+is needed after a safe accepted dispatch or to wait for existing active work.
 
 Canonical postman-leader and compatibility postman-leader-ptc share this supervisor
 profile. Use postman_team_status once for routing, never as a completion poll.
-postman_sol_worker and postman_yield are PTC-managed, not direct-only. Sol dispatch
-requires the existing explicit user-selected route; PTC grants no new authorization.
-When an explicit postman_yield is needed, call it at the end of the program and
-check exact POSTMAN_YIELDED. Host applies its nested conclude only after the complete
-outer program safely settles. A later refusal, failure, pending/unknown effect or
-revocation blocks conclusion even if the guest caught an error. Auto-yield and
-explicit yield apply the outer conclusion once, not twice. Sol engineering PTC
-does not receive these supervisor tools.
+postman_sol_worker is PTC-managed, not direct-only. Sol dispatch requires the
+existing approved route; PTC grants no new authorization. A later refusal, failure,
+pending/unknown effect or revocation blocks conclusion even if the guest caught
+an error. Sol engineering PTC does not receive supervisor tools.
 
 This eliminates the wasteful sequence:
 
-model -> successful PTC -> model -> postman_yield
+model -> successful PTC -> model -> redundant waiting round
 
 and replaces it with:
 

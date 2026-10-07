@@ -112,7 +112,7 @@ return {needsModelDecision:true, reason:'unexpected_status', evidence:r}
 
 ## 8. Event handling / verification
 
-Accepted assignment ≠ completion. После accepted Worker/Secretary/Sol/Bridge и всей независимой работы: `boundary: external_event` в той же PTC; safe auto-yield уже существует. Explicit postman_yield при необходимости тоже в этой phase. Prepare-only/error/needsModelDecision/uncertain effects не WAIT. Reports/READY/failure/user change возобновляют Leader. Не отдельный дорогой turn ради ожидания; не ping «закончил?» и не дублирующий executor.
+Accepted assignment ≠ completion. После accepted Worker/Secretary/Sol/Bridge и всей независимой работы: `boundary: external_event` в той же PTC; safe auto-yield уже существует. После обработки одного события та же boundary безопасно завершает turn, если Host доказывает другую exact активную работу; новые dispatch и status/list polling для этого не нужны. Prepare-only/error/needsModelDecision/uncertain effects не WAIT. Reports/READY/failure/user change возобновляют Leader. Не отдельный дорогой turn ради ожидания; не ping «закончил?» и не дублирующий executor.
 
 Различай **REPORT RECEIVED / VERIFIED BY WORKER / VERIFIED BY LEADER**. Worker PASS — утверждение о его acceptance conditions, не абсолютная truth authority. Critical evidence для merge/deployment/security/user outcome/architecture проверь независимо и пропорционально риску; не повторяй весь campaign. Hierarchy: exact tool/test output → durable Host state → Git diff/status → browser/user-visible evidence → Worker report → prose inference. Report не отменяет противоречащий machine evidence.
 

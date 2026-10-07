@@ -1,144 +1,75 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
-import { Context } from '@deepseek-ai/cordis'
-import { ToolRuntime } from '@deepseek-ai/dsh-tools'
-import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
-import { JsonStorageBackend } from '@deepseek-ai/dsh-storage-json'
-import { createPostmanWorkerTools } from './postman-worker.js'
-import { createPostmanYieldTool, installPostmanWorkerReportObserver } from './postman-bridge.js'
-import { openPostmanTaskRegistry } from './postman-task-registry.js'
+import { capabilityRuntime } from './fixtures/postman-capability-runtime.js'
 
-const installed = process.env.DSH_ROOT ?? join(process.env.APPDATA ?? join(process.env.USERPROFILE, 'AppData', 'Roaming'),
-  'npm/node_modules/@deepseek-ai/dsh')
-const pkg = async name => import(pathToFileURL(join(installed, 'node_modules/@deepseek-ai', name, 'lib/index.js')).href)
-const { AgentRegistry } = await pkg('dsh-agent')
-const { SessionStore } = await pkg('dsh-session')
-const { JsonlSessionPersistence } = await pkg('dsh-session-persistence-jsonl')
-const { SystemPrompt } = await pkg('dsh-system-prompt')
-const { LlmRuntime, LlmAdapter } = await pkg('dsh-llm')
-const { AgentLoop } = await pkg('dsh-agent-loop')
-const { SubagentRuntime } = await pkg('dsh-subagent')
-const { SessionProjectionRegistry } = await pkg('dsh-session-projection')
-const { apply: spawn } = await pkg('dsh-subagent-spawn-in-process')
-const { apply: nativeReport } = await pkg('dsh-tool-subagent-report')
-
-// Services and model run only inside this disposable Cordis tree; no provider or Web transport.
-test('native manager auto-wakes yielding Leader on Worker report and releases Agent', { timeout: 10000 }, async t => {
-  const dir = await mkdtemp(join(tmpdir(), 'postman-real-cycle-'))
-  t.after(async () => rm(dir, { recursive: true, force: true }))
-  const ctx = new Context()
-  new AgentRegistry(ctx); new SessionStore(ctx); new SessionProjectionRegistry(ctx)
-  new SystemPrompt(ctx, {}); new ToolRuntime(ctx, { tools: {} })
-  new LlmRuntime(ctx); new JsonlSessionPersistence(ctx, { root: join(dir, 'sessions') })
-  new SubagentRuntime(ctx); spawn(ctx, { providerName: 'spawn' }); nativeReport(ctx, { reportDelivery: 'next-step' })
-  new AgentLoop(ctx, { agents: [], maxParallelToolCalls: 1 })
-  assert.ok(ctx.agents && ctx.subagents && ctx.sessionPersistence && ctx.tools && ctx.llm)
-  const released = Promise.withResolvers(), closed = Promise.withResolvers(), peersMayFinish = Promise.withResolvers()
-  const peerIds = new Set()
-  ctx.on('session/event', (session, event) => {
-    if (session.header.id === 'leader' && event.type === 'tool/result' &&
-        event.data.message?.source?.callId === 'close') closed.resolve(event.data.message)
-  })
-  const calls = new Map()
-  const statuses = []
-  ctx.on('agent/disposed', ({ agent }) => { if (agent.id !== 'leader') released.resolve(agent.id) })
-  class FakeAdapter extends LlmAdapter {
-    async resolveModel(provider,model){return {provider,id:model,name:model,reasoning:{efforts:[{id:'low',name:'Low'}]}}}
-    async *stream() {
-      const agent = ctx.agents.currentInitiator()
-      const count = (calls.get(agent.id) ?? 0) + 1
-      calls.set(agent.id, count)
-      let block
-      if (['B', 'C'].includes(agent.session.events.find(e => e.type === 'subagent/descriptor')?.data?.label)) {
-        await peersMayFinish.promise
-        block = { type: 'text', text: 'peer still mapped' }
-      } else if (agent.id === 'leader' && count === 1) block = { type: 'tool-call', id: 'assign',
-        name: 'postman_worker', arguments: '{"task":"Inspect","createNew":true}' }
-      else if (agent.id === 'leader' && count === 2) {
-        assert.equal((await worker.taskTool.execute({ task: 'fourth', createNew: true },
-          { agent, signal: new AbortController().signal })).status, 'POSTMAN_WORKER_LIMIT_REACHED')
-        block = { type: 'tool-call', id: 'yield', name: 'postman_yield', arguments: '{}' }
-      }
-      else if (agent.id !== 'leader' && count === 1) {
-        const readiness=Promise.withResolvers();ctx.on('session/event',(s,e)=>{if(s.id==='leader'&&e.type==='tool/result'&&e.data.message?.source.callId==='yield')readiness.resolve()})
-        await readiness.promise
-        block = { type: 'tool-call', id: 'report',
-        name: 'report', arguments: '{"output":"done"}' }
-      } else if (agent.id === 'leader' && count === 3) {
-        await released.promise
-        block = { type: 'tool-call', id: 'close', name: 'postman_worker_stop',
-          arguments: JSON.stringify({ workerSessionId: await released.promise, mode: 'close' }) }
-      } else block = { type: 'text', text: 'done' }
-      yield { type: 'block-end', index: 0, block }
-      yield { type: 'finish', reason: { kind: 'stop' } }
+// Real production Host, QuickJS, native continuable children, report and inbox.
+// Only model responses and their independent completion gates are controlled.
+for (const queued of [false, true]) test('Leader re-enters external_event for existing Worker B after A report, queued=' + queued, { timeout: 45000 }, async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'postman-existing-workers-'))
+  const gates = [Promise.withResolvers(), Promise.withResolvers()]
+  const ids = [], endings = [Promise.withResolvers(), Promise.withResolvers(), Promise.withResolvers()]
+  let f
+  t.after(async () => { gates.forEach(g => g.resolve()); await f?.dispose(); await rm(dir, { recursive: true, force: true, maxRetries: 5 }) })
+  const ptc = program => ({ name: 'ptc_execute', args: { program, description: 'Handle known facts then wait for exact Worker event', boundary: 'external_event' } })
+  f = await capabilityRuntime(dir, { preset: 'postman-leader', plan: async (a, r, n) => {
+    assert.ok(!r.tools.some(t => t.name === 'postman_yield'))
+    if (a.id === 'leader') {
+      if (n === 1) return ptc('const a=await tools.postman_worker({task:"A",createNew:true});const b=await tools.postman_worker({task:"B",createNew:true});return {a,b}')
+      await f.childDone(ids[n - 2]) // Exact native settlement before known processing, not polling.
+      if (n === 2) return ptc('await tools.read({file_path:' + JSON.stringify(join(f.worktree, 'known.txt')) + '});return {handled:"A"}')
+      assert.equal(n, 3, 'only dispatch + A event + B event model requests')
+      return { text: 'Both real reports processed' }
     }
+    const index = ids.indexOf(a.id)
+    // IDs are captured at native admission before child model execution.
+    await gates[index].promise
+    return { name: 'report', args: { output: 'PASS exact Worker ' + index } }
+  } })
+  f.ctx.on('session/event', (s, e) => { if (s.id === 'leader' && e.type === 'turn/end') endings[e.data.turn - 1]?.resolve() })
+  const start = f.ctx.subagents.startContinuable.bind(f.ctx.subagents)
+  f.ctx.subagents.startContinuable = async spec => { ids.push(spec.childId); return start(spec) }
+  f.ctx.on('tools/post-execute', async (exec, result, next) => {
+    const decision = await next()
+    // B arrives after Host proved it active, but before the outer result reaches
+    // AgentLoop: exercise the existing queued-event boundary, not a fake source.
+    if (queued && exec.agent.id === 'leader' && exec.name === 'ptc_execute' && result.value?.value?.handled === 'A') {
+      assert.equal(result.concludesTurn, true); gates[1].resolve(); await f.childDone(ids[1])
+    }
+    return decision
+  })
+  await f.prepare(); await writeFile(join(f.worktree, 'known.txt'), 'known processing')
+  await f.turn(f.leader, 'Approved bounded two independent Worker event regression')
+  assert.equal(ids.length, 2); assert.equal(f.requests.filter(r => r.agent.id === 'leader').length, 1)
+  gates[0].resolve(); await endings[1].promise
+  if (!queued) {
+    await f.leader.whenIdle()
+    assert.equal(f.ctx.agents.get(ids[1]).status, 'running')
+    assert.equal(f.requests.filter(r => r.agent.id === 'leader').length, 2, 'no yield-only round')
+    gates[1].resolve()
   }
-  ctx.llm.registerAdapter(['codex'], new FakeAdapter())
-  const backend = new JsonStorageBackend(join(dir, 'registry'))
-  const domain = new DomainFacility({ storage: { backend: { get: () => backend } }, emit() {} },
-    { backend: 'json', routes: {} })
-  const registry = await openPostmanTaskRegistry(domain)
-  const context = Object.freeze({ branch: 'task/isolate', worktree: dir, leaderSessionId: 'leader' })
-  const contexts = { get: () => context, record: registry.get, changeRecord: registry.change,
-    beginWorkerAdmission: () => true, endWorkerAdmission() {} }
-  await registry.create('leader', { leaderSessionId: 'leader', repository: 'andrewverhoturov1/dsh-workspace',
-    repositoryPath: dir, originUrl: 'https://github.com/AndrewVerhoturov1/dsh-workspace.git',
-    branch: context.branch, worktree: dir, baseCommit: '0'.repeat(40), stage: 'ready',
-    diagnostic: null, workers: {}, runner: { state: 'none', requestId: null }, bridge: null })
-  const worker = createPostmanWorkerTools(ctx, undefined, contexts)
-  ctx.on('agent/created',async({agent})=>{await worker.confirmActivation(agent)})
-  const nativeStart=ctx.subagents.startContinuable.bind(ctx.subagents)
-  ctx.subagents.startContinuable=async spec=>{const accepted=await nativeStart(spec);await ctx.sessionPersistence.append(accepted.childId,[]);return accepted}
-  ctx.tools.register(worker.taskTool); ctx.tools.register(worker.stopTool)
-  ctx.tools.register(createPostmanYieldTool(ctx))
-  installPostmanWorkerReportObserver(ctx, worker)
-  const leader = ctx.agentLoop.create('leader', { provider: 'codex', model: 'gpt-6-luna' },
-    { cwd: dir, agentPreset: 'postman-leader' })
-  assert.equal(ctx.agents.get('leader'), leader)
-  for (const label of ['B']) {
-    // Reserve one independent real child before the model issues A's task.
-    const accepted = await worker.taskTool.execute({ task: label, createNew: true, label },
-      { agent: leader, signal: new AbortController().signal })
-    assert.equal(accepted.status, 'POSTMAN_WORKER_TASK_ACCEPTED')
-    peerIds.add(accepted.workerSessionId)
-  }
-  leader.followup({ id: 'initial', role: 'user', source: { kind: 'user', form: 'direct' },
-    content: [{ type: 'text', text: 'Begin' }] })
-  await closed.promise
-  await leader.whenIdle()
-  statuses.push(...leader.session.events.filter(e => e.type === 'tool/result').map(e => e.data.message))
-  assert.ok(statuses.some(x => x.source?.callId === 'yield'))
-  assert.ok(statuses.some(x => x.source?.callId === 'close'))
-  const childId = await released.promise
-  const closeResult = statuses.find(x => x.source?.callId === 'close')
-  const inspected = await ctx.sessionPersistence.inspect(childId)
-  const value = JSON.parse(closeResult.content[0].content[0].text)
-  assert.equal(value.status, 'POSTMAN_WORKER_STOPPED', JSON.stringify(value))
-  assert.equal(inspected.events.filter(e => e.type === 'turn/start').length, 1)
-  assert.equal(inspected.events.filter(e => e.type === 'turn/end').length, 1)
-  assert.equal(ctx.agents.get(childId), undefined)
-  assert.deepEqual(new Set(Object.keys(registry.get('leader').workers)), peerIds)
-  const peerBefore = Object.fromEntries([...peerIds].map(id => [id, structuredClone(registry.get('leader').workers[id])]))
-  assert.ok(leader.session.events.some(e => e.type === 'user/message' &&
-    e.data.source?.kind === 'subagent-report' && e.data.source.senderSessionId === childId))
-  assert.equal(leader.session.events.filter(e => e.type === 'turn/start').length, 2)
-  assert.equal(leader.session.events.some(e => e.type === 'assistant/message' &&
-    !e.data.message.content.length), false)
-  peersMayFinish.resolve()
-  await ctx.fiber.dispose(); await registry.close(); await backend.close()
-  const cold = new Context(); new SessionStore(cold)
-  new JsonlSessionPersistence(cold, { root: join(dir, 'sessions') })
-  const saved = await cold.sessionPersistence.inspect(childId)
-  assert.equal(saved.meta.parentSession, 'leader')
-  assert.equal(saved.events.filter(e => e.type === 'turn/end').length, 1)
-  const reopenedBackend = new JsonStorageBackend(join(dir, 'registry'))
-  const reopened = await openPostmanTaskRegistry(new DomainFacility({
-    storage: { backend: { get: () => reopenedBackend } }, emit() {} }, { backend: 'json', routes: {} }))
-  assert.deepEqual(Object.keys(reopened.get('leader').workers).sort(), [...peerIds].sort())
-  for (const id of peerIds) assert.deepEqual(reopened.get('leader').workers[id], peerBefore[id])
-  await reopened.close(); await cold.fiber.dispose(); await reopenedBackend.close()
+  await endings[2].promise; await f.leader.whenIdle(); await Promise.all(ids.map(id => f.childDone(id)))
+  assert.equal(f.requests.filter(r => r.agent.id === 'leader').length, 3)
+  const outer = f.results.filter(r => r.agent.id === 'leader' && r.name === 'ptc_execute')
+  assert.equal(outer.length, 2); assert.ok(outer.every(r => r.result.concludesTurn === true))
+  assert.deepEqual(outer[1].result.value.effects.calls.map(c => c.name), ['read'], 'no dispatch or status polling on re-wait')
+  assert.deepEqual(f.leader.session.events.filter(e => e.type === 'tool/call').map(e => e.data.name), ['ptc_execute', 'ptc_execute'])
+  assert.deepEqual(f.leader.session.events.filter(e => e.type === 'turn/start').map(e => e.data.turn), [1, 2, 3])
+  for (const id of ids) assert.equal(f.leader.session.events.filter(e => e.type === 'user/message' && e.data.source?.kind === 'subagent-report' && e.data.source.senderSessionId === id).length, 1, 'no lost or duplicate report')
+  assert.equal(f.leader.inbox.hasPending, false)
+  // Preserve the old real-cycle close/cold-Session and independent-peer coverage
+  // while replacing its explicit manual-wait tool with the event boundary above.
+  const peerBefore=structuredClone(f.registry.get('leader').workers[ids[1]])
+  const close=await f.execute(f.leader,'ptc_execute',{program:'return await tools.postman_worker_stop('+JSON.stringify({workerSessionId:ids[0],mode:'close'})+')',description:'Close only exact settled Worker; preserve independent peer',boundary:'semantic_decision'})
+  assert.equal(close.value.value.status,'POSTMAN_WORKER_STOPPED',JSON.stringify(close))
+  assert.deepEqual(Object.keys(f.registry.get('leader').workers),[ids[1]])
+  assert.deepEqual(f.registry.get('leader').workers[ids[1]],peerBefore)
+  const saved=await f.ctx.sessionPersistence.inspect(ids[0])
+  assert.equal(saved.meta.parentSession,'leader')
+  assert.equal(saved.events.filter(e=>e.type==='turn/start').length,1)
+  assert.equal(saved.events.filter(e=>e.type==='turn/end').length,1)
+  assert.equal(f.ctx.agents.get(ids[0]),undefined)
+  assert.equal(f.leader.session.events.some(e=>e.type==='assistant/message'&&!e.data.message.content.length),false)
 })
