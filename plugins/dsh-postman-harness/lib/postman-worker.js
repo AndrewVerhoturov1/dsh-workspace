@@ -1139,8 +1139,20 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
               !workerEvidence(binding, child, parent, { settlementOnly: true }).ready
           })) throw new Error('POSTMAN_SOL_REPORT_REJECTED: owned Worker work is not settled; report is the terminal assignment result')
     }
+    const reportRole = exec.name === 'report' ? roleOf(exec.agent) : null
+    const reportParent = reportRole ? ctx.agents.get(exec.agent.session.header.parentSession) : null
+    const reportAssignment = reportRole ? budgetOf(exec.agent)?.assignmentId : null
     const result = await next()
-    if (exec.name === 'report' && roleOf(exec.agent) && !result.isError && typeof result.value?.messageId === 'string') {
+    if (reportParent && !result.isError && typeof result.value?.messageId === 'string') {
+      // Native delivery only enqueues the parent's Inbox event. Do not let a
+      // terminal child outrun its durable insertion (or already performed claim).
+      if (!authorized(reportParent) || roleOf(exec.agent) !== reportRole ||
+          budgetOf(exec.agent)?.assignmentId !== reportAssignment)
+        throw new Error('POSTMAN_WORKER_REPORT_AUTHORITY_CHANGED')
+      await ctx.get('sessions').flush(reportParent.session)
+      if (!authorized(reportParent) || roleOf(exec.agent) !== reportRole ||
+          budgetOf(exec.agent)?.assignmentId !== reportAssignment)
+        throw new Error('POSTMAN_WORKER_REPORT_AUTHORITY_CHANGED')
       exec.concludeTurn?.()
       return { ...result, concludesTurn: true }
     }

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, cp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -263,6 +263,147 @@ test('native delivered report admits strict close without approval or synthetic 
   assert.equal(closed.status, 'POSTMAN_WORKER_STOPPED')
   assert.equal(closed.resultReported, true)
   assert.equal(registry.get('leader').workers[childId], undefined)
+})
+
+test('terminal report rechecks exact child authority after delivery and flush', async () => {
+  for (const phase of ['delivery', 'flush']) for (const changed of ['child', 'binding', 'context', 'parent', 'assignment']) {
+    const f = await fixture()
+    let taskContext = context, reportHook, flushes = 0, concluded = 0
+    const agents = new Map([[leader.id, leader]])
+    f.ctx.agents.get = id => agents.get(id)
+    f.ctx.on = (name, handler) => {
+      if (name === 'tools/execute') reportHook = handler
+      return () => {}
+    }
+    const worker = createPostmanWorkerTools(f.ctx, undefined, { ...f.contexts, get: () => taskContext })
+    const id = (await task(worker)).workerSessionId
+    const child = { id, session: { header: { id, origin: 'subagent', parentSession: leader.id, delegationDepth: 1 } } }
+    agents.set(id, child)
+    await worker.confirmActivation(child)
+    assert.equal(worker.roleOf(child), 'luna')
+    assert.ok(f.registry.get(leader.id).workers[id].budget.assignmentId)
+    const mutate = async () => {
+      if (changed === 'child') agents.set(id, { ...child })
+      else if (changed === 'parent') agents.set(leader.id, { ...leader })
+      else if (changed === 'context') taskContext = { ...taskContext }
+      else if (changed === 'assignment') await f.registry.change(leader.id, row => ({
+        ...row, workers: { ...row.workers, [id]: { ...row.workers[id],
+          budget: { ...row.workers[id].budget, assignmentId: 'new-assignment' } } }
+      }))
+      else await f.registry.change(leader.id, row => {
+        const workers = { ...row.workers }; delete workers[id]
+        return { ...row, workers }
+      })
+    }
+    f.ctx.get = name => name === 'sessions' ? { flush: async () => {
+      flushes++
+      if (phase === 'flush') await mutate()
+    } } : undefined
+    const exec = { agent: child, name: 'report', concludeTurn() { concluded++ } }
+    await assert.rejects(reportHook(exec, async () => {
+      if (phase === 'delivery') await mutate()
+      return { value: { messageId: 'native-report' } }
+    }), /POSTMAN_WORKER_REPORT_AUTHORITY_CHANGED/, phase + ':' + changed)
+    assert.equal(concluded, 0)
+    assert.equal(flushes, Number(phase === 'flush'))
+    worker.dispose()
+  }
+})
+
+for (const failure of [false, true]) test('native report waits for exact parent persistence; failure=' + failure,
+  { timeout: 15000 }, async t => {
+  const { Context } = await nativePkg('cordis')
+  const { AgentRegistry } = await nativePkg('dsh-agent')
+  const { SessionStore } = await nativePkg('dsh-session')
+  const { JsonlSessionPersistence } = await nativePkg('dsh-session-persistence-jsonl')
+  const { SessionProjectionRegistry } = await nativePkg('dsh-session-projection')
+  const { SystemPrompt } = await nativePkg('dsh-system-prompt')
+  const { ToolRuntime } = await nativePkg('dsh-tools')
+  const { LlmRuntime, LlmAdapter } = await nativePkg('dsh-llm')
+  const { AgentLoop } = await nativePkg('dsh-agent-loop')
+  const { SubagentRuntime } = await nativePkg('dsh-subagent')
+  const { apply: spawn } = await nativePkg('dsh-subagent-spawn-in-process')
+  const { apply: nativeReport } = await nativePkg('dsh-tool-subagent-report')
+ const dir=await mkdtemp(join(tmpdir(),'postman-report-restart-probe-'))
+ t.after(()=>rm(dir,{recursive:true,force:true,maxRetries:5,retryDelay:100}))
+ const original=join(dir,'original'), snapshot=join(dir,'snapshot')
+ const taskContext={leaderSessionId:'leader',repository:'andrewverhoturov1/dsh-workspace',branch:'task/postman-'+'a'.repeat(32),worktree:'C:/task',baseCommit:'a'.repeat(40)}
+ async function runtime(root,resume){
+  const backend=new JsonStorageBackend(join(root,'registry'))
+  const domainCtx={storage:{backend:{get:()=>backend}},emit(){}}
+  const registry=await openPostmanTaskRegistry(new DomainFacility(domainCtx,{backend:'json',routes:{}}))
+  if(!resume) await registry.create('leader',{...taskContext,repositoryPath:'C:/repo',originUrl:'https://github.com/andrewverhoturov1/dsh-workspace.git',stage:'ready',diagnostic:null,workers:{},runner:{state:'none',requestId:null},bridge:null})
+  const ctx=new Context()
+  new AgentRegistry(ctx);new SessionStore(ctx);new SessionProjectionRegistry(ctx)
+  new SystemPrompt(ctx,{});new ToolRuntime(ctx);new LlmRuntime(ctx)
+  new JsonlSessionPersistence(ctx,{root:join(root,'sessions')})
+  new SubagentRuntime(ctx);spawn(ctx,{providerName:'spawn'});nativeReport(ctx,{reportDelivery:'next-step'})
+  new AgentLoop(ctx,{agents:[],maxParallelToolCalls:1})
+  ctx.tools.register({name:'postman_bridge',description:'fixture boundary',parameters:{},output:{schema:{type:'object',properties:{}},render:()=>[]},execute:()=>({})})
+  const requests=new Map()
+  class FakeAdapter extends LlmAdapter{
+   async resolveModel(provider,model){return{provider,id:model,name:model,reasoning:{efforts:[{id:'low',name:'Low'}]}}}
+   async *stream(){const agent=ctx.agents.currentInitiator();const count=(requests.get(agent.id)??0)+1;requests.set(agent.id,count)
+    const block=agent.id==='leader'||count>1?{type:'text',text:'done'}:{type:'tool-call',id:'report-native',name:'report',arguments:'{"output":"complete"}'}
+    yield{type:'block-end',index:0,block};yield{type:'finish',reason:{kind:'stop'}}
+   }
+  }
+  ctx.llm.registerAdapter(['codex'],new FakeAdapter())
+  const contexts={get:()=>taskContext,record:registry.get,changeRecord:registry.change,isRestoring:()=>false,hasActiveOperation:()=>false}
+  const tools=createPostmanWorkerTools(ctx,undefined,contexts)
+  installPostmanWorkerReportObserver(ctx,tools);ctx.on('agent/created',({agent})=>tools.confirmActivation(agent))
+  const parent=resume?(await ctx.agents.resume({resumeSessionId:'leader',agentOptions:{provider:'codex',model:'test'},signal})).agent:ctx.agentLoop.create('leader',{provider:'codex',model:'test'},{cwd:dir,agentPreset:'postman-leader'})
+  return{ctx,parent,tools,registry,backend,requests,async dispose(){tools.dispose();await ctx.fiber.dispose();await registry.close();await backend.close()}}
+ }
+ const a=await runtime(original,false)
+ a.parent.followup({id:'initial-wake',role:'user',source:{kind:'user',form:'direct'},content:[{type:'text',text:'start'}]})
+ await a.parent.whenIdle()
+ await a.ctx.sessions.flush(a.parent.session)
+ const gate=Promise.withResolvers(),entered=Promise.withResolvers()
+ let failed=false, reportResult
+ a.ctx.on('tools/result',(exec,result)=>{if(exec.name==='report')reportResult=result})
+ const sink=a.ctx.sessionPersistence.appendBatch.bind(a.ctx.sessionPersistence)
+ a.ctx.sessionPersistence.appendBatch=async (meta,events,materialized)=>{
+  if(meta.id==='leader'&&events.some(e=>e.type==='agent/inbox/spliced'&&e.data.inserted.some(m=>m.source?.kind==='subagent-report'))){entered.resolve();await gate.promise;if(failure&&!failed){failed=true;throw Error('injected parent durability failure')}}
+  return sink(meta,events,materialized)
+ }
+ const disposed=Promise.withResolvers();a.ctx.on('agent/disposed',({agent})=>{if(agent.id!=='leader')disposed.resolve(agent.id)})
+ const accepted=await a.tools.taskTool.execute({task:'report and finish'},{agent:a.parent,signal})
+ assert.equal(accepted.status,'POSTMAN_WORKER_TASK_ACCEPTED')
+ const id=accepted.workerSessionId
+ await entered.promise
+ const blocked=a.registry.get('leader').workers[id]
+ const child=a.ctx.agents.get(id)
+ const premature=blocked.budget.reported || blocked.lifecycle.reports.length>0 || !child || child.session.events.some(e=>e.type==='turn/end')
+ // Release after taking the observation so a RED failure cannot deadlock teardown.
+ gate.resolve();assert.equal(await disposed.promise,id);await a.parent.whenIdle()
+ if(failure){
+  assert.equal(reportResult.isError,true)
+  assert.match(reportResult.error.message,/injected parent durability failure/)
+  assert.equal(a.registry.get('leader').workers[id].budget.reported,false)
+  assert.deepEqual(a.registry.get('leader').workers[id].lifecycle.reports,[])
+  const closed=await a.tools.stopTool.execute({mode:'close',workerSessionId:id},{agent:a.parent,signal})
+  assert.equal(closed.status,'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT')
+  await a.dispose();return
+ }
+ const report=a.registry.get('leader').workers[id].lifecycle.reports[0]
+ const saved=(await a.ctx.sessionPersistence.inspect(id));assert.equal(saved.events.findLast(e=>e.type==='turn/end').data.reason.kind,'completed')
+ assert.ok(report);assert.equal(a.registry.get('leader').workers[id].budget.reported,true)
+ // No added parent flush or registry close: the report tool must have made delivery durable itself.
+ await cp(original,snapshot,{recursive:true})
+ await a.dispose()
+ assert.equal(premature,false,'child report/terminal completion outran exact parent durability')
+ const b=await runtime(snapshot,true)
+ const wake={id:'restart-wake',role:'user',source:{kind:'user',form:'direct'},content:[{type:'text',text:'review'}]}
+ b.parent.followup(wake);await b.parent.whenIdle()
+ const list=await b.tools.listTool.execute({},{agent:b.parent,signal})
+ const row=list.workers.find(w=>w.workerSessionId===id)
+ assert.equal(row.runtime,'cold-continuable');assert.equal(row.turn,'settled');assert.equal(row.report,'delivered')
+ assert.equal(b.parent.session.events.filter(e=>e.type==='user/message'&&e.data.id===report.messageId).length,1)
+ assert.equal(b.requests.has(id),false);assert.equal(b.parent.inbox.hasPending,false)
+ const closed=await b.tools.stopTool.execute({mode:'close',workerSessionId:id},{agent:b.parent,signal})
+ await b.dispose()
+ assert.equal(closed.status,'POSTMAN_WORKER_STOPPED');assert.equal(closed.resultReported,true)
 })
 
 test('native close crash-window reconciles exact Luna and Sol slots after actual runtime recreation',
