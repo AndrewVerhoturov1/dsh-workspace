@@ -42,7 +42,7 @@ try {
     cpSync(resolve(repositoryRoot,'.agents/skills',role),resolve(stagingRoot,'.agents/skills',role),{recursive:true})
   for(const preset of ['postman-leader','postman-leader-ptc'])
     cpSync(resolve(repositoryRoot,'.agent-presets',preset),resolve(stagingRoot,'.agent-presets',preset),{recursive:true})
-  for(const name of ['postman-native-child-cutoff.patch','postman-native-cold-compact.patch','postman-native-lifecycle.patch'])
+  for(const name of ['postman-native-child-cutoff.patch','postman-native-cold-compact.patch','postman-native-lifecycle.patch','postman-native-close-only-upgrade.patch','postman-native-scoped-compact.patch'])
     copyFileSync(resolve(repositoryRoot,'system/patches',name),resolve(stagingRoot,'system/patches',name))
   copyFileSync(resolve(repositoryRoot,'system/patches/apply-postman-native-child-cutoff.mjs'),resolve(stagingRoot,'system/patches/apply-postman-native-child-cutoff.mjs'))
   const pluginRoot = resolve(stagingRoot, 'plugins/dsh-postman-harness')
@@ -76,6 +76,8 @@ try {
   mkdirSync(resolve(upgradeStage,upgradeRelative,'..'),{recursive:true})
   copyFileSync(subagentTarget.path,resolve(upgradeStage,upgradeRelative))
   const upgradePatch = resolve(upgradeStage,'upgrade.patch')
+  writeFileSync(upgradePatch,readFileSync(resolve(stagingRoot,'system/patches/postman-native-scoped-compact.patch'),'utf8').replaceAll('\r',''))
+  run('git',['-c','core.longpaths=true','apply','--reverse',upgradePatch],upgradeStage,{...process.env,GIT_CEILING_DIRECTORIES:stagingRoot})
   writeFileSync(upgradePatch,readFileSync(resolve(stagingRoot,'system/patches/postman-native-lifecycle.patch'),'utf8').replaceAll('\r',''))
   run('git',['-c','core.longpaths=true','apply','--reverse',upgradePatch],upgradeStage,{...process.env,GIT_CEILING_DIRECTORIES:stagingRoot})
   writeFileSync(upgradePatch,readFileSync(resolve(stagingRoot,'system/patches/postman-native-cold-compact.patch'),'utf8').replaceAll('\r',''))
@@ -87,6 +89,18 @@ try {
   assert.ok(applyPostmanNativeChildCutoff([sdkAnchor,resolve(pluginRoot,'package.json')]).some(target => target.updated))
   assert.deepEqual(readFileSync(subagentTarget.path),upgradedBytes)
   assert.ok(applyPostmanNativeChildCutoff([sdkAnchor,resolve(pluginRoot,'package.json')]).every(target => !target.updated))
+  // Live composition had the earlier close-only postimage, not the tested resident-compact one.
+  copyFileSync(subagentTarget.path,resolve(upgradeStage,upgradeRelative))
+  for (const name of ['postman-native-scoped-compact.patch','postman-native-lifecycle.patch','postman-native-close-only-upgrade.patch']) {
+    writeFileSync(upgradePatch,readFileSync(resolve(stagingRoot,'system/patches',name),'utf8').replaceAll('\r',''))
+    run('git',['-c','core.longpaths=true','apply','--reverse',upgradePatch],upgradeStage,{...process.env,GIT_CEILING_DIRECTORIES:stagingRoot})
+  }
+  const closeOnly=readFileSync(resolve(upgradeStage,upgradeRelative))
+  assert.equal(execFileSync('git',['hash-object','--stdin'],{input:closeOnly.toString('utf8').replaceAll('\r',''),encoding:'utf8'}).trim(),'d7bcddd29f0952e2e8e4d0308b6f6f4cf921f0e6')
+  rmSync(subagentTarget.path);copyFileSync(resolve(upgradeStage,upgradeRelative),subagentTarget.path)
+  assert.ok(applyPostmanNativeChildCutoff([sdkAnchor,resolve(pluginRoot,'package.json')]).some(target=>target.updated))
+  assert.deepEqual(readFileSync(subagentTarget.path),upgradedBytes)
+  assert.ok(applyPostmanNativeChildCutoff([sdkAnchor,resolve(pluginRoot,'package.json')]).every(target=>!target.updated))
   const { SubagentRuntime } = await import(pathToFileURL(sdkRequire.resolve('@deepseek-ai/dsh-subagent')).href)
   for (const method of ['closeContinuableChild','inspectClosedContinuableChild','inspectOpenContinuableChild','compactContinuableChild'])
     assert.equal(typeof SubagentRuntime.prototype[method],'function',method)
@@ -152,6 +166,8 @@ try {
   assert.equal(pluginSdkInstall.status,0,'portable capability test SDK install')
   const pluginSdkAnchor = createRequire(resolve(pluginRoot,'package.json')).resolve('@deepseek-ai/dsh/package.json')
   applyPostmanNativeChildCutoff([pluginSdkAnchor,resolve(pluginRoot,'package.json')])
+  // Execute installed native/preset compaction with one SDK identity, never mocked presence.
+  run(process.execPath,['--test','lib/postman-runtime-compact-fresh.test.js'],pluginRoot,{...process.env,DSH_CAPABILITY_SDK:pluginSdkAnchor})
   run(process.execPath,['--test','lib/postman-capability-lifecycle.test.js','lib/postman-capability-cold.test.js','lib/postman-stage3.test.js','lib/postman-stage35a.test.js','lib/postman-stage35b.test.js','lib/ptc-adapter.test.js','lib/postman-worker-evidence.test.js','lib/ptc-worker-first-request.test.js','lib/ptc-worker-mutation.test.js','lib/postman-sol-worker.test.js','lib/postman-stage1.test.js','lib/postman-stage1-review.test.js','lib/ptc-worker-cold-resume.test.js','lib/postman-bridge-core.test.js','lib/postman-worker-lifecycle.test.js','lib/postman-stage2-control.test.js','lib/postman-stage2-bridge.test.js','lib/postman-stage2-cascade.test.js','lib/postman-task-close.test.js','lib/postman-objective-budget.test.js'],pluginRoot,{...process.env,DSH_CAPABILITY_SDK:pluginSdkAnchor,DSH_ROOT:resolve(pluginSdkAnchor,'..')})
   console.log('clean production install: role model-request catalogs, FAST no PTC, Leader/Sol usable PTC and QuickJS/WASM PASS')
 } finally {

@@ -84,6 +84,11 @@ export async function capabilityRuntime(dir, { preset = 'postman-leader-ptc', re
   class Adapter extends LlmAdapter {
     async resolveModel(provider, model) { return { provider, id: model, name: model, inputModalities: ['text','image'], reasoning: { efforts: ['low','xhigh','max'].map(id => ({ id, name: id })) } } }
     async *stream(request) {
+      if (request.purpose === 'compaction') {
+        requests.push({ agent: ctx.agents.get(request.sessionId), request, compaction: true })
+        yield { type: 'block-end', index: 0, block: { type: 'text', text: 'Verified completed assignment; retain same Session authority and continue the approved task.' } }
+        yield { type: 'finish', reason: { kind: 'stop' } }; return
+      }
       const agent = ctx.agents.currentInitiator(), n = (counts.get(agent.id) ?? 0) + 1; counts.set(agent.id, n)
       requests.push({ agent, request, n })
       const action = await plan(agent, request, n, ctx)

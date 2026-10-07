@@ -1,0 +1,14 @@
+diff --git a/node_modules/@deepseek-ai/dsh-subagent/lib/index.js b/node_modules/@deepseek-ai/dsh-subagent/lib/index.js
+index a0970e3..ea563b6 100644
+--- a/node_modules/@deepseek-ai/dsh-subagent/lib/index.js
++++ b/node_modules/@deepseek-ai/dsh-subagent/lib/index.js
+@@ -1141,7 +1141,8 @@ var SubagentContinuationManager = class {
+ 					agent.session.header.id !== childId || agent.session.header.origin !== "subagent" || agent.session.header.parentSession !== parent.id ||
+ 					agent.session.header.delegationDepth !== delegationDepthOf(parent) + 1 || agent.inbox?.hasPending !== false ||
+ 					this.closedChildren.has(childId) || agent.session.events.some((event) => event.type === "subagent/closed") || !await check(agent)) return false;
+-				return { result: await agent.ctx.get("compaction").compactNow(agent, signal) };
++				const compaction = agent.ctx.get("compaction") ?? this.ownerCtx.agentPresets?.serviceFor(agent, "compaction");
++				return { result: await compaction.compactNow(agent, signal) };
+ 			} finally { await handle?.dispose(); }
+ 		});
+ 	}

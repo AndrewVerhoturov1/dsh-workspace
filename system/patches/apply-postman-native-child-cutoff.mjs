@@ -25,10 +25,12 @@ export function applyPostmanNativeChildCutoff(anchors) {
       const normalizedPatch = join(directory, 'cutoff.patch')
       writeFileSync(normalizedPatch, readFileSync(patch, 'utf8').replaceAll('\r', ''))
       const apply = args => spawnSync('git', ['-c', 'core.longpaths=true', 'apply', '--include=' + relative, ...args, normalizedPatch], { cwd:directory, env:{...process.env,GIT_CEILING_DIRECTORIES:dirname(directory)}, stdio:'ignore', windowsHide:true })
-      let changed = false, lifecycleInstalled = false
-      // Check the exact earlier postimage after peeling only our own lifecycle
-      // patch in this private staging copy; never touch pnpm store/live bytes.
+      let changed = false, lifecycleInstalled = false, scopedInstalled = false
+      // Peel only our own overlays in reverse order in the private staging copy.
       if (relative.includes('/dsh-subagent/')) {
+        writeFileSync(normalizedPatch, readFileSync(new URL('./postman-native-scoped-compact.patch', import.meta.url), 'utf8').replaceAll('\r', ''))
+        scopedInstalled = apply(['--reverse','--check']).status === 0
+        if (scopedInstalled && apply(['--reverse']).status !== 0) throw new Error('Native scoped compaction unstage mismatch: ' + path)
         writeFileSync(normalizedPatch, readFileSync(new URL('./postman-native-lifecycle.patch', import.meta.url), 'utf8').replaceAll('\r', ''))
         lifecycleInstalled = apply(['--reverse','--check']).status === 0
         if (lifecycleInstalled && apply(['--reverse']).status !== 0) throw new Error('Native lifecycle unstage mismatch: ' + path)
@@ -37,6 +39,8 @@ export function applyPostmanNativeChildCutoff(anchors) {
       if (apply(['--reverse','--check']).status !== 0) {
         if (apply(['--check']).status !== 0 && relative.includes('/dsh-subagent/'))
           writeFileSync(normalizedPatch, readFileSync(new URL('./postman-native-cold-compact.patch', import.meta.url), 'utf8').replaceAll('\r', ''))
+        if (apply(['--check']).status !== 0 && relative.includes('/dsh-subagent/'))
+          writeFileSync(normalizedPatch, readFileSync(new URL('./postman-native-close-only-upgrade.patch', import.meta.url), 'utf8').replaceAll('\r', ''))
         if (apply(['--check']).status !== 0 || apply([]).status !== 0) throw new Error('Native child cutoff patch mismatch: ' + path)
         changed = true
       }
@@ -44,6 +48,9 @@ export function applyPostmanNativeChildCutoff(anchors) {
         writeFileSync(normalizedPatch, readFileSync(new URL('./postman-native-lifecycle.patch', import.meta.url), 'utf8').replaceAll('\r', ''))
         if (apply(['--check']).status !== 0 || apply([]).status !== 0) throw new Error('Native lifecycle patch mismatch: ' + path)
         changed ||= !lifecycleInstalled
+        writeFileSync(normalizedPatch, readFileSync(new URL('./postman-native-scoped-compact.patch', import.meta.url), 'utf8').replaceAll('\r', ''))
+        if (apply(['--check']).status !== 0 || apply([]).status !== 0) throw new Error('Native scoped compaction patch mismatch: ' + path)
+        changed ||= !scopedInstalled
       }
       if (changed) prepared.at(-1).staged = staged
     }
