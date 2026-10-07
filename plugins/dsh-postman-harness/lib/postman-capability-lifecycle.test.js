@@ -38,7 +38,7 @@ for (const preset of ['postman-leader-ptc', 'code', 'postman-leader']) test('act
   assertManagementRequest('leader', r)
   assertManagementRequest('leader', await f.turn(f.leader, 'Related management follow-up'))
   assert.ok(r.tools.some(t=>t.name==='ask_user_question'),preset+': Leader retains user questions')
-  assert.equal(r.model,'gpt-6.1-sol'); assert.equal(r.reasoningEffort,'xhigh'); assert.match(r.system,/canonical programming discipline/); assert.match(r.system, /postman-leader/);assert.match(JSON.stringify(r),/POSTMAN_LEADER_SKILL_VERSION: 30/)
+  assert.equal(r.model,'gpt-6.1-sol'); assert.equal(r.reasoningEffort,'xhigh'); assert.match(r.system,/canonical programming discipline/); assert.match(r.system, /postman-leader/);assert.match(JSON.stringify(r),/POSTMAN_LEADER_SKILL_VERSION: 31/)
   await writeFile(join(f.dir, 'facts.txt'), 'old fact')
   const result = nested(await f.execute(f.leader, 'ptc_execute', ptc('const r=await tools.read({file_path:"facts.txt"});const g=await tools.grep({pattern:"old fact",path:"facts.txt"});return {r,g}')))
   assert.equal(result.r.lines[0].text, 'old fact'); assert.ok(result.g.matches.length)
@@ -82,7 +82,7 @@ test('all real child requests: Secretary/Worker/Sol functional smoke, ownership,
   const ownCall = async (agent,name,args={}) => nested(await f.execute(agent,'ptc_execute',ptc('return await tools.'+name+'('+JSON.stringify(args)+')')))
   const leaderCall = async (name,args) => nested(await f.execute(f.leader,'ptc_execute',ptc('return await tools.'+name+'('+JSON.stringify(args)+')')))
   const start = async (name,parent=f.leader) => {
-    const r = parent===f.leader ? await leaderCall(name,{task:'Explicit user-selected Sol Worker route; bounded fixture evidence'}) : await ownCall(parent,name,{task:'bounded owned fixture evidence'})
+    const r = parent===f.leader ? await leaderCall(name,{task:'Approved execution plan: Leader-selected Sol Worker route; bounded fixture evidence'}) : await ownCall(parent,name,{task:'bounded owned fixture evidence'})
     assert.equal(r.status,'POSTMAN_WORKER_TASK_ACCEPTED',JSON.stringify(r));const a=name==='postman_sol_worker'?await solEntered.promise:await f.childDone(r.workerSessionId);assert.ok(a);return a
   }
   const secretary=await start('postman_secretary'), worker=await start('postman_worker'), settledSol=await start('postman_sol_worker')
@@ -172,7 +172,7 @@ test('fresh real Secretary Worker Sol preserve exact catalog and ledger', {timeo
  if(typeof f.ctx.subagents.closeContinuableChild!=='function'){t.skip('published SDK: EXACT_CHILD_ADMISSION_CUTOFF_UNAVAILABLE; installed Host is checked separately');return}
  const call=async(name,args)=>nested(await f.execute(f.leader,'ptc_execute',ptc('return await tools.'+name+'('+JSON.stringify(args)+')')))
  for(const name of ['postman_secretary','postman_worker','postman_sol_worker']){
-  const first=await call(name,{task:'User-authorized explicit Sol Worker bounded route'});assert.equal(first.status,'POSTMAN_WORKER_TASK_ACCEPTED',JSON.stringify(first));const a=await f.childDone(first.workerSessionId)
+  const first=await call(name,{task:'Approved execution plan: Leader-selected Sol Worker bounded route'});assert.equal(first.status,'POSTMAN_WORKER_TASK_ACCEPTED',JSON.stringify(first));const a=await f.childDone(first.workerSessionId)
   const expected=f.requests.find(x=>x.agent.id===a.id).request
   await f.turn(f.leader,'Review exact native role report')
   const fresh=await call('postman_worker_fresh',{workerSessionId:a.id,task:'fresh exact role assignment'})
