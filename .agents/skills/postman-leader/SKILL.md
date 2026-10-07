@@ -7,7 +7,7 @@ description: >-
 
 # Postman Leader
 
-`POSTMAN_LEADER_SKILL_VERSION: 30`
+`POSTMAN_LEADER_SKILL_VERSION: 31`
 
 ## 1. Role and invariants
 
@@ -19,7 +19,7 @@ Production `postman-leader` и compatibility `postman-leader-ptc` — один P
 
 ## 2. Management Kernel
 
-Один дорогой model decision программирует максимально длинную безопасную deterministic management phase до следующей реальной decision boundary. Для каждой задачи ОБЯЗАТЕЛЬНО:
+Один дорогой model decision программирует максимально длинную безопасную deterministic management phase до следующей реальной decision boundary. Для каждой нетривиальной задачи сначала routing/plan/approval (§4), затем execution. Во время approved execution ОБЯЗАТЕЛЬНО:
 
 1. Определи пользовательский outcome и критерии завершения.
 2. Отдели semantic decisions от mechanical work.
@@ -49,16 +49,18 @@ Production `postman-leader` и compatibility `postman-leader-ptc` — один P
 | Leader | decomposition, architecture, routing, critical path, interpretation, conflicting evidence, user communication, final judgement, few exact critical reads | broad discovery, implementation, длинная mechanical verification |
 | Secretary | bounded files/symbols, glob/grep, несколько reads, Git/config/environment facts, condensed evidence packet, operational memory | production implementation, architecture judgement, primary review, test campaign/E2E/browser |
 | Ordinary FAST Worker | targeted test, lint/build, browser acceptance, logs, Git evidence, reproduction, mechanical verification, small unambiguous edit, exact checks | architecture, substantial implementation/research |
-| Sol Worker | сильный локальный engineering executor; свои Worker, own engineering PTC | automatic escalation, другой Leader, Web transport |
+| Sol Worker | сложный local engineering/review; свои Worker, own engineering PTC; Leader-selectable в approved plan | default для unknown, другой Leader, Web transport |
 | Postman | средняя/сложная implementation → trusted result → Worker apply/verify | мелкий локальный факт |
-| PostmanAsk | external research, architecture expertise, независимый review, сложная проблема с отдельным reasoning context | exact repository fact |
+| PostmanAsk | external/current research или действительно полезное independent outside opinion | default для local deep engineering/review, exact repository fact |
 | PostmanImage | генерация изображения, затем локальная интеграция/verification Worker при необходимости | implementation ZIP apply |
 
 Нужно узнать? → Secretary. Нужно выполнить/проверить? → Worker. Exact reads ради test diagnosis остаются внутри test assignment; не делай handoff ради каждого grep. Secretary assignment bounded: «Найди exact definitions X/Y/Z; paths + 2–5 relevant excerpts + config values; stop после фактов», не «изучи всю архитектуру».
 
-Сохрани existing route approval: просьба пользователя о конкретной роли **уже считается user approval**. Не задавай повторный вопрос «Передавать в PostmanAsk?». normal private input staging не требует согласия на public publication. Простое обсуждение Postman не delegation request. Если сам добавляешь невыбранный маршрут для средней/сложной задачи или Postman/PostmanAsk/нескольких ролей, до task preparation/dispatch покажи минимальный маршрут и дождись утверждения. Новая роль/существенное расширение требует approval, продолжение согласованной роли — нет. Мелкая понятная обратимая задача не требует отдельного плана найма. Прямой режим пользователя «только обсуждать / ничего не делать» обязателен.
+**Новая нетривиальная задача: Leader routing decision → компактный execution plan → явное user approval → execution.** План содержит outcome, scope, маршрут/роли, достаточную проверку, оценку стоимости и условную escalation, если нужна. Выбор роли пользователем или исходное «сделай» не заменяет approval плана. До approval допустимо только минимальное необходимое read-only понимание Leader: не создавай Worker/Secretary/Sol, не делегируй составление первого плана, не запускай Bridge/Postman transport, implementation, tests/build или mutating Git/product operations. Truly trivial read-only/factual запрос выполняй прямо; небольшая правка не является read-only исключением.
 
-Sol запускается **только по прямой просьбе пользователя использовать Sol Worker**; автоматической escalation Luna → Sol нет. Прямая просьба пользователя использовать Sol Worker уже является достаточным разрешением. Не задавай отдельный `ask_user_question` перед созданием или продолжением Sol Worker. Follow-up и новые задания по `workerSessionId` не требуют дополнительного подтверждения в выбранном маршруте, включая localDevelopment. `postman_sol_worker` не обращается к ApprovalService. Не меняй permission preset, approval: ask/never или глобальную permission-систему Harness. Не используй обычные `postman_worker` / `postman_worker_interrupt` для Sol.
+Approval относится к execution plan, не к каждому tool, continuation или штатному cleanup. Уточнение/исправление в том же approved scope — continuation, не новый план; новая независимая цель требует нового плана. Preapproved conditional Sol escalation не требует отдельного разрешения. Существенное изменение стоимости, scope, access, destructive operations или transport: **STOP → revised plan → approval**, а не немедленный redirect. Это не ослабляет отдельные security/artifact/Git approvals. Режим «только обсуждать / ничего не делать» обязателен; normal private input staging не означает approval public publication.
+
+Sol — Leader-selectable route в approved plan, **отдельное разрешение на роль не требуется**. Sol дорогой: выбирай cheapest reliable route до следующей meaningful decision boundary, а не Sol по умолчанию. **unknown != complex**: при полезном ограниченном evidence сначала Worker reproduction/logs/test facts или Secretary files/symbols/config facts после approval; не заставляй FAST делать architecture или substantial implementation. Для явно сложного local engineering/review допустим direct Sol без обязательного дешёвого круга. Escalation по evidence — решение Leader в пределах approved plan, не автоматический retry после любого Luna failure. postman_sol_worker не обращается к ApprovalService; не добавляй approval state machine, не меняй permission preset, approval: ask/never или глобальную permission-систему. Не используй обычные postman_worker / postman_worker_interrupt для Sol.
 
 ## 5. TASK_CONTRACT
 
@@ -70,16 +72,16 @@ Sol запускается **только по прямой просьбе по�
 
 ## 6. PTC supervisor discipline
 
-Перед каждым `ptc_execute` определи **next real decision boundary** и включи все deterministic supervisor mechanics до неё. Canonical HOW — Host-injected `plugins/dsh-postman-harness/lib/ptc-discipline.js`; не копируй весь протокол. Leader operational tools только внутри PTC; direct-only: skill, ask_user_question, exit_plan_mode, read_image. Sol controls direct-only у Sol, не Leader profile.
+Перед каждым `ptc_execute` определи **next real decision boundary** и включи все deterministic supervisor mechanics до неё. Canonical HOW — Host-injected `plugins/dsh-postman-harness/lib/ptc-discipline.js`; не копируй весь протокол. Leader operational tools только внутри PTC; direct-only: skill, ask_user_question, exit_plan_mode, read_image. Sol-owned ordinary Worker controls PTC-managed / PTC-only в Sol engineering profile revision 2 с exact parent ownership. report/notify_parent direct-only. Leader не получает controls чужого Sol subtree.
 
 **PTC = supervisor phase, not tool wrapper.** Next-tool-known: если следующий полезный tool уже можно назвать, оставь его в текущей программе до genuine boundary. Завершившийся read/status/PASS — не semantic_decision; one tool + semantic_decision presumptively underbatched, требует ясной причины, но не запрещён. Перед return выполни canonical self-check; для нового judgement предпочитай needsModelDecision + конкретный decisionQuestion + compact evidence, не «прочитать следующий файл?».
 
-- **Supervisor dispatch phase:** Leader decision → PTC: team snapshot если нужен → task prepare/readiness → все уже выбранные independent dispatch → known bookkeeping/ledger → external event / real boundary. Не wake между этими mechanics.
+- **Supervisor dispatch phase (после approval):** Leader decision → PTC: team snapshot если нужен → task prepare/readiness → все уже выбранные independent dispatch → known bookkeeping/ledger → external event / real boundary. Не wake между этими mechanics.
 - **Reconciliation/cleanup phase:** после reports Leader decision → PTC: exact critical evidence → mechanically comparable values → known lifecycle operations → ledger milestone → retire settled agents → task close когда appropriate → task complete / next real decision. Не team_status → model → close Worker → model → ledger → model → task_close без нового judgement.
 
 PTC закрывает **sufficient acceptance evidence**, не максимальное evidence. Перед ещё одной проверкой: может ли результат изменить acceptance/judgement? Если нет, не повторяй SHA/status/reread unchanged evidence, не делай child audit archaeology после sufficient trusted report и лишние evidence JSON/checksum. Независимая дешёвая mechanics → Worker, не искусственное увеличение nested calls. Description = phase goal + stop reason.
 
-Обычная phase: team_status → prepare если нужно → readiness facts → Secretary task → Worker A/B → authorized Sol/needed Bridge → known ledger/todo bookkeeping → external_event. Dispatch calls последовательны в PTC (profile concurrency=1), принятые независимые assignments выполняются параллельно. Не подменяй environment readiness значением TASK_CONTEXT_READY: prepare не устанавливает dependencies.
+Обычная approved execution phase: team_status → prepare если нужно → readiness facts → Secretary task → Worker A/B → authorized Sol/needed Bridge → known ledger/todo bookkeeping → external_event. Dispatch calls последовательны в PTC (profile concurrency=1), принятые независимые assignments выполняются параллельно. Не подменяй environment readiness значением TASK_CONTEXT_READY: prepare не устанавливает dependencies.
 
 `ptc.expectStatus` — только настоящий successful-path invariant: любой другой outcome нарушает ожидаемый путь. Tool-name form использует exact Host success table (TASK_CONTEXT_READY, POSTMAN_WORKER_TASK_ACCEPTED, POSTMAN_WORKER_INTERRUPT_TASK_ACCEPTED, POSTMAN_BRIDGE_ACCEPTED). **Known-status branching:** multi-outcome lifecycle — explicit branch, не runtime-error из нормального отрицательного status. Например:
 
@@ -120,7 +122,7 @@ Intervention только на decision/budget boundary, unexpected status, conf
 
 **FAST budget:** Stage 3 назначения Worker/Secretary (initial/continuation/fresh) передают `hardBudget:15`, soft 12 вычисляет Host; модель gpt-6-luna / low неизменна. Latest baseline уже поддерживает 8..24/default16 и root cap48 — не меняй runtime, не повышай budget ради discovery. Сохраняй rootObjectiveId для той же цели; newObjective только действительно независимая цель. Follow-up/fresh/compact/cold resume не сбрасывают root расход.
 
-Soft warning → synthesis, no new discovery branch/scope expansion. Near hard limit → NEEDS_PARENT_GUIDANCE + established facts, attempts, exact blocker, specific decision/help, options; не последний glob «для уверенности». Parent классифицирует: missing fact → Secretary/другой bounded Worker; choice → parent решает; precise instruction → same Worker continuation; объективно сложнее → существующий approved route (Sol только authorized); real blocker → user/final blocker. Не «продолжай / попробуй ещё», не бесконечная exploration branch.
+Soft warning → synthesis, no new discovery branch/scope expansion. Near hard limit → NEEDS_PARENT_GUIDANCE + established facts, attempts, exact blocker, specific decision/help, options; не последний glob «для уверенности». Parent классифицирует: missing fact → Secretary/другой bounded Worker; choice → parent решает; precise instruction → same Worker continuation; объективно сложнее → существующий approved route (включая preapproved conditional Sol escalation); real blocker → user/final blocker. Не «продолжай / попробуй ещё», не бесконечная exploration branch.
 
 Secretary ledger содержит только goal, established facts, decisions, active executors/assignments, verified results + inputs, blockers, critical path, next meaningful step. Update после существенного decision/path/result, перед long external wait или cleanup при необходимости; известное поручение update включай в ту же PTC phase, не отдельный дорогой round. Только Secretary записывает private ledger exact revision; Leader читает postman_secretary_ledger. Не tool-call journal, full reports/logs или дубликат docs; repo flush только explicit assignment.
 
@@ -140,7 +142,7 @@ Secretary ledger содержит только goal, established facts, decision
 
 `postman_worker({task,createNew:true,hardBudget:15})` создаёт direct ordinary Worker при свободном slot; существующий mapping не запрещает `createNew:true`. Exact workerSessionId для controls, без ID только однозначная binding; POSTMAN_WORKER_TARGET_REQUIRED при ambiguity. Новый trusted artifact REQ → postman_worker({task,workerSessionId,artifactRequestId,hardBudget:15}); Secretary не принимает artifactRequestId. Sol создаётся/продолжается только postman_sol_worker({task,workerSessionId?,artifactRequestId?}). Report не закрывает binding; list idle не успех.
 
-Compact сохраняет continuity; latest native cold compact работает для proven settled history, не запускает assignment; known refusal ветвится явно. Fresh требует safely settled binding; не Git reset/delete audit. Уже выбранный пользователем Sol route сохраняется: повторное user confirmation не требуется; fresh не разрешает автоматический выбор Sol.
+Compact сохраняет continuity; latest native cold compact работает для proven settled history, не запускает assignment; known refusal ветвится явно. Fresh требует safely settled binding; не Git reset/delete audit. Approved plan сохраняется при compact/fresh: повторное confirmation для продолжения не требуется; fresh не даёт blanket approval для новой независимой задачи или material change.
 
 Leader может остановить выбранного Worker в любой момент осознанным exact cancel, по действующей policy; close не скрытый cancel. Sol subtree → postman_worker_stop({workerSessionId:<sol>,mode:'close',cascade:true}) только safely settled; cancel children → Sol, PARTIAL/unknown не общий success. Sol fresh с retireOwnedWorkers:true закрывает settled subtree; active child требует explicit cascade cancel. Ownership Sol children не переходит Leader/новому Sol.
 
@@ -207,10 +209,10 @@ Goals только действительно долгоживущая цель,
 - Transport Chrome для product acceptance; вручную browser port/profile/CDP.
 - Два writers в общий worktree без доказанной безопасности.
 
-### Positive management patterns
+### Positive management patterns (после approval нетривиальной задачи)
 
 A Investigation: Leader decision → Secretary bounded facts → external_event → Leader judgement.
 B Parallel verification: environment ready → Worker A tests + Worker B canonical browser → external_event → Leader reconcile.
-C Complex authorized Sol: первая meaningful Sol decision → Worker A discovery + Worker B tests → own PTC engineering → aggregate → Leader review; prerequisite setup раньше testers.
+C Complex Leader-selected Sol в approved plan: первая meaningful Sol decision → Worker A discovery + Worker B tests → own PTC engineering → aggregate → Leader review; prerequisite setup раньше testers.
 D Postman implementation: approved Postman → trusted result → Worker apply/test → Leader acceptance.
 E Unrelated Worker task: old settled Worker → fresh → new bounded task. Related correction остаётся same Worker.

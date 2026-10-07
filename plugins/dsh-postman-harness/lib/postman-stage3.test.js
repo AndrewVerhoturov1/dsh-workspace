@@ -4,7 +4,7 @@ import {mkdtemp, rm, readFile, writeFile} from 'node:fs/promises'
 import {join} from 'node:path'
 import {tmpdir} from 'node:os'
 import {capabilityRuntime} from './fixtures/postman-capability-runtime.js'
-import {managementMarkers, assertManagementRequest} from './fixtures/postman-stage3-contract.js'
+import {managementMarkers, assertManagementRequest, obsoleteSolPermission} from './fixtures/postman-stage3-contract.js'
 import {postmanRoleInstruction, FAST_WORKER_BUDGET, FAST_ROOT_CAP} from './postman-worker.js'
 import {POSTMAN_PTC_DISCIPLINE} from './ptc-discipline.js'
 
@@ -21,6 +21,15 @@ test('bounded Stage 3 source contract: kernel first, routing, safety and FAST bu
     assert.match(skill, /hardBudget:15/)
   }
   assert.match(leader, /constraint без источника/i)
+  for (const path of ['.agents/skills/postman-leader/SKILL.md',
+    '.agents/skills/postman-sol-worker/SKILL.md',
+    '.agent-presets/postman-leader/agent.cordis.yml', '.agent-presets/postman-leader-ptc/agent.cordis.yml',
+    'plugins/dsh-postman-harness/README.md', 'postman/POSTMAN_BRIDGE_FLOW.md',
+    'docs/subprojects/postman/SUBPROJECT.md', 'docs/subprojects/ptc/PTC_CONTRACT.md']) {
+    const text = await readFile(new URL(path, root), 'utf8')
+    assert.doesNotMatch(text, obsoleteSolPermission, path + ': no obsolete normative Sol permission')
+    assert.doesNotMatch(text, /Sol controls direct-only у Sol|controls собственных Worker остаются direct-only|Worker controls (?:are )?direct-only/, path + ': no obsolete Sol direct-control flow')
+  }
   assert.match(leader, /NOT_SENT \/ TERMINAL \/ OUTCOME_UNKNOWN/)
   assert.match(POSTMAN_PTC_DISCIPLINE, /true successful-path/)
   assert.match(POSTMAN_PTC_DISCIPLINE, /multi-outcome lifecycle/)
@@ -36,7 +45,7 @@ test('bounded Stage 3 source contract: kernel first, routing, safety and FAST bu
   assert.match(compact, /Active\/pending\/uncertain остаются blocked\/busy/)
   assert.doesNotMatch(readme, /compactNow` только для trustworthy exact resident/)
   const contract = await readFile(new URL('docs/subprojects/ptc/PTC_CONTRACT.md', root), 'utf8')
-  assert.match(contract, /Skill v30/); assert.doesNotMatch(contract, /Skill v29/)
+  assert.match(contract, /Skill v31/); assert.doesNotMatch(contract, /Skill v(?:29|30)/)
   assert.match(contract, /postman_task_prepare\/postman_task_restore\/postman_task_close\/postman_input_files/)
   assert.match(contract, /postman_task_close` явно retire-ит settled Leader task binding/)
   assert.match(contract, /не Git cleanup и не доказательство success/)
@@ -57,6 +66,35 @@ test('bounded Stage 3 source contract: kernel first, routing, safety and FAST bu
     assert.match(text, /transport Chrome/i)
   }
 })
+
+// Scripted text-only turns verify contract delivery before any task preparation.
+// They are NOT evidence that a real model makes the right routing decision.
+for (const preset of ['postman-leader', 'postman-leader-ptc']) {
+  test(preset + ' actual routing requests retain initial approval in localDevelopment', {timeout:45000}, async t => {
+    const dir = await mkdtemp(join(tmpdir(), 'postman-stage3-routing-'))
+    const f = await capabilityRuntime(dir, {preset, localDevelopment:true})
+    t.after(async () => {await f.dispose(); await rm(dir, {recursive:true, force:true, maxRetries:5, retryDelay:100})})
+    for (const prompt of [
+      'Trivial factual request: report the value from this supplied exact config excerpt: enabled=true.',
+      'New task: run one known targeted test. Propose a compact execution plan; no execution before approval.',
+      'Unknown affected symbol: bounded facts first, then decide if difficult engineering needs Sol.',
+      'Obviously difficult local concurrency/authority engineering review; select a reliable route and request plan approval.',
+      'External current provider API research and a useful independent outside opinion; propose routing only.',
+      'Same approved scope correction; conditional Sol escalation was preapproved. Do not ask per-role approval.',
+      'New independent outcome plus public transport and material cost/access change: stop for revised-plan approval.',
+    ]) {
+      const request = await f.turn(f.leader, prompt)
+      assertManagementRequest('leader', request)
+      assert.match(request.system, /localDevelopment[^.]*does not bypass initial execution-plan approval/)
+      assert.match(request.system, /Truly trivial read-only\/factual requests execute directly/)
+      assert.match(request.system, /no Worker\/Secretary\/Sol, Bridge\/Postman transport, implementation, tests\/build or mutating Git\/product operations/)
+      assert.match(request.system, /Local deep engineering\/review -> Sol; external\/current research or useful independent outside opinion -> PostmanAsk/)
+      assert.match(request.system, /STOP -> revised plan -> approval/)
+      assert.equal(f.results.length, 0, 'delivery-only fixture executes no tools or transport')
+      assert.equal(f.registry.get('leader'), null, 'no task preparation or role creation')
+    }
+  })
+}
 
 // Controlled model is scripted: proves delivery and an executable bounded path,
 // NOT that a real Luna/Sol chooses these actions. Live prompts remain in README.
@@ -92,7 +130,7 @@ test('controlled exact file + command needs no broad discovery under Leader or S
   const assignment = {task:'Objective: verify exact file '+exact+' and exact command '+command+'. Type: mechanical verification. Scope: these targets only; no writes. Done: exact evidence matches. Verification: file text exact-file-evidence and command output exact-command-evidence. Stop: report or precise blocker. Established: environment ready.', hardBudget:15}
   const direct = await call('postman_worker', assignment)
   assert.equal(direct.status, 'POSTMAN_WORKER_TASK_ACCEPTED'); await f.childDone(direct.workerSessionId)
-  const acceptedSol = await call('postman_sol_worker', {task:'User explicitly selects Sol Worker. Bounded controlled evidence aggregation, no implementation.'})
+  const acceptedSol = await call('postman_sol_worker', {task:'Approved execution plan: Leader selected expensive Sol for bounded controlled evidence aggregation, no implementation.'})
   assert.equal(acceptedSol.status, 'POSTMAN_WORKER_TASK_ACCEPTED'); const sol = await entered.promise
   const owned = value(await f.execute(sol,'ptc_execute',{program:'return await tools.postman_worker('+JSON.stringify(assignment)+')',description:'Dispatch owned bounded check before review',boundary:'semantic_decision'})).value
   assert.equal(owned.status, 'POSTMAN_WORKER_TASK_ACCEPTED'); await f.childDone(owned.workerSessionId)

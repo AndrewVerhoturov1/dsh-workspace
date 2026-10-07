@@ -403,7 +403,7 @@ test('package and composition expose bridge entrypoint and leader preset', () =>
   assert.match(agents, /postman-leader/)
 
   const leaderSkill = readFileSync(join(repoRoot, '.agents', 'skills', 'postman-leader', 'SKILL.md'), 'utf8')
-  assert.match(leaderSkill, /POSTMAN_LEADER_SKILL_VERSION: 30/)
+  assert.match(leaderSkill, /POSTMAN_LEADER_SKILL_VERSION: 31/)
   assert.match(leaderSkill, /существующий mapping не запрещает \x60createNew:true\x60/)
   assert.match(leaderSkill, /может остановить выбранного Worker в любой момент/)
   for (const forbidden of ['повторный \x60postman_worker()\x60 при существующем mapping',
@@ -419,9 +419,9 @@ test('package and composition expose bridge entrypoint and leader preset', () =>
   }
   assert.match(leaderSkill, /artifactRequestId/)
   assert.ok(leaderSkill.includes('implementation_artifact_apply'))
-  assert.match(leaderSkill, /конкретной роли \*\*уже считается user approval\*\*/)
-  assert.match(leaderSkill, /Не задавай повторный вопрос «Передавать в PostmanAsk\?»/)
-  assert.match(leaderSkill, /normal private input staging не требует согласия/)
+  assert.match(leaderSkill, /Выбор роли пользователем[^.]*не заменяет approval плана/)
+  assert.match(leaderSkill, /Approval относится к execution plan, не к каждому tool, continuation или штатному cleanup/)
+  assert.match(leaderSkill, /normal private input staging не означает approval public publication/)
   assert.match(leaderSkill, /native-attachment-first|Native ChatGPT attachment is the primary input-file transport/)
   assert.match(leaderSkill, /GitHub public staging is fallback-only and requires explicit user approval/)
   assert.match(leaderSkill, /stage_current_attachments/)

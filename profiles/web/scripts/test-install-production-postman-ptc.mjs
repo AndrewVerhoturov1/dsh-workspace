@@ -33,7 +33,7 @@ try {
     resolve(stagingRoot, 'profiles/web/scripts/install-production.mjs'))
 
   // Include the current role implementation and canonical sources before commit.
-  for (const source of ['plugins/dsh-postman-harness/README.md','docs/subprojects/ptc/PTC_CONTRACT.md'])
+  for (const source of ['plugins/dsh-postman-harness/README.md','docs/subprojects/ptc/PTC_CONTRACT.md','docs/subprojects/postman/SUBPROJECT.md','postman/POSTMAN_BRIDGE_FLOW.md'])
     copyFileSync(resolve(repositoryRoot,source),resolve(stagingRoot,source))
   cpSync(resolve(repositoryRoot,'plugins/dsh-postman-harness/lib'),resolve(stagingRoot,'plugins/dsh-postman-harness/lib'),{recursive:true})
   for (const name of ['package.json','pnpm-lock.yaml'])
@@ -148,7 +148,7 @@ try {
   assert.equal(pluginSdkInstall.status,0,'portable capability test SDK install')
   const pluginSdkAnchor = createRequire(resolve(pluginRoot,'package.json')).resolve('@deepseek-ai/dsh/package.json')
   applyPostmanNativeChildCutoff([pluginSdkAnchor,resolve(pluginRoot,'package.json')])
-  run(process.execPath,['--test','lib/postman-capability-lifecycle.test.js','lib/postman-capability-cold.test.js','lib/postman-stage3.test.js','lib/postman-stage35a.test.js','lib/postman-stage35b.test.js','lib/postman-stage2-control.test.js','lib/postman-stage2-bridge.test.js','lib/postman-stage2-cascade.test.js','lib/postman-task-close.test.js','lib/postman-objective-budget.test.js'],pluginRoot,{...process.env,DSH_CAPABILITY_SDK:pluginSdkAnchor})
+  run(process.execPath,['--test','lib/postman-capability-lifecycle.test.js','lib/postman-capability-cold.test.js','lib/postman-stage3.test.js','lib/postman-stage35a.test.js','lib/postman-stage35b.test.js','lib/ptc-adapter.test.js','lib/postman-worker-evidence.test.js','lib/ptc-worker-first-request.test.js','lib/ptc-worker-mutation.test.js','lib/postman-sol-worker.test.js','lib/postman-stage1.test.js','lib/postman-stage1-review.test.js','lib/ptc-worker-cold-resume.test.js','lib/postman-bridge-core.test.js','lib/postman-worker-lifecycle.test.js','lib/postman-stage2-control.test.js','lib/postman-stage2-bridge.test.js','lib/postman-stage2-cascade.test.js','lib/postman-task-close.test.js','lib/postman-objective-budget.test.js'],pluginRoot,{...process.env,DSH_CAPABILITY_SDK:pluginSdkAnchor,DSH_ROOT:resolve(pluginSdkAnchor,'..')})
   console.log('clean production install: role model-request catalogs, FAST no PTC, Leader/Sol usable PTC and QuickJS/WASM PASS')
 } finally {
   rmSync(stagingRoot, { recursive: true, force: true })

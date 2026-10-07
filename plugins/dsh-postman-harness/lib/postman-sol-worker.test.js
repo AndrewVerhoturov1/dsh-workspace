@@ -2,13 +2,16 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { createRequire } from 'node:module'
 import { readFileSync } from 'node:fs'
+import { obsoleteSolPermission } from './fixtures/postman-stage3-contract.js'
 import { createPostmanWorkerTools, POSTMAN_SOL_WORKER_AGENT_OPTIONS } from './postman-worker.js'
 import { createMemoryTaskRegistry } from './postman-task-registry.js'
 import { POSTMAN_LEADER_TOOL_ALLOWLIST, POSTMAN_LEADER_ONLY_TOOL_NAMES, POSTMAN_PTC_ONLY_LEADER_TOOLS } from './postman-bridge-core.js'
 
 const installed = process.env.DSH_ROOT ?? join(process.env.APPDATA ?? join(process.env.USERPROFILE, 'AppData', 'Roaming'), 'npm/node_modules/@deepseek-ai/dsh')
-const pkg = name => import(pathToFileURL(join(installed, 'node_modules/@deepseek-ai', name, 'lib/index.js')).href)
+const sdkRequire = createRequire(process.env.DSH_CAPABILITY_SDK ?? join(installed, 'package.json'))
+const pkg = name => import(pathToFileURL(sdkRequire.resolve('@deepseek-ai/' + name)).href)
 const { Context } = await pkg('cordis')
 const { Session } = await pkg('dsh-session')
 
@@ -284,46 +287,47 @@ test('only top-level Leaders receive direct Sol tool outside PTC', async t => {
 })
 
 for (const preset of ['postman-leader', 'postman-leader-ptc']) {
-  test(preset + ' authorizes Sol by explicit user request without a separate confirmation', () => {
+  test(preset + ' selects expensive Sol only within an approved execution plan, not a role permission gate', () => {
     const text = readFileSync(new URL('../../../.agent-presets/' + preset + '/agent.cordis.yml', import.meta.url), 'utf8')
-    assert.match(text, /only when the user explicitly asks[^.]*Sol Worker/i)
-    assert.match(text, /explicit user request[^.]*Sol Worker[^.]*sufficient authorization/i)
-    assert.match(text, /do not ask[^.]*separate[^.]*ask_user_question[^.]*creat[^.]*continu/i)
-    assert.match(text, /follow-up[^.]*new tasks[^.]*workerSessionId[^.]*no additional[^.]*confirmation/i)
-    assert.match(text, /no automatic Luna-to-Sol escalation/i)
-    assert.doesNotMatch(text, /before[^.\n]*first Sol assignment|wait for[^.\n]*positive answer/i)
+    assert.match(text, /Every new non-trivial task: Leader routing decision -> compact execution plan -> explicit user approval -> execution/)
+    assert.match(text, /Before approval only minimal necessary Leader read-only understanding/)
+    assert.match(text, /no Worker\/Secretary\/Sol creation or plan delegation/)
+    assert.match(text, /Sol is an expensive Leader-selectable route within the approved execution plan/)
+    assert.match(text, /no separate role permission/i)
+    assert.match(text, /cheapest reliable route/)
+    assert.match(text, /unknown != complex/)
+    assert.match(text, /Direct Sol is allowed for obviously difficult local engineering\/review/)
+    assert.match(text, /Preapproved conditional Sol escalation and same-scope continuation need no repeated approval/)
+    assert.match(text, /STOP -> revised plan -> approval/)
+    assert.doesNotMatch(text, obsoleteSolPermission)
   })
 }
 
-test('Leader skill preserves the Sol authorization contract through fresh context and restart', () => {
+test('Leader skill preserves plan approval across continuation and fresh without blanket future-task permission', () => {
   const skill = readFileSync(new URL('../../../.agents/skills/postman-leader/SKILL.md', import.meta.url), 'utf8')
-  assert.match(skill, /только по прямой просьбе пользователя[^.]*Sol Worker/i)
-  assert.match(skill, /Прямая просьба пользователя[^.]*Sol Worker[^.]*достаточным разрешением/i)
-  assert.match(skill, /Не задавай[^.]*отдельный[^.]*ask_user_question[^.]*создани[^.]*продолжени/i)
-  assert.match(skill, /Follow-up[^.]*новые задания[^.]*workerSessionId[^.]*не требуют[^.]*подтверждения/i)
-  assert.match(skill, /автоматической escalation Luna → Sol нет/)
+  assert.match(skill, /Leader routing decision → компактный execution plan → явное user approval → execution/)
+  assert.match(skill, /отдельное разрешение на роль не требуется/)
+  assert.match(skill, /Preapproved conditional Sol escalation не требует отдельного разрешения/)
   assert.match(skill, /postman_sol_worker[^.]*не обращается[^.]*ApprovalService/)
-  assert.match(skill, /Не меняй permission preset[^.]*approval: ask\/never[^.]*глобальную permission-систему Harness/)
+  assert.match(skill, /не меняй permission preset[^.]*approval: ask\/never[^.]*глобальную permission-систему/i)
   assert.match(skill, /Не используй обычные[^.]*postman_worker[^.]*postman_worker_interrupt[^.]*для Sol/)
   const freshContext = skill.slice(skill.indexOf('## 9. Lifecycle'), skill.indexOf('## 10. Bridge'))
-  assert.match(freshContext, /выбранный пользователем Sol route сохраняется[^.]*повторное user confirmation не требуется/)
-  assert.match(freshContext, /fresh не разрешает автоматический выбор Sol/)
-  assert.doesNotMatch(skill, /Перед первым назначением[^.\n]*ask_user_question|обязательно[^.\n]*положительн[^.\n]*ask_user_question/i)
+  assert.match(freshContext, /Approved plan сохраняется при compact\/fresh/)
+  assert.match(freshContext, /fresh не даёт blanket approval для новой независимой задачи или material change/)
+  assert.doesNotMatch(skill, obsoleteSolPermission)
 })
 
-test('Sol tool description and localDevelopment guidance do not reintroduce a confirmation gate', async t => {
+test('Sol tool description and localDevelopment preserve initial plan approval, not obsolete role permission', async t => {
   const f = await fixture(t)
   const description = f.tools.solTaskTool.description
-  assert.match(description, /explicit user request[^.]*Sol Worker[^.]*sufficient authorization/i)
-  assert.match(description, /do not ask[^.]*separate[^.]*ask_user_question[^.]*creat[^.]*continu/i)
-  assert.match(description, /follow-up[^.]*new tasks[^.]*workerSessionId[^.]*no additional[^.]*confirmation/i)
-  assert.match(description, /Never automatically escalate Luna to Sol/)
+  assert.match(description, /expensive Sol Worker/)
+  assert.match(description, /selected by Leader within an approved execution plan/)
+  assert.match(description, /No separate Sol role permission/)
+  assert.match(description, /preapproved conditional escalation and same-scope continuation need no repeated approval/)
+  assert.match(description, /unknown != complex/)
   const bridge = readFileSync(new URL('./postman-bridge.js', import.meta.url), 'utf8')
-  assert.match(bridge, /explicit user request[^.]*sufficient authorization[^.]*postman_sol_worker/i)
-  assert.match(bridge, /Do not ask[^.]*separate[^.]*ask_user_question[^.]*creat[^.]*continu/i)
-  assert.match(bridge, /follow-up[^.]*new tasks[^.]*workerSessionId[^.]*no additional[^.]*confirmation/i)
-  assert.match(bridge, /Never automatically escalate Luna to Sol/)
-  for (const text of [description, bridge]) {
-    assert.doesNotMatch(text, /(?:each|every new) separate task[^.\n]*(?:positive answer|ask_user_question)/i)
-  }
+  assert.match(bridge, /does not bypass initial execution-plan approval/)
+  assert.match(bridge, /Before approval: minimal necessary Leader read-only understanding only/)
+  assert.match(bridge, /material cost\/scope\/access\/destructive-operation\/transport changes: STOP -> revised plan -> approval/)
+  for (const text of [description, bridge]) assert.doesNotMatch(text, obsoleteSolPermission)
 })

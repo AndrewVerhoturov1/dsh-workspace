@@ -601,7 +601,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     const sol = workerType === 'sol', secretary = workerType === 'secretary'
     return defineTool({
       name: sol ? POSTMAN_SOL_WORKER_TOOL_NAME : secretary ? 'postman_secretary' : POSTMAN_WORKER_TOOL_NAME,
-      description: sol ? 'Only on an explicit user request: create or continue the one Sol Worker (GPT-6.1 Sol, xhigh). An explicit user request to use Sol Worker is sufficient authorization; do not ask a separate ask_user_question before creation or continuation. Follow-up and new tasks by workerSessionId require no additional user confirmation within the user-selected Sol route. Never automatically escalate Luna to Sol. Use workerSessionId for follow-up; createNew rejects a second Sol Worker. Acceptance is not completion.' :
+      description: sol ? 'Create or continue the one expensive Sol Worker (GPT-6.1 Sol, xhigh), selected by Leader within an approved execution plan. No separate Sol role permission; preapproved conditional escalation and same-scope continuation need no repeated approval. New non-trivial tasks require Leader routing decision, compact plan and explicit user approval before execution; material cost/scope/access/destructive-operation/transport changes stop for revised-plan approval. Choose the cheapest reliable route through the next meaningful decision boundary; unknown != complex, bounded cheap evidence when useful, direct Sol for obviously difficult local engineering/review. Use workerSessionId for follow-up; createNew rejects a second Sol. Acceptance is not completion.' :
         secretary ? 'Create or continue the exact singleton Secretary for this Leader task. FAST facts and private operational ledger, no PTC/delegation. Acceptance is not completion.' :
         'Create or continue a Postman Worker, up to two per exact parent (Leader or Sol Worker). FAST local execution without PTC/delegation. Acceptance is not completion.',
       parameters: Object.fromEntries(Object.entries(parameters).filter(([name]) =>
@@ -973,7 +973,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
   })
   const freshTool = defineTool({
     name: 'postman_worker_fresh',
-    description: 'Retire an exact owned settled child and spawn a fresh role-preserving Session for an explicit new assignment. No history inheritance or Git reset; Secretary ledger survives. Sol user-selected route is preserved.',
+    description: 'Retire an exact owned settled child and spawn a fresh role-preserving Session for an explicit new assignment. No history inheritance or Git reset; Secretary ledger survives. Approved-plan routing is preserved; fresh is not approval for a new independent outcome or material change.',
     parameters: { workerSessionId: { type: 'string', required: true }, task: { type: 'string', required: true }, hardBudget: parameters.hardBudget, rootObjectiveId: parameters.rootObjectiveId, newObjective: parameters.newObjective, label: { type: 'string' }, retireOwnedWorkers: { type: 'boolean' } }, output: output(),
     async execute(args, exec) {
       const parent = exec.agent
