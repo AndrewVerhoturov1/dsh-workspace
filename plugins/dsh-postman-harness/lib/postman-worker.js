@@ -360,7 +360,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
   }
   function taskText(context, text) {
     return context ? 'Use the existing task branch ' + context.branch + ' and worktree ' +
-      context.worktree + ' for repository changes; do not create another branch or worktree. Follow REPO_POLICY.md. ' +
+      context.worktree.replaceAll('\\', '/') + ' for repository changes; do not create another branch or worktree. Follow REPO_POLICY.md. ' +
       'Coordinate shared files and Git operations with your immediate parent; avoid overlapping changes. Assigned task: ' + text : text
   }
   async function taskWithGrant(parent, context, args) {
@@ -1024,13 +1024,14 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
         if (child.session?.header?.parentSession !== parent.id ||
             child.session.header.origin !== 'subagent' || child.session.header.delegationDepth !== depthOf(parent.id))
           return { status: 'POSTMAN_WORKER_COMPACT_NOT_RESIDENT', workerSessionId: id }
+        const compaction = child.ctx?.get?.('compaction') ?? ctx.agentPresets?.serviceFor(child, 'compaction')
         if (child.status !== 'idle' || child.inbox?.hasPending !== false ||
-            typeof child.ctx?.get?.('compaction')?.compactNow !== 'function')
+            typeof compaction?.compactNow !== 'function')
           return { status: 'POSTMAN_WORKER_COMPACT_BUSY', workerSessionId: id }
         try {
           // Native compactNow reserves Agent.runMaintenance synchronously before
           // any await, so accepted followups cannot run inside the compacted span.
-          const compacted = await child.ctx.get('compaction').compactNow(child, exec.signal)
+          const compacted = await compaction.compactNow(child, exec.signal)
           return { status: 'POSTMAN_WORKER_COMPACTED', workerSessionId: id,
             compacted: compacted !== null, sameSession: true }
         } catch (error) { return { status: 'POSTMAN_WORKER_COMPACT_FAILED', workerSessionId: id, diagnostic: diagnostic(error) } }

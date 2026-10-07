@@ -2,3 +2,5 @@ plugins/dsh-better-sidebar-andrew/lib/** -whitespace
 # Git patch context prefixes add a space before native tab indentation.
 system/patches/postman-native-cold-compact.patch whitespace=-space-before-tab
 system/patches/postman-native-lifecycle.patch whitespace=-space-before-tab
+system/patches/postman-native-close-only-upgrade.patch whitespace=-space-before-tab
+system/patches/postman-native-scoped-compact.patch whitespace=-space-before-tab

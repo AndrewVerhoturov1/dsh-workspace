@@ -530,6 +530,13 @@ them, or return them to the model/runtime as appropriate.
 
 Tool arguments and program results cross a bounded JSON boundary.
 
+Windows paths inside program source are JavaScript strings, not raw JSON tool arguments.
+Use forward slashes (C:/Users/...) or String.raw for an existing backslash path; never
+paste a Windows path with single backslashes into a quoted JS string. JSON.stringify
+when generating source also preserves paths. A nonexistent workdir can produce
+spawn pwsh.exe ENOENT even when the executable exists; do not infer environment drift
+or alter PATH from that diagnostic alone.
+
 Return explicit JSON-compatible data. Ordinary tools return objects, not iterable
 arrays: tools.read -> {lines:Array,totalLines}, tools.glob -> {paths:Array},
 tools.grep -> {matches:Array}. readAllText returns a string, readMany an array of
