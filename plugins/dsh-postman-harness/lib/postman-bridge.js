@@ -11,7 +11,7 @@ import { createPostmanBridgeJobs } from './postman-bridge-jobs.js'
 import { postmanTaskContexts, initializePostmanTaskContexts, releasePostmanTaskContexts } from './postman-task-context.js'
 import { sharedPostmanTaskRegistry, closeSharedPostmanTaskRegistry } from './postman-task-registry.js'
 import {
-  POSTMAN_BRIDGE_TOOL_ALLOWLIST, POSTMAN_BRIDGE_TOOL_NAME, POSTMAN_BRIDGE_STATUS_TOOL_NAME, POSTMAN_BRIDGE_LIST_TOOL_NAME, POSTMAN_BRIDGE_STOP_TOOL_NAME, POSTMAN_TEAM_STATUS_TOOL_NAME, POSTMAN_CHILD_NOTIFY_TOOL_NAME, POSTMAN_TASK_PREPARE_TOOL_NAME, POSTMAN_TASK_RESTORE_TOOL_NAME, POSTMAN_TASK_CLOSE_TOOL_NAME, POSTMAN_YIELD_TOOL_NAME,
+  POSTMAN_BRIDGE_TOOL_ALLOWLIST, POSTMAN_BRIDGE_TOOL_NAME, POSTMAN_BRIDGE_STATUS_TOOL_NAME, POSTMAN_BRIDGE_LIST_TOOL_NAME, POSTMAN_BRIDGE_STOP_TOOL_NAME, POSTMAN_TEAM_STATUS_TOOL_NAME, POSTMAN_CHILD_NOTIFY_TOOL_NAME, POSTMAN_TASK_PREPARE_TOOL_NAME, POSTMAN_TASK_RESTORE_TOOL_NAME, POSTMAN_TASK_CLOSE_TOOL_NAME,
   createPostmanBridgeBoundaryManager, isTopLevelPostmanSupervisor, isTopLevelPostmanPtcLeader,
   postmanBridgeCallerAllowed, postmanBridgeRestrictionForAgent, postmanPtcDirectCallGuard,
 } from './postman-bridge-core.js'
@@ -199,20 +199,6 @@ export function createPostmanTeamStatusTool(ctx, contexts, worker, jobs) {
   })
 }
 
-export function createPostmanYieldTool(ctx) {
-  return defineTool({
-    name: POSTMAN_YIELD_TOOL_NAME,
-    description: 'Finish only this active Leader turn without a user-facing final; wait for native report, failure, or user input.',
-    parameters: {}, output: output(),
-    execute(_args, exec) {
-      if (!authorized(exec, ctx)) return { status: 'POSTMAN_YIELD_CALLER_REJECTED' }
-      if (typeof exec.concludeTurn !== 'function') return { status: 'POSTMAN_YIELD_UNSUPPORTED' }
-      exec.concludeTurn()
-      return { status: 'POSTMAN_YIELDED', taskCompleted: false }
-    },
-  })
-}
-
 export function createPostmanChildNotifyTool(ctx, contexts, worker) {
   return defineTool({
     name: POSTMAN_CHILD_NOTIFY_TOOL_NAME,
@@ -230,8 +216,7 @@ export function createPostmanChildNotifyTool(ctx, contexts, worker) {
       const leader = ctx.agents.get(header.parentSession)
       if (!leader || leader.id !== header.parentSession || !(isTopLevelPostmanSupervisor(leader) || worker?.roleOf(leader) === 'sol') ||
           typeof leader.steer !== 'function' ||
-          !((contexts?.child(child.id) != null && contexts.child(child.id) === contexts.get(leader.id)) ||
-            worker?.ownsNotification(child, leader.id)))
+          !worker?.ownsNotification(child, leader.id))
         return { status: 'PARENT_NOTIFICATION_CALLER_REJECTED' }
       if (worker?.ownsNotification(child, leader.id) && !['NEEDS_LEADER_GUIDANCE:', 'NEEDS_PARENT_GUIDANCE:'].some(prefix => args.message.startsWith(prefix)))
         return { status: 'POSTMAN_WORKER_NOTIFICATION_REJECTED', diagnostic: 'Use NEEDS_PARENT_GUIDANCE: only when an immediate parent decision is needed now; keep FYI for report' }
@@ -291,6 +276,7 @@ export async function apply(ctx, config = {}) {
   const jobs = createPostmanBridgeJobs(ctx, coordinator, grants, postmanTaskContexts, worker)
   const ownsPtcWorker = agent => worker.roleOf(agent) === 'sol' && worker.ownsLiveWorker(agent) && Boolean(worker.ptcContextOf(agent))
   ptc = createPtcAdapter(ctx, { authorize: isTopLevelPostmanPtcLeader, workerContextOf: worker.ptcContextOf,
+    hasActiveWork: (agent, role) => worker.hasActiveWork(agent) || role === 'leader' && jobs.hasActiveWork(agent),
     resolveAssignment: (agent, leaderProfile) => isTopLevelPostmanPtcLeader(agent) ?
       { profile: leaderProfile, role: 'leader' } : ownsPtcWorker(agent) ? { profile: SOL_WORKER_PROFILE, role: 'sol' } : null })
   // Guard model-direct operations, not ordinary visibility: nested PTC calls carry the outer token.
@@ -313,7 +299,6 @@ export async function apply(ctx, config = {}) {
   ctx.tools.register(worker.freshTool)
   ctx.tools.register(worker.interruptTool)
   ctx.tools.register(worker.stopTool)
-  ctx.tools.register(createPostmanYieldTool(ctx))
   installPostmanWorkerReportObserver(ctx, worker)
   ctx.tools.register(worker.listTool)
   ctx.tools.register(worker.compactTool)

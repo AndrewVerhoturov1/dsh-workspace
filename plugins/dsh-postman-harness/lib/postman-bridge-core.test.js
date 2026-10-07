@@ -82,7 +82,6 @@ test('bridge request pins Luna, spawn, depth and exact message', () => {
     'postman_send_current_turn',
     'postman_current_turn_status',
     'postman_ask_validate_reply',
-    'notify_parent',
   ])
   assert.equal(request.prompt.length, 1)
   assert.equal(request.prompt[0].type, 'text')
@@ -102,6 +101,8 @@ test('image bridge keeps exact prompt and image-only mode', () => {
 
 test('bridge persona keeps Luna mechanical and branches text handoff by delivery mode', () => {
   assert.match(POSTMAN_BRIDGE_PERSONA, /minimal one-shot transport subagent/)
+  assert.doesNotMatch(POSTMAN_BRIDGE_PERSONA, /notify_parent/)
+  assert.match(POSTMAN_BRIDGE_PERSONA, /Host delivers terminal POSTMAN_BRIDGE_READY/)
   assert.match(POSTMAN_BRIDGE_PERSONA, /skill\(delegate-via-postman-ask\)/)
   assert.match(POSTMAN_BRIDGE_PERSONA, /skill\(delegate-via-postman-image\)/)
   assert.match(POSTMAN_BRIDGE_PERSONA, /Native ChatGPT attachment is the primary input-file transport/)
@@ -215,13 +216,13 @@ test('bridge authorization and visibility are limited to exact top-level Postman
   assert.deepEqual(POSTMAN_LEADER_TOOL_ALLOWLIST, [
     'ask_user_question', 'todo_write', 'exit_plan_mode', 'create_goal', 'get_goal', 'update_goal',
     'read', 'read_image', 'grep', 'skill', 'web_fetch', 'postman_task_prepare', 'postman_task_restore', 'postman_task_close', 'postman_input_files',
-    'postman_bridge', 'postman_bridge_status', 'postman_bridge_list', 'postman_bridge_stop', 'postman_team_status', 'postman_worker', 'postman_sol_worker', 'postman_worker_interrupt', 'postman_worker_stop', 'postman_yield', 'postman_worker_list', 'postman_worker_compact', 'postman_worker_fresh', 'postman_secretary', 'postman_secretary_ledger',
+    'postman_bridge', 'postman_bridge_status', 'postman_bridge_list', 'postman_bridge_stop', 'postman_team_status', 'postman_worker', 'postman_sol_worker', 'postman_worker_interrupt', 'postman_worker_stop', 'postman_worker_list', 'postman_worker_compact', 'postman_worker_fresh', 'postman_secretary', 'postman_secretary_ledger',
   ])
-  assert.equal(POSTMAN_LEADER_TOOL_ALLOWLIST.length, 30)
-  assert.equal(new Set(POSTMAN_LEADER_TOOL_ALLOWLIST).size, 30)
+  assert.equal(POSTMAN_LEADER_TOOL_ALLOWLIST.length, 29)
+  assert.equal(new Set(POSTMAN_LEADER_TOOL_ALLOWLIST).size, 29)
   assert.deepEqual(POSTMAN_LEADER_ONLY_TOOL_NAMES, [
     'postman_task_prepare', 'postman_task_restore', 'postman_task_close', 'postman_input_files', 'postman_bridge', 'postman_bridge_status', 'postman_bridge_list', 'postman_bridge_stop', 'postman_team_status',
-    'postman_worker', 'postman_sol_worker', 'postman_worker_interrupt', 'postman_worker_stop', 'postman_yield', 'postman_worker_list', 'postman_worker_compact', 'postman_worker_fresh', 'postman_secretary', 'postman_secretary_ledger',
+    'postman_worker', 'postman_sol_worker', 'postman_worker_interrupt', 'postman_worker_stop', 'postman_worker_list', 'postman_worker_compact', 'postman_worker_fresh', 'postman_secretary', 'postman_secretary_ledger',
   ])
   assert.deepEqual(postmanBridgeRestrictionForAgent(leader), {
     allow: [...POSTMAN_LEADER_TOOL_ALLOWLIST, POSTMAN_PTC_TOOL_NAME],
@@ -251,7 +252,7 @@ test('direct PTC guard applies only to exact top-level pilot and never nested di
   const delegated = parent({agentPreset:'postman-leader-ptc',origin:'subagent',delegationDepth:1})
   const current = new Map([[pilot.id,pilot]])
   const check = (agent,name,parentToken) => postmanPtcDirectCallGuard({agent,name,parent:parentToken}, id=>current.get(id))
-  assert.equal(POSTMAN_PTC_ONLY_LEADER_TOOLS.length,26)
+  assert.equal(POSTMAN_PTC_ONLY_LEADER_TOOLS.length,25)
   for (const name of POSTMAN_PTC_ONLY_LEADER_TOOLS) {
     assert.match(check(pilot,name),/POSTMAN_PTC_DIRECT_CALL_REJECTED/)
     assert.equal(check(pilot,name,{}),undefined)

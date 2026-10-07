@@ -18,7 +18,7 @@ import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
 import { apply as applyGoal } from '@deepseek-ai/dsh-tool-goal'
 import { applyWebFetchTool } from '@deepseek-ai/dsh-tool-web'
 const output = { schema: { type:'object', additionalProperties:true }, render: (_a, value) => [{type:'text',text:JSON.stringify(value)}] }
-function fixture(dir, { real = false, readMaxBytes = 51200, runtime, resolveAssignment, workerContextOf } = {}) {
+function fixture(dir, { real = false, readMaxBytes = 51200, runtime, resolveAssignment, workerContextOf, hasActiveWork } = {}) {
   const ctx = new Context()
   ctx.systemPrompt = { tools() {}, section() { return () => {} } }
   new ToolRuntime(ctx)
@@ -45,7 +45,7 @@ function fixture(dir, { real = false, readMaxBytes = 51200, runtime, resolveAssi
   // Register inert names so the real registry can validate the full preset restriction.
   for (const name of postmanBridgeRestrictionForAgent({session:{header:{agentPreset:'postman-leader-ptc'}}}).allow)
     if (name !== 'ptc_execute' && !ctx.tools.get(name)) ctx.tools.register(defineTool({name,description:name,parameters:{},output,async execute(){return {name}}}))
-  const adapter = createPtcAdapter(ctx,{authorize:isTopLevelPostmanPtcLeader, runtime, resolveAssignment, workerContextOf})
+  const adapter = createPtcAdapter(ctx,{authorize:isTopLevelPostmanPtcLeader, runtime, resolveAssignment, workerContextOf, hasActiveWork})
   ctx.tools.register(adapter.tool)
   function agent(id,preset='postman-leader-ptc',extra={}) {
     const events = [], sections = [], diagnostics = []
@@ -895,5 +895,22 @@ test('Stage 3.5B Sol actual nested failure/pending/abort/revocation never auto-c
     const r=await pending;assert.equal(!!r.concludesTurn,false);assert.equal(f.diagnostics.at(-1).data.yieldApplied,false)
     stop()
   }
+})
+
+test('existing Host wake source never bypasses runtime/effect/abort/revocation checks', async t => {
+  let terminal, revoked=false
+  const f=fixture(process.cwd(),{hasActiveWork:()=>true,runtime:{async run(){if(revoked)f.adapter.remove(a);return terminal},async dispose(){}}})
+  const {a}=f.agent('existing-safety');f.adapter.refresh(a);t.after(()=>f.adapter.dispose())
+  const safe={status:'ok',value:{},effects:{calls:[],completed:0,pending:0,failed:0}}
+  const invoke=(controller=new AbortController())=>f.ctx.tools.execute({agent:a,name:'ptc_execute',arguments:{program:'return {}',description:'Wait only on exact proven work',boundary:'external_event'},callId:'existing',signal:controller.signal})
+  for(terminal of [{status:'runtime-error'},{status:'cancelled'},{status:'limit-exceeded'},
+    {...safe,cleanupError:{}},{...safe,value:{needsModelDecision:true}},
+    {...safe,effects:undefined},{...safe,effects:{...safe.effects,pending:1}},
+    {...safe,effects:{...safe.effects,failed:1}}, {...safe,effects:{...safe.effects,calls:[{name:'read',callId:'stale',state:'completed'}],completed:1}}]) {
+    assert.notEqual((await invoke()).concludesTurn,true,JSON.stringify(terminal))
+  }
+  terminal=safe;assert.equal((await invoke()).concludesTurn,true)
+  const aborted=new AbortController();aborted.abort();assert.notEqual((await invoke(aborted)).concludesTurn,true)
+  revoked=true;assert.notEqual((await invoke()).concludesTurn,true)
 })
 

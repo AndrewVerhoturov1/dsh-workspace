@@ -447,6 +447,14 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
       !['TERMINAL', 'FAILED', 'INTERRUPTED'].includes(job.state))
   }
 
+  function hasActiveWork(parent) {
+    if (disposed || ctx.agents.get(parent?.id) !== parent || !isTopLevelPostmanSupervisor(parent)) return false
+    return [...jobs.values()].some(job => job.parentSessionId === parent.id &&
+      (!contexts || contexts.get(parent.id) === job.taskContext) &&
+      ['QUEUED', 'STARTING', 'RUNNING'].includes(job.state) && job.completion &&
+      !job.finishedAt && !job.controller.signal.aborted && job.notification === 'PENDING')
+  }
+
   async function status(parent, bridgeJobId, retrySync = false, recover = false) {
     let job = jobs.get(bridgeJobId)
     if (!job) {
@@ -701,5 +709,5 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     jobs.clear()
   }
 
-  return { accept, status, list, teamSnapshot, stop, hasActive, dispose }
+  return { accept, status, list, teamSnapshot, stop, hasActive, hasActiveWork, dispose }
 }

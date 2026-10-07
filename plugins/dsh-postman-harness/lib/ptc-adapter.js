@@ -43,7 +43,7 @@ const output = {
 
 // Ownership of this runtime is the owning plugin, never an individual program.
 // resolveAssignment is trusted Host code; the model cannot choose its profile or role.
-export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerContextOf, profile = LEADER_SUPERVISOR_PROFILE, runtime = createPtcRuntime() }) {
+export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerContextOf, hasActiveWork, profile = LEADER_SUPERVISOR_PROFILE, runtime = createPtcRuntime() }) {
   function supervisorProfile(value) {
     const checked = validatePtcProfile(value)
     if (checked.tools.some(name => !POSTMAN_PTC_ONLY_LEADER_TOOLS.includes(name))) throw new TypeError('PTC supervisor profile tool not allowed')
@@ -192,7 +192,7 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
       program: { type: 'string', required: true, description: 'One async-function body with explicit JSON return. No imports, Node or persistent state.' },
       description: { type: 'string', required: true, description: 'Phase goal + stop reason, not an individual tool call; include all already-known safe mechanics before that boundary.' },
       boundary: { type: 'string', required: true, enum: BOUNDARIES, description: 'Next genuine decision boundary; encode all safe deterministic work before it in this program.' },
-      yield_on_success: { type: 'boolean', description: 'Compatibility flag. Leader/Sol external_event automatically concludes after safe exact role-permitted accepted dispatch, even when omitted or false.' },
+      yield_on_success: { type: 'boolean', description: 'Compatibility flag. Leader/Sol external_event automatically concludes after safe exact role-permitted accepted dispatch or proven existing active work, even when omitted or false.' },
       language: { type: 'string', enum: ['javascript', 'typescript'], description: 'JavaScript by default; TypeScript supports erasable syntax only.' },
     }, output,
     async execute(args, exec) {
@@ -320,7 +320,7 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
           nestedFailed ? 'nested-failure' : acceptanceFailed ? 'acceptance-not-confirmed' :
           !allCompleted || unknownEffect ? 'effects-not-confirmed' :
           result.value?.needsModelDecision ? 'model-decision-requested' :
-          autoConclude && !eventAccepted && !nestedConclude ? 'no-accepted-producer' : undefined
+          autoConclude && !eventAccepted && !nestedConclude && hasActiveWork?.(agent, record.role) !== true ? 'no-accepted-producer' : undefined
         if ((autoConclude || nestedConclude) && !yieldBlockedReason) {
           exec.concludeTurn()
           stagedConclusions.set(exec, record)

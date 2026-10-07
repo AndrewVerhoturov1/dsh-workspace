@@ -4,7 +4,6 @@ import test from 'node:test'
 const cutoffUnavailable = 'BLOCKED: runtime has no exact-child admission cutoff'
 import { createMemoryTaskRegistry } from './postman-task-registry.js'
 import { createPostmanWorkerTools } from './postman-worker.js'
-import { createPostmanYieldTool } from './postman-bridge.js'
 function fixture({ localDevelopment = false } = {}) {
   const registry = createMemoryTaskRegistry()
   const leader = { id: 'leader', session: { header: { agentPreset: 'postman-leader', delegationDepth: 0 }, events: [] } }
@@ -217,16 +216,6 @@ test('close with managed descendant refuses before drain and retains mapping', a
   f.leader.session.events.push({ type: 'user/message', data: { id: 'report-id', source: { kind: 'subagent-report', senderSessionId: id } } })
   f.ctx.subagents.listDescendants = async () => [{ kind: 'child', mode: 'continuable', id: 'nested', activity: 'running' }]
   assert.equal((await f.tools.stopTool.execute({}, f.exec)).status, 'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT')
-  assert.equal(f.registry.get('leader').workers[id].id, id)
-  assert.deepEqual(f.calls.drains, [])
-})
-test('yield invokes Host concludeTurn only for live Leader without changing Worker mapping', async () => {
-  const f = fixture(); const id = await start(f)
-  const yieldTool = createPostmanYieldTool(f.ctx)
-  let concluded = 0
-  assert.equal((await yieldTool.execute({}, { agent: f.leader, concludeTurn: () => concluded++ })).status, 'POSTMAN_YIELDED')
-  assert.equal(concluded, 1)
-  assert.equal((await yieldTool.execute({}, { agent: f.leader })).status, 'POSTMAN_YIELD_UNSUPPORTED')
   assert.equal(f.registry.get('leader').workers[id].id, id)
   assert.deepEqual(f.calls.drains, [])
 })
