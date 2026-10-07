@@ -144,7 +144,7 @@ _DOM_CANDIDATE_JS = r"""
   const candidates = [];
   for (const el of root.querySelectorAll('a[href], button, [role="button"], [download]')) {
     if (!visible(el)) continue;
-    const visibleLabel = normalize(el.textContent);
+    const visibleLabel = normalize(el.innerText);
     if (visibleLabel !== expectedFilename) continue;
     const betweenMarkers = beginRanges.length === 1 && endRanges.length === 1 &&
       between(beginRanges[0], el, endRanges[0]);
