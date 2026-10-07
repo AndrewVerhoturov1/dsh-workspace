@@ -1,5 +1,8 @@
 import base64
+from contextlib import redirect_stdout
 import hashlib
+import io
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -133,6 +136,22 @@ class InputFilesTest(unittest.TestCase):
             sensitive = Path(tmp) / "settings.yaml"; sensitive.write_text("secret")
             with self.assertRaises(input_files.InputStageError):
                 publisher.stage([str(sensitive)])
+
+    def test_private_stage_sensitive_ancestor_returns_status_without_materialization(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            allowed = root / "source.js"; allowed.write_bytes(b"selected source")
+            blocked = root / "node_modules" / "index.js"
+            blocked.parent.mkdir(); blocked.write_bytes(b"dependency source")
+            snapshots = root / "snapshots"; snapshots.mkdir()
+            with self.assertRaisesRegex(input_files.InputStageError, "^POSTMAN_INPUT_SENSITIVE_PATH_REJECTED$"):
+                input_files.selected_file(str(blocked))
+            output = io.StringIO()
+            with redirect_stdout(output):
+                code = input_files.main(["--stage", str(allowed), str(blocked), "--snapshot-dir", str(snapshots)])
+            self.assertEqual(code, 1)
+            self.assertEqual(json.loads(output.getvalue()), {"error": "POSTMAN_INPUT_SENSITIVE_PATH_REJECTED"})
+            self.assertEqual(list(snapshots.iterdir()), [])
 
 
 if __name__ == "__main__":
