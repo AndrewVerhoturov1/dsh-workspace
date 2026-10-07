@@ -10,15 +10,32 @@ const workerLifecycle = z.object({ version: z.literal(1),
 
 export const POSTMAN_TASK_DOMAIN = defineDomain({
   name: 'postman_task_registry', version: 1,
-  tables: { leaders: domainTable(z.object({
+  tables: { leaders: domainTable(z.preprocess(value => {
+    // Existing v1 storage contains the removed team budget. Discard only its
+    // fields so assignment budgets and unrelated strict row contracts survive.
+    if (!value || typeof value !== 'object') return value
+    const { objectives, ...row } = value
+    const stripBudget = budget => {
+      if (!budget || typeof budget !== 'object' || !Object.hasOwn(budget, 'rootObjectiveId')) return budget
+      const { rootObjectiveId, ...assignment } = budget
+      // A stored exhaustion caused by the old team cap is not assignment exhaustion.
+      return { ...assignment, exhausted: assignment.used >= assignment.hardLimit }
+    }
+    const stripWorker = worker => {
+      if (!worker || typeof worker !== 'object') return worker
+      return { ...worker, ...(worker.budget ? { budget: stripBudget(worker.budget) } : {}),
+        ...(worker.pendingBudgets ? { pendingBudgets: Object.fromEntries(Object.entries(worker.pendingBudgets).map(([id, budget]) => [id, stripBudget(budget)])) } : {}) }
+    }
+    if (row.workers) row.workers = Object.fromEntries(Object.entries(row.workers).map(([id, worker]) => [id, stripWorker(worker)]))
+    if (Array.isArray(row.retiredWorkers)) row.retiredWorkers = row.retiredWorkers.map(stripWorker)
+    return row
+  }, z.object({
     leaderSessionId: z.string().min(1), repository: z.string(), repositoryPath: z.string(),
     originUrl: z.string(), baseCommit: z.string(), branch: z.string(), worktree: z.string(),
     stage: z.enum(['intent', 'worktree', 'ready', 'uncertain', 'closed']),
     diagnostic: z.string().nullable(),
     closedAt: z.string().optional(),
     retiredTasks: z.array(z.unknown()).optional(),
-    objectives: z.record(z.string(), z.object({ id: z.string(), ownerSessionId: z.string(),
-      objective: z.string(), used: z.number().int().nonnegative(), cap: z.literal(48) }).strict()).optional(),
     // Optional on disk so v1 rows can be validated before their in-place migration.
     worker: z.object({ id: z.string().min(1), state: z.enum(['intent', 'ready', 'uncertain', 'stopping']),
       delivery: z.enum(['none', 'pending', 'unknown']),
@@ -29,8 +46,7 @@ export const POSTMAN_TASK_DOMAIN = defineDomain({
       pendingBudgets: z.record(z.string(), z.unknown()).optional(),
       budget: z.object({ assignmentId: z.string(), task: z.string(), used: z.number().int().nonnegative(),
         softLimit: z.number().int().positive(), hardLimit: z.number().int().positive(),
-        exhausted: z.boolean(), notified: z.boolean(), reported: z.boolean(),
-        rootObjectiveId: z.string().optional() }).optional(),
+        exhausted: z.boolean(), notified: z.boolean(), reported: z.boolean() }).optional(),
       state: z.enum(['intent', 'ready', 'uncertain', 'stopping']),
       delivery: z.enum(['none', 'pending', 'unknown']),
       artifactRequests: z.array(z.string()), lifecycle: workerLifecycle.optional(),
@@ -60,7 +76,7 @@ export const POSTMAN_TASK_DOMAIN = defineDomain({
       grantDiagnostic: z.string().optional(),
       cancellationRequested: z.boolean().optional(),
     })).optional(),
-  }).strict()) },
+  }).strict())) },
 })
 
 // Both Cordis entrypoints share this one ready promise. The owner closes the
@@ -100,27 +116,6 @@ export async function openPostmanTaskRegistry(storageDomain) {
       const workers = table.get(id)?.workers
       if (!workers || Object.entries(workers).some(([key, value]) => key !== value.id))
         throw new Error('POSTMAN_TASK_WORKER_BINDING_INVALID: ' + id)
-      if ([...Object.values(workers), ...(table.get(id).retiredWorkers ?? [])].some(worker => worker.workerType !== 'sol' && !worker.budget?.rootObjectiveId))
-        await table.update(id, current => {
-          const objectives = { ...(current.objectives ?? {}) }, migrated = { ...current.workers }, retired = [...(current.retiredWorkers ?? [])]
-          for (const worker of [...Object.values(migrated), ...retired]) {
-            if (worker.workerType === 'sol' || worker.budget?.rootObjectiveId) continue
-            const ownerSessionId = worker.ownerSessionId ?? id, rootId = 'legacy:' + ownerSessionId
-            // Previous assignment costs were not recorded cumulatively. Refuse
-            // refinancing when the old audit cannot prove a remaining allowance.
-            const history = [...Object.values(current.workers), ...(current.retiredWorkers ?? [])]
-              .filter(w => (w.ownerSessionId ?? id) === ownerSessionId && w.workerType !== 'sol')
-            const unknown = history.some(w => !w.budget || (w.lifecycle?.admissions?.length ?? 0) > 1)
-            const used = Math.min(48, unknown ? 48 : history.reduce((sum, w) => sum + w.budget.used, 0))
-            objectives[rootId] ??= { id: rootId, ownerSessionId, objective: 'Legacy unresolved objective', used, cap: 48 }
-            const next = { ...worker,
-              ...(worker.budget ? { budget: { ...worker.budget, rootObjectiveId: rootId } } : {}),
-              ...(worker.pendingBudgets ? { pendingBudgets: Object.fromEntries(Object.entries(worker.pendingBudgets).map(([key, b]) => [key, { ...b, rootObjectiveId: rootId }])) } : {}) }
-            if (Object.hasOwn(migrated, worker.id)) migrated[worker.id] = next
-            else retired[retired.indexOf(worker)] = next
-          }
-          return { ...current, workers: migrated, ...(current.retiredWorkers ? { retiredWorkers: retired } : {}), objectives }
-        })
     }
     const creating = new Set()
     return {

@@ -35,7 +35,7 @@ postman_secretary_ledger — Host-private durable ledger exact Leader/task, не
 
 ## FAST budget / synthesis
 
-gpt-6-luna / low, Stage 3 hardBudget:15 / Host soft12. Latest baseline configurable/default16 и cumulative root cap48 сохраняются; lifecycle не обнуляет root расход. Не обходи бюджет/не считай turns сам. Не повторяй PASS без changed inputs.
+gpt-6-luna / low, Stage 3 hardBudget:15 / Host soft12. Runtime configurable8..24/default16 сохраняется. Budget только твоего assignment, независим от Workers; compact/cold resume сохраняют его. Не обходи бюджет/не считай turns сам. Не повторяй PASS без changed inputs.
 
 Soft warning → no new discovery branch, не расширяй scope, синтезируй already obtained facts, finish либо precise blocker. Near hard limit → только NEEDS_PARENT_GUIDANCE + established facts, attempts, exact blocker, specific decision/help needed, options; не дополнительные glob/grep.
 
