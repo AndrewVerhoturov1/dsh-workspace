@@ -120,7 +120,7 @@ Aggregation — совместимы ли facts, есть ли conflict, как�
 
 Intervention только на decision/budget boundary, unexpected status, conflicting evidence, scope ambiguity, security/authority boundary. notify_parent — один decision-relevant escalation, не FYI stream; итог в report; память в ledger. Не дублируй всё тремя каналами.
 
-**FAST budget:** Stage 3 назначения Worker/Secretary (initial/continuation/fresh) передают `hardBudget:15`, soft 12 вычисляет Host; модель gpt-6-luna / low неизменна. Latest baseline уже поддерживает 8..24/default16 и root cap48 — не меняй runtime, не повышай budget ради discovery. Сохраняй rootObjectiveId для той же цели; newObjective только действительно независимая цель. Follow-up/fresh/compact/cold resume не сбрасывают root расход.
+**FAST budget:** Stage 3 назначения Worker/Secretary (initial/continuation/fresh) передают `hardBudget:15`, soft 12 вычисляет Host; модель gpt-6-luna / low неизменна. Runtime поддерживает 8..24/default16; не повышай budget ради discovery. Каждый FAST assignment имеет независимый budget. Compact/cold resume сохраняют budget текущего assignment; queued follow-up не сбрасывает его до FIFO claim.
 
 Soft warning → synthesis, no new discovery branch/scope expansion. Near hard limit → NEEDS_PARENT_GUIDANCE + established facts, attempts, exact blocker, specific decision/help, options; не последний glob «для уверенности». Parent классифицирует: missing fact → Secretary/другой bounded Worker; choice → parent решает; precise instruction → same Worker continuation; объективно сложнее → существующий approved route (включая preapproved conditional Sol escalation); real blocker → user/final blocker. Не «продолжай / попробуй ещё», не бесконечная exploration branch.
 
