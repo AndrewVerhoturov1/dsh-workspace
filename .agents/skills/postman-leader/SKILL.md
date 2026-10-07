@@ -38,7 +38,7 @@ Production `postman-leader` и compatibility `postman-leader-ptc` — один P
 
 ## 3. Execution graph
 
-Перед существенным dispatch мысленно классифицируй небольшой DAG: DECISION, FACT, IMPLEMENTATION, MECHANICAL_VERIFY, USER_VISIBLE_VERIFY, EXTERNAL_RESEARCH, TRANSPORT, USER_INPUT. Ребро означает настоящий prerequisite, не привычный порядок tools.
+Перед существенным dispatch мысленно классифицируй небольшой DAG: DECISION, FACT, IMPLEMENTATION, MECHANICAL_VERIFY, USER_VISIBLE_VERIFY, EXTERNAL_RESEARCH, TRANSPORT, USER_INPUT. Ребро означает настоящий prerequisite, не привычный порядок tools. **Dependency provenance:** нельзя придумывать prerequisite/dependency edge без конкретного названного источника: data dependency, shared mutable worktree/resource, shared authority, shared exact quota/slot, explicit runtime contract, security constraint или explicit user requirement. Источник нельзя назвать → tasks are independent → do not serialize them. Uncertain Sol занимает только Sol slot; независимые Bridge/PostmanAsk/PostmanImage authority/quota не становятся его prerequisites.
 
 Пример: FACT affected files → DECISION fix → IMPLEMENTATION → параллельные MECHANICAL_VERIFY tests / USER_VISIBLE_VERIFY browser → DECISION review → FINAL. Запускай блокирующие cheap nodes первыми. Не трать дорогой Leader/Sol turn на todo, FYI, ledger или необязательные reads, пока independent critical-path work не dispatched.
 
@@ -88,7 +88,7 @@ PTC закрывает **sufficient acceptance evidence**, не максимал
 ```js
 const r = await tools.postman_worker_compact({workerSessionId})
 if (r.status === 'POSTMAN_WORKER_COMPACTED') {
-  return await tools.postman_worker_interrupt({workerSessionId, task, hardBudget:15})
+  return await tools.postman_worker_interrupt({workerSessionId, task, hardBudget:60})
 }
 if (r.status === 'POSTMAN_WORKER_COMPACT_NOT_RESIDENT') {
   return {needsModelDecision:true, reason:'compact_not_resident', evidence:r}
@@ -120,13 +120,15 @@ Aggregation — совместимы ли facts, есть ли conflict, как�
 
 Intervention только на decision/budget boundary, unexpected status, conflicting evidence, scope ambiguity, security/authority boundary. notify_parent — один decision-relevant escalation, не FYI stream; итог в report; память в ledger. Не дублируй всё тремя каналами.
 
-**FAST budget:** Stage 3 назначения Worker/Secretary (initial/continuation/fresh) передают `hardBudget:15`, soft 12 вычисляет Host; модель gpt-6-luna / low неизменна. Runtime поддерживает 8..24/default16; не повышай budget ради discovery. Каждый FAST assignment имеет независимый budget. Compact/cold resume сохраняют budget текущего assignment; queued follow-up не сбрасывает его до FIFO claim.
+**FAST budget:** Substantial FAST assignment → normal `hardBudget:60` / Host `softLimit:48`; obviously small bounded assignment (exact fact, small synthesis, one targeted verification, known mechanical correction) → parent may choose a smaller valid budget. Runtime 8..60/default60. Каждый assignment полностью независим; расход не суммируется в team/root/objective quota. Compact/cold resume сохраняют текущий budget; queued follow-up получает новый только при FIFO claim. Модель gpt-6-luna / low неизменна.
 
 Soft warning → synthesis, no new discovery branch/scope expansion. Near hard limit → NEEDS_PARENT_GUIDANCE + established facts, attempts, exact blocker, specific decision/help, options; не последний glob «для уверенности». Parent классифицирует: missing fact → Secretary/другой bounded Worker; choice → parent решает; precise instruction → same Worker continuation; объективно сложнее → существующий approved route (включая preapproved conditional Sol escalation); real blocker → user/final blocker. Не «продолжай / попробуй ещё», не бесконечная exploration branch.
 
 Secretary ledger содержит только goal, established facts, decisions, active executors/assignments, verified results + inputs, blockers, critical path, next meaningful step. Update после существенного decision/path/result, перед long external wait или cleanup при необходимости; известное поручение update включай в ту же PTC phase, не отдельный дорогой round. Только Secretary записывает private ledger exact revision; Leader читает postman_secretary_ledger. Не tool-call journal, full reports/logs или дубликат docs; repo flush только explicit assignment.
 
 Перед task_complete: outcome выполнен? critical evidence есть? blocker отсутствует? PASS/PARTIAL/BLOCKED/FAILED различены? baseline failures классифицированы? unverified browser/dependency missing/external unavailable не PASS. Не «all tests pass» при baseline failures. Финальный ответ: сделано, проверено, осталось, важный blocker — не лог оркестрации. Единый итог ждёт всех нужных результатов; status-only сообщения не нужны.
+
+Перед повторным assignment тому же Worker parent обязан назвать: **Already established:** полученное evidence; **Still needed:** один конкретный новый факт / verification / mechanical result исходной задачи; **Next decision boundary:** какое решение станет возможно. Близость к hard limit сама по себе не основание для full assignment. Vague «continue investigating / look more / check everything else / do another pass» без named missing result запрещены. Evidence достаточно → synthesize / decide / implement / verify, не новое discovery. Arbitrary continuation counters не вводятся.
 
 ## 9. Lifecycle
 
@@ -138,9 +140,11 @@ Secretary ledger содержит только goal, established facts, decision
 | Finished, no longer useful | close/retire safely settled binding |
 | Must terminate unfinished/obsolete work | explicit cancel, без обещания success/rollback |
 
+**Existing settled Sol + approved new big task → compact first.** Если Sol уже существует и предыдущая работа settled, перед новым substantial/big assignment Leader обязан вызвать postman_worker_compact(exact Sol), проверить известный status и только после POSTMAN_WORKER_COMPACTED назначить работу. Newly created Sol специально для этой задачи → assignment directly, no compact first. Same big task continuation → normally continue; no mandatory compact each turn. Полностью clean visible context действительно нужен → existing fresh semantics, не новый clean tool и не автоматическая замена compact. Compact/fresh — execution mechanics approved plan, без отдельного approval при неизменных scope/cost/access.
+
 Не делай lifecycle ради демонстрации. Нужна реальная проблема: context bloat, unrelated assignment, freeing quota, obsolete work. Перед compaction/fresh/long wait milestone state должен быть ясен.
 
-`postman_worker({task,createNew:true,hardBudget:15})` создаёт direct ordinary Worker при свободном slot; существующий mapping не запрещает `createNew:true`. Exact workerSessionId для controls, без ID только однозначная binding; POSTMAN_WORKER_TARGET_REQUIRED при ambiguity. Новый trusted artifact REQ → postman_worker({task,workerSessionId,artifactRequestId,hardBudget:15}); Secretary не принимает artifactRequestId. Sol создаётся/продолжается только postman_sol_worker({task,workerSessionId?,artifactRequestId?}). Report не закрывает binding; list idle не успех.
+`postman_worker({task,createNew:true,hardBudget:60})` создаёт direct ordinary Worker при свободном slot; существующий mapping не запрещает `createNew:true`. Exact workerSessionId для controls, без ID только однозначная binding; POSTMAN_WORKER_TARGET_REQUIRED при ambiguity. Новый trusted artifact REQ → postman_worker({task,workerSessionId,artifactRequestId,hardBudget:60}); Secretary не принимает artifactRequestId. Sol создаётся/продолжается только postman_sol_worker({task,workerSessionId?,artifactRequestId?}). Report не закрывает binding; list idle не успех.
 
 Compact сохраняет continuity; latest native cold compact работает для proven settled history, не запускает assignment; known refusal ветвится явно. Fresh требует safely settled binding; не Git reset/delete audit. Approved plan сохраняется при compact/fresh: повторное confirmation для продолжения не требуется; fresh не даёт blanket approval для новой независимой задачи или material change.
 

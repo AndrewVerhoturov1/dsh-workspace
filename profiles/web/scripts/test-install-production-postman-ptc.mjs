@@ -33,7 +33,7 @@ try {
     resolve(stagingRoot, 'profiles/web/scripts/install-production.mjs'))
 
   // Include the current role implementation and canonical sources before commit.
-  for (const source of ['plugins/dsh-postman-harness/README.md','docs/subprojects/ptc/PTC_CONTRACT.md','docs/subprojects/postman/SUBPROJECT.md','postman/POSTMAN_BRIDGE_FLOW.md'])
+  for (const source of ['plugins/dsh-postman-harness/README.md','docs/subprojects/ptc/PTC_CONTRACT.md','docs/subprojects/ptc/SUBPROJECT.md','docs/subprojects/postman/SUBPROJECT.md','docs/workflow/TASK_CONTRACT.md','postman/POSTMAN_BRIDGE_FLOW.md'])
     copyFileSync(resolve(repositoryRoot,source),resolve(stagingRoot,source))
   cpSync(resolve(repositoryRoot,'plugins/dsh-postman-harness/lib'),resolve(stagingRoot,'plugins/dsh-postman-harness/lib'),{recursive:true})
   for (const name of ['package.json','pnpm-lock.yaml'])
@@ -42,7 +42,7 @@ try {
     cpSync(resolve(repositoryRoot,'.agents/skills',role),resolve(stagingRoot,'.agents/skills',role),{recursive:true})
   for(const preset of ['postman-leader','postman-leader-ptc'])
     cpSync(resolve(repositoryRoot,'.agent-presets',preset),resolve(stagingRoot,'.agent-presets',preset),{recursive:true})
-  for(const name of ['postman-native-child-cutoff.patch','postman-native-cold-compact.patch'])
+  for(const name of ['postman-native-child-cutoff.patch','postman-native-cold-compact.patch','postman-native-lifecycle.patch'])
     copyFileSync(resolve(repositoryRoot,'system/patches',name),resolve(stagingRoot,'system/patches',name))
   copyFileSync(resolve(repositoryRoot,'system/patches/apply-postman-native-child-cutoff.mjs'),resolve(stagingRoot,'system/patches/apply-postman-native-child-cutoff.mjs'))
   const pluginRoot = resolve(stagingRoot, 'plugins/dsh-postman-harness')
@@ -76,6 +76,8 @@ try {
   mkdirSync(resolve(upgradeStage,upgradeRelative,'..'),{recursive:true})
   copyFileSync(subagentTarget.path,resolve(upgradeStage,upgradeRelative))
   const upgradePatch = resolve(upgradeStage,'upgrade.patch')
+  writeFileSync(upgradePatch,readFileSync(resolve(stagingRoot,'system/patches/postman-native-lifecycle.patch'),'utf8').replaceAll('\r',''))
+  run('git',['-c','core.longpaths=true','apply','--reverse',upgradePatch],upgradeStage,{...process.env,GIT_CEILING_DIRECTORIES:stagingRoot})
   writeFileSync(upgradePatch,readFileSync(resolve(stagingRoot,'system/patches/postman-native-cold-compact.patch'),'utf8').replaceAll('\r',''))
   run('git',['-c','core.longpaths=true','apply','--reverse',upgradePatch],upgradeStage,{...process.env,GIT_CEILING_DIRECTORIES:stagingRoot})
   const oldBytes = readFileSync(resolve(upgradeStage,upgradeRelative))
@@ -86,7 +88,7 @@ try {
   assert.deepEqual(readFileSync(subagentTarget.path),upgradedBytes)
   assert.ok(applyPostmanNativeChildCutoff([sdkAnchor,resolve(pluginRoot,'package.json')]).every(target => !target.updated))
   const { SubagentRuntime } = await import(pathToFileURL(sdkRequire.resolve('@deepseek-ai/dsh-subagent')).href)
-  for (const method of ['closeContinuableChild','inspectClosedContinuableChild','compactContinuableChild'])
+  for (const method of ['closeContinuableChild','inspectClosedContinuableChild','inspectOpenContinuableChild','compactContinuableChild'])
     assert.equal(typeof SubagentRuntime.prototype[method],'function',method)
 
   assert.equal(realpathSync(resolve(profileRoot, 'node_modules/dsh-postman-harness')), realpathSync(pluginRoot))

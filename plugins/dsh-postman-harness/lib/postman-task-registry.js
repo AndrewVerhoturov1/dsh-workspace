@@ -4,6 +4,8 @@ import { z } from 'zod'
 // One row per exact Leader session. Writes finish on the backend before any
 // Git, child-creation, or destructive runner operation is attempted.
 const workerLifecycle = z.object({ version: z.literal(1),
+  stop: z.object({ id: z.string(), mode: z.enum(['close', 'cancel']), cascade: z.boolean(),
+    childIds: z.array(z.string()), requestedAt: z.string() }).optional(),
   admissions: z.array(z.object({ id: z.string(), state: z.enum(['pending', 'accepted']), messageId: z.string().nullable() })),
   reports: z.array(z.object({ childId: z.string(), turn: z.number(), callId: z.string(), messageId: z.string(), hostBudgetAfterSeq: z.number().int().nonnegative().optional() })),
 })

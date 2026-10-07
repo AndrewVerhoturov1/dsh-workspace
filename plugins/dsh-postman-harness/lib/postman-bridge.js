@@ -19,7 +19,7 @@ import {
 export const name = 'dsh-postman-harness-bridge'
 export const Config = z.object({
   localDevelopment: z.boolean().default(false),
-  fastBudget: z.object({ hardLimit: z.number().int().min(8).max(24).default(16) }).prefault({}),
+  fastBudget: z.object({ hardLimit: z.number().int().min(8).max(60).default(60) }).prefault({}),
 }).prefault({})
 export const inject = ['agents', 'subagents', 'tools', 'storageDomain', 'attachments', 'fs']
 

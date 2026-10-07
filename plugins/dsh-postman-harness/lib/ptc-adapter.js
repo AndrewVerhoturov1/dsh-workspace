@@ -122,6 +122,13 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
     const old = owners.get(agent.id)
     // Provisional -> confirmed is the same assignment, not a revocation of an in-flight program.
     if (old && allowed(agent, old)) return true
+    // A stop may revoke authority after an exact model request was assembled.
+    // Keep that Sol's scoped dispatcher until disposal: execute returns the
+    // precise caller rejection, never "unknown tool" for an in-flight request.
+    if (old?.agent === agent && old.role === 'sol' && !assignmentFor(agent, current)) {
+      for (const run of old.runs) run.controller.abort()
+      return false
+    }
     if (old) { owners.delete(agent.id); revoke(old) }
     if (disposed || ctx.agents.get(agent.id) !== agent) return false
     const assignment = assignmentFor(agent, current)
@@ -131,12 +138,10 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
       revision: assignment.profile.revision, runs: new Set(), section: null, tool: null,
       underbatchedStreak: 0, underbatchedCalls: 0 }
     owners.set(agent.id, record)
-    // Pre-review Sol Sessions persist a spawn filter denying inherited PTC.
-    // Bind this one Host-authorized capability in the exact Sol scope; do not
-    // rewrite audit/descriptor, lift other filters or grant it to FAST children.
-    const descriptor = agent.session?.events?.find(event => event.type === 'subagent/descriptor')?.data
-    if (record.role === 'sol' && descriptor?.toolFilter?.deny?.includes(PTC_TOOL_NAME))
-      record.tool = agent.ctx.tools.register(tool)
+    // Exact Sol scope owns its dispatcher across continuation and stop races.
+    // Inherited lifecycle filters must not turn an advertised call into unknown.
+    // Execution still rechecks exact binding/authority; FAST children get no PTC.
+    if (record.role === 'sol') record.tool = agent.ctx.tools.register(tool)
     if (agent.ctx?.systemPrompt?.section) record.section = agent.ctx.systemPrompt.section({
       name: 'postman-ptc-' + record.role, order: 125,
       text: ({ scope } = {}) => scope === agent && allowed(agent, record) ? guidance(agent, record) : '',

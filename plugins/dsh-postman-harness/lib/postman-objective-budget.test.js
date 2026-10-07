@@ -21,7 +21,7 @@ test('Worker hardBudget 8 stops at its own limit; FAST schemas expose only assig
   }
   assert.equal(Object.hasOwn(f.worker.solTaskTool.parameters.properties,'hardBudget'),false)
   assert.equal((await f.run(f.worker.solTaskTool,{task:'Sol has no FAST budget',hardBudget:8})).status,'POSTMAN_WORKER_BUDGET_INVALID')
-  for(const hardBudget of [7,25,8.5])
+  for(const hardBudget of [7,61,8.5])
     assert.equal((await f.run(f.worker.taskTool,{task:'invalid budget',hardBudget})).status,'POSTMAN_WORKER_BUDGET_INVALID')
   assert.equal((await f.run(f.worker.taskTool,{task:'no parent soft limit',hardBudget:8,softLimit:1})).status,'POSTMAN_WORKER_BUDGET_INVALID')
   const id=accepted(await f.run(f.worker.taskTool,{task:'Exact bounded check',hardBudget:8}))
@@ -45,7 +45,7 @@ test('Worker hardBudget 8 stops at its own limit; FAST schemas expose only assig
   assert.deepEqual(f.registry.get('leader').workers[id].budget,budget)
 })
 
-test('Secretary, two Leader Workers and two Sol-owned Workers have independent 15-request budgets',{timeout:20000},async t=>{
+test('Secretary, two Leader Workers and two Sol-owned Workers have independent normal 60-request budgets',{timeout:20000},async t=>{
   const solGate=Promise.withResolvers(),solEntered=Promise.withResolvers(),gates=new Map()
   t.after(()=>{solGate.resolve();for(const gate of gates.values())gate.release.resolve()})
   const f=await fixture(t,{plan:async(a,_r,n,w)=>{
@@ -59,22 +59,22 @@ test('Secretary, two Leader Workers and two Sol-owned Workers have independent 1
   const ids=[]
   for(const [task,tool,parent] of assignments){
     const gate={entered:Promise.withResolvers(),release:Promise.withResolvers()};gates.set(task,gate)
-    ids.push(accepted(await f.run(tool,{task,createNew:true,hardBudget:15},parent)));await gate.entered.promise
+    ids.push(accepted(await f.run(tool,{task,createNew:true},parent)));await gate.entered.promise
   }
   for(let i=0;i<ids.length;i++){
     const peers=ids.filter(id=>id!==ids[i]).map(id=>[id,f.registry.get('leader').workers[id].budget])
     gates.get(assignments[i][0]).release.resolve();await f.settled(ids[i])
     const budget=f.registry.get('leader').workers[ids[i]].budget
-    assert.equal(budget.hardLimit,15);assert.equal(budget.softLimit,12);assert.equal(budget.used,15);assert.equal(budget.exhausted,true)
+    assert.equal(budget.hardLimit,60);assert.equal(budget.softLimit,48);assert.equal(budget.used,60);assert.equal(budget.exhausted,true)
     for(const [id,before] of peers)assert.deepEqual(f.registry.get('leader').workers[id].budget,before)
-    assert.equal(f.requests.filter(r=>r.agent.id===ids[i]).length,15)
+    assert.equal(f.requests.filter(r=>r.agent.id===ids[i]).length,60)
   }
-  assert.equal(ids.reduce((sum,id)=>sum+f.registry.get('leader').workers[id].budget.used,0),75)
+  assert.equal(ids.reduce((sum,id)=>sum+f.registry.get('leader').workers[id].budget.used,0),300)
   assert.equal(Object.hasOwn(f.registry.get('leader'),'objectives'),false)
   const list=await f.run(f.worker.listTool)
   assert.equal(Object.hasOwn(list,'objectives'),false)
   for(const row of list.workers.filter(w=>w.workerType!=='sol'))assert.equal(Object.hasOwn(row.budget,'root'),false)
-  assert.deepEqual(f.worker.teamSnapshot(f.leader).secretary.budget,{used:15,soft:12,hard:15,exhausted:true})
+  assert.deepEqual(f.worker.teamSnapshot(f.leader).secretary.budget,{used:60,soft:48,hard:60,exhausted:true})
   solGate.resolve();await f.settled(solId)
 })
 
