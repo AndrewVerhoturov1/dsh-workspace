@@ -14,7 +14,6 @@ export const POSTMAN_WORKER_TOOL_NAME = 'postman_worker'
 export const POSTMAN_SOL_WORKER_TOOL_NAME = 'postman_sol_worker'
 export const POSTMAN_WORKER_INTERRUPT_TOOL_NAME = 'postman_worker_interrupt'
 export const POSTMAN_WORKER_STOP_TOOL_NAME = 'postman_worker_stop'
-export const POSTMAN_YIELD_TOOL_NAME = 'postman_yield'
 export const POSTMAN_INPUT_FILES_TOOL_NAME = 'postman_input_files'
 export const POSTMAN_WORKER_LIST_TOOL_NAME = 'postman_worker_list'
 export const POSTMAN_WORKER_COMPACT_TOOL_NAME = 'postman_worker_compact'
@@ -34,7 +33,6 @@ export const POSTMAN_BRIDGE_TOOL_ALLOWLIST = Object.freeze([
   'postman_send_current_turn',
   'postman_current_turn_status',
   'postman_ask_validate_reply',
-  POSTMAN_CHILD_NOTIFY_TOOL_NAME,
 ])
 export const POSTMAN_LEADER_PRESET_ID = 'postman-leader'
 export const POSTMAN_PTC_LEADER_PRESET_ID = 'postman-leader-ptc'
@@ -64,7 +62,6 @@ export const POSTMAN_LEADER_TOOL_ALLOWLIST = Object.freeze([
   POSTMAN_SOL_WORKER_TOOL_NAME,
   POSTMAN_WORKER_INTERRUPT_TOOL_NAME,
   POSTMAN_WORKER_STOP_TOOL_NAME,
-  POSTMAN_YIELD_TOOL_NAME,
   POSTMAN_WORKER_LIST_TOOL_NAME,
   POSTMAN_WORKER_COMPACT_TOOL_NAME,
   POSTMAN_WORKER_FRESH_TOOL_NAME,
@@ -89,7 +86,6 @@ export const POSTMAN_PTC_SUCCESS_STATUSES = Object.freeze({
   postman_task_prepare: Object.freeze(['TASK_CONTEXT_READY', 'POSTMAN_TASK_CONTEXT_ALREADY_READY']),
   postman_worker: Object.freeze(['POSTMAN_WORKER_TASK_ACCEPTED']),
   postman_sol_worker: Object.freeze(['POSTMAN_WORKER_TASK_ACCEPTED']),
-  postman_yield: Object.freeze(['POSTMAN_YIELDED']),
   postman_task_restore: Object.freeze(['TASK_CONTEXT_RESTORED']),
   postman_task_close: Object.freeze(['POSTMAN_TASK_CLOSED']),
   postman_team_status: Object.freeze(['POSTMAN_TEAM_STATUS']),
@@ -128,7 +124,6 @@ export const POSTMAN_LEADER_ONLY_TOOL_NAMES = Object.freeze([
   POSTMAN_SOL_WORKER_TOOL_NAME,
   POSTMAN_WORKER_INTERRUPT_TOOL_NAME,
   POSTMAN_WORKER_STOP_TOOL_NAME,
-  POSTMAN_YIELD_TOOL_NAME,
   POSTMAN_WORKER_LIST_TOOL_NAME,
   POSTMAN_WORKER_COMPACT_TOOL_NAME,
   POSTMAN_WORKER_FRESH_TOOL_NAME,
@@ -143,7 +138,7 @@ You do not solve, redesign, expand, summarize, improve, or reinterpret the deleg
 Protocol:
 1. If the current message starts with exact @PostmanAsk, first load skill(delegate-via-postman-ask). If it starts with exact @PostmanImage, first load skill(delegate-via-postman-image). If it starts with exact @Postman, first load skill(delegate-via-postman).
 2. Then call postman_send_current_turn() with no arguments. Never copy the current user text into a tool argument, Base64, shell command, or another prompt.
-3. While waiting, you may call notify_parent({message: ...}) for a factual intermediate update. Never present your message as a trusted result. Repeatedly call postman_current_turn_status() until the current Direct Postman request reaches a terminal result. Never start a second request.
+3. Wait independently without intermediate parent updates. The Host delivers terminal POSTMAN_BRIDGE_READY. Repeatedly call postman_current_turn_status() until the current Direct Postman request reaches a terminal result. Never start a second request.
 4. For TEXT_RESULT_DURABLE, inspect deliveryMode. If deliveryMode=inline, call postman_ask_validate_reply(request_id, text) with the exact assistantText and respond with exactly that text only after EXACT_REPLY_MATCH. If deliveryMode=file, do not call postman_ask_validate_reply, do not read or reconstruct resultFile, and finish with only a compact acknowledgement containing the trusted requestId/resultFile metadata. The bridge host reads the trusted terminal directly; your prose is not result authority.
 5. For image mode, report IMAGE_RESULT_DURABLE with the trusted resultImage descriptor; never read or reconstruct the image, register it as an implementation artifact, or request continuation. For artifact mode, report the terminal receipt without inventing continuation. Never call an automatic continuation tool.
 

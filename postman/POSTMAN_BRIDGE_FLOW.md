@@ -79,8 +79,9 @@ Bridge child всегда:
   - `skill`;
   - `postman_send_current_turn`;
   - `postman_current_turn_status`;
-  - `postman_ask_validate_reply`;
-  - `notify_parent` (только промежуточное сообщение, не trusted result).
+  - `postman_ask_validate_reply`.
+
+Bridge ждёт Direct terminal самостоятельно, без промежуточных FYI родителю. Host доставляет terminal `POSTMAN_BRIDGE_READY` через штатный followup; child prose не authority.
 
 `postman_continue_last_request`, generic subagents, shell, filesystem mutation, GitHub, web и
 browser tools child-у не выдаются.
@@ -215,7 +216,6 @@ postman_worker
 postman_sol_worker
 postman_worker_interrupt
 postman_worker_stop
-postman_yield
 postman_worker_list
 postman_worker_compact
 postman_worker_fresh
@@ -226,7 +226,7 @@ postman_secretary_ledger
 `glob` и `web_search` не входят в список Leader: они запрещены только Leader и остаются доступны Worker из общего coding preset. Positive allowlist задан поверх общего
 preset: фактический каталог Leader сокращается до этих имён независимо от остальных регистраций.
 
-`write`, `edit`, shell, generic `subagent`, workflow, `web_search` и direct Postman tools скрыты runtime-ом у Leader. Зарегистрированный `implementation_artifact_apply` не входит в Leader allowlist: его execute path допускает только точного активного Worker после отдельной авторизации REQ. Worker остаётся с широким общим coding preset без положительного Worker allowlist; его runtime deny включает все зарегистрированные `postman_*` имена и не затрагивает `report`. Bridge сохраняет отдельный неизменный allowlist из пяти инструментов: `skill`, `postman_send_current_turn`, `postman_current_turn_status`, `postman_ask_validate_reply`, `notify_parent`.
+`write`, `edit`, shell, generic `subagent`, workflow, `web_search` и direct Postman tools скрыты runtime-ом у Leader. Зарегистрированный `implementation_artifact_apply` не входит в Leader allowlist: его execute path допускает только точного активного Worker после отдельной авторизации REQ. Worker остаётся с широким общим coding preset без положительного Worker allowlist; его runtime deny включает все зарегистрированные `postman_*` имена и не затрагивает `report`. Bridge сохраняет отдельный transport-only allowlist из четырёх инструментов: `skill`, `postman_send_current_turn`, `postman_current_turn_status`, `postman_ask_validate_reply`.
 Host controls task/Bridge/Sol/Secretary принадлежат только верхнеуровневому Leader. Exact Sol получает только parent-scoped postman_worker/interrupt/stop/list/compact/fresh; exact Secretary — private postman_secretary_ledger. Обычный Worker не получает Postman controls, generic delegation или PTC; Secretary/Sol также не обходят topology через subagent/fork/workflow/ralph. Каждый tool body повторно проверяет exact Agent и ownership, не доверяя имени preset или saved ID.
 
 Один live Agent всегда имеет ровно один Bridge restriction. Поскольку Harness разрешает сменить
@@ -249,7 +249,7 @@ Harness model routing намеренно находится вне Agent presets
 
 Sol — дорогой Leader-selectable маршрут утверждённого execution plan; отдельное разрешение на роль не требуется. Для каждой новой нетривиальной задачи: Leader routing decision → компактный plan → explicit user approval → execution. Выбор роли или исходное «сделай» не заменяет approval плана. Cheapest reliable route до следующей meaningful decision boundary: unknown != complex; после approval полезное bounded Worker reproduction/log/test evidence или Secretary files/symbols/config facts может предшествовать escalation. Direct Sol допустим для явно сложного local engineering/review; external/current research или полезное independent outside opinion → PostmanAsk. Preapproved conditional Sol escalation и continuation/correction в approved scope не требуют повторного approval. Новая независимая цель требует нового плана; material cost/scope/access/destructive-operation/transport change → STOP → revised plan → approval. ApprovalService/runtime state machine не добавляется, permission presets и отдельные Git/security/artifact approvals сохраняются. Обычные postman_worker / postman_worker_interrupt не назначают Sol (POSTMAN_SOL_WORKER_TOOL_REQUIRED).
 
-У обоих top-level Leader ID инструмент только внутри supervisor PTC; после приёма и всей независимой работы boundary: external_event и безопасный auto-yield. Explicit postman_yield внутри программы gated полным outer settlement, не polling. Sol наследует тот же task worktree, continuable durable Session, report, cold resume, coding tools и transport restrictions, с отдельным local engineering PTC profile без supervisor authority; controls собственных Worker PTC-managed / PTC-only с exact parent check через existing authoritative Host path (Sol engineering revision 2). Sol decision dispatch-ит оба полезных independent Worker в одной PTC phase, завершает known own mechanics и boundary: external_event auto-yield ждёт actual owned reports. report/notify_parent direct-only: report terminal, owned active/pending/uncertain work блокирует его, settled/cold bindings не блокируют; failed/cancelled можно агрегировать как blockers, не success. notify_parent только decision-relevant NEEDS_PARENT_GUIDANCE, не FYI/progress. Общие `postman_worker_list` (тип/модель) и `postman_worker_stop` работают для обоих типов без approval; stop не доказывает успеха и не удаляет durable Session.
+У обоих top-level Leader ID инструмент только внутри supervisor PTC; после приёма и всей независимой работы boundary: external_event и безопасный auto-yield. Для уже активной exact работы Host применяет ту же boundary без нового dispatch и без polling. Sol наследует тот же task worktree, continuable durable Session, report, cold resume, coding tools и transport restrictions, с отдельным local engineering PTC profile без supervisor authority; controls собственных Worker PTC-managed / PTC-only с exact parent check через existing authoritative Host path (Sol engineering revision 2). Sol decision dispatch-ит оба полезных independent Worker в одной PTC phase, завершает known own mechanics и boundary: external_event auto-yield ждёт actual owned reports. report/notify_parent direct-only: report terminal, owned active/pending/uncertain work блокирует его, settled/cold bindings не блокируют; failed/cancelled можно агрегировать как blockers, не success. notify_parent только decision-relevant NEEDS_PARENT_GUIDANCE, не FYI/progress. Общие `postman_worker_list` (тип/модель) и `postman_worker_stop` работают для обоих типов без approval; stop не доказывает успеха и не удаляет durable Session.
 
 ### Explicit task-context retirement
 
@@ -317,7 +317,7 @@ Bridge никогда не делает blind resend.
 `glob` не запрещён Worker: он остаётся доступен ему из общего coding preset, но скрыт у Leader.
 `postman_bridge` остаётся отдельным специализированным tool с фиксированной Luna.
 
-**Совмещённый lifecycle Worker (#242 + #246):** обычные Worker ×2, Secretary ×1 и Sol ×1 Leader, плюс Worker ×2 Sol, независимо делят одно Host task worktree. Адресный обычный close возможен после успешного native report, доставки в контекст точного непосредственного parent и завершения всей актуальной работы; Agent может быть уже освобождён, тогда Host только читает durable Session. Неполная история — отказ без остановки; точный `mode: "cancel"` требует нового однократного Host approval. Restore не вызывает drain и не очищает грязное дерево при сохранённых Worker-привязках. `postman_yield` уступает лишь ход Leader через `concludeTurn`, не закрывает Worker и не создаёт пустой final.
+**Совмещённый lifecycle Worker (#242 + #246):** обычные Worker ×2, Secretary ×1 и Sol ×1 Leader, плюс Worker ×2 Sol, независимо делят одно Host task worktree. Адресный обычный close возможен после успешного native report, доставки в контекст точного непосредственного parent и завершения всей актуальной работы; Agent может быть уже освобождён, тогда Host только читает durable Session. Неполная история — отказ без остановки; точный `mode: "cancel"` требует нового однократного Host approval. Restore не вызывает drain и не очищает грязное дерево при сохранённых Worker-привязках. `boundary: external_event` уступает лишь текущий ход через Host `concludeTurn` при точном wake source, не закрывает Worker и не создаёт пустой final.
 ## Execution-management clarification
 
 Substantial FAST assignments use normal hardBudget:60 / softLimit:48, runtime 8..60/default60; obviously small bounded work may use less. Each assignment is independent, never shared team/root model quota. The TASK_CONTRACT repair-cycle budget is a process limit, not model-request accounting.

@@ -28,6 +28,49 @@ const turnEnd=(f,id)=>{
   return done.promise
 }
 
+test('Stage 3.5B exact Sol re-waits for existing owned B after A, never for active foreign Worker', {timeout:45000},async t=>{
+  const gates=[Promise.withResolvers(),Promise.withResolvers()],foreignGate=Promise.withResolvers(),endings=[Promise.withResolvers(),Promise.withResolvers(),Promise.withResolvers()]
+  const owned=[];let f,solId,foreignId
+  t.after(()=>{gates.forEach(g=>g.resolve());foreignGate.resolve()})
+  f=await fixture(t,async(a,r,n)=>{
+    if(a.id==='leader')return null
+    if(a.options.model==='gpt-6.1-sol'){
+      solId=a.id;assertManagementRequest('sol',r)
+      if(n===1)return {name:'ptc_execute',args:ptc('const a=await tools.postman_worker({task:"A",createNew:true});const b=await tools.postman_worker({task:"B",createNew:true});return {a,b}','external_event')}
+      await f.childDone(owned[n-2])
+      if(n===2)return {name:'ptc_execute',args:ptc('await tools.read({file_path:"known.txt"});return {handled:"A"}','external_event')}
+      assert.equal(n,3,'only dispatch and two real owned events')
+      assert.equal(f.ctx.agents.get(foreignId).status,'running')
+      const noWake=await f.execute(a,'ptc_execute',ptc('return {}','external_event'))
+      assert.notEqual(noWake.concludesTurn,true,'foreign active Worker and settled own bindings do not justify waiting')
+      return report
+    }
+    if(a.session.header.delegationDepth===1){await foreignGate.promise;return report}
+    await gates[owned.indexOf(a.id)].promise;return report
+  })
+  f.ctx.on('session/event',(s,e)=>{if(s.id===solId&&e.type==='turn/end')endings[e.data.turn-1]?.resolve()})
+  const start=f.ctx.subagents.startContinuable.bind(f.ctx.subagents)
+  f.ctx.subagents.startContinuable=async spec=>{if(spec.request.parent.id===solId)owned.push(spec.childId);return start(spec)}
+  const accepted=await selectSol(f);await endings[0].promise
+  const sol=f.ctx.agents.get(accepted.workerSessionId);await sol.whenIdle()
+  assert.equal(owned.length,2);assert.equal(f.requests.filter(r=>r.agent.id===sol.id).length,1)
+  assert.equal(sol.phase.kind,'idle')
+  const leaderWait=await f.execute(f.leader,'ptc_execute',ptc('return {}','external_event'))
+  assert.equal(leaderWait.concludesTurn,true,'event-waiting exact Sol with own active Workers remains a Leader wake source')
+  foreignId=(await call(f,f.leader,'postman_worker',{task:'unrelated Leader-owned active work'})).workerSessionId
+  gates[0].resolve();await endings[1].promise;await sol.whenIdle()
+  assert.equal(f.requests.filter(r=>r.agent.id===sol.id).length,2,'no yield-only round')
+  const rewait=f.results.filter(r=>r.agent.id===sol.id&&r.name==='ptc_execute')[1]
+  assert.equal(rewait.result.concludesTurn,true)
+  assert.deepEqual(rewait.result.value.effects.calls.map(c=>c.name),['read'],'no dispatch/status polling')
+  gates[1].resolve();await endings[2].promise;await f.childDone(sol.id)
+  assert.equal(f.requests.filter(r=>r.agent.id===sol.id).length,3)
+  assert.deepEqual(sol.session.events.filter(e=>e.type==='turn/start').map(e=>e.data.turn),[1,2,3])
+  for(const id of owned)assert.equal(sol.session.events.filter(e=>e.type==='user/message'&&e.data.source?.kind==='subagent-report'&&e.data.source.senderSessionId===id).length,1)
+  assert.equal(sol.inbox.hasPending,false)
+  foreignGate.resolve();await f.childDone(foreignId)
+})
+
 test('Stage 3.5B actual Sol batches two exact children and own mechanics in ONE PTC, auto-concludes', {timeout:45000},async t=>{
   const hold=Promise.withResolvers(),end=Promise.withResolvers();t.after(()=>hold.resolve())
   let solId

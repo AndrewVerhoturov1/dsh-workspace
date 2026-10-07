@@ -59,14 +59,16 @@ for (const preset of ['postman-leader-ptc', 'code', 'postman-leader']) test('act
   const r = await f.turn(f.leader)
   toolMatrix('postman-leader-ptc', leaderExpected, r)
   assertManagementRequest('leader', r)
+  assert.ok(!r.tools.some(t => t.name === 'postman_yield'))
+  assert.doesNotMatch(r.system, /postman_yield|POSTMAN_YIELDED/)
   assertManagementRequest('leader', await f.turn(f.leader, 'Related management follow-up'))
   assert.ok(r.tools.some(t=>t.name==='ask_user_question'),preset+': Leader retains user questions')
   assert.equal(r.model,'gpt-6.1-sol'); assert.equal(r.reasoningEffort,'xhigh'); assert.match(r.system,/canonical programming discipline/); assert.match(r.system, /postman-leader/);assert.match(JSON.stringify(r),/POSTMAN_LEADER_SKILL_VERSION: 31/)
   await writeFile(join(f.dir, 'facts.txt'), 'old fact')
   const result = nested(await f.execute(f.leader, 'ptc_execute', ptc('const r=await tools.read({file_path:"facts.txt"});const g=await tools.grep({pattern:"old fact",path:"facts.txt"});return {r,g}')))
   assert.equal(result.r.lines[0].text, 'old fact'); assert.ok(result.g.matches.length)
-  for (const name of ['read','grep','postman_worker','postman_secretary','postman_bridge','postman_sol_worker','postman_yield','postman_team_status','postman_bridge_stop']) {
-    const args = name === 'read' ? {file_path:'facts.txt'} : name === 'grep' ? {pattern:'fact'} : name === 'postman_bridge' ? {message:'@PostmanAsk bounded fixture'} : name==='postman_bridge_stop' ? {bridge_job_id:'foreign'} : ['postman_yield','postman_team_status'].includes(name) ? {} : {task:'bounded fixture'}
+  for (const name of ['read','grep','postman_worker','postman_secretary','postman_bridge','postman_sol_worker','postman_team_status','postman_bridge_stop']) {
+    const args = name === 'read' ? {file_path:'facts.txt'} : name === 'grep' ? {pattern:'fact'} : name === 'postman_bridge' ? {message:'@PostmanAsk bounded fixture'} : name==='postman_bridge_stop' ? {bridge_job_id:'foreign'} : name === 'postman_team_status' ? {} : {task:'bounded fixture'}
     const denied = await f.execute(f.leader, name, args)
     assert.equal(denied.isError, true, name); assert.match(denied.error.message, /POSTMAN_PTC_DIRECT_CALL_REJECTED/)
   }
