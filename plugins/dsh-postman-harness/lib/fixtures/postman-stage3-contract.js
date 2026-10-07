@@ -15,7 +15,12 @@ export const managementMarkers = {
     /tests\/build/, /mutating Git\/product operations/, /approval_boundary|human approval|явное user approval/,
     /cheapest reliable route/, /unknown != complex/, /direct Sol/i, /Preapproved conditional Sol escalation/,
     /STOP → revised plan → approval/, /новая независимая цель требует нового плана/i,
-    /local engineering\/review/, /external\/current research/, /independent outside opinion/],
+    /local engineering\/review/, /external\/current research/, /independent outside opinion/,
+    /hardBudget:60/, /softLimit:48/, /smaller valid budget/,
+    /Already established:/, /Still needed:/, /Next decision boundary:/,
+    /Dependency provenance:/, /shared exact quota\/slot/, /tasks are independent/,
+    /Existing settled Sol \+ approved new big task → compact first/,
+    /Newly created Sol/, /no compact first/, /no mandatory compact each turn/],
   luna: [/bounded FAST executor/, /Exact-path-first/, /Canonical skill already injected/,
     /skill\(postman-worker\)/, /Другие специализированные skills допустимы/,
     /soft warning/i, /no new discovery branch/i, /NEEDS_PARENT_GUIDANCE/, /changed \/ verified \/ remaining/,
@@ -33,7 +38,10 @@ export const managementMarkers = {
      /PTC-managed \/ PTC-only/, /ONE PTC/, /external_event/, /реальные owned Worker reports/,
      /terminal assignment result, не progress\/FYI/, /generic child report guidance/, /report завершает turn/, /decision-relevant escalation/, /не FYI\/progress\/обычный completion/,
     /дорогой Leader-selectable/, /execution plan/, /без отдельного разрешения на роль/,
-    /preapproved conditional escalation/, /revised-plan approval/, /unknown != complex/, /cheapest reliable route/i]
+    /preapproved conditional escalation/, /revised-plan approval/, /unknown != complex/, /cheapest reliable route/i,
+    /hardBudget:60/, /softLimit:48/, /smaller valid budget/,
+    /Already established:/, /Still needed:/, /Next decision boundary:/,
+    /Same task \+ large relevant context → compact/, /New assignment where old visible context is harmful → fresh/]
 }
 
 export function assertManagementRequest(role, request) {

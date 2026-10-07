@@ -18,7 +18,7 @@ test('bounded Stage 3 source contract: kernel first, routing, safety and FAST bu
   for (const role of ['luna','secretary','sol']) {
     const skill = postmanRoleInstruction(role)
     for (const marker of managementMarkers[role]) assert.match(skill, marker)
-    assert.match(skill, /hardBudget:15/)
+    assert.match(skill, /hardBudget:60/)
   }
   assert.match(leader, /constraint без источника/i)
   for (const path of ['.agents/skills/postman-leader/SKILL.md',
@@ -49,9 +49,9 @@ test('bounded Stage 3 source contract: kernel first, routing, safety and FAST bu
   assert.match(contract, /postman_task_prepare\/postman_task_restore\/postman_task_close\/postman_input_files/)
   assert.match(contract, /postman_task_close` явно retire-ит settled Leader task binding/)
   assert.match(contract, /не Git cleanup и не доказательство success/)
-  assert.match(contract, /runtime default — hard16; configurable `hardBudget` 8\.\.24; независимый budget каждого assignment/)
-  assert.match(contract, /Stage 3 assignments явно запрашивают `hardBudget:15` → Host soft12/)
-  assert.equal(FAST_WORKER_BUDGET.hardLimit, 16)
+  assert.match(contract, /runtime default — hard60; configurable `hardBudget` 8\.\.60; независимый budget каждого assignment/)
+  assert.match(contract, /Stage 3 substantial assignments запрашивают `hardBudget:60` → Host soft48/)
+  assert.deepEqual(FAST_WORKER_BUDGET, {hardLimit:60,softLimit:48})
   const example = leader.match(/const r = await tools.postman_worker_compact[\s\S]*?unexpected_status[^\n]*/)?.[0]
   assert.ok(example, 'known status branching example')
   assert.doesNotMatch(example, /expectStatus/)
@@ -127,7 +127,7 @@ test('controlled exact file + command needs no broad discovery under Leader or S
     const r = value(await f.execute(f.leader, 'ptc_execute', {program:'return await tools.'+name+'('+JSON.stringify(args)+')',description:'Dispatch exact controlled task before review',boundary:'semantic_decision'}))
     assert.equal(r.status, 'ok', JSON.stringify(r)); return r.value
   }
-  const assignment = {task:'Objective: verify exact file '+exact+' and exact command '+command+'. Type: mechanical verification. Scope: these targets only; no writes. Done: exact evidence matches. Verification: file text exact-file-evidence and command output exact-command-evidence. Stop: report or precise blocker. Established: environment ready.', hardBudget:15}
+  const assignment = {task:'Objective: verify exact file '+exact+' and exact command '+command+'. Type: mechanical verification. Scope: these targets only; no writes. Done: exact evidence matches. Verification: file text exact-file-evidence and command output exact-command-evidence. Stop: report or precise blocker. Established: environment ready.', hardBudget:60}
   const direct = await call('postman_worker', assignment)
   assert.equal(direct.status, 'POSTMAN_WORKER_TASK_ACCEPTED'); await f.childDone(direct.workerSessionId)
   const acceptedSol = await call('postman_sol_worker', {task:'Approved execution plan: Leader selected expensive Sol for bounded controlled evidence aggregation, no implementation.'})
@@ -141,7 +141,7 @@ test('controlled exact file + command needs no broad discovery under Leader or S
     assert.equal(actions[0].result.value.lines[0].text, 'exact-file-evidence')
     assert.match(JSON.stringify(actions[1].result.value), /exact-command-evidence/)
     const budget = f.registry.get('leader').workers[id].budget
-    assert.equal(budget.hardLimit, 15); assert.equal(budget.softLimit, 12); assert.equal(budget.used, 3)
+    assert.equal(budget.hardLimit, 60); assert.equal(budget.softLimit, 48); assert.equal(budget.used, 3)
     for (const {request} of f.requests.filter(r => r.agent.id === id)) assertManagementRequest('luna', request)
   }
   gate.resolve(); await f.childDone(sol.id)

@@ -172,7 +172,7 @@ test('teamSnapshot reads bounded durable/live rows without recovery or private c
   assert.equal(result.secretary.ledgerRevision, 4)
   assert.equal(result.workers.used, 1); assert.equal(result.sol.ownedWorkers.used, 2)
   assert.equal(result.sol.ownedWorkers.states.idle, 2)
-  assert.deepEqual(result.workers.rows[0].budget, { used: 0, soft: 12, hard: 16, exhausted: false })
+  assert.deepEqual(result.workers.rows[0].budget, { used: 0, soft: 48, hard: 60, exhausted: false })
   assert.ok(!JSON.stringify(result).includes('secret task'))
   assert.ok(!JSON.stringify(result).includes('private ledger'))
   assert.equal(JSON.stringify(f.registry.get(f.parent.id)), before)

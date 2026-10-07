@@ -24,9 +24,9 @@ export const POSTMAN_WORKER_PROVIDER = 'spawn'
 export const FAST_WORKER_MODEL = 'gpt-6-luna'
 export const FAST_WORKER_REASONING = 'low'
 export const POSTMAN_WORKER_AGENT_OPTIONS = Object.freeze({ provider: 'codex', model: FAST_WORKER_MODEL, reasoningEffort: FAST_WORKER_REASONING })
-const hardValid = hard => Number.isSafeInteger(hard) && hard >= 8 && hard <= 24
+const hardValid = hard => Number.isSafeInteger(hard) && hard >= 8 && hard <= 60
 const limitsFor = hardLimit => ({ hardLimit, softLimit: Math.floor(hardLimit * 0.8) })
-export const FAST_WORKER_BUDGET = Object.freeze(limitsFor(16))
+export const FAST_WORKER_BUDGET = Object.freeze(limitsFor(60))
 const ROLE_SKILLS = Object.freeze(Object.fromEntries(['luna', 'secretary', 'sol'].map(type => [type,
   readFileSync(new URL('../../../.agents/skills/' + (type === 'luna' ? 'postman-worker' : type === 'sol' ? 'postman-sol-worker' : 'postman-secretary') + '/SKILL.md', import.meta.url), 'utf8') ])))
 export const postmanRoleInstruction = type => ROLE_SKILLS[type]
@@ -254,6 +254,10 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     const context = contexts?.get(parent.id)
     return !contexts || Boolean(context && (!slot.context || slot.context === context))
   }
+  const stopIntent = (entry, mode, childIds = []) => ({
+    ...(entry.lifecycle ?? emptyLifecycle()), stop: { id: randomUUID(), mode,
+      cascade: childIds.length > 0, childIds, requestedAt: new Date().toISOString() },
+  })
   async function provenClosed(parent, id) {
     if (typeof ctx.subagents.inspectClosedContinuableChild !== 'function') return false
     try { return await ctx.subagents.inspectClosedContinuableChild(parent, id) === true } catch { return false }
@@ -273,7 +277,8 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       if (slot.parent !== parent) slot.verified = false
       if (!authorized(parent) || !matchesContext(parent, slot)) return 'POSTMAN_WORKER_BINDING_UNCERTAIN'
       const expectedContext = contexts.get(parent.id)
-      if (await provenClosed(parent, slot.id)) {
+      const hasOwnedBindings = Object.values(rawRow(parent.id)?.workers ?? {}).some(value => value.ownerSessionId === slot.id)
+      if (!hasOwnedBindings && await provenClosed(parent, slot.id)) {
         const current = rowOf(parent.id)?.workers?.[slot.id]
         if (authorized(parent) && contexts.get(parent.id) === expectedContext &&
             current?.id === slot.id && cancelWitness(current) === cancelWitness(saved) &&
@@ -282,6 +287,21 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
           bindingChanged(slot.id)
           return 'POSTMAN_WORKER_CLOSED_RECONCILED'
         }
+      }
+      // Native evidence is serialized with close/followup and rejects a closure
+      // latch, disposal, closed marker or unproven cold execution. No model turn.
+      if (typeof ctx.subagents.inspectOpenContinuableChild === 'function' &&
+          await ctx.subagents.inspectOpenContinuableChild(parent, slot.id) === true) {
+        await changeBinding(parent, slot.id, current => {
+          if (!authorized(parent) || contexts.get(parent.id) !== expectedContext ||
+              cancelWitness(current) !== cancelWitness(saved)) throw new Error('POSTMAN_WORKER_BINDING_CHANGED')
+          return { ...current, state: 'ready' }
+        })
+        slot.state = 'ready'; slot.parent = parent; slot.context = expectedContext
+        slot.verified = true; slot.workerAgent = liveWorker(slot.id) ?? null
+        slot.delivery = saved.delivery
+        bindingChanged(slot.id)
+        return saved.delivery === 'none' ? null : 'POSTMAN_WORKER_DELIVERY_UNKNOWN'
       }
       bindingChanged(slot.id)
       return 'POSTMAN_WORKER_BINDING_UNCERTAIN'
@@ -553,7 +573,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     workerSessionId: { type: 'string', description: 'Exact existing Worker session for an addressed task or artifact grant.' },
     label: { type: 'string', description: 'Display name, not an authority or lookup key.' },
     artifactRequestId: { type: 'string', description: 'Separately trusted artifact REQ.' },
-    hardBudget: { type: 'number', description: 'FAST assignment hard model-request budget: integer 8..24, default 16. Host computes softLimit=floor(0.8*hardBudget); each assignment is independent.' },
+    hardBudget: { type: 'number', description: 'FAST assignment hard model-request budget: integer 8..60, default 60 for substantial work; smaller values for obviously short bounded assignments. Host computes softLimit=floor(0.8*hardBudget); each assignment is independent.' },
   }
   function makeTaskTool(workerType) {
     const sol = workerType === 'sol', secretary = workerType === 'secretary'
@@ -621,7 +641,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
   function cancelWitness(binding) {
     return JSON.stringify({ id: binding.id, state: binding.state,
       admissions: binding.lifecycle?.admissions ?? null, delivery: binding.delivery,
-      artifactRequests: binding.artifactRequests })
+      artifactRequests: binding.artifactRequests, stop: binding.lifecycle?.stop ?? null })
   }
   async function verifyIdentity(parent, id, signal) {
     const entries = await ctx.subagents.listChildren(parent.id, signal)
@@ -733,7 +753,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
               if (durable) await changeBinding(parent, selected.id, entry => {
                 if (entry !== snapshot || entry.state !== 'ready' || entry.delivery !== 'none')
                   throw new Error('POSTMAN_WORKER_BINDING_CHANGED')
-                return { ...entry, state: 'stopping' }
+                return { ...entry, state: 'stopping', lifecycle: stopIntent(entry, mode) }
               })
               slot.state = 'stopping'
               bindingChanged(selected.id)
@@ -747,7 +767,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
             const closed = await ctx.subagents.closeContinuableChild(parent, selected.id, async () => {
               if (durable) await changeBinding(parent, selected.id, entry => {
                 if (cancelWitness(entry) !== witness) throw new Error('POSTMAN_WORKER_BINDING_CHANGED')
-                return { ...entry, state: 'stopping' }
+                return { ...entry, state: 'stopping', lifecycle: stopIntent(entry, mode) }
               })
               slot.state = 'stopping'
               bindingChanged(selected.id)
@@ -826,8 +846,9 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       // Revoke Sol admissions while the Host retires children. Ownership is never reassigned.
       await changeBinding(parent, selected.id, entry => {
         if (entry !== current) throw new Error('POSTMAN_WORKER_BINDING_CHANGED')
-        return { ...entry, state: 'stopping' }
+        return { ...entry, state: 'stopping', lifecycle: stopIntent(entry, mode, children.map(([id]) => id)) }
       })
+      slot.state = 'stopping'
       bindingChanged(selected.id)
       for (const [id] of children) {
         const result = await stopWorker({ workerSessionId: id, mode }, { ...exec, agent: sol }, true)
@@ -841,7 +862,8 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
         return { status: 'POSTMAN_WORKER_CASCADE_PARTIAL', workerSessionId: selected.id, results,
           blockers: remaining.map(b => ({ workerSessionId: b.id, reason: 'not retired' })), taskCompleted: false }
       }
-      await changeBinding(parent, selected.id, entry => ({ ...entry, state: current.state }))
+      await changeBinding(parent, selected.id, entry => ({ ...entry, state: 'ready' }))
+      slot.state = 'ready'
       // Direct Host resume is not manager-owned: release its idle handle before durable Sol closure.
       if (hostHandle) { await hostHandle.dispose(); hostHandle = null }
       const result = await stopWorker({ workerSessionId: selected.id, mode }, exec, false, true)
@@ -863,6 +885,9 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     async execute(_args, exec) {
       const parent = exec?.agent
       if (!authorized(parent)) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
+      // Only exceptional uncertain/stopping bindings need exact reconciliation.
+      // Ordinary snapshot performs no recovery loop or model activation.
+      await reconcileClosedBindings(parent, groupFor(parent))
       const values = Object.values(bindings(parent, groupFor(parent)))
       let children
       try { children = await ctx.subagents.listChildren(parent.id, exec.signal) } catch { children = null }
@@ -1286,7 +1311,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
           const current = bindings(parent, g)[binding.id]
           if (!current || !matchesContext(parent, slot) ||
               !(await closeEvidence(parent, current)).ready) return false
-          await changeBinding(parent, binding.id, entry => ({ ...entry, state: 'stopping' }))
+          await changeBinding(parent, binding.id, entry => ({ ...entry, state: 'stopping', lifecycle: stopIntent(entry, 'close') }))
           slot.state = 'stopping'; bindingChanged(binding.id)
           return true
         }))

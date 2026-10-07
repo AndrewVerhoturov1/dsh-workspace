@@ -12,17 +12,19 @@ import {Config} from './postman-bridge.js'
 const fixture=async(t,opts)=>{const dir=await mkdtemp(join(tmpdir(),'postman-stage1-'));const f=await stage1Runtime(dir,opts);t.after(async()=>{await f.dispose();await rm(dir,{recursive:true,force:true,maxRetries:5,retryDelay:100})});return {...f,dir}}
 const accepted=r=>{assert.equal(r.status,'POSTMAN_WORKER_TASK_ACCEPTED',JSON.stringify(r));return r.workerSessionId}
 test('Bridge configuration fills FAST defaults before Worker startup',{timeout:15000},async t=>{
-  for(const input of [undefined,{}, {fastBudget:{}}, {fastBudget:{softLimit:12}}, {fastBudget:{hardLimit:16}}])
-    assert.deepEqual(Config.parse(input),{localDevelopment:false,fastBudget:{hardLimit:16}})
+  for(const input of [undefined,{}, {fastBudget:{}}, {fastBudget:{softLimit:12}}, {fastBudget:{hardLimit:60}}])
+    assert.deepEqual(Config.parse(input),{localDevelopment:false,fastBudget:{hardLimit:60}})
   const config=Config.parse({localDevelopment:true})
-  assert.deepEqual(config,{localDevelopment:true,fastBudget:{hardLimit:16}})
+  assert.deepEqual(config,{localDevelopment:true,fastBudget:{hardLimit:60}})
   assert.equal(Config.safeParse({fastBudget:{hardLimit:3}}).success,false)
+  assert.equal(Config.safeParse({fastBudget:{hardLimit:61}}).success,false)
+  assert.equal(Config.parse({fastBudget:{hardLimit:16}}).fastBudget.hardLimit,16)
   assert.deepEqual(Config.parse({fastBudget:{softLimit:1,hardLimit:8}}).fastBudget,{hardLimit:8})
   const f=await fixture(t,{fastBudget:config.fastBudget})
   const id=accepted(await f.run(f.worker.taskTool,{task:'Verify parsed startup budget; report bounded facts.'}))
   await f.settled(id)
   const budget=f.registry.get('leader').workers[id].budget
-  assert.equal(budget.softLimit,12);assert.equal(budget.hardLimit,16)
+  assert.equal(budget.softLimit,48);assert.equal(budget.hardLimit,60)
 })
 for(const type of ['luna','secretary','sol']) test(type+' actual model instructions at initial, continuation, replacement and cold activation',{timeout:15000},async t=>{
   const f=await fixture(t,{plan:(a,_r,n)=>{
@@ -155,13 +157,13 @@ test('queued followup does not reset a running assignment budget before FIFO cla
   assert.notEqual(budget.assignmentId,old.assignmentId);assert.equal(budget.used,1);assert.equal(budget.reported,true)
   assert.equal(Object.keys(f.registry.get('leader').workers[id].pendingBudgets).length,0)
 })
-test('default FAST 12/16 budget cannot silently finish without escalation report',{timeout:15000},async t=>{
-  const f=await fixture(t,{plan:(_a,_r,n)=>n<16?{name:'read',args:{}}:{text:'ignored hard report instruction'}})
+test('default FAST 48/60 budget cannot silently finish without escalation report',{timeout:15000},async t=>{
+  const f=await fixture(t,{plan:(_a,_r,n)=>n<60?{name:'read',args:{}}:{text:'ignored hard report instruction'}})
   const id=accepted(await f.run(f.worker.taskTool,{task:'Exact default-budget finite check'}));const child=await f.settled(id)
-  assert.equal(f.requests.length,16)
-  assert.ok(f.requests[11].request.system.includes('SOFT WARNING'))
-  assert.ok(f.requests[15].request.system.includes('HARD CEILING'))
-  const b=f.registry.get('leader').workers[id].budget;assert.equal(b.used,16);assert.equal(b.notified,true);assert.equal(b.reported,true)
+  assert.equal(f.requests.length,60)
+  assert.ok(f.requests[47].request.system.includes('SOFT WARNING'))
+  assert.ok(f.requests[59].request.system.includes('HARD CEILING'))
+  const b=f.registry.get('leader').workers[id].budget;assert.equal(b.used,60);assert.equal(b.notified,true);assert.equal(b.reported,true)
   assert.equal(child.session.events.filter(e=>e.type==='tool/call'&&e.data.name==='report').length,0)
   await f.wake(f.leader)
   const reports=f.leader.session.events.filter(e=>e.type==='user/message'&&e.data.source?.senderSessionId===id)
@@ -201,5 +203,5 @@ test('canonical TASK_CONTRACT and Sol mandatory delegation instructions',()=>{
   }
   const sol=postmanRoleInstruction('sol')
   for(const marker of [/до двух/,/Обязательно передавай/,/параллельно/,/engineering judgement/i,/агрегированный report/,/PTC-first/,/Worker-first/,/direct-only/,/Dispatch-first/])assert.match(sol,marker)
-  assert.deepEqual(FAST_WORKER_BUDGET,{hardLimit:16,softLimit:12})
+  assert.deepEqual(FAST_WORKER_BUDGET,{hardLimit:60,softLimit:48})
 })
