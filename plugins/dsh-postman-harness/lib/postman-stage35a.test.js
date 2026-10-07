@@ -60,7 +60,7 @@ test('Stage 3.5A exact Sol gets next-request feedback; FAST and Leader do not in
   f.ctx.logger.exporter({export:m=>{if(m.name==='postman-ptc')diagnostics.push(m.args[1])}})
   await f.turn(f.leader);await f.prepare();await writeFile(join(f.worktree,'a.txt'),'A');await writeFile(join(f.worktree,'b.txt'),'B')
   const dispatch=async(name,args)=>ok(await f.execute(f.leader,'ptc_execute',ptc('return await tools.'+name+'('+JSON.stringify(args)+')').args))
-  const accepted=await dispatch('postman_sol_worker',{task:'Explicit user-selected Sol Worker. Controlled bounded exact evidence.'})
+  const accepted=await dispatch('postman_sol_worker',{task:'Approved execution plan: Leader-selected Sol Worker. Controlled bounded exact evidence.'})
   const sol=await warned.promise
   assert.equal(accepted.workerSessionId,sol.id)
   const own=ok(await f.execute(sol,'ptc_execute',ptc("return await tools.postman_worker({task:'Bounded owned FAST facts',hardBudget:15})").args))

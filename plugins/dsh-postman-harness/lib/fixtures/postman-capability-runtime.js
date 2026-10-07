@@ -13,7 +13,7 @@ const require = createRequire(import.meta.url)
 const sdkRequire = createRequire(process.env.DSH_CAPABILITY_SDK ?? require.resolve('@deepseek-ai/dsh/package.json'))
 export const native = name => import(pathToFileURL(sdkRequire.resolve('@deepseek-ai/' + name)).href)
 export const repositoryRoot = fileURLToPath(new URL('../../../../', import.meta.url))
-export async function capabilityRuntime(dir, { preset = 'postman-leader-ptc', resume = false, lateFs = false, plan = () => null } = {}) {
+export async function capabilityRuntime(dir, { preset = 'postman-leader-ptc', resume = false, lateFs = false, localDevelopment = false, plan = () => null } = {}) {
   const { Context } = await native('cordis')
   const { Loader, Group } = await native('cordis-plugin-loader')
   const { AgentRegistry, installModelSelection } = await native('dsh-agent')
@@ -77,7 +77,7 @@ export async function capabilityRuntime(dir, { preset = 'postman-leader-ptc', re
   const contexts = initializePostmanTaskContexts(registry, { gitCommand, makeDirectory: async () => worktree, temporaryDirectory: () => dir })
   const workspacePolicy=await import(pathToFileURL(join(repositoryRoot,'plugins/dsh-task-discipline/workspace-policy.js')).href)
   await ctx.plugin(workspacePolicy).await()
-  const plugin = ctx.plugin(bridge, { localDevelopment: false }); await plugin.await()
+  const plugin = ctx.plugin(bridge, { localDevelopment }); await plugin.await()
   ctx.on('tools/result', (exec, result) => results.push({ agent: exec.agent, name: exec.name, result, parent: exec.parent }))
   class Adapter extends LlmAdapter {
     async resolveModel(provider, model) { return { provider, id: model, name: model, inputModalities: ['text','image'], reasoning: { efforts: ['low','xhigh','max'].map(id => ({ id, name: id })) } } }

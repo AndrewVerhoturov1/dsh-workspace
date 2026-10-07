@@ -308,7 +308,19 @@ Avoid:
 ## 10. Leader supervisor pattern
 
 For a Postman Leader, PTC should normally absorb the deterministic supervisor
-sequence between two real decisions.
+sequence between two real decisions within an approved execution plan.
+
+Every new non-trivial task first requires Leader routing decision -> compact
+execution plan -> explicit user approval -> execution. Before approval, only minimal
+necessary Leader read-only understanding; no Worker/Secretary/Sol creation, plan
+delegation, Bridge/Postman transport, implementation, tests/build or mutating
+Git/product operations. Truly trivial read-only/factual requests execute directly.
+The human approval_boundary is a genuine stop: ask_user_question/exit_plan_mode
+remain direct-only, outside PTC; batching must never cross or hide this boundary.
+Approval covers the plan, not each tool, same-scope continuation or routine cleanup.
+Preapproved conditional Sol escalation needs no separate role permission. Material
+cost/scope/access/destructive-operation/transport changes require STOP -> revised
+plan -> approval. New independent outcomes require a new plan.
 
 Bad:
 
@@ -323,7 +335,7 @@ model
 -> model
 -> postman_yield
 
-Good:
+Good (after explicit plan approval):
 
 model
 -> PTC
