@@ -1003,18 +1003,19 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
         const binding = bindings(parent, g)[id]
         if (binding !== selected.binding || binding.state !== 'ready' || binding.delivery !== 'none' ||
             !matchesContext(parent, slot)) return { status: 'POSTMAN_WORKER_COMPACT_BUSY', workerSessionId: id }
-        const child = liveWorker(id)
+        const child = liveWorker(id), sol = workerTypeOf(binding) === 'sol'
+        if ((!child || sol) && !workerEvidence(binding, await history(id, parent.id, exec.signal), parent, { terminalReportOnly: sol }).ready)
+          return { status: 'POSTMAN_WORKER_COMPACT_BUSY', workerSessionId: id }
         if (!child) {
           try {
-            if (!durable || !await verifyIdentity(parent, id, exec.signal) ||
-                !workerEvidence(binding, await history(id, parent.id, exec.signal), parent).ready)
+            if (!durable || !await verifyIdentity(parent, id, exec.signal))
               return { status: 'POSTMAN_WORKER_COMPACT_BUSY', workerSessionId: id }
             if (typeof ctx.subagents.compactContinuableChild !== 'function')
               return { status: 'POSTMAN_WORKER_LIFECYCLE_UNSUPPORTED', workerSessionId: id }
             const compacted = await ctx.subagents.compactContinuableChild(parent, id, async agent => {
               const current = bindings(parent, g)[id]
               return authorized(parent) && current === binding && matchesContext(parent, slot) &&
-                workerEvidence(current, await history(agent.id, parent.id, exec.signal), parent).ready
+                workerEvidence(current, await history(agent.id, parent.id, exec.signal), parent, { terminalReportOnly: sol }).ready
             }, exec.signal)
             if (!compacted) return { status: 'POSTMAN_WORKER_COMPACT_BUSY', workerSessionId: id }
             return { status: 'POSTMAN_WORKER_COMPACTED', workerSessionId: id,
