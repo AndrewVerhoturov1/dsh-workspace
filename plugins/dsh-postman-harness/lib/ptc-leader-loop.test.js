@@ -111,6 +111,10 @@ for (const producer of ['postman_worker', 'postman_worker_interrupt', 'postman_b
     assert.equal(diagnostics.at(-1).descriptionNormalized,true)
     if (!accepted && producer!=='bridge-post-blocked') assert.equal(diagnostics.at(-1).yieldBlockedReason, producer==='prepare-only'?'no-accepted-producer':producer==='ambiguous-program'?'model-decision-requested':'acceptance-not-confirmed')
     if (accepted && !queued) {
+      assert.equal(adapter.isWaitingForExternalEvent(leader),true)
+      const call=leader.session.events.findLast(e=>e.type==='tool/call')
+      leader.session.append('tool/code-dispatch-start',{parentCallId:call.data.callId,callId:'known-cleanup',name:'postman_worker_stop',arguments:'{}'})
+      assert.equal(adapter.isWaitingForExternalEvent(leader),false,'settlement unblocking requested lifecycle work must wake')
       leader.followup(createUserMessage({content:[{type:'text',text:producer==='postman_bridge'?'POSTMAN_BRIDGE_READY':'Worker report'}]}))
       await leader.whenIdle()
       assert.equal(requests.length, 2)

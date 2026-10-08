@@ -29,6 +29,8 @@ test('exact Sol actual model call executes ptc_execute on initial and cold conti
   const f = await fixture(t, { plan: (agent, request) => {
     if (agent.id === 'leader') return null
     assert.ok(request.tools.some(tool => tool.name === 'ptc_execute'))
+    const context=request.messages.flatMap(m=>m.content).filter(b=>b.type==='text').map(b=>b.text).join('\n')
+    for(const id of ['postman','ptc']) assert.ok(context.includes('docs'+(process.platform==='win32'?'\\':'/')+'subprojects'+(process.platform==='win32'?'\\':'/')+id),'exact managed Sol project context before first allowed PTC/read')
     const first = !seen.has(agent); seen.add(agent)
     return first ? { name: 'ptc_execute', args: ptc('return {executed: true}') } : report
   } })

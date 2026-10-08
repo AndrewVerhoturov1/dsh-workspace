@@ -93,14 +93,13 @@ async function phase(dir, resumed) {
     leader.followup(input('Bounded fixture task')); await leader.whenIdle()
     if (!resumed) {
       const result = await ctx.tools.execute({callId:'project-touch',name:'read',arguments:{file_path:'plugins/dsh-ptc/a.txt'},agent:leader,signal:signal()})
-      assert.equal(result.isError,true)
-      leader.followup(input('Continue after Host project discovery')); await leader.whenIdle()
+      assert.equal(result.isError,false,'expected managed Leader subproject delivered before first read')
     }
     const projectText = await readFile(join(dir,'docs/subprojects/ptc/SUBPROJECT.md'),'utf8')
     assert.ok(latest(ctx,leader).some(s=>s.text.endsWith(projectText)),'subproject hints survive separate process')
     const first = requests.at(-1).request
     assert.ok(body(first).includes('Общие правила агента'))
-    assert.ok(body(first).includes('POSTMAN_LEADER_SKILL_VERSION: 24'))
+    assert.ok(body(first).includes('POSTMAN_LEADER_SKILL_VERSION: 31'))
     for (const path of ['REPO_POLICY.md','docs/workflow/TASK_CONTRACT.md']) {
       const text = await readFile(join(dir,path),'utf8')
       assert.ok(latest(ctx,leader).some(s=>s.text.endsWith(text)))
@@ -115,7 +114,7 @@ async function phase(dir, resumed) {
     assert.equal(request.agent.session.header.agentPreset,'postman-leader')
     assert.equal(ctx.agentPresets.composedPreset(request.agent.ctx),'postman-leader')
     assert.match(request.request.system,/Worker persona/)
-    assert.ok(!body(request.request).includes('POSTMAN_LEADER_SKILL_VERSION: 24'),'Leader role does not leak into child')
+    assert.ok(!body(request.request).includes('POSTMAN_LEADER_SKILL_VERSION: 31'),'Leader role does not leak into child')
     assert.ok(body(request.request).includes('Общие правила агента'))
     for (const path of ['REPO_POLICY.md','docs/workflow/TASK_CONTRACT.md']) {
       const text = await readFile(join(dir,path),'utf8')
@@ -125,9 +124,9 @@ async function phase(dir, resumed) {
       const generation = leader.session.surface.replaceGeneration
       assert.ok(await compactor.compactNow(leader,signal()))
       assert.ok(leader.session.surface.replaceGeneration>generation)
-      assert.ok(!body({messages:leader.session.deriveMessages()}).includes('POSTMAN_LEADER_SKILL_VERSION: 24'))
+      assert.ok(!body({messages:leader.session.deriveMessages()}).includes('POSTMAN_LEADER_SKILL_VERSION: 31'))
       leader.followup(input('Continue after native compaction')); await leader.whenIdle()
-      assert.ok(body(requests.at(-1).request).includes('POSTMAN_LEADER_SKILL_VERSION: 24'))
+      assert.ok(body(requests.at(-1).request).includes('POSTMAN_LEADER_SKILL_VERSION: 31'))
       assert.ok(body(requests.at(-1).request).includes('Общие правила агента'))
       assert.ok(latest(ctx,leader).some(s=>s.text.endsWith(projectText)),'subproject context restored after real compaction')
     }
@@ -152,17 +151,25 @@ else {
     t.after(async()=>{await ctx.fiber.dispose();await rm(dir,{recursive:true,force:true,maxRetries:5,retryDelay:100})})
     const agent=await create('leader')
     agent.followup(input('Small task'));await agent.whenIdle()
-    assert.ok(!body(requests.at(-1).request).includes('Current focus'),'unrelated SUBPROJECT not preloaded')
+    assert.ok(body(requests.at(-1).request).includes('Current focus'),'known supervisor subprojects proactively delivered')
+    // New/unexpected subprojects remain first-touch fail-closed.
+    await mkdir(join(dir,'docs/subprojects/agents-nods-by-andrew'),{recursive:true})
+    await mkdir(join(dir,'plugins/dsh-nodes-agent-by-andrew'),{recursive:true})
+    await writeFile(join(dir,'docs/subprojects/agents-nods-by-andrew/SUBPROJECT.md'),'UNKNOWN_PROJECT_CONTEXT')
     const execute = (name,args) => ctx.tools.execute({callId:'fixture-'+effects.length,name,arguments:args,agent,signal:signal()})
     // Even another middleware forcing allow cannot override the monotonic gate.
     ctx.on('tools/pre-execute',async (_exec,next)=>{await next();return {kind:'allow'}})
-    const denied = await execute('write',{file_path:'plugins/dsh-ptc/a.txt',content:'b'})
+    const denied = await execute('write',{file_path:'plugins/dsh-nodes-agent-by-andrew/a.txt',content:'b'})
     assert.equal(denied.isError,true);assert.match(denied.error.message,/WORKSPACE_POLICY_REQUIRED/);assert.equal(effects.length,0)
     agent.followup(input('Deliver Host context'));await agent.whenIdle()
     const subproject = await readFile(join(dir,'docs/subprojects/ptc/SUBPROJECT.md'),'utf8')
     assert.ok(latest(ctx,agent).some(s=>s.text.endsWith(subproject)))
-    assert.equal((await execute('write',{file_path:'plugins/dsh-ptc/a.txt',content:'b'})).isError,false)
+    assert.equal((await execute('write',{file_path:'plugins/dsh-nodes-agent-by-andrew/a.txt',content:'b'})).isError,false)
     assert.equal(effects.length,1)
+    await writeFile(join(dir,'docs/subprojects/ptc/SUBPROJECT.md'),'Fresh PTC instructions')
+    assert.equal((await execute('read',{file_path:'plugins/dsh-ptc/a.txt'})).isError,true,'known project freshness still fail-closed')
+    agent.followup(input('Deliver fresh project instructions'));await agent.whenIdle()
+    assert.ok(body(requests.at(-1).request).includes('Fresh PTC instructions'))
     assert.equal((await execute('read',{file_path:'nested/a.txt'})).isError,false)
     agent.followup(input('Next nested instruction step'));await agent.whenIdle()
     assert.ok(body(requests.at(-1).request).includes('NESTED_ONLY'))
@@ -182,4 +189,15 @@ else {
     const scoped = await ctx.systemPrompt.assemble({agent,scope:agent,signal:signal()}).catch(error=>error)
     assert.ok(scoped instanceof Error,'missing required Leader skill fails closed')
   })
+  test('exact Leader role does not preload Postman projects into unrelated repository',{timeout:20000},async t=>{
+    const dir=await mkdtemp(join(tmpdir(),'dsh-policy-unrelated-'));await fixture(dir)
+    await writeFile(join(dir,'AGENTS.md'),'Unrelated repository instructions')
+    await writeFile(join(dir,'REPO_POLICY.md'),'Unrelated repository policy')
+    await writeFile(join(dir,'docs/workflow/TASK_CONTRACT.md'),'Unrelated repository contract')
+    const r=await runtime(dir)
+    t.after(async()=>{await r.ctx.fiber.dispose();await rm(dir,{recursive:true,force:true,maxRetries:5})})
+    const agent=await r.create('leader');agent.followup(input('Bounded unrelated task'));await agent.whenIdle()
+    assert.ok(!latest(r.ctx,agent).some(s=>s.name.includes('docs'+(process.platform==='win32'?'\\':'/')+'subprojects')))
+  })
+
 }
