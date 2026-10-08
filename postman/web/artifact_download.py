@@ -104,8 +104,8 @@ _CONTROL_PROOF_JS = r"""
     connected: Boolean(el && el.isConnected),
     visible,
     disabled,
-    visibleLabel: normalize(el.textContent),
-    visibleLabelExact: normalize(el.textContent) === String(expectedFilename || ""),
+    visibleLabel: normalize(el.innerText),
+    visibleLabelExact: normalize(el.innerText) === String(expectedFilename || ""),
     tag: String(el.tagName || "").toLowerCase()
   };
 }
