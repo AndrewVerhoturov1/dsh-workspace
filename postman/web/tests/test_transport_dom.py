@@ -571,6 +571,35 @@ class TransportDomTests(unittest.TestCase):
         self.page.locator('[data-user-message-bubble]').first.evaluate('(el)=>el.textContent="foreign lineage"')
         with self.assertRaises(ValueError):
             transport.confirmed_binding(self.page, intent, result)
+    def test_artifact_pressable_aria_link_matches_production_dom(self):
+        # Live REQ_20261008T045856Z_4237 renders a pressable span, not a[href].
+        for role, expected in ((' role="link"', artifact.ARTIFACT_DOM_CONFIRMED),
+                               ('', artifact.ARTIFACT_ATTACHMENT_NOT_FOUND)):
+            with self.subTest(role=role):
+                control = (f'<span data-d-component="pressable"{role} tabindex="0" '
+                           f'aria-label="Open {FILENAME}"><span data-d-component="text">'
+                           f'<span data-d-text-decoration="underline-dotted">{FILENAME}</span>'
+                           '</span></span>')
+                body = ('<p>' + html.escape(artifact.result_begin_marker(REQ)) + '</p>'
+                        + control + '<p>' + html.escape(artifact.result_end_marker(REQ)) + '</p>')
+                self.set_html(document(turns=group(body=final(body))))
+                proof = observer.observe_next_assistant(self.page, PROMPT, URL,
+                    timeout_ms=6000, stable_ms=0, sleep=self.clock.sleep, monotonic=self.clock.now)
+                proof = bridge_module._attach_submit_proof(proof, prompt=PROMPT,
+                    submitted={'code': submit.PROMPT_SEND_CONFIRMED, 'sendState': submit.PROVEN_SENT})
+                found = artifact.detect_artifact_dom(self.page, expected_prompt=PROMPT,
+                    expected_chat_url=URL, request_id=REQ, expected_filename=FILENAME,
+                    completed_observer_result=proof)
+                self.assertEqual(found['code'], expected, found)
+                if found['ok']:
+                    self.assertEqual(found['details']['attachment']['tag'], 'span')
+                    self.assertEqual(found['details']['attachment']['role'], 'link')
+                    identity = artifact_download._p5_identity(found)
+                    resolved = artifact_download._resolve_control(self.page, identity)
+                    self.assertEqual(resolved.get_attribute('role'), 'link')
+                    self.assertTrue(artifact_download._control_snapshot(resolved, FILENAME)['visibleLabelExact'])
+                self.assertIsNone(self.page.evaluate('window.sends'))
+
     def test_artifact_after_natural_control_preserves_req_and_exact_anchor(self):
         intent, sent, binding = self.send_natural()
         envelope = ('<p>' + html.escape(artifact.result_begin_marker(REQ)) + '</p>'
