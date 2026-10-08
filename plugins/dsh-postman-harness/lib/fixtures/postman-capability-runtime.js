@@ -13,7 +13,7 @@ const require = createRequire(import.meta.url)
 const sdkRequire = createRequire(process.env.DSH_CAPABILITY_SDK ?? require.resolve('@deepseek-ai/dsh/package.json'))
 export const native = name => import(pathToFileURL(sdkRequire.resolve('@deepseek-ai/' + name)).href)
 export const repositoryRoot = fileURLToPath(new URL('../../../../', import.meta.url))
-export async function capabilityRuntime(dir, { preset = 'postman-leader-ptc', resume = false, lateFs = false, localDevelopment = false, plan = () => null } = {}) {
+export async function capabilityRuntime(dir, { preset = 'postman-leader-ptc', resume = false, lateFs = false, localDevelopment = false, reportDelivery = 'quiet', deferSettlements = true, plan = () => null } = {}) {
   const { Context } = await native('cordis')
   const { Loader, Group } = await native('cordis-plugin-loader')
   const { AgentRegistry, installModelSelection } = await native('dsh-agent')
@@ -54,7 +54,7 @@ export async function capabilityRuntime(dir, { preset = 'postman-leader-ptc', re
   await mount('dsh-fs-local', { cwd: dir, diffBasisMaxBytes: 1048576 })
   await mount('dsh-attachment-local', { root: join(dir, 'attachments') })
   await mount('dsh-subagent-spawn-in-process', { providerName: 'spawn' })
-  await mount('dsh-tool-subagent-report', { reportDelivery: 'quiet' })
+  await mount('dsh-tool-subagent-report', { reportDelivery })
   await mount('dsh-fs-observation-policy')
   const { AgentPresets } = await native('dsh-agent-presets')
   new AgentPresets(ctx, { default: preset, roots: [
@@ -79,7 +79,9 @@ export async function capabilityRuntime(dir, { preset = 'postman-leader-ptc', re
   const contexts = initializePostmanTaskContexts(registry, { gitCommand, makeDirectory: async () => worktree, temporaryDirectory: () => dir })
   const workspacePolicy=await import(pathToFileURL(join(repositoryRoot,'plugins/dsh-task-discipline/workspace-policy.js')).href)
   await ctx.plugin(workspacePolicy).await()
+  // Baseline comparison uses the same real loop with only the narrow hook vetoed.
   const plugin = ctx.plugin(bridge, { localDevelopment }); await plugin.await()
+  if (!deferSettlements) ctx.on('postman/subagent-settlement-defer', () => 'wake', { prepend:true })
   ctx.on('tools/result', (exec, result) => results.push({ agent: exec.agent, name: exec.name, result, parent: exec.parent }))
   class Adapter extends LlmAdapter {
     async resolveModel(provider, model) { return { provider, id: model, name: model, inputModalities: ['text','image'], reasoning: { efforts: ['low','xhigh','max'].map(id => ({ id, name: id })) } } }

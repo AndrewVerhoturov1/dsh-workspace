@@ -1347,6 +1347,29 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       return slot.workerType === 'sol' && child.phase?.kind === 'idle' && hasActiveWork(child)
     })
   }
+  // Called only by native settlement after disposal. Reports remain semantic
+  // evidence; the native terminal is separate lifecycle authority. Be conservative:
+  // new output, failure, input/work, missing identity or unseen report always wakes.
+  function canDeferSettlement(parent, child, terminal) {
+    if (!durable || !authorized(parent) || terminal?.stopReason !== 'completed') return false
+    const header = child?.session?.header, group = leaders.get(parent.id)
+    const binding = group && bindings(parent, group)[child?.id]
+    const seed = header?.seedLength ?? 0
+    if (!binding || binding.id !== child.id || header?.origin !== 'subagent' || header.parentSession !== parent.id ||
+        header.delegationDepth !== depthOf(parent.id) || !Number.isSafeInteger(seed) || seed < 0 || seed > child.session.events.length ||
+        child.inbox?.hasPending) return false
+    const events = child.session.events.slice(seed)
+    if (terminal.output !== undefined) {
+      // Native finalAssistantOutput also captures the already-delivered report
+      // tool-call. Allow only that exact block; new text/other output still wakes.
+      if (!Array.isArray(terminal.output) || terminal.output.length !== 1) return false
+      const block = terminal.output[0], call = events.findLast(e => e.type === 'tool/call')
+      if (block.type !== 'tool-call' || block.name !== 'report' || call?.data.name !== 'report' ||
+          block.id !== call.data.callId || block.arguments !== call.data.arguments) return false
+    }
+    const evidence = {session:{events},status:'idle',inbox:child.inbox}
+    return workerEvidence(binding, evidence, parent).ready
+  }
   function teamSnapshot(leader) {
     if (!isTopLevelPostmanSupervisor(leader) || !authorized(leader)) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
     const row = taskContexts?.record?.(leader.id) ?? {}
@@ -1388,5 +1411,5 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     leaders.clear()
   }
   return { taskTool, solTaskTool, secretaryTool, ledgerTool, freshTool, interruptTool, stopTool, listTool, compactTool, roleOf, ownerOf, ownsNotification, ownsLiveWorker, ptcContextOf, confirmActivation, releaseActivation, refreshLeader, suspendLeader,
-    contextOf, observeReport, pauseForOperation, prepareRestore, teamSnapshot, hasActiveWork, dispose }
+    contextOf, observeReport, pauseForOperation, prepareRestore, teamSnapshot, hasActiveWork, canDeferSettlement, dispose }
 }

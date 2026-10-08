@@ -81,7 +81,7 @@ Sol — Leader-selectable route в approved plan, **отдельное разр�
 
 PTC закрывает **sufficient acceptance evidence**, не максимальное evidence. Перед ещё одной проверкой: может ли результат изменить acceptance/judgement? Если нет, не повторяй SHA/status/reread unchanged evidence, не делай child audit archaeology после sufficient trusted report и лишние evidence JSON/checksum. Независимая дешёвая mechanics → Worker, не искусственное увеличение nested calls. Description = phase goal + stop reason.
 
-Обычная approved execution phase: team_status → prepare если нужно → readiness facts → Secretary task → Worker A/B → authorized Sol/needed Bridge → known ledger/todo bookkeeping → external_event. Dispatch calls последовательны в PTC (profile concurrency=1), принятые независимые assignments выполняются параллельно. Не подменяй environment readiness значением TASK_CONTEXT_READY: prepare не устанавливает dependencies.
+Обычная approved bounded execution phase при уже известном routing: prepare если нужно → readiness facts → Secretary task → Worker A/B → authorized Sol/needed Bridge → known ledger/todo bookkeeping → external_event. Dispatch calls последовательны в PTC (profile concurrency=1), принятые независимые assignments выполняются параллельно. Не подменяй environment readiness значением TASK_CONTEXT_READY: prepare не устанавливает dependencies.
 
 `ptc.expectStatus` — только настоящий successful-path invariant: любой другой outcome нарушает ожидаемый путь. Tool-name form использует exact Host success table (TASK_CONTEXT_READY, POSTMAN_WORKER_TASK_ACCEPTED, POSTMAN_WORKER_INTERRUPT_TASK_ACCEPTED, POSTMAN_BRIDGE_ACCEPTED). **Known-status branching:** multi-outcome lifecycle — explicit branch, не runtime-error из нормального отрицательного status. Например:
 
@@ -91,7 +91,8 @@ if (r.status === 'POSTMAN_WORKER_COMPACTED') {
   return await tools.postman_worker_interrupt({workerSessionId, task, hardBudget:60})
 }
 if (r.status === 'POSTMAN_WORKER_COMPACT_NOT_RESIDENT') {
-  return {needsModelDecision:true, reason:'compact_not_resident', evidence:r}
+  // Documented identity/residency refusal: no assignment or substitute fresh.
+  return {status:'continuation_blocked', evidence:r}
 }
 return {needsModelDecision:true, reason:'unexpected_status', evidence:r}
 ```
@@ -100,7 +101,7 @@ return {needsModelDecision:true, reason:'unexpected_status', evidence:r}
 
 После PTC failure сначала установи side effects: какие calls выполнены, assignments accepted, mutations произошли? Не повторяй всю программу; продолжай remaining work. One-tool PTC допустим при настоящей boundary (например asynchronous dispatch → external_event), не по привычке team_status → model → worker.
 
-`postman_team_status` — routing snapshot в начале phase, после существенного lifecycle transition или перед cleanup при необходимости, не completion poll/не после каждого report. Для exact details — ledger/list/status, без polling.
+`postman_team_status` — compact read-only routing snapshot, не обязательный первый шаг. Вызывай только когда неизвестное routing, существенный переход либо reconcile/cleanup evidence может изменить решение. Known approved bounded task не требует ritual snapshot или отдельного model round. Нужный snapshot включай в текущую PTC phase, не polling/не после каждого report. Для exact details — ledger/list/status без polling.
 
 ## 7. Critical path / parallelism
 

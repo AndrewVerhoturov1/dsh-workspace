@@ -175,7 +175,13 @@ exact branching on known normal outcomes (including refusals such as
 POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT or POSTMAN_WORKER_COMPACT_NOT_RESIDENT).
 Do not turn a normal negative branch into a PTC runtime-error. An explicit exact
 array may validate known outcomes before branching, but is not a replacement for
-choosing the correct next action. Unknown outcomes stop with compact evidence.
+choosing the correct next action. Known safe cleanup is one phase: exact branch
+-> applicable retirement -> quota/state verification -> task close if all exact
+children are retired. A documented refusal alone is not needsModelDecision;
+retain its blocker evidence without guessing success or retrying. Pending/active
+work still needs its real event or an already-authorized explicit cancel, not
+a synthetic model round. Unknown/conflicting/scope-ambiguous outcomes stop
+with compact evidence for judgement.
 
 Never continue on an unknown status by guessing what it means.
 
@@ -456,7 +462,11 @@ supervisor work before waiting. No separate model decision or manual wait tool
 is needed after a safe accepted dispatch or to wait for existing active work.
 
 Canonical postman-leader and compatibility postman-leader-ptc share this supervisor
-profile. Use postman_team_status once for routing, never as a completion poll.
+profile. postman_team_status stays a compact read-only routing snapshot. Call it
+only when unknown/materially transitioned/reconciliation/cleanup routing evidence
+can change a decision; known approved bounded work needs no ritual snapshot or
+standalone model round. Include any needed snapshot in the current PTC phase,
+never as a completion poll.
 postman_sol_worker is PTC-managed, not direct-only. Sol dispatch requires the
 existing approved route; PTC grants no new authorization. A later refusal, failure,
 pending/unknown effect or revocation blocks conclusion even if the guest caught

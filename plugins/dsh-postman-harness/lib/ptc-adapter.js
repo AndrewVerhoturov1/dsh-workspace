@@ -365,6 +365,17 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
       }
     },
   })
+  function isWaitingForExternalEvent(agent) {
+    const record = owners.get(agent?.id), turn = externalTurns.get(agent)
+    if (!allowed(agent, record) || agent.phase?.kind !== 'idle' || agent.inbox?.hasPending || !Number.isSafeInteger(turn)) return false
+    const events = agent.session.events, end = events.findLast(e => e.type === 'turn/end')
+    const call = events.findLast(e => e.type === 'tool/call')
+    if (end?.data.turn !== turn || end.data.reason?.kind !== 'completed' || call?.data.turn !== turn || call.data.name !== 'ptc_execute') return false
+    // Settlement that can unblock a requested retirement/compact is relevant.
+    if (events.some(e => e.type === 'tool/code-dispatch-start' && e.data.parentCallId === call.data.callId &&
+        ['postman_worker_stop','postman_worker_compact','postman_worker_fresh','postman_task_close'].includes(e.data.name))) return false
+    try { return JSON.parse(call.data.arguments).boundary === 'external_event' } catch { return false }
+  }
   async function dispose() {
     if (disposed) return
     disposed = true
@@ -373,5 +384,5 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
     owners.clear()
     await runtime.dispose()
   }
-  return { tool, refresh, remove, setProfile, permissionsChanged, dispose }
+  return { tool, refresh, remove, setProfile, permissionsChanged, isWaitingForExternalEvent, dispose }
 }

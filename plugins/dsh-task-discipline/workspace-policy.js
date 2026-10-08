@@ -66,6 +66,12 @@ async function documents(ctx, agent, signal, extra = []) {
   // Arbitrary shell is not safely classifiable as Git/non-Git. Capability is
   // the deterministic condition; repo policy precedes the first shell call.
   if (leader(agent) || ['pwsh','bash','ptc_execute','postman_task_prepare','implementation_artifact_apply'].some(has)) paths.push(join(root,POLICY))
+  // Expected managed supervisor capabilities are known before their first tool.
+  // Role comes from the owning Host, never an inherited child preset/persona.
+  if ((leader(agent) || ctx.bail('postman/workspace-role', agent) === 'sol') &&
+      (policy?.includes('`dsh-workspace`') || (await read(ctx,join(root,'AGENTS.md'),signal,true))?.includes('dsh-workspace'))) {
+    paths.push(...['postman','ptc'].map(id => join(root,'docs/subprojects',id,'SUBPROJECT.md')))
+  }
   paths.push(...projectPaths(root,[...touched(agent),...extra,agent.session.header.cwd]))
   return Promise.all([...new Set(paths)].map(async path => ({name:sectionName(path),text:'Workspace instructions from '+path+' (apply only to the named repository/subproject):\n\n'+await read(ctx,path,signal)})))
 }
