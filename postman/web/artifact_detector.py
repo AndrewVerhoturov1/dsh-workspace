@@ -142,7 +142,7 @@ _DOM_CANDIDATE_JS = r"""
   );
 
   const candidates = [];
-  for (const el of root.querySelectorAll('a[href], button, [role="button"], [download]')) {
+  for (const el of root.querySelectorAll('a[href], [role="link"], button, [role="button"], [download]')) {
     if (!visible(el)) continue;
     const visibleLabel = normalize(el.innerText);
     if (visibleLabel !== expectedFilename) continue;
