@@ -52,12 +52,14 @@ for (const resident of [false, true]) test('installed native runtime compact set
     handle = await f.ctx.agents.resume({resumeSessionId:id, agentOptions:{provider:'codex',model:'gpt-6.1-sol'},
       setup:childCtx=>applyChildComposition(childCtx,f.leader,{persona:'Exact resident Sol maintenance',toolFilter:{deny:[]}})})
     assert.equal(handle.agent.ctx.get('compaction'), undefined, 'real preset isolates compaction')
-    assert.ok(f.ctx.agentPresets.serviceFor(handle.agent,'compaction'))
+    assert.ok(f.ctx.get('agentPresets').serviceFor(handle.agent,'compaction'))
   }
+  const workerRequests = f.requests.filter(r=>r.agent.id===id && !r.compaction).length
   try {
     const compact = await f.call('postman_worker_compact',{workerSessionId:id})
     assert.deepEqual(compact,{status:'POSTMAN_WORKER_COMPACTED',workerSessionId:id,compacted:true,sameSession:true})
     assert.deepEqual(f.registry.get('leader').workers[id], binding)
+    assert.equal(f.requests.filter(r=>r.agent.id===id && !r.compaction).length, workerRequests, 'compact submits no Worker model turn')
     const after = await f.ctx.sessionPersistence.inspect(id)
     assert.equal(after.meta.id, before.meta.id); assert.equal(after.meta.parentSession, before.meta.parentSession)
     assert.ok(after.events.some(e=>e.type==='compaction/summary'))

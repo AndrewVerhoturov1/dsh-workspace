@@ -1024,7 +1024,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
         if (child.session?.header?.parentSession !== parent.id ||
             child.session.header.origin !== 'subagent' || child.session.header.delegationDepth !== depthOf(parent.id))
           return { status: 'POSTMAN_WORKER_COMPACT_NOT_RESIDENT', workerSessionId: id }
-        const compaction = child.ctx?.get?.('compaction') ?? ctx.agentPresets?.serviceFor(child, 'compaction')
+        const compaction = child.ctx?.get?.('compaction') ?? ctx.get('agentPresets')?.serviceFor(child, 'compaction')
         if (child.status !== 'idle' || child.inbox?.hasPending !== false ||
             typeof compaction?.compactNow !== 'function')
           return { status: 'POSTMAN_WORKER_COMPACT_BUSY', workerSessionId: id }
