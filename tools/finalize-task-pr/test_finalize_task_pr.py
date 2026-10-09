@@ -48,6 +48,10 @@ class FakeCommands:
 
     def __call__(self, args, *, cwd=None, timeout=120):
         self.calls.append(list(args))
+        if args[:3] == ["git", "-c", "core.longpaths=true"] and args[3:6] == ["-C", str(self.root), "worktree"] and args[6:] == ["remove", str(self.worktree)]:
+            if getattr(self, "fail_remove", False):
+                return cp(args, code=255, err="Filename too long")
+            return cp(args)
         if args[:3] == ["git", "-C", str(self.root)] and args[3:] == ["rev-parse", "--show-toplevel"]:
             return cp(args, out=str(self.root) + "\n")
         if args[:3] == ["git", "-C", str(self.root)] and args[3:] == ["remote", "get-url", "origin"]:
@@ -76,7 +80,9 @@ class FakeCommands:
             return cp(args, out=out)
         if args[:3] == ["git", "-C", str(self.worktree)] and args[3:] == ["status", "--porcelain", "--untracked-files=all"]:
             return cp(args, out=" M file.txt\n" if self.dirty else "")
-        if args[:3] == ["git", "-C", str(self.root)] and args[3:5] == ["worktree", "remove"]:
+        if args[:3] == ["git", "-c", "core.longpaths=true"] and args[3:6] == ["-C", str(self.root), "worktree"] and args[6:] == ["remove", str(self.worktree)]:
+            return cp(args)
+        if args[:3] == ["git", "-C", str(self.root)] and args[3:] == ["worktree", "remove", str(self.worktree)]:
             return cp(args)
         if args[:3] == ["git", "-C", str(self.root)] and args[3:] == ["worktree", "prune"]:
             return cp(args)
@@ -118,6 +124,8 @@ class FinalizeTaskPrTests(unittest.TestCase):
             self.assertTrue(item["mergedNow"])
             self.assertTrue(item["cleanup"]["localBranchRemoved"])
             self.assertTrue(item["cleanup"]["remoteBranchRemoved"])
+            remove_calls = [call for call in fake.calls if "worktree" in call and "remove" in call]
+            self.assertEqual(["git", "-c", "core.longpaths=true", "-C", str(fake.root), "worktree", "remove", str(fake.worktree)], remove_calls[0])
             flat = [" ".join(call) for call in fake.calls]
             self.assertTrue(any("merge_method=squash" in call for call in flat))
             self.assertFalse(any("reset --hard" in call or " stash" in call or " clean" in call for call in flat))
@@ -129,6 +137,74 @@ class FinalizeTaskPrTests(unittest.TestCase):
             result = self.run_finalize(fake)
             self.assertTrue(result["results"][0]["alreadyMerged"])
             self.assertFalse(any(call[:4] == [fake.gh_path, "api", "-X", "PUT"] for call in fake.calls))
+
+    @unittest.skipUnless(__import__("os").name == "nt", "Windows Git long-path behavior")
+    def test_windows_longpath_worktree_cleanup(self):
+        with tempfile.TemporaryDirectory(prefix="dsh-longpath-cleanup-") as td:
+            base = Path(td).resolve()
+            root = base / "repo"
+            root.mkdir()
+            git_cmd = ["git", "-C", str(root)]
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(git_cmd + ["config", "user.email", "fixture@example.invalid"], check=True)
+            subprocess.run(git_cmd + ["config", "user.name", "Fixture"], check=True)
+            (root / "tracked.txt").write_text("fixture", encoding="utf-8")
+            (root / ".gitignore").write_text("plugins/\n", encoding="utf-8")
+            subprocess.run(git_cmd + ["add", "tracked.txt", ".gitignore"], check=True)
+            subprocess.run(git_cmd + ["commit", "-qm", "fixture"], check=True)
+
+            branch = "task/fixture-longpath"
+            plain_worktree = base / "plain-worktree"
+            worktree = base / "flagged-worktree"
+            subprocess.run(git_cmd + ["worktree", "add", "-qb", "task/plain-longpath", str(plain_worktree), "HEAD"], check=True)
+            subprocess.run(git_cmd + ["worktree", "add", "-qb", branch, str(worktree), "HEAD"], check=True)
+            relative = Path("plugins/dsh-postman-harness/node_modules/.pnpm") / (
+                "@deepseek-ai+dsh@0.1.1-rc.2_" + "a" * 40
+            ) / "node_modules/@deepseek-ai/dsh/config/agent-presets/cordis/skills/cordis-plugin-development/example.txt"
+            plain_file = plain_worktree / relative
+            plain_file.parent.mkdir(parents=True)
+            plain_file.write_text("fixture", encoding="utf-8")
+            long_file = worktree / relative
+            long_file.parent.mkdir(parents=True)
+            long_file.write_text("fixture", encoding="utf-8")
+            self.assertGreater(len(str(long_file)), 260)
+            for path in (plain_worktree, worktree):
+                self.assertEqual("", subprocess.run(git_cmd[:2] + [str(path), "status", "--porcelain", "--untracked-files=all"], check=True, capture_output=True, text=True).stdout)
+            plain = subprocess.run(git_cmd + ["worktree", "remove", str(plain_worktree)], capture_output=True, text=True)
+            self.assertNotEqual(0, plain.returncode)
+            self.assertIn("Filename too long", plain.stderr)
+            self.assertTrue(plain_worktree.exists())
+            self.assertTrue(plain_file.exists())
+
+            flagged = subprocess.run(
+                ["git", "-c", "core.longpaths=true", "-C", str(root), "worktree", "remove", str(worktree)],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(0, flagged.returncode, flagged.stderr)
+            self.assertFalse(worktree.exists())
+
+    def test_longpath_remove_failure_keeps_branch_and_reports_warning(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td).resolve()
+            fake = FakeCommands(root)
+            fake.fail_remove = True
+            with patch.object(mod, "run_process", side_effect=fake), patch.object(
+                mod, "resolve_gh_executable", return_value=fake.gh_path
+            ):
+                result = mod.finalize_many(
+                    repo_root=fake.root,
+                    preview_root=fake.preview_root,
+                    repository=mod.DEFAULT_REPOSITORY,
+                    pr_numbers=[7],
+                )
+            codes = {warning["code"] for warning in result["warnings"]}
+            self.assertIn("FINALIZE_WORKTREE_REMOVE_FAILED", codes)
+            self.assertIn("FINALIZE_LOCAL_BRANCH_IN_USE", codes)
+            self.assertFalse(result["results"][0]["cleanup"]["localBranchRemoved"])
+            remove_calls = [call for call in fake.calls if "worktree" in call and "remove" in call]
+            self.assertEqual(1, len(remove_calls))
+            self.assertIn("-c", remove_calls[0])
 
     def test_dirty_worktree_is_warning_not_merge_failure(self):
         with tempfile.TemporaryDirectory() as td:
