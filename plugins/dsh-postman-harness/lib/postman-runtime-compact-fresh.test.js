@@ -23,13 +23,16 @@ const fixture = async (t, options) => {
 }
 
 for (const resident of [false, true]) test('installed native runtime compact settled '+(resident?'resident':'cold-continuable')+' Sol preserves Session and continuation', {timeout:30000}, async t => {
-  let f
+  let f, solId
+  const dispatchEnd = Promise.withResolvers(), ownGate = Promise.withResolvers()
+  t.after(() => ownGate.resolve())
   const steps = new WeakMap()
   f = await fixture(t, {plan:async a => {
     if (a.id === 'leader') return null
-    if (a.options.model !== 'gpt-6.1-sol') return report
+    if (a.options.model !== 'gpt-6.1-sol') { await ownGate.promise; return report }
+    solId = a.id
     const n = steps.get(a) ?? 0; steps.set(a, n+1)
-    if (n === 0) return {name:'ptc_execute',args:ptc('return await tools.postman_worker({task:"Finite exact lifecycle evidence"})')}
+    if (n === 0) return {name:'ptc_execute',args:{...ptc('return await tools.postman_worker({task:"Finite exact lifecycle evidence"})'),boundary:'external_event'}}
     if (n === 1) {
       const own = f.results.findLast(r=>r.agent===a && r.name==='postman_worker').result.value.workerSessionId
       await f.childDone(own)
@@ -37,9 +40,18 @@ for (const resident of [false, true]) test('installed native runtime compact set
     }
     return report
   }})
+  f.ctx.on('session/event', (session, event) => {
+    if (session.id === solId && event.type === 'turn/end' && event.data.turn === 1) dispatchEnd.resolve()
+  })
   const first = await f.call('postman_sol_worker', {task:'Approved substantial runtime regression: bounded own Worker, retire, report'})
   assert.equal(first.status, 'POSTMAN_WORKER_TASK_ACCEPTED')
+  await dispatchEnd.promise
+  assert.equal((await f.call('postman_worker_compact',{workerSessionId:first.workerSessionId})).status,
+    'POSTMAN_WORKER_COMPACT_BUSY', 'an idle event-waiting Sol with active owned work is not terminal')
+  ownGate.resolve()
   const id = first.workerSessionId, original = await f.childDone(id)
+  assert.deepEqual(original.session.events.filter(e=>e.type==='turn/start').map(e=>e.data.turn), [1,2])
+  assert.equal(f.results.filter(r=>r.agent.id===id && r.name==='report').length, 1, 'one terminal report across native event-wait turns')
   await f.turn(f.leader, 'Consume exact Sol report after own Worker retirement')
   const state = (await f.call('postman_worker_list')).workers.find(w=>w.workerSessionId===id)
   assert.equal(state.binding,'ready'); assert.equal(state.delivery,'none')

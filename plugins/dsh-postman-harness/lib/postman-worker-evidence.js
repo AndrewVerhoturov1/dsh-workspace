@@ -11,7 +11,7 @@ const isSuccessful = result => result?.data?.message?.content?.[0]?.isError === 
 const meaningful = event => event.type === 'assistant/message' &&
   event.data?.message?.content?.some(block => block.type === 'text' && block.text.trim())
 
-export function workerEvidence(worker, child, leader, { settlementOnly = false } = {}) {
+export function workerEvidence(worker, child, leader, { settlementOnly = false, terminalReportOnly = false } = {}) {
   const admissions = worker?.lifecycle?.version === 1 ? worker.lifecycle.admissions : null
   if (!Array.isArray(admissions) || !admissions.length || !Array.isArray(child?.session?.events) ||
       !Array.isArray(leader?.session?.events))
@@ -59,14 +59,18 @@ export function workerEvidence(worker, child, leader, { settlementOnly = false }
   if (currentTurn !== undefined || !turns.size)
     return { ready: false, reason: 'Worker has an unclosed or missing turn' }
   const reports = worker.lifecycle.reports ?? []
+  const terminalTurn = [...turns.values()].findLast(turn => turn.actions.length)
   for (const [turnId, turn] of turns) {
     const assigned = [...turn.consumed].filter(id => assignmentIds.has(id))
     for (const id of assigned) consumed.add(id)
     // Sol terminal reporting needs known lifecycle settlement, not task-success or
     // retirement evidence. A completed/failed/cancelled child may be aggregated as
     // a blocker; it need not have delivered a successful final report to aggregate its settled outcome.
-    if (settlementOnly) {
-      if (!['completed', 'blocked', 'aborted', 'error'].includes(turn.end) ||
+    // Compaction is maintenance, not retirement/task success. Sol may finish
+    // event-wait turns without reporting; its latest meaningful turn must still
+    // deliver a final report, and every earlier turn/tool must be settled.
+    if (settlementOnly || (terminalReportOnly && turn !== terminalTurn)) {
+      if (!(settlementOnly ? ['completed', 'blocked', 'aborted', 'error'] : ['completed']).includes(turn.end) ||
           turn.calls.some(item => { const result = turn.results.get(item.event.data.callId)
             return !result || result.position <= item.position }))
         return { ready: false, reason: 'Worker outcome or tool work not settled' }
