@@ -53,6 +53,27 @@ function Assert-DshWorkspaceReady {
 
 function Invoke-DshController([string]$Action) {
     if ($Action -in @('start', 'restart')) { Assert-DshWorkspaceReady }
+    if ($Action -in @('start', 'restart')) {
+        # Node fetch does not inherit the Windows proxy used by the browser.
+        if ([string]::IsNullOrWhiteSpace($env:HTTPS_PROXY) -and [string]::IsNullOrWhiteSpace($env:HTTP_PROXY)) {
+            $proxyKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
+            $proxyEnabled = Get-ItemPropertyValue -LiteralPath $proxyKey -Name 'ProxyEnable' -ErrorAction SilentlyContinue
+            $proxyServer = [string](Get-ItemPropertyValue -LiteralPath $proxyKey -Name 'ProxyServer' -ErrorAction SilentlyContinue)
+            if ($proxyEnabled -eq 1 -and -not [string]::IsNullOrWhiteSpace($proxyServer)) {
+                if ($proxyServer.Contains('=')) {
+                    $proxyServer = [string](@($proxyServer -split ';' | Where-Object { $_ -match '^https=' } | Select-Object -First 1) -replace '^https=', '')
+                }
+                if (-not [string]::IsNullOrWhiteSpace($proxyServer)) {
+                    if ($proxyServer -notmatch '^https?://') { $proxyServer = 'http://' + $proxyServer }
+                    $env:HTTPS_PROXY = $proxyServer
+                }
+            }
+        }
+        if (-not [string]::IsNullOrWhiteSpace($env:HTTPS_PROXY) -or -not [string]::IsNullOrWhiteSpace($env:HTTP_PROXY)) {
+            if ([string]::IsNullOrWhiteSpace($env:NODE_USE_ENV_PROXY)) { $env:NODE_USE_ENV_PROXY = '1' }
+            $env:NO_PROXY = ((@($env:NO_PROXY -split ',') + @('localhost', '127.0.0.1', '::1')) | Where-Object { $_ } | Select-Object -Unique) -join ','
+        }
+    }
     $runtime = Resolve-ControllerRuntime
     $arguments = @(
         $script:ControllerPath,
