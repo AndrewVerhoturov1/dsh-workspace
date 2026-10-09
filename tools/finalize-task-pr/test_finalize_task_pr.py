@@ -170,7 +170,7 @@ class FinalizeTaskPrTests(unittest.TestCase):
             self.assertGreater(len(str(long_file)), 260)
             for path in (plain_worktree, worktree):
                 self.assertEqual("", subprocess.run(git_cmd[:2] + [str(path), "status", "--porcelain", "--untracked-files=all"], check=True, capture_output=True, text=True).stdout)
-            plain = subprocess.run(git_cmd + ["worktree", "remove", str(plain_worktree)], capture_output=True, text=True)
+            plain = subprocess.run(["git", "-c", "core.longpaths=false", "-C", str(root), "worktree", "remove", str(plain_worktree)], capture_output=True, text=True)
             self.assertNotEqual(0, plain.returncode)
             self.assertIn("Filename too long", plain.stderr)
             self.assertTrue(plain_worktree.exists())
@@ -261,7 +261,7 @@ class FinalizeTaskPrTests(unittest.TestCase):
             codes = {w["code"] for w in result["warnings"]}
             self.assertIn("FINALIZE_PERMANENT_WORKTREE_PROTECTED", codes)
             self.assertIn("FINALIZE_LOCAL_BRANCH_IN_USE", codes)
-            self.assertFalse(any(call[3:5] == ["worktree", "remove"] for call in fake.calls if call[:1] == ["git"]))
+            self.assertFalse(any("worktree" in call and "remove" in call for call in fake.calls if call[:1] == ["git"]))
 
     def test_origin_repository_mismatch_is_rejected_before_pr_read(self):
         with tempfile.TemporaryDirectory() as td:
