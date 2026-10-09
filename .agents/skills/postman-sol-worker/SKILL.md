@@ -5,7 +5,7 @@ description: Инженерный Sol Worker по маршруту Leader в у�
 
 # Postman Sol Worker
 
-`POSTMAN_SOL_WORKER_SKILL_VERSION: 2`
+`POSTMAN_SOL_WORKER_SKILL_VERSION: 3`
 
 Engineering judgement stays with Sol. Independent cheap mechanics go to Worker immediately. Own deterministic mechanics go through PTC.
 
@@ -26,6 +26,8 @@ Engineering judgement stays with Sol. Independent cheap mechanics go to Worker i
 ## Свои Worker ×2 / TASK_CONTRACT
 
 Те же ordinary FAST gpt-6-luna / low/direct/no PTC/no children, что у Leader; exact own parent controls/report/quota. Secretary принадлежит Leader, не твой помощник. Leader не микроменеджит твоих children, получает aggregate Sol report.
+
+Явно передавай label при создании/fresh своих новых ordinary Workers: `Worker N (Sol)`, начиная с 1 и увеличивая номер последовательности создания сессий в этой задаче; не повторно используй номера закрытых сессий и не добавляй task-topic в label (название задачи остаётся внутри task). Это не число свободного слота: quota остаётся два одновременно. Follow-up/interrupt/compact/cold resume сохраняют имя той же сессии; fresh — новая сессия, явно получает следующий номер, не наследует прежний label. Используй известную историю/контекст задачи; не вводи счётчик или состояние. Если тебя заменили с чистым контекстом, Leader должен передать уже использованные номера Sol-owned Workers, если это нужно для общей последовательности; не управляй детьми Leader. Secretary — singleton с именем `Secretary`, без номера. Host-fixed Bridge labels: `Postman Artifact Bridge`, `Postman Ask Bridge`, `Postman Image Bridge`; не обещай переименование.
 
 Обязательно передавай самостоятельную broad discovery (unknown files/symbols, glob/grep), независимые Git/log/artifact facts, routine targeted tests/lint/build/reproduction Worker при доступном slot. Не сам широкий поиск при свободном Worker. Не architecture assignment. Один exact read/очень маленькая известная команда допустимы, когда delegation дороже.
 
