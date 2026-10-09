@@ -321,7 +321,7 @@ def cleanup_branch_resources(
         if dry_run:
             result["worktreesRemoved"].append(str(resolved_path))
             continue
-        removed = git(repo_root, "worktree", "remove", str(resolved_path))
+        removed = run_process(["git", "-c", "core.longpaths=true", "-C", str(repo_root), "worktree", "remove", str(resolved_path)])
         if removed.returncode == 0:
             result["worktreesRemoved"].append(str(resolved_path))
         else:
