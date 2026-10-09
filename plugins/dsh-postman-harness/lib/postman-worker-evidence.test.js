@@ -107,3 +107,28 @@ test('Sol settlementOnly separates terminal lifecycle from successful retirement
   assert.equal(settled({...worker(),delivery:'pending'},child(complete)),false)
 })
 
+
+test('compact permits settled event-wait turns before one current terminal report, not retirement', () => {
+  const w = worker()
+  w.lifecycle.reports = [{ childId:'w', turn:2, callId:'final', messageId:'report-2' }]
+  const waiting = [start(1), user('a'), call(1,'dispatch','ptc_execute'), result(1,'dispatch'), end(1)]
+  const events = [...waiting, start(2), user('owned-report'), call(2,'final'), result(2,'final'), end(2)]
+  const l = {session:{events:[delivered('report-2')]}}
+  const compact = (state, c, parent=l) => workerEvidence(state,c,parent,{terminalReportOnly:true}).ready
+  assert.equal(compact(w,child(events)),true)
+  assert.equal(workerEvidence(w,child(events),l).ready,false,'strict retirement evidence unchanged')
+  for (const c of [
+    child(waiting), child(events.slice(0,-1)), {...child(events),status:'running'},
+    {...child(events),inbox:{hasPending:true}},
+    child([...waiting, start(2), user('owned-report'), end(2)]),
+    child([...events, start(3), user('later'), end(3)]),
+    child([start(1), user('a'), call(1,'pending','ptc_execute'), end(1), ...events.slice(waiting.length)]),
+    child([start(1), user('a'), call(1,'dispatch','ptc_execute'), result(1,'dispatch'), end(1,'aborted'), ...events.slice(waiting.length)]),
+  ]) assert.equal(compact(w,c),false)
+  for (const state of [
+    {...w,state:'uncertain'}, {...w,delivery:'pending'}, {...w,delivery:'unknown'},
+    {...w,lifecycle:{...w.lifecycle,admissions:[...w.lifecycle.admissions,{id:'b',messageId:'b',state:'accepted'}]}},
+    {...w,lifecycle:{...w.lifecycle,admissions:w.lifecycle.admissions.map(a=>({...a,state:'pending'}))}},
+  ]) assert.equal(compact(state,child(events)),false)
+  assert.equal(compact(w,child(events),{session:{events:[]}}),false)
+})
