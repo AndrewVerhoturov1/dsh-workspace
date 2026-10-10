@@ -78,6 +78,7 @@ Continuation path открывает exact сохранённый `/c/<conversat
 
 После начала Send разрешена одна попытка. Success требует exact user-turn proof и bound chat URL.
 Текст legacy user turn и modern `data-user-message-bubble="true"` читается из известного вложенного semantic payload; соседние controls свёрнутого сообщения не входят в exact proof. Без такого payload контейнер с `button`/`role="button"`/`data-collapsed` остаётся fail-closed; простой контейнер без controls сохраняет fallback. Вложение проверяется в прежней области всего user turn, не внутри текстового payload.
+Перед click сохраняется user-turn snapshot. При наличии `data-turn-key` proof требует неизменный суффикс предыдущих ходов (включая прежний последний ход) и ровно один новый distinct key после него; исчезновение более ранних DOM-ходов не отменяет эту связь. Старый совпадающий текст, отсутствующий/частичный/дублирующийся key или изменённый предыдущий payload остаются UNKNOWN. Legacy DOM без keys сохраняет count+1 и неизменный текстовый prefix. Exact prompt, empty composer, exact conversation URL и attachment membership остаются отдельными gates.
 Неопределённый Send не разрешает blind resend.
 
 ### `browser_observer.py`

@@ -223,6 +223,93 @@ class TransportDomTests(unittest.TestCase):
                 self.assertEqual(submit.collect_user_turn_texts(self.page), [PROMPT])
                 self.assertTrue(submit._observe_send_proof(self.page, PROMPT, 0)[0])
 
+    def test_single_send_retains_prior_anchor_when_earlier_dom_turns_disappear(self):
+        prompt = "Выполни синтетическое задание:\nhttps://example.test/new-task.md"
+        name = f'POSTMAN_INPUT_{REQ}.zip'
+        attachment = SimpleNamespace(name=name, metadata=lambda: {'requestId': REQ, 'displayName': name})
+        for dropped in (0, 1, 2):
+            for attached in (False, True):
+                with self.subTest(dropped=dropped, attached=attached):
+                    turns = ''.join(group(prompt=f'prior-{i}', key=f'old-{i}') for i in range(4))
+                    card = ('<div data-composer-attachments><div data-testid="file-upload-preview" '
+                        'data-file-id="input-1" data-upload-state="ready" data-filename="' + name + '">'
+                        '<button type="button">synthetic input</button></div></div>') if attached else ''
+                    self.set_html('<main>' + turns + '</main><form>' + COMPOSER + card + '</form>'
+                                  '<button data-testid="send-button">Send</button>')
+                    self.page.evaluate('''dropped => {
+                        window.sends = 0;
+                        document.querySelector('[data-testid="send-button"]').onclick = () => {
+                            const composer = document.querySelector('#prompt-textarea');
+                            const turn = document.createElement('div');turn.dataset.turnKey = 'new';
+                            const unit = document.createElement('div');unit.setAttribute('data-content-search-unit-key','new:user');
+                            const bubble = document.createElement('div');bubble.setAttribute('data-user-message-bubble','true');
+                            const payload = document.createElement('div');payload.setAttribute('data-search-result-target','');
+                            const text = document.createElement('div');text.className = 'whitespace-pre-wrap';
+                            text.textContent = composer.innerText;payload.append(text);bubble.append(payload);unit.append(bubble);
+                            const card = document.querySelector('[data-testid="file-upload-preview"]');if(card)unit.append(card);
+                            turn.append(unit);document.querySelector('main').append(turn);
+                            for(let i=0;i<dropped;i++)document.querySelector('main > div').remove();
+                            composer.innerHTML = '';window.sends++;
+                        };
+                    }''', dropped)
+                    composer, _ = submit.find_composer(self.page)
+                    self.assertTrue(submit.insert_prompt(self.page, composer, prompt, timeout_ms=100)['ok'])
+                    result = submit.submit_once(self.page, composer, prompt, submit.SendGuard(), timeout_ms=100,
+                        chat_confirmed_state=submit.EXISTING_CHAT_CONFIRMED,
+                        conversation_url=URL, input_attachment=attachment if attached else None,
+                        attachment_id='input-1' if attached else None)
+                    self.assertTrue(result['ok'], result)
+                    self.assertEqual(result['sendState'], submit.SEND_PROVEN_SENT)
+                    self.assertEqual(self.page.evaluate('window.sends'), 1)
+                    proof = result['details']
+                    self.assertEqual((proof['userTurnCountBefore'], proof['userTurnCountNow']), (4, 5-dropped))
+                    self.assertEqual(proof['userTurnNoveltyMode'], 'anchored_tail')
+                    self.assertEqual(proof['userTurnKey'], 'new')
+                    self.assertEqual(proof['userTurnSemanticSelector'], '[data-search-result-target] .whitespace-pre-wrap')
+                    if attached:
+                        self.assertTrue(proof['sentAttachmentConfirmed'])
+                        self.page.locator('[data-file-id="input-1"]').evaluate('el=>el.dataset.filename="wrong.zip"')
+                        self.assertFalse(submit._observe_send_proof(self.page, prompt, 4, conversation_url=URL,
+                            before_user_turns=[{'turnKey':f'old-{i}','text':f'prior-{i}'} for i in range(4)],
+                            input_attachment=attachment, attachment_id='input-1')[0])
+
+    def test_anchored_send_refuses_old_ambiguous_or_missing_lineage(self):
+        prompt = 'exact synthetic prompt'
+        prior = [{'turnKey': 'old-0', 'text': prompt}, {'turnKey': 'old-1', 'text': 'previous tail'}]
+        cases = [
+            [('old-0', prompt)],  # An old matching turn revealed by virtualization.
+            [('old-1', 'previous tail'), ('old-0', prompt)],
+            [('foreign', 'previous tail'), ('new', prompt)],
+            [('old-1', 'previous tail'), ('new-1', prompt), ('new-2', prompt)],
+            [('old-1', 'previous tail'), ('old-1', prompt)],
+            [('old-1', 'previous tail'), ('', prompt)],
+            [('old-1', 'edited tail'), ('new', prompt)],
+        ]
+        for units in cases:
+            with self.subTest(keys=[key for key, _ in units]):
+                self.set_html(document(turns=''.join(group(prompt=text, key=key) for key, text in units)))
+                ok, proof = submit._observe_send_proof(self.page, prompt, len(prior),
+                    before_user_turns=prior, conversation_url=URL)
+                self.assertFalse(ok, proof)
+                self.assertFalse(proof['exactUserTurn'])
+                self.assertEqual(proof['userTurnCorrelationMode'], 'none')
+        # A single click without a new unit stays UNKNOWN; never auto-click again.
+        self.set_html(document(turns=group(prompt=prompt, key='old-0')))
+        self.page.evaluate('''() => {
+            window.sends=0;document.querySelector('[data-testid="send-button"]').onclick=()=>{
+                window.sends++;document.querySelector('#prompt-textarea').innerHTML='';
+            };
+        }''')
+        composer, _ = submit.find_composer(self.page)
+        self.assertTrue(submit.insert_prompt(self.page, composer, prompt, timeout_ms=100)['ok'])
+        guard = submit.SendGuard()
+        result = submit.submit_once(self.page, composer, prompt, guard, timeout_ms=0, conversation_url=URL)
+        self.assertEqual(result['code'], submit.PROMPT_SEND_UNKNOWN)
+        self.assertEqual(result['sendState'], submit.SEND_UNKNOWN)
+        self.assertEqual(self.page.evaluate('window.sends'), 1)
+        with self.assertRaises(submit.SubmitError):
+            guard.begin()
+
     def test_long_collapsed_image_send_proves_exact_text_and_sibling_attachment(self):
         prompt = self.long_image_prompt()
         name = f'POSTMAN_INPUT_{REQ}.zip'
