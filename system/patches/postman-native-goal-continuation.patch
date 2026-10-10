@@ -1,0 +1,14 @@
+diff --git a/node_modules/@deepseek-ai/dsh-goal-round-driver/lib/index.js b/node_modules/@deepseek-ai/dsh-goal-round-driver/lib/index.js
+--- a/node_modules/@deepseek-ai/dsh-goal-round-driver/lib/index.js
++++ b/node_modules/@deepseek-ai/dsh-goal-round-driver/lib/index.js
+@@ -78,7 +78,9 @@
+ 	/** Whether this exact lifecycle is quiescent with no competing prompt. */
+ 	function readyToDrive(state) {
+-		return ctx.fiber.state === 2 && !state.stopping && ctx.agents.get(state.agent.id) === state.agent && state.agent.status === "idle" && !state.competingQueued;
++		// An authoritative plugin wait defers only automatic goal admission.
++		// Native inbox input and the existing checkpoint recheck stay unchanged.
++		return ctx.fiber.state === 2 && !state.stopping && ctx.agents.get(state.agent.id) === state.agent && state.agent.status === "idle" && !state.competingQueued && ctx.bail("goal/continuation-defer", state.agent) !== true;
+ 	}
+ 	/** Recheck every condition that an awaited checkpoint may have changed. */
+ 	function readyAfterCheckpoint(state) {
+ 		return readyToDrive(state) && !state.needsCheckpoint;
