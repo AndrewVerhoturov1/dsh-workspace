@@ -1,0 +1,163 @@
+{
+  "checkedDate": "2026-10-10",
+  "currency": "USD",
+  "unitTokens": 1000000,
+  "scope": "first-party standard text API",
+  "models": [
+    {
+      "provider": "openai",
+      "publicId": "gpt-6-astra",
+      "sourceUrls": [
+        "https://developers.openai.com/api/docs/pricing",
+        "https://developers.openai.com/api/docs/models/gpt-6-astra"
+      ],
+      "sourcePriceText": "gpt-6-astra | $10.00 | $1.00 | $12.50 | $50.00 | $20.00 | $2.00 | $25.00 | $75.00",
+      "pricesUSDper1M": {
+        "promptInputLTE272000": {
+          "inputUncached": 10,
+          "cacheRead": 1,
+          "cacheWrite": 12.5,
+          "output": 50
+        },
+        "promptInputGT272000": {
+          "inputUncached": 20,
+          "cacheRead": 2,
+          "cacheWrite": 25,
+          "output": 75
+        }
+      },
+      "conditions": "Standard. Above 272000 prompt input tokens, long-context prices apply to the entire request."
+    },
+    {
+      "provider": "openai",
+      "publicId": "gpt-6.1-sol",
+      "sourceUrls": [
+        "https://developers.openai.com/api/docs/pricing",
+        "https://developers.openai.com/api/docs/models/gpt-6.1-sol"
+      ],
+      "sourcePriceText": "gpt-6.1-sol | $2.00 | $0.10 | $2.50 | $10.00 | $4.00 | $0.20 | $5.00 | $15.00",
+      "pricesUSDper1M": {
+        "promptInputLTE272000": {
+          "inputUncached": 2,
+          "cacheRead": 0.1,
+          "cacheWrite": 2.5,
+          "output": 10
+        },
+        "promptInputGT272000": {
+          "inputUncached": 4,
+          "cacheRead": 0.2,
+          "cacheWrite": 5,
+          "output": 15
+        }
+      },
+      "conditions": "Standard. Above 272000 prompt input tokens, long-context prices apply to the entire request. Cache read costs 5% of uncached input."
+    },
+    {
+      "provider": "openai",
+      "publicId": "gpt-6-luna",
+      "sourceUrls": [
+        "https://developers.openai.com/api/docs/pricing",
+        "https://developers.openai.com/api/docs/models/gpt-6-luna"
+      ],
+      "sourcePriceText": "gpt-6-luna | $0.10 | $0.01 | $0.125 | $0.50 | $0.20 | $0.02 | $0.25 | $0.75",
+      "pricesUSDper1M": {
+        "promptInputLTE272000": {
+          "inputUncached": 0.1,
+          "cacheRead": 0.01,
+          "cacheWrite": 0.125,
+          "output": 0.5
+        },
+        "promptInputGT272000": {
+          "inputUncached": 0.2,
+          "cacheRead": 0.02,
+          "cacheWrite": 0.25,
+          "output": 0.75
+        }
+      },
+      "conditions": "Standard. Above 272000 prompt input tokens, long-context prices apply to the entire request."
+    },
+    {
+      "provider": "anthropic",
+      "publicId": "claude-fable-5-1",
+      "sourceUrls": [
+        "https://platform.claude.com/docs/en/about-claude/pricing",
+        "https://platform.claude.com/docs/en/models/fable-5-1/overview"
+      ],
+      "sourcePriceText": "Input $10 / MTok; Output $50 / MTok; 5m cache write $12.50 / MTok; 1h cache write $20 / MTok; Cache read $0.25 / MTok",
+      "pricesUSDper1M": {
+        "standard": {
+          "inputUncached": 10,
+          "cacheRead": 0.25,
+          "cacheWrite5m": 12.5,
+          "cacheWrite1h": 20,
+          "output": 50
+        }
+      },
+      "conditions": "Standard up to 1M context. Cache reads cost 2.5% of uncached input."
+    },
+    {
+      "provider": "anthropic",
+      "publicId": "claude-opus-5-5",
+      "sourceUrls": [
+        "https://platform.claude.com/docs/en/about-claude/pricing",
+        "https://platform.claude.com/docs/en/models/opus-5-5/overview"
+      ],
+      "sourcePriceText": "Input $4 / MTok; Output $20 / MTok; 5m cache write $5 / MTok; 1h cache write $8 / MTok; Cache read $0.20 / MTok",
+      "pricesUSDper1M": {
+        "standard": {
+          "inputUncached": 4,
+          "cacheRead": 0.2,
+          "cacheWrite5m": 5,
+          "cacheWrite1h": 8,
+          "output": 20
+        }
+      },
+      "conditions": "Standard up to 1M context. Cache reads cost 5% of uncached input."
+    },
+    {
+      "provider": "anthropic",
+      "publicId": "claude-sonnet-5-5",
+      "sourceUrls": [
+        "https://platform.claude.com/docs/en/about-claude/pricing",
+        "https://platform.claude.com/docs/en/models/sonnet-5-5/overview"
+      ],
+      "sourcePriceText": "Input $2 / MTok; Output $10 / MTok; 5m cache write $2.50 / MTok; 1h cache write $4 / MTok; Cache read $0.10 / MTok",
+      "pricesUSDper1M": {
+        "standard": {
+          "inputUncached": 2,
+          "cacheRead": 0.1,
+          "cacheWrite5m": 2.5,
+          "cacheWrite1h": 4,
+          "output": 10
+        }
+      },
+      "conditions": "Standard up to 1M context. Cache reads cost 5% of uncached input."
+    },
+    {
+      "provider": "anthropic",
+      "publicId": "claude-haiku-5-5",
+      "sourceUrls": [
+        "https://platform.claude.com/docs/en/about-claude/pricing",
+        "https://platform.claude.com/docs/en/models/haiku-5-5/overview"
+      ],
+      "sourcePriceText": "Input $0.10 / $0.50; Output $0.50 / $2.50; 5m write $0.125 / $0.625; 1h write $0.20 / $1; Cache read $0.01 / $0.05 per MTok, for prompts up to / over 100000 tokens",
+      "pricesUSDper1M": {
+        "promptInputLTE100000": {
+          "inputUncached": 0.1,
+          "cacheRead": 0.01,
+          "cacheWrite5m": 0.125,
+          "cacheWrite1h": 0.2,
+          "output": 0.5
+        },
+        "promptInputGT100000": {
+          "inputUncached": 0.5,
+          "cacheRead": 0.05,
+          "cacheWrite5m": 0.625,
+          "cacheWrite1h": 1,
+          "output": 2.5
+        }
+      },
+      "conditions": "Standard. Prompt size includes uncached, cache-read and cache-write input tokens. Above 100000, higher prices apply to the entire request."
+    }
+  ]
+}
