@@ -291,6 +291,8 @@ Worker — обычный coding-agent с shell и теоретически мо
 
 ### Durable recovery и observation
 
+Successful Direct handoff writer сохраняет exact `branch` из trusted caller publication вместе с REQ/repository/baseCommit/taskPublicationCommit/taskUrl. Cold reader сверяет эти поля с REQ checkpoint и task binding, затем проверяет durable bytes/SHA. Branchless historical handoff не становится success по одному совпадению SHA; записи не исправляются вручную и reader ownership check не обходится.
+
 Новые operations durably сохраняют известные Host transport/phase/child/REQ/publication/terminal/sync/grant facts до side effects. При restart exact requestId читается только из journal либо exact trusted terminal; authoritative Direct state восстанавливает trusted terminal и необходимые локальные действия. Доказанный `PROVEN_NOT_SENT` или `publicationStarted:false` освобождает slot только при отсутствии противоречивой publication authority; published/may-be-sent без terminal остаётся blocked. Reserved/child-only/legacy rows не replay-ятся и не удаляются по возрасту/отсутствию Agent.
 
 `postman_bridge_list()` — read-only все операции exact Leader с limit=3, used, `countsAgainstLimit` и причиной, lifecycle/correlation/publication/sync/grant. Неизвестные legacy поля — `unknown`. Чтение не запускает child, Direct, recovery, retrySync и не регистрирует grants.

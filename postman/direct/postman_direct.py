@@ -975,6 +975,7 @@ class DirectPostman:
                 state=bridge_code,
                 requestId=request_id,
                 repository=self.repository,
+                branch=self.branch,
                 baseCommit=published.prepublication_commit,
                 taskPublicationCommit=published.publication_commit,
                 taskUrl=published.task_url,
@@ -1035,6 +1036,7 @@ class DirectPostman:
             state=STATE_RESULT_DURABLE,
             requestId=request_id,
             repository=self.repository,
+            branch=self.branch,
             baseCommit=published.prepublication_commit,
             taskPublicationCommit=published.publication_commit,
             taskUrl=published.task_url,
@@ -1119,7 +1121,7 @@ class DirectPostman:
         state_path = self.state_path(request_id)
         handoff_path = self.result_handoff_path(request_id)
         terminal = _json_result(True, STATE_IMAGE_RESULT_DURABLE,
-            state=STATE_IMAGE_RESULT_DURABLE, requestId=request_id, repository=self.repository,
+            state=STATE_IMAGE_RESULT_DURABLE, requestId=request_id, repository=self.repository, branch=self.branch,
             baseCommit=published.prepublication_commit, taskPublicationCommit=published.publication_commit,
             taskUrl=published.task_url, taskSha256=_sha256_text(task_content),
             expectedFilename=request_identity.expected_artifact_filename(request_id),
