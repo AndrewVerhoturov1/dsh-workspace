@@ -80,15 +80,19 @@ index 93eb012..ab8fbca 100644
 \ No newline at end of file
 +}
 diff --git a/packages/client/ui-conversation/src/client/chat/ChatView.module.css b/packages/client/ui-conversation/src/client/chat/ChatView.module.css
-index ebd75ad..c4d1d8c 100644
+index ebd75ad..11c895d 100644
 --- a/packages/client/ui-conversation/src/client/chat/ChatView.module.css
 +++ b/packages/client/ui-conversation/src/client/chat/ChatView.module.css
-@@ -55,6 +55,26 @@
+@@ -55,6 +55,47 @@
    min-width: 0;
  }
  
-+/* Half the existing 16px gap on each side meets the neighboring paint
-+   without changing row geometry, keyed parents, or scroll anchors. */
++/* Paint spans the chat scrollport, not its centered/padded message column.
++   100cqw is the existing scroll content width; add its unchanged side padding.
++   Leave the native right scrollbar gutter unpainted, and clip only this paint
++   by the matching stock scrollbar-width token at the left edge. Content and
++   scrollable geometry are unchanged; no native scrollbar styling is altered.
++   Half the 16px row gap meets neighboring paint without moving any content. */
 +.flowItem[data-chat-request-band] {
 +  position: relative;
 +  isolation: isolate;
@@ -97,20 +101,37 @@ index ebd75ad..c4d1d8c 100644
 +.flowItem[data-chat-request-band]::before {
 +  content: '';
 +  position: absolute;
-+  inset: -8px;
++  top: -8px;
++  bottom: -8px;
++  left: 50%;
++  width: calc(100cqw + 2 * (var(--dsh-composer-side-clearance) + 16px));
++  transform: translateX(-50%);
 +  z-index: -1;
 +  pointer-events: none;
-+  background: color-mix(in srgb, var(--dsw-alias-label-primary) 2%, transparent);
++  --dsh-request-band-alpha: 0.02;
++  background: rgba(142, 137, 62, var(--dsh-request-band-alpha));
++  clip-path: inset(0 0 0 var(--dsh-scrollbar-width, 8px));
 +}
 +
 +.flowItem[data-chat-request-band='1']::before {
-+  background: color-mix(in srgb, var(--dsw-alias-label-primary) 4%, transparent);
++  --dsh-request-band-alpha: 0.04;
++  background: rgba(38, 143, 173, var(--dsh-request-band-alpha));
++}
++
++:global(body[data-ds-dark-theme]) .flowItem[data-chat-request-band]::before {
++  --dsh-request-band-alpha: 0.065;
++  background: rgba(155, 166, 180, var(--dsh-request-band-alpha));
++
++}
++
++:global(body[data-ds-dark-theme]) .flowItem[data-chat-request-band='1']::before {
++  --dsh-request-band-alpha: 0.10;
 +}
 +
  /* A keyed renderer may intentionally decline its row after dispatch (the
     completed-turn tail does this when it owns neither actions nor extensions).
     An empty flex item must not consume the column gap. */
-@@ -199,4 +219,4 @@
+@@ -199,4 +240,4 @@
  /* Host open-path refusal: same dialog family as the workspace folder error. */
  .modalAction {
    min-width: 72px;
