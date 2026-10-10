@@ -37,6 +37,8 @@ try {
   // Exercise the current installer even before its changes are committed.
   copyFileSync(resolve(repositoryRoot, 'profiles/web/scripts/install-production.mjs'),
     resolve(stagingRoot, 'profiles/web/scripts/install-production.mjs'))
+  copyFileSync(resolve(repositoryRoot, 'plugins/dsh-cost-panel/session-compat.mjs'),
+    resolve(stagingRoot, 'plugins/dsh-cost-panel/session-compat.mjs'))
   cpSync(resolve(repositoryRoot,'system/patches'),resolve(stagingRoot,'system/patches'),{recursive:true})
   const sdkRoot = resolve(stagingRoot,'plugins/native-sdk')
   mkdirSync(sdkRoot)
