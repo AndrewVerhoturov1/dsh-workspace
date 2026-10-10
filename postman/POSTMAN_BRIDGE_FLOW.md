@@ -33,7 +33,7 @@ Postman Leader
 ← POSTMAN_BRIDGE_ACCEPTED + bridgeJobId (Leader сразу свободен)
 → Host job manager / existing Launch Coordinator
 → заново получить exact live Leader по parentSessionId; если недоступен — failed job без child
-→ Host postman_task_prepare: exact origin/preview → одна опубликованная task branch + clean worktree на Leader
+→ Host postman_task_prepare: exact origin/main → одна опубликованная task branch + clean worktree на Leader (старые pinned REQ/ветки не переназначать)
 → fresh spawn child
 → fixed gpt-6-luna
 → exact child user/message
@@ -253,7 +253,7 @@ Sol — дорогой Leader-selectable маршрут утверждённог
 
 ### Explicit task-context retirement
 
-Leader вызывает postman_task_close() после безопасного retirement всех child bindings; active/queued/uncertain work отклоняет close. POSTMAN_TASK_CLOSED retires durable active binding/grant authority без Git cleanup и без success claim. Старый worktree после merge/cleanup может отсутствовать. Audit остаётся; postman_task_prepare() той же Leader Session создаёт новую независимую задачу от current origin/preview.
+Leader вызывает postman_task_close() после безопасного retirement всех child bindings; active/queued/uncertain work отклоняет close. POSTMAN_TASK_CLOSED retires durable active binding/grant authority без Git cleanup и без success claim. Старый worktree после merge/cleanup может отсутствовать. Audit остаётся; postman_task_prepare() той же Leader Session создаёт новую независимую задачу от current origin/main. Старые опубликованные REQ/ветки остаются привязаны к своим SHA; Host transport не меняет stable preview и не выполняет PR/merge.
 
 ### Команда этапа 1: Secretary и обычный Worker
 

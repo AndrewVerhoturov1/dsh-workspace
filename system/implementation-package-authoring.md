@@ -71,7 +71,7 @@ package-local compatibility framework
 Практический путь (без обязательного второго локального runner):
 
 ```text
-актуальный origin/preview и disposable authoring environment
+актуальный origin/main для новой задачи (или pinned source для legacy/административного REQ) и disposable authoring environment
 → полная реализация с необходимыми tests и узкими .gitignore exceptions
 → git add -A -- <authoring paths>
 → Git-generated staged diff → changes.patch
@@ -86,28 +86,32 @@ package-local compatibility framework
 
 ## 5. Исходная база
 
-Обычная задача проектируется относительно актуального `origin/preview`.
+Обычная новая задача проектируется относительно точного актуального `origin/main`; исходный pinned REQ/task не переназначается автоматически.
 
 В manifest:
 
 ```json
 {
-  "baseBranch": "preview",
-  "prBase": "preview"
+  "baseBranch": "main",
+  "prBase": "main"
 }
 ```
 
-В Leader flow Host `postman_task_prepare` сначала создаёт и публикует одну task branch с clean worktree от exact `origin/preview`; Bridge публикует REQ commit в эту ветку через Host, а не в `main`. Web использует опубликованный REQ snapshot. Автор package не выбирает standalone transport branch и не меняет эту границу.
+В Leader flow Host `postman_task_prepare` сначала создаёт и публикует одну task branch с clean worktree от exact `origin/main`; Bridge публикует REQ commit в ту же временную task branch через Host, а не в постоянную ветку `main`/`preview`. Web использует опубликованный REQ snapshot. Автор package не выбирает standalone transport branch и не меняет эту границу.
 
 `packageBase` может содержать observed SHA во время подготовки, но является информационным полем.
+
+Для **однократной административной G1/G2/G3 migration** (не шаблон обычной задачи) исходная опубликованная Host task base остаётся `baseBranch="preview"`, а целевой migration PR — `prBase="main"`; `packageBase` указывается как observed source/published SHA без hard equality gate. Существующие old tasks/worktrees/REQ/packages остаются pinned, без переписывания registry, массового rebase/retarget или retouch старых PR в preview. Не переносить их на новую базу ради оформления manifest.
+
+Stable `preview` после миграции обновляется лишь по отдельному человеческому GO на полный проверенный exact main SHA A (`promote-main-to-preview`, non-force fast-forward), а не после обычной task публикации/merge. Запрещён стабильный PR и автоматическая синхронизация; принятие ZIP само по себе не даёт stable GO.
 
 Нельзя превращать его в условие:
 
 ```text
-current preview SHA == packageBase
+current task HEAD == packageBase
 ```
 
-Продвижение `preview` само по себе не делает package несовместимым.
+Продвижение `main` или `preview` само по себе не делает старый pinned package несовместимым.
 
 Главный compatibility authority:
 
@@ -259,8 +263,8 @@ PATCH_CREATES_IGNORED_FILE
   "schemaVersion": 1,
   "package": "descriptive-package-name",
   "repository": "AndrewVerhoturov1/dsh-workspace",
-  "baseBranch": "preview",
-  "prBase": "preview",
+  "baseBranch": "main",
+  "prBase": "main",
   "packageBase": "informational-observed-sha",
   "patch": "changes.patch",
   "tests": [
@@ -321,7 +325,7 @@ syntax/compile check при необходимости
 
 ## 10. Проверки central runner
 
-Runner и его hard FAIL/non-blocking diagnostics определены в [workflow](implementation-package-workflow.md). Для автора существенны: Git применимость patch, безопасность путей, обычная видимость новых файлов (включая `PATCH_CREATES_IGNORED_FILE`) и успех объявленных targeted tests. `packageBase` информационен; exact inventory, число файлов, продвижение `preview` и whitespace warning сами по себе не вводят новых gates.
+Runner и его hard FAIL/non-blocking diagnostics определены в [workflow](implementation-package-workflow.md). Для автора существенны: Git применимость patch, безопасность путей, обычная видимость новых файлов (включая `PATCH_CREATES_IGNORED_FILE`) и успех объявленных targeted tests. `packageBase` информационен; exact inventory, число файлов, продвижение `main`/`preview` и whitespace warning сами по себе не вводят новых gates.
 
 ---
 

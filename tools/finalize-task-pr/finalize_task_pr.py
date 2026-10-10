@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Squash-merge already-reviewed task PRs into preview and clean temp resources.
+"""Squash-merge already-reviewed task PRs into main and clean temp resources.
 
 This executor is deliberately not a reviewer. It does not run tests, inspect PR
 Diffs, re-check CI, or rebuild the user's merge decision. It only accepts PRs
-whose base is the permanent integration branch ``preview`` and it protects both
+whose base is the permanent integration branch ``main`` and it protects both
 permanent local worktrees from cleanup.
 """
 from __future__ import annotations
@@ -263,8 +263,8 @@ def remote_branch_sha(repo_root: Path, branch: str) -> str | None:
     return line.split()[0].lower()
 
 
-def origin_preview_sha(repo_root: Path) -> str | None:
-    cp = git(repo_root, "rev-parse", "refs/remotes/origin/preview")
+def origin_main_sha(repo_root: Path) -> str | None:
+    cp = git(repo_root, "rev-parse", "refs/remotes/origin/main")
     if cp.returncode != 0:
         return None
     value = cp.stdout.strip().lower()
@@ -404,8 +404,8 @@ def finalize_one(
     head_repo_obj = head_obj.get("repo") if isinstance(head_obj.get("repo"), dict) else {}
     head_repo = head_repo_obj.get("full_name")
 
-    if base != "preview":
-        raise FinalizeError("FINALIZE_BASE_NOT_PREVIEW", f"PR #{number} targets {base!r}, not preview")
+    if base != "main":
+        raise FinalizeError("FINALIZE_BASE_NOT_MAIN", f"PR #{number} targets {base!r}, not main")
     if not isinstance(head, str) or not head or not head_sha:
         raise FinalizeError("FINALIZE_PR_IDENTITY_INVALID", f"PR #{number} has incomplete head identity")
     if head in PERMANENT_BRANCHES:
@@ -461,7 +461,7 @@ def finalize_one(
         "mergedNow": merged_now,
         "mergeSha": merge_sha,
         "cleanup": cleanup,
-        "originPreview": None if dry_run else origin_preview_sha(repo_root),
+        "originMain": None if dry_run else origin_main_sha(repo_root),
     }
 
 
@@ -499,7 +499,7 @@ def finalize_many(
         "repoRoot": str(root),
         "previewRoot": str(preview),
         "originUrl": origin_url,
-        "targetBranch": "preview",
+        "targetBranch": "main",
         "mergeMethod": "squash",
         "prNumbers": pr_numbers,
         "results": results,
@@ -510,7 +510,7 @@ def finalize_many(
 
 
 def parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Squash-merge already-reviewed task PRs into preview and clean temporary Git resources")
+    p = argparse.ArgumentParser(description="Squash-merge already-reviewed task PRs into main and clean temporary Git resources")
     p.add_argument("--pr", type=int, action="append", required=True, dest="prs", help="PR number; repeat for multiple PRs")
     p.add_argument("--repo-root", type=Path, default=DEFAULT_REPO_ROOT)
     p.add_argument("--preview-root", type=Path, default=DEFAULT_PREVIEW_ROOT)

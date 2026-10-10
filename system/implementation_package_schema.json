@@ -9,8 +9,8 @@
     "schemaVersion": { "const": 1 },
     "package": { "type": "string", "minLength": 1 },
     "repository": { "type": "string", "pattern": "^[^/]+/[^/]+$" },
-    "baseBranch": { "type": "string", "default": "preview" },
-    "prBase": { "type": "string", "default": "preview" },
+    "baseBranch": { "type": "string", "default": "main" },
+    "prBase": { "type": "string", "default": "main" },
     "packageBase": {
       "type": "string",
       "description": "Informational source snapshot. The central runner does not require equality; git apply --check is the compatibility authority."

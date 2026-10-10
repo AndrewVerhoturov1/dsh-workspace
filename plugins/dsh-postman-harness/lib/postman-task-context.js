@@ -60,7 +60,7 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
       const match = /^(?:https?:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/]+\/[^/]+?)(?:\.git)?\/?$/i.exec(remote)
       if (match?.[1].toLowerCase() !== REPOSITORY) throw new Error('POSTMAN_TASK_REPOSITORY_REJECTED')
       await command(repository, 'fetch', '--prune', 'origin')
-      const baseCommit = await command(repository, 'rev-parse', '--verify', 'refs/remotes/origin/preview^{commit}')
+      const baseCommit = await command(repository, 'rev-parse', '--verify', 'refs/remotes/origin/main^{commit}')
       if (!SHA.test(baseCommit)) throw new Error('POSTMAN_TASK_BASE_INVALID')
       const trees = await command(repository, 'worktree', 'list', '--porcelain')
       const existingTrees = trees.split(/\r?\n/).filter(line => line.startsWith('worktree ')).map(line => line.slice(9))

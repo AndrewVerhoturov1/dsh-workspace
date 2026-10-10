@@ -1,171 +1,108 @@
 # Preview Branch Workflow
 
-`PREVIEW_BRANCH_WORKFLOW_VERSION: 1`
+`PREVIEW_BRANCH_WORKFLOW_VERSION: 2`
 
-Этот документ описывает Git-процедуру двухветочной модели `dsh-workspace`. Обязательные решения о ветках, ownership, едином Git-снимке, публикации и запретах задаёт [REPO_POLICY.md](../../REPO_POLICY.md); ниже — команды и схема их исполнения, а не дополнительный независимый набор mandates.
+Пошаговые команды новой двухветочной модели `dsh-workspace`. Обязательные правила ownership, preflight, публикации, запретов и отдельных решений см. в [REPO_POLICY.md](../../REPO_POLICY.md). Здесь не заменяются существующие Host grant/runner/ApprovalService или полномочия ролей.
 
 ## 1. Постоянные ветки
 
 ```text
-main    = стабильное, окончательно принятое состояние
-preview = интеграционное состояние для текущей работы и локального тестирования
+main    = текущая интеграционная (повседневные task PR и squash merge)
+preview = последний отдельно одобренный и проверенный stable SHA
 ```
 
-Обе ветки долгоживущие. Любые другие ветки временные.
+Обе ветки постоянные. `main` не тождественна стабильной публикации. Stable обновляется только из точного проверенного `origin/main` commit A по отдельному решению пользователя.
 
-## 2. Постоянные локальные папки
+## 2. Постоянные worktree
 
 ```text
-C:\Users\andre\.dsh          → main
+C:\Users\andre\.dsh         → main
 C:\Users\andre\.dsh-preview → preview
 ```
 
-`.dsh-preview` создаётся как `git worktree`, а не как независимый clone.
+Это постоянные разные worktree одного Git repository (не временные task environments), а не гарантии того, какой код сейчас загружен в работающий DSH. Не удалять/перепривязывать/сбрасывать, не делать auto stash/clean, не применять сюда implementation ZIP. Новую работу вести в отдельном task worktree. Включая первичные untracked `plugins/dsh-branchline/`, пользовательские файлы не трогать.
 
-Причины:
+## 3. Обычная задача после миграции
 
-- обе папки существуют одновременно;
-- не нужно постоянно `git switch` в одном рабочем каталоге;
-- Git знает, какая branch занята каким worktree;
-- task-worktree можно создавать и удалять независимо;
-- одна object database и один `origin` уменьшают риск расхождения двух clone.
-
-## 3. Обычная новая задача
-
-Начальная точка — exact current `origin/preview`.
+Только после доказанного `git fetch --prune origin`, актуального snapshot и ownership по [policy](../../REPO_POLICY.md):
 
 ```text
-origin/preview @ BASE_SHA
+origin/main @ exact BASE_SHA
         │
-        └── feature/... | fix/... | exp/... | postman/...
+        └── feature/... | fix/... | exp/... | postman/... (clean temporary worktree)
+                       └── PR base=main → отдельное user decision → squash merge в main
 ```
 
-Процедура: после единого task Git-снимка и проверки ownership по [REPO_POLICY.md](../../REPO_POLICY.md) взять exact `origin/preview` SHA, создать временную branch и отдельный clean worktree от этого SHA. После работы и соразмерных проверок публиковать task PR в `preview` по политике. Отдельная команда пользователя на merge запускает `finalize-task-pr` (squash и best-effort cleanup). Это описание последовательности не заменяет preflight и запреты политики.
+Host `postman_task_prepare` создаёт/публикует единственную task branch и clean worktree от exact `origin/main`; Bridge помещает REQ commit **в ту же task branch**, а не в `main` и не в `preview`. Standalone Direct-main остаётся без изменений. Если пакет изначально был написан для прежнего pinned snapshot, его base/REQ/`packageBase` нельзя переписывать и нельзя автоматически rebase/retarget task или registry; `git apply --check` — authority совместимости.
 
-## 4. Локальное тестирование `preview`
+Проверить относящиеся тесты и `git diff --check`, явно staged paths, commit/push task branch, exact remote SHA, PR base=`main`. Отдельное user decision запускает `finalize-task-pr` (squash и безопасная уборка временных ресурсов). Обычный task merge **не** запускает синхронизацию `preview`.
 
-После task merge локальная preview-папка обновляется только безопасным fast-forward:
+## 4. Проверка текущего интеграционного состояния
+
+После task merge интеграционные проверки выполняются против точного `origin/main` SHA и соответствующего активного runtime, если нужен live-test. Исходные файлы, локальное постоянное дерево main и реально загруженные Host/skills — разные состояния. Не менять грязный primary worktree принудительно. Для новой ошибки создаётся обычная `fix/*` branch от нового `origin/main`; если issue найдена до merge task branch, исправление остаётся там же.
+
+Отдельную проверку стабильности планируют на *полном* кандидатном SHA A из `main`, включая нужную Windows/live acceptance, по решению пользователя. Локальное прохождение узких authoring checks не есть stable GO.
+
+## 5. Stable promotion: exact approved main SHA A → preview
+
+Только после отдельного **актуального** явного решения пользователя о проверенной полной версии `origin/main` A. Канонический вызов (G2 release executor):
 
 ```powershell
-& 'C:\Users\andre\.dsh\tools\preview-worktree\preview_worktree.ps1' -Action update
+& 'C:\Users\andre\.dsh\tools\promote-main-to-preview\promote_main_to_preview.ps1' -ApprovedMainSha <A> -UserGo
 ```
 
-Скрипт обязан остановиться, если `.dsh-preview` dirty или больше не является worktree branch `preview`.
-
-Никаких auto-stash/reset/clean.
-
-## 5. Если после локального теста нужен fix
-
-Fix начинается от уже обновлённого `origin/preview`, а не от старой feature branch:
+Эквивалентные ключи Python исполнителя `tools/promote-main-to-preview/promote_main_to_preview.py`:
 
 ```text
-preview
-  └── fix/YYYYMMDD-short-slug
-        └── PR → preview
+--approved-main-sha A --user-go
 ```
 
-Исключение: если defect найден до merge исходной feature branch в preview, исправление остаётся в той же task branch.
+Remote-only promotion выполняется **сериализованно с другими Git writers** и только для проверенного полного approved SHA A с отдельным human GO. Executor проверяет actual remote `main=A`, `preview=P`, соответствие свежим fetched refs и ancestry `P → A` (или подтверждённый no-op при `P=A`). Непосредственно перед push он свежо сверяет **оба** actual remote refs: движение `main` или `preview`, обнаруженное **до** push, — **STOP** без автоматического retry/переподтверждения. Если ancestry/fast-forward не доказаны или push завершился ошибкой — также STOP без обхода.
 
-## 6. Promotion в `main`
+При `P != A` выполняется **один** обычный non-force push литерала `A:refs/heads/preview`, без force/lease, и обязательная последующая проверка **фактического** `preview=A`. Между pre-push сверкой и push остаётся окно гонки: серверный Git запрещает non-fast-forward, но обычный push **не является атомарной CAS** и не доказывает неизменность обоих refs. Если `main` успеет сдвинуться **после** push, результат содержит warning; `preview` остаётся на **проверенном A**, новый HEAD автоматически не продвигается. Не запускать retry/fallback и не подбирать новый SHA без отдельного GO.
 
-`main` меняется только после отдельной команды пользователя на перенос проверенного состояния.
-
-Единственный обычный release route:
+Исполнитель не проверяет и не изменяет постоянные worktree `main`/`preview`: нет checkout/reset/stash/clean, локальной синхронизации или удаления. **Только после подтверждённого remote stable успеха** можно **отдельно** запросить существующий локальный ff-only update `tools/preview-worktree/preview_worktree.ps1 -Action update`. Именно для этой опциональной локальной операции обязательны известное **чистое** состояние preview worktree и допустимый safe fast-forward; при dirty/unknown/diverged дереве локальный update останавливают и сохраняют пользовательские данные. Эти условия не блокируют remote-only promotion, который деревья не затрагивает.
 
 ```text
-preview → main
+main:     ... ── A  (проверенный целиком, approved)
+preview:  ... ─────┘  (A является потомком preview)
+             non-force fast-forward only, preview HEAD = A
 ```
 
-Перед promotion:
+Никакого stable PR, PR-body marker, merge commit, собственных preview commits, автоматической синхронизации после task PR. `main` остаётся интеграционной и получает обычные новые задачи; `preview` остаётся на последнем явно утверждённом SHA до следующего отдельного GO.
 
-1. получить exact `origin/preview`;
-2. убедиться, что это именно проверенное пользователем состояние;
-3. создать/использовать PR с `base=main`, `head=preview`;
-4. записать в PR body:
+## 6. GitHub CI guard
+
+`.github/workflows/preview-policy.yml`: тот же `pull_request` trigger, job ID `preview-branch-policy`, check name `Preview Branch Policy / preview-branch-policy`, права `contents: read`. Final branch-route contract:
+
+- PR `temporary task head → main` разрешён (но merge только по отдельному решению пользователя);
+- PR с head `main` или `preview` — не обычная task branch, в `main` запрещён;
+- **любой** PR с base=`preview` запрещён, даже если head временная ветка или `main`;
+- любые другие base branches запрещены.
+
+CI guard не заменяет решение пользователя и не выполняет stable update. Нельзя выключать guard или создавать временный двойной маршрут по умолчанию.
+
+## 7. Однократная административная миграция
+
+Это исключительный переход от *старых* правил, по которым обычные PR шли в `preview`, а `preview → main` требовал отдельный PR. Эти старые маршруты более не являются действующими правилами, после принятия нового policy.
+
+1. В отдельной временной **административной** ветке подготовить согласованные G1/G2/G3 изменения и единый `task → main` migration PR. Зафиксировать отдельное explicit owner-approved исключение старого guard **только** для этого PR; не переключать ordinary task на два маршрута.
+2. Проверить фактическую GitHub конфигурацию на момент действия (main default, protections/rulesets/required checks). Первоначально наблюдались: default=`main`, для main и preview protection endpoint 404 `Branch not protected`, rulesets=`[]`; это лишь historical snapshot, **не** постоянная гарантия защиты или её отсутствия.
+3. До merge предъявить реальное подтверждение, что **изменённый** `.github/workflows/preview-policy.yml` был запущен по `pull_request` для *этого* migration PR и его exact head SHA с успешным ожидаемым check. Локальный unittest или зелёный run старого guard — не доказательство. Если старое правило не даёт реально запустить/принять новое: STOP, новый согласованный план; не отключать guard, не force, не автоматический fallback или обход.
+4. По отдельному решению owner выполнить task squash merge **в `main`**, убедиться в exact remote SHA. `preview` не трогать. Старые open preview PR не retarget/rebase автоматически: после cutoff их судьба — отдельное решение owner.
+5. После merge проверить **активный** DSH GUI `4173`: source/установку/нужный штатный restart, загруженные Host и навыки и новую Leader session. Проверить фактический task prepare от `origin/main`; одно изменение Git source не обновляет текущий процесс. Миграционный PR не является user stable GO.
+6. Отдельно проверить весь кандидатный `origin/main` SHA A и запросить явный stable GO; только тогда процедура раздела 5 может продвинуть `preview` к A безопасным fast-forward. Пока этого нет, старый stable `preview` сохраняется.
+
+Нет registry migration, массовой перенастройки закреплённых REQ/packages/tasks, удаления постоянных worktree или изменения существующих trust/grant/runner authority. Если требуется починка запуска preview Harness, это отдельная задача.
+
+## 8. Task merge и границы очистки
 
 ```text
-MAIN_GO_APPROVED_BY_USER: yes
-```
-
-5. выполнить promotion executor.
-
-Канонический executor:
-
-```powershell
-& 'C:\Users\andre\.dsh\tools\promote-preview-to-main\promote_preview_to_main.ps1' -PrNumber <N>
-```
-
-Promotion использует GitHub merge method `merge`, а не `squash`.
-
-Это сохраняет ancestry:
-
-```text
-main-old ───────────────┐
-                        ├─ main-new (merge commit)
-preview-tested ─────────┘
-```
-
-После merge executor пытается non-force fast-forward remote `preview` на этот же merge commit. Он делает это только если может доказать, что `preview` не сдвинулся после проверки.
-
-Если `preview` изменился или `main` получил другой commit, автоматический sync запрещён; executor возвращает warning и не делает force push.
-
-## 7. После promotion
-
-Обновить локальный preview worktree:
-
-```powershell
-& 'C:\Users\andre\.dsh\tools\preview-worktree\preview_worktree.ps1' -Action update
-```
-
-Основной `C:\Users\andre\.dsh` не reset-ится и не обновляется насильно. Его синхронизация выполняется отдельно безопасным способом с учётом возможных локальных пользовательских изменений.
-
-## 8. Bootstrap `preview`
-
-Bootstrap выполняется **один раз после merge migration PR**, который вводит эту политику.
-
-Команда:
-
-```powershell
-& 'C:\Users\andre\.dsh\tools\preview-worktree\preview_worktree.ps1' -Action bootstrap
-```
-
-Bootstrap:
-
-1. проверяет primary repository;
-2. делает `git fetch --prune origin`;
-3. убеждается, что migration policy уже находится в `origin/main`;
-4. если remote `preview` отсутствует — создаёт его ровно на current `origin/main` без force;
-5. создаёт локальную branch `preview` с tracking `origin/preview`, если это безопасно;
-6. создаёт `C:\Users\andre\.dsh-preview` как worktree;
-7. проверяет exact SHA/branch/clean state.
-
-Если remote `preview` уже существует на другом SHA, bootstrap не переписывает его.
-
-Если `.dsh-preview` уже существует, но не является ожидаемым worktree, bootstrap ничего не удаляет и останавливается.
-
-## 9. GitHub PR policy
-
-Workflow `.github/workflows/preview-policy.yml` проверяет структуру PR:
-
-- `temporary branch → preview` — допустимый task route;
-- `preview → main` — допустимый release route только с `MAIN_GO_APPROVED_BY_USER: yes`;
-- `temporary branch → main` — ошибка;
-- `main → preview` — ошибка обычного workflow;
-- PR в другую base branch — ошибка.
-
-Этот workflow является repository guard, но не заменяет explicit user approval.
-
-## 10. Merge executors
-
-### Task PR
-
-```text
-base = preview
-head = temporary branch
+base = main
+head = temporary task branch
 merge method = squash
-cleanup temporary worktree/local branch/remote branch = best effort
-main worktree = protected
-preview worktree = protected
+cleanup temporary resources = best effort after proving no unique data loss
+main/preview permanent branches and worktrees = protected
 ```
 
 Executor:
@@ -174,53 +111,25 @@ Executor:
 tools/finalize-task-pr/finalize_task_pr.ps1
 ```
 
-### Release promotion
+Запрещены по умолчанию force push, `git reset --hard`, blind clean/stash, удаление постоянных worktree, чужих данных/первичных untracked. Упомянутое здесь не разрешает merge в обход approved workflow.
+
+## 9. Короткая схема
 
 ```text
-base = main
-head = preview
-marker = MAIN_GO_APPROVED_BY_USER: yes
-merge method = merge
-preview branch/worktree = never deleted
-safe non-force preview fast-forward after merge
+new task @ origin/main ── temporary branch ──PR/squash──▶ main
+                                                          │
+                                        full SHA A tested + explicit human stable GO
+                                                          │
+                                                          ▼
+                                                        preview
+                                                  (non-force FF to A)
 ```
 
-Executor:
+## 10. Сохранение прежних REQ/веток
 
-```text
-tools/promote-preview-to-main/promote_preview_to_main.ps1
-```
+Ранее опубликованные SHA-pinned REQ, их worktree, metadata и packageBase остаются как есть. К совместимости нового patch применяется `git apply --check`; Host не переписывает bindings/registry при миграции. PR старого маршрута base=`preview` запрещаются новым guard и рассматриваются owner-ом отдельно, без массового retarget. Текущий Direct main маршрут не менять.
 
-## 11. Запрещённые shortcuts
-
-Без отдельного явного административного решения запрещены:
-
-```text
-temporary branch → main
-прямая обычная разработка в main
-прямая обычная разработка в preview
-squash preview → main
-delete preview
-force push main/preview
-auto-stash/reset/clean постоянных worktree
-удаление C:\Users\andre\.dsh
-удаление C:\Users\andre\.dsh-preview
-```
-
-## 12. Короткая схема
-
-```text
-                   explicit user GO
-                         │
-                         ▼
-feature/fix ──PR──▶ preview ──PR/merge commit──▶ main
-                   │
-                   └── C:\Users\andre\.dsh-preview
-
-main ───────────────────▶ C:\Users\andre\.dsh
-```
-
-## 13. Локальный запуск Harness из `preview`
+## 11. Локальный запуск Harness из `preview`
 
 `PREVIEW_HARNESS_LAUNCHER_VERSION: 1`
 
