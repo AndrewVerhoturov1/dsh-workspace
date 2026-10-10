@@ -1204,5 +1204,48 @@ def main(argv: list[str] | None = None) -> int:
     return 0 if result.get("ok") else 3
 
 
+
+
+def observe_artifact_candidate(page, expected_prompt, expected_chat_url, *, timeout_ms,
+        stable_ms=DEFAULT_STABLE_MS, sleep=time.sleep, monotonic=time.monotonic):
+    """Read-only concrete answer observation; never current Send proof."""
+    deadline = monotonic() + max(timeout_ms, 0) / 1000.0
+    pinned = None
+    stable_since = monotonic()
+    while True:
+        if str(page.url) != expected_chat_url or not submit.is_bound_chat_url(expected_chat_url):
+            return {"ok": False, "code": CHAT_CORRELATION_LOST, "details": {"reason": "owned_chat_changed"}}
+        turns, selector = snapshot_turns(page)
+        relation = correlate_next_assistant(turns, expected_prompt)
+        answer = relation.get("assistant") if relation.get("ok") else None
+        if answer is None and len(turns) >= 2 and turns[-1].get("role") == "assistant" and turns[-2].get("role") == "user":
+            answer = turns[-1]
+        if answer is not None:
+            text = _normalize_text(answer.get("text", ""))
+            strong = {k: str(answer[k]) for k in ("groupKey", "contentSearchTurnKey", "assistantMessageId") if answer.get(k)}
+            if answer.get("identityAmbiguous"):
+                strong.pop("contentSearchTurnKey", None)
+            details = {"assistantIndex": answer["index"], "assistantText": text,
+                "assistantTextSha256": text_sha256(text), "assistantIdentity": strong,
+                "turnSelector": selector, "chatUrl": expected_chat_url, "observedAnswer": True}
+            if pinned is not None:
+                old = pinned["assistantIdentity"]
+                shared = set(old) & set(strong)
+                if old and (not shared or any(old[k] != strong[k] for k in shared)):
+                    return {"ok": False, "code": CHAT_CORRELATION_LOST, "details": {"reason": "answer_identity_changed"}}
+                if not old and (pinned["assistantIndex"] != details["assistantIndex"] or pinned["turnSelector"] != selector):
+                    return {"ok": False, "code": CHAT_CORRELATION_LOST, "details": {"reason": "answer_position_changed"}}
+                if details["assistantTextSha256"] != pinned["assistantTextSha256"]:
+                    stable_since = monotonic()
+            else:
+                stable_since = monotonic()
+            pinned = details
+            active, _ = generation_active(page)
+            if not active and monotonic() - stable_since >= max(stable_ms, 0) / 1000.0:
+                return {"ok": False, "code": "ASSISTANT_CANDIDATE_OBSERVED", "details": details}
+        if monotonic() >= deadline:
+            return {"ok": False, "code": ASSISTANT_TURN_TIMEOUT, "details": {"reason": "candidate_answer_unavailable"}}
+        sleep(min(DEFAULT_POLL_MS / 1000.0, max(deadline - monotonic(), 0.0)))
+
 if __name__ == "__main__":
     sys.exit(main())

@@ -6,16 +6,18 @@ export const obsoleteSolPermission = /(?:Only on an explicit user request: creat
 
 // Small semantic markers, not a wording snapshot. Called on actual native requests.
 export const managementMarkers = {
-  leader: [/POSTMAN_LEADER_SKILL_VERSION: 31/, /Management Kernel/, /execution graph/i,
+  leader: [/POSTMAN_LEADER_SKILL_VERSION: 32/, /Management Kernel/, /execution graph/i,
     /critical path/i, /dispatch first/i, /environment readiness/i, /Exact-path-first delegation/,
     /Known-status branching/, /retire unused agents/, /REPORT RECEIVED/, /VERIFIED BY LEADER/,
-    /not a required first step/, /no ritual snapshot or standalone model round/, /continuation_blocked/, 
+    /not a required first step/, /no ritual snapshot or standalone model round/, /continuation_blocked/, /NOT_SENT \/ TERMINAL \/ OUTCOME_UNKNOWN/, 
     /external_event/, /один active implementation writer/, /Canonical Harness browser/,
     /PTC = supervisor phase, not tool wrapper/, /Supervisor dispatch phase/, /Reconciliation\/cleanup phase/, /sufficient acceptance evidence/, /Leader routing decision/, /execution plan/, /явное user approval/,
     /Truly trivial read-only\/factual/, /До approval/, /не делегируй составление первого плана/,
     /tests\/build/, /mutating Git\/product operations/, /approval_boundary|human approval|явное user approval/,
     /cheapest reliable route/, /unknown != complex/, /direct Sol/i, /Preapproved conditional Sol escalation/,
     /STOP → revised plan → approval/, /новая независимая цель требует нового плана/i,
+    /Secretary`/, /Worker N/, /Sol Worker N/, /номер.*сессии|session.*number/i, /не освобождает номер/, /fresh.*следующий номер/i, /label.*явно|явно.*label/i, /task-topic/,
+    /Postman Artifact Bridge/, /Postman Ask Bridge/, /Postman Image Bridge/,
     /local engineering\/review/, /external\/current research/, /independent outside opinion/,
     /hardBudget:60/, /softLimit:48/, /smaller valid budget/,
     /Already established:/, /Still needed:/, /Next decision boundary:/,
@@ -34,7 +36,7 @@ export const managementMarkers = {
     /первой meaningful Sol decision/, /оба сразу/, /Dispatch first/,
     /PTC-first/, /Worker-first/, /Exact-path-first delegation/,
     /Canonical skill already injected/, /skill\(postman-sol-worker\)/,
-    /direct-only/, /environment readiness/, /SHOW_TO_USER/, /POSTMAN_SOL_WORKER_SKILL_VERSION: 2/,
+    /direct-only/, /environment readiness/, /SHOW_TO_USER/, /POSTMAN_SOL_WORKER_SKILL_VERSION: 3/,
     /PTC = engineering phase, not tool wrapper/, /Investigation phase/, /Implementation phase/, /Verification closure phase/,
      /PTC-managed \/ PTC-only/, /ONE PTC/, /external_event/, /реальные owned Worker reports/,
      /terminal assignment result, не progress\/FYI/, /generic child report guidance/, /report завершает turn/, /decision-relevant escalation/, /не FYI\/progress\/обычный completion/,
@@ -42,7 +44,9 @@ export const managementMarkers = {
     /preapproved conditional escalation/, /revised-plan approval/, /unknown != complex/, /cheapest reliable route/i,
     /hardBudget:60/, /softLimit:48/, /smaller valid budget/,
     /Already established:/, /Still needed:/, /Next decision boundary:/,
-    /Same task \+ large relevant context → compact/, /New assignment where old visible context is harmful → fresh/]
+    /Same task \+ large relevant context → compact/, /New assignment where old visible context is harmful → fresh/,
+     /Worker N \(Sol\)/, /номер.*сессии|session.*number/i, /не повторно используй номера/, /fresh.*следующий номер/i, /label.*явно|явно.*label/i, /task-topic/,
+     /Secretary`/, /Postman Artifact Bridge/, /Postman Ask Bridge/, /Postman Image Bridge/]
 }
 
 export function assertManagementRequest(role, request) {

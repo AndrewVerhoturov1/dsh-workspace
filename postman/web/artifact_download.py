@@ -100,7 +100,18 @@ _CONTROL_PROOF_JS = r"""
     el.disabled ||
     el.getAttribute("aria-disabled") === "true"
   );
+  const label = normalize(el.innerText);
+  const href = el.getAttribute("href") || "";
+  let localFile = false;
+  try {
+    const url = new URL(href, document.baseURI);
+    localFile = href.startsWith("sandbox:/") ||
+      (url.origin === location.origin && /^(\/backend-api\/.*(?:files|download)|\/files\/)/.test(url.pathname));
+  } catch (_) {}
+  const nativeButton = !href && (el.tagName === "BUTTON" || el.getAttribute("role") === "button") &&
+    /\.zip(?:$|\s)/i.test(label) && /download|file|attachment/i.test(el.getAttribute("data-testid") || "");
   return {
+    eligibleNativeDownload: localFile || nativeButton,
     connected: Boolean(el && el.isConnected),
     visible,
     disabled,
@@ -194,10 +205,11 @@ def _validate_expected_request(
     return trusted
 
 
-def _p5_identity(proof: Any) -> dict[str, Any] | None:
+def _p5_identity(proof: Any, *, allow_candidate: bool = False) -> dict[str, Any] | None:
     if not isinstance(proof, dict):
         return None
-    if proof.get("ok") is not True or proof.get("code") != detector.ARTIFACT_DOM_CONFIRMED:
+    candidate = allow_candidate and proof.get("ok") is False and proof.get("code") == detector.ARTIFACT_CANDIDATE_DOM
+    if not candidate and (proof.get("ok") is not True or proof.get("code") != detector.ARTIFACT_DOM_CONFIRMED):
         return None
     details = proof.get("details")
     if not isinstance(details, dict):
@@ -231,6 +243,8 @@ def _p5_identity(proof: Any) -> dict[str, Any] | None:
         return None
     if details.get("downloadStarted") is not False:
         return None
+    if candidate and (details.get("verified") is not False or details.get("applyEligible") is not False):
+        return None
 
     return {
         "requestId": details["requestId"],
@@ -242,14 +256,26 @@ def _p5_identity(proof: Any) -> dict[str, Any] | None:
         "assistantTextSha256": details["assistantTextSha256"],
         "turnSelector": details["turnSelector"],
         "attachmentPath": dom_path,
+        "assistantIdentity": details.get("assistantIdentity") if isinstance(details.get("assistantIdentity"), dict) else {},
+        "candidate": candidate,
+        "attachment": dict(attachment),
+        "reasons": list(details.get("reasons", [])) if isinstance(details.get("reasons"), list) else [],
     }
 
 
 def _same_p5_identity(first: dict[str, Any], second: dict[str, Any]) -> bool:
-    # The fresh detector re-proves the exact envelope/control. React may replace
-    # the child node; its old DOM path is not the semantic result identity.
-    keys = ("requestId", "expectedFilename", "chatUrl", "assistantIndex", "assistantTextSha256", "turnKey")
-    return all(first[key] == second[key] for key in keys)
+    keys = ("requestId", "expectedFilename", "chatUrl", "assistantTextSha256")
+    if not all(first.get(key) == second.get(key) for key in keys):
+        return False
+    if first.get("candidate") != second.get("candidate"):
+        return False
+    if not first.get("candidate"):
+        return all(first.get(key) == second.get(key) for key in ("assistantIndex", "turnKey"))
+    a, b = first.get("assistantIdentity") or {}, second.get("assistantIdentity") or {}
+    strong = ("groupKey", "contentSearchTurnKey", "assistantMessageId")
+    if any(a.get(key) or b.get(key) for key in strong):
+        return detector.candidate_identity_matches(a, b)
+    return all(first.get(key) == second.get(key) for key in ("turnSelector", "assistantIndex", "turnNodeIndex"))
 
 
 def _resolve_control(page: Any, proof_identity: dict[str, Any]) -> Any:
@@ -274,6 +300,7 @@ def _control_snapshot(control: Any, expected_filename: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("control proof did not return an object")
     return {
+        "eligibleNativeDownload": value.get("eligibleNativeDownload") is True,
         "connected": bool(value.get("connected")),
         "visible": bool(value.get("visible")),
         "disabled": bool(value.get("disabled")),
@@ -461,101 +488,124 @@ def _publish_durable(
         raise
 
 
-def _capture_download(page, control, staging_zip, expected_filename, download_timeout_ms, click_timeout_ms):
-    """One click, prove the physical source, then attest the exact staging copy."""
+def _record_candidate_metadata(candidate_path: Path, descriptor: dict[str, Any]) -> None:
+    """Metadata failure must not hide bytes already retained at the owned path."""
+    try:
+        _atomic_write_json(candidate_path.parent / "candidate.json", descriptor)
+    except OSError as exc:
+        if "CANDIDATE_METADATA_SAVE_FAILED" not in descriptor["reasons"]:
+            descriptor["reasons"].append("CANDIDATE_METADATA_SAVE_FAILED")
+        descriptor["metadataError"] = str(exc)[:300]
+
+
+def _capture_download(page, control, staging_zip, expected_filename, download_timeout_ms, click_timeout_ms,
+                      candidate_path, provenance, attachment_label):
+    """One click; retain bounded raw bytes under a controlled name."""
     click_attempted = False
+    download_info = None
+    event_error = None
     try:
         with page.expect_download(timeout=download_timeout_ms) as download_info:
             click_attempted = True
             control.click(timeout=click_timeout_ms, no_wait_after=True)
         download = download_info.value
     except Exception as exc:
-        return _result(
-            DOWNLOAD_NOT_FOUND,
-            ok=False,
-            recoverable=False,
-            details={
-                "phase": "download_event",
-                "reason": str(exc)[:500],
-                "clickAttempted": click_attempted,
-                "retryAllowed": False,
-            },
-        )
+        event_error = str(exc)[:500]
+        try:
+            if download_info is None or not click_attempted:
+                raise RuntimeError("native download event unavailable")
+            download = download_info.value
+        except Exception:
+            return _result(DOWNLOAD_NOT_FOUND, ok=False, details={
+                "phase": "download_event", "reason": event_error,
+                "clickAttempted": click_attempted, "retryAllowed": False,
+                "evidenceLimit": "Native API did not expose bytes; click is never repeated."})
 
-    suggested = str(getattr(download, "suggested_filename", "") or "")
-    # ChatGPT may append quoted SHA metadata to the native download suggestion.
-    # Only this decoration is tolerated; request identity and staging stay exact.
+    suggested = str(getattr(download, "suggested_filename", "") or "")[:512]
     sha_decoration = re.fullmatch(
         re.escape(expected_filename) + r"[ \t]+_SHA256_[ \t]+[0-9a-fA-F]{64}_", suggested
     )
-    if suggested != expected_filename and sha_decoration is None:
-        _cancel_download_best_effort(download)
-        return _result(
-            DOWNLOAD_FILENAME_MISMATCH,
-            ok=False,
-            details={
-                "phase": "download_event",
-                "suggestedFilename": suggested[:512],
-                "expectedFilename": expected_filename,
-                "clickAttempted": True,
-                "retryAllowed": False,
-            },
-        )
+    filename_match = suggested == expected_filename or sha_decoration is not None
 
     try:
-        failure = _download_failure(download)
-        if failure is not None:
-            return _result(
-                DOWNLOAD_INTERRUPTED,
-                ok=False,
-                details={
-                    "phase": "download",
-                    "failure": failure,
-                    "clickAttempted": True,
-                    "retryAllowed": False,
-                },
-            )
-        try:
-            source_name = download.path()
-        except Exception as exc:
-            return _result(DOWNLOAD_SOURCE_MISSING, ok=False,
-                           details={"phase": "download_source", "reason": str(exc)[:500],
-                                    "clickAttempted": True, "retryAllowed": False})
+        failure = _download_failure(download) or event_error
+    except Exception as exc:
+        failure = "native failure status unavailable: " + str(exc)[:200]
+    complete = failure is None
+    reasons = [] if complete else ["NATIVE_DOWNLOAD_" + re.sub(r"[^A-Z0-9]+", "_", failure.upper()).strip("_")[:80]]
+    source = None
+    source_reason = None
+    try:
+        source_name = download.path()
         source = Path(source_name) if source_name else None
         if source is None or not source.is_file():
-            return _result(
-                DOWNLOAD_SOURCE_MISSING, ok=False,
-                details={"phase": "download_source", "sourcePath": str(source) if source else None,
-                         "clickAttempted": True, "retryAllowed": False},
-            )
-        source_size = source.stat().st_size
-        source_sha256 = _sha256_file(source)
-        download.save_as(str(staging_zip))
-        if not staging_zip.is_file():
-            raise RuntimeError("save_as completed without a staging file")
+            source_reason = "native_path_unavailable"
     except Exception as exc:
-        return _result(
-            DOWNLOAD_INTERRUPTED,
-            ok=False,
-            details={
-                "phase": "download_save",
-                "reason": str(exc)[:500],
-                "clickAttempted": True,
-                "retryAllowed": False,
-            },
-        )
-
-    staging_size = staging_zip.stat().st_size
-    staging_sha256 = _sha256_file(staging_zip)
-    if staging_size != source_size or staging_sha256 != source_sha256:
-        return _result(
-            DOWNLOAD_STAGING_MISMATCH, ok=False,
-            details={"phase": "download_copy", "sourceSize": source_size,
-                     "sourceSha256": source_sha256, "stagingSize": staging_size,
-                     "stagingSha256": staging_sha256, "clickAttempted": True, "retryAllowed": False},
-        )
-    return _result(DOWNLOAD_COMPLETED, ok=True,
-                   details={"sha256": staging_sha256, "suggestedFilename": suggested})
+        source_reason = str(exc)[:300]
+    if source_reason:
+        reasons.append("NATIVE_PATH_UNAVAILABLE")
+    if source is None or not source.is_file():
+        return _result(DOWNLOAD_INTERRUPTED if not complete else DOWNLOAD_SOURCE_MISSING, ok=False,
+            details={"phase":"download_source", "failure":failure, "reason":source_reason,
+                     "clickAttempted":True,"retryAllowed":False})
+    try:
+        source_size = source.stat().st_size
+        source_before_sha = _sha256_file(source) if source_size <= 50 * 1024 * 1024 else None
+        if source_size > 50 * 1024 * 1024:
+            reasons.append("COMPRESSED_SIZE_LIMIT")
+            complete = False
+            source_size = 50 * 1024 * 1024
+        with source.open("rb") as src, candidate_path.open("wb") as dst:
+            remaining = source_size
+            while remaining:
+                block = src.read(min(1024 * 1024, remaining))
+                if not block: break
+                dst.write(block); remaining -= len(block)
+            dst.flush(); os.fsync(dst.fileno())
+        captured_bytes = candidate_path.stat().st_size
+        source_after_size = source.stat().st_size
+        source_sha256 = _sha256_file(source) if source_after_size <= 50 * 1024 * 1024 else None
+        if captured_bytes != source_after_size or captured_bytes != source_size:
+            complete = False
+            reasons.append("CAPTURE_TRUNCATED")
+        digest = _sha256_file(candidate_path)
+        if complete and (digest != source_sha256 or digest != source_before_sha):
+            complete = False
+            reasons.append("SOURCE_COPY_MISMATCH")
+        descriptor = {"path":str(candidate_path.resolve()),"byteLength":captured_bytes,"sha256":digest,
+            "originalFilename":suggested,"completeness":"complete" if complete else "partial",
+            "reasons":reasons,"provenance":provenance,"verified":False,"applyEligible":False,
+            "attachmentLabel":attachment_label,"sourceSha256":source_sha256,"sourceByteLength":source_after_size}
+        _record_candidate_metadata(candidate_path, descriptor)
+    except Exception as exc:
+        descriptor = None
+        if candidate_path.is_file() and candidate_path.stat().st_size <= 50 * 1024 * 1024:
+            descriptor = {"path": str(candidate_path.resolve()), "byteLength": candidate_path.stat().st_size,
+                "sha256": _sha256_file(candidate_path), "originalFilename": suggested, "completeness": "partial",
+                "reasons": [*reasons, "CANDIDATE_CAPTURE_FAILED"], "provenance": provenance,
+                "verified": False, "applyEligible": False}
+            _record_candidate_metadata(candidate_path, descriptor)
+        return _result(DOWNLOAD_INTERRUPTED,ok=False,details={"candidate": descriptor,
+            "phase":"candidate_capture","reason":str(exc)[:500],"clickAttempted":True,"retryAllowed":False})
+    mismatch = not filename_match
+    if mismatch:
+        descriptor["reasons"].append("NATIVE_FILENAME_MISMATCH")
+    _record_candidate_metadata(candidate_path, descriptor)
+    if complete and not mismatch:
+        try:
+            download.save_as(str(staging_zip))
+            if (not staging_zip.is_file() or staging_zip.stat().st_size != captured_bytes
+                    or _sha256_file(staging_zip) != digest):
+                descriptor["reasons"].append(DOWNLOAD_STAGING_MISMATCH)
+                _record_candidate_metadata(candidate_path, descriptor)
+                return _result(DOWNLOAD_STAGING_MISMATCH, ok=False, details={"candidate": descriptor, "retryAllowed": False})
+        except Exception as exc:
+            descriptor["reasons"].append("NATIVE_SAVE_FAILED")
+            _record_candidate_metadata(candidate_path, descriptor)
+            return _result(DOWNLOAD_INTERRUPTED, ok=False, details={"candidate": descriptor, "reason": str(exc)[:300], "retryAllowed": False})
+    code = DOWNLOAD_INTERRUPTED if not complete else DOWNLOAD_FILENAME_MISMATCH if mismatch else DOWNLOAD_COMPLETED
+    return _result(code,ok=complete and not mismatch,details={"sha256":digest,"suggestedFilename":suggested,
+        "candidate":descriptor,"clickAttempted":True,"retryAllowed":False})
 
 
 def download_validated_artifact(
@@ -574,6 +624,7 @@ def download_validated_artifact(
     download_timeout_ms: int = DEFAULT_DOWNLOAD_TIMEOUT_MS,
     click_timeout_ms: int = DEFAULT_CLICK_TIMEOUT_MS,
     validator_runner: Callable[[Path, dict[str, Any]], dict[str, Any]] | None = None,
+    candidate_root: str | os.PathLike[str] | None = None,
 ) -> dict[str, Any]:
     """Perform P6 after P5 proof. Never retries a click/download."""
     try:
@@ -585,7 +636,7 @@ def download_validated_artifact(
             details={"phase": "config", "reason": str(exc)[:500]},
         )
 
-    initial = _p5_identity(artifact_dom_result)
+    initial = _p5_identity(artifact_dom_result, allow_candidate=True)
     if initial is None:
         return _result(
             DOWNLOAD_PROOF_INVALID,
@@ -605,6 +656,14 @@ def download_validated_artifact(
 
     try:
         root = Path(result_root) if result_root is not None else default_result_root()
+        capture_root = Path(candidate_root) if candidate_root is not None else root / ".candidates"
+        candidate_dir = capture_root / request_id
+        candidate_dir.mkdir(parents=True, exist_ok=True)
+        candidate_path = candidate_dir / "capture.bin"
+        if any(_is_link_or_junction(path) for path in (capture_root, candidate_dir, candidate_path)):
+            raise RuntimeError("candidate path must not be symlink/junction")
+        if candidate_path.exists():
+            raise FileExistsError("candidate capture already exists")
         final_dir, staging_zip = _prepare_staging(root, request_id, expected_filename)
     except FileExistsError as exc:
         return _result(
@@ -621,15 +680,15 @@ def download_validated_artifact(
 
     staging_dir = staging_zip.parent
 
-    reproof = detector.detect_artifact_dom(
-        page,
-        expected_prompt=expected_prompt,
-        expected_chat_url=expected_chat_url,
-        request_id=request_id,
-        expected_filename=expected_filename,
-        completed_observer_result=completed_observer_result,
-    )
-    current = _p5_identity(reproof)
+    if initial["candidate"]:
+        reproof = detector.discover_artifact_candidate(page, expected_prompt=expected_prompt,
+            expected_chat_url=expected_chat_url, request_id=request_id,
+            expected_filename=expected_filename, completed_observer_result=completed_observer_result)
+    else:
+        reproof = detector.detect_artifact_dom(page, expected_prompt=expected_prompt,
+            expected_chat_url=expected_chat_url, request_id=request_id,
+            expected_filename=expected_filename, completed_observer_result=completed_observer_result)
+    current = _p5_identity(reproof, allow_candidate=initial["candidate"])
     if current is None:
         return _result(
             DOWNLOAD_PROOF_CHANGED,
@@ -654,7 +713,8 @@ def download_validated_artifact(
 
     try:
         control = _resolve_control(page, current)
-        snapshot = _control_snapshot(control, expected_filename)
+        attachment_label = current["attachment"].get("label", "") if current["candidate"] else expected_filename
+        snapshot = _control_snapshot(control, attachment_label)
     except Exception as exc:
         return _result(
             DOWNLOAD_CONTROL_INVALID,
@@ -667,10 +727,11 @@ def download_validated_artifact(
         )
 
     if not (
-        snapshot["connected"]
+        snapshot["eligibleNativeDownload"]
+        and snapshot["connected"]
         and snapshot["visible"]
         and not snapshot["disabled"]
-        and snapshot["visibleLabelExact"]
+        and (snapshot["visibleLabel"] == attachment_label if current["candidate"] else snapshot["visibleLabelExact"])
     ):
         return _result(
             DOWNLOAD_CONTROL_INVALID,
@@ -684,24 +745,60 @@ def download_validated_artifact(
 
     try:
         with cdp_download.download_behavior(page, cdp_artifacts_dir):
-            captured = _capture_download(
-                page, control, staging_zip, expected_filename, download_timeout_ms, click_timeout_ms)
+            provenance = {"requestId":request_id,"chatUrl":current["chatUrl"],
+                "assistantTextSha256":current["assistantTextSha256"],"assistantIndex":current["assistantIndex"],
+                "assistantIdentity":current["assistantIdentity"],"expectedFilename":expected_filename}
+            captured = _capture_download(page, control, staging_zip, expected_filename,
+                download_timeout_ms, click_timeout_ms, candidate_path, provenance,
+                attachment_label)
     except Exception as exc:
         return _result(DOWNLOAD_BEHAVIOR_FAILED, ok=False,
                        details={"phase": "download_capture", "reason": str(exc)[:500],
                                 "retryAllowed": False})
+    descriptor = captured.get("details", {}).get("candidate")
+    if descriptor:
+        descriptor["reasons"].extend(reason for reason in initial["reasons"] if reason not in descriptor["reasons"])
+        _record_candidate_metadata(candidate_path, descriptor)
     if not captured["ok"]:
-        return captured
+        details = dict(captured.get("details", {}))
+        details["candidate"] = descriptor
+        return _result(captured["code"], ok=False, recoverable=captured.get("recoverable", False), details=details)
+    if initial["candidate"]:
+        validation = None
+        try:
+            validation = (validator_runner or _run_validator)(staging_zip, trusted) if descriptor["completeness"] == "complete" else None
+        except Exception as exc:
+            descriptor["reasons"].append("VALIDATOR_EXCEPTION")
+            descriptor["validatorError"] = str(exc)[:300]
+        if not isinstance(validation, dict) or validation.get("ok") is not True:
+            descriptor["reasons"].append(str(validation.get("code") or "VALIDATOR_REJECTED") if isinstance(validation, dict) else "UNVERIFIED_CANDIDATE")
+            _record_candidate_metadata(candidate_path, descriptor)
+            return _result("ARTIFACT_CANDIDATE_SAVED" if descriptor["completeness"] == "complete" else DOWNLOAD_INTERRUPTED,
+                ok=False, details={"candidate":descriptor,"requestId":request_id,"expectedFilename":expected_filename,
+                "chatUrl":current["chatUrl"],"assistantIndex":current["assistantIndex"],
+                "assistantTextSha256":current["assistantTextSha256"],"attachment":current["attachment"],
+                "reasons":descriptor["reasons"],"downloadStarted":True})
+        descriptor["validatorResult"] = validation
+        descriptor["reasons"].append("CURRENT_REQUEST_CORRELATION_UNVERIFIED")
+        _record_candidate_metadata(candidate_path, descriptor)
+        return _result("ARTIFACT_CANDIDATE_SAVED",ok=False,details={"candidate":descriptor,
+            "requestId":request_id,"expectedFilename":expected_filename,"chatUrl":current["chatUrl"],
+            "attachment":current["attachment"],"reasons":descriptor["reasons"],"downloadStarted":True})
+    if captured["code"] == DOWNLOAD_FILENAME_MISMATCH:
+        return _result(DOWNLOAD_FILENAME_MISMATCH,ok=False,details={**captured["details"],"candidate":descriptor})
     actual_sha256 = captured["details"]["sha256"]
     runner = validator_runner or _run_validator
     try:
         validation = runner(staging_zip, trusted)
     except Exception as exc:
+        descriptor["reasons"].append("VALIDATOR_EXCEPTION")
+        _record_candidate_metadata(candidate_path, descriptor)
         return _result(
             ARTIFACT_VALIDATOR_FAILED,
             ok=False,
             details={
                 "phase": "validator",
+                "candidate": descriptor,
                 "reason": str(exc)[:500],
                 "stagingPath": str(staging_zip),
                 "sha256": actual_sha256,
@@ -709,13 +806,17 @@ def download_validated_artifact(
         )
 
     if not isinstance(validation, dict):
+        descriptor["reasons"].append("VALIDATOR_RESULT_INVALID")
+        _record_candidate_metadata(candidate_path, descriptor)
         return _result(
             ARTIFACT_VALIDATOR_FAILED,
             ok=False,
-            details={"phase": "validator", "reason": "validator result is not an object"},
+            details={"phase": "validator", "reason": "validator result is not an object", "candidate": descriptor},
         )
 
     if validation.get("ok") is not True:
+        descriptor["reasons"].append(str(validation.get("code") or "VALIDATOR_REJECTED"))
+        _record_candidate_metadata(candidate_path, descriptor)
         validator_code = validation.get("code")
         if validator_code not in _RECOVERABLE_VALIDATOR_CODES:
             return _result(
@@ -723,6 +824,7 @@ def download_validated_artifact(
                 ok=False,
                 details={
                     "phase": "validator",
+                    "candidate": descriptor,
                     "reason": "validator returned an unknown rejection code",
                     "validatorCode": validator_code,
                     "stagingPath": str(staging_zip),
@@ -736,20 +838,8 @@ def download_validated_artifact(
                 RESULT_STORE_FAILED,
                 ok=False,
                 details={
+                    "candidate": descriptor,
                     "phase": "validator_record",
-                    "reason": str(exc)[:500],
-                    "stagingPath": str(staging_zip),
-                    "sha256": actual_sha256,
-                },
-            )
-        try:
-            _discard_staging(staging_dir)
-        except Exception as exc:
-            return _result(
-                RESULT_STORE_FAILED,
-                ok=False,
-                details={
-                    "phase": "validator_cleanup",
                     "reason": str(exc)[:500],
                     "stagingPath": str(staging_zip),
                     "sha256": actual_sha256,
@@ -770,16 +860,20 @@ def download_validated_artifact(
                 ),
                 "validationDetails": validation.get("details") if isinstance(validation.get("details"), dict) else {},
                 "stagingPath": str(staging_zip),
-                "stagingDiscarded": True,
+                "stagingDiscarded": False,
+                "candidate": descriptor,
                 "sha256": actual_sha256,
             },
         )
 
     if not _validation_matches_trusted(validation, trusted=trusted, actual_sha256=actual_sha256):
+        descriptor["reasons"].append("VALIDATOR_ATTESTATION_MISMATCH")
+        _record_candidate_metadata(candidate_path, descriptor)
         return _result(
             ARTIFACT_INVALID,
             ok=False,
             details={
+                "candidate": descriptor,
                 "phase": "validator_attestation",
                 "reason": "validator success did not match trusted metadata or raw SHA-256",
                 "stagingPath": str(staging_zip),
@@ -825,6 +919,7 @@ def download_validated_artifact(
             RESULT_STORE_FAILED,
             ok=False,
             details={
+                "candidate": descriptor,
                 "phase": "publish",
                 "reason": str(exc)[:500],
                 "stagingPath": str(staging_zip),
@@ -835,6 +930,7 @@ def download_validated_artifact(
         RESULT_DURABLE,
         ok=True,
         details={
+            "candidate": descriptor,
             "phase": "durable",
             "requestId": request_id,
             "expectedFilename": expected_filename,

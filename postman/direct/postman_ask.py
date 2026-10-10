@@ -373,6 +373,7 @@ class DirectPostmanAsk:
             cdp_url=browser.get("cdpUrl", cdp_url),
             conversation_url=chat_ref.conversation_url if chat_ref is not None else None,
             observer_timeout_ms=DEFAULT_ASSISTANT_TIMEOUT_MS,
+            artifact_mode=False,
         )
         if not isinstance(result, dict) or result.get("ok") is not True:
             code = result.get("code", "DIRECT_WEB_FAILED") if isinstance(result, dict) else "DIRECT_WEB_FAILED"

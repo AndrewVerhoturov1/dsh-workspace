@@ -5,6 +5,14 @@
 Direct Postman не использует `dsh-postman-harness`/Cordis async transport как fallback.
 Browser-first pipeline находится в `postman/web/`.
 
+## Наблюдение / физическое сохранение / verified result / применение
+
+Artifact UNKNOWN разрешает только ограниченное read-only наблюдение exact принадлежащей Page conversation. Weak count/text/composer/card не повышают UNKNOWN, reminders/recovery/automatic continuation запрещены. Fresh genuinely empty owned chat сохраняет strict verified путь; TEXT/IMAGE не получают unchecked candidate success.
+
+Один native файл конкретного наблюдаемого answer можно сохранить без идеального envelope/REQ/имени. Несколько дают до восьми choices без click; global latest ZIP и arbitrary external URL не выбираются. Descriptor `candidate`: actual path/byteLength/SHA, originalFilename, completeness, reasons/provenance, `verified=false`, `applyEligible=false`. Fixed raw path: `direct/candidates/<REQ>/capture.bin`, original filename не используется как путь.
+
+Wrong native name, доступные partial bytes, validator rejection/exception сохраняются с причиной, без unpack/open/execute. Raw save bounded 50 MiB; если native API не отдаёт partial path, это explicit evidence limit. Cold physical observation читает только owned fixed path и actual hash отдельно от strict ownership receipt; branchless/inconsistent receipt не чинится/не повышается. Sync failure не скрывает bytes/path/SHA, retrySync local-only, grant subordinate to verified ownership+sync и hash rechecks. Missing input post-Send proof оставляет `RESULT_MAY_LACK_INPUT_ATTACHMENT` до человеческого выбора.
+
 ## Normal flow
 
 ```text
@@ -18,7 +26,7 @@ Luna
 → ensure dedicated Postman Chrome
 → postman/web/web_worker_bridge.py
 → submit / observe / detect / download / validate
-→ RESULT_DURABLE | ASSISTANT_COMPLETED_NO_ARTIFACT | ARTIFACT_REJECTED
+→ RESULT_DURABLE | ASSISTANT_COMPLETED_NO_ARTIFACT | ARTIFACT_REJECTED | ARTIFACT_CANDIDATE_SAVED/CHOICES
 → one terminal JSON object back to Luna
 → durable: report exact requestId + resultZip
 → non-durable: return assistantText / validation reason for continuation decision

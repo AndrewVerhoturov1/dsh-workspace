@@ -7,8 +7,9 @@ import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const repositoryRoot = resolve(fileURLToPath(new URL('../../..', import.meta.url)))
-const stagingRoot = mkdtempSync(join(tmpdir(), 'dsh-postman-ptc-install-'))
+const stagingRoot = mkdtempSync(join(tmpdir(), 'dsh-ptc-'))
 const archivePath = join(stagingRoot, 'repository.tar')
+const goalContinuationOnly = process.argv.includes('--goal-continuation')
 
 function run(command, args, cwd, env = process.env) {
   const result = spawnSync(command, args, { cwd, env, stdio: 'inherit', windowsHide: true })
@@ -42,7 +43,7 @@ try {
     cpSync(resolve(repositoryRoot,'.agents/skills',role),resolve(stagingRoot,'.agents/skills',role),{recursive:true})
   for(const preset of ['postman-leader','postman-leader-ptc'])
     cpSync(resolve(repositoryRoot,'.agent-presets',preset),resolve(stagingRoot,'.agent-presets',preset),{recursive:true})
-  for(const name of ['postman-native-child-cutoff.patch','postman-native-cold-compact.patch','postman-native-lifecycle.patch','postman-native-close-only-upgrade.patch','postman-native-scoped-compact.patch'])
+  for(const name of ['postman-native-child-cutoff.patch','postman-native-cold-compact.patch','postman-native-lifecycle.patch','postman-native-close-only-upgrade.patch','postman-native-scoped-compact.patch','postman-native-settlement.patch','postman-native-goal-continuation.patch'])
     copyFileSync(resolve(repositoryRoot,'system/patches',name),resolve(stagingRoot,'system/patches',name))
   copyFileSync(resolve(repositoryRoot,'system/patches/apply-postman-native-child-cutoff.mjs'),resolve(stagingRoot,'system/patches/apply-postman-native-child-cutoff.mjs'))
   const pluginRoot = resolve(stagingRoot, 'plugins/dsh-postman-harness')
@@ -68,6 +69,24 @@ try {
   const targets = applyPostmanNativeChildCutoff([sdkAnchor, resolve(pluginRoot,'package.json')])
   assert.ok(targets.length >= 2)
   for (const target of targets) { assertInStaging(target.path); assert.equal(target.updated,false,'installer already applied patch') }
+  const goalTarget = targets.find(target => target.path.endsWith(join('dsh-goal-round-driver','lib','index.js')))
+  assert.ok(goalTarget, 'actual SDK goal driver included')
+  const goalBytes = readFileSync(goalTarget.path)
+  assert.match(goalBytes.toString(), /goal\/continuation-defer/)
+  // A complete second install must remain idempotent, not just a helper call.
+  run(process.execPath, ['profiles/web/scripts/install-production.mjs'], stagingRoot, env)
+  assert.deepEqual(readFileSync(goalTarget.path), goalBytes)
+  assert.ok(applyPostmanNativeChildCutoff([sdkAnchor,resolve(pluginRoot,'package.json')]).every(target => !target.updated))
+  // Unknown composition must fail before replacing any SDK target.
+  const beforeMismatch = targets.map(target => readFileSync(target.path))
+  const incompatible = Buffer.concat([goalBytes, Buffer.from('\n// incompatible fixture\n')])
+  const incompatibleFile = goalTarget.path + '.fixture'
+  writeFileSync(incompatibleFile, incompatible)
+  rmSync(goalTarget.path); copyFileSync(incompatibleFile, goalTarget.path); rmSync(incompatibleFile)
+  assert.throws(() => applyPostmanNativeChildCutoff([sdkAnchor,resolve(pluginRoot,'package.json')]), /goal continuation patch preimage mismatch/)
+  for (let i=0;i<targets.length;i++) assert.deepEqual(readFileSync(targets[i].path), targets[i]===goalTarget ? incompatible : beforeMismatch[i])
+  writeFileSync(incompatibleFile,goalBytes); rmSync(goalTarget.path); copyFileSync(incompatibleFile,goalTarget.path); rmSync(incompatibleFile)
+  if (!goalContinuationOnly) {
   // Exact previous Stage 2 native postimage upgrades on disk, then is idempotent.
   const subagentTarget = targets.find(target => target.path.endsWith(join('dsh-subagent','lib','index.js')))
   const upgradedBytes = readFileSync(subagentTarget.path)
@@ -101,6 +120,7 @@ try {
   assert.ok(applyPostmanNativeChildCutoff([sdkAnchor,resolve(pluginRoot,'package.json')]).some(target=>target.updated))
   assert.deepEqual(readFileSync(subagentTarget.path),upgradedBytes)
   assert.ok(applyPostmanNativeChildCutoff([sdkAnchor,resolve(pluginRoot,'package.json')]).every(target=>!target.updated))
+  }
   const { SubagentRuntime } = await import(pathToFileURL(sdkRequire.resolve('@deepseek-ai/dsh-subagent')).href)
   for (const method of ['closeContinuableChild','inspectClosedContinuableChild','inspectOpenContinuableChild','compactContinuableChild'])
     assert.equal(typeof SubagentRuntime.prototype[method],'function',method)
@@ -157,7 +177,7 @@ try {
     await runtime.dispose()
   }
   // Native APIs run from the actual installed SDK, without a test loader.
-  run(process.execPath,['--test','lib/postman-native-cutoff.test.js'],pluginRoot,{...env,DSH_ROOT:resolve(sdkAnchor,'..')})
+  if (!goalContinuationOnly) run(process.execPath,['--test','lib/postman-native-cutoff.test.js'],pluginRoot,{...env,DSH_ROOT:resolve(sdkAnchor,'..')})
   // Preserve one SDK identity for plugin/preset tests, as in the original fixture.
   const pluginSdkInstall = spawnSync(pnpm,['install','--offline','--frozen-lockfile','--ignore-scripts'],{
     cwd:pluginRoot,stdio:'inherit',shell:process.platform==='win32',windowsHide:true,
@@ -167,9 +187,10 @@ try {
   const pluginSdkAnchor = createRequire(resolve(pluginRoot,'package.json')).resolve('@deepseek-ai/dsh/package.json')
   applyPostmanNativeChildCutoff([pluginSdkAnchor,resolve(pluginRoot,'package.json')])
   // Execute installed native/preset compaction with one SDK identity, never mocked presence.
-  run(process.execPath,['--test','lib/postman-runtime-compact-fresh.test.js'],pluginRoot,{...process.env,DSH_CAPABILITY_SDK:pluginSdkAnchor})
-  run(process.execPath,['--test','lib/postman-capability-lifecycle.test.js','lib/postman-capability-cold.test.js','lib/postman-stage3.test.js','lib/postman-stage35a.test.js','lib/postman-stage35b.test.js','lib/ptc-adapter.test.js','lib/postman-worker-evidence.test.js','lib/ptc-worker-first-request.test.js','lib/ptc-worker-mutation.test.js','lib/postman-sol-worker.test.js','lib/postman-stage1.test.js','lib/postman-stage1-review.test.js','lib/ptc-worker-cold-resume.test.js','lib/postman-bridge-core.test.js','lib/postman-worker-lifecycle.test.js','lib/postman-stage2-control.test.js','lib/postman-stage2-bridge.test.js','lib/postman-stage2-cascade.test.js','lib/postman-task-close.test.js','lib/postman-objective-budget.test.js'],pluginRoot,{...process.env,DSH_CAPABILITY_SDK:pluginSdkAnchor,DSH_ROOT:resolve(pluginSdkAnchor,'..')})
-  console.log('clean production install: role model-request catalogs, FAST no PTC, Leader/Sol usable PTC and QuickJS/WASM PASS')
+  if (!goalContinuationOnly) run(process.execPath,['--test','lib/postman-runtime-compact-fresh.test.js'],pluginRoot,{...process.env,DSH_CAPABILITY_SDK:pluginSdkAnchor})
+  if (goalContinuationOnly) run(process.execPath,['--test','lib/ptc-goal-continuation.test.js','lib/ptc-adapter.test.js'],pluginRoot,{...process.env,DSH_CAPABILITY_SDK:pluginSdkAnchor,DSH_ROOT:resolve(pluginSdkAnchor,'..')})
+  else run(process.execPath,['--test','lib/postman-capability-lifecycle.test.js','lib/postman-capability-cold.test.js','lib/postman-stage3.test.js','lib/postman-stage35a.test.js','lib/postman-stage35b.test.js','lib/ptc-adapter.test.js','lib/postman-worker-evidence.test.js','lib/ptc-worker-first-request.test.js','lib/ptc-worker-mutation.test.js','lib/postman-sol-worker.test.js','lib/postman-stage1.test.js','lib/postman-stage1-review.test.js','lib/ptc-worker-cold-resume.test.js','lib/postman-bridge-core.test.js','lib/postman-worker-lifecycle.test.js','lib/postman-stage2-control.test.js','lib/postman-stage2-bridge.test.js','lib/postman-stage2-cascade.test.js','lib/postman-task-close.test.js','lib/postman-objective-budget.test.js'],pluginRoot,{...process.env,DSH_CAPABILITY_SDK:pluginSdkAnchor,DSH_ROOT:resolve(pluginSdkAnchor,'..')})
+  console.log(goalContinuationOnly ? 'clean production install: goal admission, exact Leader/Sol wait, native events, guarded overlay and second install PASS' : 'clean production install: role model-request catalogs, FAST no PTC, Leader/Sol usable PTC and QuickJS/WASM PASS')
 } finally {
   rmSync(stagingRoot, { recursive: true, force: true })
 }

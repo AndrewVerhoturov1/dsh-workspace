@@ -525,6 +525,14 @@ class DirectPostmanUnitTests(unittest.TestCase):
             self.assertEqual(handoff["statePath"], str(runner.state_path(REQ)))
             self.assertEqual(handoff["resultHandoffPath"], str(handoff_path.resolve()))
             self.assertEqual(handoff["sha256"], "c" * 64)
+            for flag in ("verified", "applyEligible", "unresolvedSendUnknown"):
+                alias = {**handoff, flag: flag == "unresolvedSendUnknown"}
+                with self.subTest(candidateAlias=flag), self.assertRaises(direct.durable_handoff.DurableHandoffError) as rejected:
+                    direct.durable_handoff.validate_terminal(alias, expected_repository=REPO, request_id=REQ)
+                self.assertEqual(rejected.exception.code, "RESUME_INVALID")
+            # Older strict handoffs without the newer false flags remain accepted.
+            legacy = {k: v for k, v in handoff.items() if k not in {"verified", "applyEligible", "unresolvedSendUnknown"}}
+            self.assertEqual(direct.durable_handoff.validate_terminal(legacy, expected_repository=REPO)["code"], "RESULT_DURABLE")
             validated = direct.durable_handoff.validate_terminal(
                 handoff, expected_repository=REPO, request_id=REQ,
                 expected_state_path=runner.state_path(REQ), expected_handoff_path=handoff_path,

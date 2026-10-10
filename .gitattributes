@@ -4,3 +4,4 @@ system/patches/postman-native-cold-compact.patch whitespace=-space-before-tab
 system/patches/postman-native-lifecycle.patch whitespace=-space-before-tab
 system/patches/postman-native-close-only-upgrade.patch whitespace=-space-before-tab
 system/patches/postman-native-scoped-compact.patch whitespace=-space-before-tab
+system/patches/postman-native-goal-continuation.patch whitespace=blank-at-eol,blank-at-eof,-space-before-tab

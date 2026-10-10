@@ -19,10 +19,12 @@ class FinalizeTaskPrSkillContract(unittest.TestCase):
         self.assertIn(r"C:\Users\andre\.dsh\tools\finalize-task-pr\finalize_task_pr.ps1", self.text)
         self.assertIn("-PrNumber", self.text)
 
-    def test_targets_preview_not_main(self):
-        self.assertIn("base=preview", self.text)
-        self.assertIn("preview → main", self.text)
-        self.assertIn("promote-preview-to-main", self.text)
+    def test_targets_main_with_separate_preview_promotion(self):
+        self.assertIn("base=main", self.text)
+        self.assertIn("main → preview", self.text)
+        self.assertIn("promote-main-to-preview", self.text)
+        self.assertIn("promote_main_to_preview.ps1", self.text)
+        self.assertNotIn("base=preview", self.text)
 
     def test_skill_is_executor_not_reviewer(self):
         self.assertIn("не повторять", self.text.lower())
@@ -42,21 +44,15 @@ class FinalizeTaskPrSkillContract(unittest.TestCase):
     def test_what_if_is_not_mandatory(self):
         self.assertIn("-WhatIf", self.text)
 
-    def test_preview_sync_orchestration_contract(self):
-        self.assertIn(r"C:\Users\andre\.dsh\tools\preview-worktree\preview_worktree.ps1", self.text)
-        self.assertIn("-Action update", self.text)
-        self.assertIn("TASK_PRS_DRY_RUN", self.text)
-        for marker in ("reset", "stash", "clean", "force push"):
-            self.assertIn(marker, self.text)
-        terminal_guard = """if (
-    $result.ok -eq $true -and
-    $result.code -in @(
-        'TASK_PRS_FINALIZED',
-        'TASK_PRS_FINALIZED_WITH_WARNINGS'
-    )
-) {"""
-        self.assertIn(terminal_guard, self.text)
-        self.assertNotIn("-and -not $WhatIf", self.text)
+    def test_no_automatic_permanent_worktree_sync_after_merge(self):
+        self.assertIn("не запускает автоматическую синхронизацию", self.text)
+        self.assertIn("нет автоматического обновления permanent", self.text)
+        self.assertNotIn("preview_worktree.ps1", self.text)
+        self.assertNotIn("$previewText", self.text)
+        self.assertNotIn("$previewResult", self.text)
+        self.assertIn("TASK_PRS_FINALIZED_WITH_WARNINGS", self.text)
+        self.assertIn("mainWorkingTreeTouched=false", self.text)
+        self.assertIn("previewWorkingTreeTouched=false", self.text)
 
 
 if __name__ == "__main__":

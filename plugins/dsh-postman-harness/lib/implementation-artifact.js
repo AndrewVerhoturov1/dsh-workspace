@@ -56,7 +56,8 @@ export function createImplementationArtifactGrants(registry) {
         typeof leaderId !== 'string' || leaderId === '' ||
         terminal.transportKind !== 'artifact' ||
         result?.ok !== true || result?.code !== 'RESULT_DURABLE' ||
-        result?.state !== 'RESULT_DURABLE' ||
+        result?.state !== 'RESULT_DURABLE' || result?.verified === false ||
+        result?.unresolvedSendUnknown === true || result?.applyEligible === false ||
         !REQUEST_ID.test(result?.requestId ?? '') ||
         terminal.requestId !== result.requestId ||
         result.repository !== IMPLEMENTATION_REPOSITORY ||

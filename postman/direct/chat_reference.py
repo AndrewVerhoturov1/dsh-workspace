@@ -146,14 +146,13 @@ def can_continue_request(value: dict[str, Any], *, request_id: str, expected_rep
         return False
     if value.get("state") in {RESULT_DURABLE, TEXT_RESULT_DURABLE, "IMAGE_RESULT_DURABLE"}:
         return False
-    if value.get("automaticRecoveryUsed") is True or value.get("unresolvedSendUnknown") is True:
+    if (value.get("automaticRecoveryUsed") is True or value.get("unresolvedSendUnknown") is True
+            or value.get("candidate") or value.get("choices")):
         return False
     if value.get("webResultAvailable") is True or value.get("state") == "ARTIFACT_FOUND":
         return False
     # A completed successful terminal already attests its initial Send; retain legacy references.
-    return value.get("state") in {ASSISTANT_COMPLETED_NO_ARTIFACT, ARTIFACT_REJECTED} or (
-        _send_proof_class(value) == "PROVEN_SENT" or isinstance(value.get("readOnlySendReproof"), dict)
-    )
+    return value.get("state") in {ASSISTANT_COMPLETED_NO_ARTIFACT, ARTIFACT_REJECTED} or _send_proof_class(value) == "PROVEN_SENT"
 
 
 def recovery_claim_path(direct_root: str | os.PathLike[str], root_request_id: str) -> Path:

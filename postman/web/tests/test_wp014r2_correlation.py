@@ -92,7 +92,7 @@ class WP014R2CorrelationTests(unittest.TestCase):
             def __exit__(self, exc_type, exc, tb):
                 return False
 
-        def fake_submit(page, prompt, timeout_ms=None):
+        def fake_submit(page, prompt, timeout_ms=None, artifact_mode=True):
             return {
                 "ok": True,
                 "code": submit.PROMPT_SEND_CONFIRMED,
