@@ -1,10 +1,13 @@
 import { readFile } from 'node:fs/promises';
 import z from 'zod';
 import { isAgentLoopRequest } from '@deepseek-ai/dsh-llm';
+import { Session } from '@deepseek-ai/dsh-session';
 import { foldAttempts, summarize, taskTeam } from './accounting.js';
 export const name = 'cost-panel';
 export const inject = ['sessions', 'llm', 'connection', 'sessionProjections'];
 export function apply(ctx) {
+  if (Session.create('cost-panel-compatibility-probe').append('cost-panel/attempt', {}, { ignorable: true }).ignorable !== true)
+    throw new Error('cost-panel: install the Session ignorable-event compatibility patch before enabling the plugin (see README)');
   // This revision travels through DSH's existing all-session projection feed.
   ctx.sessionProjections.register({ key: 'costPanelRevision', stateVersion: 1,
     stateSchema: z.number().int().nonnegative(), init: () => 0,
@@ -20,15 +23,15 @@ export function apply(ctx) {
       purpose: options.purpose ?? (loopRequest ? 'conversation' : 'auxiliary'), usage: null, status: 'started',
       ...step ? { turn: step.data.turn, step: step.data.step } : {},
     };
-    session.append('cost-panel/attempt', record);
+    session.append('cost-panel/attempt', record, { ignorable: true });
     try {
       for await (const chunk of next()) {
-        if (chunk.type === 'usage') { record.usage = chunk.usage; session.append('cost-panel/attempt', record); }
-        if (chunk.type === 'finish') { record.status = chunk.reason.kind; session.append('cost-panel/attempt', record); }
+        if (chunk.type === 'usage') { record.usage = chunk.usage; session.append('cost-panel/attempt', record, { ignorable: true }); }
+        if (chunk.type === 'finish') { record.status = chunk.reason.kind; session.append('cost-panel/attempt', record, { ignorable: true }); }
         yield chunk;
       }
     } finally {
-      if (record.status === 'started') { record.status = 'interrupted'; session.append('cost-panel/attempt', record); }
+      if (record.status === 'started') { record.status = 'interrupted'; session.append('cost-panel/attempt', record, { ignorable: true }); }
     }
   })());
   ctx.effect(() => ctx.connection.rpc.handle('/cost-panel', async (endpoint, payload, signal) => {
@@ -46,8 +49,13 @@ export function apply(ctx) {
         const live = ctx.sessions.get(id);
         if (live) summaries.set(id, summarize(foldAttempts(live.header, live.events), catalog));
         else if (persistence) {
-          const stored = await persistence.inspect(id, signal);
-          summaries.set(id, summarize(foldAttempts(stored.meta, stored.events), catalog));
+          try {
+            const stored = await persistence.inspect(id, signal);
+            summaries.set(id, summarize(foldAttempts(stored.meta, stored.events), catalog));
+          } catch (error) {
+            if (signal.aborted || id === payload.sessionId) throw error;
+            incomplete = true;
+          }
         } else incomplete = true;
       }
       const own = summaries.get(payload.sessionId);

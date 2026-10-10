@@ -32,6 +32,8 @@ try {
   // Exercise the current installer, including changes not yet committed to HEAD.
   copyFileSync(resolve(repositoryRoot, 'profiles/web/scripts/install-production.mjs'),
     resolve(stagingRoot, 'profiles/web/scripts/install-production.mjs'))
+  copyFileSync(resolve(repositoryRoot, 'plugins/dsh-cost-panel/session-compat.mjs'),
+    resolve(stagingRoot, 'plugins/dsh-cost-panel/session-compat.mjs'))
 
   // Include the current role implementation and canonical sources before commit.
   for (const source of ['plugins/dsh-postman-harness/README.md','docs/subprojects/ptc/PTC_CONTRACT.md','docs/subprojects/ptc/SUBPROJECT.md','docs/subprojects/postman/SUBPROJECT.md','docs/workflow/TASK_CONTRACT.md','postman/POSTMAN_BRIDGE_FLOW.md'])

@@ -11,6 +11,7 @@
   },
   "files": [
     "index.js",
+    "session-compat.mjs",
     "accounting.js",
     "client.js",
     "model-prices.json",
