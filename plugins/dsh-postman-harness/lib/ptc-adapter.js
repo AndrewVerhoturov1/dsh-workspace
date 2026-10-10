@@ -94,6 +94,10 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
     }
     return decision
   })
+  // Optional goal-driver admission veto: only this exact authoritative idle
+  // wait defers automatic rounds; native inbox input still wakes normally.
+  const stopGoalContinuation = ctx.on('goal/continuation-defer', agent =>
+    isWaitingForExternalEvent(agent) ? true : undefined)
   const logger = ctx.logger('postman-ptc')
   const assignmentFor = resolveAssignment ?? (agent => authorize(agent) ? { profile: current, role: 'leader' } : null)
   function allowed(agent, record) {
@@ -379,7 +383,7 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
   async function dispose() {
     if (disposed) return
     disposed = true
-    stopConclusionObserver(); stopExternalBoundary(); stopTextReads()
+    stopConclusionObserver(); stopExternalBoundary(); stopGoalContinuation(); stopTextReads()
     for (const record of owners.values()) revoke(record)
     owners.clear()
     await runtime.dispose()
