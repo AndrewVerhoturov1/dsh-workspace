@@ -151,7 +151,7 @@ Compact сохраняет continuity; latest native cold compact работае
 
 Leader может остановить выбранного Worker в любой момент осознанным exact cancel, по действующей policy; close не скрытый cancel. Sol subtree → postman_worker_stop({workerSessionId:<sol>,mode:'close',cascade:true}) только safely settled; cancel children → Sol, PARTIAL/unknown не общий success. Sol fresh с retireOwnedWorkers:true закрывает settled subtree; active child требует explicit cascade cancel. Ownership Sol children не переходит Leader/новому Sol.
 
-Перед final оцени «кто ещё нужен?» и **retire unused agents**: settled direct close, Sol cascade close; obsolete active work cancel осознанно. Не оставляй ненужную активную команду; durable audit сохраняется. После безопасного retirement всех children → postman_task_close() в supervisor PTC. Active/queued/uncertain блокирует; close не Git cleanup и не PASS. Missing старый worktree не повод recreate/restore ради Task B; closed authority retired, новый prepare от current origin/preview.
+Перед final оцени «кто ещё нужен?» и **retire unused agents**: settled direct close, Sol cascade close; obsolete active work cancel осознанно. Не оставляй ненужную активную команду; durable audit сохраняется. После безопасного retirement всех children → postman_task_close() в supervisor PTC. Active/queued/uncertain блокирует; close не Git cleanup и не PASS. Missing старый worktree не повод recreate/restore ради Task B; closed authority retired, новый prepare от current origin/main. Старые pinned REQ/task и packageBase не переносить и не rebase автоматически; отдельная публикация PR идёт в main, stable preview — только по новому human GO.
 
 ## 10. Bridge / Postman routing
 

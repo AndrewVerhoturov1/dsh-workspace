@@ -21,7 +21,7 @@ test('production sync validates and fast-forwards a real temporary bare DAG', { 
   try {
     const root = join(temp, 'root'), bare = join(temp, 'origin.git')
     await exec('git', ['init', '--bare', bare], { windowsHide: true })
-    await exec('git', ['init', '-b', 'preview', root], { windowsHide: true })
+    await exec('git', ['init', '-b', 'main', root], { windowsHide: true })
     await call(root, 'config', 'user.email', 'postman-test@example.invalid')
     await call(root, 'config', 'user.name', 'Postman test')
     const commit = async message => {
@@ -30,7 +30,14 @@ test('production sync validates and fast-forwards a real temporary bare DAG', { 
       return call(root, 'rev-parse', 'HEAD')
     }
     const p0 = await commit('P0'), c1 = await commit('C1'), c2 = await commit('C2'), c3 = await commit('C3')
-    await call(root, 'remote', 'add', 'origin', bare); await call(root, 'push', '-u', 'origin', 'preview')
+    // A separate published preview SHA must never be used as the new task base.
+    await call(root, 'branch', 'preview', p0)
+    await call(root, 'remote', 'add', 'origin', bare)
+    await call(root, 'push', '-u', 'origin', 'main')
+    await call(root, 'push', 'origin', 'preview')
+    assert.equal(await call(bare, 'rev-parse', 'refs/heads/main'), c3)
+    assert.equal(await call(bare, 'rev-parse', 'refs/heads/preview'), p0)
+    assert.notEqual(c3, p0)
     const gitCommand = async (cwd, ...args) => {
       if (args[0] === 'remote' && args[1] === 'get-url' && args[2] === 'origin') return 'https://github.com/andrewverhoturov1/dsh-workspace.git'
       try { return await call(cwd, ...args) }
@@ -164,11 +171,19 @@ async function recoveryFixture(t) {
   await call(root, 'config', 'user.name', 'Postman test')
   await writeFile(join(root, 'history.txt'), 'A')
   await call(root, 'add', 'history.txt'); await call(root, 'commit', '-m', 'A')
-  const base = await call(root, 'rev-parse', 'HEAD')
+  const base = await call(root, 'rev-parse', 'HEAD') // Legacy published preview B.
+  await call(root, 'checkout', '-b', 'main')
+  await writeFile(join(root, 'main-only.txt'), 'integration main A')
+  await call(root, 'add', 'main-only.txt'); await call(root, 'commit', '-m', 'main A')
+  const mainSha = await call(root, 'rev-parse', 'HEAD')
+  assert.notEqual(base, mainSha)
+  await call(root, 'checkout', 'preview')
   const branch = 'task/postman-' + 'c'.repeat(32)
   const origin = 'https://github.com/AndrewVerhoturov1/dsh-workspace.git'
   await call(root, 'remote', 'add', 'origin', origin)
   await call(root, 'worktree', 'add', '-b', branch, tree, base)
+  await call(root, 'push', bare, base + ':refs/heads/preview')
+  await call(root, 'push', bare, mainSha + ':refs/heads/main')
   await call(root, 'push', bare, base + ':refs/heads/' + branch)
   const calls = []
   const gitCommand = async (cwd, ...args) => {
@@ -202,7 +217,7 @@ async function recoveryFixture(t) {
         taskUrl: 'https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/' + commit + '/' + requestId + '.md' } }
     return { old, commit, terminal }
   }
-  return { temp, root, bare, tree, branch, base, leader, first, open, gitCommand, calls, publish }
+  return { temp, root, bare, tree, branch, base, mainSha, leader, first, open, gitCommand, calls, publish }
 }
 
 const hasDestructiveGit = calls => calls.some(args => ['reset', 'clean', 'merge', 'stash', 'push'].includes(args[0]))
@@ -219,6 +234,10 @@ test('recover accepts one proven delayed REQ, then cold retrySync retains result
   assert.equal((await contexts.recover(f.leader)).status, 'POSTMAN_TASK_CONTEXT_ALREADY_READY')
   assert.equal(await call(f.tree, 'rev-parse', 'HEAD'), before)
   assert.equal(contexts.get(f.leader.id).worktree, f.tree)
+  assert.equal(contexts.get(f.leader.id).baseCommit, f.base, 'legacy task stays pinned to preview B')
+  assert.notEqual(f.base, f.mainSha, 'new main A differs from the published legacy base B')
+  assert.equal(f.calls.some(args => args.some(arg => arg.includes('origin/main')) ||
+    args[0] === 'fetch' && args[1] === '--prune'), false, 'recovery never consults new global main')
   assert.equal(contexts.record(f.leader.id).workers.W.id, 'W')
   assert.equal(hasDestructiveGit(f.calls), false)
   let sends = 0, grants = 0

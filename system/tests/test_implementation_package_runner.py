@@ -35,14 +35,14 @@ def init_repo(root: Path, branch: str = "feature/package-test") -> None:
     command(["git", "commit", "-qm", "initial"], root)
 
 
-def package_zip(root: Path, patch: str, *, tests=None, package_base="informational-old-sha") -> Path:
+def package_zip(root: Path, patch: str, *, tests=None, package_base="informational-old-sha", base_branch="main", pr_base="main") -> Path:
     package = root / "package.zip"
     manifest = {
         "schemaVersion": 1,
         "package": "test-package",
         "repository": REPOSITORY,
-        "baseBranch": "preview",
-        "prBase": "preview",
+        "baseBranch": base_branch,
+        "prBase": pr_base,
         "packageBase": package_base,
         "patch": "changes.patch",
         "tests": [] if tests is None else tests,
@@ -200,7 +200,7 @@ new file mode 100644
         command(["git", "commit", "-qm", "postman: publish task"], self.repo)
         publication = command(["git", "rev-parse", "HEAD"], self.repo).stdout.strip()
         self.assertEqual(command(["git", "rev-parse", "HEAD^"], self.repo).stdout.strip(), base)
-        package = package_zip(self.base, PATCH_TRACKED_AND_NEW, package_base=base)
+        package = package_zip(self.base, PATCH_TRACKED_AND_NEW, package_base=base, base_branch="preview", pr_base="preview")
         result = runner.execute("apply", package, self.repo, self.diag)
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["affectedPaths"], ["hello.txt", "new.txt"])

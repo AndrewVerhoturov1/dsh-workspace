@@ -1,6 +1,6 @@
 # finalize-task-pr
 
-Исполнитель уже принятого решения о merge обычного task PR **в `preview`**.
+Исполнитель уже принятого решения о squash merge обычного task PR **в `main`**.
 
 Он не является reviewer и намеренно не повторяет проверки, которые модель уже выполнила до команды пользователя «мердж»:
 
@@ -31,14 +31,14 @@ Dry-run только по явному запросу:
 ## Что делает
 
 1. Читает exact PR через GitHub CLI.
-2. Требует `base=preview`.
+2. Требует `base=main`.
 3. Запрещает использовать `main` или `preview` как временную head branch.
 4. Выполняет squash merge через GitHub API.
 5. Делает только `git fetch --prune origin` — локальные permanent worktree не checkout/update/reset.
 6. Best-effort удаляет clean secondary worktree временной head branch.
 7. Удаляет локальную временную head branch, только если она всё ещё указывает на exact PR head SHA и не используется оставшимся worktree.
 8. Удаляет remote временную head branch, только если она всё ещё указывает на exact PR head SHA.
-9. Возвращает JSON с актуальным `originPreview`.
+9. Возвращает JSON с актуальным `originMain`.
 
 ## Постоянные worktree защищены
 
@@ -76,4 +76,6 @@ Cleanup warning не превращает уже успешный merge в failu
 - обновление файлов dirty permanent worktree;
 - удаление permanent worktree.
 
-Promotion `preview → main` этим инструментом запрещён. Для release используется `tools/promote-preview-to-main/promote_preview_to_main.ps1`.
+Обычный finalize не синхронизирует permanent `main` или stable `preview` и не делает auto release.
+Для отдельного продвижения exact одобренного `main` SHA в `preview` используется
+`tools/promote-main-to-preview/promote_main_to_preview.ps1` (группа G2); этот инструмент здесь не создаётся.

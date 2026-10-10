@@ -28,13 +28,16 @@ class FakeCommands:
         moved_local=False,
         moved_remote=False,
         already_merged=False,
-        base="preview",
+        base="main",
         head="feature/x",
         task_worktree_at_preview_root=False,
+        task_worktree_at_main_root=False,
     ):
         self.root = root.resolve()
         self.preview_root = (root.parent / "preview-root").resolve()
-        self.worktree = self.preview_root if task_worktree_at_preview_root else (root.parent / "task-worktree").resolve()
+        self.worktree = self.root if task_worktree_at_main_root else (
+            self.preview_root if task_worktree_at_preview_root else (root.parent / "task-worktree").resolve()
+        )
         self.dirty = dirty
         self.moved_local = moved_local
         self.moved_remote = moved_remote
@@ -44,6 +47,7 @@ class FakeCommands:
         self.calls = []
         self.head_sha = "a" * 40
         self.preview_sha = "b" * 40
+        self.main_sha = "d" * 40
         self.gh_path = str((root / "gh.exe").resolve())
 
     def __call__(self, args, *, cwd=None, timeout=120):
@@ -95,8 +99,8 @@ class FakeCommands:
             return cp(args, out=f"{sha}\trefs/heads/{self.head}\n")
         if args[:3] == ["git", "-C", str(self.root)] and args[3:] == ["push", "origin", "--delete", self.head]:
             return cp(args)
-        if args[:3] == ["git", "-C", str(self.root)] and args[3:] == ["rev-parse", "refs/remotes/origin/preview"]:
-            return cp(args, out=self.preview_sha + "\n")
+        if args[:3] == ["git", "-C", str(self.root)] and args[3:] == ["rev-parse", "refs/remotes/origin/main"]:
+            return cp(args, out=self.main_sha + "\n")
         raise AssertionError(f"unexpected argv: {args}")
 
 
@@ -112,15 +116,18 @@ class FinalizeTaskPrTests(unittest.TestCase):
                 pr_numbers=[number],
             )
 
-    def test_open_preview_pr_merges_and_cleans(self):
+    def test_open_main_pr_merges_and_cleans(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td).resolve()
             fake = FakeCommands(root)
             result = self.run_finalize(fake)
             self.assertTrue(result["ok"])
             self.assertEqual("TASK_PRS_FINALIZED", result["code"])
-            self.assertEqual("preview", result["targetBranch"])
+            self.assertEqual("main", result["targetBranch"])
             item = result["results"][0]
+            self.assertEqual("main", item["base"])
+            self.assertEqual(fake.main_sha, item["originMain"])
+            self.assertNotIn("originPreview", item)
             self.assertTrue(item["mergedNow"])
             self.assertTrue(item["cleanup"]["localBranchRemoved"])
             self.assertTrue(item["cleanup"]["remoteBranchRemoved"])
@@ -228,9 +235,9 @@ class FinalizeTaskPrTests(unittest.TestCase):
             self.assertFalse(any(call[3:5] == ["update-ref", "-d"] for call in fake.calls if call[:1] == ["git"]))
             self.assertFalse(any(call[3:] == ["push", "origin", "--delete", "feature/x"] for call in fake.calls if call[:1] == ["git"]))
 
-    def test_main_base_is_rejected(self):
+    def test_preview_base_is_rejected(self):
         with tempfile.TemporaryDirectory() as td:
-            fake = FakeCommands(Path(td).resolve(), base="main")
+            fake = FakeCommands(Path(td).resolve(), base="preview")
             with patch.object(mod, "run_process", side_effect=fake), patch.object(mod, "resolve_gh_executable", return_value=fake.gh_path):
                 with self.assertRaises(mod.FinalizeError) as error:
                     mod.finalize_many(
@@ -239,20 +246,22 @@ class FinalizeTaskPrTests(unittest.TestCase):
                         repository=mod.DEFAULT_REPOSITORY,
                         pr_numbers=[7],
                     )
-            self.assertEqual("FINALIZE_BASE_NOT_PREVIEW", error.exception.code)
+            self.assertEqual("FINALIZE_BASE_NOT_MAIN", error.exception.code)
+            self.assertFalse(any(call[:4] == [fake.gh_path, "api", "-X", "PUT"] for call in fake.calls))
 
-    def test_preview_head_is_rejected_as_permanent(self):
+    def test_main_and_preview_heads_are_rejected_as_permanent(self):
         with tempfile.TemporaryDirectory() as td:
-            fake = FakeCommands(Path(td).resolve(), head="preview")
-            with patch.object(mod, "run_process", side_effect=fake), patch.object(mod, "resolve_gh_executable", return_value=fake.gh_path):
-                with self.assertRaises(mod.FinalizeError) as error:
-                    mod.finalize_many(
-                        repo_root=fake.root,
-                        preview_root=fake.preview_root,
-                        repository=mod.DEFAULT_REPOSITORY,
-                        pr_numbers=[7],
-                    )
-            self.assertEqual("FINALIZE_PERMANENT_BRANCH_PROTECTED", error.exception.code)
+            for head in ("main", "preview"):
+                fake = FakeCommands(Path(td).resolve(), head=head)
+                with patch.object(mod, "run_process", side_effect=fake), patch.object(mod, "resolve_gh_executable", return_value=fake.gh_path):
+                    with self.assertRaises(mod.FinalizeError) as error:
+                        mod.finalize_many(
+                            repo_root=fake.root,
+                            preview_root=fake.preview_root,
+                            repository=mod.DEFAULT_REPOSITORY,
+                            pr_numbers=[7],
+                        )
+                self.assertEqual("FINALIZE_PERMANENT_BRANCH_PROTECTED", error.exception.code)
 
     def test_preview_root_is_never_removed_even_if_task_branch_is_there(self):
         with tempfile.TemporaryDirectory() as td:
@@ -262,6 +271,30 @@ class FinalizeTaskPrTests(unittest.TestCase):
             self.assertIn("FINALIZE_PERMANENT_WORKTREE_PROTECTED", codes)
             self.assertIn("FINALIZE_LOCAL_BRANCH_IN_USE", codes)
             self.assertFalse(any("worktree" in call and "remove" in call for call in fake.calls if call[:1] == ["git"]))
+
+    def test_main_root_is_never_removed_even_if_task_branch_is_there(self):
+        with tempfile.TemporaryDirectory() as td:
+            fake = FakeCommands(Path(td).resolve(), task_worktree_at_main_root=True)
+            result = self.run_finalize(fake)
+            codes = {w["code"] for w in result["warnings"]}
+            self.assertIn("FINALIZE_PERMANENT_WORKTREE_PROTECTED", codes)
+            self.assertIn("FINALIZE_LOCAL_BRANCH_IN_USE", codes)
+            self.assertFalse(any("worktree" in call and "remove" in call for call in fake.calls if call[:1] == ["git"]))
+
+    def test_dry_run_reports_no_origin_main_and_keeps_roots_untouched(self):
+        with tempfile.TemporaryDirectory() as td:
+            fake = FakeCommands(Path(td).resolve())
+            with patch.object(mod, "run_process", side_effect=fake), patch.object(
+                mod, "resolve_gh_executable", return_value=fake.gh_path
+            ):
+                result = mod.finalize_many(repo_root=fake.root, preview_root=fake.preview_root,
+                                           repository=mod.DEFAULT_REPOSITORY, pr_numbers=[7], dry_run=True)
+            self.assertEqual("TASK_PRS_DRY_RUN", result["code"])
+            self.assertEqual("main", result["targetBranch"])
+            self.assertIsNone(result["results"][0]["originMain"])
+            self.assertFalse(result["mainWorkingTreeTouched"])
+            self.assertFalse(result["previewWorkingTreeTouched"])
+            self.assertFalse(any(call[:4] == [fake.gh_path, "api", "-X", "PUT"] for call in fake.calls))
 
     def test_origin_repository_mismatch_is_rejected_before_pr_read(self):
         with tempfile.TemporaryDirectory() as td:

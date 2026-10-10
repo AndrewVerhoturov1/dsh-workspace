@@ -2,7 +2,7 @@
 name: finalize-task-pr
 description: >-
   Использовать, когда пользователь уже принял решение смержить один или несколько
-  проверенных обычных task pull request в preview и нужно выполнить squash merge
+  проверенных обычных task pull request в main и нужно выполнить squash merge
   с best-effort cleanup временных веток/worktree. Это исполнитель готового решения,
   а не повторный reviewer.
 ---
@@ -18,7 +18,7 @@ description: >-
 Обычный task PR всегда target-ит:
 
 ```text
-preview
+main
 ```
 
 Skill не принимает решение о качестве PR. Он только исполняет уже принятое решение через:
@@ -34,17 +34,15 @@ PR уже проверен моделью
 → пользователь говорит merge / смержи
 → определить exact PR number(s)
 → один вызов finalize_task_pr.ps1
-→ проверить base=preview
-→ squash merge в preview
+→ проверить base=main
+→ squash merge в main
 → best effort cleanup temporary worktree/local branch/remote branch
-→ после успешного finalize один раз обновить permanent local preview через preview_worktree.ps1 -Action update
-→ проверить результат preview update
-→ краткий отчёт
+→ краткий отчёт без обновления permanent worktrees
 ```
 
 ## Когда использовать
 
-Использовать, если пользователь хочет выполнить merge уже проверенного обычного task PR в `preview`.
+Использовать, если пользователь хочет выполнить merge уже проверенного обычного task PR в `main`.
 
 Типичные формулировки:
 
@@ -52,7 +50,7 @@ PR уже проверен моделью
 мердж
 смёржи PR #99
 мердж #97 и #98
-всё готово, сливай в preview
+всё готово, сливай в main
 закрой ветку через merge
 ```
 
@@ -65,7 +63,7 @@ PR уже проверен моделью
 Не использовать этот skill для:
 
 ```text
-preview → main
+main → preview
 проверь PR
 сделай review
 готов ли PR к merge?
@@ -76,7 +74,7 @@ preview → main
 удали произвольную ветку
 ```
 
-Для `preview → main` используется `promote-preview-to-main`.
+Для `main → preview` используется отдельно `tools/promote-main-to-preview/promote_main_to_preview.ps1` (release-инструмент группы G2).
 
 ## Главное правило: не проверять повторно
 
@@ -120,7 +118,7 @@ $result = $resultText | ConvertFrom-Json
 
 ```text
 прочитать exact PR identity
-→ убедиться, что base=preview
+→ убедиться, что base=main
 → убедиться, что head не main/preview
 → squash merge
 → git fetch --prune
@@ -132,17 +130,8 @@ $result = $resultText | ConvertFrom-Json
 
 Executor **не запускает** тесты/CI/review.
 
-Ответственность разделена:
-
-```text
-finalize_task_pr.ps1
-= merge + temporary cleanup + refresh remote refs
-
-preview_worktree.ps1 -Action update
-= safe synchronization permanent local preview
-```
-
-Сам finalize executor не обновляет `C:\Users\andre\.dsh-preview`.
+`finalize_task_pr.ps1` выполняет только merge, уборку временных ресурсов и refresh remote refs.
+Он не синхронизирует локальные permanent `main` и `preview` worktrees.
 
 ## Cleanup — best effort
 
@@ -195,76 +184,37 @@ TASK_PRS_FINALIZED_WITH_WARNINGS
 
 Если `ok=false`, сообщить exact `code` и blocker. Не имитировать executor вручную без отдельной причины.
 
-## Синхронизация permanent preview после merge
+## После обычного merge
 
-После выполнения всего вызова `finalize_task_pr.ps1` обновлять permanent local preview **один раз на всю пачку PR**, а не после каждого PR. Канонический вызов:
+Успешный squash merge обычной задачи меняет remote `main`, а не stable `preview`.
+Skill не запускает автоматическую синхронизацию permanent `preview` и
+не вводит автоматический updater локального `main`.
+Оба постоянных worktree остаются нетронутыми.
 
-```powershell
-$previewText = & 'C:\Users\andre\.dsh\tools\preview-worktree\preview_worktree.ps1' `
-  -Action update
-$previewResult = $previewText | ConvertFrom-Json
-```
-
-Запускать его только после:
-
-```powershell
-$resultText = & 'C:\Users\andre\.dsh\tools\finalize-task-pr\finalize_task_pr.ps1' ...
-$result = $resultText | ConvertFrom-Json
-
-if (
-    $result.ok -eq $true -and
-    $result.code -in @(
-        'TASK_PRS_FINALIZED',
-        'TASK_PRS_FINALIZED_WITH_WARNINGS'
-    )
-) {
-    $previewText = & 'C:\Users\andre\.dsh\tools\preview-worktree\preview_worktree.ps1' `
-      -Action update
-    $previewResult = $previewText | ConvertFrom-Json
-}
-```
-
-Условия обязательны:
-
-- при `TASK_PRS_FINALIZED` запускать update;
-- при `TASK_PRS_FINALIZED_WITH_WARNINGS` также запускать update: warning cleanup временной task branch не мешает синхронизации permanent preview;
-- при `TASK_PRS_DRY_RUN` (`-WhatIf`) permanent preview не изменять;
-- при `ok=false` автоматически update не запускать и не угадывать состояние частично завершённой batch-операции.
-
-`preview_worktree.ps1 -Action update` сам проверяет зарегистрированный worktree branch `preview`, clean state, делает `git fetch --prune origin`, затем только `merge --ff-only origin/preview` и проверяет равенство local preview HEAD и `origin/preview`. Он не использует reset, stash, clean, checkout/switch или force push.
-
-Если task merge уже успешен, но preview update завершился ошибкой, merge не отменять и не объявлять неуспешным. Сообщить отдельно:
-
-```text
-remote task merge succeeded
-local preview synchronization failed
-exact PREVIEW_* code / blocker
-```
-
-Автоматически не исправлять dirty `.dsh-preview`, неправильный branch/worktree, divergence или ff-only failure.
+Stable `preview` продвигается только отдельной release-операцией от exact одобренного
+SHA `main` после явного решения пользователя через
+`tools/promote-main-to-preview/promote_main_to_preview.ps1` (группа G2).
+Обычный task finalize не вызывает release-инструмент.
 
 ## Финальный отчёт
 
-Сообщить кратко и разделить результат executor и полный результат skill:
+Сообщить кратко результат executor:
 
 ```text
-какие PR merged
-originPreview из результата finalize
-local preview synchronization result
-local preview HEAD после update, если доступен
-preview update code
+какие PR merged в main
+originMain из результата finalize
 какие temporary worktree/branches удалены
-cleanup warnings
-preview sync warning/blocker, если есть
+cleanup warnings, если есть
 mainWorkingTreeTouched=false
+previewWorkingTreeTouched=false
 ```
 
-Поле `previewWorkingTreeTouched=false` можно сохранять только как поле результата самого `finalize_task_pr.py`: после отдельного вызова `preview_worktree.ps1` оно не описывает полный end-to-end результат skill.
+Обычный finalize не обновляет permanent worktrees и не выполняет release в `preview`.
 
 ## Критические инварианты
 
 1. Skill — исполнитель уже принятого решения, не reviewer.
-2. Base обычного task PR — только `preview`.
+2. Base обычного task PR — только `main`.
 3. Merge method — squash.
 4. `main` и `preview` не являются временными head branches.
 5. Не повторять тесты/CI/diff/scope review.
@@ -272,6 +222,6 @@ mainWorkingTreeTouched=false
 7. Dirty secondary worktree не удалять.
 8. Permanent `.dsh` и `.dsh-preview` не удалять и не очищать.
 9. Не использовать reset/stash/clean/force push.
-10. Promotion в `main` выполняется только отдельным skill `promote-preview-to-main`.
-11. После успешного обычного task merge permanent local preview приводится к current `origin/preview` только через `preview-worktree -Action update`.
-12. Обычный task finalize никогда не обновляет local `main` и не изменяет `C:\Users\andre\.dsh`.
+10. Promotion `main → preview` выполняется только отдельным release-инструментом `promote-main-to-preview`.
+11. После обычного task merge нет автоматического обновления permanent `preview` или `main`.
+12. Обычный task finalize не меняет ни `C:\Users\andre\.dsh`, ни `C:\Users\andre\.dsh-preview`.

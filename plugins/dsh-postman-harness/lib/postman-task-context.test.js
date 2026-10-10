@@ -7,6 +7,7 @@ import { createMemoryTaskRegistry } from './postman-task-registry.js'
 const base = 'a'.repeat(40)
 const published = 'b'.repeat(40)
 const other = 'c'.repeat(40)
+const legacyPreview = 'd'.repeat(40)
 const repository = resolve('C:/Users/Andrew/.dsh')
 const worktree = resolve('C:/Users/Andrew/AppData/Local/Temp/dsh-postman-task-test')
 const leader = id => ({ id, session: { header: { cwd: repository } } })
@@ -16,7 +17,7 @@ function fixture(options = {}) {
   const registry = createMemoryTaskRegistry()
   const state = {
     remoteUrl: 'https://github.com/andrewverhoturov1/dsh-workspace.git',
-    base, remote: base, parent: base, head: base, clean: true,
+    base, preview: legacyPreview, remote: base, parent: base, head: base, clean: true,
     branch: null, trees: [repository, resolve(repository, '..', '.dsh-preview')],
     ...options,
   }
@@ -26,7 +27,11 @@ function fixture(options = {}) {
     if (verb === 'rev-parse' && rest[0] === '--show-toplevel') return cwd === worktree ? worktree : repository
     if (verb === 'remote' && rest.join(' ') === 'get-url origin') return state.remoteUrl
     if (verb === 'fetch') return ''
-    if (verb === 'rev-parse' && rest[0] === '--verify') return rest[1] === 'refs/remotes/origin/preview^{commit}' ? state.base : rest[1].replace('^{commit}', '')
+    if (verb === 'rev-parse' && rest[0] === '--verify') {
+      if (rest[1] === 'refs/remotes/origin/main^{commit}') return state.base
+      if (rest[1] === 'refs/remotes/origin/preview^{commit}') return state.preview
+      return rest[1].replace('^{commit}', '')
+    }
     if (verb === 'worktree' && rest[0] === 'list') return state.trees.map(path => 'worktree ' + path + '\nHEAD ' + base + '\n' + (path === worktree ? 'branch refs/heads/' + state.branch + '\n' : 'branch refs/heads/main\n')).join('\n')
     if (verb === 'worktree' && rest[0] === 'add') { state.branch = rest[2]; return '' }
     if (verb === 'rev-parse' && rest[0] === 'HEAD') return state.head
@@ -56,8 +61,9 @@ function fixture(options = {}) {
 }
 const invoked = (calls, ...args) => calls.some(call => JSON.stringify(call.args) === JSON.stringify(args))
 
-test('prepare pins exact fetched origin/preview and publishes a safe branch', async () => {
-  const { contexts, calls } = fixture()
+test('prepare pins exact fetched origin/main when preview has a different SHA', async () => {
+  const { contexts, calls, state } = fixture()
+  assert.notEqual(state.base, state.preview)
   const result = await contexts.prepare(leader('leader-A'))
   assert.equal(result.status, 'TASK_CONTEXT_READY')
   assert.equal(result.repository, 'andrewverhoturov1/dsh-workspace')
@@ -65,7 +71,8 @@ test('prepare pins exact fetched origin/preview and publishes a safe branch', as
   assert.equal(result.worktree, worktree)
   assert.match(result.branch, POSTMAN_TASK_BRANCH_PATTERN)
   assert.ok(invoked(calls, 'fetch', '--prune', 'origin'))
-  assert.ok(invoked(calls, 'rev-parse', '--verify', 'refs/remotes/origin/preview^{commit}'))
+  assert.ok(invoked(calls, 'rev-parse', '--verify', 'refs/remotes/origin/main^{commit}'))
+  assert.equal(invoked(calls, 'rev-parse', '--verify', 'refs/remotes/origin/preview^{commit}'), false)
   assert.ok(invoked(calls, 'worktree', 'add', '-b', result.branch, worktree, base))
   assert.ok(invoked(calls, 'push', 'origin', base + ':refs/heads/' + result.branch))
   assert.ok(invoked(calls, 'ls-remote', '--heads', 'origin', result.branch))
@@ -357,6 +364,27 @@ test('durable prepare intent survives post-worktree crash and never makes anothe
   assert.equal(result.branch, prepared.branch)
   assert.equal(f.registry.get('A').stage, 'ready')
   assert.equal(f.calls.filter(call => call.args[0] === 'worktree' && call.args[1] === 'add').length, 1)
+})
+
+test('legacy preview-based task recovers and restores from its pinned B, never from new main A', async () => {
+  const f = fixture({ base, preview: legacyPreview, head: legacyPreview, remote: legacyPreview })
+  const branch = 'task/postman-' + 'c'.repeat(32)
+  f.state.branch = branch
+  f.state.trees.push(worktree)
+  await f.registry.create('legacy', { leaderSessionId: 'legacy', repository: 'andrewverhoturov1/dsh-workspace',
+    repositoryPath: repository, originUrl: f.state.remoteUrl, branch, worktree,
+    baseCommit: legacyPreview, stage: 'ready', diagnostic: null, workers: {},
+    runner: { state: 'failed', requestId: 'REQ_OLD' }, bridge: null })
+  const cold = createPostmanTaskContexts({ registry: f.registry, gitCommand: f.gitCommand,
+    realPath: async path => path })
+  const recovered = await cold.recover(leader('legacy'))
+  assert.equal(recovered.status, 'POSTMAN_TASK_CONTEXT_ALREADY_READY', JSON.stringify(recovered))
+  assert.equal(recovered.baseCommit, legacyPreview)
+  assert.equal((await cold.restore(leader('legacy'))).status, 'TASK_CONTEXT_RESTORED')
+  assert.equal(f.registry.get('legacy').baseCommit, legacyPreview)
+  assert.ok(invoked(f.calls, 'reset', '--hard', legacyPreview))
+  assert.equal(invoked(f.calls, 'rev-parse', '--verify', 'refs/remotes/origin/main^{commit}'), false)
+  assert.equal(invoked(f.calls, 'fetch', '--prune', 'origin'), false)
 })
 
 test('unmaterialized intent fails closed without a second worktree add or push', async () => {
