@@ -722,14 +722,6 @@ def read_semantic_message_text(locator: Any) -> str:
         return ""
 
 
-def _user_turn_key(turn: Any) -> str:
-    try:
-        value = turn.evaluate("node => node.closest('[data-turn-key]')?.getAttribute('data-turn-key') || ''")
-        return value if isinstance(value, str) else ""
-    except Exception:
-        return ""
-
-
 def collect_user_turn_details(page: Any, attachment_name: str | None = None) -> list[dict[str, Any]]:
     """Collect one logical user-turn selector family, never selector aliases."""
     for selector in USER_TURN_SELECTORS:
@@ -747,7 +739,6 @@ def collect_user_turn_details(page: Any, attachment_name: str | None = None) -> 
                     "selector": selector,
                     "index": index,
                     "semanticSelector": semantic_selector or "",
-                    "turnKey": _user_turn_key(item),
                     "text": text,
                     "textLength": len(text),
                     "textSha256": prompt_sha256(text),
@@ -974,7 +965,7 @@ def insert_prompt(
 
 def _observe_send_proof(page: Any, prompt: str, before_user_turn_count: int,
                         *, conversation_url: str | None = None, input_attachment=None,
-                        attachment_id=None, before_user_turns=None) -> tuple[bool, dict[str, Any]]:
+                        attachment_id=None) -> tuple[bool, dict[str, Any]]:
     user_turn_details = collect_user_turn_details(page, input_attachment.name if input_attachment else None)
     user_turns = [item["text"] for item in user_turn_details]
     page_url = str(getattr(page, "url", "") or "")
@@ -985,28 +976,6 @@ def _observe_send_proof(page: Any, prompt: str, before_user_turn_count: int,
     selector = composer["selector"] if composer else None
     composer_empty, empty_details = _composer_empty_from_snapshot(composer_snapshot)
     new_turn = len(user_turns) == before_user_turn_count + 1
-    novelty_mode = "count" if new_turn else "none"
-    if before_user_turns is not None:
-        before_keys = [item.get("turnKey", "") for item in before_user_turns]
-        now_keys = [item.get("turnKey", "") for item in user_turn_details]
-        if before_keys and any(before_keys + now_keys):
-            # Retain the exact previous tail, followed by ONE new logical user
-            # unit. Earlier units may be virtualized; an unseen key alone is
-            # not novelty proof. Duplicate/wrapper keys and old turns fail closed.
-            retained = now_keys[:-1]
-            new_turn = (all(before_keys) and all(now_keys) and bool(retained)
-                        and len(retained) <= len(before_keys)
-                        and retained == before_keys[-len(retained):]
-                        and user_turns[:-1] == [item["text"] for item in before_user_turns[-len(retained):]]
-                        and now_keys[-1] not in before_keys
-                        and len(set(before_keys)) == len(before_keys)
-                        and len(set(now_keys)) == len(now_keys))
-            novelty_mode = "anchored_tail" if new_turn else "none"
-        else:
-            # Legacy DOM without stable keys retains the strict count proof,
-            # plus unchanged pre-Send text prefix. Never adopt an old match.
-            new_turn = new_turn and user_turns[:-1] == [item["text"] for item in before_user_turns]
-            novelty_mode = "count_prefix" if new_turn else "none"
     rendered_last = _normalize_text(user_turns[-1]) if user_turns else ""
     exact_turn = new_turn and rendered_last == _normalize_text(prompt)
     request_key_line = request_key_line_from_prompt(prompt)
@@ -1035,8 +1004,6 @@ def _observe_send_proof(page: Any, prompt: str, before_user_turn_count: int,
         "requestKeyUserTurn": request_key_turn,
         "userTurnCorrelated": correlated_turn,
         "userTurnCorrelationMode": correlation_mode,
-        "userTurnNoveltyMode": novelty_mode,
-        "userTurnKey": last_turn.get("turnKey", ""),
         "composerEmpty": composer_empty,
         "composerSelector": selector,
         **empty_details,
@@ -1073,6 +1040,7 @@ def submit_once(
     if input_attachment:
         transitions.extend([attachments.ATTACHMENT_UPLOAD_STARTED, attachments.ATTACHMENT_READY_CONFIRMED])
     transitions.append(PROMPT_INSERTED)
+    before_turns = collect_user_turn_texts(page)
 
     def send_control_ready() -> tuple[bool, dict[str, Any]]:
         button, selector = find_send_button(page)
@@ -1111,7 +1079,6 @@ def submit_once(
         if not attachment_ready or not exact_prompt:
             return _result(attachments.ATTACHMENT_LOST, ok=False, send_state=guard.state,
                            transitions=transitions, details={"attachment": attachment_proof, "prompt": prompt_proof})
-    before_turns = collect_user_turn_details(page)
     try:
         guard.begin()
     except SubmitError as exc:
@@ -1142,8 +1109,8 @@ def submit_once(
 
     def observe_or_rebind():
         proved, observed = _observe_send_proof(page, prompt, len(before_turns),
-            before_user_turns=before_turns, conversation_url=conversation_url,
-            **({"input_attachment": input_attachment, "attachment_id": attachment_id} if input_attachment else {}))
+            **({"input_attachment": input_attachment, "attachment_id": attachment_id,
+                "conversation_url": conversation_url} if input_attachment else {}))
         # Exact sent turn + server URL already prove a local-id migration.
         # No reason to burn the full 90s upload budget before read-only rebind.
         return proved or bool(input_attachment and _needs_sent_image_rebind(
@@ -1163,7 +1130,7 @@ def submit_once(
             ok, proof = _wait_until(
                 lambda: _observe_send_proof(page, prompt, len(before_turns),
                     input_attachment=input_attachment, attachment_id=attachment_id,
-                    conversation_url=bound_url, before_user_turns=before_turns), timeout_ms=max(timeout_ms, 30_000))
+                    conversation_url=bound_url), timeout_ms=max(timeout_ms, 30_000))
             proof["sentImageReadOnlyReload"] = True
             proof["localConversationProofBeforeReload"] = sent_image
         except Exception as exc:
@@ -1397,8 +1364,8 @@ def submit_existing_prompt(
             details=inserted.get("details"),
         )
     result = submit_once(page, composer, prompt, SendGuard(), chat_confirmed_state=EXISTING_CHAT_CONFIRMED, timeout_ms=timeout_ms,
-        conversation_url=conversation_url,
-        **({"input_attachment": input_attachment, "attachment_id": attachment_id} if input_attachment else {}))
+        **({"input_attachment": input_attachment, "attachment_id": attachment_id,
+            "conversation_url": conversation_url} if input_attachment else {}))
     result["details"].update(inserted.get("details", {}))
     return result
 
