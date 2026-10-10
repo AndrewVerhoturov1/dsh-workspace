@@ -23,7 +23,7 @@ TASK_URL = "https://example.test/tasks/request.md"
 
 
 class WebWorkerBridgeTests(unittest.TestCase):
-    def test_unknown_original_send_only_readonly_reproves_before_recovery(self):
+    def test_unknown_original_send_never_promotes_weak_readonly_reproof(self):
         from types import SimpleNamespace
         chat='https://chatgpt.com/c/send-reproof'
         page=SimpleNamespace(close=lambda:None)
@@ -44,10 +44,10 @@ class WebWorkerBridgeTests(unittest.TestCase):
                     result=bridge.run_request(REQ,task_url=TASK_URL,prompt='exact initial',expected_filename='result.zip',
                         expected_request={'repository':'AndrewVerhoturov1/dsh-workspace'},playwright_factory=Factory)
                 first.assert_called_once()
-                read_only.assert_called_once()
-                self.assertEqual(result['details']['unresolvedSendUnknown'],not proven)
+                read_only.assert_not_called()
+                self.assertTrue(result['details']['unresolvedSendUnknown'])
                 self.assertEqual(result['details']['promptSha256'],bridge_module.browser_submit.prompt_sha256('exact initial'))
-                if proven:self.assertTrue(result['details']['readOnlySendReproof']['exactUserTurn'])
+                self.assertIsNone(result['details'].get('readOnlySendReproof'))
 
     def test_accept_persists_request_identity_and_result_path(self):
         with tempfile.TemporaryDirectory() as root:

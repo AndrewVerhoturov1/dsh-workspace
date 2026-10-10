@@ -67,7 +67,7 @@ class ChatReferenceTests(unittest.TestCase):
                    "promptSha256": prompt_sha, "exactUserTurn": True}
         cases = [({}, True), ({"sendProofClass": "PROVEN_NOT_SENT"}, False),
                  ({"sendProofClass": "UNKNOWN"}, False),
-                 ({"sendProofClass": "UNKNOWN", "promptSha256": prompt_sha, "readOnlySendReproof": reproof}, True),
+                 ({"sendProofClass": "UNKNOWN", "promptSha256": prompt_sha, "readOnlySendReproof": reproof}, False),
                  ({"conversationUrl": None}, False), ({"conversationId": "foreign"}, False),
                  ({"repository": "foreign/repo"}, False), ({"requestId": "REQ_20261003T101324Z_7010"}, False),
                  ({"automaticRecoveryUsed": True}, False), ({"webResultAvailable": True}, False),

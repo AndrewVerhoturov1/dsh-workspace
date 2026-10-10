@@ -307,7 +307,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
   function publicationOf(terminal) {
     const result = terminal?.result
     return result?.ok === true ? result :
-      result?.ok === false && result.code === 'POSTMAN_TRANSPORT_FAILED' ? result.publicationReceipt : null
+      result?.ok === false && ['POSTMAN_TRANSPORT_FAILED', 'ARTIFACT_CANDIDATE_SAVED', 'ARTIFACT_CANDIDATE_CHOICES', 'ARTIFACT_REJECTED'].includes(result.code) ? result.publicationReceipt : null
   }
 
   // Serialize retries on the one owned job, including the read-after-restart path.
@@ -509,7 +509,9 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
             synchronization: 'not-required' }
         }
         return { status: 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN', bridgeJobId, state: 'INTERRUPTED',
-          requestId: operation.requestId, publication: proof.state === 'published' ? proof.publication : 'unknown' }
+          requestId: operation.requestId, publication: proof.state === 'published' ? proof.publication : 'unknown',
+          candidate: operation.transportKind === 'artifact' ? direct.observeArtifactCandidate?.(operation.requestId) ?? null : null,
+          verified: false, applyEligible: false }
       } else if (operation?.state === 'received' && operation.phase === 'not-sent' &&
                  operation.synchronization === 'not-required' &&
                  (operation.requestId || operation.cancellationRequested === true) && !operation.terminal)

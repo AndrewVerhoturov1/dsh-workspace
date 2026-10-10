@@ -69,6 +69,14 @@ POSTMAN_<requestId>_RESULT-02.zip
 
 `-00` не используется.
 
+## Наблюдение / физическое сохранение / verified result / применение
+
+Artifact UNKNOWN разрешает только ограниченное read-only наблюдение exact принадлежащей Page conversation. Weak count/text/composer/card не повышают UNKNOWN, reminders/recovery/automatic continuation запрещены. Fresh genuinely empty owned chat сохраняет strict verified путь; TEXT/IMAGE не получают unchecked candidate success.
+
+Один native файл конкретного наблюдаемого answer можно сохранить без идеального envelope/REQ/имени. Несколько дают до восьми choices без click; global latest ZIP и arbitrary external URL не выбираются. Descriptor `candidate`: actual path/byteLength/SHA, originalFilename, completeness, reasons/provenance, `verified=false`, `applyEligible=false`. Fixed raw path: `direct/candidates/<REQ>/capture.bin`, original filename не используется как путь.
+
+Wrong native name, доступные partial bytes, validator rejection/exception сохраняются с причиной, без unpack/open/execute. Raw save bounded 50 MiB; если native API не отдаёт partial path, это explicit evidence limit. Cold physical observation читает только owned fixed path (`capture.bin`, либо прежний request-scoped `results/<REQ>/result.zip`) и actual hash отдельно от strict ownership receipt; legacy `completeness=complete` описывает лишь все доступные on-disk bytes, а не полноту native download, и всегда сопровождается `LEGACY_FILE_COMPLETENESS_UNVERIFIED`; branchless/inconsistent receipt не чинится/не повышается. Sync failure не скрывает bytes/path/SHA, retrySync local-only, grant subordinate to verified ownership+sync и hash rechecks. Missing input post-Send proof оставляет `RESULT_MAY_LACK_INPUT_ATTACHMENT` до человеческого выбора.
+
 ## 4. Correlated assistant turn
 
 Artifact принимается только из assistant turn, который доказан как ответ на разрешённый
@@ -95,9 +103,7 @@ conversation Page, после доказанной загрузки выдерж
 Additional Processing запускает Stop-if-present→Reload→Same-chat/original-lineage re-proof→
 random wait 10–17s→natural Continue с exact Send proof. Одно непрерывное появление banner = один event;
 исчезновение rearm-ит detector. Recovery consume-ит наступившие pending slots, очередь не догоняется.
-Если скачанный ZIP не проходит minimal transport validation, staging-каталог удаляется и
-current REQ немедленно завершается `ARTIFACT_REJECTED` с точным validation code/message и
-assistant text. Решение о continuation принадлежит локальной LLM; сам REQ не ждёт следующего
+Если ZIP не проходит minimal transport validation, физически сохранённые raw bytes не удаляются: unverified candidate содержит точную причину. `ARTIFACT_REJECTED` — validation fact, не grant/apply authority. Решение о continuation принадлежит локальной LLM; сам REQ не ждёт следующего
 reminder после завершённого assistant-turn. Ошибки самого validator infrastructure, записи,
 скачивания и другие внутренние ошибки остаются transport failure. Произвольный новый user turn
 разрешённым anchor не является.

@@ -1,6 +1,6 @@
 import { createHash, randomInt as cryptoRandomInt } from 'node:crypto'
-import { existsSync, readFileSync } from 'node:fs'
-import { basename, isAbsolute, join } from 'node:path'
+import { existsSync, readFileSync, lstatSync, realpathSync } from 'node:fs'
+import { basename, isAbsolute, join, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { spawn as nodeSpawn, execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -284,6 +284,25 @@ function terminalGate(job) {
     }
   }
 
+  if (job.transportKind === "artifact" && parsed.ok === false
+      && ["ARTIFACT_CANDIDATE_SAVED", "ARTIFACT_CANDIDATE_CHOICES", "ARTIFACT_REJECTED", "POSTMAN_TRANSPORT_FAILED"].includes(parsed.code)) {
+    const checkpoint = trustedPublication(job)
+    const manager = new DirectPostmanJobManager({ directRoot: job.directRoot, readPublicationState: job.readPublicationState })
+    const observed = manager.observeArtifactCandidate(job.requestId)
+    if (observed || Array.isArray(parsed.choices) && parsed.choices.length) {
+      return { ok: false, code: observed ? "ARTIFACT_CANDIDATE_SAVED" : "ARTIFACT_CANDIDATE_CHOICES",
+        state: observed ? "ARTIFACT_CANDIDATE_SAVED" : "ARTIFACT_CANDIDATE_CHOICES",
+        requestId: job.requestId, candidate: observed, choices: Array.isArray(parsed.choices) ? parsed.choices.slice(0, 8).map(item => ({
+          label: typeof item?.label === "string" ? item.label.slice(0, 512) : "",
+          path: typeof item?.path === "string" && /^[0-9]+(?:[/][0-9]+)*$/.test(item.path) ? item.path : "" })) : [],
+        candidateReasons: parsed.candidateReasons ?? [], verified: false, applyEligible: false,
+        unresolvedSendUnknown: parsed.unresolvedSendUnknown === true,
+        publicationReceipt: checkpoint ?? undefined,
+        transportCode: parsed.transportCode ?? parsed.code, transportMessage: parsed.transportMessage ?? "Unverified artifact observation.",
+        details: {} }
+    }
+  }
+
   if (job.exitCode === 0) {
     const allowed = job.transportKind === 'text' ? TEXT_TERMINAL_OK : job.transportKind === 'image' ? IMAGE_TERMINAL_OK : ARTIFACT_TERMINAL_OK
     if (parsed.ok !== true || !allowed.has(parsed.code) || parsed.state !== parsed.code) {
@@ -294,7 +313,7 @@ function terminalGate(job) {
         transportMessage: 'Direct Postman returned an invalid success terminal object.',
       }
     }
-    if (parsed.code === 'RESULT_DURABLE' && (typeof parsed.resultZip !== 'string' || parsed.resultZip === '')) {
+    if (parsed.code === 'RESULT_DURABLE' && (parsed.verified === false || parsed.applyEligible === false || parsed.unresolvedSendUnknown === true || typeof parsed.resultZip !== 'string' || parsed.resultZip === '')) {
       return {
         ok: false,
         code: 'POSTMAN_DURABLE_RESULT_ZIP_MISSING',
@@ -738,6 +757,45 @@ export class DirectPostmanJobManager {
     return { status: 'EXACT_REPLY_MATCH', requestId }
   }
 
+  observeArtifactCandidate(requestId) {
+    if (!REQ_PATTERN.test(requestId ?? "")) return null
+    const root = this.directRoot ?? (process.env.LOCALAPPDATA
+      ? join(process.env.LOCALAPPDATA, "DSH", "Postman", "direct")
+      : join(homedir(), ".dsh", "postman", "direct"))
+    const rawDirectory = join(root, "candidates", requestId)
+    const legacyRoot = process.env.DSH_POSTMAN_RESULT_ROOT ?? resolve(root, "..", "results")
+    const legacy = !existsSync(join(rawDirectory, "capture.bin"))
+    const captureRoot = legacy ? legacyRoot : join(root, "candidates")
+    const directory = legacy ? join(legacyRoot, requestId) : rawDirectory
+    const physical = join(directory, legacy ? "result.zip" : "capture.bin")
+    try {
+      for (const path of [captureRoot, directory, physical])
+        if (lstatSync(path).isSymbolicLink() || realpathSync(path) !== resolve(path)) return null
+      const descriptorPath = join(directory, "candidate.json")
+      const missingDescriptor = !legacy && !existsSync(descriptorPath)
+      if (!legacy && !missingDescriptor && lstatSync(descriptorPath).isSymbolicLink()) return null
+      const claimed = legacy || missingDescriptor ? { path: physical, byteLength: lstatSync(physical).size,
+        completeness: legacy ? "complete" : "partial",
+        reasons: legacy ? ["LEGACY_FILE_CORRELATION_UNVERIFIED", "LEGACY_FILE_COMPLETENESS_UNVERIFIED"]
+          : ["CANDIDATE_METADATA_MISSING", "CANDIDATE_COMPLETENESS_UNVERIFIED"], provenance: { requestId } }
+        : JSON.parse(readFileSync(descriptorPath, "utf8"))
+      if (claimed?.provenance?.requestId !== requestId || !["complete", "partial"].includes(claimed.completeness)
+          || !Number.isSafeInteger(claimed.byteLength) || claimed.byteLength < 0
+          || claimed.byteLength > 50 * 1024 * 1024 || resolve(claimed.path ?? "") !== resolve(physical)) return null
+      const size = lstatSync(physical).size
+      if (size > 50 * 1024 * 1024 || !lstatSync(physical).isFile()) return null
+      const actualSha = sha256Bytes(readFileSync(physical))
+      return { path: physical, byteLength: size, sha256: actualSha,
+        originalFilename: typeof claimed.originalFilename === "string" ? claimed.originalFilename.slice(0, 512) : "",
+        completeness: claimed.completeness,
+        reasons: [...(Array.isArray(claimed.reasons) ? claimed.reasons.filter(x => typeof x === "string").slice(0, 32) : []),
+          ...(legacy || missingDescriptor || actualSha === claimed.sha256 ? [] : ["CANDIDATE_SHA_CHANGED"]),
+          ...(size === claimed.byteLength ? [] : ["CANDIDATE_LENGTH_CHANGED"]), "OWNERSHIP_RECEIPT_NOT_VERIFIED"],
+        provenance: { requestId, chatUrl: typeof claimed.provenance.chatUrl === "string" ? claimed.provenance.chatUrl : null },
+        verified: false, applyEligible: false }
+    } catch { return null }
+  }
+
   // Read-only Direct checkpoint: absence, corruption or publication ambiguity never proves a safe outcome.
   inspectRequest(requestId, branch, transportKind) {
     if (!REQ_PATTERN.test(requestId ?? '')) return { state: 'unknown' }
@@ -751,6 +809,22 @@ export class DirectPostmanJobManager {
       const publication = { requestId: state.requestId, repository: state.repository, branch: state.branch,
         taskUrl: state.taskUrl, baseCommit: state.baseCommit, taskPublicationCommit: state.taskPublicationCommit }
       if (validPublicationReceipt(publication, { requestId, branch })) {
+        if (transportKind === "artifact") {
+          try {
+            const handoff = JSON.parse(this.readPublicationState(join(root, "results", requestId + ".json"), "utf8"))
+            const candidate = this.observeArtifactCandidate(requestId)
+            if (candidate && handoff.requestId === requestId && handoff.branch === branch
+                && handoff.repository === publication.repository && handoff.baseCommit === publication.baseCommit
+                && handoff.taskPublicationCommit === publication.taskPublicationCommit && handoff.taskUrl === publication.taskUrl
+                && handoff.ok === false && handoff.code === "ARTIFACT_CANDIDATE_SAVED") {
+              return { state: "terminal", publication, terminal: { status: "POSTMAN_BRIDGE_TERMINAL",
+                terminalStatus: "FAILED", transportKind, requestId, result: { ok: false,
+                  code: "ARTIFACT_CANDIDATE_SAVED", state: "ARTIFACT_CANDIDATE_SAVED", requestId,
+                  candidate, verified: false, applyEligible: false, publicationReceipt: publication,
+                  unresolvedSendUnknown: handoff.unresolvedSendUnknown === true } } }
+            }
+          } catch {}
+        }
         { // A durable handoff can precede its final state checkpoint after a crash.
           const stateTerminal = ['RESULT_DURABLE', 'IMAGE_RESULT_DURABLE', 'TEXT_RESULT_DURABLE',
             'ASSISTANT_COMPLETED_NO_ARTIFACT', 'ARTIFACT_REJECTED', 'FAILED', 'ASK_FAILED'].includes(state.state)
@@ -791,7 +865,7 @@ export class DirectPostmanJobManager {
                   handoff.imageSha256 === state.imageSha256) &&
                   sha256Bytes(readFileSync(handoff.resultImage)) === handoff.imageSha256) ||
                 (transportKind === 'artifact' &&
-                  (handoff.code === 'RESULT_DURABLE' && (!stateTerminal || handoff.resultZip === state.resultZip &&
+                  (handoff.code === 'RESULT_DURABLE' && handoff.verified !== false && handoff.applyEligible !== false && handoff.unresolvedSendUnknown !== true && (!stateTerminal || handoff.resultZip === state.resultZip &&
                     handoff.sha256 === state.artifactSha256) && /^[0-9a-f]{64}$/.test(handoff.sha256 ?? '') &&
                     handoff.expectedFilename === 'POSTMAN_' + requestId + '_RESULT.zip' &&
                     typeof handoff.resultZip === 'string' && isAbsolute(handoff.resultZip) &&

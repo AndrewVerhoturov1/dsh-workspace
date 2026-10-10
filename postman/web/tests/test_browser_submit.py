@@ -79,7 +79,9 @@ class FakeLocator:
         self.page.click_count += 1
         if self.page.click_error:
             raise RuntimeError(self.page.click_error)
-        if self.page.confirm_on_click:
+        if self.page.on_send is not None:
+            self.page.on_send(self.page)
+        elif self.page.confirm_on_click:
             self.page.user_turns.append(self.page.composer_text)
             self.page.composer_text = ""
             self.page.url = self.page.bound_url
@@ -105,11 +107,13 @@ class FakePage:
         click_error=None,
         confirm_on_click=True,
         goto_error=None,
+        on_send=None,
     ):
         self.url = url
         self.composer_text = composer_text
         self.turn_count = turn_count
         self.user_turns = list(user_turns or [])
+        self.count_override = None
         self.body_text = body_text
         self.composer_visible = composer_visible
         self.send_visible = send_visible
@@ -118,6 +122,7 @@ class FakePage:
         self.click_error = click_error
         self.confirm_on_click = confirm_on_click
         self.goto_error = goto_error
+        self.on_send = on_send
         self.click_count = 0
         self.closed = False
         self.bound_url = "https://chatgpt.com/c/abc123"
@@ -135,11 +140,11 @@ class FakePage:
         if selector == "body":
             return FakeLocator(self, "body")
         if selector == submit.TURN_SELECTORS[0]:
-            return FakeLocator(items=["turn"] * self.turn_count)
+            return FakeLocator(items=["turn"] * (self.count_override if self.count_override is not None else self.turn_count))
         if selector in submit.TURN_SELECTORS[1:3]:
             return FakeLocator(items=[])
         if selector == submit.TURN_SELECTORS[3]:
-            return FakeLocator(items=["turn"] * self.turn_count)
+            return FakeLocator(items=["turn"] * (self.count_override if self.count_override is not None else self.turn_count))
         if selector == submit.TURN_SELECTORS[4]:
             return FakeLocator(items=[])
         if selector in submit.USER_TURN_SELECTORS:
@@ -348,6 +353,49 @@ console.log(JSON.stringify({length: actual.length, sha256: hash(actual), joined,
         self.assertEqual(page.user_turns, ["old", "new prompt"])
         self.assertEqual(page.click_count, 1)
         self.assertIn(submit.EXISTING_CHAT_CONFIRMED, result["transitions"])
+
+    def test_artifact_existing_chat_weak_success_is_unknown_without_causal_proof(self):
+        url = "https://chatgpt.com/c/existing-123"
+        for old_turns, new_turns in ((4, 4), (5, 4), (1, 2)):
+            def reveal_after_click(current):
+                current.user_turns = ["old"] * (new_turns - 1) + ["exact artifact request"]
+                current.turn_count = new_turns
+                current.composer_text = ""
+            page = FakePage(url=url, turn_count=old_turns, user_turns=["old"] * old_turns,
+                on_send=reveal_after_click)
+            page.bound_url = url
+            result = submit.submit_existing_prompt(page, "exact artifact request", url,
+                timeout_ms=0, artifact_mode=True)
+            self.assertEqual(result["code"], submit.PROMPT_SEND_UNKNOWN)
+            self.assertEqual(result["sendState"], submit.SEND_UNKNOWN)
+            self.assertEqual(result["details"]["reason"], "existing_chat_send_causality_unproven")
+            self.assertEqual(page.click_count, 1)
+            self.assertEqual(result["details"]["userTurnCountNow"], new_turns)
+            self.assertTrue(result["details"]["composerEmpty"])
+
+    def test_artifact_existing_chat_click_exception_reports_owned_bound_url(self):
+        url = "https://chatgpt.com/c/existing-123"
+        page = FakePage(url=url, turn_count=4, user_turns=["old"], click_error="uncertain")
+        result = submit.submit_existing_prompt(page, "exact request", url, timeout_ms=0, artifact_mode=True)
+        self.assertEqual(result["sendState"], submit.SEND_UNKNOWN)
+        self.assertEqual(result["details"]["chatUrl"], url)
+
+    def test_artifact_fresh_send_confirms_and_click_exception_keeps_owned_route(self):
+        success = submit.submit_fresh_prompt(FakePage(), "fresh artifact", timeout_ms=0, artifact_mode=True)
+        self.assertEqual(success["sendState"], submit.SEND_PROVEN_SENT)
+        self.assertEqual(success["details"]["ownedPage"], True)
+        self.assertEqual(success["details"]["ownedChatUrl"], "https://chatgpt.com/c/abc123")
+        unbound = submit.submit_fresh_prompt(FakePage(click_error="uncertain"), "fresh artifact",
+            timeout_ms=0, artifact_mode=True)
+        self.assertEqual(unbound["sendState"], submit.SEND_UNKNOWN)
+        self.assertNotIn("chatUrl", unbound["details"])
+        def bind_then_raise(page):
+            page.url = page.bound_url
+            raise RuntimeError("uncertain")
+        bound = submit.submit_fresh_prompt(FakePage(on_send=bind_then_raise), "fresh artifact",
+            timeout_ms=0, artifact_mode=True)
+        self.assertEqual(bound["sendState"], submit.SEND_UNKNOWN)
+        self.assertEqual(bound["details"]["ownedChatUrl"], "https://chatgpt.com/c/abc123")
 
     def test_existing_prompt_on_owned_page_does_not_navigate(self):
         url = "https://chatgpt.com/c/existing-123"

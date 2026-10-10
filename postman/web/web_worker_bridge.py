@@ -222,6 +222,7 @@ class WebWorkerBridge:
         *,
         root: str | os.PathLike[str] | None = None,
         result_root: str | os.PathLike[str] | None = None,
+        candidate_root: str | os.PathLike[str] | None = None,
         now: Callable[[], float] = time.time,
         monotonic: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
@@ -232,6 +233,7 @@ class WebWorkerBridge:
         postman_root = Path(root) if root is not None else default_postman_root()
         self.state_root = postman_root / "workers"
         self.result_root = Path(result_root) if result_root is not None else postman_root / "results"
+        self.candidate_root = Path(candidate_root) if candidate_root is not None else postman_root / "direct" / "candidates"
         self.now = now
         self.monotonic = monotonic
         self.sleep = sleep
@@ -357,6 +359,7 @@ class WebWorkerBridge:
         validator_runner: Callable[[Path, dict[str, Any]], dict[str, Any]] | None = None,
         image_prepare: Callable[[], dict[str, Any]] | None = None,
         input_attachment=None,
+        artifact_mode: bool = True,
         resume_image: bool = False,
         image_recovery_proof: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -519,28 +522,26 @@ class WebWorkerBridge:
                     # Image creation can delay the first /c/... URL after the user turn appears.
                     submitted = browser_submit.submit_fresh_prompt(
                         page, prompt, **({"input_attachment": input_attachment} if input_attachment else {}),
-                        timeout_ms=max(timeout_ms, 90_000) if image_stage else timeout_ms)
+                        timeout_ms=max(timeout_ms, 90_000) if image_stage else timeout_ms,
+                        artifact_mode=artifact_mode and not image_flow)
                 else:
                     submitted = browser_submit.submit_existing_prompt(
                         page, prompt, conversation_url, timeout_ms=timeout_ms,
+                        artifact_mode=artifact_mode and not image_flow,
                         **({"input_attachment": input_attachment} if input_attachment else {})
                     )
                 self._write_state(request, WEB_STARTING, submitProof=submitted)
                 if not submitted.get("ok"):
-                    evidence = submitted.get("details", {})
-                    bound = evidence.get("chatUrl")
-                    before = evidence.get("userTurnCountBefore")
-                    if (submitted.get("sendState") == browser_submit.SEND_UNKNOWN and type(before) is int
-                            and browser_submit.is_bound_chat_url(bound)):
-                        # One read-only reproof; no upload, fill, click, or repeat Send.
-                        proven, proof = browser_submit._wait_until(lambda: browser_submit._observe_send_proof(
-                            page, prompt, before, conversation_url=bound, input_attachment=input_attachment),
-                            timeout_ms=min(timeout_ms, 5000))
-                        if proven:
-                            self._write_state(request, WEB_STARTING, readOnlySendReproof={
-                                "requestId": request_id, "conversationUrl": bound,
-                                "conversationId": browser_submit.conversation_id_from_url(bound),
-                                "promptSha256": browser_submit.prompt_sha256(prompt), "exactUserTurn": True})
+                    if artifact_mode and not image_flow and submitted.get("sendState") == browser_submit.SEND_UNKNOWN:
+                        evidence = submitted.get("details", {})
+                        bound = evidence.get("ownedChatUrl")
+                        if (browser_submit.is_bound_chat_url(bound) and str(page.url) == bound
+                                and (conversation_url is None or bound == conversation_url)
+                                and evidence.get("ownedPage") is True):
+                            return self._observe_unknown_candidate(request, page, prompt, bound,
+                                expected_filename, expected_request, submitted, input_attachment,
+                                observer_timeout_ms, stable_ms, artifacts_dir, browser_download_dir,
+                                download_timeout_ms, click_timeout_ms, validator_runner)
                     return self._fail(request, submitted.get("code", "submit_failed"), details=submitted)
                 if input_attachment and (submitted.get("sendState") != browser_submit.SEND_PROVEN_SENT or
                         submitted.get("details", {}).get("sentAttachmentConfirmed") is not True):
@@ -884,6 +885,7 @@ class WebWorkerBridge:
                             artifact_dom_result=detected,
                             expected_request=expected_request,
                             result_root=self.result_root,
+                            candidate_root=self.candidate_root,
                             browser_download_dir=browser_download_dir,
                             cdp_artifacts_dir=artifacts_dir,
                             download_timeout_ms=download_timeout_ms,
@@ -906,6 +908,8 @@ class WebWorkerBridge:
                                     request,
                                     ARTIFACT_REJECTED,
                                     artifactValidation=durable,
+                                    candidate=durable_details.get("candidate"),
+                                    verified=False, applyEligible=False,
                                     validationCode=validation_code,
                                     validationMessage=validation_message,
                                     validationDetails=durable_details.get("validationDetails", {}),
@@ -937,6 +941,7 @@ class WebWorkerBridge:
                             resultZip=durable.get("details", {}).get("resultZip"),
                             resultSha256=durable.get("details", {}).get("sha256"),
                             durableProof=durable,
+                            candidate=durable.get("details", {}).get("candidate"),
                             **control.snapshot(),
                             conversationUrl=chat_url,
                             conversationId=conversation_id,
@@ -948,6 +953,14 @@ class WebWorkerBridge:
                         if self.on_result_durable is not None and not image_flow:
                             self.on_result_durable(terminal_result)
                         return {"kind": "terminal", "result": terminal_result}
+
+                    if (artifact_mode and not image_flow and detected.get("code") in _REMINDER_ELIGIBLE_ARTIFACT_CODES
+                            and detected.get("code") != artifact_detector.ARTIFACT_TURN_NOT_COMPLETED):
+                        candidate_result = self._capture_candidate(request, page, str(watch["prompt"]), chat_url,
+                            expected_filename, expected_request, completed, artifacts_dir, browser_download_dir,
+                            download_timeout_ms, click_timeout_ms, validator_runner, [str(detected.get("code"))])
+                        if candidate_result.get("code") in {"ARTIFACT_CANDIDATE_SAVED", "ARTIFACT_CANDIDATE_CHOICES"}:
+                            return {"kind": "terminal", "result": candidate_result}
 
                     artifact_code = detected.get("code")
                     artifact_details = detected.get("details") if isinstance(detected.get("details"), dict) else {}
@@ -1263,6 +1276,11 @@ class WebWorkerBridge:
                             send_state == browser_submit.SEND_UNKNOWN
                             or reminder_submit.get("code") == browser_submit.PROMPT_SEND_UNKNOWN
                         ):
+                            if artifact_mode and not image_flow and str(page.url) == chat_url:
+                                return self._observe_unknown_candidate(request, page, prompt, chat_url,
+                                    expected_filename, expected_request, reminder_submit, input_attachment,
+                                    remaining_ms(), stable_ms, artifacts_dir, browser_download_dir,
+                                    download_timeout_ms, click_timeout_ms, validator_runner)
                             return self._fail(
                                 request,
                                 "reminder send state is UNKNOWN",
@@ -1343,6 +1361,55 @@ class WebWorkerBridge:
                 except Exception:
                     pass
 
+
+    def _observe_unknown_candidate(self, request, page, prompt, chat_url, expected_filename,
+            expected_request, submitted, input_attachment, observer_timeout_ms, stable_ms,
+            artifacts_dir, browser_download_dir, download_timeout_ms, click_timeout_ms, validator_runner):
+        """UNKNOWN remains unresolved; no reminder/reload/recovery/Send path."""
+        reasons = ["PROMPT_SEND_UNKNOWN", "CURRENT_REQUEST_CORRELATION_UNVERIFIED"]
+        if input_attachment and submitted.get("details", {}).get("sentAttachmentConfirmed") is not True:
+            reasons.append("RESULT_MAY_LACK_INPUT_ATTACHMENT")
+        self._write_state(request, WAITING_ASSISTANT, submitProof=submitted,
+            unresolvedSendUnknown=True, conversationUrl=chat_url,
+            conversationId=browser_submit.conversation_id_from_url(chat_url))
+        observed = browser_observer.observe_artifact_candidate(page, prompt, chat_url,
+            timeout_ms=observer_timeout_ms, stable_ms=stable_ms, sleep=self.sleep, monotonic=self.monotonic)
+        observed.setdefault("details", {})["candidateReasons"] = reasons
+        return self._capture_candidate(request, page, prompt, chat_url, expected_filename,
+            expected_request, observed, artifacts_dir, browser_download_dir,
+            download_timeout_ms, click_timeout_ms, validator_runner, reasons)
+
+    def _capture_candidate(self, request, page, prompt, chat_url, expected_filename,
+            expected_request, observed, artifacts_dir, browser_download_dir,
+            download_timeout_ms, click_timeout_ms, validator_runner, reasons):
+        observed.setdefault("details", {})["candidateReasons"] = list(dict.fromkeys([
+            *observed.get("details", {}).get("candidateReasons", []), *reasons]))
+        detected = artifact_detector.discover_artifact_candidate(page, expected_prompt=prompt,
+            expected_chat_url=chat_url, request_id=request.request_id,
+            expected_filename=expected_filename, completed_observer_result=observed)
+        details = detected.get("details", {})
+        if detected.get("code") == artifact_detector.ARTIFACT_CANDIDATE_DOM:
+            captured = artifact_download.download_validated_artifact(page, expected_prompt=prompt,
+                expected_chat_url=chat_url, request_id=request.request_id, expected_filename=expected_filename,
+                completed_observer_result=observed, artifact_dom_result=detected,
+                expected_request=expected_request, result_root=self.result_root,
+                candidate_root=self.candidate_root,
+                browser_download_dir=browser_download_dir, cdp_artifacts_dir=artifacts_dir,
+                download_timeout_ms=download_timeout_ms, click_timeout_ms=click_timeout_ms,
+                validator_runner=validator_runner)
+            details = captured.get("details", {})
+        candidate = details.get("candidate")
+        code = "ARTIFACT_CANDIDATE_SAVED" if candidate else (
+            "ARTIFACT_CANDIDATE_CHOICES" if details.get("choices") else POSTMAN_TRANSPORT_FAILED)
+        fields = {"candidate": candidate, "choices": details.get("choices", []),
+            "candidateReasons": list(dict.fromkeys([*reasons, *details.get("reasons", [])])),
+            "verified": False, "applyEligible": False, "candidateObservation": observed,
+            "candidateCapture": details, "webResultAvailable": bool(candidate or details.get("choices")),
+            "conversationUrl": chat_url, "conversationId": browser_submit.conversation_id_from_url(chat_url)}
+        record = self._write_state(request, self.read_state(request.request_id)["state"], **fields)
+        record["unresolvedSendUnknown"] = self.read_state(request.request_id).get("unresolvedSendUnknown") is True
+        return {"ok": False, "code": code, "details": record}
+
     def _fail(self, request: BridgeRequest, reason: str, *, code: str = BRIDGE_PIPELINE_FAILED, details: Any = None) -> dict[str, Any]:
         transport_message = str(reason)[:1000]
         transport_details = dict(details) if isinstance(details, dict) else {"value": details}
@@ -1358,9 +1425,9 @@ class WebWorkerBridge:
         uncertain = transport_details.get("sendState") == "UNKNOWN" or any(
             isinstance(transport_details.get(key), dict) and transport_details[key].get("sendState") == "UNKNOWN"
             for key in ("reminderSubmit", "submit", "followupSubmit"))
-        if uncertain and record.get("readOnlySendReproof") and transport_details is not None and transport_details.get("code") == browser_submit.PROMPT_SEND_UNKNOWN:
-            uncertain = False
+        uncertain = uncertain or record.get("unresolvedSendUnknown") is True or send_state == browser_submit.SEND_UNKNOWN
         recovery_evidence = {
+            "candidate": transport_details.get("details", {}).get("candidate") if isinstance(transport_details.get("details"), dict) else transport_details.get("candidate"),
             "readOnlySendReproof": record.get("readOnlySendReproof"),
             "promptSha256": record.get("promptSha256") or submit_proof.get("details", {}).get("promptSha256"),
             "unresolvedSendUnknown": uncertain,

@@ -449,7 +449,7 @@ test('Leader Bridge recovery reaches Direct once; negative capabilities and rest
     ['unknown', { sendProofClass: 'UNKNOWN' }, false, 'artifact'],
     ['unknown exact reproof', { sendProofClass: 'UNKNOWN', promptSha256: 'b'.repeat(64),
       readOnlySendReproof: { requestId: original, conversationId: 'exact-chat',
-        conversationUrl: 'https://chatgpt.com/c/exact-chat', exactUserTurn: true, promptSha256: 'b'.repeat(64) } }, true, 'artifact'],
+        conversationUrl: 'https://chatgpt.com/c/exact-chat', exactUserTurn: true, promptSha256: 'b'.repeat(64) } }, false, 'artifact'],
     ['unresolved unknown', { unresolvedSendUnknown: true }, false, 'artifact'],
     ['durable result', { state: 'RESULT_DURABLE', ok: true }, false, 'artifact'],
     ['Web result download failed', { webResultAvailable: true }, false, 'artifact'],

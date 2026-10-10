@@ -1035,6 +1035,7 @@ def submit_once(
     input_attachment=None,
     attachment_id=None,
     conversation_url=None,
+    artifact_mode: bool = False,
 ) -> dict[str, Any]:
     transitions: list[str] = [PAGE_OWNED, chat_confirmed_state, COMPOSER_EMPTY_CONFIRMED]
     if input_attachment:
@@ -1098,32 +1099,53 @@ def submit_once(
         button.click(timeout=timeout_ms)
     except Exception as exc:
         guard.unknown()
+        details = {"message": str(exc), "sendControl": selector, "reason": "click_outcome_uncertain"}
+        current_url = str(getattr(page, "url", "") or "")
+        initial_empty_root = (isinstance(transaction, dict)
+            and is_chatgpt_root_url(str(transaction.get("ownedUrl", "")))
+            and transaction.get("userCount") == 0)
+        unchanged_existing = (isinstance(transaction, dict)
+            and transaction.get("ownedUrl") == current_url and is_bound_chat_url(current_url))
+        if is_bound_chat_url(current_url) and (
+            unchanged_existing or initial_empty_root
+            or (conversation_url is not None and same_conversation_url(current_url, conversation_url))
+        ):
+            details["chatUrl"] = current_url
+            if isinstance(transaction, dict):
+                transaction["ownedPage"] = True
+                transaction["ownedChatUrl"] = current_url
         return _result(
             PROMPT_SEND_UNKNOWN,
             ok=False,
             send_state=guard.state,
             transitions=transitions,
             recoverable=True,
-            details={"message": str(exc), "sendControl": selector, "reason": "click_outcome_uncertain"},
+            details=details,
         )
 
     def observe_or_rebind():
-        proved, observed = _observe_send_proof(page, prompt, len(before_turns),
-            **({"input_attachment": input_attachment, "attachment_id": attachment_id,
-                "conversation_url": conversation_url} if input_attachment else {}))
+        proof_options = {}
+        if input_attachment:
+            proof_options.update({"input_attachment": input_attachment, "attachment_id": attachment_id})
+        if conversation_url is not None:
+            proof_options["conversation_url"] = conversation_url
+        proved, observed = _observe_send_proof(page, prompt, len(before_turns), **proof_options)
         # Exact sent turn + server URL already prove a local-id migration.
         # No reason to burn the full 90s upload budget before read-only rebind.
         return proved or bool(input_attachment and _needs_sent_image_rebind(
             observed, str(getattr(page, "url", "") or ""), conversation_url)), observed
 
     ok, proof = _wait_until(observe_or_rebind, timeout_ms=timeout_ms)
+    if artifact_mode and chat_confirmed_state == EXISTING_CHAT_CONFIRMED:
+        ok = False
+        proof["reason"] = "existing_chat_send_causality_unproven"
     if input_attachment and _needs_sent_image_rebind(proof, str(getattr(page, "url", "") or ""), conversation_url):
         ok = False
     sent_image = proof.get("sentAttachment", {})
     # Fresh uploaded components retain a local conversation id after server URL binding.
     # Reload only for this proved transition; NEVER upload/fill/click again.
     bound_url = str(getattr(page, "url", "") or "")
-    if not ok and input_attachment and _needs_sent_image_rebind(proof, bound_url, conversation_url):
+    if not ok and input_attachment and not artifact_mode and _needs_sent_image_rebind(proof, bound_url, conversation_url):
         before_reload = proof
         try:
             page.reload(wait_until="domcontentloaded", timeout=max(timeout_ms, 30_000))
@@ -1223,6 +1245,8 @@ def _presend_transaction(fn=None, *, fresh=False):
             with lock:
                 diagnostic = _page_diagnostic(page)
                 transaction = {"sendAttempted": False, "fillAttempted": False, "prompt": prompt}
+                if kwargs.get("artifact_mode") is True:
+                    transaction["artifactMode"] = True
                 page._postman_presend = transaction
                 result = None
                 try:
@@ -1236,6 +1260,17 @@ def _presend_transaction(fn=None, *, fresh=False):
                         transitions=[], details={"reason": "submit_exception", "exceptionType": type(exc).__name__})
                 finally:
                     try:
+                        if (transaction.get("artifactMode") is True and transaction["sendAttempted"]
+                                and isinstance(transaction.get("ownedUrl"), str)):
+                            current_url = str(getattr(page, "url", "") or "")
+                            initial_empty_root = (is_chatgpt_root_url(transaction["ownedUrl"])
+                                and transaction.get("userCount") == 0)
+                            unchanged_existing = (same_conversation_url(current_url, transaction["ownedUrl"])
+                                and current_url == transaction["ownedUrl"])
+                            fresh_bound = initial_empty_root and is_bound_chat_url(current_url)
+                            if (unchanged_existing or fresh_bound) and is_bound_chat_url(current_url):
+                                transaction["ownedPage"] = True
+                                transaction["ownedChatUrl"] = current_url
                         if result is not None and result.get("sendState") == SEND_PROVEN_NOT_SENT and not transaction["sendAttempted"]:
                             details = result.setdefault("details", {})
                             if transaction.get("fillAttempted"):
@@ -1253,6 +1288,10 @@ def _presend_transaction(fn=None, *, fresh=False):
                     finally:
                         page._postman_presend = None
                 result.setdefault("details", {})["pageDiagnostic"] = {**diagnostic, "url": str(getattr(page, "url", "") or "")}
+                if transaction.get("artifactMode") is True and transaction.get("ownedPage") is True:
+                    result["details"]["ownedPage"] = True
+                    result["details"]["ownedChatUrl"] = transaction["ownedChatUrl"]
+                    result["details"]["chatUrl"] = transaction["ownedChatUrl"]
                 return result
         except process_lock.ResourceBusyError:
             # Lock admission failed before any Page access, attachment upload or fill.
@@ -1265,7 +1304,7 @@ def _presend_transaction(fn=None, *, fresh=False):
 
 
 @_presend_transaction(fresh=True)
-def submit_fresh_prompt(page: Any, prompt: str, *, timeout_ms: int = DEFAULT_TIMEOUT_MS, input_attachment=None) -> dict[str, Any]:
+def submit_fresh_prompt(page: Any, prompt: str, *, timeout_ms: int = DEFAULT_TIMEOUT_MS, input_attachment=None, artifact_mode: bool = False) -> dict[str, Any]:
     prep = prepare_fresh_chat(page, timeout_ms=timeout_ms)
     if not prep["ok"]:
         return _result(
@@ -1307,7 +1346,7 @@ def submit_fresh_prompt(page: Any, prompt: str, *, timeout_ms: int = DEFAULT_TIM
             details=inserted.get("details"),
         )
     guard = SendGuard()
-    result = submit_once(page, composer, prompt, guard, timeout_ms=timeout_ms,
+    result = submit_once(page, composer, prompt, guard, timeout_ms=timeout_ms, artifact_mode=artifact_mode,
         **({"input_attachment": input_attachment, "attachment_id": attachment_id} if input_attachment else {}))
     result["details"].update(inserted.get("details", {}))
     return result
@@ -1322,6 +1361,7 @@ def submit_existing_prompt(
     timeout_ms: int = DEFAULT_TIMEOUT_MS,
     navigate: bool = True,
     input_attachment=None,
+    artifact_mode: bool = False,
 ) -> dict[str, Any]:
     prep = prepare_existing_chat(page, conversation_url, timeout_ms=timeout_ms, navigate=navigate)
     if not prep["ok"]:
@@ -1364,8 +1404,8 @@ def submit_existing_prompt(
             details=inserted.get("details"),
         )
     result = submit_once(page, composer, prompt, SendGuard(), chat_confirmed_state=EXISTING_CHAT_CONFIRMED, timeout_ms=timeout_ms,
-        **({"input_attachment": input_attachment, "attachment_id": attachment_id,
-            "conversation_url": conversation_url} if input_attachment else {}))
+        conversation_url=conversation_url, artifact_mode=artifact_mode,
+        **({"input_attachment": input_attachment, "attachment_id": attachment_id} if input_attachment else {}))
     result["details"].update(inserted.get("details", {}))
     return result
 

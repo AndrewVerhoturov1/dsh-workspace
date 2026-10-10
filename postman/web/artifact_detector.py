@@ -145,7 +145,18 @@ _DOM_CANDIDATE_JS = r"""
   for (const el of root.querySelectorAll('a[href], [role="link"], button, [role="button"], [download]')) {
     if (!visible(el)) continue;
     const visibleLabel = normalize(el.innerText);
-    if (visibleLabel !== expectedFilename) continue;
+    if (args.candidateMode) {
+      const href = el.getAttribute("href") || "";
+      let localFile = false;
+      try {
+        const url = new URL(href, document.baseURI);
+        localFile = href.startsWith("sandbox:/") ||
+          (url.origin === location.origin && /^(\/backend-api\/.*(?:files|download)|\/files\/)/.test(url.pathname));
+      } catch (_) {}
+      const nativeButton = !href && (el.tagName === "BUTTON" || el.getAttribute("role") === "button") &&
+        /\.zip(?:$|\s)/i.test(visibleLabel) && /download|file|attachment/i.test(el.getAttribute("data-testid") || "");
+      if ((!localFile && !nativeButton) || !visibleLabel) continue;
+    } else if (visibleLabel !== expectedFilename) continue;
     const betweenMarkers = beginRanges.length === 1 && endRanges.length === 1 &&
       between(beginRanges[0], el, endRanges[0]);
     candidates.push({
@@ -155,7 +166,8 @@ _DOM_CANDIDATE_JS = r"""
       dataTestId: normalize(el.getAttribute("data-testid")).slice(0, 160),
       ariaLabel: normalize(el.getAttribute("aria-label")).slice(0, 160),
       title: normalize(el.getAttribute("title")).slice(0, 160),
-      visibleLabelExact: true,
+      label: visibleLabel.slice(0, 512),
+      visibleLabelExact: visibleLabel === expectedFilename,
       visibleLabelLength: visibleLabel.length,
       downloadExact: normalize(el.getAttribute("download")) === expectedFilename,
       hrefBasename: hrefBasename(el.getAttribute("href")).slice(0, 240),
@@ -812,3 +824,86 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+# Candidate capture is deliberately NOT P5 proof and cannot authorize a grant.
+ARTIFACT_CANDIDATE_DOM = "ARTIFACT_CANDIDATE_DOM"
+ARTIFACT_CANDIDATE_CHOICES = "ARTIFACT_CANDIDATE_CHOICES"
+_CANDIDATE_DOM_JS = _DOM_CANDIDATE_JS
+
+
+def candidate_identity_matches(first: dict[str, Any], second: dict[str, Any]) -> bool:
+    """Continuity for observation only; never evidence of a new Send/current turn."""
+    keys = ("groupKey", "contentSearchTurnKey", "assistantMessageId")
+    shared = [k for k in keys if first.get(k) and second.get(k)]
+    if any(first[k] != second[k] for k in shared):
+        return False
+    return bool(shared)
+
+
+def discover_artifact_candidate(page: Any, *, expected_prompt: str,
+        expected_chat_url: str, request_id: str, expected_filename: str,
+        completed_observer_result: dict[str, Any]) -> dict[str, Any]:
+    """One scoped observed assistant answer, not global/latest ZIP discovery."""
+    saved = completed_observer_result.get("details", {})
+    if (not identity.is_canonical_request_id(request_id)
+            or not submit.is_bound_chat_url(expected_chat_url)
+            or str(getattr(page, "url", "")) != expected_chat_url
+            or type(saved.get("assistantIndex")) is not int
+            or not isinstance(saved.get("assistantTextSha256"), str)):
+        return _result(ARTIFACT_CHAT_CORRELATION_LOST, ok=False,
+                       details={"reason": "candidate_observation_unbound"})
+    turns, selector = observer.snapshot_turns(page)
+    if saved.get("observedAnswer") is True:
+        old = saved.get("assistantIdentity", {})
+        matches = [t for t in turns if t.get("role") == "assistant" and (
+            candidate_identity_matches(old, t) if old else
+            selector == saved.get("turnSelector") and t.get("index") == saved.get("assistantIndex")
+            and observer.text_sha256(observer._normalize_text(t.get("text", ""))) == saved["assistantTextSha256"])]
+        correlation = {"ok": len(matches) == 1, "assistant": matches[0] if len(matches) == 1 else None,
+                       "assistantIndex": matches[0]["index"] if len(matches) == 1 else None}
+    else:
+        correlation = observer.correlate_next_assistant(turns, expected_prompt,
+            anchor_binding=saved.get("anchorBinding"))
+    if not correlation.get("ok"):
+        return _result(ARTIFACT_CHAT_CORRELATION_LOST, ok=False,
+                       details={"reason": "candidate_answer_not_localized"})
+    answer = correlation["assistant"]
+    index = correlation["assistantIndex"]
+    current_sha = observer.text_sha256(observer._normalize_text(answer.get("text", "")))
+    old_identity = saved.get("assistantIdentity", {})
+    strong = {k: str(answer[k]) for k in ("groupKey", "contentSearchTurnKey", "assistantMessageId") if answer.get(k)}
+    if answer.get("identityAmbiguous"):
+        strong.pop("contentSearchTurnKey", None)
+    continuity = candidate_identity_matches(old_identity, strong)
+    conflict = any(old_identity.get(k) and strong.get(k) and old_identity[k] != strong[k] for k in old_identity)
+    if (conflict or current_sha != saved["assistantTextSha256"]
+            or (not continuity and index != saved["assistantIndex"])
+            or (old_identity and not continuity)):
+        return _result(ARTIFACT_TURN_IDENTITY_MISMATCH, ok=False,
+                       details={"reason": "candidate_answer_identity_changed"})
+    node_index = answer.get("nodeIndex", index)
+    turn = page.locator(selector).nth(node_index)
+    try:
+        dom = turn.evaluate(_CANDIDATE_DOM_JS, {"expectedFilename": expected_filename,
+            "beginMarker": result_begin_marker(request_id), "endMarker": result_end_marker(request_id),
+            "candidateMode": True})
+    except Exception:
+        dom = {}
+    unique = {}
+    for item in dom.get("candidates", []) if isinstance(dom, dict) else []:
+        if isinstance(item, dict) and re.fullmatch(r"\d+(?:/\d+)*", str(item.get("path", ""))):
+            unique[item["path"]] = {k: item.get(k) for k in ("path", "label", "tag", "ariaLabel", "title", "hrefBasename", "betweenMarkers", "visibleLabelExact")}
+    choices = list(unique.values())
+    common = {"requestId": request_id, "expectedFilename": expected_filename,
+        "chatUrl": expected_chat_url, "assistantIndex": index, "turnNodeIndex": node_index,
+        "turnKey": str(answer.get("groupKey") or ""), "turnSelector": selector,
+        "assistantTextSha256": current_sha, "assistantIdentity": strong,
+        "downloadStarted": False, "verified": False, "applyEligible": False,
+        "reasons": list(dict.fromkeys(["CURRENT_REQUEST_CORRELATION_UNVERIFIED", *saved.get("candidateReasons", [])]))}
+    if len(choices) > 1:
+        return _result(ARTIFACT_CANDIDATE_CHOICES, ok=False,
+            details={**common, "choices": choices[:8], "candidateCount": len(choices), "choicesTruncated": len(choices) > 8})
+    if not choices:
+        return _result(ARTIFACT_ATTACHMENT_NOT_FOUND, ok=False, details=common)
+    return _result(ARTIFACT_CANDIDATE_DOM, ok=False,
+                   details={**common, "attachment": choices[0]})

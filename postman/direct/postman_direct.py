@@ -920,7 +920,8 @@ class DirectPostman:
         self._write_state(request_id, STATE_BROWSER_READY, browser=browser)
 
         bridge_root = self.direct_root.parent
-        bridge = self.bridge_factory(root=bridge_root, result_root=self.result_root)
+        bridge = self.bridge_factory(root=bridge_root, result_root=self.result_root,
+                                     candidate_root=self.direct_root / "candidates")
         self._write_state(request_id, STATE_WEB_RUNNING)
         result = bridge.run_request(
             request_id,
@@ -933,6 +934,10 @@ class DirectPostman:
             conversation_url=chat_ref.conversation_url if chat_ref is not None else None,
             observer_timeout_ms=DEFAULT_ASSISTANT_TIMEOUT_MS,
         )
+        if (isinstance(result, dict) and isinstance(result.get("details"), dict)
+                and (result["details"].get("candidate") or result["details"].get("choices"))
+                and result.get("code") != RESULT_DURABLE):
+            return self._candidate_terminal(request_id, result, published, browser, chain_fields)
         if not isinstance(result, dict) or result.get("ok") is not True:
             code = result.get("code", "DIRECT_WEB_FAILED") if isinstance(result, dict) else "DIRECT_WEB_FAILED"
             details = result.get("details", {}) if isinstance(result, dict) else {"result": repr(result)}
@@ -975,6 +980,7 @@ class DirectPostman:
                 state=bridge_code,
                 requestId=request_id,
                 repository=self.repository,
+                branch=self.branch,
                 baseCommit=published.prepublication_commit,
                 taskPublicationCommit=published.publication_commit,
                 taskUrl=published.task_url,
@@ -1035,12 +1041,15 @@ class DirectPostman:
             state=STATE_RESULT_DURABLE,
             requestId=request_id,
             repository=self.repository,
+            branch=self.branch,
             baseCommit=published.prepublication_commit,
             taskPublicationCommit=published.publication_commit,
             taskUrl=published.task_url,
             expectedFilename=expected_filename,
             resultZip=result_zip,
             sha256=sha256,
+            candidate=details.get("candidate"),
+            verified=True,
             resultRoot=str(self.result_root),
             browser=browser,
             statePath=str(state_path),
@@ -1081,6 +1090,27 @@ class DirectPostman:
         )
         return terminal
 
+
+    def _candidate_terminal(self, request_id, result, published, browser, chain_fields):
+        details = result.get("details", {})
+        candidate = details.get("candidate")
+        terminal = _json_result(False, result.get("code", POSTMAN_TRANSPORT_FAILED),
+            state=result.get("code", POSTMAN_TRANSPORT_FAILED), requestId=request_id,
+            repository=self.repository, branch=self.branch,
+            baseCommit=published.prepublication_commit, taskPublicationCommit=published.publication_commit,
+            taskUrl=published.task_url, publicationReceipt=self.publication_receipt,
+            candidate=candidate, choices=details.get("choices", []),
+            candidateReasons=details.get("candidateReasons", []), verified=False, applyEligible=False,
+            unresolvedSendUnknown=details.get("unresolvedSendUnknown") is True,
+            conversationUrl=details.get("conversationUrl"), conversationId=details.get("conversationId"),
+            transportCode=result.get("code"), transportMessage="Unverified artifact observation; saved bytes are not apply authority.",
+            details=details, **chain_fields)
+        self._write_state(request_id, STATE_FAILED, candidate=candidate,
+            unresolvedSendUnknown=terminal["unresolvedSendUnknown"], webResultAvailable=bool(candidate or terminal["choices"]),
+            conversationUrl=terminal["conversationUrl"], conversationId=terminal["conversationId"],
+            failureCode=terminal["code"], failureDetails=details)
+        durable_handoff.atomic_write_json(durable_handoff.handoff_path(self.direct_root, request_id), terminal)
+        return terminal
 
     def _finish_image_mode(
         self, *, request_id: str, result: dict[str, Any], published: PublishedTask,
