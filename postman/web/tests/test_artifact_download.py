@@ -3,6 +3,8 @@ from __future__ import annotations
 from contextlib import nullcontext
 import hashlib
 import importlib.util
+import io
+import zipfile
 import json
 from pathlib import Path
 import sys
@@ -26,6 +28,9 @@ REPO = "AndrewVerhoturov1/dsh-workspace"
 
 detector_stub = types.ModuleType("artifact_detector")
 detector_stub.ARTIFACT_DOM_CONFIRMED = "ARTIFACT_DOM_CONFIRMED"
+detector_stub.ARTIFACT_CANDIDATE_DOM = "ARTIFACT_CANDIDATE_DOM"
+detector_stub.ARTIFACT_CANDIDATE_CHOICES = "ARTIFACT_CANDIDATE_CHOICES"
+detector_stub.candidate_identity_matches = lambda a, b: bool(set(a) & set(b)) and all(a[k] == b[k] for k in set(a) & set(b))
 detector_stub.current_result = None
 def detect_artifact_dom(*args, **kwargs):
     return detector_stub.current_result
@@ -114,6 +119,7 @@ class FakeControl:
         self.page = page
         self.clicks = 0
         self.snapshot = {
+            "eligibleNativeDownload": True,
             "connected": True,
             "visible": True,
             "disabled": False,
@@ -155,6 +161,7 @@ class FakeDownload:
         self.payload = valid_zip_bytes() if payload is None else payload
         self._failure = failure
         self.save_error = save_error
+        self.path_error = None
         self.saved_to = None
         self.cancelled = False
         self.source_temp = tempfile.TemporaryDirectory()
@@ -165,6 +172,8 @@ class FakeDownload:
         self.source_temp.cleanup()
 
     def path(self):
+        if self.path_error:
+            raise RuntimeError(self.path_error)
         return self.source_path
 
     def failure(self):
@@ -391,18 +400,26 @@ class ArtifactDownloadTests(unittest.TestCase):
         page = FakePage()
         page.click_error = "click failed"
         result, _, _ = self.run_download(page=page)
-        self.assertEqual(result["code"], module.DOWNLOAD_NOT_FOUND)
+        self.assertEqual(result["code"], module.DOWNLOAD_INTERRUPTED)
+        self.assertEqual(result["details"]["candidate"]["completeness"], "partial")
         self.assertEqual(page.expect_download_calls, 1)
         self.assertEqual(page.clicks, 1)
         self.assertFalse(result["details"]["retryAllowed"])
 
-    def test_wrong_suggested_filename_rejected(self):
-        download = FakeDownload(suggested="wrong.zip")
+    def test_wrong_suggested_filename_rejected_but_raw_candidate_retained(self):
+        download = FakeDownload(suggested="../unsafe.zip")
         page = FakePage(download)
-        result, _, _ = self.run_download(page=page)
+        result, _, root = self.run_download(page=page)
         self.assertEqual(result["code"], module.DOWNLOAD_FILENAME_MISMATCH)
-        self.assertTrue(download.cancelled)
+        self.assertFalse(download.cancelled)
         self.assertIsNone(download.saved_to)
+        candidate = Path(result["details"]["candidate"]["path"])
+        self.assertEqual(candidate, root / ".candidates" / REQ / "capture.bin")
+        self.assertEqual(candidate.read_bytes(), download.payload)
+        desc = json.loads((candidate.parent / "candidate.json").read_text(encoding="utf-8"))
+        self.assertEqual(desc["originalFilename"], "../unsafe.zip")
+        self.assertFalse(desc["verified"])
+        self.assertFalse(desc["applyEligible"])
 
     def test_sha_decorated_suggestion_preserves_canonical_staging_and_actual_metadata(self):
         digest = "c9056a81e0d92958cd073c80cd2174826856196269778c9121bbf8ba02b5f4d3"
@@ -444,8 +461,9 @@ class ArtifactDownloadTests(unittest.TestCase):
                 download = FakeDownload(suggested=suggested)
                 result, page, _ = self.run_download(page=FakePage(download))
                 self.assertEqual(result["code"], module.DOWNLOAD_FILENAME_MISMATCH)
-                self.assertTrue(download.cancelled)
+                self.assertFalse(download.cancelled)
                 self.assertIsNone(download.saved_to)
+                self.assertTrue(Path(result["details"]["candidate"]["path"]).is_file())
                 self.assertEqual(page.clicks, 1)
                 self.assertEqual(page.expect_download_calls, 1)
                 self.assertFalse(result["details"]["retryAllowed"])
@@ -454,6 +472,7 @@ class ArtifactDownloadTests(unittest.TestCase):
         page = FakePage(FakeDownload(failure="canceled"))
         result, _, _ = self.run_download(page=page)
         self.assertEqual(result["code"], module.DOWNLOAD_INTERRUPTED)
+        self.assertEqual(page.clicks, 1)
 
     def test_save_as_failure_rejected(self):
         page = FakePage(FakeDownload(save_error="disk full"))
@@ -474,9 +493,27 @@ class ArtifactDownloadTests(unittest.TestCase):
     def test_source_path_none_is_transport_failure(self):
         download = FakeDownload()
         download.path = lambda: None
-        result, _, _ = self.run_download(page=FakePage(download))
+        result, page, _ = self.run_download(page=FakePage(download))
         self.assertEqual(result["code"], module.DOWNLOAD_SOURCE_MISSING)
-        self.assertIsNone(download.saved_to)
+        self.assertEqual(page.clicks, 1)
+        self.assertFalse(download.cancelled)
+
+    def test_partial_download_with_accessible_native_path_retains_partial_candidate(self):
+        download = FakeDownload(failure="canceled")
+        result, page, _ = self.run_download(page=FakePage(download))
+        self.assertEqual(result["code"], module.DOWNLOAD_INTERRUPTED)
+        candidate = Path(result["details"]["candidate"]["path"])
+        self.assertEqual(candidate.read_bytes(), download.payload)
+        self.assertEqual(result["details"]["candidate"]["completeness"], "partial")
+        self.assertEqual(page.clicks, 1)
+
+    def test_partial_download_without_native_path_reports_limitation(self):
+        download = FakeDownload(failure="canceled")
+        download.path_error = "still writing"
+        result, page, _ = self.run_download(page=FakePage(download))
+        self.assertEqual(result["code"], module.DOWNLOAD_INTERRUPTED)
+        self.assertIsNone(result["details"].get("candidate"))
+        self.assertEqual(page.clicks, 1)
 
     def test_nonzero_source_is_saved_with_exact_bytes_and_sha(self):
         download = FakeDownload()
@@ -497,7 +534,44 @@ class ArtifactDownloadTests(unittest.TestCase):
                 result, page, _ = self.run_download(page=FakePage(download), validator=no_validator)
                 self.assertEqual(result["code"], module.DOWNLOAD_STAGING_MISMATCH)
                 self.assertFalse(result.get("recoverable", False))
+                self.assertTrue(Path(result["details"]["candidate"]["path"]).is_file())
                 self.assertEqual(page.clicks, 1)
+
+    def test_real_malformed_and_unsafe_zip_rejection_preserves_bytes_and_reason(self):
+        malformed = b"not a zip"
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, "w") as archive:
+            archive.writestr("../escape.txt", "unsafe")
+        for payload in (malformed, out.getvalue()):
+            with self.subTest(payload=payload[:16]):
+                result, page, root = self.run_download(page=FakePage(FakeDownload(payload=payload)), validator=module._run_validator)
+                self.assertEqual(result["code"], module.ARTIFACT_INVALID)
+                descriptor = result["details"]["candidate"]
+                self.assertEqual(Path(descriptor["path"]).read_bytes(), payload)
+                self.assertFalse(descriptor["verified"])
+                self.assertFalse((root / REQ / "result.zip").exists())
+                saved = json.loads((Path(descriptor["path"]).parent / "candidate.json").read_text())
+                self.assertIn(result["details"]["validatorCode"], saved["reasons"])
+                self.assertEqual(page.clicks, 1)
+
+    def test_native_failure_status_exception_retains_accessible_partial_bytes(self):
+        native = FakeDownload()
+        native.failure = lambda: (_ for _ in ()).throw(RuntimeError("synthetic native failure"))
+        result, page, _ = self.run_download(page=FakePage(native))
+        self.assertEqual(result["code"], module.DOWNLOAD_INTERRUPTED)
+        self.assertEqual(result["details"]["candidate"]["completeness"], "partial")
+        self.assertEqual(Path(result["details"]["candidate"]["path"]).read_bytes(), native.payload)
+        self.assertEqual(page.clicks, 1)
+
+    def test_validator_exception_keeps_descriptor_with_concrete_reason(self):
+        def raises(*args): raise RuntimeError("synthetic validator exception")
+        result, page, _ = self.run_download(validator=raises)
+        self.assertEqual(result["code"], module.ARTIFACT_VALIDATOR_FAILED)
+        descriptor = result["details"]["candidate"]
+        self.assertTrue(Path(descriptor["path"]).is_file())
+        saved = json.loads((Path(descriptor["path"]).parent / "candidate.json").read_text())
+        self.assertIn("VALIDATOR_EXCEPTION", saved["reasons"])
+        self.assertEqual(page.clicks, 1)
 
     def test_true_zero_byte_source_reaches_existing_empty_validator(self):
         result, page, _ = self.run_download(page=FakePage(FakeDownload(payload=b"")),
@@ -510,11 +584,11 @@ class ArtifactDownloadTests(unittest.TestCase):
         page = FakePage()
         page.click_error = "failure"
         result, _, _ = self.run_download(page=page)
-        self.assertEqual(result["code"], module.DOWNLOAD_NOT_FOUND)
+        self.assertEqual(result["code"], module.DOWNLOAD_INTERRUPTED)
         with module.cdp_download.process_lock.lock_cdp_download(timeout_s=0):
             pass
 
-    def test_validator_reject_discards_staging_for_the_next_attempt(self):
+    def test_validator_reject_retains_capture_and_blocks_overwrite(self):
         def reject(zip_path, trusted):
             return {
                 "ok": False,
@@ -530,11 +604,10 @@ class ArtifactDownloadTests(unittest.TestCase):
         self.assertEqual(result["details"]["validationMessage"], "ZIP central directory is missing")
         self.assertEqual(result["details"]["validationDetails"], {"reason": "eocd"})
         self.assertFalse((root / REQ).exists())
-        self.assertFalse((root / ".staging" / REQ).exists())
-
+        candidate = root / ".candidates" / REQ / "capture.bin"
+        self.assertTrue(candidate.is_file())
         retry, _, _ = self.run_download(root=root)
-        self.assertEqual(retry["code"], module.RESULT_DURABLE, retry)
-        self.assertFalse((root / ".staging" / REQ).exists())
+        self.assertEqual(retry["code"], module.RESULT_STORE_CONFLICT)
 
     def test_validator_exception_keeps_staging(self):
         def explode(zip_path, trusted):
@@ -543,6 +616,7 @@ class ArtifactDownloadTests(unittest.TestCase):
         self.assertEqual(result["code"], module.ARTIFACT_VALIDATOR_FAILED)
         self.assertFalse((root / REQ).exists())
         self.assertTrue((root / ".staging" / REQ / FILENAME).is_file())
+        self.assertTrue(Path(result["details"]["candidate"]["path"]).is_file())
 
     def test_unknown_validator_rejection_is_not_retryable(self):
         def unknown_rejection(zip_path, trusted):
@@ -551,6 +625,7 @@ class ArtifactDownloadTests(unittest.TestCase):
         self.assertEqual(result["code"], module.ARTIFACT_VALIDATOR_FAILED)
         self.assertFalse(result.get("recoverable", False))
         self.assertTrue((root / ".staging" / REQ / FILENAME).is_file())
+        self.assertTrue(Path(result["details"]["candidate"]["path"]).is_file())
 
     def test_validator_sha_attestation_mismatch_rejected(self):
         def wrong_sha(zip_path, trusted):
@@ -560,6 +635,7 @@ class ArtifactDownloadTests(unittest.TestCase):
         result, _, root = self.run_download(validator=wrong_sha)
         self.assertEqual(result["code"], module.ARTIFACT_INVALID)
         self.assertFalse((root / REQ).exists())
+        self.assertTrue(Path(result["details"]["candidate"]["path"]).is_file())
 
     def test_validator_request_metadata_is_not_a_transport_gate(self):
         def wrong_req(zip_path, trusted):
@@ -591,6 +667,37 @@ class ArtifactDownloadTests(unittest.TestCase):
         self.assertIsNone(result["details"]["manifest"])
         metadata = json.loads((final / "metadata.json").read_text(encoding="utf-8"))
         self.assertFalse(metadata["manifestPresent"])
+
+    def test_candidate_proof_never_promotes_even_after_validator_success(self):
+        details = p5_proof()["details"]
+        details.update({"verified":False,"applyEligible":False,"reasons":["CURRENT_REQUEST_CORRELATION_UNVERIFIED"],
+            "assistantIdentity":{},"turnNodeIndex":1,"turnKey":"", "attachment":{"path":"1/2","label":"artifact.zip"}})
+        proof = {"ok":False,"code":detector_stub.ARTIFACT_CANDIDATE_DOM,"details":details}
+        detector_stub.discover_artifact_candidate = lambda *args, **kwargs: proof
+        detector_stub.candidate_identity_matches = lambda a, b: False
+        page = FakePage()
+        page.turn.snapshot["visibleLabel"] = "artifact.zip"
+        page.turn.snapshot["visibleLabelExact"] = False
+        with tempfile.TemporaryDirectory() as temp_root:
+            result, _, root = self.run_download(page=page, proof=proof, root=str(Path(temp_root) / "results"),
+                candidate_root=str(Path(temp_root) / "candidate"))
+        self.assertEqual(result["code"], "ARTIFACT_CANDIDATE_SAVED", result)
+        self.assertFalse(result["ok"])
+        self.assertFalse(result["details"]["candidate"]["verified"])
+        self.assertFalse(result["details"]["candidate"]["applyEligible"])
+        self.assertFalse((root / REQ / "result.zip").exists())
+        self.assertEqual(page.clicks, 1)
+
+    def test_candidate_root_capture_is_bounded_and_fixed_name(self):
+        with tempfile.TemporaryDirectory() as root:
+            candidate_root = Path(root) / "candidates"
+            # Probe above the existing 50 MiB compressed cap; saved bytes cannot exceed it.
+            payload = b"x" * (50 * 1024 * 1024 + 1)
+            result, _, _ = self.run_download(page=FakePage(FakeDownload(payload=payload)), root=str(Path(root)/"results"),
+                candidate_root=candidate_root)
+            path = Path(result["details"]["candidate"]["path"])
+            self.assertEqual(path.name, "capture.bin")
+            self.assertLessEqual(path.stat().st_size, 50 * 1024 * 1024)
 
     def test_result_zip_hash_matches_returned_sha(self):
         result, _, root = self.run_download()

@@ -122,6 +122,10 @@ def validate_terminal(
             details={"expected": expected_repository, "actual": repository},
         )
 
+    _required_string(data, "branch")
+    if (data.get("verified") is False or data.get("applyEligible") is False
+            or data.get("unresolvedSendUnknown") is True):
+        raise DurableHandoffError("RESUME_INVALID", "unverified candidate is not RESULT_DURABLE")
     base_commit = _commit(data, "baseCommit")
     task_publication_commit = _commit(data, "taskPublicationCommit")
     expected_filename = _required_string(data, "expectedFilename")

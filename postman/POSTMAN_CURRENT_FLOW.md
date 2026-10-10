@@ -4,7 +4,15 @@
 > Production entrypoint: `postman/direct/postman.ps1`  
 > Normal trigger: exact current-message `@Postman`
 
-Входные файлы выбираются явно: immutable descriptors остаются provenance metadata внутри task; для `@Postman`/`@PostmanAsk` bytes идут через один verified Host-created native `POSTMAN_INPUT_<REQ>.zip`. Private snapshots и Bridge-pinned child grant исключают model path authority. User intent и двухстрочный browser prompt не меняются. Send success требует exact prompt и expected ZIP в том же новом user turn; ambiguity после возможного click = UNKNOWN/no resend. `@PostmanImage` передаёт одну visual reference как native image attachment с exact bytes/SHA/card proof. Normal local/current staging private и не публикует bytes в GitHub; GitHub — existing source или separately approved fallback only; см. [Postman Input Files](POSTMAN_INPUT_FILES.md).
+Входные файлы выбираются явно: immutable descriptors остаются provenance metadata внутри task; для `@Postman`/`@PostmanAsk` bytes идут через один verified Host-created native `POSTMAN_INPUT_<REQ>.zip`. Private snapshots и Bridge-pinned child grant исключают model path authority. User intent и двухстрочный browser prompt не меняются. Pre-Send проверяет exact prompt/готовый input. После возможного click ambiguity = UNKNOWN/no resend. В artifact existing chat count+1/exact text/empty composer/card — diagnostics, не причинное доказательство текущего Send; доступный файл сохраняется candidate-only. `@PostmanImage` передаёт одну visual reference как native image attachment с exact bytes/SHA/card proof. Normal local/current staging private и не публикует bytes в GitHub; GitHub — existing source или separately approved fallback only; см. [Postman Input Files](POSTMAN_INPUT_FILES.md).
+
+## Наблюдение / физическое сохранение / verified result / применение
+
+Artifact UNKNOWN разрешает только ограниченное read-only наблюдение exact принадлежащей Page conversation. Weak count/text/composer/card не повышают UNKNOWN, reminders/recovery/automatic continuation запрещены. Fresh genuinely empty owned chat сохраняет strict verified путь; TEXT/IMAGE не получают unchecked candidate success.
+
+Один native файл конкретного наблюдаемого answer можно сохранить без идеального envelope/REQ/имени. Несколько дают до восьми choices без click; global latest ZIP и arbitrary external URL не выбираются. Descriptor `candidate`: actual path/byteLength/SHA, originalFilename, completeness, reasons/provenance, `verified=false`, `applyEligible=false`. Fixed raw path: `direct/candidates/<REQ>/capture.bin`, original filename не используется как путь.
+
+Wrong native name, доступные partial bytes, validator rejection/exception сохраняются с причиной, без unpack/open/execute. Raw save bounded 50 MiB; если native API не отдаёт partial path, это explicit evidence limit. Cold physical observation читает только owned fixed path и actual hash отдельно от strict ownership receipt; branchless/inconsistent receipt не чинится/не повышается. Sync failure не скрывает bytes/path/SHA, retrySync local-only, grant subordinate to verified ownership+sync и hash rechecks. Missing input post-Send proof оставляет `RESULT_MAY_LACK_INPUT_ATTACHMENT` до человеческого выбора.
 
 ## 1. Назначение
 
