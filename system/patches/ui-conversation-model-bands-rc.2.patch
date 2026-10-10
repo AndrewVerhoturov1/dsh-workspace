@@ -1,0 +1,364 @@
+diff --git a/packages/client/ui-conversation/src/client/chat/ChatView.tsx b/packages/client/ui-conversation/src/client/chat/ChatView.tsx
+index 93eb012..ab8fbca 100644
+--- a/packages/client/ui-conversation/src/client/chat/ChatView.tsx
++++ b/packages/client/ui-conversation/src/client/chat/ChatView.tsx
+@@ -14,7 +14,8 @@
+ // lifecycle updates replace only their own row without remounting it.
+ 
+ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+-import type { ConversationTimelineSnapshot } from '@deepseek-ai/dsh-client-runtime/client'
++import type { ChatSnapshot, ConversationTimelineSnapshot } from '@deepseek-ai/dsh-client-runtime/client'
++import type { ChatNode } from '../contract/chat-nodes.ts'
+ import { Button, IconChevronDownOutline14, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
+ import type { ChatViewSlotProps, RenderMessageImages } from '../contract/slots.ts'
+ import { PendingSteeringBubble } from './MessageItem.tsx'
+@@ -24,6 +25,40 @@ import css from './ChatView.module.css'
+ 
+ const FOLLOW_THRESHOLD = 24
+ 
++/** Paint from loaded model-attempt boundaries; never infer missing history. */
++export function requestBands(chat: ChatSnapshot): ReadonlyMap<string, 0 | 1> {
++  const boundaries: { seq: number; turn: number; step: number }[] = []
++  for (const turn of chat.timeline.turns.values()) {
++    for (const step of turn.steps) {
++      if (step.start !== undefined) boundaries.push({ seq: step.start.seq, turn: turn.turn, step: step.step })
++    }
++  }
++  for (const raw of chat.nodes.values()) {
++    const node = raw as ChatNode
++    if (node.kind !== 'model-retry') continue
++    for (const seq of node.data.startedSeqs ?? []) {
++      boundaries.push({ seq, turn: node.data.current.turn, step: node.data.current.step })
++    }
++  }
++  const ordered = [...new Map(boundaries.map(boundary => [boundary.seq, boundary])).values()]
++    .sort((left, right) => left.seq - right.seq)
++  const bands = new Map<string, 0 | 1>()
++  let index = -1
++  for (const key of chat.order) {
++    const node = chat.nodes.get(key)
++    if (node === undefined) continue
++    while (index + 1 < ordered.length && ordered[index + 1]!.seq <= node.anchorSeq) index++
++    const boundary = ordered[index]
++    if (boundary === undefined) continue
++    // A partial step must not borrow a preceding step's color. A loaded
++    // retry-started boundary can still identify its own partial attempt.
++    if (node.location.kind === 'step'
++      && (node.location.turn.turn !== boundary.turn || node.location.step.step !== boundary.step)) continue
++    bands.set(key, index % 2 === 0 ? 0 : 1)
++  }
++  return bands
++}
++
+ /** Active column host when present; otherwise the view-local scroller. */
+ function scrollerOf(from: HTMLElement): HTMLElement {
+   return (from.closest('[data-conversation-scroll]')) ?? from
+@@ -162,6 +197,10 @@ export function ChatView({
+   const order = useSession(s => s.chat.order)
+   const nodeStore = useSession(s => s.chat.nodes)
+   const timeline = useSession(s => s.chat.timeline)
++  // Content-only deltas keep this primitive selector unchanged: keyed seats
++  // still update independently, and band changes do not reparent any row.
++  const bandSignature = useSession(s => JSON.stringify([...requestBands(s.chat)]))
++  const bands = useMemo(() => new Map<string, 0 | 1>(JSON.parse(bandSignature)), [bandSignature])
+   const inbox = useSession(s => s.queue)
+   // Workspace root off the session list row: path summaries display relative to it.
+   const cwd = useSessions(s => s.byId[sessionId]?.cwd)
+@@ -433,6 +472,7 @@ export function ChatView({
+             <ChatNodeSeat
+               key={nodeKey}
+               nodeKey={nodeKey}
++              requestBand={bands.get(nodeKey)}
+               useSession={useSession}
+               selectedCallId={selectedCallId}
+               cwd={cwd}
+@@ -517,4 +557,4 @@ function FileOpenErrorDialog({
+       )}
+     />
+   )
+-}
+\ No newline at end of file
++}
+diff --git a/packages/client/ui-conversation/src/client/chat/ChatView.module.css b/packages/client/ui-conversation/src/client/chat/ChatView.module.css
+index ebd75ad..11c895d 100644
+--- a/packages/client/ui-conversation/src/client/chat/ChatView.module.css
++++ b/packages/client/ui-conversation/src/client/chat/ChatView.module.css
+@@ -55,6 +55,47 @@
+   min-width: 0;
+ }
+ 
++/* Paint spans the chat scrollport, not its centered/padded message column.
++   100cqw is the existing scroll content width; add its unchanged side padding.
++   Leave the native right scrollbar gutter unpainted, and clip only this paint
++   by the matching stock scrollbar-width token at the left edge. Content and
++   scrollable geometry are unchanged; no native scrollbar styling is altered.
++   Half the 16px row gap meets neighboring paint without moving any content. */
++.flowItem[data-chat-request-band] {
++  position: relative;
++  isolation: isolate;
++}
++
++.flowItem[data-chat-request-band]::before {
++  content: '';
++  position: absolute;
++  top: -8px;
++  bottom: -8px;
++  left: 50%;
++  width: calc(100cqw + 2 * (var(--dsh-composer-side-clearance) + 16px));
++  transform: translateX(-50%);
++  z-index: -1;
++  pointer-events: none;
++  --dsh-request-band-alpha: 0.02;
++  background: rgba(142, 137, 62, var(--dsh-request-band-alpha));
++  clip-path: inset(0 0 0 var(--dsh-scrollbar-width, 8px));
++}
++
++.flowItem[data-chat-request-band='1']::before {
++  --dsh-request-band-alpha: 0.04;
++  background: rgba(38, 143, 173, var(--dsh-request-band-alpha));
++}
++
++:global(body[data-ds-dark-theme]) .flowItem[data-chat-request-band]::before {
++  --dsh-request-band-alpha: 0.065;
++  background: rgba(155, 166, 180, var(--dsh-request-band-alpha));
++
++}
++
++:global(body[data-ds-dark-theme]) .flowItem[data-chat-request-band='1']::before {
++  --dsh-request-band-alpha: 0.10;
++}
++
+ /* A keyed renderer may intentionally decline its row after dispatch (the
+    completed-turn tail does this when it owns neither actions nor extensions).
+    An empty flex item must not consume the column gap. */
+@@ -199,4 +240,4 @@
+ /* Host open-path refusal: same dialog family as the workspace folder error. */
+ .modalAction {
+   min-width: 72px;
+-}
+\ No newline at end of file
++}
+diff --git a/packages/client/ui-conversation/src/client/chat/ChatNodeSeat.tsx b/packages/client/ui-conversation/src/client/chat/ChatNodeSeat.tsx
+index 07f7c9d..1ef4c11 100644
+--- a/packages/client/ui-conversation/src/client/chat/ChatNodeSeat.tsx
++++ b/packages/client/ui-conversation/src/client/chat/ChatNodeSeat.tsx
+@@ -6,6 +6,7 @@ import css from './ChatView.module.css'
+ 
+ interface ChatNodeSeatProps extends ChatNodeOwnerProps {
+   readonly nodeKey: string
++  readonly requestBand?: 0 | 1 | undefined
+   readonly useSession: ChatViewSlotProps['useSession']
+   readonly renderSlot: ChatViewSlotProps['renderSlot']
+   readonly t: ChatViewSlotProps['t']
+@@ -17,7 +18,7 @@ type RoutedChatNodeOwner = {
+ 
+ /** Subscribe and dispatch one stable Context key without observing sibling Nodes. */
+ export const ChatNodeSeat = memo(function ChatNodeSeat({
+-  nodeKey, selectedCallId, cwd, openFile, inspectCall, forkAt,
++  nodeKey, requestBand, selectedCallId, cwd, openFile, inspectCall, forkAt,
+   renderMessageImages, fileMentions, useSession, renderSlot, t,
+ }: ChatNodeSeatProps) {
+   const node = useSession(snapshot => snapshot.chat.nodes.get(nodeKey))
+@@ -46,6 +47,7 @@ export const ChatNodeSeat = memo(function ChatNodeSeat({
+       data-chat-anchor-key={routedNode.key}
+       data-chat-flow-key={routedNode.key}
+       data-chat-flow-kind={routedNode.kind}
++      data-chat-request-band={requestBand}
+     >
+       {renderSlot('conversation.chat.node', routedOwner, {
+         entryKey: routedNode.kind,
+@@ -60,4 +62,4 @@ export const ChatNodeSeat = memo(function ChatNodeSeat({
+       })}
+     </div>
+   )
+-})
+\ No newline at end of file
++})
+diff --git a/packages/client/ui-conversation/src/client/contract/chat-nodes.ts b/packages/client/ui-conversation/src/client/contract/chat-nodes.ts
+index 8379c17..8595a06 100644
+--- a/packages/client/ui-conversation/src/client/contract/chat-nodes.ts
++++ b/packages/client/ui-conversation/src/client/contract/chat-nodes.ts
+@@ -48,6 +48,8 @@ export interface ManualCompactionChatData {
+ export interface RetryChatData {
+   readonly attempts: readonly ModelRetryNode[]
+   readonly current: ModelRetryNode
++  /** Loaded log boundaries of attempts that actually began, not scheduled delays. */
++  readonly startedSeqs?: readonly number[]
+ }
+ 
+ /** Turn-local footer row that owns actions and optional feature contributions. */
+@@ -79,4 +81,4 @@ export function isSettledTool(block: ToolCallBlock): block is Extract<ToolCallBl
+  */
+ export function isRunningTool(block: ToolCallBlock): block is RunningToolCall {
+   return !isSettledTool(block)
+-}
+\ No newline at end of file
++}
+diff --git a/packages/client/ui-conversation/src/client/conversation-nodes/retry.ts b/packages/client/ui-conversation/src/client/conversation-nodes/retry.ts
+index 1560f4a..75c1fc1 100644
+--- a/packages/client/ui-conversation/src/client/conversation-nodes/retry.ts
++++ b/packages/client/ui-conversation/src/client/conversation-nodes/retry.ts
+@@ -83,7 +83,10 @@ export const retryDefinition: ConversationNodeDefinition<RetryState> = {
+         : attempt)
+     const current = attempts.at(-1)
+     if (current === undefined) return null
+-    const data: RetryChatData = { attempts, current }
++    const startedSeqs = context.matches
++      .filter(match => match.event.type === 'llm/retry-started')
++      .map(match => match.event.seq)
++    const data: RetryChatData = { attempts, current, startedSeqs }
+     return chatNode(context, 'model-retry', attempts[0]?.seq ?? current.seq, data)
+   },
+ }
+@@ -94,4 +97,4 @@ export const retryDefinition: ConversationNodeDefinition<RetryState> = {
+  */
+ export function registerRetryConversationNode(ctx: Context): void {
+   ctx.conversationEvents.register(retryDefinition)
+-}
+\ No newline at end of file
++}
+diff --git a/packages/client/ui-conversation/tests/conversation-node-definitions.client.spec.ts b/packages/client/ui-conversation/tests/conversation-node-definitions.client.spec.ts
+index 262d2e7..5a7823c 100644
+--- a/packages/client/ui-conversation/tests/conversation-node-definitions.client.spec.ts
++++ b/packages/client/ui-conversation/tests/conversation-node-definitions.client.spec.ts
+@@ -688,6 +688,7 @@ describe('built-in conversation node Definitions', () => {
+     const retryNode = node(snapshot(retry), 'model-retry')
+     const retryData = retryNode?.data as RetryChatData
+     expect(retryData.attempts.map(attempt => attempt.retryState)).toEqual(['started', 'cancelled'])
++    expect(retryData.startedSeqs).toEqual([4])
+     expect(node(snapshot(retry), 'turn-error')?.data).toMatchObject({
+       kind: 'turn-error',
+       turn: 1,
+diff --git a/packages/client/ui-conversation/tests/chat-view.client.spec.tsx b/packages/client/ui-conversation/tests/chat-view.client.spec.tsx
+index b81dff8..bd0672c 100644
+--- a/packages/client/ui-conversation/tests/chat-view.client.spec.tsx
++++ b/packages/client/ui-conversation/tests/chat-view.client.spec.tsx
+@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+ import { useEffect } from 'react'
+ import type {
+-  AssistantMessageNode, CommandNode, CompactionSummaryNode, ConversationNode, ConversationSnapshot,
++  AssistantMessageNode, ChatConversationViewNode, ChatSnapshot, CommandNode, CompactionSummaryNode, ConversationNode, ConversationSnapshot,
+   ModelRetryNode, RunningToolCall, SessionId, SessionListState, ToolCallBlock, ToolResultNode, TurnErrorNode,
+   TurnMaxTokensNode, UserMessageNode, WorkspaceListState,
+ } from '@deepseek-ai/dsh-client-runtime/client'
+@@ -22,7 +22,7 @@ import type {
+ import { makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
+ import { zh as commonZh } from '@deepseek-ai/dsh-client-locale/src/locales/zh.ts'
+ import { createChatStore } from '../src/client/stores.ts'
+-import { ChatView } from '../src/client/chat/ChatView.tsx'
++import { ChatView, requestBands } from '../src/client/chat/ChatView.tsx'
+ import { zh } from '../src/client/locales.ts'
+ import { AssistantNodeView } from '../src/client/chat/AssistantNodeView.tsx'
+ import { CommandNodeView, ManualCompactionNodeView } from '../src/client/chat/CommandNodeView.tsx'
+@@ -377,6 +377,110 @@ describe('Chat node rendering', () => {
+ })
+ 
+ describe('ChatView', () => {
++  it('assigns request bands from loaded step starts and actual retry starts only', () => {
++    const turn1 = { turn: 1, start: undefined, end: undefined, status: 'open', steps: [], data: { get: () => undefined } } as never
++    const step1 = { turn: 1, step: 1, start: { seq: 2 }, end: undefined, status: 'open', data: { get: () => undefined } } as never
++    const step2 = { turn: 1, step: 2, start: { seq: 8 }, end: undefined, status: 'open', data: { get: () => undefined } } as never
++    const nodes: ChatConversationViewNode[] = [
++      { key: 'a', id: 'a', target: 'chat', kind: 'assistant-step', anchorSeq: 3,
++        location: { kind: 'step', turn: turn1, step: step1 }, visibility: 'visible', data: {} },
++      { key: 'tool', id: 'tool', target: 'chat', kind: 'tool-call', anchorSeq: 4,
++        location: { kind: 'step', turn: turn1, step: step1 }, visibility: 'visible', data: {} },
++      { key: 'delay', id: 'delay', target: 'chat', kind: 'assistant-step', anchorSeq: 5,
++        location: { kind: 'step', turn: turn1, step: step1 }, visibility: 'visible', data: {} },
++      { key: 'retry', id: 'retry', target: 'chat', kind: 'model-retry', anchorSeq: 6,
++        location: { kind: 'step', turn: turn1, step: step1 }, visibility: 'visible',
++        data: { current: { ...retry(6), turn: 1, step: 1 }, attempts: [{ ...retry(6), turn: 1, step: 1 }], startedSeqs: [7] } },
++      { key: 'after', id: 'after', target: 'chat', kind: 'assistant-step', anchorSeq: 7,
++        location: { kind: 'step', turn: turn1, step: step1 }, visibility: 'visible', data: {} },
++      { key: 'step2', id: 'step2', target: 'chat', kind: 'assistant-step', anchorSeq: 9,
++        location: { kind: 'step', turn: turn1, step: step2 }, visibility: 'visible', data: {} },
++    ]
++    const bands = requestBands({
++      order: nodes.map(node => node.key),
++      nodes: { get: key => nodes.find(node => node.key === key), values: () => nodes },
++      locations: { getTurn: () => [], getStep: () => [] },
++      timeline: { turnOrder: [1], turns: new Map([[1, { ...turn1, steps: [step1, step2] }]]) },
++      legacy: { nodes: [], turnTimings: new Map(), turnEnds: new Map(), partial: null, runningCalls: [] },
++    })
++    expect(bands.get('a')).toBe(0)
++    expect(bands.get('tool')).toBe(0)
++    expect(bands.get('delay')).toBe(0)
++    expect(bands.get('retry')).toBe(0)
++    expect(bands.get('after')).toBe(1)
++    expect(bands.get('step2')).toBe(0)
++  })
++
++  it('leaves replayed steps unpainted until their own start boundary is loaded', () => {
++    const turn = { turn: 1, start: undefined, end: undefined, status: 'unknown', steps: [], data: { get: () => undefined } }
++    const step = { turn: 2, step: 1, start: undefined, end: undefined, status: 'unknown', data: { get: () => undefined } }
++    const partial: ChatConversationViewNode = {
++      key: 'partial', id: 'partial', target: 'chat', kind: 'assistant-step', anchorSeq: 20,
++      location: { kind: 'step', turn: { ...turn, turn: 2 }, step }, visibility: 'visible', data: {},
++    }
++    const base: ChatSnapshot = {
++      order: ['partial'], nodes: { get: key => key === 'partial' ? partial : undefined, values: () => [partial] },
++      locations: { getTurn: () => [], getStep: () => [] },
++      timeline: { turnOrder: [2], turns: new Map([[2, { ...turn, turn: 2, steps: [step] }]]) },
++      legacy: { nodes: [], turnTimings: new Map(), turnEnds: new Map(), partial: null, runningCalls: [] },
++    }
++    expect(requestBands(base).has('partial')).toBe(false)
++    const started = { ...step, start: { type: 'step/start', seq: 19, time: 19_000, turn: 2, step: 1 } as never }
++    const replayed = { ...base, timeline: { turnOrder: [2], turns: new Map([[2, { ...turn, turn: 2, steps: [started] }]]) } }
++    expect(requestBands(replayed).get('partial')).toBe(0)
++  })
++
++  it('keeps a request-band row mounted and painted through node updates, then flips on next step', () => {
++    const first = assistant(2, 'first')
++    const tool = toolResult(3, 'band-tool')
++    const h = makeHarness({
++      nodes: [first, tool],
++      turnTimings: new Map([[1, { startTime: 1_000 }]]),
++    })
++    const base = chatSnapshotFixture({
++      nodes: [first, tool],
++      turnTimings: new Map([[1, { startTime: 1_000 }]]),
++    })
++    const turn = base.timeline.turns.get(1)!
++    const step1 = { turn: 1, step: 1, start: { seq: 1 }, end: undefined, status: 'open', data: { get: () => undefined } } as never
++    const step2 = { turn: 1, step: 2, start: { seq: 5 }, end: undefined, status: 'open', data: { get: () => undefined } } as never
++    const withBands = (nodes: readonly ChatConversationViewNode[]): ChatSnapshot => ({
++      ...base,
++      order: nodes.map(node => node.key),
++      nodes: { get: key => nodes.find(node => node.key === key), values: () => nodes },
++      timeline: { turnOrder: [1], turns: new Map([[1, { ...turn, steps: [step1, step2] }]]) },
++    })
++    const originalRows = [...base.nodes.values()].map(node => ({ ...node,
++      location: { kind: 'step' as const, turn, step: step1 },
++    }))
++    h.set({ chat: withBands(originalRows) })
++    const view = render(<h.ChatView {...h.props} />)
++    const row = view.container.querySelector('[data-chat-flow-key="fixture:assistant:2"]')
++    expect(row?.getAttribute('data-chat-anchor-key')).toBe('fixture:assistant:2')
++    expect(row?.getAttribute('data-chat-flow-kind')).toBe('assistant-step')
++    expect(row?.getAttribute('data-chat-request-band')).toBe('0')
++
++    const changedRows = originalRows.map(node => node.key === 'fixture:assistant:2'
++      ? { ...node, data: { status: 'settled', blocks: [{ kind: 'text', text: 'updated' }] } }
++      : node)
++    act(() => { h.set({ chat: withBands(changedRows) }) })
++    const updated = view.container.querySelector('[data-chat-flow-key="fixture:assistant:2"]')
++    expect(updated).toBe(row)
++    expect(updated?.getAttribute('data-chat-anchor-key')).toBe('fixture:assistant:2')
++    expect(updated?.getAttribute('data-chat-flow-kind')).toBe('assistant-step')
++    expect(updated?.getAttribute('data-chat-request-band')).toBe('0')
++    expect(view.container.querySelector('[data-chat-flow-key="fixture:tool:band-tool"]')?.getAttribute('data-chat-request-band'))
++      .toBe('0')
++
++    const nextStepRows = changedRows.map(node => node.key === 'fixture:assistant:2'
++      ? { ...node, anchorSeq: 6, location: { kind: 'step' as const, turn, step: step2 } }
++      : node)
++    act(() => { h.set({ chat: withBands(nextStepRows) }) })
++    const flipped = view.container.querySelector('[data-chat-flow-key="fixture:assistant:2"]')
++    expect(flipped).toBe(row)
++    expect(flipped?.getAttribute('data-chat-request-band')).toBe('1')
++  })
++
+   it('hands a windowless tool result to the Tool seat with an empty tool name', () => {
+     const h = makeHarness({
+       nodes: [{ ...toolResult(3, 'w1'), call: null }],
