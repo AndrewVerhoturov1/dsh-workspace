@@ -139,6 +139,7 @@ test('native observer persists usage and interrupted status when stream aborts e
   await iter.next();
   await iter.return();
   const records = session.events.filter(e => e.type === 'cost-panel/attempt').map(e => e.data);
+  assert.ok(session.events.filter(e => e.type === 'cost-panel/attempt').every(e => e.ignorable === true));
   assert.equal(records.at(-1).status, 'interrupted');
   assert.deepEqual(records.at(-1).usage, usage(7, 3));
 });
@@ -186,6 +187,7 @@ test('registered loopback RPC returns own/live-root/live-child/cold-descendant c
   assert.equal(childResult.ok, true);
   assert.equal(childResult.value.team.rootId, root.id);
   assert.equal(childResult.value.team.sessions, 3);
+  assert.ok(Math.abs(childResult.value.team.total - (60 * 10 + 6 * 50) / 1e6) < 1e-15);
   assert.ok(childResult.value.team.total > childResult.value.own.total);
   assert.equal(childResult.value.team.costUnknown, false);
   persistence.inspect = async () => { throw new Error('Unsupported required event in a cold child'); };
@@ -199,4 +201,41 @@ test('registered loopback RPC returns own/live-root/live-child/cold-descendant c
   assert.equal(invalid.ok, false);
   assert.equal(invalid.error.code, 'bad-request');
   assert.doesNotThrow(() => rpcResultSchema(z.unknown()).parse(invalid));
+});
+
+test('observer persists merged partial usage, with one attempt and no repeated output billing', async t => {
+  const h = await harness(t);
+  const session = sessionWithStep(h.store, 'partial');
+  const chunks = [chunk('usage', { usage: usage(10, 4) }), chunk('usage', { usage: { outputTokens: 6 } }), chunk('usage', { usage: { inputTokens: 0, outputTokens: 0 } }), chunk('finish', { reason: { kind: 'stop' } })];
+  for await (const _ of h.llm.stream(markAgentLoopRequest({ sessionId: session.id, provider: 'openai', model: 'gpt-6-luna', messages: [], testChunks: chunks }))) { /* consume */ }
+  const records = session.events.filter(e => e.type === 'cost-panel/attempt');
+  assert.deepEqual(records.at(-1).data.usage, usage(10, 6));
+  assert.equal(foldAttempts(session.header, session.events).attempts.length, 1);
+  const result = await h.rpcRegistration[1]('get', { sessionId: session.id }, new AbortController().signal);
+  assert.equal(result.ok, true);
+  assert.equal(result.value.own.calls, 1);
+  assert.equal(result.value.own.metrics.input.count, 10);
+  assert.equal(result.value.own.metrics.output.count, 6);
+  assert.ok(Math.abs(result.value.own.total - (10 * 0.1 + 6 * 0.5) / 1e6) < 1e-15);
+});
+
+test('unreadable descendant or persistence list preserves available own/team costs and flags incomplete', async t => {
+  const h = await harness(t);
+  const root = sessionWithStep(h.store, 'available');
+  root.append('cost-panel/attempt', { id: 0, provider: 'openai', model: 'gpt-6-luna', purpose: 'conversation', usage: usage(10, 4), status: 'stop' });
+  const cold = { id: 'unavailable', origin: 'subagent', parentSession: root.id };
+  let failList = false;
+  h.ctx.provide('sessionPersistence', {
+    async list() { if (failList) throw new Error('list offline'); return [root.header, cold]; },
+    async inspect() { throw new Error('cold unavailable'); },
+  });
+  for (const fail of [false, true]) {
+    failList = fail;
+    const result = await h.rpcRegistration[1]('get', { sessionId: root.id }, new AbortController().signal);
+    assert.equal(result.ok, true);
+    assert.ok(result.value.own.total > 0);
+    assert.equal(result.value.team.total, result.value.own.total);
+    assert.equal(result.value.team.costKnown, true);
+    assert.equal(result.value.team.costUnknown, true);
+  }
 });

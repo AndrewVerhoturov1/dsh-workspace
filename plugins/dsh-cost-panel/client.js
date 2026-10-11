@@ -18,6 +18,27 @@ window.__ModuleLoader__.load({ id: 'dsh-cost-panel', factory: require => {
   function apply(ctx) {
     const connection = ctx.get('connection');
     const sessions = ctx.get('sessions');
+    const lastKnown = new Map(); // display retention is scoped to each session, not another store
+    const known = (value, flag) => value?.[flag] ?? false;
+    const retain = (previous, next, field, flag, unknown) => {
+      const hasNext = known(next, flag);
+      const hasPrevious = known(previous, flag);
+      const value = hasNext ? (next[unknown] && hasPrevious ? Math.max(previous[field], next[field]) : next[field]) : previous?.[field] ?? 0;
+      return { [field]: value, [flag]: hasNext || hasPrevious, [unknown]: !hasNext && hasPrevious || !!next?.[unknown] };
+    };
+    function remember(previous, next) {
+      const metrics = {};
+      for (const key of ['input', 'reasoning', 'read', 'write', 'output']) {
+        const before = previous?.own?.metrics?.[key];
+        const after = next.own?.metrics?.[key];
+        metrics[key] = { ...after, ...retain(before, after, 'count', 'countKnown', 'countUnknown'), ...retain(before, after, 'cost', 'costKnown', 'costUnknown'), share: after?.share ?? null };
+        if (metrics[key].countUnknown || metrics[key].costUnknown) metrics[key].share = null;
+      }
+      const own = { ...next.own, calls: Math.max(previous?.own?.calls ?? 0, next.own?.calls ?? 0), callsUnknown: !!next.own?.callsUnknown || (previous?.own?.calls ?? 0) > (next.own?.calls ?? 0), metrics,
+        ...retain(previous?.own, next.own, 'total', 'costKnown', 'costUnknown') };
+      const team = { ...next.team, ...retain(previous?.team, next.team, 'total', 'costKnown', 'costUnknown') };
+      return { ...next, own, team };
+    }
     const style = document.createElement('style');
     style.textContent = css;
     document.head.append(style);
@@ -39,14 +60,28 @@ window.__ModuleLoader__.load({ id: 'dsh-cost-panel', factory: require => {
           if (request) { pending = true; return; }
           request = new AbortController();
           const signal = request.signal;
+          const unavailable = () => {
+            if (stopped) return;
+            const previous = lastKnown.get(sessionId);
+            if (previous) {
+              const value = { ...previous, stale: true };
+              lastKnown.set(sessionId, value);
+              setData(value);
+            }
+          };
           connection.rpc.call('/cost-panel', 'get', { sessionId }, signal).then(result => {
-            if (!stopped) setData(result.ok ? result.value : null);
-          }, () => { if (!stopped) setData(null); }).finally(() => {
+            if (stopped) return;
+            if (result.ok && result.value?.sessionId === sessionId) {
+              const value = remember(lastKnown.get(sessionId), result.value);
+              lastKnown.set(sessionId, value);
+              setData(value);
+            } else unavailable();
+          }, unavailable).finally(() => {
             request = null;
             if (pending && !stopped) { pending = false; load(); }
           });
         };
-        setData(null);
+        setData(lastKnown.get(sessionId) ?? null);
         load();
         const off = sessions.list.subscribe(load); // native all-session projection/lifecycle updates
         const reset = ctx.on('connection/reset', load);
@@ -65,22 +100,25 @@ window.__ModuleLoader__.load({ id: 'dsh-cost-panel', factory: require => {
         window.addEventListener('scroll', place, true);
         return () => { window.removeEventListener('resize', place); window.removeEventListener('scroll', place, true); };
       }, [activeInfo, data]);
-      const own = data?.sessionId === sessionId ? data.own : null;
-      const totalText = s => !s || s.costUnknown ? '—' : money(s.total);
-      const countText = m => !m || m.countUnknown ? '—' : compact(m.count);
-      const costText = m => !m || m.costUnknown ? 'неизвестна' : money(m.cost);
-      const shareText = m => m?.share == null ? '—' : m.share.toFixed(2).replace(/\.00$/, '') + '%';
-      const rows = (name, m) => [h('strong', { key: name }, name), h('span', { key: name + '-n' }, 'Токены', h('b', null, !m || m.countUnknown ? 'неизвестны' : exact(m.count))), h('span', { key: name + '-c' }, 'Стоимость', h('b', null, costText(m))), h('span', { key: name + '-s' }, 'Доля стоимости агента', h('b', null, shareText(m)))];
+      const current = data?.sessionId === sessionId ? data : lastKnown.get(sessionId);
+      const own = current?.own;
+      const totalText = s => money(s?.total ?? 0);
+      const countText = m => compact(m?.count ?? 0);
+      const note = (hasData, incomplete, estimate = false, key = 'note') => h('span', { key }, [!hasData ? 'данные ещё не получены' : incomplete || current?.stale ? 'неполные данные' : '', estimate ? 'оценка по API' : ''].filter(Boolean).join(' · '));
+      const rows = (name, m) => [h('strong', { key: name }, name), h('span', { key: name + '-n' }, 'Токены', h('b', null, exact(m?.count ?? 0))), h('span', { key: name + '-c' }, 'Стоимость', h('b', null, money(m?.cost ?? 0))),
+        ...(m?.share == null ? [] : [h('span', { key: name + '-s' }, 'Доля стоимости агента', h('b', null, m.share.toFixed(2).replace(/\.00$/, '') + '%'))]),
+        note(known(m, 'countKnown'), m?.countUnknown || m?.costUnknown, true, name + '-note'),
+        ...(name === 'Размышления' ? [h('span', { key: 'subset' }, 'Входят в исходящие')] : [])];
       const m = own?.metrics;
-      const cacheKnown = m && !m.read.countUnknown && !m.write.countUnknown;
+      const team = current?.team;
       const names = { calls: 'Вызовы модели', cost: 'Стоимость агента', team: 'Стоимость команды', input: 'Вход без кэша', reasoning: 'Размышления', cache: 'Кэш', output: 'Исходящие' };
-      const values = { calls: !own || own.callsUnknown ? '—' : String(own.calls), cost: totalText(own), team: totalText(data?.team), input: countText(m?.input), reasoning: countText(m?.reasoning), cache: cacheKnown ? compact(m.read.count + m.write.count) : '—', output: countText(m?.output) };
-      const details = { calls: [h('strong', { key: 'h' }, names.calls), h('b', { key: 'v' }, !own || own.callsUnknown ? 'неизвестно' : exact(own.calls))], cost: [h('strong', { key: 'h' }, names.cost), h('b', { key: 'v' }, !own || own.costUnknown ? 'неизвестна' : money(own.total))], team: [h('strong', { key: 'h' }, names.team), h('b', { key: 'v' }, !data || data.team.costUnknown ? 'неизвестна' : money(data.team.total))], input: rows(names.input, m?.input), reasoning: rows(names.reasoning, m?.reasoning), output: rows(names.output, m?.output), cache: [...rows('Кэш · чтение', m?.read), ...rows('Кэш · запись', m?.write)] };
+      const values = { calls: String(own?.calls ?? 0), cost: totalText(own), team: totalText(team), input: countText(m?.input), reasoning: countText(m?.reasoning), cache: compact((m?.read?.count ?? 0) + (m?.write?.count ?? 0)), output: countText(m?.output) };
+      const details = { calls: [h('strong', { key: 'h' }, names.calls), h('b', { key: 'v' }, exact(own?.calls ?? 0)), note(own?.calls > 0, own?.callsUnknown)], cost: [h('strong', { key: 'h' }, names.cost), h('b', { key: 'v' }, totalText(own)), note(known(own, 'costKnown'), own?.costUnknown, true)], team: [h('strong', { key: 'h' }, names.team), h('b', { key: 'v' }, totalText(team)), note(known(team, 'costKnown'), team?.costUnknown, true)], input: rows(names.input, m?.input), reasoning: rows(names.reasoning, m?.reasoning), output: rows(names.output, m?.output), cache: [...rows('Кэш · чтение', m?.read), ...rows('Кэш · запись', m?.write)] };
       const metric = key => h('span', { key, className: 'dsh-cost-metric' + (['cost', 'team'].includes(key) ? ' cost' : '') + (key === 'team' ? ' team' : ''), tabIndex: 0,
         'data-metric': key, 'aria-label': names[key] + ': ' + values[key], 'aria-describedby': active === key ? 'dsh-cost-tooltip-' + sessionId : undefined,
         onMouseEnter: e => setHovered({ key, node: e.currentTarget }), onMouseLeave: () => setHovered(null), onFocus: e => setFocused({ key, node: e.currentTarget }), onBlur: () => setFocused(null),
       }, h('svg', { 'aria-hidden': true, viewBox: '0 0 16 16', dangerouslySetInnerHTML: { __html: paths[key] } }), h('span', { className: 'dsh-cost-value' }, values[key]));
-      return h('div', { className: 'dsh-cost-panel', role: 'group', 'aria-label': 'Расходы агента и команды. Оценка по ценам API, не счёт за подписку; — означает неизвестные данные. Рассуждения входят в исходящие.' },
+      return h('div', { className: 'dsh-cost-panel', role: 'group', 'aria-label': 'Расходы агента и команды. Оценка по ценам API, не счёт за подписку. Неполнота указана в подсказках. Рассуждения входят в исходящие.' },
         h('div', { className: 'dsh-cost-group' }, metric('calls')),
         h('div', { className: 'dsh-cost-group' }, metric('cost'), metric('team')),
         h('div', { className: 'dsh-cost-group' }, metric('input'), metric('reasoning'), metric('cache'), metric('output')),

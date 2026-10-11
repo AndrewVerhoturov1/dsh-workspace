@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import z from 'zod';
 import { isAgentLoopRequest } from '@deepseek-ai/dsh-llm';
 import { Session } from '@deepseek-ai/dsh-session';
-import { foldAttempts, summarize, taskTeam } from './accounting.js';
+import { foldAttempts, summarize, taskTeam, mergeUsage } from './accounting.js';
 export const name = 'cost-panel';
 export const inject = ['sessions', 'llm', 'connection', 'sessionProjections'];
 export function apply(ctx) {
@@ -26,7 +26,7 @@ export function apply(ctx) {
     session.append('cost-panel/attempt', record, { ignorable: true });
     try {
       for await (const chunk of next()) {
-        if (chunk.type === 'usage') { record.usage = chunk.usage; session.append('cost-panel/attempt', record, { ignorable: true }); }
+        if (chunk.type === 'usage') { record.usage = mergeUsage(record.usage, chunk.usage); session.append('cost-panel/attempt', record, { ignorable: true }); }
         if (chunk.type === 'finish') { record.status = chunk.reason.kind; session.append('cost-panel/attempt', record, { ignorable: true }); }
         yield chunk;
       }
@@ -38,12 +38,17 @@ export function apply(ctx) {
     if (endpoint !== 'get' || typeof payload?.sessionId !== 'string' || payload.sessionId.length > 200) return { ok: false, error: { code: 'bad-request', message: 'Expected sessionId', details: { issues: [] } } };
     try {
       const persistence = ctx.get('sessionPersistence');
-      const headers = new Map((persistence ? await persistence.list(signal) : []).map(h => [h.id, h]));
+      let incomplete = !persistence;
+      const headers = new Map();
+      if (persistence) {
+        try { for (const header of await persistence.list(signal)) headers.set(header.id, header); }
+        catch (error) { signal.throwIfAborted(); incomplete = true; }
+      }
       for (const s of ctx.sessions.list()) headers.set(s.id, s.header);
       const team = taskTeam([...headers.values()], payload.sessionId);
       const catalog = JSON.parse(await readFile(new URL('./model-prices.json', import.meta.url), 'utf8'));
       const summaries = new Map();
-      let incomplete = team.incomplete || !persistence;
+      incomplete ||= team.incomplete;
       for (const id of new Set([...team.ids, payload.sessionId])) {
         signal.throwIfAborted();
         const live = ctx.sessions.get(id);
@@ -61,8 +66,9 @@ export function apply(ctx) {
       const own = summaries.get(payload.sessionId);
       if (!own) return { ok: false, error: { code: 'session-not-found', message: 'Session unavailable', details: { sessionId: payload.sessionId } } };
       let total = 0;
-      for (const id of team.ids) { const s = summaries.get(id); if (!s) incomplete = true; else { total += s.total; incomplete ||= s.costUnknown; } }
-      return { ok: true, value: { sessionId: payload.sessionId, own, team: { rootId: team.rootId, sessions: team.ids.length, total, costUnknown: incomplete }, checkedDate: catalog.checkedDate } };
+      let costKnown = false;
+      for (const id of team.ids) { const s = summaries.get(id); if (!s) incomplete = true; else { total += s.total; costKnown ||= s.costKnown; incomplete ||= s.costUnknown; } }
+      return { ok: true, value: { sessionId: payload.sessionId, own, team: { rootId: team.rootId, sessions: team.ids.length, total, costKnown, costUnknown: incomplete }, checkedDate: catalog.checkedDate } };
     } catch (error) {
       if (signal.aborted) return { ok: false, error: { code: 'cancelled', message: 'Request cancelled', details: {} } };
       ctx.logger.warn('cost-panel: accounting read failed', error);
