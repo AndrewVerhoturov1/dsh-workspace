@@ -515,3 +515,22 @@ test('restore early rejection explains applicability and reservation, without Gi
   assert.equal(f.calls.length, before)
 })
 
+test('missing-tree retirement reservation preserves runnable denial and operation/state blockers',async()=>{
+  const f=fixture(),parent=leader('retirement-leader')
+  await f.contexts.prepare(parent)
+  assert.equal(f.contexts.beginOperation(parent.id),true)
+  assert.equal((await f.contexts.recover(parent)).diagnostic,'task worktree missing')
+  assert.equal(f.contexts.get(parent.id),null)
+  const token=Symbol('retirement')
+  assert.equal(f.contexts.beginWorkerAdmission(parent.id,token,true),false,'active operation still blocks retirement')
+  await f.contexts.endOperation(parent.id)
+  assert.equal(f.contexts.beginWorkerAdmission(parent.id,token),false,'no runnable admission')
+  assert.equal(f.contexts.beginWorkerAdmission(parent.id,token,true),true)
+  assert.equal((await f.contexts.close(parent)).diagnostic.code,'TASK_OPERATION_BUSY')
+  f.contexts.endWorkerAdmission(parent.id,token)
+  const stale=f.registry.get(parent.id)
+  for(const patch of [{stage:'closed'}, {stage:'intent'}, {diagnostic:'task branch history uncertain'}, {leaderSessionId:'foreign'}]){
+    await f.registry.change(parent.id,()=>({...stale,...patch}))
+    assert.equal(f.contexts.beginWorkerAdmission(parent.id,token,true),false)
+  }
+})

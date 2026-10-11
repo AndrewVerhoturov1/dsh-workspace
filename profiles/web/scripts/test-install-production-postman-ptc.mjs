@@ -45,7 +45,7 @@ try {
     cpSync(resolve(repositoryRoot,'.agents/skills',role),resolve(stagingRoot,'.agents/skills',role),{recursive:true})
   for(const preset of ['postman-leader','postman-leader-ptc'])
     cpSync(resolve(repositoryRoot,'.agent-presets',preset),resolve(stagingRoot,'.agent-presets',preset),{recursive:true})
-  for(const name of ['postman-native-child-cutoff.patch','postman-native-cold-compact.patch','postman-native-lifecycle.patch','postman-native-close-only-upgrade.patch','postman-native-scoped-compact.patch','postman-native-settlement.patch','postman-native-goal-continuation.patch'])
+  for(const name of ['postman-native-child-cutoff.patch','postman-native-cold-compact.patch','postman-native-lifecycle.patch','postman-native-close-only-upgrade.patch','postman-native-scoped-compact.patch','postman-native-settlement.patch','postman-native-goal-continuation.patch','postman-native-session-events.patch'])
     copyFileSync(resolve(repositoryRoot,'system/patches',name),resolve(stagingRoot,'system/patches',name))
   copyFileSync(resolve(repositoryRoot,'system/patches/apply-postman-native-child-cutoff.mjs'),resolve(stagingRoot,'system/patches/apply-postman-native-child-cutoff.mjs'))
   const pluginRoot = resolve(stagingRoot, 'plugins/dsh-postman-harness')

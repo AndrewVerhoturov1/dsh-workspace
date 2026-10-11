@@ -15,6 +15,12 @@ export function applyPostmanNativeChildCutoff(anchors) {
       targets.set(path, 'node_modules/@deepseek-ai/' + name + '/lib/index.js')
     }
   }
+  // JSONL may use a different Session copy from the subagent/Agent peers.
+  // Register the closure vocabulary in the exact reader too, not just its writer.
+  const sdk = createRequire(anchors[0])
+  const jsonl = createRequire(sdk.resolve('@deepseek-ai/dsh-session-persistence-jsonl'))
+  const persistence = createRequire(jsonl.resolve('@deepseek-ai/dsh-session-persistence'))
+  targets.set(realpathSync(persistence.resolve('@deepseek-ai/dsh-session')), 'node_modules/@deepseek-ai/dsh-session/lib/index.js')
   // The first anchor is the actual CLI SDK (or isolated SDK fixture), not
   // the plugin's optional development dependency tree.
   const goalPath = realpathSync(createRequire(anchors[0]).resolve('@deepseek-ai/dsh-goal-round-driver'))
@@ -68,6 +74,15 @@ export function applyPostmanNativeChildCutoff(anchors) {
         writeFileSync(normalizedPatch, readFileSync(new URL('./postman-native-settlement.patch', import.meta.url), 'utf8').replaceAll('\r', ''))
         if (apply(['--reverse','--check']).status !== 0) {
           if (apply(['--check']).status !== 0 || apply([]).status !== 0) throw new Error('Native settlement patch mismatch: ' + path)
+          changed = true
+        }
+      }
+      if (relative.includes('/dsh-session/')) {
+        // Historical cost snapshots are informational, not execution/closure proof.
+        // Recognize this exact type without rewriting logs or ignoring unknown events.
+        writeFileSync(normalizedPatch, readFileSync(new URL('./postman-native-session-events.patch', import.meta.url), 'utf8').replaceAll('\r', ''))
+        if (apply(['--reverse','--check']).status !== 0) {
+          if (apply(['--check']).status !== 0 || apply([]).status !== 0) throw new Error('Native session event vocabulary patch mismatch: ' + path)
           changed = true
         }
       }

@@ -479,8 +479,13 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
   function hasActiveOperation(leaderId) { return activeOperations.has(leaderId) }
   function hasSyncOperation(leaderId) { return syncOperations.has(leaderId) }
   // Synchronous reservation closes the gap before durable Worker intent/delivery.
-  function beginWorkerAdmission(leaderId, token) {
-    if (!get(leaderId) || pending.has(leaderId) || activeOperations.has(leaderId) || syncOperations.has(leaderId)) return false
+  function canRetireWorkers(leaderId) {
+    const row = registry.get(leaderId)
+    return Boolean(get(leaderId) || row?.leaderSessionId === leaderId &&
+      row.stage === 'uncertain' && row.diagnostic === 'task worktree missing')
+  }
+  function beginWorkerAdmission(leaderId, token, retirement = false) {
+    if (!(retirement ? canRetireWorkers(leaderId) : get(leaderId)) || pending.has(leaderId) || activeOperations.has(leaderId) || syncOperations.has(leaderId)) return false
     let current = workerAdmissions.get(leaderId)
     if (!current) { current = new Set(); workerAdmissions.set(leaderId, current) }
     current.add(token)
@@ -550,7 +555,7 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
   }
   function releaseChild(childId) { children.delete(childId) }
   function dispose() { contexts.clear(); children.clear(); pending.clear(); activeOperations.clear(); syncOperations.clear(); syncQueues.clear(); workerAdmissions.clear(); contextListeners.clear() }
-  return { prepare, recover, close, restore, sync, beginSync, endSync, verifyWorktree, get, record, changeRecord, onContextChange, isRestoring, hasActiveOperation, hasSyncOperation, beginWorkerAdmission, endWorkerAdmission, beginOperation, startRunner, endOperation, reserveRestore, releaseRestore, bindChild, child, recordBridgeRequest, releaseChild, dispose }
+  return { prepare, recover, close, restore, sync, beginSync, endSync, verifyWorktree, get, record, changeRecord, onContextChange, isRestoring, hasActiveOperation, hasSyncOperation, canRetireWorkers, beginWorkerAdmission, endWorkerAdmission, beginOperation, startRunner, endOperation, reserveRestore, releaseRestore, bindChild, child, recordBridgeRequest, releaseChild, dispose }
 }
 
 // Both entrypoints use one facade. Initialization is awaited before Git/child actions;

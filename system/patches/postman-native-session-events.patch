@@ -1,0 +1,11 @@
+diff --git a/node_modules/@deepseek-ai/dsh-session/lib/index.js b/node_modules/@deepseek-ai/dsh-session/lib/index.js
+--- a/node_modules/@deepseek-ai/dsh-session/lib/index.js
++++ b/node_modules/@deepseek-ai/dsh-session/lib/index.js
+@@ -1064,6 +1064,7 @@ const KNOWN_SESSION_EVENT_TYPES = new Set([
+ 	"compaction/end",
+ 	"compaction/prune",
+ 	"compaction/start",
+ 	"compaction/summary",
++	"cost-panel/attempt",
+ 	"feedback/record",
+ 	"goal/change",
