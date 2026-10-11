@@ -149,7 +149,7 @@ test('seeded own history is excluded from fold and descendant team IDs remain un
   const seeded = [
     { type: 'cost-panel/attempt', seq: 0, time: 1, data: { id: 0, purpose: 'conversation', turn: 1, step: 0, usage: usage(99, 99), status: 'stop' } },
   ];
-  const session = h.store.create('seeded', { seed: seeded, meta: { cwd: 'C:/tmp', seedLength: 1 } });
+  const session = h.store.create('seeded', { seed: seeded, meta: { cwd: tmpdir(), seedLength: 1 } });
   assert.equal(foldAttempts(session.header, session.events).attempts.length, 0);
   assert.deepEqual(taskTeam([
     { id: 'root', origin: 'ordinary' }, { id: 'child', origin: 'subagent', parentSession: 'root' },
@@ -160,8 +160,8 @@ test('seeded own history is excluded from fold and descendant team IDs remain un
 test('registered loopback RPC returns own/live-root/live-child/cold-descendant costs from native Host sessions and persisted event shape', async t => {
   const h = await harness(t);
   const root = sessionWithStep(h.store, 'root');
-  const child = h.store.create('child', { meta: { cwd: 'C:/tmp', parentSession: root.id, origin: 'subagent' } });
-  const coldHeader = { id: 'cold', version: 0, createdAt: 1, cwd: 'C:/tmp', parentSession: child.id, origin: 'subagent', seedLength: 0 };
+  const child = h.store.create('child', { meta: { cwd: tmpdir(), parentSession: root.id, origin: 'subagent' } });
+  const coldHeader = { id: 'cold', version: 0, createdAt: 1, cwd: tmpdir(), parentSession: child.id, origin: 'subagent', seedLength: 0 };
   const usageEvent = (session, input) => {
     const request = markAgentLoopRequest({ sessionId: session.id, provider: 'openai', model: 'gpt-6-astra', messages: [], testChunks: [chunk('usage', { usage: usage(input, 2) }), chunk('finish', { reason: { kind: 'stop' } })] });
     return h.llm.stream(request);
