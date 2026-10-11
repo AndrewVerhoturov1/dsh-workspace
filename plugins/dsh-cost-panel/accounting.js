@@ -1,5 +1,12 @@
 // DSH usage buckets are disjoint; reasoning is a subset of output.
 const buckets = { input: 'inputTokens', reasoning: 'reasoningTokens', read: 'cacheReadTokens', write: 'cacheWriteTokens', output: 'outputTokens' };
+// Usage chunks and durable snapshots may omit fields that were already supplied.
+export function mergeUsage(previous, next) {
+  const usage = { ...previous };
+  const partial = !Object.values(buckets).every(field => typeof next?.[field] === 'number');
+  for (const [field, value] of Object.entries(next ?? {})) if (typeof value === 'number') usage[field] = partial && typeof previous?.[field] === 'number' ? Math.max(previous[field], value) : value;
+  return Object.keys(usage).length ? usage : null;
+}
 export function foldAttempts(header, events) {
   const attempts = new Map();
   let route = {};
@@ -17,7 +24,8 @@ export function foldAttempts(header, events) {
         observedSteps.add(stepKey);
         attempts.delete(stepKey);
       }
-      attempts.set('p:' + d.id, { ...d, observed: true });
+      const old = attempts.get('p:' + d.id);
+      attempts.set('p:' + d.id, { ...old, ...d, usage: mergeUsage(old?.usage, d.usage), observed: true });
     } else if (event.type === 'assistant/chunk' || event.type === 'assistant/message') {
       const key = 's:' + d.turn + ':' + d.step;
       const old = attempts.get(key);
@@ -26,10 +34,10 @@ export function foldAttempts(header, events) {
       if (event.type === 'assistant/message') {
         const source = d.message.source;
         if (source.kind === 'model') Object.assign(record, { provider: source.provider, model: source.model });
-        if (d.usage) record.usage = d.usage;
+        record.usage = mergeUsage(record.usage, d.usage);
         record.status = d.interrupted ? 'aborted' : 'finished';
       } else {
-        if (d.chunk.type === 'usage') record.usage = d.chunk.usage;
+        if (d.chunk.type === 'usage') record.usage = mergeUsage(record.usage, d.chunk.usage);
         if (d.chunk.type === 'finish') record.status = d.chunk.reason.kind;
       }
       attempts.set(key, record);
@@ -58,7 +66,7 @@ function ratesFor(model, usage, catalog) {
   return tiers[(prompt > threshold ? 'promptInputGT' : 'promptInputLTE') + threshold] ?? null;
 }
 export function summarize(fold, catalog) {
-  const metrics = Object.fromEntries(Object.keys(buckets).map(k => [k, { count: 0, countUnknown: false, cost: 0, costUnknown: false }]));
+  const metrics = Object.fromEntries(Object.keys(buckets).map(k => [k, { count: 0, countKnown: false, countUnknown: false, cost: 0, costKnown: false, costUnknown: false }]));
   let total = 0;
   let costUnknown = fold.incompleteHistory;
   for (const attempt of fold.attempts) {
@@ -70,6 +78,7 @@ export function summarize(fold, catalog) {
       const count = usage?.[field];
       if (typeof count !== 'number') { m.countUnknown = true; m.costUnknown = true; continue; }
       m.count += count;
+      m.countKnown = true;
       let amount;
       if (count === 0) amount = 0;
       else if (key === 'write' && prices.write == null && rates?.cacheWrite5m != null) {
@@ -79,13 +88,13 @@ export function summarize(fold, catalog) {
         if (typeof short === 'number' && typeof long === 'number' && short + long === count) amount = (short * rates.cacheWrite5m + long * rates.cacheWrite1h) / catalog.unitTokens;
       } else if (typeof prices[key] === 'number') amount = count * prices[key] / catalog.unitTokens;
       if (amount == null) m.costUnknown = true;
-      else m.cost += amount;
+      else { m.cost += amount; m.costKnown = true; }
     }
   }
   for (const key of ['input', 'read', 'write', 'output']) { total += metrics[key].cost; costUnknown ||= metrics[key].costUnknown; }
   if (fold.incompleteHistory) for (const m of Object.values(metrics)) { m.countUnknown = true; m.costUnknown = true; }
   for (const m of Object.values(metrics)) m.share = !costUnknown && !m.costUnknown && total > 0 ? m.cost / total * 100 : null;
-  return { calls: fold.attempts.length, callsUnknown: fold.incompleteHistory, total, costUnknown, metrics };
+  return { calls: fold.attempts.length, callsUnknown: fold.incompleteHistory, total, costKnown: ['input', 'read', 'write', 'output'].some(key => metrics[key].costKnown), costUnknown, metrics };
 }
 export function taskTeam(headers, currentId) {
   const byId = new Map(headers.map(h => [h.id, h]));

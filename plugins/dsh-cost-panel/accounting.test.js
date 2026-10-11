@@ -163,3 +163,79 @@ test('team is root plus unique subagent descendants, excluding ordinary fork anc
   assert.equal(seededFold.attempts.length, 1);
   assert.equal(seededFold.incompleteHistory, true);
 });
+
+test('durable snapshots preserve earlier usage fields without adding repeated snapshots', () => {
+  const events = [
+    { type: 'cost-panel/attempt', seq: 0, data: attempt('one', 'gpt-6-luna', { turn: 1, step: 0, usage: usage(10, 3, 20, 4, 7) }) },
+    { type: 'cost-panel/attempt', seq: 1, data: { id: 'one', purpose: 'conversation', turn: 1, step: 0, usage: { outputTokens: 9 }, status: 'stop' } },
+    { type: 'cost-panel/attempt', seq: 2, data: { id: 'one', purpose: 'conversation', turn: 1, step: 0, usage: { inputTokens: 0, outputTokens: 0 }, status: 'stop' } },
+    { type: 'cost-panel/attempt', seq: 3, data: { id: 'one', purpose: 'conversation', turn: 1, step: 0, usage: null, status: 'stop' } },
+    assistantMessage(1, 0, 'gpt-6-luna', usage(999, 999, 999, 999, 999)),
+  ];
+  const folded = foldAttempts(header, events);
+  assert.equal(folded.attempts.length, 1);
+  assert.deepEqual(folded.attempts[0].usage, usage(10, 3, 20, 4, 9));
+  const result = summarize(folded, catalog);
+  assert.equal(result.calls, 1);
+  assert.equal(result.metrics.reasoning.count, 3);
+  assert.ok(Math.abs(result.total - (10 * 0.1 + 20 * 0.01 + 4 * 0.125 + 9 * 0.5) / 1e6) < 1e-15);
+});
+
+test('old session uses latest saved fields from chunks and partial final message, including gaps', () => {
+  const events = [
+    { type: 'request/header', seq: 0, data: { header: { config: { model: 'gpt-6-luna', provider: 'openai' } } } },
+    { type: 'assistant/chunk', seq: 1, data: { turn: 1, step: 0, chunk: { type: 'usage', usage: usage(10, 3, 20, 4, 7) } } },
+    assistantMessage(1, 0, 'gpt-6-luna', { outputTokens: 9 }),
+    { type: 'compaction/start', seq: 20, data: {} },
+  ];
+  const result = summarize(foldAttempts(header, events), catalog);
+  assert.equal(result.calls, 1);
+  assert.equal(result.callsUnknown, true);
+  assert.equal(result.metrics.input.count, 10);
+  assert.equal(result.metrics.input.countKnown, true);
+  assert.equal(result.metrics.reasoning.count, 3);
+  assert.equal(result.metrics.read.count, 20);
+  assert.equal(result.metrics.write.count, 4);
+  assert.equal(result.metrics.output.count, 9);
+  assert.equal(result.costKnown, true);
+  assert.equal(result.costUnknown, true);
+  assert.ok(result.total > 0);
+});
+
+test('empty history and absent usage have no received token data, unlike explicit zero', () => {
+  for (const result of [cost([]), cost([attempt('no-usage', 'gpt-6-luna', { usage: null })])]) {
+    assert.equal(result.total, 0);
+    assert.equal(result.costKnown, false);
+    for (const metric of Object.values(result.metrics)) {
+      assert.equal(metric.count, 0);
+      assert.equal(metric.countKnown, false);
+      assert.equal(metric.costKnown, false);
+    }
+  }
+  const zero = cost([attempt('zero')]);
+  assert.equal(zero.costKnown, true);
+  assert.equal(zero.metrics.input.countKnown, true);
+  assert.equal(zero.total, 0);
+});
+
+test('known part of a bill survives missing model, usage, cache TTL and historical completeness', () => {
+  const result = cost([
+    attempt('priced', 'gpt-6-luna', { usage: usage(10, 3, 20, 4, 7) }),
+    attempt('missing', 'unknown-model', { usage: { inputTokens: 100, outputTokens: 50 } }),
+    attempt('no-usage', 'gpt-6-luna', { usage: null }),
+  ], true);
+  assert.equal(result.calls, 3);
+  assert.equal(result.callsUnknown, true);
+  assert.equal(result.metrics.input.count, 110);
+  assert.equal(result.metrics.output.count, 57);
+  assert.equal(result.metrics.reasoning.count, 3);
+  assert.equal(result.metrics.input.countUnknown, true);
+  assert.equal(result.costKnown, true);
+  assert.equal(result.costUnknown, true);
+  assert.ok(Math.abs(result.total - (10 * 0.1 + 20 * 0.01 + 4 * 0.125 + 7 * 0.5) / 1e6) < 1e-15);
+  const ttl = cost([attempt('ttl', 'claude-fable-5-1', { usage: usage(10, 3, 20, 4, 7) })]);
+  assert.equal(ttl.metrics.write.count, 4);
+  assert.equal(ttl.metrics.write.costKnown, false);
+  assert.equal(ttl.costUnknown, true);
+  assert.ok(ttl.total > 0);
+});
