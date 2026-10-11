@@ -37,7 +37,7 @@ jobs:
           import { resolve, dirname } from 'node:path';
           import { applySessionIgnorableEvents } from './plugins/dsh-cost-panel/session-compat.mjs';
           const sdk = createRequire(resolve('plugins/dsh-postman-harness/package.json')).resolve('@deepseek-ai/dsh/package.json');
-          symlinkSync(resolve(dirname(realpathSync(sdk)), '../..'), 'plugins/dsh-cost-panel/node_modules', 'dir');
+          symlinkSync(resolve(dirname(realpathSync(sdk)), 'node_modules'), 'plugins/dsh-cost-panel/node_modules', 'dir');
           applySessionIgnorableEvents([sdk, resolve('plugins/dsh-cost-panel/package.json')]);
           JS
       - name: Verify persistence with the panel disabled and required-event rejection
