@@ -4,7 +4,7 @@
 Boundary:
 - requires an already successful P5 ARTIFACT_DOM_CONFIRMED proof;
 - re-proves the same P5 DOM identity immediately before clicking;
-- clicks exactly one exact correlated control under page.expect_download();
+- uses bounded same-answer download attempts under page.expect_download();
 - never scans a browser Downloads directory for candidates;
 - saves raw bytes to request-scoped controlled staging;
 - validates through the existing WP-002 Node validator;
@@ -25,6 +25,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from typing import Any, Callable
 import zipfile
 
@@ -519,7 +520,7 @@ def _capture_download(page, control, staging_zip, expected_filename, download_ti
             return _result(DOWNLOAD_NOT_FOUND, ok=False, details={
                 "phase": "download_event", "reason": event_error,
                 "clickAttempted": click_attempted, "retryAllowed": False,
-                "evidenceLimit": "Native API did not expose bytes; click is never repeated."})
+                "evidenceLimit": "Native API did not expose bytes for this attempt."})
 
     suggested = str(getattr(download, "suggested_filename", "") or "")[:512]
     sha_decoration = re.fullmatch(
@@ -626,7 +627,7 @@ def download_validated_artifact(
     validator_runner: Callable[[Path, dict[str, Any]], dict[str, Any]] | None = None,
     candidate_root: str | os.PathLike[str] | None = None,
 ) -> dict[str, Any]:
-    """Perform P6 after P5 proof. Never retries a click/download."""
+    """Try twice ungated (10s apart), then wait/download gated for at most 30s."""
     try:
         trusted = _validate_expected_request(request_id, expected_filename, expected_request)
     except Exception as exc:
@@ -680,81 +681,168 @@ def download_validated_artifact(
 
     staging_dir = staging_zip.parent
 
-    if initial["candidate"]:
-        reproof = detector.discover_artifact_candidate(page, expected_prompt=expected_prompt,
-            expected_chat_url=expected_chat_url, request_id=request_id,
-            expected_filename=expected_filename, completed_observer_result=completed_observer_result)
-    else:
-        reproof = detector.detect_artifact_dom(page, expected_prompt=expected_prompt,
-            expected_chat_url=expected_chat_url, request_id=request_id,
-            expected_filename=expected_filename, completed_observer_result=completed_observer_result)
-    current = _p5_identity(reproof, allow_candidate=initial["candidate"])
-    if current is None:
-        return _result(
-            DOWNLOAD_PROOF_CHANGED,
-            ok=False,
-            recoverable=bool(reproof.get("recoverable")) if isinstance(reproof, dict) else False,
-            details={
-                "phase": "preclick_reproof",
-                "detectorCode": reproof.get("code") if isinstance(reproof, dict) else "",
-                "clickAttempted": False,
-            },
-        )
-    if not _same_p5_identity(initial, current):
-        return _result(
-            DOWNLOAD_PROOF_CHANGED,
-            ok=False,
-            details={
-                "phase": "preclick_reproof",
-                "reason": "p5_identity_changed",
-                "clickAttempted": False,
-            },
-        )
+    current = initial
 
-    try:
-        control = _resolve_control(page, current)
-        attachment_label = current["attachment"].get("label", "") if current["candidate"] else expected_filename
-        snapshot = _control_snapshot(control, attachment_label)
-    except Exception as exc:
-        return _result(
-            DOWNLOAD_CONTROL_INVALID,
-            ok=False,
-            details={
-                "phase": "preclick_control",
-                "reason": str(exc)[:500],
-                "clickAttempted": False,
-            },
-        )
+    def attempt_download(gated: bool, deadline: float | None) -> dict[str, Any]:
+        nonlocal current
+        if initial["candidate"]:
+            reproof = detector.discover_artifact_candidate(page, expected_prompt=expected_prompt,
+                expected_chat_url=expected_chat_url, request_id=request_id,
+                expected_filename=expected_filename, completed_observer_result=completed_observer_result)
+        else:
+            reproof = detector.detect_artifact_dom(page, expected_prompt=expected_prompt,
+                expected_chat_url=expected_chat_url, request_id=request_id,
+                expected_filename=expected_filename, completed_observer_result=completed_observer_result)
+        current = _p5_identity(reproof, allow_candidate=initial["candidate"])
+        if current is None:
+            return _result(
+                DOWNLOAD_PROOF_CHANGED,
+                ok=False,
+                recoverable=bool(reproof.get("recoverable")) if isinstance(reproof, dict) else False,
+                details={
+                    "phase": "preclick_reproof",
+                    "detectorCode": reproof.get("code") if isinstance(reproof, dict) else "",
+                    "clickAttempted": False,
+                },
+            )
+        if not _same_p5_identity(initial, current):
+            return _result(
+                DOWNLOAD_PROOF_CHANGED,
+                ok=False,
+                details={
+                    "phase": "preclick_reproof",
+                    "reason": "p5_identity_changed",
+                    "clickAttempted": False,
+                },
+            )
 
-    if not (
-        snapshot["eligibleNativeDownload"]
-        and snapshot["connected"]
-        and snapshot["visible"]
-        and not snapshot["disabled"]
-        and (snapshot["visibleLabel"] == attachment_label if current["candidate"] else snapshot["visibleLabelExact"])
-    ):
-        return _result(
-            DOWNLOAD_CONTROL_INVALID,
-            ok=False,
-            details={
-                "phase": "preclick_control",
-                "control": snapshot,
-                "clickAttempted": False,
-            },
-        )
+        try:
+            control = _resolve_control(page, current)
+            attachment_label = current["attachment"].get("label", "") if current["candidate"] else expected_filename
+            snapshot = _control_snapshot(control, attachment_label)
+        except Exception as exc:
+            return _result(
+                DOWNLOAD_CONTROL_INVALID,
+                ok=False,
+                details={
+                    "phase": "preclick_control",
+                    "reason": str(exc)[:500],
+                    "clickAttempted": False,
+                },
+            )
 
-    try:
-        with cdp_download.download_behavior(page, cdp_artifacts_dir):
-            provenance = {"requestId":request_id,"chatUrl":current["chatUrl"],
-                "assistantTextSha256":current["assistantTextSha256"],"assistantIndex":current["assistantIndex"],
-                "assistantIdentity":current["assistantIdentity"],"expectedFilename":expected_filename}
-            captured = _capture_download(page, control, staging_zip, expected_filename,
-                download_timeout_ms, click_timeout_ms, candidate_path, provenance,
-                attachment_label)
-    except Exception as exc:
-        return _result(DOWNLOAD_BEHAVIOR_FAILED, ok=False,
-                       details={"phase": "download_capture", "reason": str(exc)[:500],
-                                "retryAllowed": False})
+        if not (
+            (not gated or snapshot["eligibleNativeDownload"])
+            and snapshot["connected"]
+            and snapshot["visible"]
+            and not snapshot["disabled"]
+            and (snapshot["visibleLabel"] == attachment_label if current["candidate"] else snapshot["visibleLabelExact"])
+        ):
+            return _result(
+                DOWNLOAD_CONTROL_INVALID,
+                ok=False,
+                details={
+                    "phase": "preclick_control",
+                    "control": snapshot,
+                    "clickAttempted": False,
+                },
+            )
+
+        try:
+            with cdp_download.download_behavior(page, cdp_artifacts_dir):
+                remaining_ms = int((deadline - time.monotonic()) * 1000) if deadline is not None else download_timeout_ms
+                if remaining_ms <= 0:
+                    return _result(DOWNLOAD_NOT_FOUND, ok=False, details={"phase": "download_deadline", "clickAttempted": False})
+                provenance = {"requestId": request_id, "chatUrl": current["chatUrl"],
+                    "assistantTextSha256": current["assistantTextSha256"], "assistantIndex": current["assistantIndex"],
+                    "assistantIdentity": current["assistantIdentity"], "expectedFilename": expected_filename}
+                return _capture_download(page, control, staging_zip, expected_filename,
+                    min(download_timeout_ms, remaining_ms), min(click_timeout_ms, remaining_ms),
+                    candidate_path, provenance, attachment_label)
+        except Exception as exc:
+            return _result(DOWNLOAD_BEHAVIOR_FAILED, ok=False,
+                details={"phase": "download_capture", "reason": str(exc)[:500], "retryAllowed": False})
+
+    previous_candidate = None
+    attempt_number = 0
+    retryable = False
+
+    def retain_failed_capture() -> None:
+        nonlocal previous_candidate
+        descriptor = captured.get("details", {}).get("candidate")
+        if not candidate_path.exists() and not staging_zip.exists():
+            return
+        archive = candidate_dir / f"attempt-{attempt_number}"
+        archive.mkdir(exist_ok=False)
+        if candidate_path.exists():
+            os.replace(candidate_path, archive / "capture.bin")
+            if descriptor:
+                descriptor["path"] = str((archive / "capture.bin").resolve())
+                previous_candidate = descriptor
+                _record_candidate_metadata(archive / "capture.bin", descriptor)
+        if staging_zip.exists():
+            os.replace(staging_zip, archive / "staging.bin")
+        metadata_path = candidate_dir / "candidate.json"
+        if metadata_path.exists():
+            metadata_path.unlink()
+
+    # Only missing/interrupted downloads may repeat. Identity, filename, ZIP,
+    # source/copy and durable-store refusals remain terminal.
+    for stage in range(3):
+        if stage == 1:
+            time.sleep(10)
+        deadline = time.monotonic() + 30 if stage == 2 else None
+        while True:
+            attempt_number += 1
+            captured = attempt_download(stage == 2, deadline)
+            if captured["ok"] and deadline is not None and time.monotonic() > deadline:
+                captured = _result(DOWNLOAD_INTERRUPTED, ok=False, details={
+                    **captured["details"], "phase": "download_deadline", "retryAllowed": False})
+            if captured["ok"]:
+                break
+            details = captured.get("details", {})
+            unavailable_control = (captured["code"] == DOWNLOAD_CONTROL_INVALID
+                or (captured["code"] == DOWNLOAD_PROOF_CHANGED
+                    and details.get("phase") == "preclick_reproof"
+                    and details.get("detectorCode") == detector.ARTIFACT_ATTACHMENT_NOT_FOUND))
+            retryable = captured["code"] in (DOWNLOAD_NOT_FOUND, DOWNLOAD_INTERRUPTED)
+            reasons = details.get("candidate", {}).get("reasons", []) if details.get("candidate") else []
+            if any(reason in reasons for reason in ("NATIVE_SAVE_FAILED", "CANDIDATE_CAPTURE_FAILED",
+                    "COMPRESSED_SIZE_LIMIT", "CAPTURE_TRUNCATED", "SOURCE_COPY_MISMATCH")):
+                retryable = False
+            if not retryable and not (stage == 2 and unavailable_control):
+                break
+            if stage != 2:
+                try:
+                    retain_failed_capture()
+                except OSError as exc:
+                    captured = _result(RESULT_STORE_FAILED, ok=False, details={
+                        **details, "phase": "retry_preserve", "reason": str(exc)[:500]})
+                    retryable = False
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                retain_failed_capture()
+            except OSError as exc:
+                captured = _result(RESULT_STORE_FAILED, ok=False, details={
+                    **details, "phase": "retry_preserve", "reason": str(exc)[:500]})
+                retryable = False
+                break
+            time.sleep(min(1, max(0, deadline - time.monotonic())))
+            if time.monotonic() >= deadline:
+                break
+        if captured["ok"] or (not retryable and not (stage == 2 and unavailable_control)):
+            break
+    if not captured["ok"] and previous_candidate and not candidate_path.exists():
+        try:
+            os.replace(previous_candidate["path"], candidate_path)
+            previous_candidate["path"] = str(candidate_path.resolve())
+            captured["details"]["candidate"] = previous_candidate
+        except OSError as exc:
+            return _result(RESULT_STORE_FAILED, ok=False, details={
+                "phase": "retry_restore", "reason": str(exc)[:500], "candidate": previous_candidate})
     descriptor = captured.get("details", {}).get("candidate")
     if descriptor:
         descriptor["reasons"].extend(reason for reason in initial["reasons"] if reason not in descriptor["reasons"])
