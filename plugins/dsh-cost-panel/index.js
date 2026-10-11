@@ -67,8 +67,10 @@ export function apply(ctx) {
       if (!own) return { ok: false, error: { code: 'session-not-found', message: 'Session unavailable', details: { sessionId: payload.sessionId } } };
       let total = 0;
       let costKnown = false;
-      for (const id of team.ids) { const s = summaries.get(id); if (!s) incomplete = true; else { total += s.total; costKnown ||= s.costKnown; incomplete ||= s.costUnknown; } }
-      return { ok: true, value: { sessionId: payload.sessionId, own, team: { rootId: team.rootId, sessions: team.ids.length, total, costKnown, costUnknown: incomplete }, checkedDate: catalog.checkedDate } };
+      let rateUnknown = false;
+      let tierUnknown = false;
+      for (const id of team.ids) { const s = summaries.get(id); if (!s) incomplete = true; else { total += s.total; costKnown ||= s.costKnown; incomplete ||= s.costUnknown; rateUnknown ||= s.rateUnknown; tierUnknown ||= s.tierUnknown; } }
+      return { ok: true, value: { sessionId: payload.sessionId, own, team: { rootId: team.rootId, sessions: team.ids.length, total, costKnown, costUnknown: incomplete, rateUnknown, tierUnknown }, checkedDate: catalog.checkedDate } };
     } catch (error) {
       if (signal.aborted) return { ok: false, error: { code: 'cancelled', message: 'Request cancelled', details: {} } };
       ctx.logger.warn('cost-panel: accounting read failed', error);

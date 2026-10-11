@@ -202,6 +202,25 @@ test('old session uses latest saved fields from chunks and partial final message
   assert.ok(result.total > 0);
 });
 
+test('partial prompt usage keeps a lower-bound cost, and a known sum above threshold proves the upper tier', () => {
+  const partial = cost([attempt('partial', 'gpt-6-luna', { provider: 'codex', usage: { inputTokens: 1224, cacheReadTokens: 39424, outputTokens: 535 } })]);
+  assert.ok(Math.abs(partial.total - (1224 * 0.1 + 39424 * 0.01 + 535 * 0.5) / 1e6) < 1e-15);
+  assert.equal(partial.costKnown, true);
+  assert.equal(partial.costUnknown, true);
+  assert.equal(partial.tierUnknown, true);
+  assert.equal(partial.rateUnknown, false);
+  assert.equal(partial.metrics.reasoning.countKnown, false);
+  assert.equal(partial.metrics.write.countKnown, false);
+  const above = cost([attempt('above', 'gpt-6-luna', { usage: { inputTokens: 272001, outputTokens: 1 } })]);
+  assert.equal(above.tierUnknown, false);
+  assert.equal(above.metrics.input.costUnknown, false);
+  assert.equal(above.metrics.output.cost, 0.75 / 1e6);
+  assert.equal(above.costUnknown, true); // absent cache usage stays absent
+  const unknown = cost([attempt('unknown', 'not-in-catalog', { usage: { inputTokens: 1, outputTokens: 1 } })]);
+  assert.equal(unknown.rateUnknown, true);
+  assert.equal(unknown.tierUnknown, false);
+});
+
 test('empty history and absent usage have no received token data, unlike explicit zero', () => {
   for (const result of [cost([]), cost([attempt('no-usage', 'gpt-6-luna', { usage: null })])]) {
     assert.equal(result.total, 0);
