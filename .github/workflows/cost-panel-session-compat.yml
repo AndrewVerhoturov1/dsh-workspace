@@ -1,0 +1,51 @@
+name: Cost panel session compatibility
+
+on:
+  pull_request:
+    paths:
+      - 'plugins/dsh-cost-panel/**'
+      - 'profiles/web/scripts/install-production.mjs'
+      - '.github/workflows/cost-panel-session-compat.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'plugins/dsh-cost-panel/**'
+      - 'profiles/web/scripts/install-production.mjs'
+      - '.github/workflows/cost-panel-session-compat.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  reopen-session:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '10'
+      - name: Install pinned native SDK
+        run: pnpm --dir plugins/dsh-postman-harness install --frozen-lockfile --ignore-scripts
+      - name: Use the SDK dependency identity and install append compatibility
+        run: |
+          node --input-type=module <<'JS'
+          import { createRequire } from 'node:module';
+          import { symlinkSync, realpathSync, mkdirSync } from 'node:fs';
+          import { resolve, dirname } from 'node:path';
+          import { applySessionIgnorableEvents } from './plugins/dsh-cost-panel/session-compat.mjs';
+          const sdk = createRequire(resolve('plugins/dsh-postman-harness/package.json')).resolve('@deepseek-ai/dsh/package.json');
+          const native = createRequire(sdk);
+          mkdirSync('plugins/dsh-cost-panel/node_modules/@deepseek-ai', {recursive: true});
+          for (const name of ['@deepseek-ai/cordis', '@deepseek-ai/dsh-llm', '@deepseek-ai/dsh-session',
+            '@deepseek-ai/dsh-session-projection', '@deepseek-ai/dsh-session-persistence-jsonl',
+            '@deepseek-ai/dsh-host-apiproxy', 'zod']) {
+            symlinkSync(dirname(realpathSync(native.resolve(name + '/package.json'))),
+              resolve('plugins/dsh-cost-panel/node_modules', name), 'dir');
+          }
+          applySessionIgnorableEvents([sdk, resolve('plugins/dsh-cost-panel/package.json')]);
+          JS
+      - name: Verify persistence with the panel disabled and required-event rejection
+        run: node --test plugins/dsh-cost-panel/*.test.js

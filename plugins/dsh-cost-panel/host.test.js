@@ -8,6 +8,10 @@ import { rpcResultSchema } from '@deepseek-ai/dsh-host-apiproxy/api/rpc.schema';
 import { z } from 'zod';
 import { foldAttempts, taskTeam } from './accounting.js';
 import { apply } from './index.js';
+import { JsonlSessionPersistence } from '@deepseek-ai/dsh-session-persistence-jsonl';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 
 const usage = (inputTokens, outputTokens) => ({ inputTokens, reasoningTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens });
 const chunk = (type, extra = {}) => ({ type, ...extra });
@@ -62,6 +66,7 @@ test('native SessionStore + marked Agent Loop request records exact session step
   for await (const item of iter) yielded.push(item);
   assert.deepEqual(yielded, original);
   const records = session.events.filter(e => e.type === 'cost-panel/attempt').map(e => e.data);
+  assert.ok(session.events.filter(e => e.type === 'cost-panel/attempt').every(e => e.ignorable === true));
   assert.equal(records.length, 3);
   assert.equal(records[0].purpose, 'conversation');
   assert.deepEqual([records[0].turn, records[0].step], [1, 0]);
@@ -72,6 +77,37 @@ test('native SessionStore + marked Agent Loop request records exact session step
   const beforeUnknown = h.projections.snapshot(session).values.costPanelRevision;
   session.append('extension/future-event', { payload: 1 });
   assert.equal(h.projections.snapshot(session).values.costPanelRevision, beforeUnknown);
+});
+
+test('cost attempts reopen with the native persistence reader after the plugin is disabled; unknown required events remain rejected', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-cost-compat-'));
+  assert.equal(dirname(resolve(directory)), resolve(tmpdir()));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const h = await harness(t);
+  const writerContext = new Context();
+  new SessionStore(writerContext);
+  const persistence = new JsonlSessionPersistence(writerContext, { root: directory });
+  const session = sessionWithStep(h.store, 'cost-reopen', { cwd: directory });
+  const request = markAgentLoopRequest({ sessionId: session.id, provider: 'p', model: 'm', messages: [],
+    testChunks: [chunk('usage', { usage: usage(7, 3) }), chunk('finish', { reason: { kind: 'stop' } })] });
+  for await (const _ of h.llm.stream(request)) { /* exercise the actual writer */ }
+  session.append('step/end', { turn: 1, step: 0 });
+  session.append('turn/end', { turn: 1, reason: { kind: 'completed' } });
+  await persistence.create(session.header);
+  await persistence.append(session.id, session.events);
+  const readerContext = new Context();
+  new SessionStore(readerContext);
+  const reader = new JsonlSessionPersistence(readerContext, { root: directory });
+  try {
+    const stored = await reader.inspect(session.id);
+    const attempts = stored.events.filter(e => e.type === 'cost-panel/attempt');
+    assert.equal(attempts.length, 3);
+    assert.ok(attempts.every(e => e.ignorable === true));
+    assert.deepEqual(foldAttempts(stored.meta, stored.events).attempts[0].usage, usage(7, 3));
+    session.append('extension/required-test', { necessary: true });
+    await persistence.append(session.id, [session.events.at(-1)]);
+    await assert.rejects(reader.inspect(session.id), /unknown to this harness and not marked ignorable/);
+  } finally { await readerContext.fiber.dispose(); await writerContext.fiber.dispose(); }
 });
 
 test('separate retry requests on same turn-step survive fold and auxiliary compaction has its own purpose', async t => {
@@ -103,6 +139,7 @@ test('native observer persists usage and interrupted status when stream aborts e
   await iter.next();
   await iter.return();
   const records = session.events.filter(e => e.type === 'cost-panel/attempt').map(e => e.data);
+  assert.ok(session.events.filter(e => e.type === 'cost-panel/attempt').every(e => e.ignorable === true));
   assert.equal(records.at(-1).status, 'interrupted');
   assert.deepEqual(records.at(-1).usage, usage(7, 3));
 });
@@ -112,7 +149,7 @@ test('seeded own history is excluded from fold and descendant team IDs remain un
   const seeded = [
     { type: 'cost-panel/attempt', seq: 0, time: 1, data: { id: 0, purpose: 'conversation', turn: 1, step: 0, usage: usage(99, 99), status: 'stop' } },
   ];
-  const session = h.store.create('seeded', { seed: seeded, meta: { cwd: 'C:/tmp', seedLength: 1 } });
+  const session = h.store.create('seeded', { seed: seeded, meta: { cwd: tmpdir(), seedLength: 1 } });
   assert.equal(foldAttempts(session.header, session.events).attempts.length, 0);
   assert.deepEqual(taskTeam([
     { id: 'root', origin: 'ordinary' }, { id: 'child', origin: 'subagent', parentSession: 'root' },
@@ -123,8 +160,8 @@ test('seeded own history is excluded from fold and descendant team IDs remain un
 test('registered loopback RPC returns own/live-root/live-child/cold-descendant costs from native Host sessions and persisted event shape', async t => {
   const h = await harness(t);
   const root = sessionWithStep(h.store, 'root');
-  const child = h.store.create('child', { meta: { cwd: 'C:/tmp', parentSession: root.id, origin: 'subagent' } });
-  const coldHeader = { id: 'cold', version: 0, createdAt: 1, cwd: 'C:/tmp', parentSession: child.id, origin: 'subagent', seedLength: 0 };
+  const child = h.store.create('child', { meta: { cwd: tmpdir(), parentSession: root.id, origin: 'subagent' } });
+  const coldHeader = { id: 'cold', version: 0, createdAt: 1, cwd: tmpdir(), parentSession: child.id, origin: 'subagent', seedLength: 0 };
   const usageEvent = (session, input) => {
     const request = markAgentLoopRequest({ sessionId: session.id, provider: 'openai', model: 'gpt-6-astra', messages: [], testChunks: [chunk('usage', { usage: usage(input, 2) }), chunk('finish', { reason: { kind: 'stop' } })] });
     return h.llm.stream(request);
@@ -153,6 +190,13 @@ test('registered loopback RPC returns own/live-root/live-child/cold-descendant c
   assert.ok(Math.abs(childResult.value.team.total - (60 * 10 + 6 * 50) / 1e6) < 1e-15);
   assert.ok(childResult.value.team.total > childResult.value.own.total);
   assert.equal(childResult.value.team.costUnknown, false);
+  persistence.inspect = async () => { throw new Error('Unsupported required event in a cold child'); };
+  const incompleteTeam = await handler('get', { sessionId: root.id }, controller.signal);
+  assert.equal(incompleteTeam.ok, true);
+  assert.deepEqual(incompleteTeam.value.own, own.value.own);
+  assert.equal(incompleteTeam.value.team.costUnknown, true);
+  const unavailableSelected = await handler('get', { sessionId: 'cold' }, controller.signal);
+  assert.equal(unavailableSelected.ok, false);
   const invalid = await handler('other', { sessionId: root.id }, controller.signal);
   assert.equal(invalid.ok, false);
   assert.equal(invalid.error.code, 'bad-request');
