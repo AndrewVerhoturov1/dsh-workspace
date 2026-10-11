@@ -104,21 +104,18 @@ window.__ModuleLoader__.load({ id: 'dsh-cost-panel', factory: require => {
       const own = current?.own;
       const totalText = s => money(s?.total ?? 0);
       const countText = m => compact(m?.count ?? 0);
-      const note = (hasData, incomplete, estimate = false, key = 'note') => h('span', { key }, [!hasData ? 'данные ещё не получены' : incomplete || current?.stale ? 'неполные данные' : '', estimate ? 'оценка по API' : ''].filter(Boolean).join(' · '));
       const rows = (name, m) => [h('strong', { key: name }, name), h('span', { key: name + '-n' }, 'Токены', h('b', null, exact(m?.count ?? 0))), h('span', { key: name + '-c' }, 'Стоимость', h('b', null, money(m?.cost ?? 0))),
-        ...(m?.share == null ? [] : [h('span', { key: name + '-s' }, 'Доля стоимости агента', h('b', null, m.share.toFixed(2).replace(/\.00$/, '') + '%'))]),
-        note(known(m, 'countKnown'), m?.countUnknown || m?.costUnknown, true, name + '-note'),
-        ...(name === 'Размышления' ? [h('span', { key: 'subset' }, 'Входят в исходящие')] : [])];
+        h('span', { key: name + '-s' }, 'Доля стоимости агента', h('b', null, (own?.total > 0 ? (m?.cost ?? 0) / own.total * 100 : 0).toFixed(2).replace(/\.00$/, '') + '%'))];
       const m = own?.metrics;
       const team = current?.team;
       const names = { calls: 'Вызовы модели', cost: 'Стоимость агента', team: 'Стоимость команды', input: 'Вход без кэша', reasoning: 'Размышления', cache: 'Кэш', output: 'Исходящие' };
       const values = { calls: String(own?.calls ?? 0), cost: totalText(own), team: totalText(team), input: countText(m?.input), reasoning: countText(m?.reasoning), cache: compact((m?.read?.count ?? 0) + (m?.write?.count ?? 0)), output: countText(m?.output) };
-      const details = { calls: [h('strong', { key: 'h' }, names.calls), h('b', { key: 'v' }, exact(own?.calls ?? 0)), note(own?.calls > 0, own?.callsUnknown)], cost: [h('strong', { key: 'h' }, names.cost), h('b', { key: 'v' }, totalText(own)), note(known(own, 'costKnown'), own?.costUnknown, true)], team: [h('strong', { key: 'h' }, names.team), h('b', { key: 'v' }, totalText(team)), note(known(team, 'costKnown'), team?.costUnknown, true)], input: rows(names.input, m?.input), reasoning: rows(names.reasoning, m?.reasoning), output: rows(names.output, m?.output), cache: [...rows('Кэш · чтение', m?.read), ...rows('Кэш · запись', m?.write)] };
+      const details = { calls: [h('strong', { key: 'h' }, names.calls), h('b', { key: 'v' }, exact(own?.calls ?? 0))], cost: [h('strong', { key: 'h' }, names.cost), h('b', { key: 'v' }, totalText(own))], team: [h('strong', { key: 'h' }, names.team), h('b', { key: 'v' }, totalText(team))], input: rows(names.input, m?.input), reasoning: rows(names.reasoning, m?.reasoning), output: rows(names.output, m?.output), cache: [...rows('Кэш · чтение', m?.read), ...rows('Кэш · запись', m?.write)] };
       const metric = key => h('span', { key, className: 'dsh-cost-metric' + (['cost', 'team'].includes(key) ? ' cost' : '') + (key === 'team' ? ' team' : ''), tabIndex: 0,
         'data-metric': key, 'aria-label': names[key] + ': ' + values[key], 'aria-describedby': active === key ? 'dsh-cost-tooltip-' + sessionId : undefined,
         onMouseEnter: e => setHovered({ key, node: e.currentTarget }), onMouseLeave: () => setHovered(null), onFocus: e => setFocused({ key, node: e.currentTarget }), onBlur: () => setFocused(null),
       }, h('svg', { 'aria-hidden': true, viewBox: '0 0 16 16', dangerouslySetInnerHTML: { __html: paths[key] } }), h('span', { className: 'dsh-cost-value' }, values[key]));
-      return h('div', { className: 'dsh-cost-panel', role: 'group', 'aria-label': 'Расходы агента и команды. Оценка по ценам API, не счёт за подписку. Неполнота указана в подсказках. Рассуждения входят в исходящие.' },
+      return h('div', { className: 'dsh-cost-panel', role: 'group', 'aria-label': 'Расходы агента и команды.' },
         h('div', { className: 'dsh-cost-group' }, metric('calls')),
         h('div', { className: 'dsh-cost-group' }, metric('cost'), metric('team')),
         h('div', { className: 'dsh-cost-group' }, metric('input'), metric('reasoning'), metric('cache'), metric('output')),
