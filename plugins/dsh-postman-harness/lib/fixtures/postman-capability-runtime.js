@@ -13,7 +13,7 @@ const require = createRequire(import.meta.url)
 const sdkRequire = createRequire(process.env.DSH_CAPABILITY_SDK ?? require.resolve('@deepseek-ai/dsh/package.json'))
 export const native = name => import(pathToFileURL(sdkRequire.resolve('@deepseek-ai/' + name)).href)
 export const repositoryRoot = fileURLToPath(new URL('../../../../', import.meta.url))
-export async function capabilityRuntime(dir, { preset = 'postman-leader-ptc', resume = false, lateFs = false, localDevelopment = false, reportDelivery = 'quiet', deferSettlements = true, plan = () => null } = {}) {
+export async function capabilityRuntime(dir, { preset = 'postman-leader-ptc', resume = false, lateFs = false, localDevelopment = false, reportDelivery = 'quiet', deferSettlements = true, taskContextOptions = null, plan = () => null } = {}) {
   const { Context } = await native('cordis')
   const { Loader, Group } = await native('cordis-plugin-loader')
   const { AgentRegistry, installModelSelection } = await native('dsh-agent')
@@ -76,7 +76,7 @@ export async function capabilityRuntime(dir, { preset = 'postman-leader-ptc', re
     if (args[0] === 'rev-parse' || args[0] === 'merge-base') return sha
     return ''
   }
-  const contexts = initializePostmanTaskContexts(registry, { gitCommand, makeDirectory: async () => worktree, temporaryDirectory: () => dir })
+  const contexts = initializePostmanTaskContexts(registry, taskContextOptions ?? { gitCommand, makeDirectory: async () => worktree, temporaryDirectory: () => dir })
   const workspacePolicy=await import(pathToFileURL(join(repositoryRoot,'plugins/dsh-task-discipline/workspace-policy.js')).href)
   await ctx.plugin(workspacePolicy).await()
   // Baseline comparison uses the same real loop with only the narrow hook vetoed.

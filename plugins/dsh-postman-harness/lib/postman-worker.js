@@ -105,7 +105,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
   if (taskContexts) contexts = { ...taskContexts, get: contextAt,
     record: taskContexts.record ? id => { const row = rawRow(id); return row ? { ...row, workers: owned(row, id) } : null } : undefined,
     changeRecord: taskContexts.changeRecord ? changeScoped : undefined,
-    ...Object.fromEntries(['isRestoring', 'hasActiveOperation', 'hasSyncOperation', 'beginWorkerAdmission', 'endWorkerAdmission'].filter(name => typeof taskContexts[name] === 'function').map(name =>
+    ...Object.fromEntries(['isRestoring', 'hasActiveOperation', 'hasSyncOperation', 'canRetireWorkers', 'beginWorkerAdmission', 'endWorkerAdmission'].filter(name => typeof taskContexts[name] === 'function').map(name =>
       [name, (id, ...args) => taskContexts[name](rootId(id), ...args)])) }
   const depthOf = id => (ctx.agents.get(id)?.session?.header?.delegationDepth ?? (rootId(id) !== id ? 1 : 0)) + 1
   const leaders = new Map()
@@ -250,9 +250,15 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       return { ...row, workers: { ...row.workers, [id]: changed } }
     })
   }
-  function matchesContext(parent, slot) {
+  function matchesContext(parent, slot, retirement = false) {
     const context = contexts?.get(parent.id)
-    return !contexts || Boolean(context && (!slot.context || slot.context === context))
+    if (!contexts || context && (!slot.context || slot.context === context)) return true
+    // Missing-tree recovery retires runnable authority, not the exact child identity.
+    // Only stop/cascade use this path; it cannot authorize another assignment.
+    const row = contexts?.record?.(parent.id)
+    return Boolean(retirement && contexts?.canRetireWorkers?.(parent.id) &&
+      (!slot.context || ['leaderSessionId', 'repository', 'branch', 'worktree', 'baseCommit']
+        .every(key => slot.context[key] === row[key])))
   }
   const stopIntent = (entry, mode, childIds = []) => ({
     ...(entry.lifecycle ?? emptyLifecycle()), stop: { id: randomUUID(), mode,
@@ -332,10 +338,10 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
   }
   const busy = id => contexts?.isRestoring?.(id) || contexts?.hasActiveOperation?.(id) ||
     contexts?.hasSyncOperation?.(id)
-  async function admitted(parent, action) {
+  async function admitted(parent, action, retirement = false) {
     if (contexts?.beginWorkerAdmission) {
       const token = Symbol('worker operation')
-      if (!contexts.beginWorkerAdmission(parent.id, token)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
+      if (!contexts.beginWorkerAdmission(parent.id, token, retirement)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
       try { return await action() } finally { contexts.endWorkerAdmission(parent.id, token) }
     }
     return action()
@@ -720,7 +726,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       const stop = async () => {
         if (slot.closed || (!hostOwned && !authorized(parent))) return { status: 'POSTMAN_WORKER_TARGET_UNKNOWN' }
         const current = bindings(parent, g)[selected.id]
-        if (!current || current.id !== selected.id || !matchesContext(parent, slot))
+        if (!current || current.id !== selected.id || !matchesContext(parent, slot, true))
           return { status: 'POSTMAN_WORKER_BINDING_UNCERTAIN', workerSessionId: selected.id }
         if (mode === 'cancel' && cancelWitness(current) !== witness)
           return { status:'POSTMAN_WORKER_BINDING_CHANGED', workerSessionId:selected.id }
@@ -747,7 +753,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
             // An ordinary native followup is not serialized by the Postman slot queue.
             const closed = await ctx.subagents.closeContinuableChild(parent, selected.id, async () => {
               const snapshot = bindings(parent, g)[selected.id]
-              if (!snapshot || snapshot.id !== selected.id || !matchesContext(parent, slot)) return false
+              if (!snapshot || snapshot.id !== selected.id || !matchesContext(parent, slot, true)) return false
               const fresh = await closeEvidence(parent, snapshot, exec.signal)
               if (!fresh.ready || fresh.eventCount !== evidence.eventCount) return false
               if (durable) await changeBinding(parent, selected.id, entry => {
@@ -789,7 +795,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
             outcome: 'unknown', diagnostic: diagnostic(error) }
         }
       }
-      return admitted(parent, () => slotLocked ? stop() : enqueue(slot, stop))
+      return admitted(parent, () => slotLocked ? stop() : enqueue(slot, stop), true)
   }
   async function cascadeStop(parent, selected, slot, mode, exec) {
     return admitted(parent, () => enqueue(slot, async () => {
@@ -876,7 +882,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
           outcome: 'unknown', taskCompleted: false, diagnostic: diagnostic(error) }
       }
       } finally { await hostHandle?.dispose() }
-    }))
+    }), true)
   }
   const listTool = defineTool({
     name: POSTMAN_WORKER_LIST_TOOL_NAME,
