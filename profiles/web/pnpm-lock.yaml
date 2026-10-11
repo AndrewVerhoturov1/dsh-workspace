@@ -861,7 +861,7 @@ packages:
       react: ^18.2.0
 
   dsh-codex-oauth@file:../../vendor/dsh-codex-oauth-0.1.9.tgz:
-    resolution: {integrity: sha512-hv8rWwDjzbociHrE8sMCspbB08JwdH96+WrY4d9UJbs3DqrEIDrCCX+v1KFiAVvl5eE+SiYuTu2zK+96eRLQRQ==, tarball: file:../../vendor/dsh-codex-oauth-0.1.9.tgz}
+    resolution: {integrity: sha512-npZJW4rhUAKBGOolUj3bkf+LfBbBwIQWfu7zbKRq4K6+/EfqT8XsTmhMVfmJMqLsPxPL/t/Yn+ZP4wboIdpe+g==, tarball: file:../../vendor/dsh-codex-oauth-0.1.9.tgz}
     version: 0.1.9
     engines: {node: ^22.19.0 || >=24.0.0}
     hasBin: true

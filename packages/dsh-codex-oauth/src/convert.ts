@@ -329,12 +329,14 @@ export async function toCodexContext(options: GenerateOptions, attachments?: Att
 /**
  * Map pi-ai usage to harness counts (pi-ai folds reasoning into output).
  * @param usage - cumulative usage from the terminal pi-ai event.
- * @returns harness counts; cache fields appear only when non-zero.
+ * pi-ai defaults missing reasoning to zero, so only positive counts are known.
+ * @returns harness counts; cache and reasoning fields appear only when positive.
  */
 export function mapUsage(usage: PiUsage): TokenUsage {
   return {
     inputTokens: usage.input,
     outputTokens: usage.output,
+    ...usage.reasoning !== undefined && usage.reasoning > 0 ? { reasoningTokens: usage.reasoning } : {},
     ...usage.cacheRead > 0 ? { cacheReadTokens: usage.cacheRead } : {},
     ...usage.cacheWrite > 0 ? { cacheWriteTokens: usage.cacheWrite } : {},
   }
