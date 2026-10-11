@@ -22,6 +22,7 @@ function fixture({ sessionId = 'child', result, pending = [] } = {}) {
   let render;
   let tree;
   let effectCleanups = [];
+  const effects = [];
   const calls = [];
   const listeners = new Map();
   const listListeners = new Set();
@@ -41,10 +42,13 @@ function fixture({ sessionId = 'child', result, pending = [] } = {}) {
     const prior = hooks[i];
     const changed = !prior || deps.some((value, n) => value !== prior.deps[n]);
     if (changed) {
-      prior?.cleanup?.();
-      const cleanup = fn();
-      hooks[i] = { deps, cleanup };
-      effectCleanups[i] = cleanup;
+      hooks[i] = { deps };
+      effects.push(() => {
+        prior?.cleanup?.();
+        const cleanup = fn();
+        hooks[i].cleanup = cleanup;
+        effectCleanups[i] = cleanup;
+      });
     }
   };
   const React = { createElement(type, props, ...children) { return { type, props: { ...(props ?? {}), children: children.length <= 1 ? children[0] : children } }; }, useState, useEffect, useRef };
@@ -75,11 +79,18 @@ function fixture({ sessionId = 'child', result, pending = [] } = {}) {
     hook = 0;
     const useProjection = key => assert.equal(key, 'costPanelRevision');
     tree = registered.component({ sessionId, useProjection });
+    for (const effect of effects.splice(0)) effect();
   };
   render();
   const setRpcResult = value => { result = value; };
   const settle = async (callIndex, value = result) => { calls[callIndex].resolve({ ok: true, value }); await Promise.resolve(); await Promise.resolve(); };
   const listChanged = () => { for (const listener of [...listListeners]) listener(); };
+  const switchSession = id => { sessionId = id; render(); };
+  const fail = async (index, reject = false) => {
+    if (reject) calls[index].reject(new Error('offline'));
+    else calls[index].resolve({ ok: false, error: { code: 'unavailable' } });
+    await Promise.resolve(); await Promise.resolve();
+  };
   const walk = (node, predicate, found = []) => {
     if (node == null || typeof node === 'boolean') return found;
     if (Array.isArray(node)) { for (const child of node) walk(child, predicate, found); return found; }
@@ -100,18 +111,18 @@ function fixture({ sessionId = 'child', result, pending = [] } = {}) {
   const tooltip = () => walk(tree, node => node.props?.role === 'tooltip')[0];
   const panel = () => walk(tree, node => node.props?.className === 'dsh-cost-panel')[0];
   const dispose = () => { for (const cleanup of [...effectCleanups].reverse()) cleanup?.(); listeners.get('dispose')?.(); };
-  return { calls, listeners, listListeners, styles, winListeners, setRpcResult, settle, listChanged, metrics, metricNodes, text, tooltip, panel, dispose, get tree() { return tree; }, get registered() { return registered; }, get registerSlot() { return registerSlot; } };
+  return { calls, listeners, listListeners, styles, winListeners, setRpcResult, settle, listChanged, switchSession, fail, metrics, metricNodes, text, tooltip, panel, dispose, get tree() { return tree; }, get registered() { return registered; }, get registerSlot() { return registerSlot; } };
 }
 
 const sample = (id = 'child', overrides = {}) => ({
   sessionId: id,
-  own: { calls: 2, callsUnknown: false, costUnknown: false, total: 0.0042, metrics: {
-    input: { count: 1200, countUnknown: false, cost: 0.001, costUnknown: false, share: 25 },
-    reasoning: { count: 300, countUnknown: false, cost: 0.0005, costUnknown: false, share: 12.5 },
-    read: { count: 2000, countUnknown: false, cost: 0.0002, costUnknown: false, share: 5 },
-    write: { count: 500, countUnknown: false, cost: 0.0005, costUnknown: false, share: 12.5 },
-    output: { count: 400, countUnknown: false, cost: 0.002, costUnknown: false, share: 50 },
-  } }, team: { costUnknown: false, total: 0.009 }, ...overrides,
+  own: { calls: 2, callsUnknown: false, costUnknown: false, costKnown: true, total: 0.0042, metrics: {
+    input: { count: 1200, countUnknown: false, countKnown: true, cost: 0.001, costUnknown: false, costKnown: true, share: 25 },
+    reasoning: { count: 300, countUnknown: false, countKnown: true, cost: 0.0005, costUnknown: false, costKnown: true, share: 12.5 },
+    read: { count: 2000, countUnknown: false, countKnown: true, cost: 0.0002, costUnknown: false, costKnown: true, share: 5 },
+    write: { count: 500, countUnknown: false, countKnown: true, cost: 0.0005, costUnknown: false, costKnown: true, share: 12.5 },
+    output: { count: 400, countUnknown: false, countKnown: true, cost: 0.002, costUnknown: false, costKnown: true, share: 50 },
+  } }, team: { costUnknown: false, costKnown: true, total: 0.009 }, ...overrides,
 });
 
 test('native registration preserves existing composer dock ordering/statistics', () => {
@@ -159,10 +170,10 @@ test('positive sub-threshold cost is visible while a true zero stays exact', asy
 test('unknown values differ from reported zero; reasoning share is explanatory and cache rows split', async () => {
   const f = fixture({ result: sample('child', { own: { ...sample().own, metrics: {
     ...sample().own.metrics,
-    reasoning: { count: 0, countUnknown: false, cost: 0, costUnknown: false, share: null },
-    read: { count: 0, countUnknown: false, cost: 0, costUnknown: false, share: null },
-    write: { count: 0, countUnknown: false, cost: 0, costUnknown: false, share: null },
-    output: { count: 10, countUnknown: false, cost: 0, costUnknown: false, share: 100 },
+    reasoning: { count: 0, countUnknown: false, countKnown: true, cost: 0, costUnknown: false, costKnown: true, share: null },
+    read: { count: 0, countUnknown: false, countKnown: true, cost: 0, costUnknown: false, costKnown: true, share: null },
+    write: { count: 0, countUnknown: false, countKnown: true, cost: 0, costUnknown: false, costKnown: true, share: null },
+    output: { count: 10, countUnknown: false, countKnown: true, cost: 0, costUnknown: false, costKnown: true, share: 100 },
   } } }) });
   await f.settle(0);
   assert.equal(f.metrics().reasoning.props.children[1].props.children, '0');
@@ -172,8 +183,8 @@ test('unknown values differ from reported zero; reasoning share is explanatory a
   const tip = f.tooltip();
   assert.equal(tip.props.hidden, false);
   const tipText = f.text(tip);
-  assert.match(tipText, /Доля стоимости агента/);
-  assert.match(tipText, /Доля стоимости агента—/);
+  assert.doesNotMatch(tipText, /Доля стоимости агента|—/);
+  assert.match(tipText, /Входят в исходящие/);
   assert.doesNotMatch(tipText, /Общий расход|Итого/);
   f.metrics().cache.props.onFocus({ currentTarget: { getBoundingClientRect() { return { left: 1, top: 2, width: 3, height: 4 }; } } });
   assert.match(f.text(f.tooltip()), /Кэш · чтение/);
@@ -184,9 +195,10 @@ test('unknown values differ from reported zero; reasoning share is explanatory a
     ...sample().own.metrics, input: { count: 0, countUnknown: true, costUnknown: true }, reasoning: { count: 0, countUnknown: true, costUnknown: true }, read: { count: 0, countUnknown: true, costUnknown: true }, write: { count: 0, countUnknown: true, costUnknown: true }, output: { count: 0, countUnknown: true, costUnknown: true },
   } } }) });
   await unknown.settle(0);
-  assert.equal(unknown.metrics().calls.props.children[1].props.children, '—');
-  assert.equal(unknown.metrics().reasoning.props.children[1].props.children, '—');
-  assert.equal(unknown.metrics().cache.props.children[1].props.children, '—');
+  assert.equal(unknown.metrics().calls.props.children[1].props.children, '2');
+  assert.equal(unknown.metrics().cost.props.children[1].props.children, '$0.0042');
+  assert.equal(unknown.metrics().reasoning.props.children[1].props.children, '0');
+  assert.equal(unknown.metrics().cache.props.children[1].props.children, '0');
   unknown.dispose();
 });
 
@@ -200,7 +212,7 @@ test('tooltip is hidden by default and focus/hover exposes exactly one tooltip',
   assert.equal(f.tooltip().props.hidden, false);
   m.team.props.onFocus({ currentTarget: anchor });
   assert.equal(f.tooltip().props.hidden, false);
-  assert.equal(f.tree.props.children[3].props.children.length, 2);
+  assert.equal(f.tree.props.children[3].props.children.length, 3);
   m.team.props.onBlur();
   assert.equal(f.tooltip().props.hidden, false);
   m.cost.props.onMouseLeave();
@@ -242,4 +254,105 @@ test('dispose removes subscriptions/style and aborts in-flight unary request wit
   assert.equal(f.listListeners.size, 0);
   assert.equal(f.listeners.has('connection/reset'), false);
   assert.equal(f.styles.length, 0);
+});
+const displayed = f => Object.fromEntries(Object.entries(f.metrics()).map(([key, node]) => [key, node.props.children[1].props.children]));
+const focus = (f, key) => f.metrics()[key].props.onFocus({ currentTarget: { getBoundingClientRect: () => ({ left: 1, top: 100, width: 20, height: 20 }) } });
+
+test('first session without usage displays zeros and compact no-data tooltip, never dashes', async () => {
+  const f = fixture({ sessionId: 'empty' });
+  assert.deepEqual(displayed(f), { calls: '0', cost: '$0.00', team: '$0.00', input: '0', reasoning: '0', cache: '0', output: '0' });
+  for (const key of Object.keys(f.metrics())) {
+    focus(f, key);
+    assert.match(f.text(f.tooltip()), /данные ещё не получены/);
+    assert.doesNotMatch(f.text(f.tooltip()), /—|неизвестн/);
+  }
+  await f.settle(0, { sessionId: 'empty', own: { calls: 0, total: 0, costKnown: false, metrics: {} }, team: { total: 0, costKnown: false } });
+  focus(f, 'input');
+  assert.match(f.text(f.tooltip()), /данные ещё не получены/);
+  f.dispose();
+});
+
+test('RPC errors, missing fields and partial lower snapshots retain known numbers per session', async () => {
+  const f = fixture({ result: sample() });
+  await f.settle(0);
+  const before = displayed(f);
+  f.listChanged();
+  await f.fail(1);
+  assert.deepEqual(displayed(f), before);
+  focus(f, 'cost');
+  assert.match(f.text(f.tooltip()), /неполные данные.*оценка по API/);
+  f.listChanged();
+  await f.fail(2, true);
+  assert.deepEqual(displayed(f), before);
+  f.listChanged();
+  await f.settle(3, { sessionId: 'child', own: { calls: 1, callsUnknown: true, total: 0.001, costKnown: true, costUnknown: true, metrics: {
+    input: { count: 500, countKnown: true, countUnknown: true, cost: 0.0001, costKnown: true, costUnknown: true },
+    read: { count: 0, countKnown: false, countUnknown: true, cost: 0, costKnown: false, costUnknown: true },
+  } }, team: { total: 0.003, costKnown: true, costUnknown: true } });
+  assert.deepEqual(displayed(f), before);
+  focus(f, 'reasoning');
+  assert.match(f.text(f.tooltip()), /неполные данные/);
+  f.listChanged();
+  await f.settle(4, sample('child', { own: { ...sample().own, calls: 3, total: 0.005 } }));
+  assert.equal(displayed(f).calls, '3');
+  assert.equal(displayed(f).cost, '$0.0050');
+  focus(f, 'cost');
+  assert.doesNotMatch(f.text(f.tooltip()), /неполные/);
+  f.dispose();
+});
+
+test('switching sessions, returning and late replies never transfer another session values', async () => {
+  const f = fixture({ sessionId: 'a', result: sample('a') });
+  await f.settle(0);
+  const a = displayed(f);
+  f.listChanged(); // old-session request remains in flight
+  f.switchSession('b');
+  assert.equal(f.calls[1].signal.aborted, true);
+  assert.equal(f.calls[2].payload.sessionId, 'b');
+  assert.equal(displayed(f).calls, '0');
+  assert.equal(displayed(f).team, '$0.00');
+  await f.settle(1, sample('a', { own: { ...sample().own, calls: 999 } }));
+  assert.equal(displayed(f).calls, '0');
+  await f.settle(2, sample('b', { own: { ...sample().own, calls: 7, total: 0.1 }, team: { total: 0.2, costKnown: true } }));
+  assert.equal(displayed(f).calls, '7');
+  f.switchSession('a');
+  assert.deepEqual(displayed(f), a);
+  await f.settle(3, sample('b')); // unexpected session RPC must not replace a
+  assert.deepEqual(displayed(f), a);
+  f.dispose();
+});
+
+test('known partial costs and cache counts stay visible, unknown shares are omitted', async () => {
+  const f = fixture({ result: sample('child', { own: { ...sample().own, costUnknown: true, total: 0.001, metrics: {
+    ...sample().own.metrics,
+    read: { count: 30, countKnown: true, countUnknown: false, cost: 0.00001, costKnown: true, costUnknown: false },
+    write: { count: 0, countKnown: false, countUnknown: true, cost: 0, costKnown: false, costUnknown: true },
+  } }, team: { total: 0.002, costKnown: true, costUnknown: true } }) });
+  await f.settle(0);
+  assert.equal(displayed(f).cost, '$0.0010');
+  assert.equal(displayed(f).team, '$0.0020');
+  assert.equal(displayed(f).cache, '30');
+  focus(f, 'team');
+  assert.match(f.text(f.tooltip()), /неполные данные.*оценка по API/);
+  focus(f, 'cache');
+  assert.match(f.text(f.tooltip()), /данные ещё не получены/);
+  assert.doesNotMatch(f.text(f.tooltip()), /—/);
+  f.dispose();
+});
+
+test('returning to a stale session keeps its numbers and incompleteness until fresh data arrives', async () => {
+  const f = fixture({ result: sample() });
+  await f.settle(0);
+  const before = displayed(f);
+  f.listChanged();
+  await f.fail(1);
+  f.switchSession('other');
+  assert.equal(displayed(f).calls, '0');
+  f.switchSession('child');
+  assert.deepEqual(displayed(f), before);
+  focus(f, 'cost');
+  assert.match(f.text(f.tooltip()), /неполные данные/);
+  await f.settle(3, sample());
+  assert.doesNotMatch(f.text(f.tooltip()), /неполные данные/);
+  f.dispose();
 });
