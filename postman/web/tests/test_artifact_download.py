@@ -30,6 +30,7 @@ detector_stub = types.ModuleType("artifact_detector")
 detector_stub.ARTIFACT_DOM_CONFIRMED = "ARTIFACT_DOM_CONFIRMED"
 detector_stub.ARTIFACT_CANDIDATE_DOM = "ARTIFACT_CANDIDATE_DOM"
 detector_stub.ARTIFACT_CANDIDATE_CHOICES = "ARTIFACT_CANDIDATE_CHOICES"
+detector_stub.ARTIFACT_ATTACHMENT_NOT_FOUND = "ARTIFACT_ATTACHMENT_NOT_FOUND"
 detector_stub.candidate_identity_matches = lambda a, b: bool(set(a) & set(b)) and all(a[k] == b[k] for k in set(a) & set(b))
 detector_stub.current_result = None
 def detect_artifact_dom(*args, **kwargs):
@@ -112,6 +113,19 @@ def zip_without_manifest_bytes():
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_STORED) as archive:
         archive.writestr("result.md", "NO_MANIFEST_OK\n")
     return buffer.getvalue()
+
+
+class FakeClock:
+    def __init__(self):
+        self.now = 0.0
+        self.sleeps = []
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.sleeps.append(seconds)
+        self.now += seconds
 
 
 class FakeControl:
@@ -249,6 +263,10 @@ def validator_ok(zip_path, trusted):
 
 class ArtifactDownloadTests(unittest.TestCase):
     def setUp(self):
+        self.clock = FakeClock()
+        clock = patch.object(module, "time", self.clock)
+        clock.start()
+        self.addCleanup(clock.stop)
         detector_stub.current_result = p5_proof()
         behavior = patch.object(module.cdp_download, "download_behavior", side_effect=lambda *args: nullcontext())
         behavior.start()
@@ -388,22 +406,176 @@ class ArtifactDownloadTests(unittest.TestCase):
         self.assertTrue(result["ok"], result)
         self.assertEqual(page.path_steps, [":scope > *", ":scope > *"])
 
-    def test_expect_download_failure_never_retries(self):
+    def test_ineligible_span_downloads_on_first_ungated_attempt(self):
+        page = FakePage()
+        page.turn.snapshot["eligibleNativeDownload"] = False
+        page.turn.snapshot["tag"] = "span"
+        result, page, _ = self.run_download(page=page)
+        self.assertEqual(result["code"], module.RESULT_DURABLE)
+        self.assertEqual(page.clicks, 1)
+        self.assertEqual(self.clock.sleeps, [])
+
+    def test_second_attempt_is_ungated_after_exact_ten_second_pause(self):
+        page = FakePage()
+        page.turn.snapshot["eligibleNativeDownload"] = False
+        original = module._capture_download
+        attempts = []
+        def capture(*args):
+            attempts.append(self.clock.now)
+            if len(attempts) == 1:
+                return module._result(module.DOWNLOAD_NOT_FOUND, ok=False)
+            return original(*args)
+        with patch.object(module, "_capture_download", side_effect=capture):
+            result, _, _ = self.run_download(page=page)
+        self.assertEqual(result["code"], module.RESULT_DURABLE)
+        self.assertEqual(attempts, [0, 10])
+        self.assertEqual(self.clock.sleeps, [10])
+
+    def test_final_stage_gates_ineligible_control_and_stops_at_thirty_seconds(self):
+        page = FakePage()
+        page.turn.snapshot["eligibleNativeDownload"] = False
+        with patch.object(module, "_capture_download", return_value=module._result(module.DOWNLOAD_NOT_FOUND, ok=False)) as capture:
+            result, _, _ = self.run_download(page=page)
+        self.assertEqual(result["code"], module.DOWNLOAD_CONTROL_INVALID)
+        self.assertEqual(capture.call_count, 2)
+        self.assertEqual(self.clock.now, 40)
+        self.assertEqual(self.clock.sleeps, [10] + [1] * 30)
+        self.assertFalse(result["ok"])
+
+    def test_final_stage_reacquires_same_answer_and_remaining_timeout(self):
+        page = FakePage()
+        original = module._capture_download
+        budgets = []
+        def capture(*args):
+            budgets.append((self.clock.now, args[4], args[5]))
+            if len(budgets) <= 2:
+                return module._result(module.DOWNLOAD_NOT_FOUND, ok=False)
+            return original(*args)
+        def proof(*args, **kwargs):
+            if 10 <= self.clock.now < 13 and len(budgets) >= 2:
+                return {"ok": False, "code": detector_stub.ARTIFACT_ATTACHMENT_NOT_FOUND, "details": {}}
+            return p5_proof(attachment={"path": "2/1"})
+        with patch.object(module, "_capture_download", side_effect=capture), patch.object(detector_stub, "detect_artifact_dom", side_effect=proof):
+            result, _, _ = self.run_download(page=page)
+        self.assertEqual(result["code"], module.RESULT_DURABLE)
+        self.assertEqual(budgets, [(0, 30000, 10000), (10, 30000, 10000), (13, 27000, 10000)])
+        self.assertEqual(self.clock.sleeps, [10, 1, 1, 1])
+
+    def test_final_stage_attempts_share_one_deadline(self):
+        budgets = []
+        def capture(*args):
+            budgets.append((self.clock.now, args[4], args[5]))
+            if len(budgets) > 2:
+                self.clock.now += min(7, args[4] / 1000)
+            return module._result(module.DOWNLOAD_NOT_FOUND, ok=False)
+        with patch.object(module, "_capture_download", side_effect=capture):
+            result, _, _ = self.run_download()
+        self.assertEqual(result["code"], module.DOWNLOAD_NOT_FOUND)
+        self.assertEqual(budgets, [(0, 30000, 10000), (10, 30000, 10000),
+            (10, 30000, 10000), (18, 22000, 10000), (26, 14000, 10000), (34, 6000, 6000)])
+        self.assertEqual(self.clock.now, 40)
+        self.assertEqual(self.clock.sleeps, [10, 1, 1, 1])
+
+    def test_late_successful_final_capture_is_rejected_without_retry(self):
+        page = FakePage()
+        original = module._capture_download
+        attempts = []
+        def capture(*args):
+            attempts.append(self.clock.now)
+            if len(attempts) <= 2:
+                return module._result(module.DOWNLOAD_NOT_FOUND, ok=False)
+            result = original(*args)
+            self.clock.now += 31  # Native completion returns after the shared deadline.
+            return result
+        with patch.object(module, "_capture_download", side_effect=capture):
+            result, _, root = self.run_download(page=page)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["code"], module.DOWNLOAD_INTERRUPTED)
+        self.assertEqual(result["details"]["phase"], "download_deadline")
+        self.assertEqual(attempts, [0, 10, 10])
+        self.assertEqual(self.clock.sleeps, [10])
+        self.assertEqual(self.clock.now, 41)
+        self.assertEqual(page.clicks, 1)
+        self.assertFalse((root / REQ).exists())
+        candidate = root / ".candidates" / REQ / "capture.bin"
+        self.assertEqual(Path(result["details"]["candidate"]["path"]), candidate)
+        self.assertEqual(candidate.read_bytes(), page.download.payload)
+        self.assertFalse(result["details"]["candidate"]["verified"])
+        self.assertFalse(result["details"]["candidate"]["applyEligible"])
+        self.assertEqual((root / ".staging" / REQ / FILENAME).read_bytes(), page.download.payload)
+
+    def test_identity_change_on_second_attempt_is_terminal(self):
+        with patch.object(module, "_capture_download", return_value=module._result(module.DOWNLOAD_NOT_FOUND, ok=False)) as capture, patch.object(detector_stub, "detect_artifact_dom", side_effect=[p5_proof(), p5_proof(assistantTextSha256="c" * 64)]):
+            result, _, _ = self.run_download()
+        self.assertEqual(result["code"], module.DOWNLOAD_PROOF_CHANGED)
+        self.assertEqual(capture.call_count, 1)
+        self.assertEqual(self.clock.sleeps, [10])
+
+    def test_partial_capture_and_partial_staging_survive_successful_retry(self):
+        native = FakeDownload(failure="canceled")
+        page = FakePage(native)
+        original = module._capture_download
+        attempts = 0
+        def capture(*args):
+            nonlocal attempts
+            attempts += 1
+            result = original(*args)
+            if attempts == 1:
+                Path(args[2]).write_bytes(b"partial staging")
+                native._failure = None
+            return result
+        with patch.object(module, "_capture_download", side_effect=capture):
+            result, _, root = self.run_download(page=page)
+        self.assertEqual(result["code"], module.RESULT_DURABLE)
+        archive = root / ".candidates" / REQ / "attempt-1"
+        self.assertEqual((archive / "capture.bin").read_bytes(), native.payload)
+        self.assertEqual((archive / "staging.bin").read_bytes(), b"partial staging")
+        desc = json.loads((archive / "candidate.json").read_text())
+        self.assertEqual(desc["path"], str((archive / "capture.bin").resolve()))
+        self.assertEqual(desc["completeness"], "partial")
+        self.assertFalse(desc["verified"])
+        self.assertEqual((root / REQ / "result.zip").read_bytes(), native.payload)
+
+    def test_last_partial_capture_is_restored_when_later_events_have_no_bytes(self):
+        page = FakePage(FakeDownload(failure="canceled"))
+        original = module._capture_download
+        attempts = 0
+        def capture(*args):
+            nonlocal attempts
+            attempts += 1
+            return original(*args) if attempts == 1 else module._result(module.DOWNLOAD_NOT_FOUND, ok=False)
+        with patch.object(module, "_capture_download", side_effect=capture):
+            result, _, root = self.run_download(page=page)
+        self.assertEqual(result["code"], module.DOWNLOAD_NOT_FOUND)
+        candidate = root / ".candidates" / REQ / "capture.bin"
+        self.assertEqual(Path(result["details"]["candidate"]["path"]), candidate)
+        self.assertEqual(candidate.read_bytes(), page.download.payload)
+        self.assertEqual(result["details"]["candidate"]["completeness"], "partial")
+
+    def test_expect_download_failure_exhausts_bounded_attempts(self):
         page = FakePage()
         page.expect_error = "timeout"
         result, _, _ = self.run_download(page=page)
         self.assertEqual(result["code"], module.DOWNLOAD_NOT_FOUND)
-        self.assertEqual(page.expect_download_calls, 1)
+        self.assertEqual(page.expect_download_calls, 32)
         self.assertEqual(page.clicks, 0)
+        self.assertEqual(self.clock.sleeps, [10] + [1] * 30)
+        self.assertEqual(self.clock.now, 40)
 
-    def test_click_failure_never_retries(self):
+    def test_click_failure_retains_partial_bytes_across_bounded_attempts(self):
         page = FakePage()
         page.click_error = "click failed"
         result, _, _ = self.run_download(page=page)
         self.assertEqual(result["code"], module.DOWNLOAD_INTERRUPTED)
         self.assertEqual(result["details"]["candidate"]["completeness"], "partial")
-        self.assertEqual(page.expect_download_calls, 1)
-        self.assertEqual(page.clicks, 1)
+        candidate = Path(result["details"]["candidate"]["path"])
+        self.assertEqual(candidate.name, "capture.bin")
+        self.assertEqual(candidate.parent.name, REQ)
+        self.assertEqual(candidate.read_bytes(), page.download.payload)
+        saved = json.loads((candidate.parent / "candidate.json").read_text())
+        self.assertEqual(saved["path"], str(candidate.resolve()))
+        self.assertEqual(page.expect_download_calls, 32)
+        self.assertEqual(page.clicks, 32)
         self.assertFalse(result["details"]["retryAllowed"])
 
     def test_wrong_suggested_filename_rejected_but_raw_candidate_retained(self):
@@ -472,7 +644,7 @@ class ArtifactDownloadTests(unittest.TestCase):
         page = FakePage(FakeDownload(failure="canceled"))
         result, _, _ = self.run_download(page=page)
         self.assertEqual(result["code"], module.DOWNLOAD_INTERRUPTED)
-        self.assertEqual(page.clicks, 1)
+        self.assertEqual(page.clicks, 32)
 
     def test_save_as_failure_rejected(self):
         page = FakePage(FakeDownload(save_error="disk full"))
@@ -505,7 +677,7 @@ class ArtifactDownloadTests(unittest.TestCase):
         candidate = Path(result["details"]["candidate"]["path"])
         self.assertEqual(candidate.read_bytes(), download.payload)
         self.assertEqual(result["details"]["candidate"]["completeness"], "partial")
-        self.assertEqual(page.clicks, 1)
+        self.assertEqual(page.clicks, 32)
 
     def test_partial_download_without_native_path_reports_limitation(self):
         download = FakeDownload(failure="canceled")
@@ -513,7 +685,7 @@ class ArtifactDownloadTests(unittest.TestCase):
         result, page, _ = self.run_download(page=FakePage(download))
         self.assertEqual(result["code"], module.DOWNLOAD_INTERRUPTED)
         self.assertIsNone(result["details"].get("candidate"))
-        self.assertEqual(page.clicks, 1)
+        self.assertEqual(page.clicks, 32)
 
     def test_nonzero_source_is_saved_with_exact_bytes_and_sha(self):
         download = FakeDownload()
@@ -561,7 +733,7 @@ class ArtifactDownloadTests(unittest.TestCase):
         self.assertEqual(result["code"], module.DOWNLOAD_INTERRUPTED)
         self.assertEqual(result["details"]["candidate"]["completeness"], "partial")
         self.assertEqual(Path(result["details"]["candidate"]["path"]).read_bytes(), native.payload)
-        self.assertEqual(page.clicks, 1)
+        self.assertEqual(page.clicks, 32)
 
     def test_validator_exception_keeps_descriptor_with_concrete_reason(self):
         def raises(*args): raise RuntimeError("synthetic validator exception")

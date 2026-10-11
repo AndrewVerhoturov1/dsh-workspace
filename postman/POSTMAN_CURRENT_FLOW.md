@@ -312,7 +312,7 @@ POSTMAN_<REQ>_RESULT.zip
 ```text
 exact correlated control
 → page.expect_download()
-→ exactly one click
+→ bounded same-answer download attempts
 → browser download event
 → suggested filename check
 → request-scoped staging
@@ -320,7 +320,19 @@ exact correlated control
 
 Нельзя искать newest ZIP в Downloads или выбирать «последнюю кнопку Download».
 
-После неопределённого click blind retry запрещён.
+Первая попытка пропускает только DOM `eligibleNativeDownload`; после отсутствующего/прерванного
+скачивания — пауза 10 секунд и вторая попытка с тем же исключением. При второй неудаче
+включается критерий: до 30 секунд суммарно на ожидание/reacquire и download attempts
+в том же exact ответе, с оставшимся бюджетом для click/event waits. После срока новые
+попытки не начинаются. Уже начатый synchronous native call безопасно завершается;
+общее wall-clock время может превысить 30 секунд, но поздний capture отклоняется и
+не становится `RESULT_DURABLE`. Каждая попытка заново доказывает REQ/chat/answer identity.
+Новые messages/Continue/REQ не отправляются. Частичные candidate/staging bytes предыдущих
+попыток сохраняются в request-scoped `attempt-N`; последняя доступная candidate-копия
+остаётся на фиксированном `capture.bin`. Refusal по identity/filename/source/copy/store
+и ZIP validation не запускает повтор и не повышает candidate до `RESULT_DURABLE`.
+
+Blind retry вне этой ограниченной последовательности запрещён.
 
 ## 14. Transport validator
 
