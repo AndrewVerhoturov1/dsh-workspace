@@ -327,14 +327,20 @@ export async function toCodexContext(options: GenerateOptions, attachments?: Att
 }
 
 /**
- * Map pi-ai usage to harness counts (pi-ai folds reasoning into output).
+ * Map pi-ai's disjoint input/output buckets (reasoning is within output).
+ * SDK 0.85.1 defaults absent provider fields to zero, losing presence for all
+ * counts. Only positive values are evidence; required numeric placeholders are
+ * explicitly marked unknown so consumers must not count them as confirmed zero.
  * @param usage - cumulative usage from the terminal pi-ai event.
- * @returns harness counts; cache fields appear only when non-zero.
+ * @returns known positive counts, never fabricated confirmed zeros.
  */
-export function mapUsage(usage: PiUsage): TokenUsage {
+export function mapUsage(usage: PiUsage): TokenUsage & { inputTokensKnown?: false; outputTokensKnown?: false } {
   return {
     inputTokens: usage.input,
     outputTokens: usage.output,
+    ...usage.input > 0 ? {} : { inputTokensKnown: false as const },
+    ...usage.output > 0 ? {} : { outputTokensKnown: false as const },
+    ...usage.reasoning !== undefined && usage.reasoning > 0 ? { reasoningTokens: usage.reasoning } : {},
     ...usage.cacheRead > 0 ? { cacheReadTokens: usage.cacheRead } : {},
     ...usage.cacheWrite > 0 ? { cacheWriteTokens: usage.cacheWrite } : {},
   }

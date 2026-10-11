@@ -6,7 +6,7 @@ import catalog from './model-prices.json' with { type: 'json' };
 const header = { id: 'root', seedLength: 0 };
 const usage = (inputTokens = 0, reasoningTokens = 0, cacheReadTokens = 0, cacheWriteTokens = 0, outputTokens = 0, extra = {}) => ({ inputTokens, reasoningTokens, cacheReadTokens, cacheWriteTokens, outputTokens, ...extra });
 const cost = (attempts, incompleteHistory = false, prices = catalog) => summarize({ attempts, incompleteHistory }, prices);
-const attempt = (id, model = 'gpt-6-luna', data = {}) => ({ id, purpose: 'conversation', provider: 'openai', model, usage: usage(), status: 'finished', ...data });
+const attempt = (id, model = 'gpt-6-luna', data = {}) => ({ id, purpose: 'conversation', provider: 'openai', model, serviceTier: 'default', usage: usage(), status: 'finished', ...data });
 
 function assistantMessage(turn, step, model, counts, extra = {}) {
   return { type: 'assistant/message', seq: turn * 10 + step, data: { turn, step, message: { source: { kind: 'model', provider: 'openai', model }, ...extra.message }, usage: counts, ...extra } };
@@ -233,9 +233,108 @@ test('known part of a bill survives missing model, usage, cache TTL and historic
   assert.equal(result.costKnown, true);
   assert.equal(result.costUnknown, true);
   assert.ok(Math.abs(result.total - (10 * 0.1 + 20 * 0.01 + 4 * 0.125 + 7 * 0.5) / 1e6) < 1e-15);
-  const ttl = cost([attempt('ttl', 'claude-fable-5-1', { usage: usage(10, 3, 20, 4, 7) })]);
+  const ttl = cost([attempt('ttl', 'claude-fable-5-1', { provider: 'anthropic', usage: usage(10, 3, 20, 4, 7) })]);
   assert.equal(ttl.metrics.write.count, 4);
   assert.equal(ttl.metrics.write.costKnown, false);
   assert.equal(ttl.costUnknown, true);
   assert.ok(ttl.total > 0);
 });
+
+test('read-only, write-only, both and repeated reads are disjoint per call', () => {
+  for (const [read, write] of [[20, 0], [0, 20], [20, 30]]) {
+    const result = cost([attempt('a', 'gpt-6-luna', { usage: usage(10, 2, read, write, 5) })]);
+    assert.equal(result.metrics.read.count, read);
+    assert.equal(result.metrics.write.count, write);
+    assert.equal(result.metrics.input.count, 10);
+    assert.equal(result.costUnknown, false);
+  }
+  const result = cost([attempt('a', 'gpt-6-luna', { usage: usage(10, 0, 20, 0, 5) }), attempt('b', 'gpt-6-luna', { usage: usage(10, 0, 20, 0, 5) })]);
+  assert.equal(result.calls, 2);
+  assert.equal(result.metrics.read.count, 40);
+  assert.equal(result.metrics.read.cost, 40 * 0.01 / 1e6);
+});
+
+test('missing prompt components retain lower-bound subtotal, not exact shares', () => {
+  for (const counts of [{ inputTokens: 10, outputTokens: 5 }, { inputTokens: 10, cacheReadTokens: 20, outputTokens: 5 }, { inputTokens: 10, cacheWriteTokens: 30, outputTokens: 5 }]) {
+    const result = cost([attempt('partial', 'gpt-6-luna', { usage: counts })]);
+    assert.equal(result.costKnown, true);
+    assert.equal(result.costUnknown, true);
+    assert.ok(result.total > 0);
+    assert.equal(result.metrics.input.cost, 10 * 0.1 / 1e6);
+    assert.equal(result.metrics.output.cost, 5 * 0.5 / 1e6);
+    assert.equal(result.metrics.input.costUnknown, true);
+    assert.ok(Object.values(result.metrics).every(m => m.share === null));
+  }
+});
+
+test('prompt threshold is per request, not summed session input', () => {
+  const result = cost([attempt('a', 'gpt-6-luna', { usage: usage(200000, 0, 0, 0, 1) }), attempt('b', 'gpt-6-luna', { usage: usage(200000, 0, 0, 0, 1) })]);
+  assert.equal(result.total, (400000 * 0.1 + 2 * 0.5) / 1e6);
+  assert.equal(result.costUnknown, false);
+});
+
+
+test('price identity matches provider plus model; Codex is an API-equivalent estimate', () => {
+  const counts = usage(10, 0, 0, 0, 5);
+  const wrong = cost([attempt('wrong', 'gpt-6-luna', { provider: 'anthropic', usage: counts })]);
+  assert.equal(wrong.metrics.input.costKnown, false);
+  assert.equal(wrong.costUnknown, true);
+  const codex = cost([attempt('codex', 'gpt-6-luna', { provider: 'codex', usage: counts })]);
+  assert.equal(codex.total, cost([attempt('api', 'gpt-6-luna', { usage: counts })]).total);
+  assert.equal(codex.costUnknown, false);
+});
+
+
+test('absent processing tier retains marked Standard estimate; other tiers are not substituted', () => {
+  const absent = cost([attempt('unknown-tier', 'gpt-6-luna', { serviceTier: undefined, usage: usage(10, 0, 0, 0, 5) })]);
+  assert.ok(absent.total > 0);
+  assert.equal(absent.costKnown, true);
+  assert.equal(absent.costUnknown, true);
+  assert.equal(absent.metrics.input.share, null);
+  const other = cost([attempt('priority', 'gpt-6-luna', { serviceTier: 'priority', usage: usage(10, 0, 0, 0, 5) })]);
+  assert.equal(other.metrics.input.costKnown, false);
+  assert.equal(other.costUnknown, true);
+});
+
+
+test('required SDK zero placeholders remain unknown through saved attempts; trusted zeros stay known', () => {
+  const events = [{ type: 'cost-panel/attempt', seq: 0, data: attempt('unknown', 'gpt-6-luna', { usage: { inputTokens: 0, outputTokens: 0, inputTokensKnown: false, outputTokensKnown: false } }) }];
+  const folded = foldAttempts(header, events);
+  assert.equal(folded.attempts[0].usage.inputTokens, undefined);
+  assert.equal(folded.attempts[0].usage.inputTokensKnown, false);
+  const result = summarize(folded, catalog);
+  assert.equal(result.metrics.input.countKnown, false);
+  assert.equal(result.metrics.output.countKnown, false);
+  assert.equal(result.costKnown, false);
+  const positive = foldAttempts(header, [...events, { type: 'cost-panel/attempt', seq: 1, data: { id: 'unknown', usage: { inputTokens: 10, outputTokens: 4 } } }, { type: 'cost-panel/attempt', seq: 2, data: { id: 'unknown', usage: { inputTokens: 0, outputTokens: 0, inputTokensKnown: false, outputTokensKnown: false } } }]);
+  assert.equal(positive.attempts[0].usage.inputTokens, 10);
+  assert.equal(positive.attempts[0].usage.outputTokens, 4);
+  assert.equal(positive.attempts[0].usage.inputTokensKnown, undefined);
+  const trusted = cost([attempt('zero', 'gpt-6-luna', { usage: usage() })]);
+  assert.equal(trusted.metrics.input.countKnown, true);
+  assert.equal(trusted.metrics.input.count, 0);
+});
+
+
+test('partial prompt subtotal proves the higher tier only above the threshold', () => {
+  const above = cost([attempt('above-partial', 'gpt-6-luna', { usage: { inputTokens: 270000, cacheReadTokens: 3000, outputTokens: 5 } })]);
+  assert.equal(above.metrics.input.cost, 270000 * 0.2 / 1e6);
+  assert.equal(above.metrics.read.cost, 3000 * 0.02 / 1e6);
+  assert.equal(above.metrics.output.cost, 5 * 0.75 / 1e6);
+  assert.equal(above.metrics.input.costUnknown, false);
+  assert.equal(above.metrics.output.costUnknown, false);
+  assert.equal(above.metrics.write.countKnown, false);
+  assert.equal(above.costUnknown, true);
+  assert.equal(above.metrics.input.share, null);
+  const at = cost([attempt('at-partial', 'gpt-6-luna', { usage: { inputTokens: 270000, cacheReadTokens: 2000, outputTokens: 5 } })]);
+  assert.equal(at.metrics.input.cost, 270000 * 0.1 / 1e6);
+  assert.equal(at.metrics.output.cost, 5 * 0.5 / 1e6);
+  assert.equal(at.metrics.input.costUnknown, true);
+  assert.equal(at.metrics.output.costUnknown, true);
+  const unknownInput = cost([attempt('unknown-input', 'gpt-6-luna', { usage: { inputTokens: 300000, inputTokensKnown: false, cacheReadTokens: 20, outputTokens: 5 } })]);
+  assert.equal(unknownInput.metrics.input.countKnown, false);
+  assert.equal(unknownInput.metrics.read.cost, 20 * 0.01 / 1e6);
+  assert.equal(unknownInput.metrics.output.cost, 5 * 0.5 / 1e6);
+  assert.equal(unknownInput.metrics.output.costUnknown, true);
+});
+

@@ -124,6 +124,8 @@ Override in a later patch layer (profile `cordis.patch.yml` replaces this row's 
 
 ## Limitations
 
+- **Usage presence is lost in pi-ai 0.85.1.** Its Responses normalizer defaults missing input/output/cache/reasoning counts to zero. This adapter confirms only positive counts, including reasoning (already within output). Required numeric input/output carry `inputTokensKnown:false`/`outputTokensKnown:false` when their SDK zeros lack provenance; the cost-panel observer omits those placeholders from accounting. Optional zero counts are omitted. Indistinguishable zero/absence stays unknown, not confirmed zero. It preserves SDK-disjoint input/read/write and never infers cache writes from context growth. Public API-equivalent cost estimates are not actual ChatGPT/Codex subscription charges; neither synthetic tests nor the SDK parser establish the private endpoint response schema.
+
 - **Image input follows the pi-ai catalog.** User images are sent only when the selected model advertises image input, through Harness's attachment service and the same request-image conversion used by `dsh-llm-pi-ai`. The supported formats are PNG, JPEG, WebP, and GIF. Historical assistant image output remains unsupported.
 - **No browser Models-page card.** Configuration happens through the patch layer and the picker lists the route through the adapter registry; login is the bin or `/codex` command, not the credentials page.
 - **No provider-native replay state.** Historical assistant messages replay as provider-neutral content (correct, but without signature/cache reuse).

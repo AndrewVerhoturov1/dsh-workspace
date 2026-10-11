@@ -10,7 +10,8 @@ const svgPaths = {
   team: '<circle cx="6" cy="5" r="2.3"/><circle cx="11.5" cy="6" r="1.7"/><path d="M1.8 13c.4-2.4 1.8-3.7 4.2-3.7s3.9 1.3 4.2 3.7m-.1-3.3c2.2-.3 3.6.9 4 3.3"/>',
   input: '<path d="M8 2v8m-3-3 3 3 3-3M2.5 11v2.5h11V11"/>',
   reasoning: '<path d="M6 12.5h4m-3.5 2h3m-4.1-4.6a5 5 0 1 1 5.2 0c-.7.5-.9 1-1 1.6H6.4c-.1-.6-.3-1.1-1-1.6Z"/><path d="M8 2v1m-4 .7.7.7m6.6 0 .7-.7"/>',
-  cache: '<ellipse cx="8" cy="3.5" rx="5.5" ry="2"/><path d="M2.5 3.5v4c0 1.1 2.5 2 5.5 2m5.5-6v4c0 1.1-2.5 2-5.5 2m-5.5-2v4c0 1.1 2.5 2 5.5 2m5.5-6v4c0 1.1-2.5 2-5.5 2"/>',
+  read: '<ellipse cx="6" cy="3.5" rx="3.5" ry="2"/><path d="M2.5 3.5v8c0 1.1 1.5 2 3.5 2m3.5-10v4M2.5 7.5c0 1.1 1.5 2 3.5 2M8 10h6m-2-2 2 2-2 2"/>',
+  write: '<ellipse cx="6" cy="3.5" rx="3.5" ry="2"/><path d="M2.5 3.5v8c0 1.1 1.5 2 3.5 2m3.5-10v4M2.5 7.5c0 1.1 1.5 2 3.5 2M14 10H8m2-2-2 2 2 2"/>',
   output: '<path d="M2 8h11m-4-4 4 4-4 4"/><path d="M2 3v10"/>',
 };
 
@@ -141,15 +142,17 @@ test('RPC targets the actual current session and renders real supplied values an
   assert.equal(f.calls[0].payload.sessionId, 'live-child-42');
   await f.settle(0);
   const m = f.metrics();
-  assert.deepEqual(Object.keys(m), ['calls', 'cost', 'team', 'input', 'reasoning', 'cache', 'output']);
+  assert.deepEqual(Object.keys(m), ['calls', 'cost', 'team', 'input', 'reasoning', 'read', 'write', 'output']);
   assert.deepEqual(Object.fromEntries(Object.entries(m).map(([key, n]) => [key, n.props['aria-label'].split(':')[0]])), {
-    calls: 'Вызовы модели', cost: 'Стоимость агента', team: 'Стоимость команды', input: 'Вход без кэша', reasoning: 'Размышления', cache: 'Кэш', output: 'Исходящие',
+    calls: 'Вызовы модели', cost: 'Стоимость агента', team: 'Стоимость команды', input: 'Вход без кэша', reasoning: 'Размышления', read: 'Кэш · чтение', write: 'Кэш · запись', output: 'Исходящие',
   });
   assert.equal(m.calls.props.children[1].props.children, '2');
   assert.equal(m.cost.props.children[1].props.children, '$0.0042');
   assert.equal(m.team.props.children[1].props.children, '$0.0090');
   assert.equal(m.reasoning.props.children[1].props.children, '300');
-  assert.equal(m.cache.props.children[1].props.children, '2.5k');
+  assert.equal(m.read.props.children[1].props.children, '2.0k');
+  assert.equal(m.write.props.children[1].props.children, '500');
+  assert.notEqual(svgPaths.read, svgPaths.write);
   assert.equal(m.output.props.children[1].props.children, '400');
   const innerSvg = key => m[key].props.children[0].props.dangerouslySetInnerHTML.__html;
   assert.deepEqual(Object.fromEntries(Object.keys(svgPaths).map(key => [key, innerSvg(key)])), svgPaths);
@@ -160,7 +163,7 @@ test('RPC targets the actual current session and renders real supplied values an
 });
 
 test('positive sub-threshold cost is visible while a true zero stays exact', async () => {
-  const low = fixture({ result: sample('child', { own: { ...sample().own, total: 0.0000007 }, team: { costUnknown: false, total: 0 } }) });
+  const low = fixture({ result: sample('child', { own: { ...sample().own, total: 0.0000007 }, team: { costUnknown: false, costKnown: true, total: 0 } }) });
   await low.settle(0);
   assert.equal(low.metrics().cost.props.children[1].props.children, '<$0.0001');
   assert.equal(low.metrics().team.props.children[1].props.children, '$0.00');
@@ -177,7 +180,8 @@ test('unknown values differ from reported zero; reasoning share is explanatory a
   } } }) });
   await f.settle(0);
   assert.equal(f.metrics().reasoning.props.children[1].props.children, '0');
-  assert.equal(f.metrics().cache.props.children[1].props.children, '0');
+  assert.equal(f.metrics().read.props.children[1].props.children, '0');
+  assert.equal(f.metrics().write.props.children[1].props.children, '0');
   assert.equal(f.metrics().output.props.children[1].props.children, '10');
   f.metrics().reasoning.props.onFocus({ currentTarget: { getBoundingClientRect() { return { left: 1, top: 2, width: 3, height: 4 }; } } });
   const tip = f.tooltip();
@@ -186,8 +190,10 @@ test('unknown values differ from reported zero; reasoning share is explanatory a
   assert.doesNotMatch(tipText, /Доля стоимости агента|—/);
   assert.match(tipText, /Входят в исходящие/);
   assert.doesNotMatch(tipText, /Общий расход|Итого/);
-  f.metrics().cache.props.onFocus({ currentTarget: { getBoundingClientRect() { return { left: 1, top: 2, width: 3, height: 4 }; } } });
+  f.metrics().read.props.onFocus({ currentTarget: { getBoundingClientRect() { return { left: 1, top: 2, width: 3, height: 4 }; } } });
   assert.match(f.text(f.tooltip()), /Кэш · чтение/);
+  assert.doesNotMatch(f.text(f.tooltip()), /Кэш · запись/);
+  focus(f, 'write');
   assert.match(f.text(f.tooltip()), /Кэш · запись/);
   assert.match(tip.props.className, /dsh-cost-tip/);
   f.dispose();
@@ -195,10 +201,11 @@ test('unknown values differ from reported zero; reasoning share is explanatory a
     ...sample().own.metrics, input: { count: 0, countUnknown: true, costUnknown: true }, reasoning: { count: 0, countUnknown: true, costUnknown: true }, read: { count: 0, countUnknown: true, costUnknown: true }, write: { count: 0, countUnknown: true, costUnknown: true }, output: { count: 0, countUnknown: true, costUnknown: true },
   } } }) });
   await unknown.settle(0);
-  assert.equal(unknown.metrics().calls.props.children[1].props.children, '2');
-  assert.equal(unknown.metrics().cost.props.children[1].props.children, '$0.0042');
-  assert.equal(unknown.metrics().reasoning.props.children[1].props.children, '0');
-  assert.equal(unknown.metrics().cache.props.children[1].props.children, '0');
+  assert.equal(unknown.metrics().calls.props.children[1].props.children, '2*');
+  assert.equal(unknown.metrics().cost.props.children[1].props.children, '$0.0042*');
+  assert.equal(unknown.metrics().reasoning.props.children[1].props.children, '—');
+  assert.equal(unknown.metrics().read.props.children[1].props.children, '—');
+  assert.equal(unknown.metrics().write.props.children[1].props.children, '—');
   unknown.dispose();
 });
 
@@ -258,18 +265,29 @@ test('dispose removes subscriptions/style and aborts in-flight unary request wit
 const displayed = f => Object.fromEntries(Object.entries(f.metrics()).map(([key, node]) => [key, node.props.children[1].props.children]));
 const focus = (f, key) => f.metrics()[key].props.onFocus({ currentTarget: { getBoundingClientRect: () => ({ left: 1, top: 100, width: 20, height: 20 }) } });
 
-test('first session without usage displays zeros and compact no-data tooltip, never dashes', async () => {
+test('loading, confirmed zero, unknown and first retrieval error stay distinct', async () => {
   const f = fixture({ sessionId: 'empty' });
-  assert.deepEqual(displayed(f), { calls: '0', cost: '$0.00', team: '$0.00', input: '0', reasoning: '0', cache: '0', output: '0' });
+  assert.ok(Object.values(displayed(f)).every(value => value === '…'));
   for (const key of Object.keys(f.metrics())) {
+    assert.equal(f.metrics()[key].props['data-state'], 'loading');
     focus(f, key);
-    assert.match(f.text(f.tooltip()), /данные ещё не получены/);
-    assert.doesNotMatch(f.text(f.tooltip()), /—|неизвестн/);
+    assert.match(f.text(f.tooltip()), /загрузка/);
   }
   await f.settle(0, { sessionId: 'empty', own: { calls: 0, total: 0, costKnown: false, metrics: {} }, team: { total: 0, costKnown: false } });
+  assert.equal(displayed(f).calls, '0');
+  assert.equal(displayed(f).input, '—');
+  assert.equal(displayed(f).cost, '—');
+  assert.equal(f.metrics().input.props['data-state'], 'unknown');
   focus(f, 'input');
-  assert.match(f.text(f.tooltip()), /данные ещё не получены/);
+  assert.match(f.text(f.tooltip()), /данные неизвестны/);
   f.dispose();
+  const error = fixture({ sessionId: 'error' });
+  await error.fail(0);
+  assert.ok(Object.values(displayed(error)).every(value => value === '—'));
+  assert.equal(error.metrics().input.props['data-state'], 'error');
+  focus(error, 'input');
+  assert.match(error.text(error.tooltip()), /ошибка получения данных/);
+  error.dispose();
 });
 
 test('RPC errors, missing fields and partial lower snapshots retain known numbers per session', async () => {
@@ -278,18 +296,18 @@ test('RPC errors, missing fields and partial lower snapshots retain known number
   const before = displayed(f);
   f.listChanged();
   await f.fail(1);
-  assert.deepEqual(displayed(f), before);
+  assert.deepEqual(displayed(f), Object.fromEntries(Object.entries(before).map(([k, v]) => [k, v + '!'])));
   focus(f, 'cost');
-  assert.match(f.text(f.tooltip()), /неполные данные.*оценка по API/);
+  assert.match(f.text(f.tooltip()), /ошибка получения данных.*оценка по API/);
   f.listChanged();
   await f.fail(2, true);
-  assert.deepEqual(displayed(f), before);
+  assert.deepEqual(displayed(f), Object.fromEntries(Object.entries(before).map(([k, v]) => [k, v + '!'])));
   f.listChanged();
   await f.settle(3, { sessionId: 'child', own: { calls: 1, callsUnknown: true, total: 0.001, costKnown: true, costUnknown: true, metrics: {
     input: { count: 500, countKnown: true, countUnknown: true, cost: 0.0001, costKnown: true, costUnknown: true },
     read: { count: 0, countKnown: false, countUnknown: true, cost: 0, costKnown: false, costUnknown: true },
   } }, team: { total: 0.003, costKnown: true, costUnknown: true } });
-  assert.deepEqual(displayed(f), before);
+  assert.deepEqual(displayed(f), Object.fromEntries(Object.entries(before).map(([k, v]) => [k, v + '*'])));
   focus(f, 'reasoning');
   assert.match(f.text(f.tooltip()), /неполные данные/);
   f.listChanged();
@@ -309,16 +327,16 @@ test('switching sessions, returning and late replies never transfer another sess
   f.switchSession('b');
   assert.equal(f.calls[1].signal.aborted, true);
   assert.equal(f.calls[2].payload.sessionId, 'b');
-  assert.equal(displayed(f).calls, '0');
-  assert.equal(displayed(f).team, '$0.00');
+  assert.equal(displayed(f).calls, '…');
+  assert.equal(displayed(f).team, '…');
   await f.settle(1, sample('a', { own: { ...sample().own, calls: 999 } }));
-  assert.equal(displayed(f).calls, '0');
+  assert.equal(displayed(f).calls, '…');
   await f.settle(2, sample('b', { own: { ...sample().own, calls: 7, total: 0.1 }, team: { total: 0.2, costKnown: true } }));
   assert.equal(displayed(f).calls, '7');
   f.switchSession('a');
   assert.deepEqual(displayed(f), a);
-  await f.settle(3, sample('b')); // unexpected session RPC must not replace a
-  assert.deepEqual(displayed(f), a);
+  await f.settle(3, sample('b')); // unexpected session RPC keeps a, but reports retrieval failure
+  assert.deepEqual(displayed(f), Object.fromEntries(Object.entries(a).map(([k, v]) => [k, v + '!'])));
   f.dispose();
 });
 
@@ -329,14 +347,17 @@ test('known partial costs and cache counts stay visible, unknown shares are omit
     write: { count: 0, countKnown: false, countUnknown: true, cost: 0, costKnown: false, costUnknown: true },
   } }, team: { total: 0.002, costKnown: true, costUnknown: true } }) });
   await f.settle(0);
-  assert.equal(displayed(f).cost, '$0.0010');
-  assert.equal(displayed(f).team, '$0.0020');
-  assert.equal(displayed(f).cache, '30');
+  assert.equal(displayed(f).cost, '$0.0010*');
+  assert.equal(displayed(f).team, '$0.0020*');
+  assert.equal(displayed(f).read, '30');
+  assert.equal(displayed(f).write, '—');
   focus(f, 'team');
   assert.match(f.text(f.tooltip()), /неполные данные.*оценка по API/);
-  focus(f, 'cache');
-  assert.match(f.text(f.tooltip()), /данные ещё не получены/);
-  assert.doesNotMatch(f.text(f.tooltip()), /—/);
+  focus(f, 'write');
+  assert.match(f.text(f.tooltip()), /данные неизвестны/);
+  assert.match(f.text(f.tooltip()), /—/);
+  focus(f, 'input');
+  assert.doesNotMatch(f.text(f.tooltip()), /Доля стоимости агента/);
   f.dispose();
 });
 
@@ -347,12 +368,31 @@ test('returning to a stale session keeps its numbers and incompleteness until fr
   f.listChanged();
   await f.fail(1);
   f.switchSession('other');
-  assert.equal(displayed(f).calls, '0');
+  assert.equal(displayed(f).calls, '…');
   f.switchSession('child');
-  assert.deepEqual(displayed(f), before);
+  assert.deepEqual(displayed(f), Object.fromEntries(Object.entries(before).map(([k, v]) => [k, v + '!'])));
   focus(f, 'cost');
-  assert.match(f.text(f.tooltip()), /неполные данные/);
+  assert.match(f.text(f.tooltip()), /ошибка получения данных/);
   await f.settle(3, sample());
-  assert.doesNotMatch(f.text(f.tooltip()), /неполные данные/);
+  assert.doesNotMatch(f.text(f.tooltip()), /ошибка получения данных/);
   f.dispose();
 });
+
+test('cache tooltips contain exact counts and focus targets; narrow wrap is retained', async () => {
+  const f = fixture({ result: sample() });
+  await f.settle(0);
+  for (const key of ['read', 'write']) {
+    assert.equal(f.metrics()[key].props.tabIndex, 0);
+    assert.equal(f.metrics()[key].props.children[0].props['aria-hidden'], true);
+    focus(f, key);
+    assert.equal(f.tooltip().props.role, 'tooltip');
+    assert.equal(f.metrics()[key].props['aria-describedby'], f.tooltip().props.id);
+    assert.match(f.text(f.tooltip()), key === 'read' ? /2[\s\u00a0]000/ : /500/);
+    assert.match(f.text(f.tooltip()), /Стоимость.*оценка по API/);
+    assert.match(f.text(f.tooltip()), /Доля стоимости агента/);
+  }
+  assert.match(f.styles[0].textContent, /flex-wrap:wrap/);
+  assert.match(f.styles[0].textContent, /@media\(max-width:390px\)/);
+  f.dispose();
+});
+

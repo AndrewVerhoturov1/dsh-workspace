@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { CodexAdapter } from '../lib/adapter.js'
-import { toCodexContext } from '../lib/convert.js'
+import { toCodexContext, mapUsage, toStreamChunks } from '../lib/convert.js'
 
 const png = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+nm4kAAAAASUVORK5CYII=',
@@ -188,3 +188,30 @@ test('ordinary text requests keep the existing pi-ai context shape', async () =>
     messages: [{ role: 'user', content: 'hello world', timestamp: 0 }],
   })
 })
+
+test('positive SDK buckets stay disjoint and reasoning remains an output subset', () => {
+  assert.deepEqual(mapUsage({ input: 10, output: 7, reasoning: 3, cacheRead: 20, cacheWrite: 4 }), {
+    inputTokens: 10, outputTokens: 7, reasoningTokens: 3, cacheReadTokens: 20, cacheWriteTokens: 4,
+  })
+})
+
+test('SDK zero counts carry unknown presence without violating required numeric usage', () => {
+  assert.deepEqual(mapUsage({ input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 }), { inputTokens: 0, outputTokens: 0, inputTokensKnown: false, outputTokensKnown: false })
+  assert.deepEqual(mapUsage({ input: 10, output: 7, reasoning: 0, cacheRead: 20, cacheWrite: 0 }), { inputTokens: 10, outputTokens: 7, cacheReadTokens: 20 })
+})
+
+test('terminal streams forward positive read/write/reasoning and omit SDK zero defaults on errors', async () => {
+  for (const type of ['done', 'error']) {
+    const message = { content: [{ type: 'text', text: 'ok' }], stopReason: type === 'done' ? 'stop' : 'error', errorMessage: 'network error', usage: { input: 10, output: 7, reasoning: 3, cacheRead: 20, cacheWrite: 4 } }
+    const events = (async function* () { yield { type, [type === 'done' ? 'message' : 'error']: message } })()
+    const chunks = []
+    for await (const chunk of toStreamChunks(events)) chunks.push(chunk)
+    assert.deepEqual(chunks[0], { type: 'usage', usage: { inputTokens: 10, outputTokens: 7, reasoningTokens: 3, cacheReadTokens: 20, cacheWriteTokens: 4 } })
+    assert.equal(chunks[1].type, 'finish')
+  }
+  const zero = (async function* () { yield { type: 'error', error: { content: [], stopReason: 'error', errorMessage: 'network error', usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } } } })()
+  const chunks = []
+  for await (const chunk of toStreamChunks(zero)) chunks.push(chunk)
+  assert.deepEqual(chunks[0], { type: 'usage', usage: { inputTokens: 0, outputTokens: 0, inputTokensKnown: false, outputTokensKnown: false } })
+})
+
