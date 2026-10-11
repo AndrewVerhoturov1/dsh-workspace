@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import { summarize } from './accounting.js';
+import catalog from './model-prices.json' with { type: 'json' };
 
 const source = fs.readFileSync(new URL('./client.js', import.meta.url), 'utf8');
 const svgPaths = {
@@ -167,7 +169,7 @@ test('positive sub-threshold cost is visible while a true zero stays exact', asy
   low.dispose();
 });
 
-test('unknown values differ from reported zero; reasoning share is explanatory and cache rows split', async () => {
+test('zero and unknown values stay numeric; reasoning and cache rows include shares', async () => {
   const f = fixture({ result: sample('child', { own: { ...sample().own, metrics: {
     ...sample().own.metrics,
     reasoning: { count: 0, countUnknown: false, countKnown: true, cost: 0, costUnknown: false, costKnown: true, share: null },
@@ -183,8 +185,9 @@ test('unknown values differ from reported zero; reasoning share is explanatory a
   const tip = f.tooltip();
   assert.equal(tip.props.hidden, false);
   const tipText = f.text(tip);
-  assert.doesNotMatch(tipText, /Доля стоимости агента|—/);
-  assert.match(tipText, /Входят в исходящие/);
+  assert.match(tipText, /Доля стоимости агента0%/);
+  assert.doesNotMatch(tipText, /Входят в исходящие|—/);
+  assertNumericTooltip(f);
   assert.doesNotMatch(tipText, /Общий расход|Итого/);
   f.metrics().cache.props.onFocus({ currentTarget: { getBoundingClientRect() { return { left: 1, top: 2, width: 3, height: 4 }; } } });
   assert.match(f.text(f.tooltip()), /Кэш · чтение/);
@@ -212,7 +215,7 @@ test('tooltip is hidden by default and focus/hover exposes exactly one tooltip',
   assert.equal(f.tooltip().props.hidden, false);
   m.team.props.onFocus({ currentTarget: anchor });
   assert.equal(f.tooltip().props.hidden, false);
-  assert.equal(f.tree.props.children[3].props.children.length, 3);
+  assert.equal(f.tree.props.children[3].props.children.length, 2);
   m.team.props.onBlur();
   assert.equal(f.tooltip().props.hidden, false);
   m.cost.props.onMouseLeave();
@@ -257,18 +260,36 @@ test('dispose removes subscriptions/style and aborts in-flight unary request wit
 });
 const displayed = f => Object.fromEntries(Object.entries(f.metrics()).map(([key, node]) => [key, node.props.children[1].props.children]));
 const focus = (f, key) => f.metrics()[key].props.onFocus({ currentTarget: { getBoundingClientRect: () => ({ left: 1, top: 100, width: 20, height: 20 }) } });
+const tooltipValues = f => Array.from(f.tooltip().props.children).filter(node => node.type !== 'strong').map(node => f.text(node.type === 'b' ? node : node.props.children[1]));
+const assertNumericTooltip = f => {
+  const rows = f.tooltip().props.children;
+  const labels = ['Токены', 'Стоимость', 'Доля стоимости агента'];
+  for (const row of rows) {
+    if (row.type === 'strong') continue;
+    if (row.type !== 'b') {
+      assert.equal(row.type, 'span');
+      assert.ok(labels.includes(row.props.children[0]));
+      assert.equal(row.props.children[1].type, 'b');
+      assert.equal(row.props.children.length, 2);
+    }
+  }
+  for (const value of tooltipValues(f)) assert.match(value, /^(?:<)?\$?[\d\s.,]+%?$/u);
+  assert.doesNotMatch(f.text(f.tooltip()), /неполные|данные ещё|неизвестн|тариф|оценка|Входят в исходящие|NaN|Infinity|—/i);
+};
 
-test('first session without usage displays zeros and compact no-data tooltip, never dashes', async () => {
+test('first session without usage displays numeric zero tooltips and zero shares, never dashes', async () => {
   const f = fixture({ sessionId: 'empty' });
   assert.deepEqual(displayed(f), { calls: '0', cost: '$0.00', team: '$0.00', input: '0', reasoning: '0', cache: '0', output: '0' });
   for (const key of Object.keys(f.metrics())) {
     focus(f, key);
-    assert.match(f.text(f.tooltip()), /данные ещё не получены/);
-    assert.doesNotMatch(f.text(f.tooltip()), /—|неизвестн/);
+    assertNumericTooltip(f);
+    const expected = ['calls', 'cost', 'team'].includes(key) ? [key === 'calls' ? '0' : '$0.00'] : key === 'cache' ? ['0', '$0.00', '0%', '0', '$0.00', '0%'] : ['0', '$0.00', '0%'];
+    assert.deepEqual(tooltipValues(f), expected);
   }
   await f.settle(0, { sessionId: 'empty', own: { calls: 0, total: 0, costKnown: false, metrics: {} }, team: { total: 0, costKnown: false } });
   focus(f, 'input');
-  assert.match(f.text(f.tooltip()), /данные ещё не получены/);
+  assertNumericTooltip(f);
+  assert.deepEqual(tooltipValues(f), ['0', '$0.00', '0%']);
   f.dispose();
 });
 
@@ -280,7 +301,7 @@ test('RPC errors, missing fields and partial lower snapshots retain known number
   await f.fail(1);
   assert.deepEqual(displayed(f), before);
   focus(f, 'cost');
-  assert.match(f.text(f.tooltip()), /неполные данные.*оценка по API/);
+  assertNumericTooltip(f);
   f.listChanged();
   await f.fail(2, true);
   assert.deepEqual(displayed(f), before);
@@ -291,7 +312,7 @@ test('RPC errors, missing fields and partial lower snapshots retain known number
   } }, team: { total: 0.003, costKnown: true, costUnknown: true } });
   assert.deepEqual(displayed(f), before);
   focus(f, 'reasoning');
-  assert.match(f.text(f.tooltip()), /неполные данные/);
+  assertNumericTooltip(f);
   f.listChanged();
   await f.settle(4, sample('child', { own: { ...sample().own, calls: 3, total: 0.005 } }));
   assert.equal(displayed(f).calls, '3');
@@ -322,7 +343,7 @@ test('switching sessions, returning and late replies never transfer another sess
   f.dispose();
 });
 
-test('known partial costs and cache counts stay visible, unknown shares are omitted', async () => {
+test('known partial costs and cache counts stay visible with available own-cost shares', async () => {
   const f = fixture({ result: sample('child', { own: { ...sample().own, costUnknown: true, total: 0.001, metrics: {
     ...sample().own.metrics,
     read: { count: 30, countKnown: true, countUnknown: false, cost: 0.00001, costKnown: true, costUnknown: false },
@@ -333,14 +354,14 @@ test('known partial costs and cache counts stay visible, unknown shares are omit
   assert.equal(displayed(f).team, '$0.0020');
   assert.equal(displayed(f).cache, '30');
   focus(f, 'team');
-  assert.match(f.text(f.tooltip()), /неполные данные.*оценка по API/);
+  assertNumericTooltip(f);
   focus(f, 'cache');
-  assert.match(f.text(f.tooltip()), /данные ещё не получены/);
-  assert.doesNotMatch(f.text(f.tooltip()), /—/);
+  assertNumericTooltip(f);
+  assert.deepEqual(tooltipValues(f), ['30', '<$0.0001', '1%', '0', '$0.00', '0%']);
   f.dispose();
 });
 
-test('returning to a stale session keeps its numbers and incompleteness until fresh data arrives', async () => {
+test('returning to a stale session keeps numeric tooltips until fresh data arrives', async () => {
   const f = fixture({ result: sample() });
   await f.settle(0);
   const before = displayed(f);
@@ -351,8 +372,82 @@ test('returning to a stale session keeps its numbers and incompleteness until fr
   f.switchSession('child');
   assert.deepEqual(displayed(f), before);
   focus(f, 'cost');
-  assert.match(f.text(f.tooltip()), /неполные данные/);
+  assertNumericTooltip(f);
   await f.settle(3, sample());
-  assert.doesNotMatch(f.text(f.tooltip()), /неполные данные/);
+  assertNumericTooltip(f);
   f.dispose();
+});
+
+test('every token category uses retained own cost, never raw shares or team total', async () => {
+  const f = fixture({ result: sample() });
+  await f.settle(0);
+  const expected = {
+    input: ['1\u00a0200', '$0.0010', '23.81%'],
+    reasoning: ['300', '$0.0005', '11.90%'],
+    cache: ['2\u00a0000', '$0.0002', '4.76%', '500', '$0.0005', '11.90%'],
+    output: ['400', '$0.0020', '47.62%'],
+  };
+  for (const [key, values] of Object.entries(expected)) {
+    focus(f, key);
+    assertNumericTooltip(f);
+    assert.deepEqual(tooltipValues(f), values);
+  }
+  assert.equal(displayed(f).cost, '$0.0042');
+  assert.equal(displayed(f).team, '$0.0090');
+  f.listChanged();
+  await f.settle(1, { sessionId: 'child', own: { calls: 1, total: 0.001, costKnown: true, costUnknown: true, metrics: {
+    input: { count: 500, countKnown: true, countUnknown: true, cost: 0.0001, costKnown: true, costUnknown: true, share: 10 },
+    reasoning: { count: 0, countKnown: false, countUnknown: true, cost: 0, costKnown: false, costUnknown: true, share: 99 },
+    read: { count: 3000, countKnown: true, cost: 0.0003, costKnown: true, share: 30 },
+  } }, team: { total: 0.003, costKnown: true, costUnknown: true } });
+  assert.equal(displayed(f).cost, '$0.0042');
+  assert.equal(displayed(f).team, '$0.0090');
+  for (const key of ['input', 'reasoning', 'output']) {
+    focus(f, key);
+    assertNumericTooltip(f);
+    assert.deepEqual(tooltipValues(f), expected[key]);
+  }
+  focus(f, 'cache');
+  assert.deepEqual(tooltipValues(f), ['3\u00a0000', '$0.0003', '7.14%', '500', '$0.0005', '11.90%']);
+  f.switchSession('empty');
+  focus(f, 'input');
+  assert.deepEqual(tooltipValues(f), ['0', '$0.00', '0%']);
+  f.switchSession('child');
+  focus(f, 'input');
+  assert.deepEqual(tooltipValues(f), expected.input);
+  f.dispose();
+});
+
+test('zero input leaves reasoning separate and output bills its subset only once', async () => {
+  const own = summarize({ incompleteHistory: false, attempts: [{ model: 'gpt-6-luna', usage: { inputTokens: 0, reasoningTokens: 223, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 400 } }] }, catalog);
+  assert.equal(own.metrics.input.count, 0);
+  assert.equal(own.metrics.reasoning.count, 223);
+  assert.equal(own.total, own.metrics.output.cost);
+  const f = fixture({ result: sample('child', { own, team: { total: 1, costKnown: true } }) });
+  await f.settle(0);
+  for (const [key, values] of Object.entries({ input: ['0', '$0.00', '0%'], reasoning: ['223', '$0.0001', '55.75%'], output: ['400', '$0.0002', '100%'] })) {
+    focus(f, key);
+    assertNumericTooltip(f);
+    assert.deepEqual(tooltipValues(f), values);
+  }
+  assert.equal(displayed(f).cost, '$0.0002');
+  assert.equal(displayed(f).team, '$1.00');
+  f.dispose();
+});
+
+test('unpriced positive counts and explicit zero have numeric zero cost and shares', async () => {
+  for (const model of ['unknown-model', 'gpt-6-luna']) {
+    const count = model === 'unknown-model' ? 5 : 0;
+    const own = summarize({ incompleteHistory: true, attempts: [{ model, usage: { inputTokens: count, reasoningTokens: count, cacheReadTokens: count, cacheWriteTokens: count, outputTokens: count } }] }, catalog);
+    assert.equal(own.total, 0);
+    const f = fixture({ result: sample('child', { own }) });
+    await f.settle(0);
+    for (const key of ['input', 'reasoning', 'cache', 'output']) {
+      focus(f, key);
+      assertNumericTooltip(f);
+      const values = [String(count), '$0.00', '0%'];
+      assert.deepEqual(tooltipValues(f), key === 'cache' ? [...values, ...values] : values);
+    }
+    f.dispose();
+  }
 });
