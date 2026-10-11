@@ -55,23 +55,28 @@ export function foldAttempts(header, events) {
 }
 function ratesFor(model, usage, catalog) {
   const item = catalog.models.find(m => m.publicId === model);
-  if (!item || !usage) return null;
+  if (!item || !usage) return { rates: null, tierUnknown: false };
   const tiers = item.pricesUSDper1M;
-  if (tiers.standard) return tiers.standard;
+  if (tiers.standard) return { rates: tiers.standard, tierUnknown: false };
   const thresholdKey = Object.keys(tiers).find(k => k.startsWith('promptInputLTE'));
   const threshold = Number(thresholdKey?.slice('promptInputLTE'.length));
   const promptKnown = ['inputTokens', 'cacheReadTokens', 'cacheWriteTokens'].every(k => typeof usage[k] === 'number');
-  if (!promptKnown) return null; // missing cache usage can change the whole-request tier
-  const prompt = usage.inputTokens + usage.cacheReadTokens + usage.cacheWriteTokens;
-  return tiers[(prompt > threshold ? 'promptInputGT' : 'promptInputLTE') + threshold] ?? null;
+  const prompt = ['inputTokens', 'cacheReadTokens', 'cacheWriteTokens'].reduce((sum, key) => sum + (usage[key] ?? 0), 0);
+  if (promptKnown || prompt > threshold) return { rates: tiers[(prompt > threshold ? 'promptInputGT' : 'promptInputLTE') + threshold] ?? null, tierUnknown: false };
+  // Missing prompt buckets cannot prove the lower tier. Show a lower-bound
+  // estimate for received tokens, not zero, using only the catalog's rates.
+  const low = tiers['promptInputLTE' + threshold];
+  const high = tiers['promptInputGT' + threshold];
+  const rates = Object.fromEntries(Object.keys(low ?? {}).filter(key => typeof high?.[key] === 'number').map(key => [key, Math.min(low[key], high[key])]));
+  return { rates, tierUnknown: true };
 }
 export function summarize(fold, catalog) {
-  const metrics = Object.fromEntries(Object.keys(buckets).map(k => [k, { count: 0, countKnown: false, countUnknown: false, cost: 0, costKnown: false, costUnknown: false }]));
+  const metrics = Object.fromEntries(Object.keys(buckets).map(k => [k, { count: 0, countKnown: false, countUnknown: false, cost: 0, costKnown: false, costUnknown: false, rateUnknown: false, tierUnknown: false }]));
   let total = 0;
   let costUnknown = fold.incompleteHistory;
   for (const attempt of fold.attempts) {
     const usage = attempt.usage;
-    const rates = ratesFor(attempt.model, usage, catalog);
+    const { rates, tierUnknown } = ratesFor(attempt.model, usage, catalog);
     const prices = { input: rates?.inputUncached, reasoning: rates?.output, read: rates?.cacheRead, write: rates?.cacheWrite, output: rates?.output };
     for (const [key, field] of Object.entries(buckets)) {
       const m = metrics[key];
@@ -87,14 +92,14 @@ export function summarize(fold, catalog) {
         const long = usage.cacheWrite1hTokens;
         if (typeof short === 'number' && typeof long === 'number' && short + long === count) amount = (short * rates.cacheWrite5m + long * rates.cacheWrite1h) / catalog.unitTokens;
       } else if (typeof prices[key] === 'number') amount = count * prices[key] / catalog.unitTokens;
-      if (amount == null) m.costUnknown = true;
-      else { m.cost += amount; m.costKnown = true; }
+      if (amount == null) { m.costUnknown = true; m.rateUnknown ||= !rates; }
+      else { m.cost += amount; m.costKnown = true; if (count > 0 && tierUnknown) { m.costUnknown = true; m.tierUnknown = true; } }
     }
   }
   for (const key of ['input', 'read', 'write', 'output']) { total += metrics[key].cost; costUnknown ||= metrics[key].costUnknown; }
   if (fold.incompleteHistory) for (const m of Object.values(metrics)) { m.countUnknown = true; m.costUnknown = true; }
   for (const m of Object.values(metrics)) m.share = !costUnknown && !m.costUnknown && total > 0 ? m.cost / total * 100 : null;
-  return { calls: fold.attempts.length, callsUnknown: fold.incompleteHistory, total, costKnown: ['input', 'read', 'write', 'output'].some(key => metrics[key].costKnown), costUnknown, metrics };
+  return { calls: fold.attempts.length, callsUnknown: fold.incompleteHistory, total, costKnown: ['input', 'read', 'write', 'output'].some(key => metrics[key].costKnown), costUnknown, rateUnknown: Object.values(metrics).some(m => m.rateUnknown), tierUnknown: Object.values(metrics).some(m => m.tierUnknown), metrics };
 }
 export function taskTeam(headers, currentId) {
   const byId = new Map(headers.map(h => [h.id, h]));

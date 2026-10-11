@@ -340,6 +340,27 @@ test('known partial costs and cache counts stay visible, unknown shares are omit
   f.dispose();
 });
 
+test('received counts with unknown rates differ from no data; partial tiers and missing reasoning are explained', async () => {
+  const unknown = fixture({ result: sample('child', { own: { ...sample().own, total: 0, costKnown: false, costUnknown: true, rateUnknown: true } }) });
+  await unknown.settle(0);
+  focus(unknown, 'cost');
+  assert.match(unknown.text(unknown.tooltip()), /тариф неизвестен/);
+  assert.doesNotMatch(unknown.text(unknown.tooltip()), /данные ещё не получены/);
+  unknown.dispose();
+  const partial = fixture({ result: sample('child', { own: { ...sample().own, total: 0.00679628, costUnknown: true, tierUnknown: true, metrics: { ...sample().own.metrics, reasoning: { count: 0, countKnown: false, countUnknown: true } } }, team: { total: 0.00679628, costKnown: true, costUnknown: true, tierUnknown: true } }) });
+  await partial.settle(0);
+  assert.equal(displayed(partial).cost, '$0.0068');
+  assert.equal(displayed(partial).team, '$0.0068');
+  focus(partial, 'cost');
+  assert.match(partial.text(partial.tooltip()), /неполные данные.*нижняя оценка: порог тарифа неизвестен.*оценка по API/);
+  focus(partial, 'team');
+  assert.match(partial.text(partial.tooltip()), /порог тарифа неизвестен/);
+  focus(partial, 'reasoning');
+  assert.match(partial.text(partial.tooltip()), /Отдельный счётчик не получен или не сохранён/);
+  assert.equal(displayed(partial).reasoning, '0');
+  partial.dispose();
+});
+
 test('returning to a stale session keeps its numbers and incompleteness until fresh data arrives', async () => {
   const f = fixture({ result: sample() });
   await f.settle(0);
