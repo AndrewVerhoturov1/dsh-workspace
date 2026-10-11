@@ -33,11 +33,18 @@ jobs:
         run: |
           node --input-type=module <<'JS'
           import { createRequire } from 'node:module';
-          import { symlinkSync, realpathSync } from 'node:fs';
+          import { symlinkSync, realpathSync, mkdirSync } from 'node:fs';
           import { resolve, dirname } from 'node:path';
           import { applySessionIgnorableEvents } from './plugins/dsh-cost-panel/session-compat.mjs';
           const sdk = createRequire(resolve('plugins/dsh-postman-harness/package.json')).resolve('@deepseek-ai/dsh/package.json');
-          symlinkSync(resolve(dirname(realpathSync(sdk)), 'node_modules'), 'plugins/dsh-cost-panel/node_modules', 'dir');
+          const native = createRequire(sdk);
+          mkdirSync('plugins/dsh-cost-panel/node_modules/@deepseek-ai', {recursive: true});
+          for (const name of ['@deepseek-ai/cordis', '@deepseek-ai/dsh-llm', '@deepseek-ai/dsh-session',
+            '@deepseek-ai/dsh-session-projection', '@deepseek-ai/dsh-session-persistence-jsonl',
+            '@deepseek-ai/dsh-host-apiproxy', 'zod']) {
+            symlinkSync(dirname(realpathSync(native.resolve(name + '/package.json'))),
+              resolve('plugins/dsh-cost-panel/node_modules', name), 'dir');
+          }
           applySessionIgnorableEvents([sdk, resolve('plugins/dsh-cost-panel/package.json')]);
           JS
       - name: Verify persistence with the panel disabled and required-event rejection
