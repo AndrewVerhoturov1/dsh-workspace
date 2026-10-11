@@ -21,6 +21,7 @@ export function apply(ctx) {
     const step = loopRequest && [...session.events].reverse().find(e => e.type === 'step/start');
     const record = { id: session.events.length, provider: options.provider, model: options.model,
       purpose: options.purpose ?? (loopRequest ? 'conversation' : 'auxiliary'), usage: null, status: 'started',
+      ...typeof options.serviceTier === 'string' ? { serviceTier: options.serviceTier } : {},
       ...step ? { turn: step.data.turn, step: step.data.step } : {},
     };
     session.append('cost-panel/attempt', record, { ignorable: true });

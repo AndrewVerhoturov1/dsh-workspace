@@ -163,13 +163,13 @@ test('registered loopback RPC returns own/live-root/live-child/cold-descendant c
   const child = h.store.create('child', { meta: { cwd: tmpdir(), parentSession: root.id, origin: 'subagent' } });
   const coldHeader = { id: 'cold', version: 0, createdAt: 1, cwd: tmpdir(), parentSession: child.id, origin: 'subagent', seedLength: 0 };
   const usageEvent = (session, input) => {
-    const request = markAgentLoopRequest({ sessionId: session.id, provider: 'openai', model: 'gpt-6-astra', messages: [], testChunks: [chunk('usage', { usage: usage(input, 2) }), chunk('finish', { reason: { kind: 'stop' } })] });
+    const request = markAgentLoopRequest({ sessionId: session.id, provider: 'openai', serviceTier: 'default', model: 'gpt-6-astra', messages: [], testChunks: [chunk('usage', { usage: usage(input, 2) }), chunk('finish', { reason: { kind: 'stop' } })] });
     return h.llm.stream(request);
   };
   for (const [session, amount] of [[root, 10], [child, 20]]) {
     for await (const _ of await usageEvent(session, amount)) { /* preserve the actual Host observer log */ }
   }
-  const coldEvents = [{ type: 'cost-panel/attempt', seq: 0, time: 1, data: { id: 0, provider: 'openai', model: 'gpt-6-astra', purpose: 'conversation', turn: 1, step: 0, usage: usage(30, 2), status: 'stop' } }];
+  const coldEvents = [{ type: 'cost-panel/attempt', seq: 0, time: 1, data: { id: 0, provider: 'openai', serviceTier: 'default', model: 'gpt-6-astra', purpose: 'conversation', turn: 1, step: 0, usage: usage(30, 2), status: 'stop' } }];
   const persistence = {
     async list() { return [root.header, child.header, coldHeader]; },
     async inspect(id) { assert.equal(id, 'cold'); return { meta: coldHeader, events: coldEvents }; },
@@ -207,7 +207,7 @@ test('observer persists merged partial usage, with one attempt and no repeated o
   const h = await harness(t);
   const session = sessionWithStep(h.store, 'partial');
   const chunks = [chunk('usage', { usage: usage(10, 4) }), chunk('usage', { usage: { outputTokens: 6 } }), chunk('usage', { usage: { inputTokens: 0, outputTokens: 0 } }), chunk('finish', { reason: { kind: 'stop' } })];
-  for await (const _ of h.llm.stream(markAgentLoopRequest({ sessionId: session.id, provider: 'openai', model: 'gpt-6-luna', messages: [], testChunks: chunks }))) { /* consume */ }
+  for await (const _ of h.llm.stream(markAgentLoopRequest({ sessionId: session.id, provider: 'openai', serviceTier: 'default', model: 'gpt-6-luna', messages: [], testChunks: chunks }))) { /* consume */ }
   const records = session.events.filter(e => e.type === 'cost-panel/attempt');
   assert.deepEqual(records.at(-1).data.usage, usage(10, 6));
   assert.equal(foldAttempts(session.header, session.events).attempts.length, 1);
@@ -222,7 +222,7 @@ test('observer persists merged partial usage, with one attempt and no repeated o
 test('unreadable descendant or persistence list preserves available own/team costs and flags incomplete', async t => {
   const h = await harness(t);
   const root = sessionWithStep(h.store, 'available');
-  root.append('cost-panel/attempt', { id: 0, provider: 'openai', model: 'gpt-6-luna', purpose: 'conversation', usage: usage(10, 4), status: 'stop' });
+  root.append('cost-panel/attempt', { id: 0, provider: 'openai', serviceTier: 'default', model: 'gpt-6-luna', purpose: 'conversation', usage: usage(10, 4), status: 'stop' });
   const cold = { id: 'unavailable', origin: 'subagent', parentSession: root.id };
   let failList = false;
   h.ctx.provide('sessionPersistence', {
@@ -239,3 +239,22 @@ test('unreadable descendant or persistence list preserves available own/team cos
     assert.equal(result.value.team.costUnknown, true);
   }
 });
+
+test('unknown required SDK placeholders survive observer/RPC without fabricated confirmed zeros', async t => {
+  const h = await harness(t);
+  const session = sessionWithStep(h.store, 'sdk-unknown');
+  const counts = { inputTokens: 0, outputTokens: 7, inputTokensKnown: false, cacheReadTokens: 20, reasoningTokens: 3 };
+  for await (const _ of h.llm.stream(markAgentLoopRequest({ sessionId: session.id, provider: 'openai', serviceTier: 'default', model: 'gpt-6-luna', messages: [], testChunks: [chunk('usage', { usage: counts }), chunk('finish', { reason: { kind: 'stop' } })] }))) {}
+  const recorded = session.events.filter(e => e.type === 'cost-panel/attempt').at(-1).data.usage;
+  assert.equal(recorded.inputTokens, undefined);
+  assert.equal(recorded.inputTokensKnown, false);
+  const result = await h.rpcRegistration[1]('get', { sessionId: session.id }, new AbortController().signal);
+  assert.equal(result.ok, true);
+  assert.equal(result.value.own.metrics.input.countKnown, false);
+  assert.equal(result.value.own.metrics.output.count, 7);
+  assert.equal(result.value.own.metrics.read.count, 20);
+  assert.equal(result.value.own.metrics.write.countKnown, false);
+  assert.equal(result.value.own.costUnknown, true);
+  assert.ok(result.value.own.total > 0);
+});
+
