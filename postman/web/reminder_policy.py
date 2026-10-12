@@ -152,10 +152,15 @@ def _phase_suppression(phase: dict[str, Any], *, boundary: str,
                        transitions: list[str], page: Any, prompt: str | None = None,
                        timeout_ms: int = 0) -> dict[str, Any] | None:
     state = phase.get("phase", browser_observer.UNKNOWN)
+    if phase.get("bellReceived"):
+        # Bell terminates Devspace; do not mutate even an owned unsent draft.
+        return _result(REMINDER_PHASE_PENDING, ok=False, send_state=submit.SEND_PROVEN_NOT_SENT,
+                       transitions=transitions, details={"answerPhase": phase, "suppressionPhase": boundary,
+                                                        "unsentPromptCleared": prompt is None})
     if (state not in {browser_observer.FINAL_ANSWER_STARTED, browser_observer.FINAL_ANSWER_COMPLETED,
                           browser_observer.ASSISTANT_CONNECTION_INTERRUPTED}
             and not phase.get("finalAnswerLatched")
-            and phase.get("reason") not in {"control_intent_lineage_changed", "control_deadline"}):
+            and phase.get("reason") not in {"control_intent_lineage_changed", "control_deadline", "external_action_not_safe"}):
         return None
     code = (REMINDER_SUPPRESSED_ASSISTANT_ACTIVITY if state in
             {browser_observer.FINAL_ANSWER_STARTED, browser_observer.FINAL_ANSWER_COMPLETED}
@@ -351,6 +356,7 @@ def submit_reminder(
     anchor_binding: dict[str, Any] | None = None,
     operation_deadline: float | None = None,
     control_intent: dict[str, Any] | None = None,
+    phase_probe: Callable[[], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Send one reminder in the exact REQ chat, unless final answer has begun."""
     if isinstance(send_window_ms, bool) or not isinstance(send_window_ms, int) or send_window_ms < 0:
@@ -386,9 +392,10 @@ def submit_reminder(
                     or relation.get("userOrdinal") != len(users)
                     or relation.get("precedingUserHashes") != [submit.prompt_sha256(t["text"]) for t in users]):
                 return {"phase": browser_observer.UNKNOWN, "reason": "control_intent_lineage_changed"}
-        phase = browser_observer.inspect_answer_phase(page, expected_anchor, conversation_url,
-                                                     tracker=tracker, anchor_binding=anchor_binding,
-                                                     ignore_system_banner=True)
+        phase = (phase_probe() if phase_probe is not None else
+                 browser_observer.inspect_answer_phase(page, expected_anchor, conversation_url,
+                                                       tracker=tracker, anchor_binding=anchor_binding,
+                                                       ignore_system_banner=True))
         interrupted, evidence = browser_observer.connection_interrupted(page)
         if interrupted or evidence.get("confidence") == "weak":
             return {**phase, "phase": browser_observer.ASSISTANT_CONNECTION_INTERRUPTED}
@@ -488,6 +495,11 @@ def submit_reminder(
                                       boundary="before_insert", transitions=base_transitions,
                                       page=page)
         insert_timeout_ms = min(insert_timeout_ms, max(1, int((operation_deadline - monotonic()) * 1000)))
+    if phase_probe is not None:
+        suppressed = _phase_suppression(inspect(), boundary="immediately_before_insert",
+                                        transitions=base_transitions, page=page)
+        if suppressed is not None:
+            return suppressed
     inserted = submit.insert_prompt(
         page,
         composer,
@@ -660,6 +672,11 @@ def submit_reminder(
                         code=REMINDER_PHASE_PENDING, phase="deadline_before_click",
                         transitions=send_transitions, timeout_ms=timeout_ms,
                         details={"reason": "control_deadline"})
+                if phase_probe is not None:
+                    suppressed = _phase_suppression(inspect(), boundary="immediately_before_click",
+                        transitions=send_transitions, page=page, prompt=prompt, timeout_ms=timeout_ms)
+                    if suppressed is not None:
+                        return suppressed
                 result = _click_ready_reminder_once(
                     page,
                     last_button,

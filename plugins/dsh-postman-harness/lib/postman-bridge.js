@@ -93,7 +93,7 @@ export function createPostmanTaskRestoreTool(ctx, contexts = postmanTaskContexts
 export function createPostmanBridgeTool(ctx, jobs, contexts) {
   return defineTool({
     name: POSTMAN_BRIDGE_TOOL_NAME,
-    description: 'Accept a fresh exact @Postman, @PostmanAsk or @PostmanImage delegation in a background Bridge job. Acceptance is not a Web result; read the trusted terminal via postman_bridge_status after POSTMAN_BRIDGE_READY.',
+    description: 'Accept an exact @Postman, @PostmanAsk, @PostmanImage or fresh stage-one @PostmanDevspace delegation in a background Bridge job. Devspace is one-shot READ_ONLY/default or private WRITE_TEST, local bell/diagnostics, no attachments/Git writes. Acceptance is not a Web result or engineering PASS; read the own Luna trusted terminal via postman_bridge_status after POSTMAN_BRIDGE_READY.',
     parameters: { message: { type: 'string', required: true,
       description: 'Complete model-authored delegation beginning with exact @Postman, @PostmanAsk, @PostmanImage or @PostmanDevspace.' },
       devspace_mode: { type: 'string', enum: ['READ_ONLY', 'WRITE_TEST'], description: 'Devspace stage 1 only: read the prepared task area, optionally write only its Host-private harmless test folder. Defaults READ_ONLY.' } },

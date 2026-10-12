@@ -25,11 +25,12 @@ export function createDevspaceChannel({ root = devspaceRoot(), bridgeJobId, lead
   const launcher = [
     '[CmdletBinding()]',
     "param([Parameter(Mandatory=$true)][ValidateSet('done','need-decision','blocked')][string]$Outcome,[string]$Message='',[string]$Report='')",
-    '& python -X utf8 ' + quote(join(sourceRoot, 'postman', 'devspace', 'signal.py')) + ' $Outcome --channel ' + quote(channel) + ' --capability ' + quote(binding.capability) + ' --message $Message --report $Report',
+    '& python -X utf8 ' + quote(join(sourceRoot, 'postman', 'devspace', 'signal.py')) + ' $Outcome --channel ' + quote(channel) + ' --capability ' + quote(binding.capability) + ' ("--message=" + $Message) ("--report=" + $Report)',
     'exit $LASTEXITCODE', ''
   ].join('\n')
   writeFileSync(command, launcher, { flag: 'wx', mode: 0o600 })
-  return Object.freeze({ ...binding, signalCommand: '& ' + quote(command) })
+  const bashQuote = value => "'" + value.replaceAll("'", "'\"'\"'") + "'"
+  return Object.freeze({ ...binding, signalCommand: 'pwsh -NoProfile -NonInteractive -File ' + bashQuote(command) })
 }
 
 // Only the saved Host binding supplies authority. Event/report prose never chooses a recipient or path.
@@ -64,11 +65,12 @@ export function devspaceTerminal(binding, observed = {}) {
   const code = event ? 'DEVSPACE_SIGNAL_RECEIVED' : 'DEVSPACE_DIAGNOSTIC'
   return { ok: true, code, state: code, jobId: binding.jobId, requestId: binding.requestId,
     leaderSessionId: binding.leaderSessionId, lunaSessionId: binding.lunaSessionId,
-    source, reportedOutcome: event?.reportedOutcome ?? 'BLOCKED', deliveryState: 'DELIVERED',
+    source, reportedOutcome: event?.reportedOutcome ?? (observed.diagnostic === 'PARTIAL' ? 'PARTIAL' : observed.source === 'text_fallback' ? 'UNKNOWN' : 'BLOCKED'), deliveryState: 'DELIVERED',
     evidenceState: 'REPORTED_NOT_VERIFIED', workspaceRef: binding.workspaceRef, writeRoot: binding.writeRoot,
-    reportRef, message: event?.message ?? '',
+    reportRef, message: event?.message ?? (typeof observed.message === 'string' ? observed.message : ''),
+    transportDiagnostics: observed.transportDiagnostics ?? null,
     assistantText: typeof observed.assistantText === 'string' ? observed.assistantText : '',
     conversationRef: typeof observed.conversationRef === 'string' && /^https:\/\/chatgpt\.com\/c\/[a-zA-Z0-9-]+$/.test(observed.conversationRef) ? observed.conversationRef : null,
-    diagnostic: event ? null : observed.diagnostic === 'CAPABILITY_UNAVAILABLE' ? 'CAPABILITY_UNAVAILABLE' : 'BLOCKED',
+    diagnostic: event ? null : ['CAPABILITY_UNAVAILABLE', 'BLOCKED', 'PARTIAL', 'UNKNOWN'].includes(observed.diagnostic) ? observed.diagnostic : 'UNKNOWN',
     warnings: event ? ['REPORT_UNVERIFIED', ...(!reportRef || !existsReport(reportRef) ? ['REPORT_UNAVAILABLE'] : [])] : ['NO_LOCAL_SIGNAL'] }
 }

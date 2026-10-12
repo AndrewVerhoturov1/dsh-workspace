@@ -212,6 +212,7 @@ def recover_interrupted_chat(
     original_prompt: str | None = None,
     anchor_binding=None,
     on_event: Callable[..., None] | None = None,
+    external_result_probe: Callable[[], dict[str, Any] | None] | None = None,
 ) -> dict[str, Any]:
     """Reload the same bound conversation conservatively after an interruption."""
     if not submit.is_bound_chat_url(conversation_url):
@@ -290,6 +291,10 @@ def recover_interrupted_chat(
             return _result(RECOVERY_INVALID_CONFIG, ok=False, details={"reason": "conversation_changed_before_reload", "attempts": attempts})
         if on_event:
             on_event("RELOAD_STARTED", attempt=attempt, timeoutMs=attempt_timeout_ms)
+        if external_result_probe:
+            received = external_result_probe()
+            if received:
+                return received
         try:
             page.reload(wait_until="domcontentloaded", timeout=attempt_timeout_ms)
             attempt_record["reload"] = "ok"

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import shlex
 from pathlib import Path
 import sys
 
@@ -12,6 +13,7 @@ sys.path.insert(0, str(REPO / "postman" / "direct"))
 sys.path.insert(0, str(REPO / "postman" / "web"))
 from postman.devspace.signal import load_binding, atomic_json
 from postman.devspace.task import render_task
+from postman.devspace.observer import DEFAULT_CHECK_INTERVAL_MS, DEFAULT_CHECK_COUNT
 from postman_direct import ensure_dedicated_chrome
 from web_worker_bridge import WebWorkerBridge
 
@@ -24,7 +26,7 @@ def run(channel, request_id, intent, *, ensure_browser=ensure_dedicated_chrome, 
     result_path = root / "result.json"
     if result_path.exists():
         return json.loads(result_path.read_text(encoding="utf-8"))
-    command = "& '" + str(root / "signal.ps1").replace("'", "''") + "'"
+    command = "pwsh -NoProfile -NonInteractive -File " + shlex.quote(str(root / "signal.ps1"))
     prompt = render_task(binding, intent, command)
     # Task/workspace/binding stays local; only private prompt goes to its ChatGPT conversation.
     (root / "task.md").write_text(prompt, encoding="utf-8")
@@ -33,11 +35,14 @@ def run(channel, request_id, intent, *, ensure_browser=ensure_dedicated_chrome, 
         bridge = bridge_factory(root=root / "web")
         observed = bridge.run_request(request_id, task_url="", prompt=prompt,
             expected_filename="", expected_request={"transportKind": "devspace", "requestId": request_id},
-            artifact_mode=False, devspace_binding=binding, cdp_url=browser["cdpUrl"])
+            artifact_mode=False, devspace_binding=binding, cdp_url=browser["cdpUrl"],
+            reminder_interval_ms=DEFAULT_CHECK_INTERVAL_MS, max_reminders=DEFAULT_CHECK_COUNT)
         details = observed.get("details", {})
         result = {"requestId": request_id, "source": "bell" if observed.get("code") == "DEVSPACE_SIGNAL_RECEIVED" else details.get("source", "transport_diagnostic"),
                   "diagnostic": details.get("diagnostic", "BLOCKED"), "assistantText": details.get("assistantText", ""),
-                  "conversationRef": details.get("conversationRef")}
+                  "conversationRef": details.get("conversationRef"), "message": details.get("message", ""),
+                  "transportDiagnostics": {key: details[key] for key in
+                      ("reminderSlots", "transportEventJournal", "detectorDiagnostics") if key in details}}
     except Exception:
         # Keep private internals/capability out of model diagnostics. Host still checks bell first.
         result = {"requestId": request_id, "source": "transport_diagnostic", "diagnostic": "BLOCKED",

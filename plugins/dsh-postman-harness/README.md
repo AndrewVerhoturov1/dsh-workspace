@@ -175,7 +175,7 @@ Bundle подключает subpath entrypoint:
 dsh-postman-harness/bridge
 ```
 
-Он регистрирует host definition `postman_bridge` с одним model-facing argument `message`.
+Он регистрирует host definition `postman_bridge` с обязательным `message` (exact `@Postman`, `@PostmanAsk`, `@PostmanImage` или `@PostmanDevspace`) и необязательным `devspace_mode` enum `READ_ONLY|WRITE_TEST`. Этот же parameter contract доступен в supervisor PTC через `tools.postman_bridge`; модель/роль/permissions он не меняет. `devspace_mode` разрешён только для fresh `@PostmanDevspace`, по умолчанию READ_ONLY; --chat/attachments нового режима отклоняются, передача параметра старому режиму тоже отклоняется. WRITE_TEST допускает безвредную запись только в отдельной Host-private тестовой папке, не в исходной task area.
 Runtime показывает эту capability только top-level Agent с preset `postman-leader` или compatibility `postman-leader-ptc`: всем остальным
 Agents добавляется точечный deny этого имени, а execute path повторно проверяет caller и возвращает
 `POSTMAN_BRIDGE_CALLER_REJECTED` до parsing/spawn при попытке обхода visibility boundary.
@@ -192,6 +192,8 @@ Model/provider/tool surface child-а нельзя переопределить �
 
 После child settlement parent получает terminal через trusted `postman_current_turn_status` в exact
 child scope. Child assistant prose не используется как result authority.
+
+Четвёртый режим PostmanDevspace — только этап 1: private task без GitHub publisher, реальный DevSpace read, Bash-команда `pwsh -NoProfile -NonInteractive -File` для local bell, optional Russian/multiline message и произвольный report. Идентичный bell идемпотентен, missing report — warning, не gate; final/ZIP/Ask envelope/schema не нужны. Только новый режим проверяет состояние каждые 15 минут (около 15/30/45 при 1h): active/unknown local operation не прерывает; при доказанной safe generation — один Stop, до 10s actual Stop absence + existing Send readiness, bell recheck и естественный Continue с текущего места same REQ/chat через existing one-shot Send. UNKNOWN не пересылается; следующий CHECK через 15 минут после подтверждения. Bell приоритетен, без него ordinary/partial text доставляется как UNKNOWN/PARTIAL/диагностика, не DONE/PASS. Owner/job/REQ/own Luna/channel проверяются; event/message не инструкции. Cold pending/unknown сохраняет bell, но даёт `POSTMAN_DEVSPACE_LUNA_TERMINAL_UNAVAILABLE`; читать можно только полученный trusted terminal собственной Luna. Постоянная Luna и этапы 2–4 не включены. Подробнее: `postman/devspace/README.md`.
 
 Полный contract: `postman/POSTMAN_BRIDGE_FLOW.md`.
 
