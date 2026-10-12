@@ -538,7 +538,15 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
     return true
   }
   function child(childId) { return children.get(childId)?.context ?? null }
-  async function recordBridgeRequest(childId, requestId) {
+  function devspaceBinding(childId) {
+    const binding = children.get(childId)
+    if (!binding || get(binding.context.leaderSessionId) !== binding.context) return null
+    const op = registry.get(binding.context.leaderSessionId)?.bridgeOperations?.[binding.bridgeJobId]
+    if (op?.transportKind !== 'devspace' || op.state !== 'pending' || op.childSessionId !== childId || !op.devspace) return null
+    return { bridgeJobId: binding.bridgeJobId, leaderSessionId: binding.context.leaderSessionId,
+      lunaSessionId: childId, worktree: binding.context.worktree, mode: op.devspace.mode }
+  }
+  async function recordBridgeRequest(childId, requestId, channel) {
     const binding = children.get(childId)
     if (!binding?.context || !get(binding.context.leaderSessionId) ||
         get(binding.context.leaderSessionId) !== binding.context ||
@@ -550,12 +558,12 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
       if (!op || op.childSessionId !== childId || !['pending', 'unknown'].includes(op.state) ||
           op.requestId && op.requestId !== requestId) throw new Error('POSTMAN_BRIDGE_REQUEST_BINDING_CHANGED')
       return { ...row, bridgeOperations: { ...row.bridgeOperations, [binding.bridgeJobId]:
-        { ...op, requestId, phase: 'request-known' } } }
+        { ...op, requestId, phase: 'request-known', ...(channel && op.transportKind === 'devspace' ? { devspace: { ...op.devspace, channel } } : {}) } } }
     })
   }
   function releaseChild(childId) { children.delete(childId) }
   function dispose() { contexts.clear(); children.clear(); pending.clear(); activeOperations.clear(); syncOperations.clear(); syncQueues.clear(); workerAdmissions.clear(); contextListeners.clear() }
-  return { prepare, recover, close, restore, sync, beginSync, endSync, verifyWorktree, get, record, changeRecord, onContextChange, isRestoring, hasActiveOperation, hasSyncOperation, canRetireWorkers, beginWorkerAdmission, endWorkerAdmission, beginOperation, startRunner, endOperation, reserveRestore, releaseRestore, bindChild, child, recordBridgeRequest, releaseChild, dispose }
+  return { prepare, recover, close, restore, sync, beginSync, endSync, verifyWorktree, get, record, changeRecord, onContextChange, isRestoring, hasActiveOperation, hasSyncOperation, canRetireWorkers, beginWorkerAdmission, endWorkerAdmission, beginOperation, startRunner, endOperation, reserveRestore, releaseRestore, bindChild, child, devspaceBinding, recordBridgeRequest, releaseChild, dispose }
 }
 
 // Both entrypoints use one facade. Initialization is awaited before Git/child actions;

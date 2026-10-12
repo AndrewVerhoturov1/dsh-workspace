@@ -5,6 +5,7 @@ import { homedir } from 'node:os'
 import { spawn as nodeSpawn, execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { postmanTaskContexts, POSTMAN_TASK_BRANCH_PATTERN } from './postman-task-context.js'
+import { createDevspaceChannel, devspaceTerminal } from './postman-devspace.js'
 import { CurrentAttachmentStore, postmanInputGrants, stageStandaloneCurrentAttachments } from './postman-input-files.js'
 
 // Standalone transport publishes REQ task files to main; Leader children use their exact prepared task branch.
@@ -165,9 +166,9 @@ export function parsePostmanUserTurn(raw) {
   // Initial whitespace is transport framing, then one exact production marker
   // and at most one immediately-following separator character. Everything
   // after that is preserved byte-for-byte at the JS-string/UTF-8 boundary.
-  const trigger = /^(\s*)@(PostmanImage|PostmanAsk|Postman)(?:(\s)|$)/u.exec(raw)
+  const trigger = /^(\s*)@(PostmanDevspace|PostmanImage|PostmanAsk|Postman)(?:(\s)|$)/u.exec(raw)
   if (trigger === null) throw parseError('POSTMAN_TRIGGER_PARSE_FAILED')
-  const transportKind = trigger[2] === 'PostmanAsk' ? 'text' : trigger[2] === 'PostmanImage' ? 'image' : 'artifact'
+  const transportKind = trigger[2] === 'PostmanDevspace' ? 'devspace' : trigger[2] === 'PostmanAsk' ? 'text' : trigger[2] === 'PostmanImage' ? 'image' : 'artifact'
 
   const afterTrigger = raw.slice(trigger[0].length)
   if (trigger[3] === undefined && afterTrigger === '') {
@@ -266,6 +267,16 @@ function trustedPublication(job) {
 }
 
 function terminalGate(job) {
+  if (job.transportKind === 'devspace') {
+    try {
+      const observed = parseTerminalJson(job.stdout)
+      // Host reads its own channel; arbitrary stdout cannot forge a bell or identity.
+      return devspaceTerminal(job.devspaceChannel, observed ?? { source: 'transport_diagnostic', diagnostic: 'BLOCKED' })
+    } catch (error) {
+      return { ok: false, code: 'POSTMAN_DEVSPACE_ROUTING_FAILED', requestId: job.requestId,
+        transportMessage: String(error.message), publicationStarted: false }
+    }
+  }
   const parsed = parseTerminalJson(job.stdout)
   if (parsed === undefined || parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
     return {
@@ -501,18 +512,20 @@ export class DirectPostmanJobManager {
     return this.jobs.get(sessionId)
   }
 
-  async start({ sessionId, workspace, payload, inputFiles = [], inputBinding, chatRequestId, automaticContinuation = false, transportKind = 'artifact', proof, branch, onRequestAllocated }) {
+  async start({ sessionId, workspace, payload, inputFiles = [], inputBinding, chatRequestId, automaticContinuation = false, transportKind = 'artifact', proof, branch, onRequestAllocated, devspaceBinding }) {
     const previous = this.jobs.get(sessionId)
     if (previous?.state === 'running' || previous?.state === 'starting') throw parseError('POSTMAN_CURRENT_TURN_JOB_ALREADY_RUNNING')
     if (typeof payload !== 'string' || payload.trim() === '') throw parseError('POSTMAN_EMPTY_PAYLOAD')
-    if (!['artifact', 'text', 'image'].includes(transportKind)) throw parseError('POSTMAN_RESULT_MODE_INVALID')
+    if (!['artifact', 'text', 'image', 'devspace'].includes(transportKind)) throw parseError('POSTMAN_RESULT_MODE_INVALID')
+    if (transportKind === 'devspace' && (!devspaceBinding || devspaceBinding.lunaSessionId !== sessionId || chatRequestId || automaticContinuation || inputFiles.length))
+      throw parseError('POSTMAN_DEVSPACE_LEADER_BINDING_REQUIRED')
     if (branch !== STANDALONE_TASK_PUBLICATION_BRANCH && !POSTMAN_TASK_BRANCH_PATTERN.test(branch ?? '')) throw parseError('POSTMAN_TASK_BRANCH_INVALID')
 
     // A new request in this Luna session supersedes any exact-reply slot left
     // by the previous PostmanAsk result.
     this.exactAskReplies.delete(sessionId)
 
-    const bridgeName = transportKind === 'text' ? 'postman-ask.ps1' : 'postman.ps1'
+    const bridgeName = transportKind === 'devspace' ? '../devspace/postman-devspace.ps1' : transportKind === 'text' ? 'postman-ask.ps1' : 'postman.ps1'
     const bridge = join(workspace, 'postman', 'direct', bridgeName)
     if (!this.exists(bridge)) throw parseError('POSTMAN_DIRECT_BRIDGE_MISSING')
 
@@ -563,7 +576,12 @@ export class DirectPostmanJobManager {
       readPublicationState: this.readPublicationState,
       waiters: new Set(),
     }
-    if (onRequestAllocated) await onRequestAllocated(requestId) // Durable Bridge correlation precedes any Direct side effect.
+    if (onRequestAllocated && transportKind !== 'devspace') await onRequestAllocated(requestId) // Durable Bridge correlation precedes any Direct side effect.
+    if (transportKind === 'devspace') {
+      job.devspaceChannel = createDevspaceChannel({ ...devspaceBinding, requestId, sourceRoot: workspace })
+      args.push('-Channel', job.devspaceChannel.channel)
+      if (onRequestAllocated) await onRequestAllocated(requestId, job.devspaceChannel.channel)
+    }
     this.jobs.set(sessionId, job)
 
     if (inputFiles.length) {
@@ -971,6 +989,9 @@ export function createDirectCurrentTurnToolConfigs(ctx, { store, jobs, taskConte
       if (record.error !== undefined) throw parseError(record.error)
       const parsed = parsePostmanUserTurn(record.text)
       const bridgeContext = taskContexts.child(agent.id)
+      const devspaceBinding = parsed.transportKind === 'devspace' ? taskContexts.devspaceBinding?.(agent.id) : undefined
+      if (parsed.transportKind === 'devspace' && (ctx.agents?.get(agent.id) !== agent || !devspaceBinding || parsed.mode !== 'fresh' || parsed.inputFiles?.length || record.attachmentCount))
+        throw parseError('POSTMAN_DEVSPACE_LEADER_BINDING_REQUIRED')
       if (agent.session?.header?.origin === 'subagent' && agent.session.header.delegationDepth === 1 &&
           agent.session.header.parentSession && !bridgeContext) throw parseError('POSTMAN_TASK_CONTEXT_REQUIRED')
       if (bridgeContext && taskContexts.get(bridgeContext.leaderSessionId) !== bridgeContext) throw parseError('POSTMAN_TASK_CONTEXT_REQUIRED')
@@ -1020,7 +1041,8 @@ export function createDirectCurrentTurnToolConfigs(ctx, { store, jobs, taskConte
           transportKind: parsed.transportKind,
           branch: bridgeContext?.branch ?? STANDALONE_TASK_PUBLICATION_BRANCH,
           proof,
-          ...(bridgeContext ? { onRequestAllocated: requestId => taskContexts.recordBridgeRequest(agent.id, requestId) } : {}),
+          devspaceBinding,
+          ...(bridgeContext ? { onRequestAllocated: (requestId, channel) => taskContexts.recordBridgeRequest(agent.id, requestId, channel) } : {}),
         })
       } catch (error) {
         turnStore.release(agent.id, record.seq)

@@ -95,7 +95,8 @@ export function createPostmanBridgeTool(ctx, jobs, contexts) {
     name: POSTMAN_BRIDGE_TOOL_NAME,
     description: 'Accept a fresh exact @Postman, @PostmanAsk or @PostmanImage delegation in a background Bridge job. Acceptance is not a Web result; read the trusted terminal via postman_bridge_status after POSTMAN_BRIDGE_READY.',
     parameters: { message: { type: 'string', required: true,
-      description: 'Complete model-authored delegation beginning with exact @Postman, @PostmanAsk or @PostmanImage.' } },
+      description: 'Complete model-authored delegation beginning with exact @Postman, @PostmanAsk, @PostmanImage or @PostmanDevspace.' },
+      devspace_mode: { type: 'string', enum: ['READ_ONLY', 'WRITE_TEST'], description: 'Devspace stage 1 only: read the prepared task area, optionally write only its Host-private harmless test folder. Defaults READ_ONLY.' } },
     output: output(),
     isConcurrencySafe: () => true,
     async execute(args, exec) {
@@ -106,6 +107,11 @@ export function createPostmanBridgeTool(ctx, jobs, contexts) {
       let parsed
       try { parsed = parsePostmanUserTurn(args?.message) }
       catch (error) { return { status: 'POSTMAN_BRIDGE_MESSAGE_REJECTED', diagnostic: String(error?.message ?? error) } }
+      if (parsed.transportKind === 'devspace' && (parsed.mode !== 'fresh' || parsed.inputFiles?.length ||
+          args.devspace_mode !== undefined && !['READ_ONLY', 'WRITE_TEST'].includes(args.devspace_mode)))
+        return { status: 'POSTMAN_BRIDGE_MESSAGE_REJECTED', diagnostic: 'POSTMAN_DEVSPACE_STAGE1_SCOPE' }
+      if (parsed.transportKind !== 'devspace' && args.devspace_mode !== undefined)
+        return { status: 'POSTMAN_BRIDGE_MESSAGE_REJECTED', diagnostic: 'POSTMAN_DEVSPACE_MODE_MISMATCH' }
       if (contexts && !contexts.get(exec.agent.id)) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
       if (parsed.inputFiles?.length && !postmanInputGrants.owns(exec.agent, contexts.get(exec.agent.id), parsed.inputFiles))
         return { status: 'POSTMAN_INPUT_PROVENANCE_REJECTED' }
@@ -114,7 +120,7 @@ export function createPostmanBridgeTool(ctx, jobs, contexts) {
       const inputBinding = parsed.inputFiles?.length
         ? postmanInputGrants.pin(exec.agent, contexts.get(exec.agent.id), parsed.inputFiles) : undefined
       try {
-        const result = await jobs.accept(exec.agent, args.message, parsed.transportKind, inputBinding)
+        const result = await jobs.accept(exec.agent, args.message, parsed.transportKind, inputBinding, undefined, args.devspace_mode)
         if (result.status !== 'POSTMAN_BRIDGE_ACCEPTED') postmanInputGrants.unpin(inputBinding)
         return result
       } catch (error) { postmanInputGrants.unpin(inputBinding); throw error }

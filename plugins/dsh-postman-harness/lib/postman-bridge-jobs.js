@@ -54,7 +54,7 @@ function hasTrustedTerminal(operation) {
     ['COMPLETED', 'FAILED'].includes(terminal.terminalStatus) &&
     Object.hasOwn(terminal, 'requestId') && typeof terminal.requestId === 'string' &&
     /^REQ_\d{8}T\d{6}Z_\d{4}$/.test(terminal.requestId) &&
-    Object.hasOwn(terminal, 'transportKind') && ['artifact', 'text', 'image'].includes(terminal.transportKind) &&
+    Object.hasOwn(terminal, 'transportKind') && ['artifact', 'text', 'image', 'devspace'].includes(terminal.transportKind) &&
     terminal.result !== null && typeof terminal.result === 'object' && !Array.isArray(terminal.result) &&
     (operation.requestId === undefined || operation.requestId === terminal.requestId) &&
     (operation.transportKind === undefined || operation.transportKind === terminal.transportKind) &&
@@ -234,7 +234,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     }
   }
 
-  function accept(parent, message, transportKind, inputBinding, recoveryFrom) {
+  function accept(parent, message, transportKind, inputBinding, recoveryFrom, devspaceMode = 'READ_ONLY') {
     const taskContext = contexts?.get(parent.id)
     if (contexts && !taskContext) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
     if (typeof contexts?.isRestoring === 'function' && contexts.isRestoring(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
@@ -263,7 +263,8 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
           const operations = old.bridgeOperations ?? {}
           const count = Object.values(operations).filter(countsAgainstLimit).length + (old.bridge ? 1 : 0)
           if (count >= 3) throw new Error('POSTMAN_BRIDGE_LIMIT_REACHED')
-          return { ...old, bridgeOperations: { ...operations, [job.bridgeJobId]: { state: 'pending', phase: 'reserved', transportKind, createdAt: job.createdAt } } }
+          return { ...old, bridgeOperations: { ...operations, [job.bridgeJobId]: { state: 'pending', phase: 'reserved', transportKind, createdAt: job.createdAt,
+              ...(transportKind === 'devspace' ? { devspace: { mode: devspaceMode } } : {}) } } }
         })
         return startJob(job, message)
       } catch (error) {
@@ -306,6 +307,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
 
   function publicationOf(terminal) {
     const result = terminal?.result
+    if (terminal?.transportKind === 'devspace') return null // Private tasks never publish REQ or synchronize Git.
     return result?.ok === true ? result :
       result?.ok === false && ['POSTMAN_TRANSPORT_FAILED', 'ARTIFACT_CANDIDATE_SAVED', 'ARTIFACT_CANDIDATE_CHOICES', 'ARTIFACT_REJECTED'].includes(result.code) ? result.publicationReceipt : null
   }
@@ -392,7 +394,9 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
         // Keep uncertain publication outcomes blocked; a missing receipt by
         // itself does not establish that the external operation did nothing.
         job.synchronization = contexts ? 'busy' : 'not-required'
-        if (job.state === 'TERMINAL' && publication && contexts)
+        if (job.state === 'TERMINAL' && job.transportKind === 'devspace')
+          await completeWithoutPublication(job)
+        else if (job.state === 'TERMINAL' && publication && contexts)
           await retryPublication(job, publication)
         else if (job.state === 'TERMINAL' && noPublicationProven(safe) && contexts?.changeRecord)
           await completeWithoutPublication(job)
@@ -478,6 +482,12 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
         if (job.synchronization === 'synchronized' && !job.grantDiagnostic &&
             terminal.result?.code === 'RESULT_DURABLE' &&
             !row?.artifactGrants?.[terminal.requestId]) job.grantRecovery = registerGrant(job)
+      } else if (operation?.transportKind === 'devspace' && ['pending', 'unknown'].includes(operation.state)) {
+        // Stage 1 preserves the local bell but cannot promote it without Luna's
+        // trusted terminal. Restart/resume delivery is not a direct Host shortcut.
+        return { status: 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN', bridgeJobId,
+          requestId: operation.requestId ?? null, childSessionId: operation.childSessionId ?? null,
+          diagnostic: 'POSTMAN_DEVSPACE_LUNA_TERMINAL_UNAVAILABLE' }
       } else if (operation && operation.requestId && ['pending', 'unknown'].includes(operation.state) &&
                  typeof direct.inspectRequest === 'function') {
         const proof = direct.inspectRequest(operation.requestId, row?.branch, operation.transportKind)
