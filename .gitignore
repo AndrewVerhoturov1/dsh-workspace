@@ -69,3 +69,9 @@ tmp-*.ps1
 /plugins/dsh-branchline/tasks.json
 /plugins/dsh-branchline/tasks.json.lock
 /plugins/dsh-branchline/tasks.json.operations.lock
+
+# DevSpace runtime mirror: publish only approved lifecycle scripts
+/devspace/*
+!/devspace/start.ps1
+!/devspace/status.ps1
+!/devspace/stop.ps1
