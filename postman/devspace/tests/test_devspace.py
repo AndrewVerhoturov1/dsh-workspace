@@ -2,6 +2,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -85,6 +86,22 @@ class DevspaceTests(unittest.TestCase):
         self.assertNotIn("raw.githubusercontent.com", prompt)
         self.assertNotIn("POSTMAN_TEXT_RESULT_BEGIN", prompt)
         self.assertIn("Никаких Git writes", prompt)
+
+    def test_script_transport_does_not_shadow_standard_python_signal(self):
+        script = REPO / 'postman' / 'devspace' / 'transport.py'
+        probe = '''import importlib, pathlib, runpy, sys
+script = pathlib.Path(sys.argv[1]).resolve()
+sys.path.insert(0, str(script.parent))
+runpy.run_path(str(script), run_name='devspace_import_probe')
+assert script.parent not in [pathlib.Path(path or '.').resolve() for path in sys.path]
+sys.modules.pop('signal', None)
+stdlib_signal = importlib.import_module('signal')
+assert hasattr(stdlib_signal, 'set_wakeup_fd')
+'''
+        result = subprocess.run([sys.executable, '-c', probe, str(script)], cwd=REPO,
+                                capture_output=True, text=True, timeout=25,
+                                env={**os.environ, 'PYTHONDONTWRITEBYTECODE': '1'})
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def wait(self, **kwargs):
         clock = [0.0]

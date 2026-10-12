@@ -1,11 +1,19 @@
 """Private stage-one Direct entry. No Git publisher, uploads or alternate browser."""
 from __future__ import annotations
+import sys
+from pathlib import Path
+
+# Running this file as a script puts postman/devspace first in sys.path.
+# Remove that entry so its signal.py cannot shadow Python's standard signal
+# module, which Playwright/asyncio needs for subprocess handling.
+if not __package__:
+    script_dir = Path(__file__).resolve().parent
+    sys.path[:] = [entry for entry in sys.path if Path(entry or '.').resolve() != script_dir]
+
 import argparse
 import base64
 import json
 import shlex
-from pathlib import Path
-import sys
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
