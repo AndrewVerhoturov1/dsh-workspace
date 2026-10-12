@@ -210,20 +210,26 @@ def upload(page, composer, attachment, *, timeout_ms, wait_until):
         eligible = []
         image_only = []
         media = getattr(attachment, 'media_type', 'application/zip')
-        # Fresh composer file controls can exist while disabled during hydration.
-        # Wait read-only for the same dedicated photo control; no upload retry.
+        # ChatGPT exposes separate image/* controls for camera capture and
+        # attaching an existing photo. Only the non-capture control can upload
+        # a Host-authorized reference; a camera input is never a fallback.
+        # Wait read-only for the unique dedicated photo control to hydrate.
         if media.startswith('image/'):
             photos = scope.locator('input[type="file"][accept="image/*"]')
-            if photos.count() == 1 and not photos.nth(0).is_enabled():
-                enabled, _ = wait_until(lambda: (photos.nth(0).is_enabled(), {}), timeout_ms=timeout_ms)
+            upload_photos = [photos.nth(i) for i in range(photos.count())
+                             if photos.nth(i).get_attribute('capture') is None]
+            if len(upload_photos) == 1 and not upload_photos[0].is_enabled():
+                enabled, _ = wait_until(lambda: (upload_photos[0].is_enabled(), {}), timeout_ms=timeout_ms)
                 if not enabled:
                     return {"ok": False, "code": ATTACHMENT_CONTROL_UNAVAILABLE,
                             "details": {"reason": "photo_input_disabled", **selection}}
         for i in range(inputs.count()):
             node = inputs.nth(i)
             accept = (node.get_attribute('accept') or '').lower()
-            selection["fileInputs"].append({"accept": accept, "container": "active-composer-form"})
-            if not node.is_enabled():
+            capture = node.get_attribute('capture')
+            selection["fileInputs"].append({"accept": accept, "capture": capture is not None,
+                                             "container": "active-composer-form"})
+            if not node.is_enabled() or (media.startswith('image/') and capture is not None):
                 continue
             accepted = [token.strip() for token in accept.split(',')]
             if not accept or '*/*' in accepted or media in accepted or Path(attachment.name[0] if isinstance(attachment.name, list) else attachment.name).suffix.lower() in accepted or (media.startswith('image/') and 'image/*' in accepted):

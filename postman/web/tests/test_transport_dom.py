@@ -115,12 +115,14 @@ class TransportDomTests(unittest.TestCase):
         self.assertEqual(submit.collect_user_turn_texts(self.page), [literal])
 
     def test_current_composer_photo_control_is_unique_before_reading_bytes(self):
-        controls = '<input id="video" type="file" accept="image/*,video/*">' \
-                   '<input id="photo" type="file" accept="image/*">' \
+        controls = '<input id="camera" type="file" accept="image/*" capture="environment" aria-label="Сделать фото">' \
+                   '<input id="video" type="file" accept="image/*,video/*">' \
+                   '<input id="photo" type="file" accept="image/*" aria-label="Прикрепить фото" multiple>' \
                    '<input id="generic" type="file">'
         cases = [(controls, 'photo', 1), ('', None, 0),
                  ('<input type="file" accept="application/pdf">', None, 0),
                  (controls + '<input type="file" accept="image/*">', None, 2),
+                 ('<input type="file" accept="image/*" capture="user">', None, 0),
                  ('<input type="file" accept="image/*" disabled>', None, 0),
                  ('<input type="file"><input type="file" accept="image/*,video/*">', None, 2)]
         for inputs, expected, eligible in cases:
@@ -150,6 +152,9 @@ class TransportDomTests(unittest.TestCase):
                 self.assertEqual(result['details']['scopeFileInputCount'], len(inputs.split('<input')) - 1)
                 self.assertEqual(result['details']['fileInputCount'], result['details']['scopeFileInputCount'] + 1)
                 self.assertEqual(result['details']['container'], 'active-composer-form')
+                if inputs == controls:
+                    self.assertEqual([item['capture'] for item in result['details']['fileInputs']],
+                                     [True, False, False, False])
 
     def test_multiple_or_hidden_current_forms_never_select_a_composer(self):
         form = '<form data-chatgpt-composer data-composer-placement="thread">' + COMPOSER + '</form>'
@@ -303,15 +308,17 @@ class TransportDomTests(unittest.TestCase):
 
     def test_photo_control_waits_for_hydration_before_single_upload(self):
         import input_attachment
-        self.set_html('<form>' + COMPOSER + '<input type="file" accept="image/*" disabled>'
-                      '<div data-composer-attachments></div></form>')
+        self.set_html('<form>' + COMPOSER
+                      + '<input type="file" accept="image/*" capture="environment">'
+                      + '<input type="file" aria-label="Прикрепить фото" accept="image/*" disabled>'
+                      + '<div data-composer-attachments></div></form>')
         attachment=SimpleNamespace(name=f'POSTMAN_REFERENCE_{REQ}.png',media_type='image/png',upload_bytes=lambda:b'fixture')
         calls=[]
         def wait(check, **kwargs):
             calls.append(1)
             if len(calls)==1:
                 self.assertFalse(check()[0])
-                self.page.locator('input').evaluate('e=>e.disabled=false')
+                self.page.locator('input[aria-label="Прикрепить фото"]').evaluate('e=>e.disabled=false')
                 self.assertTrue(check()[0])
                 return True,{}
             return True,{'known':True,'count':1,'names':[attachment.name],'pending':False,'error':False,'settled':True}
@@ -320,7 +327,8 @@ class TransportDomTests(unittest.TestCase):
             result=input_attachment.upload(self.page,self.page.locator('#prompt-textarea'),attachment,timeout_ms=100,wait_until=wait)
         self.assertTrue(result['ok'],result)
         self.assertEqual(len(calls),2)
-        self.assertEqual(self.page.locator('input').evaluate('e=>e.files.length'),1)
+        self.assertEqual(self.page.locator('input[aria-label="Прикрепить фото"]').evaluate('e=>e.files.length'),1)
+        self.assertEqual(self.page.locator('input[capture]').evaluate('e=>e.files.length'),0)
 
     def test_local_uploaded_conversation_reloads_read_only_never_resends(self):
         from unittest.mock import patch
