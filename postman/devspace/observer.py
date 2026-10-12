@@ -11,6 +11,27 @@ DEFAULT_CHECK_INTERVAL_MS = 15 * 60 * 1000
 DEFAULT_CHECK_COUNT = 3
 STOP_OBSERVATION_MS = 10_000
 
+
+def wait_for_bell_after_unknown_send(binding, *, timeout_ms, sleep, monotonic, conversation_ref=None):
+    """Keep the exact owned bell channel open when browser Send proof is UNKNOWN.
+
+    Never touch the composer, issue a reminder, reload or send again: the
+    ChatGPT turn may already be executing despite a changed browser DOM.
+    """
+    deadline = monotonic() + timeout_ms / 1000.0
+    while True:
+        event = read_event(binding)
+        if event:
+            return {"ok": True, "code": "DEVSPACE_SIGNAL_RECEIVED", "details": {
+                **event, "conversationRef": conversation_ref, "sendState": "UNKNOWN"}}
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            return {"ok": True, "code": "DEVSPACE_DIAGNOSTIC", "details": {
+                "source": "transport_diagnostic", "diagnostic": "BLOCKED", "sendState": "UNKNOWN",
+                "conversationRef": conversation_ref, "assistantText": "",
+                "message": "Unproven browser Send; no local bell before deadline. No resend."}}
+        sleep(min(0.25, remaining))
+
 # Read UI state only in the correlated turn, never treat assistant prose as proof.
 # A tool card with an unknown state is not proof that a local operation is idle.
 _ACTIVITY_JS = r"""

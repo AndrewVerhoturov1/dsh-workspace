@@ -545,6 +545,21 @@ class WebWorkerBridge:
                     )
                 self._write_state(request, WEB_STARTING, submitProof=submitted)
                 if not submitted.get("ok"):
+                    if devspace_binding is not None and submitted.get("sendState") == browser_submit.SEND_UNKNOWN:
+                        # The click may have reached ChatGPT even if its rendered user turn
+                        # cannot be proven. Bell authority is the private Host channel, not
+                        # DOM formatting: keep waiting without another browser mutation.
+                        from postman.devspace.observer import wait_for_bell_after_unknown_send
+                        candidate = submitted.get("details", {}).get("chatUrl")
+                        conversation_ref = candidate if browser_submit.is_bound_chat_url(candidate) and str(page.url) == candidate else None
+                        self._write_state(request, WAITING_ASSISTANT, submitProof=submitted,
+                                          sendUnproven=True, conversationUrl=conversation_ref)
+                        terminal_result = wait_for_bell_after_unknown_send(
+                            devspace_binding, timeout_ms=observer_timeout_ms,
+                            sleep=self.sleep, monotonic=self.monotonic,
+                            conversation_ref=conversation_ref)
+                        self._write_state(request, terminal_result["code"], **terminal_result["details"])
+                        return terminal_result
                     if artifact_mode and not image_flow and submitted.get("sendState") == browser_submit.SEND_UNKNOWN:
                         evidence = submitted.get("details", {})
                         bound = evidence.get("ownedChatUrl")
