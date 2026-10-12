@@ -59,8 +59,10 @@ _STATE_ORDER = (
     ASSISTANT_COMPLETED_NO_ARTIFACT,
     ARTIFACT_REJECTED,
     RESULT_DURABLE,
+    'DEVSPACE_SIGNAL_RECEIVED',
+    'DEVSPACE_DIAGNOSTIC',
 )
-_TERMINAL_SUCCESS_CODES = {RESULT_DURABLE, ASSISTANT_COMPLETED_NO_ARTIFACT, ARTIFACT_REJECTED}
+_TERMINAL_SUCCESS_CODES = {RESULT_DURABLE, ASSISTANT_COMPLETED_NO_ARTIFACT, ARTIFACT_REJECTED, 'DEVSPACE_SIGNAL_RECEIVED', 'DEVSPACE_DIAGNOSTIC'}
 _FATAL_ARTIFACT_CODES = {
     artifact_detector.ARTIFACT_INVALID_CONFIG,
     artifact_detector.ARTIFACT_OBSERVER_PROOF_INVALID,
@@ -362,6 +364,7 @@ class WebWorkerBridge:
         artifact_mode: bool = True,
         resume_image: bool = False,
         image_recovery_proof: dict[str, Any] | None = None,
+        devspace_binding: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Run one browser page; image mode continues to ZIP on that same page."""
         if input_attachment is not None and (input_attachment.request_id != request_id or
@@ -369,7 +372,17 @@ class WebWorkerBridge:
             return _result(BRIDGE_INVALID_CONFIG, ok=False, details={"reason": "input_attachment_binding_invalid"})
         image_stage = image_prepare is not None
         image_flow = image_stage or image_recovery_proof is not None
-        if image_stage:
+        if devspace_binding is not None:
+            if (image_flow or artifact_mode or conversation_url is not None or input_attachment is not None or
+                    expected_request.get('transportKind') != 'devspace' or devspace_binding.get('requestId') != request_id):
+                return _result(BRIDGE_INVALID_CONFIG, ok=False, details={'reason': 'devspace_binding_invalid'})
+            request_identity.assert_canonical_request_id(request_id)
+            existing = self.read_state(request_id)
+            if existing is not None:
+                return _result(existing.get('state'), ok=existing.get('state') in _TERMINAL_SUCCESS_CODES, details=existing)
+            request = BridgeRequest(request_id, '', str(self.result_path(request_id)), _job_id(request_id))
+            self._write_state(request, ACCEPTED)
+        elif image_stage:
             try:
                 request_identity.assert_canonical_request_id(request_id)
             except (TypeError, ValueError) as exc:
@@ -559,6 +572,16 @@ class WebWorkerBridge:
                     conversationId=conversation_id,
                     continuedConversation=conversation_url is not None,
                 )
+
+                if devspace_binding is not None:
+                    from postman.devspace.observer import wait_for_signal
+                    self._write_state(request, WAITING_ASSISTANT)
+                    terminal_result = wait_for_signal(page, prompt, chat_url, devspace_binding,
+                        timeout_ms=observer_timeout_ms, interval_ms=reminder_interval_ms, count=max_reminders,
+                        sleep=self.sleep, monotonic=self.monotonic,
+                        persist=lambda fields: self._write_state(request, WAITING_ASSISTANT, **fields))
+                    self._write_state(request, terminal_result['code'], **terminal_result['details'])
+                    return terminal_result
 
                 started_at = self.monotonic()
                 deadline = started_at + observer_timeout_ms / 1000.0

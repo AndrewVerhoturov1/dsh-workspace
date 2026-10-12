@@ -9,6 +9,7 @@ import { createScope } from '@deepseek-ai/dsh-scope'
 import { DEFAULT_LIMITS } from 'dsh-ptc'
 import { createPtcAdapter, PILOT_PROFILE, WORKER_MUTATION_PROFILE, SOL_WORKER_PROFILE } from './ptc-adapter.js'
 import { POSTMAN_PTC_DISCIPLINE } from './ptc-discipline.js'
+import { createPostmanBridgeTool } from './postman-bridge.js'
 import { postmanBridgeRestrictionForAgent, isTopLevelPostmanPtcLeader, postmanPtcDirectCallGuard, POSTMAN_PTC_ONLY_LEADER_TOOLS } from './postman-bridge-core.js'
 
 import { apply as applyFs } from '@deepseek-ai/dsh-tool-fs'
@@ -492,6 +493,36 @@ test('PTC-first Leader direct tools fail closed for both preset IDs while UI exc
   assert.equal(f.ctx.tools.schemas(production.a).some(s=>s.name==='ptc_execute'),true)
   assert.equal(f.ctx.tools.schemas(pilot.a).some(s=>s.name==='run_code'),false)
   await f.adapter.dispose()
+})
+
+test('production Leader PTC exposes and forwards real Bridge devspace_mode schema', async () => {
+  const f=fixture(process.cwd()), {a,sections}=f.agent('devspace-mode','postman-leader')
+  let admission
+  const real=createPostmanBridgeTool(f.ctx,{accept(...args){
+    admission=args
+    return {status:'POSTMAN_BRIDGE_ACCEPTED',bridgeJobId:'devspace-fixture'}
+  }},{get:()=>({})})
+  // Replace only this inert fixture tool with its actual registered definition.
+  a.ctx.tools.register(real)
+  a.ctx.tools.restrict(postmanBridgeRestrictionForAgent(a));f.adapter.refresh(a)
+  try {
+    const schema=f.ctx.tools.schemas(a).find(s=>s.name==='postman_bridge')
+    assert.deepEqual(schema.parameters.properties.devspace_mode.enum,['READ_ONLY','WRITE_TEST'])
+    const guidance=sections[0].text({scope:a})
+    const nested=JSON.parse(guidance.slice(guidance.lastIndexOf('Current nested argument schemas: ')+33))
+    assert.deepEqual(nested.find(s=>s.name==='postman_bridge').parameters.properties.devspace_mode.enum,['READ_ONLY','WRITE_TEST'])
+    const result=await f.execute(a,"return await tools.postman_bridge({message:'@PostmanDevspace harmless test',devspace_mode:'WRITE_TEST'})")
+    assert.equal(result.isError,false,result.error?.message)
+    assert.equal(result.value.status,'ok',JSON.stringify(result.value))
+    assert.equal(result.value.value.status,'POSTMAN_BRIDGE_ACCEPTED')
+    assert.equal(admission[0],a)
+    assert.equal(admission[1],'@PostmanDevspace harmless test')
+    assert.equal(admission[2],'devspace')
+    assert.equal(admission[5],'WRITE_TEST')
+    const nestedCall=f.traces.find(trace=>trace[0]==='pre'&&trace[1]==='postman_bridge')
+    assert.equal(nestedCall[2],a)
+    assert.ok(nestedCall[3])
+  } finally {await f.adapter.dispose()}
 })
 
 test('one PTC outer call batches supervisor operations with native parent and root linkage', async () => {

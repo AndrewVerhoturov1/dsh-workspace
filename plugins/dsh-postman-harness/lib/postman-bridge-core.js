@@ -150,18 +150,18 @@ You have no authority to choose a follow-up task. The parent Postman Leader deci
 export function buildPostmanBridgeStartRequest({ parent, message, signal, transportKind }) {
   if (parent === undefined || parent === null) throw new Error('POSTMAN_BRIDGE_PARENT_REQUIRED')
   if (typeof message !== 'string' || message.length === 0) throw new Error('POSTMAN_BRIDGE_MESSAGE_REQUIRED')
-  if (!['artifact', 'text', 'image'].includes(transportKind)) throw new Error('POSTMAN_BRIDGE_MODE_INVALID')
+  if (!['artifact', 'text', 'image', 'devspace'].includes(transportKind)) throw new Error('POSTMAN_BRIDGE_MODE_INVALID')
   if (signal === undefined || signal === null) throw new Error('POSTMAN_BRIDGE_SIGNAL_REQUIRED')
 
   return {
-    label: transportKind === 'text' ? 'Postman Ask Bridge' : transportKind === 'image' ? 'Postman Image Bridge' : 'Postman Artifact Bridge',
+    label: transportKind === 'devspace' ? 'Postman Devspace Bridge' : transportKind === 'text' ? 'Postman Ask Bridge' : transportKind === 'image' ? 'Postman Image Bridge' : 'Postman Artifact Bridge',
     prompt: [{ type: 'text', text: message }],
     parent,
     signal,
     agentOptions: { ...POSTMAN_BRIDGE_AGENT_OPTIONS },
     maxDepth: POSTMAN_BRIDGE_MAX_DEPTH,
     toolFilter: { allow: [...POSTMAN_BRIDGE_TOOL_ALLOWLIST] },
-    persona: POSTMAN_BRIDGE_PERSONA,
+    persona: transportKind === 'devspace' ? POSTMAN_BRIDGE_PERSONA.replace('1. If the current message starts with exact @PostmanAsk, first load skill(delegate-via-postman-ask). If it starts with exact @PostmanImage, first load skill(delegate-via-postman-image). If it starts with exact @Postman, first load skill(delegate-via-postman).', '1. For exact @PostmanDevspace first load skill(delegate-via-postman-devspace). Its bell/diagnostic terminal is delivery only, never engineering PASS. Do not require ZIP, Ask envelopes or a report file.') : POSTMAN_BRIDGE_PERSONA,
   }
 }
 

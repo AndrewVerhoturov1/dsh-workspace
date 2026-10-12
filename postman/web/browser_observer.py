@@ -833,6 +833,7 @@ def observe_next_assistant(
     phase_tracker: AnswerPhaseTracker | None = None,
     anchor_binding: dict[str, Any] | None = None,
     system_probe: Callable[[], str | None] | None = None,
+    external_result_probe: Callable[[], dict | None] | None = None,
     sleep: Callable[[float], None] = time.sleep,
     monotonic: Callable[[], float] = time.monotonic,
 ) -> dict[str, Any]:
@@ -860,6 +861,10 @@ def observe_next_assistant(
     image_anchor: tuple[str, ...] | None = None
 
     while True:
+        if external_result_probe is not None:
+            received = external_result_probe()
+            if received is not None:
+                return received
         current_url = str(getattr(page, "url", "") or "")
         if current_url != expected_chat_url:
             return _result(

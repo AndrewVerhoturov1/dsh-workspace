@@ -68,7 +68,8 @@ export const POSTMAN_TASK_DOMAIN = defineDomain({
     bridgeOperations: z.record(z.string(), z.object({
       state: z.enum(['pending', 'unknown', 'received']),
       phase: z.enum(['reserved', 'child-known', 'request-known', 'publication-known', 'terminal', 'not-sent', 'synchronized']).optional(),
-      transportKind: z.enum(['artifact', 'text', 'image']).optional(),
+      transportKind: z.enum(['artifact', 'text', 'image', 'devspace']).optional(),
+      devspace: z.object({ mode: z.enum(['READ_ONLY', 'WRITE_TEST']), channel: z.string().optional() }).strict().optional(),
       createdAt: z.string().optional(),
       childSessionId: z.string().optional(),
       requestId: z.string().optional(),

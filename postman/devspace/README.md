@@ -1,0 +1,15 @@
+# PostmanDevspace — реализованный этап 1
+
+Отдельный `postman_bridge({message:'@PostmanDevspace ...',devspace_mode:'READ_ONLY'|'WRITE_TEST'})` допускается только живому top-level Postman Leader. Host создаёт временную one-shot Luna и сохраняет owner/job/child/REQ/mode/channel в существующем приватном registry. `READ_ONLY` разрешает чтение prepared task worktree; `WRITE_TEST` дополнительно позволяет безвредную запись только в отдельной Host-private тестовой папке. Это ограничение поручения, **не песочница shell DevSpace**. Полноценные Git writes не разрешены.
+
+Private task.md идёт напрямую в existing proven Web Send, **не GitHub publisher**. Нет native attachments/ZIP/Ask envelopes в новом режиме. Служебный signal.ps1 скрывает Host capability; ChatGPT вызывает одну команду `done`, `need-decision` или `blocked`, необязательные `-Message` и `-Report`. JSON/signature/manual owner не требуются. Local event публикуется атомарно, повтор того же bell идемпотентен; первый значимый bell завершает обращение этапа 1. Нет постоянной Luna/episodic updates/steer/urgent/stop этапа 2.
+
+Bell имеет приоритет над final/ZIP/текстовой диагностикой. ReportRef ограничен назначенной папкой; чужой report отбрасывается без потери bell, отсутствие/произвольный текст отчёта не блокирует delivery. Host не исполняет message. Capability/job/REQ/owner/Luna и canonical channel проверяются до handoff. Result редактирования и отчёт остаются приватными; в Git идут только source/узкие tests/skill.
+
+`DEVSPACE_SIGNAL_RECEIVED` / `DEVSPACE_DIAGNOSTIC` → trusted current-turn terminal → `POSTMAN_BRIDGE_READY` → `postman_bridge_status`. READY — только уведомление; `DELIVERED` и `REPORTED_NOT_VERIFIED` не означают инженерный PASS. Minimal case-insensitive CAPABILITY_UNAVAILABLE/BLOCKED текстовая диагностика без обязательного envelope; таймаут/Send unknown — BLOCKED без повторной отправки и без fallback. Cold status читает только уже сохранённый trusted terminal Luna. Pending/unknown local bell сохраняется, но без Luna terminal возвращается служебный OUTCOME_UNKNOWN; прямой Host→Leader handoff, resend и автоматический resume отсутствуют. Старые artifact/text/image значения и grant contracts сохранены.
+
+Existing dedicated browser, Send proof, same-chat recovery и serialized reminder intent переиспользованы. Это не второй browser transport. Report parsing не является prerequisite. DevSpace App/MCP в новом conversation нужно доказать настоящим read. Unit tests с fake page не доказывают live MCP, write/bell, same Luna delivery или deployment.
+
+## Проверка/активация
+
+Целевые новые suites: `node --test lib/postman-devspace.test.js` из Harness plugin и `python -m unittest postman.devspace.tests.test_devspace` из repo. Дополнительно относящиеся старые Direct/Bridge/observer/Ask/native-image suites и `git diff --check`. Source изменения в task worktree не обновляют активный Host. Установка/перезапуск, live новый режим и публикация — отдельное согласованное действие Leader; постоянные worktrees, REPO_POLICY и permissions не меняются.
