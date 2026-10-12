@@ -194,6 +194,49 @@ assert hasattr(stdlib_signal, 'set_wakeup_fd')
         self.assertTrue(result["details"]["browserCleanup"]["ownedPageClosed"])
         self.assertEqual(bridge.read_state(REQ)["state"],"DEVSPACE_SIGNAL_RECEIVED")
 
+    def test_unknown_send_waits_for_late_bell_without_resending(self):
+        page = SimpleNamespace(url=CHAT, close=lambda: None)
+        class Factory:
+            def __enter__(self): self.chromium = self; return self
+            def __exit__(self, *args): pass
+            def connect_over_cdp(self, *args, **kwargs): return self
+            @property
+            def contexts(self): return [self]
+            def new_page(self): return page
+        clock = [0.0]
+        def sleep(seconds):
+            clock[0] += seconds
+            if clock[0] >= 2 and not (self.channel / "event.json").exists():
+                self.emit(message="bell after unproved send")
+        uncertain = {"ok": False, "code": web.browser_submit.PROMPT_SEND_UNKNOWN,
+                     "sendState": web.browser_submit.SEND_UNKNOWN,
+                     "details": {"chatUrl": CHAT, "exactUserTurn": False}}
+        with patch.object(web.browser_submit, "submit_fresh_prompt", return_value=uncertain) as submit, \
+             patch.object(web.browser_observer, "observe_next_assistant",
+                          side_effect=AssertionError("unknown Send must not use text observer")):
+            bridge = web.WebWorkerBridge(root=self.channel / "web", sleep=sleep,
+                                         monotonic=lambda: clock[0])
+            result = bridge.run_request(REQ, task_url="", prompt="private task",
+                expected_filename="", expected_request={"transportKind": "devspace"},
+                devspace_binding=self.binding, artifact_mode=False,
+                playwright_factory=Factory, observer_timeout_ms=4000)
+        submit.assert_called_once()
+        self.assertEqual(result["code"], "DEVSPACE_SIGNAL_RECEIVED")
+        self.assertEqual(result["details"]["reportedOutcome"], "DONE")
+        self.assertEqual(result["details"]["sendState"], "UNKNOWN")
+        self.assertEqual(bridge.read_state(REQ)["state"], "DEVSPACE_SIGNAL_RECEIVED")
+        self.assertTrue(result["details"]["browserCleanup"]["ownedPageClosed"])
+
+    def test_unknown_send_without_bell_yields_diagnostic_no_false_done(self):
+        clock = [0.0]
+        result = observer.wait_for_bell_after_unknown_send(self.binding, timeout_ms=1000,
+            sleep=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+            monotonic=lambda: clock[0], conversation_ref=CHAT)
+        self.assertEqual(result["code"], "DEVSPACE_DIAGNOSTIC")
+        self.assertEqual(result["details"]["sendState"], "UNKNOWN")
+        self.assertEqual(result["details"]["diagnostic"], "BLOCKED")
+        self.assertFalse((self.channel / "event.json").exists())
+
     def run_checks(self, *, state="SAFE_GENERATION", delay=0, send_ready=True, send_state="PROVEN_SENT", on_stop=None, on_send=None, complete=False, before_check=None):
         clock = [0.0]
         clicks = []
