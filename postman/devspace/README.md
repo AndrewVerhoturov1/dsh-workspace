@@ -14,6 +14,10 @@ Bell вызывается **из настоящего DevSpace Bash** готов
 
 Existing dedicated browser, Send proof, same-chat recovery и serialized reminder intent переиспользованы. Это не второй browser transport. Report parsing не является prerequisite. DevSpace App/MCP в новом conversation нужно доказать настоящим read. Unit tests с fake page не доказывают live MCP, write/bell, same Luna delivery или deployment.
 
+## Этап 3: маршруты исполнения
+
+`postman_task_prepare({read_only:true})` создаёт owned read-only контекст без Git branch/push. Только Devspace `READ_ONLY` может использовать эту область. Для `WRITE_ISOLATED` сначала штатный Host prepare (clean task branch/worktree); разрешённые правки и тесты — только в назначенном worktree, без самовольных Git commit/push/PR и без обязательного ZIP. Режим `WRITE_TEST` использует прежнюю Host-private test folder. `WRITE_APPROVED_TARGET` не включён без отдельного утверждённого Host grant; DevSpace shell сам по себе не песочница.
+
 ## Проверка/активация
 
 Целевые новые suites: `node --test lib/postman-devspace.test.js` из Harness plugin и `python -m unittest postman.devspace.tests.test_devspace` из repo. Дополнительно относящиеся старые Direct/Bridge/observer/Ask/native-image suites и `git diff --check`. Source изменения в task worktree не обновляют активный Host. Установка/перезапуск, live новый режим и публикация — отдельное согласованное действие Leader; постоянные worktrees, REPO_POLICY и permissions не меняются.

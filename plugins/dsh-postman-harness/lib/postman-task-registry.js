@@ -34,6 +34,7 @@ export const POSTMAN_TASK_DOMAIN = defineDomain({
   }, z.object({
     leaderSessionId: z.string().min(1), repository: z.string(), repositoryPath: z.string(),
     originUrl: z.string(), baseCommit: z.string(), branch: z.string(), worktree: z.string(),
+    devspaceReadOnly: z.boolean().optional(),
     stage: z.enum(['intent', 'worktree', 'ready', 'uncertain', 'closed']),
     diagnostic: z.string().nullable(),
     closedAt: z.string().optional(),
@@ -77,7 +78,7 @@ export const POSTMAN_TASK_DOMAIN = defineDomain({
       state: z.enum(['pending', 'unknown', 'received']),
       phase: z.enum(['reserved', 'child-known', 'request-known', 'publication-known', 'terminal', 'not-sent', 'synchronized']).optional(),
       transportKind: z.enum(['artifact', 'text', 'image', 'devspace']).optional(),
-      devspace: z.object({ mode: z.enum(['READ_ONLY', 'WRITE_TEST']), channel: z.string().optional() }).strict().optional(),
+      devspace: z.object({ mode: z.enum(['READ_ONLY', 'WRITE_TEST', 'WRITE_ISOLATED']), channel: z.string().optional() }).strict().optional(),
       createdAt: z.string().optional(),
       childSessionId: z.string().optional(),
       requestId: z.string().optional(),

@@ -42,7 +42,7 @@ def load_binding(channel, *, root=None):
     binding = json.loads(path.read_text(encoding="utf-8"))
     if (binding.get("version") != 1 or not re.fullmatch(r"REQ_\d{8}T\d{6}Z_\d{4}", binding.get("requestId", "")) or binding.get("jobId") != channel.name or
             Path(binding.get("channel", "")).resolve() != channel.resolve() or
-            binding.get("mode") not in {"READ_ONLY", "WRITE_TEST"} or
+            binding.get("mode") not in {"READ_ONLY", "WRITE_TEST", "WRITE_ISOLATED"} or
             not all(isinstance(binding.get(key), str) and binding[key] for key in IDENTITY)):
         raise ValueError("POSTMAN_DEVSPACE_BINDING_REJECTED")
     return binding

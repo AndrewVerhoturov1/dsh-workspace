@@ -87,7 +87,7 @@ export const POSTMAN_SOL_PTC_TOOL_NAMES = Object.freeze([...POSTMAN_WORKER_PTC_T
 // Existing PTC protocol knowledge, shared by the Host gate and expectStatus.
 // These are exact success statuses, not fuzzy aliases or a dispatch recipe.
 export const POSTMAN_PTC_SUCCESS_STATUSES = Object.freeze({
-  postman_task_prepare: Object.freeze(['TASK_CONTEXT_READY', 'POSTMAN_TASK_CONTEXT_ALREADY_READY']),
+  postman_task_prepare: Object.freeze(['TASK_CONTEXT_READY', 'POSTMAN_TASK_READ_ONLY_READY', 'POSTMAN_TASK_CONTEXT_ALREADY_READY']),
   postman_worker: Object.freeze(['POSTMAN_WORKER_TASK_ACCEPTED']),
   postman_sol_worker: Object.freeze(['POSTMAN_WORKER_TASK_ACCEPTED']),
   postman_task_restore: Object.freeze(['TASK_CONTEXT_RESTORED']),

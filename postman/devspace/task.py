@@ -5,11 +5,20 @@ def render_task(binding, intent, signal_command):
     mode = binding["mode"]
     area = binding["workspaceRef"]
     write = binding["writeRoot"]
-    return f"""# PostmanDevspace — этап 1
+    if mode == "WRITE_ISOLATED":
+        scope = ("Разрешено изменять только файлы внутри заранее подготовленного Host task worktree: " +
+                 str(write) + ". Действуй строго по одобренной цели, сам запусти нужные целевые тесты. " +
+                 "Оставь изменения и проверочные результаты в этом worktree, сообщи Leader точные пути. " +
+                 "Не публикуй изменения в Git, не делай commit/push/PR; разрешение отдельное.")
+    elif mode == "WRITE_TEST":
+        scope = "Записи в исходную область запрещены. Безвредный результат только в Host-private тестовой папке: " + str(write)
+    else:
+        scope = "Записи в исходную область и любые другие файлы запрещены."
+    return f"""# PostmanDevspace — этап 3
 REQ: {binding['requestId']}
 Используй настоящий подключённый DevSpace MCP. Сначала открой назначенную область и прочитай безопасный существующий файл, чтобы проверить реальный доступ в этом разговоре. Инструкция не доказывает доступность.
 Область для чтения: {area}
-Режим: {mode}. Записи в исходную область запрещены. {('Для безвредного результата разрешена только отдельная папка: ' + str(write)) if write else 'Изменения любых файлов задачи запрещены.'}
+Режим: {mode}. {scope}
 Shell DevSpace не является песочницей: ограничь каждое действие назначенной задачей. Не читать секреты/auth/config/runtime, не устанавливать/перезапускать Host и не управлять процессами. Никаких Git writes, commit/push/PR/merge, browser/CDP/Orca uploads; не прикрепляй изображения.
 DevSpace Bash не понимает PowerShell оператор &. Запись local bell через явный pwsh -File ниже — отдельное узкое разрешение, независимо от READ_ONLY. Выполни команду именно через DevSpace Bash; не читать binding/capability/JSON:
 {signal_command} done

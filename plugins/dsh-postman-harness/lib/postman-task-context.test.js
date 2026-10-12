@@ -61,6 +61,37 @@ function fixture(options = {}) {
 }
 const invoked = (calls, ...args) => calls.some(call => JSON.stringify(call.args) === JSON.stringify(args))
 
+test('read-only Devspace preparation creates no Git branch, worktree or push', async () => {
+  const {contexts, calls, registry} = fixture()
+  const parent = leader('read-only-leader')
+  const prepared = await contexts.prepareReadOnly(parent)
+  assert.equal(prepared.status, 'POSTMAN_TASK_READ_ONLY_READY')
+  assert.equal(prepared.devspaceReadOnly, true)
+  assert.equal(prepared.worktree, repository)
+  assert.equal(prepared.branch, 'main')
+  assert.ok(['rev-parse', 'remote'].every(v => calls.some(c => c.args[0] === v)))
+  for (const call of calls) assert.ok(!['fetch','push','worktree','reset','clean','checkout','switch','merge'].includes(call.args[0]), call.args)
+  assert.equal(registry.get(parent.id).devspaceReadOnly,true)
+  assert.equal((await contexts.restore(parent)).diagnostic.code, 'DEVSPACE_READ_ONLY_NO_RESTORE')
+  assert.deepEqual(await contexts.prepareReadOnly(parent), {
+    status: 'POSTMAN_TASK_CONTEXT_ALREADY_READY', ...contexts.get(parent.id),
+  })
+  assert.equal((await contexts.close(parent)).status, 'POSTMAN_TASK_CLOSED')
+})
+
+test('read-only Devspace recovery remains branchless and never mutates Git', async () => {
+  const {contexts, registry, calls, gitCommand} = fixture()
+  const parent=leader('read-only-cold')
+  assert.equal((await contexts.prepareReadOnly(parent)).status,'POSTMAN_TASK_READ_ONLY_READY')
+  const cold = createPostmanTaskContexts({registry,gitCommand,realPath:async x=>x})
+  const count = calls.length
+  const resumed=await cold.recover(parent)
+  assert.equal(resumed.status,'POSTMAN_TASK_CONTEXT_ALREADY_READY',resumed)
+  assert.equal(resumed.devspaceReadOnly,true)
+  for(const item of calls.slice(count))
+    assert.ok(!['fetch','push','worktree','reset','clean','checkout'].includes(item.args[0]),item.args)
+})
+
 test('prepare pins exact fetched origin/main when preview has a different SHA', async () => {
   const { contexts, calls, state } = fixture()
   assert.notEqual(state.base, state.preview)

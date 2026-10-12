@@ -61,6 +61,37 @@ function bell(binding, fields = {}) {
     reportedOutcome: 'DONE', message: 'необычный\n **отчёт**', reportRef: null, ...fields }
   writeFileSync(join(binding.channel,'event.json'), JSON.stringify(event))
 }
+test('Stage3 read-only context cannot dispatch legacy Postman or Devspace writes', async () => {
+  let called=0
+  const scope={devspaceReadOnly:true,branch:'main'}
+  const contexts={get:()=>scope}
+  const tool=createPostmanBridgeTool({agents:{get:id=>id===parent.id?parent:null}},{
+    accept(...args){called++;assert.equal(args[2],'devspace');assert.equal(args[5],'READ_ONLY');return {status:'POSTMAN_BRIDGE_ACCEPTED'}}
+  },contexts)
+  assert.equal((await tool.execute({message:'@PostmanAsk task'},{agent:parent})).status,
+    'POSTMAN_DEVSPACE_READ_ONLY_SCOPE_REQUIRED')
+  assert.equal((await tool.execute({message:'@PostmanImage task'},{agent:parent})).status,
+    'POSTMAN_DEVSPACE_READ_ONLY_SCOPE_REQUIRED')
+  assert.equal((await tool.execute({message:'@PostmanDevspace task',devspace_mode:'WRITE_ISOLATED'},{agent:parent})).status,
+    'POSTMAN_DEVSPACE_READ_ONLY_SCOPE_REQUIRED')
+  assert.equal((await tool.execute({message:'@PostmanDevspace task',devspace_mode:'READ_ONLY'},{agent:parent})).status,
+    'POSTMAN_BRIDGE_ACCEPTED')
+  assert.equal(called,1)
+})
+test('Stage 3 isolates writeRoot only to a Host-bound task worktree', t => {
+  const {root} = channel(t,'WRITE_TEST')
+  const unique='33333333-3333-4333-8333-333333333333'
+  const binding=createDevspaceChannel({root,bridgeJobId:unique,requestId:req,
+    leaderSessionId:'leader',lunaSessionId:'luna',worktree:root,sourceRoot:root,mode:'WRITE_ISOLATED'})
+  assert.equal(binding.workspaceRef,root)
+  assert.equal(binding.writeRoot,root)
+  assert.equal(devspaceTerminal(binding,{source:'text_fallback',diagnostic:'PARTIAL'}).reportedOutcome,'PARTIAL')
+  const readonly='44444444-4444-4444-8444-444444444444'
+  const read=createDevspaceChannel({root,bridgeJobId:readonly,requestId:req,
+    leaderSessionId:'leader',lunaSessionId:'luna',worktree:root,sourceRoot:root,mode:'READ_ONLY'})
+  assert.equal(read.writeRoot,null)
+})
+
 test('exact devspace marker is separate and old payload/modes stay exact', () => {
   assert.equal(parsePostmanUserTurn('  @PostmanDevspace русский\nтекст').transportKind,'devspace')
   assert.equal(parsePostmanUserTurn('@PostmanDevspace русский\nтекст').payload,'русский\nтекст')

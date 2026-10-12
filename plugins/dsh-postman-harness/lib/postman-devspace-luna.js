@@ -40,6 +40,15 @@ export function createPostmanDevspaceLuna(ctx, contexts, direct) {
     if (!sameParent(parent, job.taskContext)) return { status: 'POSTMAN_BRIDGE_PARENT_UNAVAILABLE' }
     if (active.has(leaderId) && active.get(leaderId) !== job.bridgeJobId)
       return { status: 'POSTMAN_DEVSPACE_LUNA_BUSY' }
+    if (job.devspaceMode === 'WRITE_ISOLATED') {
+      if (job.taskContext.devspaceReadOnly || job.taskContext.branch === 'main')
+        return { status: 'POSTMAN_DEVSPACE_ISOLATED_CONTEXT_REQUIRED' }
+      const previousIsolated = Object.values(rowOf(leaderId)?.bridgeOperations ?? {}).some(op =>
+        op.transportKind === 'devspace' && op.devspace?.mode === 'WRITE_ISOLATED' &&
+        op.state === 'received')
+      if (!previousIsolated && await contexts.verifyWorktree(leaderId) !== true)
+        return { status: 'POSTMAN_DEVSPACE_WORKTREE_NOT_READY' }
+    }
     if (typeof ctx.subagents?.startContinuable !== 'function' ||
         typeof ctx.subagents?.followup !== 'function' ||
         typeof ctx.subagents?.inspectOpenContinuableChild !== 'function' ||
