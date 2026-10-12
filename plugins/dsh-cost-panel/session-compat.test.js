@@ -1,17 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { applySessionIgnorableEvents } from './session-compat.mjs';
 
-test('compatibility patch preserves the shared pnpm image and is idempotent', t => {
+for (const eol of ['LF', 'CRLF']) test('compatibility patch preserves shared pnpm image (' + eol + ') and is idempotent', t => {
   const directory = mkdtempSync(join(tmpdir(), 'dsh-cost-patch-'));
   assert.equal(dirname(resolve(directory)), resolve(tmpdir()));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
-  const native = createRequire(import.meta.url).resolve('@deepseek-ai/dsh-session');
-  const original = readFileSync(native, 'utf8').replace('\t\t\t...surfaceOpts?.ignorable === true ? { ignorable: true } : {},\n', '');
+  const original = [
+    'class Session {',
+    '\tappend(type, data, ...opts) {',
+    '\t\tconst surfaceMetadata = {',
+    '\t\t};',
+    '\t}',
+    '}',
+    '',
+  ].join(eol === 'CRLF' ? '\r\n' : '\n');
   const anchor = join(directory, 'package.json');
   const packageRoot = join(directory, 'node_modules/@deepseek-ai/dsh-session');
   const target = join(packageRoot, 'index.js');
@@ -25,6 +31,7 @@ test('compatibility patch preserves the shared pnpm image and is idempotent', t 
   assert.equal(readFileSync(shared, 'utf8'), original);
   const patched = readFileSync(target, 'utf8');
   assert.notEqual(patched, original);
+  if (eol === 'CRLF') assert.equal(patched.replace(/\r\n/g, '').includes('\n'), false);
   assert.equal(applySessionIgnorableEvents([anchor])[0].updated, false);
   assert.equal(readFileSync(target, 'utf8'), patched);
   writeFileSync(target, 'unexpected SDK');
