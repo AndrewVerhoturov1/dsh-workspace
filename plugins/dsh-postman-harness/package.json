@@ -13,6 +13,7 @@
     "lib/index.js",
     "lib/direct-current-turn.js",
     "lib/postman-devspace.js",
+    "lib/postman-devspace-luna.js",
     "lib/postman-bridge.js",
     "lib/postman-bridge-core.js",
     "lib/postman-input-files.js",

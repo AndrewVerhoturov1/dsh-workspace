@@ -1,9 +1,9 @@
 ---
 name: delegate-via-postman-devspace
-description: Отдельный exact @PostmanDevspace через Host-bound one-shot Luna, только этап 1.
+description: Отдельный exact @PostmanDevspace; этап 1 legacy transport, этап 2 продолжаемая Host-managed Luna.
 ---
 
-# PostmanDevspace — этап 1
+# PostmanDevspace — связь этапов 1–2
 
 Использовать только при точном начале текущего сообщения `^\s*@PostmanDevspace(?:\s|$)` и Host-привязке этой Luna к обращению top-level Postman Leader. Навык не выдаёт полномочий обычному root/Worker; standalone send запрещён. Coordinator-сообщение не считается текущим user turn.
 

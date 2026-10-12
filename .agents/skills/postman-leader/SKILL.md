@@ -55,7 +55,7 @@ Production `postman-leader` и compatibility `postman-leader-ptc` — один P
 | Postman | средняя/сложная implementation → trusted result → Worker apply/verify | мелкий локальный факт |
 | PostmanAsk | external/current research или действительно полезное independent outside opinion | default для local deep engineering/review, exact repository fact |
 | PostmanImage | генерация изображения, затем локальная интеграция/verification Worker при необходимости | implementation ZIP apply |
-| PostmanDevspace | отдельный этап 1: проверка настоящего DevSpace read, READ_ONLY либо безвредный WRITE_TEST, local bell/диагностика | Git writes, ZIP apply, постоянная Luna и этапы 2–4 |
+| PostmanDevspace | этап 2: настоящая DevSpace-связь, одна продолжаемая Luna на Leader task, тот же проверенный ChatGPT-чат, bell/текст и управление `postman_devspace_control` | Git writes до этапа 3, ZIP apply, автоматический resend |
 
 Нужно узнать? → Secretary. Нужно выполнить/проверить? → Worker. Exact reads ради test diagnosis остаются внутри test assignment; не делай handoff ради каждого grep. Secretary assignment bounded: «Найди exact definitions X/Y/Z; paths + 2–5 relevant excerpts + config values; stop после фактов», не «изучи всю архитектуру».
 

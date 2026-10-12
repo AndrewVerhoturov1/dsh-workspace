@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { postmanInputGrants } from './postman-input-files.js'
 import { DirectPostmanJobManager } from './direct-current-turn.js'
+import { createPostmanDevspaceLuna } from './postman-devspace-luna.js'
+import { requestDevspaceControl, readDevspaceControls } from './postman-devspace.js'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { buildPostmanBridgeStartRequest, isTopLevelPostmanSupervisor, POSTMAN_BRIDGE_PROVIDER,
   settleTrustedPostmanStatus } from './postman-bridge-core.js'
@@ -85,6 +87,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
   const jobs = new Map()
   const admissionTails = new Map()
   const coldRecovery = new Map()
+  const devspaceLuna = createPostmanDevspaceLuna(ctx, contexts, direct)
   let disposed = false
 
   async function trustedStatusReader(child, signal) {
@@ -136,6 +139,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
       return { ...await settleStatus(job, () => direct.wait(job.bridgeJobId, undefined, job.controller.signal)),
         transportKind: job.transportKind }
     }
+    if (job.transportKind === 'devspace') return devspaceLuna.run(job, message, parent)
     let run
     try {
       run = await ctx.subagents.start(POSTMAN_BRIDGE_PROVIDER, buildPostmanBridgeStartRequest({
@@ -243,7 +247,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     const job = {
       bridgeJobId: randomUUID(), parentSessionId: parent.id, taskContext, transportKind, state: 'QUEUED',
       createdAt: new Date().toISOString(), controller: new AbortController(), inputBinding,
-      notification: 'PENDING', recoveryFrom,
+      notification: 'PENDING', recoveryFrom, devspaceMode,
     }
     if (typeof contexts?.changeRecord !== 'function') {
       // Unit fixtures without a durable registry retain the synchronous API.
@@ -259,17 +263,23 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
         const row = contexts.record?.(parent.id)
         const occupied = Object.values(row?.bridgeOperations ?? {}).filter(countsAgainstLimit).length + (row?.bridge ? 1 : 0)
         if (occupied >= 3) return { status: 'POSTMAN_BRIDGE_LIMIT_REACHED' }
+        if (transportKind === 'devspace' && Object.values(row?.bridgeOperations ?? {}).some(op =>
+          op.transportKind === 'devspace' && ['pending', 'unknown'].includes(op.state)))
+          return { status: 'POSTMAN_DEVSPACE_LUNA_BUSY' }
         await contexts.changeRecord(parent.id, old => {
           const operations = old.bridgeOperations ?? {}
           const count = Object.values(operations).filter(countsAgainstLimit).length + (old.bridge ? 1 : 0)
           if (count >= 3) throw new Error('POSTMAN_BRIDGE_LIMIT_REACHED')
+          if (transportKind === 'devspace' && Object.values(operations).some(op =>
+            op.transportKind === 'devspace' && ['pending', 'unknown'].includes(op.state)))
+            throw new Error('POSTMAN_DEVSPACE_LUNA_BUSY')
           return { ...old, bridgeOperations: { ...operations, [job.bridgeJobId]: { state: 'pending', phase: 'reserved', transportKind, createdAt: job.createdAt,
               ...(transportKind === 'devspace' ? { devspace: { mode: devspaceMode } } : {}) } } }
         })
         return startJob(job, message)
       } catch (error) {
-        return { status: error?.message === 'POSTMAN_BRIDGE_LIMIT_REACHED'
-          ? 'POSTMAN_BRIDGE_LIMIT_REACHED' : 'POSTMAN_BRIDGE_ADMISSION_FAILED',
+        return { status: ['POSTMAN_BRIDGE_LIMIT_REACHED', 'POSTMAN_DEVSPACE_LUNA_BUSY'].includes(error?.message)
+          ? error.message : 'POSTMAN_BRIDGE_ADMISSION_FAILED',
           diagnostic: diagnostic(error) }
       }
     }
@@ -564,6 +574,12 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
         }
       } else job.syncDiagnostic = { code: 'PUBLICATION_PROOF_MISSING' }
     }
+    if (job.transportKind === 'devspace' && job.finishedAt &&
+        job.trustedTerminal?.result?.source !== 'bell') {
+      try {
+        if (await devspaceLuna.upgradeLateBell(parent, job)) notify(job)
+      } catch { /* The immutable bell remains available; never forge promotion. */ }
+    }
     const common = snapshot(job)
     if (job.state === 'QUEUED') return { status: 'POSTMAN_BRIDGE_QUEUED', ...common }
     if (!job.finishedAt || job.state === 'STARTING' || job.state === 'RUNNING') {
@@ -711,6 +727,35 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     return { status: 'POSTMAN_BRIDGE_TEAM_SNAPSHOT', used, limit: 3, operations, truncated: total > operations.length }
   }
 
+  function devspaceControl(parent, bridgeJobId, action, message, priority = 'normal') {
+    if (disposed || !controlCallerAllowed(parent)) return { status: 'POSTMAN_DEVSPACE_CONTROL_CALLER_REJECTED' }
+    const job = jobs.get(bridgeJobId)
+    const operation = contexts?.record?.(parent.id)?.bridgeOperations?.[bridgeJobId]
+    if (!job || job.parentSessionId !== parent.id || job.transportKind !== 'devspace' ||
+        !operation || operation.transportKind !== 'devspace' ||
+        operation.childSessionId !== job.childSessionId ||
+        !job.childSessionId || (operation.requestId && operation.requestId !== job.requestId))
+      return { status: 'POSTMAN_DEVSPACE_CONTROL_JOB_NOT_FOUND' }
+    const directJob = direct.latest?.(job.childSessionId)
+    const binding = directJob?.devspaceChannel
+    if (!binding || binding.leaderSessionId !== parent.id ||
+        binding.lunaSessionId !== job.childSessionId || binding.jobId !== bridgeJobId ||
+        binding.requestId !== job.requestId)
+      return { status: 'POSTMAN_DEVSPACE_CONTROL_CHANNEL_UNAVAILABLE' }
+    if (action === 'status') {
+      try { return { status: 'POSTMAN_DEVSPACE_CONTROL_STATUS', bridgeJobId,
+        requestId: job.requestId, controls: readDevspaceControls(binding) } }
+      catch (error) { return { status: 'POSTMAN_DEVSPACE_CONTROL_STATUS_UNKNOWN', diagnostic: diagnostic(error) } }
+    }
+    if (!['steer', 'preempt', 'stop'].includes(action) ||
+        (action !== 'stop' && (typeof message !== 'string' || !message.trim())) ||
+        !['normal', 'urgent'].includes(priority)) return { status: 'POSTMAN_DEVSPACE_CONTROL_INVALID' }
+    if (job.state !== 'RUNNING' || !['running', 'starting'].includes(directJob.state))
+      return { status: 'POSTMAN_DEVSPACE_CONTROL_ALREADY_SETTLED' }
+    try { return { ...requestDevspaceControl(binding, { kind: action, message, priority }), bridgeJobId } }
+    catch (error) { return { status: 'POSTMAN_DEVSPACE_CONTROL_REJECTED', diagnostic: diagnostic(error) } }
+  }
+
   async function dispose() {
     if (disposed) return
     disposed = true
@@ -721,5 +766,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     jobs.clear()
   }
 
-  return { accept, status, list, teamSnapshot, stop, hasActive, hasActiveWork, dispose }
+  return { accept, status, list, teamSnapshot, stop, hasActive, hasActiveWork, dispose,
+    devspaceControl, devspaceLunaClose: parent => devspaceLuna.close(parent, contexts?.get(parent.id)),
+    devspaceLunaSnapshot: parent => devspaceLuna.snapshot(parent) }
 }

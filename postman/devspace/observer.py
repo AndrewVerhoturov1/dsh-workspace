@@ -5,6 +5,7 @@ import browser_recovery as recovery
 import browser_submit as submit
 import reminder_policy
 import transport_control
+from postman.devspace import controls
 from postman.devspace.signal import read_event
 
 DEFAULT_CHECK_INTERVAL_MS = 15 * 60 * 1000
@@ -147,6 +148,28 @@ def wait_for_signal(page, prompt, chat_url, binding, *, timeout_ms, interval_ms,
         received = bell()
         if received:
             return finish(received)
+        acted = controls.process_one(page, latest, chat_url, binding,
+            activity=lambda p, prompt, url: activity_snapshot(p, prompt, url, anchor_binding=anchor),
+            stop_control=stop_control, sleep=sleep, monotonic=monotonic)
+        if bell():
+            return finish(bell())
+        if acted and acted.get('kind') == 'stop':
+            return finish(diagnostic('Stop requested by Leader. UI: ' + acted['status'] +
+                '. Any local DevSpace commands may still be running.', outcome='PARTIAL'))
+        if acted and acted.get('sendUnknown'):
+            received = wait_for_bell_after_unknown_send(binding,
+                timeout_ms=max(1, int((control.soft_deadline-monotonic())*1000)),
+                sleep=sleep, monotonic=monotonic, conversation_ref=chat_url)
+            return finish(received)
+        if acted and acted.get('newPrompt'):
+            latest = acted['newPrompt']
+            anchor = None
+            latest_text = ''
+            for slot in control.slots:
+                if slot['status'] == 'PENDING':
+                    slot['scheduledElapsedMs'] = control.elapsed() + interval_ms
+            persist(control.snapshot())
+            continue
         observed = observer.observe_next_assistant(page, latest, chat_url,
             timeout_ms=min(3000, max(1, int((control.soft_deadline-monotonic())*1000))), stable_ms=500,
             poll_ms=250, anchor_binding=anchor, external_result_probe=bell,
@@ -185,7 +208,7 @@ def wait_for_signal(page, prompt, chat_url, binding, *, timeout_ms, interval_ms,
             continue
         due = next((slot for slot in control.slots if slot["status"] == "PENDING" and
                     control.elapsed() >= slot["scheduledElapsedMs"]), None)
-        if due and not interrupted:
+        if due and not interrupted and not controls.pending(binding):
             state = activity_snapshot(page, latest, chat_url, anchor_binding=anchor)
             control.event("DEVSPACE_CHECK", activity=state, slot=due["slot"])
             if bell():

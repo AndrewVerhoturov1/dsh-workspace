@@ -17,6 +17,19 @@ Luna child session.
 Bridge не создаёт собственного transport. Это Leader-specific supervisor и trusted result handoff; общий transport lifecycle описан в [Current Flow](POSTMAN_CURRENT_FLOW.md), text delta — в [Ask Flow](POSTMAN_ASK_FLOW.md). После child current-turn boundary используются существующие
 `postman/direct/postman.ps1` и `postman/direct/postman-ask.ps1` с exact task branch, переданной trusted Host.
 
+## PostmanDevspace Stage 2 — persistent Luna
+
+Новый `@PostmanDevspace` отделён от legacy one-shot Bridge. Host привязывает одну
+`startContinuable` Luna к точному Leader task context и затем использует
+`subagents.followup` в рамках той же Luna; запуск Direct принадлежит Host,
+а не произвольному coordinator-сообщению. Второй REQ использует сохранённый
+`conversationRef` текущего ChatGPT-чата. `postman_devspace_control` обслуживает
+steer/preempt/stop/status для exact Bridge job; фактические Stop/Send статусы
+не заменяются фактом QUEUED. `postman_devspace_luna_close` закрывает пустую
+связистку до закрытия task context. Bell остаётся приоритетным, произвольный
+текст не блокирует доставку; поздний bell может обновить тот же REQ.
+Подробнее: [PostmanDevspace Flow](POSTMAN_DEVSPACE_FLOW.md).
+
 ## Supervisor control Stage 2
 
 Оба top-level preset ID (production postman-leader и compatibility postman-leader-ptc) используют канонический supervisor PTC. Sol dispatch и yield выполняются внутри того же program; exact accepted asynchronous work с boundary: external_event auto-concludes после safe outer settlement. PTC не меняет Sol user authorization, Direct/Web timing, Send proof, UNKNOWN/recovery budget, correlation, terminal/grants или sync.

@@ -65,6 +65,14 @@ export const POSTMAN_TASK_DOMAIN = defineDomain({
       requestId: z.string().nullable() }),
     // Keep the legacy single marker readable; new jobs use individually keyed operations.
     bridge: z.object({ id: z.string(), state: z.enum(['pending', 'unknown']) }).nullable(),
+    // Stage 2: one exact continuable communications Luna belongs to the Leader task.
+    // Optional on disk so Stage-1 and historical v1 rows remain readable.
+    devspaceLuna: z.object({
+      childId: z.string().min(1), state: z.enum(['intent', 'ready', 'uncertain', 'closing', 'closed']),
+      activeBridgeJobId: z.string().nullable().optional(),
+      requestIds: z.array(z.string()).optional(),
+      conversationRef: z.string().nullable().optional(),
+    }).strict().optional(),
     bridgeOperations: z.record(z.string(), z.object({
       state: z.enum(['pending', 'unknown', 'received']),
       phase: z.enum(['reserved', 'child-known', 'request-known', 'publication-known', 'terminal', 'not-sent', 'synchronized']).optional(),

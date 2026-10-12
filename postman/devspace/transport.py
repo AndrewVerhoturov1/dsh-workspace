@@ -44,6 +44,7 @@ def run(channel, request_id, intent, *, ensure_browser=ensure_dedicated_chrome, 
         observed = bridge.run_request(request_id, task_url="", prompt=prompt,
             expected_filename="", expected_request={"transportKind": "devspace", "requestId": request_id},
             artifact_mode=False, devspace_binding=binding, cdp_url=browser["cdpUrl"],
+            conversation_url=binding.get("conversationUrl"),
             reminder_interval_ms=DEFAULT_CHECK_INTERVAL_MS, max_reminders=DEFAULT_CHECK_COUNT)
         details = observed.get("details", {})
         result = {"requestId": request_id, "source": "bell" if observed.get("code") == "DEVSPACE_SIGNAL_RECEIVED" else details.get("source", "transport_diagnostic"),

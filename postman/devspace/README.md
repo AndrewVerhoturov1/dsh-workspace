@@ -1,4 +1,4 @@
-# PostmanDevspace — реализованный этап 1
+# PostmanDevspace — этап 1 и продолжаемая связь этапа 2
 
 Отдельный `postman_bridge({message:'@PostmanDevspace ...',devspace_mode:'READ_ONLY'|'WRITE_TEST'})` допускается только живому top-level Postman Leader. Host создаёт временную one-shot Luna и сохраняет owner/job/child/REQ/mode/channel в существующем приватном registry. `READ_ONLY` разрешает чтение prepared task worktree; `WRITE_TEST` дополнительно позволяет безвредную запись только в отдельной Host-private тестовой папке. Это ограничение поручения, **не песочница shell DevSpace**. Полноценные Git writes не разрешены.
 
