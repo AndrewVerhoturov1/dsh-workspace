@@ -7,10 +7,12 @@ import { pathToFileURL } from 'node:url';
 // Replace files atomically so pnpm's shared hardlinks remain untouched.
 export function applySessionIgnorableEvents(anchors) {
   const paths = new Set(anchors.map(anchor => realpathSync(createRequire(anchor).resolve('@deepseek-ai/dsh-session'))));
-  const before = '\t\tconst surfaceMetadata = {\n';
-  const after = before + '\t\t\t...surfaceOpts?.ignorable === true ? { ignorable: true } : {},\n';
   const prepared = [...paths].map(path => {
     const source = readFileSync(path, 'utf8');
+    // Retain the native SDK file's line endings; installed Windows images may be CRLF.
+    const newline = source.includes('\t\tconst surfaceMetadata = {\r\n') ? '\r\n' : '\n';
+    const before = '\t\tconst surfaceMetadata = {' + newline;
+    const after = before + '\t\t\t...surfaceOpts?.ignorable === true ? { ignorable: true } : {},' + newline;
     if (source.includes(after)) return { path, updated: false };
     if (!source.includes('append(type, data, ...opts)') || source.split(before).length !== 2)
       throw new Error('Session append compatibility patch preimage mismatch: ' + path);
