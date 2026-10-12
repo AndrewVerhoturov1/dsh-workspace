@@ -46,6 +46,21 @@ export function applyPostmanNativeChildCutoff(anchors) {
       writeFileSync(normalizedPatch, readFileSync(targetPatch, 'utf8').replaceAll('\r', ''))
       const apply = args => spawnSync('git', ['-c', 'core.longpaths=true', 'apply', '--include=' + relative, ...args, normalizedPatch], { cwd:directory, env:{...process.env,GIT_CEILING_DIRECTORIES:dirname(directory)}, stdio:'ignore', windowsHide:true })
       let changed = false, lifecycleInstalled = false, scopedInstalled = false
+      // Preserve the installed compaction-service lookup while reapplying our exact overlays.
+      // The scoped patch was authored against the direct-property variant; some installations
+      // use the equivalent Cordis service lookup. Normalize only our private staging copy.
+      const scopedLookup = 'this.ownerCtx.agentPresets?.serviceFor(agent, "compaction")'
+      const installedLookup = 'this.ownerCtx.get("agentPresets")?.serviceFor(agent, "compaction")'
+      let restoreInstalledLookup = false
+      if (relative.includes('/dsh-subagent/')) {
+        const text = readFileSync(staged, 'utf8')
+        if (text.includes(installedLookup)) {
+          if (text.includes(scopedLookup) || text.indexOf(installedLookup) !== text.lastIndexOf(installedLookup))
+            throw new Error('Native scoped compaction lookup ambiguous: ' + path)
+          writeFileSync(staged, text.replace(installedLookup, scopedLookup))
+          restoreInstalledLookup = true
+        }
+      }
       // Peel only our own overlays in reverse order in the private staging copy.
       if (relative.includes('/dsh-subagent/')) {
         writeFileSync(normalizedPatch, readFileSync(new URL('./postman-native-scoped-compact.patch', import.meta.url), 'utf8').replaceAll('\r', ''))
@@ -85,6 +100,12 @@ export function applyPostmanNativeChildCutoff(anchors) {
           if (apply(['--check']).status !== 0 || apply([]).status !== 0) throw new Error('Native session event vocabulary patch mismatch: ' + path)
           changed = true
         }
+      }
+      if (restoreInstalledLookup) {
+        const text = readFileSync(staged, 'utf8')
+        if (!text.includes(scopedLookup) || text.indexOf(scopedLookup) !== text.lastIndexOf(scopedLookup))
+          throw new Error('Native scoped compaction lookup restoration mismatch: ' + path)
+        writeFileSync(staged, text.replace(scopedLookup, installedLookup))
       }
       if (relative === goalRelative && digest(staged) !== goalImages.after)
         throw new Error('Native goal continuation patch postimage mismatch: ' + path)
