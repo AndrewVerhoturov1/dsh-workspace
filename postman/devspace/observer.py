@@ -1,4 +1,4 @@
-"""Signal-first stage-one observation using the existing proven browser transport."""
+"""Signal-first Devspace checks on the existing single browser transport."""
 import re
 import browser_observer as observer
 import browser_recovery as recovery
@@ -6,6 +6,86 @@ import browser_submit as submit
 import reminder_policy
 import transport_control
 from postman.devspace.signal import read_event
+
+DEFAULT_CHECK_INTERVAL_MS = 15 * 60 * 1000
+DEFAULT_CHECK_COUNT = 3
+STOP_OBSERVATION_MS = 10_000
+
+# Read UI state only in the correlated turn, never treat assistant prose as proof.
+# A tool card with an unknown state is not proof that a local operation is idle.
+_ACTIVITY_JS = r"""
+(node) => {
+  const scope = node.closest('[data-turn-key], [data-content-search-turn-key], [data-testid^="conversation-turn-"]') || node;
+  const visible = el => !!el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none';
+  const prose = el => !!el.closest('[data-markdown-text-style="assistant-message"], .markdown, [data-testid="assistant-message"], [data-user-message-bubble]');
+  const tools = [...scope.querySelectorAll('[data-tool-name], [data-testid*="tool"], [data-testid*="devspace"], [data-tool-call-id]')].filter(el => visible(el) && !prose(el));
+  const statuses = [...scope.querySelectorAll('[role="status"], [aria-live], [data-streaming-response-status], [data-testid*="activity"]')].filter(el => visible(el) && !prose(el));
+  const active = /^(running|pending|executing|in-progress|loading|started)$/i;
+  const finished = /^(completed|complete|done|success|succeeded|failed|cancelled|canceled)$/i;
+  const state = el => el.getAttribute('data-state') || el.getAttribute('data-status') || el.getAttribute('data-tool-state') || '';
+  const operations = statuses.filter(el => /devspace|read_file|write_file|open_workspace|bash|shell|тест|чтен|запис|выполня|calling|executing|running/i.test(el.innerText || el.getAttribute('aria-label') || ''));
+  const activeTool = tools.some(el => active.test(state(el)) || el.getAttribute('aria-busy') === 'true') || operations.some(el => !finished.test(state(el)));
+  const unknownTool = tools.some(el => !finished.test(state(el)) && !active.test(state(el)) && el.getAttribute('aria-busy') !== 'true');
+  const thinking = [...scope.querySelectorAll('[data-testid*="thinking"], [data-testid*="reasoning"], [data-state="thinking"], [data-stream-phase="analysis"]')].some(el => visible(el) && !prose(el));
+  return {scopeConnected: scope.isConnected, activeTool, unknownTool, thinking, toolCount: tools.length,
+          operationLabels: operations.slice(0, 4).map(el => (el.innerText || el.getAttribute('aria-label') || '').slice(0, 200))};
+}
+"""
+
+
+def stop_control(page):
+    """Unlike generation_active, failures are UNKNOWN, not affirmative absence."""
+    try:
+        seen = []
+        for selector in observer.GENERATION_CONTROL_SELECTORS:
+            locator = page.locator(selector)
+            for i in range(locator.count()):
+                candidate = locator.nth(i)
+                if candidate.is_visible():
+                    if not candidate.is_enabled():
+                        return "UNKNOWN", None
+                    seen.append(candidate)
+        semantic = page.get_by_role("button", name=re.compile(
+            r"^(stop|stop generating|pause|pause generation|остановить|остановить создание|приостановить)$", re.I))
+        if semantic.count() > 1:
+            return "UNKNOWN", None
+        if semantic.count() == 1 and semantic.first.is_visible():
+            if not semantic.first.is_enabled():
+                return "UNKNOWN", None
+            return "PRESENT", semantic.first
+        return ("PRESENT", seen[0]) if seen else ("ABSENT", None)
+    except Exception:
+        return "UNKNOWN", None
+
+
+def activity_snapshot(page, prompt, chat_url, *, anchor_binding=None):
+    evidence = {"state": "UNKNOWN", "reason": "activity_unproved"}
+    if str(getattr(page, "url", "")) != chat_url:
+        return {**evidence, "reason": "conversation_changed"}
+    turns, selector = observer.snapshot_turns(page)
+    anchor = observer.find_user_anchor(turns, prompt, anchor_binding=anchor_binding)
+    if anchor is None or any(t.get("role") == "user" and t["index"] > anchor for t in turns):
+        return {**evidence, "reason": "task_lineage_unproved"}
+    related = [t for t in turns if t["index"] >= anchor]
+    try:
+        # Modern wrappers contain the tool UI; legacy layouts use the last correlated node.
+        node = related[-1]
+        ui = page.locator(selector).nth(node.get("nodeIndex", node["index"])).evaluate(_ACTIVITY_JS)
+        if not isinstance(ui, dict) or not ui.get("scopeConnected"):
+            return evidence
+    except Exception:
+        return evidence
+    stop, _ = stop_control(page)
+    evidence.update(ui, stopState=stop)
+    if ui.get("activeTool"):
+        return {**evidence, "state": "ACTIVE_TOOL", "reason": "visible_operation_active"}
+    if ui.get("unknownTool"):
+        return {**evidence, "reason": "tool_state_unproved"}
+    if stop == "PRESENT" and ui.get("thinking"):
+        return {**evidence, "state": "SAFE_GENERATION", "reason": "thinking_and_no_unresolved_tool"}
+    if stop == "ABSENT":
+        return {**evidence, "state": "IDLE", "reason": "no_generation_control"}
+    return {**evidence, "reason": "generation_safety_unproved"}
 
 
 def wait_for_signal(page, prompt, chat_url, binding, *, timeout_ms, interval_ms, count,
@@ -15,6 +95,7 @@ def wait_for_signal(page, prompt, chat_url, binding, *, timeout_ms, interval_ms,
         timeout_ms, interval_ms, count, monotonic=monotonic)
     latest = prompt
     anchor = None
+    latest_text = ""
 
     def bell():
         event = read_event(binding)
@@ -27,6 +108,20 @@ def wait_for_signal(page, prompt, chat_url, binding, *, timeout_ms, interval_ms,
         result["details"].update(conversationRef=chat_url, **control.snapshot())
         return result
 
+    def diagnostic(message, *, source="transport_diagnostic", outcome="BLOCKED"):
+        return {"ok": True, "code": "DEVSPACE_DIAGNOSTIC", "details": {
+            "source": source, "diagnostic": outcome, "assistantText": latest_text,
+            "message": message}}
+
+    def continuation_phase():
+        # Called by the existing Send path before every composer/Send mutation.
+        if bell():
+            return {"phase": observer.UNKNOWN, "reason": "external_action_not_safe", "bellReceived": True}
+        state = activity_snapshot(page, latest, chat_url, anchor_binding=anchor)
+        if state["state"] != "IDLE":
+            return {"phase": observer.UNKNOWN, "reason": "external_action_not_safe", "activity": state}
+        return {"phase": observer.WORKING, "activity": state}
+
     while monotonic() < control.soft_deadline:
         received = bell()
         if received:
@@ -35,54 +130,119 @@ def wait_for_signal(page, prompt, chat_url, binding, *, timeout_ms, interval_ms,
             timeout_ms=min(3000, max(1, int((control.soft_deadline-monotonic())*1000))), stable_ms=500,
             poll_ms=250, anchor_binding=anchor, external_result_probe=bell,
             sleep=sleep, monotonic=monotonic)
-        received = bell()  # Bell wins even if browser diagnostic raced it.
+        received = bell()
         if received:
             return finish(received)
         if observed.get("code") == "DEVSPACE_SIGNAL_RECEIVED":
             return finish(observed)
+        text = observed.get("details", {}).get("assistantText", "")
+        if text:
+            latest_text = text
         if observed.get("ok"):
-            text = observed.get("details", {}).get("assistantText", "")
-            # Only minimal stage-one diagnostic; arbitrary DONE text does not prove a bell.
-            diagnostic = re.search(r"\b(CAPABILITY[ _-]*UNAVAILABLE|BLOCKED)\b", text, re.I)
-            if diagnostic:
-                return finish({"ok": True, "code": "DEVSPACE_DIAGNOSTIC", "details": {
-                    "source": "text_fallback", "diagnostic": "CAPABILITY_UNAVAILABLE" if diagnostic[1].upper().startswith("CAPABILITY") else "BLOCKED",
-                    "assistantText": text}})
+            # Completed arbitrary text is deliverable evidence, not engineering PASS.
+            marker = re.search(r"\b(CAPABILITY[ _-]*UNAVAILABLE|BLOCKED)\b", latest_text, re.I)
+            outcome = ("CAPABILITY_UNAVAILABLE" if marker[1].upper().startswith("CAPABILITY") else "BLOCKED") if marker else "UNKNOWN"
+            return finish(diagnostic("Completed response without local signal.", source="text_fallback", outcome=outcome))
         if observed.get("code") == observer.CHAT_CORRELATION_LOST:
-            return finish({"ok": True, "code": "DEVSPACE_DIAGNOSTIC", "details": {
-                "source": "transport_diagnostic", "diagnostic": "BLOCKED", "assistantText": "Chat correlation lost; no resend."}})
+            return finish(diagnostic("Chat correlation lost; no resend."))
         interrupted, evidence = observer.connection_interrupted(page)
         episode = control.candidate(observer.ASSISTANT_CONNECTION_INTERRUPTED, interrupted, evidence)
         if episode and control.begin_recovery(observer.ASSISTANT_CONNECTION_INTERRUPTED, episode):
+            if bell():
+                continue
             persist(control.snapshot())
             result = recovery.recover_interrupted_chat(page, chat_url, latest, original_prompt=prompt,
                 anchor_binding=anchor, budget_ms=max(1, control.recovery_remaining_ms()), max_attempts=1,
-                settle_ms=0, retry_delays_ms=(), sleep=sleep, monotonic=monotonic)
+                settle_ms=0, retry_delays_ms=(), sleep=sleep, monotonic=monotonic,
+                external_result_probe=bell)
+            if bell():
+                continue
             control.finish_recovery(result.get("code"))
             persist(control.snapshot())
+            if not result.get("ok"):
+                return finish(diagnostic("Same-chat recovery not proven; no continuation."))
             continue
         due = next((slot for slot in control.slots if slot["status"] == "PENDING" and
                     control.elapsed() >= slot["scheduledElapsedMs"]), None)
-        if due and not observed.get("ok") and not interrupted:
-            # Existing intent/lineage and one-shot Send semantics, no competing controls.
-            intent = transport_control.make_intent(page, binding["requestId"], chat_url, prompt, latest,
-                                                   slot=due["slot"], anchor_binding=anchor)
+        if due and not interrupted:
+            state = activity_snapshot(page, latest, chat_url, anchor_binding=anchor)
+            control.event("DEVSPACE_CHECK", activity=state, slot=due["slot"])
+            if bell():
+                continue
+            if state["state"] != "SAFE_GENERATION":
+                # The interval is only CHECK: never Stop active operations or unknown UI.
+                control.slot_status(due["slot"], "DEFERRED", activity=state)
+                persist(control.snapshot())
+                continue
+            try:
+                intent = transport_control.make_intent(page, binding["requestId"], chat_url, prompt, latest,
+                                                       slot=due["slot"], anchor_binding=anchor)
+            except ValueError:
+                return finish(diagnostic("Exact task lineage not proven; no Stop or Send."))
+            intent["exactPromptText"] = ("Продолжай исходную задачу с текущего места. Не начинай заново и не повторяй уже выполненные действия. "
+                                         "Проверь текущий прогресс; по готовности подай предоставленный local bell.")
+            intent["promptSha256"] = submit.prompt_sha256(intent["exactPromptText"])
             control.intent = intent
             persist(control.snapshot())
             if bell():
                 continue
+            # Recheck volatile safety immediately before the sole Stop click.
+            state = activity_snapshot(page, latest, chat_url, anchor_binding=anchor)
+            stop, button = stop_control(page)
+            if state["state"] != "SAFE_GENERATION" or stop != "PRESENT":
+                control.slot_status(due["slot"], "DEFERRED", activity=state, stopState=stop)
+                continue
+            if bell():
+                continue
+            control.event("STOP_REQUESTED", slot=due["slot"])
+            persist(control.snapshot())
+            stop_deadline = min(monotonic() + STOP_OBSERVATION_MS / 1000, control.soft_deadline)
+            try:
+                button.click(timeout=max(1, min(1000, int((stop_deadline-monotonic())*1000))))
+            except Exception:
+                if bell():
+                    continue
+                return finish(diagnostic("Stop outcome unknown; no further click or Send."))
+            ready = False
+            post = {}
+            while monotonic() < stop_deadline:
+                if bell():
+                    break
+                post = activity_snapshot(page, latest, chat_url, anchor_binding=anchor)
+                hydration = recovery.chat_ready_snapshot(page, chat_url, latest, original_prompt=prompt, anchor_binding=anchor)
+                send_button, send_selector = submit.find_send_button(page)
+                # Time elapsed is never proof. Both Stop absence and existing Send readiness are required.
+                ready = post["state"] == "IDLE" and post.get("stopState") == "ABSENT" and hydration.get("ok") and send_button is not None and bool(send_selector)
+                if ready:
+                    break
+                sleep(min(0.25, max(0, stop_deadline-monotonic())))
+            if bell():
+                continue
+            control.event("STOP_OBSERVED", ready=bool(ready), activity=post)
+            persist(control.snapshot())
+            if not ready:
+                return finish(diagnostic("Stop/Send readiness not proven within 10 seconds; no continuation."))
+            if bell():
+                continue
             sent = reminder_policy.submit_reminder(page, intent["exactPromptText"], chat_url,
                 anchor_prompt=latest, anchor_binding=anchor, control_intent=intent,
-                operation_deadline=control.soft_deadline, sleep=sleep, monotonic=monotonic)
+                operation_deadline=control.soft_deadline, sleep=sleep, monotonic=monotonic,
+                phase_probe=continuation_phase)
+            if bell():
+                continue
             if sent.get("sendState") == submit.SEND_PROVEN_SENT:
                 anchor = transport_control.confirmed_binding(page, intent, sent)
                 latest = intent["exactPromptText"]
                 control.slot_status(due["slot"], "SENT_CONFIRMED")
-            elif sent.get("sendState") == submit.SEND_UNKNOWN:
-                return finish({"ok": True, "code": "DEVSPACE_DIAGNOSTIC", "details": {
-                    "source": "transport_diagnostic", "diagnostic": "BLOCKED", "assistantText": "Reminder Send unknown; no resend."}})
+                # Next CHECK is relative to confirmed continuation, not catch-up slots.
+                pending = [s for s in control.slots if s["status"] == "PENDING"]
+                for i, slot in enumerate(pending, 1):
+                    slot["scheduledElapsedMs"] = control.elapsed() + i * interval_ms
+            else:
+                control.event("CONTINUATION_NOT_CONFIRMED", sendState=sent.get("sendState"), details=sent.get("details", {}))
+                return finish(diagnostic("Continuation Send unknown; no resend." if sent.get("sendState") == submit.SEND_UNKNOWN else "Continuation unready; no further click."))
         persist(control.snapshot())
         sleep(min(0.25, max(0, control.soft_deadline-monotonic())))
     received = bell()
-    return finish(received or {"ok": True, "code": "DEVSPACE_DIAGNOSTIC", "details": {
-        "source": "transport_diagnostic", "diagnostic": "BLOCKED", "assistantText": "Local signal wait timed out; no completion claimed."}})
+    return finish(received or diagnostic("Local signal wait timed out; no completion claimed.",
+        outcome="PARTIAL" if latest_text else "BLOCKED"))

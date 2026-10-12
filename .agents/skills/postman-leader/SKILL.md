@@ -55,6 +55,7 @@ Production `postman-leader` и compatibility `postman-leader-ptc` — один P
 | Postman | средняя/сложная implementation → trusted result → Worker apply/verify | мелкий локальный факт |
 | PostmanAsk | external/current research или действительно полезное independent outside opinion | default для local deep engineering/review, exact repository fact |
 | PostmanImage | генерация изображения, затем локальная интеграция/verification Worker при необходимости | implementation ZIP apply |
+| PostmanDevspace | отдельный этап 1: проверка настоящего DevSpace read, READ_ONLY либо безвредный WRITE_TEST, local bell/диагностика | Git writes, ZIP apply, постоянная Luna и этапы 2–4 |
 
 Нужно узнать? → Secretary. Нужно выполнить/проверить? → Worker. Exact reads ради test diagnosis остаются внутри test assignment; не делай handoff ради каждого grep. Secretary assignment bounded: «Найди exact definitions X/Y/Z; paths + 2–5 relevant excerpts + config values; stop после фактов», не «изучи всю архитектуру».
 
@@ -157,13 +158,15 @@ Leader может остановить выбранного Worker в любой
 
 ## 10. Bridge / Postman routing
 
-Bridge только действительно нужный approved Postman/PostmanAsk/PostmanImage, не local exact facts. Leader не вызывает postman_send_current_turn/current_turn_status/ask_validate_reply/continue_last_request напрямую. Не меняй Direct/Web waits, Send, recovery/timing. До трёх independent unresolved jobs; Host сам spacing/queue/sync, не sleep/ручная сериализация.
+Bridge только действительно нужный approved Postman/PostmanAsk/PostmanImage/PostmanDevspace, не local exact facts. Leader не вызывает postman_send_current_turn/current_turn_status/ask_validate_reply/continue_last_request напрямую. Не меняй Direct/Web waits, Send, recovery/timing. До трёх independent unresolved jobs; Host сам spacing/queue/sync, не sleep/ручная сериализация.
 
 Happy path: postman_task_prepare → postman_bridge({message:'@Postman…'}) → POSTMAN_BRIDGE_ACCEPTED → external_event → POSTMAN_BRIDGE_READY → exact postman_bridge_status({bridge_job_id}) → trusted terminal result. READY не result, Bridge prose/notify не authority. Не polling Bridge.
 
 Postman implementation: trusted RESULT_DURABLE + sync/grant → exact Worker authorize artifactRequestId → implementation_artifact_apply → existing runner → report → Leader acceptance. Exact REQ/SHA-256/Host-bound worktree, не model-authored ZIP/path/registry alone. Runner PASS targeted tests authoritative при неизменных inputs, не повторять; FAIL diagnostics без ручного ремонта пакета. Substantial revision → same proven conversation `--chat <OLD_REQ>` с evidence. Publication отдельное поручение, merge отдельная команда по REPO_POLICY.
 
 PostmanAsk TEXT_RESULT_DURABLE: deliveryMode inline → assistantText; file → verified resultFile descriptor, exact bounded read при необходимости, не rehydrate огромный ответ. IMAGE_RESULT_DURABLE → resultImage, при необходимости read_image; image ZIP не implementation grant. No-artifact/rejected/failure не implementation success.
+
+Четвёртый режим — только fresh `postman_bridge({message:'@PostmanDevspace ...',devspace_mode:'READ_ONLY'})` от живого top-level Leader с prepared task. `message` обязателен; `devspace_mode` необязателен, READ_ONLY по умолчанию, WRITE_TEST разрешает только отдельную Host-private тестовую папку; для других режимов этот параметр запрещён. Host-bound one-shot Luna получает `delegate-via-postman-devspace`; --chat/attachments/Git writes запрещены. Private task доказывает настоящий DevSpace read и вызывает готовую Bash-команду `pwsh -NoProfile -NonInteractive -File` с optional Russian/multiline message/report, без чтения capability и handcrafted JSON. Bell приоритетен; нет ZIP/envelope/final/report-schema gate. Только Devspace использует safe 15-minute CHECK → один Stop лишь при доказанной безопасной генерации → до 10s Stop absence + existing Send readiness → bell recheck → Continue с текущего места, same REQ/chat, one-shot/UNKNOWN no resend. Активные/неясные операции не прерываются, следующая проверка — 15 минут после подтверждения. DELIVERED/REPORTED_NOT_VERIFIED не PASS. Без bell передаётся доступный текст с UNKNOWN/PARTIAL либо диагностикой, не выдуманный DONE. Bell доставляется через собственный trusted Luna terminal; cold pending/unknown сохраняет bell и даёт `POSTMAN_DEVSPACE_LUNA_TERMINAL_UNAVAILABLE`, без прямого handoff/resend/resume. Этапы 2–4 и постоянное управление не разрешены.
 
 Bridge stop только когда result не нужен, user change/downstream сделал obsolete или задача закрывается, не экономия секунд и не stop-probe. postman_bridge_stop({bridge_job_id}) — intent, не proof NOT_SENT; slot/pins после settlement. Truth NOT_SENT / TERMINAL / OUTCOME_UNKNOWN сохраняется; trusted late terminal не теряет authority.
 
