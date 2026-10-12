@@ -3,7 +3,9 @@ name: delegate-via-postman-devspace
 description: Отдельный exact @PostmanDevspace; этап 1 legacy transport, этап 2 продолжаемая Host-managed Luna.
 ---
 
-# PostmanDevspace — связь этапов 1–2
+# PostmanDevspace — связь и разрешённые рабочие области этапов 1–3
+
+`READ_ONLY` допускается в подтверждённом branchless Host task context; `WRITE_TEST` пишет только в Host-private writeRoot. `WRITE_ISOLATED` разрешает изменения лишь в exact Host-prepared task worktree после проверки clean identity и собственных targeted tests. Git commit/push/PR внешнему ChatGPT не разрешены без отдельного политики-совместимого разрешения; для публикации назначают локального Worker. `WRITE_APPROVED_TARGET` недоступен без отдельного Host grant. Никаких произвольных путей из текста сообщения и no blind resend.
 
 Использовать только при точном начале текущего сообщения `^\s*@PostmanDevspace(?:\s|$)` и Host-привязке этой Luna к обращению top-level Postman Leader. Навык не выдаёт полномочий обычному root/Worker; standalone send запрещён. Coordinator-сообщение не считается текущим user turn.
 

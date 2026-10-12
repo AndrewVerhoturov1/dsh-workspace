@@ -603,6 +603,8 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
             (args.createNew === true && args.workerSessionId !== undefined))
           return { status: 'POSTMAN_WORKER_ARGUMENTS_INVALID' }
         if (contexts && !contexts.get(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
+        if (contexts?.get(parent.id)?.devspaceReadOnly)
+          return { status: 'POSTMAN_WORKER_READ_ONLY_CONTEXT' }
         return admitted(parent, async () => {
           const group = groupFor(parent)
           await reconcileClosedBindings(parent, group)

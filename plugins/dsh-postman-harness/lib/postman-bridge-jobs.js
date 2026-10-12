@@ -244,6 +244,17 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     if (typeof contexts?.isRestoring === 'function' && contexts.isRestoring(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
     if (typeof contexts?.hasActiveOperation === 'function' && contexts.hasActiveOperation(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
     if (disposed) return { status: 'POSTMAN_BRIDGE_UNAVAILABLE' }
+    if (transportKind === 'devspace' && devspaceMode === 'WRITE_ISOLATED' &&
+        (taskContext?.devspaceReadOnly || !taskContext?.worktree || taskContext?.branch === 'main'))
+      return { status: 'POSTMAN_DEVSPACE_ISOLATED_CONTEXT_REQUIRED' }
+    if (taskContext?.devspaceReadOnly && (transportKind !== 'devspace' || devspaceMode !== 'READ_ONLY'))
+      return { status: 'POSTMAN_DEVSPACE_READ_ONLY_SCOPE_REQUIRED' }
+    const work = [...jobs.values()].filter(item => item.parentSessionId === parent.id &&
+      !item.finishedAt && ['QUEUED', 'STARTING', 'RUNNING'].includes(item.state))
+    if ((transportKind === 'devspace' && devspaceMode === 'WRITE_ISOLATED' &&
+        (work.length > 0 || worker?.hasActiveWork?.(parent))) ||
+        work.some(item => item.transportKind === 'devspace' && item.devspaceMode === 'WRITE_ISOLATED'))
+      return { status: 'POSTMAN_DEVSPACE_WRITER_BUSY' }
     const job = {
       bridgeJobId: randomUUID(), parentSessionId: parent.id, taskContext, transportKind, state: 'QUEUED',
       createdAt: new Date().toISOString(), controller: new AbortController(), inputBinding,

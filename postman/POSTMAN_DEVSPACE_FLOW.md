@@ -30,6 +30,10 @@ result.md не препятствует передаче сведений о REQ
 лишь затем безопасно закрывает task context. Старый Bridge artifact/Ask/Image
 остаётся одноразовым и использует свои неизменённые инструменты.
 
+## Этап 3: рабочие области и инженерный результат
+
+`postman_task_prepare({read_only:true})` готовит Host-owned Leader context по проверенному repository identity **без** Git fetch, временной ветки и push. Такой контекст допускает только `@PostmanDevspace READ_ONLY`; legacy Bridge, Worker и restore отключены. Обычный `postman_task_prepare()` сохраняет старую безопасную ветку от `origin/main`. Режим `WRITE_ISOLATED` разрешён лишь по exact prepared worktree с проверкой чистоты перед первым внешним edit. Входные ограничения Host не означают техническую песочницу DevSpace shell: запрещены любые записи вне scope и самовольный Git publish; любой PR публикует отдельно уполномоченный местный Worker. Повторное задание может продолжить в dirty worktree по собственному зарегистрированному owner, не делать post-ZIP sync. Текущие возможности и отрицательные факты — в [карте](POSTMAN_DEVSPACE_CAPABILITIES.md). `WRITE_APPROVED_TARGET` пока требует отдельного утверждённого Host grant, поэтому не включён.
+
 ## Границы приёмки
 
 Локальный unit PASS не доказывает возможности ChatGPT Web/DevSpace.

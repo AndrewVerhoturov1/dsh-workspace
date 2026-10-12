@@ -27,6 +27,9 @@ Objective, type, scope/boundaries, done when, sufficient verification, stop cond
 
 ## Operational ledger
 
+Для PostmanDevspace сохраняй только существенные факты: назначенный `READ_ONLY`/`WRITE_TEST`/`WRITE_ISOLATED` scope, owner Luna/REQ/ChatGPT-ссылка (без секретов), фактический bell/текст/transport outcome и разницу между `REPORTED`, `VERIFIED` и `ACCEPTED`. Список возможностей и отрицательные результаты — по проверенной карте `postman/POSTMAN_DEVSPACE_CAPABILITIES.md`, не по догадкам. Не создавай параллельный task journal.
+
+
 postman_secretary_ledger — Host-private durable ledger exact Leader/task, не repository file. Читай revision и обновляй exact revision; не угадывай состояние. Ledger переживает continuation/compact/fresh/restart.
 
 Только meaningful milestones: goal, established facts, decisions, active executors/assignments, verified results с relevant inputs, blockers, critical path, next meaningful step. Обнови после существенного decision/path/result, перед long external wait/cleanup по поручению. Помечай report received / verified by Worker / verified by Leader, не повышай trust сам. Для Sol только aggregate report, не подробности его subtree.

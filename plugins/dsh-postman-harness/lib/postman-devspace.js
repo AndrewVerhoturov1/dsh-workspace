@@ -10,14 +10,17 @@ export function devspaceRoot() {
 
 export function createDevspaceChannel({ root = devspaceRoot(), bridgeJobId, leaderSessionId, lunaSessionId, requestId, worktree, mode, sourceRoot, conversationUrl }) {
   if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(bridgeJobId ?? '') || !/^REQ_\d{8}T\d{6}Z_\d{4}$/.test(requestId ?? '') ||
-      !leaderSessionId || !lunaSessionId || !['READ_ONLY', 'WRITE_TEST'].includes(mode) ||
+      !leaderSessionId || !lunaSessionId || !['READ_ONLY', 'WRITE_TEST', 'WRITE_ISOLATED'].includes(mode) ||
       (conversationUrl !== undefined && !/^https:\/\/chatgpt\.com\/c\/[a-zA-Z0-9-]+$/.test(conversationUrl))) throw Error('POSTMAN_DEVSPACE_BINDING_INVALID')
   const channel = join(root, bridgeJobId)
   mkdirSync(channel, { recursive: true })
   if (realpathSync(channel) !== resolve(channel)) throw Error('POSTMAN_DEVSPACE_CHANNEL_REDIRECTED')
   const workspaceRef = realpathSync(worktree)
-  const writeRoot = mode === 'WRITE_TEST' ? join(channel, 'workspace') : null
-  if (writeRoot) mkdirSync(writeRoot)
+  if (mode === 'WRITE_ISOLATED' && workspaceRef !== resolve(worktree))
+    throw Error('POSTMAN_DEVSPACE_WORKTREE_REDIRECTED')
+  const writeRoot = mode === 'WRITE_TEST' ? join(channel, 'workspace') :
+    mode === 'WRITE_ISOLATED' ? workspaceRef : null
+  if (mode === 'WRITE_TEST') mkdirSync(writeRoot)
   const binding = Object.freeze({ version: 1, jobId: bridgeJobId, requestId, leaderSessionId, lunaSessionId,
     channel, capability: randomBytes(32).toString('hex'), mode, workspaceRef, writeRoot,
     ...(conversationUrl ? { conversationUrl } : {}) })

@@ -21,6 +21,9 @@ Cheap evidence перед решением о дорогом маршруте �
 
 ## TASK_CONTRACT / scope
 
+Для `@PostmanDevspace WRITE_ISOLATED` ChatGPT уже пишет код и запускает свои достаточные тесты в Host task worktree без ZIP. Worker нужен для адресной независимой проверки по решению Leader либо **отдельно разрешённого** локального Git commit/push/PR по REPO_POLICY, а не для обязательного применения несуществующего ZIP или повторения тех же зелёных тестов. Чужой dirty worktree сохраняй.
+
+
 Выполни конечное поручение: objective, work type, scope/boundaries, done when, sufficient verification, stop condition, established facts/context. Continuation сохраняет verified facts + inputs и остаток. Неясность → precise parent blocker, не silent expansion.
 
 Можно targeted test/lint/build, reproduction, logs/Git evidence, mechanical verification, browser acceptance, exact file/symbol check и маленькую однозначную правку в уже определённом подходе. No architecture: не выбирай design, не становись автором substantial implementation/research, не расширяй scope и не диагностируй бесконечно. Не повторяй PASS без изменения relevant inputs.

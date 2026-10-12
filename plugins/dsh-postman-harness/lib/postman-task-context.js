@@ -45,6 +45,38 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
   const onContextChange = listener => { contextListeners.add(listener); return () => contextListeners.delete(listener) }
   const command = gitCommand
 
+  // A read-only DevSpace investigation needs no task branch, remote push or
+  // secondary worktree. Its authority is still one durable Leader context.
+  async function prepareReadOnly(leader) {
+    const id = leader?.id
+    if (pending.has(id)) return { status: 'POSTMAN_TASK_PREPARE_IN_PROGRESS' }
+    if (contexts.has(id) && registry.get(id)?.stage === 'ready')
+      return { status: 'POSTMAN_TASK_CONTEXT_ALREADY_READY', ...contexts.get(id) }
+    if (registry.get(id) && registry.get(id).stage !== 'closed') return recover(leader)
+    pending.add(id)
+    try {
+      const cwd = leader?.session?.header?.cwd
+      if (typeof id !== 'string' || !id || typeof cwd !== 'string' || !cwd)
+        throw new Error('POSTMAN_TASK_REPOSITORY_UNAVAILABLE')
+      const repository = await command(cwd, 'rev-parse', '--show-toplevel')
+      const origin = await command(repository, 'remote', 'get-url', 'origin')
+      const match = /^(?:https?:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/]+\/[^/]+?)(?:\.git)?\/?$/i.exec(origin)
+      if (match?.[1].toLowerCase() !== REPOSITORY) throw new Error('POSTMAN_TASK_REPOSITORY_REJECTED')
+      const baseCommit = await command(repository, 'rev-parse', '--verify', 'refs/remotes/origin/main^{commit}')
+      if (!SHA.test(baseCommit) || normalize(await realPath(repository)) !== normalize(repository))
+        throw new Error('POSTMAN_TASK_REPOSITORY_UNAVAILABLE')
+      const context = Object.freeze({ leaderSessionId: id, repository: REPOSITORY,
+        branch: 'main', worktree: repository, baseCommit, devspaceReadOnly: true })
+      await registry.create(id, { ...context, repositoryPath: repository, originUrl: origin,
+        stage: 'ready', diagnostic: null, workers: {},
+        runner: { state: 'none', requestId: null }, bridge: null })
+      contexts.set(id, context)
+      changed(id)
+      return { status: 'POSTMAN_TASK_READ_ONLY_READY', ...context }
+    } catch (error) { return { status: 'POSTMAN_TASK_PREPARE_FAILED', diagnostic: String(error?.message ?? error) } }
+    finally { pending.delete(id) }
+  }
+
   async function prepare(leader) {
     const id = leader?.id
     if (pending.has(id)) return { status: 'POSTMAN_TASK_PREPARE_IN_PROGRESS' }
@@ -170,6 +202,29 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
     if (pending.has(id)) return { status: 'POSTMAN_TASK_PREPARE_IN_PROGRESS' }
     const row = registry.get(id)
     if (!row || row.stage === 'closed') return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
+    if (row.devspaceReadOnly === true) {
+      pending.add(id)
+      try {
+        const cwd = leader?.session?.header?.cwd
+        const repository = await command(cwd, 'rev-parse', '--show-toplevel')
+        if (row.leaderSessionId !== id || row.repository !== REPOSITORY ||
+            normalize(repository) !== normalize(row.repositoryPath) ||
+            normalize(row.worktree) !== normalize(repository) ||
+            row.branch !== 'main' || !SHA.test(row.baseCommit) ||
+            await command(repository, 'remote', 'get-url', 'origin') !== row.originUrl)
+          throw Error('POSTMAN_TASK_READ_ONLY_IDENTITY_UNKNOWN')
+        const context = Object.freeze({ leaderSessionId: id, repository: REPOSITORY,
+          branch: 'main', worktree: repository, baseCommit: row.baseCommit, devspaceReadOnly: true })
+        if (row.stage !== 'ready') throw Error('POSTMAN_TASK_READ_ONLY_CONTEXT_UNKNOWN')
+        await registry.change(id, old => ({ ...old, bridgeOperations:
+          Object.fromEntries(Object.entries(old.bridgeOperations ?? {}).map(([key, op]) =>
+            [key, op.state === 'pending' ? { ...op, state: 'unknown' } : op])) }))
+        contexts.set(id, context)
+        changed(id)
+        return { status: 'POSTMAN_TASK_CONTEXT_ALREADY_READY', ...context }
+      } catch (error) { return { status: 'POSTMAN_TASK_PREPARE_UNCERTAIN', diagnostic: String(error?.message ?? error) } }
+      finally { pending.delete(id) }
+    }
     pending.add(id)
     let repositoryVerified = false
     try {
@@ -297,6 +352,7 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
     const id = leader?.id
     const context = get(id)
     if (!context) return { status: 'POSTMAN_TASK_RESTORE_REJECTED', diagnostic: { code: 'TASK_CONTEXT_REQUIRED' } }
+    if (context.devspaceReadOnly) return { status: 'POSTMAN_TASK_RESTORE_REJECTED', diagnostic: { code: 'DEVSPACE_READ_ONLY_NO_RESTORE' } }
     if (context.leaderSessionId !== id || registry.get(id)?.leaderSessionId !== id)
       return { status: 'POSTMAN_TASK_RESTORE_REJECTED', diagnostic: { code: 'LEADER_CONTEXT_MISMATCH' } }
     if (registry.get(id)?.runner.state !== 'failed')
@@ -563,7 +619,7 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
   }
   function releaseChild(childId) { children.delete(childId) }
   function dispose() { contexts.clear(); children.clear(); pending.clear(); activeOperations.clear(); syncOperations.clear(); syncQueues.clear(); workerAdmissions.clear(); contextListeners.clear() }
-  return { prepare, recover, close, restore, sync, beginSync, endSync, verifyWorktree, get, record, changeRecord, onContextChange, isRestoring, hasActiveOperation, hasSyncOperation, canRetireWorkers, beginWorkerAdmission, endWorkerAdmission, beginOperation, startRunner, endOperation, reserveRestore, releaseRestore, bindChild, child, devspaceBinding, recordBridgeRequest, releaseChild, dispose }
+  return { prepare, prepareReadOnly, recover, close, restore, sync, beginSync, endSync, verifyWorktree, get, record, changeRecord, onContextChange, isRestoring, hasActiveOperation, hasSyncOperation, canRetireWorkers, beginWorkerAdmission, endWorkerAdmission, beginOperation, startRunner, endOperation, reserveRestore, releaseRestore, bindChild, child, devspaceBinding, recordBridgeRequest, releaseChild, dispose }
 }
 
 // Both entrypoints use one facade. Initialization is awaited before Git/child actions;

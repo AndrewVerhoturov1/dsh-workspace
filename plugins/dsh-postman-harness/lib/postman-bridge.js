@@ -39,11 +39,13 @@ function authorized(exec, ctx) {
 export function createPostmanTaskPrepareTool(ctx, contexts = postmanTaskContexts) {
   return defineTool({
     name: POSTMAN_TASK_PREPARE_TOOL_NAME,
-    description: 'Prepare one isolated task branch and clean worktree from current origin/preview for this Leader session.',
-    parameters: {}, output: output(),
-    async execute(_args, exec) {
+    description: 'Prepare one owned Leader task. Default: isolated Git task branch/worktree from origin/main. read_only=true: verified repository read context without Git fetch, push, branch or new worktree, usable only by @PostmanDevspace READ_ONLY.',
+    parameters: { read_only: { type: 'boolean', description: 'Set true only for a DevSpace read-only investigation with no branch.' } }, output: output(),
+    async execute(args, exec) {
       if (!authorized(exec, ctx)) return { status: 'POSTMAN_TASK_CALLER_REJECTED' }
-      return contexts.prepare(exec.agent)
+      if (args?.read_only !== undefined && typeof args.read_only !== 'boolean')
+        return { status: 'POSTMAN_TASK_ARGUMENTS_INVALID' }
+      return args?.read_only === true ? contexts.prepareReadOnly(exec.agent) : contexts.prepare(exec.agent)
     },
   })
 }
@@ -96,7 +98,7 @@ export function createPostmanBridgeTool(ctx, jobs, contexts) {
     description: 'Accept an exact @Postman, @PostmanAsk, @PostmanImage or fresh stage-one @PostmanDevspace delegation in a background Bridge job. Devspace is one-shot READ_ONLY/default or private WRITE_TEST, local bell/diagnostics, no attachments/Git writes. Acceptance is not a Web result or engineering PASS; read the own Luna trusted terminal via postman_bridge_status after POSTMAN_BRIDGE_READY.',
     parameters: { message: { type: 'string', required: true,
       description: 'Complete model-authored delegation beginning with exact @Postman, @PostmanAsk, @PostmanImage or @PostmanDevspace.' },
-      devspace_mode: { type: 'string', enum: ['READ_ONLY', 'WRITE_TEST'], description: 'Devspace stage 1 only: read the prepared task area, optionally write only its Host-private harmless test folder. Defaults READ_ONLY.' } },
+      devspace_mode: { type: 'string', enum: ['READ_ONLY', 'WRITE_TEST', 'WRITE_ISOLATED'], description: 'Devspace stage 1 only: read the prepared task area, optionally write only its Host-private harmless test folder. Defaults READ_ONLY.' } },
     output: output(),
     isConcurrencySafe: () => true,
     async execute(args, exec) {
@@ -108,11 +110,15 @@ export function createPostmanBridgeTool(ctx, jobs, contexts) {
       try { parsed = parsePostmanUserTurn(args?.message) }
       catch (error) { return { status: 'POSTMAN_BRIDGE_MESSAGE_REJECTED', diagnostic: String(error?.message ?? error) } }
       if (parsed.transportKind === 'devspace' && (parsed.mode !== 'fresh' || parsed.inputFiles?.length ||
-          args.devspace_mode !== undefined && !['READ_ONLY', 'WRITE_TEST'].includes(args.devspace_mode)))
+          args.devspace_mode !== undefined && !['READ_ONLY', 'WRITE_TEST', 'WRITE_ISOLATED'].includes(args.devspace_mode)))
         return { status: 'POSTMAN_BRIDGE_MESSAGE_REJECTED', diagnostic: 'POSTMAN_DEVSPACE_STAGE1_SCOPE' }
       if (parsed.transportKind !== 'devspace' && args.devspace_mode !== undefined)
         return { status: 'POSTMAN_BRIDGE_MESSAGE_REJECTED', diagnostic: 'POSTMAN_DEVSPACE_MODE_MISMATCH' }
       if (contexts && !contexts.get(exec.agent.id)) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
+      const taskContext = contexts?.get(exec.agent.id)
+      if (taskContext?.devspaceReadOnly && (parsed.transportKind !== 'devspace' ||
+          args.devspace_mode !== undefined && args.devspace_mode !== 'READ_ONLY'))
+        return { status: 'POSTMAN_DEVSPACE_READ_ONLY_SCOPE_REQUIRED' }
       if (parsed.inputFiles?.length && !postmanInputGrants.owns(exec.agent, contexts.get(exec.agent.id), parsed.inputFiles))
         return { status: 'POSTMAN_INPUT_PROVENANCE_REJECTED' }
       if (typeof contexts?.isRestoring === 'function' && contexts.isRestoring(exec.agent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
