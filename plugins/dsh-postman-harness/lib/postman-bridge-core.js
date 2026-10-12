@@ -5,6 +5,8 @@ export const POSTMAN_BRIDGE_TOOL_NAME = 'postman_bridge'
 export const POSTMAN_BRIDGE_STATUS_TOOL_NAME = 'postman_bridge_status'
 export const POSTMAN_BRIDGE_LIST_TOOL_NAME = 'postman_bridge_list'
 export const POSTMAN_BRIDGE_STOP_TOOL_NAME = 'postman_bridge_stop'
+export const POSTMAN_DEVSPACE_LUNA_CLOSE_TOOL_NAME = 'postman_devspace_luna_close'
+export const POSTMAN_DEVSPACE_CONTROL_TOOL_NAME = 'postman_devspace_control'
 export const POSTMAN_TEAM_STATUS_TOOL_NAME = 'postman_team_status'
 export const POSTMAN_CHILD_NOTIFY_TOOL_NAME = 'notify_parent'
 export const POSTMAN_TASK_PREPARE_TOOL_NAME = 'postman_task_prepare'
@@ -57,6 +59,8 @@ export const POSTMAN_LEADER_TOOL_ALLOWLIST = Object.freeze([
   POSTMAN_BRIDGE_STATUS_TOOL_NAME,
   POSTMAN_BRIDGE_LIST_TOOL_NAME,
   POSTMAN_BRIDGE_STOP_TOOL_NAME,
+  POSTMAN_DEVSPACE_LUNA_CLOSE_TOOL_NAME,
+  POSTMAN_DEVSPACE_CONTROL_TOOL_NAME,
   POSTMAN_TEAM_STATUS_TOOL_NAME,
   POSTMAN_WORKER_TOOL_NAME,
   POSTMAN_SOL_WORKER_TOOL_NAME,
@@ -97,6 +101,8 @@ export const POSTMAN_PTC_SUCCESS_STATUSES = Object.freeze({
   postman_bridge_list: Object.freeze(['POSTMAN_BRIDGE_LIST']),
   postman_bridge_status: Object.freeze(['POSTMAN_BRIDGE_QUEUED', 'POSTMAN_BRIDGE_RUNNING', 'POSTMAN_BRIDGE_TERMINAL']),
   postman_bridge_stop: Object.freeze(['POSTMAN_BRIDGE_STOP_REQUESTED', 'POSTMAN_BRIDGE_ALREADY_TERMINAL']),
+  postman_devspace_luna_close: Object.freeze(['POSTMAN_DEVSPACE_LUNA_CLOSED', 'POSTMAN_DEVSPACE_LUNA_ALREADY_CLOSED']),
+  postman_devspace_control: Object.freeze(['POSTMAN_DEVSPACE_CONTROL_QUEUED', 'POSTMAN_DEVSPACE_CONTROL_STATUS']),
   postman_secretary: Object.freeze(['POSTMAN_WORKER_TASK_ACCEPTED']),
   postman_worker_fresh: Object.freeze(['POSTMAN_WORKER_TASK_ACCEPTED']),
   postman_worker_interrupt: Object.freeze(['POSTMAN_WORKER_INTERRUPT_TASK_ACCEPTED']),
@@ -119,6 +125,8 @@ export const POSTMAN_LEADER_ONLY_TOOL_NAMES = Object.freeze([
   POSTMAN_BRIDGE_STATUS_TOOL_NAME,
   POSTMAN_BRIDGE_LIST_TOOL_NAME,
   POSTMAN_BRIDGE_STOP_TOOL_NAME,
+  POSTMAN_DEVSPACE_LUNA_CLOSE_TOOL_NAME,
+  POSTMAN_DEVSPACE_CONTROL_TOOL_NAME,
   POSTMAN_TEAM_STATUS_TOOL_NAME,
   POSTMAN_WORKER_TOOL_NAME,
   POSTMAN_SOL_WORKER_TOOL_NAME,

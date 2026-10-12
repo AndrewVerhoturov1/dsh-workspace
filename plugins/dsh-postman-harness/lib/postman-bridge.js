@@ -11,7 +11,7 @@ import { createPostmanBridgeJobs } from './postman-bridge-jobs.js'
 import { postmanTaskContexts, initializePostmanTaskContexts, releasePostmanTaskContexts } from './postman-task-context.js'
 import { sharedPostmanTaskRegistry, closeSharedPostmanTaskRegistry } from './postman-task-registry.js'
 import {
-  POSTMAN_BRIDGE_TOOL_ALLOWLIST, POSTMAN_BRIDGE_TOOL_NAME, POSTMAN_BRIDGE_STATUS_TOOL_NAME, POSTMAN_BRIDGE_LIST_TOOL_NAME, POSTMAN_BRIDGE_STOP_TOOL_NAME, POSTMAN_TEAM_STATUS_TOOL_NAME, POSTMAN_CHILD_NOTIFY_TOOL_NAME, POSTMAN_TASK_PREPARE_TOOL_NAME, POSTMAN_TASK_RESTORE_TOOL_NAME, POSTMAN_TASK_CLOSE_TOOL_NAME,
+  POSTMAN_BRIDGE_TOOL_ALLOWLIST, POSTMAN_BRIDGE_TOOL_NAME, POSTMAN_BRIDGE_STATUS_TOOL_NAME, POSTMAN_BRIDGE_LIST_TOOL_NAME, POSTMAN_BRIDGE_STOP_TOOL_NAME, POSTMAN_DEVSPACE_LUNA_CLOSE_TOOL_NAME, POSTMAN_DEVSPACE_CONTROL_TOOL_NAME, POSTMAN_TEAM_STATUS_TOOL_NAME, POSTMAN_CHILD_NOTIFY_TOOL_NAME, POSTMAN_TASK_PREPARE_TOOL_NAME, POSTMAN_TASK_RESTORE_TOOL_NAME, POSTMAN_TASK_CLOSE_TOOL_NAME,
   createPostmanBridgeBoundaryManager, isTopLevelPostmanSupervisor, isTopLevelPostmanPtcLeader,
   postmanBridgeCallerAllowed, postmanBridgeRestrictionForAgent, postmanPtcDirectCallGuard,
 } from './postman-bridge-core.js'
@@ -187,6 +187,36 @@ export function createPostmanBridgeStopTool(ctx, jobs) {
   })
 }
 
+export function createPostmanDevspaceControlTool(ctx, jobs) {
+  return defineTool({
+    name: POSTMAN_DEVSPACE_CONTROL_TOOL_NAME,
+    description: 'Exact Leader-owned running @PostmanDevspace: queue a same-chat steer, explicit preempt/Stop, or read factual control receipts. QUEUED is not Send or Stop proof. No extra REQ/resend.',
+    parameters: {
+      bridge_job_id: { type: 'string', required: true, description: 'Exact active owned bridgeJobId.' },
+      action: { type: 'string', required: true, enum: ['steer', 'preempt', 'stop', 'status'] },
+      priority: { type: 'string', enum: ['normal', 'urgent'] },
+      message: { type: 'string', description: 'Host-owned new instruction; required for steer/preempt.' },
+    },
+    output: output(), isConcurrencySafe: () => true,
+    execute(args, exec) {
+      if (!authorized(exec, ctx)) return { status: 'POSTMAN_DEVSPACE_CONTROL_CALLER_REJECTED' }
+      return jobs.devspaceControl(exec.agent, args?.bridge_job_id, args?.action, args?.message, args?.priority)
+    },
+  })
+}
+
+export function createPostmanDevspaceLunaCloseTool(ctx, jobs) {
+  return defineTool({
+    name: POSTMAN_DEVSPACE_LUNA_CLOSE_TOOL_NAME,
+    description: 'Explicitly close this Leader task persistent PostmanDevspace Luna after all its jobs settle. Never stops an active ChatGPT task or removes its files.',
+    parameters: {}, output: output(),
+    async execute(_args, exec) {
+      if (!authorized(exec, ctx)) return { status: 'POSTMAN_DEVSPACE_LUNA_CALLER_REJECTED' }
+      return jobs.devspaceLunaClose(exec.agent)
+    },
+  })
+}
+
 export function createPostmanTeamStatusTool(ctx, contexts, worker, jobs) {
   return defineTool({
     name: POSTMAN_TEAM_STATUS_TOOL_NAME,
@@ -200,7 +230,8 @@ export function createPostmanTeamStatusTool(ctx, contexts, worker, jobs) {
         task: { contextReady: Boolean(context), branch: context?.branch ?? row?.branch ?? null,
           ...(row ? { stage: row.stage, closedAt: row.closedAt ?? null } : {}),
           restoring: contexts.isRestoring(id), activeOperation: contexts.hasActiveOperation(id) },
-        ...worker.teamSnapshot(exec.agent), bridge: jobs.teamSnapshot(exec.agent) }
+        ...worker.teamSnapshot(exec.agent), bridge: jobs.teamSnapshot(exec.agent),
+        devspaceLuna: jobs.devspaceLunaSnapshot(exec.agent) }
     },
   })
 }
@@ -301,6 +332,8 @@ export async function apply(ctx, config = {}) {
   ctx.tools.register(createPostmanBridgeStatusTool(ctx, jobs))
   ctx.tools.register(createPostmanBridgeListTool(ctx, jobs))
   ctx.tools.register(createPostmanBridgeStopTool(ctx, jobs))
+  ctx.tools.register(createPostmanDevspaceLunaCloseTool(ctx, jobs))
+  ctx.tools.register(createPostmanDevspaceControlTool(ctx, jobs))
   ctx.tools.register(createPostmanTeamStatusTool(ctx, postmanTaskContexts, worker, jobs))
   ctx.tools.register(createPostmanTaskRestoreTool(ctx, postmanTaskContexts, { jobs, worker }))
   ctx.tools.register(worker.taskTool)

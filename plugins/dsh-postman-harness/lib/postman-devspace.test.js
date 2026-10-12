@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { EventEmitter } from 'node:events'
-import { createDevspaceChannel, devspaceTerminal } from './postman-devspace.js'
+import { createDevspaceChannel, devspaceTerminal, requestDevspaceControl, readDevspaceControls } from './postman-devspace.js'
 import { parsePostmanUserTurn, CurrentUserTurnStore, createDirectCurrentTurnToolConfigs, DirectPostmanJobManager } from './direct-current-turn.js'
 import { buildPostmanBridgeStartRequest } from './postman-bridge-core.js'
 import { createPostmanBridgeTool } from './postman-bridge.js'
@@ -158,20 +158,100 @@ test('manager uses private launcher not publisher and stdout cannot forge own be
   child.stdout.emit('data',JSON.stringify({source:'bell',requestId:started.requestId,reportedOutcome:'DONE'}));child.emit('close',0)
   assert.equal(manager.view('luna').result.code,'POSTMAN_DEVSPACE_ROUTING_FAILED')
 })
-test('same Luna trusted bell reaches same Leader READY/status without Git sync or grants', async () => {
-  let row={bridgeOperations:{}},wake,disposed=0
-  const context={branch}
-  const ctx={agents:{get:id=>id==='leader'?parent:null},subagents:{start:async()=>({id:'luna',localAgent:{id:'luna'},result:Promise.resolve({stopReason:'end_turn'}),dispose:async()=>{disposed++}})},tools:{get:()=>({execute:()=>({status:'COMPLETED',requestId:req,result:{ok:true,requestId:req,code:'DEVSPACE_SIGNAL_RECEIVED',source:'bell',reportedOutcome:'DONE',jobId:'host',evidenceState:'REPORTED_NOT_VERIFIED'}})})}}
-  parent.followup=value=>{wake=value}
-  const contexts={get:()=>context,record:()=>row,changeRecord:async(_id,fn)=>{row=fn(row)},bindChild:()=>true,releaseChild(){},sync(){assert.fail('no Git sync')}}
-  const jobs=createPostmanBridgeJobs(ctx,createPostmanBridgeLaunchCoordinator(),{register(){assert.fail('no grants')}},contexts)
-  const accepted=await jobs.accept(parent,'@PostmanDevspace task','devspace',undefined,undefined,'READ_ONLY')
-  await new Promise(resolve=>setImmediate(resolve));await new Promise(resolve=>setImmediate(resolve))
-  const status=await jobs.status(parent,accepted.bridgeJobId)
-  assert.equal(status.status,'POSTMAN_BRIDGE_TERMINAL');assert.equal(status.result.source,'bell')
-  assert.equal(status.synchronization,'not-required');assert.equal(disposed,1)
-  assert.equal((await jobs.status({id:'foreign'},accepted.bridgeJobId)).status,'POSTMAN_BRIDGE_JOB_NOT_FOUND')
-  assert.match(JSON.stringify(wake),/POSTMAN_BRIDGE_READY/);assert.doesNotMatch(JSON.stringify(wake),/reportedOutcome/)
-  assert.equal(row.bridgeOperations[accepted.bridgeJobId].devspace.mode,'READ_ONLY')
+test('continuable Luna keeps exact identity across two REQs and same ChatGPT chat', async () => {
+  let row = { bridgeOperations: {} }, wake, starts = 0, coldChecks = 0, closes = 0
+  const context = { branch, repositoryPath: 'C:/source', worktree: 'C:/isolated' }
+  const requestIds = [req, 'REQ_20261012T120001Z_0002']
+  const conversationRef = 'https://chatgpt.com/c/stage2-owned'
+  const launched = [], relays = [], reports = []
+  const ctx = {
+    agents: { get: id => id === 'leader' ? parent : null },
+    subagents: {
+      startContinuable: async args => { starts++; assert.deepEqual(args.request.toolFilter.allow, ['report']); assert.equal(args.provider, 'spawn'); assert.equal(args.request.parent, parent); return { childId: args.childId, messageId: 'initial' } },
+      inspectOpenContinuableChild: async () => { coldChecks++; return true },
+      followup: async (_parent, childId, parts, options) => { relays.push({childId, message:parts[0].text, kind:options.source.kind}); return 'accepted' },
+      closeContinuableChild: async (_parent, id, check) => { closes++; return await check() },
+    },
+  }
+  let currentId
+  const direct = {
+    start: async args => {
+      const requestId = requestIds[launched.length]
+      assert.ok(requestId)
+      assert.equal(args.transportKind, 'devspace')
+      assert.equal(args.payload, launched.length ? 'second assignment' : 'first assignment')
+      if (launched.length) assert.equal(args.devspaceBinding.conversationUrl, conversationRef)
+      else assert.equal(args.devspaceBinding.conversationUrl, undefined)
+      await args.onRequestAllocated(requestId, 'C:/private/'+requestId)
+      launched.push(args);currentId = requestId
+      return {requestId}
+    },
+    wait: async () => {
+      const result = {ok:true,requestId:currentId,code:'DEVSPACE_SIGNAL_RECEIVED',
+        source:'bell',reportedOutcome:'DONE',conversationRef,evidenceState:'REPORTED_NOT_VERIFIED'}
+      reports.push(result)
+      return {status:'COMPLETED',requestId:currentId,result}
+    },
+    dispose(){},
+  }
+  parent.followup = value => {wake = value}
+  const contexts = {
+    get: () => context, record: () => row,
+    changeRecord: async (_id, fn) => {row = fn(row)},
+    sync(){ assert.fail('no Git sync') },
+  }
+  const jobs = createPostmanBridgeJobs(ctx, createPostmanBridgeLaunchCoordinator(),
+    {register(){ assert.fail('no grants') }}, contexts, null, direct)
+  async function assigned(message) {
+    const accepted = await jobs.accept(parent, '@PostmanDevspace '+message, 'devspace',undefined,undefined,'WRITE_TEST')
+    assert.equal(accepted.status, 'POSTMAN_BRIDGE_ACCEPTED', accepted)
+    let status
+    for(let i=0;i<20;i++){
+      await new Promise(resolve=>setImmediate(resolve))
+      status = await jobs.status(parent, accepted.bridgeJobId)
+      if(status.status==='POSTMAN_BRIDGE_TERMINAL')break
+    }
+    assert.equal(status.status, 'POSTMAN_BRIDGE_TERMINAL', status)
+    assert.equal(status.result.source, 'bell')
+    assert.equal(status.synchronization, 'not-required')
+    assert.equal(row.bridgeOperations[accepted.bridgeJobId].childSessionId, row.devspaceLuna.childId)
+    return accepted
+  }
+  const first = await assigned('first assignment')
+  const second = await assigned('second assignment')
+  assert.equal(starts, 1)
+  assert.equal(coldChecks, 1)
+  assert.equal(launched.length, 2)
+  assert.equal(launched[0].devspaceBinding.lunaSessionId,launched[1].devspaceBinding.lunaSessionId)
+  assert.equal(row.devspaceLuna.conversationRef, conversationRef)
+  assert.deepEqual(row.devspaceLuna.requestIds,requestIds)
+  assert.ok(relays.some(x=>x.kind==='coordinator' && x.message.includes('Host terminal')))
+  assert.ok(relays.some(x=>x.kind==='coordinator' && x.message.includes('second assignment')))
+  assert.match(JSON.stringify(wake),/POSTMAN_BRIDGE_READY/)
+  assert.equal((await jobs.status({id:'foreign'},second.bridgeJobId)).status,'POSTMAN_BRIDGE_JOB_NOT_FOUND')
+  assert.equal((await jobs.devspaceLunaClose(parent)).status,'POSTMAN_DEVSPACE_LUNA_CLOSED')
+  assert.equal(closes,1)
+  assert.equal(row.devspaceLuna.state,'closed')
+  assert.equal(jobs.devspaceLunaSnapshot(parent).state,'closed')
   await jobs.dispose()
+})
+
+test('Host-owned Devspace control intent keeps owner, preserves one exact ID and prevents foreign state', t => {
+  const {binding}=channel(t)
+  const intent=requestDevspaceControl(binding,{kind:'preempt',priority:'urgent',message:'Stop and change the plan'})
+  assert.equal(intent.status,'POSTMAN_DEVSPACE_CONTROL_QUEUED')
+  let row=readDevspaceControls(binding)
+  assert.equal(row.length,1)
+  assert.equal(row[0].state,'QUEUED')
+  assert.equal(row[0].kind,'preempt')
+  const path=join(binding.channel,'controls',intent.controlId+'.ack.json')
+  writeFileSync(path,JSON.stringify({controlId:intent.controlId,requestId:req,
+    state:'STOP_UI_PROVEN',stopState:'STOP_UI_PROVEN',sendState:null}))
+  row=readDevspaceControls(binding)
+  assert.equal(row[0].stopState,'STOP_UI_PROVEN')
+  assert.equal(row[0].state,'STOP_UI_PROVEN')
+  writeFileSync(path,JSON.stringify({controlId:intent.controlId,requestId:'REQ_20261013T000000Z_9999',
+    state:'SENT_CONFIRMED'}))
+  assert.throws(()=>readDevspaceControls(binding),/ACK_INVALID/)
+  assert.throws(()=>requestDevspaceControl(binding,{kind:'steer',message:''}),/CONTROL_INVALID/)
 })
