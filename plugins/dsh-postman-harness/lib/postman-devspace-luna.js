@@ -89,7 +89,10 @@ export function createPostmanDevspaceLuna(ctx, contexts, direct) {
           label: 'PostmanDevspace Luna',
           request: { parent, prompt: request.prompt, agentOptions: request.agentOptions,
             persona: PERSONA, maxDepth: request.maxDepth,
-            toolFilter: { allow: ['report'] } },
+            // report is agent-local and not a global inherited tool name.
+            // Empty inherited allowlist keeps the native report available
+            // without exposing shell, Git, Postman or other global tools.
+            toolFilter: { allow: [] } },
         })
         if (String(started?.childId) !== childId) throw Error('POSTMAN_DEVSPACE_LUNA_CHILD_ID_MISMATCH')
         await writeLuna(leaderId, lane => {

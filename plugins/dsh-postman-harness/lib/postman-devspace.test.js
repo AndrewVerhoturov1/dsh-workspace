@@ -167,7 +167,7 @@ test('continuable Luna keeps exact identity across two REQs and same ChatGPT cha
   const ctx = {
     agents: { get: id => id === 'leader' ? parent : null },
     subagents: {
-      startContinuable: async args => { starts++; assert.deepEqual(args.request.toolFilter.allow, ['report']); assert.equal(args.provider, 'spawn'); assert.equal(args.request.parent, parent); return { childId: args.childId, messageId: 'initial' } },
+      startContinuable: async args => { starts++; assert.deepEqual(args.request.toolFilter.allow, []); assert.equal(args.provider, 'spawn'); assert.equal(args.request.parent, parent); return { childId: args.childId, messageId: 'initial' } },
       inspectOpenContinuableChild: async () => { coldChecks++; return true },
       followup: async (_parent, childId, parts, options) => { relays.push({childId, message:parts[0].text, kind:options.source.kind}); return 'accepted' },
       closeContinuableChild: async (_parent, id, check) => { closes++; return await check() },
