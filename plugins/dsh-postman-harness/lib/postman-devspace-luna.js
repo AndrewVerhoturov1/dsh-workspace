@@ -140,7 +140,8 @@ export function createPostmanDevspaceLuna(ctx, contexts, direct) {
         inputFiles: parsed.inputFiles ?? [], inputBinding: job.inputBinding,
         devspaceBinding: {
           bridgeJobId: job.bridgeJobId, leaderSessionId: leaderId, lunaSessionId: childId,
-          worktree: job.taskContext.worktree, mode: job.devspaceMode,
+          worktree: job.approvedScope?.root ?? job.taskContext.worktree,
+          mode: job.devspaceMode,
           ...(continuationRef ? { conversationUrl: continuationRef } : {}),
         },
         onRequestAllocated: async (requestId, channel) => {
