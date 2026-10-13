@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { parsePostmanUserTurn } from './direct-current-turn.js'
+import { postmanInputGrants } from './postman-input-files.js'
 import { loadDevspaceChannelForOwner, devspaceTerminal, readDevspaceEvent } from './postman-devspace.js'
 import { buildPostmanBridgeStartRequest, settleTrustedPostmanStatus, POSTMAN_BRIDGE_PROVIDER } from './postman-bridge-core.js'
 
@@ -56,7 +57,7 @@ export function createPostmanDevspaceLuna(ctx, contexts, direct) {
       return { status: 'POSTMAN_DEVSPACE_LUNA_UNAVAILABLE' }
 
     const parsed = parsePostmanUserTurn(message)
-    if (parsed.transportKind !== 'devspace' || parsed.mode !== 'fresh' || parsed.inputFiles?.length)
+    if (parsed.transportKind !== 'devspace' || parsed.mode !== 'fresh')
       return { status: 'POSTMAN_DEVSPACE_ASSIGNMENT_INVALID' }
     active.set(leaderId, job.bridgeJobId)
     let childId, accepted = false
@@ -126,10 +127,17 @@ export function createPostmanDevspaceLuna(ctx, contexts, direct) {
       })
       accepted = true
       job.state = 'RUNNING'
+      if (parsed.inputFiles?.length) {
+        const child = ctx.agents?.get(childId)
+        if (!child || !job.inputBinding ||
+            !postmanInputGrants.bindChild(job.inputBinding, parent, job.taskContext, child))
+          throw Error('POSTMAN_INPUT_PROVENANCE_REJECTED')
+      }
       const started = await direct.start({
         sessionId: childId,
         workspace: parent.session?.header?.cwd ?? job.taskContext.repositoryPath,
         payload: parsed.payload, branch: job.taskContext.branch, transportKind: 'devspace',
+        inputFiles: parsed.inputFiles ?? [], inputBinding: job.inputBinding,
         devspaceBinding: {
           bridgeJobId: job.bridgeJobId, leaderSessionId: leaderId, lunaSessionId: childId,
           worktree: job.taskContext.worktree, mode: job.devspaceMode,
