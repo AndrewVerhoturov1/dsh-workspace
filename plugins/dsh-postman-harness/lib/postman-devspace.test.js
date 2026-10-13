@@ -1,9 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { EventEmitter } from 'node:events'
+import { createHash } from 'node:crypto'
 import { createDevspaceChannel, devspaceTerminal, requestDevspaceControl, readDevspaceControls } from './postman-devspace.js'
 import { parsePostmanUserTurn, CurrentUserTurnStore, createDirectCurrentTurnToolConfigs, DirectPostmanJobManager } from './direct-current-turn.js'
 import { buildPostmanBridgeStartRequest } from './postman-bridge-core.js'
@@ -368,4 +369,79 @@ test('three concurrent READ_ONLY lanes isolate Luna, REQ, chat and an UNKNOWN in
   assert.equal((await jobs.devspaceLunaClose(leader)).status,'POSTMAN_DEVSPACE_LUNA_CLOSED')
   assert.ok(Object.values(row.devspaceLanes).every(x=>x.state==='closed'))
   await jobs.dispose()
+})
+
+test('unprepared universal Devspace starts branchless and requires exact permission for external paths', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'devspace-approved-target-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const repoPath=join(root,'repo')
+  mkdirSync(repoPath)
+  let context = null, prepared = 0
+  const calls=[]
+  const contexts={
+    get: () => context,
+    async prepareReadOnly(leader) {
+      prepared++
+      context = { leaderSessionId: leader.id, repositoryPath: repoPath,
+        worktree: repoPath, branch: 'main', devspaceReadOnly: true }
+      return { status: 'POSTMAN_TASK_READ_ONLY_READY' }
+    },
+  }
+  const worker={
+    async accept(...args) {
+      calls.push(args)
+      return { status: 'POSTMAN_BRIDGE_ACCEPTED', bridgeJobId:jobId, laneId:'lane-owned' }
+    }
+  }
+  const tool = createPostmanBridgeTool({agents:{get:id=>id===parent.id?parent:null}},
+    worker,contexts)
+  assert.equal((await tool.execute({message:'@PostmanAsk legacy'}, {agent:parent})).status,
+    'POSTMAN_TASK_CONTEXT_REQUIRED')
+  assert.equal(prepared,0)
+  const result = await tool.execute({message:'@PostmanDevspace find answers'}, {agent:parent})
+  assert.equal(result.status,'POSTMAN_BRIDGE_ACCEPTED')
+  assert.equal(prepared,1)
+  assert.equal(calls.length,1)
+  assert.equal(calls[0][5],undefined) // Host picks private output, not a Git branch.
+  assert.equal((await tool.execute({message:'@PostmanDevspace do unsafe UI',
+    computer_use_target:'ChatGPT'},{agent:parent})).status,
+    'COMPUTER_USE_TARGET_ENFORCEMENT_UNAVAILABLE')
+  assert.equal(calls.length,1)
+  assert.equal((await tool.execute({message:'@PostmanDevspace outside',
+    workspace_root:root},{agent:parent})).status,'POSTMAN_DEVSPACE_SCOPE_INVALID')
+  assert.equal((await tool.execute({message:'@PostmanDevspace outside',
+    workspace_root:join(root,'missing'),workspace_access:'write'},{agent:parent})).status,
+    'POSTMAN_DEVSPACE_SCOPE_INVALID')
+  const granted = await tool.execute({message:'@PostmanDevspace write approved file',
+    workspace_root:root,workspace_access:'write'},{agent:parent})
+  assert.equal(granted.status,'POSTMAN_DEVSPACE_ISOLATED_CONTEXT_REQUIRED')
+  const allowed = join(root,'external')
+  mkdirSync(allowed)
+  const external = await tool.execute({message:'@PostmanDevspace create approved document',
+    workspace_root:allowed,workspace_access:'write'},{agent:parent})
+  assert.equal(external.status,'POSTMAN_BRIDGE_ACCEPTED')
+  assert.deepEqual(calls[1][7],{root:allowed,access:'write'})
+  assert.equal(prepared,1)
+})
+
+test('Host checks private image proof and never promotes an arbitrary stdout path', t => {
+  const {binding} = channel(t,'READ_ONLY')
+  const source = join(binding.channel,'POSTMAN_IMAGE_'+req+'.png')
+  const content=Buffer.from('89504e470d0a1a0a'+'0000000d4948445200000049000000430802000000','hex')
+  writeFileSync(source,content)
+  const proof={source:'image_result',requestId:req,
+    imageFormat:'png',imageMimeType:'image/png',imageWidth:73,imageHeight:67,
+    resultImage:source,imageByteLength:content.length,
+    imageSha256:createHash('sha256').update(content).digest('hex'),
+    conversationRef:'https://chatgpt.com/c/owned-test-chat'}
+  const result=devspaceTerminal(binding,proof)
+  assert.equal(result.code,'DEVSPACE_IMAGE_RESULT_DURABLE')
+  assert.equal(result.source,'image_result')
+  assert.equal(result.evidenceState,'BROWSER_VERIFIED_IMAGE')
+  assert.equal(result.resultImage,source)
+  assert.equal(result.imageSha256,proof.imageSha256)
+  assert.equal(result.reportedOutcome,'UNKNOWN') // No fake DONE without bell.
+  assert.throws(()=>devspaceTerminal(binding,{...proof,resultImage:'C:/foreign.png'}),/IMAGE_PROOF_INVALID/)
+  assert.throws(()=>devspaceTerminal(binding,{...proof,imageSha256:'0'.repeat(64)}),/IMAGE_PROOF_INVALID/)
+  assert.throws(()=>devspaceTerminal(binding,{...proof,source:'arbitrary'}),/EVENT_MISSING/)
 })

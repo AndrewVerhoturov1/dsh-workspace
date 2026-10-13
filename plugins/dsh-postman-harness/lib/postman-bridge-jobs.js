@@ -241,7 +241,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     }
   }
 
-  function accept(parent, message, transportKind, inputBinding, recoveryFrom, devspaceMode = 'READ_ONLY', requestedLaneId, approvedScope) {
+  function accept(parent, message, transportKind, inputBinding, recoveryFrom, devspaceMode, requestedLaneId, approvedScope) {
     const taskContext = contexts?.get(parent.id)
     if (contexts && !taskContext) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
     if (typeof contexts?.isRestoring === 'function' && contexts.isRestoring(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
@@ -255,6 +255,13 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
         !(/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(requestedLaneId) ||
           requestedLaneId === 'legacy')))
       return { status: 'POSTMAN_DEVSPACE_LANE_INVALID' }
+    // The ordinary Devspace route owns a private output folder by default.
+    // A Leader-prepared task branch opens its isolated worktree for writing.
+    // The old explicit modes remain compatible and continue to restrict scope.
+    if (transportKind === 'devspace' && devspaceMode === undefined)
+      devspaceMode = taskContext?.devspaceReadOnly ? 'WRITE_TEST' : 'WRITE_ISOLATED'
+    if (approvedScope && devspaceMode === 'READ_ONLY' && approvedScope.access === 'write')
+      return { status: 'POSTMAN_DEVSPACE_SCOPE_INVALID' }
     devspaceMode = transportKind === 'devspace' && approvedScope
       ? approvedScope.access === 'write'
         ? approvedScope.root === taskContext?.worktree && !taskContext?.devspaceReadOnly
@@ -265,7 +272,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
         (taskContext?.devspaceReadOnly || !taskContext?.worktree || taskContext?.branch === 'main'))
       return { status: 'POSTMAN_DEVSPACE_ISOLATED_CONTEXT_REQUIRED' }
     if (taskContext?.devspaceReadOnly && (transportKind !== 'devspace' ||
-        !['READ_ONLY', 'WRITE_APPROVED_TARGET'].includes(devspaceMode)))
+        !['READ_ONLY', 'WRITE_TEST', 'WRITE_APPROVED_TARGET'].includes(devspaceMode)))
       return { status: 'POSTMAN_DEVSPACE_READ_ONLY_SCOPE_REQUIRED' }
     const work = [...jobs.values()].filter(item => item.parentSessionId === parent.id &&
       !item.finishedAt && ['QUEUED', 'STARTING', 'RUNNING'].includes(item.state))
@@ -301,6 +308,15 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     const prior = admissionTails.get(parent.id) ?? Promise.resolve()
     const admit = async () => {
       try {
+        // Read-only refusal is deterministic even if the durable storage backend
+        // is unavailable. The atomic check below remains the admission authority.
+        const existing = contexts.record?.(parent.id)
+        const occupied = Object.values(existing?.bridgeOperations ?? {}).filter(countsAgainstLimit)
+        const count = occupied.filter(op => (op.transportKind === 'devspace') ===
+          (transportKind === 'devspace')).length +
+          (transportKind !== 'devspace' && existing?.bridge ? 1 : 0)
+        if (count >= 3) return { status: transportKind === 'devspace'
+          ? 'POSTMAN_DEVSPACE_CAPACITY_REACHED' : 'POSTMAN_BRIDGE_LIMIT_REACHED' }
         let selectedLaneId
         await contexts.changeRecord(parent.id, old => {
           const operations = old.bridgeOperations ?? {}

@@ -216,12 +216,12 @@ test('bridge authorization and visibility are limited to exact top-level Postman
   assert.deepEqual(POSTMAN_LEADER_TOOL_ALLOWLIST, [
     'ask_user_question', 'todo_write', 'exit_plan_mode', 'create_goal', 'get_goal', 'update_goal',
     'read', 'read_image', 'grep', 'skill', 'web_fetch', 'postman_task_prepare', 'postman_task_restore', 'postman_task_close', 'postman_input_files',
-    'postman_bridge', 'postman_bridge_status', 'postman_bridge_list', 'postman_bridge_stop', 'postman_team_status', 'postman_worker', 'postman_sol_worker', 'postman_worker_interrupt', 'postman_worker_stop', 'postman_worker_list', 'postman_worker_compact', 'postman_worker_fresh', 'postman_secretary', 'postman_secretary_ledger',
+    'postman_bridge', 'postman_bridge_status', 'postman_bridge_list', 'postman_bridge_stop', 'postman_devspace_luna_close', 'postman_devspace_control', 'postman_team_status', 'postman_worker', 'postman_sol_worker', 'postman_worker_interrupt', 'postman_worker_stop', 'postman_worker_list', 'postman_worker_compact', 'postman_worker_fresh', 'postman_secretary', 'postman_secretary_ledger',
   ])
-  assert.equal(POSTMAN_LEADER_TOOL_ALLOWLIST.length, 29)
-  assert.equal(new Set(POSTMAN_LEADER_TOOL_ALLOWLIST).size, 29)
+  assert.equal(POSTMAN_LEADER_TOOL_ALLOWLIST.length, 31)
+  assert.equal(new Set(POSTMAN_LEADER_TOOL_ALLOWLIST).size, 31)
   assert.deepEqual(POSTMAN_LEADER_ONLY_TOOL_NAMES, [
-    'postman_task_prepare', 'postman_task_restore', 'postman_task_close', 'postman_input_files', 'postman_bridge', 'postman_bridge_status', 'postman_bridge_list', 'postman_bridge_stop', 'postman_team_status',
+    'postman_task_prepare', 'postman_task_restore', 'postman_task_close', 'postman_input_files', 'postman_bridge', 'postman_bridge_status', 'postman_bridge_list', 'postman_bridge_stop', 'postman_devspace_luna_close', 'postman_devspace_control', 'postman_team_status',
     'postman_worker', 'postman_sol_worker', 'postman_worker_interrupt', 'postman_worker_stop', 'postman_worker_list', 'postman_worker_compact', 'postman_worker_fresh', 'postman_secretary', 'postman_secretary_ledger',
   ])
   assert.deepEqual(postmanBridgeRestrictionForAgent(leader), {
@@ -252,7 +252,7 @@ test('direct PTC guard applies only to exact top-level pilot and never nested di
   const delegated = parent({agentPreset:'postman-leader-ptc',origin:'subagent',delegationDepth:1})
   const current = new Map([[pilot.id,pilot]])
   const check = (agent,name,parentToken) => postmanPtcDirectCallGuard({agent,name,parent:parentToken}, id=>current.get(id))
-  assert.equal(POSTMAN_PTC_ONLY_LEADER_TOOLS.length,25)
+  assert.equal(POSTMAN_PTC_ONLY_LEADER_TOOLS.length,27)
   for (const name of POSTMAN_PTC_ONLY_LEADER_TOOLS) {
     assert.match(check(pilot,name),/POSTMAN_PTC_DIRECT_CALL_REJECTED/)
     assert.equal(check(pilot,name,{}),undefined)
@@ -404,7 +404,7 @@ test('package and composition expose bridge entrypoint and leader preset', () =>
   assert.match(agents, /postman-leader/)
 
   const leaderSkill = readFileSync(join(repoRoot, '.agents', 'skills', 'postman-leader', 'SKILL.md'), 'utf8')
-  assert.match(leaderSkill, /POSTMAN_LEADER_SKILL_VERSION: 31/)
+  assert.match(leaderSkill, /POSTMAN_LEADER_SKILL_VERSION: 33/)
   assert.match(leaderSkill, /существующий mapping не запрещает \x60createNew:true\x60/)
   assert.match(leaderSkill, /может остановить выбранного Worker в любой момент/)
   for (const forbidden of ['повторный \x60postman_worker()\x60 при существующем mapping',
@@ -420,14 +420,14 @@ test('package and composition expose bridge entrypoint and leader preset', () =>
   }
   assert.match(leaderSkill, /artifactRequestId/)
   assert.ok(leaderSkill.includes('implementation_artifact_apply'))
-  assert.match(leaderSkill, /Выбор роли пользователем[^.]*не заменяет approval плана/)
-  assert.match(leaderSkill, /Approval относится к execution plan, не к каждому tool, continuation или штатному cleanup/)
-  assert.match(leaderSkill, /normal private input staging не означает approval public publication/)
+  assert.match(leaderSkill, /Выбор роли пользователем не даёт полномочий сверх политики/)
+  assert.match(leaderSkill, /TASK_CONTRACT/)
+  assert.match(leaderSkill, /GitHub public staging is fallback-only and requires explicit user approval/)
   assert.match(leaderSkill, /native-attachment-first|Native ChatGPT attachment is the primary input-file transport/)
   assert.match(leaderSkill, /GitHub public staging is fallback-only and requires explicit user approval/)
   assert.match(leaderSkill, /stage_current_attachments/)
   assert.ok(leaderSkill.includes('selectionIds:[<exact returned current selectionIds>]'))
-  assert.match(leaderSkill, /content-addressed `attachmentId`[\s\S]*не является selector/)
+  assert.match(leaderSkill, /Content-addressed `attachmentId`[\s\S]*не является selector/)
   assert.doesNotMatch(leaderSkill, /attachmentIds/)
   const inputDoc = readFileSync(join(repoRoot, 'postman', 'POSTMAN_INPUT_FILES.md'), 'utf8')
   for (const instructions of [leaderSkill, inputDoc]) {
@@ -441,7 +441,7 @@ test('package and composition expose bridge entrypoint and leader preset', () =>
   }
   assert.ok(inputDoc.includes('selectionIds:'))
   assert.doesNotMatch(inputDoc, /attachmentIds/)
-  assert.match(leaderSkill, /supported current image не спрашивай path/)
+  assert.match(leaderSkill, /Supported current image не спрашивай path/)
   assert.ok(leaderSkill.includes('@PostmanAsk --input-files-json <JSON.stringify(exact descriptors)>'))
   assert.ok(leaderSkill.includes('@PostmanAsk --chat <OLD_REQ> --input-files-json <JSON.stringify(exact descriptors)>'))
 

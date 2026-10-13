@@ -364,13 +364,17 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     if (values.length > 1) return { status: 'POSTMAN_WORKER_TARGET_REQUIRED' }
     return values.length === 1 ? { binding: values[0] } : { status: 'POSTMAN_WORKER_INTERRUPT_NO_ACTIVE_WORKER' }
   }
-  function taskText(context, text) {
+  function taskText(context, text, workerType) {
+    if (workerType === 'secretary') return 'Collect bounded facts and update only meaningful milestones in the Host-private ledger. ' +
+      'Never create a Git branch/worktree for search or memory. Repository context: ' +
+      String(context?.worktree ?? 'unprepared') + '. Task: ' + text
     return context ? 'Use the existing task branch ' + context.branch + ' and worktree ' +
-      context.worktree.replaceAll('\\', '/') + ' for repository changes; do not create another branch or worktree. Follow REPO_POLICY.md. ' +
+      context.worktree.replaceAll(String.fromCharCode(92), '/') +
+      ' for repository changes; do not create another branch or worktree. Follow REPO_POLICY.md. ' +
       'Coordinate shared files and Git operations with your immediate parent; avoid overlapping changes. Assigned task: ' + text : text
   }
-  async function taskWithGrant(parent, context, args) {
-    let text = taskText(context, args.task)
+  async function taskWithGrant(parent, context, args, workerType = 'luna') {
+    let text = taskText(context, args.task, workerType)
     if (args.artifactRequestId === undefined) return { text }
     if (!isTopLevelPostmanSupervisor(parent)) return { status: 'POSTMAN_WORKER_ARTIFACT_REJECTED' }
     const grant = await grants?.resolve(parent.id, args.artifactRequestId)
@@ -394,12 +398,19 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     if (slot.closed || !authorized(parent)) return { status: 'POSTMAN_WORKER_TARGET_UNKNOWN' }
     if (busy(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
     const context = contexts?.get(parent.id) ?? null
-    if (!matchesContext(parent, slot)) return { status: 'POSTMAN_TASK_CONTEXT_MISMATCH' }
+    // A continuing Secretary can adopt this same Leader's later worktree:
+    // research/ledger were created branchlessly and do not gain write authority.
+    const secretaryAdopted = slot.workerType === 'secretary' &&
+      slot.context?.devspaceReadOnly === true &&
+      context?.leaderSessionId === slot.context.leaderSessionId &&
+      context?.devspaceReadOnly !== true
+    if (!secretaryAdopted && !matchesContext(parent, slot))
+      return { status: 'POSTMAN_TASK_CONTEXT_MISMATCH' }
     slot.context = context
     const recovered = await reconcile(parent, slot, exec.signal)
     if (recovered) return { status: recovered, workerSessionId: slot.id }
     let task
-    try { task = await taskWithGrant(parent, context, args) }
+    try { task = await taskWithGrant(parent, context, args, workerType) }
     catch (error) { return { status: 'POSTMAN_WORKER_ARTIFACT_REJECTED', diagnostic: diagnostic(error) } }
     if (task.status) return task
     const id = slot.id
@@ -462,7 +473,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     const context = contexts?.get(parent.id) ?? null
     if (contexts && !context) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
     let task
-    try { task = await taskWithGrant(parent, context, args) }
+    try { task = await taskWithGrant(parent, context, args, workerType) }
     catch (error) { return { status: 'POSTMAN_WORKER_ARTIFACT_REJECTED', diagnostic: diagnostic(error) } }
     if (task.status) return task
     if (!authorized(parent)) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
@@ -602,8 +613,14 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
             (args.artifactRequestId !== undefined && typeof args.artifactRequestId !== 'string') ||
             (args.createNew === true && args.workerSessionId !== undefined))
           return { status: 'POSTMAN_WORKER_ARGUMENTS_INVALID' }
-        if (contexts && !contexts.get(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
-        if (contexts?.get(parent.id)?.devspaceReadOnly)
+        if (contexts && !contexts.get(parent.id)) {
+          if (!secretary || typeof contexts.prepareReadOnly !== 'function')
+            return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
+          const prepared = await contexts.prepareReadOnly(parent)
+          if (!['POSTMAN_TASK_READ_ONLY_READY', 'POSTMAN_TASK_CONTEXT_ALREADY_READY'].includes(prepared?.status))
+            return prepared
+        }
+        if (!secretary && contexts?.get(parent.id)?.devspaceReadOnly)
           return { status: 'POSTMAN_WORKER_READ_ONLY_CONTEXT' }
         return admitted(parent, async () => {
           const group = groupFor(parent)
@@ -950,16 +967,18 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       const agent = exec.agent, secretary = roleOf(agent) === 'secretary'
       if (!isTopLevelPostmanSupervisor(agent) && !secretary) return { status: 'POSTMAN_SECRETARY_LEDGER_CALLER_REJECTED' }
       const id = secretary ? agent.session.header.parentSession : agent.id
-      if (!durable || !contextAt(id)) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
+      if (!durable || typeof taskContexts?.readLedger !== 'function' ||
+          typeof taskContexts?.changeLedger !== 'function')
+        return { status: 'POSTMAN_SECRETARY_LEDGER_UNAVAILABLE' }
       if (args.content !== undefined) {
         if (!secretary) return { status: 'POSTMAN_SECRETARY_LEDGER_CALLER_REJECTED' }
         if (typeof args.content !== 'string' || args.content.length > 16000) return { status: 'POSTMAN_SECRETARY_LEDGER_INVALID' }
-        try { await taskContexts.changeRecord(id, row => {
-          if ((row.secretaryLedger?.revision ?? 0) !== args.revision) throw new Error('POSTMAN_SECRETARY_LEDGER_STALE')
-          return { ...row, secretaryLedger: { revision: args.revision + 1, content: args.content, updatedBy: agent.id } }
+        try { await taskContexts.changeLedger(id, old => {
+          if (old.revision !== args.revision) throw Error('POSTMAN_SECRETARY_LEDGER_STALE')
+          return { revision: old.revision + 1, content: args.content, updatedBy: agent.id }
         }) } catch (error) { return { status: 'POSTMAN_SECRETARY_LEDGER_UPDATE_FAILED', diagnostic: diagnostic(error) } }
       }
-      return { status: 'POSTMAN_SECRETARY_LEDGER', ledger: taskContexts.record(id).secretaryLedger ?? { revision: 0, content: '', updatedBy: '' } }
+      return { status: 'POSTMAN_SECRETARY_LEDGER', ledger: taskContexts.readLedger(id) }
     },
   })
   const freshTool = defineTool({
@@ -1403,7 +1422,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       else { totals.used += child.budget.used; totals.soft += child.budget.soft; totals.hard += child.budget.hard; totals.exhausted += Number(child.budget.exhausted) }
     }
     return { status: 'POSTMAN_TEAM_STATUS',
-      secretary: { present: Boolean(secretary), ...(secretary ? summary(secretary) : { sessionId: null, state: 'absent', budget: null }), ledgerRevision: row.secretaryLedger?.revision ?? 0 },
+      secretary: { present: Boolean(secretary), ...(secretary ? summary(secretary) : { sessionId: null, state: 'absent', budget: null }), ledgerRevision: taskContexts?.readLedger?.(leader.id)?.revision ?? row.secretaryLedger?.revision ?? 0 },
       workers: { used: ordinary.length, limit: 2, rows: ordinary.slice(0, 2).map(summary) },
       sol: { present: Boolean(sol), ...(sol ? summary(sol) : { sessionId: null, state: 'absent' }),
         ownedWorkers: { used: children.length, limit: 2, states, budget: totals } } }

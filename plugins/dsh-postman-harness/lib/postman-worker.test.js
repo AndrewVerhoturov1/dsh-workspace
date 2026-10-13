@@ -58,6 +58,36 @@ function toolsFromPreset() {
   return { preset, rows }
 }
 
+test('Secretary starts branchlessly, can use web tools and keeps scoped assignment', async () => {
+  let branchless = 0, context = null
+  const contexts = {
+    get:()=>context,
+    async prepareReadOnly(parent) {
+      branchless++
+      context = { leaderSessionId:parent.id,devspaceReadOnly:true,
+        branch:'main',worktree:'C:/repo' }
+      return {status:'POSTMAN_TASK_READ_ONLY_READY'}
+    },
+  }
+  const f=fixture(contexts)
+  const parent=leader('secretary-owner')
+  f.agents.set(parent.id,parent)
+  const result=await f.tools.secretaryTool.execute({
+    task:'Find current docs via web and write one goal + next step in Host-private ledger',
+    label:'Secretary',
+  },exec(parent))
+  assert.equal(result.status,'POSTMAN_WORKER_TASK_ACCEPTED')
+  assert.equal(branchless,1)
+  assert.equal(context.devspaceReadOnly,true)
+  assert.equal(f.calls.starts.length,1)
+  assert.match(f.calls.starts[0].request.prompt[0].text,/Host-private ledger/)
+  assert.match(f.calls.starts[0].request.prompt[0].text,/Never create a Git branch/)
+  const inherited=f.calls.starts[0].request.toolFilter
+  assert.ok(!inherited?.deny?.includes('web_search'))
+  assert.ok(!inherited?.deny?.includes('web_fetch'))
+  assert.equal((await f.tools.taskTool.execute({task:'edit protected source'},exec(parent))).status,
+    'POSTMAN_WORKER_READ_ONLY_CONTEXT')
+})
 test('Worker request pins Luna and denies only registered Postman tools', () => {
   const parent = leader('A')
   const denied = postmanWorkerDeniedTools(registry)
@@ -402,8 +432,8 @@ test('only Worker decision escalation steers its live direct Leader; Bridge FYI 
 
 test('notify_parent isolates pilot and production Worker/Bridge children by live parent and task ownership', async () => {
   const production = leader('production'), pilot = leader('pilot', 'postman-leader-ptc')
-  const bindings = new Map([[production.id, { branch: 'task/production' }],
-    [pilot.id, { branch: 'task/pilot' }]])
+  const bindings = new Map([[production.id, { branch: 'task/production', worktree: 'C:/postman/task-production' }],
+    [pilot.id, { branch: 'task/pilot', worktree: 'C:/postman/task-pilot' }]])
   const bridgeBindings = new Map([['bridge-production', bindings.get(production.id)],
     ['bridge-pilot', bindings.get(pilot.id)]])
   const contexts = { get: id => bindings.get(id), child: id => bridgeBindings.get(id) ?? null }
@@ -483,7 +513,7 @@ test('bridge plugin registers all Worker tools and owns one disposable attachmen
     },
   }
   await applyBridgePlugin(ctx)
-  assert.deepEqual([...registrations.keys()].sort(), ['implementation_artifact_apply', 'notify_parent', 'postman_bridge', 'postman_bridge_list', 'postman_bridge_status', 'postman_bridge_stop', 'postman_input_files', 'postman_secretary', 'postman_secretary_ledger', 'postman_sol_worker', 'postman_task_close', 'postman_task_prepare', 'postman_task_restore', 'postman_team_status', 'postman_worker', 'postman_worker_compact', 'postman_worker_fresh', 'postman_worker_interrupt', 'postman_worker_list', 'postman_worker_stop', 'ptc_execute'])
+  assert.deepEqual([...registrations.keys()].sort(), ['implementation_artifact_apply', 'notify_parent', 'postman_bridge', 'postman_bridge_list', 'postman_bridge_status', 'postman_bridge_stop', 'postman_devspace_control', 'postman_devspace_luna_close', 'postman_input_files', 'postman_secretary', 'postman_secretary_ledger', 'postman_sol_worker', 'postman_task_close', 'postman_task_prepare', 'postman_task_restore', 'postman_team_status', 'postman_worker', 'postman_worker_compact', 'postman_worker_fresh', 'postman_worker_interrupt', 'postman_worker_list', 'postman_worker_stop', 'ptc_execute'])
   assert.deepEqual(restriction.allow, postmanBridgeRestrictionForAgent(a).allow)
   assert.ok(listeners.has('agent-preset/selected'))
   assert.ok(listeners.has('agent/disposed'))

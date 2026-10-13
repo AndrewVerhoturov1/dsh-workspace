@@ -24,7 +24,7 @@ export const POSTMAN_SECRETARY_TOOL_NAME = 'postman_secretary'
 export const POSTMAN_SECRETARY_LEDGER_TOOL_NAME = 'postman_secretary_ledger'
 export const WORKER_CONTROL_TOOLS = Object.freeze(['postman_worker', 'postman_worker_interrupt', 'postman_worker_list', 'postman_worker_stop', 'postman_worker_compact', 'postman_worker_fresh'])
 export const DELEGATION_TOOLS = Object.freeze(['subagent', 'subagent_fork', 'workflow', 'ralph', 'send_message', 'interrupt_agent'])
-export const SECRETARY_TOOLS = Object.freeze(['read', 'glob', 'grep', 'skill', 'pwsh', 'bash', 'write', 'edit', 'report', 'notify_parent', 'job_output', 'job_kill', 'job_list', 'postman_secretary_ledger'])
+export const SECRETARY_TOOLS = Object.freeze(['read', 'glob', 'grep', 'web_search', 'web_fetch', 'skill', 'pwsh', 'bash', 'write', 'edit', 'report', 'notify_parent', 'job_output', 'job_kill', 'job_list', 'postman_secretary_ledger'])
 export const POSTMAN_BRIDGE_AGENT_OPTIONS = Object.freeze({
   provider: 'codex',
   model: 'gpt-6-luna',

@@ -44,7 +44,7 @@ def run(channel, request_id, intent, *, input_bundle_manifest=None, input_files_
             raise ValueError("POSTMAN_INPUT_BUNDLE_HANDOFF_INVALID")
         descriptors = input_bundle.normalize_input_files(json.loads(
             base64.b64decode(input_files_base64, validate=True).decode("utf-8")))
-        image = bool(descriptors) and all(d.get("media_type") in input_bundle.IMAGE_EXTENSIONS
+        image = bool(descriptors) and len(descriptors) <= 7 and all(d.get("media_type") in input_bundle.IMAGE_EXTENSIONS
                                           for d in descriptors)
         attachment = input_bundle.read_handoff(
             input_bundle_manifest, request_id, descriptors, image=image)
@@ -66,6 +66,9 @@ def run(channel, request_id, intent, *, input_bundle_manifest=None, input_files_
         result = {"requestId": request_id, "source": "bell" if observed.get("code") == "DEVSPACE_SIGNAL_RECEIVED" else details.get("source", "transport_diagnostic"),
                   "diagnostic": details.get("diagnostic", "BLOCKED"), "assistantText": details.get("assistantText", ""),
                   "conversationRef": details.get("conversationRef"), "message": details.get("message", ""),
+                  **{key: details[key] for key in ("resultImage", "imageSha256", "imageWidth",
+                      "imageHeight", "imageMimeType", "imageByteLength", "imageFormat",
+                      "evidenceState", "reportedOutcome") if key in details},
                   "transportDiagnostics": {key: details[key] for key in
                       ("reminderSlots", "transportEventJournal", "detectorDiagnostics") if key in details}}
     except Exception:
