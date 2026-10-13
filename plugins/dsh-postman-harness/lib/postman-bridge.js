@@ -36,7 +36,7 @@ function authorized(exec, ctx) {
   return postmanBridgeCallerAllowed(agent) && ctx.agents.get(agent.id) === agent
 }
 
-export function createPostmanTaskPrepareTool(ctx, contexts = postmanTaskContexts) {
+export function createPostmanTaskPrepareTool(ctx, contexts = postmanTaskContexts, { jobs } = {}) {
   return defineTool({
     name: POSTMAN_TASK_PREPARE_TOOL_NAME,
     description: 'Prepare one owned Leader task. Default: isolated Git task branch/worktree from origin/main. read_only=true: verified repository read context without Git fetch, push, branch or new worktree, usable only by @PostmanDevspace READ_ONLY.',
@@ -45,7 +45,13 @@ export function createPostmanTaskPrepareTool(ctx, contexts = postmanTaskContexts
       if (!authorized(exec, ctx)) return { status: 'POSTMAN_TASK_CALLER_REJECTED' }
       if (args?.read_only !== undefined && typeof args.read_only !== 'boolean')
         return { status: 'POSTMAN_TASK_ARGUMENTS_INVALID' }
-      return args?.read_only === true ? contexts.prepareReadOnly(exec.agent) : contexts.prepare(exec.agent)
+      const prepared = await (args?.read_only === true ? contexts.prepareReadOnly(exec.agent) : contexts.prepare(exec.agent))
+      if (!['TASK_CONTEXT_READY', 'POSTMAN_TASK_READ_ONLY_READY', 'POSTMAN_TASK_CONTEXT_ALREADY_READY'].includes(prepared?.status) ||
+          typeof jobs?.recoverDevspacePending !== 'function') return prepared
+      // Reconcile only the exact owner after Host task preparation/recovery.
+      // This never starts a new ChatGPT or Direct task.
+      const devspaceReconciliation = await jobs.recoverDevspacePending(exec.agent)
+      return { ...prepared, devspaceReconciliation }
     },
   })
 }
@@ -330,7 +336,7 @@ export async function apply(ctx, config = {}) {
   // Guard model-direct operations, not ordinary visibility: nested PTC calls carry the outer token.
   ctx.tools.guard(exec => postmanPtcDirectCallGuard(exec, id => ctx.agents.get(id), ownsPtcWorker))
   ctx.tools.register(ptc.tool)
-  ctx.tools.register(createPostmanTaskPrepareTool(ctx, contexts))
+  ctx.tools.register(createPostmanTaskPrepareTool(ctx, contexts, { jobs }))
   ctx.tools.register(createPostmanTaskCloseTool(ctx, contexts, { jobs }))
   ctx.tools.register(createPostmanInputFilesTool(ctx, contexts, { currentAttachments,
     resolveAttachment: (ref, signal) => ctx.attachments.readImage(ref, signal) }))

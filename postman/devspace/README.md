@@ -18,6 +18,12 @@ Existing dedicated browser, Send proof, same-chat recovery и serialized reminde
 
 `postman_task_prepare({read_only:true})` создаёт owned read-only контекст без Git branch/push. Только Devspace `READ_ONLY` может использовать эту область. Для `WRITE_ISOLATED` сначала штатный Host prepare (clean task branch/worktree); разрешённые правки и тесты — только в назначенном worktree, без самовольных Git commit/push/PR и без обязательного ZIP. Режим `WRITE_TEST` использует прежнюю Host-private test folder. `WRITE_APPROVED_TARGET` не включён без отдельного утверждённого Host grant; DevSpace shell сам по себе не песочница.
 
+## Этап 4: после перезапуска и диагностика
+
+При сохранённом REQ и местном bell восстанови прежнего Leader через штатный `postman_task_prepare` (с тем же read_only-режимом, если он использовался). Host безопасно пробует передать событие прежней продолжаемой Luna, только после подтверждения её идентичности. В ответе prepare появляется `devspaceReconciliation` с фактическими `recovered/unresolved`; `POSTMAN_BRIDGE_READY` и `postman_bridge_status` доставляют только уже доказанный terminal. `coldBellRecovery=intent` и `coldReadyWake=intent/unknown` означают неопределённый side effect: автоматический resend/followup запрещён. Старые browser/Direct процессы не запускаются заново только из-за местного сигнала; чужие каналы не читаются. При отсутствии Luna или полномочия — сообщить Leader `OUTCOME_UNKNOWN`, сохранить файлы и расследовать отдельно.
+
+Runtime диагностика: `postman_team_status` (owner Luna/активный job), `postman_bridge_list` (REQ и состояние), `postman_bridge_status` (подтверждённый terminal), `postman_devspace_control({action:'status',bridge_job_id})` для фактических Stop/Send receipts. `QUEUED` не равен отправке, `DELIVERED` не равен проверенной задаче. Старый ZIP/Ask/Image должен оставаться независимым. Откат установки — только из резервной копии изменённых source/skill-файлов; не удалять приватные `event.json`/binding и не очищать REQ.
+
 ## Проверка/активация
 
 Целевые новые suites: `node --test lib/postman-devspace.test.js` из Harness plugin и `python -m unittest postman.devspace.tests.test_devspace` из repo. Дополнительно относящиеся старые Direct/Bridge/observer/Ask/native-image suites и `git diff --check`. Source изменения в task worktree не обновляют активный Host. Установка/перезапуск, live новый режим и публикация — отдельное согласованное действие Leader; постоянные worktrees, REPO_POLICY и permissions не меняются.
