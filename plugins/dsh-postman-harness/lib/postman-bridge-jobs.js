@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { postmanInputGrants } from './postman-input-files.js'
 import { DirectPostmanJobManager } from './direct-current-turn.js'
 import { createPostmanDevspaceLanes } from './postman-devspace-lanes.js'
-import { requestDevspaceControl, readDevspaceControls } from './postman-devspace.js'
+import { requestDevspaceControl, readDevspaceControls, loadDevspaceChannelForOwner } from './postman-devspace.js'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { buildPostmanBridgeStartRequest, isTopLevelPostmanSupervisor, POSTMAN_BRIDGE_PROVIDER,
   settleTrustedPostmanStatus } from './postman-bridge-core.js'
@@ -259,9 +259,13 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
       return { status: 'POSTMAN_DEVSPACE_READ_ONLY_SCOPE_REQUIRED' }
     const work = [...jobs.values()].filter(item => item.parentSessionId === parent.id &&
       !item.finishedAt && ['QUEUED', 'STARTING', 'RUNNING'].includes(item.state))
-    if ((transportKind === 'devspace' && devspaceMode === 'WRITE_ISOLATED' &&
-        (work.length > 0 || worker?.hasActiveWork?.(parent))) ||
-        work.some(item => item.transportKind === 'devspace' && item.devspaceMode === 'WRITE_ISOLATED'))
+    // Readers and independent lanes do not wait for a different writer.
+    // The only shared mutable worktree still has exactly one writer.
+    if (transportKind === 'devspace' && devspaceMode === 'WRITE_ISOLATED' &&
+        (worker?.hasActiveWork?.(parent) ||
+          work.some(item => item.transportKind === 'devspace' &&
+            item.devspaceMode === 'WRITE_ISOLATED' &&
+            item.taskContext?.worktree === taskContext?.worktree)))
       return { status: 'POSTMAN_DEVSPACE_WRITER_BUSY' }
     const job = {
       bridgeJobId: randomUUID(), parentSessionId: parent.id, taskContext, transportKind, state: 'QUEUED',
@@ -535,6 +539,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
         job = { bridgeJobId, parentSessionId: parent.id, transportKind: terminal.transportKind,
           taskContext: contexts?.get?.(parent.id) ?? null, childSessionId: operation.childSessionId ?? null,
           trustedTerminal: terminal, requestId: terminal.requestId ?? null,
+          laneId: operation.devspace?.laneId,
           state: operation.grantDiagnostic ? 'FAILED' : 'TERMINAL',
           finishedAt: new Date().toISOString(), synchronization: operation.synchronization === 'pending' ? 'busy' : operation.synchronization ?? 'busy',
           grantDiagnostic: operation.grantDiagnostic, controller: new AbortController() }
@@ -559,6 +564,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
         }
         return { status: 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN', bridgeJobId,
           requestId: operation.requestId ?? null, childSessionId: operation.childSessionId ?? null,
+          laneId: operation.devspace?.laneId ?? null,
           diagnostic: 'POSTMAN_DEVSPACE_LUNA_TERMINAL_UNAVAILABLE' }
       } else if (operation && operation.requestId && ['pending', 'unknown'].includes(operation.state) &&
                  typeof direct.inspectRequest === 'function') {
@@ -799,10 +805,19 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
         !job.childSessionId || (operation.requestId && operation.requestId !== job.requestId))
       return { status: 'POSTMAN_DEVSPACE_CONTROL_JOB_NOT_FOUND' }
     const directJob = direct.latest?.(job.childSessionId)
-    const binding = directJob?.devspaceChannel
-    if (!binding || binding.leaderSessionId !== parent.id ||
-        binding.lunaSessionId !== job.childSessionId || binding.jobId !== bridgeJobId ||
-        binding.requestId !== job.requestId)
+    let binding = directJob?.devspaceChannel
+    const matches = value => value?.leaderSessionId === parent.id &&
+      value.lunaSessionId === job.childSessionId && value.jobId === bridgeJobId &&
+      value.requestId === job.requestId
+    // Status for a settled earlier REQ must not accidentally inspect the next
+    // REQ's live channel on this same persistent Luna.
+    if (action === 'status' && !matches(binding) && operation.devspace?.channel) {
+      try { binding = loadDevspaceChannelForOwner(operation.devspace.channel, {
+        bridgeJobId, leaderSessionId: parent.id,
+        lunaSessionId: job.childSessionId, requestId: job.requestId }) }
+      catch { binding = null }
+    }
+    if (!matches(binding))
       return { status: 'POSTMAN_DEVSPACE_CONTROL_CHANNEL_UNAVAILABLE' }
     if (action === 'status') {
       try { return { status: 'POSTMAN_DEVSPACE_CONTROL_STATUS', bridgeJobId,
