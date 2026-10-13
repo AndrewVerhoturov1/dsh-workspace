@@ -328,6 +328,15 @@ test('Bridge admission rejects fabricated and changed descriptors', async () => 
     assert.equal((await send({ ...file, sha256: 'c'.repeat(64) })).status, 'POSTMAN_INPUT_PROVENANCE_REJECTED')
     assert.equal((await send(file)).status, 'POSTMAN_BRIDGE_ACCEPTED')
     assert.equal(accepted, 1)
+    postmanInputGrants.unpin(binding)
+    // Real Leader generated one-line JSON + image intent; it must be parsed,
+    // owner-pinned and accepted before any browser Send.
+    const inline = await bridge.execute({ message: '@PostmanDevspace --input-files-json ' +
+      JSON.stringify([file]) + ' Generate image', devspace_mode: 'READ_ONLY' },
+      { agent: f.agent, signal: new AbortController().signal })
+    assert.equal(inline.status, 'POSTMAN_BRIDGE_ACCEPTED')
+    assert.equal(accepted, 2)
+    assert.ok(binding)
   } finally { postmanInputGrants.unpin(binding); postmanInputGrants.release(f.agent) }
 })
 

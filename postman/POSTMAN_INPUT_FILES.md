@@ -35,7 +35,7 @@ Host проверяет exact resolved length и canonical sha256 attachment ID,
 
 Standalone `@Postman`, `@PostmanAsk`, `@PostmanImage` с current image используют тот же no-argument `postman_send_current_turn()`: один exact text block сохраняется byte-for-byte рядом с attachment occurrences; exact live session + event seq связывают обе store записи. Host резервирует ход, выполняет существующий private stage/grant/pin и builder, не требуя Leader task context. Plain user text не получает authority через fabricated `--input-files-json`. Mixed/current capability status возвращается до Direct spawn и task publication; никакого GitHub staging, path guessing или generic resolver. Standalone task publication остаётся прежней. Selection snapshot/pin освобождаются после создания независимого request attachment, request root — на terminal.
 
-Leader переносит descriptors без модификации в `--input-files-json <JSON>` сразу после trigger separator (или после `--chat <REQ>`), затем newline + exact intent. Ни Leader, ни Bridge child не строят attachments, не читают bytes моделью, не кодируют Base64 и не выполняют manual upload.
+Leader переносит descriptors без модификации в `--input-files-json <JSON>` сразу после trigger separator (или после `--chat <REQ>`), затем пробел или newline + exact intent (граница JSON определяется полным закрытием массива, без потери валидности/provenance). Ни Leader, ни Bridge child не строят attachments, не читают bytes моделью, не кодируют Base64 и не выполняют manual upload.
 
 ### @Postman / @PostmanAsk
 

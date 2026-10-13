@@ -41,6 +41,30 @@ test('input descriptors are transport metadata, not semantic Luna payload', () =
   assert.throws(() => parsePostmanUserTurn('@Postman --input-files-json nope\nintent'), /POSTMAN_INPUT_METADATA_INVALID/)
 })
 
+test('inline Devspace PNG grant metadata ends at JSON array and preserves intent', () => {
+  const file = {source_kind:'native',media_type:'image/png',name:'reference].png',
+    sha256:'d'.repeat(64),byte_length:150594}
+  const intent='Измени изображение через GPT Image; сохрани [карточки] и не вызывай bell'
+  for (const transport of ['PostmanDevspace','PostmanAsk','PostmanImage']) {
+    const raw='@'+transport+' --input-files-json '+JSON.stringify([file])+' '+intent
+    const parsed=parsePostmanUserTurn(raw)
+    assert.deepEqual(parsed.inputFiles,[file])
+    assert.equal(parsed.payload,intent)
+    assert.equal(parsed.mode,'fresh')
+    const multi=parsePostmanUserTurn('@'+transport+' --input-files-json '+
+      JSON.stringify([file])+String.fromCharCode(10)+intent)
+    assert.equal(multi.payload,intent)
+    assert.deepEqual(multi.inputFiles,[file])
+    assert.throws(()=>parsePostmanUserTurn('@'+transport+' --input-files-json '+
+      JSON.stringify([file])+intent),/POSTMAN_INPUT_METADATA_INVALID/)
+    assert.throws(()=>parsePostmanUserTurn('@'+transport+' --input-files-json '+
+      JSON.stringify([{...file,path:'C:/secret'}])+' '+intent),
+      /POSTMAN_INPUT_METADATA_INVALID/)
+    assert.throws(()=>parsePostmanUserTurn('@'+transport+' --input-files-json '+
+      JSON.stringify([file])+' '),/POSTMAN_EMPTY_PAYLOAD/)
+  }
+})
+
 test('Direct job forwards only descriptor JSON and keeps text intent separate', async () => {
   const file = { name: 'note.md', repository: 'AndrewVerhoturov1/dsh-workspace', commit: 'a'.repeat(40),
     path: 'docs/note.md', sha256: 'b'.repeat(64), byte_length: 12 }
