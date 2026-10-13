@@ -18,12 +18,14 @@ def render_task(binding, intent, signal_command):
     # reformat long Markdown, but a matching exact request-key line still lets
     # the Host safely locate this user turn without resending UNKNOWN Sends.
     return f"""POSTMAN_REQUEST_ID: {binding['requestId']}
-# PostmanDevspace — этап 3
+# PostmanDevspace — универсальное поручение
 REQ: {binding['requestId']}
 Используй настоящий подключённый DevSpace MCP. Сначала открой назначенную область и прочитай безопасный существующий файл, чтобы проверить реальный доступ в этом разговоре. Инструкция не доказывает доступность.
 Область для чтения: {area}
 Режим: {mode}. {scope}
-Shell DevSpace не является песочницей: ограничь каждое действие назначенной задачей. Не читать секреты/auth/config/runtime, не устанавливать/перезапускать Host и не управлять процессами. Никаких Git writes, commit/push/PR/merge, browser/CDP/Orca uploads; не прикрепляй изображения.
+DevSpace Bash не является песочницей: работай с файлами только в назначенной области. Веб-поиск, подготовка документов, изображения и другие реально доступные инструменты разрешены, когда полезны для задачи. Входные изображения и документы передаёт Host автоматически, если они назначены Leader.
+Computer Use по умолчанию не разрешён: применять его можно только после точного Host grant на целевое приложение. Ни при каких обстоятельствах Computer Use или shell не должны управлять интерфейсами ChatGPT, DeepSeek Harness, Codex, запускать новых AI-агентов/подзадачи или изменять собственные права. Доверенный браузерный Postman transport выполняет Host, а не ChatGPT.
+Не читай чужие секреты и runtime credentials; не меняй чужие данные и не перезапускай Host. GitHub writes/commit/push/PR/merge — только через отдельный разрешённый местный маршрут по политике репозитория.
 DevSpace Bash не понимает PowerShell оператор &. Запись local bell через явный pwsh -File ниже — отдельное узкое разрешение, независимо от READ_ONLY. Выполни команду именно через DevSpace Bash; не читать binding/capability/JSON:
 {signal_command} done
 {signal_command} need-decision -Message 'Нужен выбор ...'
