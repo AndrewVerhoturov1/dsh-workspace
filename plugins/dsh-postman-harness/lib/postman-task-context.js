@@ -80,8 +80,21 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
   async function prepare(leader) {
     const id = leader?.id
     if (pending.has(id)) return { status: 'POSTMAN_TASK_PREPARE_IN_PROGRESS' }
-    if (contexts.has(id) && registry.get(id)?.stage === 'ready') return { status: 'POSTMAN_TASK_CONTEXT_ALREADY_READY', ...contexts.get(id) }
-    if (registry.get(id) && registry.get(id).stage !== 'closed') return recover(leader)
+    const previous = contexts.get(id)
+    const saved = registry.get(id)
+    if (previous && saved?.stage === 'ready' && !previous.devspaceReadOnly)
+      return { status: 'POSTMAN_TASK_CONTEXT_ALREADY_READY', ...previous }
+    if (!previous && saved && saved.stage !== 'closed') return recover(leader)
+    const upgrading = Boolean(previous?.devspaceReadOnly && saved?.stage === 'ready')
+    if (upgrading && (activeOperations.has(id) || syncOperations.has(id) ||
+        workerAdmissions.has(id) || saved.runner?.state !== 'none' || saved.bridge ||
+        Object.values(saved.bridgeOperations ?? {}).some(op =>
+          op.state !== 'received' || op.grantDiagnostic) ||
+        Object.values(saved.workers ?? {}).some(child =>
+          child.workerType !== 'secretary' || child.delivery !== 'none' || child.state !== 'ready') ||
+        Object.values(saved.devspaceLanes ?? {}).some(lane =>
+          lane.activeBridgeJobId || !['ready', 'closed'].includes(lane.state))))
+      return { status: 'POSTMAN_TASK_PROMOTION_BUSY' }
     pending.add(id)
     let created = false
     try {
@@ -107,7 +120,21 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
       const record = { leaderSessionId: id, repository: REPOSITORY, repositoryPath: repository, originUrl: remote,
         branch, worktree, baseCommit, stage: 'intent', diagnostic: null, workers: {},
         runner: { state: 'none', requestId: null }, bridge: null }
-      await registry.create(id, record) // Durable intent precedes the first Git mutation.
+      if (upgrading) {
+        // Keep the Secretary and its durable ledger, but save the new Git
+        // intent before any worktree or remote side effect.
+        await registry.change(id, current => {
+          if (current.stage !== 'ready' || current.devspaceReadOnly !== true ||
+              current.leaderSessionId !== id ||
+              current.runner?.state !== 'none' || current.bridge ||
+              Object.values(current.bridgeOperations ?? {}).some(op => op.state !== 'received'))
+            throw Error('POSTMAN_TASK_PROMOTION_CHANGED')
+          return { ...current, branch, worktree, baseCommit,
+            devspaceReadOnly: false, stage: 'intent', diagnostic: 'promoting branchless task' }
+        })
+      } else {
+        await registry.create(id, record) // Durable intent precedes the first Git mutation.
+      }
       created = true
       await command(repository, 'worktree', 'add', '-b', branch, worktree, baseCommit)
       await registry.change(id, row => ({ ...row, stage: 'worktree' }))
@@ -128,6 +155,10 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
       const diagnostic = String(error?.message ?? error)
       if (created) {
         try { await registry.change(id, row => ({ ...row, stage: 'uncertain', diagnostic })) } catch {}
+        if (upgrading) {
+          contexts.delete(id)
+          changed(id)
+        }
       }
       return { status: created ? 'POSTMAN_TASK_PREPARE_UNCERTAIN' : 'POSTMAN_TASK_PREPARE_FAILED', diagnostic }
     } finally { pending.delete(id) }
@@ -619,7 +650,9 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
   }
   function releaseChild(childId) { children.delete(childId) }
   function dispose() { contexts.clear(); children.clear(); pending.clear(); activeOperations.clear(); syncOperations.clear(); syncQueues.clear(); workerAdmissions.clear(); contextListeners.clear() }
-  return { prepare, prepareReadOnly, recover, close, restore, sync, beginSync, endSync, verifyWorktree, get, record, changeRecord, onContextChange, isRestoring, hasActiveOperation, hasSyncOperation, canRetireWorkers, beginWorkerAdmission, endWorkerAdmission, beginOperation, startRunner, endOperation, reserveRestore, releaseRestore, bindChild, child, devspaceBinding, recordBridgeRequest, releaseChild, dispose }
+  return { readLedger: id => registry.readLedger(id),
+    changeLedger: (id, fn) => registry.changeLedger(id, fn),
+    prepare, prepareReadOnly, recover, close, restore, sync, beginSync, endSync, verifyWorktree, get, record, changeRecord, onContextChange, isRestoring, hasActiveOperation, hasSyncOperation, canRetireWorkers, beginWorkerAdmission, endWorkerAdmission, beginOperation, startRunner, endOperation, reserveRestore, releaseRestore, bindChild, child, devspaceBinding, recordBridgeRequest, releaseChild, dispose }
 }
 
 // Both entrypoints use one facade. Initialization is awaited before Git/child actions;

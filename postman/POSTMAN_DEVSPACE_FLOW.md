@@ -1,52 +1,51 @@
-# PostmanDevspace: этапы 2–4 — связь, инженерное исполнение, восстановление
+# Универсальный PostmanDevspace — текущий технический контракт
 
-## Отличие от этапа 1
+Статус: **ветка реализации; новые три линии/универсальные inputs ещё не прошли живой GUI-приёмки и не установлены в DSH**. Канонический источник способностей: [POSTMAN_DEVSPACE_CAPABILITIES.md](POSTMAN_DEVSPACE_CAPABILITIES.md). Порядок работ и соразмерность: [TASK_CONTRACT](../docs/workflow/TASK_CONTRACT.md).
 
-Авторизованный Leader создаёт отдельную сохраняемую Luna (DSH subagents.startContinuable).
-В своём task context она имеет один childId и историю последовательных REQ.
-Пользовательские поручения адресуются исключительно через Host-owned postman_bridge.
-Host запускает Direct, ведёт browser/CDP и читает принадлежащий запросу local bell.
-Между обращениями Luna не обязана держать активный model turn; следующий REQ
-отправляется в сохранённый ChatGPT conversationRef через штатный existing-chat Send.
+## 1. Один основной маршрут, три независимые линии
 
-## Полномочия и события
+```text
+Leader ─── Secretary (web/files, private milestone ledger)
+  ├─ laneId A → Luna A → ChatGPT A + DevSpace → REQ A → bell/text A → READY A
+  ├─ laneId B → Luna B → ChatGPT B + DevSpace → REQ B → bell/text B → READY B
+  └─ laneId C → Luna C → ChatGPT C + DevSpace → REQ C → bell/text C → READY C
+```
 
-Coordinator followup к Luna не становится user message и не может вызвать
-postman_send_current_turn: общий CurrentUserTurnStore не меняется.
-Leader-only postman_devspace_control(action=steer|preempt|stop|status, bridge_job_id)
-связан с текущим REQ и частным каналом. Steer ждёт IDLE; preempt — явный
-Stop (до 10 секунд на реальное завершение), затем ровно одна попытка Send.
-Если есть активная DevSpace-операция или UI-доказательства противоречивы,
-Stop не нажимается, Host intent остаётся в очереди. Даже когда Stop не нужен
-(чат уже IDLE), перед Send записывается durable UNKNOWN intent, запрещающий
-повтор после сбоя. Stop браузера не доказывает остановку отдельной DevSpace Bash-команды.
-QUEUED означает только принятое намерение. Отдельные sendState и stopState
-позволяют различать SENT_CONFIRMED, SEND_UNKNOWN, PROVEN_NOT_SENT и Stop UI evidence.
-Угроза двойного Send после UNKNOWN запрещает любой слепой повтор. Даже если первоначальный браузерный Send остался `UNKNOWN`, Host сначала ждёт private bell, затем только после доказательства exact conversation URL и immutable `POSTMAN_REQUEST_ID` в том же user turn может обработать **отдельный** Host-authorized controlId. Без proof — только ожидание bell. Завершённый ответ того же строго привязанного assistant turn допускается как `text_fallback` после короткого bell-first grace, никогда как DONE/PASS.
+- `postman_bridge({message:'@PostmanDevspace ...'})` выбирает свободную линию. `POSTMAN_BRIDGE_ACCEPTED` включает `bridgeJobId` и `laneId`. `lane_id` требуется только для адресного продолжения прежней Luna/ChatGPT-беседы.
+- До трёх одновременных DevSpace REQ на одного Leader; четвёртый получает `POSTMAN_DEVSPACE_CAPACITY_REACHED` **до браузерного Send**. Legacy Bridge использует отдельные три слота. Одна линия сохраняет только один активный REQ, другая не блокируется её `UNKNOWN`.
+- У каждой линии свой exact owner/childId/REQ/conversationRef, приватный binding, control queue и местный bell. Coordinator `followup` не является новым user turn и не даёт модели возможности самостоятельно вызвать `postman_send_current_turn`.
+- Пересекающиеся writable folders/одна рабочая Git-ветка сериализованы; чтение и независимые папки параллельны. При неоднозначности — честный BUSY, не новая другая область.
 
-15-минутные напоминания разделяют с control один браузерный цикл;
-подтверждённый bell отменяет дальнейшие действия. Отсутствие необязательного
-result.md не препятствует передаче сведений о REQ. Поздний связанный bell
-может повысить уже доставленный text fallback без нового REQ.
+## 2. Доступ и рабочие области
 
-После окончания работы Leader вызывает postman_devspace_luna_close;
-лишь затем безопасно закрывает task context. Старый Bridge artifact/Ask/Image
-остаётся одноразовым и использует свои неизменённые инструменты.
+По умолчанию разрешены обычные реально доступные инструменты ChatGPT, включая веб-поиск, DevSpace Bash и работу с документами, **в пределах назначения**. Host не обещает capability, которого нет в текущем ChatGPT.
 
-## Этап 4: восстановление после рестарта Host
+- Без prepared task context `@PostmanDevspace` создаёт branchless Host read/private-output binding **без Git push/worktree**. `WRITE_TEST` — совместимое название частной папки результата; `READ_ONLY` — явно выбранное ограничение, `WRITE_ISOLATED` — task worktree для изменения исходников.
+- Для `dsh-workspace` source edits нужен обычный `postman_task_prepare()` со стабильной проверенной базой `origin/main` и отдельным worktree согласно `REPO_POLICY.md`. Worktree не создаётся для веб-исследования или частного результата.
+- Для внешней папки Leader явно задаёт существующий canonical `workspace_root` и `workspace_access:read|write` для конкретного REQ. Host отвергает symlinks/junctions и write grant, пересекающий постоянный репозиторий. Никакого расширения доступа из prose ChatGPT. **DevSpace shell сам по себе не файловая песочница**: если требуются жёсткие ОС-ограничения, нужен enforceable sandbox, которого эта ветка не добавляет.
+- Computer Use по умолчанию выключен для исполнителя. `computer_use_target` сейчас возвращает `COMPUTER_USE_TARGET_ENFORCEMENT_UNAVAILABLE`: нет доказанного target-scoped CU connector. Модель никогда не должна управлять через CU/GUI ChatGPT, DeepSeek Harness, Codex или саморазмножать агентов. Trusted Playwright Host Postman обслуживает только transport, не является CU исполнителя.
 
-Если у Leader сохранено незавершённое обращение и появился настоящий местный bell, после перезапуска Host **не пересылает** ChatGPT исходный prompt. `postman_task_prepare` перепривязывает прежний Leader task context; Host сверяет owner/job/REQ/channel, подтверждает bell и существование той же продолжаемой Luna. Durable `coldBellRecovery=intent` записывается до native `followup`. Только после принятия события той же Luna возможно повышение pending/unknown в trusted terminal. Затем `POSTMAN_BRIDGE_READY` доставляется Leader с отдельным durable `coldReadyWake` и доступным `postman_bridge_status`. Повторный restart/status/prepare не вызывает новый REQ и не создаёт второй успех.
+## 3. Файлы, исследование, изображения
 
-Если native followup недоказан, сохраняется `OUTCOME_UNKNOWN` и исходное событие. Нет автоматического повтора, обхода Luna или фальшивого DONE. После crash при неопределённом исходе Host оставляет intent на расследование, а не повторяет side effect. Уведомление исходного Leader запускается только после его перепривязки: при недоступной старой сессии Leader событие не передаётся чужому получателю.
+- Leader использует `postman_input_files` и exact `--input-files-json <JSON>`. Host по закреплённым descriptors создает native image attachment либо безопасный ZIP входных файлов, передаёт в тот же ChatGPT. Это **транспорт входов**, не обязательный ZIP-результат. Ручные загрузки в ChatGPT не требуются. Не отправлять файлы в GitHub из-за транспорта без явного разрешения.
+- Обязанность ChatGPT — решить задачу фактически доступными Web/DevSpace/tools, не имитировать MCP. Привязка к исходному REQ — immutable `POSTMAN_REQUEST_ID`. При SEND_UNKNOWN исходный Send нельзя повторять.
+- Настоящий GPT Image output пока имеет отдельный недостающий путь сохранения через Host; native image **input** ещё не доказывает image **result**. Legacy `@PostmanImage` остаётся резервом до доказанной универсальной image-приёмки; `@Postman` и `@PostmanAsk` также сохранены.
+- Git публикация/merge/preview запрещены лишь до отдельного предусмотренного разрешения; внешний ChatGPT не получает право GitHub writes от наличия Bash/credentials.
 
-## Этап 3: рабочие области и инженерный результат
+## 4. Управление и доказательства
 
-`postman_task_prepare({read_only:true})` готовит Host-owned Leader context по проверенному repository identity **без** Git fetch, временной ветки и push. Такой контекст допускает только `@PostmanDevspace READ_ONLY`; legacy Bridge, Worker и restore отключены. Обычный `postman_task_prepare()` сохраняет старую безопасную ветку от `origin/main`. Режим `WRITE_ISOLATED` разрешён лишь по exact prepared worktree с проверкой чистоты перед первым внешним edit. Входные ограничения Host не означают техническую песочницу DevSpace shell: запрещены любые записи вне scope и самовольный Git publish; любой PR публикует отдельно уполномоченный местный Worker. Повторное задание может продолжить в dirty worktree по собственному зарегистрированному owner, не делать post-ZIP sync. Текущие возможности и отрицательные факты — в [карте](POSTMAN_DEVSPACE_CAPABILITIES.md). `WRITE_APPROVED_TARGET` пока требует отдельного утверждённого Host grant, поэтому не включён.
+- `postman_devspace_control({bridge_job_id,action:'steer'|'preempt'|'stop'|'status',...})` адресует точный REQ и приватный канал. `QUEUED` лишь намерение, не Send/Stop proof. Browser Stop допускается только при безопасном состоянии генерации, не при активном или неизвестном DevSpace tool.
+- One-shot `controlId` ведётся до браузерного изменения; `SENT_CONFIRMED`, `SEND_UNKNOWN`, `STOP_UI_PROVEN` различаются. Никакого blind resend. Белл выигрывает у reminder, stop, неполного JSON/текста. Примерно 15/30/45 минут — действующая политика напоминаний для DevSpace.
+- `POSTMAN_BRIDGE_READY` сообщает, что доступен результат **своего** `postman_bridge_status({bridge_job_id})`. `DONE_REPORTED` ≠ `DELIVERED` ≠ `VERIFIED` ≠ `ACCEPTED`. Чатовый текст без bell передаётся как `text_fallback` (не инженерный PASS).
+- Late bell/restart: Host связывает saved Leader/lane/REQ/childId, записывает durable delivery intent до попытки native Luna followup. Не доставлять чужой bell, не повторять ChatGPT запрос после рестарта. `OUTCOME_UNKNOWN` хранит доказательства до следующего точного решения.
+- Закрытие `postman_devspace_luna_close({lane_id?})` разрешено только idle-линиям. Без lane_id закрывает все уже settled idle линии; после этого Leader безопасно закрывает task context.
 
-## Границы приёмки
+## 5. Secretary и процесс
 
-Локальный unit PASS не доказывает возможности ChatGPT Web/DevSpace.
-Требуется живой тест через DSH 4173: два REQ одной Luna, один conversation,
-bell-first, text fallback, urgent/Stop с честными статусами и проверкой
-родительской привязки. Действующий режим только READ_ONLY/WRITE_TEST;
-исходники worktree менять пока нельзя; это отдельный этап 3.
+Secretary собирает локальные и свежие веб-факты (`web_search`/`web_fetch`) и ведёт одну короткую Host-private запись `postman_secretary_ledger`. Ledger читается до Git prepare и переживает compact; не создаёт Markdown, branch или worktree. Leader принимает решения, не ведёт хронику своим дорогим контекстом. Worker — краткая механика и разрешённая Git-публикация, Sol — резерв при конкретном DevSpace blocker. Legacy маршруты — только по выбору Leader, не автоматический повтор после `SEND_UNKNOWN`.
+
+## 6. Приёмка и диагностика
+
+Unit PASS не является GUI PASS. Перед установкой проверить 3 одновременные линии/4-й отказ, continuation, input grants, external root отказ/разрешение, CU target rejection, private ledger cold reload и старые Bridge/Ask/Image/Worker регрессии. После безопасной установки — live DSH 4173: три REQ/Chats, bell+text, same-lane continuation, scope, настоящий image result, recovery и Secretary web/compact.
+
+**Производственная установка и `preview` не обновляются публикацией PR.** Squash в main — отдельное решение по `REPO_POLICY.md`, stable preview — отдельный человеческий GO.

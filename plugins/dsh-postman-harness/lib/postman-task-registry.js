@@ -74,11 +74,22 @@ export const POSTMAN_TASK_DOMAIN = defineDomain({
       requestIds: z.array(z.string()).optional(),
       conversationRef: z.string().nullable().optional(),
     }).strict().optional(),
+    // Optional on-disk lanes. Historical single devspaceLuna remains valid and
+    // is adopted as lane "legacy" on the first new Devspace admission only.
+    devspaceLanes: z.record(z.string(), z.object({
+      childId: z.string().min(1).optional(),
+      state: z.enum(['reserved', 'intent', 'ready', 'uncertain', 'closing', 'closed']),
+      activeBridgeJobId: z.string().nullable().optional(),
+      requestIds: z.array(z.string()).optional(),
+      conversationRef: z.string().nullable().optional(),
+    }).strict()).optional(),
     bridgeOperations: z.record(z.string(), z.object({
       state: z.enum(['pending', 'unknown', 'received']),
       phase: z.enum(['reserved', 'child-known', 'request-known', 'publication-known', 'terminal', 'not-sent', 'synchronized']).optional(),
       transportKind: z.enum(['artifact', 'text', 'image', 'devspace']).optional(),
-      devspace: z.object({ mode: z.enum(['READ_ONLY', 'WRITE_TEST', 'WRITE_ISOLATED']), channel: z.string().optional(),
+      devspace: z.object({ mode: z.enum(['READ_ONLY', 'WRITE_TEST', 'WRITE_ISOLATED', 'WRITE_APPROVED_TARGET']), channel: z.string().optional(),
+        laneId: z.string().optional(), approvedRoot: z.string().optional(),
+        approvedAccess: z.enum(['read', 'write']).optional(),
         coldBellRecovery: z.enum(['intent']).optional(),
         coldReadyWake: z.enum(['intent', 'sent', 'unknown']).optional(),
         lateBellRecovery: z.enum(['intent']).optional() }).strict().optional(),
@@ -91,7 +102,14 @@ export const POSTMAN_TASK_DOMAIN = defineDomain({
       grantDiagnostic: z.string().optional(),
       cancellationRequested: z.boolean().optional(),
     })).optional(),
-  }).strict())) },
+  }).strict())),
+    // Same private ledger contract, independently addressable before any Git
+    // task context is prepared. No repository document or new workspace.
+    ledgers: domainTable(z.object({
+      revision: z.number().int().nonnegative(), content: z.string(),
+      updatedBy: z.string(),
+    }).strict()),
+  },
 })
 
 // Both Cordis entrypoints share this one ready promise. The owner closes the
@@ -119,6 +137,8 @@ export async function openPostmanTaskRegistry(storageDomain) {
   const domain = await storageDomain.open(POSTMAN_TASK_DOMAIN)
   try {
     const table = domain.table('leaders')
+    const ledgerTable = domain.table('ledgers')
+    const blankLedger = () => ({ revision: 0, content: '', updatedBy: '' })
     // DomainFacility has no migration hook: open v1 once with a compatible schema,
     // then durably normalize each row before exposing the registry to callers.
     for (const [id, row] of table.entries()) {
@@ -136,6 +156,13 @@ export async function openPostmanTaskRegistry(storageDomain) {
     return {
       get: id => table.get(id) ?? null,
       entries: () => [...table.entries()],
+      readLedger: id => ledgerTable.get(id) ?? table.get(id)?.secretaryLedger ?? blankLedger(),
+      async changeLedger(id, fn) {
+        if (typeof id !== 'string' || !id) throw Error('POSTMAN_SECRETARY_LEDGER_OWNER_INVALID')
+        if (ledgerTable.get(id)) return ledgerTable.update(id, fn)
+        // Retain old leader-row journal once, including its original revision.
+        return ledgerTable.put(id, fn(table.get(id)?.secretaryLedger ?? blankLedger()))
+      },
       async create(id, record) {
         if ((table.get(id) && table.get(id).stage !== 'closed') || creating.has(id)) throw new Error('POSTMAN_TASK_BINDING_EXISTS')
         creating.add(id)
@@ -169,10 +196,17 @@ export async function openPostmanTaskRegistry(storageDomain) {
 // Explicitly injected in unit tests only. The production plugin never uses this
 // implementation or silently falls back to it after an unavailable backend.
 export function createMemoryTaskRegistry() {
-  const records = new Map()
+  const records = new Map(), ledgers = new Map()
+  const blankLedger = () => ({ revision: 0, content: '', updatedBy: '' })
   return {
     get: id => records.get(id) ?? null,
     entries: () => [...records.entries()],
+    readLedger: id => ledgers.get(id) ?? records.get(id)?.secretaryLedger ?? blankLedger(),
+    async changeLedger(id, fn) {
+      const next = fn(this.readLedger(id))
+      ledgers.set(id, next)
+      return next
+    },
     async create(id, record) {
       const previous = records.get(id)
       if (previous && previous.stage !== 'closed') throw new Error('POSTMAN_TASK_BINDING_EXISTS')

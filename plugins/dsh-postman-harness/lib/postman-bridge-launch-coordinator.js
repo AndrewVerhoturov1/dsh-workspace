@@ -86,6 +86,9 @@ export function createPostmanBridgeLaunchCoordinator({
   }
 
   return {
+    // Devspace gets its own three lifecycle slots, independent of the three
+    // legacy Bridge jobs, reusing the same launch spacing and abort semantics.
+    fork() { return createPostmanBridgeLaunchCoordinator({ now, random, setTimer, clearTimer }) },
     get activeCount() { return activeCount },
     run(signal, launch) {
       if (typeof launch !== 'function') return Promise.reject(new Error('POSTMAN_BRIDGE_LAUNCH_REQUIRED'))

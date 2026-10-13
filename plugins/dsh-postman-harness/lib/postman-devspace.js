@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { mkdirSync, writeFileSync, readFileSync, readdirSync, lstatSync, realpathSync, renameSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve, relative, isAbsolute } from 'node:path'
@@ -10,16 +10,17 @@ export function devspaceRoot() {
 
 export function createDevspaceChannel({ root = devspaceRoot(), bridgeJobId, leaderSessionId, lunaSessionId, requestId, worktree, mode, sourceRoot, conversationUrl }) {
   if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(bridgeJobId ?? '') || !/^REQ_\d{8}T\d{6}Z_\d{4}$/.test(requestId ?? '') ||
-      !leaderSessionId || !lunaSessionId || !['READ_ONLY', 'WRITE_TEST', 'WRITE_ISOLATED'].includes(mode) ||
+      !leaderSessionId || !lunaSessionId || !['READ_ONLY', 'WRITE_TEST', 'WRITE_ISOLATED', 'WRITE_APPROVED_TARGET'].includes(mode) ||
       (conversationUrl !== undefined && !/^https:\/\/chatgpt\.com\/c\/[a-zA-Z0-9-]+$/.test(conversationUrl))) throw Error('POSTMAN_DEVSPACE_BINDING_INVALID')
   const channel = join(root, bridgeJobId)
   mkdirSync(channel, { recursive: true })
   if (realpathSync(channel) !== resolve(channel)) throw Error('POSTMAN_DEVSPACE_CHANNEL_REDIRECTED')
   const workspaceRef = realpathSync(worktree)
-  if (mode === 'WRITE_ISOLATED' && workspaceRef !== resolve(worktree))
+  if (['WRITE_ISOLATED', 'WRITE_APPROVED_TARGET'].includes(mode) &&
+      workspaceRef !== resolve(worktree))
     throw Error('POSTMAN_DEVSPACE_WORKTREE_REDIRECTED')
   const writeRoot = mode === 'WRITE_TEST' ? join(channel, 'workspace') :
-    mode === 'WRITE_ISOLATED' ? workspaceRef : null
+    ['WRITE_ISOLATED', 'WRITE_APPROVED_TARGET'].includes(mode) ? workspaceRef : null
   if (mode === 'WRITE_TEST') mkdirSync(writeRoot)
   const binding = Object.freeze({ version: 1, jobId: bridgeJobId, requestId, leaderSessionId, lunaSessionId,
     channel, capability: randomBytes(32).toString('hex'), mode, workspaceRef, writeRoot,
@@ -128,17 +129,51 @@ export function devspaceTerminal(binding, observed = {}) {
     const diff = relative(allowed, target)
     if (diff === '..' || diff.startsWith('..' + (process.platform === 'win32' ? '\\' : '/')) || isAbsolute(diff)) reportRef = null
   }
-  if (!event && observed.source !== 'transport_diagnostic' && observed.source !== 'text_fallback') throw Error('POSTMAN_DEVSPACE_EVENT_MISSING')
+  // No external stdout can name an arbitrary image path. The exact file
+  // must belong to this private job channel, with stable hash/format/size.
+  let image = null
+  if (!event && observed.source === 'image_result') {
+    const extension = observed.imageFormat
+    const expected = 'POSTMAN_IMAGE_' + binding.requestId + '.' + extension
+    const format = { png: 'image/png', jpg: 'image/jpeg', webp: 'image/webp' }[extension]
+    const filename = join(binding.channel, expected)
+    if (!format || observed.resultImage !== filename ||
+        observed.imageMimeType !== format ||
+        !/^[0-9a-f]{64}$/.test(observed.imageSha256 ?? '') ||
+        !Number.isSafeInteger(observed.imageByteLength) ||
+        observed.imageByteLength < 1 || observed.imageByteLength > 48 * 1024 * 1024 ||
+        !Number.isSafeInteger(observed.imageWidth) || observed.imageWidth < 64 ||
+        !Number.isSafeInteger(observed.imageHeight) || observed.imageHeight < 64 ||
+        lstatSync(filename).isSymbolicLink() || !lstatSync(filename).isFile() ||
+        realpathSync(filename) !== filename)
+      throw Error('POSTMAN_DEVSPACE_IMAGE_PROOF_INVALID')
+    const bytes = readFileSync(filename)
+    const signature = extension === 'png'
+      ? bytes.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))
+      : extension === 'jpg' ? bytes.subarray(0, 3).equals(Buffer.from('ffd8ff', 'hex'))
+        : bytes.subarray(0, 4).equals(Buffer.from('RIFF')) &&
+          bytes.subarray(8, 12).equals(Buffer.from('WEBP'))
+    if (!signature || bytes.length !== observed.imageByteLength ||
+        createHash('sha256').update(bytes).digest('hex') !== observed.imageSha256)
+      throw Error('POSTMAN_DEVSPACE_IMAGE_PROOF_INVALID')
+    image = { resultImage: filename, imageFormat: extension,
+      imageSha256: observed.imageSha256, imageByteLength: bytes.length,
+      imageWidth: observed.imageWidth, imageHeight: observed.imageHeight,
+      imageMimeType: observed.imageMimeType }
+  }
+  if (!event && !image && observed.source !== 'transport_diagnostic' && observed.source !== 'text_fallback')
+    throw Error('POSTMAN_DEVSPACE_EVENT_MISSING')
   const source = event ? 'bell' : observed.source
-  const code = event ? 'DEVSPACE_SIGNAL_RECEIVED' : 'DEVSPACE_DIAGNOSTIC'
+  const code = event ? 'DEVSPACE_SIGNAL_RECEIVED' :
+    image ? 'DEVSPACE_IMAGE_RESULT_DURABLE' : 'DEVSPACE_DIAGNOSTIC'
   return { ok: true, code, state: code, jobId: binding.jobId, requestId: binding.requestId,
     leaderSessionId: binding.leaderSessionId, lunaSessionId: binding.lunaSessionId,
-    source, reportedOutcome: event?.reportedOutcome ?? (observed.diagnostic === 'PARTIAL' ? 'PARTIAL' : observed.source === 'text_fallback' ? 'UNKNOWN' : 'BLOCKED'), deliveryState: 'DELIVERED',
-    evidenceState: 'REPORTED_NOT_VERIFIED', workspaceRef: binding.workspaceRef, writeRoot: binding.writeRoot,
+    source, reportedOutcome: event?.reportedOutcome ?? (observed.diagnostic === 'PARTIAL' ? 'PARTIAL' : (observed.source === 'text_fallback' || image ? 'UNKNOWN' : 'BLOCKED')), deliveryState: 'DELIVERED',
+    evidenceState: image ? 'BROWSER_VERIFIED_IMAGE' : 'REPORTED_NOT_VERIFIED', ...image, workspaceRef: binding.workspaceRef, writeRoot: binding.writeRoot,
     reportRef, message: event?.message ?? (typeof observed.message === 'string' ? observed.message : ''),
     transportDiagnostics: observed.transportDiagnostics ?? null,
     assistantText: typeof observed.assistantText === 'string' ? observed.assistantText : '',
     conversationRef: typeof observed.conversationRef === 'string' && /^https:\/\/chatgpt\.com\/c\/[a-zA-Z0-9-]+$/.test(observed.conversationRef) ? observed.conversationRef : null,
     diagnostic: event ? null : ['CAPABILITY_UNAVAILABLE', 'BLOCKED', 'PARTIAL', 'UNKNOWN'].includes(observed.diagnostic) ? observed.diagnostic : 'UNKNOWN',
-    warnings: event ? ['REPORT_UNVERIFIED', ...(!reportRef || !existsReport(reportRef) ? ['REPORT_UNAVAILABLE'] : [])] : ['NO_LOCAL_SIGNAL'] }
+    warnings: event ? ['REPORT_UNVERIFIED', ...(!reportRef || !existsReport(reportRef) ? ['REPORT_UNAVAILABLE'] : [])] : image ? [] : ['NO_LOCAL_SIGNAL'] }
 }

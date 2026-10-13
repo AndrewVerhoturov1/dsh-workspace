@@ -62,7 +62,7 @@ _STATE_ORDER = (
     'DEVSPACE_SIGNAL_RECEIVED',
     'DEVSPACE_DIAGNOSTIC',
 )
-_TERMINAL_SUCCESS_CODES = {RESULT_DURABLE, ASSISTANT_COMPLETED_NO_ARTIFACT, ARTIFACT_REJECTED, 'DEVSPACE_SIGNAL_RECEIVED', 'DEVSPACE_DIAGNOSTIC'}
+_TERMINAL_SUCCESS_CODES = {RESULT_DURABLE, ASSISTANT_COMPLETED_NO_ARTIFACT, ARTIFACT_REJECTED, 'DEVSPACE_SIGNAL_RECEIVED', 'DEVSPACE_DIAGNOSTIC', 'DEVSPACE_IMAGE_RESULT_DURABLE'}
 _FATAL_ARTIFACT_CODES = {
     artifact_detector.ARTIFACT_INVALID_CONFIG,
     artifact_detector.ARTIFACT_OBSERVER_PROOF_INVALID,
@@ -373,7 +373,7 @@ class WebWorkerBridge:
         image_stage = image_prepare is not None
         image_flow = image_stage or image_recovery_proof is not None
         if devspace_binding is not None:
-            if (image_flow or artifact_mode or input_attachment is not None or
+            if (image_flow or artifact_mode or
                     expected_request.get('transportKind') != 'devspace' or devspace_binding.get('requestId') != request_id or
                     (conversation_url is not None and (conversation_url != devspace_binding.get('conversationUrl') or
                         not browser_submit.is_bound_chat_url(conversation_url)))):

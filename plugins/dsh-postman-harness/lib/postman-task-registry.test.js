@@ -129,3 +129,43 @@ test('JSON reopen retains independent Worker lifecycle and Bridge/runner fields'
   await reopened.close(); await backend.close()
 })
 
+
+test('Secretary ledger exists before Git task, persists through cold reopen without branch', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'postman-ledger-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const backend = new JsonStorageBackend(root)
+  const facility = new DomainFacility({ storage: { backend: { get: () => backend } }, emit() {} },
+    { backend: 'json', routes: {} })
+  const first = await openPostmanTaskRegistry(facility)
+  assert.equal(first.get('leader'), null)
+  assert.deepEqual(first.readLedger('leader'), { revision: 0, content: '', updatedBy: '' })
+  await first.changeLedger('leader', old => ({
+    revision: old.revision + 1, content: 'Goal: verify DevSpace', updatedBy: 'secretary'
+  }))
+  assert.equal(first.get('leader'), null)
+  await first.close()
+  const next = await openPostmanTaskRegistry(facility)
+  assert.deepEqual(next.readLedger('leader'),
+    { revision: 1, content: 'Goal: verify DevSpace', updatedBy: 'secretary' })
+  assert.equal(next.get('leader'), null)
+  await next.close()
+  await backend.close()
+})
+
+test('Secretary ledger retains historical Leader-row revision on first update', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'postman-legacy-ledger-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const backend = new JsonStorageBackend(root)
+  const facility = new DomainFacility({ storage: { backend: { get: () => backend } }, emit() {} },
+    { backend: 'json', routes: {} })
+  const registry = await openPostmanTaskRegistry(facility)
+  await registry.create('leader', { ...record, secretaryLedger: {
+    revision: 6, content: 'Existing milestones', updatedBy: 'old-secretary' } })
+  assert.equal(registry.readLedger('leader').revision, 6)
+  await registry.changeLedger('leader', old => ({
+    revision: old.revision + 1, content: old.content + '; new result', updatedBy: 'secretary' }))
+  assert.equal(registry.readLedger('leader').revision, 7)
+  assert.equal(registry.readLedger('leader').content, 'Existing milestones; new result')
+  await registry.close()
+  await backend.close()
+})

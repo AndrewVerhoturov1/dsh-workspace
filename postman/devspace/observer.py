@@ -5,7 +5,7 @@ import browser_recovery as recovery
 import browser_submit as submit
 import reminder_policy
 import transport_control
-from postman.devspace import controls
+from postman.devspace import controls, image_output
 from postman.devspace.signal import read_event
 
 DEFAULT_CHECK_INTERVAL_MS = 15 * 60 * 1000
@@ -77,6 +77,9 @@ def wait_for_bell_after_unknown_send(binding, *, timeout_ms, sleep, monotonic,
                 correlated = False
 
             if correlated:
+                image = image_output.observe_owned_image(page, current_prompt, conversation_ref, binding)
+                if image:
+                    return image
                 if controls_allowed:
                     try:
                         action = controls.process_one(page, current_prompt, conversation_ref, binding,
@@ -270,6 +273,11 @@ def wait_for_signal(page, prompt, chat_url, binding, *, timeout_ms, interval_ms,
             return finish(received)
         if observed.get("code") == "DEVSPACE_SIGNAL_RECEIVED":
             return finish(observed)
+        # The same observer may see one generated image instead of a text
+        # response. Never claim GPT Image from an unrelated assistant/gallery.
+        image = image_output.observe_owned_image(page, latest, chat_url, binding)
+        if image:
+            return finish(image)
         text = observed.get("details", {}).get("assistantText", "")
         if text:
             latest_text = text

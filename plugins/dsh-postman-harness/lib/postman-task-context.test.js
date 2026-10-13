@@ -92,6 +92,52 @@ test('read-only Devspace recovery remains branchless and never mutates Git', asy
     assert.ok(!['fetch','push','worktree','reset','clean','checkout'].includes(item.args[0]),item.args)
 })
 
+test('same Leader promotes branchless research into isolated task tree only on demand', async () => {
+  const {contexts, registry, calls}=fixture()
+  const parent=leader('research-to-code')
+  const readonly=await contexts.prepareReadOnly(parent)
+  assert.equal(readonly.status,'POSTMAN_TASK_READ_ONLY_READY')
+  await registry.changeLedger(parent.id, previous => ({
+    revision:previous.revision+1, content:'Goal: investigate; decision: make bounded fix',
+    updatedBy:'secretary' }))
+  await registry.change(parent.id, row => ({...row,
+    devspaceLanes:{'previous-lane': {childId:'same-luna',state:'ready',
+      activeBridgeJobId:null,requestIds:['REQ_20261013T100000Z_0001'],
+      conversationRef:'https://chatgpt.com/c/research-to-code'}},
+    bridgeOperations:{'previous-job': {state:'received',transportKind:'devspace',
+      synchronization:'not-required',devspace:{mode:'READ_ONLY',
+      laneId:'previous-lane'}}}
+  }))
+  assert.equal(calls.some(c=>['fetch','push','worktree'].includes(c.args[0])),false)
+  const prepared=await contexts.prepare(parent)
+  assert.equal(prepared.status,'TASK_CONTEXT_READY',JSON.stringify(prepared))
+  assert.notEqual(prepared.worktree,readonly.worktree)
+  assert.match(prepared.branch,POSTMAN_TASK_BRANCH_PATTERN)
+  assert.equal(registry.get(parent.id).devspaceReadOnly,false)
+  assert.equal(registry.get(parent.id).devspaceLanes['previous-lane'].childId,'same-luna')
+  assert.equal(registry.get(parent.id).bridgeOperations['previous-job'].state,'received')
+  assert.equal(registry.readLedger(parent.id).revision,1)
+  assert.match(registry.readLedger(parent.id).content,/Goal: investigate/)
+  assert.equal(invoked(calls,'push','origin',base+':refs/heads/'+prepared.branch),true)
+  assert.equal((await contexts.prepare(parent)).status,'POSTMAN_TASK_CONTEXT_ALREADY_READY')
+})
+
+test('branchless promotion refuses pending Devspace REQ without new Git mutations', async () => {
+  const {contexts,registry,calls}=fixture()
+  const parent=leader('pending-research')
+  assert.equal((await contexts.prepareReadOnly(parent)).status,'POSTMAN_TASK_READ_ONLY_READY')
+  await registry.change(parent.id,row=>({...row,bridgeOperations:{
+    'pending-job':{state:'pending',transportKind:'devspace',
+      devspace:{mode:'READ_ONLY',laneId:'pending-lane'}}
+  },devspaceLanes:{'pending-lane':{state:'ready',childId:'active-luna',
+    activeBridgeJobId:'pending-job'}}}))
+  const before=calls.length
+  assert.equal((await contexts.prepare(parent)).status,'POSTMAN_TASK_PROMOTION_BUSY')
+  assert.equal(calls.length,before)
+  assert.equal(registry.get(parent.id).stage,'ready')
+  assert.equal(registry.get(parent.id).devspaceReadOnly,true)
+})
+
 test('prepare pins exact fetched origin/main when preview has a different SHA', async () => {
   const { contexts, calls, state } = fixture()
   assert.notEqual(state.base, state.preview)

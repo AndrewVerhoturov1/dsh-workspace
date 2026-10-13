@@ -1,5 +1,7 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { z } from 'zod'
+import { lstatSync, realpathSync } from 'node:fs'
+import { isAbsolute, relative, resolve } from 'node:path'
 import { createPtcAdapter, SOL_WORKER_PROFILE } from './ptc-adapter.js'
 import { CurrentAttachmentStore, createPostmanInputFilesTool, postmanInputGrants } from './postman-input-files.js'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
@@ -36,7 +38,7 @@ function authorized(exec, ctx) {
   return postmanBridgeCallerAllowed(agent) && ctx.agents.get(agent.id) === agent
 }
 
-export function createPostmanTaskPrepareTool(ctx, contexts = postmanTaskContexts, { jobs } = {}) {
+export function createPostmanTaskPrepareTool(ctx, contexts = postmanTaskContexts, { jobs, worker } = {}) {
   return defineTool({
     name: POSTMAN_TASK_PREPARE_TOOL_NAME,
     description: 'Prepare one owned Leader task. Default: isolated Git task branch/worktree from origin/main. read_only=true: verified repository read context without Git fetch, push, branch or new worktree, usable only by @PostmanDevspace READ_ONLY.',
@@ -45,6 +47,9 @@ export function createPostmanTaskPrepareTool(ctx, contexts = postmanTaskContexts
       if (!authorized(exec, ctx)) return { status: 'POSTMAN_TASK_CALLER_REJECTED' }
       if (args?.read_only !== undefined && typeof args.read_only !== 'boolean')
         return { status: 'POSTMAN_TASK_ARGUMENTS_INVALID' }
+      if (args?.read_only !== true && contexts?.get?.(exec.agent.id)?.devspaceReadOnly &&
+          (jobs?.hasActive?.(exec.agent.id) || worker?.hasActiveWork?.(exec.agent)))
+        return { status: 'POSTMAN_TASK_PROMOTION_BUSY' }
       const prepared = await (args?.read_only === true ? contexts.prepareReadOnly(exec.agent) : contexts.prepare(exec.agent))
       if (!['TASK_CONTEXT_READY', 'POSTMAN_TASK_READ_ONLY_READY', 'POSTMAN_TASK_CONTEXT_ALREADY_READY'].includes(prepared?.status) ||
           typeof jobs?.recoverDevspacePending !== 'function') return prepared
@@ -101,10 +106,14 @@ export function createPostmanTaskRestoreTool(ctx, contexts = postmanTaskContexts
 export function createPostmanBridgeTool(ctx, jobs, contexts) {
   return defineTool({
     name: POSTMAN_BRIDGE_TOOL_NAME,
-    description: 'Accept an exact @Postman, @PostmanAsk, @PostmanImage or fresh stage-one @PostmanDevspace delegation in a background Bridge job. Devspace is one-shot READ_ONLY/default or private WRITE_TEST, local bell/diagnostics, no attachments/Git writes. Acceptance is not a Web result or engineering PASS; read the own Luna trusted terminal via postman_bridge_status after POSTMAN_BRIDGE_READY.',
+    description: 'Universal @PostmanDevspace is the default ChatGPT executor, with up to three independent persistent Luna/chat lanes per Leader. Legacy @Postman/Ask/Image remain available. Accepted is not completed; use POSTMAN_BRIDGE_READY then exact postman_bridge_status.',
     parameters: { message: { type: 'string', required: true,
       description: 'Complete model-authored delegation beginning with exact @Postman, @PostmanAsk, @PostmanImage or @PostmanDevspace.' },
-      devspace_mode: { type: 'string', enum: ['READ_ONLY', 'WRITE_TEST', 'WRITE_ISOLATED'], description: 'Devspace stage 1 only: read the prepared task area, optionally write only its Host-private harmless test folder. Defaults READ_ONLY.' } },
+      devspace_mode: { type: 'string', enum: ['READ_ONLY', 'WRITE_TEST', 'WRITE_ISOLATED'], description: 'Compatibility workspace scope only. READ_ONLY default. WRITE_ISOLATED uses an approved task worktree.' },
+      lane_id: { type: 'string', description: 'Optional exact returned Devspace laneId, to continue the same Luna and ChatGPT conversation. Omit for a free lane.' },
+      workspace_root: { type: 'string', description: 'Optional exact Leader-approved existing local folder. Explicit for every non-repository path.' },
+      workspace_access: { type: 'string', enum: ['read', 'write'], description: 'Read or write permission paired with workspace_root.' },
+      computer_use_target: { type: 'string', description: 'Reserved: explicit target application. Requires a Host-enforced Computer Use adapter.' } },
     output: output(),
     isConcurrencySafe: () => true,
     async execute(args, exec) {
@@ -115,15 +124,52 @@ export function createPostmanBridgeTool(ctx, jobs, contexts) {
       let parsed
       try { parsed = parsePostmanUserTurn(args?.message) }
       catch (error) { return { status: 'POSTMAN_BRIDGE_MESSAGE_REJECTED', diagnostic: String(error?.message ?? error) } }
-      if (parsed.transportKind === 'devspace' && (parsed.mode !== 'fresh' || parsed.inputFiles?.length ||
+      if (parsed.transportKind === 'devspace' && (parsed.mode !== 'fresh' ||
           args.devspace_mode !== undefined && !['READ_ONLY', 'WRITE_TEST', 'WRITE_ISOLATED'].includes(args.devspace_mode)))
         return { status: 'POSTMAN_BRIDGE_MESSAGE_REJECTED', diagnostic: 'POSTMAN_DEVSPACE_STAGE1_SCOPE' }
-      if (parsed.transportKind !== 'devspace' && args.devspace_mode !== undefined)
+      if (parsed.transportKind !== 'devspace' &&
+          (args.devspace_mode !== undefined || args.lane_id !== undefined ||
+           args.workspace_root !== undefined || args.workspace_access !== undefined ||
+           args.computer_use_target !== undefined))
         return { status: 'POSTMAN_BRIDGE_MESSAGE_REJECTED', diagnostic: 'POSTMAN_DEVSPACE_MODE_MISMATCH' }
-      if (contexts && !contexts.get(exec.agent.id)) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
+      if (contexts && !contexts.get(exec.agent.id)) {
+        if (parsed.transportKind !== 'devspace')
+          return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
+        // A universal Devspace read/file/image task needs only its Host owner;
+        // no Git fetch, branch or worktree is created automatically.
+        const prepared = await contexts.prepareReadOnly(exec.agent)
+        if (!['POSTMAN_TASK_READ_ONLY_READY', 'POSTMAN_TASK_CONTEXT_ALREADY_READY'].includes(prepared.status))
+          return prepared
+      }
+      // Opaque ChatGPT Computer Use has no Host-observable per-app navigation
+      // guard. An explicit Leader request does not make an unenforceable scope safe.
+      if (args.computer_use_target !== undefined)
+        return { status: 'COMPUTER_USE_TARGET_ENFORCEMENT_UNAVAILABLE' }
       const taskContext = contexts?.get(exec.agent.id)
+      if ((args.workspace_root === undefined) !== (args.workspace_access === undefined))
+        return { status: 'POSTMAN_DEVSPACE_SCOPE_INVALID' }
+      let approvedScope
+      if (args.workspace_root !== undefined) {
+        if (typeof args.workspace_root !== 'string' || !isAbsolute(args.workspace_root))
+          return { status: 'POSTMAN_DEVSPACE_SCOPE_INVALID' }
+        try {
+          const target = realpathSync(args.workspace_root)
+          if (target !== resolve(args.workspace_root) || !lstatSync(target).isDirectory() ||
+              lstatSync(target).isSymbolicLink()) throw Error('path_not_owned')
+          const repoRoot = resolve(taskContext?.repositoryPath ?? taskContext?.worktree ?? '')
+          const inside = relative(repoRoot, target), containsRepo = relative(target, repoRoot)
+          const overlapsRepo = (inside === '' || !inside.startsWith('..') && !isAbsolute(inside)) ||
+            (containsRepo === '' || !containsRepo.startsWith('..') && !isAbsolute(containsRepo))
+          if (args.workspace_access === 'write' && overlapsRepo)
+            return { status: 'POSTMAN_DEVSPACE_ISOLATED_CONTEXT_REQUIRED' }
+          approvedScope = { root: target, access: args.workspace_access }
+        } catch {
+          return { status: 'POSTMAN_DEVSPACE_SCOPE_INVALID' }
+        }
+      }
       if (taskContext?.devspaceReadOnly && (parsed.transportKind !== 'devspace' ||
-          args.devspace_mode !== undefined && args.devspace_mode !== 'READ_ONLY'))
+          args.devspace_mode !== undefined &&
+            !['READ_ONLY', 'WRITE_TEST'].includes(args.devspace_mode)))
         return { status: 'POSTMAN_DEVSPACE_READ_ONLY_SCOPE_REQUIRED' }
       if (parsed.inputFiles?.length && !postmanInputGrants.owns(exec.agent, contexts.get(exec.agent.id), parsed.inputFiles))
         return { status: 'POSTMAN_INPUT_PROVENANCE_REJECTED' }
@@ -132,7 +178,8 @@ export function createPostmanBridgeTool(ctx, jobs, contexts) {
       const inputBinding = parsed.inputFiles?.length
         ? postmanInputGrants.pin(exec.agent, contexts.get(exec.agent.id), parsed.inputFiles) : undefined
       try {
-        const result = await jobs.accept(exec.agent, args.message, parsed.transportKind, inputBinding, undefined, args.devspace_mode)
+        const result = await jobs.accept(exec.agent, args.message, parsed.transportKind, inputBinding,
+          undefined, args.devspace_mode, args.lane_id, approvedScope)
         if (result.status !== 'POSTMAN_BRIDGE_ACCEPTED') postmanInputGrants.unpin(inputBinding)
         return result
       } catch (error) { postmanInputGrants.unpin(inputBinding); throw error }
@@ -220,11 +267,11 @@ export function createPostmanDevspaceControlTool(ctx, jobs) {
 export function createPostmanDevspaceLunaCloseTool(ctx, jobs) {
   return defineTool({
     name: POSTMAN_DEVSPACE_LUNA_CLOSE_TOOL_NAME,
-    description: 'Explicitly close this Leader task persistent PostmanDevspace Luna after all its jobs settle. Never stops an active ChatGPT task or removes its files.',
-    parameters: {}, output: output(),
+    description: 'Close one exact idle Devspace lane or, without lane_id, all settled idle lines for this Leader. Never cancels an active ChatGPT task.',
+    parameters: { lane_id: { type: 'string', description: 'Optional exact laneId to close only that line.' } }, output: output(),
     async execute(_args, exec) {
       if (!authorized(exec, ctx)) return { status: 'POSTMAN_DEVSPACE_LUNA_CALLER_REJECTED' }
-      return jobs.devspaceLunaClose(exec.agent)
+      return jobs.devspaceLunaClose(exec.agent, _args?.lane_id)
     },
   })
 }
@@ -336,7 +383,7 @@ export async function apply(ctx, config = {}) {
   // Guard model-direct operations, not ordinary visibility: nested PTC calls carry the outer token.
   ctx.tools.guard(exec => postmanPtcDirectCallGuard(exec, id => ctx.agents.get(id), ownsPtcWorker))
   ctx.tools.register(ptc.tool)
-  ctx.tools.register(createPostmanTaskPrepareTool(ctx, contexts, { jobs }))
+  ctx.tools.register(createPostmanTaskPrepareTool(ctx, contexts, { jobs, worker }))
   ctx.tools.register(createPostmanTaskCloseTool(ctx, contexts, { jobs }))
   ctx.tools.register(createPostmanInputFilesTool(ctx, contexts, { currentAttachments,
     resolveAttachment: (ref, signal) => ctx.attachments.readImage(ref, signal) }))
