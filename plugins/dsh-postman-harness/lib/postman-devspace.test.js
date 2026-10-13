@@ -8,7 +8,8 @@ import { createHash } from 'node:crypto'
 import { createDevspaceChannel, devspaceTerminal, requestDevspaceControl, readDevspaceControls } from './postman-devspace.js'
 import { parsePostmanUserTurn, CurrentUserTurnStore, createDirectCurrentTurnToolConfigs, DirectPostmanJobManager } from './direct-current-turn.js'
 import { buildPostmanBridgeStartRequest } from './postman-bridge-core.js'
-import { createPostmanBridgeTool } from './postman-bridge.js'
+import { createPostmanBridgeTool, createPostmanTeamStatusTool } from './postman-bridge.js'
+import { createPostmanDevspaceLanes } from './postman-devspace-lanes.js'
 import { createPostmanBridgeJobs } from './postman-bridge-jobs.js'
 import { createPostmanBridgeLaunchCoordinator } from './postman-bridge-launch-coordinator.js'
 import { JsonStorageBackend } from '@deepseek-ai/dsh-storage-json'
@@ -290,6 +291,90 @@ test('Host-owned Devspace control intent keeps owner, preserves one exact ID and
   assert.throws(()=>requestDevspaceControl(binding,{kind:'steer',message:''}),/CONTROL_INVALID/)
 })
 
+test('Host team status is lossless JSON while three Luna lanes are only reserved', async () => {
+  // Admission persists reserved lanes before the native childId exists. The
+  // actual PTC ToolRuntime rejects undefined even though JSON.stringify omits it.
+  const row = { stage: 'ready', devspaceLanes: {
+    alpha: { state: 'reserved', activeBridgeJobId: 'job-A',
+      requestIds: [], conversationRef: null },
+    beta: { state: 'ready', childId: 'luna-B', activeBridgeJobId: 'job-B',
+      requestIds: ['REQ_20261013T000000Z_0002'], conversationRef: null },
+    gamma: { state: 'reserved', activeBridgeJobId: 'job-C',
+      requestIds: [], conversationRef: null },
+  } }
+  const ctx = { agents: { get: id => id === parent.id ? parent : null } }
+  const contexts = { record: () => row, get: () => ({ branch: 'main' }),
+    isRestoring: () => false, hasActiveOperation: () => false }
+  const lanes = createPostmanDevspaceLanes(ctx, contexts, {})
+  const jobs = { devspaceLunaSnapshot: owner => lanes.snapshot(owner),
+    teamSnapshot: () => ({ status: 'POSTMAN_BRIDGE_TEAM_SNAPSHOT',
+      used: 3, limit: 3, operations: [], truncated: false }) }
+  const worker = { teamSnapshot: () => ({ status: 'POSTMAN_TEAM_STATUS',
+    secretary: { present: false, sessionId: null, state: 'absent',
+      budget: null, ledgerRevision: 0 },
+    workers: { used: 0, limit: 2, rows: [] },
+    sol: { present: false, sessionId: null, state: 'absent',
+      ownedWorkers: { used: 0, limit: 2, states: {},
+        budget: { used: 0, soft: 0, hard: 0, exhausted: 0, unknown: 0 } } } }) }
+  const output = await createPostmanTeamStatusTool(ctx, contexts, worker, jobs)
+    .execute({}, { agent: parent })
+  assert.equal(output.status, 'POSTMAN_TEAM_STATUS')
+  assert.equal(output.devspaceLuna.lanes.length, 3)
+  assert.equal(output.devspaceLuna.lanes[0].lunaSessionId, null)
+  assert.equal(output.devspaceLuna.lanes[1].lunaSessionId, 'luna-B')
+  assert.equal(output.devspaceLuna.lanes[2].lunaSessionId, null)
+  assert.deepEqual(output, JSON.parse(JSON.stringify(output)),
+    'No undefined field can cross the Host PTC lossless JSON boundary')
+})
+
+test('failed pre-child reservations can be retired, never claiming a sent REQ', async () => {
+  const scope={branch:'main',devspaceReadOnly:true}
+  const leader={...parent}
+  const makeRow=()=>({bridgeOperations:Object.fromEntries(
+    ['a','b','c'].map(id=>['job-'+id,{
+      state:'unknown',phase:'reserved',transportKind:'devspace',
+      devspace:{mode:'READ_ONLY',laneId:id},
+    }])),
+    devspaceLanes:Object.fromEntries(['a','b','c'].map(id=>[id,{
+      state:'reserved',activeBridgeJobId:'job-'+id,
+      requestIds:[],conversationRef:null,
+    }]))})
+  let row=makeRow(), writes=0
+  const ctx={agents:{get:id=>id===leader.id?leader:null}}
+  const contexts={get:()=>scope,record:()=>row,
+    changeRecord:async(_id,update)=>{row=update(row);writes++}}
+  const lanes=createPostmanDevspaceLanes(ctx,contexts,{start:()=>assert.fail('no REQ or browser send')})
+  const result=await lanes.close(leader,scope)
+  assert.equal(result.status,'POSTMAN_DEVSPACE_LUNA_CLOSED')
+  assert.equal(writes,3)
+  for(const id of ['a','b','c']){
+    assert.equal(row.devspaceLanes[id].state,'closed')
+    assert.equal(row.devspaceLanes[id].activeBridgeJobId,null)
+    const op=row.bridgeOperations['job-'+id]
+    assert.equal(op.state,'received')
+    assert.equal(op.phase,'not-sent')
+    assert.equal(op.synchronization,'not-required')
+    assert.equal(op.cancellationRequested,true)
+    assert.equal(op.requestId,undefined)
+    assert.equal(op.childSessionId,undefined)
+    assert.equal(op.terminal,undefined)
+  }
+  assert.equal((await lanes.close(leader,scope)).status,'POSTMAN_DEVSPACE_LUNA_CLOSED')
+  // One in-flight or uncertain channel must block blanket cleanup atomically.
+  row=makeRow()
+  row.bridgeOperations['job-b'].requestId='REQ_20261013T000000Z_0001'
+  const previous=structuredClone(row)
+  const blocked=await lanes.close(leader,scope)
+  assert.equal(blocked.status,'POSTMAN_DEVSPACE_LUNA_BUSY')
+  assert.deepEqual(row,previous)
+  // Even targeted close must not misrepresent an ambiguous REQ as not sent.
+  assert.equal((await lanes.close(leader,scope,'b')).status,'POSTMAN_DEVSPACE_LUNA_BUSY')
+  assert.deepEqual(row,previous)
+  assert.equal((await lanes.close({...leader},scope,'a')).status,
+    'POSTMAN_DEVSPACE_LUNA_CALLER_REJECTED')
+  assert.deepEqual(row,previous)
+})
+
 test('three concurrent READ_ONLY lanes isolate Luna, REQ, chat and an UNKNOWN in another line', async () => {
   let row = { bridgeOperations: {} }
   const context = { branch, repositoryPath: 'C:/source', worktree: 'C:/source', devspaceReadOnly:true }
@@ -317,10 +402,15 @@ test('three concurrent READ_ONLY lanes isolate Luna, REQ, chat and an UNKNOWN in
     wait(childId){return new Promise(resolve=>waiting.set(childId,resolve))},
     dispose(){},
   }
-  const contexts={
+  const sourceContexts = {
     get:()=>context, record:()=>row,
     changeRecord:async (_id,fn)=>{row=fn(row)},
   }
+  // Real PostmanTaskContexts is a Proxy with no enumerable own keys;
+  // spreading it silently dropped get()/verifyWorktree() and prevented all
+  // three Luna from starting after successful Bridge admission.
+  const contexts = new Proxy({}, {get: (_target, key) => sourceContexts[key]})
+  assert.deepEqual(Object.keys(contexts), [])
   const coordinator={run:(_signal,fn)=>Promise.resolve().then(fn),dispose(){}}
   const jobs=createPostmanBridgeJobs(ctx,coordinator,null,contexts,null,direct)
   const accepted=await Promise.all([1,2,3].map(i=>

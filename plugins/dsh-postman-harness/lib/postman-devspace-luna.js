@@ -363,7 +363,7 @@ export function createPostmanDevspaceLuna(ctx, contexts, direct) {
   function snapshot(parent) {
     const lane = rowOf(parent?.id)?.devspaceLuna
     if (!lane || ctx.agents?.get(parent?.id) !== parent) return null
-    return { lunaSessionId: lane.childId, state: lane.state,
+    return { lunaSessionId: lane.childId ?? null, state: lane.state,
       activeBridgeJobId: lane.activeBridgeJobId ?? null,
       requestCount: lane.requestIds?.length ?? 0,
       conversationBound: typeof lane.conversationRef === 'string' && CONVERSATION.test(lane.conversationRef) }
