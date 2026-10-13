@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { relative, isAbsolute } from 'node:path'
 import { postmanInputGrants } from './postman-input-files.js'
 import { DirectPostmanJobManager } from './direct-current-turn.js'
 import { createPostmanDevspaceLanes } from './postman-devspace-lanes.js'
@@ -240,22 +241,31 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     }
   }
 
-  function accept(parent, message, transportKind, inputBinding, recoveryFrom, devspaceMode = 'READ_ONLY', requestedLaneId) {
+  function accept(parent, message, transportKind, inputBinding, recoveryFrom, devspaceMode = 'READ_ONLY', requestedLaneId, approvedScope) {
     const taskContext = contexts?.get(parent.id)
     if (contexts && !taskContext) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
     if (typeof contexts?.isRestoring === 'function' && contexts.isRestoring(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
     if (typeof contexts?.hasActiveOperation === 'function' && contexts.hasActiveOperation(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
     if (disposed) return { status: 'POSTMAN_BRIDGE_UNAVAILABLE' }
-    if (transportKind !== 'devspace' && requestedLaneId !== undefined)
+    if (transportKind !== 'devspace' && (requestedLaneId !== undefined || approvedScope))
       return { status: 'POSTMAN_DEVSPACE_LANE_NOT_ALLOWED' }
+    if (approvedScope && (!approvedScope.root || !['read', 'write'].includes(approvedScope.access)))
+      return { status: 'POSTMAN_DEVSPACE_SCOPE_INVALID' }
     if (requestedLaneId !== undefined && (typeof requestedLaneId !== 'string' ||
         !(/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(requestedLaneId) ||
           requestedLaneId === 'legacy')))
       return { status: 'POSTMAN_DEVSPACE_LANE_INVALID' }
+    devspaceMode = transportKind === 'devspace' && approvedScope
+      ? approvedScope.access === 'write'
+        ? approvedScope.root === taskContext?.worktree && !taskContext?.devspaceReadOnly
+          ? 'WRITE_ISOLATED' : 'WRITE_APPROVED_TARGET'
+        : 'READ_ONLY'
+      : devspaceMode
     if (transportKind === 'devspace' && devspaceMode === 'WRITE_ISOLATED' &&
         (taskContext?.devspaceReadOnly || !taskContext?.worktree || taskContext?.branch === 'main'))
       return { status: 'POSTMAN_DEVSPACE_ISOLATED_CONTEXT_REQUIRED' }
-    if (taskContext?.devspaceReadOnly && (transportKind !== 'devspace' || devspaceMode !== 'READ_ONLY'))
+    if (taskContext?.devspaceReadOnly && (transportKind !== 'devspace' ||
+        !['READ_ONLY', 'WRITE_APPROVED_TARGET'].includes(devspaceMode)))
       return { status: 'POSTMAN_DEVSPACE_READ_ONLY_SCOPE_REQUIRED' }
     const work = [...jobs.values()].filter(item => item.parentSessionId === parent.id &&
       !item.finishedAt && ['QUEUED', 'STARTING', 'RUNNING'].includes(item.state))
@@ -270,7 +280,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     const job = {
       bridgeJobId: randomUUID(), parentSessionId: parent.id, taskContext, transportKind, state: 'QUEUED',
       createdAt: new Date().toISOString(), controller: new AbortController(), inputBinding,
-      notification: 'PENDING', recoveryFrom, devspaceMode,
+      notification: 'PENDING', recoveryFrom, devspaceMode, approvedScope,
       ...(requestedLaneId ? { laneId: requestedLaneId } : {}),
     }
     if (typeof contexts?.changeRecord !== 'function') {
@@ -325,7 +335,9 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
             bridgeOperations: { ...operations, [job.bridgeJobId]: {
               state: 'pending', phase: 'reserved', transportKind, createdAt: job.createdAt,
               ...(transportKind === 'devspace' ? { devspace: {
-                mode: devspaceMode, laneId: selectedLaneId } } : {}),
+                mode: devspaceMode, laneId: selectedLaneId,
+                ...(approvedScope ? { approvedRoot: approvedScope.root,
+                  approvedAccess: approvedScope.access } : {}) } } : {}),
             } } }
         })
         if (selectedLaneId) job.laneId = selectedLaneId
