@@ -140,10 +140,29 @@ function parseError(code) {
 function extractInputMetadata(payload) {
   // Only a model-authored delegation may opt in; ordinary user text is unchanged.
   if (!payload.startsWith('--input-files-json ')) return { payload, inputFiles: [] }
-  const newline = payload.indexOf('\n')
-  if (newline < 0) throw parseError('POSTMAN_INPUT_METADATA_INVALID')
+  const supplied = payload.slice('--input-files-json '.length)
+  // The exact JSON array may end before a newline OR a space-delimited task.
+  // Accept either separator, without weakening the Host's descriptor grant.
+  if (!supplied.startsWith('[')) throw parseError('POSTMAN_INPUT_METADATA_INVALID')
+  let end = -1, depth = 0, quoted = false, escaped = false
+  for (let i = 0; i < supplied.length; i++) {
+    const ch = supplied[i]
+    if (quoted) {
+      if (escaped) escaped = false
+      else if (ch.charCodeAt(0) === 92) escaped = true
+      else if (ch === '"') quoted = false
+    } else if (ch === '"') quoted = true
+    else if (ch === '[' || ch === '{') depth++
+    else if (ch === ']' || ch === '}') {
+      depth--
+      if (depth === 0) { end = i + 1; break }
+      if (depth < 0) break
+    }
+  }
+  if (end < 1 || !/^\s/.test(supplied.slice(end)))
+    throw parseError('POSTMAN_INPUT_METADATA_INVALID')
   let inputFiles
-  try { inputFiles = JSON.parse(payload.slice('--input-files-json '.length, newline)) }
+  try { inputFiles = JSON.parse(supplied.slice(0, end)) }
   catch { throw parseError('POSTMAN_INPUT_METADATA_INVALID') }
   if (!Array.isArray(inputFiles) || !inputFiles.length || inputFiles.length > 20 ||
       inputFiles.some(file => !file || typeof file !== 'object' || Array.isArray(file) ||
@@ -155,7 +174,8 @@ function extractInputMetadata(payload) {
           : (file.source_kind !== undefined && file.source_kind !== 'github') || typeof file.repository !== 'string' ||
             !/^[0-9a-fA-F]{40}$/.test(file.commit) || typeof file.path !== 'string' || !file.path)))
     throw parseError('POSTMAN_INPUT_METADATA_INVALID')
-  const intent = payload.slice(newline + 1)
+  const remaining = supplied.slice(end)
+  const intent = remaining.slice(remaining.startsWith('\r\n') ? 2 : 1)
   if (!intent.trim()) throw parseError('POSTMAN_EMPTY_PAYLOAD')
   return { payload: intent, inputFiles }
 }
