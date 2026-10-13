@@ -102,7 +102,11 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     const next = fn({ ...row, workers: owned(row, id) })
     return { ...next, workers: { ...peers, ...next.workers } }
   })
-  if (taskContexts) contexts = { ...taskContexts, get: contextAt,
+  if (taskContexts) contexts = { ...taskContexts,
+    // Production taskContexts is an accessor-only Proxy, so object spread
+    // copies no methods. Keep the auto branchless Secretary prerequisite.
+    prepareReadOnly: taskContexts.prepareReadOnly?.bind(taskContexts),
+    get: contextAt,
     record: taskContexts.record ? id => { const row = rawRow(id); return row ? { ...row, workers: owned(row, id) } : null } : undefined,
     changeRecord: taskContexts.changeRecord ? changeScoped : undefined,
     ...Object.fromEntries(['isRestoring', 'hasActiveOperation', 'hasSyncOperation', 'canRetireWorkers', 'beginWorkerAdmission', 'endWorkerAdmission'].filter(name => typeof taskContexts[name] === 'function').map(name =>

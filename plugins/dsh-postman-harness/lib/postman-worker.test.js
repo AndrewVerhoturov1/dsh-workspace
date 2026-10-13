@@ -58,6 +58,37 @@ function toolsFromPreset() {
   return { preset, rows }
 }
 
+test('Secretary auto-prepares branchless context through actual Host Proxy facade', async () => {
+  let context = null
+  let prepared = 0
+  const backing = {
+    get: () => context,
+    async prepareReadOnly(parent) {
+      prepared++
+      context = { leaderSessionId: parent.id, devspaceReadOnly: true,
+        branch: 'main', worktree: 'C:/repo' }
+      return { status: 'POSTMAN_TASK_READ_ONLY_READY' }
+    },
+  }
+  // The production postmanTaskContexts facade is a Proxy with no own keys:
+  // spreading it into a Worker-specific projection silently drops methods.
+  const hostFacade = new Proxy({}, { get: (_, field) => backing[field] })
+  assert.deepEqual(Object.keys(hostFacade), [])
+  const f = fixture(hostFacade)
+  const parent = leader('secretary-proxy-owner')
+  f.agents.set(parent.id, parent)
+  const result = await f.tools.secretaryTool.execute({
+    task: 'Find current Python pathlib docs and update Host-private journal',
+    label: 'Secretary',
+  }, exec(parent))
+  assert.equal(result.status, 'POSTMAN_WORKER_TASK_ACCEPTED')
+  assert.equal(prepared, 1, 'auto branchless preparation must not require Leader to call prepare')
+  assert.equal(f.calls.starts.length, 1)
+  assert.equal(context.devspaceReadOnly, true)
+  assert.equal((await f.tools.taskTool.execute({task:'write source'},exec(parent))).status,
+    'POSTMAN_WORKER_READ_ONLY_CONTEXT')
+})
+
 test('Secretary starts branchlessly, can use web tools and keeps scoped assignment', async () => {
   let branchless = 0, context = null
   const contexts = {
