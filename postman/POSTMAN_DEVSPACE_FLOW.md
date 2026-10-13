@@ -22,7 +22,7 @@ Stop не нажимается, Host intent остаётся в очереди. 
 повтор после сбоя. Stop браузера не доказывает остановку отдельной DevSpace Bash-команды.
 QUEUED означает только принятое намерение. Отдельные sendState и stopState
 позволяют различать SENT_CONFIRMED, SEND_UNKNOWN, PROVEN_NOT_SENT и Stop UI evidence.
-Угроза двойного Send после UNKNOWN запрещает любой слепой повтор.
+Угроза двойного Send после UNKNOWN запрещает любой слепой повтор. Даже если первоначальный браузерный Send остался `UNKNOWN`, Host сначала ждёт private bell, затем только после доказательства exact conversation URL и immutable `POSTMAN_REQUEST_ID` в том же user turn может обработать **отдельный** Host-authorized controlId. Без proof — только ожидание bell. Завершённый ответ того же строго привязанного assistant turn допускается как `text_fallback` после короткого bell-first grace, никогда как DONE/PASS.
 
 15-минутные напоминания разделяют с control один браузерный цикл;
 подтверждённый bell отменяет дальнейшие действия. Отсутствие необязательного
