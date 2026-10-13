@@ -188,7 +188,13 @@ export class PostmanInputGrants {
     const directory = privateDirectory('request')
     try {
       const spec = join(directory, 'input-build.json')
-      writeFileSync(spec, JSON.stringify({ request_id: requestId, descriptors, image: transportKind === 'image',
+      // Universal Devspace reuses the same native image FilePayload transport.
+      // Other supported files retain the validated private ZIP input bundle;
+      // Devspace output itself is never required to be a ZIP.
+      const nativeImages = transportKind === 'image' || (transportKind === 'devspace' &&
+        descriptors.length <= 7 && descriptors.every(item =>
+          Object.hasOwn(IMAGE_EXTENSIONS, item.media_type)))
+      writeFileSync(spec, JSON.stringify({ request_id: requestId, descriptors, image: nativeImages,
         materializations: pin.entries.map(entry => entry.snapshot) }), { mode: 0o600 })
       const result = await pythonCommand(HOST_ROOT, 'input_bundle.py', ['--build', spec])
       if (this.pins.get(binding) !== pin || this.children.get(sessionId)?.binding !== binding)
@@ -197,7 +203,7 @@ export class PostmanInputGrants {
       const imageNames = descriptors.length === 1 ? [result.displayName] : result.names
       const validImages = Array.isArray(imageNames) && imageNames.length === descriptors.length && imageNames.every((name,index) =>
         typeof name === 'string' && new RegExp('^POSTMAN_REFERENCE_' + requestId + (descriptors.length > 1 ? '_' + (index+1) : '') + '\\.(png|jpg|webp|gif)$').test(name))
-      if (result.requestId !== requestId || (transportKind === 'image' ? !validImages : result.displayName !== 'POSTMAN_INPUT_' + requestId + '.zip') ||
+      if (result.requestId !== requestId || (nativeImages ? !validImages : result.displayName !== 'POSTMAN_INPUT_' + requestId + '.zip') ||
           result.handoffPath !== join(directory, 'input-handoff.json')) throw new Error('POSTMAN_INPUT_BUNDLE_HANDOFF_INVALID')
       return { ...result, cleanup: () => removePrivate(directory) }
     } catch (error) { removePrivate(directory); throw error }
