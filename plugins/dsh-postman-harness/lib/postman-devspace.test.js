@@ -357,7 +357,7 @@ test('three concurrent READ_ONLY lanes isolate Luna, REQ, chat and an UNKNOWN in
   assert.equal(launched[3].devspaceBinding.conversationUrl,
     'https://chatgpt.com/c/devspace-lane-0')
   assert.equal((await jobs.status(leader,accepted[2].bridgeJobId)).status,
-    'POSTMAN_BRIDGE_PENDING')
+    'POSTMAN_BRIDGE_RUNNING')
   // A caller from a different owner cannot inspect this lane's terminal.
   assert.equal((await jobs.status({id:'other'},accepted[0].bridgeJobId)).status,
     'POSTMAN_BRIDGE_JOB_NOT_FOUND')
