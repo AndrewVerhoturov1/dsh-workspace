@@ -1,5 +1,7 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { z } from 'zod'
+import { lstatSync, realpathSync } from 'node:fs'
+import { isAbsolute, relative, resolve } from 'node:path'
 import { createPtcAdapter, SOL_WORKER_PROFILE } from './ptc-adapter.js'
 import { CurrentAttachmentStore, createPostmanInputFilesTool, postmanInputGrants } from './postman-input-files.js'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
@@ -105,7 +107,10 @@ export function createPostmanBridgeTool(ctx, jobs, contexts) {
     parameters: { message: { type: 'string', required: true,
       description: 'Complete model-authored delegation beginning with exact @Postman, @PostmanAsk, @PostmanImage or @PostmanDevspace.' },
       devspace_mode: { type: 'string', enum: ['READ_ONLY', 'WRITE_TEST', 'WRITE_ISOLATED'], description: 'Compatibility workspace scope only. READ_ONLY default. WRITE_ISOLATED uses an approved task worktree.' },
-      lane_id: { type: 'string', description: 'Optional exact returned Devspace laneId, to continue the same Luna and ChatGPT conversation. Omit for a free lane.' } },
+      lane_id: { type: 'string', description: 'Optional exact returned Devspace laneId, to continue the same Luna and ChatGPT conversation. Omit for a free lane.' },
+      workspace_root: { type: 'string', description: 'Optional exact Leader-approved existing local folder. Explicit for every non-repository path.' },
+      workspace_access: { type: 'string', enum: ['read', 'write'], description: 'Read or write permission paired with workspace_root.' },
+      computer_use_target: { type: 'string', description: 'Reserved: explicit target application. Requires a Host-enforced Computer Use adapter.' } },
     output: output(),
     isConcurrencySafe: () => true,
     async execute(args, exec) {
@@ -120,10 +125,37 @@ export function createPostmanBridgeTool(ctx, jobs, contexts) {
           args.devspace_mode !== undefined && !['READ_ONLY', 'WRITE_TEST', 'WRITE_ISOLATED'].includes(args.devspace_mode)))
         return { status: 'POSTMAN_BRIDGE_MESSAGE_REJECTED', diagnostic: 'POSTMAN_DEVSPACE_STAGE1_SCOPE' }
       if (parsed.transportKind !== 'devspace' &&
-          (args.devspace_mode !== undefined || args.lane_id !== undefined))
+          (args.devspace_mode !== undefined || args.lane_id !== undefined ||
+           args.workspace_root !== undefined || args.workspace_access !== undefined ||
+           args.computer_use_target !== undefined))
         return { status: 'POSTMAN_BRIDGE_MESSAGE_REJECTED', diagnostic: 'POSTMAN_DEVSPACE_MODE_MISMATCH' }
       if (contexts && !contexts.get(exec.agent.id)) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
+      // Opaque ChatGPT Computer Use has no Host-observable per-app navigation
+      // guard. An explicit Leader request does not make an unenforceable scope safe.
+      if (args.computer_use_target !== undefined)
+        return { status: 'COMPUTER_USE_TARGET_ENFORCEMENT_UNAVAILABLE' }
       const taskContext = contexts?.get(exec.agent.id)
+      if ((args.workspace_root === undefined) !== (args.workspace_access === undefined))
+        return { status: 'POSTMAN_DEVSPACE_SCOPE_INVALID' }
+      let approvedScope
+      if (args.workspace_root !== undefined) {
+        if (typeof args.workspace_root !== 'string' || !isAbsolute(args.workspace_root))
+          return { status: 'POSTMAN_DEVSPACE_SCOPE_INVALID' }
+        try {
+          const target = realpathSync(args.workspace_root)
+          if (target !== resolve(args.workspace_root) || !lstatSync(target).isDirectory() ||
+              lstatSync(target).isSymbolicLink()) throw Error('path_not_owned')
+          const repoRoot = resolve(taskContext?.repositoryPath ?? taskContext?.worktree ?? '')
+          const inside = relative(repoRoot, target)
+          if (args.workspace_access === 'write' &&
+              (inside === '' || !inside.startsWith('..') && !isAbsolute(inside)) &&
+              (taskContext?.devspaceReadOnly || taskContext?.branch === 'main'))
+            return { status: 'POSTMAN_DEVSPACE_ISOLATED_CONTEXT_REQUIRED' }
+          approvedScope = { root: target, access: args.workspace_access }
+        } catch {
+          return { status: 'POSTMAN_DEVSPACE_SCOPE_INVALID' }
+        }
+      }
       if (taskContext?.devspaceReadOnly && (parsed.transportKind !== 'devspace' ||
           args.devspace_mode !== undefined && args.devspace_mode !== 'READ_ONLY'))
         return { status: 'POSTMAN_DEVSPACE_READ_ONLY_SCOPE_REQUIRED' }
@@ -134,7 +166,8 @@ export function createPostmanBridgeTool(ctx, jobs, contexts) {
       const inputBinding = parsed.inputFiles?.length
         ? postmanInputGrants.pin(exec.agent, contexts.get(exec.agent.id), parsed.inputFiles) : undefined
       try {
-        const result = await jobs.accept(exec.agent, args.message, parsed.transportKind, inputBinding, undefined, args.devspace_mode, args.lane_id)
+        const result = await jobs.accept(exec.agent, args.message, parsed.transportKind, inputBinding,
+          undefined, args.devspace_mode, args.lane_id, approvedScope)
         if (result.status !== 'POSTMAN_BRIDGE_ACCEPTED') postmanInputGrants.unpin(inputBinding)
         return result
       } catch (error) { postmanInputGrants.unpin(inputBinding); throw error }
