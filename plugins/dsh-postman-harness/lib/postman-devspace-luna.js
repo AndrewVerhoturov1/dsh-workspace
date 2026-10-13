@@ -63,14 +63,16 @@ export function createPostmanDevspaceLuna(ctx, contexts, direct) {
     let trusted, continuationRef = null
     try {
       const existing = rowOf(leaderId)?.devspaceLuna
-      if (existing && existing.state !== 'closed') {
-        if (existing.state !== 'ready' || existing.activeBridgeJobId)
+      if (existing && existing.state !== 'closed' && existing.state !== 'reserved') {
+        if (existing.state !== 'ready' ||
+            existing.activeBridgeJobId && existing.activeBridgeJobId !== job.bridgeJobId)
           return { status: 'POSTMAN_DEVSPACE_LUNA_BINDING_UNCERTAIN' }
         childId = existing.childId
         if (await ctx.subagents.inspectOpenContinuableChild(parent, childId) !== true)
           return { status: 'POSTMAN_DEVSPACE_LUNA_REPROOF_FAILED' }
         await writeLuna(leaderId, lane => {
-          if (lane.childId !== childId || lane.state !== 'ready' || lane.activeBridgeJobId)
+          if (lane.childId !== childId || lane.state !== 'ready' ||
+              lane.activeBridgeJobId && lane.activeBridgeJobId !== job.bridgeJobId)
             throw Error('POSTMAN_DEVSPACE_LUNA_BINDING_CHANGED')
           return { ...lane, activeBridgeJobId: job.bridgeJobId }
         })
@@ -84,7 +86,9 @@ export function createPostmanDevspaceLuna(ctx, contexts, direct) {
       } else {
         childId = randomUUID()
         await change(leaderId, row => {
-          if (row.devspaceLuna && row.devspaceLuna.state !== 'closed')
+          if (row.devspaceLuna && row.devspaceLuna.state !== 'closed' &&
+              !(row.devspaceLuna.state === 'reserved' &&
+                row.devspaceLuna.activeBridgeJobId === job.bridgeJobId))
             throw Error('POSTMAN_DEVSPACE_LUNA_BINDING_CHANGED')
           return { ...row, devspaceLuna: {
             childId, state: 'intent', activeBridgeJobId: job.bridgeJobId, requestIds: [], conversationRef: null,
