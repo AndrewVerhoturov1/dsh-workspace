@@ -8,7 +8,8 @@ import { createHash } from 'node:crypto'
 import { createDevspaceChannel, devspaceTerminal, requestDevspaceControl, readDevspaceControls } from './postman-devspace.js'
 import { parsePostmanUserTurn, CurrentUserTurnStore, createDirectCurrentTurnToolConfigs, DirectPostmanJobManager } from './direct-current-turn.js'
 import { buildPostmanBridgeStartRequest } from './postman-bridge-core.js'
-import { createPostmanBridgeTool } from './postman-bridge.js'
+import { createPostmanBridgeTool, createPostmanTeamStatusTool } from './postman-bridge.js'
+import { createPostmanDevspaceLanes } from './postman-devspace-lanes.js'
 import { createPostmanBridgeJobs } from './postman-bridge-jobs.js'
 import { createPostmanBridgeLaunchCoordinator } from './postman-bridge-launch-coordinator.js'
 import { JsonStorageBackend } from '@deepseek-ai/dsh-storage-json'
@@ -288,6 +289,42 @@ test('Host-owned Devspace control intent keeps owner, preserves one exact ID and
     state:'SENT_CONFIRMED'}))
   assert.throws(()=>readDevspaceControls(binding),/ACK_INVALID/)
   assert.throws(()=>requestDevspaceControl(binding,{kind:'steer',message:''}),/CONTROL_INVALID/)
+})
+
+test('Host team status is lossless JSON while three Luna lanes are only reserved', () => {
+  // Admission persists reserved lanes before the native childId exists. The
+  // actual PTC ToolRuntime rejects undefined even though JSON.stringify omits it.
+  const row = { stage: 'ready', devspaceLanes: {
+    alpha: { state: 'reserved', activeBridgeJobId: 'job-A',
+      requestIds: [], conversationRef: null },
+    beta: { state: 'ready', childId: 'luna-B', activeBridgeJobId: 'job-B',
+      requestIds: ['REQ_20261013T000000Z_0002'], conversationRef: null },
+    gamma: { state: 'reserved', activeBridgeJobId: 'job-C',
+      requestIds: [], conversationRef: null },
+  } }
+  const ctx = { agents: { get: id => id === parent.id ? parent : null } }
+  const contexts = { record: () => row, get: () => ({ branch: 'main' }),
+    isRestoring: () => false, hasActiveOperation: () => false }
+  const lanes = createPostmanDevspaceLanes(ctx, contexts, {})
+  const jobs = { devspaceLunaSnapshot: owner => lanes.snapshot(owner),
+    teamSnapshot: () => ({ status: 'POSTMAN_BRIDGE_TEAM_SNAPSHOT',
+      used: 3, limit: 3, operations: [], truncated: false }) }
+  const worker = { teamSnapshot: () => ({ status: 'POSTMAN_TEAM_STATUS',
+    secretary: { present: false, sessionId: null, state: 'absent',
+      budget: null, ledgerRevision: 0 },
+    workers: { used: 0, limit: 2, rows: [] },
+    sol: { present: false, sessionId: null, state: 'absent',
+      ownedWorkers: { used: 0, limit: 2, states: {},
+        budget: { used: 0, soft: 0, hard: 0, exhausted: 0, unknown: 0 } } } }) }
+  const output = createPostmanTeamStatusTool(ctx, contexts, worker, jobs)
+    .execute({}, { agent: parent })
+  assert.equal(output.status, 'POSTMAN_TEAM_STATUS')
+  assert.equal(output.devspaceLuna.lanes.length, 3)
+  assert.equal(output.devspaceLuna.lanes[0].lunaSessionId, null)
+  assert.equal(output.devspaceLuna.lanes[1].lunaSessionId, 'luna-B')
+  assert.equal(output.devspaceLuna.lanes[2].lunaSessionId, null)
+  assert.deepEqual(output, JSON.parse(JSON.stringify(output)),
+    'No undefined field can cross the Host PTC lossless JSON boundary')
 })
 
 test('three concurrent READ_ONLY lanes isolate Luna, REQ, chat and an UNKNOWN in another line', async () => {
