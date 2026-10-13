@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { postmanInputGrants } from './postman-input-files.js'
 import { DirectPostmanJobManager } from './direct-current-turn.js'
-import { createPostmanDevspaceLuna } from './postman-devspace-luna.js'
+import { createPostmanDevspaceLanes } from './postman-devspace-lanes.js'
 import { requestDevspaceControl, readDevspaceControls } from './postman-devspace.js'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { buildPostmanBridgeStartRequest, isTopLevelPostmanSupervisor, POSTMAN_BRIDGE_PROVIDER,
@@ -78,6 +78,7 @@ function snapshot(job) {
     transportKind: job.transportKind ?? null, createdAt: job.createdAt ?? null,
     startedAt: job.startedAt ?? null, finishedAt: job.finishedAt ?? null,
     childSessionId: job.childSessionId ?? null, requestId: job.requestId ?? null,
+    ...(job.laneId ? { laneId: job.laneId } : {}),
   }
 }
 
@@ -87,7 +88,8 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
   const jobs = new Map()
   const admissionTails = new Map()
   const coldRecovery = new Map()
-  const devspaceLuna = createPostmanDevspaceLuna(ctx, contexts, direct)
+  const devspaceLuna = createPostmanDevspaceLanes(ctx, contexts, direct)
+  const devspaceCoordinator = coordinator.fork?.() ?? coordinator
   let disposed = false
 
   async function trustedStatusReader(child, signal) {
@@ -238,12 +240,18 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     }
   }
 
-  function accept(parent, message, transportKind, inputBinding, recoveryFrom, devspaceMode = 'READ_ONLY') {
+  function accept(parent, message, transportKind, inputBinding, recoveryFrom, devspaceMode = 'READ_ONLY', requestedLaneId) {
     const taskContext = contexts?.get(parent.id)
     if (contexts && !taskContext) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
     if (typeof contexts?.isRestoring === 'function' && contexts.isRestoring(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
     if (typeof contexts?.hasActiveOperation === 'function' && contexts.hasActiveOperation(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
     if (disposed) return { status: 'POSTMAN_BRIDGE_UNAVAILABLE' }
+    if (transportKind !== 'devspace' && requestedLaneId !== undefined)
+      return { status: 'POSTMAN_DEVSPACE_LANE_NOT_ALLOWED' }
+    if (requestedLaneId !== undefined && (typeof requestedLaneId !== 'string' ||
+        !(/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(requestedLaneId) ||
+          requestedLaneId === 'legacy')))
+      return { status: 'POSTMAN_DEVSPACE_LANE_INVALID' }
     if (transportKind === 'devspace' && devspaceMode === 'WRITE_ISOLATED' &&
         (taskContext?.devspaceReadOnly || !taskContext?.worktree || taskContext?.branch === 'main'))
       return { status: 'POSTMAN_DEVSPACE_ISOLATED_CONTEXT_REQUIRED' }
@@ -259,6 +267,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
       bridgeJobId: randomUUID(), parentSessionId: parent.id, taskContext, transportKind, state: 'QUEUED',
       createdAt: new Date().toISOString(), controller: new AbortController(), inputBinding,
       notification: 'PENDING', recoveryFrom, devspaceMode,
+      ...(requestedLaneId ? { laneId: requestedLaneId } : {}),
     }
     if (typeof contexts?.changeRecord !== 'function') {
       // Unit fixtures without a durable registry retain the synchronous API.
@@ -271,25 +280,55 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     const prior = admissionTails.get(parent.id) ?? Promise.resolve()
     const admit = async () => {
       try {
-        const row = contexts.record?.(parent.id)
-        const occupied = Object.values(row?.bridgeOperations ?? {}).filter(countsAgainstLimit).length + (row?.bridge ? 1 : 0)
-        if (occupied >= 3) return { status: 'POSTMAN_BRIDGE_LIMIT_REACHED' }
-        if (transportKind === 'devspace' && Object.values(row?.bridgeOperations ?? {}).some(op =>
-          op.transportKind === 'devspace' && ['pending', 'unknown'].includes(op.state)))
-          return { status: 'POSTMAN_DEVSPACE_LUNA_BUSY' }
+        let selectedLaneId
         await contexts.changeRecord(parent.id, old => {
           const operations = old.bridgeOperations ?? {}
-          const count = Object.values(operations).filter(countsAgainstLimit).length + (old.bridge ? 1 : 0)
-          if (count >= 3) throw new Error('POSTMAN_BRIDGE_LIMIT_REACHED')
-          if (transportKind === 'devspace' && Object.values(operations).some(op =>
-            op.transportKind === 'devspace' && ['pending', 'unknown'].includes(op.state)))
-            throw new Error('POSTMAN_DEVSPACE_LUNA_BUSY')
-          return { ...old, bridgeOperations: { ...operations, [job.bridgeJobId]: { state: 'pending', phase: 'reserved', transportKind, createdAt: job.createdAt,
-              ...(transportKind === 'devspace' ? { devspace: { mode: devspaceMode } } : {}) } } }
+          const occupied = Object.values(operations).filter(countsAgainstLimit)
+          const count = occupied.filter(op => (op.transportKind === 'devspace') ===
+            (transportKind === 'devspace')).length + (transportKind !== 'devspace' && old.bridge ? 1 : 0)
+          if (count >= 3) throw new Error(transportKind === 'devspace'
+            ? 'POSTMAN_DEVSPACE_CAPACITY_REACHED' : 'POSTMAN_BRIDGE_LIMIT_REACHED')
+          let devspaceLanes = old.devspaceLanes
+          if (transportKind === 'devspace') {
+            // Do not migrate an in-flight historical Luna. It remains counted
+            // independently until its own owner settles and adopts it.
+            const available = { ...(old.devspaceLanes ?? {}) }
+            if (old.devspaceLuna && !Object.hasOwn(available, 'legacy'))
+              available.legacy = old.devspaceLuna
+            selectedLaneId = requestedLaneId ??
+              Object.entries(available).find(([, lane]) => lane.state === 'ready' &&
+                !lane.activeBridgeJobId)?.[0]
+            if (requestedLaneId && (!available[requestedLaneId] ||
+                available[requestedLaneId].state !== 'ready' ||
+                available[requestedLaneId].activeBridgeJobId))
+              throw new Error('POSTMAN_DEVSPACE_LANE_UNAVAILABLE')
+            if (!selectedLaneId) {
+              if (Object.values(available).filter(lane => lane.state !== 'closed').length >= 3)
+                throw new Error('POSTMAN_DEVSPACE_CAPACITY_REACHED')
+              selectedLaneId = randomUUID()
+            }
+            const lane = available[selectedLaneId]
+            if (lane && (lane.state !== 'ready' || lane.activeBridgeJobId))
+              throw new Error('POSTMAN_DEVSPACE_LANE_UNAVAILABLE')
+            devspaceLanes = { ...(old.devspaceLanes ?? {}),
+              [selectedLaneId]: lane
+                ? { ...lane, activeBridgeJobId: job.bridgeJobId }
+                : { state: 'reserved', activeBridgeJobId: job.bridgeJobId,
+                  requestIds: [], conversationRef: null } }
+          }
+          return { ...old,
+            ...(devspaceLanes ? { devspaceLanes } : {}),
+            bridgeOperations: { ...operations, [job.bridgeJobId]: {
+              state: 'pending', phase: 'reserved', transportKind, createdAt: job.createdAt,
+              ...(transportKind === 'devspace' ? { devspace: {
+                mode: devspaceMode, laneId: selectedLaneId } } : {}),
+            } } }
         })
+        if (selectedLaneId) job.laneId = selectedLaneId
         return startJob(job, message)
       } catch (error) {
-        return { status: ['POSTMAN_BRIDGE_LIMIT_REACHED', 'POSTMAN_DEVSPACE_LUNA_BUSY'].includes(error?.message)
+        return { status: ['POSTMAN_BRIDGE_LIMIT_REACHED', 'POSTMAN_DEVSPACE_CAPACITY_REACHED',
+          'POSTMAN_DEVSPACE_LANE_UNAVAILABLE'].includes(error?.message)
           ? error.message : 'POSTMAN_BRIDGE_ADMISSION_FAILED',
           diagnostic: diagnostic(error) }
       }
@@ -387,7 +426,8 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     jobs.set(job.bridgeJobId, job)
     // Coordinator holds the active slot only through child disposal, never through grants.
     let admission
-    try { admission = coordinator.run(job.controller.signal, () => lifecycle(job, message)) }
+    try { admission = (job.transportKind === 'devspace' ? devspaceCoordinator : coordinator)
+        .run(job.controller.signal, () => lifecycle(job, message)) }
     catch (error) { admission = Promise.reject(error) }
     job.completion = admission.then(async result => {
         // A verified terminal is delivery evidence even when the shared tree is
@@ -834,12 +874,13 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     for (const job of jobs.values()) job.controller.abort()
     direct.dispose?.()
     coordinator.dispose()
+    if (devspaceCoordinator !== coordinator) devspaceCoordinator.dispose()
     await Promise.allSettled([...jobs.values()].map(job => job.completion))
     jobs.clear()
   }
 
   return { accept, status, list, teamSnapshot, stop, hasActive, hasActiveWork, dispose,
     devspaceControl, recoverDevspacePending,
-    devspaceLunaClose: parent => devspaceLuna.close(parent, contexts?.get(parent.id)),
+    devspaceLunaClose: (parent, laneId) => devspaceLuna.close(parent, contexts?.get(parent.id), laneId),
     devspaceLunaSnapshot: parent => devspaceLuna.snapshot(parent) }
 }
