@@ -101,10 +101,11 @@ export function createPostmanTaskRestoreTool(ctx, contexts = postmanTaskContexts
 export function createPostmanBridgeTool(ctx, jobs, contexts) {
   return defineTool({
     name: POSTMAN_BRIDGE_TOOL_NAME,
-    description: 'Accept an exact @Postman, @PostmanAsk, @PostmanImage or fresh stage-one @PostmanDevspace delegation in a background Bridge job. Devspace is one-shot READ_ONLY/default or private WRITE_TEST, local bell/diagnostics, no attachments/Git writes. Acceptance is not a Web result or engineering PASS; read the own Luna trusted terminal via postman_bridge_status after POSTMAN_BRIDGE_READY.',
+    description: 'Universal @PostmanDevspace is the default ChatGPT executor, with up to three independent persistent Luna/chat lanes per Leader. Legacy @Postman/Ask/Image remain available. Accepted is not completed; use POSTMAN_BRIDGE_READY then exact postman_bridge_status.',
     parameters: { message: { type: 'string', required: true,
       description: 'Complete model-authored delegation beginning with exact @Postman, @PostmanAsk, @PostmanImage or @PostmanDevspace.' },
-      devspace_mode: { type: 'string', enum: ['READ_ONLY', 'WRITE_TEST', 'WRITE_ISOLATED'], description: 'Devspace stage 1 only: read the prepared task area, optionally write only its Host-private harmless test folder. Defaults READ_ONLY.' } },
+      devspace_mode: { type: 'string', enum: ['READ_ONLY', 'WRITE_TEST', 'WRITE_ISOLATED'], description: 'Compatibility workspace scope only. READ_ONLY default. WRITE_ISOLATED uses an approved task worktree.' },
+      lane_id: { type: 'string', description: 'Optional exact returned Devspace laneId, to continue the same Luna and ChatGPT conversation. Omit for a free lane.' } },
     output: output(),
     isConcurrencySafe: () => true,
     async execute(args, exec) {
@@ -118,7 +119,8 @@ export function createPostmanBridgeTool(ctx, jobs, contexts) {
       if (parsed.transportKind === 'devspace' && (parsed.mode !== 'fresh' || parsed.inputFiles?.length ||
           args.devspace_mode !== undefined && !['READ_ONLY', 'WRITE_TEST', 'WRITE_ISOLATED'].includes(args.devspace_mode)))
         return { status: 'POSTMAN_BRIDGE_MESSAGE_REJECTED', diagnostic: 'POSTMAN_DEVSPACE_STAGE1_SCOPE' }
-      if (parsed.transportKind !== 'devspace' && args.devspace_mode !== undefined)
+      if (parsed.transportKind !== 'devspace' &&
+          (args.devspace_mode !== undefined || args.lane_id !== undefined))
         return { status: 'POSTMAN_BRIDGE_MESSAGE_REJECTED', diagnostic: 'POSTMAN_DEVSPACE_MODE_MISMATCH' }
       if (contexts && !contexts.get(exec.agent.id)) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
       const taskContext = contexts?.get(exec.agent.id)
@@ -132,7 +134,7 @@ export function createPostmanBridgeTool(ctx, jobs, contexts) {
       const inputBinding = parsed.inputFiles?.length
         ? postmanInputGrants.pin(exec.agent, contexts.get(exec.agent.id), parsed.inputFiles) : undefined
       try {
-        const result = await jobs.accept(exec.agent, args.message, parsed.transportKind, inputBinding, undefined, args.devspace_mode)
+        const result = await jobs.accept(exec.agent, args.message, parsed.transportKind, inputBinding, undefined, args.devspace_mode, args.lane_id)
         if (result.status !== 'POSTMAN_BRIDGE_ACCEPTED') postmanInputGrants.unpin(inputBinding)
         return result
       } catch (error) { postmanInputGrants.unpin(inputBinding); throw error }
@@ -220,11 +222,11 @@ export function createPostmanDevspaceControlTool(ctx, jobs) {
 export function createPostmanDevspaceLunaCloseTool(ctx, jobs) {
   return defineTool({
     name: POSTMAN_DEVSPACE_LUNA_CLOSE_TOOL_NAME,
-    description: 'Explicitly close this Leader task persistent PostmanDevspace Luna after all its jobs settle. Never stops an active ChatGPT task or removes its files.',
-    parameters: {}, output: output(),
+    description: 'Close one exact idle Devspace lane or, without lane_id, all settled idle lines for this Leader. Never cancels an active ChatGPT task.',
+    parameters: { lane_id: { type: 'string', description: 'Optional exact laneId to close only that line.' } }, output: output(),
     async execute(_args, exec) {
       if (!authorized(exec, ctx)) return { status: 'POSTMAN_DEVSPACE_LUNA_CALLER_REJECTED' }
-      return jobs.devspaceLunaClose(exec.agent)
+      return jobs.devspaceLunaClose(exec.agent, _args?.lane_id)
     },
   })
 }
