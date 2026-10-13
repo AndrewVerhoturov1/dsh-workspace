@@ -41,7 +41,8 @@ class ControlTests(unittest.TestCase):
         (self.channel / "controls" / (uid + ".json")).write_text(json.dumps(intent), encoding="utf-8")
         return intent
 
-    def process(self, *, generation="IDLE", stop="ABSENT", after_stop=None, send_state="PROVEN_SENT"):
+    def process(self, *, generation="IDLE", stop="ABSENT", after_stop=None, send_state="PROVEN_SENT",
+                send_error=None):
         state = [generation]
         def activity(*args, **kwargs):
             return {"state": state[0]}
@@ -53,6 +54,8 @@ class ControlTests(unittest.TestCase):
             self.assertEqual(chat_url, CHAT)
             self.assertFalse(kwargs.get("navigate", True))
             self.sent.append(message)
+            if send_error:
+                raise RuntimeError(send_error)
             return {"sendState": send_state}
         def sleep(seconds):
             self.now[0] += seconds
@@ -90,11 +93,49 @@ class ControlTests(unittest.TestCase):
     def test_explicit_stop_never_sends_or_claims_shell_process_termination(self):
         cid="00000000-0000-4000-8000-000000000003"
         self.issue(cid, "stop")
-        result=self.process(generation="ACTIVE_TOOL", stop="PRESENT")
+        result=self.process(generation="SAFE_GENERATION", stop="PRESENT")
         self.assertEqual(result["kind"], "stop")
         self.assertEqual(result["status"], "STOP_UI_PROVEN")
         self.assertEqual(self.stops, ["click"])
         self.assertEqual(self.sent, [])
+
+    def test_preempt_and_stop_wait_for_active_devspace_operation(self):
+        for kind, control_id in [("preempt", "00000000-0000-4000-8000-000000000011"),
+                                 ("stop", "00000000-0000-4000-8000-000000000012")]:
+            self.issue(control_id, kind, priority="urgent")
+            self.assertIsNone(self.process(generation="ACTIVE_TOOL", stop="PRESENT"))
+            self.assertEqual(self.stops, [])
+            self.assertEqual(self.sent, [])
+            self.assertEqual(len(controls.pending(self.binding)), 1)
+            outcome = self.process(generation="SAFE_GENERATION", stop="PRESENT")
+            self.assertEqual(outcome["status"],
+                             "SENT_CONFIRMED" if kind == "preempt" else "STOP_UI_PROVEN")
+            self.stops.clear()
+            self.sent.clear()
+
+    def test_preempt_when_idle_journals_unknown_send_before_click(self):
+        control_id="00000000-0000-4000-8000-000000000013"
+        self.issue(control_id, "preempt", priority="urgent")
+        with self.assertRaisesRegex(RuntimeError, "SIMULATED_CRASH_AFTER_SEND"):
+            self.process(generation="IDLE", stop="ABSENT",
+                         send_error="SIMULATED_CRASH_AFTER_SEND")
+        self.assertEqual(self.stops, [])
+        self.assertEqual(self.sent, ["продолжай"])
+        receipt=json.loads((self.channel / "controls" /
+                            (control_id + ".ack.json")).read_text(encoding="utf-8"))
+        self.assertEqual(receipt["state"], "SEND_UNKNOWN")
+        self.assertEqual(receipt["stopState"], "ALREADY_IDLE")
+        self.assertFalse(controls.pending(self.binding))
+        self.assertIsNone(self.process())
+        self.assertEqual(len(self.sent), 1)
+
+    def test_preempt_cannot_stop_when_ui_proofs_conflict(self):
+        control_id="00000000-0000-4000-8000-000000000014"
+        self.issue(control_id, "preempt", priority="urgent")
+        self.assertIsNone(self.process(generation="IDLE", stop="PRESENT"))
+        self.assertEqual(self.stops, [])
+        self.assertFalse(self.sent)
+        self.assertEqual(len(controls.pending(self.binding)), 1)
 
     def test_uncertain_send_never_retries_or_claims_completion(self):
         cid="00000000-0000-4000-8000-000000000004"

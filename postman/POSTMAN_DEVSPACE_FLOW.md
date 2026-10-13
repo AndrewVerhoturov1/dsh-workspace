@@ -16,7 +16,10 @@ postman_send_current_turn: общий CurrentUserTurnStore не меняется
 Leader-only postman_devspace_control(action=steer|preempt|stop|status, bridge_job_id)
 связан с текущим REQ и частным каналом. Steer ждёт IDLE; preempt — явный
 Stop (до 10 секунд на реальное завершение), затем ровно одна попытка Send.
-Stop браузера не доказывает остановку отдельной DevSpace Bash-команды.
+Если есть активная DevSpace-операция или UI-доказательства противоречивы,
+Stop не нажимается, Host intent остаётся в очереди. Даже когда Stop не нужен
+(чат уже IDLE), перед Send записывается durable UNKNOWN intent, запрещающий
+повтор после сбоя. Stop браузера не доказывает остановку отдельной DevSpace Bash-команды.
 QUEUED означает только принятое намерение. Отдельные sendState и stopState
 позволяют различать SENT_CONFIRMED, SEND_UNKNOWN, PROVEN_NOT_SENT и Stop UI evidence.
 Угроза двойного Send после UNKNOWN запрещает любой слепой повтор.
