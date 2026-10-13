@@ -80,6 +80,9 @@ class DevspaceTests(unittest.TestCase):
     def test_renderer_private_and_exact_limited_scope_no_zip(self):
         prompt = task.render_task(self.binding, "read harmless source", "pwsh -NoProfile -NonInteractive -File 'private/signal.ps1'")
         self.assertIn(str(self.workspace), prompt)
+        self.assertTrue(prompt.startswith('POSTMAN_REQUEST_ID: ' + REQ + '\n'))
+        self.assertEqual(web.browser_submit.request_key_line_from_prompt(prompt),
+                         'POSTMAN_REQUEST_ID: ' + REQ)
         self.assertIn("read harmless source", prompt)
         self.assertIn("CAPABILITY_UNAVAILABLE", prompt)
         self.assertNotIn(self.binding["capability"], prompt)
@@ -236,6 +239,113 @@ assert hasattr(stdlib_signal, 'set_wakeup_fd')
         self.assertEqual(result["details"]["sendState"], "UNKNOWN")
         self.assertEqual(result["details"]["diagnostic"], "BLOCKED")
         self.assertFalse((self.channel / "event.json").exists())
+
+    def test_unknown_send_unproven_anchor_remains_bell_only(self):
+        page = SimpleNamespace(url=CHAT)
+        prompt = task.render_task(self.binding, "read README", "pwsh -File signal.ps1")
+        clock = [0.0]
+        turns = [{"index": 0, "role": "user", "text": "unrelated user turn"}]
+        with patch.object(observer.observer, "snapshot_turns", return_value=(turns, "family")), \
+             patch.object(observer.controls, "process_one",
+                          side_effect=AssertionError("unproven turn may not mutate browser")) as action, \
+             patch.object(observer.observer, "observe_next_assistant",
+                          side_effect=AssertionError("unproven turn may not supply text")):
+            result = observer.wait_for_bell_after_unknown_send(self.binding,
+                timeout_ms=1500, sleep=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+                monotonic=lambda: clock[0], conversation_ref=CHAT, page=page, prompt=prompt)
+        self.assertEqual(result["details"]["diagnostic"], "BLOCKED")
+        action.assert_not_called()
+
+    def test_unknown_send_defers_urgent_preempt_during_active_devspace_tool(self):
+        page = SimpleNamespace(url=CHAT)
+        prompt = task.render_task(self.binding, "read README", "pwsh -File signal.ps1")
+        control_id = "11111111-1111-4111-8111-111111111111"
+        folder = self.channel / "controls"
+        folder.mkdir(exist_ok=True)
+        intent = {"version": 1, "controlId": control_id, "kind": "preempt",
+                  "priority": "urgent", "message": "keep current operation safe",
+                  "issuedAt": "2026-10-13T00:00:00Z",
+                  **{key: self.binding[key] for key in signal.IDENTITY}}
+        (folder / (control_id + ".json")).write_text(json.dumps(intent), encoding="utf-8")
+        turns = [{"index": 0, "role": "user",
+                  "text": "POSTMAN_REQUEST_ID: " + REQ + "\n# Markdown altered by ChatGPT"}]
+        clock = [0.0]
+        def sleep(seconds):
+            clock[0] += seconds
+            if clock[0] >= 2.0 and not (self.channel / "event.json").exists():
+                self.emit(message="original DevSpace tool completed safely")
+        with patch.object(observer.observer, "snapshot_turns", return_value=(turns, "family")), \
+             patch.object(observer, "activity_snapshot", return_value={"state": "ACTIVE_TOOL"}), \
+             patch.object(observer, "stop_control",
+                          return_value=("PRESENT", SimpleNamespace(
+                              click=lambda **kwargs: self.fail("Stop clicked during active tool")))), \
+             patch.object(observer.observer, "observe_next_assistant",
+                          return_value={"ok": False, "code": "ASSISTANT_NOT_STARTED", "details": {}}):
+            result = observer.wait_for_bell_after_unknown_send(self.binding,
+                timeout_ms=6000, sleep=sleep, monotonic=lambda: clock[0],
+                conversation_ref=CHAT, page=page, prompt=prompt)
+        self.assertEqual(result["code"], "DEVSPACE_SIGNAL_RECEIVED")
+        self.assertEqual(result["details"]["reportedOutcome"], "DONE")
+        self.assertFalse((folder / (control_id + ".ack.json")).exists())
+        self.assertEqual(len(observer.controls.pending(self.binding)), 1)
+
+    def test_unknown_send_correlated_idle_control_sends_once_before_bell(self):
+        page = SimpleNamespace(url=CHAT)
+        prompt = task.render_task(self.binding, "read README", "pwsh -File signal.ps1")
+        control_id = "22222222-2222-4222-8222-222222222222"
+        folder = self.channel / "controls"
+        folder.mkdir(exist_ok=True)
+        intent = {"version": 1, "controlId": control_id, "kind": "steer",
+                  "priority": "urgent", "message": "complete and ring bell",
+                  "issuedAt": "2026-10-13T00:00:00Z",
+                  **{key: self.binding[key] for key in signal.IDENTITY}}
+        (folder / (control_id + ".json")).write_text(json.dumps(intent), encoding="utf-8")
+        turns = [{"index": 0, "role": "user",
+                  "text": "POSTMAN_REQUEST_ID: " + REQ + "\n# Altered rendered Markdown"}]
+        clock = [0.0]
+        def sleep(seconds):
+            clock[0] += seconds
+            if clock[0] >= 2 and not (self.channel / "event.json").exists():
+                self.emit(message="bell after distinct steer")
+        with patch.object(observer.observer, "snapshot_turns", return_value=(turns, "family")), \
+             patch.object(observer, "activity_snapshot", return_value={"state": "IDLE"}), \
+             patch.object(observer.controls.submit, "submit_existing_prompt",
+                          return_value={"sendState": "PROVEN_SENT"}) as send, \
+             patch.object(observer.observer, "observe_next_assistant",
+                          return_value={"ok": False, "code": "ASSISTANT_NOT_STARTED", "details": {}}):
+            result = observer.wait_for_bell_after_unknown_send(self.binding,
+                timeout_ms=6000, sleep=sleep, monotonic=lambda: clock[0],
+                conversation_ref=CHAT, page=page, prompt=prompt)
+        self.assertEqual(result["code"], "DEVSPACE_SIGNAL_RECEIVED")
+        send.assert_called_once()
+        self.assertEqual(send.call_args.args[1], intent["message"])
+        self.assertEqual(send.call_args.kwargs["navigate"], False)
+        ack = json.loads((folder / (control_id + ".ack.json")).read_text(encoding="utf-8"))
+        self.assertEqual(ack["state"], "SENT_CONFIRMED")
+        self.assertFalse(observer.controls.pending(self.binding))
+
+    def test_unknown_send_correlated_text_backup_never_claims_bell(self):
+        page = SimpleNamespace(url=CHAT)
+        prompt = task.render_task(self.binding, "read README", "pwsh -File signal.ps1")
+        turns = [{"index": 0, "role": "user",
+                  "text": "POSTMAN_REQUEST_ID: " + REQ + "\n# Markdown changed"}]
+        clock = [0.0]
+        with patch.object(observer.observer, "snapshot_turns", return_value=(turns, "family")), \
+             patch.object(observer.observer, "observe_next_assistant", return_value={
+                 "ok": True, "code": "ASSISTANT_COMPLETED", "details": {
+                     "assistantText": "CAPABILITY_UNAVAILABLE: DevSpace connection missing"}}), \
+             patch.object(observer.controls, "process_one", return_value=None) as actions:
+            result = observer.wait_for_bell_after_unknown_send(self.binding,
+                timeout_ms=20000,
+                sleep=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+                monotonic=lambda: clock[0], conversation_ref=CHAT, page=page, prompt=prompt)
+        self.assertEqual(result["code"], "DEVSPACE_DIAGNOSTIC")
+        self.assertEqual(result["details"]["source"], "text_fallback")
+        self.assertEqual(result["details"]["diagnostic"], "CAPABILITY_UNAVAILABLE")
+        self.assertEqual(result["details"]["sendState"], "UNKNOWN")
+        self.assertFalse((self.channel / "event.json").exists())
+        self.assertGreaterEqual(clock[0], 12)
+        self.assertTrue(actions.called)
 
     def run_checks(self, *, state="SAFE_GENERATION", delay=0, send_ready=True, send_state="PROVEN_SENT", on_stop=None, on_send=None, complete=False, before_check=None):
         clock = [0.0]

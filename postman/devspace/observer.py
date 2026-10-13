@@ -13,25 +13,116 @@ DEFAULT_CHECK_COUNT = 3
 STOP_OBSERVATION_MS = 10_000
 
 
-def wait_for_bell_after_unknown_send(binding, *, timeout_ms, sleep, monotonic, conversation_ref=None):
-    """Keep the exact owned bell channel open when browser Send proof is UNKNOWN.
+def wait_for_bell_after_unknown_send(binding, *, timeout_ms, sleep, monotonic,
+                                     conversation_ref=None, page=None, prompt=None):
+    """Signal-first wait after UNKNOWN Send; never repeat the original browser Send.
 
-    Never touch the composer, issue a reminder, reload or send again: the
-    ChatGPT turn may already be executing despite a changed browser DOM.
+    Only an exact, same-chat user turn can authorize a *different* Host-owned
+    controlId or observation of a completed assistant response. If the DOM is
+    unprovable, this remains the old bell-only, read-only wait.
     """
     deadline = monotonic() + timeout_ms / 1000.0
-    while True:
+    observable = page is not None and bool(conversation_ref) and isinstance(prompt, str) and bool(prompt)
+    current_prompt = prompt
+    controls_allowed = observable
+    next_probe = monotonic()
+    final_text = ""
+    final_since = None
+    control_error = False
+
+    def bell():
         event = read_event(binding)
-        if event:
-            return {"ok": True, "code": "DEVSPACE_SIGNAL_RECEIVED", "details": {
-                **event, "conversationRef": conversation_ref, "sendState": "UNKNOWN"}}
-        remaining = deadline - monotonic()
+        return {"ok": True, "code": "DEVSPACE_SIGNAL_RECEIVED", "details": {
+            **event, "conversationRef": conversation_ref, "sendState": "UNKNOWN"}} if event else None
+
+    def text_result():
+        marker = re.search(r"\b(CAPABILITY[ _-]*UNAVAILABLE|BLOCKED)\b", final_text, re.I)
+        outcome = ("CAPABILITY_UNAVAILABLE" if marker[1].upper().startswith("CAPABILITY")
+                   else "BLOCKED") if marker else "UNKNOWN"
+        return {"ok": True, "code": "DEVSPACE_DIAGNOSTIC", "details": {
+            "source": "text_fallback", "diagnostic": outcome, "assistantText": final_text,
+            "conversationRef": conversation_ref, "sendState": "UNKNOWN",
+            "message": "Correlated assistant response without local bell."}}
+
+    while True:
+        received = bell()
+        if received:
+            return received
+        now = monotonic()
+        # Bell gets a short grace period after a correlated final text.
+        if final_since is not None and now - final_since >= 12:
+            return text_result()
+        remaining = deadline - now
         if remaining <= 0:
+            if final_text:
+                return text_result()
             return {"ok": True, "code": "DEVSPACE_DIAGNOSTIC", "details": {
                 "source": "transport_diagnostic", "diagnostic": "BLOCKED", "sendState": "UNKNOWN",
                 "conversationRef": conversation_ref, "assistantText": "",
-                "message": "Unproven browser Send; no local bell before deadline. No resend."}}
-        sleep(min(0.25, remaining))
+                "message": "Unproven browser Send; no local bell before deadline. No resend.",
+                **({"controlDiagnostic": "CONTROL_PROOF_UNKNOWN"} if control_error else {})}}
+
+        if observable and now >= next_probe:
+            next_probe = now + 1.0
+            # URL plus exact rendered turn/request-key and no later user turn
+            # are prerequisites. An UNKNOWN Send by itself grants no UI control.
+            correlated = False
+            try:
+                if str(page.url) == conversation_ref:
+                    turns, _ = observer.snapshot_turns(page)
+                    anchor = observer.find_user_anchor(turns, current_prompt)
+                    correlated = anchor is not None and not any(
+                        t.get("role") == "user" and t["index"] > anchor for t in turns)
+            except Exception:
+                correlated = False
+
+            if correlated:
+                if controls_allowed:
+                    try:
+                        action = controls.process_one(page, current_prompt, conversation_ref, binding,
+                            activity=lambda p, text, url: activity_snapshot(p, text, url),
+                            stop_control=stop_control, sleep=sleep, monotonic=monotonic)
+                    except Exception:
+                        # Preserve bell monitoring; never retry a possibly acted
+                        # control after an unproved local/browser outcome.
+                        controls_allowed = False
+                        control_error = True
+                        action = None
+                    received = bell()
+                    if received:
+                        return received
+                    if action and action.get("sendUnknown"):
+                        controls_allowed = False
+                    if action and action.get("newPrompt"):
+                        current_prompt = action["newPrompt"]
+                        final_since = None
+                        final_text = ""
+                    if action and action.get("kind") == "stop":
+                        return {"ok": True, "code": "DEVSPACE_DIAGNOSTIC", "details": {
+                            "source": "transport_diagnostic", "diagnostic": "PARTIAL",
+                            "conversationRef": conversation_ref, "sendState": "UNKNOWN",
+                            "assistantText": "", "message": "Leader requested Stop; browser UI: " +
+                            action.get("status", "UNKNOWN") + ". Local DevSpace tools may continue."}}
+
+                if final_since is None:
+                    try:
+                        observed = observer.observe_next_assistant(page, current_prompt, conversation_ref,
+                            timeout_ms=min(400, max(1, int((deadline-monotonic())*1000))),
+                            stable_ms=250, poll_ms=100, external_result_probe=bell,
+                            sleep=sleep, monotonic=monotonic)
+                        if observed.get("code") == "DEVSPACE_SIGNAL_RECEIVED":
+                            return observed
+                        candidate = observed.get("details", {}).get("assistantText", "")
+                        if observed.get("ok") and isinstance(candidate, str) and candidate:
+                            final_text = candidate
+                            final_since = monotonic()
+                    except Exception:
+                        pass  # Correlation or observer uncertainty never suppresses a late bell.
+
+        received = bell()
+        if received:
+            return received
+        sleep(min(0.25, max(0.0, deadline-monotonic())))
 
 # Read UI state only in the correlated turn, never treat assistant prose as proof.
 # A tool card with an unknown state is not proof that a local operation is idle.

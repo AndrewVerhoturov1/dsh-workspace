@@ -14,7 +14,11 @@ def render_task(binding, intent, signal_command):
         scope = "Записи в исходную область запрещены. Безвредный результат только в Host-private тестовой папке: " + str(write)
     else:
         scope = "Записи в исходную область и любые другие файлы запрещены."
-    return f"""# PostmanDevspace — этап 3
+    # The first line is a non-secret immutable correlation key. ChatGPT may
+    # reformat long Markdown, but a matching exact request-key line still lets
+    # the Host safely locate this user turn without resending UNKNOWN Sends.
+    return f"""POSTMAN_REQUEST_ID: {binding['requestId']}
+# PostmanDevspace — этап 3
 REQ: {binding['requestId']}
 Используй настоящий подключённый DevSpace MCP. Сначала открой назначенную область и прочитай безопасный существующий файл, чтобы проверить реальный доступ в этом разговоре. Инструкция не доказывает доступность.
 Область для чтения: {area}

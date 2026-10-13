@@ -559,7 +559,9 @@ class WebWorkerBridge:
                         terminal_result = wait_for_bell_after_unknown_send(
                             devspace_binding, timeout_ms=observer_timeout_ms,
                             sleep=self.sleep, monotonic=self.monotonic,
-                            conversation_ref=conversation_ref)
+                            conversation_ref=conversation_ref,
+                            page=page if conversation_ref else None,
+                            prompt=prompt if conversation_ref else None)
                         self._write_state(request, terminal_result["code"], **terminal_result["details"])
                         return terminal_result
                     if artifact_mode and not image_flow and submitted.get("sendState") == browser_submit.SEND_UNKNOWN:
