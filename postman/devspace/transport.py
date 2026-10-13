@@ -1,4 +1,4 @@
-"""Private stage-one Direct entry. No Git publisher, uploads or alternate browser."""
+"""Host-owned universal Devspace Direct transport. No Git publisher or alternate browser."""
 from __future__ import annotations
 import sys
 from pathlib import Path
@@ -22,11 +22,13 @@ sys.path.insert(0, str(REPO / "postman" / "web"))
 from postman.devspace.signal import load_binding, atomic_json
 from postman.devspace.task import render_task
 from postman.devspace.observer import DEFAULT_CHECK_INTERVAL_MS, DEFAULT_CHECK_COUNT
+from postman import input_bundle
 from postman_direct import ensure_dedicated_chrome
 from web_worker_bridge import WebWorkerBridge
 
 
-def run(channel, request_id, intent, *, ensure_browser=ensure_dedicated_chrome, bridge_factory=WebWorkerBridge):
+def run(channel, request_id, intent, *, input_bundle_manifest=None, input_files_base64=None,
+        ensure_browser=ensure_dedicated_chrome, bridge_factory=WebWorkerBridge):
     binding = load_binding(channel)
     if binding["requestId"] != request_id:
         raise ValueError("POSTMAN_DEVSPACE_REQUEST_MISMATCH")
@@ -36,6 +38,19 @@ def run(channel, request_id, intent, *, ensure_browser=ensure_dedicated_chrome, 
         return json.loads(result_path.read_text(encoding="utf-8"))
     command = "pwsh -NoProfile -NonInteractive -File " + shlex.quote(str(root / "signal.ps1"))
     prompt = render_task(binding, intent, command)
+    attachment = None
+    if input_bundle_manifest or input_files_base64:
+        if not input_bundle_manifest or not input_files_base64:
+            raise ValueError("POSTMAN_INPUT_BUNDLE_HANDOFF_INVALID")
+        descriptors = input_bundle.normalize_input_files(json.loads(
+            base64.b64decode(input_files_base64, validate=True).decode("utf-8")))
+        image = bool(descriptors) and all(d.get("media_type") in input_bundle.IMAGE_EXTENSIONS
+                                          for d in descriptors)
+        attachment = input_bundle.read_handoff(
+            input_bundle_manifest, request_id, descriptors, image=image)
+        prompt += ("\nHost-закреплённые файлы приложены автоматически к этому сообщению."
+                   " Используй их как входные данные; не требуй ручного прикрепления"
+                   " и не ищи копии в других папках.")
     # Task/workspace/binding stays local; only private prompt goes to its ChatGPT conversation.
     (root / "task.md").write_text(prompt, encoding="utf-8")
     try:
@@ -44,6 +59,7 @@ def run(channel, request_id, intent, *, ensure_browser=ensure_dedicated_chrome, 
         observed = bridge.run_request(request_id, task_url="", prompt=prompt,
             expected_filename="", expected_request={"transportKind": "devspace", "requestId": request_id},
             artifact_mode=False, devspace_binding=binding, cdp_url=browser["cdpUrl"],
+            input_attachment=attachment,
             conversation_url=binding.get("conversationUrl"),
             reminder_interval_ms=DEFAULT_CHECK_INTERVAL_MS, max_reminders=DEFAULT_CHECK_COUNT)
         details = observed.get("details", {})
@@ -65,10 +81,14 @@ def main():
     parser.add_argument("--request-id", required=True)
     parser.add_argument("--task-base64", required=True)
     parser.add_argument("--channel", required=True)
+    parser.add_argument("--input-files-base64")
+    parser.add_argument("--input-bundle-manifest")
     args = parser.parse_args()
     try:
         task = base64.b64decode(args.task_base64, validate=True).decode("utf-8")
-        result = run(args.channel, args.request_id, task)
+        result = run(args.channel, args.request_id, task,
+                     input_files_base64=args.input_files_base64,
+                     input_bundle_manifest=args.input_bundle_manifest)
     except (OSError, ValueError):
         result = {"requestId": args.request_id, "source": "transport_diagnostic", "diagnostic": "BLOCKED"}
     print(json.dumps(result, ensure_ascii=False))
