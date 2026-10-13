@@ -291,7 +291,7 @@ test('Host-owned Devspace control intent keeps owner, preserves one exact ID and
   assert.throws(()=>requestDevspaceControl(binding,{kind:'steer',message:''}),/CONTROL_INVALID/)
 })
 
-test('Host team status is lossless JSON while three Luna lanes are only reserved', () => {
+test('Host team status is lossless JSON while three Luna lanes are only reserved', async () => {
   // Admission persists reserved lanes before the native childId exists. The
   // actual PTC ToolRuntime rejects undefined even though JSON.stringify omits it.
   const row = { stage: 'ready', devspaceLanes: {
@@ -316,7 +316,7 @@ test('Host team status is lossless JSON while three Luna lanes are only reserved
     sol: { present: false, sessionId: null, state: 'absent',
       ownedWorkers: { used: 0, limit: 2, states: {},
         budget: { used: 0, soft: 0, hard: 0, exhausted: 0, unknown: 0 } } } }) }
-  const output = createPostmanTeamStatusTool(ctx, contexts, worker, jobs)
+  const output = await createPostmanTeamStatusTool(ctx, contexts, worker, jobs)
     .execute({}, { agent: parent })
   assert.equal(output.status, 'POSTMAN_TEAM_STATUS')
   assert.equal(output.devspaceLuna.lanes.length, 3)
