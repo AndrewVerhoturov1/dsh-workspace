@@ -269,13 +269,20 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
       return { status: 'POSTMAN_DEVSPACE_READ_ONLY_SCOPE_REQUIRED' }
     const work = [...jobs.values()].filter(item => item.parentSessionId === parent.id &&
       !item.finishedAt && ['QUEUED', 'STARTING', 'RUNNING'].includes(item.state))
-    // Readers and independent lanes do not wait for a different writer.
-    // The only shared mutable worktree still has exactly one writer.
-    if (transportKind === 'devspace' && devspaceMode === 'WRITE_ISOLATED' &&
-        (worker?.hasActiveWork?.(parent) ||
-          work.some(item => item.transportKind === 'devspace' &&
-            item.devspaceMode === 'WRITE_ISOLATED' &&
-            item.taskContext?.worktree === taskContext?.worktree)))
+    // Only overlapping writers contend: unrelated approved folders remain
+    // parallel, while any two Devspace writes to the same tree are exclusive.
+    const writing = mode => ['WRITE_ISOLATED', 'WRITE_APPROVED_TARGET'].includes(mode)
+    const overlaps = (a, b) => {
+      if (!a || !b) return false
+      const forward = relative(a, b), backward = relative(b, a)
+      return (forward === '' || !forward.startsWith('..') && !isAbsolute(forward)) ||
+        (backward === '' || !backward.startsWith('..') && !isAbsolute(backward))
+    }
+    if (transportKind === 'devspace' && writing(devspaceMode) &&
+        (devspaceMode === 'WRITE_ISOLATED' && worker?.hasActiveWork?.(parent) ||
+          work.some(item => item.transportKind === 'devspace' && writing(item.devspaceMode) &&
+            overlaps(approvedScope?.root ?? taskContext?.worktree,
+              item.approvedScope?.root ?? item.taskContext?.worktree))))
       return { status: 'POSTMAN_DEVSPACE_WRITER_BUSY' }
     const job = {
       bridgeJobId: randomUUID(), parentSessionId: parent.id, taskContext, transportKind, state: 'QUEUED',
