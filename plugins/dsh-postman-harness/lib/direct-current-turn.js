@@ -504,6 +504,7 @@ export class DirectPostmanJobManager {
     this.readPublicationState = readPublicationState
     this.inputGrants = inputGrants
     this.jobs = new Map()
+    this.allocatingRequestIds = new Set()
     this.exactAskReplies = new Map()
     this.disposed = false
   }
@@ -535,12 +536,16 @@ export class DirectPostmanJobManager {
     let requestId
     for (let attempt = 0; attempt < 32; attempt += 1) {
       const candidate = makeRequestId(this.now, this.randomInt)
-      if (![...this.jobs.values()].some(job => job.requestId === candidate)) {
+      if (!this.allocatingRequestIds.has(candidate) &&
+          ![...this.jobs.values()].some(job => job.requestId === candidate)) {
         requestId = candidate
         break
       }
     }
     if (requestId === undefined) throw parseError('POSTMAN_REQUEST_ID_COLLISION')
+    // Prevent same-millisecond REQ reuse across concurrent Luna sessions while
+    // the first job awaits its durable onRequestAllocated callback.
+    this.allocatingRequestIds.add(requestId)
     const jobId = `DIRECT_${requestId}`
     const taskBase64 = Buffer.from(payload, 'utf8').toString('base64')
     const args = [
@@ -577,13 +582,17 @@ export class DirectPostmanJobManager {
       readPublicationState: this.readPublicationState,
       waiters: new Set(),
     }
-    if (onRequestAllocated && transportKind !== 'devspace') await onRequestAllocated(requestId) // Durable Bridge correlation precedes any Direct side effect.
-    if (transportKind === 'devspace') {
-      job.devspaceChannel = createDevspaceChannel({ ...devspaceBinding, requestId, sourceRoot: workspace })
-      args.push('-Channel', job.devspaceChannel.channel)
-      if (onRequestAllocated) await onRequestAllocated(requestId, job.devspaceChannel.channel)
+    try {
+      if (onRequestAllocated && transportKind !== 'devspace') await onRequestAllocated(requestId) // Durable Bridge correlation precedes any Direct side effect.
+      if (transportKind === 'devspace') {
+        job.devspaceChannel = createDevspaceChannel({ ...devspaceBinding, requestId, sourceRoot: workspace })
+        args.push('-Channel', job.devspaceChannel.channel)
+        if (onRequestAllocated) await onRequestAllocated(requestId, job.devspaceChannel.channel)
+      }
+      this.jobs.set(sessionId, job)
+    } finally {
+      this.allocatingRequestIds.delete(requestId)
     }
-    this.jobs.set(sessionId, job)
 
     if (inputFiles.length) {
       try {
