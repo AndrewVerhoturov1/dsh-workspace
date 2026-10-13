@@ -2,13 +2,16 @@
 
 id: postman
 status: active
-updated: 2026-10-02
+updated: 2026-10-13
 
 ## Goal
 
 Сохранять Direct Web Postman как единый production transport между локальным Harness/Luna agent и ChatGPT Web, не допуская расхождения runtime, skill и канонических контрактов между отдельными задачами и чатами.
 
 ## Current focus
+
+С 13 октября добавлен отдельный Host-owned `@PostmanDevspace`, без замены старых Postman/Ask/Image: продолжаемая Luna, несколько REQ одного ChatGPT-чата, местный bell и свободный текстовый резерв, Leader-only control/Stop, READ_ONLY/WRITE_TEST/WRITE_ISOLATED и отдельная Git-публикация. Этап 4: при перезапуске Host принимает связанный bell через восстановленную *ту же* Luna, без повторного browser Send и без повышения сообщений до инженерного PASS. Конкретная runtime-готовность требует живой проверки. Канонические документы — `postman/POSTMAN_DEVSPACE_FLOW.md`, `postman/POSTMAN_DEVSPACE_CAPABILITIES.md`.
+
 
 Production transport имеет два explicit user-facing режима поверх общего Direct/Web browser слоя: artifact `@Postman` через `postman/direct/postman.ps1` и text `@PostmanAsk` через `postman/direct/postman-ask.ps1`. Над ними существует supervisor orchestration: top-level `Postman Leader` формирует model-authored `@Postman`/`@PostmanAsk` delegation через Leader-only `postman_bridge`, fresh one-shot Luna выполняет только trusted transport, а parent читает terminal result напрямую из child scope. Trusted current-turn Harness остаётся orchestration boundary и не является отдельным transport.
 
@@ -47,6 +50,8 @@ LIVE E2E остаётся за пользователем: Web implementation ZI
 - `.agents/skills/delegate-via-postman-ask/SKILL.md`
 - `.agents/skills/postman-leader/SKILL.md`
 - `postman/POSTMAN_ASK_FLOW.md`
+- `postman/POSTMAN_DEVSPACE_FLOW.md`
+- `postman/POSTMAN_DEVSPACE_CAPABILITIES.md`
 - `postman/POSTMAN_BRIDGE_FLOW.md`
 - `docs/web-postman-artifact-contract.md`
 - `plugins/dsh-postman-harness/`

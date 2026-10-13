@@ -195,6 +195,81 @@ export function createPostmanDevspaceLuna(ctx, contexts, direct) {
     }
   }
 
+  async function recoverColdBell(parent, bridgeJobId) {
+    const leaderId = parent?.id
+    const taskContext = contexts?.get(leaderId)
+    if (!sameParent(parent, taskContext) || active.has(leaderId) ||
+        typeof ctx.subagents?.inspectOpenContinuableChild !== 'function' ||
+        typeof ctx.subagents?.followup !== 'function') return false
+    const row = rowOf(leaderId)
+    const op = row?.bridgeOperations?.[bridgeJobId]
+    const lane = row?.devspaceLuna
+    if (!op || !['pending', 'unknown'].includes(op.state) ||
+        op.transportKind !== 'devspace' || !op.requestId ||
+        typeof op.devspace?.channel !== 'string' || op.devspace.coldBellRecovery ||
+        !lane || lane.state !== 'ready' || lane.childId !== op.childSessionId ||
+        !lane.requestIds?.includes(op.requestId) ||
+        lane.activeBridgeJobId && lane.activeBridgeJobId !== bridgeJobId) return false
+    let binding, event, terminal
+    try {
+      binding = loadDevspaceChannelForOwner(op.devspace.channel, {
+        bridgeJobId, leaderSessionId: leaderId, lunaSessionId: lane.childId,
+        requestId: op.requestId,
+      })
+      event = readDevspaceEvent(binding)
+      if (!event) return false
+      terminal = { status: 'POSTMAN_BRIDGE_TERMINAL', terminalStatus: 'COMPLETED',
+        requestId: op.requestId, transportKind: 'devspace', checks: 0,
+        childStopReason: 'cold-luna-bell-recovery', lunaSessionId: lane.childId,
+        result: devspaceTerminal(binding) }
+      if (await ctx.subagents.inspectOpenContinuableChild(parent, lane.childId) !== true)
+        return false
+    } catch { return false }
+    // Reserve before the first irreversible coordinator followup. If the Host
+    // crashes after this intent, status stays UNKNOWN, never silently resends.
+    try {
+      await change(leaderId, current => {
+        const before = current.bridgeOperations?.[bridgeJobId], child = current.devspaceLuna
+        if (!['pending', 'unknown'].includes(before?.state) ||
+            before.devspace?.coldBellRecovery ||
+            before.requestId !== op.requestId || before.childSessionId !== lane.childId ||
+            child?.childId !== lane.childId || child.state !== 'ready')
+          throw Error('POSTMAN_DEVSPACE_COLD_BELL_INTENT_CHANGED')
+        return { ...current, bridgeOperations: { ...current.bridgeOperations,
+          [bridgeJobId]: { ...before, devspace: { ...before.devspace,
+            coldBellRecovery: 'intent' } } } }
+      })
+    } catch { return false }
+    let messageId
+    try {
+      messageId = await relay(parent, lane.childId,
+        'Host-verified local bell from previous REQ ' + op.requestId +
+        ', outcome=' + event.reportedOutcome +
+        '. This is an existing job recovery, NOT a new task or browser Send. ' +
+        'Return these observations to the same Leader; engineering PASS not proven.',
+        new AbortController().signal)
+      if (typeof messageId !== 'string' || !messageId)
+        return false
+    } catch { return false }
+    try {
+      await change(leaderId, current => {
+        const before = current.bridgeOperations?.[bridgeJobId], child = current.devspaceLuna
+        if (!['pending','unknown'].includes(before?.state) ||
+            before?.devspace?.coldBellRecovery !== 'intent' ||
+            before?.requestId !== op.requestId || before?.childSessionId !== lane.childId ||
+            child?.childId !== lane.childId || child.state !== 'ready')
+          throw Error('POSTMAN_DEVSPACE_COLD_BELL_COMMIT_CHANGED')
+        return { ...current,
+          devspaceLuna: { ...child, activeBridgeJobId:
+            child.activeBridgeJobId === bridgeJobId ? null : child.activeBridgeJobId },
+          bridgeOperations: { ...current.bridgeOperations,
+            [bridgeJobId]: { ...before, state: 'received', phase: 'synchronized',
+              terminal, synchronization: 'not-required' } } }
+      })
+      return true
+    } catch { return false }
+  }
+
   async function upgradeLateBell(parent, job) {
     if (!sameParent(parent, job.taskContext) || job.transportKind !== 'devspace' ||
         job.trustedTerminal?.status !== 'POSTMAN_BRIDGE_TERMINAL' ||
@@ -203,7 +278,7 @@ export function createPostmanDevspaceLuna(ctx, contexts, direct) {
     const lane = row?.devspaceLuna
     if (!op || op.state !== 'received' || op.terminal?.requestId !== job.requestId ||
         op.childSessionId !== job.childSessionId || lane?.childId !== job.childSessionId ||
-        lane.state !== 'ready' || !op.devspace?.channel) return false
+        lane.state !== 'ready' || !op.devspace?.channel || op.devspace?.lateBellRecovery) return false
     let binding, bell
     try {
       binding = loadDevspaceChannelForOwner(op.devspace.channel, {
@@ -213,6 +288,19 @@ export function createPostmanDevspaceLuna(ctx, contexts, direct) {
     } catch { return false }
     if (!bell || await ctx.subagents.inspectOpenContinuableChild(parent, lane.childId) !== true)
       return false
+    // One durable local intent before forwarding a late bell. If the followup
+    // is delivered but the Host crashes before journal commit, never replay it.
+    try {
+      await change(parent.id, current => {
+        const before = current.bridgeOperations?.[job.bridgeJobId]
+        if (before?.state !== 'received' || before.terminal?.requestId !== job.requestId ||
+            before.terminal?.result?.source === 'bell' || before.devspace?.lateBellRecovery)
+          throw Error('POSTMAN_DEVSPACE_LATE_BELL_INTENT_CHANGED')
+        return { ...current, bridgeOperations: { ...current.bridgeOperations,
+          [job.bridgeJobId]: { ...before, devspace: { ...before.devspace,
+            lateBellRecovery: 'intent' } } } }
+      })
+    } catch { return false }
     try {
       await relay(parent, lane.childId, 'Host late authenticated bell for existing REQ ' +
         job.requestId + ': ' + bell.reportedOutcome + '. Update this same job, no new task or Send.',
@@ -267,5 +355,5 @@ export function createPostmanDevspaceLuna(ctx, contexts, direct) {
       requestCount: lane.requestIds?.length ?? 0,
       conversationBound: typeof lane.conversationRef === 'string' && CONVERSATION.test(lane.conversationRef) }
   }
-  return { run, close, snapshot, upgradeLateBell }
+  return { run, close, snapshot, upgradeLateBell, recoverColdBell }
 }

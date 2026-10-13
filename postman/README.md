@@ -2,7 +2,11 @@
 
 `postman/` содержит production transport между локальным Harness agent и ChatGPT Web. Входные файлы и временная публикация описаны в [Postman Input Files](POSTMAN_INPUT_FILES.md).
 
-## Три transport mode
+## Четыре режима транспорта
+
+Новый адресный `@PostmanDevspace` работает через настоящий DevSpace MCP и Host-owned местный bell; без bell доставляет имеющиеся факты без требования ZIP или идеального отчёта. Leader управляет продолжаемой Luna через `postman_bridge`; `postman_devspace_control` и `postman_devspace_luna_close` доступны только владельцу. READ_ONLY допускает отсутствие Git-ветки, WRITE_TEST ограничен частной тестовой папкой, WRITE_ISOLATED — Host task worktree. Внешний ChatGPT не получает автоматическое разрешение Git commit/push/PR. После рестарта Host возвращает местный bell через ту же Luna, если её точная привязка доказана; исходный prompt повторно не отправляется. См. [поток и восстановление](POSTMAN_DEVSPACE_FLOW.md), [матрицу возможностей](POSTMAN_DEVSPACE_CAPABILITIES.md) и [рабочие команды](devspace/README.md).
+
+## Три исторических transport mode
 
 Artifact mode:
 

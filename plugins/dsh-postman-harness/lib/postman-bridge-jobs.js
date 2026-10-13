@@ -493,6 +493,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
         // Thereafter reads and overlapping retries use the same mutable object.
         const terminal = losslessValue(operation.terminal)
         job = { bridgeJobId, parentSessionId: parent.id, transportKind: terminal.transportKind,
+          taskContext: contexts?.get?.(parent.id) ?? null, childSessionId: operation.childSessionId ?? null,
           trustedTerminal: terminal, requestId: terminal.requestId ?? null,
           state: operation.grantDiagnostic ? 'FAILED' : 'TERMINAL',
           finishedAt: new Date().toISOString(), synchronization: operation.synchronization === 'pending' ? 'busy' : operation.synchronization ?? 'busy',
@@ -504,8 +505,18 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
             terminal.result?.code === 'RESULT_DURABLE' &&
             !row?.artifactGrants?.[terminal.requestId]) job.grantRecovery = registerGrant(job)
       } else if (operation?.transportKind === 'devspace' && ['pending', 'unknown'].includes(operation.state)) {
-        // Stage 1 preserves the local bell but cannot promote it without Luna's
-        // trusted terminal. Restart/resume delivery is not a direct Host shortcut.
+        // Stage 4: never directly promote a Host bell. First verify and follow up
+        // the exact persisted continuable Luna with an idempotent durable intent.
+        // Serialize concurrent cold status reads without rerunning Web or Direct.
+        if (operation.requestId && operation.childSessionId && operation.devspace?.channel &&
+            !operation.devspace?.coldBellRecovery && !coldRecovery.has(bridgeJobId)) {
+          const attempt = devspaceLuna.recoverColdBell(parent, bridgeJobId)
+          coldRecovery.set(bridgeJobId, attempt)
+          let recovered = false
+          try { recovered = await attempt } catch { recovered = false }
+          finally { if (coldRecovery.get(bridgeJobId) === attempt) coldRecovery.delete(bridgeJobId) }
+          if (recovered) return status(parent, bridgeJobId, retrySync, recover)
+        }
         return { status: 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN', bridgeJobId,
           requestId: operation.requestId ?? null, childSessionId: operation.childSessionId ?? null,
           diagnostic: 'POSTMAN_DEVSPACE_LUNA_TERMINAL_UNAVAILABLE' }
@@ -767,6 +778,56 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     catch (error) { return { status: 'POSTMAN_DEVSPACE_CONTROL_REJECTED', diagnostic: diagnostic(error) } }
   }
 
+  /** After the exact Leader task is reattached, deliver a cold bell through
+   * its persisted Luna and then an owner-only READY wake. Never resume Direct.
+   * The write-before-wake intent means uncertain notification is never retried.
+   */
+  async function recoverDevspacePending(parent) {
+    if (disposed || !controlCallerAllowed(parent) || !contexts?.get(parent.id))
+      return { status: 'POSTMAN_DEVSPACE_RECOVERY_UNAVAILABLE' }
+    const operations = contexts.record?.(parent.id)?.bridgeOperations ?? {}
+    const candidates = Object.entries(operations).filter(([, op]) => op.transportKind === 'devspace' &&
+      (['pending', 'unknown'].includes(op.state) && op.requestId && op.devspace?.channel ||
+       op.state === 'received' && op.devspace?.coldBellRecovery === 'intent') &&
+      !op.devspace?.coldReadyWake)
+    const recovered = [], unresolved = []
+    for (const [bridgeJobId] of candidates.slice(0, 12)) {
+      let outcome
+      try { outcome = await status(parent, bridgeJobId) }
+      catch { unresolved.push({ bridgeJobId, status: 'STATUS_UNKNOWN' }); continue }
+      const job = jobs.get(bridgeJobId)
+      if (outcome.status !== 'POSTMAN_BRIDGE_TERMINAL' || outcome.result?.source !== 'bell' ||
+          !job || job.parentSessionId !== parent.id) {
+        unresolved.push({ bridgeJobId, status: 'OUTCOME_UNKNOWN' }); continue
+      }
+      try {
+        await contexts.changeRecord(parent.id, row => {
+          const op = row.bridgeOperations?.[bridgeJobId]
+          if (!op || op.state !== 'received' || op.devspace?.coldBellRecovery !== 'intent' ||
+              op.devspace?.coldReadyWake || op.terminal?.requestId !== job.requestId)
+            throw Error('POSTMAN_DEVSPACE_COLD_WAKE_INTENT_CHANGED')
+          return { ...row, bridgeOperations: { ...row.bridgeOperations,
+            [bridgeJobId]: { ...op, devspace: { ...op.devspace, coldReadyWake: 'intent' } } } }
+        })
+      } catch { unresolved.push({ bridgeJobId, status: 'WAKE_INTENT_UNKNOWN' }); continue }
+      notify(job)
+      const delivered = job.notification === 'DELIVERED'
+      try {
+        await contexts.changeRecord(parent.id, row => {
+          const op = row.bridgeOperations?.[bridgeJobId]
+          if (!op || op.devspace?.coldReadyWake !== 'intent')
+            throw Error('POSTMAN_DEVSPACE_COLD_WAKE_STATE_CHANGED')
+          return { ...row, bridgeOperations: { ...row.bridgeOperations,
+            [bridgeJobId]: { ...op, devspace: { ...op.devspace,
+              coldReadyWake: delivered ? 'sent' : 'unknown' } } } }
+        })
+      } catch { /* Durable intent already prevents duplicate wake. */ }
+      recovered.push({ bridgeJobId, requestId: job.requestId,
+        notification: delivered ? 'DELIVERED' : 'UNKNOWN' })
+    }
+    return { status: 'POSTMAN_DEVSPACE_RECOVERY_SUMMARY', recovered, unresolved }
+  }
+
   async function dispose() {
     if (disposed) return
     disposed = true
@@ -778,6 +839,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
   }
 
   return { accept, status, list, teamSnapshot, stop, hasActive, hasActiveWork, dispose,
-    devspaceControl, devspaceLunaClose: parent => devspaceLuna.close(parent, contexts?.get(parent.id)),
+    devspaceControl, recoverDevspacePending,
+    devspaceLunaClose: parent => devspaceLuna.close(parent, contexts?.get(parent.id)),
     devspaceLunaSnapshot: parent => devspaceLuna.snapshot(parent) }
 }

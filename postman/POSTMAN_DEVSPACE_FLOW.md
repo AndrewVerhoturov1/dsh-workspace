@@ -1,4 +1,4 @@
-# PostmanDevspace: этап 2 — связистка и управление
+# PostmanDevspace: этапы 2–4 — связь, инженерное исполнение, восстановление
 
 ## Отличие от этапа 1
 
@@ -29,6 +29,12 @@ result.md не препятствует передаче сведений о REQ
 После окончания работы Leader вызывает postman_devspace_luna_close;
 лишь затем безопасно закрывает task context. Старый Bridge artifact/Ask/Image
 остаётся одноразовым и использует свои неизменённые инструменты.
+
+## Этап 4: восстановление после рестарта Host
+
+Если у Leader сохранено незавершённое обращение и появился настоящий местный bell, после перезапуска Host **не пересылает** ChatGPT исходный prompt. `postman_task_prepare` перепривязывает прежний Leader task context; Host сверяет owner/job/REQ/channel, подтверждает bell и существование той же продолжаемой Luna. Durable `coldBellRecovery=intent` записывается до native `followup`. Только после принятия события той же Luna возможно повышение pending/unknown в trusted terminal. Затем `POSTMAN_BRIDGE_READY` доставляется Leader с отдельным durable `coldReadyWake` и доступным `postman_bridge_status`. Повторный restart/status/prepare не вызывает новый REQ и не создаёт второй успех.
+
+Если native followup недоказан, сохраняется `OUTCOME_UNKNOWN` и исходное событие. Нет автоматического повтора, обхода Luna или фальшивого DONE. После crash при неопределённом исходе Host оставляет intent на расследование, а не повторяет side effect. Уведомление исходного Leader запускается только после его перепривязки: при недоступной старой сессии Leader событие не передаётся чужому получателю.
 
 ## Этап 3: рабочие области и инженерный результат
 

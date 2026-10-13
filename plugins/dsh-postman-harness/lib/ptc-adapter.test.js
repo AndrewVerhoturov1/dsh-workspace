@@ -507,10 +507,10 @@ test('production Leader PTC exposes and forwards real Bridge devspace_mode schem
   a.ctx.tools.restrict(postmanBridgeRestrictionForAgent(a));f.adapter.refresh(a)
   try {
     const schema=f.ctx.tools.schemas(a).find(s=>s.name==='postman_bridge')
-    assert.deepEqual(schema.parameters.properties.devspace_mode.enum,['READ_ONLY','WRITE_TEST'])
+    assert.deepEqual(schema.parameters.properties.devspace_mode.enum,['READ_ONLY','WRITE_TEST','WRITE_ISOLATED'])
     const guidance=sections[0].text({scope:a})
     const nested=JSON.parse(guidance.slice(guidance.lastIndexOf('Current nested argument schemas: ')+33))
-    assert.deepEqual(nested.find(s=>s.name==='postman_bridge').parameters.properties.devspace_mode.enum,['READ_ONLY','WRITE_TEST'])
+    assert.deepEqual(nested.find(s=>s.name==='postman_bridge').parameters.properties.devspace_mode.enum,['READ_ONLY','WRITE_TEST','WRITE_ISOLATED'])
     const result=await f.execute(a,"return await tools.postman_bridge({message:'@PostmanDevspace harmless test',devspace_mode:'WRITE_TEST'})")
     assert.equal(result.isError,false,result.error?.message)
     assert.equal(result.value.status,'ok',JSON.stringify(result.value))
