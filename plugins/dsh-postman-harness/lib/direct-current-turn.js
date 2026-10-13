@@ -517,7 +517,8 @@ export class DirectPostmanJobManager {
     if (previous?.state === 'running' || previous?.state === 'starting') throw parseError('POSTMAN_CURRENT_TURN_JOB_ALREADY_RUNNING')
     if (typeof payload !== 'string' || payload.trim() === '') throw parseError('POSTMAN_EMPTY_PAYLOAD')
     if (!['artifact', 'text', 'image', 'devspace'].includes(transportKind)) throw parseError('POSTMAN_RESULT_MODE_INVALID')
-    if (transportKind === 'devspace' && (!devspaceBinding || devspaceBinding.lunaSessionId !== sessionId || chatRequestId || automaticContinuation || inputFiles.length))
+    if (transportKind === 'devspace' && (!devspaceBinding || devspaceBinding.lunaSessionId !== sessionId ||
+        chatRequestId || automaticContinuation))
       throw parseError('POSTMAN_DEVSPACE_LEADER_BINDING_REQUIRED')
     if (branch !== STANDALONE_TASK_PUBLICATION_BRANCH && !POSTMAN_TASK_BRANCH_PATTERN.test(branch ?? '')) throw parseError('POSTMAN_TASK_BRANCH_INVALID')
 
