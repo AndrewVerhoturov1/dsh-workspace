@@ -68,10 +68,17 @@ def process_one(page, prompt, chat_url, binding, *, activity, stop_control, slee
         return None  # Keep in the Host queue; never type with Stop-only UI.
     stop_status = None
     if mode in {"preempt", "stop"}:
+        # A visible DevSpace operation may outlive browser Stop. Never interrupt
+        # it through the UI: keep this Host intent queued until generation is
+        # known safe or the exact chat becomes idle.
+        if state["state"] not in {"SAFE_GENERATION", "IDLE"}:
+            return None
         condition, button = stop_control(page)
-        if condition == "UNKNOWN" or state["state"] == "UNKNOWN":
+        if condition == "UNKNOWN":
             return None
         if condition == "PRESENT":
+            if state["state"] != "SAFE_GENERATION":
+                return None  # Conflicting UI proof; no Stop.
             # Commit an uncertain receipt before an irreversible click: a crash
             # must not replay the Stop. The same live attempt may refine it.
             acknowledge(binding, intent, "STOP_UNKNOWN", stop_state="CLICK_PENDING")
@@ -122,8 +129,12 @@ def process_one(page, prompt, chat_url, binding, *, activity, stop_control, slee
     # Commit an unknown Send intent before entering the one-shot browser mutation.
     # If the process dies after clicking but before a final receipt, there is no
     # automatic replay of this controlId on a later observation.
-    if mode == 'steer':
-        acknowledge(binding, intent, 'SEND_UNKNOWN', send_state='UNKNOWN')
+    if mode in {'steer', 'preempt'}:
+        # For preempt with an already-idle chat this is the first mutation.
+        # If Stop was clicked earlier, the STOP_UNKNOWN receipt already
+        # prevents replay; acknowledge() never overwrites it.
+        acknowledge(binding, intent, 'SEND_UNKNOWN',
+                    stop_state=stop_status, send_state='UNKNOWN')
     # An unknown prior Send is NEVER retried; this is a distinct authorized
     # Host control with its own controlId and a proved idle same-chat composer.
     result = submit.submit_existing_prompt(page, intent["message"], chat_url,
