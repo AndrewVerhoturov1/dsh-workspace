@@ -74,11 +74,21 @@ export const POSTMAN_TASK_DOMAIN = defineDomain({
       requestIds: z.array(z.string()).optional(),
       conversationRef: z.string().nullable().optional(),
     }).strict().optional(),
+    // Optional on-disk lanes. Historical single devspaceLuna remains valid and
+    // is adopted as lane "legacy" on the first new Devspace admission only.
+    devspaceLanes: z.record(z.string(), z.object({
+      childId: z.string().min(1).optional(),
+      state: z.enum(['reserved', 'intent', 'ready', 'uncertain', 'closing', 'closed']),
+      activeBridgeJobId: z.string().nullable().optional(),
+      requestIds: z.array(z.string()).optional(),
+      conversationRef: z.string().nullable().optional(),
+    }).strict()).optional(),
     bridgeOperations: z.record(z.string(), z.object({
       state: z.enum(['pending', 'unknown', 'received']),
       phase: z.enum(['reserved', 'child-known', 'request-known', 'publication-known', 'terminal', 'not-sent', 'synchronized']).optional(),
       transportKind: z.enum(['artifact', 'text', 'image', 'devspace']).optional(),
       devspace: z.object({ mode: z.enum(['READ_ONLY', 'WRITE_TEST', 'WRITE_ISOLATED']), channel: z.string().optional(),
+        laneId: z.string().optional(),
         coldBellRecovery: z.enum(['intent']).optional(),
         coldReadyWake: z.enum(['intent', 'sent', 'unknown']).optional(),
         lateBellRecovery: z.enum(['intent']).optional() }).strict().optional(),
