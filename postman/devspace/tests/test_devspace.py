@@ -149,6 +149,35 @@ assert hasattr(stdlib_signal, 'set_wakeup_fd')
         self.assertEqual(result["details"]["diagnostic"], "UNKNOWN")
         self.assertIn("произвольный", result["details"]["assistantText"])
 
+    def test_native_image_handoff_reaches_owned_devspace_browser_once(self):
+        import base64
+        calls=[]
+        attachment=SimpleNamespace(request_id=REQ,media_type="image/png")
+        class Bridge:
+            def __init__(self, **kwargs): pass
+            def run_request(self, request_id, **kwargs):
+                self_test.assertIs(kwargs["input_attachment"], attachment)
+                self_test.assertEqual(kwargs["devspace_binding"], self_test.binding)
+                self_test.assertIn("автоматически", kwargs["prompt"])
+                calls.append(kwargs)
+                return {"ok":True,"code":"DEVSPACE_DIAGNOSTIC","details":{
+                    "source":"text_fallback","assistantText":"processed reference",
+                    "diagnostic":"UNKNOWN"}}
+        self_test=self
+        encoded=base64.b64encode(b'[{"media_type":"image/png"}]').decode("ascii")
+        with patch.object(transport, "load_binding", return_value=self.binding), \
+             patch.object(transport.input_bundle, "normalize_input_files",
+                          return_value=[{"media_type":"image/png"}]), \
+             patch.object(transport.input_bundle, "read_handoff",
+                          return_value=attachment) as handoff:
+            outcome=transport.run(self.channel, REQ, "use attached image",
+                input_bundle_manifest="/private/handoff.json", input_files_base64=encoded,
+                ensure_browser=lambda:{"cdpUrl":"existing"},bridge_factory=Bridge)
+        self.assertEqual(outcome["source"],"text_fallback")
+        handoff.assert_called_once()
+        self.assertTrue(handoff.call_args.kwargs["image"])
+        self.assertEqual(len(calls),1)
+
     def test_external_bell_probe_precedes_dom_and_chat_final(self):
         received = {"ok":True,"code":"DEVSPACE_SIGNAL_RECEIVED","details":{"reportedOutcome":"DONE"}}
         result = observer.observer.observe_next_assistant(SimpleNamespace(url=CHAT), "exact", CHAT,
