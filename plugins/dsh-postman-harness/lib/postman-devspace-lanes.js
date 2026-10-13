@@ -14,8 +14,10 @@ export function createPostmanDevspaceLanes(ctx, contexts, direct) {
   const record = leaderId => contexts?.record?.(leaderId)
   const laneOf = (row, laneId) => row?.devspaceLanes?.[laneId] ??
     (laneId === 'legacy' ? row?.devspaceLuna : undefined)
-  const laneIds = row => Object.keys(row?.devspaceLanes ?? 
-    (row?.devspaceLuna ? { legacy: row.devspaceLuna } : {}))
+  const laneIds = row => [...new Set([
+    ...Object.keys(row?.devspaceLanes ?? {}),
+    ...(row?.devspaceLuna && !row?.devspaceLanes?.legacy ? ['legacy'] : []),
+  ])]
   const keyOf = (leaderId, laneId) => leaderId + ':' + laneId
   function get(leaderId, laneId) {
     if (!laneId) return legacy
