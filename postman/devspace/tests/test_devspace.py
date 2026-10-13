@@ -88,7 +88,9 @@ class DevspaceTests(unittest.TestCase):
         self.assertNotIn(self.binding["capability"], prompt)
         self.assertNotIn("raw.githubusercontent.com", prompt)
         self.assertNotIn("POSTMAN_TEXT_RESULT_BEGIN", prompt)
-        self.assertIn("Никаких Git writes", prompt)
+        self.assertIn("GitHub writes/commit/push/PR/merge", prompt)
+        self.assertIn("Computer Use по умолчанию не разрешён", prompt)
+        self.assertIn("интерфейсами ChatGPT, DeepSeek Harness, Codex", prompt)
 
     def test_script_transport_does_not_shadow_standard_python_signal(self):
         script = REPO / 'postman' / 'devspace' / 'transport.py'
