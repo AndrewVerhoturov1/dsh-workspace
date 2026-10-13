@@ -116,7 +116,7 @@ export function createPostmanBridgeTool(ctx, jobs, contexts) {
       let parsed
       try { parsed = parsePostmanUserTurn(args?.message) }
       catch (error) { return { status: 'POSTMAN_BRIDGE_MESSAGE_REJECTED', diagnostic: String(error?.message ?? error) } }
-      if (parsed.transportKind === 'devspace' && (parsed.mode !== 'fresh' || parsed.inputFiles?.length ||
+      if (parsed.transportKind === 'devspace' && (parsed.mode !== 'fresh' ||
           args.devspace_mode !== undefined && !['READ_ONLY', 'WRITE_TEST', 'WRITE_ISOLATED'].includes(args.devspace_mode)))
         return { status: 'POSTMAN_BRIDGE_MESSAGE_REJECTED', diagnostic: 'POSTMAN_DEVSPACE_STAGE1_SCOPE' }
       if (parsed.transportKind !== 'devspace' &&
