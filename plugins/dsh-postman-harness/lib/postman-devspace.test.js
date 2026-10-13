@@ -327,6 +327,54 @@ test('Host team status is lossless JSON while three Luna lanes are only reserved
     'No undefined field can cross the Host PTC lossless JSON boundary')
 })
 
+test('failed pre-child reservations can be retired, never claiming a sent REQ', async () => {
+  const scope={branch:'main',devspaceReadOnly:true}
+  const leader={...parent}
+  const makeRow=()=>({bridgeOperations:Object.fromEntries(
+    ['a','b','c'].map(id=>['job-'+id,{
+      state:'unknown',phase:'reserved',transportKind:'devspace',
+      devspace:{mode:'READ_ONLY',laneId:id},
+    }])),
+    devspaceLanes:Object.fromEntries(['a','b','c'].map(id=>[id,{
+      state:'reserved',activeBridgeJobId:'job-'+id,
+      requestIds:[],conversationRef:null,
+    }]))})
+  let row=makeRow(), writes=0
+  const ctx={agents:{get:id=>id===leader.id?leader:null}}
+  const contexts={get:()=>scope,record:()=>row,
+    changeRecord:async(_id,update)=>{row=update(row);writes++}}
+  const lanes=createPostmanDevspaceLanes(ctx,contexts,{start:()=>assert.fail('no REQ or browser send')})
+  const result=await lanes.close(leader,scope)
+  assert.equal(result.status,'POSTMAN_DEVSPACE_LUNA_CLOSED')
+  assert.equal(writes,3)
+  for(const id of ['a','b','c']){
+    assert.equal(row.devspaceLanes[id].state,'closed')
+    assert.equal(row.devspaceLanes[id].activeBridgeJobId,null)
+    const op=row.bridgeOperations['job-'+id]
+    assert.equal(op.state,'received')
+    assert.equal(op.phase,'not-sent')
+    assert.equal(op.synchronization,'not-required')
+    assert.equal(op.cancellationRequested,true)
+    assert.equal(op.requestId,undefined)
+    assert.equal(op.childSessionId,undefined)
+    assert.equal(op.terminal,undefined)
+  }
+  assert.equal((await lanes.close(leader,scope)).status,'POSTMAN_DEVSPACE_LUNA_CLOSED')
+  // One in-flight or uncertain channel must block blanket cleanup atomically.
+  row=makeRow()
+  row.bridgeOperations['job-b'].requestId='REQ_20261013T000000Z_0001'
+  const previous=structuredClone(row)
+  const blocked=await lanes.close(leader,scope)
+  assert.equal(blocked.status,'POSTMAN_DEVSPACE_LUNA_BUSY')
+  assert.deepEqual(row,previous)
+  // Even targeted close must not misrepresent an ambiguous REQ as not sent.
+  assert.equal((await lanes.close(leader,scope,'b')).status,'POSTMAN_DEVSPACE_LUNA_BUSY')
+  assert.deepEqual(row,previous)
+  assert.equal((await lanes.close({...leader},scope,'a')).status,
+    'POSTMAN_DEVSPACE_LUNA_CALLER_REJECTED')
+  assert.deepEqual(row,previous)
+})
+
 test('three concurrent READ_ONLY lanes isolate Luna, REQ, chat and an UNKNOWN in another line', async () => {
   let row = { bridgeOperations: {} }
   const context = { branch, repositoryPath: 'C:/source', worktree: 'C:/source', devspaceReadOnly:true }
@@ -354,10 +402,15 @@ test('three concurrent READ_ONLY lanes isolate Luna, REQ, chat and an UNKNOWN in
     wait(childId){return new Promise(resolve=>waiting.set(childId,resolve))},
     dispose(){},
   }
-  const contexts={
+  const sourceContexts = {
     get:()=>context, record:()=>row,
     changeRecord:async (_id,fn)=>{row=fn(row)},
   }
+  // Real PostmanTaskContexts is a Proxy with no enumerable own keys;
+  // spreading it silently dropped get()/verifyWorktree() and prevented all
+  // three Luna from starting after successful Bridge admission.
+  const contexts = new Proxy({}, {get: (_target, key) => sourceContexts[key]})
+  assert.deepEqual(Object.keys(contexts), [])
   const coordinator={run:(_signal,fn)=>Promise.resolve().then(fn),dispose(){}}
   const jobs=createPostmanBridgeJobs(ctx,coordinator,null,contexts,null,direct)
   const accepted=await Promise.all([1,2,3].map(i=>
