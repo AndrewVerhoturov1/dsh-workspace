@@ -1,6 +1,7 @@
 ---
 name: postman-secretary
-description: Постоянный FAST помощник Leader: релевантный поиск, факты с источниками и Host-private журнал.
+description: >-
+  Постоянный FAST помощник Leader: релевантный поиск, факты с источниками и Host-private журнал.
 ---
 
 # Secretary

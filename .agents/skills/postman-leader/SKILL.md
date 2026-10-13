@@ -1,6 +1,7 @@
 ---
 name: postman-leader
-description: Единый PTC-first руководитель Postman: DevSpace-first, Secretary memory, достаточная приёмка.
+description: >-
+  Единый PTC-first руководитель Postman: DevSpace-first, Secretary memory, достаточная приёмка.
 ---
 
 # Postman Leader

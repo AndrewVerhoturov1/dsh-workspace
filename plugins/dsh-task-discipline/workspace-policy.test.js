@@ -40,8 +40,8 @@ const body = request => request.messages.map(m=>JSON.stringify(m.content)).join(
 const latest = (ctx, agent) => agent.session.deriveMessages().findLast(m=>m.source?.plugin==='@deepseek-ai/dsh-system-prompt')?.source.sections ?? []
 
 async function fixture(dir) {
-  for (const path of ['.git','docs/workflow','docs/subprojects/postman','docs/subprojects/ptc','plugins/dsh-ptc','.agents/skills/postman-leader','nested','sibling','home']) await mkdir(join(dir,path),{recursive:true})
-  for (const path of ['AGENTS.md','REPO_POLICY.md','docs/workflow/TASK_CONTRACT.md','docs/subprojects/postman/SUBPROJECT.md','docs/subprojects/ptc/SUBPROJECT.md','.agents/skills/postman-leader/SKILL.md']) await copyFile(join(repo,path),join(dir,path))
+  for (const path of ['.git','docs/workflow','docs/subprojects/postman','docs/subprojects/ptc','plugins/dsh-ptc','.agents/skills/postman-leader','.agents/skills/postman-secretary','nested','sibling','home']) await mkdir(join(dir,path),{recursive:true})
+  for (const path of ['AGENTS.md','REPO_POLICY.md','docs/workflow/TASK_CONTRACT.md','docs/subprojects/postman/SUBPROJECT.md','docs/subprojects/ptc/SUBPROJECT.md','.agents/skills/postman-leader/SKILL.md','.agents/skills/postman-secretary/SKILL.md']) await copyFile(join(repo,path),join(dir,path))
   await writeFile(join(dir,'nested/AGENTS.md'),'NESTED_ONLY: applies only under nested/')
   await writeFile(join(dir,'sibling/AGENTS.md'),'SIBLING_ONLY: applies only under sibling/')
   await writeFile(join(dir,'nested/a.txt'),'a'); await writeFile(join(dir,'plugins/dsh-ptc/a.txt'),'a')
@@ -90,6 +90,14 @@ async function phase(dir, resumed) {
   const {ctx,requests,setup,create,persistence,compactor} = r
   try {
     const leader = resumed ? (await ctx.agents.resume({setup,resumeSessionId:'leader',agentOptions:{provider:'fixture',model:'inert'}})).agent : await create('leader')
+    // Exercise the real filesystem skill registry, not a hand-written YAML
+    // parser or a mocked return value. Invalid frontmatter silently removes
+    // the role skill, which makes WORKSPACE_POLICY_REQUIRED block a new Leader.
+    for (const role of ['postman-leader', 'postman-secretary']) {
+      const skill = await ctx.skills.get(role, {cwd:dir, scope:leader, signal:signal()})
+      assert.equal(skill?.name, role, 'role skill must be discoverable: '+role)
+      assert.match(skill.description, /Postman:|Leader:/)
+    }
     leader.followup(input('Bounded fixture task')); await leader.whenIdle()
     if (!resumed) {
       const result = await ctx.tools.execute({callId:'project-touch',name:'read',arguments:{file_path:'plugins/dsh-ptc/a.txt'},agent:leader,signal:signal()})
@@ -99,7 +107,7 @@ async function phase(dir, resumed) {
     assert.ok(latest(ctx,leader).some(s=>s.text.endsWith(projectText)),'subproject hints survive separate process')
     const first = requests.at(-1).request
     assert.ok(body(first).includes('Общие правила агента'))
-    assert.ok(body(first).includes('POSTMAN_LEADER_SKILL_VERSION: 31'))
+    assert.ok(body(first).includes('POSTMAN_LEADER_SKILL_VERSION: 33'))
     for (const path of ['REPO_POLICY.md','docs/workflow/TASK_CONTRACT.md']) {
       const text = await readFile(join(dir,path),'utf8')
       assert.ok(latest(ctx,leader).some(s=>s.text.endsWith(text)))
@@ -114,7 +122,7 @@ async function phase(dir, resumed) {
     assert.equal(request.agent.session.header.agentPreset,'postman-leader')
     assert.equal(ctx.agentPresets.composedPreset(request.agent.ctx),'postman-leader')
     assert.match(request.request.system,/Worker persona/)
-    assert.ok(!body(request.request).includes('POSTMAN_LEADER_SKILL_VERSION: 31'),'Leader role does not leak into child')
+    assert.ok(!body(request.request).includes('POSTMAN_LEADER_SKILL_VERSION: 33'),'Leader role does not leak into child')
     assert.ok(body(request.request).includes('Общие правила агента'))
     for (const path of ['REPO_POLICY.md','docs/workflow/TASK_CONTRACT.md']) {
       const text = await readFile(join(dir,path),'utf8')
@@ -124,9 +132,9 @@ async function phase(dir, resumed) {
       const generation = leader.session.surface.replaceGeneration
       assert.ok(await compactor.compactNow(leader,signal()))
       assert.ok(leader.session.surface.replaceGeneration>generation)
-      assert.ok(!body({messages:leader.session.deriveMessages()}).includes('POSTMAN_LEADER_SKILL_VERSION: 31'))
+      assert.ok(!body({messages:leader.session.deriveMessages()}).includes('POSTMAN_LEADER_SKILL_VERSION: 33'))
       leader.followup(input('Continue after native compaction')); await leader.whenIdle()
-      assert.ok(body(requests.at(-1).request).includes('POSTMAN_LEADER_SKILL_VERSION: 31'))
+      assert.ok(body(requests.at(-1).request).includes('POSTMAN_LEADER_SKILL_VERSION: 33'))
       assert.ok(body(requests.at(-1).request).includes('Общие правила агента'))
       assert.ok(latest(ctx,leader).some(s=>s.text.endsWith(projectText)),'subproject context restored after real compaction')
     }
