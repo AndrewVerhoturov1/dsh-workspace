@@ -10,8 +10,8 @@
 | D — интерфейс | Настройки 2–5 игроков, полный hot-seat цикл, список ходов, счёт, сохранение/загрузка и Tile Lab | Реализовано; шесть E2E-сценариев прошли совокупно в адресных прогонах |
 | E — интеграция | Подключение приложения, lock-файл, Vitest, проверка TypeScript и production build | Завершён; полный npm test: 36 тестов, check/build PASS |
 | F — браузерная приёмка | E2E на живом приложении: настройки 2/5 игроков, ход, сохранение/загрузка, воспроизводимость, окончание игры, Tile Lab | Завершена для шести проверяемых DOM-сценариев; графика/GPU и качество отображения отдельно не сертифицированы |
-| G — публикация | Review diff, отбор файлов задачи и отдельное разрешение публикации task branch/PR | Не выполнена; Git-операции не заявляются |
+| G — публикация | Review diff, отбор файлов задачи и отдельное разрешение публикации task branch/PR | Опубликована: [PR #443](https://github.com/AndrewVerhoturov1/dsh-workspace/pull/443), base `main`, открыт; merge и promotion в `preview` не выполнялись |
 
 ## Граница готовности
 
-Исходная реализация, кодовые проверки и адресные browser/display-сценарии завершены. Display-проверка в Chromium подтвердила WebGL rendering/input при DPR 2 на программном SwiftShader, но не измеряет физический GPU. Результаты собраны в [ACCEPTANCE.md](ACCEPTANCE.md). Этап G публикации готов к отдельному review и разрешённому task PR; commit/push/PR до выполнения не объявляются.
+Исходная реализация, кодовые проверки и адресные browser/display-сценарии завершены. Display-проверка в Chromium подтвердила WebGL rendering/input при DPR 2 на программном SwiftShader, но не измеряет физический GPU. Результаты собраны в [ACCEPTANCE.md](ACCEPTANCE.md). Этап G завершён публикацией открытого task PR [#443](https://github.com/AndrewVerhoturov1/dsh-workspace/pull/443) в `main`; merge и promotion в `preview` не выполнялись.
