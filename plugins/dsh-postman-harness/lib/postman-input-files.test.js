@@ -81,6 +81,46 @@ function currentFixture(t, { preset = 'postman-leader', resolveAttachment } = {}
   return { ...f, ctx, store, tool, emit, execute, reads, snapshots, listeners }
 }
 
+test('first universal Devspace PNG stages automatically with branchless Host Proxy', async t => {
+  const f = fixture()
+  t.after(() => f.grants.dispose())
+  let context = null, prepareCalls = 0, runCalls = 0
+  const backing = {
+    get: () => context,
+    async prepareReadOnly(parent) {
+      assert.equal(parent, f.agent)
+      prepareCalls++
+      context = { leaderSessionId: parent.id, branch:'main',
+        worktree:'C:/repo', devspaceReadOnly:true }
+      return {status:'POSTMAN_TASK_READ_ONLY_READY'}
+    },
+  }
+  // Production postmanTaskContexts has zero own enumerable properties.
+  const contexts = new Proxy({}, {get: (_target, name) => backing[name]})
+  assert.deepEqual(Object.keys(contexts), [])
+  const tool = createPostmanInputFilesTool({
+    agents:{get:id=>id===f.agent.id?f.agent:null}
+  }, contexts, {grants:f.grants,
+    async run(_root, args) {
+      runCalls++
+      assert.equal(args[0], '--stage')
+      const root = args[args.indexOf('--snapshot-dir')+1]
+      return {...privateResult(root), bundle_id:'f'.repeat(32)}
+    }})
+  const call = args => tool.execute(args, {agent:f.agent, signal:new AbortController().signal})
+  assert.equal((await call({action:'stage', paths:[]})).status,'POSTMAN_TASK_CONTEXT_REQUIRED')
+  assert.equal(prepareCalls,0,'invalid selection does not prepare a task')
+  const ready=await call({action:'stage',paths:['C:/repo/assets/reference.png']})
+  assert.equal(ready.status,'POSTMAN_INPUT_READY')
+  assert.equal(prepareCalls,1)
+  assert.equal(runCalls,1)
+  assert.equal(context.branch,'main')
+  assert.equal(context.devspaceReadOnly,true)
+  assert.equal(f.grants.owns(f.agent,context,ready.descriptors),true)
+  assert.equal((await call({action:'cleanup',bundleId:ready.bundleId})).status,'POSTMAN_INPUT_CLEANED')
+  assert.equal(prepareCalls,1)
+})
+
 test('available native generic readFile bytes use private staging and exact SHA', async t => {
   const f=currentFixture(t)
   f.ctx.attachments={readFile:async ref=>({data:Buffer.from('private PDF')})}

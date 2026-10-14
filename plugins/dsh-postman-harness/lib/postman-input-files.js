@@ -385,6 +385,30 @@ export function createPostmanInputFilesTool(ctx, contexts, { grants = postmanInp
         if (!operation) return { status:'POSTMAN_INPUT_ARGUMENTS_INVALID' }
         return pythonCommand(HOST_ROOT,'archive_operations.py',operation)
       }
+      // Native input staging is a prerequisite of the first universal Devspace
+      // request, not a reason to create a Git task branch or worktree. Use the
+      // same Host read-only preparation as postman_bridge / Secretary.
+      const keys = Object.keys(args).sort().join(',')
+      const stageAllowed = args.action === 'stage' && keys === 'action,paths' &&
+        Array.isArray(args.paths) && args.paths.length >= 1 && args.paths.length <= 20 &&
+        args.paths.every(path => typeof path === 'string' && path.length > 0)
+      const selectedAllowed = args.action === 'stage_current_attachments' &&
+        (keys === 'action' || keys === 'action,selectionIds') &&
+        (args.selectionIds === undefined || Array.isArray(args.selectionIds) &&
+          args.selectionIds.length >= 1 && args.selectionIds.length <= 20 &&
+          args.selectionIds.every(id => typeof id === 'string' && id.length > 0) &&
+          new Set(args.selectionIds).size === args.selectionIds.length)
+      const existingAllowed = args.action === 'describe_existing' &&
+        keys === 'action,commit,path,repository' &&
+        args.repository === 'AndrewVerhoturov1/dsh-workspace' &&
+        typeof args.commit === 'string' && typeof args.path === 'string'
+      if (!contexts?.get(agent.id) && (stageAllowed || selectedAllowed || existingAllowed)) {
+        if (typeof contexts?.prepareReadOnly !== 'function')
+          return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
+        const prepared = await contexts.prepareReadOnly(agent)
+        if (!['POSTMAN_TASK_READ_ONLY_READY', 'POSTMAN_TASK_CONTEXT_ALREADY_READY'].includes(prepared?.status))
+          return prepared
+      }
       return snapshotInputs(ctx, contexts, args, exec, { grants, run, currentAttachments, resolveAttachment })
     },
   })

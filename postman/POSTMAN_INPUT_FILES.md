@@ -4,7 +4,7 @@
 
 Native ChatGPT attachment is the primary input-file transport. Never publish a user/local input to GitHub merely so ChatGPT can read it when native attachment delivery is available. GitHub public staging is fallback-only and requires explicit user approval.
 
-После `postman_task_prepare()` exact production/PTC Leader выбирает inputs через существующий `postman_input_files`:
+Exact production/PTC Leader выбирает inputs через `postman_input_files`. При первом `stage` / `stage_current_attachments` / `describe_existing` Host сам готовит branchless read-only task context, если его ещё нет. Git branch/worktree для одного input не создаётся. Для записи исходников worktree по `REPO_POLICY.md` по-прежнему готовится отдельно:
 
 - `stage(paths:[<explicit absolute regular files>])` — bounded one-time read → private snapshots → native descriptors/grants; **zero GitHub API calls**, без public consent. Source не изменяется; directories, symlinks, sensitive/runtime paths отвергаются.
 - `stage_current_attachments(selectionIds?)` — exact latest human user/message этой live top-level Leader session → native `ctx.attachments.readImage` / `ctx.attachments.readFile` (если доступен) → length/SHA proof → temporary private source → private snapshots; **zero GitHub API calls**.
