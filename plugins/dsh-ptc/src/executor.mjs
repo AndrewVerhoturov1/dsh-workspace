@@ -123,12 +123,13 @@ async function evaluate({ program, language, profile }) {
     entry.deferred.dispose()
   }
   for(const name of profile.tools){
-    const fn=context.newFunction(name, argHandle => {
+    const fn=context.newFunction(name, (...argHandles) => {
       if(terminal) throw new Error('Execution closed')
       if(violation) throw new Error('Execution limit exceeded')
       if(nextCallId>=limits.maxToolCalls) {violation=errorResult('maxToolCalls','Call limit exceeded');throw new Error('Call limit exceeded')}
       let arg
-      try { arg=encodeGuest(argHandle) }
+      // No-argument native tools have canonical empty JSON arguments. Explicit undefined remains invalid.
+      try { arg=argHandles.length === 0 ? {} : encodeGuest(argHandles[0]) }
       catch(error) {violationStatus=error instanceof JsonLimitError?'limit-exceeded':'runtime-error';violation=errorResult(error instanceof JsonLimitError?error.code:'invalid-json',error);throw error}
       const callId=++nextCallId
       const deferred=context.newPromise()

@@ -59,6 +59,42 @@ test('sequences callbacks, bounds parallel calls, snapshots grants',async()=>{
   }finally{await r.dispose()}
 })
 
+test('zero-argument supervisor calls encode canonical empty JSON without suppressing tool effects',async()=>{
+  const runtime=createPtcRuntime(), observed=[]
+  const p=profile(['get_goal','postman_team_status'])
+  const bindings={
+    get_goal:args=>{observed.push(['get_goal',args]);return {goal:{id:'goal-test',revision:2,phase:'paused'}}},
+    postman_team_status:args=>{observed.push(['postman_team_status',args]);return {status:'TEAM_OK'}},
+  }
+  try {
+    const result=await runtime.run({
+      program:'const goal=await tools.get_goal(); const team=await tools.postman_team_status(); return {goal,team}',
+      profile:p,bindings,
+    })
+    assert.equal(result.status,'ok',JSON.stringify(result))
+    assert.deepEqual(result.value,{goal:{goal:{id:'goal-test',revision:2,phase:'paused'}},team:{status:'TEAM_OK'}})
+    assert.deepEqual(observed,[['get_goal',{}],['postman_team_status',{}]])
+    assert.equal(result.effects.completed,2)
+    assert.equal(result.effects.failed,0)
+    const bad=await runtime.run({program:'return await tools.get_goal(undefined)',profile:p,bindings})
+    assert.equal(bad.status,'runtime-error',JSON.stringify(bad))
+    assert.equal(bad.error.code,'invalid-json')
+    assert.equal(bad.effects.calls.length,0)
+    assert.equal(observed.length,2)
+    const later=await runtime.run({program:'return await tools.get_goal()',profile:p,bindings})
+    assert.equal(later.status,'ok',JSON.stringify(later))
+    assert.equal(later.effects.completed,1)
+  } finally {await runtime.dispose()}
+  // A fresh child process must retain the same validated supervisor profile semantics.
+  const restored=createPtcRuntime()
+  try {
+    const result=await restored.run({program:'return await tools.get_goal()',profile:structuredClone(p),bindings})
+    assert.equal(result.status,'ok',JSON.stringify(result))
+    assert.equal(result.value.goal.revision,2)
+    assert.equal(result.effects.completed,1)
+  } finally {await restored.dispose()}
+})
+
 test('bounds program, result, argument, log, loops and callback accumulation',async()=>{
   const r=createPtcRuntime();try{
     assert.equal((await r.run({program:'return 1;'+' '.repeat(270000),profile:profile(),bindings:{}})).status,'invalid-input')
