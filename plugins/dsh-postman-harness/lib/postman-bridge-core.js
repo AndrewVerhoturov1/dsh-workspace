@@ -62,6 +62,7 @@ export const POSTMAN_LEADER_TOOL_ALLOWLIST = Object.freeze([
   POSTMAN_DEVSPACE_LUNA_CLOSE_TOOL_NAME,
   POSTMAN_DEVSPACE_CONTROL_TOOL_NAME,
   POSTMAN_TEAM_STATUS_TOOL_NAME,
+  'postman_app',
   POSTMAN_WORKER_TOOL_NAME,
   POSTMAN_SOL_WORKER_TOOL_NAME,
   POSTMAN_WORKER_INTERRUPT_TOOL_NAME,
@@ -128,6 +129,7 @@ export const POSTMAN_LEADER_ONLY_TOOL_NAMES = Object.freeze([
   POSTMAN_DEVSPACE_LUNA_CLOSE_TOOL_NAME,
   POSTMAN_DEVSPACE_CONTROL_TOOL_NAME,
   POSTMAN_TEAM_STATUS_TOOL_NAME,
+  'postman_app',
   POSTMAN_WORKER_TOOL_NAME,
   POSTMAN_SOL_WORKER_TOOL_NAME,
   POSTMAN_WORKER_INTERRUPT_TOOL_NAME,
@@ -208,7 +210,7 @@ export function postmanBridgeRestrictionForAgent(agent, ownsPtcWorker = () => fa
   if (role === 'secretary') return { allow: [...SECRETARY_TOOLS] }
   if (role === 'sol') return { deny: [...POSTMAN_LEADER_ONLY_TOOL_NAMES.filter(name => !WORKER_CONTROL_TOOLS.includes(name)),
     ...(ownsPtcWorker(agent) ? [] : [POSTMAN_PTC_TOOL_NAME]), 'ask_user_question', 'exit_plan_mode', ...DELEGATION_TOOLS] }
-  return { deny: [...POSTMAN_LEADER_ONLY_TOOL_NAMES, POSTMAN_PTC_TOOL_NAME, ...(role === 'luna' ? ['ask_user_question', 'list_agents', 'exit_plan_mode', ...DELEGATION_TOOLS] : [])] }
+  return { deny: [...POSTMAN_LEADER_ONLY_TOOL_NAMES.filter(name => !(role === 'luna' && name === 'postman_app')), POSTMAN_PTC_TOOL_NAME, ...(role === 'luna' ? ['ask_user_question', 'list_agents', 'exit_plan_mode', ...DELEGATION_TOOLS] : [])] }
 }
 
 export function createPostmanBridgeBoundaryManager(lookupAgent, ownsPtcWorker = () => false, roleOf = () => null) {

@@ -561,7 +561,8 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
 
   function get(leaderId) { return registry.get(leaderId)?.stage === 'ready' ? contexts.get(leaderId) ?? null : null }
   function record(leaderId) { return registry.get(leaderId) }
-  const changeRecord = (leaderId, fn) => registry.change(leaderId, fn)
+  const records = () => registry.entries()
+  const changeRecord = async (leaderId, fn) => { const result = await registry.change(leaderId, fn); changed(leaderId); return result }
   function isRestoring(leaderId) { return pending.has(leaderId) }
   function hasActiveOperation(leaderId) { return activeOperations.has(leaderId) }
   function hasSyncOperation(leaderId) { return syncOperations.has(leaderId) }
@@ -573,6 +574,10 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
   }
   function beginWorkerAdmission(leaderId, token, retirement = false) {
     if (!(retirement ? canRetireWorkers(leaderId) : get(leaderId)) || pending.has(leaderId) || activeOperations.has(leaderId) || syncOperations.has(leaderId)) return false
+    // Prompt READ_ONLY does not remove ordinary Worker write/shell rights.
+    if (!retirement && Object.values(registry.get(leaderId)?.bridgeOperations ?? {}).some(op =>
+      op.transportKind === 'devspace' && (op.devspace?.approvedAccess === 'write' || op.devspace?.mode === 'WRITE_ISOLATED') &&
+      !(op.state === 'received' && ['synchronized','not-required'].includes(op.synchronization?.state)))) return false
     let current = workerAdmissions.get(leaderId)
     if (!current) { current = new Set(); workerAdmissions.set(leaderId, current) }
     current.add(token)
@@ -652,7 +657,7 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
   function dispose() { contexts.clear(); children.clear(); pending.clear(); activeOperations.clear(); syncOperations.clear(); syncQueues.clear(); workerAdmissions.clear(); contextListeners.clear() }
   return { readLedger: id => registry.readLedger(id),
     changeLedger: (id, fn) => registry.changeLedger(id, fn),
-    prepare, prepareReadOnly, recover, close, restore, sync, beginSync, endSync, verifyWorktree, get, record, changeRecord, onContextChange, isRestoring, hasActiveOperation, hasSyncOperation, canRetireWorkers, beginWorkerAdmission, endWorkerAdmission, beginOperation, startRunner, endOperation, reserveRestore, releaseRestore, bindChild, child, devspaceBinding, recordBridgeRequest, releaseChild, dispose }
+    prepare, prepareReadOnly, recover, close, restore, sync, beginSync, endSync, verifyWorktree, get, record, records, changeRecord, onContextChange, isRestoring, hasActiveOperation, hasSyncOperation, canRetireWorkers, beginWorkerAdmission, endWorkerAdmission, beginOperation, startRunner, endOperation, reserveRestore, releaseRestore, bindChild, child, devspaceBinding, recordBridgeRequest, releaseChild, dispose }
 }
 
 // Both entrypoints use one facade. Initialization is awaited before Git/child actions;

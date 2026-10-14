@@ -1,0 +1,16 @@
+diff --git a/node_modules/@deepseek-ai/dsh-subagent/lib/index.js b/node_modules/@deepseek-ai/dsh-subagent/lib/index.js
+--- a/node_modules/@deepseek-ai/dsh-subagent/lib/index.js
++++ b/node_modules/@deepseek-ai/dsh-subagent/lib/index.js
+@@ -964,4 +964,4 @@
+ 		if (delivery === "next-step" &&
+ 			this.ctx.bail("postman/subagent-report-defer", parent, activation.handle.agent, content) === true) {
+-			parent.inject(message);
++			parent.inject({ ...message, source: { ...message.source, form: "postman-deferred" } });
+ 		} else if (delivery === "next-step") this.sendWaking(parent, message, () => {
+@@ -1642,5 +1642,5 @@
+ 			if (terminal.stopReason === "completed" &&
+ 				this.ctx.bail("postman/subagent-settlement-defer", parent, activation.handle.agent, terminal) === true) {
+-				parent.inject(message);
++				parent.inject({ ...message, source: { ...message.source, form: "postman-deferred" } });
+ 				return;
+ 			}

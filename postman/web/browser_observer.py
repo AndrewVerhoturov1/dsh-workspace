@@ -587,7 +587,7 @@ def inspect_answer_phase(page: Any, expected_prompt: str, expected_chat_url: str
 
 def find_user_anchor(turns: list[dict[str, Any]], expected_prompt: str,
                      *, anchor_binding: dict[str, Any] | None = None) -> int | None:
-    """Return the last correlated user turn.
+    """Return a uniquely correlated user turn, or an explicitly bound original.
 
     Prefer byte-equivalent rendered text. ChatGPT may render long Markdown
     differently after Send, so Postman prompts may fall back to the immutable
@@ -617,19 +617,20 @@ def find_user_anchor(turns: list[dict[str, Any]], expected_prompt: str,
         for turn in turns
         if turn.get("role") == "user" and _normalize_text(turn.get("text", "")) == expected
     ]
-    if exact_matches:
-        return exact_matches[-1]
-
     request_key_line = submit.request_key_line_from_prompt(expected_prompt)
     if not request_key_line:
-        return None
+        return exact_matches[0] if len(exact_matches) == 1 else None
     key_matches = [
         turn["index"]
         for turn in turns
         if turn.get("role") == "user"
         and submit._turn_contains_exact_line(str(turn.get("text", "")), request_key_line)
     ]
-    return key_matches[-1] if key_matches else None
+    # Even one exact rendering cannot disambiguate a later REF carrying the
+    # same immutable key. Only the explicit binding above can prove its origin.
+    if len(key_matches) != 1:
+        return None
+    return exact_matches[0] if len(exact_matches) == 1 else key_matches[0]
 
 
 def correlate_next_assistant(
@@ -639,9 +640,14 @@ def correlate_next_assistant(
 ) -> dict[str, Any]:
     anchor = find_user_anchor(turns, expected_prompt, anchor_binding=anchor_binding)
     if anchor is None:
+        expected = _normalize_text(expected_prompt)
+        key = submit.request_key_line_from_prompt(expected_prompt)
+        candidates = [t for t in turns if t.get("role") == "user" and (
+            _normalize_text(t.get("text", "")) == expected or
+            key and submit._turn_contains_exact_line(str(t.get("text", "")), key))]
         return {
             "ok": False,
-            "code": USER_TURN_ANCHOR_MISSING,
+            "code": CHAT_CORRELATION_LOST if candidates else USER_TURN_ANCHOR_MISSING,
             "anchorIndex": None,
             "assistant": None,
         }

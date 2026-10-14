@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { join } from 'node:path'
+import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { createPtcAdapter } from './ptc-adapter.js'
 import { createPostmanWorkerTools } from './postman-worker.js'
@@ -11,7 +12,8 @@ import { isTopLevelPostmanPtcLeader, postmanBridgeRestrictionForAgent } from './
 // One installed SDK identity. The model and external runners are inert; the
 // complete AgentLoop scheduler, ToolRuntime, tools and QuickJS are real.
 const installed = process.env.DSH_ROOT ?? join(process.env.APPDATA, 'npm/node_modules/@deepseek-ai/dsh')
-const pkg = name => import(pathToFileURL(join(installed, 'node_modules/@deepseek-ai', name, 'lib/index.js')).href)
+const sdk = createRequire(process.env.DSH_CAPABILITY_SDK ?? join(installed, 'package.json'))
+const pkg = name => import(pathToFileURL(sdk.resolve('@deepseek-ai/' + name)).href)
 const { Context } = await pkg('cordis')
 const { AgentRegistry } = await pkg('dsh-agent')
 const { SessionStore } = await pkg('dsh-session')
@@ -42,7 +44,8 @@ for (const producer of ['postman_worker', 'postman_worker_interrupt', 'postman_b
     const held = Promise.withResolvers()
     const coordinator = { run: () => held.promise, dispose() { held.resolve({ status: 'fixture-stopped' }) } }
     const jobs = createPostmanBridgeJobs(ctx, coordinator, undefined, contexts)
-    const adapter = createPtcAdapter(ctx, { authorize: isTopLevelPostmanPtcLeader })
+    const adapter = createPtcAdapter(ctx, { authorize: isTopLevelPostmanPtcLeader,
+      hasActiveWork: agent => worker.hasActiveWork(agent) || jobs.hasActiveWork(agent) })
     const output = { schema: { type: 'object', additionalProperties: true }, render: (_a,v) => [{ type: 'text', text: JSON.stringify(v) }] }
     for (const name of ['read', 'grep']) ctx.tools.register(defineTool({ name, description: name, parameters: {}, output, execute: () => ({ name }) }))
     for (const tool of [adapter.tool, worker.taskTool, worker.interruptTool, createPostmanBridgeTool(ctx, jobs, contexts), createPostmanTaskPrepareTool(ctx, contexts)]) ctx.tools.register(tool)
@@ -91,12 +94,18 @@ for (const producer of ['postman_worker', 'postman_worker_interrupt', 'postman_b
     t.after(async () => { worker.dispose(); await adapter.dispose(); await jobs.dispose(); await ctx.fiber.dispose() })
     leader.followup(createUserMessage({content:[{type:'text',text:'start'}]}))
     await leader.whenIdle()
-    assert.equal(requests.length, accepted && !queued ? 1 : 2)
+    const realUserAndNotice = producer==='bridge-with-queued-user'
+    // Native SDK variants may review a queued real user and next-step notice
+    // together or separately. Both preserve identity; neither adds a wait turn.
+    if (realUserAndNotice) assert.ok([2,3].includes(requests.length))
+    else assert.equal(requests.length, accepted && !queued ? 1 : 2)
     if (queued) {
-      const second=leader.session.events.filter(e=>e.type==='assistant/message').at(-1)
-      assert.equal(second.data.step,1)
-      assert.equal(second.data.turn,2,'queued notice must be reviewed in a NEW turn, not a yield-only continuation')
+      const last=leader.session.events.filter(e=>e.type==='assistant/message').at(-1)
+      assert.equal(last.data.step,1)
+      assert.equal(last.data.turn,2,'queued facts are reviewed by the active AgentLoop')
       assert.equal(leader.session.events.filter(e=>e.type==='turn/end').length,2)
+      if (realUserAndNotice) assert.equal(leader.session.events.filter(e=>e.type==='step/start').length,requests.length,
+        'only queued user/notice review steps, never a synthetic waiting step')
       const messages=leader.session.events.filter(e=>e.type==='user/message' && e.data.source?.kind!=='tool')
       assert.equal(messages.filter(e=>e.data.content.some(c=>c.text==='Worker settled notice after report')).length,1)
       if (producer!=='bridge-with-queued-user') assert.equal(messages.filter(e=>e.data.content.some(c=>c.text==='one-shot policy evidence')).length,1)
@@ -111,7 +120,9 @@ for (const producer of ['postman_worker', 'postman_worker_interrupt', 'postman_b
     assert.equal(diagnostics.at(-1).descriptionNormalized,true)
     if (!accepted && producer!=='bridge-post-blocked') assert.equal(diagnostics.at(-1).yieldBlockedReason, producer==='prepare-only'?'no-accepted-producer':producer==='ambiguous-program'?'model-decision-requested':'acceptance-not-confirmed')
     if (accepted && !queued) {
-      assert.equal(adapter.isWaitingForExternalEvent(leader),true)
+      // Fake child admission has no resident active Worker; only held Bridge
+      // remains an exact live source. Acceptance never proves indefinite work.
+      assert.equal(adapter.isWaitingForExternalEvent(leader),producer==='postman_bridge')
       const call=leader.session.events.findLast(e=>e.type==='tool/call')
       leader.session.append('tool/code-dispatch-start',{parentCallId:call.data.callId,callId:'known-cleanup',name:'postman_worker_stop',arguments:'{}'})
       assert.equal(adapter.isWaitingForExternalEvent(leader),false,'settlement unblocking requested lifecycle work must wake')

@@ -188,7 +188,7 @@ test('all real child requests: Secretary/Worker/Sol functional smoke, ownership,
   const { scopeParentOf }=await native('dsh-scope')
   const ordinary=f.ctx.tools.schemas(scopeParentOf(f.leader)).map(t=>t.name).filter(n=>!POSTMAN_LEADER_ONLY_TOOL_NAMES.includes(n)&&n!=='ptc_execute'&&!DELEGATION_TOOLS.includes(n))
   for(const name of ['ask_user_question','list_agents','exit_plan_mode'])assert.ok(ordinary.includes(name),'native inherited catalog contains '+name)
-  const expected={secretary:SECRETARY_TOOLS.filter(n=>n!=='bash'),luna:sorted([...ordinary.filter(n=>!['ask_user_question','list_agents','exit_plan_mode'].includes(n)),'report']),sol:sorted([...ordinary.filter(n=>!['ask_user_question','exit_plan_mode'].includes(n)),...WORKER_CONTROL_TOOLS,'ptc_execute','report'])}
+  const expected={secretary:SECRETARY_TOOLS.filter(n=>n!=='bash'),luna:sorted([...ordinary.filter(n=>!['ask_user_question','list_agents','exit_plan_mode'].includes(n)),'postman_app','report']),sol:sorted([...ordinary.filter(n=>!['ask_user_question','exit_plan_mode'].includes(n)),...WORKER_CONTROL_TOOLS,'ptc_execute','report'])}
   const check=(a,label=role(a))=>{
     const entries=f.requests.filter(x=>x.agent.id===a.id)
     for(const {request} of entries){assertManagementRequest(role(a),request);toolMatrix(label,expected[role(a)],request);assert.ok(request.system.includes(postmanRoleInstruction(role(a))));assert.equal(request.model,role(a)==='sol'?'gpt-6.1-sol':'gpt-6-luna');assert.equal(request.reasoningEffort,role(a)==='sol'?'xhigh':'low')}

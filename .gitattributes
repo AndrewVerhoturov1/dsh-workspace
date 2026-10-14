@@ -6,3 +6,6 @@ system/patches/postman-native-close-only-upgrade.patch whitespace=-space-before-
 system/patches/postman-native-scoped-compact.patch whitespace=-space-before-tab
 system/patches/postman-native-goal-continuation.patch whitespace=blank-at-eol,blank-at-eof,-space-before-tab
 system/patches/postman-native-session-events.patch whitespace=blank-at-eol,blank-at-eof,-space-before-tab
+system/patches/postman-native-app-owner.patch whitespace=-space-before-tab
+system/patches/postman-native-deferred-source.patch whitespace=-space-before-tab
+system/patches/postman-native-luna-bootstrap-report.patch whitespace=-space-before-tab

@@ -1,0 +1,14 @@
+diff --git a/node_modules/@deepseek-ai/dsh-tool-pwsh/lib/index.js b/node_modules/@deepseek-ai/dsh-tool-pwsh/lib/index.js
+--- a/node_modules/@deepseek-ai/dsh-tool-pwsh/lib/index.js
++++ b/node_modules/@deepseek-ai/dsh-tool-pwsh/lib/index.js
+@@ -192,2 +192,3 @@
+ function apply(ctx, config = {}) {
++	ctx.on("postman/app-owner-supported", () => true);
+ 	const backgroundEnabled = config.enableRunInBackground ?? true;
+@@ -388,4 +389,4 @@
+ 						kind: "pwsh",
+-						label: args.command,
+-						...exec.agent ? { owner: exec.agent } : {},
++						label: ctx.bail("postman/app-job-label", exec) ?? args.command,
++						...exec.agent ? { owner: ctx.bail("postman/app-job-owner", exec) ?? exec.agent } : {},
+ 						run: () => {

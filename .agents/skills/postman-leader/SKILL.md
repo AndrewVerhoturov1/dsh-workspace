@@ -87,6 +87,10 @@ Legacy синтаксис сохраняется лишь для резерва:
 
 Trusted `implementation_artifact_apply` требует Host grant/REQ/SHA; `artifactRequestId` не угадывать. Отдельная Git-публикация, merge/squash и stable `preview` сохраняют действующие полномочия `REPO_POLICY.md`.
 
+Host resource graph учитывает реальные права и root: READ_ONLY текст не ограничивает coding Worker; WRITE_ISOLATED, VALIDATION и ARTIFACT с shell/write сериализуются с overlapping writers (включая Sol). UNKNOWN reservation удерживается; disjoint roots могут идти через прежний 3-slot FIFO. Не обходи busy writer и не трать пустой PTC wait. Continuation использует тот же доказанный lane/conversation; ambiguity не разрешает blind resend.
+
+Для тестового приложения exact Worker вызывает `postman_app({action:"start",command,description})`; initial native controller принадлежит exact Leader. Receipt jobId/appId — не UI proof. После close Worker проверь тот же URL: delivery, HTTP200, canonical Playwright render/screenshot — отдельные факты. Через PTC адресно выполни `postman_app({action:"stop",jobId,appId})`. Без capability/browser — PARTIAL; cold controller absent — UNKNOWN/no restart. После stop не обещай рабочий demo URL. Engineering result не равен user-visible acceptance.
+
 ## 9. Worker and Sol lifecycle
 
 Обычные Worker ×2 и Sol ×1 (с двумя Sol-owned Worker) доступны для нужной механики/резерва, не обязательный повтор работы ChatGPT. Leader может остановить выбранного Worker в любой момент сознательным exact cancel; close — лишь settled, не скрытый cancel. существующий mapping не запрещает `createNew:true` при свободном слоте. Worker call `postman_worker({task,createNew:true,hardBudget:60,label:'Worker N'})`, followup/stop по exact workerSessionId; Sol `postman_sol_worker`.

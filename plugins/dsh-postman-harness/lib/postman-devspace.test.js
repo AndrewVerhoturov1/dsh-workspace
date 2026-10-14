@@ -252,6 +252,16 @@ test('continuable Luna keeps exact identity across two REQs and same ChatGPT cha
     return accepted
   }
   const first = await assigned('first assignment')
+  const savedLane = row.devspaceLanes[first.laneId]
+  for (const conversationRef of [null, 'https://chatgpt.com/']) {
+    row.devspaceLanes[first.laneId] = {...savedLane,conversationRef}
+    const before=structuredClone(row)
+    const refused=await jobs.accept(parent,'@PostmanDevspace must not start new chat','devspace',undefined,undefined,'WRITE_TEST',first.laneId)
+    assert.equal(refused.status,'POSTMAN_DEVSPACE_CONTINUATION_UNPROVEN')
+    assert.deepEqual(row,before,'refusal precedes reservation and Send')
+    assert.equal(launched.length,1)
+  }
+  row.devspaceLanes[first.laneId] = savedLane
   const second = await assigned('second assignment')
   assert.equal(starts, 1)
   assert.equal(coldChecks, 1)
@@ -523,6 +533,7 @@ test('Host checks private image proof and never promotes an arbitrary stdout pat
     imageFormat:'png',imageMimeType:'image/png',imageWidth:73,imageHeight:67,
     resultImage:source,imageByteLength:content.length,
     imageSha256:createHash('sha256').update(content).digest('hex'),
+    assistantText:'image and text remain independent from a bell',
     conversationRef:'https://chatgpt.com/c/owned-test-chat'}
   const result=devspaceTerminal(binding,proof)
   assert.equal(result.code,'DEVSPACE_IMAGE_RESULT_DURABLE')
@@ -533,5 +544,15 @@ test('Host checks private image proof and never promotes an arbitrary stdout pat
   assert.equal(result.reportedOutcome,'UNKNOWN') // No fake DONE without bell.
   assert.throws(()=>devspaceTerminal(binding,{...proof,resultImage:'C:/foreign.png'}),/IMAGE_PROOF_INVALID/)
   assert.throws(()=>devspaceTerminal(binding,{...proof,imageSha256:'0'.repeat(64)}),/IMAGE_PROOF_INVALID/)
-  assert.throws(()=>devspaceTerminal(binding,{...proof,source:'arbitrary'}),/EVENT_MISSING/)
+  assert.throws(()=>devspaceTerminal(binding,{...proof,source:'arbitrary',resultImage:undefined}),/EVENT_MISSING/)
+  writeFileSync(join(binding.channel,'event.json'),JSON.stringify({version:1,
+    ...Object.fromEntries(['jobId','requestId','leaderSessionId','lunaSessionId','capability'].map(k=>[k,binding[k]])),
+    reportedOutcome:'DONE',message:'assistant claim only',reportRef:null}))
+  const bell=devspaceTerminal(binding,proof)
+  assert.equal(bell.source,'bell');assert.equal(bell.reportedOutcome,'DONE')
+  assert.equal(bell.resultImage,source);assert.equal(bell.imageSha256,proof.imageSha256)
+  assert.equal(bell.assistantText,proof.assistantText)
+  assert.equal(bell.evidenceState,'BROWSER_VERIFIED_IMAGE','image proof is not engineering PASS')
+  assert.equal(devspaceTerminal(binding,bell).imageSha256,proof.imageSha256,'restart/late status retains validated bytes')
+  assert.throws(()=>devspaceTerminal(binding,{...proof,imageSha256:'0'.repeat(64)}),/IMAGE_PROOF_INVALID/)
 })

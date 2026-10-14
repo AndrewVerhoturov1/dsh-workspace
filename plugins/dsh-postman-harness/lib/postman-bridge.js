@@ -5,6 +5,7 @@ import { isAbsolute, relative, resolve } from 'node:path'
 import { createPtcAdapter, SOL_WORKER_PROFILE } from './ptc-adapter.js'
 import { CurrentAttachmentStore, createPostmanInputFilesTool, postmanInputGrants } from './postman-input-files.js'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { createPostmanAppTool } from './postman-app.js'
 import { parsePostmanUserTurn } from './direct-current-turn.js'
 import { createPostmanWorkerTools } from './postman-worker.js'
 import { createImplementationArtifactGrants, createImplementationArtifactApplyTool } from './implementation-artifact.js'
@@ -377,9 +378,12 @@ export async function apply(ctx, config = {}) {
     hasActiveWork: (agent, role) => worker.hasActiveWork(agent) || role === 'leader' && jobs.hasActiveWork(agent),
     resolveAssignment: (agent, leaderProfile) => isTopLevelPostmanPtcLeader(agent) ?
       { profile: leaderProfile, role: 'leader' } : ownsPtcWorker(agent) ? { profile: SOL_WORKER_PROFILE, role: 'sol' } : null })
+  ctx.on('postman/subagent-report-defer', (parent, child, content) =>
+    jobs.canDeferLunaBootstrapReport(parent, child, content) ? true : undefined)
   ctx.on('postman/subagent-settlement-defer', (parent, child, terminal) =>
-    ptc.isWaitingForExternalEvent(parent) && worker.canDeferSettlement(parent, child, terminal) &&
-    (worker.hasActiveWork(parent) || isTopLevelPostmanPtcLeader(parent) && jobs.hasActiveWork(parent)) ? true : undefined)
+    jobs.canDeferLunaBootstrapSettlement(parent, child, terminal) ||
+    parent?.phase?.kind === 'idle' && parent.inbox?.hasPending === false &&
+    worker.canDeferSettlement(parent, child, terminal) ? true : undefined)
   // Guard model-direct operations, not ordinary visibility: nested PTC calls carry the outer token.
   ctx.tools.guard(exec => postmanPtcDirectCallGuard(exec, id => ctx.agents.get(id), ownsPtcWorker))
   ctx.tools.register(ptc.tool)
@@ -395,6 +399,7 @@ export async function apply(ctx, config = {}) {
   ctx.tools.register(createPostmanDevspaceControlTool(ctx, jobs))
   ctx.tools.register(createPostmanTeamStatusTool(ctx, postmanTaskContexts, worker, jobs))
   ctx.tools.register(createPostmanTaskRestoreTool(ctx, postmanTaskContexts, { jobs, worker }))
+  ctx.tools.register(createPostmanAppTool(ctx, worker, contexts))
   ctx.tools.register(worker.taskTool)
   ctx.tools.register(worker.solTaskTool)
   ctx.tools.register(worker.secretaryTool)

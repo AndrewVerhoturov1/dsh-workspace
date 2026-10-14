@@ -89,6 +89,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
   const jobs = new Map()
   const admissionTails = new Map()
   const coldRecovery = new Map()
+  const bootstrapAgents = new WeakMap()
   const devspaceLuna = createPostmanDevspaceLanes(ctx, contexts, direct)
   const devspaceCoordinator = coordinator.fork?.() ?? coordinator
   let disposed = false
@@ -274,23 +275,8 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     if (taskContext?.devspaceReadOnly && (transportKind !== 'devspace' ||
         !['READ_ONLY', 'WRITE_TEST', 'WRITE_APPROVED_TARGET'].includes(devspaceMode)))
       return { status: 'POSTMAN_DEVSPACE_READ_ONLY_SCOPE_REQUIRED' }
-    const work = [...jobs.values()].filter(item => item.parentSessionId === parent.id &&
-      !item.finishedAt && ['QUEUED', 'STARTING', 'RUNNING'].includes(item.state))
-    // Only overlapping writers contend: unrelated approved folders remain
-    // parallel, while any two Devspace writes to the same tree are exclusive.
-    const writing = mode => ['WRITE_ISOLATED', 'WRITE_APPROVED_TARGET'].includes(mode)
-    const overlaps = (a, b) => {
-      if (!a || !b) return false
-      const forward = relative(a, b), backward = relative(b, a)
-      return (forward === '' || !forward.startsWith('..') && !isAbsolute(forward)) ||
-        (backward === '' || !backward.startsWith('..') && !isAbsolute(backward))
-    }
-    if (transportKind === 'devspace' && writing(devspaceMode) &&
-        (devspaceMode === 'WRITE_ISOLATED' && worker?.hasActiveWork?.(parent) ||
-          work.some(item => item.transportKind === 'devspace' && writing(item.devspaceMode) &&
-            overlaps(approvedScope?.root ?? taskContext?.worktree,
-              item.approvedScope?.root ?? item.taskContext?.worktree))))
-      return { status: 'POSTMAN_DEVSPACE_WRITER_BUSY' }
+    // Durable reservations plus the existing launch FIFO serialize overlapping
+    // writers. Checking only this parent's live jobs before await is racy.
     const job = {
       bridgeJobId: randomUUID(), parentSessionId: parent.id, taskContext, transportKind, state: 'QUEUED',
       createdAt: new Date().toISOString(), controller: new AbortController(), inputBinding,
@@ -305,7 +291,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     }
     // Serialize only durable admissions for this Leader, never Web lifecycles.
     // Concurrent calls each see the preceding persisted intent before counting slots.
-    const prior = admissionTails.get(parent.id) ?? Promise.resolve()
+    const prior = admissionTails.get('host') ?? Promise.resolve()
     const admit = async () => {
       try {
         // Read-only refusal is deterministic even if the durable storage backend
@@ -345,6 +331,9 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
               selectedLaneId = randomUUID()
             }
             const lane = available[selectedLaneId]
+            if (lane?.requestIds?.length > 0 &&
+                !(typeof lane.conversationRef === 'string' && /^https:\/\/chatgpt\.com\/c\/[a-zA-Z0-9-]+$/.test(lane.conversationRef)))
+              throw new Error('POSTMAN_DEVSPACE_CONTINUATION_UNPROVEN')
             if (lane && (lane.state !== 'ready' || lane.activeBridgeJobId))
               throw new Error('POSTMAN_DEVSPACE_LANE_UNAVAILABLE')
             devspaceLanes = { ...(old.devspaceLanes ?? {}),
@@ -367,15 +356,15 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
         return startJob(job, message)
       } catch (error) {
         return { status: ['POSTMAN_BRIDGE_LIMIT_REACHED', 'POSTMAN_DEVSPACE_CAPACITY_REACHED',
-          'POSTMAN_DEVSPACE_LANE_UNAVAILABLE'].includes(error?.message)
+          'POSTMAN_DEVSPACE_LANE_UNAVAILABLE', 'POSTMAN_DEVSPACE_CONTINUATION_UNPROVEN'].includes(error?.message)
           ? error.message : 'POSTMAN_BRIDGE_ADMISSION_FAILED',
           diagnostic: diagnostic(error) }
       }
     }
     const result = prior.then(admit, admit)
     const tail = result.then(() => undefined, () => undefined)
-    admissionTails.set(parent.id, tail)
-    void tail.then(() => { if (admissionTails.get(parent.id) === tail) admissionTails.delete(parent.id) })
+    admissionTails.set('host', tail)
+    void tail.then(() => { if (admissionTails.get('host') === tail) admissionTails.delete('host') })
     return result
   }
 
@@ -461,12 +450,38 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     if (!job.grantDiagnostic && job.trustedTerminal?.status === 'POSTMAN_BRIDGE_TERMINAL') job.state = 'TERMINAL'
   }
 
+  function resourceReady(job) {
+    if (!['WRITE_ISOLATED','WRITE_APPROVED_TARGET'].includes(job.devspaceMode)) return true
+    const root = job.approvedScope?.root ?? job.taskContext?.worktree
+    const overlaps = other => other && (other === root ||
+      !relative(other,root).startsWith('..') && !isAbsolute(relative(other,root)) ||
+      !relative(root,other).startsWith('..') && !isAbsolute(relative(root,other)))
+    const rows = contexts?.records?.() ?? [[job.parentSessionId,contexts?.record?.(job.parentSessionId)]]
+    for (const [owner,row] of rows) {
+      if (!row || row.stage === 'closed') continue
+      if (overlaps(row.worktree) && worker?.hasActiveWork?.(ctx.agents.get(owner))) return false
+      for (const [id,op] of Object.entries(row.bridgeOperations ?? {})) {
+        if (id === job.bridgeJobId || !countsAgainstLimit(op)) continue
+        const otherRoot = op.devspace?.approvedAccess === 'write' ? op.devspace.approvedRoot
+          : op.devspace?.mode === 'WRITE_ISOLATED' ? row.worktree : null
+        if (!overlaps(otherRoot)) continue
+        const other = jobs.get(id)
+        // Cold pending/UNKNOWN reservations remain held; no replay or takeover.
+        if (!other || other.state !== 'QUEUED' ||
+            [...jobs.keys()].indexOf(id) < [...jobs.keys()].indexOf(job.bridgeJobId)) return false
+      }
+    }
+    return true
+  }
+  const stopResourceChanges = contexts?.onContextChange?.(() => devspaceCoordinator.refresh?.())
+  ctx.on?.('agent/status', () => devspaceCoordinator.refresh?.())
+
   function startJob(job, message) {
     jobs.set(job.bridgeJobId, job)
     // Coordinator holds the active slot only through child disposal, never through grants.
     let admission
     try { admission = (job.transportKind === 'devspace' ? devspaceCoordinator : coordinator)
-        .run(job.controller.signal, () => lifecycle(job, message)) }
+        .run(job.controller.signal, () => lifecycle(job, message), () => resourceReady(job)) }
     catch (error) { admission = Promise.reject(error) }
     job.completion = admission.then(async result => {
         // A verified terminal is delivery evidence even when the shared tree is
@@ -544,6 +559,97 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
         notify(job)
       })
     return { status: 'POSTMAN_BRIDGE_ACCEPTED', ...snapshot(job) }
+  }
+
+  // A newly created communications-only Luna has only the bootstrap prompt,
+  // not a Host terminal or a Worker assignment. Its first report/settlement is
+  // an untrusted technical lifecycle fact. Retain it in the native inbox; the
+  // exact Bridge READY is the separate authoritative wake.
+  function bootstrapLunaJob(parent, child, settled = false) {
+    if (disposed || !isTopLevelPostmanSupervisor(parent) || ctx.agents.get(parent?.id) !== parent ||
+        !child || (settled
+          ? ctx.agents.get(child.id) && ctx.agents.get(child.id) !== child ||
+            !bootstrapAgents.has(child)
+          : ctx.agents.get(child.id) !== child) || child.session?.header?.origin !== 'subagent' ||
+        child.session.header.parentSession !== parent.id || child.session.header.delegationDepth !== 1 ||
+        child.inbox?.hasPending || !contexts?.record || !contexts?.get) return null
+    const row = contexts.record(parent.id)
+    const lanes = [...Object.entries(row?.devspaceLanes ?? {}),
+      ...(row?.devspaceLuna && !row.devspaceLanes?.legacy ? [['legacy', row.devspaceLuna]] : [])]
+      .filter(([, lane]) => lane?.childId === child.id && ['intent', 'ready'].includes(lane.state) &&
+        typeof lane.activeBridgeJobId === 'string')
+    if (lanes.length !== 1) return null
+    const [laneId, lane] = lanes[0], job = jobs.get(lane.activeBridgeJobId)
+    const operation = row?.bridgeOperations?.[lane.activeBridgeJobId]
+    if (settled && bootstrapAgents.get(child) !== contexts.get(parent.id)) return null
+    if (!job || !operation || job.parentSessionId !== parent.id ||
+        job.taskContext !== contexts.get(parent.id) || job.transportKind !== 'devspace' ||
+        job.laneId && job.laneId !== laneId || job.childSessionId && job.childSessionId !== child.id ||
+        !['STARTING', 'RUNNING'].includes(job.state) || job.finishedAt ||
+        job.controller.signal.aborted || job.notification !== 'PENDING' ||
+        operation.state !== 'pending' || operation.transportKind !== 'devspace' ||
+        operation.devspace?.laneId && operation.devspace.laneId !== laneId ||
+        operation.childSessionId && operation.childSessionId !== child.id ||
+        operation.terminal) return null
+    const events = child.session.events
+    const seed = child.session.header.seedLength ?? 0
+    if (!Number.isSafeInteger(seed) || seed < 0 || seed > events.length) return null
+    const current = events.slice(seed)
+    // Later coordinator assignments, output, or resumed turns can carry genuine
+    // facts/questions. Never defer those as mere bootstrap acknowledgements.
+    if (settled && current.findLast(e => e.type === 'turn/end')?.data.reason?.kind !== 'completed') return null
+    if (current.filter(e => e.type === 'turn/start').length !== 1 ||
+        current.some(e => e.type === 'user/message' && e.data.source?.kind === 'coordinator'))
+      return null
+    return job
+  }
+  // Capture the exact registered native Agent while its first turn is live.
+  // Native settlement disposes both registry/session entries before notifying.
+  // This also covers the requested no-report ACK, not only report-tool output.
+  ctx.on?.('agent/created', ({agent:child}) => {
+    const parent=ctx.agents.get(child.session?.header?.parentSession)
+    if(ctx.agents.get(child.id)===child && ctx.agents.get(parent?.id)===parent &&
+       isTopLevelPostmanSupervisor(parent) && child.session.header.origin==='subagent' &&
+       child.session.header.delegationDepth===1 && contexts?.get(parent.id))
+      bootstrapAgents.set(child,contexts.get(parent.id))
+  })
+  // Do not infer harmlessness from arbitrary model prose: only this exact
+  // technical acknowledgement is deferrable. All other text wakes normally.
+  const bootstrapAcknowledgement = text => text === 'POSTMAN_LUNA_BOOTSTRAP_ACK'
+  function canDeferLunaBootstrapReport(parent, child, content) {
+    const job = bootstrapLunaJob(parent, child)
+    if (!job || !Array.isArray(content) ||
+        content.some(block => block?.type !== 'text')) return false
+    // An explicit problem or question is immediately decision-relevant.
+    // Otherwise the initial untrusted status remains in the durable inbox for READY.
+    if (content.length !== 1 || !bootstrapAcknowledgement(content[0].text)) return false
+    // Native disposal releases both AgentRegistry and SessionStore entries.
+    // Only the exact registered bootstrap Agent may pair with its completed
+    // settlement; IDs or copied headers are insufficient.
+    bootstrapAgents.set(child, job.taskContext)
+    return true
+  }
+  function canDeferLunaBootstrapSettlement(parent, child, terminal) {
+    if (terminal?.stopReason !== 'completed' || !bootstrapLunaJob(parent, child, true)) return false
+    if (terminal.output === undefined) {
+      const messages = child.session.events.filter(e => e.type === 'assistant/message')
+      return messages.every(e => e.data?.message?.content?.every(block =>
+        block.type === 'text' && bootstrapAcknowledgement(block.text)))
+    }
+    if (!Array.isArray(terminal.output)) return false
+    if (terminal.output.length === 0) return true
+    if (terminal.output.length !== 1) return false
+    const output = terminal.output[0]
+    // A harmless first-turn text acknowledgement is also only bootstrap; a
+    // question, failure, rich output or later Host assignment must wake normally.
+    if (output?.type === 'text') return bootstrapAcknowledgement(output.text)
+    const call = child.session.events.findLast(e => e.type === 'tool/call')
+    return output?.type === 'tool-call' && output.name === 'report' &&
+      call?.data.name === 'report' && output.id === call.data.callId &&
+      output.arguments === call.data.arguments && (() => {
+        try { return bootstrapAcknowledgement(JSON.parse(output.arguments).output) }
+        catch { return false }
+      })()
   }
 
   function hasActive(parentSessionId) {
@@ -921,6 +1027,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
   async function dispose() {
     if (disposed) return
     disposed = true
+    stopResourceChanges?.()
     for (const job of jobs.values()) job.controller.abort()
     direct.dispose?.()
     coordinator.dispose()
@@ -930,6 +1037,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
   }
 
   return { accept, status, list, teamSnapshot, stop, hasActive, hasActiveWork, dispose,
+    canDeferLunaBootstrapReport, canDeferLunaBootstrapSettlement,
     devspaceControl, recoverDevspacePending,
     devspaceLunaClose: (parent, laneId) => devspaceLuna.close(parent, contexts?.get(parent.id), laneId),
     devspaceLunaSnapshot: parent => devspaceLuna.snapshot(parent) }

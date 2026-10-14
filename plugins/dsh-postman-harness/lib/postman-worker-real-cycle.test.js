@@ -76,13 +76,14 @@ for (const queued of [false, true]) test('Leader re-enters external_event for ex
 })
 // Delayed authoritative native settlement after an already consumed terminal
 // report. No fake notice, timer, polling, new scheduler or live provider.
-for (const scenario of ['baseline','defer','conflicting-output','sol-defer']) test('real report then delayed settlement while B active, ' + scenario, {timeout:45000}, async t => {
-  const deferSettlements=scenario!=='baseline', redundant=scenario==='defer'||scenario==='sol-defer', solParent=scenario==='sol-defer'
+for (const scenario of ['baseline','defer','conflicting-output','sol-defer','text-defer','normative-baseline','normative-defer']) test('real report then delayed settlement while B active, ' + scenario, {timeout:45000}, async t => {
+  const normative=scenario.startsWith('normative-')
+  const deferSettlements=!scenario.endsWith('baseline'), redundant=['defer','sol-defer','text-defer','normative-defer'].includes(scenario), solParent=scenario==='sol-defer'
   const dir = await mkdtemp(join(tmpdir(),'postman-report-settled-'))
   const reports = [Promise.withResolvers(), Promise.withResolvers()]
   const releaseSettlement = Promise.withResolvers(), reportDelivered = Promise.withResolvers()
   const ends = Array.from({length:5},()=>Promise.withResolvers()), ids=[]
-  let f,supervisor,solId
+  let f,supervisor,solId, aReviewed=false
   const ptc = (program,boundary='external_event') => ({name:'ptc_execute',args:{program,boundary,description:'Process exact report, retain other active work, then safe cleanup'}})
   t.after(async()=>{reports.forEach(g=>g.resolve());releaseSettlement.resolve();await f?.dispose();await rm(dir,{recursive:true,force:true,maxRetries:5})})
   f=await capabilityRuntime(dir,{preset:'postman-leader',reportDelivery:'next-step',deferSettlements,plan:async(a,r,n)=>{
@@ -94,7 +95,13 @@ for (const scenario of ['baseline','defer','conflicting-output','sol-defer']) te
       if(solParent && n===4) return {name:'report',args:{output:'PASS owned child settlement/cleanup verified'}}
       if(f.registry.get('leader').stage==='closed') return {text:'Exact settlement facts and cleanup verified'}
       const bReport=a.session.events.some(e=>e.type==='user/message'&&e.data.source?.kind==='subagent-report'&&e.data.source.senderSessionId===ids[1])
-      if(!bReport) return ptc('return {handled:"A",stillWaiting:"B"}')
+      if(!bReport) {
+        // Same controlled model policy in both normative variants: one final
+        // text judgement for A. Only an unnecessary technical wake can reach
+        // the legacy empty wait branch; production must never request it.
+        if(normative && !aReviewed){aReviewed=true;return {text:'A report reviewed; B has independent active work'}}
+        return scenario==='text-defer' ? {text:'A report reviewed; B has independent active work'} : ptc('return {handled:"A",stillWaiting:"B"}')
+      }
       await Promise.all(ids.map(id=>f.childDone(id)))
       return ptc('const c=await tools.postman_worker_compact({workerSessionId:'+JSON.stringify(ids[0])+'});if(c.status!=="POSTMAN_WORKER_COMPACTED")return {status:"cleanup_blocked",c};const a=await tools.postman_worker_stop({workerSessionId:'+JSON.stringify(ids[0])+',mode:"close"});if(a.status!=="POSTMAN_WORKER_STOPPED")return {status:"cleanup_blocked",a};const b=await tools.postman_worker_stop({workerSessionId:'+JSON.stringify(ids[1])+',mode:"close"});if(b.status!=="POSTMAN_WORKER_STOPPED")return {status:"cleanup_blocked",b};const refused=await tools.postman_worker_compact({workerSessionId:'+JSON.stringify(ids[0])+'});if(refused.status!=="POSTMAN_WORKER_TARGET_UNKNOWN")return {status:"cleanup_blocked",refused};const q=await tools.postman_worker_list({});if(q.quota.luna.used!==0||q.workers.length)return {status:"cleanup_blocked",q};'+(solParent?'return {c,a,b,refused,q}':'const closed=await tools.postman_task_close({});return {c,a,b,refused,q,closed}'), 'task_complete')
     }
@@ -113,6 +120,9 @@ for (const scenario of ['baseline','defer','conflicting-output','sol-defer']) te
   if(solParent) {await f.execute(f.leader,'ptc_execute',{program:'return await tools.postman_sol_worker({task:"Approved managed Sol smoke"})',boundary:'external_event',description:'Create exact managed Sol for owned child smoke'});await ends[0].promise}
   reports[0].resolve();await reportDelivered.promise;await ends[1].promise;await supervisor.whenIdle()
   assert.equal(f.requests.filter(r=>r.agent===supervisor).length,2)
+  if(normative){
+    assert.equal(aReviewed,true,'exactly one necessary A judgement')
+  }
   const child=f.ctx.agents.get(ids[0])
   assert.ok(child,'report does not certify native settlement')
   assert.ok(!child.session.events.some(e=>e.type==='turn/end'))
@@ -130,5 +140,40 @@ for (const scenario of ['baseline','defer','conflicting-output','sol-defer']) te
     assert.equal(supervisor.session.events.filter(e=>e.type==='user/message'&&e.data.source?.kind==='subagent-report'&&e.data.source.senderSessionId===id).length,1)
     assert.equal(supervisor.session.events.filter(e=>e.type==='user/message'&&e.data.source?.kind==='subagent-settled'&&e.data.source.senderSessionId===id).length,1)
   }
-  console.log(JSON.stringify({scenario:'A-report/A-settled/B-active',case:scenario,deferSettlements,modelRequests:requests.length,trace:supervisor.session.events.filter(e=>e.type==='user/message'&&['subagent-report','subagent-settled'].includes(e.data.source?.kind)).map(e=>e.data.source.kind+':'+ids.indexOf(e.data.source.senderSessionId)),cleanup:solParent?'owned-children-retired':cleanup.result.value.status}))
+  const supervisorPtcs=f.results.filter(r=>r.agent.id===supervisor.id&&r.name==='ptc_execute')
+  if(normative){
+    assert.equal(supervisorPtcs.length,deferSettlements?2:3,'only real dispatch/cleanup after repair; old technical wake adds an empty wait')
+    assert.equal(supervisorPtcs.filter(r=>r.result.value.effects.calls.length===0).length,deferSettlements?0:1,'same semantic plan has zero wait-only PTC with Host deferral')
+    assert.equal(requests.length,deferSettlements?4:5,'only technical settlement model request disappears')
+  }
+  const meaningfulEvents=supervisor.session.events.filter(e=>e.type==='user/message'&&['subagent-report','subagent-settled'].includes(e.data.source?.kind))
+  console.log(JSON.stringify({scenario:'A-report/A-settled/B-active',case:scenario,deferSettlements,modelRequests:requests.length,ptcTotal:supervisorPtcs.length,emptyWaitingPtcs:supervisorPtcs.filter(r=>r.result.value.effects.calls.length===0).length,boundaryCounts:Object.fromEntries(['external_event','semantic_decision','task_complete'].map(boundary=>[boundary,supervisorPtcs.filter(r=>r.args?.boundary===boundary).length])),uniqueReports: new Set(meaningfulEvents.filter(e=>e.data.source.kind==='subagent-report').map(e=>e.data.source.senderSessionId)).size,uniqueSettlements:new Set(meaningfulEvents.filter(e=>e.data.source.kind==='subagent-settled').map(e=>e.data.source.senderSessionId)).size,trace:meaningfulEvents.map(e=>e.data.source.kind+':'+ids.indexOf(e.data.source.senderSessionId)),cleanup:solParent?'owned-children-retired':cleanup.result.value.status}))
+})
+for (const deferSettlements of [false,true]) test('single final report has one semantic wake, defer='+deferSettlements,{timeout:45000},async t=>{
+  const dir=await mkdtemp(join(tmpdir(),'postman-single-report-'))
+  const reportGate=Promise.withResolvers(), release=Promise.withResolvers(), delivered=Promise.withResolvers()
+  let f,id
+  t.after(async()=>{reportGate.resolve();release.resolve();await f?.dispose();await rm(dir,{recursive:true,force:true,maxRetries:5})})
+  f=await capabilityRuntime(dir,{preset:'postman-leader',reportDelivery:'next-step',deferSettlements,plan:async(a,r,n)=>{
+    if(a.id==='leader') {
+      if(n===1)return {name:'ptc_execute',args:{program:'return await tools.postman_worker({task:"single",createNew:true})',description:'Dispatch exact final Worker',boundary:'external_event'}}
+      return {text:'Exact final report reviewed'}
+    }
+    await reportGate.promise
+    return {name:'report',args:{output:'PASS single synthetic result'}}
+  }})
+  const start=f.ctx.subagents.startContinuable.bind(f.ctx.subagents)
+  f.ctx.subagents.startContinuable=spec=>{id=spec.childId;return start(spec)}
+  f.ctx.on('tools/execute',async(exec,next)=>{const result=await next();if(exec.name==='report'&&exec.agent.id===id){delivered.resolve();await release.promise}return result})
+  await f.prepare();await f.turn(f.leader,'Approved exact single Worker regression')
+  reportGate.resolve();await delivered.promise;await f.leader.whenIdle()
+  assert.equal(f.requests.filter(r=>r.agent===f.leader).length,2)
+  release.resolve();await f.childDone(id);await f.leader.whenIdle()
+  const requests=f.requests.filter(r=>r.agent===f.leader).length
+  assert.equal(requests,deferSettlements?2:3,'only the redundant completed settlement wake disappears')
+  assert.equal(f.leader.inbox.nextStep.filter(m=>m.source?.kind==='subagent-settled').length,deferSettlements?1:0)
+  const outer=f.results.filter(r=>r.agent===f.leader&&r.name==='ptc_execute')
+  assert.equal(outer.length,1);assert.equal(outer.filter(r=>r.result.value.effects.calls.length===0).length,0)
+  const meaningfulEvents=[...f.leader.session.events.filter(e=>e.type==='user/message').map(e=>e.data),...f.leader.inbox.nextStep].filter(m=>['subagent-report','subagent-settled'].includes(m.source?.kind))
+  console.log(JSON.stringify({scenario:'single-report-settled',deferSettlements,parentModelRequests:requests,ptcTotal:outer.length,emptyWaitingPtcs:outer.filter(r=>r.result.value.effects.calls.length===0).length,boundaryCounts:Object.fromEntries(['external_event','semantic_decision','task_complete'].map(boundary=>[boundary,outer.filter(r=>r.args?.boundary===boundary).length])),uniqueReports:new Set(meaningfulEvents.filter(m=>m.source.kind==='subagent-report').map(m=>m.source.senderSessionId)).size,uniqueSettlements:new Set(meaningfulEvents.filter(m=>m.source.kind==='subagent-settled').map(m=>m.source.senderSessionId)).size,tokens:null}))
 })

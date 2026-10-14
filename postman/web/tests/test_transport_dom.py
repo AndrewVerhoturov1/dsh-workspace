@@ -165,7 +165,7 @@ class TransportDomTests(unittest.TestCase):
 
     def test_current_user_payload_and_image_only_answer_share_exact_anchor(self):
         prompt = self.long_image_prompt()
-        self.set_html(document(turns=group(body='<div data-testid="generated-image-gallery"></div>', key='old') +
+        self.set_html(document(turns=group(prompt=PROMPT.replace(REQ, 'REQ_20261001T041338Z_0000'), body='<div data-testid="generated-image-gallery"></div>', key='old') +
             '<div data-turn-key="current"><div data-user-message-bubble="true">'
             '<div data-search-result-target style="max-height:80px;overflow:hidden">'
             '<div><div class="text-size-chat whitespace-pre-wrap" dir="auto">' + html.escape(prompt) +
@@ -180,7 +180,7 @@ class TransportDomTests(unittest.TestCase):
             const avatar = new Image();avatar.src=canvas.toDataURL();document.body.prepend(avatar);
         }''')
         self.page.wait_for_function('[...document.querySelectorAll("[data-testid=generated-image-gallery] img")].every(i=>i.complete)')
-        self.assertEqual(submit.collect_user_turn_texts(self.page), [PROMPT, prompt])
+        self.assertEqual(submit.collect_user_turn_texts(self.page), [PROMPT.replace(REQ, 'REQ_20261001T041338Z_0000'), prompt])
         self.assertTrue(submit._observe_send_proof(self.page, prompt, 1, conversation_url=URL)[0])
         result = observer.observe_next_assistant(self.page, prompt, URL, image_mode=True,
             timeout_ms=1000, stable_ms=100, poll_ms=10, sleep=self.clock.sleep, monotonic=self.clock.now)

@@ -33,6 +33,13 @@ export function applyPostmanNativeChildCutoff(anchors) {
   if (![goalImages.before, goalImages.after].includes(digest(goalPath)))
     throw new Error('Native goal continuation patch preimage mismatch: ' + goalPath)
   targets.set(goalPath, goalRelative)
+  // Optional in older compositions; capability remains absent/fail-closed.
+  for (const anchor of anchors) {
+    const resolver = createRequire(anchor)
+    let tool
+    try { tool = resolver.resolve('@deepseek-ai/dsh-tool-pwsh') } catch (error) { if (error.code !== 'MODULE_NOT_FOUND') throw error }
+    if (tool) targets.set(realpathSync(tool), 'node_modules/@deepseek-ai/dsh-tool-pwsh/lib/index.js')
+  }
   const prepared = []
   try {
     for (const [path, relative] of targets) {
@@ -42,10 +49,11 @@ export function applyPostmanNativeChildCutoff(anchors) {
       const staged = join(directory, relative)
       mkdirSync(dirname(staged), { recursive: true }); copyFileSync(path, staged)
       const normalizedPatch = join(directory, 'cutoff.patch')
-      const targetPatch = relative === goalRelative ? new URL('./postman-native-goal-continuation.patch', import.meta.url) : patch
+      const targetPatch = relative.includes('/dsh-tool-pwsh/') ? new URL('./postman-native-app-owner.patch', import.meta.url)
+        : relative === goalRelative ? new URL('./postman-native-goal-continuation.patch', import.meta.url) : patch
       writeFileSync(normalizedPatch, readFileSync(targetPatch, 'utf8').replaceAll('\r', ''))
       const apply = args => spawnSync('git', ['-c', 'core.longpaths=true', 'apply', '--include=' + relative, ...args, normalizedPatch], { cwd:directory, env:{...process.env,GIT_CEILING_DIRECTORIES:dirname(directory)}, stdio:'ignore', windowsHide:true })
-      let changed = false, lifecycleInstalled = false, scopedInstalled = false
+      let changed = false, lifecycleInstalled = false, scopedInstalled = false, deferredInstalled = false
       // Preserve the installed compaction-service lookup while reapplying our exact overlays.
       // The scoped patch was authored against the direct-property variant; some installations
       // use the equivalent Cordis service lookup. Normalize only our private staging copy.
@@ -63,6 +71,9 @@ export function applyPostmanNativeChildCutoff(anchors) {
       }
       // Peel only our own overlays in reverse order in the private staging copy.
       if (relative.includes('/dsh-subagent/')) {
+        writeFileSync(normalizedPatch, readFileSync(new URL('./postman-native-deferred-source.patch', import.meta.url), 'utf8').replaceAll('\r', ''))
+        deferredInstalled = apply(['--reverse','--check']).status === 0
+        if (deferredInstalled && apply(['--reverse']).status !== 0) throw new Error('Native deferred source unstage mismatch: ' + path)
         writeFileSync(normalizedPatch, readFileSync(new URL('./postman-native-scoped-compact.patch', import.meta.url), 'utf8').replaceAll('\r', ''))
         scopedInstalled = apply(['--reverse','--check']).status === 0
         if (scopedInstalled && apply(['--reverse']).status !== 0) throw new Error('Native scoped compaction unstage mismatch: ' + path)
@@ -91,6 +102,16 @@ export function applyPostmanNativeChildCutoff(anchors) {
           if (apply(['--check']).status !== 0 || apply([]).status !== 0) throw new Error('Native settlement patch mismatch: ' + path)
           changed = true
         }
+        writeFileSync(normalizedPatch, readFileSync(new URL('./postman-native-luna-bootstrap-report.patch', import.meta.url), 'utf8').replaceAll('\r', ''))
+        if (apply(['--reverse','--check']).status !== 0) {
+          if (apply(['--check']).status !== 0 || apply([]).status !== 0) throw new Error('Native Luna bootstrap report patch mismatch: ' + path)
+          changed = true
+        }
+        writeFileSync(normalizedPatch, readFileSync(new URL('./postman-native-deferred-source.patch', import.meta.url), 'utf8').replaceAll('\r', ''))
+        if (apply(['--reverse','--check']).status !== 0) {
+          if (apply(['--check']).status !== 0 || apply([]).status !== 0) throw new Error('Native deferred source patch mismatch: ' + path)
+          changed ||= !deferredInstalled
+        }
       }
       if (relative.includes('/dsh-session/')) {
         // Historical cost snapshots are informational, not execution/closure proof.
@@ -109,6 +130,19 @@ export function applyPostmanNativeChildCutoff(anchors) {
       }
       if (relative === goalRelative && digest(staged) !== goalImages.after)
         throw new Error('Native goal continuation patch postimage mismatch: ' + path)
+      // Patch context alone accepts unrelated appended/modified SDK bytes.
+      // These exact pinned postimages are the supported composition; check all
+      // staging targets before the first replacement, including the app owner.
+      const postimages = {
+        'node_modules/@deepseek-ai/dsh-subagent/lib/index.js': '4d6115442509a1084d0586c8e528f0c5f2bc374c46a225bb5aa468d86e83099c',
+        'node_modules/@deepseek-ai/dsh-session/lib/index.js': '94f795be373b553dcb9aa8b4c16475abcc4e3afd3340c015a6c7e44a46bfcd87',
+        'node_modules/@deepseek-ai/dsh-tool-pwsh/lib/index.js': '49f21df3595f052a05fdd7b123d50f04632b725f5df15092ba0019a77f18e154',
+      }
+      if (postimages[relative]) {
+        const canonical = readFileSync(staged, 'utf8').replaceAll('\r', '').replace(installedLookup, scopedLookup)
+        if (createHash('sha256').update(canonical).digest('hex') !== postimages[relative])
+          throw new Error('Native SDK postimage mismatch: ' + path)
+      }
       if (changed) prepared.at(-1).staged = staged
     }
     for (const target of prepared) if (target.staged) renameSync(target.staged, target.path)

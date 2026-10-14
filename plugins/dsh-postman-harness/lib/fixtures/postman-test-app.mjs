@@ -1,0 +1,5 @@
+import http from 'node:http'
+import { writeFile } from 'node:fs/promises'
+const html='<!doctype html><html lang="en"><meta charset="utf-8"><title>Owned runtime test</title><style>body{font:20px system-ui;margin:3rem;background:#f5f7fc;color:#18243b}main{max-width:38rem;padding:2rem;background:white;border-radius:1rem}button{font:inherit;padding:.5rem 1rem}output{margin-left:1rem}</style><main><h1>Host-owned runtime</h1><p>The Worker is closed. This exact app is still alive under its Leader.</p><button id="proof">Check rendering</button><output id="count">0</output></main><script>document.querySelector("button").onclick=()=>document.querySelector("output").value=String(Number(document.querySelector("output").value)+1)</script></html>'
+const server=http.createServer((_req,res)=>{res.writeHead(200,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store'});res.end(html)})
+server.listen(0,'127.0.0.1',async()=>{const url='http://127.0.0.1:'+server.address().port;await writeFile(process.argv[2],JSON.stringify({url}));console.log(url)})

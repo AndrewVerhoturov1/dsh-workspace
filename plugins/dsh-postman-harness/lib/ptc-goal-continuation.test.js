@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { createPtcAdapter, SOL_WORKER_PROFILE } from './ptc-adapter.js'
 import { createPostmanWorkerTools } from './postman-worker.js'
+import { createMemoryTaskRegistry } from './postman-task-registry.js'
 import { createPostmanBridgeTool } from './postman-bridge.js'
 import { createPostmanBridgeJobs } from './postman-bridge-jobs.js'
 import { isTopLevelPostmanPtcLeader, postmanBridgeRestrictionForAgent } from './postman-bridge-core.js'
@@ -51,10 +52,10 @@ for (const kind of ['worker','bridge','existing-bridge','sol','no-goal']) test('
   const worker=createPostmanWorkerTools(ctx,undefined,contexts)
   const held=Promise.withResolvers()
   const jobs=createPostmanBridgeJobs(ctx,{run:()=>held.promise,dispose(){held.resolve({status:'fixture-stopped'})}},undefined,contexts)
-  let agent, activeSol=true
-  const adapter=createPtcAdapter(ctx,{authorize:isTopLevelPostmanPtcLeader,
+  let agent, activeSol=true, producerLive=true
+  let adapter=createPtcAdapter(ctx,{authorize:isTopLevelPostmanPtcLeader,
     resolveAssignment:(candidate,profile)=>candidate===agent && kind==='sol'?{profile:SOL_WORKER_PROFILE,role:'sol'}:isTopLevelPostmanPtcLeader(candidate)?{profile,role:'leader'}:null,
-    workerContextOf:()=>context,hasActiveWork:candidate=>kind==='sol'?activeSol:['worker','no-goal'].includes(kind)||jobs.hasActiveWork(candidate)})
+    workerContextOf:()=>context,hasActiveWork:candidate=>producerLive && (kind==='sol'?activeSol:['worker','no-goal'].includes(kind)||jobs.hasActiveWork(candidate))})
   for (const tool of [adapter.tool,worker.taskTool,createPostmanBridgeTool(ctx,jobs,contexts)])ctx.tools.register(tool)
   if(kind==='sol')ctx.on('tools/execute',async(exec,next)=>exec.parent && exec.name==='postman_worker'?{isError:false,value:{status:'POSTMAN_WORKER_TASK_ACCEPTED'}}:next())
   driver.apply(ctx)
@@ -93,12 +94,27 @@ for (const kind of ['worker','bridge','existing-bridge','sol','no-goal']) test('
     agent.followup(message('explicit resumed human review'));await drain(agent)
     assert.equal(requests.length,3);assert.equal(ctx.goals.get(agent).activation,'armed');assert.equal(ctx.goals.get(agent).roundsStarted,0)
   }
+  if (kind==='bridge') {
+    await adapter.dispose()
+    adapter=createPtcAdapter(ctx,{authorize:isTopLevelPostmanPtcLeader,
+      hasActiveWork:candidate=>producerLive && jobs.hasActiveWork(candidate)})
+    adapter.refresh(agent)
+    assert.equal(adapter.isWaitingForExternalEvent(agent),true,'fresh adapter restores exact wait from native durable events')
+  }
+  agent.inject(createUserMessage({content:[{type:'text',text:'retained technical native fact'}],
+    source:{kind:'subagent-settled',form:'postman-deferred',senderSessionId:'synthetic-child'}}))
+  assert.equal(adapter.isWaitingForExternalEvent(agent),true,'deferred technical inbox fact is not a goal wake')
+  // A stale binding or lost completion source cannot hold an armed goal forever.
+  producerLive=false
+  assert.equal(adapter.isWaitingForExternalEvent(agent),false)
+  assert.notEqual(ctx.bail('goal/continuation-defer',agent),true)
   if(kind==='sol'){ activeSol=false; adapter.remove(agent); assert.notEqual(ctx.bail('goal/continuation-defer',agent),true) }
 })
 
 test('actual Bridge READY wakes one review and next safe dispatch holds',{timeout:15000},async t=>{
   const ctx=base(),requests=[],held=[Promise.withResolvers(),Promise.withResolvers()],ready=Promise.withResolvers()
-  const contexts={get:()=>Object.freeze({worktree:process.cwd(),branch:'task/fixture'})}
+  const context=Object.freeze({worktree:process.cwd(),branch:'task/fixture'})
+  const contexts={get:()=>context}
   let runs=0, agent
   const jobs=createPostmanBridgeJobs(ctx,{run:()=>held[runs++].promise,dispose(){held.forEach(p=>p.resolve({status:'fixture-stopped'}))}},undefined,contexts)
   const adapter=createPtcAdapter(ctx,{authorize:isTopLevelPostmanPtcLeader,hasActiveWork:a=>jobs.hasActiveWork(a)})
@@ -235,3 +251,94 @@ for(const kind of ['pre-veto','post-veto','unknown-status','refused-status','pro
   assert.equal(requests.length,4);assert.equal(ctx.goals.get(agent).roundsStarted,2)
   assert.equal(adapter.isWaitingForExternalEvent(agent),false);assert.notEqual(ctx.bail('goal/continuation-defer',agent),true)
 })
+
+// Native AgentLoop, native Worker report, and the installed goal-round driver.
+// A report still wakes the parent for review; the remaining exact live Worker
+// supplies the event source without asking the model for an empty waiting PTC.
+for(const quietOrder of ['none','dispatch','turn-stopping'])test('goal waits after text-only A report review while exact Worker B remains active, quiet='+quietOrder, {timeout:15000}, async t=>{
+  const {SubagentRuntime}=await pkg('dsh-subagent')
+  const {apply:spawn}=await pkg('dsh-subagent-spawn-in-process')
+  const {apply:report}=await pkg('dsh-tool-subagent-report')
+  const {JsonlSessionPersistence}=await pkg('dsh-session-persistence-jsonl')
+  const {SessionProjectionRegistry}=await pkg('dsh-session-projection')
+  const sessions=mkdtempSync(join(tmpdir(),'goal-two-reports-'))
+  const ctx=base(), parentRequests=[], ptcEffects=[], initialResults=[], ids=[]
+  let quietFact
+  const release=[Promise.withResolvers(),Promise.withResolvers()]
+  const holdSettlement=Promise.withResolvers(), delivered=Promise.withResolvers()
+  new JsonlSessionPersistence(ctx,{root:sessions})
+  new SessionProjectionRegistry(ctx)
+  new SubagentRuntime(ctx);spawn(ctx,{providerName:'spawn'});report(ctx,{reportDelivery:'next-step'})
+  const registry=createMemoryTaskRegistry()
+  const context=Object.freeze({worktree:process.cwd(),branch:'task/fixture'})
+  const contexts={get:()=>context,record:registry.get,changeRecord:registry.change}
+  const worker=createPostmanWorkerTools(ctx,undefined,contexts)
+  const start=ctx.subagents.startContinuable.bind(ctx.subagents)
+  ctx.subagents.startContinuable=async spec=>{ids.push(spec.childId);return start(spec)}
+  const adapter=createPtcAdapter(ctx,{authorize:isTopLevelPostmanPtcLeader,hasActiveWork:a=>worker.hasActiveWork(a)})
+  for(const tool of [worker.taskTool,adapter.tool])ctx.tools.register(tool)
+  driver.apply(ctx)
+  ctx.on('tools/result',(exec,result)=>{if(exec.name==='ptc_execute'&&exec.agent===parent){
+    ptcEffects.push(result.value?.effects)
+    initialResults.push({isError:result.isError,concludesTurn:result.concludesTurn,status:result.value?.status,error:result.error,effects:result.value?.effects})
+  }})
+  const injectQuiet=()=>{
+    if(quietFact)return
+    // Match the real native quiet-delivery envelope, after initial admission.
+    // Classification itself is covered by the native bootstrap suite.
+    quietFact=createUserMessage({content:[{type:'text',text:'exact technical settlement'}],source:{kind:'subagent-settled',senderSessionId:'technical-bootstrap',form:'postman-deferred'}})
+    parent.inject(quietFact)
+  }
+  if(quietOrder==='dispatch')ctx.on('tools/result',(exec)=>{if(exec.name==='ptc_execute'&&exec.agent===parent)injectQuiet()})
+  if(quietOrder==='turn-stopping')ctx.on('agent/turn-stopping',({agent})=>{if(agent===parent)injectQuiet()})
+  ctx.on('tools/execute',async(exec,next)=>{
+    const result=await next()
+    if(exec.name==='report'&&exec.agent.id===ids[0]){delivered.resolve();await holdSettlement.promise}
+    return result
+  })
+  let parent
+  class Model extends LlmAdapter{
+    async resolveModel(provider,id){return{provider,id,name:id,inputModalities:['text'],reasoning:{efforts:[{id:'low',name:'low'}]}}}
+    async *stream(request){
+      if(request.sessionId==='goal-two-workers'){
+        parentRequests.push(request)
+        if(parentRequests.length===1)ctx.goals.create(parent,{objective:'review both exact reports',maxGoalRounds:1})
+        const block=parentRequests.length===1?{type:'tool-call',id:'dispatch',name:'ptc_execute',
+          arguments:JSON.stringify({description:'Dispatch two independent native Workers',boundary:'external_event',
+            program:'const a=await tools.postman_worker({task:"A",createNew:true});const b=await tools.postman_worker({task:"B",createNew:true});return {a,b}'})}:
+          {type:'text',text:'Worker A report reviewed; waiting for B event'}
+        yield{type:'block-end',index:0,block}
+      }else{
+        const i=ids.indexOf(request.sessionId)
+        assert.ok(i>=0,'exact native Worker identity')
+        await release[i].promise
+        yield{type:'block-end',index:0,block:{type:'tool-call',id:'report-'+i,name:'report',
+          arguments:JSON.stringify({output:'PASS synthetic Worker '+i})}}
+      }
+      yield{type:'finish',reason:{kind:'stop'}}
+    }
+  }
+  ctx.llm.registerAdapter(['fixture','codex'],new Model())
+  parent=ctx.agentLoop.create('goal-two-workers',{provider:'fixture',model:'inert'},{cwd:process.cwd(),agentPreset:'postman-leader-ptc'})
+  adapter.refresh(parent)
+  await registry.create(parent.id,{workers:{}})
+  t.after(async()=>{release.forEach(p=>p.resolve());holdSettlement.resolve();worker.dispose();await adapter.dispose();await ctx.fiber.dispose();rmSync(sessions,{recursive:true,force:true})})
+  parent.followup(message('start'));await drain(parent)
+  const evidence=()=>JSON.stringify({quietOrder,results:initialResults,goal:ctx.goals.get(parent),phase:parent.phase.kind,active:worker.hasActiveWork(parent),inbox:[...parent.inbox.nextStep,...parent.inbox.nextTurn].map(m=>m.source),events:parent.session.events.filter(e=>['turn/start','turn/end','user/message'].includes(e.type)).map(e=>({type:e.type,turn:e.data.turn,reason:e.data.reason,source:e.data.source}))})
+  assert.deepEqual(initialResults.map(r=>[r.isError,r.concludesTurn,r.status]),[[false,true,'ok']],evidence())
+  assert.equal(parentRequests.length,1,evidence())
+  assert.equal(ids.length,2)
+  assert.equal(worker.hasActiveWork(parent),true)
+  assert.equal(ctx.goals.get(parent).roundsStarted,0,evidence())
+  if(quietFact)assert.equal([...parent.inbox.nextStep,...parent.inbox.nextTurn].filter(m=>m.id===quietFact.id).length,1)
+  release[0].resolve();await delivered.promise;await drain(parent)
+  assert.equal(worker.hasActiveWork(parent),true,'B is exact active producer after A report')
+  assert.equal(parentRequests.length,2,'one required report review, no extra goal wake')
+  assert.equal(adapter.isWaitingForExternalEvent(parent),true,'known active B defers goal after A text-only review')
+  assert.equal(ctx.bail('goal/continuation-defer',parent),true)
+  assert.equal(ctx.goals.get(parent).roundsStarted,0)
+  assert.equal(ptcEffects.filter(e=>e?.calls?.length===0).length,0,'zero empty waiting PTC')
+  if(quietFact)assert.equal(parent.session.events.filter(e=>e.type==='user/message'&&e.data.id===quietFact.id).length,1,'technical fact delivered once alongside real A review')
+})
+
+

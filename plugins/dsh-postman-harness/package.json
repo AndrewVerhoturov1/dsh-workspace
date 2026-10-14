@@ -16,6 +16,7 @@
     "lib/postman-devspace-luna.js",
     "lib/postman-devspace-lanes.js",
     "lib/postman-bridge.js",
+    "lib/postman-app.js",
     "lib/postman-bridge-core.js",
     "lib/postman-input-files.js",
     "lib/ptc-adapter.js",

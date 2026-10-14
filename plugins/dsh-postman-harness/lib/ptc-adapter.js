@@ -65,7 +65,8 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
   // concludeTurn is a soft boundary in AgentLoop when next-step events are
   // already queued. Arm only from the authoritative successful outer result.
   // The same existing inbox then carries those events into a NEW turn.
-  const stagedConclusions = new WeakMap(), externalTurns = new WeakMap()
+  const stagedConclusions = new WeakMap(), externalTurns = new WeakMap(), quietTurns = new WeakMap()
+  const deferredFact = message => ['subagent-report','subagent-settled'].includes(message.source?.kind) && message.source.form === 'postman-deferred'
   const stopConclusionObserver = ctx.on('tools/result', (exec, result) => {
     const record = stagedConclusions.get(exec)
     stagedConclusions.delete(exec)
@@ -77,6 +78,18 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
   const stopExternalBoundary = ctx.on('agent/pre-step', async (payload, next) => {
     const decision = await next() // Never replace or bypass ordinary pre-step policies.
     const { agent, turn } = payload
+    // Native inject is non-waking only while idle. If a quiet fact arrives as
+    // a concluded turn stops, AgentLoop may open one more turn to claim it.
+    // Suspend that empty proposal through the existing pre-step fence, keeping
+    // the exact facts in its durable inbox for the next genuine report/input.
+    // Ordinary vetoes and additional policy/context messages always win.
+    if (decision.kind !== 'reject' && decision.messages.length > 0 &&
+        decision.messages.every(deferredFact) && isWaitingForExternalEvent(agent, true)) {
+      agent.inbox.splice('next-step', 0, 0, decision.messages)
+      const last = agent.session.events.findLast(e => e.type === 'turn/end'), previous = quietTurns.get(agent)
+      quietTurns.set(agent, { turn, completedTurn: last?.data.reason?.kind === 'blocked' && previous?.turn === last.data.turn ? previous.completedTurn : last?.data.turn })
+      return { kind: 'reject' }
+    }
     const waitingTurn = externalTurns.get(agent)
     if (waitingTurn === undefined) return decision
     if (waitingTurn !== turn) { externalTurns.delete(agent); return decision }
@@ -114,6 +127,7 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
   function revoke(record) {
     if (!record) return
     externalTurns.delete(record.agent)
+    quietTurns.delete(record.agent)
     for (const run of record.runs) run.controller.abort()
     record.runs.clear()
     record.section?.()
@@ -369,14 +383,70 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
       }
     },
   })
-  function isWaitingForExternalEvent(agent) {
-    const record = owners.get(agent?.id), turn = externalTurns.get(agent)
-    if (!allowed(agent, record) || agent.phase?.kind !== 'idle' || agent.inbox?.hasPending || !Number.isSafeInteger(turn)) return false
-    const events = agent.session.events, end = events.findLast(e => e.type === 'turn/end')
-    const call = events.findLast(e => e.type === 'tool/call')
-    if (end?.data.turn !== turn || end.data.reason?.kind !== 'completed' || call?.data.turn !== turn || call.data.name !== 'ptc_execute') return false
+  function isWaitingForExternalEvent(agent, proposingStep = false) {
+    const record = owners.get(agent?.id)
+    // An accepted dispatch alone is not a perpetual wake source. Recheck exact
+    // current owner, native inbox and live admitted producers on every goal admission.
+    if (!allowed(agent, record) || (!proposingStep && agent.phase?.kind !== 'idle') ||
+        hasActiveWork?.(agent, record.role) !== true) return false
+    // Native delivery marks ONLY exact Host-vetoed redundant facts. They remain
+    // durable in the ordinary inbox, but must not create automatic goal rounds.
+    if ([...agent.inbox.nextStep, ...agent.inbox.nextTurn].some(message =>
+      !deferredFact(message))) return false
+    const events = agent.session.events
+    let end = events.findLast(e => e.type === 'turn/end')
+    if (end?.data.reason?.kind === 'blocked' && quietTurns.get(agent)?.turn === end.data.turn) {
+      // Only our exact non-semantic pre-step suspension can reuse its previous
+      // completed wait. A user/policy rejection, cold unknown or lost producer
+      // cannot become a perpetual goal veto.
+      end = events.findLast(e => e.type === 'turn/end' && e.data.turn === quietTurns.get(agent).completedTurn)
+    }
+    if (end?.data.reason?.kind !== 'completed') return false
+    const start = events.findLastIndex(e => e.type === 'turn/start' && e.data.turn === end.data.turn)
+    if (start < 0) return false
+    const inTurn = events.slice(start, events.indexOf(end) + 1), calls = inTurn.filter(e => e.type === 'tool/call')
+    if (calls.length === 0) {
+      // A real report/Bridge READY has already woken the model for judgement.
+      // A completed text-only review needs no second empty PTC just to wait for
+      // another independent confirmed producer. User, approval, arbitrary plugin
+      // input or a pending turn is never silently consumed by this admission veto.
+      const inputs = inTurn.filter(e => e.type === 'user/message' && !deferredFact(e.data))
+      return inputs.length > 0 && inputs.every(({ data }) =>
+        data.source?.kind === 'subagent-report' && typeof data.source.senderSessionId === 'string' &&
+          data.source.senderSessionId.length > 0 ||
+        data.source?.kind === 'plugin' && data.source.plugin === 'dsh-postman-harness-bridge' &&
+          data.source.form === 'bridge-ready' && data.source.targetSessionId === agent.id &&
+          typeof data.source.bridgeJobId === 'string')
+    }
+    const call = calls.at(-1), turn = externalTurns.get(agent)
+    if (calls.length !== 1 || call.data.name !== 'ptc_execute') return false
+    if (end.data.turn !== turn) {
+      // Cold/compacted adapters have no WeakMap marker. Reconstruct only from
+      // the native durable successful result and completed exact dispatches;
+      // a model-authored external_event argument alone never proves a wait.
+      const result = inTurn.findLast(e => e.type === 'tool/result' &&
+        e.data.message?.source?.callId === call.data.callId)?.data.message
+      const block = result?.content?.[0]
+      const content = block?.type === 'tool-result' ? block.content : result?.content
+      if (!result || result.isError || block?.isError || content?.length !== 1 || content[0].type !== 'text') return false
+      let value
+      try { value = JSON.parse(content[0].text) } catch { return false }
+      const effects = value.effects
+      if (value.status !== 'ok' || value.cleanupError || value.value?.needsModelDecision ||
+          !effects || effects.failed !== 0 || effects.pending !== 0 ||
+          !Array.isArray(effects.calls) || effects.completed !== effects.calls.length ||
+          effects.calls.some(entry => entry.state !== 'completed')) return false
+      const dispatches = inTurn.filter(e => e.type === 'tool/code-dispatch' &&
+        e.data.parentCallId === call.data.callId)
+      if (dispatches.length !== effects.calls.length || dispatches.some(({ data }) => {
+        if (data.isError) return true
+        if (!YIELD_ACCEPTANCE[data.name]) return false
+        try { return !YIELD_ACCEPTANCE[data.name].includes(JSON.parse(data.content[0].text).status) }
+        catch { return true }
+      })) return false
+    }
     // Settlement that can unblock a requested retirement/compact is relevant.
-    if (events.some(e => e.type === 'tool/code-dispatch-start' && e.data.parentCallId === call.data.callId &&
+    if (events.slice(start).some(e => e.type === 'tool/code-dispatch-start' && e.data.parentCallId === call.data.callId &&
         ['postman_worker_stop','postman_worker_compact','postman_worker_fresh','postman_task_close'].includes(e.data.name))) return false
     try { return JSON.parse(call.data.arguments).boundary === 'external_event' } catch { return false }
   }
