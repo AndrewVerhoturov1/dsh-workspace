@@ -29,6 +29,7 @@ Leader ─── Secretary (files/ledger; web results via Leader)
 
 - Leader использует `postman_input_files` и exact `--input-files-json <JSON>`. Host по закреплённым descriptors создает native image attachment либо безопасный ZIP входных файлов, передаёт в тот же ChatGPT. Это **транспорт входов**, не обязательный ZIP-результат. Ручные загрузки в ChatGPT не требуются. Не отправлять файлы в GitHub из-за транспорта без явного разрешения.
 - Обязанность ChatGPT — решить задачу фактически доступными Web/DevSpace/tools, не имитировать MCP. Привязка к исходному REQ — immutable `POSTMAN_REQUEST_ID`. При SEND_UNKNOWN исходный Send нельзя повторять.
+- Для веб-исследования с требуемыми ссылками/цитатами Leader явно просит **обычный текст без местного bell**: иначе bell может скрыть `assistantText`. Host возвращает текст в `source=text_fallback` (его `diagnostic=UNKNOWN` не означает проверку веб-вызова); источники можно независимо сверить и передать Secretary, а неподтверждённую активность `web.run` нельзя считать веб-PASS.
 - Настоящий GPT Image output пока имеет отдельный недостающий путь сохранения через Host; native image **input** ещё не доказывает image **result**. Legacy `@PostmanImage` остаётся резервом до доказанной универсальной image-приёмки; `@Postman` и `@PostmanAsk` также сохранены.
 - Git публикация/merge/preview запрещены лишь до отдельного предусмотренного разрешения; внешний ChatGPT не получает право GitHub writes от наличия Bash/credentials.
 
