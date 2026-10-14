@@ -105,16 +105,21 @@ window.__ModuleLoader__.load({ id: 'dsh-cost-panel', factory: require => {
       const display = (value, hasData, incomplete, format) => hasData ? format(value) + (current?.stale ? '!' : incomplete ? '*' : '') : current ? '—' : '…';
       const totalText = s => display(s?.total, known(s, 'costKnown'), s?.costUnknown, money);
       const countText = m => display(m?.count, known(m, 'countKnown'), m?.countUnknown, compact);
+      const writeCountText = m => known(m, 'countKnown') ? countText(m) : current?.stale ? '—' : current ? 'Нет данных' : '…';
       const note = (hasData, incomplete, estimate = false, key = 'note') => h('span', { key }, [!current ? 'загрузка' : current.stale ? 'ошибка получения данных · последние известные значения' : !hasData ? 'данные неизвестны' : incomplete ? 'неполные данные · * известная часть' : '', estimate ? 'оценка по API' : ''].filter(Boolean).join(' · '));
-      const rows = (name, m) => [h('strong', { key: name }, name), h('span', { key: name + '-n' }, 'Токены', h('b', null, known(m, 'countKnown') ? exact(m.count) : '—')), h('span', { key: name + '-c' }, 'Стоимость', h('b', null, known(m, 'costKnown') ? money(m.cost) : '—')),
+      const rows = (name, m, isWrite = false) => [h('strong', { key: name }, name),
+        h('span', { key: name + '-n' }, 'Токены', h('b', null, known(m, 'countKnown') ? exact(m.count) : isWrite && current && !current.stale ? 'Нет данных' : '—')),
+        h('span', { key: name + '-c' }, 'Стоимость', h('b', null, known(m, 'costKnown') ? money(m.cost) : isWrite && current && !current.stale ? known(m, 'countKnown') ? 'Недоступна' : 'Нет данных' : '—')),
         ...(m?.share == null || own?.costUnknown || current?.stale ? [] : [h('span', { key: name + '-s' }, 'Доля стоимости агента', h('b', null, m.share.toFixed(2).replace(/\.00$/, '') + '%'))]),
         note(known(m, 'countKnown'), m?.countUnknown || m?.costUnknown, true, name + '-note'),
-        ...(current && !known(m, 'costKnown') ? [h('span', { key: name + '-missing-cost' }, 'стоимость неизвестна')] : []),
+        ...(current && !known(m, 'costKnown') ? [h('span', { key: name + '-missing-cost' }, isWrite && !current.stale
+          ? known(m, 'countKnown') ? 'Цена недоступна: нет применимого тарифа или условий расчёта записи кэша' : 'Нет данных о числе токенов записи кэша; цена не вычислена'
+          : 'стоимость неизвестна')] : []),
         ...(name === 'Размышления' ? [h('span', { key: 'subset' }, 'Входят в исходящие')] : [])];
       const m = own?.metrics;
       const team = current?.team;
       const names = { calls: 'Вызовы модели', cost: 'Стоимость агента', team: 'Стоимость команды', input: 'Вход без кэша', reasoning: 'Размышления', read: 'Кэш · чтение', write: 'Кэш · запись', output: 'Исходящие' };
-      const values = { calls: display(own?.calls, own?.calls != null, own?.callsUnknown, String), cost: totalText(own), team: totalText(team), input: countText(m?.input), reasoning: countText(m?.reasoning), read: countText(m?.read), write: countText(m?.write), output: countText(m?.output) };
+      const values = { calls: display(own?.calls, own?.calls != null, own?.callsUnknown, String), cost: totalText(own), team: totalText(team), input: countText(m?.input), reasoning: countText(m?.reasoning), read: countText(m?.read), write: writeCountText(m?.write), output: countText(m?.output) };
       const state = key => {
         if (!current) return 'loading';
         if (current.stale) return 'error';
@@ -122,7 +127,7 @@ window.__ModuleLoader__.load({ id: 'dsh-cost-panel', factory: require => {
         if (!known(value, key === 'cost' || key === 'team' ? 'costKnown' : 'countKnown')) return 'unknown';
         return value?.countUnknown || value?.costUnknown ? 'partial' : 'confirmed';
       };
-      const details = { calls: [h('strong', { key: 'h' }, names.calls), h('b', { key: 'v' }, own?.calls != null ? exact(own.calls) : '—'), note(own?.calls != null, own?.callsUnknown)], cost: [h('strong', { key: 'h' }, names.cost), h('b', { key: 'v' }, totalText(own)), note(known(own, 'costKnown'), own?.costUnknown, true)], team: [h('strong', { key: 'h' }, names.team), h('b', { key: 'v' }, totalText(team)), note(known(team, 'costKnown'), team?.costUnknown, true)], input: rows(names.input, m?.input), reasoning: rows(names.reasoning, m?.reasoning), output: rows(names.output, m?.output), read: rows(names.read, m?.read), write: rows(names.write, m?.write) };
+      const details = { calls: [h('strong', { key: 'h' }, names.calls), h('b', { key: 'v' }, own?.calls != null ? exact(own.calls) : '—'), note(own?.calls != null, own?.callsUnknown)], cost: [h('strong', { key: 'h' }, names.cost), h('b', { key: 'v' }, totalText(own)), note(known(own, 'costKnown'), own?.costUnknown, true)], team: [h('strong', { key: 'h' }, names.team), h('b', { key: 'v' }, totalText(team)), note(known(team, 'costKnown'), team?.costUnknown, true)], input: rows(names.input, m?.input), reasoning: rows(names.reasoning, m?.reasoning), output: rows(names.output, m?.output), read: rows(names.read, m?.read), write: rows(names.write, m?.write, true) };
       const metric = key => h('span', { key, className: 'dsh-cost-metric' + (['cost', 'team'].includes(key) ? ' cost' : '') + (key === 'team' ? ' team' : ''), tabIndex: 0,
         'data-metric': key, 'data-state': state(key), 'aria-label': names[key] + ': ' + values[key], 'aria-describedby': active === key ? 'dsh-cost-tooltip-' + sessionId : undefined,
         onMouseEnter: e => setHovered({ key, node: e.currentTarget }), onMouseLeave: () => setHovered(null), onFocus: e => setFocused({ key, node: e.currentTarget }), onBlur: () => setFocused(null),
