@@ -328,13 +328,20 @@ export async function toCodexContext(options: GenerateOptions, attachments?: Att
 
 /**
  * Map pi-ai's disjoint input/output buckets (reasoning is within output).
- * SDK 0.85.1 defaults absent provider fields to zero, losing presence for all
- * counts. Only positive values are evidence; required numeric placeholders are
- * explicitly marked unknown so consumers must not count them as confirmed zero.
+ * SDK 0.85.1 normalizes absent cache writes to zero, but may retain raw
+ * Responses fields in openaiResponsesUsage. When that bag is present, only its
+ * explicit nonnegative cache_write_tokens (including zero) is known. Older
+ * SDKs without the bag retain the conservative positive-only fallback.
+ * Required numeric input/output placeholders remain explicitly unknown.
  * @param usage - cumulative usage from the terminal pi-ai event.
- * @returns known positive counts, never fabricated confirmed zeros.
+ * @returns known counts without inventing confirmed SDK zeros.
  */
 export function mapUsage(usage: PiUsage): TokenUsage & { inputTokensKnown?: false; outputTokensKnown?: false } {
+  const raw = (usage as PiUsage & { openaiResponsesUsage?: { cache_write_tokens?: unknown } }).openaiResponsesUsage
+  const rawWrite = raw?.cache_write_tokens
+  const cacheWrite = raw === undefined
+    ? (usage.cacheWrite > 0 ? usage.cacheWrite : undefined)
+    : (typeof rawWrite === 'number' && Number.isFinite(rawWrite) && rawWrite >= 0 ? rawWrite : undefined)
   return {
     inputTokens: usage.input,
     outputTokens: usage.output,
@@ -342,7 +349,7 @@ export function mapUsage(usage: PiUsage): TokenUsage & { inputTokensKnown?: fals
     ...usage.output > 0 ? {} : { outputTokensKnown: false as const },
     ...usage.reasoning !== undefined && usage.reasoning > 0 ? { reasoningTokens: usage.reasoning } : {},
     ...usage.cacheRead > 0 ? { cacheReadTokens: usage.cacheRead } : {},
-    ...usage.cacheWrite > 0 ? { cacheWriteTokens: usage.cacheWrite } : {},
+    ...cacheWrite === undefined ? {} : { cacheWriteTokens: cacheWrite },
   }
 }
 

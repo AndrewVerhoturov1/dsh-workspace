@@ -205,8 +205,41 @@ test('unknown values differ from reported zero; reasoning share is explanatory a
   assert.equal(unknown.metrics().cost.props.children[1].props.children, '$0.0042*');
   assert.equal(unknown.metrics().reasoning.props.children[1].props.children, '—');
   assert.equal(unknown.metrics().read.props.children[1].props.children, '—');
-  assert.equal(unknown.metrics().write.props.children[1].props.children, '—');
+  assert.equal(unknown.metrics().write.props.children[1].props.children, 'Нет данных');
   unknown.dispose();
+});
+
+test('cache-write alone distinguishes missing data, confirmed zero and known count without price', async () => {
+  const values = [
+    {
+      write: { count: 0, countKnown: false, countUnknown: true, cost: 0, costKnown: false, costUnknown: true },
+      summary: 'Нет данных', tokens: 'Нет данных', price: 'Нет данных', explanation: /Нет данных о числе токенов записи кэша/,
+    },
+    {
+      write: { count: 0, countKnown: true, countUnknown: false, cost: 0, costKnown: true, costUnknown: false },
+      summary: '0', tokens: '0', price: '$0.00', explanation: /Стоимость.*\$0\.00/,
+    },
+    {
+      write: { count: 18, countKnown: true, countUnknown: false, cost: 0.00000225, costKnown: true, costUnknown: false },
+      summary: '18', tokens: '18', price: '<$0.0001', explanation: /Стоимость.*оценка по API/,
+    },
+    {
+      write: { count: 18, countKnown: true, countUnknown: false, cost: 0, costKnown: false, costUnknown: true },
+      summary: '18', tokens: '18', price: 'Недоступна', explanation: /нет применимого тарифа или условий расчёта/,
+    },
+  ];
+  for (const item of values) {
+    const f = fixture({ result: sample('child', { own: { ...sample().own, metrics: { ...sample().own.metrics, write: item.write } } }) });
+    await f.settle(0);
+    assert.equal(f.metrics().write.props.children[1].props.children, item.summary);
+    focus(f, 'write');
+    const tooltip = f.text(f.tooltip());
+    assert.ok(tooltip.includes('Токены' + item.tokens));
+    assert.match(tooltip, item.explanation);
+    assert.ok(tooltip.includes('Стоимость' + item.price));
+    assert.doesNotMatch(tooltip, /ответе Codex/);
+    f.dispose();
+  }
 });
 
 test('tooltip is hidden by default and focus/hover exposes exactly one tooltip', async () => {
@@ -350,12 +383,12 @@ test('known partial costs and cache counts stay visible, unknown shares are omit
   assert.equal(displayed(f).cost, '$0.0010*');
   assert.equal(displayed(f).team, '$0.0020*');
   assert.equal(displayed(f).read, '30');
-  assert.equal(displayed(f).write, '—');
+  assert.equal(displayed(f).write, 'Нет данных');
   focus(f, 'team');
   assert.match(f.text(f.tooltip()), /неполные данные.*оценка по API/);
   focus(f, 'write');
   assert.match(f.text(f.tooltip()), /данные неизвестны/);
-  assert.match(f.text(f.tooltip()), /—/);
+  assert.match(f.text(f.tooltip()), /Нет данных/);
   focus(f, 'input');
   assert.doesNotMatch(f.text(f.tooltip()), /Доля стоимости агента/);
   f.dispose();
