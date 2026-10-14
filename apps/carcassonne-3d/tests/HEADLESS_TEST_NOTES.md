@@ -1,0 +1,5 @@
+# Headless autonomous game invariants
+
+`game-invariants.test.ts` exercises 100 complete deterministic games using only the public pure-game API (`createGame`, selectors, `transition`, and save/restore). Seeds are `AUTONOMOUS_0000` through `AUTONOMOUS_0099`; player counts cycle from two through five. Each accepted tile/follower-or-skip command is followed by assertions that all 72 catalog instance IDs are accounted for exactly once across board, bag, pending tile, and discards; board coordinates are unique; every adjacent edge matches at the placed rotations; meeple references point to an existing tile and region; each player's reserve remains in 0..7 and conserves seven pieces; scores are finite; and save/replay reproduces the current state.
+
+Every run must finish within 142 accepted commands, with all remaining tiles placed or discarded and an empty bag. The test also confirms that a command after completion is rejected without changing the terminal state. Run with `npm test` (or target it with `npx vitest run tests/game-invariants.test.ts`).
