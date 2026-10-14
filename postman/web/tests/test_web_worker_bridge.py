@@ -64,6 +64,36 @@ class WebWorkerBridgeTests(unittest.TestCase):
             self.assertEqual(stored["requestId"], REQ)
             self.assertEqual(stored["taskUrl"], TASK_URL)
 
+    def test_devspace_generated_image_persists_terminal_without_false_pipeline_failure(self):
+        # Real image output was persisted as 1.2 MB PNG, but the Web Worker
+        # rejected the otherwise valid terminal status and reported BLOCKED.
+        with tempfile.TemporaryDirectory() as root:
+            bridge = bridge_module.WebWorkerBridge(root=root)
+            request = bridge_module.BridgeRequest(REQ, '', str(bridge.result_path(REQ)),
+                                                  f'WEB_{REQ}')
+            bridge._write_state(request, bridge_module.ACCEPTED)
+            bridge._write_state(request, bridge_module.WEB_STARTING)
+            bridge._write_state(request, bridge_module.WAITING_ASSISTANT)
+            image = {'source': 'image_result', 'imageSha256': 'a' * 64,
+                     'imageFormat': 'png', 'imageWidth': 1536, 'imageHeight': 1024,
+                     'imageByteLength': 1205130, 'reportedOutcome': 'UNKNOWN'}
+            saved = bridge._write_state(request, 'DEVSPACE_IMAGE_RESULT_DURABLE', **image)
+            self.assertEqual(saved['state'], 'DEVSPACE_IMAGE_RESULT_DURABLE')
+            self.assertEqual(bridge.read_state(REQ)['imageSha256'], 'a' * 64)
+            self.assertIn(saved['state'], bridge_module._TERMINAL_SUCCESS_CODES)
+            with patch.object(bridge_module.browser_bootstrap, '_load_sync_playwright',
+                              side_effect=AssertionError('completed image cannot invoke browser')):
+                recovered = bridge.run_request(
+                    REQ, task_url='', prompt='POSTMAN_REQUEST_ID: ' + REQ + '\nImage',
+                    expected_filename='', expected_request={
+                        'transportKind': 'devspace', 'requestId': REQ },
+                    devspace_binding={'requestId': REQ}, artifact_mode=False)
+            self.assertTrue(recovered['ok'])
+            self.assertEqual(recovered['code'], 'DEVSPACE_IMAGE_RESULT_DURABLE')
+            self.assertEqual(recovered['details']['imageSha256'], 'a' * 64)
+            with self.assertRaisesRegex(ValueError, 'state cannot move backwards'):
+                bridge._write_state(request, bridge_module.WAITING_ASSISTANT)
+
     def test_accept_rejects_invalid_identity_and_task_url(self):
         with tempfile.TemporaryDirectory() as root:
             bridge = bridge_module.WebWorkerBridge(root=root)
