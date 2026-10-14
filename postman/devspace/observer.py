@@ -30,10 +30,37 @@ def wait_for_bell_after_unknown_send(binding, *, timeout_ms, sleep, monotonic,
     final_since = None
     control_error = False
 
+    def recover_late_chat_ref():
+        nonlocal conversation_ref, observable, controls_allowed
+        if conversation_ref or page is None or not isinstance(prompt, str):
+            return
+        # Never infer authority from a URL alone. The exact fresh REQ key must
+        # occur in the Host-owned page's user turn, with no later user turn.
+        if not prompt.startswith("POSTMAN_REQUEST_ID: " + binding["requestId"] + chr(10)):
+            return
+        try:
+            url = str(page.url)
+            if not submit.is_bound_chat_url(url):
+                return
+            turns, _ = observer.snapshot_turns(page)
+            anchor = observer.find_user_anchor(turns, current_prompt)
+            if anchor is None or any(
+                    t.get("role") == "user" and t["index"] > anchor for t in turns):
+                return
+        except Exception:
+            return  # UI read uncertainty never delays or suppresses a private bell.
+        conversation_ref = url
+        observable = True
+        controls_allowed = True
+
     def bell():
         event = read_event(binding)
+        if not event:
+            return None
+        if not conversation_ref:
+            recover_late_chat_ref()  # one read-only last chance before returning bell
         return {"ok": True, "code": "DEVSPACE_SIGNAL_RECEIVED", "details": {
-            **event, "conversationRef": conversation_ref, "sendState": "UNKNOWN"}} if event else None
+            **event, "conversationRef": conversation_ref, "sendState": "UNKNOWN"}}
 
     def text_result():
         marker = re.search(r"\b(CAPABILITY[ _-]*UNAVAILABLE|BLOCKED)\b", final_text, re.I)
@@ -62,6 +89,9 @@ def wait_for_bell_after_unknown_send(binding, *, timeout_ms, sleep, monotonic,
                 "message": "Unproven browser Send; no local bell before deadline. No resend.",
                 **({"controlDiagnostic": "CONTROL_PROOF_UNKNOWN"} if control_error else {})}}
 
+        if not observable and now >= next_probe:
+            next_probe = now + 1.0
+            recover_late_chat_ref()
         if observable and now >= next_probe:
             next_probe = now + 1.0
             # URL plus exact rendered turn/request-key and no later user turn

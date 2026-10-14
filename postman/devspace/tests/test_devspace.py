@@ -244,10 +244,12 @@ assert hasattr(stdlib_signal, 'set_wakeup_fd')
                 self.emit(message="bell after unproved send")
         uncertain = {"ok": False, "code": web.browser_submit.PROMPT_SEND_UNKNOWN,
                      "sendState": web.browser_submit.SEND_UNKNOWN,
-                     "details": {"chatUrl": CHAT, "exactUserTurn": False}}
+                     "details": {"chatUrl": None, "exactUserTurn": False}}
         with patch.object(web.browser_submit, "submit_fresh_prompt", return_value=uncertain) as submit, \
              patch.object(web.browser_observer, "observe_next_assistant",
-                          side_effect=AssertionError("unknown Send must not use text observer")):
+                          side_effect=AssertionError("unknown Send must not use text observer")), \
+             patch.object(observer, "wait_for_bell_after_unknown_send",
+                          wraps=observer.wait_for_bell_after_unknown_send) as waiting:
             bridge = web.WebWorkerBridge(root=self.channel / "web", sleep=sleep,
                                          monotonic=lambda: clock[0])
             result = bridge.run_request(REQ, task_url="", prompt="private task",
@@ -255,6 +257,8 @@ assert hasattr(stdlib_signal, 'set_wakeup_fd')
                 devspace_binding=self.binding, artifact_mode=False,
                 playwright_factory=Factory, observer_timeout_ms=4000)
         submit.assert_called_once()
+        self.assertIs(waiting.call_args.kwargs["page"], page)
+        self.assertEqual(waiting.call_args.kwargs["prompt"], "private task")
         self.assertEqual(result["code"], "DEVSPACE_SIGNAL_RECEIVED")
         self.assertEqual(result["details"]["reportedOutcome"], "DONE")
         self.assertEqual(result["details"]["sendState"], "UNKNOWN")
@@ -270,6 +274,61 @@ assert hasattr(stdlib_signal, 'set_wakeup_fd')
         self.assertEqual(result["details"]["sendState"], "UNKNOWN")
         self.assertEqual(result["details"]["diagnostic"], "BLOCKED")
         self.assertFalse((self.channel / "event.json").exists())
+
+    def test_unknown_send_recovers_late_owned_chat_url_without_resending(self):
+        page = SimpleNamespace(url=CHAT)
+        prompt = task.render_task(self.binding, "Read source", "pwsh -File signal.ps1")
+        turns = [{"index":0, "role":"user", "text":
+                  "POSTMAN_REQUEST_ID: " + REQ + chr(10) + "# Changed rendered Markdown"}]
+        clock=[0.0]
+        def sleep(seconds):
+            clock[0]+=seconds
+            if clock[0] >= 1 and not (self.channel/"event.json").exists():
+                self.emit(message="late bound chat")
+        with patch.object(observer.observer, "snapshot_turns", return_value=(turns,"family")),              patch.object(observer.controls, "process_one", return_value=None) as control,              patch.object(observer.observer, "observe_next_assistant",
+                          return_value={"ok":False,"code":"ASSISTANT_NOT_STARTED","details":{}}),              patch.object(observer.image_output, "observe_owned_image", return_value=None):
+            result=observer.wait_for_bell_after_unknown_send(self.binding,
+                timeout_ms=4000, sleep=sleep, monotonic=lambda:clock[0],
+                conversation_ref=None, page=page, prompt=prompt)
+        self.assertEqual(result["code"],"DEVSPACE_SIGNAL_RECEIVED")
+        self.assertEqual(result["details"]["reportedOutcome"],"DONE")
+        self.assertEqual(result["details"]["conversationRef"],CHAT)
+        self.assertEqual(result["details"]["sendState"],"UNKNOWN")
+        self.assertLessEqual(control.call_count,1)
+
+    def test_unknown_send_late_chat_url_keeps_text_fallback(self):
+        prompt = task.render_task(self.binding, "Read source", "pwsh -File signal.ps1")
+        turns = [{"index":0, "role":"user", "text":"POSTMAN_REQUEST_ID: " + REQ}]
+        clock=[0.0]
+        with patch.object(observer.observer, "snapshot_turns", return_value=(turns,"family")),              patch.object(observer.controls, "process_one", return_value=None),              patch.object(observer.image_output, "observe_owned_image", return_value=None),              patch.object(observer.observer, "observe_next_assistant", return_value={
+                 "ok":True,"code":"ASSISTANT_COMPLETED",
+                 "details":{"assistantText":"CAPABILITY_UNAVAILABLE: external web provider absent"}}):
+            result=observer.wait_for_bell_after_unknown_send(
+                self.binding, timeout_ms=20000,
+                sleep=lambda seconds:clock.__setitem__(0,clock[0]+seconds),
+                monotonic=lambda:clock[0], conversation_ref=None,
+                page=SimpleNamespace(url=CHAT), prompt=prompt)
+        self.assertEqual(result["code"],"DEVSPACE_DIAGNOSTIC")
+        self.assertEqual(result["details"]["source"],"text_fallback")
+        self.assertEqual(result["details"]["diagnostic"],"CAPABILITY_UNAVAILABLE")
+        self.assertEqual(result["details"]["conversationRef"],CHAT)
+        self.assertFalse((self.channel/"event.json").exists())
+
+    def test_unknown_send_does_not_bind_foreign_or_later_user_turn(self):
+        prompt = task.render_task(self.binding, "Read source", "pwsh -File signal.ps1")
+        exact={"index":0,"role":"user","text":"POSTMAN_REQUEST_ID: "+REQ}
+        foreign={"index":0,"role":"user","text":"POSTMAN_REQUEST_ID: REQ_other"}
+        later={"index":1,"role":"user","text":"Another later user task"}
+        self.emit(message="bell is delivered regardless of URL proof")
+        for turns in [[foreign],[exact,later]]:
+            with self.subTest(turns=turns),                  patch.object(observer.observer, "snapshot_turns", return_value=(turns,"family")),                  patch.object(observer.controls, "process_one",
+                              side_effect=AssertionError("no control without owned turn")):
+                result=observer.wait_for_bell_after_unknown_send(
+                    self.binding, timeout_ms=1000, sleep=lambda _:None,
+                    monotonic=lambda:0.0, conversation_ref=None,
+                    page=SimpleNamespace(url=CHAT),prompt=prompt)
+            self.assertEqual(result["code"],"DEVSPACE_SIGNAL_RECEIVED")
+            self.assertIsNone(result["details"]["conversationRef"])
 
     def test_unknown_send_unproven_anchor_remains_bell_only(self):
         page = SimpleNamespace(url=CHAT)
