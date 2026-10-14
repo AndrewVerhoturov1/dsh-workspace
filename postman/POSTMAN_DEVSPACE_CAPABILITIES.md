@@ -14,7 +14,7 @@
 | Другие входные файлы, safe private ZIP input | CODE_TEST_PASS_NO_GUI | ZIP только как transport входов; не требовать ZIP результата ChatGPT |
 | GPT Image output внутри универсального DevSpace | CODE_TEST_PASS_NO_GUI | Обнаружение одного изображения только в exact assistant turn, native source bytes, приватный PNG/JPEG/WebP, decoder+SHA; требуется живой GPT Image E2E |
 | Веб-исследование ChatGPT DevSpace | CAPABILITY_CONDITIONAL | Возможность нужно проверить в самой ChatGPT-сессии, no fake web search; нет нового web-only маршрута по умолчанию |
-| Локальный Secretary web_search/web_fetch | CODE_TEST_PASS_NO_GUI | Host toolFilter изменён, требуется runtime PTC-проверка фактического доступа |
+| Secretary: внешние факты через PostmanDevspace, без собственного web_search/web_fetch | CODE_TEST_PASS_NO_GUI | Host запрещает Secretary отдельные web-инструменты; Leader получает exact Devspace terminal и передаёт факты в private ledger, помечая неподтверждённый веб-вызов |
 | Secretary journal независим от Git task | CODE_TEST_PASS_NO_GUI | Host-private durable ledger теперь доступен до prepare; cold reopen test |
 | External explicit workspace_root: read/write | CODE_TEST_PASS_NO_GUI | Exact Leader grant на существующий canonical путь; пересечение с постоянным repo запрещено, изолирующей ОС-песочницы DevSpace нет |
 | Computer Use в другом приложении | ENFORCEMENT_UNAVAILABLE | Требуется target-scoped Host adapter; пока API отвечает `COMPUTER_USE_TARGET_ENFORCEMENT_UNAVAILABLE` |

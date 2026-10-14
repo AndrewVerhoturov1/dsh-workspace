@@ -18,7 +18,7 @@ const registeredTools = [
   'postman_send_current_turn', 'postman_current_turn_status', 'postman_ask_validate_reply',
   'postman_continue_last_request', 'postman_result_present',
   'postman_result_workspace_register', 'postman_result_workspace_unregister',
-  'read', 'read_image', 'glob', 'grep', 'write', 'edit', 'pwsh', 'web_search', 'subagent', 'subagent_fork', 'report',
+  'read', 'read_image', 'glob', 'grep', 'write', 'edit', 'pwsh', 'web_search', 'web_fetch', 'subagent', 'subagent_fork', 'report',
 ]
 const registry = { schemas: () => registeredTools.map(name => ({ name })) }
 const leader = (id, preset = 'postman-leader') => ({ id, session: { header: { id, agentPreset: preset, delegationDepth: 0 } } })
@@ -89,7 +89,7 @@ test('Secretary auto-prepares branchless context through actual Host Proxy facad
     'POSTMAN_WORKER_READ_ONLY_CONTEXT')
 })
 
-test('Secretary starts branchlessly, can use web tools and keeps scoped assignment', async () => {
+test('Secretary starts branchlessly, denies separate web provider and keeps scoped assignment', async () => {
   let branchless = 0, context = null
   const contexts = {
     get:()=>context,
@@ -104,7 +104,7 @@ test('Secretary starts branchlessly, can use web tools and keeps scoped assignme
   const parent=leader('secretary-owner')
   f.agents.set(parent.id,parent)
   const result=await f.tools.secretaryTool.execute({
-    task:'Find current docs via web and write one goal + next step in Host-private ledger',
+    task:'Read local documentation and write one goal + next step in Host-private ledger',
     label:'Secretary',
   },exec(parent))
   assert.equal(result.status,'POSTMAN_WORKER_TASK_ACCEPTED')
@@ -114,8 +114,12 @@ test('Secretary starts branchlessly, can use web tools and keeps scoped assignme
   assert.match(f.calls.starts[0].request.prompt[0].text,/Host-private ledger/)
   assert.match(f.calls.starts[0].request.prompt[0].text,/Never create a Git branch/)
   const inherited=f.calls.starts[0].request.toolFilter
-  assert.ok(!inherited?.deny?.includes('web_search'))
-  assert.ok(!inherited?.deny?.includes('web_fetch'))
+  assert.ok(inherited?.deny?.includes('web_search'))
+  assert.ok(inherited?.deny?.includes('web_fetch'))
+  const restriction = postmanBridgeRestrictionForAgent({ id:'secretary-child', session:{header:{origin:'subagent',delegationDepth:1,parentSession:parent.id}} }, () => false, () => 'secretary')
+  assert.equal(restriction.allow.includes('web_search'), false)
+  assert.equal(restriction.allow.includes('web_fetch'), false)
+  assert.equal(restriction.allow.includes('postman_secretary_ledger'), true)
   assert.equal((await f.tools.taskTool.execute({task:'edit protected source'},exec(parent))).status,
     'POSTMAN_WORKER_READ_ONLY_CONTEXT')
 })

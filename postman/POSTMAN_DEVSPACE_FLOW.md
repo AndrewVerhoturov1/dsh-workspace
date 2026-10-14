@@ -5,7 +5,7 @@
 ## 1. Один основной маршрут, три независимые линии
 
 ```text
-Leader ─── Secretary (web/files, private milestone ledger)
+Leader ─── Secretary (files/ledger; web results via Leader)
   ├─ laneId A → Luna A → ChatGPT A + DevSpace → REQ A → bell/text A → READY A
   ├─ laneId B → Luna B → ChatGPT B + DevSpace → REQ B → bell/text B → READY B
   └─ laneId C → Luna C → ChatGPT C + DevSpace → REQ C → bell/text C → READY C
@@ -42,7 +42,7 @@ Leader ─── Secretary (web/files, private milestone ledger)
 
 ## 5. Secretary и процесс
 
-Secretary собирает локальные и свежие веб-факты (`web_search`/`web_fetch`) и ведёт одну короткую Host-private запись `postman_secretary_ledger`. Ledger читается до Git prepare и переживает compact; не создаёт Markdown, branch или worktree. Leader принимает решения, не ведёт хронику своим дорогим контекстом. Worker — краткая механика и разрешённая Git-публикация, Sol — резерв при конкретном DevSpace blocker. Legacy маршруты — только по выбору Leader, не автоматический повтор после `SEND_UNKNOWN`.
+Secretary собирает локальные факты, принимает от Leader результаты внешнего поиска `@PostmanDevspace` с указанием степени подтверждения и ведёт одну короткую Host-private запись `postman_secretary_ledger`. Локальные `web_search`/`web_fetch` у Secretary не вызываются: поиск требует отдельного DeepSeek API, загрузчик страниц не настроен. Ledger читается до Git prepare и переживает compact; не создаёт Markdown, branch или worktree. Leader принимает решения, не ведёт хронику своим дорогим контекстом. Worker — краткая механика и разрешённая Git-публикация, Sol — резерв при конкретном DevSpace blocker. Legacy маршруты — только по выбору Leader, не автоматический повтор после `SEND_UNKNOWN`.
 
 ## 6. Приёмка и диагностика
 
