@@ -69,11 +69,18 @@ test('dirty isolated worktree preflight fails before REQ and automatically relea
   assert.equal(op.synchronization,'not-required');assert.equal(op.requestId,undefined)
   assert.equal(op.childSessionId,undefined)
   assert.equal(row.devspaceLanes[op.devspace.laneId],undefined)
+  assert.equal(f.jobs.list(f.parent).used,0,'proven not-sent operation must not consume admission capacity')
   assert.equal(f.launches.length,0,'no browser Send or REQ allocated')
-  // A new independent admission does not inherit a ghost reserved lane.
-  const next=await f.acceptIsolated();assert.equal(next.status,'POSTMAN_BRIDGE_ACCEPTED')
-  await flush();assert.ok(['pending','received'].includes(f.registry.get(f.parent.id).bridgeOperations[next.bridgeJobId].state),'admission is no longer rejected by a ghost reserved lane')
-  assert.equal(f.launches.length,0)
+  // Repeat past the three-slot limit: rejected requests must never accrue
+  // capacity or count as a successful prior isolated run that waives dirty-tree checks.
+  for(let i=0;i<4;i++){
+    const next=await f.acceptIsolated();assert.equal(next.status,'POSTMAN_BRIDGE_ACCEPTED')
+    await flush();const op=f.registry.get(f.parent.id).bridgeOperations[next.bridgeJobId]
+    assert.equal(op.state,'received');assert.equal(op.phase,'not-sent')
+    assert.equal(op.preSendFailure,'POSTMAN_DEVSPACE_WORKTREE_NOT_READY')
+    assert.equal(f.jobs.list(f.parent).used,0,'no permanently occupied slots after denied sends')
+    assert.equal(f.launches.length,0,'dirty worktree never reaches Browser Send')
+  }
 })
 
 test('cold exact owner stop retires only a Host-proven failed pre-REQ worktree reservation',async t=>{
@@ -97,7 +104,28 @@ test('cold exact owner stop retires only a Host-proven failed pre-REQ worktree r
   const row=f.registry.get(f.parent.id);assert.equal(row.bridgeOperations[jobId].state,'received')
   assert.equal(row.bridgeOperations[jobId].preSendFailure,'POSTMAN_DEVSPACE_WORKTREE_NOT_READY')
   assert.equal(row.devspaceLanes[laneId],undefined)
+  assert.equal(f.jobs.list(f.parent).used,0,'cold stop releases capacity as well as lane ownership')
   assert.equal(f.launches.length,0)
   assert.equal((await f.jobs.status(f.parent,jobId)).status,'POSTMAN_BRIDGE_NOT_SENT')
   assert.equal((await f.jobs.stop(f.parent,jobId)).status,'POSTMAN_BRIDGE_STOP_NOT_LIVE','not a repeatable release')
+})
+
+test('unproven received/not-sent is still capacity held without verified pre-send refusal',async t=>{
+  const f=await fixture(t,{readOnly:false}),id='22222222-3333-4444-8555-666666666666'
+  await f.contexts.changeRecord(f.parent.id,row=>({...row,bridgeOperations:{...row.bridgeOperations,
+    [id]:{state:'received',phase:'not-sent',transportKind:'devspace',
+      synchronization:'not-required',devspace:{mode:'WRITE_ISOLATED'}}}}))
+  assert.equal(f.jobs.list(f.parent).used,1,'absence of REQ without trusted preflight evidence remains reserved')
+})
+
+test('verified received DevSpace terminal may continue in existing dirty implementation task',async t=>{
+  const f=await fixture(t,{readOnly:false}),requestId='REQ_20260101T000000Z_0001'
+  await f.contexts.changeRecord(f.parent.id,row=>({...row,bridgeOperations:{...row.bridgeOperations,
+    'prior-verifiable':{state:'received',phase:'synchronized',transportKind:'devspace',requestId,
+      synchronization:'not-required',devspace:{mode:'WRITE_ISOLATED'},
+      terminal:{status:'POSTMAN_BRIDGE_TERMINAL',requestId,transportKind:'devspace',
+        terminalStatus:'COMPLETED',result:{requestId,ok:true,code:'DEVSPACE_DIAGNOSTIC'}}}}}))
+  const next=await f.acceptIsolated();assert.equal(next.status,'POSTMAN_BRIDGE_ACCEPTED')
+  await flush();assert.equal(f.launches.length,1,'only a previously verified terminal may waive clean worktree on continuation')
+  f.finish(1);await flush()
 })

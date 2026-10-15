@@ -70,7 +70,9 @@ function countsAgainstLimit(operation) {
       (!['synchronized', 'not-required'].includes(operation.synchronization) ||
         !hasTrustedTerminal(operation) && !(operation.phase === 'not-sent' &&
           operation.synchronization === 'not-required' &&
-          (operation.requestId || operation.cancellationRequested === true) && !operation.terminal))
+          (operation.requestId || operation.cancellationRequested === true ||
+            operation.transportKind === 'devspace' && operation.preSendFailure === NOT_SENT_WORKTREE_PREFLIGHT &&
+            !operation.childSessionId) && !operation.terminal))
 }
 
 // An exact native worktree preflight returned before Luna, REQ allocation or Web Send.
