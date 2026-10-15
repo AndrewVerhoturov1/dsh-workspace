@@ -101,6 +101,9 @@ export const POSTMAN_TASK_DOMAIN = defineDomain({
       synchronization: z.enum(['pending', 'busy', 'failed', 'synchronized', 'not-required']).optional(),
       grantDiagnostic: z.string().optional(),
       cancellationRequested: z.boolean().optional(),
+      // Trusted Host-only refusal before Luna/REQ/Send; retain through cold
+      // JsonStorage rehydration so NOT_SENT does not consume DevSpace capacity.
+      preSendFailure: z.literal('POSTMAN_DEVSPACE_WORKTREE_NOT_READY').optional(),
     })).optional(),
   }).strict())),
     // Same private ledger contract, independently addressable before any Git

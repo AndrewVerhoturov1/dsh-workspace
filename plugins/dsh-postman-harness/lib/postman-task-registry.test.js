@@ -24,17 +24,24 @@ test('JSON storage persists one Leader row across independent domain lifetimes',
   await first.create('leader', record)
   await first.change('leader', row => ({ ...row, stage: 'ready', workers: { 'reserved-C': { id: 'reserved-C',
     label: 'reserved-C', state: 'intent', delivery: 'pending', artifactRequests: [] } },
-    bridgeOperations: { cancelled: { state: 'pending', phase: 'reserved', cancellationRequested: true } } }))
+    bridgeOperations: { cancelled: { state: 'pending', phase: 'reserved', cancellationRequested: true },
+      preflight: { state: 'received', phase: 'not-sent', transportKind: 'devspace',
+        synchronization: 'not-required', devspace: { mode: 'WRITE_ISOLATED', laneId: 'synthetic-no-send' },
+        preSendFailure: 'POSTMAN_DEVSPACE_WORKTREE_NOT_READY' } } }))
   await assert.rejects(() => openPostmanTaskRegistry(domain), error => error.code === 'already-open')
   await first.close()
   const second = await openPostmanTaskRegistry(domain)
   assert.equal(second.get('leader').branch, record.branch)
   assert.equal(second.get('leader').workers['reserved-C'].id, 'reserved-C')
   assert.equal(second.get('leader').bridgeOperations.cancelled.cancellationRequested, true)
+  assert.equal(second.get('leader').bridgeOperations.preflight.preSendFailure, 'POSTMAN_DEVSPACE_WORKTREE_NOT_READY',
+    'exact trusted pre-Send reason survives first JsonStorage cold reopen')
   await second.change('leader', row => ({ ...row, runner: { state: 'failed', requestId: 'REQ_1' } }))
   await second.close()
   const third = await openPostmanTaskRegistry(new DomainFacility(ctx, { backend: 'json' }))
   assert.equal(third.get('leader').runner.state, 'failed')
+  assert.equal(third.get('leader').bridgeOperations.preflight.preSendFailure, 'POSTMAN_DEVSPACE_WORKTREE_NOT_READY',
+    'exact native NOT_SENT evidence survives second independent JsonStorage open')
   assert.deepEqual([...third.entries()].map(([id]) => id), ['leader'])
   await third.close()
   await backend.close()
