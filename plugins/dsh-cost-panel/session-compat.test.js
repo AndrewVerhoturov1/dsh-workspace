@@ -5,7 +5,9 @@ import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { applySessionIgnorableEvents } from './session-compat.mjs';
 import { createRequire } from 'node:module';
-const sdk = createRequire(process.env.DSH_INSTALL_SDK ?? createRequire(import.meta.url).resolve('@deepseek-ai/dsh/package.json'));
+// The panel uses autoInstallPeers:false; resolve the pinned SDK from the Postman install, not panel-local peers.
+const sdk = createRequire(process.env.DSH_INSTALL_SDK ?? process.env.DSH_CAPABILITY_SDK ??
+  createRequire(new URL('../dsh-postman-harness/package.json', import.meta.url)).resolve('@deepseek-ai/dsh/package.json'));
 const pinned = readFileSync(sdk.resolve('@deepseek-ai/dsh-session'), 'utf8').replaceAll('\r', '').replace('\t\t\t...surfaceOpts?.ignorable === true ? { ignorable: true } : {},\n', '');
 
 for (const eol of ['LF', 'CRLF']) test('compatibility patch preserves shared pnpm image (' + eol + ') and is idempotent', t => {
