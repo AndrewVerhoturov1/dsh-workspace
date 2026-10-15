@@ -93,7 +93,7 @@ test('Secretary singleton private ledger clean worktree and fresh durable surviv
   const before=execFileSync('git',['-C',repo,'status','--porcelain']).toString()
   const id=accepted(await f.run(f.worker.secretaryTool,{task:'Facts and ledger only'}));await f.settled(id)
   assert.equal((await f.run(f.worker.secretaryTool,{task:'second',createNew:true})).status,'POSTMAN_SECRETARY_LIMIT_REACHED')
-  const ledger=await f.run(f.worker.ledgerTool);assert.equal(ledger.ledger.revision,1)
+  const ledger=await f.run(f.worker.ledgerTool);assert.equal(ledger.status,'POSTMAN_SECRETARY_LEDGER',JSON.stringify(ledger));assert.equal(ledger.ledger.revision,1)
   assert.equal(execFileSync('git',['-C',repo,'status','--porcelain']).toString(),before)
   assert.ok(!f.calls.some(x=>['write','edit','pwsh'].includes(x.name)))
   await f.wake(f.leader)

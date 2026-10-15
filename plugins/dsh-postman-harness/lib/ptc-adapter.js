@@ -1,4 +1,5 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { createPtcRuntime, DEFAULT_LIMITS, validatePtcProfile } from 'dsh-ptc'
 import { buildPtcHelperPrelude, ptcHelperGuidance } from './ptc-helpers.js'
 import { POSTMAN_PTC_DISCIPLINE } from './ptc-discipline.js'
@@ -112,6 +113,99 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
   const stopGoalContinuation = ctx.on('goal/continuation-defer', agent =>
     isWaitingForExternalEvent(agent) ? true : undefined)
   const logger = ctx.logger('postman-ptc')
+  // Host-only evidence, never reconstructed from model prose or a saved tool card.
+  const fatalResults = new WeakMap(), fatalTurns = new WeakMap(), fatalStreaks = new WeakMap(), revokedGoals = new WeakMap()
+  function automaticGoal(agent) {
+    const goals = ctx.get('goals') // Native optional lookup; the bridge need not require goal-driver.
+    if (!goals || ctx.agents.get(agent?.id) !== agent) return null
+    const goal = goals.get(agent), events = agent.session.events
+    const start = events.findLastIndex(event => event.type === 'turn/start')
+    if (start < 0 || goal?.phase !== 'active' || goal.activation !== 'armed') return null
+    const inputs = events.slice(start).filter(event => event.type === 'user/message')
+    if (inputs.length !== 1) return null // Real reports/input retain their ordinary review semantics.
+    const source = inputs[0].data.source
+    return source?.kind === 'goal' && source.round > 0 && source.goalId === goal.id &&
+      source.revision === goal.revision && source.round === goal.roundsStarted ?
+      { session: agent.session, turn: events[start].data.turn, id: goal.id, revision: goal.revision, round: source.round } : null
+  }
+  function fatalKind(result) {
+    // Program exceptions, syntax, permissions, cancellation and unknown statuses are NOT infrastructure proof.
+    const origin = result.failureOrigin
+    if (origin?.kind !== 'host-runtime') return null
+    // A validated guest terminal never receives this parent-owned provenance.
+    if (result.status === 'protocol-error' && origin.stage === 'channel-frame' && ['invalid-json','maxMessageBytes','frame'].includes(result.error?.code)) return 'channel-' + result.error.code
+    if (result.status === 'protocol-error' && origin.stage === 'channel-send' && result.error?.code === 'outbound') return 'channel-outbound'
+    if (result.status === 'process-error' &&
+        ((origin.stage === 'start' && ['spawn','start-timeout'].includes(result.error?.code)) ||
+         (origin.stage === 'process-exit' && result.error?.code === 'exit') ||
+         (origin.stage === 'channel-io' && ['stdin','stdout','stderr'].includes(result.error?.code)))) return 'process-' + result.error.code
+    return null
+  }
+  const stopFatalResult = ctx.on('tools/result', (exec, result) => {
+    const proof = fatalResults.get(exec)
+    fatalResults.delete(exec)
+    if (!proof) return
+    const record = owners.get(exec.agent?.id), ref = automaticGoal(exec.agent)
+    const kind = !result.isError && JSON.stringify(result.value) === proof.json &&
+      allowed(exec.agent, record) && record.role === 'leader' && ref?.session === proof.ref.session &&
+      ref.turn === proof.ref.turn && ref.id === proof.ref.id && ref.revision === proof.ref.revision ? proof.kind : null
+    let turn = fatalTurns.get(exec.agent)
+    if (!turn || turn.ref.turn !== proof.ref.turn || turn.ref.session !== proof.ref.session) {
+      turn = { ref: proof.ref, kinds: [] }; fatalTurns.set(exec.agent, turn)
+    }
+    turn.kinds.push(kind)
+  })
+  const stopFatalTurn = ctx.on('agent/turn-stopping', async ({ agent }) => {
+    const turn = fatalTurns.get(agent)
+    fatalTurns.delete(agent)
+    const ref = automaticGoal(agent), record = owners.get(agent?.id)
+    const start = agent.session.events.findLastIndex(event => event.type === 'turn/start')
+    const calls = agent.session.events.slice(start).filter(event => event.type === 'tool/call')
+    const kind = turn?.kinds[0]
+    if (!ref || !allowed(agent, record) || record.role !== 'leader' || !kind ||
+        turn.ref.session !== ref.session || turn.ref.turn !== ref.turn ||
+        turn.ref.id !== ref.id || turn.ref.revision !== ref.revision ||
+        calls.length !== turn.kinds.length || calls.some(event => event.data.name !== PTC_TOOL_NAME) ||
+        turn.kinds.some(value => value !== kind)) { fatalStreaks.delete(agent); return }
+    const previous = fatalStreaks.get(agent)
+    const count = previous?.session === ref.session && previous.id === ref.id && previous.revision === ref.revision &&
+      previous.round + 1 === ref.round && previous.kind === kind ? previous.count + 1 : 1
+    fatalStreaks.set(agent, { ...ref, kind, count })
+    if (count < 2) return
+    // Revoke locally FIRST. A failed append/flush must never admit round three.
+    revokedGoals.set(agent, ref)
+    let paused = false, durable = false
+    try {
+      const goals = ctx.get('goals')
+      goals.disarm(agent)
+      goals.pause(agent, { id: ref.id, revision: ref.revision })
+      paused = true
+      await ctx.get('sessions').flush(agent.session)
+      durable = true
+    } catch (error) {
+      try { ctx.get('goals')?.disarm(agent) } catch {} // Local veto below remains in force too.
+      logger.warn('postman/ptc-goal-breaker persistence not confirmed', { sessionId: agent.id, goalId: ref.id, revision: ref.revision, kind, paused, durable: false })
+    }
+    // Native plugin-origin message is visible in the conversation, without queuing a user action or waking a turn.
+    const notice = 'Host остановил автоматическое продолжение цели после двух одинаковых сбоев PTC до отправки вложенных действий (' + kind + '). ' +
+      (durable ? 'Пауза цели сохранена.' : 'Автозапуск отозван в этом процессе; сохранность паузы НЕ подтверждена.') +
+      ' Цель и дочерние задачи сохранены. Возобновление — только по явной команде пользователя.'
+    try {
+      agent.session.append('user/message', createUserMessage({ content: [{ type: 'text', text: notice }],
+        source: { kind: 'plugin', plugin: 'dsh-postman-harness-bridge', form: 'ptc-goal-safety-stop' } }), { surfaceOp: 'append' })
+      await ctx.get('sessions').flush(agent.session)
+    } catch (error) { logger.warn('postman/ptc-goal-breaker visible notice could not be persisted', { sessionId: agent.id, goalId: ref.id, error: error.message }) }
+    logger.info('postman/ptc-goal-breaker', { sessionId: agent.id, goalId: ref.id, revision: ref.revision, kind, count, paused, durable })
+  })
+  const stopFatalAdmission = ctx.on('goal/continuation-defer', agent => {
+    const ref = revokedGoals.get(agent)
+    const goals = ctx.get('goals')
+    if (!ref || ctx.agents.get(agent.id) !== agent || ref.session !== agent.session || !goals) return
+    const goal = goals.get(agent)
+    // Only an ordinary authorized native resume/edit edge changes this exact revision.
+    if (goal?.id === ref.id && goal.revision === ref.revision) return true
+    revokedGoals.delete(agent)
+  })
   const assignmentFor = resolveAssignment ?? (agent => authorize(agent) ? { profile: current, role: 'leader' } : null)
   function allowed(agent, record) {
     if (disposed || !agent || !record || record.agent !== agent ||
@@ -234,6 +328,7 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
       if (autoConclude && typeof exec.concludeTurn !== 'function')
         return { status: 'PTC_YIELD_UNSUPPORTED' }
       if (exec.signal.aborted) return { status: 'cancelled', effects: { calls: [], completed: 0, failed: 0, pending: 0 } }
+      const goalRound = record.role === 'leader' ? automaticGoal(agent) : null
       const controller = new AbortController(), started = new Map()
       const startedAt = Date.now(), toolCounts = Object.create(null)
       let terminal, nestedFailed = false, acceptanceFailed = false, eventAccepted = false, yieldApplied = false, nestedConclude = false, yieldBlockedReason
@@ -343,6 +438,13 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
           exec.concludeTurn()
           stagedConclusions.set(exec, record)
           yieldApplied = true
+        }
+        if (goalRound) {
+          const effects = result.effects
+          const noActions = started.size === 0 && !nestedFailed && !unknownEffect && !result.cleanupError &&
+            !controller.signal.aborted && !exec.signal.aborted && effects && Array.isArray(effects.calls) &&
+            effects.calls.length === 0 && effects.completed === 0 && effects.failed === 0 && effects.pending === 0
+          fatalResults.set(exec, { ref: goalRound, kind: noActions ? fatalKind(result) : null, json: JSON.stringify(result) })
         }
         return result
       } finally {
@@ -454,6 +556,7 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
     if (disposed) return
     disposed = true
     stopConclusionObserver(); stopExternalBoundary(); stopGoalContinuation(); stopTextReads()
+    stopFatalResult(); stopFatalTurn(); stopFatalAdmission()
     for (const record of owners.values()) revoke(record)
     owners.clear()
     await runtime.dispose()

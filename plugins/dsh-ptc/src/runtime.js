@@ -14,6 +14,10 @@ const MAX_PROCESSES = 10, MAX_OUTSTANDING = 64, START_MS = 3000, STOP_MS = 750
 function outcome(status, code, detail, extra = {}) {
   return { status, ...(code ? { error:{code,message:String(detail ?? code).slice(0,1024)} } : {}), ...extra }
 }
+// Only this parent runtime stamps provenance; executor terminal fields cannot supply it.
+function hostFailure(status, code, detail, stage) {
+  return outcome(status, code, detail, { failureOrigin: { kind: 'host-runtime', stage } })
+}
 function errorText(error) {
   if (types.isProxy(error) || !(error instanceof Error)) return 'Host callback failed'
   const d=Object.getOwnPropertyDescriptor(error,'message')
@@ -116,7 +120,7 @@ async function execute(state,{profile,bindings,program,language,signal},outstand
     call.state=ok?'completed':'failed'
     if(!finished){
       reply ||= message('reply',runId,{callId:call.id,ok:false,error:errorText(value)})
-      void emit(reply).catch(error=>void finish(outcome('protocol-error','outbound',errorText(error))))
+      void emit(reply).catch(error=>void finish(hostFailure('protocol-error','outbound',errorText(error),'channel-send')))
       launchQueued()
     }
   }
@@ -204,7 +208,7 @@ async function execute(state,{profile,bindings,program,language,signal},outstand
   const onAbort=()=>void finish(outcome('cancelled','aborted','AbortSignal'))
   state.cancel=(status,code,detail)=>finish(outcome(status,code,detail))
   wallTimer=setTimeout(()=>void finish(outcome('limit-exceeded','maxWallMs','Wall time exceeded')),limits.maxWallMs)
-  startTimer=setTimeout(()=>void finish(outcome('process-error','start-timeout','Child did not become ready')),Math.min(START_MS,limits.maxWallMs))
+  startTimer=setTimeout(()=>void finish(hostFailure('process-error','start-timeout','Child did not become ready','start')),Math.min(START_MS,limits.maxWallMs))
   signal?.addEventListener('abort',onAbort,{once:true})
   if(signal?.aborted)onAbort()
   try {
@@ -213,17 +217,17 @@ async function execute(state,{profile,bindings,program,language,signal},outstand
     await preparing
     if(finished)return done
     child=spawnChild(process.execPath, [fileURLToPath(entry)], {cwd:directory,execArgv:[],env:process.platform==='win32'?{SystemRoot:process.env.SystemRoot||'C:/Windows',TEMP:directory,TMP:directory}:{TMPDIR:directory},stdio:['pipe','pipe','pipe'],windowsHide:true,shell:false})
-    reader=new FrameReader(limits,obj=>{try {handle(obj)}catch(error){void finish(outcome('protocol-error','message',errorText(error))) }},error=>void finish(outcome('protocol-error','frame',errorText(error))))
+    reader=new FrameReader(limits,obj=>{try {handle(obj)}catch(error){void finish(hostFailure('protocol-error','message',errorText(error),'channel-message')) }},error=>void finish(hostFailure('protocol-error',error.code==='invalid-json'?'invalid-json':error.code==='maxMessageBytes'?'maxMessageBytes':'frame',errorText(error),'channel-frame')))
     child.stdout.on('data',chunk=>{incoming+=chunk.length;if(incoming+outgoing>limits.maxTotalBridgeBytes){void finish(outcome('limit-exceeded','maxTotalBridgeBytes','Bridge budget'));return}reader.push(chunk)})
     child.stdout.once('end',()=>reader.end())
-    child.stdout.on('error',error=>void finish(outcome('process-error','stdout',errorText(error))))
+    child.stdout.on('error',error=>void finish(hostFailure('process-error','stdout',errorText(error),'channel-io')))
     child.stderr.on('data',chunk=>{stderrBytes+=chunk.length;if(stderrBytes>4096)void finish(outcome('limit-exceeded','stderrBytes','stderr budget'))})
-    child.stderr.on('error',error=>void finish(outcome('process-error','stderr',errorText(error))))
-    child.once('error',error=>void finish(outcome('process-error','spawn',errorText(error))))
-    child.once('close',(code,why)=>{state.closed=true;if(!finished)void finish(outcome('process-error','exit',`Child exited `+code+'/'+why))})
-    send=writer(child.stdin,limits,error=>void finish(outcome('process-error','stdin',errorText(error))))
+    child.stderr.on('error',error=>void finish(hostFailure('process-error','stderr',errorText(error),'channel-io')))
+    child.once('error',error=>void finish(hostFailure('process-error','spawn',errorText(error),'start')))
+    child.once('close',(code,why)=>{state.closed=true;if(!finished)void finish(hostFailure('process-error','exit',`Child exited `+code+'/'+why,'process-exit'))})
+    send=writer(child.stdin,limits,error=>void finish(hostFailure('process-error','stdin',errorText(error),'channel-io')))
     accepted=true
-    void emit(message('start',runId,{program,language,profile})).catch(error=>void finish(outcome('protocol-error','outbound',errorText(error))))
-  } catch(error){void finish(outcome('process-error','spawn',errorText(error)))}
+    void emit(message('start',runId,{program,language,profile})).catch(error=>void finish(hostFailure('protocol-error','outbound',errorText(error),'channel-send')))
+  } catch(error){void finish(hostFailure('process-error','spawn',errorText(error),'start'))}
   return done
 }

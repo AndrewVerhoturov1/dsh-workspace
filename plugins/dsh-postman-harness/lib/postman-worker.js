@@ -1223,7 +1223,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       const warning = budget && budget.used >= budget.hardLimit - 1
         ? 'HARD CEILING: this assignment is escalation-only. No ordinary searches/tests/edits/retries. ONE NEEDS_PARENT_GUIDANCE: notify_parent and meaningful blocker report, then stop. Exhaustion is not success.'
         : budget && budget.used >= budget.softLimit - 1 ? 'SOFT WARNING: budget nearly exhausted. Do not start a new research branch. Finish immediately with sufficient evidence or prepare escalation.' : ''
-      const ledger = type === 'secretary' ? rawRow(scope.session.header.parentSession)?.secretaryLedger : null
+      const ledger = type === 'secretary' ? taskContexts?.readLedger?.(scope.session.header.parentSession) ?? rawRow(scope.session.header.parentSession)?.secretaryLedger : null
       return ROLE_SKILLS[type] + (warning ? String.fromCharCode(10) + warning : '') +
         (ledger ? String.fromCharCode(10) + 'Current Host-private operational ledger: ' + JSON.stringify(ledger) : '')
     },

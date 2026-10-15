@@ -73,6 +73,55 @@ function countsAgainstLimit(operation) {
           (operation.requestId || operation.cancellationRequested === true) && !operation.terminal))
 }
 
+// An exact native worktree preflight returned before Luna, REQ allocation or Web Send.
+// A missing REQ alone is never proof: require the explicit Host status and one
+// matching, never-used lane reservation before releasing the resource.
+const NOT_SENT_WORKTREE_PREFLIGHT = 'POSTMAN_DEVSPACE_WORKTREE_NOT_READY'
+function preflightReservation(row, bridgeJobId) {
+  const op = row?.bridgeOperations?.[bridgeJobId]
+  const laneId = op?.devspace?.laneId
+  const lane = row?.devspaceLanes?.[laneId]
+  return op && op.transportKind === 'devspace' &&
+    ['pending', 'unknown'].includes(op.state) && op.phase === 'reserved' &&
+    op.devspace?.mode === 'WRITE_ISOLATED' &&
+    !op.requestId && !op.childSessionId && !op.terminal && !op.devspace?.channel &&
+    typeof laneId === 'string' && lane?.state === 'reserved' &&
+    lane.activeBridgeJobId === bridgeJobId && !lane.childId &&
+    Array.isArray(lane.requestIds) && lane.requestIds.length === 0 &&
+    lane.conversationRef == null
+}
+function recordProvenPreflightFailure(row, bridgeJobId) {
+  if (!preflightReservation(row, bridgeJobId)) throw Error('POSTMAN_BRIDGE_PRE_SEND_PROOF_CHANGED')
+  const lanes = { ...row.devspaceLanes }
+  delete lanes[row.bridgeOperations[bridgeJobId].devspace.laneId]
+  return { ...row, devspaceLanes: lanes, bridgeOperations: {
+    ...row.bridgeOperations, [bridgeJobId]: { ...row.bridgeOperations[bridgeJobId],
+      state: 'received', phase: 'not-sent', synchronization: 'not-required',
+      preSendFailure: NOT_SENT_WORKTREE_PREFLIGHT },
+  } }
+}
+function trustedPreflightReceipt(parent, bridgeJobId, row) {
+  if (!preflightReservation(row, bridgeJobId)) return false
+  const createdAt = row.bridgeOperations[bridgeJobId].createdAt
+  const laneId = row.bridgeOperations[bridgeJobId].devspace.laneId
+  // tool/code-dispatch is written by native ToolRuntime, not model prose or a
+  // user-supplied PTC return. Rebind exactly to this owner, job and generation.
+  return parent?.session?.events?.some(event => {
+    if (event.type !== 'tool/code-dispatch') return false
+    const d = event.data
+    if (d?.name !== 'postman_bridge_status' || d.isError !== false ||
+        d.arguments?.bridge_job_id !== bridgeJobId ||
+        !Array.isArray(d.content) || d.content.length !== 1 || d.content[0]?.type !== 'text') return false
+    let result
+    try { result = JSON.parse(d.content[0].text) } catch { return false }
+    return result?.bridgeJobId === bridgeJobId && result?.createdAt === createdAt &&
+      result?.laneId === laneId && result?.status === 'POSTMAN_BRIDGE_FAILED' &&
+      result?.state === 'FAILED' && result?.trustedStatus === NOT_SENT_WORKTREE_PREFLIGHT &&
+      result?.childSessionId == null && result?.requestId == null &&
+      result?.recoveryEligible === false
+  }) === true
+}
+
 function snapshot(job) {
   return {
     bridgeJobId: job.bridgeJobId, state: job.state,
@@ -534,6 +583,12 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
                 if (job.synchronization === 'synchronized') return row
                 throw new Error('POSTMAN_BRIDGE_JOURNAL_MISSING')
               }
+              // A rejected isolated worktree is verified before any Luna/REQ.
+              // Release only the matching empty lane, preserving a precise
+              // not-sent refusal for subsequent cold reads and audit.
+              if (job.trustedTerminal?.status === NOT_SENT_WORKTREE_PREFLIGHT &&
+                  !job.childSessionId && !job.requestId && preflightReservation(row, job.bridgeJobId))
+                return recordProvenPreflightFailure(row, job.bridgeJobId)
               // Only an actual Direct NO_JOB plus a pre-request journal proves
               // that a started child stopped before transport. Missing tools do not.
               const notSent = job.cancellationRequested && job.requestId == null && current.requestId == null &&
@@ -743,9 +798,11 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
           verified: false, applyEligible: false }
       } else if (operation?.state === 'received' && operation.phase === 'not-sent' &&
                  operation.synchronization === 'not-required' &&
-                 (operation.requestId || operation.cancellationRequested === true) && !operation.terminal)
+                 (operation.requestId || operation.cancellationRequested === true ||
+                   operation.preSendFailure === NOT_SENT_WORKTREE_PREFLIGHT) && !operation.terminal)
         return { status: 'POSTMAN_BRIDGE_NOT_SENT', bridgeJobId, requestId: operation.requestId ?? null,
-          synchronization: 'not-required' }
+          synchronization: 'not-required', ...(operation.preSendFailure
+            ? { preSendFailure: operation.preSendFailure } : {}) }
       else return operation
         ? { status: 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN', bridgeJobId, state: 'INTERRUPTED',
           requestId: operation.requestId ?? null }
@@ -876,6 +933,24 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
       const row = contexts?.record?.(parent.id)
       const op = Object.hasOwn(row?.bridgeOperations ?? {}, bridgeJobId)
         ? row.bridgeOperations[bridgeJobId] : row?.bridge?.id === bridgeJobId ? row.bridge : null
+      // Cold/retired job: exact Host-recorded pre-transport refusal can be
+      // stopped without treating every no-REQ UNKNOWN as safe to clear.
+      if (op && trustedPreflightReceipt(parent, bridgeJobId, row) &&
+          typeof contexts?.changeRecord === 'function') {
+        try {
+          await contexts.changeRecord(parent.id, current => {
+            if (!trustedPreflightReceipt(parent, bridgeJobId, current))
+              throw Error('POSTMAN_BRIDGE_PRE_SEND_PROOF_CHANGED')
+            return recordProvenPreflightFailure(current, bridgeJobId)
+          })
+          devspaceCoordinator.refresh?.()
+          return { status: 'POSTMAN_BRIDGE_NOT_SENT', bridgeJobId,
+            preSendFailure: NOT_SENT_WORKTREE_PREFLIGHT, synchronization: 'not-required' }
+        } catch (error) {
+          return { status: 'POSTMAN_BRIDGE_STOP_NOT_LIVE', bridgeJobId,
+            diagnostic: diagnostic(error) }
+        }
+      }
       return job || op ? { status: job?.trustedTerminal?.status === 'POSTMAN_BRIDGE_TERMINAL'
         ? 'POSTMAN_BRIDGE_ALREADY_TERMINAL' : 'POSTMAN_BRIDGE_STOP_NOT_LIVE', bridgeJobId,
         cancellationRequested: job?.cancellationRequested === true || op?.cancellationRequested === true }

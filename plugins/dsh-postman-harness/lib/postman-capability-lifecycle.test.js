@@ -215,7 +215,7 @@ test('all real child requests: Secretary/Worker/Sol functional smoke, ownership,
     for(const r of results)assert.equal(r.result.isError,false,JSON.stringify({name:r.name,result:r.result}))
     assert.ok(results.some(r=>r.name==='report'))
     if(role(a)==='luna'){assert.equal(results.find(r=>r.name==='notify_parent').result.value.status,'PARENT_NOTIFICATION_ACCEPTED');assert.ok(results.find(r=>r.name==='report').result.value.messageId)}
-    if(role(a)==='secretary'){assert.equal(f.registry.get('leader').secretaryLedger.content,'verified fact ledger');assert.equal(results.findLast(r=>r.name==='postman_secretary_ledger').result.value.ledger.content,'verified fact ledger')}
+    if(role(a)==='secretary'){assert.equal(f.registry.readLedger('leader').content,'verified fact ledger','ledger is Host-private rather than a task-row field');const lastLedger=results.findLast(r=>r.name==='postman_secretary_ledger');assert.equal(lastLedger.result.value.status,'POSTMAN_SECRETARY_LEDGER',JSON.stringify(lastLedger.result.value));assert.equal(lastLedger.result.value.ledger?.content,'verified fact ledger',JSON.stringify(lastLedger.result.value))}
     else if(role(a)==='sol'){const v=results.find(r=>r.name==='ptc_execute').result.value;assert.equal(v.status,'ok',JSON.stringify(v));assert.equal(v.value.after.lines[0].text,'new fact');assert.ok(v.value.names.includes('read')&&v.value.names.includes('grep'));}
     else assert.equal(await readFile(join(f.worktree,a.id+'.txt'),'utf8'),'smoke new')
   }
