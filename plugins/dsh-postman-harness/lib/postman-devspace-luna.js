@@ -8,11 +8,15 @@ const CONVERSATION = /^https:\/\/chatgpt\.com\/c\/[a-zA-Z0-9-]+$/
 const INITIAL_MESSAGE = 'Host has opened your persistent PostmanDevspace communications session. ' +
   'You are Luna, the communications agent, not a coding Worker. The trusted Host runs the browser ' +
   'and reads the bell; never use shell, Git, browser tools or choose a new task. ' +
-  'Receive future Host assignment/result events and relay a compact factual status without claiming engineering PASS.'
+  'A bootstrap acknowledgement is not a result: reply only POSTMAN_LUNA_BOOTSTRAP_ACK, ' +
+  'without report or asking the Leader to wait. ' +
+  'After a Host terminal, relay only its facts without claiming engineering PASS. ' +
+  'If an immediate parent decision is necessary, report with NEEDS_PARENT_GUIDANCE:.'
 const PERSONA = 'You are a persistent PostmanDevspace Luna transport liaison. The Host owns all ' +
   'ChatGPT Web Send/Stop and local bell operations. You may only report trusted Host-provided ' +
   'assignment/result facts to your Leader. Do not initiate a browser task, read local files, ' +
-  'invent a bell, reinterpret a task as completed, use other tools, or resend a message.'
+  'invent a bell, reinterpret a task as completed, report routine bootstrap/standby, ' +
+  'use other tools, or resend a message.'
 const diagnostics = error => String(error?.message ?? error).slice(0, 350)
 
 /** A single durable continuable Luna per Leader task, with separate Host Web jobs.
@@ -68,6 +72,8 @@ export function createPostmanDevspaceLuna(ctx, contexts, direct) {
         if (existing.state !== 'ready' ||
             existing.activeBridgeJobId && existing.activeBridgeJobId !== job.bridgeJobId)
           return { status: 'POSTMAN_DEVSPACE_LUNA_BINDING_UNCERTAIN' }
+        if (existing.requestIds?.length > 0 && !CONVERSATION.test(existing.conversationRef ?? ''))
+          return { status: 'POSTMAN_DEVSPACE_CONTINUATION_UNPROVEN' }
         childId = existing.childId
         if (await ctx.subagents.inspectOpenContinuableChild(parent, childId) !== true)
           return { status: 'POSTMAN_DEVSPACE_LUNA_REPROOF_FAILED' }

@@ -132,7 +132,7 @@ export function devspaceTerminal(binding, observed = {}) {
   // No external stdout can name an arbitrary image path. The exact file
   // must belong to this private job channel, with stable hash/format/size.
   let image = null
-  if (!event && observed.source === 'image_result') {
+  if (observed.source === 'image_result' || observed.resultImage !== undefined) {
     const extension = observed.imageFormat
     const expected = 'POSTMAN_IMAGE_' + binding.requestId + '.' + extension
     const format = { png: 'image/png', jpg: 'image/jpeg', webp: 'image/webp' }[extension]

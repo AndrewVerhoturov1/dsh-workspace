@@ -56,7 +56,7 @@ function output() {
 export { WORKER_CONTROL_TOOLS, DELEGATION_TOOLS, SECRETARY_TOOLS } from './postman-bridge-core.js'
 export function postmanWorkerDeniedTools(tools, type = 'luna', scope) {
   return [...new Set([...tools.schemas(scope).map(tool => tool.name).filter(name => name.startsWith('postman_') &&
-    !(type === 'sol' && WORKER_CONTROL_TOOLS.includes(name)) && !(type === 'secretary' && name === 'postman_secretary_ledger')),
+    !(type === 'sol' && WORKER_CONTROL_TOOLS.includes(name)) && !(type === 'luna' && name === 'postman_app') && !(type === 'secretary' && name === 'postman_secretary_ledger')),
     ...tools.schemas(scope).map(tool => tool.name).filter(name => DELEGATION_TOOLS.includes(name) || (type === 'luna' && ['ask_user_question', 'list_agents', 'exit_plan_mode'].includes(name)) || (type !== 'sol' && name === 'ptc_execute') || (type === 'secretary' && ['implementation_artifact_apply', 'web_search', 'web_fetch'].includes(name)))])]
 }
 
@@ -1083,6 +1083,14 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
         (contexts && slot.context !== contexts.get(leaderId))) return null
     return !requireActivation || slot.workerAgent === caller ? slot : null
   }
+  function appOwnerOf(caller) {
+    const parent = ctx.agents.get(caller?.session?.header?.parentSession)
+    const slot = liveSlot(caller, parent?.id, true)
+    const assignment = budgetOf(caller)
+    return slot && workerTypeOf(slot) === 'luna' && isTopLevelPostmanSupervisor(parent) &&
+      !slot.context?.devspaceReadOnly && typeof assignment?.assignmentId === 'string'
+      ? { owner: parent, context: slot.context, assignmentId: assignment.assignmentId } : null
+  }
   function ownerOf(caller, requestId) {
     const leaderId = caller?.session?.header?.parentSession
     const slot = liveSlot(caller, leaderId)
@@ -1122,6 +1130,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     if (type === 'secretary' && !SECRETARY_TOOLS.includes(exec.name)) return 'POSTMAN_SECRETARY_TOOL_REJECTED'
     if (type && (DELEGATION_TOOLS.includes(exec.name) || (type !== 'sol' && exec.name === 'ptc_execute') ||
       (exec.name.startsWith('postman_') && !(type === 'sol' && WORKER_CONTROL_TOOLS.includes(exec.name)) &&
+      !(type === 'luna' && exec.name === 'postman_app') &&
       !(type === 'secretary' && exec.name === 'postman_secretary_ledger')))) return 'POSTMAN_WORKER_TOOL_REJECTED'
     const budget = budgetOf(exec.agent)
     if (!budget) return
@@ -1390,6 +1399,13 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     if (!binding || binding.id !== child.id || header?.origin !== 'subagent' || header.parentSession !== parent.id ||
         header.delegationDepth !== depthOf(parent.id) || !Number.isSafeInteger(seed) || seed < 0 || seed > child.session.events.length ||
         child.inbox?.hasPending) return false
+    // A lifecycle command explicitly awaiting settlement must be unblocked,
+    // including the last Worker. Otherwise its already-reviewed report is the
+    // semantic wake; retain the completed native fact without a second request.
+    const parentEvents = parent.session.events
+    const lastStart = parentEvents.findLastIndex(event => event.type === 'turn/start')
+    if (parentEvents.slice(lastStart).some(event => event.type === 'tool/code-dispatch-start' &&
+        ['postman_worker_stop','postman_worker_compact','postman_worker_fresh','postman_task_close'].includes(event.data.name))) return false
     const events = child.session.events.slice(seed)
     if (terminal.output !== undefined) {
       // Native finalAssistantOutput also captures the already-delivered report
@@ -1442,6 +1458,6 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     }
     leaders.clear()
   }
-  return { taskTool, solTaskTool, secretaryTool, ledgerTool, freshTool, interruptTool, stopTool, listTool, compactTool, roleOf, ownerOf, ownsNotification, ownsLiveWorker, ptcContextOf, confirmActivation, releaseActivation, refreshLeader, suspendLeader,
+  return { taskTool, solTaskTool, secretaryTool, ledgerTool, freshTool, interruptTool, stopTool, listTool, compactTool, roleOf, ownerOf, appOwnerOf, ownsNotification, ownsLiveWorker, ptcContextOf, confirmActivation, releaseActivation, refreshLeader, suspendLeader,
     contextOf, observeReport, pauseForOperation, prepareRestore, teamSnapshot, hasActiveWork, canDeferSettlement, dispose }
 }

@@ -38,6 +38,9 @@ export function createPostmanBridgeLaunchCoordinator({
   const drain = () => {
     if (disposed || timer !== undefined) return
     while (queue.length > 0 && activeCount < 3) {
+      // Preserve resource FIFO while allowing unrelated roots to progress.
+      const index = queue.findIndex(entry => !entry.ready || entry.ready())
+      if (index < 0) return
       const remaining = lastStart === undefined ? 0 : lastStart + nextDelay - now()
       if (remaining > 0) {
         timer = setTimer(() => {
@@ -46,7 +49,7 @@ export function createPostmanBridgeLaunchCoordinator({
         }, remaining)
         return
       }
-      const entry = queue.shift()
+      const [entry] = queue.splice(index, 1)
       if (entry.signal?.aborted) {
         settle(entry, abortError())
         continue
@@ -90,12 +93,13 @@ export function createPostmanBridgeLaunchCoordinator({
     // legacy Bridge jobs, reusing the same launch spacing and abort semantics.
     fork() { return createPostmanBridgeLaunchCoordinator({ now, random, setTimer, clearTimer }) },
     get activeCount() { return activeCount },
-    run(signal, launch) {
+    refresh: drain,
+    run(signal, launch, ready) {
       if (typeof launch !== 'function') return Promise.reject(new Error('POSTMAN_BRIDGE_LAUNCH_REQUIRED'))
       if (disposed) return Promise.reject(new Error('POSTMAN_BRIDGE_COORDINATOR_DISPOSED'))
       if (signal?.aborted) return Promise.reject(abortError())
       return new Promise((resolve, reject) => {
-        const entry = { signal, launch, resolve, reject }
+        const entry = { signal, launch, ready, resolve, reject }
         entry.onAbort = () => {
           const index = queue.indexOf(entry)
           if (index < 0) return // Admitted work retains its slot until full cleanup.

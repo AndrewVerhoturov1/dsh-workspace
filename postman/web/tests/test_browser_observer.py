@@ -273,6 +273,46 @@ class ObserverTests(unittest.TestCase):
     def test_infer_role_unknown_fail_closed(self):
         self.assertEqual(observer.infer_turn_role(FakeLocator(text="x")), "unknown")
 
+    def test_unique_immutable_key_survives_markdown_rendering(self):
+        prompt = "POSTMAN_REQUEST_ID: REQ_20261014T000000Z_0001\n**Task** original"
+        turns = [{"index": 0, "role": "user", "text": prompt.replace("**", "")},
+                 {"index": 1, "role": "assistant", "text": "original answer"}]
+        self.assertEqual(observer.find_user_anchor(turns, prompt), 0)
+        self.assertTrue(observer.correlate_next_assistant(turns, prompt)["ok"])
+
+    def test_duplicate_immutable_key_never_rebinds_to_later_ref(self):
+        prompt = "POSTMAN_REQUEST_ID: REQ_20261014T000000Z_0001\n**Task** original"
+        for original in [prompt, prompt.replace("**", "")]:
+            turns = [{"index": 0, "role": "user", "text": original},
+                     {"index": 1, "role": "assistant", "text": "original answer"},
+                     {"index": 2, "role": "user", "text": prompt.split("\n")[0] + "\nREF later"},
+                     {"index": 3, "role": "assistant", "text": "wrong answer"}]
+            self.assertIsNone(observer.find_user_anchor(turns, prompt))
+            result = observer.correlate_next_assistant(turns, prompt)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["code"], observer.CHAT_CORRELATION_LOST)
+
+    def test_explicit_original_binding_beats_duplicate_key(self):
+        prompt = "POSTMAN_REQUEST_ID: REQ_20261014T000000Z_0001\nTask original"
+        turns = [{"index": 0, "role": "user", "text": prompt, "groupKey": "original"},
+                 {"index": 1, "role": "assistant", "text": "original answer"},
+                 {"index": 2, "role": "user", "text": prompt},
+                 {"index": 3, "role": "assistant", "text": "wrong answer"}]
+        binding = {"userOrdinal": 0, "precedingUserHashes": [], "groupKey": "original",
+                   "promptSha256": observer.submit.prompt_sha256(prompt)}
+        self.assertIsNone(observer.find_user_anchor(turns, prompt))
+        self.assertEqual(observer.find_user_anchor(turns, prompt, anchor_binding=binding), 0)
+        result = observer.correlate_next_assistant(turns, prompt, anchor_binding=binding)
+        self.assertEqual(result["assistant"]["text"], "original answer")
+        binding["groupKey"] = "not-original"
+        self.assertIsNone(observer.find_user_anchor(turns, prompt, anchor_binding=binding))
+
+    def test_duplicate_plain_exact_prompt_is_ambiguous(self):
+        turns = [{"index": 0, "role": "user", "text": "task"},
+                 {"index": 1, "role": "assistant", "text": "first"},
+                 {"index": 2, "role": "user", "text": "task"}]
+        self.assertIsNone(observer.find_user_anchor(turns, "task"))
+
     def test_natural_launch_requires_exact_full_user_turn_not_legacy_key(self):
         from launch_prompts import build_launch_prompt
         req = "REQ_20261001T175853Z_9264"
@@ -321,13 +361,13 @@ class ObserverTests(unittest.TestCase):
         self.assertIsNone(observer.find_user_anchor(turns, "probe"))
         self.assertEqual(observer.find_user_anchor(turns, " probe "), 0)
 
-    def test_anchor_uses_last_exact_user_turn(self):
+    def test_duplicate_exact_user_turn_requires_binding(self):
         turns = [
             {"index": 0, "role": "user", "text": "x"},
             {"index": 1, "role": "assistant", "text": "old"},
             {"index": 2, "role": "user", "text": "x"},
         ]
-        self.assertEqual(observer.find_user_anchor(turns, "x"), 2)
+        self.assertIsNone(observer.find_user_anchor(turns, "x"))
 
     def test_old_assistant_before_anchor_is_ignored(self):
         turns = [

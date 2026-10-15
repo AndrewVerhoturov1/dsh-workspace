@@ -548,7 +548,7 @@ test('bridge plugin registers all Worker tools and owns one disposable attachmen
     },
   }
   await applyBridgePlugin(ctx)
-  assert.deepEqual([...registrations.keys()].sort(), ['implementation_artifact_apply', 'notify_parent', 'postman_bridge', 'postman_bridge_list', 'postman_bridge_status', 'postman_bridge_stop', 'postman_devspace_control', 'postman_devspace_luna_close', 'postman_input_files', 'postman_secretary', 'postman_secretary_ledger', 'postman_sol_worker', 'postman_task_close', 'postman_task_prepare', 'postman_task_restore', 'postman_team_status', 'postman_worker', 'postman_worker_compact', 'postman_worker_fresh', 'postman_worker_interrupt', 'postman_worker_list', 'postman_worker_stop', 'ptc_execute'])
+  assert.deepEqual([...registrations.keys()].sort(), ['implementation_artifact_apply', 'notify_parent', 'postman_app', 'postman_bridge', 'postman_bridge_list', 'postman_bridge_status', 'postman_bridge_stop', 'postman_devspace_control', 'postman_devspace_luna_close', 'postman_input_files', 'postman_secretary', 'postman_secretary_ledger', 'postman_sol_worker', 'postman_task_close', 'postman_task_prepare', 'postman_task_restore', 'postman_team_status', 'postman_worker', 'postman_worker_compact', 'postman_worker_fresh', 'postman_worker_interrupt', 'postman_worker_list', 'postman_worker_stop', 'ptc_execute'])
   assert.deepEqual(restriction.allow, postmanBridgeRestrictionForAgent(a).allow)
   assert.ok(listeners.has('agent-preset/selected'))
   assert.ok(listeners.has('agent/disposed'))

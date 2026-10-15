@@ -441,10 +441,14 @@ For Leader, boundary: external_event automatically concludes the turn after a sa
 successful program with an exact accepted event producer: postman_worker,
 postman_secretary, postman_sol_worker, postman_worker_fresh, postman_worker_interrupt,
 or postman_bridge. It also safely concludes without a new dispatch when Host
-proves existing exact active Worker/Bridge work can deliver the next event. Use
-external_event again after handling one report/READY while other work remains;
-no status/list polling is needed to prove a wake source. Settled, failed, uncertain,
-stale or merely bound work and arbitrary background processes do not qualify.
+proves existing exact active Worker/Bridge work can deliver the next event.
+After handling a real Worker report or Bridge READY, a completed text-only review
+can remain idle while Host verifies other exact active producers; do not issue an
+empty effects.calls:[] PTC solely to wait. If deterministic work remains, batch
+it in external_event as usual. Native input still wakes for real judgement.
+No status/list polling is needed to prove a wake source. Settled, failed,
+uncertain, stale or merely bound work and arbitrary background processes
+do not qualify; Host rechecks producer liveness before deferring an armed goal.
 yield_on_success is compatibility
 only; omission or false does not disable this Host rule. postman_task_prepare alone
 is NOT an event producer and does not conclude the turn.

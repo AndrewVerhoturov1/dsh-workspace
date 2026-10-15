@@ -82,7 +82,7 @@ export async function capabilityRuntime(dir, { preset = 'postman-leader-ptc', re
   // Baseline comparison uses the same real loop with only the narrow hook vetoed.
   const plugin = ctx.plugin(bridge, { localDevelopment }); await plugin.await()
   if (!deferSettlements) ctx.on('postman/subagent-settlement-defer', () => 'wake', { prepend:true })
-  ctx.on('tools/result', (exec, result) => results.push({ agent: exec.agent, name: exec.name, result, parent: exec.parent }))
+  ctx.on('tools/result', (exec, result) => results.push({ agent: exec.agent, name: exec.name, args: exec.arguments, result, parent: exec.parent }))
   class Adapter extends LlmAdapter {
     async resolveModel(provider, model) { return { provider, id: model, name: model, inputModalities: ['text','image'], reasoning: { efforts: ['low','xhigh','max'].map(id => ({ id, name: id })) } } }
     async *stream(request) {
@@ -129,6 +129,6 @@ export async function capabilityRuntime(dir, { preset = 'postman-leader-ptc', re
   ctx.subagents.followup=async (...args)=>{disposals.set(args[1],Promise.withResolvers());return followup(...args)}
   ctx.subagents.startContinuable = async spec => { disposals.set(spec.childId,Promise.withResolvers()); const h = await start(spec); childHandles.set(spec.childId, h); return h }
   let disposal
-  return { ctx, leader, requests, results, registry, contexts, turn, execute, switchPreset, prepare, childDone, worktree, registerLateFs: async () => { delayedFs(); await ctx.fiber.await() },
-    dispose() { return disposal ??= (async () => { await ctx.subagents.drainContinuableChildren(leader); await plugin.dispose(); await plugin.await(); await ctx.fiber.dispose(); await ctx.fiber.await(); await backend.close() })() } }
+  return { ctx, leader, leaderHandle:handle, requests, results, registry, contexts, turn, execute, switchPreset, prepare, childDone, worktree, registerLateFs: async () => { delayedFs(); await ctx.fiber.await() },
+    dispose() { return disposal ??= (async () => { if(ctx.agents.get(leader.id)===leader)await ctx.subagents.drainContinuableChildren(leader); await plugin.dispose(); await plugin.await(); await ctx.fiber.dispose(); await ctx.fiber.await(); await backend.close() })() } }
 }
