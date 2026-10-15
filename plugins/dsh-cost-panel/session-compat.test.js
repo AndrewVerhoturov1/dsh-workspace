@@ -4,20 +4,17 @@ import { linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync }
 import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { applySessionIgnorableEvents } from './session-compat.mjs';
+import { createRequire } from 'node:module';
+// The panel uses autoInstallPeers:false; resolve the pinned SDK from the Postman install, not panel-local peers.
+const sdk = createRequire(process.env.DSH_INSTALL_SDK ?? process.env.DSH_CAPABILITY_SDK ??
+  createRequire(new URL('../dsh-postman-harness/package.json', import.meta.url)).resolve('@deepseek-ai/dsh/package.json'));
+const pinned = readFileSync(sdk.resolve('@deepseek-ai/dsh-session'), 'utf8').replaceAll('\r', '').replace('\t\t\t...surfaceOpts?.ignorable === true ? { ignorable: true } : {},\n', '');
 
 for (const eol of ['LF', 'CRLF']) test('compatibility patch preserves shared pnpm image (' + eol + ') and is idempotent', t => {
   const directory = mkdtempSync(join(tmpdir(), 'dsh-cost-patch-'));
   assert.equal(dirname(resolve(directory)), resolve(tmpdir()));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
-  const original = [
-    'class Session {',
-    '\tappend(type, data, ...opts) {',
-    '\t\tconst surfaceMetadata = {',
-    '\t\t};',
-    '\t}',
-    '}',
-    '',
-  ].join(eol === 'CRLF' ? '\r\n' : '\n');
+  const original = eol === 'CRLF' ? pinned.replaceAll('\n', '\r\n') : pinned;
   const anchor = join(directory, 'package.json');
   const packageRoot = join(directory, 'node_modules/@deepseek-ai/dsh-session');
   const target = join(packageRoot, 'index.js');
@@ -34,6 +31,8 @@ for (const eol of ['LF', 'CRLF']) test('compatibility patch preserves shared pnp
   if (eol === 'CRLF') assert.equal(patched.replace(/\r\n/g, '').includes('\n'), false);
   assert.equal(applySessionIgnorableEvents([anchor])[0].updated, false);
   assert.equal(readFileSync(target, 'utf8'), patched);
+  writeFileSync(target, patched + '\n// unknown but matching append fragments');
+  assert.throws(() => applySessionIgnorableEvents([anchor]), /preimage mismatch/);
   writeFileSync(target, 'unexpected SDK');
   assert.throws(() => applySessionIgnorableEvents([anchor]), /preimage mismatch/);
   assert.equal(readFileSync(target, 'utf8'), 'unexpected SDK');

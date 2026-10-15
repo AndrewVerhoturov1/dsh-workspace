@@ -38,7 +38,8 @@ export async function stage1Runtime(dir, {registry,grants,fastBudget,resume=fals
     repositoryPath:dir,originUrl:'https://github.com/AndrewVerhoturov1/dsh-workspace.git',branch:'task/postman-'+'a'.repeat(32),
     worktree:dir,baseCommit:'a'.repeat(40),stage:'ready',diagnostic:null,workers:{},runner:{state:'none',requestId:null},bridge:null})
   const context=Object.freeze({leaderSessionId:'leader',branch:'task/postman-fixture',worktree:dir})
-  const contexts={get:id=>id==='leader'?context:null,record:registry.get,changeRecord:registry.change,child:()=>null}
+  const contexts={get:id=>id==='leader'?context:null,record:registry.get,changeRecord:registry.change,child:()=>null,
+    readLedger:id=>registry.readLedger(id),changeLedger:(id,fn)=>registry.changeLedger(id,fn)}
   let boundaries,ptc
   const refresh=id=>{const agent=ctx.agents.get(id);if(agent){boundaries?.refreshSession(id);ptc?.refresh(agent);}}
   const worker=createPostmanWorkerTools(ctx,grants,contexts,{onBindingChange:refresh,fastBudget})

@@ -10,7 +10,9 @@ const SHAPES = Object.freeze({
   done: ['v','type','runId','status','value','error','cleanupError'],
 })
 const OPTIONAL = { reply: ['value','error'], done: ['value','error','cleanupError'] }
-export class ProtocolError extends Error {}
+export class ProtocolError extends Error {
+  constructor(message, code = 'protocol') { super(message); this.code = code }
+}
 export function message(type, runId, fields = {}) { return { v: 1, type, runId, ...fields } }
 export function checkMessage(obj, direction, runId, limits) {
   if (!obj || typeof obj !== 'object' || Array.isArray(obj) ||
@@ -46,13 +48,13 @@ export class FrameReader {
       let buf = this.pending.length ? Buffer.concat([this.pending, chunk]) : chunk
       while (buf.length >= 4) {
         const length = buf.readUInt32BE(0)
-        if (!length || length > this.limits.maxMessageBytes) throw new ProtocolError('Frame length exceeded or zero')
+        if (!length || length > this.limits.maxMessageBytes) throw new ProtocolError('Frame length exceeded or zero', 'maxMessageBytes')
         if (buf.length < length + 4) break
         let text
         try { text = new TextDecoder('utf-8', { fatal: true }).decode(buf.subarray(4, 4 + length)) }
         catch { throw new ProtocolError('Invalid UTF-8') }
         let obj
-        try { obj = JSON.parse(text) } catch { throw new ProtocolError('Invalid JSON') }
+        try { obj = JSON.parse(text) } catch { throw new ProtocolError('Invalid JSON', 'invalid-json') }
         this.onMessage(obj)
         buf = buf.subarray(4 + length)
       }

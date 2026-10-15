@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, copyFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, copyFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, symlinkSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -31,6 +32,11 @@ try {
   assert.notEqual(realpathSync(stagingRoot), realpathSync(repositoryRoot))
   run('tar', ['-xf', 'repository.tar', '-C', '.'], stagingRoot)
   rmSync(archivePath)
+  // Exercise the current frozen profile graph and canonical panel, including uncommitted changes.
+  const graphFiles = ['package.json','pnpm-lock.yaml','pnpm-workspace.yaml']
+  for (const name of graphFiles)
+    copyFileSync(resolve(repositoryRoot,'profiles/web',name),resolve(stagingRoot,'profiles/web',name))
+  cpSync(resolve(repositoryRoot,'plugins/dsh-cost-panel'),resolve(stagingRoot,'plugins/dsh-cost-panel'), {recursive:true,filter:path=>!path.split(sep).includes('node_modules')})
   // Exercise the current installer, including changes not yet committed to HEAD.
   copyFileSync(resolve(repositoryRoot, 'profiles/web/scripts/install-production.mjs'),
     resolve(stagingRoot, 'profiles/web/scripts/install-production.mjs'))
@@ -41,6 +47,7 @@ try {
   for (const source of ['plugins/dsh-postman-harness/README.md','docs/subprojects/ptc/PTC_CONTRACT.md','docs/subprojects/ptc/SUBPROJECT.md','docs/subprojects/postman/SUBPROJECT.md','docs/workflow/TASK_CONTRACT.md','postman/POSTMAN_BRIDGE_FLOW.md'])
     copyFileSync(resolve(repositoryRoot,source),resolve(stagingRoot,source))
   cpSync(resolve(repositoryRoot,'plugins/dsh-postman-harness/lib'),resolve(stagingRoot,'plugins/dsh-postman-harness/lib'),{recursive:true})
+  cpSync(resolve(repositoryRoot,'plugins/dsh-ptc'),resolve(stagingRoot,'plugins/dsh-ptc'),{recursive:true,filter:path=>!path.split(sep).includes('node_modules')})
   for (const name of ['package.json','pnpm-lock.yaml'])
     copyFileSync(resolve(repositoryRoot,'plugins/dsh-postman-harness',name),resolve(stagingRoot,'plugins/dsh-postman-harness',name))
   for(const role of ['postman-leader','postman-worker','postman-secretary','postman-sol-worker'])
@@ -69,7 +76,16 @@ try {
   const profileRoot = resolve(stagingRoot, 'profiles/web')
   assert.equal(existsSync(resolve(pluginRoot, 'node_modules')), false)
   assert.equal(existsSync(resolve(profileRoot, 'node_modules')), false)
+  const graphBefore = new Map(graphFiles.map(name=>[name,readFileSync(resolve(profileRoot,name))]))
   run(process.execPath, ['profiles/web/scripts/install-production.mjs'], stagingRoot, env)
+  const profileRequire = createRequire(resolve(profileRoot,'package.json'))
+  const panelRoot = realpathSync(resolve(stagingRoot,'plugins/dsh-cost-panel'))
+  const installedPanelManifest = realpathSync(profileRequire.resolve('dsh-cost-panel/package.json'))
+  assertInStaging(installedPanelManifest)
+  assert.equal(JSON.parse(readFileSync(installedPanelManifest)).version,'0.1.0')
+  for(const name of ['index.js','client.js','accounting.js','session-compat.mjs','package.json'])
+    assert.deepEqual(readFileSync(resolve(installedPanelManifest,'..',name)),readFileSync(resolve(panelRoot,name)),'canonical panel bytes: '+name)
+  assert.match(readFileSync(resolve(panelRoot,'index.js'),'utf8'),/costPanelRevision/)
   const { applyPostmanNativeChildCutoff } = await import(pathToFileURL(resolve(stagingRoot,'system/patches/apply-postman-native-child-cutoff.mjs')).href)
   const targets = applyPostmanNativeChildCutoff([sdkAnchor, resolve(pluginRoot,'package.json')])
   assert.ok(targets.length >= 2)
@@ -82,8 +98,12 @@ try {
   assert.ok(goalTarget, 'actual SDK goal driver included')
   const goalBytes = readFileSync(goalTarget.path)
   assert.match(goalBytes.toString(), /goal\/continuation-defer/)
-  // A complete second install must remain idempotent, not just a helper call.
+  // A complete second install must retain every SDK target and frozen graph byte.
+  const targetBefore = new Map(targets.map(target=>[target.path,readFileSync(target.path)]))
   run(process.execPath, ['profiles/web/scripts/install-production.mjs'], stagingRoot, env)
+  for(const [path,bytes] of targetBefore) assert.deepEqual(readFileSync(path),bytes,'second install SDK drift: '+path)
+  for(const [name,bytes] of graphBefore) assert.deepEqual(readFileSync(resolve(profileRoot,name)),bytes,'frozen graph drift: '+name)
+  console.log(JSON.stringify({scenario:'offline-frozen-install-twice',panelVersion:'0.1.0',canonicalPanel:true,graphSha256:Object.fromEntries([...graphBefore].map(([name,bytes])=>[name,createHash('sha256').update(bytes).digest('hex')])),sdkSha256:targets.map(target=>({package:target.path.split(sep).at(-3),sha256:createHash('sha256').update(readFileSync(target.path)).digest('hex')}))}))
   assert.deepEqual(readFileSync(goalTarget.path), goalBytes)
   assert.ok(applyPostmanNativeChildCutoff([sdkAnchor,resolve(pluginRoot,'package.json')]).every(target => !target.updated))
   // Unknown composition must fail before replacing any SDK target.
@@ -128,7 +148,7 @@ try {
   for(const name of ['postman_bridge','postman_bridge_stop','postman_team_status','postman_yield','postman_secretary','postman_sol_worker','ask_user_question','report','notify_parent'])assert.ok(!adapter.SOL_WORKER_PROFILE.tools.includes(name))
   assert.ok(worker.postmanRoleInstruction('sol').includes('PTC-first'))
   assert.ok(worker.postmanRoleInstruction('sol').includes('Worker-first'))
-  assert.ok(worker.postmanRoleInstruction('sol').includes('POSTMAN_SOL_WORKER_SKILL_VERSION: 2'))
+  assert.ok(worker.postmanRoleInstruction('sol').includes('POSTMAN_SOL_WORKER_SKILL_VERSION: 3'))
   const discipline=await import(pathToFileURL(resolve(pluginRoot,'lib/ptc-discipline.js')).href)
   assert.equal(discipline.POSTMAN_PTC_DISCIPLINE_VERSION,8)
 
@@ -163,8 +183,22 @@ try {
   applyPostmanNativeChildCutoff([pluginSdkAnchor,resolve(pluginRoot,'package.json')])
   // Execute installed native/preset compaction with one SDK identity, never mocked presence.
   if (!goalContinuationOnly) run(process.execPath,['--test','lib/postman-runtime-compact-fresh.test.js'],pluginRoot,{...process.env,DSH_CAPABILITY_SDK:pluginSdkAnchor})
-  if (goalContinuationOnly) run(process.execPath,['--test','lib/ptc-goal-continuation.test.js','lib/ptc-adapter.test.js'],pluginRoot,{...process.env,DSH_CAPABILITY_SDK:pluginSdkAnchor,DSH_ROOT:resolve(pluginSdkAnchor,'..')})
-  else run(process.execPath,['--test','lib/postman-app.test.js','lib/postman-devspace-bootstrap.test.js','lib/postman-resource-admission.test.js','lib/postman-capability-lifecycle.test.js','lib/postman-capability-cold.test.js','lib/postman-stage3.test.js','lib/postman-stage35a.test.js','lib/postman-stage35b.test.js','lib/ptc-adapter.test.js','lib/postman-worker-evidence.test.js','lib/ptc-worker-first-request.test.js','lib/ptc-worker-mutation.test.js','lib/postman-sol-worker.test.js','lib/postman-stage1.test.js','lib/postman-stage1-review.test.js','lib/ptc-worker-cold-resume.test.js','lib/postman-bridge-core.test.js','lib/postman-worker-lifecycle.test.js','lib/postman-stage2-control.test.js','lib/postman-stage2-bridge.test.js','lib/postman-stage2-cascade.test.js','lib/postman-task-close.test.js','lib/postman-objective-budget.test.js'],pluginRoot,{...process.env,DSH_CAPABILITY_SDK:pluginSdkAnchor,DSH_ROOT:resolve(pluginSdkAnchor,'..')})
+  // Real panel Host tests resolve through this same isolated pinned SDK; production source bytes are unchanged.
+  const panelTestRoot = resolve(stagingRoot,'panel-host-tests')
+  cpSync(panelRoot,panelTestRoot,{recursive:true,filter:path=>!path.split(sep).includes('node_modules')})
+  const panelDependencies = ['@deepseek-ai/cordis','@deepseek-ai/dsh-llm','@deepseek-ai/dsh-session','@deepseek-ai/dsh-session-projection','@deepseek-ai/dsh-host-apiproxy','@deepseek-ai/dsh-session-persistence-jsonl','zod']
+  for(const name of panelDependencies){
+    let entry=sdkRequire.resolve(name)
+    let root=resolve(entry,'..')
+    while(!existsSync(resolve(root,'package.json')))root=resolve(root,'..')
+    const destination=resolve(panelTestRoot,'node_modules',name)
+    mkdirSync(resolve(destination,'..'),{recursive:true})
+    symlinkSync(root,destination,process.platform==='win32'?'junction':'dir')
+    assertInStaging(root)
+  }
+  run(process.execPath,['--test','host.test.js'],panelTestRoot,{...process.env,DSH_ROOT:resolve(sdkAnchor,'..')})
+  if (goalContinuationOnly) run(process.execPath,['--test','lib/ptc-goal-continuation.test.js','lib/ptc-goal-breaker.test.js','lib/ptc-adapter.test.js'],pluginRoot,{...process.env,DSH_CAPABILITY_SDK:pluginSdkAnchor,DSH_ROOT:resolve(pluginSdkAnchor,'..')})
+  else run(process.execPath,['--test','lib/postman-app.test.js','lib/postman-devspace-bootstrap.test.js','lib/postman-resource-admission.test.js','lib/postman-capability-lifecycle.test.js','lib/postman-capability-cold.test.js','lib/postman-stage3.test.js','lib/postman-stage35a.test.js','lib/postman-stage35b.test.js','lib/ptc-adapter.test.js','lib/ptc-goal-continuation.test.js','lib/ptc-goal-breaker.test.js','lib/postman-worker-evidence.test.js','lib/ptc-worker-first-request.test.js','lib/ptc-worker-mutation.test.js','lib/postman-sol-worker.test.js','lib/postman-stage1.test.js','lib/postman-stage1-review.test.js','lib/ptc-worker-cold-resume.test.js','lib/postman-bridge-core.test.js','lib/postman-worker-lifecycle.test.js','lib/postman-stage2-control.test.js','lib/postman-stage2-bridge.test.js','lib/postman-stage2-cascade.test.js','lib/postman-task-close.test.js','lib/postman-objective-budget.test.js'],pluginRoot,{...process.env,DSH_CAPABILITY_SDK:pluginSdkAnchor,DSH_ROOT:resolve(pluginSdkAnchor,'..')})
   console.log(goalContinuationOnly ? 'clean production install: goal admission, exact Leader/Sol wait, native events, guarded overlay and second install PASS' : 'clean production install: role model-request catalogs, FAST no PTC, Leader/Sol usable PTC and QuickJS/WASM PASS')
 } finally {
   rmSync(stagingRoot, { recursive: true, force: true })

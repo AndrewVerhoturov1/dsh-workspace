@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {createRequire} from 'node:module'
-import {mkdtempSync,mkdirSync,readFileSync,writeFileSync,rmSync} from 'node:fs'
+import {mkdtempSync,mkdirSync,readFileSync,writeFileSync,rmSync,renameSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join,dirname,resolve,relative} from 'node:path'
 import {fileURLToPath} from 'node:url'
@@ -13,6 +13,8 @@ const sdk=createRequire(process.env.DSH_INSTALL_SDK ?? process.env.DSH_CAPABILIT
 const names=['dsh-subagent','dsh-session','dsh-goal-round-driver','dsh-tool-pwsh']
 const images=Object.fromEntries(names.map(name=>[name,readFileSync(sdk.resolve('@deepseek-ai/'+name))]))
 const lf=text=>text.toString().replaceAll(String.fromCharCode(13),'')
+// Fixtures start at the native-only image even when the installed SDK already has the approved panel delta.
+images['dsh-session']=Buffer.from(lf(images['dsh-session']).replace('\t\t\t...surfaceOpts?.ignorable === true ? { ignorable: true } : {},\n',''))
 const canonical=bytes=>lf(bytes).replace('this.ownerCtx.get("agentPresets")?.serviceFor(agent, "compaction")','this.ownerCtx.agentPresets?.serviceFor(agent, "compaction")')
 const blob=bytes=>createHash('sha1').update('blob '+Buffer.byteLength(lf(bytes))+String.fromCharCode(0)).update(lf(bytes)).digest('hex')
 function fixture(t){
@@ -72,4 +74,34 @@ for(const bad of names)test('unknown '+bad+' refuses before any of four target r
  const before=Object.fromEntries(names.map(name=>[name,readFileSync(f.paths[name])]))
  assert.throws(()=>applyPostmanNativeChildCutoff([f.anchor]),/preimage mismatch|postimage mismatch|patch mismatch/)
  for(const name of names)assert.deepEqual(readFileSync(f.paths[name]),before[name],name+' unchanged after refusal')
+})
+for(const newline of ['LF','CRLF'])test('known panel composition remains strict and idempotent with '+newline,t=>{
+ const f=fixture(t),path=f.paths['dsh-session']
+ const before='\t\tconst surfaceMetadata = {\n',after=before+'\t\t\t...surfaceOpts?.ignorable === true ? { ignorable: true } : {},\n'
+ let text=lf(readFileSync(path));assert.equal(text.split(before).length,2)
+ text=text.replace(before,after);if(newline==='CRLF')text=text.replaceAll('\n','\r\n')
+ writeFileSync(path,text)
+ const bytes=readFileSync(path)
+ assert.ok(applyPostmanNativeChildCutoff([f.anchor]).every(t=>!t.updated))
+ assert.deepEqual(readFileSync(path),bytes,'already final panel bytes unchanged')
+ reverse(f,'session-events','dsh-session');reverse(f,'child-cutoff','dsh-session')
+ const pre=lf(readFileSync(path));writeFileSync(path,newline==='CRLF'?pre.replaceAll('\n','\r\n'):pre)
+ assert.equal(applyPostmanNativeChildCutoff([f.anchor]).find(t=>t.path===path).updated,true)
+ assert.deepEqual(readFileSync(path),bytes,'full supported panel native composition restored')
+ assert.ok(applyPostmanNativeChildCutoff([f.anchor]).every(t=>!t.updated))
+})
+test('later target replacement failure restores exact previous multi-target bytes',t=>{
+ const f=fixture(t);historical(f,'cold');beforeOtherTargets(f)
+ const before=Object.fromEntries(names.map(name=>[name,readFileSync(f.paths[name])]))
+ let calls=0
+ assert.throws(()=>applyPostmanNativeChildCutoff([f.anchor],{replaceFile(from,to){if(++calls===2)throw Error('controlled second-target replacement failure');renameSync(from,to)}}),/controlled second-target/)
+ assert.equal(calls,2)
+ for(const name of names)assert.deepEqual(readFileSync(f.paths[name]),before[name],name+' restored byte-for-byte')
+})
+test('clean final session adds required panel inside the same atomic SDK composition',t=>{
+ const f=fixture(t),path=f.paths['dsh-session']
+ const before=lf(readFileSync(path));assert.ok(!before.includes('			...surfaceOpts?.ignorable === true ? { ignorable: true } : {},'))
+ assert.equal(applyPostmanNativeChildCutoff([f.anchor],{sessionIgnorableAnchors:[f.anchor]}).find(t=>t.path===path).updated,true)
+ assert.ok(readFileSync(path,'utf8').includes('			...surfaceOpts?.ignorable === true ? { ignorable: true } : {},'))
+ assert.ok(applyPostmanNativeChildCutoff([f.anchor],{sessionIgnorableAnchors:[f.anchor]}).every(t=>!t.updated))
 })

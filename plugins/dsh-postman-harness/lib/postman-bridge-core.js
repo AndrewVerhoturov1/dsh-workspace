@@ -101,7 +101,7 @@ export const POSTMAN_PTC_SUCCESS_STATUSES = Object.freeze({
   postman_secretary_ledger: Object.freeze(['POSTMAN_SECRETARY_LEDGER']),
   postman_bridge_list: Object.freeze(['POSTMAN_BRIDGE_LIST']),
   postman_bridge_status: Object.freeze(['POSTMAN_BRIDGE_QUEUED', 'POSTMAN_BRIDGE_RUNNING', 'POSTMAN_BRIDGE_TERMINAL']),
-  postman_bridge_stop: Object.freeze(['POSTMAN_BRIDGE_STOP_REQUESTED', 'POSTMAN_BRIDGE_ALREADY_TERMINAL']),
+  postman_bridge_stop: Object.freeze(['POSTMAN_BRIDGE_STOP_REQUESTED', 'POSTMAN_BRIDGE_ALREADY_TERMINAL', 'POSTMAN_BRIDGE_NOT_SENT']),
   postman_devspace_luna_close: Object.freeze(['POSTMAN_DEVSPACE_LUNA_CLOSED', 'POSTMAN_DEVSPACE_LUNA_ALREADY_CLOSED']),
   postman_devspace_control: Object.freeze(['POSTMAN_DEVSPACE_CONTROL_QUEUED', 'POSTMAN_DEVSPACE_CONTROL_STATUS']),
   postman_secretary: Object.freeze(['POSTMAN_WORKER_TASK_ACCEPTED']),

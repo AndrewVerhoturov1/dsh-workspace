@@ -4,7 +4,6 @@ import { resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { spawnSync } from 'node:child_process'
 import { applyPostmanNativeChildCutoff } from '../../../system/patches/apply-postman-native-child-cutoff.mjs'
-import { applySessionIgnorableEvents } from '../../../plugins/dsh-cost-panel/session-compat.mjs'
 
 const profileRoot = resolve(fileURLToPath(new URL('..', import.meta.url)))
 const repositoryRoot = resolve(profileRoot, '../..')
@@ -60,11 +59,9 @@ const requireFromProfile = createRequire(resolve(profileRoot, 'package.json'))
 // The profile fallback identifies the actual CLI SDK; an explicit anchor also
 // permits isolated clean-install tests without touching the running installation.
 const sdkAnchor = realpathSync(process.env.DSH_INSTALL_SDK ?? requireFromProfile.resolve('@deepseek-ai/dsh/package.json'))
-const nativeTargets = applyPostmanNativeChildCutoff([sdkAnchor, resolve(postmanRoot, 'package.json')])
-if (profilePackage.dsh?.profile?.bundles?.includes('dsh-cost-panel')) {
-  const costAnchor = requireFromProfile.resolve('dsh-cost-panel/package.json')
-  applySessionIgnorableEvents([sdkAnchor, costAnchor])
-}
+const sessionIgnorableAnchors = profilePackage.dsh?.profile?.bundles?.includes('dsh-cost-panel')
+  ? [sdkAnchor, requireFromProfile.resolve('dsh-cost-panel/package.json')] : []
+const nativeTargets = applyPostmanNativeChildCutoff([sdkAnchor, resolve(postmanRoot, 'package.json')], { sessionIgnorableAnchors })
 const { SubagentRuntime } = await import(pathToFileURL(createRequire(sdkAnchor).resolve('@deepseek-ai/dsh-subagent')).href)
 for (const method of ['closeContinuableChild', 'inspectClosedContinuableChild', 'compactContinuableChild']) {
   if (typeof SubagentRuntime.prototype[method] !== 'function') throw new Error('Native child cutoff API unavailable: ' + method)

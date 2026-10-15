@@ -42,7 +42,7 @@ const phase=async(dir,type,resume,legacy=false)=>{
       assert.ok(child.session.events.filter(e=>e.type==='tool/code-dispatch').length>=3)
     }
     if(resume){assert.ok(child.session.events.filter(e=>e.type==='turn/end').length>=2);assert.ok(req.messages.some(m=>JSON.stringify(m).includes('bounded initial')))}
-    const ledger=f.registry.get('leader').secretaryLedger
+    const ledger=f.registry.readLedger('leader')
     if(type==='secretary'){assert.equal(ledger.revision,1);assert.ok(req.system.includes(ledger.content)||!resume)}
     const summary={pid:process.pid,id:child.id,role:type,requests:f.requests.length,reasoning:req.reasoningEffort,ledger}
     if(resume){
@@ -57,7 +57,7 @@ const phase=async(dir,type,resume,legacy=false)=>{
       if(type==='sol')assert.equal(JSON.parse(freshChild.session.events.find(e=>e.type==='tool/result').data.message.content[0].content[0].text).status,'ok')
       assert.ok(f.registry.get('leader').retiredWorkers.some(x=>x.id===child.id))
       assert.ok((await f.ctx.sessionPersistence.inspect(child.id)).events.length>0)
-      if(type==='secretary')assert.equal(f.registry.get('leader').secretaryLedger.content,ledger.content)
+      if(type==='secretary')assert.equal(f.registry.readLedger('leader').content,ledger.content)
       summary.freshId=fresh.workerSessionId
     }
     await writeFile(join(dir,resume?'resumed.json':'fresh.json'),JSON.stringify(summary))
