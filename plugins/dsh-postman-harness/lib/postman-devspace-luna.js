@@ -50,7 +50,9 @@ export function createPostmanDevspaceLuna(ctx, contexts, direct) {
         return { status: 'POSTMAN_DEVSPACE_ISOLATED_CONTEXT_REQUIRED' }
       const previousIsolated = Object.values(rowOf(leaderId)?.bridgeOperations ?? {}).some(op =>
         op.transportKind === 'devspace' && op.devspace?.mode === 'WRITE_ISOLATED' &&
-        op.state === 'received')
+        op.state === 'received' && op.phase !== 'not-sent' &&
+        typeof op.requestId === 'string' && op.terminal?.status === 'POSTMAN_BRIDGE_TERMINAL' &&
+        op.terminal.requestId === op.requestId && op.terminal.transportKind === 'devspace')
       if (!previousIsolated && await contexts.verifyWorktree(leaderId) !== true)
         return { status: 'POSTMAN_DEVSPACE_WORKTREE_NOT_READY' }
     }
