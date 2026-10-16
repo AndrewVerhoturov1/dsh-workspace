@@ -252,6 +252,121 @@ for(const kind of ['pre-veto','post-veto','unknown-status','refused-status','pro
   assert.equal(adapter.isWaitingForExternalEvent(agent),false);assert.notEqual(ctx.bail('goal/continuation-defer',agent),true)
 })
 
+// Regression: a real Leader turn can inspect state through several PTC calls
+// and dispatch its exact live producer only in the final PTC. Earlier successes
+// must never authorize a refused final dispatch.
+for (const outcome of ['accepted','refused']) test('multiple PTC calls, last external wait '+outcome,{timeout:15000},async t=>{
+  const ctx=base(),requests=[]
+  let agent
+  const adapter=createPtcAdapter(ctx,{authorize:isTopLevelPostmanPtcLeader,hasActiveWork:()=>true})
+  ctx.tools.register(adapter.tool)
+  ctx.tools.register(defineTool({name:'postman_worker',description:'inert accepted producer',parameters:{},output,
+    execute:()=>({status:outcome==='accepted'?'POSTMAN_WORKER_TASK_ACCEPTED':'POSTMAN_WORKER_BINDING_UNCERTAIN'})}))
+  driver.apply(ctx)
+  const phase=(id,program,boundary)=>({type:'block-end',index:0,block:{type:'tool-call',id,name:'ptc_execute',
+    arguments:JSON.stringify({program,description:'Exact multiple-PTC wait regression',boundary})}})
+  class Model extends LlmAdapter{
+    async resolveModel(provider,id){return{provider,id,name:id,inputModalities:['text']}}
+    async *stream(request){
+      requests.push(request)
+      if(requests.length>6)throw Error('bounded model requests')
+      if(requests.length===1){
+        ctx.goals.create(agent,{objective:'wait for one exact producer',maxGoalRounds:3})
+        yield phase('inspect','return {preflight:true}','semantic_decision')
+      }else if(requests.length===2){
+        yield phase('dispatch','return await tools.postman_worker({task:"inert"})','external_event')
+      }else yield {type:'block-end',index:0,block:{type:'text',text:'Waiting for existing producer'}}
+      yield {type:'finish',reason:{kind:'stop'}}
+    }
+  }
+  ctx.llm.registerAdapter(['fixture'],new Model())
+  agent=ctx.agentLoop.create('multi-ptc-'+outcome,{provider:'fixture',model:'inert'},{cwd:process.cwd(),agentPreset:'postman-leader-ptc'})
+  adapter.refresh(agent)
+  t.after(async()=>{await adapter.dispose();await ctx.fiber.dispose()})
+  agent.followup(message('start'));await drain(agent)
+  const events=agent.session.events
+  assert.equal(events.filter(e=>e.type==='tool/call'&&e.data.name==='ptc_execute').length,2)
+  if(outcome==='accepted'){
+    assert.equal(requests.length,2,'confirmed last dispatch must prevent a new goal injection')
+    assert.equal(ctx.goals.get(agent).roundsStarted,0)
+    assert.equal(adapter.isWaitingForExternalEvent(agent),true)
+    assert.equal(ctx.bail('goal/continuation-defer',agent),true)
+  }else{
+    assert.ok(ctx.goals.get(agent).roundsStarted>=1,'refused last dispatch must not borrow an earlier result')
+    assert.ok(requests.length>2,'goal still admits useful retry after refusal')
+  }
+})
+
+test('goal-only text after transiently lost, then re-proven live wait does not loop',{timeout:15000},async t=>{
+  const ctx=base(),requests=[]
+  let agent,producerLive=true
+  const adapter=createPtcAdapter(ctx,{authorize:isTopLevelPostmanPtcLeader,hasActiveWork:()=>producerLive})
+  ctx.tools.register(adapter.tool)
+  ctx.tools.register(defineTool({name:'postman_worker',description:'inert accepted producer',parameters:{},output,
+    execute:()=>({status:'POSTMAN_WORKER_TASK_ACCEPTED'})}))
+  driver.apply(ctx)
+  const phase=(id,program,boundary)=>({type:'block-end',index:0,block:{type:'tool-call',id,name:'ptc_execute',
+    arguments:JSON.stringify({program,description:'Temporarily lost wait proof',boundary})}})
+  // Producer temporarily vanishes at admission, then reappears while the first
+  // already-admitted goal round responds with text. Avoid a second goal round.
+  ctx.on('agent/turn-stopping',({agent:a})=>{if(a===agent&&requests.length===2)producerLive=false})
+  class Model extends LlmAdapter{
+    async resolveModel(provider,id){return{provider,id,name:id,inputModalities:['text']}}
+    async *stream(request){
+      requests.push(request)
+      if(requests.length>3)throw Error('redundant goal woke the model')
+      if(requests.length===1){
+        ctx.goals.create(agent,{objective:'unchanged waiting goal',maxGoalRounds:3})
+        yield phase('preflight','return {checked:true}','semantic_decision')
+      }else if(requests.length===2){
+        yield phase('producer','return await tools.postman_worker({task:"inert"})','external_event')
+      }else{
+        producerLive=true
+        yield {type:'block-end',index:0,block:{type:'text',text:'Waiting for admitted producer'}}
+      }
+      yield {type:'finish',reason:{kind:'stop'}}
+    }
+  }
+  ctx.llm.registerAdapter(['fixture'],new Model())
+  agent=ctx.agentLoop.create('recovered-goal-only-wait',{provider:'fixture',model:'inert'},{cwd:process.cwd(),agentPreset:'postman-leader-ptc'})
+  adapter.refresh(agent)
+  t.after(async()=>{await adapter.dispose();await ctx.fiber.dispose()})
+  agent.followup(message('start'));await drain(agent)
+  const goal=ctx.goals.get(agent)
+  assert.equal(requests.length,3,'one genuine goal round may recover the wait, but must not loop')
+  assert.equal(goal.roundsStarted,1)
+  assert.equal(goal.phase,'active')
+  assert.equal(adapter.isWaitingForExternalEvent(agent),true)
+  assert.equal(ctx.bail('goal/continuation-defer',agent),true)
+})
+
+test('goal-only text without earlier proven wait does not suppress recovery',{timeout:15000},async t=>{
+  const ctx=base(),requests=[]
+  let agent
+  const adapter=createPtcAdapter(ctx,{authorize:isTopLevelPostmanPtcLeader,hasActiveWork:()=>true})
+  ctx.tools.register(adapter.tool);driver.apply(ctx)
+  class Model extends LlmAdapter{
+    async resolveModel(provider,id){return{provider,id,name:id,inputModalities:['text']}}
+    async *stream(request){
+      requests.push(request)
+      if(requests.length>4)throw Error('bounded goal rounds')
+      if(requests.length===1)ctx.goals.create(agent,{objective:'unproven wait',maxGoalRounds:3})
+      yield {type:'block-end',index:0,block:{type:'text',text:'Unproven waiting claim'}}
+      yield {type:'finish',reason:{kind:'stop'}}
+    }
+  }
+  ctx.llm.registerAdapter(['fixture'],new Model())
+  agent=ctx.agentLoop.create('unproven-goal-only-wait',{provider:'fixture',model:'inert'},{cwd:process.cwd(),agentPreset:'postman-leader-ptc'})
+  adapter.refresh(agent)
+  t.after(async()=>{await adapter.dispose();await ctx.fiber.dispose()})
+  agent.followup(message('start'));await drain(agent)
+  const goal=ctx.goals.get(agent)
+  assert.equal(requests.length,4)
+  assert.equal(goal.roundsStarted,3)
+  assert.equal(goal.blockedReason.code,'round-limit')
+  assert.equal(adapter.isWaitingForExternalEvent(agent),false)
+})
+
 // Native AgentLoop, native Worker report, and the installed goal-round driver.
 // A report still wakes the parent for review; the remaining exact live Worker
 // supplies the event source without asking the model for an empty waiting PTC.
