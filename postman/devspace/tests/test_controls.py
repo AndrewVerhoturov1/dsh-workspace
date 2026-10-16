@@ -99,17 +99,16 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(self.stops, ["click"])
         self.assertEqual(self.sent, [])
 
-    def test_preempt_and_stop_wait_for_active_devspace_operation(self):
+    def test_preempt_and_stop_interrupt_owned_ui_during_active_devspace_operation(self):
         for kind, control_id in [("preempt", "00000000-0000-4000-8000-000000000011"),
                                  ("stop", "00000000-0000-4000-8000-000000000012")]:
             self.issue(control_id, kind, priority="urgent")
-            self.assertIsNone(self.process(generation="ACTIVE_TOOL", stop="PRESENT"))
-            self.assertEqual(self.stops, [])
-            self.assertEqual(self.sent, [])
-            self.assertEqual(len(controls.pending(self.binding)), 1)
-            outcome = self.process(generation="SAFE_GENERATION", stop="PRESENT")
+            outcome = self.process(generation="ACTIVE_TOOL", stop="PRESENT")
             self.assertEqual(outcome["status"],
                              "SENT_CONFIRMED" if kind == "preempt" else "STOP_UI_PROVEN")
+            self.assertEqual(self.stops, ["click"])
+            self.assertEqual(self.sent, ["продолжай"] if kind == "preempt" else [])
+            self.assertFalse(controls.pending(self.binding))
             self.stops.clear()
             self.sent.clear()
 
@@ -129,13 +128,12 @@ class ControlTests(unittest.TestCase):
         self.assertIsNone(self.process())
         self.assertEqual(len(self.sent), 1)
 
-    def test_preempt_cannot_stop_when_ui_proofs_conflict(self):
+    def test_preempt_recognized_stop_does_not_require_activity_classifier(self):
         control_id="00000000-0000-4000-8000-000000000014"
         self.issue(control_id, "preempt", priority="urgent")
-        self.assertIsNone(self.process(generation="IDLE", stop="PRESENT"))
-        self.assertEqual(self.stops, [])
-        self.assertFalse(self.sent)
-        self.assertEqual(len(controls.pending(self.binding)), 1)
+        self.assertEqual(self.process(generation="UNKNOWN", stop="PRESENT")["status"], "SENT_CONFIRMED")
+        self.assertEqual(self.stops, ["click"])
+        self.assertEqual(self.sent, ["продолжай"])
 
     def test_uncertain_send_never_retries_or_claims_completion(self):
         cid="00000000-0000-4000-8000-000000000004"
@@ -154,13 +152,62 @@ class ControlTests(unittest.TestCase):
             self.process()
         self.assertEqual(self.sent, [])
 
-    def test_stop_absence_during_active_tool_is_not_treated_as_idle(self):
+    def test_stop_absence_never_clicks_or_claims_local_tool_termination(self):
         cid="00000000-0000-4000-8000-000000000007"
         self.issue(cid, "stop")
-        self.assertIsNone(self.process(generation="ACTIVE_TOOL", stop="ABSENT"))
+        self.assertEqual(self.process(generation="ACTIVE_TOOL", stop="ABSENT")["kind"], "stop")
         self.assertEqual(self.stops, [])
         self.assertEqual(self.sent, [])
+        self.assertFalse(controls.pending(self.binding))
+
+    def test_preempt_delayed_composer_resumes_without_second_stop_or_duplicate_send(self):
+        cid = "00000000-0000-4000-8000-000000000015"
+        self.issue(cid, "preempt", priority="urgent")
+        result = self.process(generation="ACTIVE_TOOL", stop="PRESENT", send_state="PROVEN_NOT_SENT")
+        self.assertEqual(result["status"], "WAITING_COMPOSER")
+        self.assertEqual(self.stops, ["click"])
+        self.now[0] = 12.0
+        # A new observer/cold read reloads the persisted receipt and only retries
+        # the positively unsent continuation, never the old Stop click.
         self.assertEqual(len(controls.pending(self.binding)), 1)
+        result = self.process(generation="UNKNOWN", stop="ABSENT")
+        self.assertEqual(result["status"], "SENT_CONFIRMED")
+        self.assertEqual(self.stops, ["click"])
+        self.assertEqual(len(self.sent), 2)  # first call proved no browser Send
+        self.assertIsNone(self.process())
+
+    def test_host_revocation_fences_owned_control_but_preserves_it(self):
+        cid = "00000000-0000-4000-8000-000000000016"
+        self.issue(cid, "preempt")
+        receipt = {key: self.binding[key] for key in controls.IDENTITY if key != "capability"}
+        (self.channel / "revoked.json").write_text(json.dumps(receipt), encoding="utf-8")
+        self.assertIsNone(self.process(generation="ACTIVE_TOOL", stop="PRESENT"))
+        self.assertFalse(self.stops)
+        self.assertFalse(self.sent)
+        self.assertEqual(len(controls.pending(self.binding)), 1)
+        receipt["leaderSessionId"] = "foreign"
+        (self.channel / "revoked.json").write_text(json.dumps(receipt), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "REVOCATION_OWNER_MISMATCH"):
+            self.process()
+
+    def test_new_explicit_stop_supersedes_old_unknown_observation_without_replay(self):
+        old_id = "00000000-0000-4000-8000-000000000017"
+        new_id = "00000000-0000-4000-8000-000000000018"
+        self.issue(old_id, "preempt", issuedAt="2026-10-13T01:00:00Z")
+        controls.acknowledge(self.binding, {"controlId": old_id}, "STOP_UNKNOWN", stop_state="CLICK_UNKNOWN")
+        self.issue(new_id, "stop", issuedAt="2026-10-13T01:00:01Z")
+        result = self.process(generation="ACTIVE_TOOL", stop="PRESENT")
+        self.assertEqual(result["status"], "STOP_UI_PROVEN")
+        self.assertEqual(self.stops, ["click"])
+        self.assertEqual(self.sent, [])
+        previous = json.loads((self.channel / "controls" / (old_id + ".ack.json")).read_text(encoding="utf-8"))
+        self.assertEqual(previous["state"], "SUPERSEDED")
+        self.assertEqual(previous["previousState"], "STOP_UNKNOWN")
+        self.assertEqual(previous["stopState"], "CLICK_UNKNOWN")
+        self.assertEqual(previous["supersededByControlId"], new_id)
+        self.assertFalse(controls.pending(self.binding))
+        self.assertIsNone(self.process(stop="PRESENT"))
+        self.assertEqual(self.stops, ["click"])
 
     def test_urgent_preempts_ordinary_pending_control(self):
         ordinary="00000000-0000-4000-8000-000000000008"

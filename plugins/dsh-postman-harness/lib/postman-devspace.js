@@ -8,10 +8,14 @@ export function devspaceRoot() {
   return process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, 'DSH', 'Postman', 'devspace') : join(homedir(), '.dsh', 'postman', 'devspace')
 }
 
-export function createDevspaceChannel({ root = devspaceRoot(), bridgeJobId, leaderSessionId, lunaSessionId, requestId, worktree, mode, sourceRoot, conversationUrl, priorRequestId }) {
+export function createDevspaceChannel({ root = devspaceRoot(), bridgeJobId, leaderSessionId, lunaSessionId, requestId, worktree, mode, sourceRoot, conversationUrl, priorRequestId, computerUse = 'deny', recovery }) {
   if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(bridgeJobId ?? '') || !/^REQ_\d{8}T\d{6}Z_\d{4}$/.test(requestId ?? '') ||
       (priorRequestId !== undefined && (!/^REQ_\d{8}T\d{6}Z_\d{4}$/.test(priorRequestId) || priorRequestId === requestId || !conversationUrl)) ||
-      !leaderSessionId || !lunaSessionId || !['READ_ONLY', 'WRITE_TEST', 'WRITE_ISOLATED', 'WRITE_APPROVED_TARGET'].includes(mode) ||
+      !leaderSessionId || !lunaSessionId || !['allow', 'deny'].includes(computerUse) ||
+      recovery && (!/^REQ_\d{8}T\d{6}Z_\d{4}$/.test(recovery.sourceRequestId ?? '') ||
+        !Number.isSafeInteger(recovery.attempt) || recovery.attempt < 1 ||
+        recovery.intent !== 'observe-then-continue' || !conversationUrl) ||
+      !['READ_ONLY', 'WRITE_TEST', 'WRITE_ISOLATED', 'WRITE_APPROVED_TARGET'].includes(mode) ||
       (conversationUrl !== undefined && !/^https:\/\/chatgpt\.com\/c\/[a-zA-Z0-9-]+$/.test(conversationUrl))) throw Error('POSTMAN_DEVSPACE_BINDING_INVALID')
   const channel = join(root, bridgeJobId)
   mkdirSync(channel, { recursive: true })
@@ -24,7 +28,8 @@ export function createDevspaceChannel({ root = devspaceRoot(), bridgeJobId, lead
     ['WRITE_ISOLATED', 'WRITE_APPROVED_TARGET'].includes(mode) ? workspaceRef : null
   if (mode === 'WRITE_TEST') mkdirSync(writeRoot)
   const binding = Object.freeze({ version: 1, jobId: bridgeJobId, requestId, leaderSessionId, lunaSessionId,
-    channel, capability: randomBytes(32).toString('hex'), mode, workspaceRef, writeRoot,
+    channel, capability: randomBytes(32).toString('hex'), mode, workspaceRef, writeRoot, computerUse,
+    ...(recovery ? { recovery } : {}),
     ...(conversationUrl ? { conversationUrl } : {}),
     ...(priorRequestId ? { priorRequestId } : {}) })
   writeFileSync(join(channel, 'binding.json'), JSON.stringify(binding), { flag: 'wx', mode: 0o600 })
@@ -39,6 +44,22 @@ export function createDevspaceChannel({ root = devspaceRoot(), bridgeJobId, lead
   writeFileSync(command, launcher, { flag: 'wx', mode: 0o600 })
   const bashQuote = value => "'" + value.replaceAll("'", "'\"'\"'") + "'"
   return Object.freeze({ ...binding, signalCommand: 'pwsh -NoProfile -NonInteractive -File ' + bashQuote(command) })
+}
+
+/** Revoke future browser actions without claiming that external shell work died. */
+export function revokeDevspaceChannel(binding) {
+  if (!binding?.capability || realpathSync(binding.channel) !== resolve(binding.channel))
+    throw Error('POSTMAN_DEVSPACE_CHANNEL_REJECTED')
+  const receipt = { version: 1, ...Object.fromEntries(['jobId', 'requestId',
+    'leaderSessionId', 'lunaSessionId', 'capability'].map(key => [key, binding[key]])) }
+  try { writeFileSync(join(binding.channel, 'revoked.json'), JSON.stringify(receipt), { flag: 'wx', mode: 0o600 }) }
+  catch (error) {
+    if (error.code !== 'EEXIST') throw error
+    const saved = JSON.parse(readFileSync(join(binding.channel, 'revoked.json'), 'utf8'))
+    for (const key of Object.keys(receipt))
+      if (saved[key] !== receipt[key]) throw Error('POSTMAN_DEVSPACE_REVOCATION_OWNER_MISMATCH')
+  }
+  return receipt
 }
 
 /** Host-only, one-per-ID control intent. The user never supplies channel authority.
@@ -79,7 +100,8 @@ export function readDevspaceControls(binding) {
         if (lstatSync(ackFile).isSymbolicLink()) throw Error('POSTMAN_DEVSPACE_CONTROL_ACK_INVALID')
         const ack = JSON.parse(readFileSync(ackFile, 'utf8'))
         if (ack.controlId !== controlId || ack.requestId !== binding.requestId ||
-            !['STOP_UI_PROVEN', 'STOP_UNKNOWN', 'SENT_CONFIRMED', 'SEND_UNKNOWN', 'PROVEN_NOT_SENT', 'ALREADY_IDLE'].includes(ack.state))
+            !['STOP_UI_PROVEN', 'STOP_UNKNOWN', 'WAITING_COMPOSER', 'SUPERSEDED',
+              'SENT_CONFIRMED', 'SEND_UNKNOWN', 'PROVEN_NOT_SENT', 'ALREADY_IDLE'].includes(ack.state))
           throw Error('POSTMAN_DEVSPACE_CONTROL_ACK_INVALID')
         state = ack.state; stopState = ack.stopState ?? null; sendState = ack.sendState ?? null
       } catch (error) { if (error.code !== 'ENOENT') throw error }

@@ -51,3 +51,84 @@ test('native Worker starts/checks app; Host owner survives Worker close; explici
   assert.equal(cancelled,1);assert.throws(()=>f.ctx.jobs.get(cleanupId),{message:'unknown job '+cleanupId})
   console.log(JSON.stringify({scenario:'owned-app-stopped',explicitStop:true,leaderCleanup:true,coldRestart:false}))
 })
+
+
+test('explicit app replacement needs owned terminal process evidence and actually free TCP resource',{timeout:10000},async t=>{
+  const {createPostmanAppTool}=await import('./postman-app.js'),{createServer}=await import('node:net')
+  const {realpath}=await import('node:fs/promises')
+  const dir=await mkdtemp(join(tmpdir(),'postman-app-restart-')),worktree=await realpath(dir)
+  const owner={id:'app-leader',session:{header:{agentPreset:'postman-leader',delegationDepth:0}}}
+  const caller={id:'app-worker'},context={leaderSessionId:owner.id,worktree},proof={owner,context,assignmentId:'explicit-assignment'}
+  const jobs=new Map();let row={appJobs:{}},starts=0
+  const resource=createServer();await new Promise(resolve=>resource.listen(0,resolve))
+  const port=resource.address().port;await new Promise(resolve=>resource.close(resolve))
+  const hooks=new Map(),ctx={on:(name,fn)=>hooks.set(name,fn),bail:()=>true,agents:{get:id=>id===owner.id?owner:caller},
+    get:()=>({get(id){if(!jobs.has(id))throw Error('unknown job '+id);return jobs.get(id)}}),
+    tools:{get:()=>true,async execute(exec){starts++;const id='native-job-'+starts
+      const label=hooks.get('postman/app-job-label')({parent:exec.parent})
+      jobs.set(id,{id,ownerSession:owner.id,kind:'pwsh',label,status:'running'})
+      return {value:{kind:'background',jobId:id}}}}}
+  const contexts={get:()=>context,record:()=>row,async changeRecord(_id,fn){row=fn(row)}}
+  let tool=createPostmanAppTool(ctx,{appOwnerOf:agent=>agent===caller?proof:null},contexts)
+  const run=args=>tool.execute(args,{agent:caller,signal:new AbortController().signal,token:Symbol(),callId:'explicit-start'})
+  t.after(async()=>{if(resource.listening)await new Promise(resolve=>resource.close(resolve));await rm(dir,{recursive:true,force:true})})
+  const initial=await run({action:'start',command:'inert-native-app',description:'isolated app',port})
+  assert.equal(initial.status,'POSTMAN_APP_STARTED');assert.equal(initial.jobId,'native-job-1')
+  const replacement={action:'start',command:'inert-native-app',description:'explicit replacement',jobId:initial.jobId,appId:initial.appId,port}
+  assert.equal((await run(replacement)).status,'POSTMAN_APP_PROCESS_NOT_STOPPED');assert.equal(starts,1)
+  jobs.delete(initial.jobId)
+  assert.equal((await run(replacement)).status,'POSTMAN_APP_OUTCOME_UNKNOWN','lost record cannot prove process absence');assert.equal(starts,1)
+  const receipt=row.appJobs[initial.appId]
+  jobs.set(initial.jobId,{id:initial.jobId,ownerSession:owner.id,kind:'pwsh',
+    label:JSON.stringify({postmanApp:1,appId:initial.appId,worktree,workerSessionId:caller.id}),status:'completed'})
+  const jobController=ctx.get();jobController.read=()=>({text:''});ctx.get=()=>jobController
+  assert.equal((await run({action:'status',jobId:initial.jobId,appId:initial.appId})).status,'POSTMAN_APP_STATUS')
+  assert.equal(row.appJobs[initial.appId].terminal,'completed')
+  jobs.delete(initial.jobId) // native completion fact persists through controller record loss
+  tool=createPostmanAppTool(ctx,{appOwnerOf:agent=>agent===caller?proof:null},contexts)
+  await new Promise(resolve=>resource.listen(port,resolve))
+  assert.equal((await run(replacement)).status,'POSTMAN_APP_RESOURCE_BUSY');assert.equal(starts,1)
+  await new Promise(resolve=>resource.close(resolve))
+  const restarted=await run(replacement)
+  assert.equal(restarted.status,'POSTMAN_APP_STARTED');assert.equal(restarted.jobId,'native-job-2')
+  assert.notEqual(restarted.appId,initial.appId);assert.equal(starts,2)
+  assert.equal((await run(replacement)).status,'POSTMAN_APP_RESTART_ALREADY_REQUESTED');assert.equal(starts,2)
+  assert.equal(receipt.assignmentId,'explicit-assignment')
+})
+
+
+test('real native app stops and a newly assigned Worker explicitly starts a new job on the same free port',{timeout:30000},async t=>{
+  const {createServer}=await import('node:net')
+  const dir=await mkdtemp(join(tmpdir(),'postman-native-app-restart-')),ready=[Promise.withResolvers(),Promise.withResolvers()]
+  const resource=createServer();await new Promise(resolve=>resource.listen(0,resolve))
+  const port=resource.address().port;await new Promise(resolve=>resource.close(resolve))
+  const paths=[join(dir,'first.json'),join(dir,'second.json')]
+  const watcher=watch(dir,async(_e,name)=>{const index=['first.json','second.json'].indexOf(String(name));if(index<0)return
+    try{ready[index].resolve(JSON.parse(await readFile(paths[index],'utf8')))}catch{}})
+  let f,startArgs={action:'start',command:'node app.mjs '+JSON.stringify(paths[0])+' '+port,description:'Initial exact native app',port}
+  f=await capabilityRuntime(dir,{preset:'postman-leader',reportDelivery:'next-step',plan:(a,_r,n)=>
+    a.id==='leader'?{text:'Native app receipt reviewed'}:n===1?{name:'postman_app',args:startArgs}:
+      {name:'report',args:{output:'PARTIAL native job started; HTTP checked separately by test'}}})
+  t.after(async()=>{watcher.close();await f.dispose();await rm(dir,{recursive:true,force:true,maxRetries:5})})
+  await f.prepare();await f.turn(f.leader,'Approved finite native app restart regression')
+  await cp(new URL('./fixtures/postman-test-app.mjs',import.meta.url),join(f.worktree,'app.mjs'))
+  const call=(name,args)=>f.execute(f.leader,'ptc_execute',workerPtc('return await tools.'+name+'('+JSON.stringify(args)+')')).then(r=>{
+    assert.equal(r.isError,false,JSON.stringify(r));assert.equal(r.value.status,'ok',JSON.stringify(r));return r.value.value})
+  const first=await call('postman_worker',{task:'Initial bounded native app',createNew:true});await f.childDone(first.workerSessionId)
+  const original=f.results.find(r=>r.agent.id===first.workerSessionId&&r.name==='postman_app').result.value
+  assert.equal(original.status,'POSTMAN_APP_STARTED')
+  const initial=await ready[0].promise;assert.equal((await fetch(initial.url)).status,200)
+  assert.equal((await call('postman_worker_stop',{mode:'close',workerSessionId:first.workerSessionId})).status,'POSTMAN_WORKER_STOPPED')
+  const stopped=await call('postman_app',{action:'stop',jobId:original.jobId,appId:original.appId})
+  assert.equal(stopped.jobStatus,'killed');await assert.rejects(fetch(initial.url))
+  startArgs={...startArgs,jobId:original.jobId,appId:original.appId,command:'node app.mjs '+JSON.stringify(paths[1])+' '+port,
+    description:'Explicit new native app after observed prior process stop'}
+  const next=await call('postman_worker',{task:'Explicitly start the replacement native app',createNew:true});await f.childDone(next.workerSessionId)
+  const restarted=f.results.find(r=>r.agent.id===next.workerSessionId&&r.name==='postman_app').result.value
+  assert.equal(restarted.status,'POSTMAN_APP_STARTED');assert.notEqual(restarted.jobId,original.jobId)
+  assert.notEqual(restarted.appId,original.appId);assert.notEqual(next.workerSessionId,first.workerSessionId)
+  const live=await ready[1].promise;assert.equal(live.url,initial.url);assert.equal((await fetch(live.url)).status,200)
+  assert.equal(f.ctx.jobs.get(original.jobId,f.leader).status,'killed')
+  assert.equal(f.ctx.jobs.get(restarted.jobId,f.leader).status,'running')
+  assert.equal((await call('postman_app',{action:'stop',jobId:restarted.jobId,appId:restarted.appId})).jobStatus,'killed')
+})

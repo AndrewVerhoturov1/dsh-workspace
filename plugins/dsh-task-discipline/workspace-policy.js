@@ -16,7 +16,7 @@ const PROJECTS = [
 ]
 const sectionName = path => 'dsh:workspace-policy:' + path
 const within = (root, path) => { const rel = relative(root, path); return rel === '' || (rel !== '..' && !rel.startsWith('..' + sep) && !isAbsolute(rel)) }
-const message = path => ({id:randomUUID(),role:'user',content:[{type:'text',text:'Host loaded required workspace instructions before this operation. Continue only after the next instruction context; no action was performed.'}],source:{kind:'plugin',plugin:name,path}})
+const message = path => ({id:randomUUID(),role:'user',content:[{type:'text',text:'Workspace path requested: '+path+'. Applicable instructions are refreshed in the next normal model context; this is not a tool outcome.'}],source:{kind:'plugin',plugin:name,path}})
 
 async function read(ctx, path, signal, optional = false) {
   const target = await ctx.fs.resolve(path, {signal})
@@ -79,41 +79,56 @@ async function documents(ctx, agent, signal, extra = []) {
     paths.push(...['postman','ptc'].map(id => join(root,'docs/subprojects',id,'SUBPROJECT.md')))
   }
   if (managed) paths.push(...projectPaths(root,[...touched(agent),...extra,agent.session.header.cwd]))
-  return Promise.all([...new Set(paths)].map(async path => ({name:sectionName(path),text:'Workspace instructions from '+path+' (apply only to the named repository/subproject):\n\n'+await read(ctx,path,signal)})))
+  return Promise.all([...new Set(paths)].map(async path => {
+    try { return {name:sectionName(path),text:'Workspace instructions from '+path+' (apply only to the named repository/subproject):\n\n'+await read(ctx,path,signal)} }
+    catch (error) {
+      signal?.throwIfAborted()
+      return {name:sectionName(path),text:'WORKSPACE_INSTRUCTION_UNAVAILABLE: '+path+'\n'+error.message+'\nThe instructions were not delivered. Retry reading them when available; this diagnostic is not an authorization or a tool failure.'}
+    }
+  }))
 }
 export function apply(ctx) {
   ctx.on('system-prompt/assemble',async (_assembly, context, next) => {
     const assembly = await next(), agent = context.agent
     if (!agent) return assembly
-    const sections = await documents(ctx,agent,context.signal)
+    let sections
+    try { sections = await documents(ctx,agent,context.signal) }
+    catch (error) {
+      context.signal?.throwIfAborted()
+      sections = [{name:sectionName('diagnostic'),text:'WORKSPACE_INSTRUCTION_UNAVAILABLE: '+error.message+'\nInstruction discovery failed; the workspace documents were not delivered. The next context assembly will retry.'}]
+    }
     if (leader(agent)) {
-      const skill = await ctx.skills.get('postman-leader',{cwd:HOST_ROOT,scope:agent,signal:context.signal})
-      if (!skill || skill.resourceBase?.kind !== 'directory' ||
-          typeof skill.resourceBase.path !== 'string' || resolve(skill.resourceBase.path) !== LEADER_SKILL_BASE)
-        throw Error('WORKSPACE_POLICY_REQUIRED: canonical postman-leader skill unavailable from Host installation')
-      sections.push({name:sectionName('skill:postman-leader'),text:'Automatically loaded for this exact top-level Postman Leader only.\n<skill_content name="postman-leader">\nBase directory: '+(skill.resourceBase?.path ?? skill.provider)+'\n\n'+skill.content+'\n</skill_content>'})
+      try {
+        const skill = await ctx.skills.get('postman-leader',{cwd:HOST_ROOT,scope:agent,signal:context.signal})
+        if (!skill || skill.resourceBase?.kind !== 'directory' ||
+            typeof skill.resourceBase.path !== 'string' || resolve(skill.resourceBase.path) !== LEADER_SKILL_BASE)
+          throw Error('canonical postman-leader skill unavailable from Host installation')
+        sections.push({name:sectionName('skill:postman-leader'),text:'Automatically loaded for this exact top-level Postman Leader only.\n<skill_content name="postman-leader">\nBase directory: '+(skill.resourceBase?.path ?? skill.provider)+'\n\n'+skill.content+'\n</skill_content>'})
+      } catch (error) {
+        context.signal?.throwIfAborted()
+        sections.push({name:sectionName('skill:postman-leader'),text:'WORKSPACE_INSTRUCTION_UNAVAILABLE: '+error.message+'. Canonical role instructions were not delivered; no project-owned substitute was loaded.'})
+      }
     }
     // Dynamic context is reassembled by Host on every request; the native
     // runtime-context projection deduplicates it and restores it after compact.
     return {...assembly,contexts:[...assembly.contexts,...sections]}
   })
-  const denied = new WeakMap()
   ctx.on('tools/pre-execute',async (exec,next) => {
     const decision = await next()
     if (decision.kind !== 'allow' || !exec.agent) return decision
-    if (!locations(exec.arguments,exec.agent.session.header.cwd).length && !['write','edit','pwsh','bash','implementation_artifact_apply','postman_task_prepare','postman_task_restore','postman_worker','postman_sol_worker','postman_worker_interrupt','postman_bridge'].includes(exec.name)) return decision
+    const paths = locations(exec.arguments,exec.agent.session.header.cwd)
+    if (!paths.length) return decision
     let required
-    try { required = await documents(ctx,exec.agent,exec.signal,locations(exec.arguments,exec.agent.session.header.cwd)) }
-    catch (error) { const reason = 'WORKSPACE_POLICY_REQUIRED: '+error.message; denied.set(exec.token,reason); return {kind:'deny',reason} }
+    try { required = await documents(ctx,exec.agent,exec.signal,paths) }
+    catch { exec.signal?.throwIfAborted(); return decision }
     const visible = visibleSections(exec.agent)
-    const missing = required.filter(row=>!visible.some(v=>v.name===row.name && v.text===row.text))
-    if (!missing.length) return decision
-    for (const path of locations(exec.arguments,exec.agent.session.header.cwd))
-      if (!exec.agent.inbox.nextStep.some(m=>m.source?.plugin===name && m.source.path===path)) exec.agent.inbox.prepend('next-step',message(path))
-    const reason = 'WORKSPACE_POLICY_REQUIRED: instruction context must reach the model before this operation; no action performed'
-    denied.set(exec.token,reason)
-    return {kind:'deny',reason}
+    // Existing first-touch hints deliver only genuinely new instruction context.
+    // Known paths must not wake an event-waiting supervisor for bookkeeping.
+    // Instruction freshness never denies an ordinary tool.
+    if (required.some(row=>!visible.some(v=>v.name===row.name && v.text===row.text)))
+      for (const path of paths)
+        if (!exec.agent.inbox.nextStep.some(m=>m.source?.plugin===name && m.source.path===path))
+          exec.agent.inbox.prepend('next-step',message(path))
+    return decision
   })
-  // A later pre-execute listener cannot force-allow this denial.
-  ctx.tools.guard(exec=>denied.get(exec.token))
 }

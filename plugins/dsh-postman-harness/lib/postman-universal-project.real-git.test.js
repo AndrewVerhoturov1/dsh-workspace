@@ -367,30 +367,26 @@ test('GitHub origin identity rejects query or malformed owner before any task wo
   assert.equal(f.registry.get(parent.id),null)
   assert.equal((await git(f.root,'worktree','list','--porcelain')).split('worktree ').length,2)
 })
-test('real Git: explicit generic failed-runner restore preserves task dirty bytes before cleaning only owned tree', async t => {
+test('real Git: generic failed-runner restore retains dirty tree and creates independent clean context', async t => {
   const f=await fixture(t,'main',{id:'generic-restore'})
   const parent=leader('generic-restore-owner',f.root)
   const task=await f.contexts.prepare(parent,f.root)
   assert.equal(task.status,'TASK_CONTEXT_READY')
   await writeFile(join(task.worktree,'runner-dirty.txt'),'untracked failed-runner bytes\n')
   await writeFile(join(task.worktree,'tracked.txt'),'dirty tracked failed-runner bytes\n')
-  const saved=join(f.temp,'private-recovery-evidence.txt')
-  const contexts=createPostmanTaskContexts({registry:f.registry,gitCommand:f.command,
-    preserveChanges:async ({worktree})=>{
-      await writeFile(saved,await readFile(join(worktree,'runner-dirty.txt')))
-      return saved
-    }})
+  const contexts=createPostmanTaskContexts({registry:f.registry,gitCommand:f.command,temporaryDirectory:()=>f.temp})
   assert.equal((await contexts.recover(parent)).status,'POSTMAN_TASK_CONTEXT_ALREADY_READY')
   assert.equal(contexts.beginOperation(parent.id),true)
   await contexts.startRunner(parent.id,REQ)
   await contexts.endOperation(parent.id,{status:'IMPLEMENTATION_ARTIFACT_RUNNER_RESULT',
     result:{ok:false}})
   const restored=await contexts.restore(parent)
-  assert.equal(restored.status,'TASK_CONTEXT_RESTORED',JSON.stringify(restored))
-  assert.equal(restored.recoveryPath,saved)
-  assert.equal(await readFile(saved,'utf8'),'untracked failed-runner bytes\n')
-  assert.equal((await readFile(join(task.worktree,'tracked.txt'),'utf8')).replaceAll('\r\n','\n'),'unchanged\n')
-  assert.equal(await git(task.worktree,'status','--porcelain=v1','--untracked-files=all'),'')
+  assert.equal(restored.status,'POSTMAN_TASK_RESTORE_ISOLATED',JSON.stringify(restored))
+  assert.notEqual(restored.worktree,task.worktree);assert.notEqual(restored.branch,task.branch)
+  assert.equal(await readFile(join(task.worktree,'runner-dirty.txt'),'utf8'),'untracked failed-runner bytes\n')
+  assert.equal(await readFile(join(task.worktree,'tracked.txt'),'utf8'),'dirty tracked failed-runner bytes\n')
+  assert.equal((await readFile(join(restored.worktree,'tracked.txt'),'utf8')).replaceAll('\r\n','\n'),'unchanged\n')
+  assert.equal(await git(restored.worktree,'status','--porcelain=v1','--untracked-files=all'),'')
   assert.equal(await git(task.worktree,'rev-parse','HEAD'),task.baseCommit)
   assert.equal(await git(f.root,'status','--porcelain=v1','--untracked-files=all'),'')
 })

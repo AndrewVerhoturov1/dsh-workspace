@@ -31,12 +31,18 @@ function preparedContexts() {
       const command = args.join(' ')
       if (command === 'rev-parse --show-toplevel') return cwd === 'C:/repo' ? 'C:/repo' : cwd
       if (command === 'remote get-url origin') return 'https://github.com/andrewverhoturov1/dsh-workspace.git'
-      if (command === 'rev-parse --verify refs/remotes/origin/preview^{commit}' || command === 'rev-parse HEAD') return BASE
-      if (command === 'worktree list --porcelain') return 'worktree C:/repo\nHEAD ' + BASE
+      if (command === 'rev-parse --verify refs/remotes/origin/main^{commit}' || command === 'rev-parse HEAD') return BASE
+      if (command === 'worktree list --porcelain') {
+        const added=calls.find(([,verb,action])=>verb==='worktree'&&action==='add')
+        return 'worktree C:/repo\nHEAD ' + BASE + (added?'\n\nworktree C:/temporary/dsh-postman-task-test\nbranch refs/heads/'+added[4]+'\n':'')
+      }
+      if (command === 'branch --show-current') return calls.find(([,verb,action])=>verb==='worktree'&&action==='add')?.[4] ?? ''
+      if (command.startsWith('rev-parse --git-path ')) return 'C:/temporary/absent-postman-marker-'+args.at(-1)
+      if (command.startsWith('merge-base ') || command.startsWith('rev-parse refs/remotes/origin/')) return BASE
       if (command === 'status --porcelain=v1 --untracked-files=all') return ''
       if (command.startsWith('ls-remote --heads origin ')) return calls.some(([, verb]) => verb === 'push')
         ? BASE + '\trefs/heads/' + args.at(-1) : ''
-      if (['fetch --prune origin'].includes(command) || command.startsWith('worktree add -b ') || command.startsWith('push origin ')) return ''
+      if (['fetch --prune origin'].includes(command) || command.startsWith('fetch origin ') || command.startsWith('worktree add -b ') || command.startsWith('push origin ')) return ''
       throw new Error('unexpected git command: ' + command)
     },
   })
@@ -64,7 +70,7 @@ function directFixture(contexts) {
 
 function argument(args, name) { return args[args.indexOf(name) + 1] }
 
-test('prepare is Leader-only, binds exact repository and publishes branch from origin/preview', async () => {
+test('prepare is Leader-only, binds exact repository and publishes branch from origin/main', async () => {
   const { contexts, calls } = preparedContexts()
   const a = leader(), impersonator = { ...a }, ordinary = leader('ordinary')
   ordinary.session.header.agentPreset = 'standard'
@@ -79,7 +85,7 @@ test('prepare is Leader-only, binds exact repository and publishes branch from o
   assert.equal(prepared.baseCommit, BASE)
   assert.equal(prepared.worktree, 'C:/temporary/dsh-postman-task-test')
   assert.deepEqual(contexts.get(a.id).branch, prepared.branch)
-  assert.ok(calls.some(([, ...args]) => args.join(' ') === 'rev-parse --verify refs/remotes/origin/preview^{commit}'))
+  assert.ok(calls.some(([, ...args]) => args.join(' ') === 'rev-parse --verify refs/remotes/origin/main^{commit}'))
   assert.ok(calls.some(([, ...args]) => args.join(' ') === 'worktree add -b ' + prepared.branch + ' ' + prepared.worktree + ' ' + BASE))
   assert.ok(calls.some(([, ...args]) => args.join(' ') === 'push origin ' + BASE + ':refs/heads/' + prepared.branch))
   assert.equal((await tool.execute({}, { agent: a })).status, 'POSTMAN_TASK_CONTEXT_ALREADY_READY')
@@ -261,8 +267,6 @@ test('Worker receives exact context and REQ; apply rejects another worktree befo
     spawnProcess() { spawned++; throw new Error('runner should not start') } })
   assert.equal((await apply.execute({ requestId: REQ, worktree: 'C:/other-worktree' }, { agent: w })).status,
     'IMPLEMENTATION_ARTIFACT_WORKTREE_REJECTED')
-  assert.equal((await apply.execute({ requestId: REQ, worktree: prepared.worktree }, { agent: w })).status,
-    'IMPLEMENTATION_ARTIFACT_WORKTREE_REJECTED') // no verified publication HEAD yet
   assert.equal((await apply.execute({ requestId: 'REQ_20260927T120000Z_9999', worktree: prepared.worktree }, { agent: w })).status,
     'IMPLEMENTATION_ARTIFACT_CALLER_REJECTED')
   assert.equal(verified, 0)

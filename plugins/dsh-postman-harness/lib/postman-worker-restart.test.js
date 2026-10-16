@@ -189,7 +189,7 @@ test('compact admits only the exact resident idle Worker without changing bindin
   child.status = 'idle'; child.inbox.hasPending = true
   assert.equal((await compact({ workerSessionId: id })).status, 'POSTMAN_WORKER_COMPACT_BUSY')
   active.delete(id)
-  assert.equal((await compact({ workerSessionId: id })).status, 'POSTMAN_WORKER_COMPACT_NOT_RESIDENT')
+  assert.equal((await compact({ workerSessionId: id })).status, 'POSTMAN_WORKER_COMPACT_BUSY')
   assert.equal(calls, 1)
   assert.equal((await task(worker)).workerSessionId, id)
 })

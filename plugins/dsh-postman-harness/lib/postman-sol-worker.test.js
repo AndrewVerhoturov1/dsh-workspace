@@ -22,6 +22,7 @@ async function fixture(t, { start } = {}) {
   }) }
   parent.session.append('turn/start', { turn: 1 })
   const agents = new Map([[parent.id, parent]]), children = new Set()
+  const hooks = new Map()
   let requestOptions
   const calls = { starts: [], follows: [], closes: [] }
   const registry = createMemoryTaskRegistry()
@@ -30,7 +31,7 @@ async function fixture(t, { start } = {}) {
   const contexts = { get: () => context, record: registry.get, changeRecord: registry.change }
   const ctx = { get: name => native.get(name), agents: { get: id => agents.get(id) },
     tools: { schemas: () => [...POSTMAN_LEADER_TOOL_ALLOWLIST, 'report', 'write'].map(name => ({ name })) },
-    on(name, handler) { if (name === 'agent/request') requestOptions = handler; return () => {} },
+    on(name, handler) { hooks.set(name, handler); if (name === 'agent/request') requestOptions = handler; return () => {} },
     subagents: {
       async startContinuable(spec) { calls.starts.push(spec); if (start) await start(spec); children.add(spec.childId)
         return { childId: spec.childId, messageId: 'initial-' + calls.starts.length } },
@@ -48,7 +49,7 @@ async function fixture(t, { start } = {}) {
   const run = (tool, args = {}, exec = {}) => tool.execute(args, {
     agent: parent, signal: new AbortController().signal, callId: 'call-' + (parent.session.seq + 1), ...exec,
   })
-  return { tools, make, run, calls, parent, agents, children, registry, ctx, context,
+  return { tools, make, run, calls, parent, agents, children, registry, ctx, context, hooks,
     options: (agent, config) => requestOptions({ agent }, async () => config) }
 }
 
@@ -150,14 +151,16 @@ test('cascade cancel never claims full settlement for a resident child or unsupp
   assert.ok(f.registry.get(f.parent.id).workers[f.sol.id])
 })
 
-test('fresh active subtree rejects before retirement, cascade only accepts exact Leader Sol', async t => {
+test('fresh explicitly cancels active owned Sol subtree; foreign cascade remains rejected', async t => {
   const f = await subtree(t)
   f.agents.get(f.ids[0]).status = 'running'
-  const fresh = await f.run(f.tools.freshTool, { workerSessionId: f.sol.id, task: 'fresh', retireOwnedWorkers: true })
-  assert.equal(fresh.status, 'POSTMAN_WORKER_CASCADE_BLOCKED')
-  assert.deepEqual(f.calls.closes, [])
   const wrong = await f.run(f.tools.stopTool, { workerSessionId: f.ids[0], cascade: true }, { agent: f.sol })
   assert.equal(wrong.status, 'POSTMAN_WORKER_CASCADE_TARGET_REJECTED')
+  const fresh = await f.run(f.tools.freshTool, { workerSessionId: f.sol.id, task: 'fresh', retireOwnedWorkers: true })
+  assert.equal(fresh.status, 'POSTMAN_WORKER_TASK_ACCEPTED')
+  assert.notEqual(fresh.workerSessionId,f.sol.id)
+  assert.deepEqual(f.calls.closes,[...f.ids,f.sol.id])
+  assert.equal(f.registry.get(f.parent.id).retiredWorkers.length,3)
 })
 
 test('teamSnapshot reads bounded durable/live rows without recovery or private contents', async t => {
@@ -329,4 +332,17 @@ test('Sol tool description and localDevelopment preserve initial plan approval, 
   assert.match(bridge, /Before approval: minimal necessary Leader read-only understanding only/)
   assert.match(bridge, /material cost\/scope\/access\/destructive-operation\/transport changes: STOP -> revised plan -> approval/)
   for (const text of [description, bridge]) assert.doesNotMatch(text, obsoleteSolPermission)
+})
+
+
+test('Sol PARTIAL/BLOCKED report is delivered with live children retained as unresolved work',async t=>{
+  const f=await subtree(t),child=f.agents.get(f.ids[0]);child.status='running'
+  const before=structuredClone(f.registry.get(f.parent.id).workers)
+  let delivered=0,concluded=0
+  const result=await f.hooks.get('tools/execute')({agent:f.sol,name:'report',arguments:{output:'BLOCKED: child tool still running; no PASS'},
+    signal:new AbortController().signal,concludeTurn(){concluded++}},async()=>{delivered++;return {value:{messageId:'actual-native-report'}}})
+  assert.equal(delivered,1);assert.equal(concluded,1);assert.equal(result.concludesTurn,true)
+  assert.deepEqual(f.registry.get(f.parent.id).workers,before,'report cannot settle or retire any descendant')
+  assert.equal(child.status,'running')
+  assert.equal((await f.run(f.tools.stopTool,{mode:'close',workerSessionId:f.sol.id,cascade:true})).status,'POSTMAN_WORKER_CASCADE_BLOCKED')
 })

@@ -764,7 +764,7 @@ def collect_user_turn_texts(page: Any) -> list[str]:
 
 
 def _read_user_history(page: Any, prior_request_id: str) -> tuple[list[str] | None, str]:
-    """Strict continuation-only snapshot; missing/unreadable is never proven zero."""
+    """Snapshot current visible history; an old REQ is diagnostic, not ownership."""
     for selector in USER_TURN_SELECTORS:
         try:
             locator = page.locator(selector)
@@ -799,7 +799,7 @@ def _read_user_history(page: Any, prior_request_id: str) -> tuple[list[str] | No
         key = "POSTMAN_REQUEST_ID: " + prior_request_id
         matches = sum(_turn_contains_exact_line(text, key) for text in texts)
         if matches != 1:
-            return None, "history_prior_anchor_missing" if matches == 0 else "history_prior_anchor_ambiguous"
+            return texts, "history_prior_anchor_missing" if matches == 0 else "history_prior_anchor_ambiguous"
         return texts, ""
     return None, "history_turns_unrecognized"
 
@@ -940,7 +940,7 @@ def prepare_existing_chat(
         history, reason = (_read_user_history(page, prior_request_id)
                            if prior_request_id is not None else (None, ""))
         history_ready = prior_request_id is None or history is not None
-        return (same_chat and empty and live_composer_ready and history_ready
+        return (same_chat and empty and live_composer_ready
                 and str(getattr(page, "url", "") or "") == page_url), {
             **({"historyReady": history_ready, "reason": reason, "history": history}
                if prior_request_id is not None else {}),
@@ -960,7 +960,7 @@ def prepare_existing_chat(
         code = COMPOSER_NOT_EMPTY if details.get("composerEmpty") is False else EXISTING_CHAT_NOT_CONFIRMED
         return {"ok": False, "code": code, "details": details}
     return {"ok": True, "code": EXISTING_CHAT_CONFIRMED, "composer": composer, "details": details,
-            **({"history": history} if prior_request_id is not None else {})}
+            **({"history": history} if history is not None else {})}
 
 
 def insert_prompt(
@@ -1283,6 +1283,9 @@ def _page_diagnostic(page: Any) -> dict[str, Any]:
 
 def _owned_unsent_binding(page: Any, transaction: dict[str, Any],
                           evidence: dict[str, Any] | None = None) -> bool:
+    action_guard = getattr(page, "_postman_action_guard", None)
+    if action_guard is not None and not action_guard():
+        return False
     strict_history = "userHistory" in transaction
     history, history_reason = (_read_user_history(page, transaction["priorRequestId"])
                                if strict_history else (None, ""))
@@ -1475,8 +1478,8 @@ def submit_existing_prompt(
     if isinstance(transaction, dict):
         history = prep.get("history")
         transaction.update({"ownedUrl": prep["details"]["pageUrl"],
-                            "userCount": len(history) if prior_request_id is not None else len(collect_user_turn_texts(page))})
-        if prior_request_id is not None:
+                            "userCount": len(history) if history is not None else len(collect_user_turn_texts(page))})
+        if history is not None:
             transaction.update(userHistory=history, priorRequestId=prior_request_id)
     attachment_id = None
     if input_attachment:
@@ -1508,6 +1511,8 @@ def submit_existing_prompt(
         conversation_url=conversation_url, artifact_mode=artifact_mode,
         **({"input_attachment": input_attachment, "attachment_id": attachment_id} if input_attachment else {}))
     result["details"].update(inserted.get("details", {}))
+    if prior_request_id is not None:
+        result["details"]["priorHistoryReason"] = prep.get("details", {}).get("reason", "")
     return result
 
 

@@ -28,18 +28,13 @@ function selectPriorRequest(operations, lane, conversationRef) {
       op?.transportKind === 'devspace' && op.requestId === requestId)
     if (matches.length !== 1) continue
     const op = matches[0], terminal = op.terminal, result = terminal?.result
-    if (op.state !== 'received' || op.phase === 'not-sent' ||
-        op.childSessionId !== lane.childId || terminal?.status !== 'POSTMAN_BRIDGE_TERMINAL' ||
-        terminal.requestId !== requestId || terminal.transportKind !== 'devspace' ||
-        result?.requestId !== requestId || result.conversationRef !== conversationRef ||
-        result.transportDiagnostics?.submitProof?.sendState === 'PROVEN_NOT_SENT' ||
-        result.transportDiagnostics?.sendProof?.sendState === 'PROVEN_NOT_SENT') continue
-    const journal = result.transportDiagnostics?.transportEventJournal
-    const positive = result.source === 'text_fallback' ||
-      (result.source === 'image_result' && result.evidenceState === 'BROWSER_VERIFIED_IMAGE') ||
-      (result.source === 'bell' && Array.isArray(journal) && journal.some(event =>
-        event?.event === 'STAGE_STARTED'))
-    if (positive) return requestId
+    // This is an optional history hint, never conversation authority. The
+    // durable lane and native child reproof authorize the exact saved URL.
+    if (op.childSessionId !== lane.childId || op.executionRevoked ||
+        terminal && (terminal.requestId !== requestId || terminal.transportKind !== 'devspace') ||
+        result?.requestId && result.requestId !== requestId ||
+        result?.conversationRef && result.conversationRef !== conversationRef) continue
+    return requestId
   }
   return null
 }
@@ -106,8 +101,7 @@ export function createPostmanDevspaceLuna(ctx, contexts, direct) {
           ? existing.conversationRef : null
         const priorRequestId = selectPriorRequest(rowOf(leaderId)?.bridgeOperations,
           existing, continuationRef)
-        if (!priorRequestId) return { status: 'POSTMAN_DEVSPACE_PRIOR_HISTORY_UNPROVEN' }
-        job.priorRequestId = priorRequestId
+        if (priorRequestId) job.priorRequestId = priorRequestId
         if (await ctx.subagents.inspectOpenContinuableChild(parent, childId) !== true)
           return { status: 'POSTMAN_DEVSPACE_LUNA_REPROOF_FAILED' }
         await writeLuna(leaderId, lane => {
@@ -179,6 +173,12 @@ export function createPostmanDevspaceLuna(ctx, contexts, direct) {
           bridgeJobId: job.bridgeJobId, leaderSessionId: leaderId, lunaSessionId: childId,
           worktree: job.approvedScope?.root ?? job.taskContext.worktree,
           mode: job.devspaceMode,
+          computerUse: job.computerUse ?? 'deny',
+          ...(job.devspaceRecovery ? { recovery: {
+            sourceRequestId: job.devspaceRecovery.sourceRequestId,
+            attempt: job.devspaceRecovery.attempt, intent: 'observe-then-continue',
+            ...(job.recoverySourceChannel ? { sourceChannel: job.recoverySourceChannel } : {}),
+          } } : {}),
           ...(continuationRef ? { conversationUrl: continuationRef } : {}),
           ...(job.priorRequestId ? { priorRequestId: job.priorRequestId } : {}),
         },
@@ -187,7 +187,7 @@ export function createPostmanDevspaceLuna(ctx, contexts, direct) {
           await change(leaderId, row => {
             const op = row.bridgeOperations?.[job.bridgeJobId]
             const lane = row.devspaceLuna
-            if (op?.state !== 'pending' || op.childSessionId !== childId ||
+            if (op?.state !== 'pending' || op.executionRevoked || op.childSessionId !== childId ||
                 lane?.childId !== childId || lane.activeBridgeJobId !== job.bridgeJobId ||
                 op.requestId && op.requestId !== requestId)
               throw Error('POSTMAN_DEVSPACE_REQUEST_BINDING_CHANGED')
@@ -205,9 +205,15 @@ export function createPostmanDevspaceLuna(ctx, contexts, direct) {
         () => direct.wait(childId, undefined, job.controller.signal), job.controller.signal)
       trusted = { ...trusted, transportKind: 'devspace',
         childStopReason: null, lunaSessionId: childId }
+      // An archived job may finish after its lane has already been reused.
+      // Return its own evidence, never mutate or relay into the new assignment.
+      if (!sameParent(parent, job.taskContext) ||
+          rowOf(leaderId)?.bridgeOperations?.[job.bridgeJobId]?.executionRevoked)
+        return trusted
       const resultRef = trusted.result?.conversationRef
       // Never guess or reuse a ChatGPT URL from an unverified browser page.
-      const nextRef = typeof resultRef === 'string' && CONVERSATION.test(resultRef)
+      const nextRef = typeof resultRef === 'string' && CONVERSATION.test(resultRef) &&
+        (!continuationRef || resultRef === continuationRef)
         ? resultRef : continuationRef
       await writeLuna(leaderId, lane => {
         if (lane.childId !== childId || lane.activeBridgeJobId !== job.bridgeJobId)
@@ -232,7 +238,9 @@ export function createPostmanDevspaceLuna(ctx, contexts, direct) {
         return { ...trusted, lunaDelivery: 'UNKNOWN', lunaDiagnostic: diagnostics(error) }
       }
     } catch (error) {
-      if (childId && rowOf(leaderId)?.devspaceLuna?.childId === childId) {
+      if (childId && sameParent(parent, job.taskContext) &&
+          !rowOf(leaderId)?.bridgeOperations?.[job.bridgeJobId]?.executionRevoked &&
+          rowOf(leaderId)?.devspaceLuna?.childId === childId) {
         try { await writeLuna(leaderId, lane => ({
           ...lane, state: 'uncertain', activeBridgeJobId: null,
         })) } catch {}
@@ -256,7 +264,7 @@ export function createPostmanDevspaceLuna(ctx, contexts, direct) {
     const op = row?.bridgeOperations?.[bridgeJobId]
     const lane = row?.devspaceLuna
     if (!op || !['pending', 'unknown'].includes(op.state) ||
-        op.transportKind !== 'devspace' || !op.requestId ||
+        op.transportKind !== 'devspace' || op.executionRevoked || !op.requestId ||
         typeof op.devspace?.channel !== 'string' || op.devspace.coldBellRecovery ||
         !lane || lane.state !== 'ready' || lane.childId !== op.childSessionId ||
         !lane.requestIds?.includes(op.requestId) ||
@@ -327,7 +335,7 @@ export function createPostmanDevspaceLuna(ctx, contexts, direct) {
         job.trustedTerminal.result?.source === 'bell') return false
     const row = rowOf(parent.id), op = row?.bridgeOperations?.[job.bridgeJobId]
     const lane = row?.devspaceLuna
-    if (!op || op.state !== 'received' || op.terminal?.requestId !== job.requestId ||
+    if (!op || op.executionRevoked || op.state !== 'received' || op.terminal?.requestId !== job.requestId ||
         op.childSessionId !== job.childSessionId || lane?.childId !== job.childSessionId ||
         lane.state !== 'ready' || !op.devspace?.channel || op.devspace?.lateBellRecovery) return false
     let binding, bell

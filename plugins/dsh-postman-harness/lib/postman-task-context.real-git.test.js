@@ -295,3 +295,37 @@ test('recover verifies every delayed REQ parent and rejects missing, contradicto
   }
 })
 
+
+
+test('dirty failed runner isolation retains files/index and pinned audit through JSON restart', {timeout:60000},async t=>{
+  const f=await recoveryFixture(t)
+  const oldIndex=await call(f.tree,'write-tree')
+  await writeFile(join(f.tree,'private.txt'),'untracked user data')
+  await writeFile(join(f.tree,'history.txt'),'staged user data');await call(f.tree,'add','history.txt')
+  const dirtyIndex=await call(f.tree,'write-tree');assert.notEqual(dirtyIndex,oldIndex)
+  await f.first.change(f.leader.id,row=>({...row,runner:{state:'failed',requestId:'REQ_FAILED'},
+    bridgeOperations:{unknown:{state:'unknown',requestId:'REQ_UNKNOWN'}}}))
+  const gitCommand=async(cwd,...args)=>{
+    if(args.join(' ')==='remote get-url origin')return 'https://github.com/AndrewVerhoturov1/dsh-workspace.git'
+    if(args[0]==='fetch'&&args[1]==='--prune')return call(cwd,'fetch',f.bare,'+refs/heads/*:refs/remotes/origin/*')
+    return call(cwd,...args.map(arg=>arg==='origin'?f.bare:arg))
+  }
+  let contexts=createPostmanTaskContexts({registry:f.first,gitCommand,temporaryDirectory:()=>f.temp})
+  assert.equal((await contexts.recover(f.leader)).status,'POSTMAN_TASK_CONTEXT_ALREADY_READY')
+  const next=await contexts.restore(f.leader,{isBusy:()=>true,beforeRestore:async()=>{throw Error('unrelated worker must not block isolation')}})
+  assert.equal(next.status,'POSTMAN_TASK_RESTORE_ISOLATED',JSON.stringify(next))
+  assert.notEqual(next.worktree,f.tree);assert.notEqual(next.branch,f.branch)
+  assert.equal(next.baseCommit,f.mainSha)
+  assert.equal(await readFile(join(f.tree,'private.txt'),'utf8'),'untracked user data')
+  assert.equal(await readFile(join(f.tree,'history.txt'),'utf8'),'staged user data')
+  assert.equal(await call(f.tree,'write-tree'),dirtyIndex,'original staged index remains exact')
+  assert.equal(await call(next.worktree,'status','--porcelain=v1','--untracked-files=all'),'')
+  await f.first.close()
+  const registry=await f.open();contexts=createPostmanTaskContexts({registry,gitCommand})
+  assert.equal((await contexts.recover(f.leader)).status,'POSTMAN_TASK_CONTEXT_ALREADY_READY')
+  const previous=registry.get(f.leader.id).retiredTasks.at(-1)
+  assert.equal(previous.abandoned,true);assert.equal(previous.runner.state,'failed')
+  assert.equal(previous.bridgeOperations.unknown.state,'unknown');assert.equal(previous.workers.W.id,'W')
+  assert.deepEqual(registry.get(f.leader.id).workers,{})
+  await registry.close()
+})

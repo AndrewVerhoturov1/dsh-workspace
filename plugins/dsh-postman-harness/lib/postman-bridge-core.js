@@ -24,7 +24,7 @@ export const POSTMAN_SECRETARY_TOOL_NAME = 'postman_secretary'
 export const POSTMAN_SECRETARY_LEDGER_TOOL_NAME = 'postman_secretary_ledger'
 export const WORKER_CONTROL_TOOLS = Object.freeze(['postman_worker', 'postman_worker_interrupt', 'postman_worker_list', 'postman_worker_stop', 'postman_worker_compact', 'postman_worker_fresh'])
 export const DELEGATION_TOOLS = Object.freeze(['subagent', 'subagent_fork', 'workflow', 'ralph', 'send_message', 'interrupt_agent'])
-export const SECRETARY_TOOLS = Object.freeze(['read', 'glob', 'grep', 'skill', 'pwsh', 'bash', 'write', 'edit', 'report', 'notify_parent', 'job_output', 'job_kill', 'job_list', 'postman_secretary_ledger'])
+export const SECRETARY_TOOLS = Object.freeze(['read', 'glob', 'grep', 'skill', 'pwsh', 'bash', 'write', 'edit', 'web_search', 'web_fetch', 'report', 'notify_parent', 'job_output', 'job_kill', 'job_list', 'postman_secretary_ledger'])
 export const POSTMAN_BRIDGE_AGENT_OPTIONS = Object.freeze({
   provider: 'codex',
   model: 'gpt-6-luna',
@@ -91,7 +91,7 @@ export const POSTMAN_PTC_SUCCESS_STATUSES = Object.freeze({
   postman_task_prepare: Object.freeze(['TASK_CONTEXT_READY', 'POSTMAN_TASK_READ_ONLY_READY', 'POSTMAN_TASK_CONTEXT_ALREADY_READY']),
   postman_worker: Object.freeze(['POSTMAN_WORKER_TASK_ACCEPTED']),
   postman_sol_worker: Object.freeze(['POSTMAN_WORKER_TASK_ACCEPTED']),
-  postman_task_restore: Object.freeze(['TASK_CONTEXT_RESTORED']),
+  postman_task_restore: Object.freeze(['TASK_CONTEXT_RESTORED', 'POSTMAN_TASK_RESTORE_ISOLATED']),
   postman_task_close: Object.freeze(['POSTMAN_TASK_CLOSED']),
   postman_team_status: Object.freeze(['POSTMAN_TEAM_STATUS']),
   postman_input_files: Object.freeze(['POSTMAN_INPUT_READY', 'POSTMAN_INPUT_CLEANED', 'POSTMAN_INPUT_ALREADY_CLEANED', 'POSTMAN_INPUT_LOCATED', 'POSTMAN_ARCHIVE_PACKED', 'POSTMAN_ARCHIVE_LISTED', 'POSTMAN_ARCHIVE_UNPACKED']),
@@ -100,8 +100,8 @@ export const POSTMAN_PTC_SUCCESS_STATUSES = Object.freeze({
   postman_worker_compact: Object.freeze(['POSTMAN_WORKER_COMPACTED']),
   postman_secretary_ledger: Object.freeze(['POSTMAN_SECRETARY_LEDGER']),
   postman_bridge_list: Object.freeze(['POSTMAN_BRIDGE_LIST']),
-  postman_bridge_status: Object.freeze(['POSTMAN_BRIDGE_QUEUED', 'POSTMAN_BRIDGE_RUNNING', 'POSTMAN_BRIDGE_TERMINAL']),
-  postman_bridge_stop: Object.freeze(['POSTMAN_BRIDGE_STOP_REQUESTED', 'POSTMAN_BRIDGE_ALREADY_TERMINAL', 'POSTMAN_BRIDGE_NOT_SENT']),
+  postman_bridge_status: Object.freeze(['POSTMAN_BRIDGE_QUEUED', 'POSTMAN_BRIDGE_RUNNING', 'POSTMAN_BRIDGE_TERMINAL', 'POSTMAN_BRIDGE_ACCEPTED', 'POSTMAN_BRIDGE_ARCHIVED']),
+  postman_bridge_stop: Object.freeze(['POSTMAN_BRIDGE_STOP_REQUESTED', 'POSTMAN_BRIDGE_ALREADY_TERMINAL', 'POSTMAN_BRIDGE_NOT_SENT', 'POSTMAN_BRIDGE_ARCHIVED']),
   postman_devspace_luna_close: Object.freeze(['POSTMAN_DEVSPACE_LUNA_CLOSED', 'POSTMAN_DEVSPACE_LUNA_ALREADY_CLOSED']),
   postman_devspace_control: Object.freeze(['POSTMAN_DEVSPACE_CONTROL_QUEUED', 'POSTMAN_DEVSPACE_CONTROL_STATUS']),
   postman_secretary: Object.freeze(['POSTMAN_WORKER_TASK_ACCEPTED']),

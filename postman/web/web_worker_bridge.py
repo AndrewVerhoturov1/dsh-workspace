@@ -381,9 +381,9 @@ class WebWorkerBridge:
                         not browser_submit.is_bound_chat_url(conversation_url)))):
                 return _result(BRIDGE_INVALID_CONFIG, ok=False, details={'reason': 'devspace_binding_invalid'})
             prior = devspace_binding.get("priorRequestId")
-            if conversation_url is not None and (not isinstance(prior, str) or
+            if prior is not None and (not isinstance(prior, str) or
                     not re.fullmatch(r"REQ_\d{8}T\d{6}Z_\d{4}", prior) or prior == request_id):
-                return _result(BRIDGE_INVALID_CONFIG, ok=False, details={"reason": "prior_history_unproven"})
+                return _result(BRIDGE_INVALID_CONFIG, ok=False, details={"reason": "invalid_prior_request_id"})
             if conversation_url is None and prior is not None:
                 return _result(BRIDGE_INVALID_CONFIG, ok=False, details={"reason": "invalid_prior_request_id"})
             request_identity.assert_canonical_request_id(request_id)
@@ -502,6 +502,95 @@ class WebWorkerBridge:
                     pass
                 self._write_state(request, WEB_STARTING, pageDiagnostic=diagnostic)
 
+                if devspace_binding is not None:
+                    from postman.devspace.controls import revoked
+                    from postman.devspace.signal import load_binding, read_event
+                    recovery_source = None
+
+                    def source_completed():
+                        return bool(recovery_source is not None and read_event(recovery_source))
+
+                    def source_result():
+                        details = {"source": "transport_diagnostic", "diagnostic": "UNKNOWN",
+                            "conversationRef": conversation_url, "recoverySourceCompleted": True,
+                            "message": "The source REQ received its own bell; no new recovery Send.",
+                            "assistantText": ""}
+                        self._write_state(request, "DEVSPACE_DIAGNOSTIC", **details)
+                        return {"ok": True, "code": "DEVSPACE_DIAGNOSTIC", "details": details}
+
+                    page._postman_action_guard = lambda: not revoked(devspace_binding) and not source_completed()
+                    if revoked(devspace_binding):
+                        return self._fail(request, "POSTMAN_DEVSPACE_REVOKED")
+                    recovery_binding = devspace_binding.get("recovery")
+                    if recovery_binding is not None:
+                        source = recovery_binding.get("sourceRequestId") if isinstance(recovery_binding, dict) else None
+                        if (conversation_url is None or not isinstance(source, str) or source == request_id or
+                                not re.fullmatch(r"REQ_\d{8}T\d{6}Z_\d{4}", source) or
+                                type(recovery_binding.get("attempt")) is not int or recovery_binding["attempt"] < 1 or
+                                recovery_binding.get("intent") != "observe-then-continue"):
+                            return self._fail(request, "POSTMAN_DEVSPACE_RECOVERY_INVALID")
+                        if recovery_binding.get("sourceChannel") is not None:
+                            recovery_source = load_binding(recovery_binding["sourceChannel"],
+                                root=Path(devspace_binding["channel"]).parent)
+                            if (recovery_source["requestId"] != source or
+                                    any(recovery_source[key] != devspace_binding[key]
+                                        for key in ("leaderSessionId", "lunaSessionId")) or
+                                    recovery_source["channel"] == devspace_binding["channel"]):
+                                return self._fail(request, "POSTMAN_DEVSPACE_RECOVERY_OWNER_MISMATCH")
+                            if source_completed():
+                                return source_result()
+                        # Read the saved owned chat before a distinct corrective REQ.
+                        # Evidence from its old response never completes this new REQ.
+                        page.goto(conversation_url, wait_until="domcontentloaded", timeout=timeout_ms)
+                        if str(page.url) != conversation_url:
+                            return self._fail(request, "POSTMAN_DEVSPACE_RECOVERY_CHAT_MISMATCH")
+                        history, reason = browser_submit._read_user_history(page, source)
+                        observation = {
+                            "sourceRequestId": source, "attempt": recovery_binding["attempt"],
+                            "messageObserved": history is not None and any(browser_submit._turn_contains_exact_line(
+                                text, "POSTMAN_REQUEST_ID: " + source) for text in history),
+                            "observationReason": reason, "historyReadable": history is not None,
+                            "newMessageSent": False, "localOperationsMayContinue": True}
+                        if observation["messageObserved"]:
+                            try:
+                                turns, _ = browser_observer.snapshot_turns(page)
+                                source_prompt = next(text for text in history if browser_submit._turn_contains_exact_line(
+                                    text, "POSTMAN_REQUEST_ID: " + source))
+                                source_anchor = browser_observer.find_user_anchor(turns, source_prompt)
+                                following = next((t for t in turns if source_anchor is not None and
+                                    t["index"] > source_anchor and t.get("role") in {"assistant", "user"}), None)
+                                if following is not None and following.get("role") == "assistant":
+                                    observation["assistantText"] = str(following.get("text", ""))[:8000]
+                            except Exception:
+                                observation["responseObservation"] = "UNKNOWN"
+                        self._write_state(request, WEB_STARTING, recoveryObservation=observation)
+                        if source_completed():
+                            return source_result()
+                        # The recovery corrective prompt checks existing work; it
+                        # must not wait forever behind the previous generation.
+                        from postman.devspace.observer import stop_control
+                        stop_state, stop_button = stop_control(page)
+                        if stop_state == "PRESENT" and stop_button is not None:
+                            if source_completed():
+                                return source_result()
+                            if revoked(devspace_binding) or str(page.url) != conversation_url:
+                                return self._fail(request, "POSTMAN_DEVSPACE_REVOKED")
+                            self._write_state(request, WEB_STARTING, recoveryUiStop={
+                                "state": "CLICK_PENDING", "localOperationsMayContinue": True})
+                            if source_completed():
+                                return source_result()
+                            if revoked(devspace_binding) or str(page.url) != conversation_url:
+                                return self._fail(request, "POSTMAN_DEVSPACE_REVOKED")
+                            try:
+                                stop_button.click(timeout=1500)
+                                stop_state = "CLICKED"
+                            except Exception:
+                                stop_state = "CLICK_UNKNOWN"
+                            self._write_state(request, WEB_STARTING, recoveryUiStop={
+                                "state": stop_state, "localOperationsMayContinue": True})
+                        if source_completed():
+                            return source_result()
+
                 if image_recovery_proof is not None:
                     # Re-prove the original image read-only; never adopt the latest image.
                     prepared = browser_submit.prepare_existing_chat(page, conversation_url, timeout_ms=timeout_ms)
@@ -549,12 +638,31 @@ class WebWorkerBridge:
                         artifact_mode=artifact_mode and not image_flow)
                 else:
                     submitted = browser_submit.submit_existing_prompt(
-                        page, prompt, conversation_url, timeout_ms=timeout_ms,
+                        page, prompt, conversation_url,
+                        timeout_ms=max(timeout_ms, 60_000) if devspace_binding is not None and devspace_binding.get("recovery") is not None else timeout_ms,
                         artifact_mode=artifact_mode and not image_flow,
-                        **({"prior_request_id": devspace_binding["priorRequestId"]} if devspace_binding is not None else {}),
+                        **({"navigate": False}
+                           if devspace_binding is not None and devspace_binding.get("recovery") is not None else {}),
+                        **({"prior_request_id": devspace_binding["priorRequestId"]}
+                           if devspace_binding is not None and devspace_binding.get("priorRequestId") is not None else {}),
                         **({"input_attachment": input_attachment} if input_attachment else {})
                     )
                 self._write_state(request, WEB_STARTING, submitProof=submitted)
+                if devspace_binding is not None and submitted.get("sendState") != browser_submit.SEND_PROVEN_NOT_SENT:
+                    # Once the distinct REQ may have been sent, a late source
+                    # bell belongs only to its old REQ and cannot fence this one.
+                    page._postman_action_guard = lambda: not revoked(devspace_binding)
+                if devspace_binding is not None and devspace_binding.get("recovery") is not None:
+                    observation = (self.read_state(request_id) or {}).get("recoveryObservation")
+                    if observation is not None:
+                        send_state = submitted.get("sendState")
+                        self._write_state(request, WEB_STARTING, recoveryObservation={**observation,
+                            "newMessageSent": (None if send_state == browser_submit.SEND_UNKNOWN
+                                               else send_state == browser_submit.SEND_PROVEN_SENT),
+                            "sendState": send_state})
+                if (devspace_binding is not None and submitted.get("sendState") == browser_submit.SEND_PROVEN_NOT_SENT
+                        and source_completed()):
+                    return source_result()
                 if not submitted.get("ok"):
                     if devspace_binding is not None and submitted.get("sendState") == browser_submit.SEND_UNKNOWN:
                         # The click may have reached ChatGPT even if its rendered user turn

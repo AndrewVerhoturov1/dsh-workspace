@@ -293,3 +293,100 @@ test('late report callback cannot resurrect removed A or mutate B', { skip: cuto
   assert.equal(f.registry.get(f.leader.id).workers[a], undefined)
   assert.deepEqual(f.registry.get(f.leader.id).workers[b.workerSessionId], before)
 })
+
+// Exact native cutoff seam: retirement writes precede the awaited release. It
+// deliberately supplies no report, turn/end or synthetic success evidence.
+function cutoff(f) {
+  const closed = new Set()
+  f.ctx.subagents.closeContinuableChild = async (parent, id, check) => {
+    assert.equal(parent, f.leader)
+    if (!await check()) return false
+    closed.add(id); f.agents.delete(id)
+    return true
+  }
+  f.ctx.subagents.inspectClosedContinuableChild = async (parent, id) => parent === f.leader && closed.has(id) && !f.agents.has(id)
+  return closed
+}
+
+test('close idle child without historical report; explicit fresh cancels active child and preserves task status', async () => {
+  const f=fixture(), id=await start(f); cutoff(f)
+  f.agents.get(id).inbox.hasPending=false
+  const closed=await f.tools.stopTool.execute({mode:'close',workerSessionId:id},f.exec)
+  assert.equal(closed.status,'POSTMAN_WORKER_STOPPED')
+  assert.equal(closed.taskCompleted,false);assert.equal(closed.resultReported,false)
+  assert.equal(f.registry.get('leader').retiredWorkers.at(-1).lifecycle.reports.length,0)
+  const next=await f.tools.taskTool.execute({task:'replacement',createNew:true},f.exec)
+  const active=f.agents.get(next.workerSessionId); active.status='running'
+  const fresh=await f.tools.freshTool.execute({workerSessionId:active.id,task:'new bounded assignment'},f.exec)
+  assert.equal(fresh.status,'POSTMAN_WORKER_TASK_ACCEPTED',JSON.stringify(fresh))
+  assert.notEqual(fresh.workerSessionId,active.id)
+  assert.equal(fresh.fresh,true);assert.equal(f.agents.has(active.id),false)
+})
+
+test('cancel failure retains quota until exact cold closure proof, then replacement can start',async()=>{
+  const f=fixture(),id=await start(f)
+  const closed=cutoff(f)
+  f.ctx.subagents.closeContinuableChild=async(_parent,_id,check)=>{await check();throw Error('native stop outcome unknown')}
+  const failed=await f.tools.stopTool.execute({mode:'cancel',workerSessionId:id},f.exec)
+  assert.equal(failed.status,'POSTMAN_WORKER_STOP_FAILED')
+  assert.equal(f.registry.get('leader').workers[id].state,'uncertain')
+  assert.equal(f.agents.has(id),true,'live process has not been called stopped')
+  f.tools.dispose();closed.add(id);f.agents.delete(id)
+  const restarted=createPostmanWorkerTools(f.ctx,undefined,f.contexts)
+  const listing=await restarted.listTool.execute({},f.exec)
+  assert.equal(listing.workers.length,0,'durable exact native closed proof frees quota after restart')
+  assert.equal(f.registry.get('leader').workers[id],undefined)
+  assert.equal((await restarted.taskTool.execute({task:'independent replacement',createNew:true},f.exec)).status,'POSTMAN_WORKER_TASK_ACCEPTED')
+})
+
+test('cancel cannot release slot before native process release or address foreign session',async()=>{
+  const f=fixture(),id=await start(f)
+  const gate=Promise.withResolvers(),entered=Promise.withResolvers()
+  f.ctx.subagents.closeContinuableChild=async(parent,target,check)=>{
+    assert.equal(parent,f.leader);assert.equal(target,id)
+    if(!await check())return false
+    entered.resolve();await gate.promise;f.agents.delete(target);return true
+  }
+  const stopping=f.tools.stopTool.execute({mode:'cancel',workerSessionId:id},f.exec)
+  await entered.promise
+  assert.equal(f.registry.get('leader').workers[id].state,'stopping')
+  assert.equal(f.agents.has(id),true)
+  assert.equal((await f.tools.stopTool.execute({workerSessionId:id},{...f.exec,agent:{...f.leader}})).status,'POSTMAN_WORKER_CALLER_REJECTED')
+  gate.resolve();assert.equal((await stopping).status,'POSTMAN_WORKER_CANCELLED')
+  assert.equal(f.registry.get('leader').workers[id],undefined)
+})
+
+
+test('Secretary invokes registered web_search and web_fetch through actual native ToolRuntime', {timeout:15000}, async t=>{
+  const {stage1Runtime,stage1Native}=await import('./fixtures/postman-stage1-runtime.js')
+  const {mkdtemp,rm}=await import('node:fs/promises'),{tmpdir}=await import('node:os'),{join}=await import('node:path')
+  const {defineTool}=await stage1Native('dsh-tools')
+  const dir=await mkdtemp(join(tmpdir(),'postman-secretary-web-')),effects=[]
+  const f=await stage1Runtime(dir,{setupTools(ctx){for(const name of ['web_search','web_fetch'])ctx.tools.register(defineTool({
+    name,description:'Registered inert provider',parameters:{},output:{schema:{type:'object',additionalProperties:true},render:()=>[]},
+    execute(_args,exec){effects.push({name,session:exec.agent.id});return {source:'provider fixture'}}}))},
+    plan:(_a,r,n)=>{if(n===1){assert.ok(r.tools.some(t=>t.name==='web_search'));return {name:'web_search'}}
+      if(n===2){assert.ok(r.tools.some(t=>t.name==='web_fetch'));return {name:'web_fetch'}}
+      return {name:'report',args:{output:'PARTIAL: registered provider fixture invoked; no live web claim'}}}})
+  t.after(async()=>{await f.dispose();await rm(dir,{recursive:true,force:true,maxRetries:5})})
+  const accepted=await f.run(f.worker.secretaryTool,{task:'Bounded registered search provider check'})
+  assert.equal(accepted.status,'POSTMAN_WORKER_TASK_ACCEPTED')
+  await f.settled(accepted.workerSessionId)
+  assert.deepEqual(effects,[{name:'web_search',session:accepted.workerSessionId},{name:'web_fetch',session:accepted.workerSessionId}])
+})
+
+
+test('cancel witness drift is an identity change, never a new approval request',async()=>{
+  const f=fixture(),id=await start(f);cutoff(f)
+  const list=f.ctx.subagents.listChildren;let reads=0
+  f.ctx.subagents.listChildren=async(...args)=>{
+    if(++reads===2)await f.registry.change('leader',row=>({...row,workers:{...row.workers,[id]:{...row.workers[id],
+      lifecycle:{...row.workers[id].lifecycle,admissions:[...row.workers[id].lifecycle.admissions,
+        {id:'new-assignment',state:'accepted',messageId:'new-message'}]}}}}))
+    return list(...args)
+  }
+  const result=await f.tools.stopTool.execute({mode:'cancel',workerSessionId:id},f.exec)
+  assert.equal(result.status,'POSTMAN_WORKER_BINDING_CHANGED')
+  assert.equal(f.agents.has(id),true);assert.equal(f.registry.get('leader').workers[id].state,'ready')
+  assert.deepEqual(f.calls.approvals,[])
+})

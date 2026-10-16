@@ -21,7 +21,7 @@ test('Worker hardBudget 8 stops at its own limit; FAST schemas expose only assig
   }
   assert.equal(Object.hasOwn(f.worker.solTaskTool.parameters.properties,'hardBudget'),false)
   assert.equal((await f.run(f.worker.solTaskTool,{task:'Sol has no FAST budget',hardBudget:8})).status,'POSTMAN_WORKER_BUDGET_INVALID')
-  for(const hardBudget of [7,61,8.5])
+  for(const hardBudget of [7,101,8.5])
     assert.equal((await f.run(f.worker.taskTool,{task:'invalid budget',hardBudget})).status,'POSTMAN_WORKER_BUDGET_INVALID')
   assert.equal((await f.run(f.worker.taskTool,{task:'no parent soft limit',hardBudget:8,softLimit:1})).status,'POSTMAN_WORKER_BUDGET_INVALID')
   const id=accepted(await f.run(f.worker.taskTool,{task:'Exact bounded check',hardBudget:8}))
@@ -99,4 +99,18 @@ test('existing storage drops obsolete team fields and preserves current and pend
   assert.deepEqual(row.workers[id].pendingBudgets.pending,budget)
   assert.deepEqual(row.retiredWorkers[0].budget,budget)
   assert.equal(row.runner.state,'none');assert.equal(row.workers[id].ownerSessionId,'leader')
+})
+
+
+test('explicit FAST hardBudget100 is admitted with soft80; default stays60/48',{timeout:15000},async t=>{
+  const f=await fixture(t)
+  const explicit=accepted(await f.run(f.worker.taskTool,{task:'Bounded result with explicitly selected upper budget',hardBudget:100}))
+  await f.settled(explicit)
+  const ordinary=accepted(await f.run(f.worker.taskTool,{task:'Independent default budget',createNew:true}))
+  await f.settled(ordinary)
+  const row=f.registry.get('leader')
+  assert.equal(row.workers[explicit].budget.hardLimit,100)
+  assert.equal(row.workers[explicit].budget.softLimit,80)
+  assert.equal(row.workers[ordinary].budget.hardLimit,60)
+  assert.equal(row.workers[ordinary].budget.softLimit,48)
 })

@@ -11,7 +11,7 @@ export const managementMarkers = {
     /critical path/i, /dispatch first/i, /environment readiness/i, /Dependency provenance:/,
     /tasks are independent/, /DECISION/, /IMPLEMENTATION/, /EXTERNAL_RESEARCH/,
     /Secretary/, /postman_secretary_ledger/, /PostmanDevspace/, /laneId/,
-    /postman_devspace_control/, /Computer Use/, /CHATGPT|ChatGPT/, /DeepSeek Harness/,
+    /postman_devspace_control/, /Computer Use/, /CHATGPT|ChatGPT/, /computer_use:'allow'\|'deny'/,
     /PTC = supervisor phase, not tool wrapper/, /Supervisor dispatch phase/,
     /Reconciliation\/cleanup phase/, /Known-status branching/, /external_event/,
     /not a required first step/, /no ritual snapshot or standalone model round/,

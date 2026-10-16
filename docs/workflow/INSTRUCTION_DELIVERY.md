@@ -16,19 +16,19 @@
 
 ## B. Условная, детерминированная доставка
 
-Новый workspace-policy.js в том же существующем bundle использует system-prompt/assemble и tools/pre-execute + штатный tools.guard. Нет новой службы, DSL, конфигурационных параметров или зависимостей.
+workspace-policy.js в существующем bundle использует system-prompt/assemble и сохранённые native tool/call события для определения затронутых путей. Tools/pre-execute не запрещает действия; tools.guard барьера доставки нет. Hint в inbox остаётся только для ещё не переданного нового контекста, а не каждого известного пути. Новый guard, служба или registry не добавляются.
 
 - TASK_CONTRACT: coding-возможности write/edit/shell/PTC/artifact/Worker либо точная верхнеуровневая роль Postman Leader. Загружается до первого model request.
 - REPO_POLICY: shell/PTC/task prepare/artifact либо точная роль Leader. Условие намеренно capability-based: классифицировать произвольный shell как Git/non-Git ненадёжно. Политика относится только к соответствующему репозиторию.
-- postman-leader: полный актуальный body через существующий skills.get, только top-level postman-leader или postman-leader-ptc. Наследовавший preset Worker не получает роль supervisor. Ошибка/отсутствие skill прерывает сборку, не скрывается.
-- SUBPROJECT: три существующих подпроекта postman, ptc, agents-nods-by-andrew; конкретные пути кода/документов, без универсального реестра. Учитываются cwd, file_path/path/workdir инструментов и сохранённые Host hints. На первом таком доступе без доставленного контекста действие запрещается; Host ставит hint в native inbox, следующий request автоматически содержит полный документ. Текстовые упоминания и скрытые пути внутри shell/Node не классифицируются.
+- postman-leader: canonical body через skills.get только для exact top-level Leader; inherited preset Worker не получает supervisor. Ошибка/отсутствие источника даёт WORKSPACE_INSTRUCTION_UNAVAILABLE в контексте; project-owned подмена не загружается.
+- SUBPROJECT: существующие подпроекты postman, ptc, agents-nods-by-andrew. Учитываются cwd, структурированные file_path/path/workdir и сохранённые события. Первый доступ выполняется без отказа за недоставленный snapshot; следующий запрос получает актуальные инструкции. Скрытые shell/Node пути не классифицируются.
 - Другие репозитории без этих документов не наследуют dsh-workspace TASK_CONTRACT/REPO_POLICY. Документы берутся из ближайшего проектного корня session cwd. Абсолютный доступ в другой worktree не переключает базу сессии автоматически; его собственные инструкции требуют явной сессии в том cwd или чтения.
 
-Тексты включаются как именованные динамические context sections. Штатная проекция не дублирует одинаковый snapshot на каждом шаге, заново создаёт его после compaction. Загруженность не хранится в новом boolean/state registry: история Session и существующие секции служат доказательством. Документы читаются актуальными перед сборкой/действием; изменённый текст не допускается на основании старого snapshot.
+Тексты включаются как именованные динамические context sections и восстанавливаются после compaction/restart. История Session и редкие first-touch hints сохраняют область; известный неизменный контекст не добавляет model turn и не будит ожидающего supervisor. Актуальный текст читается при сборке; устаревший snapshot не блокирует инструмент и не объявляется свежим.
 
 ## C. Runtime-invariants и границы
 
-Новая проверка допускает структурированную файловую/shell/существенную Postman-операцию только после model-facing snapshot с точным требуемым текстом. Отсутствующий/нечитаемый требуемый файл, устаревший snapshot или ещё не доставленный SUBPROJECT → WORKSPACE_POLICY_REQUIRED до тела инструмента. Monotonic tools.guard сохраняет отказ, даже если последующий middleware перепишет решение. Ошибка не запускает автоматический повтор действия.
+Отсутствующий/нечитаемый документ даёт честную WORKSPACE_INSTRUCTION_UNAVAILABLE в следующем контексте, а не WORKSPACE_POLICY_REQUIRED перед обычным инструментом. Повторная сборка заново пробует чтение. Это доставка инструкций; role/grant/защищённые данные по-прежнему проверяются отдельными runtime guards.
 
 Уже имелись и не заменены: exact top-level Postman allowlist; trusted current user/message и одноразовое consume; точные REQ/owner/ZIP grants для artifact apply; Worker ownership, lifecycle, лимиты и target identity. Они проверяются программно, не по prose child. Не требуется новый policy framework.
 
@@ -39,7 +39,7 @@
 - workspace-policy.test.js: установленный SDK, реальный AgentLoop/LocalFileSystem/skill provider/Loader/AgentPresets/Jsonl/BasicCompactionEngine; инертный LlmAdapter проверяет реально переданные request.system и request.messages. Leader → continuable child, persona/preset/cwd, полные документы, отсутствие Leader skill у child; штатное compaction удаляет baseline и следующий request восстанавливает его. Отдельный второй Node-процесс cold-resume восстанавливает Leader, exact child и SUBPROJECT.
 - ptc-worker-cold-resume.test.js расширен полными AGENTS/TASK_CONTRACT/REPO_POLICY и точной ролью skill в request: настоящие Postman Luna и Sol Worker, PTC QuickJS/ToolRuntime, отдельные процессы fresh/resumed, без живого LLM/transport.
 - task-discipline.test.js: обе настоящие profile patch-композиции загружают bundle через Loader и доставляют документы обычному coding-agent без Postman.
-- Before-action tests: первая запись не исполняется; после доставки проходит; соседний AGENTS не утёк; changed/deleted REPO_POLICY блокирует; missing Leader skill fail-closed. Model-facing assertions не равны live semantic eval послушания модели.
+- Non-blocking tests: первая запись выполняется, затем инструкции поступают модели; changed/deleted policy не запрещает shell; отсутствующий canonical skill диагностируется без project substitute. Прочие guards не изменены. Model-facing assertions не равны live eval послушания модели.
 
 ## Что ещё остаётся явным чтением
 
@@ -47,4 +47,4 @@
 
 ## Ввод в действующую установку
 
-Правка публикуется отдельным task PR в preview; merge/promotion не выполняются без отдельной команды пользователя. Тесты не меняют действующие пользовательские settings, credentials, browser state, старые ветки или worktree. После принятия устанавливается этот существующий plugin bundle и перезапускается штатный Web Host: изменения plain host package не обещают client HMR. Доступность 127.0.0.1:4173 сама по себе не доказывает загрузки нового plugin.
+Правка публикуется task PR в main; merge, stable preview и установка активного Host — отдельные этапы. Тесты не меняют settings, credentials, browser state и постоянные worktree. Доступность GUI 4173 сама по себе не доказывает загрузки нового plugin.

@@ -77,6 +77,11 @@ def wait_for_bell_after_unknown_send(binding, *, timeout_ms, sleep, monotonic,
         received = bell()
         if received:
             return received
+        if controls.revoked(binding):
+            return {"ok": True, "code": "DEVSPACE_DIAGNOSTIC", "details": {
+                "source": "transport_diagnostic", "diagnostic": "REVOKED",
+                "conversationRef": conversation_ref, "sendState": "UNKNOWN",
+                "message": "Host withdrew this request; local DevSpace tools may continue."}}
         now = monotonic()
         # Bell gets a short grace period after a correlated final text.
         if final_since is not None and now - final_since >= 12:
@@ -294,29 +299,11 @@ def wait_for_signal(page, prompt, chat_url, binding, *, timeout_ms, interval_ms,
             "message": message}}
 
     def owned_turn():
-        # Generation/activity markers are not ownership proof. Verify the exact
-        # original REQ, current last user turn and unchanged user-turn lineage.
-        if (str(getattr(page, "url", "")) != chat_url or not submit.is_bound_chat_url(chat_url)
-                or submit.request_key_line_from_prompt(prompt) !=
-                "POSTMAN_REQUEST_ID: " + binding["requestId"]):
-            return False
-        try:
-            turns, _ = observer.snapshot_turns(page)
-            original = observer.find_user_anchor(turns, prompt)
-            current = observer.find_user_anchor(turns, latest, anchor_binding=anchor)
-            if (original is None or current is None or original > current or
-                    any(t.get("role") == "user" and t["index"] > current for t in turns)):
-                return False
-            if (control.intent and control.intent["exactPromptText"] != latest
-                    and any(s["status"] == "ATTEMPTING" for s in control.slots)):
-                relation = control.intent["expectedUserTurnRelation"]
-                users = [t for t in turns if t.get("role") == "user"]
-                if (len(users) != relation["userOrdinal"] or
-                        [submit.prompt_sha256(t["text"]) for t in users] != relation["precedingUserHashes"]):
-                    return False
-            return True
-        except Exception:
-            return False
+        # The Host binding owns this exact saved chat. Visible old turns are
+        # result-correlation evidence, never a prerequisite for timed UI Stop.
+        return (not controls.revoked(binding) and str(getattr(page, "url", "")) == chat_url
+                and submit.is_bound_chat_url(chat_url) and
+                submit.request_key_line_from_prompt(prompt) == "POSTMAN_REQUEST_ID: " + binding["requestId"])
 
     completion_result = None
     stop_clicked = False
@@ -339,7 +326,7 @@ def wait_for_signal(page, prompt, chat_url, binding, *, timeout_ms, interval_ms,
         if fresh.get("code") == "DEVSPACE_SIGNAL_RECEIVED":
             return fresh
         if fresh.get("code") == observer.CHAT_CORRELATION_LOST:
-            return diagnostic("Chat correlation lost during " + stage + "; no continuation.")
+            return None  # Unreadable old history is not loss of Host chat ownership.
         details = fresh.get("details", {})
         text = details.get("assistantText", "")
         if isinstance(text, str) and text.strip():
@@ -387,6 +374,9 @@ def wait_for_signal(page, prompt, chat_url, binding, *, timeout_ms, interval_ms,
         received = bell()
         if received:
             return finish(received)
+        if controls.revoked(binding):
+            return finish(diagnostic("Host withdrew this request; local DevSpace tools may continue.",
+                                     outcome="REVOKED"))
         acted = controls.process_one(page, latest, chat_url, binding,
             activity=lambda p, prompt, url: activity_snapshot(p, prompt, url, anchor_binding=anchor),
             stop_control=stop_control, sleep=sleep, monotonic=monotonic)
@@ -431,7 +421,7 @@ def wait_for_signal(page, prompt, chat_url, binding, *, timeout_ms, interval_ms,
             marker = re.search(r"\b(CAPABILITY[ _-]*UNAVAILABLE|BLOCKED)\b", latest_text, re.I)
             outcome = ("CAPABILITY_UNAVAILABLE" if marker[1].upper().startswith("CAPABILITY") else "BLOCKED") if marker else "UNKNOWN"
             return finish(diagnostic("Completed response without local signal.", source="text_fallback", outcome=outcome))
-        if observed.get("code") == observer.CHAT_CORRELATION_LOST:
+        if observed.get("code") == observer.CHAT_CORRELATION_LOST and not owned_turn():
             return finish(diagnostic("Chat correlation lost; no resend."))
         interrupted, evidence = observer.connection_interrupted(page)
         episode = control.candidate(observer.ASSISTANT_CONNECTION_INTERRUPTED, interrupted, evidence)
@@ -461,10 +451,15 @@ def wait_for_signal(page, prompt, chat_url, binding, *, timeout_ms, interval_ms,
             if not owned_turn():
                 return finish(diagnostic("Original REQ/current user turn or conversation not proven; no Stop or Send."))
             try:
-                intent = transport_control.make_intent(page, binding["requestId"], chat_url, prompt, latest,
+                intent = transport_control.make_intent(page, binding["requestId"], chat_url, latest, latest,
                                                        slot=due["slot"], anchor_binding=anchor)
-            except ValueError:
-                return finish(diagnostic("Exact task lineage not proven; no Stop or Send."))
+            except Exception:
+                # Retain a distinct durable control even if ChatGPT virtualized
+                # old turns. The existing one-shot submit proves the new draft
+                # and its newly appended user turn independently.
+                intent = {"requestId": binding["requestId"], "conversationUrl": chat_url,
+                    "slot": due["slot"], "ownedConversationOnly": True,
+                    **transport_control.choose_continuation()}
             # One random selection per durable slot. Pin the final bytes/hash,
             # including bell and no-replay context, before any browser mutation.
             intent["controlId"] = binding["requestId"] + ":reminder:" + str(due["slot"])
@@ -481,22 +476,26 @@ def wait_for_signal(page, prompt, chat_url, binding, *, timeout_ms, interval_ms,
             if bell():
                 continue
 
-            # Reserve one original 10-second window for transient UNKNOWN,
-            # the one permitted Stop click, and read-only composer readiness.
-            # Never restart that window or extend the original task deadline.
+            # Ten seconds is an observation checkpoint, not a terminal refusal.
+            # Keep this single pinned continuation until the real composer is
+            # ready or the task deadline/ownership changes. Never repeat Stop.
             stop_clicked = False
             partial_before_stop = ""
             completion_result = None
             reproved = reproof_result("before Stop")
             if reproved:
                 return finish(bell() or reproved)
-            stop_deadline = min(monotonic() + STOP_OBSERVATION_MS / 1000, control.soft_deadline)
+            stop_deadline = control.soft_deadline
+            next_readiness_checkpoint = monotonic() + STOP_OBSERVATION_MS / 1000
             ready = False
             post = {}
             last_stop = "UNKNOWN"
             while monotonic() < stop_deadline:
                 if bell():
                     break
+                if controls.revoked(binding):
+                    return finish(diagnostic("Host withdrew this request; local DevSpace tools may continue.",
+                                             outcome="REVOKED"))
                 reproved = reproof_result("after Stop" if stop_clicked else "before Stop")
                 if reproved:
                     return finish(bell() or reproved)
@@ -519,6 +518,13 @@ def wait_for_signal(page, prompt, chat_url, binding, *, timeout_ms, interval_ms,
                             break
                         control.event("STOP_REQUESTED", slot=due["slot"], controlId=intent["controlId"])
                         persist(control.snapshot())
+                        if controls.revoked(binding):
+                            return finish(diagnostic("Host withdrew this request before Stop; local DevSpace tools may continue.",
+                                                     outcome="REVOKED"))
+                        if str(getattr(page, "url", "")) != chat_url:
+                            return finish(diagnostic("Owned conversation changed before Stop; no click."))
+                        if bell():
+                            break
                         stop_clicked = True
                         try:
                             button.click(timeout=max(1, min(1000, int((stop_deadline-monotonic())*1000))))
@@ -528,14 +534,19 @@ def wait_for_signal(page, prompt, chat_url, binding, *, timeout_ms, interval_ms,
                         continue  # Never issue a second Stop regardless of click outcome.
                 post = {"stopState": last_stop}
                 if last_stop == "ABSENT":
-                    hydration = recovery.chat_ready_snapshot(page, chat_url, latest,
-                        original_prompt=prompt, anchor_binding=anchor)
+                    hydration = submit.prepare_existing_chat(page, chat_url, navigate=False, timeout_ms=0)
                     post["hydration"] = hydration.get("details", {})
                     # Composer is ready before insertion; Send is proved only
                     # after text is inserted by submit_reminder.
                     ready = bool(hydration.get("ok") and owned_turn())
                     if ready:
                         break
+                if monotonic() >= next_readiness_checkpoint:
+                    control.event("CONTINUATION_WAITING_COMPOSER", slot=due["slot"],
+                                  clicked=stop_clicked, stopState=last_stop,
+                                  localOperationsMayContinue=stop_clicked)
+                    persist(control.snapshot())
+                    next_readiness_checkpoint = monotonic() + STOP_OBSERVATION_MS / 1000
                 sleep(min(0.25, max(0, stop_deadline-monotonic())))
             if bell():
                 continue
@@ -544,7 +555,7 @@ def wait_for_signal(page, prompt, chat_url, binding, *, timeout_ms, interval_ms,
             control.event("STOP_OBSERVED", slot=due["slot"], clicked=stop_clicked, ready=bool(ready), proof=post)
             persist(control.snapshot())
             if not ready:
-                return finish(diagnostic("Stop disappearance/composer readiness not proven within bounded observation; no Send."))
+                return finish(diagnostic("Stop disappearance/composer readiness not proven before task deadline; no Send."))
             if not stop_clicked:
                 control.event("STOP_ABSENT_DIRECT", slot=due["slot"])
                 persist(control.snapshot())
@@ -555,17 +566,31 @@ def wait_for_signal(page, prompt, chat_url, binding, *, timeout_ms, interval_ms,
                 if bell():
                     continue
                 return finish(diagnostic("REQ lineage changed before Send; no continuation."))
-            sent = reminder_policy.submit_reminder(page, intent["exactPromptText"], chat_url,
-                anchor_prompt=latest, anchor_binding=anchor, control_intent=intent,
-                operation_deadline=control.soft_deadline, sleep=sleep, monotonic=monotonic,
-                phase_probe=continuation_phase)
+            if intent.get("ownedConversationOnly"):
+                previous_guard = getattr(page, "_postman_action_guard", None)
+                def allowed():
+                    phase = continuation_phase()
+                    return (owned_turn() and (previous_guard is None or previous_guard()) and
+                        phase.get("phase") == observer.WORKING and not phase.get("bellReceived"))
+                page._postman_action_guard = allowed
+                try:
+                    sent = submit.submit_existing_prompt(page, intent["exactPromptText"], chat_url,
+                        navigate=False, timeout_ms=min(5000, max(1, int((control.soft_deadline-monotonic())*1000))))
+                finally:
+                    page._postman_action_guard = previous_guard
+            else:
+                sent = reminder_policy.submit_reminder(page, intent["exactPromptText"], chat_url,
+                    anchor_prompt=latest, anchor_binding=anchor, control_intent=intent,
+                    operation_deadline=control.soft_deadline, sleep=sleep, monotonic=monotonic,
+                    phase_probe=continuation_phase)
             if completion_result is not None and sent.get("sendState") != submit.SEND_PROVEN_SENT:
                 # The real Send guard has suppressed the draft (and attempts to
                 # clear it after insertion). Deliver the completed REQ result.
                 return finish(bell() or completion_result)
             if sent.get("sendState") == submit.SEND_PROVEN_SENT:
                 try:
-                    anchor = transport_control.confirmed_binding(page, intent, sent)
+                    anchor = (None if intent.get("ownedConversationOnly") else
+                              transport_control.confirmed_binding(page, intent, sent))
                 except ValueError:
                     control.event("CONTINUATION_PROOF_UNKNOWN", slot=due["slot"], proof=sent)
                     return finish(diagnostic("Exact reminder user-turn confirmation lost; no resend."))

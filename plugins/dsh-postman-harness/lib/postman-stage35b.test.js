@@ -141,7 +141,7 @@ for(const queued of [false,true]) test('Stage 3.5B owned report wakes Sol exactl
   } finally {hold.resolve()}
 })
 
-test('Stage 3.5B Sol terminal report rejects owned unsettled lifecycle, allows settled/cold/no children; FAST unchanged',{timeout:60000},async t=>{
+test('Stage 3.5B Sol partial reports deliver without settling owned unresolved lifecycle; FAST unchanged',{timeout:60000},async t=>{
   const solGate=Promise.withResolvers(),ownGate=Promise.withResolvers(),reviewGate=Promise.withResolvers(),entered=Promise.withResolvers(),review=Promise.withResolvers();t.after(()=>{solGate.resolve();ownGate.resolve();reviewGate.resolve()})
   const f=await fixture(t,async(a,r,n)=>{
     if(a.id==='leader')return null
@@ -159,8 +159,13 @@ test('Stage 3.5B Sol terminal report rejects owned unsettled lifecycle, allows s
     for(const id of [foreign.workerSessionId,secretary.workerSessionId,sol.id,'foreign-subtree-child'])for(const name of WORKER_CONTROL_TOOLS.filter(n=>n!=='postman_worker_list')){
       const r=await call(f,sol,name,{task:'foreign rejected',workerSessionId:id});assert.equal(r.status,'POSTMAN_WORKER_TARGET_UNKNOWN')
     }
-    const rejected=async()=>{const delivered=()=>f.leader.session.events.filter(e=>e.type==='user/message'&&e.data.source?.senderSessionId===sol.id&&JSON.stringify(e.data).includes('not allowed progress')).length;const before=delivered();const r=await f.execute(sol,'report',{output:'not allowed progress'});assert.equal(r.isError,true);assert.match(r.error.message,/POSTMAN_SOL_REPORT_REJECTED/);assert.equal(delivered(),before)}
-    await rejected() // actual running child
+    const partial=async()=>{
+      const before=structuredClone(f.registry.get('leader').workers)
+      const r=await f.execute(sol,'report',{output:'BLOCKED: owned Worker still unresolved; no PASS'})
+      assert.equal(r.isError,false,JSON.stringify(r));assert.ok(r.value.messageId)
+      assert.deepEqual(f.registry.get('leader').workers,before,'report must not manufacture child settlement')
+    }
+    await partial() // actual running child
     ownGate.resolve();await f.childDone(child.workerSessionId)
     const childReport=f.results.find(r=>r.agent.id===child.workerSessionId&&r.name==='report');assert.equal(childReport?.result.isError,false,JSON.stringify(childReport?.result))
     solGate.resolve();await review.promise // actual next model request has claimed the owned report
@@ -169,7 +174,7 @@ test('Stage 3.5B Sol terminal report rejects owned unsettled lifecycle, allows s
     for(const b of [{...binding,delivery:'pending'},{...binding,delivery:'unknown'},{...binding,state:'intent'},{...binding,state:'uncertain'},{...binding,state:'stopping'},
       {...binding,lifecycle:{...binding.lifecycle,admissions:[...binding.lifecycle.admissions,{id:'accepted-unclaimed',state:'accepted',messageId:'not-consumed'}]}},
       {...binding,lifecycle:{...binding.lifecycle,admissions:[...binding.lifecycle.admissions,{id:'pending',state:'pending',messageId:null}]}}]){
-      await alter(b);await rejected()
+      await alter(b);await partial()
     }
     await alter(binding)
 

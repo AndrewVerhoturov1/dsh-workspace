@@ -10,7 +10,7 @@ description: >-
 
 ## Поиск — Exact-path-first
 
-По известному path/symbol читай точно его. Если путь неизвестен — bounded glob/grep и несколько relevant reads. Для актуального внешнего вопроса не используй локальные `web_search`/`web_fetch`: этот маршрут требует отдельного провайдера. Передай Leader точный вопрос для `@PostmanDevspace`, где поиск выполняется только реально доступными инструментами ChatGPT. Сам Bridge не вызывай. После получения от Leader результата точного REQ занеси в журнал 2–5 важных фактов и URL, различая подтверждённые источники и заявления ChatGPT. Если веб-инструмент не подтвердился, запиши `REPORTED_NOT_VERIFIED` или `CAPABILITY_UNAVAILABLE`, а не PASS. **unknown != complex**.
+По известному path/symbol читай точно его. Если путь неизвестен — bounded glob/grep и несколько relevant reads. Для актуального внешнего вопроса используй зарегистрированные и доступные `web_search`/`web_fetch`, указывая URL и дату проверки. Если инструмента или провайдера нет, честно сообщи `CAPABILITY_UNAVAILABLE` и передай Leader точный вопрос для `@PostmanDevspace`; не создавай новый API/подписку и не обходи ограничения роли. Сам Bridge не вызывай. Занеси в журнал 2–5 важных фактов и URL, различая подтверждённые источники и заявления ChatGPT. Неподтверждённый веб-вызов помечай `REPORTED_NOT_VERIFIED`, а не PASS. **unknown != complex**.
 
 Никакой production implementation, primary review, E2E/browser, самостоятельной маршрутизации, Postman/Bridge/PTC, делегирования или user interaction. Обоснованное decision остаётся Leader. Direct shell/read допускаются только для фактов в согласованном scope.
 
@@ -32,4 +32,4 @@ Host уже дал этот skill в system prompt. Не вызывай `skill(p
 
 ## FAST budget
 
-gpt-6-luna / low. Стандартное substantial assignment: `hardBudget:60`, `softLimit:48`; для маленькой задачи parent вправе выбрать меньший допустимый budget. Soft warning → синтез фактов, no new discovery branch; near hard → точный blocker, без новых glob/grep. Не повторяй успешные проверки без изменения входов.
+gpt-6-luna / low. Стандартное substantial assignment: `hardBudget:60`, `softLimit:48`; допустимы 8..100 включительно, explicit100 → soft80. Для маленькой задачи parent вправе выбрать меньший допустимый budget. Каждый assignment имеет независимый budget; compact/cold resume не обнуляет расход. Soft warning → синтез фактов, no new discovery branch; near hard → точный blocker, без новых glob/grep. Не повторяй успешные проверки без изменения входов.

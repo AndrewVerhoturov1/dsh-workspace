@@ -24,12 +24,12 @@ const fixture = async (t, options) => {
 
 for (const resident of [false, true]) test('installed native runtime compact settled '+(resident?'resident':'cold-continuable')+' Sol preserves Session and continuation', {timeout:30000}, async t => {
   let f, solId
-  const dispatchEnd = Promise.withResolvers(), ownGate = Promise.withResolvers()
+  const dispatchEnd = Promise.withResolvers(), ownGate = Promise.withResolvers(), ownEntered=Promise.withResolvers()
   t.after(() => ownGate.resolve())
   const steps = new WeakMap()
   f = await fixture(t, {plan:async a => {
     if (a.id === 'leader') return null
-    if (a.options.model !== 'gpt-6.1-sol') { await ownGate.promise; return report }
+    if (a.options.model !== 'gpt-6.1-sol') { ownEntered.resolve();await ownGate.promise; return report }
     solId = a.id
     const n = steps.get(a) ?? 0; steps.set(a, n+1)
     if (n === 0) return {name:'ptc_execute',args:{...ptc('return await tools.postman_worker({task:"Finite exact lifecycle evidence"})'),boundary:'external_event'}}
@@ -46,8 +46,14 @@ for (const resident of [false, true]) test('installed native runtime compact set
   const first = await f.call('postman_sol_worker', {task:'Approved substantial runtime regression: bounded own Worker, retire, report'})
   assert.equal(first.status, 'POSTMAN_WORKER_TASK_ACCEPTED')
   await dispatchEnd.promise
-  assert.equal((await f.call('postman_worker_compact',{workerSessionId:first.workerSessionId})).status,
-    'POSTMAN_WORKER_COMPACT_BUSY', 'an idle event-waiting Sol with active owned work is not terminal')
+  await ownEntered.promise // Native first-request budget has now been charged; hold model progress during maintenance.
+  const pendingBindings=structuredClone(f.registry.get('leader').workers)
+  const maintained=await f.call('postman_worker_compact',{workerSessionId:first.workerSessionId})
+  assert.equal(maintained.status,'POSTMAN_WORKER_COMPACTED','idle native maintenance does not require task completion')
+  assert.equal(maintained.sameSession,true)
+  assert.deepEqual(f.registry.get('leader').workers,pendingBindings,'compaction cannot settle owned child assignments')
+  const activeOwned=Object.values(pendingBindings).filter(b=>b.ownerSessionId===first.workerSessionId)
+  assert.equal(activeOwned.length,1);assert.equal(f.ctx.agents.get(activeOwned[0].id).status,'running')
   ownGate.resolve()
   const id = first.workerSessionId, original = await f.childDone(id)
   assert.deepEqual(original.session.events.filter(e=>e.type==='turn/start').map(e=>e.data.turn), [1,2])
