@@ -251,6 +251,54 @@ assert hasattr(stdlib_signal, 'set_wakeup_fd')
                 self.assertEqual(result, cached)
                 (self.channel / "result.json").unlink()
 
+    def test_history_diagnostic_is_bounded_and_never_forwards_snapshot(self):
+        for reason in ("history_count_failed", "history_traversal_failed", "history_semantic_unrecognized",
+                       "history_text_read_failed", "history_changed_during_read", "history_prior_anchor_missing",
+                       "history_prior_anchor_ambiguous", "history_turns_unrecognized", "history_changed",
+                       "prior_history_unproven", "invalid_prior_request_id"):
+            proof = {"code": "EXISTING_CHAT_NOT_CONFIRMED", "sendState": "PROVEN_NOT_SENT",
+                "details": {"reason": reason, "historyReady": False, "history": ["PRIVATE_SECRET_VALUE"],
+                    "priorRequestId": "PRIVATE_SECRET_VALUE", "presendOwnership": {
+                        "historyReadConfirmed": False, "historyEqual": False, "historyReason": reason,
+                        "userHistory": ["PRIVATE_SECRET_VALUE"], "hash": "PRIVATE_SECRET_VALUE"}}}
+            safe = transport._safe_transport_evidence({"details": proof})["submitProof"]
+            self.assertEqual(safe["reason"], reason)
+            self.assertFalse(safe["historyReady"])
+            self.assertEqual(safe["presendOwnership"], {
+                "historyReadConfirmed": False, "historyEqual": False, "historyReason": reason})
+            self.assertNotIn("PRIVATE_SECRET_VALUE", json.dumps(safe))
+
+    def test_devspace_prior_history_handoff_and_validation(self):
+        prior = "REQ_20261011T120000Z_0001"
+        binding = {**self.binding, "conversationUrl": CHAT, "priorRequestId": prior}
+        page = SimpleNamespace(url=CHAT, close=lambda: None)
+        class Factory:
+            def __enter__(self): self.chromium = self; return self
+            def __exit__(self, *args): pass
+            def connect_over_cdp(self, *args, **kwargs): return self
+            @property
+            def contexts(self): return [self]
+            def new_page(self): return page
+        refused = {"ok": False, "code": "EXISTING_CHAT_NOT_CONFIRMED", "sendState": "PROVEN_NOT_SENT",
+                   "details": {"reason": "history_prior_anchor_missing"}}
+        with patch.object(web.browser_submit, "submit_existing_prompt", return_value=refused) as sent:
+            bridge = web.WebWorkerBridge(root=self.channel / "handoff")
+            result = bridge.run_request(REQ, task_url="", prompt="private task", expected_filename="",
+                expected_request={"transportKind": "devspace"}, conversation_url=CHAT,
+                devspace_binding=binding, artifact_mode=False, playwright_factory=Factory)
+        sent.assert_called_once()
+        self.assertEqual(sent.call_args.kwargs["prior_request_id"], prior)
+        self.assertEqual(result["details"]["details"]["details"]["reason"], "history_prior_anchor_missing")
+        for candidate in (None, "bad", REQ):
+            with self.subTest(candidate=candidate):
+                bridge = web.WebWorkerBridge(root=self.channel / ("bad-" + str(candidate)))
+                with patch.object(web.browser_bootstrap, "_load_sync_playwright", side_effect=AssertionError("no attach")):
+                    result = bridge.run_request(REQ, task_url="", prompt="private task", expected_filename="",
+                        expected_request={"transportKind": "devspace"}, conversation_url=CHAT,
+                        devspace_binding={**binding, "priorRequestId": candidate}, artifact_mode=False)
+                self.assertEqual(result["code"], web.BRIDGE_INVALID_CONFIG)
+                self.assertEqual(result["details"]["reason"], "prior_history_unproven")
+
     def test_transport_rejects_unsafe_dynamic_message_and_reason(self):
         fields = transport._safe_transport_evidence({
             "transportCode": "SECRET_NOT_AN_AUTHORIZED_CODE",

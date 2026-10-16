@@ -21,6 +21,29 @@ const PERSONA = 'You are a persistent PostmanDevspace Luna transport liaison. Th
   'use other tools, or resend a message.'
 const diagnostics = error => String(error?.message ?? error).slice(0, 350)
 
+function selectPriorRequest(operations, lane, conversationRef) {
+  if (!conversationRef || !Array.isArray(lane?.requestIds)) return null
+  for (const requestId of [...lane.requestIds].reverse()) {
+    const matches = Object.values(operations ?? {}).filter(op =>
+      op?.transportKind === 'devspace' && op.requestId === requestId)
+    if (matches.length !== 1) continue
+    const op = matches[0], terminal = op.terminal, result = terminal?.result
+    if (op.state !== 'received' || op.phase === 'not-sent' ||
+        op.childSessionId !== lane.childId || terminal?.status !== 'POSTMAN_BRIDGE_TERMINAL' ||
+        terminal.requestId !== requestId || terminal.transportKind !== 'devspace' ||
+        result?.requestId !== requestId || result.conversationRef !== conversationRef ||
+        result.transportDiagnostics?.submitProof?.sendState === 'PROVEN_NOT_SENT' ||
+        result.transportDiagnostics?.sendProof?.sendState === 'PROVEN_NOT_SENT') continue
+    const journal = result.transportDiagnostics?.transportEventJournal
+    const positive = result.source === 'text_fallback' ||
+      (result.source === 'image_result' && result.evidenceState === 'BROWSER_VERIFIED_IMAGE') ||
+      (result.source === 'bell' && Array.isArray(journal) && journal.some(event =>
+        event?.event === 'STAGE_STARTED'))
+    if (positive) return requestId
+  }
+  return null
+}
+
 /** A single durable continuable Luna per Leader task, with separate Host Web jobs.
  * Coordinator followups are NOT reclassified as user turns and never carry
  * transport-tool authority. Only a Host-approved exact Bridge job can start Direct.
@@ -79,6 +102,12 @@ export function createPostmanDevspaceLuna(ctx, contexts, direct) {
         if (existing.requestIds?.length > 0 && !CONVERSATION.test(existing.conversationRef ?? ''))
           return { status: 'POSTMAN_DEVSPACE_CONTINUATION_UNPROVEN' }
         childId = existing.childId
+        continuationRef = existing.conversationRef && CONVERSATION.test(existing.conversationRef)
+          ? existing.conversationRef : null
+        const priorRequestId = selectPriorRequest(rowOf(leaderId)?.bridgeOperations,
+          existing, continuationRef)
+        if (!priorRequestId) return { status: 'POSTMAN_DEVSPACE_PRIOR_HISTORY_UNPROVEN' }
+        job.priorRequestId = priorRequestId
         if (await ctx.subagents.inspectOpenContinuableChild(parent, childId) !== true)
           return { status: 'POSTMAN_DEVSPACE_LUNA_REPROOF_FAILED' }
         await writeLuna(leaderId, lane => {
@@ -87,8 +116,6 @@ export function createPostmanDevspaceLuna(ctx, contexts, direct) {
             throw Error('POSTMAN_DEVSPACE_LUNA_BINDING_CHANGED')
           return { ...lane, activeBridgeJobId: job.bridgeJobId }
         })
-        continuationRef = existing.conversationRef && CONVERSATION.test(existing.conversationRef)
-          ? existing.conversationRef : null
         // Native coordinator source is accepted by the continuable subagent, but
         // is never authorized as a trusted current-user-turn transport message.
         await relay(parent, childId, 'Host-assigned PostmanDevspace job ' + job.bridgeJobId +
@@ -153,6 +180,7 @@ export function createPostmanDevspaceLuna(ctx, contexts, direct) {
           worktree: job.approvedScope?.root ?? job.taskContext.worktree,
           mode: job.devspaceMode,
           ...(continuationRef ? { conversationUrl: continuationRef } : {}),
+          ...(job.priorRequestId ? { priorRequestId: job.priorRequestId } : {}),
         },
         onRequestAllocated: async (requestId, channel) => {
           job.requestId = requestId

@@ -38,7 +38,12 @@ _SAFE_CODES = frozenset(value for key, value in vars(browser_submit).items()
 _SAFE_REASONS = {"invalid_conversation_url", "current_chat_mismatch", "prompt_empty",
                  "chat_changed_before_fill", "presend_ownership_or_prompt_changed",
                  "attachment_chat_changed_before_send", "click_outcome_uncertain",
-                 "submit_exception", "fresh_presend_lock_timeout"}
+                 "submit_exception", "fresh_presend_lock_timeout",
+                 "invalid_prior_request_id", "prior_history_unproven",
+                 "history_count_failed", "history_traversal_failed",
+                 "history_semantic_unrecognized", "history_text_read_failed",
+                 "history_changed_during_read", "history_prior_anchor_missing",
+                 "history_prior_anchor_ambiguous", "history_turns_unrecognized", "history_changed"}
 _SAFE_SEND_STATES = {"PROVEN_NOT_SENT", "PROVEN_SENT", "UNKNOWN", "SEND_STARTED"}
 
 
@@ -76,13 +81,14 @@ def _safe_transport_evidence(details):
         if isinstance(diagnostic, dict):
             if _allowed(diagnostic.get("reason"), _SAFE_REASONS):
                 safe["reason"] = diagnostic["reason"]
-            for key in ("exactPromptReadback", "singleLogicalComposer"):
+            for key in ("exactPromptReadback", "singleLogicalComposer", "historyReady"):
                 if type(diagnostic.get(key)) is bool:
                     safe[key] = diagnostic[key]
             ownership = diagnostic.get("presendOwnership")
             if isinstance(ownership, dict):
                 bounded = {key: ownership[key] for key in
-                           ("sendNotAttempted", "ownedUrlEqual", "userTurnCountEqual")
+                           ("sendNotAttempted", "ownedUrlEqual", "userTurnCountEqual",
+                            "historyReadConfirmed", "historyEqual")
                            if type(ownership.get(key)) is bool}
                 for key in ("expectedUserTurnCount", "observedUserTurnCount"):
                     value = ownership.get(key)
@@ -90,6 +96,8 @@ def _safe_transport_evidence(details):
                         bounded[key] = value
                 if _allowed(ownership.get("userTurnSelectorFamily"), {"none", "author-role", "test-id", "bubble"}):
                     bounded["userTurnSelectorFamily"] = ownership["userTurnSelectorFamily"]
+                if _allowed(ownership.get("historyReason"), _SAFE_REASONS):
+                    bounded["historyReason"] = ownership["historyReason"]
                 if bounded:
                     safe["presendOwnership"] = bounded
         if safe:
