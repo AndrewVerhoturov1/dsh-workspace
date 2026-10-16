@@ -20,7 +20,8 @@
 | Computer Use в другом приложении | ENFORCEMENT_UNAVAILABLE | Требуется target-scoped Host adapter; пока API отвечает `COMPUTER_USE_TARGET_ENFORCEMENT_UNAVAILABLE` |
 | Computer Use для ChatGPT/DSH/Codex и самозапуск агентов | ALWAYS_FORBIDDEN | Не разрешается никакими доп. scope/поручениями; Host transport Playwright не есть исполнительское CU |
 | Leader steer после SEND_UNKNOWN | VERIFIED_LIVE_PREVIOUS | Host receipt SENT_CONFIRMED и точный bell того же REQ, без нового origin Send |
-| Preempt/Stop активного DevSpace инструмента | TESTED_CODE_NOT_LIVE | Unit tests предотвращают Stop активного/неизвестного инструмента; фактический GUI Stop ещё не проверен |
+| Ручной Leader Preempt/Stop активного DevSpace инструмента | TESTED_CODE_NOT_LIVE | Для ручных controls Unit tests предотвращают Stop активного/неизвестного инструмента; фактический живой GUI Stop ещё не проверен |
+| Автоматическое напоминание DevSpace (Stop → готовность → Send) | CODE_TEST_PASS_NO_LIVE | Unit/state tests и изолированный headless Chromium с контролируемым временем: Stop даже при активном tool/неизвестном состоянии, только свой REQ, одно подтверждённое сообщение, без реальной доставки ChatGPT |
 | Text fallback без местного bell | VERIFIED_LIVE_PREVIOUS | Результат `source=text_fallback`, diagnostic UNKNOWN, без выдуманного DONE |
 | Cold bell → старая Luna → Leader после Host restart | VERIFIED_LIVE_PREVIOUS | Получено DONE в прежнем Host каналe, Leader получил terminal, blind resend не было |
 | Legacy @Postman, @PostmanAsk, @PostmanImage | PRESERVED_FALLBACK | Оригинальные маршруты остаются рабочими, автопереключения после UNKNOWN нет |
