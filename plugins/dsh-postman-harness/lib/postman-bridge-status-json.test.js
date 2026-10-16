@@ -1,10 +1,16 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { Context } from '@deepseek-ai/cordis'
+import { spawnSync } from 'node:child_process'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
 import { createPostmanBridgeStatusTool } from './postman-bridge.js'
 import { createPostmanBridgeJobs } from './postman-bridge-jobs.js'
 import { createPostmanBridgeLaunchCoordinator } from './postman-bridge-launch-coordinator.js'
+import { createDevspaceChannel, devspaceTerminal } from './postman-devspace.js'
 import { boundedJson } from '../../dsh-ptc/src/json.js'
 import { DEFAULT_LIMITS } from '../../dsh-ptc/src/profiles.js'
 
@@ -46,6 +52,110 @@ function valid(reply, expected) {
   assert.equal(reply.value.status, expected)
   return reply.value
 }
+
+test('Python Devspace failure evidence survives Host terminal and real Bridge status JSON without raw fields', async t => {
+  const temp = mkdtempSync(join(tmpdir(), 'devspace-safe-terminal-'))
+  t.after(() => rmSync(temp, { recursive: true, force: true }))
+  const sourceRoot = fileURLToPath(new URL('../../../', import.meta.url))
+  // Exercise Python transport.run's actual result shape, not hand-built JS
+  // result.json. Only browser/transport entrypoints are inert test doubles.
+  const pythonFixture = String.raw`
+import json, sys
+from unittest.mock import patch
+from postman.devspace import transport
+fixture = json.load(sys.stdin)
+binding, state, code = fixture["binding"], fixture["state"], fixture["code"]
+private = "PRIVATE_DIAGNOSTIC_MUST_NOT_ESCAPE"
+class InertBridge:
+    def __init__(self, **kwargs): pass
+    def run_request(self, request_id, **kwargs):
+        return {"ok": False, "code": "POSTMAN_TRANSPORT_FAILED", "details": {
+            "source": "transport_diagnostic", "diagnostic": "BLOCKED",
+            "transportCode": code, "transportMessage": code,
+            "sendProof": {"sendState": state, "proofClass": state, "foreign": private},
+            "sendProofClass": state,
+            "details": {"code": code, "sendState": state, "details": {
+                "reason": "presend_ownership_or_prompt_changed" if state == "PROVEN_NOT_SENT" else "submit_exception",
+                "presendOwnership": {"sendNotAttempted": state == "PROVEN_NOT_SENT",
+                    "ownedUrlEqual": False, "userTurnCountEqual": True,
+                    "expectedUserTurnCount": 1, "observedUserTurnCount": 1,
+                    "userTurnSelectorFamily": "bubble", "rawPrompt": private},
+                "exactPromptReadback": True, "singleLogicalComposer": True,
+                "raw": private}},
+            "conversationUrl": "https://chatgpt.com/c/" + private,
+            "capability": private, "rawPrompt": private}}
+with patch.object(transport, "load_binding", return_value=binding):
+    result = transport.run(binding["channel"], binding["requestId"], "fixture only",
+        ensure_browser=lambda: {"cdpUrl": "inert"}, bridge_factory=InertBridge)
+print(json.dumps(result))
+`
+  for (const [index, sendState, code] of [
+    [1, 'PROVEN_NOT_SENT', 'SUBMIT_INVALID_CONFIG'],
+    [2, 'UNKNOWN', 'PROMPT_SEND_UNKNOWN'],
+  ]) {
+    const requestId = 'REQ_20261016T135619Z_6971'
+    const bridgeJobId = index === 1
+      ? '11111111-1111-4111-8111-111111111111'
+      : '22222222-2222-4222-8222-222222222222'
+    const binding = createDevspaceChannel({ root: temp, bridgeJobId, requestId,
+      leaderSessionId: parent.id, lunaSessionId: 'luna', worktree: temp,
+      sourceRoot, mode: 'WRITE_TEST' })
+    const run = spawnSync('python', ['-c', pythonFixture], {
+      cwd: sourceRoot, windowsHide: true, encoding: 'utf8', timeout: 30000,
+      env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
+      input: JSON.stringify({ binding, state: sendState, code }),
+    })
+    assert.equal(run.status, 0, run.stderr?.slice(0, 1000) ?? 'Python fixture failed')
+    const observed = JSON.parse(run.stdout)
+    assert.equal(observed.transportDiagnostics.transportCode, code)
+    assert.equal(observed.transportCode, undefined, 'new evidence uses the existing Host envelope')
+    const result = devspaceTerminal(binding, observed)
+    const terminal = { status: 'POSTMAN_BRIDGE_TERMINAL', terminalStatus: 'COMPLETED',
+      requestId, transportKind: 'devspace', result }
+    // Read a previously delivered trusted Host terminal through the actual
+    // Bridge status tool/ToolRuntime, including its JSON output validation.
+    const contexts = { get: () => ({}), record: () => ({ bridgeOperations: {
+      [bridgeJobId]: { state: 'received', transportKind: 'devspace',
+        requestId, synchronization: 'not-required', terminal },
+    } }) }
+    const f = fixture({ contexts, direct: { inspectRequest() { assert.fail('no send or direct reproof') } } })
+    try {
+      const reply = valid(await f.read({ bridgeJobId }), 'POSTMAN_BRIDGE_TERMINAL')
+      const evidence = reply.result.transportDiagnostics
+      assert.equal(reply.result.source, 'transport_diagnostic')
+      assert.equal(reply.result.diagnostic, 'BLOCKED')
+      assert.equal(evidence.transportCode, code)
+      assert.equal(evidence.transportMessage, code)
+      assert.deepEqual(evidence.sendProof, { sendState, proofClass: sendState })
+      assert.equal(evidence.sendProofClass, sendState)
+      assert.equal(evidence.submitProof.code, code)
+      assert.equal(evidence.submitProof.sendState, sendState)
+      assert.equal(evidence.submitProof.reason,
+        sendState === 'PROVEN_NOT_SENT' ? 'presend_ownership_or_prompt_changed' : 'submit_exception')
+      assert.deepEqual(evidence.submitProof.presendOwnership, {
+        sendNotAttempted: sendState === 'PROVEN_NOT_SENT',
+        ownedUrlEqual: false, userTurnCountEqual: true,
+        expectedUserTurnCount: 1, observedUserTurnCount: 1,
+        userTurnSelectorFamily: 'bubble',
+      })
+      assert.equal(evidence.submitProof.exactPromptReadback, true)
+      assert.equal(evidence.submitProof.singleLogicalComposer, true)
+      const serialized = JSON.stringify(reply)
+      assert.doesNotMatch(serialized, /PRIVATE_DIAGNOSTIC_MUST_NOT_ESCAPE|rawPrompt|capability|conversationUrl/)
+      // Even if a valid bell arrives later, its authenticated outcome wins.
+      if (index === 1) {
+        const event = { version: 1, reportedOutcome: 'DONE', message: 'fixture bell', reportRef: null,
+          ...Object.fromEntries(['jobId', 'requestId', 'leaderSessionId', 'lunaSessionId', 'capability']
+            .map(key => [key, binding[key]])) }
+        writeFileSync(join(binding.channel, 'event.json'), JSON.stringify(event))
+        const bell = devspaceTerminal(binding, observed)
+        assert.equal(bell.source, 'bell')
+        assert.equal(bell.reportedOutcome, 'DONE')
+        assert.equal(bell.code, 'DEVSPACE_SIGNAL_RECEIVED')
+      }
+    } finally { await f.jobs.dispose() }
+  }
+})
 
 test('actual ToolRuntime rejects old undefined fields before render', async () => {
   const f = fixture()

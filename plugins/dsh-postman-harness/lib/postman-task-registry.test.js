@@ -37,12 +37,18 @@ test('JSON storage persists one Leader row across independent domain lifetimes',
   assert.equal(second.get('leader').bridgeOperations.preflight.preSendFailure, 'POSTMAN_DEVSPACE_WORKTREE_NOT_READY',
     'exact trusted pre-Send reason survives first JsonStorage cold reopen')
   await second.change('leader', row => ({ ...row, runner: { state: 'failed', requestId: 'REQ_1' } }))
+  await second.create('selected', { ...record, leaderSessionId: 'selected',
+    selectedDshProject: true })
   await second.close()
   const third = await openPostmanTaskRegistry(new DomainFacility(ctx, { backend: 'json' }))
   assert.equal(third.get('leader').runner.state, 'failed')
   assert.equal(third.get('leader').bridgeOperations.preflight.preSendFailure, 'POSTMAN_DEVSPACE_WORKTREE_NOT_READY',
     'exact native NOT_SENT evidence survives second independent JsonStorage open')
-  assert.deepEqual([...third.entries()].map(([id]) => id), ['leader'])
+  assert.equal(third.get('selected').selectedDshProject, true,
+    'new explicit DSH root flag survives strict durable reopen')
+  assert.equal(third.get('leader').selectedDshProject, undefined,
+    'historical DSH row remains unchanged')
+  assert.deepEqual([...third.entries()].map(([id]) => id), ['leader', 'selected'])
   await third.close()
   await backend.close()
 })
@@ -174,5 +180,30 @@ test('Secretary ledger retains historical Leader-row revision on first update', 
   assert.equal(registry.readLedger('leader').revision, 7)
   assert.equal(registry.readLedger('leader').content, 'Existing milestones; new result')
   await registry.close()
+  await backend.close()
+})
+
+test('universal project identity survives strict v1 JSON cold reopen without retargeting historical rows', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'postman-registry-universal-'))
+  t.after(() => rm(root, {recursive:true,force:true,maxRetries:5,retryDelay:100}))
+  const backend = new JsonStorageBackend(root)
+  const facility = new DomainFacility({storage:{backend:{get:()=>backend}},emit(){}}, {backend:'json'})
+  const initial = await openPostmanTaskRegistry(facility)
+  const universal = {...record,leaderSessionId:'owner-external',repository:'ExampleOrg/custom',
+    repositoryPath:'C:/chosen/custom',originUrl:'https://github.com/ExampleOrg/custom.git',
+    defaultBranch:'release/custom',baseSource:'cached',universalProject:true,
+    worktree:'C:/isolated/custom-task',worker:null}
+  await initial.create('owner-external',universal)
+  await initial.close()
+  const cold = await openPostmanTaskRegistry(facility)
+  const reopened = cold.get('owner-external')
+  assert.equal(reopened.repository,'ExampleOrg/custom')
+  assert.equal(reopened.repositoryPath,'C:/chosen/custom')
+  assert.equal(reopened.originUrl,'https://github.com/ExampleOrg/custom.git')
+  assert.equal(reopened.defaultBranch,'release/custom')
+  assert.equal(reopened.baseSource,'cached')
+  assert.equal(reopened.universalProject,true)
+  assert.equal(reopened.baseCommit,universal.baseCommit)
+  await cold.close()
   await backend.close()
 })

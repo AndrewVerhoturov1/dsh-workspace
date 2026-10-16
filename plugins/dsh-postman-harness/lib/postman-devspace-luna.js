@@ -1,10 +1,12 @@
 import { randomUUID } from 'node:crypto'
+import { fileURLToPath } from 'node:url'
 import { parsePostmanUserTurn } from './direct-current-turn.js'
 import { postmanInputGrants } from './postman-input-files.js'
 import { loadDevspaceChannelForOwner, devspaceTerminal, readDevspaceEvent } from './postman-devspace.js'
 import { buildPostmanBridgeStartRequest, settleTrustedPostmanStatus, POSTMAN_BRIDGE_PROVIDER } from './postman-bridge-core.js'
 
 const CONVERSATION = /^https:\/\/chatgpt\.com\/c\/[a-zA-Z0-9-]+$/
+const HOST_SOURCE_ROOT = fileURLToPath(new URL('../../../', import.meta.url))
 const INITIAL_MESSAGE = 'Host has opened your persistent PostmanDevspace communications session. ' +
   'You are Luna, the communications agent, not a coding Worker. The trusted Host runs the browser ' +
   'and reads the bell; never use shell, Git, browser tools or choose a new task. ' +
@@ -46,7 +48,7 @@ export function createPostmanDevspaceLuna(ctx, contexts, direct) {
     if (active.has(leaderId) && active.get(leaderId) !== job.bridgeJobId)
       return { status: 'POSTMAN_DEVSPACE_LUNA_BUSY' }
     if (job.devspaceMode === 'WRITE_ISOLATED') {
-      if (job.taskContext.devspaceReadOnly || job.taskContext.branch === 'main')
+      if (job.taskContext.devspaceReadOnly)
         return { status: 'POSTMAN_DEVSPACE_ISOLATED_CONTEXT_REQUIRED' }
       const previousIsolated = Object.values(rowOf(leaderId)?.bridgeOperations ?? {}).some(op =>
         op.transportKind === 'devspace' && op.devspace?.mode === 'WRITE_ISOLATED' &&
@@ -143,7 +145,7 @@ export function createPostmanDevspaceLuna(ctx, contexts, direct) {
       }
       const started = await direct.start({
         sessionId: childId,
-        workspace: parent.session?.header?.cwd ?? job.taskContext.repositoryPath,
+        workspace: HOST_SOURCE_ROOT,
         payload: parsed.payload, branch: job.taskContext.branch, transportKind: 'devspace',
         inputFiles: parsed.inputFiles ?? [], inputBinding: job.inputBinding,
         devspaceBinding: {

@@ -10,9 +10,10 @@ export const IMPLEMENTATION_ARTIFACT_APPLY_TOOL_NAME = 'implementation_artifact_
 export const IMPLEMENTATION_REPOSITORY = 'AndrewVerhoturov1/dsh-workspace'
 const REQUEST_ID = /^REQ_\d{8}T\d{6}Z_\d{4}$/
 const SHA256 = /^[a-fA-F0-9]{64}$/
+const SHA40 = /^[a-f0-9]{40}$/
 const execFileAsync = promisify(execFile)
 
-export async function verifiedRepository(worktree) {
+export async function verifiedRepository(worktree, binding = {}) {
   try {
     const top = await execFileAsync('git', ['-C', worktree, 'rev-parse', '--show-toplevel'],
       { windowsHide: true, timeout: 30000 })
@@ -21,7 +22,9 @@ export async function verifiedRepository(worktree) {
       { windowsHide: true, timeout: 30000 })
     const remote = stdout.trim().replaceAll('\\', '/')
     const match = /^(?:https?:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/]+\/[^/]+?)(?:\.git)?\/?$/i.exec(remote)
-    return match?.[1].toLowerCase() === IMPLEMENTATION_REPOSITORY.toLowerCase()
+    const expected = binding.repository ?? IMPLEMENTATION_REPOSITORY
+    return match?.[1].toLowerCase() === expected.toLowerCase() &&
+      (!binding.originUrl || stdout.trim() === binding.originUrl)
   } catch { return false }
 }
 
@@ -52,6 +55,8 @@ export function createImplementationArtifactGrants(registry) {
 
   async function register(leaderId, terminal) {
     const result = terminal?.result
+    const owner = registry.get(leaderId)
+    const expectedRepository = owner?.universalProject ? owner.repository : IMPLEMENTATION_REPOSITORY
     if (terminal?.status !== 'POSTMAN_BRIDGE_TERMINAL' || terminal.terminalStatus !== 'COMPLETED' ||
         typeof leaderId !== 'string' || leaderId === '' ||
         terminal.transportKind !== 'artifact' ||
@@ -60,10 +65,14 @@ export function createImplementationArtifactGrants(registry) {
         result?.unresolvedSendUnknown === true || result?.applyEligible === false ||
         !REQUEST_ID.test(result?.requestId ?? '') ||
         terminal.requestId !== result.requestId ||
-        result.repository !== IMPLEMENTATION_REPOSITORY ||
+        result.repository?.toLowerCase() !== expectedRepository?.toLowerCase() ||
         result.expectedFilename !== `POSTMAN_${result.requestId}_RESULT.zip` ||
         typeof result.resultZip !== 'string' || !isAbsolute(result.resultZip) ||
         !SHA256.test(result.sha256 ?? '')) return false
+    if (owner?.universalProject &&
+        (result.branch !== owner.branch || !SHA40.test(result.taskPublicationCommit ?? '') ||
+         result.taskUrl !== 'https://raw.githubusercontent.com/' + owner.repository + '/' +
+           result.taskPublicationCommit + '/' + result.requestId + '.md')) return false
     const grant = Object.freeze({
       repository: result.repository, requestId: result.requestId,
       resultZip: result.resultZip, sha256: result.sha256.toLowerCase(),
@@ -88,7 +97,8 @@ export function createImplementationArtifactGrants(registry) {
     const row = registry.get(leaderId)
     if (row?.leaderSessionId !== leaderId || row.stage === 'closed') return null
     const grant = row.artifactGrants?.[requestId]
-    return grant?.requestId === requestId && grant.repository === IMPLEMENTATION_REPOSITORY &&
+    const expectedRepository = row.universalProject ? row.repository : IMPLEMENTATION_REPOSITORY
+    return grant?.requestId === requestId && grant.repository?.toLowerCase() === expectedRepository?.toLowerCase() &&
       grant.expectedFilename === `POSTMAN_${requestId}_RESULT.zip` && SHA256.test(grant.sha256 ?? '') &&
       await verifiedZip(grant) ? Object.freeze({ ...grant }) : null
   }
@@ -163,7 +173,17 @@ export function createImplementationArtifactApplyTool(ctx, grants, worker, optio
         if (options.taskContexts && !await options.taskContexts.verifyWorktree(leaderId)) {
           return { status: 'IMPLEMENTATION_ARTIFACT_WORKTREE_REJECTED' }
         }
-        if (!await (options.verifiedRepository ?? verifiedRepository)(args.worktree)) {
+        // New local-first projects have no published REQ by default. An
+        // artifact grant, unlike ordinary Devspace edits, requires the exact
+        // remote task HEAD to be proven before the runner may touch files.
+        if (context?.universalProject &&
+            !await options.taskContexts.verifyDirectPublication?.(leaderId))
+          return { status: 'IMPLEMENTATION_ARTIFACT_WORKTREE_REJECTED' }
+        if (context && grant.repository.toLowerCase() !== context.repository.toLowerCase())
+          return { status: 'IMPLEMENTATION_ARTIFACT_REPOSITORY_REJECTED' }
+        if (!await (options.verifiedRepository ?? verifiedRepository)(args.worktree,
+          context ? { repository: context.repository,
+            originUrl: options.taskContexts?.record?.(leaderId)?.originUrl ?? context.originUrl } : {})) {
           return { status: 'IMPLEMENTATION_ARTIFACT_REPOSITORY_REJECTED' }
         }
         // Persist intent before the runner can change files. A crash without a

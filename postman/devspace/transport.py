@@ -24,7 +24,77 @@ from postman.devspace.task import render_task
 from postman.devspace.observer import DEFAULT_CHECK_INTERVAL_MS, DEFAULT_CHECK_COUNT
 from postman import input_bundle
 from postman_direct import ensure_dedicated_chrome
-from web_worker_bridge import WebWorkerBridge
+from web_worker_bridge import WebWorkerBridge, browser_submit
+
+
+# Project diagnostic only: never forward raw submitProof, URL, prompt or exception
+# message from the browser's private state into the DevSpace terminal.
+_SAFE_CODES = frozenset(value for key, value in vars(browser_submit).items()
+                        if key.isupper() and isinstance(value, str) and value.isupper()
+                        and 0 < len(value) <= 80) | {
+    "BRIDGE_PIPELINE_FAILED", "POSTMAN_SENT_ATTACHMENT_PROOF_UNKNOWN",
+    "image_resume_send_unproven", "submit_failed",
+}
+_SAFE_REASONS = {"invalid_conversation_url", "current_chat_mismatch", "prompt_empty",
+                 "chat_changed_before_fill", "presend_ownership_or_prompt_changed",
+                 "attachment_chat_changed_before_send", "click_outcome_uncertain",
+                 "submit_exception", "fresh_presend_lock_timeout"}
+_SAFE_SEND_STATES = {"PROVEN_NOT_SENT", "PROVEN_SENT", "UNKNOWN", "SEND_STARTED"}
+
+
+def _allowed(value, choices):
+    return isinstance(value, str) and value in choices
+
+
+def _safe_transport_evidence(details):
+    if not isinstance(details, dict):
+        return {}
+    result = {}
+    code = details.get("transportCode")
+    if _allowed(code, _SAFE_CODES):
+        result["transportCode"] = code
+    message = details.get("transportMessage")
+    if isinstance(message, str) and (message == result.get("transportCode") or
+                                      message == "submit did not bind a chat URL"):
+        result["transportMessage"] = message
+    proof = details.get("sendProof")
+    if isinstance(proof, dict):
+        safe = {key: proof[key] for key in ("sendState", "proofClass")
+                if _allowed(proof.get(key), _SAFE_SEND_STATES)}
+        if safe:
+            result["sendProof"] = safe
+    if _allowed(details.get("sendProofClass"), _SAFE_SEND_STATES):
+        result["sendProofClass"] = details["sendProofClass"]
+    submitted = details.get("details")
+    if isinstance(submitted, dict):
+        safe = {}
+        if _allowed(submitted.get("code"), _SAFE_CODES):
+            safe["code"] = submitted["code"]
+        if _allowed(submitted.get("sendState"), _SAFE_SEND_STATES):
+            safe["sendState"] = submitted["sendState"]
+        diagnostic = submitted.get("details")
+        if isinstance(diagnostic, dict):
+            if _allowed(diagnostic.get("reason"), _SAFE_REASONS):
+                safe["reason"] = diagnostic["reason"]
+            for key in ("exactPromptReadback", "singleLogicalComposer"):
+                if type(diagnostic.get(key)) is bool:
+                    safe[key] = diagnostic[key]
+            ownership = diagnostic.get("presendOwnership")
+            if isinstance(ownership, dict):
+                bounded = {key: ownership[key] for key in
+                           ("sendNotAttempted", "ownedUrlEqual", "userTurnCountEqual")
+                           if type(ownership.get(key)) is bool}
+                for key in ("expectedUserTurnCount", "observedUserTurnCount"):
+                    value = ownership.get(key)
+                    if type(value) is int and 0 <= value <= 100_000:
+                        bounded[key] = value
+                if _allowed(ownership.get("userTurnSelectorFamily"), {"none", "author-role", "test-id", "bubble"}):
+                    bounded["userTurnSelectorFamily"] = ownership["userTurnSelectorFamily"]
+                if bounded:
+                    safe["presendOwnership"] = bounded
+        if safe:
+            result["submitProof"] = safe
+    return result
 
 
 def run(channel, request_id, intent, *, input_bundle_manifest=None, input_files_base64=None,
@@ -69,8 +139,9 @@ def run(channel, request_id, intent, *, input_bundle_manifest=None, input_files_
                   **{key: details[key] for key in ("resultImage", "imageSha256", "imageWidth",
                       "imageHeight", "imageMimeType", "imageByteLength", "imageFormat",
                       "evidenceState", "reportedOutcome") if key in details},
-                  "transportDiagnostics": {key: details[key] for key in
-                      ("reminderSlots", "transportEventJournal", "detectorDiagnostics") if key in details}}
+                  "transportDiagnostics": {**{key: details[key] for key in
+                      ("reminderSlots", "transportEventJournal", "detectorDiagnostics") if key in details},
+                      **_safe_transport_evidence(details)}}
     except Exception:
         # Keep private internals/capability out of model diagnostics. Host still checks bell first.
         result = {"requestId": request_id, "source": "transport_diagnostic", "diagnostic": "BLOCKED",

@@ -1,6 +1,7 @@
 import { createHash, randomInt as cryptoRandomInt } from 'node:crypto'
 import { existsSync, readFileSync, lstatSync, realpathSync } from 'node:fs'
 import { basename, isAbsolute, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
 import { spawn as nodeSpawn, execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -10,6 +11,8 @@ import { CurrentAttachmentStore, postmanInputGrants, stageStandaloneCurrentAttac
 
 // Standalone transport publishes REQ task files to main; Leader children use their exact prepared task branch.
 const STANDALONE_TASK_PUBLICATION_BRANCH = 'main'
+const STANDALONE_REPOSITORY = 'AndrewVerhoturov1/dsh-workspace'
+const HOST_SOURCE_ROOT = fileURLToPath(new URL('../../../', import.meta.url))
 
 const REQ_PATTERN = /^REQ_\d{8}T\d{6}Z_\d{4}$/
 const ARTIFACT_TERMINAL_OK = new Set([
@@ -265,10 +268,10 @@ function parseTerminalJson(stdout) {
 function validPublicationReceipt(value, job) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
   const { requestId, repository, branch, taskUrl, baseCommit, taskPublicationCommit } = value
-  if (requestId !== job.requestId || repository !== 'AndrewVerhoturov1/dsh-workspace' ||
+  if (requestId !== job.requestId || repository?.toLowerCase() !== (job.repository ?? STANDALONE_REPOSITORY).toLowerCase() ||
       branch !== job.branch || (branch !== STANDALONE_TASK_PUBLICATION_BRANCH && !POSTMAN_TASK_BRANCH_PATTERN.test(branch ?? '')) ||
       !/^[0-9a-f]{40}$/.test(baseCommit ?? '') || !/^[0-9a-f]{40}$/.test(taskPublicationCommit ?? '')) return false
-  return taskUrl === 'https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/' + taskPublicationCommit + '/' + requestId + '.md'
+  return taskUrl === 'https://raw.githubusercontent.com/' + (job.repository ?? STANDALONE_REPOSITORY) + '/' + taskPublicationCommit + '/' + requestId + '.md'
 }
 
 function trustedPublication(job) {
@@ -490,7 +493,7 @@ function terminalGate(job) {
         : join(homedir(), '.dsh', 'postman', 'direct'))
       const state = JSON.parse(job.readPublicationState(join(root, 'requests', job.requestId + '.json'), 'utf8'))
       if (!checkpoint && state.requestId === job.requestId && state.branch === job.branch &&
-          state.repository === 'AndrewVerhoturov1/dsh-workspace' && state.publicationStarted === false &&
+          state.repository?.toLowerCase() === (job.repository ?? STANDALONE_REPOSITORY).toLowerCase() && state.publicationStarted === false &&
           !state.taskPublicationCommit && !state.taskUrl) parsed.publicationStarted = false
     } catch { /* Absent or ambiguous state remains synchronization-required. */ }
     return parsed
@@ -533,7 +536,7 @@ export class DirectPostmanJobManager {
     return this.jobs.get(sessionId)
   }
 
-  async start({ sessionId, workspace, payload, inputFiles = [], inputBinding, chatRequestId, automaticContinuation = false, transportKind = 'artifact', proof, branch, onRequestAllocated, devspaceBinding }) {
+  async start({ sessionId, workspace, payload, inputFiles = [], inputBinding, chatRequestId, automaticContinuation = false, transportKind = 'artifact', proof, branch, repository = STANDALONE_REPOSITORY, onRequestAllocated, devspaceBinding }) {
     const previous = this.jobs.get(sessionId)
     if (previous?.state === 'running' || previous?.state === 'starting') throw parseError('POSTMAN_CURRENT_TURN_JOB_ALREADY_RUNNING')
     if (typeof payload !== 'string' || payload.trim() === '') throw parseError('POSTMAN_EMPTY_PAYLOAD')
@@ -541,7 +544,13 @@ export class DirectPostmanJobManager {
     if (transportKind === 'devspace' && (!devspaceBinding || devspaceBinding.lunaSessionId !== sessionId ||
         chatRequestId || automaticContinuation))
       throw parseError('POSTMAN_DEVSPACE_LEADER_BINDING_REQUIRED')
-    if (branch !== STANDALONE_TASK_PUBLICATION_BRANCH && !POSTMAN_TASK_BRANCH_PATTERN.test(branch ?? '')) throw parseError('POSTMAN_TASK_BRANCH_INVALID')
+    // Devspace is private and Host-bound; a branchless read-only project may
+    // currently be on master, a custom default branch, or have an unborn HEAD.
+    // Git-publishing Direct modes retain the strict main/task-branch contract.
+    if (transportKind === 'devspace' ?
+        typeof branch !== 'string' || !branch || branch.length > 255 || /[\s\x00-\x1f]/.test(branch) :
+        branch !== STANDALONE_TASK_PUBLICATION_BRANCH && !POSTMAN_TASK_BRANCH_PATTERN.test(branch ?? ''))
+      throw parseError('POSTMAN_TASK_BRANCH_INVALID')
 
     // A new request in this Luna session supersedes any exact-reply slot left
     // by the previous PostmanAsk result.
@@ -578,6 +587,7 @@ export class DirectPostmanJobManager {
       '-TaskBase64', taskBase64,
     ]
     args.push('-Branch', branch)
+    if (repository !== STANDALONE_REPOSITORY && transportKind !== 'devspace') args.push('-Repository', repository)
     if (inputFiles.length) args.push('-InputFilesBase64', Buffer.from(JSON.stringify(inputFiles), 'utf8').toString('base64'))
     if (chatRequestId !== undefined) args.push('-ChatRequestId', chatRequestId)
     if (automaticContinuation) args.push('-AutomaticContinuation')
@@ -597,6 +607,7 @@ export class DirectPostmanJobManager {
       automaticContinuation,
       transportKind,
       branch,
+      repository,
       proof,
       directRoot: this.directRoot,
       readPublicationState: this.readPublicationState,
@@ -845,18 +856,18 @@ export class DirectPostmanJobManager {
   }
 
   // Read-only Direct checkpoint: absence, corruption or publication ambiguity never proves a safe outcome.
-  inspectRequest(requestId, branch, transportKind) {
+  inspectRequest(requestId, branch, transportKind, repository = STANDALONE_REPOSITORY) {
     if (!REQ_PATTERN.test(requestId ?? '')) return { state: 'unknown' }
     const root = this.directRoot ?? (process.env.LOCALAPPDATA
       ? join(process.env.LOCALAPPDATA, 'DSH', 'Postman', 'direct')
       : join(homedir(), '.dsh', 'postman', 'direct'))
     try {
       const state = JSON.parse(this.readPublicationState(join(root, 'requests', requestId + '.json'), 'utf8'))
-      if (state?.requestId !== requestId || state.repository !== 'AndrewVerhoturov1/dsh-workspace' ||
+      if (state?.requestId !== requestId || state.repository?.toLowerCase() !== repository.toLowerCase() ||
           state.branch !== branch) return { state: 'unknown' }
       const publication = { requestId: state.requestId, repository: state.repository, branch: state.branch,
         taskUrl: state.taskUrl, baseCommit: state.baseCommit, taskPublicationCommit: state.taskPublicationCommit }
-      if (validPublicationReceipt(publication, { requestId, branch })) {
+      if (validPublicationReceipt(publication, { requestId, branch, repository })) {
         if (transportKind === "artifact") {
           try {
             const handoff = JSON.parse(this.readPublicationState(join(root, "results", requestId + ".json"), "utf8"))
@@ -966,6 +977,7 @@ export class DirectPostmanJobManager {
       onRequestAllocated,
       transportKind: previous.transportKind ?? 'artifact',
       branch: previous.branch,
+      repository: previous.repository ?? STANDALONE_REPOSITORY,
       proof: {
         parseMode: 'automatic-continuation',
         sourceMessageLength: 0,
@@ -1063,13 +1075,14 @@ export function createDirectCurrentTurnToolConfigs(ctx, { store, jobs, taskConte
         }
         return await manager.start({
           sessionId: agent.id,
-          workspace: workspaceOf(agent),
+          workspace: bridgeContext ? HOST_SOURCE_ROOT : workspaceOf(agent),
           payload: parsed.payload,
           inputFiles,
           inputBinding,
           chatRequestId: parsed.chatRequestId,
           transportKind: parsed.transportKind,
           branch: bridgeContext?.branch ?? STANDALONE_TASK_PUBLICATION_BRANCH,
+          repository: bridgeContext?.repository ?? STANDALONE_REPOSITORY,
           proof,
           devspaceBinding,
           ...(bridgeContext ? { onRequestAllocated: (requestId, channel) => taskContexts.recordBridgeRequest(agent.id, requestId, channel) } : {}),

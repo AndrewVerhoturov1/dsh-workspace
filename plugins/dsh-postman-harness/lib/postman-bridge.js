@@ -42,16 +42,19 @@ function authorized(exec, ctx) {
 export function createPostmanTaskPrepareTool(ctx, contexts = postmanTaskContexts, { jobs, worker } = {}) {
   return defineTool({
     name: POSTMAN_TASK_PREPARE_TOOL_NAME,
-    description: 'Prepare one owned Leader task. Default: isolated Git task branch/worktree from origin/main. read_only=true: verified repository read context without Git fetch, push, branch or new worktree, usable only by @PostmanDevspace READ_ONLY.',
-    parameters: { read_only: { type: 'boolean', description: 'Set true only for a DevSpace read-only investigation with no branch.' } }, output: output(),
+    description: 'Prepare one exact Leader-owned GitHub project. project_path selects a canonical local Git root; if omitted use this Leader workspace. New non-DSH projects use a local-only isolated task worktree from the verified default branch, or a proven cached base offline. read_only creates no Git branch, fetch, push or worktree. Historical DSH tasks retain origin/main publication rules.',
+    parameters: { read_only: { type: 'boolean', description: 'Read-only branchless research, no Git mutation.' },
+      project_path: { type: 'string', description: 'Optional exact absolute existing local Git project root, selected by Leader.' } }, output: output(),
     async execute(args, exec) {
       if (!authorized(exec, ctx)) return { status: 'POSTMAN_TASK_CALLER_REJECTED' }
-      if (args?.read_only !== undefined && typeof args.read_only !== 'boolean')
+      if (args?.read_only !== undefined && typeof args.read_only !== 'boolean' ||
+          args?.project_path !== undefined && (typeof args.project_path !== 'string' || !isAbsolute(args.project_path)))
         return { status: 'POSTMAN_TASK_ARGUMENTS_INVALID' }
       if (args?.read_only !== true && contexts?.get?.(exec.agent.id)?.devspaceReadOnly &&
           (jobs?.hasActive?.(exec.agent.id) || worker?.hasActiveWork?.(exec.agent)))
         return { status: 'POSTMAN_TASK_PROMOTION_BUSY' }
-      const prepared = await (args?.read_only === true ? contexts.prepareReadOnly(exec.agent) : contexts.prepare(exec.agent))
+      const prepared = await (args?.read_only === true ? contexts.prepareReadOnly(exec.agent, args?.project_path) :
+        contexts.prepare(exec.agent, args?.project_path))
       if (!['TASK_CONTEXT_READY', 'POSTMAN_TASK_READ_ONLY_READY', 'POSTMAN_TASK_CONTEXT_ALREADY_READY'].includes(prepared?.status) ||
           typeof jobs?.recoverDevspacePending !== 'function') return prepared
       // Reconcile only the exact owner after Host task preparation/recovery.
@@ -147,6 +150,9 @@ export function createPostmanBridgeTool(ctx, jobs, contexts) {
       if (args.computer_use_target !== undefined)
         return { status: 'COMPUTER_USE_TARGET_ENFORCEMENT_UNAVAILABLE' }
       const taskContext = contexts?.get(exec.agent.id)
+      if (parsed.transportKind !== 'devspace' && taskContext?.universalProject &&
+          !await contexts.verifyDirectPublication?.(exec.agent.id))
+        return { status: 'POSTMAN_TASK_REMOTE_PUBLICATION_REQUIRED' }
       if ((args.workspace_root === undefined) !== (args.workspace_access === undefined))
         return { status: 'POSTMAN_DEVSPACE_SCOPE_INVALID' }
       let approvedScope
@@ -288,7 +294,11 @@ export function createPostmanTeamStatusTool(ctx, contexts, worker, jobs) {
       const id = exec.agent.id, context = contexts.get(id), row = contexts.record(id)
       return { status: 'POSTMAN_TEAM_STATUS',
         task: { contextReady: Boolean(context), branch: context?.branch ?? row?.branch ?? null,
-          ...(row ? { stage: row.stage, closedAt: row.closedAt ?? null } : {}),
+          ...(row ? { stage: row.stage, closedAt: row.closedAt ?? null,
+            ...Object.fromEntries(['repository', 'repositoryPath', 'originUrl', 'baseCommit', 'worktree']
+              .filter(key => row[key] !== undefined).map(key => [key, row[key]])),
+            defaultBranch: row.defaultBranch ?? 'main',
+            baseSource: row.baseSource ?? (row.universalProject ? 'unproven' : 'legacy') } : {}),
           restoring: contexts.isRestoring(id), activeOperation: contexts.hasActiveOperation(id) },
         ...worker.teamSnapshot(exec.agent), bridge: jobs.teamSnapshot(exec.agent),
         devspaceLuna: jobs.devspaceLunaSnapshot(exec.agent) }

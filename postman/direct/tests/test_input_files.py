@@ -74,6 +74,18 @@ class InputFilesTest(unittest.TestCase):
         self.assertEqual(result["byte_length"], len(data))
         self.assertEqual(endpoints, [(f"repos/{REPO}/contents/docs/marker.md?ref={COMMIT}", "GET")])
 
+    def test_existing_descriptor_uses_selected_repository_without_publication(self):
+        selected = 'ExampleOrg/local-project'
+        data = b'GENERIC_EXISTING_FILE'
+        endpoints = []
+        def api(endpoint, method='GET', payload=None):
+            endpoints.append((endpoint, method))
+            return {'type': 'file', 'encoding': 'base64', 'content': base64.b64encode(data).decode('ascii')}
+        record = input_files.GitHubInputPublisher(api, existing_repository=selected).existing(COMMIT, 'docs/guide.md')
+        self.assertEqual(record['repository'], selected)
+        self.assertEqual(record['raw_url'], f'https://raw.githubusercontent.com/{selected}/{COMMIT}/docs/guide.md')
+        self.assertEqual(endpoints, [(f'repos/{selected}/contents/docs/guide.md?ref={COMMIT}', 'GET')])
+
     def test_stage_exact_selected_bytes_and_cleanup(self):
         with tempfile.TemporaryDirectory() as tmp:
             one = Path(tmp) / "note.md"; one.write_bytes(b"MARKER-one")

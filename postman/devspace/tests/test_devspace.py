@@ -206,6 +206,73 @@ assert hasattr(stdlib_signal, 'set_wakeup_fd')
         self.assertEqual(len(calls),1)
         self.assertTrue((self.channel / "task.md").exists())
 
+    def test_fast_presend_and_unknown_failure_evidence_reaches_terminal_without_private_data(self):
+        for state, code, reason in [
+            ("PROVEN_NOT_SENT", "SUBMIT_INVALID_CONFIG", "presend_ownership_or_prompt_changed"),
+            ("UNKNOWN", "PROMPT_SEND_UNKNOWN", "submit_exception"),
+        ]:
+            with self.subTest(state=state):
+                submitted = {"ok": False, "code": code, "sendState": state,
+                    "details": {"reason": reason, "private": "PRIVATE_SECRET_VALUE",
+                        "pageDiagnostic": {"url": "https://chatgpt.com/c/PRIVATE_SECRET_VALUE"},
+                        "presendOwnership": {"sendNotAttempted": state == "PROVEN_NOT_SENT",
+                            "ownedUrlEqual": False, "userTurnCountEqual": True,
+                            "expectedUserTurnCount": 1, "observedUserTurnCount": 1,
+                            "userTurnSelectorFamily": "author-role", "private": "PRIVATE_SECRET_VALUE"},
+                        "exactPromptReadback": True, "singleLogicalComposer": True}}
+                observed = {"ok": False, "code": "POSTMAN_TRANSPORT_FAILED", "details": {
+                    "diagnostic": "BLOCKED", "transportCode": code,
+                    "transportMessage": code, "sendProof": {"sendState": state, "proofClass": state},
+                    "sendProofClass": state, "conversationUrl": "https://chatgpt.com/c/PRIVATE_SECRET_VALUE",
+                    "details": submitted, "runtimeCredentials": "PRIVATE_SECRET_VALUE"}}
+                class Bridge:
+                    def __init__(self, **kwargs): pass
+                    def run_request(self, *args, **kwargs): return observed
+                with patch.object(transport, "load_binding", return_value=self.binding):
+                    result = transport.run(self.channel, REQ, "safe task",
+                        ensure_browser=lambda: {"cdpUrl": "fixture"}, bridge_factory=Bridge)
+                evidence = result["transportDiagnostics"]
+                self.assertNotIn("transportCode", result, "Host consumes only the transportDiagnostics envelope")
+                self.assertEqual(evidence["transportCode"], code)
+                self.assertEqual(evidence["transportMessage"], code)
+                self.assertEqual(evidence["sendProof"], {"sendState": state, "proofClass": state})
+                self.assertEqual(evidence["sendProofClass"], state)
+                self.assertEqual(evidence["submitProof"]["code"], code)
+                self.assertEqual(evidence["submitProof"]["sendState"], state)
+                self.assertEqual(evidence["submitProof"]["reason"], reason)
+                self.assertEqual(evidence["submitProof"]["presendOwnership"]["userTurnSelectorFamily"], "author-role")
+                self.assertEqual(evidence["submitProof"]["presendOwnership"]["observedUserTurnCount"], 1)
+                self.assertNotIn("PRIVATE_SECRET_VALUE", json.dumps(result))
+                self.assertNotIn("chatgpt.com", json.dumps(result))
+                self.assertNotIn(self.binding["capability"], json.dumps(result))
+                with patch.object(transport, "load_binding", return_value=self.binding):
+                    cached = transport.run(self.channel, REQ, "safe task",
+                        ensure_browser=lambda: (_ for _ in ()).throw(AssertionError("no resend")), bridge_factory=Bridge)
+                self.assertEqual(result, cached)
+                (self.channel / "result.json").unlink()
+
+    def test_transport_rejects_unsafe_dynamic_message_and_reason(self):
+        fields = transport._safe_transport_evidence({
+            "transportCode": "SECRET_NOT_AN_AUTHORIZED_CODE",
+            "transportMessage": "PRIVATE_SECRET_VALUE https://chatgpt.com/c/foreign",
+            "sendProof": {"sendState": "PROVEN_NOT_SENT", "proofClass": "PROVEN_NOT_SENT",
+                          "private": "PRIVATE_SECRET_VALUE"},
+            "details": {"code": "SUBMIT_INVALID_CONFIG", "sendState": "PROVEN_NOT_SENT",
+                        "details": {"reason": "PRIVATE_SECRET_VALUE",
+                                    "presendOwnership": {"ownedUrlEqual": False,
+                                        "expectedUserTurnCount": 999999999,
+                                        "userTurnSelectorFamily": "PRIVATE_SECRET_VALUE"}}}})
+        self.assertEqual(fields["sendProof"], {"sendState": "PROVEN_NOT_SENT", "proofClass": "PROVEN_NOT_SENT"})
+        self.assertNotIn("transportCode", fields)
+        self.assertNotIn("transportMessage", fields)
+        self.assertNotIn("reason", fields["submitProof"])
+        self.assertEqual(fields["submitProof"]["presendOwnership"], {"ownedUrlEqual": False})
+        self.assertNotIn("PRIVATE_SECRET_VALUE", json.dumps(fields))
+        self.assertEqual(transport._safe_transport_evidence({
+            "sendProofClass": [], "sendProof": {"sendState": {}},
+            "details": {"code": [], "sendState": [], "details": {
+                "reason": {}, "presendOwnership": {"userTurnSelectorFamily": []}}}}), {})
+
     def test_existing_web_send_and_private_terminal_same_page_cleanup_no_artifact(self):
         page=SimpleNamespace(url=CHAT,close=lambda:None)
         class Factory:

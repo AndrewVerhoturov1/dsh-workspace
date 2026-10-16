@@ -254,8 +254,11 @@ async function snapshotInputs(ctx, contexts, args, exec, { grants, run, currentA
   const keys = Object.keys(args ?? {}).sort().join(',')
   let operation, selected, current
   if (args.action === 'describe_existing' && keys === 'action,commit,path,repository' &&
-      args.repository === 'AndrewVerhoturov1/dsh-workspace' && typeof args.commit === 'string' && typeof args.path === 'string')
-    operation = ['--existing', args.commit, args.path]
+      typeof args.repository === 'string' &&
+      args.repository.toLowerCase() === (context.repository ?? 'AndrewVerhoturov1/dsh-workspace').toLowerCase() &&
+      typeof args.commit === 'string' && typeof args.path === 'string')
+    operation = ['--existing', args.commit, args.path, '--existing-repository',
+      context.universalProject ? context.repository : 'AndrewVerhoturov1/dsh-workspace']
   else if (args.action === 'stage' && keys === 'action,paths' && Array.isArray(args.paths) &&
       args.paths.length >= 1 && args.paths.length <= 20 && args.paths.every(path => typeof path === 'string' && path.length > 0))
     operation = ['--stage', ...args.paths]
@@ -346,7 +349,7 @@ export function createPostmanInputFilesTool(ctx, contexts, { grants = postmanInp
     description: 'Privately snapshot exact current attachments or selected local files; locate filename metadata; pack, list or safely unpack selected ZIPs. Existing GitHub sources are read-only. Never publishes input bytes.',
     parameters: {
       action: { type: 'string', required: true, enum: ['describe_existing', 'stage', 'stage_current_attachments', 'cleanup', 'locate', 'pack', 'list', 'unpack'] },
-      repository: { type: 'string', description: 'Existing file repository; only AndrewVerhoturov1/dsh-workspace is supported.' },
+      repository: { type: 'string', description: 'Existing GitHub file: exact owner/repo from this Leader task binding.' },
       commit: { type: 'string', description: 'Exact existing GitHub commit.' },
       path: { type: 'string', description: 'Repository-relative path of the existing file.' },
       paths: { type: 'array', items: { type: 'string' }, description: 'Explicit absolute paths to selected regular files.' },
@@ -400,8 +403,7 @@ export function createPostmanInputFilesTool(ctx, contexts, { grants = postmanInp
           new Set(args.selectionIds).size === args.selectionIds.length)
       const existingAllowed = args.action === 'describe_existing' &&
         keys === 'action,commit,path,repository' &&
-        args.repository === 'AndrewVerhoturov1/dsh-workspace' &&
-        typeof args.commit === 'string' && typeof args.path === 'string'
+        typeof args.repository === 'string' && typeof args.commit === 'string' && typeof args.path === 'string'
       if (!contexts?.get(agent.id) && (stageAllowed || selectedAllowed || existingAllowed)) {
         if (typeof contexts?.prepareReadOnly !== 'function')
           return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }

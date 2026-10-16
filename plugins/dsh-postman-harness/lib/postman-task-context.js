@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
-import { copyFile, cp, mkdir, mkdtemp, realpath, stat, writeFile } from 'node:fs/promises'
+import { copyFile, cp, mkdir, mkdtemp, realpath, stat, writeFile, unlink } from 'node:fs/promises'
 import { createMemoryTaskRegistry } from './postman-task-registry.js'
 import { homedir, tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { isAbsolute, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 
 const exec = promisify(execFile)
@@ -11,6 +11,27 @@ const REPOSITORY = 'andrewverhoturov1/dsh-workspace'
 const SHA = /^[0-9a-f]{40}$/
 const BRANCH = /^task\/postman-[0-9a-f]{32}$/
 const normalize = value => resolve(value).replaceAll('\\', '/').toLowerCase()
+const githubRepository = origin => {
+  const match = /^(?:https?:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+?)(?:\.git)?\/?$/i.exec(origin)
+  return match?.[1] ?? null
+}
+const boundContext = row => Object.freeze({
+  leaderSessionId: row.leaderSessionId, repository: row.repository,
+  branch: row.branch, worktree: row.worktree, baseCommit: row.baseCommit,
+  ...(row.devspaceReadOnly ? { devspaceReadOnly: true } : {}),
+  ...(row.universalProject ? { universalProject: true,
+    repositoryPath: row.repositoryPath, originUrl: row.originUrl,
+    ...(row.defaultBranch ? { defaultBranch: row.defaultBranch } : {}),
+    ...(row.baseSource ? { baseSource: row.baseSource } : {}) } : {}),
+})
+const sameProject = (row, root, origin) =>
+  normalize(row.repositoryPath) === normalize(root) && row.originUrl === origin &&
+  githubRepository(origin)?.toLowerCase() === row.repository.toLowerCase()
+async function defaultGitHubBranch(repository) {
+  const { stdout } = await exec('gh', ['api', 'repos/' + repository, '--jq', '.default_branch'],
+    { windowsHide: true, timeout: 30000 })
+  return stdout.trim()
+}
 const fileExists = async path => { try { await stat(path); return true } catch (error) { if (error?.code === 'ENOENT') return false; throw error } }
 
 async function git(cwd, ...args) {
@@ -32,7 +53,7 @@ async function preserveTaskChanges({ worktree, command, ...metadata }) {
 }
 
 /** The host injects one durable registry; tests explicitly inject an in-memory one. */
-export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(), gitCommand = git, temporaryDirectory = tmpdir, makeDirectory = mkdtemp, realPath = realpath, localDevelopment = false, preserveChanges = preserveTaskChanges } = {}) {
+export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(), gitCommand = git, temporaryDirectory = tmpdir, makeDirectory = mkdtemp, realPath = realpath, localDevelopment = false, preserveChanges = preserveTaskChanges, githubDefaultBranch = defaultGitHubBranch } = {}) {
   const contexts = new Map()
   const children = new Map()
   const pending = new Set()
@@ -45,43 +66,135 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
   const onContextChange = listener => { contextListeners.add(listener); return () => contextListeners.delete(listener) }
   const command = gitCommand
 
-  // A read-only DevSpace investigation needs no task branch, remote push or
-  // secondary worktree. Its authority is still one durable Leader context.
-  async function prepareReadOnly(leader) {
-    const id = leader?.id
-    if (pending.has(id)) return { status: 'POSTMAN_TASK_PREPARE_IN_PROGRESS' }
-    if (contexts.has(id) && registry.get(id)?.stage === 'ready')
-      return { status: 'POSTMAN_TASK_CONTEXT_ALREADY_READY', ...contexts.get(id) }
-    if (registry.get(id) && registry.get(id).stage !== 'closed') return recover(leader)
-    pending.add(id)
-    try {
-      const cwd = leader?.session?.header?.cwd
-      if (typeof id !== 'string' || !id || typeof cwd !== 'string' || !cwd)
-        throw new Error('POSTMAN_TASK_REPOSITORY_UNAVAILABLE')
-      const repository = await command(cwd, 'rev-parse', '--show-toplevel')
-      const origin = await command(repository, 'remote', 'get-url', 'origin')
-      const match = /^(?:https?:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/]+\/[^/]+?)(?:\.git)?\/?$/i.exec(origin)
-      if (match?.[1].toLowerCase() !== REPOSITORY) throw new Error('POSTMAN_TASK_REPOSITORY_REJECTED')
-      const baseCommit = await command(repository, 'rev-parse', '--verify', 'refs/remotes/origin/main^{commit}')
-      if (!SHA.test(baseCommit) || normalize(await realPath(repository)) !== normalize(repository))
-        throw new Error('POSTMAN_TASK_REPOSITORY_UNAVAILABLE')
-      const context = Object.freeze({ leaderSessionId: id, repository: REPOSITORY,
-        branch: 'main', worktree: repository, baseCommit, devspaceReadOnly: true })
-      await registry.create(id, { ...context, repositoryPath: repository, originUrl: origin,
-        stage: 'ready', diagnostic: null, workers: {},
-        runner: { state: 'none', requestId: null }, bridge: null })
-      contexts.set(id, context)
-      changed(id)
-      return { status: 'POSTMAN_TASK_READ_ONLY_READY', ...context }
-    } catch (error) { return { status: 'POSTMAN_TASK_PREPARE_FAILED', diagnostic: String(error?.message ?? error) } }
-    finally { pending.delete(id) }
+  async function repositoryFor(leader, projectPath) {
+    const path = projectPath ?? leader?.session?.header?.cwd
+    if (typeof path !== 'string' || !path || (projectPath !== undefined && !isAbsolute(path)))
+      throw Error('POSTMAN_TASK_REPOSITORY_UNAVAILABLE')
+    if (normalize(await realPath(path)) !== normalize(path))
+      throw Error('POSTMAN_TASK_REPOSITORY_UNAVAILABLE')
+    const repository = await command(path, 'rev-parse', '--show-toplevel')
+    if (!isAbsolute(repository) || normalize(await realPath(repository)) !== normalize(repository) ||
+        (projectPath !== undefined && normalize(repository) !== normalize(projectPath)))
+      throw Error('POSTMAN_TASK_REPOSITORY_UNAVAILABLE')
+    const originUrl = await command(repository, 'remote', 'get-url', 'origin')
+    const name = githubRepository(originUrl)
+    if (!name) throw Error('POSTMAN_TASK_REPOSITORY_REJECTED')
+    const universalProject = name.toLowerCase() !== REPOSITORY
+    if (universalProject && [resolve(homedir(), '.dsh'), resolve(homedir(), '.dsh-preview')]
+        .some(permanent => normalize(repository) === normalize(permanent)))
+      throw Error('POSTMAN_TASK_PERMANENT_WORKTREE')
+    return { repository, originUrl, name: universalProject ? name : REPOSITORY, universalProject }
   }
 
-  async function prepare(leader) {
+  async function determineBase(info) {
+    if (!info.universalProject) {
+      await command(info.repository, 'fetch', '--prune', 'origin')
+      return { defaultBranch: 'main',
+        baseCommit: await command(info.repository, 'rev-parse', '--verify', 'refs/remotes/origin/main^{commit}'),
+        baseSource: 'remote' }
+    }
+    let remoteHead
+    try { remoteHead = await command(info.repository, 'ls-remote', '--symref', 'origin', 'HEAD') }
+    catch {
+      // Offline is local-only and requires an already proven remote HEAD.
+      let cached
+      try { cached = await command(info.repository, 'symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD') }
+      catch { throw Error('POSTMAN_TASK_DEFAULT_BRANCH_UNPROVEN_OFFLINE') }
+      if (!cached.startsWith('origin/')) throw Error('POSTMAN_TASK_DEFAULT_BRANCH_UNPROVEN_OFFLINE')
+      const defaultBranch = cached.slice('origin/'.length)
+      const baseCommit = await command(info.repository, 'rev-parse', '--verify',
+        'refs/remotes/origin/' + defaultBranch + '^{commit}')
+      if (!SHA.test(baseCommit)) throw Error('POSTMAN_TASK_BASE_INVALID')
+      return { defaultBranch, baseCommit, baseSource: 'cached' }
+    }
+    let branch = /^ref: refs\/heads\/([^\t\r\n]+)\s+HEAD(?:\r?\n|$)/.exec(remoteHead)?.[1]
+    if (!branch) {
+      const heads = await command(info.repository, 'ls-remote', '--heads', 'origin')
+      if (heads.trim()) throw Error('POSTMAN_TASK_DEFAULT_BRANCH_UNPROVEN')
+      try { branch = await githubDefaultBranch(info.name) }
+      catch { throw Error('POSTMAN_TASK_EMPTY_DEFAULT_BRANCH_UNPROVEN') }
+      if (!branch || branch === 'null') throw Error('POSTMAN_TASK_EMPTY_DEFAULT_BRANCH_UNPROVEN')
+      await command(info.repository, 'check-ref-format', '--branch', branch)
+      return { defaultBranch: branch, baseCommit: '', baseSource: 'bootstrap' }
+    }
+    await command(info.repository, 'check-ref-format', '--branch', branch)
+    const remoteSha = remoteHead.split(/\r?\n/).map(line => /^([0-9a-f]{40})\s+HEAD$/.exec(line)?.[1])
+      .find(Boolean)
+    if (!SHA.test(remoteSha ?? '')) throw Error('POSTMAN_TASK_BASE_INVALID')
+    await command(info.repository, 'fetch', '--prune', 'origin')
+    const baseCommit = await command(info.repository, 'rev-parse', '--verify',
+      'refs/remotes/origin/' + branch + '^{commit}')
+    if (baseCommit !== remoteSha) throw Error('POSTMAN_TASK_BASE_CHANGED')
+    return { defaultBranch: branch, baseCommit, baseSource: 'remote' }
+  }
+
+  async function emptyBootstrap(repository, directory) {
+    // Never use the user's staging area or working files to form the first tree.
+    const marker = join(directory, '.postman-empty-tree')
+    await writeFile(marker, '', { flag: 'wx' })
+    let tree
+    try { tree = await command(repository, 'hash-object', '-t', 'tree', '-w', marker) }
+    finally { await unlink(marker) }
+    return command(repository, '-c', 'user.name=Postman Bootstrap',
+      '-c', 'user.email=postman-bootstrap@localhost', 'commit-tree', tree,
+      '-m', 'Initial empty repository base')
+  }
+
+  // A read-only DevSpace investigation needs no task branch, remote push or
+  // secondary worktree. Its authority is still one durable Leader context.
+  async function prepareReadOnly(leader, projectPath) {
     const id = leader?.id
     if (pending.has(id)) return { status: 'POSTMAN_TASK_PREPARE_IN_PROGRESS' }
-    const previous = contexts.get(id)
-    const saved = registry.get(id)
+    const previous = contexts.get(id), saved = registry.get(id)
+    if (saved && saved.stage !== 'closed') {
+      if (projectPath !== undefined && (!isAbsolute(projectPath) ||
+          normalize(saved.repositoryPath) !== normalize(projectPath)))
+        return { status: 'POSTMAN_TASK_PROJECT_CHANGED' }
+      if (previous && saved.stage === 'ready')
+        return { status: 'POSTMAN_TASK_CONTEXT_ALREADY_READY', ...previous }
+      return recover(leader)
+    }
+    pending.add(id)
+    try {
+      if (typeof id !== 'string' || !id) throw Error('POSTMAN_TASK_REPOSITORY_UNAVAILABLE')
+      const info = await repositoryFor(leader, projectPath)
+      let branch = 'main', baseCommit, defaultBranch
+      if (info.universalProject) {
+        try { branch = await command(info.repository, 'symbolic-ref', '--quiet', '--short', 'HEAD') }
+        catch { branch = 'unborn' }
+        try { baseCommit = await command(info.repository, 'rev-parse', '--verify', 'HEAD^{commit}') }
+        catch { baseCommit = '' }
+        try {
+          const remote = await command(info.repository, 'symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD')
+          if (remote.startsWith('origin/')) defaultBranch = remote.slice('origin/'.length)
+        } catch { /* Branchless reading needs no network or default branch. */ }
+      } else {
+        baseCommit = await command(info.repository, 'rev-parse', '--verify', 'refs/remotes/origin/main^{commit}')
+        if (!SHA.test(baseCommit)) throw Error('POSTMAN_TASK_BASE_INVALID')
+      }
+      const row = { leaderSessionId: id, repository: info.name, repositoryPath: info.repository,
+        originUrl: info.originUrl, branch, worktree: info.repository, baseCommit,
+        ...(info.universalProject ? { universalProject: true,
+          ...(defaultBranch ? { defaultBranch } : {}) } : {}),
+        ...(!info.universalProject && projectPath !== undefined ? { selectedDshProject: true } : {}),
+        devspaceReadOnly: true, stage: 'ready', diagnostic: null, workers: {},
+        runner: { state: 'none', requestId: null }, bridge: null }
+      await registry.create(id, row)
+      const context = boundContext(row)
+      contexts.set(id, context); changed(id)
+      return { status: 'POSTMAN_TASK_READ_ONLY_READY', ...context }
+    } catch (error) {
+      return { status: 'POSTMAN_TASK_PREPARE_FAILED', diagnostic: String(error?.message ?? error) }
+    } finally { pending.delete(id) }
+  }
+
+  async function prepare(leader, projectPath) {
+    const id = leader?.id
+    if (pending.has(id)) return { status: 'POSTMAN_TASK_PREPARE_IN_PROGRESS' }
+    const previous = contexts.get(id), saved = registry.get(id)
+    if (saved && saved.stage !== 'closed' && projectPath !== undefined &&
+        (!isAbsolute(projectPath) || normalize(saved.repositoryPath) !== normalize(projectPath)))
+      return { status: 'POSTMAN_TASK_PROJECT_CHANGED' }
     if (previous && saved?.stage === 'ready' && !previous.devspaceReadOnly)
       return { status: 'POSTMAN_TASK_CONTEXT_ALREADY_READY', ...previous }
     if (!previous && saved && saved.stage !== 'closed') return recover(leader)
@@ -98,67 +211,77 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
     pending.add(id)
     let created = false
     try {
-      const cwd = leader?.session?.header?.cwd
-      if (typeof id !== 'string' || !id || typeof cwd !== 'string' || !cwd) throw new Error('POSTMAN_TASK_REPOSITORY_UNAVAILABLE')
-      const repository = await command(cwd, 'rev-parse', '--show-toplevel')
-      const remote = await command(repository, 'remote', 'get-url', 'origin')
-      const match = /^(?:https?:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/]+\/[^/]+?)(?:\.git)?\/?$/i.exec(remote)
-      if (match?.[1].toLowerCase() !== REPOSITORY) throw new Error('POSTMAN_TASK_REPOSITORY_REJECTED')
-      await command(repository, 'fetch', '--prune', 'origin')
-      const baseCommit = await command(repository, 'rev-parse', '--verify', 'refs/remotes/origin/main^{commit}')
-      if (!SHA.test(baseCommit)) throw new Error('POSTMAN_TASK_BASE_INVALID')
-      const trees = await command(repository, 'worktree', 'list', '--porcelain')
+      if (typeof id !== 'string' || !id) throw Error('POSTMAN_TASK_REPOSITORY_UNAVAILABLE')
+      const info = await repositoryFor(leader, projectPath ?? (upgrading ? saved.repositoryPath : undefined))
+      if (upgrading && !sameProject(saved, info.repository, info.originUrl))
+        throw Error('POSTMAN_TASK_PROJECT_CHANGED')
+      const base = await determineBase(info)
+      let baseCommit = base.baseCommit
+      if (base.baseSource !== 'bootstrap' && !SHA.test(baseCommit))
+        throw Error('POSTMAN_TASK_BASE_INVALID')
+      const trees = await command(info.repository, 'worktree', 'list', '--porcelain')
       const existingTrees = trees.split(/\r?\n/).filter(line => line.startsWith('worktree ')).map(line => line.slice(9))
-      if (!existingTrees.some(tree => normalize(tree) === normalize(repository))) throw new Error('POSTMAN_TASK_WORKTREES_UNAVAILABLE')
-      const permanent = [repository, resolve(homedir(), '.dsh'), resolve(homedir(), '.dsh-preview')]
+      if (!existingTrees.some(tree => normalize(tree) === normalize(info.repository)))
+        throw Error('POSTMAN_TASK_WORKTREES_UNAVAILABLE')
+      const permanent = [info.repository, resolve(homedir(), '.dsh'), resolve(homedir(), '.dsh-preview')]
       const branch = 'task/postman-' + randomUUID().replaceAll('-', '')
-      if (!BRANCH.test(branch)) throw new Error('POSTMAN_TASK_BRANCH_INVALID')
-      const remoteExisting = await command(repository, 'ls-remote', '--heads', 'origin', branch)
-      if (remoteExisting !== '') throw new Error('POSTMAN_TASK_REMOTE_BRANCH_EXISTS')
+      if (!BRANCH.test(branch)) throw Error('POSTMAN_TASK_BRANCH_INVALID')
+      if (!info.universalProject) {
+        const remoteExisting = await command(info.repository, 'ls-remote', '--heads', 'origin', branch)
+        if (remoteExisting !== '') throw Error('POSTMAN_TASK_REMOTE_BRANCH_EXISTS')
+      }
       const worktree = await makeDirectory(join(temporaryDirectory(), 'dsh-postman-task-'))
-      if (permanent.some(path => normalize(path) === normalize(worktree)) || existingTrees.some(path => normalize(path) === normalize(worktree))) throw new Error('POSTMAN_TASK_PERMANENT_WORKTREE')
-      const record = { leaderSessionId: id, repository: REPOSITORY, repositoryPath: repository, originUrl: remote,
-        branch, worktree, baseCommit, stage: 'intent', diagnostic: null, workers: {},
-        runner: { state: 'none', requestId: null }, bridge: null }
+      if (permanent.some(path => normalize(path) === normalize(worktree)) ||
+          existingTrees.some(path => normalize(path) === normalize(worktree)) ||
+          (info.universalProject && normalize(await realPath(worktree)) !== normalize(worktree)))
+        throw Error('POSTMAN_TASK_PERMANENT_WORKTREE')
+      const row = { leaderSessionId: id, repository: info.name, repositoryPath: info.repository,
+        originUrl: info.originUrl, branch, worktree, baseCommit, stage: 'intent',
+        diagnostic: null, workers: {}, runner: { state: 'none', requestId: null }, bridge: null,
+        ...(info.universalProject ? { universalProject: true, defaultBranch: base.defaultBranch,
+          baseSource: base.baseSource } : {}),
+        ...(!info.universalProject && (projectPath !== undefined || (upgrading && saved.selectedDshProject))
+          ? { selectedDshProject: true } : {}) }
       if (upgrading) {
-        // Keep the Secretary and its durable ledger, but save the new Git
-        // intent before any worktree or remote side effect.
         await registry.change(id, current => {
           if (current.stage !== 'ready' || current.devspaceReadOnly !== true ||
-              current.leaderSessionId !== id ||
+              current.leaderSessionId !== id || !sameProject(current, info.repository, info.originUrl) ||
               current.runner?.state !== 'none' || current.bridge ||
               Object.values(current.bridgeOperations ?? {}).some(op => op.state !== 'received'))
             throw Error('POSTMAN_TASK_PROMOTION_CHANGED')
-          return { ...current, branch, worktree, baseCommit,
-            devspaceReadOnly: false, stage: 'intent', diagnostic: 'promoting branchless task' }
+          return { ...current, ...row, workers: current.workers, devspaceReadOnly: false,
+            diagnostic: 'promoting branchless task' }
         })
       } else {
-        await registry.create(id, record) // Durable intent precedes the first Git mutation.
+        await registry.create(id, row) // Durable intent before any task ref change.
       }
       created = true
-      await command(repository, 'worktree', 'add', '-b', branch, worktree, baseCommit)
-      await registry.change(id, row => ({ ...row, stage: 'worktree' }))
+      if (base.baseSource === 'bootstrap') {
+        baseCommit = await emptyBootstrap(info.repository, worktree)
+        if (!SHA.test(baseCommit)) throw Error('POSTMAN_TASK_BASE_INVALID')
+        await registry.change(id, current => ({ ...current, baseCommit }))
+      }
+      await command(info.repository, 'worktree', 'add', '-b', branch, worktree, baseCommit)
+      await registry.change(id, current => ({ ...current, stage: 'worktree' }))
       if (normalize(await command(worktree, 'rev-parse', '--show-toplevel')) !== normalize(worktree) ||
           await command(worktree, 'rev-parse', 'HEAD') !== baseCommit ||
-          await command(worktree, 'status', '--porcelain=v1', '--untracked-files=all') !== '') {
-        throw new Error('POSTMAN_TASK_WORKTREE_INVALID')
+          await command(worktree, 'status', '--porcelain=v1', '--untracked-files=all') !== '')
+        throw Error('POSTMAN_TASK_WORKTREE_INVALID')
+      if (!info.universalProject) {
+        await command(info.repository, 'push', 'origin', baseCommit + ':refs/heads/' + branch)
+        const remoteRef = await command(info.repository, 'ls-remote', '--heads', 'origin', branch)
+        if (remoteRef !== baseCommit + '	refs/heads/' + branch)
+          throw Error('POSTMAN_TASK_REMOTE_REF_INVALID')
       }
-      await command(repository, 'push', 'origin', baseCommit + ':refs/heads/' + branch)
-      const remoteRef = await command(repository, 'ls-remote', '--heads', 'origin', branch)
-      if (remoteRef !== baseCommit + '\trefs/heads/' + branch) throw new Error('POSTMAN_TASK_REMOTE_REF_INVALID')
-      const context = Object.freeze({ leaderSessionId: id, repository: REPOSITORY, branch, worktree, baseCommit })
-      await registry.change(id, row => ({ ...row, stage: 'ready' }))
-      contexts.set(id, context)
-      changed(id)
+      await registry.change(id, current => ({ ...current, stage: 'ready' }))
+      const context = boundContext({ ...row, baseCommit, devspaceReadOnly: false })
+      contexts.set(id, context); changed(id)
       return { status: 'TASK_CONTEXT_READY', ...context }
     } catch (error) {
       const diagnostic = String(error?.message ?? error)
       if (created) {
         try { await registry.change(id, row => ({ ...row, stage: 'uncertain', diagnostic })) } catch {}
-        if (upgrading) {
-          contexts.delete(id)
-          changed(id)
-        }
+        if (upgrading) { contexts.delete(id); changed(id) }
       }
       return { status: created ? 'POSTMAN_TASK_PREPARE_UNCERTAIN' : 'POSTMAN_TASK_PREPARE_FAILED', diagnostic }
     } finally { pending.delete(id) }
@@ -194,11 +317,13 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
         // Only the recovery diagnostic for a formerly ready, missing tree is
         // eligible. Re-prove identity/absence; no Git mutation or generic uncertain close.
         const cwd = leader?.session?.header?.cwd
-        if (!cwd || row.repository !== REPOSITORY || !BRANCH.test(row.branch) || !SHA.test(row.baseCommit) ||
+        if (!cwd || (!row.universalProject && row.repository !== REPOSITORY) || !BRANCH.test(row.branch) || !SHA.test(row.baseCommit) ||
             !row.repositoryPath || !row.originUrl || !row.worktree) return reject('TASK_STATE_UNCERTAIN')
-        const repository = await command(cwd, 'rev-parse', '--show-toplevel')
+        const repository = row.universalProject ? row.repositoryPath :
+          await command(cwd, 'rev-parse', '--show-toplevel')
         const originMatch = /^(?:https?:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/]+\/[^/]+?)(?:\.git)?\/?$/i.exec(row.originUrl)
-        if (normalize(repository) !== normalize(row.repositoryPath) || originMatch?.[1].toLowerCase() !== REPOSITORY ||
+        if (normalize(repository) !== normalize(row.repositoryPath) ||
+            originMatch?.[1].toLowerCase() !== row.repository.toLowerCase() ||
             await command(repository, 'remote', 'get-url', 'origin') !== row.originUrl ||
             [repository, resolve(homedir(), '.dsh'), resolve(homedir(), '.dsh-preview')]
               .some(path => normalize(path) === normalize(row.worktree)) || await fileExists(row.worktree))
@@ -227,17 +352,79 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
     finally { pending.delete(id) }
   }
 
+  async function recoverUniversal(leader, row) {
+    const id = leader?.id
+    if (pending.has(id)) return { status: 'POSTMAN_TASK_PREPARE_IN_PROGRESS' }
+    pending.add(id)
+    try {
+      const info = await repositoryFor(leader, row.repositoryPath)
+      if (row.leaderSessionId !== id || !info.universalProject ||
+          !sameProject(row, info.repository, info.originUrl))
+        throw Error('POSTMAN_TASK_PROJECT_CHANGED')
+      if (row.devspaceReadOnly) {
+        if (row.stage !== 'ready' || normalize(row.worktree) !== normalize(info.repository))
+          throw Error('POSTMAN_TASK_READ_ONLY_CONTEXT_UNKNOWN')
+      } else {
+        if (!BRANCH.test(row.branch) || !SHA.test(row.baseCommit) || !row.defaultBranch ||
+            !['remote','cached','bootstrap'].includes(row.baseSource) ||
+            normalize(row.worktree) === normalize(info.repository) ||
+            normalize(await realPath(row.worktree)) !== normalize(row.worktree))
+          throw Error('POSTMAN_TASK_BINDING_INVALID')
+        const listings = (await command(info.repository, 'worktree', 'list', '--porcelain'))
+          .split(/\n\s*\n/).filter(Boolean)
+        const owned = listings.filter(entry => entry.split(/\r?\n/).some(line =>
+          line.startsWith('worktree ') && normalize(line.slice(9)) === normalize(row.worktree)))
+        if (owned.length !== 1 || !owned[0].split(/\r?\n/).includes('branch refs/heads/' + row.branch) ||
+            /(?:^|\n)(?:locked|prunable)(?: |\r?$)/m.test(owned[0]) ||
+            normalize(await command(row.worktree, 'rev-parse', '--show-toplevel')) !== normalize(row.worktree) ||
+            await command(row.worktree, 'branch', '--show-current') !== row.branch ||
+            await command(row.worktree, 'remote', 'get-url', 'origin') !== row.originUrl)
+          throw Error('POSTMAN_TASK_WORKTREE_IDENTITY_UNKNOWN')
+        for (const marker of ['MERGE_HEAD','REBASE_HEAD','CHERRY_PICK_HEAD','REVERT_HEAD',
+          'rebase-merge','rebase-apply','sequencer']) {
+          const path = await command(row.worktree, 'rev-parse', '--git-path', marker)
+          if (await fileExists(resolve(row.worktree, path))) throw Error('POSTMAN_TASK_GIT_OPERATION_BUSY')
+        }
+        const head = await command(row.worktree, 'rev-parse', 'HEAD')
+        if (!SHA.test(head) || await command(row.worktree, 'rev-parse', '--verify', row.baseCommit + '^{commit}') !== row.baseCommit ||
+            await command(row.worktree, 'merge-base', head, row.baseCommit) !== row.baseCommit)
+          throw Error('POSTMAN_TASK_HISTORY_UNKNOWN')
+        if (row.baseSource === 'bootstrap' &&
+            await command(row.worktree, 'rev-list', '--parents', '-n', '1', row.baseCommit) !== row.baseCommit)
+          throw Error('POSTMAN_TASK_BOOTSTRAP_INVALID')
+      }
+      if (row.stage !== 'ready' || ['running', 'restoring'].includes(row.runner?.state) ||
+          Object.values(row.bridgeOperations ?? {}).some(op => op.state === 'pending'))
+        await registry.change(id, current => ({ ...current, stage: 'ready', diagnostic: null,
+          runner: ['running','restoring'].includes(current.runner.state)
+            ? { ...current.runner, state: 'unknown' } : current.runner,
+          bridgeOperations: Object.fromEntries(Object.entries(current.bridgeOperations ?? {}).map(([key, op]) =>
+            [key, op.state === 'pending' ? { ...op, state: 'unknown' } : op])) }))
+      const context = boundContext(row)
+      contexts.set(id, context); changed(id)
+      return { status: 'POSTMAN_TASK_CONTEXT_ALREADY_READY', ...context }
+    } catch (error) {
+      const diagnostic = String(error?.message ?? error)
+      try { await registry.change(id, current => ({ ...current, stage: 'uncertain', diagnostic })) } catch {}
+      contexts.delete(id); changed(id)
+      return { status: 'POSTMAN_TASK_PREPARE_UNCERTAIN', diagnostic }
+    } finally { pending.delete(id) }
+  }
+
   // Recovery never invokes restore(), reset, clean, merge, or a new worktree add.
   async function recover(leader) {
     const id = leader?.id
     if (pending.has(id)) return { status: 'POSTMAN_TASK_PREPARE_IN_PROGRESS' }
     const row = registry.get(id)
     if (!row || row.stage === 'closed') return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
+    if (row.universalProject === true) return recoverUniversal(leader, row)
     if (row.devspaceReadOnly === true) {
       pending.add(id)
       try {
         const cwd = leader?.session?.header?.cwd
-        const repository = await command(cwd, 'rev-parse', '--show-toplevel')
+        const repository = row.selectedDshProject
+          ? (await repositoryFor(leader, row.repositoryPath)).repository
+          : await command(cwd, 'rev-parse', '--show-toplevel')
         if (row.leaderSessionId !== id || row.repository !== REPOSITORY ||
             normalize(repository) !== normalize(row.repositoryPath) ||
             normalize(row.worktree) !== normalize(repository) ||
@@ -263,7 +450,9 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
       if (typeof cwd !== 'string' || !cwd || row.leaderSessionId !== id ||
           row.repository !== REPOSITORY || !BRANCH.test(row.branch) || !SHA.test(row.baseCommit) ||
           !row.worktree || !row.repositoryPath || !row.originUrl) throw new Error('invalid durable binding')
-      const repository = await command(cwd, 'rev-parse', '--show-toplevel')
+      const repository = row.selectedDshProject
+        ? (await repositoryFor(leader, row.repositoryPath)).repository
+        : await command(cwd, 'rev-parse', '--show-toplevel')
       const originMatch = /^(?:https?:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/]+\/[^/]+?)(?:\.git)?\/?$/i.exec(row.originUrl)
       if (normalize(repository) !== normalize(row.repositoryPath) ||
           originMatch?.[1].toLowerCase() !== REPOSITORY ||
@@ -395,11 +584,15 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
       if (activeOperations.has(id) || syncOperations.has(id) || isBusy(id) || !await beforeRestore(id))
         return { status: 'POSTMAN_TASK_CONTEXT_BUSY', diagnostic: { code: 'RESTORE_OPERATION_BUSY' } }
       const { branch, worktree, baseCommit } = context
-      const repository = await command(leader.session.header.cwd, 'rev-parse', '--show-toplevel')
+      const row = registry.get(id)
+      const repository = row.universalProject ? row.repositoryPath : row.selectedDshProject
+        ? (await repositoryFor(leader, row.repositoryPath)).repository
+        : await command(leader.session.header.cwd, 'rev-parse', '--show-toplevel')
       const origin = await command(repository, 'remote', 'get-url', 'origin')
       const worktreeOrigin = await command(worktree, 'remote', 'get-url', 'origin')
       const match = /^(?:https?:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/]+\/[^/]+?)(?:\.git)?\/?$/i.exec(origin)
-      if (context.repository !== REPOSITORY || match?.[1].toLowerCase() !== REPOSITORY ||
+      if ((row.universalProject || row.selectedDshProject ? !sameProject(row, repository, origin) :
+            context.repository !== REPOSITORY || match?.[1].toLowerCase() !== REPOSITORY) ||
           origin !== worktreeOrigin || !BRANCH.test(branch) || !SHA.test(baseCommit))
         throw new Error('repository identity mismatch')
       const permanent = [repository, resolve(homedir(), '.dsh'), resolve(homedir(), '.dsh-preview')]
@@ -422,16 +615,19 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
       const head = await command(worktree, 'rev-parse', 'HEAD')
       if (!SHA.test(head) || await command(worktree, 'merge-base', head, baseCommit) !== baseCommit)
         throw new Error('task HEAD is not descended from base')
-      const remoteLine = await command(repository, 'ls-remote', '--heads', 'origin', branch)
-      const remote = remoteLine.split('\t')[0]
-      if (!SHA.test(remote) || remoteLine !== remote + '\trefs/heads/' + branch)
-        throw new Error('remote task branch missing')
-      await command(worktree, 'fetch', 'origin', 'refs/heads/' + branch + ':refs/remotes/origin/' + branch)
-      if (await command(worktree, 'rev-parse', 'refs/remotes/origin/' + branch) !== remote ||
-          await command(worktree, 'merge-base', remote, baseCommit) !== baseCommit ||
-          await command(worktree, 'merge-base', remote, head) !== head ||
-          await command(repository, 'ls-remote', '--heads', 'origin', branch) !== remoteLine)
-        throw new Error('remote task branch moved unexpectedly')
+      let remote = head, remoteLine = null
+      if (!row.universalProject) {
+        remoteLine = await command(repository, 'ls-remote', '--heads', 'origin', branch)
+        remote = remoteLine.split('\t')[0]
+        if (!SHA.test(remote) || remoteLine !== remote + '\trefs/heads/' + branch)
+          throw new Error('remote task branch missing')
+        await command(worktree, 'fetch', 'origin', 'refs/heads/' + branch + ':refs/remotes/origin/' + branch)
+        if (await command(worktree, 'rev-parse', 'refs/remotes/origin/' + branch) !== remote ||
+            await command(worktree, 'merge-base', remote, baseCommit) !== baseCommit ||
+            await command(worktree, 'merge-base', remote, head) !== head ||
+            await command(repository, 'ls-remote', '--heads', 'origin', branch) !== remoteLine)
+          throw new Error('remote task branch moved unexpectedly')
+      }
       // A failed package does not identify which dirty bytes belong to that
       // runner rather than B/C. With retained Worker bindings, only an already
       // clean tree can be restored without discarding another session's work.
@@ -453,7 +649,7 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
       if (await command(worktree, 'rev-parse', 'HEAD') !== remote ||
           await command(worktree, 'branch', '--show-current') !== branch ||
           await command(worktree, 'status', '--porcelain=v1', '--untracked-files=all') !== '' ||
-          await command(repository, 'ls-remote', '--heads', 'origin', branch) !== remoteLine)
+          (!row.universalProject && await command(repository, 'ls-remote', '--heads', 'origin', branch) !== remoteLine))
         throw new Error('restored task worktree could not be verified')
       await registry.change(id, row => ({ ...row, runner: { state: 'none', requestId: null } }))
       return { status: 'TASK_CONTEXT_RESTORED', branch, worktree, head: remote, ...(recoveryPath ? { recoveryPath } : {}) }
@@ -549,14 +745,35 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
 
   async function verifyWorktree(leaderId) {
     const context = get(leaderId)
-    if (!context) return false
+    if (!context || context.devspaceReadOnly) return false
     try {
-      return normalize(await command(context.worktree, 'rev-parse', '--show-toplevel')) === normalize(context.worktree) &&
+      const rootValid = normalize(await realPath(context.worktree)) === normalize(context.worktree) &&
+        normalize(await command(context.worktree, 'rev-parse', '--show-toplevel')) === normalize(context.worktree) &&
         await command(context.worktree, 'branch', '--show-current') === context.branch &&
-        await command(context.worktree, 'rev-parse', 'HEAD') ===
-          await command(context.worktree, 'rev-parse', 'refs/remotes/origin/' + context.branch) &&
         await command(context.worktree, 'status', '--porcelain=v1', '--untracked-files=all') === ''
+      if (!rootValid) return false
+      if (context.universalProject) {
+        const row = registry.get(leaderId)
+        if (!row || !sameProject(row, context.repositoryPath,
+            await command(context.worktree, 'remote', 'get-url', 'origin'))) return false
+        const head = await command(context.worktree, 'rev-parse', 'HEAD')
+        return SHA.test(head) && await command(context.worktree, 'merge-base', head, context.baseCommit) === context.baseCommit
+      }
+      return await command(context.worktree, 'rev-parse', 'HEAD') ===
+        await command(context.worktree, 'rev-parse', 'refs/remotes/origin/' + context.branch)
     } catch { return false }
+  }
+
+  async function verifyDirectPublication(leaderId) {
+    const context = get(leaderId)
+    if (!context || context.devspaceReadOnly) return false
+    if (!context.universalProject) return true
+    try {
+      if (!await verifyWorktree(leaderId)) return false
+      const head = await command(context.worktree, 'rev-parse', 'HEAD')
+      const remoteLine = await command(context.repositoryPath, 'ls-remote', '--heads', 'origin', context.branch)
+      return remoteLine === head + '\trefs/heads/' + context.branch
+    } catch { return false } // Offline or an unproven remote ref cannot authorize Direct Git publication.
   }
 
   function get(leaderId) { return registry.get(leaderId)?.stage === 'ready' ? contexts.get(leaderId) ?? null : null }
@@ -657,7 +874,7 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
   function dispose() { contexts.clear(); children.clear(); pending.clear(); activeOperations.clear(); syncOperations.clear(); syncQueues.clear(); workerAdmissions.clear(); contextListeners.clear() }
   return { readLedger: id => registry.readLedger(id),
     changeLedger: (id, fn) => registry.changeLedger(id, fn),
-    prepare, prepareReadOnly, recover, close, restore, sync, beginSync, endSync, verifyWorktree, get, record, records, changeRecord, onContextChange, isRestoring, hasActiveOperation, hasSyncOperation, canRetireWorkers, beginWorkerAdmission, endWorkerAdmission, beginOperation, startRunner, endOperation, reserveRestore, releaseRestore, bindChild, child, devspaceBinding, recordBridgeRequest, releaseChild, dispose }
+    prepare, prepareReadOnly, recover, close, restore, sync, beginSync, endSync, verifyWorktree, verifyDirectPublication, get, record, records, changeRecord, onContextChange, isRestoring, hasActiveOperation, hasSyncOperation, canRetireWorkers, beginWorkerAdmission, endWorkerAdmission, beginOperation, startRunner, endOperation, reserveRestore, releaseRestore, bindChild, child, devspaceBinding, recordBridgeRequest, releaseChild, dispose }
 }
 
 // Both entrypoints use one facade. Initialization is awaited before Git/child actions;
