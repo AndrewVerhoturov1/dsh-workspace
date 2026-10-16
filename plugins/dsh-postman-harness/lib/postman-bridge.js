@@ -211,7 +211,7 @@ export function createPostmanBridgeStatusTool(ctx, jobs) {
       description: 'Exact bridgeJobId from POSTMAN_BRIDGE_ACCEPTED or POSTMAN_BRIDGE_READY.' },
       retrySync: { type: 'boolean', description: 'Retry only local task publication synchronization; never send Direct again.' },
       recover: { type: 'boolean', description: 'DevSpace: explicitly authorize the next recovery using the original or latest bridgeJobId; Host resolves the owned chain. Known chat continues; unavailable chat uses a new owned attempt with safe isolation if old writes are unknown. Legacy: existing one-shot Direct capability, no prompt/state arguments.' },
-      reconcileWriter: { type: 'boolean', description: 'Explicitly check this exact archived writer using Host-owned native execution evidence. Releases its retained root only after revoked future tool authority, whole-process settlement and absence of other live writers. No caller-provided receipt.' } },
+      reconcileWriter: { type: 'boolean', description: 'Explicitly check this exact retained writer using Host-owned native evidence. A received terminal with a verified native hold may revoke its exact future tool authority before checking; an active Bridge request cannot. Releases the root only after whole-process settlement and absence of other writers. Does not stop background jobs; no caller-provided receipt.' } },
     output: output(),
     async execute(args, exec) {
       if (!authorized(exec, ctx)) return { status: 'POSTMAN_BRIDGE_CALLER_REJECTED' }

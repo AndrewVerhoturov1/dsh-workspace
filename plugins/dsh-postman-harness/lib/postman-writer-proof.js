@@ -1,18 +1,76 @@
-import {readFileSync, lstatSync, realpathSync} from 'node:fs'
+import {readFileSync, lstatSync, realpathSync, unlinkSync} from 'node:fs'
 import {homedir} from 'node:os'
 import {join, resolve} from 'node:path'
 import {loadDevspaceChannelForOwner} from './postman-devspace.js'
+
+/** A native background/pending lease survives a delivered web result. Reading
+ * it can only retain the original granted root, never prove native settlement. */
+export function readDevspaceWriterHold({leaderSessionId,bridgeJobId,task,op}) {
+  if(op.writerSettlement || !op.devspace?.channel) return null
+  const savedRoot=op.residualWriteRoot ?? (op.devspace.approvedAccess==='write' ? op.devspace.approvedRoot :
+    op.devspace.mode==='WRITE_ISOLATED' ? task.worktree :
+      op.devspace.mode==='WRITE_TEST' ? join(op.devspace.channel,'workspace') : null)
+  const uncertain=()=>savedRoot ? {root:savedRoot,verified:false} : null
+  let held=false
+  try {
+    const file=join(op.devspace.channel,'writer-hold.json')
+    let info
+    try {info=lstatSync(file)} catch(error) {return error.code==='ENOENT' ? null : uncertain()}
+    held=true
+    const binding=loadDevspaceChannelForOwner(op.devspace.channel,{leaderSessionId,bridgeJobId,
+      lunaSessionId:op.childSessionId,requestId:op.requestId})
+    if(binding.branch!==task.branch || binding.mode!==op.devspace.mode || !binding.writeRoot || binding.writeRoot!==savedRoot) return uncertain()
+    if(info.isSymbolicLink() || info.size>65536 || realpathSync(file)!==resolve(file)) return uncertain()
+    const lease=JSON.parse(readFileSync(file,'utf8'))
+    if(lease.version!==1 || !/^[0-9a-f-]{36}$/.test(lease.generation??'') ||
+      ['jobId','requestId','leaderSessionId','lunaSessionId','branch','writeRoot','capability'].some(key=>lease[key]!==binding[key]))
+      return uncertain()
+    const claimFile=join(binding.channel,'writer-claim.json'),claimInfo=lstatSync(claimFile)
+    if(claimInfo.isSymbolicLink() || claimInfo.size>65536 || realpathSync(claimFile)!==resolve(claimFile)) return uncertain()
+    const claim=JSON.parse(readFileSync(claimFile,'utf8'))
+    if(claim.version!==1 || claim.generation!==lease.generation || typeof claim.scope!=='string' || !claim.scope ||
+      ['jobId','requestId','leaderSessionId','branch','writeRoot'].some(key=>claim[key]!==binding[key])) return uncertain()
+    return {root:binding.writeRoot,verified:true}
+  } catch { return held ? uncertain() : null }
+}
+export const devspaceWriterHoldRoot=options=>readDevspaceWriterHold(options)?.root??null
+
+/** Called only after the exact native proof has been durably recorded. */
+export function clearDevspaceWriterHold({leaderSessionId,bridgeJobId,task,op,proof}) {
+  try {
+    const binding=loadDevspaceChannelForOwner(op.devspace?.channel,{leaderSessionId,bridgeJobId,
+      lunaSessionId:op.childSessionId,requestId:op.requestId})
+    if(proof?.version!==1 || proof.source!=='devspace_native_tree' || !/^[0-9a-f-]{36}$/.test(proof.generation??'') ||
+      !Number.isFinite(Date.parse(proof.settledAt)) || binding.branch!==task.branch ||
+      ['jobId','requestId','leaderSessionId','branch','writeRoot'].some(key=>proof[key]!==binding[key])) return false
+    const claimFile=join(binding.channel,'writer-claim.json'),claimInfo=lstatSync(claimFile)
+    if(claimInfo.isSymbolicLink() || claimInfo.size>65536 || realpathSync(claimFile)!==resolve(claimFile)) return false
+    const claim=JSON.parse(readFileSync(claimFile,'utf8'))
+    if(claim.version!==1 || claim.generation!==proof.generation ||
+      ['jobId','requestId','leaderSessionId','branch','writeRoot'].some(key=>claim[key]!==binding[key])) return false
+    const file=join(binding.channel,'writer-hold.json')
+    try {lstatSync(file)} catch(error) {return error.code==='ENOENT'}
+    const held=readDevspaceWriterHold({leaderSessionId,bridgeJobId,task,op:{...op,writerSettlement:undefined}})
+    if(!held?.verified || held.root!==proof.writeRoot) return false
+    const lease=JSON.parse(readFileSync(file,'utf8'))
+    if(lease.generation!==proof.generation ||
+      ['jobId','requestId','leaderSessionId','lunaSessionId','branch','writeRoot','capability'].some(key=>lease[key]!==binding[key])) return false
+    unlinkSync(file)
+    return true
+  } catch {return false}
+}
 
 /** The caller supplies an owned journal row, never a model-authored exit receipt. */
 export async function observeDevspaceWriter({leaderSessionId,bridgeJobId,task,op,otherWriters=[],controlFile}) {
   try {
     const binding=loadDevspaceChannelForOwner(op.devspace?.channel, {leaderSessionId,bridgeJobId,
       lunaSessionId:op.childSessionId,requestId:op.requestId})
-    const writeRoot=op.residualWriteRoot ?? (op.devspace?.approvedAccess==='write' ? op.devspace.approvedRoot : task.worktree)
+    const writeRoot=op.residualWriteRoot ?? (op.devspace?.approvedAccess==='write' ? op.devspace.approvedRoot :
+      op.devspace?.mode==='WRITE_TEST' ? binding.writeRoot : task.worktree)
     if(binding.writerRuntimeVersion!==1 || binding.branch!==task.branch || binding.writeRoot!==writeRoot)
       return {ok:false,code:'WRITER_BINDING_CHANGED'}
     const descriptor=controlFile??join(homedir(),'.dsh','devspace','writer-control.json')
-    if(lstatSync(descriptor).isSymbolicLink() || lstatSync(descriptor).size>4096 || realpathSync(descriptor)!==resolve(descriptor))
+    if(lstatSync(descriptor).isSymbolicLink() || lstatSync(descriptor).size>1048576 || realpathSync(descriptor)!==resolve(descriptor))
       return {ok:false,code:'DEVSPACE_NATIVE_PROOF_UNAVAILABLE'}
     const control=JSON.parse(readFileSync(descriptor,'utf8'))
     if(control.version!==1 || !Number.isSafeInteger(control.port) || control.port<1 || control.port>65535 ||

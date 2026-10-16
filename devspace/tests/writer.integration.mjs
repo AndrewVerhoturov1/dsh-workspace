@@ -36,6 +36,7 @@ config.oauth={...config.oauth,ownerToken:owner,allowedRedirectHosts:['127.0.0.1'
 config.logging={...config.logging,level:'silent'};config.subagents={...config.subagents,enabled:false};
 const native=createServer(config);
 let count=0;
+let call,workspace_id;
 const check=(value,name)=>{assert(value,name);count++;console.log('PASS '+name)};
 try {
   const registration=await fetch(base+'/register',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({client_name:'isolated-writer-proof',
@@ -48,7 +49,7 @@ try {
   const code=new URL(consent.headers.get('location')).searchParams.get('code');
   const granted=await form('/token',{grant_type:'authorization_code',client_id:client.client_id,code,code_verifier:verifier,redirect_uri:fields.redirect_uri,resource:base+'/mcp'});
   assert.equal(granted.status,200);const token=(await granted.json()).access_token;
-  const call=async(name,args,scope='owned-chat')=>{
+  call=async(name,args,scope='owned-chat')=>{
     const response=await fetch(base+'/mcp',{method:'POST',headers:{'content-type':'application/json',accept:'application/json, text/event-stream',authorization:'Bearer '+token,'MCP-Protocol-Version':'2025-03-26'},
       body:JSON.stringify({jsonrpc:'2.0',id:randomUUID(),method:'tools/call',params:{name,arguments:args,_meta:{'openai/session':scope}}})});
     const text=await response.text();assert.equal(response.status,200,text);
@@ -57,7 +58,7 @@ try {
   };
   const opened=await call('open_workspace',{path:'postman-writer:'+id});
   check(!opened.isError && opened.structuredContent.root===project,'Host alias binds actual MCP metadata to the exact native root');
-  const workspace_id=opened.structuredContent.workspace_id;
+  workspace_id=opened.structuredContent.workspace_id;
   const write=await call('write',{workspace_id,path:'kept.txt',content:'preserved'});
   check(!write.isError&&readFileSync(join(project,'kept.txt'),'utf8')==='preserved','instrumented native MCP write settles');
   process.env.PATH='C:/Program Files/Git/bin;C:/Program Files/nodejs;'+process.env.PATH;
@@ -74,6 +75,10 @@ try {
   check(!independent.isError&&readFileSync(join(project,'new.txt'),'utf8')==='independent','released root accepts a new independent native MCP write');
   console.log('PASS '+count+' isolated native writer integration checks; production unchanged');
 } finally {
+  if(call&&workspace_id){
+    const jobs=await call('bash',{workspace_id,execution:'status'});
+    for(const job of jobs.structuredContent?.jobs??[])if(!job.treeSettled)await call('bash',{workspace_id,execution:'stop',job_id:job.native_job_id});
+  }
   await new Promise(resolve=>server.close(resolve)); await native.close();
   rmSync(root,{recursive:true,force:true,maxRetries:5,retryDelay:100});
 }

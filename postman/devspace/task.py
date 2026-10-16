@@ -23,12 +23,19 @@ def render_task(binding, intent, signal_command):
     else:
         scope = "Записи в исходную область и любые другие файлы запрещены."
     access = "Сначала открой назначенную область и прочитай безопасный существующий файл, чтобы проверить реальный доступ в этом разговоре."
+    background = ""
     if mode != "READ_ONLY":
         access = ("Перед любыми другими DevSpace-инструментами вызови open_workspace с path='postman-writer:" +
                   binding["jobId"] + "'. Host связывает этот адрес с разрешённой папкой записи. "
                   "Если адрес недоступен, сообщи CAPABILITY_UNAVAILABLE обычным текстом; "
                   "не обходи его открытием буквального пути. Затем прочитай безопасный существующий файл, "
                   "чтобы проверить реальный доступ в этом разговоре.")
+        background = ("Для нужного по поручению фонового сервера/watcher используй явный режим DevSpace Bash "
+                      "execution='background', сохрани точный ID из ответа. Проверяй его через execution='status' "
+                      "(без job_id — список своих заданий), останавливай адресно через execution='stop', job_id=<полученный ID>. "
+                      "Обычное завершение команды и BACKGROUND_RUNNING не означают окончания всего дерева. "
+                      "Пока дерево не завершено, не запускай конфликтующую запись. Не повторяй запуск после неизвестного ответа: "
+                      "сначала запроси статус. UI Stop, восстановление REQ и тайм-аут ожидания не являются командой остановить приложение.")
     # The first line is a non-secret immutable correlation key. ChatGPT may
     # reformat long Markdown, but a matching exact request-key line still lets
     # the Host safely locate this user turn without resending UNKNOWN Sends.
@@ -40,6 +47,7 @@ REQ: {binding['requestId']}
 Режим: {mode}. {scope}
 DevSpace Bash не является песочницей: работай с файлами только в назначенной области. Веб-поиск, подготовка документов, изображения и другие реально доступные инструменты разрешены, когда полезны для задачи. Входные изображения и документы передаёт Host автоматически, если они назначены Leader.
 {computer_use}
+{background}
 Не меняй собственные права и не создавай новых AI-агентов/подзадачи. Доверенный браузерный Postman transport выполняет Host, а не ChatGPT.
 Не читай чужие секреты и runtime credentials; не меняй чужие данные и не перезапускай Host. GitHub writes/commit/push/PR/merge — только через отдельный разрешённый местный маршрут по политике репозитория.
 DevSpace Bash не понимает PowerShell оператор &. Запись local bell через явный pwsh -File ниже — отдельное узкое разрешение, независимо от READ_ONLY. Выполни команду именно через DevSpace Bash; не читать binding/capability/JSON:

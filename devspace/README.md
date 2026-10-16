@@ -79,8 +79,23 @@ binding с `openai/session`, разрешённым корнем и отдель
 новая разрешённая попытка может получить отдельное поколение/папку без возврата прав старого REQ.
 Обычный буквальный путь не заменяет этот адрес для пишущего Postman-задания.
 
-На Windows `writer-process.ps1` помещает фиксированный запуск в Job Object до исполнения команды
-и ждёт нулевого числа процессов всего дерева, включая detached descendants. Неизвестное завершение
+Обычный DevSpace без проверенного Postman binding использует исходный executor `createBashTool`:
+Postman helper не выбирается по одному ALS-store, workspace/cwd или совпадению пути. Ограничение восьми
+одновременных Bash-вызовов и исходный предел команды 300 секунд сохраняются. Неотслеживаемый сторонний
+writer оставляет UNKNOWN только для пересекающегося освобождения Postman; независимые каталоги доступны.
+
+На Windows `writer-process.ps1` помещает Postman-запуск в Job Object до исполнения команды.
+Короткая foreground-команда и whole-tree settlement — разные факты: положительный proof требует
+нулевого числа процессов всего дерева, включая detached descendants. Для намеренного сервера/watcher
+исполнитель использует существующий MCP Bash с `execution:'background'`, получает ID и состояние
+работающего задания. `execution:'status'` с `job_id` проверяет его; без ID показывает только свои задания.
+`execution:'stop'` требует точного ID и отдельного адресного намерения. Scope/generation и права старого
+REQ проверяются; новый запуск не получает прав от наличия чужого ID. `postman_app` Worker не подменяет
+этот маршрут ChatGPT DevSpace.
+
+Завершение основной команды, тайм-аут ожидания, UI Stop и перезапуск Host не выключают фоновое приложение
+и не означают whole-tree settlement. При неизвестном ответе запуска сначала запроси status, не повторяй
+команду. Native-владение и адресная остановка отделены от ожидания ответа. Неизвестное завершение
 helper/runtime не считается доказательством. Private loopback controller выдаёт Host факты exact
 owner/REQ/root/branch/generation; `postman_bridge_status({bridge_job_id,reconcileWriter:true})`
 снимает residual только после revoke, native settlement и проверки других writers. Release не меняет
@@ -95,7 +110,13 @@ physical proof от одного `idle`/закрытия сессии: их во
 не отслеживались. При таких соседях release остаётся непроверенным, доступна новая изолированная
 папка. Пересекающийся app job без native terminal также удерживает ресурс.
 
-Патчер проверяет обе исходные версии/SHA до изменений и сохраняет оба оригинала. Эти source-изменения
+Именованный Job Object удерживает отдельный фиксированный процесс-владелец: выход Node-контроллера
+не закрывает его native handle. Новый контроллер может найти собственный ID и адресно остановить
+задание по сохранённому scope/generation, но потерянный общий учёт не восстанавливается как positive proof.
+Сохранённый native hold защищает только пересекающуюся папку и после restart; снимается после durable release.
+
+Патчер проверяет версию/SHA всех трёх upstream-файлов (`pi-tools.js`, `server.js`, `tool-surfaces/claude.js`)
+до изменений и сохраняет оригиналы. Эти source-изменения
 не устанавливают новый runtime и не перезапускают действующий сервер.
 
 Наблюдатель **никогда не повторяет MCP-команды**. Если соединение оборвалось после начала изменяющей команды,
@@ -139,6 +160,8 @@ node --test devspace/tests/runtime.test.mjs
 node devspace/tests/native.integration.mjs
 node devspace/tests/bash-limit.integration.mjs
 node devspace/tests/disconnect.integration.mjs
+node devspace/tests/background.integration.mjs
+node --test devspace/tests/writer-parent-exit.test.mjs
 ```
 
 Испытания создают отдельные временные проекты, процессы, порт и OAuth SQLite. Сбой внешнего маршрута
@@ -149,5 +172,6 @@ node devspace/tests/disconnect.integration.mjs
 Установка файлов выполняется из проверенного task worktree с резервной копией существующих сценариев.
 `install-watchdog.ps1` использует штатное UAC и проверяет, что повышение не изменило пользователя.
 Для отката: приостановить/отключить задание Планировщика, штатно остановить новый сервер после окончания
-работы, вернуть сценарии из локальной копии и оригиналы `pi-tools.js.dsh-original` / `server.js.dsh-original`, затем запустить прежний
+работы, вернуть сценарии из локальной копии и оригиналы `pi-tools.js.dsh-original`, `server.js.dsh-original`,
+`tool-surfaces/claude.js.dsh-original`, затем запустить прежний
 сервер. OAuth, SQLite, проекты, адрес и ключи не удаляются. Не использовать общий `funnel reset`.

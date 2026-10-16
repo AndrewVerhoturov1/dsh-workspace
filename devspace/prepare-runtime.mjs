@@ -24,25 +24,53 @@ export async function runShellTool(input, context) {
     finally { dshActiveShells--; }
 }
 async function dshRunShellTool(input, context) {`;
+const managedAfter=after.replace('    if (dshActiveShells >= 8)',
+  '    if (["status", "stop"].includes(input.execution)) return await dshRunShellTool(input, context);\n    if (dshActiveShells >= 8)');
+const oldPiPrefix='import {dshWriters} from '+JSON.stringify(runtime)+';\nimport {getShellConfig} from '+JSON.stringify(shell)+';\n';
+const piPrefix='import {dshWriters} from '+JSON.stringify(runtime)+';\nimport {getShellConfig,getShellEnv} from '+JSON.stringify(shell)+';\n';
+const previousPi=source=>oldPiPrefix+source.replace(before,after)
+  .replace('createBashTool(context.cwd);','createBashTool(context.cwd, {operations: dshWriters.bashOperations(getShellConfig)});');
 const changes=[
   {file,sha:'98f0b596058dad3aa34d99f6735ef9fdb5f1053844da41f7a59117e4d9fd6b00',
-    transform:source=>'import {dshWriters} from '+JSON.stringify(runtime)+';\nimport {getShellConfig} from '+JSON.stringify(shell)+';\n'+
-      source.replace(before,after).replace('createBashTool(context.cwd);','createBashTool(context.cwd, {operations: dshWriters.bashOperations(getShellConfig)});')},
+    previous:previousPi,
+    transform:source=>piPrefix+source.replace(before,managedAfter).replace('const tool = createBashTool(context.cwd);',
+      `const managed = dshWriters.background(input, { ...context, env: getShellEnv() }, getShellConfig);
+    if (managed !== undefined) return await managed;
+    if ((input.execution && input.execution !== "foreground") || input.job_id) return { isError: true, content: [{ type: "text", text: "WRITER_BINDING_REQUIRED" }] };
+    if (typeof input.command !== "string") return { isError: true, content: [{ type: "text", text: "Shell command is required" }] };
+    const operations = dshWriters.bashOperations(getShellConfig);
+    const tool = operations ? createBashTool(context.cwd, { operations }) : createBashTool(context.cwd);`)},
   {file:join(pkg,'dist/server.js'),sha:'0c7601c4be6b9d3a53ef7b4d672f43a3b728914cf10f255fdaed6c6cd849269a',
     transform:source=>'import {dshWriters} from '+JSON.stringify(runtime)+';\n'+source
       .replace('withTrackedToolHandlers(server, trackToolActivity)','withTrackedToolHandlers(server, trackToolActivity, workspaces)')
       .replace('function withTrackedToolHandlers(server, trackToolActivity) {','function withTrackedToolHandlers(server, trackToolActivity, workspaces) {')
       .replace('trackToolActivity(() => Promise.resolve(handler(...handlerArgs)))',
         'trackToolActivity(() => dshWriters.runTool(args[0], handlerArgs[0], handlerArgs[1], workspaces, () => Promise.resolve(handler(...handlerArgs)), args[1]?.annotations?.readOnlyHint === true))')},
+  {file:join(pkg,'dist/tool-surfaces/claude.js'),sha:'6fd9cb01bd4efcee55a457e310ae58530c92cd67fd623db274ba9f59d4bcf8f8',
+    transform:source=>{
+      const index=source.indexOf('function registerShellTool(context) {');
+      const head=source.slice(0,index), body=source.slice(index);
+      return head+body.replace('inputSchema: {',`inputSchema: {
+            execution: z.enum(["foreground", "background", "status", "stop"]).optional().describe("Postman writer only: background starts an owned native job; status lists or inspects it; stop requires its exact job_id. Default foreground. Timeout bounds waiting, never background lifetime."),
+            job_id: z.string().optional().describe("Exact native_job_id from Postman background/status; omit for status discovery."),`)
+        .replace(/command:\s*z\s*\.string\(\)/,'command: z.string().optional()')
+        .replace('outputSchema: resultOutputSchema(),',`outputSchema: resultOutputSchema({
+            native_job_id: z.string().optional(), state: z.string().optional(), jobs: z.array(z.unknown()).optional(),
+            foregroundFinished: z.boolean().optional(), exitCode: z.number().nullable().optional(), treeSettled: z.boolean().optional(),
+            output: z.string().optional(), waitExpired: z.boolean().optional(), evidence: z.string().optional(),
+        }),`)
+        .replace(/structuredContent: \{\s*result:/,'structuredContent: { ...response.structuredContent, result:')
+        .replaceAll('input.command.length','(input.command?.length ?? 0)');
+    }},
 ];
-// Validate every upstream input before changing either file. Retain original bytes.
+// Validate every upstream input before changing any file. Retain original bytes.
 const prepared=changes.map(change=>{
   const saved=readFileSync(change.file,'utf8'), backup=change.file+'.dsh-original';
   const canonical=existsSync(backup)?readFileSync(backup,'utf8'):saved;
   if(createHash('sha256').update(canonical).digest('hex')!==change.sha) throw Error('Unexpected upstream source; preserved');
   const patched=change.transform(canonical);
   const legacy=change.file.endsWith('pi-tools.js') ? canonical.replace(before,after) : canonical;
-  if(![canonical,legacy,patched].includes(saved)) throw Error('Unexpected patched source; preserved');
+  if(![canonical,legacy,patched,...(change.previous?[change.previous(canonical)]:[])].includes(saved)) throw Error('Unexpected patched source; preserved');
   return {...change,canonical,patched,backup};
 });
 for(const change of prepared) {

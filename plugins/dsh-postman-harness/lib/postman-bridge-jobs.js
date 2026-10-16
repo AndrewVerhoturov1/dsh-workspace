@@ -6,6 +6,7 @@ import { DirectPostmanJobManager, parsePostmanUserTurn } from './direct-current-
 import { createPostmanDevspaceLanes } from './postman-devspace-lanes.js'
 import { requestDevspaceControl, readDevspaceControls, loadDevspaceChannelForOwner,
   revokeDevspaceChannel, readDevspaceEvent, devspaceTerminal } from './postman-devspace.js'
+import { devspaceWriterHoldRoot } from './postman-writer-proof.js'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { buildPostmanBridgeStartRequest, isTopLevelPostmanSupervisor, POSTMAN_BRIDGE_PROVIDER,
   settleTrustedPostmanStatus } from './postman-bridge-core.js'
@@ -562,8 +563,10 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     for (const [owner,row] of rows) {
       if (!row) continue
       for (const historical of [row, ...(row.retiredTasks ?? [])]) {
-        if (Object.values(historical.bridgeOperations ?? {}).some(op => {
+        if (Object.entries(historical.bridgeOperations ?? {}).some(([id,op]) => {
           if (op.writerSettlement) return false
+          if (id !== job.bridgeJobId && overlaps(devspaceWriterHoldRoot({leaderSessionId:owner,
+            bridgeJobId:id,task:historical,op}))) return true
           // Dirty isolation may preserve a task even when browser revocation
           // failed. Its saved writer scope still protects the original files.
           const unresolved = !op.executionRevoked &&
