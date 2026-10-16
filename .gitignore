@@ -75,3 +75,11 @@ tmp-*.ps1
 !/devspace/start.ps1
 !/devspace/status.ps1
 !/devspace/stop.ps1
+!/devspace/lifecycle.ps1
+!/devspace/watchdog.ps1
+!/devspace/install-watchdog.ps1
+!/devspace/server-runner.mjs
+!/devspace/probe.mjs
+!/devspace/prepare-runtime.mjs
+!/devspace/README.md
+!/devspace/tests/
