@@ -1,10 +1,13 @@
 import { randomUUID } from 'node:crypto'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 export const name = 'dsh-workspace-policy'
 export const inject = ['systemPrompt', 'tools', 'fs', 'skills']
 const CONTRACT = 'docs/workflow/TASK_CONTRACT.md'
 const POLICY = 'REPO_POLICY.md'
+const HOST_ROOT = fileURLToPath(new URL('../../', import.meta.url))
+const LEADER_SKILL_BASE = resolve(HOST_ROOT, '.agents/skills/postman-leader')
 // Only current, concrete subprojects. This is not a configurable rule registry.
 const PROJECTS = [
   ['postman', ['postman', 'plugins/dsh-postman-harness', '.agents/skills/postman-leader', '.agents/skills/delegate-via-postman', '.agents/skills/delegate-via-postman-ask', '.agents/skills/delegate-via-postman-image']],
@@ -84,8 +87,10 @@ export function apply(ctx) {
     if (!agent) return assembly
     const sections = await documents(ctx,agent,context.signal)
     if (leader(agent)) {
-      const skill = await ctx.skills.get('postman-leader',{cwd:agent.session.header.cwd,scope:agent,signal:context.signal})
-      if (!skill) throw Error('WORKSPACE_POLICY_REQUIRED: postman-leader skill unavailable')
+      const skill = await ctx.skills.get('postman-leader',{cwd:HOST_ROOT,scope:agent,signal:context.signal})
+      if (!skill || skill.resourceBase?.kind !== 'directory' ||
+          typeof skill.resourceBase.path !== 'string' || resolve(skill.resourceBase.path) !== LEADER_SKILL_BASE)
+        throw Error('WORKSPACE_POLICY_REQUIRED: canonical postman-leader skill unavailable from Host installation')
       sections.push({name:sectionName('skill:postman-leader'),text:'Automatically loaded for this exact top-level Postman Leader only.\n<skill_content name="postman-leader">\nBase directory: '+(skill.resourceBase?.path ?? skill.provider)+'\n\n'+skill.content+'\n</skill_content>'})
     }
     // Dynamic context is reassembled by Host on every request; the native
