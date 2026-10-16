@@ -25,11 +25,13 @@ test('named lifecycle statuses accept isolated restore, archived work and a new 
   const ptc = helper({ postman_task_restore() {}, postman_bridge_stop() {}, postman_bridge_status() {} })
   for (const [tool, status] of [['postman_task_restore','POSTMAN_TASK_RESTORE_ISOLATED'],
     ['postman_bridge_stop','POSTMAN_BRIDGE_ARCHIVED'], ['postman_bridge_status','POSTMAN_BRIDGE_ARCHIVED'],
-    ['postman_bridge_status','POSTMAN_BRIDGE_ACCEPTED']]) {
+    ['postman_bridge_status','POSTMAN_BRIDGE_ACCEPTED'], ['postman_bridge_status','POSTMAN_WRITER_RELEASED'],
+    ['postman_bridge_status','POSTMAN_WRITER_ALREADY_RELEASED']]) {
     const result = {status, taskCompleted:false}
     assert.equal(ptc.expectStatus(result, tool), result)
   }
   assert.throws(()=>ptc.expectStatus({status:'POSTMAN_BRIDGE_ARCHIVE_FENCE_FAILED'},'postman_bridge_stop'),/unexpected status/)
+  assert.throws(()=>ptc.expectStatus({status:'POSTMAN_WRITER_EXIT_UNPROVEN'},'postman_bridge_status'),/unexpected status/)
 })
 
 test('utf8Bytes and jsonBytes count Cyrillic, emoji, escaping and lone surrogates exactly', () => {

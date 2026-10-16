@@ -82,6 +82,12 @@ def wait_for_bell_after_unknown_send(binding, *, timeout_ms, sleep, monotonic,
                 "source": "transport_diagnostic", "diagnostic": "REVOKED",
                 "conversationRef": conversation_ref, "sendState": "UNKNOWN",
                 "message": "Host withdrew this request; local DevSpace tools may continue."}}
+        if (observable and str(getattr(page, "url", "")) == conversation_ref
+                and controls.newer_user_turn(page, current_prompt)):
+            return {"ok": True, "code": "DEVSPACE_DIAGNOSTIC", "details": {
+                "source": "transport_diagnostic", "diagnostic": "UNKNOWN", "sendState": "UNKNOWN",
+                "conversationRef": conversation_ref, "assistantText": "", "supersededByUserTurn": True,
+                "message": "A newer user assignment owns this chat; the old request cannot Stop or Send."}}
         now = monotonic()
         # Bell gets a short grace period after a correlated final text.
         if final_since is not None and now - final_since >= 12:
@@ -274,12 +280,15 @@ def wait_for_signal(page, prompt, chat_url, binding, *, timeout_ms, interval_ms,
     latest = prompt
     anchor = None
     latest_text = ""
+    superseded_by_user_turn = False
 
     def bell():
         event = read_event(binding)
         return {"ok": True, "code": "DEVSPACE_SIGNAL_RECEIVED", "details": event} if event else None
 
     def finish(result):
+        if superseded_by_user_turn:
+            result["details"]["supersededByUserTurn"] = True
         completed = (result["code"] != "DEVSPACE_DIAGNOSTIC" or
                      result.get("details", {}).get("source") == "text_fallback")
         if completed:
@@ -299,10 +308,14 @@ def wait_for_signal(page, prompt, chat_url, binding, *, timeout_ms, interval_ms,
             "message": message}}
 
     def owned_turn():
+        nonlocal superseded_by_user_turn
         # The Host binding owns this exact saved chat. Visible old turns are
-        # result-correlation evidence, never a prerequisite for timed UI Stop.
+        # optional correlation evidence. Positive evidence of a newer user turn
+        # fences this old observer even if that newer turn is later virtualized.
+        superseded_by_user_turn = (superseded_by_user_turn or
+                                   controls.newer_user_turn(page, latest))
         return (not controls.revoked(binding) and str(getattr(page, "url", "")) == chat_url
-                and submit.is_bound_chat_url(chat_url) and
+                and not superseded_by_user_turn and submit.is_bound_chat_url(chat_url) and
                 submit.request_key_line_from_prompt(prompt) == "POSTMAN_REQUEST_ID: " + binding["requestId"])
 
     completion_result = None
@@ -377,11 +390,18 @@ def wait_for_signal(page, prompt, chat_url, binding, *, timeout_ms, interval_ms,
         if controls.revoked(binding):
             return finish(diagnostic("Host withdrew this request; local DevSpace tools may continue.",
                                      outcome="REVOKED"))
+        if not owned_turn() and superseded_by_user_turn:
+            return finish(diagnostic("A newer user assignment owns this chat; old request cannot Stop or Send.",
+                                     outcome="UNKNOWN"))
         acted = controls.process_one(page, latest, chat_url, binding,
             activity=lambda p, prompt, url: activity_snapshot(p, prompt, url, anchor_binding=anchor),
             stop_control=stop_control, sleep=sleep, monotonic=monotonic)
         if bell():
             return finish(bell())
+        if acted and acted.get("supersededByUserTurn"):
+            superseded_by_user_turn = True
+            return finish(diagnostic("A newer user assignment superseded this old control; no Stop or Send.",
+                                     outcome="UNKNOWN"))
         if acted and acted.get('kind') == 'stop':
             return finish(diagnostic('Stop requested by Leader. UI: ' + acted['status'] +
                 '. Any local DevSpace commands may still be running.', outcome='PARTIAL'))
@@ -525,6 +545,9 @@ def wait_for_signal(page, prompt, chat_url, binding, *, timeout_ms, interval_ms,
                             return finish(diagnostic("Owned conversation changed before Stop; no click."))
                         if bell():
                             break
+                        if not owned_turn():
+                            return finish(diagnostic("Request no longer owns the active user assignment before Stop; no click.",
+                                                     outcome="UNKNOWN"))
                         stop_clicked = True
                         try:
                             button.click(timeout=max(1, min(1000, int((stop_deadline-monotonic())*1000))))

@@ -81,5 +81,7 @@ tmp-*.ps1
 !/devspace/server-runner.mjs
 !/devspace/probe.mjs
 !/devspace/prepare-runtime.mjs
+!/devspace/writer-runtime.mjs
+!/devspace/writer-process.ps1
 !/devspace/README.md
 !/devspace/tests/

@@ -228,6 +228,34 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(self.stops,[])
         self.assertEqual(self.sent,[])
 
+    def test_stale_explicit_preempt_cannot_stop_or_send_newer_user_task(self):
+        cid = "00000000-0000-4000-8000-000000000019"
+        self.issue(cid, "preempt", priority="urgent")
+        turns = [{"index": 0, "role": "user", "text": "old"},
+                 {"index": 1, "role": "assistant", "text": "older operation"},
+                 {"index": 2, "role": "user", "text": "new manual user task"}]
+        with patch("browser_observer.snapshot_turns", return_value=(turns, "fixture")):
+            self.process(generation="ACTIVE_TOOL", stop="PRESENT")
+        self.assertEqual(self.stops, [])
+        self.assertEqual(self.sent, [])
+        receipt = json.loads((self.channel / "controls" / (cid + ".ack.json")).read_text(encoding="utf-8"))
+        self.assertEqual(receipt["state"], "SUPERSEDED")
+
+    def test_new_user_after_stop_intent_is_rechecked_before_actual_click(self):
+        cid = "00000000-0000-4000-8000-000000000020"
+        self.issue(cid, "preempt", priority="urgent")
+        ack = self.channel / "controls" / (cid + ".ack.json")
+        def snapshot(_page):
+            turns = [{"index": 0, "role": "user", "text": "old"}]
+            if ack.exists():
+                turns.append({"index": 1, "role": "user", "text": "new manual task"})
+            return turns, "fixture"
+        with patch("browser_observer.snapshot_turns", side_effect=snapshot):
+            result = self.process(generation="UNKNOWN", stop="PRESENT")
+        self.assertEqual(result["status"], "SUPERSEDED")
+        self.assertFalse(self.stops)
+        self.assertFalse(self.sent)
+
 
 if __name__ == "__main__":
     unittest.main()

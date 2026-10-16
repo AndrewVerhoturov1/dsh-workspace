@@ -3,6 +3,7 @@ import { join, dirname } from 'node:path';
 import { createServer as createHttpServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import {dshWriters,startWriterControl} from './writer-runtime.mjs';
 
 const allowed = new Set(['requestId', 'method', 'status', 'durationMs', 'success', 'tool', 'commandLength']);
 export function safeRecord(event, fields = {}) {
@@ -35,6 +36,8 @@ async function main() {
   const { loadConfig } = await import('./node_modules/@waishnav/devspace/dist/config.js');
   const config = loadConfig();
   if (config.host !== '127.0.0.1' || config.port !== 7676 || config.publicBaseUrl !== 'https://desktop-dujmm2g.tail3bd4f2.ts.net') throw new Error('Unexpected server configuration');
+  const writerRuntime=dshWriters.configure();
+  const writerControl=await startWriterControl(writerRuntime);
   const { app, close } = createServer(config);
   const server = createHttpServer((req, res) => {
     const requestId = randomUUID(), started = performance.now();
@@ -57,6 +60,7 @@ async function main() {
     write('server_draining');
     await new Promise(resolve => server.close(resolve));
     await close();
+    await writerControl.close();
     write('server_stopped');
   };
   const timer = setInterval(() => {

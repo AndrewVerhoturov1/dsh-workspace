@@ -57,6 +57,11 @@ def _safe_transport_evidence(details):
     if not isinstance(details, dict):
         return {}
     result = {}
+    if details.get("recoverySourceCompleted") is True:
+        if _allowed(details.get("recoverySourceOutcome"), {"DONE", "BLOCKED", "NEED_DECISION"}):
+            result["recoverySourceOutcome"] = details["recoverySourceOutcome"]
+        if isinstance(details.get("recoverySourceMessage"), str):
+            result["recoverySourceMessage"] = details["recoverySourceMessage"][:2000]
     code = details.get("transportCode")
     if _allowed(code, _SAFE_CODES):
         result["transportCode"] = code
@@ -154,6 +159,8 @@ def run(channel, request_id, intent, *, input_bundle_manifest=None, input_files_
                 "newMessageSent", "localOperationsMayContinue", "observationReason", "sendState") if key in observation}
         if details.get("recoverySourceCompleted") is True:
             recovery_diagnostics["recoverySourceCompleted"] = True
+        if details.get("supersededByUserTurn") is True:
+            recovery_diagnostics["supersededByUserTurn"] = True
         ui_stop = (stored or {}).get("recoveryUiStop")
         if isinstance(ui_stop, dict):
             recovery_diagnostics["recoveryUiStop"] = {key: ui_stop[key] for key in

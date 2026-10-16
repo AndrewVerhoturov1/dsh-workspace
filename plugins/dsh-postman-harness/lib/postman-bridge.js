@@ -206,15 +206,19 @@ export function createPostmanBridgeTool(ctx, jobs, contexts) {
 export function createPostmanBridgeStatusTool(ctx, jobs) {
   return defineTool({
     name: POSTMAN_BRIDGE_STATUS_TOOL_NAME,
-    description: 'Read the authoritative trusted Direct Postman terminal of this Leader session background Bridge job.',
+    description: 'Read the authoritative owned Bridge result. Explicit recover starts an addressed recovery; reconcileWriter checks Host native evidence before releasing an archived writer root. Neither action proves task success.',
     parameters: { bridge_job_id: { type: 'string', required: true,
       description: 'Exact bridgeJobId from POSTMAN_BRIDGE_ACCEPTED or POSTMAN_BRIDGE_READY.' },
       retrySync: { type: 'boolean', description: 'Retry only local task publication synchronization; never send Direct again.' },
-      recover: { type: 'boolean', description: 'DevSpace: explicitly authorize another same-chat recovery after the automatic three-attempt series. Legacy: existing one-shot Direct capability, no prompt/state arguments.' } },
+      recover: { type: 'boolean', description: 'DevSpace: explicitly authorize the next recovery using the original or latest bridgeJobId; Host resolves the owned chain. Known chat continues; unavailable chat uses a new owned attempt with safe isolation if old writes are unknown. Legacy: existing one-shot Direct capability, no prompt/state arguments.' },
+      reconcileWriter: { type: 'boolean', description: 'Explicitly check this exact archived writer using Host-owned native execution evidence. Releases its retained root only after revoked future tool authority, whole-process settlement and absence of other live writers. No caller-provided receipt.' } },
     output: output(),
     async execute(args, exec) {
       if (!authorized(exec, ctx)) return { status: 'POSTMAN_BRIDGE_CALLER_REJECTED' }
-      const status = await jobs.status(exec.agent, args?.bridge_job_id, args?.retrySync === true, args?.recover === true)
+      if (args?.reconcileWriter === true && (args?.retrySync === true || args?.recover === true))
+        return { status: 'POSTMAN_BRIDGE_ARGUMENTS_INVALID' }
+      const status = await jobs.status(exec.agent, args?.bridge_job_id, args?.retrySync === true,
+        args?.recover === true, args?.reconcileWriter === true)
       const terminalResult = status?.result
       const details = terminalResult?.details
       const journal = details?.transportEventJournal

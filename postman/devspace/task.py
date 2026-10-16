@@ -22,13 +22,20 @@ def render_task(binding, intent, signal_command):
         scope = "Записи в исходную область запрещены. Безвредный результат только в Host-private тестовой папке: " + str(write)
     else:
         scope = "Записи в исходную область и любые другие файлы запрещены."
+    access = "Сначала открой назначенную область и прочитай безопасный существующий файл, чтобы проверить реальный доступ в этом разговоре."
+    if mode != "READ_ONLY":
+        access = ("Перед любыми другими DevSpace-инструментами вызови open_workspace с path='postman-writer:" +
+                  binding["jobId"] + "'. Host связывает этот адрес с разрешённой папкой записи. "
+                  "Если адрес недоступен, сообщи CAPABILITY_UNAVAILABLE обычным текстом; "
+                  "не обходи его открытием буквального пути. Затем прочитай безопасный существующий файл, "
+                  "чтобы проверить реальный доступ в этом разговоре.")
     # The first line is a non-secret immutable correlation key. ChatGPT may
     # reformat long Markdown, but a matching exact request-key line still lets
     # the Host safely locate this user turn without resending UNKNOWN Sends.
     return f"""POSTMAN_REQUEST_ID: {binding['requestId']}
 # PostmanDevspace — универсальное поручение
 REQ: {binding['requestId']}
-Используй настоящий подключённый DevSpace MCP. Сначала открой назначенную область и прочитай безопасный существующий файл, чтобы проверить реальный доступ в этом разговоре. Инструкция не доказывает доступность.
+Используй настоящий подключённый DevSpace MCP. {access} Инструкция не доказывает доступность.
 Область для чтения: {area}
 Режим: {mode}. {scope}
 DevSpace Bash не является песочницей: работай с файлами только в назначенной области. Веб-поиск, подготовка документов, изображения и другие реально доступные инструменты разрешены, когда полезны для задачи. Входные изображения и документы передаёт Host автоматически, если они назначены Leader.

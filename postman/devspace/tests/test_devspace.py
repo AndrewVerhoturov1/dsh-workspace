@@ -96,6 +96,17 @@ class DevspaceTests(unittest.TestCase):
         self.assertIn("15/30/45", allowed)
         self.assertIn("не доказывает остановку Bash", allowed)
 
+    def test_writer_prompt_requires_owned_alias_before_any_devspace_tools(self):
+        for mode in ("WRITE_TEST", "WRITE_ISOLATED", "WRITE_APPROVED_TARGET"):
+            with self.subTest(mode=mode):
+                prompt = task.render_task({**self.binding, "mode": mode}, "inspect first", "bell")
+                self.assertIn("Перед любыми другими DevSpace-инструментами вызови open_workspace с path='postman-writer:" + JOB + "'", prompt)
+                self.assertIn("не обходи его открытием буквального пути", prompt)
+                self.assertIn("сообщи CAPABILITY_UNAVAILABLE обычным текстом", prompt)
+        read_only = task.render_task({**self.binding, "mode": "READ_ONLY"}, "inspect", "bell")
+        self.assertNotIn("postman-writer:", read_only)
+        self.assertIn("Сначала открой назначенную область", read_only)
+
     def test_script_transport_does_not_shadow_standard_python_signal(self):
         script = REPO / 'postman' / 'devspace' / 'transport.py'
         probe = '''import importlib, pathlib, runpy, sys
@@ -376,6 +387,32 @@ assert hasattr(stdlib_signal, 'set_wakeup_fd')
         self.assertEqual(saved["assistantText"], "old partial evidence")
         self.assertNotEqual(result["code"], "DEVSPACE_SIGNAL_RECEIVED")
 
+    def test_fresh_recovery_without_url_or_source_req_uses_new_owned_send(self):
+        for source in (None, "REQ_20261011T120000Z_0001"):
+            with self.subTest(source=source):
+                binding = {**self.binding, "recovery": {
+                    "sourceRequestId": source, "attempt": 1, "intent": "observe-then-continue"}}
+                page = SimpleNamespace(url="https://chatgpt.com/", close=lambda: None)
+                class Factory:
+                    def __enter__(self): self.chromium = self; return self
+                    def __exit__(self, *args): pass
+                    def connect_over_cdp(self, *args, **kwargs): return self
+                    @property
+                    def contexts(self): return [self]
+                    def new_page(self): return page
+                bridge = web.WebWorkerBridge(root=self.channel / ("fresh-recovery-" + str(source)))
+                with patch.object(web.browser_submit, "submit_fresh_prompt", return_value={
+                         "ok": True, "sendState": "PROVEN_SENT", "details": {"chatUrl": CHAT}}) as fresh, \
+                     patch.object(web.browser_submit, "submit_existing_prompt", side_effect=AssertionError("no saved chat")), \
+                     patch.object(observer, "wait_for_signal", return_value={"ok": True,
+                         "code": "DEVSPACE_DIAGNOSTIC", "details": {"source": "transport_diagnostic", "diagnostic": "UNKNOWN"}}):
+                    bridge.run_request(REQ, task_url="", prompt="inspect current state before any continuation",
+                        expected_filename="", expected_request={"transportKind": "devspace"},
+                        devspace_binding=binding, artifact_mode=False, playwright_factory=Factory)
+                fresh.assert_called_once()
+                self.assertEqual(bridge.read_state(REQ)["recoveryObservation"]["observationReason"], "conversation_not_created")
+                self.assertTrue(bridge.read_state(REQ)["recoveryObservation"]["newMessageSent"])
+
     def test_revocation_stops_monitor_without_claiming_shell_termination(self):
         receipt = {key: self.binding[key] for key in signal.IDENTITY if key != "capability"}
         (self.channel / "revoked.json").write_text(json.dumps(receipt), encoding="utf-8")
@@ -394,7 +431,6 @@ assert hasattr(stdlib_signal, 'set_wakeup_fd')
         source_binding = {**self.binding, "jobId": source_job, "requestId": source_id,
                           "channel": str(source_channel)}
         (source_channel / "binding.json").write_text(json.dumps(source_binding), encoding="utf-8")
-        signal.signal(source_channel, source_binding["capability"], "done", root=self.root)
         recovery_binding = {**self.binding, "conversationUrl": CHAT,
             "recovery": {"sourceRequestId": source_id, "sourceChannel": str(source_channel),
                          "attempt": 1, "intent": "observe-then-continue"}}
@@ -406,17 +442,28 @@ assert hasattr(stdlib_signal, 'set_wakeup_fd')
             @property
             def contexts(self): return [self]
             def new_page(self): return page
-        with patch.object(web.browser_submit, "submit_existing_prompt", side_effect=AssertionError("no new Send")):
-            bridge = web.WebWorkerBridge(root=self.channel / "late-source")
-            result = bridge.run_request(REQ, task_url="", prompt="new corrective prompt", expected_filename="",
-                expected_request={"transportKind": "devspace"}, conversation_url=CHAT,
-                devspace_binding=recovery_binding, artifact_mode=False, playwright_factory=Factory)
-        self.assertEqual(result["code"], "DEVSPACE_DIAGNOSTIC")
-        self.assertEqual(result["details"]["diagnostic"], "UNKNOWN")
-        self.assertTrue(result["details"]["recoverySourceCompleted"])
-        self.assertEqual(signal.read_event(source_binding)["reportedOutcome"], "DONE")
-        self.assertIsNone(signal.read_event(self.binding))
-        (source_channel / "event.json").unlink()
+        for outcome, expected, message in (("done", "DONE", "ready"),
+                ("blocked", "BLOCKED", "temporary Bash failure " + "x" * 2100),
+                ("need-decision", "NEED_DECISION", "new permission required")):
+            with self.subTest(outcome=outcome):
+                signal.signal(source_channel, source_binding["capability"], outcome, message=message, root=self.root)
+                with patch.object(web.browser_submit, "submit_existing_prompt", side_effect=AssertionError("no new Send")):
+                    bridge = web.WebWorkerBridge(root=self.channel / ("late-source-" + outcome))
+                    result = bridge.run_request(REQ, task_url="", prompt="new corrective prompt", expected_filename="",
+                        expected_request={"transportKind": "devspace"}, conversation_url=CHAT,
+                        devspace_binding=recovery_binding, artifact_mode=False, playwright_factory=Factory)
+                self.assertEqual(result["code"], "DEVSPACE_DIAGNOSTIC")
+                self.assertEqual(result["details"]["diagnostic"], "UNKNOWN")
+                self.assertNotIn("reportedOutcome", result["details"])
+                self.assertTrue(result["details"]["recoverySourceCompleted"])
+                self.assertEqual(result["details"]["recoverySourceOutcome"], expected)
+                self.assertEqual(result["details"]["recoverySourceMessage"], message[:2000])
+                safe = transport._safe_transport_evidence(result["details"])
+                self.assertEqual(safe["recoverySourceOutcome"], expected)
+                self.assertEqual(safe["recoverySourceMessage"], message[:2000])
+                self.assertEqual(signal.read_event(source_binding)["reportedOutcome"], expected)
+                self.assertIsNone(signal.read_event(self.binding))
+                (source_channel / "event.json").unlink()
         def observe_new(*args, **kwargs):
             signal.signal(source_channel, source_binding["capability"], "done", root=self.root)
             self.assertTrue(page._postman_action_guard())  # old bell cannot fence the new REQ
@@ -750,7 +797,7 @@ assert hasattr(stdlib_signal, 'set_wakeup_fd')
 
     def run_checks(self, *, state="SAFE_GENERATION", delay=0, send_ready=True, send_state="PROVEN_SENT", on_stop=None, on_send=None, complete=False, before_check=None, stop_present=True, stop_raises=False, url_change=False, bad_req=False, foreign_turn=False, foreign_url=False, prestop_complete=False, binding=None, chat_url=CHAT, stop_unknown=False,
                    stop_unknown_until=None, result_stage=None, composer_delay=0, missing_history=False,
-                   on_persist=None):
+                   on_persist=None, newer_user_after=None):
         clock = [0.0]
         binding = binding or self.binding
         request_id = binding["requestId"]
@@ -821,9 +868,15 @@ assert hasattr(stdlib_signal, 'set_wakeup_fd')
         def existing_send(*args, **kwargs):
             return sent(*args, control_intent=snapshots[-1]["controlIntent"],
                         phase_probe=lambda: {"phase": observer.observer.WORKING})
+        def snapshot(*args, **kwargs):
+            if newer_user_after and any(e["event"] == newer_user_after
+                    for value in snapshots for e in value["transportEventJournal"]) and not any(
+                    t["text"] == "new manual assignment" for t in turns):
+                turns.append({"index": len(turns), "role": "user", "text": "new manual assignment"})
+            return turns, "turns"
         with patch.object(observer.observer, "observe_next_assistant", side_effect=observe), \
              patch.object(observer.observer, "connection_interrupted", return_value=(False, {})), \
-             patch.object(observer.observer, "snapshot_turns", side_effect=lambda *a,**k:(turns,"turns")), \
+             patch.object(observer.observer, "snapshot_turns", side_effect=snapshot), \
              patch.object(observer, "activity_snapshot", side_effect=activity), \
              patch.object(observer, "stop_control", side_effect=stop), \
              patch.object(observer.submit, "prepare_existing_chat", side_effect=hydration), \
@@ -936,6 +989,20 @@ assert hasattr(stdlib_signal, 'set_wakeup_fd')
         intent = next(s["controlIntent"] for s in snapshots if s.get("controlIntent"))
         self.assertTrue(intent["ownedConversationOnly"])
         self.assertEqual(intent["controlId"], REQ + ":reminder:1")
+
+    def test_stale_timer_cannot_stop_or_send_after_positive_newer_user_turn(self):
+        result, clicks, _, sent, _ = self.run_checks(foreign_turn=True, state="ACTIVE_TOOL")
+        self.assertEqual(clicks, [])
+        sent.assert_not_called()
+        self.assertTrue(result["details"]["supersededByUserTurn"])
+
+    def test_new_user_races_durable_stop_intent_and_pending_continuation(self):
+        for stage, expected_stops in (("STOP_REQUESTED", 0), ("STOP_OBSERVED", 1)):
+            with self.subTest(stage=stage):
+                result, clicks, _, sent, _ = self.run_checks(state="UNKNOWN", newer_user_after=stage)
+                self.assertEqual(len(clicks), expected_stops)
+                sent.assert_not_called()
+                self.assertTrue(result["details"]["supersededByUserTurn"])
 
     def test_timer_revocation_at_durable_stop_intent_prevents_actual_click_and_send(self):
         def revoke_at_stop(value):

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { mkdtemp, realpath, stat, writeFile, unlink } from 'node:fs/promises'
 import { createMemoryTaskRegistry } from './postman-task-registry.js'
+import { observeDevspaceWriter } from './postman-writer-proof.js'
 import { homedir, tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
@@ -40,7 +41,7 @@ async function git(cwd, ...args) {
 }
 
 /** The host injects one durable registry; tests explicitly inject an in-memory one. */
-export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(), gitCommand = git, temporaryDirectory = tmpdir, makeDirectory = mkdtemp, realPath = realpath, githubDefaultBranch = defaultGitHubBranch } = {}) {
+export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(), gitCommand = git, temporaryDirectory = tmpdir, makeDirectory = mkdtemp, realPath = realpath, githubDefaultBranch = defaultGitHubBranch, writerControlFile } = {}) {
   const contexts = new Map()
   const children = new Map()
   const pending = new Set()
@@ -820,6 +821,7 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
     return [current, ...(current.retiredTasks ?? [])].some(task =>
       task !== current && ['running', 'unknown', 'restoring'].includes(task.runner?.state) && overlaps(task.worktree) ||
       Object.values(task.bridgeOperations ?? {}).some(op => {
+        if (op.writerSettlement) return false
         if (overlaps(op.residualWriteRoot)) return true
         if (task === current && !op.archivedAt && !op.executionRevoked) return false
         const settled = op.state === 'received' && ['synchronized', 'not-required'].includes(op.synchronization)
@@ -827,6 +829,61 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
           op.devspace?.approvedAccess === 'write' ? op.devspace.approvedRoot :
             op.devspace?.mode === 'WRITE_ISOLATED' ? task.worktree : null)
       }))
+  }
+  async function reconcileWriter(leaderId, bridgeJobId) {
+    const reject = code => ({status:'POSTMAN_WRITER_EXIT_UNPROVEN', diagnostic:{code},
+      alternative:'START_IN_NEW_ISOLATED_WORKSPACE'})
+    const row=registry.get(leaderId)
+    if(!row || row.leaderSessionId!==leaderId) return {status:'POSTMAN_WRITER_OWNER_MISMATCH'}
+    const locate=current => [current,...(current.retiredTasks??[])].filter(task=>
+      task.leaderSessionId===leaderId && task.bridgeOperations?.[bridgeJobId])
+    const matches=locate(row)
+    if(matches.length!==1) return {status:'POSTMAN_WRITER_OWNER_MISMATCH'}
+    const task=matches[0], op=task.bridgeOperations[bridgeJobId]
+    const writeRoot=op.residualWriteRoot ?? (op.devspace?.approvedAccess==='write' ? op.devspace.approvedRoot :
+      op.devspace?.mode==='WRITE_ISOLATED' ? task.worktree : null)
+    const exact=proof => proof?.jobId===bridgeJobId && proof.leaderSessionId===leaderId && proof.requestId===op.requestId &&
+      proof.branch===task.branch && proof.writeRoot===writeRoot
+    if(op.writerSettlement) return exact(op.writerSettlement) ?
+      {status:'POSTMAN_WRITER_ALREADY_RELEASED',bridgeJobId,writerSettlement:op.writerSettlement} : reject('WRITER_BINDING_CHANGED')
+    if(op.transportKind!=='devspace' || !writeRoot || !(op.executionRevoked || op.archivedAt || task.stage==='closed'))
+      return reject('WRITER_BINDING_CHANGED')
+    const otherWriters=[]
+    const overlaps=root=>root && (normalize(root)===normalize(writeRoot) || normalize(root).startsWith(normalize(writeRoot)+'/') || normalize(writeRoot).startsWith(normalize(root)+'/'))
+    for(const [,current] of registry.entries()) for(const historical of [current,...(current.retiredTasks??[])]) {
+      // Idle sessions and retired membership do not prove that a former native
+      // shell descendant died. These legacy writers have no complete census.
+      if(overlaps(historical.worktree) && (workerAdmissions.has(current.leaderSessionId) ||
+        Object.keys(historical.workers??{}).length || historical.retiredWorkers?.length))
+        return reject('OTHER_WRITER_ACTIVE')
+      if(Object.values(historical.appJobs??{}).some(app=>overlaps(app.worktree) &&
+        !['completed','killed'].includes(app.terminal))) return reject('OTHER_WRITER_ACTIVE')
+      if(['running','unknown','restoring'].includes(historical.runner?.state) && overlaps(historical.worktree))
+        return reject('OTHER_WRITER_ACTIVE')
+      for(const [id,other] of Object.entries(historical.bridgeOperations??{})) {
+        if(other===op || other.writerSettlement || other.transportKind!=='devspace') continue
+        const root=other.residualWriteRoot ?? (other.devspace?.approvedAccess==='write' ? other.devspace.approvedRoot :
+          other.devspace?.mode==='WRITE_ISOLATED' ? historical.worktree : null)
+        if(overlaps(root)) otherWriters.push({jobId:id,requestId:other.requestId,leaderSessionId:historical.leaderSessionId,
+          branch:historical.branch,writeRoot:root})
+      }
+    }
+    const observed=await observeDevspaceWriter({leaderSessionId:leaderId,bridgeJobId,task,op,otherWriters,controlFile:writerControlFile})
+    if(!observed.ok || !exact(observed.proof)) return reject(observed.code??'WRITER_BINDING_CHANGED')
+    let released=false
+    await registry.change(leaderId,current=>{
+      const found=locate(current)
+      if(found.length!==1 || found[0].branch!==task.branch || found[0].worktree!==task.worktree ||
+        JSON.stringify(found[0].bridgeOperations[bridgeJobId])!==JSON.stringify(op)) return current
+      const {residualWriteRoot,...saved}=op
+      const updated={...found[0],bridgeOperations:{...found[0].bridgeOperations,
+        [bridgeJobId]:{...saved,writerSettlement:observed.proof}}}
+      released=true
+      return found[0]===current ? updated : {...current,retiredTasks:current.retiredTasks.map(old=>old===found[0]?updated:old)}
+    })
+    if(!released) return reject('WRITER_BINDING_CHANGED')
+    changed(leaderId)
+    return {status:'POSTMAN_WRITER_RELEASED',bridgeJobId,writerSettlement:observed.proof}
   }
   // Synchronous reservation closes the gap before durable Worker intent/delivery.
   function canRetireWorkers(leaderId) {
@@ -897,7 +954,7 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
     const op = registry.get(binding.context.leaderSessionId)?.bridgeOperations?.[binding.bridgeJobId]
     if (op?.transportKind !== 'devspace' || op.state !== 'pending' || op.childSessionId !== childId || !op.devspace) return null
     return { bridgeJobId: binding.bridgeJobId, leaderSessionId: binding.context.leaderSessionId,
-      lunaSessionId: childId, worktree: binding.context.worktree, mode: op.devspace.mode }
+      lunaSessionId: childId, worktree: binding.context.worktree, branch:binding.context.branch, mode: op.devspace.mode }
   }
   async function recordBridgeRequest(childId, requestId, channel) {
     const binding = children.get(childId)
@@ -918,7 +975,7 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
   function dispose() { contexts.clear(); children.clear(); pending.clear(); activeOperations.clear(); syncOperations.clear(); syncQueues.clear(); workerAdmissions.clear(); contextListeners.clear() }
   return { readLedger: id => registry.readLedger(id),
     changeLedger: (id, fn) => registry.changeLedger(id, fn),
-    prepare, prepareReadOnly, recover, close, restore, sync, beginSync, endSync, verifyWorktree, verifyDirectPublication, get, record, records, changeRecord, onContextChange, isRestoring, hasActiveOperation, hasSyncOperation, canRetireWorkers, beginWorkerAdmission, endWorkerAdmission, beginOperation, startRunner, endOperation, reserveRestore, releaseRestore, bindChild, child, devspaceBinding, recordBridgeRequest, releaseChild, dispose }
+    prepare, prepareReadOnly, recover, close, restore, sync, beginSync, endSync, verifyWorktree, verifyDirectPublication, get, record, records, changeRecord, onContextChange, isRestoring, hasActiveOperation, hasSyncOperation, canRetireWorkers, beginWorkerAdmission, endWorkerAdmission, beginOperation, startRunner, endOperation, reserveRestore, releaseRestore, bindChild, child, devspaceBinding, recordBridgeRequest, releaseChild, reconcileWriter, dispose }
 }
 
 // Both entrypoints use one facade. Initialization is awaited before Git/child actions;

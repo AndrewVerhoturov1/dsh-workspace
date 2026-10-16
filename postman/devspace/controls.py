@@ -12,6 +12,7 @@ import re
 
 from postman.devspace.signal import IDENTITY, atomic_json, read_event
 import browser_submit as submit
+import browser_observer as observer
 
 CONTROL_ID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}")
 
@@ -27,6 +28,29 @@ def revoked(binding):
     if any(receipt.get(key) != binding[key] for key in IDENTITY if key != "capability"):
         raise ValueError("POSTMAN_DEVSPACE_REVOCATION_OWNER_MISMATCH")
     return True
+
+
+def newer_user_turn(page, prompt):
+    """Only positive visible ordering withdraws an old request's UI rights.
+
+    A missing/virtualized old anchor is not evidence of a newer assignment.
+    """
+    try:
+        turns, _ = observer.snapshot_turns(page)
+        anchor = observer.find_user_anchor(turns, prompt)
+        return anchor is not None and any(
+            turn.get("role") == "user" and turn["index"] > anchor for turn in turns)
+    except Exception:
+        return False  # Unreadable history must not reinstate the prior-history gate.
+
+
+def supersede_for_user_turn(binding, intent):
+    path = Path(binding["channel"]) / "controls" / (intent["controlId"] + ".ack.json")
+    receipt = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {
+        "version": 1, "controlId": intent["controlId"], "requestId": binding["requestId"]}
+    atomic_json(path, {**receipt, "state": "SUPERSEDED", "previousState": receipt.get("state"),
+                       "supersededByUserTurn": True})
+    return {"kind": "control", "status": "SUPERSEDED", "supersededByUserTurn": True}
 
 
 def pending(binding):
@@ -82,6 +106,8 @@ def process_one(page, prompt, chat_url, binding, *, activity, stop_control, slee
     if str(getattr(page, "url", "")) != chat_url:
         acknowledge(binding, intent, "PROVEN_NOT_SENT")
         return {"kind": "control", "status": "PROVEN_NOT_SENT"}
+    if newer_user_turn(page, prompt):
+        return supersede_for_user_turn(binding, intent)
     if intent.get("receipt"):
         replacement = next((command for command in commands[1:]
             if command["kind"] in {"preempt", "stop"} and command.get("receipt") is None
@@ -115,6 +141,8 @@ def process_one(page, prompt, chat_url, binding, *, activity, stop_control, slee
             acknowledge(binding, intent, "STOP_UNKNOWN", stop_state="CLICK_PENDING")
             if revoked(binding) or str(getattr(page, "url", "")) != chat_url or read_event(binding):
                 return None
+            if newer_user_turn(page, prompt):
+                return supersede_for_user_turn(binding, intent)
             try:
                 button.click(timeout=1500)
             except Exception:
@@ -125,6 +153,8 @@ def process_one(page, prompt, chat_url, binding, *, activity, stop_control, slee
             while monotonic() < deadline:
                 if read_event(binding) or revoked(binding) or str(getattr(page, "url", "")) != chat_url:
                     break
+                if newer_user_turn(page, prompt):
+                    return supersede_for_user_turn(binding, intent)
                 condition, _ = stop_control(page)
                 if condition == "ABSENT":
                     stop_status = "STOP_UI_PROVEN"
@@ -150,6 +180,8 @@ def process_one(page, prompt, chat_url, binding, *, activity, stop_control, slee
 
     if read_event(binding) or revoked(binding) or str(getattr(page, "url", "")) != chat_url:
         return None
+    if newer_user_turn(page, prompt):
+        return supersede_for_user_turn(binding, intent)
     # Commit an unknown Send intent before entering the one-shot browser mutation.
     # If the process dies after clicking but before a final receipt, there is no
     # automatic replay of this controlId on a later observation.
@@ -162,9 +194,22 @@ def process_one(page, prompt, chat_url, binding, *, activity, stop_control, slee
             "state": "SEND_UNKNOWN", "stopState": stop_status, "sendState": "UNKNOWN"})
     # An unknown prior Send is NEVER retried; this is a distinct authorized
     # Host control with its own controlId and a proved idle same-chat composer.
-    result = submit.submit_existing_prompt(page, intent["message"], chat_url,
-                                            navigate=False, timeout_ms=10000)
+    previous_guard = getattr(page, "_postman_action_guard", None)
+    superseded = False
+    def allowed():
+        nonlocal superseded
+        superseded = superseded or newer_user_turn(page, prompt)
+        return (not superseded and not revoked(binding) and str(getattr(page, "url", "")) == chat_url
+                and (previous_guard is None or previous_guard()))
+    page._postman_action_guard = allowed
+    try:
+        result = submit.submit_existing_prompt(page, intent["message"], chat_url,
+                                                navigate=False, timeout_ms=10000)
+    finally:
+        page._postman_action_guard = previous_guard
     send_state = result.get("sendState", submit.SEND_UNKNOWN)
+    if superseded and send_state == submit.SEND_PROVEN_NOT_SENT:
+        return supersede_for_user_turn(binding, intent)
     verdict = ("SENT_CONFIRMED" if send_state == submit.SEND_PROVEN_SENT else
                "SEND_UNKNOWN" if send_state == submit.SEND_UNKNOWN else "WAITING_COMPOSER")
     ack_path = Path(binding["channel"]) / "controls" / (intent["controlId"] + ".ack.json")

@@ -983,6 +983,34 @@ class TransportDomTests(unittest.TestCase):
                 self.assertNotEqual(sent_turns[1], PROMPT)
                 self.assertIn('local bell', sent_turns[1])
 
+    def test_stale_timer_newer_user_is_fenced_but_virtualized_history_still_runs(self):
+        from postman.devspace import observer as devspace_observer
+        for newer in (True, False):
+            with self.subTest(newer=newer):
+                self.clock = Clock()
+                turns = (group() + group(prompt="new manual user task", key="newer") if newer else
+                         group(prompt="visible excerpt without the old request anchor", key="virtualized"))
+                self.set_html(document(turns=turns, stop=True))
+                self.page.evaluate("window.sends=0;window.stopClicks=0")
+                def observe(*args, **kwargs):
+                    self.clock.sleep(0.2)
+                    return {"ok": False, "code": observer.CHAT_CORRELATION_LOST, "details": {}}
+                def bell(_binding):
+                    return {"reportedOutcome": "DONE"} if self.page.evaluate("window.sends || 0") else None
+                with patch.object(devspace_observer, "read_event", side_effect=bell), \
+                     patch.object(devspace_observer.controls, "process_one", return_value=None), \
+                     patch.object(devspace_observer.image_output, "observe_owned_image", return_value=None), \
+                     patch.object(devspace_observer.observer, "observe_next_assistant", side_effect=observe):
+                    result = devspace_observer.wait_for_signal(self.page, PROMPT, URL,
+                        self.devspace_binding, timeout_ms=60000, interval_ms=1000, count=3,
+                        sleep=self.clock.sleep, monotonic=self.clock.now, persist=lambda _: None)
+                self.assertEqual(self.page.evaluate("window.stopClicks"), 0 if newer else 1)
+                self.assertEqual(self.page.evaluate("window.sends"), 0 if newer else 1)
+                if newer:
+                    self.assertTrue(result["details"]["supersededByUserTurn"])
+                else:
+                    self.assertEqual(result["code"], "DEVSPACE_SIGNAL_RECEIVED", result)
+
 
     def test_unknown_initial_send_recovers_real_dom_stop_and_continuation(self):
         from postman.devspace import observer as devspace_observer

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, symlinkSync, copyFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -11,6 +11,9 @@ const pkg=join(root,'node_modules/@waishnav/devspace');mkdirSync(join(pkg,'dist'
 const sourceFile=join(install,'node_modules/@waishnav/devspace/dist/pi-tools.js');
 const original=readFileSync(existsSync(sourceFile+'.dsh-original')?sourceFile+'.dsh-original':sourceFile);
 const file=join(pkg,'dist/pi-tools.js');writeFileSync(file,original);writeFileSync(join(pkg,'package.json'),'{"version":"1.1.0-beta.4"}');
+copyFileSync(join(install,'node_modules/@waishnav/devspace/dist/server.js'),join(pkg,'dist/server.js'));
+symlinkSync(join(install,'node_modules'),join(pkg,'node_modules'),'junction');
+for(const name of ['writer-runtime.mjs','writer-process.ps1']) copyFileSync(fileURLToPath(new URL('../'+name,import.meta.url)),join(root,name));
 const patcher=fileURLToPath(new URL('../prepare-runtime.mjs',import.meta.url));
 assert.equal(spawnSync(process.execPath,[patcher,root],{encoding:'utf8'}).status,0);
 const patched=readFileSync(file,'utf8');

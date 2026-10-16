@@ -171,11 +171,12 @@ export function createPostmanDevspaceLuna(ctx, contexts, direct) {
         inputFiles: parsed.inputFiles ?? [], inputBinding: job.inputBinding,
         devspaceBinding: {
           bridgeJobId: job.bridgeJobId, leaderSessionId: leaderId, lunaSessionId: childId,
+          branch: job.taskContext.branch,
           worktree: job.approvedScope?.root ?? job.taskContext.worktree,
           mode: job.devspaceMode,
           computerUse: job.computerUse ?? 'deny',
           ...(job.devspaceRecovery ? { recovery: {
-            sourceRequestId: job.devspaceRecovery.sourceRequestId,
+            ...(job.devspaceRecovery.sourceRequestId ? { sourceRequestId: job.devspaceRecovery.sourceRequestId } : {}),
             attempt: job.devspaceRecovery.attempt, intent: 'observe-then-continue',
             ...(job.recoverySourceChannel ? { sourceChannel: job.recoverySourceChannel } : {}),
           } } : {}),

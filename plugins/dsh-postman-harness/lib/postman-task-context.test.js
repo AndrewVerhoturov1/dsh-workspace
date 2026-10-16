@@ -709,11 +709,15 @@ test('archived and retired writers deny only overlapping Worker/runner admission
   const context=f.contexts.get('A'),token=Symbol('worker')
   const operation={state:'unknown',transportKind:'devspace',archivedAt:'2026-10-17T00:00:00Z',executionRevoked:true,
     devspace:{mode:'WRITE_ISOLATED'}}
+  const writerSettlement={version:1,source:'devspace_native_tree',jobId:'old',requestId:'REQ',leaderSessionId:'A',
+    branch:context.branch,writeRoot:context.worktree,generation:'native-generation',settledAt:'2026-10-17T00:01:00Z'}
   for(const [patch,allowed] of [
     [{bridgeOperations:{old:{...operation,residualWriteRoot:context.worktree}}},false],
     [{bridgeOperations:{old:operation}},false],
     [{bridgeOperations:{},retiredTasks:[{worktree:context.worktree,bridgeOperations:{old:operation}}]},false],
     [{bridgeOperations:{},retiredTasks:[{worktree:context.worktree+'-other',bridgeOperations:{old:operation}}]},true],
+    [{bridgeOperations:{old:{...operation,writerSettlement}},retiredTasks:[]},true],
+    [{bridgeOperations:{},retiredTasks:[{worktree:context.worktree,bridgeOperations:{old:{...operation,writerSettlement}}}]},true],
     [{bridgeOperations:{old:{state:'received',transportKind:'devspace',synchronization:'synchronized',devspace:{mode:'WRITE_ISOLATED'}}},retiredTasks:[]},true],
   ]){
     await f.registry.change('A',row=>({...row,...patch}))

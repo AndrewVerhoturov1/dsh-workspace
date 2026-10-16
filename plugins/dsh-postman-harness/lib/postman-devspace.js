@@ -8,13 +8,14 @@ export function devspaceRoot() {
   return process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, 'DSH', 'Postman', 'devspace') : join(homedir(), '.dsh', 'postman', 'devspace')
 }
 
-export function createDevspaceChannel({ root = devspaceRoot(), bridgeJobId, leaderSessionId, lunaSessionId, requestId, worktree, mode, sourceRoot, conversationUrl, priorRequestId, computerUse = 'deny', recovery }) {
+export function createDevspaceChannel({ root = devspaceRoot(), bridgeJobId, leaderSessionId, lunaSessionId, requestId, worktree, branch, mode, sourceRoot, conversationUrl, priorRequestId, computerUse = 'deny', recovery }) {
   if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(bridgeJobId ?? '') || !/^REQ_\d{8}T\d{6}Z_\d{4}$/.test(requestId ?? '') ||
       (priorRequestId !== undefined && (!/^REQ_\d{8}T\d{6}Z_\d{4}$/.test(priorRequestId) || priorRequestId === requestId || !conversationUrl)) ||
       !leaderSessionId || !lunaSessionId || !['allow', 'deny'].includes(computerUse) ||
-      recovery && (!/^REQ_\d{8}T\d{6}Z_\d{4}$/.test(recovery.sourceRequestId ?? '') ||
+      recovery && (recovery.sourceRequestId !== undefined &&
+        (!/^REQ_\d{8}T\d{6}Z_\d{4}$/.test(recovery.sourceRequestId) || recovery.sourceRequestId === requestId) ||
         !Number.isSafeInteger(recovery.attempt) || recovery.attempt < 1 ||
-        recovery.intent !== 'observe-then-continue' || !conversationUrl) ||
+        recovery.intent !== 'observe-then-continue') ||
       !['READ_ONLY', 'WRITE_TEST', 'WRITE_ISOLATED', 'WRITE_APPROVED_TARGET'].includes(mode) ||
       (conversationUrl !== undefined && !/^https:\/\/chatgpt\.com\/c\/[a-zA-Z0-9-]+$/.test(conversationUrl))) throw Error('POSTMAN_DEVSPACE_BINDING_INVALID')
   const channel = join(root, bridgeJobId)
@@ -29,6 +30,7 @@ export function createDevspaceChannel({ root = devspaceRoot(), bridgeJobId, lead
   if (mode === 'WRITE_TEST') mkdirSync(writeRoot)
   const binding = Object.freeze({ version: 1, jobId: bridgeJobId, requestId, leaderSessionId, lunaSessionId,
     channel, capability: randomBytes(32).toString('hex'), mode, workspaceRef, writeRoot, computerUse,
+    ...(branch ? {branch,writerRuntimeVersion:1} : {}),
     ...(recovery ? { recovery } : {}),
     ...(conversationUrl ? { conversationUrl } : {}),
     ...(priorRequestId ? { priorRequestId } : {}) })

@@ -53,6 +53,28 @@ function valid(reply, expected) {
   return reply.value
 }
 
+test('writer reconciliation is an exact owning Leader status action with lossless native-proof result', async () => {
+  const ctx = new Context()
+  ctx.systemPrompt = { tools() {} }
+  new ToolRuntime(ctx)
+  ctx.agents = { get: id => id === parent.id ? parent : undefined }
+  const calls = []
+  ctx.tools.register(createPostmanBridgeStatusTool(ctx, { async status(...args) {
+    calls.push(args)
+    return { status: 'POSTMAN_WRITER_RELEASED', bridgeJobId: 'owned-writer', taskCompleted: false }
+  } }))
+  const invoke = (arguments_, agent = parent) => ctx.tools.execute({ callId: 'writer-proof',
+    name: 'postman_bridge_status', arguments: arguments_, agent, signal: new AbortController().signal })
+  const result = valid(await invoke({ bridge_job_id: 'owned-writer', reconcileWriter: true }), 'POSTMAN_WRITER_RELEASED')
+  assert.equal(result.taskCompleted, false)
+  assert.deepEqual(calls, [[parent, 'owned-writer', false, false, true]])
+  valid(await invoke({ bridge_job_id: 'owned-writer', reconcileWriter: true, recover: true }), 'POSTMAN_BRIDGE_ARGUMENTS_INVALID')
+  valid(await invoke({ bridge_job_id: 'owned-writer', reconcileWriter: true, retrySync: true }), 'POSTMAN_BRIDGE_ARGUMENTS_INVALID')
+  valid(await invoke({ bridge_job_id: 'owned-writer', reconcileWriter: true },
+    { id: 'foreign-worker', session: { header: { agentPreset: 'postman-worker' } } }), 'POSTMAN_BRIDGE_CALLER_REJECTED')
+  assert.equal(calls.length, 1)
+})
+
 test('Python Devspace failure evidence survives Host terminal and real Bridge status JSON without raw fields', async t => {
   const temp = mkdtempSync(join(tmpdir(), 'devspace-safe-terminal-'))
   t.after(() => rmSync(temp, { recursive: true, force: true }))
