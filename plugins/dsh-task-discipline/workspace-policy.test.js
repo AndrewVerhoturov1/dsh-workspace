@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm, copyFile } from 'node:fs/promi
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL, fileURLToPath } from 'node:url'
-import { spawn as processSpawn } from 'node:child_process'
+import { spawn as processSpawn, execFileSync } from 'node:child_process'
 import { apply as policy } from './workspace-policy.js'
 import { apply as discipline, TASK_DISCIPLINE } from './index.js'
 
@@ -40,13 +40,15 @@ const body = request => request.messages.map(m=>JSON.stringify(m.content)).join(
 const latest = (ctx, agent) => agent.session.deriveMessages().findLast(m=>m.source?.plugin==='@deepseek-ai/dsh-system-prompt')?.source.sections ?? []
 
 async function fixture(dir) {
-  for (const path of ['.git','docs/workflow','docs/subprojects/postman','docs/subprojects/ptc','plugins/dsh-ptc','.agents/skills/postman-leader','.agents/skills/postman-secretary','nested','sibling','home']) await mkdir(join(dir,path),{recursive:true})
-  for (const path of ['AGENTS.md','REPO_POLICY.md','docs/workflow/TASK_CONTRACT.md','docs/subprojects/postman/SUBPROJECT.md','docs/subprojects/ptc/SUBPROJECT.md','.agents/skills/postman-leader/SKILL.md','.agents/skills/postman-secretary/SKILL.md']) await copyFile(join(repo,path),join(dir,path))
+  for (const path of ['docs/workflow','docs/subprojects/postman','docs/subprojects/ptc','plugins/dsh-ptc','.agents/skills/ordinary-fixture','nested','sibling','home']) await mkdir(join(dir,path),{recursive:true})
+  execFileSync('git',['init','-q'],{cwd:dir})
+  for (const path of ['AGENTS.md','REPO_POLICY.md','docs/workflow/TASK_CONTRACT.md','docs/subprojects/postman/SUBPROJECT.md','docs/subprojects/ptc/SUBPROJECT.md']) await copyFile(join(repo,path),join(dir,path))
+  await writeFile(join(dir,'.agents/skills/ordinary-fixture/SKILL.md'),'---\nname: ordinary-fixture\ndescription: Ordinary project skill\n---\n\nORDINARY_PROJECT_SKILL')
   await writeFile(join(dir,'nested/AGENTS.md'),'NESTED_ONLY: applies only under nested/')
   await writeFile(join(dir,'sibling/AGENTS.md'),'SIBLING_ONLY: applies only under sibling/')
   await writeFile(join(dir,'nested/a.txt'),'a'); await writeFile(join(dir,'plugins/dsh-ptc/a.txt'),'a')
 }
-async function runtime(dir, observe = () => {}) {
+async function runtime(dir, observe = () => {}, { applyPolicy = policy, sessionCwd = dir } = {}) {
   const ctx = new Context(), requests = [], effects = []
   new AgentRegistry(ctx); new SessionStore(ctx); new SessionProjectionRegistry(ctx)
   new SystemPrompt(ctx,{}); new ToolRuntime(ctx); new LlmRuntime(ctx)
@@ -57,7 +59,7 @@ async function runtime(dir, observe = () => {}) {
   new TokenMeter(ctx)
   const compactor = new BasicCompactionEngine(ctx,{auto:false})
   compactor.summarize = async () => ({summary:'Task checkpoint.',provider:'fixture',model:'inert'})
-  discipline(ctx); policy(ctx)
+  discipline(ctx); applyPolicy(ctx)
   skills(ctx,{includeDefaultRoots:true,dshHome:join(dir,'home'),watch:false})
   await ctx.plugin(Loader,{baseUrl:pathToFileURL(join(installed,'lib/bin.js')).href})
   const presetDir = join(dir,'presets/postman-leader')
@@ -81,7 +83,7 @@ async function runtime(dir, observe = () => {}) {
     }
   }
   ctx.llm.registerAdapter(['fixture'],new Model())
-  const create = async id => (await ctx.agents.create({setup,sessionId:id,meta:{cwd:dir,agentPreset:'postman-leader'},agentOptions:{provider:'fixture',model:'inert'}})).agent
+  const create = async id => (await ctx.agents.create({setup,sessionId:id,meta:{cwd:sessionCwd,agentPreset:'postman-leader'},agentOptions:{provider:'fixture',model:'inert'}})).agent
   return {ctx,requests,effects,setup,create,persistence,compactor}
 }
 
@@ -90,14 +92,13 @@ async function phase(dir, resumed) {
   const {ctx,requests,setup,create,persistence,compactor} = r
   try {
     const leader = resumed ? (await ctx.agents.resume({setup,resumeSessionId:'leader',agentOptions:{provider:'fixture',model:'inert'}})).agent : await create('leader')
-    // Exercise the real filesystem skill registry, not a hand-written YAML
-    // parser or a mocked return value. Invalid frontmatter silently removes
-    // the role skill, which makes WORKSPACE_POLICY_REQUIRED block a new Leader.
-    for (const role of ['postman-leader', 'postman-secretary']) {
-      const skill = await ctx.skills.get(role, {cwd:dir, scope:leader, signal:signal()})
-      assert.equal(skill?.name, role, 'role skill must be discoverable: '+role)
-      assert.match(skill.description, /Postman:|Leader:/)
-    }
+    // Real Host registry sees the canonical skill at the installed Host root;
+    // the unrelated Git repository has no copied Postman role skills.
+    const canonical = await ctx.skills.get('postman-leader',{cwd:repo,scope:leader,signal:signal()})
+    assert.equal(canonical?.resourceBase?.path,join(repo,'.agents/skills/postman-leader'))
+    assert.match(canonical.content,/POSTMAN_LEADER_SKILL_VERSION: 33/)
+    const ordinary = await ctx.skills.get('ordinary-fixture',{cwd:dir,scope:leader,signal:signal()})
+    assert.match(ordinary.content,/ORDINARY_PROJECT_SKILL/)
     leader.followup(input('Bounded fixture task')); await leader.whenIdle()
     if (!resumed) {
       const result = await ctx.tools.execute({callId:'project-touch',name:'read',arguments:{file_path:'plugins/dsh-ptc/a.txt'},agent:leader,signal:signal()})
@@ -193,9 +194,9 @@ else {
     assert.equal((await execute('pwsh',{})).isError,true,'both missing required documents do not turn off workspace policy')
     await writeFile(join(dir,'docs/workflow/TASK_CONTRACT.md'),'Restored task contract')
     await writeFile(join(dir,'REPO_POLICY.md'),'Fresh policy revision')
-    await rm(join(dir,'.agents/skills/postman-leader/SKILL.md'))
-    const scoped = await ctx.systemPrompt.assemble({agent,scope:agent,signal:signal()}).catch(error=>error)
-    assert.ok(scoped instanceof Error,'missing required Leader skill fails closed')
+    const scoped = await ctx.systemPrompt.assemble({agent,scope:agent,signal:signal()})
+    assert.ok(scoped.contexts.some(s=>s.name==='dsh:workspace-policy:skill:postman-leader' &&
+      s.text.includes('POSTMAN_LEADER_SKILL_VERSION: 33')),'project has no copied role skill; Host still supplies canonical source')
   })
   test('real Host assembly/pre-execute respects partial generic rules and preserves mandatory DSH contract',{timeout:60000},async t=>{
     const docs=['AGENTS.md','REPO_POLICY.md','docs/workflow/TASK_CONTRACT.md']
@@ -240,6 +241,74 @@ else {
     t.after(async()=>{await r.ctx.fiber.dispose();await rm(dir,{recursive:true,force:true,maxRetries:5})})
     const agent=await r.create('leader');agent.followup(input('Bounded unrelated task'));await agent.whenIdle()
     assert.ok(!latest(r.ctx,agent).some(s=>s.name.includes('docs'+(process.platform==='win32'?'\\':'/')+'subprojects')))
+  })
+
+  test('real Host registry: external Git cwd cannot replace canonical Leader skill',{timeout:30000},async t=>{
+    const dir=await mkdtemp(join(tmpdir(),'dsh-policy-decoy-'));await fixture(dir)
+    await mkdir(join(dir,'.agents/skills/postman-leader'),{recursive:true})
+    await writeFile(join(dir,'.agents/skills/postman-leader/SKILL.md'),
+      '---\nname: postman-leader\ndescription: Project-owned decoy\n---\n\nPROJECT_DECOY_NOT_CANONICAL')
+    const r=await runtime(dir)
+    t.after(async()=>{await r.ctx.fiber.dispose();await rm(dir,{recursive:true,force:true,maxRetries:5})})
+    const agent=await r.create('leader')
+    const decoy=await r.ctx.skills.get('postman-leader',{cwd:dir,scope:agent,signal:signal()})
+    assert.equal(decoy?.resourceBase?.path,join(dir,'.agents/skills/postman-leader'))
+    assert.match(decoy.content,/PROJECT_DECOY_NOT_CANONICAL/)
+    agent.followup(input('Work in this unrelated Git repository'));await agent.whenIdle()
+    const sections=latest(r.ctx,agent)
+    const role=sections.find(s=>s.name==='dsh:workspace-policy:skill:postman-leader')
+    assert.ok(role,'actual Host assembly includes top-level Leader role')
+    assert.ok(role.text.includes('Base directory: '+join(repo,'.agents/skills/postman-leader')))
+    assert.match(body(r.requests.at(-1).request),/POSTMAN_LEADER_SKILL_VERSION: 33/)
+    assert.doesNotMatch(body(r.requests.at(-1).request),/PROJECT_DECOY_NOT_CANONICAL/)
+    const ordinary=await r.ctx.skills.get('ordinary-fixture',{cwd:dir,scope:agent,signal:signal()})
+    assert.match(ordinary.content,/ORDINARY_PROJECT_SKILL/)
+    assert.ok(sections.some(s=>s.name.endsWith('REPO_POLICY.md')),'project policy remains available')
+  })
+
+  test('real Host assembly: Leader startup from DSH checkout reads canonical source',{timeout:30000},async t=>{
+    const dir=await mkdtemp(join(tmpdir(),'dsh-policy-host-start-'));await fixture(dir)
+    const r=await runtime(dir,()=>{}, {sessionCwd:repo})
+    t.after(async()=>{await r.ctx.fiber.dispose();await rm(dir,{recursive:true,force:true,maxRetries:5})})
+    const agent=await r.create('leader')
+    agent.followup(input('Start inside DSH checkout'));await agent.whenIdle()
+    assert.match(body(r.requests.at(-1).request),/POSTMAN_LEADER_SKILL_VERSION: 33/)
+    assert.ok(latest(r.ctx,agent).some(s=>s.name==='dsh:workspace-policy:'+join(repo,'REPO_POLICY.md')))
+  })
+
+  test('missing installed canonical Leader skill fails closed despite project decoy',{timeout:30000},async t=>{
+    const dir=await mkdtemp(join(tmpdir(),'dsh-policy-missing-project-'));await fixture(dir)
+    await mkdir(join(dir,'.agents/skills/postman-leader'),{recursive:true})
+    await writeFile(join(dir,'.agents/skills/postman-leader/SKILL.md'),
+      '---\nname: postman-leader\ndescription: Project-owned decoy\n---\n\nPROJECT_DECOY_NOT_CANONICAL')
+    const host=await mkdtemp(join(tmpdir(),'dsh-policy-missing-host-'))
+    const moduleDir=join(host,'plugins/dsh-task-discipline')
+    await mkdir(moduleDir,{recursive:true})
+    await writeFile(join(host,'package.json'),'{"type":"module"}')
+    await copyFile(join(repo,'plugins/dsh-task-discipline/workspace-policy.js'),join(moduleDir,'workspace-policy.js'))
+    const missing=await import(pathToFileURL(join(moduleDir,'workspace-policy.js')).href)
+    const r=await runtime(dir,()=>{}, {applyPolicy:missing.apply})
+    t.after(async()=>{await r.ctx.fiber.dispose();await rm(dir,{recursive:true,force:true,maxRetries:5});await rm(host,{recursive:true,force:true,maxRetries:5})})
+    const agent=await r.create('leader')
+    await assert.rejects(r.ctx.systemPrompt.assemble({agent,scope:agent,signal:signal()}),
+      /WORKSPACE_POLICY_REQUIRED: canonical postman-leader skill unavailable from Host installation/)
+  })
+
+  test('real Host registry preserves distinct Worker, Secretary and Sol canonical skills',{timeout:20000},async t=>{
+    const dir=await mkdtemp(join(tmpdir(),'dsh-policy-role-registry-'));await fixture(dir)
+    const r=await runtime(dir)
+    t.after(async()=>{await r.ctx.fiber.dispose();await rm(dir,{recursive:true,force:true,maxRetries:5})})
+    const agent=await r.create('leader')
+    for (const [type,name] of [['luna','postman-worker'],['secretary','postman-secretary'],['sol','postman-sol-worker']]) {
+      const skill=await r.ctx.skills.get(name,{cwd:repo,scope:agent,signal:signal()})
+      assert.equal(skill?.resourceBase?.path,join(repo,'.agents/skills',name),type+' must come from installed Host')
+      const canonical=await readFile(join(repo,'.agents/skills',name,'SKILL.md'),'utf8')
+      assert.ok(canonical.includes(skill.content),type+' parsed registry content matches Host source')
+      assert.ok(!skill.content.includes('POSTMAN_LEADER_SKILL_VERSION: 33'),type+' must not inherit Leader instructions')
+    }
+    const workerModule=await readFile(join(repo,'plugins/dsh-postman-harness/lib/postman-worker.js'),'utf8')
+    assert.ok(workerModule.includes("readFileSync(new URL('../../../.agents/skills/'"),
+      'existing role loader remains Host-module-relative')
   })
 
 }
