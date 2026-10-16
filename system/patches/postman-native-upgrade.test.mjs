@@ -10,7 +10,7 @@ import {createHash} from 'node:crypto'
 import {applyPostmanNativeChildCutoff} from './apply-postman-native-child-cutoff.mjs'
 const repository=resolve(fileURLToPath(new URL('../../',import.meta.url)))
 const sdk=createRequire(process.env.DSH_INSTALL_SDK ?? process.env.DSH_CAPABILITY_SDK ?? createRequire(import.meta.url).resolve('@deepseek-ai/dsh/package.json'))
-const names=['dsh-subagent','dsh-session','dsh-goal-round-driver','dsh-tool-pwsh']
+const names=['dsh-subagent','dsh-session','dsh-goal-round-driver','dsh-tool-goal','dsh-tool-pwsh']
 const images=Object.fromEntries(names.map(name=>[name,readFileSync(sdk.resolve('@deepseek-ai/'+name))]))
 const lf=text=>text.toString().replaceAll(String.fromCharCode(13),'')
 // Fixtures start at the native-only image even when the installed SDK already has the approved panel delta.
@@ -48,7 +48,7 @@ function historical(f,kind){
 function beforeOtherTargets(f){
  reverse(f,'app-owner','dsh-tool-pwsh')
  reverse(f,'session-events','dsh-session');reverse(f,'child-cutoff','dsh-session')
- reverse(f,'goal-continuation','dsh-goal-round-driver')
+ reverse(f,'goal-continuation','dsh-goal-round-driver');reverse(f,'goal-continuation','dsh-tool-goal')
  // The SDK ships this module as LF; Git on Windows can write CRLF while
  // reversing its patch. Hash the original SDK line-ending composition.
  writeFileSync(f.paths['dsh-goal-round-driver'],lf(readFileSync(f.paths['dsh-goal-round-driver'])))
@@ -57,18 +57,27 @@ function verifyCurrent(f){
  for(const name of names)assert.equal(canonical(readFileSync(f.paths[name])),canonical(images[name]),name+' exact current postimage')
  assert.ok(applyPostmanNativeChildCutoff([f.anchor]).every(t=>!t.updated),'second application is idempotent')
 }
-test('current four-target native composition is idempotent',t=>{
- const f=fixture(t),result=applyPostmanNativeChildCutoff([f.anchor]);assert.equal(result.length,4);assert.ok(result.every(t=>!t.updated));verifyCurrent(f)
+test('current five-target native composition is idempotent',t=>{
+ const f=fixture(t),result=applyPostmanNativeChildCutoff([f.anchor]);assert.equal(result.length,5);assert.ok(result.every(t=>!t.updated));verifyCurrent(f)
 })
-test('older composition without optional pwsh is three-target idempotent',t=>{
+test('previous wait-only goal image upgrades without changing other targets',t=>{
+ const f=fixture(t),path=f.paths['dsh-goal-round-driver']
+ reverse(f,'goal-continuation','dsh-goal-round-driver');reverse(f,'goal-continuation','dsh-tool-goal')
+ const old=lf(readFileSync(path)).replace('\t\treturn ctx.fiber.state === 2 && !state.stopping && ctx.agents.get(state.agent.id) === state.agent && state.agent.status === "idle" && !state.competingQueued;',
+  '\t\t// An authoritative plugin wait defers only automatic goal admission.\n\t\t// Native inbox input and the existing checkpoint recheck stay unchanged.\n\t\treturn ctx.fiber.state === 2 && !state.stopping && ctx.agents.get(state.agent.id) === state.agent && state.agent.status === "idle" && !state.competingQueued && ctx.bail("goal/continuation-defer", state.agent) !== true;')
+ assert.equal(createHash('sha256').update(old).digest('hex'),'93733a1750665882a3f5bce5bc96c7249d8ab019dfb91e25ff736b2f7bd27d77')
+ writeFileSync(path,old)
+ const result=applyPostmanNativeChildCutoff([f.anchor]);assert.equal(result.filter(t=>t.updated).length,2);verifyCurrent(f)
+})
+test('older composition without optional pwsh is four-target idempotent',t=>{
  const f=fixture(t);rmSync(join(f.root,'node_modules/@deepseek-ai/dsh-tool-pwsh'),{recursive:true})
- const result=applyPostmanNativeChildCutoff([f.anchor]);assert.equal(result.length,3);assert.ok(result.every(t=>!t.updated))
+ const result=applyPostmanNativeChildCutoff([f.anchor]);assert.equal(result.length,4);assert.ok(result.every(t=>!t.updated))
 })
-for(const kind of ['cold','close'])test('unchanged historical '+kind+' preimage upgrades all four targets then is idempotent',t=>{
+for(const kind of ['cold','close'])test('unchanged historical '+kind+' preimage upgrades all five targets then is idempotent',t=>{
  const f=fixture(t);historical(f,kind);beforeOtherTargets(f)
- const result=applyPostmanNativeChildCutoff([f.anchor]);assert.equal(result.length,4);assert.ok(result.every(t=>t.updated));verifyCurrent(f)
+ const result=applyPostmanNativeChildCutoff([f.anchor]);assert.equal(result.length,5);assert.ok(result.every(t=>t.updated));verifyCurrent(f)
 })
-for(const bad of names)test('unknown '+bad+' refuses before any of four target replacements',t=>{
+for(const bad of names)test('unknown '+bad+' refuses before any of five target replacements',t=>{
  const f=fixture(t);historical(f,'cold');beforeOtherTargets(f)
  writeFileSync(f.paths[bad],Buffer.concat([readFileSync(f.paths[bad]),Buffer.from('\n// unrecognized SDK composition\n')]))
  const before=Object.fromEntries(names.map(name=>[name,readFileSync(f.paths[name])]))
