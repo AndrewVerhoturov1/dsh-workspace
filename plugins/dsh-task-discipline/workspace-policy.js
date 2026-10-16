@@ -59,20 +59,23 @@ async function documents(ctx, agent, signal, extra = []) {
   // existing repository documents identify where this plugin applies.
   const contract = await read(ctx,join(root,CONTRACT),signal,true)
   const policy = await read(ctx,join(root,POLICY),signal,true)
-  if (contract === undefined && policy === undefined && !(await read(ctx,join(root,'AGENTS.md'),signal,true))?.includes('dsh-workspace')) return []
+  const agents = await read(ctx,join(root,'AGENTS.md'),signal,true)
+  const managed = policy?.includes('`dsh-workspace`') || agents?.includes('dsh-workspace')
+  if (!managed && contract === undefined && policy === undefined) return []
   const has = tool => ctx.tools.get(tool,agent) !== undefined
   const paths = []
-  if (leader(agent) || ['write','edit','pwsh','bash','ptc_execute','implementation_artifact_apply','postman_worker','postman_sol_worker'].some(has)) paths.push(join(root,CONTRACT))
+  // Generic repositories have optional rules: load each existing document,
+  // while a managed DSH checkout still requires both when capabilities apply.
+  if ((managed || contract !== undefined) && (leader(agent) || ['write','edit','pwsh','bash','ptc_execute','implementation_artifact_apply','postman_worker','postman_sol_worker'].some(has))) paths.push(join(root,CONTRACT))
   // Arbitrary shell is not safely classifiable as Git/non-Git. Capability is
   // the deterministic condition; repo policy precedes the first shell call.
-  if (leader(agent) || ['pwsh','bash','ptc_execute','postman_task_prepare','implementation_artifact_apply'].some(has)) paths.push(join(root,POLICY))
+  if ((managed || policy !== undefined) && (leader(agent) || ['pwsh','bash','ptc_execute','postman_task_prepare','implementation_artifact_apply'].some(has))) paths.push(join(root,POLICY))
   // Expected managed supervisor capabilities are known before their first tool.
   // Role comes from the owning Host, never an inherited child preset/persona.
-  if ((leader(agent) || ctx.bail('postman/workspace-role', agent) === 'sol') &&
-      (policy?.includes('`dsh-workspace`') || (await read(ctx,join(root,'AGENTS.md'),signal,true))?.includes('dsh-workspace'))) {
+  if (managed && (leader(agent) || ctx.bail('postman/workspace-role', agent) === 'sol')) {
     paths.push(...['postman','ptc'].map(id => join(root,'docs/subprojects',id,'SUBPROJECT.md')))
   }
-  paths.push(...projectPaths(root,[...touched(agent),...extra,agent.session.header.cwd]))
+  if (managed) paths.push(...projectPaths(root,[...touched(agent),...extra,agent.session.header.cwd]))
   return Promise.all([...new Set(paths)].map(async path => ({name:sectionName(path),text:'Workspace instructions from '+path+' (apply only to the named repository/subproject):\n\n'+await read(ctx,path,signal)})))
 }
 export function apply(ctx) {

@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createPostmanBridgeJobs } from './postman-bridge-jobs.js'
+import { createPostmanBridgeTool } from './postman-bridge.js'
 import { POSTMAN_PTC_SUCCESS_STATUSES } from './postman-bridge-core.js'
 import { createPostmanBridgeLaunchCoordinator } from './postman-bridge-launch-coordinator.js'
 import { createMemoryTaskRegistry } from './postman-task-registry.js'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { mkdtempSync, mkdirSync, rmSync } from 'node:fs'
 const tick=()=>new Promise(r=>setImmediate(r))
 async function flush(){for(let i=0;i<18;i++)await tick()}
 async function fixture(t,{readOnly=true}={}){
@@ -28,7 +30,7 @@ async function fixture(t,{readOnly=true}={}){
   t.after(()=>jobs.dispose())
   const accept=(root=join(tmpdir(),'synthetic-approved-A'))=>jobs.accept(parent,'@PostmanDevspace synthetic resource test','devspace',undefined,undefined,'WRITE_APPROVED_TARGET',undefined,{root,access:'write'})
   const finish=(n)=>completed.get(launches[n-1].sessionId)({status:'COMPLETED',requestId:'REQ_20261013T000000Z_'+String(n).padStart(4,'0'),result:{ok:true,requestId:'REQ_20261013T000000Z_'+String(n).padStart(4,'0'),source:'bell',reportedOutcome:'DONE',evidenceState:'REPORTED_NOT_VERIFIED',conversationRef:'https://chatgpt.com/c/synthetic-'+n}})
-  return {parent,registry,contexts,jobs,accept,acceptIsolated:()=>jobs.accept(parent,'@PostmanDevspace inert dirty task', 'devspace',undefined,undefined,'WRITE_ISOLATED'),launches,finish,coordinator,setBusy:v=>{workerBusy=v;coordinator.refresh()},root}
+  return {parent,ctx,registry,contexts,jobs,accept,acceptIsolated:()=>jobs.accept(parent,'@PostmanDevspace inert dirty task', 'devspace',undefined,undefined,'WRITE_ISOLATED'),launches,finish,coordinator,setBusy:v=>{workerBusy=v;coordinator.refresh()},root}
 }
 test('racing overlapping reservations launch once in FIFO after terminal release',async t=>{
   const f=await fixture(t), [a,b]=await Promise.all([f.accept(),f.accept()]);await flush()
@@ -128,4 +130,26 @@ test('verified received DevSpace terminal may continue in existing dirty impleme
   const next=await f.acceptIsolated();assert.equal(next.status,'POSTMAN_BRIDGE_ACCEPTED')
   await flush();assert.equal(f.launches.length,1,'only a previously verified terminal may waive clean worktree on continuation')
   f.finish(1);await flush()
+})
+test('real Host-approved disjoint directories run independently; nested overlapping directory queues', async t => {
+  const f = await fixture(t)
+  const parentRoot = mkdtempSync(join(tmpdir(), 'postman-real-host-scopes-'))
+  t.after(() => rmSync(parentRoot, { recursive: true, force: true }))
+  const a = join(parentRoot, 'scope-A'), b = join(parentRoot, 'scope-B'), nested = join(a, 'nested')
+  for (const dir of [a, b, nested]) mkdirSync(dir, { recursive: true })
+  const tool = createPostmanBridgeTool(f.ctx, f.jobs, f.contexts)
+  const accept = root => tool.execute({ message: '@PostmanDevspace exact real Host scope',
+    workspace_root: root, workspace_access: 'write' }, { agent: f.parent, signal: new AbortController().signal })
+  const [one, two] = await Promise.all([accept(a), accept(b)])
+  assert.equal(one.status, 'POSTMAN_BRIDGE_ACCEPTED')
+  assert.equal(two.status, 'POSTMAN_BRIDGE_ACCEPTED')
+  await flush()
+  assert.equal(f.launches.length, 2, 'two independent real directories do not serialize')
+  const queued = await accept(nested)
+  assert.equal(queued.status, 'POSTMAN_BRIDGE_ACCEPTED')
+  await flush()
+  assert.equal(f.launches.length, 2, 'nested writer must not race its parent writer')
+  f.finish(1); await flush()
+  assert.equal(f.launches.length, 3, 'nested writer may start after overlapping writer settles')
+  f.finish(2); f.finish(3); await flush()
 })

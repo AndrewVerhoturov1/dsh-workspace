@@ -34,6 +34,13 @@ export const POSTMAN_TASK_DOMAIN = defineDomain({
   }, z.object({
     leaderSessionId: z.string().min(1), repository: z.string(), repositoryPath: z.string(),
     originUrl: z.string(), baseCommit: z.string(), branch: z.string(), worktree: z.string(),
+    // Optional for new universal project bindings. Historical v1 rows are not migrated.
+    universalProject: z.literal(true).optional(),
+    // New explicit DSH selections keep their verified root across cold recovery.
+    // Absent on historical v1 DSH bindings; no migration of pinned rows.
+    selectedDshProject: z.literal(true).optional(),
+    defaultBranch: z.string().min(1).optional(),
+    baseSource: z.enum(['remote', 'cached', 'bootstrap']).optional(),
     devspaceReadOnly: z.boolean().optional(),
     stage: z.enum(['intent', 'worktree', 'ready', 'uncertain', 'closed']),
     diagnostic: z.string().nullable(),

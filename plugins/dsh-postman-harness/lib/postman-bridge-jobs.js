@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { relative, isAbsolute } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { postmanInputGrants } from './postman-input-files.js'
 import { DirectPostmanJobManager } from './direct-current-turn.js'
 import { createPostmanDevspaceLanes } from './postman-devspace-lanes.js'
@@ -7,6 +8,8 @@ import { requestDevspaceControl, readDevspaceControls, loadDevspaceChannelForOwn
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { buildPostmanBridgeStartRequest, isTopLevelPostmanSupervisor, POSTMAN_BRIDGE_PROVIDER,
   settleTrustedPostmanStatus } from './postman-bridge-core.js'
+
+const HOST_SOURCE_ROOT = fileURLToPath(new URL('../../../', import.meta.url))
 
 function diagnostic(error) {
   const text = String(error?.message ?? error ?? 'unknown error')
@@ -180,8 +183,10 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     if (job.recoveryFrom) {
       job.state = 'RUNNING'
       const previous = { state: 'completed', requestId: job.recoveryFrom.requestId,
-        result: job.recoveryFrom.result, transportKind: job.transportKind, branch: job.taskContext.branch }
-      const started = await direct.continueLast(job.bridgeJobId, parent.session.header.cwd, previous,
+        result: job.recoveryFrom.result, transportKind: job.transportKind, branch: job.taskContext.branch,
+        repository: job.taskContext.repository }
+      const started = await direct.continueLast(job.bridgeJobId,
+        job.taskContext.universalProject ? HOST_SOURCE_ROOT : parent.session.header.cwd, previous,
         async requestId => {
           if (typeof contexts?.changeRecord === 'function') await contexts.changeRecord(job.parentSessionId, row => {
             const op = row.bridgeOperations?.[job.bridgeJobId]
@@ -321,7 +326,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
         : 'READ_ONLY'
       : devspaceMode
     if (transportKind === 'devspace' && devspaceMode === 'WRITE_ISOLATED' &&
-        (taskContext?.devspaceReadOnly || !taskContext?.worktree || taskContext?.branch === 'main'))
+        (taskContext?.devspaceReadOnly || !taskContext?.worktree))
       return { status: 'POSTMAN_DEVSPACE_ISOLATED_CONTEXT_REQUIRED' }
     if (taskContext?.devspaceReadOnly && (transportKind !== 'devspace' ||
         !['READ_ONLY', 'WRITE_TEST', 'WRITE_APPROVED_TARGET'].includes(devspaceMode)))
@@ -766,7 +771,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
           diagnostic: 'POSTMAN_DEVSPACE_LUNA_TERMINAL_UNAVAILABLE' }
       } else if (operation && operation.requestId && ['pending', 'unknown'].includes(operation.state) &&
                  typeof direct.inspectRequest === 'function') {
-        const proof = direct.inspectRequest(operation.requestId, row?.branch, operation.transportKind)
+        const proof = direct.inspectRequest(operation.requestId, row?.branch, operation.transportKind, row?.repository)
         if (proof.state === 'terminal' && typeof contexts?.changeRecord === 'function') {
           const safe = losslessValue(proof.terminal)
           const pending = contexts.changeRecord(parent.id, previous => {
@@ -862,7 +867,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     let capability = { recovery_eligible: false }
     if (terminal?.status === 'POSTMAN_BRIDGE_TERMINAL' &&
         ['POSTMAN_TRANSPORT_FAILED', 'ASSISTANT_COMPLETED_NO_ARTIFACT', 'ARTIFACT_REJECTED'].includes(terminal.result?.code)) {
-      try { capability = await direct.recoveryCapability(parent.session.header.cwd, terminal.requestId) }
+      try { capability = await direct.recoveryCapability(job.taskContext?.universalProject ? HOST_SOURCE_ROOT : parent.session.header.cwd, terminal.requestId) }
       catch (error) { capability = { recovery_eligible: false, code: diagnostic(error) } }
     }
     if (recover) {
@@ -892,7 +897,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
       const occupied = countsAgainstLimit(op)
       const proof = op.requestId && ['text', 'artifact', 'image'].includes(op.transportKind) &&
         typeof direct.inspectRequest === 'function'
-        ? direct.inspectRequest(op.requestId, row.branch, op.transportKind) : null
+        ? direct.inspectRequest(op.requestId, row.branch, op.transportKind, row.repository) : null
       return { bridgeJobId, state: op.state, phase: op.phase ?? 'unknown',
         transportKind: op.transportKind ?? op.terminal?.transportKind ?? 'unknown',
         createdAt: op.createdAt ?? 'unknown', childSessionId: op.childSessionId ?? 'unknown',

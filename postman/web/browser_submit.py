@@ -977,7 +977,11 @@ def _observe_send_proof(page: Any, prompt: str, before_user_turn_count: int,
     composer_empty, empty_details = _composer_empty_from_snapshot(composer_snapshot)
     new_turn = len(user_turns) == before_user_turn_count + 1
     rendered_last = _normalize_text(user_turns[-1]) if user_turns else ""
-    exact_turn = new_turn and rendered_last == _normalize_text(prompt)
+    # The scoped semantic DOM extractor removes exactly one final rendered LF.
+    # Match that single rendering boundary on the expected side only; keep all
+    # interior whitespace, additional terminal LFs and the complete REQ exact.
+    expected_rendered = _normalize_text(prompt).removesuffix("\n")
+    exact_turn = new_turn and rendered_last == expected_rendered
     request_key_line = request_key_line_from_prompt(prompt)
     request_key_turn = new_turn and _turn_contains_exact_line(rendered_last, request_key_line)
     # REQ presence is diagnostic only; proof requires exact full rendered text.
@@ -1062,11 +1066,15 @@ def submit_once(
 
     transaction = getattr(page, "_postman_presend", None)
     if isinstance(transaction, dict):
-        owned = _owned_unsent_binding(page, transaction)
+        ownership: dict[str, Any] = {}
+        owned = _owned_unsent_binding(page, transaction, ownership)
         exact, exact_details = _exact_prompt_readback(page, prompt)
-        if not owned or not exact or exact_details.get("logicalComposerCountAfterFill") != 1:
+        one_composer = exact_details.get("logicalComposerCountAfterFill") == 1
+        if not owned or not exact or not one_composer:
             return _result(SUBMIT_INVALID_CONFIG if not owned else PROMPT_MISMATCH, ok=False, send_state=guard.state,
-                           transitions=transitions, details={"reason": "presend_ownership_or_prompt_changed"})
+                           transitions=transitions, details={"reason": "presend_ownership_or_prompt_changed",
+                               "presendOwnership": ownership, "exactPromptReadback": exact,
+                               "singleLogicalComposer": one_composer})
     if input_attachment:
         current_url = str(getattr(page, "url", "") or "")
         chat_still_owned = (is_chatgpt_root_url(current_url) and count_conversation_turns(page) == 0
@@ -1207,10 +1215,23 @@ def _page_diagnostic(page: Any) -> dict[str, Any]:
     return {**value, "url": str(getattr(page, "url", "") or "")}
 
 
-def _owned_unsent_binding(page: Any, transaction: dict[str, Any]) -> bool:
-    return (transaction.get("sendAttempted") is False
-            and transaction.get("ownedUrl") == str(getattr(page, "url", "") or "")
-            and transaction.get("userCount") == len(collect_user_turn_texts(page)))
+def _owned_unsent_binding(page: Any, transaction: dict[str, Any],
+                          evidence: dict[str, Any] | None = None) -> bool:
+    turns = collect_user_turn_details(page)
+    send_not_attempted = transaction.get("sendAttempted") is False
+    url_equal = transaction.get("ownedUrl") == str(getattr(page, "url", "") or "")
+    expected_count = transaction.get("userCount")
+    count_equal = expected_count == len(turns)
+    if evidence is not None:
+        families = ("author-role", "test-id", "bubble")
+        family = next((families[i] for i, selector in enumerate(USER_TURN_SELECTORS)
+                       if turns and turns[0]["selector"] == selector), "none")
+        bounded = lambda value: value if type(value) is int and 0 <= value <= 100_000 else None
+        evidence.update(sendNotAttempted=send_not_attempted, ownedUrlEqual=url_equal,
+                        expectedUserTurnCount=bounded(expected_count),
+                        observedUserTurnCount=bounded(len(turns)),
+                        userTurnCountEqual=count_equal, userTurnSelectorFamily=family)
+    return send_not_attempted and url_equal and count_equal
 
 
 def clear_owned_unsent_prompt(page: Any, prompt: str, *, timeout_ms: int) -> bool:

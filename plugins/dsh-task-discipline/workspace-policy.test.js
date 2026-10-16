@@ -197,6 +197,40 @@ else {
     const scoped = await ctx.systemPrompt.assemble({agent,scope:agent,signal:signal()}).catch(error=>error)
     assert.ok(scoped instanceof Error,'missing required Leader skill fails closed')
   })
+  test('real Host assembly/pre-execute respects partial generic rules and preserves mandatory DSH contract',{timeout:60000},async t=>{
+    const docs=['AGENTS.md','REPO_POLICY.md','docs/workflow/TASK_CONTRACT.md']
+    for (const [kind,present] of [
+      ['none',[]], ['agents',['AGENTS.md']], ['policy',['REPO_POLICY.md']],
+      ['contract',['docs/workflow/TASK_CONTRACT.md']],
+    ]) {
+      const dir=await mkdtemp(join(tmpdir(),'dsh-policy-generic-'+kind+'-'))
+      await fixture(dir)
+      for (const path of docs) if (!present.includes(path)) await rm(join(dir,path))
+      if (present.includes('AGENTS.md')) await writeFile(join(dir,'AGENTS.md'),'GENERIC_AGENTS_ONLY')
+      if (present.includes('REPO_POLICY.md')) await writeFile(join(dir,'REPO_POLICY.md'),'GENERIC_POLICY_ONLY')
+      if (present.includes('docs/workflow/TASK_CONTRACT.md')) await writeFile(join(dir,'docs/workflow/TASK_CONTRACT.md'),'GENERIC_CONTRACT_ONLY')
+      const r=await runtime(dir)
+      try {
+        const agent=await r.create('leader')
+        agent.followup(input('Generic repository operation'));await agent.whenIdle()
+        const sections=latest(r.ctx,agent)
+        for (const [path,marker] of [['REPO_POLICY.md','GENERIC_POLICY_ONLY'],['docs/workflow/TASK_CONTRACT.md','GENERIC_CONTRACT_ONLY']])
+          assert.equal(sections.some(s=>s.text.includes(marker)),present.includes(path),kind+': '+path)
+        assert.ok(!sections.some(s=>s.name.includes('docs/subprojects')),kind+': DSH subprojects must not leak')
+        const result=await r.ctx.tools.execute({callId:'generic-'+kind,name:'pwsh',arguments:{},agent,signal:signal()})
+        assert.equal(result.isError,false,kind+': missing optional companion must not block pre-execute')
+        if (kind==='agents') assert.ok(body(r.requests.at(-1).request).includes('GENERIC_AGENTS_ONLY'))
+      } finally {await r.ctx.fiber.dispose();await rm(dir,{recursive:true,force:true,maxRetries:5})}
+    }
+    const dir=await mkdtemp(join(tmpdir(),'dsh-policy-mandatory-'))
+    await fixture(dir)
+    await rm(join(dir,'docs/workflow/TASK_CONTRACT.md'))
+    const r=await runtime(dir)
+    try {
+      const agent=await r.create('leader')
+      await assert.rejects(r.ctx.systemPrompt.assemble({agent,scope:agent,signal:signal()}),/ENOENT|not found|no such file/i)
+    } finally {await r.ctx.fiber.dispose();await rm(dir,{recursive:true,force:true,maxRetries:5})}
+  })
   test('exact Leader role does not preload Postman projects into unrelated repository',{timeout:20000},async t=>{
     const dir=await mkdtemp(join(tmpdir(),'dsh-policy-unrelated-'));await fixture(dir)
     await writeFile(join(dir,'AGENTS.md'),'Unrelated repository instructions')

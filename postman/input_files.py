@@ -68,8 +68,9 @@ def input_media_type(data):
 
 
 class GitHubInputPublisher:
-    def __init__(self, api=None, snapshot_dir=None):
+    def __init__(self, api=None, snapshot_dir=None, existing_repository=REPOSITORY):
         self.api = api or self._api
+        self.existing_repository = existing_repository
         # Only Host supplies this private directory; never returned in a descriptor.
         self.snapshot_dir = Path(snapshot_dir) if snapshot_dir is not None else None
         self.materializations = []
@@ -121,7 +122,7 @@ class GitHubInputPublisher:
     def existing(self, commit, path):
         if not _SHA.fullmatch(commit) or not path or path.startswith("/") or any(part in {"", ".", ".."} for part in path.split("/")) or "\\" in path or ":" in path:
             raise InputStageError("existing file requires exact commit and safe repository-relative path")
-        response = self.api(f"repos/{REPOSITORY}/contents/{quote(path, safe='/')}?ref={commit}")
+        response = self.api(f"repos/{self.existing_repository}/contents/{quote(path, safe='/')}?ref={commit}")
         if response.get("type") != "file" or response.get("encoding") != "base64":
             raise InputStageError("GitHub file unavailable")
         if response.get("size", 0) > MAX_INPUT_BYTES or len(response["content"]) > 72 * 1024 * 1024:
@@ -132,9 +133,9 @@ class GitHubInputPublisher:
         if "size" in response and response["size"] != len(data):
             raise InputStageError("POSTMAN_INPUT_MATERIALIZATION_MISMATCH")
         name = Path(path).name
-        descriptor = normalize_input_files([dict(source_kind="github", media_type=input_media_type(data), name=name, repository=REPOSITORY, commit=commit, path=path,
+        descriptor = normalize_input_files([dict(source_kind="github", media_type=input_media_type(data), name=name, repository=self.existing_repository, commit=commit, path=path,
             sha256=hashlib.sha256(data).hexdigest(), byte_length=len(data),
-            raw_url=f"https://raw.githubusercontent.com/{REPOSITORY}/{commit}/{quote(path, safe='/')}")])[0]
+            raw_url=f"https://raw.githubusercontent.com/{self.existing_repository}/{commit}/{quote(path, safe='/')}")])[0]
         self._materialize(descriptor["sha256"], data)
         return descriptor
 
@@ -232,10 +233,13 @@ def main(argv=None):
     group.add_argument("--cleanup-public-fallback")
     parser.add_argument("--public-fallback-confirmed", action="store_true")
     group.add_argument("--existing", nargs=2, metavar=("COMMIT", "PATH"))
+    parser.add_argument("--existing-repository", default=REPOSITORY, help=argparse.SUPPRESS)
     parser.add_argument("--snapshot-dir", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     try:
-        publisher = GitHubInputPublisher(snapshot_dir=args.snapshot_dir)
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", args.existing_repository):
+            raise InputStageError('POSTMAN_INPUT_REPOSITORY_INVALID')
+        publisher = GitHubInputPublisher(snapshot_dir=args.snapshot_dir, existing_repository=args.existing_repository)
         if args.stage:
             result = publisher.stage(args.stage)
         elif args.stage_public_fallback:

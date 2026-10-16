@@ -191,6 +191,9 @@ const standalone = extract(el("ROOT", [el("P", [el("SPAN", [text(req)])])]));
 if (standalone !== req) throw new Error("standalone REQ changed");
 const oldFixture = extract(el("ROOT", [el("P", [text("first")]), el("DIV", [el("P", [text("second")])])]));
 if (oldFixture !== "first\nsecond") throw new Error("block fixture changed");
+const oneTerminal = extract(el("ROOT", [el("P", [text(req), el("BR")])]));
+const twoTerminal = extract(el("ROOT", [el("P", [text(req), el("BR"), el("BR")])]));
+if (oneTerminal !== req || twoTerminal !== req + "\n") throw new Error("terminal LF contract changed");
 console.log(JSON.stringify({length: actual.length, sha256: hash(actual), joined, standalone, oldFixture}));
 '''
         result = subprocess.run(
@@ -1016,6 +1019,68 @@ console.log(JSON.stringify({length: actual.length, sha256: hash(actual), joined,
         )
         self.assertFalse(ok)
         self.assertFalse(proof["userTurnCorrelated"])
+
+    def test_terminal_lf_exact_rendered_proof_preserves_req_count_and_extra_newlines(self):
+        req = "POSTMAN_REQUEST_ID: REQ_20261016T121952Z_5393"
+        base = req + "\nTwo spaces  and a URL https://example.test/pinned"
+        for prompt, rendered in [(base + "\n", base), (base + "\r\n", base),
+                                 (base + "\n\n", base + "\n"),
+                                 (base.replace("\n", "\r\n") + "\r\n", base)]:
+            with self.subTest(prompt=repr(prompt)):
+                page = FakePage(user_turns=[rendered], composer_text="", url="https://chatgpt.com/c/exact")
+                ok, proof = submit._observe_send_proof(page, prompt, 0,
+                                                         conversation_url="https://chatgpt.com/c/exact")
+                self.assertTrue(ok, proof)
+                self.assertTrue(proof["exactUserTurn"])
+                self.assertTrue(proof["requestKeyUserTurn"])
+                self.assertEqual(proof["userTurnCountNow"], 1)
+        prompt = base + "\n"
+        for changed in [base + "\n", base.replace("pinned", "changed"),
+                        base.replace(req, "POSTMAN_REQUEST_ID: REQ_20261016T121952Z_5394")]:
+            with self.subTest(changed=repr(changed)):
+                ok, proof = submit._observe_send_proof(
+                    FakePage(user_turns=[changed], composer_text="", url="https://chatgpt.com/c/exact"),
+                    prompt, 0)
+                self.assertFalse(ok)
+                self.assertFalse(proof["exactUserTurn"])
+        ok, proof = submit._observe_send_proof(
+            FakePage(user_turns=[base], composer_text="", url="https://chatgpt.com/c/exact"),
+            base + "\n\n", 0)
+        self.assertFalse(ok, "two terminal LFs must not collapse into one")
+
+    def test_presend_refusal_reports_bounded_url_count_selector_operands_without_click(self):
+        owned_url = "https://chatgpt.com/c/owned"
+        prompt = "private prompt and SECRET_DO_NOT_EMIT"
+        for variant in ("url", "count", "draft"):
+            with self.subTest(variant=variant):
+                page = FakePage(url=owned_url, composer_text=prompt, user_turns=["old"])
+                page._postman_presend = {"sendAttempted": False, "fillAttempted": True,
+                                         "ownedUrl": owned_url, "userCount": 1}
+                if variant == "url":
+                    page.url = "https://chatgpt.com/c/foreign-private-url"
+                elif variant == "count":
+                    page.user_turns.append("another")
+                else:
+                    page.composer_text = "foreign draft SECRET_DO_NOT_EMIT"
+                result = submit.submit_once(page, page.locator("#prompt-textarea"), prompt,
+                                            submit.SendGuard(), timeout_ms=0)
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["sendState"], submit.SEND_PROVEN_NOT_SENT)
+                self.assertEqual(page.click_count, 0)
+                self.assertNotIn(submit.PROMPT_SEND_STARTED, result["transitions"])
+                details = result["details"]
+                self.assertEqual(details["reason"], "presend_ownership_or_prompt_changed")
+                evidence = details["presendOwnership"]
+                self.assertEqual(evidence["sendNotAttempted"], True)
+                self.assertEqual(evidence["ownedUrlEqual"], variant != "url")
+                self.assertEqual(evidence["expectedUserTurnCount"], 1)
+                self.assertEqual(evidence["observedUserTurnCount"], 2 if variant == "count" else 1)
+                self.assertEqual(evidence["userTurnCountEqual"], variant != "count")
+                self.assertEqual(evidence["userTurnSelectorFamily"], "test-id")
+                self.assertEqual(details["exactPromptReadback"], variant != "draft")
+                self.assertEqual(details["singleLogicalComposer"], True)
+                self.assertNotIn("SECRET", str(evidence))
+                self.assertNotIn("chatgpt.com", str(evidence))
 
     def test_post_send_requires_full_content_not_just_matching_req(self):
         req = "REQ_20260925T175605Z_0372"

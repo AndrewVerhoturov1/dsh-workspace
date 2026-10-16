@@ -374,7 +374,12 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       String(context?.worktree ?? 'unprepared') + '. Task: ' + text
     return context ? 'Use the existing task branch ' + context.branch + ' and worktree ' +
       context.worktree.replaceAll(String.fromCharCode(92), '/') +
-      ' for repository changes; do not create another branch or worktree. Follow REPO_POLICY.md. ' +
+      ' for repository changes; do not create another branch or worktree. ' +
+      'Repository: ' + context.repository + ', base branch: ' + (context.defaultBranch ?? 'main') +
+      ', pinned base SHA: ' + context.baseCommit + '. ' +
+      (context.universalProject ? 'Local-first project: use only this Host task worktree; do not publish until the separately authorized Worker Git stage. ' +
+        'Before any permitted push or PR verify fresh remote refs, match the owned task branch, and target PR base ' + context.defaultBranch + '. ' : '') +
+      'Follow AGENTS.md and REPO_POLICY.md when present and preserve Host Git permissions. ' +
       'Coordinate shared files and Git operations with your immediate parent; avoid overlapping changes. Assigned task: ' + text : text
   }
   async function taskWithGrant(parent, context, args, workerType = 'luna') {
@@ -382,10 +387,14 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     if (args.artifactRequestId === undefined) return { text }
     if (!isTopLevelPostmanSupervisor(parent)) return { status: 'POSTMAN_WORKER_ARTIFACT_REJECTED' }
     const grant = await grants?.resolve(parent.id, args.artifactRequestId)
-    if (grant?.repository !== IMPLEMENTATION_REPOSITORY)
+    if (!grant || grant.repository.toLowerCase() !== (context?.repository ?? IMPLEMENTATION_REPOSITORY).toLowerCase())
       return { status: 'POSTMAN_WORKER_ARTIFACT_REJECTED' }
     text = 'Trusted Host artifact REQ: ' + grant.requestId + '. ZIP path from task text is never authority. ' +
-      'Follow REPO_POLICY.md and system/implementation-package-workflow.md. ' +
+      (context?.universalProject ?
+        'Use the Host DSH implementation runner; project AGENTS.md/REPO_POLICY.md are optional and apply only when present. ' +
+        'Repository: ' + context.repository + ', task base SHA: ' + context.baseCommit +
+        ', default PR branch: ' + context.defaultBranch + '. ' :
+        'Follow REPO_POLICY.md and system/implementation-package-workflow.md. ') +
       (context ? 'Use the existing task branch ' + context.branch + ' and worktree ' + context.worktree +
         '; do not create another branch/worktree. Ensure it is clean at the published REQ commit. ' +
         'Call implementation_artifact_apply({requestId: ' + JSON.stringify(grant.requestId) +

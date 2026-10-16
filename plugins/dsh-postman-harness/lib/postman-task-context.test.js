@@ -3,6 +3,7 @@ import test from 'node:test'
 import { resolve } from 'node:path'
 import { createPostmanTaskContexts, POSTMAN_TASK_BRANCH_PATTERN } from './postman-task-context.js'
 import { createMemoryTaskRegistry } from './postman-task-registry.js'
+import { createPostmanTaskPrepareTool } from './postman-bridge.js'
 
 const base = 'a'.repeat(40)
 const published = 'b'.repeat(40)
@@ -92,6 +93,54 @@ test('read-only Devspace recovery remains branchless and never mutates Git', asy
     assert.ok(!['fetch','push','worktree','reset','clean','checkout'].includes(item.args[0]),item.args)
 })
 
+test('new explicit DSH root survives foreign Host cwd in cold read-only recovery', async () => {
+  const f=fixture()
+  const foreign=resolve('C:/Users/Andrew/foreign-host-workspace')
+  const parent={...leader('selected-dsh-readonly'),session:{header:{cwd:foreign}}}
+  const prepared=await f.contexts.prepareReadOnly(parent,repository)
+  assert.equal(prepared.status,'POSTMAN_TASK_READ_ONLY_READY',JSON.stringify(prepared))
+  assert.equal(f.registry.get(parent.id).selectedDshProject,true)
+  const cold=createPostmanTaskContexts({registry:f.registry,realPath:async path=>path,
+    gitCommand:async (cwd,...args)=>{
+      if (cwd===foreign) throw Error('FOREIGN_HOST_CWD_MUST_NOT_BE_USED')
+      return f.gitCommand(cwd,...args)
+    }})
+  const recovered=await cold.recover(parent)
+  assert.equal(recovered.status,'POSTMAN_TASK_CONTEXT_ALREADY_READY',JSON.stringify(recovered))
+  assert.equal(recovered.worktree,repository)
+  assert.equal(recovered.devspaceReadOnly,true)
+  assert.equal((await cold.restore(parent)).diagnostic.code,'DEVSPACE_READ_ONLY_NO_RESTORE')
+  assert.equal(f.calls.some(call=>['fetch','push','reset','clean'].includes(call.args[0])),false)
+})
+
+test('new explicit DSH root survives foreign Host cwd in cold writable recovery and safe failed-runner restore', async () => {
+  const f=fixture()
+  const foreign=resolve('C:/Users/Andrew/foreign-host-workspace')
+  const parent={...leader('selected-dsh-writable'),session:{header:{cwd:foreign}}}
+  const prepared=await f.contexts.prepare(parent,repository)
+  assert.equal(prepared.status,'TASK_CONTEXT_READY',JSON.stringify(prepared))
+  assert.equal(f.registry.get(parent.id).selectedDshProject,true)
+  assert.equal(f.registry.get(parent.id).universalProject,undefined)
+  assert.equal(prepared.baseCommit,base)
+  assert.ok(invoked(f.calls,'push','origin',base+':refs/heads/'+prepared.branch),'DSH still publishes exact remote task ref')
+  f.state.trees.push(worktree)
+  const cold=createPostmanTaskContexts({registry:f.registry,realPath:async path=>path,
+    gitCommand:async (cwd,...args)=>{
+      if (cwd===foreign) throw Error('FOREIGN_HOST_CWD_MUST_NOT_BE_USED')
+      return f.gitCommand(cwd,...args)
+    }})
+  const recovered=await cold.recover(parent)
+  assert.equal(recovered.status,'POSTMAN_TASK_CONTEXT_ALREADY_READY',JSON.stringify(recovered))
+  assert.equal(recovered.worktree,worktree)
+  assert.equal(cold.beginOperation(parent.id),true)
+  await cold.startRunner(parent.id,'REQ_SELECTED_DSH')
+  await cold.endOperation(parent.id,{status:'IMPLEMENTATION_ARTIFACT_RUNNER_RESULT',result:{ok:false}})
+  const restored=await cold.restore(parent)
+  assert.equal(restored.status,'TASK_CONTEXT_RESTORED',JSON.stringify(restored))
+  assert.equal(restored.head,base)
+  assert.equal(f.registry.get(parent.id).runner.state,'none')
+})
+
 test('same Leader promotes branchless research into isolated task tree only on demand', async () => {
   const {contexts, registry, calls}=fixture()
   const parent=leader('research-to-code')
@@ -179,11 +228,14 @@ test('prepare is idempotent for its Leader but not shared with another Leader', 
   assert.equal(contexts.child('child-A'), null)
 })
 
-test('prepare rejects another origin identity before fetch or worktree mutation', async () => {
-  for (const remoteUrl of ['https://github.com/another/dsh-workspace.git', 'https://example.com/andrewverhoturov1/dsh-workspace.git']) {
+test('prepare forbids foreign GitHub project at protected DSH root and rejects non-GitHub origin', async () => {
+  for (const [remoteUrl, diagnostic] of [
+    ['https://github.com/another/dsh-workspace.git', 'POSTMAN_TASK_PERMANENT_WORKTREE'],
+    ['https://example.com/andrewverhoturov1/dsh-workspace.git', 'POSTMAN_TASK_REPOSITORY_REJECTED'],
+  ]) {
     const { contexts, calls } = fixture({ remoteUrl })
     assert.deepEqual(await contexts.prepare(leader('leader-A')), {
-      status: 'POSTMAN_TASK_PREPARE_FAILED', diagnostic: 'POSTMAN_TASK_REPOSITORY_REJECTED',
+      status: 'POSTMAN_TASK_PREPARE_FAILED', diagnostic,
     })
     assert.equal(calls.some(call => ['fetch', 'worktree', 'push'].includes(call.args[0])), false)
   }
@@ -457,6 +509,7 @@ test('legacy preview-based task recovers and restores from its pinned B, never f
   const recovered = await cold.recover(leader('legacy'))
   assert.equal(recovered.status, 'POSTMAN_TASK_CONTEXT_ALREADY_READY', JSON.stringify(recovered))
   assert.equal(recovered.baseCommit, legacyPreview)
+  assert.equal(f.registry.get('legacy').selectedDshProject,undefined,'historical v1 row is not migrated')
   assert.equal((await cold.restore(leader('legacy'))).status, 'TASK_CONTEXT_RESTORED')
   assert.equal(f.registry.get('legacy').baseCommit, legacyPreview)
   assert.ok(invoked(f.calls, 'reset', '--hard', legacyPreview))
@@ -610,4 +663,19 @@ test('missing-tree retirement reservation preserves runnable denial and operatio
     await f.registry.change(parent.id,()=>({...stale,...patch}))
     assert.equal(f.contexts.beginWorkerAdmission(parent.id,token,true),false)
   }
+})
+
+test('Leader prepare schema forwards exact optional project_path and rejects relative paths before Git', async () => {
+  const project = resolve('chosen-independent-project')
+  const caller = {id:'leader-select',session:{header:{cwd:repository,agentPreset:'postman-leader',delegationDepth:0}}}
+  const seen = []
+  const contexts = {get:()=>null,
+    async prepare(parent,path) {seen.push([parent,path,false]);return {status:'TASK_CONTEXT_READY',repository:'ExampleOrg/repo'}},
+    async prepareReadOnly(parent,path) {seen.push([parent,path,true]);return {status:'POSTMAN_TASK_READ_ONLY_READY'}}}
+  const tool = createPostmanTaskPrepareTool({agents:{get:id=>id===caller.id?caller:null}}, contexts)
+  const invoke = args => tool.execute(args,{agent:caller})
+  assert.equal((await invoke({project_path:'relative/path'})).status,'POSTMAN_TASK_ARGUMENTS_INVALID')
+  assert.equal((await invoke({project_path:project})).status,'TASK_CONTEXT_READY')
+  assert.equal((await invoke({project_path:project,read_only:true})).status,'POSTMAN_TASK_READ_ONLY_READY')
+  assert.deepEqual(seen,[[caller,project,false],[caller,project,true]])
 })
