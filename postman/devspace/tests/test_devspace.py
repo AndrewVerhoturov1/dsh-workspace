@@ -255,8 +255,12 @@ assert hasattr(stdlib_signal, 'set_wakeup_fd')
             result = bridge.run_request(REQ, task_url="", prompt="private task",
                 expected_filename="", expected_request={"transportKind": "devspace"},
                 devspace_binding=self.binding, artifact_mode=False,
-                playwright_factory=Factory, observer_timeout_ms=4000)
+                playwright_factory=Factory, observer_timeout_ms=4000,
+                reminder_interval_ms=1000, max_reminders=3)
         submit.assert_called_once()
+        self.assertEqual(waiting.call_args.kwargs["interval_ms"], 1000)
+        self.assertEqual(waiting.call_args.kwargs["count"], 3)
+        self.assertTrue(callable(waiting.call_args.kwargs["persist"]))
         self.assertIs(waiting.call_args.kwargs["page"], page)
         self.assertEqual(waiting.call_args.kwargs["prompt"], "private task")
         self.assertEqual(result["code"], "DEVSPACE_SIGNAL_RECEIVED")
@@ -264,6 +268,46 @@ assert hasattr(stdlib_signal, 'set_wakeup_fd')
         self.assertEqual(result["details"]["sendState"], "UNKNOWN")
         self.assertEqual(bridge.read_state(REQ)["state"], "DEVSPACE_SIGNAL_RECEIVED")
         self.assertTrue(result["details"]["browserCleanup"]["ownedPageClosed"])
+
+
+    def test_unknown_send_proven_exact_req_promotes_to_timed_reminders(self):
+        # Unknown initial click is NOT a failed task if the exact user turn
+        # subsequently appears in the original ChatGPT conversation.
+        page = SimpleNamespace(url=CHAT)
+        prompt = task.render_task(self.binding, "continue development", "pwsh -File signal.ps1")
+        turns = [{"index": 0, "role": "user",
+                  "text": "POSTMAN_REQUEST_ID: " + REQ + "\n# Markdown re-rendered"}]
+        clock = [0.0]
+        records = []
+        def timed(page_arg, original, chat, binding, **opts):
+            self.assertIs(page_arg, page)
+            self.assertEqual(original, prompt)
+            self.assertEqual(chat, CHAT)
+            self.assertIs(binding, self.binding)
+            self.assertEqual(opts["started_at"], 0.0,
+                             "the 15-minute clock must not restart on late REQ proof")
+            self.assertEqual(opts["interval_ms"], 1000)
+            self.assertEqual(opts["count"], 3)
+            self.assertTrue(callable(opts["persist"]))
+            return {"ok": True, "code": "DEVSPACE_SIGNAL_RECEIVED",
+                    "details": {"reportedOutcome": "DONE", "reminderSlots": [
+                        {"slot": 1, "status": "SENT_CONFIRMED"}]}}
+        with patch.object(observer.observer, "snapshot_turns",
+                          return_value=(turns, "turns")), \
+             patch.object(observer.image_output, "observe_owned_image", return_value=None), \
+             patch.object(observer, "wait_for_signal", side_effect=timed) as promoted, \
+             patch.object(observer.controls, "process_one",
+                          side_effect=AssertionError("timed handler owns future controls")):
+            result = observer.wait_for_bell_after_unknown_send(
+                self.binding, timeout_ms=60_000,
+                sleep=lambda x: clock.__setitem__(0, clock[0] + x),
+                monotonic=lambda: clock[0], page=page, prompt=prompt,
+                conversation_ref=CHAT, interval_ms=1000, count=3,
+                persist=records.append)
+        promoted.assert_called_once()
+        self.assertEqual(result["code"], "DEVSPACE_SIGNAL_RECEIVED")
+        self.assertEqual(result["details"]["sendState"], "UNKNOWN")
+        self.assertEqual(result["details"]["reminderSlots"][0]["status"], "SENT_CONFIRMED")
 
     def test_unknown_send_without_bell_yields_diagnostic_no_false_done(self):
         clock = [0.0]
@@ -295,6 +339,37 @@ assert hasattr(stdlib_signal, 'set_wakeup_fd')
         self.assertEqual(result["details"]["conversationRef"],CHAT)
         self.assertEqual(result["details"]["sendState"],"UNKNOWN")
         self.assertLessEqual(control.call_count,1)
+
+
+    def test_unknown_send_late_chat_proof_keeps_original_check_schedule(self):
+        page = SimpleNamespace(url=CHAT)
+        prompt = task.render_task(self.binding, "original task", "pwsh -File signal.ps1")
+        turns = [{"index": 0, "role": "user",
+                  "text": "POSTMAN_REQUEST_ID: " + REQ + "\n# Rendered markdown"}]
+        clock = [0.0]
+        def snapshots(*args, **kwargs):
+            # A ChatGPT conversation link/turn can appear only after the
+            # original 15-minute check has become due.
+            return ((turns if clock[0] >= 2 else []), "turns")
+        def timed(page_arg, original, chat, binding, **opts):
+            self.assertGreaterEqual(clock[0], 2)
+            self.assertEqual(chat, CHAT)
+            self.assertEqual(opts["started_at"], 0.0,
+                             "late proof must not grant a new 15-minute wait")
+            self.assertEqual(opts["interval_ms"], 1000)
+            self.assertEqual(opts["count"], 3)
+            return {"ok": True, "code": "DEVSPACE_DIAGNOSTIC",
+                    "details": {"diagnostic": "BLOCKED", "source": "transport_diagnostic"}}
+        with patch.object(observer.observer, "snapshot_turns", side_effect=snapshots), \
+             patch.object(observer.image_output, "observe_owned_image", return_value=None), \
+             patch.object(observer, "wait_for_signal", side_effect=timed) as promoted:
+            outcome = observer.wait_for_bell_after_unknown_send(
+                self.binding, timeout_ms=5000, interval_ms=1000, count=3,
+                sleep=lambda t: clock.__setitem__(0, clock[0] + t),
+                monotonic=lambda: clock[0], conversation_ref=None,
+                page=page, prompt=prompt, persist=lambda _: None)
+        promoted.assert_called_once()
+        self.assertEqual(outcome["details"]["sendState"], "UNKNOWN")
 
     def test_unknown_send_late_chat_url_keeps_text_fallback(self):
         prompt = task.render_task(self.binding, "Read source", "pwsh -File signal.ps1")
@@ -338,13 +413,17 @@ assert hasattr(stdlib_signal, 'set_wakeup_fd')
         with patch.object(observer.observer, "snapshot_turns", return_value=(turns, "family")), \
              patch.object(observer.controls, "process_one",
                           side_effect=AssertionError("unproven turn may not mutate browser")) as action, \
+             patch.object(observer, "wait_for_signal",
+                          side_effect=AssertionError("unproven turn must not enable reminders")) as timed, \
              patch.object(observer.observer, "observe_next_assistant",
                           side_effect=AssertionError("unproven turn may not supply text")):
             result = observer.wait_for_bell_after_unknown_send(self.binding,
                 timeout_ms=1500, sleep=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
-                monotonic=lambda: clock[0], conversation_ref=CHAT, page=page, prompt=prompt)
+                monotonic=lambda: clock[0], conversation_ref=CHAT, page=page, prompt=prompt,
+                interval_ms=1000, count=3, persist=lambda _: None)
         self.assertEqual(result["details"]["diagnostic"], "BLOCKED")
         action.assert_not_called()
+        timed.assert_not_called()
 
     def test_unknown_send_defers_urgent_preempt_during_active_devspace_tool(self):
         page = SimpleNamespace(url=CHAT)
@@ -437,43 +516,74 @@ assert hasattr(stdlib_signal, 'set_wakeup_fd')
         self.assertGreaterEqual(clock[0], 12)
         self.assertTrue(actions.called)
 
-    def run_checks(self, *, state="SAFE_GENERATION", delay=0, send_ready=True, send_state="PROVEN_SENT", on_stop=None, on_send=None, complete=False, before_check=None):
+    def run_checks(self, *, state="SAFE_GENERATION", delay=0, send_ready=True, send_state="PROVEN_SENT", on_stop=None, on_send=None, complete=False, before_check=None, stop_present=True, stop_raises=False, url_change=False, bad_req=False, foreign_turn=False, foreign_url=False, prestop_complete=False, binding=None, chat_url=CHAT, stop_unknown=False,
+                   stop_unknown_until=None, result_stage=None):
         clock = [0.0]
-        clicks = []
-        checks = []
-        snapshots = []
+        binding = binding or self.binding
+        request_id = binding["requestId"]
+        clicks, checks, snapshots, sent_prompts = [], [], [], []
+        original = "POSTMAN_REQUEST_ID: " + ("REQ_20261012T120000Z_9999" if bad_req else request_id) + "\nprivate task"
+        page = SimpleNamespace(url=chat_url + "-foreign" if foreign_url else chat_url)
+        turns = [{"index":0, "role":"user", "text":original},
+                 {"index":1, "role":"assistant", "text":"partial"}]
+        if foreign_turn:
+            turns.append({"index":2, "role":"user", "text":"foreign newer turn"})
         def sleep(seconds): clock[0] += seconds
         def stop_click(**kwargs):
             clicks.append(clock[0])
+            if url_change: page.url = "https://chatgpt.com/c/foreign"
             if on_stop: on_stop()
+            if stop_raises: raise RuntimeError("ambiguous Stop")
         button = SimpleNamespace(click=stop_click)
+        def is_ready():
+            return bool(clicks) and len(clicks)>len(sent_prompts) and clock[0] >= clicks[-1] + delay
         def activity(*args, **kwargs):
             checks.append(clock[0])
             if before_check: before_check()
-            post = bool(clicks) and clock[0] >= clicks[0] + delay
-            return {"state":"IDLE" if post else state, "stopState":"ABSENT" if post else "PRESENT", "reason":"fixture"}
+            post = is_ready()
+            return {"state": (state if state in ("ACTIVE_TOOL","TEXT_STREAMING","UNKNOWN") else "IDLE") if post else state,
+                    "stopState":"ABSENT" if post else "PRESENT", "reason":"fixture"}
+        def stop(*args, **kwargs):
+            if stop_unknown or (stop_unknown_until is not None and clock[0] < stop_unknown_until):
+                return "UNKNOWN", None
+            return ("ABSENT",None) if not stop_present or is_ready() else ("PRESENT",button)
+        def hydration(*args, **kwargs):
+            checks.append(clock[0])
+            return {"ok":send_ready, "details":{"composerEmpty":send_ready}}
         def observe(*args, **kwargs):
             sleep(0.2)
-            return {"ok":complete, "code":"ASSISTANT_TURN_COMPLETED" if complete else "ASSISTANT_TURN_TIMEOUT",
-                    "details":{"assistantText":"частичный произвольный текст"}}
-        intent = {"requestId":REQ, "conversationUrl":CHAT, "exactPromptText":"continue", "expectedUserTurnRelation":{}}
+            reproving = kwargs.get("stable_ms") == 0
+            stage_complete = result_stage == "after_stop" and bool(clicks) and reproving
+            stopped_partial = result_stage == "partial_after_stop" and bool(clicks) and reproving
+            done = complete or (prestop_complete and reproving) or stage_complete or stopped_partial
+            text = "готовый ответ" if stage_complete else "частичный произвольный текст"
+            phase = {"phase": observer.observer.FINAL_ANSWER_COMPLETED,
+                     "phaseSource": "response_actions_and_inactive_control",
+                     "finalUnitProven": True, "completionControlFound": True}
+            return {"ok":done, "code":observer.observer.ASSISTANT_TURN_COMPLETED if done else observer.observer.ASSISTANT_TURN_TIMEOUT,
+                    "details":{"assistantText":text, **({"answerPhase":phase} if done else {})}}
         def send(*args, **kwargs):
-            self.assertEqual(kwargs["control_intent"]["requestId"], REQ)
-            self.assertEqual(args[2], CHAT)
-            self.assertIn("Не начинай заново", args[1])
+            self.assertEqual(kwargs["control_intent"]["requestId"], request_id)
+            self.assertEqual(args[2], chat_url)
+            self.assertIn("Не начинай исходную задачу заново", args[1])
+            self.assertIn("local bell", args[1])
             self.assertIn("phase_probe", kwargs)
+            intent = kwargs["control_intent"]
+            self.assertEqual(intent["promptSha256"], observer.submit.prompt_sha256(args[1]))
+            if send_state == "PROVEN_SENT":
+                turns.extend([{"index":len(turns), "role":"user", "text":args[1]},
+                              {"index":len(turns)+1, "role":"assistant", "text":"running"}])
+                sent_prompts.append(args[1])
             if on_send: on_send(kwargs["phase_probe"])
             return {"sendState":send_state, "details":{}}
         with patch.object(observer.observer, "observe_next_assistant", side_effect=observe), \
              patch.object(observer.observer, "connection_interrupted", return_value=(False, {})), \
+             patch.object(observer.observer, "snapshot_turns", side_effect=lambda *a,**k:(turns,"turns")), \
              patch.object(observer, "activity_snapshot", side_effect=activity), \
-             patch.object(observer, "stop_control", return_value=("PRESENT",button)), \
-             patch.object(observer.recovery, "chat_ready_snapshot", return_value={"ok":True}), \
-             patch.object(observer.submit, "find_send_button", return_value=(button,"send") if send_ready else (None,None)), \
-             patch.object(observer.transport_control, "make_intent", return_value=intent), \
-             patch.object(observer.transport_control, "confirmed_binding", return_value={"confirmed":True}), \
+             patch.object(observer, "stop_control", side_effect=stop), \
+             patch.object(observer.recovery, "chat_ready_snapshot", side_effect=hydration), \
              patch.object(observer.reminder_policy, "submit_reminder", side_effect=send) as sent:
-            result = observer.wait_for_signal(SimpleNamespace(url=CHAT), "private task", CHAT, self.binding,
+            result = observer.wait_for_signal(page, original, chat_url, binding,
                 timeout_ms=14000, interval_ms=1000, count=3, sleep=sleep, monotonic=lambda:clock[0],
                 persist=lambda value:snapshots.append(value))
         return result, clicks, checks, sent, snapshots
@@ -505,15 +615,17 @@ assert hasattr(stdlib_signal, 'set_wakeup_fd')
         self.assertEqual(clicks,[])
         sent.assert_not_called()
 
-    def test_active_tool_and_unknown_safety_defer_check_without_click(self):
-        for state in ["ACTIVE_TOOL","UNKNOWN","IDLE"]:
+    def test_due_activity_never_defers_stop_and_continue(self):
+        for state in ["SAFE_GENERATION", "ACTIVE_TOOL", "TEXT_STREAMING", "UNKNOWN"]:
             with self.subTest(state=state):
-                result, clicks, checks, sent, _ = self.run_checks(state=state)
-                self.assertEqual(clicks,[])
-                sent.assert_not_called()
-                self.assertEqual(result["details"]["diagnostic"],"PARTIAL")
-                self.assertEqual(len(checks),3)
-                self.assertTrue(all(s["status"]=="DEFERRED" for s in result["details"]["reminderSlots"]))
+                (self.channel / "event.json").unlink(missing_ok=True)
+                def completed(_probe):
+                    self.emit()
+                result, clicks, checks, sent, snapshots = self.run_checks(state=state, on_send=completed)
+                self.assertEqual(result["code"], "DEVSPACE_SIGNAL_RECEIVED")
+                self.assertEqual(len(clicks), 1)
+                sent.assert_called_once()
+                self.assertTrue(any(s["reminderSlots"][0]["status"] == "SENT_CONFIRMED" for s in snapshots))
 
     def test_missing_send_and_stop_still_active_are_bounded_not_proof(self):
         for delay, ready in [(0,False),(11,True)]:
@@ -530,6 +642,192 @@ assert hasattr(stdlib_signal, 'set_wakeup_fd')
         self.assertEqual(len(clicks),1)
         sent.assert_called_once()
         self.assertIn("no resend",result["details"]["message"])
+
+    def test_absent_stop_direct_send_or_bounded_unready(self):
+        def bell_on_send(_probe): self.emit()
+        result, clicks, _, sent, snapshots = self.run_checks(
+            state="ACTIVE_TOOL", stop_present=False, on_send=bell_on_send)
+        self.assertEqual(result["code"], "DEVSPACE_SIGNAL_RECEIVED")
+        self.assertEqual(clicks, [])
+        sent.assert_called_once()
+        self.assertTrue(any(s["reminderSlots"][0]["status"] == "SENT_CONFIRMED" for s in snapshots))
+        (self.channel / "event.json").unlink()
+        blocked, clicks, _, sent, _ = self.run_checks(stop_present=False, send_ready=False)
+        self.assertEqual(clicks, [])
+        sent.assert_not_called()
+        self.assertEqual(blocked["details"]["diagnostic"], "BLOCKED")
+        self.assertEqual([s["status"] for s in blocked["details"]["reminderSlots"]],
+                         ["BLOCKED_UNKNOWN", "PENDING", "PENDING"])
+
+    def test_original_req_url_and_newer_user_guard_stop_and_send(self):
+        for options in ({"bad_req": True}, {"foreign_url": True}, {"foreign_turn": True}):
+            with self.subTest(options=options):
+                result, clicks, _, sent, _ = self.run_checks(**options)
+                self.assertEqual(clicks, [])
+                sent.assert_not_called()
+                self.assertEqual(result["details"]["diagnostic"], "BLOCKED")
+        result, clicks, _, sent, _ = self.run_checks(url_change=True)
+        self.assertEqual(len(clicks), 1)
+        sent.assert_not_called()
+        self.assertEqual(result["details"]["reminderSlots"][0]["status"], "BLOCKED_UNKNOWN")
+
+    def test_completion_newly_proved_at_due_prevents_stop(self):
+        result, clicks, _, sent, snapshots = self.run_checks(prestop_complete=True)
+        self.assertEqual(result["details"]["source"], "text_fallback")
+        self.assertEqual(clicks, [])
+        sent.assert_not_called()
+        self.assertTrue(any(s["reminderSlots"][0]["status"] == "ATTEMPTING" for s in snapshots))
+        self.assertEqual(result["details"]["reminderSlots"][0]["status"], "CANCELLED_RESULT_READY")
+
+    def test_completed_result_after_stop_cancels_reminder_without_send(self):
+        result, clicks, _, sent, _ = self.run_checks(result_stage="after_stop", state="ACTIVE_TOOL")
+        self.assertEqual(len(clicks), 1)
+        sent.assert_not_called()
+        self.assertEqual(result["details"]["source"], "text_fallback")
+        self.assertEqual(result["details"]["assistantText"], "готовый ответ")
+        self.assertEqual([s["status"] for s in result["details"]["reminderSlots"]],
+                         ["CANCELLED_RESULT_READY"] * 3)
+
+    def test_stop_partial_must_not_masquerade_as_completed_result(self):
+        def bell_after_send(_probe): self.emit()
+        result, clicks, _, sent, _ = self.run_checks(
+            result_stage="partial_after_stop", state="TEXT_STREAMING", on_send=bell_after_send)
+        self.assertEqual(result["code"], "DEVSPACE_SIGNAL_RECEIVED")
+        self.assertEqual(len(clicks), 1)
+        sent.assert_called_once()
+
+    def test_ambiguous_stop_ui_aborts_without_click_or_send(self):
+        result, clicks, _, sent, snapshots = self.run_checks(stop_unknown=True)
+        self.assertEqual(result["details"]["diagnostic"], "BLOCKED")
+        self.assertEqual(clicks, [])
+        sent.assert_not_called()
+        self.assertEqual(result["details"]["reminderSlots"][0]["status"], "BLOCKED_UNKNOWN")
+        self.assertTrue(any(e["event"] == "STOP_UNPROVED" for e in result["details"]["transportEventJournal"]))
+
+    def test_transient_unknown_stop_is_observed_without_retrying_click(self):
+        for absent in (False, True):
+            with self.subTest(absent=absent):
+                (self.channel / "event.json").unlink(missing_ok=True)
+                def bell_after_send(_probe): self.emit()
+                result, clicks, _, sent, journal = self.run_checks(
+                    state="UNKNOWN", stop_unknown_until=2.5, stop_present=not absent,
+                    on_send=bell_after_send)
+                self.assertEqual(result["code"], "DEVSPACE_SIGNAL_RECEIVED")
+                self.assertEqual(len(clicks), 0 if absent else 1)
+                sent.assert_called_once()
+                self.assertEqual(result["details"]["reminderSlots"][0]["status"], "SENT_CONFIRMED")
+                self.assertLessEqual(max(e["elapsedMs"] for e in
+                    result["details"]["transportEventJournal"] if e["event"] == "STOP_OBSERVED"), 11000)
+
+    def test_persistent_unknown_stop_is_bounded_read_only(self):
+        result, clicks, _, sent, _ = self.run_checks(stop_unknown=True)
+        self.assertEqual(result["details"]["diagnostic"], "BLOCKED")
+        self.assertEqual(clicks, [])
+        sent.assert_not_called()
+        journal = result["details"]["transportEventJournal"]
+        self.assertTrue(any(e["event"] == "STOP_UNPROVED" for e in journal))
+        self.assertEqual(sum(e["event"] == "STOP_REQUESTED" for e in journal), 0)
+        check_at = next(e["elapsedMs"] for e in journal if e["event"] == "DEVSPACE_CHECK")
+        observed_at = next(e["elapsedMs"] for e in journal if e["event"] == "STOP_OBSERVED")
+        self.assertLessEqual(observed_at - check_at, 11000)
+        self.assertLessEqual(observed_at, 14000)
+
+    def test_stop_outcome_unknown_never_reclicke_and_deadline_is_honest(self):
+        result, clicks, _, sent, snapshots = self.run_checks(stop_raises=True, delay=11)
+        self.assertEqual(len(clicks), 1)
+        sent.assert_not_called()
+        self.assertEqual(result["details"]["diagnostic"], "BLOCKED")
+        self.assertEqual(result["details"]["reminderSlots"][0]["status"], "BLOCKED_UNKNOWN")
+        journal = result["details"]["transportEventJournal"]
+        self.assertEqual(sum(e["event"] == "STOP_REQUESTED" for e in journal), 1)
+        self.assertEqual(sum(e["event"] == "STOP_CLICK_UNKNOWN" for e in journal), 1)
+        self.assertLessEqual(max(e["elapsedMs"] for e in journal), 14000)
+
+    def test_three_confirmed_reminders_only_and_pinned_random_prompts(self):
+        from continuation_prompts import CONTINUATION_TEMPLATES
+        result, clicks, _, sent, snapshots = self.run_checks(state="ACTIVE_TOOL")
+        self.assertEqual(len(clicks), 3)
+        self.assertEqual(sent.call_count, 3)
+        self.assertEqual([s["status"] for s in result["details"]["reminderSlots"]],
+                         ["SENT_CONFIRMED"] * 3)
+        self.assertEqual(result["details"]["diagnostic"], "PARTIAL")
+        seen = {}
+        for snapshot in snapshots:
+            intent = snapshot.get("controlIntent")
+            if not intent:
+                continue
+            cid = intent["controlId"]
+            current = (intent["templateId"], intent["exactPromptText"], intent["promptSha256"])
+            self.assertEqual(seen.setdefault(cid, current), current)
+            self.assertTrue(intent["exactPromptText"].startswith(
+                CONTINUATION_TEMPLATES[intent["templateId"] - 1]))
+            self.assertEqual(intent["promptSha256"], observer.submit.prompt_sha256(intent["exactPromptText"]))
+            self.assertNotIn("POSTMAN_REQUEST_ID", intent["exactPromptText"])
+        self.assertEqual(len(seen), 3)
+        self.assertEqual(len(CONTINUATION_TEMPLATES), 50)
+
+    def test_two_independent_lanes_do_not_share_bell_slots_or_control_ids(self):
+        second_req = "REQ_20261012T120000Z_0002"
+        second_url = "https://chatgpt.com/c/devspace-other"
+        second_channel = self.root / "22222222-2222-4222-8222-222222222222"
+        second_channel.mkdir()
+        second = {**self.binding, "requestId": second_req,
+                  "jobId": second_channel.name, "channel": str(second_channel)}
+        def finish_lane_a(_probe): self.emit()
+        a, a_clicks, _, a_send, a_journal = self.run_checks(
+            state="ACTIVE_TOOL", on_send=finish_lane_a)
+        b, b_clicks, _, b_send, b_journal = self.run_checks(
+            binding=second, chat_url=second_url, state="UNKNOWN")
+        self.assertEqual(a["code"], "DEVSPACE_SIGNAL_RECEIVED")
+        self.assertEqual(b["code"], "DEVSPACE_DIAGNOSTIC")
+        self.assertEqual(a_send.call_count, 1)
+        self.assertEqual(b_send.call_count, 3)
+        self.assertEqual(len(a_clicks), 1)
+        self.assertEqual(len(b_clicks), 3)
+        self.assertEqual([s["status"] for s in a["details"]["reminderSlots"]],
+                         ["SENT_CONFIRMED", "CANCELLED_RESULT_READY", "CANCELLED_RESULT_READY"])
+        self.assertEqual([s["status"] for s in b["details"]["reminderSlots"]],
+                         ["SENT_CONFIRMED"] * 3)
+        self.assertEqual(a["details"]["controlIntent"]["requestId"], REQ)
+        self.assertEqual(b["details"]["controlIntent"]["requestId"], second_req)
+        self.assertNotEqual(a["details"]["controlIntent"]["controlId"],
+                            b["details"]["controlIntent"]["controlId"])
+        self.assertTrue(all(s["status"] == "SENT_CONFIRMED" for s in b_journal[-2]["reminderSlots"]))
+
+    def test_multiple_stop_controls_not_unequivocally_own(self):
+        class Candidate:
+            def is_visible(self): return True
+            def is_enabled(self): return True
+        candidates = [Candidate(), Candidate()]
+        class Locators:
+            def __init__(self, selector):
+                self.items = candidates if observer.observer.GENERATION_CONTROL_SELECTORS[0] in selector else []
+            def count(self): return len(self.items)
+            def nth(self, index): return self.items[index]
+        class Semantic:
+            def count(self): return 0
+        page = SimpleNamespace(locator=lambda selector: Locators(selector),
+                               get_by_role=lambda *a, **kw: Semantic())
+        self.assertEqual(observer.stop_control(page), ("UNKNOWN", None))
+
+    def test_cold_waiting_worker_does_not_replay_saved_stop_or_send(self):
+        for saved_event in ("STOP_REQUESTED", "SEND_REQUESTED", "SEND_UNKNOWN"):
+            with self.subTest(saved_event=saved_event):
+                bridge = web.WebWorkerBridge(root=self.channel / ("cold-" + saved_event))
+                req = web.BridgeRequest(REQ, "", str(bridge.result_path(REQ)), "cold")
+                bridge._write_state(req, web.WAITING_ASSISTANT,
+                    controlIntent={"controlId":REQ + ":reminder:1", "exactPromptText":"already pinned"},
+                    reminderSlots=[{"slot":1,"status":"ATTEMPTING"}],
+                    transportEventJournal=[{"event":saved_event,"slot":1}])
+                with patch.object(web.browser_bootstrap, "_load_sync_playwright",
+                                  side_effect=AssertionError("cold restore must not click")) as browser:
+                    result = bridge.run_request(REQ, task_url="", prompt="POSTMAN_REQUEST_ID: " + REQ,
+                        expected_filename="", expected_request={"transportKind":"devspace"},
+                        artifact_mode=False, devspace_binding=self.binding)
+                self.assertEqual(result["code"], web.WAITING_ASSISTANT)
+                self.assertEqual(result["details"]["controlIntent"]["exactPromptText"], "already pinned")
+                self.assertEqual(result["details"]["transportEventJournal"][0]["event"], saved_event)
+                browser.assert_not_called()
 
     def test_next_check_is_15min_relative_to_confirmed_continuation(self):
         # Millisecond-scale injected interval verifies the same schedule rule.
