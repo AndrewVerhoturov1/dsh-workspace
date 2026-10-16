@@ -102,7 +102,7 @@ class PreviewLauncherContract(unittest.TestCase):
 
     def test_preview_workflow_documents_port_and_launcher(self):
         self.assertIn("PREVIEW_HARNESS_LAUNCHER_VERSION: 1", self.workflow)
-        self.assertIn("http://127.0.0.1:4174/", self.workflow)
+        self.assertIn("http://localhost:4174/", self.workflow)
         self.assertIn("start-dsh-preview.bat", self.workflow)
         self.assertIn("Prepare-DSH-Preview.ps1", self.workflow)
 
