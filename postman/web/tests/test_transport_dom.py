@@ -781,6 +781,228 @@ class TransportDomTests(unittest.TestCase):
         self.assertIsNone(self.page.evaluate('window.sends'))
         self.assertEqual(self.page.locator('#prompt-textarea').inner_text(),'')
 
+    def test_devspace_completed_structural_result_after_stop_real_chromium(self):
+        from postman.devspace import observer as devspace_observer
+        self.clock = Clock()
+        markup = document(turns=group(body=ACTIVITY, key="original"), stop=True)
+        markup += """<script>
+        document.querySelector('[data-testid="stop-button"]').addEventListener('click', () => {
+            document.querySelector('main [data-turn-key="original"]').insertAdjacentHTML(
+                'beforeend', `""" + final("Готово: исходная задача завершена") + """`);
+        });
+        </script>"""
+        self.set_html(markup)
+        with patch.object(devspace_observer, "read_event", return_value=None), \
+             patch.object(devspace_observer.controls, "process_one", return_value=None), \
+             patch.object(devspace_observer.image_output, "observe_owned_image", return_value=None):
+            result = devspace_observer.wait_for_signal(self.page, PROMPT, URL, {"requestId": REQ},
+                timeout_ms=10000, interval_ms=1000, count=1,
+                sleep=self.clock.sleep, monotonic=self.clock.now, persist=lambda _: None)
+        self.assertEqual(result["details"]["source"], "text_fallback", result)
+        self.assertIn("Готово: исходная задача завершена", result["details"]["assistantText"])
+        self.assertEqual(self.page.evaluate("window.stopClicks"), 1)
+        self.assertEqual(self.page.evaluate("window.sends || 0"), 0)
+        self.assertEqual(len(submit.collect_user_turn_texts(self.page)), 1)
+        self.assertEqual(result["details"]["reminderSlots"][0]["status"], "CANCELLED_RESULT_READY")
+
+    def test_devspace_completed_result_after_stop_before_insert_before_send_real_dom(self):
+        from postman.devspace import observer as devspace_observer
+        for stage in ("after_stop", "before_insert", "before_send"):
+            with self.subTest(stage=stage):
+                self.clock = Clock()
+                self.set_html(document(turns=group(body=ACTIVITY, key="original"), stop=True))
+                self.page.evaluate("window.stopClicks=0;window.sends=0")
+                reached = {"value": False}
+                actual_prepare = reminders.prepare_same_chat
+                actual_insert = submit.insert_prompt
+
+                def prepare(*args, **kwargs):
+                    proof = actual_prepare(*args, **kwargs)
+                    if stage == "before_insert":
+                        reached["value"] = True
+                    return proof
+
+                def insert(*args, **kwargs):
+                    proof = actual_insert(*args, **kwargs)
+                    if stage == "before_send":
+                        reached["value"] = True
+                    return proof
+
+                def observe(*args, **kwargs):
+                    self.clock.sleep(0.01)
+                    after_stop = bool(self.page.evaluate("window.stopClicks || 0"))
+                    completed = kwargs.get("stable_ms") == 0 and after_stop and (
+                        stage == "after_stop" or reached["value"])
+                    if completed:
+                        return {"ok": True, "code": observer.ASSISTANT_TURN_COMPLETED,
+                            "details": {"assistantText": "Готовый ответ по текущему REQ",
+                                "answerPhase": {"phase": observer.FINAL_ANSWER_COMPLETED,
+                                    "phaseSource": "response_actions_and_inactive_control",
+                                    "finalUnitProven": True, "completionControlFound": True}}}
+                    return {"ok": False, "code": observer.ASSISTANT_TURN_TIMEOUT,
+                            "details": {"assistantText": "Частичный ответ до Stop"}}
+
+                with patch.object(devspace_observer, "read_event", return_value=None), \
+                     patch.object(devspace_observer.controls, "process_one", return_value=None), \
+                     patch.object(devspace_observer.image_output, "observe_owned_image", return_value=None), \
+                     patch.object(devspace_observer.observer, "observe_next_assistant", side_effect=observe), \
+                     patch.object(reminders, "prepare_same_chat", side_effect=prepare) as prepare_call, \
+                     patch.object(submit, "insert_prompt", side_effect=insert) as insert_call:
+                    result = devspace_observer.wait_for_signal(self.page, PROMPT, URL, {"requestId": REQ},
+                        timeout_ms=60000, interval_ms=1000, count=3,
+                        sleep=self.clock.sleep, monotonic=self.clock.now, persist=lambda _: None)
+                self.assertEqual(result["details"]["source"], "text_fallback", result)
+                self.assertEqual(result["details"]["assistantText"], "Готовый ответ по текущему REQ")
+                self.assertEqual(self.page.evaluate("window.stopClicks"), 1)
+                self.assertEqual(self.page.evaluate("window.sends || 0"), 0)
+                self.assertEqual(len(submit.collect_user_turn_texts(self.page)), 1)
+                self.assertEqual(self.page.locator("#prompt-textarea").inner_text().strip(), "")
+                self.assertEqual([s["status"] for s in result["details"]["reminderSlots"]],
+                                 ["CANCELLED_RESULT_READY"] * 3)
+                self.assertEqual(prepare_call.call_count, 0 if stage == "after_stop" else 1)
+                self.assertEqual(insert_call.call_count, 1 if stage == "before_send" else 0)
+
+    def test_devspace_ambiguous_send_click_once_real_offline_chromium(self):
+        from postman.devspace import observer as devspace_observer
+        self.clock = Clock()
+        self.set_html(document(turns=group(body=ACTIVITY, key="original"), stop=True))
+        clicks = []
+        real_click = Locator.click
+        def lose_send_ack(locator, *args, **kwargs):
+            if locator.get_attribute("data-testid") == "send-button":
+                clicks.append("send")
+                real_click(locator, *args, **kwargs)
+                raise RuntimeError("Send acknowledgement unavailable")
+            return real_click(locator, *args, **kwargs)
+        def observe(*args, **kwargs):
+            self.clock.sleep(0.2)
+            return {"ok":False, "code":observer.ASSISTANT_TURN_TIMEOUT, "details":{}}
+        with patch.object(Locator, "click", new=lose_send_ack), \
+             patch.object(devspace_observer, "read_event", return_value=None), \
+             patch.object(devspace_observer.controls, "process_one", return_value=None), \
+             patch.object(devspace_observer.image_output, "observe_owned_image", return_value=None), \
+             patch.object(devspace_observer.observer, "observe_next_assistant", side_effect=observe):
+            result = devspace_observer.wait_for_signal(self.page, PROMPT, URL, {"requestId":REQ},
+                timeout_ms=60000, interval_ms=1000, count=3,
+                sleep=self.clock.sleep, monotonic=self.clock.now, persist=lambda _:None)
+        self.assertEqual(result["code"], "DEVSPACE_DIAGNOSTIC")
+        self.assertEqual(result["details"]["diagnostic"], "BLOCKED")
+        self.assertEqual(result["details"]["reminderSlots"][0]["status"], "BLOCKED_UNKNOWN")
+        self.assertEqual(self.page.evaluate("window.stopClicks"), 1)
+        self.assertEqual(self.page.evaluate("window.sends"), 1)
+        self.assertEqual(clicks, ["send"])
+        self.assertIn("SEND_UNKNOWN", result["details"]["message"])
+        self.assertEqual(len(submit.collect_user_turn_texts(self.page)), 2)
+
+    def test_devspace_due_stop_ready_send_real_offline_chromium(self):
+        from postman.devspace import observer as devspace_observer
+        for state, body in [
+            ("THINKING", '<div data-testid="thinking-indicator">Thinking</div>'),
+            ("ACTIVE_TOOL", '<div role="status" data-status="running">DevSpace Bash running</div>'),
+            ("TEXT_STREAMING", '<div data-streaming-response-status="running">Text streaming</div>'),
+            ("UNKNOWN", '<div data-tool-name="bash">Unknown tool state</div>'),
+        ]:
+            with self.subTest(state=state):
+                # All navigation is intercepted by setUp's local route; no
+                # real ChatGPT, paid model or external delivery is involved.
+                self.clock = Clock()
+                body_html = document(turns=group(body=body, key="original"), stop=True)
+                body_html = body_html.replace('aria-label="Send" onclick="',
+                                              'aria-label="Send" disabled onclick="')
+                body_html += """<script>
+                (() => {
+                    const editor=document.querySelector('#prompt-textarea');
+                    const update=()=>{ document.querySelector('[data-testid="send-button"]').disabled = !editor.innerText.trim(); };
+                    editor.addEventListener('input',update);
+                    new MutationObserver(update).observe(editor,{subtree:true,childList:true,characterData:true});
+                })();
+                </script>"""
+                self.set_html(body_html)
+                self.page.evaluate('window.sends=0;window.stopClicks=0')
+                self.assertIsNone(submit.find_send_button(self.page)[0])
+                if state == "ACTIVE_TOOL":
+                    self.assertEqual(devspace_observer.activity_snapshot(
+                        self.page, PROMPT, URL)["state"], "ACTIVE_TOOL")
+                snapshots = []
+                def observe(*args, **kwargs):
+                    self.clock.sleep(0.2)
+                    return {"ok":False, "code":observer.ASSISTANT_TURN_TIMEOUT, "details":{}}
+                def bell(_binding):
+                    return {"reportedOutcome":"DONE"} if self.page.evaluate("window.sends || 0") else None
+                with patch.object(devspace_observer, "read_event", side_effect=bell), \
+                     patch.object(devspace_observer.controls, "process_one", return_value=None), \
+                     patch.object(devspace_observer.image_output, "observe_owned_image", return_value=None), \
+                     patch.object(devspace_observer.observer, "observe_next_assistant", side_effect=observe):
+                    result = devspace_observer.wait_for_signal(self.page, PROMPT, URL,
+                        {"requestId":REQ}, timeout_ms=60000, interval_ms=1000, count=3,
+                        sleep=self.clock.sleep, monotonic=self.clock.now, persist=snapshots.append)
+                self.assertEqual(result["code"], "DEVSPACE_SIGNAL_RECEIVED", result)
+                self.assertEqual(self.page.evaluate("window.stopClicks"), 1)
+                self.assertEqual(self.page.evaluate("window.sends"), 1)
+                self.assertEqual(result["details"]["reminderSlots"][0]["status"], "SENT_CONFIRMED")
+                self.assertEqual(result["details"]["reminderSlots"][1]["status"], "CANCELLED_RESULT_READY")
+                sent_turns = submit.collect_user_turn_texts(self.page)
+                self.assertEqual(len(sent_turns), 2)
+                self.assertNotEqual(sent_turns[1], PROMPT)
+                self.assertIn('local bell', sent_turns[1])
+
+
+    def test_unknown_initial_send_recovers_real_dom_stop_and_continuation(self):
+        from postman.devspace import observer as devspace_observer
+        self.clock = Clock()
+        # This one visible Stop matches both CSS aliases; another Stop is
+        # present in the DOM but hidden. Old per-selector/semantic counting
+        # returned UNKNOWN, so only a manual Stop could release the queued text.
+        markup = document(turns=group(body='<div data-testid="thinking-indicator">Thinking</div>',
+                                      key="original"), stop=True)
+        markup = markup.replace('data-testid="stop-button"',
+                                'data-testid="stop-button" aria-label="Stop"')
+        markup += '<button aria-label="Stop" style="display:none">Hidden Stop</button>'
+        markup = markup.replace('aria-label="Send" onclick="',
+                                'aria-label="Send" disabled onclick="')
+        markup += """<script>
+        (() => {
+            const editor = document.querySelector('#prompt-textarea');
+            const button = document.querySelector('[data-testid="send-button"]');
+            const update = () => { button.disabled = !editor.innerText.trim(); };
+            editor.addEventListener('input', update);
+            new MutationObserver(update).observe(editor, {
+                subtree: true, childList: true, characterData: true
+            });
+        })();
+        </script>"""
+        self.set_html(markup)
+        self.page.evaluate('window.stopClicks=0;window.sends=0')
+        state, control = devspace_observer.stop_control(self.page)
+        self.assertEqual(state, "PRESENT", "one visible Stop with aliased selectors is unambiguous")
+        self.assertIsNotNone(control)
+        snapshots = []
+        def observe(*args, **kwargs):
+            self.clock.sleep(0.2)
+            return {"ok": False, "code": observer.ASSISTANT_TURN_TIMEOUT, "details": {}}
+        def bell(_binding):
+            return {"reportedOutcome": "DONE"} if self.page.evaluate("window.sends || 0") else None
+        with patch.object(devspace_observer, "read_event", side_effect=bell), \
+             patch.object(devspace_observer.controls, "process_one", return_value=None), \
+             patch.object(devspace_observer.image_output, "observe_owned_image", return_value=None), \
+             patch.object(devspace_observer.observer, "observe_next_assistant", side_effect=observe):
+            result = devspace_observer.wait_for_bell_after_unknown_send(
+                {"requestId": REQ}, timeout_ms=60_000,
+                interval_ms=1000, count=3, page=self.page,
+                conversation_ref=URL, prompt=PROMPT,
+                sleep=self.clock.sleep, monotonic=self.clock.now, persist=snapshots.append)
+        self.assertEqual(result["code"], "DEVSPACE_SIGNAL_RECEIVED", result)
+        self.assertEqual(result["details"]["sendState"], "UNKNOWN",
+                         "never forge proof of the original uncertain Send")
+        self.assertEqual(self.page.evaluate("window.stopClicks"), 1)
+        self.assertEqual(self.page.evaluate("window.sends"), 1)
+        self.assertEqual(result["details"]["reminderSlots"][0]["status"], "SENT_CONFIRMED")
+        self.assertGreaterEqual(result["details"]["reminderSlots"][0]["finishedElapsedMs"], 2000,
+                                "the script must wait after Stop before sending continuation")
+        messages = submit.collect_user_turn_texts(self.page)
+        self.assertEqual(len(messages), 2)
+        self.assertNotEqual(messages[1], PROMPT)
+        self.assertIn("local bell", messages[1])
 
 if __name__ == '__main__':
     unittest.main()
