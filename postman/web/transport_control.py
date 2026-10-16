@@ -94,9 +94,13 @@ class TransportControl:
 
     def slot_status(self, index, status, **fields):
         slot = self.slots[index - 1]
-        if slot["status"] != "PENDING":
+        previous = slot["status"]
+        if previous not in {"PENDING", "ATTEMPTING"} or (previous == "ATTEMPTING" and status == "ATTEMPTING"):
             return
-        slot.update(status=status, finishedElapsedMs=self.elapsed(), **fields)
+        if previous == "ATTEMPTING" and status not in {"SENT_CONFIRMED", "BLOCKED_UNKNOWN", "CANCELLED_RESULT_READY"}:
+            return
+        timestamp = "attemptedElapsedMs" if status == "ATTEMPTING" else "finishedElapsedMs"
+        slot.update(status=status, **{timestamp: self.elapsed()}, **fields)
         self.event("REMINDER_SLOT_" + status, **slot)
 
     def cancel_slots(self, status):
