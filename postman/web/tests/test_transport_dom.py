@@ -550,6 +550,36 @@ class TransportDomTests(unittest.TestCase):
         self.set_html(document())
         proof = recovery.chat_ready_snapshot(self.page, URL + '-other', PROMPT)
         self.assertFalse(proof['ok'])
+    def test_strict_continuation_waits_for_prior_user_payload_then_sends_once(self):
+        prior_id = "REQ_20261001T041338Z_9561"
+        prior = f"POSTMAN_REQUEST_ID: {prior_id}\nEarlier task"
+        self.set_html(document(turns=""))
+        def hydrate():
+            self.page.locator('main').evaluate("(el, body)=>el.innerHTML=body", group(
+                prompt=prior, body='<div data-testid="collapsible-user-message-content">' + html.escape(prior) + '</div>', key="prior"))
+        original_wait = submit._wait_until
+        first = [True]
+        def delayed(predicate, **kwargs):
+            ready, details = predicate()
+            if first[0]:
+                first[0] = False
+                self.assertFalse(ready)
+                self.assertEqual(details.get('reason'), 'history_turns_unrecognized')
+                hydrate()
+            return original_wait(predicate, **kwargs)
+        self.page.locator('[data-testid="send-button"]').evaluate('''button => button.onclick = () => {
+            const bubble=document.createElement('div');bubble.setAttribute('data-user-message-bubble','true');
+            const payload=document.createElement('div');payload.setAttribute('data-testid','collapsible-user-message-content');
+            payload.textContent=document.querySelector('#prompt-textarea').innerText;bubble.append(payload);
+            document.querySelector('main').append(bubble);document.querySelector('#prompt-textarea').innerHTML='';
+            history.replaceState(null,'','/c/recovery-fixture');window.sends=(window.sends||0)+1;
+        }''')
+        with patch.object(submit, '_wait_until', side_effect=delayed):
+            result = submit.submit_existing_prompt(self.page, PROMPT, URL, timeout_ms=0,
+                                                   navigate=False, prior_request_id=prior_id)
+        self.assertTrue(result['ok'], result)
+        self.assertEqual(self.page.evaluate('window.sends'), 1)
+
     def send_natural(self, *, slot=1, binding=None, anchor=PROMPT, original=PROMPT):
         intent = transport.make_intent(self.page, REQ, URL, original, anchor,
                                       slot=slot, anchor_binding=binding, randrange=lambda _: 7)

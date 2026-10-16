@@ -670,7 +670,7 @@ def _visible(locator: Any) -> bool:
         return False
 
 
-def find_user_message_content(turn: Any) -> tuple[Any | None, str | None]:
+def find_user_message_content(turn: Any, *, strict: bool = False) -> tuple[Any | None, str | None]:
     """Find the payload node inside a legacy user turn or modern user bubble.
 
     The user container is deliberately not trusted when it contains interactive
@@ -678,22 +678,26 @@ def find_user_message_content(turn: Any) -> tuple[Any | None, str | None]:
     prompt. Known payload contracts are tried in order, and a plain container
     is used only when it has no UI-control descendants.
     """
+    attribute = (lambda name: str(turn.get_attribute(name) or "")) if strict else lambda name: _attribute(turn, name)
     is_user_container = (
-        _attribute(turn, "data-message-author-role").casefold() == "user"
-        or _attribute(turn, "data-user-message-bubble") == "true"
+        attribute("data-message-author-role").casefold() == "user"
+        or attribute("data-user-message-bubble") == "true"
+        or (strict and attribute("data-testid") == "conversation-turn-user")
     )
     if not is_user_container:
-        return turn, None
+        return (None if strict else turn), None
 
     for selector in USER_MESSAGE_CONTENT_SELECTORS:
         try:
             locator = turn.locator(selector)
-            count = _locator_count(locator)
+            count = locator.count() if strict else _locator_count(locator)
             for index in range(count):
                 candidate = locator.nth(index)
-                if _visible(candidate):
+                if (candidate.is_visible() if strict else _visible(candidate)):
                     return candidate, selector
         except Exception:
+            if strict:
+                raise
             continue
 
     # Older ChatGPT markup has no dedicated content test id. Do not fall back
@@ -701,9 +705,12 @@ def find_user_message_content(turn: Any) -> tuple[Any | None, str | None]:
     # labels into exact prompt proof.
     for selector in ('button', '[role="button"]', '[data-collapsed]'):
         try:
-            if _locator_count(turn.locator(selector)):
+            locator = turn.locator(selector)
+            if (locator.count() if strict else _locator_count(locator)):
                 return None, None
         except Exception:
+            if strict:
+                raise
             continue
     return turn, None
 
@@ -754,6 +761,47 @@ def collect_user_turn_details(page: Any, attachment_name: str | None = None) -> 
 
 def collect_user_turn_texts(page: Any) -> list[str]:
     return [item["text"] for item in collect_user_turn_details(page)]
+
+
+def _read_user_history(page: Any, prior_request_id: str) -> tuple[list[str] | None, str]:
+    """Strict continuation-only snapshot; missing/unreadable is never proven zero."""
+    for selector in USER_TURN_SELECTORS:
+        try:
+            locator = page.locator(selector)
+            count = locator.count()
+            if type(count) is not int or count < 0:
+                return None, "history_count_failed"
+        except Exception:
+            return None, "history_count_failed"
+        if not count:
+            continue
+        texts = []
+        for index in range(count):
+            try:
+                item = locator.nth(index)
+                semantic, _ = find_user_message_content(item, strict=True)
+            except Exception:
+                return None, "history_traversal_failed"
+            if semantic is None:
+                return None, "history_semantic_unrecognized"
+            try:
+                value = semantic.evaluate(_SEMANTIC_MESSAGE_TEXT_JS)
+                if not isinstance(value, str):
+                    return None, "history_text_read_failed"
+                texts.append(_normalize_text(value))
+            except Exception:
+                return None, "history_text_read_failed"
+        try:
+            if locator.count() != count:
+                return None, "history_changed_during_read"
+        except Exception:
+            return None, "history_count_failed"
+        key = "POSTMAN_REQUEST_ID: " + prior_request_id
+        matches = sum(_turn_contains_exact_line(text, key) for text in texts)
+        if matches != 1:
+            return None, "history_prior_anchor_missing" if matches == 0 else "history_prior_anchor_ambiguous"
+        return texts, ""
+    return None, "history_turns_unrecognized"
 
 
 def find_send_button(page: Any) -> tuple[Any | None, str | None]:
@@ -859,9 +907,13 @@ def prepare_existing_chat(
     *,
     timeout_ms: int = DEFAULT_TIMEOUT_MS,
     navigate: bool = True,
+    prior_request_id: str | None = None,
 ) -> dict[str, Any]:
     if not is_bound_chat_url(conversation_url):
         return {"ok": False, "code": SUBMIT_INVALID_CONFIG, "details": {"reason": "invalid_conversation_url"}}
+    if prior_request_id is not None and (not isinstance(prior_request_id, str) or
+            not re.fullmatch(r"REQ_\d{8}T\d{6}Z_\d{4}", prior_request_id)):
+        return {"ok": False, "code": SUBMIT_INVALID_CONFIG, "details": {"reason": "invalid_prior_request_id"}}
     if not navigate and not same_conversation_url(str(getattr(page, "url", "") or ""), conversation_url):
         return {"ok": False, "code": EXISTING_CHAT_NOT_CONFIRMED, "details": {"reason": "current_chat_mismatch"}}
     if navigate:
@@ -883,8 +935,15 @@ def prepare_existing_chat(
             return False, {"sessionCode": session_code, "pageUrl": page_url, "turnCount": turns, **session_details}
         empty, empty_details = _composer_empty_from_snapshot(snapshot)
         live_composer_ready = composer["selector"] != "textarea"
-        same_chat = same_conversation_url(page_url, conversation_url)
-        return same_chat and empty and live_composer_ready, {
+        same_chat = (page_url == conversation_url if prior_request_id is not None
+                     else same_conversation_url(page_url, conversation_url))
+        history, reason = (_read_user_history(page, prior_request_id)
+                           if prior_request_id is not None else (None, ""))
+        history_ready = prior_request_id is None or history is not None
+        return (same_chat and empty and live_composer_ready and history_ready
+                and str(getattr(page, "url", "") or "") == page_url), {
+            **({"historyReady": history_ready, "reason": reason, "history": history}
+               if prior_request_id is not None else {}),
             "pageUrl": page_url,
             "turnCount": turns,
             "composerSelector": selector,
@@ -896,10 +955,12 @@ def prepare_existing_chat(
 
     ok, details = _wait_until(predicate, timeout_ms=timeout_ms)
     composer = details.pop("composer", None)
+    history = details.pop("history", None)
     if not ok:
         code = COMPOSER_NOT_EMPTY if details.get("composerEmpty") is False else EXISTING_CHAT_NOT_CONFIRMED
         return {"ok": False, "code": code, "details": details}
-    return {"ok": True, "code": EXISTING_CHAT_CONFIRMED, "composer": composer, "details": details}
+    return {"ok": True, "code": EXISTING_CHAT_CONFIRMED, "composer": composer, "details": details,
+            **({"history": history} if prior_request_id is not None else {})}
 
 
 def insert_prompt(
@@ -926,10 +987,13 @@ def insert_prompt(
         return {"ok": False, "code": COMPOSER_NOT_EMPTY, "details": empty_details}
     transaction = getattr(page, "_postman_presend", None)
     if isinstance(transaction, dict):
-        if transaction.get("ownedUrl") is not None and not _owned_unsent_binding(page, transaction):
-            return {"ok": False, "code": SUBMIT_INVALID_CONFIG, "details": {"reason": "chat_changed_before_fill"}}
+        ownership: dict[str, Any] = {}
+        if transaction.get("ownedUrl") is not None and not _owned_unsent_binding(page, transaction, ownership):
+            return {"ok": False, "code": SUBMIT_INVALID_CONFIG, "details": {
+                "reason": "chat_changed_before_fill", "presendOwnership": ownership}}
         transaction.setdefault("ownedUrl", str(page.url))
-        transaction.setdefault("userCount", len(collect_user_turn_texts(page)))
+        if "userCount" not in transaction:
+            transaction["userCount"] = len(collect_user_turn_texts(page))
         transaction["fillAttempted"] = True
     try:
         composer.fill(prompt, timeout=timeout_ms)
@@ -1045,7 +1109,9 @@ def submit_once(
     if input_attachment:
         transitions.extend([attachments.ATTACHMENT_UPLOAD_STARTED, attachments.ATTACHMENT_READY_CONFIRMED])
     transitions.append(PROMPT_INSERTED)
-    before_turns = collect_user_turn_texts(page)
+    transaction = getattr(page, "_postman_presend", None)
+    before_turns = (transaction["userHistory"] if isinstance(transaction, dict) and "userHistory" in transaction
+                    else collect_user_turn_texts(page))
 
     def send_control_ready() -> tuple[bool, dict[str, Any]]:
         button, selector = find_send_button(page)
@@ -1064,17 +1130,6 @@ def submit_once(
             details={"sendControl": selector or ""},
         )
 
-    transaction = getattr(page, "_postman_presend", None)
-    if isinstance(transaction, dict):
-        ownership: dict[str, Any] = {}
-        owned = _owned_unsent_binding(page, transaction, ownership)
-        exact, exact_details = _exact_prompt_readback(page, prompt)
-        one_composer = exact_details.get("logicalComposerCountAfterFill") == 1
-        if not owned or not exact or not one_composer:
-            return _result(SUBMIT_INVALID_CONFIG if not owned else PROMPT_MISMATCH, ok=False, send_state=guard.state,
-                           transitions=transitions, details={"reason": "presend_ownership_or_prompt_changed",
-                               "presendOwnership": ownership, "exactPromptReadback": exact,
-                               "singleLogicalComposer": one_composer})
     if input_attachment:
         current_url = str(getattr(page, "url", "") or "")
         chat_still_owned = (is_chatgpt_root_url(current_url) and count_conversation_turns(page) == 0
@@ -1088,6 +1143,17 @@ def submit_once(
         if not attachment_ready or not exact_prompt:
             return _result(attachments.ATTACHMENT_LOST, ok=False, send_state=guard.state,
                            transitions=transitions, details={"attachment": attachment_proof, "prompt": prompt_proof})
+    transaction = getattr(page, "_postman_presend", None)
+    if isinstance(transaction, dict):
+        ownership: dict[str, Any] = {}
+        owned = _owned_unsent_binding(page, transaction, ownership)
+        exact, exact_details = _exact_prompt_readback(page, prompt)
+        one_composer = exact_details.get("logicalComposerCountAfterFill") == 1
+        if not owned or not exact or not one_composer:
+            return _result(SUBMIT_INVALID_CONFIG if not owned else PROMPT_MISMATCH, ok=False, send_state=guard.state,
+                           transitions=transitions, details={"reason": "presend_ownership_or_prompt_changed",
+                               "presendOwnership": ownership, "exactPromptReadback": exact,
+                               "singleLogicalComposer": one_composer})
     try:
         guard.begin()
     except SubmitError as exc:
@@ -1217,11 +1283,16 @@ def _page_diagnostic(page: Any) -> dict[str, Any]:
 
 def _owned_unsent_binding(page: Any, transaction: dict[str, Any],
                           evidence: dict[str, Any] | None = None) -> bool:
-    turns = collect_user_turn_details(page)
+    strict_history = "userHistory" in transaction
+    history, history_reason = (_read_user_history(page, transaction["priorRequestId"])
+                               if strict_history else (None, ""))
+    turns = [] if strict_history else collect_user_turn_details(page)
+    observed_count = len(history) if history is not None else (None if strict_history else len(turns))
+    history_equal = not strict_history or history == transaction["userHistory"]
     send_not_attempted = transaction.get("sendAttempted") is False
     url_equal = transaction.get("ownedUrl") == str(getattr(page, "url", "") or "")
     expected_count = transaction.get("userCount")
-    count_equal = expected_count == len(turns)
+    count_equal = observed_count is not None and expected_count == observed_count
     if evidence is not None:
         families = ("author-role", "test-id", "bubble")
         family = next((families[i] for i, selector in enumerate(USER_TURN_SELECTORS)
@@ -1229,9 +1300,12 @@ def _owned_unsent_binding(page: Any, transaction: dict[str, Any],
         bounded = lambda value: value if type(value) is int and 0 <= value <= 100_000 else None
         evidence.update(sendNotAttempted=send_not_attempted, ownedUrlEqual=url_equal,
                         expectedUserTurnCount=bounded(expected_count),
-                        observedUserTurnCount=bounded(len(turns)),
+                        observedUserTurnCount=bounded(observed_count),
                         userTurnCountEqual=count_equal, userTurnSelectorFamily=family)
-    return send_not_attempted and url_equal and count_equal
+        if strict_history:
+            evidence.update(historyReadConfirmed=history is not None, historyEqual=history_equal,
+                            historyReason=history_reason or ("" if history_equal else "history_changed"))
+    return send_not_attempted and url_equal and count_equal and history_equal
 
 
 def clear_owned_unsent_prompt(page: Any, prompt: str, *, timeout_ms: int) -> bool:
@@ -1383,8 +1457,10 @@ def submit_existing_prompt(
     navigate: bool = True,
     input_attachment=None,
     artifact_mode: bool = False,
+    prior_request_id: str | None = None,
 ) -> dict[str, Any]:
-    prep = prepare_existing_chat(page, conversation_url, timeout_ms=timeout_ms, navigate=navigate)
+    prep = prepare_existing_chat(page, conversation_url, timeout_ms=timeout_ms, navigate=navigate,
+                                 prior_request_id=prior_request_id)
     if not prep["ok"]:
         return _result(
             prep["code"],
@@ -1397,7 +1473,11 @@ def submit_existing_prompt(
     composer = prep["composer"]
     transaction = getattr(page, "_postman_presend", None)
     if isinstance(transaction, dict):
-        transaction.update({"ownedUrl": str(page.url), "userCount": len(collect_user_turn_texts(page))})
+        history = prep.get("history")
+        transaction.update({"ownedUrl": prep["details"]["pageUrl"],
+                            "userCount": len(history) if prior_request_id is not None else len(collect_user_turn_texts(page))})
+        if prior_request_id is not None:
+            transaction.update(userHistory=history, priorRequestId=prior_request_id)
     attachment_id = None
     if input_attachment:
         # Preparation has proved chat identity and an empty live composer. No Send yet.

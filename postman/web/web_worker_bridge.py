@@ -13,6 +13,7 @@ import cdp_download
 from contextlib import ExitStack
 from dataclasses import dataclass
 import json
+import re
 import os
 import random
 from pathlib import Path
@@ -379,6 +380,12 @@ class WebWorkerBridge:
                     (conversation_url is not None and (conversation_url != devspace_binding.get('conversationUrl') or
                         not browser_submit.is_bound_chat_url(conversation_url)))):
                 return _result(BRIDGE_INVALID_CONFIG, ok=False, details={'reason': 'devspace_binding_invalid'})
+            prior = devspace_binding.get("priorRequestId")
+            if conversation_url is not None and (not isinstance(prior, str) or
+                    not re.fullmatch(r"REQ_\d{8}T\d{6}Z_\d{4}", prior) or prior == request_id):
+                return _result(BRIDGE_INVALID_CONFIG, ok=False, details={"reason": "prior_history_unproven"})
+            if conversation_url is None and prior is not None:
+                return _result(BRIDGE_INVALID_CONFIG, ok=False, details={"reason": "invalid_prior_request_id"})
             request_identity.assert_canonical_request_id(request_id)
             existing = self.read_state(request_id)
             if existing is not None:
@@ -544,6 +551,7 @@ class WebWorkerBridge:
                     submitted = browser_submit.submit_existing_prompt(
                         page, prompt, conversation_url, timeout_ms=timeout_ms,
                         artifact_mode=artifact_mode and not image_flow,
+                        **({"prior_request_id": devspace_binding["priorRequestId"]} if devspace_binding is not None else {}),
                         **({"input_attachment": input_attachment} if input_attachment else {})
                     )
                 self._write_state(request, WEB_STARTING, submitProof=submitted)

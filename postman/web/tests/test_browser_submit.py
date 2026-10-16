@@ -339,6 +339,153 @@ console.log(JSON.stringify({length: actual.length, sha256: hash(actual), joined,
         self.assertEqual(result["code"], submit.EXISTING_CHAT_CONFIRMED)
         self.assertTrue(result["details"]["sameConversation"])
 
+    def test_strict_history_requires_semantic_markup_and_unique_prior_anchor(self):
+        class Collection:
+            def __init__(self, items): self.items = items
+            def count(self): return len(self.items)
+            def nth(self, index): return self.items[index]
+            def is_visible(self): return True
+        class Payload(Collection):
+            def __init__(self, text): self.text = text
+            def evaluate(self, _script): return self.text
+        class Bubble:
+            def __init__(self, text, markup=True): self.text, self.markup = text, markup
+            def get_attribute(self, name): return "user" if name == "data-message-author-role" else None
+            def locator(self, selector):
+                if selector == '[data-user-message-bubble="true"]':
+                    return Collection([Payload(self.text)] if self.markup else [])
+                return Collection([])
+        class Page:
+            def __init__(self, turns): self.turns = turns
+            def locator(self, selector): return Collection(self.turns if selector in submit.USER_TURN_SELECTORS else [])
+        cases = [([Bubble("ordinary")], "history_prior_anchor_missing"),
+                 ([Bubble("POSTMAN_REQUEST_ID: prior"), Bubble("POSTMAN_REQUEST_ID: prior")], "history_prior_anchor_ambiguous")]
+        for turns, reason in cases:
+            with self.subTest(reason=reason): self.assertEqual(submit._read_user_history(Page(turns), "prior"), (None, reason))
+
+    def test_strict_history_distinguishes_missing_unknown_and_read_failures(self):
+        class Locator:
+            def __init__(self, items=None, error=None): self.items, self.error = list(items or []), error
+            def count(self):
+                if self.error: raise RuntimeError(self.error)
+                return len(self.items)
+            def nth(self, index):
+                if self.error: raise RuntimeError(self.error)
+                return self.items[index]
+        class Turn:
+            def __init__(self, text=None, *, markup=True, traversal_error=False, text_error=False):
+                self.text, self.markup, self.traversal_error, self.text_error = text, markup, traversal_error, text_error
+            def get_attribute(self, name):
+                if self.traversal_error: raise RuntimeError("traversal")
+                return "user" if name == "data-message-author-role" else None
+            def locator(self, selector):
+                if self.traversal_error: raise RuntimeError("traversal")
+                return Locator([Payload(self.text, self.text_error)] if selector == '[data-user-message-bubble="true"]' and self.markup else [])
+        class Payload:
+            def __init__(self, text, error=False): self.text, self.error = text, error
+            def is_visible(self): return True
+            def evaluate(self, _script):
+                if self.error: raise RuntimeError("text")
+                return self.text
+        class Page:
+            def __init__(self, locator): self.value = locator
+            def locator(self, _selector): return self.value
+
+        prior = "REQ_20261001T041338Z_9561"
+        self.assertEqual(submit._read_user_history(Page(Locator()), prior), (None, "history_turns_unrecognized"))
+        self.assertEqual(submit._read_user_history(Page(Locator(error="count")), prior), (None, "history_count_failed"))
+        unknown = Turn("irrelevant", markup=False)
+        unknown.get_attribute = lambda name: None
+        self.assertEqual(submit._read_user_history(Page(Locator([unknown])), prior),
+                         (None, "history_semantic_unrecognized"))
+        self.assertEqual(submit._read_user_history(Page(Locator([Turn(prior, traversal_error=True)])), prior),
+                         (None, "history_traversal_failed"))
+        self.assertEqual(submit._read_user_history(Page(Locator([Turn(prior, text_error=True)])), prior),
+                         (None, "history_text_read_failed"))
+
+    def test_continuation_presend_vetoes_same_count_history_mutation(self):
+        url = "https://chatgpt.com/c/existing-123"
+        prior = "REQ_20261001T041338Z_9561"
+        baseline = [f"POSTMAN_REQUEST_ID: {prior}\nEarlier task"]
+        page = FakePage(url=url, user_turns=baseline)
+        content = [baseline[0]]
+        class Payload(FakeLocator):
+            def __init__(self): super().__init__(kind="bubble", text=content[0])
+            def evaluate(self, _script): return content[0]
+            def is_visible(self): return True
+        class Turn:
+            def get_attribute(self, name): return "user" if name == "data-message-author-role" else None
+            def locator(self, value): return FakeLocator(items=[Payload()]) if value == '[data-user-message-bubble="true"]' else FakeLocator(items=[])
+        class Turns:
+            def count(self): return 1
+            def nth(self, _index): return Turn()
+        def locator(value): return Turns() if value in submit.USER_TURN_SELECTORS else original(value)
+        original = page.locator
+        page.locator = locator
+        page._postman_presend = {"sendAttempted": False, "fillAttempted": True, "ownedUrl": url,
+                                 "userCount": 1, "userHistory": baseline, "priorRequestId": prior}
+        ownership = {}
+        self.assertTrue(submit._owned_unsent_binding(page, page._postman_presend, ownership), ownership)
+        self.assertTrue(ownership["historyEqual"])
+        # Keep one turn and its count, but mutate the semantic payload after baseline.
+        content[0] = f"POSTMAN_REQUEST_ID: {prior}\nChanged task"
+        changed_ownership = {}
+        self.assertFalse(submit._owned_unsent_binding(page, page._postman_presend, changed_ownership), changed_ownership)
+        self.assertTrue(changed_ownership["historyReadConfirmed"])
+        self.assertTrue(changed_ownership["userTurnCountEqual"])
+        self.assertFalse(changed_ownership["historyEqual"])
+        result = submit.submit_once(page, page.locator("#prompt-textarea"), "next prompt", submit.SendGuard(), timeout_ms=0)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["sendState"], submit.SEND_PROVEN_NOT_SENT)
+        self.assertEqual(page.click_count, 0)
+        self.assertEqual(result["details"]["presendOwnership"]["historyEqual"], False)
+
+    def test_continuation_uses_loaded_history_as_baseline_and_unknown_never_resends(self):
+        url = "https://chatgpt.com/c/existing-123"
+        prior = "REQ_20261001T041338Z_9561"
+        history = [f"POSTMAN_REQUEST_ID: {prior}\nEarlier task"]
+        page = FakePage(url=url, turn_count=1, user_turns=history)
+        page.bound_url = url
+        class Payload(FakeLocator):
+            def __init__(self, text): super().__init__(kind="bubble", text=text)
+            def evaluate(self, _script): return self._text
+        class Turn(FakeLocator):
+            def __init__(self, text): super().__init__(attrs={"data-message-author-role": "user"}); self.text = text
+            def locator(self, selector): return FakeLocator(items=[Payload(self.text)]) if selector == '[data-user-message-bubble="true"]' else FakeLocator(items=[])
+        class Turns(FakeLocator):
+            def __init__(self): super().__init__(items=[Turn(text) for text in page.user_turns])
+        original = page.locator
+        page.locator = lambda selector: Turns() if selector in submit.USER_TURN_SELECTORS else original(selector)
+        result = submit.submit_existing_prompt(page, "next prompt", url, timeout_ms=0,
+                                               navigate=False, prior_request_id=prior)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(page.user_turns, history + ["next prompt"])
+        self.assertEqual(page.click_count, 1)
+
+        uncertain = FakePage(url=url, turn_count=1, user_turns=history, click_error="uncertain")
+        uncertain._postman_presend = {"sendAttempted": False}
+        class UncertainPayload(FakeLocator):
+            def __init__(self): super().__init__(kind="bubble", text=history[0])
+            def evaluate(self, _script): return self._text
+        class UncertainTurn:
+            def get_attribute(self, name): return "user" if name == "data-message-author-role" else None
+            def locator(self, selector): return FakeLocator(items=[UncertainPayload()]) if selector == '[data-user-message-bubble="true"]' else FakeLocator(items=[])
+        class UncertainTurns:
+            def count(self): return 1
+            def nth(self, _index): return UncertainTurn()
+        original_uncertain = uncertain.locator
+        uncertain.locator = lambda selector: UncertainTurns() if selector in submit.USER_TURN_SELECTORS else original_uncertain(selector)
+        result = submit.submit_existing_prompt(uncertain, "next prompt", url, timeout_ms=0,
+                                              navigate=False, prior_request_id=prior)
+        self.assertEqual(result["sendState"], submit.SEND_UNKNOWN)
+        retry_guard = submit.SendGuard()
+        retry_guard.begin()
+        retry_guard.unknown()
+        again = submit.submit_once(uncertain, uncertain.locator("#prompt-textarea"), "next prompt",
+                                   retry_guard, timeout_ms=0)
+        self.assertEqual(again["sendState"], submit.SEND_UNKNOWN)
+        self.assertEqual(uncertain.click_count, 1)
+
     def test_prepare_existing_chat_rejects_redirect_to_other_chat(self):
         requested = "https://chatgpt.com/c/requested"
         page = FakePage(turn_count=2)

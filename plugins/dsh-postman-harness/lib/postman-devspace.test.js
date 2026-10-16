@@ -10,6 +10,7 @@ import { parsePostmanUserTurn, CurrentUserTurnStore, createDirectCurrentTurnTool
 import { buildPostmanBridgeStartRequest } from './postman-bridge-core.js'
 import { createPostmanBridgeTool, createPostmanTeamStatusTool } from './postman-bridge.js'
 import { createPostmanDevspaceLanes } from './postman-devspace-lanes.js'
+import { createPostmanDevspaceLuna } from './postman-devspace-luna.js'
 import { createPostmanBridgeJobs } from './postman-bridge-jobs.js'
 import { createPostmanBridgeLaunchCoordinator } from './postman-bridge-launch-coordinator.js'
 import { JsonStorageBackend } from '@deepseek-ai/dsh-storage-json'
@@ -87,6 +88,14 @@ test('Stage 3 isolates writeRoot only to a Host-bound task worktree', t => {
     leaderSessionId:'leader',lunaSessionId:'luna',worktree:root,sourceRoot:root,mode:'WRITE_ISOLATED'})
   assert.equal(binding.workspaceRef,root)
   assert.equal(binding.writeRoot,root)
+  assert.throws(() => createDevspaceChannel({root,bridgeJobId:'55555555-5555-4555-8555-555555555555',
+    requestId:req,priorRequestId:req,conversationUrl:'https://chatgpt.com/c/old',
+    leaderSessionId:'leader',lunaSessionId:'luna',worktree:root,sourceRoot:root,mode:'READ_ONLY'}),
+  /POSTMAN_DEVSPACE_BINDING_INVALID/)
+  assert.throws(() => createDevspaceChannel({root,bridgeJobId:'66666666-6666-4666-8666-666666666666',
+    requestId:req,priorRequestId:'bad',conversationUrl:'https://chatgpt.com/c/old',
+    leaderSessionId:'leader',lunaSessionId:'luna',worktree:root,sourceRoot:root,mode:'READ_ONLY'}),
+  /POSTMAN_DEVSPACE_BINDING_INVALID/)
   assert.equal(devspaceTerminal(binding,{source:'text_fallback',diagnostic:'PARTIAL'}).reportedOutcome,'PARTIAL')
   const readonly='44444444-4444-4444-8444-444444444444'
   const read=createDevspaceChannel({root,bridgeJobId:readonly,requestId:req,
@@ -213,7 +222,10 @@ test('continuable Luna keeps exact identity across two REQs and same ChatGPT cha
       assert.ok(requestId)
       assert.equal(args.transportKind, 'devspace')
       assert.equal(args.payload, launched.length ? 'second assignment' : 'first assignment')
-      if (launched.length) assert.equal(args.devspaceBinding.conversationUrl, conversationRef)
+      if (launched.length) {
+        assert.equal(args.devspaceBinding.conversationUrl, conversationRef)
+        assert.equal(args.devspaceBinding.priorRequestId, req)
+      }
       else assert.equal(args.devspaceBinding.conversationUrl, undefined)
       await args.onRequestAllocated(requestId, 'C:/private/'+requestId)
       launched.push(args);currentId = requestId
@@ -221,7 +233,8 @@ test('continuable Luna keeps exact identity across two REQs and same ChatGPT cha
     },
     wait: async () => {
       const result = {ok:true,requestId:currentId,code:'DEVSPACE_SIGNAL_RECEIVED',
-        source:'bell',reportedOutcome:'DONE',conversationRef,evidenceState:'REPORTED_NOT_VERIFIED'}
+        source:'bell',reportedOutcome:'DONE',conversationRef,evidenceState:'REPORTED_NOT_VERIFIED',
+        transportDiagnostics:{transportEventJournal:[{event:'STAGE_STARTED'}]}}
       reports.push(result)
       return {status:'COMPLETED',requestId:currentId,result}
     },
@@ -270,6 +283,7 @@ test('continuable Luna keeps exact identity across two REQs and same ChatGPT cha
   assert.equal(first.laneId, second.laneId)
   assert.equal(row.devspaceLanes[first.laneId].conversationRef, conversationRef)
   assert.deepEqual(row.devspaceLanes[first.laneId].requestIds,requestIds)
+  assert.equal(row.bridgeOperations[second.bridgeJobId].requestId,requestIds[1])
   assert.ok(relays.some(x=>x.kind==='coordinator' && x.message.includes('Host terminal')))
   assert.ok(relays.some(x=>x.kind==='coordinator' && x.message.includes('second assignment')))
   assert.match(JSON.stringify(wake),/POSTMAN_BRIDGE_READY/)
@@ -279,6 +293,54 @@ test('continuable Luna keeps exact identity across two REQs and same ChatGPT cha
   assert.equal(row.devspaceLanes[first.laneId].state,'closed')
   assert.equal(jobs.devspaceLunaSnapshot(parent).state,'closed')
   await jobs.dispose()
+})
+
+test('prior history selects latest positively observed REQ, never failed allocation or foreign terminal', async () => {
+  const prior = req, failed = 'REQ_20261012T120001Z_0002', next = 'REQ_20261012T120002Z_0003'
+  const chat = 'https://chatgpt.com/c/prior-history', child = 'luna'
+  const positive = () => ({state:'received',phase:'synchronized',transportKind:'devspace',requestId:prior,
+    childSessionId:child,terminal:{status:'POSTMAN_BRIDGE_TERMINAL',terminalStatus:'COMPLETED',
+      requestId:prior,transportKind:'devspace',result:{requestId:prior,conversationRef:chat,source:'bell',
+        transportDiagnostics:{transportEventJournal:[{event:'STAGE_STARTED'}]}}}})
+  for (const variant of ['normal','text','image','recovered-unknown','child','url','request','unobserved','not-sent','duplicate','missing']) {
+    let op=positive()
+    if(variant==='text')op.terminal.result.source='text_fallback'
+    if(variant==='image')Object.assign(op.terminal.result,{source:'image_result',evidenceState:'BROWSER_VERIFIED_IMAGE'})
+    if(variant==='recovered-unknown')op.terminal.result.transportDiagnostics.sendProof={sendState:'UNKNOWN'}
+    if(variant==='child')op.childSessionId='foreign'
+    if(variant==='url')op.terminal.result.conversationRef='https://chatgpt.com/c/foreign'
+    if(variant==='request')op.terminal.requestId=failed
+    if(variant==='unobserved')delete op.terminal.result.transportDiagnostics
+    if(variant==='not-sent')op.terminal.result.transportDiagnostics.sendProof={sendState:'PROVEN_NOT_SENT'}
+    let row={devspaceLuna:{childId:child,state:'ready',activeBridgeJobId:null,requestIds:[prior,failed],conversationRef:chat},
+      bridgeOperations:{old:op,failed:{...positive(),requestId:failed,terminal:{...positive().terminal,requestId:failed,
+        result:{requestId:failed,conversationRef:chat,source:'transport_diagnostic',
+          transportDiagnostics:{submitProof:{sendState:'PROVEN_NOT_SENT'}}}}},
+        current:{state:'pending',phase:'reserved',transportKind:'devspace'}}}
+    if(variant==='duplicate')row.bridgeOperations.duplicate=positive()
+    if(variant==='missing')delete row.bridgeOperations.old
+    const context={branch,worktree:'C:/task'}, launched=[]
+    const contexts={get:()=>context,record:()=>row,changeRecord:async(_,fn)=>{row=fn(row)}}
+    const ctx={agents:{get:id=>id===parent.id?parent:null},subagents:{
+      startContinuable:async()=>{throw Error('must reuse saved Luna')},
+      inspectOpenContinuableChild:async()=>true,followup:async()=> 'ok'}}
+    const direct={start:async args=>{launched.push(args);await args.onRequestAllocated(next,'C:/private');return {requestId:next}},
+      wait:async()=>({status:'COMPLETED',requestId:next,result:{requestId:next,source:'text_fallback',conversationRef:chat}})}
+    const luna=createPostmanDevspaceLuna(ctx,contexts,direct)
+    const before=structuredClone(row)
+    const result=await luna.run({bridgeJobId:'current',taskContext:context,controller:new AbortController(),devspaceMode:'READ_ONLY'},
+      '@PostmanDevspace continuation',parent)
+    if(['normal','text','image','recovered-unknown'].includes(variant)){
+      assert.equal(result.status,'POSTMAN_BRIDGE_TERMINAL',variant)
+      assert.equal(launched.length,1)
+      assert.equal(launched[0].devspaceBinding.priorRequestId,prior)
+      assert.equal(launched[0].devspaceBinding.conversationUrl,chat)
+    }else{
+      assert.equal(result.status,'POSTMAN_DEVSPACE_PRIOR_HISTORY_UNPROVEN',variant)
+      assert.equal(launched.length,0)
+      assert.deepEqual(row,before,'no lane reservation or relay on missing positive history')
+    }
+  }
 })
 
 test('Host-owned Devspace control intent keeps owner, preserves one exact ID and prevents foreign state', t => {
@@ -441,6 +503,7 @@ test('three concurrent READ_ONLY lanes isolate Luna, REQ, chat and an UNKNOWN in
   const out=(i)=>({status:'COMPLETED',requestId:reqs[i],result:{
     ok:true,requestId:reqs[i],source:'bell',reportedOutcome:'DONE',
     evidenceState:'REPORTED_NOT_VERIFIED',
+    transportDiagnostics:{transportEventJournal:[{event:'STAGE_STARTED'}]},
     conversationRef:'https://chatgpt.com/c/devspace-lane-'+i}})
   waiting.get(launched[0].sessionId)(out(0))
   waiting.get(launched[1].sessionId)(out(1))
