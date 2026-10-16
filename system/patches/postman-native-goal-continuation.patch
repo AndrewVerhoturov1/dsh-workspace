@@ -1,14 +1,58 @@
 diff --git a/node_modules/@deepseek-ai/dsh-goal-round-driver/lib/index.js b/node_modules/@deepseek-ai/dsh-goal-round-driver/lib/index.js
 --- a/node_modules/@deepseek-ai/dsh-goal-round-driver/lib/index.js
 +++ b/node_modules/@deepseek-ai/dsh-goal-round-driver/lib/index.js
-@@ -78,7 +78,9 @@
+@@ -75,9 +75,36 @@ function apply(ctx) {
+ 		if (ctx.agents.get(state.agent.id) !== state.agent) return void 0;
+ 		return ctx.goals.get(state.agent);
+ 	}
++	/** Goal bookkeeping and a delivered answer are not another unit of work. */
++	function hasWorkToContinue(agent) {
++		const events = agent.session.events;
++		const end = events.findLastIndex((event) => event.type === "turn/end");
++		if (end < 0 || events[end].data.reason.kind !== "completed") return true;
++		const start = events.findLastIndex((event) => event.type === "turn/start" && event.data.turn === events[end].data.turn);
++		const inTurn = events.slice(start + 1, end);
++		const bookkeeping = (name) => ["get_goal", "create_goal", "update_goal"].includes(name);
++		const event = inTurn.findLast((candidate) => candidate.type === "tool/call" && !bookkeeping(candidate.data.name));
++		if (!event) return false;
++		{
++			// PTC goal inspection has the same semantics as a direct goal call.
++			if (event.data.name !== "ptc_execute") return true;
++			const nested = inTurn.filter((candidate) => candidate.type === "tool/code-dispatch-start" && candidate.data.parentCallId === event.data.callId);
++			const result = inTurn.findLast((candidate) => candidate.type === "tool/result" && candidate.data.message.source.callId === event.data.callId)?.data.message;
++			try {
++				const block = result.content[0];
++				const content = block.type === "tool-result" ? block.content : result.content;
++				const value = JSON.parse(content[0].text);
++				// Unsafe/unknown effects still get their existing recovery opportunity.
++				if (result.isError || value.status !== "ok" || value.cleanupError || value.effects.failed || value.effects.pending) return true;
++				const boundary = JSON.parse(event.data.arguments).boundary;
++				if (["task_complete", "user_input", "approval_boundary"].includes(boundary)) return false;
++				return value.value?.needsModelDecision === true || nested.some((candidate) => !bookkeeping(candidate.data.name));
++			} catch { return true; }
++		}
++	}
  	/** Whether this exact lifecycle is quiescent with no competing prompt. */
  	function readyToDrive(state) {
 -		return ctx.fiber.state === 2 && !state.stopping && ctx.agents.get(state.agent.id) === state.agent && state.agent.status === "idle" && !state.competingQueued;
-+		// An authoritative plugin wait defers only automatic goal admission.
-+		// Native inbox input and the existing checkpoint recheck stay unchanged.
-+		return ctx.fiber.state === 2 && !state.stopping && ctx.agents.get(state.agent.id) === state.agent && state.agent.status === "idle" && !state.competingQueued && ctx.bail("goal/continuation-defer", state.agent) !== true;
++		return ctx.fiber.state === 2 && !state.stopping && ctx.agents.get(state.agent.id) === state.agent && state.agent.status === "idle" && !state.competingQueued && hasWorkToContinue(state.agent) && ctx.bail("goal/continuation-defer", state.agent) !== true;
  	}
  	/** Recheck every condition that an awaited checkpoint may have changed. */
  	function readyAfterCheckpoint(state) {
- 		return readyToDrive(state) && !state.needsCheckpoint;
+diff --git a/node_modules/@deepseek-ai/dsh-tool-goal/lib/index.js b/node_modules/@deepseek-ai/dsh-tool-goal/lib/index.js
+--- a/node_modules/@deepseek-ai/dsh-tool-goal/lib/index.js
++++ b/node_modules/@deepseek-ai/dsh-tool-goal/lib/index.js
+@@ -354,7 +354,12 @@ function apply(ctx, config) {
+ 				code: "model-reported",
+ 				message: args.blocked_reason
+ 			});
+-			if (authority.kind === "goal-round") exec.deferContext(createUserMessage({
++			// A terminal answer in this very response is already delivered; an older
++			// progress message is not evidence that this outcome has been reported.
++			const response = execution.events.findLast((event) => event.type === "assistant/message");
++			const finalReady = response?.data.message.content.some((block) => block.type === "text" && block.text.trim().length > 0);
++			if (finalReady) exec.concludeTurn();
++			if (authority.kind === "goal-round" && !finalReady) exec.deferContext(createUserMessage({
+ 				content: args.action === "complete" ? renderWrapupContext(goal.objective) : renderWrapupContext(goal.objective, args.blocked_reason),
+ 				source: {
+ 					kind: "plugin",

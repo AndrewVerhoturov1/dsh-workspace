@@ -193,9 +193,10 @@ for(const race of ['dispatch','turn-stopping','idle'])test('native inbox event a
 for(const veto of [undefined,false,'true',true])test('only exact true admission veto holds useful goals: '+String(veto),{timeout:15000},async t=>{
   const ctx=base(),requests=[];let agent
   ctx.on('goal/continuation-defer',()=>veto);driver.apply(ctx)
+  ctx.tools.register(defineTool({name:'fixture_work',description:'Inert useful round',parameters:{},output,execute:(_args,exec)=>{exec.concludeTurn();return {worked:true}}}))
   class Model extends LlmAdapter{
     async resolveModel(provider,id){return{provider,id,name:id,inputModalities:['text']}}
-    async *stream(request){requests.push(request);if(requests.length>3)throw Error('bounded cap');if(requests.length===1)ctx.goals.create(agent,{objective:'normal useful goal',maxGoalRounds:2});yield{type:'block-end',index:0,block:{type:'text',text:'useful work'}};yield{type:'finish',reason:{kind:'stop'}}}
+    async *stream(request){requests.push(request);if(requests.length>3)throw Error('bounded cap');if(requests.length===1)ctx.goals.create(agent,{objective:'normal useful goal',maxGoalRounds:2});yield{type:'block-end',index:0,block:{type:'tool-call',id:'work-'+requests.length,name:'fixture_work',arguments:'{}'}};yield{type:'finish',reason:{kind:'stop'}}}
   }
   ctx.llm.registerAdapter(['fixture'],new Model());agent=ctx.agentLoop.create('normal',{provider:'fixture',model:'inert'},{cwd:process.cwd()})
   t.after(()=>ctx.fiber.dispose());agent.followup(message('start'));await drain(agent)
@@ -208,9 +209,10 @@ test('admission veto is rechecked after awaited durability checkpoint',{timeout:
   const flush=ctx.sessions.flush.bind(ctx.sessions)
   ctx.sessions.flush=async session=>{flushing.resolve();await checkpoint.promise;return flush(session)}
   driver.apply(ctx)
+  ctx.tools.register(defineTool({name:'fixture_work',description:'Inert checkpoint action',parameters:{},output,execute:(_args,exec)=>{exec.concludeTurn();return {worked:true}}}))
   class Model extends LlmAdapter{
     async resolveModel(provider,id){return{provider,id,name:id,inputModalities:['text']}}
-    async *stream(request){requests.push(request);if(requests.length>4)throw Error('bounded cap');if(requests.length===1)ctx.goals.create(agent,{objective:'checkpoint race',maxGoalRounds:2});yield{type:'block-end',index:0,block:{type:'text',text:'useful work'}};yield{type:'finish',reason:{kind:'stop'}}}
+    async *stream(request){requests.push(request);if(requests.length>4)throw Error('bounded cap');if(requests.length===1)ctx.goals.create(agent,{objective:'checkpoint race',maxGoalRounds:2});yield{type:'block-end',index:0,block:{type:'tool-call',id:'work-'+requests.length,name:'fixture_work',arguments:'{}'}};yield{type:'finish',reason:{kind:'stop'}}}
   }
   ctx.llm.registerAdapter(['fixture'],new Model());agent=ctx.agentLoop.create('checkpoint',{provider:'fixture',model:'inert'},{cwd:process.cwd()})
   t.after(async()=>{checkpoint.resolve();await ctx.fiber.dispose()})
@@ -248,7 +250,7 @@ for(const kind of ['pre-veto','post-veto','unknown-status','refused-status','pro
   ctx.llm.registerAdapter(['fixture'],new Model());agent=ctx.agentLoop.create('unsafe-'+kind,{provider:'fixture',model:'inert'},{cwd:process.cwd(),agentPreset:'postman-leader-ptc'});adapter.refresh(agent)
   t.after(async()=>{await adapter.dispose();await ctx.fiber.dispose()})
   agent.followup(message('start'));await drain(agent)
-  assert.equal(requests.length,4);assert.equal(ctx.goals.get(agent).roundsStarted,2)
+  assert.equal(requests.length,3);assert.equal(ctx.goals.get(agent).roundsStarted,1)
   assert.equal(adapter.isWaitingForExternalEvent(agent),false);assert.notEqual(ctx.bail('goal/continuation-defer',agent),true)
 })
 
@@ -340,7 +342,7 @@ test('goal-only text after transiently lost, then re-proven live wait does not l
   assert.equal(ctx.bail('goal/continuation-defer',agent),true)
 })
 
-test('goal-only text without earlier proven wait does not suppress recovery',{timeout:15000},async t=>{
+test('text-only turn without proven wait does not invent automatic work',{timeout:15000},async t=>{
   const ctx=base(),requests=[]
   let agent
   const adapter=createPtcAdapter(ctx,{authorize:isTopLevelPostmanPtcLeader,hasActiveWork:()=>true})
@@ -361,9 +363,9 @@ test('goal-only text without earlier proven wait does not suppress recovery',{ti
   t.after(async()=>{await adapter.dispose();await ctx.fiber.dispose()})
   agent.followup(message('start'));await drain(agent)
   const goal=ctx.goals.get(agent)
-  assert.equal(requests.length,4)
-  assert.equal(goal.roundsStarted,3)
-  assert.equal(goal.blockedReason.code,'round-limit')
+  assert.equal(requests.length,1)
+  assert.equal(goal.roundsStarted,0)
+  assert.equal(goal.phase,'active')
   assert.equal(adapter.isWaitingForExternalEvent(agent),false)
 })
 
@@ -456,4 +458,65 @@ for(const quietOrder of ['none','dispatch','turn-stopping'])test('goal waits aft
   if(quietFact)assert.equal(parent.session.events.filter(e=>e.type==='user/message'&&e.data.id===quietFact.id).length,1,'technical fact delivered once alongside real A review')
 })
 
+
+// Real adapter request counts: no live model, transport, or user goal state.
+for(const scenario of ['final-text','goal-read','goal-ptc','empty-ptc','finished-ptc','complete-ready','complete-needed','blocked-ready','blocked-needed','useful','pause-resume'])test('quiescent native requests: '+scenario,{timeout:15000},async t=>{
+  const ctx=base(),requests=[],turnSteps=new Map()
+  const adapter=createPtcAdapter(ctx,{authorize:isTopLevelPostmanPtcLeader});ctx.tools.register(adapter.tool)
+  const {apply:goalTools}=await pkg('dsh-tool-goal');goalTools(ctx,{blockedAfterConsecutiveRounds:3});driver.apply(ctx)
+  let agent,actions=0
+  ctx.tools.register(defineTool({name:'fixture_work',description:'An inert useful action',parameters:{},output,execute:()=>({action:++actions})}))
+  const text=value=>({type:'block-end',index:0,block:{type:'text',text:value}})
+  const tool=(name,args)=>({type:'block-end',index:1,block:{type:'tool-call',id:'fixture-'+requests.length,name,arguments:JSON.stringify(args)}})
+  class Model extends LlmAdapter{
+    async resolveModel(provider,id){return{provider,id,name:id,inputModalities:['text']}}
+    async *stream(request){
+      requests.push(request);if(requests.length>16)throw Error('bounded actual model requests')
+      if(!ctx.goals.get(agent))ctx.goals.create(agent,{objective:'same unchanged objective',maxGoalRounds:5})
+      const g=ctx.goals.get(agent),turn=agent.session.events.findLast(e=>e.type==='turn/start').data.turn
+      const step=(turnSteps.get(turn)||0)+1;turnSteps.set(turn,step)
+      if(scenario==='final-text')yield text('Outcome already delivered')
+      else if(scenario==='goal-read'){if(step===1)yield tool('get_goal',{});else yield text('No new action or decision')}
+      else if(['goal-ptc','empty-ptc','finished-ptc'].includes(scenario)){
+        if(step===1)yield tool('ptc_execute',{program:scenario==='goal-ptc'?'return await tools.get_goal({})':scenario==='empty-ptc'?'return {waiting:true}':'return await tools.read({})',description:'Native completion boundary',boundary:scenario==='finished-ptc'?'task_complete':'semantic_decision'})
+        else yield text('Outcome already delivered')
+      }
+      else if(scenario==='pause-resume'){
+        if(turn===1&&step===1)yield tool('update_goal',{goal_id:g.id,revision:g.revision,action:'pause'})
+        else if(turn===2&&step===1)yield tool('update_goal',{goal_id:g.id,revision:g.revision,action:'resume'})
+        else yield text('Human request addressed')
+      }else if(scenario==='useful'){
+        if(g.roundsStarted<2&&step===1)yield tool('fixture_work',{})
+        else if(g.roundsStarted===2&&g.phase==='active')yield tool('update_goal',{goal_id:g.id,revision:g.revision,action:'complete'})
+        else yield text('Useful action verified')
+      }else{
+        const blocked=scenario.startsWith('blocked'),terminalRound=blocked?3:1
+        if(g.phase!=='active')yield text('Final outcome supplied once')
+        else if(g.roundsStarted<terminalRound){if(step===1)yield tool('fixture_work',{});else yield text('Useful work verified')}
+        else{
+          if(scenario.endsWith('-ready'))yield text('Final outcome already supplied')
+          yield tool('update_goal',{goal_id:g.id,revision:g.revision,action:blocked?'blocked':'complete',...(blocked?{blocked_reason:'Concrete user dependency persists'}:{})})
+        }
+      }
+      yield{type:'finish',reason:{kind:'stop'}}
+    }
+  }
+  ctx.llm.registerAdapter(['fixture'],new Model());agent=ctx.agentLoop.create('quiescent-'+scenario,{provider:'fixture',model:'inert'},{cwd:process.cwd(),agentPreset:'postman-leader-ptc'})
+  adapter.refresh(agent)
+  t.after(async()=>{await adapter.dispose();await ctx.fiber.dispose()});agent.followup(message('start'));await drain(agent)
+  if(scenario==='pause-resume'){
+    assert.equal(requests.length,2);assert.equal(ctx.goals.get(agent).phase,'paused')
+    ctx.emit('agent/session-start',{agent});await drain(agent);assert.equal(requests.length,2)
+    agent.followup(message('resume this exact objective'));await drain(agent)
+    assert.equal(ctx.goals.get(agent).phase,'active');assert.equal(ctx.goals.get(agent).activation,'armed')
+  }
+  const expected={'final-text':1,'goal-read':2,'goal-ptc':2,'empty-ptc':2,'finished-ptc':2,'complete-ready':3,'complete-needed':4,'blocked-ready':7,'blocked-needed':8,useful:6,'pause-resume':4}[scenario]
+  console.log(JSON.stringify({scenario,actualRequests:requests.length,autoRounds:ctx.goals.get(agent).roundsStarted,actions,phase:ctx.goals.get(agent).phase}))
+  assert.equal(requests.length,expected,'no empty continuation or duplicate final')
+  if(scenario==='useful')assert.equal(actions,2,'unchanged objective still admits useful autonomous work')
+  if(scenario==='final-text'){
+    ctx.emit('agent/session-start',{agent});await drain(agent);assert.equal(requests.length,1,'cold active restore is disarmed')
+    agent.followup(message('ordinary human message'));await drain(agent);assert.equal(requests.length,2,'ordinary input is not vetoed')
+  }
+})
 

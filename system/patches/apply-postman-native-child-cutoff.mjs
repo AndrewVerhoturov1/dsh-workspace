@@ -37,7 +37,14 @@ export function applyPostmanNativeChildCutoff(anchors, { replaceFile = renameSyn
   const goalRelative = 'node_modules/@deepseek-ai/dsh-goal-round-driver/lib/index.js'
   const goalImages = {
     before: '95f68fdb41a96082df3ae0dab2fb27a80de7bf57b1cc147651d0ff7a8f1a1af8',
-    after: '93733a1750665882a3f5bce5bc96c7249d8ab019dfb91e25ff736b2f7bd27d77',
+    legacy: '93733a1750665882a3f5bce5bc96c7249d8ab019dfb91e25ff736b2f7bd27d77',
+    after: '6a9c69f86411f14c52786b628911b0706c5be90182d7d519090e320b760ba6cb',
+  }
+  const toolGoalPath = realpathSync(createRequire(anchors[0]).resolve('@deepseek-ai/dsh-tool-goal'))
+  const toolGoalRelative = 'node_modules/@deepseek-ai/dsh-tool-goal/lib/index.js'
+  const toolGoalImages = {
+    before: 'b6ebe2f5b412eb4043fd8c1483a1ee3aeaaa3858b95e0b285ab811d99b89a1e3',
+    after: 'b1b70a17847149edf92fa578c9fd5811b5e959f543f767b78bd28ad4e870391e',
   }
   const sessionRelative = 'node_modules/@deepseek-ai/dsh-session/lib/index.js'
   // Entire pinned rc.2 images: clean, child-cutoff, then session vocabulary.
@@ -53,9 +60,12 @@ export function applyPostmanNativeChildCutoff(anchors, { replaceFile = renameSyn
   const digestText = text => createHash('sha256').update(text).digest('hex')
   const lf = text => text.replaceAll('\r', '')
   const digest = path => digestText(lf(readFileSync(path, 'utf8')))
-  if (![goalImages.before, goalImages.after].includes(digest(goalPath)))
+  if (![goalImages.before, goalImages.legacy, goalImages.after].includes(digest(goalPath)))
     throw new Error('Native goal continuation patch preimage mismatch: ' + goalPath)
   targets.set(goalPath, goalRelative)
+  if (![toolGoalImages.before, toolGoalImages.after].includes(digest(toolGoalPath)))
+    throw new Error('Native goal tool patch preimage mismatch: ' + toolGoalPath)
+  targets.set(toolGoalPath, toolGoalRelative)
   // Optional in older compositions; capability remains absent/fail-closed.
   for (const anchor of anchors) {
     const resolver = createRequire(anchor)
@@ -75,6 +85,12 @@ export function applyPostmanNativeChildCutoff(anchors, { replaceFile = renameSyn
       const newline = original.includes('\r\n') ? '\r\n' : '\n'
       const sessionCompatBefore = '\t\tconst surfaceMetadata = {\n'
       const sessionCompatAfter = sessionCompatBefore + '\t\t\t...surfaceOpts?.ignorable === true ? { ignorable: true } : {},\n'
+      if (relative === goalRelative && digest(path) === goalImages.legacy) {
+        // Upgrade only the exact previous wait-only image, in private staging.
+        writeFileSync(staged, lf(original)
+          .replace('\t\t// An authoritative plugin wait defers only automatic goal admission.\n\t\t// Native inbox input and the existing checkpoint recheck stay unchanged.\n', '')
+          .replace(' && ctx.bail("goal/continuation-defer", state.agent) !== true', ''))
+      }
       let restorePanel = false
       if (relative === sessionRelative) {
         const source = lf(original), hash = digestText(source)
@@ -84,7 +100,7 @@ export function applyPostmanNativeChildCutoff(anchors, { replaceFile = renameSyn
       }
       const normalizedPatch = join(directory, 'cutoff.patch')
       const targetPatch = relative.includes('/dsh-tool-pwsh/') ? new URL('./postman-native-app-owner.patch', import.meta.url)
-        : relative === goalRelative ? new URL('./postman-native-goal-continuation.patch', import.meta.url) : patch
+        : [goalRelative, toolGoalRelative].includes(relative) ? new URL('./postman-native-goal-continuation.patch', import.meta.url) : patch
       writeFileSync(normalizedPatch, readFileSync(targetPatch, 'utf8').replaceAll('\r', ''))
       const apply = args => spawnSync('git', ['-c', 'core.longpaths=true', 'apply', '--include=' + relative, ...args, normalizedPatch], { cwd:directory, env:{...process.env,GIT_CEILING_DIRECTORIES:dirname(directory)}, stdio:'ignore', windowsHide:true })
       let lifecycleInstalled = false, scopedInstalled = false, deferredInstalled = false
@@ -157,6 +173,8 @@ export function applyPostmanNativeChildCutoff(anchors, { replaceFile = renameSyn
       }
       if (relative === goalRelative && digest(staged) !== goalImages.after)
         throw new Error('Native goal continuation patch postimage mismatch: ' + path)
+      if (relative === toolGoalRelative && digest(staged) !== toolGoalImages.after)
+        throw new Error('Native goal tool patch postimage mismatch: ' + path)
       // Patch context alone accepts unrelated appended/modified SDK bytes.
       // These exact pinned postimages are the supported composition; check all
       // staging targets before the first replacement, including the app owner.
