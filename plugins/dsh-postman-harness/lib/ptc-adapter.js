@@ -485,6 +485,41 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
       }
     },
   })
+  // Validate a completed turn's final PTC, never an earlier successful call.
+  // Also works after cold restore, without trusting model-authored wait prose.
+  function provenExternalWait(inTurn, end, agent) {
+    const calls = inTurn.filter(e => e.type === 'tool/call')
+    const call = calls.at(-1), turn = externalTurns.get(agent)
+    if (call?.data.name !== 'ptc_execute') return false
+    // A marker from an earlier PTC in this turn cannot prove the LAST PTC
+    // succeeded. With multiple calls, validate its exact durable result.
+    if (end.data.turn !== turn || calls.length !== 1) {
+      const result = inTurn.findLast(e => e.type === 'tool/result' &&
+        e.data.message?.source?.callId === call.data.callId)?.data.message
+      const block = result?.content?.[0]
+      const content = block?.type === 'tool-result' ? block.content : result?.content
+      if (!result || result.isError || block?.isError || content?.length !== 1 || content[0].type !== 'text') return false
+      let value
+      try { value = JSON.parse(content[0].text) } catch { return false }
+      const effects = value.effects
+      if (value.status !== 'ok' || value.cleanupError || value.value?.needsModelDecision ||
+          !effects || effects.failed !== 0 || effects.pending !== 0 ||
+          !Array.isArray(effects.calls) || effects.completed !== effects.calls.length ||
+          effects.calls.some(entry => entry.state !== 'completed')) return false
+      const dispatches = inTurn.filter(e => e.type === 'tool/code-dispatch' &&
+        e.data.parentCallId === call.data.callId)
+      if (dispatches.length !== effects.calls.length || dispatches.some(({ data }) => {
+        if (data.isError) return true
+        if (!YIELD_ACCEPTANCE[data.name]) return false
+        try { return !YIELD_ACCEPTANCE[data.name].includes(JSON.parse(data.content[0].text).status) }
+        catch { return true }
+      })) return false
+    }
+    // Settlement that can unblock a requested retirement/compact is relevant.
+    if (inTurn.some(e => e.type === 'tool/code-dispatch-start' && e.data.parentCallId === call.data.callId &&
+        ['postman_worker_stop','postman_worker_compact','postman_worker_fresh','postman_task_close'].includes(e.data.name))) return false
+    try { return JSON.parse(call.data.arguments).boundary === 'external_event' } catch { return false }
+  }
   function isWaitingForExternalEvent(agent, proposingStep = false) {
     const record = owners.get(agent?.id)
     // An accepted dispatch alone is not a perpetual wake source. Recheck exact
@@ -513,6 +548,16 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
       // another independent confirmed producer. User, approval, arbitrary plugin
       // input or a pending turn is never silently consumed by this admission veto.
       const inputs = inTurn.filter(e => e.type === 'user/message' && !deferredFact(e.data))
+      // A goal-only acknowledgement can inherit a proven prior wait, never
+      // a failed PTC or an unverified claim that work is still running.
+      if (inputs.length === 1 && automaticGoal(agent)?.turn === end.data.turn) {
+        const previousEnd = events.slice(0, start).findLast(e => e.type === 'turn/end')
+        if (previousEnd?.data.reason?.kind === 'completed') {
+          const previousStart = events.findLastIndex(e => e.type === 'turn/start' && e.data.turn === previousEnd.data.turn)
+          if (previousStart >= 0 && provenExternalWait(
+            events.slice(previousStart, events.indexOf(previousEnd) + 1), previousEnd, agent)) return true
+        }
+      }
       return inputs.length > 0 && inputs.every(({ data }) =>
         data.source?.kind === 'subagent-report' && typeof data.source.senderSessionId === 'string' &&
           data.source.senderSessionId.length > 0 ||
@@ -520,37 +565,7 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
           data.source.form === 'bridge-ready' && data.source.targetSessionId === agent.id &&
           typeof data.source.bridgeJobId === 'string')
     }
-    const call = calls.at(-1), turn = externalTurns.get(agent)
-    if (calls.length !== 1 || call.data.name !== 'ptc_execute') return false
-    if (end.data.turn !== turn) {
-      // Cold/compacted adapters have no WeakMap marker. Reconstruct only from
-      // the native durable successful result and completed exact dispatches;
-      // a model-authored external_event argument alone never proves a wait.
-      const result = inTurn.findLast(e => e.type === 'tool/result' &&
-        e.data.message?.source?.callId === call.data.callId)?.data.message
-      const block = result?.content?.[0]
-      const content = block?.type === 'tool-result' ? block.content : result?.content
-      if (!result || result.isError || block?.isError || content?.length !== 1 || content[0].type !== 'text') return false
-      let value
-      try { value = JSON.parse(content[0].text) } catch { return false }
-      const effects = value.effects
-      if (value.status !== 'ok' || value.cleanupError || value.value?.needsModelDecision ||
-          !effects || effects.failed !== 0 || effects.pending !== 0 ||
-          !Array.isArray(effects.calls) || effects.completed !== effects.calls.length ||
-          effects.calls.some(entry => entry.state !== 'completed')) return false
-      const dispatches = inTurn.filter(e => e.type === 'tool/code-dispatch' &&
-        e.data.parentCallId === call.data.callId)
-      if (dispatches.length !== effects.calls.length || dispatches.some(({ data }) => {
-        if (data.isError) return true
-        if (!YIELD_ACCEPTANCE[data.name]) return false
-        try { return !YIELD_ACCEPTANCE[data.name].includes(JSON.parse(data.content[0].text).status) }
-        catch { return true }
-      })) return false
-    }
-    // Settlement that can unblock a requested retirement/compact is relevant.
-    if (events.slice(start).some(e => e.type === 'tool/code-dispatch-start' && e.data.parentCallId === call.data.callId &&
-        ['postman_worker_stop','postman_worker_compact','postman_worker_fresh','postman_task_close'].includes(e.data.name))) return false
-    try { return JSON.parse(call.data.arguments).boundary === 'external_event' } catch { return false }
+    return provenExternalWait(inTurn, end, agent)
   }
   async function dispose() {
     if (disposed) return
