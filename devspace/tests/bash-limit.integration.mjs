@@ -11,7 +11,8 @@ const pkg=join(root,'node_modules/@waishnav/devspace');mkdirSync(join(pkg,'dist'
 const sourceFile=join(install,'node_modules/@waishnav/devspace/dist/pi-tools.js');
 const original=readFileSync(existsSync(sourceFile+'.dsh-original')?sourceFile+'.dsh-original':sourceFile);
 const file=join(pkg,'dist/pi-tools.js');writeFileSync(file,original);writeFileSync(join(pkg,'package.json'),'{"version":"1.1.0-beta.4"}');
-copyFileSync(join(install,'node_modules/@waishnav/devspace/dist/server.js'),join(pkg,'dist/server.js'));
+const serverSource=join(install,'node_modules/@waishnav/devspace/dist/server.js');
+copyFileSync(existsSync(serverSource+'.dsh-original')?serverSource+'.dsh-original':serverSource,join(pkg,'dist/server.js'));
 mkdirSync(join(pkg,'dist/tool-surfaces'),{recursive:true});
 const surfaceSource=join(install,'node_modules/@waishnav/devspace/dist/tool-surfaces/claude.js');
 const surfaceOriginal=readFileSync(existsSync(surfaceSource+'.dsh-original')?surfaceSource+'.dsh-original':surfaceSource);
@@ -19,15 +20,43 @@ const surface=join(pkg,'dist/tool-surfaces/claude.js');writeFileSync(surface,sur
 symlinkSync(join(install,'node_modules'),join(pkg,'node_modules'),'junction');
 for(const name of ['writer-runtime.mjs','writer-process.ps1','ordinary-process.ps1']) copyFileSync(fileURLToPath(new URL('../'+name,import.meta.url)),join(root,name));
 const patcher=fileURLToPath(new URL('../prepare-runtime.mjs',import.meta.url));
+const checkedFiles=[file,join(pkg,'dist/server.js'),surface];
+const beforeCheck=checkedFiles.map(path=>readFileSync(path,'utf8'));
+const stale=spawnSync(process.execPath,[patcher,root,'--check'],{encoding:'utf8'});
+assert.notEqual(stale.status,0,'read-only preflight must refuse an unprepared runtime');
+assert.deepEqual(checkedFiles.map(path=>readFileSync(path,'utf8')),beforeCheck,'check must never apply patches');
+assert(checkedFiles.every(path=>!existsSync(path+'.dsh-original')),'check must not create backups');
+// The real runner must reject a stale install before opening a listener or writer control.
+for(const name of ['server-runner.mjs','prepare-runtime.mjs'])copyFileSync(fileURLToPath(new URL('../'+name,import.meta.url)),join(root,name));
+const refusedStart=spawnSync(process.execPath,[join(root,'server-runner.mjs')],{encoding:'utf8',timeout:10000,
+  env:{...process.env,LOCALAPPDATA:root,DEVSPACE_CONFIG_DIR:join(root,'unused-config')}});
+assert.equal(refusedStart.status,1,refusedStart.stdout+refusedStart.stderr);
+assert(!existsSync(join(root,'logs'))&&!existsSync(join(root,'writer-control.json')),'preflight precedes all runtime startup writes');
+console.log('PASS stale runtime refused before startup; read-only check preserves all bytes and backups');
+// Replay the installed legacy limiter, not just a clean npm package.
+const legacyLimiter=`// DSH: bound active Bash calls; never queue or replay commands after disconnect.
+let dshActiveShells = 0;
+export async function runShellTool(input, context) {
+    if (dshActiveShells >= 8) return { content: [{ type: "text", text: "Eight Bash calls are already running. No command was started." }], isError: true };
+    dshActiveShells++;
+    try { return await dshRunShellTool(input, context); }
+    finally { dshActiveShells--; }
+}
+async function dshRunShellTool(input, context) {`;
+const legacy=original.toString().replace('export async function runShellTool(input, context) {',legacyLimiter);
+writeFileSync(file,legacy);writeFileSync(file+'.dsh-original',original);
+assert.notEqual(spawnSync(process.execPath,[patcher,root,'--check'],{encoding:'utf8'}).status,0);
+assert.equal(readFileSync(file,'utf8'),legacy,'legacy preflight must not apply a migration');
 assert.equal(spawnSync(process.execPath,[patcher,root],{encoding:'utf8'}).status,0);
 const patched=readFileSync(file,'utf8');
 const patchedSurface=readFileSync(surface,'utf8');
+assert.equal(spawnSync(process.execPath,[patcher,root,'--check'],{encoding:'utf8'}).status,0);
 assert.equal(spawnSync(process.execPath,[patcher,root],{encoding:'utf8'}).status,0);
 assert.equal(readFileSync(file,'utf8'),patched);
 assert.equal(readFileSync(file+'.dsh-original','utf8'),original.toString());
 assert.equal(readFileSync(surface+'.dsh-original','utf8'),surfaceOriginal.toString());
 assert.equal(readFileSync(surface,'utf8'),patchedSurface);
-console.log('PASS guarded runtime patch, original backup and idempotent installation');
+console.log('PASS legacy limiter migration, guarded patch, original backup and idempotent installation');
 const agent=pathToFileURL(join(install,'node_modules/@earendil-works/pi-coding-agent/dist/index.js')).href;
 const module=await import('data:text/javascript;base64,'+Buffer.from(patched.replace('"@earendil-works/pi-coding-agent"',JSON.stringify(agent))).toString('base64'));
 process.env.PATH='C:/Program Files/Git/bin;C:/Program Files/nodejs;'+process.env.PATH;
@@ -66,5 +95,5 @@ writeFileSync(file,patched);writeFileSync(surface,'// unknown MCP surface');
 assert.notEqual(spawnSync(process.execPath,[patcher,root],{encoding:'utf8'}).status,0);
 assert.equal(readFileSync(surface,'utf8'),'// unknown MCP surface');assert.equal(readFileSync(file,'utf8'),patched);
 console.log('PASS unknown MCP schema source refused before writing known executor');
-writeFileSync(join(root,'results.json'),JSON.stringify({passed:5,root,productionFilesChanged:false}));
-console.log(JSON.stringify({passed:5,root}));
+writeFileSync(join(root,'results.json'),JSON.stringify({passed:6,root,productionFilesChanged:false}));
+console.log(JSON.stringify({passed:6,root}));

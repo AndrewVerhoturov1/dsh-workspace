@@ -669,32 +669,45 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     const sourceOutcome = sourceObserved ? result.transportDiagnostics.recoverySourceOutcome : null
     if (result?.reportedOutcome === 'DONE' || sourceOutcome === 'DONE')
       return { kind: 'received', reason: 'result-received-not-engineering-pass' }
-    const codes = [result?.diagnostic, result?.transportCode, result?.code,
+    const failureCodes = [result?.diagnostic, result?.transportCode, result?.code,
       op.devspace?.hostFailure?.status, op.devspace?.hostFailure?.diagnostic]
-      .filter(value => typeof value === 'string' || typeof value === 'number').join(' ')
-    const failureText = [codes, result?.message, result?.assistantText,
-      result?.transportDiagnostics?.recoverySourceMessage, op.devspace?.hostFailure?.diagnostic]
-      .filter(value => typeof value === 'string').map(value => value.slice(0, 2000)).join('\n')
+      .filter(value => typeof value === 'string' || typeof value === 'number')
+    const codes = failureCodes.join(' ')
+    // An observer marker does not turn the whole assistant response into an
+    // error. Only explicit failure statements can supply a legacy text reason.
+    const reports = (typeof result?.assistantText === 'string' ? result.assistantText : '').split(/\r?\n/).flatMap(line => {
+      line = line.trim().replace(/`/g, '')
+      const marked = /^CAPABILITY_UNAVAILABLE\s*[:—–-]\s*(.+)$/i.exec(line)
+      if (marked) return [marked[1].slice(0, 2000)]
+      return /^(?:(?:tool|method|connector|schema)\s+(?:is\s+)?(?:not\b|does not\b|missing\b)|(?:(?:операция|параметр)\s+)?(?:execution|job_id)\b.*(?:не поддержива|отсутств)|(?:несовместимая|неподдерживаемая)\s+схема|NEED_DECISION\b|permission denied\b|access denied\b|(?:authentication|authorization|login|sign in) required\b|(?:expired (?:access |refresh )?token|token (?:has )?expired)\b|не авторизован|отказано в доступе)/i.test(line)
+        ? [line.slice(0, 2000)] : []
+    })
+    const messages = [result?.message, result?.transportDiagnostics?.recoverySourceMessage,
+      op.devspace?.hostFailure?.diagnostic].filter(value => typeof value === 'string')
+      .map(value => value.slice(0, 2000))
+    const failureText = [codes, ...messages, ...reports].join('\n')
     // CAPABILITY_UNAVAILABLE is an observer marker, not an MCP error category.
     // Its retained text distinguishes temporary transport failure from an absent
     // tool/schema. Explicit permanent/authority refusals below always win.
-    const temporaryPattern = /\b(?:(?:MCP_|TOOL_)?UNAVAILABLE|(?:MCP_|ERR_)?TIMEOUT|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENETUNREACH|EHOSTUNREACH|CONNECTION_(?:FAILED|FAILURE)|NETWORK_ERROR)\b|timed?\s*out|temporar(?:y|ily)\s+(?:\w+\s+){0,3}unavailable|connection\s+(?:failure|failed|refused|reset|closed)|failed to connect|fetch failed|временно\s+недоступ|тайм[ -]?аут|(?:сбой|ошибка)\s+(?:соединения|подключения)/i
-    const temporary = temporaryPattern.test(failureText)
+    const temporaryCode = failureCodes.some(code => /^(?:(?:MCP_|TOOL_)?UNAVAILABLE|(?:MCP_|ERR_)?TIMEOUT|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENETUNREACH|EHOSTUNREACH|CONNECTION_(?:FAILED|FAILURE)|NETWORK_ERROR)$/i.test(String(code)))
+    const temporary = [...messages, ...reports].some(text => /^(?:(?:DevSpace\s+)?MCP|DevSpace|инструмент\s+DevSpace)\s+(?:(?:request|call|tool)\s+)?(?:UNAVAILABLE\b|returned\s+(?:(?:MCP_|TOOL_)?UNAVAILABLE|(?:MCP_|ERR_)?TIMEOUT|ETIMEDOUT|ECONNRESET|ECONNREFUSED)\b|timed?\s*out\b|temporar(?:y|ily)\s+unavailable\b|connection\s+(?:failure|failed|refused|reset|closed)\b|failed to connect\b|fetch failed\b|временно\s+недоступ)/i.test(text))
     // Missing capability/tool is permanent; a missing response is not evidence
     // that the capability itself is absent. Do not scan from the marker to any
     // unrelated "missing" later in the sentence.
     const permanentCapability = /\b(?:TOOL_NOT_FOUND|METHOD_NOT_FOUND|UNKNOWN_TOOL|INVALID_PARAMS|UNSUPPORTED_(?:TOOL|PARAMETER|EXECUTION)|SCHEMA_(?:MISMATCH|UNSUPPORTED))\b|(?:^|\s)-3260[12]\b|permanent(?:ly)?\s+unavailable|(?:tool|method)\s+not found|\b(?:tool|capability|connector|schema)\s+(?:is\s+)?(?:not (?:installed|configured|supported|registered)|does not (?:exist|support)|missing\b(?!\s+(?:response|reply|result|output)))|\bmissing\s+(?:tool|capability|connector|schema)\b(?!\s+(?:response|reply|result|output))/i.test(failureText) ||
       /\b(?:unknown|unsupported|unrecognized|unexpected|invalid)\s+(?:parameters?|arguments?|fields?|keys?|propert(?:y|ies))\b|\brequires?\s+(?:an?\s+)?(?:argument|parameter|field|property)\b|\b(?:execution|job_id)\b[^;\n.]{0,60}\bnot\s+(?:supported|recognized|allowed)\b/i.test(failureText) ||
+      /(?:execution|job_id)[^;\n.]{0,100}(?:не поддержива|отсутств)|(?:несовместимая|неподдерживаемая)\s+схема|схем[аы]\s+(?:не поддержива|несовместим)/i.test(failureText) ||
       /(?:инструмент(?:\s+DevSpace)?|соединитель|DevSpace)\s+(?:отсутствует|не (?:установлен|подключен|поддержива))|постоянно недоступ/i.test(failureText)
-    const authenticationFailure = /\b(?:TOKEN_EXPIRED|EXPIRED_TOKEN|LOGIN_REQUIRED|SIGN_IN_REQUIRED)\b|\btoken\s+(?:has\s+)?expired\b|\bexpired\s+(?:(?:access|refresh)\s+)?token\b|\b(?:login|log in|sign in)\s+(?:is\s+)?required\b/i.test(failureText)
+    const authenticationFailure = failureCodes.some(code => /^(?:HTTP[_ ]?)?(?:401|403)$/i.test(String(code))) ||
+      /\b(?:TOKEN_EXPIRED|EXPIRED_TOKEN|LOGIN_REQUIRED|SIGN_IN_REQUIRED)\b|\bHTTP[ :_-]*(?:401|403)\b|\btoken\s+(?:has\s+)?expired\b|\bexpired\s+(?:(?:access|refresh)\s+)?token\b|\b(?:login|log in|sign in)\s+(?:is\s+)?required\b|(?:ошибка|требуется)\s+(?:авторизац|аутентификац)|токен\s+ист[её]к/i.test(failureText)
     const blocker = result?.reportedOutcome === 'NEED_DECISION' || sourceOutcome === 'NEED_DECISION' ||
       sourceObserved && !['DONE', 'BLOCKED', 'NEED_DECISION'].includes(sourceOutcome) || result?.recoveryEligible === false ||
       result?.transportDiagnostics?.supersededByUserTurn === true ||
       /(?:NEED_DECISION|LEADER_DECISION_REQUIRED|PERMISSION_(?:DENIED|REQUIRED)|INPUT_PROVENANCE_REJECTED|ACCESS_DENIED|SCOPE_(?:DENIED|INVALID|VIOLATION)|UNAUTHENTICATED|FORBIDDEN|AUTH(?:ORIZATION|ENTICATION)_REQUIRED|SAFETY|SECURITY|PERMANENT|CALLER_REJECTED|BINDING_(?:CHANGED|INVALID)|REPROOF_FAILED|WORKTREE_NOT_READY|LUNA_UNAVAILABLE)/i.test(codes) ||
-      permanentCapability || authenticationFailure || /CAPABILITY_UNAVAILABLE/i.test(codes) && !temporary ||
+      permanentCapability || authenticationFailure || /CAPABILITY_UNAVAILABLE/i.test(codes) && !temporary && !temporaryCode ||
       /(?:NEED_DECISION|NEEDS_(?:PARENT|LEADER)_GUIDANCE|PERMISSION_(?:DENIED|REQUIRED)|ACCESS_DENIED|SCOPE_(?:DENIED|INVALID|VIOLATION)|permission denied|access denied|unauthori[sz]ed|forbidden|(?:new (?:user )?)?permission required|(?:authentication|authorization) required|out of (?:the )?(?:approved )?scope|нет (?:разрешения|прав|авторизации)|не авторизован|требуется (?:новое )?разрешение|отказано в доступе)/i.test(failureText)
     if (blocker) return { kind: 'decision', reason: 'permission-scope-or-leader-decision-required' }
-    const retry = temporaryPattern.test(codes) || /CAPABILITY_UNAVAILABLE/i.test(codes) && temporary ||
+    const retry = temporaryCode || /CAPABILITY_UNAVAILABLE/i.test(codes) && temporary ||
       result?.reportedOutcome === 'BLOCKED' || sourceOutcome === 'BLOCKED' || result?.diagnostic === 'BLOCKED' ||
       result?.source === 'transport_diagnostic' || result?.diagnostic === 'PARTIAL' ||
       op.terminal?.terminalStatus === 'FAILED' || result?.ok === false ||

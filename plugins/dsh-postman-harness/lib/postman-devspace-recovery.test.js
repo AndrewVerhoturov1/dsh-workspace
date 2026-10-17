@@ -477,6 +477,86 @@ function capabilityFallback(f, text, { diagnostic = 'CAPABILITY_UNAVAILABLE', ..
   }
 }
 
+// Reduced from the two real READ_ONLY reports. The standalone word "timeout"
+// described a parameter; neither request attempted a Bash status call.
+for (const separator of [':', '—']) test('schema/prose regression: Russian unsupported schema ' + separator, async t => {
+  const f = fixture(t)
+  capabilityFallback(f, `READ_ONLY проверка завершена. open_workspace и read: PASS.
+Фактическая схема Bash:
+workspace_id string обязательный
+command string обязательный
+working_directory string необязательный
+timeout number необязательный
+timeout: по умолчанию 30 секунд, максимум 300 секунд.
+В действующей схеме отсутствуют execution и job_id.
+CAPABILITY_UNAVAILABLE ${separator} операция execution:'status' не поддерживается текущей схемой Bash.
+Причина: несовместимая схема соединителя. Вызов status не выполнялся.`)
+  const jobs = f.make()
+  t.after(() => jobs.dispose())
+  const first = await jobs.accept(f.leader, '@PostmanDevspace inspect schema', 'devspace', undefined, undefined, 'READ_ONLY')
+  for (let i = 0; i < 100; i++) await tick()
+  const statuses = await Promise.all(Array.from({ length: 8 }, () => jobs.status(f.leader, first.bridgeJobId)))
+  assert.ok(statuses.every(status => status.recovery.classification.kind === 'decision'))
+  assert.ok(statuses.every(status => status.recovery.attempts.length === 0))
+  assert.equal(f.launches.length, 1, 'schema mismatch cannot authorize a second Send/REQ')
+  assert.equal(f.relays.length, 1, 'only the terminal relay to Luna, no recovery relay')
+})
+
+for (const text of [
+  'Схема Bash: timeout number optional. execution и job_id отсутствуют.',
+  'The schema documents timeout, UNAVAILABLE, connection failure, and status parameters.',
+  'CAPABILITY_UNAVAILABLE: timeout is an optional parameter with a 300 second maximum.',
+]) test('schema/prose regression: parameter prose cannot authorize recovery: ' + text, async t => {
+  const f = fixture(t)
+  capabilityFallback(f, text)
+  const jobs = f.make()
+  t.after(() => jobs.dispose())
+  const first = await jobs.accept(f.leader, '@PostmanDevspace inspect schema', 'devspace', undefined, undefined, 'READ_ONLY')
+  for (let i = 0; i < 100; i++) await tick()
+  assert.equal((await jobs.status(f.leader, first.bridgeJobId)).recovery.classification.kind, 'decision')
+  assert.equal(f.launches.length, 1)
+})
+
+test('schema/prose regression: unrelated authorization prose does not override a real MCP failure', async t => {
+  const f = fixture(t, ['transport_diagnostic', 'bell'])
+  capabilityFallback(f, 'CAPABILITY_UNAVAILABLE: DevSpace MCP request timed out.\nДокументация перечисляет token expired, permission denied, forbidden и NEED_DECISION.')
+  const jobs = f.make()
+  t.after(() => jobs.dispose())
+  const first = await jobs.accept(f.leader, '@PostmanDevspace inspect progress', 'devspace', undefined, undefined, 'READ_ONLY')
+  for (let i = 0; i < 100; i++) await tick()
+  const status = await jobs.status(f.leader, first.bridgeJobId)
+  assert.equal(status.recovery.attempts.length, 1)
+  assert.equal(f.launches.length, 2)
+  assert.notEqual(f.launches[0].requestId, f.launches[1].requestId)
+  assert.equal(status.recovery.resultJobId, f.launches[1].binding.jobId)
+})
+
+for (const extra of [{ code: 401 }, { code: 'HTTP_403' }, { reportedOutcome: 'NEED_DECISION' }])
+test('schema/prose regression: structured authority refusal overrides a transient error ' + JSON.stringify(extra), async t => {
+  const f = fixture(t)
+  capabilityFallback(f, 'CAPABILITY_UNAVAILABLE: DevSpace MCP request timed out.', extra)
+  const jobs = f.make()
+  t.after(() => jobs.dispose())
+  const first = await jobs.accept(f.leader, '@PostmanDevspace inspect', 'devspace', undefined, undefined, 'READ_ONLY')
+  for (let i = 0; i < 80; i++) await tick()
+  const status = await jobs.status(f.leader, first.bridgeJobId)
+  assert.equal(status.recovery.classification.kind, 'decision')
+  assert.equal(status.recovery.attempts.length, 0)
+  assert.equal(f.launches.length, 1)
+})
+
+test('schema/prose regression: a Russian schema refusal after a long tool listing overrides UNAVAILABLE', async t => {
+  const f = fixture(t)
+  capabilityFallback(f, 'Parameter documentation timeout\n'.repeat(100) +
+    "операция execution:'status' не поддерживается текущей схемой", { code: 'UNAVAILABLE' })
+  const jobs = f.make()
+  t.after(() => jobs.dispose())
+  const first = await jobs.accept(f.leader, '@PostmanDevspace inspect schema', 'devspace', undefined, undefined, 'READ_ONLY')
+  for (let i = 0; i < 80; i++) await tick()
+  assert.equal((await jobs.status(f.leader, first.bridgeJobId)).recovery.classification.kind, 'decision')
+  assert.equal(f.launches.length, 1)
+})
+
 for (const text of [
   'CAPABILITY_UNAVAILABLE: DevSpace MCP returned UNAVAILABLE.',
   'CAPABILITY_UNAVAILABLE: DevSpace MCP request timed out.',
@@ -558,9 +638,10 @@ test('MCP recovery: second temporary recovery succeeds before the third attempt'
 })
 
 for (const code of ['UNAVAILABLE', 'MCP_TIMEOUT', 'ETIMEDOUT', 'ECONNRESET', 'CONNECTION_FAILURE'])
-test('MCP recovery: structured transient error code ' + code + ' recovers', async t => {
+for (const diagnostic of ['UNKNOWN', 'CAPABILITY_UNAVAILABLE'])
+test('MCP recovery: structured transient error code ' + code + ' overrides observer ' + diagnostic, async t => {
   const f = fixture(t, ['transport_diagnostic', 'bell'])
-  capabilityFallback(f, 'The MCP call failed.', { diagnostic: 'UNKNOWN', code })
+  capabilityFallback(f, 'The MCP call failed.', { diagnostic, code })
   const jobs = f.make()
   t.after(() => jobs.dispose())
   const first = await jobs.accept(f.leader, '@PostmanDevspace inspect', 'devspace', undefined, undefined, 'READ_ONLY')
@@ -602,6 +683,9 @@ for (const [text, extra] of [
   ['CAPABILITY_UNAVAILABLE: MCP UNAVAILABLE because token expired, login required.', {}],
   ['CAPABILITY_UNAVAILABLE: MCP UNAVAILABLE because token expired.', {}],
   ['CAPABILITY_UNAVAILABLE: MCP UNAVAILABLE because login required.', {}],
+  ['CAPABILITY_UNAVAILABLE: MCP UNAVAILABLE; ошибка авторизации: HTTP 401.', {}],
+  ['CAPABILITY_UNAVAILABLE: MCP UNAVAILABLE; требуется авторизация.', {}],
+  ['CAPABILITY_UNAVAILABLE: MCP UNAVAILABLE; токен истёк.', {}],
   ['CAPABILITY_UNAVAILABLE: MCP UNAVAILABLE: expired token.', {}],
   ['CAPABILITY_UNAVAILABLE: MCP UNAVAILABLE: TOKEN_EXPIRED.', {}],
   ['MCP UNAVAILABLE.', { diagnostic: 'UNKNOWN', code: 'TOKEN_EXPIRED' }],
