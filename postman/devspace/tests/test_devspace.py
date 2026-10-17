@@ -103,9 +103,16 @@ class DevspaceTests(unittest.TestCase):
                 self.assertIn("Перед любыми другими DevSpace-инструментами вызови open_workspace с path='postman-writer:" + JOB + "'", prompt)
                 self.assertIn("не обходи его открытием буквального пути", prompt)
                 self.assertIn("сообщи CAPABILITY_UNAVAILABLE обычным текстом", prompt)
+                self.assertIn("нужны поля execution и job_id", prompt)
+                self.assertIn("connector schema does not support execution/job_id", prompt)
+                self.assertIn("не повторяй неподдерживаемый вызов", prompt)
         read_only = task.render_task({**self.binding, "mode": "READ_ONLY"}, "inspect", "bell")
         self.assertNotIn("postman-writer:", read_only)
-        self.assertIn("Сначала открой назначенную область", read_only)
+        self.assertIn("обычным open_workspace с path=" + json.dumps(str(self.root), ensure_ascii=False), read_only)
+        self.assertIn("В READ_ONLY не используй postman-writer", read_only)
+        self.assertNotIn("execution='background'", read_only)
+        self.assertIn("временного MCP UNAVAILABLE", read_only)
+        self.assertIn("отказ прав/scope или NEED_DECISION", read_only)
 
     def test_script_transport_does_not_shadow_standard_python_signal(self):
         script = REPO / 'postman' / 'devspace' / 'transport.py'

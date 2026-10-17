@@ -459,6 +459,176 @@ for (const failure of ['before-luna', 'before-req']) test('review1: three infras
   }
 })
 
+// Real observer/terminal shape: the marker survives as diagnostic, while the
+// underlying MCP failure is retained in assistantText, not reportedOutcome.
+function capabilityFallback(f, text, { diagnostic = 'CAPABILITY_UNAVAILABLE', ...extra } = {}) {
+  const originalWait = f.direct.wait
+  f.direct.wait = async (...args) => {
+    const result = await originalWait(...args)
+    if (result.result?.source !== 'bell' && result.status !== 'RUNNING') {
+      const launch = f.launches.find(value => value.requestId === result.requestId)
+      result.result = { ...devspaceTerminal(launch.binding, {
+        source: 'text_fallback', diagnostic, conversationRef: CHAT,
+        message: 'Completed response without local signal', assistantText: text,
+        transportDiagnostics: { submitProof: { sendState: 'SENT_CONFIRMED' } },
+      }), ...extra }
+    }
+    return result
+  }
+}
+
+for (const text of [
+  'CAPABILITY_UNAVAILABLE: DevSpace MCP returned UNAVAILABLE.',
+  'CAPABILITY_UNAVAILABLE: DevSpace MCP request timed out.',
+  'CAPABILITY_UNAVAILABLE: MCP connection failure (ECONNRESET).',
+  'CAPABILITY_UNAVAILABLE: DevSpace connection refused (ECONNREFUSED).',
+  'CAPABILITY_UNAVAILABLE: DevSpace tool temporarily unavailable.',
+  'CAPABILITY_UNAVAILABLE: инструмент DevSpace временно недоступен.',
+  'CAPABILITY_UNAVAILABLE: MCP UNAVAILABLE during the security documentation review.',
+  'CAPABILITY_UNAVAILABLE: MCP UNAVAILABLE due to missing response from server.',
+  'CAPABILITY_UNAVAILABLE: DevSpace MCP UNAVAILABLE due to missing response from server.',
+  'CAPABILITY_UNAVAILABLE: MCP UNAVAILABLE due to missing tool response.',
+  'CAPABILITY_UNAVAILABLE: DevSpace MCP UNAVAILABLE: отсутствует ответ сервера.',
+]) test('MCP recovery: temporary text fallback recovers: ' + text, async t => {
+  const f = fixture(t, ['transport_diagnostic', 'bell'])
+  capabilityFallback(f, text)
+  const jobs = f.make()
+  t.after(() => jobs.dispose())
+  const first = await jobs.accept(f.leader, '@PostmanDevspace inspect permitted files', 'devspace', undefined, undefined, 'READ_ONLY')
+  for (let i = 0; i < 100; i++) await tick()
+  const status = await jobs.status(f.leader, first.bridgeJobId)
+  assert.equal(f.row().bridgeOperations[first.bridgeJobId].terminal.result.reportedOutcome, 'UNKNOWN')
+  assert.equal(status.result.diagnostic, 'CAPABILITY_UNAVAILABLE')
+  assert.equal(status.recovery.attempts.length, 1, JSON.stringify(status.recovery))
+  assert.equal(f.launches.length, 2)
+  assert.notEqual(f.launches[0].requestId, f.launches[1].requestId)
+  assert.equal(status.recovery.resultJobId, f.launches[1].binding.jobId)
+})
+
+test('MCP recovery: initial UNAVAILABLE plus three attempts exhausts without replaying any REQ', async t => {
+  const f = fixture(t)
+  capabilityFallback(f, 'CAPABILITY_UNAVAILABLE: DevSpace MCP returned UNAVAILABLE.')
+  const jobs = f.make()
+  t.after(() => jobs.dispose())
+  const first = await jobs.accept(f.leader, '@PostmanDevspace inspect progress then finish', 'devspace', undefined, undefined, 'READ_ONLY')
+  for (let i = 0; i < 150; i++) await tick()
+  const status = await jobs.status(f.leader, first.bridgeJobId)
+  assert.deepEqual(status.recovery.attempts.map(value => value.attempt), [1, 2, 3], JSON.stringify(status.recovery))
+  assert.equal(status.recovery.exhausted, true)
+  assert.equal(status.recovery.classification.kind, 'retry')
+  assert.equal(f.launches.length, 4)
+  assert.equal(new Set(f.launches.map(value => value.requestId)).size, 4)
+  assert.equal(new Set(f.launches.map(value => value.binding.jobId)).size, 4)
+  assert.ok(f.launches.slice(1).every(value => value.binding.recovery.intent === 'observe-then-continue'))
+  assert.match(f.launches[1].payload, /Не повторяй уже выполненные команды/)
+  assert.equal(status.result.source, 'text_fallback')
+  assert.equal(status.result.diagnostic, 'CAPABILITY_UNAVAILABLE')
+})
+
+test('MCP recovery: concurrent status cannot duplicate active recovery or resend after success', async t => {
+  const f = fixture(t, ['transport_diagnostic', 'pending'])
+  capabilityFallback(f, 'CAPABILITY_UNAVAILABLE: MCP connection failure (ECONNRESET).')
+  const jobs = f.make()
+  t.after(() => jobs.dispose())
+  const first = await jobs.accept(f.leader, '@PostmanDevspace inspect progress', 'devspace', undefined, undefined, 'READ_ONLY')
+  for (let i = 0; i < 100; i++) await tick()
+  assert.equal(f.launches.length, 2)
+  const next = f.launches[1]
+  await Promise.all(Array.from({ length: 8 }, () => jobs.status(f.leader, first.bridgeJobId, false, true)))
+  assert.equal(f.launches.length, 2, 'the same pending successor is reused')
+  f.waiters.get(next.requestId)(f.terminal(next.requestId, 'bell'))
+  await until(() => f.row().bridgeOperations[next.binding.jobId].state === 'received')
+  const statuses = await Promise.all(Array.from({ length: 8 }, () => jobs.status(f.leader, first.bridgeJobId, false, true)))
+  assert.ok(statuses.every(value => value.status === 'POSTMAN_DEVSPACE_RECOVERY_NOT_REQUIRED'))
+  assert.equal(f.launches.length, 2)
+})
+
+test('MCP recovery: second temporary recovery succeeds before the third attempt', async t => {
+  const f = fixture(t, ['transport_diagnostic', 'transport_diagnostic', 'bell'])
+  capabilityFallback(f, 'CAPABILITY_UNAVAILABLE: DevSpace MCP request timed out.')
+  const jobs = f.make()
+  t.after(() => jobs.dispose())
+  const first = await jobs.accept(f.leader, '@PostmanDevspace finish missing step', 'devspace', undefined, undefined, 'READ_ONLY')
+  for (let i = 0; i < 100; i++) await tick()
+  const status = await jobs.status(f.leader, first.bridgeJobId)
+  assert.deepEqual(status.recovery.attempts.map(value => value.attempt), [1, 2])
+  assert.equal(status.recovery.resultJobId, f.launches[2].binding.jobId)
+  assert.equal(status.recovery.exhausted, false)
+  assert.equal(f.launches.length, 3)
+})
+
+for (const code of ['UNAVAILABLE', 'MCP_TIMEOUT', 'ETIMEDOUT', 'ECONNRESET', 'CONNECTION_FAILURE'])
+test('MCP recovery: structured transient error code ' + code + ' recovers', async t => {
+  const f = fixture(t, ['transport_diagnostic', 'bell'])
+  capabilityFallback(f, 'The MCP call failed.', { diagnostic: 'UNKNOWN', code })
+  const jobs = f.make()
+  t.after(() => jobs.dispose())
+  const first = await jobs.accept(f.leader, '@PostmanDevspace inspect', 'devspace', undefined, undefined, 'READ_ONLY')
+  for (let i = 0; i < 100; i++) await tick()
+  assert.equal((await jobs.status(f.leader, first.bridgeJobId)).recovery.attempts.length, 1)
+  assert.equal(f.launches.length, 2)
+})
+
+test('MCP recovery: ordinary delivered text mentioning timeout is not a failed MCP call', async t => {
+  const f = fixture(t)
+  capabilityFallback(f, 'The documentation describes timeout and UNAVAILABLE handling.', { diagnostic: 'UNKNOWN' })
+  const jobs = f.make()
+  t.after(() => jobs.dispose())
+  const first = await jobs.accept(f.leader, '@PostmanDevspace summarize documentation', 'devspace', undefined, undefined, 'READ_ONLY')
+  for (let i = 0; i < 80; i++) await tick()
+  const status = await jobs.status(f.leader, first.bridgeJobId)
+  assert.equal(status.recovery.classification.kind, 'received')
+  assert.deepEqual(status.recovery.attempts, [])
+  assert.equal(f.launches.length, 1)
+})
+
+for (const [text, extra] of [
+  ['CAPABILITY_UNAVAILABLE: no reason supplied', {}],
+  ['CAPABILITY_UNAVAILABLE: DevSpace MCP tool not found; previous call was UNAVAILABLE.', {}],
+  ['CAPABILITY_UNAVAILABLE: MCP -32601 Method not found (not a timeout).', {}],
+  ['CAPABILITY_UNAVAILABLE: connector schema does not support execution/background; previous timeout.', {}],
+  ['CAPABILITY_UNAVAILABLE: инструмент DevSpace отсутствует в установленном соединителе.', {}],
+  ['CAPABILITY_UNAVAILABLE: DevSpace permanently unavailable after timeout.', {}],
+  ['CAPABILITY_UNAVAILABLE: DevSpace MCP UNAVAILABLE; permission denied for requested scope.', {}],
+  ['CAPABILITY_UNAVAILABLE: MCP UNAVAILABLE; access denied.', {}],
+  ['CAPABILITY_UNAVAILABLE: MCP UNAVAILABLE; out of approved scope.', {}],
+  ['CAPABILITY_UNAVAILABLE: MCP UNAVAILABLE; NEED_DECISION.', {}],
+  ['CAPABILITY_UNAVAILABLE: DevSpace MCP UNAVAILABLE; не авторизован.', {}],
+  ['Tool is not registered in the connector; MCP was UNAVAILABLE.', { diagnostic: 'UNKNOWN' }],
+  ['MCP method not found after timeout.', { diagnostic: 'UNKNOWN', code: 'METHOD_NOT_FOUND' }],
+  ['Scope violation after MCP timeout.', { diagnostic: 'UNKNOWN', code: 'SCOPE_VIOLATION' }],
+  ['CAPABILITY_UNAVAILABLE: MCP UNAVAILABLE; PERMISSION_DENIED.', {}],
+  ['CAPABILITY_UNAVAILABLE: MCP UNAVAILABLE; SCOPE_DENIED.', {}],
+  ['CAPABILITY_UNAVAILABLE: MCP UNAVAILABLE because token expired, login required.', {}],
+  ['CAPABILITY_UNAVAILABLE: MCP UNAVAILABLE because token expired.', {}],
+  ['CAPABILITY_UNAVAILABLE: MCP UNAVAILABLE because login required.', {}],
+  ['CAPABILITY_UNAVAILABLE: MCP UNAVAILABLE: expired token.', {}],
+  ['CAPABILITY_UNAVAILABLE: MCP UNAVAILABLE: TOKEN_EXPIRED.', {}],
+  ['MCP UNAVAILABLE.', { diagnostic: 'UNKNOWN', code: 'TOKEN_EXPIRED' }],
+  ['CAPABILITY_UNAVAILABLE: MCP UNAVAILABLE due to missing response; login required.', {}],
+  ['CAPABILITY_UNAVAILABLE: MCP UNAVAILABLE due to missing tool in connector; previous missing response.', {}],
+  ['CAPABILITY_UNAVAILABLE: MCP UNAVAILABLE; unsupported parameter: execution.', {}],
+  ["CAPABILITY_UNAVAILABLE: MCP UNAVAILABLE; unrecognized key(s) in object: 'execution'.", {}],
+  ["CAPABILITY_UNAVAILABLE: MCP UNAVAILABLE; unknown parameter 'job_id'.", {}],
+  ["CAPABILITY_UNAVAILABLE: MCP UNAVAILABLE; schema validation failed: unexpected property 'execution'.", {}],
+  ["CAPABILITY_UNAVAILABLE: MCP UNAVAILABLE; status requires argument 'command' in the installed schema.", {}],
+  ['CAPABILITY_UNAVAILABLE: previous timeout; MCP error.', { code: -32601 }],
+  ['CAPABILITY_UNAVAILABLE: previous timeout; MCP error.', { code: -32602 }],
+  ['CAPABILITY_UNAVAILABLE: MCP UNAVAILABLE.', { recoveryEligible: false }],
+]) test('MCP recovery: permanent or decision refusal never retries: ' + text, async t => {
+  const f = fixture(t)
+  capabilityFallback(f, text, extra)
+  const jobs = f.make()
+  t.after(() => jobs.dispose())
+  const first = await jobs.accept(f.leader, '@PostmanDevspace only permitted scope', 'devspace', undefined, undefined, 'READ_ONLY')
+  for (let i = 0; i < 80; i++) await tick()
+  const status = await jobs.status(f.leader, first.bridgeJobId, false, true)
+  assert.equal(status.status, 'POSTMAN_DEVSPACE_RECOVERY_LEADER_DECISION_REQUIRED')
+  assert.equal(status.recovery.classification.kind, 'decision')
+  assert.deepEqual(status.recovery.attempts, [])
+  assert.equal(f.launches.length, 1)
+})
+
 for (const source of ['bell', 'text_fallback']) test('review2: ambiguous temporary BLOCKED ' + source + ' recovers', async t => {
   const f = fixture(t, [source, 'bell']), originalWait = f.direct.wait
   f.direct.wait = async (...args) => {
