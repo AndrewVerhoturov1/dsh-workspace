@@ -670,17 +670,26 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     if (result?.reportedOutcome === 'DONE' || sourceOutcome === 'DONE')
       return { kind: 'received', reason: 'result-received-not-engineering-pass' }
     const codes = [result?.diagnostic, result?.transportCode, result?.code,
-      op.devspace?.hostFailure?.status, op.devspace?.hostFailure?.diagnostic].filter(value => typeof value === 'string').join(' ')
+      op.devspace?.hostFailure?.status, op.devspace?.hostFailure?.diagnostic]
+      .filter(value => typeof value === 'string' || typeof value === 'number').join(' ')
+    const failureText = [codes, result?.message, result?.assistantText,
+      result?.transportDiagnostics?.recoverySourceMessage, op.devspace?.hostFailure?.diagnostic]
+      .filter(value => typeof value === 'string').map(value => value.slice(0, 2000)).join('\n')
+    // CAPABILITY_UNAVAILABLE is an observer marker, not an MCP error category.
+    // Its retained text distinguishes temporary transport failure from an absent
+    // tool/schema. Explicit permanent/authority refusals below always win.
+    const temporaryPattern = /\b(?:(?:MCP_|TOOL_)?UNAVAILABLE|(?:MCP_|ERR_)?TIMEOUT|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENETUNREACH|EHOSTUNREACH|CONNECTION_(?:FAILED|FAILURE)|NETWORK_ERROR)\b|timed?\s*out|temporar(?:y|ily)\s+(?:\w+\s+){0,3}unavailable|connection\s+(?:failure|failed|refused|reset|closed)|failed to connect|fetch failed|временно\s+недоступ|тайм[ -]?аут|(?:сбой|ошибка)\s+(?:соединения|подключения)/i
+    const temporary = temporaryPattern.test(failureText)
+    const permanentCapability = /\b(?:TOOL_NOT_FOUND|METHOD_NOT_FOUND|UNKNOWN_TOOL|INVALID_PARAMS|UNSUPPORTED_(?:TOOL|PARAMETER|EXECUTION)|SCHEMA_(?:MISMATCH|UNSUPPORTED))\b|(?:^|\s)-3260[12]\b|permanent(?:ly)?\s+unavailable|(?:tool|method)\s+not found|(?:tool|capability|connector|schema)[^\n]{0,100}(?:not (?:installed|configured|supported|registered)|does not (?:exist|support)|missing)|(?:инструмент|соединитель|DevSpace)[^\n]{0,100}(?:отсутствует|не (?:установлен|подключен|поддержива))|постоянно недоступ/i.test(failureText)
     const blocker = result?.reportedOutcome === 'NEED_DECISION' || sourceOutcome === 'NEED_DECISION' ||
       sourceObserved && !['DONE', 'BLOCKED', 'NEED_DECISION'].includes(sourceOutcome) || result?.recoveryEligible === false ||
       result?.transportDiagnostics?.supersededByUserTurn === true ||
-      /(?:NEED_DECISION|LEADER_DECISION_REQUIRED|PERMISSION_(?:DENIED|REQUIRED)|INPUT_PROVENANCE_REJECTED|ACCESS_DENIED|SCOPE_(?:DENIED|INVALID)|SAFETY|SECURITY|CAPABILITY_UNAVAILABLE|PERMANENT|CALLER_REJECTED|BINDING_(?:CHANGED|INVALID)|REPROOF_FAILED|WORKTREE_NOT_READY|LUNA_UNAVAILABLE)/i.test(codes) ||
-      /(?:NEED_DECISION|NEEDS_(?:PARENT|LEADER)_GUIDANCE|permission denied|access denied|new (?:user )?permission required|out of (?:the )?(?:approved )?scope|нет разрешения|требуется (?:новое )?разрешение|отказано в доступе|постоянно недоступ)/i
-        .test([result?.message, result?.assistantText, result?.transportDiagnostics?.recoverySourceMessage,
-          op.devspace?.hostFailure?.diagnostic]
-          .filter(value => typeof value === 'string').map(value => value.slice(0, 2000)).join('\n'))
+      /(?:NEED_DECISION|LEADER_DECISION_REQUIRED|PERMISSION_(?:DENIED|REQUIRED)|INPUT_PROVENANCE_REJECTED|ACCESS_DENIED|SCOPE_(?:DENIED|INVALID|VIOLATION)|UNAUTHENTICATED|FORBIDDEN|AUTH(?:ORIZATION|ENTICATION)_REQUIRED|SAFETY|SECURITY|PERMANENT|CALLER_REJECTED|BINDING_(?:CHANGED|INVALID)|REPROOF_FAILED|WORKTREE_NOT_READY|LUNA_UNAVAILABLE)/i.test(codes) ||
+      permanentCapability || /CAPABILITY_UNAVAILABLE/i.test(codes) && !temporary ||
+      /(?:NEED_DECISION|NEEDS_(?:PARENT|LEADER)_GUIDANCE|PERMISSION_(?:DENIED|REQUIRED)|ACCESS_DENIED|SCOPE_(?:DENIED|INVALID|VIOLATION)|permission denied|access denied|unauthori[sz]ed|forbidden|(?:new (?:user )?)?permission required|(?:authentication|authorization) required|out of (?:the )?(?:approved )?scope|нет (?:разрешения|прав|авторизации)|не авторизован|требуется (?:новое )?разрешение|отказано в доступе)/i.test(failureText)
     if (blocker) return { kind: 'decision', reason: 'permission-scope-or-leader-decision-required' }
-    const retry = result?.reportedOutcome === 'BLOCKED' || sourceOutcome === 'BLOCKED' || result?.diagnostic === 'BLOCKED' ||
+    const retry = temporaryPattern.test(codes) || /CAPABILITY_UNAVAILABLE/i.test(codes) && temporary ||
+      result?.reportedOutcome === 'BLOCKED' || sourceOutcome === 'BLOCKED' || result?.diagnostic === 'BLOCKED' ||
       result?.source === 'transport_diagnostic' || result?.diagnostic === 'PARTIAL' ||
       op.terminal?.terminalStatus === 'FAILED' || result?.ok === false ||
       !op.terminal && ['unknown', 'pending'].includes(op.state)
