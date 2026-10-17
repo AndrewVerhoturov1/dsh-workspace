@@ -4,6 +4,7 @@ import { createServer as createHttpServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {dshWriters,startWriterControl} from './writer-runtime.mjs';
+import {prepareRuntime} from './prepare-runtime.mjs';
 
 const allowed = new Set(['requestId', 'method', 'status', 'durationMs', 'success', 'tool', 'commandLength']);
 export function safeRecord(event, fields = {}) {
@@ -25,6 +26,7 @@ export function appendLog(file, record, maxBytes = 2 * 1024 * 1024) {
 }
 async function main() {
   const root = dirname(fileURLToPath(import.meta.url));
+  prepareRuntime(root, {check:true});
   mkdirSync(join(root, 'logs'), { recursive: true });
   const write = (event, fields) => appendLog(join(root, 'logs', 'requests.jsonl'), safeRecord(event, fields));
   // Upstream errors can contain file contents and command text. Persist only these fields.

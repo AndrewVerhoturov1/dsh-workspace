@@ -16,7 +16,7 @@ export async function createBackgroundFixture({patched=true}={}) {
   const pkg=join(root,'node_modules/@waishnav/devspace'),upstream=join(install,'node_modules/@waishnav/devspace');
   mkdirSync(pkg,{recursive:true});cpSync(join(upstream,'dist'),join(pkg,'dist'),{recursive:true});
   copyFileSync(join(upstream,'package.json'),join(pkg,'package.json'));
-  for(const name of ['pi-tools.js','server.js']) {
+  for(const name of ['pi-tools.js','server.js','tool-surfaces/claude.js']) {
     const original=join(upstream,'dist',name+'.dsh-original');
     if(existsSync(original))copyFileSync(original,join(pkg,'dist',name));
   }
