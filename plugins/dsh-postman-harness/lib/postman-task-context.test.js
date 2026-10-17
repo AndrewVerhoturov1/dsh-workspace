@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { resolve } from 'node:path'
+import { resolve,join,dirname } from 'node:path'
+import { mkdtemp,writeFile,rm } from 'node:fs/promises'
+import {tmpdir} from 'node:os'
 import { createPostmanTaskContexts, POSTMAN_TASK_BRANCH_PATTERN } from './postman-task-context.js'
 import { createMemoryTaskRegistry } from './postman-task-registry.js'
 import { createPostmanTaskPrepareTool } from './postman-bridge.js'
@@ -70,7 +72,7 @@ function fixture(options = {}) {
     if (verb === 'merge' && rest[0] === '--ff-only') { state.head = rest[1]; return '' }
     throw new Error('Unexpected git command: ' + JSON.stringify({ cwd, args }))
   }
-  const contexts = createPostmanTaskContexts({ registry, gitCommand, localDevelopment: options.localDevelopment, preserveChanges: options.preserveChanges ?? (async () => 'fixture-recovery'), realPath: options.realPath ?? (async path => path),
+  const contexts = createPostmanTaskContexts({ registry, gitCommand, writerControlFile:options.writerControlFile, localDevelopment: options.localDevelopment, preserveChanges: options.preserveChanges ?? (async () => 'fixture-recovery'), realPath: options.realPath ?? (async path => path),
     temporaryDirectory: () => resolve('C:/Users/Andrew/AppData/Local/Temp'),
     makeDirectory: async () => options.directory ?? (directories++ === 0 ? worktree : worktree + '-isolated-' + directories) })
   return { contexts, state, calls, registry, gitCommand }
@@ -726,6 +728,27 @@ test('archived and retired writers deny only overlapping Worker/runner admission
     assert.equal(f.contexts.beginOperation('A'),allowed,JSON.stringify(patch))
     if(allowed)await f.contexts.endOperation('A')
   }
+})
+
+test('ordinary private census gates actual Worker admission by overlapping root and clears without administrative unlock',async t=>{
+  const directory=await mkdtemp(join(tmpdir(),'postman-ordinary-admission-')),file=join(directory,'writer-control.json')
+  t.after(()=>{assert.equal(dirname(resolve(directory)),resolve(tmpdir()));return rm(directory,{recursive:true,force:true})})
+  const f=fixture({writerControlFile:file}),parent=leader('ordinary-admission'),token=Symbol('worker')
+  await f.contexts.prepare(parent)
+  const root=f.contexts.get(parent.id).worktree
+  for(const roots of [[root],[root+'-independent'],[]]) {
+    await writeFile(file,JSON.stringify({version:1,untrackedRoots:roots}))
+    const expected=!roots.includes(root)
+    assert.equal(f.contexts.beginWorkerAdmission(parent.id,token),expected)
+    if(expected)f.contexts.endWorkerAdmission(parent.id,token)
+    assert.equal((await f.contexts.checkOrdinaryWriterAdmission(parent.id,root)).ok,expected)
+  }
+  await writeFile(file,'{unreadable census')
+  assert.equal(f.contexts.beginWorkerAdmission(parent.id,token),false)
+  assert.equal((await f.contexts.checkOrdinaryWriterAdmission(parent.id,root)).status,'EXIT_UNPROVEN')
+  await writeFile(file,JSON.stringify({version:1,untrackedRoots:[]}))
+  assert.equal(f.contexts.beginWorkerAdmission(parent.id,token),true)
+  f.contexts.endWorkerAdmission(parent.id,token)
 })
 
 test('dirty isolation attempts old operation retirement and preserves unconfirmed outcome without blocking independent tree',async()=>{

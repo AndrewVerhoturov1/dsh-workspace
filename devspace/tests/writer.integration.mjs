@@ -15,7 +15,7 @@ const upstream=join(install,'node_modules/@waishnav/devspace');
 cpSync(join(upstream,'dist'),join(pkg,'dist'),{recursive:true}); copyFileSync(join(upstream,'package.json'),join(pkg,'package.json'));
 copyFileSync(join(upstream,'dist/pi-tools.js.dsh-original'),join(pkg,'dist/pi-tools.js'));
 symlinkSync(join(install,'node_modules'),join(pkg,'node_modules'),'junction');
-for(const name of ['writer-runtime.mjs','writer-process.ps1']) copyFileSync(fileURLToPath(new URL('../'+name,import.meta.url)),join(root,name));
+for(const name of ['writer-runtime.mjs','writer-process.ps1','ordinary-process.ps1']) copyFileSync(fileURLToPath(new URL('../'+name,import.meta.url)),join(root,name));
 const patcher=fileURLToPath(new URL('../prepare-runtime.mjs',import.meta.url));
 assert.equal(spawnSync(process.execPath,[patcher,root],{encoding:'utf8'}).status,0);
 const runtimeModule=await import(pathToFileURL(join(root,'writer-runtime.mjs')));

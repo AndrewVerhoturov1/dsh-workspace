@@ -8,6 +8,7 @@ import {homedir} from 'node:os';
 import {join, resolve, dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {StringDecoder} from 'node:string_decoder';
+import {channel as diagnosticsChannel} from 'node:diagnostics_channel';
 
 const normalize = value => resolve(value).replaceAll('\\','/').toLowerCase();
 const overlaps = (a,b) => { a=normalize(a); b=normalize(b); return a===b || a.startsWith(b+'/') || b.startsWith(a+'/'); };
@@ -16,16 +17,143 @@ const sameSecret = (a,b) => typeof a==='string' && typeof b==='string' && a.leng
 const channelRoot = () => process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA,'DSH','Postman','devspace') : join(homedir(),'.dsh','postman','devspace');
 const denied = code => ({isError:true,content:[{type:'text',text:code}]});
 const nativeHelper = join(dirname(fileURLToPath(import.meta.url)),'writer-process.ps1');
+const ordinaryHelper = join(dirname(fileURLToPath(import.meta.url)),'ordinary-process.ps1');
 
 /** In-memory observations belong to this live server instance. Losing them is UNKNOWN. */
-export function createWriterRuntime({root=channelRoot(), helper=nativeHelper}={}) {
+export function createWriterRuntime({root=channelRoot(), helper=nativeHelper,censusHelper=ordinaryHelper}={}) {
   const local=new AsyncLocalStorage(), records=new Map(), scopes=new Map(), unboundScopes=new Set(), otherTools=new Set();
-  const untrackedRoots=new Set(); let saveCensus=()=>{};
+  const untrackedRoots=new Set(),coldRoots=new Set(); let saveCensus=()=>{};
+  let observer=null,lastCensus=null,observationLost=false,nextTicket=0;
+  const censusWaiters=new Set(),childChannel=diagnosticsChannel('child_process');
   const keyFields=['jobId','requestId','leaderSessionId','branch','writeRoot'];
   const boundedWait=async(promise,ms)=>{
     let timer;try{return await Promise.race([promise,new Promise(resolve=>{timer=setTimeout(()=>resolve(null),ms)})]);}
     finally{clearTimeout(timer);}
   };
+  const ordinaryLeases=()=>[...otherTools].map(other=>({id:other.id,writeRoot:other.writeRoot,
+    state:other.active?'ACTIVE':!other.ordinary || other.observationLost?'UNKNOWN':'POSSIBLE_DESCENDANTS'}));
+  function publishOrdinary() {
+    untrackedRoots.clear();for(const target of coldRoots)untrackedRoots.add(target);
+    for(const other of otherTools)if((other.active || other.unknown) && other.writeRoot)untrackedRoots.add(other.writeRoot);
+    saveCensus([...untrackedRoots],ordinaryLeases());
+  }
+  function loseObservation() {
+    if(observationLost)return;
+    observationLost=true;
+    childChannel.unsubscribe(captureChild);
+    // End only the read-only collector, never the ordinary tool or its children.
+    try{observer?.stdin.end();}catch{}
+    for(const other of otherTools)if(other.ordinary){other.observationLost=true;other.unknown=true;}
+    for(const waiter of censusWaiters)waiter.resolve(null);censusWaiters.clear();
+    try{publishOrdinary();}catch{}
+  }
+  function captureChild({process:child}) {
+    const context=local.getStore();
+    if(context?.censusProbe){context.child=child;return;}
+    if(!context?.ordinary)return;
+    const root={child,pid:null,finished:false};context.children.push(root);
+    child.once('spawn',()=>{root.pid=child.pid;});
+    child.once('exit',()=>{root.finished=true;context.postTicket=requestCensus();});
+    child.once('error',()=>{if(!child.pid)root.finished=true;else context.observationLost=true;});
+  }
+  // A missing intermediate parent is never evidence of absence. Every new live
+  // orphan remains a possible descendant until a subsequent complete census has
+  // no possible descendants. Baseline identities require BOTH PID and birth.
+  function possibleDescendant(other,census) {
+    const roots=new Set(other.children.map(child=>child.pid).filter(Boolean));
+    const visit=(row,seen=new Set())=>{
+      if(roots.has(row.pid))return true;
+      if(other.baseline.get(row.pid)?.birth===row.birth)return false;
+      if(seen.has(row.pid))return true;
+      seen.add(row.pid);
+      const parent=census.rows.get(row.parent);
+      if(!parent || BigInt(parent.birth)>BigInt(row.birth))return true;
+      return visit(parent,seen);
+    };
+    for(const row of census.rows.values())if(visit(row))return true;
+    return false;
+  }
+  function observeOrdinary(census) {
+    let changed=false;
+    for(const other of otherTools)if(other.ordinary && !other.active && !other.observationLost && other.baseline &&
+      census.ack>=other.postTicket && other.children.every(child=>child.finished)) {
+      if(!other.children.length || !possibleDescendant(other,census)){other.unknown=false;otherTools.delete(other);changed=true;}
+    }
+    if(changed)try{publishOrdinary();}catch{loseObservation();}
+  }
+  function requestCensus() {
+    if(!observer || observationLost || !Number.isSafeInteger(nextTicket+1))return Infinity;
+    const ticket=++nextTicket;
+    try{observer.stdin.write(JSON.stringify({ticket})+'\n');}catch{loseObservation();return Infinity;}
+    return ticket;
+  }
+  function waitCensus(ticket) {
+    if(observationLost)return Promise.resolve(null);
+    if(lastCensus && lastCensus.ack>=ticket)return Promise.resolve(lastCensus);
+    const result=Promise.withResolvers(),waiter={ticket,resolve:result.resolve};censusWaiters.add(waiter);
+    return boundedWait(result.promise,5000).then(value=>{if(!value)loseObservation();return value;})
+      .finally(()=>censusWaiters.delete(waiter));
+  }
+  function startObservation() {
+    if(observer || observationLost)return;
+    if(process.platform!=='win32' || process.arch!=='x64'){loseObservation();return;}
+    childChannel.subscribe(captureChild);
+    const probe={censusProbe:true};
+    const child=local.run(probe,()=>spawn('pwsh',['-NoProfile','-NonInteractive','-File',censusHelper,'-OwnerPid',String(process.pid)],
+      {windowsHide:true,stdio:['pipe','pipe','ignore']}));
+    observer=child;
+    if(probe.child!==child){loseObservation();child.stdin.end();return;}
+    child.unref();for(const stream of [child.stdin,child.stdout])stream.unref?.();
+    let buffer='';
+    child.stdout.on('data',data=>{
+      if(observationLost){buffer='';return;}
+      buffer+=data;if(buffer.length>4194304){buffer='';loseObservation();return;}
+      let newline;
+      while((newline=buffer.indexOf('\n'))>=0){
+        const line=buffer.slice(0,newline);buffer=buffer.slice(newline+1);
+        try{
+          const value=JSON.parse(line);
+          if(value.version!==1 || value.error || !Number.isSafeInteger(value.sequence) || value.sequence<1 ||
+            value.sequence<=(lastCensus?.sequence??0) || !Number.isSafeInteger(value.ack) || value.ack<0 || value.ack>nextTicket ||
+            value.ack<(lastCensus?.ack??0) || !Array.isArray(value.rows) || value.rows.length>65536)throw Error('CENSUS_UNAVAILABLE');
+          const rows=new Map();
+          for(const row of value.rows){
+            if(!Number.isSafeInteger(row.pid) || row.pid<0 || !Number.isSafeInteger(row.parent) || row.parent<0 ||
+              !/^[0-9]+$/.test(row.birth) || rows.has(row.pid))throw Error('CENSUS_UNAVAILABLE');
+            rows.set(row.pid,row);
+          }
+          if(!rows.has(process.pid) || !rows.has(child.pid))throw Error('CENSUS_UNAVAILABLE');
+          lastCensus={sequence:value.sequence,ack:value.ack,rows};observeOrdinary(lastCensus);
+          for(const waiter of censusWaiters)if(value.ack>=waiter.ticket){censusWaiters.delete(waiter);waiter.resolve(lastCensus);}
+        }catch{loseObservation();}
+      }
+    });
+    child.stdin.on('error',loseObservation);child.once('error',loseObservation);child.once('close',loseObservation);
+  }
+  async function beginOrdinary(other) {
+    other.ordinary=true;other.id=randomUUID();other.children=[];other.baseline=null;other.postTicket=Infinity;other.observationLost=observationLost;
+    // The durable root barrier precedes the actual upstream spawn/effect.
+    publishOrdinary();startObservation();
+    const census=await waitCensus(requestCensus());
+    if(census && !observationLost)other.baseline=census.rows;
+    else{other.observationLost=true;other.unknown=true;}
+  }
+  async function finishOrdinary(other) {
+    other.active=0;other.postTicket=requestCensus();
+    // The native snapshot must acknowledge a request made after handler/root
+    // completion; a later-arriving pre-effect stdout buffer is insufficient.
+    const census=await waitCensus(other.postTicket);
+    if(census)observeOrdinary(census);
+  }
+  async function ordinaryAdmission(writeRoot) {
+    if(typeof writeRoot!=='string' || !writeRoot)return {ok:false,status:'EXIT_UNPROVEN'};
+    if([...untrackedRoots].some(target=>overlaps(target,writeRoot)) && observer && !observationLost)await waitCensus(requestCensus());
+    const held=[...untrackedRoots].some(target=>overlaps(target,writeRoot));
+    return {ok:!held,status:held?(coldRoots.size && [...coldRoots].some(target=>overlaps(target,writeRoot)) || observationLost?'EXIT_UNPROVEN':'OTHER_WRITER_ACTIVE'):'READY',writeRoot};
+  }
+  function closeObservation() {
+    if(observer){loseObservation();observer.stdin.end();childChannel.unsubscribe(captureChild);}
+  }
   function privateJson(file) {
     const stat=lstatSync(file);
     if(!stat.isFile() || stat.isSymbolicLink() || stat.size>65536 || realpathSync(file)!==resolve(file))throw Error('WRITER_BINDING_CHANGED');
@@ -119,14 +247,20 @@ export function createWriterRuntime({root=channelRoot(), helper=nativeHelper}={}
     const scope=extra?._meta?.['openai/session'];
     const alias=name==='open_workspace' && /^postman-writer:([0-9a-f-]{36})$/.exec(input.path??'');
     let record=typeof scope==='string'?scopes.get(scope):null;
+    // Workspace lookup belongs to the upstream provider. Its errors are not
+    // evidence of a changed Host binding and keep the provider's error path.
+    let target;
+    if(input.workspace_id) target=(await workspaces.getWorkspace(input.workspace_id)).root;
+    else if(name==='open_workspace' && typeof input.path==='string') target=input.path;
+    const validationFailure=error=>denied(error?.message==='WRITER_NATIVE_JOB_UNKNOWN'
+      ? 'WRITER_NATIVE_JOB_UNKNOWN' : 'WRITER_BINDING_CHANGED');
+    if(name==='bash' && ['status','stop'].includes(input.execution)) {
+      try{record=ownControl(input,scope,target);}catch(error){return validationFailure(error);}
+      return await local.run(record,operation);
+    }
     try {
-      let target;
-      if(input.workspace_id) target=(await workspaces.getWorkspace(input.workspace_id)).root;
-      else if(name==='open_workspace' && typeof input.path==='string') target=input.path;
-      if(name==='bash' && ['status','stop'].includes(input.execution)) {
-        record=ownControl(input,scope,target);
-        return await local.run(record,operation);
-      }
+      if(name==='open_workspace' && typeof input.path==='string' && input.path.startsWith('postman-writer:') && !alias)
+        return denied('WRITER_BINDING_CHANGED');
       if(alias) {
         if(process.platform!=='win32' || !scope || unboundScopes.has(scope)) return denied('DEVSPACE_NATIVE_PROOF_UNAVAILABLE');
         const owned=binding(alias[1]); record=records.get(owned.jobId);
@@ -159,17 +293,32 @@ export function createWriterRuntime({root=channelRoot(), helper=nativeHelper}={}
           (!other.settlementIssued || other.active || other.unknown || !revoked(other)))) return denied('WRITER_BINDING_REQUIRED');
         if(scope) unboundScopes.add(scope);
       }
-      if(readOnly) return await operation();
-      if(!record) {
-        const unknown=name==='bash' || name==='open_workspace' && input.mode==='worktree';
-        if(unknown && target){untrackedRoots.add(target);saveCensus();}
-        const other={writeRoot:target,active:1,unknown}; otherTools.add(other);
-        try{return await local.run(other,operation);}
-        finally{other.active=0;if(!other.unknown)otherTools.delete(other);}
+    } catch(error){return validationFailure(error);}
+    // No Host validation catch surrounds operation(): thrown/rejected upstream
+    // errors and structured isError results retain their original semantics.
+    if(readOnly) return await operation();
+    if(!record) {
+      const unknown=name==='bash' || name==='open_workspace' && input.mode==='worktree';
+      const other={id:randomUUID(),writeRoot:target,active:1,unknown}; otherTools.add(other);
+      let effectStarted=false;
+      try{
+        try{
+          if(name==='bash' && target)await beginOrdinary(other);
+          else if(unknown && target){coldRoots.add(target);publishOrdinary();}
+          else publishOrdinary();
+        }catch(error){return denied(error?.message==='WRITER_CONTROL_GENERATION_CHANGED'
+          ? 'WRITER_CONTROL_GENERATION_CHANGED' : 'DEVSPACE_ORDINARY_CENSUS_UNAVAILABLE');}
+        effectStarted=true;return await local.run(other,operation);
       }
-      record.active++;
-      try{return await local.run(record,operation);}finally{record.active--;clearFiniteHold(record);}
-    } catch{return denied('WRITER_BINDING_CHANGED');}
+      finally{
+        other.active=0;
+        if(!effectStarted){other.unknown=false;otherTools.delete(other);try{publishOrdinary();}catch{}}
+        else if(other.ordinary){try{await finishOrdinary(other);}catch{other.observationLost=true;other.unknown=true;try{publishOrdinary();}catch{}}}
+        else if(!other.unknown){otherTools.delete(other);try{publishOrdinary();}catch{}}
+      }
+    }
+    record.active++;
+    try{return await local.run(record,operation);}finally{record.active--;clearFiniteHold(record);}
   }
   function snapshot(job) {
     return {native_job_id:job.id,state:job.unknown?'UNKNOWN':job.treeSettled?'TREE_SETTLED':job.stopRequested?'STOP_REQUESTED':job.startedObserved?'BACKGROUND_RUNNING':'STARTING',
@@ -332,28 +481,29 @@ export function createWriterRuntime({root=channelRoot(), helper=nativeHelper}={}
     }catch{return {ok:false,code:'WRITER_BINDING_CHANGED'};}
   }
   function restoreCensus(saved,persist){
-    if(Array.isArray(saved))for(const target of saved)if(typeof target==='string' && target)untrackedRoots.add(target);
-    saveCensus=()=>persist([...untrackedRoots]);
+    if(Array.isArray(saved))for(const target of saved)if(typeof target==='string' && target){untrackedRoots.add(target);coldRoots.add(target);}
+    saveCensus=(roots,leases)=>persist(roots,leases);
   }
-  return {runTool,bashOperations,background,reconcile,restoreCensus,untrackedRoots:()=>[...untrackedRoots]};
+  return {runTool,bashOperations,background,reconcile,restoreCensus,ordinaryAdmission,ordinaryLeases,closeObservation,untrackedRoots:()=>[...untrackedRoots]};
 }
 
 /** A private loopback controller; neither MCP nor a model can submit an exit receipt. */
 export async function startWriterControl(runtime,{file=join(homedir(),'.dsh','devspace','writer-control.json')}={}) {
   const secret=randomBytes(32).toString('hex');
   const server=createServer(async(req,res)=>{
-    if(req.method!=='POST' || req.url!=='/reconcile' || !sameSecret(req.headers.authorization,'Bearer '+secret)) {
+    if(req.method!=='POST' || !['/reconcile','/ordinary-admission'].includes(req.url) || !sameSecret(req.headers.authorization,'Bearer '+secret)) {
       res.writeHead(403); res.end(); return;
     }
     let body='';
     try {
       for await(const chunk of req) { body+=chunk; if(body.length>65536) throw Error('Too large'); }
-      const result=runtime.reconcile(JSON.parse(body));
+      const input=JSON.parse(body),result=req.url==='/ordinary-admission'?await runtime.ordinaryAdmission(input.writeRoot):runtime.reconcile(input);
       res.writeHead(200,{'content-type':'application/json'}); res.end(JSON.stringify(result));
     } catch { res.writeHead(400); res.end(); }
   });
   await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});
   const descriptor={version:1,port:server.address().port,secret};
+  let persistenceActive=true;
   const persist=value=>{
     if(existsSync(file) && lstatSync(file).isSymbolicLink())throw Error('Writer control redirected');
     const temporary=file+'.'+randomUUID()+'.tmp';
@@ -362,12 +512,19 @@ export async function startWriterControl(runtime,{file=join(homedir(),'.dsh','de
   let previous;
   try{if(existsSync(file))previous=JSON.parse(readFileSync(file,'utf8'));}
   catch(error){server.close();throw error;}
-  runtime.restoreCensus(previous?.untrackedRoots,roots=>persist({...descriptor,untrackedRoots:roots}));
-  try { persist({...descriptor,untrackedRoots:runtime.untrackedRoots()}); }
+  runtime.restoreCensus(previous?.untrackedRoots,(roots,leases)=>{
+    if(!persistenceActive)return;
+    // A delayed old observer must never replace a newer controller descriptor.
+    if(JSON.parse(readFileSync(file,'utf8')).secret!==secret)throw Error('WRITER_CONTROL_GENERATION_CHANGED');
+    persist({...descriptor,untrackedRoots:roots,ordinaryLeases:leases});
+  });
+  try { persist({...descriptor,untrackedRoots:runtime.untrackedRoots(),ordinaryLeases:runtime.ordinaryLeases()}); }
   catch(error) { server.close(); throw error; }
   return {file,port:descriptor.port,close:async()=>{
+    persistenceActive=false;
+    runtime.closeObservation();
     await new Promise(resolve=>server.close(resolve));
-    try { if(JSON.parse(readFileSync(file,'utf8')).secret===secret)persist({version:1,untrackedRoots:runtime.untrackedRoots()}); } catch {}
+    try { if(JSON.parse(readFileSync(file,'utf8')).secret===secret)persist({version:1,untrackedRoots:runtime.untrackedRoots(),ordinaryLeases:runtime.ordinaryLeases()}); } catch {}
   }};
 }
 

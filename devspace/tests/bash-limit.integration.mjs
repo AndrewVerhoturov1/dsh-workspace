@@ -17,7 +17,7 @@ const surfaceSource=join(install,'node_modules/@waishnav/devspace/dist/tool-surf
 const surfaceOriginal=readFileSync(existsSync(surfaceSource+'.dsh-original')?surfaceSource+'.dsh-original':surfaceSource);
 const surface=join(pkg,'dist/tool-surfaces/claude.js');writeFileSync(surface,surfaceOriginal);
 symlinkSync(join(install,'node_modules'),join(pkg,'node_modules'),'junction');
-for(const name of ['writer-runtime.mjs','writer-process.ps1']) copyFileSync(fileURLToPath(new URL('../'+name,import.meta.url)),join(root,name));
+for(const name of ['writer-runtime.mjs','writer-process.ps1','ordinary-process.ps1']) copyFileSync(fileURLToPath(new URL('../'+name,import.meta.url)),join(root,name));
 const patcher=fileURLToPath(new URL('../prepare-runtime.mjs',import.meta.url));
 assert.equal(spawnSync(process.execPath,[patcher,root],{encoding:'utf8'}).status,0);
 const patched=readFileSync(file,'utf8');

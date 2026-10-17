@@ -1,7 +1,42 @@
 import {readFileSync, lstatSync, realpathSync, unlinkSync} from 'node:fs'
 import {homedir} from 'node:os'
-import {join, resolve} from 'node:path'
+import {join, resolve, isAbsolute} from 'node:path'
 import {loadDevspaceChannelForOwner} from './postman-devspace.js'
+
+const controlPath=controlFile=>controlFile??join(homedir(),'.dsh','devspace','writer-control.json')
+const normalized=root=>resolve(root).replaceAll('\\','/').toLowerCase()
+const overlaps=(a,b)=>{a=normalized(a);b=normalized(b);return a===b||a.startsWith(b+'/')||b.startsWith(a+'/')}
+function ordinaryCensus(controlFile) {
+  const file=controlPath(controlFile)
+  let info
+  try {info=lstatSync(file)} catch(error) {if(error.code==='ENOENT')return {untrackedRoots:[]};throw error}
+  if(info.isSymbolicLink() || info.size>1048576 || realpathSync(file)!==resolve(file))throw Error('DEVSPACE_ORDINARY_CENSUS_UNAVAILABLE')
+  const census=JSON.parse(readFileSync(file,'utf8'))
+  if(census.version!==1 || census.untrackedRoots!==undefined && (!Array.isArray(census.untrackedRoots) ||
+    census.untrackedRoots.some(root=>typeof root!=='string'||!root||!isAbsolute(root))))throw Error('DEVSPACE_ORDINARY_CENSUS_UNAVAILABLE')
+  return {...census,untrackedRoots:census.untrackedRoots??[]}
+}
+
+/** Advisory admission only; absence of a known lease is never native exit proof. */
+export function devspaceOrdinaryWriterConflict(writeRoot,{controlFile}={}) {
+  try {return ordinaryCensus(controlFile).untrackedRoots.some(root=>overlaps(writeRoot,root))}
+  catch {return true}
+}
+export async function checkDevspaceOrdinaryWriterAdmission(writeRoot,{controlFile}={}) {
+  const unavailable=()=>({ok:false,status:'EXIT_UNPROVEN'})
+  try {
+    const census=ordinaryCensus(controlFile)
+    if(!census.untrackedRoots.some(root=>overlaps(writeRoot,root)))return {ok:true,status:'READY'}
+    if(!Number.isSafeInteger(census.port)||census.port<1||census.port>65535||!/^[0-9a-f]{64}$/.test(census.secret??''))return unavailable()
+    const response=await fetch('http://127.0.0.1:'+census.port+'/ordinary-admission',{method:'POST',signal:AbortSignal.timeout(3000),
+      headers:{'content-type':'application/json','authorization':'Bearer '+census.secret},body:JSON.stringify({writeRoot})})
+    if(!response.ok)return unavailable()
+    const result=await response.json()
+    if(result.writeRoot!==writeRoot || !['READY','OTHER_WRITER_ACTIVE','EXIT_UNPROVEN'].includes(result.status))return unavailable()
+    if(result.status==='READY')return result.ok===true ? {ok:true,status:'READY'} : unavailable()
+    return result.ok===false ? {ok:false,status:result.status} : unavailable()
+  } catch {return unavailable()}
+}
 
 /** A native background/pending lease survives a delivered web result. Reading
  * it can only retain the original granted root, never prove native settlement. */

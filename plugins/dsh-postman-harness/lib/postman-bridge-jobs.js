@@ -373,6 +373,18 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     const prior = admissionTails.get('host') ?? Promise.resolve()
     const admit = async () => {
       try {
+        // Ordinary native leases are checked before entering the launch queue.
+        // Their external completion has no coordinator wake event. A later race
+        // remains guarded by the MCP runtime immediately before tool effects.
+        if(transportKind==='devspace' && ['WRITE_ISOLATED','WRITE_APPROVED_TARGET'].includes(devspaceMode) &&
+          typeof contexts.checkOrdinaryWriterAdmission==='function') {
+          const ordinary=await contexts.checkOrdinaryWriterAdmission(parent.id,approvedScope?.root??taskContext?.worktree)
+          if(ordinary?.ok!==true)return {status:'POSTMAN_TASK_CONTEXT_BUSY',
+            diagnostic:{code:ordinary?.status==='OTHER_WRITER_ACTIVE'?'OTHER_WRITER_ACTIVE':'DEVSPACE_ORDINARY_WRITER_EXIT_UNPROVEN'},
+            alternative:'START_IN_NEW_ISOLATED_WORKSPACE'}
+          if(contexts.get(parent.id)!==taskContext || ctx.agents.get(parent.id)!==parent)
+            return {status:'POSTMAN_TASK_CONTEXT_BUSY',diagnostic:{code:'POSTMAN_TASK_CONTEXT_CHANGED'}}
+        }
         // Read-only refusal is deterministic even if the durable storage backend
         // is unavailable. The atomic check below remains the admission authority.
         const existing = contexts.record?.(parent.id)

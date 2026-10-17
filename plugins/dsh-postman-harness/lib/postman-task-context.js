@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { mkdtemp, realpath, stat, writeFile, unlink } from 'node:fs/promises'
 import { createMemoryTaskRegistry } from './postman-task-registry.js'
-import { observeDevspaceWriter,devspaceWriterHoldRoot,readDevspaceWriterHold,clearDevspaceWriterHold } from './postman-writer-proof.js'
+import { observeDevspaceWriter,devspaceWriterHoldRoot,readDevspaceWriterHold,clearDevspaceWriterHold,
+  devspaceOrdinaryWriterConflict,checkDevspaceOrdinaryWriterAdmission } from './postman-writer-proof.js'
 import {loadDevspaceChannelForOwner,revokeDevspaceChannel} from './postman-devspace.js'
 import { homedir, tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
@@ -813,6 +814,7 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
   function hasConflictingRetiredWriter(leaderId) {
     const current = registry.get(leaderId)
     if (!current?.worktree) return false
+    if(devspaceOrdinaryWriterConflict(current.worktree,{controlFile:writerControlFile}))return true
     const target = normalize(current.worktree)
     const overlaps = root => {
       if (typeof root !== 'string' || !root) return false
@@ -833,6 +835,10 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
           op.devspace?.approvedAccess === 'write' ? op.devspace.approvedRoot :
             op.devspace?.mode === 'WRITE_ISOLATED' ? task.worktree : null)
       }))
+  }
+  async function checkOrdinaryWriterAdmission(leaderId,writeRoot) {
+    if(!get(leaderId))return {ok:false,status:'EXIT_UNPROVEN'}
+    return checkDevspaceOrdinaryWriterAdmission(writeRoot,{controlFile:writerControlFile})
   }
   async function reconcileWriter(leaderId, bridgeJobId) {
     const reject = code => ({status:'POSTMAN_WRITER_EXIT_UNPROVEN', diagnostic:{code},
@@ -989,7 +995,7 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
   function dispose() { contexts.clear(); children.clear(); pending.clear(); activeOperations.clear(); syncOperations.clear(); syncQueues.clear(); workerAdmissions.clear(); contextListeners.clear() }
   return { readLedger: id => registry.readLedger(id),
     changeLedger: (id, fn) => registry.changeLedger(id, fn),
-    prepare, prepareReadOnly, recover, close, restore, sync, beginSync, endSync, verifyWorktree, verifyDirectPublication, get, record, records, changeRecord, onContextChange, isRestoring, hasActiveOperation, hasSyncOperation, canRetireWorkers, beginWorkerAdmission, endWorkerAdmission, beginOperation, startRunner, endOperation, reserveRestore, releaseRestore, bindChild, child, devspaceBinding, recordBridgeRequest, releaseChild, reconcileWriter, hasConflictingRetiredWriter, dispose }
+    prepare, prepareReadOnly, recover, close, restore, sync, beginSync, endSync, verifyWorktree, verifyDirectPublication, get, record, records, changeRecord, onContextChange, isRestoring, hasActiveOperation, hasSyncOperation, canRetireWorkers, beginWorkerAdmission, endWorkerAdmission, beginOperation, startRunner, endOperation, reserveRestore, releaseRestore, bindChild, child, devspaceBinding, recordBridgeRequest, releaseChild, reconcileWriter, checkOrdinaryWriterAdmission, hasConflictingRetiredWriter, dispose }
 }
 
 // Both entrypoints use one facade. Initialization is awaited before Git/child actions;
