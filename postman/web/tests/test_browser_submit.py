@@ -339,7 +339,7 @@ console.log(JSON.stringify({length: actual.length, sha256: hash(actual), joined,
         self.assertEqual(result["code"], submit.EXISTING_CHAT_CONFIRMED)
         self.assertTrue(result["details"]["sameConversation"])
 
-    def test_strict_history_requires_semantic_markup_and_unique_prior_anchor(self):
+    def test_owned_history_missing_or_ambiguous_old_anchor_is_diagnostic(self):
         class Collection:
             def __init__(self, items): self.items = items
             def count(self): return len(self.items)
@@ -361,7 +361,9 @@ console.log(JSON.stringify({length: actual.length, sha256: hash(actual), joined,
         cases = [([Bubble("ordinary")], "history_prior_anchor_missing"),
                  ([Bubble("POSTMAN_REQUEST_ID: prior"), Bubble("POSTMAN_REQUEST_ID: prior")], "history_prior_anchor_ambiguous")]
         for turns, reason in cases:
-            with self.subTest(reason=reason): self.assertEqual(submit._read_user_history(Page(turns), "prior"), (None, reason))
+            with self.subTest(reason=reason):
+                self.assertEqual(submit._read_user_history(Page(turns), "prior"),
+                                 ([turn.text for turn in turns], reason))
 
     def test_strict_history_distinguishes_missing_unknown_and_read_failures(self):
         class Locator:
@@ -443,7 +445,9 @@ console.log(JSON.stringify({length: actual.length, sha256: hash(actual), joined,
     def test_continuation_uses_loaded_history_as_baseline_and_unknown_never_resends(self):
         url = "https://chatgpt.com/c/existing-123"
         prior = "REQ_20261001T041338Z_9561"
-        history = [f"POSTMAN_REQUEST_ID: {prior}\nEarlier task"]
+        # The old REQ can be virtualized out of the visible transcript. A stable
+        # current history in the owned saved chat still allows a new message.
+        history = ["Earlier task without the old REQ anchor"]
         page = FakePage(url=url, turn_count=1, user_turns=history)
         page.bound_url = url
         class Payload(FakeLocator):
@@ -461,6 +465,7 @@ console.log(JSON.stringify({length: actual.length, sha256: hash(actual), joined,
         self.assertTrue(result["ok"], result)
         self.assertEqual(page.user_turns, history + ["next prompt"])
         self.assertEqual(page.click_count, 1)
+        self.assertEqual(result["details"]["priorHistoryReason"], "history_prior_anchor_missing")
 
         uncertain = FakePage(url=url, turn_count=1, user_turns=history, click_error="uncertain")
         uncertain._postman_presend = {"sendAttempted": False}
@@ -485,6 +490,40 @@ console.log(JSON.stringify({length: actual.length, sha256: hash(actual), joined,
                                    retry_guard, timeout_ms=0)
         self.assertEqual(again["sendState"], submit.SEND_UNKNOWN)
         self.assertEqual(uncertain.click_count, 1)
+
+    def test_host_revocation_guard_prevents_fill_and_click(self):
+        url = "https://chatgpt.com/c/existing-123"
+        page = FakePage(url=url)
+        page._postman_action_guard = lambda: False
+        result = submit.submit_existing_prompt(page, "new request", url, timeout_ms=0, navigate=False)
+        self.assertEqual(result["sendState"], submit.SEND_PROVEN_NOT_SENT)
+        self.assertEqual(page.click_count, 0)
+        self.assertEqual(page.composer_text, "")
+
+    def test_owned_existing_chat_unreadable_old_history_does_not_block_new_req(self):
+        url = "https://chatgpt.com/c/existing-123"
+        page = FakePage(url=url, turn_count=1, user_turns=["old rendered content"])
+        page.bound_url = url
+        result = submit.submit_existing_prompt(page, "new distinct request", url,
+            prior_request_id="REQ_20261001T041338Z_9561", timeout_ms=0, navigate=False)
+        self.assertEqual(result["sendState"], submit.SEND_PROVEN_SENT)
+        self.assertEqual(page.click_count, 1)
+        self.assertEqual(page.user_turns[-1], "new distinct request")
+        self.assertEqual(result["details"]["priorHistoryReason"], "history_semantic_unrecognized")
+
+    def test_host_revocation_after_fill_prevents_real_send_click(self):
+        url = "https://chatgpt.com/c/existing-123"
+        page = FakePage(url=url)
+        checks = []
+        def guard():
+            checks.append(True)
+            return len(checks) == 1  # allowed before fill, withdrawn before Send
+        page._postman_action_guard = guard
+        result = submit.submit_existing_prompt(page, "new distinct request", url,
+            timeout_ms=0, navigate=False)
+        self.assertEqual(result["sendState"], submit.SEND_PROVEN_NOT_SENT)
+        self.assertEqual(page.click_count, 0)
+        self.assertGreaterEqual(len(checks), 2)
 
     def test_prepare_existing_chat_rejects_redirect_to_other_chat(self):
         requested = "https://chatgpt.com/c/requested"

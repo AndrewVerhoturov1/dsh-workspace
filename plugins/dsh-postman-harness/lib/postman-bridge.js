@@ -22,7 +22,7 @@ import {
 export const name = 'dsh-postman-harness-bridge'
 export const Config = z.object({
   localDevelopment: z.boolean().default(false),
-  fastBudget: z.object({ hardLimit: z.number().int().min(8).max(60).default(60) }).prefault({}),
+  fastBudget: z.object({ hardLimit: z.number().int().min(8).max(100).default(60) }).prefault({}),
 }).prefault({})
 export const inject = ['agents', 'subagents', 'tools', 'storageDomain', 'attachments', 'fs']
 
@@ -65,16 +65,24 @@ export function createPostmanTaskPrepareTool(ctx, contexts = postmanTaskContexts
   })
 }
 
-export function createPostmanTaskCloseTool(ctx, contexts = postmanTaskContexts, { jobs } = {}) {
+export function createPostmanTaskCloseTool(ctx, contexts = postmanTaskContexts, { jobs, worker } = {}) {
   return defineTool({
     name: POSTMAN_TASK_CLOSE_TOOL_NAME,
-    description: 'Explicitly retire this settled Leader task binding, including after external merge/cleanup removed its worktree. Retire child bindings first. Active/queued/uncertain work rejects close. No Git cleanup or success claim; this Session may then prepare an independent task.',
-    parameters: {}, output: output(),
-    async execute(_args, exec) {
+    description: 'Retire this exact Leader task binding. abandon:true revokes old task authority, addresses owned operations and preserves journals, UNKNOWN/FAILED outcomes and files; this is not process-stop or success proof. A new task uses a separate worktree. Normal close requires settled children. No Git cleanup.',
+    parameters: { abandon: { type: 'boolean', description: 'Explicitly abandon unfinished task; preserve audit and files without claiming PASS.' } }, output: output(),
+    async execute(args, exec) {
       if (!authorized(exec, ctx)) return { status: 'POSTMAN_TASK_CALLER_REJECTED' }
+      if (args?.abandon !== undefined && typeof args.abandon !== 'boolean') return { status: 'POSTMAN_TASK_ARGUMENTS_INVALID' }
       return contexts.close(exec.agent, {
+        abandon: args?.abandon === true,
         isBusy: id => Boolean(jobs?.hasActive(id)),
         beforeClose: async id => {
+          if (args?.abandon === true) {
+            const archived = await jobs?.abandonAll?.(exec.agent)
+            if (archived && archived.status !== 'POSTMAN_BRIDGE_ARCHIVED')
+              throw Error('POSTMAN_TASK_ARCHIVE_FENCE_FAILED: '+archived.status)
+            return worker ? await worker.prepareAbandon(id) : true
+          }
           // Missing mappings are not proof: refuse live/queued or unreadable orphans.
           if (typeof ctx.subagents?.listDescendants !== 'function') return false
           const descendants = await ctx.subagents.listDescendants(id, exec.signal)
@@ -95,13 +103,14 @@ export function createPostmanTaskCloseTool(ctx, contexts = postmanTaskContexts, 
 export function createPostmanTaskRestoreTool(ctx, contexts = postmanTaskContexts, { jobs, worker } = {}) {
   return defineTool({
     name: POSTMAN_TASK_RESTORE_TOOL_NAME,
-    description: 'After a runner FAIL, restore only uncommitted changes (localDevelopment preserves a private recovery copy first) in this Leader’s existing bound temporary task worktree and restore its exact remote branch HEAD; never recreate bindings, grants, or Workers.',
+    description: 'After runner FAIL preserve a dirty task worktree and continue in a new clean isolated task context. No reset/clean or deletion of user files. A clean tree may advance to its exact verified remote branch HEAD. Grants and old REQ keep their original binding.',
     parameters: {}, output: output(),
     async execute(_args, exec) {
       if (!authorized(exec, ctx)) return { status: 'POSTMAN_TASK_CALLER_REJECTED' }
       return contexts.restore(exec.agent, {
         isBusy: id => Boolean(jobs?.hasActive(id)),
         beforeRestore: async id => worker ? await worker.prepareRestore(id) : true,
+        beforeIsolate: async () => jobs?.abandonAll?.(exec.agent) ?? null,
       })
     },
   })
@@ -117,7 +126,8 @@ export function createPostmanBridgeTool(ctx, jobs, contexts) {
       lane_id: { type: 'string', description: 'Optional exact returned Devspace laneId, to continue the same Luna and ChatGPT conversation. Omit for a free lane.' },
       workspace_root: { type: 'string', description: 'Optional exact Leader-approved existing local folder. Explicit for every non-repository path.' },
       workspace_access: { type: 'string', enum: ['read', 'write'], description: 'Read or write permission paired with workspace_root.' },
-      computer_use_target: { type: 'string', description: 'Reserved: explicit target application. Requires a Host-enforced Computer Use adapter.' } },
+      computer_use: { type: 'string', enum: ['allow', 'deny'], description: 'Explicit Leader decision for this task, delivered to ChatGPT as an instruction. Default deny. Actual tool availability is determined by ChatGPT.' },
+      computer_use_target: { type: 'string', description: 'Legacy indication of Computer Use intent; equivalent to allow unless computer_use explicitly says deny. Does not impose a Host application allowlist.' } },
     output: output(),
     isConcurrencySafe: () => true,
     async execute(args, exec) {
@@ -134,7 +144,7 @@ export function createPostmanBridgeTool(ctx, jobs, contexts) {
       if (parsed.transportKind !== 'devspace' &&
           (args.devspace_mode !== undefined || args.lane_id !== undefined ||
            args.workspace_root !== undefined || args.workspace_access !== undefined ||
-           args.computer_use_target !== undefined))
+           args.computer_use_target !== undefined || args.computer_use !== undefined))
         return { status: 'POSTMAN_BRIDGE_MESSAGE_REJECTED', diagnostic: 'POSTMAN_DEVSPACE_MODE_MISMATCH' }
       if (contexts && !contexts.get(exec.agent.id)) {
         if (parsed.transportKind !== 'devspace')
@@ -145,10 +155,9 @@ export function createPostmanBridgeTool(ctx, jobs, contexts) {
         if (!['POSTMAN_TASK_READ_ONLY_READY', 'POSTMAN_TASK_CONTEXT_ALREADY_READY'].includes(prepared.status))
           return prepared
       }
-      // Opaque ChatGPT Computer Use has no Host-observable per-app navigation
-      // guard. An explicit Leader request does not make an unenforceable scope safe.
-      if (args.computer_use_target !== undefined)
-        return { status: 'COMPUTER_USE_TARGET_ENFORCEMENT_UNAVAILABLE' }
+      if (args.computer_use !== undefined && !['allow', 'deny'].includes(args.computer_use))
+        return { status: 'POSTMAN_DEVSPACE_SCOPE_INVALID' }
+      const computerUse = args.computer_use ?? (args.computer_use_target !== undefined ? 'allow' : 'deny')
       const taskContext = contexts?.get(exec.agent.id)
       if (parsed.transportKind !== 'devspace' && taskContext?.universalProject &&
           !await contexts.verifyDirectPublication?.(exec.agent.id))
@@ -186,7 +195,7 @@ export function createPostmanBridgeTool(ctx, jobs, contexts) {
         ? postmanInputGrants.pin(exec.agent, contexts.get(exec.agent.id), parsed.inputFiles) : undefined
       try {
         const result = await jobs.accept(exec.agent, args.message, parsed.transportKind, inputBinding,
-          undefined, args.devspace_mode, args.lane_id, approvedScope)
+          undefined, args.devspace_mode, args.lane_id, approvedScope, { computerUse })
         if (result.status !== 'POSTMAN_BRIDGE_ACCEPTED') postmanInputGrants.unpin(inputBinding)
         return result
       } catch (error) { postmanInputGrants.unpin(inputBinding); throw error }
@@ -197,15 +206,19 @@ export function createPostmanBridgeTool(ctx, jobs, contexts) {
 export function createPostmanBridgeStatusTool(ctx, jobs) {
   return defineTool({
     name: POSTMAN_BRIDGE_STATUS_TOOL_NAME,
-    description: 'Read the authoritative trusted Direct Postman terminal of this Leader session background Bridge job.',
+    description: 'Read the authoritative owned Bridge result. Explicit recover starts an addressed recovery; reconcileWriter checks Host native evidence before releasing an archived writer root. Neither action proves task success.',
     parameters: { bridge_job_id: { type: 'string', required: true,
       description: 'Exact bridgeJobId from POSTMAN_BRIDGE_ACCEPTED or POSTMAN_BRIDGE_READY.' },
       retrySync: { type: 'boolean', description: 'Retry only local task publication synchronization; never send Direct again.' },
-      recover: { type: 'boolean', description: 'Request one same-chat recovery. Host reads exact Direct capability and Direct durably claims the one-shot budget; no prompt/state arguments.' } },
+      recover: { type: 'boolean', description: 'DevSpace: explicitly authorize the next recovery using the original or latest bridgeJobId; Host resolves the owned chain. Known chat continues; unavailable chat uses a new owned attempt with safe isolation if old writes are unknown. Legacy: existing one-shot Direct capability, no prompt/state arguments.' },
+      reconcileWriter: { type: 'boolean', description: 'Explicitly check this exact retained writer using Host-owned native evidence. A received terminal with a verified native hold may revoke its exact future tool authority before checking; an active Bridge request cannot. Releases the root only after whole-process settlement and absence of other writers. Does not stop background jobs; no caller-provided receipt.' } },
     output: output(),
     async execute(args, exec) {
       if (!authorized(exec, ctx)) return { status: 'POSTMAN_BRIDGE_CALLER_REJECTED' }
-      const status = await jobs.status(exec.agent, args?.bridge_job_id, args?.retrySync === true, args?.recover === true)
+      if (args?.reconcileWriter === true && (args?.retrySync === true || args?.recover === true))
+        return { status: 'POSTMAN_BRIDGE_ARGUMENTS_INVALID' }
+      const status = await jobs.status(exec.agent, args?.bridge_job_id, args?.retrySync === true,
+        args?.recover === true, args?.reconcileWriter === true)
       const terminalResult = status?.result
       const details = terminalResult?.details
       const journal = details?.transportEventJournal
@@ -243,12 +256,13 @@ export function createPostmanBridgeListTool(ctx, jobs) {
 export function createPostmanBridgeStopTool(ctx, jobs) {
   return defineTool({
     name: POSTMAN_BRIDGE_STOP_TOOL_NAME,
-    description: 'Request cancellation of one exact owned live Bridge job. Not proof of NOT_SENT; trusted Direct terminal remains authoritative. No recovery or Web resend.',
-    parameters: { bridge_job_id: { type: 'string', required: true, description: 'Exact owned bridgeJobId.' } },
+    description: 'Request cancellation of one exact owned Bridge job. abandon:true archives its logical authority and frees its lane, preserving outcomes and late results; this does not prove shell stopped. Not proof of NOT_SENT or task success.',
+    parameters: { bridge_job_id: { type: 'string', required: true, description: 'Exact owned bridgeJobId.' },
+      abandon: { type: 'boolean', description: 'Archive/revoke the old operation while preserving audit and files.' } },
     output: output(),
     async execute(args, exec) {
       if (!authorized(exec, ctx)) return { status: 'POSTMAN_BRIDGE_CALLER_REJECTED' }
-      return jobs.stop(exec.agent, args.bridge_job_id)
+      return jobs.stop(exec.agent, args.bridge_job_id, args.abandon === true)
     },
   })
 }
@@ -256,7 +270,7 @@ export function createPostmanBridgeStopTool(ctx, jobs) {
 export function createPostmanDevspaceControlTool(ctx, jobs) {
   return defineTool({
     name: POSTMAN_DEVSPACE_CONTROL_TOOL_NAME,
-    description: 'Exact Leader-owned running @PostmanDevspace: queue a same-chat steer, explicit preempt/Stop, or read factual control receipts. QUEUED is not Send or Stop proof. No extra REQ/resend.',
+    description: 'Exact Leader-owned running @PostmanDevspace: queue same-chat steer, explicit preempt/Stop even during active DevSpace, or read control receipts. QUEUED is not Send/Stop proof. Stop generation does not prove shell stopped; new sends are recorded separately.',
     parameters: {
       bridge_job_id: { type: 'string', required: true, description: 'Exact active owned bridgeJobId.' },
       action: { type: 'string', required: true, enum: ['steer', 'preempt', 'stop', 'status'] },
@@ -398,7 +412,7 @@ export async function apply(ctx, config = {}) {
   ctx.tools.guard(exec => postmanPtcDirectCallGuard(exec, id => ctx.agents.get(id), ownsPtcWorker))
   ctx.tools.register(ptc.tool)
   ctx.tools.register(createPostmanTaskPrepareTool(ctx, contexts, { jobs, worker }))
-  ctx.tools.register(createPostmanTaskCloseTool(ctx, contexts, { jobs }))
+  ctx.tools.register(createPostmanTaskCloseTool(ctx, contexts, { jobs, worker }))
   ctx.tools.register(createPostmanInputFilesTool(ctx, contexts, { currentAttachments,
     resolveAttachment: (ref, signal) => ctx.attachments.readImage(ref, signal) }))
   ctx.tools.register(createPostmanBridgeTool(ctx, jobs, postmanTaskContexts))

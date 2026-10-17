@@ -63,6 +63,8 @@ test('fresh runtime reopens JSON registry and preserves dirty real Git bytes and
   await git(repository, 'add', 'payload.txt')
   await git(repository, 'commit', '-m', 'base')
   await git(repository, 'push', 'origin', 'preview')
+  await git(repository, 'branch', 'main')
+  await git(repository, 'push', 'origin', 'main')
   const storage = new JsonStorageBackend(join(root, 'storage'))
   const domainCtx = { storage: { backend: { get: () => storage } }, emit() {} }
   const facility = () => new DomainFacility(domainCtx, { backend: 'json' })
@@ -122,7 +124,7 @@ test('fresh runtime reopens JSON registry and preserves dirty real Git bytes and
   await storage.close()
 })
 
-test('real runner FAIL leaves dirty patch; explicit bound restore permits ZIP #2 on same branch', async t => {
+test('real runner FAIL preserves dirty patch; explicit isolation permits ZIP #2 in new context', async t => {
   const root = await mkdtemp(join(tmpdir(), 'postman-restore-integration-'))
   const repository = join(root, 'repo'), bare = join(root, 'origin.git')
   await mkdir(repository)
@@ -139,6 +141,8 @@ test('real runner FAIL leaves dirty patch; explicit bound restore permits ZIP #2
   await git(repository, 'commit', '-m', 'fixture base')
   const base = await git(repository, 'rev-parse', 'HEAD')
   await git(repository, 'push', 'origin', 'preview')
+  await git(repository, 'branch', 'main')
+  await git(repository, 'push', 'origin', 'main')
 
   const registry = createMemoryTaskRegistry()
   const contexts = createPostmanTaskContexts({
@@ -209,17 +213,18 @@ test('real runner FAIL leaves dirty patch; explicit bound restore permits ZIP #2
   assert.equal(contexts.beginOperation('integration-leader'), true)
   await contexts.startRunner('integration-leader', 'REQ_20260927T120000Z_1234')
   await contexts.endOperation('integration-leader', { status: 'IMPLEMENTATION_ARTIFACT_RUNNER_RESULT', result: failure })
-  const restored = await contexts.restore(leader) // Explicit, authorized discard on this verified temporary tree only.
-  assert.equal(restored.status, 'TASK_CONTEXT_RESTORED', JSON.stringify(restored))
-  assert.equal(restored.branch, branch)
-  assert.equal(restored.head, base)
-  assert.equal(await git(worktree, 'status', '--porcelain=v1', '--untracked-files=all'), '')
-  assert.equal(await readFile(join(worktree, 'payload.txt'), 'utf8'), 'original\n')
+  const restored = await contexts.restore(leader) // Explicit isolation retains the failed candidate in the old tree.
+  assert.equal(restored.status, 'POSTMAN_TASK_RESTORE_ISOLATED', JSON.stringify(restored))
+  assert.notEqual(restored.branch, branch);assert.notEqual(restored.worktree, worktree)
+  assert.equal(await readFile(join(worktree, 'payload.txt'), 'utf8'), 'first candidate\n')
+  assert.equal(await git(restored.worktree, 'status', '--porcelain=v1', '--untracked-files=all'), '')
+  assert.equal(await readFile(join(restored.worktree, 'payload.txt'), 'utf8'), 'original\n')
 
-  const success = await applyRunner(root, second, worktree)
+  const success = await applyRunner(root, second, restored.worktree)
   assert.equal(success.ok, true, JSON.stringify(success))
   assert.equal(success.code, 'IMPLEMENTATION_PACKAGE_APPLIED')
-  assert.equal(await readFile(join(worktree, 'payload.txt'), 'utf8'), 'second candidate\n')
+  assert.equal(await readFile(join(restored.worktree, 'payload.txt'), 'utf8'), 'second candidate\n')
+  assert.equal(await readFile(join(worktree, 'payload.txt'), 'utf8'), 'first candidate\n')
   assert.equal(await git(worktree, 'branch', '--show-current'), branch)
   assert.equal(await git(worktree, 'rev-parse', 'HEAD'), base)
   assert.equal(await git(repository, 'ls-remote', '--heads', bare, branch), base + '\trefs/heads/' + branch)

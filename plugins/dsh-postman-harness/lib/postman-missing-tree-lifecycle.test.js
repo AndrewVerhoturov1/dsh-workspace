@@ -123,14 +123,12 @@ test('missing-tree cold Sol cascade retires exact settled owned child before Sol
   const owned=Object.values(f.registry.get('leader').workers).filter(w=>w.ownerSessionId===sol.workerSessionId)
   assert.equal(owned.length,1)
   await git(fixture.root,'worktree','remove',a.worktree);await f.contexts.recover(f.leader)
-  const before=structuredClone(f.registry.get('leader').workers)
-  // Sol's preceding event-wait turn lacks retirement proof: retain the strict refusal.
+  // Runtime quiescence and exact ownership permit retirement even when the
+  // prior event-wait turn has no narrative retirement report.
   const closed=await call(f,'postman_worker_stop',{workerSessionId:sol.workerSessionId,mode:'close',cascade:true})
-  assert.equal(closed.status,'POSTMAN_WORKER_CASCADE_BLOCKED');assert.deepEqual(f.registry.get('leader').workers,before)
-  const stopped=await call(f,'postman_worker_stop',{workerSessionId:sol.workerSessionId,mode:'cancel',cascade:true})
-  assert.equal(stopped.status,'POSTMAN_WORKER_CANCELLED',JSON.stringify(stopped));assert.equal(stopped.cascade,true)
-  assert.equal(stopped.results.length,1);assert.equal(stopped.results[0].status,'POSTMAN_WORKER_CANCELLED')
-  assert.equal(stopped.taskCompleted,false);assert.equal(stopped.resultReported,false)
+  assert.equal(closed.status,'POSTMAN_WORKER_STOPPED',JSON.stringify(closed));assert.equal(closed.cascade,true)
+  assert.equal(closed.results.length,1);assert.equal(closed.results[0].status,'POSTMAN_WORKER_STOPPED')
+  assert.equal(closed.taskCompleted,false);assert.equal(closed.resultReported,false)
   assert.deepEqual(f.registry.get('leader').workers,{})
   assert.equal(await f.ctx.subagents.inspectClosedContinuableChild(f.leader,sol.workerSessionId),true)
   assert.equal((await call(f,'postman_task_close')).status,'POSTMAN_TASK_CLOSED')

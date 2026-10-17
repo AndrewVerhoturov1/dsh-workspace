@@ -295,7 +295,7 @@ test('continuable Luna keeps exact identity across two REQs and same ChatGPT cha
   await jobs.dispose()
 })
 
-test('prior history selects latest positively observed REQ, never failed allocation or foreign terminal', async () => {
+test('owned conversation continues after failed REQ; prior history is only an optional hint', async () => {
   const prior = req, failed = 'REQ_20261012T120001Z_0002', next = 'REQ_20261012T120002Z_0003'
   const chat = 'https://chatgpt.com/c/prior-history', child = 'luna'
   const positive = () => ({state:'received',phase:'synchronized',transportKind:'devspace',requestId:prior,
@@ -330,16 +330,13 @@ test('prior history selects latest positively observed REQ, never failed allocat
     const before=structuredClone(row)
     const result=await luna.run({bridgeJobId:'current',taskContext:context,controller:new AbortController(),devspaceMode:'READ_ONLY'},
       '@PostmanDevspace continuation',parent)
-    if(['normal','text','image','recovered-unknown'].includes(variant)){
-      assert.equal(result.status,'POSTMAN_BRIDGE_TERMINAL',variant)
-      assert.equal(launched.length,1)
-      assert.equal(launched[0].devspaceBinding.priorRequestId,prior)
-      assert.equal(launched[0].devspaceBinding.conversationUrl,chat)
-    }else{
-      assert.equal(result.status,'POSTMAN_DEVSPACE_PRIOR_HISTORY_UNPROVEN',variant)
-      assert.equal(launched.length,0)
-      assert.deepEqual(row,before,'no lane reservation or relay on missing positive history')
-    }
+    assert.equal(result.status,'POSTMAN_BRIDGE_TERMINAL',variant)
+    assert.equal(launched.length,1)
+    assert.equal(launched[0].devspaceBinding.priorRequestId,failed)
+    assert.equal(launched[0].devspaceBinding.conversationUrl,chat)
+    assert.deepEqual(row.bridgeOperations.old,before.bridgeOperations.old)
+    assert.deepEqual(row.bridgeOperations.failed,before.bridgeOperations.failed,
+      'the old PROVEN_NOT_SENT terminal remains unchanged')
   }
 })
 
@@ -361,6 +358,20 @@ test('Host-owned Devspace control intent keeps owner, preserves one exact ID and
     state:'SENT_CONFIRMED'}))
   assert.throws(()=>readDevspaceControls(binding),/ACK_INVALID/)
   assert.throws(()=>requestDevspaceControl(binding,{kind:'steer',message:''}),/CONTROL_INVALID/)
+})
+
+test('control status accepts durable composer wait and superseded acknowledgements without claiming Send', t => {
+  const { binding } = channel(t)
+  const intent = requestDevspaceControl(binding, { kind: 'preempt', message: 'continue when ready' })
+  const path = join(binding.channel, 'controls', intent.controlId + '.ack.json')
+  for (const state of ['WAITING_COMPOSER', 'SUPERSEDED']) {
+    writeFileSync(path, JSON.stringify({ controlId: intent.controlId, requestId: binding.requestId,
+      state, stopState: 'CLICK_UNKNOWN', sendState: 'PROVEN_NOT_SENT' }))
+    const status = readDevspaceControls(binding)[0]
+    assert.equal(status.state, state)
+    assert.equal(status.stopState, 'CLICK_UNKNOWN')
+    assert.equal(status.sendState, 'PROVEN_NOT_SENT')
+  }
 })
 
 test('Host team status is lossless JSON while three Luna lanes are only reserved', async () => {
@@ -568,8 +579,12 @@ test('unprepared universal Devspace starts branchless and requires exact permiss
   assert.equal(calls[0][5],undefined) // Host picks private output, not a Git branch.
   assert.equal((await tool.execute({message:'@PostmanDevspace do unsafe UI',
     computer_use_target:'ChatGPT'},{agent:parent})).status,
-    'COMPUTER_USE_TARGET_ENFORCEMENT_UNAVAILABLE')
-  assert.equal(calls.length,1)
+    'POSTMAN_BRIDGE_ACCEPTED')
+  assert.equal(calls[1][8].computerUse,'allow')
+  assert.equal((await tool.execute({message:'@PostmanDevspace observe without UI',
+    computer_use:'deny'},{agent:parent})).status,'POSTMAN_BRIDGE_ACCEPTED')
+  assert.equal(calls[2][8].computerUse,'deny')
+  assert.equal(calls.length,3)
   assert.equal((await tool.execute({message:'@PostmanDevspace outside',
     workspace_root:root},{agent:parent})).status,'POSTMAN_DEVSPACE_SCOPE_INVALID')
   assert.equal((await tool.execute({message:'@PostmanDevspace outside',
@@ -583,7 +598,7 @@ test('unprepared universal Devspace starts branchless and requires exact permiss
   const external = await tool.execute({message:'@PostmanDevspace create approved document',
     workspace_root:allowed,workspace_access:'write'},{agent:parent})
   assert.equal(external.status,'POSTMAN_BRIDGE_ACCEPTED')
-  assert.deepEqual(calls[1][7],{root:allowed,access:'write'})
+  assert.deepEqual(calls[3][7],{root:allowed,access:'write'})
   assert.equal(prepared,1)
 })
 

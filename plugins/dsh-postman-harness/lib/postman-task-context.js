@@ -1,7 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
-import { copyFile, cp, mkdir, mkdtemp, realpath, stat, writeFile, unlink } from 'node:fs/promises'
+import { mkdtemp, realpath, stat, writeFile, unlink } from 'node:fs/promises'
 import { createMemoryTaskRegistry } from './postman-task-registry.js'
+import { observeDevspaceWriter,devspaceWriterHoldRoot,readDevspaceWriterHold,clearDevspaceWriterHold,
+  devspaceOrdinaryWriterConflict,checkDevspaceOrdinaryWriterAdmission } from './postman-writer-proof.js'
+import {loadDevspaceChannelForOwner,revokeDevspaceChannel} from './postman-devspace.js'
 import { homedir, tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
@@ -39,21 +42,8 @@ async function git(cwd, ...args) {
   return stdout.trim()
 }
 
-// Kept outside Git and temp cleanup; never uploaded or included in tool output.
-async function preserveTaskChanges({ worktree, command, ...metadata }) {
-  const root = join(homedir(), '.dsh-recovery', 'postman')
-  await mkdir(root, { recursive: true, mode: 0o700 })
-  const backup = await mkdtemp(join(root, 'restore-'))
-  await cp(worktree, join(backup, 'files'), { recursive: true, dereference: false, verbatimSymlinks: true,
-    filter: source => normalize(source) !== normalize(join(worktree, '.git')) })
-  const index = resolve(worktree, await command(worktree, 'rev-parse', '--git-path', 'index'))
-  await copyFile(index, join(backup, 'index'))
-  await writeFile(join(backup, 'recovery.json'), JSON.stringify({ ...metadata, worktree }, null, 2), 'utf8')
-  return backup
-}
-
 /** The host injects one durable registry; tests explicitly inject an in-memory one. */
-export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(), gitCommand = git, temporaryDirectory = tmpdir, makeDirectory = mkdtemp, realPath = realpath, localDevelopment = false, preserveChanges = preserveTaskChanges, githubDefaultBranch = defaultGitHubBranch } = {}) {
+export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(), gitCommand = git, temporaryDirectory = tmpdir, makeDirectory = mkdtemp, realPath = realpath, githubDefaultBranch = defaultGitHubBranch, writerControlFile } = {}) {
   const contexts = new Map()
   const children = new Map()
   const pending = new Set()
@@ -145,7 +135,7 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
   async function prepareReadOnly(leader, projectPath) {
     const id = leader?.id
     if (pending.has(id)) return { status: 'POSTMAN_TASK_PREPARE_IN_PROGRESS' }
-    const previous = contexts.get(id), saved = registry.get(id)
+    const previous = get(id), saved = registry.get(id)
     if (saved && saved.stage !== 'closed') {
       if (projectPath !== undefined && (!isAbsolute(projectPath) ||
           normalize(saved.repositoryPath) !== normalize(projectPath)))
@@ -191,7 +181,7 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
   async function prepare(leader, projectPath) {
     const id = leader?.id
     if (pending.has(id)) return { status: 'POSTMAN_TASK_PREPARE_IN_PROGRESS' }
-    const previous = contexts.get(id), saved = registry.get(id)
+    const previous = get(id), saved = registry.get(id)
     if (saved && saved.stage !== 'closed' && projectPath !== undefined &&
         (!isAbsolute(projectPath) || normalize(saved.repositoryPath) !== normalize(projectPath)))
       return { status: 'POSTMAN_TASK_PROJECT_CHANGED' }
@@ -289,14 +279,39 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
 
   // Close retires authority, not files/branches and not a task-success certificate.
   // It deliberately needs no Git/worktree access after external merge/cleanup.
-  async function close(leader, { isBusy = () => false, beforeClose = async () => true } = {}) {
+  async function close(leader, { isBusy = () => false, beforeClose = async () => true, abandon = false } = {}) {
     const id = leader?.id
     const reject = code => ({ status: 'POSTMAN_TASK_CLOSE_REJECTED', diagnostic: { code } })
     if (pending.has(id) || activeOperations.has(id) || syncOperations.has(id) || workerAdmissions.has(id))
       return reject('TASK_OPERATION_BUSY')
     const row = registry.get(id)
     if (!row || row.leaderSessionId !== id) return reject('TASK_CONTEXT_REQUIRED')
-    if (row.stage === 'closed') return { status: 'POSTMAN_TASK_CLOSED', branch: row.branch, closedAt: row.closedAt }
+    if (row.stage === 'closed') return { status: 'POSTMAN_TASK_CLOSED', branch: row.branch, closedAt: row.closedAt,
+      abandoned: row.abandoned === true, ...(row.workerRetirementProven !== undefined ? { workerRetirementProven: row.workerRetirementProven } : {}), taskCompleted: false }
+    if (abandon) {
+      // Addressed native cancellation needs the existing Worker admission path.
+      // Reserve only after it returns, then archive whatever facts remain.
+      let workerRetirementProven
+      try { workerRetirementProven = await beforeClose(id) === true && Object.keys(registry.get(id)?.workers ?? {}).length === 0 }
+      catch (error) { return reject(String(error?.message ?? error)) }
+      if (pending.has(id) || activeOperations.has(id) || syncOperations.has(id) || workerAdmissions.has(id))
+        return reject('TASK_OPERATION_BUSY')
+      pending.add(id)
+      try {
+        const closedAt = new Date().toISOString()
+        await registry.change(id, current => {
+          if (current.leaderSessionId !== id || current.branch !== row.branch || current.worktree !== row.worktree)
+            throw Error('TASK_CONTEXT_CHANGED')
+          return { ...current, stage: 'closed', closedAt, abandoned: true, workerRetirementProven }
+        })
+        contexts.delete(id)
+        for (const [childId, binding] of children) if (binding.context.leaderSessionId === id) children.delete(childId)
+        changed(id)
+        return { status: 'POSTMAN_TASK_CLOSED', branch: row.branch, worktree: row.worktree,
+          closedAt, abandoned: true, workerRetirementProven, taskCompleted: false }
+      } catch (error) { return reject(String(error?.message ?? error)) }
+      finally { pending.delete(id) }
+    }
     // This synchronous reservation is shared with prepare/Bridge/Worker/runner admission.
     pending.add(id)
     try {
@@ -567,9 +582,11 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
     } finally { pending.delete(id) }
   }
 
-  // Explicit runner restore is a separate destructive path; never call from recover.
-  async function restore(leader, { isBusy = () => false, beforeRestore = async () => true } = {}) {
+  // Explicit failed-runner recovery preserves dirty trees and isolates subsequent work.
+  async function restore(leader, { isBusy = () => false, beforeRestore = async () => true, beforeIsolate = async () => null } = {}) {
     const id = leader?.id
+    if (registry.get(id) && registry.get(id).leaderSessionId !== id)
+      return { status: 'POSTMAN_TASK_RESTORE_REJECTED', diagnostic: { code: 'LEADER_CONTEXT_MISMATCH' } }
     const context = get(id)
     if (!context) return { status: 'POSTMAN_TASK_RESTORE_REJECTED', diagnostic: { code: 'TASK_CONTEXT_REQUIRED' } }
     if (context.devspaceReadOnly) return { status: 'POSTMAN_TASK_RESTORE_REJECTED', diagnostic: { code: 'DEVSPACE_READ_ONLY_NO_RESTORE' } }
@@ -579,9 +596,8 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
       return { status: 'POSTMAN_TASK_RESTORE_REJECTED', diagnostic: { code: 'RUNNER_NOT_FAILED' } }
     if (!reserveRestore(id))
       return { status: 'POSTMAN_TASK_RESTORE_REJECTED', diagnostic: { code: 'RESTORE_RESERVATION_UNAVAILABLE' } }
-    let recoveryPath = null
     try {
-      if (activeOperations.has(id) || syncOperations.has(id) || isBusy(id) || !await beforeRestore(id))
+      if (activeOperations.has(id) || syncOperations.has(id))
         return { status: 'POSTMAN_TASK_CONTEXT_BUSY', diagnostic: { code: 'RESTORE_OPERATION_BUSY' } }
       const { branch, worktree, baseCommit } = context
       const row = registry.get(id)
@@ -632,30 +648,37 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
       // runner rather than B/C. With retained Worker bindings, only an already
       // clean tree can be restored without discarding another session's work.
       const dirty = await command(worktree, 'status', '--porcelain=v1', '--untracked-files=all') !== ''
-      if (!localDevelopment && Object.keys(registry.get(id)?.workers ?? {}).length > 0 && dirty)
-        throw new Error('dirty Worker changes have no proven restore ownership')
-      // Do not guess which dirty bytes came from runner or user. Preserve them
-      // privately before a local reset, including untracked/ignored files and index.
-      recoveryPath = dirty
-        ? await preserveChanges({ worktree, branch, head, remote, leaderSessionId: id, command }) : null
+      if (dirty) {
+        // The entire old tree/index remains available in place, with its pinned
+        // REQs and grants. New work gets a distinct branch and worktree from main.
+        let operationRetirement
+        try { operationRetirement = await beforeIsolate(id) }
+        catch { operationRetirement = { status: 'POSTMAN_TASK_ISOLATION_RETIREMENT_UNKNOWN' } }
+        await registry.change(id, current => ({ ...current, stage: 'closed',
+          abandoned: true, closedAt: new Date().toISOString() }))
+        contexts.delete(id)
+        for (const [childId, binding] of children) if (binding.context.leaderSessionId === id) children.delete(childId)
+        changed(id)
+        pending.delete(id)
+        const next = await prepare(leader, row.selectedDshProject || row.universalProject ? row.repositoryPath : undefined)
+        return { ...next, status: next.status === 'TASK_CONTEXT_READY' ? 'POSTMAN_TASK_RESTORE_ISOLATED' : next.status,
+          oldWorktree: worktree, oldBranch: branch, oldHead: head, filesPreserved: true, taskCompleted: false,
+          ...(operationRetirement ? { operationRetirement } : {}) }
+      }
+      if (isBusy(id) || !await beforeRestore(id))
+        return { status: 'POSTMAN_TASK_CONTEXT_BUSY', diagnostic: { code: 'RESTORE_OPERATION_BUSY' } }
       // A crash after this point must not authorize an automatic second attempt.
       await registry.change(id, row => ({ ...row, runner: { ...row.runner, state: 'restoring' } }))
-      if (localDevelopment && !dirty) {
-        if (head !== remote) await command(worktree, 'merge', '--ff-only', remote)
-      } else {
-        await command(worktree, 'reset', '--hard', remote)
-        await command(worktree, 'clean', '-fd')
-      }
+      if (head !== remote) await command(worktree, 'merge', '--ff-only', remote)
       if (await command(worktree, 'rev-parse', 'HEAD') !== remote ||
           await command(worktree, 'branch', '--show-current') !== branch ||
           await command(worktree, 'status', '--porcelain=v1', '--untracked-files=all') !== '' ||
           (!row.universalProject && await command(repository, 'ls-remote', '--heads', 'origin', branch) !== remoteLine))
         throw new Error('restored task worktree could not be verified')
       await registry.change(id, row => ({ ...row, runner: { state: 'none', requestId: null } }))
-      return { status: 'TASK_CONTEXT_RESTORED', branch, worktree, head: remote, ...(recoveryPath ? { recoveryPath } : {}) }
+      return { status: 'TASK_CONTEXT_RESTORED', branch, worktree, head: remote }
     } catch (error) {
-      return { status: 'POSTMAN_TASK_RESTORE_REJECTED', diagnostic: String(error?.message ?? error),
-        ...(recoveryPath ? { recoveryPath } : {}) }
+      return { status: 'POSTMAN_TASK_RESTORE_REJECTED', diagnostic: String(error?.message ?? error) }
     } finally { pending.delete(id) }
   }
 
@@ -776,13 +799,112 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
     } catch { return false } // Offline or an unproven remote ref cannot authorize Direct Git publication.
   }
 
-  function get(leaderId) { return registry.get(leaderId)?.stage === 'ready' ? contexts.get(leaderId) ?? null : null }
+  function get(leaderId) {
+    const row = registry.get(leaderId), context = contexts.get(leaderId)
+    return row?.stage === 'ready' && context &&
+      ['leaderSessionId', 'repository', 'branch', 'worktree', 'baseCommit']
+        .every(key => row[key] === context[key]) ? context : null
+  }
   function record(leaderId) { return registry.get(leaderId) }
   const records = () => registry.entries()
   const changeRecord = async (leaderId, fn) => { const result = await registry.change(leaderId, fn); changed(leaderId); return result }
   function isRestoring(leaderId) { return pending.has(leaderId) }
   function hasActiveOperation(leaderId) { return activeOperations.has(leaderId) }
   function hasSyncOperation(leaderId) { return syncOperations.has(leaderId) }
+  function hasConflictingRetiredWriter(leaderId) {
+    const current = registry.get(leaderId)
+    if (!current?.worktree) return false
+    if(devspaceOrdinaryWriterConflict(current.worktree,{controlFile:writerControlFile}))return true
+    const target = normalize(current.worktree)
+    const overlaps = root => {
+      if (typeof root !== 'string' || !root) return false
+      const scope = normalize(root)
+      return target === scope || target.startsWith(scope + '/') || scope.startsWith(target + '/')
+    }
+    for(const [,saved] of registry.entries())for(const task of [saved,...(saved.retiredTasks??[])])
+      for(const [bridgeJobId,op] of Object.entries(task.bridgeOperations??{}))
+        if(overlaps(devspaceWriterHoldRoot({leaderSessionId:task.leaderSessionId,bridgeJobId,task,op})))return true
+    return [current, ...(current.retiredTasks ?? [])].some(task =>
+      task !== current && ['running', 'unknown', 'restoring'].includes(task.runner?.state) && overlaps(task.worktree) ||
+      Object.values(task.bridgeOperations ?? {}).some(op => {
+        if (op.writerSettlement) return false
+        if (overlaps(op.residualWriteRoot)) return true
+        if (task === current && !op.archivedAt && !op.executionRevoked) return false
+        const settled = op.state === 'received' && ['synchronized', 'not-required'].includes(op.synchronization)
+        return !settled && op.transportKind === 'devspace' && overlaps(
+          op.devspace?.approvedAccess === 'write' ? op.devspace.approvedRoot :
+            op.devspace?.mode === 'WRITE_ISOLATED' ? task.worktree : null)
+      }))
+  }
+  async function checkOrdinaryWriterAdmission(leaderId,writeRoot) {
+    if(!get(leaderId))return {ok:false,status:'EXIT_UNPROVEN'}
+    return checkDevspaceOrdinaryWriterAdmission(writeRoot,{controlFile:writerControlFile})
+  }
+  async function reconcileWriter(leaderId, bridgeJobId) {
+    const reject = code => ({status:'POSTMAN_WRITER_EXIT_UNPROVEN', diagnostic:{code},
+      alternative:'START_IN_NEW_ISOLATED_WORKSPACE'})
+    const row=registry.get(leaderId)
+    if(!row || row.leaderSessionId!==leaderId) return {status:'POSTMAN_WRITER_OWNER_MISMATCH'}
+    const locate=current => [current,...(current.retiredTasks??[])].filter(task=>
+      task.leaderSessionId===leaderId && task.bridgeOperations?.[bridgeJobId])
+    const matches=locate(row)
+    if(matches.length!==1) return {status:'POSTMAN_WRITER_OWNER_MISMATCH'}
+    const task=matches[0], op=task.bridgeOperations[bridgeJobId]
+    const hold=readDevspaceWriterHold({leaderSessionId:leaderId,bridgeJobId,task,op})
+    const writeRoot=op.residualWriteRoot ?? (op.devspace?.approvedAccess==='write' ? op.devspace.approvedRoot :
+      op.devspace?.mode==='WRITE_ISOLATED' ? task.worktree : hold?.root??op.writerSettlement?.writeRoot??null)
+    const exact=proof => proof?.jobId===bridgeJobId && proof.leaderSessionId===leaderId && proof.requestId===op.requestId &&
+      proof.branch===task.branch && proof.writeRoot===writeRoot
+    if(op.writerSettlement) return exact(op.writerSettlement) ?
+      {status:'POSTMAN_WRITER_ALREADY_RELEASED',bridgeJobId,writerSettlement:op.writerSettlement,
+        holdCleared:clearDevspaceWriterHold({leaderSessionId:leaderId,bridgeJobId,task,op,proof:op.writerSettlement})} : reject('WRITER_BINDING_CHANGED')
+    const receivedHold=op.state==='received' && hold?.verified===true
+    if(op.transportKind!=='devspace' || !writeRoot || !(op.executionRevoked || op.archivedAt || task.stage==='closed' || receivedHold))
+      return reject('WRITER_BINDING_CHANGED')
+    if(receivedHold && !op.executionRevoked && !op.archivedAt && task.stage!=='closed'){
+      try{revokeDevspaceChannel(loadDevspaceChannelForOwner(op.devspace.channel,{leaderSessionId:leaderId,
+        bridgeJobId,lunaSessionId:op.childSessionId,requestId:op.requestId}))}
+      catch{return reject('WRITER_BINDING_CHANGED')}
+    }
+    const otherWriters=[]
+    const overlaps=root=>root && (normalize(root)===normalize(writeRoot) || normalize(root).startsWith(normalize(writeRoot)+'/') || normalize(writeRoot).startsWith(normalize(root)+'/'))
+    for(const [,current] of registry.entries()) for(const historical of [current,...(current.retiredTasks??[])]) {
+      // Idle sessions and retired membership do not prove that a former native
+      // shell descendant died. These legacy writers have no complete census.
+      if(overlaps(historical.worktree) && (workerAdmissions.has(current.leaderSessionId) ||
+        Object.keys(historical.workers??{}).length || historical.retiredWorkers?.length))
+        return reject('OTHER_WRITER_ACTIVE')
+      if(Object.values(historical.appJobs??{}).some(app=>overlaps(app.worktree) &&
+        !['completed','killed'].includes(app.terminal))) return reject('OTHER_WRITER_ACTIVE')
+      if(['running','unknown','restoring'].includes(historical.runner?.state) && overlaps(historical.worktree))
+        return reject('OTHER_WRITER_ACTIVE')
+      for(const [id,other] of Object.entries(historical.bridgeOperations??{})) {
+        if(other===op || other.writerSettlement || other.transportKind!=='devspace') continue
+        const root=other.residualWriteRoot ?? (other.devspace?.approvedAccess==='write' ? other.devspace.approvedRoot :
+          other.devspace?.mode==='WRITE_ISOLATED' ? historical.worktree :
+            devspaceWriterHoldRoot({leaderSessionId:historical.leaderSessionId,bridgeJobId:id,task:historical,op:other}))
+        if(overlaps(root)) otherWriters.push({jobId:id,requestId:other.requestId,leaderSessionId:historical.leaderSessionId,
+          branch:historical.branch,writeRoot:root})
+      }
+    }
+    const observed=await observeDevspaceWriter({leaderSessionId:leaderId,bridgeJobId,task,op,otherWriters,controlFile:writerControlFile})
+    if(!observed.ok || !exact(observed.proof)) return reject(observed.code??'WRITER_BINDING_CHANGED')
+    let released=false
+    await registry.change(leaderId,current=>{
+      const found=locate(current)
+      if(found.length!==1 || found[0].branch!==task.branch || found[0].worktree!==task.worktree ||
+        JSON.stringify(found[0].bridgeOperations[bridgeJobId])!==JSON.stringify(op)) return current
+      const {residualWriteRoot,...saved}=op
+      const updated={...found[0],bridgeOperations:{...found[0].bridgeOperations,
+        [bridgeJobId]:{...saved,writerSettlement:observed.proof}}}
+      released=true
+      return found[0]===current ? updated : {...current,retiredTasks:current.retiredTasks.map(old=>old===found[0]?updated:old)}
+    })
+    if(!released) return reject('WRITER_BINDING_CHANGED')
+    changed(leaderId)
+    return {status:'POSTMAN_WRITER_RELEASED',bridgeJobId,writerSettlement:observed.proof,
+      holdCleared:clearDevspaceWriterHold({leaderSessionId:leaderId,bridgeJobId,task,op,proof:observed.proof})}
+  }
   // Synchronous reservation closes the gap before durable Worker intent/delivery.
   function canRetireWorkers(leaderId) {
     const row = registry.get(leaderId)
@@ -792,9 +914,10 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
   function beginWorkerAdmission(leaderId, token, retirement = false) {
     if (!(retirement ? canRetireWorkers(leaderId) : get(leaderId)) || pending.has(leaderId) || activeOperations.has(leaderId) || syncOperations.has(leaderId)) return false
     // Prompt READ_ONLY does not remove ordinary Worker write/shell rights.
-    if (!retirement && Object.values(registry.get(leaderId)?.bridgeOperations ?? {}).some(op =>
+    if (!retirement && (hasConflictingRetiredWriter(leaderId) || Object.values(registry.get(leaderId)?.bridgeOperations ?? {}).some(op =>
+      !op.archivedAt && !op.executionRevoked &&
       op.transportKind === 'devspace' && (op.devspace?.approvedAccess === 'write' || op.devspace?.mode === 'WRITE_ISOLATED') &&
-      !(op.state === 'received' && ['synchronized','not-required'].includes(op.synchronization?.state)))) return false
+      !(op.state === 'received' && ['synchronized','not-required'].includes(op.synchronization))))) return false
     let current = workerAdmissions.get(leaderId)
     if (!current) { current = new Set(); workerAdmissions.set(leaderId, current) }
     current.add(token)
@@ -808,9 +931,9 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
   function beginOperation(leaderId, isBusy = () => false, workerId = null) {
     if (!get(leaderId) || pending.has(leaderId) || activeOperations.has(leaderId) || syncOperations.has(leaderId) ||
         workerAdmissions.has(leaderId) ||
-        ['running', 'unknown', 'restoring'].includes(registry.get(leaderId)?.runner.state) ||
+        ['running', 'unknown', 'restoring'].includes(registry.get(leaderId)?.runner.state) || hasConflictingRetiredWriter(leaderId) ||
         Object.values(registry.get(leaderId)?.bridgeOperations ?? {}).some(op =>
-          op.state === 'received' && !['synchronized', 'not-required'].includes(op.synchronization)) || isBusy(leaderId)) return false
+          !op.archivedAt && !op.executionRevoked && op.state === 'received' && !['synchronized', 'not-required'].includes(op.synchronization)) || isBusy(leaderId)) return false
     activeOperations.add(leaderId)
     return true
   }
@@ -833,9 +956,7 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
     } finally { activeOperations.delete(leaderId) }
   }
   function reserveRestore(leaderId) {
-    if (!get(leaderId) || pending.has(leaderId) || syncOperations.has(leaderId) || activeOperations.has(leaderId) || workerAdmissions.has(leaderId) ||
-        (!localDevelopment && Object.values(registry.get(leaderId)?.bridgeOperations ?? {}).some(op =>
-          op.state === 'received' && !['synchronized', 'not-required'].includes(op.synchronization)))) return false
+    if (!get(leaderId) || pending.has(leaderId) || syncOperations.has(leaderId) || activeOperations.has(leaderId) || workerAdmissions.has(leaderId)) return false
     pending.add(leaderId)
     return true
   }
@@ -853,7 +974,7 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
     const op = registry.get(binding.context.leaderSessionId)?.bridgeOperations?.[binding.bridgeJobId]
     if (op?.transportKind !== 'devspace' || op.state !== 'pending' || op.childSessionId !== childId || !op.devspace) return null
     return { bridgeJobId: binding.bridgeJobId, leaderSessionId: binding.context.leaderSessionId,
-      lunaSessionId: childId, worktree: binding.context.worktree, mode: op.devspace.mode }
+      lunaSessionId: childId, worktree: binding.context.worktree, branch:binding.context.branch, mode: op.devspace.mode }
   }
   async function recordBridgeRequest(childId, requestId, channel) {
     const binding = children.get(childId)
@@ -874,7 +995,7 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
   function dispose() { contexts.clear(); children.clear(); pending.clear(); activeOperations.clear(); syncOperations.clear(); syncQueues.clear(); workerAdmissions.clear(); contextListeners.clear() }
   return { readLedger: id => registry.readLedger(id),
     changeLedger: (id, fn) => registry.changeLedger(id, fn),
-    prepare, prepareReadOnly, recover, close, restore, sync, beginSync, endSync, verifyWorktree, verifyDirectPublication, get, record, records, changeRecord, onContextChange, isRestoring, hasActiveOperation, hasSyncOperation, canRetireWorkers, beginWorkerAdmission, endWorkerAdmission, beginOperation, startRunner, endOperation, reserveRestore, releaseRestore, bindChild, child, devspaceBinding, recordBridgeRequest, releaseChild, dispose }
+    prepare, prepareReadOnly, recover, close, restore, sync, beginSync, endSync, verifyWorktree, verifyDirectPublication, get, record, records, changeRecord, onContextChange, isRestoring, hasActiveOperation, hasSyncOperation, canRetireWorkers, beginWorkerAdmission, endWorkerAdmission, beginOperation, startRunner, endOperation, reserveRestore, releaseRestore, bindChild, child, devspaceBinding, recordBridgeRequest, releaseChild, reconcileWriter, checkOrdinaryWriterAdmission, hasConflictingRetiredWriter, dispose }
 }
 
 // Both entrypoints use one facade. Initialization is awaited before Git/child actions;

@@ -163,3 +163,42 @@ test('close refuses removed mapping with live/queued or unclosed/unreadable desc
   assert.equal((await tool.execute({}, {agent:leader})).status,'POSTMAN_TASK_CLOSED')
 })
 
+
+
+test('explicit abandon preserves unresolved failures, is repeatable after cold reopen and permits a new context',async()=>{
+  const f=await fixture({stage:'uncertain',runner:{state:'unknown',requestId:'REQ_RUNNER'},
+    bridgeOperations:{job:{state:'unknown',requestId:'REQ_OLD'}},
+    workers:{child:{id:'child',label:'child',state:'uncertain',delivery:'unknown',artifactRequests:[]}}})
+  let cancelled=0
+  const result=await f.contexts.close(leader,{abandon:true,beforeClose:async()=>{cancelled++;return false}})
+  assert.equal(result.status,'POSTMAN_TASK_CLOSED');assert.equal(result.abandoned,true);assert.equal(result.taskCompleted,false)
+  assert.equal(result.workerRetirementProven,false)
+  assert.equal(cancelled,1);assert.equal(f.registry.get('leader').runner.state,'unknown')
+  assert.equal(f.registry.get('leader').workers.child.state,'uncertain')
+  const cold=createPostmanTaskContexts({registry:f.registry,gitCommand:async()=>{throw Error('abandon has no Git cleanup')}})
+  assert.equal((await cold.close(leader,{abandon:true})).status,'POSTMAN_TASK_CLOSED')
+  assert.equal((await cold.recover(leader)).status,'POSTMAN_TASK_CONTEXT_REQUIRED')
+  await f.registry.create('leader',{...row,branch:'task/postman-'+'b'.repeat(32),worktree:'C:/new-isolation'})
+  assert.equal(f.registry.get('leader').retiredTasks.at(-1).bridgeOperations.job.requestId,'REQ_OLD')
+  assert.equal(f.registry.get('leader').retiredTasks.at(-1).abandoned,true)
+  assert.deepEqual(f.registry.get('leader').workers,{})
+})
+
+
+test('abandon tool rejects archive fencing failure, preserves unknown cancellation audit and checks live caller',async()=>{
+  const f=await fixture({runner:{state:'unknown',requestId:'REQ_UNKNOWN'}})
+  let archives=0,cancels=0,status='POSTMAN_BRIDGE_ARCHIVE_FENCE_FAILED'
+  const tool=createPostmanTaskCloseTool({agents:{get:id=>id===leader.id?leader:null}},f.contexts,{
+    jobs:{async abandonAll(){archives++;return {status}}},
+    worker:{async prepareAbandon(){cancels++;return false}}})
+  const call=agent=>tool.execute({abandon:true},{agent})
+  assert.equal((await call({...leader})).status,'POSTMAN_TASK_CALLER_REJECTED');assert.equal(archives,0)
+  const rejected=await call(leader)
+  assert.equal(rejected.status,'POSTMAN_TASK_CLOSE_REJECTED');assert.match(rejected.diagnostic.code,/ARCHIVE_FENCE_FAILED/)
+  assert.equal(f.registry.get('leader').stage,'ready');assert.equal(cancels,0)
+  status='POSTMAN_BRIDGE_ARCHIVED'
+  const closed=await call(leader)
+  assert.equal(closed.status,'POSTMAN_TASK_CLOSED');assert.equal(closed.taskCompleted,false)
+  assert.equal(closed.workerRetirementProven,false);assert.equal(f.registry.get('leader').workerRetirementProven,false)
+  assert.equal(f.registry.get('leader').runner.state,'unknown');assert.equal(cancels,1)
+})

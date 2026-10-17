@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { resolve } from 'node:path'
+import { resolve,join,dirname } from 'node:path'
+import { mkdtemp,writeFile,rm } from 'node:fs/promises'
+import {tmpdir} from 'node:os'
 import { createPostmanTaskContexts, POSTMAN_TASK_BRANCH_PATTERN } from './postman-task-context.js'
 import { createMemoryTaskRegistry } from './postman-task-registry.js'
 import { createPostmanTaskPrepareTool } from './postman-bridge.js'
@@ -22,9 +24,24 @@ function fixture(options = {}) {
     branch: null, trees: [repository, resolve(repository, '..', '.dsh-preview')],
     ...options,
   }
+  const isolatedTrees = new Map()
+  let directories = 0
   const gitCommand = async (cwd, ...args) => {
     calls.push({ cwd, args })
     const [verb, ...rest] = args
+    const isolated = isolatedTrees.get(cwd)
+    if (isolated) {
+      if (verb === 'rev-parse' && rest[0] === '--show-toplevel') return cwd
+      if (verb === 'rev-parse' && rest[0] === 'HEAD') return state.base
+      if (verb === 'status') return ''
+    }
+    if (verb === 'worktree' && rest[0] === 'add' && rest[3] !== worktree) {
+      isolatedTrees.set(rest[3], {branch:rest[2]}); return ''
+    }
+    if (verb === 'ls-remote') {
+      const isolated = [...isolatedTrees.values()].find(tree => tree.branch === rest[2])
+      if (isolated) return state.base + '\trefs/heads/' + isolated.branch
+    }
     if (verb === 'rev-parse' && rest[0] === '--show-toplevel') return cwd === worktree ? worktree : repository
     if (verb === 'remote' && rest.join(' ') === 'get-url origin') return state.remoteUrl
     if (verb === 'fetch') return ''
@@ -55,9 +72,9 @@ function fixture(options = {}) {
     if (verb === 'merge' && rest[0] === '--ff-only') { state.head = rest[1]; return '' }
     throw new Error('Unexpected git command: ' + JSON.stringify({ cwd, args }))
   }
-  const contexts = createPostmanTaskContexts({ registry, gitCommand, localDevelopment: options.localDevelopment, preserveChanges: options.preserveChanges ?? (async () => 'fixture-recovery'), realPath: options.realPath ?? (async path => path),
+  const contexts = createPostmanTaskContexts({ registry, gitCommand, writerControlFile:options.writerControlFile, localDevelopment: options.localDevelopment, preserveChanges: options.preserveChanges ?? (async () => 'fixture-recovery'), realPath: options.realPath ?? (async path => path),
     temporaryDirectory: () => resolve('C:/Users/Andrew/AppData/Local/Temp'),
-    makeDirectory: async () => options.directory ?? worktree })
+    makeDirectory: async () => options.directory ?? (directories++ === 0 ? worktree : worktree + '-isolated-' + directories) })
   return { contexts, state, calls, registry, gitCommand }
 }
 const invoked = (calls, ...args) => calls.some(call => JSON.stringify(call.args) === JSON.stringify(args))
@@ -309,22 +326,25 @@ test('apply guard requires unchanged bound branch and exact published HEAD', asy
 
 
 
-test('local restore preserves changes before reset and does not forge pending terminal synchronization', async () => {
+test('dirty restore preserves old tree and pending receipt in archived task; new work is isolated', async () => {
   const calls = []
   const f = fixture({ localDevelopment: true, preserveChanges: async snapshot => { calls.push(snapshot); return 'private-recovery' } })
   await f.contexts.prepare(leader('A')); f.state.trees.push(worktree); f.state.clean = false
   await f.registry.change('A', row => ({ ...row, runner: { state: 'failed', requestId: 'REQ' }, bridgeOperations: { job: { state: 'received', synchronization: 'pending' } } }))
   const restored = await f.contexts.restore(leader('A'))
-  assert.equal(restored.status, 'TASK_CONTEXT_RESTORED', JSON.stringify(restored))
-  assert.equal(restored.recoveryPath, 'private-recovery')
-  assert.equal(calls.length, 1)
-  assert.equal(f.registry.get('A').bridgeOperations.job.synchronization, 'pending')
+  assert.equal(restored.status, 'POSTMAN_TASK_RESTORE_ISOLATED', JSON.stringify(restored))
+  assert.notEqual(restored.worktree, worktree)
+  assert.equal(restored.oldWorktree, worktree)
+  assert.equal(restored.taskCompleted, false)
+  assert.equal(f.state.clean, false)
+  assert.equal(calls.length, 0)
+  assert.equal(f.registry.get('A').retiredTasks.at(-1).bridgeOperations.job.synchronization, 'pending')
 })
-test('local restore refuses backup failure before destructive commands', async () => {
+test('dirty isolation does not require a backup because old bytes are retained', async () => {
   const f = fixture({ localDevelopment: true, preserveChanges: async () => { throw new Error('backup unavailable') } })
   await f.contexts.prepare(leader('A')); f.state.trees.push(worktree); f.state.clean = false
   await f.registry.change('A', row => ({ ...row, runner: { state: 'failed', requestId: 'REQ' } }))
-  assert.equal((await f.contexts.restore(leader('A'))).status, 'POSTMAN_TASK_RESTORE_REJECTED')
+  assert.equal((await f.contexts.restore(leader('A'))).status, 'POSTMAN_TASK_RESTORE_ISOLATED')
   assert.equal(f.calls.some(call => ['reset', 'clean'].includes(call.args[0])), false)
   assert.equal(f.state.clean, false)
 })
@@ -337,14 +357,15 @@ test('local restore of clean tree uses fast-forward, never reset or clean', asyn
   assert.equal(f.calls.some(call => ['reset', 'clean'].includes(call.args[0])), false)
 })
 
-test('received unsynced terminal blocks runner and restore without becoming unknown', async () => {
+test('received unsynced terminal blocks runner but permits isolated recovery reservation without rewriting history', async () => {
   const f = fixture(); await f.contexts.prepare(leader('A'))
   await f.registry.change('A', row => ({ ...row, bridgeOperations: { request: {
     state: 'received', synchronization: 'busy', terminal: { status: 'POSTMAN_BRIDGE_TERMINAL',
       requestId: 'REQ_20260927T120000Z_1234', result: { ok: true, assistantText: 'verified' } }
   } } }))
   assert.equal(f.contexts.beginOperation('A'), false)
-  assert.equal(f.contexts.reserveRestore('A'), false)
+  assert.equal(f.contexts.reserveRestore('A'), true)
+  f.contexts.releaseRestore('A')
   assert.equal(f.registry.get('A').bridgeOperations.request.state, 'received')
   await f.registry.change('A', row => ({ ...row, bridgeOperations: {} }))
   assert.equal(f.contexts.beginOperation('A'), true)
@@ -363,7 +384,7 @@ test('two Host runners cannot reserve the shared worktree at once', async () => 
   await f.contexts.endOperation('A', { status: 'IMPLEMENTATION_ARTIFACT_RUNNER_RESULT', result: { ok: true } })
 })
 
-test('restore discards dirty bound tree only after explicit Leader call', async () => {
+test('explicit failed-runner restore retains dirty bound tree and creates a new clean context', async () => {
   const f = fixture(), prepared = await f.contexts.prepare(leader('A'))
   f.state.head = published; f.state.remote = published; f.state.clean = false
   f.state.trees.push(worktree)
@@ -373,11 +394,10 @@ test('restore discards dirty bound tree only after explicit Leader call', async 
   assert.equal(f.contexts.beginOperation('A'), true)
   await f.contexts.startRunner('A', 'REQ_20260927T120000Z_1234')
   await f.contexts.endOperation('A', { status: 'IMPLEMENTATION_ARTIFACT_RUNNER_RESULT', result: { ok: false } })
-  assert.equal((await f.contexts.restore(leader('A'))).status, 'TASK_CONTEXT_RESTORED')
-  assert.equal(f.state.clean, true)
+  assert.equal((await f.contexts.restore(leader('A'))).status, 'POSTMAN_TASK_RESTORE_ISOLATED')
+  assert.equal(f.state.clean, false)
   assert.equal(f.state.head, published)
-  assert.ok(invoked(f.calls, 'reset', '--hard', published))
-  assert.ok(invoked(f.calls, 'clean', '-fd'))
+  assert.equal(f.calls.some(call => ['reset', 'clean'].includes(call.args[0])), false)
   assert.equal(prepared.worktree, worktree)
 })
 
@@ -441,6 +461,8 @@ test('recovery accepts one journaled IMAGE_RESULT_DURABLE publication without im
       resultImage: '/tmp/result.png' } }
   await f.registry.change('A', row => ({ ...row, bridgeOperations: { image: { state: 'received',
     synchronization: 'pending', terminal } } }))
+  const isolatedTrees = new Map()
+  let directories = 0
   const gitCommand = async (cwd, ...args) => {
     if (args[0] === 'rev-list' && args[1] === '--reverse') return published
     return f.gitCommand(cwd, ...args)
@@ -512,7 +534,7 @@ test('legacy preview-based task recovers and restores from its pinned B, never f
   assert.equal(f.registry.get('legacy').selectedDshProject,undefined,'historical v1 row is not migrated')
   assert.equal((await cold.restore(leader('legacy'))).status, 'TASK_CONTEXT_RESTORED')
   assert.equal(f.registry.get('legacy').baseCommit, legacyPreview)
-  assert.ok(invoked(f.calls, 'reset', '--hard', legacyPreview))
+  assert.equal(f.calls.some(call => ['reset', 'clean'].includes(call.args[0])), false)
   assert.equal(invoked(f.calls, 'rev-parse', '--verify', 'refs/remotes/origin/main^{commit}'), false)
   assert.equal(invoked(f.calls, 'fetch', '--prune', 'origin'), false)
 })
@@ -549,11 +571,12 @@ test('explicit runner failure survives recovery while restore remains separately
   await f.contexts.startRunner('A', 'REQ_20260927T120000Z_1234')
   await f.contexts.endOperation('A', { status: 'IMPLEMENTATION_ARTIFACT_RUNNER_RESULT', result: { ok: false } })
   const cold = createPostmanTaskContexts({ registry: f.registry, gitCommand: f.gitCommand,
-    realPath: async path => path, preserveChanges: async () => 'fixture-recovery' })
+    realPath: async path => path, makeDirectory: async () => worktree + '-cold-isolated' })
   assert.equal((await cold.prepare(leader('A'))).status, 'POSTMAN_TASK_CONTEXT_ALREADY_READY')
   assert.equal(f.state.clean, false)
   assert.equal(f.registry.get('A').runner.state, 'failed')
-  assert.equal((await cold.restore(leader('A'))).status, 'TASK_CONTEXT_RESTORED')
+  assert.equal((await cold.restore(leader('A'))).status, 'POSTMAN_TASK_RESTORE_ISOLATED')
+  assert.equal(f.registry.get('A').retiredTasks.at(-1).runner.state, 'failed')
   assert.equal(f.registry.get('A').runner.state, 'none')
 })
 
@@ -598,7 +621,7 @@ test('clean failed runner restore retains all three exact Worker bindings', asyn
   assert.deepEqual(f.registry.get('A').workers, workers)
 })
 
-test('Worker bindings alone do not block sync but dirty restore still refuses unowned changes', async () => {
+test('dirty restore isolates unowned changes and retains prior Worker bindings only in audit', async () => {
   const f = fixture(); await f.contexts.prepare(leader('A'))
   f.state.trees.push(worktree); f.state.clean = false
   assert.equal(f.contexts.beginOperation('A'), true)
@@ -607,7 +630,9 @@ test('Worker bindings alone do not block sync but dirty restore still refuses un
   await f.registry.change('A', row => ({ ...row, workers: { child: { id: 'child', label: 'C', state: 'ready', delivery: 'none', artifactRequests: [] } } }))
   assert.equal(f.contexts.beginSync('A'), true)
   f.contexts.endSync('A')
-  assert.equal((await f.contexts.restore(leader('A'))).status, 'POSTMAN_TASK_RESTORE_REJECTED')
+  assert.equal((await f.contexts.restore(leader('A'))).status, 'POSTMAN_TASK_RESTORE_ISOLATED')
+  assert.equal(f.registry.get('A').retiredTasks.at(-1).workers.child.id, 'child')
+  assert.deepEqual(f.registry.get('A').workers, {})
   assert.equal(f.state.clean, false)
   assert.equal(f.calls.some(call => ['reset', 'clean'].includes(call.args[0])), false)
 })
@@ -678,4 +703,61 @@ test('Leader prepare schema forwards exact optional project_path and rejects rel
   assert.equal((await invoke({project_path:project})).status,'TASK_CONTEXT_READY')
   assert.equal((await invoke({project_path:project,read_only:true})).status,'POSTMAN_TASK_READ_ONLY_READY')
   assert.deepEqual(seen,[[caller,project,false],[caller,project,true]])
+})
+
+
+test('archived and retired writers deny only overlapping Worker/runner admission; settled history is not a blocker',async()=>{
+  const f=fixture(),parent=leader('A');await f.contexts.prepare(parent)
+  const context=f.contexts.get('A'),token=Symbol('worker')
+  const operation={state:'unknown',transportKind:'devspace',archivedAt:'2026-10-17T00:00:00Z',executionRevoked:true,
+    devspace:{mode:'WRITE_ISOLATED'}}
+  const writerSettlement={version:1,source:'devspace_native_tree',jobId:'old',requestId:'REQ',leaderSessionId:'A',
+    branch:context.branch,writeRoot:context.worktree,generation:'native-generation',settledAt:'2026-10-17T00:01:00Z'}
+  for(const [patch,allowed] of [
+    [{bridgeOperations:{old:{...operation,residualWriteRoot:context.worktree}}},false],
+    [{bridgeOperations:{old:operation}},false],
+    [{bridgeOperations:{},retiredTasks:[{worktree:context.worktree,bridgeOperations:{old:operation}}]},false],
+    [{bridgeOperations:{},retiredTasks:[{worktree:context.worktree+'-other',bridgeOperations:{old:operation}}]},true],
+    [{bridgeOperations:{old:{...operation,writerSettlement}},retiredTasks:[]},true],
+    [{bridgeOperations:{},retiredTasks:[{worktree:context.worktree,bridgeOperations:{old:{...operation,writerSettlement}}}]},true],
+    [{bridgeOperations:{old:{state:'received',transportKind:'devspace',synchronization:'synchronized',devspace:{mode:'WRITE_ISOLATED'}}},retiredTasks:[]},true],
+  ]){
+    await f.registry.change('A',row=>({...row,...patch}))
+    assert.equal(f.contexts.beginWorkerAdmission('A',token),allowed,JSON.stringify(patch))
+    if(allowed)f.contexts.endWorkerAdmission('A',token)
+    assert.equal(f.contexts.beginOperation('A'),allowed,JSON.stringify(patch))
+    if(allowed)await f.contexts.endOperation('A')
+  }
+})
+
+test('ordinary private census gates actual Worker admission by overlapping root and clears without administrative unlock',async t=>{
+  const directory=await mkdtemp(join(tmpdir(),'postman-ordinary-admission-')),file=join(directory,'writer-control.json')
+  t.after(()=>{assert.equal(dirname(resolve(directory)),resolve(tmpdir()));return rm(directory,{recursive:true,force:true})})
+  const f=fixture({writerControlFile:file}),parent=leader('ordinary-admission'),token=Symbol('worker')
+  await f.contexts.prepare(parent)
+  const root=f.contexts.get(parent.id).worktree
+  for(const roots of [[root],[root+'-independent'],[]]) {
+    await writeFile(file,JSON.stringify({version:1,untrackedRoots:roots}))
+    const expected=!roots.includes(root)
+    assert.equal(f.contexts.beginWorkerAdmission(parent.id,token),expected)
+    if(expected)f.contexts.endWorkerAdmission(parent.id,token)
+    assert.equal((await f.contexts.checkOrdinaryWriterAdmission(parent.id,root)).ok,expected)
+  }
+  await writeFile(file,'{unreadable census')
+  assert.equal(f.contexts.beginWorkerAdmission(parent.id,token),false)
+  assert.equal((await f.contexts.checkOrdinaryWriterAdmission(parent.id,root)).status,'EXIT_UNPROVEN')
+  await writeFile(file,JSON.stringify({version:1,untrackedRoots:[]}))
+  assert.equal(f.contexts.beginWorkerAdmission(parent.id,token),true)
+  f.contexts.endWorkerAdmission(parent.id,token)
+})
+
+test('dirty isolation attempts old operation retirement and preserves unconfirmed outcome without blocking independent tree',async()=>{
+  const f=fixture();await f.contexts.prepare(leader('A'));f.state.trees.push(worktree);f.state.clean=false
+  await f.registry.change('A',row=>({...row,runner:{state:'failed',requestId:'REQ'},bridgeOperations:{old:{state:'unknown'}}}))
+  let calls=0
+  const result=await f.contexts.restore(leader('A'),{beforeIsolate:async()=>{calls++;return {status:'POSTMAN_BRIDGE_ARCHIVE_FENCE_FAILED'}}})
+  assert.equal(calls,1);assert.equal(result.status,'POSTMAN_TASK_RESTORE_ISOLATED')
+  assert.equal(result.operationRetirement.status,'POSTMAN_BRIDGE_ARCHIVE_FENCE_FAILED')
+  assert.equal(f.registry.get('A').retiredTasks.at(-1).bridgeOperations.old.state,'unknown')
+  assert.equal(f.state.clean,false);assert.equal(result.taskCompleted,false)
 })

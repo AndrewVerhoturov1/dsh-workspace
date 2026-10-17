@@ -210,3 +210,18 @@ test('failed late-child release leaves uncertain binding counted against two slo
 })
 
 
+
+
+test('FAST assignment boundaries 7/8/60/100/101 retain default60 and computed soft limits',async()=>{
+  for(const hardBudget of [undefined,7,8,60,100,101]){
+    const f=await fixture()
+    const result=await task(f.tools,{...(hardBudget===undefined?{}:{hardBudget})})
+    if(hardBudget===7||hardBudget===101){
+      assert.equal(result.status,'POSTMAN_WORKER_BUDGET_INVALID');assert.equal(f.calls.starts.length,0)
+    }else{
+      assert.equal(result.status,'POSTMAN_WORKER_TASK_ACCEPTED')
+      const budget=f.registry.get(leader.id).workers[result.workerSessionId].budget
+      assert.equal(budget.hardLimit,hardBudget??60);assert.equal(budget.softLimit,Math.floor((hardBudget??60)*0.8))
+    }
+  }
+})

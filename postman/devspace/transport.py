@@ -34,6 +34,8 @@ _SAFE_CODES = frozenset(value for key, value in vars(browser_submit).items()
                         and 0 < len(value) <= 80) | {
     "BRIDGE_PIPELINE_FAILED", "POSTMAN_SENT_ATTACHMENT_PROOF_UNKNOWN",
     "image_resume_send_unproven", "submit_failed",
+    "POSTMAN_DEVSPACE_REVOKED", "POSTMAN_DEVSPACE_RECOVERY_INVALID",
+    "POSTMAN_DEVSPACE_RECOVERY_OWNER_MISMATCH", "POSTMAN_DEVSPACE_RECOVERY_CHAT_MISMATCH",
 }
 _SAFE_REASONS = {"invalid_conversation_url", "current_chat_mismatch", "prompt_empty",
                  "chat_changed_before_fill", "presend_ownership_or_prompt_changed",
@@ -55,6 +57,11 @@ def _safe_transport_evidence(details):
     if not isinstance(details, dict):
         return {}
     result = {}
+    if details.get("recoverySourceCompleted") is True:
+        if _allowed(details.get("recoverySourceOutcome"), {"DONE", "BLOCKED", "NEED_DECISION"}):
+            result["recoverySourceOutcome"] = details["recoverySourceOutcome"]
+        if isinstance(details.get("recoverySourceMessage"), str):
+            result["recoverySourceMessage"] = details["recoverySourceMessage"][:2000]
     code = details.get("transportCode")
     if _allowed(code, _SAFE_CODES):
         result["transportCode"] = code
@@ -79,6 +86,8 @@ def _safe_transport_evidence(details):
             safe["sendState"] = submitted["sendState"]
         diagnostic = submitted.get("details")
         if isinstance(diagnostic, dict):
+            if _allowed(diagnostic.get("priorHistoryReason"), _SAFE_REASONS):
+                safe["priorHistoryReason"] = diagnostic["priorHistoryReason"]
             if _allowed(diagnostic.get("reason"), _SAFE_REASONS):
                 safe["reason"] = diagnostic["reason"]
             for key in ("exactPromptReadback", "singleLogicalComposer", "historyReady"):
@@ -141,6 +150,21 @@ def run(channel, request_id, intent, *, input_bundle_manifest=None, input_files_
             conversation_url=binding.get("conversationUrl"),
             reminder_interval_ms=DEFAULT_CHECK_INTERVAL_MS, max_reminders=DEFAULT_CHECK_COUNT)
         details = observed.get("details", {})
+        stored = bridge.read_state(request_id) if callable(getattr(bridge, "read_state", None)) else {}
+        recovery_diagnostics = {}
+        observation = (stored or {}).get("recoveryObservation")
+        if isinstance(observation, dict):
+            recovery_diagnostics["recoveryObservation"] = {key: observation[key] for key in (
+                "sourceRequestId", "attempt", "messageObserved", "historyReadable",
+                "newMessageSent", "localOperationsMayContinue", "observationReason", "sendState") if key in observation}
+        if details.get("recoverySourceCompleted") is True:
+            recovery_diagnostics["recoverySourceCompleted"] = True
+        if details.get("supersededByUserTurn") is True:
+            recovery_diagnostics["supersededByUserTurn"] = True
+        ui_stop = (stored or {}).get("recoveryUiStop")
+        if isinstance(ui_stop, dict):
+            recovery_diagnostics["recoveryUiStop"] = {key: ui_stop[key] for key in
+                ("state", "localOperationsMayContinue") if key in ui_stop}
         result = {"requestId": request_id, "source": "bell" if observed.get("code") == "DEVSPACE_SIGNAL_RECEIVED" else details.get("source", "transport_diagnostic"),
                   "diagnostic": details.get("diagnostic", "BLOCKED"), "assistantText": details.get("assistantText", ""),
                   "conversationRef": details.get("conversationRef"), "message": details.get("message", ""),
@@ -149,11 +173,12 @@ def run(channel, request_id, intent, *, input_bundle_manifest=None, input_files_
                       "evidenceState", "reportedOutcome") if key in details},
                   "transportDiagnostics": {**{key: details[key] for key in
                       ("reminderSlots", "transportEventJournal", "detectorDiagnostics") if key in details},
+                      **recovery_diagnostics,
                       **_safe_transport_evidence(details)}}
     except Exception:
         # Keep private internals/capability out of model diagnostics. Host still checks bell first.
         result = {"requestId": request_id, "source": "transport_diagnostic", "diagnostic": "BLOCKED",
-                  "assistantText": "Devspace browser/runtime failed; inspect owned local state. No retry or fallback."}
+                  "assistantText": "Devspace browser/runtime failed; inspect owned local state before a separate recovery attempt."}
     atomic_json(result_path, result)
     return result
 

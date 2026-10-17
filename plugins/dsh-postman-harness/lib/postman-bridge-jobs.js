@@ -2,9 +2,11 @@ import { randomUUID } from 'node:crypto'
 import { relative, isAbsolute } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { postmanInputGrants } from './postman-input-files.js'
-import { DirectPostmanJobManager } from './direct-current-turn.js'
+import { DirectPostmanJobManager, parsePostmanUserTurn } from './direct-current-turn.js'
 import { createPostmanDevspaceLanes } from './postman-devspace-lanes.js'
-import { requestDevspaceControl, readDevspaceControls, loadDevspaceChannelForOwner } from './postman-devspace.js'
+import { requestDevspaceControl, readDevspaceControls, loadDevspaceChannelForOwner,
+  revokeDevspaceChannel, readDevspaceEvent, devspaceTerminal } from './postman-devspace.js'
+import { devspaceWriterHoldRoot } from './postman-writer-proof.js'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { buildPostmanBridgeStartRequest, isTopLevelPostmanSupervisor, POSTMAN_BRIDGE_PROVIDER,
   settleTrustedPostmanStatus } from './postman-bridge-core.js'
@@ -68,6 +70,7 @@ function hasTrustedTerminal(operation) {
 }
 
 function countsAgainstLimit(operation) {
+  if (operation.executionRevoked) return false
   return operation.state === 'pending' || operation.state === 'unknown' ||
     operation.state === 'received' &&
       (!['synchronized', 'not-required'].includes(operation.synchronization) ||
@@ -76,6 +79,21 @@ function countsAgainstLimit(operation) {
           (operation.requestId || operation.cancellationRequested === true ||
             operation.transportKind === 'devspace' && operation.preSendFailure === NOT_SENT_WORKTREE_PREFLIGHT &&
             !operation.childSessionId) && !operation.terminal))
+}
+
+function operationIn(row, bridgeJobId) {
+  return row?.bridgeOperations?.[bridgeJobId] ??
+    row?.retiredTasks?.find(task => task?.bridgeOperations?.[bridgeJobId])?.bridgeOperations[bridgeJobId]
+}
+
+function updateHistoricalOperation(row, bridgeJobId, update) {
+  if (row.bridgeOperations?.[bridgeJobId]) return { ...row, bridgeOperations: {
+    ...row.bridgeOperations, [bridgeJobId]: update(row.bridgeOperations[bridgeJobId]) } }
+  if (row.retiredTasks?.some(task => task?.bridgeOperations?.[bridgeJobId])) return { ...row,
+    retiredTasks: row.retiredTasks.map(task => task?.bridgeOperations?.[bridgeJobId]
+      ? { ...task, bridgeOperations: { ...task.bridgeOperations,
+          [bridgeJobId]: update(task.bridgeOperations[bridgeJobId]) } } : task) }
+  return row
 }
 
 // An exact native worktree preflight returned before Luna, REQ allocation or Web Send.
@@ -167,6 +185,8 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
   }
 
   async function lifecycle(job, message) {
+    if (contexts?.record?.(job.parentSessionId)?.bridgeOperations?.[job.bridgeJobId]?.executionRevoked)
+      return { status: 'POSTMAN_BRIDGE_ARCHIVED' }
     job.state = 'STARTING'
     job.startedAt = new Date().toISOString()
     let parent
@@ -298,7 +318,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     }
   }
 
-  function accept(parent, message, transportKind, inputBinding, recoveryFrom, devspaceMode, requestedLaneId, approvedScope) {
+  function accept(parent, message, transportKind, inputBinding, recoveryFrom, devspaceMode, requestedLaneId, approvedScope, options = {}) {
     const taskContext = contexts?.get(parent.id)
     if (contexts && !taskContext) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
     if (typeof contexts?.isRestoring === 'function' && contexts.isRestoring(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
@@ -320,7 +340,8 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     if (approvedScope && devspaceMode === 'READ_ONLY' && approvedScope.access === 'write')
       return { status: 'POSTMAN_DEVSPACE_SCOPE_INVALID' }
     devspaceMode = transportKind === 'devspace' && approvedScope
-      ? approvedScope.access === 'write'
+      ? options.recovery?.isolated && approvedScope.access === 'read' ? 'WRITE_TEST'
+        : approvedScope.access === 'write'
         ? approvedScope.root === taskContext?.worktree && !taskContext?.devspaceReadOnly
           ? 'WRITE_ISOLATED' : 'WRITE_APPROVED_TARGET'
         : 'READ_ONLY'
@@ -337,6 +358,8 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
       bridgeJobId: randomUUID(), parentSessionId: parent.id, taskContext, transportKind, state: 'QUEUED',
       createdAt: new Date().toISOString(), controller: new AbortController(), inputBinding,
       notification: 'PENDING', recoveryFrom, devspaceMode, approvedScope,
+      computerUse: options.computerUse ?? 'deny', devspaceRecovery: options.recovery,
+      recoverySourceChannel: options.sourceChannel,
       ...(requestedLaneId ? { laneId: requestedLaneId } : {}),
     }
     if (typeof contexts?.changeRecord !== 'function') {
@@ -350,9 +373,32 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     const prior = admissionTails.get('host') ?? Promise.resolve()
     const admit = async () => {
       try {
+        // Ordinary native leases are checked before entering the launch queue.
+        // Their external completion has no coordinator wake event. A later race
+        // remains guarded by the MCP runtime immediately before tool effects.
+        if(transportKind==='devspace' && ['WRITE_ISOLATED','WRITE_APPROVED_TARGET'].includes(devspaceMode) &&
+          typeof contexts.checkOrdinaryWriterAdmission==='function') {
+          const ordinary=await contexts.checkOrdinaryWriterAdmission(parent.id,approvedScope?.root??taskContext?.worktree)
+          if(ordinary?.ok!==true)return {status:'POSTMAN_TASK_CONTEXT_BUSY',
+            diagnostic:{code:ordinary?.status==='OTHER_WRITER_ACTIVE'?'OTHER_WRITER_ACTIVE':'DEVSPACE_ORDINARY_WRITER_EXIT_UNPROVEN'},
+            alternative:'START_IN_NEW_ISOLATED_WORKSPACE'}
+          if(contexts.get(parent.id)!==taskContext || ctx.agents.get(parent.id)!==parent)
+            return {status:'POSTMAN_TASK_CONTEXT_BUSY',diagnostic:{code:'POSTMAN_TASK_CONTEXT_CHANGED'}}
+        }
         // Read-only refusal is deterministic even if the durable storage backend
         // is unavailable. The atomic check below remains the admission authority.
         const existing = contexts.record?.(parent.id)
+        const recoverySource = job.devspaceRecovery &&
+          existing?.bridgeOperations?.[job.devspaceRecovery.sourceJobId]
+        if (job.devspaceRecovery && (!recoverySource || recoverySource.archivedAt ||
+            recoverySource.transportKind !== 'devspace' ||
+            (options.recovery.freshConversation
+              ? requestedLaneId !== undefined || !recoverySource.devspace?.recoveryRetired
+              : recoverySource.devspace?.laneId !== requestedLaneId)))
+          return { status: 'POSTMAN_DEVSPACE_RECOVERY_SOURCE_CHANGED' }
+        if (recoverySource?.devspace?.recoveryNextJobId)
+          return { status: 'POSTMAN_DEVSPACE_RECOVERY_ALREADY_RESERVED',
+            bridgeJobId: recoverySource.devspace.recoveryNextJobId }
         const occupied = Object.values(existing?.bridgeOperations ?? {}).filter(countsAgainstLimit)
         const count = occupied.filter(op => (op.transportKind === 'devspace') ===
           (transportKind === 'devspace')).length +
@@ -362,6 +408,13 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
         let selectedLaneId
         await contexts.changeRecord(parent.id, old => {
           const operations = old.bridgeOperations ?? {}
+          const sourceId = job.devspaceRecovery?.sourceJobId
+          const source = sourceId && operations[sourceId]
+          if (sourceId && (!source || source.archivedAt || source.devspace?.recoveryNextJobId ||
+              (options.recovery.freshConversation
+                ? requestedLaneId !== undefined || !source.devspace?.recoveryRetired
+                : source.devspace?.laneId !== requestedLaneId)))
+            throw Error('POSTMAN_DEVSPACE_RECOVERY_SOURCE_CHANGED')
           const occupied = Object.values(operations).filter(countsAgainstLimit)
           const count = occupied.filter(op => (op.transportKind === 'devspace') ===
             (transportKind === 'devspace')).length + (transportKind !== 'devspace' && old.bridge ? 1 : 0)
@@ -375,8 +428,9 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
             if (old.devspaceLuna && !Object.hasOwn(available, 'legacy'))
               available.legacy = old.devspaceLuna
             selectedLaneId = requestedLaneId ??
-              Object.entries(available).find(([, lane]) => lane.state === 'ready' &&
-                !lane.activeBridgeJobId)?.[0]
+              (options.recovery?.freshConversation ? undefined :
+                Object.entries(available).find(([, lane]) => lane.state === 'ready' &&
+                  !lane.activeBridgeJobId)?.[0])
             if (requestedLaneId && (!available[requestedLaneId] ||
                 available[requestedLaneId].state !== 'ready' ||
                 available[requestedLaneId].activeBridgeJobId))
@@ -400,10 +454,15 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
           }
           return { ...old,
             ...(devspaceLanes ? { devspaceLanes } : {}),
-            bridgeOperations: { ...operations, [job.bridgeJobId]: {
+            bridgeOperations: { ...operations,
+              ...(sourceId ? { [sourceId]: { ...source, devspace: {
+                ...source.devspace, recoveryNextJobId: job.bridgeJobId } } } : {}),
+              [job.bridgeJobId]: {
               state: 'pending', phase: 'reserved', transportKind, createdAt: job.createdAt,
               ...(transportKind === 'devspace' ? { devspace: {
                 mode: devspaceMode, laneId: selectedLaneId,
+                computerUse: job.computerUse, payload: source?.devspace?.payload ?? message,
+                ...(job.devspaceRecovery ? { recovery: job.devspaceRecovery } : {}),
                 ...(approvedScope ? { approvedRoot: approvedScope.root,
                   approvedAccess: approvedScope.access } : {}) } } : {}),
             } } }
@@ -514,7 +573,25 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
       !relative(root,other).startsWith('..') && !isAbsolute(relative(root,other)))
     const rows = contexts?.records?.() ?? [[job.parentSessionId,contexts?.record?.(job.parentSessionId)]]
     for (const [owner,row] of rows) {
-      if (!row || row.stage === 'closed') continue
+      if (!row) continue
+      for (const historical of [row, ...(row.retiredTasks ?? [])]) {
+        if (Object.entries(historical.bridgeOperations ?? {}).some(([id,op]) => {
+          if (op.writerSettlement) return false
+          if (id !== job.bridgeJobId && overlaps(devspaceWriterHoldRoot({leaderSessionId:owner,
+            bridgeJobId:id,task:historical,op}))) return true
+          // Dirty isolation may preserve a task even when browser revocation
+          // failed. Its saved writer scope still protects the original files.
+          const unresolved = !op.executionRevoked &&
+            (['pending', 'unknown'].includes(op.state) || technicalFailure(op))
+          const retainedRoot = op.residualWriteRoot ??
+            ((historical !== row || row.stage === 'closed') && unresolved
+              ? op.devspace?.approvedAccess === 'write' ? op.devspace.approvedRoot
+                : op.devspace?.mode === 'WRITE_ISOLATED' ? historical.worktree : null
+              : null)
+          return retainedRoot && overlaps(retainedRoot)
+        })) return false
+      }
+      if (row.stage === 'closed') continue
       if (overlaps(row.worktree) && worker?.hasActiveWork?.(ctx.agents.get(owner))) return false
       for (const [id,op] of Object.entries(row.bridgeOperations ?? {})) {
         if (id === job.bridgeJobId || !countsAgainstLimit(op)) continue
@@ -532,6 +609,211 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
   const stopResourceChanges = contexts?.onContextChange?.(() => devspaceCoordinator.refresh?.())
   ctx.on?.('agent/status', () => devspaceCoordinator.refresh?.())
 
+  function recoveryChain(parent, bridgeJobId) {
+    const row = contexts?.record?.(parent.id), operations = row?.bridgeOperations ?? {}
+    const rootJobId = operations[bridgeJobId]?.devspace?.recovery?.rootJobId ?? bridgeJobId
+    const entries = [], seen = new Set()
+    let id = rootJobId, successAt = null
+    while (id) {
+      const value = operations[id], previous = entries.at(-1)
+      if (seen.has(id) || !value || value.transportKind !== 'devspace' ||
+          !previous && value.devspace?.recovery ||
+          previous && (value.devspace?.recovery?.rootJobId !== rootJobId ||
+            value.devspace.recovery.sourceJobId !== previous.id ||
+            value.devspace.recovery.attempt !== (previous.value.devspace?.recovery?.attempt ?? 0) + 1 ||
+            previous.value.requestId && value.devspace.recovery.sourceRequestId !== previous.value.requestId ||
+            !value.devspace.recovery.freshConversation && value.devspace.laneId !== previous.value.devspace?.laneId))
+        return { rootJobId, entries, error: 'POSTMAN_DEVSPACE_RECOVERY_CHAIN_INVALID' }
+      seen.add(id); entries.push({ id, value })
+      if (recoveryOutcome(value).kind === 'received') successAt ??= id
+      id = value.devspace?.recoveryNextJobId
+    }
+    if (!seen.has(bridgeJobId)) return { rootJobId, entries, error: 'POSTMAN_DEVSPACE_RECOVERY_CHAIN_INVALID' }
+    return { rootJobId, entries, leaf: entries.at(-1), successAt }
+  }
+
+  function recoverySummary(parent, bridgeJobId) {
+    const chain = recoveryChain(parent, bridgeJobId), rootJobId = chain.rootJobId
+    const attempts = chain.entries.filter(entry => entry.id !== rootJobId).map(({ id, value }) => ({
+        bridgeJobId: id, attempt: value.devspace.recovery.attempt,
+        sourceJobId: value.devspace.recovery.sourceJobId,
+        sourceRequestId: value.devspace.recovery.sourceRequestId ?? null,
+        requestId: value.requestId ?? null, state: value.state,
+        observation: value.terminal?.result?.transportDiagnostics?.recoveryObservation ?? null,
+        sendState: value.terminal?.result?.transportDiagnostics?.submitProof?.sendState ??
+          value.terminal?.result?.transportDiagnostics?.sendProof?.sendState ?? null,
+        source: value.terminal?.result?.source ?? null,
+        diagnostic: value.terminal?.result?.diagnostic ?? null,
+        hostFailure: value.devspace?.hostFailure ?? null,
+        classification: recoveryOutcome(value),
+      })).sort((a, b) => a.attempt - b.attempt)
+    const lastOp = chain.leaf?.value
+    const exhausted = !chain.error && !chain.successAt &&
+      (lastOp?.devspace?.recovery?.attempt ?? 0) >= 3 && technicalFailure(lastOp) &&
+      lastOp?.state !== 'pending'
+    return { rootJobId, attempts, exhausted,
+      nextJobId: lastOp?.state === 'pending' && !lastOp.executionRevoked ? chain.leaf.id : null,
+      lastJobId: chain.leaf?.id ?? null,
+      resultJobId: chain.successAt ?? null,
+      ...(chain.error ? { diagnostic: chain.error } : {}),
+      ...(lastOp ? { classification: recoveryOutcome(lastOp) } : {}),
+      ...(exhausted ? { choices: ['retry', 'new-conversation-or-executor', 'archive'] } : {}) }
+  }
+
+  function recoveryOutcome(op) {
+    if (!op || op.transportKind !== 'devspace' || op.archivedAt || op.cancellationRequested ||
+        op.executionRevoked && !op.devspace?.recoveryRetired)
+      return { kind: 'decision', reason: 'operation-authority-revoked' }
+    const result = op.terminal?.result
+    const sourceObserved = result?.transportDiagnostics?.recoverySourceCompleted === true
+    const sourceOutcome = sourceObserved ? result.transportDiagnostics.recoverySourceOutcome : null
+    if (result?.reportedOutcome === 'DONE' || sourceOutcome === 'DONE')
+      return { kind: 'received', reason: 'result-received-not-engineering-pass' }
+    const codes = [result?.diagnostic, result?.transportCode, result?.code,
+      op.devspace?.hostFailure?.status, op.devspace?.hostFailure?.diagnostic].filter(value => typeof value === 'string').join(' ')
+    const blocker = result?.reportedOutcome === 'NEED_DECISION' || sourceOutcome === 'NEED_DECISION' ||
+      sourceObserved && !['DONE', 'BLOCKED', 'NEED_DECISION'].includes(sourceOutcome) || result?.recoveryEligible === false ||
+      result?.transportDiagnostics?.supersededByUserTurn === true ||
+      /(?:NEED_DECISION|LEADER_DECISION_REQUIRED|PERMISSION_(?:DENIED|REQUIRED)|INPUT_PROVENANCE_REJECTED|ACCESS_DENIED|SCOPE_(?:DENIED|INVALID)|SAFETY|SECURITY|CAPABILITY_UNAVAILABLE|PERMANENT|CALLER_REJECTED|BINDING_(?:CHANGED|INVALID)|REPROOF_FAILED|WORKTREE_NOT_READY|LUNA_UNAVAILABLE)/i.test(codes) ||
+      /(?:NEED_DECISION|NEEDS_(?:PARENT|LEADER)_GUIDANCE|permission denied|access denied|new (?:user )?permission required|out of (?:the )?(?:approved )?scope|нет разрешения|требуется (?:новое )?разрешение|отказано в доступе|постоянно недоступ)/i
+        .test([result?.message, result?.assistantText, result?.transportDiagnostics?.recoverySourceMessage,
+          op.devspace?.hostFailure?.diagnostic]
+          .filter(value => typeof value === 'string').map(value => value.slice(0, 2000)).join('\n'))
+    if (blocker) return { kind: 'decision', reason: 'permission-scope-or-leader-decision-required' }
+    const retry = result?.reportedOutcome === 'BLOCKED' || sourceOutcome === 'BLOCKED' || result?.diagnostic === 'BLOCKED' ||
+      result?.source === 'transport_diagnostic' || result?.diagnostic === 'PARTIAL' ||
+      op.terminal?.terminalStatus === 'FAILED' || result?.ok === false ||
+      !op.terminal && ['unknown', 'pending'].includes(op.state)
+    return retry ? { kind: 'retry', reason: 'transient-or-ambiguous-failure-observe-first' }
+      : { kind: 'received', reason: 'result-received-not-engineering-pass' }
+  }
+  const technicalFailure = op => recoveryOutcome(op).kind === 'retry'
+
+  async function continueDevspaceRecovery(parent, bridgeJobId, manual = false) {
+    if (disposed || !controlCallerAllowed(parent))
+      return { status: 'POSTMAN_DEVSPACE_RECOVERY_UNAVAILABLE' }
+    if (manual) {
+      const chain = recoveryChain(parent, bridgeJobId)
+      if (chain.error) return { status: chain.error, recovery: recoverySummary(parent, bridgeJobId) }
+      if (chain.entries.some(entry => entry.value.archivedAt || entry.value.cancellationRequested ||
+          entry.value.executionRevoked && !entry.value.devspace?.recoveryRetired))
+        return { status: 'POSTMAN_DEVSPACE_RECOVERY_AUTHORITY_REVOKED', recovery: recoverySummary(parent, bridgeJobId) }
+      if (chain.successAt) return { status: 'POSTMAN_DEVSPACE_RECOVERY_NOT_REQUIRED',
+        bridgeJobId: chain.successAt, recovery: recoverySummary(parent, bridgeJobId) }
+      bridgeJobId = chain.leaf.id
+    }
+    let row = contexts?.record?.(parent.id), op = row?.bridgeOperations?.[bridgeJobId]
+    if (!technicalFailure(op)) return { status: recoveryOutcome(op).kind === 'decision'
+      ? 'POSTMAN_DEVSPACE_RECOVERY_LEADER_DECISION_REQUIRED' : 'POSTMAN_DEVSPACE_RECOVERY_NOT_REQUIRED',
+      bridgeJobId, recovery: recoverySummary(parent, bridgeJobId) }
+    if (op.devspace?.recoveryNextJobId) return {
+      status: 'POSTMAN_DEVSPACE_RECOVERY_ALREADY_RESERVED', bridgeJobId: op.devspace.recoveryNextJobId,
+      recovery: recoverySummary(parent, bridgeJobId) }
+    const attempt = (op.devspace?.recovery?.attempt ?? 0) + 1
+    if (!manual && attempt > 3) return { status: 'POSTMAN_DEVSPACE_RECOVERY_EXHAUSTED',
+      recovery: recoverySummary(parent, bridgeJobId) }
+    const laneId = op.devspace?.laneId
+    const lane = row.devspaceLanes?.[laneId] ?? (laneId === 'legacy' ? row.devspaceLuna : null)
+    if (!op.devspace?.payload || op.childSessionId && lane?.childId !== op.childSessionId)
+      return { status: 'POSTMAN_DEVSPACE_RECOVERY_SOURCE_CHANGED', bridgeJobId }
+    const freshConversation = !lane?.childId ||
+      !/^https:\/\/chatgpt\.com\/c\/[a-zA-Z0-9-]+$/.test(lane.conversationRef ?? '')
+    let live = jobs.get(bridgeJobId)
+    if (live && !live.finishedAt) return { status: 'POSTMAN_DEVSPACE_RECOVERY_RUNNING', bridgeJobId,
+      recovery: recoverySummary(parent, bridgeJobId) }
+    if (!live && op.terminal && !op.executionRevoked) {
+      await status(parent, bridgeJobId)
+      live = jobs.get(bridgeJobId)
+      op = contexts.record(parent.id).bridgeOperations[bridgeJobId]
+      if (!technicalFailure(op)) return { status: 'POSTMAN_DEVSPACE_RECOVERY_NOT_REQUIRED', bridgeJobId }
+    }
+    if (live && !op.executionRevoked) {
+      try {
+        if (await devspaceLuna.upgradeLateBell(parent, live)) {
+          op = contexts.record(parent.id).bridgeOperations[bridgeJobId]
+          if (!technicalFailure(op)) return { status: 'POSTMAN_DEVSPACE_RECOVERY_NOT_REQUIRED', bridgeJobId }
+        }
+      } catch { /* A missing old event cannot authorize a fabricated result. */ }
+    }
+    if (op.devspace.channel) {
+      try { revokeDevspaceChannel(loadDevspaceChannelForOwner(op.devspace.channel, {
+        bridgeJobId, leaderSessionId: parent.id, lunaSessionId: op.childSessionId, requestId: op.requestId })) }
+      catch (error) { return { status: 'POSTMAN_DEVSPACE_RECOVERY_FENCE_FAILED', diagnostic: diagnostic(error) } }
+    }
+    const sendState = op.terminal?.result?.transportDiagnostics?.submitProof?.sendState ??
+      op.terminal?.result?.transportDiagnostics?.sendProof?.sendState
+    const possibleWriteRoot = op.requestId && !op.writerSettlement && sendState !== 'PROVEN_NOT_SENT'
+      ? op.devspace.approvedAccess === 'write' ? op.devspace.approvedRoot
+        : op.devspace.mode === 'WRITE_ISOLATED' ? row.worktree : null
+      : null
+    const isolated = Boolean(possibleWriteRoot || op.devspace.recovery?.isolated)
+    // A cold reservation is an uncertain old action. Revoke its browser rights
+    // before reserving a fresh attempt; never replay an old click or REQ.
+    if (!op.terminal || freshConversation || possibleWriteRoot) {
+      await contexts.changeRecord(parent.id, current => {
+        const before = current.bridgeOperations?.[bridgeJobId]
+        if (before?.devspace?.recoveryNextJobId) return current
+        const child = current.devspaceLanes?.[laneId] ?? (laneId === 'legacy' ? current.devspaceLuna : null)
+        if (!before || before.archivedAt || before.requestId !== op.requestId ||
+            child?.childId !== lane?.childId || child?.activeBridgeJobId && child.activeBridgeJobId !== bridgeJobId)
+          throw Error('POSTMAN_DEVSPACE_RECOVERY_SOURCE_CHANGED')
+        const nextLane = child ? { ...child, state: freshConversation ? 'closed' : 'ready', activeBridgeJobId: null } : null
+        return { ...current, ...(nextLane ? laneId === 'legacy' && !current.devspaceLanes?.legacy
+          ? { devspaceLuna: nextLane } : { devspaceLanes: { ...current.devspaceLanes, [laneId]: nextLane } } : {}),
+          bridgeOperations: { ...current.bridgeOperations, [bridgeJobId]: {
+            ...before, ...(!before.terminal ? { state: 'unknown' } : {}),
+            ...(freshConversation || !before.terminal ? { executionRevoked: true,
+              devspace: { ...before.devspace, recoveryRetired: true } } : {}),
+            ...(possibleWriteRoot ? { residualWriteRoot: possibleWriteRoot } : {}) } } }
+      })
+      row = contexts.record(parent.id); op = row.bridgeOperations[bridgeJobId]
+      if (op.devspace?.recoveryNextJobId) return { status: 'POSTMAN_DEVSPACE_RECOVERY_ALREADY_RESERVED',
+        bridgeJobId: op.devspace.recoveryNextJobId, recovery: recoverySummary(parent, bridgeJobId) }
+    }
+    const sourceRequestId = op.requestId ?? op.devspace.recovery?.sourceRequestId ?? lane?.requestIds?.at(-1)
+    const sourceChannel = op.devspace.channel ??
+      row.bridgeOperations?.[op.devspace.recovery?.sourceJobId]?.devspace?.channel
+    const original = parsePostmanUserTurn(op.devspace.payload)
+    let inputBinding
+    if (original.inputFiles?.length) {
+      try { inputBinding = postmanInputGrants.pin(parent, contexts.get(parent.id), original.inputFiles) }
+      catch {
+        await contexts.changeRecord(parent.id, current => updateHistoricalOperation(current, bridgeJobId, before => ({
+          ...before, devspace: { ...before.devspace, hostFailure: {
+            status: 'POSTMAN_INPUT_PROVENANCE_REJECTED', diagnostic: 'Select the original inputs again through the owned input tool' } },
+        })))
+        return { status: 'POSTMAN_INPUT_PROVENANCE_REJECTED', bridgeJobId,
+          recovery: recoverySummary(parent, bridgeJobId), action: 'Select the original inputs again through the owned input tool' }
+      }
+    }
+    const message = '@PostmanDevspace' + (original.inputFiles?.length
+      ? ' --input-files-json ' + JSON.stringify(original.inputFiles) + '\n' : ' ') +
+      'Восстановление разрешённой задачи, попытка ' + attempt +
+      ', после REQ ' + (sourceRequestId ?? 'без выделенного REQ') + '. Сначала проверь историю, ' +
+      'результат, уже изменённые файлы и ещё выполняющиеся процессы. Продолжи с места остановки: ' +
+      'выполни только недостающий шаг. Не повторяй уже выполненные команды и не запускай ' +
+      'конфликтующую запись, пока прежний процесс не завершён. Неопределённость старой отправки ' +
+      'не означает её отсутствие. ' + (freshConversation
+        ? 'Сохранённый разговор недоступен: не выдумывай его историю. Начни с проверки фактов. ' : '') +
+      (isolated ? 'Восстановление изолировано: прежнюю область только читай, новые результаты сохраняй ' +
+        'только в новой приватной writeRoot. Перенос в прежние файлы требует проверки завершения старого writer. ' : '') +
+      'Исходное разрешённое намерение:\n' +
+      original.payload
+    const approvedScope = isolated ? { root: possibleWriteRoot ?? op.devspace.approvedRoot ?? row.worktree, access: 'read' }
+      : op.devspace.approvedRoot ? { root: op.devspace.approvedRoot, access: op.devspace.approvedAccess } : undefined
+    let accepted
+    try {
+      accepted = await accept(parent, message, 'devspace', inputBinding, undefined,
+        isolated ? 'WRITE_TEST' : op.devspace.mode, freshConversation ? undefined : laneId, approvedScope,
+        { computerUse: op.devspace.computerUse ?? 'deny', ...(!freshConversation && sourceChannel ? { sourceChannel } : {}), recovery: {
+          rootJobId: op.devspace.recovery?.rootJobId ?? bridgeJobId,
+          sourceJobId: bridgeJobId, ...(sourceRequestId ? { sourceRequestId } : {}), attempt,
+          ...(freshConversation ? { freshConversation: true } : {}), ...(isolated ? { isolated: true } : {}) } })
+    } catch (error) { postmanInputGrants.unpin(inputBinding); throw error }
+    if (accepted.status !== 'POSTMAN_BRIDGE_ACCEPTED') postmanInputGrants.unpin(inputBinding)
+    return { ...accepted, recovery: recoverySummary(parent, bridgeJobId) }
+  }
+
   function startJob(job, message) {
     jobs.set(job.bridgeJobId, job)
     // Coordinator holds the active slot only through child disposal, never through grants.
@@ -543,6 +825,15 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
         // A verified terminal is delivery evidence even when the shared tree is
         // temporarily busy. Persist it before any synchronization attempt.
         const safe = losslessValue(result)
+        const archived = operationIn(contexts?.record?.(job.parentSessionId), job.bridgeJobId)
+        if (archived?.executionRevoked || contexts?.get?.(job.parentSessionId) !== job.taskContext) {
+          if (safe.status === 'POSTMAN_BRIDGE_TERMINAL')
+            await contexts.changeRecord(job.parentSessionId, row =>
+              updateHistoricalOperation(row, job.bridgeJobId, before => ({ ...before, lateTerminal: safe })))
+          job.trustedTerminal = safe
+          job.state = 'INTERRUPTED'
+          return
+        }
         job.trustedTerminal = safe
         job.requestId = safe.requestId ?? job.requestId ?? null
         job.state = safe.status === 'POSTMAN_BRIDGE_TERMINAL' ? 'TERMINAL'
@@ -585,8 +876,10 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
               const current = row.bridgeOperations?.[job.bridgeJobId]
               // Received terminal is authoritative even if a later sync or grant
               // fails. Never reinterpret it as unknown external delivery.
-              if (current?.state === 'received') return row
+              if (current?.state === 'received' || current?.executionRevoked) return row
               if (!current) {
+                if (operationIn(row, job.bridgeJobId)?.executionRevoked ||
+                    contexts.get(job.parentSessionId) !== job.taskContext) return row
                 if (job.synchronization === 'synchronized') return row
                 throw new Error('POSTMAN_BRIDGE_JOURNAL_MISSING')
               }
@@ -604,7 +897,11 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
               return { ...row, bridgeOperations: { ...row.bridgeOperations,
                 [job.bridgeJobId]: notSent
                   ? { ...current, state: 'received', phase: 'not-sent', synchronization: 'not-required' }
-                  : { ...current, state: 'unknown' } } }
+                  : { ...current, state: 'unknown', ...(job.transportKind === 'devspace' ? {
+                    devspace: { ...current.devspace, hostFailure: {
+                      status: job.trustedTerminal?.status ?? 'POSTMAN_DEVSPACE_HOST_LIFECYCLE_FAILED',
+                      ...(job.trustedTerminal?.diagnostic || job.diagnostic ? {
+                        diagnostic: String(job.trustedTerminal?.diagnostic ?? job.diagnostic) } : {}) } } } : {}) } } }
             })
             if (job.cancellationRequested && job.trustedTerminal?.status !== 'POSTMAN_BRIDGE_TERMINAL') {
               const settled = contexts.record?.(job.parentSessionId)?.bridgeOperations?.[job.bridgeJobId]
@@ -618,6 +915,10 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
         postmanInputGrants.unpin(job.inputBinding)
         delete job.inputBinding
         job.finishedAt = new Date().toISOString()
+        if (!disposed && job.transportKind === 'devspace' && !job.cancellationRequested) {
+          try { job.recovery = await continueDevspaceRecovery(ctx.agents.get(job.parentSessionId), job.bridgeJobId) }
+          catch (error) { job.recovery = { status: 'POSTMAN_DEVSPACE_RECOVERY_UNKNOWN', diagnostic: diagnostic(error) } }
+        }
         notify(job)
       })
     return { status: 'POSTMAN_BRIDGE_ACCEPTED', ...snapshot(job) }
@@ -727,7 +1028,41 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
       !job.finishedAt && !job.controller.signal.aborted && job.notification === 'PENDING')
   }
 
-  async function status(parent, bridgeJobId, retrySync = false, recover = false) {
+  async function status(parent, bridgeJobId, retrySync = false, recover = false, reconcileWriter = false) {
+    if (reconcileWriter) {
+      if (!controlCallerAllowed(parent)) return { status: 'POSTMAN_BRIDGE_CALLER_REJECTED' }
+      if (typeof contexts?.reconcileWriter !== 'function') return { status: 'POSTMAN_WRITER_EXIT_UNPROVEN',
+        bridgeJobId, diagnostic: 'Native writer settlement evidence is unavailable',
+        alternative: 'Use a separate isolated write folder' }
+      const reconciled = await contexts.reconcileWriter(parent.id, bridgeJobId)
+      devspaceCoordinator.refresh?.()
+      return reconciled
+    }
+    let archived = operationIn(contexts?.record?.(parent.id), bridgeJobId)
+    if (archived?.archivedAt) {
+      if (archived.transportKind === 'devspace' && archived.devspace?.channel && !archived.lateTerminal) {
+        try {
+          const binding = loadDevspaceChannelForOwner(archived.devspace.channel, {
+            bridgeJobId, requestId: archived.requestId, leaderSessionId: parent.id,
+            lunaSessionId: archived.childSessionId })
+          if (readDevspaceEvent(binding)) {
+            const lateTerminal = { status: 'POSTMAN_BRIDGE_TERMINAL', terminalStatus: 'COMPLETED',
+              transportKind: 'devspace', requestId: archived.requestId,
+              result: devspaceTerminal(binding) }
+            await contexts.changeRecord(parent.id, row => updateHistoricalOperation(row, bridgeJobId,
+              before => ({ ...before, lateTerminal })))
+            archived = operationIn(contexts.record(parent.id), bridgeJobId)
+          }
+        } catch { /* Unverified late data has no authority over any operation. */ }
+      }
+      return { status: 'POSTMAN_BRIDGE_ARCHIVED', bridgeJobId,
+      state: archived.state, requestId: archived.requestId ?? null, archivedAt: archived.archivedAt,
+      result: archived.terminal?.result ?? null, lateResult: archived.lateTerminal?.result ?? null,
+      executionRevoked: archived.executionRevoked === true,
+      processStopProven: false, residualWriteRoot: archived.residualWriteRoot ?? null }
+    }
+    if (recover && archived?.transportKind === 'devspace')
+      return continueDevspaceRecovery(parent, bridgeJobId, true)
     let job = jobs.get(bridgeJobId)
     if (!job) {
       const pending = coldRecovery.get(bridgeJobId)
@@ -768,7 +1103,8 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
         return { status: 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN', bridgeJobId,
           requestId: operation.requestId ?? null, childSessionId: operation.childSessionId ?? null,
           laneId: operation.devspace?.laneId ?? null,
-          diagnostic: 'POSTMAN_DEVSPACE_LUNA_TERMINAL_UNAVAILABLE' }
+          diagnostic: operation.devspace?.hostFailure?.status ?? 'POSTMAN_DEVSPACE_LUNA_TERMINAL_UNAVAILABLE',
+          recovery: recoverySummary(parent, bridgeJobId) }
       } else if (operation && operation.requestId && ['pending', 'unknown'].includes(operation.state) &&
                  typeof direct.inspectRequest === 'function') {
         const proof = direct.inspectRequest(operation.requestId, row?.branch, operation.transportKind, row?.repository)
@@ -875,7 +1211,12 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
         ? 'POSTMAN_AUTOMATIC_CONTINUATION_LIMIT_REACHED' : 'POSTMAN_AUTOMATIC_CONTINUATION_NOT_ALLOWED', bridgeJobId }
       return accept(parent, null, job.transportKind, undefined, terminal)
     }
-    return { ...common, recoveryEligible: capability.recovery_eligible === true,
+    const devspaceRecovery = job.transportKind === 'devspace' ? recoverySummary(parent, bridgeJobId) : null
+    return { ...common, recoveryEligible: devspaceRecovery
+        ? !devspaceRecovery.diagnostic && !devspaceRecovery.resultJobId && devspaceRecovery.classification?.kind === 'retry'
+        : capability.recovery_eligible === true,
+      ...(devspaceRecovery ? { recovery: devspaceRecovery,
+        recoveryContinuation: job.recovery ?? null } : {}),
       status: job.state === 'TERMINAL' ? 'POSTMAN_BRIDGE_TERMINAL' : 'POSTMAN_BRIDGE_FAILED',
       terminalStatus: terminal?.terminalStatus ?? null,
       trustedStatus: terminal?.status ?? null,
@@ -893,7 +1234,9 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
   // Read-only observation: Direct inspection reads exact REQ evidence but never writes journals or grants.
   function list(parent) {
     const row = contexts?.record?.(parent.id)
-    const operations = Object.entries(row?.bridgeOperations ?? {}).map(([bridgeJobId, op]) => {
+    const all = Object.assign({}, ...[...(row?.retiredTasks ?? []), row].filter(Boolean)
+      .map(task => task.bridgeOperations ?? {}))
+    const operations = Object.entries(all).map(([bridgeJobId, op]) => {
       const occupied = countsAgainstLimit(op)
       const proof = op.requestId && ['text', 'artifact', 'image'].includes(op.transportKind) &&
         typeof direct.inspectRequest === 'function'
@@ -913,7 +1256,9 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
         countsAgainstLimit: occupied, slotReason: occupied
           ? op.state === 'received' && hasTrustedTerminal(op) ? 'trusted terminal awaiting local synchronization or grant'
             : op.requestId ? 'Direct outcome not yet proven' : 'correlation unavailable; outcome unknown'
-          : 'terminal synchronized or publication proven unnecessary' }
+          : op.executionRevoked ? 'execution revoked; old outcome retained'
+          : 'terminal synchronized or publication proven unnecessary',
+        archivedAt: op.archivedAt ?? null, executionRevoked: op.executionRevoked === true }
     })
     if (row?.bridge) operations.push({ bridgeJobId: row.bridge.id, state: row.bridge.state,
       phase: 'unknown', transportKind: 'unknown', createdAt: 'unknown', childSessionId: 'unknown',
@@ -930,8 +1275,9 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     } catch { return false }
   }
 
-  async function stop(parent, bridgeJobId) {
+  async function stop(parent, bridgeJobId, abandon = false) {
     if (!controlCallerAllowed(parent)) return { status: 'POSTMAN_BRIDGE_CALLER_REJECTED' }
+    if (abandon) return abandonJob(parent, bridgeJobId)
     const job = jobs.get(bridgeJobId)
     if (job && job.parentSessionId !== parent.id) return { status: 'POSTMAN_BRIDGE_JOB_NOT_FOUND' }
     if (job?.trustedTerminal?.status === 'POSTMAN_BRIDGE_TERMINAL')
@@ -986,6 +1332,80 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
       intentPersisted, ...(intentDiagnostic ? { diagnostic: intentDiagnostic } : {}) }
   }
 
+  async function abandonJob(parent, bridgeJobId, seen = new Set()) {
+    if (!controlCallerAllowed(parent)) return { status: 'POSTMAN_BRIDGE_CALLER_REJECTED' }
+    const row = contexts?.record?.(parent.id), op = row?.bridgeOperations?.[bridgeJobId]
+    const job = jobs.get(bridgeJobId)
+    if (!op || job && job.parentSessionId !== parent.id)
+      return { status: 'POSTMAN_BRIDGE_JOB_NOT_FOUND' }
+    if (seen.has(bridgeJobId)) return { status: 'POSTMAN_BRIDGE_ARCHIVE_BINDING_CHANGED', bridgeJobId }
+    seen.add(bridgeJobId)
+    const nextId = op.devspace?.recoveryNextJobId
+    if (nextId) {
+      const next = row.bridgeOperations?.[nextId]
+      if (next?.devspace?.recovery?.sourceJobId !== bridgeJobId)
+        return { status: 'POSTMAN_BRIDGE_ARCHIVE_BINDING_CHANGED', bridgeJobId }
+      const descendant = await abandonJob(parent, nextId, seen)
+      if (descendant.status !== 'POSTMAN_BRIDGE_ARCHIVED') return descendant
+    }
+    if (op.archivedAt) return { status: 'POSTMAN_BRIDGE_ARCHIVED', bridgeJobId,
+      requestId: op.requestId ?? null, processStopProven: false }
+    const ownedDirect = op.childSessionId && direct.latest?.(op.childSessionId)
+    if (op.transportKind !== 'devspace' && ownedDirect?.requestId === op.requestId &&
+        ['running', 'starting'].includes(ownedDirect.state)) {
+      if (job) { job.cancellationRequested = true; job.controller.abort() }
+      return { status: 'POSTMAN_BRIDGE_ARCHIVE_PROCESS_ACTIVE', bridgeJobId,
+        requestId: op.requestId, stopRequested: Boolean(job), processStopProven: false }
+    }
+    let stopReceipt = null
+    if (op.transportKind === 'devspace' && op.devspace?.channel) {
+      try {
+        const binding = loadDevspaceChannelForOwner(op.devspace.channel, {
+          bridgeJobId, requestId: op.requestId, leaderSessionId: parent.id,
+          lunaSessionId: op.childSessionId })
+        const liveDirect = direct.latest?.(op.childSessionId)
+        if (liveDirect?.requestId === op.requestId && ['running', 'starting'].includes(liveDirect.state))
+          stopReceipt = requestDevspaceControl(binding, { kind: 'stop' })
+        revokeDevspaceChannel(binding)
+      } catch (error) { return { status: 'POSTMAN_BRIDGE_ARCHIVE_FENCE_FAILED', bridgeJobId,
+        diagnostic: diagnostic(error) } }
+    }
+    if (job) { job.cancellationRequested = true; job.controller.abort() }
+    await contexts.changeRecord(parent.id, current => {
+      const before = current.bridgeOperations?.[bridgeJobId]
+      if (!before || before.requestId !== op.requestId || before.childSessionId !== op.childSessionId)
+        throw Error('POSTMAN_BRIDGE_ARCHIVE_BINDING_CHANGED')
+      const laneId = before.devspace?.laneId
+      const lane = current.devspaceLanes?.[laneId] ?? (laneId === 'legacy' ? current.devspaceLuna : null)
+      const closeLane = lane && (lane.activeBridgeJobId === bridgeJobId ||
+        !lane.activeBridgeJobId && lane.requestIds?.at(-1) === before.requestId)
+      const nextLane = closeLane ? { ...lane, state: 'closed', activeBridgeJobId: null } : null
+      const residualWriteRoot = before.devspace?.mode === 'WRITE_ISOLATED' ? current.worktree
+        : before.devspace?.approvedAccess === 'write' ? before.devspace.approvedRoot : null
+      return { ...current,
+        ...(nextLane ? laneId === 'legacy' && !current.devspaceLanes?.legacy
+          ? { devspaceLuna: nextLane } : { devspaceLanes: { ...current.devspaceLanes, [laneId]: nextLane } } : {}),
+        bridgeOperations: { ...current.bridgeOperations, [bridgeJobId]: { ...before,
+          archivedAt: new Date().toISOString(), executionRevoked: true,
+          cancellationRequested: true, ...(residualWriteRoot ? { residualWriteRoot } : {}) } } }
+    })
+    devspaceCoordinator.refresh?.()
+    return { status: 'POSTMAN_BRIDGE_ARCHIVED', bridgeJobId, requestId: op.requestId ?? null,
+      processStopProven: false, stopReceipt, outcome: op.terminal?.result ?? null }
+  }
+
+  async function abandonAll(parent) {
+    if (!controlCallerAllowed(parent)) return { status: 'POSTMAN_BRIDGE_CALLER_REJECTED' }
+    const results = []
+    for (const id of Object.keys(contexts?.record?.(parent.id)?.bridgeOperations ?? {})) {
+      const receipt = await abandonJob(parent, id)
+      results.push(receipt)
+      if (receipt.status !== 'POSTMAN_BRIDGE_ARCHIVED')
+        return { status: 'POSTMAN_BRIDGE_ARCHIVE_INCOMPLETE', results }
+    }
+    return { status: 'POSTMAN_BRIDGE_ARCHIVED', results }
+  }
+
   // Team observation must not inspect Direct, recover, synchronize or register grants.
   function teamSnapshot(parent) {
     if (!controlCallerAllowed(parent)) return { status: 'POSTMAN_BRIDGE_CALLER_REJECTED' }
@@ -1022,8 +1442,9 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     if (disposed || !controlCallerAllowed(parent)) return { status: 'POSTMAN_DEVSPACE_CONTROL_CALLER_REJECTED' }
     const job = jobs.get(bridgeJobId)
     const operation = contexts?.record?.(parent.id)?.bridgeOperations?.[bridgeJobId]
-    if (!job || job.parentSessionId !== parent.id || job.transportKind !== 'devspace' ||
+      if (!job || job.parentSessionId !== parent.id || job.transportKind !== 'devspace' ||
         !operation || operation.transportKind !== 'devspace' ||
+        operation.executionRevoked ||
         operation.childSessionId !== job.childSessionId ||
         !job.childSessionId || (operation.requestId && operation.requestId !== job.requestId))
       return { status: 'POSTMAN_DEVSPACE_CONTROL_JOB_NOT_FOUND' }
@@ -1064,7 +1485,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     if (disposed || !controlCallerAllowed(parent) || !contexts?.get(parent.id))
       return { status: 'POSTMAN_DEVSPACE_RECOVERY_UNAVAILABLE' }
     const operations = contexts.record?.(parent.id)?.bridgeOperations ?? {}
-    const candidates = Object.entries(operations).filter(([, op]) => op.transportKind === 'devspace' &&
+    const candidates = Object.entries(operations).filter(([, op]) => op.transportKind === 'devspace' && !op.executionRevoked &&
       (['pending', 'unknown'].includes(op.state) && op.requestId && op.devspace?.channel ||
        op.state === 'received' && op.devspace?.coldBellRecovery === 'intent') &&
       !op.devspace?.coldReadyWake)
@@ -1103,7 +1524,16 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
       recovered.push({ bridgeJobId, requestId: job.requestId,
         notification: delivered ? 'DELIVERED' : 'UNKNOWN' })
     }
-    return { status: 'POSTMAN_DEVSPACE_RECOVERY_SUMMARY', recovered, unresolved }
+    const continuations = []
+    for (const [bridgeJobId, op] of Object.entries(contexts.record?.(parent.id)?.bridgeOperations ?? {})) {
+      if (!technicalFailure(op) || !op.devspace?.payload || op.devspace.recoveryNextJobId ||
+          (op.devspace.recovery?.attempt ?? 0) >= 3) continue
+      try { continuations.push({ sourceJobId: bridgeJobId,
+        ...await continueDevspaceRecovery(parent, bridgeJobId) }) }
+      catch (error) { continuations.push({ sourceJobId: bridgeJobId,
+        status: 'POSTMAN_DEVSPACE_RECOVERY_UNKNOWN', diagnostic: diagnostic(error) }) }
+    }
+    return { status: 'POSTMAN_DEVSPACE_RECOVERY_SUMMARY', recovered, unresolved, continuations }
   }
 
   async function dispose() {
@@ -1118,7 +1548,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     jobs.clear()
   }
 
-  return { accept, status, list, teamSnapshot, stop, hasActive, hasActiveWork, dispose,
+  return { accept, status, list, teamSnapshot, stop, abandonAll, hasActive, hasActiveWork, dispose,
     canDeferLunaBootstrapReport, canDeferLunaBootstrapSettlement,
     devspaceControl, recoverDevspacePending,
     devspaceLunaClose: (parent, laneId) => devspaceLuna.close(parent, contexts?.get(parent.id), laneId),

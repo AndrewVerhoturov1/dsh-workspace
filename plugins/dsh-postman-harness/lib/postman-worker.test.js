@@ -89,7 +89,7 @@ test('Secretary auto-prepares branchless context through actual Host Proxy facad
     'POSTMAN_WORKER_READ_ONLY_CONTEXT')
 })
 
-test('Secretary starts branchlessly, denies separate web provider and keeps scoped assignment', async () => {
+test('Secretary starts branchlessly, permits registered web providers and keeps scoped assignment', async () => {
   let branchless = 0, context = null
   const contexts = {
     get:()=>context,
@@ -114,11 +114,11 @@ test('Secretary starts branchlessly, denies separate web provider and keeps scop
   assert.match(f.calls.starts[0].request.prompt[0].text,/Host-private ledger/)
   assert.match(f.calls.starts[0].request.prompt[0].text,/Never create a Git branch/)
   const inherited=f.calls.starts[0].request.toolFilter
-  assert.ok(inherited?.deny?.includes('web_search'))
-  assert.ok(inherited?.deny?.includes('web_fetch'))
+  assert.equal(inherited?.deny?.includes('web_search'), false)
+  assert.equal(inherited?.deny?.includes('web_fetch'), false)
   const restriction = postmanBridgeRestrictionForAgent({ id:'secretary-child', session:{header:{origin:'subagent',delegationDepth:1,parentSession:parent.id}} }, () => false, () => 'secretary')
-  assert.equal(restriction.allow.includes('web_search'), false)
-  assert.equal(restriction.allow.includes('web_fetch'), false)
+  assert.equal(restriction.allow.includes('web_search'), true)
+  assert.equal(restriction.allow.includes('web_fetch'), true)
   assert.equal(restriction.allow.includes('postman_secretary_ledger'), true)
   assert.equal((await f.tools.taskTool.execute({task:'edit protected source'},exec(parent))).status,
     'POSTMAN_WORKER_READ_ONLY_CONTEXT')

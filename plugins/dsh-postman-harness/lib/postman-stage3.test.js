@@ -49,7 +49,7 @@ test('bounded Stage 3 source contract: kernel first, routing, safety and FAST bu
   assert.match(contract, /postman_task_prepare\/postman_task_restore\/postman_task_close\/postman_input_files/)
   assert.match(contract, /postman_task_close` явно retire-ит settled Leader task binding/)
   assert.match(contract, /не Git cleanup и не доказательство success/)
-  assert.match(contract, /runtime default — hard60; configurable `hardBudget` 8\.\.60; независимый budget каждого assignment/)
+  assert.match(contract, /runtime default — hard60; configurable `hardBudget` 8\.\.100; независимый budget каждого assignment/)
   assert.match(contract, /Stage 3 substantial assignments запрашивают `hardBudget:60` → Host soft48/)
   assert.deepEqual(FAST_WORKER_BUDGET, {hardLimit:60,softLimit:48})
   const example = leader.split('\n').find(line => line.includes('**Known-status branching**'))

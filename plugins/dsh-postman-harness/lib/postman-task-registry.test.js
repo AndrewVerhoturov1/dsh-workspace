@@ -24,6 +24,8 @@ test('JSON storage persists one Leader row across independent domain lifetimes',
   await first.create('leader', record)
   await first.change('leader', row => ({ ...row, stage: 'ready', workers: { 'reserved-C': { id: 'reserved-C',
     label: 'reserved-C', state: 'intent', delivery: 'pending', artifactRequests: [] } },
+    appJobs: { app: { jobId: 'native-app-1', workerSessionId: 'reserved-C', assignmentId: 'assignment',
+      worktree: record.worktree, port: 4173, terminal: 'completed' } },
     bridgeOperations: { cancelled: { state: 'pending', phase: 'reserved', cancellationRequested: true },
       preflight: { state: 'received', phase: 'not-sent', transportKind: 'devspace',
         synchronization: 'not-required', devspace: { mode: 'WRITE_ISOLATED', laneId: 'synthetic-no-send' },
@@ -33,6 +35,7 @@ test('JSON storage persists one Leader row across independent domain lifetimes',
   const second = await openPostmanTaskRegistry(domain)
   assert.equal(second.get('leader').branch, record.branch)
   assert.equal(second.get('leader').workers['reserved-C'].id, 'reserved-C')
+  assert.equal(second.get('leader').appJobs.app.terminal, 'completed', 'Host-observed native process terminal survives cold loss of job controller')
   assert.equal(second.get('leader').bridgeOperations.cancelled.cancellationRequested, true)
   assert.equal(second.get('leader').bridgeOperations.preflight.preSendFailure, 'POSTMAN_DEVSPACE_WORKTREE_NOT_READY',
     'exact trusted pre-Send reason survives first JsonStorage cold reopen')

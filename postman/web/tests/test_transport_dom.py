@@ -1,5 +1,6 @@
 """Real Chromium DOM: banners, re-proof, natural Send and result correlation."""
 import html
+import json
 import sys
 import tempfile
 import unittest
@@ -69,6 +70,14 @@ class TransportDomTests(unittest.TestCase):
         cls.browser.close()
         cls.pw.stop()
     def setUp(self):
+        private = tempfile.TemporaryDirectory()
+        self.addCleanup(private.cleanup)
+        channel = Path(private.name) / "11111111-1111-4111-8111-111111111111"
+        channel.mkdir()
+        self.devspace_binding = {"version": 1, "requestId": REQ, "jobId": channel.name,
+            "channel": str(channel), "leaderSessionId": "fixture-leader", "lunaSessionId": "fixture-luna",
+            "capability": "a" * 64, "mode": "READ_ONLY", "workspaceRef": private.name, "writeRoot": None}
+        (channel / "binding.json").write_text(json.dumps(self.devspace_binding), encoding="utf-8")
         self.page = self.browser.new_page()
         self.route_body = document()
         self.page.route('**/*', lambda route: route.fulfill(status=200, content_type='text/html; charset=utf-8', body=self.route_body))
@@ -550,22 +559,18 @@ class TransportDomTests(unittest.TestCase):
         self.set_html(document())
         proof = recovery.chat_ready_snapshot(self.page, URL + '-other', PROMPT)
         self.assertFalse(proof['ok'])
-    def test_strict_continuation_waits_for_prior_user_payload_then_sends_once(self):
-        prior_id = "REQ_20261001T041338Z_9561"
-        prior = f"POSTMAN_REQUEST_ID: {prior_id}\nEarlier task"
+    def test_owned_continuation_missing_prior_user_payload_sends_once(self):
+        prior_id = "REQ_20260930T041338Z_9561"
         self.set_html(document(turns=""))
-        def hydrate():
-            self.page.locator('main').evaluate("(el, body)=>el.innerHTML=body", group(
-                prompt=prior, body='<div data-testid="collapsible-user-message-content">' + html.escape(prior) + '</div>', key="prior"))
         original_wait = submit._wait_until
         first = [True]
         def delayed(predicate, **kwargs):
             ready, details = predicate()
             if first[0]:
                 first[0] = False
-                self.assertFalse(ready)
+                self.assertTrue(ready)
                 self.assertEqual(details.get('reason'), 'history_turns_unrecognized')
-                hydrate()
+                self.assertFalse(details['historyReady'])
             return original_wait(predicate, **kwargs)
         self.page.locator('[data-testid="send-button"]').evaluate('''button => button.onclick = () => {
             const bubble=document.createElement('div');bubble.setAttribute('data-user-message-bubble','true');
@@ -579,6 +584,8 @@ class TransportDomTests(unittest.TestCase):
                                                    navigate=False, prior_request_id=prior_id)
         self.assertTrue(result['ok'], result)
         self.assertEqual(self.page.evaluate('window.sends'), 1)
+        self.assertEqual(result['details']['priorHistoryReason'], 'history_turns_unrecognized')
+        self.assertEqual(submit.collect_user_turn_texts(self.page), [PROMPT])
 
     def send_natural(self, *, slot=1, binding=None, anchor=PROMPT, original=PROMPT):
         intent = transport.make_intent(self.page, REQ, URL, original, anchor,
@@ -825,7 +832,7 @@ class TransportDomTests(unittest.TestCase):
         with patch.object(devspace_observer, "read_event", return_value=None), \
              patch.object(devspace_observer.controls, "process_one", return_value=None), \
              patch.object(devspace_observer.image_output, "observe_owned_image", return_value=None):
-            result = devspace_observer.wait_for_signal(self.page, PROMPT, URL, {"requestId": REQ},
+            result = devspace_observer.wait_for_signal(self.page, PROMPT, URL, self.devspace_binding,
                 timeout_ms=10000, interval_ms=1000, count=1,
                 sleep=self.clock.sleep, monotonic=self.clock.now, persist=lambda _: None)
         self.assertEqual(result["details"]["source"], "text_fallback", result)
@@ -878,7 +885,7 @@ class TransportDomTests(unittest.TestCase):
                      patch.object(devspace_observer.observer, "observe_next_assistant", side_effect=observe), \
                      patch.object(reminders, "prepare_same_chat", side_effect=prepare) as prepare_call, \
                      patch.object(submit, "insert_prompt", side_effect=insert) as insert_call:
-                    result = devspace_observer.wait_for_signal(self.page, PROMPT, URL, {"requestId": REQ},
+                    result = devspace_observer.wait_for_signal(self.page, PROMPT, URL, self.devspace_binding,
                         timeout_ms=60000, interval_ms=1000, count=3,
                         sleep=self.clock.sleep, monotonic=self.clock.now, persist=lambda _: None)
                 self.assertEqual(result["details"]["source"], "text_fallback", result)
@@ -912,7 +919,7 @@ class TransportDomTests(unittest.TestCase):
              patch.object(devspace_observer.controls, "process_one", return_value=None), \
              patch.object(devspace_observer.image_output, "observe_owned_image", return_value=None), \
              patch.object(devspace_observer.observer, "observe_next_assistant", side_effect=observe):
-            result = devspace_observer.wait_for_signal(self.page, PROMPT, URL, {"requestId":REQ},
+            result = devspace_observer.wait_for_signal(self.page, PROMPT, URL, self.devspace_binding,
                 timeout_ms=60000, interval_ms=1000, count=3,
                 sleep=self.clock.sleep, monotonic=self.clock.now, persist=lambda _:None)
         self.assertEqual(result["code"], "DEVSPACE_DIAGNOSTIC")
@@ -964,7 +971,7 @@ class TransportDomTests(unittest.TestCase):
                      patch.object(devspace_observer.image_output, "observe_owned_image", return_value=None), \
                      patch.object(devspace_observer.observer, "observe_next_assistant", side_effect=observe):
                     result = devspace_observer.wait_for_signal(self.page, PROMPT, URL,
-                        {"requestId":REQ}, timeout_ms=60000, interval_ms=1000, count=3,
+                        self.devspace_binding, timeout_ms=60000, interval_ms=1000, count=3,
                         sleep=self.clock.sleep, monotonic=self.clock.now, persist=snapshots.append)
                 self.assertEqual(result["code"], "DEVSPACE_SIGNAL_RECEIVED", result)
                 self.assertEqual(self.page.evaluate("window.stopClicks"), 1)
@@ -975,6 +982,34 @@ class TransportDomTests(unittest.TestCase):
                 self.assertEqual(len(sent_turns), 2)
                 self.assertNotEqual(sent_turns[1], PROMPT)
                 self.assertIn('local bell', sent_turns[1])
+
+    def test_stale_timer_newer_user_is_fenced_but_virtualized_history_still_runs(self):
+        from postman.devspace import observer as devspace_observer
+        for newer in (True, False):
+            with self.subTest(newer=newer):
+                self.clock = Clock()
+                turns = (group() + group(prompt="new manual user task", key="newer") if newer else
+                         group(prompt="visible excerpt without the old request anchor", key="virtualized"))
+                self.set_html(document(turns=turns, stop=True))
+                self.page.evaluate("window.sends=0;window.stopClicks=0")
+                def observe(*args, **kwargs):
+                    self.clock.sleep(0.2)
+                    return {"ok": False, "code": observer.CHAT_CORRELATION_LOST, "details": {}}
+                def bell(_binding):
+                    return {"reportedOutcome": "DONE"} if self.page.evaluate("window.sends || 0") else None
+                with patch.object(devspace_observer, "read_event", side_effect=bell), \
+                     patch.object(devspace_observer.controls, "process_one", return_value=None), \
+                     patch.object(devspace_observer.image_output, "observe_owned_image", return_value=None), \
+                     patch.object(devspace_observer.observer, "observe_next_assistant", side_effect=observe):
+                    result = devspace_observer.wait_for_signal(self.page, PROMPT, URL,
+                        self.devspace_binding, timeout_ms=60000, interval_ms=1000, count=3,
+                        sleep=self.clock.sleep, monotonic=self.clock.now, persist=lambda _: None)
+                self.assertEqual(self.page.evaluate("window.stopClicks"), 0 if newer else 1)
+                self.assertEqual(self.page.evaluate("window.sends"), 0 if newer else 1)
+                if newer:
+                    self.assertTrue(result["details"]["supersededByUserTurn"])
+                else:
+                    self.assertEqual(result["code"], "DEVSPACE_SIGNAL_RECEIVED", result)
 
 
     def test_unknown_initial_send_recovers_real_dom_stop_and_continuation(self):
@@ -1017,7 +1052,7 @@ class TransportDomTests(unittest.TestCase):
              patch.object(devspace_observer.image_output, "observe_owned_image", return_value=None), \
              patch.object(devspace_observer.observer, "observe_next_assistant", side_effect=observe):
             result = devspace_observer.wait_for_bell_after_unknown_send(
-                {"requestId": REQ}, timeout_ms=60_000,
+                self.devspace_binding, timeout_ms=60_000,
                 interval_ms=1000, count=3, page=self.page,
                 conversation_ref=URL, prompt=PROMPT,
                 sleep=self.clock.sleep, monotonic=self.clock.now, persist=snapshots.append)

@@ -35,7 +35,7 @@ Engineering judgement stays with Sol. Independent cheap mechanics go to Worker i
 
 Assignment короткий, однозначный: Objective, Work type, Scope/boundaries, Done when, Verification, Stop condition, Established facts/context. **Exact-path-first delegation:** дай уже known file/symbol/test command/expected status, запрети не discovery вообще, а ненужное повторное discovery известного target. Constraint только с источником: user/TASK_CONTRACT/repo policy/security/shared-worktree/explicit scope.
 
-Substantial FAST assignment → normal `hardBudget:60` / Host `softLimit:48`; obviously small bounded assignment (exact fact, small synthesis, one targeted verification, known mechanical correction) → parent may choose a smaller valid budget. Runtime 8..60/default60. Каждый assignment полностью независим; расход не суммируется в team/root/objective quota. Compact/cold resume сохраняют текущий budget; queued follow-up получает новый только при FIFO claim.
+Substantial FAST assignment → normal `hardBudget:60` / Host `softLimit:48`; obviously small bounded assignment (exact fact, small synthesis, one targeted verification, known mechanical correction) → parent may choose a smaller valid budget. Runtime 8..100/default60; softLimit=floor(0.8*hardBudget), explicit100 → soft80. Каждый assignment полностью независим; расход не суммируется в team/root/objective quota. Compact/cold resume сохраняют текущий budget; queued follow-up получает новый только при FIFO claim.
 
 FAST escalation: missing fact → другой bounded Worker (или запрос Leader о Secretary facts); choice → Sol решает; precise correction → same Worker continuation; scope/authority/реальный blocker → Leader. Не vague «продолжай», не бесконечная discovery branch. Soft warning → synthesis, near hard → precise NEEDS_PARENT_GUIDANCE, не ещё grep.
 
@@ -79,7 +79,7 @@ Own browser engineering verification только canonical Host-selected `mcp__
 
 Для exact Sol generic child report guidance «report earlier for progress» не применяется: этот role contract имеет приоритет, report завершает turn.
 
-`report` = terminal assignment result, не progress/FYI channel: не «Worker запущены», «я продолжаю» или «Worker работают». Host отвергает final report, пока owned work active/pending/uncertain либо result ещё не settled. После settlement report разрешён без обязательного close каждого idle/cold binding; failed/cancelled outcomes агрегируй как blockers, не как success. `notify_parent` = только NEEDS_PARENT_GUIDANCE / decision-relevant escalation, не FYI/progress/обычный completion; final result всё равно через report.
+`report` = terminal assignment result, не progress/FYI channel: не «Worker запущены», «я продолжаю» или «Worker работают». Сообщай PARTIAL/BLOCKED даже при незавершённых owned children: перечисли их реальные состояния и оставшуюся работу. Host доставляет отчёт без автоматического settlement детей и без оценки его смысла. После settlement report разрешён без обязательного close каждого idle/cold binding; failed/cancelled outcomes агрегируй как blockers, не как success. `notify_parent` = только NEEDS_PARENT_GUIDANCE / decision-relevant escalation, не FYI/progress/обычный completion; final result всё равно через report.
 
 Self-contained aggregate report: PASS/PARTIAL/BLOCKED/FAILED, changed paths, implementation, verified commands/tool output+inputs, Worker-reported vs Sol-verified, contradictions, remaining/blockers, own children lifecycle. Report не абсолютная truth authority; final judgement Leader. Unverified UI/dependency missing/baseline failures не общий PASS.
 

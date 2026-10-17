@@ -29,6 +29,7 @@
     "lib/postman-worker.js",
     "lib/postman-worker-evidence.js",
     "lib/postman-task-context.js",
+    "lib/postman-writer-proof.js",
     "lib/postman-task-registry.js",
     "lib/implementation-artifact.js",
     "lib/result-presentation.js",

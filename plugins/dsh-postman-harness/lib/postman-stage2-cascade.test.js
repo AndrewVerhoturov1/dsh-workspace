@@ -58,7 +58,7 @@ test('actual PTC active Sol cascade close rejects before binding mutation', { ti
   f.gate.resolve(); await f.childDone(f.id)
 })
 
-test('actual PTC two RUNNING ordinary children reject close and fresh then strict cascade cancel settles children before Sol', { timeout: 30000 }, async t => {
+test('actual PTC two RUNNING ordinary children reject close; explicit fresh cancels descendants then replaces Sol', { timeout: 30000 }, async t => {
   const dir = await mkdtemp(join(tmpdir(), 'stage2-running-cascade-'))
   const started = Promise.withResolvers(), childrenStarted = Promise.withResolvers(), cleanup = new AbortController()
   const running = new Map(), aborted = []; let step = 0, sol, f
@@ -76,6 +76,7 @@ test('actual PTC two RUNNING ordinary children reject close and fresh then stric
       if (running.size === 2) childrenStarted.resolve()
       return waitAbort(a.id, request.signal)
     }
+    if(sol && a.id!==sol.id)return report
     sol = a
     if (step++ < 2) return {name:'ptc_execute',args:{program:'return await tools.postman_worker({task:"running bounded native child",createNew:true})',description:'Dispatch exact active owned child before event',boundary:'semantic_decision'}}
     await childrenStarted.promise
@@ -96,20 +97,17 @@ test('actual PTC two RUNNING ordinary children reject close and fresh then stric
   assert.equal(closed.status, 'POSTMAN_WORKER_CASCADE_BLOCKED', JSON.stringify(closed))
   for (const id of ids) assert.ok(closed.blockers.some(b => b.workerSessionId === id))
   assert.equal(JSON.stringify(f.registry.get('leader').workers), before)
-  const fresh = await call(f, 'postman_worker_fresh', { workerSessionId: sol.id, task: 'fresh rejects active children', retireOwnedWorkers: true })
-  assert.equal(fresh.status, 'POSTMAN_WORKER_CASCADE_BLOCKED', JSON.stringify(fresh))
-  for (const id of ids) assert.ok(fresh.blockers.some(b => b.workerSessionId === id))
-  assert.equal(JSON.stringify(f.registry.get('leader').workers), before)
   assert.deepEqual(aborted, [])
-  const cancelled = await call(f, 'postman_worker_stop', { workerSessionId: sol.id, mode: 'cancel', cascade: true })
-  assert.equal(cancelled.status, 'POSTMAN_WORKER_CANCELLED', JSON.stringify(cancelled))
-  assert.equal(cancelled.taskCompleted, false); assert.equal(cancelled.resultReported, false)
-  assert.deepEqual(aborted, [...ids, sol.id])
-  // Native cancellation notifications may wake the Leader; no child mechanical turn is permitted.
-  assert.equal(f.requests.filter(r => r.agent.id !== f.leader.id).length, requests)
-  const row = f.registry.get('leader')
-  assert.deepEqual(row.workers, {})
-  assert.deepEqual(row.retiredWorkers.map(b => b.id), [...ids, sol.id])
+  const oldSolId=sol.id
+  const fresh=await call(f,'postman_worker_fresh',{workerSessionId:oldSolId,task:'Explicit new bounded assignment',retireOwnedWorkers:true})
+  assert.equal(fresh.status,'POSTMAN_WORKER_TASK_ACCEPTED',JSON.stringify(fresh))
+  assert.notEqual(fresh.workerSessionId,oldSolId);assert.equal(fresh.fresh,true)
+  await f.childDone(fresh.workerSessionId)
+  assert.deepEqual(aborted,[...ids,oldSolId])
+  assert.equal(f.requests.filter(r=>[...ids,oldSolId].includes(r.agent.id)).length,requests,'retirement runs no old child model turn')
+  const row=f.registry.get('leader')
+  assert.deepEqual(Object.keys(row.workers),[fresh.workerSessionId])
+  assert.deepEqual(row.retiredWorkers.map(b=>b.id),[...ids,oldSolId])
   for (const id of [...ids, sol.id]) {
     assert.equal(f.ctx.agents.get(id), undefined)
     const saved = await f.ctx.sessionPersistence.inspect(id)

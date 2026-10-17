@@ -154,29 +154,28 @@ else {
       child.on('error',reject);child.on('exit',code=>code===0?resolve():reject(Error(phase+' exited '+code)))
     })
   })
-  test('before-action delivery, scoped subproject, nested AGENTS and fail-closed sources',{timeout:20000},async t=>{
+  test('non-blocking delivery, scoped subproject, nested AGENTS and unavailable sources',{timeout:20000},async t=>{
     const dir=await mkdtemp(join(tmpdir(),'dsh-policy-boundary-'));await fixture(dir)
     const r=await runtime(dir);const {ctx,requests,effects,create}=r
     t.after(async()=>{await ctx.fiber.dispose();await rm(dir,{recursive:true,force:true,maxRetries:5,retryDelay:100})})
     const agent=await create('leader')
     agent.followup(input('Small task'));await agent.whenIdle()
     assert.ok(body(requests.at(-1).request).includes('Current focus'),'known supervisor subprojects proactively delivered')
-    // New/unexpected subprojects remain first-touch fail-closed.
+    // First touch executes and schedules instructions for the next model step.
     await mkdir(join(dir,'docs/subprojects/agents-nods-by-andrew'),{recursive:true})
     await mkdir(join(dir,'plugins/dsh-nodes-agent-by-andrew'),{recursive:true})
     await writeFile(join(dir,'docs/subprojects/agents-nods-by-andrew/SUBPROJECT.md'),'UNKNOWN_PROJECT_CONTEXT')
     const execute = (name,args) => ctx.tools.execute({callId:'fixture-'+effects.length,name,arguments:args,agent,signal:signal()})
-    // Even another middleware forcing allow cannot override the monotonic gate.
-    ctx.on('tools/pre-execute',async (_exec,next)=>{await next();return {kind:'allow'}})
-    const denied = await execute('write',{file_path:'plugins/dsh-nodes-agent-by-andrew/a.txt',content:'b'})
-    assert.equal(denied.isError,true);assert.match(denied.error.message,/WORKSPACE_POLICY_REQUIRED/);assert.equal(effects.length,0)
+    const first = await execute('write',{file_path:'plugins/dsh-nodes-agent-by-andrew/a.txt',content:'b'})
+    assert.equal(first.isError,false,JSON.stringify(first));assert.equal(effects.length,1)
     agent.followup(input('Deliver Host context'));await agent.whenIdle()
+    assert.ok(body(requests.at(-1).request).includes('UNKNOWN_PROJECT_CONTEXT'))
     const subproject = await readFile(join(dir,'docs/subprojects/ptc/SUBPROJECT.md'),'utf8')
     assert.ok(latest(ctx,agent).some(s=>s.text.endsWith(subproject)))
     assert.equal((await execute('write',{file_path:'plugins/dsh-nodes-agent-by-andrew/a.txt',content:'b'})).isError,false)
-    assert.equal(effects.length,1)
+    assert.equal(effects.length,2)
     await writeFile(join(dir,'docs/subprojects/ptc/SUBPROJECT.md'),'Fresh PTC instructions')
-    assert.equal((await execute('read',{file_path:'plugins/dsh-ptc/a.txt'})).isError,true,'known project freshness still fail-closed')
+    assert.equal((await execute('read',{file_path:'plugins/dsh-ptc/a.txt'})).isError,false,'changed project instructions do not reject reads')
     agent.followup(input('Deliver fresh project instructions'));await agent.whenIdle()
     assert.ok(body(requests.at(-1).request).includes('Fresh PTC instructions'))
     assert.equal((await execute('read',{file_path:'nested/a.txt'})).isError,false)
@@ -184,14 +183,17 @@ else {
     assert.ok(body(requests.at(-1).request).includes('NESTED_ONLY'))
     assert.ok(!body(requests.at(-1).request).includes('SIBLING_ONLY'))
     await writeFile(join(dir,'REPO_POLICY.md'),'Fresh policy revision')
-    assert.equal((await execute('pwsh',{})).isError,true,'stale policy blocks action')
+    assert.equal((await execute('pwsh',{})).isError,false,'stale policy does not block action')
     agent.followup(input('Refresh changed policy'));await agent.whenIdle()
     assert.equal((await execute('pwsh',{})).isError,false)
     await rm(join(dir,'REPO_POLICY.md'))
-    assert.equal((await execute('pwsh',{})).isError,true,'missing required policy blocks action')
-    assert.equal(effects.length,3)
+    assert.equal((await execute('pwsh',{})).isError,false,'missing policy does not block action')
+    assert.equal(effects.length,7)
     await rm(join(dir,'docs/workflow/TASK_CONTRACT.md'))
-    assert.equal((await execute('pwsh',{})).isError,true,'both missing required documents do not turn off workspace policy')
+    assert.equal((await execute('pwsh',{})).isError,false,'missing documents do not reject ordinary tools')
+    agent.followup(input('Show unavailable instructions'));await agent.whenIdle()
+    assert.ok(body(requests.at(-1).request).includes('WORKSPACE_INSTRUCTION_UNAVAILABLE'))
+    assert.ok(!latest(ctx,agent).some(s=>s.text.endsWith('Fresh policy revision')))
     await writeFile(join(dir,'docs/workflow/TASK_CONTRACT.md'),'Restored task contract')
     await writeFile(join(dir,'REPO_POLICY.md'),'Fresh policy revision')
     const scoped = await ctx.systemPrompt.assemble({agent,scope:agent,signal:signal()})
@@ -229,7 +231,8 @@ else {
     const r=await runtime(dir)
     try {
       const agent=await r.create('leader')
-      await assert.rejects(r.ctx.systemPrompt.assemble({agent,scope:agent,signal:signal()}),/ENOENT|not found|no such file/i)
+      const assembled=await r.ctx.systemPrompt.assemble({agent,scope:agent,signal:signal()})
+      assert.ok(assembled.contexts.some(s=>s.text.includes('WORKSPACE_INSTRUCTION_UNAVAILABLE') && s.name.includes('TASK_CONTRACT')))
     } finally {await r.ctx.fiber.dispose();await rm(dir,{recursive:true,force:true,maxRetries:5})}
   })
   test('exact Leader role does not preload Postman projects into unrelated repository',{timeout:20000},async t=>{
@@ -241,6 +244,20 @@ else {
     t.after(async()=>{await r.ctx.fiber.dispose();await rm(dir,{recursive:true,force:true,maxRetries:5})})
     const agent=await r.create('leader');agent.followup(input('Bounded unrelated task'));await agent.whenIdle()
     assert.ok(!latest(r.ctx,agent).some(s=>s.name.includes('docs'+(process.platform==='win32'?'\\':'/')+'subprojects')))
+  })
+
+  test('path observation refreshes context without an inbox wake or extra model turn',{timeout:20000},async t=>{
+    const dir=await mkdtemp(join(tmpdir(),'dsh-policy-no-wake-'));await fixture(dir)
+    const r=await runtime(dir,({requests})=>requests.length===1
+      ? {type:'tool-call',id:'observe-path',name:'read',arguments:JSON.stringify({file_path:'plugins/dsh-ptc/a.txt'})}
+      : {type:'text',text:'finished requested read'})
+    t.after(async()=>{await r.ctx.fiber.dispose();await rm(dir,{recursive:true,force:true,maxRetries:5})})
+    const agent=await r.create('leader')
+    agent.followup(input('Read the exact named file once'));await agent.whenIdle()
+    assert.equal(r.effects.length,1)
+    assert.equal(r.requests.length,2,'one tool request and one normal completion')
+    assert.equal(agent.inbox.nextStep.some(m=>m.source?.plugin==='dsh-workspace-policy'),false)
+    assert.ok(!agent.session.events.some(e=>e.type==='user/message' && e.data.source?.plugin==='dsh-workspace-policy'))
   })
 
   test('real Host registry: external Git cwd cannot replace canonical Leader skill',{timeout:30000},async t=>{
@@ -276,7 +293,7 @@ else {
     assert.ok(latest(r.ctx,agent).some(s=>s.name==='dsh:workspace-policy:'+join(repo,'REPO_POLICY.md')))
   })
 
-  test('missing installed canonical Leader skill fails closed despite project decoy',{timeout:30000},async t=>{
+  test('missing canonical Leader skill is diagnosed without loading project decoy',{timeout:30000},async t=>{
     const dir=await mkdtemp(join(tmpdir(),'dsh-policy-missing-project-'));await fixture(dir)
     await mkdir(join(dir,'.agents/skills/postman-leader'),{recursive:true})
     await writeFile(join(dir,'.agents/skills/postman-leader/SKILL.md'),
@@ -290,8 +307,8 @@ else {
     const r=await runtime(dir,()=>{}, {applyPolicy:missing.apply})
     t.after(async()=>{await r.ctx.fiber.dispose();await rm(dir,{recursive:true,force:true,maxRetries:5});await rm(host,{recursive:true,force:true,maxRetries:5})})
     const agent=await r.create('leader')
-    await assert.rejects(r.ctx.systemPrompt.assemble({agent,scope:agent,signal:signal()}),
-      /WORKSPACE_POLICY_REQUIRED: canonical postman-leader skill unavailable from Host installation/)
+    const assembled=await r.ctx.systemPrompt.assemble({agent,scope:agent,signal:signal()})
+    assert.ok(assembled.contexts.some(s=>s.text.includes('WORKSPACE_INSTRUCTION_UNAVAILABLE: canonical postman-leader skill unavailable from Host installation')))
   })
 
   test('real Host registry preserves distinct Worker, Secretary and Sol canonical skills',{timeout:20000},async t=>{

@@ -24,7 +24,7 @@ export const POSTMAN_WORKER_PROVIDER = 'spawn'
 export const FAST_WORKER_MODEL = 'gpt-6-luna'
 export const FAST_WORKER_REASONING = 'low'
 export const POSTMAN_WORKER_AGENT_OPTIONS = Object.freeze({ provider: 'codex', model: FAST_WORKER_MODEL, reasoningEffort: FAST_WORKER_REASONING })
-const hardValid = hard => Number.isSafeInteger(hard) && hard >= 8 && hard <= 60
+const hardValid = hard => Number.isSafeInteger(hard) && hard >= 8 && hard <= 100
 const limitsFor = hardLimit => ({ hardLimit, softLimit: Math.floor(hardLimit * 0.8) })
 export const FAST_WORKER_BUDGET = Object.freeze(limitsFor(60))
 const ROLE_SKILLS = Object.freeze(Object.fromEntries(['luna', 'secretary', 'sol'].map(type => [type,
@@ -57,7 +57,7 @@ export { WORKER_CONTROL_TOOLS, DELEGATION_TOOLS, SECRETARY_TOOLS } from './postm
 export function postmanWorkerDeniedTools(tools, type = 'luna', scope) {
   return [...new Set([...tools.schemas(scope).map(tool => tool.name).filter(name => name.startsWith('postman_') &&
     !(type === 'sol' && WORKER_CONTROL_TOOLS.includes(name)) && !(type === 'luna' && name === 'postman_app') && !(type === 'secretary' && name === 'postman_secretary_ledger')),
-    ...tools.schemas(scope).map(tool => tool.name).filter(name => DELEGATION_TOOLS.includes(name) || (type === 'luna' && ['ask_user_question', 'list_agents', 'exit_plan_mode'].includes(name)) || (type !== 'sol' && name === 'ptc_execute') || (type === 'secretary' && ['implementation_artifact_apply', 'web_search', 'web_fetch'].includes(name)))])]
+    ...tools.schemas(scope).map(tool => tool.name).filter(name => DELEGATION_TOOLS.includes(name) || (type === 'luna' && ['ask_user_question', 'list_agents', 'exit_plan_mode'].includes(name)) || (type !== 'sol' && name === 'ptc_execute') || (type === 'secretary' && name === 'implementation_artifact_apply'))])]
 }
 
 export function buildPostmanWorkerStartRequest(parent, task, signal, deniedTools, label = 'Postman Worker', workerType = 'luna') {
@@ -603,7 +603,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     workerSessionId: { type: 'string', description: 'Exact existing Worker session for an addressed task or artifact grant.' },
     label: { type: 'string', description: 'Display name, not an authority or lookup key.' },
     artifactRequestId: { type: 'string', description: 'Separately trusted artifact REQ.' },
-    hardBudget: { type: 'number', description: 'FAST assignment hard model-request budget: integer 8..60, default 60 for substantial work; smaller values for obviously short bounded assignments. Host computes softLimit=floor(0.8*hardBudget); each assignment is independent.' },
+    hardBudget: { type: 'number', description: 'FAST assignment hard model-request budget: integer 8..100, default 60 for substantial work; smaller values for obviously short bounded assignments. Host computes softLimit=floor(0.8*hardBudget); each assignment is independent.' },
   }
   function makeTaskTool(workerType) {
     const sol = workerType === 'sol', secretary = workerType === 'secretary'
@@ -690,15 +690,13 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     if (!preflightOwned && workerTypeOf(binding) === 'sol' && Object.values(rawRow(parent.id)?.workers ?? {}).some(value => value.ownerSessionId === binding.id))
       return { ready: false, reason: 'Sol must retire its own Worker bindings before closing/fresh' }
     if (binding.state !== 'ready' || binding.delivery !== 'none')
-      return { ready: false, reason: 'binding or admission uncertain; request approved addressed cancel' }
+      return { ready: false, reason: 'binding or admission uncertain; request addressed cancel' }
     const child = await history(binding.id, parent.id, signal)
     const reported = workerEvidence(binding, child, parent)
-    // Releasing a session is not certifying its task. Local mode needs runtime
-    // quiescence, not a perfect historical chain of reports.
-    const evidence = localDevelopment
-      ? { ready: child?.status === 'idle' && child.inbox?.hasPending === false,
-          reason: 'Worker active, pending, or history unavailable', resultReported: reported.ready }
-      : { ...reported, resultReported: reported.ready }
+    // Releasing a session certifies only runtime quiescence. Reports remain
+    // evidence of delivery; their absence never invents task success.
+    const evidence = { ready: child?.status === 'idle' && child.inbox?.hasPending === false,
+      reason: 'Worker active, pending, or history unavailable', resultReported: reported.ready }
     if (!evidence.ready) return evidence
     // Capture before the asynchronous descendant read, not after it.
     const eventCount = child.session.events.length
@@ -763,12 +761,10 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
         if (mode === 'cancel' && cancelWitness(current) !== witness)
           return { status:'POSTMAN_WORKER_BINDING_CHANGED', workerSessionId:selected.id }
         try {
-          const evidence = mode === 'close' ? (localDevelopment || current.lifecycle ?
-            await closeEvidence(parent, current, exec.signal) :
-            { ready: false, reason: 'no durable lifecycle witness' }) : null
+          const evidence = mode === 'close' ? await closeEvidence(parent, current, exec.signal) : null
           if (mode === 'close') {
             if (!evidence.ready) return { status: 'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT',
-              workerSessionId: selected.id, reason: evidence.reason + '; request approved addressed cancel if no report can arrive' }
+              workerSessionId: selected.id, reason: evidence.reason + '; request addressed cancel for active or uncertain work' }
           }
           if (!await verifyIdentity(parent, selected.id, exec.signal))
             return { status: 'POSTMAN_WORKER_BINDING_UNCERTAIN', workerSessionId: selected.id }
@@ -778,7 +774,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
           const latest = bindings(parent, g)[selected.id]
           if (!latest || latest.id !== selected.id ||
               (mode === 'cancel' && cancelWitness(latest) !== witness))
-            return { status: mode === 'cancel' ? (localDevelopment ? 'POSTMAN_WORKER_BINDING_CHANGED' : 'POSTMAN_WORKER_CANCEL_APPROVAL_REQUIRED') :
+            return { status: mode === 'cancel' ? 'POSTMAN_WORKER_BINDING_CHANGED' :
               'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT', workerSessionId: selected.id }
           if (mode === 'close') {
             // Verification and admission cutoff share the native exact-child lock.
@@ -996,7 +992,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
   })
   const freshTool = defineTool({
     name: 'postman_worker_fresh',
-    description: 'Retire an exact owned settled child and spawn a fresh role-preserving Session for an explicit new assignment. No history inheritance or Git reset; Secretary ledger survives. Approved-plan routing is preserved; fresh is not approval for a new independent outcome or material change.',
+    description: 'Cancel and retire an exact owned child, then spawn a fresh role-preserving Session for an explicit new assignment after native closure. No history inheritance or Git reset; Secretary ledger survives. Approved-plan routing is preserved; fresh is not approval for a new independent outcome or material change.',
     parameters: { workerSessionId: { type: 'string', required: true }, task: { type: 'string', required: true }, hardBudget: parameters.hardBudget, label: { type: 'string' }, retireOwnedWorkers: { type: 'boolean' } }, output: output(),
     async execute(args, exec) {
       const parent = exec.agent
@@ -1020,8 +1016,8 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
             if (!await provenClosed(parent, id) || ctx.agents.get(id) || Object.values(rawRow(parent.id)?.workers ?? {}).some(b => b.ownerSessionId === id))
               return { status: 'POSTMAN_WORKER_BINDING_UNCERTAIN', workerSessionId: id }
           } else {
-            const closed = await stopTool.execute({workerSessionId: id, mode: 'close', cascade: args.retireOwnedWorkers === true}, exec)
-            if (closed.status !== 'POSTMAN_WORKER_STOPPED') return closed
+            const closed = await stopTool.execute({workerSessionId: id, mode: 'cancel', cascade: args.retireOwnedWorkers === true}, exec)
+            if (!['POSTMAN_WORKER_STOPPED', 'POSTMAN_WORKER_CANCELLED'].includes(closed.status)) return closed
           }
           const accepted = await create(parent, g, {...args, workerSessionId: undefined, label: args.label ?? chosen.binding.label, createNew: true}, exec, workerTypeOf(chosen.binding), id)
           return {...accepted, retiredWorkerSessionId: id, fresh: accepted.status === 'POSTMAN_WORKER_TASK_ACCEPTED'}
@@ -1030,7 +1026,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
   })
   const compactTool = defineTool({
     name: POSTMAN_WORKER_COMPACT_TOOL_NAME,
-    description: 'Compact the exact idle or settled non-resident Worker using native compaction; keep its Session, binding and budget without a Worker turn.',
+    description: 'Compact the exact idle Worker using native compaction, including non-resident sessions without a historical report; keep its Session, binding and budget without a Worker turn.',
     parameters: { workerSessionId: { type: 'string', required: true } }, output: output(),
     async execute(args, exec) {
       const parent = exec?.agent, id = args?.workerSessionId
@@ -1043,8 +1039,8 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
         const binding = bindings(parent, g)[id]
         if (binding !== selected.binding || binding.state !== 'ready' || binding.delivery !== 'none' ||
             !matchesContext(parent, slot)) return { status: 'POSTMAN_WORKER_COMPACT_BUSY', workerSessionId: id }
-        const child = liveWorker(id), sol = workerTypeOf(binding) === 'sol'
-        if ((!child || sol) && !workerEvidence(binding, await history(id, parent.id, exec.signal), parent, { terminalReportOnly: sol }).ready)
+        const child = liveWorker(id), saved = await history(id, parent.id, exec.signal)
+        if (!saved || saved.status !== 'idle' || saved.inbox?.hasPending !== false)
           return { status: 'POSTMAN_WORKER_COMPACT_BUSY', workerSessionId: id }
         if (!child) {
           try {
@@ -1055,7 +1051,9 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
             const compacted = await ctx.subagents.compactContinuableChild(parent, id, async agent => {
               const current = bindings(parent, g)[id]
               return authorized(parent) && current === binding && matchesContext(parent, slot) &&
-                workerEvidence(current, await history(agent.id, parent.id, exec.signal), parent, { terminalReportOnly: sol }).ready
+                agent.id === id && agent.status === 'idle' && agent.inbox?.hasPending === false &&
+                agent.session?.header?.origin === 'subagent' && agent.session.header.parentSession === parent.id &&
+                agent.session.header.delegationDepth === depthOf(parent.id)
             }, exec.signal)
             if (!compacted) return { status: 'POSTMAN_WORKER_COMPACT_BUSY', workerSessionId: id }
             return { status: 'POSTMAN_WORKER_COMPACTED', workerSessionId: id,
@@ -1152,22 +1150,8 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       return 'POSTMAN_WORKER_BUDGET_EXHAUSTED: meaningful blocker required, not success'
   })
   const stopReportConclusion = ctx.on?.('tools/execute', async (exec, next) => {
-    if (exec.name === 'report' && roleOf(exec.agent) === 'sol') {
-      const parent = exec.agent, group = groupFor(parent)
-      const owned = bindings(parent, group), entries = Object.entries(owned)
-      // Reuse authoritative admission/report/turn settlement, including cold history.
-      // An idle binding alone is not proof; a settled binding need not be closed.
-      const children = await Promise.all(entries.map(([id]) => history(id, parent.id, exec.signal)))
-      const current = bindings(parent, group)
-      if (exec.signal.aborted || roleOf(parent) !== 'sol' ||
-          Object.keys(current).length !== entries.length || entries.some(([id, binding], index) => {
-            const child = children[index], resident = liveWorker(id)
-            return current[id] !== binding ||
-              (resident && (resident.status !== 'idle' || resident.inbox?.hasPending !== false ||
-                resident.session.events.at(-1) !== child?.session.events.at(-1))) ||
-              !workerEvidence(binding, child, parent, { settlementOnly: true }).ready
-          })) throw new Error('POSTMAN_SOL_REPORT_REJECTED: owned Worker work is not settled; report is the terminal assignment result')
-    }
+    // Sol may report PARTIAL/BLOCKED while owned work is unresolved. Delivery
+    // does not settle children, remove their bindings or certify a PASS.
     const result = await next()
     if (exec.name === 'report' && roleOf(exec.agent) && !result.isError && typeof result.value?.messageId === 'string') {
       exec.concludeTurn?.()
@@ -1377,6 +1361,18 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     }
     return pauseForOperation(leaderId)
   }
+  async function prepareAbandon(leaderId) {
+    const parent = ctx.agents.get(leaderId)
+    if (!authorized(parent) || !isTopLevelPostmanSupervisor(parent)) return false
+    const g = groupFor(parent), results = []
+    for (const binding of Object.values(bindings(parent, g))) {
+      results.push(await stopWorker({workerSessionId: binding.id, mode: 'cancel',
+        cascade: workerTypeOf(binding) === 'sol'}, {agent: parent, signal: new AbortController().signal}))
+    }
+    // Failed/unknown cancellations remain audit in the abandoned task row.
+    // They never acquire the replacement context or its worktree.
+    return results.every(result => ['POSTMAN_WORKER_CANCELLED', 'POSTMAN_WORKER_ALREADY_STOPPED'].includes(result.status))
+  }
   // Raw durable membership + exact current live state only. No recovery, journal reads or writes.
   // Read only the existing exact admission/activation state; never materialize,
   // reconcile or poll a cold binding just to justify an event boundary.
@@ -1468,5 +1464,5 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     leaders.clear()
   }
   return { taskTool, solTaskTool, secretaryTool, ledgerTool, freshTool, interruptTool, stopTool, listTool, compactTool, roleOf, ownerOf, appOwnerOf, ownsNotification, ownsLiveWorker, ptcContextOf, confirmActivation, releaseActivation, refreshLeader, suspendLeader,
-    contextOf, observeReport, pauseForOperation, prepareRestore, teamSnapshot, hasActiveWork, canDeferSettlement, dispose }
+    contextOf, observeReport, pauseForOperation, prepareRestore, prepareAbandon, teamSnapshot, hasActiveWork, canDeferSettlement, dispose }
 }
