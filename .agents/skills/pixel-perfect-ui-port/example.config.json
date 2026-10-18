@@ -1,0 +1,16 @@
+{
+  "reference": "http://127.0.0.1:5180/reference",
+  "target": "http://127.0.0.1:5181/game",
+  "viewports": [
+    { "name": "desktop", "width": 1440, "height": 900 }
+  ],
+  "components": [
+    {
+      "name": "upgrade-button",
+      "referenceSelector": "#upgrade-button",
+      "targetSelector": ".upgrade-button"
+    }
+  ],
+  "geometryTolerancePx": 0.5,
+  "pixelChannelTolerance": 2
+}
