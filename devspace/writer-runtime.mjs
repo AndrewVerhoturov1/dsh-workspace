@@ -279,6 +279,10 @@ export function createWriterRuntime({root=channelRoot(), helper=nativeHelper,cen
       }
       if(record) {
         if(revoked(record)) return denied('WRITER_EXECUTION_REVOKED');
+        // A lost native receipt may hide a live process. Keep addressed
+        // inspection/stop above and read-only tools available, but never
+        // authorize another effect in this generation from UNKNOWN.
+        if(record.unknown && !readOnly) return denied('WRITER_NATIVE_OUTCOME_UNKNOWN');
         if(!readOnly && name!=='open_workspace' && !['bash','write','edit'].includes(name)) return denied('WRITER_TOOL_NOT_INSTRUMENTED');
         if(!readOnly && target && !inside(target,record.binding.writeRoot)) return denied('WRITER_BINDING_CHANGED');
         if(!readOnly && [...untrackedRoots].some(root=>overlaps(root,record.binding.writeRoot)))return denied('OTHER_WRITER_ACTIVE');
