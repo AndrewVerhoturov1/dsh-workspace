@@ -22,7 +22,9 @@ export const managementMarkers = {
     /task worktree/i, /(?:one|один) active implementation writer/i,
     /Sol Worker/, /Worker N/, /Postman Artifact Bridge/, /Postman Ask Bridge/,
     /Postman Image Bridge/, /retire unused agents/, /STOP → revised plan → approval/,
-    /TASK_CONTRACT/, /legacy/i
+    /TASK_CONTRACT/, /legacy/i,
+    /не создавай долгоживущую goal по своей инициативе/,
+    /POSTMAN_LUNA_BOOTSTRAP_ACK.*не требует нового `get_goal`/
   ],
   luna: [/bounded FAST executor/, /Exact-path-first/, /Canonical skill already injected/,
     /skill\(postman-worker\)/, /Другие (?:специализированные|specialized) skills допустимы/i,
