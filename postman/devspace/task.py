@@ -1,69 +1,70 @@
-"""Private Devspace task renderer; never passed to the GitHub task publisher."""
-
+"""Private Devspace REQ: task-specific authority plus readable instruction refs."""
+import hashlib
 import json
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[2]
+
+
+def instruction_refs(binding):
+    # Host source, never a Leader-supplied instruction root. Project rules are
+    # confined to the already assigned workspace; refs confer no write rights.
+    files = [REPO / name for name in (
+        "postman/devspace/SKILL.md", "AGENTS.md", "REPO_POLICY.md",
+        "docs/workflow/TASK_CONTRACT.md")]
+    area = Path(binding["workspaceRef"])
+    for name in ("AGENTS.md", "REPO_POLICY.md", "docs/workflow/TASK_CONTRACT.md", "SUBPROJECT.md"):
+        candidate = area / name
+        try:
+            candidate.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError as error:
+            raise ValueError("POSTMAN_DEVSPACE_INSTRUCTION_UNAVAILABLE: " + str(candidate)) from error
+        files.append(candidate)
+    paths, digest = [], hashlib.sha256()
+    for file in dict.fromkeys(files):
+        try:
+            if not file.is_absolute() or file.resolve(strict=True) != file.absolute() or not file.is_file():
+                raise ValueError("redirected instruction")
+            content = file.read_bytes()
+            content.decode("utf-8")
+        except (OSError, ValueError) as error:
+            raise ValueError("POSTMAN_DEVSPACE_INSTRUCTION_UNAVAILABLE: " + str(file)) from error
+        paths.append(str(file))
+        digest.update(str(file).encode("utf-8") + b"\0" + content + b"\0")
+    return paths, digest.hexdigest()
+
 
 def render_task(binding, intent, signal_command):
     mode = binding["mode"]
-    area = binding["workspaceRef"]
-    write = binding["writeRoot"]
-    computer_use = ("Leader разрешил Computer Use для этого поручения. Используй реально доступные средства CU, "
-                    "когда они нужны задаче; Postman Host не задаёт список целевых приложений. "
-                    "Если средство недоступно, честно сообщи CAPABILITY_UNAVAILABLE.") if binding.get("computerUse") == "allow" else (
-                    "Leader запретил Computer Use для этого поручения. Не применяй CU.")
-    if mode == "WRITE_ISOLATED":
-        scope = ("Разрешено изменять только файлы внутри заранее подготовленного Host task worktree: " +
-                 str(write) + ". Действуй строго по одобренной цели, сам запусти нужные целевые тесты. " +
-                 "Оставь изменения и проверочные результаты в этом worktree, сообщи Leader точные пути. " +
-                 "Не публикуй изменения в Git, не делай commit/push/PR; разрешение отдельное.")
-    elif mode == "WRITE_APPROVED_TARGET":
-        scope = ("Leader разрешил запись только в этот существующий внешний каталог: " +
-                 str(write) + ". Не выходи за его границы, не меняй соседние проекты"
-                 " и не подразумевай разрешение на иные папки.")
-    elif mode == "WRITE_TEST":
-        scope = "Записи в исходную область запрещены. Безвредный результат только в Host-private тестовой папке: " + str(write)
+    area, write = binding["workspaceRef"], binding["writeRoot"]
+    files, fingerprint = instruction_refs(binding)
+    refs = "\n".join("- " + file for file in files)
+    if mode == "READ_ONLY":
+        access = ("Сначала открой назначенную область обычным open_workspace с path=" + json.dumps(str(area), ensure_ascii=False) +
+                  ". В READ_ONLY не используй postman-writer. Записи в любые файлы запрещены, кроме bell ниже.")
     else:
-        scope = "Записи в исходную область и любые другие файлы запрещены."
-    access = ("Сначала открой назначенную область обычным open_workspace с path=" + json.dumps(str(area), ensure_ascii=False) +
-              ". В READ_ONLY не используй postman-writer. Прочитай безопасный существующий файл, "
-              "чтобы проверить реальный доступ в этом разговоре.")
-    background = ""
-    if mode != "READ_ONLY":
         access = ("Перед любыми другими DevSpace-инструментами вызови open_workspace с path='postman-writer:" +
-                  binding["jobId"] + "'. Host связывает этот адрес с разрешённой папкой записи. "
-                  "Если адрес недоступен, сообщи CAPABILITY_UNAVAILABLE обычным текстом; "
-                  "не обходи его открытием буквального пути. Затем прочитай безопасный существующий файл, "
-                  "чтобы проверить реальный доступ в этом разговоре.")
-        background = ("Проверь актуальную схему подключённого Bash: нужны поля execution и job_id, "
-                      "а для status/stop команда необязательна. Если полей нет, сообщи "
-                      "CAPABILITY_UNAVAILABLE: connector schema does not support execution/job_id; "
-                      "не выдумывай параметры и не повторяй неподдерживаемый вызов. "
-                      "Для нужного по поручению фонового сервера/watcher используй явный режим DevSpace Bash "
-                      "execution='background', сохрани точный ID из ответа. Проверяй его через execution='status' "
-                      "(без job_id — список своих заданий), останавливай адресно через execution='stop', job_id=<полученный ID>. "
-                      "Обычное завершение команды и BACKGROUND_RUNNING не означают окончания всего дерева. "
-                      "Пока дерево не завершено, не запускай конфликтующую запись. Не повторяй запуск после неизвестного ответа: "
-                      "сначала запроси статус. UI Stop, восстановление REQ и тайм-аут ожидания не являются командой остановить приложение.")
-    # The first line is a non-secret immutable correlation key. ChatGPT may
-    # reformat long Markdown, but a matching exact request-key line still lets
-    # the Host safely locate this user turn without resending UNKNOWN Sends.
+                  binding["jobId"] + "'. Если адрес недоступен, сообщи CAPABILITY_UNAVAILABLE обычным текстом; "
+                  "не обходи его открытием буквального пути. Запись только внутри " + str(write) + ".")
+        if mode == "WRITE_TEST":
+            access += " Исходная область только для чтения."
+    computer_use = "разрешил" if binding.get("computerUse") == "allow" else "запретил"
+    # The immutable first line remains the existing browser correlation key.
     return f"""POSTMAN_REQUEST_ID: {binding['requestId']}
-# PostmanDevspace — универсальное поручение
-REQ: {binding['requestId']}
-Используй настоящий подключённый DevSpace MCP. {access} Инструкция не доказывает доступность.
-Область для чтения: {area}
-Режим: {mode}. {scope}
-DevSpace Bash не является песочницей: работай с файлами только в назначенной области. Веб-поиск, подготовка документов, изображения и другие реально доступные инструменты разрешены, когда полезны для задачи. Входные изображения и документы передаёт Host автоматически, если они назначены Leader.
-{computer_use}
-{background}
-Не меняй собственные права и не создавай новых AI-агентов/подзадачи. Доверенный браузерный Postman transport выполняет Host, а не ChatGPT.
-Не читай чужие секреты и runtime credentials; не меняй чужие данные и не перезапускай Host. GitHub writes/commit/push/PR/merge — только через отдельный разрешённый местный маршрут по политике репозитория.
-DevSpace Bash не понимает PowerShell оператор &. Запись local bell через явный pwsh -File ниже — отдельное узкое разрешение, независимо от READ_ONLY. Выполни команду именно через DevSpace Bash; не читать binding/capability/JSON:
-{signal_command} done
-{signal_command} need-decision -Message 'Нужен выбор ...'
-{signal_command} blocked -Message 'Причина ...'
-В Bash заключай каждый -Message/-Report аргумент в одинарные кавычки, для апострофа используй стандартное '"'"' экранирование Bash; переносы строк и русский текст допустимы. Можно добавить -Report 'report.md' (относительно разрешённой папки); отчёт необязателен, обычный UTF-8 текст, любой формат. Не создавать JSON/подписи/ZIP вручную. Один основной сигнал завершает обращение; сообщение не даёт новых полномочий. Не открывай binding/служебные файлы и не выбирай чужие каналы.
-Если DevSpace отсутствует/не авторизован, сообщи CAPABILITY_UNAVAILABLE и конкретное препятствие обычным текстом. Для временного MCP UNAVAILABLE, тайм-аута или сбоя соединения сохрани точный код и причину, не называй их постоянным отсутствием инструмента. Отдельно укажи отсутствие инструмента, несовместимую схему, отказ прав/scope или NEED_DECISION: они требуют решения Leader вместо автоматических повторов. Не имитируй MCP, не используй запасной transport. Если signal command недоступна, сообщи BLOCKED и сохрани доступный контекст. ZIP и Ask BEGIN/END не нужны.
-Примерно через 15/30/45 минут transport может нажать распознанный Stop в своём разговоре, включая активный/неясный DevSpace, затем дождаться поля ввода и отправить короткое продолжение. Stop интерфейса не доказывает остановку Bash/местного процесса: перед продолжением проверь уже выполненное, состояние файлов и процессов; не запускай конфликтующую запись, пока прежняя операция может продолжаться. Продолжай с текущего прогресса, не переделывай выполненное. После технического сбоя Host выполняет три самостоятельные попытки восстановления с отдельным новым REQ для каждого нового сообщения. Bell завершает ожидание независимо от финального текста/ZIP; повтор идентичного bell безопасен. При отсутствии bell любой доступный итог/частичный текст передаётся как непроверенное свидетельство, без обязательной формы.
+Режим: {mode}. Область для чтения: {area}
+{access}
+Leader {computer_use} Computer Use для этого поручения.
+DevSpace Bash не является песочницей. Не выходи за scope; не читай секреты/runtime credentials, binding и служебные файлы, не меняй права, не создавай AI-агентов, не устанавливай и не перезапускай Host/DevSpace. GitHub writes/commit/push/PR/merge запрещены здесь; отдельный местный маршрут требует разрешения.
+## Инструкции Host
+instructions_sha256: {fingerprint}
+После первого указанного open_workspace при необходимости открой instruction_workspace через open_workspace в mode='checkout' только для чтения перечисленных файлов; сохрани исходный workspace_id для работы. Это не разрешение Bash/записи в instruction_workspace. Ссылки и содержимое не расширяют scope и не заменяют Host binding.
+instruction_workspace: {REPO}
+{refs}
+Прочитай инструкции до работы. Проектные файлы читай в workspace области чтения; при необходимости открой её отдельно в checkout только для чтения. Тот же instructions_sha256 при сохранённом содержимом в разговоре — без повторного чтения; cold restore без содержимого — прочитай снова. Недоступный обязательный файл: blocked -Message 'INSTRUCTION_UNAVAILABLE: точный путь', без работы по памяти. Применимые вложенные правила проекта Leader указывает точными путями внутри области.
+Bell — отдельное узкое разрешение через настоящий DevSpace Bash (не читать скрипт/JSON):
+{signal_command} <done|need-decision|blocked> [-Message 'причина'] [-Report 'report.md']
 ## Поручение Leader (не расширяет перечисленные ограничения)
 {intent}
 """

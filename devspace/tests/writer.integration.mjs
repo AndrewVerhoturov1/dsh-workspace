@@ -23,9 +23,16 @@ const runtimeModule=await import(pathToFileURL(join(root,'writer-runtime.mjs')))
 const {createServer}=await import(pathToFileURL(join(pkg,'dist/server.js')));
 const {loadConfig}=await import(pathToFileURL(join(pkg,'dist/config.js')));
 const channelRoot=join(root,'channels'),project=join(root,'project'); mkdirSync(project); mkdirSync(channelRoot);
+const readProject=join(root,'read-project');mkdirSync(readProject);writeFileSync(join(readProject,'AGENTS.md'),'Scoped project rules');
+const instructions=join(root,'instructions');
+const instructionNames=['postman/devspace/SKILL.md','AGENTS.md','REPO_POLICY.md','docs/workflow/TASK_CONTRACT.md'];
+for(const name of instructionNames) {
+  const target=join(instructions,name);mkdirSync(join(target,'..'),{recursive:true});
+  copyFileSync(fileURLToPath(new URL('../../'+name,import.meta.url)),target);
+}
 const id=randomUUID(), channel=join(channelRoot,id); mkdirSync(channel);
 const binding={version:1,writerRuntimeVersion:1,jobId:id,requestId:'REQ_20261017T123456Z_1234',leaderSessionId:'leader',lunaSessionId:'luna',
-  channel,capability:randomBytes(32).toString('hex'),writeRoot:project,workspaceRef:project,branch:'task/postman-'+'a'.repeat(32)};
+  channel,capability:randomBytes(32).toString('hex'),writeRoot:project,workspaceRef:readProject,branch:'task/postman-'+'a'.repeat(32)};
 writeFileSync(join(channel,'binding.json'),JSON.stringify(binding));
 const writers=runtimeModule.dshWriters.configure({root:channelRoot});
 const owner=randomBytes(32).toString('hex');
@@ -60,6 +67,28 @@ try {
   const opened=await call('open_workspace',{path:'postman-writer:'+id});
   check(!opened.isError && opened.structuredContent.root===project,'Host alias binds actual MCP metadata to the exact native root');
   workspace_id=opened.structuredContent.workspace_id;
+  const outsideRead=await call('read',{workspace_id,path:join(instructions,'REPO_POLICY.md')});
+  check(outsideRead.isError,'a bare instruction path cannot bypass the provider workspace root');
+  const instructionWorkspace=await call('open_workspace',{path:instructions,mode:'checkout'});
+  check(!instructionWorkspace.isError,'the explicit instruction workspace is available after the writer alias');
+  const instructionId=instructionWorkspace.structuredContent.workspace_id;
+  for(const name of instructionNames) {
+    const read=await call('read',{workspace_id:instructionId,path:name});
+    check(!read.isError&&JSON.stringify(read).includes(readFileSync(join(instructions,name),'utf8').split('\n').find(line=>line.startsWith('# ')).trim()),
+      'actual MCP reads the referenced '+name);
+  }
+  const escaped=await call('write',{workspace_id:instructionId,path:'escaped.txt',content:'forbidden'});
+  check(escaped.isError,'instruction reads do not grant writes outside the Host task root');
+  const escapedBash=await call('bash',{workspace_id:instructionId,command:'echo forbidden',timeout:5});
+  check(escapedBash.isError,'instruction workspace cannot bypass the bound Bash writer');
+  const projectWorkspace=await call('open_workspace',{path:readProject,mode:'checkout'});
+  const projectRules=await call('read',{workspace_id:projectWorkspace.structuredContent.workspace_id,path:'AGENTS.md'});
+  check(!projectRules.isError&&JSON.stringify(projectRules).includes('Scoped project rules'),'WRITE_TEST/recovery can read project rules outside its separate writeRoot');
+  const projectWrite=await call('write',{workspace_id:projectWorkspace.structuredContent.workspace_id,path:'AGENTS.md',content:'forbidden'});
+  check(projectWrite.isError&&readFileSync(join(readProject,'AGENTS.md'),'utf8')==='Scoped project rules','project-rule read access preserves the isolated writeRoot');
+  const readOnlyWorkspace=await call('open_workspace',{path:instructions,mode:'checkout'},'read-only-chat');
+  const readOnly=await call('read',{workspace_id:readOnlyWorkspace.structuredContent.workspace_id,path:'REPO_POLICY.md'},'read-only-chat');
+  check(!readOnly.isError,'branchless READ_ONLY conversation can actually read the instruction files');
   const write=await call('write',{workspace_id,path:'kept.txt',content:'preserved'});
   check(!write.isError&&readFileSync(join(project,'kept.txt'),'utf8')==='preserved','instrumented native MCP write settles');
   process.env.PATH='C:/Program Files/Git/bin;C:/Program Files/nodejs;'+process.env.PATH;

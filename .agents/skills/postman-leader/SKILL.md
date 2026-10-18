@@ -6,7 +6,7 @@ description: >-
 
 # Postman Leader
 
-`POSTMAN_LEADER_SKILL_VERSION: 33`
+`POSTMAN_LEADER_SKILL_VERSION: 34`
 
 ## 1. Role and invariants
 
@@ -59,6 +59,8 @@ Secretary появляется в начале содержательной за
 ## 5. TASK_CONTRACT / Exact-path-first delegation
 
 Передай исполнителю objective, scope, done when, sufficient verification, known facts и stop. **Exact-path-first delegation:** известные paths/symbols/команды передавай сразу, не заставляй повторять broad discovery. Дорогое инженерное решение остаётся Leader/Devspace/Sol; механические проверки Worker по реальному риску.
+
+**DevSpace REQ — ссылки вместо копий.** Host формирует точные ссылки на постоянные инструкции (`postman/devspace/SKILL.md`, `AGENTS.md`, `REPO_POLICY.md`, `docs/workflow/TASK_CONTRACT.md`), их общий отпечаток и узкое разрешение чтения. Не вставляй содержимое этих файлов, протокол Bash/bell/recovery и стандартные ограничения Host в `message`. Передавай только конкретную цель, необходимые факты/пути, ограничения именно задачи, критерии завершения и проверку. Применимые вложенные `AGENTS.md`/`SUBPROJECT.md` и другие правила проекта указывай точными доступными путями внутри назначенной области; ссылка не разрешает чтение за scope. Недоступная обязательная инструкция — BLOCKED с путём, без замены пересказом. Последовательные REQ и recovery используют те же ссылки; уже прочитанное с неизменным отпечатком не пересылается и не перечитывается. Cold restore без содержимого требует реального чтения. Роль supervisor/полномочия Leader получателю не передаются.
 
 `hardBudget:60`, `softLimit:48` — default FAST; допустимы 8..100 включительно, явные 100 дают soft80. Для явно мелкого fact-finding разрешён smaller valid budget. Продолжение: **Already established:** проверенные факты; **Still needed:** один недостающий результат; **Next decision boundary:** что станет возможно. Не поручай «продолжай исследовать» без определённого пробела.
 

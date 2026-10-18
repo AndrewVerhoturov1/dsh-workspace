@@ -686,6 +686,8 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
       op.devspace?.hostFailure?.diagnostic].filter(value => typeof value === 'string')
       .map(value => value.slice(0, 2000))
     const failureText = [codes, ...messages, ...reports].join('\n')
+    if (messages.some(text => /^(?:POSTMAN_DEVSPACE_)?INSTRUCTION_UNAVAILABLE:/i.test(text)))
+      return { kind: 'decision', reason: 'instruction-unavailable' }
     // CAPABILITY_UNAVAILABLE is an observer marker, not an MCP error category.
     // Its retained text distinguishes temporary transport failure from an absent
     // tool/schema. Explicit permanent/authority refusals below always win.

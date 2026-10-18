@@ -699,6 +699,7 @@ for (const [text, extra] of [
   ['CAPABILITY_UNAVAILABLE: previous timeout; MCP error.', { code: -32601 }],
   ['CAPABILITY_UNAVAILABLE: previous timeout; MCP error.', { code: -32602 }],
   ['CAPABILITY_UNAVAILABLE: MCP UNAVAILABLE.', { recoveryEligible: false }],
+  ['INSTRUCTION_UNAVAILABLE: C:/scope/AGENTS.md', { diagnostic: 'BLOCKED', message: 'INSTRUCTION_UNAVAILABLE: C:/scope/AGENTS.md' }],
 ]) test('MCP recovery: permanent or decision refusal never retries: ' + text, async t => {
   const f = fixture(t)
   capabilityFallback(f, text, extra)
