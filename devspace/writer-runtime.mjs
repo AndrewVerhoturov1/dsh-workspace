@@ -9,6 +9,7 @@ import {join, resolve, dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {StringDecoder} from 'node:string_decoder';
 import {channel as diagnosticsChannel} from 'node:diagnostics_channel';
+import {inspectLoadedRuntime} from './runtime-identity.mjs';
 
 const normalize = value => resolve(value).replaceAll('\\','/').toLowerCase();
 const overlaps = (a,b) => { a=normalize(a); b=normalize(b); return a===b || a.startsWith(b+'/') || b.startsWith(a+'/'); };
@@ -488,16 +489,18 @@ export function createWriterRuntime({root=channelRoot(), helper=nativeHelper,cen
 }
 
 /** A private loopback controller; neither MCP nor a model can submit an exit receipt. */
-export async function startWriterControl(runtime,{file=join(homedir(),'.dsh','devspace','writer-control.json')}={}) {
+export async function startWriterControl(runtime,{file=join(homedir(),'.dsh','devspace','writer-control.json'),identityModules=[]}={}) {
   const secret=randomBytes(32).toString('hex');
   const server=createServer(async(req,res)=>{
-    if(req.method!=='POST' || !['/reconcile','/ordinary-admission'].includes(req.url) || !sameSecret(req.headers.authorization,'Bearer '+secret)) {
+    if(req.method!=='POST' || !['/reconcile','/ordinary-admission','/runtime-identity'].includes(req.url) || !sameSecret(req.headers.authorization,'Bearer '+secret)) {
       res.writeHead(403); res.end(); return;
     }
     let body='';
     try {
       for await(const chunk of req) { body+=chunk; if(body.length>65536) throw Error('Too large'); }
-      const input=JSON.parse(body),result=req.url==='/ordinary-admission'?await runtime.ordinaryAdmission(input.writeRoot):runtime.reconcile(input);
+      const input=JSON.parse(body),result=req.url==='/runtime-identity'
+        ? await inspectLoadedRuntime([{name:'writer-runtime.mjs',url:import.meta.url},...identityModules])
+        : req.url==='/ordinary-admission'?await runtime.ordinaryAdmission(input.writeRoot):runtime.reconcile(input);
       res.writeHead(200,{'content-type':'application/json'}); res.end(JSON.stringify(result));
     } catch { res.writeHead(400); res.end(); }
   });

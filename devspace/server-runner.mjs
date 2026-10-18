@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, readFileSync, renameSync, rmSync, mkdirSync, statSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, renameSync, rmSync, mkdirSync, statSync, realpathSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { createServer as createHttpServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
@@ -39,7 +39,13 @@ async function main() {
   const config = loadConfig();
   if (config.host !== '127.0.0.1' || config.port !== 7676 || config.publicBaseUrl !== 'https://desktop-dujmm2g.tail3bd4f2.ts.net') throw new Error('Unexpected server configuration');
   const writerRuntime=dshWriters.configure();
-  const writerControl=await startWriterControl(writerRuntime);
+  const writerControl=await startWriterControl(writerRuntime,{identityModules:[
+    {name:'server-runner.mjs',url:import.meta.url},
+    ...['server.js','pi-tools.js','tool-surfaces/claude.js'].map(name=>({
+      name:'devspace-'+name.replaceAll('/','-'),
+      url:pathToFileURL(realpathSync(join(root,'node_modules/@waishnav/devspace/dist',name)))
+    }))
+  ]});
   const { app, close } = createServer(config);
   const server = createHttpServer((req, res) => {
     const requestId = randomUUID(), started = performance.now();

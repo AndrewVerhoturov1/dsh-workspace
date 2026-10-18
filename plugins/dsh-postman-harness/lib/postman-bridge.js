@@ -6,6 +6,7 @@ import { createPtcAdapter, SOL_WORKER_PROFILE } from './ptc-adapter.js'
 import { CurrentAttachmentStore, createPostmanInputFilesTool, postmanInputGrants } from './postman-input-files.js'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { createPostmanAppTool } from './postman-app.js'
+import {inspectLoadedRuntime} from '../../../devspace/runtime-identity.mjs'
 import { parsePostmanUserTurn } from './direct-current-turn.js'
 import { createPostmanWorkerTools } from './postman-worker.js'
 import { createImplementationArtifactGrants, createImplementationArtifactApplyTool } from './implementation-artifact.js'
@@ -301,9 +302,9 @@ export function createPostmanTeamStatusTool(ctx, contexts, worker, jobs) {
   return defineTool({
     name: POSTMAN_TEAM_STATUS_TOOL_NAME,
     description: 'Compact read-only snapshot of this Leader task and team for routing. No recovery, synchronization, journals, full ledger/results or completion polling; idle is not completed.',
-    parameters: {}, output: output(),
+    parameters: { runtime: {type:'boolean',description:'Explicit read-only inspection of loaded Host/DevSpace module hashes. No Git SHA substitution, process start, restart or polling.'} }, output: output(),
     isConcurrencySafe: () => true,
-    execute(_args, exec) {
+    async execute(args, exec) {
       if (!authorized(exec, ctx)) return { status: 'POSTMAN_TEAM_CALLER_REJECTED' }
       const id = exec.agent.id, context = contexts.get(id), row = contexts.record(id)
       return { status: 'POSTMAN_TEAM_STATUS',
@@ -315,7 +316,12 @@ export function createPostmanTeamStatusTool(ctx, contexts, worker, jobs) {
             baseSource: row.baseSource ?? (row.universalProject ? 'unproven' : 'legacy') } : {}),
           restoring: contexts.isRestoring(id), activeOperation: contexts.hasActiveOperation(id) },
         ...worker.teamSnapshot(exec.agent), bridge: jobs.teamSnapshot(exec.agent),
-        devspaceLuna: jobs.devspaceLunaSnapshot(exec.agent) }
+        devspaceLuna: jobs.devspaceLunaSnapshot(exec.agent),
+        ...(args.runtime===true ? {runtime:{
+          host:await inspectLoadedRuntime(['postman-bridge.js','ptc-adapter.js','postman-worker.js','postman-task-context.js',
+            'postman-bridge-jobs.js','postman-devspace.js','postman-writer-proof.js'].map(name=>({name,url:new URL(name,import.meta.url)}))),
+          devspace:await contexts.inspectDevspaceRuntime()
+        }} : {}) }
     },
   })
 }

@@ -82,6 +82,7 @@ tmp-*.ps1
 !/devspace/probe.mjs
 !/devspace/prepare-runtime.mjs
 !/devspace/writer-runtime.mjs
+!/devspace/runtime-identity.mjs
 !/devspace/writer-process.ps1
 !/devspace/ordinary-process.ps1
 !/devspace/README.md

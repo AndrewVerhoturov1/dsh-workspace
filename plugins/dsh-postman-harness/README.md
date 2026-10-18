@@ -308,6 +308,17 @@ Direct transport выполняется существующими wrapper-ам�
 
 ## Production source of truth
 
+Адресная read-only проверка `postman_team_status({runtime:true})` возвращает identity
+живых Host/DevSpace: PID, instance ID и SHA256 перечисленных загруженных модулей.
+Источником служит V8 `Debugger.getScriptSource` через внутреннюю сессию без debug-порта;
+текст кода, credentials и private control secret в ответ не входят. Это SHA256
+указанного набора модулей (`coverage: listed-modules`), а не Git commit SHA и не
+утверждение о всех зависимостях процесса. DevSpace проверяется одним запросом к
+существующему authenticated loopback controller. Без `runtime:true` снимок прежний.
+Отсутствующий/старый controller, незагруженный модуль или разные загруженные версии
+одного модуля остаются `RUNTIME_SHA_UNPROVEN`. Disk/source SHA и `origin/main`
+не заменяют эту проверку. Она не запускает процесс, модель или задание.
+
 ```text
 AGENTS.md
 .agents/skills/delegate-via-postman/SKILL.md

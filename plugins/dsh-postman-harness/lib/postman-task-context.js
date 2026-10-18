@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process'
 import { mkdtemp, realpath, stat, writeFile, unlink } from 'node:fs/promises'
 import { createMemoryTaskRegistry } from './postman-task-registry.js'
 import { observeDevspaceWriter,devspaceWriterHoldRoot,readDevspaceWriterHold,clearDevspaceWriterHold,
-  devspaceOrdinaryWriterConflict,checkDevspaceOrdinaryWriterAdmission } from './postman-writer-proof.js'
+  devspaceOrdinaryWriterConflict,checkDevspaceOrdinaryWriterAdmission,inspectDevspaceRuntime } from './postman-writer-proof.js'
 import {loadDevspaceChannelForOwner,revokeDevspaceChannel} from './postman-devspace.js'
 import { homedir, tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
@@ -993,7 +993,8 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
   }
   function releaseChild(childId) { children.delete(childId) }
   function dispose() { contexts.clear(); children.clear(); pending.clear(); activeOperations.clear(); syncOperations.clear(); syncQueues.clear(); workerAdmissions.clear(); contextListeners.clear() }
-  return { readLedger: id => registry.readLedger(id),
+  return { inspectDevspaceRuntime: () => inspectDevspaceRuntime({controlFile:writerControlFile}),
+    readLedger: id => registry.readLedger(id),
     changeLedger: (id, fn) => registry.changeLedger(id, fn),
     prepare, prepareReadOnly, recover, close, restore, sync, beginSync, endSync, verifyWorktree, verifyDirectPublication, get, record, records, changeRecord, onContextChange, isRestoring, hasActiveOperation, hasSyncOperation, canRetireWorkers, beginWorkerAdmission, endWorkerAdmission, beginOperation, startRunner, endOperation, reserveRestore, releaseRestore, bindChild, child, devspaceBinding, recordBridgeRequest, releaseChild, reconcileWriter, checkOrdinaryWriterAdmission, hasConflictingRetiredWriter, dispose }
 }
