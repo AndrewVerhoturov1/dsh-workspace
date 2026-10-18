@@ -150,7 +150,7 @@ try {
   assert.ok(worker.postmanRoleInstruction('sol').includes('Worker-first'))
   assert.ok(worker.postmanRoleInstruction('sol').includes('POSTMAN_SOL_WORKER_SKILL_VERSION: 3'))
   const discipline=await import(pathToFileURL(resolve(pluginRoot,'lib/ptc-discipline.js')).href)
-  assert.equal(discipline.POSTMAN_PTC_DISCIPLINE_VERSION,8)
+  assert.equal(discipline.POSTMAN_PTC_DISCIPLINE_VERSION,9)
 
   const requireFromPlugin = createRequire(bridgePath)
   const ptcPath = requireFromPlugin.resolve('dsh-ptc')

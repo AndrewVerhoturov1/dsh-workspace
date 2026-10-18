@@ -43,7 +43,8 @@ async function drain(agent) {
   }
 }
 
-async function fixture(t, { count=1, ack='POSTMAN_LUNA_BOOTSTRAP_ACK', reasoning='', duringAck, ackDuringDispatch=false } = {}) {
+async function fixture(t, { count=1, ack='POSTMAN_LUNA_BOOTSTRAP_ACK', reasoning='', duringAck, ackDuringDispatch=false,
+  normalRefusal, producerProof=true, expectedInitialRequests=1 } = {}) {
   const dir=mkdtempSync(join(tmpdir(),'goal-bootstrap-')), ctx=new Context()
   new AgentRegistry(ctx); new SessionStore(ctx); new SessionProjectionRegistry(ctx); new SystemPrompt(ctx,{})
   new JsonlSessionPersistence(ctx,{root:join(dir,'sessions')})
@@ -54,7 +55,8 @@ async function fixture(t, { count=1, ack='POSTMAN_LUNA_BOOTSTRAP_ACK', reasoning
   new AgentLoop(ctx,{agents:[],maxParallelToolCalls:1}); goalTools(ctx,{}); goalDriver(ctx)
   const task=Object.freeze({worktree:dir,repositoryPath:dir,branch:'task/synthetic'})
   let row={leaderSessionId:'leader',bridgeOperations:{}}, leader, parentRequests=0, childRequests=0, finalCount=0
-  const contexts={get:()=>task,record:()=>row,async changeRecord(_id,fn){row=fn(row);return row}}
+  let busy=false
+  const contexts={get:()=>task,record:()=>row,async changeRecord(_id,fn){row=fn(row);return row},hasActiveOperation:()=>busy}
   const children=[], gates=Array.from({length:count},()=>Promise.withResolvers())
   const held=Array.from({length:count},()=>Promise.withResolvers()), allocated=Promise.withResolvers()
   const relayGate=Promise.withResolvers()
@@ -74,10 +76,13 @@ async function fixture(t, { count=1, ack='POSTMAN_LUNA_BOOTSTRAP_ACK', reasoning
   let adapter, unregister
   const refresh=()=>{
     unregister?.()
-    adapter=createPtcAdapter(ctx,{authorize:isTopLevelPostmanPtcLeader,hasActiveWork:a=>jobs.hasActiveWork(a)})
+    adapter=createPtcAdapter(ctx,{authorize:isTopLevelPostmanPtcLeader,hasActiveWork:a=>producerProof && jobs.hasActiveWork(a)})
     unregister=ctx.tools.register(adapter.tool); if(leader)adapter.refresh(leader)
   }
   refresh(); ctx.tools.register(createPostmanBridgeTool(ctx,jobs,contexts))
+  ctx.on('tools/result',(exec,result)=>{
+    if(normalRefusal==='POSTMAN_TASK_CONTEXT_BUSY' && exec.name==='postman_bridge' && result.value?.status==='POSTMAN_BRIDGE_ACCEPTED')busy=true
+  })
   ctx.on('postman/subagent-report-defer',(p,c,parts)=>jobs.canDeferLunaBootstrapReport(p,c,parts)?true:undefined)
   ctx.on('postman/subagent-settlement-defer',(p,c,value)=>{
     children.find(entry=>entry.id===c.id)?.settlement.resolve()
@@ -117,7 +122,10 @@ async function fixture(t, { count=1, ack='POSTMAN_LUNA_BOOTSTRAP_ACK', reasoning
           e.data.source.form==='bridge-ready'))?.data
         if(parentRequests===1){
           ctx.goals.create(leader,{objective:'explicit synthetic goal',maxGoalRounds:24})
-          yield ptc('const jobs=[];for(let i=0;i<'+count+';i++)jobs.push(await tools.postman_bridge({message:"@PostmanDevspace inert held fixture",devspace_mode:"WRITE_TEST"}));return jobs')
+          yield ptc('const jobs=[];for(let i=0;i<'+count+';i++)jobs.push(await tools.postman_bridge({message:"@PostmanDevspace inert held fixture",devspace_mode:"WRITE_TEST"}));'+
+            (normalRefusal?'const refused=[];for(let i=0;i<3;i++){const r=await tools.postman_bridge({message:"@PostmanDevspace refused exact lane",devspace_mode:"WRITE_TEST",lane_id:"00000000-0000-4000-8000-000000000001"});ptc.expectStatus(r,['+JSON.stringify(normalRefusal)+']);refused.push(r);}return {jobs,refused,waiting:true}':'return jobs'))
+        } else if(!producerProof) {
+          ctx.goals.pause(leader,goal);yield text('No trusted producer proof; ordinary model decision retained')
         } else if(last?.source.kind==='goal') {
           // Bound RED to the same three unwanted rounds as the archived session.
           if(goal.roundsStarted===1)yield ptc('return await tools.get_goal({})')
@@ -153,7 +161,7 @@ async function fixture(t, { count=1, ack='POSTMAN_LUNA_BOOTSTRAP_ACK', reasoning
   leader.followup(human('Start explicit synthetic goal'));await drain(leader)
   assert.equal(children.length,count,JSON.stringify({row,counts:{parentRequests,childRequests},events:leader.session.events.filter(e=>e.type==='tool/result')}))
   await allocated.promise
-  assert.equal(parentRequests,1,'one initial dispatch request')
+  assert.equal(parentRequests,expectedInitialRequests,'no extra request for a handled normal refusal during confirmed work')
   return {ctx,leader,jobs,children,held,terminal,refresh,
     get adapter(){return adapter},
     counts:()=>({leader:parentRequests,luna:childRequests,final:finalCount}),
@@ -164,6 +172,27 @@ async function fixture(t, { count=1, ack='POSTMAN_LUNA_BOOTSTRAP_ACK', reasoning
       held[i].resolve(terminal(i));await ready.promise;stop();await drain(leader)
     },
   }
+}
+
+for(const normalRefusal of ['POSTMAN_DEVSPACE_LANE_UNAVAILABLE','POSTMAN_TASK_CONTEXT_BUSY']) {
+  test('handled '+normalRefusal+' retains the confirmed Bridge wait',{timeout:20000},async t=>{
+    const f=await fixture(t,{normalRefusal})
+    assert.equal(f.counts().leader,1)
+    assert.equal(f.children.length,1,'three refusals do not resend the accepted operation')
+    assert.equal(f.adapter.isWaitingForExternalEvent(f.leader),true)
+    await f.adapter.dispose();f.refresh()
+    assert.equal(f.adapter.isWaitingForExternalEvent(f.leader),true,'last durable PTC validates each normal refusal after adapter reconstruction')
+    assert.equal(f.leader.session.events.filter(e=>e.type==='user/message'&&e.data.source.kind==='goal').length,0)
+    await f.ack(0);assert.equal(f.counts().leader,1)
+    await f.ready(0);assert.equal(f.counts().leader,2,'one necessary READY review')
+    assert.equal(f.counts().final,1)
+    console.log(JSON.stringify({scenario:'handled-refusal',normalRefusal,requests:f.counts(),acceptedDispatches:f.children.length}))
+  })
+  test('handled '+normalRefusal+' without trusted producer proof does not suppress a model decision',{timeout:20000},async t=>{
+    const f=await fixture(t,{normalRefusal,producerProof:false,expectedInitialRequests:2})
+    assert.equal(f.adapter.isWaitingForExternalEvent(f.leader),false)
+    assert.equal(f.counts().leader,2)
+  })
 }
 
 for(const state of ['active','pause','clear','cold'])test('native empty-reasoning ACK with goal '+state,{timeout:20000},async t=>{

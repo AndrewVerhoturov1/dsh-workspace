@@ -30,13 +30,24 @@ const LEADER_REQUIRED = ['read', 'grep']
 const WORKER_REQUIRED = ['read', 'glob', 'grep']
 const MAX_DESCRIPTION = 160
 const BOUNDARIES = ['semantic_decision', 'user_input', 'external_event', 'approval_boundary', 'task_complete']
-// Auto-yield must not hide a refused/unknown prepare or async dispatch returned as ordinary JSON.
+// Auto-yield never treats a refusal as acceptance. A handled normal refusal can
+// retain a confirmed wait only through the narrow policy below.
 // This gate does not recover statuses or alter the tool result/authority.
 const EVENT_PRODUCERS = {
   leader: ['postman_worker', 'postman_sol_worker', 'postman_secretary', 'postman_worker_fresh', 'postman_worker_interrupt', 'postman_bridge'],
   sol: ['postman_worker', 'postman_worker_fresh', 'postman_worker_interrupt'],
 }
 const YIELD_ACCEPTANCE = POSTMAN_PTC_SUCCESS_STATUSES
+// These refusals can be handled by a successful external-event phase while
+// another exact Host-owned producer is still running. They never accept work.
+const WAIT_REFUSALS = {
+  postman_bridge: ['POSTMAN_DEVSPACE_LANE_UNAVAILABLE','POSTMAN_TASK_CONTEXT_BUSY'],
+  postman_task_prepare: ['POSTMAN_TASK_CONTEXT_BUSY'],
+  postman_worker: ['POSTMAN_TASK_CONTEXT_BUSY'],
+  postman_secretary: ['POSTMAN_TASK_CONTEXT_BUSY'],
+  postman_sol_worker: ['POSTMAN_TASK_CONTEXT_BUSY'],
+}
+const waitRefusal = (name,status) => WAIT_REFUSALS[name]?.includes(status) === true
 const output = {
   schema: { type: 'object', additionalProperties: true, properties: { status: { type: 'string', required: true } } },
   render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
@@ -380,7 +391,10 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
                   workerContextOf?.(agent) !== workerContext)) throw new Error('PTC_ACCESS_REVOKED')
             if (result.isError) throw new Error(result.error.message)
             if (YIELD_ACCEPTANCE[name]) {
-              if (!YIELD_ACCEPTANCE[name].includes(result.value?.status)) acceptanceFailed = true
+              if (!YIELD_ACCEPTANCE[name].includes(result.value?.status)) {
+                if (!(autoConclude && waitRefusal(name,result.value?.status) &&
+                  hasActiveWork?.(agent,record.role) === true)) acceptanceFailed = true
+              }
               else if (EVENT_PRODUCERS[record.role].includes(name)) eventAccepted = true
             }
             for (const context of result.additionalContexts ?? []) exec.deferContext(context)
@@ -511,7 +525,11 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
       if (dispatches.length !== effects.calls.length || dispatches.some(({ data }) => {
         if (data.isError) return true
         if (!YIELD_ACCEPTANCE[data.name]) return false
-        try { return !YIELD_ACCEPTANCE[data.name].includes(JSON.parse(data.content[0].text).status) }
+        try {
+          const status=JSON.parse(data.content[0].text).status
+          return !YIELD_ACCEPTANCE[data.name].includes(status) &&
+            !(waitRefusal(data.name,status) && hasActiveWork?.(agent,owners.get(agent.id)?.role) === true)
+        }
         catch { return true }
       })) return false
     }

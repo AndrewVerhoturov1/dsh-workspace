@@ -186,6 +186,11 @@ test('expectStatus tool-name form shares exact current statuses and visibility',
       assert.throws(()=>ptc.expectStatus({status},name),/unexpected status/)
   }
   assert.throws(()=>helper({}).expectStatus({status:'POSTMAN_BRIDGE_ACCEPTED'},'postman_bridge'),/unavailable tool/)
+  for(const status of ['POSTMAN_DEVSPACE_LANE_UNAVAILABLE','POSTMAN_TASK_CONTEXT_BUSY']) {
+    const result={status}
+    assert.throws(()=>ptc.expectStatus(result,'postman_bridge'),/unexpected status/,'a refusal never becomes acceptance')
+    assert.equal(ptc.expectStatus(result,[status]),result,'an explicit normal branch preserves its exact refusal')
+  }
 })
 
 test('existing helper argument/result shapes fail clearly without iterable guesses or partial input validation', async () => {
