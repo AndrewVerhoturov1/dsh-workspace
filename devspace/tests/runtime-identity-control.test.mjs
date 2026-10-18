@@ -1,0 +1,33 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import {mkdtemp,readFile,rm} from 'node:fs/promises';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
+import {createWriterRuntime,startWriterControl} from '../writer-runtime.mjs';
+import {inspectDevspaceRuntime} from '../../plugins/dsh-postman-harness/lib/postman-writer-proof.js';
+
+test('private runtime inspection is authenticated, read-only and bound to the running process',async t=>{
+  const dir=await mkdtemp(join(tmpdir(),'devspace-runtime-identity-'));
+  const runtime=createWriterRuntime({root:join(dir,'channels')});
+  const control=await startWriterControl(runtime,{file:join(dir,'control.json')});
+  t.after(async()=>{await control.close();await rm(dir,{recursive:true,force:true});});
+  const descriptor=JSON.parse(await readFile(control.file,'utf8'));
+  const call=secret=>fetch('http://127.0.0.1:'+control.port+'/runtime-identity',{method:'POST',headers:{authorization:'Bearer '+secret},body:'{}'});
+  assert.equal((await call('foreign')).status,403);
+  const before=await readFile(control.file,'utf8');
+  const response=await call(descriptor.secret);
+  assert.equal(response.status,200);
+  const identity=await response.json();
+  assert.equal(identity.status,'RUNTIME_IDENTITY_PROVEN');
+  assert.equal(identity.pid,process.pid);
+  assert.match(identity.sha256,/^[a-f0-9]{64}$/);
+  assert.equal(identity.source,'v8_loaded_script');
+  const next=await (await call(descriptor.secret)).json();
+  assert.equal(next.instanceId,identity.instanceId);assert.equal(next.sha256,identity.sha256);
+  const host=await inspectDevspaceRuntime({controlFile:control.file});
+  assert.equal(host.status,'RUNTIME_IDENTITY_PROVEN');
+  assert.equal(host.instanceId,identity.instanceId);assert.equal(host.sha256,identity.sha256);
+  assert.deepEqual(runtime.untrackedRoots(),[]);
+  assert.equal(await readFile(control.file,'utf8'),before,'identity inspection must not alter the writer census');
+  assert.doesNotMatch(JSON.stringify(identity),new RegExp(descriptor.secret));
+});

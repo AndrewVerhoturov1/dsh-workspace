@@ -236,9 +236,9 @@ PR сам по себе не изменяет работающие Host/MCP. Н�
    При отказе/занятости остановиться; не обходить его `Stop-Process`, ручным kill или удалением state.
 4. Сохранить в отдельную локальную папку резервную копию **точных установленных байтов** следующих
    файлов и уже существующих `.dsh-original`: `prepare-runtime.mjs`, `server-runner.mjs`,
-   `writer-runtime.mjs`, `writer-process.ps1`, `ordinary-process.ps1` и три `dist`-файла из таблицы.
+   `writer-runtime.mjs`, `runtime-identity.mjs`, `writer-process.ps1`, `ordinary-process.ps1` и три `dist`-файла из таблицы.
    Сохранить перечень SHA256. Не удалять OAuth SQLite, config/auth, каналы Host, проекты и данные заданий.
-5. Скопировать из выбранного source worktree пять перечисленных `.mjs`/`.ps1`-сценариев, затем:
+5. Скопировать из выбранного source worktree шесть перечисленных `.mjs`/`.ps1`-сценариев, затем:
 
    ```powershell
    node "$install/prepare-runtime.mjs" $install

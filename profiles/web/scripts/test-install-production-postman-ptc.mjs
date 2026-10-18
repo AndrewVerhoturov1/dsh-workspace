@@ -44,7 +44,7 @@ try {
     resolve(stagingRoot, 'plugins/dsh-cost-panel/session-compat.mjs'))
 
   // Include the current role implementation and canonical sources before commit.
-  for (const source of ['plugins/dsh-postman-harness/README.md','docs/subprojects/ptc/PTC_CONTRACT.md','docs/subprojects/ptc/SUBPROJECT.md','docs/subprojects/postman/SUBPROJECT.md','docs/workflow/TASK_CONTRACT.md','postman/POSTMAN_BRIDGE_FLOW.md'])
+  for (const source of ['plugins/dsh-postman-harness/README.md','devspace/runtime-identity.mjs','docs/subprojects/ptc/PTC_CONTRACT.md','docs/subprojects/ptc/SUBPROJECT.md','docs/subprojects/postman/SUBPROJECT.md','docs/workflow/TASK_CONTRACT.md','postman/POSTMAN_BRIDGE_FLOW.md'])
     copyFileSync(resolve(repositoryRoot,source),resolve(stagingRoot,source))
   cpSync(resolve(repositoryRoot,'plugins/dsh-postman-harness/lib'),resolve(stagingRoot,'plugins/dsh-postman-harness/lib'),{recursive:true})
   cpSync(resolve(repositoryRoot,'plugins/dsh-ptc'),resolve(stagingRoot,'plugins/dsh-ptc'),{recursive:true,filter:path=>!path.split(sep).includes('node_modules')})
@@ -182,7 +182,7 @@ try {
   const pluginSdkAnchor = createRequire(resolve(pluginRoot,'package.json')).resolve('@deepseek-ai/dsh/package.json')
   applyPostmanNativeChildCutoff([pluginSdkAnchor,resolve(pluginRoot,'package.json')])
   // Execute installed native/preset compaction with one SDK identity, never mocked presence.
-  if (!goalContinuationOnly) run(process.execPath,['--test','lib/postman-runtime-compact-fresh.test.js'],pluginRoot,{...process.env,DSH_CAPABILITY_SDK:pluginSdkAnchor})
+  if (!goalContinuationOnly) run(process.execPath,['--test','lib/postman-runtime-compact-fresh.test.js','lib/postman-runtime-identity.test.js'],pluginRoot,{...process.env,DSH_CAPABILITY_SDK:pluginSdkAnchor})
   // Real panel Host tests resolve through this same isolated pinned SDK; production source bytes are unchanged.
   const panelTestRoot = resolve(stagingRoot,'panel-host-tests')
   cpSync(panelRoot,panelTestRoot,{recursive:true,filter:path=>!path.split(sep).includes('node_modules')})

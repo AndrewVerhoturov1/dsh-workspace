@@ -23,7 +23,7 @@ export async function createBackgroundFixture({patched=true,runtimeOptions={}}={
   symlinkSync(join(install,'node_modules'),join(pkg,'node_modules'),'junction');
   let runtimeModule,writers;
   if(patched) {
-    for(const name of ['writer-runtime.mjs','writer-process.ps1','ordinary-process.ps1'])copyFileSync(fileURLToPath(new URL('../'+name,import.meta.url)),join(root,name));
+    for(const name of ['writer-runtime.mjs','writer-process.ps1','ordinary-process.ps1','runtime-identity.mjs'])copyFileSync(fileURLToPath(new URL('../'+name,import.meta.url)),join(root,name));
     const result=spawnSync(process.execPath,[fileURLToPath(new URL('../prepare-runtime.mjs',import.meta.url)),root],{encoding:'utf8'});
     assert.equal(result.status,0,result.stdout+result.stderr);
     runtimeModule=await import(pathToFileURL(join(root,'writer-runtime.mjs')));
