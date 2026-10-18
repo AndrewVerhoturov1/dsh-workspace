@@ -871,8 +871,16 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
     for(const [,current] of registry.entries()) for(const historical of [current,...(current.retiredTasks??[])]) {
       // Idle sessions and retired membership do not prove that a former native
       // shell descendant died. These legacy writers have no complete census.
-      if(overlaps(historical.worktree) && (workerAdmissions.has(current.leaderSessionId) ||
-        Object.keys(historical.workers??{}).length || historical.retiredWorkers?.length))
+      // A branchless Secretary can survive promotion to another worktree.
+      // Keep every admitted scope, including retired/failed assignments; a
+      // legacy binding without complete Host provenance remains conservative.
+      const workers=[...Object.values(historical.workers??{}),...(historical.retiredWorkers??[])]
+      if((overlaps(historical.worktree) && workerAdmissions.has(current.leaderSessionId)) || workers.some(worker=>{
+        const admissions=worker?.lifecycle?.admissions
+        if(!Array.isArray(admissions) || !admissions.length)return overlaps(historical.worktree)
+        return admissions.some(entry=>typeof entry?.worktree==='string' && isAbsolute(entry.worktree) && overlaps(entry.worktree)) ||
+          admissions.some(entry=>typeof entry?.worktree!=='string' || !isAbsolute(entry.worktree)) && overlaps(historical.worktree)
+      }))
         return reject('OTHER_WRITER_ACTIVE')
       if(Object.values(historical.appJobs??{}).some(app=>overlaps(app.worktree) &&
         !['completed','killed'].includes(app.terminal))) return reject('OTHER_WRITER_ACTIVE')
@@ -909,7 +917,7 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
   function canRetireWorkers(leaderId) {
     const row = registry.get(leaderId)
     return Boolean(get(leaderId) || row?.leaderSessionId === leaderId &&
-      row.stage === 'uncertain' && row.diagnostic === 'task worktree missing')
+      (row.stage === 'closed' || row.stage === 'uncertain' && row.diagnostic === 'task worktree missing'))
   }
   function beginWorkerAdmission(leaderId, token, retirement = false) {
     if (!(retirement ? canRetireWorkers(leaderId) : get(leaderId)) || pending.has(leaderId) || activeOperations.has(leaderId) || syncOperations.has(leaderId)) return false

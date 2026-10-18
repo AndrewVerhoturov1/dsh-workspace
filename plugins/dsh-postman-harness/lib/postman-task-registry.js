@@ -6,7 +6,7 @@ import { z } from 'zod'
 const workerLifecycle = z.object({ version: z.literal(1),
   stop: z.object({ id: z.string(), mode: z.enum(['close', 'cancel']), cascade: z.boolean(),
     childIds: z.array(z.string()), requestedAt: z.string() }).optional(),
-  admissions: z.array(z.object({ id: z.string(), state: z.enum(['pending', 'accepted']), messageId: z.string().nullable() })),
+  admissions: z.array(z.object({ id: z.string(), state: z.enum(['pending', 'accepted']), messageId: z.string().nullable(), worktree: z.string().optional() })),
   reports: z.array(z.object({ childId: z.string(), turn: z.number(), callId: z.string(), messageId: z.string(), hostBudgetAfterSeq: z.number().int().nonnegative().optional() })),
 })
 

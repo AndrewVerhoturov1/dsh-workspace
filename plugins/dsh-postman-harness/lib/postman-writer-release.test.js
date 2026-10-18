@@ -39,6 +39,24 @@ test('an archived own native writer has an addressed release route instead of an
     'an UNKNOWN archived writer can never be reconciled after its physical process exits')
 })
 
+for(const retired of [false,true])test('a settled native writer is not held by a disjoint promoted Secretary '+retired,async t=>{
+  const f=await writerRuntimeFixture(t),{contexts,registry}=await registryFixture(f)
+  assert.equal((await f.operations('process.exit(0)')).exitCode,0)
+  f.revoke()
+  const secretary={id:'research-secretary',workerType:'secretary',state:'ready',delivery:'none',
+    lifecycle:{version:1,admissions:[{id:'initial',state:'accepted',messageId:'native-message',worktree:join(f.directory,'original-research')}],reports:[]}}
+  const save=entry=>registry.change(f.binding.leaderSessionId,row=>({...row,
+    ...(retired?{retiredWorkers:[entry]}:{workers:{[entry.id]:entry}})}))
+  await save({...secretary,lifecycle:{...secretary.lifecycle,admissions:[...secretary.lifecycle.admissions,
+    {id:'later',state:'accepted',messageId:'later-message',worktree:f.worktree}]}})
+  assert.equal((await contexts.reconcileWriter(f.binding.leaderSessionId,f.binding.jobId)).diagnostic.code,'OTHER_WRITER_ACTIVE',
+    'a later admission into this root still retains it, even after retirement')
+  await save(secretary)
+  const result=await contexts.reconcileWriter(f.binding.leaderSessionId,f.binding.jobId)
+  console.log(JSON.stringify({scenario:'disjoint-secretary',retired,result}))
+  assert.equal(result.status,'POSTMAN_WRITER_RELEASED',JSON.stringify(result))
+})
+
 test('other overlapping writers and uncertain Workers block release; independent roots and reads pass',async t=>{
   const f=await writerRuntimeFixture(t),{contexts,registry,operation,old}=await registryFixture(f)
   const actual=await f.operations('console.log("real native output")')
