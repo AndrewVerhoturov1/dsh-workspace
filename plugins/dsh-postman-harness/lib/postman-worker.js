@@ -261,8 +261,8 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     // Only stop/cascade use this path; it cannot authorize another assignment.
     const row = contexts?.record?.(parent.id)
     return Boolean(retirement && contexts?.canRetireWorkers?.(parent.id) &&
-      (!slot.context || ['leaderSessionId', 'repository', 'branch', 'worktree', 'baseCommit']
-        .every(key => slot.context[key] === row[key])))
+      Object.hasOwn(row?.workers ?? {}, slot.id) && row.workers[slot.id].id === slot.id &&
+      (row.workers[slot.id].ownerSessionId ?? parent.id) === parent.id)
   }
   const stopIntent = (entry, mode, childIds = []) => ({
     ...(entry.lifecycle ?? emptyLifecycle()), stop: { id: randomUUID(), mode,
@@ -430,7 +430,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     const onAbort = () => bindingChanged(id)
     exec.signal.addEventListener('abort', onAbort, { once: true })
     try {
-      const assignment = { id: randomUUID(), state: 'pending', messageId: null }
+      const assignment = { id: randomUUID(), state: 'pending', messageId: null, ...(context ? {worktree:context.worktree} : {}) }
       let nextBudget = slot.workerType !== 'sol' ? newBudget(assignment.id, args.task, args.hardBudget ?? fastBudget.hardLimit) : null
       if (durable) await contexts.changeRecord(parent.id, row => {
         const current = row.workers[id]
@@ -491,7 +491,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     if (task.status) return task
     if (!authorized(parent)) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
     const reservedId = randomUUID()
-    const assignment = { id: randomUUID(), state: 'pending', messageId: null }
+    const assignment = { id: randomUUID(), state: 'pending', messageId: null, ...(context ? {worktree:context.worktree} : {}) }
     let initialBudget = workerType !== 'sol' ? newBudget(assignment.id, args.task, args.hardBudget ?? fastBudget.hardLimit) : null
     const label = args.label ?? (workerType === 'sol' ? 'Postman Sol Worker' : workerType === 'secretary' ? 'Secretary' : 'Postman Worker')
     // Reserve an exact child identity durably before the first DSH side effect.

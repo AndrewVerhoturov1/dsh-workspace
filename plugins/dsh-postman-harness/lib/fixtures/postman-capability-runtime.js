@@ -76,7 +76,7 @@ export async function capabilityRuntime(dir, { preset = 'postman-leader-ptc', re
     if (args[0] === 'rev-parse' || args[0] === 'merge-base') return sha
     return ''
   }
-  const contexts = initializePostmanTaskContexts(registry, taskContextOptions ?? { gitCommand, makeDirectory: async () => worktree, temporaryDirectory: () => dir })
+  const contexts = initializePostmanTaskContexts(registry, { gitCommand, makeDirectory: async () => worktree, temporaryDirectory: () => dir, ...taskContextOptions })
   const workspacePolicy=await import(pathToFileURL(join(repositoryRoot,'plugins/dsh-task-discipline/workspace-policy.js')).href)
   await ctx.plugin(workspacePolicy).await()
   // Baseline comparison uses the same real loop with only the narrow hook vetoed.
