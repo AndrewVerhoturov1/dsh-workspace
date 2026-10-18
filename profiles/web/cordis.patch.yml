@@ -28,6 +28,21 @@
         env: {}
         cwd: !!js process.cwd()
         failOnStartupError: false
+    - id: mcp-vuda
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: vuda
+        transport: stdio
+        command: npx
+        args:
+          - '-y'
+          - 'visual-ui-debug-agent-mcp@1.1.0'
+        env:
+          DOTENV_CONFIG_PATH: !!js >-
+            (process.env.DSH_HOME || process.env.USERPROFILE + '/.dsh') + '/skills/pixel-perfect-ui-port/references/vuda-empty.config'
+        cwd: !!js >-
+          process.env.DSH_HOME || (process.env.USERPROFILE + '/.dsh')
+        failOnStartupError: false
 - id: agent-instructions
   disabled: false
   config:
