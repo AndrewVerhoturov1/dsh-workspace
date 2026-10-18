@@ -67,6 +67,19 @@ test('two bootstrap Luna report+settled pairs stay durable without waking; both 
         {stopReason:'error',output:terminal.output}),false)
       assert.equal(jobs.canDeferLunaBootstrapSettlement(parent,child,
         {stopReason:'completed',output:[{type:'text',text:'unreported failure'}]}),false)
+      for(const [parts,deferred] of [
+        [[{type:'reasoning',text:''},{type:'text',text:reportText}],true],
+        [[{type:'reasoning',text:'internal acknowledgement reasoning'},{type:'text',text:reportText}],true],
+        [[{type:'reasoning',text:''}],false],
+        [[{type:'reasoning',text:''},{type:'text',text:'NEEDS_PARENT_GUIDANCE: choose scope'}],false],
+        [[{type:'text',text:reportText},{type:'text',text:'unreported failure'}],false],
+      ]){
+        assert.equal(jobs.canDeferLunaBootstrapSettlement(parent,child,{stopReason:'completed',output:parts}),deferred)
+        child.session.events.push({type:'assistant/message',data:{message:{content:parts}}})
+        assert.equal(jobs.canDeferLunaBootstrapSettlement(parent,child,{stopReason:'completed'}),deferred,
+          'durable assistant output has the same exact ACK boundary')
+        child.session.events.pop()
+      }
       return {childId:child.id,messageId:'admitted-'+started.length}
     },
     async inspectOpenContinuableChild(_parent,childId) {return children.has(childId)},

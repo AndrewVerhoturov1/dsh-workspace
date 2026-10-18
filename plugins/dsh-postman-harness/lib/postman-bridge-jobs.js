@@ -1022,15 +1022,24 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
   }
   function canDeferLunaBootstrapSettlement(parent, child, terminal) {
     if (terminal?.stopReason !== 'completed' || !bootstrapLunaJob(parent, child, true)) return false
+    // Native output retains reasoning alongside the visible ACK (the observed
+    // regression had an empty block). Only the exact visible ACK is technical;
+    // questions, reports, tool calls and rich output retain ordinary delivery.
+    const visible = content => content.filter(block => block?.type !== 'reasoning')
     if (terminal.output === undefined) {
       const messages = child.session.events.filter(e => e.type === 'assistant/message')
-      return messages.every(e => e.data?.message?.content?.every(block =>
-        block.type === 'text' && bootstrapAcknowledgement(block.text)))
+      return messages.every(e => {
+        const output = e.data?.message?.content
+        if (!Array.isArray(output)) return false
+        const parts = visible(output)
+        return parts.length === 1 && parts[0]?.type === 'text' && bootstrapAcknowledgement(parts[0].text)
+      })
     }
     if (!Array.isArray(terminal.output)) return false
     if (terminal.output.length === 0) return true
-    if (terminal.output.length !== 1) return false
-    const output = terminal.output[0]
+    const parts = visible(terminal.output)
+    if (parts.length !== 1) return false
+    const output = parts[0]
     // A harmless first-turn text acknowledgement is also only bootstrap; a
     // question, failure, rich output or later Host assignment must wake normally.
     if (output?.type === 'text') return bootstrapAcknowledgement(output.text)
