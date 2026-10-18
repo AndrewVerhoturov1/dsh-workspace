@@ -81,9 +81,16 @@ test('normal real PTC keeps native admission until configured round limit', {tim
   assert.equal(f.ctx.goals.get(f.agent).blockedReason.code,'round-limit')
 })
 test('one transient failure followed by useful work does not trip', {timeout:20000}, async t=>{
-  const f=await fixture(t,{runtime:channelFault('invalid-json',2),rounds:3});await f.run()
+  const fault=channelFault(), real=createPtcRuntimeForTest(new URL('./executor.mjs',import.meta.resolve('dsh-ptc')))
+  let calls=0
+  const f=await fixture(t,{runtime:{run:input=>++calls===1?fault.run(input):real.run(input),
+    dispose:async()=>{await fault.dispose();await real.dispose()}},rounds:3});await f.run()
   assert.equal(f.ctx.goals.get(f.agent).blockedReason.code,'round-limit')
   assert.equal(f.results.filter(x=>x.result.value.error?.code==='invalid-json').length,1)
+  assert.equal(f.results.length,4,'initial fault followed by three useful autonomous rounds')
+  assert.ok(f.results.slice(1).every(x=>x.result.value.status==='ok'&&x.result.value.effects.calls.length===1&&
+    x.result.value.effects.calls[0].name==='read'&&x.result.value.effects.calls[0].state==='completed'))
+  assert.equal(f.agent.session.events.some(e=>e.type==='user/message'&&e.data.source?.form==='ptc-goal-safety-stop'),false)
 })
 for(const [kind,scenario] of [['invalid-json','invalid-json'],['maxMessageBytes','oversized']])
   test('two consecutive proven no-action '+kind+' failures stop before round three', {timeout:20000}, async t=>{
@@ -271,7 +278,13 @@ for(const [name,program] of [
  ['model-authored fatal JSON',"return {status:'runtime-error',error:{code:'invalid-json'},failureOrigin:{kind:'host-runtime',stage:'channel-frame'}}"],
 ]) test('repeated guest '+name+' is not infrastructure proof', {timeout:20000},async t=>{
  const f=await fixture(t,{runtime:null,rounds:2,program:()=>program});await f.run()
- assert.equal(f.ctx.goals.get(f.agent).blockedReason.code,'round-limit')
+ if(name==='model-authored fatal JSON'){
+  const goal=f.ctx.goals.get(f.agent)
+  assert.equal(goal.phase,'active');assert.equal(goal.blockedReason,undefined);assert.equal(goal.roundsStarted,0)
+  assert.equal(f.requests.length,2,'one PTC response and one review, no empty automatic rounds')
+  assert.equal(f.results.length,1);assert.equal(f.results[0].result.value.status,'ok')
+  assert.equal(f.results[0].result.value.effects.calls.length,0)
+ }else assert.equal(f.ctx.goals.get(f.agent).blockedReason.code,'round-limit')
  assert.ok(f.results.every(x=>!x.result.value.failureOrigin))
  assert.equal(f.agent.session.events.some(e=>e.type==='user/message'&&e.data.source?.form==='ptc-goal-safety-stop'),false)
 })
