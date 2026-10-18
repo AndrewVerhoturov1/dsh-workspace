@@ -124,7 +124,16 @@ def run(channel, request_id, intent, *, input_bundle_manifest=None, input_files_
     if result_path.exists():
         return json.loads(result_path.read_text(encoding="utf-8"))
     command = "pwsh -NoProfile -NonInteractive -File " + shlex.quote(str(root / "signal.ps1"))
-    prompt = render_task(binding, intent, command)
+    try:
+        prompt = render_task(binding, intent, command)
+    except ValueError as error:
+        if not str(error).startswith("POSTMAN_DEVSPACE_INSTRUCTION_UNAVAILABLE:"):
+            raise
+        result = {"requestId": request_id, "source": "transport_diagnostic",
+                  "diagnostic": "CAPABILITY_UNAVAILABLE", "message": str(error),
+                  "assistantText": str(error)}
+        atomic_json(result_path, result)
+        return result  # No browser/Send and no blind recovery of missing rules.
     attachment = None
     if input_bundle_manifest or input_files_base64:
         if not input_bundle_manifest or not input_files_base64:

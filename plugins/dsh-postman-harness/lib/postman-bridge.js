@@ -122,7 +122,7 @@ export function createPostmanBridgeTool(ctx, jobs, contexts) {
     name: POSTMAN_BRIDGE_TOOL_NAME,
     description: 'Universal @PostmanDevspace is the default ChatGPT executor, with up to three independent persistent Luna/chat lanes per Leader. Legacy @Postman/Ask/Image remain available. Accepted is not completed; use POSTMAN_BRIDGE_READY then exact postman_bridge_status.',
     parameters: { message: { type: 'string', required: true,
-      description: 'Complete model-authored delegation beginning with exact @Postman, @PostmanAsk, @PostmanImage or @PostmanDevspace.' },
+      description: 'Complete model-authored delegation beginning with exact @Postman, @PostmanAsk, @PostmanImage or @PostmanDevspace. For Devspace include only the concrete task, necessary facts/paths, task constraints and done conditions. Host supplies standard instruction file refs and safety scope; do not copy manuals or Host boilerplate.' },
       devspace_mode: { type: 'string', enum: ['READ_ONLY', 'WRITE_TEST', 'WRITE_ISOLATED'], description: 'Compatibility workspace scope only. READ_ONLY default. WRITE_ISOLATED uses an approved task worktree.' },
       lane_id: { type: 'string', description: 'Optional exact returned Devspace laneId, to continue the same Luna and ChatGPT conversation. Omit for a free lane.' },
       workspace_root: { type: 'string', description: 'Optional exact Leader-approved existing local folder. Explicit for every non-repository path.' },

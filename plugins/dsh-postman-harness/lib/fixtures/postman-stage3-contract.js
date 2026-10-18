@@ -7,7 +7,7 @@ export const obsoleteSolPermission = /(?:Only on an explicit user request: creat
 // Small semantic markers, not a wording snapshot. Called on actual native requests.
 export const managementMarkers = {
   leader: [
-    /POSTMAN_LEADER_SKILL_VERSION: 33/, /Management Kernel/, /execution graph/i,
+    /POSTMAN_LEADER_SKILL_VERSION: 34/, /Management Kernel/, /execution graph/i,
     /critical path/i, /dispatch first/i, /environment readiness/i, /Dependency provenance:/,
     /tasks are independent/, /DECISION/, /IMPLEMENTATION/, /EXTERNAL_RESEARCH/,
     /Secretary/, /postman_secretary_ledger/, /PostmanDevspace/, /laneId/,

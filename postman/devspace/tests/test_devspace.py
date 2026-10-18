@@ -93,8 +93,9 @@ class DevspaceTests(unittest.TestCase):
         allowed = task.render_task({**self.binding, "computerUse": "allow"}, "inspect", "bell")
         self.assertIn("Leader разрешил Computer Use", allowed)
         self.assertNotIn("Host grant на целевое приложение", allowed)
-        self.assertIn("15/30/45", allowed)
-        self.assertIn("не доказывает остановку Bash", allowed)
+        instructions = (REPO / "postman/devspace/SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("15/30/45", instructions)
+        self.assertIn("не доказывает остановку Bash", instructions)
 
     def test_writer_prompt_requires_owned_alias_before_any_devspace_tools(self):
         for mode in ("WRITE_TEST", "WRITE_ISOLATED", "WRITE_APPROVED_TARGET"):
@@ -103,16 +104,17 @@ class DevspaceTests(unittest.TestCase):
                 self.assertIn("Перед любыми другими DevSpace-инструментами вызови open_workspace с path='postman-writer:" + JOB + "'", prompt)
                 self.assertIn("не обходи его открытием буквального пути", prompt)
                 self.assertIn("сообщи CAPABILITY_UNAVAILABLE обычным текстом", prompt)
-                self.assertIn("нужны поля execution и job_id", prompt)
-                self.assertIn("connector schema does not support execution/job_id", prompt)
-                self.assertIn("не повторяй неподдерживаемый вызов", prompt)
+                instructions = (REPO / "postman/devspace/SKILL.md").read_text(encoding="utf-8")
+                self.assertIn("нужны поля execution и job_id", instructions)
+                self.assertIn("connector schema does not support execution/job_id", instructions)
+                self.assertIn("не повторяй неподдерживаемый вызов", instructions)
         read_only = task.render_task({**self.binding, "mode": "READ_ONLY"}, "inspect", "bell")
         self.assertNotIn("postman-writer:", read_only)
         self.assertIn("обычным open_workspace с path=" + json.dumps(str(self.root), ensure_ascii=False), read_only)
         self.assertIn("В READ_ONLY не используй postman-writer", read_only)
         self.assertNotIn("execution='background'", read_only)
-        self.assertIn("временного MCP UNAVAILABLE", read_only)
-        self.assertIn("отказ прав/scope или NEED_DECISION", read_only)
+        self.assertIn("MCP UNAVAILABLE", instructions)
+        self.assertIn("отказ прав/scope или NEED_DECISION", instructions)
 
     def test_script_transport_does_not_shadow_standard_python_signal(self):
         script = REPO / 'postman' / 'devspace' / 'transport.py'
