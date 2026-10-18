@@ -10,7 +10,7 @@ import {spawnSync} from 'node:child_process';
 
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 export const quote=value=>"'"+value.replaceAll("'","'\"'\"'")+"'";
-export async function createBackgroundFixture({patched=true}={}) {
+export async function createBackgroundFixture({patched=true,runtimeOptions={}}={}) {
   const install=process.env.DEVSPACE_INSTALL_ROOT??'C:/Users/Andrew/.dsh/devspace';
   const root=mkdtempSync(join(tmpdir(),'devspace-background-'));
   const pkg=join(root,'node_modules/@waishnav/devspace'),upstream=join(install,'node_modules/@waishnav/devspace');
@@ -33,7 +33,7 @@ export async function createBackgroundFixture({patched=true}={}) {
   const binding={version:1,writerRuntimeVersion:1,jobId:id,requestId:'REQ_20261017T123456Z_1234',leaderSessionId:'leader',lunaSessionId:'luna',
     channel,capability:randomBytes(32).toString('hex'),writeRoot:project,workspaceRef:project,branch:'task/postman-'+'a'.repeat(32)};
   writeFileSync(join(channel,'binding.json'),JSON.stringify(binding));
-  if(patched)writers=runtimeModule.dshWriters.configure({root:channelRoot});
+  if(patched)writers=runtimeModule.dshWriters.configure({root:channelRoot,...runtimeOptions});
   const {createServer}=await import(pathToFileURL(join(pkg,'dist/server.js')));
   const {loadConfig}=await import(pathToFileURL(join(pkg,'dist/config.js')));
   const owner=randomBytes(32).toString('hex');let native;
