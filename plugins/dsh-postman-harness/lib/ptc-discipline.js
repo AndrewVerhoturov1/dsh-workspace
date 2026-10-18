@@ -9,7 +9,7 @@
 // This module is deliberately data-only. ptc-adapter.js is responsible for
 // injecting the text into the system prompt of an authorized Postman PTC agent.
 
-export const POSTMAN_PTC_DISCIPLINE_VERSION = 8
+export const POSTMAN_PTC_DISCIPLINE_VERSION = 9
 
 export const POSTMAN_PTC_DISCIPLINE = String.raw`
 # Postman PTC programming discipline
@@ -173,6 +173,12 @@ Host-maintained exact success statuses of prepare/Worker/interrupt/Bridge; do no
 invent acceptance aliases. For multi-outcome lifecycle state machines, use explicit
 exact branching on known normal outcomes (including refusals such as
 POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT or POSTMAN_WORKER_COMPACT_NOT_RESIDENT).
+POSTMAN_DEVSPACE_LANE_UNAVAILABLE and POSTMAN_TASK_CONTEXT_BUSY are also normal
+admission refusals: branch on them BEFORE the successful-path expectStatus call.
+Retain earlier accepted bridgeJobId/REQ/workerSessionId receipts and do not resend
+those operations. A successful external_event phase can wait after these refusals
+only while the Host confirms another owned producer. Without that proof, retain
+the refusal for the next necessary decision; never invent an accepted result.
 Do not turn a normal negative branch into a PTC runtime-error. An explicit exact
 array may validate known outcomes before branching, but is not a replacement for
 choosing the correct next action. Known safe cleanup is one phase: exact branch
@@ -630,19 +636,17 @@ appears. Do not preemptively flood its context.
 
 When ptc.expectStatus is available and the successful path is a true invariant, prefer:
 
-const prep = ptc.expectStatus(
-  await tools.postman_task_prepare({}),
-  'postman_task_prepare'
-)
+const prep = await tools.postman_task_prepare({})
+if (prep.status === 'POSTMAN_TASK_CONTEXT_BUSY') return {refused: prep, waiting: true}
+ptc.expectStatus(prep, 'postman_task_prepare')
 
-const worker = ptc.expectStatus(
-  await tools.postman_worker({
+const worker = await tools.postman_worker({
     task: taskText,
     createNew: true,
     label: 'implementation'
-  }),
-  'postman_worker'
-)
+  })
+if (worker.status === 'POSTMAN_TASK_CONTEXT_BUSY') return {taskStatus: prep.status, refused: worker, waiting: true}
+ptc.expectStatus(worker, 'postman_worker')
 
 return {
   taskStatus: prep.status,
@@ -655,6 +659,11 @@ not POSTMAN_WORKER_INTERRUPT_ACCEPTED; Bridge is POSTMAN_BRIDGE_ACCEPTED. An exp
 exact array remains supported for deterministic known non-success branches.
 If expectStatus is not available, perform an equivalent exact allowlist check.
 Do not use fuzzy matching for protocol statuses.
+For Bridge admission, branch exactly on POSTMAN_DEVSPACE_LANE_UNAVAILABLE and
+POSTMAN_TASK_CONTEXT_BUSY before ptc.expectStatus(result, 'postman_bridge').
+Neither refusal creates a REQ. Preserve all earlier accepted receipts in the
+returned value. Return from the phase, wait for its confirmed producer when
+appropriate, and do not retry a refused lane or replay accepted sends in a loop.
 
 ## 25. Canonical large-read pattern
 
