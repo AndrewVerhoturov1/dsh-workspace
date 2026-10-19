@@ -1,6 +1,6 @@
 # PostmanDevspace — возможности и ограничения
 
-Обновлено: 17 октября 2026. Источник истины для действий Leader — реальные Host scopes и подтверждённый результат конкретного REQ. Эта таблица разделяет **живую проверку старой установки**, **текущие тесты ветки PR #433** и **ещё не подтверждённую доступность ChatGPT**. Запись в main/публикация PR не доказывает, что active DSH Host уже загрузил новый код.
+Обновлено: 19 октября 2026. Источник истины для действий Leader — реальные Host scopes и подтверждённый результат конкретного REQ. Эта таблица разделяет **живую проверку старой установки**, **текущие тесты ветки PR #433** и **проверки конкретного подключения ChatGPT/локального исполнителя**. Запись в main/публикация PR не доказывает, что active DSH Host уже загрузил новый код.
 
 | Возможность | Статус | Доказательство / ограничение |
 |---|---|---|
@@ -17,7 +17,7 @@
 | Secretary: доступные web_search/web_fetch | CODE_REQUIRES_PROVIDER | Роль допускает зарегистрированные инструменты; отсутствующий провайдер — диагностика и маршрут через Leader/DevSpace, без нового API |
 | Secretary journal независим от Git task | CODE_TEST_PASS_NO_GUI | Host-private durable ledger теперь доступен до prepare; cold reopen test |
 | External explicit workspace_root: read/write | CODE_TEST_PASS_NO_GUI | Exact Leader grant на существующий canonical путь; пересечение с постоянным repo запрещено, изолирующей ОС-песочницы DevSpace нет |
-| Computer Use по решению Leader | CODE_NOT_LIVE | Явное allow/deny в task, без Host списка приложений/target adapter; фактическая доступность зависит от ChatGPT |
+| Передача Computer Use allow/deny из Host | CODE_NOT_LIVE | Явное allow/deny в task, без Host списка приложений/target adapter; фактическая доступность зависит от ChatGPT |
 | Computer Use: границы | USER_SCOPE_AND_PROVIDER | Пользовательская область, правила поставщика и права ОС; инструкция deny не выдаётся за аппаратную изоляцию |
 | Leader steer после SEND_UNKNOWN | VERIFIED_LIVE_PREVIOUS | Host receipt SENT_CONFIRMED и точный bell того же REQ, без нового origin Send |
 | Preempt/Stop активного DevSpace инструмента | CODE_NOT_LIVE | Распознанный Stop своего чата допускается при ACTIVE_TOOL/UNKNOWN; не доказывает остановку Bash; composer может ждать более 10s |
@@ -26,6 +26,25 @@
 | Legacy @Postman, @PostmanAsk, @PostmanImage | PRESERVED_FALLBACK | Оригинальные маршруты остаются рабочими, автопереключения после UNKNOWN нет |
 | Worker Git commit/push/PR | PERMISSION_BOUND | Только отдельно разрешённый локальный task branch/worktree по REPO_POLICY.md |
 | Sol backup | PERMISSION_BOUND | Только конкретный блокер возможности/доступности DevSpace, не default из-за сложности |
+
+### Orca и VUDA: проверка 19 октября 2026
+
+| Маршрут | Статус | Доказательство / граница проверки |
+|---|---|---|
+| ChatGPT → DevSpace Bash → встроенный браузер Orca | TARGET_SESSION_PASS_REPORTED | Пользователь передал PASS из целевой ChatGPT-сессии: Orca 1.4.229, область `C:/Users/Andrew/.dsh`, DOM, click/hover/Enter с `isTrusted=true`, ввод и скриншот. Тот же сценарий независимо выполнен локальным исполнителем через DevSpace. Это не новая проверка штатной доставки Leader → Bridge |
+| DevSpace Bash → `orca computer` → Windows-окно | VERIFIED_LOCAL_VIA_DEVSPACE | Orca 1.4.229, `orca-computer-use-windows` 1.0.0. Собственное временное WinForms-окно: дерево доступности, set-value с readback `verified`, результат click на снимке, Enter в прочитанном состоянии. Пользовательские приложения не изменялись; целевой ChatGPT этот сценарий ещё не повторял |
+| DevSpace Bash → MCP-клиент → VUDA stdio | VERIFIED_LOCAL_MCP_VIA_DEVSPACE | Установленный VUDA 1.1.0 предъявил 29 инструментов одной страницей. Через MCP проверены navigate/click/hover/fill/press_key/evaluate/screenshot на тестовой HTTP-странице; click/hover/Enter дали `isTrusted=true`. Через соединитель DevSpace отдельно подтверждены MCP-навигация и чтение страницы. Это не отдельное VUDA-подключение в каталоге ChatGPT |
+| Запуск закрытой Orca на целевом ПК | DOCUMENTED_NOT_LIVE_TESTED | Штатная команда `orca open --json` запускает Orca и ждёт runtime; команда подтверждена руководством/CLI help. Для проверки работающую пользовательскую Orca не закрывали |
+
+В этих проверках весь `C:/Users/Andrew` возвращал `WRITER_BINDING_REQUIRED`, тогда как
+назначенная узкая область `.dsh` допускала команды. Найдены пересекающиеся сохранённые
+writer holds; их не удаляли. Этот факт не разрешает менять выданный Host writeRoot:
+исполнитель использует область задания, а повторный отказ передаёт Leader.
+
+Orca CLI, VUDA и установленные библиотеки, вызываемые через Bash, не считаются отдельными
+инструментами каталога ChatGPT. После изменения версии или подключения прежний PASS
+не переносится автоматически; проверяются только затронутые операции. Рабочие правила
+запуска и выбора маршрута находятся в [инструкциях исполнителя](devspace/SKILL.md#orca-и-vuda-на-целевом-пк).
 
 ### Capacity и маршрутизация
 
