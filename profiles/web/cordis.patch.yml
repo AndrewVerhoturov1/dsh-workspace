@@ -38,8 +38,9 @@
           - '-y'
           - 'visual-ui-debug-agent-mcp@1.1.0'
         env:
+          VUDA_BROWSER_PROVIDER: local
           DOTENV_CONFIG_PATH: !!js >-
-            (process.env.DSH_HOME || process.env.USERPROFILE + '/.dsh') + '/skills/pixel-perfect-ui-port/references/vuda-empty.config'
+            (process.env.DSH_HOME || process.env.USERPROFILE + '/.dsh') + '/.agents/skills/pixel-perfect-ui-port/references/vuda-empty.config'
         cwd: !!js >-
           process.env.DSH_HOME || (process.env.USERPROFILE + '/.dsh')
         failOnStartupError: false

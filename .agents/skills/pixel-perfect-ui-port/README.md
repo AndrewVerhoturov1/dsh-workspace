@@ -1,6 +1,6 @@
 # Pixel Perfect UI Port v1 — локальный измеритель
 
-Измеряет одну и ту же видимую область reference и target в Chromium. Сравнивает position/size, фиксированный набор computed styles и PNG по прямым RGBA-каналам. Не вносит изменений в игру и не исправляет CSS автоматически. В исходном web profile предусмотрен VUDA, но без активации и реального испытания его работоспособность не подтверждена.
+Измеряет одну и ту же видимую область reference и target в Chromium. Сравнивает position/size, фиксированный набор computed styles и PNG по прямым RGBA-каналам. Не вносит изменений в игру и не исправляет CSS автоматически. В исходном web profile предусмотрен VUDA с местным скрытым Chromium (`VUDA_BROWSER_PROVIDER=local`), но без активации и реального испытания его работоспособность в активном Host не подтверждена. Playwright MCP, VUDA и измеритель используют отдельные сеансы; входы и состояние страниц автоматически не переносятся.
 
 ## Установка в проекте (Windows)
 
@@ -47,7 +47,7 @@ node scripts/compare-ui.mjs --dir ./artifacts/desktop/upgrade-button --component
 
 ## Исходная интеграция VUDA (без активации)
 
-В `profiles/web/cordis.patch.yml` добавлен отдельный `mcp-vuda`: `stdio`, `npx -y visual-ui-debug-agent-mcp@1.1.0`, `failOnStartupError: false`. Существующий `mcp-playwright` сохранён. Рабочий каталог VUDA указывает на `DSH_HOME` (по умолчанию `$HOME/.dsh` в Windows через `USERPROFILE`), **не** на каталог игры. `DOTENV_CONFIG_PATH` указывает на `<DSH_HOME>/skills/pixel-perfect-ui-port/references/vuda-empty.config` в пользовательской глобальной копии. Ручная команда копирования ниже переносит туда версионируемый исходный файл `.agents/skills/pixel-perfect-ui-port/references/vuda-empty.config`. В файле только комментарии, секретов нет. Это не удаляет унаследованные переменные среды. Для версии 1.1.0 ранее сообщалась ошибка импорта `dotenv/config`; наличие нужной зависимости и действительный запуск VUDA здесь не доказаны. Missing/forbidden инструменты требуют STOP для маршрутизации; VUDA не отменяет ролевые разрешения и функциональную приёмку через канонический Playwright.
+В `profiles/web/cordis.patch.yml` добавлен отдельный `mcp-vuda`: `stdio`, `npx -y visual-ui-debug-agent-mcp@1.1.0`, `failOnStartupError: false`. Профиль явно задаёт `VUDA_BROWSER_PROVIDER=local`; в коде этой версии местный Chromium запускается с `headless: true`. Существующий `mcp-playwright` использует свой скрытый Chromium. Рабочий каталог VUDA указывает на `DSH_HOME` (по умолчанию `$HOME/.dsh` в Windows через `USERPROFILE`), **не** на каталог игры. `DOTENV_CONFIG_PATH` указывает на существующий исходный файл `<DSH_HOME>/.agents/skills/pixel-perfect-ui-port/references/vuda-empty.config`; ручная глобальная копия навыка для этого пути не требуется. В файле только комментарии, секретов нет. Это не удаляет унаследованные переменные среды. Для версии 1.1.0 ранее сообщалась ошибка импорта `dotenv/config`; наличие нужной зависимости и действительный запуск VUDA здесь не доказаны. Missing/forbidden инструменты требуют STOP для маршрутизации; VUDA не отменяет ролевые разрешения и функциональную приёмку через канонический Playwright.
 
 ## Копия user-global (только явное решение владельца)
 
@@ -65,6 +65,6 @@ foreach ($item in @('SKILL.md','README.md','example.config.json','package.json',
 pwsh -NoProfile -NonInteractive -File (Join-Path $dest 'setup.ps1')
 ```
 
-Это независимая **копия**, не ссылка на временный каталог. `DSH_HOME` поддержан непосредственно командой; список копирования намеренно исключает `node_modules`, `.npm-cache`, `.playwright-browsers`, `artifacts`. Файл `references/vuda-empty.config` попадает в копию вместе с `references/`. Не перезаписывать чужую установку. Обнаружение навыка вне проекта следует проверить через существующий filesystem provider, если он доступен; действительный VUDA MCP — после отдельной активации профиля. Реальный trial на игре **PENDING**.
+Это независимая **копия**, не ссылка на временный каталог. `DSH_HOME` поддержан непосредственно командой; список копирования намеренно исключает `node_modules`, `.npm-cache`, `.playwright-browsers`, `artifacts`. Файл `references/vuda-empty.config` попадает в копию вместе с `references/`; web profile читает исходный файл из `<DSH_HOME>/.agents/skills/pixel-perfect-ui-port/references/`. Не перезаписывать чужую установку. Обнаружение навыка вне проекта следует проверить через существующий filesystem provider, если он доступен; действительный VUDA MCP — после отдельной активации профиля. Реальный trial на игре **PENDING**.
 
 См. `SKILL.md`, `references/rules.md`, `references/vuda.md`.
