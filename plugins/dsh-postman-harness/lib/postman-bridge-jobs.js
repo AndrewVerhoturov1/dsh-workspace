@@ -1,12 +1,10 @@
 import { randomUUID } from 'node:crypto'
-import { relative, isAbsolute } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { postmanInputGrants } from './postman-input-files.js'
 import { DirectPostmanJobManager, parsePostmanUserTurn } from './direct-current-turn.js'
 import { createPostmanDevspaceLanes } from './postman-devspace-lanes.js'
 import { requestDevspaceControl, readDevspaceControls, loadDevspaceChannelForOwner,
   revokeDevspaceChannel, readDevspaceEvent, devspaceTerminal } from './postman-devspace.js'
-import { devspaceWriterHoldRoot } from './postman-writer-proof.js'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { buildPostmanBridgeStartRequest, isTopLevelPostmanSupervisor, POSTMAN_BRIDGE_PROVIDER,
   settleTrustedPostmanStatus } from './postman-bridge-core.js'
@@ -199,7 +197,6 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
       }
     } catch { return { status: 'POSTMAN_BRIDGE_PARENT_UNAVAILABLE' } }
     if (contexts && contexts.get(parent.id) !== job.taskContext) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
-    if (typeof contexts?.hasActiveOperation === 'function' && contexts.hasActiveOperation(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
     if (job.recoveryFrom) {
       job.state = 'RUNNING'
       const previous = { state: 'completed', requestId: job.recoveryFrom.requestId,
@@ -322,7 +319,6 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     const taskContext = contexts?.get(parent.id)
     if (contexts && !taskContext) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
     if (typeof contexts?.isRestoring === 'function' && contexts.isRestoring(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
-    if (typeof contexts?.hasActiveOperation === 'function' && contexts.hasActiveOperation(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
     if (disposed) return { status: 'POSTMAN_BRIDGE_UNAVAILABLE' }
     if (transportKind !== 'devspace' && (requestedLaneId !== undefined || approvedScope))
       return { status: 'POSTMAN_DEVSPACE_LANE_NOT_ALLOWED' }
@@ -373,18 +369,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     const prior = admissionTails.get('host') ?? Promise.resolve()
     const admit = async () => {
       try {
-        // Ordinary native leases are checked before entering the launch queue.
-        // Their external completion has no coordinator wake event. A later race
-        // remains guarded by the MCP runtime immediately before tool effects.
-        if(transportKind==='devspace' && ['WRITE_ISOLATED','WRITE_APPROVED_TARGET'].includes(devspaceMode) &&
-          typeof contexts.checkOrdinaryWriterAdmission==='function') {
-          const ordinary=await contexts.checkOrdinaryWriterAdmission(parent.id,approvedScope?.root??taskContext?.worktree)
-          if(ordinary?.ok!==true)return {status:'POSTMAN_TASK_CONTEXT_BUSY',
-            diagnostic:{code:ordinary?.status==='OTHER_WRITER_ACTIVE'?'OTHER_WRITER_ACTIVE':'DEVSPACE_ORDINARY_WRITER_EXIT_UNPROVEN'},
-            alternative:'START_IN_NEW_ISOLATED_WORKSPACE'}
-          if(contexts.get(parent.id)!==taskContext || ctx.agents.get(parent.id)!==parent)
-            return {status:'POSTMAN_TASK_CONTEXT_BUSY',diagnostic:{code:'POSTMAN_TASK_CONTEXT_CHANGED'}}
-        }
+        // Resource conflicts are a Leader decision; admission does not consult writers.
         // Read-only refusal is deterministic even if the durable storage backend
         // is unavailable. The atomic check below remains the admission authority.
         const existing = contexts.record?.(parent.id)
@@ -542,7 +527,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     let synchronized = false
     try {
       synchronized = await contexts.sync(leaderId, publication.taskPublicationCommit,
-        publication.baseCommit, id => worker ? worker.pauseForOperation(id) : true)
+        publication.baseCommit)
     } catch { synchronized = { ok: false, diagnostic: { code: 'GIT_SYNC_FAILED' } } }
     if (synchronized !== true) {
       job.syncDiagnostic = synchronized?.diagnostic ?? { code: 'GIT_SYNC_FAILED' }
@@ -565,49 +550,6 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     if (!job.grantDiagnostic && job.trustedTerminal?.status === 'POSTMAN_BRIDGE_TERMINAL') job.state = 'TERMINAL'
   }
 
-  function resourceReady(job) {
-    if (!['WRITE_ISOLATED','WRITE_APPROVED_TARGET'].includes(job.devspaceMode)) return true
-    const root = job.approvedScope?.root ?? job.taskContext?.worktree
-    const overlaps = other => other && (other === root ||
-      !relative(other,root).startsWith('..') && !isAbsolute(relative(other,root)) ||
-      !relative(root,other).startsWith('..') && !isAbsolute(relative(root,other)))
-    const rows = contexts?.records?.() ?? [[job.parentSessionId,contexts?.record?.(job.parentSessionId)]]
-    for (const [owner,row] of rows) {
-      if (!row) continue
-      for (const historical of [row, ...(row.retiredTasks ?? [])]) {
-        if (Object.entries(historical.bridgeOperations ?? {}).some(([id,op]) => {
-          if (op.writerSettlement) return false
-          if (id !== job.bridgeJobId && overlaps(devspaceWriterHoldRoot({leaderSessionId:owner,
-            bridgeJobId:id,task:historical,op}))) return true
-          // Dirty isolation may preserve a task even when browser revocation
-          // failed. Its saved writer scope still protects the original files.
-          const unresolved = !op.executionRevoked &&
-            (['pending', 'unknown'].includes(op.state) || technicalFailure(op))
-          const retainedRoot = op.residualWriteRoot ??
-            ((historical !== row || row.stage === 'closed') && unresolved
-              ? op.devspace?.approvedAccess === 'write' ? op.devspace.approvedRoot
-                : op.devspace?.mode === 'WRITE_ISOLATED' ? historical.worktree : null
-              : null)
-          return retainedRoot && overlaps(retainedRoot)
-        })) return false
-      }
-      if (row.stage === 'closed') continue
-      if (overlaps(row.worktree) && worker?.hasActiveWork?.(ctx.agents.get(owner))) return false
-      for (const [id,op] of Object.entries(row.bridgeOperations ?? {})) {
-        if (id === job.bridgeJobId || !countsAgainstLimit(op)) continue
-        const otherRoot = op.devspace?.approvedAccess === 'write' ? op.devspace.approvedRoot
-          : op.devspace?.mode === 'WRITE_ISOLATED' ? row.worktree : null
-        if (!overlaps(otherRoot)) continue
-        const other = jobs.get(id)
-        // Cold pending/UNKNOWN reservations remain held; no replay or takeover.
-        if (!other || other.state !== 'QUEUED' ||
-            [...jobs.keys()].indexOf(id) < [...jobs.keys()].indexOf(job.bridgeJobId)) return false
-      }
-    }
-    return true
-  }
-  const stopResourceChanges = contexts?.onContextChange?.(() => devspaceCoordinator.refresh?.())
-  ctx.on?.('agent/status', () => devspaceCoordinator.refresh?.())
 
   function recoveryChain(parent, bridgeJobId) {
     const row = contexts?.record?.(parent.id), operations = row?.bridgeOperations ?? {}
@@ -851,7 +793,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     // Coordinator holds the active slot only through child disposal, never through grants.
     let admission
     try { admission = (job.transportKind === 'devspace' ? devspaceCoordinator : coordinator)
-        .run(job.controller.signal, () => lifecycle(job, message), () => resourceReady(job)) }
+        .run(job.controller.signal, () => lifecycle(job, message)) }
     catch (error) { admission = Promise.reject(error) }
     job.completion = admission.then(async result => {
         // A verified terminal is delivery evidence even when the shared tree is
@@ -1580,7 +1522,6 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
   async function dispose() {
     if (disposed) return
     disposed = true
-    stopResourceChanges?.()
     for (const job of jobs.values()) job.controller.abort()
     direct.dispose?.()
     coordinator.dispose()

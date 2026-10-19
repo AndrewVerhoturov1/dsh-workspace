@@ -66,13 +66,13 @@ for(const bound of [false,true]) {
   });
 }
 
-test('Host validation refuses foreign scope, escaped roots, malformed aliases and revoked generation before the handler',{
+test('Host preserves binding validation while independent authorized scopes may share a root',{
   skip:process.platform!=='win32',
 },async t=>{
   const f=await fixture(t,{bound:true});let invoked=0;
   const operation=async()=>{invoked++;return {bad:true}};
   const foreign=await f.invoke(operation,{callMeta:{_meta:{'openai/session':'foreign'}}});
-  assert.equal(foreign.isError,true);assert.match(JSON.stringify(foreign),/WRITER_BINDING_REQUIRED/);
+  assert.equal(foreign.bad,true,'an independent upstream-authorized scope is not denied by root overlap');
   const escaped=await f.invoke(operation,{spaces:{getWorkspace:async()=>({root:f.directory})}});
   assert.equal(escaped.isError,true);assert.match(JSON.stringify(escaped),/WRITER_BINDING_CHANGED/);
   const malformed=await f.invoke(operation,{name:'open_workspace',readOnly:true,input:{path:'postman-writer:invalid'}});
@@ -84,7 +84,7 @@ test('Host validation refuses foreign scope, escaped roots, malformed aliases an
   const malformedBinding=await f.invoke(operation,{name:'open_workspace',readOnly:true,input:{path:'postman-writer:'+f.binding.jobId}});
   assert.equal(malformedBinding.isError,true);assert.match(JSON.stringify(malformedBinding),/WRITER_BINDING_CHANGED/);
   assert.equal(JSON.stringify(malformedBinding).includes('PRIVATE_HOST_SECRET'),false);
-  assert.equal(invoked,0);
+  assert.equal(invoked,1,'only the independent authorized operation reaches the handler');
 });
 
 test('bound upstream abort retains concurrent activity and releases each active counter once',{

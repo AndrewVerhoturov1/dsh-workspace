@@ -253,8 +253,8 @@ test('one archived unknown does not count beside three live lanes; a fourth live
   await jobs.dispose()
 })
 
-test('unknown external writer retained in a retired task blocks only overlapping write scope', async t => {
-  const f = fixture(t, ['bell']), pending = [], gates = []
+test('unknown external writer remains in history without vetoing overlapping new work', async t => {
+  const f = fixture(t, ['bell']), gates = []
   const oldId = randomUUID(), oldRoot = join(f.root, 'old-writer'), otherRoot = join(f.root, 'independent')
   mkdirSync(oldRoot); mkdirSync(otherRoot)
   f.setRow({ ...f.row(), retiredTasks: [{ stage: 'closed', worktree: oldRoot,
@@ -262,24 +262,21 @@ test('unknown external writer retained in a retired task blocks only overlapping
       executionRevoked: true, residualWriteRoot: oldRoot } } }] })
   const coordinator = { run(signal, fn, ready) {
     gates.push(ready)
-    if (ready()) return Promise.resolve().then(fn)
-    return new Promise((_resolve, reject) => {
-      pending.push(signal); signal.addEventListener('abort', () => reject(Error('aborted')), { once: true })
-    })
+    return Promise.resolve().then(fn)
   }, dispose() {}, refresh() {} }
   const jobs = createPostmanBridgeJobs(f.ctx, coordinator, null, f.contexts, null, f.direct)
   const blocked = await jobs.accept(f.leader, '@PostmanDevspace conflicting write', 'devspace',
     undefined, undefined, 'WRITE_APPROVED_TARGET', undefined, { root: oldRoot, access: 'write' })
   assert.equal(blocked.status, 'POSTMAN_BRIDGE_ACCEPTED')
   await tick()
-  assert.equal(gates[0](), false)
-  assert.equal(f.launches.length, 0)
+  assert.equal(gates[0], undefined)
+  assert.equal(f.launches.length, 1)
   const allowed = await jobs.accept(f.leader, '@PostmanDevspace independent write', 'devspace',
     undefined, undefined, 'WRITE_APPROVED_TARGET', undefined, { root: otherRoot, access: 'write' })
   assert.equal(allowed.status, 'POSTMAN_BRIDGE_ACCEPTED')
-  await until(() => f.launches.length === 1)
-  assert.equal(gates[1](), true)
-  assert.equal(f.launches[0].binding.workspaceRef, otherRoot)
+  await until(() => f.launches.length === 2)
+  assert.equal(gates[1], undefined)
+  assert.equal(f.launches[1].binding.workspaceRef, otherRoot)
   await jobs.dispose()
 })
 
@@ -303,20 +300,18 @@ test('failed browser revoke followed by dirty isolation retains the original ext
   const gates = []
   const coordinator = { run(signal, fn, ready) {
     gates.push(ready)
-    if (ready()) return Promise.resolve().then(fn)
-    return new Promise((_resolve, reject) => signal.addEventListener('abort',
-      () => reject(Error('aborted')), { once: true }))
+    return Promise.resolve().then(fn)
   }, dispose() {}, refresh() {} }
   const jobs = createPostmanBridgeJobs(f.ctx, coordinator, null, f.contexts, null, f.direct)
   await jobs.accept(f.leader, '@PostmanDevspace conflicting', 'devspace', undefined, undefined,
     'WRITE_APPROVED_TARGET', undefined, { root: oldRoot, access: 'write' })
   await tick()
-  assert.equal(gates[0](), false)
+  assert.equal(gates[0], undefined)
   await jobs.accept(f.leader, '@PostmanDevspace independent', 'devspace', undefined, undefined,
     'WRITE_APPROVED_TARGET', undefined, { root: otherRoot, access: 'write' })
-  await until(() => f.launches.length === 2)
-  assert.equal(gates[1](), true)
-  assert.equal(f.launches[1].binding.workspaceRef, otherRoot)
+  await until(() => f.launches.length === 3)
+  assert.equal(gates[1], undefined)
+  assert.equal(f.launches[2].binding.workspaceRef, otherRoot)
   await jobs.dispose(); await firstJobs.dispose()
 })
 
@@ -1070,8 +1065,7 @@ test('review cycle: three attempts, root fourth, archive, native writer release,
   }, dispose() {} }
   const coordinator = { run(signal, fn, ready) {
     gates.push(ready)
-    if (ready()) return Promise.resolve().then(fn)
-    return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(Error('aborted')), { once: true }))
+    return Promise.resolve().then(fn)
   }, refresh() {}, dispose() {} }
   const jobs = createPostmanBridgeJobs(ctx, coordinator, null, contexts, null, direct)
   t.after(async () => { await jobs.dispose(); await registry.close(); await backend.close() })
@@ -1111,7 +1105,7 @@ test('review cycle: three attempts, root fourth, archive, native writer release,
     undefined, undefined, 'WRITE_APPROVED_TARGET', undefined, { root: native.worktree, access: 'write' })
   assert.equal(independent.status, 'POSTMAN_BRIDGE_ACCEPTED')
   await durableState(() => launches.length === 5 && registry.get(leader.id).bridgeOperations[independent.bridgeJobId]?.state === 'received')
-  assert.equal(gates.at(-1)(), true)
+  assert.equal(gates.at(-1), undefined, 'recovery does not install a root conflict gate')
   assert.equal(readFileSync(join(native.worktree, 'preserved.txt'), 'utf8'), 'native writer finished')
   await jobs.dispose(); await registry.close()
   registry = await openPostmanTaskRegistry(facility)

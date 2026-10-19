@@ -357,13 +357,14 @@ test('local restore of clean tree uses fast-forward, never reset or clean', asyn
   assert.equal(f.calls.some(call => ['reset', 'clean'].includes(call.args[0])), false)
 })
 
-test('received unsynced terminal blocks runner but permits isolated recovery reservation without rewriting history', async () => {
+test('received unsynced terminal does not gate a Leader-authorized runner or rewrite history', async () => {
   const f = fixture(); await f.contexts.prepare(leader('A'))
   await f.registry.change('A', row => ({ ...row, bridgeOperations: { request: {
     state: 'received', synchronization: 'busy', terminal: { status: 'POSTMAN_BRIDGE_TERMINAL',
       requestId: 'REQ_20260927T120000Z_1234', result: { ok: true, assistantText: 'verified' } }
   } } }))
-  assert.equal(f.contexts.beginOperation('A'), false)
+  assert.equal(f.contexts.beginOperation('A'), true)
+  await f.contexts.endOperation('A')
   assert.equal(f.contexts.reserveRestore('A'), true)
   f.contexts.releaseRestore('A')
   assert.equal(f.registry.get('A').bridgeOperations.request.state, 'received')
@@ -638,19 +639,17 @@ test('dirty restore isolates unowned changes and retains prior Worker bindings o
 })
 
 
-test('sync explains admission, Worker activity and Git rejection without leaking error', async () => {
+test('sync permits Worker admission while preserving task lifecycle and dirty-file checks', async () => {
   const f = fixture()
   await f.contexts.prepare(leader('A')); f.state.trees.push(worktree); f.state.remote = published
-  assert.equal((await f.contexts.sync('A', published, base, async () => false)).diagnostic.code, 'WORKER_ACTIVE')
   assert.equal(f.contexts.beginWorkerAdmission('A'), true)
-  assert.equal((await f.contexts.sync('A', published, base)).diagnostic.code, 'WORKER_ADMISSION_ACTIVE')
+  assert.equal(await f.contexts.sync('A', published, base), true)
   f.contexts.endWorkerAdmission('A')
   assert.equal(f.contexts.reserveRestore('A'), true)
   assert.equal((await f.contexts.sync('A', published, base)).diagnostic.code, 'SYNC_ADMISSION_BUSY')
   f.contexts.releaseRestore('A')
-  assert.deepEqual(await f.contexts.sync('A', published, base, async () => { throw Error('auth secret C:/private') }),
-    { ok: false, diagnostic: { code: 'GIT_SYNC_FAILED' } })
-  assert.equal(f.calls.some(c => c.args[0] === 'merge'), false)
+  f.state.clean=false
+  assert.equal((await f.contexts.sync('A', published, base)).diagnostic.code,'WORKTREE_DIRTY')
 })
 
 test('restore early rejection explains applicability and reservation, without Git', async () => {
@@ -677,16 +676,18 @@ test('missing-tree retirement reservation preserves runnable denial and operatio
   assert.equal((await f.contexts.recover(parent)).diagnostic,'task worktree missing')
   assert.equal(f.contexts.get(parent.id),null)
   const token=Symbol('retirement')
-  assert.equal(f.contexts.beginWorkerAdmission(parent.id,token,true),false,'active operation still blocks retirement')
+  assert.equal(f.contexts.beginWorkerAdmission(parent.id,token,true),true,'active operation does not gate addressed retirement')
+  f.contexts.endWorkerAdmission(parent.id,token)
   await f.contexts.endOperation(parent.id)
   assert.equal(f.contexts.beginWorkerAdmission(parent.id,token),false,'no runnable admission')
   assert.equal(f.contexts.beginWorkerAdmission(parent.id,token,true),true)
   assert.equal((await f.contexts.close(parent)).diagnostic.code,'TASK_OPERATION_BUSY')
   f.contexts.endWorkerAdmission(parent.id,token)
   const stale=f.registry.get(parent.id)
-  for(const patch of [{stage:'closed'}, {stage:'intent'}, {diagnostic:'task branch history uncertain'}, {leaderSessionId:'foreign'}]){
+  for(const [patch,allowed] of [[{stage:'closed'},true], [{stage:'intent'},false], [{diagnostic:'task branch history uncertain'},false], [{leaderSessionId:'foreign'},false]]){
     await f.registry.change(parent.id,()=>({...stale,...patch}))
-    assert.equal(f.contexts.beginWorkerAdmission(parent.id,token,true),false)
+    assert.equal(f.contexts.beginWorkerAdmission(parent.id,token,true),allowed)
+    f.contexts.endWorkerAdmission(parent.id,token)
   }
 })
 
@@ -706,7 +707,7 @@ test('Leader prepare schema forwards exact optional project_path and rejects rel
 })
 
 
-test('archived and retired writers deny only overlapping Worker/runner admission; settled history is not a blocker',async()=>{
+test('active, archived and retired writers do not gate Worker or runner admission',async()=>{
   const f=fixture(),parent=leader('A');await f.contexts.prepare(parent)
   const context=f.contexts.get('A'),token=Symbol('worker')
   const operation={state:'unknown',transportKind:'devspace',archivedAt:'2026-10-17T00:00:00Z',executionRevoked:true,
@@ -714,9 +715,10 @@ test('archived and retired writers deny only overlapping Worker/runner admission
   const writerSettlement={version:1,source:'devspace_native_tree',jobId:'old',requestId:'REQ',leaderSessionId:'A',
     branch:context.branch,writeRoot:context.worktree,generation:'native-generation',settledAt:'2026-10-17T00:01:00Z'}
   for(const [patch,allowed] of [
-    [{bridgeOperations:{old:{...operation,residualWriteRoot:context.worktree}}},false],
-    [{bridgeOperations:{old:operation}},false],
-    [{bridgeOperations:{},retiredTasks:[{worktree:context.worktree,bridgeOperations:{old:operation}}]},false],
+    [{bridgeOperations:{old:{state:'pending',transportKind:'devspace',devspace:{mode:'WRITE_ISOLATED'}}}},true],
+    [{bridgeOperations:{old:{...operation,residualWriteRoot:context.worktree}}},true],
+    [{bridgeOperations:{old:operation}},true],
+    [{bridgeOperations:{},retiredTasks:[{worktree:context.worktree,bridgeOperations:{old:operation}}]},true],
     [{bridgeOperations:{},retiredTasks:[{worktree:context.worktree+'-other',bridgeOperations:{old:operation}}]},true],
     [{bridgeOperations:{old:{...operation,writerSettlement}},retiredTasks:[]},true],
     [{bridgeOperations:{},retiredTasks:[{worktree:context.worktree,bridgeOperations:{old:{...operation,writerSettlement}}}]},true],
@@ -730,7 +732,7 @@ test('archived and retired writers deny only overlapping Worker/runner admission
   }
 })
 
-test('ordinary private census gates actual Worker admission by overlapping root and clears without administrative unlock',async t=>{
+test('ordinary census remains diagnostic and never gates Worker admission, even when unreadable',async t=>{
   const directory=await mkdtemp(join(tmpdir(),'postman-ordinary-admission-')),file=join(directory,'writer-control.json')
   t.after(()=>{assert.equal(dirname(resolve(directory)),resolve(tmpdir()));return rm(directory,{recursive:true,force:true})})
   const f=fixture({writerControlFile:file}),parent=leader('ordinary-admission'),token=Symbol('worker')
@@ -739,12 +741,13 @@ test('ordinary private census gates actual Worker admission by overlapping root 
   for(const roots of [[root],[root+'-independent'],[]]) {
     await writeFile(file,JSON.stringify({version:1,untrackedRoots:roots}))
     const expected=!roots.includes(root)
-    assert.equal(f.contexts.beginWorkerAdmission(parent.id,token),expected)
-    if(expected)f.contexts.endWorkerAdmission(parent.id,token)
+    assert.equal(f.contexts.beginWorkerAdmission(parent.id,token),true)
+    f.contexts.endWorkerAdmission(parent.id,token)
     assert.equal((await f.contexts.checkOrdinaryWriterAdmission(parent.id,root)).ok,expected)
   }
   await writeFile(file,'{unreadable census')
-  assert.equal(f.contexts.beginWorkerAdmission(parent.id,token),false)
+  assert.equal(f.contexts.beginWorkerAdmission(parent.id,token),true)
+  f.contexts.endWorkerAdmission(parent.id,token)
   assert.equal((await f.contexts.checkOrdinaryWriterAdmission(parent.id,root)).status,'EXIT_UNPROVEN')
   await writeFile(file,JSON.stringify({version:1,untrackedRoots:[]}))
   assert.equal(f.contexts.beginWorkerAdmission(parent.id,token),true)

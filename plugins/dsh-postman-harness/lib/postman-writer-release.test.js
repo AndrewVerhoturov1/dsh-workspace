@@ -161,9 +161,9 @@ test('missing native observation, foreign owner and model prose cannot release a
   assert.equal(response.status,403)
   f.revoke()
   const otherScope=await f.runtime.runTool('write',{workspace_id:'native'},{_meta:{'openai/session':'shifted'}},f.workspaces,async()=>({bad:true}))
-  assert.equal(otherScope.isError,true)
+  assert.equal(otherScope.bad,true,'an independent authorized scope is not gated by another job')
   const missingMeta=await f.runtime.runTool('write',{workspace_id:'native'},{},f.workspaces,async()=>({bad:true}))
-  assert.equal(missingMeta.isError,true)
+  assert.equal(missingMeta.bad,true,'ordinary upstream authorization is independent of Postman ownership')
 })
 
 test('an explicit new private generation in the same conversation fences the old workspace and permits independent reads',async t=>{
@@ -183,13 +183,13 @@ test('an explicit new private generation in the same conversation fences the old
   assert.equal(read.read,true)
 })
 
-test('shifted metadata cannot create a Git worktree through the upstream readOnlyHint annotation',async t=>{
+test('independent upstream worktree creation is allowed while Postman generation binding remains exact',async t=>{
   const f=await writerRuntimeFixture(t)
   let mutations=0
   const result=await f.runtime.runTool('open_workspace',{path:f.worktree,mode:'worktree'},
     {_meta:{'openai/session':'shifted-worktree'}},f.workspaces,async()=>{mutations++;return {created:true}},true)
-  assert.equal(mutations,0,'mode worktree mutates Git even though upstream annotates open_workspace as read only')
-  assert.equal(result.isError,true)
+  assert.equal(mutations,1,'an independent authorized operation is not blocked by an overlapping Postman root')
+  assert.equal(result.created,true)
   const reading=await f.runtime.runTool('open_workspace',{path:f.worktree,mode:'checkout'},
     {_meta:{'openai/session':'independent-reading'}},f.workspaces,async()=>({reading:true}),true)
   assert.equal(reading.reading,true)
@@ -246,7 +246,7 @@ test('background writer remains held after foreground exit and UI stop; actual a
   assert.equal(running.structuredContent.foregroundFinished,true)
   assert.equal(running.structuredContent.treeSettled,false)
   assert.equal(contexts.hasConflictingRetiredWriter(f.binding.leaderSessionId),true,
-    'ordinary Worker admission sees the native hold even after a received DONE')
+    'native hold remains observable even after a received DONE')
   const separate=join(f.directory,'independent');await mkdir(separate)
   const leader={id:f.binding.leaderSessionId,session:{header:{agentPreset:'postman-leader',delegationDepth:0}},followup(){}}
   const gates=[]
@@ -259,13 +259,13 @@ test('background writer remains held after foreground exit and UI stop; actual a
     const conflict=await jobs.accept(leader,'@PostmanDevspace conflicting write','devspace',undefined,undefined,
       'WRITE_APPROVED_TARGET',undefined,{root:f.worktree,access:'write'})
     assert.equal(conflict.status,'POSTMAN_BRIDGE_ACCEPTED')
-    assert.equal(gates.at(-1)(),false,'DONE from the web does not allow a second writer over a running native background job')
+    assert.equal(gates.at(-1),undefined,'native holds do not add a Host launch gate')
     const reading=await jobs.accept(leader,'@PostmanDevspace read while app runs','devspace',undefined,undefined,'READ_ONLY')
-    assert.equal(reading.status,'POSTMAN_BRIDGE_ACCEPTED');assert.equal(gates.at(-1)(),true)
+    assert.equal(reading.status,'POSTMAN_BRIDGE_ACCEPTED');assert.equal(gates.at(-1),undefined)
     const separateWrite=await jobs.accept(leader,'@PostmanDevspace independent write','devspace',undefined,undefined,
       'WRITE_APPROVED_TARGET',undefined,{root:separate,access:'write'})
     assert.equal(separateWrite.status,'POSTMAN_BRIDGE_ACCEPTED')
-    assert.equal(gates.at(-1)(),true)
+    assert.equal(gates.at(-1),undefined)
   } finally {await jobs.dispose()}
   await registry.change(f.binding.leaderSessionId,row=>({...row,bridgeOperations:{[f.binding.jobId]:operation()}}))
   const leaseFile=join(f.binding.channel,'writer-hold.json'),lease=await readFile(leaseFile,'utf8')
@@ -295,8 +295,8 @@ test('background writer remains held after foreground exit and UI stop; actual a
   const noController=createPostmanTaskContexts({registry,writerControlFile:join(f.directory,'missing-controller')})
   assert.equal((await noController.reconcileWriter(f.binding.leaderSessionId,f.binding.jobId)).status,'POSTMAN_WRITER_EXIT_UNPROVEN')
   const conflicting=await f.runtime.runTool('write',{workspace_id:'native'},
-    {_meta:{'openai/session':'foreign-writer'}},f.workspaces,()=>{throw Error('conflicting writer started')})
-  assert.equal(conflicting.isError,true)
+    {_meta:{'openai/session':'foreign-writer'}},f.workspaces,async()=>({allowed:true}))
+  assert.equal(conflicting.allowed,true,'native uncertainty does not override Leader scheduling')
   const read=await f.runtime.runTool('read',{workspace_id:'native'},
     {_meta:{'openai/session':'independent-reader'}},f.workspaces,async()=>({read:await readFile(kept,'utf8')}),true)
   assert.equal(read.read,'preserved old user file\n')

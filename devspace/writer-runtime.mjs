@@ -214,27 +214,6 @@ export function createWriterRuntime({root=channelRoot(), helper=nativeHelper,cen
     if(candidates.length!==1) throw Error('WRITER_NATIVE_JOB_UNKNOWN');
     return candidates[0]; // Inspection/stop only: never restored as a fresh native census.
   }
-  function heldByOther(target,record) {
-    if(!existsSync(root))return false;
-    for(const entry of readdirSync(root,{withFileTypes:true})) {
-      if(!entry.isDirectory() || !/^[a-f0-9-]{36}$/.test(entry.name))continue;
-      const channel=join(root,entry.name),file=join(channel,'writer-hold.json');
-      let owned;
-      try{
-        owned=binding(entry.name);
-        if(!overlaps(target,owned.writeRoot))continue;
-        let hold;
-        try{hold=privateJson(file);}catch(error){if(error.code==='ENOENT')continue;throw error;}
-        if(record && record.binding.jobId===owned.jobId){
-          const claim=privateJson(markerFor(owned));
-          if(markerMatches(claim,owned) && claim.scope===record.scope && claim.generation===record.generation && hold.generation===record.generation &&
-            ['jobId','requestId','leaderSessionId','lunaSessionId','branch','writeRoot','capability'].every(key=>hold[key]===record.binding[key] && owned[key]===record.binding[key]))continue;
-        }
-        return true;
-      }catch{if(owned?.writeRoot && overlaps(target,owned.writeRoot))return true;}
-    }
-    return false;
-  }
   function hasClaimedScope(scope) {
     if(typeof scope!=='string' || !existsSync(root))return false;
     for(const entry of readdirSync(root,{withFileTypes:true})) {
@@ -280,22 +259,15 @@ export function createWriterRuntime({root=channelRoot(), helper=nativeHelper,cen
       }
       if(record) {
         if(revoked(record)) return denied('WRITER_EXECUTION_REVOKED');
-        // A lost native receipt may hide a live process. Keep addressed
-        // inspection/stop above and read-only tools available, but never
-        // authorize another effect in this generation from UNKNOWN.
-        if(record.unknown && !readOnly) return denied('WRITER_NATIVE_OUTCOME_UNKNOWN');
+        // Native uncertainty remains visible in status/settlement. The Leader
+        // decides whether another authorized operation should proceed.
         if(!readOnly && name!=='open_workspace' && !['bash','write','edit'].includes(name)) return denied('WRITER_TOOL_NOT_INSTRUMENTED');
         if(!readOnly && target && !inside(target,record.binding.writeRoot)) return denied('WRITER_BINDING_CHANGED');
-        if(!readOnly && [...untrackedRoots].some(root=>overlaps(root,record.binding.writeRoot)))return denied('OTHER_WRITER_ACTIVE');
-        if(!readOnly && heldByOther(record.binding.writeRoot,record))return denied('OTHER_WRITER_ACTIVE');
       } else if(!readOnly) {
         // A cold Postman scope must explicitly obtain a new Host binding, even
         // after its old hold was released. Metadata loss cannot grant native access.
         if(hasClaimedScope(scope))return denied('WRITER_BINDING_REQUIRED');
         if(name==='bash' && input.execution && input.execution!=='foreground') return denied('WRITER_BINDING_REQUIRED');
-        if(target && heldByOther(target,null))return denied('WRITER_BINDING_REQUIRED');
-        if(target && [...records.values()].some(other=>overlaps(target,other.binding.writeRoot) &&
-          (!other.settlementIssued || other.active || other.unknown || !revoked(other)))) return denied('WRITER_BINDING_REQUIRED');
         if(scope) unboundScopes.add(scope);
       }
     } catch(error){return validationFailure(error);}
@@ -311,8 +283,7 @@ export function createWriterRuntime({root=channelRoot(), helper=nativeHelper,cen
           if(name==='bash' && target)await beginOrdinary(other);
           else if(unknown && target){coldRoots.add(target);publishOrdinary();}
           else publishOrdinary();
-        }catch(error){return denied(error?.message==='WRITER_CONTROL_GENERATION_CHANGED'
-          ? 'WRITER_CONTROL_GENERATION_CHANGED' : 'DEVSPACE_ORDINARY_CENSUS_UNAVAILABLE');}
+        }catch{other.observationLost=true;other.unknown=true;}
         effectStarted=true;return await local.run(other,operation);
       }
       finally{

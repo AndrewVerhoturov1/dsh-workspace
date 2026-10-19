@@ -340,8 +340,8 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     slot.delivery = current.delivery
     return current.delivery === 'none' ? null : 'POSTMAN_WORKER_DELIVERY_UNKNOWN'
   }
-  const busy = id => contexts?.isRestoring?.(id) || contexts?.hasActiveOperation?.(id) ||
-    contexts?.hasSyncOperation?.(id)
+  // The Leader coordinates concurrent work; only a changing task context stops admission.
+  const busy = id => contexts?.isRestoring?.(id)
   async function admitted(parent, action, retirement = false) {
     if (contexts?.beginWorkerAdmission) {
       const token = Symbol('worker operation')

@@ -151,14 +151,11 @@ export function createImplementationArtifactApplyTool(ctx, grants, worker, optio
       }
       const operationLock = options.taskContexts?.beginOperation
       if (typeof operationLock === 'function' &&
-          !operationLock(leaderId, id => Boolean(options.jobs?.hasActive(id)), caller.id)) {
+          !operationLock(leaderId)) {
         return { status: 'IMPLEMENTATION_ARTIFACT_WORKTREE_BUSY' }
       }
       let runnerOutcome
       try {
-        if (typeof operationLock === 'function' &&
-            !await worker.pauseForOperation(leaderId, caller.id))
-          return { status: 'IMPLEMENTATION_ARTIFACT_WORKTREE_BUSY' }
         const grant = await grants.resolve(leaderId, args?.requestId)
         if (grant === null) return { status: 'IMPLEMENTATION_ARTIFACT_GRANT_REJECTED' }
         if (typeof args?.worktree !== 'string' || !isAbsolute(args.worktree)) {

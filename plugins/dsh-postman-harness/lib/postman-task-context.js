@@ -685,7 +685,7 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
   // Reserve the mutable worktree from terminal handling until the sync completes.
   // Other Web Bridge operations remain independent while runner/restore are blocked.
   function beginSync(leaderId) {
-    if (!get(leaderId) || pending.has(leaderId) || activeOperations.has(leaderId) || workerAdmissions.has(leaderId)) return false
+    if (!get(leaderId) || pending.has(leaderId) || activeOperations.has(leaderId)) return false
     syncOperations.set(leaderId, (syncOperations.get(leaderId) ?? 0) + 1)
     return true
   }
@@ -695,12 +695,11 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
     else syncOperations.set(leaderId, count - 1)
   }
 
-  async function sync(leaderId, publicationCommit, expectedParent, beforeSync = async () => true) {
+  async function sync(leaderId, publicationCommit, expectedParent) {
     const context = get(leaderId)
     const reject = code => ({ ok: false, diagnostic: { code } })
     if (!context) return reject('TASK_CONTEXT_CHANGED')
     if (!SHA.test(publicationCommit ?? '') || !SHA.test(expectedParent ?? '')) return reject('PUBLICATION_COMMIT_INVALID')
-    if (workerAdmissions.has(leaderId)) return reject('WORKER_ADMISSION_ACTIVE')
     if (!beginSync(leaderId)) return reject('SYNC_ADMISSION_BUSY')
     // Queue insertion is synchronous, before the first await. Each Leader has
     // one FIFO chain; other Leaders' worktrees do not share a lock.
@@ -713,8 +712,6 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
       await previous.catch(() => undefined)
       const { worktree, branch, baseCommit } = context
       if (get(leaderId) !== context) return reject('TASK_CONTEXT_CHANGED')
-      if (workerAdmissions.has(leaderId)) return reject('WORKER_ADMISSION_ACTIVE')
-      if (!await beforeSync(leaderId)) return reject('WORKER_ACTIVE')
       if (!BRANCH.test(branch) ||
           normalize(await realPath(worktree)) !== normalize(worktree) ||
           normalize(await command(worktree, 'rev-parse', '--show-toplevel')) !== normalize(worktree) ||
@@ -920,12 +917,9 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
       (row.stage === 'closed' || row.stage === 'uncertain' && row.diagnostic === 'task worktree missing'))
   }
   function beginWorkerAdmission(leaderId, token, retirement = false) {
-    if (!(retirement ? canRetireWorkers(leaderId) : get(leaderId)) || pending.has(leaderId) || activeOperations.has(leaderId) || syncOperations.has(leaderId)) return false
-    // Prompt READ_ONLY does not remove ordinary Worker write/shell rights.
-    if (!retirement && (hasConflictingRetiredWriter(leaderId) || Object.values(registry.get(leaderId)?.bridgeOperations ?? {}).some(op =>
-      !op.archivedAt && !op.executionRevoked &&
-      op.transportKind === 'devspace' && (op.devspace?.approvedAccess === 'write' || op.devspace?.mode === 'WRITE_ISOLATED') &&
-      !(op.state === 'received' && ['synchronized','not-required'].includes(op.synchronization))))) return false
+    if (!(retirement ? canRetireWorkers(leaderId) : get(leaderId)) || pending.has(leaderId)) return false
+    // Admission records exact ownership, not an exclusive lease on the worktree.
+    // Worker/Secretary/Sol scheduling and writer conflicts belong to the Leader.
     let current = workerAdmissions.get(leaderId)
     if (!current) { current = new Set(); workerAdmissions.set(leaderId, current) }
     current.add(token)
@@ -936,12 +930,9 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
     current?.delete(token)
     if (current?.size === 0) workerAdmissions.delete(leaderId)
   }
-  function beginOperation(leaderId, isBusy = () => false, workerId = null) {
+  function beginOperation(leaderId) {
     if (!get(leaderId) || pending.has(leaderId) || activeOperations.has(leaderId) || syncOperations.has(leaderId) ||
-        workerAdmissions.has(leaderId) ||
-        ['running', 'unknown', 'restoring'].includes(registry.get(leaderId)?.runner.state) || hasConflictingRetiredWriter(leaderId) ||
-        Object.values(registry.get(leaderId)?.bridgeOperations ?? {}).some(op =>
-          !op.archivedAt && !op.executionRevoked && op.state === 'received' && !['synchronized', 'not-required'].includes(op.synchronization)) || isBusy(leaderId)) return false
+        ['running', 'unknown', 'restoring'].includes(registry.get(leaderId)?.runner.state)) return false
     activeOperations.add(leaderId)
     return true
   }

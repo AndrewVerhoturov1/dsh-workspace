@@ -7,7 +7,7 @@ import {fileURLToPath} from 'node:url';
 import {channel} from 'node:diagnostics_channel';
 import {createBackgroundFixture,quote} from './background-fixture.mjs';
 
-test('lost native outcome fences further effects but permits addressed status/stop and reads', {timeout:60000},async t=>{
+test('lost native outcome remains UNKNOWN while Leader may continue authorized work', {timeout:60000},async t=>{
   const dir=mkdtempSync(join(tmpdir(),'postman-native-outcome-'));
   const helper=join(dir,'helper.ps1');
   // Artificial loss of the controller's terminal receipt. No exit is invented.
@@ -30,17 +30,18 @@ test('lost native outcome fences further effects but permits addressed status/st
   for(const key of ['requestId','leaderSessionId','branch','writeRoot'])assert.equal(descriptor[key],f.binding[key]);
   assert.equal(descriptor.bridgeJobId,f.binding.jobId);assert.equal(descriptor.scope,scope);assert.equal(descriptor.cwd,f.project);
   copyFileSync(fileURLToPath(new URL('../writer-process.ps1',import.meta.url)),helper);
-  const write=await f.call('write',{workspace_id,path:'unsafe-after-unknown.txt',content:'must not run'},scope);
+  const write=await f.call('write',{workspace_id,path:'continued-after-unknown.txt',content:'Leader-authorized continuation'},scope);
   const restarted=await call({execution:'background',command:'node -e '+quote("require('node:fs').writeFileSync('restarted.txt','unexpected');setInterval(()=>{},1000)"),timeout:2});
   console.log(JSON.stringify({phase:'unknown-admission',writeDenied:write.isError===true,restartDenied:restarted.isError===true,
     restartedNativeJobId:restarted.structuredContent?.native_job_id??null}));
   try {
-    assert.equal(write.isError,true,JSON.stringify(write));
-    assert.match(JSON.stringify(write),/WRITER_NATIVE_OUTCOME_UNKNOWN/);
-    assert.equal(restarted.isError,true,JSON.stringify(restarted));
-    assert.match(JSON.stringify(restarted),/WRITER_NATIVE_OUTCOME_UNKNOWN/);
-    assert.equal(existsSync(join(f.project,'unsafe-after-unknown.txt')),false);
-    assert.equal(existsSync(join(f.project,'restarted.txt')),false);
+    assert.notEqual(write.isError,true,JSON.stringify(write));
+    assert.notEqual(restarted.isError,true,JSON.stringify(restarted));
+    assert.ok(restarted.structuredContent.native_job_id);
+    assert.equal(readFileSync(join(f.project,'continued-after-unknown.txt'),'utf8'),'Leader-authorized continuation');
+    const deadline=Date.now()+10000;
+    while(!existsSync(join(f.project,'restarted.txt'))&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,50));
+    assert.equal(existsSync(join(f.project,'restarted.txt')),true,JSON.stringify(await call({execution:'status',job_id:restarted.structuredContent.native_job_id})));
     const status=await call({execution:'status',job_id:nativeJobId});
     assert.equal(status.structuredContent.state,'UNKNOWN');
     assert.equal(status.structuredContent.treeSettled,false);
@@ -59,7 +60,7 @@ test('lost native outcome fences further effects but permits addressed status/st
     const refused=await coldCall({execution:'background',command:'must not start'});
     assert.equal(refused.isError,true);
     console.log(JSON.stringify({scenario:'native-outcome-lost',bridgeJobId:f.binding.jobId,requestId:f.binding.requestId,nativeJobId,
-      owner:scope,workspace:workspace_id,restartAllowed:false,treeSettled:false,modelRequests:0}));
+      owner:scope,workspace:workspace_id,restartAllowed:true,treeSettled:false,modelRequests:0}));
   } finally {
     if(restarted.structuredContent?.native_job_id)await call({execution:'stop',job_id:restarted.structuredContent.native_job_id});
   }

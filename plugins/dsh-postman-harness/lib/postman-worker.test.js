@@ -58,6 +58,20 @@ function toolsFromPreset() {
   return { preset, rows }
 }
 
+test('Secretary, Worker and Sol creation and follow-up remain independent of runner/sync activity',async()=>{
+  const context={branch:'task/parallel',worktree:'C:/parallel'}
+  const f=fixture({get:()=>context,hasActiveOperation:()=>true,hasSyncOperation:()=>true})
+  const parent=leader('parallel-owner');f.agents.set(parent.id,parent)
+  for(const tool of [f.tools.secretaryTool,f.tools.taskTool,f.tools.solTaskTool]) {
+    const created=await tool.execute({task:'Leader-authorized parallel work',createNew:true},exec(parent))
+    assert.equal(created.status,'POSTMAN_WORKER_TASK_ACCEPTED')
+    const continued=await tool.execute({task:'Continue the same work',workerSessionId:created.workerSessionId},exec(parent))
+    assert.equal(continued.status,'POSTMAN_WORKER_TASK_ACCEPTED')
+  }
+  assert.equal(f.calls.starts.length,3)
+  assert.equal(f.calls.followups.length,3)
+})
+
 test('Secretary auto-prepares branchless context through actual Host Proxy facade', async () => {
   let context = null
   let prepared = 0
@@ -302,7 +316,8 @@ test('non-Leader cannot interrupt another Leader Worker', async () => {
 })
 
 test('interrupt enforces required, busy and exact task context identity', async () => {
-  let context = { branch: 'task/one', worktree: 'C:/one' }
+  const originalContext = { branch: 'task/one', worktree: 'C:/one' }
+  let context = originalContext
   let restoring = false
   let operation = false
   const contexts = { get: () => context, isRestoring: () => restoring, hasActiveOperation: () => operation }
@@ -311,17 +326,18 @@ test('interrupt enforces required, busy and exact task context identity', async 
   context = undefined
   assert.equal((await f.tools.interruptTool.execute({ task: 'redirect' }, exec(a))).status,
     'POSTMAN_TASK_CONTEXT_REQUIRED')
-  context = { branch: 'task/one', worktree: 'C:/one' }
+  context = originalContext
   restoring = true
   assert.equal((await f.tools.interruptTool.execute({ task: 'redirect' }, exec(a))).status,
     'POSTMAN_TASK_CONTEXT_BUSY')
   restoring = false; operation = true
   assert.equal((await f.tools.interruptTool.execute({ task: 'redirect' }, exec(a))).status,
-    'POSTMAN_TASK_CONTEXT_BUSY')
+    'POSTMAN_WORKER_INTERRUPT_TASK_ACCEPTED')
   operation = false; context = { branch: 'task/two', worktree: 'C:/two' }
   assert.equal((await f.tools.interruptTool.execute({ task: 'redirect' }, exec(a))).status,
     'POSTMAN_TASK_CONTEXT_MISMATCH')
   assert.equal(f.calls.interrupts.length, 0)
+  assert.equal(f.calls.followups.length, 1)
 })
 
 test('ordinary Worker tasks retain FIFO follow-up admission without interrupting', async () => {

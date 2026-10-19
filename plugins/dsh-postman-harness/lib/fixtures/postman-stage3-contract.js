@@ -7,7 +7,7 @@ export const obsoleteSolPermission = /(?:Only on an explicit user request: creat
 // Small semantic markers, not a wording snapshot. Called on actual native requests.
 export const managementMarkers = {
   leader: [
-    /POSTMAN_LEADER_SKILL_VERSION: 36/, /Management Kernel/, /execution graph/i,
+    /POSTMAN_LEADER_SKILL_VERSION: 37/, /Management Kernel/, /execution graph/i,
     /critical path/i, /dispatch first/i, /environment readiness/i, /Dependency provenance:/,
     /tasks are independent/, /DECISION/, /IMPLEMENTATION/, /EXTERNAL_RESEARCH/,
     /Secretary/, /postman_secretary_ledger/, /PostmanDevspace/, /laneId/,
@@ -19,7 +19,7 @@ export const managementMarkers = {
     /REPORT RECEIVED/, /VERIFIED BY LEADER/, /sufficient acceptance evidence/,
     /Exact-path-first delegation/, /hardBudget:60/, /softLimit:48/,
     /Already established:/, /Still needed:/, /Next decision boundary:/,
-    /task worktree/i, /(?:one|один) active implementation writer/i,
+    /task worktree/i, /Параллельность и конфликты.*решает Leader/,
     /Sol Worker/, /Worker N/, /Postman Artifact Bridge/, /Postman Ask Bridge/,
     /Postman Image Bridge/, /retire unused agents/, /STOP → revised plan → approval/,
     /TASK_CONTRACT/, /legacy/i,
