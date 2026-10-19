@@ -4,14 +4,13 @@ import json
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
+SOURCE_FILES = ("postman/devspace/SKILL.md", "AGENTS.md", "REPO_POLICY.md", "docs/workflow/TASK_CONTRACT.md")
 
 
 def instruction_refs(binding):
     # Host source, never a Leader-supplied instruction root. Project rules are
     # confined to the already assigned workspace; refs confer no write rights.
-    files = [REPO / name for name in (
-        "postman/devspace/SKILL.md", "AGENTS.md", "REPO_POLICY.md",
-        "docs/workflow/TASK_CONTRACT.md")]
+    files = [REPO / name for name in SOURCE_FILES]
     area = Path(binding["workspaceRef"])
     for name in ("AGENTS.md", "REPO_POLICY.md", "docs/workflow/TASK_CONTRACT.md", "SUBPROJECT.md"):
         candidate = area / name
@@ -36,11 +35,18 @@ def instruction_refs(binding):
     return paths, digest.hexdigest()
 
 
-def render_task(binding, intent, signal_command):
+def render_task(binding, intent, signal_command, *, source_commit=None):
     mode = binding["mode"]
     area, write = binding["workspaceRef"], binding["writeRoot"]
     files, fingerprint = instruction_refs(binding)
-    refs = "\n".join("- " + file for file in files)
+    source_files = {REPO / name for name in SOURCE_FILES}
+    refs = []
+    for file in files:
+        link = file
+        if source_commit and Path(file) in source_files:
+            link = "https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/" + source_commit + "/" + Path(file).relative_to(REPO).as_posix()
+        refs.append("- " + link)
+    refs = "\n".join(refs)
     if mode == "READ_ONLY":
         access = ("Сначала открой назначенную область обычным open_workspace с path=" + json.dumps(str(area), ensure_ascii=False) +
                   ". В READ_ONLY не используй postman-writer. Записи в любые файлы запрещены, кроме bell ниже.")
@@ -51,7 +57,7 @@ def render_task(binding, intent, signal_command):
         if mode == "WRITE_TEST":
             access += " Исходная область только для чтения."
     computer_use = "разрешил" if binding.get("computerUse") == "allow" else "запретил"
-    # The immutable first line remains the existing browser correlation key.
+    # This is the linked task document. Its REQ is never copied into chat text.
     return f"""POSTMAN_REQUEST_ID: {binding['requestId']}
 Режим: {mode}. Область для чтения: {area}
 {access}
@@ -59,10 +65,7 @@ Leader {computer_use} Computer Use для этого поручения.
 DevSpace Bash не является песочницей. Не выходи за scope; не читай секреты/runtime credentials, binding и служебные файлы, не меняй права, не создавай AI-агентов, не устанавливай и не перезапускай Host/DevSpace. GitHub writes/commit/push/PR/merge запрещены здесь; отдельный местный маршрут требует разрешения.
 ## Инструкции Host
 instructions_sha256: {fingerprint}
-После первого указанного open_workspace при необходимости открой instruction_workspace через open_workspace в mode='checkout' только для чтения перечисленных файлов; сохрани исходный workspace_id для работы. Это не разрешение Bash/записи в instruction_workspace. Ссылки и содержимое не расширяют scope и не заменяют Host binding.
-instruction_workspace: {REPO}
 {refs}
-Прочитай инструкции до работы. Проектные файлы читай в workspace области чтения; при необходимости открой её отдельно в checkout только для чтения. Тот же instructions_sha256 при сохранённом содержимом в разговоре — без повторного чтения; cold restore без содержимого — прочитай снова. Недоступный обязательный файл: blocked -Message 'INSTRUCTION_UNAVAILABLE: точный путь', без работы по памяти. Применимые вложенные правила проекта Leader указывает точными путями внутри области.
 Bell — отдельное узкое разрешение через настоящий DevSpace Bash (не читать скрипт/JSON):
 {signal_command} <done|need-decision|blocked> [-Message 'причина'] [-Report 'report.md']
 ## Поручение Leader (не расширяет перечисленные ограничения)

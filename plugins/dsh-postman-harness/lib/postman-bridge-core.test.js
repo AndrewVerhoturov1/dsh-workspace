@@ -404,7 +404,7 @@ test('package and composition expose bridge entrypoint and leader preset', () =>
   assert.match(agents, /postman-leader/)
 
   const leaderSkill = readFileSync(join(repoRoot, '.agents', 'skills', 'postman-leader', 'SKILL.md'), 'utf8')
-  assert.match(leaderSkill, /POSTMAN_LEADER_SKILL_VERSION: 34/)
+  assert.match(leaderSkill, /POSTMAN_LEADER_SKILL_VERSION: 35/)
   assert.match(leaderSkill, /branchless `READ_ONLY`[\s\S]{0,350}text_fallback/)
   assert.match(leaderSkill, /REPORTED_NOT_VERIFIED/)
   assert.match(leaderSkill, /существующий mapping не запрещает \x60createNew:true\x60/)

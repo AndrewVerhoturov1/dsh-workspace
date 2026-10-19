@@ -7,6 +7,7 @@ import reminder_policy
 import transport_control
 from postman.devspace import controls, image_output
 from postman.devspace.signal import read_event
+from postman.devspace.publication import bound_prompt
 
 DEFAULT_CHECK_INTERVAL_MS = 15 * 60 * 1000
 DEFAULT_CHECK_COUNT = 3
@@ -36,9 +37,9 @@ def wait_for_bell_after_unknown_send(binding, *, timeout_ms, sleep, monotonic,
         nonlocal conversation_ref, observable, controls_allowed
         if conversation_ref or page is None or not isinstance(prompt, str):
             return
-        # Never infer authority from a URL alone. The exact fresh REQ key must
-        # occur in the Host-owned page's user turn, with no later user turn.
-        if not prompt.startswith("POSTMAN_REQUEST_ID: " + binding["requestId"] + chr(10)):
+        # Never infer authority from a chat URL alone. The exact Host-bound
+        # task key must occur in its user turn, with no later user turn.
+        if not bound_prompt(binding, prompt):
             return
         try:
             url = str(page.url)
@@ -114,8 +115,7 @@ def wait_for_bell_after_unknown_send(binding, *, timeout_ms, sleep, monotonic,
                 if str(page.url) == conversation_ref:
                     turns, _ = observer.snapshot_turns(page)
                     anchor = observer.find_user_anchor(turns, current_prompt)
-                    correlated = (isinstance(prompt, str) and prompt.startswith(
-                        'POSTMAN_REQUEST_ID: ' + binding['requestId'] + '\n')
+                    correlated = (isinstance(prompt, str) and bound_prompt(binding, prompt)
                         and anchor is not None and not any(
                             t.get("role") == "user" and t["index"] > anchor for t in turns))
             except Exception:
@@ -131,8 +131,7 @@ def wait_for_bell_after_unknown_send(binding, *, timeout_ms, sleep, monotonic,
                 # without repeating the original Send or changing its proof.
                 # A different/newer user turn or unproved REQ stays bell-only.
                 if (persist is not None and interval_ms is not None and count is not None
-                        and isinstance(prompt, str) and prompt.startswith(
-                            'POSTMAN_REQUEST_ID: ' + binding['requestId'] + '\n')
+                        and isinstance(prompt, str) and bound_prompt(binding, prompt)
                         and current_prompt == prompt):
                     outcome = wait_for_signal(page, prompt, conversation_ref, binding,
                         timeout_ms=timeout_ms, interval_ms=interval_ms, count=count,
@@ -316,7 +315,7 @@ def wait_for_signal(page, prompt, chat_url, binding, *, timeout_ms, interval_ms,
                                    controls.newer_user_turn(page, latest))
         return (not controls.revoked(binding) and str(getattr(page, "url", "")) == chat_url
                 and not superseded_by_user_turn and submit.is_bound_chat_url(chat_url) and
-                submit.request_key_line_from_prompt(prompt) == "POSTMAN_REQUEST_ID: " + binding["requestId"])
+                bound_prompt(binding, prompt))
 
     completion_result = None
     stop_clicked = False

@@ -2,6 +2,8 @@
 
 Статус: **ветка реализации; новые три линии/универсальные inputs ещё не прошли живой GUI-приёмки и не установлены в DSH**. Канонический источник способностей: [POSTMAN_DEVSPACE_CAPABILITIES.md](POSTMAN_DEVSPACE_CAPABILITIES.md). Порядок работ и соразмерность: [TASK_CONTRACT](../docs/workflow/TASK_CONTRACT.md).
 
+Внешний prompt имеет три человеческие строки: просьба прочитать оба документа и выполнить работу, `Задание: <SHA-pinned GitHub URL>`, `Правила: <SHA-pinned GitHub URL>`. REQ, режим, scope, первый writer alias и bell-команда находятся только в задании. Общие правила — файлы source repository, без копирования в REQ. Задание публикует Host существующим GitHub transport publisher в `transport/postman-devspace`; это не Git-операции целевого проекта и не продвижение main/preview. Вложения остаются частными. Публичная доступность проверяется без credentials; недоступность не заменяется локальным/текстовым fallback. Browser correlation использует exact task URL плюс private receipt, owner и привязанный разговор; older REQ anchors сохраняются для прежних каналов.
+
 ## 1. Один основной маршрут, три независимые линии
 
 ```text
