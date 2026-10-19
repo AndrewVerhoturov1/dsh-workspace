@@ -111,11 +111,12 @@ test('transport diagnostic then PROVEN_NOT_SENT do not block a third distinct RE
   await jobs.dispose()
 })
 
-test('three recovery attempts persist separate jobs and REQs; Leader can authorize a fourth', async t => {
+for (const computerUse of ['allow', 'deny'])
+test('three recovery attempts preserve Computer Use ' + computerUse + '; Leader can authorize a fourth', async t => {
   const f = fixture(t, ['transport_diagnostic', 'not-sent', 'transport_diagnostic', 'transport_diagnostic', 'bell'])
   const jobs = f.make()
   const accepted = await jobs.accept(f.leader, '@PostmanDevspace inspect files and finish', 'devspace',
-    undefined, undefined, 'READ_ONLY', undefined, undefined, { computerUse: 'allow' })
+    undefined, undefined, 'READ_ONLY', undefined, undefined, { computerUse })
   await until(() => f.launches.length === 4 && Object.values(f.row().bridgeOperations)
     .every(value => value.state === 'received'))
   await tick()
@@ -125,7 +126,7 @@ test('three recovery attempts persist separate jobs and REQs; Leader can authori
   assert.equal(new Set(f.launches.map(value => value.sessionId)).size, 1)
   assert.deepEqual(f.launches.slice(1).map(value => value.binding.recovery.attempt), [1, 2, 3])
   assert.ok(f.launches.slice(1).every(value => value.binding.conversationUrl === CHAT &&
-    value.binding.recovery.intent === 'observe-then-continue' && value.binding.computerUse === 'allow'))
+    value.binding.recovery.intent === 'observe-then-continue' && value.binding.computerUse === computerUse))
   assert.match(f.launches[1].payload, /проверь историю/)
   assert.match(f.launches[1].payload, /ещё выполняющиеся процессы/)
   const first = await jobs.status(f.leader, accepted.bridgeJobId)

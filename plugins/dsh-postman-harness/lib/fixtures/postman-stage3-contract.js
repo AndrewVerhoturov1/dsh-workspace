@@ -7,11 +7,11 @@ export const obsoleteSolPermission = /(?:Only on an explicit user request: creat
 // Small semantic markers, not a wording snapshot. Called on actual native requests.
 export const managementMarkers = {
   leader: [
-    /POSTMAN_LEADER_SKILL_VERSION: 35/, /Management Kernel/, /execution graph/i,
+    /POSTMAN_LEADER_SKILL_VERSION: 36/, /Management Kernel/, /execution graph/i,
     /critical path/i, /dispatch first/i, /environment readiness/i, /Dependency provenance:/,
     /tasks are independent/, /DECISION/, /IMPLEMENTATION/, /EXTERNAL_RESEARCH/,
     /Secretary/, /postman_secretary_ledger/, /PostmanDevspace/, /laneId/,
-    /postman_devspace_control/, /Computer Use/, /CHATGPT|ChatGPT/, /computer_use:'allow'\|'deny'/,
+    /postman_devspace_control/, /Computer Use/, /CHATGPT|ChatGPT/, /computer_use:'deny'/,
     /PTC = supervisor phase, not tool wrapper/, /Supervisor dispatch phase/,
     /Reconciliation\/cleanup phase/, /Known-status branching/, /external_event/,
     /not a required first step/, /no ritual snapshot or standalone model round/,

@@ -101,6 +101,7 @@ test('Stage 3 isolates writeRoot only to a Host-bound task worktree', t => {
   const read=createDevspaceChannel({root,bridgeJobId:readonly,requestId:req,
     leaderSessionId:'leader',lunaSessionId:'luna',worktree:root,sourceRoot:root,mode:'READ_ONLY'})
   assert.equal(read.writeRoot,null)
+  assert.equal(read.computerUse,'allow')
 })
 
 test('exact devspace marker is separate and old payload/modes stay exact', () => {
@@ -577,6 +578,7 @@ test('unprepared universal Devspace starts branchless and requires exact permiss
   assert.equal(prepared,1)
   assert.equal(calls.length,1)
   assert.equal(calls[0][5],undefined) // Host picks private output, not a Git branch.
+  assert.equal(calls[0][8].computerUse,'allow')
   assert.equal((await tool.execute({message:'@PostmanDevspace do unsafe UI',
     computer_use_target:'ChatGPT'},{agent:parent})).status,
     'POSTMAN_BRIDGE_ACCEPTED')

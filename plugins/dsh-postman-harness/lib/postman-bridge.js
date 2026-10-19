@@ -123,11 +123,11 @@ export function createPostmanBridgeTool(ctx, jobs, contexts) {
     description: 'Universal @PostmanDevspace is the default ChatGPT executor, with up to three independent persistent Luna/chat lanes per Leader. Legacy @Postman/Ask/Image remain available. Accepted is not completed; use POSTMAN_BRIDGE_READY then exact postman_bridge_status.',
     parameters: { message: { type: 'string', required: true,
       description: 'Complete model-authored delegation beginning with exact @Postman, @PostmanAsk, @PostmanImage or @PostmanDevspace. For Devspace include only the concrete task, necessary facts/paths, task constraints and done conditions. Host supplies standard instruction file refs and safety scope; do not copy manuals or Host boilerplate.' },
-      devspace_mode: { type: 'string', enum: ['READ_ONLY', 'WRITE_TEST', 'WRITE_ISOLATED'], description: 'Compatibility workspace scope only. READ_ONLY default. WRITE_ISOLATED uses an approved task worktree.' },
+      devspace_mode: { type: 'string', enum: ['READ_ONLY', 'WRITE_TEST', 'WRITE_ISOLATED'], description: 'Omit for normal work: a prepared task worktree is writable; otherwise source is read-only with private output (WRITE_TEST). READ_ONLY explicitly forbids output files. External read scope keeps private output unless READ_ONLY is explicit.' },
       lane_id: { type: 'string', description: 'Optional exact returned Devspace laneId, to continue the same Luna and ChatGPT conversation. Omit for a free lane.' },
       workspace_root: { type: 'string', description: 'Optional exact Leader-approved existing local folder. Explicit for every non-repository path.' },
       workspace_access: { type: 'string', enum: ['read', 'write'], description: 'Read or write permission paired with workspace_root.' },
-      computer_use: { type: 'string', enum: ['allow', 'deny'], description: 'Explicit Leader decision for this task, delivered to ChatGPT as an instruction. Default deny. Actual tool availability is determined by ChatGPT.' },
+      computer_use: { type: 'string', enum: ['allow', 'deny'], description: 'Computer Use is allowed by default within the user task scope. Use deny only for an explicit task restriction. Actual tool availability is determined by ChatGPT; this does not widen filesystem or Host authority.' },
       computer_use_target: { type: 'string', description: 'Legacy indication of Computer Use intent; equivalent to allow unless computer_use explicitly says deny. Does not impose a Host application allowlist.' } },
     output: output(),
     isConcurrencySafe: () => true,
@@ -158,7 +158,7 @@ export function createPostmanBridgeTool(ctx, jobs, contexts) {
       }
       if (args.computer_use !== undefined && !['allow', 'deny'].includes(args.computer_use))
         return { status: 'POSTMAN_DEVSPACE_SCOPE_INVALID' }
-      const computerUse = args.computer_use ?? (args.computer_use_target !== undefined ? 'allow' : 'deny')
+      const computerUse = args.computer_use ?? 'allow'
       const taskContext = contexts?.get(exec.agent.id)
       if (parsed.transportKind !== 'devspace' && taskContext?.universalProject &&
           !await contexts.verifyDirectPublication?.(exec.agent.id))

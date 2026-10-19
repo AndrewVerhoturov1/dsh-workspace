@@ -344,7 +344,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
         : approvedScope.access === 'write'
         ? approvedScope.root === taskContext?.worktree && !taskContext?.devspaceReadOnly
           ? 'WRITE_ISOLATED' : 'WRITE_APPROVED_TARGET'
-        : 'READ_ONLY'
+        : devspaceMode === 'READ_ONLY' ? 'READ_ONLY' : 'WRITE_TEST'
       : devspaceMode
     if (transportKind === 'devspace' && devspaceMode === 'WRITE_ISOLATED' &&
         (taskContext?.devspaceReadOnly || !taskContext?.worktree))
@@ -358,7 +358,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
       bridgeJobId: randomUUID(), parentSessionId: parent.id, taskContext, transportKind, state: 'QUEUED',
       createdAt: new Date().toISOString(), controller: new AbortController(), inputBinding,
       notification: 'PENDING', recoveryFrom, devspaceMode, approvedScope,
-      computerUse: options.computerUse ?? 'deny', devspaceRecovery: options.recovery,
+      computerUse: options.computerUse ?? 'allow', devspaceRecovery: options.recovery,
       recoverySourceChannel: options.sourceChannel,
       ...(requestedLaneId ? { laneId: requestedLaneId } : {}),
     }
@@ -835,6 +835,8 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     try {
       accepted = await accept(parent, message, 'devspace', inputBinding, undefined,
         isolated ? 'WRITE_TEST' : op.devspace.mode, freshConversation ? undefined : laneId, approvedScope,
+        // Historical operations without a saved choice retain their old deny;
+        // recovery never broadens a previously issued task's authority.
         { computerUse: op.devspace.computerUse ?? 'deny', ...(!freshConversation && sourceChannel ? { sourceChannel } : {}), recovery: {
           rootJobId: op.devspace.recovery?.rootJobId ?? bridgeJobId,
           sourceJobId: bridgeJobId, ...(sourceRequestId ? { sourceRequestId } : {}), attempt,

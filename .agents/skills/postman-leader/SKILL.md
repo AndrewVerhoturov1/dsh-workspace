@@ -6,7 +6,7 @@ description: >-
 
 # Postman Leader
 
-`POSTMAN_LEADER_SKILL_VERSION: 35`
+`POSTMAN_LEADER_SKILL_VERSION: 36`
 
 ## 1. Role and invariants
 
@@ -52,7 +52,9 @@ Secretary появляется в начале содержательной за
 
 В `READ_ONLY` ChatGPT открывает обычный разрешённый путь назначенной области через `open_workspace`; адрес `postman-writer:<jobId>` нужен только режимам записи. Для записи сначала используется этот выданный Host адрес, без обхода буквальным путём. Проверяй реальную схему подключённого MCP: `background/status/stop` требуют у Bash полей `execution` и `job_id`, а для `status/stop` команда необязательна. Если этих полей нет, сообщи о несовместимости соединителя; не выдумывай параметры и не повторяй неподдерживаемый вызов.
 
-**Computer Use:** Leader обязан явно решить `разрешить` или `запретить` для поручения и передать `computer_use:'allow'|'deny'` в Bridge. По умолчанию deny. Назначение должно содержать «Computer Use разрешён» либо «Computer Use запрещён». При allow Host не навязывает список приложений или `computer_use_target`; действуют пользовательская область задачи, правила ChatGPT и права ОС. Это инструкция модели, а не обещание технической изоляции. Если ChatGPT не предоставляет инструмент — `CAPABILITY_UNAVAILABLE`. Trusted Host Postman browser transport имеет собственную проверку владельца.
+**Computer Use:** по умолчанию разрешён в границах пользовательской задачи; `computer_use:'deny'` передавай только при конкретном запрете пользователя или применимом ограничении задачи. Чтение исходников без изменений не является запретом действий с окном приложения или создания результата. Host сам передаёт выбранное разрешение; не дублируй стандартную формулировку в поручении. ChatGPT выбирает реально доступные инструменты и способ работы. Host не навязывает список приложений или `computer_use_target`; сохраняются scope, правила ChatGPT, права ОС и binding. Отсутствующий инструмент — `CAPABILITY_UNAVAILABLE`, а не повод имитировать работу.
+
+**Достаточные полномочия:** задай результат и существенные ограничения, оставь ChatGPT выбор шагов и инструментов. Различай изменение исходников, создание результата, запуск приложения и работу с его интерфейсом. Обычно не задавай `devspace_mode`: Host даёт подготовленный task worktree либо чтение исходной области с частной папкой результата (`WRITE_TEST`). `workspace_access:'read'` запрещает изменение указанного проекта, но сохраняет частную папку результата; явный `READ_ONLY` запрещает создание файлов. Снимки, отчёты и экспорты можно сохранять в любую выданную область записи. Просьба запустить и показать приложение допускает необходимые запуск и действия с целевым интерфейсом в существующем окружении; ограничения установки, Git и Host остаются прежними. Если один способ недоступен, ChatGPT может выбрать другой в рамках имеющихся прав.
 
 Все остальные реально доступные инструменты ChatGPT допускаются в пределах задачи. Не выдавай отсутствие инструмента за выполненную работу. Старый PostmanAsk/PostmanImage/Postman используется лишь осознанно при блокере и доказанном исходе предыдущего REQ.
 
@@ -89,7 +91,7 @@ Worker PASS — claim в report, не универсальная правда. �
 
 ## 8. Browser, Git and inputs
 
-**Canonical Harness browser:** `mcp__playwright__browser_*` для точного product URL; `SHOW_TO_USER` требует фактического подтверждения UI и доступного screenshot. Product UI acceptance только через Host-selected Playwright и exact product URL; transport Chrome ChatGPT не считать пользовательским проверочным браузером. Никакого самостоятельного CDP/Orca/порт 9222 для Worker/CU.
+**Проверка интерфейса:** `SHOW_TO_USER` требует фактического подтверждения UI и доступного screenshot точной цели. Местные Worker/Sol используют Host-selected `mcp__playwright__browser_*`, без самостоятельного CDP/Orca/порта 9222. PostmanDevspace выбирает реально доступный ему браузер или Computer Use в границах поручения; не навязывай ChatGPT имена инструментов местного Harness. Transport Chrome ChatGPT не считать пользовательским проверочным браузером.
 
 **native-attachment-first:** `postman_input_files` делает private snapshot по exact local path либо `stage_current_attachments(selectionIds:[<exact returned current selectionIds>])`. Supported current image не спрашивай path; поддержаны PNG / JPEG / WebP / GIF. Для PDF, ZIP, DOCX current generic SDK может вернуть `POSTMAN_INPUT_CURRENT_ATTACHMENT_UNAVAILABLE`: Host resolver не умеет его читать — используй explicit `stage(paths)`, при выборе не угадывать local path; bounded locate Downloads/Desktop с подтверждением. Content-addressed `attachmentId` не является selector. В сообщении `@PostmanDevspace --input-files-json <JSON.stringify(exact descriptors)> <задача>` передавай **реальный JSON дескрипторов** (не угловые скобки); отдели от текста задания пробелом **или** переводом строки. Host сам проверяет закреплённые файлы и отправляет вложение, не выполняй ручной attach или Base64.
 
