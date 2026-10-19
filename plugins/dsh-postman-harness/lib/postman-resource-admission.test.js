@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os'
 import { mkdtempSync, mkdirSync, rmSync } from 'node:fs'
 const tick=()=>new Promise(r=>setImmediate(r))
 async function flush(){for(let i=0;i<18;i++)await tick()}
-async function fixture(t,{readOnly=true}={}){
+async function fixture(t,{readOnly=true,launchDelay=false}={}){
   const parent={id:'resource-leader',session:{header:{origin:'root',agentPreset:'postman-leader',cwd:tmpdir()}},followup(){}}
   const root=join(tmpdir(),'synthetic-task-root'), context=Object.freeze({worktree:root,branch:'task/synthetic',devspaceReadOnly:readOnly})
   const registry=createMemoryTaskRegistry()
@@ -21,7 +21,7 @@ async function fixture(t,{readOnly=true}={}){
     async changeRecord(id,fn){const v=await registry.change(id,fn);for(const f of listeners)f(id);return v},
     onContextChange(f){listeners.add(f);return()=>listeners.delete(f)}}
   let workerBusy=false,stamp=0
-  const coordinator=createPostmanBridgeLaunchCoordinator({now:()=>++stamp*20000,random:()=>0});coordinator.fork=()=>coordinator
+  const coordinator=createPostmanBridgeLaunchCoordinator({now:()=>launchDelay?0:++stamp*20000,random:()=>0});coordinator.fork=()=>coordinator
   const ctx={on(){},agents:{get:id=>id===parent.id?parent:children.get(id)},subagents:{
     async startContinuable(spec){const child={id:spec.childId};children.set(child.id,child);return {childId:child.id}},
     async inspectOpenContinuableChild(){return true},async followup(){return 'relay'},async closeContinuableChild(_p,id,ok){if(ok&&!await ok())return false;children.delete(id);return true}}}
@@ -57,10 +57,10 @@ test('external source read scope preserves private output: ' + (mode ?? 'default
   assert.equal(f.registry.get(f.parent.id).bridgeOperations[accepted.bridgeJobId].devspace.computerUse,'allow')
   f.finish(1);await flush()
 })
-test('racing overlapping reservations launch once in FIFO after terminal release',async t=>{
+test('Leader may launch overlapping writers without waiting for terminal release',async t=>{
   const f=await fixture(t), [a,b]=await Promise.all([f.accept(),f.accept()]);await flush()
   assert.equal(a.status,'POSTMAN_BRIDGE_ACCEPTED');assert.equal(b.status,'POSTMAN_BRIDGE_ACCEPTED')
-  assert.equal(f.launches.length,1,JSON.stringify(await f.jobs.status(f.parent,a.bridgeJobId)));assert.equal((await f.jobs.status(f.parent,b.bridgeJobId)).state,'QUEUED')
+  assert.equal(f.launches.length,2);assert.equal((await f.jobs.status(f.parent,b.bridgeJobId)).state,'RUNNING')
   f.finish(1);await flush();assert.equal(f.launches.length,2)
   f.coordinator.refresh();f.coordinator.refresh();assert.equal(f.launches.length,2)
   f.finish(2);await flush()
@@ -70,21 +70,21 @@ test('disjoint approved output roots launch independently',async t=>{
   assert.equal(f.launches.length,2);f.finish(1);f.finish(2);await flush()
 })
 test('cancel queued reservation never sends and releases exactly once',async t=>{
-  const f=await fixture(t),a=await f.accept(),b=await f.accept();await flush()
+  const f=await fixture(t,{launchDelay:true}),a=await f.accept(),b=await f.accept();await flush()
   const stopped=await f.jobs.stop(f.parent,b.bridgeJobId)
   assert.equal(stopped.status,'POSTMAN_BRIDGE_STOP_REQUESTED');assert.equal(f.launches.length,1)
   f.finish(1);await flush();f.coordinator.refresh();assert.equal(f.launches.length,1)
 })
-test('cold UNKNOWN root reservation holds while disjoint root proceeds',async t=>{
+test('cold UNKNOWN root is evidence for Leader and does not gate new writers',async t=>{
   const f=await fixture(t), cold='synthetic-cold-reservation'
   await f.contexts.changeRecord(f.parent.id,row=>({...row,bridgeOperations:{[cold]:{state:'unknown',phase:'reserved',transportKind:'devspace',createdAt:'2026-01-01',devspace:{mode:'WRITE_APPROVED_TARGET',approvedRoot:join(tmpdir(),'synthetic-approved-A'),approvedAccess:'write'}}}}))
-  await f.accept();await f.accept(join(tmpdir(),'synthetic-approved-B'));await flush();assert.equal(f.launches.length,1)
+  await f.accept();await f.accept(join(tmpdir(),'synthetic-approved-B'));await flush();assert.equal(f.launches.length,2)
   assert.equal(f.registry.get(f.parent.id).bridgeOperations[cold].state,'unknown')
-  f.finish(1);await flush()
+  f.finish(1);f.finish(2);await flush()
 })
-test('Worker with shell/write rights conflicts even with read-only prompt',async t=>{
-  const f=await fixture(t);f.setBusy(true);await f.accept(f.root);await flush();assert.equal(f.launches.length,0)
-  f.setBusy(false);await flush();assert.equal(f.launches.length,1);f.finish(1);await flush()
+test('active Worker does not gate a Leader-authorized Bridge in the same root',async t=>{
+  const f=await fixture(t);f.setBusy(true);await f.accept(f.root);await flush();assert.equal(f.launches.length,1)
+  f.finish(1);await flush()
 })
 
 test('dirty isolated worktree preflight fails before REQ and automatically releases its reservation',async t=>{
@@ -156,7 +156,7 @@ test('verified received DevSpace terminal may continue in existing dirty impleme
   await flush();assert.equal(f.launches.length,1,'only a previously verified terminal may waive clean worktree on continuation')
   f.finish(1);await flush()
 })
-test('real Host-approved disjoint directories run independently; nested overlapping directory queues', async t => {
+test('real Host-approved nested directories run concurrently when Leader dispatches them', async t => {
   const f = await fixture(t)
   const parentRoot = mkdtempSync(join(tmpdir(), 'postman-real-host-scopes-'))
   t.after(() => rmSync(parentRoot, { recursive: true, force: true }))
@@ -173,8 +173,8 @@ test('real Host-approved disjoint directories run independently; nested overlapp
   const queued = await accept(nested)
   assert.equal(queued.status, 'POSTMAN_BRIDGE_ACCEPTED')
   await flush()
-  assert.equal(f.launches.length, 2, 'nested writer must not race its parent writer')
+  assert.equal(f.launches.length, 3, 'overlapping directories do not impose a Host scheduling policy')
   f.finish(1); await flush()
-  assert.equal(f.launches.length, 3, 'nested writer may start after overlapping writer settles')
+  assert.equal(f.launches.length, 3, 'settlement does not launch a duplicate')
   f.finish(2); f.finish(3); await flush()
 })

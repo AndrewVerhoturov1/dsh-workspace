@@ -56,7 +56,7 @@ async function fixture(t, { count=1, ack='POSTMAN_LUNA_BOOTSTRAP_ACK', reasoning
   const task=Object.freeze({worktree:dir,repositoryPath:dir,branch:'task/synthetic'})
   let row={leaderSessionId:'leader',bridgeOperations:{}}, leader, parentRequests=0, childRequests=0, finalCount=0
   let busy=false
-  const contexts={get:()=>task,record:()=>row,async changeRecord(_id,fn){row=fn(row);return row},hasActiveOperation:()=>busy}
+  const contexts={get:()=>task,record:()=>row,async changeRecord(_id,fn){row=fn(row);return row},isRestoring:()=>busy}
   const children=[], gates=Array.from({length:count},()=>Promise.withResolvers())
   const held=Array.from({length:count},()=>Promise.withResolvers()), allocated=Promise.withResolvers()
   const relayGate=Promise.withResolvers()

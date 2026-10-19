@@ -95,10 +95,10 @@ try {
       const wrong=await bash({execution:'stop',workspace_id:other.structuredContent.workspace_id,job_id:native_job_id});
       check(wrong.isError&&await app.health(),'wrong workspace cannot stop exact owned native job');
       const write=await f.call('write',{workspace_id,path:'kept.txt',content:'preserved'});
-      const conflict=await f.call('write',{workspace_id,path:'kept.txt',content:'bad'},'foreign-chat');
+      const conflict=await f.call('write',{workspace_id,path:'parallel.txt',content:'parallel'},'foreign-chat');
       const read=await f.call('read',{workspace_id,path:'kept.txt'},'reader');
       const separate=await f.call('write',{workspace_id:other.structuredContent.workspace_id,path:'independent.txt',content:'independent'},'independent-chat');
-      check(!write.isError&&conflict.isError&&!read.isError&&!separate.isError&&readFileSync(join(f.project,'kept.txt'),'utf8')==='preserved','live writer blocks conflicting mutation while independent root and read continue');
+      check(!write.isError&&!conflict.isError&&!read.isError&&!separate.isError&&readFileSync(join(f.project,'kept.txt'),'utf8')==='preserved','live writer does not veto concurrent upstream-authorized writes or reads');
       writeFileSync(join(f.channel,'revoked.json'),JSON.stringify(f.binding));
       check(!f.writers.reconcile(f.binding).ok,'revoked live background cannot manufacture native release');
       const denied=await bash({command:node("require('node:fs').writeFileSync('forbidden','bad')"),execution:'background',timeout:3});

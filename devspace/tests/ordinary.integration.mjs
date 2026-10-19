@@ -76,15 +76,15 @@ test('B actual MCP missing workspace and missing file retain provider error shap
   assert.match(output(missingFile),/ENOENT|not found|no such/i);
 }));
 
-test('A3 parallel ordinary calls in one root keep admission blocked until both actually finish',{timeout:60000},()=>fixture(async f=>{
+test('A3 parallel ordinary calls do not veto Leader-authorized same-root Postman work',{timeout:60000},()=>fixture(async f=>{
   const workspace_id=await open(f),first=gate(f,'first'),second=gate(f,'second');
   const one=f.call('bash',{workspace_id,command:first.command,timeout:30},'ordinary-one');
   const two=f.call('bash',{workspace_id,command:second.command,timeout:30},'ordinary-two');
   try {
     await until(()=>existsSync(first.started)&&existsSync(second.started),'both real commands started');
-    assert((await admission(f)).isError,'live ordinary writers block overlapping Postman admission');
+    assert(!(await admission(f)).isError,'Leader may admit overlapping Postman work while both commands run');
     writeFileSync(first.release,'release');assert(!(await one).isError);
-    assert((await admission(f)).isError,'one remaining ordinary writer still blocks admission');
+    assert(!(await admission(f)).isError,'one remaining ordinary writer is not a Host admission veto');
     writeFileSync(second.release,'release');assert(!(await two).isError);
     await until(async()=>!(await admission(f)).isError,'both completed commands release their memory and durable holds');
   } finally {writeFileSync(first.release,'release');writeFileSync(second.release,'release');await Promise.allSettled([one,two])}
@@ -99,7 +99,7 @@ test('A4/A5 ordinary detached writer holds only its root and releases after nati
   assert.notEqual(readFileSync(app.heartbeat,'utf8'),before,'detached descendant continues writing after handler return');
   const ordinaryWrite=await f.call('write',{workspace_id,path:'ordinary-owned.txt',content:'ordinary remains usable'},'ordinary-background');
   assert(!ordinaryWrite.isError,'ordinary same-chat writing keeps its upstream permissions while its own background runs');
-  assert((await admission(f)).isError,'active ordinary descendant blocks same-root Postman write');
+  assert(!(await admission(f)).isError,'active ordinary descendant does not block a Leader-authorized same-root write');
   const independent=join(f.root,'independent');mkdirSync(independent);
   const other=await open(f,independent,'independent');
   const written=await f.call('write',{workspace_id:other,path:'independent.txt',content:'independent'},'independent');
@@ -127,7 +127,7 @@ test('A7 ordinary calls in independent roots run concurrently and settle indepen
     assert(!result.isError&&output(result).includes('INDEPENDENT_FINISHED'),'second root finishes while first remains active');
     assert(!existsSync(pending.release),'first native command is still gated');
     assert(!f.writers.untrackedRoots().includes(independent),'finished independent root is not held by another root process');
-    assert((await admission(f)).isError,'first active root remains protected');
+    assert(!(await admission(f)).isError,'first active root remains available to Leader-authorized work');
     writeFileSync(pending.release,'release');assert(!(await active).isError);
     await until(async()=>!(await admission(f)).isError,'first root releases independently after actual completion');
   } finally {writeFileSync(pending.release,'release');await Promise.allSettled([active])}

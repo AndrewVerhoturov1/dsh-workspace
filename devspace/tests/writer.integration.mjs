@@ -98,7 +98,7 @@ try {
   const after=await call('write',{workspace_id,path:'kept.txt',content:'corruption'});
   check(after.isError&&readFileSync(join(project,'kept.txt'),'utf8')==='preserved','revoked actual MCP handler cannot mutate preserved files');
   const shifted=await call('write',{workspace_id,path:'kept.txt',content:'corruption'},'shifted-chat');
-  check(shifted.isError,'shifted metadata cannot bypass a retained root');
+   check(!shifted.isError,'independent upstream-authorized scope is not blocked by a retained root');
   const proof=writers.reconcile(binding);
   check(proof.ok&&proof.proof.source==='devspace_native_tree','actual production handler observations produce a settlement proof');
   const independent=await call('write',{workspace_id,path:'new.txt',content:'independent'},'new-chat');

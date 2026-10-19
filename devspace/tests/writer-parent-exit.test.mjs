@@ -59,8 +59,8 @@ await control.close();
   assert.equal(fresh.reconcile(binding).ok,false,'lost generation census is not recreated as active zero');
   let mutated=false;
   const foreign={_meta:{'openai/session':'independent-cold-scope'}};
-  const blocked=await fresh.runTool('write',{workspace_id:'native'},foreign,workspaces,async()=>{mutated=true;});
-  assert.equal(blocked.isError,true);assert.equal(mutated,false,'cold hold must prevent an overlapping unbound writer');
+  await fresh.runTool('write',{workspace_id:'native'},foreign,workspaces,async()=>{mutated=true;return {allowed:true};});
+  assert.equal(mutated,true,'retained observations do not veto an independent authorized writer');
   const read=await fresh.runTool('read',{workspace_id:'native'},foreign,workspaces,async()=>({allowed:true}),true);
   assert.equal(read.allowed,true);
   const independent=await fresh.runTool('write',{workspace_id:'other'},foreign,workspaces,async()=>({allowed:true}));
@@ -69,8 +69,9 @@ await control.close();
   createDevspaceChannel({root:channelRoot,bridgeJobId:nextId,leaderSessionId:'leader',lunaSessionId:'luna2',
     requestId:'REQ_20261017T123457Z_2346',worktree,branch,mode:'WRITE_ISOLATED',sourceRoot:root});
   await fresh.runTool('open_workspace',{path:'postman-writer:'+nextId},nextMeta,workspaces,async()=>({ok:true}),true);
-  const boundBlocked=await fresh.runTool('write',{workspace_id:'native'},nextMeta,workspaces,async()=>{mutated=true;});
-  assert.equal(boundBlocked.isError,true);assert.equal(mutated,false,'a new valid generation cannot overlap the retained old hold');
+  mutated=false;
+  await fresh.runTool('write',{workspace_id:'native'},nextMeta,workspaces,async()=>{mutated=true;return {allowed:true};});
+  assert.equal(mutated,true,'Leader may dispatch a new valid generation despite the retained old hold');
   const discovery=await fresh.runTool('bash',{workspace_id:'native',execution:'status'},meta,workspaces,
     ()=>fresh.background({execution:'status'},{cwd:worktree}));
   assert(discovery.structuredContent.jobs.some(job=>job.native_job_id===nativeId));

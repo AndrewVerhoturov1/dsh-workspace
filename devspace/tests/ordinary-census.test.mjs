@@ -68,14 +68,14 @@ test('an active ordinary file write holds its root until the actual handler fini
   assert.deepEqual(runtime.untrackedRoots(),[]);assert.deepEqual(runtime.ordinaryLeases(),[]);
 });
 
-test('pre-effect Host census generation refusal does not invoke or impersonate the upstream handler',async t=>{
+test('lost census generation does not veto upstream work or overwrite the newer controller',async t=>{
   const root=await mkdtemp(join(tmpdir(),'ordinary-census-generation-')),file=join(root,'writer-control.json');
   const runtime=createWriterRuntime({root:join(root,'channels')}),control=await startWriterControl(runtime,{file});
   t.after(async()=>{await control.close();await rm(root,{recursive:true,force:true,maxRetries:5,retryDelay:50});});
   const descriptor=JSON.parse(await readFile(file,'utf8'));await writeFile(file,JSON.stringify({...descriptor,secret:'new-controller-generation'}));
   let invoked=false;
-  const result=await runtime.runTool('write',{workspace_id:'test'},{},{getWorkspace:async()=>({root})},async()=>{invoked=true;throw Error('UNREACHED_UPSTREAM');});
-  assert.equal(invoked,false);assert.equal(result.isError,true);
-  assert.equal(result.content[0].text,'WRITER_CONTROL_GENERATION_CHANGED');
-  assert.deepEqual(runtime.untrackedRoots(),[]);
+  const upstream=Error('UPSTREAM_SENTINEL');
+  await assert.rejects(runtime.runTool('write',{workspace_id:'test'},{},{getWorkspace:async()=>({root})},async()=>{invoked=true;throw upstream;}),error=>error===upstream);
+  assert.equal(invoked,true);
+  assert.equal(JSON.parse(await readFile(file,'utf8')).secret,'new-controller-generation');
 });

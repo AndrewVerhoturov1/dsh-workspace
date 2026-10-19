@@ -20,7 +20,7 @@ async function fixture({ zip = false, before = false, finishGate = false, reject
   const contexts = { get: () => context, record: registry.get, changeRecord: registry.change,
     isRestoring: () => false, hasActiveOperation: () => false,
     bindChild: () => true, releaseChild() {},
-    async sync(_id, _commit, _base, beforeSync) { syncs++; return allowed && await beforeSync(leader.id) } }
+    async sync() { syncs++; return allowed } }
   const grants = { async register(_leaderId, terminal) {
     if (terminal.result?.code === 'RESULT_DURABLE') { grantCount++; return grantAllowed }
     return true
@@ -78,7 +78,7 @@ test('persisted terminal survives restart and retries sync without Direct', asyn
   })
   let sends = 0, syncs = 0, grants = 0
   const contexts = { record: f.registry.get, changeRecord: f.registry.change,
-    async sync(_leader, _commit, _parent, beforeSync) { syncs++; return beforeSync(leader.id) } }
+    async sync() { syncs++; return true } }
   const cold = createPostmanBridgeJobs({ agents: { get: () => leader }, subagents: {
     async start() { sends++; throw Error('must not send') }
   } }, { run: () => { sends++; throw Error('must not run') }, dispose() {} },
@@ -138,7 +138,7 @@ test('verified artifact grant failure remains recoverable across restart', async
     { run: () => { sends++; throw Error('must not send') }, dispose() {} },
     { async register() { grants++; return true } },
     { record: second.registry.get, changeRecord: second.registry.change,
-      async sync(_id, _commit, _base, beforeSync) { return beforeSync(leader.id) } },
+      async sync() { return true } },
     { async pauseForOperation() { return true } })
   assert.equal((await cold.status(leader, other.bridgeJobId)).status, 'POSTMAN_BRIDGE_FAILED')
   assert.equal((await cold.status(leader, other.bridgeJobId, true)).status, 'POSTMAN_BRIDGE_TERMINAL')

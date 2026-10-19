@@ -3,7 +3,7 @@ import test from 'node:test'
 import {writerRuntimeFixture} from './fixtures/postman-writer-runtime.js'
 import {capabilityRuntime} from './fixtures/postman-capability-runtime.js'
 
-test('native writer settlement permits actual SDK Worker and owned app admission',{timeout:60000},async t=>{
+test('live native writer does not block actual SDK Worker and owned app admission',{timeout:60000},async t=>{
   const previous=process.env.LOCALAPPDATA
   const native=await writerRuntimeFixture(t,{leaderSessionId:'leader'})
   // The writer has captured its private root. Do not load SDK Windows DLLs
@@ -30,16 +30,10 @@ test('native writer settlement permits actual SDK Worker and owned app admission
   assert.equal(started.structuredContent.treeSettled,false)
   const phase=program=>f.execute(f.leader,'ptc_execute',{program,description:'Exact native release to SDK admission',boundary:'semantic_decision'})
   const program='return await tools.postman_worker({task:"Start isolated owned app",createNew:true})'
-  const before=f.requests.length
-  const denied=await phase(program)
-  assert.equal(denied.value.value.status,'POSTMAN_TASK_CONTEXT_BUSY')
-  assert.equal(f.requests.length,before,'a protective refusal itself does not call the model')
+  const accepted=await phase(program)
+  assert.equal(accepted.value.value.status,'POSTMAN_WORKER_TASK_ACCEPTED')
   const stopped=await native.background({execution:'stop',job_id:jobId})
   assert.equal(stopped.structuredContent.treeSettled,true,JSON.stringify(stopped))
-  const released=await f.contexts.reconcileWriter('leader',native.binding.jobId)
-  assert.equal(released.status,'POSTMAN_WRITER_RELEASED',JSON.stringify(released))
-  const accepted=await phase(program)
-  assert.equal(accepted.value.value.status,'POSTMAN_WORKER_TASK_ACCEPTED',JSON.stringify(accepted))
   const childId=accepted.value.value.workerSessionId
   await f.childDone(childId)
   await f.leader.whenIdle()
