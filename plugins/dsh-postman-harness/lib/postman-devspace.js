@@ -200,6 +200,6 @@ export function devspaceTerminal(binding, observed = {}) {
     transportDiagnostics: observed.transportDiagnostics ?? null,
     assistantText: typeof observed.assistantText === 'string' ? observed.assistantText : '',
     conversationRef: typeof observed.conversationRef === 'string' && /^https:\/\/chatgpt\.com\/c\/[a-zA-Z0-9-]+$/.test(observed.conversationRef) ? observed.conversationRef : null,
-    diagnostic: event ? null : ['CAPABILITY_UNAVAILABLE', 'BLOCKED', 'PARTIAL', 'UNKNOWN', 'RESULT_MARKERS_INVALID'].includes(observed.diagnostic) ? observed.diagnostic : 'UNKNOWN',
+    diagnostic: event ? null : ['CAPABILITY_UNAVAILABLE', 'BLOCKED', 'PARTIAL', 'UNKNOWN'].includes(observed.diagnostic) ? observed.diagnostic : 'UNKNOWN',
     warnings: event ? ['REPORT_UNVERIFIED', ...(!reportRef || !existsReport(reportRef) ? ['REPORT_UNAVAILABLE'] : [])] : image ? [] : ['NO_LOCAL_SIGNAL'] }
 }
