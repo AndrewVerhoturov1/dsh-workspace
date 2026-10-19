@@ -11,6 +11,8 @@
 
 Исключение [transport/postman-inputs](postman/POSTMAN_INPUT_FILES.md): Host-managed transport branch только для явно выбранных временных файлов. Это не task branch, не обычный task PR и не merge; очистка — только безопасный non-force commit, без обещания удаления истории.
 
+По явному запросу человеческого DevSpace-обращения с GitHub-ссылками Host публикует только файлы заданий в `transport/postman-devspace` через существующий GitHub transport publisher. Это отдельные non-force transport commits без task PR/merge и без изменения `main`, `preview` или целевого проекта. REQ/безопасные scope-данные находятся в задании; binding/capability/credentials/native attachments туда не публикуются. Общие правила читаются из SHA-pinned файлов source repository, а не копируются в каждый REQ.
+
 ## Один канонический Git-снимок
 
 До новой ветки выполни `git fetch --prune origin`; один раз собери task snapshot: `git status --short --branch`, текущие branch/HEAD, локальные и remote refs (включая exact `origin/main` и `origin/preview`), `git worktree list --porcelain`, связанные PR с base/head/state и ownership, незавершённые local/remote temporary branches. Адресные команды:

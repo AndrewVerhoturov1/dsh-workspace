@@ -20,7 +20,7 @@ sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "postman" / "direct"))
 sys.path.insert(0, str(REPO / "postman" / "web"))
 from postman.devspace.signal import load_binding, atomic_json
-from postman.devspace.task import render_task
+from postman.devspace.publication import publish_assignment
 from postman.devspace.observer import DEFAULT_CHECK_INTERVAL_MS, DEFAULT_CHECK_COUNT
 from postman import input_bundle
 from postman_direct import ensure_dedicated_chrome
@@ -124,16 +124,6 @@ def run(channel, request_id, intent, *, input_bundle_manifest=None, input_files_
     if result_path.exists():
         return json.loads(result_path.read_text(encoding="utf-8"))
     command = "pwsh -NoProfile -NonInteractive -File " + shlex.quote(str(root / "signal.ps1"))
-    try:
-        prompt = render_task(binding, intent, command)
-    except ValueError as error:
-        if not str(error).startswith("POSTMAN_DEVSPACE_INSTRUCTION_UNAVAILABLE:"):
-            raise
-        result = {"requestId": request_id, "source": "transport_diagnostic",
-                  "diagnostic": "CAPABILITY_UNAVAILABLE", "message": str(error),
-                  "assistantText": str(error)}
-        atomic_json(result_path, result)
-        return result  # No browser/Send and no blind recovery of missing rules.
     attachment = None
     if input_bundle_manifest or input_files_base64:
         if not input_bundle_manifest or not input_files_base64:
@@ -144,15 +134,28 @@ def run(channel, request_id, intent, *, input_bundle_manifest=None, input_files_
                                           for d in descriptors)
         attachment = input_bundle.read_handoff(
             input_bundle_manifest, request_id, descriptors, image=image)
-        prompt += ("\nHost-закреплённые файлы приложены автоматически к этому сообщению."
+        intent += ("\nHost-закреплённые файлы приложены автоматически к этому сообщению."
                    " Используй их как входные данные; не требуй ручного прикрепления"
                    " и не ищи копии в других папках.")
-    # Task/workspace/binding stays local; only private prompt goes to its ChatGPT conversation.
+    try:
+        publication = publish_assignment(binding, intent, command)
+        prompt = publication["prompt"]
+    except Exception as error:
+        code = str(error).split(":", 1)[0]
+        if not code.startswith("POSTMAN_DEVSPACE_"):
+            code = "POSTMAN_DEVSPACE_PUBLICATION_UNAVAILABLE"
+        result = {"requestId": request_id, "source": "transport_diagnostic",
+                  "diagnostic": "CAPABILITY_UNAVAILABLE",
+                  "message": str(error) if code == "POSTMAN_DEVSPACE_INSTRUCTION_UNAVAILABLE" else code,
+                  "assistantText": code}
+        atomic_json(result_path, result)
+        return result
+    # Browser text has only the human invitation and the two public links.
     (root / "task.md").write_text(prompt, encoding="utf-8")
     try:
         browser = ensure_browser()
         bridge = bridge_factory(root=root / "web")
-        observed = bridge.run_request(request_id, task_url="", prompt=prompt,
+        observed = bridge.run_request(request_id, task_url=publication["taskUrl"], prompt=prompt,
             expected_filename="", expected_request={"transportKind": "devspace", "requestId": request_id},
             artifact_mode=False, devspace_binding=binding, cdp_url=browser["cdpUrl"],
             input_attachment=attachment,

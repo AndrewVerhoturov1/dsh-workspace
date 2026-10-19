@@ -387,10 +387,14 @@ class WebWorkerBridge:
             if conversation_url is None and prior is not None:
                 return _result(BRIDGE_INVALID_CONFIG, ok=False, details={"reason": "invalid_prior_request_id"})
             request_identity.assert_canonical_request_id(request_id)
+            if task_url:
+                from postman.devspace.publication import bound_prompt
+                if not bound_prompt(devspace_binding, prompt, task_url=task_url):
+                    return _result(BRIDGE_INVALID_CONFIG, ok=False, details={"reason": "devspace_publication_binding_invalid"})
             existing = self.read_state(request_id)
             if existing is not None:
                 return _result(existing.get('state'), ok=existing.get('state') in _TERMINAL_SUCCESS_CODES, details=existing)
-            request = BridgeRequest(request_id, '', str(self.result_path(request_id)), _job_id(request_id))
+            request = BridgeRequest(request_id, task_url, str(self.result_path(request_id)), _job_id(request_id))
             self._write_state(request, ACCEPTED)
         elif image_stage:
             try:
@@ -505,9 +509,11 @@ class WebWorkerBridge:
                 if devspace_binding is not None:
                     from postman.devspace.controls import revoked, newer_user_turn
                     from postman.devspace.signal import load_binding, read_event
+                    from postman.devspace.publication import saved_prompt
                     recovery_source = None
                     source = None
                     source_user_turn_seen = False
+                    source_prompt = None
 
                     def source_completed():
                         return bool(recovery_source is not None and read_event(recovery_source))
@@ -516,7 +522,7 @@ class WebWorkerBridge:
                         nonlocal source_user_turn_seen
                         source_user_turn_seen = source_user_turn_seen or bool(
                             source and conversation_url is not None and str(page.url) == conversation_url
-                            and newer_user_turn(page, "POSTMAN_REQUEST_ID: " + source))
+                            and newer_user_turn(page, source_prompt or "POSTMAN_REQUEST_ID: " + source))
                         return source_user_turn_seen
 
                     def superseded_result():
@@ -560,6 +566,7 @@ class WebWorkerBridge:
                                     recovery_source["channel"] == devspace_binding["channel"]):
                                 return self._fail(request, "POSTMAN_DEVSPACE_RECOVERY_OWNER_MISMATCH")
                             source = recovery_source["requestId"]
+                            source_prompt = saved_prompt(recovery_source)
                             if source == request_id:
                                 return self._fail(request, "POSTMAN_DEVSPACE_RECOVERY_OWNER_MISMATCH")
                             if source_completed():
@@ -573,18 +580,18 @@ class WebWorkerBridge:
                             if str(page.url) != conversation_url:
                                 return self._fail(request, "POSTMAN_DEVSPACE_RECOVERY_CHAT_MISMATCH")
                             if source is not None:
-                                history, reason = browser_submit._read_user_history(page, source)
+                                history, reason = browser_submit._read_user_history(page, source, **({"prior_prompt": source_prompt} if source_prompt else {}))
                         observation = {
                             "sourceRequestId": source, "attempt": recovery_binding["attempt"],
                             "messageObserved": history is not None and any(browser_submit._turn_contains_exact_line(
-                                text, "POSTMAN_REQUEST_ID: " + source) for text in history),
+                                text, browser_submit.request_key_line_from_prompt(source_prompt or "POSTMAN_REQUEST_ID: " + source)) for text in history),
                             "observationReason": reason, "historyReadable": history is not None,
                             "newMessageSent": False, "localOperationsMayContinue": True}
                         if observation["messageObserved"]:
                             try:
                                 turns, _ = browser_observer.snapshot_turns(page)
                                 source_prompt = next(text for text in history if browser_submit._turn_contains_exact_line(
-                                    text, "POSTMAN_REQUEST_ID: " + source))
+                                    text, browser_submit.request_key_line_from_prompt(source_prompt or "POSTMAN_REQUEST_ID: " + source)))
                                 source_anchor = browser_observer.find_user_anchor(turns, source_prompt)
                                 following = next((t for t in turns if source_anchor is not None and
                                     t["index"] > source_anchor and t.get("role") in {"assistant", "user"}), None)

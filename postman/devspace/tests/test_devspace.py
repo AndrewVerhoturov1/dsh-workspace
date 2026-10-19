@@ -36,6 +36,18 @@ class DevspaceTests(unittest.TestCase):
             "mode": "WRITE_TEST", "workspaceRef": str(self.root), "writeRoot": str(self.workspace)}
         (self.channel / "binding.json").write_text(json.dumps(self.binding), encoding="utf-8")
 
+        def publish(binding, intent, command):
+            from postman.devspace.publication import render_launch
+            self.published_intent = intent
+            self.published_task = task.render_task(binding, intent, command)
+            url = "https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/" + "a" * 40 + "/tasks/" + binding["jobId"] + ".md"
+            rules = "https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/" + "b" * 40 + "/postman/devspace/SKILL.md"
+            return {"taskUrl": url, "rulesUrl": rules, "prompt": render_launch(url, rules)}
+        publisher = patch.object(transport, "publish_assignment", side_effect=publish)
+        publisher.start()
+        self.addCleanup(publisher.stop)
+
+
     def emit(self, outcome="done", **kwargs):
         return signal.signal(self.channel, self.binding["capability"], outcome, root=self.root, **kwargs)
 
@@ -182,7 +194,7 @@ assert hasattr(stdlib_signal, 'set_wakeup_fd')
             def run_request(self, request_id, **kwargs):
                 self_test.assertIs(kwargs["input_attachment"], attachment)
                 self_test.assertEqual(kwargs["devspace_binding"], self_test.binding)
-                self_test.assertIn("автоматически", kwargs["prompt"])
+                self_test.assertIn("автоматически", self_test.published_intent)
                 calls.append(kwargs)
                 return {"ok":True,"code":"DEVSPACE_DIAGNOSTIC","details":{
                     "source":"text_fallback","assistantText":"processed reference",
@@ -208,17 +220,18 @@ assert hasattr(stdlib_signal, 'set_wakeup_fd')
             external_result_probe=lambda:received)
         self.assertIs(result, received)
 
-    def test_private_transport_no_publisher_and_result_idempotent_no_resend(self):
+    def test_github_launch_and_result_idempotent_no_resend(self):
         calls=[]
         class Bridge:
             def __init__(self, **kwargs):calls.append(kwargs)
             def run_request(self, request_id, **kwargs):
                 self_test.assertEqual(request_id, REQ)
-                self_test.assertEqual(kwargs["task_url"], "")
+                self_test.assertIn("/tasks/" + JOB + ".md", kwargs["task_url"])
                 self_test.assertFalse(kwargs["artifact_mode"])
                 self_test.assertEqual(kwargs["reminder_interval_ms"], 900000)
                 self_test.assertEqual(kwargs["max_reminders"], 3)
-                self_test.assertIn("pwsh -NoProfile -NonInteractive -File", kwargs["prompt"])
+                self_test.assertIn("pwsh -NoProfile -NonInteractive -File", self_test.published_task)
+                self_test.assertNotIn(REQ, kwargs["prompt"])
                 self_test.assertNotIn("& \'", kwargs["prompt"])
                 self_test.assertEqual(kwargs["devspace_binding"], self_test.binding)
                 return {"ok":True,"code":"DEVSPACE_DIAGNOSTIC","details":{"source":"text_fallback", "diagnostic":"CAPABILITY_UNAVAILABLE"}}

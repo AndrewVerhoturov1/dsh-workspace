@@ -354,7 +354,10 @@ def request_key_line_from_prompt(prompt: str) -> str:
     first = lines[0]
     if re.fullmatch(r"POSTMAN_REQUEST_ID: REQ_\d{8}T\d{6}Z_\d{4}", first):
         return first
-    return ""
+    # The immutable task URL is the natural DevSpace launch's correlation key.
+    tasks = [line for line in lines if re.fullmatch(
+        r"Задание: https://raw[.]githubusercontent[.]com/AndrewVerhoturov1/dsh-workspace/[0-9a-f]{40}/tasks/[0-9a-f-]{36}[.]md", line)]
+    return tasks[0] if len(tasks) == 1 else ""
 
 
 def _turn_contains_exact_line(text: str, expected_line: str) -> bool:
@@ -763,7 +766,7 @@ def collect_user_turn_texts(page: Any) -> list[str]:
     return [item["text"] for item in collect_user_turn_details(page)]
 
 
-def _read_user_history(page: Any, prior_request_id: str) -> tuple[list[str] | None, str]:
+def _read_user_history(page: Any, prior_request_id: str, *, prior_prompt: str | None = None) -> tuple[list[str] | None, str]:
     """Snapshot current visible history; an old REQ is diagnostic, not ownership."""
     for selector in USER_TURN_SELECTORS:
         try:
@@ -796,7 +799,7 @@ def _read_user_history(page: Any, prior_request_id: str) -> tuple[list[str] | No
                 return None, "history_changed_during_read"
         except Exception:
             return None, "history_count_failed"
-        key = "POSTMAN_REQUEST_ID: " + prior_request_id
+        key = request_key_line_from_prompt(prior_prompt) if prior_prompt is not None else "POSTMAN_REQUEST_ID: " + prior_request_id
         matches = sum(_turn_contains_exact_line(text, key) for text in texts)
         if matches != 1:
             return texts, "history_prior_anchor_missing" if matches == 0 else "history_prior_anchor_ambiguous"

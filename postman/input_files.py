@@ -68,7 +68,10 @@ def input_media_type(data):
 
 
 class GitHubInputPublisher:
-    def __init__(self, api=None, snapshot_dir=None, existing_repository=REPOSITORY):
+    def __init__(self, api=None, snapshot_dir=None, existing_repository=REPOSITORY, branch=BRANCH):
+        if branch not in {BRANCH, "transport/postman-devspace"}:
+            raise InputStageError("unsupported Host transport branch")
+        self.branch = branch
         self.api = api or self._api
         self.existing_repository = existing_repository
         # Only Host supplies this private directory; never returned in a descriptor.
@@ -97,7 +100,7 @@ class GitHubInputPublisher:
 
     def _head(self):
         try:
-            result = self.api(f"repos/{REPOSITORY}/git/ref/heads/{quote(BRANCH, safe='')}")
+            result = self.api(f"repos/{REPOSITORY}/git/ref/heads/{quote(self.branch, safe='')}")
             return result["object"]["sha"]
         except InputStageError as exc:
             # Only a missing ref may be created; never replace an existing branch.
@@ -114,9 +117,9 @@ class GitHubInputPublisher:
         tree = self.api(f"repos/{REPOSITORY}/git/trees", "POST", tree_request)["sha"]
         commit = self.api(f"repos/{REPOSITORY}/git/commits", "POST", {"message": message, "tree": tree, "parents": [parent] if parent else []})["sha"]
         if parent is None:
-            self.api(f"repos/{REPOSITORY}/git/refs", "POST", {"ref": "refs/heads/" + BRANCH, "sha": commit})
+            self.api(f"repos/{REPOSITORY}/git/refs", "POST", {"ref": "refs/heads/" + self.branch, "sha": commit})
         else:
-            self.api(f"repos/{REPOSITORY}/git/refs/heads/{quote(BRANCH, safe='')}", "PATCH", {"sha": commit, "force": False})
+            self.api(f"repos/{REPOSITORY}/git/refs/heads/{quote(self.branch, safe='')}", "PATCH", {"sha": commit, "force": False})
         return commit
 
     def existing(self, commit, path):

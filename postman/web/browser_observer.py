@@ -591,7 +591,7 @@ def find_user_anchor(turns: list[dict[str, Any]], expected_prompt: str,
 
     Prefer byte-equivalent rendered text. ChatGPT may render long Markdown
     differently after Send, so Postman prompts may fall back to the immutable
-    first-line POSTMAN_REQUEST_ID anchor. Exact prompt bytes were already
+    POSTMAN_REQUEST_ID or immutable task-URL anchor. Exact prompt bytes were already
     proven in the composer before the single Send action.
     """
     expected = _normalize_text(expected_prompt)
