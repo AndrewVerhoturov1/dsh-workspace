@@ -17,6 +17,6 @@ Host выполняет browser/DevSpace и сам отправляет пору
 
 ## Scope
 
-ChatGPT — универсальный основной исполнитель. Обычные доступные инструменты разрешены в назначенной области. Leader явно передаёт решение «Computer Use разрешён» либо «Computer Use запрещён» через computer_use allow/deny; default deny. При allow Postman Host не навязывает список приложений или target adapter. Это инструкция модели, не техническая гарантия контроля внешнего ChatGPT. Если сам инструмент недоступен — `CAPABILITY_UNAVAILABLE`. Внешние папки требуют точного Host-visible scope Leader; Git merge/preview/destructive actions — отдельные полномочия.
+ChatGPT — универсальный основной исполнитель. Computer Use и обычные доступные инструменты по умолчанию разрешены в границах задачи; явный computer_use deny сохраняется. Исполнитель выбирает способ работы, а Host не навязывает список приложений или target adapter. Чтение проекта может сочетаться с частной папкой результата WRITE_TEST; явный READ_ONLY запрещает файлы результата. Это инструкция модели, не техническая гарантия контроля внешнего ChatGPT. Если инструмент недоступен — `CAPABILITY_UNAVAILABLE`; если не хватает разрешения — `NEED_DECISION`. Внешние папки требуют точного Host-visible scope Leader; Git merge/preview/destructive actions — отдельные полномочия. Recovery сохраняет прежний выбор Computer Use, включая deny; новый default не расширяет старые поручения.
 
 Подробный технический протокол: `postman/POSTMAN_DEVSPACE_FLOW.md`. Точная цель и соразмерная остановка: `docs/workflow/TASK_CONTRACT.md`.

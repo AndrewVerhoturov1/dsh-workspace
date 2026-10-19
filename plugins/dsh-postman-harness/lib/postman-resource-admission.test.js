@@ -5,6 +5,7 @@ import { createPostmanBridgeTool } from './postman-bridge.js'
 import { POSTMAN_PTC_SUCCESS_STATUSES } from './postman-bridge-core.js'
 import { createPostmanBridgeLaunchCoordinator } from './postman-bridge-launch-coordinator.js'
 import { createMemoryTaskRegistry } from './postman-task-registry.js'
+import { createDevspaceChannel } from './postman-devspace.js'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { mkdtempSync, mkdirSync, rmSync } from 'node:fs'
@@ -32,6 +33,30 @@ async function fixture(t,{readOnly=true}={}){
   const finish=(n)=>completed.get(launches[n-1].sessionId)({status:'COMPLETED',requestId:'REQ_20261013T000000Z_'+String(n).padStart(4,'0'),result:{ok:true,requestId:'REQ_20261013T000000Z_'+String(n).padStart(4,'0'),source:'bell',reportedOutcome:'DONE',evidenceState:'REPORTED_NOT_VERIFIED',conversationRef:'https://chatgpt.com/c/synthetic-'+n}})
   return {parent,ctx,registry,contexts,jobs,accept,acceptIsolated:()=>jobs.accept(parent,'@PostmanDevspace inert dirty task', 'devspace',undefined,undefined,'WRITE_ISOLATED'),launches,finish,coordinator,setBusy:v=>{workerBusy=v;coordinator.refresh()},root}
 }
+
+for (const mode of [undefined, 'WRITE_TEST', 'READ_ONLY'])
+test('external source read scope preserves private output: ' + (mode ?? 'default'), async t => {
+  const f=await fixture(t)
+  const root=mkdtempSync(join(tmpdir(),'devspace-read-output-'))
+  t.after(()=>rmSync(root,{recursive:true,force:true}))
+  const project=join(root,'project');mkdirSync(project)
+  const tool=createPostmanBridgeTool(f.ctx,f.jobs,f.contexts)
+  const accepted=await tool.execute({message:'@PostmanDevspace inspect the game and save a screenshot',
+    workspace_root:project,workspace_access:'read',...(mode?{devspace_mode:mode}:{})},{agent:f.parent})
+  assert.equal(accepted.status,'POSTMAN_BRIDGE_ACCEPTED')
+  await flush()
+  assert.equal(f.launches.length,1)
+  const grant=f.launches[0].devspaceBinding
+  assert.equal(grant.mode,mode==='READ_ONLY'?'READ_ONLY':'WRITE_TEST')
+  assert.equal(grant.computerUse,'allow')
+  const binding=createDevspaceChannel({...grant,root:join(root,'private'),sourceRoot:root,
+    requestId:'REQ_20261019T090000Z_0001'})
+  assert.equal(binding.workspaceRef,project)
+  assert.equal(binding.writeRoot,mode==='READ_ONLY'?null:join(binding.channel,'workspace'))
+  assert.notEqual(binding.writeRoot,project)
+  assert.equal(f.registry.get(f.parent.id).bridgeOperations[accepted.bridgeJobId].devspace.computerUse,'allow')
+  f.finish(1);await flush()
+})
 test('racing overlapping reservations launch once in FIFO after terminal release',async t=>{
   const f=await fixture(t), [a,b]=await Promise.all([f.accept(),f.accept()]);await flush()
   assert.equal(a.status,'POSTMAN_BRIDGE_ACCEPTED');assert.equal(b.status,'POSTMAN_BRIDGE_ACCEPTED')

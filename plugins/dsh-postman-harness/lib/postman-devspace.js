@@ -8,7 +8,7 @@ export function devspaceRoot() {
   return process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, 'DSH', 'Postman', 'devspace') : join(homedir(), '.dsh', 'postman', 'devspace')
 }
 
-export function createDevspaceChannel({ root = devspaceRoot(), bridgeJobId, leaderSessionId, lunaSessionId, requestId, worktree, branch, mode, sourceRoot, conversationUrl, priorRequestId, computerUse = 'deny', recovery }) {
+export function createDevspaceChannel({ root = devspaceRoot(), bridgeJobId, leaderSessionId, lunaSessionId, requestId, worktree, branch, mode, sourceRoot, conversationUrl, priorRequestId, computerUse = 'allow', recovery }) {
   if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(bridgeJobId ?? '') || !/^REQ_\d{8}T\d{6}Z_\d{4}$/.test(requestId ?? '') ||
       (priorRequestId !== undefined && (!/^REQ_\d{8}T\d{6}Z_\d{4}$/.test(priorRequestId) || priorRequestId === requestId || !conversationUrl)) ||
       !leaderSessionId || !lunaSessionId || !['allow', 'deny'].includes(computerUse) ||
