@@ -13,6 +13,7 @@ if not __package__:
 import argparse
 import base64
 import json
+import re
 import shlex
 
 REPO = Path(__file__).resolve().parents[2]
@@ -25,6 +26,7 @@ from postman.devspace.observer import DEFAULT_CHECK_INTERVAL_MS, DEFAULT_CHECK_C
 from postman import input_bundle
 from postman_direct import ensure_dedicated_chrome
 from web_worker_bridge import WebWorkerBridge, browser_submit
+from artifact_detector import result_begin_marker, result_end_marker
 
 
 # Project diagnostic only: never forward raw submitProof, URL, prompt or exception
@@ -187,6 +189,21 @@ def run(channel, request_id, intent, *, input_bundle_manifest=None, input_files_
                       ("reminderSlots", "transportEventJournal", "detectorDiagnostics") if key in details},
                       **recovery_diagnostics,
                       **_safe_transport_evidence(details)}}
+        if result["source"] == "text_fallback":
+            # Same completed, owned assistant turn; markers confer no authority.
+            # A recovered old answer retains its source REQ, never the new one.
+            reply_request = ((binding.get("recovery") or {}).get("sourceRequestId", request_id)
+                             if details.get("recoverySourceCompleted") is True else request_id)
+            text = result["assistantText"]
+            lines = text.strip("\r\n").splitlines()
+            begin, end = result_begin_marker(reply_request), result_end_marker(reply_request)
+            valid = (len(lines) >= 3 and lines[0] == begin and lines[-1] == end and
+                     bool("\n".join(lines[1:-1]).strip()) and
+                     re.findall(r"<<<POSTMAN_RESULT_(?:BEGIN|END):[^<>\r\n]+>>>", text) == [begin, end])
+            result["transportDiagnostics"]["resultMarkers"] = {"valid": valid, "requestId": reply_request}
+            if not valid and result["diagnostic"] == "UNKNOWN":
+                result["diagnostic"] = "RESULT_MARKERS_INVALID"
+                result["message"] = "Final response lacks the exact required REQ-bound result markers."
     except Exception:
         # Keep private internals/capability out of model diagnostics. Host still checks bell first.
         result = {"requestId": request_id, "source": "transport_diagnostic", "diagnostic": "BLOCKED",

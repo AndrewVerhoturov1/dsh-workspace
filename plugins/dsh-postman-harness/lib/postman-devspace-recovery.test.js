@@ -663,6 +663,19 @@ test('MCP recovery: ordinary delivered text mentioning timeout is not a failed M
   assert.equal(f.launches.length, 1)
 })
 
+test('invalid response markers are visible without automatic LLM retries', async t => {
+  const f = fixture(t)
+  capabilityFallback(f, 'Response without required result markers.', { diagnostic: 'RESULT_MARKERS_INVALID' })
+  const jobs = f.make()
+  t.after(() => jobs.dispose())
+  const first = await jobs.accept(f.leader, '@PostmanDevspace summarize documentation', 'devspace', undefined, undefined, 'READ_ONLY')
+  for (let i = 0; i < 80; i++) await tick()
+  const status = await jobs.status(f.leader, first.bridgeJobId)
+  assert.equal(status.result.diagnostic, 'RESULT_MARKERS_INVALID')
+  assert.deepEqual(status.recovery.attempts, [])
+  assert.equal(f.launches.length, 1)
+})
+
 for (const [text, extra] of [
   ['CAPABILITY_UNAVAILABLE: no reason supplied', {}],
   ['CAPABILITY_UNAVAILABLE: DevSpace MCP tool not found; previous call was UNAVAILABLE.', {}],
