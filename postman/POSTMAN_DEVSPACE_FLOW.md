@@ -33,6 +33,8 @@ Leader ─── Secretary (files/ledger; available web_search/web_fetch)
 
 ## 3. Файлы, исследование, изображения
 
+- Внешний ChatGPT использует подключённый `VUDA Local` через Secure MCP Tunnel, местные агенты — прямой разрешённый VUDA MCP без туннеля. Выбор маршрута, общий сеанс и обслуживание — [VUDA.md](devspace/VUDA.md); контракт Bridge, scope, writer и bell сохраняется.
+
 - Leader использует `postman_input_files` и exact `--input-files-json <JSON>`. Host по закреплённым descriptors создает native image attachment либо безопасный ZIP входных файлов, передаёт в тот же ChatGPT. Это **транспорт входов**, не обязательный ZIP-результат. Ручные загрузки в ChatGPT не требуются. Не отправлять файлы в GitHub из-за транспорта без явного разрешения.
 - ChatGPT решает задачу реально доступными Web/DevSpace/tools. Каждая отправка получает свой immutable `POSTMAN_REQUEST_ID`; прежние UNKNOWN/FAILED/PROVEN_NOT_SENT сохраняются. Перед восстановлением Host наблюдает прежний собственный чат: найденное сообщение/итог не дублируется, новое корректирующее продолжение проверяет уже выполненное.
 - Для веб-исследования с требуемыми ссылками/цитатами Leader явно просит **обычный текст без местного bell**: иначе bell может скрыть `assistantText`. Host возвращает текст в `source=text_fallback` (его `diagnostic=UNKNOWN` не означает проверку веб-вызова); источники можно независимо сверить и передать Secretary, а неподтверждённую активность `web.run` нельзя считать веб-PASS.
