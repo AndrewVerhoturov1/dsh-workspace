@@ -62,6 +62,28 @@ VUDA не запускался: проверялись PATH, npm global и ка�
 | Первый текст Host требует чтения до DevSpace | CODE_TEST_PASS_NO_LIVE | Новый формат launch отдельно запрещает open_workspace/Bash/Orca/VUDA до чтения документов. Cold restore старых публикаций сохраняет прежний exact prompt; поведение целевого ChatGPT ещё требует новой приёмки |
 | Новый маршрут VUDA в настоящем ChatGPT REQ | VISIBLE_NOT_TESTED | Локальная проверка через тот же соединитель не заменяет адресное поручение. Для него нужны опубликованный/применённый код, точные пути и разрешённые зависимости по [инструкции](devspace/VUDA.md) |
 
+### VUDA Local через Secure MCP Tunnel, 20 октября 2026
+
+Проверен отдельный маршрут внешнего ChatGPT: облачный плагин `VUDA Local` → официальный
+OpenAI Secure MCP Tunnel (`tunnel-client` v0.0.16) → установленный VUDA 1.1.0 по stdio.
+Местные агенты DSH продолжают использовать прямой местный VUDA MCP без туннеля.
+Эта проверка выполнена пользователем из ChatGPT, не являлась новым Host-bound REQ
+и не заменяет приёмку Leader → Bridge → ChatGPT → DevSpace → bell.
+
+| Возможность | Статус | Доказательство / граница |
+|---|---|---|
+| Клиент, ключ и соединение OpenAI | VERIFIED_WORKING | Host подтвердил `process_running=true`, `healthy=true`, `ready=true`, успешный polling; ключ и его содержимое не являются материалом этого отчёта |
+| Каталог VUDA в подключении ChatGPT | VERIFIED_WORKING | Обнаружены server `vuda`, версия 1.1.0, 29 инструментов; `tools_list.complete=true`, без пропущенных страниц. Это не проверка каждого инструмента |
+| navigate/evaluate/hover/fill/click/press_key/screenshot | TARGET_SESSION_PASS_REPORTED | Пользователь передал отчёт ChatGPT по `VUDA-TUNNEL-20261020-A`: один сеанс, значение `VUDA tunnel OK`, исходные счётчики 0 → конечные 1/1/1/1; mouseenter/input/click/keydown имеют `trusted=true`, полученный из `event.isTrusted`. Host-журнал независимо подтверждает обращения и создание `screenshot://vuda-local-verified`; пиксели этого снимка Host отдельно не просматривал |
+| Доставка ответов | VERIFIED_WORKING | Host: 37 принятых ответов, 0 окончательных ошибок доставки; в метриках 10 успешных `tools/call` и один внутренний ответ 409. Причина 409 по сохранённым info-журналам не установлена; нулевой общий счётчик ошибок не заявляется |
+| Тестовый сервер / продолжение работы | VERIFIED_WORKING | Собственный временный HTTP-сервер остановлен по проверенному PID/команде; туннель оставлен работающим. Автозапуск после перезагрузки и постоянное хранение ключа не настроены |
+
+Частные доказательства этой установки: `%LOCALAPPDATA%/DSH/integrations/vuda-tunnel/connection-evidence.json`
+и `acceptance-evidence.json`; журнал клиента — `%USERPROFILE%/.local/state/tunnel-client/logs/vuda-local.log`.
+Они не включаются в Git и не обещаются доступными внешнему ChatGPT без отдельного scope.
+Имена namespace и схемы проверяются в текущем чате. Эта запись не отменяет прежние
+BLOCKED/FAILED, не подтверждает исправление DevSpace Bash или всех действий Orca/Windows.
+
 ### Capacity и маршрутизация
 
 - На одного Leader **в ветке PR #433**: максимум 3 независимые активные DevSpace операции, 3 ChatGPT-разговора и продолжаемые Luna. Каждому свой laneId/REQ/controls. Legacy Bridge держит отдельную ёмкость 3.
