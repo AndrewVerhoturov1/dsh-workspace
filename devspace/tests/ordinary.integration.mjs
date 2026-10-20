@@ -76,6 +76,35 @@ test('B actual MCP missing workspace and missing file retain provider error shap
   assert.match(output(missingFile),/ENOENT|not found|no such/i);
 }));
 
+test('folder writer without a Git branch performs actual MCP read, write, edit and Windows Bash',{timeout:45000},()=>fixture(async f=>{
+  writeFileSync(join(f.channel,'binding.json'),JSON.stringify({...f.binding,branch:''}));
+  const missingKind=await f.call('open_workspace',{path:'postman-writer:'+f.binding.jobId});
+  assert(missingKind.isError&&output(missingKind).includes('WRITER_BINDING_CHANGED'));
+  writeFileSync(join(f.channel,'binding.json'),JSON.stringify({...f.binding,branch:'',workspaceOnly:true}));
+  const writer=await f.call('open_workspace',{path:'postman-writer:'+f.binding.jobId});
+  assert(!writer.isError,output(writer));
+  const workspace_id=writer.structuredContent.workspace_id;
+  const written=await f.call('write',{workspace_id,path:'folder-result.txt',content:'before'});
+  assert(!written.isError,output(written));
+  const edited=await f.call('edit',{workspace_id,path:'folder-result.txt',edits:[{old_text:'before',new_text:'after'}]});
+  assert(!edited.isError,output(edited));
+  const read=await f.call('read',{workspace_id,path:'folder-result.txt'});
+  assert(!read.isError&&output(read).includes('after'),output(read));
+  const executed=await f.call('bash',{workspace_id,execution:'foreground',
+    command:node("console.log('FOLDER_BASH_OK');console.log(process.cwd())"),timeout:10});
+  assert(!executed.isError&&output(executed).includes('FOLDER_BASH_OK'),output(executed));
+  const background=await f.call('bash',{workspace_id,execution:'background',
+    command:node("console.log('FOLDER_BACKGROUND_OK')"),timeout:10});
+  assert(!background.isError,output(background));
+  const job_id=background.structuredContent.native_job_id;
+  assert(job_id);
+  await until(async()=>{
+    const status=await f.call('bash',{workspace_id,execution:'status',job_id});
+    assert(!status.isError,output(status));return status.structuredContent.treeSettled===true;
+  },'the folder background process tree must settle');
+  assert.equal(readFileSync(join(f.project,'folder-result.txt'),'utf8'),'after');
+}));
+
 test('A3 parallel ordinary calls do not veto Leader-authorized same-root Postman work',{timeout:60000},()=>fixture(async f=>{
   const workspace_id=await open(f),first=gate(f,'first'),second=gate(f,'second');
   const one=f.call('bash',{workspace_id,command:first.command,timeout:30},'ordinary-one');

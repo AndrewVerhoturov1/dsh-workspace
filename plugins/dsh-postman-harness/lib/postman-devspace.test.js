@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { EventEmitter } from 'node:events'
 import { createHash } from 'node:crypto'
 import { createDevspaceChannel, devspaceTerminal, requestDevspaceControl, readDevspaceControls } from './postman-devspace.js'
@@ -46,7 +47,13 @@ test('registry reopens new private mode and old v1 operation without migration',
   await registry.create('leader',row);await registry.close()
   const again=await openPostmanTaskRegistry(domain)
   assert.deepEqual(again.get('leader').bridgeOperations,row.bridgeOperations)
-  await again.close();await backend.close()
+  const folder = { ...row, leaderSessionId: 'folder', workspaceOnly: true,
+    repository: '', originUrl: '', baseCommit: '', branch: '', devspaceReadOnly: true, workers: {} }
+  await again.create('folder', folder)
+  await again.close()
+  const restored = await openPostmanTaskRegistry(domain)
+  assert.deepEqual(restored.get('folder'), folder)
+  await restored.close(); await backend.close()
 })
 
 const req = 'REQ_20261012T120000Z_0001'
@@ -195,15 +202,21 @@ test('manager uses private launcher not publisher and stdout cannot forge own be
   // Override private-root allocation only through test environment, never source.
   const old=process.env.LOCALAPPDATA;process.env.LOCALAPPDATA=root;t.after(()=>{if(old===undefined)delete process.env.LOCALAPPDATA;else process.env.LOCALAPPDATA=old})
   await assert.rejects(manager.start({sessionId:'root',workspace:root,payload:'intent',branch,transportKind:'devspace'}),/LEADER_BINDING_REQUIRED/)
-  const started=await manager.start({sessionId:'luna',workspace:root,payload:'intent',branch,transportKind:'devspace',devspaceBinding:{bridgeJobId:id,leaderSessionId:'leader',lunaSessionId:'luna',worktree:root,mode:'READ_ONLY'}})
+  const started=await manager.start({sessionId:'luna',workspace:root,payload:'intent',branch:'',transportKind:'devspace',devspaceBinding:{bridgeJobId:id,leaderSessionId:'leader',lunaSessionId:'luna',worktree:root,branch:'',workspaceOnly:true,mode:'READ_ONLY'}})
   assert.match(argv[argv.indexOf('-File')+1],/postman-devspace\.ps1$/)
+  assert.equal(argv[argv.indexOf('-Branch')+1],'')
+  const binding=JSON.parse(readFileSync(join(argv[argv.indexOf('-Channel')+1],'binding.json'),'utf8'))
+  assert.equal(binding.workspaceOnly,true)
+  assert.equal(binding.branch,'')
+  assert.equal(binding.writerRuntimeVersion,1)
   assert.ok(argv.includes('-Channel'));assert.equal(argv.includes('-InputFilesBase64'),false)
   child.stdout.emit('data',JSON.stringify({source:'bell',requestId:started.requestId,reportedOutcome:'DONE'}));child.emit('close',0)
   assert.equal(manager.view('luna').result.code,'POSTMAN_DEVSPACE_ROUTING_FAILED')
 })
-test('continuable Luna keeps exact identity across two REQs and same ChatGPT chat', async () => {
+test('folder Luna keeps exact identity across two REQs and same ChatGPT chat without a Git branch', async () => {
   let row = { bridgeOperations: {} }, wake, starts = 0, coldChecks = 0, closes = 0
-  const context = { branch, repositoryPath: 'C:/source', worktree: 'C:/isolated' }
+  const context = { branch: '', workspaceOnly: true, devspaceReadOnly: true,
+    repositoryPath: 'C:/source', worktree: 'C:/source' }
   const requestIds = [req, 'REQ_20261012T120001Z_0002']
   const conversationRef = 'https://chatgpt.com/c/stage2-owned'
   const launched = [], relays = [], reports = []
@@ -222,6 +235,10 @@ test('continuable Luna keeps exact identity across two REQs and same ChatGPT cha
       const requestId = requestIds[launched.length]
       assert.ok(requestId)
       assert.equal(args.transportKind, 'devspace')
+      assert.equal(args.branch, '')
+      assert.equal(args.devspaceBinding.workspaceOnly, true)
+      assert.equal(args.devspaceBinding.branch, '')
+      assert.equal(args.workspace, fileURLToPath(new URL('../../../', import.meta.url)))
       assert.equal(args.payload, launched.length ? 'second assignment' : 'first assignment')
       if (launched.length) {
         assert.equal(args.devspaceBinding.conversationUrl, conversationRef)
@@ -601,6 +618,10 @@ test('unprepared universal Devspace starts branchless and requires exact permiss
     workspace_root:allowed,workspace_access:'write'},{agent:parent})
   assert.equal(external.status,'POSTMAN_BRIDGE_ACCEPTED')
   assert.deepEqual(calls[3][7],{root:allowed,access:'write'})
+  context = { ...context, workspaceOnly: true, branch: '', repositoryPath: allowed, worktree: allowed }
+  assert.equal((await tool.execute({message:'@PostmanDevspace edit selected folder',
+    workspace_root:allowed,workspace_access:'write'},{agent:parent})).status,'POSTMAN_BRIDGE_ACCEPTED')
+  assert.deepEqual(calls[4][7],{root:allowed,access:'write'})
   assert.equal(prepared,1)
 })
 

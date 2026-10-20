@@ -165,7 +165,8 @@ export function createWriterRuntime({root=channelRoot(), helper=nativeHelper,cen
     const channel=join(root,jobId);
     if(realpathSync(channel)!==resolve(channel)) throw Error('WRITER_BINDING_CHANGED');
     const value=privateJson(join(channel,'binding.json'));
-    if(value.jobId!==jobId || value.channel!==channel || value.writerRuntimeVersion!==1 || !value.writeRoot || !value.branch ||
+    if(value.jobId!==jobId || value.channel!==channel || value.writerRuntimeVersion!==1 || !value.writeRoot ||
+      (!value.branch && !(value.workspaceOnly===true && value.branch==='')) ||
       realpathSync(value.writeRoot)!==resolve(value.writeRoot)) throw Error('WRITER_BINDING_CHANGED');
     return value;
   }

@@ -22,6 +22,7 @@ const boundContext = row => Object.freeze({
   leaderSessionId: row.leaderSessionId, repository: row.repository,
   branch: row.branch, worktree: row.worktree, baseCommit: row.baseCommit,
   ...(row.devspaceReadOnly ? { devspaceReadOnly: true } : {}),
+  ...(row.workspaceOnly ? { workspaceOnly: true, repositoryPath: row.repositoryPath } : {}),
   ...(row.universalProject ? { universalProject: true,
     repositoryPath: row.repositoryPath, originUrl: row.originUrl,
     ...(row.defaultBranch ? { defaultBranch: row.defaultBranch } : {}),
@@ -56,19 +57,34 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
   const onContextChange = listener => { contextListeners.add(listener); return () => contextListeners.delete(listener) }
   const command = gitCommand
 
-  async function repositoryFor(leader, projectPath) {
+  async function workspaceFor(leader, projectPath) {
     const path = projectPath ?? leader?.session?.header?.cwd
     if (typeof path !== 'string' || !path || (projectPath !== undefined && !isAbsolute(path)))
       throw Error('POSTMAN_TASK_REPOSITORY_UNAVAILABLE')
     if (normalize(await realPath(path)) !== normalize(path))
       throw Error('POSTMAN_TASK_REPOSITORY_UNAVAILABLE')
-    const repository = await command(path, 'rev-parse', '--show-toplevel')
+    return path
+  }
+
+  async function repositoryFor(leader, projectPath, allowWorkspace = false) {
+    const path = await workspaceFor(leader, projectPath)
+    const workspace = async () => {
+      if (!(await stat(path)).isDirectory()) throw Error('POSTMAN_TASK_REPOSITORY_UNAVAILABLE')
+      return { repository: path, originUrl: '', name: '', workspaceOnly: true }
+    }
+    let repository, originUrl
+    try { repository = await command(path, 'rev-parse', '--show-toplevel') }
+    catch (error) { if (allowWorkspace) return workspace(); throw error }
     if (!isAbsolute(repository) || normalize(await realPath(repository)) !== normalize(repository) ||
         (projectPath !== undefined && normalize(repository) !== normalize(projectPath)))
       throw Error('POSTMAN_TASK_REPOSITORY_UNAVAILABLE')
-    const originUrl = await command(repository, 'remote', 'get-url', 'origin')
+    try { originUrl = await command(repository, 'remote', 'get-url', 'origin') }
+    catch (error) { if (allowWorkspace) return workspace(); throw error }
     const name = githubRepository(originUrl)
-    if (!name) throw Error('POSTMAN_TASK_REPOSITORY_REJECTED')
+    if (!name) {
+      if (allowWorkspace) return workspace()
+      throw Error('POSTMAN_TASK_REPOSITORY_REJECTED')
+    }
     const universalProject = name.toLowerCase() !== REPOSITORY
     if (universalProject && [resolve(homedir(), '.dsh'), resolve(homedir(), '.dsh-preview')]
         .some(permanent => normalize(repository) === normalize(permanent)))
@@ -147,8 +163,8 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
     pending.add(id)
     try {
       if (typeof id !== 'string' || !id) throw Error('POSTMAN_TASK_REPOSITORY_UNAVAILABLE')
-      const info = await repositoryFor(leader, projectPath)
-      let branch = 'main', baseCommit, defaultBranch
+      const info = await repositoryFor(leader, projectPath, true)
+      let branch = info.workspaceOnly ? '' : 'main', baseCommit = '', defaultBranch
       if (info.universalProject) {
         try { branch = await command(info.repository, 'symbolic-ref', '--quiet', '--short', 'HEAD') }
         catch { branch = 'unborn' }
@@ -158,15 +174,16 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
           const remote = await command(info.repository, 'symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD')
           if (remote.startsWith('origin/')) defaultBranch = remote.slice('origin/'.length)
         } catch { /* Branchless reading needs no network or default branch. */ }
-      } else {
+      } else if (!info.workspaceOnly) {
         baseCommit = await command(info.repository, 'rev-parse', '--verify', 'refs/remotes/origin/main^{commit}')
         if (!SHA.test(baseCommit)) throw Error('POSTMAN_TASK_BASE_INVALID')
       }
       const row = { leaderSessionId: id, repository: info.name, repositoryPath: info.repository,
         originUrl: info.originUrl, branch, worktree: info.repository, baseCommit,
+        ...(info.workspaceOnly ? { workspaceOnly: true } : {}),
         ...(info.universalProject ? { universalProject: true,
           ...(defaultBranch ? { defaultBranch } : {}) } : {}),
-        ...(!info.universalProject && projectPath !== undefined ? { selectedDshProject: true } : {}),
+        ...(!info.universalProject && !info.workspaceOnly && projectPath !== undefined ? { selectedDshProject: true } : {}),
         devspaceReadOnly: true, stage: 'ready', diagnostic: null, workers: {},
         runner: { state: 'none', requestId: null }, bridge: null }
       await registry.create(id, row)
@@ -203,7 +220,8 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
     try {
       if (typeof id !== 'string' || !id) throw Error('POSTMAN_TASK_REPOSITORY_UNAVAILABLE')
       const info = await repositoryFor(leader, projectPath ?? (upgrading ? saved.repositoryPath : undefined))
-      if (upgrading && !sameProject(saved, info.repository, info.originUrl))
+      if (upgrading && !(saved.workspaceOnly ? normalize(saved.worktree) === normalize(info.repository)
+        : sameProject(saved, info.repository, info.originUrl)))
         throw Error('POSTMAN_TASK_PROJECT_CHANGED')
       const base = await determineBase(info)
       let baseCommit = base.baseCommit
@@ -235,11 +253,14 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
       if (upgrading) {
         await registry.change(id, current => {
           if (current.stage !== 'ready' || current.devspaceReadOnly !== true ||
-              current.leaderSessionId !== id || !sameProject(current, info.repository, info.originUrl) ||
+              current.leaderSessionId !== id || !(current.workspaceOnly
+                ? normalize(current.worktree) === normalize(info.repository)
+                : sameProject(current, info.repository, info.originUrl)) ||
               current.runner?.state !== 'none' || current.bridge ||
               Object.values(current.bridgeOperations ?? {}).some(op => op.state !== 'received'))
             throw Error('POSTMAN_TASK_PROMOTION_CHANGED')
-          return { ...current, ...row, workers: current.workers, devspaceReadOnly: false,
+          const { workspaceOnly, ...previous } = current
+          return { ...previous, ...row, workers: current.workers, devspaceReadOnly: false,
             diagnostic: 'promoting branchless task' }
         })
       } else {
@@ -367,16 +388,23 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
     finally { pending.delete(id) }
   }
 
-  async function recoverUniversal(leader, row) {
+  async function recoverProject(leader, row) {
     const id = leader?.id
     if (pending.has(id)) return { status: 'POSTMAN_TASK_PREPARE_IN_PROGRESS' }
     pending.add(id)
     try {
-      const info = await repositoryFor(leader, row.repositoryPath)
-      if (row.leaderSessionId !== id || !info.universalProject ||
-          !sameProject(row, info.repository, info.originUrl))
+      const info = row.workspaceOnly
+        ? { repository: await workspaceFor(leader, row.repositoryPath) }
+        : await repositoryFor(leader, row.repositoryPath)
+      if (row.leaderSessionId !== id) throw Error('POSTMAN_TASK_PROJECT_CHANGED')
+      if (row.workspaceOnly) {
+        if (!(await stat(info.repository)).isDirectory() || !row.devspaceReadOnly || row.repository !== '' || row.originUrl !== '' ||
+            row.branch !== '' || row.baseCommit !== '' || row.stage !== 'ready' ||
+            normalize(row.worktree) !== normalize(info.repository))
+          throw Error('POSTMAN_TASK_WORKSPACE_IDENTITY_UNKNOWN')
+      } else if (!info.universalProject || !sameProject(row, info.repository, info.originUrl)) {
         throw Error('POSTMAN_TASK_PROJECT_CHANGED')
-      if (row.devspaceReadOnly) {
+      } else if (row.devspaceReadOnly) {
         if (row.stage !== 'ready' || normalize(row.worktree) !== normalize(info.repository))
           throw Error('POSTMAN_TASK_READ_ONLY_CONTEXT_UNKNOWN')
       } else {
@@ -432,7 +460,7 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
     if (pending.has(id)) return { status: 'POSTMAN_TASK_PREPARE_IN_PROGRESS' }
     const row = registry.get(id)
     if (!row || row.stage === 'closed') return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
-    if (row.universalProject === true) return recoverUniversal(leader, row)
+    if (row.universalProject === true || row.workspaceOnly === true) return recoverProject(leader, row)
     if (row.devspaceReadOnly === true) {
       pending.add(id)
       try {
@@ -973,7 +1001,8 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
     const op = registry.get(binding.context.leaderSessionId)?.bridgeOperations?.[binding.bridgeJobId]
     if (op?.transportKind !== 'devspace' || op.state !== 'pending' || op.childSessionId !== childId || !op.devspace) return null
     return { bridgeJobId: binding.bridgeJobId, leaderSessionId: binding.context.leaderSessionId,
-      lunaSessionId: childId, worktree: binding.context.worktree, branch:binding.context.branch, mode: op.devspace.mode }
+      lunaSessionId: childId, worktree: binding.context.worktree, branch:binding.context.branch,
+      ...(binding.context.workspaceOnly ? { workspaceOnly: true } : {}), mode: op.devspace.mode }
   }
   async function recordBridgeRequest(childId, requestId, channel) {
     const binding = children.get(childId)

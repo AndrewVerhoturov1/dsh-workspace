@@ -203,7 +203,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
         result: job.recoveryFrom.result, transportKind: job.transportKind, branch: job.taskContext.branch,
         repository: job.taskContext.repository }
       const started = await direct.continueLast(job.bridgeJobId,
-        job.taskContext.universalProject ? HOST_SOURCE_ROOT : parent.session.header.cwd, previous,
+        job.transportKind === 'devspace' || job.taskContext.universalProject ? HOST_SOURCE_ROOT : parent.session.header.cwd, previous,
         async requestId => {
           if (typeof contexts?.changeRecord === 'function') await contexts.changeRecord(job.parentSessionId, row => {
             const op = row.bridgeOperations?.[job.bridgeJobId]
@@ -1186,7 +1186,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     let capability = { recovery_eligible: false }
     if (terminal?.status === 'POSTMAN_BRIDGE_TERMINAL' &&
         ['POSTMAN_TRANSPORT_FAILED', 'ASSISTANT_COMPLETED_NO_ARTIFACT', 'ARTIFACT_REJECTED'].includes(terminal.result?.code)) {
-      try { capability = await direct.recoveryCapability(job.taskContext?.universalProject ? HOST_SOURCE_ROOT : parent.session.header.cwd, terminal.requestId) }
+      try { capability = await direct.recoveryCapability(job.transportKind === 'devspace' || job.taskContext?.universalProject ? HOST_SOURCE_ROOT : parent.session.header.cwd, terminal.requestId) }
       catch (error) { capability = { recovery_eligible: false, code: diagnostic(error) } }
     }
     if (recover) {
