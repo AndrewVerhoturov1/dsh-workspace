@@ -19,7 +19,8 @@ Computer Use разрешён по умолчанию в её границах; 
 ## Чтение инструкций и работа
 
 До любых действий обязательно прочитай задание и эти правила по GitHub-ссылкам
-из обращения. Затем прочитай [AGENTS.md](../../AGENTS.md),
+из обращения. До их чтения не вызывай даже `open_workspace`, Bash или диагностические
+команды Orca/VUDA. Затем прочитай [AGENTS.md](../../AGENTS.md),
 [REPO_POLICY.md](../../REPO_POLICY.md) и
 [TASK_CONTRACT.md](../../docs/workflow/TASK_CONTRACT.md) в той же закреплённой версии.
 Недоступная ссылка или обязательный файл — BLOCKED / INSTRUCTION_UNAVAILABLE
@@ -90,7 +91,12 @@ Orca. Отказ запуска/недоступный ПК сообщай то�
 `orca skills get orca-cli --reference references/browser.md --json`.
 
 Встроенный браузер Orca обслуживают `tab`, `snapshot`, `eval`, `click`, `hover`, `type`,
-`keypress`, `screenshot`. Windows-приложения и внешние окна — `orca computer`: сначала
+`keypress`, `screenshot`. Сохрани `browserPageId` собственной вкладки и передавай
+`--page <id>` во всех её командах. После навигации/смены вкладки получи новый snapshot.
+Перед Enter явно сфокусируй целевое поле через `focus` со свежим ref; через `eval`
+проверь `document.activeElement` и `document.hasFocus()`. Если квитанция есть, а эффекта
+нет, сохрани эти значения, page id и состояние DOM; не объявляй успех и не повторяй
+тот же вызов без изменения условий. Windows-приложения и внешние окна — `orca computer`: сначала
 обнаружь нужное приложение/окно, затем используй свежие индексы его дерева доступности.
 Не переноси индексы после обновления состояния; после перезапуска Orca заново получи
 runtime-scoped handles. Ответ `clicked` или `verification: unverified` сам по себе
@@ -99,7 +105,18 @@ runtime-scoped handles. Ответ `clicked` или `verification: unverified` �
 VUDA — отдельный местный MCP-сервер `visual-ui-debug-agent-mcp`, не браузер Orca.
 Если его MCP-инструменты предъявлены напрямую, используй их. Другой проверенный путь —
 DevSpace Bash → уже установленный MCP-клиент/SDK → VUDA по stdio; он не добавляет
-инструменты в каталог ChatGPT. Проверь реальную схему сервера и сохраняй один сеанс для
+инструменты в каталог ChatGPT. Пустые PATH и `npm list -g` не исключают установку
+в кэше `npm exec`. В разрешённой исходной установке запусти
+`node postman/devspace/vuda-runtime.mjs --describe`, затем `--list-tools` для полного
+каталога с учётом всех страниц. Локатор ничего не устанавливает: проверяет существующие
+пакеты проекта и `<npm-cache>/_npx/*/node_modules`, сервер 1.1.0, SDK и `dotenv/config`.
+Не запускай `npx` с загрузкой. Пример одного сеанса — [VUDA.md](VUDA.md).
+Если исходная область — только `postman`, путь к локатору относительно неё —
+`devspace/vuda-runtime.mjs`; пути в примере замени на фактическую разрешённую установку.
+Необходимые пути и разрешение исполнения установленных зависимостей должны быть
+в области задания; локатор сам их не расширяет. Ошибку `VUDA_RUNTIME_UNAVAILABLE`
+передай Leader с диагностикой найденных неполных установок.
+Проверь реальную схему сервера и сохраняй один сеанс для
 связанных вызовов `playwright_navigate`, `playwright_click`, `playwright_hover`,
 `playwright_fill`, `playwright_press_key`, `playwright_evaluate`, `playwright_screenshot`.
 Для отдельной проверки задай серверу `VUDA_BROWSER_PROVIDER=local` и

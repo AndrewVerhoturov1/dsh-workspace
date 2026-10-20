@@ -20,15 +20,20 @@ _SHA = re.compile(r"^[0-9a-f]{40}$")
 _SECRET = re.compile(r"-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----|\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,})\b|\b(?:authorization\s*:\s*bearer|(?:api[_-]?key|password|access[_-]?token|refresh[_-]?token|client[_-]?secret)['\"]?\s*[:=]\s*['\"]?[^\s'\"]+)", re.I)
 
 
-def render_launch(task_url, rules_url):
+def render_launch(task_url, rules_url, *, launch_version=2):
+    first = ("Первые вызовы инструментов — только чтение задания и правил по двум ссылкам ниже, "
+             "затем обязательных документов из правил. До этого не вызывай DevSpace open_workspace/Bash, "
+             "Orca или VUDA, даже для проверки доступности. " if launch_version == 2 else "")
     return ("Пожалуйста, выполни задание. Перед началом обязательно прочитай задание и правила по ссылкам ниже и соблюдай их. "
+            + first +
             "Ответ оформи строго по формату из задания, включая обязательные маркеры. "
             "Если любой документ недоступен, сообщи об этом и не начинай работу.\n"
             "Задание: " + task_url + "\nПравила: " + rules_url)
 
 
 def _receipt(binding, value):
-    if (value.get("version") != 1 or any(value.get(key) != binding.get(key) for key in OWNER) or
+    if (value.get("version") != 1 or value.get("launchVersion", 1) not in (1, 2) or
+            any(value.get(key) != binding.get(key) for key in OWNER) or
             not _SHA.fullmatch(value.get("commit", "")) or not _SHA.fullmatch(value.get("sourceCommit", "")) or
             value.get("taskUrl") != BASE + value["commit"] + "/tasks/" + binding["jobId"] + ".md" or
             value.get("rulesUrl") != BASE + value["sourceCommit"] + "/postman/devspace/SKILL.md"):
@@ -47,7 +52,8 @@ def bound_prompt(binding, prompt, *, task_url=None):
     try:
         if (Path(binding["channel"]) / "publication.json").exists():
             saved = read_publication(binding)
-            return (task_url is None or task_url == saved["taskUrl"]) and prompt == render_launch(saved["taskUrl"], saved["rulesUrl"])
+            return (task_url is None or task_url == saved["taskUrl"]) and prompt == render_launch(
+                saved["taskUrl"], saved["rulesUrl"], launch_version=saved.get("launchVersion", 1))
         return prompt.startswith("POSTMAN_REQUEST_ID: " + binding["requestId"] + "\n")
     except (OSError, ValueError, KeyError):
         return False
@@ -56,7 +62,7 @@ def bound_prompt(binding, prompt, *, task_url=None):
 def saved_prompt(binding):
     if (Path(binding["channel"]) / "publication.json").exists():
         saved = read_publication(binding)
-        return render_launch(saved["taskUrl"], saved["rulesUrl"])
+        return render_launch(saved["taskUrl"], saved["rulesUrl"], launch_version=saved.get("launchVersion", 1))
     file = Path(binding["channel"]) / "task.md"
     if not file.exists():
         return "POSTMAN_REQUEST_ID: " + binding["requestId"] + "\n"  # old persisted channels
@@ -143,7 +149,7 @@ def publish_assignment(binding, intent, command, *, publisher=None, fetch=public
                                      {"content": base64.b64encode(content).decode("ascii"), "encoding": "base64"})["sha"]
                 commit = publisher._commit(parent, [{"path": path, "mode": "100644", "type": "blob", "sha": blob}],
                                            "postman: publish DevSpace assignment " + binding["jobId"])
-            value = _receipt(binding, {"version": 1, **{key: binding.get(key) for key in OWNER},
+            value = _receipt(binding, {"version": 1, "launchVersion": 2, **{key: binding.get(key) for key in OWNER},
                 "commit": commit, "sourceCommit": revision, "taskUrl": BASE + commit + "/" + path,
                 "rulesUrl": rules_url, "taskSha256": hashlib.sha256(content).hexdigest(),
                 "intentSha256": hashlib.sha256(intent.encode("utf-8")).hexdigest()})
@@ -157,4 +163,5 @@ def publish_assignment(binding, intent, command, *, publisher=None, fetch=public
                     fetch(BASE + value["sourceCommit"] + "/" + name).decode("utf-8")
                 except Exception as error:
                     raise ValueError("POSTMAN_DEVSPACE_INSTRUCTION_UNAVAILABLE: " + name) from error
-        return {**value, "prompt": render_launch(value["taskUrl"], value["rulesUrl"])}
+        return {**value, "prompt": render_launch(value["taskUrl"], value["rulesUrl"],
+                                               launch_version=value.get("launchVersion", 1))}

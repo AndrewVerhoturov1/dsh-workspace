@@ -101,6 +101,20 @@ class PublicationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "BINDING_CHANGED"):
             self.publish(intent="different intent")
 
+    def test_old_launch_receipt_keeps_its_exact_prompt_during_cold_restore(self):
+        first = self.publish()
+        receipt = self.root / "publication.json"
+        saved = json.loads(receipt.read_text())
+        saved.pop("launchVersion")
+        receipt.write_text(json.dumps(saved))
+        old = pub.render_launch(first["taskUrl"], first["rulesUrl"], launch_version=1)
+        writes = len(self.github.writes)
+        self.assertEqual(pub.saved_prompt(self.binding), old)
+        self.assertTrue(pub.bound_prompt(self.binding, old))
+        self.assertFalse(pub.bound_prompt(self.binding, first["prompt"]))
+        self.assertEqual(self.publish()["prompt"], old)
+        self.assertEqual(len(self.github.writes), writes)
+
     def test_publication_before_receipt_crash_is_recovered_without_new_commit(self):
         first = self.publish()
         mutations = len(self.github.writes)
