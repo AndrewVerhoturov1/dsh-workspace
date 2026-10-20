@@ -13,6 +13,32 @@ const record = { leaderSessionId: 'leader', repository: 'andrewverhoturov1/dsh-w
   branch: 'task/postman-' + 'b'.repeat(32), worktree: 'C:/task', stage: 'intent', diagnostic: null,
   worker: null, runner: { state: 'none', requestId: null }, bridge: null }
 
+test('resumed task replacement persists PR identity and revoked audit; stale replacement cannot overwrite it', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'postman-resume-registry-'))
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }))
+  const backend = new JsonStorageBackend(root)
+  const ctx = { storage: { backend: { get: () => backend } }, emit() {} }
+  let registry = await openPostmanTaskRegistry(new DomainFacility(ctx, { backend: 'json' }))
+  await registry.create('leader', record)
+  await registry.change('leader', row => ({ ...row, stage: 'closed', abandoned: true,
+    bridgeOperations: { old: { state: 'unknown', executionRevoked: true } } }))
+  const old = registry.get('leader'), { worker, ...current } = record
+  const resumed = { ...current, workers: {}, stage: 'ready', bindingId: 'new-generation',
+    pullRequest: { number: 477, url: 'https://github.com/AndrewVerhoturov1/dsh-workspace/pull/477', base: 'main' },
+    resumedFrom: { leaderSessionId: 'leader' } }
+  await registry.replace('leader', old, resumed)
+  await assert.rejects(registry.replace('leader', old, resumed), /BINDING_CHANGED/)
+  await registry.close()
+  registry = await openPostmanTaskRegistry(new DomainFacility(ctx, { backend: 'json' }))
+  assert.equal(registry.get('leader').bindingId, resumed.bindingId)
+  assert.deepEqual(registry.get('leader').pullRequest, resumed.pullRequest)
+  assert.deepEqual(registry.get('leader').resumedFrom, resumed.resumedFrom)
+  assert.equal(registry.get('leader').bridgeOperations, undefined)
+  assert.equal(registry.get('leader').retiredTasks[0].bridgeOperations.old.executionRevoked, true)
+  assert.equal(registry.get('leader').retiredTasks[0].bridgeOperations.old.state, 'unknown')
+  await registry.close(); await backend.close()
+})
+
 test('JSON storage persists one Leader row across independent domain lifetimes', async t => {
   const root = await mkdtemp(join(tmpdir(), 'postman-registry-'))
   t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }))

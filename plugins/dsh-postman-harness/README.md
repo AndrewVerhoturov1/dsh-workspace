@@ -335,3 +335,12 @@ postman/web/README.md
 ```
 
 Worker lifecycle хранит exact session и durable stop/cancel intent, результаты и audit. Освобождение фактически stopped/settled собственного Worker не зависит от идеальной истории отчётов; отсутствие runtime handle само по себе не доказывает остановку. Exact Leader cascade отменяет своих Sol-потомков. `postman_task_close({abandon:true})` сохраняет прежнюю задачу и отозванные полномочия, без Git cleanup; новый prepare создаёт отдельную область. `localDevelopment:true` пользователя сохраняется.
+
+
+### Продолжение существующего PR
+
+`postman_task_prepare({resume_pr:<номер>,project_path?:<canonical Git root>})` явно продолжает закрытую Host-задачу в её прежних branch/worktree/PR. Host сверяет локальную сохранённую принадлежность, реальные Git/PR identity, pinned base и завершение прежних детей/writers. Read-only children сначала освобождаются. Busy/unknown/чужая активная задача дают `POSTMAN_TASK_RESUME_REJECTED`, без новой ветки и без изменения файлов. Staged/unstaged/untracked данные сохраняются. Старые операции/grants не копируются в новую привязку; весь audit остаётся на месте. Обычный prepare и read-only режим сохраняют прежние контракты.
+
+После milestone освобождаются ненужные агенты, а task binding остаётся для продолжения. Close/abandon означает отзыв прежней authority; незакрытая задача восстанавливается штатным cold recovery. Новый Leader в той же локальной установке может явно принять только закрытую сохранённую задачу после той же проверки; действующего владельца этот путь не вытесняет. Новый реестр, prompt-based grant и миграция старых pinned задач не вводятся.
+
+Установка и живая приёмка отдельно от source/PR: штатный `profiles/web/scripts/install-production.mjs`, управляемый перезапуск web Host и новая Leader-сессия. Через `postman_team_status({runtime:true})` сверить V8-loaded модули Host, включая task-context, registry и artifact grant boundary, с опубликованными исходниками; проверить доставленную роль/инструкцию Leader. Затем на отдельном тестовом PR пройти milestone → освобождение агентов → продолжение → close → новая сессия → resume того же PR. Проверить старые REQ/grants и отказ при неизвестном writer. Source tests и проверка installer не заменяют этот живой сценарий; main merge не означает stable preview.

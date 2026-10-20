@@ -24,6 +24,16 @@ const fixture = async (t, options) => {
   t.after(async () => { await f.dispose(); await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }) })
   return { ...f, dir }
 }
+
+test('actual Leader request receives milestone retention and explicit PR continuation policy', { timeout: 30000 }, async t => {
+  const f = await fixture(t, { localDevelopment: true })
+  const request = JSON.stringify(await f.turn(f.leader))
+  assert.match(request, /Milestones retain task binding/)
+  assert.match(request, /postman_task_prepare\(\{resume_pr/)
+  assert.match(request, /POSTMAN_TASK_RESUME_REJECTED/)
+  assert.match(request, /Старые REQ\/grants\/операции остаются отозванными/)
+})
+
 test('exact Sol actual model call executes ptc_execute on initial and cold continuation', { timeout: 30000 }, async t => {
   const seen = new WeakSet()
   const f = await fixture(t, { plan: (agent, request) => {

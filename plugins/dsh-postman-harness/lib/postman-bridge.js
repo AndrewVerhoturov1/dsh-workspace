@@ -40,21 +40,37 @@ function authorized(exec, ctx) {
   return postmanBridgeCallerAllowed(agent) && ctx.agents.get(agent.id) === agent
 }
 
+async function childrenClosed(ctx, id, signal) {
+  if (typeof ctx.subagents?.listDescendants !== 'function') return false
+  for (const child of await ctx.subagents.listDescendants(id, signal)) {
+    if (child.kind !== 'child' || child.activity !== 'inactive' || ctx.agents.get(child.id)) return false
+    if (child.mode === 'continuable') {
+      const saved = await ctx.get?.('sessionPersistence')?.inspect?.(child.id, signal)
+      if (!saved?.events?.some(event => event.type === 'subagent/closed')) return false
+    }
+  }
+  return true
+}
+
 export function createPostmanTaskPrepareTool(ctx, contexts = postmanTaskContexts, { jobs, worker } = {}) {
   return defineTool({
     name: POSTMAN_TASK_PREPARE_TOOL_NAME,
-    description: 'Prepare one exact Leader-owned GitHub project. project_path selects a canonical local Git root; if omitted use this Leader workspace. New non-DSH projects use a local-only isolated task worktree from the verified default branch, or a proven cached base offline. read_only creates no Git branch, fetch, push or worktree. Historical DSH tasks retain origin/main publication rules.',
+    description: 'Prepare one exact Leader-owned GitHub project. resume_pr explicitly continues a closed Host-created task for an open PR in the same branch/worktree, after Git/PR/ownership and former-child/writer verification; old operations remain revoked. Retire read-only children first. project_path selects a canonical local Git root; if omitted use this Leader workspace. Otherwise new tasks use an isolated worktree from the verified default branch. read_only creates no Git branch, fetch, push or worktree. Historical DSH tasks retain origin/main publication rules.',
     parameters: { read_only: { type: 'boolean', description: 'Read-only branchless research, no Git mutation.' },
+      resume_pr: { type: 'integer', description: 'Explicit open PR number for a retained Host-created task in this project; mutually exclusive with read_only.' },
       project_path: { type: 'string', description: 'Optional exact absolute existing local Git project root, selected by Leader.' } }, output: output(),
     async execute(args, exec) {
       if (!authorized(exec, ctx)) return { status: 'POSTMAN_TASK_CALLER_REJECTED' }
       if (args?.read_only !== undefined && typeof args.read_only !== 'boolean' ||
+          args?.resume_pr !== undefined && (!Number.isSafeInteger(args.resume_pr) || args.resume_pr < 1 || args.read_only !== undefined) ||
           args?.project_path !== undefined && (typeof args.project_path !== 'string' || !isAbsolute(args.project_path)))
         return { status: 'POSTMAN_TASK_ARGUMENTS_INVALID' }
       if (args?.read_only !== true && contexts?.get?.(exec.agent.id)?.devspaceReadOnly &&
           (jobs?.hasActive?.(exec.agent.id) || worker?.hasActiveWork?.(exec.agent)))
         return { status: 'POSTMAN_TASK_PROMOTION_BUSY' }
-      const prepared = await (args?.read_only === true ? contexts.prepareReadOnly(exec.agent, args?.project_path) :
+      const prepared = await (args?.resume_pr !== undefined ? contexts.resume(exec.agent, args.resume_pr, args?.project_path,
+        { beforeResume: id => childrenClosed(ctx, id, exec.signal) }) :
+        args?.read_only === true ? contexts.prepareReadOnly(exec.agent, args?.project_path) :
         contexts.prepare(exec.agent, args?.project_path))
       if (!['TASK_CONTEXT_READY', 'POSTMAN_TASK_READ_ONLY_READY', 'POSTMAN_TASK_CONTEXT_ALREADY_READY'].includes(prepared?.status) ||
           typeof jobs?.recoverDevspacePending !== 'function') return prepared
@@ -85,16 +101,7 @@ export function createPostmanTaskCloseTool(ctx, contexts = postmanTaskContexts, 
             return worker ? await worker.prepareAbandon(id) : true
           }
           // Missing mappings are not proof: refuse live/queued or unreadable orphans.
-          if (typeof ctx.subagents?.listDescendants !== 'function') return false
-          const descendants = await ctx.subagents.listDescendants(id, exec.signal)
-          for (const child of descendants) {
-            if (child.kind !== 'child' || child.activity !== 'inactive' || ctx.agents.get(child.id)) return false
-            if (child.mode === 'continuable') {
-              const saved = await ctx.get?.('sessionPersistence')?.inspect?.(child.id, exec.signal)
-              if (!saved?.events?.some(event => event.type === 'subagent/closed')) return false
-            }
-          }
-          return true
+          return childrenClosed(ctx, id, exec.signal)
         },
       })
     },
@@ -317,7 +324,8 @@ export function createPostmanTeamStatusTool(ctx, contexts, worker, jobs) {
         devspaceLuna: jobs.devspaceLunaSnapshot(exec.agent),
         ...(args.runtime===true ? {runtime:{
           host:await inspectLoadedRuntime(['postman-bridge.js','ptc-adapter.js','postman-worker.js','postman-task-context.js',
-            'postman-bridge-jobs.js','postman-devspace.js','postman-writer-proof.js'].map(name=>({name,url:new URL(name,import.meta.url)}))),
+            'postman-bridge-jobs.js','postman-devspace.js','postman-writer-proof.js',
+            'postman-task-registry.js','implementation-artifact.js'].map(name=>({name,url:new URL(name,import.meta.url)}))),
           devspace:await contexts.inspectDevspaceRuntime()
         }} : {}) }
     },
@@ -383,7 +391,7 @@ export async function apply(ctx, config = {}) {
   if (config.localDevelopment === true) ctx.get?.('systemPrompt')?.section({
     name: 'postman-local-development', order: 130,
     text: ({ scope } = {}) => isTopLevelPostmanSupervisor(scope) ?
-      'Host localDevelopment is explicitly enabled by the user, but does not bypass initial execution-plan approval. Every new non-trivial task: Leader routing decision -> compact plan -> explicit user approval -> execution. Before approval: minimal necessary Leader read-only understanding only; no Worker/Secretary/Sol, Bridge/Postman transport, implementation, tests/build or mutating Git/product operations. Truly trivial read-only/factual requests execute directly. Within the approved plan, no repeated approval per tool, same-scope continuation, local preparation or routine close/cancel/restore. Sol is an expensive Leader-selectable route, no separate role permission; preapproved conditional escalation needs no repeated approval. Choose cheapest reliable routing through the next meaningful decision boundary; unknown != complex, useful cheap bounded evidence first, direct Sol for obviously difficult local engineering/review. Local deep engineering/review -> Sol; external/current research or useful independent outside opinion -> PostmanAsk. New independent outcomes require a new plan; material cost/scope/access/destructive-operation/transport changes: STOP -> revised plan -> approval. Do not add an approval state machine or change Harness permissions. Close releases an idle session, not a successful task. Addressed cancel needs no approval prompt and never certifies completion. Restore preserves dirty files/index in a private local recovery directory before resetting only the bound temporary worktree. Never bypass secret disclosure consent, overwrite permanent worktrees, or invent execution status.' : '',
+      'Host localDevelopment is explicitly enabled by the user, but does not bypass initial execution-plan approval. Every new non-trivial task: Leader routing decision -> compact plan -> explicit user approval -> execution. Before approval: minimal necessary Leader read-only understanding only; no Worker/Secretary/Sol, Bridge/Postman transport, implementation, tests/build or mutating Git/product operations. Truly trivial read-only/factual requests execute directly. Within the approved plan, no repeated approval per tool, same-scope continuation, local preparation or routine close/cancel/restore. Sol is an expensive Leader-selectable route, no separate role permission; preapproved conditional escalation needs no repeated approval. Choose cheapest reliable routing through the next meaningful decision boundary; unknown != complex, useful cheap bounded evidence first, direct Sol for obviously difficult local engineering/review. Local deep engineering/review -> Sol; external/current research or useful independent outside opinion -> PostmanAsk. New independent outcomes require a new plan; material cost/scope/access/destructive-operation/transport changes: STOP -> revised plan -> approval. Do not add an approval state machine or change Harness permissions. Worker close releases an idle session, not a successful task. Milestones retain task binding; postman_task_close revokes it. Closed PR continuation uses postman_task_prepare with resume_pr after Host identity and settlement proof. Addressed cancel needs no approval prompt and never certifies completion. Restore preserves dirty files/index in a private local recovery directory before resetting only the bound temporary worktree. Never bypass secret disclosure consent, overwrite permanent worktrees, or invent execution status.' : '',
   })
   let boundaries, ptc
   const refreshWorker = id => {

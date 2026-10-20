@@ -34,6 +34,9 @@ export const POSTMAN_TASK_DOMAIN = defineDomain({
   }, z.object({
     leaderSessionId: z.string().min(1), repository: z.string(), repositoryPath: z.string(),
     originUrl: z.string(), baseCommit: z.string(), branch: z.string(), worktree: z.string(),
+    bindingId: z.string().optional(),
+    pullRequest: z.object({ number: z.number().int().positive(), url: z.string(), base: z.string() }).strict().optional(),
+    resumedFrom: z.object({ leaderSessionId: z.string(), bindingId: z.string().optional() }).strict().optional(),
     // Optional for new universal project bindings. Historical v1 rows are not migrated.
     universalProject: z.literal(true).optional(),
     workspaceOnly: z.literal(true).optional(),
@@ -204,6 +207,11 @@ export async function openPostmanTaskRegistry(storageDomain) {
           (worker ? { [worker.id]: { ...worker, label: worker.id } } : {}) })
         } finally { creating.delete(id) }
       },
+      replace: (id, expected, record) => table.update(id, current => {
+        if (JSON.stringify(current) !== JSON.stringify(expected)) throw Error('POSTMAN_TASK_BINDING_CHANGED')
+        return { ...record, retiredTasks: [...(current.retiredTasks ?? []),
+          Object.fromEntries(Object.entries(current).filter(([key]) => key !== 'retiredTasks'))] }
+      }),
       change: (id, fn) => table.update(id, current => {
         // A partial transform must not drop unrelated row fields or the workers map.
         const next = fn(current)
@@ -240,6 +248,12 @@ export function createMemoryTaskRegistry() {
       if (previous && previous.stage !== 'closed') throw new Error('POSTMAN_TASK_BINDING_EXISTS')
       records.set(id, { ...record, ...(previous ? { retiredTasks: [...(previous.retiredTasks ?? []),
         Object.fromEntries(Object.entries(previous).filter(([key]) => key !== 'retiredTasks'))] } : {}) })
+    },
+    async replace(id, expected, record) {
+      const current = records.get(id)
+      if (!current || JSON.stringify(current) !== JSON.stringify(expected)) throw Error('POSTMAN_TASK_BINDING_CHANGED')
+      records.set(id, { ...record, retiredTasks: [...(current.retiredTasks ?? []),
+        Object.fromEntries(Object.entries(current).filter(([key]) => key !== 'retiredTasks'))] })
     },
     async change(id, fn) {
       if (!records.has(id)) throw new Error('POSTMAN_TASK_BINDING_MISSING')
