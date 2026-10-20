@@ -2,86 +2,39 @@
 
 id: postman
 status: active
-updated: 2026-10-13
+updated: 2026-10-20
 
-## Goal
+## Цель и текущая модель
 
-Сохранять Direct Web Postman как единый production transport между локальным Harness/Luna agent и ChatGPT Web, не допуская расхождения runtime, skill и канонических контрактов между отдельными задачами и чатами.
+Основной исполнитель — Host-owned `@PostmanDevspace`: до трёх текущих исполнений с persistent Luna/ChatGPT lanes, native inputs, bell/text и адресным управлением. Luna сохраняет роль связистки и текущие инструменты. Готовый отчёт доступен независимо от её состояния.
 
-## Current focus
+Host исполняет явные команды, сохраняет факты и обслуживает действующий 15-минутный Stop → Continue. Leader выбирает маршрут, повтор, восстановление и приёмку. Автоматических цепочек новых REQ и классификаторов ошибок по тексту нет. Один вызов — одна попытка Send; история отправки/UNKNOWN сообщается, но не блокирует новую явную команду Leader.
 
-Универсальный Host-owned `@PostmanDevspace` — предпочтительный ChatGPT-исполнитель. До трёх независимых persistent Luna/ChatGPT lanes на Leader, native inputs, local bell/text, адресные controls и cold recovery. Право продолжить собственную беседу не зависит от успеха старого REQ. После ошибки Host делает три попытки восстановления, сохраняя отдельные REQ и прежние исходы. Leader явно решает allow/deny Computer Use; Host не навязывает список приложений или target adapter. PR/source ≠ runtime installation/GUI acceptance; канонические детали `postman/POSTMAN_DEVSPACE_FLOW.md` и `postman/POSTMAN_DEVSPACE_CAPABILITIES.md`.
+Leader и Sol используют обязательный PTC, Worker/Secretary — direct tools без делегирования. У PTC обязателен `program`, `description` необязателен, `wait_for_event:true` выражает решение ждать без доказательств из истории. Отказ инструмента — данные, не повод автоматически аварийно завершить всю программу.
 
+Host не готовит и не восстанавливает Git, не синхронизирует рабочий проект и не требует task context для запуска. Назначенный каталог либо cwd сессии подходит для обычной папки без origin/GitHub. Git-работу и временный worktree при изменении репозитория выполняет Worker по REPO_POLICY. Scope/read-only — инструкции; native rights, ownership, role restrictions, revoke и технические пределы сохраняются.
 
-Production transport имеет два explicit user-facing режима поверх общего Direct/Web browser слоя: artifact `@Postman` через `postman/direct/postman.ps1` и text `@PostmanAsk` через `postman/direct/postman-ask.ps1`. Над ними существует supervisor orchestration: top-level `Postman Leader` формирует model-authored `@Postman`/`@PostmanAsk` delegation через Leader-only `postman_bridge`, fresh one-shot Luna выполняет только trusted transport, а parent читает terminal result напрямую из child scope. Trusted current-turn Harness остаётся orchestration boundary и не является отдельным transport.
+## Доставка и совместимость
 
-Host поддерживает `localDevelopment: true`; настройка пользователя сохраняется. Техническое освобождение фактически остановленной собственной сессии не требует смыслового PASS. `postman_task_close({abandon:true})` отзывает старую authority и сохраняет журналы/файлы. Dirty restore сохраняет старое дерево и продолжает в новом чистом task worktree. Старые UNKNOWN/FAILED не превращаются в успех.
+`postman_bridge_status` и списки только наблюдают, без отправки/запуска Luna/отзыва прав. Существующий реестр хранит владельцев, REQ/job/child/lane, адрес беседы, результаты и факты отправки/отмены. Старые Git-поля — история. Выгрузка не повторяет команды; поздний результат остаётся у своего REQ. Сохранённая беседа и старая неопределённая запись сами по себе слот исполнения не занимают.
 
-## Next step
+`@Postman`, `@PostmanAsk`, `@PostmanImage` остаются резервными Direct/Web маршрутами. Fresh one-shot Luna вызывает trusted current-turn transport без копирования текста в tool arguments. Trusted terminal из exact child scope — authority доставки, prose Luna не заменяет его. Транспортная публикация не управляет Git рабочего проекта. Public input staging требует отдельного разрешения.
 
-Worker lifecycle сохраняет runtime ownership и механические факты; качество отчёта оценивают модели. Исторические результаты ниже не доказывают развёртывания текущего source PR.
+Trusted ZIP grant принадлежит exact Leader/REQ и сохраняет ZIP/SHA. Отдельно авторизованный Worker вызывает `implementation_artifact_apply({requestId,worktree})` с явно выбранным каталогом. Host проверяет принадлежность/целостность, existing runner — фактическое применение. Host не требует опубликованного HEAD или подготовленного им дерева. PASS runner не означает разрешение на Git-публикацию или merge.
 
-LIVE E2E остаётся за пользователем: Web implementation ZIP → RESULT_DURABLE → Host grant → Sol authorization → same continuable Worker → Host-prepared clean worktree на опубликованном REQ commit → implementation_artifact_apply → existing runner → Worker report. Локально покрыты отказ runner-а → явный rollback → второй ZIP в той же ветке; живой Web-путь не запускался; текущий Host подтвердил загрузку исправленной политики и успешные штатные restore/retrySync.
+## Границы и проверка
 
-## Boundaries
+Пользовательские файлы, журналы, REQ и старые результаты сохраняются. UNKNOWN/FAILED не становятся успехом; отозванные задания не получают права заново. Host самостоятельно не чистит, не сбрасывает и не перезаписывает пользовательские данные.
 
-- Этот подпроект не переопределяет `AGENTS.md`, `REPO_POLICY.md`, `.agents/skills/delegate-via-postman/SKILL.md`, `postman/POSTMAN_CURRENT_FLOW.md` или `docs/web-postman-artifact-contract.md`.
-- Normal `@Postman` не распаковывает и не применяет результат, не создаёт implementation branch/worktree/commit/PR и не выполняет merge.
-- `plugins/dsh-postman-harness/` содержит trusted current-turn boundary, Leader-only `postman_bridge` для Web и независимый Leader-only `postman_worker` для локальной работы; Bridge не является альтернативным transport/fallback и не доступен обычным Agents.
-- Канонические Postman документы остаются на своих текущих путях; подпроект хранит только долговременный контекст и решения.
+Unit/source PASS не является GUI/live PASS. Установка, переключение текущей сессии и новая живая приёмка выполняются отдельным согласованным этапом. Merge и stable preview требуют отдельных решений REPO_POLICY. Исторические возможности и пределы прежних проверок — `POSTMAN_DEVSPACE_CAPABILITIES.md` и `JOURNAL.md`.
 
-## Read first
+## Основные источники
 
-1. `AGENTS.md`
-2. `REPO_POLICY.md`
-3. `.agents/skills/delegate-via-postman/SKILL.md` и `.agents/skills/delegate-via-postman-ask/SKILL.md` — по direct trigger mode.
-4. `.agents/skills/postman-leader/SKILL.md` и `postman/POSTMAN_BRIDGE_FLOW.md` — для supervisor mode.
-5. `postman/POSTMAN_CURRENT_FLOW.md` для artifact flow или `postman/POSTMAN_ASK_FLOW.md` для text flow.
-6. `docs/web-postman-artifact-contract.md` — только для artifact mode.
-7. `postman/direct/README.md` или `postman/web/README.md` — по затронутому слою.
-8. `system/implementation-package-workflow.md` и `system/implementation-package-authoring.md` — для explicit implementation-package работы.
+- `postman/POSTMAN_BRIDGE_FLOW.md`, `.agents/skills/postman-leader/SKILL.md` — управление и роли.
+- `postman/POSTMAN_DEVSPACE_FLOW.md`, `postman/devspace/SKILL.md` — основной маршрут и исполнитель.
+- `postman/POSTMAN_CURRENT_FLOW.md`, `postman/POSTMAN_ASK_FLOW.md`, Direct/Web README — резервные транспорты.
+- `docs/web-postman-artifact-contract.md` — artifact transport, без автоматического применения.
+- `system/implementation-package-workflow.md`, `system/implementation-package-authoring.md` — явная работа с implementation package.
+- `docs/subprojects/ptc/PTC_CONTRACT.md` — PTC API и технические пределы.
 
-## Main paths
-
-- `postman/`
-- `postman/direct/`
-- `postman/web/`
-- `.agents/skills/delegate-via-postman/SKILL.md`
-- `.agents/skills/delegate-via-postman-ask/SKILL.md`
-- `.agents/skills/postman-leader/SKILL.md`
-- `postman/POSTMAN_ASK_FLOW.md`
-- `postman/POSTMAN_DEVSPACE_FLOW.md`
-- `postman/POSTMAN_DEVSPACE_CAPABILITIES.md`
-- `postman/POSTMAN_BRIDGE_FLOW.md`
-- `docs/web-postman-artifact-contract.md`
-- `plugins/dsh-postman-harness/`
-
-## Current decisions
-
-- `@Postman` — explicit artifact/ZIP production trigger; entrypoint — `postman/direct/postman.ps1`.
-- `@PostmanAsk` — отдельный explicit text production trigger; entrypoint — `postman/direct/postman-ask.ps1`.
-- `postman_bridge` — отдельная supervisor capability только для top-level `postman-leader`; обычные root/subagent Agents получают runtime deny, execute path повторно проверяет caller fail-closed, а blank-session `agent-preset/selected` заменяет старый restriction на restriction текущей live composition.
-- Bridge delegation создаёт fresh one-shot `codex / gpt-6-luna` child с `maxDepth = 1` и узким transport-only toolFilter; follow-up, mode и continuation Web-запроса выбирает parent Leader.
-- Stage 1: Leader владеет Secretary ×1, обычными Worker ×2 и Sol Worker ×1; Sol — собственными такими же Worker ×2. Worker/Secretary: `codex / gpt-6-luna / low`, direct native tools, no PTC/delegation, durable independent FAST assignment budget normal 48/60 (small bounded assignments may use less); Sol: `gpt-6.1-sol / xhigh` и обязательное механическое делегирование. Exact parent владеет controls/report/quota. Host внедряет канонический role skill при initial/follow-up/cold resume. Secretary ledger приватен для Leader/task, вне Git; compact сохраняет Session/budget, fresh заменяет ID без visible history, сохраняя audit/ledger. Stop/fresh и exhaustion не доказывают успех. Stage 3: новая нетривиальная задача → Leader routing/compact plan → explicit user approval → execution; trivial read-only/factual прямо. Sol — дорогой Leader-selectable approved-plan route без отдельного role permission/нового ApprovalService; unknown != complex, полезное cheap bounded evidence до escalation, direct Sol для явно сложного local engineering/review, PostmanAsk для external/current research или independent outside opinion. Continuation и preapproved conditional Sol escalation без повторного approval; новая цель/material change → новый approval плана. Direct/Web и trusted grant/runner authority сохраняются.
-- Authority supervisor result — trusted Direct terminal из exact child scope, а не Luna prose. Для text terminal parent Leader ветвится по `deliveryMode`: `inline` анализирует `assistantText`, `file` использует verified `resultFile` descriptor и при необходимости читает exact Markdown выборочно через свои `read`/`grep`; Bridge child файл не rehydrate-ит.
-- Agent presets не владеют model routing; для роли Leader `GPT-6 Sol` выбирается отдельно в model selector, Bridge Luna остаётся hard-fixed.
-- Оба режима используют один trusted `postman_send_current_turn()` без text arguments; Harness сам различает exact current-message trigger и сохраняет exact payload.
-- PostmanAsk success — только `TEXT_RESULT_DURABLE` после exact REQ-bound BEGIN/END envelope; обычный assistant text не является result.
-- После `TEXT_RESULT_DURABLE` Direct PostmanAsk использует size-based handoff: `<=4096` символов остаются `deliveryMode=inline` и проходят strict `postman_ask_validate_reply`; более длинный exact result атомарно сохраняется как UTF-8 `POSTMAN_<REQ>_ANSWER.md`, terminal возвращает только проверенный file descriptor без `assistantText`, а Luna не rehydrate-ит файл обратно в context.
-- PostmanAsk использует существующий Web Worker 10-second no-artifact fresh re-proof перед text-envelope validation; отдельный browser transport не создаётся.
-- Artifact terminal surface: `RESULT_DURABLE`, `ASSISTANT_COMPLETED_NO_ARTIFACT`, `ARTIFACT_REJECTED`, `POSTMAN_TRANSPORT_FAILED`; первые три являются artifact handoff, transport failure остаётся отдельным fail-closed исходом. Text success surface — `TEXT_RESULT_DURABLE`; text trigger validation failure остаётся transport failure.
-- `ASSISTANT_COMPLETED_NO_ARTIFACT` требует fresh reproof через 10 секунд; изменение assistant text/SHA запускает новое 10-секундное grace window.
-- ZIP, отклонённый minimal transport validator, немедленно завершает REQ как `ARTIFACT_REJECTED`.
-- Reminders 10/20/30/40/50 — absolute slots; soft deadline 60 минут, текущий recovery начатый до него может закончиться только до soft+45s. Recovery consume-ит все наступившие pending slots без очереди догоняющих сообщений. 50 natural Russian continuation templates не показывают REQ/control identifiers; trusted state сохраняет exact text/hash/templateId, slot/eventId и доказанную user-turn relation (ordinal/prefix/groupKey). Reminder безопасен только при WORKING без final latch; 5-second Send window/poll 1s/one-shot click сохраняются.
-- Connection headline не требует subtitle; modern turn wrapper не исключает system UI. Additional Processing выполняет Stop-if-present (ABSENT/UNKNOWN без повторного click)→Reload exact chat→original task lineage/composer re-proof→uniform wait 10–17s→natural Continue. Один banner episode = один bounded cycle; disappearance re-arms, второй flow не накладывается. Durable/failure state содержит bounded 256-event журнал и detector evidence/reasons/counters.
-- Recovery выполняется в том же exact ChatGPT conversation; reload не создаёт новый REQ и не повторяет исходный prompt.
-- Manual `@Postman --chat <old REQ> <intent>` / `@PostmanAsk --chat <old REQ> <intent>` используют exact сохранённый conversation; automatic continuation остаётся artifact-only.
-- Automatic continuation использует explicit `-AutomaticContinuation` только после non-durable artifact terminal: максимум два новых REQ на root chain (`continuationIndex` 1 и 2); после исчерпания требуется отдельное решение. Ручной `--chat` начинает новую root chain с индексом 0. Worker follow-up не относится к этому пределу.
-- `POSTMAN_TRANSPORT_FAILED` автоматически не продолжается.
-- Normal Postman transport универсален: безопасный ZIP и trusted `RESULT_DURABLE` подтверждают происхождение, целостность и сохранность, но не пригодность patch и не разрешение на применение. На downstream boundary Host сохраняет durable grant по exact Leader session + REQ для trusted ZIP/SHA; Sol отдельно авторизует REQ через `postman_worker({task, artifactRequestId})`.
-- Для implementation ZIP ChatGPT Web следует `REPO_POLICY.md`, `system/implementation-package-workflow.md` и `system/implementation-package-authoring.md`: `manifest.json`, Git-generated `changes.patch`, `README.md`, `TEST_PLAN.md`, только относящиеся к изменению тесты и узкое исключение `.gitignore` в том же patch для иначе игнорируемых новых файлов. Пакет не приносит собственного runner или grant-механизма: Leader-owned durable Host grant принадлежит downstream orchestration.
-- Тот же continuable Worker получает trusted REQ, не model-authored ZIP path, использует единственную Host-prepared task branch и тот же clean worktree на опубликованном REQ commit, не создавая вторую ветку и вызывает `implementation_artifact_apply({requestId, worktree})`. Host проверяет caller и SHA-256, подставляет сохранённый exact ZIP и запускает существующий `system/implementation_package_runner.py`. Runner PASS с `manifest.tests` на реальном target worktree authoritative при неизменных релевантных inputs: Worker inspect-ит exact result/status/diff, но не повторяет те же tests вручную. Worker сообщает через `report` (приём задания — не завершение). На PASS сообщает результат и затронутые пути, но не публикует автоматически; на FAIL передаёт диагностику без ручного ремонта. Sol выбирает дальнейший шаг. Worker остаётся обычным coding-agent с shell: граница запрещает не все самостоятельные локальные запуски, а доступ неавторизованного Worker к trusted grant/tool. Публикация — отдельное действие согласно `REPO_POLICY.md`; merge требует отдельной команды.
-- Новые задачи: Host `postman_task_prepare` создаёт task branch/worktree от exact `origin/main`; Bridge публикует REQ в ту же ветку. Dirty restore сохраняет прежнюю папку и создаёт новую изоляцию без reset/clean. Старые pinned REQ, grants и refs не перепривязываются; task abandon сохраняет audit, не объявляет PASS и не выполняет Git cleanup. Merge и stable preview требуют отдельных решений `REPO_POLICY.md`.
-- Normal Postman не выполняет automatic Result Workspace registration и сам не переходит к Git integration или merge.
-
-PR #242 уже входит в `preview`. Разработка #246 совмещает `workers[id]` и отдельные lifecycle-свидетельства каждого Worker, не переносит устаревший drain из старого prepareRestore. Постоянные worktree и активная установка не меняются; накладка `dsh-subagent` остаётся SHA-привязанной offline-поправкой для отдельного будущего развёртывания. Историческое отсутствие `turn/end` не имеет установленной причины.
+Подпроект не переопределяет AGENTS, REPO_POLICY и полномочия ролей. При обычной разработке Postman без exact trigger транспорт не запускается.

@@ -1,30 +1,30 @@
-# ПТС-ядро
+# PTC-ядро
 
 id: ptc
 status: active
-updated: 2026-10-02
+updated: 2026-10-20
 
 ## Цель
 
-Безопасный программный вызов штатных Harness-инструментов с сохранением исходной личности и проверок прав. Этап 1 — самостоятельное изолированное ядро QuickJS; Postman Stage 2 — канонический PTC-first верхнеуровневый Leader; исторический этап 4 исследовал read-only ПТС Worker (текущие FAST роли его не получают). Живая проверка Leader этапа 3 проведена частично; полная cross-session isolation отдельно не подтверждена.
+Программные пакетные вызовы штатных DSH-инструментов с исходной идентичностью, правами и техническими пределами. QuickJS работает в отдельном процессе. Postman Leader и Sol используют PTC обязательно; ordinary Worker, Secretary и Bridge работают без PTC.
 
-## Текущий фокус и следующий шаг
+## Текущая модель
 
-Канонический production `postman-leader` и compatibility `postman-leader-ptc` используют `postman-leader-supervisor` revision 9, Program-First с canonical discipline v8 и concurrency=1. Полная supervisor control plane включает Sol dispatch, safe external_event conclusion, bounded team status, exact Bridge stop и existing Worker lifecycle с Sol subtree cascade/fresh. Exact Sol Worker имеет только `postman-sol-worker-engineering` revision 2; собственные Worker controls PTC-only и parent-scoped; report/notify_parent direct-only. Safe external_event auto-yield также доступен Sol после accepted owned Worker/interrupt/fresh либо при доказанной уже активной exact own Worker работе. Sol report — terminal assignment result; PARTIAL/BLOCKED можно доставить с честно незавершёнными owned children, без их фиктивного settlement; settled binding не требует close. Ordinary Worker и Secretary — `gpt-6-luna/low`, independent FAST budget normal 48/60, smaller for obviously short bounded assignments, no PTC/delegation; Bridge no PTC. Actual inherited preset scope, late tool composition и parent-only escalation сохранены. Current normative contract — [PTC_CONTRACT.md](PTC_CONTRACT.md); исторические Worker PTC этапы ниже не являются текущей role matrix. Stage 2 проверяется локально с controlled LLM, real QuickJS/ToolRuntime/cold resume/production clean install; это не live model acceptance или deployment.
+`postman-leader-supervisor` revision 10 и `postman-sol-worker-engineering` revision 3 используют внедряемую дисциплину version 10. Обязателен только `program`; `description` необязателен, `wait_for_event:true` поручает закончить ход и ждать адресного события либо нового сообщения. Host не доказывает право ждать и не анализирует историю для восстановления доказательств.
 
-Leader limits: 300000 ms, 256 nested calls, 64 MiB QuickJS, 16 MiB aggregate bridge, concurrency 1; Postman наследует core DEFAULT_LIMITS.maxOutputBytes: 512 KiB результата и отдельно 512 KiB суммы logs; политика размеров восстановлена по базе PR. Общий runtime допускает не более 10 процессов. Helpers: exact `expectStatus` со shared Host status table по имени видимого инструмента, UTF-8 чтение до 4 MiB на файл, default retained budget 480 KiB у `readMany/mapTextFiles`; у `grepMany` отдельного byte limit нет, строгие формы JSON/grep results сохранены. Большие данные предпочтительно сокращать внутри PTC, но нужный модели результат до штатного максимума допустим. Чтение переиспользуется в локальных переменных; кэша нет, reread после mutation сохраняется. Leader `external_event` + exact accepted Worker/interrupt/Bridge producer или доказанная уже активная exact работа автоматически завершает turn независимо от `yield_on_success`; prepare alone не создаёт WAIT. После authoritative outer result queued next-step события/контексты сохраняются в native inbox и рассматриваются в новом turn, не в продолжении для yield; ordinary policies/veto сохраняются. `mapTextFiles` отвергает сохранение полного исходного text, включая вложенные структуры; `readMany` остаётся raw reader. На каждый запуск — компактная `postman/ptc-run` диагностика через штатный Cordis logger (не session event), включая совместимый underbatchedCandidate, descriptive smallSemanticPhase/thinSemanticPhase (даже при needsModelDecision:true) и oversizedResultCandidate (>64 KiB или maxOutputBytes; только диагностика) и yieldBlockedReason; Jsonl/cold resume больше не встречает неизвестный тип. Двухпроцессный round-trip exact Worker и PTC/discipline/max в первом resumed request подтверждены. Provisional Worker уже в первом request может послать exact `NEEDS_LEADER_GUIDANCE:`, но не FYI. Новый этап сокращает model-round overhead, не расширяет authority и не меняет native Harness PTC. Проверяется автоматически через настоящий QuickJS/ToolRuntime и установленный Agent loop без живой модели; установка и live acceptance остаются отдельным этапом.
+Вложенные отказы и ошибки ToolRuntime возвращаются как данные. Ошибки программы, отмена и технические пределы сохраняются; прежние эффекты не повторяются. Helper проверки статусов, обязательные типы границ, underbatching и goal-breaker удалены. Helpers чтения и измерения JSON остаются с техническими лимитами.
 
-## Границы и решения
+Рабочий каталог определяется назначением; Git-подготовка Host и дополнительные файловые fences не нужны. Нативные права, ownership, role restrictions, явный отзыв и технические пределы сохраняются. Leader не получает низкоуровневые инструменты Sol/Worker. Готовый результат и событие не зависят от идеального отчёта или формального статуса.
 
-- Новая программа — новый процесс и QuickJS runtime; профили — данные, а не названия ролей. Нет наследования, второго реестра Worker, долгоживущей REPL или автоматического повтора. Общие пределы runtime действуют для трёх независимых Worker.
-- Lab QuickJS на PR #215 пользователем подтверждён живым; это не означает, что каждый старый тест был live. Проверенный механизм обычного Promise перенесён выборочно; Asyncify с известной ошибкой очистки не применяется.
-- Аудит `dsh-ptc-plus@0.3.2` завершён: Node-пути к файлам/процессам/окружению делают его недостаточной границей; изменение Plus не входит в текущую задачу.
-- Будущий конструктор лидеров и субагентов — роли, навыки, инструменты, ограничения и сохранённые пресеты — отложен; этап 1 предоставляет лишь проверяемый профиль.
+Нормативные интерфейсы и пределы — [PTC_CONTRACT.md](PTC_CONTRACT.md). Изменение source/PR не обновляет действующий Host. Изолированные тесты и проверка установки не означают live model acceptance; установка/переключение — отдельный согласованный этап.
 
-## Живые проверки и следующая граница
+## Границы
 
-Для experimental Leader в установленной сборке подтверждены: точный namespace, отсутствие Node globals, настоящие `read/grep/get_goal`, `maxWallMs` и новый запуск после timeout, внешний пользовательский Stop и новый запуск после abort. Вызов `web_fetch` дошёл до штатного инструмента, но web provider отсутствовал. Stage 4 Worker live подтвердил namespace PASS, отсутствие Node globals и mutation/shell/privileged PTC functions, настоящий glob/read/grep PASS, continuable follow-up PASS, selective stop трёх Worker PASS и отсутствие PTC production Worker PASS. Одновременно `read("plugins/dsh-ptc/src/runtime.js")` прочёл `.dsh`/session cwd вместо task worktree — поэтому этап 5 был остановлен. Этап 4.5 исправляет этот Host-side дефект; его live-приёмка не проводилась, автоматическая cross-session проверка не заменяет live cross-session isolation. Отдельное разрешение потребуется до установки/загрузки ветки и модели. Этап 5 реализован и проверен автоматическими тестами без модели: `write/edit` внутри Worker PTC идут через тот же Host-side guard к штатному ToolRuntime с exact Worker Agent. Успешная mutation не откатывается при поздней ошибке; shell внутри PTC отсутствует. Stage 5A (защита от конкурентной враждебной перестановки namespace между ordinary Worker) отложен и не является prerequisite MVP. Live acceptance остаётся отдельным Stage 6; установка и приёмка моделью не проводились.
+- Новая программа — новый процесс/runtime; нет долгоживущей REPL и автоматического повтора.
+- Профили — данные, а не второй реестр агентов. Runtime сохраняет обычный ToolRuntime и исходного Agent.
+- Native Harness Code Mode и `dsh-ptc-plus` не изменяются этим адаптером.
+- Технические детали исторических этапов и прежние live-результаты находятся в [JOURNAL.md](JOURNAL.md); они не переносят PASS на текущую установку автоматически.
 
 ## Прочитать сначала
 
-`AGENTS.md`, `REPO_POLICY.md`, этот файл, [PTC_CONTRACT.md](PTC_CONTRACT.md), [JOURNAL.md](JOURNAL.md), `plugins/dsh-ptc/README.md`.
+`AGENTS.md`, применимый `REPO_POLICY.md`, этот файл, [PTC_CONTRACT.md](PTC_CONTRACT.md), `plugins/dsh-ptc/README.md`. Журнал нужен только для истории затронутого механизма.

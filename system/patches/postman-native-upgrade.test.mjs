@@ -13,6 +13,23 @@ const sdk=createRequire(process.env.DSH_INSTALL_SDK ?? process.env.DSH_CAPABILIT
 const names=['dsh-subagent','dsh-session','dsh-goal-round-driver','dsh-tool-goal','dsh-tool-pwsh']
 const images=Object.fromEntries(names.map(name=>[name,readFileSync(sdk.resolve('@deepseek-ai/'+name))]))
 const lf=text=>text.toString().replaceAll(String.fromCharCode(13),'')
+// Expected current images remove the former transcript interpretation.
+const previousImages={...images}
+{
+ let source=lf(images['dsh-goal-round-driver'])
+ if(source.includes('function hasWorkToContinue(agent)')){
+  const start=source.indexOf('\t/** Goal bookkeeping and a delivered answer'),end=source.indexOf('\t/** Whether this exact lifecycle',start)
+  source=(source.slice(0,start)+source.slice(end)).replace(' && hasWorkToContinue(state.agent)','')
+   .replace('\t\treturn ctx.fiber.state === 2 && !state.stopping','\t\t// An authoritative plugin wait defers only automatic goal admission.\n\t\t// Native inbox input and the existing checkpoint recheck stay unchanged.\n\t\treturn ctx.fiber.state === 2 && !state.stopping')
+ }
+ images['dsh-goal-round-driver']=Buffer.from(source)
+ source=lf(images['dsh-tool-goal'])
+ if(source.includes('// A terminal answer in this very response')){
+  const start=source.indexOf('\t\t\t// A terminal answer in this very response'),end=source.indexOf(' exec.deferContext(createUserMessage({',start)
+  source=source.slice(0,start)+'\t\t\tif (authority.kind === "goal-round")'+source.slice(end)
+ }
+ images['dsh-tool-goal']=Buffer.from(source)
+}
 // Fixtures start at the native-only image even when the installed SDK already has the approved panel delta.
 images['dsh-session']=Buffer.from(lf(images['dsh-session']).replace('\t\t\t...surfaceOpts?.ignorable === true ? { ignorable: true } : {},\n',''))
 const canonical=bytes=>lf(bytes).replace('this.ownerCtx.get("agentPresets")?.serviceFor(agent, "compaction")','this.ownerCtx.agentPresets?.serviceFor(agent, "compaction")')
@@ -48,7 +65,7 @@ function historical(f,kind){
 function beforeOtherTargets(f){
  reverse(f,'app-owner','dsh-tool-pwsh')
  reverse(f,'session-events','dsh-session');reverse(f,'child-cutoff','dsh-session')
- reverse(f,'goal-continuation','dsh-goal-round-driver');reverse(f,'goal-continuation','dsh-tool-goal')
+ reverse(f,'goal-continuation','dsh-goal-round-driver')
  // The SDK ships this module as LF; Git on Windows can write CRLF while
  // reversing its patch. Hash the original SDK line-ending composition.
  writeFileSync(f.paths['dsh-goal-round-driver'],lf(readFileSync(f.paths['dsh-goal-round-driver'])))
@@ -60,14 +77,13 @@ function verifyCurrent(f){
 test('current five-target native composition is idempotent',t=>{
  const f=fixture(t),result=applyPostmanNativeChildCutoff([f.anchor]);assert.equal(result.length,5);assert.ok(result.every(t=>!t.updated));verifyCurrent(f)
 })
-test('previous wait-only goal image upgrades without changing other targets',t=>{
- const f=fixture(t),path=f.paths['dsh-goal-round-driver']
- reverse(f,'goal-continuation','dsh-goal-round-driver');reverse(f,'goal-continuation','dsh-tool-goal')
- const old=lf(readFileSync(path)).replace('\t\treturn ctx.fiber.state === 2 && !state.stopping && ctx.agents.get(state.agent.id) === state.agent && state.agent.status === "idle" && !state.competingQueued;',
-  '\t\t// An authoritative plugin wait defers only automatic goal admission.\n\t\t// Native inbox input and the existing checkpoint recheck stay unchanged.\n\t\treturn ctx.fiber.state === 2 && !state.stopping && ctx.agents.get(state.agent.id) === state.agent && state.agent.status === "idle" && !state.competingQueued && ctx.bail("goal/continuation-defer", state.agent) !== true;')
- assert.equal(createHash('sha256').update(old).digest('hex'),'93733a1750665882a3f5bce5bc96c7249d8ab019dfb91e25ff736b2f7bd27d77')
- writeFileSync(path,old)
- const result=applyPostmanNativeChildCutoff([f.anchor]);assert.equal(result.filter(t=>t.updated).length,2);verifyCurrent(f)
+test('previous semantic goal overlays upgrade to explicit waiting and native goal reporting',t=>{
+ const f=fixture(t)
+ for(const name of ['dsh-goal-round-driver','dsh-tool-goal'])writeFileSync(f.paths[name],previousImages[name])
+ const result=applyPostmanNativeChildCutoff([f.anchor]);verifyCurrent(f)
+ assert.doesNotMatch(readFileSync(f.paths['dsh-goal-round-driver'],'utf8'),/hasWorkToContinue|needsModelDecision|\.boundary/)
+ assert.doesNotMatch(readFileSync(f.paths['dsh-tool-goal'],'utf8'),/finalReady/)
+ assert.equal(result.filter(t=>t.updated).length,previousImages['dsh-goal-round-driver'].equals(images['dsh-goal-round-driver'])?0:2)
 })
 test('older composition without optional pwsh is four-target idempotent',t=>{
  const f=fixture(t);rmSync(join(f.root,'node_modules/@deepseek-ai/dsh-tool-pwsh'),{recursive:true})
@@ -75,7 +91,7 @@ test('older composition without optional pwsh is four-target idempotent',t=>{
 })
 for(const kind of ['cold','close'])test('unchanged historical '+kind+' preimage upgrades all five targets then is idempotent',t=>{
  const f=fixture(t);historical(f,kind);beforeOtherTargets(f)
- const result=applyPostmanNativeChildCutoff([f.anchor]);assert.equal(result.length,5);assert.ok(result.every(t=>t.updated));verifyCurrent(f)
+ const result=applyPostmanNativeChildCutoff([f.anchor]);assert.equal(result.length,5);assert.equal(result.filter(t=>t.updated).length,4);verifyCurrent(f)
 })
 for(const bad of names)test('unknown '+bad+' refuses before any of five target replacements',t=>{
  const f=fixture(t);historical(f,'cold');beforeOtherTargets(f)

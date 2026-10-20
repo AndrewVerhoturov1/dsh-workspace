@@ -73,8 +73,13 @@ def signal(channel, capability, outcome, *, message="", report="", request=None,
         target = Path(report)
         allowed = Path(binding["writeRoot"] or binding["workspaceRef"]).resolve()
         target = (allowed / target).resolve() if not target.is_absolute() else target.resolve()
-        if target.is_relative_to(allowed):
-            report_ref = str(target)  # Foreign report is ignored, never opens foreign data or destroys the bell.
+        # The assignment folder is guidance, not a Host filesystem policy.
+        # Keep private channel capabilities out of report attachments.
+        channel_root = Path(binding["channel"]).resolve()
+        private = target.is_relative_to(channel_root)
+        output = binding.get("writeRoot") and target.is_relative_to(Path(binding["writeRoot"]).resolve())
+        if not private or output:
+            report_ref = str(target)
     event = {"version": 1, **{key: binding[key] for key in IDENTITY},
              "reportedOutcome": OUTCOMES[outcome], "message": message, "reportRef": report_ref}
     path = Path(binding["channel"]) / "event.json"

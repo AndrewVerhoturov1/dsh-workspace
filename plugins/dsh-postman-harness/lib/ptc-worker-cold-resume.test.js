@@ -17,7 +17,7 @@ const phase=async(dir,type,resume,legacy=false)=>{
     const start=ctx.subagents.startContinuable.bind(ctx.subagents)
     ctx.subagents.startContinuable=spec=>start({...spec,request:{...spec.request,toolFilter:{deny:[...spec.request.toolFilter.deny,'ptc_execute']}}})
   }:undefined,plan:(a,_r,n,w)=>type==='sol'&&n===1?
-    {name:'ptc_execute',args:{program:'const a=await tools.read({file_path:"known.txt"});const b=await tools.glob({pattern:"*.txt"});const c=await tools.grep({pattern:"known"});return {a,b,c}',description:'Batch exact local evidence then review',boundary:'semantic_decision'}}:
+    {name:'ptc_execute',args:{program:'const a=await tools.read({file_path:"known.txt"});const b=await tools.glob({pattern:"*.txt"});const c=await tools.grep({pattern:"known"});return {a,b,c}',description:'Batch exact local evidence then review'}}:
     type==='secretary'&&!resume&&n===1?
     {name:'postman_secretary_ledger',args:{content:'durable exact facts; PASS inputs fixture',revision:0}}:
     {name:'report',args:{output:'Exact bounded '+type+' facts; verified fixture'}}})

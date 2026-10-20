@@ -166,7 +166,8 @@ for (const profile of ['web', 'headless']) test(profile+' connects independent d
 // Deterministic wording regressions only, NOT an assertion of LLM compliance.
 // No stable live-model semantic eval runner exists in this package.
 for(const [scenario,rule] of [
-  ['small edit beside tempting refactor', /smallest sufficient change and preserve existing contracts/],
+  ['small edit beside tempting refactor', /smallest sufficient change and preserve user-facing guarantees/],
+  ['explicitly removed internal policy', /Internal contracts, guards, states, and tests explicitly superseded by the current request may be changed or removed/],
   ['adjacent issue outside scope', /adjacent issue that is not required for the task, report it instead of fixing it/],
   ['task needs no new dependency', /Do not add.*dependencies.*unless required by the current task or justified by a concrete material risk present now/],
   ['local change needs no generic abstraction', /Do not add abstractions, layers, wrappers/],

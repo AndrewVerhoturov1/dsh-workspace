@@ -10,7 +10,7 @@ import { createDirectCurrentTurnToolConfigs } from './direct-current-turn.js'
 import { postmanInputGrants } from './postman-input-files.js'
 const tick = () => new Promise(resolve => setImmediate(resolve))
 const call = async (f, name, args = {}) => {
-  const r = await f.execute(f.leader, 'ptc_execute', { program: 'return await tools.' + name + '(' + JSON.stringify(args) + ')', boundary: 'semantic_decision', description: 'Verify registered exact Bridge lifecycle' })
+  const r = await f.execute(f.leader, 'ptc_execute', { program: 'return await tools.' + name + '(' + JSON.stringify(args) + ')', description: 'Verify registered exact Bridge lifecycle' })
   assert.equal(r.isError, false, JSON.stringify(r)); assert.equal(r.value.status, 'ok', JSON.stringify(r.value)); return r.value.value
 }
 
@@ -20,7 +20,7 @@ test('production Bridge A READY re-waits on active B with no dispatch/poll/FYI r
   const endings=[Promise.withResolvers(),Promise.withResolvers(),Promise.withResolvers()],children=[],accepted=[],ready=[]
   let f
   t.after(async()=>{gates.forEach(g=>g.resolve());await f?.dispose();await rm(dir,{recursive:true,force:true,maxRetries:5})})
-  const ptc=program=>({name:'ptc_execute',args:{program,description:'Handle terminal then wait for exact remaining Bridge event',boundary:'external_event'}})
+  const ptc=program=>({name:'ptc_execute',args:{program,description:'Handle terminal then wait for exact remaining Bridge event',wait_for_event:true}})
   f=await capabilityRuntime(dir,{preset:'postman-leader',plan:async(a,r,n)=>{
     if(a.id==='leader'){
       assert.ok(!r.tools.some(t=>t.name==='postman_yield'));assert.doesNotMatch(r.system,/postman_yield|POSTMAN_YIELDED/)
@@ -104,7 +104,7 @@ test('production inherited PTC Bridge stop retains input pin through actual clea
   postmanInputGrants.release(f.leader)
   assert.equal(existsSync(root), true, 'opaque Bridge pin owns bytes after Leader grant release')
   const stopped = await call(f, 'postman_bridge_stop', { bridge_job_id: accepted.bridgeJobId })
-  assert.equal(stopped.status, 'POSTMAN_BRIDGE_STOP_REQUESTED', JSON.stringify(stopped)); assert.equal(stopped.intentPersisted, true)
+  assert.equal(stopped.status, 'POSTMAN_BRIDGE_STOP_REQUESTED', JSON.stringify(stopped)); assert.equal(stopped.cancellationRequested, true)
   assert.equal(signal.aborted, true)
   await disposing.promise
   assert.equal(disposed, 1); assert.equal(existsSync(root), true)

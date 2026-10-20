@@ -1,179 +1,107 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile, readFile, access } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { randomUUID } from 'node:crypto'
 import { capabilityRuntime } from './fixtures/postman-capability-runtime.js'
 
-// Real production Host, QuickJS, native continuable children, report and inbox.
-// Only model responses and their independent completion gates are controlled.
-for (const queued of [false, true]) test('Leader re-enters external_event for existing Worker B after A report, queued=' + queued, { timeout: 45000 }, async t => {
-  const dir = await mkdtemp(join(tmpdir(), 'postman-existing-workers-'))
-  const gates = [Promise.withResolvers(), Promise.withResolvers()]
-  const ids = [], endings = [Promise.withResolvers(), Promise.withResolvers(), Promise.withResolvers()]
+const ptc = (program, wait = false) => ({ name: 'ptc_execute', args: { program, ...(wait ? { wait_for_event: true } : {}) } })
+const value = result => { assert.equal(result.isError, false, JSON.stringify(result)); return result.value.value }
+const exists = async file => { try { await access(file); return true } catch { return false } }
+async function until(check, message) {
+  const deadline = Date.now() + 15000
+  while (!await check()) {
+    assert.ok(Date.now() < deadline, message)
+    await new Promise(resolve => setTimeout(resolve, 25))
+  }
+}
+
+// Real production Host, QuickJS, native continuable children, report and disk
+// sessions. Only model output and the two independent report times are controlled.
+test('branchless Leader dispatches two native Workers through PTC and closes only the selected peer', { timeout: 45000 }, async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'postman-native-workers-'))
+  const gates = [Promise.withResolvers(), Promise.withResolvers()], ids = []
   let f
   t.after(async () => { gates.forEach(g => g.resolve()); await f?.dispose(); await rm(dir, { recursive: true, force: true, maxRetries: 5 }) })
-  const ptc = program => ({ name: 'ptc_execute', args: { program, description: 'Handle known facts then wait for exact Worker event', boundary: 'external_event' } })
-  f = await capabilityRuntime(dir, { preset: 'postman-leader', plan: async (a, r, n) => {
-    assert.ok(!r.tools.some(t => t.name === 'postman_yield'))
-    if (a.id === 'leader') {
-      if (n === 1) return ptc('const a=await tools.postman_worker({task:"A",createNew:true});const b=await tools.postman_worker({task:"B",createNew:true});return {a,b}')
-      await f.childDone(ids[n - 2]) // Exact native settlement before known processing, not polling.
-      if (n === 2) return ptc('await tools.read({file_path:' + JSON.stringify(join(f.worktree, 'known.txt')) + '});return {handled:"A"}')
-      assert.equal(n, 3, 'only dispatch + A event + B event model requests')
-      return { text: 'Both real reports processed' }
-    }
-    const index = ids.indexOf(a.id)
-    // IDs are captured at native admission before child model execution.
-    await gates[index].promise
-    return { name: 'report', args: { output: 'PASS exact Worker ' + index } }
+  f = await capabilityRuntime(dir, { preset: 'postman-leader', reportDelivery: 'next-step', plan: async (agent, request, n) => {
+    if (agent.id === 'leader') return n === 1
+      ? ptc('const a=await tools.postman_worker({task:"Read A",createNew:true});const b=await tools.postman_worker({task:"Read B",createNew:true});return {a,b}', true)
+      : { text: 'Received executor facts; acceptance remains a Leader decision.' }
+    assert.equal(request.tools.some(tool => tool.name === 'ptc_execute'), false, 'ordinary Worker uses its direct tools')
+    assert.equal(request.tools.some(tool => tool.name === 'postman_worker'), false, 'ordinary Worker does not delegate')
+    if (n === 1) return { name: 'read', args: { file_path: join(dir, 'known.txt') } }
+    await gates[ids.indexOf(agent.id)].promise
+    return { name: 'report', args: { output: 'Unverified notes from Worker ' + ids.indexOf(agent.id) } }
   } })
-  f.ctx.on('session/event', (s, e) => { if (s.id === 'leader' && e.type === 'turn/end') endings[e.data.turn - 1]?.resolve() })
   const start = f.ctx.subagents.startContinuable.bind(f.ctx.subagents)
-  f.ctx.subagents.startContinuable = async spec => { ids.push(spec.childId); return start(spec) }
-  f.ctx.on('tools/post-execute', async (exec, result, next) => {
-    const decision = await next()
-    // B arrives after Host proved it active, but before the outer result reaches
-    // AgentLoop: exercise the existing queued-event boundary, not a fake source.
-    if (queued && exec.agent.id === 'leader' && exec.name === 'ptc_execute' && result.value?.value?.handled === 'A') {
-      assert.equal(result.concludesTurn, true); gates[1].resolve(); await f.childDone(ids[1])
-    }
-    return decision
-  })
-  await f.prepare(); await writeFile(join(f.worktree, 'known.txt'), 'known processing')
-  await f.turn(f.leader, 'Approved bounded two independent Worker event regression')
-  assert.equal(ids.length, 2); assert.equal(f.requests.filter(r => r.agent.id === 'leader').length, 1)
-  gates[0].resolve(); await endings[1].promise
-  if (!queued) {
-    await f.leader.whenIdle()
-    assert.equal(f.ctx.agents.get(ids[1]).status, 'running')
-    assert.equal(f.requests.filter(r => r.agent.id === 'leader').length, 2, 'no yield-only round')
-    gates[1].resolve()
-  }
-  await endings[2].promise; await f.leader.whenIdle(); await Promise.all(ids.map(id => f.childDone(id)))
-  assert.equal(f.requests.filter(r => r.agent.id === 'leader').length, 3)
-  const outer = f.results.filter(r => r.agent.id === 'leader' && r.name === 'ptc_execute')
-  assert.equal(outer.length, 2); assert.ok(outer.every(r => r.result.concludesTurn === true))
-  assert.deepEqual(outer[1].result.value.effects.calls.map(c => c.name), ['read'], 'no dispatch or status polling on re-wait')
-  assert.deepEqual(f.leader.session.events.filter(e => e.type === 'tool/call').map(e => e.data.name), ['ptc_execute', 'ptc_execute'])
-  assert.deepEqual(f.leader.session.events.filter(e => e.type === 'turn/start').map(e => e.data.turn), [1, 2, 3])
-  for (const id of ids) assert.equal(f.leader.session.events.filter(e => e.type === 'user/message' && e.data.source?.kind === 'subagent-report' && e.data.source.senderSessionId === id).length, 1, 'no lost or duplicate report')
-  assert.equal(f.leader.inbox.hasPending, false)
-  // Preserve the old real-cycle close/cold-Session and independent-peer coverage
-  // while replacing its explicit manual-wait tool with the event boundary above.
-  const peerBefore=structuredClone(f.registry.get('leader').workers[ids[1]])
-  const close=await f.execute(f.leader,'ptc_execute',{program:'return await tools.postman_worker_stop('+JSON.stringify({workerSessionId:ids[0],mode:'close'})+')',description:'Close only exact settled Worker; preserve independent peer',boundary:'semantic_decision'})
-  assert.equal(close.value.value.status,'POSTMAN_WORKER_STOPPED',JSON.stringify(close))
-  assert.deepEqual(Object.keys(f.registry.get('leader').workers),[ids[1]])
-  assert.deepEqual(f.registry.get('leader').workers[ids[1]],peerBefore)
-  const saved=await f.ctx.sessionPersistence.inspect(ids[0])
-  assert.equal(saved.meta.parentSession,'leader')
-  assert.equal(saved.events.filter(e=>e.type==='turn/start').length,1)
-  assert.equal(saved.events.filter(e=>e.type==='turn/end').length,1)
-  assert.equal(f.ctx.agents.get(ids[0]),undefined)
-  assert.equal(f.leader.session.events.some(e=>e.type==='assistant/message'&&!e.data.message.content.length),false)
+  f.ctx.subagents.startContinuable = spec => { ids.push(spec.childId); return start(spec) }
+  await writeFile(join(dir, 'known.txt'), 'Local folder facts without a Git repository')
+  await f.turn(f.leader, 'Dispatch two bounded folder inspections')
+  assert.equal(await exists(join(dir, '.git')), false)
+  assert.equal(f.contexts.get('leader').worktree, dir)
+  assert.equal(ids.length, 2)
+  const outer = f.results.find(result => result.agent === f.leader && result.name === 'ptc_execute')
+  assert.equal(outer.result.concludesTurn, true)
+  assert.equal(value(outer.result).a.status, 'POSTMAN_WORKER_TASK_ACCEPTED')
+  assert.equal(value(outer.result).b.status, 'POSTMAN_WORKER_TASK_ACCEPTED')
+  const denied = await f.execute(f.leader, 'postman_worker', { task: 'Direct bypass' })
+  assert.equal(denied.isError, true, 'Leader keeps mandatory PTC')
+
+  gates[0].resolve(); await f.childDone(ids[0]); await f.leader.whenIdle()
+  const peerBefore = structuredClone(f.registry.get('leader').workers[ids[1]])
+  const closed = value(await f.execute(f.leader, 'ptc_execute', {
+    program: 'return await tools.postman_worker_stop(' + JSON.stringify({ workerSessionId: ids[0], mode: 'close' }) + ')',
+  }))
+  assert.equal(closed.status, 'POSTMAN_WORKER_STOPPED')
+  assert.equal(closed.taskCompleted, false, 'closing does not certify the unverified report')
+  assert.deepEqual(f.registry.get('leader').workers[ids[1]], peerBefore)
+  assert.ok(f.ctx.agents.get(ids[1]), 'the independent peer remains active')
+  assert.equal(f.ctx.agents.get(ids[0]), undefined)
+  await assert.rejects(f.ctx.subagents.followup(f.leader, ids[0], [{ type: 'text', text: 'Must not resurrect a closed Worker' }], { signal: new AbortController().signal }), /closed|not open|unknown|admission/i)
+  const saved = await f.ctx.sessionPersistence.inspect(ids[0])
+  assert.equal(saved.meta.parentSession, 'leader')
+  assert.equal(saved.events.filter(event => event.type === 'tool/call' && event.data.name === 'report').length, 1)
+
+  gates[1].resolve(); await f.childDone(ids[1]); await f.leader.whenIdle()
+  for (const id of ids) assert.equal(f.leader.session.events.filter(event => event.type === 'user/message' &&
+    event.data.source?.kind === 'subagent-report' && event.data.source.senderSessionId === id).length, 1)
+  const final = value(await f.execute(f.leader, 'ptc_execute', { program: 'return await tools.postman_worker_stop(' +
+    JSON.stringify({ workerSessionId: ids[1], mode: 'close' }) + ')' }))
+  assert.equal(final.status, 'POSTMAN_WORKER_STOPPED')
+  assert.deepEqual(Object.keys(f.registry.get('leader').workers), [])
+  assert.ok(f.results.filter(result => ids.includes(result.agent.id) && result.name === 'read').every(result => result.result.isError === false))
 })
-// Delayed authoritative native settlement after an already consumed terminal
-// report. No fake notice, timer, polling, new scheduler or live provider.
-for (const scenario of ['baseline','defer','conflicting-output','sol-defer','text-defer','normative-baseline','normative-defer']) test('real report then delayed settlement while B active, ' + scenario, {timeout:45000}, async t => {
-  const normative=scenario.startsWith('normative-')
-  const deferSettlements=!scenario.endsWith('baseline'), redundant=['defer','sol-defer','text-defer','normative-defer'].includes(scenario), solParent=scenario==='sol-defer'
-  const dir = await mkdtemp(join(tmpdir(),'postman-report-settled-'))
-  const reports = [Promise.withResolvers(), Promise.withResolvers()]
-  const releaseSettlement = Promise.withResolvers(), reportDelivered = Promise.withResolvers()
-  const ends = Array.from({length:5},()=>Promise.withResolvers()), ids=[]
-  let f,supervisor,solId, aReviewed=false
-  const ptc = (program,boundary='external_event') => ({name:'ptc_execute',args:{program,boundary,description:'Process exact report, retain other active work, then safe cleanup'}})
-  t.after(async()=>{reports.forEach(g=>g.resolve());releaseSettlement.resolve();await f?.dispose();await rm(dir,{recursive:true,force:true,maxRetries:5})})
-  f=await capabilityRuntime(dir,{preset:'postman-leader',reportDelivery:'next-step',deferSettlements,plan:async(a,r,n)=>{
-    if(solParent && a.id==='leader') return null
-    if(a.id==='leader' || a.id===solId) {
-      supervisor=a
-      if(n===1) return ptc('const a=await tools.postman_worker({task:"A",createNew:true});const b=await tools.postman_worker({task:"B",createNew:true});return {a,b}')
-      if(solParent && f.registry.get('leader').workers[solId]?.lifecycle?.reports.length) return null
-      if(solParent && n===4) return {name:'report',args:{output:'PASS owned child settlement/cleanup verified'}}
-      if(f.registry.get('leader').stage==='closed') return {text:'Exact settlement facts and cleanup verified'}
-      const bReport=a.session.events.some(e=>e.type==='user/message'&&e.data.source?.kind==='subagent-report'&&e.data.source.senderSessionId===ids[1])
-      if(!bReport) {
-        // Same controlled model policy in both normative variants: one final
-        // text judgement for A. Only an unnecessary technical wake can reach
-        // the legacy empty wait branch; production must never request it.
-        if(normative && !aReviewed){aReviewed=true;return {text:'A report reviewed; B has independent active work'}}
-        return scenario==='text-defer' ? {text:'A report reviewed; B has independent active work'} : ptc('return {handled:"A",stillWaiting:"B"}')
-      }
-      await Promise.all(ids.map(id=>f.childDone(id)))
-      return ptc('const c=await tools.postman_worker_compact({workerSessionId:'+JSON.stringify(ids[0])+'});if(c.status!=="POSTMAN_WORKER_COMPACTED")return {status:"cleanup_blocked",c};const a=await tools.postman_worker_stop({workerSessionId:'+JSON.stringify(ids[0])+',mode:"close"});if(a.status!=="POSTMAN_WORKER_STOPPED")return {status:"cleanup_blocked",a};const b=await tools.postman_worker_stop({workerSessionId:'+JSON.stringify(ids[1])+',mode:"close"});if(b.status!=="POSTMAN_WORKER_STOPPED")return {status:"cleanup_blocked",b};const refused=await tools.postman_worker_compact({workerSessionId:'+JSON.stringify(ids[0])+'});if(refused.status!=="POSTMAN_WORKER_TARGET_UNKNOWN")return {status:"cleanup_blocked",refused};const q=await tools.postman_worker_list({});if(q.quota.luna.used!==0||q.workers.length)return {status:"cleanup_blocked",q};'+(solParent?'return {c,a,b,refused,q}':'const closed=await tools.postman_task_close({});return {c,a,b,refused,q,closed}'), 'task_complete')
-    }
-    await reports[ids.indexOf(a.id)].promise
-    return {name:'report',args:{output:'PASS exact bounded report '+ids.indexOf(a.id)}}
-  }})
-  f.ctx.on('session/event',(s,e)=>{if(s.id===(solParent?solId:'leader')&&e.type==='turn/end')ends[e.data.turn-1]?.resolve()})
-  const start=f.ctx.subagents.startContinuable.bind(f.ctx.subagents)
-  f.ctx.subagents.startContinuable=async spec=>{if(solParent && !solId)solId=spec.childId;else ids.push(spec.childId);return start(spec)}
-  f.ctx.on('tools/execute',async(exec,next)=>{
-    const result=await next()
-    if(exec.name==='report'&&exec.agent.id===ids[0]){reportDelivered.resolve();await releaseSettlement.promise}
-    return result
-  })
-  await f.prepare();await f.turn(f.leader,'Approved bounded duplicate-settlement smoke')
-  if(solParent) {await f.execute(f.leader,'ptc_execute',{program:'return await tools.postman_sol_worker({task:"Approved managed Sol smoke"})',boundary:'external_event',description:'Create exact managed Sol for owned child smoke'});await ends[0].promise}
-  reports[0].resolve();await reportDelivered.promise;await ends[1].promise;await supervisor.whenIdle()
-  assert.equal(f.requests.filter(r=>r.agent===supervisor).length,2)
-  if(normative){
-    assert.equal(aReviewed,true,'exactly one necessary A judgement')
-  }
-  const child=f.ctx.agents.get(ids[0])
-  assert.ok(child,'report does not certify native settlement')
-  assert.ok(!child.session.events.some(e=>e.type==='turn/end'))
-  if(scenario==='conflicting-output') child.session.append('assistant/message',{turn:1,step:1,message:{role:'assistant',content:[{type:'text',text:'A conflicting closing result after report'}],id:randomUUID(),source:{kind:'model',provider:'codex',model:'gpt-6-luna'}}},{surfaceOp:'append'})
-  releaseSettlement.resolve();await f.childDone(ids[0]);await supervisor.whenIdle()
-  assert.equal(f.requests.filter(r=>r.agent===supervisor).length,redundant?2:3,'only redundant A settlement judgement disappears')
-  if(redundant) assert.equal(supervisor.inbox.nextStep.filter(m=>m.source?.kind==='subagent-settled').length,1,'durable fact retained without wake')
-  reports[1].resolve();await f.childDone(ids[1]);await ends[redundant?2:3].promise;await supervisor.whenIdle()
-  // task_complete has one normal result review, unrelated to settlement suppression.
-  const requests=f.requests.filter(r=>r.agent===supervisor)
-  const cleanup=f.results.find(r=>r.agent===supervisor&&r.name==='postman_task_close')
-  if(solParent){await f.childDone(solId);assert.deepEqual(Object.keys(f.registry.get('leader').workers),[solId])}
-  else {assert.equal(cleanup.result.value.status,'POSTMAN_TASK_CLOSED',JSON.stringify(cleanup.result));assert.deepEqual(Object.keys(f.registry.get('leader').workers),[])}
-  for(const id of ids){
-    assert.equal(supervisor.session.events.filter(e=>e.type==='user/message'&&e.data.source?.kind==='subagent-report'&&e.data.source.senderSessionId===id).length,1)
-    assert.equal(supervisor.session.events.filter(e=>e.type==='user/message'&&e.data.source?.kind==='subagent-settled'&&e.data.source.senderSessionId===id).length,1)
-  }
-  const supervisorPtcs=f.results.filter(r=>r.agent.id===supervisor.id&&r.name==='ptc_execute')
-  if(normative){
-    assert.equal(supervisorPtcs.length,deferSettlements?2:3,'only real dispatch/cleanup after repair; old technical wake adds an empty wait')
-    assert.equal(supervisorPtcs.filter(r=>r.result.value.effects.calls.length===0).length,deferSettlements?0:1,'same semantic plan has zero wait-only PTC with Host deferral')
-    assert.equal(requests.length,deferSettlements?4:5,'only technical settlement model request disappears')
-  }
-  const meaningfulEvents=supervisor.session.events.filter(e=>e.type==='user/message'&&['subagent-report','subagent-settled'].includes(e.data.source?.kind))
-  console.log(JSON.stringify({scenario:'A-report/A-settled/B-active',case:scenario,deferSettlements,modelRequests:requests.length,ptcTotal:supervisorPtcs.length,emptyWaitingPtcs:supervisorPtcs.filter(r=>r.result.value.effects.calls.length===0).length,boundaryCounts:Object.fromEntries(['external_event','semantic_decision','task_complete'].map(boundary=>[boundary,supervisorPtcs.filter(r=>r.args?.boundary===boundary).length])),uniqueReports: new Set(meaningfulEvents.filter(e=>e.data.source.kind==='subagent-report').map(e=>e.data.source.senderSessionId)).size,uniqueSettlements:new Set(meaningfulEvents.filter(e=>e.data.source.kind==='subagent-settled').map(e=>e.data.source.senderSessionId)).size,trace:meaningfulEvents.map(e=>e.data.source.kind+':'+ids.indexOf(e.data.source.senderSessionId)),cleanup:solParent?'owned-children-retired':cleanup.result.value.status}))
-})
-for (const deferSettlements of [false,true]) test('single final report has one semantic wake, defer='+deferSettlements,{timeout:45000},async t=>{
-  const dir=await mkdtemp(join(tmpdir(),'postman-single-report-'))
-  const reportGate=Promise.withResolvers(), release=Promise.withResolvers(), delivered=Promise.withResolvers()
-  let f,id
-  t.after(async()=>{reportGate.resolve();release.resolve();await f?.dispose();await rm(dir,{recursive:true,force:true,maxRetries:5})})
-  f=await capabilityRuntime(dir,{preset:'postman-leader',reportDelivery:'next-step',deferSettlements,plan:async(a,r,n)=>{
-    if(a.id==='leader') {
-      if(n===1)return {name:'ptc_execute',args:{program:'return await tools.postman_worker({task:"single",createNew:true})',description:'Dispatch exact final Worker',boundary:'external_event'}}
-      return {text:'Exact final report reviewed'}
-    }
-    await reportGate.promise
-    return {name:'report',args:{output:'PASS single synthetic result'}}
-  }})
-  const start=f.ctx.subagents.startContinuable.bind(f.ctx.subagents)
-  f.ctx.subagents.startContinuable=spec=>{id=spec.childId;return start(spec)}
-  f.ctx.on('tools/execute',async(exec,next)=>{const result=await next();if(exec.name==='report'&&exec.agent.id===id){delivered.resolve();await release.promise}return result})
-  await f.prepare();await f.turn(f.leader,'Approved exact single Worker regression')
-  reportGate.resolve();await delivered.promise;await f.leader.whenIdle()
-  assert.equal(f.requests.filter(r=>r.agent===f.leader).length,2)
-  release.resolve();await f.childDone(id);await f.leader.whenIdle()
-  const requests=f.requests.filter(r=>r.agent===f.leader).length
-  assert.equal(requests,deferSettlements?2:3,'only the redundant completed settlement wake disappears')
-  assert.equal(f.leader.inbox.nextStep.filter(m=>m.source?.kind==='subagent-settled').length,deferSettlements?1:0)
-  const outer=f.results.filter(r=>r.agent===f.leader&&r.name==='ptc_execute')
-  assert.equal(outer.length,1);assert.equal(outer.filter(r=>r.result.value.effects.calls.length===0).length,0)
-  const meaningfulEvents=[...f.leader.session.events.filter(e=>e.type==='user/message').map(e=>e.data),...f.leader.inbox.nextStep].filter(m=>['subagent-report','subagent-settled'].includes(m.source?.kind))
-  console.log(JSON.stringify({scenario:'single-report-settled',deferSettlements,parentModelRequests:requests,ptcTotal:outer.length,emptyWaitingPtcs:outer.filter(r=>r.result.value.effects.calls.length===0).length,boundaryCounts:Object.fromEntries(['external_event','semantic_decision','task_complete'].map(boundary=>[boundary,outer.filter(r=>r.args?.boundary===boundary).length])),uniqueReports:new Set(meaningfulEvents.filter(m=>m.source.kind==='subagent-report').map(m=>m.source.senderSessionId)).size,uniqueSettlements:new Set(meaningfulEvents.filter(m=>m.source.kind==='subagent-settled').map(m=>m.source.senderSessionId)).size,tokens:null}))
+
+test('addressed cancel cuts off an active native Worker and preserves its peer and files', { timeout: 45000 }, async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'postman-active-cutoff-')), marker = join(dir, 'started.txt'), kept = join(dir, 'kept.txt')
+  let f, activeId
+  const peerGate = Promise.withResolvers(), ids = []
+  t.after(async () => { peerGate.resolve(); await f?.dispose(); await rm(dir, { recursive: true, force: true, maxRetries: 5 }) })
+  f = await capabilityRuntime(dir, { preset: 'postman-leader', reportDelivery: 'next-step', plan: async (agent, _request, n) => {
+    if (agent.id === 'leader') return n === 1
+      ? ptc('const a=await tools.postman_worker({task:"Run owned bounded shell",createNew:true});const b=await tools.postman_worker({task:"Keep independent peer",createNew:true});return {a,b}', true)
+      : { text: 'Observed native executor event.' }
+    if (agent.id === ids[0]) return n === 1 ? { name: 'pwsh', args: {
+      command: "Set-Content -LiteralPath '" + marker.replaceAll("'", "''") + "' -Value active; Start-Sleep -Seconds 20",
+      description: 'Bounded native cancellation fixture',
+    } } : { text: 'Native command ended.' }
+    await peerGate.promise
+    return { name: 'report', args: { output: 'Peer observations' } }
+  } })
+  const start = f.ctx.subagents.startContinuable.bind(f.ctx.subagents)
+  f.ctx.subagents.startContinuable = spec => { ids.push(spec.childId); return start(spec) }
+  await writeFile(kept, 'preserved user bytes')
+  await f.turn(f.leader, 'Start two explicitly bounded native Workers')
+  activeId = ids[0]
+  await until(() => exists(marker), 'the owned native foreground process must actually start')
+  const peer = structuredClone(f.registry.get('leader').workers[ids[1]])
+  const cancelled = value(await f.execute(f.leader, 'ptc_execute', { program: 'return await tools.postman_worker_stop(' +
+    JSON.stringify({ workerSessionId: activeId, mode: 'cancel' }) + ')' }))
+  assert.equal(cancelled.status, 'POSTMAN_WORKER_CANCELLED', JSON.stringify(cancelled))
+  assert.equal(cancelled.taskCompleted, false)
+  assert.equal(f.ctx.agents.get(activeId), undefined)
+  assert.deepEqual(f.registry.get('leader').workers[ids[1]], peer)
+  await assert.rejects(f.ctx.subagents.followup(f.leader, activeId, [{ type: 'text', text: 'Revoked assignment cannot resume' }], { signal: new AbortController().signal }), /closed|not open|unknown|admission/i)
+  assert.equal(await readFile(kept, 'utf8'), 'preserved user bytes')
+  peerGate.resolve(); await f.childDone(ids[1]); await f.leader.whenIdle()
 })

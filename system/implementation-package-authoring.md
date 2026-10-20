@@ -97,7 +97,7 @@ package-local compatibility framework
 }
 ```
 
-В Leader flow Host `postman_task_prepare` сначала создаёт и публикует одну task branch с clean worktree от exact `origin/main`; Bridge публикует REQ commit в ту же временную task branch через Host, а не в постоянную ветку `main`/`preview`. Web использует опубликованный REQ snapshot. Автор package не выбирает standalone transport branch и не меняет эту границу.
+В Leader flow Worker по поручению Leader готовит временное task worktree от exact `origin/main` по REPO_POLICY. Host не управляет Git рабочего проекта; транспортная публикация REQ/RESULT независима от ветки реализации. Web использует фактически опубликованный REQ snapshot, автор package не меняет транспортную ветку. Целевой каталог применения Worker указывает явно.
 
 `packageBase` может содержать observed SHA во время подготовки, но является информационным полем.
 

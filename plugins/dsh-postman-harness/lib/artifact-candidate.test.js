@@ -244,7 +244,7 @@ test('candidate-shaped terminal cannot create implementation grant or invoke run
   assert.equal(registry.get('leader').artifactGrants?.[REQ], undefined)
 })
 
-test('strict verified durable result sync failure stays visible and grants only after sync', async t => {
+test('strict verified durable result stays visible and explicit use restores its grant', async t => {
   const f = await candidateFixture(t)
   const results = join(f.root, 'results'), requests = join(f.root, 'requests')
   await mkdir(results, { recursive: true }); await mkdir(requests, { recursive: true })
@@ -268,17 +268,17 @@ test('strict verified durable result sync failure stays visible and grants only 
   const first = await jobs.status(parent, 'strict', true)
   assert.equal(first.result.resultZip, f.path)
   assert.equal(first.result.sha256, sha(bytes))
-  assert.equal(first.synchronization, 'busy')
-  assert.equal(await grants.resolve(parent.id, REQ), null)
-  assert.deepEqual({ syncs, sends, grantCalls }, { syncs: 1, sends: 0, grantCalls: 0 })
+  assert.equal(first.synchronization, 'not-required')
+  assert.equal(registry.get(parent.id).artifactGrants?.[REQ], undefined)
+  assert.deepEqual({ syncs, sends, grantCalls }, { syncs: 0, sends: 0, grantCalls: 0 })
   const retried = await jobs.status(parent, 'strict', true)
   assert.equal(retried.status, 'POSTMAN_BRIDGE_TERMINAL')
   assert.equal(await grants.resolve(parent.id, REQ).then(Boolean), true)
-  assert.deepEqual({ syncs, sends, grantCalls }, { syncs: 2, sends: 0, grantCalls: 1 })
+  assert.deepEqual({ syncs, sends, grantCalls }, { syncs: 0, sends: 0, grantCalls: 0 })
   await jobs.dispose()
 })
 
-test('Bridge candidate stays visible after sync failure; retry never resends or grants', async t => {
+test('Bridge candidate stays visible; repeated observations never synchronize, resend or grant', async t => {
   const f = await candidateFixture(t)
   const requests = join(f.root, 'requests'), results = join(f.root, 'results')
   await mkdir(requests, { recursive: true }); await mkdir(results, { recursive: true })
@@ -307,9 +307,9 @@ test('Bridge candidate stays visible after sync failure; retry never resends or 
   assert.equal(status.result.candidate.sha256, sha(bytes))
   assert.equal(status.result.candidate.verified, false)
   assert.equal(status.result.candidate.applyEligible, false)
-  assert.deepEqual({ syncs, sends, grants }, { syncs: 1, sends: 0, grants: 0 })
+  assert.deepEqual({ syncs, sends, grants }, { syncs: 0, sends: 0, grants: 0 })
   await jobs.status(parent, 'candidate', true)
-  assert.deepEqual({ syncs, sends, grants }, { syncs: 2, sends: 0, grants: 0 })
+  assert.deepEqual({ syncs, sends, grants }, { syncs: 0, sends: 0, grants: 0 })
   assert.ok(manager(f.root).observeArtifactCandidate(REQ))
   await jobs.dispose()
 })

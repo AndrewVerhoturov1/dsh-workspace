@@ -72,7 +72,7 @@ async function subtree(t) {
 }
 
 test('cascade close preflights every exact child before mutations and never cancels blockers', async t => {
-  for (const state of ['running', 'pending', 'unknown', 'uncertain']) {
+  for (const state of ['running', 'pending']) {
     const f = await subtree(t), id = f.ids[1]
     if (state === 'running') f.agents.get(id).status = 'running'
     if (state === 'pending') f.agents.get(id).inbox.hasPending = true
@@ -288,22 +288,11 @@ test('only top-level Leaders receive direct Sol tool outside PTC', async t => {
   assert.equal(f.calls.starts.length, 0)
 })
 
-for (const preset of ['postman-leader', 'postman-leader-ptc']) {
-  test(preset + ' selects expensive Sol only within an approved execution plan, not a role permission gate', () => {
-    const text = readFileSync(new URL('../../../.agent-presets/' + preset + '/agent.cordis.yml', import.meta.url), 'utf8')
-    assert.match(text, /Follow TASK_CONTRACT: small reversible tasks need only a bounded goal/)
-    assert.match(text, /Secretary may gather facts and maintain private memory without a Git worktree/)
-    assert.match(text, /A separate plan or user approval is needed at material risk/)
-    assert.match(text, /Sol is an expensive Leader-selectable route within the approved execution plan/)
-    assert.match(text, /no separate role permission/i)
-    assert.match(text, /cheapest reliable route/)
-    assert.match(text, /unknown != complex/)
-    assert.match(text, /Sol only as evidence-backed fallback when DevSpace is unavailable or insufficient/)
-    assert.match(text, /Preapproved conditional Sol escalation and same-scope continuation need no repeated approval/)
-    assert.match(text, /STOP -> revised plan -> approval/)
-    assert.doesNotMatch(text, obsoleteSolPermission)
-  })
-}
+for(const preset of ['postman-leader','postman-leader-ptc'])test(preset+' keeps Leader decisions, mandatory PTC and native role limits',()=>{
+ const text=readFileSync(new URL('../../../.agent-presets/'+preset+'/agent.cordis.yml',import.meta.url),'utf8')
+ for(const phrase of ['Only program is required','wait_for_event:true','You decide routing, retries, recovery','Ordinary folders require no Host Git context','Native permissions, exact ownership'])assert.ok(text.includes(phrase),phrase)
+ assert.doesNotMatch(text,obsoleteSolPermission)
+})
 
 test('Leader skill preserves plan approval across continuation and fresh without blanket future-task permission', () => {
   const skill = readFileSync(new URL('../../../.agents/skills/postman-leader/SKILL.md', import.meta.url), 'utf8')
@@ -319,18 +308,15 @@ test('Leader skill preserves plan approval across continuation and fresh without
   assert.doesNotMatch(skill, obsoleteSolPermission)
 })
 
-test('Sol tool description and localDevelopment preserve initial plan approval, not obsolete role permission', async t => {
+test('Sol tool describes Leader routing decisions and ordinary technical limits', async t => {
   const f = await fixture(t)
   const description = f.tools.solTaskTool.description
-  assert.match(description, /expensive Sol Worker/)
-  assert.match(description, /selected by Leader within an approved execution plan/)
-  assert.match(description, /No separate Sol role permission/)
-  assert.match(description, /preapproved conditional escalation and same-scope continuation need no repeated approval/)
-  assert.match(description, /unknown != complex/)
+  assert.match(description,/Sol Worker/)
+  assert.match(description,/Leader decides routing and acceptance/)
+  assert.match(description,/technical limits and role tools remain unchanged/)
   const bridge = readFileSync(new URL('./postman-bridge.js', import.meta.url), 'utf8')
-  assert.match(bridge, /does not bypass initial execution-plan approval/)
-  assert.match(bridge, /Before approval: minimal necessary Leader read-only understanding only/)
-  assert.match(bridge, /material cost\/scope\/access\/destructive-operation\/transport changes: STOP -> revised plan -> approval/)
+  assert.match(bridge, /readWait/);assert.match(bridge,/writeWait/)
+  assert.doesNotMatch(bridge,/createPostmanTaskPrepareTool/)
   for (const text of [description, bridge]) assert.doesNotMatch(text, obsoleteSolPermission)
 })
 

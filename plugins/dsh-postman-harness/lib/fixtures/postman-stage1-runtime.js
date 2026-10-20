@@ -34,10 +34,8 @@ export async function stage1Runtime(dir, {registry,grants,fastBudget,resume=fals
   new JsonlSessionPersistence(ctx,{root:join(dir,'sessions')});new SubagentRuntime(ctx)
   spawn(ctx,{providerName:'spawn'});nativeReport(ctx,{reportDelivery:'quiet'})
   new AgentLoop(ctx,{agents:[],maxParallelToolCalls:2})
-  if(!registry.get('leader')) await registry.create('leader',{leaderSessionId:'leader',repository:'andrewverhoturov1/dsh-workspace',
-    repositoryPath:dir,originUrl:'https://github.com/AndrewVerhoturov1/dsh-workspace.git',branch:'task/postman-'+'a'.repeat(32),
-    worktree:dir,baseCommit:'a'.repeat(40),stage:'ready',diagnostic:null,workers:{},runner:{state:'none',requestId:null},bridge:null})
-  const context=Object.freeze({leaderSessionId:'leader',branch:'task/postman-fixture',worktree:dir})
+  if(!registry.get('leader')) await registry.create('leader',{leaderSessionId:'leader',cwd:dir,workers:{}})
+  const context=Object.freeze({leaderSessionId:'leader',cwd:dir,worktree:dir})
   const contexts={get:id=>id==='leader'?context:null,record:registry.get,changeRecord:registry.change,child:()=>null,
     readLedger:id=>registry.readLedger(id),changeLedger:(id,fn)=>registry.changeLedger(id,fn)}
   let boundaries,ptc

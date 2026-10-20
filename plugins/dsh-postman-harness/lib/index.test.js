@@ -47,7 +47,6 @@ test('apply registers modern current-turn and result tools without legacy async 
     'postman_send_current_turn',
     'postman_current_turn_status',
     'postman_ask_validate_reply',
-    'postman_continue_last_request',
   ])
   for (const legacyName of [
     'postman_send',

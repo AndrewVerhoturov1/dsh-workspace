@@ -21,7 +21,7 @@ language: ru
 - **Sol** — задаёт intent, существенные архитектурные решения и ограничения, а после результата отдельно решает, использовать ли REQ.
 - **ChatGPT Web / другая внешняя модель** — исследует нужный код, пишет полный минимальный implementation и необходимые targeted/regression tests внутри созданного Git `changes.patch`, готовит декларативный ZIP с `manifest.json`, `README.md`, `TEST_PLAN.md`. Переиспользует существующие механизмы, не добавляет speculative abstractions, соседний refactor или package-local applicator/framework. Дешёвые authoring checks допустимы; полная локальная verification, Git publication и воспроизведение Windows/DSH-среды не являются обязанностью Web. Незапущенные проверки отмечаются честно.
 - **Central implementation package runner** — одинаково для всех пакетов проверяет реальную применимость patch, защищает постоянные worktree/локальные данные, применяет patch, запускает только объявленные targeted tests и создаёт компактную диагностику при FAIL.
-- **Host / Worker** — после trusted `RESULT_DURABLE` Host сохраняет durable grant по `(Leader session, REQ)` для exact ZIP/SHA. После отдельного решения Sol допускает REQ через `postman_worker({task, artifactRequestId})`. Тот же продолжаемый Worker использует подготовленное Host чистое task worktree на опубликованном REQ commit и вызывает `implementation_artifact_apply({requestId, worktree})`; Host повторно проверяет SHA и запускает существующий runner. Worker проверяет фактический итог, но не повторяет authoritative PASS targeted tests при неизменных входах; при FAIL возвращает точную диагностику, не переписывая package за спиной Web. Публикация применённых изменений требует отдельного решения Sol. Вне trusted artifact workflow Worker остаётся полноценным локальным coding/research agent.
+- **Host / Worker** — после trusted `RESULT_DURABLE` Host сохраняет durable grant по `(Leader session, REQ)` для exact ZIP/SHA. После отдельного решения Sol допускает REQ через `postman_worker({task, artifactRequestId})`. Тот же продолжаемый Worker выбирает и готовит чистое временное task worktree по REPO_POLICY и вызывает `implementation_artifact_apply({requestId, worktree})`; Host повторно проверяет SHA и запускает существующий runner. Worker проверяет фактический итог, но не повторяет authoritative PASS targeted tests при неизменных входах; при FAIL возвращает точную диагностику, не переписывая package за спиной Web. Публикация применённых изменений требует отдельного решения Sol. Вне trusted artifact workflow Worker остаётся полноценным локальным coding/research agent.
 - **Пользователь** — отдельно решает task merge в `main` и отдельно утверждает полный проверенный `origin/main` SHA A для stable `preview`; обычный task merge не означает stable GO.
 
 ## 2. Канонический runner
@@ -204,14 +204,14 @@ origin/main (для новых задач; прежний опубликован
 → trusted RESULT_DURABLE и durable Host grant для exact Leader session + REQ
 → отдельное решение Sol: postman_worker({task, artifactRequestId})
 → тот же продолжаемый Worker
-→ та же единственная опубликованная Host task branch и чистое worktree на REQ commit
+→ Worker выбирает и готовит чистое временное worktree по REPO_POLICY
 → implementation_artifact_apply({requestId, worktree})
 → Host подставляет trusted ZIP, повторно проверяет SHA и запускает central runner apply
 ```
 
 Runner не выполняет `git reset --hard`, `git clean`, auto-stash, force push и не удаляет пользовательские данные.
 
-На FAIL dirty temporary worktree можно оставить для диагностики. Если после отдельного решения нужна повторная попытка, Leader-only Host-инструмент `postman_task_restore()` проверяет только существующую process-local привязку и точный удалённый HEAD, затем явно сбрасывает только привязанное временное дерево к этому SHA; операция необратимо удаляет незакоммиченные изменения. Это отдельная операция Host, не часть runner; потерянную привязку Host не восстанавливает. Постоянные worktree не затрагиваются.
+На FAIL dirty temporary worktree сохраняется для диагностики. Дальнейший шаг выбирает Leader; при необходимости Worker готовит другое чистое временное дерево по REPO_POLICY, сохраняя прежние файлы. Host не выполняет restore/reset/clean и не требует публикации HEAD как условия применения. Постоянные worktree не затрагиваются.
 
 ## 9. Тесты
 
@@ -258,7 +258,7 @@ review git status/diff на уровне задачи
 
 Merge — только после отдельного решения пользователя.
 
-Runner не выполняет commit/push/PR, чтобы application и публикация оставались разными границами ответственности. Normal Postman transport универсален и лишь доставляет результат; отдельно Host `postman_task_prepare` создаёт и публикует одну task branch/worktree от exact `origin/main` на Leader, а Bridge через Host публикует REQ commit в ту же временную task branch (не в постоянный `main` или `preview`). Существующие опубликованные REQ, связанные task worktrees и `packageBase` остаются pinned без массового retarget/rebase или registry migration. Transport не запускает runner и не публикует реализацию. Перед отдельным commit/push/PR реализации REQ transport-файлы очищаются; SHA-pinned URL старых REQ и `--chat` сохраняются. Trusted `RESULT_DURABLE` с exact ZIP/SHA подтверждает только происхождение и целостность полученного файла, но не его применимость, качество, разрешение на применение или публикацию.
+Runner не выполняет commit/push/PR, чтобы application и публикация оставались разными границами ответственности. Normal Postman transport универсален и лишь доставляет результат. Временную task branch/worktree от exact `origin/main` готовит Worker по REPO_POLICY; Host не управляет Git рабочего проекта. Транспортная публикация REQ/RESULT независима от ветки реализации. Существующие опубликованные REQ, связанные task worktrees и `packageBase` остаются pinned без массового retarget/rebase или registry migration. Transport не запускает runner и не публикует реализацию. Если в дереве реализации есть относящиеся к нему временные transport-файлы, их исключают из публикации реализации по фактическому diff без удаления неизвестных пользовательских данных; SHA-pinned URL старых REQ и `--chat` сохраняются. Trusted `RESULT_DURABLE` с exact ZIP/SHA подтверждает только происхождение и целостность полученного файла, но не его применимость, качество, разрешение на применение или публикацию.
 
 ## 11. Что модель должна выдавать после внедрения этой системы
 

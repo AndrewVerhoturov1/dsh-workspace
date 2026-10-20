@@ -9,9 +9,6 @@ export const POSTMAN_DEVSPACE_LUNA_CLOSE_TOOL_NAME = 'postman_devspace_luna_clos
 export const POSTMAN_DEVSPACE_CONTROL_TOOL_NAME = 'postman_devspace_control'
 export const POSTMAN_TEAM_STATUS_TOOL_NAME = 'postman_team_status'
 export const POSTMAN_CHILD_NOTIFY_TOOL_NAME = 'notify_parent'
-export const POSTMAN_TASK_PREPARE_TOOL_NAME = 'postman_task_prepare'
-export const POSTMAN_TASK_RESTORE_TOOL_NAME = 'postman_task_restore'
-export const POSTMAN_TASK_CLOSE_TOOL_NAME = 'postman_task_close'
 export const POSTMAN_WORKER_TOOL_NAME = 'postman_worker'
 export const POSTMAN_SOL_WORKER_TOOL_NAME = 'postman_sol_worker'
 export const POSTMAN_WORKER_INTERRUPT_TOOL_NAME = 'postman_worker_interrupt'
@@ -51,9 +48,6 @@ export const POSTMAN_LEADER_TOOL_ALLOWLIST = Object.freeze([
   'grep',
   'skill',
   'web_fetch',
-  POSTMAN_TASK_PREPARE_TOOL_NAME,
-  POSTMAN_TASK_RESTORE_TOOL_NAME,
-  POSTMAN_TASK_CLOSE_TOOL_NAME,
   POSTMAN_INPUT_FILES_TOOL_NAME,
   POSTMAN_BRIDGE_TOOL_NAME,
   POSTMAN_BRIDGE_STATUS_TOOL_NAME,
@@ -85,31 +79,6 @@ export const POSTMAN_SOL_PTC_TOOL_NAMES = Object.freeze([...POSTMAN_WORKER_PTC_T
   'read_image', 'pwsh', 'bash', 'job_output', 'job_kill', 'job_list', 'implementation_artifact_apply',
   ...WORKER_CONTROL_TOOLS])
 
-// Existing PTC protocol knowledge, shared by the Host gate and expectStatus.
-// These are exact success statuses, not fuzzy aliases or a dispatch recipe.
-export const POSTMAN_PTC_SUCCESS_STATUSES = Object.freeze({
-  postman_task_prepare: Object.freeze(['TASK_CONTEXT_READY', 'POSTMAN_TASK_READ_ONLY_READY', 'POSTMAN_TASK_CONTEXT_ALREADY_READY']),
-  postman_worker: Object.freeze(['POSTMAN_WORKER_TASK_ACCEPTED']),
-  postman_sol_worker: Object.freeze(['POSTMAN_WORKER_TASK_ACCEPTED']),
-  postman_task_restore: Object.freeze(['TASK_CONTEXT_RESTORED', 'POSTMAN_TASK_RESTORE_ISOLATED']),
-  postman_task_close: Object.freeze(['POSTMAN_TASK_CLOSED']),
-  postman_team_status: Object.freeze(['POSTMAN_TEAM_STATUS']),
-  postman_input_files: Object.freeze(['POSTMAN_INPUT_READY', 'POSTMAN_INPUT_CLEANED', 'POSTMAN_INPUT_ALREADY_CLEANED', 'POSTMAN_INPUT_LOCATED', 'POSTMAN_ARCHIVE_PACKED', 'POSTMAN_ARCHIVE_LISTED', 'POSTMAN_ARCHIVE_UNPACKED']),
-  postman_worker_list: Object.freeze(['POSTMAN_WORKER_LIST']),
-  postman_worker_stop: Object.freeze(['POSTMAN_WORKER_STOPPED', 'POSTMAN_WORKER_CANCELLED', 'POSTMAN_WORKER_ALREADY_STOPPED']),
-  postman_worker_compact: Object.freeze(['POSTMAN_WORKER_COMPACTED']),
-  postman_secretary_ledger: Object.freeze(['POSTMAN_SECRETARY_LEDGER']),
-  postman_bridge_list: Object.freeze(['POSTMAN_BRIDGE_LIST']),
-  postman_bridge_status: Object.freeze(['POSTMAN_BRIDGE_QUEUED', 'POSTMAN_BRIDGE_RUNNING', 'POSTMAN_BRIDGE_TERMINAL', 'POSTMAN_BRIDGE_ACCEPTED', 'POSTMAN_BRIDGE_ARCHIVED', 'POSTMAN_WRITER_RELEASED', 'POSTMAN_WRITER_ALREADY_RELEASED']),
-  postman_bridge_stop: Object.freeze(['POSTMAN_BRIDGE_STOP_REQUESTED', 'POSTMAN_BRIDGE_ALREADY_TERMINAL', 'POSTMAN_BRIDGE_NOT_SENT', 'POSTMAN_BRIDGE_ARCHIVED']),
-  postman_devspace_luna_close: Object.freeze(['POSTMAN_DEVSPACE_LUNA_CLOSED', 'POSTMAN_DEVSPACE_LUNA_ALREADY_CLOSED']),
-  postman_devspace_control: Object.freeze(['POSTMAN_DEVSPACE_CONTROL_QUEUED', 'POSTMAN_DEVSPACE_CONTROL_STATUS']),
-  postman_secretary: Object.freeze(['POSTMAN_WORKER_TASK_ACCEPTED']),
-  postman_worker_fresh: Object.freeze(['POSTMAN_WORKER_TASK_ACCEPTED']),
-  postman_worker_interrupt: Object.freeze(['POSTMAN_WORKER_INTERRUPT_TASK_ACCEPTED']),
-  postman_bridge: Object.freeze(['POSTMAN_BRIDGE_ACCEPTED']),
-})
-
 export function postmanPtcDirectCallGuard(exec, lookupAgent, ownsPtcWorker = () => false) {
   return lookupAgent(exec.agent?.id) === exec.agent && exec.parent === undefined &&
     ((isTopLevelPostmanPtcLeader(exec.agent) && POSTMAN_PTC_ONLY_LEADER_TOOLS.includes(exec.name)) ||
@@ -118,9 +87,6 @@ export function postmanPtcDirectCallGuard(exec, lookupAgent, ownsPtcWorker = () 
 }
 
 export const POSTMAN_LEADER_ONLY_TOOL_NAMES = Object.freeze([
-  POSTMAN_TASK_PREPARE_TOOL_NAME,
-  POSTMAN_TASK_RESTORE_TOOL_NAME,
-  POSTMAN_TASK_CLOSE_TOOL_NAME,
   POSTMAN_INPUT_FILES_TOOL_NAME,
   POSTMAN_BRIDGE_TOOL_NAME,
   POSTMAN_BRIDGE_STATUS_TOOL_NAME,

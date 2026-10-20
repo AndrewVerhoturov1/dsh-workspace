@@ -103,10 +103,10 @@ export class PostmanInputGrants {
   constructor() { this.owners = new Map(); this.pins = new Map(); this.children = new Map() }
   record(agent, context, result) {
     const owner = this.owners.get(agent.id)
-    if (owner && (owner.context !== context || owner.agent !== agent)) this.release(owner.agent)
+    if (owner && (owner.agent !== agent)) this.release(owner.agent)
     if (!result.snapshotRoot || result.materializations?.length !== result.descriptors.length)
       throw new Error('POSTMAN_INPUT_MATERIALIZATION_MISSING')
-    const current = this.owners.get(agent.id) ?? { agent, context, descriptors: new Map(), bundles: new Map() }
+    const current = this.owners.get(agent.id) ?? { agent, descriptors: new Map(), bundles: new Map() }
     const root = { path: result.snapshotRoot, refs: result.descriptors.length }
     const entries = result.descriptors.map((descriptor, index) => {
       const snapshot = result.materializations[index]
@@ -126,12 +126,12 @@ export class PostmanInputGrants {
   }
   owns(agent, context, descriptors) {
     const current = this.owners.get(agent?.id)
-    return !!context && current?.agent === agent && current.context === context &&
+    return current?.agent === agent &&
       descriptors.every(item => current.descriptors.has(JSON.stringify(item)))
   }
   bundle(agent, context, id) {
     const current = this.owners.get(agent?.id)
-    return current?.agent === agent && current.context === context ? current.bundles.get(id) : undefined
+    return current?.agent === agent ? current.bundles.get(id) : undefined
   }
   cleaned(agent, id) {
     const current = this.owners.get(agent.id)
@@ -151,27 +151,23 @@ export class PostmanInputGrants {
     for (const entry of owner.descriptors.values()) this.drop(entry)
     this.owners.delete(agent.id)
   }
-  releaseStale(agent, context) {
-    const owner = this.owners.get(agent?.id)
-    if (owner && owner.context !== context) this.release(owner.agent)
-  }
   pin(agent, context, descriptors) {
     if (!this.owns(agent, context, descriptors)) throw new Error('POSTMAN_INPUT_PROVENANCE_REJECTED')
     const entries = descriptors.map(d => this.owners.get(agent.id).descriptors.get(JSON.stringify(d)))
     for (const entry of entries) entry.root.refs++
     const binding = Object.freeze({})
-    this.pins.set(binding, { agent, context, entries, identity: JSON.stringify(descriptors) })
+    this.pins.set(binding, { agent, entries, identity: JSON.stringify(descriptors) })
     return binding
   }
   bindChild(binding, parent, context, child) {
     const pin = this.pins.get(binding)
-    if (!pin || pin.agent !== parent || pin.context !== context || this.children.has(child.id)) return false
+    if (!pin || pin.agent !== parent || this.children.has(child.id)) return false
     this.children.set(child.id, { binding, child })
     return true
   }
   child(agent, context, descriptors) {
     const child = this.children.get(agent.id), pin = this.pins.get(child?.binding)
-    return child?.child === agent && pin?.context === context && pin.identity === JSON.stringify(descriptors)
+    return child?.child === agent && pin && pin.identity === JSON.stringify(descriptors)
       ? child.binding : null
   }
   unpin(binding) {
@@ -248,17 +244,16 @@ export async function stageStandaloneCurrentAttachments(ctx, agent, record, curr
 
 async function snapshotInputs(ctx, contexts, args, exec, { grants, run, currentAttachments, resolveAttachment }) {
   const agent = exec.agent
+  await contexts.ensure?.(agent)
   const context = contexts.get(agent.id)
-  if (!context) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
   if (exec.signal?.aborted) return { status: 'POSTMAN_INPUT_ABORTED' }
   const keys = Object.keys(args ?? {}).sort().join(',')
   let operation, selected, current
   if (args.action === 'describe_existing' && keys === 'action,commit,path,repository' &&
       typeof args.repository === 'string' &&
-      args.repository.toLowerCase() === (context.repository ?? 'AndrewVerhoturov1/dsh-workspace').toLowerCase() &&
       typeof args.commit === 'string' && typeof args.path === 'string')
     operation = ['--existing', args.commit, args.path, '--existing-repository',
-      context.universalProject ? context.repository : 'AndrewVerhoturov1/dsh-workspace']
+      args.repository]
   else if (args.action === 'stage' && keys === 'action,paths' && Array.isArray(args.paths) &&
       args.paths.length >= 1 && args.paths.length <= 20 && args.paths.every(path => typeof path === 'string' && path.length > 0))
     operation = ['--stage', ...args.paths]
@@ -317,7 +312,7 @@ async function snapshotInputs(ctx, contexts, args, exec, { grants, run, currentA
         writeFileSync(path, data, { mode: 0o600, flag: 'wx' })
         sources.push(path)
       }
-      if (contexts.get(agent.id) !== context || ctx.agents.get(agent.id) !== agent || exec.signal?.aborted)
+      if (ctx.agents.get(agent.id) !== agent || exec.signal?.aborted)
         return { status: 'POSTMAN_INPUT_CONTEXT_CHANGED' }
       if (currentAttachments.get(agent) !== current) throw new Error(CURRENT_MISMATCH)
       operation = ['--stage', ...sources]
@@ -325,7 +320,7 @@ async function snapshotInputs(ctx, contexts, args, exec, { grants, run, currentA
     snapshotRoot = privateDirectory('snapshot')
     // Source paths never leave this selection operation. Host chooses the private root.
     const result = await run(HOST_ROOT, [...operation, '--snapshot-dir', snapshotRoot])
-    if (contexts.get(agent.id) !== context || ctx.agents.get(agent.id) !== agent || exec.signal?.aborted)
+    if (ctx.agents.get(agent.id) !== agent || exec.signal?.aborted)
       return { status: 'POSTMAN_INPUT_CONTEXT_CHANGED' }
     if (selected && currentAttachments.get(agent) !== current) throw new Error(CURRENT_MISMATCH)
     const descriptors = result.descriptors
@@ -349,12 +344,12 @@ export function createPostmanInputFilesTool(ctx, contexts, { grants = postmanInp
     description: 'Privately snapshot exact current attachments or selected local files; locate filename metadata; pack, list or safely unpack selected ZIPs. Existing GitHub sources are read-only. Never publishes input bytes.',
     parameters: {
       action: { type: 'string', required: true, enum: ['describe_existing', 'stage', 'stage_current_attachments', 'cleanup', 'locate', 'pack', 'list', 'unpack'] },
-      repository: { type: 'string', description: 'Existing GitHub file: exact owner/repo from this Leader task binding.' },
+      repository: { type: 'string', description: 'Existing GitHub file: explicit owner/repository selected by Leader.' },
       commit: { type: 'string', description: 'Exact existing GitHub commit.' },
       path: { type: 'string', description: 'Repository-relative path of the existing file.' },
       paths: { type: 'array', items: { type: 'string' }, description: 'Explicit absolute paths to selected regular files.' },
       selectionIds: { type: 'array', items: { type: 'string' }, description: 'Exact Host occurrence selectors from this Leader latest user message; omit only for a single attachment.' },
-      bundleId: { type: 'string', description: 'Exact bundle ID returned by stage in this Leader task context.' },
+      bundleId: { type: 'string', description: 'Exact bundle ID returned to this Leader by stage.' },
       filename: { type: 'string', description: 'Exact or near filename for bounded metadata search.' },
       source: { type: 'string', description: 'Explicit absolute ZIP path for list/unpack.' },
       destination: { type: 'string', description: 'Explicit absolute new ZIP path for pack or new directory for unpack; never overwrite.' },
@@ -387,29 +382,6 @@ export function createPostmanInputFilesTool(ctx, contexts, { grants = postmanInp
           operation = ['unpack','--source',args.source,'--destination',args.destination]
         if (!operation) return { status:'POSTMAN_INPUT_ARGUMENTS_INVALID' }
         return pythonCommand(HOST_ROOT,'archive_operations.py',operation)
-      }
-      // Native input staging is a prerequisite of the first universal Devspace
-      // request, not a reason to create a Git task branch or worktree. Use the
-      // same Host read-only preparation as postman_bridge / Secretary.
-      const keys = Object.keys(args).sort().join(',')
-      const stageAllowed = args.action === 'stage' && keys === 'action,paths' &&
-        Array.isArray(args.paths) && args.paths.length >= 1 && args.paths.length <= 20 &&
-        args.paths.every(path => typeof path === 'string' && path.length > 0)
-      const selectedAllowed = args.action === 'stage_current_attachments' &&
-        (keys === 'action' || keys === 'action,selectionIds') &&
-        (args.selectionIds === undefined || Array.isArray(args.selectionIds) &&
-          args.selectionIds.length >= 1 && args.selectionIds.length <= 20 &&
-          args.selectionIds.every(id => typeof id === 'string' && id.length > 0) &&
-          new Set(args.selectionIds).size === args.selectionIds.length)
-      const existingAllowed = args.action === 'describe_existing' &&
-        keys === 'action,commit,path,repository' &&
-        typeof args.repository === 'string' && typeof args.commit === 'string' && typeof args.path === 'string'
-      if (!contexts?.get(agent.id) && (stageAllowed || selectedAllowed || existingAllowed)) {
-        if (typeof contexts?.prepareReadOnly !== 'function')
-          return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
-        const prepared = await contexts.prepareReadOnly(agent)
-        if (!['POSTMAN_TASK_READ_ONLY_READY', 'POSTMAN_TASK_CONTEXT_ALREADY_READY'].includes(prepared?.status))
-          return prepared
       }
       return snapshotInputs(ctx, contexts, args, exec, { grants, run, currentAttachments, resolveAttachment })
     },

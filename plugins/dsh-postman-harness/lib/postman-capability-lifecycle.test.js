@@ -17,7 +17,7 @@ export function toolMatrix(role, expected, request) {
   assert.deepEqual(actual, expected, diagnostic)
   return actual
 }
-const ptc = program => ({ program, description: 'Execute bounded fixture evidence before review', boundary: 'semantic_decision' })
+const ptc = program => ({ program, description: 'Execute bounded fixture evidence before review' })
 const fixture = async (t, options) => {
   const dir = await mkdtemp(join(tmpdir(), 'postman-capability-'))
   const f = await capabilityRuntime(dir, options)
@@ -25,13 +25,15 @@ const fixture = async (t, options) => {
   return { ...f, dir }
 }
 
-test('actual Leader request receives milestone retention and explicit PR continuation policy', { timeout: 30000 }, async t => {
-  const f = await fixture(t, { localDevelopment: true })
-  const request = JSON.stringify(await f.turn(f.leader))
-  assert.match(request, /Milestones retain task binding/)
-  assert.match(request, /postman_task_prepare\(\{resume_pr/)
-  assert.match(request, /POSTMAN_TASK_RESUME_REJECTED/)
-  assert.match(request, /Старые REQ\/grants\/операции остаются отозванными/)
+test('actual Leader has no Git lifecycle tools and uses an ordinary folder', {timeout:30000},async t=>{
+ const f=await fixture(t,{localDevelopment:true})
+ const request=await f.turn(f.leader)
+ for(const name of ['postman_task_prepare','postman_task_restore','postman_task_close'])assert.ok(!request.tools.some(tool=>tool.name===name))
+ const {stat}=await import('node:fs/promises')
+ await assert.rejects(stat(join(f.dir,'.git')),error=>error.code==='ENOENT')
+ await f.prepare()
+ assert.equal(f.registry.get('leader').branch,undefined)
+ assert.equal(f.registry.get('leader').cwd,f.dir)
 })
 
 test('exact Sol actual model call executes ptc_execute on initial and cold continuation', { timeout: 30000 }, async t => {
@@ -75,7 +77,7 @@ for (const preset of ['postman-leader-ptc', 'code', 'postman-leader']) test('act
   assert.doesNotMatch(r.system, /postman_yield|POSTMAN_YIELDED/)
   assertManagementRequest('leader', await f.turn(f.leader, 'Related management follow-up'))
   assert.ok(r.tools.some(t=>t.name==='ask_user_question'),preset+': Leader retains user questions')
-  assert.equal(r.model,'gpt-6.1-sol'); assert.equal(r.reasoningEffort,'xhigh'); assert.match(r.system,/canonical programming discipline/); assert.match(r.system, /postman-leader/);assert.match(JSON.stringify(r),/POSTMAN_LEADER_SKILL_VERSION: 37/)
+  assert.equal(r.model,'gpt-6.1-sol'); assert.equal(r.reasoningEffort,'xhigh'); assert.match(r.system,/Postman PTC programming discipline/); assert.match(r.system, /Postman Leader/);assert.match(JSON.stringify(r),/POSTMAN_LEADER_SKILL_VERSION: 41/)
   await writeFile(join(f.dir, 'facts.txt'), 'old fact')
   const result = nested(await f.execute(f.leader, 'ptc_execute', ptc('const r=await tools.read({file_path:"facts.txt"});const g=await tools.grep({pattern:"old fact",path:"facts.txt"});return {r,g}')))
   assert.equal(result.r.lines[0].text, 'old fact'); assert.ok(result.g.matches.length)
@@ -244,7 +246,7 @@ test('all real child requests: Secretary/Worker/Sol functional smoke, ownership,
   for(const a of [secretary,worker,own,own2]){
     const before=Object.keys(f.registry.get('leader').workers).length
     const h=await f.ctx.agents.resume({resumeSessionId:a.id,agentOptions:{provider:'codex',model:'gpt-6-luna'}})
-    for(const name of ['postman_worker','postman_secretary','postman_sol_worker','ptc_execute','subagent','workflow'])assert.equal((await f.execute(h.agent,name,{task:'forbidden child',program:'return 1',description:'forbidden',boundary:'semantic_decision'})).isError,true,name)
+    for(const name of ['postman_worker','postman_secretary','postman_sol_worker','ptc_execute','subagent','workflow'])assert.equal((await f.execute(h.agent,name,{task:'forbidden child',program:'return 1',description:'forbidden'})).isError,true,name)
     assert.equal(Object.keys(f.registry.get('leader').workers).length,before);await h.dispose()
   }
   const redirect=await ownCall(sol,'postman_worker_interrupt',{workerSessionId:own2.id,task:'bounded owned redirect'});assert.equal(redirect.status,'POSTMAN_WORKER_INTERRUPT_TASK_ACCEPTED',JSON.stringify(redirect));await f.childDone(own2.id);check(own2)

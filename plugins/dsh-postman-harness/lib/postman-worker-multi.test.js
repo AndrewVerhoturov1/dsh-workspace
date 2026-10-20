@@ -19,9 +19,9 @@ async function fixture({ start = null, followup = null, changeRecord = null, dra
     subagents: {
       async listChildren() { return [...children].map(id => ({ id, kind: 'child', mode: 'continuable',
         activity: agents.has(id) ? 'running' : 'inactive' })) },
-      async startContinuable(spec) { calls.starts.push(spec); if (start) await start(spec); children.add(spec.childId); return { childId: spec.childId, messageId: 'initial-' + calls.starts.length } },
+      async startContinuable(spec) { calls.starts.push(spec); if (start) await start(spec); children.add(spec.childId); agents.set(spec.childId,{id:spec.childId,status:'idle',inbox:{hasPending:true},session:{header:{id:spec.childId,origin:'subagent',parentSession:leader.id,delegationDepth:1},events:[]}}); return { childId: spec.childId, messageId: 'initial-' + calls.starts.length } },
       async followup(parent, id, content) { calls.followups.push({ parent, id, content }); if (followup) await followup(id); return 'followup-' + calls.followups.length },
-      async drainContinuableChildren(parent, ids) { calls.drains.push({ parent, ids }); if (drain) await drain(ids[0]); children.delete(ids[0]) },
+      async drainContinuableChildren(parent, ids) { calls.drains.push({ parent, ids }); if (drain) await drain(ids[0]); children.delete(ids[0]); agents.delete(ids[0]) },
     },
   }
   const contexts = { get: () => context, record: registry.get, changeRecord: changeRecord ?? registry.change,
@@ -42,7 +42,7 @@ test('two independent reservations run without waiting for model completion; thi
   assert.equal(f.registry.get(leader.id).bridgeOperations.job.state, 'pending')
   const listing = await run(f.tools.listTool, {})
   assert.deepEqual(listing.quota, { secretary: { used: 0, limit: 1 }, luna: { used: 2, limit: 2 }, sol: { used: 0, limit: 1 } })
-  assert.deepEqual(listing.workers.map(x => x.runtime), ['cold-continuable', 'cold-continuable'])
+  assert.deepEqual(listing.workers.map(x => x.runtime), ['resident-idle', 'resident-idle'])
   assert.equal((await task(f.tools)).status, 'POSTMAN_WORKER_TARGET_REQUIRED')
   assert.equal((await run(f.tools.interruptTool, { task: 'next' })).status, 'POSTMAN_WORKER_TARGET_REQUIRED')
   assert.equal((await run(f.tools.stopTool, {})).status, 'POSTMAN_WORKER_TARGET_REQUIRED')
@@ -115,27 +115,7 @@ test('unknown exact and conflicting create arguments never redirect or create', 
   assert.equal(f.calls.starts.length, 1)
 })
 
-test('inactive peers keep exact session IDs through shared-operation pause', async () => {
-  const f = await fixture()
-  const [a, b, c] = await Promise.all(['A', 'B', 'C'].map(label => label === 'C' ? run(f.tools.secretaryTool, { task: 'facts', createNew: true, label }) : task(f.tools, { createNew: true, label })))
-  assert.equal(await f.tools.pauseForOperation(leader.id, a.workerSessionId), true)
-  assert.deepEqual((await run(f.tools.listTool, {})).workers.map(x => x.workerSessionId),
-    [a.workerSessionId, b.workerSessionId, c.workerSessionId])
-  assert.equal((await task(f.tools, { workerSessionId: b.workerSessionId })).status, 'POSTMAN_WORKER_TASK_ACCEPTED')
-  assert.equal(await f.tools.prepareRestore(leader.id), true)
-  assert.equal((await run(f.tools.secretaryTool, { task: 'facts', workerSessionId: c.workerSessionId })).status, 'POSTMAN_WORKER_TASK_ACCEPTED')
-})
-
-test('removed binding is not proof that a live orphan stopped mutating files', async () => {
-  const f = await fixture()
-  f.children.add('orphan')
-  f.agents.set('orphan', { id: 'orphan' })
-  assert.equal(await f.tools.prepareRestore(leader.id), false)
-  f.agents.delete('orphan')
-  assert.equal(await f.tools.prepareRestore(leader.id), true)
-})
-
-const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done }); return { promise, resolve } }
+const deferred = () => Promise.withResolvers()
 
 test('special inherited and missing Worker IDs never create hidden slots or grants', async () => {
   const f = await fixture()
@@ -151,7 +131,6 @@ test('special inherited and missing Worker IDs never create hidden slots or gran
   assert.equal((await run(f.tools.stopTool, { mode:'close', workerSessionId:real.workerSessionId })).status,
     'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT')
   assert.deepEqual((await run(f.tools.listTool, {})).workers.map(x => x.workerSessionId), [real.workerSessionId])
-  assert.equal(await f.tools.prepareRestore(leader.id), true)
 })
 
 test('late start after disposal or Leader replacement never reports acceptance', async () => {

@@ -66,9 +66,7 @@ def wait_for_bell_after_unknown_send(binding, *, timeout_ms, sleep, monotonic,
             **event, "conversationRef": conversation_ref, "sendState": "UNKNOWN"}}
 
     def text_result():
-        marker = re.search(r"\b(CAPABILITY[ _-]*UNAVAILABLE|BLOCKED)\b", final_text, re.I)
-        outcome = ("CAPABILITY_UNAVAILABLE" if marker[1].upper().startswith("CAPABILITY")
-                   else "BLOCKED") if marker else "UNKNOWN"
+        outcome = "UNKNOWN"
         return {"ok": True, "code": "DEVSPACE_DIAGNOSTIC", "details": {
             "source": "text_fallback", "diagnostic": outcome, "assistantText": final_text,
             "conversationRef": conversation_ref, "sendState": "UNKNOWN",
@@ -356,9 +354,7 @@ def wait_for_signal(page, prompt, chat_url, binding, *, timeout_ms, interval_ms,
                 # Stop can expose actions for the same truncated text. Do not
                 # promote the pre-Stop partial into a terminal result.
                 return None
-            marker = re.search(r"\b(CAPABILITY[ _-]*UNAVAILABLE|BLOCKED)\b", text, re.I)
-            outcome = ("CAPABILITY_UNAVAILABLE" if marker[1].upper().startswith("CAPABILITY")
-                       else "BLOCKED") if marker else "UNKNOWN"
+            outcome = "UNKNOWN"
             return diagnostic("Completed REQ-bound response during " + stage + ".",
                               source="text_fallback", outcome=outcome)
         return None
@@ -437,8 +433,7 @@ def wait_for_signal(page, prompt, chat_url, binding, *, timeout_ms, interval_ms,
             latest_text = text
         if observed.get("ok"):
             # Completed arbitrary text is deliverable evidence, not engineering PASS.
-            marker = re.search(r"\b(CAPABILITY[ _-]*UNAVAILABLE|BLOCKED)\b", latest_text, re.I)
-            outcome = ("CAPABILITY_UNAVAILABLE" if marker[1].upper().startswith("CAPABILITY") else "BLOCKED") if marker else "UNKNOWN"
+            outcome = "UNKNOWN"
             return finish(diagnostic("Completed response without local signal.", source="text_fallback", outcome=outcome))
         if observed.get("code") == observer.CHAT_CORRELATION_LOST and not owned_turn():
             return finish(diagnostic("Chat correlation lost; no resend."))

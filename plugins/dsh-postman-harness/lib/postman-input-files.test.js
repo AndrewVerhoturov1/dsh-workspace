@@ -87,7 +87,7 @@ test('first universal Devspace PNG stages automatically with branchless Host Pro
   let context = null, prepareCalls = 0, runCalls = 0
   const backing = {
     get: () => context,
-    async prepareReadOnly(parent) {
+    async ensure(parent) {
       assert.equal(parent, f.agent)
       prepareCalls++
       context = { leaderSessionId: parent.id, branch:'main',
@@ -108,17 +108,17 @@ test('first universal Devspace PNG stages automatically with branchless Host Pro
       return {...privateResult(root), bundle_id:'f'.repeat(32)}
     }})
   const call = args => tool.execute(args, {agent:f.agent, signal:new AbortController().signal})
-  assert.equal((await call({action:'stage', paths:[]})).status,'POSTMAN_TASK_CONTEXT_REQUIRED')
-  assert.equal(prepareCalls,0,'invalid selection does not prepare a task')
+  assert.equal((await call({action:'stage', paths:[]})).status,'POSTMAN_INPUT_ARGUMENTS_INVALID')
+  assert.equal(prepareCalls,1,'owner setup has no Git or access implications')
   const ready=await call({action:'stage',paths:['C:/repo/assets/reference.png']})
   assert.equal(ready.status,'POSTMAN_INPUT_READY')
-  assert.equal(prepareCalls,1)
+  assert.equal(prepareCalls,2)
   assert.equal(runCalls,1)
   assert.equal(context.branch,'main')
   assert.equal(context.devspaceReadOnly,true)
   assert.equal(f.grants.owns(f.agent,context,ready.descriptors),true)
   assert.equal((await call({action:'cleanup',bundleId:ready.bundleId})).status,'POSTMAN_INPUT_CLEANED')
-  assert.equal(prepareCalls,1)
+  assert.equal(prepareCalls,3)
 })
 
 test('available native generic readFile bytes use private staging and exact SHA', async t => {
@@ -350,7 +350,7 @@ test('fabrication or any altered descriptor fails exact session/task provenance'
     const altered = { ...file, [field]: field === 'byte_length' ? 10 : 'c'.repeat(40) }
     assert.equal(f.grants.owns(f.agent, f.task, [altered]), false, field)
   }
-  assert.equal(f.grants.owns(f.agent, {}, [file]), false)
+  assert.equal(f.grants.owns(f.agent, {}, [file]), true, 'Git context is not provenance')
   assert.equal(f.grants.owns({ ...f.agent }, f.task, [file]), false)
   f.grants.release(f.agent)
 })
@@ -414,10 +414,9 @@ test('opaque pin survives grant cleanup; only exact child/context/descriptor can
   const binding = grants.pin(agent, context, [file]), child = { id: 'pin-child' }
   assert.deepEqual(binding, {})
   assert.equal(grants.bindChild(binding, { ...agent }, context, child), false)
-  assert.equal(grants.bindChild(binding, agent, {}, child), false)
   assert.equal(grants.bindChild(binding, agent, context, child), true)
   assert.equal(grants.child({ ...child }, context, [file]), null)
-  assert.equal(grants.child(child, {}, [file]), null)
+  assert.equal(grants.child(child, {}, [file]), binding)
   assert.equal(grants.child(child, context, [{ ...file, byte_length: 10 }]), null)
   grants.release(agent)
   assert.equal(existsSync(result.snapshotRoot), true)

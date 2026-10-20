@@ -28,7 +28,6 @@ export function createPostmanDevspaceLanes(ctx, contexts, direct) {
     // underlying Luna, even when a fixture object spread happened to work.
     const adapted = {
       get: id => contexts.get(id),
-      verifyWorktree: contexts.verifyWorktree?.bind(contexts),
       record(id) {
         const row = record(id)
         return row ? { ...row, devspaceLuna: laneOf(row, laneId) } : row
@@ -54,56 +53,9 @@ export function createPostmanDevspaceLanes(ctx, contexts, direct) {
   function laneFromJob(job) {
     return job?.laneId ?? record(job?.parentSessionId)?.bridgeOperations?.[job?.bridgeJobId]?.devspace?.laneId
   }
-  // A durable "reserved" row means no Luna child was created. Only an
-  // unknown, pre-child/pre-REQ intent with no private channel or conversation
-  // can be retired without risking an unobserved ChatGPT Send.
-  function neverStarted(row, laneId) {
-    const lane = laneOf(row, laneId)
-    const operation = row?.bridgeOperations?.[lane?.activeBridgeJobId]
-    return lane?.state === 'reserved' && typeof lane.activeBridgeJobId === 'string' &&
-      !lane.childId && !lane.conversationRef && (lane.requestIds?.length ?? 0) === 0 &&
-      operation?.transportKind === 'devspace' && operation?.devspace?.laneId === laneId &&
-      operation.state === 'unknown' && operation.phase === 'reserved' &&
-      !operation.requestId && !operation.childSessionId && !operation.devspace?.channel &&
-      !operation.terminal && !operation.devspace?.coldBellRecovery
-  }
-  async function retireNeverStarted(parent, taskContext, laneId) {
-    if (ctx.agents?.get(parent?.id) !== parent ||
-        contexts?.get(parent.id) !== taskContext)
-      return { status: 'POSTMAN_DEVSPACE_LUNA_CALLER_REJECTED' }
-    const original = record(parent.id)
-    if (!neverStarted(original, laneId))
-      return { status: 'POSTMAN_DEVSPACE_LUNA_BUSY' }
-    const bridgeJobId = laneOf(original, laneId).activeBridgeJobId
-    try {
-      await contexts.changeRecord(parent.id, row => {
-        if (!neverStarted(row, laneId) ||
-            laneOf(row, laneId).activeBridgeJobId !== bridgeJobId)
-          throw Error('POSTMAN_DEVSPACE_NEVER_STARTED_CHANGED')
-        const current = row.bridgeOperations[bridgeJobId]
-        return { ...row,
-          devspaceLanes: { ...row.devspaceLanes,
-            [laneId]: { ...row.devspaceLanes[laneId],
-              state: 'closed', activeBridgeJobId: null } },
-          bridgeOperations: { ...row.bridgeOperations,
-            [bridgeJobId]: { ...current, state: 'received', phase: 'not-sent',
-              synchronization: 'not-required', cancellationRequested: true } },
-        }
-      })
-    } catch { return { status: 'POSTMAN_DEVSPACE_LUNA_CLOSE_UNKNOWN' } }
-    return { status: 'POSTMAN_DEVSPACE_LUNA_CLOSED', laneId, bridgeJobId,
-      requestId: null, diagnostic: 'POSTMAN_DEVSPACE_NEVER_STARTED' }
-  }
   return {
     run(job, message, parent) {
       return get(parent.id, laneFromJob(job)).run(job, message, parent)
-    },
-    recoverColdBell(parent, bridgeJobId) {
-      const laneId = record(parent?.id)?.bridgeOperations?.[bridgeJobId]?.devspace?.laneId
-      return get(parent?.id, laneId).recoverColdBell(parent, bridgeJobId)
-    },
-    upgradeLateBell(parent, job) {
-      return get(parent?.id, laneFromJob(job)).upgradeLateBell(parent, job)
     },
     snapshot(parent) {
       const row = record(parent?.id)
@@ -114,40 +66,27 @@ export function createPostmanDevspaceLanes(ctx, contexts, direct) {
       }).filter(Boolean)
       if (!details.length) return legacy.snapshot(parent)
       return { ...(details.length === 1 ? details[0] : {}),
-        lanes: details, capacity: { used: details.filter(v => v.state !== 'closed').length, limit: 3 } }
+        lanes: details, capacity: { used: details.filter(v => v.runtimeActive).length, limit: 3 } }
     },
     async close(parent, taskContext, laneId) {
       if (ctx.agents?.get(parent?.id) !== parent ||
-          contexts?.get(parent?.id) !== taskContext)
+          taskContext?.leaderSessionId && taskContext.leaderSessionId !== parent.id)
         return { status: 'POSTMAN_DEVSPACE_LUNA_CALLER_REJECTED' }
-      if (laneId) {
-        if (!laneOf(record(parent.id), laneId))
-          return { status: 'POSTMAN_DEVSPACE_LUNA_LANE_NOT_FOUND' }
-        return neverStarted(record(parent.id), laneId)
-          ? retireNeverStarted(parent, taskContext, laneId)
-          : get(parent.id, laneId).close(parent, taskContext)
-      }
-      const ids = laneIds(record(parent.id))
+      const ids = laneId ? [laneId] : laneIds(record(parent.id))
       if (!ids.length) return legacy.close(parent, taskContext)
-      // Never partially close while another lane has a live child or an
-      // ambiguous/unproved REQ. Only no-side-effect reservations are exempt.
-      if (ids.some(id => {
-        const row = laneOf(record(parent.id), id)
-        return row?.state !== 'closed' &&
-          !neverStarted(record(parent.id), id) &&
-          (row?.state !== 'ready' || row?.activeBridgeJobId)
-      })) return { status: 'POSTMAN_DEVSPACE_LUNA_BUSY' }
       const results = []
       for (const id of ids) {
-        if (laneOf(record(parent.id), id)?.state === 'closed') continue
-        const outcome = neverStarted(record(parent.id), id)
-          ? await retireNeverStarted(parent, taskContext, id)
-          : await get(parent.id, id).close(parent, taskContext)
-        results.push({ laneId: id, ...outcome })
-        if (outcome.status !== 'POSTMAN_DEVSPACE_LUNA_CLOSED') return {
-          status: 'POSTMAN_DEVSPACE_LUNA_CLOSE_UNKNOWN', results }
+        const lane = laneOf(record(parent.id), id)
+        if (!lane) return { status: 'POSTMAN_DEVSPACE_LUNA_LANE_NOT_FOUND' }
+        if (lane.state === 'closed') continue
+        if (!lane.childId) {
+          await contexts.changeRecord(parent.id, row => ({ ...row, devspaceLanes: {
+            ...row.devspaceLanes, [id]: { ...laneOf(row, id), state: 'closed', activeBridgeJobId: null } } }))
+          results.push({ laneId: id, status: 'POSTMAN_DEVSPACE_LUNA_CLOSED' })
+        } else results.push({ laneId: id, ...await get(parent.id, id).close(parent, taskContext) })
       }
-      return { status: 'POSTMAN_DEVSPACE_LUNA_CLOSED', results }
+      return { status: results.every(v => v.status === 'POSTMAN_DEVSPACE_LUNA_CLOSED')
+        ? 'POSTMAN_DEVSPACE_LUNA_CLOSED' : 'POSTMAN_DEVSPACE_LUNA_CLOSE_UNKNOWN', results }
     },
   }
 }

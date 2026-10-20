@@ -20,7 +20,7 @@ URL = "https://chatgpt.com/c/861d4716-8c1b-41bc-b37e-a912e2323e70"
 
 
 class ChatReferenceTests(unittest.TestCase):
-    def test_transport_failure_is_not_eligible_for_continuation(self):
+    def test_unknown_failed_send_keeps_address_for_an_explicit_command(self):
         with tempfile.TemporaryDirectory() as root:
             direct_root = Path(root) / "direct"
             path = direct_root / "requests" / f"{REQ}.json"
@@ -33,9 +33,9 @@ class ChatReferenceTests(unittest.TestCase):
                 "repository": REPO,
                 "conversationUrl": URL,
             }), encoding="utf-8")
-            with self.assertRaises(chat_reference.ChatReferenceError) as ctx:
-                chat_reference.resolve_chat_reference(direct_root, REQ, expected_repository=REPO)
-            self.assertEqual(ctx.exception.code, "DIRECT_CHAT_REFERENCE_UNAVAILABLE")
+            reference = chat_reference.resolve_chat_reference(direct_root, REQ, expected_repository=REPO)
+            self.assertEqual(reference.conversation_url, URL)
+            self.assertEqual(reference.send_proof_class, "UNKNOWN")
 
     def failed_record(self, **fields):
         return {"requestId": REQ, "repository": REPO, "state": "FAILED", "ok": False,

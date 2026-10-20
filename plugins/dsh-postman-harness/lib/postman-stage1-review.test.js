@@ -18,7 +18,7 @@ const fixture=async(t,opts)=>{
   return {...f,dir}
 }
 const accepted=r=>{assert.equal(r.status,'POSTMAN_WORKER_TASK_ACCEPTED',JSON.stringify(r));return r.workerSessionId}
-const ptcArgs=program=>({program,description:'Execute known local batch before engineering review',boundary:'semantic_decision'})
+const ptcArgs=program=>({program,description:'Execute known local batch before engineering review'})
 const results=child=>{
   const ids=new Set(child.session.events.filter(e=>e.type==='tool/call'&&e.data.name==='ptc_execute').map(e=>e.data.callId))
   return child.session.events.filter(e=>e.type==='tool/result').flatMap(e=>e.data.message.content).filter(b=>ids.has(b.toolCallId)).map(b=>JSON.parse(b.content[0].text))
@@ -27,12 +27,13 @@ const results=child=>{
 test('Sol PTC real read/edit/reread is usable at initial continuation cold and fresh; stock observation applies',{timeout:20000},async t=>{
   const f=await fixture(t,dir=>({
     setupTools:async ctx=>{await writeFile(join(dir,'facts.txt'),'old fact');new LocalFileSystem(ctx,{cwd:dir,diffBasisMaxBytes:1048576});filesystemTools(ctx,{readLimit:2000,readMaxLineLength:2000,readMaxBytes:51200,readStreamMinSize:10485760});observationPolicy(ctx)},
-    plan:(_a,_r,n)=>n%2===1?{name:'ptc_execute',args:ptcArgs('let rejected=false;try{await tools.edit({file_path:"facts.txt",old_string:"old fact",new_string:"new fact"})}catch(e){rejected=true}const before=await tools.read({file_path:"facts.txt"});if(before.lines[0].text==="old fact")await tools.edit({file_path:"facts.txt",old_string:"old fact",new_string:"new fact"});const after=await tools.read({file_path:"facts.txt"});return {rejected,before:before.lines[0].text,after:after.lines[0].text}')}: {name:'report',args:{output:'Exact local mutation evidence; done'}}
+    plan:(_a,_r,n)=>n%2===1?{name:'ptc_execute',args:ptcArgs('const refusal=await tools.edit({file_path:"facts.txt",old_string:"old fact",new_string:"new fact"});const rejected=refusal.isError===true;const before=await tools.read({file_path:"facts.txt"});if(before.lines[0].text==="old fact")await tools.edit({file_path:"facts.txt",old_string:"old fact",new_string:"new fact"});const after=await tools.read({file_path:"facts.txt"});return {rejected,before:before.lines[0].text,after:after.lines[0].text}')}: {name:'report',args:{output:'Exact local mutation evidence; done'}}
   }))
   const id=accepted(await f.run(f.worker.solTaskTool,{task:'Scope: known facts.txt. Done: old to new. Check: stock observation and reread. Stop: report.'}))
   let child=await f.settled(id)
   assert.deepEqual(results(child)[0].value,{rejected:true,before:'old fact',after:'new fact'})
-  assert.equal(results(child)[0].effects.failed,1) // Caught refusal remains visible; no false all-effects PASS.
+  assert.equal(results(child)[0].effects.failed,0) // A tool refusal is completed data, not a failed PTC callback.
+  assert.ok(child.session.events.some(e=>e.type==='tool/code-dispatch'&&e.data.name==='edit'&&e.data.isError===true),'the native refusal remains visible')
   accepted(await f.run(f.worker.solTaskTool,{workerSessionId:id,task:'Already verified: mutation. Remaining: exact reread; stop report.'}));child=await f.settled(id)
   assert.equal(results(child).at(-1).status,'ok');assert.equal(results(child).at(-1).value.after,'new fact')
   await f.wake(f.leader)

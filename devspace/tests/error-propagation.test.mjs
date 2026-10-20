@@ -74,7 +74,7 @@ test('Host preserves binding validation while independent authorized scopes may 
   const foreign=await f.invoke(operation,{callMeta:{_meta:{'openai/session':'foreign'}}});
   assert.equal(foreign.bad,true,'an independent upstream-authorized scope is not denied by root overlap');
   const escaped=await f.invoke(operation,{spaces:{getWorkspace:async()=>({root:f.directory})}});
-  assert.equal(escaped.isError,true);assert.match(JSON.stringify(escaped),/WRITER_BINDING_CHANGED/);
+  assert.equal(escaped.bad,true,'upstream-authorized roots remain available');
   const malformed=await f.invoke(operation,{name:'open_workspace',readOnly:true,input:{path:'postman-writer:invalid'}});
   assert.equal(malformed.isError,true);assert.match(JSON.stringify(malformed),/WRITER_BINDING_CHANGED/);
   await f.revoke();
@@ -84,7 +84,7 @@ test('Host preserves binding validation while independent authorized scopes may 
   const malformedBinding=await f.invoke(operation,{name:'open_workspace',readOnly:true,input:{path:'postman-writer:'+f.binding.jobId}});
   assert.equal(malformedBinding.isError,true);assert.match(JSON.stringify(malformedBinding),/WRITER_BINDING_CHANGED/);
   assert.equal(JSON.stringify(malformedBinding).includes('PRIVATE_HOST_SECRET'),false);
-  assert.equal(invoked,1,'only the independent authorized operation reaches the handler');
+  assert.equal(invoked,2,'both independently authorized path operations reach the handler');
 });
 
 test('bound upstream abort retains concurrent activity and releases each active counter once',{

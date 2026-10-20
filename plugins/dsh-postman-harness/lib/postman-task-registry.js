@@ -32,8 +32,10 @@ export const POSTMAN_TASK_DOMAIN = defineDomain({
     if (Array.isArray(row.retiredWorkers)) row.retiredWorkers = row.retiredWorkers.map(stripWorker)
     return row
   }, z.object({
-    leaderSessionId: z.string().min(1), repository: z.string(), repositoryPath: z.string(),
-    originUrl: z.string(), baseCommit: z.string(), branch: z.string(), worktree: z.string(),
+    leaderSessionId: z.string().min(1), cwd: z.string().optional(), waitingForEvent: z.boolean().optional(),
+    // Historical Git metadata is readable but no longer grants or gates authority.
+    repository: z.string().optional(), repositoryPath: z.string().optional(),
+    originUrl: z.string().optional(), baseCommit: z.string().optional(), branch: z.string().optional(), worktree: z.string().optional(),
     bindingId: z.string().optional(),
     pullRequest: z.object({ number: z.number().int().positive(), url: z.string(), base: z.string() }).strict().optional(),
     resumedFrom: z.object({ leaderSessionId: z.string(), bindingId: z.string().optional() }).strict().optional(),
@@ -46,8 +48,8 @@ export const POSTMAN_TASK_DOMAIN = defineDomain({
     defaultBranch: z.string().min(1).optional(),
     baseSource: z.enum(['remote', 'cached', 'bootstrap']).optional(),
     devspaceReadOnly: z.boolean().optional(),
-    stage: z.enum(['intent', 'worktree', 'ready', 'uncertain', 'closed']),
-    diagnostic: z.string().nullable(),
+    stage: z.enum(['intent', 'worktree', 'ready', 'uncertain', 'closed']).optional(),
+    diagnostic: z.string().nullable().optional(),
     closedAt: z.string().optional(),
     abandoned: z.boolean().optional(),
     // Exact Worker retirement proof only, not external shell/app process death.
@@ -59,7 +61,7 @@ export const POSTMAN_TASK_DOMAIN = defineDomain({
       artifactRequests: z.array(z.string()),
       lifecycle: workerLifecycle.optional() }).nullable().optional(),
     workers: z.record(z.string(), z.object({
-      id: z.string(), label: z.string(), workerType: z.enum(['luna', 'sol', 'secretary']).optional(), ownerSessionId: z.string().optional(),
+      id: z.string(), label: z.string(), cwd: z.string().optional(), waitingForEvent: z.boolean().optional(), workerType: z.enum(['luna', 'sol', 'secretary']).optional(), ownerSessionId: z.string().optional(),
       pendingBudgets: z.record(z.string(), z.unknown()).optional(),
       budget: z.object({ assignmentId: z.string(), task: z.string(), used: z.number().int().nonnegative(),
         softLimit: z.number().int().positive(), hardLimit: z.number().int().positive(),
@@ -80,9 +82,9 @@ export const POSTMAN_TASK_DOMAIN = defineDomain({
       assignmentId: z.string(), worktree: z.string(), port: z.number().int().min(1).max(65535).optional(),
       terminal: z.enum(['completed', 'killed']).optional(), replacedBy: z.string().optional() }).strict()).optional(),
     runner: z.object({ state: z.enum(['none', 'running', 'failed', 'unknown', 'restoring']),
-      requestId: z.string().nullable() }),
+      requestId: z.string().nullable() }).optional(),
     // Keep the legacy single marker readable; new jobs use individually keyed operations.
-    bridge: z.object({ id: z.string(), state: z.enum(['pending', 'unknown']) }).nullable(),
+    bridge: z.object({ id: z.string(), state: z.enum(['pending', 'unknown']) }).nullable().optional(),
     // Stage 2: one exact continuable communications Luna belongs to the Leader task.
     // Optional on disk so Stage-1 and historical v1 rows remain readable.
     devspaceLuna: z.object({
@@ -132,7 +134,7 @@ export const POSTMAN_TASK_DOMAIN = defineDomain({
       // Trusted Host-only refusal before Luna/REQ/Send; retain through cold
       // JsonStorage rehydration so NOT_SENT does not consume DevSpace capacity.
       preSendFailure: z.literal('POSTMAN_DEVSPACE_WORKTREE_NOT_READY').optional(),
-    })).optional(),
+    }).passthrough()).optional(),
   }).strict())),
     // Same private ledger contract, independently addressable before any Git
     // task context is prepared. No repository document or new workspace.

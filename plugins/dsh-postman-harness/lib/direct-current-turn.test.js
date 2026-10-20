@@ -208,8 +208,6 @@ test('image transport requires exact durable descriptor and bytes, never grants 
       children.at(-1).stdout.emit('data', JSON.stringify({ ...terminal, requestId: started.requestId }))
       children.at(-1).emit('close', 0)
       assert.equal(manager.view('image').result.code, expected)
-      if (expected === 'IMAGE_RESULT_DURABLE')
-        await assert.rejects(manager.continueLast('image', '/repo'), /POSTMAN_AUTOMATIC_CONTINUATION_NOT_ALLOWED/)
     }
     await manager.start({ sessionId: 'image', workspace: '/repo', payload: 'draw', branch: 'main', transportKind: 'image', chatRequestId: 'REQ_20260921T193936Z_3678' })
     assert.ok(args.at(-1).includes('-ChatRequestId'))
@@ -491,7 +489,6 @@ test('tool surface has no task/payload/prompt arguments', () => {
     'postman_send_current_turn',
     'postman_current_turn_status',
     'postman_ask_validate_reply',
-    'postman_continue_last_request',
   ])
   for (const tool of bridge.tools.filter(tool => tool.name !== 'postman_ask_validate_reply')) {
     assert.deepEqual(tool.parameters, {})
@@ -526,76 +523,6 @@ test('send_current_turn reads captured runtime text, not model arguments, and co
   await assert.rejects(bridge.tools[0].execute({}, { agent }), /POSTMAN_CURRENT_TURN_ALREADY_USED/)
   bridge.dispose()
 })
-
-
-test('automatic continuation is deterministic and does not accept model-written text', async () => {
-  const children = []
-  const invocations = []
-  const manager = new DirectPostmanJobManager({
-    exists: () => true,
-    now: (() => {
-      const values = [new Date('2026-09-22T12:34:56.000Z'), new Date('2026-09-22T12:35:56.000Z')]
-      return () => values.shift()
-    })(),
-    randomInt: (() => { const xs = [1, 2]; return () => xs.shift() })(),
-    spawn(command, args, options) {
-      const child = fakeChild()
-      children.push(child)
-      invocations.push({ command, args, options })
-      queueMicrotask(() => child.emit('spawn'))
-      return child
-    },
-  })
-  const first = await manager.start({ sessionId: 's1', workspace: '/repo', payload: 'x', proof: {}, branch: 'main' })
-  children[0].stdout.emit('data', Buffer.from(JSON.stringify({
-    ok: true,
-    code: 'ASSISTANT_COMPLETED_NO_ARTIFACT',
-    state: 'ASSISTANT_COMPLETED_NO_ARTIFACT',
-    requestId: first.requestId,
-    rootRequestId: first.requestId,
-    continuationIndex: 0,
-    assistantText: 'progress',
-  })))
-  children[0].emit('close', 0, null)
-
-  const second = await manager.continueLast('s1', '/repo')
-  assert.equal(second.chatRequestId, first.requestId)
-  const args = invocations[1].args
-  assert.equal(args.includes('-AutomaticContinuation'), true)
-  assert.equal(args[args.indexOf('-ChatRequestId') + 1], first.requestId)
-  const payload = Buffer.from(args[args.indexOf('-TaskBase64') + 1], 'base64').toString('utf8')
-  assert.match(payload, /^Продолжи исходную незавершённую задачу/)
-})
-
-test('Host permits one automatic recovery and blocks the second before child spawn', async () => {
-  const children = []
-  const manager = new DirectPostmanJobManager({
-    exists: () => true,
-    now: (() => { let n = 0; return () => new Date(Date.UTC(2026, 8, 22, 12, 34, ++n)) })(),
-    randomInt: () => 7,
-    spawn() {
-      const child = fakeChild()
-      children.push(child)
-      queueMicrotask(() => child.emit('spawn'))
-      return child
-    },
-  })
-  const terminal = (index, code = 'ASSISTANT_COMPLETED_NO_ARTIFACT') => {
-    const job = manager.latest('chain')
-    children[index].stdout.emit('data', JSON.stringify({ ok: true, code, state: code,
-      requestId: job.requestId, rootRequestId: root.requestId, continuationIndex: index }))
-    children[index].emit('close', 0, null)
-  }
-  const root = await manager.start({ sessionId: 'chain', workspace: '/repo', payload: 'intent', branch: 'main' })
-  terminal(0)
-  const first = await manager.continueLast('chain', '/repo')
-  assert.equal(first.chatRequestId, root.requestId)
-  terminal(1, 'ARTIFACT_REJECTED')
-  await assert.rejects(manager.continueLast('chain', '/repo'), /POSTMAN_AUTOMATIC_CONTINUATION_LIMIT_REACHED/)
-  assert.equal(children.length, 2)
-  assert.equal(manager.latest('chain').requestId, first.requestId)
-})
-
 
 
 test('Direct wait abort promptly cleans waiter/listener and never kills the transport', { timeout: 2000 }, async t => {
@@ -678,19 +605,3 @@ test('current-turn status forwards exec.signal and plugin disposal wakes Direct 
   assert.equal(manager.view(agent.id).status, 'COMPLETED')
 })
 
-test('Host refuses durable terminals and preserves text/image mode for recovery', async () => {
-  const manager = new DirectPostmanJobManager({ spawn() { throw Error('must not spawn') } })
-  for (const code of ['RESULT_DURABLE', 'TEXT_RESULT_DURABLE', 'IMAGE_RESULT_DURABLE']) {
-    manager.jobs.set('terminal', { state:'completed', requestId:'REQ_20260922T123456Z_0001', result:{code} })
-    await assert.rejects(manager.continueLast('terminal','/repo'), /POSTMAN_AUTOMATIC_CONTINUATION_NOT_ALLOWED/)
-  }
-  manager.start = async args => args
-  for (const transportKind of ['text','image','artifact']) {
-    manager.jobs.set('terminal', { state:'completed', requestId:'REQ_20260922T123456Z_0001', transportKind,
-      branch:'main', result:{code:'POSTMAN_TRANSPORT_FAILED'} })
-    const args = await manager.continueLast('terminal','/repo')
-    assert.equal(args.transportKind, transportKind)
-    assert.equal(args.automaticContinuation,true)
-    assert.equal(args.chatRequestId,'REQ_20260922T123456Z_0001')
-  }
-})

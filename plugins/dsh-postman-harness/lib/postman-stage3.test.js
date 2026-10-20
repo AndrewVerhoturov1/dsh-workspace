@@ -9,55 +9,35 @@ import {postmanRoleInstruction, FAST_WORKER_BUDGET} from './postman-worker.js'
 import {POSTMAN_PTC_DISCIPLINE} from './ptc-discipline.js'
 
 const root = new URL('../../../', import.meta.url)
-test('bounded Stage 3 source contract: kernel first, routing, safety and FAST budget', async () => {
+test('minimal Host role instructions preserve PTC, routing and user guarantees', async () => {
   const leader = await readFile(new URL('.agents/skills/postman-leader/SKILL.md', root), 'utf8')
   for (const marker of managementMarkers.leader) assert.match(leader, marker)
-  assert.ok(leader.indexOf('## 2. Management Kernel') < leader.indexOf('## 4. Routing'))
-  assert.ok(leader.split('\n').length < 350, 'structural rewrite, not another append-only playbook')
-  for (const kind of ['DECISION','FACT','IMPLEMENTATION','MECHANICAL_VERIFY','USER_VISIBLE_VERIFY','EXTERNAL_RESEARCH','TRANSPORT','USER_INPUT']) assert.ok(leader.includes(kind), kind)
+  assert.ok(leader.split('\n').length < 350, 'instructions remain bounded')
   for (const role of ['luna','secretary','sol']) {
     const skill = postmanRoleInstruction(role)
     for (const marker of managementMarkers[role]) assert.match(skill, marker)
     assert.match(skill, /hardBudget:60/)
   }
-  assert.match(leader, /constraint без источника/i)
   for (const path of ['.agents/skills/postman-leader/SKILL.md',
     '.agents/skills/postman-sol-worker/SKILL.md',
     '.agent-presets/postman-leader/agent.cordis.yml', '.agent-presets/postman-leader-ptc/agent.cordis.yml',
     'plugins/dsh-postman-harness/README.md', 'postman/POSTMAN_BRIDGE_FLOW.md',
     'docs/subprojects/postman/SUBPROJECT.md', 'docs/subprojects/ptc/PTC_CONTRACT.md']) {
     const text = await readFile(new URL(path, root), 'utf8')
-    assert.doesNotMatch(text, obsoleteSolPermission, path + ': no obsolete normative Sol permission')
-    assert.doesNotMatch(text, /Sol controls direct-only у Sol|controls собственных Worker остаются direct-only|Worker controls (?:are )?direct-only/, path + ': no obsolete Sol direct-control flow')
+    assert.doesNotMatch(text, obsoleteSolPermission, path + ': no obsolete Sol permission')
+    assert.doesNotMatch(text, /postman_task_prepare|postman_task_restore|postman_task_close|expectStatus|yield_on_success|retrySync|reconcileWriter/, path + ': removed Host workflow stays removed')
   }
-  assert.match(leader, /NOT_SENT \/ TERMINAL \/ OUTCOME_UNKNOWN/)
-  assert.match(POSTMAN_PTC_DISCIPLINE, /true successful-path/)
-  assert.match(POSTMAN_PTC_DISCIPLINE, /multi-outcome lifecycle/)
-  assert.doesNotMatch(POSTMAN_PTC_DISCIPLINE, /experimental Leader|Child role execution is direct/i)
-  assert.match(POSTMAN_PTC_DISCIPLINE, /canonical\/compat Leader uses supervisor PTC/)
-  assert.match(POSTMAN_PTC_DISCIPLINE, /Host-managed Sol Worker\s+uses a separate engineering PTC profile/)
-  assert.match(POSTMAN_PTC_DISCIPLINE, /Sol owned Worker controls are PTC-managed \/ PTC-only/)
-  assert.match(POSTMAN_PTC_DISCIPLINE, /ordinary Worker and Secretary remain direct-only, without PTC/)
-  const readme = await readFile(new URL('plugins/dsh-postman-harness/README.md', root), 'utf8')
-  const compact = readme.split('\n').find(line => line.startsWith('`postman_worker_compact('))
-  assert.match(compact, /resident idle Worker ИЛИ proven settled non-resident durable Worker/)
-  assert.match(compact, /ту же Session\/ID, binding, FAST budget/)
-  assert.match(compact, /Active\/pending\/uncertain остаются blocked\/busy/)
-  assert.doesNotMatch(readme, /compactNow` только для trustworthy exact resident/)
+  assert.match(POSTMAN_PTC_DISCIPLINE, /Leader and Sol Worker.*PTC-managed/)
+  assert.match(POSTMAN_PTC_DISCIPLINE, /Only program is required/)
+  assert.match(POSTMAN_PTC_DISCIPLINE, /wait_for_event:true/)
+  assert.match(POSTMAN_PTC_DISCIPLINE, /tool refusal is ordinary data/)
+  assert.match(POSTMAN_PTC_DISCIPLINE, /Completed effects/)
+  assert.doesNotMatch(POSTMAN_PTC_DISCIPLINE, /Mandatory pre-return self-check|presumptively underbatched|expectStatus/)
   const contract = await readFile(new URL('docs/subprojects/ptc/PTC_CONTRACT.md', root), 'utf8')
-  assert.match(contract, /Skill v33/); assert.doesNotMatch(contract, /Skill v(?:29|30)/)
-  assert.match(contract, /postman_task_prepare\/postman_task_restore\/postman_task_close\/postman_input_files/)
-  assert.match(contract, /postman_task_close` явно retire-ит settled Leader task binding/)
-  assert.match(contract, /не Git cleanup и не доказательство success/)
-  assert.match(contract, /runtime default — hard60; configurable `hardBudget` 8\.\.100; независимый budget каждого assignment/)
-  assert.match(contract, /Stage 3 substantial assignments запрашивают `hardBudget:60` → Host soft48/)
+  assert.match(contract, /обязателен только `program`/)
+  assert.match(contract, /wait_for_event:true/)
+  assert.match(contract, /Не требуется|не нужны|не требует/)
   assert.deepEqual(FAST_WORKER_BUDGET, {hardLimit:60,softLimit:48})
-  const example = leader.split('\n').find(line => line.includes('**Known-status branching**'))
-  assert.ok(example, 'known status branching example')
-  assert.doesNotMatch(example, /expectStatus/)
-  assert.match(example, /POSTMAN_WORKER_COMPACT_NOT_RESIDENT.*continuation_blocked/ )
-  assert.match(example, /ожидаемый отказ обрабатывай условием, не runtime error/ )
-  assert.match(example, /без фиктивного fresh/ )
   const browser = JSON.parse(await readFile(new URL('profiles/web/playwright-mcp.config.json', root), 'utf8'))
   assert.equal(browser.browser.isolated, true)
   assert.equal(browser.browser.browserName, 'chromium')
@@ -72,7 +52,7 @@ test('bounded Stage 3 source contract: kernel first, routing, safety and FAST bu
 // Scripted text-only turns verify contract delivery before any task preparation.
 // They are NOT evidence that a real model makes the right routing decision.
 for (const preset of ['postman-leader', 'postman-leader-ptc']) {
-  test(preset + ' actual routing requests retain initial approval in localDevelopment', {timeout:45000}, async t => {
+  test(preset + ' actual requests deliver Leader judgement without blanket Host approval in localDevelopment', {timeout:45000}, async t => {
     const dir = await mkdtemp(join(tmpdir(), 'postman-stage3-routing-'))
     const f = await capabilityRuntime(dir, {preset, localDevelopment:true})
     t.after(async () => {await f.dispose(); await rm(dir, {recursive:true, force:true, maxRetries:5, retryDelay:100})})
@@ -87,13 +67,13 @@ for (const preset of ['postman-leader', 'postman-leader-ptc']) {
     ]) {
       const request = await f.turn(f.leader, prompt)
       assertManagementRequest('leader', request)
-      assert.match(request.system, /localDevelopment[^.]*does not bypass initial execution-plan approval/)
-      assert.match(request.system, /Truly trivial read-only\/factual requests execute directly/)
-      assert.match(request.system, /no Worker\/Secretary\/Sol, Bridge\/Postman transport, implementation, tests\/build or mutating Git\/product operations/)
-      assert.match(request.system, /Local deep engineering\/review -> Sol; external\/current research or useful independent outside opinion -> PostmanAsk/)
-      assert.match(request.system, /STOP -> revised plan -> approval/)
+      assert.match(request.system, /Leader chooses routing, retries, recovery and acceptance/)
+      assert.doesNotMatch(request.system, /does not bypass initial execution-plan approval|no Worker\/Secretary\/Sol, Bridge\/Postman transport/)
       assert.equal(f.results.length, 0, 'delivery-only fixture executes no tools or transport')
-      assert.equal(f.registry.get('leader'), null, 'no task preparation or role creation')
+      const row = f.registry.get('leader')
+      assert.deepEqual(row?.workers ?? {}, {}, 'no role creation')
+      assert.equal(row?.branch, undefined, 'no Git branch preparation')
+      assert.equal(row?.worktree, undefined, 'no Host worktree preparation')
     }
   })
 }

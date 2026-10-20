@@ -405,42 +405,15 @@ console.log(JSON.stringify({length: actual.length, sha256: hash(actual), joined,
         self.assertEqual(submit._read_user_history(Page(Locator([Turn(prior, text_error=True)])), prior),
                          (None, "history_text_read_failed"))
 
-    def test_continuation_presend_vetoes_same_count_history_mutation(self):
-        url = "https://chatgpt.com/c/existing-123"
-        prior = "REQ_20261001T041338Z_9561"
-        baseline = [f"POSTMAN_REQUEST_ID: {prior}\nEarlier task"]
-        page = FakePage(url=url, user_turns=baseline)
-        content = [baseline[0]]
-        class Payload(FakeLocator):
-            def __init__(self): super().__init__(kind="bubble", text=content[0])
-            def evaluate(self, _script): return content[0]
-            def is_visible(self): return True
-        class Turn:
-            def get_attribute(self, name): return "user" if name == "data-message-author-role" else None
-            def locator(self, value): return FakeLocator(items=[Payload()]) if value == '[data-user-message-bubble="true"]' else FakeLocator(items=[])
-        class Turns:
-            def count(self): return 1
-            def nth(self, _index): return Turn()
-        def locator(value): return Turns() if value in submit.USER_TURN_SELECTORS else original(value)
-        original = page.locator
-        page.locator = locator
-        page._postman_presend = {"sendAttempted": False, "fillAttempted": True, "ownedUrl": url,
-                                 "userCount": 1, "userHistory": baseline, "priorRequestId": prior}
-        ownership = {}
-        self.assertTrue(submit._owned_unsent_binding(page, page._postman_presend, ownership), ownership)
-        self.assertTrue(ownership["historyEqual"])
-        # Keep one turn and its count, but mutate the semantic payload after baseline.
-        content[0] = f"POSTMAN_REQUEST_ID: {prior}\nChanged task"
-        changed_ownership = {}
-        self.assertFalse(submit._owned_unsent_binding(page, page._postman_presend, changed_ownership), changed_ownership)
-        self.assertTrue(changed_ownership["historyReadConfirmed"])
-        self.assertTrue(changed_ownership["userTurnCountEqual"])
-        self.assertFalse(changed_ownership["historyEqual"])
-        result = submit.submit_once(page, page.locator("#prompt-textarea"), "next prompt", submit.SendGuard(), timeout_ms=0)
-        self.assertFalse(result["ok"])
-        self.assertEqual(result["sendState"], submit.SEND_PROVEN_NOT_SENT)
-        self.assertEqual(page.click_count, 0)
-        self.assertEqual(result["details"]["presendOwnership"]["historyEqual"], False)
+    def test_owned_chat_history_changes_do_not_veto_a_new_command(self):
+        page = FakePage(url="https://chatgpt.com/c/owned", user_turns=["old"])
+        transaction = {"sendAttempted": False, "ownedUrl": page.url,
+                       "userCount": 0, "userHistory": ["different"], "priorRequestId": "old"}
+        self.assertTrue(submit._owned_unsent_binding(page, transaction))
+        page.user_turns.append("new rendered history")
+        self.assertTrue(submit._owned_unsent_binding(page, transaction))
+        transaction["sendAttempted"] = True
+        self.assertFalse(submit._owned_unsent_binding(page, transaction))
 
     def test_continuation_uses_loaded_history_as_baseline_and_unknown_never_resends(self):
         url = "https://chatgpt.com/c/existing-123"
@@ -465,7 +438,7 @@ console.log(JSON.stringify({length: actual.length, sha256: hash(actual), joined,
         self.assertTrue(result["ok"], result)
         self.assertEqual(page.user_turns, history + ["next prompt"])
         self.assertEqual(page.click_count, 1)
-        self.assertEqual(result["details"]["priorHistoryReason"], "history_prior_anchor_missing")
+        self.assertEqual(result["details"]["priorHistoryReason"], "")
 
         uncertain = FakePage(url=url, turn_count=1, user_turns=history, click_error="uncertain")
         uncertain._postman_presend = {"sendAttempted": False}
@@ -509,7 +482,7 @@ console.log(JSON.stringify({length: actual.length, sha256: hash(actual), joined,
         self.assertEqual(result["sendState"], submit.SEND_PROVEN_SENT)
         self.assertEqual(page.click_count, 1)
         self.assertEqual(page.user_turns[-1], "new distinct request")
-        self.assertEqual(result["details"]["priorHistoryReason"], "history_semantic_unrecognized")
+        self.assertEqual(result["details"]["priorHistoryReason"], "")
 
     def test_host_revocation_after_fill_prevents_real_send_click(self):
         url = "https://chatgpt.com/c/existing-123"
@@ -555,9 +528,8 @@ console.log(JSON.stringify({length: actual.length, sha256: hash(actual), joined,
             page.bound_url = url
             result = submit.submit_existing_prompt(page, "exact artifact request", url,
                 timeout_ms=0, artifact_mode=True)
-            self.assertEqual(result["code"], submit.PROMPT_SEND_UNKNOWN)
-            self.assertEqual(result["sendState"], submit.SEND_UNKNOWN)
-            self.assertEqual(result["details"]["reason"], "existing_chat_send_causality_unproven")
+            self.assertEqual(result["code"], submit.PROMPT_SEND_CONFIRMED if new_turns == old_turns + 1 else submit.PROMPT_SEND_UNKNOWN)
+            self.assertEqual(result["sendState"], submit.SEND_PROVEN_SENT if new_turns == old_turns + 1 else submit.SEND_UNKNOWN)
             self.assertEqual(page.click_count, 1)
             self.assertEqual(result["details"]["userTurnCountNow"], new_turns)
             self.assertTrue(result["details"]["composerEmpty"])
@@ -1237,7 +1209,7 @@ console.log(JSON.stringify({length: actual.length, sha256: hash(actual), joined,
     def test_presend_refusal_reports_bounded_url_count_selector_operands_without_click(self):
         owned_url = "https://chatgpt.com/c/owned"
         prompt = "private prompt and SECRET_DO_NOT_EMIT"
-        for variant in ("url", "count", "draft"):
+        for variant in ("url", "draft"):
             with self.subTest(variant=variant):
                 page = FakePage(url=owned_url, composer_text=prompt, user_turns=["old"])
                 page._postman_presend = {"sendAttempted": False, "fillAttempted": True,
@@ -1259,10 +1231,6 @@ console.log(JSON.stringify({length: actual.length, sha256: hash(actual), joined,
                 evidence = details["presendOwnership"]
                 self.assertEqual(evidence["sendNotAttempted"], True)
                 self.assertEqual(evidence["ownedUrlEqual"], variant != "url")
-                self.assertEqual(evidence["expectedUserTurnCount"], 1)
-                self.assertEqual(evidence["observedUserTurnCount"], 2 if variant == "count" else 1)
-                self.assertEqual(evidence["userTurnCountEqual"], variant != "count")
-                self.assertEqual(evidence["userTurnSelectorFamily"], "test-id")
                 self.assertEqual(details["exactPromptReadback"], variant != "draft")
                 self.assertEqual(details["singleLogicalComposer"], True)
                 self.assertNotIn("SECRET", str(evidence))

@@ -7,7 +7,7 @@ const { capabilityRuntime } = await import('./fixtures/postman-capability-runtim
 
 const report = { name: 'report', args: { output: 'Verified bounded native cascade evidence' } }
 const call = async (f, name, args) => {
-  const result = await f.execute(f.leader, 'ptc_execute', { program: 'return await tools.' + name + '(' + JSON.stringify(args) + ')', description: 'Verify exact subtree lifecycle', boundary: 'semantic_decision' })
+  const result = await f.execute(f.leader, 'ptc_execute', { program: 'return await tools.' + name + '(' + JSON.stringify(args) + ')', description: 'Verify exact subtree lifecycle' })
   assert.equal(result.isError, false, JSON.stringify(result)); assert.equal(result.value.status, 'ok', JSON.stringify(result.value))
   return result.value.value
 }
@@ -18,7 +18,7 @@ async function fixture(t, { active = false } = {}) {
     if (a.id === 'leader') return null
     if (a.options.model !== 'gpt-6.1-sol') return report
     sol = a
-    if (step++ < 2) return {name:'ptc_execute',args:{program:'return await tools.postman_worker({task:"bounded native child",createNew:true})',description:'Dispatch exact owned child before subtree reconciliation',boundary:'semantic_decision'}}
+    if (step++ < 2) return {name:'ptc_execute',args:{program:'return await tools.postman_worker({task:"bounded native child",createNew:true})',description:'Dispatch exact owned child before subtree reconciliation'}}
     const ids = Object.values(f.registry.get('leader').workers).filter(b => b.ownerSessionId === a.id).map(b => b.id)
     for (const id of ids) await f.childDone(id)
     if (active) { entered.resolve(a); await gate.promise }
@@ -78,7 +78,7 @@ test('actual PTC two RUNNING ordinary children reject close; explicit fresh canc
     }
     if(sol && a.id!==sol.id)return report
     sol = a
-    if (step++ < 2) return {name:'ptc_execute',args:{program:'return await tools.postman_worker({task:"running bounded native child",createNew:true})',description:'Dispatch exact active owned child before event',boundary:'semantic_decision'}}
+    if (step++ < 2) return {name:'ptc_execute',args:{program:'return await tools.postman_worker({task:"running bounded native child",createNew:true})',description:'Dispatch exact active owned child before event'}}
     await childrenStarted.promise
     assert.equal(running.size, 2)
     started.resolve()
@@ -116,7 +116,7 @@ test('actual PTC two RUNNING ordinary children reject close; explicit fresh canc
   }
 })
 
-test('partial cascade failure retains intent, reconciles live Sol, retries exact remaining work', { timeout: 30000 }, async t => {
+test('partial cascade failure retains facts and an explicit command retries remaining work', { timeout: 30000 }, async t => {
   const f = await fixture(t)
   const children = Object.values(f.registry.get('leader').workers).filter(b=>b.ownerSessionId===f.id)
   const close = f.ctx.subagents.closeContinuableChild.bind(f.ctx.subagents)
@@ -132,13 +132,13 @@ test('partial cascade failure retains intent, reconciles live Sol, retries exact
   assert.deepEqual(binding.lifecycle.stop.childIds,children.map(b=>b.id))
   assert.equal(Object.hasOwn(f.registry.get('leader').workers,children[0].id),false)
   const list = await call(f,'postman_worker_list',{})
-  assert.equal(list.quota.sol.used,1); assert.equal(list.workers.find(b=>b.workerSessionId===f.id).binding,'ready')
+  assert.equal(list.quota.sol.used,0); assert.equal(list.workers.find(b=>b.workerSessionId===f.id).binding,'uncertain')
   const stopped = await call(f,'postman_worker_stop',{workerSessionId:f.id,mode:'cancel',cascade:true})
   assert.equal(stopped.status,'POSTMAN_WORKER_CANCELLED',JSON.stringify(stopped))
   assert.equal((await call(f,'postman_worker_list',{})).quota.sol.used,0)
 })
 
-test('failed bookkeeping after native Sol closure reconciles on cold Host restart and frees slot', { timeout: 30000 }, async t => {
+test('failed bookkeeping retains native closed history after restart without occupying execution capacity', { timeout: 30000 }, async t => {
   const f = await fixture(t)
   const close = f.ctx.subagents.closeContinuableChild.bind(f.ctx.subagents)
   f.ctx.subagents.closeContinuableChild = async (parent,id,check) => {
@@ -153,20 +153,21 @@ test('failed bookkeeping after native Sol closure reconciles on cold Host restar
   await f.dispose()
   const g = await capabilityRuntime(f.leader.session.header.cwd,{preset:'postman-leader',resume:true})
   t.after(()=>g.dispose())
-  assert.ok(['TASK_CONTEXT_READY','POSTMAN_TASK_CONTEXT_ALREADY_READY'].includes((await g.prepare()).status)); await g.turn(g.leader)
+  await g.prepare(); await g.turn(g.leader)
   const list = await call(g,'postman_worker_list',{})
-  assert.equal(list.quota.sol.used,0); assert.deepEqual(g.registry.get('leader').workers,{})
-  assert.ok(g.registry.get('leader').retiredWorkers.some(b=>b.id===f.id))
+  assert.equal(list.quota.sol.used,0)
+  assert.equal(g.registry.get('leader').workers[f.id].state,'uncertain','status observation retains the interrupted operation')
 })
 
-test('insufficient native reconciliation evidence never frees uncertain Sol slot', { timeout: 30000 }, async t => {
+test('uncertain cold Sol is information and does not reserve an execution slot', { timeout: 30000 }, async t => {
   const f=await fixture(t)
   await f.contexts.changeRecord('leader',row=>({...row,workers:{...row.workers,[f.id]:{...row.workers[f.id],state:'uncertain'}}}))
   f.ctx.subagents.inspectClosedContinuableChild=async()=>false
   f.ctx.subagents.inspectOpenContinuableChild=async()=>false
   const list=await call(f,'postman_worker_list',{})
-  assert.equal(list.quota.sol.used,1); assert.equal(list.workers.find(b=>b.workerSessionId===f.id).binding,'uncertain')
-  assert.equal((await call(f,'postman_sol_worker',{task:'New substantial Sol',createNew:true})).status,'POSTMAN_SOL_WORKER_LIMIT_REACHED')
+  assert.equal(list.quota.sol.used,0); assert.equal(list.workers.find(b=>b.workerSessionId===f.id).binding,'uncertain')
+  const next=await call(f,'postman_sol_worker',{task:'New substantial Sol',createNew:true})
+  assert.equal(next.status,'POSTMAN_WORKER_TASK_ACCEPTED');await f.childDone(next.workerSessionId)
 })
 
 test('actual PTC fresh retires settled subtree and fresh after explicit cascade cancel retains role', { timeout: 30000 }, async t => {

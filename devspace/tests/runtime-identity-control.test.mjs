@@ -27,7 +27,6 @@ test('private runtime inspection is authenticated, read-only and bound to the ru
   const host=await inspectDevspaceRuntime({controlFile:control.file});
   assert.equal(host.status,'RUNTIME_IDENTITY_PROVEN');
   assert.equal(host.instanceId,identity.instanceId);assert.equal(host.sha256,identity.sha256);
-  assert.deepEqual(runtime.untrackedRoots(),[]);
   assert.equal(await readFile(control.file,'utf8'),before,'identity inspection must not alter the writer census');
   assert.doesNotMatch(JSON.stringify(identity),new RegExp(descriptor.secret));
 });

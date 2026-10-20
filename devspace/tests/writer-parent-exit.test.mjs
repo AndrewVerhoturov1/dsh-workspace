@@ -55,7 +55,7 @@ await control.close();
   await delay(2200);assert.equal(await health(url),true,'timeout/Node EOF must not kill an app that keeps writing output');
   fresh=createWriterRuntime({root:channelRoot});control=await startWriterControl(fresh,{file:controllerFile});
   const coldClaim=await fresh.runTool('open_workspace',{path:'postman-writer:'+bridgeJobId},meta,workspaces,async()=>({bad:true}),true);
-  assert.equal(coldClaim.isError,true);
+  assert.equal(coldClaim.bad,true,'an explicit command may reclaim its own persisted job');
   assert.equal(fresh.reconcile(binding).ok,false,'lost generation census is not recreated as active zero');
   let mutated=false;
   const foreign={_meta:{'openai/session':'independent-cold-scope'}};
@@ -86,50 +86,3 @@ await control.close();
   assert.equal(await readFile(kept,'utf8'),'user data must remain unchanged');
 });
 
-test('ordinary upstream background retains only its overlapping unknown root across controller restart; bound argv receives stdin EOF',{timeout:30000},async t=>{
-  const root=await mkdtemp(join(tmpdir(),'postman-unbound-census-'));
-  const worktree=join(root,'old'),disjoint=join(root,'new'),channelRoot=join(root,'channels');
-  await mkdir(worktree);await mkdir(disjoint);await mkdir(channelRoot);
-  const file=join(root,'writer-control.json'),portFile=join(worktree,'port.txt');
-  const app=join(worktree,'app.cjs'),launcher=join(worktree,'launch.cjs');
-  await writeFile(app,`const http=require('http'),fs=require('fs');const server=http.createServer((q,r)=>{r.end('alive');if(q.url==='/stop')server.close()});server.listen(0,'127.0.0.1',()=>fs.writeFileSync(${JSON.stringify(portFile)},String(server.address().port)));`);
-  await writeFile(launcher,`require('child_process').spawn(process.execPath,[${JSON.stringify(app)}],{detached:true,stdio:'ignore',windowsHide:true}).unref();`);
-  const install=process.env.DEVSPACE_INSTALL_ROOT??'C:/Users/Andrew/.dsh/devspace';
-  const {createBashTool}=await import(pathToFileURL(join(install,'node_modules/@earendil-works/pi-coding-agent/dist/index.js')));
-  const previousPath=process.env.PATH;process.env.PATH='C:/Program Files/Git/bin;'+previousPath;
-  let control,url;
-  t.after(async()=>{
-    process.env.PATH=previousPath;
-    if(url)try{await fetch(url+'/stop',{signal:AbortSignal.timeout(1000)});}catch{}
-    if(control)await control.close();
-    await rm(root,{recursive:true,force:true,maxRetries:5,retryDelay:100});
-  });
-  const old=createWriterRuntime({root:channelRoot});control=await startWriterControl(old,{file});
-  const workspaces={getWorkspace:async()=>({root:worktree})},meta={_meta:{'openai/session':'ordinary-external'}};
-  const command=`"${process.execPath.replaceAll('\\','/')}" "${launcher.replaceAll('\\','/')}"`;
-  const result=await old.runTool('bash',{workspace_id:'old',command,timeout:4},meta,workspaces,()=>{
-    assert.equal(old.bashOperations(()=>{}),undefined,'ordinary Bash must receive real upstream default operations');
-    return createBashTool(worktree).execute(randomUUID(),{command,timeout:4});
-  });
-  assert.equal(result.isError,undefined);
-  await until(async()=>{try{url='http://127.0.0.1:'+Number(await readFile(portFile,'utf8'));return await health(url);}catch{return false;}});
-  await control.close();control=null;
-  const saved=JSON.parse(await readFile(file,'utf8'));assert.deepEqual(saved.untrackedRoots,[worktree]);assert.equal(saved.port,undefined);
-  const fresh=createWriterRuntime({root:channelRoot});control=await startWriterControl(fresh,{file});
-  const makeBinding=target=>createDevspaceChannel({root:channelRoot,bridgeJobId:randomUUID(),leaderSessionId:'leader',lunaSessionId:randomUUID(),
-    requestId:'REQ_20261017T123458Z_2347',worktree:target,branch:'task/postman-'+randomUUID().replaceAll('-',''),mode:'WRITE_ISOLATED',sourceRoot:root});
-  const bind=async(owned,scope)=>fresh.runTool('open_workspace',{path:'postman-writer:'+owned.jobId},{_meta:{'openai/session':scope}},
-    {getWorkspace:async()=>({root:owned.writeRoot})},async()=>({ok:true}),true);
-  const overlapping=makeBinding(worktree);assert.equal((await bind(overlapping,'overlap')).ok,true);
-  await writeFile(join(overlapping.channel,'revoked.json'),JSON.stringify(overlapping));
-  assert.equal(fresh.reconcile(overlapping).code,'OTHER_WRITER_ACTIVE','root-exit/restart cannot prove ordinary descendants stopped');
-  const independent=makeBinding(disjoint);assert.equal((await bind(independent,'disjoint')).ok,true);
-  const independentMeta={_meta:{'openai/session':'disjoint'}},independentWorkspaces={getWorkspace:async()=>({root:disjoint})};
-  let output='';
-  await fresh.runTool('bash',{workspace_id:'new'},independentMeta,independentWorkspaces,()=>fresh.bashOperations(
-    ()=>({shell:process.execPath,args:['-e'],commandTransport:'argv'})).exec("process.stdin.on('end',()=>console.log('STDIN_EOF'));process.stdin.resume()",disjoint,
-    {env:process.env,timeout:8,onData:data=>output+=data}));
-  assert.match(output,/STDIN_EOF/,'the shell must receive EOF instead of inheriting the helper stop-control pipe');
-  await writeFile(join(independent.channel,'revoked.json'),JSON.stringify(independent));
-  assert.equal(fresh.reconcile(independent).ok,true,'an unknown ordinary background must not block an independent root');
-});

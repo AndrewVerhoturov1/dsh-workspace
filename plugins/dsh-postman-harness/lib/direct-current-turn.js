@@ -3,10 +3,10 @@ import { existsSync, readFileSync, lstatSync, realpathSync } from 'node:fs'
 import { basename, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
-import { spawn as nodeSpawn, execFile } from 'node:child_process'
-import { promisify } from 'node:util'
-import { postmanTaskContexts, POSTMAN_TASK_BRANCH_PATTERN } from './postman-task-context.js'
-import { createDevspaceChannel, devspaceTerminal } from './postman-devspace.js'
+import { spawn as nodeSpawn } from 'node:child_process'
+import { postmanTaskContexts } from './postman-task-context.js'
+const POSTMAN_TASK_BRANCH_PATTERN = /^task\/postman-[a-f0-9]{32}$/
+import { createDevspaceChannel, devspaceTerminal, readDevspaceObservation } from './postman-devspace.js'
 import { CurrentAttachmentStore, postmanInputGrants, stageStandaloneCurrentAttachments } from './postman-input-files.js'
 
 // Standalone transport publishes REQ task files to main; Leader children use their exact prepared task branch.
@@ -292,7 +292,10 @@ function trustedPublication(job) {
 function terminalGate(job) {
   if (job.transportKind === 'devspace') {
     try {
-      const observed = parseTerminalJson(job.stdout)
+      const parsed = parseTerminalJson(job.stdout)
+      const saved = readDevspaceObservation(job.devspaceChannel)
+      const observed = { ...saved, ...(parsed ?? { source: 'transport_diagnostic', diagnostic: 'BLOCKED' }),
+        conversationRef: parsed?.conversationRef ?? saved.conversationRef }
       // Host reads its own channel; arbitrary stdout cannot forge a bell or identity.
       return devspaceTerminal(job.devspaceChannel, observed ?? { source: 'transport_diagnostic', diagnostic: 'BLOCKED' })
     } catch (error) {
@@ -544,6 +547,7 @@ export class DirectPostmanJobManager {
     if (transportKind === 'devspace' && (!devspaceBinding || devspaceBinding.lunaSessionId !== sessionId ||
         chatRequestId || automaticContinuation))
       throw parseError('POSTMAN_DEVSPACE_LEADER_BINDING_REQUIRED')
+    branch ??= transportKind === 'devspace' ? '' : STANDALONE_TASK_PUBLICATION_BRANCH
     // Devspace is private and Host-bound; a branchless read-only project may
     // currently be on master, a custom default branch, or have an unborn HEAD.
     // Git-publishing Direct modes retain the strict main/task-branch contract.
@@ -948,48 +952,6 @@ export class DirectPostmanJobManager {
     } catch { return { state: 'unknown' } }
   }
 
-  async recoveryCapability(workspace, requestId) {
-    const root = this.directRoot ?? (process.env.LOCALAPPDATA
-      ? join(process.env.LOCALAPPDATA, 'DSH', 'Postman', 'direct')
-      : join(homedir(), '.dsh', 'postman', 'direct'))
-    const { stdout } = await promisify(execFile)(process.env.POSTMAN_PYTHON ?? 'python',
-      ['-X', 'utf8', join(workspace, 'postman', 'direct', 'chat_reference.py'),
-        '--direct-root', root, '--request-id', requestId], { windowsHide: true, timeout: 10000 })
-    return JSON.parse(stdout)
-  }
-
-  async continueLast(sessionId, workspace, previous = this.jobs.get(sessionId), onRequestAllocated) {
-    if (previous === undefined || previous.state !== 'completed' || previous.result === undefined) {
-      throw parseError('POSTMAN_AUTOMATIC_CONTINUATION_NOT_ALLOWED')
-    }
-    if (new Set(['RESULT_DURABLE', 'TEXT_RESULT_DURABLE', 'IMAGE_RESULT_DURABLE']).has(previous.result.code))
-      throw parseError('POSTMAN_AUTOMATIC_CONTINUATION_NOT_ALLOWED')
-    if (previous.automaticContinuation || previous.result.automaticRecoveryUsed === true)
-      throw parseError('POSTMAN_AUTOMATIC_CONTINUATION_LIMIT_REACHED')
-    // Direct owns the durable evidence and claim; it rejects ineligible failures before Send.
-    const payload = 'Продолжи исходную незавершённую задачу с текущего места и доведи её до готового результата.'
-    return this.start({
-      sessionId,
-      workspace,
-      payload,
-      chatRequestId: previous.requestId,
-      automaticContinuation: true,
-      onRequestAllocated,
-      transportKind: previous.transportKind ?? 'artifact',
-      branch: previous.branch,
-      repository: previous.repository ?? STANDALONE_REPOSITORY,
-      proof: {
-        parseMode: 'automatic-continuation',
-        sourceMessageLength: 0,
-        sourceMessageSha256: null,
-        payloadLength: payload.length,
-        payloadSha256: sha256(payload),
-        removedTransportPrefixLength: 0,
-        removedTransportPrefixSha256: null,
-      },
-    })
-  }
-
   dispose() {
     this.disposed = true
     for (const job of this.jobs.values()) this.finish(job)
@@ -1036,7 +998,6 @@ export function createDirectCurrentTurnToolConfigs(ctx, { store, jobs, taskConte
         throw parseError('POSTMAN_DEVSPACE_LEADER_BINDING_REQUIRED')
       if (agent.session?.header?.origin === 'subagent' && agent.session.header.delegationDepth === 1 &&
           agent.session.header.parentSession && !bridgeContext) throw parseError('POSTMAN_TASK_CONTEXT_REQUIRED')
-      if (bridgeContext && taskContexts.get(bridgeContext.leaderSessionId) !== bridgeContext) throw parseError('POSTMAN_TASK_CONTEXT_REQUIRED')
       if (parsed.inputFiles?.length && !bridgeContext) throw parseError('POSTMAN_INPUT_METADATA_LEADER_REQUIRED')
       let inputFiles = parsed.inputFiles ?? []
       let inputBinding = inputFiles.length ? inputGrants.child(agent, bridgeContext, inputFiles) : undefined
@@ -1081,8 +1042,8 @@ export function createDirectCurrentTurnToolConfigs(ctx, { store, jobs, taskConte
           inputBinding,
           chatRequestId: parsed.chatRequestId,
           transportKind: parsed.transportKind,
-          branch: bridgeContext?.branch ?? STANDALONE_TASK_PUBLICATION_BRANCH,
-          repository: bridgeContext?.repository ?? STANDALONE_REPOSITORY,
+          branch: parsed.transportKind === 'devspace' ? bridgeContext?.branch ?? '' : STANDALONE_TASK_PUBLICATION_BRANCH,
+          repository: STANDALONE_REPOSITORY,
           proof,
           devspaceBinding,
           ...(bridgeContext ? { onRequestAllocated: (requestId, channel) => taskContexts.recordBridgeRequest(agent.id, requestId, channel) } : {}),
@@ -1131,19 +1092,8 @@ export function createDirectCurrentTurnToolConfigs(ctx, { store, jobs, taskConte
     },
   }
 
-  const continueLast = {
-    name: 'postman_continue_last_request',
-    description: 'Start one automatic same-chat recovery of the last failed or non-durable request, preserving artifact/text/image mode. Takes no task text; Direct authorizes exact proven-sent capability and durably enforces one attempt.',
-    parameters: {},
-    output: toolOutput(),
-    async execute(_args, exec) {
-      const agent = requiredAgent(exec, 'postman_continue_last_request')
-      return manager.continueLast(agent.id, workspaceOf(agent))
-    },
-  }
-
   return {
-    tools: [sendCurrent, statusCurrent, validateAskReply, continueLast],
+    tools: [sendCurrent, statusCurrent, validateAskReply],
     store: turnStore,
     currentAttachments: attachments,
     jobs: manager,
@@ -1160,5 +1110,4 @@ export const DIRECT_CURRENT_TURN_TOOL_NAMES = Object.freeze([
   'postman_send_current_turn',
   'postman_current_turn_status',
   'postman_ask_validate_reply',
-  'postman_continue_last_request',
 ])

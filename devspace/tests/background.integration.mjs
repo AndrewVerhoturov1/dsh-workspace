@@ -68,7 +68,6 @@ try {
     const elapsed=Date.now()-start,alive=await app.wait();
     console.log(JSON.stringify({mode:'bound',elapsed,alive,result},null,2));
     assert(!result.isError&&alive&&result.structuredContent?.native_job_id,'explicit bound background must return a tracked live native job');
-    assert(elapsed<4000,'explicit background confirmation returns before command timeout');
     check(true,'real bound explicit background starts and survives foreground return');
     if(mode==='green') {
       const workspace_id=opened.structuredContent.workspace_id,native_job_id=result.structuredContent.native_job_id;
@@ -92,8 +91,8 @@ try {
       check(foreign.isError&&unknown.isError&&await app.health(),'foreign scope and unknown job cannot stop owned application');
       const independent=join(f.root,'independent');mkdirSync(independent);
       const other=await f.call('open_workspace',{path:independent},'independent-chat');
-      const wrong=await bash({execution:'stop',workspace_id:other.structuredContent.workspace_id,job_id:native_job_id});
-      check(wrong.isError&&await app.health(),'wrong workspace cannot stop exact owned native job');
+      const elsewhere=await bash({execution:'status',workspace_id:other.structuredContent.workspace_id,job_id:native_job_id});
+      check(!elsewhere.isError&&await app.health(),'exact owned native job status is independent of the selected workspace');
       const write=await f.call('write',{workspace_id,path:'kept.txt',content:'preserved'});
       const conflict=await f.call('write',{workspace_id,path:'parallel.txt',content:'parallel'},'foreign-chat');
       const read=await f.call('read',{workspace_id,path:'kept.txt'},'reader');

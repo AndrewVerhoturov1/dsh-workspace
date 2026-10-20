@@ -33,7 +33,7 @@ origin/main @ exact BASE_SHA
                        └── PR base=main → отдельное user decision → squash merge в main
 ```
 
-Host `postman_task_prepare` создаёт/публикует единственную task branch и clean worktree от exact `origin/main`; Bridge помещает REQ commit **в ту же task branch**, а не в `main` и не в `preview`. Standalone Direct-main остаётся без изменений. Если пакет изначально был написан для прежнего pinned snapshot, его base/REQ/`packageBase` нельзя переписывать и нельзя автоматически rebase/retarget task или registry; `git apply --check` — authority совместимости.
+Worker по поручению Leader готовит временную task branch и clean worktree от exact `origin/main` по REPO_POLICY. Host не выполняет подготовку, синхронизацию или восстановление рабочего Git-проекта. Транспортная публикация REQ/RESULT выполняется отдельно и не является публикацией реализации. Standalone Direct-main сохраняется. Если пакет изначально был написан для прежнего pinned snapshot, его base/REQ/`packageBase` нельзя переписывать и нельзя автоматически rebase/retarget task или registry; `git apply --check` — authority совместимости.
 
 Проверить относящиеся тесты и `git diff --check`, явно staged paths, commit/push task branch, exact remote SHA, PR base=`main`. Отдельное user decision запускает `finalize-task-pr` (squash и безопасная уборка временных ресурсов). Обычный task merge **не** запускает синхронизацию `preview`.
 

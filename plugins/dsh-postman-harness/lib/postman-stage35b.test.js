@@ -8,7 +8,7 @@ import {assertManagementRequest} from './fixtures/postman-stage3-contract.js'
 import {WORKER_CONTROL_TOOLS} from './postman-bridge-core.js'
 import {SOL_WORKER_PROFILE, LEADER_SUPERVISOR_PROFILE} from './ptc-adapter.js'
 
-const ptc=(program,boundary='semantic_decision')=>({program,boundary,description:'Complete owned control and engineering mechanics; stop at actual event or judgement'})
+const ptc=(program,waitForEvent=false)=>({program,description:'Run owned operations and return their facts',...(waitForEvent?{wait_for_event:true}:{})})
 const report={name:'report',args:{output:'PASS terminal assignment result; exact controlled evidence'}}
 const value=r=>{assert.equal(r.isError,false,JSON.stringify(r));return r.value}
 const nested=r=>{const v=value(r);assert.equal(v.status,'ok',JSON.stringify(v));return v.value}
@@ -28,7 +28,7 @@ const turnEnd=(f,id)=>{
   return done.promise
 }
 
-test('Stage 3.5B exact Sol re-waits for existing owned B after A, never for active foreign Worker', {timeout:45000},async t=>{
+test('Stage 3.5B exact Sol explicitly waits through owned reports without producer proofs', {timeout:45000},async t=>{
   const gates=[Promise.withResolvers(),Promise.withResolvers()],foreignGate=Promise.withResolvers(),endings=[Promise.withResolvers(),Promise.withResolvers(),Promise.withResolvers()]
   const owned=[];let f,solId,foreignId
   t.after(()=>{gates.forEach(g=>g.resolve());foreignGate.resolve()})
@@ -36,13 +36,13 @@ test('Stage 3.5B exact Sol re-waits for existing owned B after A, never for acti
     if(a.id==='leader')return null
     if(a.options.model==='gpt-6.1-sol'){
       solId=a.id;assertManagementRequest('sol',r)
-      if(n===1)return {name:'ptc_execute',args:ptc('const a=await tools.postman_worker({task:"A",createNew:true});const b=await tools.postman_worker({task:"B",createNew:true});return {a,b}','external_event')}
+      if(n===1)return {name:'ptc_execute',args:ptc('const a=await tools.postman_worker({task:"A",createNew:true});const b=await tools.postman_worker({task:"B",createNew:true});return {a,b}',true)}
       await f.childDone(owned[n-2])
-      if(n===2)return {name:'ptc_execute',args:ptc('await tools.read({file_path:"known.txt"});return {handled:"A"}','external_event')}
+      if(n===2)return {name:'ptc_execute',args:ptc('await tools.read({file_path:"known.txt"});return {handled:"A"}',true)}
       assert.equal(n,3,'only dispatch and two real owned events')
       assert.equal(f.ctx.agents.get(foreignId).status,'running')
-      const noWake=await f.execute(a,'ptc_execute',ptc('return {}','external_event'))
-      assert.notEqual(noWake.concludesTurn,true,'foreign active Worker and settled own bindings do not justify waiting')
+      const noWake=await f.execute(a,'ptc_execute',ptc('return {}',true))
+      assert.equal(noWake.concludesTurn,true,'an explicit wait does not require an owned active producer')
       return report
     }
     if(a.session.header.delegationDepth===1){await foreignGate.promise;return report}
@@ -55,7 +55,7 @@ test('Stage 3.5B exact Sol re-waits for existing owned B after A, never for acti
   const sol=f.ctx.agents.get(accepted.workerSessionId);await sol.whenIdle()
   assert.equal(owned.length,2);assert.equal(f.requests.filter(r=>r.agent.id===sol.id).length,1)
   assert.equal(sol.phase.kind,'idle')
-  const leaderWait=await f.execute(f.leader,'ptc_execute',ptc('return {}','external_event'))
+  const leaderWait=await f.execute(f.leader,'ptc_execute',ptc('return {}',true))
   assert.equal(leaderWait.concludesTurn,true,'event-waiting exact Sol with own active Workers remains a Leader wake source')
   foreignId=(await call(f,f.leader,'postman_worker',{task:'unrelated Leader-owned active work'})).workerSessionId
   gates[0].resolve();await endings[1].promise;await sol.whenIdle()
@@ -71,7 +71,7 @@ test('Stage 3.5B exact Sol re-waits for existing owned B after A, never for acti
   foreignGate.resolve();await f.childDone(foreignId)
 })
 
-test('Stage 3.5B actual Sol batches two exact children and own mechanics in ONE PTC, auto-concludes', {timeout:45000},async t=>{
+test('Stage 3.5B actual Sol batches two exact children and own mechanics in ONE PTC, explicitly waits', {timeout:45000},async t=>{
   const hold=Promise.withResolvers(),end=Promise.withResolvers();t.after(()=>hold.resolve())
   let solId
   const f=await fixture(t,async(a,r,n)=>{
@@ -79,9 +79,9 @@ test('Stage 3.5B actual Sol batches two exact children and own mechanics in ONE 
     if(a.options.model==='gpt-6.1-sol'){
       assertManagementRequest('sol',r);solId=a.id
       return n===1?{name:'ptc_execute',args:ptc(
-        'const a=ptc.expectStatus(await tools.postman_worker({task:"bounded A",createNew:true}),"postman_worker");'+
-        'const b=ptc.expectStatus(await tools.postman_worker({task:"bounded B",createNew:true}),"postman_worker");'+
-        'const own=await tools.read({file_path:"known.txt"});return {a,b,own:own.lines.length}', 'external_event')}:null
+        'const a=await tools.postman_worker({task:"bounded A",createNew:true});'+
+        'const b=await tools.postman_worker({task:"bounded B",createNew:true});'+
+        'const own=await tools.read({file_path:"known.txt"});return {a,b,own:own.lines.length}', true)}:null
     }
     assertManagementRequest('luna',r);await hold.promise;return report
   })
@@ -97,8 +97,8 @@ test('Stage 3.5B actual Sol batches two exact children and own mechanics in ONE 
   assert.deepEqual(effects.map(e=>e.data.name),['postman_worker','postman_worker','read'])
   const outerCall=sol.session.events.find(e=>e.type==='tool/call'&&e.data.name==='ptc_execute').data.callId
   assert.ok(effects.every(e=>e.data.parentCallId===outerCall),'all effects correlated to same actual outer PTC')
-  assert.equal(v.effects.completed,3);assert.equal(f.diagnostics.find(d=>d.sessionId===sol.id).yieldApplied,true)
-  assert.equal(SOL_WORKER_PROFILE.revision,2);assert.equal(LEADER_SUPERVISOR_PROFILE.revision,9)
+  assert.equal(v.effects.completed,3);assert.equal(f.diagnostics.find(d=>d.sessionId===sol.id).waitApplied,true)
+  assert.equal(SOL_WORKER_PROFILE.revision,3);assert.equal(LEADER_SUPERVISOR_PROFILE.revision,10)
   hold.resolve();await Promise.all(ids.map(id=>f.childDone(id)));await sol.whenIdle()
 })
 
@@ -109,7 +109,7 @@ for(const queued of [false,true]) test('Stage 3.5B owned report wakes Sol exactl
     if(a.id==='leader')return null
     if(a.options.model==='gpt-6.1-sol'){
       solId=a.id;assertManagementRequest('sol',r)
-      if(n===1)return {name:'ptc_execute',args:ptc('const w=await tools.postman_worker({task:"one owned external completion"});await tools.read({file_path:"known.txt"});return w','external_event')}
+      if(n===1)return {name:'ptc_execute',args:ptc('const w=await tools.postman_worker({task:"one owned external completion"});await tools.read({file_path:"known.txt"});return w',true)}
       // Event delivery may precede producer turn settlement; deterministic test barrier, not polling.
       await f.childDone(workerId);return n===2?report:null
     }
@@ -178,7 +178,7 @@ test('Stage 3.5B Sol partial reports deliver without settling owned unresolved l
     }
     await alter(binding)
 
-    assert.equal((await f.execute(sol,'notify_parent',{message:'FYI Workers launched'})).value.status,'POSTMAN_WORKER_NOTIFICATION_REJECTED')
+    assert.equal((await f.execute(sol,'notify_parent',{message:'FYI Workers launched'})).value.status,'PARENT_NOTIFICATION_ACCEPTED','Host does not classify notification meaning')
     const escalation=value(await f.execute(sol,'notify_parent',{message:'NEEDS_PARENT_GUIDANCE: exact decision outside finite assignment'}));assert.equal(escalation.status,'PARENT_NOTIFICATION_ACCEPTED')
 
     const acceptedReport=await f.execute(sol,'report',report.args);assert.equal(acceptedReport.isError,false,JSON.stringify(acceptedReport))
@@ -200,23 +200,17 @@ test('Stage 3.5B Sol with no children can report terminal assignment', {timeout:
   assert.ok(final.result.value.messageId)
 })
 
-test('Stage 3.5B logger sees semantic shape even with needsModelDecision, without leaking payload',{timeout:45000},async t=>{
+test('PTC logger retains execution metrics without semantic scoring or payload',{timeout:45000},async t=>{
   const f=await fixture(t,()=>null)
-  const programs=[
-    ['await tools.read({file_path:"known.txt"});return {ordinary:true}',true,true,true],
-    ['await tools.read({file_path:"known.txt"});return {needsModelDecision:true,decisionQuestion:"PRIVATE_QUESTION",evidence:"PRIVATE_EVIDENCE"}',true,true,false],
-    ['await tools.read({file_path:"known.txt"});await tools.read({file_path:"known.txt"});return {}',false,true,false],
-    ['await tools.read({file_path:"known.txt"});await tools.read({file_path:"known.txt"});await tools.read({file_path:"known.txt"});return {}',false,false,false],
-  ]
-  for(const [program,small,thin,candidate] of programs){
-    nested(await f.execute(f.leader,'ptc_execute',ptc(program.replaceAll('"known.txt"',JSON.stringify(join(f.worktree,'known.txt'))))))
-    const d=f.diagnostics.at(-1);assert.equal(d.smallSemanticPhase,small);assert.equal(d.thinSemanticPhase,thin);assert.equal(d.underbatchedCandidate,candidate)
-    if(program.includes('needsModelDecision')){assert.equal(d.needsModelDecision,true);assert.equal(d.decisionQuestionPresent,true)}
+  const path=JSON.stringify(join(f.worktree,'known.txt'))
+  for(const count of [1,2,3]){
+    const program=('await tools.read({file_path:'+path+'});').repeat(count)+'return {privateEvidence:"PRIVATE_EVIDENCE"}'
+    nested(await f.execute(f.leader,'ptc_execute',ptc(program)))
+    const d=f.diagnostics.at(-1)
+    assert.equal(d.nestedToolCalls,count)
+    assert.equal(d.status,'ok')
+    for(const removed of ['smallSemanticPhase','thinSemanticPhase','underbatchedCandidate','underbatchedStreak','decisionQuestionPresent'])
+      assert.equal(Object.hasOwn(d,removed),false,removed)
   }
-  for(const boundary of ['semantic_decision','external_event']){
-    const r=await f.execute(f.leader,'ptc_execute',ptc('return await tools.postman_worker({task:"bounded shape evidence"})',boundary))
-    const worker=nested(r);await f.childDone(worker.workerSessionId)
-    const d=f.diagnostics.at(-1);assert.equal(d.smallSemanticPhase,boundary==='semantic_decision');assert.equal(d.thinSemanticPhase,boundary==='semantic_decision');assert.equal(d.underbatchedCandidate,false)
-  }
-  assert.doesNotMatch(JSON.stringify(f.diagnostics),/PRIVATE_QUESTION|PRIVATE_EVIDENCE|PRIVATE_FILE|program|arguments|file_path|ordinary/)
+  assert.doesNotMatch(JSON.stringify(f.diagnostics),/PRIVATE_EVIDENCE|PRIVATE_FILE|program|arguments|file_path|privateEvidence/)
 })

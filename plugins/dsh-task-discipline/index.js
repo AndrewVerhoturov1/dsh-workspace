@@ -5,7 +5,7 @@ export const inject = ['systemPrompt']
 export const TASK_DISCIPLINE = `TASK DISCIPLINE — mandatory
 
 1. Perform only the current task and its acceptance criteria. Do not invent or continue into a next task.
-2. Make the smallest sufficient change and preserve existing contracts.
+2. Make the smallest sufficient change and preserve user-facing guarantees. Internal contracts, guards, states, and tests explicitly superseded by the current request may be changed or removed; do not preserve them through new exceptions.
 3. Do not add abstractions, layers, wrappers, dependencies, state, retries, fallbacks, validators, infrastructure, or adjacent changes unless required by the current task or justified by a concrete material risk present now.
 4. If you discover an adjacent issue that is not required for the task, report it instead of fixing it.
 5. Verification must be proportional to the change. Do not repeat a successful check unless relevant inputs changed.
