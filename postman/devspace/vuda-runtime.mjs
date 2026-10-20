@@ -10,12 +10,12 @@ const npmCache = process.env.npm_config_cache || (process.platform === 'win32'
   : join(homedir(), '.npm'))
 
 // npm exec installations are not necessarily present in PATH or npm's global tree.
-export async function findVudaRuntime({ root = projectRoot, cache = npmCache } = {}) {
-  const candidates = [join(root, 'node_modules/visual-ui-debug-agent-mcp'),
+export async function findVudaRuntime({ root = projectRoot, cache = npmCache, packageDirectory } = {}) {
+  const candidates = packageDirectory ? [resolve(packageDirectory)] : [join(root, 'node_modules/visual-ui-debug-agent-mcp'),
     join(root, 'profiles/web/node_modules/visual-ui-debug-agent-mcp')]
   const cacheRoot = join(cache, '_npx')
   let entries
-  try { entries = await readdir(cacheRoot, { withFileTypes: true }) }
+  try { entries = packageDirectory ? [] : await readdir(cacheRoot, { withFileTypes: true }) }
   catch (error) { if (error.code !== 'ENOENT') throw error; entries = [] }
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     if (entry.isDirectory()) candidates.push(join(cacheRoot, entry.name, 'node_modules/visual-ui-debug-agent-mcp'))
@@ -37,8 +37,9 @@ export async function findVudaRuntime({ root = projectRoot, cache = npmCache } =
       require.resolve('dotenv/config')
       const clientEntry = require.resolve('@modelcontextprotocol/sdk/client')
       const transportEntry = require.resolve('@modelcontextprotocol/sdk/client/stdio.js')
+      const launcherArgs = [fileURLToPath(new URL('./start-vuda.mjs', import.meta.url)), directory, root]
       return { version: metadata.version, command: process.execPath, serverEntry, clientEntry,
-        transportEntry, cwd: directory, env: { VUDA_BROWSER_PROVIDER: 'local', DOTENV_CONFIG_PATH: dotenvConfig } }
+        transportEntry, launcherArgs, cwd: directory, env: { VUDA_BROWSER_PROVIDER: 'local', DOTENV_CONFIG_PATH: dotenvConfig } }
     } catch (error) { diagnostics.push({ directory, error: error.code || error.message }) }
   }
   const error = new Error('VUDA_RUNTIME_UNAVAILABLE: installed VUDA 1.1.0 and its SDK/dotenv were not found; nothing was installed')
@@ -55,7 +56,7 @@ export async function withVudaClient(operation, options) {
   const allowed = new Set(['path', 'systemroot', 'windir', 'temp', 'tmp', 'userprofile',
     'localappdata', 'appdata', 'comspec', 'pathext', 'home', 'lang'])
   for (const [key, value] of Object.entries(process.env)) if (allowed.has(key.toLowerCase())) env[key] = value
-  const transport = new StdioClientTransport({ command: runtime.command, args: [runtime.serverEntry],
+  const transport = new StdioClientTransport({ command: runtime.command, args: runtime.launcherArgs,
     cwd: runtime.cwd, env, stderr: 'pipe' })
   let startupError = ''
   transport.stderr?.on('data', chunk => { startupError = (startupError + chunk.toString()).slice(-2000) })

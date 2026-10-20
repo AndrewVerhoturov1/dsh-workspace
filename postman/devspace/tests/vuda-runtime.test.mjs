@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
 import { findVudaRuntime, listVudaTools } from '../vuda-runtime.mjs'
+import { configureVudaChromium } from '../start-vuda.mjs'
 
 async function fixture(t, { dotenv = true } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'dsh-vuda-discovery-'))
@@ -37,6 +40,51 @@ test('discovers an existing npm exec installation without PATH or a global packa
   assert.equal(runtime.env.DOTENV_CONFIG_PATH, join(options.root, '.agents/skills/pixel-perfect-ui-port/references/vuda-empty.config'))
   assert.ok(runtime.clientEntry.endsWith('client.js'))
   assert.ok(runtime.transportEntry.endsWith('stdio.js'))
+  assert.deepEqual(runtime.launcherArgs.slice(1), [runtime.cwd, options.root])
+  assert.ok(runtime.launcherArgs[0].endsWith('start-vuda.mjs'))
+})
+
+test('GPU launch preserves caller options and the existing Chrome fallback', async () => {
+  const calls = []
+  const chromium = { launch(options) { assert.equal(this, chromium); calls.push(options) } }
+  configureVudaChromium(chromium)
+  await chromium.launch({ headless: true, timeout: 123, args: ['--example'] })
+  await chromium.launch({ headless: true, channel: 'chrome', args: ['--enable-gpu'] })
+  assert.deepEqual(calls, [
+    { headless: true, timeout: 123, channel: 'chromium', args: ['--example', '--enable-gpu'] },
+    { headless: true, channel: 'chrome', args: ['--enable-gpu'] }
+  ])
+})
+
+test('shared entry changes the Playwright instance imported by VUDA and strips credentials', async t => {
+  const options = await fixture(t)
+  const runtime = await findVudaRuntime(options)
+  const packageRoot = runtime.cwd
+  await writeFile(join(packageRoot, 'package.json'), JSON.stringify({
+    name: 'visual-ui-debug-agent-mcp', version: '1.1.0', type: 'module'
+  }))
+  const playwrightRoot = join(packageRoot, '../playwright')
+  await mkdir(playwrightRoot)
+  await writeFile(join(playwrightRoot, 'package.json'), JSON.stringify({ name: 'playwright', main: 'index.cjs' }))
+  await writeFile(join(playwrightRoot, 'index.cjs'), `exports.chromium = {
+    launch(options) { console.log(JSON.stringify({ options,
+      secretPresent: 'DSH_TEST_SECRET' in process.env,
+      provider: process.env.VUDA_BROWSER_PROVIDER,
+      dotenv: process.env.DOTENV_CONFIG_PATH,
+      cwd: process.cwd() })) }
+  }`)
+  await writeFile(runtime.serverEntry, `import { chromium } from 'playwright';
+    await chromium.launch({ headless: true });`)
+  const launcher = fileURLToPath(new URL('../start-vuda.mjs', import.meta.url))
+  const output = execFileSync(process.execPath, [launcher, packageRoot, options.root], {
+    encoding: 'utf8', env: { ...process.env, DSH_TEST_SECRET: 'test-only', VUDA_BROWSER_PROVIDER: 'cdp' }
+  })
+  const actual = JSON.parse(output)
+  assert.deepEqual(actual.options, { headless: true, channel: 'chromium', args: ['--enable-gpu'] })
+  assert.equal(actual.secretPresent, false)
+  assert.equal(actual.provider, 'local')
+  assert.equal(actual.dotenv, runtime.env.DOTENV_CONFIG_PATH)
+  assert.equal(resolve(actual.cwd), resolve(packageRoot))
 })
 
 test('reports an incomplete installed package instead of pretending it is usable', async t => {
