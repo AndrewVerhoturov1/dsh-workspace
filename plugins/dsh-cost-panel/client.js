@@ -15,7 +15,7 @@ window.__ModuleLoader__.load({ id: 'dsh-cost-panel', factory: require => {
     write: '<ellipse cx="6" cy="3.5" rx="3.5" ry="2"/><path d="M2.5 3.5v8c0 1.1 1.5 2 3.5 2m3.5-10v4M2.5 7.5c0 1.1 1.5 2 3.5 2M14 10H8m2-2-2 2 2 2"/>',
     output: '<path d="M2 8h11m-4-4 4 4-4 4"/><path d="M2 3v10"/>',
   };
-  const css = '.dsh-cost-panel{display:flex;align-items:center;flex-wrap:wrap;min-height:40px;padding:3px 2px;margin:1px 0 2px;gap:0;color:#c8c9cc;font:12px/1.4 Inter,"Segoe UI",sans-serif;max-width:100%;box-sizing:border-box}.dsh-cost-group{display:flex;align-items:center;gap:2px;max-width:100%;flex-wrap:wrap}.dsh-cost-group+.dsh-cost-group{border-left:1px solid #4b4c50;margin-left:8px;padding-left:8px}.dsh-cost-metric{position:relative;display:inline-flex;align-items:center;gap:5px;min-height:30px;padding:4px 6px;border-radius:6px;color:#c8c9cc;white-space:nowrap;outline:none;cursor:help}.dsh-cost-metric svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.55;stroke-linecap:round;stroke-linejoin:round;color:#aeb1b8;flex:none}.dsh-cost-value{font-variant-numeric:tabular-nums;font-size:12px}.dsh-cost-metric:hover,.dsh-cost-metric:focus-visible{background:#3a3b3f;color:#fff}.dsh-cost-metric:focus-visible{box-shadow:0 0 0 2px #75a9ff}.dsh-cost-metric.cost{background:#3c414b;color:#e7e9ee}.dsh-cost-metric.cost svg{color:#b6cbf2}.dsh-cost-metric.team{background:#353d49}.dsh-cost-tip{position:fixed;z-index:10000;display:grid;gap:3px;width:max-content;max-width:calc(100vw - 24px);box-sizing:border-box;padding:9px 11px;border:1px solid #45464a;border-radius:7px;background:#17181a;color:#e6e7e9;font-size:12px;line-height:1.45;white-space:normal;pointer-events:none;box-shadow:0 5px 18px #0008}.dsh-cost-scenario{display:flex;align-items:center;gap:4px 12px;flex-wrap:wrap;width:100%;font-size:11px;color:#aeb1b8;padding:0 6px 3px}.dsh-cost-scenario strong{font-weight:600;color:#d9dbe1}.dsh-cost-scenario span{white-space:normal}.dsh-cost-tip[hidden]{display:none}.dsh-cost-tip>span{display:flex;justify-content:space-between;gap:12px}.dsh-cost-tip strong{font-size:12px;color:#fff}.dsh-cost-tip b{font-variant-numeric:tabular-nums;font-family:ui-monospace,Consolas,monospace;color:#f2f3f5}@media(max-width:600px){.dsh-cost-group+.dsh-cost-group{margin-left:4px;padding-left:5px}.dsh-cost-metric{gap:4px;padding:4px 5px}.dsh-cost-metric svg{width:13px;height:13px}.dsh-cost-value{font-size:11.5px}}@media(max-width:390px){.dsh-cost-group+.dsh-cost-group{margin-left:2px;padding-left:4px}.dsh-cost-metric{padding:4px 3px;gap:3px}}';
+  const css = '.dsh-cost-panel{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;width:100%;min-height:40px;padding:3px 2px;margin:1px 0 2px;gap:0;color:#c8c9cc;font:12px/1.4 Inter,"Segoe UI",sans-serif;max-width:100%;box-sizing:border-box}.dsh-cost-group{display:flex;align-items:center;gap:2px;max-width:100%;flex-wrap:wrap}.dsh-cost-group+.dsh-cost-group{border-left:1px solid #4b4c50;margin-left:8px;padding-left:8px}.dsh-cost-metric{position:relative;display:inline-flex;align-items:center;gap:5px;min-height:30px;padding:4px 6px;border-radius:6px;color:#c8c9cc;white-space:nowrap;outline:none;cursor:help}.dsh-cost-metric svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.55;stroke-linecap:round;stroke-linejoin:round;color:#aeb1b8;flex:none}.dsh-cost-value{font-variant-numeric:tabular-nums;font-size:12px}.dsh-cost-metric:hover,.dsh-cost-metric:focus-visible{background:#3a3b3f;color:#fff}.dsh-cost-metric:focus-visible{box-shadow:0 0 0 2px #75a9ff}.dsh-cost-metric.cost{background:#3c414b;color:#e7e9ee}.dsh-cost-metric.cost svg{color:#b6cbf2}.dsh-cost-metric.team{background:#353d49}.dsh-cost-tip{position:fixed;z-index:10000;display:grid;gap:3px;width:max-content;max-width:calc(100vw - 24px);box-sizing:border-box;padding:9px 11px;border:1px solid #45464a;border-radius:7px;background:#17181a;color:#e6e7e9;font-size:12px;line-height:1.45;white-space:normal;pointer-events:none;box-shadow:0 5px 18px #0008}.dsh-cost-tip[hidden]{display:none}.dsh-cost-tip>span{display:flex;justify-content:space-between;gap:12px}.dsh-cost-tip strong{font-size:12px;color:#fff}.dsh-cost-tip b{font-variant-numeric:tabular-nums;font-family:ui-monospace,Consolas,monospace;color:#f2f3f5}@media(max-width:600px){.dsh-cost-group+.dsh-cost-group{margin-left:4px;padding-left:5px}.dsh-cost-metric{gap:4px;padding:4px 5px}.dsh-cost-metric svg{width:13px;height:13px}.dsh-cost-value{font-size:11.5px}}@media(max-width:390px){.dsh-cost-group+.dsh-cost-group{margin-left:2px;padding-left:4px}.dsh-cost-metric{padding:4px 3px;gap:3px}}';
   function apply(ctx) {
     const connection = ctx.get('connection');
     const sessions = ctx.get('sessions');
@@ -41,14 +41,10 @@ window.__ModuleLoader__.load({ id: 'dsh-cost-panel', factory: require => {
         metrics[key] = { ...after, ...retain(before, after, 'count', 'countKnown', 'countUnknown', provisionalOwn), ...retain(before, after, 'cost', 'costKnown', 'costUnknown', provisionalOwn), share: provisionalOwn ? null : after?.share ?? null };
         if (metrics[key].countUnknown || metrics[key].costUnknown) metrics[key].share = null;
       }
-      // The hypothesis can decrease when an actual provider counter becomes known.
-      // Do not retain a provisional doubled scenario as a permanent lower bound.
-      const ownScenario = provisionalOwn ? { ...priorOwn?.writeScenario, tokensUnknown: true, extraUnknown: true, costUnknown: true } : next.own?.writeScenario;
-      const teamScenario = provisionalTeam ? { ...priorTeam?.writeScenario, tokensUnknown: true, extraUnknown: true, costUnknown: true } : next.team?.writeScenario;
       const own = { ...next.own, calls: provisionalOwn ? priorOwn?.calls ?? null : next.own?.callsUnknown ? Math.max(priorOwn?.calls ?? 0, next.own?.calls ?? 0) : next.own?.calls ?? 0,
-        callsUnknown: provisionalOwn || !!next.own?.callsUnknown, metrics, writeScenario: ownScenario,
+        callsUnknown: provisionalOwn || !!next.own?.callsUnknown, metrics,
         ...retain(priorOwn, next.own, 'total', 'costKnown', 'costUnknown', provisionalOwn) };
-      const team = { ...next.team, writeScenario: teamScenario, ...retain(priorTeam, next.team, 'total', 'costKnown', 'costUnknown', provisionalTeam) };
+      const team = { ...next.team, ...retain(priorTeam, next.team, 'total', 'costKnown', 'costUnknown', provisionalTeam) };
       if (own.costUnknown) for (const m of Object.values(metrics)) m.share = null;
       return { ...next, own, team };
     }
@@ -126,15 +122,9 @@ window.__ModuleLoader__.load({ id: 'dsh-cost-panel', factory: require => {
         ...(current && !known(m, 'costKnown') ? [h('span', { key: name + '-missing-cost' }, isWrite && !current.stale
           ? known(m, 'countKnown') ? 'Цена недоступна: нет применимого тарифа или условий расчёта записи кэша' : 'Нет данных о числе токенов записи кэша; цена не вычислена'
           : 'стоимость неизвестна')] : []),
-        ...(name === 'Размышления' ? [h('span', { key: 'subset' }, 'Входят в исходящие')] : []),
-        ...(isWrite ? [h('span', { key: 'write-provenance' }, 'Исторический ноль без подтверждения источника не доказывает отсутствие записи; сценарий отдельно ниже')] : [])];
+        ...(name === 'Размышления' ? [h('span', { key: 'subset' }, 'Входят в исходящие')] : [])];
       const m = own?.metrics;
       const team = current?.team;
-      const scenarioOwn = own?.writeScenario;
-      const scenarioTeam = team?.writeScenario;
-      const scenarioTokens = s => display(s?.tokens, known(s, 'tokensKnown'), s?.tokensUnknown, exact);
-      const scenarioExtra = s => s?.rateMissing ? 'Недоступна' : display(s?.extra, known(s, 'extraKnown'), s?.extraUnknown, money);
-      const scenarioTotal = s => s?.rateMissing ? 'Недоступна' : display(s?.total, known(s, 'costKnown'), s?.costUnknown, money);
       const names = { calls: 'Вызовы модели', cost: 'Стоимость агента', team: 'Стоимость команды', input: 'Вход без кэша', reasoning: 'Размышления', read: 'Кэш · чтение', write: 'Кэш · запись', output: 'Исходящие' };
       const values = { calls: display(own?.calls, own?.calls != null, own?.callsUnknown, String), cost: totalText(own), team: totalText(team), input: countText(m?.input), reasoning: countText(m?.reasoning), read: countText(m?.read), write: writeCountText(m?.write), output: countText(m?.output) };
       const state = key => {
@@ -153,14 +143,7 @@ window.__ModuleLoader__.load({ id: 'dsh-cost-panel', factory: require => {
         h('div', { className: 'dsh-cost-group' }, metric('calls')),
         h('div', { className: 'dsh-cost-group' }, metric('cost'), metric('team')),
         h('div', { className: 'dsh-cost-group' }, metric('input'), metric('reasoning'), metric('read'), metric('write'), metric('output')),
-        h('div', { ref: tip, id: 'dsh-cost-tooltip-' + sessionId, className: 'dsh-cost-tip', role: 'tooltip', hidden: !active }, active ? details[active] : null),
-        h('div', { className: 'dsh-cost-scenario', role: 'group', 'aria-label': 'Условная оценка записи кэша',
-          title: 'Гипотеза, не измеренная запись и не счёт Codex. Тариф из таблицы Standard API. Доплата = предполагаемые токены × (Cache writes − Input) / 1 млн; фактическая запись повторно не начисляется. Это не минимум и не максимум реальной оплаты.' },
-          h('strong', null, 'Оценка записи: весь вход без чтения кэша'),
-          h('span', null, 'Агент: ' + scenarioTokens(scenarioOwn) + ' токенов · доплата ' + scenarioExtra(scenarioOwn)),
-          h('span', null, 'Команда: ' + scenarioTokens(scenarioTeam) + ' токенов · доплата ' + scenarioExtra(scenarioTeam)),
-          h('span', null, 'С предполагаемой записью · агент: ' + scenarioTotal(scenarioOwn) + ' · команда: ' + scenarioTotal(scenarioTeam)),
-          h('span', null, 'Гипотеза по тарифу Standard API, не измерение и не счёт')));
+        h('div', { ref: tip, id: 'dsh-cost-tooltip-' + sessionId, className: 'dsh-cost-tip', role: 'tooltip', hidden: !active }, active ? details[active] : null));
     }
     ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register({ name: 'conversation.composer.dock', id: 'cost-panel', order: -10 }, Panel));
   }

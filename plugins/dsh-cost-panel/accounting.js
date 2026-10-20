@@ -141,38 +141,9 @@ export function summarize(fold, catalog) {
   const metrics = Object.fromEntries(Object.keys(buckets).map(k => [k, { count: 0, countKnown: false, countUnknown: false, cost: 0, costKnown: false, costUnknown: false }]));
   let total = 0;
   let costUnknown = fold.incompleteHistory;
-  const writeScenario = { tokens: 0, tokensKnown: false, tokensUnknown: !!fold.incompleteHistory,
-    extra: 0, extraKnown: false, extraUnknown: !!fold.incompleteHistory, rateMissing: false };
   for (const attempt of fold.attempts) {
     const usage = attempt.usage;
     const rates = ratesFor(attempt, usage, catalog);
-    // Codex hypothesis uses the catalog's fixed Standard row, not the baseline long-context tier.
-    const scenarioRates = attempt.provider === 'codex' && rates
-      ? catalog.models.find(m => m.provider === 'openai' && m.publicId === attempt.model)?.pricesUSDper1M?.promptInputLTE272000
-      : rates;
-    if (!rates || !scenarioRates) writeScenario.rateMissing = true; // unknown model or unsupported tier
-    const writeCount = usage?.cacheWriteTokens;
-    // Positive actual writes are already charged; zero needs explicit provenance.
-    const provenWrite = typeof writeCount === 'number' && usage.cacheWriteTokensKnown !== false &&
-      (writeCount > 0 || usage.cacheWriteTokensKnown === true);
-    if (provenWrite) { writeScenario.tokensKnown = true; writeScenario.extraKnown = true; }
-    else if (typeof usage?.inputTokens !== 'number' || usage.inputTokensKnown === false) {
-      writeScenario.tokensUnknown = true;
-      writeScenario.extraUnknown = true;
-    } else {
-      // inputTokens is already the disjoint, non-cache-read input bucket.
-      const count = usage.inputTokens;
-      writeScenario.tokens += count;
-      writeScenario.tokensKnown = true;
-      if (typeof usage.cacheReadTokens !== 'number' || usage.cacheReadTokensKnown === false) writeScenario.tokensUnknown = true;
-      if (count === 0) writeScenario.extraKnown = true;
-      else if (typeof scenarioRates?.inputUncached === 'number' && typeof scenarioRates?.cacheWrite === 'number') {
-        // Replace the input category: never add the whole write fee to baseline.
-        writeScenario.extra += count * (scenarioRates.cacheWrite - scenarioRates.inputUncached) / catalog.unitTokens;
-        writeScenario.extraKnown = true;
-        if (scenarioRates.tierUnknown || rates?.processingUnknown) writeScenario.extraUnknown = true;
-      } else { writeScenario.extraUnknown = true; writeScenario.rateMissing = true; }
-    }
     const prices = { input: rates?.inputUncached, reasoning: rates?.output, read: rates?.cacheRead, write: rates?.cacheWrite, output: rates?.output };
     for (const [key, field] of Object.entries(buckets)) {
       const m = metrics[key];
@@ -195,11 +166,7 @@ export function summarize(fold, catalog) {
   for (const key of ['input', 'read', 'write', 'output']) { total += metrics[key].cost; costUnknown ||= metrics[key].costUnknown; }
   if (fold.incompleteHistory) for (const m of Object.values(metrics)) { m.countUnknown = true; m.costUnknown = true; }
   for (const m of Object.values(metrics)) m.share = !costUnknown && !m.costUnknown && total > 0 ? m.cost / total * 100 : null;
-  const costKnown = ['input', 'read', 'write', 'output'].some(key => metrics[key].costKnown);
-  writeScenario.total = total + writeScenario.extra;
-  writeScenario.costKnown = costKnown && writeScenario.extraKnown && !writeScenario.rateMissing;
-  writeScenario.costUnknown = !!(costUnknown || writeScenario.extraUnknown || writeScenario.rateMissing);
-  return { calls: fold.attempts.length, callsUnknown: fold.incompleteHistory, duplicateUncertain: !!fold.duplicateUncertain, total, costKnown, costUnknown, metrics, writeScenario };
+  return { calls: fold.attempts.length, callsUnknown: fold.incompleteHistory, duplicateUncertain: !!fold.duplicateUncertain, total, costKnown: ['input', 'read', 'write', 'output'].some(key => metrics[key].costKnown), costUnknown, metrics };
 }
 export function taskTeam(headers, currentId) {
   const byId = new Map(headers.map(h => [h.id, h]));
