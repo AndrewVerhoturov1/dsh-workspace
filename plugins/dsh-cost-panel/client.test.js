@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import { foldAttempts, summarize } from './accounting.js';
+import catalog from './model-prices.json' with { type: 'json' };
 
 const source = fs.readFileSync(new URL('./client.js', import.meta.url), 'utf8');
 const svgPaths = {
@@ -111,8 +113,9 @@ function fixture({ sessionId = 'child', result, pending = [] } = {}) {
   };
   const tooltip = () => walk(tree, node => node.props?.role === 'tooltip')[0];
   const panel = () => walk(tree, node => node.props?.className === 'dsh-cost-panel')[0];
+  const scenarioLine = () => walk(tree, node => node.props?.className === 'dsh-cost-scenario')[0];
   const dispose = () => { for (const cleanup of [...effectCleanups].reverse()) cleanup?.(); listeners.get('dispose')?.(); };
-  return { calls, listeners, listListeners, styles, winListeners, setRpcResult, settle, listChanged, switchSession, fail, metrics, metricNodes, text, tooltip, panel, dispose, get tree() { return tree; }, get registered() { return registered; }, get registerSlot() { return registerSlot; } };
+  return { calls, listeners, listListeners, styles, winListeners, setRpcResult, settle, listChanged, switchSession, fail, metrics, metricNodes, text, tooltip, panel, scenarioLine, dispose, get tree() { return tree; }, get registered() { return registered; }, get registerSlot() { return registerSlot; } };
 }
 
 const sample = (id = 'child', overrides = {}) => ({
@@ -298,6 +301,93 @@ test('dispose removes subscriptions/style and aborts in-flight unary request wit
 const displayed = f => Object.fromEntries(Object.entries(f.metrics()).map(([key, node]) => [key, node.props.children[1].props.children]));
 const focus = (f, key) => f.metrics()[key].props.onFocus({ currentTarget: { getBoundingClientRect: () => ({ left: 1, top: 100, width: 20, height: 20 }) } });
 
+test('live provisional double-count can correct in place for known AND absent processing tier', async () => {
+  for (const serviceTier of ['default', undefined]) {
+    const config = { provider: 'openai', model: 'gpt-6.1-sol', ...(serviceTier ? { serviceTier } : {}) };
+    const counts = { inputTokens: 1000, reasoningTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 100 };
+    const record = { id: 2, ...config, purpose: 'auxiliary', usage: null, status: 'started' };
+    const events = [
+      { type: 'request/header', seq: 0, data: { header: { config } } },
+      { type: 'step/start', seq: 1, data: { turn: 1, step: 0 } },
+      { type: 'cost-panel/attempt', seq: 2, data: record },
+      { type: 'cost-panel/attempt', seq: 3, data: { ...record, usage: counts } },
+      { type: 'tool/result', seq: 4, data: {} }, // no evidence to link yet
+      { type: 'assistant/chunk', seq: 5, data: { turn: 1, step: 0, chunk: { type: 'usage', usage: counts } } },
+      { type: 'cost-panel/attempt', seq: 6, data: { ...record, usage: counts, status: 'stop' } },
+      { type: 'assistant/chunk', seq: 7, data: { turn: 1, step: 0, chunk: { type: 'finish', reason: { kind: 'stop' } } } },
+      { type: 'assistant/message', seq: 8, data: { turn: 1, step: 0, message: { source: { kind: 'model', ...config } }, usage: counts } },
+    ];
+    const snapshot = (length, history = events) => {
+      const own = summarize(foldAttempts({ seedLength: 0 }, history.slice(0, length)), catalog);
+      return { sessionId: 'child', own, team: { rootId: 'child', sessions: 1, total: own.total,
+        costKnown: own.costKnown, costUnknown: own.costUnknown, duplicateUncertain: own.duplicateUncertain } };
+    };
+    const provisional = snapshot(6);
+    assert.equal(provisional.own.calls, 2);
+    assert.equal(provisional.own.duplicateUncertain, true);
+    assert.ok(Math.abs(provisional.own.total - 0.006) < 1e-12);
+    const fresh = fixture({ result: provisional });
+    await fresh.settle(0); // no reliable baseline: do not show a double charge
+    assert.equal(displayed(fresh).calls, '—');
+    assert.equal(displayed(fresh).cost, '—');
+    assert.equal(displayed(fresh).team, '—');
+    assert.equal(displayed(fresh).input, '—');
+    fresh.dispose();
+
+    const f = fixture({ result: snapshot(3) }); // observer started, before any usage
+    await f.settle(0);
+    assert.equal(displayed(f).calls, '1');
+    assert.equal(displayed(f).cost, '—');
+    f.listChanged();
+    await f.settle(1, provisional); // ambiguous stream cannot increase trusted subtotal
+    assert.equal(displayed(f).calls, '1*');
+    assert.equal(displayed(f).cost, '—');
+    assert.equal(displayed(f).team, '—');
+    assert.equal(displayed(f).input, '—');
+
+    f.listChanged();
+    const completed = snapshot(8); // finish echo, before final assistant/message
+    assert.equal(completed.own.duplicateUncertain, false);
+    assert.equal(completed.own.calls, 1);
+    await f.settle(2, completed);
+    assert.equal(displayed(f).calls, '1');
+    assert.equal(displayed(f).cost, serviceTier ? '$0.0030' : '$0.0030*');
+    assert.equal(displayed(f).team, serviceTier ? '$0.0030' : '$0.0030*');
+    assert.equal(displayed(f).input, '1.0k');
+    assert.equal(displayed(f).output, '100');
+
+    f.listChanged();
+    await f.settle(3, snapshot(9)); // native final message cannot resurrect duplicate
+    assert.equal(displayed(f).calls, '1');
+    assert.equal(displayed(f).cost, serviceTier ? '$0.0030' : '$0.0030*');
+    f.dispose();
+
+    // The ordinary streaming path must be accurate BEFORE the finish chunk.
+    const streaming = [
+      events[0], events[1], events[2],
+      { type: 'assistant/chunk', seq: 3, data: { turn: 1, step: 0, chunk: { type: 'text-delta', text: 'x' } } },
+      { ...events[3], seq: 4 },
+      { ...events[5], seq: 5 },
+      { ...events[6], seq: 6 },
+      { ...events[7], seq: 7 },
+      events[8],
+    ];
+    const live = fixture({ result: snapshot(3, streaming) });
+    await live.settle(0);
+    assert.equal(displayed(live).calls, '1');
+    for (const [call, prefix] of [[1, 6], [2, 7], [3, 8], [4, 9]]) {
+      live.listChanged();
+      await live.settle(call, snapshot(prefix, streaming));
+      assert.equal(displayed(live).calls, '1');
+      assert.equal(displayed(live).input, '1.0k');
+      assert.equal(displayed(live).output, '100');
+      assert.equal(displayed(live).cost, serviceTier ? '$0.0030' : '$0.0030*');
+      assert.equal(displayed(live).team, serviceTier ? '$0.0030' : '$0.0030*');
+    }
+    live.dispose();
+  }
+});
+
 test('loading, confirmed zero, unknown and first retrieval error stay distinct', async () => {
   const f = fixture({ sessionId: 'empty' });
   assert.ok(Object.values(displayed(f)).every(value => value === '…'));
@@ -426,6 +516,79 @@ test('cache tooltips contain exact counts and focus targets; narrow wrap is reta
   }
   assert.match(f.styles[0].textContent, /flex-wrap:wrap/);
   assert.match(f.styles[0].textContent, /@media\(max-width:390px\)/);
+  f.dispose();
+});
+
+test('separate scenario shows tokens, category replacement and own/team totals without changing base rows', async () => {
+  const scenario = (tokens, extra, total) => ({ tokens, tokensKnown: true, tokensUnknown: false,
+    extra, extraKnown: true, extraUnknown: false, total, costKnown: true, costUnknown: false, rateMissing: false });
+  const f = fixture({ result: sample('child', {
+    own: { ...sample().own, writeScenario: scenario(1200, 0.0003, 0.0045) },
+    team: { ...sample().team, writeScenario: scenario(3200, 0.0007, 0.0097) },
+  }) });
+  await f.settle(0);
+  assert.equal(f.metrics().cost.props.children[1].props.children, '$0.0042');
+  assert.equal(f.metrics().team.props.children[1].props.children, '$0.0090');
+  assert.equal(f.metrics().write.props.children[1].props.children, '500');
+  const line = f.scenarioLine();
+  const content = f.text(line);
+  assert.match(content, /Оценка записи: весь вход без чтения кэша/);
+  assert.match(content, /Агент: 1[\s\u00a0]200 токенов · доплата \$0\.0003/);
+  assert.match(content, /Команда: 3[\s\u00a0]200 токенов · доплата \$0\.0007/);
+  assert.match(content, /С предполагаемой записью · агент: \$0\.0045 · команда: \$0\.0097/);
+  assert.match(line.props.title, /не измеренная запись|не измерение/);
+  assert.match(line.props.title, /Cache writes − Input/);
+  assert.equal(f.scenarioLine().props.role, 'group');
+  f.dispose();
+});
+
+test('unavailable tariff shows tokens but no monetary scenario; partial totals remain marked', async () => {
+  const scenario = { tokens: 80, tokensKnown: true, tokensUnknown: false, extra: 0, extraKnown: false,
+    extraUnknown: true, rateMissing: true, total: 0.005, costKnown: false, costUnknown: true };
+  const partial = { ...scenario, tokens: 40, extra: 0.00003, extraKnown: true, rateMissing: false,
+    total: 0.00423, costKnown: true };
+  const f = fixture({ result: sample('child', {
+    own: { ...sample().own, writeScenario: scenario },
+    team: { ...sample().team, writeScenario: partial },
+  }) });
+  await f.settle(0);
+  const content = f.text(f.scenarioLine());
+  assert.match(content, /Агент: 80 токенов · доплата Недоступна/);
+  assert.match(content, /С предполагаемой записью · агент: Недоступна · команда: \$0\.0042\*/);
+  assert.match(content, /Команда: 40 токенов · доплата <\$0\.0001\*/);
+  f.dispose();
+});
+
+test('provisional stream never fixes a doubled hypothetical write; later provider zero corrects the estimate', async () => {
+  const scenario = (tokens, extra, total) => ({ tokens, tokensKnown: true, tokensUnknown: false,
+    extra, extraKnown: true, extraUnknown: false, total, costKnown: true, costUnknown: false, rateMissing: false });
+  const reliable = sample('child', {
+    own: { ...sample().own, writeScenario: scenario(1000, 0.00025, 0.00445) },
+    team: { ...sample().team, writeScenario: scenario(1000, 0.00025, 0.00925) },
+  });
+  const provisional = sample('child', {
+    own: { ...reliable.own, duplicateUncertain: true, writeScenario: scenario(2000, 0.0005, 0.0047) },
+    team: { ...reliable.team, duplicateUncertain: true, writeScenario: scenario(2000, 0.0005, 0.0095) },
+  });
+  const fresh = fixture({ result: provisional });
+  await fresh.settle(0);
+  assert.doesNotMatch(fresh.text(fresh.scenarioLine()), /2[\s\u00a0]000/);
+  assert.match(fresh.text(fresh.scenarioLine()), /Агент: — токенов/);
+  fresh.dispose();
+
+  const f = fixture({ result: reliable });
+  await f.settle(0);
+  f.listChanged();
+  await f.settle(1, provisional);
+  assert.match(f.text(f.scenarioLine()), /Агент: 1[\s\u00a0]000\* токенов/);
+  assert.doesNotMatch(f.text(f.scenarioLine()), /2[\s\u00a0]000/);
+  f.listChanged();
+  await f.settle(2, sample('child', {
+    own: { ...reliable.own, writeScenario: scenario(0, 0, 0.0042) },
+    team: { ...reliable.team, writeScenario: scenario(0, 0, 0.009) },
+  }));
+  assert.match(f.text(f.scenarioLine()), /Агент: 0 токенов · доплата \$0\.00/);
+  assert.match(f.text(f.scenarioLine()), /С предполагаемой записью · агент: \$0\.0042 · команда: \$0\.0090/);
   f.dispose();
 });
 

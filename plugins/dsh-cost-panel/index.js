@@ -68,8 +68,31 @@ export function apply(ctx) {
       if (!own) return { ok: false, error: { code: 'session-not-found', message: 'Session unavailable', details: { sessionId: payload.sessionId } } };
       let total = 0;
       let costKnown = false;
-      for (const id of team.ids) { const s = summaries.get(id); if (!s) incomplete = true; else { total += s.total; costKnown ||= s.costKnown; incomplete ||= s.costUnknown; } }
-      return { ok: true, value: { sessionId: payload.sessionId, own, team: { rootId: team.rootId, sessions: team.ids.length, total, costKnown, costUnknown: incomplete }, checkedDate: catalog.checkedDate } };
+      let duplicateUncertain = false;
+      const writeScenario = { tokens: 0, tokensKnown: false, tokensUnknown: false,
+        extra: 0, extraKnown: false, extraUnknown: false, rateMissing: false };
+      for (const id of team.ids) {
+        const s = summaries.get(id);
+        if (!s) { incomplete = true; continue; }
+        total += s.total;
+        costKnown ||= s.costKnown;
+        incomplete ||= s.costUnknown;
+        duplicateUncertain ||= s.duplicateUncertain;
+        const scenario = s.writeScenario;
+        writeScenario.tokens += scenario.tokens;
+        writeScenario.tokensKnown ||= scenario.tokensKnown;
+        writeScenario.tokensUnknown ||= scenario.tokensUnknown;
+        writeScenario.extra += scenario.extra;
+        writeScenario.extraKnown ||= scenario.extraKnown;
+        writeScenario.extraUnknown ||= scenario.extraUnknown;
+        writeScenario.rateMissing ||= scenario.rateMissing;
+      }
+      writeScenario.tokensUnknown ||= incomplete;
+      writeScenario.extraUnknown ||= incomplete;
+      writeScenario.total = total + writeScenario.extra;
+      writeScenario.costKnown = costKnown && writeScenario.extraKnown && !writeScenario.rateMissing;
+      writeScenario.costUnknown = incomplete || writeScenario.extraUnknown || writeScenario.rateMissing;
+      return { ok: true, value: { sessionId: payload.sessionId, own, team: { rootId: team.rootId, sessions: team.ids.length, total, costKnown, costUnknown: incomplete, duplicateUncertain, writeScenario }, checkedDate: catalog.checkedDate } };
     } catch (error) {
       if (signal.aborted) return { ok: false, error: { code: 'cancelled', message: 'Request cancelled', details: {} } };
       ctx.logger.warn('cost-panel: accounting read failed', error);

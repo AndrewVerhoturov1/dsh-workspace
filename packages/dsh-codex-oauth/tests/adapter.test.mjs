@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { CodexAdapter } from '../lib/adapter.js'
 import { toCodexContext, mapUsage, toStreamChunks } from '../lib/convert.js'
-import { mergeUsage, summarize } from '../../../plugins/dsh-cost-panel/accounting.js'
+import { foldAttempts, mergeUsage, summarize } from '../../../plugins/dsh-cost-panel/accounting.js'
 import prices from '../../../plugins/dsh-cost-panel/model-prices.json' with { type: 'json' }
 
 const png = Buffer.from(
@@ -208,10 +208,10 @@ test('raw Codex cache-write presence wins over SDK defaults; no raw bag retains 
   assert.deepEqual(mapUsage({ ...usage, openaiResponsesUsage: {} }), baseline)
   assert.deepEqual(mapUsage({ ...usage, cacheWrite: 4, openaiResponsesUsage: {} }), baseline)
   assert.deepEqual(mapUsage({ ...usage, openaiResponsesUsage: { cache_write_tokens: 0 } }), {
-    ...baseline, cacheWriteTokens: 0,
+    ...baseline, cacheWriteTokens: 0, cacheWriteTokensKnown: true,
   })
   assert.deepEqual(mapUsage({ ...usage, openaiResponsesUsage: { cache_write_tokens: 4 } }), {
-    ...baseline, cacheWriteTokens: 4,
+    ...baseline, cacheWriteTokens: 4, cacheWriteTokensKnown: true,
   })
   assert.deepEqual(mapUsage({ ...usage, openaiResponsesUsage: { cache_write_tokens: -1 } }), baseline)
   assert.deepEqual(mapUsage({ ...usage, openaiResponsesUsage: { cache_write_tokens: '0' } }), baseline)
@@ -234,11 +234,19 @@ test('raw Codex cache writes survive terminal stream and actual panel pricing', 
     assert.equal(chunks.at(-1).type, 'finish', caseName)
     const mapped = chunks.find(chunk => chunk.type === 'usage').usage
     assert.equal(mapped.cacheWriteTokens, knownWrite, caseName)
+    assert.equal(mapped.cacheWriteTokensKnown, knownWrite === undefined ? undefined : true, caseName)
     const merged = mergeUsage(null, mapped)
-    const summary = summarize({
-      incompleteHistory: false,
-      attempts: [{ provider: 'codex', model: 'gpt-6-luna', serviceTier: 'default', usage: merged }],
-    }, prices)
+    const record = { id: 1, provider: 'codex', model: 'gpt-6-luna', serviceTier: 'default',
+      purpose: 'conversation', turn: 1, step: 0, usage: merged, status: 'finished' }
+    const folded = foldAttempts({ seedLength: 0 }, [
+      { type: 'cost-panel/attempt', seq: 0, data: record },
+      { type: 'cost-panel/attempt', seq: 1, data: { id: 1, usage: { outputTokens: 7 }, status: 'finished' } },
+    ])
+    assert.equal(folded.attempts.length, 1, caseName)
+    assert.equal(folded.attempts[0].usage.cacheWriteTokensKnown, mapped.cacheWriteTokensKnown, caseName)
+    const summary = summarize(folded, prices)
+    assert.equal(summary.writeScenario.tokens, knownWrite === undefined ? 10 : 0, caseName)
+    assert.ok(Math.abs(summary.writeScenario.extra - (knownWrite === undefined ? 10 * (0.125 - 0.1) / prices.unitTokens : 0)) < 1e-15, caseName)
     const write = summary.metrics.write
     assert.equal(write.countKnown, knownWrite !== undefined, caseName)
     assert.equal(write.costKnown, knownWrite !== undefined, caseName)
