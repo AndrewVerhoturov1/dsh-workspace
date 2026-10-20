@@ -182,8 +182,14 @@ the refusal for the next necessary decision; never invent an accepted result.
 Do not turn a normal negative branch into a PTC runtime-error. An explicit exact
 array may validate known outcomes before branching, but is not a replacement for
 choosing the correct next action. Known safe cleanup is one phase: exact branch
--> applicable retirement -> quota/state verification -> task close if all exact
-children are retired. A documented refusal alone is not needsModelDecision;
+-> applicable agent retirement -> quota/state verification. A milestone retains
+the task binding for the same PR; task close is final authority retirement only.
+To explicitly continue a closed Host-created open PR, retire read-only children
+then use postman_task_prepare({resume_pr:number,project_path?:repositoryRoot}).
+Host verifies saved ownership, Git/PR identity and old writers before issuing a
+fresh binding to the same branch/worktree/base. Old operations/grants stay revoked.
+POSTMAN_TASK_RESUME_REJECTED is a normal refusal: retain its diagnostic and do not
+create a replacement task or widen scope through a prompt. A documented refusal alone is not needsModelDecision;
 retain its blocker evidence without guessing success or retrying. Pending/active
 work still needs its real event or an already-authorized explicit cancel, not
 a synthetic model round. Unknown/conflicting/scope-ambiguous outcomes stop

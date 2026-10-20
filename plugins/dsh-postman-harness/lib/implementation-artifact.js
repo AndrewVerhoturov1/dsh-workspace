@@ -53,11 +53,11 @@ export function createImplementationArtifactGrants(registry) {
   if (typeof registry?.get !== 'function' || typeof registry?.change !== 'function')
     throw new Error('IMPLEMENTATION_ARTIFACT_STORAGE_REQUIRED')
 
-  async function register(leaderId, terminal) {
+  async function register(leaderId, terminal, binding = registry.get(leaderId)) {
     const result = terminal?.result
     const owner = registry.get(leaderId)
     const expectedRepository = owner?.universalProject ? owner.repository : IMPLEMENTATION_REPOSITORY
-    if (terminal?.status !== 'POSTMAN_BRIDGE_TERMINAL' || terminal.terminalStatus !== 'COMPLETED' ||
+    if (owner?.bindingId !== binding?.bindingId || terminal?.status !== 'POSTMAN_BRIDGE_TERMINAL' || terminal.terminalStatus !== 'COMPLETED' ||
         typeof leaderId !== 'string' || leaderId === '' ||
         terminal.transportKind !== 'artifact' ||
         result?.ok !== true || result?.code !== 'RESULT_DURABLE' ||
@@ -81,7 +81,7 @@ export function createImplementationArtifactGrants(registry) {
     if (!await verifiedZip(grant)) return false
     let registered = false
     await registry.change(leaderId, row => {
-      if (row.leaderSessionId !== leaderId || row.stage === 'closed') return row
+      if (row.leaderSessionId !== leaderId || row.stage === 'closed' || row.bindingId !== binding?.bindingId) return row
       const prior = row.artifactGrants?.[grant.requestId]
       if (prior !== undefined && (prior.sha256 !== grant.sha256 ||
           prior.resultZip !== grant.resultZip || prior.expectedFilename !== grant.expectedFilename ||

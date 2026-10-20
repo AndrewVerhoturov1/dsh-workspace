@@ -474,7 +474,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     const artifact = terminal.result?.code === 'RESULT_DURABLE'
     job.grantDiagnostic = undefined
     try {
-      if (await grants?.register(job.parentSessionId, terminal) !== true && artifact)
+      if (await grants?.register(job.parentSessionId, terminal, job.taskContext) !== true && artifact)
         job.grantDiagnostic = 'Artifact grant registration rejected.'
     } catch (error) { job.grantDiagnostic = diagnostic(error) }
     if (artifact && job.grantDiagnostic) job.state = 'FAILED'

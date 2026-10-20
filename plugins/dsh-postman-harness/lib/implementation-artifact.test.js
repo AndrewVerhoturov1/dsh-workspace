@@ -100,6 +100,17 @@ test('Bridge grant comes only from exact child-scoped status, not child prose', 
   assert.equal(await grants.resolve(child.id, REQ), null)
 })
 
+test('a revoked binding cannot register a late artifact in a resumed task generation', async t => {
+  const { terminal } = await artifactFixture(t), registry = createMemoryTaskRegistry()
+  const old = { leaderSessionId: 'A', stage: 'closed', workers: {} }
+  await registry.create('A', old)
+  await registry.replace('A', old, { leaderSessionId: 'A', stage: 'ready', workers: {}, bindingId: 'new-binding' })
+  const grants = createImplementationArtifactGrants(registry)
+  assert.equal(await grants.register('A', terminal, old), false)
+  assert.equal(await grants.resolve('A', REQ), null)
+  assert.equal(await grants.register('A', terminal, registry.get('A')), true)
+})
+
 test('Leader decision admits REQ to same Worker; rejected stop keeps grant and mapping', async t => {
   const { terminal } = await artifactFixture(t)
   const grants = await memoryGrants()

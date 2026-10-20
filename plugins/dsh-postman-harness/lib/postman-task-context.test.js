@@ -6,6 +6,7 @@ import {tmpdir} from 'node:os'
 import { createPostmanTaskContexts, POSTMAN_TASK_BRANCH_PATTERN } from './postman-task-context.js'
 import { createMemoryTaskRegistry } from './postman-task-registry.js'
 import { createPostmanTaskPrepareTool } from './postman-bridge.js'
+import { createPostmanWorkerTools } from './postman-worker.js'
 
 const base = 'a'.repeat(40)
 const published = 'b'.repeat(40)
@@ -43,6 +44,8 @@ function fixture(options = {}) {
       if (isolated) return state.base + '\trefs/heads/' + isolated.branch
     }
     if (verb === 'rev-parse' && rest[0] === '--show-toplevel') return cwd === worktree ? worktree : repository
+    if (verb === 'rev-parse' && rest[0] === '--git-common-dir')
+      return resolve(state.foreignCommonDir && cwd === worktree ? worktree : repository, '.git')
     if (verb === 'remote' && rest.join(' ') === 'get-url origin') return state.remoteUrl
     if (verb === 'fetch') return ''
     if (verb === 'rev-parse' && rest[0] === '--verify') {
@@ -72,12 +75,200 @@ function fixture(options = {}) {
     if (verb === 'merge' && rest[0] === '--ff-only') { state.head = rest[1]; return '' }
     throw new Error('Unexpected git command: ' + JSON.stringify({ cwd, args }))
   }
-  const contexts = createPostmanTaskContexts({ registry, gitCommand, writerControlFile:options.writerControlFile, localDevelopment: options.localDevelopment, preserveChanges: options.preserveChanges ?? (async () => 'fixture-recovery'), realPath: options.realPath ?? (async path => path),
+  const githubPullRequest = async (_repository, number) => state.pr ?? ({ number, state: 'open', merged: false,
+    html_url: `https://github.com/AndrewVerhoturov1/dsh-workspace/pull/${number}`,
+    base: { ref: 'main', repo: { full_name: 'AndrewVerhoturov1/dsh-workspace' } },
+    head: { ref: state.branch, sha: state.remote, repo: { full_name: 'AndrewVerhoturov1/dsh-workspace' } } })
+  const contexts = createPostmanTaskContexts({ registry, gitCommand, githubPullRequest, writerControlFile:options.writerControlFile, localDevelopment: options.localDevelopment, preserveChanges: options.preserveChanges ?? (async () => 'fixture-recovery'), realPath: options.realPath ?? (async path => path),
     temporaryDirectory: () => resolve('C:/Users/Andrew/AppData/Local/Temp'),
     makeDirectory: async () => options.directory ?? (directories++ === 0 ? worktree : worktree + '-isolated-' + directories) })
-  return { contexts, state, calls, registry, gitCommand }
+  return { contexts, state, calls, registry, gitCommand, githubPullRequest }
 }
 const invoked = (calls, ...args) => calls.some(call => JSON.stringify(call.args) === JSON.stringify(args))
+
+async function closedTask(options) {
+  const f = fixture(options), parent = leader('original-owner')
+  await f.contexts.prepare(parent)
+  f.state.trees.push(worktree)
+  const original = f.contexts.get(parent.id)
+  await f.registry.change(parent.id, row => ({ ...row, artifactGrants: { old: { retained: true } } }))
+  await f.contexts.close(parent)
+  return { ...f, parent, original }
+}
+
+test('explicit PR continuation keeps dirty task identity, archives revoked authority and survives cold recovery', async () => {
+  const f = await closedTask()
+  await f.contexts.prepareReadOnly(f.parent)
+  await f.registry.change(f.parent.id, row => ({ ...row, secretaryLedger: {
+    revision: 7, content: 'retained legacy checkpoint', updatedBy: 'secretary' } }))
+  const readonly = f.contexts.get(f.parent.id), before = f.calls.length
+  f.state.clean = false
+  const resumed = await f.contexts.resume(f.parent, 477)
+  assert.equal(resumed.status, 'TASK_CONTEXT_READY', JSON.stringify(resumed))
+  assert.equal(resumed.branch, f.original.branch)
+  assert.equal(resumed.worktree, f.original.worktree)
+  assert.equal(resumed.baseCommit, f.original.baseCommit)
+  assert.notEqual(f.contexts.get(f.parent.id), readonly)
+  assert.ok(resumed.bindingId)
+  assert.equal(f.state.clean, false)
+  const row = f.registry.get(f.parent.id)
+  assert.equal(row.devspaceReadOnly, undefined)
+  assert.equal(row.artifactGrants, undefined)
+  assert.equal(row.bridgeOperations, undefined)
+  assert.deepEqual(row.workers, {})
+  assert.equal(row.retiredTasks[0].artifactGrants.old.retained, true)
+  assert.equal(f.registry.readLedger(f.parent.id).content, 'retained legacy checkpoint')
+  for (const { args } of f.calls.slice(before))
+    assert.ok(!['push', 'reset', 'clean', 'checkout', 'switch', 'merge'].includes(args[0]) &&
+      !(args[0] === 'worktree' && args[1] !== 'list'), args)
+  const cold = createPostmanTaskContexts({ registry: f.registry, gitCommand: f.gitCommand, realPath: async x => x })
+  const recovered = await cold.recover(f.parent)
+  assert.equal(recovered.bindingId, resumed.bindingId)
+  assert.equal(cold.beginWorkerAdmission(f.parent.id, 'new-worker'), true)
+  cold.endWorkerAdmission(f.parent.id, 'new-worker')
+  assert.equal((await f.contexts.resume(f.parent, 477)).status, 'POSTMAN_TASK_CONTEXT_ALREADY_READY')
+  await f.contexts.close(f.parent)
+  const again = await f.contexts.resume(f.parent, 477)
+  assert.equal(again.status, 'TASK_CONTEXT_READY', JSON.stringify(again))
+  assert.notEqual(again.bindingId, resumed.bindingId)
+  assert.equal(again.branch, resumed.branch)
+  assert.equal(again.worktree, resumed.worktree)
+  assert.equal(cold.get(f.parent.id), null, 'another context generation cannot retain authority')
+})
+
+test('PR continuation transfers only closed Host ownership; concurrent or live owners cannot acquire it twice', async () => {
+  const f = await closedTask(), next = leader('next-session')
+  let entered, release
+  const waiting = new Promise(resolve => { entered = resolve })
+  const gate = new Promise(resolve => { release = resolve })
+  const first = f.contexts.resume(next, 477, undefined, { beforeResume: async () => { entered(); await gate; return true } })
+  await waiting
+  const other = await f.contexts.resume(leader('competing-session'), 477)
+  assert.equal(other.status, 'POSTMAN_TASK_RESUME_REJECTED')
+  assert.equal(other.diagnostic.code, 'TASK_OPERATION_BUSY')
+  release()
+  const resumed = await first
+  assert.equal(resumed.status, 'TASK_CONTEXT_READY', JSON.stringify(resumed))
+  assert.equal(f.registry.get(f.parent.id).stage, 'closed')
+  assert.equal(f.registry.get(next.id).resumedFrom.leaderSessionId, f.parent.id)
+  assert.equal((await f.contexts.resume(leader('third-session'), 477)).diagnostic.code, 'TASK_STILL_OWNED')
+})
+
+test('resume rejects changed PR, Git or ownership without replacing the read-only context', async () => {
+  for (const change of [
+    async f => { f.state.pr = { ...await f.githubPullRequest('', 477), state: 'closed' } },
+    async f => { const pr = await f.githubPullRequest('', 477); f.state.pr = { ...pr, head: { ...pr.head, repo: { full_name: 'foreign/fork' } } } },
+    async f => { const pr = await f.githubPullRequest('', 477); f.state.pr = { ...pr, base: { ...pr.base, ref: 'preview' } } },
+    async f => { f.state.pr = { ...await f.githubPullRequest('', 477), number: 478 } },
+    async f => { f.state.pr = await f.githubPullRequest('', 477); f.state.branch = 'task/postman-' + 'f'.repeat(32) },
+    async f => { f.state.remote = other },
+    async f => { f.state.foreignCommonDir = true },
+    async f => { await f.registry.change(f.parent.id, row => ({ ...row, worktree: repository })) },
+    async f => { await f.registry.change(f.parent.id, row => ({ ...row, leaderSessionId: 'foreign-owner' })) },
+  ]) {
+    const f = await closedTask(), next = leader('read-only-session')
+    await f.contexts.prepareReadOnly(next)
+    const readonly = f.contexts.get(next.id)
+    await change(f)
+    const before = f.calls.length
+    const result = await f.contexts.resume(next, 477)
+    assert.equal(result.status, 'POSTMAN_TASK_RESUME_REJECTED', JSON.stringify(result))
+    assert.equal(f.contexts.get(next.id), readonly)
+    assert.ok(f.calls.slice(before).every(({ args }) => !['push', 'reset', 'clean', 'checkout', 'merge'].includes(args[0])))
+  }
+  const f = fixture()
+  f.state.branch = 'task/postman-' + 'f'.repeat(32)
+  assert.equal((await f.contexts.resume(leader('unowned'), 477)).diagnostic.code, 'TASK_OWNERSHIP_UNPROVEN')
+})
+
+test('resume preserves unknown children, writers, runner outcomes and busy read-only research', async () => {
+  for (const patch of [
+    { workers: { old: { id: 'old', state: 'uncertain', delivery: 'unknown' } } },
+    { runner: { state: 'unknown', requestId: 'old' } },
+    { bridgeOperations: { old: { executionRevoked: true, state: 'unknown', transportKind: 'devspace', devspace: { mode: 'WRITE_ISOLATED' } } } },
+    { appJobs: { old: { worktree, terminal: 'running' } } },
+  ]) {
+    const f = await closedTask()
+    await f.registry.change(f.parent.id, row => ({ ...row, ...patch }))
+    const prior = JSON.stringify(f.registry.get(f.parent.id))
+    const result = await f.contexts.resume(leader('next-session'), 477)
+    assert.equal(result.diagnostic.code, 'PREVIOUS_WRITER_UNPROVEN', JSON.stringify(result))
+    assert.equal(JSON.stringify(f.registry.get(f.parent.id)), prior)
+    assert.equal(f.registry.get('next-session'), null)
+  }
+  const f = await closedTask(), next = leader('next-session')
+  assert.equal((await f.contexts.resume(next, 477, undefined, { beforeResume: async () => false })).diagnostic.code,
+    'CHILD_CLOSURE_UNPROVEN')
+  await f.contexts.prepareReadOnly(next)
+  await f.registry.change(next.id, row => ({ ...row, workers: { secretary: { id: 'secretary' } } }))
+  assert.equal((await f.contexts.resume(next, 477)).diagnostic.code, 'READ_ONLY_CONTEXT_BUSY')
+})
+
+test('resume refuses redirected paths, concurrent registry changes and failed durable replacement', async () => {
+  const f = await closedTask({ realPath: async path => path === worktree ? worktree + '-redirected' : path })
+  assert.equal((await f.contexts.resume(leader('next'), 477)).diagnostic.code, 'TASK_IDENTITY_CHANGED')
+  const g = await closedTask(), next = leader('next')
+  await g.contexts.prepareReadOnly(next)
+  const readonly = g.contexts.get(next.id)
+  const result = await g.contexts.resume(next, 477, undefined, { beforeResume: async owner => {
+    if (owner === g.parent.id) await g.registry.change(owner, row => ({ ...row, diagnostic: 'changed concurrently' }))
+    return true
+  } })
+  assert.equal(result.diagnostic.code, 'TASK_BINDING_CHANGED')
+  g.registry.replace = async () => { throw Error('disk unavailable') }
+  assert.equal((await g.contexts.resume(next, 477)).diagnostic.code, 'disk unavailable')
+  assert.equal(g.contexts.get(next.id), readonly)
+  assert.equal(g.contexts.isRestoring(next.id), false)
+  assert.equal(g.contexts.isRestoring(g.parent.id), false)
+})
+
+test('Leader resume contract preserves caller boundary and native child-closure proof', async () => {
+  const caller = { ...leader('native-leader'), session: { header: { agentPreset: 'postman-leader', delegationDepth: 0 } } }
+  const seen = []
+  let descendants = []
+  const ctx = { agents: { get: id => id === caller.id ? caller : undefined },
+    subagents: { listDescendants: async () => descendants } }
+  const tool = createPostmanTaskPrepareTool(ctx, { get: () => null,
+    async resume(parent, number, path, options) {
+      seen.push([parent.id, number, path])
+      return { status: await options.beforeResume('old-owner') ? 'TASK_CONTEXT_READY' : 'POSTMAN_TASK_RESUME_REJECTED' }
+    } })
+  const invoke = args => tool.execute(args, { agent: caller })
+  assert.equal(tool.parameters.properties.resume_pr.type, 'integer')
+  await assert.rejects(invoke({ resume_pr: '477' }), /must be an integer/)
+  for (const args of [{ resume_pr: 0 }, { resume_pr: 477, read_only: false }])
+    assert.equal((await invoke(args)).status, 'POSTMAN_TASK_ARGUMENTS_INVALID')
+  assert.equal((await tool.execute({ resume_pr: 477 }, { agent: leader('ordinary') })).status, 'POSTMAN_TASK_CALLER_REJECTED')
+  assert.equal((await invoke({ resume_pr: 477, project_path: repository })).status, 'TASK_CONTEXT_READY')
+  descendants = [{ id: 'unknown-child', kind: 'child', activity: 'inactive', mode: 'continuable' }]
+  assert.equal((await invoke({ resume_pr: 477 })).status, 'POSTMAN_TASK_RESUME_REJECTED')
+  assert.deepEqual(seen[0], [caller.id, 477, repository])
+})
+
+test('same Host tools reject a read-only publisher then admit it in the resumed PR worktree', async () => {
+  const f = await closedTask()
+  f.parent.session.header.agentPreset = 'postman-leader'
+  f.parent.session.header.delegationDepth = 0
+  await f.contexts.prepareReadOnly(f.parent)
+  const starts = []
+  const ctx = { agents: { get: id => id === f.parent.id ? f.parent : undefined },
+    tools: { schemas: () => ['read', 'write', 'pwsh', 'report', 'postman_bridge'].map(name => ({ name })) },
+    subagents: { listDescendants: async () => [],
+      listChildren: async () => starts.map(spec => ({ id: spec.childId, kind: 'child', mode: 'continuable' })),
+      async startContinuable(spec) {
+      starts.push(spec); return { childId: spec.childId, messageId: 'native-message' }
+    } } }
+  const workers = createPostmanWorkerTools(ctx, undefined, f.contexts)
+  const exec = { agent: f.parent, signal: new AbortController().signal }
+  assert.equal((await workers.taskTool.execute({ task: 'Publish the current PR' }, exec)).status,
+    'POSTMAN_WORKER_READ_ONLY_CONTEXT')
+  const resumed = await createPostmanTaskPrepareTool(ctx, f.contexts).execute({ resume_pr: 477 }, exec)
+  assert.equal(resumed.status, 'TASK_CONTEXT_READY', JSON.stringify(resumed))
+  const accepted = await workers.taskTool.execute({ task: 'Publish the current PR' }, exec)
+  assert.equal(accepted.status, 'POSTMAN_WORKER_TASK_ACCEPTED', JSON.stringify(accepted))
+  assert.equal(starts.length, 1)
+  assert.ok(starts[0].request.prompt[0].text.includes(f.original.worktree.replaceAll('\\', '/')))
+})
 
 test('read-only Devspace preparation creates no Git branch, worktree or push', async () => {
   const {contexts, calls, registry} = fixture()

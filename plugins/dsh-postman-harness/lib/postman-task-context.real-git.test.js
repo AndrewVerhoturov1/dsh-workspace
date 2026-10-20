@@ -5,7 +5,7 @@ import { JsonStorageBackend } from '@deepseek-ai/dsh-storage-json'
 import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { openPostmanTaskRegistry } from './postman-task-registry.js'
 import { createPostmanBridgeJobs } from './postman-bridge-jobs.js'
-import { join } from 'node:path'
+import { join, dirname, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -15,6 +15,70 @@ const exec = promisify(execFile)
 const shaPattern = /^[0-9a-f]{40}$/
 const call = async (cwd, ...args) => (await exec('git', ['-C', cwd, ...args], { windowsHide: true, timeout: 10000 })).stdout.trim()
 const makeLeader = (id, root) => ({ id, session: { header: { cwd: root } } })
+
+test('closed PR task resumes across sessions and JSON reopen without changing real Git files or index', { timeout: 120000 }, async () => {
+  const temp = await mkdtemp(join(tmpdir(), 'postman-real-resume-'))
+  const backend = new JsonStorageBackend(join(temp, 'storage'))
+  let registry
+  try {
+    const root = join(temp, 'root'), bare = join(temp, 'origin.git')
+    await exec('git', ['init', '--bare', bare], { windowsHide: true })
+    await exec('git', ['init', '-b', 'main', root], { windowsHide: true })
+    await call(root, 'config', 'user.email', 'postman-test@example.invalid')
+    await call(root, 'config', 'user.name', 'Postman test')
+    await writeFile(join(root, 'tracked.txt'), 'base\n')
+    await call(root, 'add', 'tracked.txt'); await call(root, 'commit', '-m', 'base')
+    await call(root, 'remote', 'add', 'origin', bare)
+    await call(root, 'push', 'origin', 'main')
+    const ctx = { storage: { backend: { get: () => backend } }, emit() {} }
+    registry = await openPostmanTaskRegistry(new DomainFacility(ctx, { backend: 'json' }))
+    const gitCommand = async (cwd, ...args) => args.join(' ') === 'remote get-url origin'
+      ? 'https://github.com/AndrewVerhoturov1/dsh-workspace.git' : call(cwd, ...args)
+    let branch
+    const githubPullRequest = async () => ({ number: 17, state: 'open', merged: false,
+      html_url: 'https://github.com/AndrewVerhoturov1/dsh-workspace/pull/17',
+      base: { ref: 'main', repo: { full_name: 'AndrewVerhoturov1/dsh-workspace' } },
+      head: { ref: branch, sha: await call(bare, 'rev-parse', 'refs/heads/' + branch),
+        repo: { full_name: 'AndrewVerhoturov1/dsh-workspace' } } })
+    const options = { registry, gitCommand, githubPullRequest, temporaryDirectory: () => temp }
+    const contexts = createPostmanTaskContexts(options), first = makeLeader('first-session', root)
+    const prepared = await contexts.prepare(first)
+    assert.equal(prepared.status, 'TASK_CONTEXT_READY', JSON.stringify(prepared))
+    branch = prepared.branch
+    const tree = prepared.worktree
+    await writeFile(join(tree, 'local.txt'), 'local commit\n')
+    await call(tree, 'add', 'local.txt'); await call(tree, 'commit', '-m', 'local-ahead')
+    await writeFile(join(tree, 'tracked.txt'), 'unstaged change\n')
+    await writeFile(join(tree, 'staged.txt'), 'staged change\n'); await call(tree, 'add', 'staged.txt')
+    await writeFile(join(tree, 'untracked.txt'), 'user data\n')
+    const snapshot = async () => Promise.all([
+      call(tree, 'rev-parse', 'HEAD'), call(tree, 'status', '--porcelain=v1'),
+      call(tree, 'diff', '--binary'), call(tree, 'diff', '--cached', '--binary'),
+      readFile(join(tree, 'untracked.txt'), 'utf8')])
+    const before = await snapshot()
+    await contexts.close(first)
+    await registry.close()
+    registry = await openPostmanTaskRegistry(new DomainFacility(ctx, { backend: 'json' }))
+    const cold = createPostmanTaskContexts({ ...options, registry }), next = makeLeader('next-session', root)
+    await cold.prepareReadOnly(next)
+    const resumed = await cold.resume(next, 17)
+    assert.equal(resumed.status, 'TASK_CONTEXT_READY', JSON.stringify(resumed))
+    assert.equal(resumed.branch, branch)
+    assert.equal(resumed.worktree, tree)
+    assert.equal(resumed.baseCommit, prepared.baseCommit)
+    assert.deepEqual(await snapshot(), before)
+    assert.equal(registry.get(first.id).stage, 'closed')
+    await registry.close()
+    registry = await openPostmanTaskRegistry(new DomainFacility(ctx, { backend: 'json' }))
+    const recovered = await createPostmanTaskContexts({ ...options, registry }).recover(next)
+    assert.equal(recovered.bindingId, resumed.bindingId)
+    assert.deepEqual(await snapshot(), before)
+  } finally {
+    await registry?.close(); await backend.close()
+    assert.equal(dirname(resolve(temp)), resolve(tmpdir()))
+    await rm(temp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+  }
+})
 
 test('production sync validates and fast-forwards a real temporary bare DAG', { timeout: 120000 }, async t => {
   const temp = await mkdtemp(join(tmpdir(), 'postman-production-sync-'))

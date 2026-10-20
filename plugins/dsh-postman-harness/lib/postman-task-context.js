@@ -21,6 +21,7 @@ const githubRepository = origin => {
 const boundContext = row => Object.freeze({
   leaderSessionId: row.leaderSessionId, repository: row.repository,
   branch: row.branch, worktree: row.worktree, baseCommit: row.baseCommit,
+  ...(row.bindingId ? { bindingId: row.bindingId } : {}),
   ...(row.devspaceReadOnly ? { devspaceReadOnly: true } : {}),
   ...(row.workspaceOnly ? { workspaceOnly: true, repositoryPath: row.repositoryPath } : {}),
   ...(row.universalProject ? { universalProject: true,
@@ -36,6 +37,11 @@ async function defaultGitHubBranch(repository) {
     { windowsHide: true, timeout: 30000 })
   return stdout.trim()
 }
+async function defaultPullRequest(repository, number) {
+  const { stdout } = await exec('gh', ['api', `repos/${repository}/pulls/${number}`],
+    { windowsHide: true, timeout: 30000 })
+  return JSON.parse(stdout)
+}
 const fileExists = async path => { try { await stat(path); return true } catch (error) { if (error?.code === 'ENOENT') return false; throw error } }
 
 async function git(cwd, ...args) {
@@ -44,7 +50,7 @@ async function git(cwd, ...args) {
 }
 
 /** The host injects one durable registry; tests explicitly inject an in-memory one. */
-export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(), gitCommand = git, temporaryDirectory = tmpdir, makeDirectory = mkdtemp, realPath = realpath, githubDefaultBranch = defaultGitHubBranch, writerControlFile } = {}) {
+export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(), gitCommand = git, temporaryDirectory = tmpdir, makeDirectory = mkdtemp, realPath = realpath, githubDefaultBranch = defaultGitHubBranch, githubPullRequest = defaultPullRequest, writerControlFile } = {}) {
   const contexts = new Map()
   const children = new Map()
   const pending = new Set()
@@ -298,6 +304,116 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
     } finally { pending.delete(id) }
   }
 
+  // A PR selects a Host-created task, never an arbitrary prompt-supplied worktree.
+  // Closed operations stay in their original audit; only a fresh binding is issued.
+  async function resume(leader, number, projectPath, { beforeResume = async () => true } = {}) {
+    const id = leader?.id, reserved = new Set()
+    const reject = code => ({ status: 'POSTMAN_TASK_RESUME_REJECTED', diagnostic: { code } })
+    if (!Number.isSafeInteger(number) || number < 1) return reject('PULL_REQUEST_INVALID')
+    if (pending.has(id)) return reject('TASK_OPERATION_BUSY')
+    pending.add(id); reserved.add(id)
+    try {
+      const info = await repositoryFor(leader, projectPath)
+      const pr = await githubPullRequest(info.name, number)
+      if (pr?.number !== number || pr.state !== 'open' || pr.merged ||
+          pr.base?.repo?.full_name?.toLowerCase() !== info.name.toLowerCase() ||
+          pr.head?.repo?.full_name?.toLowerCase() !== info.name.toLowerCase() ||
+          !BRANCH.test(pr.head?.ref ?? '') || !SHA.test(pr.head?.sha ?? '') ||
+          pr.html_url !== `https://github.com/${pr.base.repo.full_name}/pull/${number}`)
+        return reject('PULL_REQUEST_IDENTITY_UNPROVEN')
+      const saved = registry.get(id)
+      if (saved && !saved.devspaceReadOnly && saved.stage !== 'closed') {
+        if (!sameProject(saved, info.repository, info.originUrl) || saved.branch !== pr.head.ref ||
+            pr.base.ref !== (saved.defaultBranch ?? 'main') ||
+            saved.pullRequest && (saved.pullRequest.number !== number || saved.pullRequest.url !== pr.html_url ||
+              saved.pullRequest.base !== pr.base.ref))
+          return reject('ANOTHER_TASK_BOUND')
+        if (await command(info.repository, 'ls-remote', '--heads', 'origin', saved.branch) !==
+            pr.head.sha + '\trefs/heads/' + saved.branch) return reject('TASK_HISTORY_CHANGED')
+        const context = get(id)
+        if (context) return { status: 'POSTMAN_TASK_CONTEXT_ALREADY_READY', ...context }
+        pending.delete(id); reserved.delete(id)
+        return recover(leader)
+      }
+      const entries = registry.entries()
+      const candidates = entries.flatMap(([owner, current]) => [current, ...(current.retiredTasks ?? [])]
+        .filter(row => row?.leaderSessionId === owner && !row.devspaceReadOnly &&
+          row.branch === pr.head.ref && row.repository?.toLowerCase() === info.name.toLowerCase()))
+      const identities = new Set(candidates.map(row => JSON.stringify([
+        row.repositoryPath, row.originUrl, row.branch, row.worktree, row.baseCommit])))
+      if (!candidates.length || identities.size !== 1) return reject('TASK_OWNERSHIP_UNPROVEN')
+      if (candidates.some(row => row.stage !== 'closed')) return reject('TASK_STILL_OWNED')
+      const source = candidates.toSorted((a, b) => (b.closedAt ?? '').localeCompare(a.closedAt ?? ''))[0]
+      if (!sameProject(source, info.repository, info.originUrl) || !SHA.test(source.baseCommit) ||
+          !isAbsolute(source.worktree) || normalize(await realPath(source.worktree)) !== normalize(source.worktree) ||
+          [info.repository, resolve(homedir(), '.dsh'), resolve(homedir(), '.dsh-preview')]
+            .some(path => normalize(path) === normalize(source.worktree)) ||
+          pr.base.ref !== (source.defaultBranch ?? 'main') ||
+          candidates.some(row => row.pullRequest && (row.pullRequest.number !== number ||
+            row.pullRequest.url !== pr.html_url || row.pullRequest.base !== pr.base.ref)))
+        return reject('TASK_IDENTITY_CHANGED')
+      const commonDirectory = async path => normalize(await realPath(resolve(path,
+        await command(path, 'rev-parse', '--git-common-dir'))))
+      if (await commonDirectory(info.repository) !== await commonDirectory(source.worktree))
+        return reject('TASK_WORKTREE_OWNERSHIP_CHANGED')
+      const target = normalize(source.worktree)
+      const overlaps = path => typeof path === 'string' && (normalize(path) === target ||
+        normalize(path).startsWith(target + '/') || target.startsWith(normalize(path) + '/'))
+      const busy = () => devspaceOrdinaryWriterConflict(source.worktree, { controlFile: writerControlFile }) ||
+        registry.entries().some(([owner, row]) => [row, ...(row.retiredTasks ?? [])].some(task =>
+          overlaps(task.worktree) && (Object.keys(task.workers ?? {}).length ||
+            task.runner?.state && task.runner.state !== 'none' ||
+            task.stage !== 'closed' && !task.devspaceReadOnly) ||
+          Object.values(task.appJobs ?? {}).some(app => overlaps(app.worktree) && !['completed', 'killed'].includes(app.terminal)) ||
+          Object.entries(task.bridgeOperations ?? {}).some(([jobId, op]) => !op.writerSettlement && overlaps(
+            devspaceWriterHoldRoot({ leaderSessionId: owner, bridgeJobId: jobId, task, op }) ??
+            op.residualWriteRoot ?? (op.devspace?.approvedAccess === 'write' ? op.devspace.approvedRoot :
+              op.devspace?.mode === 'WRITE_ISOLATED' ? task.worktree : null)))))
+      if (saved && saved.stage !== 'closed' && (saved.stage !== 'ready' ||
+          Object.keys(saved.workers ?? {}).length || saved.runner?.state !== 'none' || saved.bridge ||
+          Object.values(saved.bridgeOperations ?? {}).some(op => op.state !== 'received' || op.grantDiagnostic) ||
+          Object.values(saved.devspaceLanes ?? {}).some(lane => lane.state !== 'closed')))
+        return reject('READ_ONLY_CONTEXT_BUSY')
+      const owners = new Set([id, ...candidates.map(row => row.leaderSessionId)])
+      for (const owner of owners) {
+        if (owner !== id) {
+          if (pending.has(owner)) return reject('TASK_OPERATION_BUSY')
+          pending.add(owner); reserved.add(owner)
+        }
+        if (activeOperations.has(owner) || syncOperations.has(owner) || workerAdmissions.has(owner))
+          return reject('TASK_OPERATION_BUSY')
+      }
+      if (busy()) return reject('PREVIOUS_WRITER_UNPROVEN')
+      const snapshots = new Map([...owners].map(owner => [owner, JSON.stringify(registry.get(owner))]))
+      for (const owner of owners) if (!await beforeResume(owner)) return reject('CHILD_CLOSURE_UNPROVEN')
+      const proof = await verifyTaskHistory(source, info.repository)
+      if (proof.remote !== pr.head.sha || proof.common !== proof.remote) return reject('TASK_HISTORY_CHANGED')
+      const fresh = await githubPullRequest(info.name, number)
+      if (fresh.state !== 'open' || fresh.merged || fresh.head?.sha !== pr.head.sha ||
+          fresh.number !== number || fresh.base?.repo?.full_name !== pr.base.repo.full_name ||
+          fresh.head?.ref !== pr.head.ref || fresh.base?.ref !== pr.base.ref ||
+          fresh.head?.repo?.full_name !== pr.head.repo.full_name || fresh.html_url !== pr.html_url ||
+          [...snapshots].some(([owner, snapshot]) => JSON.stringify(registry.get(owner)) !== snapshot) || busy() ||
+          await command(info.repository, 'ls-remote', '--heads', 'origin', source.branch) !==
+            proof.remote + '\trefs/heads/' + source.branch)
+        return reject('TASK_BINDING_CHANGED')
+      const row = { leaderSessionId: id, repository: source.repository, repositoryPath: source.repositoryPath,
+        originUrl: source.originUrl, branch: source.branch, worktree: source.worktree, baseCommit: source.baseCommit,
+        ...(source.universalProject ? { universalProject: true, defaultBranch: source.defaultBranch, baseSource: source.baseSource } : {}),
+        ...(!source.universalProject ? { selectedDshProject: true } : {}),
+        bindingId: randomUUID(), pullRequest: { number, url: pr.html_url, base: pr.base.ref },
+        resumedFrom: { leaderSessionId: source.leaderSessionId, ...(source.bindingId ? { bindingId: source.bindingId } : {}) },
+        ...(saved?.secretaryLedger ? { secretaryLedger: saved.secretaryLedger } : {}),
+        stage: 'ready', diagnostic: null, workers: {}, runner: { state: 'none', requestId: null }, bridge: null }
+      if (saved) await registry.replace(id, saved, row)
+      else await registry.create(id, row)
+      const context = boundContext(row)
+      contexts.set(id, context); changed(id)
+      return { status: 'TASK_CONTEXT_READY', ...context, pullRequest: row.pullRequest }
+    } catch (error) { return reject(String(error?.message ?? error)) }
+    finally { for (const owner of reserved) pending.delete(owner) }
+  }
+
   // Close retires authority, not files/branches and not a task-success certificate.
   // It deliberately needs no Git/worktree access after external merge/cleanup.
   async function close(leader, { isBusy = () => false, beforeClose = async () => true, abandon = false } = {}) {
@@ -454,6 +570,89 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
     } finally { pending.delete(id) }
   }
 
+  // Shared Git proof: recovery and explicit PR continuation never move HEAD or working files.
+  async function verifyTaskHistory(row, repository) {
+    const listing = await command(repository, 'worktree', 'list', '--porcelain')
+    const entries = listing.split(/\n\s*\n/).filter(Boolean)
+    const owned = entries.filter(entry => entry.split(/\r?\n/).some(line =>
+      line.startsWith('worktree ') && normalize(line.slice(9)) === normalize(row.worktree)))
+    const branchEntries = entries.filter(entry => entry.split(/\r?\n/).includes('branch refs/heads/' + row.branch))
+    if (owned.length !== 1 || branchEntries.length !== 1 || owned[0] !== branchEntries[0] ||
+        /(?:^|\n)(?:locked|prunable)(?: |\r?$)/m.test(owned[0]) ||
+        normalize(await realPath(row.worktree)) !== normalize(row.worktree) ||
+        normalize(await command(row.worktree, 'rev-parse', '--show-toplevel')) !== normalize(row.worktree) ||
+        await command(row.worktree, 'branch', '--show-current') !== row.branch ||
+        await command(row.worktree, 'remote', 'get-url', 'origin') !== row.originUrl)
+      throw new Error('task worktree ownership uncertain')
+    for (const marker of ['MERGE_HEAD', 'REBASE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'rebase-merge', 'rebase-apply', 'sequencer']) {
+      const markerPath = await command(row.worktree, 'rev-parse', '--git-path', marker)
+      if (await fileExists(resolve(row.worktree, markerPath))) throw new Error('git operation in progress')
+    }
+    const head = await command(row.worktree, 'rev-parse', 'HEAD')
+    const remoteLine = await command(repository, 'ls-remote', '--heads', 'origin', row.branch)
+    const remote = remoteLine.split('\t')[0]
+    if (!SHA.test(head) || !SHA.test(remote) || remoteLine !== remote + '\trefs/heads/' + row.branch)
+      throw new Error('task branch history uncertain')
+    // Fetch only the exact owned task ref to obtain missing objects; never update
+    // HEAD or the working files during recovery.
+    await command(row.worktree, 'fetch', 'origin', 'refs/heads/' + row.branch + ':refs/remotes/origin/' + row.branch)
+    if (await command(row.worktree, 'rev-parse', 'refs/remotes/origin/' + row.branch) !== remote ||
+        await command(row.worktree, 'merge-base', head, row.baseCommit) !== row.baseCommit ||
+        await command(row.worktree, 'merge-base', remote, row.baseCommit) !== row.baseCommit)
+      throw new Error('task branch history uncertain')
+    const common = await command(row.worktree, 'merge-base', remote, head)
+    if (common !== remote) {
+      if (common !== head) throw new Error('task branch history uncertain')
+      // Every remote-only commit must be one exact, locally journaled REQ
+      // publication. An ordinary fast-forward without receipts is not authority.
+      const receipts = new Map()
+      const { DirectPostmanJobManager } = await import('./direct-current-turn.js')
+      const direct = new DirectPostmanJobManager()
+      for (const op of Object.values(row.bridgeOperations ?? {})) {
+        const proof = op.requestId && ['artifact', 'text', 'image'].includes(op.transportKind)
+          ? direct.inspectRequest(op.requestId, row.branch, op.transportKind) : null
+        const terminal = op.state === 'received' && op.terminal &&
+          ['pending', 'busy', 'failed', 'synchronized'].includes(op.synchronization) ? op.terminal
+          : proof?.state === 'terminal' ? proof.terminal : null
+        const result = terminal?.result
+        const publication = result?.ok === true ? result :
+          result?.ok === false && result.code === 'POSTMAN_TRANSPORT_FAILED' ? result.publicationReceipt
+            : proof?.state === 'published' ? proof.publication : null
+        if (!publication) continue
+        const { taskPublicationCommit: commit, baseCommit: parent } = publication
+        if (!SHA.test(commit ?? '') || !SHA.test(parent ?? '') ||
+            (terminal && terminal.status !== 'POSTMAN_BRIDGE_TERMINAL') ||
+            (!terminal && proof?.state !== 'published') ||
+            (result?.ok === true && !['RESULT_DURABLE', 'TEXT_RESULT_DURABLE', 'IMAGE_RESULT_DURABLE',
+              'ASSISTANT_COMPLETED_NO_ARTIFACT', 'ARTIFACT_REJECTED'].includes(result.code)) ||
+            !['text', 'artifact', 'image'].includes(terminal?.transportKind ?? op.transportKind) ||
+            typeof (terminal?.requestId ?? op.requestId) !== 'string' || !((terminal?.requestId ?? op.requestId)) ||
+            (result?.requestId !== undefined && result.requestId !== (terminal?.requestId ?? op.requestId)) ||
+            (publication.requestId !== undefined && publication.requestId !== (terminal?.requestId ?? op.requestId)) ||
+            typeof publication.repository !== 'string' || publication.repository.toLowerCase() !== REPOSITORY ||
+            (result?.ok === false ? publication.branch !== row.branch :
+              publication.branch !== undefined && publication.branch !== row.branch) ||
+            publication.taskUrl !==
+              'https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/' + commit + '/' + (terminal?.requestId ?? op.requestId) + '.md' ||
+            receipts.has(commit)) throw new Error('task branch history uncertain')
+        receipts.set(commit, parent)
+      }
+      const commits = (await command(row.worktree, 'rev-list', '--reverse', head + '..' + remote)).split(/\r?\n/).filter(Boolean)
+      if (!commits.length) throw new Error('task branch history uncertain')
+      let parent = head
+      for (const commit of commits) {
+        if (!SHA.test(commit) || receipts.get(commit) !== parent ||
+            await command(row.worktree, 'rev-list', '--parents', '-n', '1', commit) !== commit + ' ' + parent)
+          throw new Error('task branch history uncertain')
+        parent = commit
+      }
+      if (parent !== remote) throw new Error('task branch history uncertain')
+    }
+    if (await command(repository, 'ls-remote', '--heads', 'origin', row.branch) !== remoteLine)
+      throw new Error('task branch history uncertain')
+    return { head, remote, common }
+  }
+
   // Recovery never invokes restore(), reset, clean, merge, or a new worktree add.
   async function recover(leader) {
     const id = leader?.id
@@ -506,86 +705,8 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
       repositoryVerified = true
       // A reserved empty directory with no registered Git tree is not authority
       // to create a new tree in recovery: it is merely an incomplete intent.
-      const listing = await command(repository, 'worktree', 'list', '--porcelain')
-      const entries = listing.split(/\n\s*\n/).filter(Boolean)
-      const owned = entries.filter(entry => entry.split(/\r?\n/).some(line =>
-        line.startsWith('worktree ') && normalize(line.slice(9)) === normalize(row.worktree)))
-      const branchEntries = entries.filter(entry => entry.split(/\r?\n/).includes('branch refs/heads/' + row.branch))
-      if (owned.length !== 1 || branchEntries.length !== 1 || owned[0] !== branchEntries[0] ||
-          /(?:^|\n)(?:locked|prunable)(?: |\r?$)/m.test(owned[0]) ||
-          normalize(await realPath(row.worktree)) !== normalize(row.worktree) ||
-          normalize(await command(row.worktree, 'rev-parse', '--show-toplevel')) !== normalize(row.worktree) ||
-          await command(row.worktree, 'branch', '--show-current') !== row.branch ||
-          await command(row.worktree, 'remote', 'get-url', 'origin') !== row.originUrl)
-        throw new Error('task worktree ownership uncertain')
-      for (const marker of ['MERGE_HEAD', 'REBASE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'rebase-merge', 'rebase-apply', 'sequencer']) {
-        const markerPath = await command(row.worktree, 'rev-parse', '--git-path', marker)
-        if (await fileExists(resolve(row.worktree, markerPath))) throw new Error('git operation in progress')
-      }
-      const head = await command(row.worktree, 'rev-parse', 'HEAD')
-      const remoteLine = await command(repository, 'ls-remote', '--heads', 'origin', row.branch)
-      const remote = remoteLine.split('\t')[0]
-      if (!SHA.test(head) || !SHA.test(remote) || remoteLine !== remote + '\trefs/heads/' + row.branch)
-        throw new Error('task branch history uncertain')
-      // Fetch only the exact owned task ref to obtain missing objects; never update
-      // HEAD or the working files during recovery.
-      await command(row.worktree, 'fetch', 'origin', 'refs/heads/' + row.branch + ':refs/remotes/origin/' + row.branch)
-      if (await command(row.worktree, 'rev-parse', 'refs/remotes/origin/' + row.branch) !== remote ||
-          await command(row.worktree, 'merge-base', head, row.baseCommit) !== row.baseCommit ||
-          await command(row.worktree, 'merge-base', remote, row.baseCommit) !== row.baseCommit)
-        throw new Error('task branch history uncertain')
-      const common = await command(row.worktree, 'merge-base', remote, head)
-      if (common !== remote) {
-        if (common !== head) throw new Error('task branch history uncertain')
-        // Every remote-only commit must be one exact, locally journaled REQ
-        // publication. An ordinary fast-forward without receipts is not authority.
-        const receipts = new Map()
-        const { DirectPostmanJobManager } = await import('./direct-current-turn.js')
-        const direct = new DirectPostmanJobManager()
-        for (const op of Object.values(row.bridgeOperations ?? {})) {
-          const proof = op.requestId && ['artifact', 'text', 'image'].includes(op.transportKind)
-            ? direct.inspectRequest(op.requestId, row.branch, op.transportKind) : null
-          const terminal = op.state === 'received' && op.terminal &&
-            ['pending', 'busy', 'failed', 'synchronized'].includes(op.synchronization) ? op.terminal
-            : proof?.state === 'terminal' ? proof.terminal : null
-          const result = terminal?.result
-          const publication = result?.ok === true ? result :
-            result?.ok === false && result.code === 'POSTMAN_TRANSPORT_FAILED' ? result.publicationReceipt
-              : proof?.state === 'published' ? proof.publication : null
-          if (!publication) continue
-          const { taskPublicationCommit: commit, baseCommit: parent } = publication
-          if (!SHA.test(commit ?? '') || !SHA.test(parent ?? '') ||
-              (terminal && terminal.status !== 'POSTMAN_BRIDGE_TERMINAL') ||
-              (!terminal && proof?.state !== 'published') ||
-              (result?.ok === true && !['RESULT_DURABLE', 'TEXT_RESULT_DURABLE', 'IMAGE_RESULT_DURABLE',
-                'ASSISTANT_COMPLETED_NO_ARTIFACT', 'ARTIFACT_REJECTED'].includes(result.code)) ||
-              !['text', 'artifact', 'image'].includes(terminal?.transportKind ?? op.transportKind) ||
-              typeof (terminal?.requestId ?? op.requestId) !== 'string' || !((terminal?.requestId ?? op.requestId)) ||
-              (result?.requestId !== undefined && result.requestId !== (terminal?.requestId ?? op.requestId)) ||
-              (publication.requestId !== undefined && publication.requestId !== (terminal?.requestId ?? op.requestId)) ||
-              typeof publication.repository !== 'string' || publication.repository.toLowerCase() !== REPOSITORY ||
-              (result?.ok === false ? publication.branch !== row.branch :
-                publication.branch !== undefined && publication.branch !== row.branch) ||
-              publication.taskUrl !==
-                'https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/' + commit + '/' + (terminal?.requestId ?? op.requestId) + '.md' ||
-              receipts.has(commit)) throw new Error('task branch history uncertain')
-          receipts.set(commit, parent)
-        }
-        const commits = (await command(row.worktree, 'rev-list', '--reverse', head + '..' + remote)).split(/\r?\n/).filter(Boolean)
-        if (!commits.length) throw new Error('task branch history uncertain')
-        let parent = head
-        for (const commit of commits) {
-          if (!SHA.test(commit) || receipts.get(commit) !== parent ||
-              await command(row.worktree, 'rev-list', '--parents', '-n', '1', commit) !== commit + ' ' + parent)
-            throw new Error('task branch history uncertain')
-          parent = commit
-        }
-        if (parent !== remote) throw new Error('task branch history uncertain')
-      }
-      if (await command(repository, 'ls-remote', '--heads', 'origin', row.branch) !== remoteLine)
-        throw new Error('task branch history uncertain')
-      const context = Object.freeze({ leaderSessionId: id, repository: REPOSITORY,
-        branch: row.branch, worktree: row.worktree, baseCommit: row.baseCommit })
+      await verifyTaskHistory(row, repository)
+      const context = boundContext(row)
       // Interrupted runner/Bridge outcomes are unknown, not trusted failures.
       if (row.stage !== 'ready' || row.runner.state === 'running' || row.runner.state === 'restoring' ||
           row.bridge?.state === 'pending' || Object.values(row.bridgeOperations ?? {}).some(op => op.state === 'pending'))
@@ -827,7 +948,7 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
   function get(leaderId) {
     const row = registry.get(leaderId), context = contexts.get(leaderId)
     return row?.stage === 'ready' && context &&
-      ['leaderSessionId', 'repository', 'branch', 'worktree', 'baseCommit']
+      ['leaderSessionId', 'repository', 'branch', 'worktree', 'baseCommit', 'bindingId']
         .every(key => row[key] === context[key]) ? context : null
   }
   function record(leaderId) { return registry.get(leaderId) }
@@ -1024,7 +1145,7 @@ export function createPostmanTaskContexts({ registry = createMemoryTaskRegistry(
   return { inspectDevspaceRuntime: () => inspectDevspaceRuntime({controlFile:writerControlFile}),
     readLedger: id => registry.readLedger(id),
     changeLedger: (id, fn) => registry.changeLedger(id, fn),
-    prepare, prepareReadOnly, recover, close, restore, sync, beginSync, endSync, verifyWorktree, verifyDirectPublication, get, record, records, changeRecord, onContextChange, isRestoring, hasActiveOperation, hasSyncOperation, canRetireWorkers, beginWorkerAdmission, endWorkerAdmission, beginOperation, startRunner, endOperation, reserveRestore, releaseRestore, bindChild, child, devspaceBinding, recordBridgeRequest, releaseChild, reconcileWriter, checkOrdinaryWriterAdmission, hasConflictingRetiredWriter, dispose }
+    prepare, prepareReadOnly, resume, recover, close, restore, sync, beginSync, endSync, verifyWorktree, verifyDirectPublication, get, record, records, changeRecord, onContextChange, isRestoring, hasActiveOperation, hasSyncOperation, canRetireWorkers, beginWorkerAdmission, endWorkerAdmission, beginOperation, startRunner, endOperation, reserveRestore, releaseRestore, bindChild, child, devspaceBinding, recordBridgeRequest, releaseChild, reconcileWriter, checkOrdinaryWriterAdmission, hasConflictingRetiredWriter, dispose }
 }
 
 // Both entrypoints use one facade. Initialization is awaited before Git/child actions;
