@@ -940,13 +940,8 @@ def prepare_existing_chat(
         live_composer_ready = composer["selector"] != "textarea"
         same_chat = (page_url == conversation_url if prior_request_id is not None
                      else same_conversation_url(page_url, conversation_url))
-        history, reason = (_read_user_history(page, prior_request_id)
-                           if prior_request_id is not None else (None, ""))
-        history_ready = prior_request_id is None or history is not None
         return (same_chat and empty and live_composer_ready
                 and str(getattr(page, "url", "") or "") == page_url), {
-            **({"historyReady": history_ready, "reason": reason, "history": history}
-               if prior_request_id is not None else {}),
             "pageUrl": page_url,
             "turnCount": turns,
             "composerSelector": selector,
@@ -1213,9 +1208,6 @@ def submit_once(
             observed, str(getattr(page, "url", "") or ""), conversation_url)), observed
 
     ok, proof = _wait_until(observe_or_rebind, timeout_ms=timeout_ms)
-    if artifact_mode and chat_confirmed_state == EXISTING_CHAT_CONFIRMED:
-        ok = False
-        proof["reason"] = "existing_chat_send_causality_unproven"
     if input_attachment and _needs_sent_image_rebind(proof, str(getattr(page, "url", "") or ""), conversation_url):
         ok = False
     sent_image = proof.get("sentAttachment", {})
@@ -1289,29 +1281,11 @@ def _owned_unsent_binding(page: Any, transaction: dict[str, Any],
     action_guard = getattr(page, "_postman_action_guard", None)
     if action_guard is not None and not action_guard():
         return False
-    strict_history = "userHistory" in transaction
-    history, history_reason = (_read_user_history(page, transaction["priorRequestId"])
-                               if strict_history else (None, ""))
-    turns = [] if strict_history else collect_user_turn_details(page)
-    observed_count = len(history) if history is not None else (None if strict_history else len(turns))
-    history_equal = not strict_history or history == transaction["userHistory"]
     send_not_attempted = transaction.get("sendAttempted") is False
     url_equal = transaction.get("ownedUrl") == str(getattr(page, "url", "") or "")
-    expected_count = transaction.get("userCount")
-    count_equal = observed_count is not None and expected_count == observed_count
     if evidence is not None:
-        families = ("author-role", "test-id", "bubble")
-        family = next((families[i] for i, selector in enumerate(USER_TURN_SELECTORS)
-                       if turns and turns[0]["selector"] == selector), "none")
-        bounded = lambda value: value if type(value) is int and 0 <= value <= 100_000 else None
-        evidence.update(sendNotAttempted=send_not_attempted, ownedUrlEqual=url_equal,
-                        expectedUserTurnCount=bounded(expected_count),
-                        observedUserTurnCount=bounded(observed_count),
-                        userTurnCountEqual=count_equal, userTurnSelectorFamily=family)
-        if strict_history:
-            evidence.update(historyReadConfirmed=history is not None, historyEqual=history_equal,
-                            historyReason=history_reason or ("" if history_equal else "history_changed"))
-    return send_not_attempted and url_equal and count_equal and history_equal
+        evidence.update(sendNotAttempted=send_not_attempted, ownedUrlEqual=url_equal)
+    return send_not_attempted and url_equal
 
 
 def clear_owned_unsent_prompt(page: Any, prompt: str, *, timeout_ms: int) -> bool:
@@ -1482,8 +1456,6 @@ def submit_existing_prompt(
         history = prep.get("history")
         transaction.update({"ownedUrl": prep["details"]["pageUrl"],
                             "userCount": len(history) if history is not None else len(collect_user_turn_texts(page))})
-        if history is not None:
-            transaction.update(userHistory=history, priorRequestId=prior_request_id)
     attachment_id = None
     if input_attachment:
         # Preparation has proved chat identity and an empty live composer. No Send yet.

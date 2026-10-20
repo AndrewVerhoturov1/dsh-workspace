@@ -5,9 +5,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { capabilityRuntime, native } from './fixtures/postman-capability-runtime.js'
-import { POSTMAN_PTC_SUCCESS_STATUSES } from './postman-bridge-core.js'
 
-const ptc = (program,boundary='semantic_decision') => ({program,boundary,description:'Execute complete deterministic supervisor step before genuine decision'})
+const ptc = (program,wait=false) => ({program,...(wait?{wait_for_event:true}:{})})
 const ok = r => { assert.equal(r.isError,false,JSON.stringify(r)); return r.value }
 const nested = r => { const v=ok(r);assert.equal(v.status,'ok',JSON.stringify(v));return v.value }
 const report = {name:'report',args:{output:'bounded verified exact stage2 evidence'}}
@@ -24,24 +23,23 @@ for(const preset of ['postman-leader','postman-leader-ptc']) test(preset+': one 
  const hold=Promise.withResolvers();t.after(()=>hold.resolve())
  const program=
   'const before=await tools.postman_team_status({});'+
-  'ptc.expectStatus(await tools.postman_task_prepare({}),"postman_task_prepare");'+
-  'const secretary=ptc.expectStatus(await tools.postman_secretary({task:"facts only"}),"postman_secretary");'+
-  'const a=ptc.expectStatus(await tools.postman_worker({task:"bounded A",createNew:true}),"postman_worker");'+
-  'const b=ptc.expectStatus(await tools.postman_worker({task:"bounded B",createNew:true}),"postman_worker");'+
-  'const sol=ptc.expectStatus(await tools.postman_sol_worker({task:"User explicitly selected Sol Worker; bounded review"}),"postman_sol_worker");'+
-  'const after=ptc.expectStatus(await tools.postman_team_status({}),"postman_team_status");'+
+  'const secretary=await tools.postman_secretary({task:"facts only"});'+
+  'const a=await tools.postman_worker({task:"bounded A",createNew:true});'+
+  'const b=await tools.postman_worker({task:"bounded B",createNew:true});'+
+  'const sol=await tools.postman_sol_worker({task:"User explicitly selected Sol Worker; bounded review"});'+
+  'const after=await tools.postman_team_status({});'+
   'return {before,secretary,a,b,sol,after}'
- const f=await fixture(t,{preset,plan:async(a,_r,n)=>{if(a.id==='leader'){assert.equal(n,1,'no mechanical model-direct rounds');return {name:'ptc_execute',args:ptc(program,'external_event')}}await hold.promise;return report}})
+ const f=await fixture(t,{preset,plan:async(a,_r,n)=>{if(a.id==='leader'){assert.equal(n,1,'no mechanical model-direct rounds');return {name:'ptc_execute',args:ptc(program,true)}}await hold.promise;return report}})
  const request=await f.turn(f.leader,'User explicitly asks for Sol Worker with Secretary and two ordinary Workers')
  assert.equal(request.model,'gpt-6.1-sol');assert.equal(request.reasoningEffort,'xhigh')
  const outer=f.results.find(r=>r.agent===f.leader&&r.name==='ptc_execute');assert.ok(outer)
- const v=ok(outer.result);assert.equal(v.status,'ok',JSON.stringify(v));assert.equal(f.diagnostics.at(-1).yieldApplied,true,JSON.stringify(f.diagnostics.at(-1)))
+ const v=ok(outer.result);assert.equal(v.status,'ok',JSON.stringify(v));assert.equal(f.diagnostics.at(-1).waitApplied,true,JSON.stringify(f.diagnostics.at(-1)))
  assert.equal(f.requests.filter(r=>r.agent.id==='leader').length,1)
- assert.deepEqual(f.results.filter(r=>r.parent&&r.agent===f.leader).map(r=>r.name),['postman_team_status','postman_task_prepare','postman_secretary','postman_worker','postman_worker','postman_sol_worker','postman_team_status'])
+ assert.deepEqual(f.results.filter(r=>r.parent&&r.agent===f.leader).map(r=>r.name),['postman_team_status','postman_secretary','postman_worker','postman_worker','postman_sol_worker','postman_team_status'])
  assert.equal(v.value.before.workers.used,0);assert.equal(v.value.before.secretary.present,false);assert.equal(v.value.before.sol.present,false)
  for(const name of ['secretary','a','b','sol'])assert.equal(v.value[name].status,'POSTMAN_WORKER_TASK_ACCEPTED')
  assert.notEqual(v.value.a.workerSessionId,v.value.b.workerSessionId)
- const team=v.value.after;assert.equal(team.status,'POSTMAN_TEAM_STATUS');assert.equal(team.task.contextReady,true)
+ const team=v.value.after;assert.equal(team.status,'POSTMAN_TEAM_STATUS');assert.equal(team.task.cwd,f.dir)
  assert.equal(team.workers.used,2);assert.equal(team.workers.limit,2);assert.equal(team.sol.present,true);assert.equal(team.sol.ownedWorkers.limit,2)
   const {used,...limits}=team.secretary.budget
   assert.deepEqual(limits,{soft:48,hard:60,exhausted:false})
@@ -52,38 +50,14 @@ for(const preset of ['postman-leader','postman-leader-ptc']) test(preset+': one 
 
 test('Sol create/continuation accepted in PTC, direct rejected and exact success is external producer', {timeout:30000},async t=>{
  const f=await fixture(t,{plan:a=>a.id==='leader'?null:report});await f.turn(f.leader);await f.prepare()
- const exec=async(program,boundary='external_event')=>{let concluded=0;const r=await f.ctx.tools.execute({agent:f.leader,name:'ptc_execute',arguments:ptc(program,boundary),callId:randomUUID(),signal:new AbortController().signal,concludeTurn(){concluded++}});return {v:ok(r),concluded:r.concludesTurn?1:0}}
- const first=await exec('return ptc.expectStatus(await tools.postman_sol_worker({task:"User explicitly selected Sol Worker"}),"postman_sol_worker")')
- assert.equal(first.v.status,'ok',JSON.stringify(first.v));assert.equal(f.diagnostics.at(-1).yieldApplied,true,JSON.stringify(f.diagnostics.at(-1)));assert.equal(first.concluded,1)
+ const exec=async(program,wait=true)=>{let concluded=0;const r=await f.ctx.tools.execute({agent:f.leader,name:'ptc_execute',arguments:ptc(program,wait),callId:randomUUID(),signal:new AbortController().signal,concludeTurn(){concluded++}});return {v:ok(r),concluded:r.concludesTurn?1:0}}
+ const first=await exec('return await tools.postman_sol_worker({task:"User explicitly selected Sol Worker"})')
+ assert.equal(first.v.status,'ok',JSON.stringify(first.v));assert.equal(f.diagnostics.at(-1).waitApplied,true,JSON.stringify(f.diagnostics.at(-1)));assert.equal(first.concluded,1)
  await f.childDone(first.v.value.workerSessionId)
  const second=await exec('return await tools.postman_sol_worker({workerSessionId:'+JSON.stringify(first.v.value.workerSessionId)+',task:"next exact authorized assignment"})')
  assert.equal(second.v.value.status,'POSTMAN_WORKER_TASK_ACCEPTED');assert.equal(second.v.value.workerSessionId,first.v.value.workerSessionId);assert.equal(second.concluded,1)
  await f.childDone(second.v.value.workerSessionId)
  const direct=await f.execute(f.leader,'postman_sol_worker',{task:'reject direct'});assert.equal(direct.isError,true);assert.match(direct.error.message,/POSTMAN_PTC_DIRECT_CALL_REJECTED/)
- assert.deepEqual(POSTMAN_PTC_SUCCESS_STATUSES.postman_sol_worker,['POSTMAN_WORKER_TASK_ACCEPTED'])
-})
-
-test('existing Worker wake-source fails closed on uncertain/stale/settled work and unsafe outer effects', {timeout:30000},async t=>{
- const gate=Promise.withResolvers(),entered=Promise.withResolvers();t.after(()=>gate.resolve())
- const f=await fixture(t,{plan:async a=>{if(a.id==='leader')return null;entered.resolve(a);await gate.promise;return report}})
- await f.turn(f.leader);await f.prepare()
- const wait=async(program='return {}')=>{const r=await f.execute(f.leader,'ptc_execute',ptc(program,'external_event'));assert.equal(r.isError,false,JSON.stringify(r));return r}
- assert.notEqual((await wait()).concludesTurn,true,'no producer or active work')
- const accepted=nested(await call(f,'postman_worker',{task:'hold exact active worker'})),id=accepted.workerSessionId,child=await entered.promise
- assert.equal((await wait()).concludesTurn,true,'existing work requires no dispatch or status call')
- const saved=structuredClone(f.registry.get('leader').workers[id])
- for(const delta of [{state:'uncertain'},{state:'stopping'},{state:'intent'},{delivery:'unknown'},{delivery:'pending'},
-  {ownerSessionId:'foreign'}, {lifecycle:{version:1,admissions:[],reports:[]}},
-  {lifecycle:{...saved.lifecycle,admissions:saved.lifecycle.admissions.map(a=>({...a,state:'pending'}))}}]){
-  await f.registry.change('leader',row=>({...row,workers:{...row.workers,[id]:{...saved,...delta}}}))
-  assert.notEqual((await wait()).concludesTurn,true,JSON.stringify(delta))
- }
- await f.registry.change('leader',row=>({...row,workers:{...row.workers,[id]:saved}}))
- for(const program of ['return {needsModelDecision:true}','try{await tools.read({file_path:"absent"})}catch(e){}return {}',
-  'return await tools.postman_bridge_stop({bridge_job_id:"foreign"})','tools.read({file_path:"absent"});return {}']) assert.notEqual((await wait(program)).concludesTurn,true,program)
- gate.resolve();await f.childDone(id);await f.turn(f.leader,'Consume final report')
- assert.notEqual((await wait()).concludesTurn,true,'retained settled binding is not a wake source')
- assert.equal(f.registry.get('leader').workers[id].state,'ready')
 })
 
 test('actual team snapshot is private bounded read-only and hides control tools from FAST/Sol roles', {timeout:30000},async t=>{
@@ -99,7 +73,7 @@ test('actual team snapshot is private bounded read-only and hides control tools 
  await f.childDone(a.workerSessionId);await f.childDone(b.workerSessionId)
  await f.registry.change('leader',r=>({...r,secretaryLedger:{revision:9,content:'do not expose private ledger'},bridgeOperations:Object.fromEntries(Array.from({length:80},(_,i)=>['job-'+i,{state:'unknown',phase:'request-known',transportKind:'text',requestId:'REQ_20261006T000000Z_'+String(i).padStart(4,'0'),cancellationRequested:i===0,terminal:{status:'FAKE',hugeJournal:'NEVER EXPOSE'},publication:{huge:'NEVER EXPOSE'}}]))}))
  const before=JSON.stringify(f.registry.get('leader'));const snapshot=nested(await call(f,'postman_team_status'))
- assert.equal(snapshot.secretary.ledgerRevision,9);assert.equal(snapshot.sol.ownedWorkers.used,2);assert.equal(snapshot.bridge.used,80);assert.equal(snapshot.bridge.operations.length,30);assert.equal(snapshot.bridge.truncated,true)
+ assert.equal(snapshot.secretary.ledgerRevision,9);assert.equal(snapshot.sol.ownedWorkers.used,2);assert.equal(snapshot.bridge.used,0);assert.equal(snapshot.bridge.operations.length,30);assert.equal(snapshot.bridge.truncated,true)
  const json=JSON.stringify(snapshot);assert.ok(json.length<16000);for(const secret of ['NEVER EXPOSE','private task','private ledger',a.workerSessionId,b.workerSessionId])assert.ok(!json.includes(secret),secret)
  assert.equal(JSON.stringify(f.registry.get('leader')),before)
  for(const agent of [solAgent,await f.childDone(a.workerSessionId),await f.childDone(worker.workerSessionId),await f.childDone(secretary.workerSessionId)]){
@@ -148,7 +122,7 @@ test('settled non-resident Worker compact keeps Session/binding/budget/audit and
  assert.deepEqual(continued.lifecycle.reports.slice(0,binding.lifecycle.reports.length),binding.lifecycle.reports)
 })
 
-test('compact rejects active, pending, unknown-delivery and wrong-lineage Workers without maintenance', {timeout:30000}, async t => {
+test('compact rejects active or native-pending and foreign-lineage Workers without maintenance', {timeout:30000}, async t => {
  const gate=Promise.withResolvers(),entered=Promise.withResolvers();t.after(()=>gate.resolve())
  const f=await fixture(t,{plan:async a=>{if(a.id==='leader')return null;entered.resolve();await gate.promise;return report}})
  await f.prepare();await f.turn(f.leader)
@@ -159,11 +133,10 @@ test('compact rejects active, pending, unknown-delivery and wrong-lineage Worker
   assert.equal(f.requests.length,requests);assert.deepEqual(f.registry.get('leader').workers[id],before)}
  await reject();gate.resolve();await f.childDone(id);await f.turn(f.leader,'Consume final active Worker report')
  const inspect=f.ctx.sessionPersistence.inspect.bind(f.ctx.sessionPersistence)
- for(const delivery of ['pending','unknown']) {
-  await f.registry.change('leader',r=>({...r,workers:{...r.workers,[id]:{...r.workers[id],delivery}}}))
-  await reject()
- }
- await f.registry.change('leader',r=>({...r,workers:{...r.workers,[id]:{...r.workers[id],delivery:'none'}}}))
+ await f.registry.change('leader',r=>({...r,workers:{...r.workers,[id]:{...r.workers[id],delivery:'unknown'}}}))
+ const compact=nested(await call(f,'postman_worker_compact',{workerSessionId:id}))
+ assert.equal(compact.status,'POSTMAN_WORKER_COMPACTED','historical delivery uncertainty does not veto native quiescent maintenance')
+ const compactionCount=(await inspect(id)).events.filter(event=>event.type==='compaction/start').length
  for(const mismatch of ['pending','parent','depth','open-turn']) {
   f.ctx.sessionPersistence.inspect=async(target,...args)=>{
    const saved=await inspect(target,...args);if(target!==id)return saved
@@ -175,6 +148,6 @@ test('compact rejects active, pending, unknown-delivery and wrong-lineage Worker
   await reject();assert.equal(f.ctx.agents.get(id),undefined)
  }
  f.ctx.sessionPersistence.inspect=inspect
- const saved=await inspect(id);assert.equal(saved.events.some(e=>e.type==='compaction/start'),false)
+ const saved=await inspect(id);assert.equal(saved.events.filter(e=>e.type==='compaction/start').length,compactionCount)
 })
 

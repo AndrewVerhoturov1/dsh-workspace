@@ -8,7 +8,7 @@ import {capabilityRuntime} from './fixtures/postman-capability-runtime.js'
 import {POSTMAN_LEADER_TOOL_ALLOWLIST,POSTMAN_SOL_PTC_TOOL_NAMES} from './postman-bridge-core.js'
 import {postmanRoleInstruction} from './postman-worker.js'
 const names=r=>r.tools.map(t=>t.name).sort()
-const ptc=program=>({program,description:'Review exact durable role facts',boundary:'semantic_decision'})
+const ptc=program=>({program,description:'Review exact durable role facts'})
 const report={name:'report',args:{output:'bounded native role verified'}}
 const value=r=>{assert.equal(r.isError,false,JSON.stringify(r));return r.value}
 const nested=r=>{const v=value(r);assert.equal(v.status,'ok',JSON.stringify(v));return v.value}
@@ -20,7 +20,7 @@ for (const preset of ['postman-leader', 'postman-leader-ptc']) test(preset + ': 
  t.after(async()=>{await f?.dispose();await rm(dir,{recursive:true,force:true,maxRetries:5,retryDelay:100})})
  const plan=async a=>{if(a.id!=='leader'&&a.options.model==='gpt-6.1-sol'){entered.resolve(a);await gate.promise}return a.id==='leader'?null:report}
  f=await capabilityRuntime(dir,{preset,plan});await f.prepare();await writeFile(join(f.worktree,'facts.txt'),'cold verified fact')
- const initial=await f.turn(f.leader),entries=[];assertManagementRequest('leader',initial);assert.match(JSON.stringify(initial),/POSTMAN_LEADER_SKILL_VERSION: 37/)
+ const initial=await f.turn(f.leader),entries=[];assertManagementRequest('leader',initial);assert.match(JSON.stringify(initial),/POSTMAN_LEADER_SKILL_VERSION: 41/)
  const remember=(a,type,name,owner='leader')=>entries.push({id:a.id,type,name,owner,log:f.ctx.sessionPersistence.locate(a.session.header).path,expected:names(f.requests.find(x=>x.agent.id===a.id).request)})
  for(const type of ['secretary','luna','sol']){
   const name=type==='secretary'?'postman_secretary':type==='sol'?'postman_sol_worker':'postman_worker',args={task:'User authorizes explicit Sol Worker route for bounded fixture'}
@@ -38,8 +38,8 @@ for (const preset of ['postman-leader', 'postman-leader-ptc']) test(preset + ': 
  const descriptor=lines.find(e=>e.type==='subagent/descriptor');assert.ok(descriptor);descriptor.data.toolFilter.deny.push('ptc_execute')
  await writeFile(sol.log,lines.map(JSON.stringify).join('\n')+'\n')
  gate=Promise.withResolvers();entered=Promise.withResolvers();f=await capabilityRuntime(dir,{preset,resume:true,plan})
- assert.ok(['TASK_CONTEXT_READY','POSTMAN_TASK_CONTEXT_ALREADY_READY'].includes((await f.prepare()).status))
- const resumed=await f.turn(f.leader);assertManagementRequest('leader',resumed);assert.deepEqual(names(resumed),names(initial));assert.match(JSON.stringify(resumed),/POSTMAN_LEADER_SKILL_VERSION: 37/);await f.switchPreset('postman-leader-ptc');assert.deepEqual(names(await f.turn(f.leader)),[...POSTMAN_LEADER_TOOL_ALLOWLIST,'ptc_execute'].sort())
+ await f.prepare()
+ const resumed=await f.turn(f.leader);assertManagementRequest('leader',resumed);assert.deepEqual(names(resumed),names(initial));assert.match(JSON.stringify(resumed),/POSTMAN_LEADER_SKILL_VERSION: 41/);await f.switchPreset('postman-leader-ptc');assert.deepEqual(names(await f.turn(f.leader)),[...POSTMAN_LEADER_TOOL_ALLOWLIST,'ptc_execute'].sort())
  let liveSol
  for(const e of entries){
   const args={workerSessionId:e.id,task:'bounded cold durable facts'}
@@ -54,4 +54,23 @@ for (const preset of ['postman-leader', 'postman-leader-ptc']) test(preset + ': 
   }
  }
  gate.resolve();await f.childDone(sol.id)
+})
+
+
+test('explicit Leader wait persists as one registry boolean and real input clears it after cold resume',{timeout:30000},async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'postman-cold-wait-'));let f
+ t.after(async()=>{await f?.dispose();await rm(dir,{recursive:true,force:true,maxRetries:5,retryDelay:100})})
+ f=await capabilityRuntime(dir,{plan:()=>({name:'ptc_execute',args:{program:'return {waiting:true}',wait_for_event:true}})})
+ await f.turn(f.leader)
+ assert.equal(f.requests.length,1)
+ assert.equal(f.registry.get('leader').waitingForEvent,true)
+ assert.equal(f.ctx.bail('goal/continuation-defer',f.leader),true)
+ await f.dispose();f=null
+ f=await capabilityRuntime(dir,{resume:true})
+ assert.equal(f.registry.get('leader').waitingForEvent,true)
+ assert.equal(f.ctx.bail('goal/continuation-defer',f.leader),true,'no transcript or producer proof is needed')
+ await f.turn(f.leader,'Real human input resumes work')
+ assert.equal(f.requests.length,1)
+ assert.equal(f.registry.get('leader').waitingForEvent,false)
+ assert.notEqual(f.ctx.bail('goal/continuation-defer',f.leader),true)
 })

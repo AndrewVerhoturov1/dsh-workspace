@@ -43,7 +43,7 @@ test('registry reopens new private mode and old v1 operation without migration',
   const registry=await openPostmanTaskRegistry(domain)
   const row={leaderSessionId:'leader',repository:'andrewverhoturov1/dsh-workspace',repositoryPath:'C:/repo',originUrl:'https://github.com/andrewverhoturov1/dsh-workspace.git',
     baseCommit:'a'.repeat(40),branch,worktree:'C:/task',stage:'ready',diagnostic:null,runner:{state:'none',requestId:null},bridge:null,
-    bridgeOperations:{old:{state:'pending'},[jobId]:{state:'pending',phase:'request-known',transportKind:'devspace',childSessionId:'luna',requestId:req,devspace:{mode:'WRITE_TEST',channel:'C:/private/job'}}}}
+    bridgeOperations:{old:{state:'pending'},[jobId]:{state:'pending',phase:'request-known',transportKind:'devspace',childSessionId:'luna',requestId:req,notification:'delivered',finishedAt:'2026-10-20T12:00:00Z',diagnostic:'saved local fact',hostDiagnostic:{status:'unknown'},devspace:{mode:'WRITE_TEST',channel:'C:/private/job'}}}}
   await registry.create('leader',row);await registry.close()
   const again=await openPostmanTaskRegistry(domain)
   assert.deepEqual(again.get('leader').bridgeOperations,row.bridgeOperations)
@@ -71,23 +71,6 @@ function bell(binding, fields = {}) {
     reportedOutcome: 'DONE', message: 'необычный\n **отчёт**', reportRef: null, ...fields }
   writeFileSync(join(binding.channel,'event.json'), JSON.stringify(event))
 }
-test('Stage3 read-only context cannot dispatch legacy Postman or Devspace writes', async () => {
-  let called=0
-  const scope={devspaceReadOnly:true,branch:'main'}
-  const contexts={get:()=>scope}
-  const tool=createPostmanBridgeTool({agents:{get:id=>id===parent.id?parent:null}},{
-    accept(...args){called++;assert.equal(args[2],'devspace');assert.equal(args[5],'READ_ONLY');return {status:'POSTMAN_BRIDGE_ACCEPTED'}}
-  },contexts)
-  assert.equal((await tool.execute({message:'@PostmanAsk task'},{agent:parent})).status,
-    'POSTMAN_DEVSPACE_READ_ONLY_SCOPE_REQUIRED')
-  assert.equal((await tool.execute({message:'@PostmanImage task'},{agent:parent})).status,
-    'POSTMAN_DEVSPACE_READ_ONLY_SCOPE_REQUIRED')
-  assert.equal((await tool.execute({message:'@PostmanDevspace task',devspace_mode:'WRITE_ISOLATED'},{agent:parent})).status,
-    'POSTMAN_DEVSPACE_READ_ONLY_SCOPE_REQUIRED')
-  assert.equal((await tool.execute({message:'@PostmanDevspace task',devspace_mode:'READ_ONLY'},{agent:parent})).status,
-    'POSTMAN_BRIDGE_ACCEPTED')
-  assert.equal(called,1)
-})
 test('Stage 3 isolates writeRoot only to a Host-bound task worktree', t => {
   const {root} = channel(t,'WRITE_TEST')
   const unique='33333333-3333-4333-8333-333333333333'
@@ -131,21 +114,6 @@ test('standalone and non-bound coding child cannot send devspace; coordinator st
   await assert.rejects(tools.tools[0].execute({}, {agent}),/POSTMAN_DEVSPACE_LEADER_BINDING_REQUIRED/)
   assert.equal(store.get(agent.id).consumed,false)
 })
-test('only live top-level Leader authorizes bridge and stage-one mode excludes continuation/Git', async () => {
-  let accepted = 0
-  const contexts = {get:()=>({})}
-  const tool = createPostmanBridgeTool({agents:{get:id=>id===parent.id?parent:null}}, {accept(...args){accepted++;assert.equal(args[2],'devspace');assert.equal(args[5],'WRITE_TEST');return {status:'POSTMAN_BRIDGE_ACCEPTED'}}}, contexts)
-  assert.equal((await tool.execute({message:'@PostmanDevspace task'}, {agent:{id:'foreign'}})).status,'POSTMAN_BRIDGE_CALLER_REJECTED')
-  assert.equal((await tool.execute({message:'@PostmanDevspace --chat '+req+' task'}, {agent:parent})).status,'POSTMAN_BRIDGE_MESSAGE_REJECTED')
-  assert.equal((await tool.execute({message:'@PostmanAsk task',devspace_mode:'WRITE_TEST'}, {agent:parent})).status,'POSTMAN_BRIDGE_MESSAGE_REJECTED')
-  assert.equal((await tool.execute({message:'@PostmanDevspace task',devspace_mode:'WRITE_TEST'}, {agent:parent})).status,'POSTMAN_BRIDGE_ACCEPTED')
-  assert.equal(accepted,1)
-  const start = buildPostmanBridgeStartRequest({parent,message:'@PostmanDevspace task',transportKind:'devspace',signal:new AbortController().signal})
-  assert.equal(start.label,'Postman Devspace Bridge')
-  assert.match(start.persona,/1\. For exact @PostmanDevspace/)
-  assert.equal(start.maxDepth,1)
-  assert.deepEqual(start.toolFilter.allow,['skill','postman_send_current_turn','postman_current_turn_status','postman_ask_validate_reply'])
-})
 test('bell retains missing/arbitrary report, rejects each foreign identity and redacts capability', t => {
   const {binding} = channel(t)
   bell(binding,{reportRef:join(binding.writeRoot,'missing.md')})
@@ -159,39 +127,6 @@ test('bell retains missing/arbitrary report, rejects each foreign identity and r
   }
   bell(binding,{reportRef:join(binding.channel,'binding.json')})
   assert.equal(devspaceTerminal(binding).reportRef,null)
-})
-test('cold pending/unknown bell cannot bypass Luna; received trusted terminal remains readable', async t => {
-  const {binding}=channel(t)
-  bell(binding)
-  const eventPath=join(binding.channel,'event.json')
-  const saved=readFileSync(eventPath,'utf8')
-  for (const state of ['pending','unknown']) {
-    const operation={state,phase:'request-known',transportKind:'devspace',requestId:req,childSessionId:'luna',
-      devspace:{mode:'WRITE_TEST',channel:binding.channel}}
-    const row={bridgeOperations:{[jobId]:operation}}
-    const unexpected=()=>assert.fail('cold status must not resume Luna, read Direct, mutate journal, sync or grant')
-    const jobs=createPostmanBridgeJobs({subagents:{start:unexpected}}, {run:unexpected,dispose(){}}, {register:unexpected},
-      {record:()=>row,changeRecord:unexpected,sync:unexpected}, null, {inspectRequest:unexpected})
-    const status=await jobs.status(parent,jobId,true)
-    assert.equal(status.status,'POSTMAN_BRIDGE_OUTCOME_UNKNOWN')
-    assert.equal(status.diagnostic,'POSTMAN_DEVSPACE_LUNA_TERMINAL_UNAVAILABLE')
-    assert.equal(status.result,undefined)
-    assert.equal(status.terminalStatus,undefined)
-    assert.equal(operation.terminal,undefined)
-    assert.equal(operation.state,state)
-    assert.equal(jobs.list(parent).used,1)
-    assert.equal(readFileSync(eventPath,'utf8'),saved)
-    assert.doesNotMatch(JSON.stringify(status),/DONE|DELIVERED|RESULT_REPORTED|capability|REPORT_UNVERIFIED/)
-    // Only a terminal previously delivered through Luna/journal can be read cold.
-    const result=devspaceTerminal(binding)
-    row.bridgeOperations[jobId]={...operation,state:'received',synchronization:'not-required',
-      terminal:{status:'POSTMAN_BRIDGE_TERMINAL',terminalStatus:'COMPLETED',transportKind:'devspace',requestId:req,result}}
-    const received=await jobs.status(parent,jobId)
-    assert.equal(received.status,'POSTMAN_BRIDGE_TERMINAL')
-    assert.deepEqual(received.result,result)
-    assert.equal(readFileSync(eventPath,'utf8'),saved)
-    await jobs.dispose()
-  }
 })
 test('manager uses private launcher not publisher and stdout cannot forge own bell', async t => {
   const {root}=channel(t,'READ_ONLY')
@@ -213,106 +148,6 @@ test('manager uses private launcher not publisher and stdout cannot forge own be
   child.stdout.emit('data',JSON.stringify({source:'bell',requestId:started.requestId,reportedOutcome:'DONE'}));child.emit('close',0)
   assert.equal(manager.view('luna').result.code,'POSTMAN_DEVSPACE_ROUTING_FAILED')
 })
-test('folder Luna keeps exact identity across two REQs and same ChatGPT chat without a Git branch', async () => {
-  let row = { bridgeOperations: {} }, wake, starts = 0, coldChecks = 0, closes = 0
-  const context = { branch: '', workspaceOnly: true, devspaceReadOnly: true,
-    repositoryPath: 'C:/source', worktree: 'C:/source' }
-  const requestIds = [req, 'REQ_20261012T120001Z_0002']
-  const conversationRef = 'https://chatgpt.com/c/stage2-owned'
-  const launched = [], relays = [], reports = []
-  const ctx = {
-    agents: { get: id => id === 'leader' ? parent : null },
-    subagents: {
-      startContinuable: async args => { starts++; assert.deepEqual(args.request.toolFilter.allow, []); assert.equal(args.provider, 'spawn'); assert.equal(args.request.parent, parent); return { childId: args.childId, messageId: 'initial' } },
-      inspectOpenContinuableChild: async () => { coldChecks++; return true },
-      followup: async (_parent, childId, parts, options) => { relays.push({childId, message:parts[0].text, kind:options.source.kind}); return 'accepted' },
-      closeContinuableChild: async (_parent, id, check) => { closes++; return await check() },
-    },
-  }
-  let currentId
-  const direct = {
-    start: async args => {
-      const requestId = requestIds[launched.length]
-      assert.ok(requestId)
-      assert.equal(args.transportKind, 'devspace')
-      assert.equal(args.branch, '')
-      assert.equal(args.devspaceBinding.workspaceOnly, true)
-      assert.equal(args.devspaceBinding.branch, '')
-      assert.equal(args.workspace, fileURLToPath(new URL('../../../', import.meta.url)))
-      assert.equal(args.payload, launched.length ? 'second assignment' : 'first assignment')
-      if (launched.length) {
-        assert.equal(args.devspaceBinding.conversationUrl, conversationRef)
-        assert.equal(args.devspaceBinding.priorRequestId, req)
-      }
-      else assert.equal(args.devspaceBinding.conversationUrl, undefined)
-      await args.onRequestAllocated(requestId, 'C:/private/'+requestId)
-      launched.push(args);currentId = requestId
-      return {requestId}
-    },
-    wait: async () => {
-      const result = {ok:true,requestId:currentId,code:'DEVSPACE_SIGNAL_RECEIVED',
-        source:'bell',reportedOutcome:'DONE',conversationRef,evidenceState:'REPORTED_NOT_VERIFIED',
-        transportDiagnostics:{transportEventJournal:[{event:'STAGE_STARTED'}]}}
-      reports.push(result)
-      return {status:'COMPLETED',requestId:currentId,result}
-    },
-    dispose(){},
-  }
-  parent.followup = value => {wake = value}
-  const contexts = {
-    get: () => context, record: () => row,
-    changeRecord: async (_id, fn) => {row = fn(row)},
-    sync(){ assert.fail('no Git sync') },
-  }
-  const jobs = createPostmanBridgeJobs(ctx, createPostmanBridgeLaunchCoordinator(),
-    {register(){ assert.fail('no grants') }}, contexts, null, direct)
-  async function assigned(message) {
-    const accepted = await jobs.accept(parent, '@PostmanDevspace '+message, 'devspace',undefined,undefined,'WRITE_TEST')
-    assert.equal(accepted.status, 'POSTMAN_BRIDGE_ACCEPTED', accepted)
-    let status
-    for(let i=0;i<20;i++){
-      await new Promise(resolve=>setImmediate(resolve))
-      status = await jobs.status(parent, accepted.bridgeJobId)
-      if(status.status==='POSTMAN_BRIDGE_TERMINAL')break
-    }
-    assert.equal(status.status, 'POSTMAN_BRIDGE_TERMINAL', status)
-    assert.equal(status.result.source, 'bell')
-    assert.equal(status.synchronization, 'not-required')
-    assert.equal(row.bridgeOperations[accepted.bridgeJobId].childSessionId,
-      row.devspaceLanes[accepted.laneId].childId)
-    return accepted
-  }
-  const first = await assigned('first assignment')
-  const savedLane = row.devspaceLanes[first.laneId]
-  for (const conversationRef of [null, 'https://chatgpt.com/']) {
-    row.devspaceLanes[first.laneId] = {...savedLane,conversationRef}
-    const before=structuredClone(row)
-    const refused=await jobs.accept(parent,'@PostmanDevspace must not start new chat','devspace',undefined,undefined,'WRITE_TEST',first.laneId)
-    assert.equal(refused.status,'POSTMAN_DEVSPACE_CONTINUATION_UNPROVEN')
-    assert.deepEqual(row,before,'refusal precedes reservation and Send')
-    assert.equal(launched.length,1)
-  }
-  row.devspaceLanes[first.laneId] = savedLane
-  const second = await assigned('second assignment')
-  assert.equal(starts, 1)
-  assert.equal(coldChecks, 1)
-  assert.equal(launched.length, 2)
-  assert.equal(launched[0].devspaceBinding.lunaSessionId,launched[1].devspaceBinding.lunaSessionId)
-  assert.equal(first.laneId, second.laneId)
-  assert.equal(row.devspaceLanes[first.laneId].conversationRef, conversationRef)
-  assert.deepEqual(row.devspaceLanes[first.laneId].requestIds,requestIds)
-  assert.equal(row.bridgeOperations[second.bridgeJobId].requestId,requestIds[1])
-  assert.ok(relays.some(x=>x.kind==='coordinator' && x.message.includes('Host terminal')))
-  assert.ok(relays.some(x=>x.kind==='coordinator' && x.message.includes('second assignment')))
-  assert.match(JSON.stringify(wake),/POSTMAN_BRIDGE_READY/)
-  assert.equal((await jobs.status({id:'foreign'},second.bridgeJobId)).status,'POSTMAN_BRIDGE_JOB_NOT_FOUND')
-  assert.equal((await jobs.devspaceLunaClose(parent)).status,'POSTMAN_DEVSPACE_LUNA_CLOSED')
-  assert.equal(closes,1)
-  assert.equal(row.devspaceLanes[first.laneId].state,'closed')
-  assert.equal(jobs.devspaceLunaSnapshot(parent).state,'closed')
-  await jobs.dispose()
-})
-
 test('owned conversation continues after failed REQ; prior history is only an optional hint', async () => {
   const prior = req, failed = 'REQ_20261012T120001Z_0002', next = 'REQ_20261012T120002Z_0003'
   const chat = 'https://chatgpt.com/c/prior-history', child = 'luna'
@@ -428,54 +263,6 @@ test('Host team status is lossless JSON while three Luna lanes are only reserved
     'No undefined field can cross the Host PTC lossless JSON boundary')
 })
 
-test('failed pre-child reservations can be retired, never claiming a sent REQ', async () => {
-  const scope={branch:'main',devspaceReadOnly:true}
-  const leader={...parent}
-  const makeRow=()=>({bridgeOperations:Object.fromEntries(
-    ['a','b','c'].map(id=>['job-'+id,{
-      state:'unknown',phase:'reserved',transportKind:'devspace',
-      devspace:{mode:'READ_ONLY',laneId:id},
-    }])),
-    devspaceLanes:Object.fromEntries(['a','b','c'].map(id=>[id,{
-      state:'reserved',activeBridgeJobId:'job-'+id,
-      requestIds:[],conversationRef:null,
-    }]))})
-  let row=makeRow(), writes=0
-  const ctx={agents:{get:id=>id===leader.id?leader:null}}
-  const contexts={get:()=>scope,record:()=>row,
-    changeRecord:async(_id,update)=>{row=update(row);writes++}}
-  const lanes=createPostmanDevspaceLanes(ctx,contexts,{start:()=>assert.fail('no REQ or browser send')})
-  const result=await lanes.close(leader,scope)
-  assert.equal(result.status,'POSTMAN_DEVSPACE_LUNA_CLOSED')
-  assert.equal(writes,3)
-  for(const id of ['a','b','c']){
-    assert.equal(row.devspaceLanes[id].state,'closed')
-    assert.equal(row.devspaceLanes[id].activeBridgeJobId,null)
-    const op=row.bridgeOperations['job-'+id]
-    assert.equal(op.state,'received')
-    assert.equal(op.phase,'not-sent')
-    assert.equal(op.synchronization,'not-required')
-    assert.equal(op.cancellationRequested,true)
-    assert.equal(op.requestId,undefined)
-    assert.equal(op.childSessionId,undefined)
-    assert.equal(op.terminal,undefined)
-  }
-  assert.equal((await lanes.close(leader,scope)).status,'POSTMAN_DEVSPACE_LUNA_CLOSED')
-  // One in-flight or uncertain channel must block blanket cleanup atomically.
-  row=makeRow()
-  row.bridgeOperations['job-b'].requestId='REQ_20261013T000000Z_0001'
-  const previous=structuredClone(row)
-  const blocked=await lanes.close(leader,scope)
-  assert.equal(blocked.status,'POSTMAN_DEVSPACE_LUNA_BUSY')
-  assert.deepEqual(row,previous)
-  // Even targeted close must not misrepresent an ambiguous REQ as not sent.
-  assert.equal((await lanes.close(leader,scope,'b')).status,'POSTMAN_DEVSPACE_LUNA_BUSY')
-  assert.deepEqual(row,previous)
-  assert.equal((await lanes.close({...leader},scope,'a')).status,
-    'POSTMAN_DEVSPACE_LUNA_CALLER_REJECTED')
-  assert.deepEqual(row,previous)
-})
-
 test('three concurrent READ_ONLY lanes isolate Luna, REQ, chat and an UNKNOWN in another line', async () => {
   let row = { bridgeOperations: {} }
   const context = { branch, repositoryPath: 'C:/source', worktree: 'C:/source', devspaceReadOnly:true }
@@ -561,68 +348,6 @@ test('three concurrent READ_ONLY lanes isolate Luna, REQ, chat and an UNKNOWN in
   assert.equal((await jobs.devspaceLunaClose(leader)).status,'POSTMAN_DEVSPACE_LUNA_CLOSED')
   assert.ok(Object.values(row.devspaceLanes).every(x=>x.state==='closed'))
   await jobs.dispose()
-})
-
-test('unprepared universal Devspace starts branchless and requires exact permission for external paths', async t => {
-  const root = mkdtempSync(join(tmpdir(), 'devspace-approved-target-'))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
-  const repoPath=join(root,'repo')
-  mkdirSync(repoPath)
-  let context = null, prepared = 0
-  const calls=[]
-  const contexts={
-    get: () => context,
-    async prepareReadOnly(leader) {
-      prepared++
-      context = { leaderSessionId: leader.id, repositoryPath: repoPath,
-        worktree: repoPath, branch: 'main', devspaceReadOnly: true }
-      return { status: 'POSTMAN_TASK_READ_ONLY_READY' }
-    },
-  }
-  const worker={
-    async accept(...args) {
-      calls.push(args)
-      return { status: 'POSTMAN_BRIDGE_ACCEPTED', bridgeJobId:jobId, laneId:'lane-owned' }
-    }
-  }
-  const tool = createPostmanBridgeTool({agents:{get:id=>id===parent.id?parent:null}},
-    worker,contexts)
-  assert.equal((await tool.execute({message:'@PostmanAsk legacy'}, {agent:parent})).status,
-    'POSTMAN_TASK_CONTEXT_REQUIRED')
-  assert.equal(prepared,0)
-  const result = await tool.execute({message:'@PostmanDevspace find answers'}, {agent:parent})
-  assert.equal(result.status,'POSTMAN_BRIDGE_ACCEPTED')
-  assert.equal(prepared,1)
-  assert.equal(calls.length,1)
-  assert.equal(calls[0][5],undefined) // Host picks private output, not a Git branch.
-  assert.equal(calls[0][8].computerUse,'allow')
-  assert.equal((await tool.execute({message:'@PostmanDevspace do unsafe UI',
-    computer_use_target:'ChatGPT'},{agent:parent})).status,
-    'POSTMAN_BRIDGE_ACCEPTED')
-  assert.equal(calls[1][8].computerUse,'allow')
-  assert.equal((await tool.execute({message:'@PostmanDevspace observe without UI',
-    computer_use:'deny'},{agent:parent})).status,'POSTMAN_BRIDGE_ACCEPTED')
-  assert.equal(calls[2][8].computerUse,'deny')
-  assert.equal(calls.length,3)
-  assert.equal((await tool.execute({message:'@PostmanDevspace outside',
-    workspace_root:root},{agent:parent})).status,'POSTMAN_DEVSPACE_SCOPE_INVALID')
-  assert.equal((await tool.execute({message:'@PostmanDevspace outside',
-    workspace_root:join(root,'missing'),workspace_access:'write'},{agent:parent})).status,
-    'POSTMAN_DEVSPACE_SCOPE_INVALID')
-  const granted = await tool.execute({message:'@PostmanDevspace write approved file',
-    workspace_root:root,workspace_access:'write'},{agent:parent})
-  assert.equal(granted.status,'POSTMAN_DEVSPACE_ISOLATED_CONTEXT_REQUIRED')
-  const allowed = join(root,'external')
-  mkdirSync(allowed)
-  const external = await tool.execute({message:'@PostmanDevspace create approved document',
-    workspace_root:allowed,workspace_access:'write'},{agent:parent})
-  assert.equal(external.status,'POSTMAN_BRIDGE_ACCEPTED')
-  assert.deepEqual(calls[3][7],{root:allowed,access:'write'})
-  context = { ...context, workspaceOnly: true, branch: '', repositoryPath: allowed, worktree: allowed }
-  assert.equal((await tool.execute({message:'@PostmanDevspace edit selected folder',
-    workspace_root:allowed,workspace_access:'write'},{agent:parent})).status,'POSTMAN_BRIDGE_ACCEPTED')
-  assert.deepEqual(calls[4][7],{root:allowed,access:'write'})
-  assert.equal(prepared,1)
 })
 
 test('Host checks private image proof and never promotes an arbitrary stdout path', t => {

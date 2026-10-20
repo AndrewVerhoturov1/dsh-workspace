@@ -28,7 +28,6 @@ export async function capabilityRuntime(dir, { preset = 'postman-leader-ptc', re
   const { JsonStorageBackend } = await native('dsh-storage-json')
   const { DomainFacility } = await native('dsh-storage-domain')
   // Production Host auto-loads workspace/Leader instructions, not a fixture persona.
-  await mkdir(join(dir,'.git'),{recursive:true})
   for(const path of ['AGENTS.md','REPO_POLICY.md','docs/workflow/TASK_CONTRACT.md','docs/subprojects/postman/SUBPROJECT.md','docs/subprojects/ptc/SUBPROJECT.md','.agents/skills/postman-leader']){await mkdir(join(dir,path,'..'),{recursive:true});await cp(join(repositoryRoot,path),join(dir,path),{recursive:true})}
   const ctx = new Context(), requests = [], results = [], counts = new Map(), disposals = new Map()
   ctx.on('agent/disposed', ({agent}) => disposals.get(agent.id)?.resolve(agent))
@@ -62,21 +61,8 @@ export async function capabilityRuntime(dir, { preset = 'postman-leader-ptc', re
     { path: resolve(sdkRequire.resolve('@deepseek-ai/dsh/package.json'), '../config/agent-presets'), trust: 'system' },
   ], includeUserRoot: false })
   const registry = await sharedPostmanTaskRegistry(ctx.storageDomain)
-  // Existing injection seam: no network/Git mutations, only task identity facts.
-  const worktree = join(dir, 'worktree'); await mkdir(worktree, { recursive: true })
-  const sha = 'a'.repeat(40)
-  const gitCommand = async (cwd, ...args) => {
-    const command = args.join(' ')
-    if (command.includes('--show-toplevel')) return cwd
-    if (command === 'remote get-url origin') return 'https://github.com/AndrewVerhoturov1/dsh-workspace.git'
-    if (command === 'worktree list --porcelain') return 'worktree ' + dir + '\n\n' + (registry.get('leader')?.stage === 'ready' ? 'worktree ' + worktree + '\nbranch refs/heads/' + registry.get('leader').branch + '\n' : '')
-    if (command === 'branch --show-current') return registry.get('leader')?.branch ?? ''
-    if (args[0] === 'ls-remote') return args.at(-1) === registry.get('leader')?.branch ? sha + '\trefs/heads/' + args.at(-1) : ''
-    if (args[0] === 'rev-parse' && args[1] === '--git-path') return join(dir, 'absent-' + args[2])
-    if (args[0] === 'rev-parse' || args[0] === 'merge-base') return sha
-    return ''
-  }
-  const contexts = initializePostmanTaskContexts(registry, { gitCommand, makeDirectory: async () => worktree, temporaryDirectory: () => dir, ...taskContextOptions })
+  const worktree = dir
+  const contexts = initializePostmanTaskContexts(registry, taskContextOptions ?? {})
   const workspacePolicy=await import(pathToFileURL(join(repositoryRoot,'plugins/dsh-task-discipline/workspace-policy.js')).href)
   await ctx.plugin(workspacePolicy).await()
   // Baseline comparison uses the same real loop with only the narrow hook vetoed.
@@ -114,7 +100,7 @@ export async function capabilityRuntime(dir, { preset = 'postman-leader-ptc', re
   }
   const execute = (agent, name, args = {}) => ctx.tools.execute({ agent, name, arguments: args, callId: randomUUID(), signal: new AbortController().signal })
   const switchPreset = async id => { await ctx.agentPresets.recompose(leader.ctx, id); leader.session.append('agent-preset/selected', { agentPreset: id }); await ctx.emit('agent-preset/selected', leader.id, id) }
-  const prepare = () => contexts.prepare(leader)
+  const prepare = () => contexts.ensure(leader)
   const childDone = async id => {
     const child = ctx.agents.get(id)
     await disposals.get(id)?.promise

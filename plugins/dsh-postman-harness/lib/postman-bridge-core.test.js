@@ -215,13 +215,13 @@ test('bridge authorization and visibility are limited to exact top-level Postman
 
   assert.deepEqual(POSTMAN_LEADER_TOOL_ALLOWLIST, [
     'ask_user_question', 'todo_write', 'exit_plan_mode', 'create_goal', 'get_goal', 'update_goal',
-    'read', 'read_image', 'grep', 'skill', 'web_fetch', 'postman_task_prepare', 'postman_task_restore', 'postman_task_close', 'postman_input_files',
+    'read', 'read_image', 'grep', 'skill', 'web_fetch', 'postman_input_files',
     'postman_bridge', 'postman_bridge_status', 'postman_bridge_list', 'postman_bridge_stop', 'postman_devspace_luna_close', 'postman_devspace_control', 'postman_team_status', 'postman_app', 'postman_worker', 'postman_sol_worker', 'postman_worker_interrupt', 'postman_worker_stop', 'postman_worker_list', 'postman_worker_compact', 'postman_worker_fresh', 'postman_secretary', 'postman_secretary_ledger',
   ])
-  assert.equal(POSTMAN_LEADER_TOOL_ALLOWLIST.length, 32)
-  assert.equal(new Set(POSTMAN_LEADER_TOOL_ALLOWLIST).size, 32)
+  assert.equal(POSTMAN_LEADER_TOOL_ALLOWLIST.length, 29)
+  assert.equal(new Set(POSTMAN_LEADER_TOOL_ALLOWLIST).size, 29)
   assert.deepEqual(POSTMAN_LEADER_ONLY_TOOL_NAMES, [
-    'postman_task_prepare', 'postman_task_restore', 'postman_task_close', 'postman_input_files', 'postman_bridge', 'postman_bridge_status', 'postman_bridge_list', 'postman_bridge_stop', 'postman_devspace_luna_close', 'postman_devspace_control', 'postman_team_status', 'postman_app',
+    'postman_input_files', 'postman_bridge', 'postman_bridge_status', 'postman_bridge_list', 'postman_bridge_stop', 'postman_devspace_luna_close', 'postman_devspace_control', 'postman_team_status', 'postman_app',
     'postman_worker', 'postman_sol_worker', 'postman_worker_interrupt', 'postman_worker_stop', 'postman_worker_list', 'postman_worker_compact', 'postman_worker_fresh', 'postman_secretary', 'postman_secretary_ledger',
   ])
   assert.deepEqual(postmanBridgeRestrictionForAgent(leader), {
@@ -252,7 +252,7 @@ test('direct PTC guard applies only to exact top-level pilot and never nested di
   const delegated = parent({agentPreset:'postman-leader-ptc',origin:'subagent',delegationDepth:1})
   const current = new Map([[pilot.id,pilot]])
   const check = (agent,name,parentToken) => postmanPtcDirectCallGuard({agent,name,parent:parentToken}, id=>current.get(id))
-  assert.equal(POSTMAN_PTC_ONLY_LEADER_TOOLS.length,28)
+  assert.equal(POSTMAN_PTC_ONLY_LEADER_TOOLS.length,25)
   for (const name of POSTMAN_PTC_ONLY_LEADER_TOOLS) {
     assert.match(check(pilot,name),/POSTMAN_PTC_DIRECT_CALL_REJECTED/)
     assert.equal(check(pilot,name,{}),undefined)
@@ -388,7 +388,7 @@ test('package and composition expose bridge entrypoint and leader preset', () =>
     'tool-todo', 'tool-web'])
   assert.equal(pilotPreset.replaceAll('\r\n','\n'), leaderPreset.replaceAll('\r\n','\n'))
   assert.match(pilotPreset, /Direct PTC-managed calls are rejected/)
-  assert.match(pilotPreset, /Group all predetermined supervisor operations/)
+  assert.match(pilotPreset, /batch useful known operations/)
   assert.doesNotMatch(pilotPreset, /run_code|dsh-ptc-plus|Node Worker Thread/i)
 
   const bridgeSource = readFileSync(join(pluginRoot, 'lib', 'postman-bridge.js'), 'utf8')
@@ -404,7 +404,7 @@ test('package and composition expose bridge entrypoint and leader preset', () =>
   assert.match(agents, /postman-leader/)
 
   const leaderSkill = readFileSync(join(repoRoot, '.agents', 'skills', 'postman-leader', 'SKILL.md'), 'utf8')
-  assert.match(leaderSkill, /POSTMAN_LEADER_SKILL_VERSION: 37/)
+  assert.match(leaderSkill, /POSTMAN_LEADER_SKILL_VERSION: 41/)
   assert.match(leaderSkill, /branchless `READ_ONLY`[\s\S]{0,350}text_fallback/)
   assert.match(leaderSkill, /REPORTED_NOT_VERIFIED/)
   assert.match(leaderSkill, /существующий mapping не запрещает \x60createNew:true\x60/)
@@ -414,11 +414,12 @@ test('package and composition expose bridge entrypoint and leader preset', () =>
     'использование stop только ради переключения этапа', 'Для новой session сначала должно отсутствовать прежнее mapping']) {
     assert.ok(!leaderSkill.includes(forbidden), forbidden)
   }
-  assert.match(leaderSkill, /postman_bridge_status\(\{bridge_job_id, recover:true\}\)/)
+  assert.match(leaderSkill, /wait_for_event:true/)
+  assert.doesNotMatch(leaderSkill, /recover:true|retrySync|reconcileWriter|postman_task_prepare|expectStatus/)
   for (const name of ['postman-leader', 'delegate-via-postman', 'delegate-via-postman-ask', 'delegate-via-postman-image']) {
     const policy = readFileSync(join(repoRoot, '.agents', 'skills', name, 'SKILL.md'), 'utf8')
-    assert.match(policy, /capability/)
-    assert.doesNotMatch(policy, /это не successful terminal и не повод продолжать автоматически|→ \x60STOP\x60, без fallback и blind resend/)
+    assert.match(policy, /Leader|пользовател/)
+    assert.doesNotMatch(policy, /Автоматическое восстановление — одна попытка|postman_continue_last_request/)
   }
   assert.match(leaderSkill, /artifactRequestId/)
   assert.ok(leaderSkill.includes('implementation_artifact_apply'))
@@ -449,11 +450,10 @@ test('package and composition expose bridge entrypoint and leader preset', () =>
 
   const bridgeFlow = readFileSync(join(repoRoot, 'postman', 'POSTMAN_BRIDGE_FLOW.md'), 'utf8')
   assert.match(bridgeFlow, /deliveryMode=inline/)
-  assert.match(bridgeFlow, /deliveryMode=file/)
-  assert.match(bridgeFlow, /child НЕ вызывает `postman_ask_validate_reply`/)
-  assert.match(bridgeFlow, /bridge host сохраняет descriptor для parent Leader/)
-  assert.match(bridgeFlow, /durable Leader-owned grant по точной сессии Leader и REQ/)
-  assert.ok(bridgeFlow.includes('postman_worker({task, workerSessionId, artifactRequestId:'))
-  assert.ok(bridgeFlow.includes('implementation_artifact_apply({requestId:'))
-  assert.doesNotMatch(bridgeFlow, /применение exact `resultZip`/)
+  assert.match(bridgeFlow, /`file`.*проверенный `resultFile`/)
+  assert.match(bridgeFlow, /exact Leader\/REQ grant|Leader-owned grant по exact REQ/)
+  assert.match(bridgeFlow, /implementation_artifact_apply\(\{requestId, worktree\}\)/)
+  assert.match(bridgeFlow, /готовит Worker|поручает Worker/)
+  assert.doesNotMatch(bridgeFlow, /postman_task_prepare|retrySync|reconcileWriter|recover:true/)
+
 })

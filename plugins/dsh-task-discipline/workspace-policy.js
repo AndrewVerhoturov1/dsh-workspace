@@ -72,7 +72,7 @@ async function documents(ctx, agent, signal, extra = []) {
   if ((managed || contract !== undefined) && (leader(agent) || ['write','edit','pwsh','bash','ptc_execute','implementation_artifact_apply','postman_worker','postman_sol_worker'].some(has))) paths.push(join(root,CONTRACT))
   // Arbitrary shell is not safely classifiable as Git/non-Git. Capability is
   // the deterministic condition; repo policy precedes the first shell call.
-  if ((managed || policy !== undefined) && (leader(agent) || ['pwsh','bash','ptc_execute','postman_task_prepare','implementation_artifact_apply'].some(has))) paths.push(join(root,POLICY))
+  if ((managed || policy !== undefined) && (leader(agent) || ['pwsh','bash','ptc_execute','implementation_artifact_apply'].some(has))) paths.push(join(root,POLICY))
   // Expected managed supervisor capabilities are known before their first tool.
   // Role comes from the owning Host, never an inherited child preset/persona.
   if (managed && (leader(agent) || ctx.bail('postman/workspace-role', agent) === 'sol')) {

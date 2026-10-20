@@ -13,7 +13,7 @@ description: >-
 
 # Delegate via Postman — Direct Production
 
-`DIRECT_POSTMAN_SKILL_VERSION: 24`
+`DIRECT_POSTMAN_SKILL_VERSION: 25`
 
 `TRUSTED_CURRENT_TURN_BOUNDARY_VERSION: 1`
 
@@ -24,7 +24,6 @@ Normal `@Postman` не формирует payload в LLM-коде. После з
 ```text
 postman_send_current_turn()
 postman_current_turn_status()
-postman_continue_last_request()   # только разрешённая automatic continuation
 ```
 
 Trusted plugin получает exact current `user/message` из Harness, механически разбирает marker/`--chat`, создаёт canonical REQ и вызывает существующий `<current workspace>\postman\direct\postman.ps1`. Нельзя копировать current user message в JavaScript, PowerShell, Base64 или tool argument. Если `postman_send_current_turn`/`postman_current_turn_status` недоступны — `STOP`; model-copy fallback запрещён. Не запускать shell, Chrome, browser, ZIP download или Git integration вручную вместо них. Transport lifecycle (напоминания, correlation, validator и закрытие owned Page) — в `postman/POSTMAN_CURRENT_FLOW.md`.
@@ -158,21 +157,20 @@ Playwright
 
 ### Л1 — local transport agent
 
-В normal `@Postman` flow Л1 загружает skill, вызывает trusted no-argument tools, принимает terminal текущего REQ и сообщает результат либо решает о разрешённом automatic continuation. Разбор intent, создание REQ и запуск Direct wrapper принадлежат trusted runtime, а не Л1.
+В normal `@Postman` flow Л1 загружает skill, вызывает trusted no-argument tools, принимает terminal текущего REQ и сообщает результат Leader или пользователю для следующего решения. Разбор intent, создание REQ и запуск Direct wrapper принадлежат trusted runtime, а не Л1.
 
 Л1 не анализирует содержимое durable ZIP, не применяет и не изменяет ZIP, не выбирает
 semantic test и не начинает Git/PR integration. Для двух non-durable terminal outcomes
-Л1 может прочитать только terminal assistantText и exact validation reason, чтобы решить:
-нужен ли короткий continuation того же conversation или требуется пользователь. Новые
+Л1 может прочитать только terminal assistantText и exact validation reason, для передачи фактического исхода Leader или пользователю. Новую отправку самостоятельно не начинай. Новые
 содержательные требования от себя добавлять нельзя.
 
 ## 4. Intent и запуск trusted transport
 
 Л1 не превращает пользовательский запрос в техническое ТЗ, не разрешает ссылки на предыдущий контекст и не копирует payload в код. Trusted runtime удаляет только exact transport marker `@Postman` и непосредственно следующий separator; при ручном `--chat <old REQ>` удаляет transport metadata, оставляя новый intent verbatim. Ч1 получает этот intent без дополнений. До отправки не исследовать предмет задачи, не выбирать технологию и не выполнять задачу самостоятельно.
 
-Единственный normal entrypoint — no-argument `postman_send_current_turn()`. Trusted plugin создаёт один canonical `REQ_YYYYMMDDTHHMMSSZ_NNNN`, вызывает workspace-relative `postman/direct/postman.ps1` и возвращает связанный результат; ожидание — только `postman_current_turn_status()`. Не создавать REQ, `jobId`, `TaskBase64` и `tools.pwsh` invocation в модели. Shell failure до старта — `POSTMAN_INVOCATION_NOT_STARTED`: Send не происходил, не читать старые/latest REQ и не делать retry. Running/unknown outcome не разрешает новую отправку; не использовать browser fallback.
+Единственный normal entrypoint — no-argument `postman_send_current_turn()`. Trusted plugin создаёт один canonical `REQ_YYYYMMDDTHHMMSSZ_NNNN`, вызывает workspace-relative `postman/direct/postman.ps1` и возвращает связанный результат; ожидание — только `postman_current_turn_status()`. Не создавать REQ, `jobId`, `TaskBase64` и `tools.pwsh` invocation в модели. Shell failure до старта — `POSTMAN_INVOCATION_NOT_STARTED`: Send не происходил, не читать старые/latest REQ и не делать retry. Running/unknown outcome сообщи вызывающему Leader или пользователю; сам не повторяй отправку; не использовать browser fallback.
 
-Автоматическое восстановление — одна попытка на исходный REQ/root chain, во всех трёх режимах. Direct принимает решение по capability: exact locally saved conversation, доказанный original Send (`PROVEN_SENT` или read-only reproof UNKNOWN), нет unresolved Send, durable результата или уже созданного Web artifact. Перед публикацией/Send новый REQ эксклюзивно фиксирует durable `recovery-<rootREQ>.claim`; restart и конкурирующий вызов не дают вторую попытку. Новый короткий intent продолжает работу, а не повторяет исходный запрос. `PROVEN_NOT_SENT` и недоказанный UNKNOWN → STOP. Ошибка download при уже созданном Web artifact не запускает новый Web message. Ручной `--chat` остаётся независимым новым запросом. Для Image обычный `--chat` создаёт новое изображение; automatic recovery после готового изображения сначала read-only доказывает исходный image assistant identity и запускает только упаковку без generation. При настоящем blocker/необходимости выбора верни результат пользователю.
+Host не создаёт восстановительную отправку по исходу или тексту ошибки. Новую команду выбирает Leader либо пользователь; перед повторным Send проверь известные результаты и историю, чтобы не повторить уже выполненное. Старый Send/UNKNOWN сам по себе не блокирует новую явную команду, но не является разрешением transport child повторить её самостоятельно. В одном вызове одна попытка Send. Явный `--chat` использует собственную сохранённую беседу и отдельный REQ; готовые результаты не переигрываются.
 
 Внешний browser prompt формирует Direct Postman, не Л1:
 
@@ -184,15 +182,15 @@ REQ остаётся в task URL/file. Видимые `POSTMAN_REQUEST_ID:`, `ta
 
 ## 5. Terminal gate и handoff
 
-Принимать только trusted terminal текущего REQ. `ASSISTANT_COMPLETED_NO_ARTIFACT` и `ARTIFACT_REJECTED` возвращают assistantText/причину; они допускают одну automatic recovery по тому же trusted capability правилу. `RESULT_DURABLE` требует exact `requestId` и `resultZip`; Direct уже проверил correlation, SHA-256, ZIP safety и сохранил durable result. Не распаковывать ZIP, не повторять validator/manifest checks и не открывать ChatGPT для подтверждения. Сообщить exact `requestId` и кликабельный `resultZip`, затем `STOP`. Не вызывать `postman_result_workspace_register` и не создавать Result Workspace автоматически. Исторический PUBLISHED Result Workspace остаётся отдельным explicit workflow.
+Принимать только trusted terminal текущего REQ. `ASSISTANT_COMPLETED_NO_ARTIFACT` и `ARTIFACT_REJECTED` возвращают assistantText/причину; они передаются для решения Leader или пользователя без автоматического продолжения. `RESULT_DURABLE` требует exact `requestId` и `resultZip`; Direct уже проверил correlation, SHA-256, ZIP safety и сохранил durable result. Не распаковывать ZIP, не повторять validator/manifest checks и не открывать ChatGPT для подтверждения. Сообщить exact `requestId` и кликабельный `resultZip`, затем `STOP`. Не вызывать `postman_result_workspace_register` и не создавать Result Workspace автоматически. Исторический PUBLISHED Result Workspace остаётся отдельным explicit workflow.
 
-Автоматическое восстановление — одна попытка на исходный REQ/root chain, во всех трёх режимах. Direct принимает решение по capability: exact locally saved conversation, доказанный original Send (`PROVEN_SENT` или read-only reproof UNKNOWN), нет unresolved Send, durable результата или уже созданного Web artifact. Перед публикацией/Send новый REQ эксклюзивно фиксирует durable `recovery-<rootREQ>.claim`; restart и конкурирующий вызов не дают вторую попытку. Новый короткий intent продолжает работу, а не повторяет исходный запрос. `PROVEN_NOT_SENT` и недоказанный UNKNOWN → STOP. Ошибка download при уже созданном Web artifact не запускает новый Web message. Ручной `--chat` остаётся независимым новым запросом. Для Image обычный `--chat` создаёт новое изображение; automatic recovery после готового изображения сначала read-only доказывает исходный image assistant identity и запускает только упаковку без generation. При настоящем blocker/необходимости выбора верни результат пользователю.
+При non-durable результате передай факты для решения по разделу 4; нового Send этот исход сам по себе не создаёт.
 
-`POSTMAN_TRANSPORT_FAILED` сохраняет exact `requestId`, `transportCode`, `transportMessage`, `details` и non-zero exit; это не successful terminal; одна automatic recovery допустима только по trusted Direct capability, а не по самому коду ошибки. Некоррелированный, некорректный или неизвестный результат — fail-closed, без подмены старым REQ. Normal transport не оценивает содержимое package и не применяет artifact; implementation требует отдельного разрешения и workflow.
+`POSTMAN_TRANSPORT_FAILED` сохраняет exact `requestId`, `transportCode`, `transportMessage`, `details` и non-zero exit; это не successful terminal; автоматическое продолжение не выполняется; исход передаётся Leader или пользователю. Некоррелированный, некорректный или неизвестный результат — fail-closed, без подмены старым REQ. Normal transport не оценивает содержимое package и не применяет artifact; implementation требует отдельного разрешения и workflow.
 
 ## 6. Failure и запреты normal flow
 
-`DIRECT_CHAT_REFERENCE_UNAVAILABLE` означает отсутствие доказанного exact conversation URL: `STOP` до Send, без Search UI и silent fresh-chat fallback. При `POSTMAN_INVOCATION_NOT_STARTED` процесс не стартовал и Send не происходил; не читать старые/latest REQ states, не выполнять recovery и retry. После возможного Send неизвестный исход, interrupt или failure не разрешают blind resend. `POSTMAN_TRANSPORT_FAILED` возвращать с exact причиной; одна automatic recovery возможна только по проверенной Direct capability. Недоказанный UNKNOWN не разрешает новый Send.
+`DIRECT_CHAT_REFERENCE_UNAVAILABLE` означает отсутствие доказанного exact conversation URL: `STOP` до Send, без Search UI и silent fresh-chat fallback. При `POSTMAN_INVOCATION_NOT_STARTED` процесс не стартовал и Send не происходил; не читать старые/latest REQ states, не выполнять recovery и retry. После возможного Send неизвестный исход, interrupt или failure не разрешают blind resend. `POSTMAN_TRANSPORT_FAILED` возвращать с exact причиной; новую отправку решает Leader либо пользователь по фактам и истории. Недоказанный UNKNOWN сохраняется как информация, не как veto новой явной команды.
 
 Не запускать BrowserSmoke как normal preflight (он допустим только при явной диагностике), не открывать/управлять ChatGPT вручную, не запускать Chrome или альтернативный transport, не выполнять содержательную задачу вместо Ч1. Normal flow не создаёт implementation branch/worktree/commit/PR, не очищает пользовательский dirty worktree и не применяет ZIP. После `RESULT_DURABLE` — exact `requestId`/`resultZip` и `STOP`; при failure — exact REQ/code/reason и последняя доказанная фаза без предположений. Детали механического Direct lifecycle — `postman/POSTMAN_CURRENT_FLOW.md`.
 

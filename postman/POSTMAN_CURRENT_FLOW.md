@@ -8,11 +8,11 @@
 
 ## Наблюдение / физическое сохранение / verified result / применение
 
-Artifact UNKNOWN разрешает только ограниченное read-only наблюдение exact принадлежащей Page conversation. Weak count/text/composer/card не повышают UNKNOWN, reminders/recovery/automatic continuation запрещены. Fresh genuinely empty owned chat сохраняет strict verified путь; TEXT/IMAGE не получают unchecked candidate success.
+Artifact UNKNOWN сохраняет фактическую неопределённость отправки и позволяет наблюдать собственную беседу. Слабые признаки count/text/composer/card не превращают UNKNOWN в verified result. Host не создаёт новый REQ автоматически; новую явную команду Leader старый UNKNOWN не блокирует. Leader проверяет историю и результаты перед повтором. TEXT/IMAGE не получают неподтверждённый success.
 
 Один native файл конкретного наблюдаемого answer можно сохранить без идеального envelope/REQ/имени. Несколько дают до восьми choices без click; global latest ZIP и arbitrary external URL не выбираются. Descriptor `candidate`: actual path/byteLength/SHA, originalFilename, completeness, reasons/provenance, `verified=false`, `applyEligible=false`. Fixed raw path: `direct/candidates/<REQ>/capture.bin`, original filename не используется как путь.
 
-Wrong native name, доступные partial bytes, validator rejection/exception сохраняются с причиной, без unpack/open/execute. Raw save bounded 50 MiB; если native API не отдаёт partial path, это explicit evidence limit. Cold physical observation читает только owned fixed path и actual hash отдельно от strict ownership receipt; branchless/inconsistent receipt не чинится/не повышается. Sync failure не скрывает bytes/path/SHA, retrySync local-only, grant subordinate to verified ownership+sync и hash rechecks. Missing input post-Send proof оставляет `RESULT_MAY_LACK_INPUT_ATTACHMENT` до человеческого выбора.
+Wrong native name, доступные partial bytes, validator rejection/exception сохраняются с причиной, без unpack/open/execute. Raw save bounded 50 MiB; если native API не отдаёт partial path, это explicit evidence limit. Cold physical observation читает только owned fixed path и actual hash отдельно от strict ownership receipt; branchless/inconsistent receipt не чинится/не повышается. Отсутствие синхронизации рабочего Git-проекта не скрывает bytes/path/SHA и не является условием доставки. Grant требует verified ownership и повторной проверки hash; Host не синхронизирует checkout проекта. Missing input post-Send proof оставляет `RESULT_MAY_LACK_INPUT_ATTACHMENT` до человеческого выбора.
 
 ## 1. Назначение
 
@@ -116,11 +116,11 @@ REQ строится без JavaScript-template interpolation hazard, напри
 $requestId = 'REQ_' + $stamp + '_' + $suffix
 ```
 
-Persisted state того же REQ блокирует blind resend.
+Persisted state сохраняет факт и исход единственной попытки Send этого вызова. Leader учитывает его перед новой явной отправкой.
 
 ## 6. Snapshot и GitHub task publication
 
-Direct Postman фиксирует trusted snapshot branch, явно переданной trusted Host: standalone transport выбирает `main`, Leader child получает exact подготовленную task branch.
+Direct Postman фиксирует trusted snapshot транспортного репозитория; штатная база новых transport-запросов — `main`. Публикация REQ/RESULT не подготавливает и не синхронизирует рабочий Git-проект Leader/Worker. Ранее опубликованные SHA-pinned REQ сохраняются.
 
 Task filename:
 
@@ -161,7 +161,7 @@ Browser prompt состоит ровно из двух строк:
 Первая строка — одна из ровно 50 уникальных русских стартовых фраз в
 `web/launch_prompts.py`, отдельном от continuation/reminder pool. Выбор стабилен
 для REQ, exact полный prompt и SHA сохраняются до Send. Новый REQ, в том числе
-automatic continuation, получает новый task URL; same-REQ reminders не меняются.
+explicit continuation, получает новый task URL; same-REQ reminders не меняются.
 Visible protocol labels отсутствуют; REQ сохраняется в URL/task file/internal state.
 Submit/observer/detector используют exact полный user turn и bound conversation URL;
 legacy `POSTMAN_REQUEST_ID:` fallback сохранён для старых prompts. Отдельной `policy:` строки нет.
@@ -237,7 +237,7 @@ https://chatgpt.com/c/<conversation-id>
 
 После этого новый REQ проходит обычный send/observe/download lifecycle.
 
-Автоматическое восстановление — одна попытка на исходный REQ/root chain, во всех трёх режимах. Direct принимает решение по capability: exact locally saved conversation, доказанный original Send (`PROVEN_SENT` или read-only reproof UNKNOWN), нет unresolved Send, durable результата или уже созданного Web artifact. Перед публикацией/Send новый REQ эксклюзивно фиксирует durable `recovery-<rootREQ>.claim`; restart и конкурирующий вызов не дают вторую попытку. Новый короткий intent продолжает работу, а не повторяет исходный запрос. `PROVEN_NOT_SENT` и недоказанный UNKNOWN → STOP. Ошибка download при уже созданном Web artifact не запускает новый Web message. Ручной `--chat` остаётся независимым новым запросом. Для Image обычный `--chat` создаёт новое изображение; automatic recovery после готового изображения сначала read-only доказывает исходный image assistant identity и запускает только упаковку без generation.
+Host не создаёт новую отправку по исходу или тексту ошибки. Повтор/продолжение выбирает Leader по сохранённым результатам, истории и состоянию процессов. Явный `--chat` создаёт отдельный REQ в собственной сохранённой беседе; прежний UNKNOWN или результат сам по себе не запрещает вызов. В одном вызове одна попытка Send, без повторного клика при неизвестном исходе. Ранее выполненные действия не переигрываются автоматически.
 
 Запрещено:
 

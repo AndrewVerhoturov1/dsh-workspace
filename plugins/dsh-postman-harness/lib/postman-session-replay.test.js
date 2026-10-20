@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {capabilityRuntime, native} from './fixtures/postman-capability-runtime.js'
 
-const ptc = program => ({program, description:'Verify exact durable replay and retirement', boundary:'semantic_decision'})
+const ptc = program => ({program, description:'Verify exact durable replay and retirement'})
 const unwrap = result => {
   assert.equal(result.isError, false, JSON.stringify(result))
   assert.equal(result.value.status, 'ok', JSON.stringify(result.value))
@@ -48,7 +48,6 @@ test('legacy informational cost events survive real cold continuation and native
   assert.equal((await call('postman_worker_stop',{workerSessionId:id,mode:'close'})).status,'POSTMAN_WORKER_STOPPED')
   assert.equal(await f.ctx.subagents.inspectClosedContinuableChild(f.leader,id),true)
   await assert.rejects(f.ctx.subagents.followup(f.leader,id,[{type:'text',text:'late'}],{source:{kind:'user'},signal:new AbortController().signal}),/closed/)
-  assert.equal((await call('postman_task_close')).status,'POSTMAN_TASK_CLOSED')
 })
 
 test('known informational cost type does not allow an unknown required event or alter saved bytes',async t=>{

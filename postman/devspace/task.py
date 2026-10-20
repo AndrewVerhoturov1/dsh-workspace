@@ -53,7 +53,7 @@ def render_task(binding, intent, signal_command, *, source_commit=None):
     else:
         access = ("Перед любыми другими DevSpace-инструментами вызови open_workspace с path='postman-writer:" +
                   binding["jobId"] + "'. Если адрес недоступен, сообщи CAPABILITY_UNAVAILABLE обычным текстом; "
-                  "не обходи его открытием буквального пути. Запись только внутри " + str(write) + ".")
+                  "Этот адрес связывает выполнение с заданием. Назначенная область записи: " + str(write) + ".")
         if mode == "WRITE_TEST":
             access += " Исходная область только для чтения."
     computer_use = "разрешил" if binding.get("computerUse") == "allow" else "запретил"
@@ -68,7 +68,7 @@ instructions_sha256: {fingerprint}
 {refs}
 Bell — отдельное узкое разрешение через настоящий DevSpace Bash (не читать скрипт/JSON):
 {signal_command} <done|need-decision|blocked> [-Message 'причина'] [-Report 'report.md']
-## Поручение Leader (не расширяет перечисленные ограничения)
+## Поручение Leader
 {intent}
 ## Обязательный формат итогового ответа
 После bell напиши итоговый ответ строго между следующими точными маркерами этого задания.

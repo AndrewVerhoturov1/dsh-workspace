@@ -6,7 +6,7 @@ import {join} from 'node:path'
 import {capabilityRuntime, native} from './fixtures/postman-capability-runtime.js'
 import {assertManagementRequest} from './fixtures/postman-stage3-contract.js'
 
-const ptc = program => ({program, description:'Verify exact settled runtime lifecycle', boundary:'semantic_decision'})
+const ptc = program => ({program, description:'Verify exact settled runtime lifecycle'})
 const nested = result => {
   assert.equal(result.isError, false, JSON.stringify(result))
   assert.equal(result.value.status, 'ok', JSON.stringify(result.value))
@@ -32,7 +32,7 @@ for (const resident of [false, true]) test('installed native runtime compact set
     if (a.options.model !== 'gpt-6.1-sol') { ownEntered.resolve();await ownGate.promise; return report }
     solId = a.id
     const n = steps.get(a) ?? 0; steps.set(a, n+1)
-    if (n === 0) return {name:'ptc_execute',args:{...ptc('return await tools.postman_worker({task:"Finite exact lifecycle evidence"})'),boundary:'external_event'}}
+    if (n === 0) return {name:'ptc_execute',args:{...ptc('return await tools.postman_worker({task:"Finite exact lifecycle evidence"})'),wait_for_event:true}}
     if (n === 1) {
       const own = f.results.findLast(r=>r.agent===a && r.name==='postman_worker').result.value.workerSessionId
       await f.childDone(own)
@@ -105,9 +105,10 @@ test('installed compact primitive and Host reject active/pending Sol and stale p
   assert.equal(checked,false)
   await assert.rejects(f.ctx.subagents.compactContinuableChild({...f.leader},id,()=>true,new AbortController().signal),e=>e.code==='UNAUTHORIZED')
   gate.resolve(); await f.childDone(id)
-  for(const state of ['stopping','uncertain']) {
+  for(const state of ['uncertain']) {
     await f.contexts.changeRecord('leader',row=>({...row,workers:{...row.workers,[id]:{...row.workers[id],state}}}))
-    assert.equal((await f.call('postman_worker_compact',{workerSessionId:id})).status,'POSTMAN_WORKER_COMPACT_BUSY')
+    const compact=await f.call('postman_worker_compact',{workerSessionId:id})
+    assert.equal(compact.status,'POSTMAN_WORKER_COMPACTED',JSON.stringify(compact))
   }
 })
 
@@ -117,11 +118,11 @@ test('initial and fresh actual Sol PTC pwsh retain Host environment, authority a
   f=await fixture(t,{plan:(a,request)=>{
     if(a.id==='leader')return null
     assertManagementRequest('sol',request)
-    assert.match(request.system,/Windows paths inside program source are JavaScript strings/)
+    assert.match(request.system,/Postman PTC programming discipline/)
     if(seen.has(a))return report
     seen.add(a)
-    const prompt=request.messages.flatMap(m=>m.content).find(b=>b.type==='text' && b.text.includes('Use the existing task branch'))?.text
-    const workdir=prompt.match(/ and worktree (.+?) for repository changes/)[1]
+    const prompt=request.messages.flatMap(m=>m.content).find(b=>b.type==='text' && b.text.startsWith('Working directory: '))?.text
+    const workdir=prompt.match(/^Working directory: (.+?)\. Use it as the base/)[1]
     assert.ok(!workdir.includes('\\'));paths.push(workdir)
     // Exactly the model-shaped literal that failed live, now using the Host's portable path.
     return {name:'ptc_execute',args:ptc("return await tools.pwsh({command:'$PSVersionTable.PSVersion.ToString(); (Get-Process -Id $PID).Path; (Get-Location).Path',description:'Read PowerShell version and execution environment',workdir:'"+workdir+"'})")}

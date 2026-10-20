@@ -113,31 +113,13 @@ def _send_proof_class(value: dict[str, Any]) -> str:
 def _reference_eligible(value: dict[str, Any], *, request_id: str, expected_repository: str) -> bool:
     if value.get("requestId") != request_id or value.get("repository") not in {None, expected_repository}:
         return False
-    state = value.get("state")
-    if state in _TERMINAL_CHAT_STATES:
-        return value.get("code") in {None, state} and value.get("ok") is not False
-    # Failed references need exact repository and conversation identity, not UI search.
-    if value.get("repository") != expected_repository or not value.get("failureCode") and state not in {"FAILED", "ASK_FAILED"}:
-        return False
     try:
-        conversation_id, conversation_url = normalize_conversation_url(_nested_chat_url(value))
+        conversation_id, _ = normalize_conversation_url(_nested_chat_url(value))
     except ChatReferenceError:
         return False
-    if value.get("conversationId") != conversation_id:
-        return False
-    if _send_proof_class(value) == "PROVEN_SENT":
-        return True
-    proof = value.get("readOnlySendReproof")
-    return bool(
-        _send_proof_class(value) == "UNKNOWN" and isinstance(proof, dict)
-        and proof.get("requestId") == request_id
-        and proof.get("conversationUrl") == conversation_url
-        and proof.get("conversationId") == conversation_id
-        and proof.get("exactUserTurn") is True
-        and proof.get("promptSha256") == value.get("promptSha256")
-        and isinstance(value.get("promptSha256"), str)
-        and re.fullmatch(r"[0-9a-f]{64}", value["promptSha256"])
-    )
+    # A saved address belongs to this exact REQ. Unknown Send, a previous result
+    # or an incomplete old state informs the Leader; it does not veto a new command.
+    return value.get("conversationId") in {None, conversation_id}
 
 
 def can_continue_request(value: dict[str, Any], *, request_id: str, expected_repository: str) -> bool:

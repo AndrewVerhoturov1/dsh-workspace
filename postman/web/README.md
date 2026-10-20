@@ -2,11 +2,11 @@
 
 ## Наблюдение / физическое сохранение / verified result / применение
 
-Artifact UNKNOWN разрешает только ограниченное read-only наблюдение exact принадлежащей Page conversation. Weak count/text/composer/card не повышают UNKNOWN, reminders/recovery/automatic continuation запрещены. Fresh genuinely empty owned chat сохраняет strict verified путь; TEXT/IMAGE не получают unchecked candidate success.
+Artifact UNKNOWN сохраняет фактическую неопределённость отправки и позволяет наблюдать собственную беседу. Слабые признаки count/text/composer/card не превращают UNKNOWN в verified result. Host не создаёт новый REQ автоматически; новую явную команду Leader старый UNKNOWN не блокирует. Leader проверяет историю и результаты перед повтором. TEXT/IMAGE не получают неподтверждённый success.
 
 Один native файл конкретного наблюдаемого answer можно сохранить без идеального envelope/REQ/имени. Несколько дают до восьми choices без click; global latest ZIP и arbitrary external URL не выбираются. Descriptor `candidate`: actual path/byteLength/SHA, originalFilename, completeness, reasons/provenance, `verified=false`, `applyEligible=false`. Fixed raw path: `direct/candidates/<REQ>/capture.bin`, original filename не используется как путь.
 
-Wrong native name, доступные partial bytes, validator rejection/exception сохраняются с причиной, без unpack/open/execute. Raw save bounded 50 MiB; если native API не отдаёт partial path, это explicit evidence limit. Cold physical observation читает только owned fixed path и actual hash отдельно от strict ownership receipt; branchless/inconsistent receipt не чинится/не повышается. Sync failure не скрывает bytes/path/SHA, retrySync local-only, grant subordinate to verified ownership+sync и hash rechecks. Missing input post-Send proof оставляет `RESULT_MAY_LACK_INPUT_ATTACHMENT` до человеческого выбора.
+Wrong native name, доступные partial bytes, validator rejection/exception сохраняются с причиной, без unpack/open/execute. Raw save bounded 50 MiB; если native API не отдаёт partial path, это explicit evidence limit. Cold physical observation читает только owned fixed path и actual hash отдельно от strict ownership receipt; branchless/inconsistent receipt не чинится/не повышается. Отсутствие синхронизации рабочего Git-проекта не скрывает bytes/path/SHA и не является условием доставки. Grant требует verified ownership и повторной проверки hash; Host не синхронизирует checkout проекта. Missing input post-Send proof оставляет `RESULT_MAY_LACK_INPUT_ATTACHMENT` до человеческого выбора.
 
 ## Статус
 
@@ -14,7 +14,7 @@ Wrong native name, доступные partial bytes, validator rejection/excepti
 
 Старые WP-002…WP-007 milestone-описания являются историей разработки и не задают
 текущее production поведение. Текущая схема определяется executable modules,
-`postman/POSTMAN_CURRENT_FLOW.md` и `docs/web-postman-artifact-contract.md`. Этот README — карта browser modules; transport lifecycle и пределы automatic continuation определяет Current Flow, не эта карта.
+`postman/POSTMAN_CURRENT_FLOW.md` и `docs/web-postman-artifact-contract.md`. Этот README — карта browser modules; transport lifecycle определяет Current Flow, не эта карта.
 
 Production pipeline:
 

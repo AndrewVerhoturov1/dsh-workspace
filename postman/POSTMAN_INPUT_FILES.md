@@ -4,7 +4,7 @@
 
 Native ChatGPT attachment is the primary input-file transport. Never publish a user/local input to GitHub merely so ChatGPT can read it when native attachment delivery is available. GitHub public staging is fallback-only and requires explicit user approval.
 
-Exact production/PTC Leader выбирает inputs через `postman_input_files`. При первом `stage` / `stage_current_attachments` / `describe_existing` Host сам готовит branchless read-only task context, если его ещё нет. Git branch/worktree для одного input не создаётся. Для записи исходников worktree по `REPO_POLICY.md` по-прежнему готовится отдельно:
+Exact production/PTC Leader выбирает inputs через `postman_input_files`. Подготовка Git/task context не требуется: набор связывается с точным владельцем и отправкой. Для изменения репозитория Worker отдельно готовит worktree по `REPO_POLICY.md`:
 
 - `stage(paths:[<explicit absolute regular files>])` — bounded one-time read → private snapshots → native descriptors/grants; **zero GitHub API calls**, без public consent. Source не изменяется; directories, symlinks, sensitive/runtime paths отвергаются.
 - `stage_current_attachments(selectionIds?)` — exact latest human user/message этой live top-level Leader session → native `ctx.attachments.readImage` / `ctx.attachments.readFile` (если доступен) → length/SHA proof → temporary private source → private snapshots; **zero GitHub API calls**.
@@ -15,7 +15,7 @@ Native descriptor: `{source_kind:"native",name,sha256,byte_length,media_type}`. 
 
 ## Authority и current attachment limitations
 
-PostmanInputGrants связывает serialized descriptor с exact private snapshot, exact Agent/session/task context. Bridge admission закрепляет opaque process-local pin и exact child. Fabricated/modified descriptors отвергаются; после restart authority не восстанавливается из model text или registry.
+PostmanInputGrants связывает serialized descriptor с exact private snapshot, exact Agent/session, descriptor set и отправкой. Bridge admission закрепляет opaque process-local pin и exact child. Fabricated/modified descriptors отвергаются; после restart authority не восстанавливается из model text или registry.
 
 CurrentAttachmentStore хранит только metadata/handles последнего exact `role === "user"`, `source.kind === "user"`, same live top-level Agent `user/message` (Leader или standalone). Все non-text occurrences учитываются; unsupported generic occurrences имеют selectionId и capability status, но не resolver handle. Новый user message заменяет запись даже без вложений; system/subagent/synthetic/foreign session не дают authority. Plugin disposal удаляет store/listener.
 
@@ -73,6 +73,6 @@ Normal tool не содержит public-stage action и никогда не в�
 
 ## Cleanup и проверки
 
-Private selection snapshots освобождаются cleanup/release/context replacement/dispose; pins удерживают их до disposal. Direct удаляет request attachment/handoff best-effort после browser lifecycle, Host убирает request root на terminal/spawn failure. Cleanup не меняет доказанный Send outcome.
+Private selection snapshots освобождаются cleanup/release/dispose; pins удерживают их до disposal. Direct удаляет request attachment/handoff best-effort после browser lifecycle, Host убирает request root на terminal/spawn failure. Cleanup не меняет доказанный Send outcome.
 
 Controlled tests покрывают private local/current stages без GitHub writes, existing immutable source, ZIP/native Send в Postman/Ask, image generation + real submit/observer helpers + one packaging Send + IMAGE_RESULT_DURABLE, exact card/prompt negatives и UNKNOWN/no-resend. Живой ChatGPT Web для этой реализации не запускался; acceptance отдельно по разрешению пользователя.

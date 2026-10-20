@@ -98,7 +98,7 @@ test('existing storage drops obsolete team fields and preserves current and pend
   assert.deepEqual(row.workers[id].budget,budget)
   assert.deepEqual(row.workers[id].pendingBudgets.pending,budget)
   assert.deepEqual(row.retiredWorkers[0].budget,budget)
-  assert.equal(row.runner.state,'none');assert.equal(row.workers[id].ownerSessionId,'leader')
+  assert.equal(row.runner,undefined);assert.equal(row.workers[id].ownerSessionId,'leader')
 })
 
 

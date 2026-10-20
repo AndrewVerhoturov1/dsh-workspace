@@ -58,16 +58,17 @@ for(const type of ['luna','secretary','sol']) test(type+' actual model instructi
   assert.ok(original.session.events.length,'audit remains')
 })
 test('one Worker entity: parallel owner quotas, exact reports, no cross-parent control',{timeout:15000},async t=>{
-  const solGate=Promise.withResolvers(),entered=Promise.withResolvers()
-  const f=await fixture(t,{plan:async(agent,_r,n,w)=>{if(w.roleOf(agent)==='sol'){entered.resolve();await solGate.promise;return null}return {name:'report',args:{output:'Worker evidence'}}}})
+  const solGate=Promise.withResolvers(),workerGate=Promise.withResolvers(),entered=Promise.withResolvers()
+  t.after(()=>{solGate.resolve();workerGate.resolve()})
+  const f=await fixture(t,{plan:async(agent,_r,n,w)=>{if(w.roleOf(agent)==='sol'){entered.resolve();await solGate.promise;return null}await workerGate.promise;return {name:'report',args:{output:'Worker evidence'}}}})
   const solId=accepted(await f.run(f.worker.solTaskTool,{task:'approved Sol route'}));await entered.promise
   const parent=f.ctx.agents.get(solId)
-  t.after(()=>solGate.resolve())
   const left=await Promise.all([1,2].map(n=>f.run(f.worker.taskTool,{task:'Leader mechanical '+n,createNew:true})))
   const right=await Promise.all([1,2].map(n=>f.run(f.worker.taskTool,{task:'Sol mechanical '+n,createNew:true},parent)))
-  for(const r of [...left,...right]){accepted(r);await f.settled(r.workerSessionId)}
+  for(const r of [...left,...right])accepted(r)
   assert.equal((await f.run(f.worker.taskTool,{task:'third',createNew:true})).status,'POSTMAN_WORKER_LIMIT_REACHED')
   assert.equal((await f.run(f.worker.taskTool,{task:'third',createNew:true},parent)).status,'POSTMAN_WORKER_LIMIT_REACHED')
+  workerGate.resolve();await Promise.all([...left,...right].map(r=>f.settled(r.workerSessionId)))
   assert.equal((await f.run(f.worker.secretaryTool,{task:'illegal'},parent)).status,'POSTMAN_WORKER_CALLER_REJECTED')
   for(const [actor,id] of [[f.leader,right[0].workerSessionId],[parent,left[0].workerSessionId]])for(const tool of [f.worker.taskTool,f.worker.interruptTool,f.worker.stopTool,f.worker.compactTool,f.worker.freshTool])
     assert.equal((await f.run(tool,{task:'foreign',workerSessionId:id},actor)).status,'POSTMAN_WORKER_TARGET_UNKNOWN')
@@ -75,7 +76,7 @@ test('one Worker entity: parallel owner quotas, exact reports, no cross-parent c
     assert.equal(request.system,l.system);assert.deepEqual(request.tools.map(x=>x.name),l.tools.map(x=>x.name));assert.equal(request.reasoningEffort,l.reasoningEffort)
     for(const id of [r.workerSessionId,left[0].workerSessionId]){
       const text=f.specs.find(s=>s.childId===id).request.prompt[0].text
-      assert.match(text,/Use the existing task branch/);assert.match(text,/your immediate parent/);assert.match(text,/Assigned task:/)
+      assert.match(text,/Working directory:/);assert.doesNotMatch(text,/Use the existing task branch|postman_task_prepare/);assert.equal(f.specs.find(s=>s.childId===id).request.parent.id,id===r.workerSessionId?parent.id:f.leader.id)
       assert.doesNotMatch(text,/Leader task|your Leader|existing Leader/)
     }
     assert.equal(f.registry.get('leader').workers[r.workerSessionId].ownerSessionId,parent.id)
@@ -90,11 +91,17 @@ test('Secretary singleton private ledger clean worktree and fresh durable surviv
   const dir=await mkdtemp(join(tmpdir(),'postman-ledger-')), repo=join(dir,'repo')
   execFileSync('git',['init',repo])
   const {mkdir}=await import('node:fs/promises');await mkdir(join(dir,'sessions'),{recursive:true})
-  const f=await stage1Runtime(dir,{plan:(a,_r,n,w)=>w.roleOf(a)==='secretary' && n===1?{name:'postman_secretary_ledger',args:{content:'Goal exact facts; PASS fixture inputs A; next report',revision:0}}:{name:'report',args:{output:'Ledger facts updated; no repository write'}}})
+  const gate=Promise.withResolvers(),entered=Promise.withResolvers();t.after(()=>gate.resolve())
+  const f=await stage1Runtime(dir,{plan:async(a,_r,n,w)=>{
+    if(w.roleOf(a)==='secretary'&&n===1)return {name:'postman_secretary_ledger',args:{content:'Goal exact facts; PASS fixture inputs A; next report',revision:0}}
+    if(n===2){entered.resolve();await gate.promise}
+    return {name:'report',args:{output:'Ledger facts updated; no repository write'}}
+  }})
   t.after(async()=>{await f.dispose();await rm(dir,{recursive:true,force:true,maxRetries:5,retryDelay:100})})
   const before=execFileSync('git',['-C',repo,'status','--porcelain']).toString()
-  const id=accepted(await f.run(f.worker.secretaryTool,{task:'Facts and ledger only'}));await f.settled(id)
+  const id=accepted(await f.run(f.worker.secretaryTool,{task:'Facts and ledger only'}));await entered.promise
   assert.equal((await f.run(f.worker.secretaryTool,{task:'second',createNew:true})).status,'POSTMAN_SECRETARY_LIMIT_REACHED')
+  gate.resolve();await f.settled(id)
   const ledger=await f.run(f.worker.ledgerTool);assert.equal(ledger.status,'POSTMAN_SECRETARY_LEDGER',JSON.stringify(ledger));assert.equal(ledger.ledger.revision,1)
   assert.equal(execFileSync('git',['-C',repo,'status','--porcelain']).toString(),before)
   assert.ok(!f.calls.some(x=>['write','edit','pwsh'].includes(x.name)))
@@ -148,6 +155,7 @@ test('all child roles force native tools even when Host default is code',{timeou
 })
 test('queued followup does not reset a running assignment budget before FIFO claim',{timeout:15000},async t=>{
   const gate=Promise.withResolvers(),entered=Promise.withResolvers()
+  t.after(()=>gate.resolve())
   const f=await fixture(t,{fastBudget:{hardLimit:8},plan:async(_a,_r,n)=>{if(n===1){entered.resolve();await gate.promise}return {name:'report',args:{output:'exact finite facts'}}}})
   const id=accepted(await f.run(f.worker.taskTool,{task:'initial bounded facts'}));await entered.promise
   const old=f.registry.get('leader').workers[id].budget
@@ -174,7 +182,7 @@ test('default FAST 48/60 budget cannot silently finish without escalation report
 test('stock manual compact retains exact role Session budget quota and audit',{timeout:15000},async t=>{
   const native=stage1Native
   const {BasicCompactionEngine}=await native('dsh-compaction-basic'),{TokenMeter}=await native('dsh-token-meter')
-  const f=await fixture(t,{plan:(a,_r,n,w)=>w.roleOf(a)==='sol'&&n%2===1?{name:'ptc_execute',args:{program:'const a=await tools.read({file_path:"known.txt"});const b=await tools.glob({pattern:"*.txt"});const c=await tools.grep({pattern:"known"});return {a,b,c}',description:'Batch known local facts before review',boundary:'semantic_decision'}}:({name:'report',args:{output:'verified evidence '.repeat(1000)}}),setupTools:ctx=>{new TokenMeter(ctx);const Summarizer=class extends BasicCompactionEngine{async summarize(){return {summary:[{type:'text',text:'summary of exact finite facts; next bounded assignment'}],provider:'codex',model:'gpt-6-luna'}}};new Summarizer(ctx,{auto:false})}})
+  const f=await fixture(t,{plan:(a,_r,n,w)=>w.roleOf(a)==='sol'&&n%2===1?{name:'ptc_execute',args:{program:'const a=await tools.read({file_path:"known.txt"});const b=await tools.glob({pattern:"*.txt"});const c=await tools.grep({pattern:"known"});return {a,b,c}',description:'Batch known local facts before review'}}:({name:'report',args:{output:'verified evidence '.repeat(1000)}}),setupTools:ctx=>{new TokenMeter(ctx);const Summarizer=class extends BasicCompactionEngine{async summarize(){return {summary:[{type:'text',text:'summary of exact finite facts; next bounded assignment'}],provider:'codex',model:'gpt-6-luna'}}};new Summarizer(ctx,{auto:false})}})
   for(const tool of [f.worker.taskTool,f.worker.secretaryTool,f.worker.solTaskTool]){
     const id=accepted(await f.run(tool,{task:'bounded facts '+('verified evidence '.repeat(1000))}));await f.settled(id)
     const handle=await f.ctx.agents.resume({resumeSessionId:id,agentOptions:{provider:'codex',model:tool===f.worker.solTaskTool?'gpt-6.1-sol':'gpt-6-luna'}}),resident=handle.agent
@@ -204,6 +212,6 @@ test('canonical TASK_CONTRACT and Sol mandatory delegation instructions',()=>{
     for(const marker of [/TASK_CONTRACT/,/scope/i,/done (conditions|when)/i,/verification/i,/stop( condition)?/i,/blocker/i])assert.match(s,marker,type+' '+marker)
   }
   const sol=postmanRoleInstruction('sol')
-  for(const marker of [/до двух/,/Обязательно передавай/,/параллельно/,/engineering judgement/i,/агрегированный report/,/PTC-first/,/Worker-first/,/direct-only/,/Dispatch-first/])assert.match(sol,marker)
+  for(const marker of [/до двух/,/Обязательно передавай/,/параллельно/,/engineering judgement/i,/агрегированный report/,/PTC-first/,/Worker-first/,/`report` и `notify_parent` остаются прямыми/,/Dispatch-first/])assert.match(sol,marker)
   assert.deepEqual(FAST_WORKER_BUDGET,{hardLimit:60,softLimit:48})
 })

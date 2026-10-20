@@ -1,41 +1,38 @@
 # Postman PTC: краткая справка
 
-Канонический runtime protocol — [ptc-discipline.js](../../../plugins/dsh-postman-harness/lib/ptc-discipline.js). Он автоматически приходит вместе с нашим `ptc_execute`; при расхождении этот файл — источник истины, а не эта справка. Native Harness PTC/Code Mode не затрагивается.
+PTC обязателен у Leader и Sol. Канонические возможности внедряет Host из [ptc-discipline.js](../../../plugins/dsh-postman-harness/lib/ptc-discipline.js). Native Harness PTC/Code Mode не изменяется.
 
-## Supervisor dispatch
+## Назначить и ждать
 
-После положенного approval одна программа может проверить goal, подготовить task, проверить точный статус через `ptc.expectStatus(result, "postman_worker")` (либо prepare/interrupt/Bridge по имени видимого инструмента; точные успешные статусы принадлежат Host), принять Worker и вернуть его ID. У вызова `boundary: "external_event"`: exact accepted Worker/interrupt/Bridge producer и безопасный успех автоматически заканчивают Leader turn штатным concludeTurn; `yield_on_success` не требуется. Prepare alone не вызывает WAIT. Worker report / Bridge READY возобновляют его; polling не нужен. Routing определяется SKILL.md.
-
-## Read large internally, return compact
+Вызови `ptc_execute` с `program` и необязательными `description`, `wait_for_event:true`. Пример тела программы:
 
 ```js
-const evidence = await ptc.mapTextFiles(
+const assignment = await tools.postman_worker({
+  task: "Прочитай известный файл и верни нужные факты",
+  createNew: true,
+  label: "Worker 1"
+})
+return { assignment }
+```
+
+`wait_for_event:true` означает решение лидера завершить ход и ждать. Host не требует таблиц статусов, подтверждения producer и доказательств из истории. Адресное событие исполнителя или новое сообщение возобновляет работу; тихая диагностика отдельного хода не создаёт. Для обычной конечной задачи goal не нужна.
+
+## Прочитать и сократить данные
+
+```js
+return await ptc.mapTextFiles(
   { files: ["docs/a.md", "docs/b.md"] },
   ({ file_path, text }) => ({
     file_path,
     headings: text.split("\n").filter(line => /^#{1,3} /.test(line))
   })
 )
-return { evidence }
 ```
 
-Mapper делает механическое извлечение, не семантическое summarization. Полный исходный text, включая вложенные поля/массивы и большие строковые обёртки, отклоняется именно в `mapTextFiles`. `readMany` остаётся сырым reader внутри PTC; при реальной необходимости его данные можно вернуть модели в пределах штатного output. Читай один раз и анализируй локальную переменную несколькими способами; после write/edit или при необходимости внешней свежести перечитай. Helpers не кешируют файлы. `readAllText` допускает 4 MiB UTF-8 на файл; `readMany` и `mapTextFiles` default retained JSON 480 KiB, у `grepMany` отдельного byte limit нет. Явный `max_total_bytes` расширяет внутренний объём, не output: результат ≤512 KiB и сумма logs отдельно ≤512 KiB, как в исходном DEFAULT_LIMITS. Большие данные предпочтительно сокращать, но нужные результаты 40/80/150 KiB допустимы. Превышение штатного максимума даёт maxOutputBytes. Используй `ptc.utf8Bytes`/`ptc.jsonBytes`, а не число JS characters.
+Доступны `readAllText`, `readMany`, `mapTextFiles`, `grepMany`, `utf8Bytes`, `jsonBytes` по фактической видимости инструментов. Сокращай большие данные, когда модели нужны только извлечённые факты; полный текст допустим в технических пределах. `readAllText` по умолчанию допускает 4 MiB UTF-8 на файл; `readMany/mapTextFiles` — 480 KiB сохраняемого JSON, выход и сумма logs — отдельно до 512 KiB. Helpers не кешируют: после изменений перечитай необходимое.
 
-Helpers идут через обычные доступные tools и сохраняют Worker worktree guard. Это строковый текст по линиям, не побайтная копия: финальный перевод строки не гарантируется. Усечённую ordinary read строку и неполное чтение helper не выдаёт за полный файл. Формы: readAllText → string; readMany → Array<{file_path,text}>; mapTextFiles → Array<mapper JSON>; grepMany → Array<{query,result:{matches:Array}}>. Ordinary read/glob/grep — объекты lines/paths/matches, не массив целиком.
+## Отказы и уже выполненные действия
 
-## Известный отказ остаётся внутри программы
+Результат вложенного инструмента возвращается программе как данные. Ошибка ToolRuntime имеет `isError:true`, исходный `error` и при наличии `content`. Список допустимых статусов и специальный helper проверки не нужны. Верни сведения модели для решения или обработай действительно известный случай обычным условием.
 
-`expectStatus` — только настоящий successful-path invariant. Multi-outcome lifecycle требует explicit exact branching, чтобы нормальный отказ не стал runtime-error:
-
-```js
-const close = await tools.postman_worker_stop({ workerSessionId, mode: 'close' })
-if (close.status === 'POSTMAN_WORKER_STOPPED') {
-  return { cleanupDeferred: false, status: close.status }
-}
-if (close.status === 'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT') {
-  return { cleanupDeferred: true, needsModelDecision: true, evidence: close }
-}
-return { needsModelDecision: true, reason: 'unexpected_status', evidence: close }
-```
-
-Неизвестный status по-прежнему останавливает механический этап. Новый helper не нужен.
+Ошибка самой программы, отмена и технический предел не откатывают предыдущие действия. Сначала проверь `effects` и уже принятые назначения, затем продолжай остаток. Не повторяй всю программу ради восстановления и не опрашивай статус циклом.

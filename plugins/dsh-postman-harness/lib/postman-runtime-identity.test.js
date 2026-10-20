@@ -9,7 +9,7 @@ test('runtime status inspects the actual Host without calling a model',{timeout:
   const dir=await mkdtemp(join(tmpdir(),'postman-runtime-identity-'))
   const f=await capabilityRuntime(dir,{taskContextOptions:{writerControlFile:join(dir,'missing-controller.json')}})
   t.after(async()=>{await f.dispose();await rm(dir,{recursive:true,force:true})})
-  const result=await f.execute(f.leader,'ptc_execute',{program:'return await tools.postman_team_status({runtime:true})',description:'Read loaded Host identity',boundary:'semantic_decision'})
+  const result=await f.execute(f.leader,'ptc_execute',{program:'return await tools.postman_team_status({runtime:true})',description:'Read loaded Host identity'})
   const identity=result.value.value.runtime?.host
   assert.equal(identity?.status,'RUNTIME_IDENTITY_PROVEN',JSON.stringify(result))
   assert.equal(identity.pid,process.pid)

@@ -5,7 +5,7 @@ description: Инженерный Sol Worker по маршруту Leader в у�
 
 # Postman Sol Worker
 
-`POSTMAN_SOL_WORKER_SKILL_VERSION: 3`
+`POSTMAN_SOL_WORKER_SKILL_VERSION: 4`
 
 Engineering judgement stays with Sol. Independent cheap mechanics go to Worker immediately. Own deterministic mechanics go through PTC.
 
@@ -19,7 +19,7 @@ Engineering judgement stays with Sol. Independent cheap mechanics go to Worker i
 
 1. Выдели до двух independent cheap mechanical subtasks и critical-path prerequisites.
 2. Sol decision → **ONE PTC**: dispatch через tools.postman_worker; два свободных slots + две полезные независимые задачи → **оба сразу** в одной PTC phase. Не фиктивная задача ради quota/batching.
-3. В той же PTC phase закончи already-known independent own engineering mechanics: reads, compare evidence, implementation/edit/integration, reread/targeted verification. Затем boundary: external_event → Host auto-yield → реальные owned Worker reports → новое Sol judgement, без отдельного «теперь жду» round и polling.
+3. В той же PTC phase закончи already-known independent own engineering mechanics: reads, compare evidence, implementation/edit/integration, reread/targeted verification. Если дальше нужны отчёты детей, передай `wait_for_event:true`: Host завершит ход и возобновит его по адресному событию, без отдельного сообщения «теперь жду» и опроса.
 4. Aggregate child evidence: совместимость/contradictions, reported vs mechanically verified; engineering judgement оставь себе.
 5. Проверь critical evidence, safely retire ненужных собственных Workers, один агрегированный report Leader и stop.
 
@@ -43,23 +43,13 @@ FAST escalation: missing fact → другой bounded Worker (или запро
 
 ## PTC-first / Worker-first
 
-**PTC-first для собственной batchable engineering mechanics; Worker-first для independent cheap mechanics.** Host-injected canonical programming discipline обязателен, не отдельный новый planner. Before ptc_execute: next real boundary → все safe deterministic operations до неё в одной программе. Не read A → reasoning → read B → reasoning → edit → reasoning → test, если flow уже известен. Новое semantic решение не внутри PTC.
+Собственные инженерные вызовы и управление своими Worker выполняй через обязательный `ptc_execute`. Самостоятельную дешёвую механику поручай Worker. Объединяй известные операции в одной программе, когда это полезно; формальная граница этапа и доказательство достаточной группировки не нужны.
 
-Engineering profile postman-sol-worker-engineering revision 2 — granted local read/glob/grep/web_fetch/web_search/write/edit/read_image/pwsh/bash/job_output/job_kill/job_list/implementation_artifact_apply. PTC не заменяет обязательную cheap delegation и не расширяет permissions/grant. Shell workdir exact existing task worktree.
+Профиль `postman-sol-worker-engineering` revision 3 включает доступные роли `read/glob/grep/web_fetch/web_search/write/edit/read_image/pwsh/bash/job_output/job_kill/job_list/implementation_artifact_apply` и управление собственными ordinary Worker. PTC не расширяет права. Для назначения своего Worker можно передать абсолютный `cwd`; по умолчанию используется текущий каталог, продолжение сохраняет его. Каталог определяется назначением либо каталогом сессии; подготовка Git Host не требуется. `report` и `notify_parent` остаются прямыми; Bridge, Secretary, новый Sol и инструменты Leader недоступны. FAST дети не получают PTC или делегирование.
 
-Owned Worker controls postman_worker/postman_worker_interrupt/postman_worker_list/postman_worker_stop/postman_worker_compact/postman_worker_fresh — **PTC-managed / PTC-only** через ordinary authoritative Host path, exact parent ownership. Уже принятое dispatch/continue/cleanup решение — mechanical control-plane work внутри текущей PTC phase. report/notify_parent остаются **direct-only**. Нет Bridge/Secretary/Sol/Leader task/user approval в own PTC. Initial/follow-up/compact/cold resume/fresh Host восстанавливает Sol PTC; FAST дети его не получают. Не generic subagent/fork/workflow/ralph.
+У `ptc_execute` обязателен только `program`; `description` необязателен. Отказ инструмента и ошибка ToolRuntime возвращаются программе как данные, без обязательных списков статусов. Для ожидания событий передай `wait_for_event:true`: Host не требует подтверждения запущенного producer или восстановления доказательств из истории. Качество и достаточность результата оцениваешь ты.
 
-expectStatus только true successful-path invariant. Known lifecycle multi-outcome → explicit exact branching, не normal refusal runtime-error. Unknown status → STOP compact evidence → decision. После PTC error учти completed calls/mutations/accepted assignments, продолжи remaining work, не replay whole program.
-
-## PTC = engineering phase, not tool wrapper
-
-Один Sol decision программирует полную deterministic phase до genuine judgement. **Next-tool-known:** следующий useful call уже можно назвать → тот же PTC, если нет real boundary. Completion read/grep/hash/status/expected PASS/known FAIL с заданной реакцией — НЕ semantic_decision. One tool + semantic_decision presumptively underbatched, не запрещён, но требует ясной причины. Перед return — canonical self-check; новый semantic выбор обозначь needsModelDecision + краткий конкретный decisionQuestion + compact evidence (не «читать следующий файл?»). Description = phase goal + stop reason.
-
-- **Investigation phase:** Sol decision → PTC: read known files → inspect exact symbols → bounded grep/references → inspect config → mechanically reduce evidence → Sol engineering decision. Не read → Sol → grep → Sol → read → Sol.
-- **Implementation phase:** после выбранного design Sol decision → PTC: exact reads → edit → reread → deterministic static/targeted verification → compact result → Sol. Known test status с deterministic reaction ветвится внутри PTC; новую архитектуру программа не выбирает.
-- **Verification closure phase:** после child reports/implementation Sol → PTC: exact critical evidence → reconcile mechanically comparable values → diff/status → known final targeted verification → compact evidence packet → Sol final engineering judgement. Не отдельные rounds для hash/status/another hash/reread/final status без нового judgement.
-
-Worker-first сохранён: independent cheap mechanics → ordinary Worker; tightly coupled own engineering mechanics → PTC; judgement → Sol model. Не broad glob/grep/test campaign ради большого PTC, calls — diagnostic, не цель. Закрывай sufficient acceptance evidence, не максимальное: может ли следующая проверка изменить acceptance/judgement? Если нет — не повторяй SHA/status/unchanged reread, не excavate child audit после sufficient trusted report и не создавай лишние evidence JSON/checksum. PTC выполняет exact branching/comparisons/invariants, не engineering/product judgement через string heuristics.
+После ошибки программы учитывай уже выполненные вызовы, правки и принятые назначения. Продолжай оставшуюся работу; повтор всей программы может повторить её эффекты. Не повторяй достаточный PASS при тех же входах. В PTC выполняй выбранные действия и механические сравнения; инженерные решения принимай сам, не подменяй их классификацией текста регулярными выражениями.
 
 ## Canonical skill already injected
 
@@ -69,7 +59,7 @@ Worker-first сохранён: independent cheap mechanics → ordinary Worker; 
 
 Один active implementation writer, несколько только proven disjoint exact write scope. Reads/independent read-only tests параллельно, installs/generated builds/fixtures/Git/restore/artifact apply упорядочены. Не конкурирующие writers, не tests на промежуточной environment mutation.
 
-Same task + large relevant context → compact при допустимом lifecycle: same Session/ID/budget, summarized history, continuity и binding preserved. New assignment where old visible context is harmful → fresh: new Session/clean visible history, same role, new explicit assignment, old audit preserved. Новый clean tool не нужен. Эти existing controls остаются PTC-only; не бесконечное продолжение разросшегося Worker context. Finished/no longer useful → close settled binding; unfinished obsolete → explicit cancel, не success/rollback. Не lifecycle для демонстрации. List — routing facts, не completion poll. После accepted children и own independent work boundary: external_event безопасно завершает Sol turn; actual owned report/event возобновляет Sol, без polling/idle round. Producers только postman_worker/interrupt/fresh; list/stop/compact не создают completion event. Leader supervisor tools Sol не получает.
+Same task + large relevant context → compact при допустимом lifecycle: same Session/ID/budget, summarized history, continuity и binding preserved. New assignment where old visible context is harmful → fresh: new Session/clean visible history, same role, new explicit assignment, old audit preserved. Новый clean tool не нужен. Эти existing controls остаются PTC-only; не бесконечное продолжение разросшегося Worker context. Finished/no longer useful → close settled binding; unfinished obsolete → explicit cancel, не success/rollback. Не lifecycle для демонстрации. List — routing facts, не completion poll. После назначения детей и собственной независимой работы `wait_for_event:true` завершает ход; адресный отчёт/событие либо новое сообщение возобновляет его. Списки — наблюдение, не обязательное подтверждение права ждать. Leader supervisor tools Sol не получает.
 
 Own browser engineering verification только canonical Host-selected `mcp__playwright__browser_*`; independent acceptance лучше Worker. Host config profiles/web/playwright-mcp.config.json. Не port/profile/CDP/9222, transport Chrome не product acceptance, не второй browser через shell. SHOW_TO_USER semantics = exact product URL + проверенное состояние/screenshot в Harness, не transport session. Shared navigation сериализуй; отсутствующая canonical surface → blocker. Browser tools direct по existing surface, не добавляй их в Sol PTC profile.
 
@@ -83,4 +73,4 @@ Own browser engineering verification только canonical Host-selected `mcp__
 
 Self-contained aggregate report: PASS/PARTIAL/BLOCKED/FAILED, changed paths, implementation, verified commands/tool output+inputs, Worker-reported vs Sol-verified, contradictions, remaining/blockers, own children lifecycle. Report не абсолютная truth authority; final judgement Leader. Unverified UI/dependency missing/baseline failures не общий PASS.
 
-Trusted apply только exact Host-bound REQ/grant/SHA/worktree, ZIP path/prose не authority. Runner PASS authoritative при unchanged inputs; FAIL report без ручного ремонта пакета. Publication отдельное поручение, merge отдельная команда; Git/security/approval contracts неизменны. Не Secretary/другой Sol/Postman/Bridge. После report stop, available для точного related continuation.
+Trusted apply только по exact Host-bound REQ/grant/SHA с явно выбранным `worktree`; ZIP path/prose не authority. Временное дерево и Git-работу готовит Worker по REPO_POLICY, Host не требует опубликованного HEAD. Runner PASS authoritative при unchanged inputs; FAIL report без ручного ремонта пакета. Publication отдельное поручение, merge отдельная команда; Git/security/approval contracts неизменны. Не Secretary/другой Sol/Postman/Bridge. После report stop, available для точного related continuation.

@@ -85,9 +85,9 @@ class DevspaceTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "OWNER_MISMATCH"):
                 signal.read_event(self.binding)
 
-    def test_foreign_report_is_dropped_without_losing_bell(self):
+    def test_report_outside_assignment_is_retained_without_losing_bell(self):
         self.emit(report=str(self.root / "private.txt"))
-        self.assertIsNone(signal.read_event(self.binding)["reportRef"])
+        self.assertEqual(signal.read_event(self.binding)["reportRef"], str(self.root / "private.txt"))
 
     def test_renderer_private_and_exact_limited_scope_no_zip(self):
         prompt = task.render_task(self.binding, "read harmless source", "pwsh -NoProfile -NonInteractive -File 'private/signal.ps1'")
@@ -114,7 +114,7 @@ class DevspaceTests(unittest.TestCase):
             with self.subTest(mode=mode):
                 prompt = task.render_task({**self.binding, "mode": mode}, "inspect first", "bell")
                 self.assertIn("Перед любыми другими DevSpace-инструментами вызови open_workspace с path='postman-writer:" + JOB + "'", prompt)
-                self.assertIn("не обходи его открытием буквального пути", prompt)
+                self.assertIn("Этот адрес связывает выполнение с заданием", prompt)
                 self.assertIn("сообщи CAPABILITY_UNAVAILABLE обычным текстом", prompt)
                 instructions = (REPO / "postman/devspace/SKILL.md").read_text(encoding="utf-8")
                 self.assertIn("нужны поля execution и job_id", instructions)
@@ -172,7 +172,7 @@ assert hasattr(stdlib_signal, 'set_wakeup_fd')
         self.assertIn("external_result_probe", observed.call_args.kwargs)
 
     def test_minimal_text_diagnostics_tolerate_format_and_no_envelope(self):
-        for text, expected in [("**capability unavailable**\nNo app", "CAPABILITY_UNAVAILABLE"), ("arbitrary prose: blocked — decision", "BLOCKED")]:
+        for text, expected in [("**capability unavailable**\nNo app", "UNKNOWN"), ("arbitrary prose: blocked — decision", "UNKNOWN")]:
             result, _ = self.wait(return_value={"ok":True,"details":{"assistantText":text}})
             self.assertEqual(result["code"], "DEVSPACE_DIAGNOSTIC")
             self.assertEqual(result["details"]["diagnostic"], expected)
@@ -683,7 +683,7 @@ assert hasattr(stdlib_signal, 'set_wakeup_fd')
                 page=SimpleNamespace(url=CHAT), prompt=prompt)
         self.assertEqual(result["code"],"DEVSPACE_DIAGNOSTIC")
         self.assertEqual(result["details"]["source"],"text_fallback")
-        self.assertEqual(result["details"]["diagnostic"],"CAPABILITY_UNAVAILABLE")
+        self.assertEqual(result["details"]["diagnostic"],"UNKNOWN")
         self.assertEqual(result["details"]["conversationRef"],CHAT)
         self.assertFalse((self.channel/"event.json").exists())
 
@@ -811,7 +811,7 @@ assert hasattr(stdlib_signal, 'set_wakeup_fd')
                 monotonic=lambda: clock[0], conversation_ref=CHAT, page=page, prompt=prompt)
         self.assertEqual(result["code"], "DEVSPACE_DIAGNOSTIC")
         self.assertEqual(result["details"]["source"], "text_fallback")
-        self.assertEqual(result["details"]["diagnostic"], "CAPABILITY_UNAVAILABLE")
+        self.assertEqual(result["details"]["diagnostic"], "UNKNOWN")
         self.assertEqual(result["details"]["sendState"], "UNKNOWN")
         self.assertFalse((self.channel / "event.json").exists())
         self.assertGreaterEqual(clock[0], 12)

@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { capabilityRuntime } from './fixtures/postman-capability-runtime.js'
 const pause=ms=>new Promise(r=>setTimeout(r,ms))
-const workerPtc=program=>({program,description:'Exact owned app lifecycle',boundary:'semantic_decision'})
+const workerPtc=program=>({program,description:'Exact owned app lifecycle',})
 test('native Worker starts/checks app; Host owner survives Worker close; explicit stop and Leader cleanup',{timeout:180000},async t=>{
   const dir=await mkdtemp(join(tmpdir(),'postman-owned-app-')), gate=Promise.withResolvers(),ready=Promise.withResolvers()
   const readyPath=join(dir,'ready.json');let f,receipt,url
@@ -41,8 +41,8 @@ test('native Worker starts/checks app; Host owner survives Worker close; explici
   const stopped=await f.execute(f.leader,'ptc_execute',workerPtc('return await tools.postman_app('+JSON.stringify({action:'stop',jobId:receipt.jobId,appId:receipt.appId})+')'))
   assert.equal(stopped.value.value.status,'POSTMAN_APP_STOP_REQUESTED');assert.notEqual(stopped.value.value.jobStatus,'running')
   await assert.rejects(fetch(url))
-  const cold=await f.execute(f.leader,'ptc_execute',workerPtc('return await tools.postman_app('+JSON.stringify({action:'status',jobId:'absent-owned-job',appId:receipt.appId})+')'))
-  assert.equal(cold.value.value?.status,'POSTMAN_APP_OUTCOME_UNKNOWN',JSON.stringify(cold));assert.equal(cold.value.value.restartAllowed,false)
+  const cold=await f.execute(f.leader,'ptc_execute',workerPtc('return await tools.postman_app('+JSON.stringify({action:'status',jobId:receipt.jobId,appId:receipt.appId})+')'))
+  assert.equal(cold.value.value?.status,'POSTMAN_APP_STATUS',JSON.stringify(cold));assert.equal(cold.value.value.jobStatus,'killed')
   // The exact native owner lifecycle, not a rewritten ledger, cleans a second
   // existing controller job on Leader disposal; no cold autostart exists.
   let cancelled=0;const done=Promise.withResolvers()
@@ -53,49 +53,20 @@ test('native Worker starts/checks app; Host owner survives Worker close; explici
 })
 
 
-test('explicit app replacement needs owned terminal process evidence and actually free TCP resource',{timeout:10000},async t=>{
-  const {createPostmanAppTool}=await import('./postman-app.js'),{createServer}=await import('node:net')
-  const {realpath}=await import('node:fs/promises')
-  const dir=await mkdtemp(join(tmpdir(),'postman-app-restart-')),worktree=await realpath(dir)
-  const owner={id:'app-leader',session:{header:{agentPreset:'postman-leader',delegationDepth:0}}}
-  const caller={id:'app-worker'},context={leaderSessionId:owner.id,worktree},proof={owner,context,assignmentId:'explicit-assignment'}
-  const jobs=new Map();let row={appJobs:{}},starts=0
-  const resource=createServer();await new Promise(resolve=>resource.listen(0,resolve))
-  const port=resource.address().port;await new Promise(resolve=>resource.close(resolve))
-  const hooks=new Map(),ctx={on:(name,fn)=>hooks.set(name,fn),bail:()=>true,agents:{get:id=>id===owner.id?owner:caller},
-    get:()=>({get(id){if(!jobs.has(id))throw Error('unknown job '+id);return jobs.get(id)}}),
-    tools:{get:()=>true,async execute(exec){starts++;const id='native-job-'+starts
-      const label=hooks.get('postman/app-job-label')({parent:exec.parent})
-      jobs.set(id,{id,ownerSession:owner.id,kind:'pwsh',label,status:'running'})
-      return {value:{kind:'background',jobId:id}}}}}
-  const contexts={get:()=>context,record:()=>row,async changeRecord(_id,fn){row=fn(row)}}
-  let tool=createPostmanAppTool(ctx,{appOwnerOf:agent=>agent===caller?proof:null},contexts)
-  const run=args=>tool.execute(args,{agent:caller,signal:new AbortController().signal,token:Symbol(),callId:'explicit-start'})
-  t.after(async()=>{if(resource.listening)await new Promise(resolve=>resource.close(resolve));await rm(dir,{recursive:true,force:true})})
-  const initial=await run({action:'start',command:'inert-native-app',description:'isolated app',port})
-  assert.equal(initial.status,'POSTMAN_APP_STARTED');assert.equal(initial.jobId,'native-job-1')
-  const replacement={action:'start',command:'inert-native-app',description:'explicit replacement',jobId:initial.jobId,appId:initial.appId,port}
-  assert.equal((await run(replacement)).status,'POSTMAN_APP_PROCESS_NOT_STOPPED');assert.equal(starts,1)
-  jobs.delete(initial.jobId)
-  assert.equal((await run(replacement)).status,'POSTMAN_APP_OUTCOME_UNKNOWN','lost record cannot prove process absence');assert.equal(starts,1)
-  const receipt=row.appJobs[initial.appId]
-  jobs.set(initial.jobId,{id:initial.jobId,ownerSession:owner.id,kind:'pwsh',
-    label:JSON.stringify({postmanApp:1,appId:initial.appId,worktree,workerSessionId:caller.id}),status:'completed'})
-  const jobController=ctx.get();jobController.read=()=>({text:''});ctx.get=()=>jobController
-  assert.equal((await run({action:'status',jobId:initial.jobId,appId:initial.appId})).status,'POSTMAN_APP_STATUS')
-  assert.equal(row.appJobs[initial.appId].terminal,'completed')
-  jobs.delete(initial.jobId) // native completion fact persists through controller record loss
-  tool=createPostmanAppTool(ctx,{appOwnerOf:agent=>agent===caller?proof:null},contexts)
-  await new Promise(resolve=>resource.listen(port,resolve))
-  assert.equal((await run(replacement)).status,'POSTMAN_APP_RESOURCE_BUSY');assert.equal(starts,1)
-  await new Promise(resolve=>resource.close(resolve))
-  const restarted=await run(replacement)
-  assert.equal(restarted.status,'POSTMAN_APP_STARTED');assert.equal(restarted.jobId,'native-job-2')
-  assert.notEqual(restarted.appId,initial.appId);assert.equal(starts,2)
-  assert.equal((await run(replacement)).status,'POSTMAN_APP_RESTART_ALREADY_REQUESTED');assert.equal(starts,2)
-  assert.equal(receipt.assignmentId,'explicit-assignment')
+test('an explicit new start reports the prior app without process or port proof veto',async()=>{
+  const {createPostmanAppTool}=await import('./postman-app.js')
+  const owner={id:'leader'},caller={id:'worker'},hooks=new Map();let row={appJobs:{}},calls=0
+  const context={worktree:process.cwd()},proof={owner,context,assignmentId:'assignment'}
+  const ctx={on:(name,fn)=>hooks.set(name,fn),bail:()=>true,agents:{get:id=>id==='worker'?caller:owner},get:()=>({}),
+    tools:{get:()=>true,execute:async()=>({value:{kind:'background',jobId:'native-'+(++calls)}})}}
+  const tool=createPostmanAppTool(ctx,{appOwnerOf:a=>a===caller?proof:null},{record:()=>row,changeRecord:async(_id,fn)=>{row=fn(row)}})
+  const run=args=>tool.execute(args,{agent:caller,signal:new AbortController().signal,token:Symbol(),callId:'call'})
+  const first=await run({action:'start',command:'inert'})
+  const next=await run({action:'start',command:'inert',jobId:first.jobId,appId:first.appId,port:12345})
+  assert.equal(next.status,'POSTMAN_APP_STARTED');assert.equal(calls,2)
+  assert.equal(next.previousApp.jobId,first.jobId)
+  assert.notEqual(next.appId,first.appId)
 })
-
 
 test('real native app stops and a newly assigned Worker explicitly starts a new job on the same free port',{timeout:30000},async t=>{
   const {createServer}=await import('node:net')

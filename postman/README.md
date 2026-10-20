@@ -4,7 +4,7 @@
 
 ## Четыре режима транспорта
 
-Новый адресный `@PostmanDevspace` работает через настоящий DevSpace MCP и Host-owned местный bell; без bell доставляет имеющиеся факты без требования ZIP или идеального отчёта. Leader управляет продолжаемой Luna через `postman_bridge`; `postman_devspace_control` и `postman_devspace_luna_close` доступны только владельцу. READ_ONLY допускает отсутствие Git-ветки, WRITE_TEST ограничен частной тестовой папкой, WRITE_ISOLATED — Host task worktree. Внешний ChatGPT не получает автоматическое разрешение Git commit/push/PR. После рестарта Host возвращает местный bell через ту же Luna, если её точная привязка доказана; исходный prompt повторно не отправляется. См. [поток и восстановление](POSTMAN_DEVSPACE_FLOW.md), [матрицу возможностей](POSTMAN_DEVSPACE_CAPABILITIES.md) и [рабочие команды](devspace/README.md).
+`@PostmanDevspace` — основной Host-owned маршрут с persistent Luna и местным bell/текстом. До трёх текущих исполнений; сохранённые беседы и старая неопределённость сами по себе слот не занимают. Scope и режим назначает Leader как инструкции; Host не готовит Git и не блокирует по пересечению путей. Готовый отчёт доступен независимо от Luna; выгрузка не повторяет Send. Повтор и восстановление решает Leader, действующий 15-минутный Stop → Continue сохраняется. См. [поток](POSTMAN_DEVSPACE_FLOW.md), [матрицу прежних проверок](POSTMAN_DEVSPACE_CAPABILITIES.md) и [рабочие команды](devspace/README.md).
 
 ## Три исторических transport mode
 
@@ -49,7 +49,7 @@ Artifact и text режимы поддерживают manual continuation:
 @PostmanAsk --chat <old REQ> <new intent>
 ```
 
-Автоматическое восстановление — одна попытка на исходный REQ/root chain, во всех трёх режимах. Direct принимает решение по capability: exact locally saved conversation, доказанный original Send (`PROVEN_SENT` или read-only reproof UNKNOWN), нет unresolved Send, durable результата или уже созданного Web artifact. Перед публикацией/Send новый REQ эксклюзивно фиксирует durable `recovery-<rootREQ>.claim`; restart и конкурирующий вызов не дают вторую попытку. Новый короткий intent продолжает работу, а не повторяет исходный запрос. `PROVEN_NOT_SENT` и недоказанный UNKNOWN → STOP. Ошибка download при уже созданном Web artifact не запускает новый Web message. Ручной `--chat` остаётся независимым новым запросом. Для Image обычный `--chat` создаёт новое изображение; automatic recovery после готового изображения сначала read-only доказывает исходный image assistant identity и запускает только упаковку без generation. Подробности — в [Current Flow](POSTMAN_CURRENT_FLOW.md).
+Host не создаёт новые REQ по ошибке. Повтор/продолжение решает Leader либо пользователь по результатам, истории и процессам; старый UNKNOWN не блокирует новую явную команду. В одном вызове одна попытка Send, без слепого повторного клика. Явный `--chat` использует собственную сохранённую беседу. Подробности — в [Current Flow](POSTMAN_CURRENT_FLOW.md).
 
 ## Supervisor mode: Postman Bridge
 

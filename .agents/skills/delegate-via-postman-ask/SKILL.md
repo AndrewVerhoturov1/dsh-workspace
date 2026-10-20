@@ -9,7 +9,7 @@ description: >-
 
 # Delegate via PostmanAsk — Direct transport with text result
 
-`DIRECT_POSTMAN_ASK_SKILL_VERSION: 4`
+`DIRECT_POSTMAN_ASK_SKILL_VERSION: 5`
 
 ## 0. Золотой путь
 
@@ -180,7 +180,7 @@ ok=false
 code=POSTMAN_TRANSPORT_FAILED
 ```
 
-→ одна automatic recovery допустима только по trusted Direct capability из раздела 7; иначе `STOP`. Fallback и blind resend запрещены.
+→ вернуть фактический исход Leader или пользователю. Самостоятельных новых REQ и слепого повтора нет; продолжение требует новой явной команды.
 
 ## 7. Existing-chat continuation
 
@@ -191,7 +191,7 @@ conversation URL. UI Search и silent fresh fallback запрещены.
 продолжить тот же conversation как новым `@PostmanAsk --chat ...`, так и обычным
 `@Postman --chat ...`, если пользователь теперь хочет ZIP.
 
-Автоматическое восстановление — одна попытка на исходный REQ/root chain, во всех трёх режимах. Direct принимает решение по capability: exact locally saved conversation, доказанный original Send (`PROVEN_SENT` или read-only reproof UNKNOWN), нет unresolved Send, durable результата или уже созданного Web artifact. Перед публикацией/Send новый REQ эксклюзивно фиксирует durable `recovery-<rootREQ>.claim`; restart и конкурирующий вызов не дают вторую попытку. Новый короткий intent продолжает работу, а не повторяет исходный запрос. `PROVEN_NOT_SENT` и недоказанный UNKNOWN → STOP. Ошибка download при уже созданном Web artifact не запускает новый Web message. Ручной `--chat` остаётся независимым новым запросом. Для Image обычный `--chat` создаёт новое изображение; automatic recovery после готового изображения сначала read-only доказывает исходный image assistant identity и запускает только упаковку без generation. Recovery Ask сохраняет text mode и exact REQ-bound envelope; trusted no-argument tool не принимает model-authored text.
+Host не создаёт восстановительную отправку по исходу или тексту ошибки. Новую команду выбирает Leader либо пользователь; перед повторным Send проверь известные результаты и историю, чтобы не повторить уже выполненное. Старый Send/UNKNOWN сам по себе не блокирует новую явную команду, но не является разрешением transport child повторить её самостоятельно. В одном вызове одна попытка Send. Явный `--chat` использует собственную сохранённую беседу и отдельный REQ; готовые результаты не переигрываются.
 
 ## 8. Handoff локальной модели
 

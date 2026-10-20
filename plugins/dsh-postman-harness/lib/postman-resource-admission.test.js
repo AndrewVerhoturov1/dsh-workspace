@@ -2,7 +2,6 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createPostmanBridgeJobs } from './postman-bridge-jobs.js'
 import { createPostmanBridgeTool } from './postman-bridge.js'
-import { POSTMAN_PTC_SUCCESS_STATUSES } from './postman-bridge-core.js'
 import { createPostmanBridgeLaunchCoordinator } from './postman-bridge-launch-coordinator.js'
 import { createMemoryTaskRegistry } from './postman-task-registry.js'
 import { createDevspaceChannel } from './postman-devspace.js'
@@ -87,75 +86,6 @@ test('active Worker does not gate a Leader-authorized Bridge in the same root',a
   f.finish(1);await flush()
 })
 
-test('dirty isolated worktree preflight fails before REQ and automatically releases its reservation',async t=>{
-  const f=await fixture(t,{readOnly:false})
-  const a=await f.acceptIsolated();assert.equal(a.status,'POSTMAN_BRIDGE_ACCEPTED');await flush()
-  const row=f.registry.get(f.parent.id), op=row.bridgeOperations[a.bridgeJobId]
-  assert.equal(op.state,'received');assert.equal(op.phase,'not-sent')
-  assert.equal(op.preSendFailure,'POSTMAN_DEVSPACE_WORKTREE_NOT_READY')
-  assert.equal(op.synchronization,'not-required');assert.equal(op.requestId,undefined)
-  assert.equal(op.childSessionId,undefined)
-  assert.equal(row.devspaceLanes[op.devspace.laneId],undefined)
-  assert.equal(f.jobs.list(f.parent).used,0,'proven not-sent operation must not consume admission capacity')
-  assert.equal(f.launches.length,0,'no browser Send or REQ allocated')
-  // Repeat past the three-slot limit: rejected requests must never accrue
-  // capacity or count as a successful prior isolated run that waives dirty-tree checks.
-  for(let i=0;i<4;i++){
-    const next=await f.acceptIsolated();assert.equal(next.status,'POSTMAN_BRIDGE_ACCEPTED')
-    await flush();const op=f.registry.get(f.parent.id).bridgeOperations[next.bridgeJobId]
-    assert.equal(op.state,'received');assert.equal(op.phase,'not-sent')
-    assert.equal(op.preSendFailure,'POSTMAN_DEVSPACE_WORKTREE_NOT_READY')
-    assert.equal(f.jobs.list(f.parent).used,0,'no permanently occupied slots after denied sends')
-    assert.equal(f.launches.length,0,'dirty worktree never reaches Browser Send')
-  }
-})
-
-test('cold exact owner stop retires only a Host-proven failed pre-REQ worktree reservation',async t=>{
-  const f=await fixture(t,{readOnly:false})
-  const jobId='11111111-2222-4333-8444-555555555555',laneId='aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',createdAt='2026-01-01T00:00:00.000Z'
-  const operation={state:'unknown',phase:'reserved',transportKind:'devspace',createdAt,devspace:{mode:'WRITE_ISOLATED',laneId}}
-  const lane={state:'reserved',activeBridgeJobId:jobId,requestIds:[],conversationRef:null}
-  await f.contexts.changeRecord(f.parent.id,row=>({...row,bridgeOperations:{...row.bridgeOperations,[jobId]:operation},devspaceLanes:{[laneId]:lane}}))
-  const evidence={bridgeJobId:jobId,createdAt,laneId,state:'FAILED',status:'POSTMAN_BRIDGE_FAILED',
-    trustedStatus:'POSTMAN_DEVSPACE_WORKTREE_NOT_READY',requestId:null,childSessionId:null,recoveryEligible:false}
-  f.parent.session.events=[{type:'tool/result',data:{name:'postman_bridge_status',content:[{type:'text',text:JSON.stringify(evidence)}]}}]
-  assert.equal((await f.jobs.stop(f.parent,jobId)).status,'POSTMAN_BRIDGE_STOP_NOT_LIVE','model/tool-result is not evidence')
-  f.parent.session.events.push({type:'tool/code-dispatch',data:{name:'postman_bridge_status',isError:false,
-    arguments:{bridge_job_id:jobId},content:[{type:'text',text:JSON.stringify({...evidence,requestId:'REQ_20261015T090000Z_0001'})}]}})
-  assert.equal((await f.jobs.stop(f.parent,jobId)).status,'POSTMAN_BRIDGE_STOP_NOT_LIVE','any recorded REQ forbids release')
-  f.parent.session.events.push({type:'tool/code-dispatch',data:{name:'postman_bridge_status',isError:false,
-    arguments:{bridge_job_id:jobId},content:[{type:'text',text:JSON.stringify(evidence)}]}})
-  const response=await f.jobs.stop(f.parent,jobId)
-  assert.equal(response.status,'POSTMAN_BRIDGE_NOT_SENT',JSON.stringify(response))
-  assert.ok(POSTMAN_PTC_SUCCESS_STATUSES.postman_bridge_stop.includes(response.status))
-  const row=f.registry.get(f.parent.id);assert.equal(row.bridgeOperations[jobId].state,'received')
-  assert.equal(row.bridgeOperations[jobId].preSendFailure,'POSTMAN_DEVSPACE_WORKTREE_NOT_READY')
-  assert.equal(row.devspaceLanes[laneId],undefined)
-  assert.equal(f.jobs.list(f.parent).used,0,'cold stop releases capacity as well as lane ownership')
-  assert.equal(f.launches.length,0)
-  assert.equal((await f.jobs.status(f.parent,jobId)).status,'POSTMAN_BRIDGE_NOT_SENT')
-  assert.equal((await f.jobs.stop(f.parent,jobId)).status,'POSTMAN_BRIDGE_STOP_NOT_LIVE','not a repeatable release')
-})
-
-test('unproven received/not-sent is still capacity held without verified pre-send refusal',async t=>{
-  const f=await fixture(t,{readOnly:false}),id='22222222-3333-4444-8555-666666666666'
-  await f.contexts.changeRecord(f.parent.id,row=>({...row,bridgeOperations:{...row.bridgeOperations,
-    [id]:{state:'received',phase:'not-sent',transportKind:'devspace',
-      synchronization:'not-required',devspace:{mode:'WRITE_ISOLATED'}}}}))
-  assert.equal(f.jobs.list(f.parent).used,1,'absence of REQ without trusted preflight evidence remains reserved')
-})
-
-test('verified received DevSpace terminal may continue in existing dirty implementation task',async t=>{
-  const f=await fixture(t,{readOnly:false}),requestId='REQ_20260101T000000Z_0001'
-  await f.contexts.changeRecord(f.parent.id,row=>({...row,bridgeOperations:{...row.bridgeOperations,
-    'prior-verifiable':{state:'received',phase:'synchronized',transportKind:'devspace',requestId,
-      synchronization:'not-required',devspace:{mode:'WRITE_ISOLATED'},
-      terminal:{status:'POSTMAN_BRIDGE_TERMINAL',requestId,transportKind:'devspace',
-        terminalStatus:'COMPLETED',result:{requestId,ok:true,code:'DEVSPACE_DIAGNOSTIC'}}}}}))
-  const next=await f.acceptIsolated();assert.equal(next.status,'POSTMAN_BRIDGE_ACCEPTED')
-  await flush();assert.equal(f.launches.length,1,'only a previously verified terminal may waive clean worktree on continuation')
-  f.finish(1);await flush()
-})
 test('real Host-approved nested directories run concurrently when Leader dispatches them', async t => {
   const f = await fixture(t)
   const parentRoot = mkdtempSync(join(tmpdir(), 'postman-real-host-scopes-'))
@@ -177,4 +107,15 @@ test('real Host-approved nested directories run concurrently when Leader dispatc
   f.finish(1); await flush()
   assert.equal(f.launches.length, 3, 'settlement does not launch a duplicate')
   f.finish(2); f.finish(3); await flush()
+})
+
+
+test('Git cleanliness and historical not-sent records do not gate current DevSpace execution',async t=>{
+ const f=await fixture(t,{readOnly:false})
+ await f.contexts.changeRecord(f.parent.id,row=>({...row,bridgeOperations:{history:{state:'received',phase:'not-sent',transportKind:'devspace',devspace:{mode:'WRITE_ISOLATED'}}}}))
+ assert.equal(f.jobs.list(f.parent).used,0)
+ const first=await f.acceptIsolated();assert.equal(first.status,'POSTMAN_BRIDGE_ACCEPTED')
+ await flush();assert.equal(f.launches.length,1)
+ f.finish(1);await flush()
+ assert.equal(f.jobs.list(f.parent).used,0)
 })

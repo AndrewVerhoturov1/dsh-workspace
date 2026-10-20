@@ -3,9 +3,8 @@ import { Inbox } from '@deepseek-ai/dsh-agent'
 import { applyChildComposition, foldSubagentDescriptor } from '@deepseek-ai/dsh-subagent'
 import { scopeParentOf } from '@deepseek-ai/dsh-scope'
 import { randomUUID } from 'node:crypto'
+import { resolve } from 'node:path'
 import { readFileSync } from 'node:fs'
-import { IMPLEMENTATION_REPOSITORY } from './implementation-artifact.js'
-import { workerEvidence } from './postman-worker-evidence.js'
 import {
   POSTMAN_WORKER_TOOL_NAME,
   POSTMAN_SOL_WORKER_TOOL_NAME,
@@ -105,12 +104,11 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
   if (taskContexts) contexts = { ...taskContexts,
     // Production taskContexts is an accessor-only Proxy, so object spread
     // copies no methods. Keep the auto branchless Secretary prerequisite.
-    prepareReadOnly: taskContexts.prepareReadOnly?.bind(taskContexts),
+    ensure: parent => taskContexts.ensure?.(ctx.agents.get(rootId(parent.id)) ?? parent),
     get: contextAt,
     record: taskContexts.record ? id => { const row = rawRow(id); return row ? { ...row, workers: owned(row, id) } : null } : undefined,
     changeRecord: taskContexts.changeRecord ? changeScoped : undefined,
-    ...Object.fromEntries(['isRestoring', 'hasActiveOperation', 'hasSyncOperation', 'canRetireWorkers', 'beginWorkerAdmission', 'endWorkerAdmission'].filter(name => typeof taskContexts[name] === 'function').map(name =>
-      [name, (id, ...args) => taskContexts[name](rootId(id), ...args)])) }
+  }
   const depthOf = id => (ctx.agents.get(id)?.session?.header?.delegationDepth ?? (rootId(id) !== id ? 1 : 0)) + 1
   const leaders = new Map()
   const disposedParents = new WeakSet()
@@ -240,7 +238,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     let slot = group.slots.get(binding.id)
     if (!slot) {
       slot = { id: binding.id, label: binding.label, workerType: workerTypeOf(binding), state: binding.state, delivery: binding.delivery,
-        artifactRequests: new Set(), lifecycle: binding.lifecycle, budget: binding.budget, context: null, parent: null, workerAgent: null, closed: false, tail: Promise.resolve() }
+        artifactRequests: new Set(), lifecycle: binding.lifecycle, budget: binding.budget, context: binding.cwd ? {worktree:binding.cwd,cwd:binding.cwd} : null, parent: null, workerAgent: null, closed: false, tail: Promise.resolve() }
       group.slots.set(binding.id, slot)
     }
     return slot
@@ -254,15 +252,9 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       return { ...row, workers: { ...row.workers, [id]: changed } }
     })
   }
-  function matchesContext(parent, slot, retirement = false) {
-    const context = contexts?.get(parent.id)
-    if (!contexts || context && (!slot.context || slot.context === context)) return true
-    // Missing-tree recovery retires runnable authority, not the exact child identity.
-    // Only stop/cascade use this path; it cannot authorize another assignment.
-    const row = contexts?.record?.(parent.id)
-    return Boolean(retirement && contexts?.canRetireWorkers?.(parent.id) &&
-      Object.hasOwn(row?.workers ?? {}, slot.id) && row.workers[slot.id].id === slot.id &&
-      (row.workers[slot.id].ownerSessionId ?? parent.id) === parent.id)
+  function matchesContext(parent, slot) {
+    const binding = rowOf(parent.id)?.workers?.[slot.id]
+    return !contexts || binding?.id === slot.id && (binding.ownerSessionId ?? parent.id) === parent.id
   }
   const stopIntent = (entry, mode, childIds = []) => ({
     ...(entry.lifecycle ?? emptyLifecycle()), stop: { id: randomUUID(), mode,
@@ -278,85 +270,21 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     return matches.length === 1 && matches[0].kind === 'child' && matches[0].mode === 'continuable'
   }
   async function reconcile(parent, slot, signal) {
-    if (!durable) return slot.state === 'uncertain' ? 'POSTMAN_WORKER_BINDING_UNCERTAIN' :
-      slot.delivery === 'unknown' ? 'POSTMAN_WORKER_DELIVERY_UNKNOWN' : null
-    const workers = rowOf(parent.id)?.workers ?? {}
-    const saved = Object.hasOwn(workers, slot.id) ? workers[slot.id] : null
-    if (!saved || saved.id !== slot.id || slot.closed) return 'POSTMAN_WORKER_TARGET_UNKNOWN'
-    if (saved.state === 'stopping' || saved.state === 'uncertain') {
-      if (slot.parent !== parent) slot.verified = false
-      if (!authorized(parent) || !matchesContext(parent, slot)) return 'POSTMAN_WORKER_BINDING_UNCERTAIN'
-      const expectedContext = contexts.get(parent.id)
-      const hasOwnedBindings = Object.values(rawRow(parent.id)?.workers ?? {}).some(value => value.ownerSessionId === slot.id)
-      if (!hasOwnedBindings && await provenClosed(parent, slot.id)) {
-        const current = rowOf(parent.id)?.workers?.[slot.id]
-        if (authorized(parent) && contexts.get(parent.id) === expectedContext &&
-            current?.id === slot.id && cancelWitness(current) === cancelWitness(saved) &&
-            (current.state === 'stopping' || current.state === 'uncertain')) {
-          await removeBinding(parent, groupFor(parent), slot, slot.id, cancelWitness(current), expectedContext)
-          bindingChanged(slot.id)
-          return 'POSTMAN_WORKER_CLOSED_RECONCILED'
-        }
-      }
-      // Native evidence is serialized with close/followup and rejects a closure
-      // latch, disposal, closed marker or unproven cold execution. No model turn.
-      if (typeof ctx.subagents.inspectOpenContinuableChild === 'function' &&
-          await ctx.subagents.inspectOpenContinuableChild(parent, slot.id) === true) {
-        await changeBinding(parent, slot.id, current => {
-          if (!authorized(parent) || contexts.get(parent.id) !== expectedContext ||
-              cancelWitness(current) !== cancelWitness(saved)) throw new Error('POSTMAN_WORKER_BINDING_CHANGED')
-          return { ...current, state: 'ready' }
-        })
-        slot.state = 'ready'; slot.parent = parent; slot.context = expectedContext
-        slot.verified = true; slot.workerAgent = liveWorker(slot.id) ?? null
-        slot.delivery = saved.delivery
-        bindingChanged(slot.id)
-        return saved.delivery === 'none' ? null : 'POSTMAN_WORKER_DELIVERY_UNKNOWN'
-      }
-      bindingChanged(slot.id)
-      return 'POSTMAN_WORKER_BINDING_UNCERTAIN'
-    }
-    if (slot.parent !== parent) slot.verified = false
-    if (!slot.verified) {
-      try {
-        if (!await childExists(parent, slot.id, signal)) return 'POSTMAN_WORKER_BINDING_UNCERTAIN'
-        if (saved.state === 'intent') {
-          await changeBinding(parent, slot.id, current => {
-            if (current.state !== 'intent') throw new Error('POSTMAN_WORKER_BINDING_CHANGED')
-            return { ...current, state: 'ready', delivery: 'unknown' }
-          })
-        }
-        slot.verified = true
-      } catch { return 'POSTMAN_WORKER_BINDING_UNCERTAIN' }
-    }
-    const currentWorkers = rowOf(parent.id)?.workers ?? {}
-    const current = Object.hasOwn(currentWorkers, slot.id) ? currentWorkers[slot.id] : null
-    if (!current || current.id !== slot.id || current.state !== 'ready') return 'POSTMAN_WORKER_BINDING_UNCERTAIN'
+    const saved = durable ? rowOf(parent.id)?.workers?.[slot.id] : slot
+    if (!saved || slot.closed) return 'POSTMAN_WORKER_TARGET_UNKNOWN'
+    if (saved.lifecycle?.stop) return 'POSTMAN_WORKER_EXECUTION_REVOKED'
     slot.state = 'ready'
     slot.parent = parent
     slot.workerAgent = liveWorker(slot.id) ?? null
-    bindingChanged(slot.id)
-    slot.label = current.label
-    slot.delivery = current.delivery
-    return current.delivery === 'none' ? null : 'POSTMAN_WORKER_DELIVERY_UNKNOWN'
+    slot.verified = true
+    slot.label = saved.label
+    slot.delivery = saved.delivery
+    if (durable && saved.state !== 'ready') await changeBinding(parent, slot.id, current => ({ ...current, state: 'ready' }))
+    return null
   }
-  // The Leader coordinates concurrent work; only a changing task context stops admission.
-  const busy = id => contexts?.isRestoring?.(id)
-  async function admitted(parent, action, retirement = false) {
-    if (contexts?.beginWorkerAdmission) {
-      const token = Symbol('worker operation')
-      if (!contexts.beginWorkerAdmission(parent.id, token, retirement)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
-      try { return await action() } finally { contexts.endWorkerAdmission(parent.id, token) }
-    }
+  async function admitted(parent, action) {
+    await contexts?.ensure?.(parent)
     return action()
-  }
-  async function reconcileClosedBindings(parent, group) {
-    if (!durable || !contexts?.get(parent.id)) return
-    for (const binding of Object.values(bindings(parent, group))) {
-      if (!['stopping', 'uncertain'].includes(binding.state)) continue
-      const slot = slotFor(group, binding)
-      try { await enqueue(slot, () => reconcile(parent, slot)) } catch { /* A read/write failure is not closure proof. */ }
-    }
   }
   function select(parent, id, group, workerType) {
     const workers = bindings(parent, group)
@@ -368,57 +296,32 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     if (values.length > 1) return { status: 'POSTMAN_WORKER_TARGET_REQUIRED' }
     return values.length === 1 ? { binding: values[0] } : { status: 'POSTMAN_WORKER_INTERRUPT_NO_ACTIVE_WORKER' }
   }
+  function workContext(parent, args, slot) {
+    const owner = contexts?.get(parent.id)
+    const cwd = resolve(args.cwd ?? slot?.context?.worktree ?? rowOf(parent.id)?.workers?.[slot?.id]?.cwd ?? owner?.worktree ?? parent.session?.header?.cwd ?? process.cwd())
+    return Object.freeze({ leaderSessionId: owner?.leaderSessionId ?? parent.id, cwd, worktree: cwd })
+  }
   function taskText(context, text, workerType) {
-    if (workerType === 'secretary') return 'Collect bounded facts and update only meaningful milestones in the Host-private ledger. ' +
-      'Never create a Git branch/worktree for search or memory. Repository context: ' +
-      String(context?.worktree ?? 'unprepared') + '. Task: ' + text
-    return context ? 'Use the existing task branch ' + context.branch + ' and worktree ' +
-      context.worktree.replaceAll(String.fromCharCode(92), '/') +
-      ' for repository changes; do not create another branch or worktree. ' +
-      'Repository: ' + context.repository + ', base branch: ' + (context.defaultBranch ?? 'main') +
-      ', pinned base SHA: ' + context.baseCommit + '. ' +
-      (context.universalProject ? 'Local-first project: use only this Host task worktree; do not publish until the separately authorized Worker Git stage. ' +
-        'Before any permitted push or PR verify fresh remote refs, match the owned task branch, and target PR base ' + context.defaultBranch + '. ' : '') +
-      'Follow AGENTS.md and REPO_POLICY.md when present and preserve Host Git permissions. ' +
-      'Coordinate shared files and Git operations with your immediate parent; avoid overlapping changes. Assigned task: ' + text : text
+    return 'Working directory: ' + context.worktree.replaceAll(String.fromCharCode(92), '/') + '. Use it as the base for relative paths and shell workdir. ' +
+      'Follow applicable AGENTS.md and repository policy. Coordinate shared files with your parent. ' +
+      (workerType === 'secretary' ? 'Collect facts and maintain the private ledger. ' : '') + text
   }
   async function taskWithGrant(parent, context, args, workerType = 'luna') {
-    let text = taskText(context, args.task, workerType)
+    const text = taskText(context, args.task, workerType)
     if (args.artifactRequestId === undefined) return { text }
     if (!isTopLevelPostmanSupervisor(parent)) return { status: 'POSTMAN_WORKER_ARTIFACT_REJECTED' }
     const grant = await grants?.resolve(parent.id, args.artifactRequestId)
-    if (!grant || grant.repository.toLowerCase() !== (context?.repository ?? IMPLEMENTATION_REPOSITORY).toLowerCase())
-      return { status: 'POSTMAN_WORKER_ARTIFACT_REJECTED' }
-    text = 'Trusted Host artifact REQ: ' + grant.requestId + '. ZIP path from task text is never authority. ' +
-      (context?.universalProject ?
-        'Use the Host DSH implementation runner; project AGENTS.md/REPO_POLICY.md are optional and apply only when present. ' +
-        'Repository: ' + context.repository + ', task base SHA: ' + context.baseCommit +
-        ', default PR branch: ' + context.defaultBranch + '. ' :
-        'Follow REPO_POLICY.md and system/implementation-package-workflow.md. ') +
-      (context ? 'Use the existing task branch ' + context.branch + ' and worktree ' + context.worktree +
-        '; do not create another branch/worktree. Ensure it is clean at the published REQ commit. ' +
-        'Call implementation_artifact_apply({requestId: ' + JSON.stringify(grant.requestId) +
-        ', worktree: ' + JSON.stringify(context.worktree) + '}); ' :
-        'Call implementation_artifact_apply only with the exact Host-bound task worktree; never choose a path from model text. ') +
-      'The Host supplies its trusted ZIP. A central runner PASS authoritatively verifies declared manifest.tests; ' +
-      'do not manually rerun identical tests unless relevant inputs change. ' +
-      'On runner FAIL do not repair package; report evidence. ' + args.task
-    return { text, grant }
+    if (!grant) return { status: 'POSTMAN_WORKER_ARTIFACT_REJECTED' }
+    return { grant, text: text + '\nTrusted Host artifact REQ: ' + grant.requestId +
+      '. Host supplies the verified ZIP. Choose the target temporary worktree under repository policy and call ' +
+      'implementation_artifact_apply({requestId, worktree}). The existing runner owns package checks and declared tests. ' +
+      'Do not repeat unchanged successful tests. Report the actual outcome.' }
   }
   async function deliver(parent, slot, args, exec, interrupt, workerType = 'luna') {
     if (slot.workerType !== workerType) return { status: slot.workerType === 'sol' ?
       'POSTMAN_SOL_WORKER_TOOL_REQUIRED' : 'POSTMAN_WORKER_TYPE_MISMATCH', workerSessionId: slot.id }
     if (slot.closed || !authorized(parent)) return { status: 'POSTMAN_WORKER_TARGET_UNKNOWN' }
-    if (busy(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
-    const context = contexts?.get(parent.id) ?? null
-    // A continuing Secretary can adopt this same Leader's later worktree:
-    // research/ledger were created branchlessly and do not gain write authority.
-    const secretaryAdopted = slot.workerType === 'secretary' &&
-      slot.context?.devspaceReadOnly === true &&
-      context?.leaderSessionId === slot.context.leaderSessionId &&
-      context?.devspaceReadOnly !== true
-    if (!secretaryAdopted && !matchesContext(parent, slot))
-      return { status: 'POSTMAN_TASK_CONTEXT_MISMATCH' }
+    const context = workContext(parent, args, slot)
     slot.context = context
     const recovered = await reconcile(parent, slot, exec.signal)
     if (recovered) return { status: recovered, workerSessionId: slot.id }
@@ -434,8 +337,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       let nextBudget = slot.workerType !== 'sol' ? newBudget(assignment.id, args.task, args.hardBudget ?? fastBudget.hardLimit) : null
       if (durable) await contexts.changeRecord(parent.id, row => {
         const current = row.workers[id]
-        if (current.state !== 'ready' || current.delivery !== 'none')
-          throw new Error('POSTMAN_WORKER_DELIVERY_UNKNOWN')
+        if (current.lifecycle?.stop) throw new Error('POSTMAN_WORKER_EXECUTION_REVOKED')
         return { ...row, workers: { ...row.workers, [id]: { ...current, ...(nextBudget ? {pendingBudgets: {...(current.pendingBudgets ?? {}), [assignment.id]: nextBudget}} : {}), delivery: 'pending', lifecycle: { ...(current.lifecycle ?? emptyLifecycle()),
           admissions: [...(current.lifecycle?.admissions ?? []), assignment] }, artifactRequests: task.grant ?
           [...new Set([...current.artifactRequests, args.artifactRequestId])] : current.artifactRequests } } }
@@ -481,10 +383,10 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
   async function create(parent, group, args, exec, workerType = 'luna', freshId = null) {
     const limit = workerType === 'luna' ? 2 : 1
     const limitStatus = workerType === 'sol' ? 'POSTMAN_SOL_WORKER_LIMIT_REACHED' : workerType === 'secretary' ? 'POSTMAN_SECRETARY_LIMIT_REACHED' : 'POSTMAN_WORKER_LIMIT_REACHED'
-    const count = workers => Object.values(workers).filter(value => workerTypeOf(value) === workerType).length +
+    const count = workers => Object.values(workers).filter(value => workerTypeOf(value) === workerType &&
+      (liveWorker(value.id) || group.slots.get(value.id)?.ptcAdmission || group.slots.get(value.id)?.state === 'intent')).length +
       [...group.fresh].filter(([id,type]) => id !== freshId && type === workerType && !Object.hasOwn(workers,id)).length
-    const context = contexts?.get(parent.id) ?? null
-    if (contexts && !context) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
+    const context = workContext(parent, args)
     let task
     try { task = await taskWithGrant(parent, context, args, workerType) }
     catch (error) { return { status: 'POSTMAN_WORKER_ARTIFACT_REJECTED', diagnostic: diagnostic(error) } }
@@ -496,7 +398,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     const label = args.label ?? (workerType === 'sol' ? 'Postman Sol Worker' : workerType === 'secretary' ? 'Secretary' : 'Postman Worker')
     // Reserve an exact child identity durably before the first DSH side effect.
     const admission = await enqueue(group, async () => {
-      if (busy(parent.id) || !authorized(parent)) return { status: 'POSTMAN_TASK_CONTEXT_BUSY' }
+      if (!authorized(parent)) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
       if (args.createNew !== true && count(bindings(parent, group)))
         return { selected: select(parent, undefined, group, workerType) }
       if (count(bindings(parent, group)) >= limit) return { status: limitStatus }
@@ -505,7 +407,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
           if (count(row.workers ?? {}) >= limit) throw new Error(limitStatus)
           if (Object.hasOwn(row.workers ?? {}, reservedId)) throw new Error('POSTMAN_WORKER_BINDING_EXISTS')
           return { ...row, workers: { ...row.workers,
-            [reservedId]: { id: reservedId, label, workerType, ownerSessionId: parent.id, state: 'intent', delivery: 'pending',
+            [reservedId]: { id: reservedId, label, workerType, cwd: context.worktree, ownerSessionId: parent.id, state: 'intent', delivery: 'pending',
               artifactRequests: task.grant ? [args.artifactRequestId] : [],
               ...(initialBudget ? { budget: initialBudget } : {}),
               lifecycle: { version: 1, admissions: [assignment], reports: [] } } } }
@@ -603,13 +505,14 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     workerSessionId: { type: 'string', description: 'Exact existing Worker session for an addressed task or artifact grant.' },
     label: { type: 'string', description: 'Display name, not an authority or lookup key.' },
     artifactRequestId: { type: 'string', description: 'Separately trusted artifact REQ.' },
+    cwd: { type: 'string', description: 'Optional absolute working directory; defaults to the current assignment or parent directory. This is a path base, not an access fence.' },
     hardBudget: { type: 'number', description: 'FAST assignment hard model-request budget: integer 8..100, default 60 for substantial work; smaller values for obviously short bounded assignments. Host computes softLimit=floor(0.8*hardBudget); each assignment is independent.' },
   }
   function makeTaskTool(workerType) {
     const sol = workerType === 'sol', secretary = workerType === 'secretary'
     return defineTool({
       name: sol ? POSTMAN_SOL_WORKER_TOOL_NAME : secretary ? 'postman_secretary' : POSTMAN_WORKER_TOOL_NAME,
-      description: sol ? 'Create or continue the one expensive Sol Worker (GPT-6.1 Sol, xhigh), selected by Leader within an approved execution plan. No separate Sol role permission; preapproved conditional escalation and same-scope continuation need no repeated approval. New non-trivial tasks require Leader routing decision, compact plan and explicit user approval before execution; material cost/scope/access/destructive-operation/transport changes stop for revised-plan approval. Choose the cheapest reliable route through the next meaningful decision boundary; unknown != complex, bounded cheap evidence when useful, direct Sol for obviously difficult local engineering/review. Use workerSessionId for follow-up; createNew rejects a second Sol. Acceptance is not completion.' :
+      description: sol ? 'Create or continue the Sol Worker (GPT-6.1 Sol, xhigh) selected by Leader. Leader decides routing and acceptance under the user task and repository policy. Use workerSessionId for follow-up; technical limits and role tools remain unchanged. Acceptance is not completion.' :
         secretary ? 'Create or continue the exact singleton Secretary for this Leader task. FAST facts and private operational ledger, no PTC/delegation. Acceptance is not completion.' :
         'Create or continue a Postman Worker, up to two per exact parent (Leader or Sol Worker). FAST local execution without PTC/delegation. Acceptance is not completion.',
       parameters: Object.fromEntries(Object.entries(parameters).filter(([name]) =>
@@ -626,18 +529,8 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
             (args.artifactRequestId !== undefined && typeof args.artifactRequestId !== 'string') ||
             (args.createNew === true && args.workerSessionId !== undefined))
           return { status: 'POSTMAN_WORKER_ARGUMENTS_INVALID' }
-        if (contexts && !contexts.get(parent.id)) {
-          if (!secretary || typeof contexts.prepareReadOnly !== 'function')
-            return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
-          const prepared = await contexts.prepareReadOnly(parent)
-          if (!['POSTMAN_TASK_READ_ONLY_READY', 'POSTMAN_TASK_CONTEXT_ALREADY_READY'].includes(prepared?.status))
-            return prepared
-        }
-        if (!secretary && contexts?.get(parent.id)?.devspaceReadOnly)
-          return { status: 'POSTMAN_WORKER_READ_ONLY_CONTEXT' }
         return admitted(parent, async () => {
           const group = groupFor(parent)
-          await reconcileClosedBindings(parent, group)
           if (args.createNew === true) return create(parent, group, args, exec, workerType)
           const chosen = await enqueue(group, () => select(parent, args.workerSessionId, group, workerType))
           if (!chosen.binding) {
@@ -665,7 +558,6 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       if (typeof args?.task !== 'string' || !args.task.trim()) return { status: 'POSTMAN_WORKER_TASK_INVALID' }
       if (args.workerSessionId !== undefined && (typeof args.workerSessionId !== 'string' || !args.workerSessionId))
         return { status: 'POSTMAN_WORKER_TARGET_UNKNOWN' }
-      if (contexts && !contexts.get(parent.id)) return { status: 'POSTMAN_TASK_CONTEXT_REQUIRED' }
       return admitted(parent, async () => {
         const group = groupFor(parent)
         const chosen = await enqueue(group, () => select(parent, args.workerSessionId, group))
@@ -686,27 +578,12 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     const matches = entries.filter(entry => entry.id === id)
     return matches.length === 1 && matches[0].kind === 'child' && matches[0].mode === 'continuable'
   }
-  async function closeEvidence(parent, binding, signal, preflightOwned = false) {
-    if (!preflightOwned && workerTypeOf(binding) === 'sol' && Object.values(rawRow(parent.id)?.workers ?? {}).some(value => value.ownerSessionId === binding.id))
-      return { ready: false, reason: 'Sol must retire its own Worker bindings before closing/fresh' }
-    if (binding.state !== 'ready' || binding.delivery !== 'none')
-      return { ready: false, reason: 'binding or admission uncertain; request addressed cancel' }
+  async function closeEvidence(parent, binding, signal) {
     const child = await history(binding.id, parent.id, signal)
-    const reported = workerEvidence(binding, child, parent)
-    // Releasing a session certifies only runtime quiescence. Reports remain
-    // evidence of delivery; their absence never invents task success.
-    const evidence = { ready: child?.status === 'idle' && child.inbox?.hasPending === false,
-      reason: 'Worker active, pending, or history unavailable', resultReported: reported.ready }
-    if (!evidence.ready) return evidence
-    // Capture before the asynchronous descendant read, not after it.
-    const eventCount = child.session.events.length
-    const descendants = await ctx.subagents.listDescendants(binding.id, signal)
-    const ownedIds = preflightOwned ? new Set(Object.values(rawRow(parent.id)?.workers ?? {}).filter(b => b.ownerSessionId === binding.id).map(b => b.id)) : new Set()
-    if (descendants.some(entry => !ownedIds.has(entry.id) && (entry.kind === 'diagnostic' ||
-        (entry.kind === 'child' && entry.mode === 'continuable' &&
-          (entry.activity !== 'inactive' || ctx.agents.get(entry.id))))))
-      return { ready: false, reason: 'managed descendants running or uncertain' }
-    return { ...evidence, eventCount }
+    return { ready: child?.status === 'idle' && child.inbox?.hasPending === false,
+      reason: 'Worker has active or queued work; use addressed cancel',
+      resultReported: (binding.lifecycle?.reports?.length ?? 0) > 0,
+      eventCount: child?.session.events.length }
   }
   const stopTool = defineTool({
     name: POSTMAN_WORKER_STOP_TOOL_NAME,
@@ -727,7 +604,6 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       if (id !== undefined && (typeof id !== 'string' || !id)) return { status: 'POSTMAN_WORKER_TARGET_UNKNOWN' }
       if (mode === 'cancel' && !id) return { status:'POSTMAN_WORKER_TARGET_REQUIRED' }
       const g = groupFor(parent)
-      if (args.cascade !== true && !slotLocked) await reconcileClosedBindings(parent, g)
       const chosen = await enqueue(g, () => select(parent, id, g))
       if (!chosen.binding) {
         if (id && g.stopped.has(id)) return { status: 'POSTMAN_WORKER_ALREADY_STOPPED', workerSessionId: id }
@@ -783,9 +659,9 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
               const snapshot = bindings(parent, g)[selected.id]
               if (!snapshot || snapshot.id !== selected.id || !matchesContext(parent, slot, true)) return false
               const fresh = await closeEvidence(parent, snapshot, exec.signal)
-              if (!fresh.ready || fresh.eventCount !== evidence.eventCount) return false
+              if (!fresh.ready) return false
               if (durable) await changeBinding(parent, selected.id, entry => {
-                if (entry !== snapshot || entry.state !== 'ready' || entry.delivery !== 'none')
+                if (entry.id !== selected.id)
                   throw new Error('POSTMAN_WORKER_BINDING_CHANGED')
                 return { ...entry, state: 'stopping', lifecycle: stopIntent(entry, mode) }
               })
@@ -921,7 +797,6 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       if (!authorized(parent)) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
       // Only exceptional uncertain/stopping bindings need exact reconciliation.
       // Ordinary snapshot performs no recovery loop or model activation.
-      await reconcileClosedBindings(parent, groupFor(parent))
       const values = Object.values(bindings(parent, groupFor(parent)))
       let children
       try { children = await ctx.subagents.listChildren(parent.id, exec.signal) } catch { children = null }
@@ -958,12 +833,13 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
         return { workerSessionId: value.id, label: value.label, workerType: workerTypeOf(value),
           model: workerOptions(workerTypeOf(value)).model, binding: value.state,
           delivery: value.delivery, runtime, execution: runtime, turn, report,
+          countsAgainstLimit: Boolean(live || groupFor(parent).slots.get(value.id)?.ptcAdmission || groupFor(parent).slots.get(value.id)?.state === 'intent'),
           ...(workerTypeOf(value) !== 'sol' ? { budget: value.budget ?? null, pendingBudgets: Object.values(value.pendingBudgets ?? {}) } : {}) }
       }))
       return { status: 'POSTMAN_WORKER_LIST', quota: {
-        secretary: { used: workers.filter(value => value.workerType === 'secretary').length, limit: isTopLevelPostmanSupervisor(parent) ? 1 : 0 },
-        luna: { used: workers.filter(value => value.workerType === 'luna').length, limit: 2 },
-        sol: { used: workers.filter(value => value.workerType === 'sol').length, limit: isTopLevelPostmanSupervisor(parent) ? 1 : 0 },
+        secretary: { used: workers.filter(value => value.countsAgainstLimit && value.workerType === 'secretary').length, limit: isTopLevelPostmanSupervisor(parent) ? 1 : 0 },
+        luna: { used: workers.filter(value => value.countsAgainstLimit && value.workerType === 'luna').length, limit: 2 },
+        sol: { used: workers.filter(value => value.countsAgainstLimit && value.workerType === 'sol').length, limit: isTopLevelPostmanSupervisor(parent) ? 1 : 0 },
       }, workers }
     },
   })
@@ -1037,7 +913,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       const slot = slotFor(g, selected.binding)
       return admitted(parent, () => enqueue(slot, async () => {
         const binding = bindings(parent, g)[id]
-        if (binding !== selected.binding || binding.state !== 'ready' || binding.delivery !== 'none' ||
+        if (binding.id !== selected.binding.id || binding.lifecycle?.stop ||
             !matchesContext(parent, slot)) return { status: 'POSTMAN_WORKER_COMPACT_BUSY', workerSessionId: id }
         const child = liveWorker(id), saved = await history(id, parent.id, exec.signal)
         if (!saved || saved.status !== 'idle' || saved.inbox?.hasPending !== false)
@@ -1086,8 +962,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
         slot.state !== 'ready' ||
         (durable && (!Object.hasOwn(rowOf(leaderId)?.workers ?? {}, caller.id) ||
           rowOf(leaderId).workers[caller.id]?.id !== caller.id ||
-          rowOf(leaderId).workers[caller.id].state !== 'ready')) ||
-        (contexts && slot.context !== contexts.get(leaderId))) return null
+          rowOf(leaderId).workers[caller.id].state !== 'ready'))) return null
     return !requireActivation || slot.workerAgent === caller ? slot : null
   }
   function appOwnerOf(caller) {
@@ -1095,7 +970,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     const slot = liveSlot(caller, parent?.id, true)
     const assignment = budgetOf(caller)
     return slot && workerTypeOf(slot) === 'luna' && isTopLevelPostmanSupervisor(parent) &&
-      !slot.context?.devspaceReadOnly && typeof assignment?.assignmentId === 'string'
+      typeof assignment?.assignmentId === 'string'
       ? { owner: parent, context: slot.context, assignmentId: assignment.assignmentId } : null
   }
   function ownerOf(caller, requestId) {
@@ -1121,7 +996,6 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     if (!authorized(parent) || (requirePtcLeader && !isTopLevelPostmanPtcLeader(parent)) ||
         ctx.agents.get(caller?.id) !== caller || (header?.id !== undefined && header.id !== caller.id) || header?.origin !== 'subagent' || header.delegationDepth !== depthOf(leaderId) ||
         !slot || slot.closed || slot.parent !== parent || admission?.parent !== parent || admission.signal?.aborted ||
-        (contexts && (!slot.context || slot.context !== contexts.get(leaderId))) ||
         (slot.workerAgent !== null && slot.workerAgent !== caller) ||
         !['intent', 'ready'].includes(slot.state) || slot.delivery !== 'pending' ||
         (durable && (binding?.id !== caller.id || binding.state !== slot.state || binding.delivery !== 'pending' ||
@@ -1142,12 +1016,9 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     const budget = budgetOf(exec.agent)
     if (!budget) return
     if (budget.reported) return 'POSTMAN_WORKER_ASSIGNMENT_REPORTED: wait for a new parent assignment'
-    if (exec.name === 'notify_parent' && budget.notified) return 'POSTMAN_WORKER_ESCALATION_ALREADY_SENT'
     if (!budget.exhausted) return
     if (!['notify_parent', 'report'].includes(exec.name)) return 'POSTMAN_WORKER_BUDGET_EXHAUSTED: escalation/report only'
-    const text = exec.name === 'report' ? exec.arguments?.output : exec.arguments?.message
-    if (typeof text !== 'string' || !/^(NEEDS_PARENT_GUIDANCE:|NEEDS_LEADER_GUIDANCE:)/.test(text))
-      return 'POSTMAN_WORKER_BUDGET_EXHAUSTED: meaningful blocker required, not success'
+
   })
   const stopReportConclusion = ctx.on?.('tools/execute', async (exec, next) => {
     // Sol may report PARTIAL/BLOCKED while owned work is unresolved. Delivery
@@ -1237,9 +1108,9 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     let slot = leaders.get(leaderId)?.slots.get(caller?.id)
     if (!slot && authorized(ctx.agents.get(leaderId))) {
       const binding = rowOf(leaderId)?.workers?.[caller?.id]
-      if (!binding || binding.state !== 'ready' || binding.delivery !== 'none') return false
+      if (!binding || binding.lifecycle?.stop) return false
       slot = slotFor(groupFor(ctx.agents.get(leaderId)), binding)
-      slot.context = contexts?.get(leaderId) ?? null
+      slot.context ??= workContext(ctx.agents.get(leaderId), {}, slot)
       if (await reconcile(ctx.agents.get(leaderId), slot)) return false
     }
     if (!slot || slot.workerAgent !== null || !liveSlot(caller, leaderId)) return false
@@ -1279,52 +1150,8 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
         rowOf(leaderId).workers[childId]?.id === childId &&
         rowOf(leaderId).workers[childId].state === 'ready')) ? slot.context : null
   }
-  // The Host has already reserved the shared worktree before calling this.
-  // DSH's selected drain cancels a live turn; never use it as a pause.
-  // Inactive durable peers already have no resident Activation to release.
-  // The runner's caller is inside this tool and must never await itself.
-  async function pauseForOperation(leaderId, callerId = null) {
-    const parent = ctx.agents.get(leaderId)
-    if (!authorized(parent)) return false
-    const group = groupFor(parent)
-    const values = Object.values(bindings(parent, group))
-    // Caller may be Sol inside the artifact runner. Its children share this task
-    // worktree but are not the Leader slots: never ignore their mutation activity.
-    if (durable) for (const binding of Object.values(rawRow(leaderId)?.workers ?? {})) {
-      if ((binding.ownerSessionId ?? leaderId) === leaderId) continue
-      if (binding.state !== 'ready' || binding.delivery !== 'none') return false
-      const child = await history(binding.id, binding.ownerSessionId)
-      if (!child || child.status !== 'idle' || child.inbox?.hasPending) return false
-    }
-    if (values.some(value => value.state !== 'ready' || value.delivery !== 'none' ||
-        (callerId && value.id === callerId && !group.slots.has(callerId)))) return false
-    if (callerId && !values.some(value => value.id === callerId)) return false
-    try {
-      // DSH activity is session residency, not proof of model completion.
-      // Only inactive durable children have no resident accepted turns.
-      const entries = await ctx.subagents.listChildren(leaderId)
-      const mapped = new Set(values.map(value => value.id))
-      // A removed mapping alone cannot prove its former child is not running.
-      if (entries.some(entry => entry.activity === 'running' &&
-          entry.id !== callerId && (mapped.has(entry.id) ||
-            (entry.kind === 'child' && entry.mode === 'continuable')))) return false
-      for (const value of values) {
-        if (value.id === callerId) continue
-        const match = entries.filter(entry => entry.id === value.id)
-        if (match.length !== 1 || match[0].kind !== 'child' ||
-            match[0].mode !== 'continuable' || match[0].activity !== 'inactive' ||
-            ctx.agents.get(value.id)) return false
-      }
-      return authorized(parent) && values.every(value => {
-        const current = bindings(parent, group)[value.id]
-        return current?.id === value.id && current.state === 'ready' && current.delivery === 'none'
-      })
-    } catch { return false }
-  }
   async function removeBinding(parent, g, slot, id, expected = null, expectedContext = null) {
     if (durable) await contexts.changeRecord(parent.id, row => {
-      if (expectedContext && (!authorized(parent) || contexts.get(parent.id) !== expectedContext))
-        throw new Error('POSTMAN_WORKER_CONTEXT_CHANGED')
       if (expected ? cancelWitness(row.workers?.[id] ?? {}) !== expected : row.workers?.[id]?.state !== 'stopping')
         throw new Error('POSTMAN_WORKER_BINDING_CHANGED')
       const workers = { ...row.workers }; delete workers[id]
@@ -1332,96 +1159,14 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     })
     slot.closed = true; g.slots.delete(id); g.stopped.add(id)
   }
-  async function prepareRestore(leaderId) {
-    if (!localDevelopment) return pauseForOperation(leaderId)
-    // Called only after Host reserved restore: no new Postman admissions.
-    const parent = ctx.agents.get(leaderId)
-    if (!authorized(parent) || !durable || !contexts.isRestoring?.(leaderId)) return false
-    const g = groupFor(parent)
-    if (Object.keys(bindings(parent, g)).length && typeof ctx.subagents.closeContinuableChild !== 'function') return false
-    for (const binding of Object.values(bindings(parent, g))) {
-      const slot = slotFor(g, binding)
-      try {
-        const closed = await enqueue(slot, () => ctx.subagents.closeContinuableChild(parent, binding.id, async () => {
-          const current = bindings(parent, g)[binding.id]
-          if (!current || !matchesContext(parent, slot) ||
-              !(await closeEvidence(parent, current)).ready) return false
-          await changeBinding(parent, binding.id, entry => ({ ...entry, state: 'stopping', lifecycle: stopIntent(entry, 'close') }))
-          slot.state = 'stopping'; bindingChanged(binding.id)
-          return true
-        }))
-        if (!closed) return false
-        await removeBinding(parent, g, slot, binding.id)
-      } catch {
-        if (rowOf(leaderId)?.workers?.[binding.id]?.state === 'stopping')
-          await changeBinding(parent, binding.id, entry => ({ ...entry, state: 'uncertain' }))
-        slot.state = 'uncertain'; bindingChanged(binding.id)
-        return false
-      }
-    }
-    return pauseForOperation(leaderId)
-  }
-  async function prepareAbandon(leaderId) {
-    const parent = ctx.agents.get(leaderId)
-    if (!authorized(parent) || !isTopLevelPostmanSupervisor(parent)) return false
-    const g = groupFor(parent), results = []
-    for (const binding of Object.values(bindings(parent, g))) {
-      results.push(await stopWorker({workerSessionId: binding.id, mode: 'cancel',
-        cascade: workerTypeOf(binding) === 'sol'}, {agent: parent, signal: new AbortController().signal}))
-    }
-    // Failed/unknown cancellations remain audit in the abandoned task row.
-    // They never acquire the replacement context or its worktree.
-    return results.every(result => ['POSTMAN_WORKER_CANCELLED', 'POSTMAN_WORKER_ALREADY_STOPPED'].includes(result.status))
-  }
-  // Raw durable membership + exact current live state only. No recovery, journal reads or writes.
-  // Read only the existing exact admission/activation state; never materialize,
-  // reconcile or poll a cold binding just to justify an event boundary.
-  function hasActiveWork(parent) {
-    if (!authorized(parent)) return false
-    const group = leaders.get(parent.id)
-    if (!group) return false
-    return Object.entries(bindings(parent, group)).some(([id, binding]) => {
-      const child = liveWorker(id), slot = child && liveSlot(child, parent.id, true)
-      const admission = binding.lifecycle?.admissions?.at(-1)
-      if (!slot || binding.id !== id || binding.state !== 'ready' || binding.delivery !== 'none' ||
-          slot.delivery !== 'none' || admission?.state !== 'accepted' || !admission.messageId ||
-          binding.budget?.reported || slot.budget?.reported) return false
-      if (child.phase?.kind === 'running' && child.phase.abort?.signal.aborted === false &&
-          !binding.lifecycle?.reports?.some(report => report.turn === child.phase.turn)) return true
-      // An event-waiting Sol still owns its active children; their native reports
-      // wake that same Sol, which delivers its terminal report to this Leader.
-      return slot.workerType === 'sol' && child.phase?.kind === 'idle' && hasActiveWork(child)
-    })
-  }
   // Called only by native settlement after disposal. Reports remain semantic
   // evidence; the native terminal is separate lifecycle authority. Be conservative:
   // new output, failure, input/work, missing identity or unseen report always wakes.
   function canDeferSettlement(parent, child, terminal) {
-    if (!durable || !authorized(parent) || terminal?.stopReason !== 'completed') return false
-    const header = child?.session?.header, group = leaders.get(parent.id)
-    const binding = group && bindings(parent, group)[child?.id]
-    const seed = header?.seedLength ?? 0
-    if (!binding || binding.id !== child.id || header?.origin !== 'subagent' || header.parentSession !== parent.id ||
-        header.delegationDepth !== depthOf(parent.id) || !Number.isSafeInteger(seed) || seed < 0 || seed > child.session.events.length ||
-        child.inbox?.hasPending) return false
-    // A lifecycle command explicitly awaiting settlement must be unblocked,
-    // including the last Worker. Otherwise its already-reviewed report is the
-    // semantic wake; retain the completed native fact without a second request.
-    const parentEvents = parent.session.events
-    const lastStart = parentEvents.findLastIndex(event => event.type === 'turn/start')
-    if (parentEvents.slice(lastStart).some(event => event.type === 'tool/code-dispatch-start' &&
-        ['postman_worker_stop','postman_worker_compact','postman_worker_fresh','postman_task_close'].includes(event.data.name))) return false
-    const events = child.session.events.slice(seed)
-    if (terminal.output !== undefined) {
-      // Native finalAssistantOutput also captures the already-delivered report
-      // tool-call. Allow only that exact block; new text/other output still wakes.
-      if (!Array.isArray(terminal.output) || terminal.output.length !== 1) return false
-      const block = terminal.output[0], call = events.findLast(e => e.type === 'tool/call')
-      if (block.type !== 'tool-call' || block.name !== 'report' || call?.data.name !== 'report' ||
-          block.id !== call.data.callId || block.arguments !== call.data.arguments) return false
-    }
-    const evidence = {session:{events},status:'idle',inbox:child.inbox}
-    return workerEvidence(binding, evidence, parent).ready
+    if (!authorized(parent) || terminal?.stopReason !== 'completed' || child?.session?.header?.parentSession !== parent.id) return false
+    const output = terminal.output
+    if (!Array.isArray(output) || output.length !== 1 || output[0].type !== 'tool-call' || output[0].name !== 'report') return false
+    return (rowOf(parent.id)?.workers?.[child.id]?.lifecycle?.reports ?? []).some(report => report.callId === output[0].id)
   }
   function teamSnapshot(leader) {
     if (!isTopLevelPostmanSupervisor(leader) || !authorized(leader)) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
@@ -1464,5 +1209,5 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     leaders.clear()
   }
   return { taskTool, solTaskTool, secretaryTool, ledgerTool, freshTool, interruptTool, stopTool, listTool, compactTool, roleOf, ownerOf, appOwnerOf, ownsNotification, ownsLiveWorker, ptcContextOf, confirmActivation, releaseActivation, refreshLeader, suspendLeader,
-    contextOf, observeReport, pauseForOperation, prepareRestore, prepareAbandon, teamSnapshot, hasActiveWork, canDeferSettlement, dispose }
+    contextOf, observeReport, teamSnapshot, canDeferSettlement, dispose }
 }

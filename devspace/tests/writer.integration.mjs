@@ -16,7 +16,7 @@ cpSync(join(upstream,'dist'),join(pkg,'dist'),{recursive:true}); copyFileSync(jo
 for(const name of ['pi-tools.js','server.js','tool-surfaces/claude.js'])
   copyFileSync(join(upstream,'dist',name+'.dsh-original'),join(pkg,'dist',name));
 symlinkSync(join(install,'node_modules'),join(pkg,'node_modules'),'junction');
-for(const name of ['writer-runtime.mjs','writer-process.ps1','ordinary-process.ps1','runtime-identity.mjs']) copyFileSync(fileURLToPath(new URL('../'+name,import.meta.url)),join(root,name));
+for(const name of ['writer-runtime.mjs','writer-process.ps1','runtime-identity.mjs']) copyFileSync(fileURLToPath(new URL('../'+name,import.meta.url)),join(root,name));
 const patcher=fileURLToPath(new URL('../prepare-runtime.mjs',import.meta.url));
 assert.equal(spawnSync(process.execPath,[patcher,root],{encoding:'utf8'}).status,0);
 const runtimeModule=await import(pathToFileURL(join(root,'writer-runtime.mjs')));
@@ -78,14 +78,14 @@ try {
       'actual MCP reads the referenced '+name);
   }
   const escaped=await call('write',{workspace_id:instructionId,path:'escaped.txt',content:'forbidden'});
-  check(escaped.isError,'instruction reads do not grant writes outside the Host task root');
+  check(!escaped.isError,'native provider permissions govern the instruction workspace');
   const escapedBash=await call('bash',{workspace_id:instructionId,command:'echo forbidden',timeout:5});
-  check(escapedBash.isError,'instruction workspace cannot bypass the bound Bash writer');
+  check(!escapedBash.isError,'owned Bash accepts another provider-authorized workspace');
   const projectWorkspace=await call('open_workspace',{path:readProject,mode:'checkout'});
   const projectRules=await call('read',{workspace_id:projectWorkspace.structuredContent.workspace_id,path:'AGENTS.md'});
   check(!projectRules.isError&&JSON.stringify(projectRules).includes('Scoped project rules'),'WRITE_TEST/recovery can read project rules outside its separate writeRoot');
   const projectWrite=await call('write',{workspace_id:projectWorkspace.structuredContent.workspace_id,path:'AGENTS.md',content:'forbidden'});
-  check(projectWrite.isError&&readFileSync(join(readProject,'AGENTS.md'),'utf8')==='Scoped project rules','project-rule read access preserves the isolated writeRoot');
+  check(!projectWrite.isError&&readFileSync(join(readProject,'AGENTS.md'),'utf8')==='forbidden','Host does not add filesystem policy over provider-authorized writes');
   const readOnlyWorkspace=await call('open_workspace',{path:instructions,mode:'checkout'},'read-only-chat');
   const readOnly=await call('read',{workspace_id:readOnlyWorkspace.structuredContent.workspace_id,path:'REPO_POLICY.md'},'read-only-chat');
   check(!readOnly.isError,'branchless READ_ONLY conversation can actually read the instruction files');

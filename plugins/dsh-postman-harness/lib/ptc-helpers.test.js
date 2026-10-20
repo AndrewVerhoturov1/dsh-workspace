@@ -9,31 +9,6 @@ const read = documents => async ({ file_path, offset, limit }) => {
   return { totalLines: lines.length, lines: lines.slice(offset - 1, offset - 1 + limit).map((text, i) => ({ number: offset + i, text })) }
 }
 
-test('expectStatus accepts exact statuses and preserves the original object', () => {
-  const ptc = helper({})
-  const result = { status: 'TASK_CONTEXT_READY', evidence: 1 }
-  assert.equal(ptc.expectStatus(result, ['TASK_CONTEXT_READY']), result)
-  for (const status of ['task_context_ready', 'TASK_CONTEXT_READY_EXTRA', ' TASK_CONTEXT_READY', 'NEW_STATUS'])
-    assert.throws(() => ptc.expectStatus({ status }, ['TASK_CONTEXT_READY']), /unexpected status/)
-  for (const result of [null, [], {}, { status: 1 }, 'READY', Object.create({ status: 'READY' })])
-    assert.throws(() => ptc.expectStatus(result, ['READY']), /object with a string status/)
-  for (const statuses of [null, 'READY', [], [''], [1], ['READY', null], Array(2)])
-    assert.throws(() => ptc.expectStatus({ status: 'READY' }, statuses), /non-empty list|unknown or unavailable tool/)
-})
-
-test('named lifecycle statuses accept isolated restore, archived work and a new recovery job', () => {
-  const ptc = helper({ postman_task_restore() {}, postman_bridge_stop() {}, postman_bridge_status() {} })
-  for (const [tool, status] of [['postman_task_restore','POSTMAN_TASK_RESTORE_ISOLATED'],
-    ['postman_bridge_stop','POSTMAN_BRIDGE_ARCHIVED'], ['postman_bridge_status','POSTMAN_BRIDGE_ARCHIVED'],
-    ['postman_bridge_status','POSTMAN_BRIDGE_ACCEPTED'], ['postman_bridge_status','POSTMAN_WRITER_RELEASED'],
-    ['postman_bridge_status','POSTMAN_WRITER_ALREADY_RELEASED']]) {
-    const result = {status, taskCompleted:false}
-    assert.equal(ptc.expectStatus(result, tool), result)
-  }
-  assert.throws(()=>ptc.expectStatus({status:'POSTMAN_BRIDGE_ARCHIVE_FENCE_FAILED'},'postman_bridge_stop'),/unexpected status/)
-  assert.throws(()=>ptc.expectStatus({status:'POSTMAN_WRITER_EXIT_UNPROVEN'},'postman_bridge_status'),/unexpected status/)
-})
-
 test('utf8Bytes and jsonBytes count Cyrillic, emoji, escaping and lone surrogates exactly', () => {
   const ptc = helper({})
   for (const text of ['', 'ascii', 'кириллица', '中文', 'a😀я', '\ud800', '\udfff', '\n"\\']) {
@@ -95,15 +70,6 @@ test('mapTextFiles reads sequentially, reduces each file before the next, and bo
     await assert.rejects(ptc.readMany(options), /options|files/)
   for (const options of [{ file_path: '' }, { file_path: 'a', page_limit: 0 }, { file_path: 'a', max_bytes: -1 }])
     await assert.rejects(ptc.readAllText(options), /file_path|positive integer/)
-})
-
-test('mapTextFiles rejects direct full-text retention; readMany remains the raw reader', async () => {
-  const text = '# heading\nfull source', ptc = helper({ read: read({ a: text }) })
-  for (const mapper of [({text}) => text, ({file_path,text}) => ({file_path,text}), ({text}) => ({raw:text}), ({text}) => [text]])
-    await assert.rejects(ptc.mapTextFiles({files:['a']}, mapper), /must reduce text.*readMany/)
-  assert.deepEqual(await ptc.mapTextFiles({files:['a']}, ({file_path,text}) => ({file_path,matches:text.split('\n').filter(x=>x.startsWith('#'))})),
-    [{file_path:'a',matches:['# heading']}])
-  assert.equal((await ptc.readMany({files:['a']}))[0].text, text)
 })
 
 test('incomplete, changing or truncated ordinary reads are never presented as full text', async () => {
@@ -176,23 +142,6 @@ test('actual QuickJS processes multiple >512 KiB Cyrillic files but returns comp
   } finally { await runtime.dispose() }
 })
 
-test('expectStatus tool-name form shares exact current statuses and visibility', () => {
-  const tools={postman_worker:()=>{},postman_worker_interrupt:()=>{},postman_bridge:()=>{},postman_task_prepare:()=>{}}
-  const ptc=helper(tools)
-  const table={postman_task_prepare:['TASK_CONTEXT_READY','POSTMAN_TASK_CONTEXT_ALREADY_READY'],postman_worker:['POSTMAN_WORKER_TASK_ACCEPTED'],postman_worker_interrupt:['POSTMAN_WORKER_INTERRUPT_TASK_ACCEPTED'],postman_bridge:['POSTMAN_BRIDGE_ACCEPTED']}
-  for (const [name,statuses] of Object.entries(table)) {
-    for (const status of statuses) assert.equal(ptc.expectStatus({status},name).status,status)
-    for (const status of ['NEW_STATUS',statuses[0]+'_EXTRA',statuses[0].toLowerCase(),'POSTMAN_WORKER_INTERRUPT_ACCEPTED'])
-      assert.throws(()=>ptc.expectStatus({status},name),/unexpected status/)
-  }
-  assert.throws(()=>helper({}).expectStatus({status:'POSTMAN_BRIDGE_ACCEPTED'},'postman_bridge'),/unavailable tool/)
-  for(const status of ['POSTMAN_DEVSPACE_LANE_UNAVAILABLE','POSTMAN_TASK_CONTEXT_BUSY']) {
-    const result={status}
-    assert.throws(()=>ptc.expectStatus(result,'postman_bridge'),/unexpected status/,'a refusal never becomes acceptance')
-    assert.equal(ptc.expectStatus(result,[status]),result,'an explicit normal branch preserves its exact refusal')
-  }
-})
-
 test('existing helper argument/result shapes fail clearly without iterable guesses or partial input validation', async () => {
   let calls=0
   const ptc=helper({grep:async()=>{calls++;return {matches:[]}}})
@@ -253,15 +202,6 @@ test('actual QuickJS readMany retains formerly allowed raw data inside PTC and c
   } finally {await runtime.dispose()}
 })
 
-test('mapTextFiles catches deeply wrapped full sources without rejecting empty or compact extraction', async () => {
-  const text='full source\n'.repeat(2000), ptc=helper({read:read({a:text,empty:''})})
-  for (const mapper of [({text})=>({nested:[{raw:text}]}),({text})=>({nested:{raw:'prefix:'+text+':suffix'}})])
-    await assert.rejects(ptc.mapTextFiles({files:['a'],max_total_bytes:100000},mapper),/must reduce text/)
-  const result=await ptc.mapTextFiles({files:['a']},({text})=>({chars:text.length,excerpt:text.slice(0,20)}))
-  assert.deepEqual(result,[{chars:text.length,excerpt:text.slice(0,20)}])
-  assert.deepEqual(await ptc.mapTextFiles({files:['empty']},()=>({excerpt:'',count:0})),[{excerpt:'',count:0}])
-})
-
 test('read once, reuse locally; helpers never cache across mutation or external changes', async () => {
   let text='alpha\nbeta',calls=0
   const ptc=helper({read:args=>{calls++;return read({a:text})(args)}})
@@ -273,3 +213,10 @@ test('read once, reuse locally; helpers never cache across mutation or external 
   assert.equal(await ptc.readAllText({file_path:'a'}),'external change');assert.equal(calls,3)
 })
 
+
+
+test('helpers do not impose Host status or full-source reduction policy', async()=>{
+  const ptc=helper({read:read({a:'full source'})})
+  assert.equal(ptc.expectStatus,undefined)
+  assert.equal((await ptc.mapTextFiles({files:['a']},({text})=>({nested:{text}})))[0].nested.text,'full source')
+})

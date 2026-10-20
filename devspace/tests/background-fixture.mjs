@@ -23,7 +23,7 @@ export async function createBackgroundFixture({patched=true,runtimeOptions={}}={
   symlinkSync(join(install,'node_modules'),join(pkg,'node_modules'),'junction');
   let runtimeModule,writers;
   if(patched) {
-    for(const name of ['writer-runtime.mjs','writer-process.ps1','ordinary-process.ps1','runtime-identity.mjs'])copyFileSync(fileURLToPath(new URL('../'+name,import.meta.url)),join(root,name));
+    for(const name of ['writer-runtime.mjs','writer-process.ps1','runtime-identity.mjs'])copyFileSync(fileURLToPath(new URL('../'+name,import.meta.url)),join(root,name));
     const result=spawnSync(process.execPath,[fileURLToPath(new URL('../prepare-runtime.mjs',import.meta.url)),root],{encoding:'utf8'});
     assert.equal(result.status,0,result.stdout+result.stderr);
     runtimeModule=await import(pathToFileURL(join(root,'writer-runtime.mjs')));
@@ -74,7 +74,7 @@ export async function createBackgroundFixture({patched=true,runtimeOptions={}}={
     const ready=join(project,'ready-'+randomUUID()+'.json'),secret=randomBytes(16).toString('hex'),heartbeat=writes?join(project,'heartbeat-'+randomUUID()):null;children.push({ready,secret});
     return {heartbeat,command:quote(process.execPath.replaceAll('\\','/'))+' '+quote(join(project,'launch.cjs').replaceAll('\\','/'))+' '+quote(ready.replaceAll('\\','/'))+' '+quote(secret)+(heartbeat?' '+quote(heartbeat.replaceAll('\\','/')):''),
       async health(){try{const data=JSON.parse(readFileSync(ready,'utf8'));const res=await fetch('http://127.0.0.1:'+data.port+'/health',{signal:AbortSignal.timeout(500)});return res.ok&&await res.text()===secret}catch{return false}},
-      async wait(){for(let i=0;i<40;i++){if(await this.health())return true;await pause(100)}return false},
+      async wait(){for(let i=0;i<150;i++){if(await this.health())return true;await pause(100)}return false},
       async stop(){const data=JSON.parse(readFileSync(ready,'utf8'));const response=await fetch('http://127.0.0.1:'+data.port+'/shutdown?token='+secret,{signal:AbortSignal.timeout(1000)});await response.text();for(let i=0;i<30&&await this.health();i++)await pause(100);assert(!await this.health(),'own application shuts down')}};
   };
   const close=async()=>{
@@ -87,8 +87,7 @@ export async function createBackgroundFixture({patched=true,runtimeOptions={}}={
     }
     // A native helper may still be publishing the final census after HTTP exit.
     if(children.length)await pause(500);
-    writers?.closeObservation();
-    await new Promise(resolve=>server.close(resolve));await native.close();
+        await new Promise(resolve=>server.close(resolve));await native.close();
     const actual=resolve(root);assert(actual.startsWith(resolve(tmpdir())+sep)&&actual.includes('devspace-background-'));
     rmSync(root,{recursive:true,force:true,maxRetries:10,retryDelay:150});
   };

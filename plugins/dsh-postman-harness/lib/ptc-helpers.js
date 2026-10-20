@@ -1,4 +1,3 @@
-import { POSTMAN_PTC_SUCCESS_STATUSES } from './postman-bridge-core.js'
 import { createJsonCodec } from 'dsh-ptc/json'
 
 const DEFAULT_READ_ALL_MAX_BYTES = 4 * 1024 * 1024
@@ -14,23 +13,6 @@ const COMMON_HELPERS = String.raw`
   function optionsObject(value, name) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError(name + ' options must be an object')
     return value
-  }
-  api.expectStatus = function expectStatus(result, allowedStatuses) {
-    if (!result || typeof result !== 'object' || Array.isArray(result) ||
-        ![Object.prototype, null].includes(Object.getPrototypeOf(result)) ||
-        !Object.hasOwn(result, 'status') || typeof result.status !== 'string') {
-      throw new TypeError('ptc.expectStatus result must be an object with a string status')
-    }
-    if (typeof allowedStatuses === 'string') {
-      if (!Object.hasOwn(successStatuses, allowedStatuses)) throw new TypeError('ptc.expectStatus unknown or unavailable tool: ' + allowedStatuses)
-      allowedStatuses = successStatuses[allowedStatuses]
-    }
-    if (!Array.isArray(allowedStatuses) || allowedStatuses.length === 0 ||
-        Array.from(allowedStatuses).some(status => typeof status !== 'string' || status.length === 0)) {
-      throw new TypeError('ptc.expectStatus allowedStatuses must be a non-empty list of exact non-empty strings')
-    }
-    if (!allowedStatuses.includes(result.status)) throw new Error('ptc.expectStatus unexpected status: ' + result.status)
-    return result
   }
   api.utf8Bytes = function utf8Bytes(value) {
     if (typeof value !== 'string') throw new TypeError('ptc.utf8Bytes requires a string')
@@ -54,6 +36,7 @@ const READ_HELPERS = `
       for (;;) {
         const page = await tools.read({ file_path: filePath, offset: lineOffset, limit: pageLimit,
           __ptc_text: { offset: textOffset, maxBytes } })
+        if (page?.isError) throw new Error(page.error?.message ?? JSON.stringify(page))
         if (!page || typeof page.text !== 'string' || typeof page.eof !== 'boolean' || typeof page.version !== 'string' ||
             !Number.isSafeInteger(page.totalChars) || page.totalChars < 0 ||
             !Number.isSafeInteger(page.totalBytes) || page.totalBytes < 0 ||
@@ -77,6 +60,7 @@ const READ_HELPERS = `
     const parts = []
     for (;;) {
       const page = await tools.read({ file_path: filePath, offset, limit: pageLimit })
+      if (page?.isError) throw new Error(page.error?.message ?? JSON.stringify(page))
       if (!page || typeof page !== 'object' || Array.isArray(page) ||
           !Array.isArray(page.lines) || !Number.isSafeInteger(page.totalLines) || page.totalLines < 0 ||
           (totalLines !== undefined && totalLines !== page.totalLines)) {
@@ -126,11 +110,6 @@ const READ_HELPERS = `
     return { file_path: filePath, page_limit: options.page_limit,
       max_bytes: options.max_bytes_per_file, max_chars: options.max_chars_per_file }
   }
-  function retainsSource(value, text) {
-    if (typeof value === 'string') return value === text || (text.length >= 1024 && value.includes(text))
-    if (!value || typeof value !== 'object') return false
-    return Object.values(value).some(item => retainsSource(item, text))
-  }
   async function collectFiles(options, mapper, name) {
     const maxTotal = options.max_total_bytes === undefined ? ${DEFAULT_RESULT_MAX_BYTES} : positiveInteger(options.max_total_bytes, 'max_total_bytes')
     const results = []
@@ -139,9 +118,6 @@ const READ_HELPERS = `
       const text = await api.readAllText(readOptions(options, filePath))
       const result = await mapper({ file_path: filePath, text })
       const resultBytes = api.jsonBytes(result) // Validate before walking or retaining mapper data.
-      if (name === 'ptc.mapTextFiles' && text.length > 0 && retainsSource(result, text)) {
-        throw new Error('ptc.mapTextFiles must reduce text, not retain the full source text (including nested fields); use ptc.readMany for raw files inside PTC')
-      }
       bytes += resultBytes + (results.length ? 1 : 0)
       if (bytes > maxTotal) throw new Error(name + ' max_total_bytes exceeded; read large internally, return compact (use mapTextFiles)')
       results.push(result)
@@ -175,6 +151,7 @@ const GREP_HELPERS = `
     const results = []
     for (const query of queries) {
       const result = await tools.grep(query)
+      if (result?.isError) throw new Error(result.error?.message ?? JSON.stringify(result))
       if (!result || typeof result !== 'object' || Array.isArray(result) || !Array.isArray(result.matches)) {
         throw new TypeError('ptc.grepMany expected tools.grep result {matches: Array}; raw tool results are objects, not iterable arrays')
       }
@@ -188,8 +165,7 @@ const GREP_HELPERS = `
 
 export function buildPtcHelperPrelude(toolNames, jsonLimits = { maxValueDepth: 32, maxValueNodes: 10000 }, fullTextRead = false) {
   const names = new Set(toolNames)
-  const successStatuses = Object.fromEntries(Object.entries(POSTMAN_PTC_SUCCESS_STATUSES).filter(([name]) => names.has(name)))
-  const sections = ['const successStatuses = ' + JSON.stringify(successStatuses) + '; Object.values(successStatuses).forEach(Object.freeze); Object.freeze(successStatuses);', COMMON_HELPERS]
+  const sections = [COMMON_HELPERS]
   if (names.has('read')) sections.push(READ_HELPERS)
   if (names.has('grep')) sections.push(GREP_HELPERS)
   return `const ptc = (() => {
@@ -205,7 +181,7 @@ ${sections.join('\n')}
 
 export function ptcHelperGuidance(toolNames) {
   const names = new Set(toolNames)
-  const helpers = ['ptc.expectStatus(result, allowedStatusesOrVisiblePostmanToolName)', 'ptc.utf8Bytes(text)', 'ptc.jsonBytes(value)']
+  const helpers = ['ptc.utf8Bytes(text)', 'ptc.jsonBytes(value)']
   if (names.has('read')) helpers.push(
     'ptc.readAllText({file_path, page_limit?, max_bytes?, max_chars?})',
     'ptc.readMany({files, page_limit?, max_bytes_per_file?, max_chars_per_file?, max_total_bytes?})',
@@ -213,7 +189,6 @@ export function ptcHelperGuidance(toolNames) {
   )
   if (names.has('grep')) helpers.push('ptc.grepMany({queries})')
   return 'PTC helpers available: ' + helpers.join(', ') + '. ' +
-    'expectStatus accepts either your exact status array or a visible Postman tool name for Host-maintained exact success statuses; unknown statuses still stop. ' +
     'Returns: readAllText -> string; readMany -> Array<{file_path,text}>; mapTextFiles -> Array<mapper JSON>; grepMany -> Array<{query,result:{matches:Array}}> (not a flat match array). ' +
     'Raw tool values are objects: read.lines, glob.paths, grep.matches; do not iterate the whole result. ' +
     'Full reads default to 4 MiB UTF-8 per file internally. readMany and mapTextFiles bound aggregate retained JSON to 480 KiB by default; explicit max_total_bytes allows larger internal data, not larger final output. grepMany has no separate retained-result byte ceiling. ' +

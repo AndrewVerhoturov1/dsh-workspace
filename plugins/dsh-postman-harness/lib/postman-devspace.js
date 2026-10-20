@@ -22,9 +22,6 @@ export function createDevspaceChannel({ root = devspaceRoot(), bridgeJobId, lead
   mkdirSync(channel, { recursive: true })
   if (realpathSync(channel) !== resolve(channel)) throw Error('POSTMAN_DEVSPACE_CHANNEL_REDIRECTED')
   const workspaceRef = realpathSync(worktree)
-  if (['WRITE_ISOLATED', 'WRITE_APPROVED_TARGET'].includes(mode) &&
-      workspaceRef !== resolve(worktree))
-    throw Error('POSTMAN_DEVSPACE_WORKTREE_REDIRECTED')
   const writeRoot = mode === 'WRITE_TEST' ? join(channel, 'workspace') :
     ['WRITE_ISOLATED', 'WRITE_APPROVED_TARGET'].includes(mode) ? workspaceRef : null
   if (mode === 'WRITE_TEST') mkdirSync(writeRoot)
@@ -145,16 +142,38 @@ export function readDevspaceEvent(binding) {
   } catch (error) { if (error.code === 'ENOENT') return null; throw error }
 }
 
+
+/** Read facts already saved by this exact job's transport. No model or browser work. */
+export function readDevspaceObservation(binding) {
+  const read = file => {
+    try {
+      const info = lstatSync(file)
+      if (!info.isFile() || info.isSymbolicLink() || info.size > 8 * 1024 * 1024) return null
+      const value = JSON.parse(readFileSync(file, 'utf8'))
+      return value?.requestId === binding.requestId ? value : null
+    } catch { return null }
+  }
+  const result = read(join(binding.channel, 'result.json'))
+  const receipt = read(join(binding.channel, 'web', 'workers', binding.requestId + '.json'))
+  const candidate = result?.conversationRef ?? receipt?.conversationUrl ?? binding.conversationUrl
+  const conversationRef = typeof candidate === 'string' && /^https:\/\/chatgpt\.com\/c\/[a-zA-Z0-9-]+$/.test(candidate)
+    ? candidate : null
+  return { ...(result ?? {}), conversationRef }
+}
+
 function existsReport(path) { try { return lstatSync(path).isFile() } catch { return false } }
 
 export function devspaceTerminal(binding, observed = {}) {
   const event = readDevspaceEvent(binding)
   let reportRef = event?.reportRef ?? null
   if (reportRef) {
-    const allowed = binding.writeRoot ?? binding.workspaceRef
     const target = (() => { try { return realpathSync(reportRef) } catch { return resolve(reportRef) } })()
-    const diff = relative(allowed, target)
-    if (diff === '..' || diff.startsWith('..' + (process.platform === 'win32' ? '\\' : '/')) || isAbsolute(diff)) reportRef = null
+    const privatePath = relative(binding.channel, target)
+    const workspacePath = binding.writeRoot && relative(binding.writeRoot, target)
+    const within = path => path !== null && path !== false && !isAbsolute(path) && path !== '..' && !path.startsWith('..' + (process.platform === 'win32' ? '\\' : '/'))
+    // Reports may live outside the assignment folder. Host capabilities and
+    // transport internals are never accepted as a report attachment.
+    if (within(privatePath) && !(binding.writeRoot && within(workspacePath))) reportRef = null
   }
   // No external stdout can name an arbitrary image path. The exact file
   // must belong to this private job channel, with stable hash/format/size.

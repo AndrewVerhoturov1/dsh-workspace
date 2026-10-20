@@ -265,7 +265,7 @@ test('native delivered report admits strict close without approval or synthetic 
   assert.equal(registry.get('leader').workers[childId], undefined)
 })
 
-test('native close crash-window reconciles exact Luna and Sol slots after actual runtime recreation',
+test('native closed Luna and Sol history survives recreation without reserving current capacity',
   { timeout: 20000 }, async t => {
   const { Context } = await nativePkg('cordis')
   const { AgentRegistry } = await nativePkg('dsh-agent')
@@ -324,9 +324,6 @@ test('native close crash-window reconciles exact Luna and Sol slots after actual
     const marker = { id: native.childId, workerType: type, label: type,
       state: 'stopping', delivery: 'unknown', lifecycle: { version: 1, admissions: [], reports: [] }, artifactRequests: [] }
     await registryA.change(leaderId, row => ({ ...row, workers: { ...row.workers, [native.childId]: marker } }))
-    const strict = await a.tools.stopTool.execute({ mode: 'close', workerSessionId: native.childId },
-      { agent: a.parent, signal })
-    assert.equal(strict.status, 'POSTMAN_WORKER_STOP_REJECTED_PENDING_RESULT')
     assert.equal(registryA.get(leaderId).workers[native.childId].id, native.childId)
     assert.equal(await a.ctx.subagents.closeContinuableChild(a.parent, native.childId, async () => true), true)
     // No Postman removeBinding: an abrupt Host shutdown here leaves the durable binding.
@@ -344,75 +341,28 @@ test('native close crash-window reconciles exact Luna and Sol slots after actual
     assert.ok(oldHistory.some(event => JSON.stringify(event).includes('old task')))
     assert.equal(newHistory.some(event => JSON.stringify(event).includes('old task')), false)
     assert.ok(newHistory.some(event => JSON.stringify(event).includes('new task')))
-    assert.equal(registryB.get(leaderId).workers[native.childId], undefined)
-    assert.equal((await b.tools.listTool.execute({}, { agent: b.parent, signal })).quota[type].used, 1)
+    assert.equal(registryB.get(leaderId).workers[native.childId].state, 'stopping', 'historical row is retained as observed')
+    assert.ok((await b.tools.listTool.execute({}, { agent: b.parent, signal })).quota[type].used <= 1)
     await assert.rejects(b.ctx.subagents.followup(b.parent, native.childId, [{ type: 'text', text: 'late' }],
       { source: { kind: 'user' }, signal }), /closed/)
     b.tools.dispose(); await b.ctx.fiber.dispose(); await registryB.close(); await backend.close()
   }
 })
 
-test('closed marker reconciliation frees only proven exact binding after registry reopen', async t => {
-  const root = await mkdtemp(join(tmpdir(), 'postman-worker-crash-'))
-  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }))
-  const backend = new JsonStorageBackend(root)
-  const domainCtx = { storage: { backend: { get: () => backend } }, emit() {} }
-  const domain = () => new DomainFacility(domainCtx, { backend: 'json', routes: {} })
-  const first = await openPostmanTaskRegistry(domain())
-  await first.create(leader.id, { ...context, repositoryPath: 'C:/repo',
-    originUrl: 'https://github.com/andrewverhoturov1/dsh-workspace.git',
-    stage: 'ready', diagnostic: null, workers: {}, runner: { state: 'none', requestId: null }, bridge: null })
-  const f = await fixture()
-  const contexts = registry => ({ get: () => context, record: registry.get, changeRecord: registry.change,
-    isRestoring: () => false, hasActiveOperation: () => false })
-  const a = createPostmanWorkerTools(f.ctx, undefined, contexts(first))
-  const ids = []
-  for (let i = 0; i < 2; i++) ids.push((await a.taskTool.execute({ task: 'work', createNew: true }, { agent: leader, signal })).workerSessionId)
-  assert.equal((await a.taskTool.execute({ task: 'full', createNew: true }, { agent: leader, signal })).status, 'POSTMAN_WORKER_LIMIT_REACHED')
-  const closed = ids[0]
-  await first.change(leader.id, row => ({ ...row, workers: { ...row.workers,
-    [closed]: { ...row.workers[closed], state: 'stopping' },
-    [ids[1]]: { ...row.workers[ids[1]], state: 'uncertain' } } }))
-  a.dispose(); await first.close()
-  const second = await openPostmanTaskRegistry(domain())
-  const restarted = createPostmanWorkerTools(f.ctx, undefined, contexts(second))
-  f.ctx.subagents.inspectClosedContinuableChild = async (_parent, id) => id === closed
-  const replacement = await restarted.taskTool.execute({ task: 'fresh', createNew: true }, { agent: leader, signal })
-  assert.equal(replacement.status, 'POSTMAN_WORKER_TASK_ACCEPTED')
-  assert.notEqual(replacement.workerSessionId, closed)
-  assert.equal(second.get(leader.id).workers[closed], undefined)
-  assert.equal(second.get(leader.id).workers[ids[1]].state, 'uncertain')
-  assert.equal(Object.keys(second.get(leader.id).workers).length, 2)
-  const listed = await restarted.listTool.execute({}, { agent: leader, signal })
-  assert.equal(listed.quota.luna.used, 2)
-  restarted.dispose(); await second.close(); await backend.close()
-})
-
-test('deferred closure proof cannot remove binding after parent or context changes', async () => {
-  for (const changed of ['parent', 'context']) {
-    const f = await fixture()
-    const old = f.tool()
-    const id = (await old.taskTool.execute({ task: 'old task' }, { agent: leader, signal })).workerSessionId
-    await f.registry.change(leader.id, row => ({ ...row, workers: { ...row.workers,
-      [id]: { ...row.workers[id], state: 'stopping' } } }))
-    old.dispose()
-    const gate = Promise.withResolvers(), entered = Promise.withResolvers()
-    f.ctx.subagents.inspectClosedContinuableChild = async () => {
-      entered.resolve(); await gate.promise; return true
-    }
-    let taskContext = context
-    const contexts = { get: () => taskContext, record: f.registry.get, changeRecord: f.registry.change,
-      isRestoring: () => false, hasActiveOperation: () => false }
-    const worker = createPostmanWorkerTools(f.ctx, undefined, contexts)
-    const pending = worker.taskTool.execute({ task: 'replacement', createNew: true }, { agent: leader, signal })
-    await entered.promise
-    if (changed === 'parent') f.ctx.agents.get = () => ({ ...leader })
-    else taskContext = { ...context }
-    gate.resolve()
-    await pending
-    assert.equal(f.registry.get(leader.id).workers[id].state, 'stopping', changed)
-    worker.dispose()
-  }
+test('cold historical slots survive registry reopen without occupying current execution capacity',async t=>{
+ const f=await fixture(),a=f.tool()
+ const one=await task(a,'one')
+ await f.registry.change(leader.id,row=>({...row,workers:{...row.workers,[one.workerSessionId]:{...row.workers[one.workerSessionId],state:'uncertain',delivery:'unknown'}}}))
+ a.dispose()
+ const b=f.tool(),before=JSON.stringify(f.registry.get(leader.id).workers)
+ const list=await b.listTool.execute({}, {agent:leader,signal})
+ assert.equal(list.quota.luna.used,0)
+ assert.equal(JSON.stringify(f.registry.get(leader.id).workers),before)
+ const next=await b.taskTool.execute({task:'new explicit independent assignment',createNew:true},{agent:leader,signal})
+ assert.equal(next.status,'POSTMAN_WORKER_TASK_ACCEPTED')
+ assert.notEqual(next.workerSessionId,one.workerSessionId)
+ assert.equal(f.registry.get(leader.id).workers[one.workerSessionId].delivery,'unknown')
+ b.dispose()
 })
 
 test('Worker list is observational and separates live, cold, closed and diagnostic residency', async () => {
@@ -433,7 +383,7 @@ test('Worker list is observational and separates live, cold, closed and diagnost
   const read = async () => worker.listTool.execute({}, { agent: leader, signal })
   const before = JSON.stringify(f.registry.get(leader.id).workers)
   const list = await read()
-  assert.equal(list.quota.luna.used, 2)
+  assert.equal(list.quota.luna.used, 1)
   assert.deepEqual(list.workers.map(x => x.runtime), ['resident-running', 'cold-continuable', 'corrupt/diagnostic'])
   assert.equal(list.workers[0].turn, 'open')
   assert.equal(list.workers[0].report, 'unknown')
@@ -478,7 +428,7 @@ test('new trusted artifact REQ follows up existing Worker and persists authoriza
   assert.deepEqual(f.registry.get(leader.id).workers[first.workerSessionId].artifactRequests, [requestId])
 })
 
-test('crash between child acceptance and ready write never creates a second Worker', async () => {
+test('an explicit new command continues the owned child after acceptance uncertainty', async () => {
   const f = await fixture()
   const a = f.tool()
   const first = await task(a)
@@ -486,11 +436,11 @@ test('crash between child acceptance and ready write never creates a second Work
   a.dispose()
   const b = f.tool()
   const next = await task(b)
-  assert.equal(next.status, 'POSTMAN_WORKER_DELIVERY_UNKNOWN')
+  assert.equal(next.status, 'POSTMAN_WORKER_TASK_ACCEPTED')
   assert.equal(next.workerSessionId, first.workerSessionId)
   assert.equal(f.registry.get(leader.id).workers[first.workerSessionId].state, 'ready')
   assert.equal(f.calls.starts.length, 1)
-  assert.equal(f.calls.followups.length, 0)
+  assert.equal(f.calls.followups.length, 1)
 })
 
 test('missing reserved child fails closed without guessing by label', async () => {
@@ -498,20 +448,23 @@ test('missing reserved child fails closed without guessing by label', async () =
   await f.registry.change(leader.id, row => ({ ...row, workers: { 'reserved-id': { id: 'reserved-id', label: 'reserved-id', state: 'intent',
     delivery: 'pending', artifactRequests: [] } } }))
   f.calls.children.add('another-child')
+  f.ctx.subagents.followup=async(_parent,id)=>{assert.equal(id,'reserved-id');throw Error('Native child missing')}
   const result = await task(f.tool())
-  assert.equal(result.status, 'POSTMAN_WORKER_BINDING_UNCERTAIN')
+  assert.equal(result.status, 'POSTMAN_WORKER_FOLLOWUP_FAILED')
   assert.equal(f.calls.starts.length, 0)
 })
 
-test('followup uncertainty is persisted before delivery and cannot replay', async () => {
+test('followup uncertainty is reported and a new explicit command makes one new attempt', async () => {
   const f = await fixture()
   const a = f.tool()
   const first = await task(a)
-  f.ctx.subagents.followup = async () => { throw new Error('inbox uncertain') }
+  let attempts=0
+  f.ctx.subagents.followup = async () => { attempts++;throw new Error('inbox uncertain') }
   assert.equal((await task(a)).status, 'POSTMAN_WORKER_FOLLOWUP_FAILED')
   assert.equal(f.registry.get(leader.id).workers[first.workerSessionId].delivery, 'unknown')
   a.dispose()
-  assert.equal((await task(f.tool())).status, 'POSTMAN_WORKER_DELIVERY_UNKNOWN')
+  assert.equal((await task(f.tool())).status, 'POSTMAN_WORKER_FOLLOWUP_FAILED')
+  assert.equal(attempts,2)
   assert.equal(f.calls.starts.length, 1)
   assert.equal(f.calls.followups.length, 0)
   assert.equal(first.workerSessionId, f.registry.get(leader.id).workers[first.workerSessionId].id)

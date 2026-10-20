@@ -8,153 +8,21 @@ import {homedir} from 'node:os';
 import {join, resolve, dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {StringDecoder} from 'node:string_decoder';
-import {channel as diagnosticsChannel} from 'node:diagnostics_channel';
 import {inspectLoadedRuntime} from './runtime-identity.mjs';
 
-const normalize = value => resolve(value).replaceAll('\\','/').toLowerCase();
-const overlaps = (a,b) => { a=normalize(a); b=normalize(b); return a===b || a.startsWith(b+'/') || b.startsWith(a+'/'); };
-const inside = (target,root) => normalize(target)===normalize(root) || normalize(target).startsWith(normalize(root)+'/');
 const sameSecret = (a,b) => typeof a==='string' && typeof b==='string' && a.length===b.length && timingSafeEqual(Buffer.from(a),Buffer.from(b));
 const channelRoot = () => process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA,'DSH','Postman','devspace') : join(homedir(),'.dsh','postman','devspace');
 const denied = code => ({isError:true,content:[{type:'text',text:code}]});
 const nativeHelper = join(dirname(fileURLToPath(import.meta.url)),'writer-process.ps1');
-const ordinaryHelper = join(dirname(fileURLToPath(import.meta.url)),'ordinary-process.ps1');
 
 /** In-memory observations belong to this live server instance. Losing them is UNKNOWN. */
-export function createWriterRuntime({root=channelRoot(), helper=nativeHelper,censusHelper=ordinaryHelper}={}) {
-  const local=new AsyncLocalStorage(), records=new Map(), scopes=new Map(), unboundScopes=new Set(), otherTools=new Set();
-  const untrackedRoots=new Set(),coldRoots=new Set(); let saveCensus=()=>{};
-  let observer=null,lastCensus=null,observationLost=false,nextTicket=0;
-  const censusWaiters=new Set(),childChannel=diagnosticsChannel('child_process');
+export function createWriterRuntime({root=channelRoot(), helper=nativeHelper}={}) {
+  const local=new AsyncLocalStorage(), records=new Map(), scopes=new Map();
   const keyFields=['jobId','requestId','leaderSessionId','branch','writeRoot'];
   const boundedWait=async(promise,ms)=>{
     let timer;try{return await Promise.race([promise,new Promise(resolve=>{timer=setTimeout(()=>resolve(null),ms)})]);}
     finally{clearTimeout(timer);}
   };
-  const ordinaryLeases=()=>[...otherTools].map(other=>({id:other.id,writeRoot:other.writeRoot,
-    state:other.active?'ACTIVE':!other.ordinary || other.observationLost?'UNKNOWN':'POSSIBLE_DESCENDANTS'}));
-  function publishOrdinary() {
-    untrackedRoots.clear();for(const target of coldRoots)untrackedRoots.add(target);
-    for(const other of otherTools)if((other.active || other.unknown) && other.writeRoot)untrackedRoots.add(other.writeRoot);
-    saveCensus([...untrackedRoots],ordinaryLeases());
-  }
-  function loseObservation() {
-    if(observationLost)return;
-    observationLost=true;
-    childChannel.unsubscribe(captureChild);
-    // End only the read-only collector, never the ordinary tool or its children.
-    try{observer?.stdin.end();}catch{}
-    for(const other of otherTools)if(other.ordinary){other.observationLost=true;other.unknown=true;}
-    for(const waiter of censusWaiters)waiter.resolve(null);censusWaiters.clear();
-    try{publishOrdinary();}catch{}
-  }
-  function captureChild({process:child}) {
-    const context=local.getStore();
-    if(context?.censusProbe){context.child=child;return;}
-    if(!context?.ordinary)return;
-    const root={child,pid:null,finished:false};context.children.push(root);
-    child.once('spawn',()=>{root.pid=child.pid;});
-    child.once('exit',()=>{root.finished=true;context.postTicket=requestCensus();});
-    child.once('error',()=>{if(!child.pid)root.finished=true;else context.observationLost=true;});
-  }
-  // A missing intermediate parent is never evidence of absence. Every new live
-  // orphan remains a possible descendant until a subsequent complete census has
-  // no possible descendants. Baseline identities require BOTH PID and birth.
-  function possibleDescendant(other,census) {
-    const roots=new Set(other.children.map(child=>child.pid).filter(Boolean));
-    const visit=(row,seen=new Set())=>{
-      if(roots.has(row.pid))return true;
-      if(other.baseline.get(row.pid)?.birth===row.birth)return false;
-      if(seen.has(row.pid))return true;
-      seen.add(row.pid);
-      const parent=census.rows.get(row.parent);
-      if(!parent || BigInt(parent.birth)>BigInt(row.birth))return true;
-      return visit(parent,seen);
-    };
-    for(const row of census.rows.values())if(visit(row))return true;
-    return false;
-  }
-  function observeOrdinary(census) {
-    let changed=false;
-    for(const other of otherTools)if(other.ordinary && !other.active && !other.observationLost && other.baseline &&
-      census.ack>=other.postTicket && other.children.every(child=>child.finished)) {
-      if(!other.children.length || !possibleDescendant(other,census)){other.unknown=false;otherTools.delete(other);changed=true;}
-    }
-    if(changed)try{publishOrdinary();}catch{loseObservation();}
-  }
-  function requestCensus() {
-    if(!observer || observationLost || !Number.isSafeInteger(nextTicket+1))return Infinity;
-    const ticket=++nextTicket;
-    try{observer.stdin.write(JSON.stringify({ticket})+'\n');}catch{loseObservation();return Infinity;}
-    return ticket;
-  }
-  function waitCensus(ticket) {
-    if(observationLost)return Promise.resolve(null);
-    if(lastCensus && lastCensus.ack>=ticket)return Promise.resolve(lastCensus);
-    const result=Promise.withResolvers(),waiter={ticket,resolve:result.resolve};censusWaiters.add(waiter);
-    return boundedWait(result.promise,5000).then(value=>{if(!value)loseObservation();return value;})
-      .finally(()=>censusWaiters.delete(waiter));
-  }
-  function startObservation() {
-    if(observer || observationLost)return;
-    if(process.platform!=='win32' || process.arch!=='x64'){loseObservation();return;}
-    childChannel.subscribe(captureChild);
-    const probe={censusProbe:true};
-    const child=local.run(probe,()=>spawn('pwsh',['-NoProfile','-NonInteractive','-File',censusHelper,'-OwnerPid',String(process.pid)],
-      {windowsHide:true,stdio:['pipe','pipe','ignore']}));
-    observer=child;
-    if(probe.child!==child){loseObservation();child.stdin.end();return;}
-    child.unref();for(const stream of [child.stdin,child.stdout])stream.unref?.();
-    let buffer='';
-    child.stdout.on('data',data=>{
-      if(observationLost){buffer='';return;}
-      buffer+=data;if(buffer.length>4194304){buffer='';loseObservation();return;}
-      let newline;
-      while((newline=buffer.indexOf('\n'))>=0){
-        const line=buffer.slice(0,newline);buffer=buffer.slice(newline+1);
-        try{
-          const value=JSON.parse(line);
-          if(value.version!==1 || value.error || !Number.isSafeInteger(value.sequence) || value.sequence<1 ||
-            value.sequence<=(lastCensus?.sequence??0) || !Number.isSafeInteger(value.ack) || value.ack<0 || value.ack>nextTicket ||
-            value.ack<(lastCensus?.ack??0) || !Array.isArray(value.rows) || value.rows.length>65536)throw Error('CENSUS_UNAVAILABLE');
-          const rows=new Map();
-          for(const row of value.rows){
-            if(!Number.isSafeInteger(row.pid) || row.pid<0 || !Number.isSafeInteger(row.parent) || row.parent<0 ||
-              !/^[0-9]+$/.test(row.birth) || rows.has(row.pid))throw Error('CENSUS_UNAVAILABLE');
-            rows.set(row.pid,row);
-          }
-          if(!rows.has(process.pid) || !rows.has(child.pid))throw Error('CENSUS_UNAVAILABLE');
-          lastCensus={sequence:value.sequence,ack:value.ack,rows};observeOrdinary(lastCensus);
-          for(const waiter of censusWaiters)if(value.ack>=waiter.ticket){censusWaiters.delete(waiter);waiter.resolve(lastCensus);}
-        }catch{loseObservation();}
-      }
-    });
-    child.stdin.on('error',loseObservation);child.once('error',loseObservation);child.once('close',loseObservation);
-  }
-  async function beginOrdinary(other) {
-    other.ordinary=true;other.id=randomUUID();other.children=[];other.baseline=null;other.postTicket=Infinity;other.observationLost=observationLost;
-    // The durable root barrier precedes the actual upstream spawn/effect.
-    publishOrdinary();startObservation();
-    const census=await waitCensus(requestCensus());
-    if(census && !observationLost)other.baseline=census.rows;
-    else{other.observationLost=true;other.unknown=true;}
-  }
-  async function finishOrdinary(other) {
-    other.active=0;other.postTicket=requestCensus();
-    // The native snapshot must acknowledge a request made after handler/root
-    // completion; a later-arriving pre-effect stdout buffer is insufficient.
-    const census=await waitCensus(other.postTicket);
-    if(census)observeOrdinary(census);
-  }
-  async function ordinaryAdmission(writeRoot) {
-    if(typeof writeRoot!=='string' || !writeRoot)return {ok:false,status:'EXIT_UNPROVEN'};
-    if([...untrackedRoots].some(target=>overlaps(target,writeRoot)) && observer && !observationLost)await waitCensus(requestCensus());
-    const held=[...untrackedRoots].some(target=>overlaps(target,writeRoot));
-    return {ok:!held,status:held?(coldRoots.size && [...coldRoots].some(target=>overlaps(target,writeRoot)) || observationLost?'EXIT_UNPROVEN':'OTHER_WRITER_ACTIVE'):'READY',writeRoot};
-  }
-  function closeObservation() {
-    if(observer){loseObservation();observer.stdin.end();childChannel.unsubscribe(captureChild);}
-  }
   function privateJson(file) {
     const stat=lstatSync(file);
     if(!stat.isFile() || stat.isSymbolicLink() || stat.size>65536 || realpathSync(file)!==resolve(file))throw Error('WRITER_BINDING_CHANGED');
@@ -166,8 +34,7 @@ export function createWriterRuntime({root=channelRoot(), helper=nativeHelper,cen
     if(realpathSync(channel)!==resolve(channel)) throw Error('WRITER_BINDING_CHANGED');
     const value=privateJson(join(channel,'binding.json'));
     if(value.jobId!==jobId || value.channel!==channel || value.writerRuntimeVersion!==1 || !value.writeRoot ||
-      (!value.branch && !(value.workspaceOnly===true && value.branch==='')) ||
-      realpathSync(value.writeRoot)!==resolve(value.writeRoot)) throw Error('WRITER_BINDING_CHANGED');
+      typeof value.branch!=='string') throw Error('WRITER_BINDING_CHANGED');
     return value;
   }
   function revoked(record) {
@@ -188,24 +55,24 @@ export function createWriterRuntime({root=channelRoot(), helper=nativeHelper,cen
     const saved=JSON.parse(readFileSync(file,'utf8'));
     if(saved.version!==1 || saved.nativeJobId!==id || saved.bridgeJobId!==record.binding.jobId || saved.scope!==record.scope ||
       saved.generation!==record.generation || ['requestId','leaderSessionId','branch','writeRoot'].some(key=>saved[key]!==record.binding[key]) ||
-      !/^Local\\DSH_Postman_[a-f0-9-]{36}_[a-f0-9]{64}$/.test(saved.jobName??'') || !inside(saved.cwd,record.binding.writeRoot))
+      !/^Local\\DSH_Postman_[a-f0-9-]{36}_[a-f0-9]{64}$/.test(saved.jobName??''))
       throw Error('WRITER_NATIVE_JOB_UNKNOWN');
     return saved;
   }
   function ownControl(input,scope,target) {
     if(typeof scope!=='string' || !target) throw Error('WRITER_BINDING_CHANGED');
     if(input.job_id) for(const record of records.values()) if(record.nativeJobs.has(input.job_id)) {
-      if(record.scope!==scope || normalize(target)!==normalize(record.binding.writeRoot)) throw Error('WRITER_BINDING_CHANGED');
+      if(record.scope!==scope) throw Error('WRITER_BINDING_CHANGED');
       descriptorFor(record,input.job_id); return record;
     }
     const current=scopes.get(scope);
-    if(!input.job_id && current && normalize(target)===normalize(current.binding.writeRoot)) return current;
+    if(!input.job_id && current) return current;
     const candidates=[];
     for(const entry of readdirSync(root,{withFileTypes:true})) {
       if(!entry.isDirectory() || !/^[a-f0-9-]{36}$/.test(entry.name)) continue;
       try {
         const owned=binding(entry.name), marker=JSON.parse(readFileSync(markerFor(owned),'utf8'));
-        if(!markerMatches(marker,owned) || marker.scope!==scope || normalize(target)!==normalize(owned.writeRoot)) continue;
+        if(!markerMatches(marker,owned) || marker.scope!==scope) continue;
         const record={binding:owned,scope,generation:marker.generation,nativeJobs:new Map(),active:0,unknown:true,coldControl:true};
         if(input.job_id) descriptorFor(record,input.job_id);
         candidates.push(record);
@@ -215,19 +82,26 @@ export function createWriterRuntime({root=channelRoot(), helper=nativeHelper,cen
     if(candidates.length!==1) throw Error('WRITER_NATIVE_JOB_UNKNOWN');
     return candidates[0]; // Inspection/stop only: never restored as a fresh native census.
   }
-  function hasClaimedScope(scope) {
-    if(typeof scope!=='string' || !existsSync(root))return false;
+  function savedScope(scope) {
+    if(typeof scope!=='string' || !existsSync(root))return null;
+    const matches=[];
     for(const entry of readdirSync(root,{withFileTypes:true})) {
       if(!entry.isDirectory() || !/^[a-f0-9-]{36}$/.test(entry.name))continue;
-      try{const owned=binding(entry.name),claim=privateJson(markerFor(owned));if(markerMatches(claim,owned) && claim.scope===scope)return true;}catch{}
+      try {
+        const owned=binding(entry.name), claim=privateJson(markerFor(owned));
+        if(markerMatches(claim,owned) && claim.scope===scope)
+          matches.push({binding:owned,scope,generation:claim.generation,nativeJobs:new Map(),active:0,unknown:true,censusLost:true,
+            claimedAt:lstatSync(markerFor(owned)).mtimeMs});
+      }catch{}
     }
-    return false;
+    return matches.sort((a,b)=>b.claimedAt-a.claimedAt)[0]??null;
   }
   async function runTool(name,input,extra,workspaces,operation,readOnly=false) {
     readOnly=readOnly && !(name==='open_workspace' && input.mode==='worktree');
     const scope=extra?._meta?.['openai/session'];
     const alias=name==='open_workspace' && /^postman-writer:([0-9a-f-]{36})$/.exec(input.path??'');
-    let record=typeof scope==='string'?scopes.get(scope):null;
+    let record=typeof scope==='string'?scopes.get(scope)??savedScope(scope):null;
+    if(record){records.set(record.binding.jobId,record);scopes.set(scope,record);}
     // Workspace lookup belongs to the upstream provider. Its errors are not
     // evidence of a changed Host binding and keep the provider's error path.
     let target;
@@ -243,57 +117,32 @@ export function createWriterRuntime({root=channelRoot(), helper=nativeHelper,cen
       if(name==='open_workspace' && typeof input.path==='string' && input.path.startsWith('postman-writer:') && !alias)
         return denied('WRITER_BINDING_CHANGED');
       if(alias) {
-        if(process.platform!=='win32' || !scope || unboundScopes.has(scope)) return denied('DEVSPACE_NATIVE_PROOF_UNAVAILABLE');
+        if(process.platform!=='win32' || !scope) return denied('DEVSPACE_NATIVE_PROOF_UNAVAILABLE');
         const owned=binding(alias[1]); record=records.get(owned.jobId);
         if(!record) {
           const candidate={binding:owned,scope,generation:randomUUID(),active:0,unknown:false,nativeJobs:new Map()};
           if(revoked(candidate)) return denied('WRITER_EXECUTION_REVOKED');
-          if(input.mode && input.mode!=='checkout') return denied('WRITER_BINDING_CHANGED');
           const claim={version:1,...Object.fromEntries(keyFields.map(key=>[key,owned[key]])),scope,generation:candidate.generation};
           try {writeFileSync(markerFor(owned),JSON.stringify(claim),{flag:'wx',mode:0o600});}
-          catch(error){if(error.code==='EEXIST')return denied('DEVSPACE_NATIVE_CENSUS_LOST');throw error;}
+          catch(error){
+            if(error.code!=='EEXIST')throw error;
+            const existing=privateJson(markerFor(owned));
+            if(!markerMatches(existing,owned) || existing.scope!==scope)return denied('WRITER_BINDING_CHANGED');
+            candidate.generation=existing.generation;candidate.unknown=true;candidate.censusLost=true;
+          }
           record=candidate; records.set(owned.jobId,record);
         }
         if(record.scope!==scope || revoked(record)) return denied('WRITER_EXECUTION_REVOKED');
-        if(input.mode && input.mode!=='checkout') return denied('WRITER_BINDING_CHANGED');
-        scopes.set(scope,record); input.path=owned.writeRoot; input.mode='checkout'; target=owned.writeRoot;
+        scopes.set(scope,record); input.path=owned.writeRoot; input.mode??='checkout'; target=owned.writeRoot;
       }
       if(record) {
         if(revoked(record)) return denied('WRITER_EXECUTION_REVOKED');
-        // Native uncertainty remains visible in status/settlement. The Leader
-        // decides whether another authorized operation should proceed.
-        if(!readOnly && name!=='open_workspace' && !['bash','write','edit'].includes(name)) return denied('WRITER_TOOL_NOT_INSTRUMENTED');
-        if(!readOnly && target && !inside(target,record.binding.writeRoot)) return denied('WRITER_BINDING_CHANGED');
-      } else if(!readOnly) {
-        // A cold Postman scope must explicitly obtain a new Host binding, even
-        // after its old hold was released. Metadata loss cannot grant native access.
-        if(hasClaimedScope(scope))return denied('WRITER_BINDING_REQUIRED');
-        if(name==='bash' && input.execution && input.execution!=='foreground') return denied('WRITER_BINDING_REQUIRED');
-        if(scope) unboundScopes.add(scope);
       }
     } catch(error){return validationFailure(error);}
     // No Host validation catch surrounds operation(): thrown/rejected upstream
     // errors and structured isError results retain their original semantics.
     if(readOnly) return await operation();
-    if(!record) {
-      const unknown=name==='bash' || name==='open_workspace' && input.mode==='worktree';
-      const other={id:randomUUID(),writeRoot:target,active:1,unknown}; otherTools.add(other);
-      let effectStarted=false;
-      try{
-        try{
-          if(name==='bash' && target)await beginOrdinary(other);
-          else if(unknown && target){coldRoots.add(target);publishOrdinary();}
-          else publishOrdinary();
-        }catch{other.observationLost=true;other.unknown=true;}
-        effectStarted=true;return await local.run(other,operation);
-      }
-      finally{
-        other.active=0;
-        if(!effectStarted){other.unknown=false;otherTools.delete(other);try{publishOrdinary();}catch{}}
-        else if(other.ordinary){try{await finishOrdinary(other);}catch{other.observationLost=true;other.unknown=true;try{publishOrdinary();}catch{}}}
-        else if(!other.unknown){otherTools.delete(other);try{publishOrdinary();}catch{}}
-      }
-    }
+    if(!record) return await operation();
     record.active++;
     try{return await local.run(record,operation);}finally{record.active--;clearFiniteHold(record);}
   }
@@ -318,7 +167,7 @@ export function createWriterRuntime({root=channelRoot(), helper=nativeHelper,cen
     try{const receipt=JSON.parse(readFileSync(file,'utf8'));if(receipt.generation===record.generation && !lstatSync(file).isSymbolicLink())unlinkSync(file);}catch{}
   }
   function startNative(record,command,cwd,options,shellConfig) {
-    if(!record?.binding || record.coldControl || revoked(record) || !inside(cwd,record.binding.writeRoot)) throw Error('WRITER_EXECUTION_REVOKED');
+    if(!record?.binding || record.coldControl || revoked(record)) throw Error('WRITER_EXECUTION_REVOKED');
     const config=shellConfig();
     const id=randomUUID(), directory=join(record.binding.channel,'native-jobs'); mkdirSync(directory,{recursive:true});
     if(realpathSync(directory)!==resolve(directory)) throw Error('WRITER_BINDING_CHANGED');
@@ -392,13 +241,12 @@ export function createWriterRuntime({root=channelRoot(), helper=nativeHelper,cen
     if(!['foreground','background','status','stop'].includes(execution))return denied('WRITER_EXECUTION_INVALID');
     if(execution==='status' && !input.job_id){
       let jobs=[...record.nativeJobs.values()].map(snapshot);
-      if(record.coldControl){
-        jobs=[];
+      if(record.coldControl || record.censusLost){
         for(const source of record.controlRecords??[record]){
           const directory=join(source.binding.channel,'native-jobs');
           if(!existsSync(directory))continue;
           for(const name of readdirSync(directory).filter(name=>/^[a-f0-9-]{36}[.]json$/.test(name)).slice(-32)){
-            const saved=descriptorFor(source,name.slice(0,-5));jobs.push({native_job_id:saved.nativeJobId,generation:source.generation,state:'UNKNOWN',treeSettled:false,foregroundFinished:false,exitCode:null});
+            const saved=descriptorFor(source,name.slice(0,-5));if(jobs.some(job=>job.native_job_id===saved.nativeJobId))continue;jobs.push({native_job_id:saved.nativeJobId,generation:source.generation,state:'UNKNOWN',treeSettled:false,foregroundFinished:false,exitCode:null});
           }
         }
       }
@@ -444,31 +292,18 @@ export function createWriterRuntime({root=channelRoot(), helper=nativeHelper,cen
       if(keyFields.some(key=>own[key]!==expected[key]) || !sameSecret(own.capability,expected.capability) || !revoked(record))return {ok:false,code:'WRITER_BINDING_CHANGED'};
       if(record.unknown)return {ok:false,code:'DEVSPACE_NATIVE_PROOF_UNAVAILABLE'};
       if(record.active)return {ok:false,code:'WRITER_STILL_RUNNING'};
-      if([...untrackedRoots].some(target=>overlaps(target,own.writeRoot)))return {ok:false,code:'OTHER_WRITER_ACTIVE'};
-      for(const expectedOther of expected.otherWriters??[]){
-        const other=records.get(expectedOther.jobId);
-        if(!other || ['requestId','leaderSessionId','branch','writeRoot'].some(key=>other.binding[key]!==expectedOther[key]) ||
-          other.unknown || other.active || !revoked(other))return {ok:false,code:'OTHER_WRITER_ACTIVE'};
-      }
-      if([...otherTools].some(other=>(!other.writeRoot || overlaps(other.writeRoot,own.writeRoot)) && (other.active || other.unknown)))return {ok:false,code:'OTHER_WRITER_ACTIVE'};
-      if([...records.values()].some(other=>other!==record && overlaps(other.binding.writeRoot,own.writeRoot) &&
-        (other.active || other.unknown || !revoked(other))))return {ok:false,code:'OTHER_WRITER_ACTIVE'};
       record.settlementIssued=true;
       return {ok:true,proof:{version:1,source:'devspace_native_tree',...Object.fromEntries(keyFields.map(key=>[key,own[key]])),generation:record.generation,settledAt:new Date().toISOString()}};
     }catch{return {ok:false,code:'WRITER_BINDING_CHANGED'};}
   }
-  function restoreCensus(saved,persist){
-    if(Array.isArray(saved))for(const target of saved)if(typeof target==='string' && target){untrackedRoots.add(target);coldRoots.add(target);}
-    saveCensus=(roots,leases)=>persist(roots,leases);
-  }
-  return {runTool,bashOperations,background,reconcile,restoreCensus,ordinaryAdmission,ordinaryLeases,closeObservation,untrackedRoots:()=>[...untrackedRoots]};
+  return {runTool,bashOperations,background,reconcile};
 }
 
 /** A private loopback controller; neither MCP nor a model can submit an exit receipt. */
 export async function startWriterControl(runtime,{file=join(homedir(),'.dsh','devspace','writer-control.json'),identityModules=[]}={}) {
   const secret=randomBytes(32).toString('hex');
   const server=createServer(async(req,res)=>{
-    if(req.method!=='POST' || !['/reconcile','/ordinary-admission','/runtime-identity'].includes(req.url) || !sameSecret(req.headers.authorization,'Bearer '+secret)) {
+    if(req.method!=='POST' || !['/reconcile','/runtime-identity'].includes(req.url) || !sameSecret(req.headers.authorization,'Bearer '+secret)) {
       res.writeHead(403); res.end(); return;
     }
     let body='';
@@ -476,34 +311,18 @@ export async function startWriterControl(runtime,{file=join(homedir(),'.dsh','de
       for await(const chunk of req) { body+=chunk; if(body.length>65536) throw Error('Too large'); }
       const input=JSON.parse(body),result=req.url==='/runtime-identity'
         ? await inspectLoadedRuntime([{name:'writer-runtime.mjs',url:import.meta.url},...identityModules])
-        : req.url==='/ordinary-admission'?await runtime.ordinaryAdmission(input.writeRoot):runtime.reconcile(input);
+        : runtime.reconcile(input);
       res.writeHead(200,{'content-type':'application/json'}); res.end(JSON.stringify(result));
     } catch { res.writeHead(400); res.end(); }
   });
   await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});
   const descriptor={version:1,port:server.address().port,secret};
-  let persistenceActive=true;
-  const persist=value=>{
-    if(existsSync(file) && lstatSync(file).isSymbolicLink())throw Error('Writer control redirected');
-    const temporary=file+'.'+randomUUID()+'.tmp';
-    writeFileSync(temporary,JSON.stringify(value),{flag:'wx',mode:0o600});renameSync(temporary,file);
-  };
-  let previous;
-  try{if(existsSync(file))previous=JSON.parse(readFileSync(file,'utf8'));}
-  catch(error){server.close();throw error;}
-  runtime.restoreCensus(previous?.untrackedRoots,(roots,leases)=>{
-    if(!persistenceActive)return;
-    // A delayed old observer must never replace a newer controller descriptor.
-    if(JSON.parse(readFileSync(file,'utf8')).secret!==secret)throw Error('WRITER_CONTROL_GENERATION_CHANGED');
-    persist({...descriptor,untrackedRoots:roots,ordinaryLeases:leases});
-  });
-  try { persist({...descriptor,untrackedRoots:runtime.untrackedRoots(),ordinaryLeases:runtime.ordinaryLeases()}); }
-  catch(error) { server.close(); throw error; }
+  if(existsSync(file) && lstatSync(file).isSymbolicLink()){server.close();throw Error('Writer control redirected');}
+  const temporary=file+'.'+randomUUID()+'.tmp';
+  writeFileSync(temporary,JSON.stringify(descriptor),{flag:'wx',mode:0o600});renameSync(temporary,file);
   return {file,port:descriptor.port,close:async()=>{
-    persistenceActive=false;
-    runtime.closeObservation();
     await new Promise(resolve=>server.close(resolve));
-    try { if(JSON.parse(readFileSync(file,'utf8')).secret===secret)persist({version:1,untrackedRoots:runtime.untrackedRoots(),ordinaryLeases:runtime.ordinaryLeases()}); } catch {}
+    try { if(JSON.parse(readFileSync(file,'utf8')).secret===secret)unlinkSync(file); } catch {}
   }};
 }
 
