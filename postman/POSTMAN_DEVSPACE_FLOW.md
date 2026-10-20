@@ -33,7 +33,7 @@ Leader ─── Secretary (files/ledger; available web_search/web_fetch)
 
 ## 3. Файлы, исследование, изображения
 
-- Для внешнего ChatGPT подключённый `VUDA Local` использует OpenAI Secure MCP Tunnel → местный VUDA stdio и предъявляет собственные MCP-инструменты; Bash не является обязательным промежуточным шагом этого маршрута. Местные агенты DSH используют прямой разрешённый VUDA MCP без туннеля. Инструкции и эксплуатационные ограничения — [VUDA.md](devspace/VUDA.md). Туннель не меняет доставку Leader → Bridge → ChatGPT, Host scope, writer binding и bell; общий VUDA-сеанс одного туннеля нельзя одновременно использовать для независимых lanes.
+- Внешний ChatGPT использует подключённый `VUDA Local` через Secure MCP Tunnel, местные агенты — прямой разрешённый VUDA MCP без туннеля. Выбор маршрута, общий сеанс и обслуживание — [VUDA.md](devspace/VUDA.md); контракт Bridge, scope, writer и bell сохраняется.
 
 - Leader использует `postman_input_files` и exact `--input-files-json <JSON>`. Host по закреплённым descriptors создает native image attachment либо безопасный ZIP входных файлов, передаёт в тот же ChatGPT. Это **транспорт входов**, не обязательный ZIP-результат. Ручные загрузки в ChatGPT не требуются. Не отправлять файлы в GitHub из-за транспорта без явного разрешения.
 - ChatGPT решает задачу реально доступными Web/DevSpace/tools. Каждая отправка получает свой immutable `POSTMAN_REQUEST_ID`; прежние UNKNOWN/FAILED/PROVEN_NOT_SENT сохраняются. Перед восстановлением Host наблюдает прежний собственный чат: найденное сообщение/итог не дублируется, новое корректирующее продолжение проверяет уже выполненное.
