@@ -106,6 +106,9 @@ VUDA — отдельный местный MCP-сервер `visual-ui-debug-age
 Для внешнего ChatGPT предпочтителен подключённый плагин `VUDA Local` через OpenAI
 Secure MCP Tunnel → этот сервер по stdio. Используй его настоящие инструменты из
 своего текущего каталога и их схемы; ради VUDA не требуется запускать DevSpace Bash.
+Подключённые инструменты используй сразу в границах задачи и проверяй эффект действий.
+Проверка серверных `VUDA_BROWSER_PROVIDER`/`DOTENV_CONFIG_PATH` и получение полного
+`tools/list` не являются предварительными условиями этих вызовов.
 Обслуживание и границы принятой проверки —
 [VUDA.md](VUDA.md). Местные агенты DSH обращаются к своему VUDA MCP напрямую, без туннеля.
 
@@ -130,7 +133,7 @@ DevSpace Bash → уже установленный MCP-клиент/SDK → VUD
 Проверь реальную схему сервера и сохраняй один сеанс для
 связанных вызовов `playwright_navigate`, `playwright_click`, `playwright_hover`,
 `playwright_fill`, `playwright_press_key`, `playwright_evaluate`, `playwright_screenshot`.
-Для отдельной проверки задай серверу `VUDA_BROWSER_PROVIDER=local` и
+Только при самостоятельном запуске сервера через SDK задай `VUDA_BROWSER_PROVIDER=local` и
 `DOTENV_CONFIG_PATH` на доступный пустой файл конфигурации; готовый файл в исходниках —
 [vuda-empty.config](../../.agents/skills/pixel-perfect-ui-port/references/vuda-empty.config).
 Не загружай посторонние `.env`, credentials или пользовательский браузерный профиль.
