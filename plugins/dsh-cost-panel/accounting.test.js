@@ -33,6 +33,115 @@ test('sum distinct calls using each call model price rather than the current mod
   assert.equal(result.total, (100 * 10 + 20 * 50 + 50 * 0.1 + 10 * 0.5) / 1e6);
 });
 
+test('legacy auxiliary observer is linked to its native step by usage AND finish echoes', () => {
+  const counts = usage(1000, 0, 0, 0, 100);
+  const old = attempt('legacy', 'gpt-6.1-sol', { purpose: 'auxiliary', usage: null, status: 'started' });
+  const events = [
+    { type: 'step/start', seq: 0, data: { turn: 1, step: 0 } },
+    { type: 'cost-panel/attempt', seq: 1, data: old },
+    { type: 'cost-panel/attempt', seq: 2, data: { ...old, usage: counts } },
+    { type: 'assistant/chunk', seq: 3, data: { turn: 1, step: 0, chunk: { type: 'usage', usage: counts } } },
+    { type: 'cost-panel/attempt', seq: 4, data: { ...old, usage: counts, status: 'stop' } },
+    { type: 'assistant/chunk', seq: 5, data: { turn: 1, step: 0, chunk: { type: 'finish', reason: { kind: 'stop' } } } },
+    { ...assistantMessage(1, 0, 'gpt-6.1-sol', counts), seq: 6 },
+    { type: 'step/end', seq: 7, data: { turn: 1, step: 0 } },
+  ];
+  const original = structuredClone(events);
+  const folded = foldAttempts(header, events);
+  assert.deepEqual(events, original); // no historical journal migration
+  assert.equal(folded.attempts.length, 1);
+  assert.equal(folded.incompleteHistory, false);
+  assert.deepEqual([folded.attempts[0].purpose, folded.attempts[0].turn, folded.attempts[0].step], ['conversation', 1, 0]);
+  assert.deepEqual(folded.attempts[0].usage, counts);
+  assert.ok(Math.abs(summarize(folded, catalog).total - 0.003) < 1e-12);
+});
+
+test('live unmarked stream links on first text or usage chunk, before finish', () => {
+  const counts = usage(1000, 0, 0, 0, 100);
+  const old = attempt('live', 'gpt-6.1-sol', { purpose: 'auxiliary', usage: null, status: 'started' });
+  const events = [
+    { type: 'step/start', seq: 0, data: { turn: 1, step: 0 } },
+    { type: 'cost-panel/attempt', seq: 1, data: old },
+    { type: 'assistant/chunk', seq: 2, data: { turn: 1, step: 0, chunk: { type: 'text-delta', text: 'hello' } } },
+    { type: 'cost-panel/attempt', seq: 3, data: { ...old, usage: counts } },
+    { type: 'assistant/chunk', seq: 4, data: { turn: 1, step: 0, chunk: { type: 'usage', usage: counts } } },
+    { type: 'cost-panel/attempt', seq: 5, data: { ...old, usage: counts, status: 'stop' } },
+    { type: 'assistant/chunk', seq: 6, data: { turn: 1, step: 0, chunk: { type: 'finish', reason: { kind: 'stop' } } } },
+    { ...assistantMessage(1, 0, 'gpt-6.1-sol', counts), seq: 7 },
+  ];
+  for (const length of [2, 3, 4, 5, 6, 7, 8]) {
+    const folded = foldAttempts(header, events.slice(0, length));
+    const result = summarize(folded, catalog);
+    assert.equal(result.calls, 1, 'events prefix ' + length);
+    assert.equal(result.duplicateUncertain, false);
+    assert.equal(result.callsUnknown, false);
+    assert.equal(result.metrics.input.count, length >= 4 ? 1000 : 0);
+    assert.equal(result.metrics.output.count, length >= 4 ? 100 : 0);
+    assert.ok(Math.abs(result.total - (length >= 4 ? 0.003 : 0)) < 1e-12);
+  }
+  const noText = [events[0], events[1], { ...events[3], seq: 2 }, { ...events[4], seq: 3 }];
+  assert.equal(foldAttempts(header, noText).attempts.length, 1);
+  const title = attempt('title', 'gpt-6.1-sol', { purpose: 'title', usage: counts });
+  const compaction = attempt('compact', 'gpt-6.1-sol', { purpose: 'compaction', usage: counts });
+  const extra = [...events, { type: 'cost-panel/attempt', seq: 8, data: title }, { type: 'cost-panel/attempt', seq: 9, data: compaction }];
+  assert.deepEqual(foldAttempts(header, extra).attempts.map(a => a.purpose), ['conversation', 'title', 'compaction']);
+});
+
+test('legacy same-usage coincidence without adjacent stream echoes stays unknown, not merged', () => {
+  const counts = usage(1000, 0, 0, 0, 100);
+  const old = attempt('uncertain', 'gpt-6.1-sol', { purpose: 'auxiliary', usage: null, status: 'started' });
+  const events = [
+    { type: 'step/start', seq: 0, data: { turn: 1, step: 0 } },
+    { type: 'cost-panel/attempt', seq: 1, data: old },
+    { type: 'cost-panel/attempt', seq: 2, data: { ...old, usage: counts } },
+    { type: 'tool/result', seq: 3, data: {} }, // even equal usage is insufficient without causal adjacency
+    { type: 'assistant/chunk', seq: 4, data: { turn: 1, step: 0, chunk: { type: 'usage', usage: counts } } },
+    { type: 'cost-panel/attempt', seq: 5, data: { ...old, usage: counts, status: 'stop' } },
+    { type: 'tool/result', seq: 6, data: {} },
+    { type: 'assistant/chunk', seq: 7, data: { turn: 1, step: 0, chunk: { type: 'finish', reason: { kind: 'stop' } } } },
+    { ...assistantMessage(1, 0, 'gpt-6.1-sol', counts), seq: 8 },
+    { type: 'step/end', seq: 9, data: { turn: 1, step: 0 } },
+  ];
+  const folded = foldAttempts(header, events);
+  assert.equal(folded.attempts.length, 2);
+  assert.equal(folded.incompleteHistory, true);
+  const result = summarize(folded, catalog);
+  assert.equal(result.callsUnknown, true);
+  assert.equal(result.costUnknown, true);
+});
+
+test('unmarked same-step retries each count once; multiple usage snapshots never add twice', () => {
+  const first = attempt('first', 'gpt-6.1-sol', { purpose: 'auxiliary', usage: null, status: 'started' });
+  const second = attempt('second', 'gpt-6.1-sol', { purpose: 'auxiliary', usage: null, status: 'started' });
+  const counts1 = usage(100, 0, 0, 0, 10);
+  const counts2 = usage(200, 0, 0, 0, 20);
+  const observed = (seq, data) => ({ type: 'cost-panel/attempt', seq, data });
+  const native = (seq, type, data) => ({ type: 'assistant/chunk', seq, data: { turn: 1, step: 0, chunk: { type, ...data } } });
+  const events = [
+    { type: 'step/start', seq: 0, data: { turn: 1, step: 0 } },
+    observed(1, first),
+    observed(2, { ...first, usage: counts1 }),
+    native(3, 'usage', { usage: counts1 }),
+    observed(4, { ...first, usage: { ...counts1, outputTokens: 12 } }),
+    native(5, 'usage', { usage: { outputTokens: 12 } }),
+    observed(6, { ...first, usage: { ...counts1, outputTokens: 12 }, status: 'error' }),
+    native(7, 'finish', { reason: { kind: 'error' } }),
+    { type: 'llm/retry', seq: 8, data: { provider: 'openai', turn: 1, step: 0, retry: 1 } },
+    observed(9, second),
+    observed(10, { ...second, usage: counts2 }),
+    native(11, 'usage', { usage: counts2 }),
+    observed(12, { ...second, usage: counts2, status: 'stop' }),
+    native(13, 'finish', { reason: { kind: 'stop' } }),
+    { ...assistantMessage(1, 0, 'gpt-6.1-sol', counts2), seq: 14 },
+  ];
+  const folded = foldAttempts(header, events);
+  assert.equal(folded.attempts.length, 2);
+  assert.equal(folded.incompleteHistory, false);
+  assert.deepEqual(folded.attempts.map(a => a.id), ['first', 'second']);
+  assert.deepEqual(folded.attempts.map(a => a.usage.outputTokens), [12, 20]);
+  assert.ok(Math.abs(summarize(folded, catalog).total - 0.00092) < 1e-12);
+});
+
 test('legacy same-turn-step retries remain explicitly incomplete despite final usage', () => {
   const events = [
     { type: 'request/header', seq: 0, data: { header: { config: { model: 'gpt-6-luna', provider: 'openai' } } } },

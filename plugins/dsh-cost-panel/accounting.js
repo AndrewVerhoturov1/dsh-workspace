@@ -12,27 +12,78 @@ export function mergeUsage(previous, next) {
   }
   return Object.keys(usage).length ? usage : null;
 }
+function correlateNativeStreams(events, seedLength) {
+  // The observer appends immediately before yielding each native chunk.
+  // Sequence adjacency, chunk kind, and the active step prove stream identity;
+  // matching token numbers by themselves never do.
+  const evidence = new Map(), seenNative = new Set();
+  let activeStep = null;
+  for (let i = 0; i < events.length; i++) {
+    const native = events[i], observer = events[i - 1];
+    if (native.seq < seedLength) continue;
+    if (native.type === 'step/start') activeStep = 's:' + native.data.turn + ':' + native.data.step;
+    if (native.type === 'step/end' || native.type === 'turn/end') activeStep = null;
+    if (native.type !== 'assistant/chunk') continue;
+    const data = native.data, chunk = data?.chunk;
+    const key = 's:' + data?.turn + ':' + data?.step;
+    if (observer?.type === 'cost-panel/attempt' && observer.seq >= seedLength &&
+        native.seq === observer.seq + 1 && data?.turn != null && data?.step != null) {
+      const d = observer.data;
+      if (d?.id != null && ['auxiliary', 'conversation'].includes(d.purpose)) {
+        const id = 'p:' + d.id;
+        const proof = evidence.get(id) ?? { key, turn: data.turn, step: data.step, start: false, usage: false, finish: false, conflict: false };
+        if (proof.key !== key) proof.conflict = true;
+        if (!seenNative.has(key) && activeStep === key && d.status === 'started' && d.usage == null &&
+            chunk?.type !== 'usage' && chunk?.type !== 'finish') proof.start = true;
+        if (chunk?.type === 'usage' && chunk.usage && d.usage &&
+            Object.entries(chunk.usage).some(([, value]) => typeof value === 'number') &&
+            Object.entries(chunk.usage).every(([field, value]) =>
+              typeof value !== 'number' || typeof d.usage[field] === 'number' && d.usage[field] >= value))
+          proof.usage = true;
+        if (chunk?.type === 'finish' && chunk.reason?.kind === d.status) proof.finish = true;
+        evidence.set(id, proof);
+      }
+    }
+    seenNative.add(key);
+  }
+  const linked = new Map(), uncertain = new Set();
+  for (const [id, proof] of evidence) {
+    if (!proof.conflict && (proof.start || proof.usage || proof.finish)) linked.set(id, proof);
+    else uncertain.add(proof.key);
+  }
+  return { linked, uncertain };
+}
+
 export function foldAttempts(header, events) {
   const attempts = new Map();
   let route = {};
   let legacyCompaction = false;
   let legacyRetry = false;
-  const observedSteps = new Set();
+  const observedSteps = new Set(), nativeFallbackSteps = new Set();
+  const { linked, uncertain } = correlateNativeStreams(events, header.seedLength ?? 0);
+  let activeStep = null;
   for (const event of events) {
     const d = event.data;
     if (event.type === 'request/header') route = d.header.config;
     if (event.seq < (header.seedLength ?? 0)) continue;
+    if (event.type === 'step/start') activeStep = 's:' + d.turn + ':' + d.step;
+    if (event.type === 'step/end' || event.type === 'turn/end') activeStep = null;
     if (event.type === 'compaction/start') legacyCompaction = true;
     if (event.type === 'cost-panel/attempt') {
-      if (d.purpose === 'conversation' && d.turn != null) {
-        const stepKey = 's:' + d.turn + ':' + d.step;
+      const id = 'p:' + d.id;
+      const proof = d.turn == null || d.step == null ? linked.get(id) : null;
+      const observed = proof ? { ...d, purpose: 'conversation', turn: proof.turn, step: proof.step } : d;
+      if (d.purpose === 'auxiliary' && d.turn == null && !proof && activeStep) uncertain.add(activeStep);
+      if (observed.purpose === 'conversation' && observed.turn != null && observed.step != null) {
+        const stepKey = 's:' + observed.turn + ':' + observed.step;
         observedSteps.add(stepKey);
         attempts.delete(stepKey);
       }
-      const old = attempts.get('p:' + d.id);
-      attempts.set('p:' + d.id, { ...old, ...d, usage: mergeUsage(old?.usage, d.usage), observed: true });
+      const old = attempts.get(id);
+      attempts.set(id, { ...old, ...observed, usage: mergeUsage(old?.usage, d.usage), observed: true });
     } else if (event.type === 'assistant/chunk' || event.type === 'assistant/message') {
       const key = 's:' + d.turn + ':' + d.step;
+      nativeFallbackSteps.add(key);
       const old = attempts.get(key);
       if (observedSteps.has(key)) continue; // the observer's full snapshots own these calls
       const record = old ?? { ...route, purpose: 'conversation', usage: null, status: 'unknown' };
@@ -56,7 +107,8 @@ export function foldAttempts(header, events) {
   // Old compaction calls have no durable token usage; never turn that gap into zero.
   const compactions = [...attempts.values()].filter(a => a.purpose === 'compaction');
   const markerCount = events.filter(e => e.seq >= (header.seedLength ?? 0) && e.type === 'compaction/start').length;
-  return { attempts: [...attempts.values()], incompleteHistory: legacyRetry || legacyCompaction && compactions.length < markerCount };
+  const ambiguous = [...uncertain].some(key => nativeFallbackSteps.has(key) && !observedSteps.has(key));
+  return { attempts: [...attempts.values()], duplicateUncertain: ambiguous, incompleteHistory: legacyRetry || ambiguous || legacyCompaction && compactions.length < markerCount };
 }
 function ratesFor(attempt, usage, catalog) {
   const provider = attempt.provider === 'codex' ? 'openai' : attempt.provider; // API-equivalent estimate, not subscription billing
@@ -111,7 +163,7 @@ export function summarize(fold, catalog) {
   for (const key of ['input', 'read', 'write', 'output']) { total += metrics[key].cost; costUnknown ||= metrics[key].costUnknown; }
   if (fold.incompleteHistory) for (const m of Object.values(metrics)) { m.countUnknown = true; m.costUnknown = true; }
   for (const m of Object.values(metrics)) m.share = !costUnknown && !m.costUnknown && total > 0 ? m.cost / total * 100 : null;
-  return { calls: fold.attempts.length, callsUnknown: fold.incompleteHistory, total, costKnown: ['input', 'read', 'write', 'output'].some(key => metrics[key].costKnown), costUnknown, metrics };
+  return { calls: fold.attempts.length, callsUnknown: fold.incompleteHistory, duplicateUncertain: !!fold.duplicateUncertain, total, costKnown: ['input', 'read', 'write', 'output'].some(key => metrics[key].costKnown), costUnknown, metrics };
 }
 export function taskTeam(headers, currentId) {
   const byId = new Map(headers.map(h => [h.id, h]));

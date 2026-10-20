@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Context } from '@deepseek-ai/cordis';
-import { LlmAdapter, LlmRuntime, markAgentLoopRequest } from '@deepseek-ai/dsh-llm';
+import { LlmAdapter, LlmRuntime, markAgentLoopRequest, isAgentLoopRequest } from '@deepseek-ai/dsh-llm';
 import { SessionStore } from '@deepseek-ai/dsh-session';
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection';
 import { rpcResultSchema } from '@deepseek-ai/dsh-host-apiproxy/api/rpc.schema';
@@ -63,20 +63,58 @@ test('native SessionStore + marked Agent Loop request records exact session step
   const request = markAgentLoopRequest({ sessionId: session.id, provider: 'p', model: 'm', messages: [], testChunks: original });
   const yielded = [];
   const iter = h.llm.stream(request);
-  for await (const item of iter) yielded.push(item);
+  for await (const item of iter) {
+    yielded.push(item);
+    session.append('assistant/chunk', { turn: 1, step: 0, chunk: item });
+  }
+  session.append('assistant/message', { turn: 1, step: 0, message: { source: { kind: 'model', provider: 'p', model: 'm' } }, usage: usage(10, 4) });
   assert.deepEqual(yielded, original);
   const records = session.events.filter(e => e.type === 'cost-panel/attempt').map(e => e.data);
   assert.ok(session.events.filter(e => e.type === 'cost-panel/attempt').every(e => e.ignorable === true));
   assert.equal(records.length, 3);
-  assert.equal(records[0].purpose, 'conversation');
+  assert.equal(records[0].purpose, 'conversation'); // same-module marked calls still work without native echoes
   assert.deepEqual([records[0].turn, records[0].step], [1, 0]);
   assert.deepEqual(records[1].usage, usage(10, 4));
   assert.equal(records[2].status, 'stop');
-  assert.equal(foldAttempts(session.header, session.events).attempts.length, 1);
-  assert.equal(h.projections.snapshot(session).values.costPanelRevision, 3);
+  const folded = foldAttempts(session.header, session.events);
+  assert.equal(folded.attempts.length, 1);
+  assert.equal(folded.attempts[0].purpose, 'conversation');
+  assert.deepEqual([folded.attempts[0].turn, folded.attempts[0].step], [1, 0]);
+  assert.equal(folded.incompleteHistory, false);
+  assert.equal(h.projections.snapshot(session).values.costPanelRevision, 6);
   const beforeUnknown = h.projections.snapshot(session).values.costPanelRevision;
   session.append('extension/future-event', { payload: 1 });
   assert.equal(h.projections.snapshot(session).values.costPanelRevision, beforeUnknown);
+});
+
+test('separate Agent Loop module WeakSet: native stream evidence prevents double calls and costs', async t => {
+  const h = await harness(t);
+  const session = sessionWithStep(h.store, 'foreign-module');
+  const request = { sessionId: session.id, provider: 'openai', serviceTier: 'default', model: 'gpt-6.1-sol', messages: [],
+    testChunks: [chunk('usage', { usage: usage(1000, 100) }), chunk('finish', { reason: { kind: 'stop' } })] };
+  const hostModuleMarks = new WeakSet([request]);
+  assert.equal(hostModuleMarks.has(request), true);
+  assert.equal(isAgentLoopRequest(request), false); // the panel's peer module cannot see Host marks
+  for await (const item of h.llm.stream(request)) session.append('assistant/chunk', { turn: 1, step: 0, chunk: item });
+  session.append('assistant/message', { turn: 1, step: 0, message: { source: { kind: 'model', provider: 'openai', model: 'gpt-6.1-sol' } }, usage: usage(1000, 100) });
+  const folded = foldAttempts(session.header, session.events);
+  assert.equal(folded.attempts.length, 1);
+  assert.equal(folded.attempts[0].purpose, 'conversation');
+  assert.equal(folded.incompleteHistory, false);
+  const result = await h.rpcRegistration[1]('get', { sessionId: session.id }, new AbortController().signal);
+  assert.equal(result.ok, true);
+  assert.equal(result.value.own.calls, 1);
+  assert.equal(result.value.own.metrics.input.count, 1000);
+  assert.equal(result.value.own.metrics.output.count, 100);
+  assert.ok(Math.abs(result.value.own.total - 0.003) < 1e-12);
+  assert.ok(Math.abs(result.value.team.total - 0.003) < 1e-12);
+
+  // An actual title call with the SAME usage is still a separate request.
+  const title = { ...request, purpose: 'title' };
+  for await (const _ of h.llm.stream(title)) { /* not a native assistant step */ }
+  const distinct = foldAttempts(session.header, session.events);
+  assert.deepEqual(distinct.attempts.map(a => a.purpose), ['conversation', 'title']);
+  assert.equal(distinct.attempts.length, 2);
 });
 
 test('cost attempts reopen with the native persistence reader after the plugin is disabled; unknown required events remain rejected', async t => {
@@ -118,8 +156,9 @@ test('separate retry requests on same turn-step survive fold and auxiliary compa
   for (const request of [first, second]) {
     request.testChunks = [chunk('usage', { usage: usage(1, 1) }), chunk('finish', { reason: { kind: 'error', failure: { code: 'TEST', message: 'Test request failure' } } })];
     const iter = h.llm.stream(request);
-    for await (const _ of iter) { /* consume real observer stream */ }
+    for await (const item of iter) session.append('assistant/chunk', { turn: 1, step: 0, chunk: item });
   }
+  session.append('assistant/message', { turn: 1, step: 0, message: { source: { kind: 'model', provider: 'p', model: 'm' } }, usage: usage(1, 1) });
   const compact = { sessionId: session.id, provider: 'p', model: 'm', purpose: 'compaction', messages: [] };
   const compIter = h.llm.stream({ ...compact, messages: [], testChunks: [chunk('usage', { usage: usage(3, 2) }), chunk('finish', { reason: { kind: 'stop' } })] });
   for await (const _ of compIter) { /* consume */ }
@@ -207,7 +246,9 @@ test('observer persists merged partial usage, with one attempt and no repeated o
   const h = await harness(t);
   const session = sessionWithStep(h.store, 'partial');
   const chunks = [chunk('usage', { usage: usage(10, 4) }), chunk('usage', { usage: { outputTokens: 6 } }), chunk('usage', { usage: { inputTokens: 0, outputTokens: 0 } }), chunk('finish', { reason: { kind: 'stop' } })];
-  for await (const _ of h.llm.stream(markAgentLoopRequest({ sessionId: session.id, provider: 'openai', serviceTier: 'default', model: 'gpt-6-luna', messages: [], testChunks: chunks }))) { /* consume */ }
+  for await (const item of h.llm.stream(markAgentLoopRequest({ sessionId: session.id, provider: 'openai', serviceTier: 'default', model: 'gpt-6-luna', messages: [], testChunks: chunks })))
+    session.append('assistant/chunk', { turn: 1, step: 0, chunk: item });
+  session.append('assistant/message', { turn: 1, step: 0, message: { source: { kind: 'model', provider: 'openai', model: 'gpt-6-luna' } }, usage: usage(10, 6) });
   const records = session.events.filter(e => e.type === 'cost-panel/attempt');
   assert.deepEqual(records.at(-1).data.usage, usage(10, 6));
   assert.equal(foldAttempts(session.header, session.events).attempts.length, 1);

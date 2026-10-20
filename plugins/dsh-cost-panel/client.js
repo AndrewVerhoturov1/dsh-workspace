@@ -21,23 +21,30 @@ window.__ModuleLoader__.load({ id: 'dsh-cost-panel', factory: require => {
     const sessions = ctx.get('sessions');
     const lastKnown = new Map(); // display retention is scoped to each session, not another store
     const known = (value, flag) => value?.[flag] ?? false;
-    const retain = (previous, next, field, flag, unknown) => {
-      const hasNext = known(next, flag);
+    const retain = (previous, next, field, flag, unknown, provisional = false) => {
+      const hasNext = !provisional && known(next, flag);
       const hasPrevious = known(previous, flag);
       const value = hasNext ? (next[unknown] && hasPrevious ? Math.max(previous[field], next[field]) : next[field]) : previous?.[field] ?? 0;
-      return { [field]: value, [flag]: hasNext || hasPrevious, [unknown]: !hasNext && hasPrevious || !!next?.[unknown] };
+      return { [field]: value, [flag]: hasNext || hasPrevious, [unknown]: provisional || !hasNext && hasPrevious || !!next?.[unknown] };
     };
     function remember(previous, next) {
+      // An unverified observer/native overlap is provisional, not a lower bound to
+      // keep forever. Retain only prior values free of that possible duplication.
+      const priorOwn = previous?.own?.duplicateUncertain ? null : previous?.own;
+      const priorTeam = previous?.team?.duplicateUncertain ? null : previous?.team;
+      const provisionalOwn = !!next.own?.duplicateUncertain;
+      const provisionalTeam = !!next.team?.duplicateUncertain;
       const metrics = {};
       for (const key of ['input', 'reasoning', 'read', 'write', 'output']) {
-        const before = previous?.own?.metrics?.[key];
+        const before = priorOwn?.metrics?.[key];
         const after = next.own?.metrics?.[key];
-        metrics[key] = { ...after, ...retain(before, after, 'count', 'countKnown', 'countUnknown'), ...retain(before, after, 'cost', 'costKnown', 'costUnknown'), share: after?.share ?? null };
+        metrics[key] = { ...after, ...retain(before, after, 'count', 'countKnown', 'countUnknown', provisionalOwn), ...retain(before, after, 'cost', 'costKnown', 'costUnknown', provisionalOwn), share: provisionalOwn ? null : after?.share ?? null };
         if (metrics[key].countUnknown || metrics[key].costUnknown) metrics[key].share = null;
       }
-      const own = { ...next.own, calls: Math.max(previous?.own?.calls ?? 0, next.own?.calls ?? 0), callsUnknown: !!next.own?.callsUnknown || (previous?.own?.calls ?? 0) > (next.own?.calls ?? 0), metrics,
-        ...retain(previous?.own, next.own, 'total', 'costKnown', 'costUnknown') };
-      const team = { ...next.team, ...retain(previous?.team, next.team, 'total', 'costKnown', 'costUnknown') };
+      const own = { ...next.own, calls: provisionalOwn ? priorOwn?.calls ?? null : next.own?.callsUnknown ? Math.max(priorOwn?.calls ?? 0, next.own?.calls ?? 0) : next.own?.calls ?? 0,
+        callsUnknown: provisionalOwn || !!next.own?.callsUnknown, metrics,
+        ...retain(priorOwn, next.own, 'total', 'costKnown', 'costUnknown', provisionalOwn) };
+      const team = { ...next.team, ...retain(priorTeam, next.team, 'total', 'costKnown', 'costUnknown', provisionalTeam) };
       if (own.costUnknown) for (const m of Object.values(metrics)) m.share = null;
       return { ...next, own, team };
     }

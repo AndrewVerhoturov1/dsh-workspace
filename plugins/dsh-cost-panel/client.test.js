@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import { foldAttempts, summarize } from './accounting.js';
+import catalog from './model-prices.json' with { type: 'json' };
 
 const source = fs.readFileSync(new URL('./client.js', import.meta.url), 'utf8');
 const svgPaths = {
@@ -297,6 +299,93 @@ test('dispose removes subscriptions/style and aborts in-flight unary request wit
 });
 const displayed = f => Object.fromEntries(Object.entries(f.metrics()).map(([key, node]) => [key, node.props.children[1].props.children]));
 const focus = (f, key) => f.metrics()[key].props.onFocus({ currentTarget: { getBoundingClientRect: () => ({ left: 1, top: 100, width: 20, height: 20 }) } });
+
+test('live provisional double-count can correct in place for known AND absent processing tier', async () => {
+  for (const serviceTier of ['default', undefined]) {
+    const config = { provider: 'openai', model: 'gpt-6.1-sol', ...(serviceTier ? { serviceTier } : {}) };
+    const counts = { inputTokens: 1000, reasoningTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 100 };
+    const record = { id: 2, ...config, purpose: 'auxiliary', usage: null, status: 'started' };
+    const events = [
+      { type: 'request/header', seq: 0, data: { header: { config } } },
+      { type: 'step/start', seq: 1, data: { turn: 1, step: 0 } },
+      { type: 'cost-panel/attempt', seq: 2, data: record },
+      { type: 'cost-panel/attempt', seq: 3, data: { ...record, usage: counts } },
+      { type: 'tool/result', seq: 4, data: {} }, // no evidence to link yet
+      { type: 'assistant/chunk', seq: 5, data: { turn: 1, step: 0, chunk: { type: 'usage', usage: counts } } },
+      { type: 'cost-panel/attempt', seq: 6, data: { ...record, usage: counts, status: 'stop' } },
+      { type: 'assistant/chunk', seq: 7, data: { turn: 1, step: 0, chunk: { type: 'finish', reason: { kind: 'stop' } } } },
+      { type: 'assistant/message', seq: 8, data: { turn: 1, step: 0, message: { source: { kind: 'model', ...config } }, usage: counts } },
+    ];
+    const snapshot = (length, history = events) => {
+      const own = summarize(foldAttempts({ seedLength: 0 }, history.slice(0, length)), catalog);
+      return { sessionId: 'child', own, team: { rootId: 'child', sessions: 1, total: own.total,
+        costKnown: own.costKnown, costUnknown: own.costUnknown, duplicateUncertain: own.duplicateUncertain } };
+    };
+    const provisional = snapshot(6);
+    assert.equal(provisional.own.calls, 2);
+    assert.equal(provisional.own.duplicateUncertain, true);
+    assert.ok(Math.abs(provisional.own.total - 0.006) < 1e-12);
+    const fresh = fixture({ result: provisional });
+    await fresh.settle(0); // no reliable baseline: do not show a double charge
+    assert.equal(displayed(fresh).calls, '—');
+    assert.equal(displayed(fresh).cost, '—');
+    assert.equal(displayed(fresh).team, '—');
+    assert.equal(displayed(fresh).input, '—');
+    fresh.dispose();
+
+    const f = fixture({ result: snapshot(3) }); // observer started, before any usage
+    await f.settle(0);
+    assert.equal(displayed(f).calls, '1');
+    assert.equal(displayed(f).cost, '—');
+    f.listChanged();
+    await f.settle(1, provisional); // ambiguous stream cannot increase trusted subtotal
+    assert.equal(displayed(f).calls, '1*');
+    assert.equal(displayed(f).cost, '—');
+    assert.equal(displayed(f).team, '—');
+    assert.equal(displayed(f).input, '—');
+
+    f.listChanged();
+    const completed = snapshot(8); // finish echo, before final assistant/message
+    assert.equal(completed.own.duplicateUncertain, false);
+    assert.equal(completed.own.calls, 1);
+    await f.settle(2, completed);
+    assert.equal(displayed(f).calls, '1');
+    assert.equal(displayed(f).cost, serviceTier ? '$0.0030' : '$0.0030*');
+    assert.equal(displayed(f).team, serviceTier ? '$0.0030' : '$0.0030*');
+    assert.equal(displayed(f).input, '1.0k');
+    assert.equal(displayed(f).output, '100');
+
+    f.listChanged();
+    await f.settle(3, snapshot(9)); // native final message cannot resurrect duplicate
+    assert.equal(displayed(f).calls, '1');
+    assert.equal(displayed(f).cost, serviceTier ? '$0.0030' : '$0.0030*');
+    f.dispose();
+
+    // The ordinary streaming path must be accurate BEFORE the finish chunk.
+    const streaming = [
+      events[0], events[1], events[2],
+      { type: 'assistant/chunk', seq: 3, data: { turn: 1, step: 0, chunk: { type: 'text-delta', text: 'x' } } },
+      { ...events[3], seq: 4 },
+      { ...events[5], seq: 5 },
+      { ...events[6], seq: 6 },
+      { ...events[7], seq: 7 },
+      events[8],
+    ];
+    const live = fixture({ result: snapshot(3, streaming) });
+    await live.settle(0);
+    assert.equal(displayed(live).calls, '1');
+    for (const [call, prefix] of [[1, 6], [2, 7], [3, 8], [4, 9]]) {
+      live.listChanged();
+      await live.settle(call, snapshot(prefix, streaming));
+      assert.equal(displayed(live).calls, '1');
+      assert.equal(displayed(live).input, '1.0k');
+      assert.equal(displayed(live).output, '100');
+      assert.equal(displayed(live).cost, serviceTier ? '$0.0030' : '$0.0030*');
+      assert.equal(displayed(live).team, serviceTier ? '$0.0030' : '$0.0030*');
+    }
+    live.dispose();
+  }
+});
 
 test('loading, confirmed zero, unknown and first retrieval error stay distinct', async () => {
   const f = fixture({ sessionId: 'empty' });
