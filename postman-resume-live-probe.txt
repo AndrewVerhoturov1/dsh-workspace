@@ -1,0 +1,2 @@
+Temporary lifecycle probe for merged PR 479.
+No product changes; this draft PR will be closed after live acceptance.
