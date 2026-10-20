@@ -336,12 +336,13 @@ export async function toCodexContext(options: GenerateOptions, attachments?: Att
  * @param usage - cumulative usage from the terminal pi-ai event.
  * @returns known counts without inventing confirmed SDK zeros.
  */
-export function mapUsage(usage: PiUsage): TokenUsage & { inputTokensKnown?: false; outputTokensKnown?: false } {
+export function mapUsage(usage: PiUsage): TokenUsage & { inputTokensKnown?: false; outputTokensKnown?: false; cacheWriteTokensKnown?: true } {
   const raw = (usage as PiUsage & { openaiResponsesUsage?: { cache_write_tokens?: unknown } }).openaiResponsesUsage
   const rawWrite = raw?.cache_write_tokens
+  const rawWriteKnown = typeof rawWrite === 'number' && Number.isFinite(rawWrite) && rawWrite >= 0
   const cacheWrite = raw === undefined
     ? (usage.cacheWrite > 0 ? usage.cacheWrite : undefined)
-    : (typeof rawWrite === 'number' && Number.isFinite(rawWrite) && rawWrite >= 0 ? rawWrite : undefined)
+    : (rawWriteKnown ? rawWrite : undefined)
   return {
     inputTokens: usage.input,
     outputTokens: usage.output,
@@ -350,6 +351,7 @@ export function mapUsage(usage: PiUsage): TokenUsage & { inputTokensKnown?: fals
     ...usage.reasoning !== undefined && usage.reasoning > 0 ? { reasoningTokens: usage.reasoning } : {},
     ...usage.cacheRead > 0 ? { cacheReadTokens: usage.cacheRead } : {},
     ...cacheWrite === undefined ? {} : { cacheWriteTokens: cacheWrite },
+    ...rawWriteKnown ? { cacheWriteTokensKnown: true as const } : {},
   }
 }
 

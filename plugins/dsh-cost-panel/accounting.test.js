@@ -447,3 +447,112 @@ test('partial prompt subtotal proves the higher tier only above the threshold', 
   assert.equal(unknownInput.metrics.output.costUnknown, true);
 });
 
+
+test('cache-write scenario replaces input category without double charging known writes', () => {
+  const counts = usage(1000, 0, 2000, 0, 100);
+  const unproven = cost([attempt('legacy-zero', 'gpt-6.1-sol', { usage: counts })]);
+  const baseline = (1000 * 2 + 2000 * 0.1 + 100 * 10) / 1e6;
+  assert.equal(unproven.total, baseline);
+  assert.equal(unproven.metrics.write.count, 0); // original accounting is unchanged
+  assert.equal(unproven.writeScenario.tokens, 1000);
+  assert.equal(unproven.writeScenario.extra, 1000 * (2.5 - 2) / 1e6);
+  assert.equal(unproven.writeScenario.total, baseline + unproven.writeScenario.extra);
+  assert.equal(unproven.writeScenario.costKnown, true);
+  assert.equal(unproven.writeScenario.costUnknown, false);
+
+  const provenZero = cost([attempt('provider-zero', 'gpt-6.1-sol', { usage: { ...counts, cacheWriteTokensKnown: true } })]);
+  assert.equal(provenZero.total, baseline);
+  assert.equal(provenZero.writeScenario.tokens, 0);
+  assert.equal(provenZero.writeScenario.extra, 0);
+  assert.equal(provenZero.writeScenario.total, baseline);
+  const provenPositive = cost([attempt('provider-write', 'gpt-6.1-sol', { usage: usage(1000, 0, 2000, 50, 100) })]);
+  assert.equal(provenPositive.writeScenario.extra, 0);
+  assert.equal(provenPositive.total, baseline + 50 * 2.5 / 1e6);
+  assert.equal(provenPositive.writeScenario.total, provenPositive.total);
+});
+
+test('provider-confirmed zero provenance survives durable partial snapshots; old normalized zero does not', () => {
+  const initial = attempt('one', 'gpt-6-luna', { usage: usage(200, 0, 500, 0, 1) });
+  const events = [{ type: 'cost-panel/attempt', seq: 0, data: initial }];
+  const old = foldAttempts(header, events);
+  assert.equal(old.attempts[0].usage.cacheWriteTokensKnown, undefined);
+  assert.equal(summarize(old, catalog).writeScenario.tokens, 200);
+  events.push({ type: 'cost-panel/attempt', seq: 1, data: { id: 'one', usage: { cacheWriteTokens: 0, cacheWriteTokensKnown: true } } });
+  events.push({ type: 'cost-panel/attempt', seq: 2, data: { id: 'one', usage: { outputTokens: 2, cacheWriteTokens: 0 } } });
+  const folded = foldAttempts(header, events);
+  assert.equal(folded.attempts[0].usage.cacheWriteTokensKnown, true);
+  assert.equal(summarize(folded, catalog).writeScenario.tokens, 0);
+  assert.equal(summarize(folded, catalog).writeScenario.extra, 0);
+  const missing = cost([attempt('unknown', 'gpt-6-luna', { usage: { inputTokens: 20, cacheReadTokens: 100, cacheWriteTokens: 0, cacheWriteTokensKnown: false, outputTokens: 2 } })]);
+  assert.equal(missing.metrics.write.countKnown, false);
+  assert.equal(missing.writeScenario.tokens, 20);
+});
+
+test('scenario requires known input, valid write tariff and marks partial history instead of fake zero', () => {
+  const noInput = cost([attempt('missing-input', 'gpt-6-luna', { usage: { cacheReadTokens: 20, cacheWriteTokens: 0, outputTokens: 5 } })]);
+  assert.equal(noInput.writeScenario.tokensKnown, false);
+  assert.equal(noInput.writeScenario.extraKnown, false);
+  assert.equal(noInput.writeScenario.costKnown, false);
+  assert.equal(noInput.writeScenario.tokensUnknown, true);
+  const unknownRate = cost([attempt('unknown-model', 'unknown-model', { usage: usage(80, 0, 50, 0, 10) })]);
+  assert.equal(unknownRate.writeScenario.tokens, 80);
+  assert.equal(unknownRate.writeScenario.rateMissing, true);
+  assert.equal(unknownRate.writeScenario.costKnown, false);
+  const unsupported = cost([attempt('priority', 'gpt-6-luna', { serviceTier: 'priority', usage: usage(80, 0, 50, 0, 10) })]);
+  assert.equal(unsupported.writeScenario.rateMissing, true);
+  assert.equal(unsupported.writeScenario.costKnown, false);
+  const unknownZero = cost([attempt('no-rate-even-for-zero', 'unknown-model', { usage: usage(0, 0, 0, 0, 0, { cacheWriteTokensKnown: true }) })]);
+  assert.equal(unknownZero.writeScenario.tokens, 0);
+  assert.equal(unknownZero.writeScenario.rateMissing, true);
+  assert.equal(unknownZero.writeScenario.costKnown, false);
+  const ttlUnknown = cost([attempt('ttl', 'claude-fable-5-1', { provider: 'anthropic', usage: usage(80, 0, 50, 0, 10) })]);
+  assert.equal(ttlUnknown.writeScenario.rateMissing, true);
+  assert.equal(ttlUnknown.writeScenario.costKnown, false);
+  const missingWrite = cost([attempt('missing-write', 'gpt-6-luna', { usage: { inputTokens: 80, cacheReadTokens: 50, outputTokens: 10 } })]);
+  assert.equal(missingWrite.writeScenario.tokens, 80);
+  assert.equal(missingWrite.writeScenario.extra, 80 * (0.125 - 0.1) / 1e6);
+  assert.equal(missingWrite.writeScenario.costUnknown, true);
+  const missingRead = cost([attempt('missing-read', 'gpt-6-luna', { usage: { inputTokens: 80, cacheWriteTokens: 0, outputTokens: 10 } })]);
+  assert.equal(missingRead.writeScenario.tokens, 80);
+  assert.equal(missingRead.writeScenario.tokensUnknown, true);
+  assert.equal(missingRead.writeScenario.costUnknown, true);
+  const noTier = cost([attempt('unknown-tier', 'gpt-6-luna', { serviceTier: undefined, usage: usage(80, 0, 50, 0, 10) })]);
+  assert.equal(noTier.writeScenario.extraKnown, true);
+  assert.equal(noTier.writeScenario.costUnknown, true);
+  const incomplete = cost([attempt('legacy', 'gpt-6-luna', { usage: usage(80, 0, 50, 0, 10) })], true);
+  assert.equal(incomplete.writeScenario.tokens, 80);
+  assert.equal(incomplete.writeScenario.costUnknown, true);
+  assert.equal(incomplete.writeScenario.costKnown, true); // a partial subtotal, not a final bill
+});
+
+test('synthetic 39 Sol and 44 Luna calls reproduce own and team scenario without shifting tiers', () => {
+  const split = (value, parts, i) => Math.floor(value / parts) + (i < value % parts ? 1 : 0);
+  const group = (model, n, input, read, output) => Array.from({ length: n }, (_, i) =>
+    attempt(model + i, model, { usage: usage(split(input, n, i), 0, split(read, n, i), 0, split(output, n, i)) }));
+  const root = cost(group('gpt-6.1-sol', 39, 102227, 2400896, 24345));
+  const children = cost(group('gpt-6-luna', 44, 102643, 199552, 5525));
+  assert.ok(Math.abs(root.total - 0.6879936) < 1e-12);
+  assert.ok(Math.abs(children.total - 0.01502232) < 1e-12);
+  assert.ok(Math.abs(root.writeScenario.extra - 0.0511135) < 1e-12);
+  assert.ok(Math.abs(children.writeScenario.extra - 0.002566075) < 1e-12);
+  assert.equal(root.writeScenario.tokens + children.writeScenario.tokens, 204870);
+  assert.ok(Math.abs(root.total + children.total + root.writeScenario.extra + children.writeScenario.extra - 0.756695495) < 1e-12);
+});
+
+test('Codex 300k input uses fixed Standard write scenario while baseline retains long-context tier', () => {
+  const result = cost([attempt('codex-large', 'gpt-6.1-sol', {
+    provider: 'codex', usage: usage(300000, 0, 0, 0, 0),
+  })]);
+  assert.ok(Math.abs(result.total - 1.20) < 1e-12);
+  assert.equal(result.writeScenario.tokens, 300000);
+  assert.ok(Math.abs(result.writeScenario.extra - 0.15) < 1e-12);
+  assert.ok(Math.abs(result.writeScenario.total - 1.35) < 1e-12);
+  assert.equal(result.writeScenario.costKnown, true);
+  assert.equal(result.writeScenario.costUnknown, false);
+  const unsupported = cost([attempt('codex-priority', 'gpt-6.1-sol', {
+    provider: 'codex', serviceTier: 'priority', usage: usage(300000, 0, 0, 0, 0),
+  })]);
+  assert.equal(unsupported.writeScenario.rateMissing, true);
+  assert.equal(unsupported.writeScenario.costKnown, false);
+});
+
