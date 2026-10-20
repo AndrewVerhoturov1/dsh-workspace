@@ -2,7 +2,7 @@
 param([Parameter(Mandatory=$true)][string]$RequestId,
       [Parameter(Mandatory=$true)][string]$TaskBase64,
       [Parameter(Mandatory=$true)][string]$Channel,
-      [Parameter(Mandatory=$true)][string]$Branch,
+      [Parameter(Mandatory=$true)][AllowEmptyString()][string]$Branch,
       [string]$InputFilesBase64,
       [string]$InputBundleManifest)
 $ErrorActionPreference = 'Stop'

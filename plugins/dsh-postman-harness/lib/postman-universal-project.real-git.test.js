@@ -305,6 +305,59 @@ test('generic branchless Devspace accepts master/custom/unborn without weakening
     }), error => error?.message === 'POSTMAN_TASK_BRANCH_INVALID',
       'publishing mode must retain existing main/task branch validation')
   }
+  await assert.rejects(() => direct.start({
+    sessionId: 'folder-luna', workspace: 'C:/trusted-DSH-source', payload: 'files',
+    branch: '', transportKind: 'devspace',
+    devspaceBinding: { lunaSessionId: 'folder-luna', workspaceOnly: true },
+  }), /POSTMAN_DIRECT_BRIDGE_MISSING/)
+  await assert.rejects(() => direct.start({
+    sessionId: 'folder-luna', workspace: 'C:/trusted-DSH-source', payload: 'files',
+    branch: '', transportKind: 'devspace', devspaceBinding: { lunaSessionId: 'folder-luna' },
+  }), /POSTMAN_TASK_BRANCH_INVALID/)
+})
+
+test('Devspace folder contexts need neither Git nor GitHub and recover the exact selected directory', async t => {
+  for (const kind of ['plain-folder', 'local-git', 'non-github-git']) await t.test(kind, async t => {
+    const root = await mkdtemp(join(tmpdir(), 'postman-folder-'))
+    t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }))
+    await writeFile(join(root, 'README.md'), 'user data\n')
+    if (kind !== 'plain-folder') await git(root, 'init', '-b', 'master')
+    if (kind === 'non-github-git') await git(root, 'remote', 'add', 'origin', 'https://gitlab.com/example/project.git')
+    const calls = [], registry = createMemoryTaskRegistry()
+    const command = (cwd, ...args) => { calls.push(args); return git(cwd, ...args) }
+    const contexts = createPostmanTaskContexts({ registry, gitCommand: command })
+    const owner = leader(kind, root)
+    const context = await contexts.prepareReadOnly(owner)
+    assert.equal(context.status, 'POSTMAN_TASK_READ_ONLY_READY', JSON.stringify(context))
+    assert.equal(context.workspaceOnly, true)
+    assert.equal(context.worktree, root)
+    assert.equal(context.repositoryPath, root)
+    for (const key of ['repository', 'branch', 'baseCommit']) assert.equal(context[key], '')
+    assert.equal(await contexts.verifyDirectPublication(owner.id), false)
+    const before = calls.length
+    const cold = createPostmanTaskContexts({ registry, gitCommand: command })
+    assert.equal((await cold.recover(leader(owner.id, tmpdir()))).status, 'POSTMAN_TASK_CONTEXT_ALREADY_READY')
+    assert.equal(cold.get(owner.id).worktree, root, 'restart must retain the assigned directory')
+    assert.equal(calls.length, before, 'folder recovery does not depend on Git')
+    assert.equal((await cold.prepareReadOnly(owner, tmpdir())).status, 'POSTMAN_TASK_PROJECT_CHANGED')
+    assert.equal((await cold.close(owner)).status, 'POSTMAN_TASK_CLOSED')
+    assert.equal(await readFile(join(root, 'README.md'), 'utf8'), 'user data\n')
+    assert.equal(calls.some(args => ['fetch', 'push', 'worktree', 'checkout', 'reset', 'clean'].includes(args[0])), false)
+  })
+})
+
+test('a local folder context can explicitly prepare a Git task after origin is configured', async t => {
+  const f = await fixture(t, 'master', { id: 'folder-promotion' })
+  await git(f.root, 'remote', 'remove', 'origin')
+  const owner = leader('folder-promotion', f.root)
+  assert.equal((await f.contexts.prepareReadOnly(owner)).workspaceOnly, true)
+  await git(f.root, 'remote', 'add', 'origin', f.originUrl)
+  const task = await f.contexts.prepare(owner)
+  assert.equal(task.status, 'TASK_CONTEXT_READY', JSON.stringify(task))
+  assert.equal(task.universalProject, true)
+  assert.equal(task.workspaceOnly, undefined)
+  assert.equal(f.registry.get(owner.id).workspaceOnly, undefined)
+  assert.equal(task.baseCommit, f.base)
 })
 test('mock-only local bare publication preserves custom default PR base and exact remote task SHA', async t => {
   const f = await fixture(t, 'release/next', { id:'mock-publication' })

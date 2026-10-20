@@ -172,6 +172,7 @@ export function createPostmanDevspaceLuna(ctx, contexts, direct) {
         devspaceBinding: {
           bridgeJobId: job.bridgeJobId, leaderSessionId: leaderId, lunaSessionId: childId,
           branch: job.taskContext.branch,
+          ...(job.taskContext.workspaceOnly ? { workspaceOnly: true } : {}),
           worktree: job.approvedScope?.root ?? job.taskContext.worktree,
           mode: job.devspaceMode,
           computerUse: job.computerUse ?? 'deny',

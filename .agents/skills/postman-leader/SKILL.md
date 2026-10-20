@@ -6,7 +6,7 @@ description: >-
 
 # Postman Leader
 
-`POSTMAN_LEADER_SKILL_VERSION: 38`
+`POSTMAN_LEADER_SKILL_VERSION: 39`
 
 ## 1. Role and invariants
 
@@ -48,7 +48,7 @@ Secretary появляется в начале содержательной за
 
 Обычный `postman_bridge({message:'@PostmanDevspace ...'})` выбирает свободную линию. Ответ `POSTMAN_BRIDGE_ACCEPTED` содержит exact `bridgeJobId` и `laneId`. Для продолжения прежней Luna/ChatGPT беседы передай `lane_id`. Один активный REQ на линию, до трёх на Leader; `UNKNOWN` A не блокирует B/C. `postman_devspace_control({bridge_job_id,action:'steer'|'preempt'|'stop'|'status',message?,priority?})` адресен REQ: `QUEUED` не равен реальному Send/Stop. Не делай blind resend после `SEND_UNKNOWN`.
 
-**Контексты:** без prepared context Host допускает branchless read/private output без создания Git branch/worktree; разрешённый рабочий root выбирается по задаче. Для разработки исходников `dsh-workspace` вызови обычный `postman_task_prepare()` и соблюдай отдельный чистый task worktree по `REPO_POLICY.md`. Для конкретного внешнего каталога Leader передаёт exact `workspace_root`, `workspace_access:read|write`; prompt сам по себе не выдаёт доступ. Параллельность и конфликты в общей области решает Leader; Host не запрещает создание агентов, продолжение заданий и запуск Bridge из-за других writers.
+**Контексты:** без prepared context Host берёт рабочую область из каталога сессии и допускает чтение/private output без создания Git branch/worktree. Обычная папка, местный Git без origin и другой Git-хостинг тоже поддерживаются; GitHub нужен только соответствующему Git-маршруту. Для разработки исходников `dsh-workspace` вызови обычный `postman_task_prepare()` и соблюдай отдельный чистый task worktree по `REPO_POLICY.md`. Для выбранного каталога Leader передаёт exact `workspace_root`, `workspace_access:read|write`, в том числе для записи в исходную папку без GitHub-контекста; prompt сам по себе не выдаёт доступ. Установка DSH, навыки и подключение VUDA общие для проектов. Параллельность и конфликты в общей области решает Leader; Host не запрещает создание агентов, продолжение заданий и запуск Bridge из-за других writers.
 
 В `READ_ONLY` ChatGPT открывает обычный разрешённый путь назначенной области через `open_workspace`; адрес `postman-writer:<jobId>` нужен только режимам записи. Для записи сначала используется этот выданный Host адрес, без обхода буквальным путём. Проверяй реальную схему подключённого MCP: `background/status/stop` требуют у Bash полей `execution` и `job_id`, а для `status/stop` команда необязательна. Если этих полей нет, сообщи о несовместимости соединителя; не выдумывай параметры и не повторяй неподдерживаемый вызов.
 

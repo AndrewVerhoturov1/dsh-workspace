@@ -548,7 +548,7 @@ export class DirectPostmanJobManager {
     // currently be on master, a custom default branch, or have an unborn HEAD.
     // Git-publishing Direct modes retain the strict main/task-branch contract.
     if (transportKind === 'devspace' ?
-        typeof branch !== 'string' || !branch || branch.length > 255 || /[\s\x00-\x1f]/.test(branch) :
+        typeof branch !== 'string' || (!branch && devspaceBinding?.workspaceOnly !== true) || branch.length > 255 || /[\s\x00-\x1f]/.test(branch) :
         branch !== STANDALONE_TASK_PUBLICATION_BRANCH && !POSTMAN_TASK_BRANCH_PATTERN.test(branch ?? ''))
       throw parseError('POSTMAN_TASK_BRANCH_INVALID')
 

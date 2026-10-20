@@ -176,7 +176,7 @@ export function createPostmanBridgeTool(ctx, jobs, contexts) {
           const inside = relative(repoRoot, target), containsRepo = relative(target, repoRoot)
           const overlapsRepo = (inside === '' || !inside.startsWith('..') && !isAbsolute(inside)) ||
             (containsRepo === '' || !containsRepo.startsWith('..') && !isAbsolute(containsRepo))
-          if (args.workspace_access === 'write' && overlapsRepo)
+          if (args.workspace_access === 'write' && overlapsRepo && !taskContext?.workspaceOnly)
             return { status: 'POSTMAN_DEVSPACE_ISOLATED_CONTEXT_REQUIRED' }
           approvedScope = { root: target, access: args.workspace_access }
         } catch {
