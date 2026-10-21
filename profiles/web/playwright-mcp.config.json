@@ -3,7 +3,9 @@
     "browserName": "chromium",
     "isolated": true,
     "launchOptions": {
-      "headless": true
+      "headless": true,
+      "channel": "chromium",
+      "args": ["--enable-gpu"]
     }
   }
 }
