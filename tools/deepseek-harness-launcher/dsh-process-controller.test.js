@@ -102,6 +102,27 @@ test('should treat a stale recorded PID as not running', async () => {
   } finally { fixture.cleanup() }
 })
 
+test('should reject inaccessible listener metadata without treating the recorded PID as proof', async () => {
+  for (const record of [null, { pid: 1210, commandLine: '' }]) {
+    const fixture = createFixture({
+      state: { pid: 1210, port: 4173, profile: 'web' },
+      listenerPids: [1210],
+      records: record ? { 1210: record } : {},
+    })
+    try {
+      const before = fs.readFileSync(path.join(fixture.launcherRoot, 'dsh-runtime.json'), 'utf8')
+      const found = await fixture.controller.discover()
+      assert.equal(found.status, 'PROCESS_METADATA_UNAVAILABLE')
+      for (const action of ['start', 'stop', 'restart']) {
+        await assert.rejects(() => fixture.controller[action](), { code: 'PROCESS_METADATA_UNAVAILABLE' })
+      }
+      assert.deepEqual(fixture.listenerPids, [1210])
+      assert.equal(fixture.spawnOptions, null)
+      assert.equal(fs.readFileSync(path.join(fixture.launcherRoot, 'dsh-runtime.json'), 'utf8'), before)
+    } finally { fixture.cleanup() }
+  }
+})
+
 test('should stop a discovered DSH and close the port', async () => {
   const fixture = createFixture({
     listenerPids: [1204],
