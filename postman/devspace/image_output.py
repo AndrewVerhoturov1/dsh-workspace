@@ -13,6 +13,8 @@ import os
 from pathlib import Path
 import warnings
 
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
 import browser_observer as observer
 from postman.devspace.publication import bound_prompt
 
@@ -99,37 +101,77 @@ def inspect_owned_image(page, prompt, chat_url, binding):
         image, _, _, identity = _owned_image(page, prompt, chat_url, binding)
         details["assistantIdentity"] = identity
         details["generationActive"] = observer.generation_active(page)[0]
+        image.hover(timeout=3000)
         gallery = image.locator("xpath=ancestor::*[@data-testid='generated-image-gallery'][1]")
         details["gallery"] = gallery.evaluate(_IMAGE_UI_FACTS_JS)
         if details["generationActive"]:
             return {"ok": False, "code": "GENERATION_ACTIVE", "details": details}
         preview = gallery.locator('button[data-testid="generated-image-preview"]')
-        # Existing viewer is not attributed to this response; do not click it.
+        native = gallery.get_by_role("button", name=re.compile(
+            r"^(?:Download(?: image)?|Скачать(?: изображение)?)$", re.I))
+        details["nativeDownloadCount"] = native.count()
         details["existingDialogs"] = page.get_by_role("dialog").count()
         details["previewCount"] = preview.count()
-        if preview.count() == 1 and preview.is_enabled() and not details["existingDialogs"]:
-            page.evaluate("window.__postmanImageBefore = new Set([...document.querySelectorAll('*')].filter(i => i.getClientRects().length))")
-            preview.click(timeout=3000)
-            # New visible image ancestors are inspection facts, NOT authority to click Download.
-            details["viewerCandidates"] = page.evaluate("""() => {
-                const before = window.__postmanImageBefore;
-                delete window.__postmanImageBefore;
-                return [...document.querySelectorAll('img,button,[role=button]')].filter(i => !before.has(i) && i.getClientRects().length)
-                  .slice(0, 12).map(img => {
-                    const ancestors=[];
-                    for(let n=img.parentElement, depth=0; n && depth<6; n=n.parentElement,depth++) {
-                      if(n===document.body || n===document.documentElement || before.has(n)) break;
-                      ancestors.push({tag:n.tagName,role:n.getAttribute('role'),id:n.id,
-                        testId:n.getAttribute('data-testid'),ariaModal:n.getAttribute('aria-modal'),
-                        buttons:[...n.querySelectorAll('button,[role=button]')].slice(0,12).map(b=>({
-                          role:b.getAttribute('role'),testId:b.getAttribute('data-testid'),
-                          label:(b.getAttribute('aria-label')||b.getAttribute('title')||b.innerText||'').slice(0,120)}))});
-                    }
-                    return {tag:img.tagName,role:img.getAttribute('role'),testId:img.getAttribute('data-testid'),
-                      label:(img.getAttribute('aria-label')||img.getAttribute('title')||img.alt||'').slice(0,120),ancestors};
-                  });
+        if details["nativeDownloadCount"] == 1 and native.is_enabled():
+            details["nativeDownloadInGallery"] = True
+        elif details["nativeDownloadCount"] > 1:
+            return {"ok": False, "code": "NATIVE_BUTTON_AMBIGUOUS", "details": details}
+        elif preview.count() == 1 and preview.is_enabled() and not details["existingDialogs"]:
+            # Snapshot after hover: newly visible controls can already exist but be hidden.
+            page.evaluate("""() => {
+                const visible = el => el.getClientRects().length > 0 &&
+                    el.checkVisibility({checkOpacity:true, checkVisibilityCSS:true}) &&
+                    !el.closest('[aria-hidden="true"],[inert]');
+                window.__postmanImageBefore = new Set([...document.querySelectorAll('*')].filter(visible));
             }""")
-            details["previewClicked"] = True
+            try:
+                preview.click(timeout=3000)
+                details["previewClicked"] = True
+                # Facts only. These new visible elements are not authority to click Download.
+                try:
+                    details["viewerCandidates"] = page.wait_for_function("""() => {
+                        const before = window.__postmanImageBefore;
+                        if (!before) return false;
+                        const visible = el => el.getClientRects().length > 0 &&
+                            el.checkVisibility({checkOpacity:true, checkVisibilityCSS:true}) &&
+                            !el.closest('[aria-hidden="true"],[inert]');
+                        const changes = [...document.querySelectorAll(
+                            'img,button,[role],[aria-modal],[data-testid]')]
+                            .filter(el => visible(el) && !before.has(el));
+                        if (!changes.length) return false;
+                        return changes.slice(0, 12).map(el => {
+                            const facts = node => ({
+                                tag:node.tagName, role:node.getAttribute('role'),
+                                testId:node.getAttribute('data-testid'),
+                                state:node.getAttribute('data-state'),
+                                ariaModal:node.getAttribute('aria-modal'),
+                                label:(node.getAttribute('aria-label')||node.getAttribute('title')||
+                                       node.innerText||node.getAttribute('alt')||'').slice(0,120)
+                            });
+                            const ancestors=[];
+                            for(let n=el.parentElement,depth=0; n && depth<6; n=n.parentElement,depth++) {
+                                if(n===document.body || n===document.documentElement || before.has(n)) break;
+                                ancestors.push({...facts(n),
+                                    buttons:[...n.querySelectorAll('button,[role="button"]')]
+                                        .filter(visible).slice(0,12).map(facts)});
+                            }
+                            return {...facts(el), visible:true,
+                                inGallery:!!el.closest('[data-testid="generated-image-gallery"]'),
+                                buttons:[...el.querySelectorAll('button,[role="button"]')]
+                                    .filter(visible).slice(0,12).map(facts), ancestors};
+                        });
+                    }""", timeout=3000).json_value()
+                    details["viewerReadiness"] = "VISIBLE_UI_OBSERVED"
+                except PlaywrightTimeoutError:
+                    details["viewerCandidates"] = []
+                    details["viewerReadiness"] = "NOT_OBSERVED"
+            finally:
+                page.evaluate("delete window.__postmanImageBefore")
+            details["dialogsAfter"] = page.get_by_role("dialog").count()
+            if not details["viewerCandidates"]:
+                return {"ok": False, "code": "OWNED_VIEWER_UNPROVEN", "details": details}
+        else:
+            return {"ok": False, "code": "NATIVE_CONTROL_UNPROVEN", "details": details}
         _, _, _, fresh = _owned_image(page, prompt, chat_url, binding)
         if fresh != identity:
             raise ValueError("ASSISTANT_IDENTITY_CHANGED")
@@ -140,10 +182,18 @@ def inspect_owned_image(page, prompt, chat_url, binding):
             "exceptionType": type(error).__name__}}
 
 
-_IMAGE_UI_FACTS_JS = """node => ({tag:node.tagName,role:node.getAttribute('role'),
-  testId:node.getAttribute('data-testid'),buttons:[...node.querySelectorAll('button,[role=button]')]
-  .slice(0,12).map(b=>({testId:b.getAttribute('data-testid'),
-    label:(b.getAttribute('aria-label')||b.getAttribute('title')||b.innerText||'').slice(0,120)}))})"""
+_IMAGE_UI_FACTS_JS = """node => {
+  const visible = el => el.getClientRects().length > 0 &&
+    el.checkVisibility({checkOpacity:true, checkVisibilityCSS:true}) &&
+    !el.closest('[aria-hidden="true"],[inert]');
+  return {tag:node.tagName, role:node.getAttribute('role'),
+    testId:node.getAttribute('data-testid'),
+    buttons:[...node.querySelectorAll('button,[role=button]')].slice(0,12)
+      .map(b=>({testId:b.getAttribute('data-testid'),role:b.getAttribute('role'),
+        state:b.getAttribute('data-state'),visible:visible(b),
+        disabled:b.matches(':disabled'),
+        label:(b.getAttribute('aria-label')||b.getAttribute('title')||b.innerText||'').slice(0,120)}))};
+}"""
 
 
 def observe_owned_image(page, prompt, chat_url: str, binding, *, diagnostic=None, expected_identity=None):
@@ -195,10 +245,15 @@ def observe_owned_image(page, prompt, chat_url: str, binding, *, diagnostic=None
             phase = "OPEN_OWNED_VIEWER"
             preview.click(timeout=3000)
             viewer = page.get_by_role("dialog")
-            if viewer.count() != 1:
-                return failed("OWNED_VIEWER_UNPROVEN")
             download_button = viewer.get_by_role("button", name=re.compile(
                 r"^(?:Download(?: image)?|Скачать(?: изображение)?)$", re.I))
+            try:
+                download_button.wait_for(state="visible", timeout=3000)
+            except PlaywrightTimeoutError:
+                return failed("OWNED_VIEWER_UNPROVEN" if viewer.count() != 1
+                              else "VIEWER_NATIVE_BUTTON_UNPROVEN")
+            if viewer.count() != 1:
+                return failed("OWNED_VIEWER_UNPROVEN")
             if download_button.count() != 1:
                 return failed("VIEWER_NATIVE_BUTTON_UNPROVEN")
         if not download_button.is_enabled():

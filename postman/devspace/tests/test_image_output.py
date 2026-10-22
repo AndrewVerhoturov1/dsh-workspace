@@ -214,8 +214,10 @@ class ImageOutputTests(unittest.TestCase):
                             a.click();
                         };
                         viewer.append(button);
-                        document.body.append(viewer);
-                        viewer.showModal();
+                        setTimeout(() => {
+                            document.body.append(viewer);
+                            viewer.showModal();
+                        }, 150);
                     };
                 }""", base64.b64encode(self.png).decode("ascii"))
                 diagnostic = {}
@@ -253,10 +255,12 @@ class ImageOutputTests(unittest.TestCase):
                     window.previewClicks=0; window.downloadClicks=0;
                     document.querySelector('[data-testid=generated-image-preview]').onclick=()=>{
                       window.previewClicks++;
-                      const viewer=document.createElement('section');viewer.dataset.testid='actual-viewer';
-                      viewer.innerHTML='<button aria-label="Download image">Download</button>';
-                      viewer.querySelector('button').onclick=()=>window.downloadClicks++;
-                      document.body.append(viewer);
+                      setTimeout(()=>{
+                        const viewer=document.createElement('section');viewer.dataset.testid='actual-viewer';
+                        viewer.innerHTML='<button aria-label="Download image">Download</button>';
+                        viewer.querySelector('button').onclick=()=>window.downloadClicks++;
+                        document.body.append(viewer);
+                      }, 150);
                     };
                 }""")
                 with patch.object(type(page), 'url', property(lambda _: CHAT)), \
@@ -264,12 +268,51 @@ class ImageOutputTests(unittest.TestCase):
                     result=image_output.inspect_owned_image(page, visual, CHAT, binding)
                 self.assertTrue(result['ok'], result)
                 self.assertTrue(result['details']['previewClicked'])
-                self.assertIn('actual-viewer', repr(result['details']['viewerCandidates']))
+                self.assertEqual(result['details']['viewerReadiness'], 'VISIBLE_UI_OBSERVED')
+                viewer = next(node for node in result['details']['viewerCandidates']
+                              if node['testId'] == 'actual-viewer')
+                self.assertIsNone(viewer['role'])
+                self.assertEqual(viewer['buttons'][0]['label'], 'Download image')
                 self.assertEqual(result['details']['existingDialogs'], 0)
                 self.assertEqual(page.evaluate('window.previewClicks'), 1)
                 self.assertEqual(page.evaluate('window.downloadClicks'), 0)
                 self.assertFalse(list(self.root.glob('POSTMAN_IMAGE_*')))
                 self.assertEqual(page.locator('[data-user-message-bubble]').count(), 1)
+            finally:
+                browser.close()
+
+    def test_inspect_without_viewer_reports_unproven_without_download(self):
+        visual = "Нарисуй одну звезду."
+        binding = self.visual_binding(visual)
+        data = base64.b64encode(self.png).decode('ascii')
+        with sync_playwright() as p:
+            browser = p.chromium.launch(channel='chrome', headless=True)
+            try:
+                page = browser.new_page()
+                page.set_content('<main><div data-turn-key="ours">'
+                    '<div data-user-message-bubble="true">' + visual + '</div>'
+                    '<div data-message-author-role="assistant">'
+                    '<div data-testid="generated-image-gallery"><button data-testid="generated-image-preview">'
+                    '<img src="data:image/png;base64,' + data + '"></button></div></div></div></main>')
+                page.wait_for_function("document.querySelector('img').naturalWidth===73")
+                page.evaluate("""() => {
+                    window.previewClicks=0;
+                    document.querySelector('[data-testid=generated-image-preview]').onclick=()=>{
+                        window.previewClicks++;
+                    };
+                }""")
+                with patch.object(type(page), 'url', property(lambda _: CHAT)), \
+                     patch.object(type(page), 'expect_download', side_effect=AssertionError('inspect cannot download')):
+                    result = image_output.inspect_owned_image(page, visual, CHAT, binding)
+                self.assertFalse(result['ok'])
+                self.assertEqual(result['code'], 'OWNED_VIEWER_UNPROVEN')
+                self.assertEqual(result['details']['viewerReadiness'], 'NOT_OBSERVED')
+                self.assertEqual(result['details']['viewerCandidates'], [])
+                self.assertEqual(page.evaluate('window.previewClicks'), 1)
+                self.assertTrue(result['details']['previewClicked'])
+                self.assertFalse(result['details']['downloadAttempted'])
+                self.assertFalse(result['details']['newMessageSent'])
+                self.assertFalse(list(self.root.glob('POSTMAN_IMAGE_*')))
             finally:
                 browser.close()
 
@@ -286,9 +329,14 @@ class ImageOutputTests(unittest.TestCase):
                     '<img src="data:image/png;base64,'+data+'"></div></div></div></main>')
                 page.wait_for_function("document.querySelector('img').naturalWidth===73")
                 self.native_download(page)
+                page.add_style_tag(content='[data-testid="generated-image-gallery"] button {opacity:0}'
+                                           '[data-testid="generated-image-gallery"]:hover button {opacity:1}')
+                self.assertFalse(page.locator('[data-testid="generated-image-gallery"] button')
+                                 .evaluate('el => el.checkVisibility({checkOpacity:true})'))
                 with patch.object(type(page), 'url', property(lambda _: CHAT)):
                     inspection=image_output.inspect_owned_image(page,visual,CHAT,binding)
                     self.assertTrue(inspection['ok'])
+                    self.assertTrue(inspection['details']['gallery']['buttons'][0]['visible'])
                     identity=inspection['details']['assistantIdentity']
                     diagnostic={}
                     self.assertIsNone(image_output.observe_owned_image(page,visual,CHAT,binding,
