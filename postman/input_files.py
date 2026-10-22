@@ -42,7 +42,7 @@ def selected_file(path: str) -> tuple[str, bytes]:
         raise InputStageError("symlink path cannot be staged")
     if any(part.lower() in _SENSITIVE or part.lower().endswith((".key", ".pem", ".p12", ".log"))
            for part in source.resolve(strict=True).parts):
-        raise InputStageError("sensitive/runtime path cannot be staged")
+        raise InputStageError("POSTMAN_INPUT_SENSITIVE_PATH_REJECTED")
     # One bounded read: hashing, publication and private snapshot use these same bytes.
     with source.open("rb") as handle:
         if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
