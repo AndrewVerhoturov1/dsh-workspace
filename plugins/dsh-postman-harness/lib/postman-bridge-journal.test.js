@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { JsonStorageBackend } from '@deepseek-ai/dsh-storage-json'
@@ -206,6 +207,46 @@ test('Direct terminal receipt from text survives cold Bridge recovery without Se
       changeRecord() { throw Error('cannot trust tampered result') } }, null,
     new DirectPostmanJobManager({ directRoot }))
   assert.equal((await another.status(parent, 'result')).status, 'POSTMAN_BRIDGE_OUTCOME_UNKNOWN')
+})
+
+test('Python artifact handoff survives cold recovery and rejects mismatched ownership or bytes', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'postman-python-handoff-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const directRoot = join(root, 'direct'), resultZip = join(root, 'result.zip')
+  const id = 'REQ_20261004T020203Z_0001'
+  await writeFile(resultZip, 'synthetic artifact bytes')
+  // Real Direct writer, controlled publisher/browser/Bridge: no transport or Send.
+  execFileSync(process.env.POSTMAN_PYTHON ?? 'python', ['-X', 'utf8', '-c',
+    "import hashlib, sys\nfrom pathlib import Path\nfrom postman.direct.postman_direct import DirectPostman, TaskSnapshot, PublishedTask\nroot, branch, request_id, result_zip = sys.argv[1:]\nbase, publication = 'a' * 40, 'b' * 40\nclass Publisher:\n    def __init__(self, **kwargs): pass\n    def snapshot(self): return TaskSnapshot(base, ('README.md',))\n    def publish_content(self, request_id, content, **kwargs):\n        return PublishedTask(request_id, f'https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/{publication}/{request_id}.md', base, publication, ('README.md',))\nclass Bridge:\n    def __init__(self, **kwargs): pass\n    def run_request(self, request_id, **kwargs):\n        return {'ok': True, 'code': 'RESULT_DURABLE', 'details': {\n            'resultZip': result_zip, 'resultSha256': hashlib.sha256(Path(result_zip).read_bytes()).hexdigest()}}\nDirectPostman(branch=branch, direct_root=root, publisher_factory=Publisher, bridge_factory=Bridge,\n    ensure_browser=lambda **kwargs: {'cdpUrl': 'controlled-fixture'}).run(request_id=request_id, task='synthetic fixture')",
+    directRoot, row().branch, id, resultZip], { cwd: join(import.meta.dirname, '../../..'), stdio: 'pipe' })
+  const manager = new DirectPostmanJobManager({ directRoot })
+  const proof = manager.inspectRequest(id, row().branch, 'artifact')
+  assert.equal(proof.state, 'terminal')
+  assert.equal(proof.terminal.result.branch, row().branch)
+  const terminal = proof.terminal.result
+  const registry = createMemoryTaskRegistry()
+  await registry.create(parent.id, { ...row(), bridgeOperations: { result: {
+    state: 'unknown', phase: 'request-known', requestId: id, transportKind: 'artifact' } } })
+  let sends = 0
+  const jobs = createPostmanBridgeJobs({}, { run() { sends++; throw Error('no Send') }, dispose() {} }, null,
+    { record: registry.get, changeRecord: registry.change, async sync() { return false } }, null, manager)
+  assert.equal((await jobs.status(parent, 'result')).status, 'POSTMAN_BRIDGE_TERMINAL')
+  assert.equal(sends, 0)
+  await jobs.dispose()
+  const { branch, ...branchless } = terminal
+  for (const invalid of [branchless,
+    { ...terminal, requestId: 'REQ_20261004T020204Z_0001' },
+    { ...terminal, branch: 'task/postman-' + 'c'.repeat(32) },
+    { ...terminal, taskPublicationCommit: 'c'.repeat(40) },
+    { ...terminal, baseCommit: 'c'.repeat(40) },
+    { ...terminal, taskUrl: terminal.taskUrl + '-wrong' },
+    { ...terminal, sha256: '0'.repeat(64) }]) {
+    await writeFile(join(directRoot, 'results', id + '.json'), JSON.stringify(invalid))
+    assert.equal(manager.inspectRequest(id, row().branch, 'artifact').state, 'published')
+  }
+  await writeFile(join(directRoot, 'results', id + '.json'), JSON.stringify(terminal))
+  await writeFile(resultZip, 'changed synthetic artifact bytes')
+  assert.equal(manager.inspectRequest(id, row().branch, 'artifact').state, 'published')
 })
 
 test('published transport failure handoff survives missing final checkpoint without resend', async t => {
