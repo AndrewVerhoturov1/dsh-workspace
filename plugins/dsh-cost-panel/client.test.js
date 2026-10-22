@@ -555,3 +555,19 @@ test('a later measured counter replaces inferred values instead of retaining a h
   f.dispose();
 });
 
+test('partial inferred totals can decrease while other calls still use estimated writes', async () => {
+  const result = (count, total) => sample('child', {
+    own: { ...sample().own, estimated: true, total, costUnknown: true,
+      metrics: { ...sample().own.metrics, write: { ...sample().own.metrics.write, estimated: true, count, countUnknown: true } } },
+    team: { ...sample().team, estimated: true, total: total * 2, costUnknown: true },
+  });
+  const f = fixture({ result: result(10000, 0.02) });
+  await f.settle(0);
+  f.listChanged();
+  await f.settle(1, result(5000, 0.01));
+  assert.equal(f.metrics().write.props.children[1].props.children, '≈5.0k*');
+  assert.equal(f.metrics().cost.props.children[1].props.children, '≈$0.0100*');
+  assert.equal(f.metrics().team.props.children[1].props.children, '≈$0.0200*');
+  f.dispose();
+});
+

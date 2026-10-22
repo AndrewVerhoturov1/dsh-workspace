@@ -24,7 +24,7 @@ window.__ModuleLoader__.load({ id: 'dsh-cost-panel', factory: require => {
     const retain = (previous, next, field, flag, unknown, provisional = false) => {
       const hasNext = !provisional && known(next, flag);
       const hasPrevious = known(previous, flag);
-      const value = hasNext ? (next[unknown] && hasPrevious ? Math.max(previous[field], next[field]) : next[field]) : previous?.[field] ?? 0;
+      const value = hasNext ? (next[unknown] && hasPrevious && !next.estimated && !previous.estimated ? Math.max(previous[field], next[field]) : next[field]) : previous?.[field] ?? 0;
       return { [field]: value, [flag]: hasNext || hasPrevious, [unknown]: provisional || !hasNext && hasPrevious || !!next?.[unknown] };
     };
     function remember(previous, next) {
