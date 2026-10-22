@@ -21,13 +21,20 @@ def wait_for_image(page, prompt, chat_url, binding, *, timeout_ms, sleep, monoto
 
     deadline = monotonic() + timeout_ms / 1000.0
     generated = False
+    download_diagnostic = {}
 
     def blocked(reason):
         return {"ok": True, "code": "DEVSPACE_DIAGNOSTIC", "details": {
             "source": "transport_diagnostic", "diagnostic": "UNKNOWN",
             "conversationRef": chat_url, "sendState": send_state,
             "generationState": "CONFIRMED" if generated else "UNPROVEN",
-            "saveState": "SAVE_FAILED" if generated else "NOT_SAVED",
+            "saveState": download_diagnostic.get("saveState", "NOT_ATTEMPTED" if generated else "NOT_SAVED"),
+            "downloadPhase": download_diagnostic.get("downloadPhase", "NOT_STARTED"),
+            "downloadState": download_diagnostic.get("downloadState", "NOT_ATTEMPTED"),
+            "downloadAttempted": download_diagnostic.get("downloadAttempted", False),
+            "downloadError": download_diagnostic.get("downloadError", "NONE"),
+            **({"downloadExceptionType": download_diagnostic["downloadExceptionType"]}
+               if "downloadExceptionType" in download_diagnostic else {}),
             "deliveryState": "UNAVAILABLE", "assistantText": "", "message": reason}}
 
     if binding.get("imageMode") is not True or not bound_prompt(binding, prompt):
@@ -53,7 +60,8 @@ def wait_for_image(page, prompt, chat_url, binding, *, timeout_ms, sleep, monoto
                 stable_ms=500, poll_ms=100, sleep=sleep, monotonic=monotonic)
             if result.get('ok') and result.get('details', {}).get('assistantImageCount') == 1:
                 generated = True
-                image = image_output.observe_owned_image(page, prompt, chat_url, binding)
+                image = image_output.observe_owned_image(
+                    page, prompt, chat_url, binding, diagnostic=download_diagnostic)
                 if image:
                     image['details'].update(sendState=send_state, conversationRef=chat_url)
                     return image

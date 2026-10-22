@@ -427,10 +427,14 @@ test('Devspace image flag uses existing launcher and keeps save/delivery facts s
   assert.equal(binding.imageMode,true)
   assert.equal(Buffer.from(argv[argv.indexOf('-TaskBase64')+1],'base64').toString('utf8'),'one lighthouse')
   const observed={requestId:started.requestId,source:'transport_diagnostic',diagnostic:'UNKNOWN',
-    generationState:'CONFIRMED',saveState:'SAVE_FAILED',deliveryState:'UNAVAILABLE'}
+    generationState:'CONFIRMED',saveState:'SAVE_FAILED',deliveryState:'UNAVAILABLE',
+    downloadPhase:'WAIT_NATIVE_DOWNLOAD',downloadState:'FAILED',downloadAttempted:true,
+    downloadError:'NATIVE_DOWNLOAD_REPORTED_FAILURE',downloadExceptionType:'Error'}
   const terminal=devspaceTerminal(binding,observed)
   assert.equal(terminal.generationState,'CONFIRMED'); assert.equal(terminal.saveState,'SAVE_FAILED')
   assert.equal(terminal.deliveryState,'UNAVAILABLE'); assert.equal(terminal.resultImage,undefined)
+  for(const key of ['downloadPhase','downloadState','downloadAttempted','downloadError','downloadExceptionType'])
+    assert.equal(terminal[key],observed[key])
   writeFileSync(join(binding.channel,'result.json'),JSON.stringify(observed))
   child.emit('close',0)
   manager.dispose()

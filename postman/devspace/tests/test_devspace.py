@@ -254,6 +254,37 @@ assert hasattr(stdlib_signal, 'set_wakeup_fd')
         with self.assertRaisesRegex(ValueError, "IMAGE_INPUT_INVALID"):
             transport.run(self.channel, REQ, visual, image_mode=True, input_bundle_manifest="unrelated")
 
+    def test_image_download_diagnostic_reaches_transport_result(self):
+        visual = "Создай одно изображение."
+        class Bridge:
+            def __init__(self, **kwargs):
+                pass
+            def run_request(self, request_id, **kwargs):
+                return {"ok": True, "code": "DEVSPACE_DIAGNOSTIC",
+                        "details": {"source": "transport_diagnostic", "diagnostic": "UNKNOWN",
+                                    "sendState": "UNKNOWN", "generationState": "CONFIRMED",
+                                    "saveState": "NOT_ATTEMPTED", "deliveryState": "UNAVAILABLE",
+                                    "downloadPhase": "WAIT_NATIVE_DOWNLOAD",
+                                    "downloadState": "FAILED", "downloadAttempted": True,
+                                    "downloadError": "EXCEPTION",
+                                    "downloadExceptionType": "TimeoutError"}}
+        with patch.object(transport, "load_binding", return_value=self.binding), \
+             patch.object(transport, "publish_assignment",
+                          return_value={"taskUrl": "", "prompt": visual}):
+            result = transport.run(self.channel, REQ, visual, image_mode=True,
+                                   ensure_browser=lambda: {"cdpUrl": "existing"},
+                                   bridge_factory=Bridge)
+        self.assertEqual(result["sendState"], "UNKNOWN")
+        self.assertEqual(result["generationState"], "CONFIRMED")
+        self.assertEqual(result["saveState"], "NOT_ATTEMPTED")
+        self.assertEqual(result["downloadPhase"], "WAIT_NATIVE_DOWNLOAD")
+        self.assertEqual(result["downloadState"], "FAILED")
+        self.assertTrue(result["downloadAttempted"])
+        self.assertEqual(result["downloadError"], "EXCEPTION")
+        self.assertEqual(result["downloadExceptionType"], "TimeoutError")
+        self.assertEqual(json.loads((self.channel / "result.json").read_text(encoding="utf-8")),
+                         result)
+
     def test_existing_result_cannot_be_reused_in_another_mode(self):
         from postman.devspace import publication
         ordinary = {"requestId": REQ, "source": "text_fallback",

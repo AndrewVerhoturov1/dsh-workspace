@@ -194,7 +194,9 @@ def run(channel, request_id, intent, *, image_mode=False,
                   **{key: details[key] for key in ("resultImage", "imageSha256", "imageWidth",
                       "imageHeight", "imageMimeType", "imageByteLength", "imageFormat",
                       "evidenceState", "sendState", "generationState", "saveState", "deliveryState",
-                      "imageSource", "assistantIdentity", "reportedOutcome") if key in details},
+                      "downloadPhase", "downloadState", "downloadAttempted", "downloadError",
+                      "downloadExceptionType", "imageSource", "assistantIdentity", "reportedOutcome")
+                      if key in details},
                   "transportDiagnostics": {**{key: details[key] for key in
                       ("reminderSlots", "transportEventJournal", "detectorDiagnostics") if key in details},
                       **recovery_diagnostics,
