@@ -1,0 +1,25 @@
+POSTMAN_REQUEST_ID: REQ_20261022T042314Z_6309
+Режим: READ_ONLY. Область для чтения: C:\PROJECTS\Real-tactic-wargame
+Сначала открой назначенную область обычным open_workspace с path="C:\\PROJECTS\\Real-tactic-wargame". В READ_ONLY не используй postman-writer. Записи в любые файлы запрещены, кроме bell ниже.
+Leader разрешил Computer Use для этого поручения.
+DevSpace Bash не является песочницей. Не выходи за scope; не читай секреты/runtime credentials, binding и служебные файлы, не меняй права, не создавай AI-агентов, не устанавливай и не перезапускай Host/DevSpace. GitHub writes/commit/push/PR/merge запрещены здесь; отдельный местный маршрут требует разрешения.
+## Инструкции Host
+instructions_sha256: 291170eb9f1e384b74b7ae05bb566105fde44a468fbe40610204467f9e08ffdf
+- https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/53db1d57f1c300014b73ef72a82c7b50d3f8eea5/postman/devspace/SKILL.md
+- https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/53db1d57f1c300014b73ef72a82c7b50d3f8eea5/AGENTS.md
+- https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/53db1d57f1c300014b73ef72a82c7b50d3f8eea5/REPO_POLICY.md
+- https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/53db1d57f1c300014b73ef72a82c7b50d3f8eea5/docs/workflow/TASK_CONTRACT.md
+- C:\PROJECTS\Real-tactic-wargame\AGENTS.md
+Bell — отдельное узкое разрешение через настоящий DevSpace Bash (не читать скрипт/JSON):
+pwsh -NoProfile -NonInteractive -File 'C:\Users\Andrew\AppData\Local\DSH\Postman\devspace\6fd5f8e2-bb89-4d87-beed-7dc9a62f51df\signal.ps1' <done|need-decision|blocked> [-Message 'причина'] [-Report 'report.md']
+## Поручение Leader
+Предыдущее исследование завершено, но вызван местный bell вопреки просьбе завершить текстом. В доставленном Host-результате assistantText пуст, reportRef отсутствует, предупреждения REPORT_UNAVAILABLE и REPORT_UNVERIFIED: сам отчёт мне недоступен. Не повторяй исследования и веб-проверки. Один недостающий результат: передай уже подготовленный отчёт в обычном финальном текстовом сообщении БЕЗ вызова местного bell. Включи сравнение 2D rig / Blender→sprites / Blender→glTF browser, рекомендацию для нашего top-down боя, основные ограничения ИИ, точные буквальные https:// URL уже проверенных официальных источников и короткие выдержки для ключевых возможностей/лицензионных оговорок. Если какая-то ссылка не проверялась, так и пометь. Никаких файлов или изменений проекта. Требуется только доставка уже полученных результатов.
+## Обязательный формат итогового ответа
+После bell напиши итоговый ответ строго между следующими точными маркерами этого задания.
+Если bell недоступен или поручение требует только текст, эти маркеры всё равно обязательны.
+Каждый маркер — отдельная строка без кавычек, Markdown, пробелов или замены REQ.
+Между ними — непустой итог, ограничения и результаты проверок; вне маркеров ничего не пиши.
+<<<POSTMAN_RESULT_BEGIN:REQ_20261022T042314Z_6309>>>
+<итог работы либо BLOCKED/NEED_DECISION с причиной>
+<<<POSTMAN_RESULT_END:REQ_20261022T042314Z_6309>>>
+Маркеры нужны скрипту получения ответа; они не заменяют bell и не доказывают PASS.
