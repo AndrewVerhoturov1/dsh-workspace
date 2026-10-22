@@ -79,10 +79,12 @@ OpenAI Secure MCP Tunnel (`tunnel-client` v0.0.16) → установленны�
 | Каталог VUDA в подключении ChatGPT | VERIFIED_WORKING | Обнаружены server `vuda`, версия 1.1.0, 29 инструментов; `tools_list.complete=true`, без пропущенных страниц. Это не проверка каждого инструмента |
 | navigate/evaluate/hover/fill/click/press_key/screenshot | TARGET_SESSION_PASS_REPORTED | Пользователь передал отчёт ChatGPT по `VUDA-TUNNEL-20261020-A`: один сеанс, значение `VUDA tunnel OK`, исходные счётчики 0 → конечные 1/1/1/1; mouseenter/input/click/keydown имеют `trusted=true`, полученный из `event.isTrusted`. Host-журнал независимо подтверждает обращения и создание `screenshot://vuda-local-verified`; пиксели этого снимка Host отдельно не просматривал |
 | Доставка ответов | VERIFIED_WORKING | Host: 37 принятых ответов, 0 окончательных ошибок доставки; в метриках 10 успешных `tools/call` и один внутренний ответ 409. Причина 409 по сохранённым info-журналам не установлена; нулевой общий счётчик ошибок не заявляется |
-| Тестовый сервер / продолжение работы | VERIFIED_WORKING | Собственный временный HTTP-сервер остановлен по проверенному PID/команде; туннель оставлен работающим. Автозапуск после перезагрузки и постоянное хранение ключа не настроены |
+| Тестовый сервер / продолжение работы | VERIFIED_WORKING | Собственный временный HTTP-сервер остановлен по проверенному PID/команде; туннель оставлен работающим. На момент этого теста автозапуск и постоянное хранение ключа не были настроены |
+| Постоянный запуск Windows — последующая настройка | VERIFIED_WORKING | Настроена задача `DSH VUDA Local`: при входе и каждую минуту, один экземпляр; ключ защищён Windows DPAPI. Проверены работа после закрытия окна ввода, автоматический запуск после остановки и успешный polling без повторного ввода ключа. Реальная перезагрузка Windows и новый браузерный тест ChatGPT не выполнялись |
 
 Частные доказательства этой установки: `%LOCALAPPDATA%/DSH/integrations/vuda-tunnel/connection-evidence.json`
-и `acceptance-evidence.json`; журнал клиента — `%USERPROFILE%/.local/state/tunnel-client/logs/vuda-local.log`.
+и `acceptance-evidence.json`; последующая настройка — `persistent-runtime-evidence.json` в той же папке.
+Журнал клиента — `%USERPROFILE%/.local/state/tunnel-client/logs/vuda-local.log`.
 Они не включаются в Git и не обещаются доступными внешнему ChatGPT без отдельного scope.
 Имена namespace и схемы проверяются в текущем чате. Эта запись не отменяет прежние
 BLOCKED/FAILED, не подтверждает исправление DevSpace Bash или всех действий Orca/Windows.
