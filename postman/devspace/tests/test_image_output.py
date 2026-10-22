@@ -131,6 +131,10 @@ class ImageOutputTests(unittest.TestCase):
                 self.assertEqual(details["deliveryState"], "READY_FOR_LEADER_READ")
                 self.assertEqual(details["imageMimeType"], "image/png")
                 self.assertEqual(details["imageSource"], "NATIVE_GENERATED_IMAGE_DOWNLOAD")
+                self.assertEqual(details["downloadPhase"], "COMPLETE")
+                self.assertEqual(details["downloadState"], "DOWNLOADED")
+                self.assertTrue(details["downloadAttempted"])
+                self.assertEqual(details["downloadError"], "NONE")
                 self.assertEqual(page.evaluate("window.downloadClicks"), 1)
                 self.assertNotEqual(preview.getvalue(), self.png)
                 self.assertEqual(details["imageSha256"], hashlib.sha256(self.png).hexdigest())
@@ -155,11 +159,116 @@ class ImageOutputTests(unittest.TestCase):
                 page.set_content(html)
                 page.wait_for_function("document.querySelector('img').naturalWidth===73")
                 with patch.object(type(page), 'url', property(lambda _: CHAT)):
-                    self.assertIsNone(image_output.observe_owned_image(page, visual, CHAT, binding))
+                    missing = {}
+                    self.assertIsNone(image_output.observe_owned_image(
+                        page, visual, CHAT, binding, diagnostic=missing))
+                    self.assertEqual(missing["downloadPhase"], "FIND_NATIVE_BUTTON")
+                    self.assertEqual(missing["downloadError"], "NATIVE_BUTTON_NOT_FOUND")
+                    self.assertEqual(missing["downloadState"], "NOT_ATTEMPTED")
+                    self.assertFalse(missing["downloadAttempted"])
+                    self.assertEqual(missing["saveState"], "NOT_ATTEMPTED")
                     self.native_download(page, original=b'not an original image')
-                    self.assertIsNone(image_output.observe_owned_image(page, visual, CHAT, binding))
+                    invalid = {}
+                    self.assertIsNone(image_output.observe_owned_image(
+                        page, visual, CHAT, binding, diagnostic=invalid))
+                    self.assertEqual(invalid["downloadPhase"], "STORE_ORIGINAL")
+                    self.assertEqual(invalid["downloadState"], "DOWNLOADED")
+                    self.assertEqual(invalid["downloadError"], "DEVSPACE_IMAGE_DECODE_FAILED")
+                    self.assertEqual(invalid["saveState"], "SAVE_FAILED")
                 self.assertEqual(page.evaluate('window.downloadClicks'), 1)
                 self.assertFalse(list(self.root.glob('POSTMAN_IMAGE_*')))
+            finally:
+                browser.close()
+
+    def test_owned_preview_viewer_downloads_original_only_once(self):
+        visual = "Нарисуй один маяк."
+        binding = self.visual_binding(visual)
+        preview = io.BytesIO()
+        Image.new("RGB", (64, 64), (1, 2, 3)).save(preview, format="PNG")
+        html = ('<main><div data-turn-key="ours"><div data-user-message-bubble="true">' +
+                visual + '</div><div data-message-author-role="assistant">' +
+                '<div data-testid="generated-image-gallery">' +
+                '<button data-testid="generated-image-preview"><img src="data:image/png;base64,' +
+                base64.b64encode(preview.getvalue()).decode("ascii") +
+                '"></button></div></div></div></main>')
+        with sync_playwright() as p:
+            browser = p.chromium.launch(channel="chrome", headless=True)
+            try:
+                page = browser.new_page()
+                page.set_content(html)
+                page.wait_for_function("document.querySelector('img').naturalWidth === 64")
+                page.evaluate("""encoded => {
+                    window.previewClicks = 0;
+                    window.downloadClicks = 0;
+                    document.querySelector('[data-testid="generated-image-preview"]').onclick = () => {
+                        window.previewClicks++;
+                        const viewer = document.createElement('dialog');
+                        const button = document.createElement('button');
+                        button.setAttribute('aria-label', 'Download image');
+                        button.onclick = () => {
+                            window.downloadClicks++;
+                            const bytes = Uint8Array.from(atob(encoded), c => c.charCodeAt(0));
+                            const a = document.createElement('a');
+                            a.href = URL.createObjectURL(new Blob([bytes], {type:'image/png'}));
+                            a.download = 'original.png';
+                            a.click();
+                        };
+                        viewer.append(button);
+                        document.body.append(viewer);
+                        viewer.showModal();
+                    };
+                }""", base64.b64encode(self.png).decode("ascii"))
+                diagnostic = {}
+                with patch.object(type(page), "url", property(lambda _: CHAT)):
+                    result = image_output.observe_owned_image(
+                        page, visual, CHAT, binding, diagnostic=diagnostic)
+                self.assertIsNotNone(result)
+                self.assertEqual(result["details"]["imageSource"], "NATIVE_GENERATED_IMAGE_DOWNLOAD")
+                self.assertEqual(Path(result["details"]["resultImage"]).read_bytes(), self.png)
+                self.assertNotEqual(preview.getvalue(), self.png)
+                self.assertEqual(diagnostic["downloadPhase"], "COMPLETE")
+                self.assertEqual(diagnostic["downloadState"], "DOWNLOADED")
+                self.assertEqual(diagnostic["saveState"], "SAVED")
+                self.assertEqual(page.evaluate("window.previewClicks"), 1)
+                self.assertEqual(page.evaluate("window.downloadClicks"), 1)
+                self.assertEqual(len(list(self.root.glob('POSTMAN_IMAGE_*'))), 1)
+            finally:
+                browser.close()
+
+    def test_native_download_missing_event_records_attempted_failure(self):
+        visual = "Нарисуй одну звезду."
+        binding = self.visual_binding(visual)
+        data = base64.b64encode(self.png).decode("ascii")
+        html = ('<main><div data-turn-key="ours"><div data-user-message-bubble="true">' +
+                visual + '</div><div data-message-author-role="assistant">' +
+                '<div data-testid="generated-image-gallery"><img src="data:image/png;base64,' +
+                data + '"><button aria-label="Download image">Save</button>' +
+                '</div></div></div></main>')
+        class TimedOutDownload:
+            def __enter__(self):
+                return self
+            def __exit__(self, *_):
+                raise TimeoutError("private browser error text must not escape")
+        with sync_playwright() as p:
+            browser = p.chromium.launch(channel="chrome", headless=True)
+            try:
+                page = browser.new_page()
+                page.set_content(html)
+                page.wait_for_function("document.querySelector('img').naturalWidth===73")
+                diagnostic = {}
+                with patch.object(type(page), "url", property(lambda _: CHAT)), \
+                     patch.object(type(page), "expect_download", return_value=TimedOutDownload()):
+                    result = image_output.observe_owned_image(
+                        page, visual, CHAT, binding, diagnostic=diagnostic)
+                self.assertIsNone(result)
+                self.assertEqual(diagnostic["downloadPhase"], "WAIT_NATIVE_DOWNLOAD")
+                self.assertEqual(diagnostic["downloadState"], "FAILED")
+                self.assertTrue(diagnostic["downloadAttempted"])
+                self.assertEqual(diagnostic["saveState"], "NOT_ATTEMPTED")
+                self.assertEqual(diagnostic["downloadError"], "EXCEPTION")
+                self.assertEqual(diagnostic["downloadExceptionType"], "TimeoutError")
+                self.assertNotIn("private", repr(diagnostic))
+                self.assertFalse(list(self.root.glob("POSTMAN_IMAGE_*")))
             finally:
                 browser.close()
 
@@ -290,7 +399,12 @@ class ImageOutputTests(unittest.TestCase):
                      "details": {"chatUrl": CHAT}}
         diagnostic = {"ok": True, "code": "DEVSPACE_DIAGNOSTIC",
                       "details": {"source": "transport_diagnostic", "diagnostic": "UNKNOWN",
-                                  "sendState": "UNKNOWN"}}
+                                  "sendState": "UNKNOWN", "generationState": "CONFIRMED",
+                                  "saveState": "NOT_ATTEMPTED", "deliveryState": "UNAVAILABLE",
+                                  "downloadPhase": "FIND_NATIVE_BUTTON",
+                                  "downloadState": "NOT_ATTEMPTED",
+                                  "downloadAttempted": False,
+                                  "downloadError": "NATIVE_BUTTON_NOT_FOUND"}}
         args = dict(task_url=receipt["taskUrl"], prompt=visual,
                     expected_filename="", expected_request={"transportKind": "devspace"},
                     artifact_mode=False, devspace_binding=binding, playwright_factory=Factory,
@@ -306,6 +420,11 @@ class ImageOutputTests(unittest.TestCase):
         send.assert_called_once()
         observe.assert_called_once()
         self.assertEqual(observe.call_args.kwargs["send_state"], "UNKNOWN")
+        status = bridge.read_state(REQ)
+        self.assertEqual(status["downloadPhase"], "FIND_NATIVE_BUTTON")
+        self.assertEqual(status["downloadError"], "NATIVE_BUTTON_NOT_FOUND")
+        self.assertFalse(status["downloadAttempted"])
+        self.assertEqual(status["saveState"], "NOT_ATTEMPTED")
 
     def test_verified_image_with_unavailable_bytes_reports_generation_separately(self):
         from types import SimpleNamespace
@@ -327,9 +446,45 @@ class ImageOutputTests(unittest.TestCase):
                 monotonic=lambda: clock[0],
                 sleep=lambda seconds: clock.__setitem__(0, clock[0] + seconds))
         self.assertEqual(result["details"]["generationState"], "CONFIRMED")
-        self.assertEqual(result["details"]["saveState"], "SAVE_FAILED")
+        self.assertEqual(result["details"]["saveState"], "NOT_ATTEMPTED")
+        self.assertEqual(result["details"]["downloadState"], "NOT_ATTEMPTED")
+        self.assertEqual(result["details"]["downloadPhase"], "NOT_STARTED")
         self.assertEqual(result["details"]["deliveryState"], "UNAVAILABLE")
         extract.assert_called_once()
+
+    def test_wait_for_image_retains_failed_store_diagnostics(self):
+        from types import SimpleNamespace
+        visual = "Нарисуй одно солнце."
+        binding = self.visual_binding(visual)
+        clock = [0.0]
+        def observed(*args, **kwargs):
+            clock[0] += 0.4
+            return {"ok": True, "code": "ASSISTANT_TURN_COMPLETED",
+                    "details": {"assistantImageCount": 1}}
+        def failed_save(*args, **kwargs):
+            kwargs["diagnostic"].update(downloadPhase="STORE_ORIGINAL",
+                downloadState="DOWNLOADED", downloadAttempted=True,
+                downloadError="DEVSPACE_IMAGE_SAVE_FAILED", saveState="SAVE_FAILED",
+                downloadExceptionType="ValueError")
+            return None
+        with patch.object(dev_observer.observer, "observe_next_assistant",
+                          side_effect=observed), \
+             patch.object(dev_observer.image_output, "observe_owned_image",
+                          side_effect=failed_save):
+            result = dev_observer.wait_for_image(SimpleNamespace(url=CHAT),
+                visual, CHAT, binding, timeout_ms=300, send_state="UNKNOWN",
+                monotonic=lambda: clock[0],
+                sleep=lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+        details = result["details"]
+        self.assertEqual(details["generationState"], "CONFIRMED")
+        self.assertEqual(details["sendState"], "UNKNOWN")
+        self.assertEqual(details["downloadState"], "DOWNLOADED")
+        self.assertEqual(details["downloadPhase"], "STORE_ORIGINAL")
+        self.assertTrue(details["downloadAttempted"])
+        self.assertEqual(details["downloadError"], "DEVSPACE_IMAGE_SAVE_FAILED")
+        self.assertEqual(details["downloadExceptionType"], "ValueError")
+        self.assertEqual(details["saveState"], "SAVE_FAILED")
+        self.assertEqual(details["deliveryState"], "UNAVAILABLE")
 
     def test_unknown_image_send_wait_is_read_only_not_another_send(self):
         from types import SimpleNamespace
@@ -352,6 +507,9 @@ class ImageOutputTests(unittest.TestCase):
                 sleep=lambda seconds:clock.__setitem__(0, clock[0] + seconds))
         self.assertEqual(result["details"]["sendState"], "UNKNOWN")
         self.assertEqual(result["details"]["saveState"], "NOT_SAVED")
+        self.assertEqual(result["details"]["downloadState"], "NOT_ATTEMPTED")
+        self.assertEqual(result["details"]["downloadPhase"], "NOT_STARTED")
+        self.assertFalse(result["details"]["downloadAttempted"])
         self.assertEqual(result["details"]["deliveryState"], "UNAVAILABLE")
         watched.assert_called_once()
         sent.assert_not_called()

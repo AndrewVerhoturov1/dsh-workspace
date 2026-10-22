@@ -220,6 +220,8 @@ export function devspaceTerminal(binding, observed = {}) {
       sendState: ['PROVEN_SENT', 'PROVEN_NOT_SENT', 'UNKNOWN', 'SEND_STARTED'].includes(observed.sendState) ? observed.sendState : 'UNKNOWN',
       generationState: image ? 'CONFIRMED' : observed.generationState === 'CONFIRMED' ? 'CONFIRMED' : 'UNPROVEN',
       saveState: image ? 'SAVED' : observed.saveState === 'SAVE_FAILED' ? 'SAVE_FAILED' : 'NOT_SAVED',
+      ...Object.fromEntries(['downloadPhase', 'downloadState', 'downloadAttempted', 'downloadError', 'downloadExceptionType']
+        .filter(key => Object.hasOwn(observed, key)).map(key => [key, observed[key]])),
       deliveryState: image ? 'READY_FOR_LEADER_READ' : 'UNAVAILABLE',
       ...(image ? { imageSource: observed.imageSource ?? null,
         assistantIdentity: observed.assistantIdentity ?? {} } : {}),
