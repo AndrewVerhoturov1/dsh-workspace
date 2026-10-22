@@ -341,6 +341,66 @@ class WebWorkerBridge:
             },
         }
 
+    def run_image_action(self, binding, prompt, chat_url, action, *, expected_identity=None,
+                         cdp_url=browser_bootstrap.DEFAULT_CDP_URL, playwright_factory=None):
+        """Observe/download one already-owned image; never submit a prompt."""
+        from postman.devspace import image_output
+        from postman.devspace.publication import bound_prompt
+        from postman.devspace.controls import revoked
+        if (action not in {"image_inspect", "image_download"} or
+                not browser_submit.is_bound_chat_url(chat_url) or not bound_prompt(binding, prompt)):
+            return {"ok": False, "code": "DEVSPACE_IMAGE_ACTION_BINDING_INVALID", "details": {}}
+        factory = playwright_factory
+        if factory is None:
+            factory = browser_bootstrap._load_sync_playwright()
+        browser = context = page = None
+        owns_context = False
+        try:
+            with ExitStack() as stack:
+                artifacts_dir = stack.enter_context(cdp_download.temporary_artifacts_dir())
+                playwright = stack.enter_context(cdp_download.locked_playwright(factory))
+                browser = cdp_download.connect_over_cdp(playwright,
+                    browser_bootstrap.normalize_cdp_url(cdp_url), artifacts_dir=artifacts_dir)
+                contexts = list(browser.contexts)
+                if contexts:
+                    context = contexts[0]
+                else:
+                    context = browser.new_context()
+                    owns_context = True
+                page = context.new_page()
+                def close_owned():
+                    if page is not None:
+                        try: page.close()
+                        except Exception: pass
+                    if owns_context and context is not None:
+                        try: context.close()
+                        except Exception: pass
+                stack.callback(close_owned)
+                page.goto(chat_url)
+                if str(page.url) != chat_url:
+                    raise ValueError("CHAT_MISMATCH")
+                ready = browser_observer.observe_next_assistant(page, prompt, chat_url,
+                    image_mode=True, timeout_ms=browser_submit.DEFAULT_TIMEOUT_MS)
+                if ready.get("ok") is not True or ready.get("code") != browser_observer.ASSISTANT_TURN_COMPLETED:
+                    return {"ok": False, "code": ready.get("code", "IMAGE_GENERATION_UNPROVEN"),
+                            "details": ready.get("details", {})}
+                if revoked(binding):
+                    raise ValueError("POSTMAN_DEVSPACE_REVOKED")
+                if action == "image_inspect":
+                    observed = image_output.inspect_owned_image(page, prompt, chat_url, binding)
+                else:
+                    diagnostic = {}
+                    with cdp_download.download_behavior(page, artifacts_dir):
+                        observed = image_output.observe_owned_image(page, prompt, chat_url, binding,
+                            diagnostic=diagnostic, expected_identity=expected_identity)
+                    if observed is None:
+                        observed = {"ok": False, "code": "DEVSPACE_IMAGE_DOWNLOAD_UNPROVEN",
+                                    "details": diagnostic}
+                return observed
+        except Exception as exc:
+            return {"ok": False, "code": "DEVSPACE_IMAGE_ACTION_FAILED",
+                    "details": {"exceptionType": type(exc).__name__[:80]}}
+
     def run_request(
         self,
         request_id: str,

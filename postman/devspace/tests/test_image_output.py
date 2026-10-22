@@ -235,6 +235,73 @@ class ImageOutputTests(unittest.TestCase):
             finally:
                 browser.close()
 
+    def test_inspect_reports_roleless_owned_viewer_without_download_or_send(self):
+        visual = "Нарисуй одну звезду."
+        binding = self.visual_binding(visual)
+        data = base64.b64encode(self.png).decode('ascii')
+        with sync_playwright() as p:
+            browser = p.chromium.launch(channel='chrome', headless=True)
+            try:
+                page = browser.new_page()
+                page.set_content('<main><div data-turn-key="ours">'
+                    '<div data-user-message-bubble="true">' + visual + '</div>'
+                    '<div data-message-author-role="assistant" data-message-id="response-one">'
+                    '<div data-testid="generated-image-gallery"><button data-testid="generated-image-preview">'
+                    '<img src="data:image/png;base64,' + data + '"></button></div></div></div></main>')
+                page.wait_for_function("document.querySelector('img').naturalWidth===73")
+                page.evaluate("""() => {
+                    window.previewClicks=0; window.downloadClicks=0;
+                    document.querySelector('[data-testid=generated-image-preview]').onclick=()=>{
+                      window.previewClicks++;
+                      const viewer=document.createElement('section');viewer.dataset.testid='actual-viewer';
+                      viewer.innerHTML='<button aria-label="Download image">Download</button>';
+                      viewer.querySelector('button').onclick=()=>window.downloadClicks++;
+                      document.body.append(viewer);
+                    };
+                }""")
+                with patch.object(type(page), 'url', property(lambda _: CHAT)), \
+                     patch.object(type(page), 'expect_download', side_effect=AssertionError('inspect cannot download')):
+                    result=image_output.inspect_owned_image(page, visual, CHAT, binding)
+                self.assertTrue(result['ok'], result)
+                self.assertTrue(result['details']['previewClicked'])
+                self.assertIn('actual-viewer', repr(result['details']['viewerCandidates']))
+                self.assertEqual(result['details']['existingDialogs'], 0)
+                self.assertEqual(page.evaluate('window.previewClicks'), 1)
+                self.assertEqual(page.evaluate('window.downloadClicks'), 0)
+                self.assertFalse(list(self.root.glob('POSTMAN_IMAGE_*')))
+                self.assertEqual(page.locator('[data-user-message-bubble]').count(), 1)
+            finally:
+                browser.close()
+
+    def test_download_reproves_inspected_response_before_one_native_original(self):
+        visual = "Нарисуй один квадрат."
+        binding = self.visual_binding(visual)
+        data=base64.b64encode(self.png).decode('ascii')
+        with sync_playwright() as p:
+            browser=p.chromium.launch(channel='chrome', headless=True)
+            try:
+                page=browser.new_page()
+                page.set_content('<main><div data-turn-key="ours"><div data-user-message-bubble="true">'+visual+
+                    '</div><div data-message-author-role="assistant"><div data-testid="generated-image-gallery">'
+                    '<img src="data:image/png;base64,'+data+'"></div></div></div></main>')
+                page.wait_for_function("document.querySelector('img').naturalWidth===73")
+                self.native_download(page)
+                with patch.object(type(page), 'url', property(lambda _: CHAT)):
+                    inspection=image_output.inspect_owned_image(page,visual,CHAT,binding)
+                    self.assertTrue(inspection['ok'])
+                    identity=inspection['details']['assistantIdentity']
+                    diagnostic={}
+                    self.assertIsNone(image_output.observe_owned_image(page,visual,CHAT,binding,
+                        diagnostic=diagnostic,expected_identity={**identity,'nodeIndex':999}))
+                    self.assertEqual(diagnostic['downloadError'],'INSPECTED_ASSISTANT_CHANGED')
+                    self.assertEqual(page.evaluate('window.downloadClicks'),0)
+                    result=image_output.observe_owned_image(page,visual,CHAT,binding,expected_identity=identity)
+                self.assertIsNotNone(result)
+                self.assertEqual(page.evaluate('window.downloadClicks'),1)
+                self.assertEqual(Path(result['details']['resultImage']).read_bytes(),self.png)
+            finally:
+                browser.close()
+
     def test_native_download_missing_event_records_attempted_failure(self):
         visual = "Нарисуй одну звезду."
         binding = self.visual_binding(visual)

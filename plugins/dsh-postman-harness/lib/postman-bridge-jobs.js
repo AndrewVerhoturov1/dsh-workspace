@@ -3,7 +3,7 @@ import { postmanInputGrants } from './postman-input-files.js'
 import { DirectPostmanJobManager } from './direct-current-turn.js'
 import { createPostmanDevspaceLanes } from './postman-devspace-lanes.js'
 import { requestDevspaceControl, readDevspaceControls, loadDevspaceChannelForOwner,
-  revokeDevspaceChannel, readDevspaceEvent, devspaceTerminal, readDevspaceObservation } from './postman-devspace.js'
+  revokeDevspaceChannel, readDevspaceEvent, devspaceTerminal, readDevspaceObservation, readDevspaceImageAction } from './postman-devspace.js'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { buildPostmanBridgeStartRequest, isTopLevelPostmanSupervisor, POSTMAN_BRIDGE_PROVIDER,
   settleTrustedPostmanStatus } from './postman-bridge-core.js'
@@ -417,7 +417,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
 
 
   function hasActive(parentSessionId) {
-    return [...jobs.values()].some(job => job.parentSessionId === parentSessionId && live(job))
+    return admissionTails.has(parentSessionId) || [...jobs.values()].some(job => job.parentSessionId === parentSessionId && live(job))
   }
   function hasActiveWork(parent) {
     return !disposed && controlCallerAllowed(parent) && hasActive(parent.id)
@@ -457,7 +457,18 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
       archivedAt: op.archivedAt ?? null, result: op.terminal?.result ?? null,
       lateResult: observedTerminal(parent, bridgeJobId, op, op.lateTerminal)?.result ?? null,
       processStopProven: false }
+    let imageActions = {}
+    if (op?.transportKind === 'devspace' && !op.executionRevoked) {
+      try {
+        const binding = loadDevspaceChannelForOwner(op.devspace?.channel, { bridgeJobId,
+          leaderSessionId: parent.id, lunaSessionId: op.childSessionId, requestId: op.requestId })
+        if (binding.imageMode === true) imageActions = {
+          imageInspection: readDevspaceImageAction(binding, 'image_inspect'),
+          imageDownload: readDevspaceImageAction(binding, 'image_download') }
+      } catch (error) { imageActions = { imageActionDiagnostic: diagnostic(error) } }
+    }
     if (terminal?.status === 'POSTMAN_BRIDGE_TERMINAL') return {
+      ...imageActions,
       ...(job ? snapshot(job) : { bridgeJobId, transportKind: op.transportKind ?? null,
         requestId: op.requestId ?? terminal.requestId ?? null, childSessionId: op.childSessionId ?? null, laneId: op.devspace?.laneId ?? null }),
       status: 'POSTMAN_BRIDGE_TERMINAL', state: 'TERMINAL', terminalStatus: terminal.terminalStatus ?? null,
@@ -516,6 +527,31 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     try { binding = loadDevspaceChannelForOwner(op.devspace?.channel, { bridgeJobId,
       leaderSessionId: parent.id, lunaSessionId: op.childSessionId, requestId: op.requestId }) }
     catch (error) { return { status: 'POSTMAN_DEVSPACE_CONTROL_CHANNEL_UNAVAILABLE', diagnostic: diagnostic(error) } }
+    if (action === 'image_inspect' || action === 'image_download') {
+      const execute = async () => {
+        const current = operation(parent, bridgeJobId), row = contexts.record(parent.id)
+        const laneId = current?.devspace?.laneId
+        const lane = laneId === 'legacy' ? row.devspaceLuna : row.devspaceLanes?.[laneId]
+        if (disposed || !controlCallerAllowed(parent) || !current || current.executionRevoked ||
+            binding.imageMode !== true || current.terminal?.status !== 'POSTMAN_BRIDGE_TERMINAL' || live(ownedJob(parent, bridgeJobId)) ||
+            lane?.activeBridgeJobId && lane.activeBridgeJobId !== bridgeJobId ||
+            [...jobs.values()].some(other => other.parentSessionId === parent.id && other.laneId === laneId && live(other)))
+          return { status: 'POSTMAN_DEVSPACE_IMAGE_ACTION_REJECTED', diagnostic: 'OWNED_TERMINAL_IMAGE_REQUIRED' }
+        if (!direct.imageAction) return { status: 'POSTMAN_DEVSPACE_IMAGE_ACTION_UNAVAILABLE' }
+        try {
+          const receipt = await direct.imageAction(binding, action)
+          return { status: receipt ? 'POSTMAN_DEVSPACE_IMAGE_ACTION_RESULT' : 'POSTMAN_DEVSPACE_IMAGE_ACTION_UNKNOWN',
+            bridgeJobId, requestId: op.requestId, receipt }
+        } catch (error) { return { status: 'POSTMAN_DEVSPACE_IMAGE_ACTION_UNKNOWN', diagnostic: diagnostic(error),
+            bridgeJobId, requestId: op.requestId } }
+      }
+      // Reuse admission serialization so a new Send cannot occupy this lane mid-action.
+      const result = (admissionTails.get(parent.id) ?? Promise.resolve()).then(execute, execute)
+      const tail = result.then(() => undefined, () => undefined)
+      admissionTails.set(parent.id, tail)
+      void tail.then(() => { if (admissionTails.get(parent.id) === tail) admissionTails.delete(parent.id) })
+      return result
+    }
     if (action === 'status') {
       try { return { status: 'POSTMAN_DEVSPACE_CONTROL_STATUS', bridgeJobId, requestId: op.requestId,
         controls: readDevspaceControls(binding), runtime: live(job) ? 'active' : 'not-observed' } }
@@ -592,7 +628,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     direct.dispose?.()
     coordinator.dispose()
     if (devspaceCoordinator !== coordinator) devspaceCoordinator.dispose()
-    await Promise.allSettled([...jobs.values()].map(job => job.completion))
+    await Promise.allSettled([...jobs.values()].map(job => job.completion).concat([...admissionTails.values()]))
     jobs.clear()
   }
   return { accept, status, list, teamSnapshot, stop, abandonAll, hasActive, hasActiveWork, dispose,

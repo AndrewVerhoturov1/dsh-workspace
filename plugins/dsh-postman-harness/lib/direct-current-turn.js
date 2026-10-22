@@ -6,7 +6,7 @@ import { homedir } from 'node:os'
 import { spawn as nodeSpawn } from 'node:child_process'
 import { postmanTaskContexts } from './postman-task-context.js'
 const POSTMAN_TASK_BRANCH_PATTERN = /^task\/postman-[a-f0-9]{32}$/
-import { createDevspaceChannel, devspaceTerminal, readDevspaceObservation } from './postman-devspace.js'
+import { createDevspaceChannel, devspaceTerminal, readDevspaceObservation, readDevspaceImageAction } from './postman-devspace.js'
 import { CurrentAttachmentStore, postmanInputGrants, stageStandaloneCurrentAttachments } from './postman-input-files.js'
 
 // Standalone transport publishes REQ task files to main; Leader children use their exact prepared task branch.
@@ -533,6 +533,28 @@ export class DirectPostmanJobManager {
     this.allocatingRequestIds = new Set()
     this.exactAskReplies = new Map()
     this.disposed = false
+  }
+
+  async imageAction(binding, action) {
+    if (this.disposed || !['image_inspect', 'image_download'].includes(action))
+      throw parseError('POSTMAN_DEVSPACE_IMAGE_ACTION_INVALID')
+    const bridge = join(HOST_SOURCE_ROOT, 'postman', 'devspace', 'postman-devspace.ps1')
+    const args = ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', bridge,
+      '-RequestId', binding.requestId, '-Channel', binding.channel, '-ImageAction', action]
+    let stdout = ''
+    await new Promise((resolve, reject) => {
+      const child = this.spawn(this.pwsh, args, { cwd: HOST_SOURCE_ROOT, windowsHide: true,
+        stdio: ['ignore', 'pipe', 'ignore'] })
+      child.stdout?.on('data', chunk => { stdout = appendBounded(stdout, chunk) })
+      child.once('error', reject)
+      child.once('close', code => code === 0 ? resolve() : reject(parseError('POSTMAN_DEVSPACE_IMAGE_ACTION_FAILED')))
+    })
+    const actionDiagnostic = parseTerminalJson(stdout)?.diagnostic
+    if (typeof actionDiagnostic === 'string' && /^POSTMAN_DEVSPACE_[A-Z_]+$/.test(actionDiagnostic))
+      throw parseError(actionDiagnostic)
+    const receipt = readDevspaceImageAction(binding, action)
+    if (!receipt) throw parseError('POSTMAN_DEVSPACE_IMAGE_ACTION_RECEIPT_MISSING')
+    return receipt
   }
 
   latest(sessionId) {

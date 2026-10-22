@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
-import { mkdirSync, writeFileSync, readFileSync, readdirSync, lstatSync, realpathSync, renameSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, lstatSync, realpathSync, renameSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve, relative, isAbsolute } from 'node:path'
 
@@ -233,4 +233,32 @@ export function devspaceTerminal(binding, observed = {}) {
     conversationRef: typeof observed.conversationRef === 'string' && /^https:\/\/chatgpt\.com\/c\/[a-zA-Z0-9-]+$/.test(observed.conversationRef) ? observed.conversationRef : null,
     diagnostic: event ? null : ['CAPABILITY_UNAVAILABLE', 'BLOCKED', 'PARTIAL', 'UNKNOWN'].includes(observed.diagnostic) ? observed.diagnostic : 'UNKNOWN',
     warnings: event ? ['REPORT_UNVERIFIED', ...(!reportRef || !existsReport(reportRef) ? ['REPORT_UNAVAILABLE'] : [])] : image ? [] : ['NO_LOCAL_SIGNAL'] }
+}
+
+/** Separate recovery facts never rewrite the original terminal observation. */
+export function readDevspaceImageAction(binding, action) {
+  if (!['image_inspect', 'image_download'].includes(action)) throw Error('POSTMAN_DEVSPACE_IMAGE_ACTION_INVALID')
+  let file = join(binding.channel, action === 'image_inspect' ? 'image-inspect.json' : 'image-download.json')
+  if (action === 'image_download' && !existsSync(file))
+    file = join(binding.channel, 'image-download-attempt.json')
+  try {
+    const info = lstatSync(file)
+    if (info.isSymbolicLink() || !info.isFile() || info.size > 1024 * 1024) throw Error('POSTMAN_DEVSPACE_IMAGE_RECEIPT_INVALID')
+    const receipt = JSON.parse(readFileSync(file, 'utf8'))
+    for (const key of ['jobId', 'requestId', 'leaderSessionId', 'lunaSessionId'])
+      if (receipt[key] !== binding[key]) throw Error('POSTMAN_DEVSPACE_IMAGE_RECEIPT_OWNER_MISMATCH')
+    if (binding.imageMode !== true || receipt.action !== action ||
+        receipt.conversationRef !== readDevspaceObservation(binding).conversationRef)
+      throw Error('POSTMAN_DEVSPACE_IMAGE_RECEIPT_INVALID')
+    if (receipt.resultImage !== undefined) {
+      const verified = devspaceTerminal(binding, { ...receipt, source: 'image_result' })
+      if (action !== 'image_download' || receipt.ok !== true ||
+          receipt.imageSource !== 'NATIVE_GENERATED_IMAGE_DOWNLOAD' ||
+          !receipt.assistantIdentity || !Object.keys(receipt.assistantIdentity).length)
+        throw Error('POSTMAN_DEVSPACE_IMAGE_RECEIPT_INVALID')
+      return { ...receipt, ...Object.fromEntries(['resultImage', 'imageSha256', 'imageMimeType', 'imageFormat',
+        'imageWidth', 'imageHeight', 'imageByteLength'].map(key => [key, verified[key]])) }
+    }
+    return receipt
+  } catch (error) { if (error.code === 'ENOENT') return null; throw error }
 }

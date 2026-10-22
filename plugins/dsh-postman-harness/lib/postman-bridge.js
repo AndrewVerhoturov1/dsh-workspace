@@ -155,10 +155,10 @@ export function createPostmanBridgeStopTool(ctx, jobs) {
 export function createPostmanDevspaceControlTool(ctx, jobs) {
   return defineTool({
     name: POSTMAN_DEVSPACE_CONTROL_TOOL_NAME,
-    description: 'Exact Leader-owned running @PostmanDevspace: queue same-chat steer, explicit preempt/Stop even during active DevSpace, or read control receipts. QUEUED is not Send/Stop proof. Stop generation does not prove shell stopped; new sends are recorded separately.',
+    description: 'Exact Leader-owned @PostmanDevspace: queue steer/preempt/Stop, read status, or explicitly image_inspect then image_download on a settled image job without Send. Inspection opens only its proved preview; download is one native original attempt. Historical terminal is preserved. QUEUED is not Send/Stop proof. Stop generation does not prove shell stopped; new sends are recorded separately.',
     parameters: {
       bridge_job_id: { type: 'string', required: true, description: 'Exact active owned bridgeJobId.' },
-      action: { type: 'string', required: true, enum: ['steer', 'preempt', 'stop', 'status'] },
+      action: { type: 'string', required: true, enum: ['steer', 'preempt', 'stop', 'status', 'image_inspect', 'image_download'] },
       priority: { type: 'string', enum: ['normal', 'urgent'] },
       message: { type: 'string', description: 'Host-owned new instruction; required for steer/preempt.' },
     },

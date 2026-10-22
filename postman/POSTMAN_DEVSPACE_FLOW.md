@@ -49,6 +49,20 @@ await tools.postman_bridge({
 
 После `POSTMAN_BRIDGE_READY` Leader читает `postman_bridge_status({bridge_job_id})`. Из точного следующего generated response загружается оригинал штатной кнопкой Download image, не preview/currentSrc и не снимок экрана. Decode проверяется до сохранения неизменных bytes. Результат содержит owner/job/REQ/chat, `assistantIdentity`, `resultImage`, MIME, размеры, длину, SHA-256 и отдельные `sendState/generationState/saveState/deliveryState`. При `SAVED/READY_FOR_LEADER_READ` Leader открывает точный `resultImage` прямым штатным `read_image`. Генерация без доказанного оригинала — не сохранённая/доставленная картинка; автоматической загрузки повторно нет.
 
+### Явное скачивание уже созданной картинки
+
+Для своего завершённого image job Leader вызывает через PTC существующий control:
+
+```js
+await tools.postman_devspace_control({bridge_job_id: jobId, action: 'image_inspect'})
+// Отдельное решение Leader после scoped фактов:
+await tools.postman_devspace_control({bridge_job_id: jobId, action: 'image_download'})
+```
+
+Inspect заново доказывает точный saved visual prompt/следующий generated response и отсутствие newer user turns; может открыть только его preview, но не нажимает Download и не отправляет сообщение. Возвращает фактические роли/атрибуты/кнопки галереи и появившегося UI, не угадывает viewer по глобальной кнопке. Download требует успешно сохранённого inspect и той же response identity, делает не более одной native download попытки; UNKNOWN не повторяется. Другая занятая lane, чужой/не image/отозванный/незавершённый job отклоняются.
+
+Исходный failed terminal/REQ не переписывается. Отдельные `image-inspect.json` и `image-download.json` в его private channel видны как `imageInspection`/`imageDownload` в `postman_bridge_status`. Успешный download даёт исходные bytes после decode, точный path/MIME/dimensions/size/SHA для штатного `read_image`; старый Send остаётся UNKNOWN, если был UNKNOWN. Активация кода и реальная загрузка — отдельные согласованные этапы, не доказанные unit-тестами.
+
 ## Отправки, таймер и управление
 
 После ошибки Host возвращает факты, не запускает восстановительную цепочку и не классифицирует текст `BLOCKED`/тайм-аут. Leader решает наблюдать, продолжить, создать новый REQ или сменить исполнителя. Перед повторным Send он проверяет историю, результаты и процессы; UNKNOWN не означает отсутствие выполненных действий. В одном вызове — одна попытка Send; старая неопределённость не запрещает новую явную команду.
