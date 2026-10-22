@@ -518,3 +518,40 @@ test('cache tooltips contain exact counts and focus targets; narrow wrap is reta
   f.dispose();
 });
 
+test('inferred writes and own/team totals use existing metrics with approximate markers', async () => {
+  const own = sample().own;
+  const f = fixture({ result: sample('child', {
+    own: { ...own, estimated: true, metrics: { ...own.metrics, write: { ...own.metrics.write, estimated: true, count: 1200 } } },
+    team: { ...sample().team, estimated: true },
+  }) });
+  await f.settle(0);
+  assert.equal(f.metrics().write.props.children[1].props.children, '≈1.2k');
+  assert.equal(f.metrics().cost.props.children[1].props.children, '≈$0.0042');
+  assert.equal(f.metrics().team.props.children[1].props.children, '≈$0.0090');
+  assert.equal(Object.keys(f.metrics()).length, 8);
+  assert.doesNotMatch(f.text(f.panel()), /Оценка записи:|С предполагаемой записью/);
+  focus(f, 'write');
+  assert.match(f.text(f.tooltip()), /Вклад в итог/);
+  assert.match(f.text(f.tooltip()), /разница тарифов/);
+  assert.match(f.text(f.tooltip()), /вход повторно не оплачивается/);
+  f.dispose();
+});
+
+test('a later measured counter replaces inferred values instead of retaining a higher estimate', async () => {
+  const original = sample();
+  const f = fixture({ result: sample('child', {
+    own: { ...original.own, estimated: true, total: 0.02, costUnknown: true, metrics: { ...original.own.metrics, write: { ...original.own.metrics.write, estimated: true, count: 10000, costUnknown: true } } },
+    team: { ...original.team, estimated: true, total: 0.03, costUnknown: true },
+  }) });
+  await f.settle(0);
+  f.listChanged();
+  await f.settle(1, sample('child', {
+    own: { ...original.own, estimated: false, costUnknown: true },
+    team: { ...original.team, estimated: false, costUnknown: true },
+  }));
+  assert.equal(f.metrics().write.props.children[1].props.children, '500');
+  assert.equal(f.metrics().cost.props.children[1].props.children, '$0.0042*');
+  assert.equal(f.metrics().team.props.children[1].props.children, '$0.0090*');
+  f.dispose();
+});
+

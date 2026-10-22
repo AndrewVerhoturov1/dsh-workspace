@@ -36,15 +36,16 @@ window.__ModuleLoader__.load({ id: 'dsh-cost-panel', factory: require => {
       const provisionalTeam = !!next.team?.duplicateUncertain;
       const metrics = {};
       for (const key of ['input', 'reasoning', 'read', 'write', 'output']) {
-        const before = priorOwn?.metrics?.[key];
         const after = next.own?.metrics?.[key];
+        const prior = priorOwn?.metrics?.[key];
+        const before = !!prior?.estimated === !!after?.estimated ? prior : null;
         metrics[key] = { ...after, ...retain(before, after, 'count', 'countKnown', 'countUnknown', provisionalOwn), ...retain(before, after, 'cost', 'costKnown', 'costUnknown', provisionalOwn), share: provisionalOwn ? null : after?.share ?? null };
         if (metrics[key].countUnknown || metrics[key].costUnknown) metrics[key].share = null;
       }
       const own = { ...next.own, calls: provisionalOwn ? priorOwn?.calls ?? null : next.own?.callsUnknown ? Math.max(priorOwn?.calls ?? 0, next.own?.calls ?? 0) : next.own?.calls ?? 0,
         callsUnknown: provisionalOwn || !!next.own?.callsUnknown, metrics,
-        ...retain(priorOwn, next.own, 'total', 'costKnown', 'costUnknown', provisionalOwn) };
-      const team = { ...next.team, ...retain(priorTeam, next.team, 'total', 'costKnown', 'costUnknown', provisionalTeam) };
+        ...retain(!!priorOwn?.estimated === !!next.own?.estimated ? priorOwn : null, next.own, 'total', 'costKnown', 'costUnknown', provisionalOwn) };
+      const team = { ...next.team, ...retain(!!priorTeam?.estimated === !!next.team?.estimated ? priorTeam : null, next.team, 'total', 'costKnown', 'costUnknown', provisionalTeam) };
       if (own.costUnknown) for (const m of Object.values(metrics)) m.share = null;
       return { ...next, own, team };
     }
@@ -109,16 +110,18 @@ window.__ModuleLoader__.load({ id: 'dsh-cost-panel', factory: require => {
       }, [activeInfo, data]);
       const current = data?.sessionId === sessionId ? data : lastKnown.get(sessionId);
       const own = current?.own;
-      const display = (value, hasData, incomplete, format) => hasData ? format(value) + (current?.stale ? '!' : incomplete ? '*' : '') : current ? '—' : '…';
-      const totalText = s => display(s?.total, known(s, 'costKnown'), s?.costUnknown, money);
-      const countText = m => display(m?.count, known(m, 'countKnown'), m?.countUnknown, compact);
+      const display = (value, hasData, incomplete, format, estimated = false) => hasData ? (estimated ? '≈' : '') + format(value) + (current?.stale ? '!' : incomplete ? '*' : '') : current ? '—' : '…';
+      const totalText = s => display(s?.total, known(s, 'costKnown'), s?.costUnknown, money, s?.estimated);
+      const countText = m => display(m?.count, known(m, 'countKnown'), m?.countUnknown, compact, m?.estimated);
       const writeCountText = m => known(m, 'countKnown') ? countText(m) : current?.stale ? '—' : current ? 'Нет данных' : '…';
       const note = (hasData, incomplete, estimate = false, key = 'note') => h('span', { key }, [!current ? 'загрузка' : current.stale ? 'ошибка получения данных · последние известные значения' : !hasData ? 'данные неизвестны' : incomplete ? 'неполные данные · * известная часть' : '', estimate ? 'оценка по API' : ''].filter(Boolean).join(' · '));
       const rows = (name, m, isWrite = false) => [h('strong', { key: name }, name),
-        h('span', { key: name + '-n' }, 'Токены', h('b', null, known(m, 'countKnown') ? exact(m.count) : isWrite && current && !current.stale ? 'Нет данных' : '—')),
-        h('span', { key: name + '-c' }, 'Стоимость', h('b', null, known(m, 'costKnown') ? money(m.cost) : isWrite && current && !current.stale ? known(m, 'countKnown') ? 'Недоступна' : 'Нет данных' : '—')),
+        h('span', { key: name + '-n' }, 'Токены', h('b', null, known(m, 'countKnown') ? (m.estimated ? '≈' : '') + exact(m.count) : isWrite && current && !current.stale ? 'Нет данных' : '—')),
+        h('span', { key: name + '-c' }, m?.estimated ? 'Вклад в итог' : 'Стоимость', h('b', null, known(m, 'costKnown') ? (m.estimated ? '≈' : '') + money(m.cost) : isWrite && current && !current.stale ? known(m, 'countKnown') ? 'Недоступна' : 'Нет данных' : '—')),
         ...(m?.share == null || own?.costUnknown || current?.stale ? [] : [h('span', { key: name + '-s' }, 'Доля стоимости агента', h('b', null, m.share.toFixed(2).replace(/\.00$/, '') + '%'))]),
-        note(known(m, 'countKnown'), m?.countUnknown || m?.costUnknown, true, name + '-note'),
+        isWrite && m?.estimated && known(m, 'countKnown') && !current?.stale
+          ? h('span', { key: name + '-note' }, '≈ Расчёт: вход без чтения кэша. Для расчётной части добавлена разница тарифов записи и обычного входа; вход повторно не оплачивается.')
+          : note(known(m, 'countKnown'), m?.countUnknown || m?.costUnknown, true, name + '-note'),
         ...(current && !known(m, 'costKnown') ? [h('span', { key: name + '-missing-cost' }, isWrite && !current.stale
           ? known(m, 'countKnown') ? 'Цена недоступна: нет применимого тарифа или условий расчёта записи кэша' : 'Нет данных о числе токенов записи кэша; цена не вычислена'
           : 'стоимость неизвестна')] : []),

@@ -69,8 +69,9 @@ export function apply(ctx) {
       let total = 0;
       let costKnown = false;
       let duplicateUncertain = false;
-      for (const id of team.ids) { const s = summaries.get(id); if (!s) incomplete = true; else { total += s.total; costKnown ||= s.costKnown; incomplete ||= s.costUnknown; duplicateUncertain ||= s.duplicateUncertain; } }
-      return { ok: true, value: { sessionId: payload.sessionId, own, team: { rootId: team.rootId, sessions: team.ids.length, total, costKnown, costUnknown: incomplete, duplicateUncertain }, checkedDate: catalog.checkedDate } };
+      let estimated = false;
+      for (const id of team.ids) { const s = summaries.get(id); if (!s) incomplete = true; else { total += s.total; costKnown ||= s.costKnown; incomplete ||= s.costUnknown; duplicateUncertain ||= s.duplicateUncertain; estimated ||= s.estimated; } }
+      return { ok: true, value: { sessionId: payload.sessionId, own, team: { rootId: team.rootId, sessions: team.ids.length, total, costKnown, costUnknown: incomplete, duplicateUncertain, estimated }, checkedDate: catalog.checkedDate } };
     } catch (error) {
       if (signal.aborted) return { ok: false, error: { code: 'cancelled', message: 'Request cancelled', details: {} } };
       ctx.logger.warn('cost-panel: accounting read failed', error);
