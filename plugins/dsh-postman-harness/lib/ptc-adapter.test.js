@@ -428,7 +428,7 @@ test('PTC-first Leader direct tools fail closed for both preset IDs while UI exc
   await f.adapter.dispose()
 })
 
-test('production Leader PTC exposes and forwards real Bridge devspace_mode schema', async () => {
+test('production Leader PTC exposes and forwards real Bridge Devspace image schema', async () => {
   const f=fixture(process.cwd()), {a,sections}=f.agent('devspace-mode','postman-leader')
   let admission
   const real=createPostmanBridgeTool(f.ctx,{accept(...args){
@@ -441,10 +441,12 @@ test('production Leader PTC exposes and forwards real Bridge devspace_mode schem
   try {
     const schema=f.ctx.tools.schemas(a).find(s=>s.name==='postman_bridge')
     assert.deepEqual(schema.parameters.properties.devspace_mode.enum,['READ_ONLY','WRITE_TEST','WRITE_ISOLATED'])
+    assert.equal(schema.parameters.properties.image_mode.type,'boolean')
     const guidance=sections[0].text({scope:a})
     const nested=JSON.parse(guidance.slice(guidance.lastIndexOf('Current nested argument schemas: ')+33))
     assert.deepEqual(nested.find(s=>s.name==='postman_bridge').parameters.properties.devspace_mode.enum,['READ_ONLY','WRITE_TEST','WRITE_ISOLATED'])
-    const result=await f.execute(a,"return await tools.postman_bridge({message:'@PostmanDevspace harmless test',devspace_mode:'WRITE_TEST'})")
+    assert.equal(nested.find(s=>s.name==='postman_bridge').parameters.properties.image_mode.type,'boolean')
+    const result=await f.execute(a,"return await tools.postman_bridge({message:'@PostmanDevspace harmless test',devspace_mode:'WRITE_TEST',image_mode:true})")
     assert.equal(result.isError,false,result.error?.message)
     assert.equal(result.value.status,'ok',JSON.stringify(result.value))
     assert.equal(result.value.value.status,'POSTMAN_BRIDGE_ACCEPTED')
@@ -452,6 +454,7 @@ test('production Leader PTC exposes and forwards real Bridge devspace_mode schem
     assert.equal(admission[1],'@PostmanDevspace harmless test')
     assert.equal(admission[2],'devspace')
     assert.equal(admission[5],'WRITE_TEST')
+    assert.equal(admission[8].imageMode,true)
     const nestedCall=f.traces.find(trace=>trace[0]==='pre'&&trace[1]==='postman_bridge')
     assert.equal(nestedCall[2],a)
     assert.ok(nestedCall[3])

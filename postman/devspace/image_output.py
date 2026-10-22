@@ -6,7 +6,7 @@ can supply one image. A failed extraction is not a completed image result.
 """
 from __future__ import annotations
 
-import base64
+import re
 import hashlib
 import io
 import os
@@ -14,54 +14,18 @@ from pathlib import Path
 import warnings
 
 import browser_observer as observer
+from postman.devspace.publication import bound_prompt
 
 MAX_IMAGE_BYTES = 48 * 1024 * 1024
 MIMES = {"PNG": ("png", "image/png"), "JPEG": ("jpg", "image/jpeg"),
          "WEBP": ("webp", "image/webp")}
 
-# Native generated image content may be blob/data or ChatGPT's own image/CDN URL.
-# The browser must successfully fetch this very src; the Host never interpolates
-# an arbitrary URL from assistant text, and never fetches file:// or localhost.
-_IMAGE_SOURCE_JS = r"""
-async img => {
-  if (!img.isConnected || !img.complete ||
-      img.naturalWidth < 64 || img.naturalHeight < 64 ||
-      !img.getClientRects().length || getComputedStyle(img).visibility === 'hidden')
-    return {ok:false,reason:'image_unready'};
-  const source = img.currentSrc || img.src || '';
-  let url;
-  try { url = new URL(source, location.href) } catch { return {ok:false,reason:'invalid_url'} }
-  const safe = url.protocol === 'blob:' && url.origin === location.origin ||
-    url.protocol === 'data:' && /^data:image\/(?:png|jpeg|webp);base64,/i.test(source) ||
-    url.protocol === 'https:' &&
-      (url.hostname === 'chatgpt.com' || url.hostname.endsWith('.oaiusercontent.com') ||
-       url.hostname === 'oaiusercontent.com');
-  if (!safe) return {ok:false,reason:'image_source_not_authorized'};
-  try {
-    const result = await fetch(source, {credentials:'include'});
-    if (!result.ok) return {ok:false,reason:'image_fetch_unavailable'};
-    const bytes = await result.arrayBuffer();
-    if (!bytes.byteLength || bytes.byteLength > 50331648)
-      return {ok:false,reason:'image_too_large'};
-    const value = new Uint8Array(bytes);
-    let text = '';
-    // Streamed chunk conversion avoids JS stack overflow for large images.
-    for (let i=0; i<value.length; i+=8192)
-      text += String.fromCharCode(...value.subarray(i,i+8192));
-    return {ok:true,data: btoa(text),mime:result.headers.get('content-type') || '',
-      width:img.naturalWidth,height:img.naturalHeight};
-  } catch { return {ok:false,reason:'image_fetch_unavailable'} }
-}
-"""
-
-
-def _store(binding, encoded: str) -> dict:
-    if not isinstance(encoded, str) or len(encoded) > MAX_IMAGE_BYTES * 2:
+# Only ChatGPT's native Download image action supplies the original asset.
+# The displayed img/currentSrc may be a resized preview and is never an output.
+def _store(binding, image_bytes: bytes) -> dict:
+    if not isinstance(image_bytes, bytes) or not 0 < len(image_bytes) <= MAX_IMAGE_BYTES:
         raise ValueError("DEVSPACE_IMAGE_DATA_INVALID")
     try:
-        image_bytes = base64.b64decode(encoded, validate=True)
-        if not 0 < len(image_bytes) <= MAX_IMAGE_BYTES:
-            raise ValueError("DEVSPACE_IMAGE_TOO_LARGE")
         from PIL import Image, UnidentifiedImageError
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
@@ -94,19 +58,20 @@ def _store(binding, encoded: str) -> dict:
         raise ValueError("DEVSPACE_IMAGE_SAVE_FAILED") from error
     return {"resultImage": str(target.resolve()), "imageSha256": hashlib.sha256(image_bytes).hexdigest(),
             "imageWidth": width, "imageHeight": height, "imageByteLength": len(image_bytes),
-            "imageMimeType": mime, "imageFormat": extension, "evidenceState": "BROWSER_VERIFIED_IMAGE"}
+            "imageMimeType": mime, "imageFormat": extension,
+            "evidenceState": "BROWSER_VERIFIED_IMAGE", "generationState": "CONFIRMED",
+            "saveState": "SAVED", "deliveryState": "READY_FOR_LEADER_READ"}
 
 
 def observe_owned_image(page, prompt, chat_url: str, binding):
-    """Attempt one read-only correlated capture; return None for unproved input.
+    """Download once from the correlated generated response; fail closed.
 
     Exact matching URL + request key + the immediately subsequent assistant
     are mandatory. Never select a later gallery from body/global DOM.
     """
     if str(getattr(page, 'url', '')) != chat_url:
         return None
-    expected = 'POSTMAN_REQUEST_ID: ' + binding["requestId"]
-    if not isinstance(prompt, str) or not prompt.startswith(expected + '\n'):
+    if not bound_prompt(binding, prompt):
         return None
     turns, selector = observer.snapshot_turns(page, image_mode=True,
                                                expected_prompt=prompt)
@@ -124,14 +89,50 @@ def observe_owned_image(page, prompt, chat_url: str, binding):
         images = scope.locator('[data-testid="generated-image-gallery"] img')
         if not images.count() and scope.get_attribute("data-testid") == "generated-image-gallery":
             images = scope.locator("img")
-        # Never capture user-supplied image, icons or ambiguous multiple outputs.
-        if images.count() != 1:
+        if not images.count():
+            # Modern ChatGPT puts the gallery beside the assistant message,
+            # inside the same content turn. Never search the whole document.
+            images = scope.locator("xpath=ancestor-or-self::*[@data-content-search-turn-key][1]//*[@data-testid=\'generated-image-gallery\']//img")
+        if images.count() != 1 or images.nth(0).evaluate(
+                "(img) => !!img.closest(\'[data-user-message-bubble], [data-message-author-role=user]\')"):
             return None
-        source = images.nth(0).evaluate(_IMAGE_SOURCE_JS)
-        if not isinstance(source, dict) or source.get("ok") is not True:
+        if observer.generation_active(page)[0]:
             return None
-        info = _store(binding, source.get("data"))
-    except (OSError, ValueError, AttributeError, TypeError):
+        image = images.nth(0)
+        image.hover(timeout=3000)
+        gallery = image.locator("xpath=ancestor::*[@data-testid='generated-image-gallery'][1]")
+        download_button = gallery.get_by_role("button", name=re.compile(
+            r"^(?:Download(?: image)?|Скачать(?: изображение)?)$", re.I))
+        if download_button.count() != 1 or not download_button.is_enabled():
+            return None
+        with page.expect_download(timeout=15000) as pending:
+            download_button.click(timeout=3000)
+        download = pending.value
+        if download.failure() is not None:
+            return None
+        original = Path(download.path())
+        if not 0 < original.stat().st_size <= MAX_IMAGE_BYTES or str(page.url) != chat_url:
+            return None
+        image_bytes = original.read_bytes()
+        fresh_turns, fresh_selector = observer.snapshot_turns(page, image_mode=True, expected_prompt=prompt)
+        fresh = observer.correlate_next_assistant(fresh_turns, prompt)
+        if not fresh.get("ok") or fresh["assistant"].get("imageCount") != 1 or any(
+                t.get("role") == "user" for t in fresh_turns[fresh["assistantIndex"] + 1:]):
+            return None
+        keys = ("groupKey", "contentSearchTurnKey", "assistantMessageId")
+        for key in keys:
+            if assistant.get(key) and fresh["assistant"].get(key) != assistant[key]:
+                return None
+        if not any(assistant.get(key) for key in keys) and (fresh_selector != selector or
+                fresh["assistant"].get("nodeIndex", fresh["assistant"]["index"]) !=
+                assistant.get("nodeIndex", assistant["index"])):
+            return None
+        info = _store(binding, image_bytes)
+        info["imageSource"] = "NATIVE_GENERATED_IMAGE_DOWNLOAD"
+        info["assistantIdentity"] = {"turnSelector": selector,
+            "nodeIndex": assistant.get("nodeIndex", assistant["index"]),
+            **{key: assistant[key] for key in keys if assistant.get(key)}}
+    except Exception:
         return None
     return {"ok": True, "code": "DEVSPACE_IMAGE_RESULT_DURABLE",
             "details": {"source": "image_result", "diagnostic": "UNKNOWN",

@@ -214,6 +214,65 @@ assert hasattr(stdlib_signal, 'set_wakeup_fd')
         self.assertTrue(handoff.call_args.kwargs["image"])
         self.assertEqual(len(calls),1)
 
+    def test_image_mode_sends_only_visual_prompt_and_returns_durable_file_status(self):
+        visual = "Создай одно изображение кота на синем фоне."
+        calls = []
+        class Bridge:
+            def __init__(self, **kwargs):
+                pass
+            def run_request(self, request_id, **kwargs):
+                calls.append(kwargs)
+                return {"ok": True, "code": "DEVSPACE_IMAGE_RESULT_DURABLE",
+                        "details": {"source": "image_result", "diagnostic": "UNKNOWN",
+                            "resultImage": "/absolute/POSTMAN_IMAGE_test.png",
+                            "imageMimeType": "image/png", "imageFormat": "png",
+                            "imageWidth": 73, "imageHeight": 67,
+                            "imageByteLength": 100, "imageSha256": "e" * 64,
+                            "sendState": "UNKNOWN", "generationState": "CONFIRMED", "saveState": "SAVED",
+                            "deliveryState": "READY_FOR_LEADER_READ"}}
+        def publish(binding, intent, command, *, image_mode=False):
+            self.assertTrue(image_mode)
+            self.assertTrue(binding["imageMode"])
+            self.assertEqual(intent, visual)
+            return {"taskUrl": "", "prompt": visual}
+        with patch.object(transport, "load_binding", return_value=self.binding), \
+             patch.object(transport, "publish_assignment", side_effect=publish):
+            result = transport.run(self.channel, REQ, visual, image_mode=True,
+                ensure_browser=lambda: {"cdpUrl": "existing"}, bridge_factory=Bridge)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["prompt"], visual)
+        self.assertEqual(calls[0]["task_url"], "")
+        self.assertEqual(result["sendState"], "UNKNOWN")
+        self.assertEqual(calls[0]["max_reminders"], 0)
+        self.assertEqual(calls[0]["devspace_binding"]["imageMode"], True)
+        self.assertFalse(calls[0]["artifact_mode"])
+        self.assertEqual(result["source"], "image_result")
+        self.assertEqual(result["generationState"], "CONFIRMED")
+        self.assertEqual(result["saveState"], "SAVED")
+        self.assertEqual(result["deliveryState"], "READY_FOR_LEADER_READ")
+        self.assertEqual(result["resultImage"], "/absolute/POSTMAN_IMAGE_test.png")
+        with self.assertRaisesRegex(ValueError, "IMAGE_INPUT_INVALID"):
+            transport.run(self.channel, REQ, visual, image_mode=True, input_bundle_manifest="unrelated")
+
+    def test_existing_result_cannot_be_reused_in_another_mode(self):
+        from postman.devspace import publication
+        ordinary = {"requestId": REQ, "source": "text_fallback",
+                    "diagnostic": "UNKNOWN", "assistantText": "previous text"}
+        (self.channel / "result.json").write_text(json.dumps(ordinary), encoding="utf-8")
+        sha = "a" * 40
+        source = "b" * 40
+        receipt = {"version": 1, "launchVersion": 2,
+                   **{name: self.binding.get(name) for name in publication.OWNER},
+                   "commit": sha, "sourceCommit": source,
+                   "taskUrl": publication.BASE + sha + "/tasks/" + JOB + ".md",
+                   "rulesUrl": publication.BASE + source + "/postman/devspace/SKILL.md"}
+        (self.channel / "publication.json").write_text(json.dumps(receipt), encoding="utf-8")
+        with patch.object(transport, "load_binding", return_value=self.binding):
+            self.assertEqual(transport.run(self.channel, REQ, "ordinary")["assistantText"],
+                             "previous text")
+            with self.assertRaisesRegex(ValueError, "BINDING_CHANGED"):
+                transport.run(self.channel, REQ, "image", image_mode=True)
+
     def test_external_bell_probe_precedes_dom_and_chat_final(self):
         received = {"ok":True,"code":"DEVSPACE_SIGNAL_RECEIVED","details":{"reportedOutcome":"DONE"}}
         result = observer.observer.observe_next_assistant(SimpleNamespace(url=CHAT), "exact", CHAT,

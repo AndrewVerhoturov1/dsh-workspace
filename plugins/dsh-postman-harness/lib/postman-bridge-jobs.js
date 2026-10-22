@@ -195,7 +195,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
       return startJob({ bridgeJobId: randomUUID(), parentSessionId: parent.id,
         taskContext: contexts?.get?.(parent.id) ?? { leaderSessionId: parent.id, worktree: parent.session?.header?.cwd },
         transportKind, state: 'QUEUED', createdAt: new Date().toISOString(), controller: new AbortController(),
-        inputBinding, notification: 'PENDING' }, message)
+        inputBinding, imageMode: options.imageMode === true, notification: 'PENDING' }, message)
     }
     const admit = async () => {
       if (contexts?.ensure) await contexts.ensure(parent)
@@ -227,7 +227,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
       const job = { bridgeJobId: randomUUID(), parentSessionId: parent.id, taskContext, transportKind,
         state: 'QUEUED', createdAt: new Date().toISOString(), controller: new AbortController(), inputBinding,
         notification: 'PENDING', devspaceMode: devspaceMode ?? (approvedScope?.access === 'write' ? 'WRITE_APPROVED_TARGET' : 'WRITE_TEST'),
-        approvedScope, computerUse: options.computerUse ?? 'allow', ...(laneId ? { laneId } : {}) }
+        approvedScope, imageMode: options.imageMode === true, computerUse: options.computerUse ?? 'allow', ...(laneId ? { laneId } : {}) }
       job.priorOperations = Object.entries(row?.bridgeOperations ?? {})
         .filter(([id, op]) => op.devspace?.laneId === laneId && !op.executionRevoked)
         .slice(-3).map(([bridgeJobId, op]) => ({ bridgeJobId, requestId: op.requestId ?? null,
@@ -241,7 +241,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
           bridgeOperations: { ...old.bridgeOperations, [job.bridgeJobId]: {
             state: 'pending', phase: 'reserved', transportKind, createdAt: job.createdAt,
             ...(laneId ? { devspace: { mode: job.devspaceMode, laneId,
-              computerUse: job.computerUse,
+              computerUse: job.computerUse, ...(job.imageMode ? { imageMode: true } : {}),
               ...(approvedScope ? { approvedRoot: approvedScope.root, approvedAccess: approvedScope.access } : {}) } } : {}) } } }
       })
       return startJob(job, message)

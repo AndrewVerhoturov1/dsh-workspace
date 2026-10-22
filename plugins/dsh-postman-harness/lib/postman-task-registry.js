@@ -107,7 +107,7 @@ export const POSTMAN_TASK_DOMAIN = defineDomain({
       phase: z.enum(['reserved', 'child-known', 'request-known', 'publication-known', 'terminal', 'not-sent', 'synchronized']).optional(),
       transportKind: z.enum(['artifact', 'text', 'image', 'devspace']).optional(),
       devspace: z.object({ mode: z.enum(['READ_ONLY', 'WRITE_TEST', 'WRITE_ISOLATED', 'WRITE_APPROVED_TARGET']), channel: z.string().optional(),
-        laneId: z.string().optional(), approvedRoot: z.string().optional(),
+        laneId: z.string().optional(), imageMode: z.boolean().optional(), approvedRoot: z.string().optional(),
         approvedAccess: z.enum(['read', 'write']).optional(),
         coldBellRecovery: z.enum(['intent']).optional(),
         coldReadyWake: z.enum(['intent', 'sent', 'unknown']).optional(),

@@ -8,10 +8,10 @@ export function devspaceRoot() {
   return process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, 'DSH', 'Postman', 'devspace') : join(homedir(), '.dsh', 'postman', 'devspace')
 }
 
-export function createDevspaceChannel({ root = devspaceRoot(), bridgeJobId, leaderSessionId, lunaSessionId, requestId, worktree, branch, workspaceOnly, mode, sourceRoot, conversationUrl, priorRequestId, computerUse = 'allow', recovery }) {
+export function createDevspaceChannel({ root = devspaceRoot(), bridgeJobId, leaderSessionId, lunaSessionId, requestId, worktree, branch, workspaceOnly, mode, sourceRoot, conversationUrl, priorRequestId, computerUse = 'allow', imageMode = false, recovery }) {
   if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(bridgeJobId ?? '') || !/^REQ_\d{8}T\d{6}Z_\d{4}$/.test(requestId ?? '') ||
       (priorRequestId !== undefined && (!/^REQ_\d{8}T\d{6}Z_\d{4}$/.test(priorRequestId) || priorRequestId === requestId || !conversationUrl)) ||
-      !leaderSessionId || !lunaSessionId || !['allow', 'deny'].includes(computerUse) ||
+      !leaderSessionId || !lunaSessionId || typeof imageMode !== 'boolean' || !['allow', 'deny'].includes(computerUse) ||
       recovery && (recovery.sourceRequestId !== undefined &&
         (!/^REQ_\d{8}T\d{6}Z_\d{4}$/.test(recovery.sourceRequestId) || recovery.sourceRequestId === requestId) ||
         !Number.isSafeInteger(recovery.attempt) || recovery.attempt < 1 ||
@@ -29,6 +29,7 @@ export function createDevspaceChannel({ root = devspaceRoot(), bridgeJobId, lead
     channel, capability: randomBytes(32).toString('hex'), mode, workspaceRef, writeRoot, computerUse,
     ...(typeof branch === 'string' ? {branch,writerRuntimeVersion:1} : {}),
     ...(workspaceOnly ? { workspaceOnly: true } : {}),
+    ...(imageMode ? { imageMode: true } : {}),
     ...(recovery ? { recovery } : {}),
     ...(conversationUrl ? { conversationUrl } : {}),
     ...(priorRequestId ? { priorRequestId } : {}) })
@@ -215,6 +216,14 @@ export function devspaceTerminal(binding, observed = {}) {
   return { ok: true, code, state: code, jobId: binding.jobId, requestId: binding.requestId,
     leaderSessionId: binding.leaderSessionId, lunaSessionId: binding.lunaSessionId,
     source, reportedOutcome: event?.reportedOutcome ?? (observed.diagnostic === 'PARTIAL' ? 'PARTIAL' : (observed.source === 'text_fallback' || image ? 'UNKNOWN' : 'BLOCKED')), deliveryState: 'DELIVERED',
+    ...(binding.imageMode === true ? {
+      sendState: ['PROVEN_SENT', 'PROVEN_NOT_SENT', 'UNKNOWN', 'SEND_STARTED'].includes(observed.sendState) ? observed.sendState : 'UNKNOWN',
+      generationState: image ? 'CONFIRMED' : observed.generationState === 'CONFIRMED' ? 'CONFIRMED' : 'UNPROVEN',
+      saveState: image ? 'SAVED' : observed.saveState === 'SAVE_FAILED' ? 'SAVE_FAILED' : 'NOT_SAVED',
+      deliveryState: image ? 'READY_FOR_LEADER_READ' : 'UNAVAILABLE',
+      ...(image ? { imageSource: observed.imageSource ?? null,
+        assistantIdentity: observed.assistantIdentity ?? {} } : {}),
+    } : {}),
     evidenceState: image ? 'BROWSER_VERIFIED_IMAGE' : 'REPORTED_NOT_VERIFIED', ...image, workspaceRef: binding.workspaceRef, writeRoot: binding.writeRoot,
     reportRef, message: event?.message ?? (typeof observed.message === 'string' ? observed.message : ''),
     transportDiagnostics: observed.transportDiagnostics ?? null,

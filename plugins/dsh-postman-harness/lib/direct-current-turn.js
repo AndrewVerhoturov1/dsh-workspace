@@ -595,7 +595,7 @@ export class DirectPostmanJobManager {
     if (inputFiles.length) args.push('-InputFilesBase64', Buffer.from(JSON.stringify(inputFiles), 'utf8').toString('base64'))
     if (chatRequestId !== undefined) args.push('-ChatRequestId', chatRequestId)
     if (automaticContinuation) args.push('-AutomaticContinuation')
-    if (transportKind === 'image') args.push('-ImageMode')
+    if (transportKind === 'image' || transportKind === 'devspace' && devspaceBinding.imageMode === true) args.push('-ImageMode')
 
     const job = {
       sessionId,

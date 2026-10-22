@@ -380,6 +380,8 @@ class WebWorkerBridge:
                     (conversation_url is not None and (conversation_url != devspace_binding.get('conversationUrl') or
                         not browser_submit.is_bound_chat_url(conversation_url)))):
                 return _result(BRIDGE_INVALID_CONFIG, ok=False, details={'reason': 'devspace_binding_invalid'})
+            if devspace_binding.get("imageMode") is True and devspace_binding.get("recovery") is not None:
+                return _result(BRIDGE_INVALID_CONFIG, ok=False, details={"reason": "image_recovery_send_forbidden"})
             prior = devspace_binding.get("priorRequestId")
             if prior is not None and (not isinstance(prior, str) or
                     not re.fullmatch(r"REQ_\d{8}T\d{6}Z_\d{4}", prior) or prior == request_id):
@@ -713,18 +715,23 @@ class WebWorkerBridge:
                         # The click may have reached ChatGPT even if its rendered user turn
                         # cannot be proven. Bell authority is the private Host channel, not
                         # DOM formatting: keep waiting without another browser mutation.
-                        from postman.devspace.observer import wait_for_bell_after_unknown_send
+                        from postman.devspace.observer import wait_for_bell_after_unknown_send, wait_for_image
                         candidate = submitted.get("details", {}).get("chatUrl")
                         conversation_ref = candidate if browser_submit.is_bound_chat_url(candidate) and str(page.url) == candidate else None
                         self._write_state(request, WAITING_ASSISTANT, submitProof=submitted,
                                           sendUnproven=True, conversationUrl=conversation_ref)
-                        terminal_result = wait_for_bell_after_unknown_send(
-                            devspace_binding, timeout_ms=observer_timeout_ms,
-                            sleep=self.sleep, monotonic=self.monotonic,
-                            conversation_ref=conversation_ref, page=page, prompt=prompt,
-                            interval_ms=reminder_interval_ms, count=max_reminders,
-                            persist=lambda fields: self._write_state(
-                                request, WAITING_ASSISTANT, **fields))
+                        if devspace_binding.get("imageMode") is True:
+                            terminal_result = wait_for_image(page, prompt, conversation_ref,
+                                devspace_binding, timeout_ms=observer_timeout_ms,
+                                sleep=self.sleep, monotonic=self.monotonic, send_state="UNKNOWN")
+                        else:
+                            terminal_result = wait_for_bell_after_unknown_send(
+                                devspace_binding, timeout_ms=observer_timeout_ms,
+                                sleep=self.sleep, monotonic=self.monotonic,
+                                conversation_ref=conversation_ref, page=page, prompt=prompt,
+                                interval_ms=reminder_interval_ms, count=max_reminders,
+                                persist=lambda fields: self._write_state(
+                                    request, WAITING_ASSISTANT, **fields))
                         self._write_state(request, terminal_result["code"], **terminal_result["details"])
                         return terminal_result
                     if artifact_mode and not image_flow and submitted.get("sendState") == browser_submit.SEND_UNKNOWN:
@@ -756,12 +763,16 @@ class WebWorkerBridge:
                 )
 
                 if devspace_binding is not None:
-                    from postman.devspace.observer import wait_for_signal
+                    from postman.devspace.observer import wait_for_image, wait_for_signal
                     self._write_state(request, WAITING_ASSISTANT)
-                    terminal_result = wait_for_signal(page, prompt, chat_url, devspace_binding,
-                        timeout_ms=observer_timeout_ms, interval_ms=reminder_interval_ms, count=max_reminders,
-                        sleep=self.sleep, monotonic=self.monotonic,
-                        persist=lambda fields: self._write_state(request, WAITING_ASSISTANT, **fields))
+                    if devspace_binding.get("imageMode") is True:
+                        terminal_result = wait_for_image(page, prompt, chat_url, devspace_binding,
+                            timeout_ms=observer_timeout_ms, sleep=self.sleep, monotonic=self.monotonic)
+                    else:
+                        terminal_result = wait_for_signal(page, prompt, chat_url, devspace_binding,
+                            timeout_ms=observer_timeout_ms, interval_ms=reminder_interval_ms, count=max_reminders,
+                            sleep=self.sleep, monotonic=self.monotonic,
+                            persist=lambda fields: self._write_state(request, WAITING_ASSISTANT, **fields))
                     self._write_state(request, terminal_result['code'], **terminal_result['details'])
                     return terminal_result
 

@@ -569,8 +569,8 @@ class TransportDomTests(unittest.TestCase):
             if first[0]:
                 first[0] = False
                 self.assertTrue(ready)
-                self.assertEqual(details.get('reason'), 'history_turns_unrecognized')
-                self.assertFalse(details['historyReady'])
+                self.assertTrue(details['composerEmpty'])
+                self.assertEqual(details['pageUrl'], URL)
             return original_wait(predicate, **kwargs)
         self.page.locator('[data-testid="send-button"]').evaluate('''button => button.onclick = () => {
             const bubble=document.createElement('div');bubble.setAttribute('data-user-message-bubble','true');
@@ -584,7 +584,6 @@ class TransportDomTests(unittest.TestCase):
                                                    navigate=False, prior_request_id=prior_id)
         self.assertTrue(result['ok'], result)
         self.assertEqual(self.page.evaluate('window.sends'), 1)
-        self.assertEqual(result['details']['priorHistoryReason'], 'history_turns_unrecognized')
         self.assertEqual(submit.collect_user_turn_texts(self.page), [PROMPT])
 
     def send_natural(self, *, slot=1, binding=None, anchor=PROMPT, original=PROMPT):

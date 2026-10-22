@@ -32,8 +32,17 @@ def render_launch(task_url, rules_url, *, launch_version=2):
 
 
 def _receipt(binding, value):
+    if binding.get("imageMode") is True:
+        if (value.get("version") != 1 or value.get("imageMode") is not True or
+                any(value.get(key) != binding.get(key) for key in OWNER) or
+                not re.fullmatch(r"[0-9a-f]{64}", value.get("intentSha256", "")) or
+                value.get("taskUrl") != "" or value.get("rulesUrl") != ""):
+            raise ValueError("POSTMAN_DEVSPACE_PUBLICATION_BINDING_CHANGED")
+        return value
     if (value.get("version") != 1 or value.get("launchVersion", 1) not in (1, 2) or
             any(value.get(key) != binding.get(key) for key in OWNER) or
+            (type(value.get("imageMode", False)) is not bool or
+             value.get("imageMode", False) != (binding.get("imageMode") is True)) or
             not _SHA.fullmatch(value.get("commit", "")) or not _SHA.fullmatch(value.get("sourceCommit", "")) or
             value.get("taskUrl") != BASE + value["commit"] + "/tasks/" + binding["jobId"] + ".md" or
             value.get("rulesUrl") != BASE + value["sourceCommit"] + "/postman/devspace/SKILL.md"):
@@ -52,9 +61,15 @@ def bound_prompt(binding, prompt, *, task_url=None):
     try:
         if (Path(binding["channel"]) / "publication.json").exists():
             saved = read_publication(binding)
-            return (task_url is None or task_url == saved["taskUrl"]) and prompt == render_launch(
-                saved["taskUrl"], saved["rulesUrl"], launch_version=saved.get("launchVersion", 1))
-        return prompt.startswith("POSTMAN_REQUEST_ID: " + binding["requestId"] + "\n")
+            if task_url is not None and task_url != saved["taskUrl"]:
+                return False
+            if saved.get("imageMode") is True:
+                return isinstance(prompt, str) and bool(prompt.strip()) and hashlib.sha256(
+                    prompt.encode("utf-8")).hexdigest() == saved["intentSha256"]
+            return prompt == render_launch(saved["taskUrl"], saved["rulesUrl"],
+                                           launch_version=saved.get("launchVersion", 1))
+        return binding.get("imageMode") is not True and prompt.startswith(
+            "POSTMAN_REQUEST_ID: " + binding["requestId"] + "\n")
     except (OSError, ValueError, KeyError):
         return False
 
@@ -62,7 +77,17 @@ def bound_prompt(binding, prompt, *, task_url=None):
 def saved_prompt(binding):
     if (Path(binding["channel"]) / "publication.json").exists():
         saved = read_publication(binding)
-        return render_launch(saved["taskUrl"], saved["rulesUrl"], launch_version=saved.get("launchVersion", 1))
+        if saved.get("imageMode") is not True:
+            return render_launch(saved["taskUrl"], saved["rulesUrl"], launch_version=saved.get("launchVersion", 1))
+        # The existing task.md records the exact visual-only first prompt; the
+        # private receipt pins its hash without publishing the chat text.
+        file = Path(binding["channel"]) / "task.md"
+        if file.is_symlink() or not file.is_file() or file.stat().st_size > 1024 * 1024:
+            raise ValueError("POSTMAN_DEVSPACE_PUBLICATION_BINDING_CHANGED")
+        prompt = file.read_text(encoding="utf-8")
+        if not bound_prompt(binding, prompt):
+            raise ValueError("POSTMAN_DEVSPACE_PUBLICATION_BINDING_CHANGED")
+        return prompt
     file = Path(binding["channel"]) / "task.md"
     if not file.exists():
         return "POSTMAN_REQUEST_ID: " + binding["requestId"] + "\n"  # old persisted channels
@@ -97,9 +122,26 @@ def public_read(url):
         return response.read(1024 * 1024 + 1)
 
 
-def publish_assignment(binding, intent, command, *, publisher=None, fetch=public_read, source=source_snapshot):
+def publish_assignment(binding, intent, command, *, image_mode=False,
+                       publisher=None, fetch=public_read, source=source_snapshot):
+    if type(image_mode) is not bool or image_mode != (binding.get("imageMode") is True):
+        raise ValueError("POSTMAN_DEVSPACE_PUBLICATION_BINDING_CHANGED")
+    if not isinstance(intent, str) or not intent.strip():
+        raise ValueError("POSTMAN_DEVSPACE_PUBLICATION_BINDING_CHANGED")
     if _SECRET.search(intent) or binding.get("capability") and binding["capability"] in intent:
         raise ValueError("POSTMAN_DEVSPACE_PUBLICATION_CREDENTIAL_REJECTED")
+    if image_mode:
+        # Visual-only requests are private: no GitHub publication or instructions.
+        root = Path(binding["channel"])
+        value = {"version": 1, "imageMode": True,
+            **{key: binding.get(key) for key in OWNER}, "taskUrl": "", "rulesUrl": "",
+            "intentSha256": hashlib.sha256(intent.encode("utf-8")).hexdigest()}
+        if (root / "publication.json").exists():
+            if read_publication(binding) != value:
+                raise ValueError("POSTMAN_DEVSPACE_PUBLICATION_BINDING_CHANGED")
+        else:
+            atomic_json(root / "publication.json", _receipt(binding, value))
+        return {**value, "prompt": intent}
     # Validate only the known instruction files, never serialize private binding.
     task.instruction_refs(binding)
     root = Path(binding["channel"])
@@ -149,7 +191,8 @@ def publish_assignment(binding, intent, command, *, publisher=None, fetch=public
                                      {"content": base64.b64encode(content).decode("ascii"), "encoding": "base64"})["sha"]
                 commit = publisher._commit(parent, [{"path": path, "mode": "100644", "type": "blob", "sha": blob}],
                                            "postman: publish DevSpace assignment " + binding["jobId"])
-            value = _receipt(binding, {"version": 1, "launchVersion": 2, **{key: binding.get(key) for key in OWNER},
+            value = _receipt(binding, {"version": 1, "launchVersion": 2,
+                **{key: binding.get(key) for key in OWNER},
                 "commit": commit, "sourceCommit": revision, "taskUrl": BASE + commit + "/" + path,
                 "rulesUrl": rules_url, "taskSha256": hashlib.sha256(content).hexdigest(),
                 "intentSha256": hashlib.sha256(intent.encode("utf-8")).hexdigest()})
@@ -163,5 +206,5 @@ def publish_assignment(binding, intent, command, *, publisher=None, fetch=public
                     fetch(BASE + value["sourceCommit"] + "/" + name).decode("utf-8")
                 except Exception as error:
                     raise ValueError("POSTMAN_DEVSPACE_INSTRUCTION_UNAVAILABLE: " + name) from error
-        return {**value, "prompt": render_launch(value["taskUrl"], value["rulesUrl"],
-                                               launch_version=value.get("launchVersion", 1))}
+        return {**value, "prompt": render_launch(
+            value["taskUrl"], value["rulesUrl"], launch_version=value.get("launchVersion", 1))}
