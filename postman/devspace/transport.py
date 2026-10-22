@@ -209,22 +209,101 @@ def run(channel, request_id, intent, *, image_mode=False,
     return result
 
 
+def run_image_action(channel, request_id, action, *, ensure_browser=None,
+                     bridge_factory=WebWorkerBridge):
+    from postman.devspace.publication import saved_prompt
+    from postman.devspace.controls import revoked
+    root = Path(channel)
+    binding = load_binding(channel)
+    if binding["requestId"] != request_id or binding.get("imageMode") is not True:
+        raise ValueError("POSTMAN_DEVSPACE_IMAGE_ACTION_BINDING_INVALID")
+    if action not in {"image_inspect", "image_download"}:
+        raise ValueError("POSTMAN_DEVSPACE_IMAGE_ACTION_INVALID")
+    result_path = root / "result.json"
+    if not result_path.is_file() or result_path.is_symlink():
+        raise ValueError("POSTMAN_DEVSPACE_IMAGE_RESULT_MISSING")
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    if result.get("requestId") != request_id or not result.get("conversationRef"):
+        raise ValueError("POSTMAN_DEVSPACE_IMAGE_RESULT_INVALID")
+    if revoked(binding):
+        raise ValueError("POSTMAN_DEVSPACE_REVOKED")
+    chat_url = binding.get("conversationUrl") or result["conversationRef"]
+    if not browser_submit.is_bound_chat_url(chat_url):
+        raise ValueError("POSTMAN_DEVSPACE_IMAGE_CHAT_MISMATCH")
+    if chat_url != result["conversationRef"]:
+        raise ValueError("POSTMAN_DEVSPACE_IMAGE_CHAT_MISMATCH")
+    prompt = saved_prompt(binding)
+    root.mkdir(parents=True, exist_ok=True)
+    inspection_path = root / "image-inspect.json"
+    download_path = root / "image-download.json"
+    attempt_path = root / "image-download-attempt.json"
+    expected_identity = None
+    if action == "image_download":
+        if not inspection_path.is_file() or inspection_path.is_symlink():
+            raise ValueError("POSTMAN_DEVSPACE_IMAGE_INSPECTION_REQUIRED")
+        inspection = json.loads(inspection_path.read_text(encoding="utf-8"))
+        expected_identity = inspection.get("assistantIdentity")
+        if (inspection.get("ok") is not True or not isinstance(expected_identity, dict) or not expected_identity or
+                inspection.get("requestId") != request_id or inspection.get("jobId") != binding["jobId"] or
+                inspection.get("leaderSessionId") != binding["leaderSessionId"] or
+                inspection.get("lunaSessionId") != binding["lunaSessionId"] or
+                inspection.get("action") != "image_inspect" or inspection.get("conversationRef") != chat_url):
+            raise ValueError("POSTMAN_DEVSPACE_IMAGE_INSPECTION_REQUIRED")
+        try:
+            with attempt_path.open("x", encoding="utf-8") as handle:
+                json.dump({"requestId": request_id, "action": action, "conversationRef": chat_url,
+                           "code": "POSTMAN_DEVSPACE_IMAGE_DOWNLOAD_CLAIMED", "outcome": "UNKNOWN",
+                           "sendState": result.get("sendState"), "assistantIdentity": expected_identity,
+                           **{key: binding[key] for key in ("jobId", "leaderSessionId", "lunaSessionId")}}, handle)
+        except FileExistsError:
+            raise ValueError("POSTMAN_DEVSPACE_IMAGE_DOWNLOAD_ALREADY_ATTEMPTED")
+    owner = {"requestId": request_id, "jobId": binding["jobId"],
+        "leaderSessionId": binding["leaderSessionId"], "lunaSessionId": binding["lunaSessionId"],
+        "action": action, "conversationRef": chat_url}
+    target = inspection_path if action == "image_inspect" else download_path
+    try:
+        if revoked(binding):
+            raise ValueError("POSTMAN_DEVSPACE_REVOKED")
+        browser = (ensure_browser or ensure_dedicated_chrome)()
+        bridge = bridge_factory(root=root / "web")
+        observed = bridge.run_image_action(binding, prompt, chat_url, action,
+            expected_identity=expected_identity, cdp_url=browser["cdpUrl"])
+    except Exception as error:
+        observed = {"ok": False, "code": str(error) if isinstance(error, ValueError) else "DEVSPACE_IMAGE_ACTION_FAILED",
+                    "details": {"exceptionType": type(error).__name__}}
+    details = observed.get("details") if isinstance(observed, dict) else {}
+    details = details if isinstance(details, dict) else {}
+    receipt = {**details, **owner, "ok": observed.get("ok") is True,
+        "code": observed.get("code", "DEVSPACE_IMAGE_ACTION_FAILED"),
+        "sendState": result.get("sendState")}
+    atomic_json(target, receipt)
+    return receipt
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--request-id", required=True)
-    parser.add_argument("--task-base64", required=True)
+    parser.add_argument("--task-base64")
     parser.add_argument("--channel", required=True)
+    parser.add_argument("--image-action")
     parser.add_argument("--input-files-base64")
     parser.add_argument("--input-bundle-manifest")
     parser.add_argument("--image-mode", action="store_true")
     args = parser.parse_args()
     try:
-        task = base64.b64decode(args.task_base64, validate=True).decode("utf-8")
-        result = run(args.channel, args.request_id, task, image_mode=args.image_mode,
+        if args.image_action:
+            result = run_image_action(args.channel, args.request_id, args.image_action)
+        else:
+            if args.task_base64 is None:
+                raise ValueError("POSTMAN_DEVSPACE_TASK_MISSING")
+            task = base64.b64decode(args.task_base64, validate=True).decode("utf-8")
+            result = run(args.channel, args.request_id, task, image_mode=args.image_mode,
                      input_files_base64=args.input_files_base64,
                      input_bundle_manifest=args.input_bundle_manifest)
-    except (OSError, ValueError):
-        result = {"requestId": args.request_id, "source": "transport_diagnostic", "diagnostic": "BLOCKED"}
+    except (OSError, ValueError) as error:
+        code = str(error) if isinstance(error, ValueError) and str(error).startswith("POSTMAN_DEVSPACE_") else "BLOCKED"
+        result = {"requestId": args.request_id, "source": "transport_diagnostic", "diagnostic": code,
+                  "assistantText": code}
     print(json.dumps(result, ensure_ascii=False))
     return 0
 

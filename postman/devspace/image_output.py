@@ -63,7 +63,90 @@ def _store(binding, image_bytes: bytes) -> dict:
             "saveState": "SAVED", "deliveryState": "READY_FOR_LEADER_READ"}
 
 
-def observe_owned_image(page, prompt, chat_url: str, binding, *, diagnostic=None):
+def _owned_image(page, prompt, chat_url, binding):
+    if str(getattr(page, 'url', '')) != chat_url:
+        raise ValueError("CHAT_MISMATCH")
+    if not bound_prompt(binding, prompt):
+        raise ValueError("BINDING_UNPROVEN")
+    turns, selector = observer.snapshot_turns(page, image_mode=True, expected_prompt=prompt)
+    correlated = observer.correlate_next_assistant(turns, prompt)
+    if not correlated.get("ok"):
+        raise ValueError("ASSISTANT_UNPROVEN")
+    if any(t.get("role") == "user" for t in turns[correlated["assistantIndex"] + 1:]):
+        raise ValueError("NEWER_USER_TURN")
+    assistant = correlated["assistant"]
+    if assistant.get("imageCount") != 1:
+        raise ValueError("OWNED_IMAGE_COUNT_NOT_ONE")
+    scope = page.locator(selector).nth(assistant.get("nodeIndex", assistant["index"]))
+    images = scope.locator('[data-testid="generated-image-gallery"] img')
+    if not images.count() and scope.get_attribute("data-testid") == "generated-image-gallery":
+        images = scope.locator("img")
+    if not images.count():
+        images = scope.locator("xpath=ancestor-or-self::*[@data-content-search-turn-key][1]//*[@data-testid='generated-image-gallery']//img")
+    if images.count() != 1:
+        raise ValueError("SCOPED_IMAGE_COUNT_NOT_ONE")
+    if images.nth(0).evaluate("img => !!img.closest('[data-user-message-bubble], [data-message-author-role=user]')"):
+        raise ValueError("USER_IMAGE_REJECTED")
+    identity = {"turnSelector": selector, "nodeIndex": assistant.get("nodeIndex", assistant["index"]),
+                **{key: assistant[key] for key in ("groupKey", "contentSearchTurnKey", "assistantMessageId") if assistant.get(key)}}
+    return images.nth(0), assistant, selector, identity
+
+
+def inspect_owned_image(page, prompt, chat_url, binding):
+    """Facts from one proved response and UI opened only by its preview. No download."""
+    details = {"downloadAttempted": False, "newMessageSent": False}
+    try:
+        image, _, _, identity = _owned_image(page, prompt, chat_url, binding)
+        details["assistantIdentity"] = identity
+        details["generationActive"] = observer.generation_active(page)[0]
+        gallery = image.locator("xpath=ancestor::*[@data-testid='generated-image-gallery'][1]")
+        details["gallery"] = gallery.evaluate(_IMAGE_UI_FACTS_JS)
+        if details["generationActive"]:
+            return {"ok": False, "code": "GENERATION_ACTIVE", "details": details}
+        preview = gallery.locator('button[data-testid="generated-image-preview"]')
+        # Existing viewer is not attributed to this response; do not click it.
+        details["existingDialogs"] = page.get_by_role("dialog").count()
+        details["previewCount"] = preview.count()
+        if preview.count() == 1 and preview.is_enabled() and not details["existingDialogs"]:
+            page.evaluate("window.__postmanImageBefore = new Set([...document.querySelectorAll('*')].filter(i => i.getClientRects().length))")
+            preview.click(timeout=3000)
+            # New visible image ancestors are inspection facts, NOT authority to click Download.
+            details["viewerCandidates"] = page.evaluate("""() => {
+                const before = window.__postmanImageBefore;
+                delete window.__postmanImageBefore;
+                return [...document.querySelectorAll('img,button,[role=button]')].filter(i => !before.has(i) && i.getClientRects().length)
+                  .slice(0, 12).map(img => {
+                    const ancestors=[];
+                    for(let n=img.parentElement, depth=0; n && depth<6; n=n.parentElement,depth++) {
+                      if(n===document.body || n===document.documentElement || before.has(n)) break;
+                      ancestors.push({tag:n.tagName,role:n.getAttribute('role'),id:n.id,
+                        testId:n.getAttribute('data-testid'),ariaModal:n.getAttribute('aria-modal'),
+                        buttons:[...n.querySelectorAll('button,[role=button]')].slice(0,12).map(b=>({
+                          role:b.getAttribute('role'),testId:b.getAttribute('data-testid'),
+                          label:(b.getAttribute('aria-label')||b.getAttribute('title')||b.innerText||'').slice(0,120)}))});
+                    }
+                    return {tag:img.tagName,role:img.getAttribute('role'),testId:img.getAttribute('data-testid'),
+                      label:(img.getAttribute('aria-label')||img.getAttribute('title')||img.alt||'').slice(0,120),ancestors};
+                  });
+            }""")
+            details["previewClicked"] = True
+        _, _, _, fresh = _owned_image(page, prompt, chat_url, binding)
+        if fresh != identity:
+            raise ValueError("ASSISTANT_IDENTITY_CHANGED")
+        return {"ok": True, "code": "DEVSPACE_IMAGE_INSPECTED", "details": details}
+    except Exception as error:
+        return {"ok": False, "code": "DEVSPACE_IMAGE_INSPECTION_UNPROVEN", "details": {
+            **details, "reason": str(error) if isinstance(error, ValueError) else "UI_READ_FAILED",
+            "exceptionType": type(error).__name__}}
+
+
+_IMAGE_UI_FACTS_JS = """node => ({tag:node.tagName,role:node.getAttribute('role'),
+  testId:node.getAttribute('data-testid'),buttons:[...node.querySelectorAll('button,[role=button]')]
+  .slice(0,12).map(b=>({testId:b.getAttribute('data-testid'),
+    label:(b.getAttribute('aria-label')||b.getAttribute('title')||b.innerText||'').slice(0,120)}))})"""
+
+
+def observe_owned_image(page, prompt, chat_url: str, binding, *, diagnostic=None, expected_identity=None):
     """Download once from the correlated generated response; fail closed.
 
     Exact matching URL + request key + the immediately subsequent assistant
@@ -83,42 +166,17 @@ def observe_owned_image(page, prompt, chat_url: str, binding, *, diagnostic=None
         return None
 
     try:
-        if str(getattr(page, 'url', '')) != chat_url:
-            return failed("CHAT_MISMATCH")
-        if not bound_prompt(binding, prompt):
-            return failed("BINDING_UNPROVEN")
-        phase = "CORRELATE_ASSISTANT"
-        turns, selector = observer.snapshot_turns(page, image_mode=True,
-                                                   expected_prompt=prompt)
-        correlated = observer.correlate_next_assistant(turns, prompt)
-        if not correlated.get("ok"):
-            return failed("ASSISTANT_UNPROVEN")
-        index = correlated["assistantIndex"]
-        if any(turn.get("role") == "user" for turn in turns[index + 1:]):
-            return failed("NEWER_USER_TURN")
-        assistant = correlated["assistant"]
-        if assistant.get("imageCount") != 1:
-            return failed("OWNED_IMAGE_COUNT_NOT_ONE")
-
-        phase = "LOCATE_OWNED_GALLERY"
-        scope = page.locator(selector).nth(assistant.get("nodeIndex", assistant["index"]))
-        images = scope.locator('[data-testid="generated-image-gallery"] img')
-        if not images.count() and scope.get_attribute("data-testid") == "generated-image-gallery":
-            images = scope.locator("img")
-        if not images.count():
-            # The sibling gallery may be inside the same content-search turn.
-            # Never search the whole document or a different assistant turn.
-            images = scope.locator("xpath=ancestor-or-self::*[@data-content-search-turn-key][1]//*[@data-testid='generated-image-gallery']//img")
-        if images.count() != 1:
-            return failed("SCOPED_IMAGE_COUNT_NOT_ONE")
-        if images.nth(0).evaluate(
-                "(img) => !!img.closest('[data-user-message-bubble], [data-message-author-role=user]')"):
-            return failed("USER_IMAGE_REJECTED")
+        try:
+            image, assistant, selector, identity = _owned_image(page, prompt, chat_url, binding)
+        except ValueError as error:
+            return failed(str(error))
+        if expected_identity is not None:
+            if identity != expected_identity:
+                return failed("INSPECTED_ASSISTANT_CHANGED")
 
         phase = "FIND_NATIVE_BUTTON"
         if observer.generation_active(page)[0]:
             return failed("GENERATION_ACTIVE")
-        image = images.nth(0)
         image.hover(timeout=3000)
         gallery = image.locator("xpath=ancestor::*[@data-testid='generated-image-gallery'][1]")
         download_button = gallery.get_by_role("button", name=re.compile(
@@ -148,6 +206,10 @@ def observe_owned_image(page, prompt, chat_url: str, binding, *, diagnostic=None
         if str(page.url) != chat_url:
             return failed("CHAT_CHANGED_BEFORE_DOWNLOAD")
 
+        if expected_identity is not None:
+            from postman.devspace.controls import revoked
+            if revoked(binding):
+                return failed("POSTMAN_DEVSPACE_REVOKED")
         phase = "EXPECT_NATIVE_DOWNLOAD"
         with page.expect_download(timeout=15000) as pending:
             phase = "CLICK_NATIVE_DOWNLOAD"

@@ -9,7 +9,7 @@ import { createScope } from '@deepseek-ai/dsh-scope'
 import { DEFAULT_LIMITS } from 'dsh-ptc'
 import { createPtcAdapter, PILOT_PROFILE, WORKER_MUTATION_PROFILE, SOL_WORKER_PROFILE } from './ptc-adapter.js'
 import { POSTMAN_PTC_DISCIPLINE } from './ptc-discipline.js'
-import { createPostmanBridgeTool } from './postman-bridge.js'
+import { createPostmanBridgeTool, createPostmanDevspaceControlTool } from './postman-bridge.js'
 import { postmanBridgeRestrictionForAgent, isTopLevelPostmanPtcLeader, postmanPtcDirectCallGuard, POSTMAN_PTC_ONLY_LEADER_TOOLS } from './postman-bridge-core.js'
 
 import { apply as applyFs } from '@deepseek-ai/dsh-tool-fs'
@@ -458,6 +458,30 @@ test('production Leader PTC exposes and forwards real Bridge Devspace image sche
     const nestedCall=f.traces.find(trace=>trace[0]==='pre'&&trace[1]==='postman_bridge')
     assert.equal(nestedCall[2],a)
     assert.ok(nestedCall[3])
+  } finally {await f.adapter.dispose()}
+})
+
+test('Leader PTC exposes explicit image inspect/download without Send tool routing', async () => {
+  const f=fixture(process.cwd()), {a,sections}=f.agent('image-actions','postman-leader')
+  const calls=[]
+  a.ctx.tools.register(createPostmanDevspaceControlTool(f.ctx,{
+    devspaceControl(...args){calls.push(args);return {status:'POSTMAN_DEVSPACE_IMAGE_ACTION_RESULT'}}
+  }))
+  a.ctx.tools.restrict(postmanBridgeRestrictionForAgent(a));f.adapter.refresh(a)
+  try {
+    const schema=f.ctx.tools.schemas(a).find(s=>s.name==='postman_devspace_control')
+    assert.ok(schema.parameters.properties.action.enum.includes('image_inspect'))
+    assert.ok(schema.parameters.properties.action.enum.includes('image_download'))
+    const hint=sections[0].text({scope:a})
+    const nested=JSON.parse(hint.slice(hint.lastIndexOf('Current nested argument schemas: ')+33))
+    assert.ok(nested.find(s=>s.name==='postman_devspace_control').parameters.properties.action.enum.includes('image_download'))
+    for(const action of ['image_inspect','image_download']) {
+      const out=await f.execute(a, "return await tools.postman_devspace_control({bridge_job_id:'owned',action:'"+action+"'})")
+      assert.equal(out.isError,false,out.error?.message)
+      assert.equal(out.value.value.status,'POSTMAN_DEVSPACE_IMAGE_ACTION_RESULT')
+    }
+    assert.deepEqual(calls.map(args=>args.slice(1,3)),[['owned','image_inspect'],['owned','image_download']])
+    assert.ok(calls.every(args=>args[0]===a))
   } finally {await f.adapter.dispose()}
 })
 
