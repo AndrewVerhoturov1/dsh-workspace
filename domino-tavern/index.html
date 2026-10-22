@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#24140d">
+  <title>Домино таверны</title>
+  <meta name="description" content="Атмосферное классическое домино против компьютера — без регистрации и установки.">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="candle candle--left" aria-hidden="true"></div>
+  <div class="candle candle--right" aria-hidden="true"></div>
+
+  <main class="game-shell" id="gameShell">
+    <header class="masthead">
+      <div class="crest" aria-hidden="true">
+        <svg viewBox="0 0 64 64" role="img">
+          <path d="M32 4 53 12v17c0 13-8.2 24.5-21 31C19.2 53.5 11 42 11 29V12L32 4Z" fill="currentColor" opacity=".22"/>
+          <path d="M32 7.5 49.5 14v15c0 10.8-6.4 20.5-17.5 27-11.1-6.5-17.5-16.2-17.5-27V14L32 7.5Z" fill="none" stroke="currentColor" stroke-width="2"/>
+          <rect x="21" y="20" width="22" height="12" rx="2.5" transform="rotate(-9 32 26)" fill="none" stroke="currentColor" stroke-width="2"/>
+          <path d="M31.7 18.4 35.4 34" stroke="currentColor" stroke-width="2"/>
+          <circle cx="27.2" cy="25.1" r="1.8" fill="currentColor"/>
+          <circle cx="37.1" cy="27.1" r="1.8" fill="currentColor"/>
+          <circle cx="39" cy="23" r="1.8" fill="currentColor"/>
+        </svg>
+      </div>
+      <div class="masthead__copy">
+        <p class="eyebrow">Игра у очага</p>
+        <h1>Домино таверны</h1>
+        <p class="subtitle">Классическая партия double-six против трактирного соперника.</p>
+      </div>
+      <button class="button button--gold new-game" id="newGameButton" type="button">
+        Новая партия
+      </button>
+    </header>
+
+    <section class="status-ribbon" aria-labelledby="turnHeading">
+      <div>
+        <p class="status-ribbon__label" id="turnHeading">Сейчас</p>
+        <p class="status-ribbon__message" id="turnMessage" aria-live="polite"></p>
+      </div>
+      <div class="status-ribbon__meta" id="starterMessage"></div>
+    </section>
+
+    <section class="opponent-area" aria-labelledby="opponentHeading">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Напротив вас</p>
+          <h2 id="opponentHeading">Соперник</h2>
+        </div>
+        <div class="counter-pill"><span id="computerCount">0</span> фишек</div>
+      </div>
+      <div class="opponent-hand" id="computerHand" aria-label="Закрытые фишки соперника"></div>
+    </section>
+
+    <section class="table-area" aria-label="Игровой стол">
+      <div class="table-topline">
+        <div class="end-marker">
+          <span>Левый край</span>
+          <strong id="leftEnd">—</strong>
+        </div>
+        <div class="boneyard" aria-label="Базар">
+          <span class="boneyard__stack" aria-hidden="true"></span>
+          <span><strong id="boneyardCount">0</strong> в базаре</span>
+        </div>
+        <div class="end-marker end-marker--right">
+          <span>Правый край</span>
+          <strong id="rightEnd">—</strong>
+        </div>
+      </div>
+
+      <div class="chain-viewport" id="chainViewport" tabindex="0" aria-label="Цепочка домино. Можно прокручивать по горизонтали.">
+        <div class="chain" id="chain"></div>
+      </div>
+
+      <div class="side-choice" id="sideChoice" hidden></div>
+    </section>
+
+    <section class="player-area" aria-labelledby="playerHeading">
+      <div class="section-heading section-heading--player">
+        <div>
+          <p class="eyebrow">Ваша сторона стола</p>
+          <h2 id="playerHeading">Ваши фишки</h2>
+        </div>
+        <div class="player-actions" id="playerActions"></div>
+      </div>
+      <div class="player-hand" id="playerHand" role="group" aria-label="Ваши фишки"></div>
+      <p class="hand-hint" id="handHint">Подходящие фишки подсвечены. Для выбора используйте Tab и Enter.</p>
+    </section>
+
+    <section class="result-card" id="resultCard" hidden aria-live="assertive"></section>
+
+    <details class="rules-card">
+      <summary>Короткие правила партии</summary>
+      <div class="rules-grid">
+        <p><strong>Набор:</strong> 28 фишек double-six. Вы и соперник получаете по 7, остальные уходят в базар.</p>
+        <p><strong>Старт:</strong> автоматически выходит старшая двойка среди рук; если двоек нет — фишка с наибольшей суммой.</p>
+        <p><strong>Нет хода:</strong> берём из базара до первой подходящей фишки. Если базар пуст — пропускаем ход.</p>
+        <p><strong>Финиш:</strong> победа при пустой руке. При «рыбе» выигрывает меньшая сумма очков на руках; равенство — ничья.</p>
+      </div>
+    </details>
+
+    <footer class="game-footer">
+      <span>Без регистрации · работает офлайн · управление мышью, касанием и клавиатурой</span>
+    </footer>
+  </main>
+
+  <template id="dominoTemplate">
+    <button class="domino" type="button">
+      <span class="domino__half domino__half--a" aria-hidden="true"></span>
+      <span class="domino__bar" aria-hidden="true"></span>
+      <span class="domino__half domino__half--b" aria-hidden="true"></span>
+    </button>
+  </template>
+
+  <script src="engine.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
