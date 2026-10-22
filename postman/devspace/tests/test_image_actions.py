@@ -76,7 +76,7 @@ class ImageActions(unittest.TestCase):
         download_context = Mock()
         download_context.__enter__ = lambda *_: events.append(("download.enter",))
         download_context.__exit__ = lambda *_: events.append(("download.exit",))
-        readiness = Mock(return_value={"ok":True,"code":"IMAGE_GENERATION_COMPLETED","details":{}})
+        readiness = Mock(return_value={"ok":True,"code":web.browser_observer.ASSISTANT_TURN_COMPLETED,"details":{}})
         inspect = Mock(return_value={"ok":True,"code":"INSPECTED","details":{"assistantIdentity":identity}})
         observe = Mock(return_value={"ok":True,"code":"DOWNLOADED","details":{"assistantIdentity":identity}})
         with patch.object(web.browser_submit, "is_bound_chat_url", return_value=True), \

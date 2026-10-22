@@ -381,7 +381,7 @@ class WebWorkerBridge:
                     raise ValueError("CHAT_MISMATCH")
                 ready = browser_observer.observe_next_assistant(page, prompt, chat_url,
                     image_mode=True, timeout_ms=browser_submit.DEFAULT_TIMEOUT_MS)
-                if ready.get("ok") is not True or ready.get("code") != "IMAGE_GENERATION_COMPLETED":
+                if ready.get("ok") is not True or ready.get("code") != browser_observer.ASSISTANT_TURN_COMPLETED:
                     return {"ok": False, "code": ready.get("code", "IMAGE_GENERATION_UNPROVEN"),
                             "details": ready.get("details", {})}
                 if revoked(binding):
