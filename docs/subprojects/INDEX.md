@@ -122,6 +122,7 @@ AGENTS.md
 | Agents Nods by Andrew | agents-nods-by-andrew | active | 2026-09-21 |
 | Postman | postman | active | 2026-09-21 |
 | ПТС-ядро | ptc | active | 2026-09-29 |
+| Carcassonne Web | carcassonne-web | active | 2026-10-05 |
 
 ## Принцип v1
 
