@@ -303,7 +303,7 @@ test('three concurrent READ_ONLY lanes isolate Luna, REQ, chat and an UNKNOWN in
   const jobs=createPostmanBridgeJobs(ctx,coordinator,null,contexts,null,direct)
   const accepted=await Promise.all([1,2,3].map(i=>
     jobs.accept(leader, '@PostmanDevspace read-only job '+i, 'devspace',
-      undefined,undefined,'READ_ONLY')))
+      undefined,undefined,'READ_ONLY',undefined,undefined,{imageMode:i===1})))
   assert.ok(accepted.every(v=>v.status==='POSTMAN_BRIDGE_ACCEPTED'))
   assert.equal(new Set(accepted.map(v=>v.laneId)).size,3)
   const fourth=await jobs.accept(leader,'@PostmanDevspace rejected','devspace',
@@ -313,6 +313,9 @@ test('three concurrent READ_ONLY lanes isolate Luna, REQ, chat and an UNKNOWN in
   assert.equal(starts,3)
   assert.equal(allocated,3)
   assert.equal(waiting.size,3)
+  assert.equal(launched[0].devspaceBinding.imageMode,true)
+  assert.equal(row.bridgeOperations[accepted[0].bridgeJobId].devspace.imageMode,true)
+  assert.equal(launched[1].devspaceBinding.imageMode,undefined)
   assert.equal(new Set(launched.map(v=>v.sessionId)).size,3)
   assert.equal(Object.keys(row.devspaceLanes).length,3)
   assert.ok(accepted.every(v=>row.devspaceLanes[v.laneId].activeBridgeJobId===v.bridgeJobId))
@@ -367,6 +370,13 @@ test('Host checks private image proof and never promotes an arbitrary stdout pat
   assert.equal(result.evidenceState,'BROWSER_VERIFIED_IMAGE')
   assert.equal(result.resultImage,source)
   assert.equal(result.imageSha256,proof.imageSha256)
+  const native=devspaceTerminal({...binding,imageMode:true},{...proof,sendState:'UNKNOWN',
+    imageSource:'NATIVE_GENERATED_IMAGE_DOWNLOAD',assistantIdentity:{assistantMessageId:'response-1'}})
+  assert.equal(native.generationState,'CONFIRMED'); assert.equal(native.saveState,'SAVED')
+  assert.equal(native.deliveryState,'READY_FOR_LEADER_READ'); assert.equal(native.sendState,'UNKNOWN')
+  assert.equal(native.imageSource,'NATIVE_GENERATED_IMAGE_DOWNLOAD')
+  assert.equal(native.assistantIdentity.assistantMessageId,'response-1')
+  assert.deepEqual(native,JSON.parse(JSON.stringify(native)))
   assert.equal(result.reportedOutcome,'UNKNOWN') // No fake DONE without bell.
   assert.throws(()=>devspaceTerminal(binding,{...proof,resultImage:'C:/foreign.png'}),/IMAGE_PROOF_INVALID/)
   assert.throws(()=>devspaceTerminal(binding,{...proof,imageSha256:'0'.repeat(64)}),/IMAGE_PROOF_INVALID/)
@@ -381,4 +391,47 @@ test('Host checks private image proof and never promotes an arbitrary stdout pat
   assert.equal(bell.evidenceState,'BROWSER_VERIFIED_IMAGE','image proof is not engineering PASS')
   assert.equal(devspaceTerminal(binding,bell).imageSha256,proof.imageSha256,'restart/late status retains validated bytes')
   assert.throws(()=>devspaceTerminal(binding,{...proof,imageSha256:'0'.repeat(64)}),/IMAGE_PROOF_INVALID/)
+})
+
+test('Leader image_mode reaches the existing Devspace job without altering visual text', async () => {
+  const owner = { ...parent }, calls = []
+  const tool = createPostmanBridgeTool({ agents: { get: () => owner } }, {
+    accept(...args) { calls.push(args); return {status:'POSTMAN_BRIDGE_ACCEPTED'} },
+  }, { ensure: async () => {}, get: () => ({}) })
+  const message = '@PostmanDevspace Нарисуй одну картинку: маяк у моря.'
+  assert.equal((await tool.execute({message, image_mode:true}, {agent:owner})).status, 'POSTMAN_BRIDGE_ACCEPTED')
+  assert.equal(calls[0][1], message)
+  assert.equal(calls[0][2], 'devspace')
+  assert.equal(calls[0][8].imageMode, true)
+  assert.equal((await tool.execute({message:'@PostmanImage legacy', image_mode:true}, {agent:owner})).diagnostic,
+    'POSTMAN_DEVSPACE_MODE_MISMATCH')
+  assert.equal(calls.length, 1)
+})
+
+test('Devspace image flag uses existing launcher and keeps save/delivery facts separate', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'devspace-image-mode-'))
+  t.after(() => rmSync(root, { recursive:true, force:true }))
+  const old = process.env.LOCALAPPDATA; process.env.LOCALAPPDATA=root
+  t.after(() => { if(old===undefined) delete process.env.LOCALAPPDATA; else process.env.LOCALAPPDATA=old })
+  let argv, child
+  const manager = new DirectPostmanJobManager({exists:()=>true, spawn(_cmd,args) {
+    argv=args; child=new EventEmitter(); child.stdout=new EventEmitter(); child.stderr=new EventEmitter()
+    queueMicrotask(()=>child.emit('spawn')); return child
+  }})
+  const started=await manager.start({sessionId:'image-luna', workspace:root, payload:'one lighthouse', branch:'',
+    transportKind:'devspace', devspaceBinding:{bridgeJobId:jobId,leaderSessionId:'leader',lunaSessionId:'image-luna',
+      worktree:root,branch:'',workspaceOnly:true,mode:'READ_ONLY',imageMode:true}})
+  assert.ok(argv.includes('-ImageMode'))
+  assert.match(argv[argv.indexOf('-File')+1], /postman-devspace[.]ps1$/)
+  const binding=JSON.parse(readFileSync(join(argv[argv.indexOf('-Channel')+1], 'binding.json'),'utf8'))
+  assert.equal(binding.imageMode,true)
+  assert.equal(Buffer.from(argv[argv.indexOf('-TaskBase64')+1],'base64').toString('utf8'),'one lighthouse')
+  const observed={requestId:started.requestId,source:'transport_diagnostic',diagnostic:'UNKNOWN',
+    generationState:'CONFIRMED',saveState:'SAVE_FAILED',deliveryState:'UNAVAILABLE'}
+  const terminal=devspaceTerminal(binding,observed)
+  assert.equal(terminal.generationState,'CONFIRMED'); assert.equal(terminal.saveState,'SAVE_FAILED')
+  assert.equal(terminal.deliveryState,'UNAVAILABLE'); assert.equal(terminal.resultImage,undefined)
+  writeFileSync(join(binding.channel,'result.json'),JSON.stringify(observed))
+  child.emit('close',0)
+  manager.dispose()
 })

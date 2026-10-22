@@ -169,6 +169,7 @@ export function createPostmanDevspaceLuna(ctx, contexts, direct) {
           ...(job.taskContext.workspaceOnly ? { workspaceOnly: true } : {}),
           worktree: job.approvedScope?.root ?? job.taskContext.worktree,
           mode: job.devspaceMode,
+          ...(job.imageMode ? { imageMode: true } : {}),
           computerUse: job.computerUse ?? 'deny',
           ...(continuationRef ? { conversationUrl: continuationRef } : {}),
           ...(job.priorRequestId ? { priorRequestId: job.priorRequestId } : {}),

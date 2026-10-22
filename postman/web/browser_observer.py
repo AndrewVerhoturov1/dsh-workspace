@@ -297,12 +297,16 @@ def snapshot_turns(page: Any, *, image_mode: bool = False,
             if count <= 0:
                 continue
             turns: list[dict[str, Any]] = []
-            for index in range(count):
-                node = locator.nth(index)
+            nodes = [(index, locator.nth(index)) for index in range(count)]
+            user_indices = {index for index, _ in submit.unique_user_aliases(
+                [(index, node) for index, node in nodes if infer_turn_role(node) == "user"])}
+            for index, node in nodes:
                 role = ("assistant" if image_mode and _get_attribute(node, "data-testid") == "generated-image-gallery"
                         else infer_turn_role(node))
+                if role == "user" and index not in user_indices:
+                    continue
                 entry = {
-                    "index": index,
+                    "index": len(turns), "nodeIndex": index,
                     "role": role,
                     "text": extract_turn_text(node),
                     "testId": _get_attribute(node, "data-testid"),

@@ -14,6 +14,57 @@ DEFAULT_CHECK_COUNT = 3
 STOP_OBSERVATION_MS = 10_000
 
 
+def wait_for_image(page, prompt, chat_url, binding, *, timeout_ms, sleep, monotonic,
+                   send_state="PROVEN_SENT"):
+    """Read-only first image result. Never repeat Send after UNKNOWN."""
+    import browser_submit as submit
+
+    deadline = monotonic() + timeout_ms / 1000.0
+    generated = False
+
+    def blocked(reason):
+        return {"ok": True, "code": "DEVSPACE_DIAGNOSTIC", "details": {
+            "source": "transport_diagnostic", "diagnostic": "UNKNOWN",
+            "conversationRef": chat_url, "sendState": send_state,
+            "generationState": "CONFIRMED" if generated else "UNPROVEN",
+            "saveState": "SAVE_FAILED" if generated else "NOT_SAVED",
+            "deliveryState": "UNAVAILABLE", "assistantText": "", "message": reason}}
+
+    if binding.get("imageMode") is not True or not bound_prompt(binding, prompt):
+        return blocked("Image publication binding not proved.")
+    while monotonic() < deadline:
+        if controls.revoked(binding):
+            return blocked("Request revoked.")
+        current = str(getattr(page, "url", "") or "")
+        if chat_url and current != chat_url:
+            return blocked("Owned chat changed.")
+        if not chat_url and submit.is_bound_chat_url(current):
+            try:
+                turns, _ = observer.snapshot_turns(page, image_mode=True, expected_prompt=prompt)
+                anchor = observer.find_user_anchor(turns, prompt)
+                if anchor is not None and not any(
+                        t.get("role") == "user" and t["index"] > anchor for t in turns):
+                    chat_url = current
+            except Exception:
+                pass
+        if chat_url:
+            result = observer.observe_next_assistant(page, prompt, chat_url,
+                image_mode=True, timeout_ms=min(1500, max(1, int((deadline-monotonic())*1000))),
+                stable_ms=500, poll_ms=100, sleep=sleep, monotonic=monotonic)
+            if result.get('ok') and result.get('details', {}).get('assistantImageCount') == 1:
+                generated = True
+                image = image_output.observe_owned_image(page, prompt, chat_url, binding)
+                if image:
+                    image['details'].update(sendState=send_state, conversationRef=chat_url)
+                    return image
+                return blocked("Owned image completed but original download/save was not proved; no retry or resend.")
+            if result.get('code') == observer.CHAT_CORRELATION_LOST:
+                return blocked('Assistant image correlation lost.')
+        else:
+            sleep(min(0.25, max(0.0, deadline-monotonic())))
+    return blocked("No completed owned image saved; no resend.")
+
+
 def wait_for_bell_after_unknown_send(binding, *, timeout_ms, sleep, monotonic,
                                      conversation_ref=None, page=None, prompt=None,
                                      interval_ms=None, count=None, persist=None):

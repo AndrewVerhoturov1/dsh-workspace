@@ -45,6 +45,7 @@ export function createPostmanBridgeTool(ctx, jobs, contexts) {
     description: 'Universal @PostmanDevspace is the default ChatGPT executor, with up to three independent persistent Luna/chat lanes per Leader. Legacy @Postman/Ask/Image remain available. Accepted is not completed; use POSTMAN_BRIDGE_READY then exact postman_bridge_status.',
     parameters: { message: { type: 'string', required: true,
       description: 'Complete model-authored delegation beginning with exact @Postman, @PostmanAsk, @PostmanImage or @PostmanDevspace. For Devspace include only the concrete task, necessary facts/paths, task constraints and done conditions. Host supplies standard instruction file refs and task scope; do not copy manuals or Host boilerplate.' },
+      image_mode: { type: 'boolean', description: 'Devspace only: generate one native ChatGPT image from the visual message alone; no GitHub task links, bell, input files or automatic resend. Original download and metadata are returned through bridge status.' },
       devspace_mode: { type: 'string', enum: ['READ_ONLY', 'WRITE_TEST', 'WRITE_ISOLATED'], description: 'Task instructions: WRITE_TEST uses private output by default; READ_ONLY requests no output files; WRITE_ISOLATED uses the directory selected by Leader. These do not change actual connector permissions.' },
       lane_id: { type: 'string', description: 'Optional exact returned Devspace laneId, to continue the same Luna and ChatGPT conversation. Omit for a free lane.' },
       workspace_root: { type: 'string', description: 'Optional local working folder selected by Leader; no Git preparation is required.' },
@@ -64,12 +65,15 @@ export function createPostmanBridgeTool(ctx, jobs, contexts) {
           args.devspace_mode !== undefined && !['READ_ONLY', 'WRITE_TEST', 'WRITE_ISOLATED'].includes(args.devspace_mode)))
         return { status: 'POSTMAN_BRIDGE_MESSAGE_REJECTED', diagnostic: 'POSTMAN_DEVSPACE_STAGE1_SCOPE' }
       if (parsed.transportKind !== 'devspace' &&
-          (args.devspace_mode !== undefined || args.lane_id !== undefined ||
+          (args.image_mode !== undefined || args.devspace_mode !== undefined || args.lane_id !== undefined ||
            args.workspace_root !== undefined || args.workspace_access !== undefined ||
            args.computer_use_target !== undefined || args.computer_use !== undefined))
         return { status: 'POSTMAN_BRIDGE_MESSAGE_REJECTED', diagnostic: 'POSTMAN_DEVSPACE_MODE_MISMATCH' }
       if (args.computer_use !== undefined && !['allow', 'deny'].includes(args.computer_use))
         return { status: 'POSTMAN_DEVSPACE_SCOPE_INVALID' }
+      if (args.image_mode !== undefined && typeof args.image_mode !== 'boolean' ||
+          args.image_mode === true && parsed.inputFiles?.length)
+        return { status: 'POSTMAN_BRIDGE_MESSAGE_REJECTED', diagnostic: 'POSTMAN_DEVSPACE_IMAGE_INPUT_INVALID' }
       const computerUse = args.computer_use ?? 'allow'
       let approvedScope
       if (args.workspace_root !== undefined) approvedScope = {
@@ -81,7 +85,7 @@ export function createPostmanBridgeTool(ctx, jobs, contexts) {
         ? postmanInputGrants.pin(exec.agent, contexts.get(exec.agent.id), parsed.inputFiles) : undefined
       try {
         const result = await jobs.accept(exec.agent, args.message, parsed.transportKind, inputBinding,
-          undefined, args.devspace_mode, args.lane_id, approvedScope, { computerUse })
+          undefined, args.devspace_mode, args.lane_id, approvedScope, { computerUse, imageMode: args.image_mode === true })
         if (result.status !== 'POSTMAN_BRIDGE_ACCEPTED') postmanInputGrants.unpin(inputBinding)
         return result
       } catch (error) { postmanInputGrants.unpin(inputBinding); throw error }

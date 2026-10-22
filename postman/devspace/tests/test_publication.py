@@ -71,9 +71,9 @@ class PublicationTests(unittest.TestCase):
         self.github = GitHub()
         self.publisher = input_files.GitHubInputPublisher(api=self.github.api, branch=pub.BRANCH)
 
-    def publish(self, intent="Read README and report its purpose", binding=None, fetch=None):
+    def publish(self, intent="Read README and report its purpose", binding=None, fetch=None, image_mode=False):
         return pub.publish_assignment(binding or self.binding, intent, "pwsh -File private-signal.ps1",
-            publisher=self.publisher, fetch=fetch or self.github.fetch,
+            image_mode=image_mode, publisher=self.publisher, fetch=fetch or self.github.fetch,
             source=lambda: ("b" * 40, {name: ("public " + name).encode() for name in pub.SOURCE_FILES}))
 
     def test_public_documents_and_natural_prompt_preserve_binding_without_credentials(self):
@@ -100,6 +100,30 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual(len(self.github.writes), mutations)
         with self.assertRaisesRegex(ValueError, "BINDING_CHANGED"):
             self.publish(intent="different intent")
+
+    def test_visual_image_mode_keeps_plain_prompt_and_private_binding(self):
+        visual = "Нарисуй одну картинку: светящийся маяк у моря."
+        binding = {**self.binding, "imageMode": True}
+        first = self.publish(visual, binding=binding, image_mode=True)
+        self.assertEqual(first["prompt"], visual)
+        self.assertEqual(first["imageMode"], True)
+        self.assertNotIn("POSTMAN_REQUEST_ID", first["prompt"])
+        self.assertNotIn("https://", first["prompt"])
+        self.assertTrue(pub.bound_prompt(binding, first["prompt"]))
+        self.assertFalse(pub.bound_prompt(binding, visual + " again"))
+        self.assertFalse(pub.bound_prompt(self.binding, visual))
+        self.assertEqual(first["taskUrl"], "")
+        self.assertEqual(first["rulesUrl"], "")
+        self.assertEqual(self.github.writes, [])
+        (self.root / "task.md").write_text(visual, encoding="utf-8")
+        self.assertEqual(pub.saved_prompt(binding), visual)
+        writes = len(self.github.writes)
+        self.assertEqual(self.publish(visual, binding=binding, image_mode=True), first)
+        self.assertEqual(len(self.github.writes), writes)
+        with self.assertRaisesRegex(ValueError, "BINDING_CHANGED"):
+            self.publish(visual, binding=self.binding)
+        with self.assertRaisesRegex(ValueError, "BINDING_CHANGED"):
+            self.publish(visual + " second", binding=binding, image_mode=True)
 
     def test_old_launch_receipt_keeps_its_exact_prompt_during_cold_restore(self):
         first = self.publish()

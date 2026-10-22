@@ -20,7 +20,7 @@ sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "postman" / "direct"))
 sys.path.insert(0, str(REPO / "postman" / "web"))
 from postman.devspace.signal import load_binding, atomic_json
-from postman.devspace.publication import publish_assignment
+from postman.devspace.publication import publish_assignment, read_publication
 from postman.devspace.observer import DEFAULT_CHECK_INTERVAL_MS, DEFAULT_CHECK_COUNT
 from postman import input_bundle
 from postman_direct import ensure_dedicated_chrome
@@ -114,14 +114,23 @@ def _safe_transport_evidence(details):
     return result
 
 
-def run(channel, request_id, intent, *, input_bundle_manifest=None, input_files_base64=None,
+def run(channel, request_id, intent, *, image_mode=False,
+        input_bundle_manifest=None, input_files_base64=None,
         ensure_browser=ensure_dedicated_chrome, bridge_factory=WebWorkerBridge):
+    if type(image_mode) is not bool or (image_mode and (input_bundle_manifest or input_files_base64)):
+        raise ValueError("POSTMAN_DEVSPACE_IMAGE_INPUT_INVALID")
     binding = load_binding(channel)
+    if image_mode:
+        binding = {**binding, "imageMode": True}
     if binding["requestId"] != request_id:
         raise ValueError("POSTMAN_DEVSPACE_REQUEST_MISMATCH")
     root = Path(channel)
     result_path = root / "result.json"
     if result_path.exists():
+        if image_mode and not (root / "publication.json").exists():
+            raise ValueError("POSTMAN_DEVSPACE_PUBLICATION_BINDING_CHANGED")
+        if (root / "publication.json").exists():
+            read_publication(binding)  # Reject cross-mode reuse of an earlier REQ.
         return json.loads(result_path.read_text(encoding="utf-8"))
     command = "pwsh -NoProfile -NonInteractive -File " + shlex.quote(str(root / "signal.ps1"))
     attachment = None
@@ -138,7 +147,8 @@ def run(channel, request_id, intent, *, input_bundle_manifest=None, input_files_
                    " Используй их как входные данные; не требуй ручного прикрепления"
                    " и не ищи копии в других папках.")
     try:
-        publication = publish_assignment(binding, intent, command)
+        publication = publish_assignment(binding, intent, command,
+            **({"image_mode": True} if image_mode else {}))
         prompt = publication["prompt"]
     except Exception as error:
         code = str(error).split(":", 1)[0]
@@ -160,7 +170,8 @@ def run(channel, request_id, intent, *, input_bundle_manifest=None, input_files_
             artifact_mode=False, devspace_binding=binding, cdp_url=browser["cdpUrl"],
             input_attachment=attachment,
             conversation_url=binding.get("conversationUrl"),
-            reminder_interval_ms=DEFAULT_CHECK_INTERVAL_MS, max_reminders=DEFAULT_CHECK_COUNT)
+            reminder_interval_ms=DEFAULT_CHECK_INTERVAL_MS,
+            max_reminders=0 if image_mode else DEFAULT_CHECK_COUNT)
         details = observed.get("details", {})
         stored = bridge.read_state(request_id) if callable(getattr(bridge, "read_state", None)) else {}
         recovery_diagnostics = {}
@@ -182,7 +193,8 @@ def run(channel, request_id, intent, *, input_bundle_manifest=None, input_files_
                   "conversationRef": details.get("conversationRef"), "message": details.get("message", ""),
                   **{key: details[key] for key in ("resultImage", "imageSha256", "imageWidth",
                       "imageHeight", "imageMimeType", "imageByteLength", "imageFormat",
-                      "evidenceState", "reportedOutcome") if key in details},
+                      "evidenceState", "sendState", "generationState", "saveState", "deliveryState",
+                      "imageSource", "assistantIdentity", "reportedOutcome") if key in details},
                   "transportDiagnostics": {**{key: details[key] for key in
                       ("reminderSlots", "transportEventJournal", "detectorDiagnostics") if key in details},
                       **recovery_diagnostics,
@@ -202,10 +214,11 @@ def main():
     parser.add_argument("--channel", required=True)
     parser.add_argument("--input-files-base64")
     parser.add_argument("--input-bundle-manifest")
+    parser.add_argument("--image-mode", action="store_true")
     args = parser.parse_args()
     try:
         task = base64.b64decode(args.task_base64, validate=True).decode("utf-8")
-        result = run(args.channel, args.request_id, task,
+        result = run(args.channel, args.request_id, task, image_mode=args.image_mode,
                      input_files_base64=args.input_files_base64,
                      input_bundle_manifest=args.input_bundle_manifest)
     except (OSError, ValueError):

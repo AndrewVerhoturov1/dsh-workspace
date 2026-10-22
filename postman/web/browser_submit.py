@@ -732,6 +732,45 @@ def read_semantic_message_text(locator: Any) -> str:
         return ""
 
 
+_USER_TURN_IDENTITY_JS = r"""
+(node) => {
+  const path = [];
+  for (let el = node; el && el.parentElement; el = el.parentElement)
+    path.unshift(Array.prototype.indexOf.call(el.parentElement.children, el));
+  const owner = node.closest('[data-content-search-unit-key$=":user"], [data-chatgpt-search-unit-key$=":user"], [data-turn-key]');
+  const key = owner && (owner.getAttribute('data-content-search-unit-key') ||
+    owner.getAttribute('data-chatgpt-search-unit-key') ||
+    owner.getAttribute('data-turn-key'));
+  return {path, key: key || ''};
+}
+"""
+
+
+def unique_user_aliases(items):
+    """Collapse only structural DOM aliases, never equal-text user messages."""
+    groups = []
+    for index, node in items:
+        try:
+            info = node.evaluate(_USER_TURN_IDENTITY_JS)
+            key = info.get("key") if isinstance(info, dict) else None
+            path = tuple(info.get("path") or ()) if isinstance(info, dict) else ()
+        except Exception:
+            key, path = None, ()
+        match = next((group for group in groups if (
+            key and group["key"] == key or
+            path and group["path"] and (
+                _path_is_prefix(path, group["path"]) or
+                _path_is_prefix(group["path"], path)))), None)
+        if match is None:
+            groups.append({"key": key, "path": path, "index": index, "node": node})
+        elif path and (not match["path"] or len(path) < len(match["path"])):
+            # Keep the enclosing user turn: sent-attachment evidence can live
+            # outside an inner duplicate content node.
+            match.update(index=index, node=node, path=path)
+    return sorted(((group["index"], group["node"]) for group in groups),
+                  key=lambda entry: entry[0])
+
+
 def collect_user_turn_details(page: Any, attachment_name: str | None = None) -> list[dict[str, Any]]:
     """Collect one logical user-turn selector family, never selector aliases."""
     for selector in USER_TURN_SELECTORS:
@@ -741,8 +780,8 @@ def collect_user_turn_details(page: Any, attachment_name: str | None = None) -> 
             if count <= 0:
                 continue
             values: list[dict[str, Any]] = []
-            for index in range(count):
-                item = locator.nth(index)
+            for index, item in unique_user_aliases(
+                    [(i, locator.nth(i)) for i in range(count)]):
                 semantic, semantic_selector = find_user_message_content(item)
                 text = read_semantic_message_text(semantic) if semantic is not None else ""
                 values.append({
@@ -779,9 +818,9 @@ def _read_user_history(page: Any, prior_request_id: str, *, prior_prompt: str | 
         if not count:
             continue
         texts = []
-        for index in range(count):
+        for index, item in unique_user_aliases(
+                [(i, locator.nth(i)) for i in range(count)]):
             try:
-                item = locator.nth(index)
                 semantic, _ = find_user_message_content(item, strict=True)
             except Exception:
                 return None, "history_traversal_failed"
