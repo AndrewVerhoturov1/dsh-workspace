@@ -141,18 +141,29 @@ export function summarize(fold, catalog) {
   const metrics = Object.fromEntries(Object.keys(buckets).map(k => [k, { count: 0, countKnown: false, countUnknown: false, cost: 0, costKnown: false, costUnknown: false }]));
   let total = 0;
   let costUnknown = fold.incompleteHistory;
+  let estimated = false;
   for (const attempt of fold.attempts) {
     const usage = attempt.usage;
     const rates = ratesFor(attempt, usage, catalog);
+    const estimateWrite = attempt.provider === 'codex' && !(usage?.cacheWriteTokens > 0 && usage.cacheWriteTokensKnown !== false);
+    const codexPrices = estimateWrite && catalog.models.find(m => m.provider === 'openai' && m.publicId === attempt.model)?.pricesUSDper1M;
+    const writeRates = rates && (codexPrices?.standard ?? codexPrices?.promptInputLTE272000);
     const prices = { input: rates?.inputUncached, reasoning: rates?.output, read: rates?.cacheRead, write: rates?.cacheWrite, output: rates?.output };
     for (const [key, field] of Object.entries(buckets)) {
       const m = metrics[key];
-      const count = usage?.[field];
-      if (typeof count !== 'number' || usage?.[field + 'Known'] === false) { m.countUnknown = true; m.costUnknown = true; continue; }
+      const inferred = key === 'write' && estimateWrite;
+      const sourceField = inferred ? 'inputTokens' : field;
+      const count = usage?.[sourceField];
+      if (inferred) { m.estimated = true; estimated = true; }
+      if (typeof count !== 'number' || usage?.[sourceField + 'Known'] === false) { m.countUnknown = true; m.costUnknown = true; continue; }
       m.count += count;
       m.countKnown = true;
       let amount;
-      if (count === 0) amount = 0;
+      if (inferred) {
+        // Ordinary input is already in the baseline. Add only the fixed Standard premium.
+        if (typeof writeRates?.inputUncached === 'number' && typeof writeRates?.cacheWrite === 'number')
+          amount = count * (writeRates.cacheWrite - writeRates.inputUncached) / catalog.unitTokens;
+      } else if (count === 0) amount = 0;
       else if (key === 'write' && prices.write == null && rates?.cacheWrite5m != null) {
         // Only price actual TTL buckets. DSH's normalized aggregate does not imply 5m.
         const short = usage.cacheWrite5mTokens;
@@ -166,7 +177,7 @@ export function summarize(fold, catalog) {
   for (const key of ['input', 'read', 'write', 'output']) { total += metrics[key].cost; costUnknown ||= metrics[key].costUnknown; }
   if (fold.incompleteHistory) for (const m of Object.values(metrics)) { m.countUnknown = true; m.costUnknown = true; }
   for (const m of Object.values(metrics)) m.share = !costUnknown && !m.costUnknown && total > 0 ? m.cost / total * 100 : null;
-  return { calls: fold.attempts.length, callsUnknown: fold.incompleteHistory, duplicateUncertain: !!fold.duplicateUncertain, total, costKnown: ['input', 'read', 'write', 'output'].some(key => metrics[key].costKnown), costUnknown, metrics };
+  return { calls: fold.attempts.length, callsUnknown: fold.incompleteHistory, duplicateUncertain: !!fold.duplicateUncertain, total, costKnown: ['input', 'read', 'write', 'output'].some(key => metrics[key].costKnown), costUnknown, estimated, metrics };
 }
 export function taskTeam(headers, currentId) {
   const byId = new Map(headers.map(h => [h.id, h]));

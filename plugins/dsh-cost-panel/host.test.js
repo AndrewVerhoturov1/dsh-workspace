@@ -242,6 +242,27 @@ test('registered loopback RPC returns own/live-root/live-child/cold-descendant c
   assert.doesNotThrow(() => rpcResultSchema(z.unknown()).parse(invalid));
 });
 
+test('registered loopback RPC includes inferred writes in own and unique team totals', async t => {
+  const h = await harness(t);
+  const root = sessionWithStep(h.store, 'inferred-root');
+  const child = h.store.create('inferred-child', { meta: { cwd: tmpdir(), parentSession: root.id, origin: 'subagent' } });
+  for (const [session, input] of [[root, 10], [child, 20]]) {
+    session.append('cost-panel/attempt', { id: 0, provider: 'codex', model: 'gpt-6-luna', serviceTier: 'default',
+      purpose: 'conversation', status: 'stop', usage: { ...usage(input, 2), cacheWriteTokensKnown: true } }, { ignorable: true });
+  }
+  h.ctx.provide('sessionPersistence', { async list() { return [root.header, child.header]; } });
+  const handler = h.rpcRegistration[1];
+  const signal = new AbortController().signal;
+  const result = await handler('get', { sessionId: root.id }, signal);
+  assert.equal(result.ok, true);
+  assert.equal(result.value.own.metrics.write.count, 10);
+  assert.equal(result.value.own.estimated, true);
+  assert.equal(result.value.team.estimated, true);
+  assert.ok(Math.abs(result.value.team.total - (30 * 0.125 + 4 * 0.5) / 1e6) < 1e-15);
+  const fromChild = await handler('get', { sessionId: child.id }, signal);
+  assert.equal(fromChild.value.team.total, result.value.team.total);
+});
+
 test('observer persists merged partial usage, with one attempt and no repeated output billing', async t => {
   const h = await harness(t);
   const session = sessionWithStep(h.store, 'partial');

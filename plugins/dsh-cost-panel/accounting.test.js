@@ -390,7 +390,7 @@ test('price identity matches provider plus model; Codex is an API-equivalent est
   assert.equal(wrong.metrics.input.costKnown, false);
   assert.equal(wrong.costUnknown, true);
   const codex = cost([attempt('codex', 'gpt-6-luna', { provider: 'codex', usage: counts })]);
-  assert.equal(codex.total, cost([attempt('api', 'gpt-6-luna', { usage: counts })]).total);
+  assert.ok(Math.abs(codex.total - cost([attempt('api', 'gpt-6-luna', { usage: counts })]).total - 10 * (0.125 - 0.1) / 1e6) < 1e-15);
   assert.equal(codex.costUnknown, false);
 });
 
@@ -460,5 +460,52 @@ test('provider-confirmed zero provenance survives durable partial snapshots; old
   assert.equal(folded.attempts[0].usage.cacheWriteTokensKnown, true);
   const missing = cost([attempt('unknown', 'gpt-6-luna', { usage: { inputTokens: 20, cacheReadTokens: 100, cacheWriteTokens: 0, cacheWriteTokensKnown: false, outputTokens: 2 } })]);
   assert.equal(missing.metrics.write.countKnown, false);
+});
+
+test('Codex zero or missing writes use uncached input and add only the Standard premium', () => {
+  for (const extra of [{}, { cacheWriteTokensKnown: true }, { cacheWriteTokens: undefined }]) {
+    const counts = usage(1000, 0, 2000, 0, 100, extra);
+    const original = structuredClone(counts);
+    const result = cost([attempt('codex', 'gpt-6.1-sol', { provider: 'codex', usage: counts })]);
+    const baseline = (1000 * 2 + 2000 * 0.1 + 100 * 10) / 1e6;
+    assert.equal(result.metrics.write.count, 1000);
+    assert.equal(result.metrics.write.estimated, true);
+    assert.equal(result.metrics.write.cost, 1000 * (2.5 - 2) / 1e6);
+    assert.equal(result.metrics.input.count, 1000);
+    assert.equal(result.total, baseline + result.metrics.write.cost);
+    assert.equal(result.estimated, true);
+    assert.deepEqual(counts, original);
+  }
+});
+
+test('positive actual Codex writes and non-Codex provider zeros retain measured accounting', () => {
+  const result = cost([attempt('codex', 'gpt-6.1-sol', { provider: 'codex', usage: usage(1000, 0, 2000, 50, 100) })]);
+  assert.equal(result.estimated, false);
+  assert.equal(result.metrics.write.count, 50);
+  assert.equal(result.metrics.write.cost, 50 * 2.5 / 1e6);
+  assert.ok(Math.abs(result.total - (1000 * 2 + 2000 * 0.1 + 50 * 2.5 + 100 * 10) / 1e6) < 1e-15);
+  const api = cost([attempt('api', 'gpt-6.1-sol', { usage: usage(1000, 0, 2000, 0, 100) })]);
+  assert.equal(api.metrics.write.count, 0);
+  assert.equal(api.estimated, false);
+});
+
+test('inferred writes require known input and an applicable price rather than fabricated zeros', () => {
+  const missing = cost([attempt('missing', 'gpt-6-luna', { provider: 'codex', usage: { inputTokens: 0, inputTokensKnown: false, outputTokens: 2, cacheWriteTokens: 0 } })]);
+  assert.equal(missing.metrics.write.countKnown, false);
+  assert.equal(missing.metrics.write.costKnown, false);
+  for (const data of [{ model: 'unknown-model' }, { serviceTier: 'priority' }]) {
+    const result = cost([attempt('no-rate', 'gpt-6-luna', { provider: 'codex', usage: usage(80, 0, 50, 0, 10), ...data })]);
+    assert.equal(result.metrics.write.count, 80);
+    assert.equal(result.metrics.write.costKnown, false);
+    assert.equal(result.costUnknown, true);
+  }
+});
+
+test('large Codex prompt retains its baseline and fixed Standard write premium without double payment', () => {
+  const result = cost([attempt('large', 'gpt-6.1-sol', { provider: 'codex', usage: usage(300000, 0, 0, 0, 0) })]);
+  assert.equal(result.metrics.input.cost, 1.2);
+  assert.equal(result.metrics.write.cost, 0.15);
+  assert.ok(Math.abs(result.total - 1.35) < 1e-12);
+  assert.equal(result.total, ['input', 'read', 'write', 'output'].reduce((sum, key) => sum + result.metrics[key].cost, 0));
 });
 
