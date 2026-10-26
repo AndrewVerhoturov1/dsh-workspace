@@ -27,8 +27,8 @@ $script:RequireProfileInstall = (Get-LauncherEnvValue -Name 'DSH_REQUIRE_PROFILE
 New-Item -ItemType Directory -Path $script:LogsRoot -Force | Out-Null
 
 function Resolve-ControllerRuntime {
-    $node = Get-Command 'node.exe' -CommandType Application -ErrorAction SilentlyContinue
-    if (-not $node) { $node = Get-Command 'node' -CommandType Application -ErrorAction SilentlyContinue }
+    $node = Get-Command 'node.exe' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $node) { $node = Get-Command 'node' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1 }
     if (-not $node) { throw 'node.exe was not found in PATH.' }
     $nodePath = [string]$node.Source
     if ([string]::IsNullOrWhiteSpace($nodePath)) { $nodePath = [string]$node.Path }
@@ -57,8 +57,9 @@ function Invoke-DshController([string]$Action) {
         # Node fetch does not inherit the Windows proxy used by the browser.
         if ([string]::IsNullOrWhiteSpace($env:HTTPS_PROXY) -and [string]::IsNullOrWhiteSpace($env:HTTP_PROXY)) {
             $proxyKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
-            $proxyEnabled = Get-ItemPropertyValue -LiteralPath $proxyKey -Name 'ProxyEnable' -ErrorAction SilentlyContinue
-            $proxyServer = [string](Get-ItemPropertyValue -LiteralPath $proxyKey -Name 'ProxyServer' -ErrorAction SilentlyContinue)
+            $proxySettings = Get-ItemProperty -LiteralPath $proxyKey -ErrorAction SilentlyContinue
+            $proxyEnabled = $proxySettings | Select-Object -ExpandProperty ProxyEnable -ErrorAction SilentlyContinue
+            $proxyServer = [string]($proxySettings | Select-Object -ExpandProperty ProxyServer -ErrorAction SilentlyContinue)
             if ($proxyEnabled -eq 1 -and -not [string]::IsNullOrWhiteSpace($proxyServer)) {
                 if ($proxyServer.Contains('=')) {
                     $proxyServer = [string](@($proxyServer -split ';' | Where-Object { $_ -match '^https=' } | Select-Object -First 1) -replace '^https=', '')

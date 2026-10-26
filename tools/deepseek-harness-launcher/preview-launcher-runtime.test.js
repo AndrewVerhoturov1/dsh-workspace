@@ -32,6 +32,8 @@ test('Windows launcher passes the enabled system proxy to Node and keeps loopbac
     { system: '127.0.0.1:18080', enabled: 1, https: 'http://127.0.0.1:18080' },
     { system: 'http=127.0.0.1:18080;https=127.0.0.1:18081', enabled: 1, https: 'http://127.0.0.1:18081' },
     { system: '127.0.0.1:18080', enabled: 0, https: null },
+    { enabled: 0, https: null },
+    { https: null },
     { system: 'http=127.0.0.1:18080', enabled: 1, https: null },
     { system: '127.0.0.1:18080', enabled: 1, env: { HTTPS_PROXY: 'http://explicit.invalid:18082', NO_PROXY: 'internal.invalid' }, https: 'http://explicit.invalid:18082' },
     { system: '127.0.0.1:18080', enabled: 1, env: { HTTP_PROXY: 'http://explicit.invalid:18082', NODE_USE_ENV_PROXY: '0' }, https: null },
@@ -42,10 +44,10 @@ test('Windows launcher passes the enabled system proxy to Node and keeps loopbac
       const script = `
         $ErrorActionPreference = 'Stop'
         [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
-        $script:proxySettings = @{ ProxyEnable = ${entry.enabled}; ProxyServer = ${quote(entry.system)} }
-        function Get-ItemPropertyValue {
-          [CmdletBinding()] param([string]$LiteralPath, [string]$Name)
-          return $script:proxySettings[$Name]
+        $script:proxySettings = @{ ${entry.enabled === undefined ? '' : `ProxyEnable = ${entry.enabled};`} ${entry.system === undefined ? '' : `ProxyServer = ${quote(entry.system)}`} }
+        function Get-ItemProperty {
+          [CmdletBinding()] param([string]$LiteralPath)
+          return [pscustomobject]$script:proxySettings
         }
         . ${quote(path.join(__dirname, 'DSH-Common.ps1'))}
         $script:ControllerPath = ${quote(controllerPath)}
