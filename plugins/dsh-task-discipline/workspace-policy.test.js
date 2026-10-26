@@ -48,7 +48,7 @@ async function fixture(dir) {
   await writeFile(join(dir,'sibling/AGENTS.md'),'SIBLING_ONLY: applies only under sibling/')
   await writeFile(join(dir,'nested/a.txt'),'a'); await writeFile(join(dir,'plugins/dsh-ptc/a.txt'),'a')
 }
-async function runtime(dir, observe = () => {}, { applyPolicy = policy, sessionCwd = dir } = {}) {
+async function runtime(dir, observe = () => {}, { applyPolicy = policy, sessionCwd = dir, preset = 'postman-leader' } = {}) {
   const ctx = new Context(), requests = [], effects = []
   new AgentRegistry(ctx); new SessionStore(ctx); new SessionProjectionRegistry(ctx)
   new SystemPrompt(ctx,{}); new ToolRuntime(ctx); new LlmRuntime(ctx)
@@ -62,14 +62,14 @@ async function runtime(dir, observe = () => {}, { applyPolicy = policy, sessionC
   discipline(ctx); applyPolicy(ctx)
   skills(ctx,{includeDefaultRoots:true,dshHome:join(dir,'home'),watch:false})
   await ctx.plugin(Loader,{baseUrl:pathToFileURL(join(installed,'lib/bin.js')).href})
-  const presetDir = join(dir,'presets/postman-leader')
+  const presetDir = join(dir,'presets',preset)
   await mkdir(presetDir,{recursive:true})
   await writeFile(join(presetDir,'agent.cordis.yml'),JSON.stringify([
     {id:'persona',name:pathToFileURL(modulePath('dsh-persona')).href,config:{text:'Shared composition marker {{cwd}}'}},
     {id:'instructions',name:pathToFileURL(modulePath('dsh-agent-instructions')).href,config:{dshHome:join(dir,'home'),maxBytes:65536}},
   ]))
-  new AgentPresets(ctx,{default:'postman-leader',includeUserRoot:false,roots:[{path:join(dir,'presets'),trust:'system'}]})
-  const setup = async agentCtx => { await ctx.agentPresets.mount(agentCtx,'postman-leader') }
+  new AgentPresets(ctx,{default:preset,includeUserRoot:false,roots:[{path:join(dir,'presets'),trust:'system'}]})
+  const setup = async agentCtx => { await ctx.agentPresets.mount(agentCtx,preset) }
   const output = {schema:{type:'object',additionalProperties:true},render:(_a,v)=>[{type:'text',text:JSON.stringify(v)}]}
   for (const name of ['read','write','pwsh']) ctx.tools.register(defineTool({name,description:'Inert '+name,parameters:{file_path:{type:'string'},content:{type:'string'},workdir:{type:'string'}},output,execute:(args,exec)=>{effects.push({name,args,agent:exec.agent.id});return {ok:true}}}))
   class Model extends LlmAdapter {
@@ -83,7 +83,7 @@ async function runtime(dir, observe = () => {}, { applyPolicy = policy, sessionC
     }
   }
   ctx.llm.registerAdapter(['fixture'],new Model())
-  const create = async id => (await ctx.agents.create({setup,sessionId:id,meta:{cwd:sessionCwd,agentPreset:'postman-leader'},agentOptions:{provider:'fixture',model:'inert'}})).agent
+  const create = async id => (await ctx.agents.create({setup,sessionId:id,meta:{cwd:sessionCwd,agentPreset:preset},agentOptions:{provider:'fixture',model:'inert'}})).agent
   return {ctx,requests,effects,setup,create,persistence,compactor}
 }
 
@@ -235,6 +235,21 @@ else {
       assert.ok(assembled.contexts.some(s=>s.text.includes('WORKSPACE_INSTRUCTION_UNAVAILABLE') && s.name.includes('TASK_CONTRACT')))
     } finally {await r.ctx.fiber.dispose();await rm(dir,{recursive:true,force:true,maxRetries:5})}
   })
+  test('exact Nodes Leader loads its additional canonical skill only in new role',{timeout:20000},async t=>{
+    for (const preset of ['postman-leader','postman-leader-ptc','postman-leader-ptc-nodes']) {
+      const dir=await mkdtemp(join(tmpdir(),'dsh-policy-nodes-'));await fixture(dir)
+      const r=await runtime(dir,()=>{}, {preset})
+      try {
+        const agent=await r.create('leader');agent.followup(input('Bounded role context check'));await agent.whenIdle()
+        const sections=latest(r.ctx,agent)
+        assert.ok(sections.some(s=>s.name==='dsh:workspace-policy:skill:postman-leader' && s.text.includes('POSTMAN_LEADER_SKILL_VERSION')))
+        const nodes=sections.find(s=>s.name==='dsh:workspace-policy:skill:postman-leader-nodes')
+        assert.equal(Boolean(nodes),preset==='postman-leader-ptc-nodes')
+        if(nodes) assert.match(nodes.text,/sole source of node-to-DSH-session identity/)
+      } finally { await r.ctx.fiber.dispose();await rm(dir,{recursive:true,force:true,maxRetries:5}) }
+    }
+  })
+
   test('exact Leader role does not preload Postman projects into unrelated repository',{timeout:20000},async t=>{
     const dir=await mkdtemp(join(tmpdir(),'dsh-policy-unrelated-'));await fixture(dir)
     await writeFile(join(dir,'AGENTS.md'),'Unrelated repository instructions')

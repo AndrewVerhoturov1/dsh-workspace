@@ -1,7 +1,7 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { z } from 'zod'
 import { resolve } from 'node:path'
-import { createPtcAdapter, SOL_WORKER_PROFILE } from './ptc-adapter.js'
+import { createPtcAdapter, SOL_WORKER_PROFILE, NODES_LEADER_PROFILE, NODES_SOL_PROFILE } from './ptc-adapter.js'
 import { CurrentAttachmentStore, createPostmanInputFilesTool, postmanInputGrants } from './postman-input-files.js'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { createPostmanAppTool } from './postman-app.js'
@@ -15,7 +15,7 @@ import { postmanTaskContexts, initializePostmanTaskContexts, releasePostmanTaskC
 import { sharedPostmanTaskRegistry, closeSharedPostmanTaskRegistry } from './postman-task-registry.js'
 import {
   POSTMAN_BRIDGE_TOOL_ALLOWLIST, POSTMAN_BRIDGE_TOOL_NAME, POSTMAN_BRIDGE_STATUS_TOOL_NAME, POSTMAN_BRIDGE_LIST_TOOL_NAME, POSTMAN_BRIDGE_STOP_TOOL_NAME, POSTMAN_DEVSPACE_LUNA_CLOSE_TOOL_NAME, POSTMAN_DEVSPACE_CONTROL_TOOL_NAME, POSTMAN_TEAM_STATUS_TOOL_NAME, POSTMAN_CHILD_NOTIFY_TOOL_NAME,
-  createPostmanBridgeBoundaryManager, isTopLevelPostmanSupervisor, isTopLevelPostmanPtcLeader,
+  createPostmanBridgeBoundaryManager, isTopLevelPostmanSupervisor, isTopLevelPostmanPtcLeader, isTopLevelPostmanNodesLeader,
   postmanBridgeCallerAllowed, postmanBridgeRestrictionForAgent, postmanPtcDirectCallGuard,
 } from './postman-bridge-core.js'
 
@@ -272,7 +272,16 @@ export async function apply(ctx, config = {}) {
       ptc.refresh(agent)
     }
   }
-  const worker = createPostmanWorkerTools(ctx, grants, postmanTaskContexts, { onBindingChange: refreshWorker, localDevelopment: config.localDevelopment === true, fastBudget: config.fastBudget })
+  let currentNodesService = null
+  ctx.inject(['nodesAgent'], nodesCtx => {
+    currentNodesService = nodesCtx.nodesAgent
+    return () => { currentNodesService = null }
+  })
+  const worker = createPostmanWorkerTools(ctx, grants, postmanTaskContexts, {
+    onBindingChange: refreshWorker, localDevelopment: config.localDevelopment === true,
+    fastBudget: config.fastBudget, nodesService: () => currentNodesService,
+  })
+  ctx.provide('postmanNativeNodes', { start: worker.startNodesTeam, deliverMessage: worker.deliverNodesMessage })
   // Workspace policy asks the same exact current Host role predicate used by PTC.
   ctx.on('postman/workspace-role', agent => worker.roleOf(agent))
   const stopContextWatch = contexts.onContextChange(id => {
@@ -292,8 +301,9 @@ export async function apply(ctx, config = {}) {
       await contexts.changeRecord(id, row => parent ? { ...row, workers: { ...row.workers,
         ...(row.workers?.[agent.id] ? { [agent.id]: { ...row.workers[agent.id], waitingForEvent } } : {}) } } : { ...row, waitingForEvent })
     },
-    resolveAssignment: (agent, leaderProfile) => isTopLevelPostmanPtcLeader(agent) ?
-      { profile: leaderProfile, role: 'leader' } : ownsPtcWorker(agent) ? { profile: SOL_WORKER_PROFILE, role: 'sol' } : null })
+    resolveAssignment: (agent, leaderProfile) => isTopLevelPostmanNodesLeader(agent) ?
+      { profile: NODES_LEADER_PROFILE, role: 'leader' } : isTopLevelPostmanPtcLeader(agent) ?
+      { profile: leaderProfile, role: 'leader' } : ownsPtcWorker(agent) ? { profile: currentNodesService?.runForAgent(agent) ? NODES_SOL_PROFILE : SOL_WORKER_PROFILE, role: 'sol' } : null })
   ctx.on('postman/subagent-report-defer', (parent, child, content) =>
     jobs.canDeferLunaBootstrapReport(parent, child, content) ? true : undefined)
   ctx.on('postman/subagent-settlement-defer', (parent, child, terminal) =>
@@ -337,7 +347,8 @@ export async function apply(ctx, config = {}) {
     }
   }, 'dsh-postman-harness-bridge.shared-service()')
 
-  boundaries = createPostmanBridgeBoundaryManager(sessionId => ctx.agents.get(sessionId), ownsPtcWorker, worker.roleOf)
+  boundaries = createPostmanBridgeBoundaryManager(sessionId => ctx.agents.get(sessionId), ownsPtcWorker, worker.roleOf,
+    agent => isTopLevelPostmanNodesLeader(ctx.agents.get(agent?.session?.header?.parentSession)))
   ctx.effect(() => () => boundaries.disposeAll(), 'dsh-postman-harness-bridge.boundary-manager()')
   ctx.on('agent/created', async ({ agent }) => {
     // Admission confirmation performs its provisional refresh synchronously.

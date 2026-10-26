@@ -4,7 +4,7 @@ import { createPtcRuntime, DEFAULT_LIMITS, validatePtcProfile } from 'dsh-ptc'
 import { buildPtcHelperPrelude, ptcHelperGuidance } from './ptc-helpers.js'
 import { POSTMAN_PTC_DISCIPLINE } from './ptc-discipline.js'
 import { readPtcTextPage } from './ptc-read.js'
-import { POSTMAN_PTC_ONLY_LEADER_TOOLS, POSTMAN_WORKER_PTC_TOOL_NAMES, POSTMAN_SOL_PTC_TOOL_NAMES } from './postman-bridge-core.js'
+import { POSTMAN_PTC_ONLY_LEADER_TOOLS, POSTMAN_WORKER_PTC_TOOL_NAMES, POSTMAN_SOL_PTC_TOOL_NAMES, POSTMAN_NODES_TOOL_NAMES } from './postman-bridge-core.js'
 
 export const PTC_TOOL_NAME = 'ptc_execute'
 export const LEADER_SUPERVISOR_PROFILE = validatePtcProfile({
@@ -15,6 +15,12 @@ export const LEADER_SUPERVISOR_PROFILE = validatePtcProfile({
 })
 // Historical import compatibility; the canonical profile is no longer a pilot.
 export const PILOT_PROFILE = LEADER_SUPERVISOR_PROFILE
+export const NODES_LEADER_PROFILE = validatePtcProfile({
+  schemaVersion: 1, id: 'postman-nodes-supervisor', revision: 1,
+  tools: [...POSTMAN_PTC_ONLY_LEADER_TOOLS, ...POSTMAN_NODES_TOOL_NAMES],
+  limits: { ...DEFAULT_LIMITS, maxWallMs: 300000, maxToolCalls: 256,
+    quickjsMemoryBytes: 67108864, maxTotalBridgeBytes: 16777216, maxConcurrentToolCalls: 1 },
+})
 export const WORKER_MUTATION_PROFILE = validatePtcProfile({
   schemaVersion: 1, id: 'postman-worker-mutation', revision: 5,
   tools: [...POSTMAN_WORKER_PTC_TOOL_NAMES],
@@ -24,6 +30,9 @@ export const SOL_WORKER_PROFILE = validatePtcProfile({
   schemaVersion: 1, id: 'postman-sol-worker-engineering', revision: 3,
   tools: [...POSTMAN_SOL_PTC_TOOL_NAMES],
   limits: { ...DEFAULT_LIMITS, maxWallMs: 300000, maxConcurrentToolCalls: 1 },
+})
+export const NODES_SOL_PROFILE = validatePtcProfile({
+  ...SOL_WORKER_PROFILE, id: 'postman-nodes-sol', tools: [...POSTMAN_SOL_PTC_TOOL_NAMES, ...POSTMAN_NODES_TOOL_NAMES],
 })
 const MAX_DESCRIPTION = 160
 const output = {
@@ -36,7 +45,7 @@ const output = {
 export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerContextOf, readWait, writeWait, profile = LEADER_SUPERVISOR_PROFILE, runtime = createPtcRuntime() }) {
   function supervisorProfile(value) {
     const checked = validatePtcProfile(value)
-    if (checked.tools.some(name => !POSTMAN_PTC_ONLY_LEADER_TOOLS.includes(name))) throw new TypeError('PTC supervisor profile tool not allowed')
+    if (checked.tools.some(name => ![...POSTMAN_PTC_ONLY_LEADER_TOOLS, ...POSTMAN_NODES_TOOL_NAMES].includes(name))) throw new TypeError('PTC supervisor profile tool not allowed')
     return checked
   }
   let current = supervisorProfile(profile), disposed = false
@@ -124,8 +133,8 @@ export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerCont
     if (old) { owners.delete(agent.id); revoke(old) }
     if (disposed || ctx.agents.get(agent.id) !== agent) return false
     const assignment = assignmentFor(agent, current)
-    if (!assignment || !((assignment.role === 'leader' && assignment.profile === current) ||
-        (assignment.role === 'sol' && assignment.profile === SOL_WORKER_PROFILE))) return false
+    if (!assignment || !((assignment.role === 'leader' && [current, NODES_LEADER_PROFILE].includes(assignment.profile)) ||
+        (assignment.role === 'sol' && [SOL_WORKER_PROFILE, NODES_SOL_PROFILE].includes(assignment.profile)))) return false
     const record = { agent, profile: assignment.profile, role: assignment.role,
       revision: assignment.profile.revision, runs: new Set(), section: null, tool: null }
     owners.set(agent.id, record)

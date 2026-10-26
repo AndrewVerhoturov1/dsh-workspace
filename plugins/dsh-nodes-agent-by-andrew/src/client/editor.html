@@ -1,0 +1,280 @@
+<div class="app-shell" id="appShell">
+    <header class="topbar">
+      <div class="brand-block">
+        <div class="brand-mark" aria-hidden="true">NA</div>
+        <div>
+          <div class="brand-title">NodesAgent_by_Andrew</div>
+          <div class="brand-subtitle" data-i18n="prototypeLabel">Native Postman Team Editor</div>
+        </div>
+      </div>
+
+      <div class="team-block">
+        <label class="sr-only" for="teamName" data-i18n="teamName">Team name</label>
+        <input id="teamName" class="team-name" type="text" maxlength="64" value="Software Team" autocomplete="off">
+        <span class="save-state" id="saveState" data-i18n="localDraft">Local draft</span>
+      </div>
+
+      <div class="toolbar-actions">
+        <div class="toolbar-cluster utility">
+          <div class="segmented compact" role="group" aria-label="Language">
+            <button type="button" class="segment is-active" data-locale-action="en-US">EN</button>
+            <button type="button" class="segment" data-locale-action="ru-RU">RU</button>
+          </div>
+          <select id="teamPicker" class="nodes-team-picker" aria-label="Saved teams"></select>
+          <button type="button" class="button subtle" id="loadDemoButton" data-i18n="loadDemo">Load</button>
+          <button type="button" class="button subtle" id="resetButton" data-i18n="reset">New</button>
+        </div>
+        <div class="toolbar-cluster">
+          <button type="button" class="button" id="saveButton" data-i18n="save">Save</button>
+          <button type="button" class="button" id="saveAsButton" data-i18n="saveAs">Save As</button>
+          <button type="button" class="button validate-button" id="validateButton" data-validation="none"><span id="validateButtonLabel" data-i18n="validate">Validate</span><span class="validate-button-status" id="validateButtonStatus"></span></button>
+        </div>
+        <div class="toolbar-cluster">
+          <button type="button" class="button primary" id="startButton" data-i18n="start">Start</button>
+          <button type="button" class="button" id="pauseButton" data-i18n="pause" hidden>Pause</button>
+          <button type="button" class="button" id="resumeButton" data-i18n="resume" hidden>Resume</button>
+          <button type="button" class="button danger" id="stopButton" data-i18n="stop" hidden>Stop</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="workspace" id="workspace">
+      <section class="editor-pane" aria-label="Agent team editor">
+        <div class="canvas-toolbar">
+          <button type="button" class="icon-button label-button" id="addNodeButton" title="Add AgentNode">
+            <span class="icon">+</span><span data-i18n="addAgent">Agent</span>
+          </button>
+          <div class="toolbar-divider"></div>
+          <div class="segmented" role="group" aria-label="Edge mode">
+            <button type="button" class="segment is-active" data-edge-mode="select" data-i18n="selectMode">Select</button>
+            <button type="button" class="segment" data-edge-mode="authority" data-i18n="authority">Authority</button>
+            <button type="button" class="segment" data-edge-mode="communication" data-i18n="communication">Communication</button>
+          </div>
+          <div class="segmented communication-direction-control" id="communicationDirectionControl" role="group" aria-label="Communication direction" hidden>
+            <button type="button" class="segment is-active" data-communication-direction="bidirectional" title="Bidirectional">↔<span data-i18n="communicationBidirectional">Both</span></button>
+            <button type="button" class="segment" data-communication-direction="oneway" title="One-way">→<span data-i18n="communicationOneWay">One-way</span></button>
+          </div>
+          <div class="toolbar-divider"></div>
+          <button type="button" class="icon-button" id="zoomOutButton" title="Zoom out">−</button>
+          <span class="zoom-readout" id="zoomReadout">100%</span>
+          <button type="button" class="icon-button" id="zoomInButton" title="Zoom in">+</button>
+          <button type="button" class="icon-button label-button" id="fitButton" title="Fit view"><span class="fit-icon">⌗</span><span data-i18n="fitView">Fit</span></button>
+          <div class="canvas-settings-wrap">
+            <button type="button" class="icon-button label-button canvas-settings-button" id="canvasSettingsButton" aria-expanded="false"><span aria-hidden="true">⚙</span><span data-i18n="canvasSettings">Canvas</span></button>
+            <div class="canvas-settings-popover" id="canvasSettingsPopover" hidden>
+              <div class="canvas-settings-title"><span data-i18n="canvasSettingsTitle">Canvas settings</span></div>
+              <div class="canvas-settings-section">
+                <div class="canvas-settings-row">
+                  <span class="canvas-settings-label"><span data-i18n="showGrid">Show grid</span><small data-i18n="showGridHelp">Visual coordinate grid</small></span>
+                  <input id="gridVisibleInput" type="checkbox">
+                </div>
+                <div class="canvas-settings-row">
+                  <span data-i18n="gridStyle">Grid style</span>
+                  <select id="gridStyleSelect"><option value="dots" data-i18n="gridDots">Dots</option><option value="lines" data-i18n="gridLines">Lines</option></select>
+                </div>
+                <div class="canvas-settings-row">
+                  <span data-i18n="gridSize">Grid step</span>
+                  <select id="gridSizeSelect"><option value="12">12 px</option><option value="18">18 px</option><option value="24">24 px</option><option value="36">36 px</option></select>
+                </div>
+                <div class="canvas-settings-row">
+                  <span class="canvas-settings-label"><span data-i18n="snapNodes">Snap nodes</span><small data-i18n="snapNodesHelp">Drag AgentNodes by grid step</small></span>
+                  <input id="snapNodesInput" type="checkbox">
+                </div>
+                <button type="button" class="button subtle canvas-settings-align" id="alignNodesButton" data-i18n="alignNodes">Align existing nodes</button>
+              </div>
+              <div class="canvas-settings-section">
+                <div class="canvas-settings-label"><span data-i18n="connectionRouting">Connection routing</span><small data-i18n="connectionRoutingHelp">Free curves or rounded orthogonal grid routes</small></div>
+                <div class="canvas-settings-routing" role="group" aria-label="Connection routing">
+                  <button type="button" class="segment" data-routing-mode="free" data-i18n="routingFree">Free</button>
+                  <button type="button" class="segment" data-routing-mode="orthogonal" data-i18n="routingOrthogonal">Grid</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="canvas-toolbar-spacer"></div>
+          <div class="legend">
+            <span class="legend-item"><span class="legend-line authority"></span><span data-i18n="authority">Authority</span></span>
+            <span class="legend-item"><span class="legend-line communication"></span><span data-i18n="communication">Communication</span></span>
+          </div>
+        </div>
+
+        <div class="canvas-shell" id="canvasShell" tabindex="0">
+          <div class="connection-banner" id="connectionBanner" hidden></div>
+          <div class="canvas-empty" id="canvasEmpty" hidden>
+            <div class="empty-icon">◎</div>
+            <h2 data-i18n="emptyTitle">Build an agent team</h2>
+            <p data-i18n="emptyBody">Add AgentNodes, assign one Entry Agent, then connect authority and communication independently.</p>
+            <button type="button" class="button primary" id="emptyAddButton" data-i18n="addFirstAgent">Add first AgentNode</button>
+          </div>
+          <div class="canvas-stage" id="canvasStage">
+            <div class="canvas-world" id="canvasWorld">
+            <svg class="edge-layer" id="edgeLayer" xmlns="http://www.w3.org/2000/svg" aria-label="Connections">
+              <defs>
+                <marker id="arrowAuthority" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+                  <path d="M0,0 L0,6 L9,3 z" class="marker-authority"></path>
+                </marker>
+                <marker id="arrowCommunication" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto-start-reverse" markerUnits="strokeWidth">
+                  <path d="M0,0 L0,6 L9,3 z" class="marker-communication"></path>
+                </marker>
+              </defs>
+              <g id="edgeGroup"></g>
+              <path id="draftEdge" class="edge draft" d="" hidden></path>
+            </svg>
+            <div class="node-layer" id="nodeLayer"></div>
+            </div>
+          </div>
+          <div class="canvas-hint" id="canvasHint" data-i18n="canvasHint">Drag empty space to pan · wheel to zoom · Delete removes selection</div>
+        </div>
+      </section>
+
+      <aside class="inspector" id="inspector">
+        <div class="inspector-header">
+          <div>
+            <div class="eyebrow" data-i18n="inspector">Inspector</div>
+            <h2 id="inspectorTitle" data-i18n="nothingSelected">Nothing selected</h2>
+          </div>
+          <div class="inspector-header-actions">
+            <button type="button" class="icon-button inspector-collapse-button" id="inspectorCollapseButton" aria-expanded="true">‹</button>
+            <button type="button" class="icon-button danger-ghost" id="deleteSelectionButton" title="Delete" hidden>×</button>
+          </div>
+        </div>
+
+        <div class="inspector-empty" id="inspectorEmpty">
+          <div class="empty-ring">◇</div>
+          <p data-i18n="inspectorEmpty">Select an AgentNode or connection to edit it.</p>
+        </div>
+
+        <form class="inspector-form" id="nodeInspector" hidden>
+          <div class="section-heading">
+            <span data-i18n="identity">Identity</span>
+          </div>
+
+          <label class="field">
+            <span data-i18n="displayName">Display name</span>
+            <input id="displayNameInput" type="text" maxlength="64">
+          </label>
+
+          <details class="agent-details" id="agentDetailsDisclosure">
+            <summary>
+              <span class="agent-details-summary-copy">
+                <strong data-i18n="advancedDetails">Technical details</strong>
+                <small data-i18n="advancedDetailsHint">Technical name, role and system prompt</small>
+              </span>
+              <span class="agent-details-chevron" aria-hidden="true">›</span>
+            </summary>
+            <div class="agent-details-content">
+              <span class="node-id" id="nodeIdLabel"></span>
+              <label class="field">
+                <span data-i18n="technicalName">Technical name</span>
+                <input id="technicalNameInput" type="text" maxlength="48" spellcheck="false">
+              </label>
+              <label class="field">
+                <span data-i18n="role">Role</span>
+                <input id="roleInput" type="text" maxlength="120">
+              </label>
+              <label class="field">
+                <span data-i18n="systemPrompt">System prompt</span>
+                <textarea id="systemPromptInput" rows="5"></textarea>
+              </label>
+            </div>
+          </details>
+
+          <div class="section-heading"><span data-i18n="modelSection">Model</span></div>
+          <div class="field-grid two">
+            <label class="field">
+              <span data-i18n="provider">Provider</span>
+              <select id="providerSelect"></select>
+            </label>
+            <label class="field">
+              <span data-i18n="model">Model</span>
+              <select id="modelSelect"></select>
+            </label>
+          </div>
+          <label class="field">
+            <span data-i18n="reasoningEffort">Reasoning effort</span>
+            <select id="reasoningSelect"></select>
+            <small class="field-help" data-i18n="reasoningHelp">Values come from the selected provider/model.</small>
+          </label>
+
+          <div class="section-heading split-heading">
+            <span data-i18n="capabilities">Capabilities</span>
+            <span class="policy-note" data-i18n="denyWins">deny wins</span>
+          </div>
+          <div class="capability-tabs" id="capabilityTabs">
+            <span data-i18n="tools">Tools</span> · <span data-i18n="skillsPreview">Session skill loader</span>
+          </div>
+          <div class="capability-list" id="capabilityList"></div>
+
+          <div class="section-heading"><span data-i18n="teamRole">Team role</span></div>
+          <div class="entry-control" id="entryControl">
+            <div>
+              <strong data-i18n="entryAgent">Entry Agent</strong>
+              <small id="entryAgentHelp" data-i18n="entryHelp">Exactly one node receives the primary user channel.</small>
+            </div>
+            <div class="entry-status-row">
+              <span class="entry-status" id="entryAgentStatus"></span>
+              <button type="button" class="button" id="makeEntryButton" data-i18n="makeEntry">Make Entry Agent</button>
+            </div>
+          </div>
+
+          <div class="section-heading"><span data-i18n="runtime">Runtime</span></div>
+          <div class="runtime-card">
+            <div>
+              <span class="status-dot" id="inspectorStatusDot"></span>
+              <span id="inspectorRuntimeStatus">NOT_STARTED</span>
+            </div>
+            <button type="button" class="button full" id="openChatButton" disabled data-i18n="openChat">Open Chat</button>
+            <small id="openChatHelp" data-i18n="openChatHelp">Available with real DSH Session bindings in a production runtime milestone.</small>
+          </div>
+        </form>
+
+        <div class="edge-inspector" id="edgeInspector" hidden>
+          <div class="edge-kind-badge" id="edgeKindBadge"></div>
+          <div class="edge-summary" id="edgeSummary"></div>
+          <div class="edge-direction-note" id="edgeDirectionNote" hidden></div>
+          <p class="muted" id="edgeDescription"></p>
+          <button type="button" class="button danger full" id="deleteEdgeButton" data-i18n="deleteConnection">Delete connection</button>
+        </div>
+      </aside>
+    </main>
+
+    <section class="status-dock collapsed" id="statusDock">
+      <div class="status-dock-header">
+        <div class="status-summary">
+          <span class="run-pill" id="runPill" data-state="STOPPED"><span class="pulse"></span><span id="runStateLabel">STOPPED</span></span>
+          <span class="validation-summary" id="validationSummary" data-i18n="notValidated">Not validated</span>
+          <span class="compact-metrics" aria-label="Team metrics">
+            <span><strong id="compactMetricAgents">0</strong> <span data-i18n="agents">Agents</span></span>
+            <span><strong id="compactMetricAuthority">0</strong> Authority</span>
+            <span><strong id="compactMetricCommunication">0</strong> Communication</span>
+          </span>
+        </div>
+        <button type="button" class="dock-toggle" id="dockToggle" aria-expanded="false"><span data-i18n="validationRuntime">Validation / runtime</span><span class="chevron">⌃</span></button>
+      </div>
+      <div class="status-dock-body" id="statusDockBody">
+        <div class="validation-panel">
+          <div class="panel-title-row">
+            <h3 data-i18n="validation">Validation</h3>
+            <span class="badge neutral" id="validationBadge">—</span>
+          </div>
+          <div class="validation-list" id="validationList"></div>
+        </div>
+        <div class="runtime-panel">
+          <div class="panel-title-row">
+            <h3 data-i18n="mockRuntime">Mock TeamRun</h3>
+            <span class="muted" id="runIdLabel">—</span>
+          </div>
+          <div class="runtime-copy" id="runtimeCopy" data-i18n="runtimeStoppedHelp">Select a native Postman Chat to run this team.</div>
+          <div class="nodes-activity" id="nodesActivity" role="status" aria-live="polite"></div>
+          <div class="runtime-metrics">
+            <div><span data-i18n="agents">Agents</span><strong id="metricAgents">0</strong></div>
+            <div><span data-i18n="authority">Authority</span><strong id="metricAuthority">0</strong></div>
+            <div><span data-i18n="communication">Communication</span><strong id="metricCommunication">0</strong></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div class="toast-stack" id="toastStack" aria-live="polite"></div>
+  <div id="smokeResult" hidden></div>

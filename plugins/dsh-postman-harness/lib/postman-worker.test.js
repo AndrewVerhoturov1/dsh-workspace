@@ -464,6 +464,8 @@ test('bridge plugin registers all Worker tools and owns one disposable attachmen
     agents: { get: id => id === a.id ? a : undefined, list: () => [a] },
     tools: { register(tool) { registrations.set(tool.name, tool) }, guard() { return () => undefined } },
     subagents: {},
+    inject() { return () => undefined },
+    provide() {},
     logger: () => ({info() {}}),
     storageDomain: { async open() { const memory = createMemoryTaskRegistry(); return {
       table: () => ({ get: memory.get, entries: memory.entries, put: memory.create, update: memory.change }),

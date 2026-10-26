@@ -1,0 +1,4 @@
+# Opt-in NodesAgent host service; does not change the existing Postman presets.
+- insert:
+    - id: nodes-agent-by-andrew
+      name: dsh-nodes-agent-by-andrew

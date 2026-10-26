@@ -34,7 +34,7 @@ async function repository(ctx, cwd, signal) {
 function leader(agent) {
   const header = agent.session.header
   const preset = agent.ctx.get('agentPresets')?.composedPreset(agent.ctx) ?? header.agentPreset
-  return header.origin !== 'subagent' && (header.delegationDepth ?? 0) === 0 && ['postman-leader','postman-leader-ptc'].includes(preset)
+  return header.origin !== 'subagent' && (header.delegationDepth ?? 0) === 0 && ['postman-leader','postman-leader-ptc','postman-leader-ptc-nodes'].includes(preset)
 }
 function locations(args, cwd) {
   return ['file_path','path','workdir'].flatMap(field => typeof args?.[field] === 'string' ? [resolve(cwd,args[field])] : [])
@@ -107,6 +107,17 @@ export function apply(ctx) {
       } catch (error) {
         context.signal?.throwIfAborted()
         sections.push({name:sectionName('skill:postman-leader'),text:'WORKSPACE_INSTRUCTION_UNAVAILABLE: '+error.message+'. Canonical role instructions were not delivered; no project-owned substitute was loaded.'})
+      }
+      if ((agent.ctx.get('agentPresets')?.composedPreset(agent.ctx) ?? agent.session.header.agentPreset) === 'postman-leader-ptc-nodes') {
+        try {
+          const skill = await ctx.skills.get('postman-leader-nodes',{cwd:HOST_ROOT,scope:agent,signal:context.signal})
+          if (skill?.resourceBase?.kind !== 'directory' || resolve(skill.resourceBase.path) !== resolve(HOST_ROOT,'.agents/skills/postman-leader-nodes'))
+            throw Error('canonical postman-leader-nodes skill unavailable from Host installation')
+          sections.push({name:sectionName('skill:postman-leader-nodes'),text:'<skill_content name="postman-leader-nodes">\n'+skill.content+'\n</skill_content>'})
+        } catch (error) {
+          context.signal?.throwIfAborted()
+          sections.push({name:sectionName('skill:postman-leader-nodes'),text:'WORKSPACE_INSTRUCTION_UNAVAILABLE: '+error.message})
+        }
       }
     }
     // Dynamic context is reassembled by Host on every request; the native
