@@ -33,15 +33,20 @@ export function createTemplate() {
     { id: randomUUID(), from: e.from, to: e.to },
     { id: randomUUID(), from: e.to, to: e.from }
   ]);
+  const lunas = Array.from({ length: 3 }, (_, i) => ({
+    id: randomUUID(), kind: 'luna-bridge', displayName: 'LunaBridge ' + (i + 1),
+    chatNodeId: randomUUID()
+  }));
   const layout = {
     schemaVersion: 1, teamId: id, viewport: { x: 100, y: 65, zoom: 0.85 },
-    nodes: Object.fromEntries(agents.map((a, i) => [a.id,
+    nodes: { ...Object.fromEntries(agents.map((a, i) => [a.id,
       { x: i === 0 ? 460 : i === 4 ? 800 : i === 5 ? 630 : i === 6 ? 1000 : 100 + ((i - 1) % 3) * 290,
-        y: i === 0 ? 40 : i > 4 ? 570 : i === 4 ? 285 : 285 }]))
+        y: i === 0 ? 40 : i > 4 ? 570 : i === 4 ? 285 : 285 }])),
+      ...Object.fromEntries(lunas.map((a, i) => [a.id, { x: 130 + i * 480, y: 870 }])) }
   };
   return { definition: {
     schemaVersion: 1, id, revision: 0, name: 'Postman Native Team',
-    entryAgentId: bySlot.get('entry'), agents, authorityEdges, communicationEdges
+    entryAgentId: bySlot.get('entry'), agents, lunas, authorityEdges, communicationEdges
   }, layout };
 }
 const invalid = (errors, code, message) => errors.push({ code, message, blocking: true });
@@ -49,10 +54,21 @@ export function validateTeam(team, catalog = null) {
   const errors = [];
   if (!team || team.schemaVersion !== 1 || !Array.isArray(team.agents) || !Array.isArray(team.authorityEdges) ||
     !Array.isArray(team.communicationEdges)) return [{ code: 'INVALID_SCHEMA', message: 'Invalid TeamDefinition', blocking: true }];
+  const lunas = team.lunas ?? [];
+  if (!Array.isArray(lunas) || lunas.length > 3) invalid(errors, 'LUNA_LIMIT', 'Zero to three LunaBridge nodes permitted');
+  const lunaIds = new Set(), chatIds = new Set();
+  for (const luna of Array.isArray(lunas) ? lunas : []) {
+    if (!luna || luna.kind !== 'luna-bridge' || !luna.id || typeof luna.id !== 'string' ||
+      lunaIds.has(luna.id) || !luna.chatNodeId || typeof luna.chatNodeId !== 'string' ||
+      chatIds.has(luna.chatNodeId) || typeof luna.displayName !== 'string' || !luna.displayName.trim())
+      invalid(errors, 'LUNA_INVALID', 'Each LunaBridge needs a unique node, chat and name');
+    else { lunaIds.add(luna.id); chatIds.add(luna.chatNodeId); }
+  }
   const byId = new Map(), bySlot = new Map(), names = new Set();
   for (const a of team.agents) {
     if (!a || typeof a.id !== 'string' || !a.id || byId.has(a.id)) { invalid(errors, 'DUPLICATE_ID', 'Invalid or duplicate agent id'); continue; }
     byId.set(a.id, a);
+    if (lunaIds.has(a.id) || chatIds.has(a.id)) invalid(errors, 'LUNA_ID_COLLISION', 'Luna node conflicts with a native AgentNode');
     if (!slotById.has(a.slot) || bySlot.has(a.slot)) invalid(errors, 'INVALID_SLOT', 'Unknown or duplicate native Postman slot: ' + a.slot);
     else bySlot.set(a.slot, a);
     for (const field of ['technicalName', 'displayName', 'role', 'systemPrompt']) {

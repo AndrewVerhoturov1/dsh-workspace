@@ -34,7 +34,12 @@ test('new exact top-level Nodes ID has Supervisor/PTC permissions; old identitie
   assert.deepEqual(core.postmanBridgeRestrictionForAgent(a), { allow: oldAllow });
   assert.deepEqual(core.postmanBridgeRestrictionForAgent(b), { allow: oldAllow });
   const newAllow = core.postmanBridgeRestrictionForAgent(c).allow;
-  assert.deepEqual(newAllow, [...core.POSTMAN_LEADER_TOOL_ALLOWLIST, ...core.POSTMAN_NODES_TOOL_NAMES, 'ptc_execute']);
+  assert.deepEqual(newAllow, [...core.POSTMAN_LEADER_TOOL_ALLOWLIST, ...core.POSTMAN_NODES_TOOL_NAMES,
+    ...core.POSTMAN_NODES_LEADER_TOOL_NAMES, 'ptc_execute']);
+  assert.ok(!core.postmanBridgeRestrictionForAgent(b).allow.includes('nodes_team_luna_send'));
+  assert.equal(core.postmanPtcDirectCallGuard(
+    { agent: c, name: 'nodes_team_luna_send' }, () => c
+  ), 'POSTMAN_PTC_DIRECT_CALL_REJECTED: use ptc_execute');
   assert.equal(core.postmanPtcDirectCallGuard(
     { agent: c, name: 'nodes_team_assign_task' }, () => c
   ), 'POSTMAN_PTC_DIRECT_CALL_REJECTED: use ptc_execute');
@@ -56,6 +61,7 @@ test('exact Nodes Sol nodes tools require PTC while ordinary workers keep direct
   assert.match(core.postmanPtcDirectCallGuard({agent:sol,name:'nodes_team_assign_task'},lookup,a=>a===sol),/PTC_DIRECT_CALL_REJECTED/);
   assert.equal(core.postmanPtcDirectCallGuard({agent:sol,name:'nodes_team_assign_task',parent:{}},lookup,a=>a===sol),undefined);
   assert.equal(core.postmanPtcDirectCallGuard({agent:sol,name:'nodes_team_message'},lookup,()=>false),undefined);
+  assert.ok(!core.postmanBridgeRestrictionForAgent(sol,()=>true,()=> 'sol',()=>true).allow?.includes('nodes_team_luna_send'));
 });
 
 test('legacy Secretary restriction unchanged, Nodes Secretary gains exact message/task tools only through trusted parent predicate', () => {

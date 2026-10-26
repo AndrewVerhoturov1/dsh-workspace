@@ -5,6 +5,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createPostmanBridgeJobs } from './postman-bridge-jobs.js'
+import { createNodesLunaNativeBridge } from './postman-bridge.js'
 import { createDevspaceChannel, readDevspaceControls } from './postman-devspace.js'
 
 const tick = () => new Promise(resolve => setImmediate(resolve))
@@ -122,6 +123,72 @@ test('three running executions consume capacity; old unknown lanes do not', asyn
   assert.equal(jobs.list(f.parent).used, 0)
   assert.equal(f.calls.filter(call => call[0] === 'send').length, 3, 'BLOCKED prose never creates a new REQ')
   await jobs.dispose()
+})
+
+test('Nodes lanes permit one live job per Luna, retain verified old chats, and resume only a selected URL', async t => {
+  const f = fixture(t);
+  f.parent.session.header.agentPreset = 'postman-leader-ptc-nodes';
+  const firstLane = 'nodes:run-a:luna-a', rotatedLane = firstLane + ':next';
+  const peerLane = 'nodes:run-a:luna-b', nextRunLane = 'nodes:run-b:luna-a';
+  await f.contexts.changeRecord(f.parent.id, row => ({ ...row,
+    devspaceLanes: Object.fromEntries([firstLane, rotatedLane, peerLane].map(id =>
+      [id, { state: 'reserved', activeBridgeJobId: null, requestIds: [], conversationRef: null }])) }));
+  const jobs = f.make();
+  const absent = jobs.nodesLunaSnapshot(f.parent, [firstLane]);
+  assert.equal(absent[0].status, 'POTENTIAL');
+  assert.equal(absent[0].conversationRef, null);
+  const a = await jobs.accept(f.parent, '@PostmanDevspace mocked A', 'devspace',
+    undefined, undefined, 'READ_ONLY', firstLane);
+  assert.equal(a.status, 'POSTMAN_BRIDGE_ACCEPTED');
+  const sameLuna = await jobs.accept(f.parent, '@PostmanDevspace denied concurrent', 'devspace',
+    undefined, undefined, 'READ_ONLY', rotatedLane);
+  assert.equal(sameLuna.status, 'NODES_LUNA_BUSY', 'lane rotation cannot bypass one-current limit');
+  const peer = await jobs.accept(f.parent, '@PostmanDevspace mocked B', 'devspace',
+    undefined, undefined, 'READ_ONLY', peerLane);
+  assert.equal(peer.status, 'POSTMAN_BRIDGE_ACCEPTED');
+  await tick(); await tick();
+  assert.equal(f.calls.filter(c => c[0] === 'send').length, 2, 'no extra external Send');
+  const op = f.row().bridgeOperations[a.bridgeJobId];
+  const ref = 'https://chatgpt.com/c/' + op.childSessionId;
+  const dir = join(op.devspace.channel, 'web', 'workers');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, op.requestId + '.json'), JSON.stringify({
+    requestId: op.requestId, conversationUrl: ref
+  }));
+  f.finish(a.bridgeJobId); f.finish(peer.bridgeJobId);
+  await tick(); await tick();
+  const snapshot = jobs.nodesLunaSnapshot(f.parent, [firstLane, peerLane]);
+  assert.equal(snapshot[0].status, 'IDLE', 'saved history must not consume execution slot');
+  assert.equal(snapshot[0].conversationRef, ref);
+  assert.equal(snapshot[0].conversations[0].requestId, op.requestId);
+  assert.equal(snapshot[0].conversations[0].sourceChildSessionId, op.childSessionId);
+  assert.equal(snapshot[0].reminderSent, null, 'no invented reminders');
+  assert.equal(snapshot[0].elapsedMs === null || snapshot[0].elapsedMs >= 0, true);
+  assert.equal(jobs.list(f.parent).used, 0);
+  await f.contexts.changeRecord(f.parent.id, row => ({ ...row,
+    bridgeOperations: { ...row.bridgeOperations,
+      [a.bridgeJobId]: { ...row.bridgeOperations[a.bridgeJobId], executionRevoked: true } },
+  }));
+  assert.equal(jobs.nodesLunaSnapshot(f.parent, [firstLane])[0].conversationRef, ref,
+    'archive remains accessible after previous job is retired');
+  const archive = snapshot[0].conversations[0];
+  const native = createNodesLunaNativeBridge(f.ctx, f.contexts, jobs, null);
+  assert.equal((await native.reserveLunas(f.parent,[nextRunLane],{...archive,
+    conversationRef:'https://chatgpt.com/c/foreign'})).status,'NODES_LUNA_ARCHIVE_UNPROVEN');
+  assert.equal((await native.reserveLunas(f.parent,[nextRunLane],archive)).status,'NODES_LUNA_RESERVED');
+  assert.equal(jobs.nodesLunaSnapshot(f.parent, [nextRunLane])[0].status, 'IDLE',
+    'selected verified chat is idle, never a working job');
+  const resumed = await jobs.accept(f.parent, '@PostmanDevspace explicit continuation', 'devspace',
+    undefined, undefined, 'READ_ONLY', nextRunLane);
+  assert.equal(resumed.status, 'POSTMAN_BRIDGE_ACCEPTED');
+  await tick(); await tick();
+  const next = f.calls.filter(c => c[0] === 'send').at(-1)[1];
+  assert.equal(next.devspaceBinding.conversationUrl, ref);
+  assert.equal(next.devspaceBinding.priorRequestId, undefined, 'old REQ is historical only');
+  assert.notEqual(next.sessionId, op.childSessionId, 'new Luna identity is independent');
+  assert.equal(f.row().bridgeOperations[a.bridgeJobId].requestId, op.requestId);
+  f.finish(resumed.bridgeJobId); await tick(); await tick();
+  await jobs.dispose();
 })
 
 test('ready terminal is readable while Luna delivery is still pending', async t => {

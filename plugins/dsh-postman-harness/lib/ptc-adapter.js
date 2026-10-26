@@ -4,7 +4,7 @@ import { createPtcRuntime, DEFAULT_LIMITS, validatePtcProfile } from 'dsh-ptc'
 import { buildPtcHelperPrelude, ptcHelperGuidance } from './ptc-helpers.js'
 import { POSTMAN_PTC_DISCIPLINE } from './ptc-discipline.js'
 import { readPtcTextPage } from './ptc-read.js'
-import { POSTMAN_PTC_ONLY_LEADER_TOOLS, POSTMAN_WORKER_PTC_TOOL_NAMES, POSTMAN_SOL_PTC_TOOL_NAMES, POSTMAN_NODES_TOOL_NAMES } from './postman-bridge-core.js'
+import { POSTMAN_PTC_ONLY_LEADER_TOOLS, POSTMAN_WORKER_PTC_TOOL_NAMES, POSTMAN_SOL_PTC_TOOL_NAMES, POSTMAN_NODES_TOOL_NAMES, POSTMAN_NODES_LEADER_TOOL_NAMES } from './postman-bridge-core.js'
 
 export const PTC_TOOL_NAME = 'ptc_execute'
 export const LEADER_SUPERVISOR_PROFILE = validatePtcProfile({
@@ -17,7 +17,7 @@ export const LEADER_SUPERVISOR_PROFILE = validatePtcProfile({
 export const PILOT_PROFILE = LEADER_SUPERVISOR_PROFILE
 export const NODES_LEADER_PROFILE = validatePtcProfile({
   schemaVersion: 1, id: 'postman-nodes-supervisor', revision: 1,
-  tools: [...POSTMAN_PTC_ONLY_LEADER_TOOLS, ...POSTMAN_NODES_TOOL_NAMES],
+  tools: [...POSTMAN_PTC_ONLY_LEADER_TOOLS, ...POSTMAN_NODES_TOOL_NAMES, ...POSTMAN_NODES_LEADER_TOOL_NAMES],
   limits: { ...DEFAULT_LIMITS, maxWallMs: 300000, maxToolCalls: 256,
     quickjsMemoryBytes: 67108864, maxTotalBridgeBytes: 16777216, maxConcurrentToolCalls: 1 },
 })
@@ -45,7 +45,7 @@ const output = {
 export function createPtcAdapter(ctx, { authorize, resolveAssignment, workerContextOf, readWait, writeWait, profile = LEADER_SUPERVISOR_PROFILE, runtime = createPtcRuntime() }) {
   function supervisorProfile(value) {
     const checked = validatePtcProfile(value)
-    if (checked.tools.some(name => ![...POSTMAN_PTC_ONLY_LEADER_TOOLS, ...POSTMAN_NODES_TOOL_NAMES].includes(name))) throw new TypeError('PTC supervisor profile tool not allowed')
+    if (checked.tools.some(name => ![...POSTMAN_PTC_ONLY_LEADER_TOOLS, ...POSTMAN_NODES_TOOL_NAMES, ...POSTMAN_NODES_LEADER_TOOL_NAMES].includes(name))) throw new TypeError('PTC supervisor profile tool not allowed')
     return checked
   }
   let current = supervisorProfile(profile), disposed = false

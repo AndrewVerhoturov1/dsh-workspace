@@ -75,7 +75,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 
 .workspace { display: grid; grid-template-columns: minmax(0,1fr) var(--inspector-w); min-height: 0; transition: grid-template-columns .16s ease; }
 .workspace.inspector-collapsed { grid-template-columns: minmax(0,1fr) 42px; }
-.editor-pane { display: grid; grid-template-rows: 44px minmax(0,1fr); min-width: 0; min-height: 0; border-right: 1px solid var(--line); }
+.editor-pane { display: grid; grid-template-columns: minmax(0,1fr); grid-template-rows: 44px minmax(0,1fr); min-width: 0; min-height: 0; border-right: 1px solid var(--line); }
 .canvas-toolbar { position: relative; display: flex; align-items: center; gap: 6px; padding: 0 10px; border-bottom: 1px solid var(--line-soft); background: #101620; z-index: 9; }
 .icon-button { width: 30px; height: 30px; border-radius: 7px; display: inline-grid; place-items: center; padding: 0; font-weight: 760; }
 .icon-button.label-button { width: auto; grid-auto-flow: column; gap: 6px; padding: 0 9px; font-size: 11px; }
@@ -310,6 +310,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   :root { --inspector-w: 320px; }
   .brand-subtitle, .save-state, .button.subtle#resetButton, .legend { display: none; }
   .toolbar-actions { gap: 5px; }
+  .canvas-toolbar .label-button span[data-i18n] { display: none; }
+  .canvas-toolbar .segment { padding-inline: 6px; }
+  .canvas-toolbar .toolbar-divider { margin-inline: 1px; }
   .button { padding-inline: 9px; }
 }
 @media (max-width: 900px) {
@@ -326,4 +329,31 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .nodes-team-picker {max-width:150px;min-width:90px;background:#151d29;color:#edf2f7;border:1px solid #293446;border-radius:7px;height:31px;font-size:11px;}
 .nodes-activity {max-height:120px;overflow-y:auto;font-size:11px;color:var(--muted);padding:4px 10px;}
 .nodes-activity div {padding:3px 0;}
+.nodes-native-actions {display:flex;flex-wrap:wrap;gap:5px;margin-top:11px;}
+.nodes-native-actions .button {flex:1 1 95px;padding:7px 5px;white-space:normal;}
+.luna-bridge-node {border-color:#506d79;background:linear-gradient(180deg,#20333c,#152329);}
+.luna-bridge-node .node-role {color:#91c4d0;}
+.luna-bridge-node.selected {border-color:#58d5c9;}
+.luna-chat-node {position:absolute;width:204px;min-height:100px;padding:12px;border:1px dashed #40998f;border-radius:10px;background:#101f27;color:#b6d9d4;font-size:10px;cursor:pointer;overflow:visible;}
+.luna-chat-node::before {content:'';position:absolute;left:-34px;top:39px;width:34px;border-top:2px dashed #58d5c9;}
+.luna-chat-node strong {display:block;margin-bottom:9px;font-size:13px;}
+.luna-chat-node div {margin-top:5px;color:#8aaca8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.luna-chat-node .luna-chat-address {color:#58d5c9;}
+.luna-inspector {padding:14px 14px 28px;}
+.luna-inspector .luna-facts {display:grid;gap:8px;font-size:11px;line-height:1.4;}
+.luna-inspector a {color:#8cc5ff;overflow-wrap:anywhere;}
+.luna-inspector .field select {max-width:100%;}
+.agent-node[data-runtime="WORKING"] .node-runtime-strip,.agent-node[data-runtime="WORKING"] .runtime-dot {background:var(--success);}
+.agent-node[data-runtime="WORKING"] {border-color:#55cfa0;box-shadow:inset 0 1px 0 rgba(78,222,165,.45),0 0 0 2px rgba(78,222,165,.16),0 10px 28px rgba(0,0,0,.28);}
+.agent-node[data-runtime="IDLE"] {border-color:#5589b9;}
+.agent-node[data-runtime="POTENTIAL"],.agent-node[data-runtime="COLD"],.agent-node[data-runtime="SUSPENDED"] {opacity:.58;}
+.agent-node[data-runtime="POTENTIAL"] .node-runtime-strip,.agent-node[data-runtime="COLD"] .node-runtime-strip {background:#526174;}
+.agent-node[data-runtime="POTENTIAL"] .runtime-chip,.agent-node[data-runtime="COLD"] .runtime-chip {color:#8290a4;}
+.luna-chat-node[data-runtime="WORKING"],.luna-chat-node[data-runtime="QUEUED"] {border-color:#5bd6a9;box-shadow:0 0 0 2px rgba(91,214,169,.15);}
+.luna-chat-node[data-runtime="POTENTIAL"] {opacity:.7;}
+.luna-chat-node .luna-chat-status {font-weight:700;color:#94dfb7;}
+.luna-inspector .luna-archive-detail {margin:8px 0;font-size:10px;line-height:1.5;color:#8193a8;overflow-wrap:anywhere;}
+.luna-inspector textarea {width:100%;box-sizing:border-box;min-height:80px;resize:vertical;}
+.luna-inspector #lunaArchiveLink {display:inline-block;margin-bottom:8px;}
+.luna-inspector #lunaArchiveLink[hidden] {display:none;}
 }

@@ -78,6 +78,15 @@ export function createPostmanDevspaceLuna(ctx, contexts, direct) {
     let trusted, continuationRef = null
     try {
       const existing = rowOf(leaderId)?.devspaceLuna
+      const source = rowOf(leaderId)?.bridgeOperations?.[job.bridgeJobId]?.devspace?.archiveSource
+      if (job.laneId?.startsWith('nodes:') && existing?.state === 'reserved' && existing.conversationRef &&
+          (!source || !existing.archiveSource || source.bridgeJobId !== existing.archiveSource.bridgeJobId ||
+            source.sourceLeaderSessionId !== existing.archiveSource.sourceLeaderSessionId ||
+            source.sourceChildSessionId !== existing.archiveSource.sourceChildSessionId ||
+            source.sourceLaneId !== existing.archiveSource.sourceLaneId ||
+            source.requestId !== existing.archiveSource.requestId ||
+            source.conversationRef !== existing.conversationRef))
+        return { status: 'NODES_LUNA_ARCHIVE_UNPROVEN' }
       if (existing && existing.state !== 'closed' && existing.state !== 'reserved') {
         childId = existing.childId
         continuationRef = existing.conversationRef && CONVERSATION.test(existing.conversationRef)
@@ -111,6 +120,11 @@ export function createPostmanDevspaceLuna(ctx, contexts, direct) {
           'not your coordinator message. User intent:\n' + parsed.payload, job.controller.signal) }
         catch (error) { job.lunaDiagnostic = diagnostics(error) }
       } else {
+        // A new Leader may select an independently verified archived URL for a
+        // fresh lane. Its old Luna child and old REQ are never transferred.
+        continuationRef = existing?.state === 'reserved' &&
+          typeof existing.conversationRef === 'string' && CONVERSATION.test(existing.conversationRef)
+          ? existing.conversationRef : null
         childId = randomUUID()
         await change(leaderId, row => {
           if (row.devspaceLuna && row.devspaceLuna.state !== 'closed' &&
@@ -118,7 +132,7 @@ export function createPostmanDevspaceLuna(ctx, contexts, direct) {
                 row.devspaceLuna.activeBridgeJobId === job.bridgeJobId))
             throw Error('POSTMAN_DEVSPACE_LUNA_BINDING_CHANGED')
           return { ...row, devspaceLuna: {
-            childId, state: 'intent', activeBridgeJobId: job.bridgeJobId, requestIds: [], conversationRef: null,
+            childId, state: 'intent', activeBridgeJobId: job.bridgeJobId, requestIds: [], conversationRef: continuationRef,
           } }
         })
         const request = buildPostmanBridgeStartRequest({
