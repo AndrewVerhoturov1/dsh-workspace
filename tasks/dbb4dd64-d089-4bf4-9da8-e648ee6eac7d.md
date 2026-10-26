@@ -1,0 +1,39 @@
+POSTMAN_REQUEST_ID: REQ_20261026T173659Z_0992
+Режим: WRITE_ISOLATED. Область для чтения: C:\PROJECTS\Real-tactic-wargame\.worktrees\combat-lab-cpu-optimization
+Перед любыми другими DevSpace-инструментами вызови open_workspace с path='postman-writer:dbb4dd64-d089-4bf4-9da8-e648ee6eac7d'. Если адрес недоступен, сообщи CAPABILITY_UNAVAILABLE обычным текстом; Этот адрес связывает выполнение с заданием. Назначенная область записи: C:\PROJECTS\Real-tactic-wargame\.worktrees\combat-lab-cpu-optimization.
+Leader разрешил Computer Use для этого поручения.
+DevSpace Bash не является песочницей. Не выходи за scope; не читай секреты/runtime credentials, binding и служебные файлы, не меняй права, не создавай AI-агентов, не устанавливай и не перезапускай Host/DevSpace. GitHub writes/commit/push/PR/merge запрещены здесь; отдельный местный маршрут требует разрешения.
+## Инструкции Host
+instructions_sha256: a7f8a3f2baf5916df3ff0d3f8a7f4e6b449daae794da2143732f5c915da36ccc
+- https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/5b96122ef898cdceaf5a7d6dc7217372b548a9ef/postman/devspace/SKILL.md
+- https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/5b96122ef898cdceaf5a7d6dc7217372b548a9ef/AGENTS.md
+- https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/5b96122ef898cdceaf5a7d6dc7217372b548a9ef/REPO_POLICY.md
+- https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/5b96122ef898cdceaf5a7d6dc7217372b548a9ef/docs/workflow/TASK_CONTRACT.md
+- C:\PROJECTS\Real-tactic-wargame\.worktrees\combat-lab-cpu-optimization\AGENTS.md
+Bell — отдельное узкое разрешение через настоящий DevSpace Bash (не читать скрипт/JSON):
+pwsh -NoProfile -NonInteractive -File 'C:\Users\Andrew\AppData\Local\DSH\Postman\devspace\dbb4dd64-d089-4bf4-9da8-e648ee6eac7d\signal.ps1' <done|need-decision|blocked> [-Message 'причина'] [-Report 'report.md']
+## Поручение Leader
+Реализуй одобренный пользователем фоновый расчёт интерактивного маршрута Combat Lab и закончи текущую performance-задачу. Предыдущая попытка этого нового поручения PROVEN_NOT_SENT (старый чат не подтверждён); её authority отозвана, код этой части ещё не выполнялся.
+
+Рабочая копия: C:/PROJECTS/Real-tactic-wargame/.worktrees/combat-lab-cpu-optimization. Branch codex/combat-lab-cpu-optimization, base/HEAD 87190c9c169928eb08105eae7fd24c2fba4debe0. Прочти README/AGENTS/DEVELOPMENT, docs/performance/PERFORMANCE_PRINCIPLES.md и фактический diff. Уже есть 5 изменённых файлов с тремя оптимизациями: CharacterView.ts, CombatLabBabylonScene.ts, CombatLabRenderer.ts, AttentionOverlayInstaller.ts, PixiApp.ts. Их сохранять. CombatEffectsInstaller.ts специально возвращён точно к HEAD: его callback потребляет события и вызывает звук playRifleShot через PixiCombatEffectsRenderer, поэтому не отключать в 3D. Core route файлы возвращены к HEAD после отклонённой небезопасной pending-очереди.
+
+Пользователь явно согласился: тяжёлый приказ принимается сразу, показывает «маршрут рассчитывается», точный маршрут появляется после фоновой подготовки, включая паузу; ожидание сохраняется, отменяется и заменяется штатно. Это supersedes прежнее требование немедленно вернуть ГОТОВЫЙ путь. Не supersedes правильность опасности/LOS/маршрута. Основная игра остаётся Pixi, объединение 2D/3D строго вне задачи.
+
+Фактическая цепочка: CombatLabBabylonScene.issueGroundMove (smoothCorners:true) → CombatLabVisualSession.executeInteractive → CombatLabCommands → RoutedMoveOrders → MoveOrderPlanning → GridPathfinder.findGridPath → getRouteCostFields (visibility/danger/cover) + A*. Нормальный профиль учитывает субъективную опасность, нельзя заменить на direct. Existing RouteCostWorkerClient и worker уже готовят точные поля, а planMoveOrder/findGridPath поддерживают preparedCostFields. Уважай реальные ключи knowledge/map/profile/posture, не только routeCostFieldsMatch. Подробный read-only диагноз: C:/Users/Andrew/AppData/Local/DSH/Postman/devspace/039572ed-4f3a-4583-bf8f-1ae515fc4222/workspace/artifacts/combat-lab-cpu-optimization/routing-diagnosis.md.
+
+Сделай минимальное расширение существующего worker пути, чтобы ПОЛНЫЕ тяжёлые поля, A*, smoothing/сравнение маршрутов не блокировали main pointerup или следующий тик. Не строить параллельный общий scheduler/cache framework. Pending должен содержать сериализуемый intent, target и явный UI-статус, не фиктивный готовый путь. Подготовка идёт и на паузе, готовый приказ публикуется без продвижения simulation time. STEP не должен запускать подготовку только своим нажатием. Сохранение/загрузка pending в checkpoint, latest-per-unit, отмена/замена/reset/load/death, stale reply rejection, ограниченная справедливая очередь, видимая ошибка и teardown обязательны для конкретного async риска. Ошибка не теряет приказ молча, нет синхронного fallback-stall или бесконечных retries. Core machine-owned logic публикует результат, не renderer; скриптовые сценарии и main game сохраняют прежний детерминированный путь. Фоновая подготовка не должна менять симуляцию сама по таймеру.
+
+Сначала сохрани artifacts/combat-lab-cpu-optimization/checkpoint.md с 3–5 шагами, текущими фактами и рисками. Есть dependencies npm ci PASS и 2 localGLB; повторный install не нужен. Результаты старых шагов: result.md, before.json/after.json в этом task artifacts. Старые timings: RTX3060/1280x800DPR1/5units/seed9041, before6486frames~108s,after6755~113s; Babylon6.18→5.18мс, app9.04→8.52, FPS59.81→59.87, framep95 20.7→21.4. Не объявлять улучшение FPS; after не соответствует будущему async diff и восстановленному звуку. Baseline сохранить без повторения.
+
+Проверить реальные async cases: delayed worker на паузе без продвижения времени; ready до STEP; pending checkpoint restore; cancel/replace/reset/load/death/stale/error; exact route parity с sync snapshot; счётчики доказывают отсутствие full-map/A* в main input call. Используй имеющиеся тесты/инструменты, не regex-only. typecheck/build на конечной границе, не чинить старые unrelated smoke failures (описаны в result.md). Точный task URL http://127.0.0.1:5197/combat-lab.html жив, PID58208 ownership не установлен; root5173 и чужие серверы не трогать. Новые собственные jobs только managed background с job_id и точным settlement. Browser missing checks: both sides + rectangle selection, paused STEP/posture. Остальные move/fireammo/2d3d/mainPixistart ранее проверены для трёх rendering fixes. Не придумывай доступные screenshot paths; сохраняй реальный URI/path. При ошибке VUDA MCP не обходить его через Bash/SDK.
+
+Для performance: свежий after в той же сцене после прогрева ≥90s, плюс короткий cold/warm right-click capture и main-vs-worker CPU, учитывая snapshot/postMessage preparation. Для steady bottleneck достаточно короткого раскрытия scene.render через доступный профайлер/временные Babylon instrumentation counters, не вводить постоянную новую инфраструктуру. CPU submit не GPU time. Артефакты только под task artifacts, исходники только этой task-копии, docs/ideas/plans не менять, untracked failure.txt/user data сохранить. В result.md укажи изменённые файлы, реальные проверки/метрики/ограничения и jobs. Commit/push/PR делает локальный Worker после review, не выполнять Git publication. По завершении остановись и доставь отчёт через bell с reportRef; не назначай соседний рефакторинг.
+## Обязательный формат итогового ответа
+После bell напиши итоговый ответ строго между следующими точными маркерами этого задания.
+Если bell недоступен или поручение требует только текст, эти маркеры всё равно обязательны.
+Каждый маркер — отдельная строка без кавычек, Markdown, пробелов или замены REQ.
+Между ними — непустой итог, ограничения и результаты проверок; вне маркеров ничего не пиши.
+<<<POSTMAN_RESULT_BEGIN:REQ_20261026T173659Z_0992>>>
+<итог работы либо BLOCKED/NEED_DECISION с причиной>
+<<<POSTMAN_RESULT_END:REQ_20261026T173659Z_0992>>>
+Маркеры нужны скрипту получения ответа; они не заменяют bell и не доказывают PASS.
