@@ -53,35 +53,39 @@ function apply(ctx) {
     document.head.appendChild(style);
     return () => style.remove();
   }, 'nodes-agent: style');
-  function TeamEditor(props) {
-    const el = React.useRef(null);
-    React.useEffect(() => {
-      const current = el.current;
-      if (!current) return;
-      current.innerHTML = EDITOR_HTML;
-      const dispose = mountEditor(current, {
-        ...bridge,
-        sessionId: () => props.sessionId || bridge.sessionId(),
-        openChat: binding => { bridge.openChat(binding); props.onOpenChat?.(); }
-      });
-      return () => { dispose?.(); current.replaceChildren(); };
-    }, [props.sessionId, props.onOpenChat]);
-    return React.createElement('div', { className: 'nodes-agent-root', ref: el,
-      'data-testid': 'nodes-agent-editor' });
-  }
-  function EditorDialog({ sessionId, onClose }) {
-    const dialog = React.useRef(null);
-    React.useEffect(() => { dialog.current.showModal(); }, []);
-    return React.createElement('dialog', { className:'nodes-agent-dialog', ref:dialog, onCancel:onClose },
-      React.createElement('button', { className:'nodes-agent-close', onClick:onClose, 'aria-label':'Close editor' }, '×'),
-      React.createElement(TeamEditor, {sessionId,onOpenChat:onClose}));
+  let editorWindow = null;
+  function openEditorWindow() {
+    if (editorWindow && !editorWindow.closed) {
+      editorWindow.focus();
+      return;
+    }
+    const popup = window.open('', 'nodes-agent-by-andrew-editor', 'popup,width=1480,height=920');
+    if (!popup) throw Error('Allow pop-up windows to open the NodesAgent editor');
+    try {
+      const doc = popup.document;
+      doc.open();
+      doc.write('<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>NodesAgent_by_Andrew</title>' +
+        '<style>html,body{width:100%;height:100%;margin:0;background:#0b0e14}' +
+        EDITOR_CSS + '</style></head><body><div class="nodes-agent-root" id="nodesAgentWindowRoot">' +
+        EDITOR_HTML + '</div></body></html>');
+      doc.close();
+      const dispose = mountEditor(doc.getElementById('nodesAgentWindowRoot'), bridge);
+      editorWindow = popup;
+      popup.addEventListener('pagehide', () => {
+        dispose?.();
+        if (editorWindow === popup) editorWindow = null;
+      }, { once: true });
+      popup.focus();
+    } catch (error) {
+      popup.close();
+      throw error;
+    }
   }
   function TeamChoice({ session }) {
     const sessionId = session?.id || bridge.sessionId();
     const [list, setList] = React.useState([]);
     const [selection, setSelection] = React.useState('');
     const [visible, setVisible] = React.useState(false);
-    const [editing, setEditing] = React.useState(false);
     const [pending, setPending] = React.useState(false);
     const [error, setError] = React.useState('');
     React.useEffect(() => {
@@ -112,18 +116,11 @@ function apply(ctx) {
             ...list.map(row => React.createElement('option', { key: row.id, value: row.id }, row.name)))),
         React.createElement('button', { type: 'button', disabled: pending || !selection || !sessionId, onClick: create },
           pending ? '…' : (ru ? 'Запустить' : 'Start')),
-        React.createElement('button', { type:'button', onClick:()=>setEditing(true) }, ru ? 'Редактор команды' : 'Edit team'),
-        error && React.createElement('small', { role: 'alert' }, error)),
-      editing && React.createElement(EditorDialog,{sessionId,onClose:()=>setEditing(false)}));
+        React.createElement('button', { type:'button', onClick: () => {
+          try { openEditorWindow(); } catch (e) { setError(String(e.message || e)); }
+        } }, ru ? 'Редактор команды' : 'Edit team'),
+        error && React.createElement('small', { role: 'alert' }, error)));
   }
-  ctx.slots.inject('conversation.view', () => {
-    // Share the existing conversation state seat: Open Chat selects its real tab.
-    const chat = ctx.slots.entries('conversation.session').find(entry => entry.store);
-    return ctx.slots.register({
-      name: 'conversation.view', id: 'nodes-agent-editor', order: 24, store:chat.store,
-      label: () => 'NodesAgent', inject: (sessionId,actions) => ({sessionId,onOpenChat:()=>actions.setView('chat')})
-    }, TeamEditor);
-  });
   ctx.slots.inject('conversation.input.right', () => ctx.slots.register({
     name: 'conversation.input.right', id: 'nodes-agent-use-team', order: 81,
     inject: () => ({})

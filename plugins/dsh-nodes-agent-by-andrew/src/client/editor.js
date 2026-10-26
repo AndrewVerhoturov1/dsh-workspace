@@ -1,6 +1,13 @@
 function mountEditor(root, bridge) {
 
   'use strict';
+  const document = root.ownerDocument;
+  const window = document.defaultView;
+  const localStorage = window.localStorage;
+  const requestAnimationFrame = window.requestAnimationFrame.bind(window);
+  const setInterval = window.setInterval.bind(window);
+  const clearInterval = window.clearInterval.bind(window);
+  const setTimeout = window.setTimeout.bind(window);
 
   const STORAGE_KEYS = Object.freeze({
     definition: 'nodesAgentByAndrew.p0.teamDefinition.v1',
@@ -1302,8 +1309,26 @@ function mountEditor(root, bridge) {
       if (state.runtime.status !== 'STOPPED') { resetRuntime(); renderAll(); }
       return;
     }
+    const prior = state.runtime;
+    const statusChanged = prior.id !== run.id || prior.status !== run.status;
+    const bindingsChanged = JSON.stringify(prior.bindings) !== JSON.stringify(run.bindings);
     state.runtime = { id: run.id, status: run.status, bindings: run.bindings };
-    renderAll();
+    if (statusChanged) renderRuntime();
+    if (statusChanged || bindingsChanged) {
+      for (const node of els.nodeLayer.children) {
+        const status = state.runtime.bindings[node.dataset.id]?.status || (run.status === 'STOPPED' ? 'NOT_STARTED' : 'IDLE');
+        node.dataset.runtime = status;
+        const label = node.querySelector('.runtime-chip span:last-child');
+        if (label) label.textContent = status;
+      }
+      if (state.selection?.type === 'node') {
+        const binding = state.runtime.bindings[state.selection.id];
+        const status = binding?.status || (run.status === 'STOPPED' ? 'NOT_STARTED' : 'IDLE');
+        els.inspectorRuntimeStatus.textContent = status;
+        els.inspectorStatusDot.style.background = status === 'RUNNING' ? 'var(--success)' : status === 'PAUSED' ? 'var(--warning)' : status === 'ERROR' ? 'var(--danger)' : '#657184';
+        els.openChatButton.disabled = !binding?.sessionId;
+      }
+    }
     const items = await bridge.call('runs/activity', { id: run.id });
     const activity = $('nodesActivity');
     activity.replaceChildren();
