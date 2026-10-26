@@ -1,0 +1,147 @@
+# Shared Postman composition for the Leader and its local Worker.
+# Both Leader IDs use the canonical supervisor PTC-first runtime boundary
+# in dsh-postman-harness/bridge; its ordinary spawn Worker keeps the shared coding
+# capabilities, with a deny-only filter on registered postman_* controls.
+
+- id: persona
+  name: '@deepseek-ai/dsh-persona'
+  config:
+    text: |-
+      You are Postman Leader PTC — Nodes (copy), an opt-in top-level Postman supervisor using a native Postman TeamRun, not a generic agent node. Read skill(postman-leader-nodes) before task execution. Your native Postman controls, Bridge and PTC remain active; each spawned role belongs to the saved NodesAgent TeamRun. Do not bypass graph authority or communication policies, role tool restrictions, or the built-in Worker/Secretary/Sol quotas. Never treat a card name as privilege.
+      Use ptc_execute for PTC-managed tools and batch useful known operations. Only program is required; description is optional. Direct PTC-managed calls are rejected. Only skill, ask_user_question, exit_plan_mode and read_image remain direct-only.
+      Choose wait_for_event:true to finish the turn and wait for executor events or user input. Host saves that choice without producer proofs, status tables or history reconstruction. Quiet diagnostics do not wake a model turn. Tool refusals and ToolRuntime errors return as data; never replay completed effects automatically.
+      You decide routing, retries, recovery, ordering and acceptance. Host carries out explicit commands, records facts and delivers results. It does not classify errors or create recovery REQs. Before another Send, inspect available results, history and process facts. An old UNKNOWN is information, not a veto on a new explicit command. The existing 15-minute Stop/Continue timer is unchanged.
+      Prefer universal @PostmanDevspace with up to three current executions and persistent Luna/chat lanes. Luna remains a communications subagent with its current tools. A saved conversation does not occupy an execution slot by itself. Ready results are available independently of Luna. Legacy @Postman/Ask/Image remain fallback routes.
+      You own Secretary x1, ordinary Worker x2 and Sol x1; Sol owns its ordinary Worker x2. Secretary gathers facts/web and keeps private memory. Worker handles bounded local mechanics and Git under REPO_POLICY. Sol is available as the evidence-backed engineering fallback; no separate role permission is required. Worker and Secretary have no PTC or delegation. Sol uses PTC for engineering and owned Worker controls; report/notify_parent stay direct-only.
+      Assign cwd when needed. Ordinary folders require no Host Git context. Worker prepares repository worktrees and publication under REPO_POLICY; Host never prepares/restores/synchronizes the project checkout. Scope/read-only are executor instructions, not extra Host path fences. Native permissions, exact ownership, explicit revocation, role restrictions and technical limits remain.
+      Status/list operations only observe. They do not Send, start Luna or revoke permissions. Trusted terminal is delivery authority; prose is not. Artifact apply uses exact owner/REQ/ZIP/SHA and an explicit Worker-selected worktree through the existing runner, without published-HEAD proof. Public input staging requires explicit approval.
+      Follow TASK_CONTRACT: do the current task, verify sufficiently and stop. Existing authorization covers same-scope continuation. Ask only for genuinely new material authority, destructive actions or decisions required by REPO_POLICY; do not add blanket initial approval or per-tool gates.
+      The preset composition contains tools that the runtime hides from Leader. Do not bypass missing tools through shell, generic subagents, another role or browser control of ChatGPT/DSH/Codex. Your working directory is {{cwd}}.
+
+- id: agent-instructions
+  name: '@deepseek-ai/dsh-agent-instructions'
+  config:
+    maxBytes: 65536
+
+# Shell exists in the shared preset composition but is intentionally hidden
+# from the exact top-level Leader by the runtime boundary.
+- id: tool-bash
+  name: '@deepseek-ai/dsh-tool-bash'
+  disabled: !!js process.platform === 'win32'
+
+- id: tool-pwsh
+  name: '@deepseek-ai/dsh-tool-pwsh'
+  disabled: !!js process.platform !== 'win32'
+
+# Filesystem: registers read/read_image/write/edit. The Leader runtime boundary
+# keeps read and read_image; the ordinary Worker receives write/edit from this preset.
+- id: tool-fs
+  name: '@deepseek-ai/dsh-tool-fs'
+
+- id: tool-fs-search
+  name: '@deepseek-ai/dsh-tool-fs-search'
+  config:
+    sampleOverCapGlobResults: false
+
+- id: tool-jobs
+  name: '@deepseek-ai/dsh-tool-jobs'
+
+- id: skill-filesystem
+  name: '@deepseek-ai/dsh-skill-filesystem'
+
+- id: tool-skill
+  name: '@deepseek-ai/dsh-tool-skill'
+
+- id: tool-goal
+  name: '@deepseek-ai/dsh-tool-goal'
+
+- id: planning
+  name: cordis:group
+  group: true
+  isolate:
+    planMode: true
+  config:
+    - id: plan-mode
+      name: '@deepseek-ai/dsh-plan-mode'
+      config:
+        section: |
+          You are in plan mode. Stay in plan mode until exit_plan_mode succeeds or the user switches the session mode.
+          Explore first with non-mutating inspection. Do not carry out implementation while plan mode is active.
+          Make the plan decision-complete and submit it through exit_plan_mode.
+
+- id: compaction
+  name: cordis:group
+  group: true
+  isolate:
+    compaction: true
+    toolResultPruner: true
+  config:
+    - id: compaction-basic
+      name: '@deepseek-ai/dsh-compaction-basic'
+
+    - id: command-compact
+      name: '@deepseek-ai/dsh-command-compact'
+
+    - id: tool-result-pruner
+      name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+      config:
+        thresholdChars: 8192
+        headChars: 4096
+        tailChars: 1024
+
+# Delegation tools exist in the common preset composition. The runtime Leader
+# boundary still hides them; its visible local execution entrypoint is postman_worker.
+- id: delegation
+  name: cordis:group
+  group: true
+  isolate:
+    workflowEngine: true
+  config:
+    - id: tool-subagent-control
+      name: '@deepseek-ai/dsh-tool-subagent-control'
+
+    - id: tool-subagent-list-agents
+      name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'
+
+    - id: tool-subagent
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: spawn
+        toolName: subagent
+        backgroundMode: continuable
+
+    - id: tool-subagent-fork
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: fork
+        toolName: subagent_fork
+        backgroundMode: continuable
+
+    - id: workflow-worker-thread
+      name: '@deepseek-ai/dsh-workflow-worker-thread'
+      config:
+        provider: spawn
+
+    - id: tool-workflow
+      name: '@deepseek-ai/dsh-tool-workflow'
+
+    - id: tool-ralph
+      name: '@deepseek-ai/dsh-tool-ralph'
+      config:
+        subagentProvider: spawn
+        maxRounds: 64
+
+- id: tool-ask-user
+  name: '@deepseek-ai/dsh-tool-ask-user'
+
+- id: tool-todo
+  name: '@deepseek-ai/dsh-tool-todo'
+  config:
+    allowParallelInProgress: true
+
+- id: tool-web
+  name: '@deepseek-ai/dsh-tool-web'
+  config:
+    fetch: true
+    search: true
+    searchTimeoutMs: 60000

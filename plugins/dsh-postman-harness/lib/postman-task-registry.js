@@ -62,6 +62,8 @@ export const POSTMAN_TASK_DOMAIN = defineDomain({
       lifecycle: workerLifecycle.optional() }).nullable().optional(),
     workers: z.record(z.string(), z.object({
       id: z.string(), label: z.string(), cwd: z.string().optional(), waitingForEvent: z.boolean().optional(), workerType: z.enum(['luna', 'sol', 'secretary']).optional(), ownerSessionId: z.string().optional(),
+      // Exact opt-in NodesAgent snapshot identity; historical Postman records remain unchanged.
+      nodesRunId: z.string().optional(), nodesNodeId: z.string().optional(),
       pendingBudgets: z.record(z.string(), z.unknown()).optional(),
       budget: z.object({ assignmentId: z.string(), task: z.string(), used: z.number().int().nonnegative(),
         softLimit: z.number().int().positive(), hardLimit: z.number().int().positive(),

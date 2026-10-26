@@ -35,7 +35,9 @@ export const POSTMAN_BRIDGE_TOOL_ALLOWLIST = Object.freeze([
 ])
 export const POSTMAN_LEADER_PRESET_ID = 'postman-leader'
 export const POSTMAN_PTC_LEADER_PRESET_ID = 'postman-leader-ptc'
+export const POSTMAN_NODES_LEADER_PRESET_ID = 'postman-leader-ptc-nodes'
 export const POSTMAN_PTC_TOOL_NAME = 'ptc_execute'
+export const POSTMAN_NODES_TOOL_NAMES = Object.freeze(['nodes_team_message', 'nodes_team_assign_task', 'nodes_team_complete_task'])
 export const POSTMAN_LEADER_TOOL_ALLOWLIST = Object.freeze([
   'ask_user_question',
   'todo_write',
@@ -82,7 +84,9 @@ export const POSTMAN_SOL_PTC_TOOL_NAMES = Object.freeze([...POSTMAN_WORKER_PTC_T
 export function postmanPtcDirectCallGuard(exec, lookupAgent, ownsPtcWorker = () => false) {
   return lookupAgent(exec.agent?.id) === exec.agent && exec.parent === undefined &&
     ((isTopLevelPostmanPtcLeader(exec.agent) && POSTMAN_PTC_ONLY_LEADER_TOOLS.includes(exec.name)) ||
-      (ownsPtcWorker(exec.agent) && POSTMAN_SOL_PTC_TOOL_NAMES.includes(exec.name)))
+      (ownsPtcWorker(exec.agent) && (POSTMAN_SOL_PTC_TOOL_NAMES.includes(exec.name) ||
+        isTopLevelPostmanNodesLeader(lookupAgent(exec.agent.session.header.parentSession)) && POSTMAN_NODES_TOOL_NAMES.includes(exec.name))) ||
+      (isTopLevelPostmanNodesLeader(exec.agent) && POSTMAN_NODES_TOOL_NAMES.includes(exec.name)))
     ? 'POSTMAN_PTC_DIRECT_CALL_REJECTED: use ptc_execute' : undefined
 }
 
@@ -161,25 +165,34 @@ export function isTopLevelPostmanPtcLeader(agent) {
 
 export function isTopLevelPostmanSupervisor(agent) {
   const preset = topLevelPostmanPreset(agent)
-  return preset === POSTMAN_LEADER_PRESET_ID || preset === POSTMAN_PTC_LEADER_PRESET_ID
+  return preset === POSTMAN_LEADER_PRESET_ID || preset === POSTMAN_PTC_LEADER_PRESET_ID || preset === POSTMAN_NODES_LEADER_PRESET_ID
+}
+
+export function isTopLevelPostmanNodesLeader(agent) {
+  return topLevelPostmanPreset(agent) === POSTMAN_NODES_LEADER_PRESET_ID
 }
 
 export function postmanBridgeCallerAllowed(agent) {
   return isTopLevelPostmanSupervisor(agent)
 }
 
-export function postmanBridgeRestrictionForAgent(agent, ownsPtcWorker = () => false, roleOf = () => null) {
+export function postmanBridgeRestrictionForAgent(agent, ownsPtcWorker = () => false, roleOf = () => null, isNodesChild = () => false) {
+  if (isTopLevelPostmanNodesLeader(agent)) {
+    return { allow: [...POSTMAN_LEADER_TOOL_ALLOWLIST, ...POSTMAN_NODES_TOOL_NAMES, POSTMAN_PTC_TOOL_NAME] }
+  }
   if (isTopLevelPostmanPtcLeader(agent)) {
     return { allow: [...POSTMAN_LEADER_TOOL_ALLOWLIST, POSTMAN_PTC_TOOL_NAME] }
   }
   const role = roleOf(agent)
-  if (role === 'secretary') return { allow: [...SECRETARY_TOOLS] }
+  if (role === 'secretary') {
+    return { allow: isNodesChild(agent) ? [...SECRETARY_TOOLS, ...POSTMAN_NODES_TOOL_NAMES] : [...SECRETARY_TOOLS] }
+  }
   if (role === 'sol') return { deny: [...POSTMAN_LEADER_ONLY_TOOL_NAMES.filter(name => !WORKER_CONTROL_TOOLS.includes(name)),
     ...(ownsPtcWorker(agent) ? [] : [POSTMAN_PTC_TOOL_NAME]), 'ask_user_question', 'exit_plan_mode', ...DELEGATION_TOOLS] }
   return { deny: [...POSTMAN_LEADER_ONLY_TOOL_NAMES.filter(name => !(role === 'luna' && name === 'postman_app')), POSTMAN_PTC_TOOL_NAME, ...(role === 'luna' ? ['ask_user_question', 'list_agents', 'exit_plan_mode', ...DELEGATION_TOOLS] : [])] }
 }
 
-export function createPostmanBridgeBoundaryManager(lookupAgent, ownsPtcWorker = () => false, roleOf = () => null) {
+export function createPostmanBridgeBoundaryManager(lookupAgent, ownsPtcWorker = () => false, roleOf = () => null, isNodesChild = () => false) {
   if (typeof lookupAgent !== 'function') throw new Error('POSTMAN_BRIDGE_AGENT_LOOKUP_REQUIRED')
   const active = new Map()
   let updating = false
@@ -195,7 +208,7 @@ export function createPostmanBridgeBoundaryManager(lookupAgent, ownsPtcWorker = 
     // restrict() accepts only currently inherited names, not agent-local report/PTC.
     // Inspect the preset parent, BEFORE this agent's filters, never the global-only
     // or already restricted agent surface. Recompute from canonical policy on change.
-    const restriction = postmanBridgeRestrictionForAgent(agent, ownsPtcWorker, roleOf)
+    const restriction = postmanBridgeRestrictionForAgent(agent, ownsPtcWorker, roleOf, isNodesChild)
     const schemas = agent.ctx.tools.schemas?.(scopeParentOf(agent))
     if (schemas) {
       const known = new Set(schemas.map(tool => tool.name))
