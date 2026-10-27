@@ -109,6 +109,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .canvas-shell.is-panning { cursor: grabbing; }
 .canvas-shell.edge-authority { cursor: crosshair; }
 .canvas-shell.edge-communication { cursor: crosshair; }
+.canvas-shell.edge-chat { cursor: crosshair; }
 .canvas-stage { position: absolute; width: 4000px; height: 3000px; transform-origin: 0 0; }
 .canvas-world { position: absolute; inset: 0; width: 4000px; height: 3000px; transform-origin: 0 0; text-rendering: geometricPrecision; }
 .edge-layer { position: absolute; inset: 0; width: 4000px; height: 3000px; overflow: visible; pointer-events: none; }
@@ -119,6 +120,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .edge.authority { stroke: var(--authority); marker-end: url(#arrowAuthority); opacity: .96; }
 .edge.communication { stroke: var(--communication); stroke-dasharray: 7 6; marker-end: url(#arrowCommunication); opacity: .78; }
 .edge.communication.bidirectional { marker-start: url(#arrowCommunication); }
+.edge.chat { stroke: #769be8; stroke-dasharray: 3 6; opacity: .83; }
+.legend-line.chat { border-color: #769be8; border-top-style: dashed; }
 .communication-direction-control { display: inline-flex; }
 .communication-direction-control .segment { min-width: 31px; padding-inline: 8px; font-size: 12px; }
 .communication-direction-control .segment span[data-i18n] { margin-left: 4px; font-size: 9px; }
@@ -186,6 +189,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .connection-banner { position: absolute; left: 50%; top: 12px; z-index: 8; transform: translateX(-50%); max-width: min(620px,calc(100% - 40px)); padding: 8px 11px; border: 1px solid #3a4a62; border-radius: 8px; background: rgba(14,20,30,.94); box-shadow: 0 10px 28px rgba(0,0,0,.28); color: #c8d3e2; font-size: 10.5px; font-weight: 650; pointer-events: none; }
 .connection-banner.authority { border-color: rgba(255,180,84,.42); color: #ffd296; }
 .connection-banner.communication { border-color: rgba(88,213,201,.38); color: #9af0e8; }
+.connection-banner.chat { border-color: rgba(118,155,232,.5); color: #b4c9ff; }
 
 .inspector { min-width: 0; min-height: 0; overflow: auto; background: #101620; }
 .inspector-header { position: sticky; top: 0; z-index: 4; min-height: 64px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 14px; background: rgba(16,22,32,.95); border-bottom: 1px solid var(--line-soft); backdrop-filter: blur(10px); }
@@ -197,6 +201,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .workspace.inspector-collapsed .inspector-empty,
 .workspace.inspector-collapsed .inspector-form,
 .workspace.inspector-collapsed .edge-inspector,
+.workspace.inspector-collapsed .luna-inspector,
 .workspace.inspector-collapsed #deleteSelectionButton { display: none !important; }
 .workspace.inspector-collapsed .inspector-header-actions { display: block; }
 .eyebrow { color: var(--muted-2); font-size: 9px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
@@ -335,12 +340,15 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .luna-bridge-node .node-role {color:#91c4d0;}
 .luna-bridge-node.selected {border-color:#58d5c9;}
 .luna-chat-node {position:absolute;width:204px;min-height:100px;padding:12px;border:1px dashed #40998f;border-radius:10px;background:#101f27;color:#b6d9d4;font-size:10px;cursor:pointer;overflow:visible;}
-.luna-chat-node::before {content:'';position:absolute;left:-34px;top:39px;width:34px;border-top:2px dashed #58d5c9;}
+.luna-chat-node.selected { border-color:#92b4ff; box-shadow:0 0 0 2px rgba(146,180,255,.18); }
+.luna-chat-node.edge-source-chat {border-color:#a8bcff; box-shadow:0 0 0 2px rgba(146,180,255,.17);}
 .luna-chat-node strong {display:block;margin-bottom:9px;font-size:13px;}
 .luna-chat-node div {margin-top:5px;color:#8aaca8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .luna-chat-node .luna-chat-address {color:#58d5c9;}
 .luna-inspector {padding:14px 14px 28px;}
 .luna-inspector .luna-facts {display:grid;gap:8px;font-size:11px;line-height:1.4;}
+#lunaJobStatus {color:#a5b7d9;overflow-wrap:anywhere;}
+#lunaJobResult {color:#9fceb9;white-space:pre-wrap;overflow-wrap:anywhere;max-height:130px;overflow:auto;}
 .luna-inspector a {color:#8cc5ff;overflow-wrap:anywhere;}
 .luna-inspector .field select {max-width:100%;}
 .agent-node[data-runtime="WORKING"] .node-runtime-strip,.agent-node[data-runtime="WORKING"] .runtime-dot {background:var(--success);}

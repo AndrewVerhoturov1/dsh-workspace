@@ -4,11 +4,13 @@ import { randomUUID } from 'node:crypto'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { createNodesLunaNativeBridge, createPostmanBridgeTool } from './postman-bridge.js'
-import { createPostmanBridgeJobs } from './postman-bridge-jobs.js'
-import { createDevspaceChannel } from './postman-devspace.js'
-import { openPostmanTaskRegistry } from './postman-task-registry.js'
-import { stage1Native } from './fixtures/postman-stage1-runtime.js'
+// Use native installed SDK modules inside the isolated source worktree.
+await import('../../dsh-nodes-agent-by-andrew/tests/sdk-loader.mjs')
+const { createNodesLunaNativeBridge, createPostmanBridgeTool } = await import('./postman-bridge.js')
+const { createPostmanBridgeJobs } = await import('./postman-bridge-jobs.js')
+const { createDevspaceChannel } = await import('./postman-devspace.js')
+const { openPostmanTaskRegistry } = await import('./postman-task-registry.js')
+const { stage1Native } = await import('./fixtures/postman-stage1-runtime.js')
 
 const { JsonStorageBackend } = await stage1Native('dsh-storage-json')
 const { DomainFacility } = await stage1Native('dsh-storage-domain')

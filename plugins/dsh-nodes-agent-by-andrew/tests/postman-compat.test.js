@@ -14,6 +14,8 @@ registerHooks({ resolve(specifier, context, nextResolve) {
     ? { url: 'data:text/javascript,' + encodeURIComponent(modules.get(specifier)), shortCircuit: true }
     : nextResolve(specifier, context);
 }});
+// The isolated worktree uses the installed native SDK resolution without changing dependency manifests.
+await import('./sdk-loader.mjs');
 const core = await import('../../dsh-postman-harness/lib/postman-bridge-core.js');
 const worker = await import('../../dsh-postman-harness/lib/postman-worker.js');
 
@@ -97,7 +99,8 @@ test('native continuable child retains Postman role, node route/persona and deny
   assert.match(req.request.persona, /bounded verification/);
   assert.equal(req.request.maxDepth, 1);
   assert.deepEqual(req.request.toolFilter.deny, ['postman_bridge', 'write']);
-  assert.deepEqual(req.request.toolFilter.allow, ['read', 'report', 'notify_parent', ...core.POSTMAN_NODES_TOOL_NAMES, 'postman_app']);
+  assert.deepEqual(req.request.toolFilter.allow, ['read', 'report', 'notify_parent',
+    ...core.POSTMAN_NODES_TOOL_NAMES.filter(name => !name.startsWith('nodes_chat_')), 'postman_app']);
   const withoutReasoning = structuredClone(node);
   withoutReasoning.model.reasoningEffort = '';
   assert.equal(Object.hasOwn(worker.buildPostmanWorkerStartRequest(parent, 'task', signal, ['postman_bridge'], 'Worker 1', 'luna', withoutReasoning).request.agentOptions, 'reasoningEffort'), false);

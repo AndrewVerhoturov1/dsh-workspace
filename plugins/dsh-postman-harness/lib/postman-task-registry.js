@@ -61,7 +61,7 @@ export const POSTMAN_TASK_DOMAIN = defineDomain({
       artifactRequests: z.array(z.string()),
       lifecycle: workerLifecycle.optional() }).nullable().optional(),
     workers: z.record(z.string(), z.object({
-      id: z.string(), label: z.string(), cwd: z.string().optional(), waitingForEvent: z.boolean().optional(), workerType: z.enum(['luna', 'sol', 'secretary']).optional(), ownerSessionId: z.string().optional(),
+      id: z.string(), label: z.string(), cwd: z.string().optional(), waitingForEvent: z.boolean().optional(), workerType: z.enum(['luna', 'sol', 'secretary', 'luna-bridge']).optional(), ownerSessionId: z.string().optional(),
       // Exact opt-in NodesAgent snapshot identity; historical Postman records remain unchanged.
       nodesRunId: z.string().optional(), nodesNodeId: z.string().optional(),
       pendingBudgets: z.record(z.string(), z.unknown()).optional(),
@@ -126,6 +126,11 @@ export const POSTMAN_TASK_DOMAIN = defineDomain({
           conversationRef: z.string() }).strict().optional(),
         hostFailure: z.object({status: z.string(), diagnostic: z.string().optional()}).strict().optional(),
         recoveryNextJobId: z.string().optional() }).strict().optional(),
+      // Exact Nodes invocation lives in the existing Bridge operation, never in a parallel journal.
+      nodesInvocation: z.object({ runId: z.string(), initiatorNodeId: z.string(),
+        initiatorSessionId: z.string(), chatNodeId: z.string(), laneId: z.string() }).strict().optional(),
+      nodesDelivery: z.object({ status: z.enum(['delivered','unavailable']),
+        diagnostic: z.string().optional() }).strict().optional(),
       archivedAt: z.string().optional(), executionRevoked: z.boolean().optional(),
       lateTerminal: z.unknown().optional(), residualWriteRoot: z.string().optional(),
       writerSettlement: z.object({version: z.literal(1), source: z.literal('devspace_native_tree'),

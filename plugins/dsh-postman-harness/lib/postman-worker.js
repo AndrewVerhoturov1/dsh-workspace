@@ -30,7 +30,7 @@ const limitsFor = hardLimit => ({ hardLimit, softLimit: Math.floor(hardLimit * 0
 export const FAST_WORKER_BUDGET = Object.freeze(limitsFor(60))
 const ROLE_SKILLS = Object.freeze(Object.fromEntries(['luna', 'secretary', 'sol'].map(type => [type,
   readFileSync(new URL('../../../.agents/skills/' + (type === 'luna' ? 'postman-worker' : type === 'sol' ? 'postman-sol-worker' : 'postman-secretary') + '/SKILL.md', import.meta.url), 'utf8') ])))
-export const postmanRoleInstruction = type => ROLE_SKILLS[type]
+export const postmanRoleInstruction = type => ROLE_SKILLS[type === 'luna-bridge' ? 'luna' : type]
 export const POSTMAN_SOL_WORKER_AGENT_OPTIONS = Object.freeze({ provider: 'codex', model: 'gpt-6.1-sol', reasoningEffort: 'xhigh' })
 const workerTypeOf = binding => binding.workerType ?? 'luna'
 const workerOptions = type => type === 'sol' ? POSTMAN_SOL_WORKER_AGENT_OPTIONS : POSTMAN_WORKER_AGENT_OPTIONS
@@ -57,18 +57,18 @@ function output() {
 export { WORKER_CONTROL_TOOLS, DELEGATION_TOOLS, SECRETARY_TOOLS } from './postman-bridge-core.js'
 export function postmanWorkerDeniedTools(tools, type = 'luna', scope) {
   return [...new Set([...tools.schemas(scope).map(tool => tool.name).filter(name => name.startsWith('postman_') &&
-    !(type === 'sol' && WORKER_CONTROL_TOOLS.includes(name)) && !(type === 'luna' && name === 'postman_app') && !(type === 'secretary' && name === 'postman_secretary_ledger')),
-    ...tools.schemas(scope).map(tool => tool.name).filter(name => DELEGATION_TOOLS.includes(name) || (type === 'luna' && ['ask_user_question', 'list_agents', 'exit_plan_mode'].includes(name)) || (type !== 'sol' && name === 'ptc_execute') || (type === 'secretary' && name === 'implementation_artifact_apply'))])]
+    !(type === 'sol' && WORKER_CONTROL_TOOLS.includes(name)) && !(['luna', 'luna-bridge'].includes(type) && name === 'postman_app') && !(type === 'secretary' && name === 'postman_secretary_ledger')),
+    ...tools.schemas(scope).map(tool => tool.name).filter(name => DELEGATION_TOOLS.includes(name) || (['luna', 'luna-bridge'].includes(type) && ['ask_user_question', 'list_agents', 'exit_plan_mode'].includes(name)) || (type !== 'sol' && name === 'ptc_execute') || (type === 'secretary' && name === 'implementation_artifact_apply'))])]
 }
 
 function nodeToolFilter(node, type, intrinsicDenied) {
   const grants = node.capabilities?.grants || []
   const denied = new Set([...intrinsicDenied, ...grants.filter(g => g.kind === 'tool' && g.mode === 'deny').map(g => g.id)])
   const allowed = grants.filter(g => g.kind === 'tool' && g.mode === 'allow').map(g => g.id)
-  const nativeRequired = ['report', 'notify_parent', ...POSTMAN_NODES_TOOL_NAMES,
+  const nativeRequired = ['report', 'notify_parent', ...POSTMAN_NODES_TOOL_NAMES.filter(name => !name.startsWith('nodes_chat_')),
     ...(type === 'sol' ? ['ptc_execute', ...WORKER_CONTROL_TOOLS] : []),
     ...(type === 'secretary' ? ['postman_secretary_ledger'] : []),
-    ...(type === 'luna' ? ['postman_app'] : [])]
+    ...(['luna', 'luna-bridge'].includes(type) ? ['postman_app'] : [])]
   return { deny: [...denied], ...(allowed.length ? { allow: [...new Set([...allowed, ...nativeRequired])].filter(name => !denied.has(name)) } : {}) }
 }
 
@@ -408,7 +408,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     } finally { exec.signal.removeEventListener('abort', onAbort) }
   }
   async function create(parent, group, args, exec, workerType = 'luna', freshId = null) {
-    const limit = workerType === 'luna' ? 2 : 1
+    const limit = workerType === 'luna-bridge' && nodesOwner(parent) ? 3 : workerType === 'luna' ? 2 : 1
     const limitStatus = workerType === 'sol' ? 'POSTMAN_SOL_WORKER_LIMIT_REACHED' : workerType === 'secretary' ? 'POSTMAN_SECRETARY_LIMIT_REACHED' : 'POSTMAN_WORKER_LIMIT_REACHED'
     const count = workers => Object.values(workers).filter(value => workerTypeOf(value) === workerType &&
       (liveWorker(value.id) || group.slots.get(value.id)?.ptcAdmission || group.slots.get(value.id)?.state === 'intent')).length +
@@ -1068,10 +1068,11 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
   const stopBudgetGuard = ctx.tools.guard?.(exec => {
     const type = roleOf(exec.agent)
     if (type === 'secretary' && !SECRETARY_TOOLS.includes(exec.name) &&
-        !(nodesOwner(exec.agent) && POSTMAN_NODES_TOOL_NAMES.includes(exec.name))) return 'POSTMAN_SECRETARY_TOOL_REJECTED'
+        !(nativeNodesService()?.runForAgent(exec.agent) && POSTMAN_NODES_TOOL_NAMES.includes(exec.name)))
+      return 'POSTMAN_SECRETARY_TOOL_REJECTED'
     if (type && (DELEGATION_TOOLS.includes(exec.name) || (type !== 'sol' && exec.name === 'ptc_execute') ||
       (exec.name.startsWith('postman_') && !(type === 'sol' && WORKER_CONTROL_TOOLS.includes(exec.name)) &&
-      !(type === 'luna' && exec.name === 'postman_app') &&
+      !(['luna', 'luna-bridge'].includes(type) && exec.name === 'postman_app') &&
       !(type === 'secretary' && exec.name === 'postman_secretary_ledger')))) return 'POSTMAN_WORKER_TOOL_REJECTED'
     const budget = budgetOf(exec.agent)
     if (!budget) return
@@ -1152,7 +1153,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
         ? 'HARD CEILING: this assignment is escalation-only. No ordinary searches/tests/edits/retries. ONE NEEDS_PARENT_GUIDANCE: notify_parent and meaningful blocker report, then stop. Exhaustion is not success.'
         : budget && budget.used >= budget.softLimit - 1 ? 'SOFT WARNING: budget nearly exhausted. Do not start a new research branch. Finish immediately with sufficient evidence or prepare escalation.' : ''
       const ledger = type === 'secretary' ? taskContexts?.readLedger?.(scope.session.header.parentSession) ?? rawRow(scope.session.header.parentSession)?.secretaryLedger : null
-      return ROLE_SKILLS[type] + (warning ? String.fromCharCode(10) + warning : '') +
+      return postmanRoleInstruction(type) + (warning ? String.fromCharCode(10) + warning : '') +
         (ledger ? String.fromCharCode(10) + 'Current Host-private operational ledger: ' + JSON.stringify(ledger) : '')
     },
   })
@@ -1322,7 +1323,11 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       return { status: 'NODES_NATIVE_ACTION_REJECTED' }
     if (user ? requester !== leader : !authorized(requester))
       return { status: 'NODES_NATIVE_OWNER_REJECTED' }
-    const owner = run.definition.agents.find(a => a.slot === (node.slot.startsWith('sol-worker') ? 'sol' : 'entry'))
+    const managerId = node.slot === 'luna-bridge'
+      ? run.definition.authorityEdges.find(e => e.to === nodeId)?.from : null
+    const owner = managerId
+      ? run.definition.agents.find(a => a.id === managerId)
+      : run.definition.agents.find(a => a.slot === (node.slot.startsWith('sol-worker') ? 'sol' : 'entry'))
     if (!owner) return { status: 'NODES_NATIVE_PARENT_UNAVAILABLE' }
     if (!user && run.bindings[owner.id]?.sessionId !== requester.id)
       return { status: 'NODES_NATIVE_OWNER_REJECTED' }
@@ -1335,7 +1340,9 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       // asynchronous child-admission stages. Release its idle Activation, then
       // hold an explicit Host-owned resume handle through the exact operation.
       if (parent && owner.slot === 'sol' && user) {
-        const descendants = fresh.definition.agents.filter(a => a.slot.startsWith('sol-worker') &&
+        const descendants = fresh.definition.agents.filter(a =>
+          (a.slot.startsWith('sol-worker') || a.slot === 'luna-bridge' &&
+            fresh.definition.authorityEdges.some(e => e.from === owner.id && e.to === a.id)) &&
           fresh.bindings[a.id] && ctx.agents.get(fresh.bindings[a.id].sessionId))
         if (parent.status !== 'idle' || parent.inbox?.hasPending)
           return { status: 'NODES_NATIVE_PARENT_BUSY', nodeId }
@@ -1376,7 +1383,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
             (owner.slot === 'sol' && parent.session.header.parentSession !== leader.id))
           return { status: 'NODES_NATIVE_PARENT_UNAVAILABLE' }
         const ownerBindings = bindings(parent, groupFor(parent))
-        const workerType = node.slot === 'secretary' ? 'secretary' : node.slot === 'sol' ? 'sol' : 'luna'
+        const workerType = node.slot === 'secretary' ? 'secretary' : node.slot === 'sol' ? 'sol' : node.slot === 'luna-bridge' ? 'luna-bridge' : 'luna'
         if (action === 'activate') {
           if (bound) {
             if (bound.parentSessionId !== parent.id) return { status: 'NODES_BINDING_UNCERTAIN' }
@@ -1464,7 +1471,10 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
         let cascadeHandle = null
         try {
           if (node.slot === 'sol') {
-            const children = fresh.definition.agents.filter(a => a.slot.startsWith('sol-worker') && fresh.bindings[a.id])
+            const children = fresh.definition.agents.filter(a =>
+              (a.slot.startsWith('sol-worker') || a.slot === 'luna-bridge' &&
+                fresh.definition.authorityEdges.some(e => e.from === nodeId && e.to === a.id)) &&
+              fresh.bindings[a.id])
             for (const descendant of children) {
               // After one descendant settles the SDK may naturally release
               // its idle Sol parent. Acquire the same persisted Sol again for

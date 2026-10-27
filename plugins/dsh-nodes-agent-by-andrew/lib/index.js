@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import { scopeParentOf } from '@deepseek-ai/dsh-scope';
 import { POSTMAN_LEADER_TOOL_ALLOWLIST, SECRETARY_TOOLS, DELEGATION_TOOLS, POSTMAN_LEADER_ONLY_TOOL_NAMES, POSTMAN_NODES_TOOL_NAMES, POSTMAN_NODES_LEADER_TOOL_NAMES } from '../../dsh-postman-harness/lib/postman-bridge-core.js';
-import { NODES_PRESET, SLOTS, createTemplate, slotFor, validateTeam, allowedMessage, allowedAssignment, effectiveTools } from './domain.js';
+import { NODES_PRESET, SLOTS, LUNA_ROLE, LUNA_SLOT, createTemplate, normalizeTeam, slotFor, validateTeam, allowedMessage, allowedAssignment, allowedChat, effectiveTools } from './domain.js';
 
 const valueSchema = z.record(z.string(), z.unknown());
 export const nodesDomain = defineDomain({
@@ -101,6 +101,16 @@ export class NodesAgentService extends Service {
       { lunaId: { type: 'string', required: true }, message: { type: 'string', required: true },
         devspaceMode: { type: 'string', enum: ['READ_ONLY', 'WRITE_TEST', 'WRITE_ISOLATED'] } },
       (a, e) => this.agentSendLuna(e.agent, a.lunaId, a.message, a.devspaceMode, e.signal));
+    tool('nodes_chat_send', 'Send an explicit @PostmanDevspace task to a connected Postman Chat; Host Leader owns the Bridge.',
+      { chatNodeId: { type: 'string', required: true }, message: { type: 'string', required: true },
+        devspaceMode: { type: 'string', enum: ['READ_ONLY', 'WRITE_TEST', 'WRITE_ISOLATED'] } },
+      (a, e) => this.sendChat(e.agent, a.chatNodeId, a.message, a.devspaceMode, e.signal));
+    tool('nodes_chat_select', 'Select a new or verified archived conversation for a connected Chat; selection never Sends.',
+      { chatNodeId: { type: 'string', required: true }, archiveId: { type: 'string' } },
+      (a, e) => this.selectChat(e.agent, a.chatNodeId, a.archiveId ?? null));
+    tool('nodes_chat_result', 'Read the exact outcome of your own Bridge job, never another Session or run.',
+      { chatNodeId: { type: 'string', required: true }, bridgeJobId: { type: 'string', required: true } },
+      (a, e) => this.chatResult(e.agent, a.chatNodeId, a.bridgeJobId));
     tool('nodes_team_snapshot', 'Read a role-scoped current team graph and verified Luna archive; no foreign prompts or full chats.',
       {}, (a, e) => this.snapshotForAgent(e.agent));
     this.ctx.systemPrompt.section({ name: 'nodes-team', order: 125, text: ({ scope } = {}) => {
@@ -114,11 +124,11 @@ export class NodesAgentService extends Service {
           conversationRef: item.conversationRef, requestId: item.requestId })) }])) : undefined;
       return 'NodesAgent TeamRun ' + run.id + ' [' + run.status + ']\n' +
         'Your node: ' + node.id + ', name: ' + node.displayName + ', role: ' + node.role + '\n' + node.systemPrompt +
-        '\nNative owner, authority and communication are separate. Use exact nodeId via nodes_team_activate,' +
-        ' nodes_team_deactivate, nodes_team_message, nodes_team_assign_task. Entry alone can use nodes_team_luna_select' +
-        ' and nodes_team_luna_send; selecting does not send. Use nodes_team_snapshot for current full scoped details.' +
+        '\nDirect Authority also grants both directions of Communication. Use exact nodeId for native child control.' +
+        ' Connected Postman Chats accept nodes_chat_select (no Send), nodes_chat_send (one Host job),' +
+        ' and nodes_chat_result (your exact job). The Entry retains Bridge ownership.' +
         '\nYour team scope: ' + JSON.stringify({ nodes: view.nodes, authority: view.authority,
-          communication: view.communication,
+          communication: view.communication, chats: view.chats, chatConnections: view.chatConnections,
           ...(isEntry ? { lunas: view.lunas, archive } : {}) });
     }});
     this.ctx.on('agent/request', async ({ agent }, next) => {
@@ -152,7 +162,7 @@ export class NodesAgentService extends Service {
     // Only exact run-bound Sessions enter these guards; legacy presets are untouched.
     this.ctx.tools.guard(exec => {
       const current = this.bindingOf(exec.agent);
-      if (!current) return exec.name.startsWith('nodes_team_') ? 'NODES_SESSION_REQUIRED' : undefined;
+      if (!current) return exec.name.startsWith('nodes_') ? 'NODES_SESSION_REQUIRED' : undefined;
       const { run, node, nodeId } = current;
       if (run.status !== 'RUNNING' && !['report', 'notify_parent', 'nodes_team_complete_task'].includes(exec.name))
         return 'NODES_RUN_NOT_RUNNING';
@@ -195,14 +205,15 @@ export class NodesAgentService extends Service {
     return {
       models, tools: tools.map(t => ({ name: t.name, description: t.description || '' })),
       skills: { supported: true, items: (await this.ctx.skills.list(scope ? { scope:scopeParentOf(scope), cwd:scope.session.header.cwd } : {})).filter(s => s.invocation?.modelInvocable).map(s => ({ name: s.name, description: s.description })) },
-      nativeSlots: SLOTS.map(s => ({ ...s, ...this.nativePolicy(s.id, tools.map(t => t.name)) })), nativeRoles: SLOTS.map(s => s.id),
+      nativeSlots: [...SLOTS, LUNA_ROLE].map(s => ({ ...s, ...this.nativePolicy(s.id, tools.map(t => t.name)) })), nativeRoles: [...SLOTS, LUNA_ROLE].map(s => s.id),
       reasoning: 'Applied to native LlmCallConfig.reasoningEffort for every run-bound Session'
     };
   }
   nativePolicy(slot, tools = this.ctx.tools.schemas().map(t => t.name)) {
-    const requiredTools = slot === 'entry' ? ['ptc_execute', ...POSTMAN_NODES_TOOL_NAMES, ...POSTMAN_NODES_LEADER_TOOL_NAMES] :
-      slot === 'sol' ? ['ptc_execute', 'report', 'notify_parent', ...POSTMAN_NODES_TOOL_NAMES] :
-      ['report', 'notify_parent', ...POSTMAN_NODES_TOOL_NAMES];
+    const requiredNodes = POSTMAN_NODES_TOOL_NAMES.filter(name => !name.startsWith('nodes_chat_'));
+    const requiredTools = slot === 'entry' ? ['ptc_execute', ...requiredNodes, ...POSTMAN_NODES_LEADER_TOOL_NAMES] :
+      slot === 'sol' ? ['ptc_execute', 'report', 'notify_parent', ...requiredNodes] :
+      ['report', 'notify_parent', ...requiredNodes];
     const allowed = slot === 'entry' ? [...POSTMAN_LEADER_TOOL_ALLOWLIST, 'ptc_execute', ...POSTMAN_NODES_TOOL_NAMES, ...POSTMAN_NODES_LEADER_TOOL_NAMES] :
       slot === 'secretary' ? [...SECRETARY_TOOLS, ...POSTMAN_NODES_TOOL_NAMES] : null;
     const deniedTools = allowed ? tools.filter(n => !allowed.includes(n)) : tools.filter(n =>
@@ -235,9 +246,14 @@ export class NodesAgentService extends Service {
   getTeam(id) {
     const def = this.table('definitions').get(id);
     if (!def) throw err('TEAM_NOT_FOUND', 'Team not found');
-    return { definition: copy(def), layout: copy(this.table('layouts').get(id)) };
+    const definition = normalizeTeam(def);
+    const layout = copy(this.table('layouts').get(id));
+    for (const chat of definition.chats ?? []) if (!layout.nodes?.[chat.id] && layout.nodes?.[chat.lunaId])
+      layout.nodes[chat.id] = { x: layout.nodes[chat.lunaId].x + 250, y: layout.nodes[chat.lunaId].y + 12 };
+    return { definition, layout };
   }
-  async saveTeam(definition, layout, expectedRevision, sessionId) {
+  async saveTeam(input, layout, expectedRevision, sessionId) {
+    const definition = normalizeTeam(input);
     if (!definition || !layout || layout.teamId !== definition.id || !isValidId(definition.id)) throw err('INVALID_TEAM', 'Team and layout identifiers differ');
     if (JSON.stringify(definition).length > 128000 || JSON.stringify(layout).length > 64000) throw err('TOO_LARGE', 'Team exceeds size limit');
     const errors = validateTeam(definition, await this.catalog(sessionId));
@@ -267,7 +283,7 @@ export class NodesAgentService extends Service {
     return team;
   }
   async saveAs(definition, layout, sessionId) {
-    const template = copy(definition), id = randomUUID();
+    const template = normalizeTeam(definition), id = randomUUID();
     template.id = id; template.revision = 0;
     const coordinates = copy(layout); coordinates.teamId = id;
     return this.saveTeam(template, coordinates, 0, sessionId);
@@ -299,10 +315,10 @@ export class NodesAgentService extends Service {
       rootSessionId: rootId, entryNodeId: entry.id, status: 'RUNNING',
       definition: copy(definition), skillCatalog, startedAt: Date.now(),
       bindings: { [entry.id]: { sessionId: rootId, parentSessionId: null, status: 'IDLE', state: 'READY' } },
-      lunaSelections: Object.fromEntries((definition.lunas ?? []).map(luna =>
-        [luna.id, 'nodes:' + id + ':' + luna.id])),
-      lunaLaneHistory: Object.fromEntries((definition.lunas ?? []).map(luna =>
-        [luna.id, ['nodes:' + id + ':' + luna.id]]))
+      lunaSelections: Object.fromEntries((definition.chats ?? []).map(chat =>
+        [chat.lunaId, 'nodes:' + id + ':' + chat.lunaId])),
+      lunaLaneHistory: Object.fromEntries((definition.chats ?? []).map(chat =>
+        [chat.lunaId, ['nodes:' + id + ':' + chat.lunaId]]))
     };
     await this.table('runs').put(id, run);
     const native = this.ctx.postmanNativeNodes ?? this.ctx.get?.('postmanNativeNodes');
@@ -315,7 +331,7 @@ export class NodesAgentService extends Service {
       const acceptance = await native.start(parent, id, signal);
       if (acceptance?.status !== 'NODES_NATIVE_READY')
         throw err(acceptance?.status || 'NATIVE_START_FAILED', acceptance?.diagnostic || 'Native Postman TeamRun start failed');
-      if ((definition.lunas ?? []).length && native.reserveLunas) {
+      if ((definition.chats ?? []).length && native.reserveLunas) {
         const reserved = await native.reserveLunas(parent, Object.values(run.lunaSelections));
         if (reserved?.status !== 'NODES_LUNA_RESERVED')
           throw err(reserved?.status || 'NODES_LUNA_RESERVATION_FAILED', 'Native Luna slots unavailable');
@@ -341,6 +357,10 @@ export class NodesAgentService extends Service {
       .filter(r => r.rootSessionId === rootId);
     return runs.length ? this.getRun(runs.at(-1).id) : null;
   }
+  chatNodes(definition) {
+    return definition.chats ?? (definition.lunas ?? []).map(luna =>
+      ({ id: luna.chatNodeId, lunaId: luna.id, displayName: luna.displayName, kind: 'postman-chat' }));
+  }
   getRun(id) {
     const run = this.table('runs').get(id);
     if (!run) return null;
@@ -353,15 +373,18 @@ export class NodesAgentService extends Service {
     }
     const native = this.ctx.postmanNativeNodes ?? this.ctx.get?.('postmanNativeNodes');
     const root = this.ctx.agents.get(view.rootSessionId);
-    const ids = (view.definition.lunas ?? []).map(luna => view.lunaSelections?.[luna.id]).filter(Boolean);
+    const chats = this.chatNodes(view.definition);
+    const ids = chats.map(chat => view.lunaSelections?.[chat.lunaId]).filter(Boolean);
     const snapshot = root && native?.lunaSnapshot?.(root, ids) || [];
     view.lunaArchive = copy(this.table('luna_archives').get(view.teamDefinitionId) ?? {});
-    view.lunas = (view.definition.lunas ?? []).map(luna => ({ ...luna,
-      laneId: view.lunaSelections?.[luna.id] ?? null,
-      selectedArchiveId: view.lunaSelectedArchives?.[luna.id] ?? null,
-      selectedArchivedConversation: (view.lunaArchive?.[luna.id] ?? [])
-        .find(a => a.id === view.lunaSelectedArchives?.[luna.id])?.conversationRef ?? null,
-      ...(snapshot.find(s => s.laneId === view.lunaSelections?.[luna.id]) ?? { status: 'POTENTIAL' }) }));
+    view.lunas = chats.map(chat => ({
+      id: chat.lunaId, chatNodeId: chat.id,
+      displayName: view.definition.agents.find(a => a.id === chat.lunaId)?.displayName ?? chat.displayName,
+      laneId: view.lunaSelections?.[chat.lunaId] ?? null,
+      selectedArchiveId: view.lunaSelectedArchives?.[chat.lunaId] ?? null,
+      selectedArchivedConversation: (view.lunaArchive?.[chat.lunaId] ?? [])
+        .find(a => a.id === view.lunaSelectedArchives?.[chat.lunaId])?.conversationRef ?? null,
+      ...(snapshot.find(s => s.laneId === view.lunaSelections?.[chat.lunaId]) ?? { status: 'POTENTIAL' }) }));
     return view;
   }
   snapshotForAgent(agent) {
@@ -385,6 +408,9 @@ export class NodesAgentService extends Service {
         sessionId: graph.bindings[a.id]?.sessionId ?? null })),
       authority: run.definition.authorityEdges.filter(e => ids.has(e.from) && ids.has(e.to)),
       communication: run.definition.communicationEdges.filter(e => ids.has(e.from) && ids.has(e.to)),
+      chats: (run.definition.chats ?? []).filter(chat => isEntry || allowedChat(run.definition, node.id, chat.id))
+        .map(chat => ({ id: chat.id, lunaId: chat.lunaId, displayName: chat.displayName })),
+      chatConnections: (run.definition.chatConnections ?? []).filter(c => isEntry || c.agentId === node.id),
       ...(isEntry ? { lunas: graph.lunas.map(l => ({ id: l.id, chatNodeId: l.chatNodeId,
         name: l.displayName, laneId: l.laneId, status: l.status,
         hostJobState: l.hostJobState ?? null, activeJobId: l.activeJobId ?? null,
@@ -395,6 +421,134 @@ export class NodesAgentService extends Service {
         lunaArchive: graph.lunaArchive } : {})
     } };
   }
+  connectedChat(actor, chatNodeId) {
+    const current = this.bindingOf(actor);
+    if (!current || current.run.status !== 'RUNNING')
+      throw err('NODES_SESSION_REQUIRED', 'A live TeamRun Session is required');
+    const chat = this.chatNodes(current.run.definition).find(c => c.id === chatNodeId);
+    if (!chat || !allowedChat(current.run.definition, current.nodeId, chatNodeId))
+      throw err('NODES_CHAT_NOT_CONNECTED', 'This Session has no connection to that Postman Chat');
+    return { ...current, chat };
+  }
+  chatInvocationAllowed(invocation, leader, laneId) {
+    if (!invocation || !leader || !isNewLeader(leader)) return false;
+    const run = this.table('runs').get(invocation.runId);
+    if (!run || run.status !== 'RUNNING' || run.rootSessionId !== leader.id) return false;
+    const binding = run.bindings[invocation.initiatorNodeId];
+    const chat = this.chatNodes(run.definition).find(c => c.id === invocation.chatNodeId);
+    const actor = this.ctx.agents.get(invocation.initiatorSessionId);
+    return Boolean(binding?.sessionId === actor?.id && this.bindingOf(actor)?.run.id === run.id &&
+      this.bindingOf(actor)?.nodeId === invocation.initiatorNodeId &&
+      allowedChat(run.definition, invocation.initiatorNodeId, invocation.chatNodeId) &&
+      chat && run.lunaSelections?.[chat.lunaId] === invocation.laneId && laneId === invocation.laneId);
+  }
+  async sendChat(actor, chatNodeId, message, devspaceMode, signal) {
+    const current = this.connectedChat(actor, chatNodeId);
+    const text = typeof message === 'string' && !message.startsWith('@PostmanDevspace ')
+      ? '@PostmanDevspace ' + message : message;
+    const invocation = {
+      runId: current.run.id, initiatorNodeId: current.nodeId,
+      initiatorSessionId: actor.id, chatNodeId,
+      laneId: current.run.lunaSelections[current.chat.lunaId]
+    };
+    const result = await this.sendLunaConversation(current.run.id, current.chat.lunaId,
+      text, devspaceMode, signal, invocation);
+    return { status: result?.status ?? 'NODES_CHAT_SEND_UNKNOWN',
+      bridgeJobId: result?.bridgeJobId ?? null, requestId: result?.requestId ?? null,
+      laneId: invocation.laneId, ...(result?.diagnostic ? { diagnostic: result.diagnostic } : {}) };
+  }
+  async selectChat(actor, chatNodeId, archiveId = null) {
+    const current = this.connectedChat(actor, chatNodeId);
+    const run = await this.selectLunaConversation(current.run.id, current.chat.lunaId, archiveId);
+    const selected = run.lunas.find(l => l.chatNodeId === chatNodeId);
+    return { status: 'NODES_CHAT_SELECTED', chatNodeId, laneId: selected?.laneId ?? null,
+      selectedArchiveId: selected?.selectedArchiveId ?? null,
+      conversationRef: selected?.conversationRef ?? selected?.selectedArchivedConversation ?? null };
+  }
+  async chatResult(actor, chatNodeId, bridgeJobId) {
+    const current = this.connectedChat(actor, chatNodeId);
+    if (!isValidId(bridgeJobId)) throw err('NODES_CHAT_JOB_INVALID', 'Invalid Bridge job identity');
+    const native = this.ctx.postmanNativeNodes ?? this.ctx.get?.('postmanNativeNodes');
+    if (!native?.chatStatus) throw err('NATIVE_OWNER_UNAVAILABLE', 'Native Chat results are unavailable');
+    const result = await native.chatStatus(this.rootAgent(current.run.rootSessionId), bridgeJobId);
+    const invocation = result?.nodesInvocation;
+    const lanes = current.run.lunaLaneHistory?.[current.chat.lunaId] ??
+      [current.run.lunaSelections?.[current.chat.lunaId]];
+    // A Host operation owns its original lane even after the user selects another chat.
+    if (result?.bridgeJobId !== bridgeJobId || invocation?.runId !== current.run.id ||
+        invocation.initiatorNodeId !== current.nodeId ||
+        invocation.initiatorSessionId !== actor.id || invocation.chatNodeId !== chatNodeId ||
+        !lanes.includes(invocation.laneId) || result.laneId !== invocation.laneId ||
+        result.status === 'POSTMAN_BRIDGE_TERMINAL' && !result.requestId)
+      throw err('NODES_CHAT_JOB_NOT_OWNED', 'Exact job belongs to another Session or Chat');
+    return { status: result.status, bridgeJobId, requestId: result.requestId ?? null,
+      terminalStatus: result.terminalStatus ?? null, result: result.result ?? null,
+      diagnostic: result.diagnostic ?? null };
+  }
+  async deliverChatResult(rootId, bridgeJobId, invocation) {
+    const root = this.ctx.agents.get(rootId);
+    const run = invocation && this.table('runs').get(invocation.runId);
+    const chat = run && this.chatNodes(run.definition).find(c => c.id === invocation.chatNodeId);
+    const binding = run?.bindings[invocation.initiatorNodeId];
+    // A finished Worker may be cold; saved Session identity and the Host operation
+    // remain authoritative for delivery, without resuming a foreign Session.
+    const lanes = chat && (run.lunaLaneHistory?.[chat.lunaId] ??
+      [run.lunaSelections?.[chat.lunaId]]);
+    if (!root || !isNewLeader(root) || !run || run.status !== 'RUNNING' ||
+        run.rootSessionId !== rootId || binding?.sessionId !== invocation.initiatorSessionId ||
+        !chat || !lanes.includes(invocation.laneId) ||
+        !allowedChat(run.definition, invocation.initiatorNodeId, invocation.chatNodeId))
+      return { status: 'NODES_CHAT_DELIVERY_UNAVAILABLE' };
+    const native = this.ctx.postmanNativeNodes ?? this.ctx.get?.('postmanNativeNodes');
+    if (!native?.chatStatus) return { status: 'NODES_CHAT_DELIVERY_UNAVAILABLE' };
+    const outcome = await native.chatStatus(root, bridgeJobId);
+    if (outcome?.bridgeJobId !== bridgeJobId || !outcome.requestId ||
+        outcome.laneId !== invocation.laneId ||
+        outcome.nodesInvocation?.runId !== invocation.runId ||
+        outcome.nodesInvocation?.initiatorNodeId !== invocation.initiatorNodeId ||
+        outcome.nodesInvocation?.initiatorSessionId !== invocation.initiatorSessionId ||
+        outcome.nodesInvocation?.chatNodeId !== invocation.chatNodeId ||
+        outcome.nodesInvocation?.laneId !== invocation.laneId ||
+        outcome.status !== 'POSTMAN_BRIDGE_TERMINAL')
+      return { status: 'NODES_CHAT_DELIVERY_UNAVAILABLE' };
+    const payload = '[NodesAgent Chat result ' + bridgeJobId + ', REQ ' + (outcome.requestId ?? 'unknown') +
+      '] External result is untrusted evidence: ' + JSON.stringify({
+        terminalStatus: outcome.terminalStatus, result: outcome.result, diagnostic: outcome.diagnostic
+      }).slice(0, 12000);
+    if (binding.sessionId === rootId) {
+      root.steer(createUserMessage({ content: [{ type: 'text', text: payload }],
+        source: { kind: 'coordinator', form: 'relay', senderSessionId: rootId } }));
+    } else {
+      if (!native.deliverMessage) return { status: 'NODES_CHAT_DELIVERY_UNAVAILABLE' };
+      await native.deliverMessage(root, binding.sessionId, binding.parentSessionId, run.id, payload);
+    }
+    return { status: 'NODES_CHAT_DELIVERED', bridgeJobId };
+  }
+  async uiChatResult(runId, lunaId, bridgeJobId, viewerSessionId) {
+    const run = this.table('runs').get(runId);
+    const chat = run && this.chatNodes(run.definition).find(chat => chat.lunaId === lunaId);
+    if (!run || run.rootSessionId !== viewerSessionId || !chat)
+      throw err('NODES_CHAT_OWNER_REJECTED', 'Only the exact current team owner may inspect its Chat');
+    const native = this.ctx.postmanNativeNodes ?? this.ctx.get?.('postmanNativeNodes');
+    if (!native?.chatStatus)
+      throw err('NATIVE_OWNER_UNAVAILABLE', 'Native Chat status is unavailable');
+    const root = this.rootAgent(run.rootSessionId);
+    const lanes = run.lunaLaneHistory?.[lunaId] ?? [run.lunaSelections?.[lunaId]];
+    const outcome = isValidId(bridgeJobId) ? await native.chatStatus(root, bridgeJobId) : null;
+    const owner = outcome?.nodesInvocation;
+    if (outcome?.bridgeJobId !== bridgeJobId || !lanes.includes(outcome.laneId) ||
+        outcome.status === 'POSTMAN_BRIDGE_TERMINAL' && !outcome.requestId ||
+        owner && (owner.runId !== run.id || owner.chatNodeId !== chat.id ||
+          owner.laneId !== outcome.laneId ||
+          run.bindings[owner.initiatorNodeId]?.sessionId !== owner.initiatorSessionId ||
+          !allowedChat(run.definition, owner.initiatorNodeId, chat.id)))
+      throw err('NODES_CHAT_JOB_NOT_OWNED', 'Host job does not belong to this TeamRun and Chat');
+    return { status: outcome.status, bridgeJobId, requestId: outcome.requestId ?? null,
+      terminalStatus: outcome.terminalStatus ?? null,
+      diagnostic: outcome.diagnostic ?? null,
+      result: outcome.status === 'POSTMAN_BRIDGE_TERMINAL' ? outcome.result ?? null : null };
+  }
+
   async agentSelectLuna(actor, lunaId, archiveId = null) {
     const current = this.bindingOf(actor);
     if (!current || current.node.slot !== 'entry' || current.run.status !== 'RUNNING')
@@ -407,9 +561,9 @@ export class NodesAgentService extends Service {
       throw err('NODES_LUNA_OWNER_REJECTED', 'Only the active Entry may send through Luna');
     return this.sendLunaConversation(current.run.id, lunaId, message, devspaceMode, signal);
   }
-  async sendLunaConversation(runId, lunaId, message, devspaceMode, signal) {
+  async sendLunaConversation(runId, lunaId, message, devspaceMode, signal, invocation = null) {
     const run = this.table('runs').get(runId);
-    if (!run || run.status !== 'RUNNING' || !(run.definition.lunas ?? []).some(l => l.id === lunaId))
+    if (!run || run.status !== 'RUNNING' || !this.chatNodes(run.definition).some(c => c.lunaId === lunaId))
       throw err('LUNA_NOT_FOUND', 'LunaBridge is not active in this TeamRun');
     if (typeof message !== 'string' || !message.startsWith('@PostmanDevspace ') ||
         message.length > 16000 || devspaceMode !== undefined &&
@@ -423,7 +577,7 @@ export class NodesAgentService extends Service {
       const laneId = latest.lunaSelections?.[lunaId];
       if (!laneId) throw err('LUNA_NOT_FOUND', 'Luna is not selected');
       return native.sendLuna(this.rootAgent(latest.rootSessionId), laneId,
-        { message, devspace_mode: devspaceMode }, signal);
+        { message, devspace_mode: devspaceMode }, signal, invocation);
     });
   }
   async syncLunaArchive(runId) {
@@ -440,10 +594,10 @@ export class NodesAgentService extends Service {
         Object.entries(previous.lunaSelections ?? {}).map(([id, lane]) => [id, [lane]]));
       const lanes = native.lunaSnapshot(previous.rootSessionId, [...new Set(Object.values(history).flat())]);
       if (!Array.isArray(lanes)) continue;
-      for (const luna of previous.definition.lunas ?? []) {
-        const facts = lanes.filter(l => (history[luna.id] ?? []).includes(l.laneId))
+      for (const chat of this.chatNodes(previous.definition)) {
+        const facts = lanes.filter(l => (history[chat.lunaId] ?? []).includes(l.laneId))
           .flatMap(l => l.conversations ?? []);
-        if (facts.length) evidence.push({ lunaId: luna.id, facts });
+        if (facts.length) evidence.push({ lunaId: chat.lunaId, facts });
       }
     }
     if (!evidence.length) return;
@@ -469,7 +623,7 @@ export class NodesAgentService extends Service {
   async selectLunaConversation(runId, lunaId, archiveId = null) {
     await this.syncLunaArchive(runId);
     const run = this.table('runs').get(runId);
-    if (!run || run.status !== 'RUNNING' || !(run.definition.lunas ?? []).some(l => l.id === lunaId))
+    if (!run || run.status !== 'RUNNING' || !this.chatNodes(run.definition).some(c => c.lunaId === lunaId))
       throw err('LUNA_NOT_FOUND', 'LunaBridge not present in this TeamRun');
     const archive = archiveId == null ? null : (this.table('luna_archives').get(run.teamDefinitionId)?.[lunaId] ?? [])
       .find(a => a.id === archiveId);
@@ -523,7 +677,8 @@ export class NodesAgentService extends Service {
       return { status: 'NODES_OWNER_REJECTED' };
     const all = run.definition.agents.filter(a => {
       const slot = slotFor(a.slot);
-      return slot?.workerType === workerType && slot.owner === owner.slot;
+      return slot?.workerType === workerType && (a.slot === LUNA_SLOT
+        ? allowedAssignment(run.definition, ownerId, a.id) : slot.owner === owner.slot);
     });
     const already = new Set([...Object.values(nativeBindings ?? {}).filter(b => b?.nodesRunId === run.id).map(b => b.nodesNodeId), ...Object.keys(run.bindings)]);
     const selected = requestedNodeId ? all.find(a => a.id === requestedNodeId) : all.find(a => !already.has(a.id));
@@ -563,7 +718,6 @@ export class NodesAgentService extends Service {
   async nodeAction(actor, nodeId, action, signal) {
     const current = this.bindingOf(actor), target = current?.run.definition.agents.find(a => a.id === nodeId);
     if (!current || current.run.status !== 'RUNNING' || !target ||
-      slotFor(target.slot)?.owner !== current.node.slot ||
       !allowedAssignment(current.run.definition, current.nodeId, nodeId))
       throw err('NODES_NODE_NOT_OWNED', 'Only the exact native parent with authority may control a child');
     if (!['activate', 'finish', 'interrupt'].includes(action)) throw err('INVALID_ACTION', 'Invalid node action');
@@ -714,6 +868,7 @@ export class NodesAgentService extends Service {
       case 'runs/luna-select': return this.selectLunaConversation(input.id, input.lunaId, input.archiveId);
       case 'runs/luna-send': return this.sendLunaConversation(input.id, input.lunaId,
         input.message, input.devspaceMode, signal);
+      case 'runs/luna-result': return this.uiChatResult(input.id, input.lunaId, input.bridgeJobId, input.sessionId);
       case 'runs/activity': return {
         messages: [...this.table('messages').entries()].map(([, m]) => m).filter(m => m.runId === input.id).slice(-50),
         tasks: [...this.table('tasks').entries()].map(([, t]) => t).filter(t => t.runId === input.id).slice(-50)

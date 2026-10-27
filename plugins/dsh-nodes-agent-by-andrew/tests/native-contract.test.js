@@ -78,7 +78,7 @@ test('actual rc.2 native bootstrap, routes/prompts, scoped skills and cold Sessi
     const entryDispatch=await rt.ctx.tools.execute({name:'ptc_execute',arguments:{program:'const s=await tools.nodes_team_snapshot({}); return {nodes:typeof tools.nodes_team_message,work:typeof tools.postman_worker,activate:typeof tools.nodes_team_activate,lunaSelect:typeof tools.nodes_team_luna_select,lunaSend:typeof tools.nodes_team_luna_send,snapshot:s.status,nodeCount:s.run.nodes.length,lunaCount:s.run.lunas.length};'},callId:'native-entry-ptc',...rt.exec(rt.leader)});
     const entryResult=entryDispatch.value??entryDispatch;
     assert.equal(entryResult.status, 'ok', 'Native PTC must execute: ' + JSON.stringify(entryResult));
-    assert.deepEqual(entryResult.value, {nodes:'function',work:'function',activate:'function',lunaSelect:'function',lunaSend:'function',snapshot:'NODES_SNAPSHOT',nodeCount:7,lunaCount:3});
+    assert.deepEqual(entryResult.value, {nodes:'function',work:'function',activate:'function',lunaSelect:'function',lunaSend:'function',snapshot:'NODES_SNAPSHOT',nodeCount:10,lunaCount:3});
     const activation=await service.nodeAction(rt.leader,worker.id,'activate');
     assert.equal(activation.status,'NODES_NODE_ACTIVE',JSON.stringify(activation));
     assert.equal(allRequests.length,1, 'Only the explicitly awakened Entry invoked the adapter');

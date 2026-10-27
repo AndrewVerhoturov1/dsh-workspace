@@ -18,6 +18,8 @@ function mountEditor(root, bridge) {
 
   const NODE_WIDTH = 216;
   const NODE_HEIGHT = 126;
+  const CHAT_WIDTH = 204;
+  const CHAT_HEIGHT = 104;
   const STAGE_WIDTH = 4000;
   const STAGE_HEIGHT = 3000;
   const MIN_ZOOM = 0.35;
@@ -109,6 +111,27 @@ function mountEditor(root, bridge) {
       confirmReset: 'Discard unsaved changes and create a new saved team?',
       errorInvalidModel: 'Model {provider}/{model} is not present in the live DSH catalog.',
       errorInvalidCapability: 'Tool {kind}:{id} is unavailable in DSH.',
+      postmanChat: 'Postman Chat', chatInspectorTitle: 'Postman Chat · Transport',
+      authorityImplicit: 'Authority includes two-way messaging; no separate Communication line',
+      edgeAuthorityHelp: 'Direct manager → subordinate. Messages flow both ways automatically.',
+      edgeChatHelp: 'Authorized agent ↔ Postman Chat. Several agents may connect to the same Chat; Host retains ownership.',
+      sourceSelectedChat: 'Select an AgentNode and a Postman Chat to connect them.',
+      connectionChatPrompt: 'Postman Chat · choose AgentNode and Chat · Esc cancels',
+      connectionChatTarget: 'Postman Chat · {name} → select the other endpoint · Esc cancels',
+      chatNeedPair: 'Select one AgentNode and one Postman Chat.',
+      chatUseConnectionMode: 'Select the Postman Chat connection tool to link a Chat.',
+      implicitCommunication: 'Authority already permits messages in both directions. No extra line is needed.',
+      errorLunaParent: 'LunaBridge requires one direct native manager (Entry or Sol).',
+      errorChatNoConnection: 'Postman Chat requires at least one AgentNode connection.',
+      errorInvalidChatConnection: 'Postman Chat connection has an invalid endpoint or duplicate.',
+      jobKnown: 'Host job: {id} · REQ: {request} · {status}',
+      jobNone: 'No current Host job or confirmed REQ.',
+      jobResultNone: 'No verified result loaded.',
+      jobResultPending: 'Host job is pending; acceptance is not completion.',
+      jobResultTerminal: 'Verified Host terminal: {value}',
+      jobResultUnknown: 'Host result is unknown; do not infer completion.',
+      chatResultError: 'Cannot read Host result: {reason}',
+      
       nodeActivate: 'Activate idle', nodeFinish: 'Finish and release', nodeInterrupt: 'Interrupt now',
       lunaLimit: 'At most three LunaBridge nodes are allowed.', lunaNoChat: 'No confirmed chat',
       lunaLinkLabel: 'Open confirmed Postman Chat', lunaArchiveTitle: 'Conversation archive',
@@ -149,6 +172,27 @@ function mountEditor(root, bridge) {
       confirmReset: 'Отбросить несохранённые правки и создать новую команду?',
       errorInvalidModel: 'Модель {provider}/{model} отсутствует в настоящем каталоге DSH.',
       errorInvalidCapability: 'Инструмент {kind}:{id} недоступен в DSH.',
+      postmanChat: 'Postman Chat', chatInspectorTitle: 'Postman Chat · транспорт',
+      authorityImplicit: 'Authority включает общение в обе стороны, без отдельной линии',
+      edgeAuthorityHelp: 'Прямое подчинение. Сообщения идут в обе стороны автоматически.',
+      edgeChatHelp: 'Разрешённая связь агента с Postman Chat. Один чат может иметь несколько агентов; владелец Host не меняется.',
+      sourceSelectedChat: 'Выберите AgentNode и Postman Chat, чтобы соединить их.',
+      connectionChatPrompt: 'Postman Chat · выберите AgentNode и Chat · Esc отменяет',
+      connectionChatTarget: 'Postman Chat · {name} → выберите другой конец · Esc отменяет',
+      chatNeedPair: 'Нужны один AgentNode и один Postman Chat.',
+      chatUseConnectionMode: 'Для связи с чатом выберите режим Postman Chat.',
+      implicitCommunication: 'Authority уже разрешает общение в обе стороны. Дополнительная линия не нужна.',
+      errorLunaParent: 'У LunaBridge должен быть один прямой штатный руководитель (Entry или Sol).',
+      errorChatNoConnection: 'Для Postman Chat требуется хотя бы одна связь с агентом.',
+      errorInvalidChatConnection: 'Связь Postman Chat имеет неверный конец или повторяется.',
+      jobKnown: 'Задание Host: {id} · REQ: {request} · {status}',
+      jobNone: 'Нет активного задания Host или подтверждённого REQ.',
+      jobResultNone: 'Подтверждённый результат не загружен.',
+      jobResultPending: 'Host принял поручение, но выполнение ещё не подтверждено.',
+      jobResultTerminal: 'Подтверждённое завершение Host: {value}',
+      jobResultUnknown: 'Результат Host неизвестен; завершение не доказано.',
+      chatResultError: 'Не удалось прочитать результат Host: {reason}',
+      
       nodeActivate: 'Активировать без задания', nodeFinish: 'Завершить и освободить', nodeInterrupt: 'Прервать сейчас',
       lunaLimit: 'Можно добавить не более трёх нод LunaBridge.', lunaNoChat: 'Адрес чата не подтверждён',
       lunaLinkLabel: 'Открыть подтверждённый Postman Chat', lunaArchiveTitle: 'Архив разговоров',
@@ -187,7 +231,8 @@ function mountEditor(root, bridge) {
     dirty: { definition: false, layout: false },
     persisted: false,
     ui: { inspectorCollapsed: true, statusDockCollapsed: true },
-    interaction: { nodeDrag: null, pan: null }
+    interaction: { nodeDrag: null, pan: null },
+    chatJob: null
   };
 
   const $ = (id) => root.querySelector('#' + id);
@@ -197,7 +242,7 @@ function mountEditor(root, bridge) {
     'workspace','addNodeButton','emptyAddButton','communicationDirectionControl','zoomOutButton','zoomInButton','fitButton','zoomReadout','canvasSettingsButton','canvasSettingsPopover','gridVisibleInput','gridStyleSelect','gridSizeSelect','snapNodesInput','alignNodesButton','canvasShell','canvasStage','canvasWorld','canvasEmpty','nodeLayer','edgeGroup','draftEdge','canvasHint','connectionBanner',
     'inspectorTitle','inspectorEmpty','nodeInspector','edgeInspector','inspectorCollapseButton','deleteSelectionButton','agentDetailsDisclosure','nodeIdLabel','technicalNameInput','displayNameInput','roleInput','systemPromptInput',
     'providerSelect','modelSelect','reasoningSelect','capabilityList','entryControl','entryAgentStatus','entryAgentHelp','makeEntryButton','inspectorRuntimeStatus','inspectorStatusDot','openChatButton','openChatHelp',
-    'nodesNativeActions','nodeActivateButton','nodeFinishButton','nodeInterruptButton','lunaInspector','lunaNameInput','lunaRuntimeStatus','lunaRuntimeStart','lunaRuntimeDuration','lunaReminders','lunaReminderState','lunaConversationLink','lunaConversationUnconfirmed','lunaArchiveSelect','lunaArchiveDetail','lunaArchiveLink','lunaContinueButton','lunaNewChatButton','lunaTaskInput','lunaModeSelect','lunaSendButton',
+    'nodesNativeActions','nodeActivateButton','nodeFinishButton','nodeInterruptButton','lunaInspector','lunaNameInput','lunaRuntimeStatus','lunaJobStatus','lunaJobResult','lunaRuntimeStart','lunaRuntimeDuration','lunaReminders','lunaReminderState','lunaConversationLink','lunaConversationUnconfirmed','lunaArchiveSelect','lunaArchiveDetail','lunaArchiveLink','lunaContinueButton','lunaNewChatButton','lunaTaskInput','lunaModeSelect','lunaSendButton',
     'edgeKindBadge','edgeSummary','edgeDirectionNote','edgeDescription','deleteEdgeButton','statusDock','dockToggle','validationSummary','validationBadge','validationList','runPill','runStateLabel','runIdLabel','runtimeCopy',
     'metricAgents','metricAuthority','metricCommunication','compactMetricAgents','compactMetricAuthority','compactMetricCommunication','toastStack','smokeResult'
   ];
@@ -220,7 +265,10 @@ function mountEditor(root, bridge) {
   function clamp(value, min, max) { return Math.min(max, Math.max(min, value)); }
   function deepClone(value) { return JSON.parse(JSON.stringify(value)); }
   function getAgent(id) { return state.definition.agents.find((agent) => agent.id === id) || null; }
-  function getLuna(id) { return (state.definition.lunas || []).find((luna) => luna.id === id) || null; }
+  function getChat(id) { return (state.definition.chats || []).find(chat => chat.id === id) || null; }
+  function chatForLuna(id) { return (state.definition.chats || []).find(chat => chat.lunaId === id) || null; }
+  function directAuthority(a, b) { return state.definition.authorityEdges.some(e =>
+    (e.from === a && e.to === b) || (e.from === b && e.to === a)); }
   function lunaRuntime(id) { return (state.runtime.lunas || []).find((luna) => luna.id === id) || null; }
   function isEditingLocked() { return state.runtime.status !== 'STOPPED' && state.runtime.status !== 'FAILED'; }
   function agentStatusText(status) { return t({ POTENTIAL: 'nodePotential', COLD: 'nodeCold',
@@ -232,13 +280,15 @@ function mountEditor(root, bridge) {
     const teamId = uid('team');
     return {
       definition: {
-        schemaVersion: 1,
+        schemaVersion: 2,
         id: teamId,
         revision: 0,
         name: 'Software Team',
         description: '',
         entryAgentId: null,
         agents: [],
+        chats: [],
+        chatConnections: [],
         authorityEdges: [],
         communicationEdges: []
       },
@@ -304,10 +354,11 @@ function mountEditor(root, bridge) {
   }
 
   function normalizeState() {
-    state.definition.schemaVersion = 1;
+    state.definition.schemaVersion = 2;
     state.definition.revision = Number.isFinite(state.definition.revision) ? state.definition.revision : 0;
     state.definition.agents = Array.isArray(state.definition.agents) ? state.definition.agents : [];
-    state.definition.lunas = Array.isArray(state.definition.lunas) ? state.definition.lunas : [];
+    state.definition.chats = Array.isArray(state.definition.chats) ? state.definition.chats : [];
+    state.definition.chatConnections = Array.isArray(state.definition.chatConnections) ? state.definition.chatConnections : [];
     state.definition.authorityEdges = Array.isArray(state.definition.authorityEdges) ? state.definition.authorityEdges : [];
     state.definition.communicationEdges = Array.isArray(state.definition.communicationEdges) ? state.definition.communicationEdges : [];
     state.layout.schemaVersion = 1;
@@ -329,8 +380,11 @@ function mountEditor(root, bridge) {
       agent.capabilities.grants = Array.isArray(agent.capabilities.grants) ? agent.capabilities.grants : [];
       if (!state.layout.nodes[agent.id]) state.layout.nodes[agent.id] = { x: 180 + (index % 3) * 280, y: 120 + Math.floor(index / 3) * 200 };
     });
-    state.definition.lunas.forEach((luna, index) => {
-      if (!state.layout.nodes[luna.id]) state.layout.nodes[luna.id] = { x: 180 + index * 480, y: 820 };
+    state.definition.chats.forEach((chat, index) => {
+      if (!state.layout.nodes[chat.id]) {
+        const owner = state.layout.nodes[chat.lunaId] || { x: 180 + index * 480, y: 820 };
+        state.layout.nodes[chat.id] = { x: owner.x + NODE_WIDTH + 34, y: owner.y + 12 };
+      }
     });
   }
 
@@ -350,6 +404,7 @@ function mountEditor(root, bridge) {
     els.zoomInButton.title = t('zoomInTitle');
     els.fitButton.title = t('fitTitle');
     els.canvasSettingsButton.title = t('canvasSettingsTitle');
+    $('authorityLegend').title = t('authorityImplicit');
     els.deleteSelectionButton.title = t('inspectorDelete');
     els.validateButtonLabel.textContent = t('validate');
     updateConnectionBanner();
@@ -439,7 +494,7 @@ function mountEditor(root, bridge) {
 
   function createAgent({ x, y } = {}) {
     if (isEditingLocked()) return lockedToast();
-    const native = NATIVE_SLOTS.find(slot => slot.id !== 'entry' && !state.definition.agents.some(a => a.slot === slot.id) &&
+    const native = NATIVE_SLOTS.find(slot => slot.id !== 'entry' && slot.id !== 'luna-bridge' && !state.definition.agents.some(a => a.slot === slot.id) &&
       state.definition.agents.some(a => a.slot === slot.owner));
     if (!native) { toast(t('nativeSlotsFull'), 'error'); return null; }
     const parent = state.definition.agents.find(a => a.slot === native.owner);
@@ -451,8 +506,6 @@ function mountEditor(root, bridge) {
       capabilities: { grants: [] } };
     state.definition.agents.push(agent);
     state.definition.authorityEdges.push({ id: uid('auth'), from: parent.id, to: agent.id });
-    state.definition.communicationEdges.push({ id: uid('comm'), from: parent.id, to: agent.id });
-    state.definition.communicationEdges.push({ id: uid('comm'), from: agent.id, to: parent.id });
     const view = state.layout.viewport;
     const n = state.definition.agents.length;
     let px = Number.isFinite(x) ? x : (els.canvasShell.clientWidth / 2 - view.x) / view.zoom - NODE_WIDTH / 2 + (n % 4) * 24;
@@ -467,14 +520,29 @@ function mountEditor(root, bridge) {
 
   function createLuna() {
     if (isEditingLocked()) return lockedToast();
-    if (state.definition.lunas.length >= 3) { toast(t('lunaLimit'), 'error'); return; }
-    const index = state.definition.lunas.length;
-    let ordinal = 1;
-    while (state.definition.lunas.some(l => l.displayName === 'LunaBridge ' + ordinal)) ordinal++;
-    const luna = { id: uid('luna'), kind: 'luna-bridge', displayName: 'LunaBridge ' + ordinal, chatNodeId: uid('chat') };
-    state.definition.lunas.push(luna);
-    state.layout.nodes[luna.id] = { x: 160 + index * 480, y: 870 };
-    state.selection = { type: 'luna', id: luna.id };
+    const slot = NATIVE_SLOTS.find(role => role.id === 'luna-bridge');
+    const current = state.definition.agents.filter(agent => agent.slot === 'luna-bridge');
+    if (current.length >= 3) { toast(t('lunaLimit'), 'error'); return; }
+    const leader = getAgent(state.definition.entryAgentId);
+    if (!slot || !leader) { toast(t('entryFixed'), 'error'); return; }
+    let n = 1;
+    while (state.definition.agents.some(a => a.technicalName === 'luna_bridge_' + n)) n++;
+    const id = uid('luna'), chatId = uid('chat');
+    const agent = { id, slot: 'luna-bridge', technicalName: 'luna_bridge_' + n,
+      displayName: 'LunaBridge ' + n, role: 'LunaBridge',
+      systemPrompt: 'Follow native Postman role constraints and use connected Postman Chat through Nodes tools.',
+      model: { provider: 'codex', model: slot.model, reasoningEffort: slot.reasoning || 'low' },
+      capabilities: { grants: [] } };
+    const chat = { id: chatId, kind: 'postman-chat', displayName: 'Postman Chat ' + n, lunaId: id };
+    state.definition.agents.push(agent);
+    state.definition.chats.push(chat);
+    state.definition.authorityEdges.push({ id: uid('auth'), from: leader.id, to: id });
+    state.definition.chatConnections.push(
+      { id: uid('chatlink'), agentId: id, chatNodeId: chatId },
+      { id: uid('chatlink'), agentId: leader.id, chatNodeId: chatId });
+    state.layout.nodes[id] = { x: 160 + current.length * 480, y: 870 };
+    state.layout.nodes[chatId] = { x: 160 + current.length * 480 + NODE_WIDTH + 34, y: 882 };
+    state.selection = { type: 'node', id };
     markDefinitionDirty(); markLayoutDirty(); renderAll();
     setInspectorCollapsed(false, { mark: false });
   }
@@ -483,37 +551,37 @@ function mountEditor(root, bridge) {
     if (!state.selection) return;
     if (isEditingLocked()) return lockedToast();
     if (state.selection.type === 'node') deleteNode(state.selection.id);
-    if (state.selection.type === 'luna') {
-      const id = state.selection.id;
-      state.definition.lunas = state.definition.lunas.filter(l => l.id !== id);
-      delete state.layout.nodes[id];
-      state.selection = null;
-      markDefinitionDirty(); markLayoutDirty(); renderAll();
-    }
-    if (state.selection?.type === 'edge') deleteEdge(state.selection.id, state.selection.kind, state.selection.pairId || null);
+    else if (state.selection.type === 'chat') {
+      const chat = getChat(state.selection.id);
+      if (chat) deleteNode(chat.lunaId);
+    } else if (state.selection.type === 'edge')
+      deleteEdge(state.selection.id, state.selection.kind, state.selection.pairId || null);
   }
 
   function deleteNode(id) {
-    state.definition.agents = state.definition.agents.filter((agent) => agent.id !== id);
-    state.definition.authorityEdges = state.definition.authorityEdges.filter((edge) => edge.from !== id && edge.to !== id);
-    state.definition.communicationEdges = state.definition.communicationEdges.filter((edge) => edge.from !== id && edge.to !== id);
+    const ownedChat = chatForLuna(id);
+    const removedChats = new Set(ownedChat ? [ownedChat.id] : []);
+    state.definition.agents = state.definition.agents.filter(agent => agent.id !== id);
+    state.definition.chats = state.definition.chats.filter(chat => !removedChats.has(chat.id));
+    state.definition.chatConnections = state.definition.chatConnections.filter(e =>
+      e.agentId !== id && !removedChats.has(e.chatNodeId));
+    state.definition.authorityEdges = state.definition.authorityEdges.filter(e => e.from !== id && e.to !== id);
+    state.definition.communicationEdges = state.definition.communicationEdges.filter(e => e.from !== id && e.to !== id);
     delete state.layout.nodes[id];
+    for (const chatId of removedChats) delete state.layout.nodes[chatId];
     if (state.definition.entryAgentId === id) state.definition.entryAgentId = null;
     state.selection = null;
     state.edgeSourceId = null;
-    markDefinitionDirty();
-    markLayoutDirty();
-    renderAll();
+    markDefinitionDirty(); markLayoutDirty(); renderAll();
     toast(t('deleteNodeToast'));
   }
 
   function deleteEdge(id, kind, pairId = null) {
-    const key = kind === 'authority' ? 'authorityEdges' : 'communicationEdges';
+    const key = kind === 'authority' ? 'authorityEdges' : kind === 'chat' ? 'chatConnections' : 'communicationEdges';
     const ids = new Set([id, pairId].filter(Boolean));
-    state.definition[key] = state.definition[key].filter((edge) => !ids.has(edge.id));
+    state.definition[key] = state.definition[key].filter(edge => !ids.has(edge.id));
     state.selection = null;
-    markDefinitionDirty();
-    renderAll();
+    markDefinitionDirty(); renderAll();
     toast(t('deleteEdgeToast'));
   }
 
@@ -527,67 +595,80 @@ function mountEditor(root, bridge) {
   }
 
   function setEdgeMode(mode) {
-    if (!['select', 'authority', 'communication'].includes(mode)) return;
+    if (!['select', 'authority', 'communication', 'chat'].includes(mode)) return;
     state.edgeMode = mode;
     state.edgeSourceId = null;
     root.querySelectorAll('[data-edge-mode]').forEach((button) => button.classList.toggle('is-active', button.dataset.edgeMode === mode));
     els.communicationDirectionControl.hidden = mode !== 'communication';
     els.canvasShell.classList.toggle('edge-authority', mode === 'authority');
     els.canvasShell.classList.toggle('edge-communication', mode === 'communication');
+    els.canvasShell.classList.toggle('edge-chat', mode === 'chat');
     updateConnectionBanner();
     renderNodes();
   }
 
-  function handleNodeAction(id) {
+  function handleNodeAction(id) { handleConnectionEndpoint(id, 'node'); }
+  function handleChatAction(id) { handleConnectionEndpoint(id, 'chat'); }
+
+  function handleConnectionEndpoint(id, type) {
     if (state.edgeMode === 'select') {
-      state.selection = { type: 'node', id };
-      setInspectorCollapsed(false, { mark: false });
-      renderSelection();
+      state.selection = { type, id };
+      setInspectorCollapsed(false, { mark: false }); renderSelection();
+      if (type === 'chat') void refreshChatResult();
       return;
     }
     if (isEditingLocked()) return lockedToast();
+    const mode = state.edgeMode;
+    if (mode !== 'chat' && type !== 'node') { toast(t('chatUseConnectionMode'), 'error'); return; }
     if (!state.edgeSourceId) {
       state.edgeSourceId = id;
-      state.selection = { type: 'node', id };
-      updateConnectionBanner();
-      renderSelection();
-      toast(t(state.edgeMode === 'authority' ? 'sourceSelectedAuthority' : 'sourceSelectedCommunication'));
+      state.selection = { type, id };
+      updateConnectionBanner(); renderSelection();
+      toast(t(mode === 'chat' ? 'sourceSelectedChat' :
+        mode === 'authority' ? 'sourceSelectedAuthority' : 'sourceSelectedCommunication'));
       return;
     }
-    const from = state.edgeSourceId;
-    const to = id;
+    const from = state.edgeSourceId, to = id;
     if (from === to) {
       toast(t('selfEdgeBlocked'), 'error');
-      state.edgeSourceId = null;
-      updateConnectionBanner();
-      renderNodes();
-      return;
-    }
-    const key = state.edgeMode === 'authority' ? 'authorityEdges' : 'communicationEdges';
-    if (state.edgeMode === 'communication' && state.communicationDirection === 'bidirectional') {
-      const forwardExists = state.definition.communicationEdges.some((edge) => edge.from === from && edge.to === to);
-      const reverseExists = state.definition.communicationEdges.some((edge) => edge.from === to && edge.to === from);
-      if (forwardExists && reverseExists) {
+    } else if (mode === 'chat') {
+      const agentId = type === 'node' ? to : from;
+      const chatNodeId = type === 'chat' ? to : from;
+      if (!getAgent(agentId) || !getChat(chatNodeId)) toast(t('chatNeedPair'), 'error');
+      else if (state.definition.chatConnections.some(e => e.agentId === agentId && e.chatNodeId === chatNodeId))
         toast(t('edgeExists'), 'error');
-      } else {
-        if (!forwardExists) state.definition.communicationEdges.push({ id: uid('comm'), from, to });
-        if (!reverseExists) state.definition.communicationEdges.push({ id: uid('comm'), from: to, to: from });
-        markDefinitionDirty();
-        toast(t('edgeCreated', { kind: t('bidirectionalConnection') }), 'success');
+      else {
+        state.definition.chatConnections.push({ id: uid('chatlink'), agentId, chatNodeId });
+        markDefinitionDirty(); toast(t('edgeCreated', { kind: t('postmanChat') }), 'success');
       }
-    } else if (state.definition[key].some((edge) => edge.from === from && edge.to === to)) {
+    } else if (mode === 'authority') {
+      if (state.definition.authorityEdges.some(e => e.from === from && e.to === to))
+        toast(t('edgeExists'), 'error');
+      else {
+        state.definition.authorityEdges.push({ id: uid('auth'), from, to });
+        state.definition.communicationEdges = state.definition.communicationEdges.filter(e =>
+          !((e.from === from && e.to === to) || (e.from === to && e.to === from)));
+        markDefinitionDirty(); toast(t('edgeCreated', { kind: 'Authority' }), 'success');
+      }
+    } else if (directAuthority(from, to)) {
+      toast(t('implicitCommunication'), 'error');
+    } else if (state.communicationDirection === 'bidirectional') {
+      const forward = state.definition.communicationEdges.some(e => e.from === from && e.to === to);
+      const backward = state.definition.communicationEdges.some(e => e.from === to && e.to === from);
+      if (forward && backward) toast(t('edgeExists'), 'error');
+      else {
+        if (!forward) state.definition.communicationEdges.push({ id: uid('comm'), from, to });
+        if (!backward) state.definition.communicationEdges.push({ id: uid('comm'), from: to, to: from });
+        markDefinitionDirty(); toast(t('edgeCreated', { kind: t('bidirectionalConnection') }), 'success');
+      }
+    } else if (state.definition.communicationEdges.some(e => e.from === from && e.to === to))
       toast(t('edgeExists'), 'error');
-    } else {
-      const prefix = state.edgeMode === 'authority' ? 'auth' : 'comm';
-      state.definition[key].push({ id: uid(prefix), from, to });
-      markDefinitionDirty();
-      const kind = state.edgeMode === 'authority' ? 'Authority' : t('oneWayConnection');
-      toast(t('edgeCreated', { kind }), 'success');
+    else {
+      state.definition.communicationEdges.push({ id: uid('comm'), from, to });
+      markDefinitionDirty(); toast(t('edgeCreated', { kind: t('oneWayConnection') }), 'success');
     }
-    state.edgeSourceId = null;
-    state.selection = null;
-    updateConnectionBanner();
-    renderAll();
+    state.edgeSourceId = null; state.selection = null;
+    updateConnectionBanner(); renderAll();
   }
 
   function applyVisualState() {
@@ -664,8 +745,9 @@ function mountEditor(root, bridge) {
       els.connectionBanner.className = 'connection-banner';
       return;
     }
-    const source = state.edgeSourceId ? getAgent(state.edgeSourceId) : null;
-    const key = state.edgeMode === 'authority'
+    const source = state.edgeSourceId ? (getAgent(state.edgeSourceId) || getChat(state.edgeSourceId)) : null;
+    const key = state.edgeMode === 'chat'
+      ? (source ? 'connectionChatTarget' : 'connectionChatPrompt') : state.edgeMode === 'authority'
       ? (source ? 'connectionAuthorityTarget' : 'connectionAuthorityPrompt')
       : state.communicationDirection === 'oneway'
         ? (source ? 'connectionCommunicationTargetOneWay' : 'connectionCommunicationPromptOneWay')
@@ -687,10 +769,10 @@ function mountEditor(root, bridge) {
     els.canvasEmpty.hidden = state.definition.agents.length > 0;
     els.metricAgents.textContent = state.definition.agents.length;
     els.metricAuthority.textContent = state.definition.authorityEdges.length;
-    els.metricCommunication.textContent = state.definition.communicationEdges.length;
+    els.metricCommunication.textContent = state.definition.communicationEdges.length + state.definition.chatConnections.length;
     els.compactMetricAgents.textContent = state.definition.agents.length;
     els.compactMetricAuthority.textContent = state.definition.authorityEdges.length;
-    els.compactMetricCommunication.textContent = state.definition.communicationEdges.length;
+    els.compactMetricCommunication.textContent = state.definition.communicationEdges.length + state.definition.chatConnections.length;
     renderDirtyState();
     updateConnectionBanner();
   }
@@ -701,7 +783,7 @@ function mountEditor(root, bridge) {
       const position = state.layout.nodes[agent.id] || { x: 100, y: 100 };
       const runtimeStatus = state.runtime.bindings[agent.id]?.status || (state.runtime.status === 'STOPPED' ? 'NOT_STARTED' : 'POTENTIAL');
       const node = document.createElement('article');
-      node.className = 'agent-node';
+      node.className = 'agent-node' + (agent.slot === 'luna-bridge' ? ' luna-bridge-node' : '');
       node.dataset.id = agent.id;
       node.dataset.kind = 'native-agent';
       node.dataset.runtime = runtimeStatus;
@@ -711,7 +793,7 @@ function mountEditor(root, bridge) {
       if (state.definition.entryAgentId === agent.id) node.classList.add('entry');
       if (state.selection?.type === 'edge') {
         const selectedEdge = edgeCollection(state.selection.kind).find((edge) => edge.id === state.selection.id);
-        if (selectedEdge && (selectedEdge.from === agent.id || selectedEdge.to === agent.id)) node.classList.add('edge-peer');
+        if (selectedEdge && (selectedEdge.from === agent.id || selectedEdge.to === agent.id || selectedEdge.agentId === agent.id)) node.classList.add('edge-peer');
       }
       if (state.edgeSourceId === agent.id) node.classList.add(state.edgeMode === 'authority' ? 'edge-source-authority' : 'edge-source-communication');
       else if (state.edgeSourceId && state.edgeMode !== 'select') node.classList.add('edge-target-candidate');
@@ -774,56 +856,35 @@ function mountEditor(root, bridge) {
       });
       els.nodeLayer.append(node);
     }
-    for (const luna of state.definition.lunas || []) {
-      const position = state.layout.nodes[luna.id] || { x: 100, y: 870 };
-      const binding = lunaRuntime(luna.id);
-      const status = binding?.status || 'POTENTIAL';
-      const node = document.createElement('article');
-      node.className = 'agent-node luna-bridge-node';
-      node.dataset.id = luna.id;
-      node.dataset.kind = 'luna';
-      node.dataset.runtime = status;
-      node.style.left = position.x + 'px';
-      node.style.top = position.y + 'px';
-      if (state.selection?.type === 'luna' && state.selection.id === luna.id) node.classList.add('selected');
-      const strip = document.createElement('div'); strip.className = 'node-runtime-strip';
-      const body = document.createElement('div'); body.className = 'node-body';
-      const title = document.createElement('div'); title.className = 'node-title'; title.textContent = luna.displayName;
-      const role = document.createElement('div'); role.className = 'node-role'; role.textContent = t('lunaChatKind');
-      const info = document.createElement('div'); info.className = 'node-meta';
-      const statusLabel = document.createElement('span'); statusLabel.className = 'model-chip'; statusLabel.textContent = 'LunaBridge';
-      const phase = document.createElement('span'); phase.className = 'runtime-chip'; phase.textContent = status;
-      info.append(statusLabel, phase); body.append(title, role, info); node.append(strip, body);
-      node.addEventListener('pointerdown', (event) => onNodePointerDown(event, luna.id));
-      node.addEventListener('click', event => {
-        if (state.interaction.nodeDrag?.moved) return;
-        event.stopPropagation();
-        if (state.edgeMode !== 'select') return;
-        state.selection = { type: 'luna', id: luna.id };
-        setInspectorCollapsed(false, { mark: false }); renderSelection();
-      });
-      els.nodeLayer.append(node);
+    for (const chatDef of state.definition.chats) {
+      const position = state.layout.nodes[chatDef.id] || { x: 100, y: 870 };
+      const facts = lunaRuntime(chatDef.lunaId), status = facts?.status || 'POTENTIAL';
       const chat = document.createElement('article');
       chat.className = 'luna-chat-node';
       chat.dataset.kind = 'postman-chat';
-      chat.dataset.id = luna.chatNodeId;
-      chat.dataset.lunaId = luna.id;
+      chat.dataset.id = chatDef.id;
+      chat.dataset.lunaId = chatDef.lunaId;
       chat.dataset.runtime = status;
-      chat.style.left = (position.x + NODE_WIDTH + 34) + 'px';
-      chat.style.top = (position.y + 12) + 'px';
-      const label = document.createElement('strong'); label.textContent = t('lunaChatNode');
+      if (state.selection?.type === 'chat' && state.selection.id === chatDef.id) chat.classList.add('selected');
+      if (state.edgeSourceId === chatDef.id) chat.classList.add('edge-source-chat');
+      chat.style.left = position.x + 'px';
+      chat.style.top = position.y + 'px';
+      const label = document.createElement('strong'); label.textContent = chatDef.displayName;
       const statusText = document.createElement('div'); statusText.className = 'luna-chat-status';
-      statusText.textContent = t('lunaStatus', { status });
+      statusText.textContent = t('lunaStatus', { status: facts?.hostJobState ?? status });
       const address = document.createElement('div');
-      address.textContent = binding?.conversationRef || binding?.selectedArchivedConversation || t('lunaNoChat');
       address.className = 'luna-chat-address';
+      address.textContent = facts?.conversationRef || facts?.selectedArchivedConversation || t('lunaNoChat');
       const start = document.createElement('div'); start.className = 'luna-chat-time';
-      start.textContent = binding?.startedAt ? t('lunaElapsed', { duration: elapsedText(
-        binding.status === 'WORKING' ? Date.now() - Date.parse(binding.startedAt) : binding.elapsedMs ?? 0) }) : t('lunaHostNotStarted');
+      start.textContent = facts?.startedAt ? t('lunaElapsed', { duration: elapsedText(
+        isLunaWorking(facts) ? Date.now() - Date.parse(facts.startedAt) : facts.elapsedMs ?? 0) })
+        : t('lunaHostNotStarted');
       chat.append(label, statusText, address, start);
+      chat.addEventListener('pointerdown', event => onNodePointerDown(event, chatDef.id));
       chat.addEventListener('click', event => {
-        event.stopPropagation(); state.selection = { type: 'luna', id: luna.id };
-        setInspectorCollapsed(false, { mark: false }); renderSelection();
+        if (state.interaction.nodeDrag?.moved) return;
+        event.stopPropagation();
+        handleChatAction(chatDef.id);
       });
       els.nodeLayer.append(chat);
     }
@@ -856,17 +917,14 @@ function mountEditor(root, bridge) {
         nextX = snapGridValue(nextX);
         nextY = snapGridValue(nextY);
       }
+      const width = getChat(id) ? CHAT_WIDTH : NODE_WIDTH;
+      const height = getChat(id) ? CHAT_HEIGHT : NODE_HEIGHT;
       state.layout.nodes[id] = {
-        x: clamp(nextX, 8, STAGE_WIDTH - NODE_WIDTH - 8),
-        y: clamp(nextY, 8, STAGE_HEIGHT - NODE_HEIGHT - 8)
+        x: clamp(nextX, 8, STAGE_WIDTH - width - 8),
+        y: clamp(nextY, 8, STAGE_HEIGHT - height - 8)
       };
       node.style.left = `${state.layout.nodes[id].x}px`;
       node.style.top = `${state.layout.nodes[id].y}px`;
-      const chat = node.nextElementSibling;
-      if (node.dataset.kind === 'luna' && chat?.classList.contains('luna-chat-node')) {
-        chat.style.left = (state.layout.nodes[id].x + NODE_WIDTH + 34) + 'px';
-        chat.style.top = (state.layout.nodes[id].y + 12) + 'px';
-      }
       renderEdges();
     };
     const up = () => {
@@ -883,7 +941,8 @@ function mountEditor(root, bridge) {
   }
 
   function edgeCollection(kind) {
-    return kind === 'authority' ? state.definition.authorityEdges : state.definition.communicationEdges;
+    return kind === 'authority' ? state.definition.authorityEdges :
+      kind === 'chat' ? state.definition.chatConnections : state.definition.communicationEdges;
   }
 
   function cleanOrthogonalPoints(points) {
@@ -980,14 +1039,15 @@ function mountEditor(root, bridge) {
     els.edgeGroup.replaceChildren();
     renderEdgeKind('authority');
     renderEdgeKind('communication');
+    renderChatEdges();
   }
 
   function renderEdgeKind(kind) {
     const collection = edgeCollection(kind);
-    const focusActive = state.selection?.type === 'node' || state.selection?.type === 'edge';
+    const focusActive = state.selection?.type === 'node' || state.selection?.type === 'chat' || state.selection?.type === 'edge';
     const processed = new Set();
     for (const edge of collection) {
-      if (processed.has(edge.id)) continue;
+      if (processed.has(edge.id) || kind === 'communication' && directAuthority(edge.from, edge.to)) continue;
       let visualEdge = edge;
       let pair = null;
       let isBidirectional = false;
@@ -1061,17 +1121,69 @@ function mountEditor(root, bridge) {
     }
   }
 
+  function renderChatEdges() {
+    for (const edge of state.definition.chatConnections) {
+      const a = state.layout.nodes[edge.agentId], b = state.layout.nodes[edge.chatNodeId];
+      if (!a || !b) continue;
+      const from = { x: a.x + NODE_WIDTH, y: a.y + NODE_HEIGHT / 2 };
+      const to = { x: b.x, y: b.y + CHAT_HEIGHT / 2 };
+      const curve = Math.max(55, Math.abs(to.x - from.x) * 0.32);
+      const path = state.layout.visual.edgeRouting === 'orthogonal'
+        ? roundedOrthogonalPath([from, { x: from.x + 26, y: from.y },
+          { x: to.x - 26, y: to.y }, to], 9)
+        : 'M ' + from.x + ' ' + from.y + ' C ' + (from.x + curve) + ' ' + from.y +
+          ', ' + (to.x - curve) + ' ' + to.y + ', ' + to.x + ' ' + to.y;
+      const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      group.classList.add('edge-group-item');
+      group.dataset.edgeKind = 'chat';
+      group.dataset.edgeId = edge.id;
+      const selected = state.selection?.type === 'edge' && state.selection.id === edge.id;
+      const relevant = !state.selection ||
+        state.selection.type === 'edge' && selected ||
+        state.selection.type === 'node' && state.selection.id === edge.agentId ||
+        state.selection.type === 'chat' && state.selection.id === edge.chatNodeId;
+      if (!relevant) group.classList.add('is-dimmed');
+      const visible = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      visible.setAttribute('d', path);
+      visible.setAttribute('class', 'edge chat' + (selected ? ' selected' : ''));
+      const hit = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      hit.setAttribute('d', path); hit.setAttribute('class', 'edge-hit');
+      hit.style.pointerEvents = 'stroke';
+      hit.addEventListener('click', event => {
+        event.stopPropagation();
+        state.selection = { type: 'edge', id: edge.id, kind: 'chat' };
+        setInspectorCollapsed(false, { mark: false }); renderSelection();
+      });
+      group.append(visible, hit); els.edgeGroup.append(group);
+    }
+  }
+
   function renderSelection() {
     renderNodes();
     renderEdges();
     renderInspector();
   }
 
-  function renderLunaFacts(luna) {
-    const facts = lunaRuntime(luna.id);
-    const archives = state.runtime.lunaArchive?.[luna.id] || [];
+  function renderLunaFacts(chat) {
+    const facts = lunaRuntime(chat.lunaId);
+    const archives = state.runtime.lunaArchive?.[chat.lunaId] || [];
     const running = isLunaWorking(facts);
     els.lunaRuntimeStatus.textContent = t('lunaStatus', { status: facts?.hostJobState ?? facts?.status ?? 'POTENTIAL' });
+    els.lunaJobStatus.textContent = facts?.lastBridgeJobId
+      ? t('jobKnown', { id: facts.lastBridgeJobId, request: facts.lastRequestId || '—',
+        status: facts.hostJobState ?? facts.status ?? 'UNKNOWN' }) : t('jobNone');
+    const observation = state.chatJob;
+    if (observation?.runId === state.runtime.id && observation?.chatId === chat.id &&
+        observation?.jobId === facts?.lastBridgeJobId) {
+      const value = observation.value;
+      els.lunaJobResult.textContent = value?.status === 'POSTMAN_BRIDGE_TERMINAL'
+        ? t('jobResultTerminal', { value: String(value.result?.assistantText ??
+            value.result?.reportedOutcome ?? value.terminalStatus ?? 'TERMINAL').slice(0, 6000) })
+        : value?.status === 'POSTMAN_BRIDGE_QUEUED' || value?.status === 'POSTMAN_BRIDGE_RUNNING'
+          ? t('jobResultPending')
+          : value?.diagnostic ? t('chatResultError', { reason: value.diagnostic })
+          : t('jobResultUnknown');
+    } else els.lunaJobResult.textContent = facts?.activeJobId ? t('jobResultPending') : t('jobResultNone');
     els.lunaRuntimeStart.textContent = facts?.startedAt
       ? t('lunaHostStart', { time: new Date(facts.startedAt).toLocaleString(state.locale) })
       : t('lunaHostNotStarted');
@@ -1093,8 +1205,8 @@ function mountEditor(root, bridge) {
 
     // A status poll must not recreate the select or reset an in-progress task.
     const key = state.locale + JSON.stringify(archives.map(record => [record.id, record.conversationRef, record.createdAt]));
-    if (els.lunaArchiveSelect.dataset.items !== key || els.lunaArchiveSelect.dataset.lunaId !== luna.id) {
-      const prior = els.lunaArchiveSelect.dataset.lunaId === luna.id
+    if (els.lunaArchiveSelect.dataset.items !== key || els.lunaArchiveSelect.dataset.lunaId !== chat.id) {
+      const prior = els.lunaArchiveSelect.dataset.lunaId === chat.id
         ? els.lunaArchiveSelect.value : facts?.selectedArchiveId;
       els.lunaArchiveSelect.replaceChildren();
       for (const record of archives) {
@@ -1108,7 +1220,7 @@ function mountEditor(root, bridge) {
       }
       if (archives.some(record => record.id === prior)) els.lunaArchiveSelect.value = prior;
       els.lunaArchiveSelect.dataset.items = key;
-      els.lunaArchiveSelect.dataset.lunaId = luna.id;
+      els.lunaArchiveSelect.dataset.lunaId = chat.id;
     }
     const archive = archives.find(record => record.id === els.lunaArchiveSelect.value);
     els.lunaArchiveDetail.textContent = archive
@@ -1153,18 +1265,10 @@ function mountEditor(root, bridge) {
       const label = element.querySelector('.runtime-chip span:last-child');
       if (label) label.textContent = agentStatusText(status);
     }
-    for (const element of els.nodeLayer.querySelectorAll('.luna-bridge-node')) {
-      const facts = lunaRuntime(element.dataset.id), status = facts?.status ?? 'POTENTIAL';
-      const role = element.querySelector('.node-role');
-      if (role) role.textContent = t('lunaChatKind');
-      element.dataset.runtime = status;
-      const label = element.querySelector('.runtime-chip');
-      if (label) label.textContent = status;
-    }
     for (const element of els.nodeLayer.querySelectorAll('.luna-chat-node')) {
       const facts = lunaRuntime(element.dataset.lunaId), status = facts?.status ?? 'POTENTIAL';
       const title = element.querySelector('strong');
-      if (title) title.textContent = t('lunaChatNode');
+      if (title) title.textContent = getChat(element.dataset.id)?.displayName || t('lunaChatNode');
       element.dataset.runtime = status;
       const label = element.querySelector('.luna-chat-status');
       if (label) label.textContent = t('lunaStatus', { status: facts?.hostJobState ?? status });
@@ -1181,9 +1285,9 @@ function mountEditor(root, bridge) {
   }
 
   function refreshRuntimeInspector() {
-    if (state.selection?.type === 'luna') {
-      const luna = getLuna(state.selection.id);
-      if (luna) renderLunaFacts(luna);
+    if (state.selection?.type === 'chat') {
+      const chat = getChat(state.selection.id);
+      if (chat) renderLunaFacts(chat);
     } else if (state.selection?.type === 'node') {
       const agent = getAgent(state.selection.id);
       if (agent) refreshNativeInspector(agent);
@@ -1202,14 +1306,14 @@ function mountEditor(root, bridge) {
       els.inspectorTitle.textContent = t('nothingSelected');
       return;
     }
-    if (selection.type === 'luna') {
-      const luna = getLuna(selection.id);
-      if (!luna) { state.selection = null; return renderInspector(); }
-      els.inspectorTitle.textContent = luna.displayName;
+    if (selection.type === 'chat') {
+      const chat = getChat(selection.id);
+      if (!chat) { state.selection = null; return renderInspector(); }
+      els.inspectorTitle.textContent = chat.displayName;
       els.lunaInspector.hidden = false;
-      if (document.activeElement !== els.lunaNameInput) els.lunaNameInput.value = luna.displayName;
+      if (document.activeElement !== els.lunaNameInput) els.lunaNameInput.value = chat.displayName;
       els.lunaNameInput.disabled = isEditingLocked();
-      renderLunaFacts(luna);
+      renderLunaFacts(chat);
       return;
     }
     if (selection.type === 'node') {
@@ -1243,10 +1347,10 @@ function mountEditor(root, bridge) {
     }
     const edge = edgeCollection(selection.kind).find((item) => item.id === selection.id);
     if (!edge) { state.selection = null; return renderInspector(); }
-    const from = getAgent(edge.from);
-    const to = getAgent(edge.to);
+    const from = getAgent(edge.from || edge.agentId);
+    const to = getAgent(edge.to) || getChat(edge.chatNodeId);
     const reciprocal = selection.kind === 'communication' ? communicationReciprocal(edge, state.definition.communicationEdges) : null;
-    const kindLabel = selection.kind === 'authority' ? 'Authority' : 'Communication';
+    const kindLabel = selection.kind === 'authority' ? 'Authority' : selection.kind === 'chat' ? t('postmanChat') : 'Communication';
     els.inspectorTitle.textContent = kindLabel;
     els.edgeInspector.hidden = false;
     els.edgeKindBadge.textContent = kindLabel;
@@ -1258,7 +1362,8 @@ function mountEditor(root, bridge) {
       els.edgeDirectionNote.className = `edge-direction-note${reciprocal ? ' bidirectional' : ''}`;
       state.selection.pairId = reciprocal?.id || null;
     }
-    els.edgeDescription.textContent = t(selection.kind === 'authority' ? 'edgeAuthorityHelp' : 'edgeCommunicationHelp');
+    els.edgeDescription.textContent = t(selection.kind === 'chat' ? 'edgeChatHelp' :
+      selection.kind === 'authority' ? 'edgeAuthorityHelp' : 'edgeCommunicationHelp');
     els.deleteEdgeButton.disabled = isEditingLocked();
   }
 
@@ -1465,6 +1570,32 @@ function mountEditor(root, bridge) {
       if (!agentById.has(edge.from) || !agentById.has(edge.to)) errors.push(issue('DANGLING_COMMUNICATION', t('errorDanglingEdge', { kind: 'Communication' }), `edge:${edge.id}`));
     }
     if (hasAuthorityCycle(agentById)) errors.push(issue('AUTHORITY_CYCLE', t('errorAuthorityCycle'), 'authority'));
+    const lunaAgents = agents.filter(a => a.slot === 'luna-bridge');
+    const chats = state.definition.chats || [];
+    if (lunaAgents.length > 3 || chats.length > 3 || lunaAgents.length !== chats.length)
+      errors.push(issue('LUNA_LIMIT', t('lunaLimit'), 'team'));
+    for (const agent of lunaAgents) {
+      const parents = state.definition.authorityEdges.filter(e => e.to === agent.id);
+      if (parents.length !== 1 || !['entry', 'sol'].includes(agentById.get(parents[0]?.from)?.slot))
+        errors.push(issue('LUNA_PARENT', t('errorLunaParent'), 'node:' + agent.id));
+    }
+    const chatIds = new Set(), ownerIds = new Set(), links = new Set();
+    for (const chat of chats) {
+      if (chatIds.has(chat.id) || agentById.has(chat.id) ||
+          !lunaAgents.some(a => a.id === chat.lunaId) || ownerIds.has(chat.lunaId)) {
+        errors.push(issue('CHAT_INVALID', t('errorInvalidChatConnection'), 'chat:' + chat.id));
+      }
+      chatIds.add(chat.id);
+      ownerIds.add(chat.lunaId);
+      if (!state.definition.chatConnections.some(e => e.chatNodeId === chat.id))
+        errors.push(issue('CHAT_DISCONNECTED', t('errorChatNoConnection'), 'chat:' + chat.id));
+    }
+    for (const link of state.definition.chatConnections) {
+      const pair = link.agentId + ':' + link.chatNodeId;
+      if (!agentById.has(link.agentId) || !chatIds.has(link.chatNodeId) || links.has(pair))
+        errors.push(issue('CHAT_CONNECTION_INVALID', t('errorInvalidChatConnection'), 'edge:' + link.id));
+      links.add(pair);
+    }
 
     state.validation = { hasRun: true, errors };
     renderValidation();
@@ -1542,7 +1673,10 @@ function mountEditor(root, bridge) {
   }
 
   function focusValidationTarget(target) {
-    if (target.startsWith('node:')) {
+    if (target.startsWith('chat:')) {
+      const id = target.slice(5);
+      if (getChat(id)) { state.selection = { type: 'chat', id }; setInspectorCollapsed(false, { mark: false }); renderSelection(); }
+    } else if (target.startsWith('node:')) {
       const id = target.split(':')[1];
       if (getAgent(id)) {
         state.selection = { type: 'node', id };
@@ -1550,8 +1684,9 @@ function mountEditor(root, bridge) {
         renderSelection();
       }
     } else if (target.startsWith('edge:')) {
-      const id = target.split(':')[1];
-      const kind = state.definition.authorityEdges.some((edge) => edge.id === id) ? 'authority' : 'communication';
+      const id = target.slice(5);
+      const kind = state.definition.authorityEdges.some(edge => edge.id === id) ? 'authority' :
+        state.definition.chatConnections.some(edge => edge.id === id) ? 'chat' : 'communication';
       state.selection = { type: 'edge', id, kind };
       setInspectorCollapsed(false, { mark: false });
       renderSelection();
@@ -1560,6 +1695,7 @@ function mountEditor(root, bridge) {
 
   function resetRuntime() {
     state.runtime = { status: 'STOPPED', id: null, bindings: {}, lunas: [], lunaArchive: {} };
+    state.chatJob = null;
   }
 
   async function validateOnHost() {
@@ -1576,6 +1712,33 @@ function mountEditor(root, bridge) {
       renderValidation();
       return errors;
     }
+  }
+
+  async function refreshChatResult() {
+    if (state.selection?.type !== 'chat' || !state.runtime.id) return;
+    const chat = getChat(state.selection.id);
+    const facts = chat && lunaRuntime(chat.lunaId);
+    const jobId = facts?.lastBridgeJobId;
+    if (!chat || !jobId) return;
+    const status = facts.hostJobState ?? facts.status ?? 'UNKNOWN';
+    if (state.chatJob?.runId === state.runtime.id && state.chatJob?.chatId === chat.id &&
+        state.chatJob?.jobId === jobId && state.chatJob?.hostState === status) return;
+    const requested = { runId: state.runtime.id, chatId: chat.id, jobId, hostState: status, value: null };
+    state.chatJob = requested;
+    try {
+      const value = await bridge.call('runs/luna-result', {
+        id: requested.runId, lunaId: chat.lunaId, bridgeJobId: jobId
+      });
+      if (state.chatJob !== requested) return;
+      state.chatJob = { ...requested, value };
+    } catch (error) {
+      if (state.chatJob !== requested) return;
+      state.chatJob = { ...requested, value: {
+        status: 'UNKNOWN', diagnostic: String(error.message || error)
+      } };
+    }
+    if (state.selection?.type === 'chat' && state.selection.id === requested.chatId &&
+        state.runtime.id === requested.runId) renderLunaFacts(chat);
   }
 
   async function syncRun() {
@@ -1600,6 +1763,7 @@ function mountEditor(root, bridge) {
       updateRuntimeNodes(); renderRuntime(false);
     } else if (state.runtime.status === 'RUNNING') updateRuntimeNodes();
     refreshRuntimeInspector();
+    void refreshChatResult();
     const items = await bridge.call('runs/activity', { id: run.id });
     const activity = $('nodesActivity');
     activity.replaceChildren();
@@ -1655,7 +1819,7 @@ function mountEditor(root, bridge) {
   }
 
   async function selectLuna(archiveId = null) {
-    const lunaId = state.selection?.type === 'luna' ? state.selection.id : null;
+    const lunaId = state.selection?.type === 'chat' ? getChat(state.selection.id)?.lunaId : null;
     if (!lunaId || !state.runtime.id || state.runtime.status !== 'RUNNING') return;
     if (isLunaWorking(lunaRuntime(lunaId))) { toast(t('lunaBusy'), 'error'); return; }
     try {
@@ -1666,7 +1830,7 @@ function mountEditor(root, bridge) {
 
   let lunaSending = false;
   async function sendLuna() {
-    const lunaId = state.selection?.type === 'luna' ? state.selection.id : null;
+    const lunaId = state.selection?.type === 'chat' ? getChat(state.selection.id)?.lunaId : null;
     if (!lunaId || !state.runtime.id || state.runtime.status !== 'RUNNING' || lunaSending) return;
     if (isLunaWorking(lunaRuntime(lunaId))) { toast(t('lunaBusy'), 'error'); return; }
     const task = els.lunaTaskInput.value.trim();
@@ -1754,13 +1918,13 @@ function mountEditor(root, bridge) {
   }
 
   function fitView() {
-    if (!state.definition.agents.length && !state.definition.lunas.length) {
+    if (!state.definition.agents.length && !state.definition.chats.length) {
       state.layout.viewport = { x: 120, y: 80, zoom: 1 };
       applyViewport();
       markLayoutDirty();
       return;
     }
-    const positions = [...state.definition.agents, ...state.definition.lunas].map((agent) => state.layout.nodes[agent.id]).filter(Boolean);
+    const positions = [...state.definition.agents, ...state.definition.chats].map((node) => state.layout.nodes[node.id]).filter(Boolean);
     const minX = Math.min(...positions.map((pos) => pos.x));
     const minY = Math.min(...positions.map((pos) => pos.y));
     const maxX = Math.max(...positions.map((pos) => pos.x + NODE_WIDTH));
@@ -1841,15 +2005,15 @@ function mountEditor(root, bridge) {
     els.lunaContinueButton.addEventListener('click', () => selectLuna(els.lunaArchiveSelect.value));
     els.lunaNewChatButton.addEventListener('click', () => selectLuna(null));
     els.lunaArchiveSelect.addEventListener('change', () => {
-      const luna = state.selection?.type === 'luna' && getLuna(state.selection.id);
-      if (luna) renderLunaFacts(luna);
+      const chat = state.selection?.type === 'chat' && getChat(state.selection.id);
+      if (chat) renderLunaFacts(chat);
     });
     els.lunaTaskInput.addEventListener('input', () => refreshRuntimeInspector());
     els.lunaSendButton.addEventListener('click', () => { void sendLuna(); });
     els.lunaNameInput.addEventListener('input', () => {
-      if (isEditingLocked() || state.selection?.type !== 'luna') return;
-      const luna = getLuna(state.selection.id);
-      if (luna) { luna.displayName = els.lunaNameInput.value; markDefinitionDirty(); renderNodes(); }
+      if (isEditingLocked() || state.selection?.type !== 'chat') return;
+      const chat = getChat(state.selection.id);
+      if (chat) { chat.displayName = els.lunaNameInput.value; markDefinitionDirty(); renderNodes(); }
     });
     els.openChatButton.addEventListener('click', () => {
       const binding = state.selection?.type === 'node' && state.runtime.bindings[state.selection.id];
