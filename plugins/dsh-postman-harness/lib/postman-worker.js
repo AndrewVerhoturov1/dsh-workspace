@@ -1339,7 +1339,10 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
           fresh.bindings[a.id] && ctx.agents.get(fresh.bindings[a.id].sessionId))
         if (parent.status !== 'idle' || parent.inbox?.hasPending)
           return { status: 'NODES_NATIVE_PARENT_BUSY', nodeId }
-        if (!descendants.length) {
+        const resumedParent = resumedNodes.get(parent.id)
+        if (resumedParent && resumedParent.agent !== parent)
+          return { status: 'NODES_NATIVE_PARENT_RELEASE_UNPROVEN', nodeId }
+        if (!descendants.length && !resumedParent) {
           await ctx.subagents.drainContinuableChildren(leader, [parent.id])
           if (ctx.agents.get(parent.id)) return { status: 'NODES_NATIVE_PARENT_RELEASE_UNPROVEN', nodeId }
           parent = null
@@ -1395,7 +1398,11 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
             try {
               const handle = await ctx.agents.resume({ resumeSessionId: bound.sessionId,
                 agentOptions: { provider: descriptor.agentProvider, model: descriptor.agentModel },
-                signal, setup: childCtx => applyChildComposition(childCtx, parent, descriptor) })
+                signal, setup: childCtx => {
+                  applyChildComposition(childCtx, parent, descriptor)
+                  const current = service.configForSession(bound.sessionId)
+                  if (current) service.installSkills(childCtx, current.node, current.run)
+                } })
               if (handle.agent.id !== bound.sessionId || ctx.agents.get(bound.sessionId) !== handle.agent ||
                   handle.agent.session.header.parentSession !== parent.id)
                 throw Error('NODES_SESSION_IDENTITY_CHANGED')
@@ -1415,10 +1422,38 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
           }, { agent: parent, signal }, workerType))
           if (accepted.status !== 'POSTMAN_WORKER_TASK_ACCEPTED' || !accepted.workerSessionId)
             return { status: accepted.status || 'NODES_NATIVE_ACTIVATION_FAILED', diagnostic: accepted.diagnostic }
-          await ctx.agents.get(accepted.workerSessionId)?.whenIdle()
-          await service.nativeChildState(runId, nodeId, accepted.workerSessionId,
-            ctx.agents.get(accepted.workerSessionId) ? 'READY' : 'SUSPENDED')
-          return { status: 'NODES_NODE_ACTIVE', nodeId, workerSessionId: accepted.workerSessionId, reused: false }
+          const childId = accepted.workerSessionId
+          await ctx.agents.get(childId)?.whenIdle()
+          // SDK owns the bootstrap Activation and may release it after this RPC.
+          // Transfer the idle durable Session to the existing Host resume handle.
+          await ctx.subagents.drainContinuableChildren(parent, [childId])
+          if (ctx.agents.get(childId))
+            return { status: 'NODES_NATIVE_RELEASE_UNPROVEN', nodeId, workerSessionId: childId }
+          const saved = await history(childId, parent.id, signal)
+          const descriptor = saved && foldSubagentDescriptor(saved.session.events)
+          if (!saved || descriptor?.mode !== 'continuable' ||
+              saved.session.events.some(event => event.type === 'subagent/closed'))
+            return { status: 'NODES_SESSION_RECOVERY_UNPROVEN', nodeId, workerSessionId: childId }
+          let handle
+          try {
+            handle = await ctx.agents.resume({ resumeSessionId: childId,
+              agentOptions: { provider: descriptor.agentProvider, model: descriptor.agentModel },
+              signal, setup: childCtx => {
+                applyChildComposition(childCtx, parent, descriptor)
+                const current = service.configForSession(childId)
+                if (current) service.installSkills(childCtx, current.node, current.run)
+              } })
+            if (handle.agent.id !== childId || ctx.agents.get(childId) !== handle.agent ||
+                handle.agent.session.header.parentSession !== parent.id)
+              throw Error('NODES_SESSION_IDENTITY_CHANGED')
+            resumedNodes.set(childId, handle)
+            await service.nativeChildState(runId, nodeId, childId, 'READY')
+            return { status: 'NODES_NODE_ACTIVE', nodeId, workerSessionId: childId, reused: false }
+          } catch (error) {
+            resumedNodes.delete(childId)
+            await handle?.dispose()
+            return { status: 'NODES_SESSION_RECOVERY_FAILED', nodeId, diagnostic: diagnostic(error) }
+          }
         }
         if (!bound) return { status: 'NODES_NODE_POTENTIAL', nodeId }
         if (bound.parentSessionId !== parent.id) return { status: 'NODES_BINDING_UNCERTAIN' }
