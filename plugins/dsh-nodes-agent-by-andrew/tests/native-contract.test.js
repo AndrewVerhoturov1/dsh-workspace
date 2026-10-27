@@ -82,15 +82,31 @@ test('actual rc.2 native bootstrap, routes/prompts, scoped skills and cold Sessi
     const activation=await service.nodeAction(rt.leader,worker.id,'activate');
     assert.equal(activation.status,'NODES_NODE_ACTIVE',JSON.stringify(activation));
     assert.equal(allRequests.length,1, 'Only the explicitly awakened Entry invoked the adapter');
-    assert.ok(['IDLE','COLD'].includes(service.getRun(run.id).bindings[worker.id].status),
-      'Bootstrap is idle in memory or durably cold, never model-working');
     const childId=service.getRun(run.id).bindings[worker.id].sessionId;
-    assert.ok(childId);
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(service.getRun(run.id).bindings[worker.id].status,'IDLE',
+      'Manual activation must leave an actual resident, idle native child after SDK settlement');
+    assert.ok(rt.ctx.agents.get(childId), 'The exact child must remain resident without a model turn');
+    assert.equal(Object.keys(service.getRun(run.id).bindings).length,2,
+      'Only Entry and the addressed Worker should be bound');
+    const idleFinished=await service.nodeAction(rt.leader,worker.id,'finish');
+    assert.equal(idleFinished.status,'NODES_NODE_SUSPENDED',JSON.stringify(idleFinished));
+    assert.equal(service.getRun(run.id).bindings[worker.id].status,'COLD');
+    assert.equal(rt.ctx.agents.get(childId),undefined,'Idle finish releases only the resident Activation');
+    const idleReactivated=await service.nodeAction(rt.leader,worker.id,'activate');
+    assert.equal(idleReactivated.status,'NODES_NODE_ACTIVE',JSON.stringify(idleReactivated));
+    assert.equal(idleReactivated.workerSessionId,childId,'Idle reactivation must reuse exact Session');
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(service.getRun(run.id).bindings[worker.id].status,'IDLE');
+    assert.equal(allRequests.length,1,'No additional model turn for idle lifecycle');
     const ended = Promise.withResolvers();
     const stop = rt.ctx.on('session/event', (session,event) => { if(session.id===childId && event.type==='turn/end') ended.resolve(); });
     await service.sendMessage(rt.leader, worker.id, 'First actual turn');
     await ended.promise; stop();
     await rt.ctx.agents.get(childId)?.whenIdle();
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(service.getRun(run.id).bindings[worker.id].status,'IDLE',
+      'Read-only polling after a genuine SDK turn must retain the idle child');
     const first=rt.requests.find(r=>r.agent.id===childId);
     assert.ok(first);
     assert.equal(first.request.reasoningEffort, 'max', JSON.stringify(first.request).slice(0,3000));
