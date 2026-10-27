@@ -108,7 +108,29 @@ function mountEditor(root, bridge) {
       chooseChat: 'Open a new DSH Chat using the Postman Leader PTC - Nodes preset first.',
       confirmReset: 'Discard unsaved changes and create a new saved team?',
       errorInvalidModel: 'Model {provider}/{model} is not present in the live DSH catalog.',
-      errorInvalidCapability: 'Tool {kind}:{id} is unavailable in DSH.'
+      errorInvalidCapability: 'Tool {kind}:{id} is unavailable in DSH.',
+      nodeActivate: 'Activate idle', nodeFinish: 'Finish and release', nodeInterrupt: 'Interrupt now',
+      lunaLimit: 'At most three LunaBridge nodes are allowed.', lunaNoChat: 'No confirmed chat',
+      lunaLinkLabel: 'Open confirmed Postman Chat', lunaArchiveTitle: 'Conversation archive',
+      lunaArchiveLabel: 'Verified previous conversations', lunaOpenArchived: 'Open selected archived chat',
+      lunaOpenChat: 'Open confirmed Postman Chat', lunaContinue: 'Continue selected chat',
+      lunaNew: 'Prepare new chat', lunaSelectionWarning: 'Selecting a chat never redirects an already running request. Selection does not send.',
+      lunaSendTitle: 'Explicit Postman Chat task', lunaTaskLabel: 'Task for selected chat',
+      lunaTaskPlaceholder: 'Describe the exact task to send to the selected chat',
+      lunaModeLabel: 'Execution mode', lunaSend: 'Send explicit task',
+      lunaHostStart: 'Host job started: {time}', lunaHostNotStarted: 'Host job start unknown',
+      lunaElapsed: 'Host job elapsed: {duration}', lunaElapsedUnknown: 'Host elapsed: unknown',
+      lunaReminders: 'Confirmed reminders: {count}', lunaRemindersUnknown: 'Confirmed reminders: unknown',
+      lunaReminderStatus: 'Reminder status: {status}', lunaArchivedUnknown: 'Historical status not available',
+      lunaArchiveEntry: '{url} · {date}', lunaNoArchive: 'No archived conversations',
+      lunaSelected: 'Selected archived chat; nothing sent.', lunaPrepared: 'New chat selected; nothing sent.',
+      lunaSendAccepted: 'Explicit request accepted: {id}', lunaNeedTask: 'Enter an explicit task before sending.',
+      lunaBusy: 'This Luna has a current Host job; selection cannot redirect it.',
+      lunaChatKind: 'Communication only · not a Worker', lunaChatNode: 'Postman Chat',
+      lunaStatus: 'Host: {status}', lunaPotential: 'Potential · no chat started',
+      nodeCold: 'Potential · saved', nodePotential: 'Potential', nodeIdle: 'Idle', nodeWorking: 'Working',
+      nodeUnknown: 'Unknown', lunaRemindersPending: 'pending', lunaRemindersObserved: 'observed',
+      lunaRemindersUnknownState: 'unknown', lunaArchiveDateUnknown: 'date unknown'
     },
     'ru-RU': {
       prototypeLabel: 'Редактор настоящей команды Postman', loadDemo: 'Загрузить', reset: 'Новая', saveAs: 'Сохранить как',
@@ -126,7 +148,29 @@ function mountEditor(root, bridge) {
       chooseChat: 'Откройте новый чат DSH с пресетом Postman Leader PTC - Nodes.',
       confirmReset: 'Отбросить несохранённые правки и создать новую команду?',
       errorInvalidModel: 'Модель {provider}/{model} отсутствует в настоящем каталоге DSH.',
-      errorInvalidCapability: 'Инструмент {kind}:{id} недоступен в DSH.'
+      errorInvalidCapability: 'Инструмент {kind}:{id} недоступен в DSH.',
+      nodeActivate: 'Активировать без задания', nodeFinish: 'Завершить и освободить', nodeInterrupt: 'Прервать сейчас',
+      lunaLimit: 'Можно добавить не более трёх нод LunaBridge.', lunaNoChat: 'Адрес чата не подтверждён',
+      lunaLinkLabel: 'Открыть подтверждённый Postman Chat', lunaArchiveTitle: 'Архив разговоров',
+      lunaArchiveLabel: 'Подтверждённые предыдущие чаты', lunaOpenArchived: 'Открыть выбранный чат из архива',
+      lunaOpenChat: 'Открыть подтверждённый Postman Chat', lunaContinue: 'Выбрать чат из архива',
+      lunaNew: 'Подготовить новый чат', lunaSelectionWarning: 'Выбор чата не перенаправляет уже выполняемый запрос и не отправляет новое сообщение.',
+      lunaSendTitle: 'Явное поручение Postman Chat', lunaTaskLabel: 'Задание для выбранного чата',
+      lunaTaskPlaceholder: 'Укажите конкретное задание для адресной отправки',
+      lunaModeLabel: 'Режим выполнения', lunaSend: 'Отправить поручение',
+      lunaHostStart: 'Host начал операцию: {time}', lunaHostNotStarted: 'Время начала Host неизвестно',
+      lunaElapsed: 'Время Host-операции: {duration}', lunaElapsedUnknown: 'Длительность неизвестна',
+      lunaReminders: 'Подтверждённых напоминаний: {count}', lunaRemindersUnknown: 'Подтверждённые напоминания: неизвестно',
+      lunaReminderStatus: 'Напоминания: {status}', lunaArchivedUnknown: 'Исторический статус неизвестен',
+      lunaArchiveEntry: '{url} · {date}', lunaNoArchive: 'Архивных разговоров нет',
+      lunaSelected: 'Чат из архива выбран; отправки не было.', lunaPrepared: 'Новый чат выбран; отправки не было.',
+      lunaSendAccepted: 'Адресное поручение принято: {id}', lunaNeedTask: 'Введите поручение перед отправкой.',
+      lunaBusy: 'Эта Luna сейчас выполняет операцию Host; выбор не изменит её адрес.',
+      lunaChatKind: 'Только связь · не Worker', lunaChatNode: 'Postman Chat',
+      lunaStatus: 'Host: {status}', lunaPotential: 'Потенциальный · чат не запускался',
+      nodeCold: 'Потенц. · сохранён', nodePotential: 'Потенциальный', nodeIdle: 'Ожидает', nodeWorking: 'Работает',
+      nodeUnknown: 'Неизвестно', lunaRemindersPending: 'ожидается', lunaRemindersObserved: 'подтверждено',
+      lunaRemindersUnknownState: 'неизвестно', lunaArchiveDateUnknown: 'дата неизвестна'
     }
   };
 
@@ -134,7 +178,7 @@ function mountEditor(root, bridge) {
     locale: localStorage.getItem(STORAGE_KEYS.locale) || 'ru-RU',
     definition: null,
     layout: null,
-    runtime: { status: 'STOPPED', id: null, bindings: {} },
+    runtime: { status: 'STOPPED', id: null, bindings: {}, lunas: [], lunaArchive: {} },
     selection: null,
     edgeMode: 'select',
     communicationDirection: 'bidirectional',
@@ -149,10 +193,11 @@ function mountEditor(root, bridge) {
   const $ = (id) => root.querySelector('#' + id);
   const els = {};
   const ids = [
-    'teamName','saveState','loadDemoButton','resetButton','saveButton','validateButton','validateButtonLabel','validateButtonStatus','startButton','pauseButton','resumeButton','stopButton',
+    'teamName','saveState','loadDemoButton','resetButton','saveButton','validateButton','validateButtonLabel','validateButtonStatus','startButton','pauseButton','resumeButton','stopButton','addLunaButton',
     'workspace','addNodeButton','emptyAddButton','communicationDirectionControl','zoomOutButton','zoomInButton','fitButton','zoomReadout','canvasSettingsButton','canvasSettingsPopover','gridVisibleInput','gridStyleSelect','gridSizeSelect','snapNodesInput','alignNodesButton','canvasShell','canvasStage','canvasWorld','canvasEmpty','nodeLayer','edgeGroup','draftEdge','canvasHint','connectionBanner',
     'inspectorTitle','inspectorEmpty','nodeInspector','edgeInspector','inspectorCollapseButton','deleteSelectionButton','agentDetailsDisclosure','nodeIdLabel','technicalNameInput','displayNameInput','roleInput','systemPromptInput',
     'providerSelect','modelSelect','reasoningSelect','capabilityList','entryControl','entryAgentStatus','entryAgentHelp','makeEntryButton','inspectorRuntimeStatus','inspectorStatusDot','openChatButton','openChatHelp',
+    'nodesNativeActions','nodeActivateButton','nodeFinishButton','nodeInterruptButton','lunaInspector','lunaNameInput','lunaRuntimeStatus','lunaRuntimeStart','lunaRuntimeDuration','lunaReminders','lunaReminderState','lunaConversationLink','lunaConversationUnconfirmed','lunaArchiveSelect','lunaArchiveDetail','lunaArchiveLink','lunaContinueButton','lunaNewChatButton','lunaTaskInput','lunaModeSelect','lunaSendButton',
     'edgeKindBadge','edgeSummary','edgeDirectionNote','edgeDescription','deleteEdgeButton','statusDock','dockToggle','validationSummary','validationBadge','validationList','runPill','runStateLabel','runIdLabel','runtimeCopy',
     'metricAgents','metricAuthority','metricCommunication','compactMetricAgents','compactMetricAuthority','compactMetricCommunication','toastStack','smokeResult'
   ];
@@ -175,7 +220,13 @@ function mountEditor(root, bridge) {
   function clamp(value, min, max) { return Math.min(max, Math.max(min, value)); }
   function deepClone(value) { return JSON.parse(JSON.stringify(value)); }
   function getAgent(id) { return state.definition.agents.find((agent) => agent.id === id) || null; }
+  function getLuna(id) { return (state.definition.lunas || []).find((luna) => luna.id === id) || null; }
+  function lunaRuntime(id) { return (state.runtime.lunas || []).find((luna) => luna.id === id) || null; }
   function isEditingLocked() { return state.runtime.status !== 'STOPPED' && state.runtime.status !== 'FAILED'; }
+  function agentStatusText(status) { return t({ POTENTIAL: 'nodePotential', COLD: 'nodeCold',
+    SUSPENDED: 'nodeCold', IDLE: 'nodeIdle', WORKING: 'nodeWorking', UNKNOWN: 'nodeUnknown' }[status] || status); }
+  function isLunaWorking(facts) { return Boolean(facts?.activeJobId) || ['WORKING', 'QUEUED'].includes(facts?.status); }
+  function elapsedText(ms) { return Math.floor(ms / 60000) + 'm ' + Math.floor(ms % 60000 / 1000) + 's'; }
 
   function createEmptyTeam() {
     const teamId = uid('team');
@@ -256,6 +307,7 @@ function mountEditor(root, bridge) {
     state.definition.schemaVersion = 1;
     state.definition.revision = Number.isFinite(state.definition.revision) ? state.definition.revision : 0;
     state.definition.agents = Array.isArray(state.definition.agents) ? state.definition.agents : [];
+    state.definition.lunas = Array.isArray(state.definition.lunas) ? state.definition.lunas : [];
     state.definition.authorityEdges = Array.isArray(state.definition.authorityEdges) ? state.definition.authorityEdges : [];
     state.definition.communicationEdges = Array.isArray(state.definition.communicationEdges) ? state.definition.communicationEdges : [];
     state.layout.schemaVersion = 1;
@@ -277,12 +329,21 @@ function mountEditor(root, bridge) {
       agent.capabilities.grants = Array.isArray(agent.capabilities.grants) ? agent.capabilities.grants : [];
       if (!state.layout.nodes[agent.id]) state.layout.nodes[agent.id] = { x: 180 + (index % 3) * 280, y: 120 + Math.floor(index / 3) * 200 };
     });
+    state.definition.lunas.forEach((luna, index) => {
+      if (!state.layout.nodes[luna.id]) state.layout.nodes[luna.id] = { x: 180 + index * 480, y: 820 };
+    });
   }
 
   function applyI18n() {
     root.querySelectorAll('[data-i18n]').forEach((element) => {
       element.textContent = t(element.dataset.i18n);
     });
+    root.querySelectorAll('[data-i18n-placeholder]').forEach((element) => {
+      element.placeholder = t(element.dataset.i18nPlaceholder);
+    });
+    els.nodeActivateButton.textContent = t('nodeActivate');
+    els.nodeFinishButton.textContent = t('nodeFinish');
+    els.nodeInterruptButton.textContent = t('nodeInterrupt');
     root.querySelectorAll('[data-locale-action]').forEach((button) => button.classList.toggle('is-active', button.dataset.localeAction === state.locale));
     els.addNodeButton.title = t('addAgentTitle');
     els.zoomOutButton.title = t('zoomOutTitle');
@@ -293,6 +354,7 @@ function mountEditor(root, bridge) {
     els.validateButtonLabel.textContent = t('validate');
     updateConnectionBanner();
     applyVisualState();
+    updateRuntimeNodes();
     renderInspector();
     renderValidation();
     renderRuntime();
@@ -403,11 +465,32 @@ function mountEditor(root, bridge) {
     return agent;
   }
 
+  function createLuna() {
+    if (isEditingLocked()) return lockedToast();
+    if (state.definition.lunas.length >= 3) { toast(t('lunaLimit'), 'error'); return; }
+    const index = state.definition.lunas.length;
+    let ordinal = 1;
+    while (state.definition.lunas.some(l => l.displayName === 'LunaBridge ' + ordinal)) ordinal++;
+    const luna = { id: uid('luna'), kind: 'luna-bridge', displayName: 'LunaBridge ' + ordinal, chatNodeId: uid('chat') };
+    state.definition.lunas.push(luna);
+    state.layout.nodes[luna.id] = { x: 160 + index * 480, y: 870 };
+    state.selection = { type: 'luna', id: luna.id };
+    markDefinitionDirty(); markLayoutDirty(); renderAll();
+    setInspectorCollapsed(false, { mark: false });
+  }
+
   function deleteSelection() {
     if (!state.selection) return;
     if (isEditingLocked()) return lockedToast();
     if (state.selection.type === 'node') deleteNode(state.selection.id);
-    if (state.selection.type === 'edge') deleteEdge(state.selection.id, state.selection.kind, state.selection.pairId || null);
+    if (state.selection.type === 'luna') {
+      const id = state.selection.id;
+      state.definition.lunas = state.definition.lunas.filter(l => l.id !== id);
+      delete state.layout.nodes[id];
+      state.selection = null;
+      markDefinitionDirty(); markLayoutDirty(); renderAll();
+    }
+    if (state.selection?.type === 'edge') deleteEdge(state.selection.id, state.selection.kind, state.selection.pairId || null);
   }
 
   function deleteNode(id) {
@@ -616,10 +699,11 @@ function mountEditor(root, bridge) {
     els.nodeLayer.replaceChildren();
     for (const agent of state.definition.agents) {
       const position = state.layout.nodes[agent.id] || { x: 100, y: 100 };
-      const runtimeStatus = state.runtime.bindings[agent.id]?.status || (state.runtime.status === 'STOPPED' ? 'NOT_STARTED' : 'IDLE');
+      const runtimeStatus = state.runtime.bindings[agent.id]?.status || (state.runtime.status === 'STOPPED' ? 'NOT_STARTED' : 'POTENTIAL');
       const node = document.createElement('article');
       node.className = 'agent-node';
       node.dataset.id = agent.id;
+      node.dataset.kind = 'native-agent';
       node.dataset.runtime = runtimeStatus;
       node.style.left = `${position.x}px`;
       node.style.top = `${position.y}px`;
@@ -664,7 +748,7 @@ function mountEditor(root, bridge) {
       const dot = document.createElement('span');
       dot.className = 'runtime-dot';
       const runtimeText = document.createElement('span');
-      runtimeText.textContent = runtimeStatus;
+      runtimeText.textContent = agentStatusText(runtimeStatus);
       runtime.append(dot, runtimeText);
       meta.append(model, runtime);
       body.append(top, meta);
@@ -689,6 +773,59 @@ function mountEditor(root, bridge) {
         handleNodeAction(agent.id);
       });
       els.nodeLayer.append(node);
+    }
+    for (const luna of state.definition.lunas || []) {
+      const position = state.layout.nodes[luna.id] || { x: 100, y: 870 };
+      const binding = lunaRuntime(luna.id);
+      const status = binding?.status || 'POTENTIAL';
+      const node = document.createElement('article');
+      node.className = 'agent-node luna-bridge-node';
+      node.dataset.id = luna.id;
+      node.dataset.kind = 'luna';
+      node.dataset.runtime = status;
+      node.style.left = position.x + 'px';
+      node.style.top = position.y + 'px';
+      if (state.selection?.type === 'luna' && state.selection.id === luna.id) node.classList.add('selected');
+      const strip = document.createElement('div'); strip.className = 'node-runtime-strip';
+      const body = document.createElement('div'); body.className = 'node-body';
+      const title = document.createElement('div'); title.className = 'node-title'; title.textContent = luna.displayName;
+      const role = document.createElement('div'); role.className = 'node-role'; role.textContent = t('lunaChatKind');
+      const info = document.createElement('div'); info.className = 'node-meta';
+      const statusLabel = document.createElement('span'); statusLabel.className = 'model-chip'; statusLabel.textContent = 'LunaBridge';
+      const phase = document.createElement('span'); phase.className = 'runtime-chip'; phase.textContent = status;
+      info.append(statusLabel, phase); body.append(title, role, info); node.append(strip, body);
+      node.addEventListener('pointerdown', (event) => onNodePointerDown(event, luna.id));
+      node.addEventListener('click', event => {
+        if (state.interaction.nodeDrag?.moved) return;
+        event.stopPropagation();
+        if (state.edgeMode !== 'select') return;
+        state.selection = { type: 'luna', id: luna.id };
+        setInspectorCollapsed(false, { mark: false }); renderSelection();
+      });
+      els.nodeLayer.append(node);
+      const chat = document.createElement('article');
+      chat.className = 'luna-chat-node';
+      chat.dataset.kind = 'postman-chat';
+      chat.dataset.id = luna.chatNodeId;
+      chat.dataset.lunaId = luna.id;
+      chat.dataset.runtime = status;
+      chat.style.left = (position.x + NODE_WIDTH + 34) + 'px';
+      chat.style.top = (position.y + 12) + 'px';
+      const label = document.createElement('strong'); label.textContent = t('lunaChatNode');
+      const statusText = document.createElement('div'); statusText.className = 'luna-chat-status';
+      statusText.textContent = t('lunaStatus', { status });
+      const address = document.createElement('div');
+      address.textContent = binding?.conversationRef || binding?.selectedArchivedConversation || t('lunaNoChat');
+      address.className = 'luna-chat-address';
+      const start = document.createElement('div'); start.className = 'luna-chat-time';
+      start.textContent = binding?.startedAt ? t('lunaElapsed', { duration: elapsedText(
+        binding.status === 'WORKING' ? Date.now() - Date.parse(binding.startedAt) : binding.elapsedMs ?? 0) }) : t('lunaHostNotStarted');
+      chat.append(label, statusText, address, start);
+      chat.addEventListener('click', event => {
+        event.stopPropagation(); state.selection = { type: 'luna', id: luna.id };
+        setInspectorCollapsed(false, { mark: false }); renderSelection();
+      });
+      els.nodeLayer.append(chat);
     }
   }
 
@@ -725,6 +862,11 @@ function mountEditor(root, bridge) {
       };
       node.style.left = `${state.layout.nodes[id].x}px`;
       node.style.top = `${state.layout.nodes[id].y}px`;
+      const chat = node.nextElementSibling;
+      if (node.dataset.kind === 'luna' && chat?.classList.contains('luna-chat-node')) {
+        chat.style.left = (state.layout.nodes[id].x + NODE_WIDTH + 34) + 'px';
+        chat.style.top = (state.layout.nodes[id].y + 12) + 'px';
+      }
       renderEdges();
     };
     const up = () => {
@@ -925,14 +1067,149 @@ function mountEditor(root, bridge) {
     renderInspector();
   }
 
+  function renderLunaFacts(luna) {
+    const facts = lunaRuntime(luna.id);
+    const archives = state.runtime.lunaArchive?.[luna.id] || [];
+    const running = isLunaWorking(facts);
+    els.lunaRuntimeStatus.textContent = t('lunaStatus', { status: facts?.hostJobState ?? facts?.status ?? 'POTENTIAL' });
+    els.lunaRuntimeStart.textContent = facts?.startedAt
+      ? t('lunaHostStart', { time: new Date(facts.startedAt).toLocaleString(state.locale) })
+      : t('lunaHostNotStarted');
+    const elapsed = running && facts?.startedAt ? Date.now() - Date.parse(facts.startedAt) : facts?.elapsedMs;
+    els.lunaRuntimeDuration.textContent = Number.isFinite(elapsed) && elapsed >= 0
+      ? t('lunaElapsed', { duration: elapsedText(elapsed) }) : t('lunaElapsedUnknown');
+    els.lunaReminders.textContent = facts?.reminderSent == null
+      ? t('lunaRemindersUnknown') : t('lunaReminders', { count: facts.reminderSent });
+    const reminderStatus = { PENDING: 'lunaRemindersPending', OBSERVED: 'lunaRemindersObserved',
+      UNKNOWN: 'lunaRemindersUnknownState' }[facts?.reminderState] || 'lunaRemindersUnknownState';
+    els.lunaReminderState.textContent = t('lunaReminderStatus', { status: t(reminderStatus) });
+    const url = facts?.conversationRef || facts?.selectedArchivedConversation;
+    const confirmed = typeof url === 'string' && /^https:\/\/chatgpt\.com\/c\/[a-zA-Z0-9-]+$/.test(url);
+    els.lunaConversationLink.hidden = !confirmed;
+    els.lunaConversationUnconfirmed.hidden = confirmed;
+    if (confirmed) els.lunaConversationLink.href = url;
+    else els.lunaConversationLink.removeAttribute('href');
+    els.lunaConversationUnconfirmed.textContent = t('lunaNoChat');
+
+    // A status poll must not recreate the select or reset an in-progress task.
+    const key = state.locale + JSON.stringify(archives.map(record => [record.id, record.conversationRef, record.createdAt]));
+    if (els.lunaArchiveSelect.dataset.items !== key || els.lunaArchiveSelect.dataset.lunaId !== luna.id) {
+      const prior = els.lunaArchiveSelect.dataset.lunaId === luna.id
+        ? els.lunaArchiveSelect.value : facts?.selectedArchiveId;
+      els.lunaArchiveSelect.replaceChildren();
+      for (const record of archives) {
+        const option = document.createElement('option');
+        option.value = record.id;
+        option.textContent = t('lunaArchiveEntry', {
+          url: record.conversationRef,
+          date: record.createdAt ? new Date(record.createdAt).toLocaleDateString(state.locale) : t('lunaArchiveDateUnknown')
+        });
+        els.lunaArchiveSelect.append(option);
+      }
+      if (archives.some(record => record.id === prior)) els.lunaArchiveSelect.value = prior;
+      els.lunaArchiveSelect.dataset.items = key;
+      els.lunaArchiveSelect.dataset.lunaId = luna.id;
+    }
+    const archive = archives.find(record => record.id === els.lunaArchiveSelect.value);
+    els.lunaArchiveDetail.textContent = archive
+      ? [t('lunaArchivedUnknown'), archive.requestId || '',
+        archive.createdAt ? new Date(archive.createdAt).toLocaleString(state.locale) : t('lunaArchiveDateUnknown'),
+        archive.reminderSent == null ? t('lunaRemindersUnknown') : t('lunaReminders', { count: archive.reminderSent })]
+        .filter(Boolean).join(' · ') : t('lunaNoArchive');
+    const archiveConfirmed = archive && /^https:\/\/chatgpt\.com\/c\/[a-zA-Z0-9-]+$/.test(archive.conversationRef);
+    els.lunaArchiveLink.hidden = !archiveConfirmed;
+    if (archiveConfirmed) els.lunaArchiveLink.href = archive.conversationRef;
+    else els.lunaArchiveLink.removeAttribute('href');
+    const active = state.runtime.status === 'RUNNING';
+    els.lunaContinueButton.disabled = !active || !archive || running;
+    els.lunaNewChatButton.disabled = !active || running;
+    els.lunaSendButton.disabled = !active || running || !els.lunaTaskInput.value.trim();
+    els.lunaTaskInput.disabled = !active || running;
+    els.lunaModeSelect.disabled = !active || running;
+  }
+
+  function refreshNativeInspector(agent) {
+    const runtimeStatus = state.runtime.bindings[agent.id]?.status ||
+      (state.runtime.status === 'STOPPED' ? 'NOT_STARTED' : 'POTENTIAL');
+    els.inspectorRuntimeStatus.textContent = agentStatusText(runtimeStatus);
+    els.inspectorStatusDot.style.background = runtimeStatus === 'WORKING' ? 'var(--success)' :
+      runtimeStatus === 'IDLE' ? '#5fb7ff' : runtimeStatus === 'ERROR' ? 'var(--danger)' : '#657184';
+    els.openChatButton.disabled = !state.runtime.bindings[agent.id]?.sessionId;
+    const canControl = agent.slot !== 'entry' && state.runtime.status === 'RUNNING';
+    const cold = ['COLD', 'POTENTIAL', 'SUSPENDED'].includes(runtimeStatus) ||
+      !state.runtime.bindings[agent.id];
+    els.nodesNativeActions.hidden = agent.slot === 'entry';
+    els.nodeActivateButton.disabled = !canControl || !cold;
+    els.nodeFinishButton.disabled = !canControl || cold;
+    els.nodeInterruptButton.disabled = !canControl || cold;
+  }
+
+  function updateRuntimeNodes() {
+    const agents = [...els.nodeLayer.querySelectorAll('.agent-node[data-kind="native-agent"]')];
+    for (const element of agents) {
+      const status = state.runtime.bindings[element.dataset.id]?.status ||
+        (state.runtime.status === 'STOPPED' ? 'NOT_STARTED' : 'POTENTIAL');
+      element.dataset.runtime = status;
+      const label = element.querySelector('.runtime-chip span:last-child');
+      if (label) label.textContent = agentStatusText(status);
+    }
+    for (const element of els.nodeLayer.querySelectorAll('.luna-bridge-node')) {
+      const facts = lunaRuntime(element.dataset.id), status = facts?.status ?? 'POTENTIAL';
+      const role = element.querySelector('.node-role');
+      if (role) role.textContent = t('lunaChatKind');
+      element.dataset.runtime = status;
+      const label = element.querySelector('.runtime-chip');
+      if (label) label.textContent = status;
+    }
+    for (const element of els.nodeLayer.querySelectorAll('.luna-chat-node')) {
+      const facts = lunaRuntime(element.dataset.lunaId), status = facts?.status ?? 'POTENTIAL';
+      const title = element.querySelector('strong');
+      if (title) title.textContent = t('lunaChatNode');
+      element.dataset.runtime = status;
+      const label = element.querySelector('.luna-chat-status');
+      if (label) label.textContent = t('lunaStatus', { status: facts?.hostJobState ?? status });
+      const url = element.querySelector('.luna-chat-address');
+      if (url) url.textContent = facts?.conversationRef || facts?.selectedArchivedConversation || t('lunaNoChat');
+      const time = element.querySelector('.luna-chat-time');
+      if (time) {
+        const elapsed = facts?.startedAt ? (isLunaWorking(facts)
+          ? Date.now() - Date.parse(facts.startedAt) : facts.elapsedMs) : null;
+        time.textContent = Number.isFinite(elapsed) && elapsed >= 0
+          ? t('lunaElapsed', { duration: elapsedText(elapsed) }) : t('lunaHostNotStarted');
+      }
+    }
+  }
+
+  function refreshRuntimeInspector() {
+    if (state.selection?.type === 'luna') {
+      const luna = getLuna(state.selection.id);
+      if (luna) renderLunaFacts(luna);
+    } else if (state.selection?.type === 'node') {
+      const agent = getAgent(state.selection.id);
+      if (agent) refreshNativeInspector(agent);
+    }
+  }
+
   function renderInspector() {
     const selection = state.selection;
     els.inspectorEmpty.hidden = Boolean(selection);
     els.nodeInspector.hidden = true;
+    els.lunaInspector.hidden = true;
     els.edgeInspector.hidden = true;
     els.deleteSelectionButton.hidden = !selection;
+    els.deleteSelectionButton.disabled = isEditingLocked();
     if (!selection) {
       els.inspectorTitle.textContent = t('nothingSelected');
+      return;
+    }
+    if (selection.type === 'luna') {
+      const luna = getLuna(selection.id);
+      if (!luna) { state.selection = null; return renderInspector(); }
+      els.inspectorTitle.textContent = luna.displayName;
+      els.lunaInspector.hidden = false;
+      if (document.activeElement !== els.lunaNameInput) els.lunaNameInput.value = luna.displayName;
+      els.lunaNameInput.disabled = isEditingLocked();
+      renderLunaFacts(luna);
       return;
     }
     if (selection.type === 'node') {
@@ -960,10 +1237,7 @@ function mountEditor(root, bridge) {
       els.entryAgentHelp.textContent = t('entryFixed');
       els.makeEntryButton.hidden = isEntry || agent.slot !== 'entry';
       els.makeEntryButton.disabled = isEditingLocked();
-      const runtimeStatus = state.runtime.bindings[agent.id]?.status || (state.runtime.status === 'STOPPED' ? 'NOT_STARTED' : 'IDLE');
-      els.inspectorRuntimeStatus.textContent = runtimeStatus;
-      els.inspectorStatusDot.style.background = runtimeStatus === 'RUNNING' ? 'var(--success)' : runtimeStatus === 'PAUSED' ? 'var(--warning)' : runtimeStatus === 'ERROR' ? 'var(--danger)' : '#657184';
-      els.openChatButton.disabled = !state.runtime.bindings[agent.id]?.sessionId;
+      refreshNativeInspector(agent);
       setInspectorEditingLocked(isEditingLocked());
       return;
     }
@@ -994,6 +1268,10 @@ function mountEditor(root, bridge) {
     els.openChatButton.disabled = state.selection?.type !== 'node' || !state.runtime.bindings[state.selection.id]?.sessionId;
     els.makeEntryButton.disabled = locked;
     els.deleteSelectionButton.disabled = locked;
+    if (state.selection?.type === 'node') {
+      const agent = getAgent(state.selection.id);
+      if (agent?.slot === 'entry') els.nodesNativeActions.hidden = true;
+    }
   }
 
   function populateProviderSelect(agent) {
@@ -1281,7 +1559,7 @@ function mountEditor(root, bridge) {
   }
 
   function resetRuntime() {
-    state.runtime = { status: 'STOPPED', id: null, bindings: {} };
+    state.runtime = { status: 'STOPPED', id: null, bindings: {}, lunas: [], lunaArchive: {} };
   }
 
   async function validateOnHost() {
@@ -1312,23 +1590,16 @@ function mountEditor(root, bridge) {
     const prior = state.runtime;
     const statusChanged = prior.id !== run.id || prior.status !== run.status;
     const bindingsChanged = JSON.stringify(prior.bindings) !== JSON.stringify(run.bindings);
-    state.runtime = { id: run.id, status: run.status, bindings: run.bindings };
-    if (statusChanged) renderRuntime();
-    if (statusChanged || bindingsChanged) {
-      for (const node of els.nodeLayer.children) {
-        const status = state.runtime.bindings[node.dataset.id]?.status || (run.status === 'STOPPED' ? 'NOT_STARTED' : 'IDLE');
-        node.dataset.runtime = status;
-        const label = node.querySelector('.runtime-chip span:last-child');
-        if (label) label.textContent = status;
-      }
-      if (state.selection?.type === 'node') {
-        const binding = state.runtime.bindings[state.selection.id];
-        const status = binding?.status || (run.status === 'STOPPED' ? 'NOT_STARTED' : 'IDLE');
-        els.inspectorRuntimeStatus.textContent = status;
-        els.inspectorStatusDot.style.background = status === 'RUNNING' ? 'var(--success)' : status === 'PAUSED' ? 'var(--warning)' : status === 'ERROR' ? 'var(--danger)' : '#657184';
-        els.openChatButton.disabled = !binding?.sessionId;
-      }
-    }
+    const lunaChanged = JSON.stringify(prior.lunas) !== JSON.stringify(run.lunas) ||
+      JSON.stringify(prior.lunaArchive) !== JSON.stringify(run.lunaArchive);
+    state.runtime = { id: run.id, status: run.status, bindings: run.bindings,
+      lunas: run.lunas || [], lunaArchive: run.lunaArchive || {} };
+    if (statusChanged || bindingsChanged || lunaChanged) {
+      // Runtime polls update existing nodes in place: pointer target, popup,
+      // inspector selection, drafts and open disclosures stay untouched.
+      updateRuntimeNodes(); renderRuntime(false);
+    } else if (state.runtime.status === 'RUNNING') updateRuntimeNodes();
+    refreshRuntimeInspector();
     const items = await bridge.call('runs/activity', { id: run.id });
     const activity = $('nodesActivity');
     activity.replaceChildren();
@@ -1350,7 +1621,8 @@ function mountEditor(root, bridge) {
     renderAll();
     try {
       const run = await bridge.startTeam(state.definition.id, sessionId);
-      state.runtime = { status: run.status, id: run.id, bindings: run.bindings };
+      state.runtime = { status: run.status, id: run.id, bindings: run.bindings,
+        lunas: run.lunas || [], lunaArchive: run.lunaArchive || {} };
       renderAll();
       toast(t('running'), 'success');
       return true;
@@ -1364,17 +1636,60 @@ function mountEditor(root, bridge) {
     if (!state.runtime.id) return false;
     try {
       const run = await bridge.call('runs/control', { id: state.runtime.id, action });
-      state.runtime = { id: run.id, status: run.status, bindings: run.bindings };
+      state.runtime = { id: run.id, status: run.status, bindings: run.bindings,
+        lunas: run.lunas || [], lunaArchive: run.lunaArchive || {} };
       renderAll();
       toast(t(action === 'pause' ? 'paused' : action === 'resume' ? 'resumed' : 'stopped'));
       return true;
     } catch (e) { toast(String(e.message || e), 'error'); return false; }
   }
+  async function nodeControl(action) {
+    const nodeId = state.selection?.type === 'node' ? state.selection.id : null;
+    if (!nodeId || !state.runtime.id || state.runtime.status !== 'RUNNING') return;
+    try {
+      const result = await bridge.call('runs/node-control', { id: state.runtime.id, nodeId, action });
+      if (!['NODES_NODE_ACTIVE', 'NODES_NODE_SUSPENDED', 'NODES_NODE_ALREADY_COLD'].includes(result.status))
+        throw Error(result.status || 'Node lifecycle not confirmed');
+      await syncRun(); toast(result.status, 'success');
+    } catch (error) { toast(String(error.message || error), 'error'); }
+  }
+
+  async function selectLuna(archiveId = null) {
+    const lunaId = state.selection?.type === 'luna' ? state.selection.id : null;
+    if (!lunaId || !state.runtime.id || state.runtime.status !== 'RUNNING') return;
+    if (isLunaWorking(lunaRuntime(lunaId))) { toast(t('lunaBusy'), 'error'); return; }
+    try {
+      await bridge.call('runs/luna-select', { id: state.runtime.id, lunaId, archiveId });
+      await syncRun(); toast(t(archiveId ? 'lunaSelected' : 'lunaPrepared'), 'success');
+    } catch (error) { toast(String(error.message || error), 'error'); }
+  }
+
+  let lunaSending = false;
+  async function sendLuna() {
+    const lunaId = state.selection?.type === 'luna' ? state.selection.id : null;
+    if (!lunaId || !state.runtime.id || state.runtime.status !== 'RUNNING' || lunaSending) return;
+    if (isLunaWorking(lunaRuntime(lunaId))) { toast(t('lunaBusy'), 'error'); return; }
+    const task = els.lunaTaskInput.value.trim();
+    if (!task) { toast(t('lunaNeedTask'), 'error'); return; }
+    const message = task.startsWith('@PostmanDevspace ') ? task : '@PostmanDevspace ' + task;
+    lunaSending = true;
+    els.lunaSendButton.disabled = true;
+    try {
+      const result = await bridge.call('runs/luna-send', { id: state.runtime.id, lunaId,
+        message, devspaceMode: els.lunaModeSelect.value });
+      if (result.status !== 'POSTMAN_BRIDGE_ACCEPTED') throw Error(result.status || 'Send not accepted');
+      els.lunaTaskInput.value = '';
+      toast(t('lunaSendAccepted', { id: result.bridgeJobId || '—' }), 'success');
+      await syncRun();
+    } catch (error) { toast(String(error.message || error), 'error'); }
+    finally { lunaSending = false; refreshRuntimeInspector(); }
+  }
+
   const pauseRuntime = () => controlRuntime('pause');
   const resumeRuntime = () => controlRuntime('resume');
   const stopRuntime = () => controlRuntime('stop');
 
-  function renderRuntime() {
+  function renderRuntime(refreshInspector = true) {
     const status = state.runtime.status;
     els.runStateLabel.textContent = status;
     els.runPill.dataset.state = status;
@@ -1388,7 +1703,7 @@ function mountEditor(root, bridge) {
     else if (status === 'STARTING') els.runtimeCopy.textContent = t('runtimeStartingHelp');
     else els.runtimeCopy.textContent = t('runtimeStoppedHelp');
     if (status === 'FAILED') setStatusDockCollapsed(false, { mark: false });
-    renderInspector();
+    if (refreshInspector) renderInspector();
   }
 
   function lockedToast() { toast(t('editLocked'), 'error'); }
@@ -1439,13 +1754,13 @@ function mountEditor(root, bridge) {
   }
 
   function fitView() {
-    if (!state.definition.agents.length) {
+    if (!state.definition.agents.length && !state.definition.lunas.length) {
       state.layout.viewport = { x: 120, y: 80, zoom: 1 };
       applyViewport();
       markLayoutDirty();
       return;
     }
-    const positions = state.definition.agents.map((agent) => state.layout.nodes[agent.id]).filter(Boolean);
+    const positions = [...state.definition.agents, ...state.definition.lunas].map((agent) => state.layout.nodes[agent.id]).filter(Boolean);
     const minX = Math.min(...positions.map((pos) => pos.x));
     const minY = Math.min(...positions.map((pos) => pos.y));
     const maxX = Math.max(...positions.map((pos) => pos.x + NODE_WIDTH));
@@ -1462,7 +1777,8 @@ function mountEditor(root, bridge) {
   }
 
   function onCanvasPointerDown(event) {
-    if (event.button !== 0 || event.target.closest('.agent-node') || event.target.closest('.edge-hit')) return;
+    if (event.button !== 0 || event.target.closest('.agent-node') ||
+        event.target.closest('.luna-chat-node') || event.target.closest('.edge-hit')) return;
     if (state.edgeMode !== 'select') {
       state.edgeSourceId = null;
       updateConnectionBanner();
@@ -1506,6 +1822,7 @@ function mountEditor(root, bridge) {
     root.querySelectorAll('[data-edge-mode]').forEach((button) => button.addEventListener('click', () => setEdgeMode(button.dataset.edgeMode)));
     root.querySelectorAll('[data-communication-direction]').forEach((button) => button.addEventListener('click', () => setCommunicationDirection(button.dataset.communicationDirection)));
     els.addNodeButton.addEventListener('click', () => createAgent());
+    els.addLunaButton.addEventListener('click', createLuna);
     els.emptyAddButton.addEventListener('click', () => createAgent());
     els.loadDemoButton.addEventListener('click', () => loadDemo());
     els.resetButton.addEventListener('click', () => resetPrototype());
@@ -1518,6 +1835,22 @@ function mountEditor(root, bridge) {
     els.stopButton.addEventListener('click', () => stopRuntime());
     els.deleteSelectionButton.addEventListener('click', deleteSelection);
     els.deleteEdgeButton.addEventListener('click', deleteSelection);
+    els.nodeActivateButton.addEventListener('click', () => nodeControl('activate'));
+    els.nodeFinishButton.addEventListener('click', () => nodeControl('finish'));
+    els.nodeInterruptButton.addEventListener('click', () => nodeControl('interrupt'));
+    els.lunaContinueButton.addEventListener('click', () => selectLuna(els.lunaArchiveSelect.value));
+    els.lunaNewChatButton.addEventListener('click', () => selectLuna(null));
+    els.lunaArchiveSelect.addEventListener('change', () => {
+      const luna = state.selection?.type === 'luna' && getLuna(state.selection.id);
+      if (luna) renderLunaFacts(luna);
+    });
+    els.lunaTaskInput.addEventListener('input', () => refreshRuntimeInspector());
+    els.lunaSendButton.addEventListener('click', () => { void sendLuna(); });
+    els.lunaNameInput.addEventListener('input', () => {
+      if (isEditingLocked() || state.selection?.type !== 'luna') return;
+      const luna = getLuna(state.selection.id);
+      if (luna) { luna.displayName = els.lunaNameInput.value; markDefinitionDirty(); renderNodes(); }
+    });
     els.openChatButton.addEventListener('click', () => {
       const binding = state.selection?.type === 'node' && state.runtime.bindings[state.selection.id];
       if (!binding?.sessionId) return;

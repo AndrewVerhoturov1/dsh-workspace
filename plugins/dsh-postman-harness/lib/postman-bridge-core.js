@@ -37,7 +37,8 @@ export const POSTMAN_LEADER_PRESET_ID = 'postman-leader'
 export const POSTMAN_PTC_LEADER_PRESET_ID = 'postman-leader-ptc'
 export const POSTMAN_NODES_LEADER_PRESET_ID = 'postman-leader-ptc-nodes'
 export const POSTMAN_PTC_TOOL_NAME = 'ptc_execute'
-export const POSTMAN_NODES_TOOL_NAMES = Object.freeze(['nodes_team_message', 'nodes_team_assign_task', 'nodes_team_complete_task'])
+export const POSTMAN_NODES_TOOL_NAMES = Object.freeze(['nodes_team_message', 'nodes_team_assign_task', 'nodes_team_complete_task', 'nodes_team_activate', 'nodes_team_deactivate', 'nodes_team_snapshot'])
+export const POSTMAN_NODES_LEADER_TOOL_NAMES = Object.freeze(['nodes_team_luna_select', 'nodes_team_luna_send'])
 export const POSTMAN_LEADER_TOOL_ALLOWLIST = Object.freeze([
   'ask_user_question',
   'todo_write',
@@ -86,11 +87,12 @@ export function postmanPtcDirectCallGuard(exec, lookupAgent, ownsPtcWorker = () 
     ((isTopLevelPostmanPtcLeader(exec.agent) && POSTMAN_PTC_ONLY_LEADER_TOOLS.includes(exec.name)) ||
       (ownsPtcWorker(exec.agent) && (POSTMAN_SOL_PTC_TOOL_NAMES.includes(exec.name) ||
         isTopLevelPostmanNodesLeader(lookupAgent(exec.agent.session.header.parentSession)) && POSTMAN_NODES_TOOL_NAMES.includes(exec.name))) ||
-      (isTopLevelPostmanNodesLeader(exec.agent) && POSTMAN_NODES_TOOL_NAMES.includes(exec.name)))
+      (isTopLevelPostmanNodesLeader(exec.agent) && [...POSTMAN_NODES_TOOL_NAMES, ...POSTMAN_NODES_LEADER_TOOL_NAMES].includes(exec.name)))
     ? 'POSTMAN_PTC_DIRECT_CALL_REJECTED: use ptc_execute' : undefined
 }
 
 export const POSTMAN_LEADER_ONLY_TOOL_NAMES = Object.freeze([
+  ...POSTMAN_NODES_LEADER_TOOL_NAMES,
   POSTMAN_INPUT_FILES_TOOL_NAME,
   POSTMAN_BRIDGE_TOOL_NAME,
   POSTMAN_BRIDGE_STATUS_TOOL_NAME,
@@ -178,7 +180,7 @@ export function postmanBridgeCallerAllowed(agent) {
 
 export function postmanBridgeRestrictionForAgent(agent, ownsPtcWorker = () => false, roleOf = () => null, isNodesChild = () => false) {
   if (isTopLevelPostmanNodesLeader(agent)) {
-    return { allow: [...POSTMAN_LEADER_TOOL_ALLOWLIST, ...POSTMAN_NODES_TOOL_NAMES, POSTMAN_PTC_TOOL_NAME] }
+    return { allow: [...POSTMAN_LEADER_TOOL_ALLOWLIST, ...POSTMAN_NODES_TOOL_NAMES, ...POSTMAN_NODES_LEADER_TOOL_NAMES, POSTMAN_PTC_TOOL_NAME] }
   }
   if (isTopLevelPostmanPtcLeader(agent)) {
     return { allow: [...POSTMAN_LEADER_TOOL_ALLOWLIST, POSTMAN_PTC_TOOL_NAME] }

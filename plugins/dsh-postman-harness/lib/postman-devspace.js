@@ -156,10 +156,13 @@ export function readDevspaceObservation(binding) {
   }
   const result = read(join(binding.channel, 'result.json'))
   const receipt = read(join(binding.channel, 'web', 'workers', binding.requestId + '.json'))
-  const candidate = result?.conversationRef ?? receipt?.conversationUrl ?? binding.conversationUrl
+  const observed = result?.conversationRef ?? receipt?.conversationUrl
+  const candidate = observed ?? binding.conversationUrl
   const conversationRef = typeof candidate === 'string' && /^https:\/\/chatgpt\.com\/c\/[a-zA-Z0-9-]+$/.test(candidate)
     ? candidate : null
-  return { ...(result ?? {}), conversationRef }
+  // An input continuation URL is not proof that this new job opened/sent it.
+  const conversationObserved = typeof observed === 'string' && observed === conversationRef
+  return { ...(result ?? {}), conversationRef, conversationObserved }
 }
 
 function existsReport(path) { try { return lstatSync(path).isFile() } catch { return false } }

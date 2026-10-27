@@ -39,7 +39,7 @@ function authorized(exec, ctx) {
   return postmanBridgeCallerAllowed(agent) && ctx.agents.get(agent.id) === agent
 }
 
-export function createPostmanBridgeTool(ctx, jobs, contexts) {
+export function createPostmanBridgeTool(ctx, jobs, contexts, nodesService = () => null) {
   return defineTool({
     name: POSTMAN_BRIDGE_TOOL_NAME,
     description: 'Universal @PostmanDevspace is the default ChatGPT executor, with up to three independent persistent Luna/chat lanes per Leader. Legacy @Postman/Ask/Image remain available. Accepted is not completed; use POSTMAN_BRIDGE_READY then exact postman_bridge_status.',
@@ -64,6 +64,12 @@ export function createPostmanBridgeTool(ctx, jobs, contexts) {
       if (parsed.transportKind === 'devspace' && (parsed.mode !== 'fresh' ||
           args.devspace_mode !== undefined && !['READ_ONLY', 'WRITE_TEST', 'WRITE_ISOLATED'].includes(args.devspace_mode)))
         return { status: 'POSTMAN_BRIDGE_MESSAGE_REJECTED', diagnostic: 'POSTMAN_DEVSPACE_STAGE1_SCOPE' }
+      if (isTopLevelPostmanNodesLeader(exec.agent) && parsed.transportKind === 'devspace') {
+        const run = nodesService()?.runForAgent(exec.agent)
+        if (run?.status !== 'RUNNING' || !args.lane_id ||
+            !Object.values(run.lunaSelections ?? {}).includes(args.lane_id))
+          return { status: 'NODES_LUNA_EXACT_LANE_REQUIRED' }
+      }
       if (parsed.transportKind !== 'devspace' &&
           (args.image_mode !== undefined || args.devspace_mode !== undefined || args.lane_id !== undefined ||
            args.workspace_root !== undefined || args.workspace_access !== undefined ||
@@ -234,6 +240,72 @@ export function createPostmanChildNotifyTool(ctx, contexts, worker) {
   })
 }
 
+// Host-owned Nodes Luna adapter: one archive proof and one exact Bridge Send
+// route for both agent tools and UI RPC. It never chooses a destination.
+export function createNodesLunaNativeBridge(ctx, contexts, jobs, bridgeTool) {
+  return {
+    lunaSnapshot: (parent, laneIds) => jobs.nodesLunaSnapshot(parent, laneIds),
+    async reserveLunas(parent, laneIds, archive = null, previousLaneId = null) {
+      if (!isTopLevelPostmanNodesLeader(parent) || ctx.agents.get(parent.id) !== parent ||
+          !Array.isArray(laneIds) || !laneIds.length || laneIds.length > 3 ||
+          laneIds.some(id => typeof id !== 'string' || !/^nodes:[^:]+:[^:]+(?::[^:]+)?$/.test(id)) ||
+          previousLaneId && (laneIds.length !== 1 ||
+            previousLaneId.split(':').slice(0, 3).join(':') !== laneIds[0].split(':').slice(0, 3).join(':')))
+        return { status: 'NODES_LUNA_OWNER_REJECTED' }
+      return jobs.withAdmission(parent.id, async () => {
+      let archiveSource = null
+      if (archive) {
+        const { id, sourceLeaderSessionId, sourceChildSessionId, sourceLaneId, requestId, conversationRef } = archive
+        if (!id || !sourceLeaderSessionId || !sourceChildSessionId || !requestId ||
+            !sourceLaneId?.startsWith('nodes:') || !/^https:\/\/chatgpt\.com\/c\/[a-zA-Z0-9-]+$/.test(conversationRef) ||
+            laneIds.length !== 1 || laneIds[0].split(':')[2] !== sourceLaneId.split(':')[2])
+          return { status: 'NODES_LUNA_ARCHIVE_UNPROVEN' }
+        const proven = jobs.nodesLunaSnapshot(sourceLeaderSessionId, [sourceLaneId])?.[0]?.conversations?.find(a =>
+          a.id === id && a.sourceLeaderSessionId === sourceLeaderSessionId &&
+          a.sourceChildSessionId === sourceChildSessionId && a.sourceLaneId === sourceLaneId &&
+          a.requestId === requestId && a.conversationRef === conversationRef)
+        if (!proven) return { status: 'NODES_LUNA_ARCHIVE_UNPROVEN' }
+        archiveSource = { bridgeJobId: id, sourceLeaderSessionId, sourceChildSessionId,
+          sourceLaneId, requestId, conversationRef }
+      }
+      if (previousLaneId) {
+        const current = jobs.nodesLunaSnapshot(parent, [previousLaneId])?.[0]
+        if (current?.activeJobId || ['QUEUED', 'WORKING'].includes(current?.status))
+          return { status: 'NODES_LUNA_BUSY' }
+      }
+      await contexts.ensure?.(parent)
+      try {
+        await contexts.changeRecord(parent.id, row => {
+          const lanes = { ...row.devspaceLanes }
+          if (previousLaneId && (!lanes[previousLaneId] || lanes[previousLaneId].state === 'closed'))
+            throw Error('NODES_LUNA_PREVIOUS_CHANGED')
+          if (previousLaneId && jobs.list(parent).operations.some(op =>
+            op.countsAgainstLimit && op.laneId?.split(':').slice(0, 3).join(':') ===
+              previousLaneId.split(':').slice(0, 3).join(':')))
+            throw Error('NODES_LUNA_BUSY')
+          for (const laneId of laneIds) {
+            if (Object.hasOwn(lanes, laneId)) throw Error('NODES_LUNA_LANE_EXISTS')
+            lanes[laneId] = { state: 'reserved', activeBridgeJobId: null,
+              requestIds: [], conversationRef: archiveSource?.conversationRef ?? null,
+              ...(archiveSource ? { archiveSource } : {}) }
+          }
+          if (previousLaneId) lanes[previousLaneId] = { ...lanes[previousLaneId], state: 'closed' }
+          return { ...row, devspaceLanes: lanes }
+        })
+        return { status: 'NODES_LUNA_RESERVED' }
+      } catch (error) { return { status: error?.message === 'NODES_LUNA_BUSY'
+        ? 'NODES_LUNA_BUSY' : 'NODES_LUNA_RESERVATION_FAILED' } }
+      })
+    },
+    sendLuna(parent, laneId, args, signal = new AbortController().signal) {
+      if (!isTopLevelPostmanNodesLeader(parent) || ctx.agents.get(parent.id) !== parent ||
+          typeof laneId !== 'string' || !laneId.startsWith('nodes:') || !bridgeTool)
+        return { status: 'NODES_LUNA_OWNER_REJECTED' }
+      return bridgeTool.execute({ ...args, lane_id: laneId }, { agent: parent, signal })
+    },
+  }
+}
+
 export function installPostmanLeaderBoundary(agent) {
   const leader = isTopLevelPostmanSupervisor(agent)
   const restriction = postmanBridgeRestrictionForAgent(agent)
@@ -281,13 +353,17 @@ export async function apply(ctx, config = {}) {
     onBindingChange: refreshWorker, localDevelopment: config.localDevelopment === true,
     fastBudget: config.fastBudget, nodesService: () => currentNodesService,
   })
-  ctx.provide('postmanNativeNodes', { start: worker.startNodesTeam, deliverMessage: worker.deliverNodesMessage })
+  const jobs = createPostmanBridgeJobs(ctx, coordinator, grants, postmanTaskContexts, worker,
+    undefined, () => currentNodesService)
+  const bridgeTool = createPostmanBridgeTool(ctx, jobs, postmanTaskContexts, () => currentNodesService)
+  ctx.provide('postmanNativeNodes', { start: worker.startNodesTeam, nodeAction: worker.nativeNodeAction,
+    deliverMessage: worker.deliverNodesMessage,
+    ...createNodesLunaNativeBridge(ctx, postmanTaskContexts, jobs, bridgeTool) })
   // Workspace policy asks the same exact current Host role predicate used by PTC.
   ctx.on('postman/workspace-role', agent => worker.roleOf(agent))
   const stopContextWatch = contexts.onContextChange(id => {
     worker.refreshLeader(id)
   })
-  const jobs = createPostmanBridgeJobs(ctx, coordinator, grants, postmanTaskContexts, worker)
   const ownsPtcWorker = agent => worker.roleOf(agent) === 'sol' && worker.ownsLiveWorker(agent) && Boolean(worker.ptcContextOf(agent))
   ptc = createPtcAdapter(ctx, { authorize: isTopLevelPostmanPtcLeader, workerContextOf: worker.ptcContextOf,
     readWait: agent => {
@@ -315,7 +391,7 @@ export async function apply(ctx, config = {}) {
   ctx.tools.register(ptc.tool)
   ctx.tools.register(createPostmanInputFilesTool(ctx, contexts, { currentAttachments,
     resolveAttachment: (ref, signal) => ctx.attachments.readImage(ref, signal) }))
-  ctx.tools.register(createPostmanBridgeTool(ctx, jobs, postmanTaskContexts))
+  ctx.tools.register(bridgeTool)
   ctx.tools.register(createPostmanBridgeStatusTool(ctx, jobs))
   ctx.tools.register(createPostmanBridgeListTool(ctx, jobs))
   ctx.tools.register(createPostmanBridgeStopTool(ctx, jobs))

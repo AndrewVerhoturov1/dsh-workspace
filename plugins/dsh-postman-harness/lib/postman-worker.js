@@ -1,5 +1,6 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { Inbox } from '@deepseek-ai/dsh-agent'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { applyChildComposition, foldSubagentDescriptor } from '@deepseek-ai/dsh-subagent'
 import { scopeParentOf } from '@deepseek-ai/dsh-scope'
 import { randomUUID } from 'node:crypto'
@@ -426,14 +427,18 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     // Reserve an exact child identity durably before the first DSH side effect.
     const admission = await enqueue(group, async () => {
       if (!authorized(parent)) return { status: 'POSTMAN_WORKER_CALLER_REJECTED' }
-      if (args.createNew !== true && count(bindings(parent, group)))
-        return { selected: select(parent, undefined, group, workerType) }
+      if (args.createNew !== true && count(bindings(parent, group))) {
+        if (!nodesOwner(parent)) return { selected: select(parent, undefined, group, workerType) }
+        const exact = Object.values(bindings(parent, group)).find(b => b.nodesNodeId === args.nodeId && workerTypeOf(b) === workerType)
+        if (exact) return { selected: select(parent, exact.id, group, workerType) }
+      }
       if (count(bindings(parent, group)) >= limit) return { status: limitStatus }
       try {
         if (nodesOwner(parent)) {
           const service = nativeNodesService()
           if (!service) return { status: 'NODES_SERVICE_UNAVAILABLE' }
-          selectedNode = service.nodeForNativeWorker(parent, workerType, bindings(parent, group), args.nodesBootstrap === true)
+          if (typeof args.nodeId !== 'string' || !args.nodeId) return { status: 'NODES_NODE_ID_REQUIRED' }
+          selectedNode = service.nodeForNativeWorker(parent, workerType, bindings(parent, group), args.nodesIdle === true, args.nodeId)
           if (selectedNode.status) return { status: selectedNode.status }
         }
         if (durable) await contexts.changeRecord(parent.id, row => {
@@ -472,12 +477,17 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     let readyBinding
     const onAbort = () => bindingChanged(reservedId)
     if (slot.closed || !authorized(parent) || !exactIntent())
-      return { status: 'POSTMAN_WORKER_BINDING_UNCERTAIN', workerSessionId: reservedId }
+      return { status: 'POSTMAN_WORKER_BINDING_UNCERTAIN', workerSessionId: reservedId,
+        diagnostic: slot.closed ? 'NATIVE_SLOT_CLOSED' : !authorized(parent) ?
+          ctx.agents.get(parent.id) !== parent ? 'NATIVE_PARENT_NOT_RESIDENT' :
+          disposedParents.has(parent) ? 'NATIVE_PARENT_REVOKED' :
+          roleOf(parent) !== 'sol' && !isTopLevelPostmanSupervisor(parent) ? 'NATIVE_PARENT_ROLE_LOST' : 'NATIVE_PARENT_SETTLED'
+          : 'NATIVE_INTENT_CHANGED' }
     try {
       exec.signal.addEventListener('abort', onAbort, { once: true })
       slot.parent = parent
       slot.ptcAdmission = { id: assignment.id, parent, signal: exec.signal }
-      if (selectedNode) await nativeNodesService().nativeChildAccepted(parent, reservedId, selectedNode.nodeId, selectedNode.runId)
+      if (selectedNode) await nativeNodesService().nativeChildAccepted(parent, reservedId, selectedNode.nodeId, selectedNode.runId, args.nodesIdle === true)
       const accepted = await ctx.subagents.startContinuable({
         ...buildPostmanWorkerStartRequest(parent, task.text, exec.signal, postmanWorkerDeniedTools(ctx.tools, workerType, scopeParentOf(parent)), label, workerType, selectedNode?.node),
         childId: reservedId,
@@ -500,7 +510,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
       if (slot.closed || !authorized(parent) ||
           (durable && rowOf(parent.id)?.workers?.[reservedId]?.lifecycle?.admissions?.[0]?.id !== assignment.id))
         throw new Error('POSTMAN_WORKER_START_STALE')
-      if (selectedNode) await nativeNodesService().nativeChildAccepted(parent, reservedId, selectedNode.nodeId, selectedNode.runId)
+      if (selectedNode) await nativeNodesService().nativeChildAccepted(parent, reservedId, selectedNode.nodeId, selectedNode.runId, args.nodesIdle === true)
       slot.verified = true
       slot.parent = parent
       slot.workerAgent = liveWorker(reservedId) ?? null
@@ -540,6 +550,7 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     createNew: { type: 'boolean', description: 'Create a distinct Worker; never follow up an existing one.' },
     workerSessionId: { type: 'string', description: 'Exact existing Worker session for an addressed task or artifact grant.' },
     label: { type: 'string', description: 'Display name, not an authority or lookup key.' },
+    nodeId: { type: 'string', description: 'Exact NodesAgent child nodeId (required for a new native child).' },
     artifactRequestId: { type: 'string', description: 'Separately trusted artifact REQ.' },
     cwd: { type: 'string', description: 'Optional absolute working directory; defaults to the current assignment or parent directory. This is a path base, not an access fence.' },
     hardBudget: { type: 'number', description: 'FAST assignment hard model-request budget: integer 8..100, default 60 for substantial work; smaller values for obviously short bounded assignments. Host computes softLimit=floor(0.8*hardBudget); each assignment is independent.' },
@@ -562,17 +573,29 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
         if ((args.createNew !== undefined && typeof args.createNew !== 'boolean') ||
             (args.workerSessionId !== undefined && (typeof args.workerSessionId !== 'string' || !args.workerSessionId)) ||
             (args.label !== undefined && (typeof args.label !== 'string' || !args.label.trim() || args.label.length > 120)) ||
+            (args.nodeId !== undefined && (typeof args.nodeId !== 'string' || !args.nodeId)) ||
             (args.artifactRequestId !== undefined && typeof args.artifactRequestId !== 'string') ||
             (args.createNew === true && args.workerSessionId !== undefined))
           return { status: 'POSTMAN_WORKER_ARGUMENTS_INVALID' }
         return admitted(parent, async () => {
           const group = groupFor(parent)
           if (args.createNew === true) return create(parent, group, args, exec, workerType)
-          const chosen = await enqueue(group, () => select(parent, args.workerSessionId, group, workerType))
+          if (nodesOwner(parent) && !args.nodeId && !args.workerSessionId)
+            return { status: 'NODES_NODE_ID_REQUIRED' }
+          const chosen = await enqueue(group, () => {
+            if (nodesOwner(parent) && args.nodeId && !args.workerSessionId) {
+              const exact = Object.values(bindings(parent, group)).find(b =>
+                b.nodesNodeId === args.nodeId && workerTypeOf(b) === workerType)
+              return exact ? select(parent, exact.id, group, workerType) : { status: 'NODES_NODE_ABSENT' }
+            }
+            return select(parent, args.workerSessionId, group, workerType)
+          })
           if (!chosen.binding) {
             if (args.workerSessionId !== undefined || chosen.status === 'POSTMAN_WORKER_TARGET_REQUIRED') return chosen
             return create(parent, group, args, exec, workerType)
           }
+          if (nodesOwner(parent) && args.nodeId && chosen.binding.nodesNodeId !== args.nodeId)
+            return { status: 'NODES_NODE_ID_MISMATCH' }
           const slot = slotFor(group, chosen.binding)
           return enqueue(slot, () => deliver(parent, slot, args, exec, false, workerType))
         })
@@ -1267,41 +1290,217 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
           current.lifecycle?.stop || !nativeNodesService()?.runForAgent(sender) ||
           nativeNodesService().getRun(runId)?.status !== 'RUNNING')
         throw Error('NODES_NATIVE_DELIVERY_REVOKED')
+      const source = { kind: 'coordinator', form: 'relay', senderSessionId: sender.id }
+      const resumed = resumedNodes.get(targetSessionId)
+      if (resumed) {
+        // An explicitly resumed, idle node is owned by this Host handle,
+        // not by the subagent manager's Activation table. Native followup
+        // would try to cold-resume that already-live exact Session again.
+        const recipient = ctx.agents.get(targetSessionId)
+        if (resumed.agent !== recipient || recipient?.session?.header?.parentSession !== parent.id)
+          throw Error('NODES_NATIVE_RECOVERY_UNPROVEN')
+        signal?.throwIfAborted()
+        const message = createUserMessage({ content: [{ type: 'text', text }], source })
+        recipient.followup(message)
+        return message.id
+      }
       return ctx.subagents.followup(parent, targetSessionId,
-        [{ type: 'text', text }], { signal, source: { kind: 'coordinator', form: 'relay', senderSessionId: sender.id } })
+        [{ type: 'text', text }], { signal, source })
     })
     } finally { await hostHandle?.dispose() }
   }
-  async function startNodesTeam(leader, runId, signal = new AbortController().signal) {
-    if (!isTopLevelPostmanNodesLeader(leader) || !authorized(leader))
-      return { status: 'NODES_NATIVE_CALLER_REJECTED' }
-    const service = nativeNodesService()
-    const run = service?.getRun(runId)
-    if (!run || run.rootSessionId !== leader.id || run.status !== 'RUNNING')
-      return { status: 'NODES_NATIVE_RUN_REJECTED' }
-    const groups = [
-      { owner: leader, types: ['secretary', 'luna', 'luna', 'sol'] },
-    ]
-    for (let phase = 0; phase < groups.length; phase++) {
-      const { owner, types } = groups[phase]
-      if (!owner || !authorized(owner)) return { status: 'NODES_NATIVE_OWNER_UNAVAILABLE' }
-      for (const type of types) {
-        const next = service.nodeForNativeWorker(owner, type, bindings(owner, groupFor(owner)), true)
-        if (next.status === 'NODES_NO_SLOT_AVAILABLE') continue
-        if (next.status) return { status: next.status }
-        const result = await admitted(owner, () => create(owner, groupFor(owner), {
-          task: 'Initialize your native Postman role for this TeamRun. Keep your role restrictions. Await a new assignment; do not start independent work.',
-          label: next.node.displayName, createNew: true, nodesBootstrap: true,
-        }, { agent: owner, signal }, type))
-        if (result.status !== 'POSTMAN_WORKER_TASK_ACCEPTED' || result.created !== true)
-          return { status: result.status || 'NODES_NATIVE_START_FAILED', diagnostic: result.diagnostic }
-        if (type === 'sol') {
-          const sol = liveWorker(result.workerSessionId)
-          if (!sol) return { status: 'NODES_NATIVE_SOL_NOT_RESIDENT' }
-          groups.push({ owner: sol, types: ['luna', 'luna'] })
+  // Node actions reuse the durable native child and its original parent. No
+  // closeContinuableChild is used here: suspension must preserve history.
+  const resumedNodes = new Map()
+  async function nativeNodeAction(requester, runId, nodeId, action, signal = new AbortController().signal, user = false) {
+    const service = nativeNodesService(), run = service?.getRun(runId)
+    const leader = run && ctx.agents.get(run.rootSessionId)
+    const node = run?.definition.agents.find(a => a.id === nodeId)
+    if (!service || !run || run.status !== 'RUNNING' || !leader ||
+        !isTopLevelPostmanNodesLeader(leader) || !node || node.slot === 'entry' ||
+        !['activate', 'finish', 'interrupt'].includes(action))
+      return { status: 'NODES_NATIVE_ACTION_REJECTED' }
+    if (user ? requester !== leader : !authorized(requester))
+      return { status: 'NODES_NATIVE_OWNER_REJECTED' }
+    const owner = run.definition.agents.find(a => a.slot === (node.slot.startsWith('sol-worker') ? 'sol' : 'entry'))
+    if (!owner) return { status: 'NODES_NATIVE_PARENT_UNAVAILABLE' }
+    if (!user && run.bindings[owner.id]?.sessionId !== requester.id)
+      return { status: 'NODES_NATIVE_OWNER_REJECTED' }
+    return service.locked('node-action:' + runId + ':' + nodeId, async () => {
+      let fresh = service.getRun(runId)
+      const bound = fresh?.bindings[nodeId]
+      if (fresh?.status !== 'RUNNING') return { status: 'NODES_RUN_NOT_RUNNING' }
+      let parent = ctx.agents.get(fresh.bindings[owner.id]?.sessionId), borrowed = null
+      // A Sol spawned by the native continuable owner can settle between two
+      // asynchronous child-admission stages. Release its idle Activation, then
+      // hold an explicit Host-owned resume handle through the exact operation.
+      if (parent && owner.slot === 'sol' && user) {
+        const descendants = fresh.definition.agents.filter(a => a.slot.startsWith('sol-worker') &&
+          fresh.bindings[a.id] && ctx.agents.get(fresh.bindings[a.id].sessionId))
+        if (parent.status !== 'idle' || parent.inbox?.hasPending)
+          return { status: 'NODES_NATIVE_PARENT_BUSY', nodeId }
+        if (!descendants.length) {
+          await ctx.subagents.drainContinuableChildren(leader, [parent.id])
+          if (ctx.agents.get(parent.id)) return { status: 'NODES_NATIVE_PARENT_RELEASE_UNPROVEN', nodeId }
+          parent = null
         }
       }
-    }
+      // A selected Sol-owned child must not silently activate its potential
+      // parent. Activating Sol is a separate explicit owner/user action.
+      if (!parent && owner.slot === 'sol' && !fresh.bindings[owner.id])
+        return { status: 'NODES_NATIVE_PARENT_UNAVAILABLE', nodeId }
+      if (!parent && owner.slot === 'sol' && fresh.bindings[owner.id]) {
+        // Resume the exact cold parent only to perform this addressed child operation.
+        const rootBinding = fresh.bindings[owner.id]
+        const saved = await history(rootBinding.sessionId, leader.id, signal)
+        const descriptor = saved && foldSubagentDescriptor(saved.session.events)
+        if (!saved || descriptor?.mode !== 'continuable' ||
+            saved.session.events.some(event => event.type === 'subagent/closed'))
+          return { status: 'NODES_NATIVE_PARENT_UNAVAILABLE' }
+        try {
+          borrowed = await ctx.agents.resume({ resumeSessionId: rootBinding.sessionId,
+            agentOptions: { ...POSTMAN_SOL_WORKER_AGENT_OPTIONS }, signal,
+            setup: childCtx => applyChildComposition(childCtx, leader, descriptor) })
+          parent = borrowed.agent
+        } catch (error) {
+          await borrowed?.dispose()
+          return { status: 'NODES_NATIVE_PARENT_UNAVAILABLE', diagnostic: diagnostic(error) }
+        }
+      }
+      try {
+        if (!parent || !authorized(parent) ||
+            fresh.bindings[owner.id]?.sessionId !== parent.id ||
+            (owner.slot === 'sol' && parent.session.header.parentSession !== leader.id))
+          return { status: 'NODES_NATIVE_PARENT_UNAVAILABLE' }
+        const ownerBindings = bindings(parent, groupFor(parent))
+        const workerType = node.slot === 'secretary' ? 'secretary' : node.slot === 'sol' ? 'sol' : 'luna'
+        if (action === 'activate') {
+          if (bound) {
+            if (bound.parentSessionId !== parent.id) return { status: 'NODES_BINDING_UNCERTAIN' }
+            const binding = ownerBindings[bound.sessionId]
+            if (!binding || binding.nodesRunId !== runId || binding.nodesNodeId !== nodeId ||
+                binding.lifecycle?.stop || !await childExists(parent, bound.sessionId, signal))
+              return { status: 'NODES_BINDING_UNCERTAIN' }
+            const live = liveWorker(bound.sessionId)
+            if (live) {
+              if (live.session.header.parentSession !== parent.id) return { status: 'NODES_BINDING_UNCERTAIN' }
+              await service.nativeChildState(runId, nodeId, bound.sessionId, 'READY')
+              return { status: 'NODES_NODE_ACTIVE', nodeId, workerSessionId: bound.sessionId, reused: true }
+            }
+            const saved = await history(bound.sessionId, parent.id, signal)
+            const descriptor = saved && foldSubagentDescriptor(saved.session.events)
+            if (!saved || descriptor?.mode !== 'continuable' ||
+                saved.session.events.some(event => event.type === 'subagent/closed'))
+              return { status: 'NODES_SESSION_RECOVERY_UNPROVEN' }
+            try {
+              const handle = await ctx.agents.resume({ resumeSessionId: bound.sessionId,
+                agentOptions: { provider: descriptor.agentProvider, model: descriptor.agentModel },
+                signal, setup: childCtx => applyChildComposition(childCtx, parent, descriptor) })
+              if (handle.agent.id !== bound.sessionId || ctx.agents.get(bound.sessionId) !== handle.agent ||
+                  handle.agent.session.header.parentSession !== parent.id)
+                throw Error('NODES_SESSION_IDENTITY_CHANGED')
+              resumedNodes.set(bound.sessionId, handle)
+              await service.nativeChildState(runId, nodeId, bound.sessionId,
+                ctx.agents.get(bound.sessionId) ? 'READY' : 'SUSPENDED')
+              return { status: 'NODES_NODE_ACTIVE', nodeId, workerSessionId: bound.sessionId, reused: true }
+            } catch (error) {
+              return { status: 'NODES_SESSION_RECOVERY_FAILED', diagnostic: diagnostic(error) }
+            }
+          }
+          const next = service.nodeForNativeWorker(parent, workerType, ownerBindings, true, nodeId)
+          if (next.status) return { status: next.status }
+          const accepted = await admitted(parent, () => create(parent, groupFor(parent), {
+            task: 'Initialize your native Postman role. Await a direct assignment; do not invoke the model.',
+            label: node.displayName, createNew: true, nodesIdle: true, nodeId,
+          }, { agent: parent, signal }, workerType))
+          if (accepted.status !== 'POSTMAN_WORKER_TASK_ACCEPTED' || !accepted.workerSessionId)
+            return { status: accepted.status || 'NODES_NATIVE_ACTIVATION_FAILED', diagnostic: accepted.diagnostic }
+          await ctx.agents.get(accepted.workerSessionId)?.whenIdle()
+          await service.nativeChildState(runId, nodeId, accepted.workerSessionId,
+            ctx.agents.get(accepted.workerSessionId) ? 'READY' : 'SUSPENDED')
+          return { status: 'NODES_NODE_ACTIVE', nodeId, workerSessionId: accepted.workerSessionId, reused: false }
+        }
+        if (!bound) return { status: 'NODES_NODE_POTENTIAL', nodeId }
+        if (bound.parentSessionId !== parent.id) return { status: 'NODES_BINDING_UNCERTAIN' }
+        const binding = ownerBindings[bound.sessionId]
+        if (!binding || binding.nodesRunId !== runId || binding.nodesNodeId !== nodeId ||
+            binding.lifecycle?.stop || !await childExists(parent, bound.sessionId, signal))
+          return { status: 'NODES_BINDING_UNCERTAIN' }
+        let cascadeHandle = null
+        try {
+          if (node.slot === 'sol') {
+            const children = fresh.definition.agents.filter(a => a.slot.startsWith('sol-worker') && fresh.bindings[a.id])
+            for (const descendant of children) {
+              // After one descendant settles the SDK may naturally release
+              // its idle Sol parent. Acquire the same persisted Sol again for
+              // the next child, never a new Session or a new model assignment.
+              let solOwner = ctx.agents.get(bound.sessionId)
+              if (!solOwner && !cascadeHandle) {
+                const saved = await history(bound.sessionId, parent.id, signal)
+                const descriptor = saved && foldSubagentDescriptor(saved.session.events)
+                if (!saved || descriptor?.mode !== 'continuable' ||
+                    saved.session.events.some(event => event.type === 'subagent/closed'))
+                  return { status: 'NODES_SOL_CASCADE_UNPROVEN', nodeId }
+                cascadeHandle = await ctx.agents.resume({ resumeSessionId: bound.sessionId,
+                  agentOptions: { provider: descriptor.agentProvider, model: descriptor.agentModel }, signal,
+                  setup: childCtx => applyChildComposition(childCtx, parent, descriptor) })
+                solOwner = cascadeHandle.agent
+              }
+              if (!solOwner || solOwner.id !== bound.sessionId ||
+                  solOwner.session?.header?.parentSession !== parent.id)
+                return { status: 'NODES_SOL_CASCADE_UNPROVEN', nodeId }
+              // Cold resumes publish before the asynchronous role callback.
+              if (!authorized(solOwner)) await confirmActivation(solOwner)
+              if (!authorized(solOwner)) return { status: 'NODES_SOL_CASCADE_UNPROVEN', nodeId }
+              const result = await nativeNodeAction(solOwner, runId, descendant.id, action, signal, false)
+              if (!['NODES_NODE_SUSPENDED', 'NODES_NODE_ALREADY_COLD'].includes(result.status))
+                return { status: 'NODES_SOL_CASCADE_BLOCKED', childNodeId: descendant.id, result }
+            }
+          }
+        } finally { await cascadeHandle?.dispose() }
+        const child = liveWorker(bound.sessionId)
+        if (!child) {
+          if (bound.state === 'SUSPENDED') return { status: 'NODES_NODE_ALREADY_COLD', nodeId, workerSessionId: bound.sessionId }
+          return { status: 'NODES_NODE_COLD_UNKNOWN', nodeId }
+        }
+        const slot = slotFor(groupFor(parent), binding)
+        return enqueue(slot, async () => {
+          if (action === 'finish' && child.status !== 'idle') await child.whenIdle()
+          const proof = await closeEvidence(parent, binding, signal)
+          if (action === 'finish' && !proof.ready)
+            return { status: 'NODES_NODE_BUSY', nodeId, reason: proof.reason }
+          if (typeof ctx.subagents.drainContinuableChildren !== 'function')
+            return { status: 'NODES_RELEASE_UNSUPPORTED', nodeId }
+          // Native SDK owns a freshly spawned child's Activation; the Host
+          // owns the explicit resume handle of a previously cold Session.
+          // Release the actual owner, without closing durable admission.
+          const resumed = resumedNodes.get(bound.sessionId)
+          if (resumed) {
+            if (resumed.agent !== child) return { status: 'NODES_RELEASE_UNPROVEN', nodeId }
+            await resumed.dispose()
+          } else {
+            await ctx.subagents.drainContinuableChildren(parent, [bound.sessionId])
+          }
+          if (ctx.agents.get(bound.sessionId))
+            return { status: 'NODES_RELEASE_UNPROVEN', nodeId }
+          resumedNodes.delete(bound.sessionId)
+          await service.nativeChildState(runId, nodeId, bound.sessionId, 'SUSPENDED')
+          return { status: 'NODES_NODE_SUSPENDED', nodeId, workerSessionId: bound.sessionId,
+            durableSessionDeleted: false }
+        })
+      } catch (error) {
+        return { status: 'NODES_NATIVE_ACTION_UNKNOWN', nodeId, diagnostic: diagnostic(error) }
+      } finally { await borrowed?.dispose() }
+    })
+  }
+  async function startNodesTeam(leader, runId) {
+    if (!isTopLevelPostmanNodesLeader(leader) || !authorized(leader))
+      return { status: 'NODES_NATIVE_CALLER_REJECTED' }
+    const run = nativeNodesService()?.getRun(runId)
+    if (!run || run.rootSessionId !== leader.id || run.status !== 'RUNNING' ||
+        Object.keys(run.bindings).length !== 1)
+      return { status: 'NODES_NATIVE_RUN_REJECTED' }
+    // The Entry Session already exists; all native children remain potential.
     return { status: 'NODES_NATIVE_READY' }
   }
   function dispose() {
@@ -1316,5 +1515,5 @@ export function createPostmanWorkerTools(ctx, grants, contexts, { onBindingChang
     leaders.clear()
   }
   return { taskTool, solTaskTool, secretaryTool, ledgerTool, freshTool, interruptTool, stopTool, listTool, compactTool, roleOf, ownerOf, appOwnerOf, ownsNotification, ownsLiveWorker, ptcContextOf, confirmActivation, releaseActivation, refreshLeader, suspendLeader,
-    contextOf, observeReport, teamSnapshot, canDeferSettlement, startNodesTeam, deliverNodesMessage, dispose }
+    contextOf, observeReport, teamSnapshot, canDeferSettlement, startNodesTeam, nativeNodeAction, deliverNodesMessage, dispose }
 }

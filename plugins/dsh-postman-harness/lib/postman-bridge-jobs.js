@@ -5,7 +5,7 @@ import { createPostmanDevspaceLanes } from './postman-devspace-lanes.js'
 import { requestDevspaceControl, readDevspaceControls, loadDevspaceChannelForOwner,
   revokeDevspaceChannel, readDevspaceEvent, devspaceTerminal, readDevspaceObservation, readDevspaceImageAction } from './postman-devspace.js'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import { buildPostmanBridgeStartRequest, isTopLevelPostmanSupervisor, POSTMAN_BRIDGE_PROVIDER,
+import { buildPostmanBridgeStartRequest, isTopLevelPostmanSupervisor, isTopLevelPostmanNodesLeader, POSTMAN_BRIDGE_PROVIDER,
   settleTrustedPostmanStatus } from './postman-bridge-core.js'
 
 function diagnostic(error) {
@@ -43,10 +43,20 @@ function snapshot(job) {
 }
 
 /** Host executes addressed commands and retains facts; the Leader chooses recovery. */
-export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, worker, direct = new DirectPostmanJobManager()) {
+export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, worker,
+  direct = new DirectPostmanJobManager(), nodesService = null) {
   if (typeof coordinator?.run !== 'function') throw new Error('POSTMAN_BRIDGE_COORDINATOR_REQUIRED')
   const jobs = new Map()
   const admissionTails = new Map()
+  function withAdmission(parentSessionId, action) {
+    const previous = admissionTails.get(parentSessionId) ?? Promise.resolve()
+    const result = previous.then(action, action)
+    const tail = result.then(() => undefined, () => undefined)
+    admissionTails.set(parentSessionId, tail)
+    void tail.then(() => { if (admissionTails.get(parentSessionId) === tail)
+      admissionTails.delete(parentSessionId) })
+    return result
+  }
   const bootstrapAgents = new WeakMap()
   const devspaceLuna = createPostmanDevspaceLanes(ctx, contexts, direct)
   const devspaceCoordinator = coordinator.fork?.() ?? coordinator
@@ -77,6 +87,11 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
       return { status: 'POSTMAN_BRIDGE_ARCHIVED' }
     job.state = 'STARTING'
     job.startedAt = new Date().toISOString()
+    if (job.transportKind === 'devspace' && contexts?.changeRecord) {
+      try { await contexts.changeRecord(job.parentSessionId, row =>
+        updateHistoricalOperation(row, job.bridgeJobId, before => ({ ...before, startedAt: job.startedAt }))) }
+      catch { /* Live Host start is still known; cold startedAt remains unproven. */ }
+    }
     let parent
     try { parent = ctx.agents.get(job.parentSessionId) }
     catch { return { status: 'POSTMAN_BRIDGE_PARENT_UNAVAILABLE' } }
@@ -210,9 +225,26 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
       const lanes = { ...(row?.devspaceLanes ?? {}),
         ...(row?.devspaceLuna && !row.devspaceLanes?.legacy ? { legacy: row.devspaceLuna } : {}) }
       if (transportKind === 'devspace') {
+        if (isTopLevelPostmanNodesLeader(parent) && nodesService) {
+          const current = nodesService()?.runForAgent(parent)
+          if (current?.status !== 'RUNNING' || !laneId ||
+              !Object.values(current.lunaSelections ?? {}).includes(laneId))
+            return { status: 'NODES_LUNA_EXACT_LANE_REQUIRED' }
+        }
+        if (!laneId && isTopLevelPostmanNodesLeader(parent) &&
+            Object.keys(lanes).some(id => id.startsWith('nodes:')))
+          return { status: 'NODES_LUNA_EXACT_LANE_REQUIRED' }
         if (laneId && !lanes[laneId]) return { status: 'POSTMAN_DEVSPACE_LANE_UNKNOWN' }
+        if (laneId && lanes[laneId].state === 'closed')
+          return { status: 'POSTMAN_DEVSPACE_LANE_CLOSED' }
         const occupied = id => running.some(job => job.transportKind === 'devspace' && job.laneId === id)
         if (laneId && occupied(laneId)) return { status: 'POSTMAN_DEVSPACE_LUNA_BUSY' }
+        if (laneId?.startsWith('nodes:')) {
+          const group = laneId.split(':').slice(0, 3).join(':')
+          if (running.some(job => job.transportKind === 'devspace' &&
+              (job.laneId === group || job.laneId?.startsWith(group + ':'))))
+            return { status: 'NODES_LUNA_BUSY' }
+        }
         const hasAddress = lane => {
           if (!lane.requestIds?.length || lane.conversationRef) return true
           return Object.entries(row?.bridgeOperations ?? {}).some(([id, op]) => {
@@ -242,16 +274,12 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
             state: 'pending', phase: 'reserved', transportKind, createdAt: job.createdAt,
             ...(laneId ? { devspace: { mode: job.devspaceMode, laneId,
               computerUse: job.computerUse, ...(job.imageMode ? { imageMode: true } : {}),
-              ...(approvedScope ? { approvedRoot: approvedScope.root, approvedAccess: approvedScope.access } : {}) } } : {}) } } }
+              ...(approvedScope ? { approvedRoot: approvedScope.root, approvedAccess: approvedScope.access } : {}),
+              ...(lane?.archiveSource ? { archiveSource: lane.archiveSource } : {}) } } : {}) } } }
       })
       return startJob(job, message)
     }
-    const previous = admissionTails.get(parent.id) ?? Promise.resolve()
-    const result = previous.then(admit, admit)
-    const tail = result.then(() => undefined, () => undefined)
-    admissionTails.set(parent.id, tail)
-    void tail.then(() => { if (admissionTails.get(parent.id) === tail) admissionTails.delete(parent.id) })
-    return result
+    return withAdmission(parent.id, admit)
   }
 
   async function registerGrant(job) {
@@ -505,6 +533,81 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     })
     return { status: 'POSTMAN_BRIDGE_LIST', limit: 3, used: operations.filter(op => op.countsAgainstLimit).length, operations }
   }
+  // Read-only projection for the optional NodesAgent communication graph.
+  // A saved URL is exposed only with exact Host operation/channel evidence.
+  function nodesLunaSnapshot(parentOrId, laneIds) {
+    // A string root ID is the internal, read-only cold-history path supplied
+    // by NodesAgent from its exact persisted TeamRun. Tool callers still need
+    // the live Supervisor identity on the ordinary parent-object route.
+    const coldId = typeof parentOrId === 'string' ? parentOrId : null
+    const parent = coldId ? { id: coldId } : parentOrId
+    if (!Array.isArray(laneIds) || (coldId
+      ? !laneIds.every(id => typeof id === 'string' && id.startsWith('nodes:'))
+      : !controlCallerAllowed(parent))) return []
+    const row = contexts?.record?.(parent.id)
+    if (coldId && row?.leaderSessionId !== coldId) return []
+    const operations = Object.assign({}, ...[...(row?.retiredTasks ?? []), row]
+      .filter(Boolean).map(task => task.bridgeOperations ?? {}))
+    const urlPattern = /^https:\/\/chatgpt\.com\/c\/[a-zA-Z0-9-]+$/
+    return laneIds.map(laneId => {
+      const lane = row?.devspaceLanes?.[laneId] ??
+        (laneId === 'legacy' ? row?.devspaceLuna : null)
+      const entries = Object.entries(operations).filter(([, op]) =>
+        op?.transportKind === 'devspace' && op.devspace?.laneId === laneId)
+      const conversations = [], observations = new Map()
+      for (const [bridgeJobId, op] of entries) {
+        if (!op.requestId || !op.childSessionId || !op.devspace?.channel) continue
+        let verified
+        try {
+          const binding = loadDevspaceChannelForOwner(op.devspace.channel, {
+            bridgeJobId, leaderSessionId: parent.id, lunaSessionId: op.childSessionId,
+            requestId: op.requestId })
+          verified = readDevspaceObservation(binding)
+          observations.set(bridgeJobId, verified)
+        } catch { continue }
+        if (!verified.conversationObserved) continue
+        const terminalUrl = op.terminal?.result?.conversationRef
+        const url = terminalUrl && terminalUrl === verified.conversationRef ? terminalUrl :
+          verified?.conversationRef
+        if (typeof url !== 'string' || !urlPattern.test(url)) continue
+        const slots = verified.transportDiagnostics?.reminderSlots ??
+          op.terminal?.result?.transportDiagnostics?.reminderSlots
+        const reminderSent = slots && typeof slots === 'object' ?
+          Object.values(slots).filter(slot => slot?.state === 'SENT_CONFIRMED').length : null
+        conversations.push({ id: bridgeJobId, conversationRef: url,
+          sourceLeaderSessionId: parent.id, sourceLaneId: laneId,
+          requestId: op.requestId, sourceChildSessionId: op.childSessionId,
+          createdAt: op.createdAt ?? null, reminderSent })
+      }
+      const active = entries.filter(([, op]) => !op.executionRevoked)
+        .map(([id]) => ownedJob(parent, id)).find(job => live(job))
+      const last = conversations.at(-1), mostRecent = entries.at(-1)
+      const currentId = active?.bridgeJobId ?? mostRecent?.[0]
+      const currentOp = currentId && operations[currentId]
+      const job = currentId && ownedJob(parent, currentId)
+      const startedAt = job?.startedAt ?? currentOp?.startedAt ?? null
+      const finishedAt = active ? null : job?.finishedAt ?? currentOp?.finishedAt ?? null
+      const end = active ? Date.now() : finishedAt ? Date.parse(finishedAt) : NaN
+      const elapsedMs = startedAt && Number.isFinite(end) && end >= Date.parse(startedAt)
+        ? end - Date.parse(startedAt) : null
+      const slots = observations.get(currentId)?.transportDiagnostics?.reminderSlots ??
+        currentOp?.terminal?.result?.transportDiagnostics?.reminderSlots
+      const reminderSent = slots && typeof slots === 'object' ?
+        Object.values(slots).filter(slot => slot?.state === 'SENT_CONFIRMED').length : null
+      const reminderState = !slots ? 'UNKNOWN' :
+        Object.values(slots).some(slot => ['PENDING', 'ATTEMPTING'].includes(slot?.state)) ? 'PENDING' :
+        Object.values(slots).some(slot => slot?.state === 'BLOCKED_UNKNOWN') ? 'UNKNOWN' : 'OBSERVED'
+      const currentRef = last?.conversationRef ?? lane?.archiveSource?.conversationRef ?? null
+      return { laneId, status: active ? active.state === 'QUEUED' ? 'QUEUED' : 'WORKING' :
+          entries.some(([, op]) => !op.executionRevoked && op.state === 'pending' && !op.terminal) ? 'UNKNOWN' :
+          lane?.state === 'closed' ? 'CLOSED' : currentRef ? 'IDLE' : 'POTENTIAL',
+        hostJobState: active?.state ?? (mostRecent?.[1]?.terminal ? 'TERMINAL' :
+          mostRecent?.[1]?.state === 'pending' ? 'UNKNOWN' : 'IDLE'),
+        activeJobId: active?.bridgeJobId ?? null, startedAt, finishedAt, elapsedMs,
+        timeBasis: 'HOST_JOB', lastRequestId: mostRecent?.[1]?.requestId ?? null,
+        conversationRef: currentRef, reminderSent, reminderState, conversations }
+    })
+  }
   function teamSnapshot(parent) {
     if (!controlCallerAllowed(parent)) return { status: 'POSTMAN_BRIDGE_CALLER_REJECTED' }
     const result = list(parent)
@@ -631,7 +734,7 @@ export function createPostmanBridgeJobs(ctx, coordinator, grants, contexts, work
     await Promise.allSettled([...jobs.values()].map(job => job.completion).concat([...admissionTails.values()]))
     jobs.clear()
   }
-  return { accept, status, list, teamSnapshot, stop, abandonAll, hasActive, hasActiveWork, dispose,
+  return { accept, status, list, teamSnapshot, nodesLunaSnapshot, withAdmission, stop, abandonAll, hasActive, hasActiveWork, dispose,
     canDeferLunaBootstrapReport, canDeferLunaBootstrapSettlement, devspaceControl, recoverDevspacePending,
     devspaceLunaClose: (parent, laneId) => devspaceLuna.close(parent, contexts?.get(parent.id), laneId),
     devspaceLunaSnapshot: parent => devspaceLuna.snapshot(parent) }

@@ -44,6 +44,9 @@
           <button type="button" class="icon-button label-button" id="addNodeButton" title="Add AgentNode">
             <span class="icon">+</span><span data-i18n="addAgent">Agent</span>
           </button>
+          <button type="button" class="icon-button label-button" id="addLunaButton" title="Add LunaBridge">
+            <span class="icon">+</span><span>LunaBridge</span>
+          </button>
           <div class="toolbar-divider"></div>
           <div class="segmented" role="group" aria-label="Edge mode">
             <button type="button" class="segment is-active" data-edge-mode="select" data-i18n="selectMode">Select</button>
@@ -224,10 +227,41 @@
               <span id="inspectorRuntimeStatus">NOT_STARTED</span>
             </div>
             <button type="button" class="button full" id="openChatButton" disabled data-i18n="openChat">Open Chat</button>
-            <small id="openChatHelp" data-i18n="openChatHelp">Available with real DSH Session bindings in a production runtime milestone.</small>
+            <small id="openChatHelp" data-i18n="openChatHelp">Available with a real DSH Session binding.</small>
+            <div class="nodes-native-actions" id="nodesNativeActions">
+              <button type="button" class="button" id="nodeActivateButton">Activate</button>
+              <button type="button" class="button" id="nodeFinishButton">Finish &amp; release</button>
+              <button type="button" class="button danger" id="nodeInterruptButton">Interrupt &amp; release</button>
+            </div>
           </div>
         </form>
 
+        <div class="luna-inspector" id="lunaInspector" hidden>
+          <div class="section-heading">LunaBridge · Postman Chat</div>
+          <label class="field"><span>Name</span><input id="lunaNameInput" type="text" maxlength="64"></label>
+          <div class="runtime-card luna-facts">
+            <div><span id="lunaRuntimeStatus">POTENTIAL</span></div>
+            <div id="lunaRuntimeStart">Host start: unconfirmed</div>
+            <div id="lunaRuntimeDuration">Duration: —</div>
+            <div id="lunaReminders">Confirmed reminders: —</div>
+            <div id="lunaReminderState">Reminder status: unknown</div>
+            <a id="lunaConversationLink" hidden target="_blank" rel="noopener noreferrer" data-i18n="lunaOpenChat">Open confirmed Postman Chat</a>
+            <div id="lunaConversationUnconfirmed">No confirmed conversation address</div>
+          </div>
+          <div class="section-heading" data-i18n="lunaArchiveTitle">Conversation archive</div>
+          <label class="field"><span data-i18n="lunaArchiveLabel">Verified previous conversations</span><select id="lunaArchiveSelect"></select></label>
+          <div class="luna-archive-detail" id="lunaArchiveDetail"></div>
+          <a id="lunaArchiveLink" hidden target="_blank" rel="noopener noreferrer" data-i18n="lunaOpenArchived">Open selected archived chat</a>
+          <div class="nodes-native-actions">
+            <button type="button" class="button" id="lunaContinueButton" data-i18n="lunaContinue">Continue selected chat</button>
+            <button type="button" class="button" id="lunaNewChatButton" data-i18n="lunaNew">Prepare new chat</button>
+          </div>
+          <p class="muted" data-i18n="lunaSelectionWarning">Selecting a conversation never redirects a current job or sends a message.</p>
+          <div class="section-heading" data-i18n="lunaSendTitle">Explicit Postman Chat task</div>
+          <label class="field"><span data-i18n="lunaTaskLabel">Task for the selected chat</span><textarea id="lunaTaskInput" rows="4" maxlength="15980" data-i18n-placeholder="lunaTaskPlaceholder" placeholder="Describe the task to send explicitly"></textarea></label>
+          <label class="field"><span data-i18n="lunaModeLabel">Execution mode</span><select id="lunaModeSelect"><option value="READ_ONLY">READ_ONLY</option><option value="WRITE_TEST">WRITE_TEST</option><option value="WRITE_ISOLATED">WRITE_ISOLATED</option></select></label>
+          <button type="button" class="button primary full" id="lunaSendButton" data-i18n="lunaSend">Send explicit task</button>
+        </div>
         <div class="edge-inspector" id="edgeInspector" hidden>
           <div class="edge-kind-badge" id="edgeKindBadge"></div>
           <div class="edge-summary" id="edgeSummary"></div>
@@ -261,7 +295,7 @@
         </div>
         <div class="runtime-panel">
           <div class="panel-title-row">
-            <h3 data-i18n="mockRuntime">Mock TeamRun</h3>
+            <h3 data-i18n="mockRuntime">TeamRun</h3>
             <span class="muted" id="runIdLabel">—</span>
           </div>
           <div class="runtime-copy" id="runtimeCopy" data-i18n="runtimeStoppedHelp">Select a native Postman Chat to run this team.</div>
