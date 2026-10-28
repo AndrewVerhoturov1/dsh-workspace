@@ -4,6 +4,7 @@ import { resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { spawnSync } from 'node:child_process'
 import { applyPostmanNativeChildCutoff } from '../../../system/patches/apply-postman-native-child-cutoff.mjs'
+import { applyHarnessSessionPerformance } from '../../../system/patches/apply-harness-session-performance.mjs'
 
 const profileRoot = resolve(fileURLToPath(new URL('..', import.meta.url)))
 const repositoryRoot = resolve(profileRoot, '../..')
@@ -62,6 +63,8 @@ const sdkAnchor = realpathSync(process.env.DSH_INSTALL_SDK ?? requireFromProfile
 const sessionIgnorableAnchors = profilePackage.dsh?.profile?.bundles?.includes('dsh-cost-panel')
   ? [sdkAnchor, requireFromProfile.resolve('dsh-cost-panel/package.json')] : []
 const nativeTargets = applyPostmanNativeChildCutoff([sdkAnchor, resolve(postmanRoot, 'package.json')], { sessionIgnorableAnchors })
+const sessionTargets = applyHarnessSessionPerformance(sdkAnchor)
+console.log('session performance patches installed: ' + sessionTargets.join(', '))
 const { SubagentRuntime } = await import(pathToFileURL(createRequire(sdkAnchor).resolve('@deepseek-ai/dsh-subagent')).href)
 for (const method of ['closeContinuableChild', 'inspectClosedContinuableChild', 'compactContinuableChild']) {
   if (typeof SubagentRuntime.prototype[method] !== 'function') throw new Error('Native child cutoff API unavailable: ' + method)

@@ -1,0 +1,222 @@
+diff --git a/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js b/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js
+--- a/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js
++++ b/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js
+@@ -1061,34 +1061,41 @@
+ 		signal?.throwIfAborted();
+ 		await this.ensureRootEncoding();
+ 		signal?.throwIfAborted();
+ 		const artifacts = [];
+-		const ids = /* @__PURE__ */ new Set();
++		const ids = new Set();
+ 		for (const project of await this.listProjectDirs(signal)) {
+-			signal?.throwIfAborted();
+-			for (const dir of await this.listSessionDirs(project, signal)) {
+-				signal?.throwIfAborted();
+-				const opposite = join(dir, `session${logSuffix(this.oppositeCompression())}`);
+-				const oppositeExists = await this.exists(opposite);
+-				signal?.throwIfAborted();
+-				if (oppositeExists) throw this.encodingMismatch(opposite);
+-				const path = join(dir, `session${logSuffix(this.compression)}`);
+-				const pathExists = await this.exists(path);
+-				signal?.throwIfAborted();
+-				if (!pathExists) continue;
+-				const first = this.compression === "zstd" ? await this.readFirstZstdLine(path, signal) : await this.readFirstLine(path, signal);
+-				signal?.throwIfAborted();
+-				if (first === void 0) continue;
+-				const meta = parseHeaderMeta(first);
+-				if (meta === void 0) continue;
+-				await this.assertStoredIdentity(path, meta, void 0, signal);
+-				signal?.throwIfAborted();
+-				if (ids.has(meta.id)) throw new Error(`duplicate JSONL session id "${meta.id}" appears in multiple project directories`);
+-				ids.add(meta.id);
+-				artifacts.push({
+-					header: meta,
+-					path
+-				});
++			const directories = await this.listSessionDirs(project, signal);
++			// Bound filesystem work; settle the whole batch before returning or failing.
++			for (let offset = 0; offset < directories.length; offset += 16) {
++				signal?.throwIfAborted();
++				const settled = await Promise.allSettled(directories.slice(offset, offset + 16).map(async (dir) => {
++					const opposite = join(dir, `session${logSuffix(this.oppositeCompression())}`);
++					const oppositeExists = await this.exists(opposite);
++					signal?.throwIfAborted();
++					if (oppositeExists) throw this.encodingMismatch(opposite);
++					const path = join(dir, `session${logSuffix(this.compression)}`);
++					const pathExists = await this.exists(path);
++					signal?.throwIfAborted();
++					if (!pathExists) return;
++					const first = this.compression === "zstd" ? await this.readFirstZstdLine(path, signal) : await this.readFirstLine(path, signal);
++					signal?.throwIfAborted();
++					if (first === void 0) return;
++					const meta = parseHeaderMeta(first);
++					if (meta === void 0) return;
++					await this.assertStoredIdentity(path, meta, void 0, signal);
++					signal?.throwIfAborted();
++					return { header: meta, path };
++				}));
++				signal?.throwIfAborted();
++				for (const result of settled) {
++					if (result.status === "rejected") throw result.reason;
++					const artifact = result.value;
++					if (artifact === void 0) continue;
++					if (ids.has(artifact.header.id)) throw new Error(`duplicate JSONL session id "${artifact.header.id}" appears in multiple project directories`);
++					ids.add(artifact.header.id);
++					artifacts.push(artifact);
++				}
+ 			}
+ 		}
+ 		signal?.throwIfAborted();
+ 		return artifacts;
+@@ -1399,11 +1406,17 @@
+ 		this.rootEncodingCheck ??= this.checkRootEncoding();
+ 		return this.rootEncodingCheck;
+ 	}
+ 	async checkRootEncoding() {
+-		for (const project of await this.listProjectDirs()) for (const dir of await this.listSessionDirs(project)) {
+-			const incompatible = join(dir, `session${logSuffix(this.oppositeCompression())}`);
+-			if (await this.exists(incompatible)) throw this.encodingMismatch(incompatible);
++		for (const project of await this.listProjectDirs()) {
++			const directories = await this.listSessionDirs(project);
++			for (let offset = 0; offset < directories.length; offset += 16) {
++				const settled = await Promise.allSettled(directories.slice(offset, offset + 16).map(async (dir) => {
++					const incompatible = join(dir, `session${logSuffix(this.oppositeCompression())}`);
++					if (await this.exists(incompatible)) throw this.encodingMismatch(incompatible);
++				}));
++				for (const result of settled) if (result.status === "rejected") throw result.reason;
++			}
+ 		}
+ 	}
+ 	async rejectLegacyFlatArtifact(project, id, signal) {
+ 		signal?.throwIfAborted();
+diff --git a/node_modules/@deepseek-ai/dsh-host-apiproxy/lib/index.js b/node_modules/@deepseek-ai/dsh-host-apiproxy/lib/index.js
+--- a/node_modules/@deepseek-ai/dsh-host-apiproxy/lib/index.js
++++ b/node_modules/@deepseek-ai/dsh-host-apiproxy/lib/index.js
+@@ -969,22 +969,28 @@
+ function paginate(events, beforeSeq, maxMessages) {
+ 	const window = beforeSeq === void 0 ? [...events] : events.filter((event) => event.seq < beforeSeq);
+ 	let count = 0;
+ 	let cut = 0;
++	let measuredFrom = window.length;
++	let bytes = 0;
++	let bounded = false;
++	// Message count alone does not bound thousands of streamed chunk events.
++	// Keep complete source groups and contiguous seqs; older pages retain every event.
+ 	for (let i = window.length - 1; i >= 0; i--) {
+ 		const event = window[i];
+ 		if (!MESSAGE_TYPES.has(event.type) || !isAppendSurfaceEvent(event)) continue;
++		let groupStart = event.seq;
++		for (const source of event.sourceEventSeqs ?? []) if (source < groupStart) groupStart = source;
++		const groupIndex = window.findIndex((entry) => entry.seq >= groupStart);
++		if (count > 0 && window.length - groupIndex > 2048) { bounded = true; break; }
++		for (let j = measuredFrom - 1; j >= groupIndex; j--) bytes += Buffer.byteLength(JSON.stringify(window[j]));
++		if (count > 0 && bytes > 512 * 1024) { bounded = true; break; }
++		measuredFrom = groupIndex;
++		cut = groupStart;
+ 		count++;
+-		const sources = event.sourceEventSeqs;
+-		let groupStart = event.seq;
+-		if (sources !== void 0) {
+-			for (const source of sources) if (source < groupStart) groupStart = source;
+-		}
+-		if (count >= maxMessages) {
+-			cut = groupStart;
+-			break;
+-		}
+-	}
++		if (count >= maxMessages) break;
++	}
++	if (!bounded && count < maxMessages) cut = 0;
+ 	return {
+ 		events: window.filter((event) => event.seq >= cut),
+ 		hasMore: cut > 0
+ 	};
+@@ -1222,10 +1228,9 @@
+ 		...agentPreset === void 0 ? {} : { agentPreset }
+ 	};
+ }
+ /** SessionSummary projection for attached (in-memory) sessions. */
+-function summarize(session, running) {
+-	const metadata = sessionListMetadata(session.events);
++function summarize(session, running, metadata = sessionListMetadata(session.events)) {
+ 	return {
+ 		sessionId: session.id,
+ 		updatedAt: sessionListUpdatedAt(session.header, metadata),
+ 		running,
+@@ -1420,11 +1425,26 @@
+ 		return;
+ 	}
+ }
+ /** Projection baseline for a detached history tail without Agent activation. */
+-function detachedProjectionsFor(ctx, events) {
++function detachedProjectionsFor(ctx, events, header) {
+ 	const registry = ctx.get("sessionProjections");
+ 	if (registry === void 0) return void 0;
++	if (header !== void 0) {
++		try {
++			const record = ctx.get("sessionProjectionCache")?.recordFor(header.id, {
++				createdAt: header.createdAt,
++				...header.cwd === void 0 ? {} : { cwd: header.cwd }
++			});
++			if (record !== void 0) {
++				const floor = registry.restoreFloor(record.rows);
++				if (floor !== void 0 && floor <= (events.at(-1)?.seq ?? -1) + 1)
++					return registry.restore(record.rows, events.filter((event) => event.seq >= floor), floor).snapshot;
++			}
++		} catch {
++			// A stale or unusable checkpoint falls back to the authoritative log.
++		}
++	}
+ 	return registry.restore({}, events, 0).snapshot;
+ }
+ /**
+ * Best-effort projections for one subagent history page, fail-soft like
+@@ -2030,9 +2050,9 @@
+ 	* @returns the events and, when asked, the baseline for that same position.
+ 	*/
+ 	function historyCutOf(source, includeProjections) {
+ 		if (source.kind === "detached") {
+-			const projections = includeProjections ? detachedProjectionsFor(ctx, source.events) : void 0;
++			const projections = includeProjections ? detachedProjectionsFor(ctx, source.events, source.header) : void 0;
+ 			return {
+ 				events: source.events,
+ 				...projections === void 0 ? {} : { projections }
+ 			};
+@@ -2162,9 +2182,9 @@
+ 		const summarizeAttached = (session) => {
+ 			const agent = ctx.agents.get(session.id);
+ 			const projections = listProjectionsFor(ctx, session.header, session);
+ 			return {
+-				...summarize(session, agent?.status === "running"),
++				...summarize(session, agent?.status === "running", projections?.values.sessionListMetadata),
+ 				...projections === void 0 ? {} : { projections }
+ 			};
+ 		};
+ 		const items = ctx.sessions.list().map(summarizeAttached);
+diff --git a/node_modules/@deepseek-ai/dsh-api-remotes/lib/index.js b/node_modules/@deepseek-ai/dsh-api-remotes/lib/index.js
+--- a/node_modules/@deepseek-ai/dsh-api-remotes/lib/index.js
++++ b/node_modules/@deepseek-ai/dsh-api-remotes/lib/index.js
+@@ -80,11 +80,20 @@
+ */
+ async function inspectApiRemoteSession(ctx, sessionId) {
+ 	const persistence = ctx.get("sessionPersistence");
+ 	if (persistence === void 0) throw new Error("session persistence is not configured (load a dsh-session-persistence backend)");
+-	const meta = (await persistence.list()).find((candidate) => candidate.id === sessionId);
+-	if (meta === void 0 || meta.cwd === void 0) throw new ApiRemoteSessionNotFound(`session "${sessionId}" not found`);
+-	const inspected = await persistence.inspect(sessionId);
++	let inspected;
++	try {
++		// The backend validates the selected log's identity and duplicate-id paths.
++		// Opening one conversation must not enumerate every unrelated session.
++		inspected = await persistence.inspect(sessionId);
++	} catch (error) {
++		// Persistence has no typed not-found error. Preserve the API taxonomy on
++		// this failure path without making the successful read pay for a listing.
++		const meta = (await persistence.list()).find((candidate) => candidate.id === sessionId);
++		if (meta === void 0 || meta.cwd === void 0) throw new ApiRemoteSessionNotFound(`session "${sessionId}" not found`);
++		throw error;
++	}
+ 	if (inspected.meta.cwd === void 0) throw new ApiRemoteSessionNotFound(`session "${sessionId}" not found`);
+ 	return {
+ 		meta: inspected.meta,
+ 		events: [...inspected.events]
