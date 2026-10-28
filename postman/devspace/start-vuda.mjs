@@ -7,12 +7,29 @@ import { findVudaRuntime } from './vuda-runtime.mjs'
 // Playwright instance; the pixel verifier and other MCP servers are unaffected.
 export function configureVudaChromium(chromium) {
   const launch = chromium.launch.bind(chromium)
-  chromium.launch = options => launch({
-    ...options,
-    headless: true,
-    channel: options?.channel ?? 'chromium',
-    args: [...new Set([...(options?.args ?? []), '--enable-gpu'])]
-  })
+  const browsers = new Set()
+  const pending = new Set()
+  chromium.launch = options => {
+    const opening = Promise.resolve().then(() => launch({
+      ...options,
+      headless: true,
+      channel: options?.channel ?? 'chromium',
+      args: [...new Set([...(options?.args ?? []), '--enable-gpu'])]
+    }))
+    pending.add(opening)
+    return opening.then(browser => {
+      if (browser) {
+        browsers.add(browser)
+        browser.once?.('disconnected', () => browsers.delete(browser))
+      }
+      return browser
+    }).finally(() => pending.delete(opening))
+  }
+  return async () => {
+    await Promise.allSettled([...pending])
+    await Promise.allSettled([...browsers].map(async browser => browser.close()))
+    browsers.clear()
+  }
 }
 
 export async function startVuda(options) {
@@ -27,7 +44,15 @@ export async function startVuda(options) {
   process.chdir(runtime.cwd)
   const require = createRequire(runtime.serverEntry)
   const { chromium } = require('playwright')
-  configureVudaChromium(chromium)
+  const closeBrowsers = configureVudaChromium(chromium)
+  let closing
+  const shutdown = () => {
+    // Windows MCP shutdown closes stdin before it forcibly terminates Node.
+    // Close only browsers launched by this server while graceful cleanup is possible.
+    closing ??= closeBrowsers().finally(() => process.exit(0))
+  }
+  process.stdin.once('end', shutdown)
+  process.stdin.once('close', shutdown)
   await import(pathToFileURL(runtime.serverEntry).href)
 }
 

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import test from 'node:test'
@@ -56,6 +56,22 @@ test('GPU launch preserves caller options and the existing Chrome fallback', asy
   ])
 })
 
+test('shutdown waits for an opening browser and closes every owned browser', async () => {
+  let opened
+  let closed = 0
+  const browser = { async close() { closed++ } }
+  const chromium = { launch: () => new Promise(resolve => { opened = resolve }) }
+  const close = configureVudaChromium(chromium)
+  const launching = chromium.launch({})
+  await Promise.resolve()
+  const closing = close()
+  opened(browser)
+  await launching
+  await closing
+  await close()
+  assert.equal(closed, 1)
+})
+
 test('shared entry changes the Playwright instance imported by VUDA and strips credentials', async t => {
   const options = await fixture(t)
   const runtime = await findVudaRuntime(options)
@@ -95,6 +111,34 @@ test('reports an incomplete installed package instead of pretending it is usable
     assert.equal(error.diagnostics[0].error, 'MODULE_NOT_FOUND')
     return true
   })
+})
+
+test('closing MCP stdin closes the browser before the server exits', { timeout: 5000 }, async t => {
+  const options = await fixture(t)
+  const runtime = await findVudaRuntime(options)
+  await writeFile(join(runtime.cwd, 'package.json'), JSON.stringify({ name: 'visual-ui-debug-agent-mcp', version: '1.1.0', type: 'module' }))
+  const playwrightRoot = join(runtime.cwd, '../playwright')
+  await mkdir(playwrightRoot)
+  await writeFile(join(playwrightRoot, 'package.json'), JSON.stringify({ name: 'playwright', main: 'index.cjs' }))
+  await writeFile(join(playwrightRoot, 'index.cjs'), `exports.chromium = { async launch() {
+    return { async close() { console.log('browser-closed') } }
+  } }`)
+  await writeFile(runtime.serverEntry, `import { chromium } from 'playwright';
+    await chromium.launch({}); console.log('browser-open'); process.stdin.resume();`)
+  const launcher = fileURLToPath(new URL('../start-vuda.mjs', import.meta.url))
+  const child = spawn(process.execPath, [launcher, runtime.cwd, options.root], { windowsHide: true })
+  t.after(() => { if (child.exitCode === null) child.kill() })
+  let output = ''
+  child.stdout.on('data', chunk => {
+    output += chunk
+    if (output.includes('browser-open')) child.stdin.end()
+  })
+  const code = await new Promise((resolve, reject) => {
+    child.once('error', reject)
+    child.once('close', resolve)
+  })
+  assert.equal(code, 0)
+  assert.match(output, /browser-open[\s\S]*browser-closed/)
 })
 
 test('lists every MCP catalog page using the returned cursor', async () => {

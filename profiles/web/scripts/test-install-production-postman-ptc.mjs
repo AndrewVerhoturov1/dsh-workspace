@@ -61,6 +61,8 @@ try {
   for(const name of ['postman-native-child-cutoff.patch','postman-native-cold-compact.patch','postman-native-lifecycle.patch','postman-native-close-only-upgrade.patch','postman-native-scoped-compact.patch','postman-native-settlement.patch','postman-native-luna-bootstrap-report.patch','postman-native-deferred-source.patch','postman-native-app-owner.patch','postman-native-goal-continuation.patch','postman-native-session-events.patch'])
     copyFileSync(resolve(repositoryRoot,'system/patches',name),resolve(stagingRoot,'system/patches',name))
   copyFileSync(resolve(repositoryRoot,'system/patches/apply-postman-native-child-cutoff.mjs'),resolve(stagingRoot,'system/patches/apply-postman-native-child-cutoff.mjs'))
+  for (const name of ['apply-harness-session-performance.mjs', 'harness-session-performance.patch'])
+    copyFileSync(resolve(repositoryRoot, 'system/patches', name), resolve(stagingRoot, 'system/patches', name))
   copyFileSync(resolve(repositoryRoot,'system/patches/postman-native-upgrade.test.mjs'),resolve(stagingRoot,'system/patches/postman-native-upgrade.test.mjs'))
   const pluginRoot = resolve(stagingRoot, 'plugins/dsh-postman-harness')
   // The real installer must patch an isolated, pinned SDK on disk, not APPDATA.
@@ -92,6 +94,9 @@ try {
   assert.match(readFileSync(resolve(panelRoot,'index.js'),'utf8'),/costPanelRevision/)
   const { applyPostmanNativeChildCutoff } = await import(pathToFileURL(resolve(stagingRoot,'system/patches/apply-postman-native-child-cutoff.mjs')).href)
   const targets = applyPostmanNativeChildCutoff([sdkAnchor, resolve(pluginRoot,'package.json')])
+  const { applyHarnessSessionPerformance } = await import(pathToFileURL(resolve(stagingRoot, 'system/patches/apply-harness-session-performance.mjs')).href)
+  const sessionTargets = applyHarnessSessionPerformance(sdkAnchor)
+  for (const path of sessionTargets) assertInStaging(path)
   assert.ok(targets.length >= 2)
   const subagentTarget=targets.find(target=>target.path.includes('dsh-subagent'))
   assert.ok(subagentTarget)
@@ -103,7 +108,7 @@ try {
   const goalBytes = readFileSync(goalTarget.path)
   assert.match(goalBytes.toString(), /goal\/continuation-defer/)
   // A complete second install must retain every SDK target and frozen graph byte.
-  const targetBefore = new Map(targets.map(target=>[target.path,readFileSync(target.path)]))
+  const targetBefore = new Map([...targets.map(target=>[target.path,readFileSync(target.path)]), ...sessionTargets.map(path=>[path,readFileSync(path)])])
   run(process.execPath, ['profiles/web/scripts/install-production.mjs'], stagingRoot, env)
   for(const [path,bytes] of targetBefore) assert.deepEqual(readFileSync(path),bytes,'second install SDK drift: '+path)
   for(const [name,bytes] of graphBefore) assert.deepEqual(readFileSync(resolve(profileRoot,name)),bytes,'frozen graph drift: '+name)
