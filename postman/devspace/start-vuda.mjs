@@ -3,34 +3,9 @@ import { resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { findVudaRuntime } from './vuda-runtime.mjs'
 
-// VUDA 1.1.0 has no launch-options setting. Change only its in-process
-// Playwright instance; the pixel verifier and other MCP servers are unaffected.
-export function configureVudaChromium(chromium) {
-  const launch = chromium.launch.bind(chromium)
-  const browsers = new Set()
-  const pending = new Set()
-  chromium.launch = options => {
-    const opening = Promise.resolve().then(() => launch({
-      ...options,
-      headless: true,
-      channel: options?.channel ?? 'chromium',
-      args: [...new Set([...(options?.args ?? []), '--enable-gpu'])]
-    }))
-    pending.add(opening)
-    return opening.then(browser => {
-      if (browser) {
-        browsers.add(browser)
-        browser.once?.('disconnected', () => browsers.delete(browser))
-      }
-      return browser
-    }).finally(() => pending.delete(opening))
-  }
-  return async () => {
-    await Promise.allSettled([...pending])
-    await Promise.allSettled([...browsers].map(async browser => browser.close()))
-    browsers.clear()
-  }
-}
+import { configureHardwareChromium } from '../../.agents/skills/pixel-perfect-ui-port/scripts/browser-runtime.mjs'
+export { configureHardwareChromium as configureVudaChromium, requireHardwareGpu, withHardwareChromium }
+  from '../../.agents/skills/pixel-perfect-ui-port/scripts/browser-runtime.mjs'
 
 export async function startVuda(options) {
   const runtime = await findVudaRuntime(options)
@@ -44,7 +19,7 @@ export async function startVuda(options) {
   process.chdir(runtime.cwd)
   const require = createRequire(runtime.serverEntry)
   const { chromium } = require('playwright')
-  const closeBrowsers = configureVudaChromium(chromium)
+  const closeBrowsers = configureHardwareChromium(chromium)
   let closing
   const shutdown = () => {
     // Windows MCP shutdown closes stdin before it forcibly terminates Node.
@@ -53,6 +28,8 @@ export async function startVuda(options) {
   }
   process.stdin.once('end', shutdown)
   process.stdin.once('close', shutdown)
+  process.once('SIGINT', shutdown)
+  process.once('SIGTERM', shutdown)
   await import(pathToFileURL(runtime.serverEntry).href)
 }
 

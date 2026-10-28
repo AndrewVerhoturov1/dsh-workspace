@@ -1,6 +1,7 @@
 import { mkdir, writeFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { withHardwareChromium } from './browser-runtime.mjs';
 
 export const SKILL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const ARTIFACTS_ROOT = path.join(SKILL_ROOT, 'artifacts');
@@ -74,7 +75,7 @@ export async function capture({ url, selector, viewport, outDir, label }) {
   // Isolate browser installation from the system/global Playwright cache.
   process.env.PLAYWRIGHT_BROWSERS_PATH = path.join(SKILL_ROOT, '.playwright-browsers');
   const { chromium } = await import('playwright');
-  const browser = await chromium.launch({ headless: true });
+  return withHardwareChromium(chromium, async browser => {
   try {
     const context = await browser.newContext({
       viewport: { width: viewport.width, height: viewport.height },
@@ -150,9 +151,8 @@ export async function capture({ url, selector, viewport, outDir, label }) {
     await Promise.all(['.json', '.png'].map(ext =>
       rm(path.join(out, label + ext), { force: true })));
     throw error;
-  } finally {
-    await browser.close();
   }
+  });
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

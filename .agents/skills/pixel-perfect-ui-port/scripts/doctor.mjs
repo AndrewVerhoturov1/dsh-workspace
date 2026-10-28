@@ -2,6 +2,7 @@ import { access, mkdir, writeFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ARTIFACTS_ROOT, SKILL_ROOT } from './capture.mjs';
+import { withHardwareChromium } from './browser-runtime.mjs';
 
 async function doctor() {
   const major = Number(process.versions.node.split('.')[0]);
@@ -20,15 +21,12 @@ async function doctor() {
   const probe = path.join(ARTIFACTS_ROOT, '.doctor-write-probe');
   try { await writeFile(probe, 'ok'); } finally { await rm(probe, { force: true }); }
 
-  const browser = await chromium.launch({ headless: true });
-  try {
+  await withHardwareChromium(chromium, async browser => {
     const page = await browser.newPage({ viewport: { width: 640, height: 480 }, deviceScaleFactor: 1 });
     if (await page.evaluate(() => 6 * 7) !== 42) throw new Error('Chromium evaluation failed');
     await page.close();
-  } finally {
-    await browser.close();
-  }
-  console.log('DOCTOR PASS: artifacts writable; Chromium launches');
+  });
+  console.log('DOCTOR PASS: artifacts writable; Chromium uses hardware WebGL');
 }
 
 try { await doctor(); } catch (error) {

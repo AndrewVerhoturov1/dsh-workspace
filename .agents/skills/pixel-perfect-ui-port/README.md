@@ -12,6 +12,8 @@ pwsh -NoProfile -NonInteractive -File .\.agents\skills\pixel-perfect-ui-port\set
 
 Сценарий ставит только зависимости `node_modules`, npm cache `.npm-cache` и Playwright Chromium `.playwright-browsers` внутри папки skill, затем запускает doctor и self-test. Настройки DSH, игра, ветки Git и постоянные профили не изменяются. Итоговые артефакты находятся в `artifacts/` и исключены из Git.
 
+Doctor и capture запускают полный скрытый Chromium через общий `scripts/browser-runtime.mjs` с `--enable-gpu`. Перед проверкой CDP должен подтвердить аппаратный WebGL и фактический renderer без SwiftShader/WARP. При отказе браузер закрывается и проверка останавливается; CPU-рендерер не используется как запасной вариант. Тот же модуль подключён к запуску VUDA. Временный браузер закрывается при успехе, ошибке, отмене и SIGINT/SIGTERM; серверы предпросмотра и чужие браузеры не затрагиваются. Геометрия, DPR, PNG-сравнение и допуски измерителя не меняются.
+
 Для явных отдельных проверок из каталога навыка:
 
 ```powershell
