@@ -52,6 +52,7 @@
             <button type="button" class="segment is-active" data-edge-mode="select" data-i18n="selectMode">Select</button>
             <button type="button" class="segment" data-edge-mode="authority" data-i18n="authority">Authority</button>
             <button type="button" class="segment" data-edge-mode="communication" data-i18n="communication">Communication</button>
+            <button type="button" class="segment" data-edge-mode="chat" data-i18n="postmanChat">Postman Chat</button>
           </div>
           <div class="segmented communication-direction-control" id="communicationDirectionControl" role="group" aria-label="Communication direction" hidden>
             <button type="button" class="segment is-active" data-communication-direction="bidirectional" title="Bidirectional">↔<span data-i18n="communicationBidirectional">Both</span></button>
@@ -96,8 +97,9 @@
           </div>
           <div class="canvas-toolbar-spacer"></div>
           <div class="legend">
-            <span class="legend-item"><span class="legend-line authority"></span><span data-i18n="authority">Authority</span></span>
+            <span class="legend-item" id="authorityLegend" title="Authority also permits messages in both directions"><span class="legend-line authority"></span><span data-i18n="authority">Authority</span></span>
             <span class="legend-item"><span class="legend-line communication"></span><span data-i18n="communication">Communication</span></span>
+            <span class="legend-item" title="Agent-to-Chat connection"><span class="legend-line chat"></span><span data-i18n="postmanChat">Postman Chat</span></span>
           </div>
         </div>
 
@@ -237,10 +239,12 @@
         </form>
 
         <div class="luna-inspector" id="lunaInspector" hidden>
-          <div class="section-heading">LunaBridge · Postman Chat</div>
-          <label class="field"><span>Name</span><input id="lunaNameInput" type="text" maxlength="64"></label>
+          <div class="section-heading" data-i18n="chatInspectorTitle">Postman Chat · Transport</div>
+          <label class="field"><span data-i18n="displayName">Display name</span><input id="lunaNameInput" type="text" maxlength="64"></label>
           <div class="runtime-card luna-facts">
             <div><span id="lunaRuntimeStatus">POTENTIAL</span></div>
+            <div id="lunaJobStatus">No active Host job</div>
+            <div id="lunaJobResult" role="status">No confirmed result</div>
             <div id="lunaRuntimeStart">Host start: unconfirmed</div>
             <div id="lunaRuntimeDuration">Duration: —</div>
             <div id="lunaReminders">Confirmed reminders: —</div>

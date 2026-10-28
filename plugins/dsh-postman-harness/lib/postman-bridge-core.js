@@ -37,7 +37,7 @@ export const POSTMAN_LEADER_PRESET_ID = 'postman-leader'
 export const POSTMAN_PTC_LEADER_PRESET_ID = 'postman-leader-ptc'
 export const POSTMAN_NODES_LEADER_PRESET_ID = 'postman-leader-ptc-nodes'
 export const POSTMAN_PTC_TOOL_NAME = 'ptc_execute'
-export const POSTMAN_NODES_TOOL_NAMES = Object.freeze(['nodes_team_message', 'nodes_team_assign_task', 'nodes_team_complete_task', 'nodes_team_activate', 'nodes_team_deactivate', 'nodes_team_snapshot'])
+export const POSTMAN_NODES_TOOL_NAMES = Object.freeze(['nodes_team_message', 'nodes_team_assign_task', 'nodes_team_complete_task', 'nodes_team_activate', 'nodes_team_deactivate', 'nodes_team_snapshot', 'nodes_chat_send', 'nodes_chat_select', 'nodes_chat_result'])
 export const POSTMAN_NODES_LEADER_TOOL_NAMES = Object.freeze(['nodes_team_luna_select', 'nodes_team_luna_send'])
 export const POSTMAN_LEADER_TOOL_ALLOWLIST = Object.freeze([
   'ask_user_question',

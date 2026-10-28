@@ -89,9 +89,14 @@ export function createPostmanBridgeTool(ctx, jobs, contexts, nodesService = () =
         return { status: 'POSTMAN_INPUT_PROVENANCE_REJECTED' }
       const inputBinding = parsed.inputFiles?.length
         ? postmanInputGrants.pin(exec.agent, contexts.get(exec.agent.id), parsed.inputFiles) : undefined
+      if (exec.nodesInvocation && (parsed.transportKind !== 'devspace' ||
+          !nodesService()?.chatInvocationAllowed(exec.nodesInvocation, exec.agent, args.lane_id)))
+        return { status: 'NODES_CHAT_INVOCATION_REJECTED' }
       try {
         const result = await jobs.accept(exec.agent, args.message, parsed.transportKind, inputBinding,
-          undefined, args.devspace_mode, args.lane_id, approvedScope, { computerUse, imageMode: args.image_mode === true })
+          undefined, args.devspace_mode, args.lane_id, approvedScope,
+          { computerUse, imageMode: args.image_mode === true,
+            ...(exec.nodesInvocation ? { nodesInvocation: exec.nodesInvocation } : {}) })
         if (result.status !== 'POSTMAN_BRIDGE_ACCEPTED') postmanInputGrants.unpin(inputBinding)
         return result
       } catch (error) { postmanInputGrants.unpin(inputBinding); throw error }
@@ -297,11 +302,15 @@ export function createNodesLunaNativeBridge(ctx, contexts, jobs, bridgeTool) {
         ? 'NODES_LUNA_BUSY' : 'NODES_LUNA_RESERVATION_FAILED' } }
       })
     },
-    sendLuna(parent, laneId, args, signal = new AbortController().signal) {
+    async chatStatus(parent, bridgeJobId) {
+      return { ...await jobs.status(parent, bridgeJobId),
+        nodesInvocation: jobs.chatInvocation(parent, bridgeJobId) };
+    },
+    sendLuna(parent, laneId, args, signal = new AbortController().signal, invocation = null) {
       if (!isTopLevelPostmanNodesLeader(parent) || ctx.agents.get(parent.id) !== parent ||
           typeof laneId !== 'string' || !laneId.startsWith('nodes:') || !bridgeTool)
         return { status: 'NODES_LUNA_OWNER_REJECTED' }
-      return bridgeTool.execute({ ...args, lane_id: laneId }, { agent: parent, signal })
+      return bridgeTool.execute({ ...args, lane_id: laneId }, { agent: parent, signal, nodesInvocation: invocation })
     },
   }
 }

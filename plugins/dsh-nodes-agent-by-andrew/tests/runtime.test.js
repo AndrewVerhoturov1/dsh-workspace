@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { registerHooks } from 'node:module';
-import { createTemplate, SLOTS } from '../lib/domain.js';
+import { createTemplate, SLOTS, LUNA_SLOT, normalizeTeam } from '../lib/domain.js';
 
 // The task worktree intentionally has no node_modules. Test the exact Host
 // adapter contract with inert core services; no model calls or DSH activation.
@@ -123,7 +123,7 @@ test('verified Luna archive survives a closed TeamRun and explicit old-chat sele
     activeJobId: busy.has(laneId) ? 'current-job' : null,
     conversations: evidence.get((typeof root === 'string' ? root : root.id) + ':' + laneId) ?? []
   }));
-  const luna = template.definition.lunas[0];
+  const luna = { id: template.definition.chats[0].lunaId, chatNodeId: template.definition.chats[0].id };
   const first = await service.start(template.definition.id, leader.id);
   assert.equal(first.lunas.length, 3, 'native template has three optional Luna bridges');
   assert.equal(reservations[0].lanes.length, 3);
@@ -219,7 +219,7 @@ test('current Entry graph and scoped Sol branch expose configured rights, not fo
   const run = await service.start(template.definition.id, leader.id);
   const leaderGraph = service.snapshotForAgent(leader);
   assert.equal(leaderGraph.status, 'NODES_SNAPSHOT');
-  assert.equal(leaderGraph.run.nodes.length, 7);
+  assert.equal(leaderGraph.run.nodes.length, 10);
   assert.equal(leaderGraph.run.lunas.length, 3);
   assert.equal(leaderGraph.run.nodes.find(a => a.slot === 'worker-1').model.model, 'gpt-6-luna');
   assert.ok(leaderGraph.run.nodes.find(a => a.slot === 'entry').tools.required.includes('nodes_team_luna_send'));
@@ -228,7 +228,7 @@ test('current Entry graph and scoped Sol branch expose configured rights, not fo
   assert.match(prompt, /nodes_team_luna_send/);
   assert.match(prompt, /nodes_team_snapshot/);
   assert.doesNotMatch(prompt, /PRIVATE_OTHER_WORKER_PROMPT/);
-  assert.ok(prompt.includes(template.definition.lunas[0].id));
+  assert.ok(prompt.includes(template.definition.chats[0].lunaId));
   const sol = template.definition.agents.find(a => a.slot === 'sol');
   await service.nativeChildAccepted(leader, 'sol-test-session', sol.id, run.id);
   const solAgent = { id: 'sol-test-session', session: { header: {
@@ -245,7 +245,7 @@ test('current Entry graph and scoped Sol branch expose configured rights, not fo
     sent.push({ parent: parent.id, laneId, ...args });
     return { status: 'POSTMAN_BRIDGE_ACCEPTED', bridgeJobId: 'job-' + sent.length };
   };
-  const lunaId = template.definition.lunas[0].id;
+  const lunaId = template.definition.chats[0].lunaId;
   const payload = { lunaId, message: '@PostmanDevspace explicit factual task', devspaceMode: 'READ_ONLY' };
   assert.equal((await registered.get('nodes_team_luna_send').execute(payload, { agent: solAgent })).status,
     'NODES_LUNA_OWNER_REJECTED');
@@ -262,7 +262,7 @@ test('deleting every Luna from the schema preserves its archived verified chat a
   const { service, template, leader, agents, native, tables } = setup();
   native.start = async () => ({ status: 'NODES_NATIVE_READY' });
   const old = await service.start(template.definition.id, leader.id);
-  const id = template.definition.lunas[0].id;
+  const id = template.definition.chats[0].lunaId;
   const prior = { id: 'saved-job', sourceLeaderSessionId: leader.id,
     sourceLaneId: old.lunaSelections[id], sourceChildSessionId: 'luna-session',
     requestId: 'REQ_20261026T120000Z_0002', conversationRef: 'https://chatgpt.com/c/proven',
@@ -272,7 +272,11 @@ test('deleting every Luna from the schema preserves its archived verified chat a
   await service.control(old.id, 'stop');
   assert.equal(tables.luna_archives.get(template.definition.id)[id][0].id, prior.id);
   const updated = structuredClone(template.definition);
-  updated.lunas = [];
+  const removed = new Set(updated.agents.filter(a => a.slot === LUNA_SLOT).map(a => a.id));
+  updated.agents = updated.agents.filter(a => !removed.has(a.id));
+  updated.authorityEdges = updated.authorityEdges.filter(e => !removed.has(e.from) && !removed.has(e.to));
+  updated.chats = [];
+  updated.chatConnections = [];
   await service.saveTeam(updated, template.layout, 0);
   agents.delete(leader.id);
   const nextRoot = { ...leader, id: 'new-root', status: 'idle' };
@@ -283,3 +287,111 @@ test('deleting every Luna from the schema preserves its archived verified chat a
   await assert.rejects(service.selectLunaConversation(latest.id, id, prior.id),
     error => error.code === 'LUNA_NOT_FOUND');
 });
+
+test('a finished Host job remains owned by its original Session and Chat after lane rotation', async () => {
+  const { service, template, leader, agents, native, sent } = setup();
+  native.start = async () => ({ status: 'NODES_NATIVE_READY' });
+  const sends = [], operations = new Map();
+  native.reserveLunas = async () => ({ status: 'NODES_LUNA_RESERVED' });
+  native.lunaSnapshot = (_root, laneIds) => laneIds.map(laneId => ({
+    laneId, status: 'IDLE', conversations: [],
+    lastBridgeJobId: [...operations.values()].filter(op => op.laneId === laneId).at(-1)?.bridgeJobId ?? null
+  }));
+  native.chatStatus = async (root, jobId) => {
+    const op = operations.get(jobId);
+    return op?.ownerRootId === root.id ? structuredClone(op) : { status: 'POSTMAN_BRIDGE_JOB_NOT_FOUND' };
+  };
+  native.sendLuna = async (root, laneId, args, _signal, invocation) => {
+    const bridgeJobId = 'host-job-' + (sends.length + 1);
+    const requestId = 'REQ_HOST_JOB_' + (sends.length + 1);
+    sends.push({ root: root.id, laneId, args, invocation, bridgeJobId, requestId });
+    operations.set(bridgeJobId, {
+      ownerRootId: root.id, bridgeJobId, laneId, requestId,
+      nodesInvocation: structuredClone(invocation),
+      status: 'POSTMAN_BRIDGE_TERMINAL', terminalStatus: 'COMPLETED',
+      result: { assistantText: 'Host-confirmed ' + requestId }
+    });
+    return { status: 'POSTMAN_BRIDGE_ACCEPTED', bridgeJobId };
+  };
+
+  const chatA = template.definition.chats[0], chatB = template.definition.chats[1];
+  const worker = template.definition.agents.find(a => a.slot === 'worker-1');
+  const other = template.definition.agents.find(a => a.slot === 'worker-2');
+  for (const [agentId, chatNodeId] of [[worker.id, chatA.id], [worker.id, chatB.id], [other.id, chatA.id]])
+    template.definition.chatConnections.push({ id: 'shared:' + agentId + ':' + chatNodeId, agentId, chatNodeId });
+  await service.table('definitions').put(template.definition.id, template.definition);
+  const run = await service.start(template.definition.id, leader.id);
+  const laneA = run.lunaSelections[chatA.lunaId];
+  const bindChild = async (root, runId, nodeId, id) => {
+    await service.nativeChildAccepted(root, id, nodeId, runId);
+    const child = { id, session: { header: { origin: 'subagent', parentSession: root.id, delegationDepth: 1 } } };
+    agents.set(id, child);
+    return child;
+  };
+  const author = await bindChild(leader, run.id, worker.id, 'original-author-session');
+  const stranger = await bindChild(leader, run.id, other.id, 'other-session');
+
+  const first = await service.sendChat(author, chatA.id, 'task A', 'READ_ONLY');
+  assert.equal(first.status, 'POSTMAN_BRIDGE_ACCEPTED');
+  assert.equal(sends[0].laneId, laneA);
+  const immutable = structuredClone(operations.get(first.bridgeJobId).nodesInvocation);
+  const selectedB = await service.selectChat(author, chatA.id);
+  assert.equal(selectedB.status, 'NODES_CHAT_SELECTED');
+  assert.notEqual(selectedB.laneId, laneA);
+  assert.equal(sends.length, 1, 'selection never Sends');
+
+  const prior = await service.chatResult(author, chatA.id, first.bridgeJobId);
+  assert.equal(prior.status, 'POSTMAN_BRIDGE_TERMINAL');
+  assert.equal(prior.requestId, sends[0].requestId);
+  assert.match(prior.result.assistantText, /Host-confirmed/);
+  assert.equal(Object.hasOwn(prior, 'nodesInvocation'), false);
+  assert.equal((await service.dispatch('runs/luna-result', {
+    id: run.id, lunaId: chatA.lunaId, bridgeJobId: first.bridgeJobId, sessionId: leader.id
+  })).requestId, prior.requestId, 'Host root UI may inspect its historical exact job');
+
+  const delivered = await service.deliverChatResult(leader.id, first.bridgeJobId, immutable);
+  assert.equal(delivered.status, 'NODES_CHAT_DELIVERED');
+  assert.equal(sent.at(-1).child, author.id, 'delayed result reaches original child Session');
+  assert.equal(sent.at(-1).runId, run.id);
+  assert.match(sent.at(-1).content, new RegExp(first.bridgeJobId));
+  assert.match(sent.at(-1).content, new RegExp(prior.requestId));
+
+  const second = await service.sendChat(author, chatA.id, 'task B', 'READ_ONLY');
+  assert.equal(second.status, 'POSTMAN_BRIDGE_ACCEPTED');
+  assert.equal(sends[1].laneId, selectedB.laneId, 'future Sends use newly selected lane B');
+  assert.notEqual(sends[1].requestId, prior.requestId);
+  assert.equal((await service.chatResult(author, chatA.id, first.bridgeJobId)).requestId, prior.requestId,
+    'new Send does not take historical ownership away');
+
+  await assert.rejects(service.chatResult(stranger, chatA.id, first.bridgeJobId),
+    e => e.code === 'NODES_CHAT_JOB_NOT_OWNED');
+  await assert.rejects(service.chatResult(author, chatB.id, first.bridgeJobId),
+    e => e.code === 'NODES_CHAT_JOB_NOT_OWNED');
+  await assert.rejects(service.uiChatResult(run.id, chatB.lunaId, first.bridgeJobId, leader.id),
+    e => e.code === 'NODES_CHAT_JOB_NOT_OWNED');
+  await assert.rejects(service.uiChatResult(run.id, chatA.lunaId, first.bridgeJobId, stranger.id),
+    e => e.code === 'NODES_CHAT_OWNER_REJECTED');
+  assert.equal((await service.deliverChatResult(leader.id, first.bridgeJobId,
+    { ...immutable, initiatorSessionId: stranger.id })).status, 'NODES_CHAT_DELIVERY_UNAVAILABLE');
+  assert.equal((await service.deliverChatResult(leader.id, first.bridgeJobId,
+    { ...immutable, laneId: selectedB.laneId })).status, 'NODES_CHAT_DELIVERY_UNAVAILABLE');
+  assert.equal(sent.length, 1, 'spoofed deliveries do not reach any Session');
+
+  const root2 = { ...leader, id: 'other-root', status: 'idle' };
+  agents.set(root2.id, root2);
+  const foreignRun = await service.start(template.definition.id, root2.id);
+  const foreign = await bindChild(root2, foreignRun.id, worker.id, 'foreign-run-session');
+  await assert.rejects(service.chatResult(foreign, chatA.id, first.bridgeJobId),
+    e => e.code === 'NODES_CHAT_JOB_NOT_OWNED');
+  await assert.rejects(service.uiChatResult(foreignRun.id, chatA.lunaId, first.bridgeJobId, root2.id),
+    e => e.code === 'NODES_CHAT_JOB_NOT_OWNED');
+  assert.equal((await service.deliverChatResult(root2.id, first.bridgeJobId, immutable)).status,
+    'NODES_CHAT_DELIVERY_UNAVAILABLE');
+
+  await service.control(run.id, 'stop');
+  await assert.rejects(service.chatResult(author, chatA.id, first.bridgeJobId),
+    e => e.code === 'NODES_SESSION_REQUIRED', 'stopped TeamRun retains existing rejection semantics');
+  assert.equal((await service.deliverChatResult(leader.id, first.bridgeJobId, immutable)).status,
+    'NODES_CHAT_DELIVERY_UNAVAILABLE');
+});
+

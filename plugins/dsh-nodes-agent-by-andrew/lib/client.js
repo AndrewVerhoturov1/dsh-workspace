@@ -2,8 +2,8 @@ window.__ModuleLoader__.load({
  id: "dsh-nodes-agent-by-andrew",
  factory: (require) => {
  const module = { exports: {} };
- const EDITOR_HTML = "<div class=\"app-shell\" id=\"appShell\">\r\n    <header class=\"topbar\">\r\n      <div class=\"brand-block\">\r\n        <div class=\"brand-mark\" aria-hidden=\"true\">NA</div>\r\n        <div>\r\n          <div class=\"brand-title\">NodesAgent_by_Andrew</div>\r\n          <div class=\"brand-subtitle\" data-i18n=\"prototypeLabel\">Native Postman Team Editor</div>\r\n        </div>\r\n      </div>\r\n\r\n      <div class=\"team-block\">\r\n        <label class=\"sr-only\" for=\"teamName\" data-i18n=\"teamName\">Team name</label>\r\n        <input id=\"teamName\" class=\"team-name\" type=\"text\" maxlength=\"64\" value=\"Software Team\" autocomplete=\"off\">\r\n        <span class=\"save-state\" id=\"saveState\" data-i18n=\"localDraft\">Local draft</span>\r\n      </div>\r\n\r\n      <div class=\"toolbar-actions\">\r\n        <div class=\"toolbar-cluster utility\">\r\n          <div class=\"segmented compact\" role=\"group\" aria-label=\"Language\">\r\n            <button type=\"button\" class=\"segment is-active\" data-locale-action=\"en-US\">EN</button>\r\n            <button type=\"button\" class=\"segment\" data-locale-action=\"ru-RU\">RU</button>\r\n          </div>\r\n          <select id=\"teamPicker\" class=\"nodes-team-picker\" aria-label=\"Saved teams\"></select>\r\n          <button type=\"button\" class=\"button subtle\" id=\"loadDemoButton\" data-i18n=\"loadDemo\">Load</button>\r\n          <button type=\"button\" class=\"button subtle\" id=\"resetButton\" data-i18n=\"reset\">New</button>\r\n        </div>\r\n        <div class=\"toolbar-cluster\">\r\n          <button type=\"button\" class=\"button\" id=\"saveButton\" data-i18n=\"save\">Save</button>\r\n          <button type=\"button\" class=\"button\" id=\"saveAsButton\" data-i18n=\"saveAs\">Save As</button>\r\n          <button type=\"button\" class=\"button validate-button\" id=\"validateButton\" data-validation=\"none\"><span id=\"validateButtonLabel\" data-i18n=\"validate\">Validate</span><span class=\"validate-button-status\" id=\"validateButtonStatus\"></span></button>\r\n        </div>\r\n        <div class=\"toolbar-cluster\">\r\n          <button type=\"button\" class=\"button primary\" id=\"startButton\" data-i18n=\"start\">Start</button>\r\n          <button type=\"button\" class=\"button\" id=\"pauseButton\" data-i18n=\"pause\" hidden>Pause</button>\r\n          <button type=\"button\" class=\"button\" id=\"resumeButton\" data-i18n=\"resume\" hidden>Resume</button>\r\n          <button type=\"button\" class=\"button danger\" id=\"stopButton\" data-i18n=\"stop\" hidden>Stop</button>\r\n        </div>\r\n      </div>\r\n    </header>\r\n\r\n    <main class=\"workspace\" id=\"workspace\">\r\n      <section class=\"editor-pane\" aria-label=\"Agent team editor\">\r\n        <div class=\"canvas-toolbar\">\r\n          <button type=\"button\" class=\"icon-button label-button\" id=\"addNodeButton\" title=\"Add AgentNode\">\r\n            <span class=\"icon\">+</span><span data-i18n=\"addAgent\">Agent</span>\r\n          </button>\r\n          <button type=\"button\" class=\"icon-button label-button\" id=\"addLunaButton\" title=\"Add LunaBridge\">\r\n            <span class=\"icon\">+</span><span>LunaBridge</span>\r\n          </button>\r\n          <div class=\"toolbar-divider\"></div>\r\n          <div class=\"segmented\" role=\"group\" aria-label=\"Edge mode\">\r\n            <button type=\"button\" class=\"segment is-active\" data-edge-mode=\"select\" data-i18n=\"selectMode\">Select</button>\r\n            <button type=\"button\" class=\"segment\" data-edge-mode=\"authority\" data-i18n=\"authority\">Authority</button>\r\n            <button type=\"button\" class=\"segment\" data-edge-mode=\"communication\" data-i18n=\"communication\">Communication</button>\r\n          </div>\r\n          <div class=\"segmented communication-direction-control\" id=\"communicationDirectionControl\" role=\"group\" aria-label=\"Communication direction\" hidden>\r\n            <button type=\"button\" class=\"segment is-active\" data-communication-direction=\"bidirectional\" title=\"Bidirectional\">↔<span data-i18n=\"communicationBidirectional\">Both</span></button>\r\n            <button type=\"button\" class=\"segment\" data-communication-direction=\"oneway\" title=\"One-way\">→<span data-i18n=\"communicationOneWay\">One-way</span></button>\r\n          </div>\r\n          <div class=\"toolbar-divider\"></div>\r\n          <button type=\"button\" class=\"icon-button\" id=\"zoomOutButton\" title=\"Zoom out\">−</button>\r\n          <span class=\"zoom-readout\" id=\"zoomReadout\">100%</span>\r\n          <button type=\"button\" class=\"icon-button\" id=\"zoomInButton\" title=\"Zoom in\">+</button>\r\n          <button type=\"button\" class=\"icon-button label-button\" id=\"fitButton\" title=\"Fit view\"><span class=\"fit-icon\">⌗</span><span data-i18n=\"fitView\">Fit</span></button>\r\n          <div class=\"canvas-settings-wrap\">\r\n            <button type=\"button\" class=\"icon-button label-button canvas-settings-button\" id=\"canvasSettingsButton\" aria-expanded=\"false\"><span aria-hidden=\"true\">⚙</span><span data-i18n=\"canvasSettings\">Canvas</span></button>\r\n            <div class=\"canvas-settings-popover\" id=\"canvasSettingsPopover\" hidden>\r\n              <div class=\"canvas-settings-title\"><span data-i18n=\"canvasSettingsTitle\">Canvas settings</span></div>\r\n              <div class=\"canvas-settings-section\">\r\n                <div class=\"canvas-settings-row\">\r\n                  <span class=\"canvas-settings-label\"><span data-i18n=\"showGrid\">Show grid</span><small data-i18n=\"showGridHelp\">Visual coordinate grid</small></span>\r\n                  <input id=\"gridVisibleInput\" type=\"checkbox\">\r\n                </div>\r\n                <div class=\"canvas-settings-row\">\r\n                  <span data-i18n=\"gridStyle\">Grid style</span>\r\n                  <select id=\"gridStyleSelect\"><option value=\"dots\" data-i18n=\"gridDots\">Dots</option><option value=\"lines\" data-i18n=\"gridLines\">Lines</option></select>\r\n                </div>\r\n                <div class=\"canvas-settings-row\">\r\n                  <span data-i18n=\"gridSize\">Grid step</span>\r\n                  <select id=\"gridSizeSelect\"><option value=\"12\">12 px</option><option value=\"18\">18 px</option><option value=\"24\">24 px</option><option value=\"36\">36 px</option></select>\r\n                </div>\r\n                <div class=\"canvas-settings-row\">\r\n                  <span class=\"canvas-settings-label\"><span data-i18n=\"snapNodes\">Snap nodes</span><small data-i18n=\"snapNodesHelp\">Drag AgentNodes by grid step</small></span>\r\n                  <input id=\"snapNodesInput\" type=\"checkbox\">\r\n                </div>\r\n                <button type=\"button\" class=\"button subtle canvas-settings-align\" id=\"alignNodesButton\" data-i18n=\"alignNodes\">Align existing nodes</button>\r\n              </div>\r\n              <div class=\"canvas-settings-section\">\r\n                <div class=\"canvas-settings-label\"><span data-i18n=\"connectionRouting\">Connection routing</span><small data-i18n=\"connectionRoutingHelp\">Free curves or rounded orthogonal grid routes</small></div>\r\n                <div class=\"canvas-settings-routing\" role=\"group\" aria-label=\"Connection routing\">\r\n                  <button type=\"button\" class=\"segment\" data-routing-mode=\"free\" data-i18n=\"routingFree\">Free</button>\r\n                  <button type=\"button\" class=\"segment\" data-routing-mode=\"orthogonal\" data-i18n=\"routingOrthogonal\">Grid</button>\r\n                </div>\r\n              </div>\r\n            </div>\r\n          </div>\r\n          <div class=\"canvas-toolbar-spacer\"></div>\r\n          <div class=\"legend\">\r\n            <span class=\"legend-item\"><span class=\"legend-line authority\"></span><span data-i18n=\"authority\">Authority</span></span>\r\n            <span class=\"legend-item\"><span class=\"legend-line communication\"></span><span data-i18n=\"communication\">Communication</span></span>\r\n          </div>\r\n        </div>\r\n\r\n        <div class=\"canvas-shell\" id=\"canvasShell\" tabindex=\"0\">\r\n          <div class=\"connection-banner\" id=\"connectionBanner\" hidden></div>\r\n          <div class=\"canvas-empty\" id=\"canvasEmpty\" hidden>\r\n            <div class=\"empty-icon\">◎</div>\r\n            <h2 data-i18n=\"emptyTitle\">Build an agent team</h2>\r\n            <p data-i18n=\"emptyBody\">Add AgentNodes, assign one Entry Agent, then connect authority and communication independently.</p>\r\n            <button type=\"button\" class=\"button primary\" id=\"emptyAddButton\" data-i18n=\"addFirstAgent\">Add first AgentNode</button>\r\n          </div>\r\n          <div class=\"canvas-stage\" id=\"canvasStage\">\r\n            <div class=\"canvas-world\" id=\"canvasWorld\">\r\n            <svg class=\"edge-layer\" id=\"edgeLayer\" xmlns=\"http://www.w3.org/2000/svg\" aria-label=\"Connections\">\r\n              <defs>\r\n                <marker id=\"arrowAuthority\" markerWidth=\"10\" markerHeight=\"10\" refX=\"9\" refY=\"3\" orient=\"auto\" markerUnits=\"strokeWidth\">\r\n                  <path d=\"M0,0 L0,6 L9,3 z\" class=\"marker-authority\"></path>\r\n                </marker>\r\n                <marker id=\"arrowCommunication\" markerWidth=\"10\" markerHeight=\"10\" refX=\"9\" refY=\"3\" orient=\"auto-start-reverse\" markerUnits=\"strokeWidth\">\r\n                  <path d=\"M0,0 L0,6 L9,3 z\" class=\"marker-communication\"></path>\r\n                </marker>\r\n              </defs>\r\n              <g id=\"edgeGroup\"></g>\r\n              <path id=\"draftEdge\" class=\"edge draft\" d=\"\" hidden></path>\r\n            </svg>\r\n            <div class=\"node-layer\" id=\"nodeLayer\"></div>\r\n            </div>\r\n          </div>\r\n          <div class=\"canvas-hint\" id=\"canvasHint\" data-i18n=\"canvasHint\">Drag empty space to pan · wheel to zoom · Delete removes selection</div>\r\n        </div>\r\n      </section>\r\n\r\n      <aside class=\"inspector\" id=\"inspector\">\r\n        <div class=\"inspector-header\">\r\n          <div>\r\n            <div class=\"eyebrow\" data-i18n=\"inspector\">Inspector</div>\r\n            <h2 id=\"inspectorTitle\" data-i18n=\"nothingSelected\">Nothing selected</h2>\r\n          </div>\r\n          <div class=\"inspector-header-actions\">\r\n            <button type=\"button\" class=\"icon-button inspector-collapse-button\" id=\"inspectorCollapseButton\" aria-expanded=\"true\">‹</button>\r\n            <button type=\"button\" class=\"icon-button danger-ghost\" id=\"deleteSelectionButton\" title=\"Delete\" hidden>×</button>\r\n          </div>\r\n        </div>\r\n\r\n        <div class=\"inspector-empty\" id=\"inspectorEmpty\">\r\n          <div class=\"empty-ring\">◇</div>\r\n          <p data-i18n=\"inspectorEmpty\">Select an AgentNode or connection to edit it.</p>\r\n        </div>\r\n\r\n        <form class=\"inspector-form\" id=\"nodeInspector\" hidden>\r\n          <div class=\"section-heading\">\r\n            <span data-i18n=\"identity\">Identity</span>\r\n          </div>\r\n\r\n          <label class=\"field\">\r\n            <span data-i18n=\"displayName\">Display name</span>\r\n            <input id=\"displayNameInput\" type=\"text\" maxlength=\"64\">\r\n          </label>\r\n\r\n          <details class=\"agent-details\" id=\"agentDetailsDisclosure\">\r\n            <summary>\r\n              <span class=\"agent-details-summary-copy\">\r\n                <strong data-i18n=\"advancedDetails\">Technical details</strong>\r\n                <small data-i18n=\"advancedDetailsHint\">Technical name, role and system prompt</small>\r\n              </span>\r\n              <span class=\"agent-details-chevron\" aria-hidden=\"true\">›</span>\r\n            </summary>\r\n            <div class=\"agent-details-content\">\r\n              <span class=\"node-id\" id=\"nodeIdLabel\"></span>\r\n              <label class=\"field\">\r\n                <span data-i18n=\"technicalName\">Technical name</span>\r\n                <input id=\"technicalNameInput\" type=\"text\" maxlength=\"48\" spellcheck=\"false\">\r\n              </label>\r\n              <label class=\"field\">\r\n                <span data-i18n=\"role\">Role</span>\r\n                <input id=\"roleInput\" type=\"text\" maxlength=\"120\">\r\n              </label>\r\n              <label class=\"field\">\r\n                <span data-i18n=\"systemPrompt\">System prompt</span>\r\n                <textarea id=\"systemPromptInput\" rows=\"5\"></textarea>\r\n              </label>\r\n            </div>\r\n          </details>\r\n\r\n          <div class=\"section-heading\"><span data-i18n=\"modelSection\">Model</span></div>\r\n          <div class=\"field-grid two\">\r\n            <label class=\"field\">\r\n              <span data-i18n=\"provider\">Provider</span>\r\n              <select id=\"providerSelect\"></select>\r\n            </label>\r\n            <label class=\"field\">\r\n              <span data-i18n=\"model\">Model</span>\r\n              <select id=\"modelSelect\"></select>\r\n            </label>\r\n          </div>\r\n          <label class=\"field\">\r\n            <span data-i18n=\"reasoningEffort\">Reasoning effort</span>\r\n            <select id=\"reasoningSelect\"></select>\r\n            <small class=\"field-help\" data-i18n=\"reasoningHelp\">Values come from the selected provider/model.</small>\r\n          </label>\r\n\r\n          <div class=\"section-heading split-heading\">\r\n            <span data-i18n=\"capabilities\">Capabilities</span>\r\n            <span class=\"policy-note\" data-i18n=\"denyWins\">deny wins</span>\r\n          </div>\r\n          <div class=\"capability-tabs\" id=\"capabilityTabs\">\r\n            <span data-i18n=\"tools\">Tools</span> · <span data-i18n=\"skillsPreview\">Session skill loader</span>\r\n          </div>\r\n          <div class=\"capability-list\" id=\"capabilityList\"></div>\r\n\r\n          <div class=\"section-heading\"><span data-i18n=\"teamRole\">Team role</span></div>\r\n          <div class=\"entry-control\" id=\"entryControl\">\r\n            <div>\r\n              <strong data-i18n=\"entryAgent\">Entry Agent</strong>\r\n              <small id=\"entryAgentHelp\" data-i18n=\"entryHelp\">Exactly one node receives the primary user channel.</small>\r\n            </div>\r\n            <div class=\"entry-status-row\">\r\n              <span class=\"entry-status\" id=\"entryAgentStatus\"></span>\r\n              <button type=\"button\" class=\"button\" id=\"makeEntryButton\" data-i18n=\"makeEntry\">Make Entry Agent</button>\r\n            </div>\r\n          </div>\r\n\r\n          <div class=\"section-heading\"><span data-i18n=\"runtime\">Runtime</span></div>\r\n          <div class=\"runtime-card\">\r\n            <div>\r\n              <span class=\"status-dot\" id=\"inspectorStatusDot\"></span>\r\n              <span id=\"inspectorRuntimeStatus\">NOT_STARTED</span>\r\n            </div>\r\n            <button type=\"button\" class=\"button full\" id=\"openChatButton\" disabled data-i18n=\"openChat\">Open Chat</button>\r\n            <small id=\"openChatHelp\" data-i18n=\"openChatHelp\">Available with a real DSH Session binding.</small>\r\n            <div class=\"nodes-native-actions\" id=\"nodesNativeActions\">\r\n              <button type=\"button\" class=\"button\" id=\"nodeActivateButton\">Activate</button>\r\n              <button type=\"button\" class=\"button\" id=\"nodeFinishButton\">Finish &amp; release</button>\r\n              <button type=\"button\" class=\"button danger\" id=\"nodeInterruptButton\">Interrupt &amp; release</button>\r\n            </div>\r\n          </div>\r\n        </form>\r\n\r\n        <div class=\"luna-inspector\" id=\"lunaInspector\" hidden>\r\n          <div class=\"section-heading\">LunaBridge · Postman Chat</div>\r\n          <label class=\"field\"><span>Name</span><input id=\"lunaNameInput\" type=\"text\" maxlength=\"64\"></label>\r\n          <div class=\"runtime-card luna-facts\">\r\n            <div><span id=\"lunaRuntimeStatus\">POTENTIAL</span></div>\r\n            <div id=\"lunaRuntimeStart\">Host start: unconfirmed</div>\r\n            <div id=\"lunaRuntimeDuration\">Duration: —</div>\r\n            <div id=\"lunaReminders\">Confirmed reminders: —</div>\r\n            <div id=\"lunaReminderState\">Reminder status: unknown</div>\r\n            <a id=\"lunaConversationLink\" hidden target=\"_blank\" rel=\"noopener noreferrer\" data-i18n=\"lunaOpenChat\">Open confirmed Postman Chat</a>\r\n            <div id=\"lunaConversationUnconfirmed\">No confirmed conversation address</div>\r\n          </div>\r\n          <div class=\"section-heading\" data-i18n=\"lunaArchiveTitle\">Conversation archive</div>\r\n          <label class=\"field\"><span data-i18n=\"lunaArchiveLabel\">Verified previous conversations</span><select id=\"lunaArchiveSelect\"></select></label>\r\n          <div class=\"luna-archive-detail\" id=\"lunaArchiveDetail\"></div>\r\n          <a id=\"lunaArchiveLink\" hidden target=\"_blank\" rel=\"noopener noreferrer\" data-i18n=\"lunaOpenArchived\">Open selected archived chat</a>\r\n          <div class=\"nodes-native-actions\">\r\n            <button type=\"button\" class=\"button\" id=\"lunaContinueButton\" data-i18n=\"lunaContinue\">Continue selected chat</button>\r\n            <button type=\"button\" class=\"button\" id=\"lunaNewChatButton\" data-i18n=\"lunaNew\">Prepare new chat</button>\r\n          </div>\r\n          <p class=\"muted\" data-i18n=\"lunaSelectionWarning\">Selecting a conversation never redirects a current job or sends a message.</p>\r\n          <div class=\"section-heading\" data-i18n=\"lunaSendTitle\">Explicit Postman Chat task</div>\r\n          <label class=\"field\"><span data-i18n=\"lunaTaskLabel\">Task for the selected chat</span><textarea id=\"lunaTaskInput\" rows=\"4\" maxlength=\"15980\" data-i18n-placeholder=\"lunaTaskPlaceholder\" placeholder=\"Describe the task to send explicitly\"></textarea></label>\r\n          <label class=\"field\"><span data-i18n=\"lunaModeLabel\">Execution mode</span><select id=\"lunaModeSelect\"><option value=\"READ_ONLY\">READ_ONLY</option><option value=\"WRITE_TEST\">WRITE_TEST</option><option value=\"WRITE_ISOLATED\">WRITE_ISOLATED</option></select></label>\r\n          <button type=\"button\" class=\"button primary full\" id=\"lunaSendButton\" data-i18n=\"lunaSend\">Send explicit task</button>\r\n        </div>\r\n        <div class=\"edge-inspector\" id=\"edgeInspector\" hidden>\r\n          <div class=\"edge-kind-badge\" id=\"edgeKindBadge\"></div>\r\n          <div class=\"edge-summary\" id=\"edgeSummary\"></div>\r\n          <div class=\"edge-direction-note\" id=\"edgeDirectionNote\" hidden></div>\r\n          <p class=\"muted\" id=\"edgeDescription\"></p>\r\n          <button type=\"button\" class=\"button danger full\" id=\"deleteEdgeButton\" data-i18n=\"deleteConnection\">Delete connection</button>\r\n        </div>\r\n      </aside>\r\n    </main>\r\n\r\n    <section class=\"status-dock collapsed\" id=\"statusDock\">\r\n      <div class=\"status-dock-header\">\r\n        <div class=\"status-summary\">\r\n          <span class=\"run-pill\" id=\"runPill\" data-state=\"STOPPED\"><span class=\"pulse\"></span><span id=\"runStateLabel\">STOPPED</span></span>\r\n          <span class=\"validation-summary\" id=\"validationSummary\" data-i18n=\"notValidated\">Not validated</span>\r\n          <span class=\"compact-metrics\" aria-label=\"Team metrics\">\r\n            <span><strong id=\"compactMetricAgents\">0</strong> <span data-i18n=\"agents\">Agents</span></span>\r\n            <span><strong id=\"compactMetricAuthority\">0</strong> Authority</span>\r\n            <span><strong id=\"compactMetricCommunication\">0</strong> Communication</span>\r\n          </span>\r\n        </div>\r\n        <button type=\"button\" class=\"dock-toggle\" id=\"dockToggle\" aria-expanded=\"false\"><span data-i18n=\"validationRuntime\">Validation / runtime</span><span class=\"chevron\">⌃</span></button>\r\n      </div>\r\n      <div class=\"status-dock-body\" id=\"statusDockBody\">\r\n        <div class=\"validation-panel\">\r\n          <div class=\"panel-title-row\">\r\n            <h3 data-i18n=\"validation\">Validation</h3>\r\n            <span class=\"badge neutral\" id=\"validationBadge\">—</span>\r\n          </div>\r\n          <div class=\"validation-list\" id=\"validationList\"></div>\r\n        </div>\r\n        <div class=\"runtime-panel\">\r\n          <div class=\"panel-title-row\">\r\n            <h3 data-i18n=\"mockRuntime\">TeamRun</h3>\r\n            <span class=\"muted\" id=\"runIdLabel\">—</span>\r\n          </div>\r\n          <div class=\"runtime-copy\" id=\"runtimeCopy\" data-i18n=\"runtimeStoppedHelp\">Select a native Postman Chat to run this team.</div>\r\n          <div class=\"nodes-activity\" id=\"nodesActivity\" role=\"status\" aria-live=\"polite\"></div>\r\n          <div class=\"runtime-metrics\">\r\n            <div><span data-i18n=\"agents\">Agents</span><strong id=\"metricAgents\">0</strong></div>\r\n            <div><span data-i18n=\"authority\">Authority</span><strong id=\"metricAuthority\">0</strong></div>\r\n            <div><span data-i18n=\"communication\">Communication</span><strong id=\"metricCommunication\">0</strong></div>\r\n          </div>\r\n        </div>\r\n      </div>\r\n    </section>\r\n  </div>\r\n\r\n  <div class=\"toast-stack\" id=\"toastStack\" aria-live=\"polite\"></div>\r\n  <div id=\"smokeResult\" hidden></div>\r\n";
- const EDITOR_CSS = ".nodes-agent-root {width:100%;height:100%;min-height:560px;overflow:hidden;}\r\n.nodes-agent-dialog {box-sizing:border-box;position:fixed;inset:0;width:100vw;max-width:none;height:100vh;max-height:none;padding:26px 0 0;margin:0;border:0;background:#0b0e14;overflow:hidden;}\r\n.nodes-agent-close {position:absolute;right:8px;top:0;background:none;border:0;color:#edf2f7;font-size:22px;cursor:pointer;}\r\n.nodes-team-choice-panel {position:absolute;right:0;bottom:40px;z-index:50;background:#151d29;color:#edf2f7;padding:12px;display:grid;gap:8px;border:1px solid #293446;border-radius:8px;}\r\n.nodes-team-choice {position:relative;}\r\n@scope (.nodes-agent-root) {\r\n\r\n:scope {\r\n  color-scheme: dark;\r\n  --bg: #0b0e14;\r\n  --panel: #111722;\r\n  --panel-2: #151d29;\r\n  --panel-3: #1a2432;\r\n  --line: #293446;\r\n  --line-soft: #202a39;\r\n  --text: #edf2f7;\r\n  --muted: #8fa0b6;\r\n  --muted-2: #68798f;\r\n  --accent: #7c9cff;\r\n  --accent-2: #9b8cff;\r\n  --accent-soft: rgba(124,156,255,.12);\r\n  --authority: #ffb454;\r\n  --communication: #58d5c9;\r\n  --danger: #ff6b7a;\r\n  --success: #64d98b;\r\n  --warning: #ffd166;\r\n  --shadow: 0 18px 60px rgba(0,0,0,.32);\r\n  --radius: 12px;\r\n  --topbar-h: 64px;\r\n  --dock-h: 210px;\r\n  --inspector-w: 360px;\r\n  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;\r\n}\r\n\r\n* { box-sizing: border-box; }\r\n:scope { width: 100%; height: 100%; overflow: hidden; background: var(--bg); color: var(--text); }\r\nbutton, input, textarea, select { font: inherit; }\r\nbutton { color: inherit; }\r\nbutton:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, .canvas-shell:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }\r\n[hidden] { display: none !important; }\r\n.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0,0,0,0); border: 0; }\r\n\r\n.app-shell { display: grid; grid-template-rows: var(--topbar-h) minmax(0,1fr) auto; height: 100%; background: linear-gradient(180deg,#0d1119,#090c12); }\r\n.topbar { display: flex; align-items: center; gap: 18px; min-width: 0; padding: 0 16px; border-bottom: 1px solid var(--line); background: rgba(14,19,28,.96); box-shadow: 0 2px 14px rgba(0,0,0,.2); z-index: 20; }\r\n.brand-block { display: flex; align-items: center; gap: 10px; min-width: 238px; }\r\n.brand-mark { width: 34px; height: 34px; display: grid; place-items: center; border: 1px solid #405171; border-radius: 9px; background: linear-gradient(145deg,#283956,#151e2c); color: #c9d5ff; font-weight: 800; font-size: 12px; letter-spacing: .08em; }\r\n.brand-title { font-weight: 760; letter-spacing: -.02em; font-size: 14px; }\r\n.brand-subtitle { margin-top: 2px; color: var(--muted-2); font-size: 11px; }\r\n.team-block { display: flex; align-items: center; gap: 9px; min-width: 0; flex: 1; }\r\n.team-name { width: min(240px, 28vw); border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--text); padding: 7px 9px; font-weight: 650; }\r\n.team-name:hover { background: var(--panel-2); }\r\n.team-name:focus { border-color: var(--line); background: var(--panel-2); }\r\n.save-state { color: var(--muted-2); font-size: 11px; white-space: nowrap; }\r\n.toolbar-actions { display: flex; align-items: center; gap: 8px; white-space: nowrap; }\r\n.toolbar-cluster { display: inline-flex; align-items: center; gap: 5px; }\r\n.toolbar-cluster + .toolbar-cluster { padding-left: 8px; border-left: 1px solid var(--line-soft); }\r\n.toolbar-cluster.utility .button { color: #8fa0b6; }\r\n.button, .icon-button, .segment, .dock-toggle, .capability-tab { border: 1px solid var(--line); background: #171f2b; cursor: pointer; transition: .15s ease; }\r\n.validate-button { display: inline-flex; align-items: center; gap: 7px; }\r\n.validate-button-status { display: none; padding: 2px 5px; border-radius: 999px; font-size: 8px; font-weight: 850; letter-spacing: .04em; }\r\n.validate-button[data-validation=\"pass\"] .validate-button-status { display: inline-block; color: #9becb2; background: rgba(100,217,139,.12); }\r\n.validate-button[data-validation=\"failed\"] .validate-button-status { display: inline-block; color: #ff9ba6; background: rgba(255,107,122,.12); }\r\n.button { min-height: 34px; padding: 7px 12px; border-radius: 8px; font-weight: 650; font-size: 12px; }\r\n.button:hover, .icon-button:hover, .segment:hover:not(:disabled), .capability-tab:hover:not(:disabled) { border-color: #40506a; background: #202a39; }\r\n.button.primary { border-color: #607ee0; background: linear-gradient(180deg,#6887ee,#536fd0); color: #fff; }\r\n.button.primary:hover { filter: brightness(1.06); }\r\n.button.subtle { background: transparent; color: #b3c0d2; }\r\n.button.danger { border-color: rgba(255,107,122,.35); background: rgba(255,107,122,.09); color: #ff9ba6; }\r\n.button:disabled { opacity: .42; cursor: not-allowed; }\r\n.button.full { width: 100%; }\r\n.segmented { display: inline-flex; border-radius: 8px; background: #101620; padding: 2px; border: 1px solid var(--line-soft); }\r\n.segmented.compact .segment { min-width: 34px; padding: 5px 6px; }\r\n.segment { min-height: 28px; padding: 5px 9px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 11px; font-weight: 700; }\r\n.segment.is-active { background: #283449; color: var(--text); box-shadow: inset 0 0 0 1px #35435b; }\r\n\r\n.workspace { display: grid; grid-template-columns: minmax(0,1fr) var(--inspector-w); min-height: 0; transition: grid-template-columns .16s ease; }\r\n.workspace.inspector-collapsed { grid-template-columns: minmax(0,1fr) 42px; }\r\n.editor-pane { display: grid; grid-template-columns: minmax(0,1fr); grid-template-rows: 44px minmax(0,1fr); min-width: 0; min-height: 0; border-right: 1px solid var(--line); }\r\n.canvas-toolbar { position: relative; display: flex; align-items: center; gap: 6px; padding: 0 10px; border-bottom: 1px solid var(--line-soft); background: #101620; z-index: 9; }\r\n.icon-button { width: 30px; height: 30px; border-radius: 7px; display: inline-grid; place-items: center; padding: 0; font-weight: 760; }\r\n.icon-button.label-button { width: auto; grid-auto-flow: column; gap: 6px; padding: 0 9px; font-size: 11px; }\r\n.icon-button.danger-ghost { background: transparent; color: #d98a95; border-color: transparent; font-size: 19px; }\r\n.icon-button.danger-ghost:hover { border-color: rgba(255,107,122,.25); background: rgba(255,107,122,.08); }\r\n.toolbar-divider { width: 1px; height: 20px; margin: 0 3px; background: var(--line-soft); }\r\n.canvas-toolbar-spacer { flex: 1; }\r\n.zoom-readout { width: 45px; text-align: center; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }\r\n.legend { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 10px; }\r\n.legend-item { display: inline-flex; align-items: center; gap: 5px; }\r\n.legend-line { width: 22px; height: 0; border-top: 2px solid; position: relative; }\r\n.legend-line.authority { border-color: var(--authority); }\r\n.legend-line.communication { border-color: var(--communication); border-top-style: dashed; }\r\n.canvas-settings-wrap { position: relative; }\r\n.canvas-settings-button.is-active { border-color: #4c5f7e; background: #222d3f; color: #d7e1ee; }\r\n.canvas-settings-popover { position: absolute; right: 0; top: 36px; z-index: 40; width: 286px; padding: 11px; border: 1px solid #334158; border-radius: 10px; background: rgba(15,21,31,.98); box-shadow: 0 18px 50px rgba(0,0,0,.42); backdrop-filter: blur(12px); }\r\n.canvas-settings-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 9px; color: #c7d3e3; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }\r\n.canvas-settings-section { padding: 9px 0; border-top: 1px solid var(--line-soft); }\r\n.canvas-settings-section:first-of-type { border-top: 0; padding-top: 0; }\r\n.canvas-settings-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 30px; color: #aab8ca; font-size: 10px; }\r\n.canvas-settings-row + .canvas-settings-row { margin-top: 4px; }\r\n.canvas-settings-row select { width: 106px; border: 1px solid #2d394d; border-radius: 6px; background: #0d131d; color: var(--text); padding: 6px 7px; font-size: 10px; }\r\n.canvas-settings-row input[type=\"checkbox\"] { accent-color: var(--accent); }\r\n.canvas-settings-label { display: grid; gap: 2px; }\r\n.canvas-settings-label small { color: #607188; font-size: 8.5px; font-weight: 500; line-height: 1.35; }\r\n.canvas-settings-routing { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-top: 7px; }\r\n.canvas-settings-routing .segment { border: 1px solid #2b384c; min-height: 31px; }\r\n.canvas-settings-align { width: 100%; margin-top: 8px; }\r\n\r\n.canvas-shell { position: relative; overflow: hidden; min-height: 0; cursor: default; background-color: #0b1018; background-image: radial-gradient(circle at 1px 1px, rgba(114,133,164,.25) 1px, transparent 1.1px); background-size: 22px 22px; }\r\n.canvas-shell.is-panning { cursor: grabbing; }\r\n.canvas-shell.edge-authority { cursor: crosshair; }\r\n.canvas-shell.edge-communication { cursor: crosshair; }\r\n.canvas-stage { position: absolute; width: 4000px; height: 3000px; transform-origin: 0 0; }\r\n.canvas-world { position: absolute; inset: 0; width: 4000px; height: 3000px; transform-origin: 0 0; text-rendering: geometricPrecision; }\r\n.edge-layer { position: absolute; inset: 0; width: 4000px; height: 3000px; overflow: visible; pointer-events: none; }\r\n.edge-group { pointer-events: none; }\r\n.node-layer { position: absolute; inset: 0; }\r\n.edge-hit { fill: none; stroke: transparent; stroke-width: 14px; pointer-events: stroke; cursor: pointer; }\r\n.edge { fill: none; stroke-width: 2.1px; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; transition: opacity .14s ease, stroke-width .14s ease; }\r\n.edge.authority { stroke: var(--authority); marker-end: url(#arrowAuthority); opacity: .96; }\r\n.edge.communication { stroke: var(--communication); stroke-dasharray: 7 6; marker-end: url(#arrowCommunication); opacity: .78; }\r\n.edge.communication.bidirectional { marker-start: url(#arrowCommunication); }\r\n.communication-direction-control { display: inline-flex; }\r\n.communication-direction-control .segment { min-width: 31px; padding-inline: 8px; font-size: 12px; }\r\n.communication-direction-control .segment span[data-i18n] { margin-left: 4px; font-size: 9px; }\r\n@media (max-width: 1180px) { .communication-direction-control .segment span[data-i18n] { display: none; } }\r\n.edge-group-item.is-dimmed .edge { opacity: .22; }\r\n.edge-group-item.is-dimmed .edge-hit { pointer-events: stroke; }\r\n.edge.selected { opacity: 1; stroke-width: 3.4px; filter: drop-shadow(0 0 5px currentColor); }\r\n.edge.draft { stroke: #b5c6e6; stroke-dasharray: 4 5; stroke-width: 1.5px; opacity: .7; }\r\n.marker-authority { fill: var(--authority); }\r\n.marker-communication { fill: var(--communication); }\r\n.edge-label-bg { fill: rgba(10,14,21,.95); stroke-width: 1px; }\r\n.edge-label-bg.authority { stroke: rgba(255,180,84,.45); }\r\n.edge-label-bg.communication { stroke: rgba(88,213,201,.45); }\r\n.edge-label { fill: #aebcd0; font-size: 9px; text-anchor: middle; dominant-baseline: central; pointer-events: none; letter-spacing: .04em; text-transform: uppercase; }\r\n\r\n.agent-node { position: absolute; width: 216px; min-height: 126px; user-select: none; border: 1px solid #334056; border-radius: 12px; background: linear-gradient(180deg,rgba(28,38,52,.98),rgba(17,24,34,.98)); box-shadow: 0 12px 25px rgba(0,0,0,.25); overflow: hidden; transform-origin: 0 0; transition: border-color .12s ease, box-shadow .12s ease; }\r\n.agent-node:hover { border-color: #465773; }\r\n.agent-node.selected { border-color: var(--accent); box-shadow: 0 0 0 1px rgba(124,156,255,.25), 0 15px 32px rgba(0,0,0,.3); }\r\n.agent-node.edge-peer { border-color: #526784; }\r\n.agent-node.edge-source-authority { border-color: var(--authority); box-shadow: 0 0 0 1px rgba(255,180,84,.2), 0 15px 32px rgba(0,0,0,.3); }\r\n.agent-node.edge-source-communication { border-color: var(--communication); box-shadow: 0 0 0 1px rgba(88,213,201,.18), 0 15px 32px rgba(0,0,0,.3); }\r\n.agent-node.edge-target-candidate { border-color: #45566f; }\r\n.agent-node.edge-target-candidate:hover { border-color: var(--accent); }\r\n.agent-node.entry { box-shadow: inset 0 2px 0 rgba(155,140,255,.8), 0 12px 25px rgba(0,0,0,.25); }\r\n.agent-node.dragging { box-shadow: 0 20px 42px rgba(0,0,0,.42); }\r\n.node-runtime-strip { height: 4px; background: #42506a; }\r\n.agent-node[data-runtime=\"RUNNING\"] .node-runtime-strip { background: var(--success); box-shadow: 0 0 12px rgba(100,217,139,.5); }\r\n.agent-node[data-runtime=\"IDLE\"] .node-runtime-strip { background: #5fb7ff; }\r\n.agent-node[data-runtime=\"PAUSED\"] .node-runtime-strip { background: var(--warning); }\r\n.agent-node[data-runtime=\"ERROR\"] .node-runtime-strip { background: var(--danger); }\r\n.agent-node[data-runtime=\"STOPPED\"] .node-runtime-strip { background: #657184; }\r\n.node-body { padding: 12px 13px 11px; }\r\n.node-topline { display: flex; align-items: flex-start; gap: 7px; }\r\n.node-title-wrap { min-width: 0; flex: 1; }\r\n.node-title { font-size: 13px; font-weight: 780; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }\r\n.node-role { margin-top: 3px; color: var(--muted); font-size: 10.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }\r\n.entry-badge { flex: none; padding: 3px 5px; border-radius: 5px; background: rgba(155,140,255,.13); color: #c4b9ff; border: 1px solid rgba(155,140,255,.28); font-size: 9px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }\r\n.node-meta { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px; margin-top: 13px; padding-top: 9px; border-top: 1px solid rgba(64,78,99,.4); }\r\n.model-chip { min-width: 0; color: #c2ccda; font-size: 10px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }\r\n.runtime-chip { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 9.5px; font-weight: 700; }\r\n.runtime-dot { width: 7px; height: 7px; border-radius: 50%; background: #657184; }\r\n.agent-node[data-runtime=\"RUNNING\"] .runtime-dot { background: var(--success); box-shadow: 0 0 0 3px rgba(100,217,139,.12); }\r\n.agent-node[data-runtime=\"IDLE\"] .runtime-dot { background: #5fb7ff; }\r\n.agent-node[data-runtime=\"PAUSED\"] .runtime-dot { background: var(--warning); }\r\n.agent-node[data-runtime=\"ERROR\"] .runtime-dot { background: var(--danger); }\r\n.node-port { position: absolute; width: 11px; height: 11px; border-radius: 50%; border: 2px solid #111923; opacity: .68; transition: opacity .12s ease, transform .12s ease, box-shadow .12s ease; pointer-events: none; z-index: 3; box-shadow: 0 0 0 1px rgba(255,255,255,.04); }\r\n.node-port.authority { background: var(--authority); }\r\n.node-port.communication { background: var(--communication); }\r\n.node-port.authority.in { left: 50%; top: -6px; transform: translateX(-50%); }\r\n.node-port.authority.out { left: 50%; bottom: -6px; transform: translateX(-50%); }\r\n.node-port.communication.in { left: -6px; top: 50%; transform: translateY(-50%); }\r\n.node-port.communication.out { right: -6px; top: 50%; transform: translateY(-50%); }\r\n.canvas-shell.edge-authority .node-port.authority { opacity: 1; box-shadow: 0 0 0 3px rgba(255,180,84,.10); }\r\n.canvas-shell.edge-authority .node-port.communication { opacity: .22; }\r\n.canvas-shell.edge-communication .node-port.communication { opacity: 1; box-shadow: 0 0 0 3px rgba(88,213,201,.10); }\r\n.canvas-shell.edge-communication .node-port.authority { opacity: .22; }\r\n.agent-node:hover .node-port { opacity: 1; }\r\n\r\n.canvas-empty { position: absolute; inset: 0; z-index: 3; display: grid; place-content: center; justify-items: center; text-align: center; padding: 30px; pointer-events: none; }\r\n.canvas-empty .button { pointer-events: auto; }\r\n.empty-icon, .empty-ring { display: grid; place-items: center; width: 54px; height: 54px; border-radius: 50%; border: 1px solid #344158; background: #131b27; color: #8295b2; font-size: 26px; }\r\n.canvas-empty h2 { margin: 14px 0 5px; font-size: 18px; }\r\n.canvas-empty p { max-width: 460px; margin: 0 0 16px; color: var(--muted); font-size: 12px; line-height: 1.6; }\r\n.canvas-hint { position: absolute; left: 12px; bottom: 10px; z-index: 5; padding: 6px 8px; border-radius: 6px; color: #71839a; background: rgba(12,17,25,.75); border: 1px solid rgba(52,65,88,.45); font-size: 10px; pointer-events: none; }\r\n.connection-banner { position: absolute; left: 50%; top: 12px; z-index: 8; transform: translateX(-50%); max-width: min(620px,calc(100% - 40px)); padding: 8px 11px; border: 1px solid #3a4a62; border-radius: 8px; background: rgba(14,20,30,.94); box-shadow: 0 10px 28px rgba(0,0,0,.28); color: #c8d3e2; font-size: 10.5px; font-weight: 650; pointer-events: none; }\r\n.connection-banner.authority { border-color: rgba(255,180,84,.42); color: #ffd296; }\r\n.connection-banner.communication { border-color: rgba(88,213,201,.38); color: #9af0e8; }\r\n\r\n.inspector { min-width: 0; min-height: 0; overflow: auto; background: #101620; }\r\n.inspector-header { position: sticky; top: 0; z-index: 4; min-height: 64px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 14px; background: rgba(16,22,32,.95); border-bottom: 1px solid var(--line-soft); backdrop-filter: blur(10px); }\r\n.inspector-header-actions { display: inline-flex; align-items: center; gap: 4px; }\r\n.inspector-collapse-button { width: 28px; height: 28px; font-size: 17px; color: #8fa0b6; background: transparent; border-color: transparent; }\r\n.workspace.inspector-collapsed .inspector { overflow: hidden; }\r\n.workspace.inspector-collapsed .inspector-header { height: 100%; min-height: 0; align-items: flex-start; justify-content: center; padding: 10px 6px; border-bottom: 0; }\r\n.workspace.inspector-collapsed .inspector-header > div:first-child,\r\n.workspace.inspector-collapsed .inspector-empty,\r\n.workspace.inspector-collapsed .inspector-form,\r\n.workspace.inspector-collapsed .edge-inspector,\r\n.workspace.inspector-collapsed #deleteSelectionButton { display: none !important; }\r\n.workspace.inspector-collapsed .inspector-header-actions { display: block; }\r\n.eyebrow { color: var(--muted-2); font-size: 9px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }\r\n.inspector-header h2 { margin: 3px 0 0; font-size: 14px; letter-spacing: -.01em; }\r\n.inspector-empty { display: grid; justify-items: center; padding: 70px 30px; text-align: center; color: var(--muted); }\r\n.inspector-empty p { max-width: 230px; font-size: 11px; line-height: 1.6; }\r\n.inspector-form, .edge-inspector { padding: 14px 14px 28px; }\r\n.section-heading { display: flex; align-items: center; gap: 8px; margin: 16px 0 9px; color: #b8c5d7; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }\r\n.section-heading:first-child { margin-top: 0; }\r\n.agent-details { margin: 4px 0 14px; border: 1px solid #273348; border-radius: 8px; background: #0d141f; overflow: hidden; }\r\n.agent-details summary { list-style: none; display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 8px 10px; cursor: pointer; color: #9eacc0; font-size: 10px; font-weight: 750; user-select: none; }\r\n.agent-details summary::-webkit-details-marker { display: none; }\r\n.agent-details summary:hover { background: #111a27; color: #c2cddd; }\r\n.agent-details-summary-copy { min-width: 0; flex: 1; }\r\n.agent-details-summary-copy strong { display: block; color: inherit; font-size: 10px; }\r\n.agent-details-summary-copy small { display: block; margin-top: 2px; color: #65758b; font-size: 9px; font-weight: 500; line-height: 1.35; }\r\n.agent-details-chevron { width: 16px; height: 16px; display: grid; place-items: center; flex: none; color: #71839a; font-size: 15px; transition: transform .14s ease; }\r\n.agent-details[open] .agent-details-chevron { transform: rotate(90deg); }\r\n.agent-details-content { padding: 10px 10px 0; border-top: 1px solid #253145; background: rgba(10,15,23,.32); }\r\n.agent-details .node-id { display: block; margin: 0 0 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }\r\n.split-heading { justify-content: space-between; }\r\n.node-id { margin-left: auto; color: #596c86; font-size: 9px; text-transform: none; letter-spacing: normal; font-family: ui-monospace,SFMono-Regular,Menlo,monospace; }\r\n.policy-note { padding: 2px 5px; border: 1px solid rgba(255,107,122,.22); border-radius: 5px; color: #d5848e; font-size: 9px; letter-spacing: .04em; text-transform: lowercase; }\r\n.field { display: grid; gap: 5px; margin-bottom: 10px; color: var(--muted); font-size: 10px; font-weight: 650; }\r\n.field input, .field textarea, .field select { width: 100%; border: 1px solid #2d394d; border-radius: 7px; background: #0d131d; color: var(--text); padding: 8px 9px; font-size: 11px; font-weight: 500; }\r\n.field textarea { min-height: 88px; resize: vertical; line-height: 1.45; }\r\n.field select { min-height: 34px; }\r\n.field-grid.two { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }\r\n.field-help { color: #65758b; font-size: 10px; font-weight: 500; line-height: 1.4; }\r\n.capability-tabs { display: grid; grid-template-columns: repeat(3,1fr); gap: 5px; margin-bottom: 8px; }\r\n.capability-tab { min-height: 28px; border-radius: 6px; color: var(--muted); font-size: 9.5px; font-weight: 700; }\r\n.capability-tab.is-active { border-color: #435170; background: #222d3f; color: var(--text); }\r\n.capability-tab:disabled { opacity: .42; cursor: not-allowed; }\r\n.capability-list { display: grid; gap: 5px; }\r\n.cap-row { display: grid; grid-template-columns: minmax(0,1fr) 68px; gap: 7px; align-items: center; padding: 7px 8px; border: 1px solid #263246; border-radius: 7px; background: #0e141e; }\r\n.cap-name { min-width: 0; display: flex; align-items: center; gap: 7px; }\r\n.cap-name code { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: #c7d2e1; font-size: 10px; }\r\n.cap-kind { flex: none; padding: 2px 4px; border-radius: 4px; background: #202b3c; color: #7f92ad; font-size: 8.5px; text-transform: uppercase; }\r\n.cap-row select { width: 100%; border: 1px solid #2e3a4d; border-radius: 5px; background: #151d29; color: #c1ccda; padding: 4px; font-size: 10px; }\r\n.cap-row select[data-mode=\"deny\"] { border-color: rgba(255,107,122,.35); color: #ff9ba6; }\r\n.entry-control { display: grid; gap: 9px; padding: 10px; border: 1px solid #29354a; border-radius: 8px; background: #0d141f; }\r\n.entry-control.current { border-color: rgba(155,140,255,.35); background: rgba(155,140,255,.055); }\r\n.entry-control strong { display: block; font-size: 11px; }\r\n.entry-control small { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.45; }\r\n.entry-status-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }\r\n.entry-status { color: #c7d2e1; font-size: 10px; font-weight: 700; }\r\n.entry-status.current { color: #c4b9ff; }\r\n.runtime-card { display: grid; gap: 9px; padding: 10px; border: 1px solid #29354a; border-radius: 8px; background: #0d141f; }\r\n.runtime-card > div { display: flex; align-items: center; gap: 7px; color: #bcc7d6; font-size: 10px; font-weight: 700; }\r\n.status-dot { width: 8px; height: 8px; border-radius: 50%; background: #657184; }\r\n.runtime-card small { color: var(--muted-2); font-size: 10px; line-height: 1.45; }\r\n.edge-inspector { display: grid; gap: 12px; }\r\n.edge-kind-badge { width: fit-content; padding: 4px 7px; border-radius: 6px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; }\r\n.edge-kind-badge.authority { background: rgba(255,180,84,.11); color: #ffc676; border: 1px solid rgba(255,180,84,.25); }\r\n.edge-kind-badge.communication { background: rgba(88,213,201,.1); color: #83e9e0; border: 1px solid rgba(88,213,201,.22); }\r\n.edge-summary { font-size: 13px; line-height: 1.5; }\r\n.edge-direction-note { display: flex; align-items: center; gap: 7px; width: fit-content; padding: 5px 7px; border: 1px solid #2a394e; border-radius: 7px; background: #101824; color: #9fb0c6; font-size: 10px; font-weight: 700; }\r\n.edge-direction-note.bidirectional { border-color: rgba(88,213,201,.28); color: #9ae7df; }\r\n.muted { color: var(--muted); }\r\n\r\n.status-dock { border-top: 1px solid var(--line); background: #0e141d; z-index: 15; }\r\n.status-dock-header { height: 38px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 12px; border-bottom: 1px solid var(--line-soft); }\r\n.status-summary { display: flex; align-items: center; gap: 9px; min-width: 0; }\r\n.compact-metrics { display: inline-flex; align-items: center; gap: 8px; padding-left: 4px; color: #74869e; font-size: 9.5px; white-space: nowrap; }\r\n.compact-metrics span + span::before { content: '·'; margin-right: 8px; color: #42516a; }\r\n.compact-metrics strong { color: #aebed1; font-weight: 800; }\r\n.run-pill { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 7px; border: 1px solid #30405a; border-radius: 999px; color: #a7b5c9; background: #141c28; font-size: 9px; font-weight: 800; letter-spacing: .04em; }\r\n.run-pill .pulse { width: 6px; height: 6px; border-radius: 50%; background: #617087; }\r\n.run-pill[data-state=\"RUNNING\"] { border-color: rgba(100,217,139,.35); color: #97efb1; }\r\n.run-pill[data-state=\"RUNNING\"] .pulse { background: var(--success); box-shadow: 0 0 0 4px rgba(100,217,139,.1); }\r\n.run-pill[data-state=\"STARTING\"] .pulse { background: var(--warning); animation: pulse 1s infinite; }\r\n.run-pill[data-state=\"PAUSED\"] { color: #ffe099; border-color: rgba(255,209,102,.28); }\r\n.run-pill[data-state=\"PAUSED\"] .pulse { background: var(--warning); }\r\n.run-pill[data-state=\"FAILED\"] { color: #ff9ba6; border-color: rgba(255,107,122,.28); }\r\n.run-pill[data-state=\"FAILED\"] .pulse { background: var(--danger); }\r\n@keyframes pulse { 50% { opacity: .35; } }\r\n.validation-summary { color: var(--muted); font-size: 10px; }\r\n.dock-toggle { display: inline-flex; align-items: center; gap: 7px; border: 0; background: transparent; color: var(--muted); font-size: 9px; }\r\n.dock-toggle .chevron { transition: transform .15s; }\r\n.status-dock.collapsed .dock-toggle .chevron { transform: rotate(180deg); }\r\n.status-dock-body { height: 166px; display: grid; grid-template-columns: minmax(0,1.5fr) minmax(300px,.8fr); }\r\n.status-dock.collapsed .status-dock-body { display: none; }\r\n.validation-panel, .runtime-panel { min-width: 0; overflow: auto; padding: 10px 12px; }\r\n.runtime-panel { border-left: 1px solid var(--line-soft); }\r\n.panel-title-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }\r\n.panel-title-row h3 { margin: 0; font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: #a9b7ca; }\r\n.badge { padding: 2px 6px; border-radius: 999px; font-size: 9px; font-weight: 800; }\r\n.badge.neutral { background: #1a2432; color: var(--muted); }\r\n.badge.success { background: rgba(100,217,139,.1); color: #8ce9a8; }\r\n.badge.error { background: rgba(255,107,122,.1); color: #ff94a0; }\r\n.validation-list { display: grid; gap: 5px; }\r\n.validation-item { display: grid; grid-template-columns: 8px minmax(0,1fr) auto; gap: 7px; align-items: start; padding: 6px 7px; border-radius: 6px; background: #111924; color: #b8c4d4; font-size: 9.5px; cursor: default; }\r\n.validation-item:hover { background: #151f2c; }\r\n.validation-icon { width: 7px; height: 7px; margin-top: 3px; border-radius: 50%; background: var(--danger); }\r\n.validation-target { color: #687b93; font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: 9px; }\r\n.validation-ok { padding: 16px 8px; color: #8fdda6; font-size: 10px; }\r\n.validation-empty { padding: 16px 8px; color: var(--muted); font-size: 10px; }\r\n.runtime-copy { color: var(--muted); font-size: 9.5px; line-height: 1.5; }\r\n.runtime-metrics { display: grid; grid-template-columns: repeat(3,1fr); gap: 7px; margin-top: 12px; }\r\n.runtime-metrics div { padding: 7px; border: 1px solid #273348; border-radius: 7px; background: #111925; }\r\n.runtime-metrics span { display: block; color: var(--muted-2); font-size: 8px; }\r\n.runtime-metrics strong { display: block; margin-top: 3px; font-size: 14px; }\r\n\r\n.toast-stack { position: fixed; right: 14px; bottom: 50px; z-index: 100; display: grid; gap: 7px; width: min(330px,calc(100vw - 28px)); pointer-events: none; }\r\n.toast { padding: 10px 11px; border: 1px solid #34425a; border-radius: 8px; background: rgba(21,29,41,.96); box-shadow: var(--shadow); color: #c8d2df; font-size: 10px; animation: toastIn .18s ease; }\r\n.toast.error { border-color: rgba(255,107,122,.35); }\r\n.toast.success { border-color: rgba(100,217,139,.35); }\r\n@keyframes toastIn { from { transform: translateY(7px); opacity: 0; } }\r\n\r\n@media (max-width: 1180px) {\r\n  :root { --inspector-w: 320px; }\r\n  .brand-subtitle, .save-state, .button.subtle#resetButton, .legend { display: none; }\r\n  .toolbar-actions { gap: 5px; }\r\n  .canvas-toolbar .label-button span[data-i18n] { display: none; }\r\n  .canvas-toolbar .segment { padding-inline: 6px; }\r\n  .canvas-toolbar .toolbar-divider { margin-inline: 1px; }\r\n  .button { padding-inline: 9px; }\r\n}\r\n@media (max-width: 900px) {\r\n  :root { --inspector-w: 290px; }\r\n  .brand-block { min-width: 180px; }\r\n  .brand-mark { display: none; }\r\n  .team-name { width: 150px; }\r\n  .toolbar-actions .button.subtle { display: none; }\r\n  .field-grid.two { grid-template-columns: 1fr; }\r\n}\r\n\r\n\r\n\r\n.nodes-team-picker {max-width:150px;min-width:90px;background:#151d29;color:#edf2f7;border:1px solid #293446;border-radius:7px;height:31px;font-size:11px;}\r\n.nodes-activity {max-height:120px;overflow-y:auto;font-size:11px;color:var(--muted);padding:4px 10px;}\r\n.nodes-activity div {padding:3px 0;}\r\n.nodes-native-actions {display:flex;flex-wrap:wrap;gap:5px;margin-top:11px;}\r\n.nodes-native-actions .button {flex:1 1 95px;padding:7px 5px;white-space:normal;}\r\n.luna-bridge-node {border-color:#506d79;background:linear-gradient(180deg,#20333c,#152329);}\r\n.luna-bridge-node .node-role {color:#91c4d0;}\r\n.luna-bridge-node.selected {border-color:#58d5c9;}\r\n.luna-chat-node {position:absolute;width:204px;min-height:100px;padding:12px;border:1px dashed #40998f;border-radius:10px;background:#101f27;color:#b6d9d4;font-size:10px;cursor:pointer;overflow:visible;}\r\n.luna-chat-node::before {content:'';position:absolute;left:-34px;top:39px;width:34px;border-top:2px dashed #58d5c9;}\r\n.luna-chat-node strong {display:block;margin-bottom:9px;font-size:13px;}\r\n.luna-chat-node div {margin-top:5px;color:#8aaca8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}\r\n.luna-chat-node .luna-chat-address {color:#58d5c9;}\r\n.luna-inspector {padding:14px 14px 28px;}\r\n.luna-inspector .luna-facts {display:grid;gap:8px;font-size:11px;line-height:1.4;}\r\n.luna-inspector a {color:#8cc5ff;overflow-wrap:anywhere;}\r\n.luna-inspector .field select {max-width:100%;}\r\n.agent-node[data-runtime=\"WORKING\"] .node-runtime-strip,.agent-node[data-runtime=\"WORKING\"] .runtime-dot {background:var(--success);}\r\n.agent-node[data-runtime=\"WORKING\"] {border-color:#55cfa0;box-shadow:inset 0 1px 0 rgba(78,222,165,.45),0 0 0 2px rgba(78,222,165,.16),0 10px 28px rgba(0,0,0,.28);}\r\n.agent-node[data-runtime=\"IDLE\"] {border-color:#5589b9;}\r\n.agent-node[data-runtime=\"POTENTIAL\"],.agent-node[data-runtime=\"COLD\"],.agent-node[data-runtime=\"SUSPENDED\"] {opacity:.58;}\r\n.agent-node[data-runtime=\"POTENTIAL\"] .node-runtime-strip,.agent-node[data-runtime=\"COLD\"] .node-runtime-strip {background:#526174;}\r\n.agent-node[data-runtime=\"POTENTIAL\"] .runtime-chip,.agent-node[data-runtime=\"COLD\"] .runtime-chip {color:#8290a4;}\r\n.luna-chat-node[data-runtime=\"WORKING\"],.luna-chat-node[data-runtime=\"QUEUED\"] {border-color:#5bd6a9;box-shadow:0 0 0 2px rgba(91,214,169,.15);}\r\n.luna-chat-node[data-runtime=\"POTENTIAL\"] {opacity:.7;}\r\n.luna-chat-node .luna-chat-status {font-weight:700;color:#94dfb7;}\r\n.luna-inspector .luna-archive-detail {margin:8px 0;font-size:10px;line-height:1.5;color:#8193a8;overflow-wrap:anywhere;}\r\n.luna-inspector textarea {width:100%;box-sizing:border-box;min-height:80px;resize:vertical;}\r\n.luna-inspector #lunaArchiveLink {display:inline-block;margin-bottom:8px;}\r\n.luna-inspector #lunaArchiveLink[hidden] {display:none;}\r\n}\r\n";
+ const EDITOR_HTML = "<div class=\"app-shell\" id=\"appShell\">\r\n    <header class=\"topbar\">\r\n      <div class=\"brand-block\">\r\n        <div class=\"brand-mark\" aria-hidden=\"true\">NA</div>\r\n        <div>\r\n          <div class=\"brand-title\">NodesAgent_by_Andrew</div>\r\n          <div class=\"brand-subtitle\" data-i18n=\"prototypeLabel\">Native Postman Team Editor</div>\r\n        </div>\r\n      </div>\r\n\r\n      <div class=\"team-block\">\r\n        <label class=\"sr-only\" for=\"teamName\" data-i18n=\"teamName\">Team name</label>\r\n        <input id=\"teamName\" class=\"team-name\" type=\"text\" maxlength=\"64\" value=\"Software Team\" autocomplete=\"off\">\r\n        <span class=\"save-state\" id=\"saveState\" data-i18n=\"localDraft\">Local draft</span>\r\n      </div>\r\n\r\n      <div class=\"toolbar-actions\">\r\n        <div class=\"toolbar-cluster utility\">\r\n          <div class=\"segmented compact\" role=\"group\" aria-label=\"Language\">\r\n            <button type=\"button\" class=\"segment is-active\" data-locale-action=\"en-US\">EN</button>\r\n            <button type=\"button\" class=\"segment\" data-locale-action=\"ru-RU\">RU</button>\r\n          </div>\r\n          <select id=\"teamPicker\" class=\"nodes-team-picker\" aria-label=\"Saved teams\"></select>\r\n          <button type=\"button\" class=\"button subtle\" id=\"loadDemoButton\" data-i18n=\"loadDemo\">Load</button>\r\n          <button type=\"button\" class=\"button subtle\" id=\"resetButton\" data-i18n=\"reset\">New</button>\r\n        </div>\r\n        <div class=\"toolbar-cluster\">\r\n          <button type=\"button\" class=\"button\" id=\"saveButton\" data-i18n=\"save\">Save</button>\r\n          <button type=\"button\" class=\"button\" id=\"saveAsButton\" data-i18n=\"saveAs\">Save As</button>\r\n          <button type=\"button\" class=\"button validate-button\" id=\"validateButton\" data-validation=\"none\"><span id=\"validateButtonLabel\" data-i18n=\"validate\">Validate</span><span class=\"validate-button-status\" id=\"validateButtonStatus\"></span></button>\r\n        </div>\r\n        <div class=\"toolbar-cluster\">\r\n          <button type=\"button\" class=\"button primary\" id=\"startButton\" data-i18n=\"start\">Start</button>\r\n          <button type=\"button\" class=\"button\" id=\"pauseButton\" data-i18n=\"pause\" hidden>Pause</button>\r\n          <button type=\"button\" class=\"button\" id=\"resumeButton\" data-i18n=\"resume\" hidden>Resume</button>\r\n          <button type=\"button\" class=\"button danger\" id=\"stopButton\" data-i18n=\"stop\" hidden>Stop</button>\r\n        </div>\r\n      </div>\r\n    </header>\r\n\r\n    <main class=\"workspace\" id=\"workspace\">\r\n      <section class=\"editor-pane\" aria-label=\"Agent team editor\">\r\n        <div class=\"canvas-toolbar\">\r\n          <button type=\"button\" class=\"icon-button label-button\" id=\"addNodeButton\" title=\"Add AgentNode\">\r\n            <span class=\"icon\">+</span><span data-i18n=\"addAgent\">Agent</span>\r\n          </button>\r\n          <button type=\"button\" class=\"icon-button label-button\" id=\"addLunaButton\" title=\"Add LunaBridge\">\r\n            <span class=\"icon\">+</span><span>LunaBridge</span>\r\n          </button>\r\n          <div class=\"toolbar-divider\"></div>\r\n          <div class=\"segmented\" role=\"group\" aria-label=\"Edge mode\">\r\n            <button type=\"button\" class=\"segment is-active\" data-edge-mode=\"select\" data-i18n=\"selectMode\">Select</button>\r\n            <button type=\"button\" class=\"segment\" data-edge-mode=\"authority\" data-i18n=\"authority\">Authority</button>\r\n            <button type=\"button\" class=\"segment\" data-edge-mode=\"communication\" data-i18n=\"communication\">Communication</button>\r\n            <button type=\"button\" class=\"segment\" data-edge-mode=\"chat\" data-i18n=\"postmanChat\">Postman Chat</button>\r\n          </div>\r\n          <div class=\"segmented communication-direction-control\" id=\"communicationDirectionControl\" role=\"group\" aria-label=\"Communication direction\" hidden>\r\n            <button type=\"button\" class=\"segment is-active\" data-communication-direction=\"bidirectional\" title=\"Bidirectional\">↔<span data-i18n=\"communicationBidirectional\">Both</span></button>\r\n            <button type=\"button\" class=\"segment\" data-communication-direction=\"oneway\" title=\"One-way\">→<span data-i18n=\"communicationOneWay\">One-way</span></button>\r\n          </div>\r\n          <div class=\"toolbar-divider\"></div>\r\n          <button type=\"button\" class=\"icon-button\" id=\"zoomOutButton\" title=\"Zoom out\">−</button>\r\n          <span class=\"zoom-readout\" id=\"zoomReadout\">100%</span>\r\n          <button type=\"button\" class=\"icon-button\" id=\"zoomInButton\" title=\"Zoom in\">+</button>\r\n          <button type=\"button\" class=\"icon-button label-button\" id=\"fitButton\" title=\"Fit view\"><span class=\"fit-icon\">⌗</span><span data-i18n=\"fitView\">Fit</span></button>\r\n          <div class=\"canvas-settings-wrap\">\r\n            <button type=\"button\" class=\"icon-button label-button canvas-settings-button\" id=\"canvasSettingsButton\" aria-expanded=\"false\"><span aria-hidden=\"true\">⚙</span><span data-i18n=\"canvasSettings\">Canvas</span></button>\r\n            <div class=\"canvas-settings-popover\" id=\"canvasSettingsPopover\" hidden>\r\n              <div class=\"canvas-settings-title\"><span data-i18n=\"canvasSettingsTitle\">Canvas settings</span></div>\r\n              <div class=\"canvas-settings-section\">\r\n                <div class=\"canvas-settings-row\">\r\n                  <span class=\"canvas-settings-label\"><span data-i18n=\"showGrid\">Show grid</span><small data-i18n=\"showGridHelp\">Visual coordinate grid</small></span>\r\n                  <input id=\"gridVisibleInput\" type=\"checkbox\">\r\n                </div>\r\n                <div class=\"canvas-settings-row\">\r\n                  <span data-i18n=\"gridStyle\">Grid style</span>\r\n                  <select id=\"gridStyleSelect\"><option value=\"dots\" data-i18n=\"gridDots\">Dots</option><option value=\"lines\" data-i18n=\"gridLines\">Lines</option></select>\r\n                </div>\r\n                <div class=\"canvas-settings-row\">\r\n                  <span data-i18n=\"gridSize\">Grid step</span>\r\n                  <select id=\"gridSizeSelect\"><option value=\"12\">12 px</option><option value=\"18\">18 px</option><option value=\"24\">24 px</option><option value=\"36\">36 px</option></select>\r\n                </div>\r\n                <div class=\"canvas-settings-row\">\r\n                  <span class=\"canvas-settings-label\"><span data-i18n=\"snapNodes\">Snap nodes</span><small data-i18n=\"snapNodesHelp\">Drag AgentNodes by grid step</small></span>\r\n                  <input id=\"snapNodesInput\" type=\"checkbox\">\r\n                </div>\r\n                <button type=\"button\" class=\"button subtle canvas-settings-align\" id=\"alignNodesButton\" data-i18n=\"alignNodes\">Align existing nodes</button>\r\n              </div>\r\n              <div class=\"canvas-settings-section\">\r\n                <div class=\"canvas-settings-label\"><span data-i18n=\"connectionRouting\">Connection routing</span><small data-i18n=\"connectionRoutingHelp\">Free curves or rounded orthogonal grid routes</small></div>\r\n                <div class=\"canvas-settings-routing\" role=\"group\" aria-label=\"Connection routing\">\r\n                  <button type=\"button\" class=\"segment\" data-routing-mode=\"free\" data-i18n=\"routingFree\">Free</button>\r\n                  <button type=\"button\" class=\"segment\" data-routing-mode=\"orthogonal\" data-i18n=\"routingOrthogonal\">Grid</button>\r\n                </div>\r\n              </div>\r\n            </div>\r\n          </div>\r\n          <div class=\"canvas-toolbar-spacer\"></div>\r\n          <div class=\"legend\">\r\n            <span class=\"legend-item\" id=\"authorityLegend\" title=\"Authority also permits messages in both directions\"><span class=\"legend-line authority\"></span><span data-i18n=\"authority\">Authority</span></span>\r\n            <span class=\"legend-item\"><span class=\"legend-line communication\"></span><span data-i18n=\"communication\">Communication</span></span>\r\n            <span class=\"legend-item\" title=\"Agent-to-Chat connection\"><span class=\"legend-line chat\"></span><span data-i18n=\"postmanChat\">Postman Chat</span></span>\r\n          </div>\r\n        </div>\r\n\r\n        <div class=\"canvas-shell\" id=\"canvasShell\" tabindex=\"0\">\r\n          <div class=\"connection-banner\" id=\"connectionBanner\" hidden></div>\r\n          <div class=\"canvas-empty\" id=\"canvasEmpty\" hidden>\r\n            <div class=\"empty-icon\">◎</div>\r\n            <h2 data-i18n=\"emptyTitle\">Build an agent team</h2>\r\n            <p data-i18n=\"emptyBody\">Add AgentNodes, assign one Entry Agent, then connect authority and communication independently.</p>\r\n            <button type=\"button\" class=\"button primary\" id=\"emptyAddButton\" data-i18n=\"addFirstAgent\">Add first AgentNode</button>\r\n          </div>\r\n          <div class=\"canvas-stage\" id=\"canvasStage\">\r\n            <div class=\"canvas-world\" id=\"canvasWorld\">\r\n            <svg class=\"edge-layer\" id=\"edgeLayer\" xmlns=\"http://www.w3.org/2000/svg\" aria-label=\"Connections\">\r\n              <defs>\r\n                <marker id=\"arrowAuthority\" markerWidth=\"10\" markerHeight=\"10\" refX=\"9\" refY=\"3\" orient=\"auto\" markerUnits=\"strokeWidth\">\r\n                  <path d=\"M0,0 L0,6 L9,3 z\" class=\"marker-authority\"></path>\r\n                </marker>\r\n                <marker id=\"arrowCommunication\" markerWidth=\"10\" markerHeight=\"10\" refX=\"9\" refY=\"3\" orient=\"auto-start-reverse\" markerUnits=\"strokeWidth\">\r\n                  <path d=\"M0,0 L0,6 L9,3 z\" class=\"marker-communication\"></path>\r\n                </marker>\r\n              </defs>\r\n              <g id=\"edgeGroup\"></g>\r\n              <path id=\"draftEdge\" class=\"edge draft\" d=\"\" hidden></path>\r\n            </svg>\r\n            <div class=\"node-layer\" id=\"nodeLayer\"></div>\r\n            </div>\r\n          </div>\r\n          <div class=\"canvas-hint\" id=\"canvasHint\" data-i18n=\"canvasHint\">Drag empty space to pan · wheel to zoom · Delete removes selection</div>\r\n        </div>\r\n      </section>\r\n\r\n      <aside class=\"inspector\" id=\"inspector\">\r\n        <div class=\"inspector-header\">\r\n          <div>\r\n            <div class=\"eyebrow\" data-i18n=\"inspector\">Inspector</div>\r\n            <h2 id=\"inspectorTitle\" data-i18n=\"nothingSelected\">Nothing selected</h2>\r\n          </div>\r\n          <div class=\"inspector-header-actions\">\r\n            <button type=\"button\" class=\"icon-button inspector-collapse-button\" id=\"inspectorCollapseButton\" aria-expanded=\"true\">‹</button>\r\n            <button type=\"button\" class=\"icon-button danger-ghost\" id=\"deleteSelectionButton\" title=\"Delete\" hidden>×</button>\r\n          </div>\r\n        </div>\r\n\r\n        <div class=\"inspector-empty\" id=\"inspectorEmpty\">\r\n          <div class=\"empty-ring\">◇</div>\r\n          <p data-i18n=\"inspectorEmpty\">Select an AgentNode or connection to edit it.</p>\r\n        </div>\r\n\r\n        <form class=\"inspector-form\" id=\"nodeInspector\" hidden>\r\n          <div class=\"section-heading\">\r\n            <span data-i18n=\"identity\">Identity</span>\r\n          </div>\r\n\r\n          <label class=\"field\">\r\n            <span data-i18n=\"displayName\">Display name</span>\r\n            <input id=\"displayNameInput\" type=\"text\" maxlength=\"64\">\r\n          </label>\r\n\r\n          <details class=\"agent-details\" id=\"agentDetailsDisclosure\">\r\n            <summary>\r\n              <span class=\"agent-details-summary-copy\">\r\n                <strong data-i18n=\"advancedDetails\">Technical details</strong>\r\n                <small data-i18n=\"advancedDetailsHint\">Technical name, role and system prompt</small>\r\n              </span>\r\n              <span class=\"agent-details-chevron\" aria-hidden=\"true\">›</span>\r\n            </summary>\r\n            <div class=\"agent-details-content\">\r\n              <span class=\"node-id\" id=\"nodeIdLabel\"></span>\r\n              <label class=\"field\">\r\n                <span data-i18n=\"technicalName\">Technical name</span>\r\n                <input id=\"technicalNameInput\" type=\"text\" maxlength=\"48\" spellcheck=\"false\">\r\n              </label>\r\n              <label class=\"field\">\r\n                <span data-i18n=\"role\">Role</span>\r\n                <input id=\"roleInput\" type=\"text\" maxlength=\"120\">\r\n              </label>\r\n              <label class=\"field\">\r\n                <span data-i18n=\"systemPrompt\">System prompt</span>\r\n                <textarea id=\"systemPromptInput\" rows=\"5\"></textarea>\r\n              </label>\r\n            </div>\r\n          </details>\r\n\r\n          <div class=\"section-heading\"><span data-i18n=\"modelSection\">Model</span></div>\r\n          <div class=\"field-grid two\">\r\n            <label class=\"field\">\r\n              <span data-i18n=\"provider\">Provider</span>\r\n              <select id=\"providerSelect\"></select>\r\n            </label>\r\n            <label class=\"field\">\r\n              <span data-i18n=\"model\">Model</span>\r\n              <select id=\"modelSelect\"></select>\r\n            </label>\r\n          </div>\r\n          <label class=\"field\">\r\n            <span data-i18n=\"reasoningEffort\">Reasoning effort</span>\r\n            <select id=\"reasoningSelect\"></select>\r\n            <small class=\"field-help\" data-i18n=\"reasoningHelp\">Values come from the selected provider/model.</small>\r\n          </label>\r\n\r\n          <div class=\"section-heading split-heading\">\r\n            <span data-i18n=\"capabilities\">Capabilities</span>\r\n            <span class=\"policy-note\" data-i18n=\"denyWins\">deny wins</span>\r\n          </div>\r\n          <div class=\"capability-tabs\" id=\"capabilityTabs\">\r\n            <span data-i18n=\"tools\">Tools</span> · <span data-i18n=\"skillsPreview\">Session skill loader</span>\r\n          </div>\r\n          <div class=\"capability-list\" id=\"capabilityList\"></div>\r\n\r\n          <div class=\"section-heading\"><span data-i18n=\"teamRole\">Team role</span></div>\r\n          <div class=\"entry-control\" id=\"entryControl\">\r\n            <div>\r\n              <strong data-i18n=\"entryAgent\">Entry Agent</strong>\r\n              <small id=\"entryAgentHelp\" data-i18n=\"entryHelp\">Exactly one node receives the primary user channel.</small>\r\n            </div>\r\n            <div class=\"entry-status-row\">\r\n              <span class=\"entry-status\" id=\"entryAgentStatus\"></span>\r\n              <button type=\"button\" class=\"button\" id=\"makeEntryButton\" data-i18n=\"makeEntry\">Make Entry Agent</button>\r\n            </div>\r\n          </div>\r\n\r\n          <div class=\"section-heading\"><span data-i18n=\"runtime\">Runtime</span></div>\r\n          <div class=\"runtime-card\">\r\n            <div>\r\n              <span class=\"status-dot\" id=\"inspectorStatusDot\"></span>\r\n              <span id=\"inspectorRuntimeStatus\">NOT_STARTED</span>\r\n            </div>\r\n            <button type=\"button\" class=\"button full\" id=\"openChatButton\" disabled data-i18n=\"openChat\">Open Chat</button>\r\n            <small id=\"openChatHelp\" data-i18n=\"openChatHelp\">Available with a real DSH Session binding.</small>\r\n            <div class=\"nodes-native-actions\" id=\"nodesNativeActions\">\r\n              <button type=\"button\" class=\"button\" id=\"nodeActivateButton\">Activate</button>\r\n              <button type=\"button\" class=\"button\" id=\"nodeFinishButton\">Finish &amp; release</button>\r\n              <button type=\"button\" class=\"button danger\" id=\"nodeInterruptButton\">Interrupt &amp; release</button>\r\n            </div>\r\n          </div>\r\n        </form>\r\n\r\n        <div class=\"luna-inspector\" id=\"lunaInspector\" hidden>\r\n          <div class=\"section-heading\" data-i18n=\"chatInspectorTitle\">Postman Chat · Transport</div>\r\n          <label class=\"field\"><span data-i18n=\"displayName\">Display name</span><input id=\"lunaNameInput\" type=\"text\" maxlength=\"64\"></label>\r\n          <div class=\"runtime-card luna-facts\">\r\n            <div><span id=\"lunaRuntimeStatus\">POTENTIAL</span></div>\r\n            <div id=\"lunaJobStatus\">No active Host job</div>\r\n            <div id=\"lunaJobResult\" role=\"status\">No confirmed result</div>\r\n            <div id=\"lunaRuntimeStart\">Host start: unconfirmed</div>\r\n            <div id=\"lunaRuntimeDuration\">Duration: —</div>\r\n            <div id=\"lunaReminders\">Confirmed reminders: —</div>\r\n            <div id=\"lunaReminderState\">Reminder status: unknown</div>\r\n            <a id=\"lunaConversationLink\" hidden target=\"_blank\" rel=\"noopener noreferrer\" data-i18n=\"lunaOpenChat\">Open confirmed Postman Chat</a>\r\n            <div id=\"lunaConversationUnconfirmed\">No confirmed conversation address</div>\r\n          </div>\r\n          <div class=\"section-heading\" data-i18n=\"lunaArchiveTitle\">Conversation archive</div>\r\n          <label class=\"field\"><span data-i18n=\"lunaArchiveLabel\">Verified previous conversations</span><select id=\"lunaArchiveSelect\"></select></label>\r\n          <div class=\"luna-archive-detail\" id=\"lunaArchiveDetail\"></div>\r\n          <a id=\"lunaArchiveLink\" hidden target=\"_blank\" rel=\"noopener noreferrer\" data-i18n=\"lunaOpenArchived\">Open selected archived chat</a>\r\n          <div class=\"nodes-native-actions\">\r\n            <button type=\"button\" class=\"button\" id=\"lunaContinueButton\" data-i18n=\"lunaContinue\">Continue selected chat</button>\r\n            <button type=\"button\" class=\"button\" id=\"lunaNewChatButton\" data-i18n=\"lunaNew\">Prepare new chat</button>\r\n          </div>\r\n          <p class=\"muted\" data-i18n=\"lunaSelectionWarning\">Selecting a conversation never redirects a current job or sends a message.</p>\r\n          <div class=\"section-heading\" data-i18n=\"lunaSendTitle\">Explicit Postman Chat task</div>\r\n          <label class=\"field\"><span data-i18n=\"lunaTaskLabel\">Task for the selected chat</span><textarea id=\"lunaTaskInput\" rows=\"4\" maxlength=\"15980\" data-i18n-placeholder=\"lunaTaskPlaceholder\" placeholder=\"Describe the task to send explicitly\"></textarea></label>\r\n          <label class=\"field\"><span data-i18n=\"lunaModeLabel\">Execution mode</span><select id=\"lunaModeSelect\"><option value=\"READ_ONLY\">READ_ONLY</option><option value=\"WRITE_TEST\">WRITE_TEST</option><option value=\"WRITE_ISOLATED\">WRITE_ISOLATED</option></select></label>\r\n          <button type=\"button\" class=\"button primary full\" id=\"lunaSendButton\" data-i18n=\"lunaSend\">Send explicit task</button>\r\n        </div>\r\n        <div class=\"edge-inspector\" id=\"edgeInspector\" hidden>\r\n          <div class=\"edge-kind-badge\" id=\"edgeKindBadge\"></div>\r\n          <div class=\"edge-summary\" id=\"edgeSummary\"></div>\r\n          <div class=\"edge-direction-note\" id=\"edgeDirectionNote\" hidden></div>\r\n          <p class=\"muted\" id=\"edgeDescription\"></p>\r\n          <button type=\"button\" class=\"button danger full\" id=\"deleteEdgeButton\" data-i18n=\"deleteConnection\">Delete connection</button>\r\n        </div>\r\n      </aside>\r\n    </main>\r\n\r\n    <section class=\"status-dock collapsed\" id=\"statusDock\">\r\n      <div class=\"status-dock-header\">\r\n        <div class=\"status-summary\">\r\n          <span class=\"run-pill\" id=\"runPill\" data-state=\"STOPPED\"><span class=\"pulse\"></span><span id=\"runStateLabel\">STOPPED</span></span>\r\n          <span class=\"validation-summary\" id=\"validationSummary\" data-i18n=\"notValidated\">Not validated</span>\r\n          <span class=\"compact-metrics\" aria-label=\"Team metrics\">\r\n            <span><strong id=\"compactMetricAgents\">0</strong> <span data-i18n=\"agents\">Agents</span></span>\r\n            <span><strong id=\"compactMetricAuthority\">0</strong> Authority</span>\r\n            <span><strong id=\"compactMetricCommunication\">0</strong> Communication</span>\r\n          </span>\r\n        </div>\r\n        <button type=\"button\" class=\"dock-toggle\" id=\"dockToggle\" aria-expanded=\"false\"><span data-i18n=\"validationRuntime\">Validation / runtime</span><span class=\"chevron\">⌃</span></button>\r\n      </div>\r\n      <div class=\"status-dock-body\" id=\"statusDockBody\">\r\n        <div class=\"validation-panel\">\r\n          <div class=\"panel-title-row\">\r\n            <h3 data-i18n=\"validation\">Validation</h3>\r\n            <span class=\"badge neutral\" id=\"validationBadge\">—</span>\r\n          </div>\r\n          <div class=\"validation-list\" id=\"validationList\"></div>\r\n        </div>\r\n        <div class=\"runtime-panel\">\r\n          <div class=\"panel-title-row\">\r\n            <h3 data-i18n=\"mockRuntime\">TeamRun</h3>\r\n            <span class=\"muted\" id=\"runIdLabel\">—</span>\r\n          </div>\r\n          <div class=\"runtime-copy\" id=\"runtimeCopy\" data-i18n=\"runtimeStoppedHelp\">Select a native Postman Chat to run this team.</div>\r\n          <div class=\"nodes-activity\" id=\"nodesActivity\" role=\"status\" aria-live=\"polite\"></div>\r\n          <div class=\"runtime-metrics\">\r\n            <div><span data-i18n=\"agents\">Agents</span><strong id=\"metricAgents\">0</strong></div>\r\n            <div><span data-i18n=\"authority\">Authority</span><strong id=\"metricAuthority\">0</strong></div>\r\n            <div><span data-i18n=\"communication\">Communication</span><strong id=\"metricCommunication\">0</strong></div>\r\n          </div>\r\n        </div>\r\n      </div>\r\n    </section>\r\n  </div>\r\n\r\n  <div class=\"toast-stack\" id=\"toastStack\" aria-live=\"polite\"></div>\r\n  <div id=\"smokeResult\" hidden></div>\r\n";
+ const EDITOR_CSS = ".nodes-agent-root {width:100%;height:100%;min-height:560px;overflow:hidden;}\r\n.nodes-agent-dialog {box-sizing:border-box;position:fixed;inset:0;width:100vw;max-width:none;height:100vh;max-height:none;padding:26px 0 0;margin:0;border:0;background:#0b0e14;overflow:hidden;}\r\n.nodes-agent-close {position:absolute;right:8px;top:0;background:none;border:0;color:#edf2f7;font-size:22px;cursor:pointer;}\r\n.nodes-team-choice-panel {position:absolute;right:0;bottom:40px;z-index:50;background:#151d29;color:#edf2f7;padding:12px;display:grid;gap:8px;border:1px solid #293446;border-radius:8px;}\r\n.nodes-team-choice {position:relative;}\r\n@scope (.nodes-agent-root) {\r\n\r\n:scope {\r\n  color-scheme: dark;\r\n  --bg: #0b0e14;\r\n  --panel: #111722;\r\n  --panel-2: #151d29;\r\n  --panel-3: #1a2432;\r\n  --line: #293446;\r\n  --line-soft: #202a39;\r\n  --text: #edf2f7;\r\n  --muted: #8fa0b6;\r\n  --muted-2: #68798f;\r\n  --accent: #7c9cff;\r\n  --accent-2: #9b8cff;\r\n  --accent-soft: rgba(124,156,255,.12);\r\n  --authority: #ffb454;\r\n  --communication: #58d5c9;\r\n  --danger: #ff6b7a;\r\n  --success: #64d98b;\r\n  --warning: #ffd166;\r\n  --shadow: 0 18px 60px rgba(0,0,0,.32);\r\n  --radius: 12px;\r\n  --topbar-h: 64px;\r\n  --dock-h: 210px;\r\n  --inspector-w: 360px;\r\n  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;\r\n}\r\n\r\n* { box-sizing: border-box; }\r\n:scope { width: 100%; height: 100%; overflow: hidden; background: var(--bg); color: var(--text); }\r\nbutton, input, textarea, select { font: inherit; }\r\nbutton { color: inherit; }\r\nbutton:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, .canvas-shell:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }\r\n[hidden] { display: none !important; }\r\n.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0,0,0,0); border: 0; }\r\n\r\n.app-shell { display: grid; grid-template-rows: var(--topbar-h) minmax(0,1fr) auto; height: 100%; background: linear-gradient(180deg,#0d1119,#090c12); }\r\n.topbar { display: flex; align-items: center; gap: 18px; min-width: 0; padding: 0 16px; border-bottom: 1px solid var(--line); background: rgba(14,19,28,.96); box-shadow: 0 2px 14px rgba(0,0,0,.2); z-index: 20; }\r\n.brand-block { display: flex; align-items: center; gap: 10px; min-width: 238px; }\r\n.brand-mark { width: 34px; height: 34px; display: grid; place-items: center; border: 1px solid #405171; border-radius: 9px; background: linear-gradient(145deg,#283956,#151e2c); color: #c9d5ff; font-weight: 800; font-size: 12px; letter-spacing: .08em; }\r\n.brand-title { font-weight: 760; letter-spacing: -.02em; font-size: 14px; }\r\n.brand-subtitle { margin-top: 2px; color: var(--muted-2); font-size: 11px; }\r\n.team-block { display: flex; align-items: center; gap: 9px; min-width: 0; flex: 1; }\r\n.team-name { width: min(240px, 28vw); border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--text); padding: 7px 9px; font-weight: 650; }\r\n.team-name:hover { background: var(--panel-2); }\r\n.team-name:focus { border-color: var(--line); background: var(--panel-2); }\r\n.save-state { color: var(--muted-2); font-size: 11px; white-space: nowrap; }\r\n.toolbar-actions { display: flex; align-items: center; gap: 8px; white-space: nowrap; }\r\n.toolbar-cluster { display: inline-flex; align-items: center; gap: 5px; }\r\n.toolbar-cluster + .toolbar-cluster { padding-left: 8px; border-left: 1px solid var(--line-soft); }\r\n.toolbar-cluster.utility .button { color: #8fa0b6; }\r\n.button, .icon-button, .segment, .dock-toggle, .capability-tab { border: 1px solid var(--line); background: #171f2b; cursor: pointer; transition: .15s ease; }\r\n.validate-button { display: inline-flex; align-items: center; gap: 7px; }\r\n.validate-button-status { display: none; padding: 2px 5px; border-radius: 999px; font-size: 8px; font-weight: 850; letter-spacing: .04em; }\r\n.validate-button[data-validation=\"pass\"] .validate-button-status { display: inline-block; color: #9becb2; background: rgba(100,217,139,.12); }\r\n.validate-button[data-validation=\"failed\"] .validate-button-status { display: inline-block; color: #ff9ba6; background: rgba(255,107,122,.12); }\r\n.button { min-height: 34px; padding: 7px 12px; border-radius: 8px; font-weight: 650; font-size: 12px; }\r\n.button:hover, .icon-button:hover, .segment:hover:not(:disabled), .capability-tab:hover:not(:disabled) { border-color: #40506a; background: #202a39; }\r\n.button.primary { border-color: #607ee0; background: linear-gradient(180deg,#6887ee,#536fd0); color: #fff; }\r\n.button.primary:hover { filter: brightness(1.06); }\r\n.button.subtle { background: transparent; color: #b3c0d2; }\r\n.button.danger { border-color: rgba(255,107,122,.35); background: rgba(255,107,122,.09); color: #ff9ba6; }\r\n.button:disabled { opacity: .42; cursor: not-allowed; }\r\n.button.full { width: 100%; }\r\n.segmented { display: inline-flex; border-radius: 8px; background: #101620; padding: 2px; border: 1px solid var(--line-soft); }\r\n.segmented.compact .segment { min-width: 34px; padding: 5px 6px; }\r\n.segment { min-height: 28px; padding: 5px 9px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 11px; font-weight: 700; }\r\n.segment.is-active { background: #283449; color: var(--text); box-shadow: inset 0 0 0 1px #35435b; }\r\n\r\n.workspace { display: grid; grid-template-columns: minmax(0,1fr) var(--inspector-w); min-height: 0; transition: grid-template-columns .16s ease; }\r\n.workspace.inspector-collapsed { grid-template-columns: minmax(0,1fr) 42px; }\r\n.editor-pane { display: grid; grid-template-columns: minmax(0,1fr); grid-template-rows: 44px minmax(0,1fr); min-width: 0; min-height: 0; border-right: 1px solid var(--line); }\r\n.canvas-toolbar { position: relative; display: flex; align-items: center; gap: 6px; padding: 0 10px; border-bottom: 1px solid var(--line-soft); background: #101620; z-index: 9; }\r\n.icon-button { width: 30px; height: 30px; border-radius: 7px; display: inline-grid; place-items: center; padding: 0; font-weight: 760; }\r\n.icon-button.label-button { width: auto; grid-auto-flow: column; gap: 6px; padding: 0 9px; font-size: 11px; }\r\n.icon-button.danger-ghost { background: transparent; color: #d98a95; border-color: transparent; font-size: 19px; }\r\n.icon-button.danger-ghost:hover { border-color: rgba(255,107,122,.25); background: rgba(255,107,122,.08); }\r\n.toolbar-divider { width: 1px; height: 20px; margin: 0 3px; background: var(--line-soft); }\r\n.canvas-toolbar-spacer { flex: 1; }\r\n.zoom-readout { width: 45px; text-align: center; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }\r\n.legend { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 10px; }\r\n.legend-item { display: inline-flex; align-items: center; gap: 5px; }\r\n.legend-line { width: 22px; height: 0; border-top: 2px solid; position: relative; }\r\n.legend-line.authority { border-color: var(--authority); }\r\n.legend-line.communication { border-color: var(--communication); border-top-style: dashed; }\r\n.canvas-settings-wrap { position: relative; }\r\n.canvas-settings-button.is-active { border-color: #4c5f7e; background: #222d3f; color: #d7e1ee; }\r\n.canvas-settings-popover { position: absolute; right: 0; top: 36px; z-index: 40; width: 286px; padding: 11px; border: 1px solid #334158; border-radius: 10px; background: rgba(15,21,31,.98); box-shadow: 0 18px 50px rgba(0,0,0,.42); backdrop-filter: blur(12px); }\r\n.canvas-settings-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 9px; color: #c7d3e3; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }\r\n.canvas-settings-section { padding: 9px 0; border-top: 1px solid var(--line-soft); }\r\n.canvas-settings-section:first-of-type { border-top: 0; padding-top: 0; }\r\n.canvas-settings-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 30px; color: #aab8ca; font-size: 10px; }\r\n.canvas-settings-row + .canvas-settings-row { margin-top: 4px; }\r\n.canvas-settings-row select { width: 106px; border: 1px solid #2d394d; border-radius: 6px; background: #0d131d; color: var(--text); padding: 6px 7px; font-size: 10px; }\r\n.canvas-settings-row input[type=\"checkbox\"] { accent-color: var(--accent); }\r\n.canvas-settings-label { display: grid; gap: 2px; }\r\n.canvas-settings-label small { color: #607188; font-size: 8.5px; font-weight: 500; line-height: 1.35; }\r\n.canvas-settings-routing { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-top: 7px; }\r\n.canvas-settings-routing .segment { border: 1px solid #2b384c; min-height: 31px; }\r\n.canvas-settings-align { width: 100%; margin-top: 8px; }\r\n\r\n.canvas-shell { position: relative; overflow: hidden; min-height: 0; cursor: default; background-color: #0b1018; background-image: radial-gradient(circle at 1px 1px, rgba(114,133,164,.25) 1px, transparent 1.1px); background-size: 22px 22px; }\r\n.canvas-shell.is-panning { cursor: grabbing; }\r\n.canvas-shell.edge-authority { cursor: crosshair; }\r\n.canvas-shell.edge-communication { cursor: crosshair; }\r\n.canvas-shell.edge-chat { cursor: crosshair; }\r\n.canvas-stage { position: absolute; width: 4000px; height: 3000px; transform-origin: 0 0; }\r\n.canvas-world { position: absolute; inset: 0; width: 4000px; height: 3000px; transform-origin: 0 0; text-rendering: geometricPrecision; }\r\n.edge-layer { position: absolute; inset: 0; width: 4000px; height: 3000px; overflow: visible; pointer-events: none; }\r\n.edge-group { pointer-events: none; }\r\n.node-layer { position: absolute; inset: 0; }\r\n.edge-hit { fill: none; stroke: transparent; stroke-width: 14px; pointer-events: stroke; cursor: pointer; }\r\n.edge { fill: none; stroke-width: 2.1px; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; transition: opacity .14s ease, stroke-width .14s ease; }\r\n.edge.authority { stroke: var(--authority); marker-end: url(#arrowAuthority); opacity: .96; }\r\n.edge.communication { stroke: var(--communication); stroke-dasharray: 7 6; marker-end: url(#arrowCommunication); opacity: .78; }\r\n.edge.communication.bidirectional { marker-start: url(#arrowCommunication); }\r\n.edge.chat { stroke: #769be8; stroke-dasharray: 3 6; opacity: .83; }\r\n.legend-line.chat { border-color: #769be8; border-top-style: dashed; }\r\n.communication-direction-control { display: inline-flex; }\r\n.communication-direction-control .segment { min-width: 31px; padding-inline: 8px; font-size: 12px; }\r\n.communication-direction-control .segment span[data-i18n] { margin-left: 4px; font-size: 9px; }\r\n@media (max-width: 1180px) { .communication-direction-control .segment span[data-i18n] { display: none; } }\r\n.edge-group-item.is-dimmed .edge { opacity: .22; }\r\n.edge-group-item.is-dimmed .edge-hit { pointer-events: stroke; }\r\n.edge.selected { opacity: 1; stroke-width: 3.4px; filter: drop-shadow(0 0 5px currentColor); }\r\n.edge.draft { stroke: #b5c6e6; stroke-dasharray: 4 5; stroke-width: 1.5px; opacity: .7; }\r\n.marker-authority { fill: var(--authority); }\r\n.marker-communication { fill: var(--communication); }\r\n.edge-label-bg { fill: rgba(10,14,21,.95); stroke-width: 1px; }\r\n.edge-label-bg.authority { stroke: rgba(255,180,84,.45); }\r\n.edge-label-bg.communication { stroke: rgba(88,213,201,.45); }\r\n.edge-label { fill: #aebcd0; font-size: 9px; text-anchor: middle; dominant-baseline: central; pointer-events: none; letter-spacing: .04em; text-transform: uppercase; }\r\n\r\n.agent-node { position: absolute; width: 216px; min-height: 126px; user-select: none; border: 1px solid #334056; border-radius: 12px; background: linear-gradient(180deg,rgba(28,38,52,.98),rgba(17,24,34,.98)); box-shadow: 0 12px 25px rgba(0,0,0,.25); overflow: hidden; transform-origin: 0 0; transition: border-color .12s ease, box-shadow .12s ease; }\r\n.agent-node:hover { border-color: #465773; }\r\n.agent-node.selected { border-color: var(--accent); box-shadow: 0 0 0 1px rgba(124,156,255,.25), 0 15px 32px rgba(0,0,0,.3); }\r\n.agent-node.edge-peer { border-color: #526784; }\r\n.agent-node.edge-source-authority { border-color: var(--authority); box-shadow: 0 0 0 1px rgba(255,180,84,.2), 0 15px 32px rgba(0,0,0,.3); }\r\n.agent-node.edge-source-communication { border-color: var(--communication); box-shadow: 0 0 0 1px rgba(88,213,201,.18), 0 15px 32px rgba(0,0,0,.3); }\r\n.agent-node.edge-target-candidate { border-color: #45566f; }\r\n.agent-node.edge-target-candidate:hover { border-color: var(--accent); }\r\n.agent-node.entry { box-shadow: inset 0 2px 0 rgba(155,140,255,.8), 0 12px 25px rgba(0,0,0,.25); }\r\n.agent-node.dragging { box-shadow: 0 20px 42px rgba(0,0,0,.42); }\r\n.node-runtime-strip { height: 4px; background: #42506a; }\r\n.agent-node[data-runtime=\"RUNNING\"] .node-runtime-strip { background: var(--success); box-shadow: 0 0 12px rgba(100,217,139,.5); }\r\n.agent-node[data-runtime=\"IDLE\"] .node-runtime-strip { background: #5fb7ff; }\r\n.agent-node[data-runtime=\"PAUSED\"] .node-runtime-strip { background: var(--warning); }\r\n.agent-node[data-runtime=\"ERROR\"] .node-runtime-strip { background: var(--danger); }\r\n.agent-node[data-runtime=\"STOPPED\"] .node-runtime-strip { background: #657184; }\r\n.node-body { padding: 12px 13px 11px; }\r\n.node-topline { display: flex; align-items: flex-start; gap: 7px; }\r\n.node-title-wrap { min-width: 0; flex: 1; }\r\n.node-title { font-size: 13px; font-weight: 780; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }\r\n.node-role { margin-top: 3px; color: var(--muted); font-size: 10.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }\r\n.entry-badge { flex: none; padding: 3px 5px; border-radius: 5px; background: rgba(155,140,255,.13); color: #c4b9ff; border: 1px solid rgba(155,140,255,.28); font-size: 9px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }\r\n.node-meta { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px; margin-top: 13px; padding-top: 9px; border-top: 1px solid rgba(64,78,99,.4); }\r\n.model-chip { min-width: 0; color: #c2ccda; font-size: 10px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }\r\n.runtime-chip { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 9.5px; font-weight: 700; }\r\n.runtime-dot { width: 7px; height: 7px; border-radius: 50%; background: #657184; }\r\n.agent-node[data-runtime=\"RUNNING\"] .runtime-dot { background: var(--success); box-shadow: 0 0 0 3px rgba(100,217,139,.12); }\r\n.agent-node[data-runtime=\"IDLE\"] .runtime-dot { background: #5fb7ff; }\r\n.agent-node[data-runtime=\"PAUSED\"] .runtime-dot { background: var(--warning); }\r\n.agent-node[data-runtime=\"ERROR\"] .runtime-dot { background: var(--danger); }\r\n.node-port { position: absolute; width: 11px; height: 11px; border-radius: 50%; border: 2px solid #111923; opacity: .68; transition: opacity .12s ease, transform .12s ease, box-shadow .12s ease; pointer-events: none; z-index: 3; box-shadow: 0 0 0 1px rgba(255,255,255,.04); }\r\n.node-port.authority { background: var(--authority); }\r\n.node-port.communication { background: var(--communication); }\r\n.node-port.authority.in { left: 50%; top: -6px; transform: translateX(-50%); }\r\n.node-port.authority.out { left: 50%; bottom: -6px; transform: translateX(-50%); }\r\n.node-port.communication.in { left: -6px; top: 50%; transform: translateY(-50%); }\r\n.node-port.communication.out { right: -6px; top: 50%; transform: translateY(-50%); }\r\n.canvas-shell.edge-authority .node-port.authority { opacity: 1; box-shadow: 0 0 0 3px rgba(255,180,84,.10); }\r\n.canvas-shell.edge-authority .node-port.communication { opacity: .22; }\r\n.canvas-shell.edge-communication .node-port.communication { opacity: 1; box-shadow: 0 0 0 3px rgba(88,213,201,.10); }\r\n.canvas-shell.edge-communication .node-port.authority { opacity: .22; }\r\n.agent-node:hover .node-port { opacity: 1; }\r\n\r\n.canvas-empty { position: absolute; inset: 0; z-index: 3; display: grid; place-content: center; justify-items: center; text-align: center; padding: 30px; pointer-events: none; }\r\n.canvas-empty .button { pointer-events: auto; }\r\n.empty-icon, .empty-ring { display: grid; place-items: center; width: 54px; height: 54px; border-radius: 50%; border: 1px solid #344158; background: #131b27; color: #8295b2; font-size: 26px; }\r\n.canvas-empty h2 { margin: 14px 0 5px; font-size: 18px; }\r\n.canvas-empty p { max-width: 460px; margin: 0 0 16px; color: var(--muted); font-size: 12px; line-height: 1.6; }\r\n.canvas-hint { position: absolute; left: 12px; bottom: 10px; z-index: 5; padding: 6px 8px; border-radius: 6px; color: #71839a; background: rgba(12,17,25,.75); border: 1px solid rgba(52,65,88,.45); font-size: 10px; pointer-events: none; }\r\n.connection-banner { position: absolute; left: 50%; top: 12px; z-index: 8; transform: translateX(-50%); max-width: min(620px,calc(100% - 40px)); padding: 8px 11px; border: 1px solid #3a4a62; border-radius: 8px; background: rgba(14,20,30,.94); box-shadow: 0 10px 28px rgba(0,0,0,.28); color: #c8d3e2; font-size: 10.5px; font-weight: 650; pointer-events: none; }\r\n.connection-banner.authority { border-color: rgba(255,180,84,.42); color: #ffd296; }\r\n.connection-banner.communication { border-color: rgba(88,213,201,.38); color: #9af0e8; }\r\n.connection-banner.chat { border-color: rgba(118,155,232,.5); color: #b4c9ff; }\r\n\r\n.inspector { min-width: 0; min-height: 0; overflow: auto; background: #101620; }\r\n.inspector-header { position: sticky; top: 0; z-index: 4; min-height: 64px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 14px; background: rgba(16,22,32,.95); border-bottom: 1px solid var(--line-soft); backdrop-filter: blur(10px); }\r\n.inspector-header-actions { display: inline-flex; align-items: center; gap: 4px; }\r\n.inspector-collapse-button { width: 28px; height: 28px; font-size: 17px; color: #8fa0b6; background: transparent; border-color: transparent; }\r\n.workspace.inspector-collapsed .inspector { overflow: hidden; }\r\n.workspace.inspector-collapsed .inspector-header { height: 100%; min-height: 0; align-items: flex-start; justify-content: center; padding: 10px 6px; border-bottom: 0; }\r\n.workspace.inspector-collapsed .inspector-header > div:first-child,\r\n.workspace.inspector-collapsed .inspector-empty,\r\n.workspace.inspector-collapsed .inspector-form,\r\n.workspace.inspector-collapsed .edge-inspector,\r\n.workspace.inspector-collapsed .luna-inspector,\r\n.workspace.inspector-collapsed #deleteSelectionButton { display: none !important; }\r\n.workspace.inspector-collapsed .inspector-header-actions { display: block; }\r\n.eyebrow { color: var(--muted-2); font-size: 9px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }\r\n.inspector-header h2 { margin: 3px 0 0; font-size: 14px; letter-spacing: -.01em; }\r\n.inspector-empty { display: grid; justify-items: center; padding: 70px 30px; text-align: center; color: var(--muted); }\r\n.inspector-empty p { max-width: 230px; font-size: 11px; line-height: 1.6; }\r\n.inspector-form, .edge-inspector { padding: 14px 14px 28px; }\r\n.section-heading { display: flex; align-items: center; gap: 8px; margin: 16px 0 9px; color: #b8c5d7; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }\r\n.section-heading:first-child { margin-top: 0; }\r\n.agent-details { margin: 4px 0 14px; border: 1px solid #273348; border-radius: 8px; background: #0d141f; overflow: hidden; }\r\n.agent-details summary { list-style: none; display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 8px 10px; cursor: pointer; color: #9eacc0; font-size: 10px; font-weight: 750; user-select: none; }\r\n.agent-details summary::-webkit-details-marker { display: none; }\r\n.agent-details summary:hover { background: #111a27; color: #c2cddd; }\r\n.agent-details-summary-copy { min-width: 0; flex: 1; }\r\n.agent-details-summary-copy strong { display: block; color: inherit; font-size: 10px; }\r\n.agent-details-summary-copy small { display: block; margin-top: 2px; color: #65758b; font-size: 9px; font-weight: 500; line-height: 1.35; }\r\n.agent-details-chevron { width: 16px; height: 16px; display: grid; place-items: center; flex: none; color: #71839a; font-size: 15px; transition: transform .14s ease; }\r\n.agent-details[open] .agent-details-chevron { transform: rotate(90deg); }\r\n.agent-details-content { padding: 10px 10px 0; border-top: 1px solid #253145; background: rgba(10,15,23,.32); }\r\n.agent-details .node-id { display: block; margin: 0 0 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }\r\n.split-heading { justify-content: space-between; }\r\n.node-id { margin-left: auto; color: #596c86; font-size: 9px; text-transform: none; letter-spacing: normal; font-family: ui-monospace,SFMono-Regular,Menlo,monospace; }\r\n.policy-note { padding: 2px 5px; border: 1px solid rgba(255,107,122,.22); border-radius: 5px; color: #d5848e; font-size: 9px; letter-spacing: .04em; text-transform: lowercase; }\r\n.field { display: grid; gap: 5px; margin-bottom: 10px; color: var(--muted); font-size: 10px; font-weight: 650; }\r\n.field input, .field textarea, .field select { width: 100%; border: 1px solid #2d394d; border-radius: 7px; background: #0d131d; color: var(--text); padding: 8px 9px; font-size: 11px; font-weight: 500; }\r\n.field textarea { min-height: 88px; resize: vertical; line-height: 1.45; }\r\n.field select { min-height: 34px; }\r\n.field-grid.two { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }\r\n.field-help { color: #65758b; font-size: 10px; font-weight: 500; line-height: 1.4; }\r\n.capability-tabs { display: grid; grid-template-columns: repeat(3,1fr); gap: 5px; margin-bottom: 8px; }\r\n.capability-tab { min-height: 28px; border-radius: 6px; color: var(--muted); font-size: 9.5px; font-weight: 700; }\r\n.capability-tab.is-active { border-color: #435170; background: #222d3f; color: var(--text); }\r\n.capability-tab:disabled { opacity: .42; cursor: not-allowed; }\r\n.capability-list { display: grid; gap: 5px; }\r\n.cap-row { display: grid; grid-template-columns: minmax(0,1fr) 68px; gap: 7px; align-items: center; padding: 7px 8px; border: 1px solid #263246; border-radius: 7px; background: #0e141e; }\r\n.cap-name { min-width: 0; display: flex; align-items: center; gap: 7px; }\r\n.cap-name code { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: #c7d2e1; font-size: 10px; }\r\n.cap-kind { flex: none; padding: 2px 4px; border-radius: 4px; background: #202b3c; color: #7f92ad; font-size: 8.5px; text-transform: uppercase; }\r\n.cap-row select { width: 100%; border: 1px solid #2e3a4d; border-radius: 5px; background: #151d29; color: #c1ccda; padding: 4px; font-size: 10px; }\r\n.cap-row select[data-mode=\"deny\"] { border-color: rgba(255,107,122,.35); color: #ff9ba6; }\r\n.entry-control { display: grid; gap: 9px; padding: 10px; border: 1px solid #29354a; border-radius: 8px; background: #0d141f; }\r\n.entry-control.current { border-color: rgba(155,140,255,.35); background: rgba(155,140,255,.055); }\r\n.entry-control strong { display: block; font-size: 11px; }\r\n.entry-control small { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.45; }\r\n.entry-status-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }\r\n.entry-status { color: #c7d2e1; font-size: 10px; font-weight: 700; }\r\n.entry-status.current { color: #c4b9ff; }\r\n.runtime-card { display: grid; gap: 9px; padding: 10px; border: 1px solid #29354a; border-radius: 8px; background: #0d141f; }\r\n.runtime-card > div { display: flex; align-items: center; gap: 7px; color: #bcc7d6; font-size: 10px; font-weight: 700; }\r\n.status-dot { width: 8px; height: 8px; border-radius: 50%; background: #657184; }\r\n.runtime-card small { color: var(--muted-2); font-size: 10px; line-height: 1.45; }\r\n.edge-inspector { display: grid; gap: 12px; }\r\n.edge-kind-badge { width: fit-content; padding: 4px 7px; border-radius: 6px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; }\r\n.edge-kind-badge.authority { background: rgba(255,180,84,.11); color: #ffc676; border: 1px solid rgba(255,180,84,.25); }\r\n.edge-kind-badge.communication { background: rgba(88,213,201,.1); color: #83e9e0; border: 1px solid rgba(88,213,201,.22); }\r\n.edge-summary { font-size: 13px; line-height: 1.5; }\r\n.edge-direction-note { display: flex; align-items: center; gap: 7px; width: fit-content; padding: 5px 7px; border: 1px solid #2a394e; border-radius: 7px; background: #101824; color: #9fb0c6; font-size: 10px; font-weight: 700; }\r\n.edge-direction-note.bidirectional { border-color: rgba(88,213,201,.28); color: #9ae7df; }\r\n.muted { color: var(--muted); }\r\n\r\n.status-dock { border-top: 1px solid var(--line); background: #0e141d; z-index: 15; }\r\n.status-dock-header { height: 38px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 12px; border-bottom: 1px solid var(--line-soft); }\r\n.status-summary { display: flex; align-items: center; gap: 9px; min-width: 0; }\r\n.compact-metrics { display: inline-flex; align-items: center; gap: 8px; padding-left: 4px; color: #74869e; font-size: 9.5px; white-space: nowrap; }\r\n.compact-metrics span + span::before { content: '·'; margin-right: 8px; color: #42516a; }\r\n.compact-metrics strong { color: #aebed1; font-weight: 800; }\r\n.run-pill { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 7px; border: 1px solid #30405a; border-radius: 999px; color: #a7b5c9; background: #141c28; font-size: 9px; font-weight: 800; letter-spacing: .04em; }\r\n.run-pill .pulse { width: 6px; height: 6px; border-radius: 50%; background: #617087; }\r\n.run-pill[data-state=\"RUNNING\"] { border-color: rgba(100,217,139,.35); color: #97efb1; }\r\n.run-pill[data-state=\"RUNNING\"] .pulse { background: var(--success); box-shadow: 0 0 0 4px rgba(100,217,139,.1); }\r\n.run-pill[data-state=\"STARTING\"] .pulse { background: var(--warning); animation: pulse 1s infinite; }\r\n.run-pill[data-state=\"PAUSED\"] { color: #ffe099; border-color: rgba(255,209,102,.28); }\r\n.run-pill[data-state=\"PAUSED\"] .pulse { background: var(--warning); }\r\n.run-pill[data-state=\"FAILED\"] { color: #ff9ba6; border-color: rgba(255,107,122,.28); }\r\n.run-pill[data-state=\"FAILED\"] .pulse { background: var(--danger); }\r\n@keyframes pulse { 50% { opacity: .35; } }\r\n.validation-summary { color: var(--muted); font-size: 10px; }\r\n.dock-toggle { display: inline-flex; align-items: center; gap: 7px; border: 0; background: transparent; color: var(--muted); font-size: 9px; }\r\n.dock-toggle .chevron { transition: transform .15s; }\r\n.status-dock.collapsed .dock-toggle .chevron { transform: rotate(180deg); }\r\n.status-dock-body { height: 166px; display: grid; grid-template-columns: minmax(0,1.5fr) minmax(300px,.8fr); }\r\n.status-dock.collapsed .status-dock-body { display: none; }\r\n.validation-panel, .runtime-panel { min-width: 0; overflow: auto; padding: 10px 12px; }\r\n.runtime-panel { border-left: 1px solid var(--line-soft); }\r\n.panel-title-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }\r\n.panel-title-row h3 { margin: 0; font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: #a9b7ca; }\r\n.badge { padding: 2px 6px; border-radius: 999px; font-size: 9px; font-weight: 800; }\r\n.badge.neutral { background: #1a2432; color: var(--muted); }\r\n.badge.success { background: rgba(100,217,139,.1); color: #8ce9a8; }\r\n.badge.error { background: rgba(255,107,122,.1); color: #ff94a0; }\r\n.validation-list { display: grid; gap: 5px; }\r\n.validation-item { display: grid; grid-template-columns: 8px minmax(0,1fr) auto; gap: 7px; align-items: start; padding: 6px 7px; border-radius: 6px; background: #111924; color: #b8c4d4; font-size: 9.5px; cursor: default; }\r\n.validation-item:hover { background: #151f2c; }\r\n.validation-icon { width: 7px; height: 7px; margin-top: 3px; border-radius: 50%; background: var(--danger); }\r\n.validation-target { color: #687b93; font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: 9px; }\r\n.validation-ok { padding: 16px 8px; color: #8fdda6; font-size: 10px; }\r\n.validation-empty { padding: 16px 8px; color: var(--muted); font-size: 10px; }\r\n.runtime-copy { color: var(--muted); font-size: 9.5px; line-height: 1.5; }\r\n.runtime-metrics { display: grid; grid-template-columns: repeat(3,1fr); gap: 7px; margin-top: 12px; }\r\n.runtime-metrics div { padding: 7px; border: 1px solid #273348; border-radius: 7px; background: #111925; }\r\n.runtime-metrics span { display: block; color: var(--muted-2); font-size: 8px; }\r\n.runtime-metrics strong { display: block; margin-top: 3px; font-size: 14px; }\r\n\r\n.toast-stack { position: fixed; right: 14px; bottom: 50px; z-index: 100; display: grid; gap: 7px; width: min(330px,calc(100vw - 28px)); pointer-events: none; }\r\n.toast { padding: 10px 11px; border: 1px solid #34425a; border-radius: 8px; background: rgba(21,29,41,.96); box-shadow: var(--shadow); color: #c8d2df; font-size: 10px; animation: toastIn .18s ease; }\r\n.toast.error { border-color: rgba(255,107,122,.35); }\r\n.toast.success { border-color: rgba(100,217,139,.35); }\r\n@keyframes toastIn { from { transform: translateY(7px); opacity: 0; } }\r\n\r\n@media (max-width: 1180px) {\r\n  :root { --inspector-w: 320px; }\r\n  .brand-subtitle, .save-state, .button.subtle#resetButton, .legend { display: none; }\r\n  .toolbar-actions { gap: 5px; }\r\n  .canvas-toolbar .label-button span[data-i18n] { display: none; }\r\n  .canvas-toolbar .segment { padding-inline: 6px; }\r\n  .canvas-toolbar .toolbar-divider { margin-inline: 1px; }\r\n  .button { padding-inline: 9px; }\r\n}\r\n@media (max-width: 900px) {\r\n  :root { --inspector-w: 290px; }\r\n  .brand-block { min-width: 180px; }\r\n  .brand-mark { display: none; }\r\n  .team-name { width: 150px; }\r\n  .toolbar-actions .button.subtle { display: none; }\r\n  .field-grid.two { grid-template-columns: 1fr; }\r\n}\r\n\r\n\r\n\r\n.nodes-team-picker {max-width:150px;min-width:90px;background:#151d29;color:#edf2f7;border:1px solid #293446;border-radius:7px;height:31px;font-size:11px;}\r\n.nodes-activity {max-height:120px;overflow-y:auto;font-size:11px;color:var(--muted);padding:4px 10px;}\r\n.nodes-activity div {padding:3px 0;}\r\n.nodes-native-actions {display:flex;flex-wrap:wrap;gap:5px;margin-top:11px;}\r\n.nodes-native-actions .button {flex:1 1 95px;padding:7px 5px;white-space:normal;}\r\n.luna-bridge-node {border-color:#506d79;background:linear-gradient(180deg,#20333c,#152329);}\r\n.luna-bridge-node .node-role {color:#91c4d0;}\r\n.luna-bridge-node.selected {border-color:#58d5c9;}\r\n.luna-chat-node {position:absolute;width:204px;min-height:100px;padding:12px;border:1px dashed #40998f;border-radius:10px;background:#101f27;color:#b6d9d4;font-size:10px;cursor:pointer;overflow:visible;}\r\n.luna-chat-node.selected { border-color:#92b4ff; box-shadow:0 0 0 2px rgba(146,180,255,.18); }\r\n.luna-chat-node.edge-source-chat {border-color:#a8bcff; box-shadow:0 0 0 2px rgba(146,180,255,.17);}\r\n.luna-chat-node strong {display:block;margin-bottom:9px;font-size:13px;}\r\n.luna-chat-node div {margin-top:5px;color:#8aaca8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}\r\n.luna-chat-node .luna-chat-address {color:#58d5c9;}\r\n.luna-inspector {padding:14px 14px 28px;}\r\n.luna-inspector .luna-facts {display:grid;gap:8px;font-size:11px;line-height:1.4;}\r\n#lunaJobStatus {color:#a5b7d9;overflow-wrap:anywhere;}\r\n#lunaJobResult {color:#9fceb9;white-space:pre-wrap;overflow-wrap:anywhere;max-height:130px;overflow:auto;}\r\n.luna-inspector a {color:#8cc5ff;overflow-wrap:anywhere;}\r\n.luna-inspector .field select {max-width:100%;}\r\n.agent-node[data-runtime=\"WORKING\"] .node-runtime-strip,.agent-node[data-runtime=\"WORKING\"] .runtime-dot {background:var(--success);}\r\n.agent-node[data-runtime=\"WORKING\"] {border-color:#55cfa0;box-shadow:inset 0 1px 0 rgba(78,222,165,.45),0 0 0 2px rgba(78,222,165,.16),0 10px 28px rgba(0,0,0,.28);}\r\n.agent-node[data-runtime=\"IDLE\"] {border-color:#5589b9;}\r\n.agent-node[data-runtime=\"POTENTIAL\"],.agent-node[data-runtime=\"COLD\"],.agent-node[data-runtime=\"SUSPENDED\"] {opacity:.58;}\r\n.agent-node[data-runtime=\"POTENTIAL\"] .node-runtime-strip,.agent-node[data-runtime=\"COLD\"] .node-runtime-strip {background:#526174;}\r\n.agent-node[data-runtime=\"POTENTIAL\"] .runtime-chip,.agent-node[data-runtime=\"COLD\"] .runtime-chip {color:#8290a4;}\r\n.luna-chat-node[data-runtime=\"WORKING\"],.luna-chat-node[data-runtime=\"QUEUED\"] {border-color:#5bd6a9;box-shadow:0 0 0 2px rgba(91,214,169,.15);}\r\n.luna-chat-node[data-runtime=\"POTENTIAL\"] {opacity:.7;}\r\n.luna-chat-node .luna-chat-status {font-weight:700;color:#94dfb7;}\r\n.luna-inspector .luna-archive-detail {margin:8px 0;font-size:10px;line-height:1.5;color:#8193a8;overflow-wrap:anywhere;}\r\n.luna-inspector textarea {width:100%;box-sizing:border-box;min-height:80px;resize:vertical;}\r\n.luna-inspector #lunaArchiveLink {display:inline-block;margin-bottom:8px;}\r\n.luna-inspector #lunaArchiveLink[hidden] {display:none;}\r\n}\r\n";
 function mountEditor(root, bridge) {
 
   'use strict';
@@ -24,6 +24,8 @@ function mountEditor(root, bridge) {
 
   const NODE_WIDTH = 216;
   const NODE_HEIGHT = 126;
+  const CHAT_WIDTH = 204;
+  const CHAT_HEIGHT = 104;
   const STAGE_WIDTH = 4000;
   const STAGE_HEIGHT = 3000;
   const MIN_ZOOM = 0.35;
@@ -115,6 +117,27 @@ function mountEditor(root, bridge) {
       confirmReset: 'Discard unsaved changes and create a new saved team?',
       errorInvalidModel: 'Model {provider}/{model} is not present in the live DSH catalog.',
       errorInvalidCapability: 'Tool {kind}:{id} is unavailable in DSH.',
+      postmanChat: 'Postman Chat', chatInspectorTitle: 'Postman Chat · Transport',
+      authorityImplicit: 'Authority includes two-way messaging; no separate Communication line',
+      edgeAuthorityHelp: 'Direct manager → subordinate. Messages flow both ways automatically.',
+      edgeChatHelp: 'Authorized agent ↔ Postman Chat. Several agents may connect to the same Chat; Host retains ownership.',
+      sourceSelectedChat: 'Select an AgentNode and a Postman Chat to connect them.',
+      connectionChatPrompt: 'Postman Chat · choose AgentNode and Chat · Esc cancels',
+      connectionChatTarget: 'Postman Chat · {name} → select the other endpoint · Esc cancels',
+      chatNeedPair: 'Select one AgentNode and one Postman Chat.',
+      chatUseConnectionMode: 'Select the Postman Chat connection tool to link a Chat.',
+      implicitCommunication: 'Authority already permits messages in both directions. No extra line is needed.',
+      errorLunaParent: 'LunaBridge requires one direct native manager (Entry or Sol).',
+      errorChatNoConnection: 'Postman Chat requires at least one AgentNode connection.',
+      errorInvalidChatConnection: 'Postman Chat connection has an invalid endpoint or duplicate.',
+      jobKnown: 'Host job: {id} · REQ: {request} · {status}',
+      jobNone: 'No current Host job or confirmed REQ.',
+      jobResultNone: 'No verified result loaded.',
+      jobResultPending: 'Host job is pending; acceptance is not completion.',
+      jobResultTerminal: 'Verified Host terminal: {value}',
+      jobResultUnknown: 'Host result is unknown; do not infer completion.',
+      chatResultError: 'Cannot read Host result: {reason}',
+      
       nodeActivate: 'Activate idle', nodeFinish: 'Finish and release', nodeInterrupt: 'Interrupt now',
       lunaLimit: 'At most three LunaBridge nodes are allowed.', lunaNoChat: 'No confirmed chat',
       lunaLinkLabel: 'Open confirmed Postman Chat', lunaArchiveTitle: 'Conversation archive',
@@ -155,6 +178,27 @@ function mountEditor(root, bridge) {
       confirmReset: 'Отбросить несохранённые правки и создать новую команду?',
       errorInvalidModel: 'Модель {provider}/{model} отсутствует в настоящем каталоге DSH.',
       errorInvalidCapability: 'Инструмент {kind}:{id} недоступен в DSH.',
+      postmanChat: 'Postman Chat', chatInspectorTitle: 'Postman Chat · транспорт',
+      authorityImplicit: 'Authority включает общение в обе стороны, без отдельной линии',
+      edgeAuthorityHelp: 'Прямое подчинение. Сообщения идут в обе стороны автоматически.',
+      edgeChatHelp: 'Разрешённая связь агента с Postman Chat. Один чат может иметь несколько агентов; владелец Host не меняется.',
+      sourceSelectedChat: 'Выберите AgentNode и Postman Chat, чтобы соединить их.',
+      connectionChatPrompt: 'Postman Chat · выберите AgentNode и Chat · Esc отменяет',
+      connectionChatTarget: 'Postman Chat · {name} → выберите другой конец · Esc отменяет',
+      chatNeedPair: 'Нужны один AgentNode и один Postman Chat.',
+      chatUseConnectionMode: 'Для связи с чатом выберите режим Postman Chat.',
+      implicitCommunication: 'Authority уже разрешает общение в обе стороны. Дополнительная линия не нужна.',
+      errorLunaParent: 'У LunaBridge должен быть один прямой штатный руководитель (Entry или Sol).',
+      errorChatNoConnection: 'Для Postman Chat требуется хотя бы одна связь с агентом.',
+      errorInvalidChatConnection: 'Связь Postman Chat имеет неверный конец или повторяется.',
+      jobKnown: 'Задание Host: {id} · REQ: {request} · {status}',
+      jobNone: 'Нет активного задания Host или подтверждённого REQ.',
+      jobResultNone: 'Подтверждённый результат не загружен.',
+      jobResultPending: 'Host принял поручение, но выполнение ещё не подтверждено.',
+      jobResultTerminal: 'Подтверждённое завершение Host: {value}',
+      jobResultUnknown: 'Результат Host неизвестен; завершение не доказано.',
+      chatResultError: 'Не удалось прочитать результат Host: {reason}',
+      
       nodeActivate: 'Активировать без задания', nodeFinish: 'Завершить и освободить', nodeInterrupt: 'Прервать сейчас',
       lunaLimit: 'Можно добавить не более трёх нод LunaBridge.', lunaNoChat: 'Адрес чата не подтверждён',
       lunaLinkLabel: 'Открыть подтверждённый Postman Chat', lunaArchiveTitle: 'Архив разговоров',
@@ -193,7 +237,8 @@ function mountEditor(root, bridge) {
     dirty: { definition: false, layout: false },
     persisted: false,
     ui: { inspectorCollapsed: true, statusDockCollapsed: true },
-    interaction: { nodeDrag: null, pan: null }
+    interaction: { nodeDrag: null, pan: null },
+    chatJob: null
   };
 
   const $ = (id) => root.querySelector('#' + id);
@@ -203,7 +248,7 @@ function mountEditor(root, bridge) {
     'workspace','addNodeButton','emptyAddButton','communicationDirectionControl','zoomOutButton','zoomInButton','fitButton','zoomReadout','canvasSettingsButton','canvasSettingsPopover','gridVisibleInput','gridStyleSelect','gridSizeSelect','snapNodesInput','alignNodesButton','canvasShell','canvasStage','canvasWorld','canvasEmpty','nodeLayer','edgeGroup','draftEdge','canvasHint','connectionBanner',
     'inspectorTitle','inspectorEmpty','nodeInspector','edgeInspector','inspectorCollapseButton','deleteSelectionButton','agentDetailsDisclosure','nodeIdLabel','technicalNameInput','displayNameInput','roleInput','systemPromptInput',
     'providerSelect','modelSelect','reasoningSelect','capabilityList','entryControl','entryAgentStatus','entryAgentHelp','makeEntryButton','inspectorRuntimeStatus','inspectorStatusDot','openChatButton','openChatHelp',
-    'nodesNativeActions','nodeActivateButton','nodeFinishButton','nodeInterruptButton','lunaInspector','lunaNameInput','lunaRuntimeStatus','lunaRuntimeStart','lunaRuntimeDuration','lunaReminders','lunaReminderState','lunaConversationLink','lunaConversationUnconfirmed','lunaArchiveSelect','lunaArchiveDetail','lunaArchiveLink','lunaContinueButton','lunaNewChatButton','lunaTaskInput','lunaModeSelect','lunaSendButton',
+    'nodesNativeActions','nodeActivateButton','nodeFinishButton','nodeInterruptButton','lunaInspector','lunaNameInput','lunaRuntimeStatus','lunaJobStatus','lunaJobResult','lunaRuntimeStart','lunaRuntimeDuration','lunaReminders','lunaReminderState','lunaConversationLink','lunaConversationUnconfirmed','lunaArchiveSelect','lunaArchiveDetail','lunaArchiveLink','lunaContinueButton','lunaNewChatButton','lunaTaskInput','lunaModeSelect','lunaSendButton',
     'edgeKindBadge','edgeSummary','edgeDirectionNote','edgeDescription','deleteEdgeButton','statusDock','dockToggle','validationSummary','validationBadge','validationList','runPill','runStateLabel','runIdLabel','runtimeCopy',
     'metricAgents','metricAuthority','metricCommunication','compactMetricAgents','compactMetricAuthority','compactMetricCommunication','toastStack','smokeResult'
   ];
@@ -226,7 +271,10 @@ function mountEditor(root, bridge) {
   function clamp(value, min, max) { return Math.min(max, Math.max(min, value)); }
   function deepClone(value) { return JSON.parse(JSON.stringify(value)); }
   function getAgent(id) { return state.definition.agents.find((agent) => agent.id === id) || null; }
-  function getLuna(id) { return (state.definition.lunas || []).find((luna) => luna.id === id) || null; }
+  function getChat(id) { return (state.definition.chats || []).find(chat => chat.id === id) || null; }
+  function chatForLuna(id) { return (state.definition.chats || []).find(chat => chat.lunaId === id) || null; }
+  function directAuthority(a, b) { return state.definition.authorityEdges.some(e =>
+    (e.from === a && e.to === b) || (e.from === b && e.to === a)); }
   function lunaRuntime(id) { return (state.runtime.lunas || []).find((luna) => luna.id === id) || null; }
   function isEditingLocked() { return state.runtime.status !== 'STOPPED' && state.runtime.status !== 'FAILED'; }
   function agentStatusText(status) { return t({ POTENTIAL: 'nodePotential', COLD: 'nodeCold',
@@ -238,13 +286,15 @@ function mountEditor(root, bridge) {
     const teamId = uid('team');
     return {
       definition: {
-        schemaVersion: 1,
+        schemaVersion: 2,
         id: teamId,
         revision: 0,
         name: 'Software Team',
         description: '',
         entryAgentId: null,
         agents: [],
+        chats: [],
+        chatConnections: [],
         authorityEdges: [],
         communicationEdges: []
       },
@@ -310,10 +360,11 @@ function mountEditor(root, bridge) {
   }
 
   function normalizeState() {
-    state.definition.schemaVersion = 1;
+    state.definition.schemaVersion = 2;
     state.definition.revision = Number.isFinite(state.definition.revision) ? state.definition.revision : 0;
     state.definition.agents = Array.isArray(state.definition.agents) ? state.definition.agents : [];
-    state.definition.lunas = Array.isArray(state.definition.lunas) ? state.definition.lunas : [];
+    state.definition.chats = Array.isArray(state.definition.chats) ? state.definition.chats : [];
+    state.definition.chatConnections = Array.isArray(state.definition.chatConnections) ? state.definition.chatConnections : [];
     state.definition.authorityEdges = Array.isArray(state.definition.authorityEdges) ? state.definition.authorityEdges : [];
     state.definition.communicationEdges = Array.isArray(state.definition.communicationEdges) ? state.definition.communicationEdges : [];
     state.layout.schemaVersion = 1;
@@ -335,8 +386,11 @@ function mountEditor(root, bridge) {
       agent.capabilities.grants = Array.isArray(agent.capabilities.grants) ? agent.capabilities.grants : [];
       if (!state.layout.nodes[agent.id]) state.layout.nodes[agent.id] = { x: 180 + (index % 3) * 280, y: 120 + Math.floor(index / 3) * 200 };
     });
-    state.definition.lunas.forEach((luna, index) => {
-      if (!state.layout.nodes[luna.id]) state.layout.nodes[luna.id] = { x: 180 + index * 480, y: 820 };
+    state.definition.chats.forEach((chat, index) => {
+      if (!state.layout.nodes[chat.id]) {
+        const owner = state.layout.nodes[chat.lunaId] || { x: 180 + index * 480, y: 820 };
+        state.layout.nodes[chat.id] = { x: owner.x + NODE_WIDTH + 34, y: owner.y + 12 };
+      }
     });
   }
 
@@ -356,6 +410,7 @@ function mountEditor(root, bridge) {
     els.zoomInButton.title = t('zoomInTitle');
     els.fitButton.title = t('fitTitle');
     els.canvasSettingsButton.title = t('canvasSettingsTitle');
+    $('authorityLegend').title = t('authorityImplicit');
     els.deleteSelectionButton.title = t('inspectorDelete');
     els.validateButtonLabel.textContent = t('validate');
     updateConnectionBanner();
@@ -445,7 +500,7 @@ function mountEditor(root, bridge) {
 
   function createAgent({ x, y } = {}) {
     if (isEditingLocked()) return lockedToast();
-    const native = NATIVE_SLOTS.find(slot => slot.id !== 'entry' && !state.definition.agents.some(a => a.slot === slot.id) &&
+    const native = NATIVE_SLOTS.find(slot => slot.id !== 'entry' && slot.id !== 'luna-bridge' && !state.definition.agents.some(a => a.slot === slot.id) &&
       state.definition.agents.some(a => a.slot === slot.owner));
     if (!native) { toast(t('nativeSlotsFull'), 'error'); return null; }
     const parent = state.definition.agents.find(a => a.slot === native.owner);
@@ -457,8 +512,6 @@ function mountEditor(root, bridge) {
       capabilities: { grants: [] } };
     state.definition.agents.push(agent);
     state.definition.authorityEdges.push({ id: uid('auth'), from: parent.id, to: agent.id });
-    state.definition.communicationEdges.push({ id: uid('comm'), from: parent.id, to: agent.id });
-    state.definition.communicationEdges.push({ id: uid('comm'), from: agent.id, to: parent.id });
     const view = state.layout.viewport;
     const n = state.definition.agents.length;
     let px = Number.isFinite(x) ? x : (els.canvasShell.clientWidth / 2 - view.x) / view.zoom - NODE_WIDTH / 2 + (n % 4) * 24;
@@ -473,14 +526,29 @@ function mountEditor(root, bridge) {
 
   function createLuna() {
     if (isEditingLocked()) return lockedToast();
-    if (state.definition.lunas.length >= 3) { toast(t('lunaLimit'), 'error'); return; }
-    const index = state.definition.lunas.length;
-    let ordinal = 1;
-    while (state.definition.lunas.some(l => l.displayName === 'LunaBridge ' + ordinal)) ordinal++;
-    const luna = { id: uid('luna'), kind: 'luna-bridge', displayName: 'LunaBridge ' + ordinal, chatNodeId: uid('chat') };
-    state.definition.lunas.push(luna);
-    state.layout.nodes[luna.id] = { x: 160 + index * 480, y: 870 };
-    state.selection = { type: 'luna', id: luna.id };
+    const slot = NATIVE_SLOTS.find(role => role.id === 'luna-bridge');
+    const current = state.definition.agents.filter(agent => agent.slot === 'luna-bridge');
+    if (current.length >= 3) { toast(t('lunaLimit'), 'error'); return; }
+    const leader = getAgent(state.definition.entryAgentId);
+    if (!slot || !leader) { toast(t('entryFixed'), 'error'); return; }
+    let n = 1;
+    while (state.definition.agents.some(a => a.technicalName === 'luna_bridge_' + n)) n++;
+    const id = uid('luna'), chatId = uid('chat');
+    const agent = { id, slot: 'luna-bridge', technicalName: 'luna_bridge_' + n,
+      displayName: 'LunaBridge ' + n, role: 'LunaBridge',
+      systemPrompt: 'Follow native Postman role constraints and use connected Postman Chat through Nodes tools.',
+      model: { provider: 'codex', model: slot.model, reasoningEffort: slot.reasoning || 'low' },
+      capabilities: { grants: [] } };
+    const chat = { id: chatId, kind: 'postman-chat', displayName: 'Postman Chat ' + n, lunaId: id };
+    state.definition.agents.push(agent);
+    state.definition.chats.push(chat);
+    state.definition.authorityEdges.push({ id: uid('auth'), from: leader.id, to: id });
+    state.definition.chatConnections.push(
+      { id: uid('chatlink'), agentId: id, chatNodeId: chatId },
+      { id: uid('chatlink'), agentId: leader.id, chatNodeId: chatId });
+    state.layout.nodes[id] = { x: 160 + current.length * 480, y: 870 };
+    state.layout.nodes[chatId] = { x: 160 + current.length * 480 + NODE_WIDTH + 34, y: 882 };
+    state.selection = { type: 'node', id };
     markDefinitionDirty(); markLayoutDirty(); renderAll();
     setInspectorCollapsed(false, { mark: false });
   }
@@ -489,37 +557,37 @@ function mountEditor(root, bridge) {
     if (!state.selection) return;
     if (isEditingLocked()) return lockedToast();
     if (state.selection.type === 'node') deleteNode(state.selection.id);
-    if (state.selection.type === 'luna') {
-      const id = state.selection.id;
-      state.definition.lunas = state.definition.lunas.filter(l => l.id !== id);
-      delete state.layout.nodes[id];
-      state.selection = null;
-      markDefinitionDirty(); markLayoutDirty(); renderAll();
-    }
-    if (state.selection?.type === 'edge') deleteEdge(state.selection.id, state.selection.kind, state.selection.pairId || null);
+    else if (state.selection.type === 'chat') {
+      const chat = getChat(state.selection.id);
+      if (chat) deleteNode(chat.lunaId);
+    } else if (state.selection.type === 'edge')
+      deleteEdge(state.selection.id, state.selection.kind, state.selection.pairId || null);
   }
 
   function deleteNode(id) {
-    state.definition.agents = state.definition.agents.filter((agent) => agent.id !== id);
-    state.definition.authorityEdges = state.definition.authorityEdges.filter((edge) => edge.from !== id && edge.to !== id);
-    state.definition.communicationEdges = state.definition.communicationEdges.filter((edge) => edge.from !== id && edge.to !== id);
+    const ownedChat = chatForLuna(id);
+    const removedChats = new Set(ownedChat ? [ownedChat.id] : []);
+    state.definition.agents = state.definition.agents.filter(agent => agent.id !== id);
+    state.definition.chats = state.definition.chats.filter(chat => !removedChats.has(chat.id));
+    state.definition.chatConnections = state.definition.chatConnections.filter(e =>
+      e.agentId !== id && !removedChats.has(e.chatNodeId));
+    state.definition.authorityEdges = state.definition.authorityEdges.filter(e => e.from !== id && e.to !== id);
+    state.definition.communicationEdges = state.definition.communicationEdges.filter(e => e.from !== id && e.to !== id);
     delete state.layout.nodes[id];
+    for (const chatId of removedChats) delete state.layout.nodes[chatId];
     if (state.definition.entryAgentId === id) state.definition.entryAgentId = null;
     state.selection = null;
     state.edgeSourceId = null;
-    markDefinitionDirty();
-    markLayoutDirty();
-    renderAll();
+    markDefinitionDirty(); markLayoutDirty(); renderAll();
     toast(t('deleteNodeToast'));
   }
 
   function deleteEdge(id, kind, pairId = null) {
-    const key = kind === 'authority' ? 'authorityEdges' : 'communicationEdges';
+    const key = kind === 'authority' ? 'authorityEdges' : kind === 'chat' ? 'chatConnections' : 'communicationEdges';
     const ids = new Set([id, pairId].filter(Boolean));
-    state.definition[key] = state.definition[key].filter((edge) => !ids.has(edge.id));
+    state.definition[key] = state.definition[key].filter(edge => !ids.has(edge.id));
     state.selection = null;
-    markDefinitionDirty();
-    renderAll();
+    markDefinitionDirty(); renderAll();
     toast(t('deleteEdgeToast'));
   }
 
@@ -533,67 +601,80 @@ function mountEditor(root, bridge) {
   }
 
   function setEdgeMode(mode) {
-    if (!['select', 'authority', 'communication'].includes(mode)) return;
+    if (!['select', 'authority', 'communication', 'chat'].includes(mode)) return;
     state.edgeMode = mode;
     state.edgeSourceId = null;
     root.querySelectorAll('[data-edge-mode]').forEach((button) => button.classList.toggle('is-active', button.dataset.edgeMode === mode));
     els.communicationDirectionControl.hidden = mode !== 'communication';
     els.canvasShell.classList.toggle('edge-authority', mode === 'authority');
     els.canvasShell.classList.toggle('edge-communication', mode === 'communication');
+    els.canvasShell.classList.toggle('edge-chat', mode === 'chat');
     updateConnectionBanner();
     renderNodes();
   }
 
-  function handleNodeAction(id) {
+  function handleNodeAction(id) { handleConnectionEndpoint(id, 'node'); }
+  function handleChatAction(id) { handleConnectionEndpoint(id, 'chat'); }
+
+  function handleConnectionEndpoint(id, type) {
     if (state.edgeMode === 'select') {
-      state.selection = { type: 'node', id };
-      setInspectorCollapsed(false, { mark: false });
-      renderSelection();
+      state.selection = { type, id };
+      setInspectorCollapsed(false, { mark: false }); renderSelection();
+      if (type === 'chat') void refreshChatResult();
       return;
     }
     if (isEditingLocked()) return lockedToast();
+    const mode = state.edgeMode;
+    if (mode !== 'chat' && type !== 'node') { toast(t('chatUseConnectionMode'), 'error'); return; }
     if (!state.edgeSourceId) {
       state.edgeSourceId = id;
-      state.selection = { type: 'node', id };
-      updateConnectionBanner();
-      renderSelection();
-      toast(t(state.edgeMode === 'authority' ? 'sourceSelectedAuthority' : 'sourceSelectedCommunication'));
+      state.selection = { type, id };
+      updateConnectionBanner(); renderSelection();
+      toast(t(mode === 'chat' ? 'sourceSelectedChat' :
+        mode === 'authority' ? 'sourceSelectedAuthority' : 'sourceSelectedCommunication'));
       return;
     }
-    const from = state.edgeSourceId;
-    const to = id;
+    const from = state.edgeSourceId, to = id;
     if (from === to) {
       toast(t('selfEdgeBlocked'), 'error');
-      state.edgeSourceId = null;
-      updateConnectionBanner();
-      renderNodes();
-      return;
-    }
-    const key = state.edgeMode === 'authority' ? 'authorityEdges' : 'communicationEdges';
-    if (state.edgeMode === 'communication' && state.communicationDirection === 'bidirectional') {
-      const forwardExists = state.definition.communicationEdges.some((edge) => edge.from === from && edge.to === to);
-      const reverseExists = state.definition.communicationEdges.some((edge) => edge.from === to && edge.to === from);
-      if (forwardExists && reverseExists) {
+    } else if (mode === 'chat') {
+      const agentId = type === 'node' ? to : from;
+      const chatNodeId = type === 'chat' ? to : from;
+      if (!getAgent(agentId) || !getChat(chatNodeId)) toast(t('chatNeedPair'), 'error');
+      else if (state.definition.chatConnections.some(e => e.agentId === agentId && e.chatNodeId === chatNodeId))
         toast(t('edgeExists'), 'error');
-      } else {
-        if (!forwardExists) state.definition.communicationEdges.push({ id: uid('comm'), from, to });
-        if (!reverseExists) state.definition.communicationEdges.push({ id: uid('comm'), from: to, to: from });
-        markDefinitionDirty();
-        toast(t('edgeCreated', { kind: t('bidirectionalConnection') }), 'success');
+      else {
+        state.definition.chatConnections.push({ id: uid('chatlink'), agentId, chatNodeId });
+        markDefinitionDirty(); toast(t('edgeCreated', { kind: t('postmanChat') }), 'success');
       }
-    } else if (state.definition[key].some((edge) => edge.from === from && edge.to === to)) {
+    } else if (mode === 'authority') {
+      if (state.definition.authorityEdges.some(e => e.from === from && e.to === to))
+        toast(t('edgeExists'), 'error');
+      else {
+        state.definition.authorityEdges.push({ id: uid('auth'), from, to });
+        state.definition.communicationEdges = state.definition.communicationEdges.filter(e =>
+          !((e.from === from && e.to === to) || (e.from === to && e.to === from)));
+        markDefinitionDirty(); toast(t('edgeCreated', { kind: 'Authority' }), 'success');
+      }
+    } else if (directAuthority(from, to)) {
+      toast(t('implicitCommunication'), 'error');
+    } else if (state.communicationDirection === 'bidirectional') {
+      const forward = state.definition.communicationEdges.some(e => e.from === from && e.to === to);
+      const backward = state.definition.communicationEdges.some(e => e.from === to && e.to === from);
+      if (forward && backward) toast(t('edgeExists'), 'error');
+      else {
+        if (!forward) state.definition.communicationEdges.push({ id: uid('comm'), from, to });
+        if (!backward) state.definition.communicationEdges.push({ id: uid('comm'), from: to, to: from });
+        markDefinitionDirty(); toast(t('edgeCreated', { kind: t('bidirectionalConnection') }), 'success');
+      }
+    } else if (state.definition.communicationEdges.some(e => e.from === from && e.to === to))
       toast(t('edgeExists'), 'error');
-    } else {
-      const prefix = state.edgeMode === 'authority' ? 'auth' : 'comm';
-      state.definition[key].push({ id: uid(prefix), from, to });
-      markDefinitionDirty();
-      const kind = state.edgeMode === 'authority' ? 'Authority' : t('oneWayConnection');
-      toast(t('edgeCreated', { kind }), 'success');
+    else {
+      state.definition.communicationEdges.push({ id: uid('comm'), from, to });
+      markDefinitionDirty(); toast(t('edgeCreated', { kind: t('oneWayConnection') }), 'success');
     }
-    state.edgeSourceId = null;
-    state.selection = null;
-    updateConnectionBanner();
-    renderAll();
+    state.edgeSourceId = null; state.selection = null;
+    updateConnectionBanner(); renderAll();
   }
 
   function applyVisualState() {
@@ -670,8 +751,9 @@ function mountEditor(root, bridge) {
       els.connectionBanner.className = 'connection-banner';
       return;
     }
-    const source = state.edgeSourceId ? getAgent(state.edgeSourceId) : null;
-    const key = state.edgeMode === 'authority'
+    const source = state.edgeSourceId ? (getAgent(state.edgeSourceId) || getChat(state.edgeSourceId)) : null;
+    const key = state.edgeMode === 'chat'
+      ? (source ? 'connectionChatTarget' : 'connectionChatPrompt') : state.edgeMode === 'authority'
       ? (source ? 'connectionAuthorityTarget' : 'connectionAuthorityPrompt')
       : state.communicationDirection === 'oneway'
         ? (source ? 'connectionCommunicationTargetOneWay' : 'connectionCommunicationPromptOneWay')
@@ -693,10 +775,10 @@ function mountEditor(root, bridge) {
     els.canvasEmpty.hidden = state.definition.agents.length > 0;
     els.metricAgents.textContent = state.definition.agents.length;
     els.metricAuthority.textContent = state.definition.authorityEdges.length;
-    els.metricCommunication.textContent = state.definition.communicationEdges.length;
+    els.metricCommunication.textContent = state.definition.communicationEdges.length + state.definition.chatConnections.length;
     els.compactMetricAgents.textContent = state.definition.agents.length;
     els.compactMetricAuthority.textContent = state.definition.authorityEdges.length;
-    els.compactMetricCommunication.textContent = state.definition.communicationEdges.length;
+    els.compactMetricCommunication.textContent = state.definition.communicationEdges.length + state.definition.chatConnections.length;
     renderDirtyState();
     updateConnectionBanner();
   }
@@ -707,7 +789,7 @@ function mountEditor(root, bridge) {
       const position = state.layout.nodes[agent.id] || { x: 100, y: 100 };
       const runtimeStatus = state.runtime.bindings[agent.id]?.status || (state.runtime.status === 'STOPPED' ? 'NOT_STARTED' : 'POTENTIAL');
       const node = document.createElement('article');
-      node.className = 'agent-node';
+      node.className = 'agent-node' + (agent.slot === 'luna-bridge' ? ' luna-bridge-node' : '');
       node.dataset.id = agent.id;
       node.dataset.kind = 'native-agent';
       node.dataset.runtime = runtimeStatus;
@@ -717,7 +799,7 @@ function mountEditor(root, bridge) {
       if (state.definition.entryAgentId === agent.id) node.classList.add('entry');
       if (state.selection?.type === 'edge') {
         const selectedEdge = edgeCollection(state.selection.kind).find((edge) => edge.id === state.selection.id);
-        if (selectedEdge && (selectedEdge.from === agent.id || selectedEdge.to === agent.id)) node.classList.add('edge-peer');
+        if (selectedEdge && (selectedEdge.from === agent.id || selectedEdge.to === agent.id || selectedEdge.agentId === agent.id)) node.classList.add('edge-peer');
       }
       if (state.edgeSourceId === agent.id) node.classList.add(state.edgeMode === 'authority' ? 'edge-source-authority' : 'edge-source-communication');
       else if (state.edgeSourceId && state.edgeMode !== 'select') node.classList.add('edge-target-candidate');
@@ -780,56 +862,35 @@ function mountEditor(root, bridge) {
       });
       els.nodeLayer.append(node);
     }
-    for (const luna of state.definition.lunas || []) {
-      const position = state.layout.nodes[luna.id] || { x: 100, y: 870 };
-      const binding = lunaRuntime(luna.id);
-      const status = binding?.status || 'POTENTIAL';
-      const node = document.createElement('article');
-      node.className = 'agent-node luna-bridge-node';
-      node.dataset.id = luna.id;
-      node.dataset.kind = 'luna';
-      node.dataset.runtime = status;
-      node.style.left = position.x + 'px';
-      node.style.top = position.y + 'px';
-      if (state.selection?.type === 'luna' && state.selection.id === luna.id) node.classList.add('selected');
-      const strip = document.createElement('div'); strip.className = 'node-runtime-strip';
-      const body = document.createElement('div'); body.className = 'node-body';
-      const title = document.createElement('div'); title.className = 'node-title'; title.textContent = luna.displayName;
-      const role = document.createElement('div'); role.className = 'node-role'; role.textContent = t('lunaChatKind');
-      const info = document.createElement('div'); info.className = 'node-meta';
-      const statusLabel = document.createElement('span'); statusLabel.className = 'model-chip'; statusLabel.textContent = 'LunaBridge';
-      const phase = document.createElement('span'); phase.className = 'runtime-chip'; phase.textContent = status;
-      info.append(statusLabel, phase); body.append(title, role, info); node.append(strip, body);
-      node.addEventListener('pointerdown', (event) => onNodePointerDown(event, luna.id));
-      node.addEventListener('click', event => {
-        if (state.interaction.nodeDrag?.moved) return;
-        event.stopPropagation();
-        if (state.edgeMode !== 'select') return;
-        state.selection = { type: 'luna', id: luna.id };
-        setInspectorCollapsed(false, { mark: false }); renderSelection();
-      });
-      els.nodeLayer.append(node);
+    for (const chatDef of state.definition.chats) {
+      const position = state.layout.nodes[chatDef.id] || { x: 100, y: 870 };
+      const facts = lunaRuntime(chatDef.lunaId), status = facts?.status || 'POTENTIAL';
       const chat = document.createElement('article');
       chat.className = 'luna-chat-node';
       chat.dataset.kind = 'postman-chat';
-      chat.dataset.id = luna.chatNodeId;
-      chat.dataset.lunaId = luna.id;
+      chat.dataset.id = chatDef.id;
+      chat.dataset.lunaId = chatDef.lunaId;
       chat.dataset.runtime = status;
-      chat.style.left = (position.x + NODE_WIDTH + 34) + 'px';
-      chat.style.top = (position.y + 12) + 'px';
-      const label = document.createElement('strong'); label.textContent = t('lunaChatNode');
+      if (state.selection?.type === 'chat' && state.selection.id === chatDef.id) chat.classList.add('selected');
+      if (state.edgeSourceId === chatDef.id) chat.classList.add('edge-source-chat');
+      chat.style.left = position.x + 'px';
+      chat.style.top = position.y + 'px';
+      const label = document.createElement('strong'); label.textContent = chatDef.displayName;
       const statusText = document.createElement('div'); statusText.className = 'luna-chat-status';
-      statusText.textContent = t('lunaStatus', { status });
+      statusText.textContent = t('lunaStatus', { status: facts?.hostJobState ?? status });
       const address = document.createElement('div');
-      address.textContent = binding?.conversationRef || binding?.selectedArchivedConversation || t('lunaNoChat');
       address.className = 'luna-chat-address';
+      address.textContent = facts?.conversationRef || facts?.selectedArchivedConversation || t('lunaNoChat');
       const start = document.createElement('div'); start.className = 'luna-chat-time';
-      start.textContent = binding?.startedAt ? t('lunaElapsed', { duration: elapsedText(
-        binding.status === 'WORKING' ? Date.now() - Date.parse(binding.startedAt) : binding.elapsedMs ?? 0) }) : t('lunaHostNotStarted');
+      start.textContent = facts?.startedAt ? t('lunaElapsed', { duration: elapsedText(
+        isLunaWorking(facts) ? Date.now() - Date.parse(facts.startedAt) : facts.elapsedMs ?? 0) })
+        : t('lunaHostNotStarted');
       chat.append(label, statusText, address, start);
+      chat.addEventListener('pointerdown', event => onNodePointerDown(event, chatDef.id));
       chat.addEventListener('click', event => {
-        event.stopPropagation(); state.selection = { type: 'luna', id: luna.id };
-        setInspectorCollapsed(false, { mark: false }); renderSelection();
+        if (state.interaction.nodeDrag?.moved) return;
+        event.stopPropagation();
+        handleChatAction(chatDef.id);
       });
       els.nodeLayer.append(chat);
     }
@@ -862,17 +923,14 @@ function mountEditor(root, bridge) {
         nextX = snapGridValue(nextX);
         nextY = snapGridValue(nextY);
       }
+      const width = getChat(id) ? CHAT_WIDTH : NODE_WIDTH;
+      const height = getChat(id) ? CHAT_HEIGHT : NODE_HEIGHT;
       state.layout.nodes[id] = {
-        x: clamp(nextX, 8, STAGE_WIDTH - NODE_WIDTH - 8),
-        y: clamp(nextY, 8, STAGE_HEIGHT - NODE_HEIGHT - 8)
+        x: clamp(nextX, 8, STAGE_WIDTH - width - 8),
+        y: clamp(nextY, 8, STAGE_HEIGHT - height - 8)
       };
       node.style.left = `${state.layout.nodes[id].x}px`;
       node.style.top = `${state.layout.nodes[id].y}px`;
-      const chat = node.nextElementSibling;
-      if (node.dataset.kind === 'luna' && chat?.classList.contains('luna-chat-node')) {
-        chat.style.left = (state.layout.nodes[id].x + NODE_WIDTH + 34) + 'px';
-        chat.style.top = (state.layout.nodes[id].y + 12) + 'px';
-      }
       renderEdges();
     };
     const up = () => {
@@ -889,7 +947,8 @@ function mountEditor(root, bridge) {
   }
 
   function edgeCollection(kind) {
-    return kind === 'authority' ? state.definition.authorityEdges : state.definition.communicationEdges;
+    return kind === 'authority' ? state.definition.authorityEdges :
+      kind === 'chat' ? state.definition.chatConnections : state.definition.communicationEdges;
   }
 
   function cleanOrthogonalPoints(points) {
@@ -986,14 +1045,15 @@ function mountEditor(root, bridge) {
     els.edgeGroup.replaceChildren();
     renderEdgeKind('authority');
     renderEdgeKind('communication');
+    renderChatEdges();
   }
 
   function renderEdgeKind(kind) {
     const collection = edgeCollection(kind);
-    const focusActive = state.selection?.type === 'node' || state.selection?.type === 'edge';
+    const focusActive = state.selection?.type === 'node' || state.selection?.type === 'chat' || state.selection?.type === 'edge';
     const processed = new Set();
     for (const edge of collection) {
-      if (processed.has(edge.id)) continue;
+      if (processed.has(edge.id) || kind === 'communication' && directAuthority(edge.from, edge.to)) continue;
       let visualEdge = edge;
       let pair = null;
       let isBidirectional = false;
@@ -1067,17 +1127,69 @@ function mountEditor(root, bridge) {
     }
   }
 
+  function renderChatEdges() {
+    for (const edge of state.definition.chatConnections) {
+      const a = state.layout.nodes[edge.agentId], b = state.layout.nodes[edge.chatNodeId];
+      if (!a || !b) continue;
+      const from = { x: a.x + NODE_WIDTH, y: a.y + NODE_HEIGHT / 2 };
+      const to = { x: b.x, y: b.y + CHAT_HEIGHT / 2 };
+      const curve = Math.max(55, Math.abs(to.x - from.x) * 0.32);
+      const path = state.layout.visual.edgeRouting === 'orthogonal'
+        ? roundedOrthogonalPath([from, { x: from.x + 26, y: from.y },
+          { x: to.x - 26, y: to.y }, to], 9)
+        : 'M ' + from.x + ' ' + from.y + ' C ' + (from.x + curve) + ' ' + from.y +
+          ', ' + (to.x - curve) + ' ' + to.y + ', ' + to.x + ' ' + to.y;
+      const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      group.classList.add('edge-group-item');
+      group.dataset.edgeKind = 'chat';
+      group.dataset.edgeId = edge.id;
+      const selected = state.selection?.type === 'edge' && state.selection.id === edge.id;
+      const relevant = !state.selection ||
+        state.selection.type === 'edge' && selected ||
+        state.selection.type === 'node' && state.selection.id === edge.agentId ||
+        state.selection.type === 'chat' && state.selection.id === edge.chatNodeId;
+      if (!relevant) group.classList.add('is-dimmed');
+      const visible = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      visible.setAttribute('d', path);
+      visible.setAttribute('class', 'edge chat' + (selected ? ' selected' : ''));
+      const hit = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      hit.setAttribute('d', path); hit.setAttribute('class', 'edge-hit');
+      hit.style.pointerEvents = 'stroke';
+      hit.addEventListener('click', event => {
+        event.stopPropagation();
+        state.selection = { type: 'edge', id: edge.id, kind: 'chat' };
+        setInspectorCollapsed(false, { mark: false }); renderSelection();
+      });
+      group.append(visible, hit); els.edgeGroup.append(group);
+    }
+  }
+
   function renderSelection() {
     renderNodes();
     renderEdges();
     renderInspector();
   }
 
-  function renderLunaFacts(luna) {
-    const facts = lunaRuntime(luna.id);
-    const archives = state.runtime.lunaArchive?.[luna.id] || [];
+  function renderLunaFacts(chat) {
+    const facts = lunaRuntime(chat.lunaId);
+    const archives = state.runtime.lunaArchive?.[chat.lunaId] || [];
     const running = isLunaWorking(facts);
     els.lunaRuntimeStatus.textContent = t('lunaStatus', { status: facts?.hostJobState ?? facts?.status ?? 'POTENTIAL' });
+    els.lunaJobStatus.textContent = facts?.lastBridgeJobId
+      ? t('jobKnown', { id: facts.lastBridgeJobId, request: facts.lastRequestId || '—',
+        status: facts.hostJobState ?? facts.status ?? 'UNKNOWN' }) : t('jobNone');
+    const observation = state.chatJob;
+    if (observation?.runId === state.runtime.id && observation?.chatId === chat.id &&
+        observation?.jobId === facts?.lastBridgeJobId) {
+      const value = observation.value;
+      els.lunaJobResult.textContent = value?.status === 'POSTMAN_BRIDGE_TERMINAL'
+        ? t('jobResultTerminal', { value: String(value.result?.assistantText ??
+            value.result?.reportedOutcome ?? value.terminalStatus ?? 'TERMINAL').slice(0, 6000) })
+        : value?.status === 'POSTMAN_BRIDGE_QUEUED' || value?.status === 'POSTMAN_BRIDGE_RUNNING'
+          ? t('jobResultPending')
+          : value?.diagnostic ? t('chatResultError', { reason: value.diagnostic })
+          : t('jobResultUnknown');
+    } else els.lunaJobResult.textContent = facts?.activeJobId ? t('jobResultPending') : t('jobResultNone');
     els.lunaRuntimeStart.textContent = facts?.startedAt
       ? t('lunaHostStart', { time: new Date(facts.startedAt).toLocaleString(state.locale) })
       : t('lunaHostNotStarted');
@@ -1099,8 +1211,8 @@ function mountEditor(root, bridge) {
 
     // A status poll must not recreate the select or reset an in-progress task.
     const key = state.locale + JSON.stringify(archives.map(record => [record.id, record.conversationRef, record.createdAt]));
-    if (els.lunaArchiveSelect.dataset.items !== key || els.lunaArchiveSelect.dataset.lunaId !== luna.id) {
-      const prior = els.lunaArchiveSelect.dataset.lunaId === luna.id
+    if (els.lunaArchiveSelect.dataset.items !== key || els.lunaArchiveSelect.dataset.lunaId !== chat.id) {
+      const prior = els.lunaArchiveSelect.dataset.lunaId === chat.id
         ? els.lunaArchiveSelect.value : facts?.selectedArchiveId;
       els.lunaArchiveSelect.replaceChildren();
       for (const record of archives) {
@@ -1114,7 +1226,7 @@ function mountEditor(root, bridge) {
       }
       if (archives.some(record => record.id === prior)) els.lunaArchiveSelect.value = prior;
       els.lunaArchiveSelect.dataset.items = key;
-      els.lunaArchiveSelect.dataset.lunaId = luna.id;
+      els.lunaArchiveSelect.dataset.lunaId = chat.id;
     }
     const archive = archives.find(record => record.id === els.lunaArchiveSelect.value);
     els.lunaArchiveDetail.textContent = archive
@@ -1159,18 +1271,10 @@ function mountEditor(root, bridge) {
       const label = element.querySelector('.runtime-chip span:last-child');
       if (label) label.textContent = agentStatusText(status);
     }
-    for (const element of els.nodeLayer.querySelectorAll('.luna-bridge-node')) {
-      const facts = lunaRuntime(element.dataset.id), status = facts?.status ?? 'POTENTIAL';
-      const role = element.querySelector('.node-role');
-      if (role) role.textContent = t('lunaChatKind');
-      element.dataset.runtime = status;
-      const label = element.querySelector('.runtime-chip');
-      if (label) label.textContent = status;
-    }
     for (const element of els.nodeLayer.querySelectorAll('.luna-chat-node')) {
       const facts = lunaRuntime(element.dataset.lunaId), status = facts?.status ?? 'POTENTIAL';
       const title = element.querySelector('strong');
-      if (title) title.textContent = t('lunaChatNode');
+      if (title) title.textContent = getChat(element.dataset.id)?.displayName || t('lunaChatNode');
       element.dataset.runtime = status;
       const label = element.querySelector('.luna-chat-status');
       if (label) label.textContent = t('lunaStatus', { status: facts?.hostJobState ?? status });
@@ -1187,9 +1291,9 @@ function mountEditor(root, bridge) {
   }
 
   function refreshRuntimeInspector() {
-    if (state.selection?.type === 'luna') {
-      const luna = getLuna(state.selection.id);
-      if (luna) renderLunaFacts(luna);
+    if (state.selection?.type === 'chat') {
+      const chat = getChat(state.selection.id);
+      if (chat) renderLunaFacts(chat);
     } else if (state.selection?.type === 'node') {
       const agent = getAgent(state.selection.id);
       if (agent) refreshNativeInspector(agent);
@@ -1208,14 +1312,14 @@ function mountEditor(root, bridge) {
       els.inspectorTitle.textContent = t('nothingSelected');
       return;
     }
-    if (selection.type === 'luna') {
-      const luna = getLuna(selection.id);
-      if (!luna) { state.selection = null; return renderInspector(); }
-      els.inspectorTitle.textContent = luna.displayName;
+    if (selection.type === 'chat') {
+      const chat = getChat(selection.id);
+      if (!chat) { state.selection = null; return renderInspector(); }
+      els.inspectorTitle.textContent = chat.displayName;
       els.lunaInspector.hidden = false;
-      if (document.activeElement !== els.lunaNameInput) els.lunaNameInput.value = luna.displayName;
+      if (document.activeElement !== els.lunaNameInput) els.lunaNameInput.value = chat.displayName;
       els.lunaNameInput.disabled = isEditingLocked();
-      renderLunaFacts(luna);
+      renderLunaFacts(chat);
       return;
     }
     if (selection.type === 'node') {
@@ -1249,10 +1353,10 @@ function mountEditor(root, bridge) {
     }
     const edge = edgeCollection(selection.kind).find((item) => item.id === selection.id);
     if (!edge) { state.selection = null; return renderInspector(); }
-    const from = getAgent(edge.from);
-    const to = getAgent(edge.to);
+    const from = getAgent(edge.from || edge.agentId);
+    const to = getAgent(edge.to) || getChat(edge.chatNodeId);
     const reciprocal = selection.kind === 'communication' ? communicationReciprocal(edge, state.definition.communicationEdges) : null;
-    const kindLabel = selection.kind === 'authority' ? 'Authority' : 'Communication';
+    const kindLabel = selection.kind === 'authority' ? 'Authority' : selection.kind === 'chat' ? t('postmanChat') : 'Communication';
     els.inspectorTitle.textContent = kindLabel;
     els.edgeInspector.hidden = false;
     els.edgeKindBadge.textContent = kindLabel;
@@ -1264,7 +1368,8 @@ function mountEditor(root, bridge) {
       els.edgeDirectionNote.className = `edge-direction-note${reciprocal ? ' bidirectional' : ''}`;
       state.selection.pairId = reciprocal?.id || null;
     }
-    els.edgeDescription.textContent = t(selection.kind === 'authority' ? 'edgeAuthorityHelp' : 'edgeCommunicationHelp');
+    els.edgeDescription.textContent = t(selection.kind === 'chat' ? 'edgeChatHelp' :
+      selection.kind === 'authority' ? 'edgeAuthorityHelp' : 'edgeCommunicationHelp');
     els.deleteEdgeButton.disabled = isEditingLocked();
   }
 
@@ -1471,6 +1576,32 @@ function mountEditor(root, bridge) {
       if (!agentById.has(edge.from) || !agentById.has(edge.to)) errors.push(issue('DANGLING_COMMUNICATION', t('errorDanglingEdge', { kind: 'Communication' }), `edge:${edge.id}`));
     }
     if (hasAuthorityCycle(agentById)) errors.push(issue('AUTHORITY_CYCLE', t('errorAuthorityCycle'), 'authority'));
+    const lunaAgents = agents.filter(a => a.slot === 'luna-bridge');
+    const chats = state.definition.chats || [];
+    if (lunaAgents.length > 3 || chats.length > 3 || lunaAgents.length !== chats.length)
+      errors.push(issue('LUNA_LIMIT', t('lunaLimit'), 'team'));
+    for (const agent of lunaAgents) {
+      const parents = state.definition.authorityEdges.filter(e => e.to === agent.id);
+      if (parents.length !== 1 || !['entry', 'sol'].includes(agentById.get(parents[0]?.from)?.slot))
+        errors.push(issue('LUNA_PARENT', t('errorLunaParent'), 'node:' + agent.id));
+    }
+    const chatIds = new Set(), ownerIds = new Set(), links = new Set();
+    for (const chat of chats) {
+      if (chatIds.has(chat.id) || agentById.has(chat.id) ||
+          !lunaAgents.some(a => a.id === chat.lunaId) || ownerIds.has(chat.lunaId)) {
+        errors.push(issue('CHAT_INVALID', t('errorInvalidChatConnection'), 'chat:' + chat.id));
+      }
+      chatIds.add(chat.id);
+      ownerIds.add(chat.lunaId);
+      if (!state.definition.chatConnections.some(e => e.chatNodeId === chat.id))
+        errors.push(issue('CHAT_DISCONNECTED', t('errorChatNoConnection'), 'chat:' + chat.id));
+    }
+    for (const link of state.definition.chatConnections) {
+      const pair = link.agentId + ':' + link.chatNodeId;
+      if (!agentById.has(link.agentId) || !chatIds.has(link.chatNodeId) || links.has(pair))
+        errors.push(issue('CHAT_CONNECTION_INVALID', t('errorInvalidChatConnection'), 'edge:' + link.id));
+      links.add(pair);
+    }
 
     state.validation = { hasRun: true, errors };
     renderValidation();
@@ -1548,7 +1679,10 @@ function mountEditor(root, bridge) {
   }
 
   function focusValidationTarget(target) {
-    if (target.startsWith('node:')) {
+    if (target.startsWith('chat:')) {
+      const id = target.slice(5);
+      if (getChat(id)) { state.selection = { type: 'chat', id }; setInspectorCollapsed(false, { mark: false }); renderSelection(); }
+    } else if (target.startsWith('node:')) {
       const id = target.split(':')[1];
       if (getAgent(id)) {
         state.selection = { type: 'node', id };
@@ -1556,8 +1690,9 @@ function mountEditor(root, bridge) {
         renderSelection();
       }
     } else if (target.startsWith('edge:')) {
-      const id = target.split(':')[1];
-      const kind = state.definition.authorityEdges.some((edge) => edge.id === id) ? 'authority' : 'communication';
+      const id = target.slice(5);
+      const kind = state.definition.authorityEdges.some(edge => edge.id === id) ? 'authority' :
+        state.definition.chatConnections.some(edge => edge.id === id) ? 'chat' : 'communication';
       state.selection = { type: 'edge', id, kind };
       setInspectorCollapsed(false, { mark: false });
       renderSelection();
@@ -1566,6 +1701,7 @@ function mountEditor(root, bridge) {
 
   function resetRuntime() {
     state.runtime = { status: 'STOPPED', id: null, bindings: {}, lunas: [], lunaArchive: {} };
+    state.chatJob = null;
   }
 
   async function validateOnHost() {
@@ -1582,6 +1718,33 @@ function mountEditor(root, bridge) {
       renderValidation();
       return errors;
     }
+  }
+
+  async function refreshChatResult() {
+    if (state.selection?.type !== 'chat' || !state.runtime.id) return;
+    const chat = getChat(state.selection.id);
+    const facts = chat && lunaRuntime(chat.lunaId);
+    const jobId = facts?.lastBridgeJobId;
+    if (!chat || !jobId) return;
+    const status = facts.hostJobState ?? facts.status ?? 'UNKNOWN';
+    if (state.chatJob?.runId === state.runtime.id && state.chatJob?.chatId === chat.id &&
+        state.chatJob?.jobId === jobId && state.chatJob?.hostState === status) return;
+    const requested = { runId: state.runtime.id, chatId: chat.id, jobId, hostState: status, value: null };
+    state.chatJob = requested;
+    try {
+      const value = await bridge.call('runs/luna-result', {
+        id: requested.runId, lunaId: chat.lunaId, bridgeJobId: jobId
+      });
+      if (state.chatJob !== requested) return;
+      state.chatJob = { ...requested, value };
+    } catch (error) {
+      if (state.chatJob !== requested) return;
+      state.chatJob = { ...requested, value: {
+        status: 'UNKNOWN', diagnostic: String(error.message || error)
+      } };
+    }
+    if (state.selection?.type === 'chat' && state.selection.id === requested.chatId &&
+        state.runtime.id === requested.runId) renderLunaFacts(chat);
   }
 
   async function syncRun() {
@@ -1606,6 +1769,7 @@ function mountEditor(root, bridge) {
       updateRuntimeNodes(); renderRuntime(false);
     } else if (state.runtime.status === 'RUNNING') updateRuntimeNodes();
     refreshRuntimeInspector();
+    void refreshChatResult();
     const items = await bridge.call('runs/activity', { id: run.id });
     const activity = $('nodesActivity');
     activity.replaceChildren();
@@ -1661,7 +1825,7 @@ function mountEditor(root, bridge) {
   }
 
   async function selectLuna(archiveId = null) {
-    const lunaId = state.selection?.type === 'luna' ? state.selection.id : null;
+    const lunaId = state.selection?.type === 'chat' ? getChat(state.selection.id)?.lunaId : null;
     if (!lunaId || !state.runtime.id || state.runtime.status !== 'RUNNING') return;
     if (isLunaWorking(lunaRuntime(lunaId))) { toast(t('lunaBusy'), 'error'); return; }
     try {
@@ -1672,7 +1836,7 @@ function mountEditor(root, bridge) {
 
   let lunaSending = false;
   async function sendLuna() {
-    const lunaId = state.selection?.type === 'luna' ? state.selection.id : null;
+    const lunaId = state.selection?.type === 'chat' ? getChat(state.selection.id)?.lunaId : null;
     if (!lunaId || !state.runtime.id || state.runtime.status !== 'RUNNING' || lunaSending) return;
     if (isLunaWorking(lunaRuntime(lunaId))) { toast(t('lunaBusy'), 'error'); return; }
     const task = els.lunaTaskInput.value.trim();
@@ -1760,13 +1924,13 @@ function mountEditor(root, bridge) {
   }
 
   function fitView() {
-    if (!state.definition.agents.length && !state.definition.lunas.length) {
+    if (!state.definition.agents.length && !state.definition.chats.length) {
       state.layout.viewport = { x: 120, y: 80, zoom: 1 };
       applyViewport();
       markLayoutDirty();
       return;
     }
-    const positions = [...state.definition.agents, ...state.definition.lunas].map((agent) => state.layout.nodes[agent.id]).filter(Boolean);
+    const positions = [...state.definition.agents, ...state.definition.chats].map((node) => state.layout.nodes[node.id]).filter(Boolean);
     const minX = Math.min(...positions.map((pos) => pos.x));
     const minY = Math.min(...positions.map((pos) => pos.y));
     const maxX = Math.max(...positions.map((pos) => pos.x + NODE_WIDTH));
@@ -1847,15 +2011,15 @@ function mountEditor(root, bridge) {
     els.lunaContinueButton.addEventListener('click', () => selectLuna(els.lunaArchiveSelect.value));
     els.lunaNewChatButton.addEventListener('click', () => selectLuna(null));
     els.lunaArchiveSelect.addEventListener('change', () => {
-      const luna = state.selection?.type === 'luna' && getLuna(state.selection.id);
-      if (luna) renderLunaFacts(luna);
+      const chat = state.selection?.type === 'chat' && getChat(state.selection.id);
+      if (chat) renderLunaFacts(chat);
     });
     els.lunaTaskInput.addEventListener('input', () => refreshRuntimeInspector());
     els.lunaSendButton.addEventListener('click', () => { void sendLuna(); });
     els.lunaNameInput.addEventListener('input', () => {
-      if (isEditingLocked() || state.selection?.type !== 'luna') return;
-      const luna = getLuna(state.selection.id);
-      if (luna) { luna.displayName = els.lunaNameInput.value; markDefinitionDirty(); renderNodes(); }
+      if (isEditingLocked() || state.selection?.type !== 'chat') return;
+      const chat = getChat(state.selection.id);
+      if (chat) { chat.displayName = els.lunaNameInput.value; markDefinitionDirty(); renderNodes(); }
     });
     els.openChatButton.addEventListener('click', () => {
       const binding = state.selection?.type === 'node' && state.runtime.bindings[state.selection.id];
