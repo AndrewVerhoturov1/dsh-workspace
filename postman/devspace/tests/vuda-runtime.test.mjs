@@ -6,7 +6,21 @@ import { basename, dirname, join, resolve } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { findVudaRuntime, listVudaTools } from '../vuda-runtime.mjs'
-import { configureVudaChromium } from '../start-vuda.mjs'
+import { configureVudaChromium, requireHardwareGpu, withHardwareChromium } from '../start-vuda.mjs'
+
+const hardwareGpu = {
+  auxAttributes: { glRenderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11)' },
+  featureStatus: { webgl: 'enabled', webgl2: 'enabled' }
+}
+function fakeBrowser(gpu) {
+  return {
+    async newBrowserCDPSession() {
+      return { async send() { return { gpu } }, async detach() {} }
+    },
+    async close() {}
+  }
+}
+const browserSource = `(${fakeBrowser.toString()})(${JSON.stringify(hardwareGpu)})`
 
 async function fixture(t, { dotenv = true } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'dsh-vuda-discovery-'))
@@ -46,7 +60,9 @@ test('discovers an existing npm exec installation without PATH or a global packa
 
 test('GPU launch preserves caller options and the existing Chrome fallback', async () => {
   const calls = []
-  const chromium = { launch(options) { assert.equal(this, chromium); calls.push(options) } }
+  const chromium = { launch(options) {
+    assert.equal(this, chromium); calls.push(options); return fakeBrowser(hardwareGpu)
+  } }
   configureVudaChromium(chromium)
   await chromium.launch({ headless: true, timeout: 123, args: ['--example'] })
   await chromium.launch({ headless: true, channel: 'chrome', args: ['--enable-gpu'] })
@@ -59,14 +75,15 @@ test('GPU launch preserves caller options and the existing Chrome fallback', asy
 test('shutdown waits for an opening browser and closes every owned browser', async () => {
   let opened
   let closed = 0
-  const browser = { async close() { closed++ } }
+  const browser = { ...fakeBrowser(hardwareGpu), async close() { closed++ } }
   const chromium = { launch: () => new Promise(resolve => { opened = resolve }) }
   const close = configureVudaChromium(chromium)
   const launching = chromium.launch({})
   await Promise.resolve()
   const closing = close()
+  const rejected = assert.rejects(launching, /BROWSER_SESSION_CLOSED/)
   opened(browser)
-  await launching
+  await rejected
   await closing
   await close()
   assert.equal(closed, 1)
@@ -87,7 +104,7 @@ test('shared entry changes the Playwright instance imported by VUDA and strips c
       secretPresent: 'DSH_TEST_SECRET' in process.env,
       provider: process.env.VUDA_BROWSER_PROVIDER,
       dotenv: process.env.DOTENV_CONFIG_PATH,
-      cwd: process.cwd() })) }
+      cwd: process.cwd() })); return ${browserSource} }
   }`)
   await writeFile(runtime.serverEntry, `import { chromium } from 'playwright';
     await chromium.launch({ headless: true });`)
@@ -121,7 +138,7 @@ test('closing MCP stdin closes the browser before the server exits', { timeout: 
   await mkdir(playwrightRoot)
   await writeFile(join(playwrightRoot, 'package.json'), JSON.stringify({ name: 'playwright', main: 'index.cjs' }))
   await writeFile(join(playwrightRoot, 'index.cjs'), `exports.chromium = { async launch() {
-    return { async close() { console.log('browser-closed') } }
+    return { ...${browserSource}, async close() { console.log('browser-closed') } }
   } }`)
   await writeFile(runtime.serverEntry, `import { chromium } from 'playwright';
     await chromium.launch({}); console.log('browser-open'); process.stdin.resume();`)
@@ -139,6 +156,78 @@ test('closing MCP stdin closes the browser before the server exits', { timeout: 
   })
   assert.equal(code, 0)
   assert.match(output, /browser-open[\s\S]*browser-closed/)
+})
+
+test('GPU check rejects software rendering even when a physical NVIDIA device is listed', async () => {
+  for (const renderer of ['ANGLE (Google, Vulkan SwiftShader Device)', 'ANGLE (Microsoft, WARP)', 'llvmpipe (LLVM)']) {
+    let closed = 0
+    const gpu = { ...hardwareGpu, devices: [{ deviceString: 'NVIDIA GeForce RTX 3060' }],
+      auxAttributes: { glRenderer: renderer } }
+    const chromium = { launch: async () => ({ ...fakeBrowser(gpu), async close() { closed++ } }) }
+    const close = configureVudaChromium(chromium)
+    await assert.rejects(chromium.launch(), /HARDWARE_GPU_UNAVAILABLE/)
+    await close()
+    assert.equal(closed, 1)
+  }
+})
+
+test('GPU check fails closed on disabled WebGL or an unreported renderer', async () => {
+  await assert.rejects(requireHardwareGpu(fakeBrowser({ ...hardwareGpu,
+    featureStatus: { webgl: 'unavailable_software', webgl2: 'disabled_software' }
+  })), /HARDWARE_GPU_UNAVAILABLE/)
+  await assert.rejects(requireHardwareGpu(fakeBrowser({ ...hardwareGpu, auxAttributes: {} })), /HARDWARE_GPU_UNAVAILABLE/)
+  assert.equal((await requireHardwareGpu(fakeBrowser(hardwareGpu))).renderer, hardwareGpu.auxAttributes.glRenderer)
+})
+
+test('a failed GPU probe closes its browser and detaches the CDP session', async () => {
+  let closed = 0, detached = 0
+  const chromium = { launch: async () => ({
+    async newBrowserCDPSession() { return {
+      async send() { throw new Error('GPU probe failed') }, async detach() { detached++ }
+    } },
+    async close() { closed++ }
+  }) }
+  const close = configureVudaChromium(chromium)
+  await assert.rejects(chromium.launch(), /GPU probe failed/)
+  await close()
+  assert.equal(closed, 1)
+  assert.equal(detached, 1)
+  await assert.rejects(chromium.launch(), /BROWSER_SESSION_CLOSED/)
+})
+
+test('temporary project tests close only their browser on success and failure', async () => {
+  let closed = 0
+  const chromium = { launch: async () => ({ ...fakeBrowser(hardwareGpu), async close() { closed++ } }) }
+  const originalLaunch = chromium.launch
+  assert.equal(await withHardwareChromium(chromium, async () => 'done'), 'done')
+  await assert.rejects(withHardwareChromium(chromium, async () => { throw new Error('test failed') }), /test failed/)
+  assert.equal(closed, 2)
+  assert.equal(chromium.launch, originalLaunch)
+})
+
+test('cancelling a temporary test closes its browser and pre-cancelled tests never launch', async () => {
+  let closed = 0, finish
+  const controller = new AbortController()
+  const chromium = { launch: async () => ({ ...fakeBrowser(hardwareGpu), async close() { closed++; finish?.() } }) }
+  await assert.rejects(withHardwareChromium(chromium, async () => {
+    const stopped = new Promise(resolve => { finish = resolve })
+    controller.abort()
+    await stopped
+  }, { signal: controller.signal }), { name: 'AbortError' })
+  assert.equal(closed, 1)
+  await assert.rejects(withHardwareChromium(chromium, async () => {}, { signal: controller.signal }), { name: 'AbortError' })
+  assert.equal(closed, 1)
+})
+
+test('cancellation rejects even when the test callback never settles', { timeout: 1000 }, async () => {
+  let closed = 0
+  const controller = new AbortController()
+  const chromium = { launch: async () => ({ ...fakeBrowser(hardwareGpu), async close() { closed++ } }) }
+  await assert.rejects(withHardwareChromium(chromium, () => {
+    queueMicrotask(() => controller.abort())
+    return new Promise(() => {})
+  }, { signal: controller.signal }), { name: 'AbortError' })
+  assert.equal(closed, 1)
 })
 
 test('lists every MCP catalog page using the returned cursor', async () => {
