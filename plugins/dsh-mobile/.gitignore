@@ -1,0 +1,6 @@
+# The rc.2 Web loader requires the compiled package exports at activation.
+# Ship the two reviewed bundle files with the source (no source maps).
+!lib/
+lib/*
+!lib/index.js
+!lib/client.js

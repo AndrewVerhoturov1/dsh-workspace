@@ -1,0 +1,4 @@
+# Install opt-in: the package alone does not alter a running profile.
+- insert:
+    - id: dsh-mobile
+      name: 'dsh-mobile'
