@@ -353,7 +353,9 @@ function MobileApp({ctx}){
     return()=>{for(const id of targets)ctx.sessions.setSubagentCatalogOpen(id,false)}
   },[ctx,screen,rootId,sessions.subagentsByParent])
   React.useEffect(()=>{
-    if(screen==='chat')endRef.current?.scrollIntoView?.({block:'end'})
+    if(screen!=='chat'||document.activeElement?.closest('.m-composer'))return
+    const messages=endRef.current?.parentElement
+    if(messages)messages.scrollTop=messages.scrollHeight
   },[screen,selected,snapshot.nodes?.length,snapshot.partial])
   React.useEffect(()=>{
     if(restart==='requested'&&!hostDescription)setRestart('disconnected')

@@ -5,7 +5,7 @@ import {readFile} from 'node:fs/promises'
 
 function obs(value){return {getSnapshot:()=>value,subscribe:()=>()=>{}}}
 function fakeHooks(){
-  const state=[],refs=[]
+  const state=[],refs=[],effects=[]
   let cursor=0,refCursor=0
   const React={
     Fragment:'fragment',
@@ -15,7 +15,7 @@ function fakeHooks(){
       if(!Object.prototype.hasOwnProperty.call(state,i))state[i]=typeof initial==='function'?initial():initial
       return [state[i],value=>{state[i]=typeof value==='function'?value(state[i]):value}]
     },
-    useEffect(){},
+    useEffect(effect,deps){effects.push({effect,deps})},
     useMemo:fn=>fn(),
     useCallback:fn=>fn,
     useRef(value){
@@ -24,7 +24,7 @@ function fakeHooks(){
     },
     useSyncExternalStore:(_subscribe,getSnapshot)=>getSnapshot()
   }
-  return {React,reset(){cursor=0;refCursor=0},clear(){state.length=0;refs.length=0;cursor=0;refCursor=0}}
+  return {React,effects,reset(){cursor=0;refCursor=0;effects.length=0},clear(){state.length=0;refs.length=0;effects.length=0;cursor=0;refCursor=0}}
 }
 function collect(node,out=[]){
   if(node===null||node===undefined||typeof node==='boolean')return out
@@ -39,7 +39,7 @@ function collect(node,out=[]){
 async function browser(search){
   const script=await readFile(new URL('../lib/client.js',import.meta.url),'utf8')
   const registrations=[]
-  const {React,reset,clear}=fakeHooks()
+  const {React,reset,clear,effects}=fakeHooks()
   const document={
     querySelector:()=>null,
     createElement:tag=>({tag,setAttribute(){},remove(){}}),
@@ -58,7 +58,7 @@ async function browser(search){
     assert.equal(id,'react')
     return React
   })
-  return {client,reset,clear}
+  return {client,reset,clear,effects,document}
 }
 function syntheticCtx(){
   const list={
@@ -141,6 +141,32 @@ test('mobile mode composes over the installed shell.overlay and uses actual snap
   assert(elements.includes('Привет'))
   assert(elements.some(x=>x.type==='strong'&&x.children.includes('Ответ')))
 })
+test('streaming scroll stays inside messages and leaves the focused composer alone',async()=>{
+  const {client,reset,effects,document}=await browser('?mobile=1')
+  const {ctx}=syntheticCtx()
+  client.apply(ctx)
+  reset()
+  const list=collect(ctx.slot.component())
+  list.find(x=>x.props?.className==='m-chat-row').props.onClick()
+  reset()
+  const nodes=collect(ctx.slot.component())
+  const messages=nodes.find(x=>x.props?.className==='m-messages')
+  const marker=messages.children.at(-1)
+  let ancestorScrolls=0
+  const panel={scrollTop:0,scrollHeight:750}
+  marker.props.ref.current={parentElement:panel,scrollIntoView(){ancestorScrolls++}}
+  const scrollEffect=effects.find(x=>x.deps?.length===4&&x.deps[0]==='chat'&&x.deps[1]==='session-12345')?.effect
+  assert(scrollEffect,'chat scroll effect registered')
+  document.activeElement={closest:selector=>selector==='.m-composer'?{}:null}
+  for(let i=0;i<8;i++)scrollEffect()
+  assert.equal(panel.scrollTop,0,'streaming must not scroll while composing')
+  assert.equal(ancestorScrolls,0,'never scroll the entire page')
+  document.activeElement=null
+  scrollEffect()
+  assert.equal(panel.scrollTop,750,'normal scrolling stays in the messages panel')
+  assert.equal(ancestorScrolls,0)
+})
+
 test('Task includes grandchildren and opens one-shot child through direct parent',async()=>{
   const {client,reset}=await browser('?mobile=1')
   const {ctx,activity}=syntheticCtx()
