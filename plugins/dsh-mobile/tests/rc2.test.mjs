@@ -5,6 +5,15 @@ import vm from 'node:vm'
 import {apply} from '../src/index.js'
 
 const dshRoot='C:/Users/Andrew/AppData/Roaming/npm/node_modules/@deepseek-ai/dsh'
+test('installed rc.2 create flow publishes session locally and supports blank preset selection',async()=>{
+  const runtime=await readFile(dshRoot+'/node_modules/@deepseek-ai/dsh-client-runtime/lib/client.js','utf8')
+  const api=await readFile(dshRoot+'/node_modules/@deepseek-ai/dsh-host-apiproxy/lib/index.js','utf8')
+  assert.match(runtime,/async create\(opts = \{\}\) \{[\s\S]*?this\.manager\.create\(opts\)[\s\S]*?this\.projectList\(\)/)
+  assert.match(runtime,/async create\(opts = \{\}\) \{[\s\S]*?sessionId: opts\.sessionId/)
+  assert.match(runtime,/noteAgentPreset\(sessionId, agentPreset\)/)
+  assert.match(api,/async select\(request\) \{[\s\S]*?sessionBlank\(agent\.session\)[\s\S]*?presets\.recompose\(agent\.ctx, agentPreset\)/)
+})
+
 test('installed rc.2 metadata matches the supported browser bundle format',async()=>{
   const app=JSON.parse(await readFile(dshRoot+'/package.json','utf8'))
   const modules=JSON.parse(await readFile(dshRoot+'/node_modules/@deepseek-ai/dsh-client-modules/package.json','utf8'))

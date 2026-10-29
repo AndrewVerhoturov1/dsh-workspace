@@ -20,6 +20,16 @@ const mod=await system.import('dsh-mobile')
 
 const calls=window.__fixtureCalls
 const record=(action,...args)=>{calls.push({action,args});return calls.length}
+const createControl={failOnce:false,wait:false,release:null,presetFail:false}
+const allPresets=[
+  {id:'standard',name:'标准模式',isDefault:true},
+  {id:'code',name:'PTC 模式',isDefault:false},
+  {id:'minimal',name:'极简模式',isDefault:false},
+  {id:'cordis',name:'创造模式',isDefault:false},
+  {id:'research',name:'Research',isDefault:false},
+  {id:'custom',name:'Мой агент',isDefault:false},
+  {id:'disabled',name:'Broken',isDefault:false,broken:'unavailable'}
+]
 function makeStore(value) {
   const listeners=new Set()
   return {
@@ -118,22 +128,16 @@ function openChat(id,address){
 }
 const api={
   agentPresets:{
-    async list(){record('presets.list');return {result:{ok:true,value:{presets:[
-      {id:'standard',name:'Разработчик',broken:false},{id:'research',name:'Исследователь',broken:false}
-    ]}}}}
+    async list(){record('presets.list');return {result:{ok:true,value:{presets:allPresets}}}},
+    async select({sessionId,agentPreset}){
+      record('preset.select',sessionId,agentPreset)
+      if(createControl.presetFail)return {result:{ok:false,error:{message:'Fixture preset unavailable'}}}
+      return {result:{ok:true,value:{agentPreset}}}
+    }
   },
   llm:{async models(){record('llm.models');return {result:{ok:true,value:{groups:llmGroups,failures:[]}}}}},
   sessions:{
-    async create(request) {
-      record('create',request)
-      const id='session-new-'+Date.now()
-      const base=request.cwd||project.path
-      updateSessions(old=>({...old,ids:[id,...old.ids],byId:{...old.byId,[id]:{
-        id,displayTitle:'Новый разговор',cwd:base,blank:false,updatedAt:Date.now(),
-        running:false,agentPreset:request.agentPreset||'standard'
-      }}}))
-      return {result:{ok:true,value:{sessionId:id,agentPreset:request.agentPreset}}}
-    },
+    async create() {throw Error('Raw API session.create bypasses the rc.2 local session mirror')},
     async rename({sessionId,title}) {
       record('rename',sessionId,title)
       updateSessions(old=>({...old,byId:{...old.byId,[sessionId]:{
@@ -177,7 +181,31 @@ const ctx={
     }
   },
   sessions:{
-    list:sessions,binding,open:id=>openChat(id),
+    list:sessions,binding,
+    async create(request){
+      record('sessions.create',request)
+      if(createControl.wait)await new Promise(resolve=>{createControl.release=resolve})
+      if(createControl.failOnce){
+        createControl.failOnce=false
+        throw Error('Fixture transport outcome unknown')
+      }
+      const id=request.sessionId
+      if(!sessions.getSnapshot().byId[id]){
+        const base=request.workspaceId?project.path:'C:\\default'
+        updateSessions(old=>({...old,ids:[id,...old.ids],byId:{...old.byId,[id]:{
+          id,displayTitle:'Новый разговор',cwd:base,blank:true,updatedAt:Date.now(),
+          running:false,agentPreset:'standard'
+        }}}))
+      }
+      return id
+    },
+    noteAgentPreset(id,preset){
+      record('preset.note',id,preset)
+      updateSessions(old=>({...old,byId:{...old.byId,[id]:{
+        ...old.byId[id],agentPreset:preset
+      }}}))
+    },
+    open:id=>openChat(id),
     openSubagent:address=>openChat(address.childSessionId,address),
     subagentAddress:id=>{
       if(id===childId)return {parentSessionId:rootId,childSessionId:childId,mode:'one-shot'}
@@ -231,6 +259,7 @@ window.fetch=async(input,init={})=>{
 mod.apply(ctx)
 window.__fixture={
   calls,sessions,workspaces,hostDescription,states:stateById,pressure:pressureById,
+  createControl,allPresets,
   forceQuestion(){
     const state=getSession(rootId),current=state.getSnapshot()
     const wait={

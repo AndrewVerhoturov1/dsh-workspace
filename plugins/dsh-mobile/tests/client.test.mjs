@@ -5,8 +5,8 @@ import {readFile} from 'node:fs/promises'
 
 function obs(value){return {getSnapshot:()=>value,subscribe:()=>()=>{}}}
 function fakeHooks(){
-  const state=[]
-  let cursor=0
+  const state=[],refs=[]
+  let cursor=0,refCursor=0
   const React={
     Fragment:'fragment',
     createElement:(type,props,...children)=>({type,props:props||{},children}),
@@ -18,10 +18,13 @@ function fakeHooks(){
     useEffect(){},
     useMemo:fn=>fn(),
     useCallback:fn=>fn,
-    useRef:value=>({current:value}),
+    useRef(value){
+      const i=refCursor++
+      return refs[i]??(refs[i]={current:value})
+    },
     useSyncExternalStore:(_subscribe,getSnapshot)=>getSnapshot()
   }
-  return {React,reset(){cursor=0},clear(){state.length=0;cursor=0}}
+  return {React,reset(){cursor=0;refCursor=0},clear(){state.length=0;refs.length=0;cursor=0;refCursor=0}}
 }
 function collect(node,out=[]){
   if(node===null||node===undefined||typeof node==='boolean')return out
@@ -46,7 +49,7 @@ async function browser(search){
     window:{__ModuleLoader__:{load:registration=>registrations.push(registration)}},
     document,location:{search},
     URLSearchParams,URL,Date,Intl,console,Set,Map,AbortController,
-    setTimeout,clearTimeout
+    setTimeout,clearTimeout,crypto:{getRandomValues(bytes){bytes.fill(42);return bytes}}
   }
   vm.runInNewContext(script,environment,{filename:'installed-rc2-client-bundle.js'})
   assert.equal(registrations.length,1)
@@ -158,6 +161,47 @@ test('Task includes grandchildren and opens one-shot child through direct parent
   assert(elements.some(x=>x.type==='div'&&x.props.className==='m-readonly'))
   assert(!elements.some(x=>x.type==='form'&&x.props.className==='m-composer'))
 })
+test('create retries with the same id after an uncertain result, then opens a listed session',async()=>{
+  const {client,reset}=await browser('?mobile=1')
+  const {ctx,activity}=syntheticCtx()
+  const list=ctx.sessions.list.getSnapshot()
+  const attempts=[]
+  let failOnce=true
+  ctx.sessions.create=async request=>{
+    attempts.push(request)
+    if(failOnce){failOnce=false;throw Error('uncertain transport result')}
+    const id=request.sessionId
+    list.byId[id]={id,displayTitle:'Created session',blank:true,updatedAt:1790000002000,running:false}
+    list.ids.unshift(id)
+    return id
+  }
+  ctx.connection.api.sessions.create=()=>{throw Error('raw API must not create')}
+  client.apply(ctx)
+  const draw=()=>{reset();return collect(ctx.slot.component())}
+  let elements=draw()
+  elements.find(x=>x.type==='button'&&x.props.title==='Создать чат').props.onClick()
+  elements=draw()
+  const select=(id,value)=>elements.find(x=>x.type==='select'&&x.props.id===id).props.onChange({target:{value}})
+  select('mobile-workspace','workspace-123')
+  select('mobile-preset','standard')
+  elements=draw()
+  const create=()=>elements.find(x=>x.type==='button'&&x.props.className==='m-btn m-primary m-full').props.onClick()
+  create()
+  for(let i=0;i<8;i++)await Promise.resolve()
+  elements=draw()
+  assert.equal(attempts.length,1)
+  assert.equal(attempts[0].workspaceId,'workspace-123')
+  assert(elements.includes('uncertain transport result'))
+  assert.equal(elements.find(x=>x.type==='button'&&x.props.className==='m-btn m-primary m-full').props.disabled,false)
+  // No new name/id is allocated: a retry is an idempotent request.
+  elements.find(x=>x.type==='button'&&x.props.className==='m-btn m-primary m-full').props.onClick()
+  for(let i=0;i<8;i++)await Promise.resolve()
+  elements=draw()
+  assert.equal(attempts.length,2)
+  assert.equal(attempts[1].sessionId,attempts[0].sessionId)
+  assert(activity.some(x=>x[0]==='open'&&x[1]===attempts[0].sessionId))
+  assert(elements.some(x=>x.type==='div'&&x.props.className==='m-messages'))
+})
 test('pending question batch uses retained wait.respond envelope',async()=>{
   const {client,reset,clear}=await browser('?mobile=1')
   clear()
@@ -180,6 +224,18 @@ test('pending question batch uses retained wait.respond envelope',async()=>{
   assert.equal(result.value.sessionId,'session-12345')
   assert.deepEqual(JSON.parse(JSON.stringify(result.value.answer.answers)),[{id:'a',selected:['Да']}])
   assert(done)
+})
+test('preset labels retain every canonical id and display Russian or English text',async()=>{
+  const {client}=await browser('?mobile=1')
+  const label=client.testing.presetLabel
+  assert.equal(label({id:'standard',name:'标准模式'},0),'Стандартный')
+  assert.equal(label({id:'code',name:'PTC 模式'},1),'PTC')
+  assert.equal(label({id:'minimal',name:'极简模式'},2),'Минимальный')
+  assert.equal(label({id:'cordis',name:'创造模式'},3),'Творческий')
+  assert.equal(label({id:'research',name:'Research'},4),'Research')
+  assert.equal(label({id:'custom',name:'Мой агент'},5),'Мой агент')
+  assert.equal(label({id:'my-special',name:'非中文模式'},6),'my-special')
+  assert.equal(label({id:'不支持',name:'非中文模式'},7),'Пресет 8')
 })
 test('pure client helpers keep projection semantics and safe URL policy',async()=>{
   const {client}=await browser('?mobile=1')

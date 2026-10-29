@@ -57,11 +57,6 @@ function projectRelative(root,cwd){
   return String(cwd||'').replace(/\\/g,'/').slice(String(root||'').replace(/\\/g,'/').replace(/\/+$/,'').length).replace(/^\//,'')
 }
 function pathChild(path,name){return path?path+'/'+name:name}
-function pathForHost(root,path){
-  const windows=/\\/.test(root)
-  const separator=windows?'\\':'/'
-  return root+(path?separator+path.split('/').join(separator):'')
-}
 function pressurePercent(value){
   const count=value?.projectedTokens??value?.pressureTokens
   return count===undefined||!value?.contextWindow?'—':
@@ -83,6 +78,13 @@ function descendantBranches(catalogs,root) {
   }
   visit(root)
   return [...visited]
+}
+function presetLabel(p,index){
+  const name=p.name||''
+  const readable=text=>!!text.trim()&&/^[\p{Script=Latin}\p{Script=Cyrillic}\p{Number}\p{Punctuation}\p{Separator}]+$/u.test(text)
+  if(readable(name))return name
+  const names={standard:'Стандартный',code:'PTC',minimal:'Минимальный',cordis:'Творческий'}
+  return names[p.id]|| (readable(p.id)?p.id:'Пресет '+(index+1))
 }
 function catalogModels(groups){
   const models=[]
@@ -250,7 +252,8 @@ function MobileApp({ctx}){
   const [screen,setScreen]=React.useState('chats')
   const [selected,setSelected]=React.useState(null)
   const [selectedAddress,setSelectedAddress]=React.useState(null)
-  const [createPending,setCreatePending]=React.useState(null)
+  const pendingSessionId=React.useRef(null)
+  const createInFlight=React.useRef(false)
   const [filter,setFilter]=React.useState('all')
   const [search,setSearch]=React.useState('')
   const [searchResults,setSearchResults]=React.useState([])
@@ -258,7 +261,7 @@ function MobileApp({ctx}){
   const [busy,setBusy]=React.useState(false)
   const [modal,setModal]=React.useState(null)
   const [newTitle,setNewTitle]=React.useState('')
-  const [newFolder,setNewFolder]=React.useState(null)
+  const [newWorkspaceId,setNewWorkspaceId]=React.useState('')
   const [newPreset,setNewPreset]=React.useState('')
   const [newModel,setNewModel]=React.useState('')
   const [newEffort,setNewEffort]=React.useState('')
@@ -300,11 +303,7 @@ function MobileApp({ctx}){
   }
   React.useEffect(()=>{
     if(!selected&&sessions.current)setSelected(sessions.current)
-    if(createPending&&sessions.byId[createPending]){
-      navigateChat(createPending)
-      setCreatePending(null)
-    }
-  },[selected,sessions.current,createPending,sessions.byId])
+  },[selected,sessions.current])
   React.useEffect(()=>{
     if(!notice)return
     const timer=setTimeout(()=>setNotice(''),4500)
@@ -323,16 +322,15 @@ function MobileApp({ctx}){
   },[ctx,search])
   React.useEffect(()=>{
     let keep=true
-    Promise.all([
-      ctx.connection.api.agentPresets.list({}),
-      ctx.connection.api.llm.models({})
-    ]).then(([presetsResponse,modelsResponse])=>{
+    ctx.connection.api.agentPresets.list({}).then(response=>{
       if(!keep)return
-      const available=valueOf(presetsResponse).presets.filter(p=>!p.broken)
+      const available=valueOf(response).presets.filter(p=>!p.broken)
       setPresets(available)
-      setNewPreset(old=>old||available[0]?.id||'')
-      setCatalog(valueOf(modelsResponse).groups)
-    }).catch(error=>{if(keep)notify('Не удалось загрузить агенты или модели: '+error.message)})
+      setNewPreset(old=>old||available.find(p=>p.isDefault)?.id||available[0]?.id||'')
+    }).catch(error=>{if(keep)notify('Не удалось загрузить пресеты: '+error.message)})
+    ctx.connection.api.llm.models({}).then(response=>{
+      if(keep)setCatalog(valueOf(response).groups)
+    }).catch(error=>{if(keep)notify('Не удалось загрузить модели: '+error.message)})
     return()=>{keep=false}
   },[ctx,notify])
   React.useEffect(()=>{
@@ -392,29 +390,41 @@ function MobileApp({ctx}){
     })
   }
   async function createSession(){
-    if(!newPreset)throw Error('Агент не выбран')
-    const request={agentPreset:newPreset}
-    if(newFolder){
-      if(newFolder.path)request.cwd=newFolder.absolute
-      else request.workspaceId=newFolder.id
-    }
-    const created=valueOf(await ctx.connection.api.sessions.create(request))
-    let configError=''
+    if(!newPreset||createInFlight.current)return
+    createInFlight.current=true
     try{
+      // getRandomValues also works on private-network HTTP, where randomUUID is absent.
+      // An uncertain transport outcome must be retried with the same session id.
+      const requestId=pendingSessionId.current||'session-'+[...crypto.getRandomValues(new Uint8Array(16))]
+        .map(byte=>byte.toString(16).padStart(2,'0')).join('')
+      pendingSessionId.current=requestId
+      // Unlike the raw API, sessions.create publishes the confirmed id in the
+      // local runtime before returning. No wait for an unrelated Host event.
+      const sessionId=await ctx.sessions.create({
+        sessionId:requestId,...(newWorkspaceId?{workspaceId:newWorkspaceId}:{})
+      })
+      pendingSessionId.current=null
+      navigateChat(sessionId)
+      const errors=[]
+      const selectedPreset=presets.find(p=>p.id===newPreset)
+      if(selectedPreset&&!selectedPreset.isDefault)try{
+        const value=valueOf(await ctx.connection.api.agentPresets.select({sessionId,agentPreset:newPreset}))
+        ctx.sessions.noteAgentPreset(sessionId,value.agentPreset)
+      }catch(error){errors.push('пресет: '+error.message)}
       const route=modelChoicesNew.find(m=>m.key===newModel)
-      if(route)valueOf(await ctx.connection.api.sessions.selectModel({
-        sessionId:created.sessionId,provider:route.provider,model:route.model,
-        ...(newEffort?{reasoningEffort:newEffort}:{})
-      }))
-      if(newTitle.trim())valueOf(await ctx.connection.api.sessions.rename({
-        sessionId:created.sessionId,title:newTitle.trim()
-      }))
-    }catch(error){configError=error.message}
-    setCreatePending(created.sessionId)
-    setScreen('chats')
-    setNewTitle('')
-    setNewFolder(null)
-    if(configError)notify('Чат создан, но параметры не установлены: '+configError)
+      if(route)try{
+        valueOf(await ctx.connection.api.sessions.selectModel({
+          sessionId,provider:route.provider,model:route.model,
+          ...(newEffort?{reasoningEffort:newEffort}:{})
+        }))
+      }catch(error){errors.push('модель: '+error.message)}
+      if(newTitle.trim())try{
+        valueOf(await ctx.connection.api.sessions.rename({sessionId,title:newTitle.trim()}))
+      }catch(error){errors.push('название: '+error.message)}
+      setNewTitle('')
+      setNewWorkspaceId('')
+      if(errors.length)notify('Чат создан, но не все настройки применены: '+errors.join('; '))
+    }finally{createInFlight.current=false}
   }
   async function changeModel(key,effort) {
     const route=modelChoices.find(x=>x.key===key)
@@ -548,11 +558,10 @@ function MobileApp({ctx}){
         ...[['all','Все'],['question','Ожидают'],['archive','Архив']].map(([id,label])=>
           h('button',{type:'button',key:id,className:filter===id?'active':'',
             onClick:()=>setFilter(id)},label))),
-      !listGroups.length?h('p',{className:'m-empty'},createPending?'Создание переписки…':'Нет чатов'):null,
+      !listGroups.length?h('p',{className:'m-empty'},'Нет чатов'):null,
       ...listGroups),
     nav)
 
-  const presetsToShow=presets.slice(0,3)
   const newChat=h('section',{className:'m-page','aria-label':'Новый чат'},
     pageHeader('Новый чат',()=>setScreen('chats')),
     h('div',{className:'m-scroll m-new'},
@@ -562,18 +571,17 @@ function MobileApp({ctx}){
           value:newTitle,onChange:e=>setNewTitle(e.target.value),
           placeholder:'Новый разговор'})),
       h('div',{className:'m-field'},
-        h('h2',null,'Папка проекта'),
-        h('div',{className:'m-folder-card'},
-          h('code',{className:'m-path'},newFolder?.absolute||'Без проекта'),
-          h('div',{className:'m-actions'},
-            btn('Папка','folder',()=>{setBrowse(null);setModal('folders')},'m-btn m-soft'),
-            h('button',{type:'button',className:'m-btn',onClick:()=>setNewFolder(null)},'Без проекта')))),
-      h('div',{className:'m-field'},h('h2',null,'Агент'),
-        h('div',{className:'m-presets',role:'radiogroup','aria-label':'Агент'},
-          ...presetsToShow.map(p=>h('button',{key:p.id,type:'button',
-            className:'m-preset '+(newPreset===p.id?'active':''),
-            role:'radio','aria-checked':newPreset===p.id,onClick:()=>setNewPreset(p.id)},
-            ico('chat'),h('strong',null,p.name||p.id))))),
+        h('label',{htmlFor:'mobile-workspace'},'Папка проекта'),
+        h('select',{id:'mobile-workspace',className:'m-textfield',value:newWorkspaceId,
+          onChange:e=>setNewWorkspaceId(e.target.value)},
+          h('option',{value:''},'Без проекта'),
+          ...(workspaces.items||[]).map(item=>
+            h('option',{value:item.workspaceId,key:item.workspaceId},item.title||item.path)))),
+      h('div',{className:'m-field'},
+        h('label',{htmlFor:'mobile-preset'},'Пресет агента'),
+        h('select',{id:'mobile-preset',className:'m-textfield',value:newPreset,
+          onChange:e=>setNewPreset(e.target.value)},
+          ...presets.map((p,i)=>h('option',{value:p.id,key:p.id},presetLabel(p,i))))),
       h('div',{className:'m-field'},h('h2',null,'Параметры'),
         h('div',{className:'m-tuning'},
           h('label',null,'Модель',h('select',{'aria-label':'Модель',
@@ -587,7 +595,7 @@ function MobileApp({ctx}){
             ...(newChoice?.efforts||[]).map(x=>h('option',{value:x.id,key:x.id},x.name))))))),
     h('div',{className:'m-sticky'},
       h('button',{type:'button',className:'m-btn m-primary m-full',disabled:busy||!newPreset,
-        onClick:()=>void execute(createSession)},ico('plus'),'Создать')))
+        onClick:()=>void execute(createSession)},ico('plus'),busy?'Создаётся…':'Создать')))
 
   const stopped=!snapshot.running&&nodes.some(x=>x.kind==='assistant'&&x.interrupted)
   const status=snapshot.pending?.length?'Ожидает ответа':
@@ -765,29 +773,7 @@ function MobileApp({ctx}){
     nav)
 
   let modalBody=null
-  if(modal==='folders'){
-    const choices=(!browse)?(workspaces.items||[]).map(item=>
-      h('button',{key:item.workspaceId,className:'m-file-row',type:'button',
-        onClick:()=>chooseBrowse(item.workspaceId,'','folder')},
-        ico('folder'),h('span',null,item.title||item.path),ico('next'))):
-      [h('code',{className:'m-path',key:'selected'},browse.root||'',browse.path?'/'+browse.path:''),
-        browse.path?btn('На уровень выше','back',
-          ()=>chooseBrowse(browse.id,browse.path.split('/').slice(0,-1).join('/'),'folder'),'m-btn'):null,
-        browse.loading?h('p',{className:'m-note',key:'loading'},'Загрузка…'):null,
-        browse.error?h('p',{className:'m-error',key:'error'},browse.error):null,
-        ...(browse.entries||[]).filter(x=>x.directory).map(x=>
-          h('button',{className:'m-file-row',type:'button',key:x.name,
-            onClick:()=>chooseBrowse(browse.id,pathChild(browse.path,x.name),'folder')},
-            ico('folder'),h('span',null,x.name),ico('next'))),
-        h('div',{className:'m-actions',key:'actions'},
-          h('button',{type:'button',className:'m-btn',onClick:()=>setBrowse(null)},'Проекты'),
-          h('button',{type:'button',className:'m-btn m-primary',disabled:busy||browse.loading||!!browse.error,
-            onClick:()=>{
-              setNewFolder({id:browse.id,path:browse.path,absolute:pathForHost(browse.root,browse.path)})
-              setModal(null);setScreen('new')
-            }},'Выбрать'))]
-    modalBody=h('div',null,...choices)
-  }else if(modal==='restart')
+  if(modal==='restart')
     modalBody=h('div',null,h('p',null,'Перезапустить Harness? Ответы могут прерваться.'),
       h('div',{className:'m-actions'},
         h('button',{type:'button',className:'m-btn',onClick:()=>setModal(null)},'Отмена'),
@@ -799,9 +785,9 @@ function MobileApp({ctx}){
       h('button',{type:'button',className:'m-btn m-danger',disabled:busy||child,
         onClick:()=>void execute(archive)},'В архив'))
   const modalFrame=modal?h('div',{className:'m-modal-mask',onMouseDown:e=>{if(e.target===e.currentTarget)setModal(null)}},
-    h('div',{className:'m-sheet',role:'dialog','aria-modal':true,'aria-label':modal==='folders'?'Папка проекта':modal==='restart'?'Перезапуск':'Меню чата'},
+    h('div',{className:'m-sheet',role:'dialog','aria-modal':true,'aria-label':modal==='restart'?'Перезапуск':'Меню чата'},
       h('div',{className:'m-sheet-head'},
-        h('h2',null,modal==='folders'?'Папка Windows':modal==='restart'?'Перезапуск Harness':'Меню чата'),
+        h('h2',null,modal==='restart'?'Перезапуск Harness':'Меню чата'),
         btn('Закрыть','close',()=>setModal(null),'m-square m-quiet')),
       modalBody)):null
   const page=screen==='new'?newChat:screen==='chat'?chat:screen==='task'?task:
@@ -826,5 +812,5 @@ function apply(ctx){
   },()=>h(MobileApp,{ctx})))
 }
 module.exports={apply,inject:['slots','sessions','workspaces','connection'],
-  testing:{pressurePercent,rootOf,descendantBranches,catalogModels,urlIfReachable,QuestionForm,Markdown}}
+  testing:{pressurePercent,rootOf,descendantBranches,catalogModels,presetLabel,urlIfReachable,QuestionForm,Markdown}}
 
