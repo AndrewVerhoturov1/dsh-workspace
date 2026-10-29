@@ -5,6 +5,7 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 const test = require('node:test')
+const vm = require('node:vm')
 
 const {
   createProcessController,
@@ -16,6 +17,28 @@ const runtime = {
   nodePath: 'C:/Program Files/nodejs/node.exe',
   dshBin: 'C:/Users/andre/AppData/Roaming/npm/node_modules/@deepseek-ai/dsh/lib/bin.js',
 }
+
+test('should only consider listeners that can occupy IPv4 loopback', () => {
+  const controllerSource = fs.readFileSync(path.join(__dirname, 'dsh-process-controller.js'), 'utf8')
+  const list = (output) => Array.from(vm.runInNewContext(`${controllerSource}\nlistListeningPids(4173)`, {
+    require: (name) => name === 'node:child_process' ? { execFileSync: () => output } : require(name),
+    process: { platform: 'win32', env: {} },
+    module: { exports: {} },
+  }))
+  const lanProxy = '  TCP    192.168.0.5:4173    0.0.0.0:0       LISTENING    3656'
+  assert.deepEqual(list(lanProxy), [])
+  assert.deepEqual(list([
+    lanProxy,
+    '  TCP    127.0.0.2:4173    0.0.0.0:0       LISTENING    4000',
+    '  TCP    127.0.0.1:4173    0.0.0.0:0       LISTENING    4001',
+    '  TCP    0.0.0.0:4173      0.0.0.0:0       LISTENING    4002',
+    '  TCP    [::]:4173         [::]:0          LISTENING    4003',
+    '  TCP    [::1]:4173        [::]:0          LISTENING    4004',
+    '  TCP    127.0.0.1:41730   0.0.0.0:0       LISTENING    4005',
+    '  TCP    127.0.0.1:4173    127.0.0.1:1234  ESTABLISHED  4006',
+    '  TCP    127.0.0.1:4173    0.0.0.0:0       LISTENING    4001',
+  ].join('\n')), [4001, 4002, 4003])
+})
 
 function commandLine({ profile = 'web', port = 4173, dshBin = runtime.dshBin } = {}) {
   return `"${runtime.nodePath}" --expose-internals ${dshBin} --profile ${profile} --port ${port} --no-open`
