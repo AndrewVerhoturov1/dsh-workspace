@@ -54,3 +54,11 @@
 - id: postman-bridge
   config:
     localDevelopment: true
+
+- id: web-runtime
+  config:
+    openBrowser: !!js ctx.webStartup.openBrowser
+    printUrl: true
+    surfaceContext: true
+    trustedHosts: !!js >-
+      ['192.168.0.5:4173', ...ctx.webStartup.trustedHosts]
