@@ -31,7 +31,7 @@
 ## Поведение и соответствие API
 
 * Список, поиск и группы: службы sessions.list, workspaces.list и sessions.search (последний зависит от включённого индекса сообщений на Host).
-* Создание: sessions.create(agentPreset + workspaceId или cwd), затем до первого сообщения sessions.selectModel(provider, model, reasoningEffort) и sessions.rename. «Без проекта» не регистрирует Workspace; Host всё равно назначает свой рабочий cwd.
+* Создание: выбор только корня уже зарегистрированного Workspace либо «Без проекта», без обхода вложенных папок. Штатный sessions.create(workspaceId или Host cwd, предварительно заданный sessionId) сразу публикует созданную сессию в клиентском списке; для выбранного неосновного пресета затем применяется agentPreset.select до первого сообщения, при необходимости sessions.selectModel(provider, model, reasoningEffort) и sessions.rename. Повтор после неизвестного ответа использует тот же sessionId. «Без проекта» не регистрирует Workspace; Host назначает свой рабочий cwd.
 * Переписка, текущий поток, старая история: готовые Session bindings с getSnapshot и loadOlder, переподключение штатного DSH. Нет дополнительного WebSocket или самостоятельного reconnect.
 * Отправка: session.prompt с queue или steer. Неизвестный результат отправки не повторяется автоматически. Остановка: session.cancel или subagents.interrupt; эти операции не гарантируют завершения всех фоновых задач. «Продолжить» отправляет новый запрос.
 * Вопросы: PendingWait.respond с исходным rpcId и полным набором ответов, без подмены вопроса обычным сообщением.

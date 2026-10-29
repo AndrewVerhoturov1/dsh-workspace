@@ -3,7 +3,7 @@ var module={exports:{}}; var exports=module.exports;
 /* Browser half of the mobile web plugin. Uses only installed rc.2 services. */
 const React=require('react')
 const h=React.createElement
-const MOBILE_CSS="/* Accepted v6 compact messenger language, scoped to the opt-in surface. */\n.dsh-mobile{position:absolute;inset:0;z-index:100;pointer-events:auto;display:flex;justify-content:center;align-items:center;overflow:hidden;background:#f5f9f5;color:#284e39;font:13px/1.45 -apple-system,BlinkMacSystemFont,\"Segoe UI\",Arial,sans-serif}\n.dsh-mobile *{box-sizing:border-box}\n.dsh-mobile button,.dsh-mobile input,.dsh-mobile select,.dsh-mobile textarea{font:inherit;color:inherit}\n.dsh-mobile button{cursor:pointer}\n.dsh-mobile button:disabled{opacity:.5;cursor:not-allowed}\n.dsh-mobile a{color:#1d7151;overflow-wrap:anywhere}\n.dsh-mobile .m-icon{height:20px;width:20px;flex-shrink:0;display:inline-block}\n.dsh-mobile .m-shell{height:100%;min-height:0;max-width:580px;width:100%;display:flex;flex-direction:column;overflow:hidden;background:#f5f9f5}\n.dsh-mobile .m-page{height:100%;min-height:0;width:100%;display:flex;flex-direction:column;flex:1;overflow:hidden}\n.dsh-mobile .m-scroll{min-height:0;flex:1;overflow-y:auto;overscroll-behavior:contain;padding:0 12px 12px}\n.dsh-mobile .m-topline{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:10px 0 8px}\n.dsh-mobile .m-topline h1{font-size:21px;font-weight:850;letter-spacing:-.5px;margin:0;line-height:1.3}\n.dsh-mobile .m-topline small{font-size:10px;color:#819b8a}\n.dsh-mobile .m-square,.dsh-mobile .m-send{height:44px;width:44px;min-height:44px;min-width:44px;display:inline-grid;place-items:center;flex-shrink:0;background:#e9f4eb;border:1px solid #cfe3d6;border-radius:11px;color:#296a4c;padding:0}\n.dsh-mobile .m-square.m-quiet{background:transparent;border-color:transparent}\n.dsh-mobile .m-square.m-add,.dsh-mobile .m-send{background:#286f4c;color:white;border-color:#286f4c}\n.dsh-mobile .m-btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:44px;padding:8px 12px;border-radius:11px;border:1px solid #d4e4d8;background:white;color:#426b51;font-size:12px;font-weight:750;text-align:center}\n.dsh-mobile .m-btn .m-icon{width:18px;height:18px}\n.dsh-mobile .m-btn.m-primary{color:white;background:#246e49;border-color:#246e49}\n.dsh-mobile .m-btn.m-soft,.dsh-mobile .m-square.m-soft{background:#e7f3e9;border-color:#c7e3ce}\n.dsh-mobile .m-btn.m-danger{color:white;background:#a84d43;border-color:#a84d43}\n.dsh-mobile .m-btn.m-full{width:100%}\n.dsh-mobile .m-nav{flex-shrink:0;height:calc(60px + env(safe-area-inset-bottom));padding:4px 7px calc(4px + env(safe-area-inset-bottom));display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:3px;background:#fff;border-top:1px solid #dfebe2}\n.dsh-mobile .m-nav button{border:0;border-radius:10px;min-height:48px;background:transparent;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:3px;color:#84a38f;font-size:10px;font-weight:750}\n.dsh-mobile .m-nav button.selected{background:#eaf4eb;color:#2c6b48}\n.dsh-mobile .m-nav .m-icon{width:19px;height:19px}\n.dsh-mobile .m-search{height:44px;display:flex;align-items:center;gap:8px;border:1px solid #d9e8de;border-radius:11px;background:white;margin:0 0 7px;padding:0 11px}\n.dsh-mobile .m-search .m-icon{width:17px;height:17px;color:#9eb5a3}\n.dsh-mobile .m-search input{width:100%;flex:1;min-width:0;height:44px;outline:none;border:0;background:transparent;font-size:13px}\n.dsh-mobile .m-filters{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;margin-bottom:8px}\n.dsh-mobile .m-filters button{min-height:44px;border:1px solid #d5e6da;background:#fff;border-radius:10px;font-size:11px;font-weight:760}\n.dsh-mobile .m-filters button.active{color:#2c734c;background:#e1f1e5;border-color:#afd2b9}\n.dsh-mobile .m-project{margin-bottom:10px}\n.dsh-mobile .m-project-heading{display:flex;flex-direction:column;gap:1px;padding:0 3px;margin:9px 0 5px}\n.dsh-mobile .m-project-heading h2{font-size:11px;font-weight:850;display:flex;align-items:center;gap:6px;color:#5f8168;margin:0}\n.dsh-mobile .m-project-heading h2 .m-icon{height:13px;width:13px}\n.dsh-mobile .m-project-heading code{font:9px/1.4 Consolas,monospace;color:#7f9585;white-space:nowrap;text-overflow:ellipsis;overflow:hidden}\n.dsh-mobile .m-chat-rows{border:1px solid #dbe8df;background:white;border-radius:12px;overflow:hidden}\n.dsh-mobile .m-chat-row{width:100%;min-height:77px;display:flex;align-items:flex-start;gap:9px;text-align:left;border:0;border-bottom:1px solid #e4eee6;padding:9px 10px;background:white;color:inherit}\n.dsh-mobile .m-chat-row:last-child{border-bottom:0}\n.dsh-mobile .m-chat-row:active,.dsh-mobile .m-file-row:active{background:#edf5ef}\n.dsh-mobile .m-avatar{width:37px;height:37px;display:grid;place-items:center;flex-shrink:0;margin-top:2px;border-radius:50%;background:#e2f2e7;color:#37845a}\n.dsh-mobile .m-avatar .m-icon{height:19px;width:19px}\n.dsh-mobile .m-chat-copy{flex:1;min-width:0;display:block}\n.dsh-mobile .m-chat-head{display:flex;align-items:baseline;justify-content:space-between;gap:6px;min-width:0}\n.dsh-mobile .m-chat-head strong{font-size:12px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;min-width:0;flex:1}\n.dsh-mobile .m-chat-head small{font-size:10px;color:#96a99a;flex-shrink:0}\n.dsh-mobile .m-chat-excerpt{display:block;color:#789280;font-size:11px;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}\n.dsh-mobile .m-chat-meta{display:flex;align-items:center;gap:5px;color:#879b8b;font-size:10px;margin-top:4px}\n.dsh-mobile .m-dot{width:6px;height:6px;border-radius:50%;background:#a7b8a9}\n.dsh-mobile .m-dot.working{background:#32a46b}\n.dsh-mobile .m-dot.waiting{background:#dba348}\n.dsh-mobile .m-pagebar{display:flex;align-items:center;gap:6px;min-height:53px;padding:5px 9px;background:#fff;border-bottom:1px solid #e0ebe3;flex-shrink:0}\n.dsh-mobile .m-page-title{min-width:0;flex:1;display:flex;flex-direction:column;justify-content:center}\n.dsh-mobile .m-page-title strong{font-size:13px;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}\n.dsh-mobile .m-page-title small{font-size:10px;color:#819786}\n.dsh-mobile .m-new{padding-top:11px}\n.dsh-mobile .m-field{margin-bottom:13px}\n.dsh-mobile .m-field>label,.dsh-mobile .m-field>h2{display:block;font-size:11px;font-weight:800;margin:0 0 6px;color:#537961}\n.dsh-mobile .m-textfield{height:44px;width:100%;background:white;padding:0 11px;border:1px solid #d5e6db;border-radius:11px;font-size:13px}\n.dsh-mobile .m-folder-card{border:1px solid #dae9df;background:white;padding:9px;border-radius:12px}\n.dsh-mobile .m-path{display:block;min-height:38px;max-height:95px;overflow:auto;padding:8px 9px;border-radius:9px;color:#6a8775;background:#f3f7f4;font:11px/1.4 Consolas,monospace;overflow-wrap:anywhere}\n.dsh-mobile .m-actions{display:flex;align-items:stretch;gap:7px;margin-top:8px}\n.dsh-mobile .m-actions>.m-btn{flex:1;min-width:0}\n.dsh-mobile .m-presets{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}\n.dsh-mobile .m-preset{min-height:70px;min-width:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:5px;padding:6px 4px;border:1px solid #d6e7db;border-radius:11px;background:#fff}\n.dsh-mobile .m-preset .m-icon{height:24px;width:24px;color:#3a8458}\n.dsh-mobile .m-preset strong{font-size:10px;line-height:1.2;overflow-wrap:anywhere}\n.dsh-mobile .m-preset.active{background:#e7f4ea;border-color:#83b99b}\n.dsh-mobile .m-tuning{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin:0 0 7px}\n.dsh-mobile .m-tuning label{display:flex;align-items:center;gap:5px;padding:0 6px;border:1px solid #d4e5d9;background:#f2f7f3;border-radius:10px;height:44px;min-width:0;color:#6b8e79;font-size:10px}\n.dsh-mobile .m-tuning select{border:0;background:transparent;outline:0;height:44px;flex:1;min-width:0;width:100%;font-size:11px;color:#285b40}\n.dsh-mobile .m-sticky{padding:8px 11px calc(9px + env(safe-area-inset-bottom));border-top:1px solid #e1eae3;background:#fff}\n.dsh-mobile .m-chat-path{flex-shrink:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#8b9f90;font:10px/1.3 Consolas,monospace;background:#f4f9f5;padding:6px 12px}\n.dsh-mobile .m-task-route{display:flex;gap:6px;align-items:center;padding:3px 8px;background:#eef6f0;flex-shrink:0}\n.dsh-mobile .m-task-route>span{flex:1;min-width:0}\n.dsh-mobile .m-task-route strong,.dsh-mobile .m-task-route small{display:block;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}\n.dsh-mobile .m-task-route strong{font-size:11px}\n.dsh-mobile .m-task-route small{font-size:10px;color:#839b88}\n.dsh-mobile .m-status{min-height:44px;display:flex;align-items:center;gap:7px;margin:1px 11px;color:#658d73;flex-shrink:0}\n.dsh-mobile .m-status>.m-icon{width:25px;height:25px;background:#e7f1e9;border-radius:8px;padding:5px}\n.dsh-mobile .m-status strong{font-size:11px;flex:1}\n.dsh-mobile .m-messages{min-height:0;flex:1;overflow-y:auto;overscroll-behavior:contain;display:flex;flex-direction:column;gap:12px;padding:9px 12px 13px}\n.dsh-mobile .m-bubble-user{align-self:flex-end;max-width:85%;padding:10px 12px;border-radius:14px 14px 4px 14px;background:#e2efe4;color:#315c41;font-size:12px;overflow-wrap:anywhere}\n.dsh-mobile .m-agent{overflow-wrap:anywhere;max-width:100%;font-size:12px;color:#31553f}\n.dsh-mobile .m-agent-name{display:block;color:#71947a;font-size:10px;font-weight:750;margin:0 0 4px}\n.dsh-mobile .m-live{opacity:.82}\n.dsh-mobile .m-markdown{overflow-wrap:anywhere}\n.dsh-mobile .m-markdown p{line-height:1.5;margin:0 0 7px;white-space:pre-wrap}\n.dsh-mobile .m-markdown p:last-child{margin-bottom:0}\n.dsh-mobile .m-markdown h1,.dsh-mobile .m-markdown h2,.dsh-mobile .m-markdown h3{margin:8px 0 5px;font-size:14px}\n.dsh-mobile .m-markdown ul{padding-left:19px;margin:5px 0}\n.dsh-mobile .m-markdown li{line-height:1.5}\n.dsh-mobile .m-markdown code{background:#e5eee7;padding:1px 3px;border-radius:4px;font:11px Consolas,monospace}\n.dsh-mobile .m-markdown pre,.dsh-mobile .m-tool pre{max-width:100%;overflow:auto;white-space:pre-wrap;word-break:break-word;background:#eaf0e9;border-radius:9px;padding:10px;font:11px/1.5 Consolas,monospace}\n.dsh-mobile .m-tool{border:1px solid #dde9df;border-radius:10px;background:white;padding:8px 10px;font-size:11px}\n.dsh-mobile .m-note{color:#819a88;font-size:11px;line-height:1.4;text-align:center;margin:5px 0}\n.dsh-mobile .m-error{font-size:11px;color:#a14939;background:#fff0e9;border-radius:8px;padding:7px 9px}\n.dsh-mobile .m-empty{border:1px solid #e1eae3;border-radius:12px;background:#fff;color:#839b8a;padding:22px 10px;text-align:center;font-size:12px}\n.dsh-mobile .m-readonly{padding:13px;text-align:center;color:#799182;background:#fff;border-top:1px solid #dae8dc}\n.dsh-mobile .m-composer{flex-shrink:0;border-top:1px solid #deebe1;background:#fff;padding:5px 9px calc(8px + env(safe-area-inset-bottom))}\n.dsh-mobile .m-composer-top{display:flex;align-items:center;gap:6px;min-height:44px;margin-bottom:4px}\n.dsh-mobile .m-recipient{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:#60806d;font-size:11px}\n.dsh-mobile .m-usage{min-height:32px;padding:6px 8px;border:1px solid #dbe6de;border-radius:9px;background:#f5f8f5;font-size:11px;font-weight:750;white-space:nowrap}\n.dsh-mobile .m-send-row{display:flex;align-items:flex-end;gap:6px}\n.dsh-mobile .m-send-row textarea{flex:1;min-height:44px;max-height:108px;min-width:0;resize:vertical;border-radius:11px;border:1px solid #d5e5db;background:#f9fbf9;padding:10px 12px;font-size:13px}\n.dsh-mobile .m-tree-children{padding-left:14px;margin:6px 0 8px 14px;border-left:1px solid #bedaca}\n.dsh-mobile .m-tree-entry{margin:0 0 5px}\n.dsh-mobile .m-tree-card{display:flex;align-items:center;gap:2px;min-height:54px;padding:2px;border:1px solid #d9e5db;border-radius:12px;background:#fff}\n.dsh-mobile .m-tree-card.m-root{max-width:300px;margin:0 auto 7px}\n.dsh-mobile .m-tree-card.selected{box-shadow:inset 0 0 0 1px #83bda0}\n.dsh-mobile .m-tree-main{display:flex;align-items:center;gap:7px;flex:1;min-width:0;min-height:48px;padding:5px 6px;border:0;background:transparent;text-align:left}\n.dsh-mobile .m-tree-main>.m-icon{width:26px;height:26px;color:#368153;background:#eaf4eb;border-radius:8px;padding:5px}\n.dsh-mobile .m-tree-main>span{flex:1;min-width:0}\n.dsh-mobile .m-tree-main strong,.dsh-mobile .m-tree-main small{display:block;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}\n.dsh-mobile .m-tree-main strong{font-size:11px}\n.dsh-mobile .m-tree-main small{font-size:9px;color:#8eaa94}\n.dsh-mobile .m-tree-main em{flex-shrink:0;font-style:normal;font-size:9px;color:#759d82}\n.dsh-mobile .m-questions{padding-top:8px}\n.dsh-mobile .m-question{padding:9px 0;margin:0 0 12px;border:0;min-width:0}\n.dsh-mobile .m-question legend{font-size:10px;color:#71947b}\n.dsh-mobile .m-question h2{font-size:18px;margin:0 0 10px}\n.dsh-mobile .m-answer{min-height:48px;padding:8px 10px;display:flex;align-items:center;gap:10px;margin:6px 0;border:1px solid #d7e6db;border-radius:11px;background:#fff}\n.dsh-mobile .m-answer input{width:18px;height:18px;accent-color:#2e8055}\n.dsh-mobile .m-answer span{font-size:12px}\n.dsh-mobile .m-answer small{display:block;font-size:10px;color:#8c9c8f}\n.dsh-mobile .m-question textarea{width:100%;padding:10px;border:1px solid #d7e6da;background:#fff;border-radius:11px;margin-top:6px}\n.dsh-mobile .m-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;padding:4px;border-radius:11px;background:#eaf3ec;margin:5px 0 12px}\n.dsh-mobile .m-tabs button{min-height:44px;border:0;background:transparent;border-radius:9px;font-size:11px;font-weight:800}\n.dsh-mobile .m-tabs button.active{background:#fff;color:#34724e;box-shadow:0 1px 4px #1b3d2218}\n.dsh-mobile .m-result-caption{font-size:11px;color:#638970;margin:6px 0;overflow-wrap:anywhere}\n.dsh-mobile .m-file-row{display:flex;align-items:center;gap:10px;text-align:left;min-height:55px;width:100%;padding:8px 5px;border:0;border-bottom:1px solid #e5eee6;background:#fff;border-radius:0;color:#2d5c42}\n.dsh-mobile .m-file-row span{flex:1;min-width:0;overflow-wrap:anywhere;font-size:12px}\n.dsh-mobile .m-file-row .m-icon:last-child{color:#7da188}\n.dsh-mobile .m-result-list,.dsh-mobile .m-preview{border:1px solid #d9e9de;background:#fff;padding:10px;border-radius:12px}\n.dsh-mobile .m-preview-title{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12px;font-weight:850;margin-bottom:10px}\n.dsh-mobile .m-preview .m-frame{width:100%;min-height:55vh;border:0;background:white}\n.dsh-mobile .m-preview .m-image{max-width:100%;max-height:65vh;object-fit:contain}\n.dsh-mobile .m-web-link{padding:9px 11px;margin-bottom:7px;border-radius:10px;background:#fff;border:1px solid #d9e9dd;font-size:11px;overflow-wrap:anywhere}\n.dsh-mobile .m-action-card{display:flex;align-items:center;gap:9px;min-height:60px;padding:8px 10px;margin-bottom:7px;background:#fff;border:1px solid #d6e6dc;border-radius:12px}\n.dsh-mobile .m-action-card h2{font-size:12px;flex:1;margin:0}\n.dsh-mobile .m-modal-mask{position:absolute;inset:0;z-index:50;display:flex;align-items:flex-end;justify-content:center;padding:9px 9px calc(10px + env(safe-area-inset-bottom));background:rgba(18,46,29,.44)}\n.dsh-mobile .m-sheet{width:100%;max-width:560px;max-height:84vh;overflow:auto;padding:13px;background:#fff;border-radius:19px;box-shadow:0 21px 62px #18382243}\n.dsh-mobile .m-sheet-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:7px}\n.dsh-mobile .m-sheet-head h2{margin:0;font-size:16px}\n.dsh-mobile .m-toast{position:absolute;z-index:80;bottom:calc(69px + env(safe-area-inset-bottom));left:12px;right:12px;padding:10px 12px;background:#2c523d;color:white;border-radius:10px;box-shadow:0 7px 25px #294d3930;font-size:11px}\n.dsh-mobile button:focus-visible,.dsh-mobile input:focus-visible,.dsh-mobile select:focus-visible,.dsh-mobile textarea:focus-visible,.dsh-mobile a:focus-visible{outline:2px solid #2b8559;outline-offset:2px}\n@media(min-width:600px){.dsh-mobile .m-shell{width:412px;height:min(872px,calc(100dvh - 36px));border:6px solid #e3ebe4;border-radius:32px;box-shadow:0 30px 80px #18402b1d}}\n@media(max-width:359px){.dsh-mobile .m-scroll{padding-left:9px;padding-right:9px}.dsh-mobile .m-chat-row{padding:8px 7px}.dsh-mobile .m-tree-children{padding-left:10px;margin-left:10px}.dsh-mobile .m-tuning label{gap:2px;padding:0 4px}.dsh-mobile .m-tuning select{font-size:10px}}\n@media(prefers-reduced-motion:reduce){.dsh-mobile *{transition:none!important;scroll-behavior:auto!important}}\n"
+const MOBILE_CSS="/* Accepted v6 compact messenger language, scoped to the opt-in surface. */\r\n.dsh-mobile{position:absolute;inset:0;z-index:100;pointer-events:auto;display:flex;justify-content:center;align-items:center;overflow:hidden;background:#f5f9f5;color:#284e39;font:13px/1.45 -apple-system,BlinkMacSystemFont,\"Segoe UI\",Arial,sans-serif}\r\n.dsh-mobile *{box-sizing:border-box}\r\n.dsh-mobile button,.dsh-mobile input,.dsh-mobile select,.dsh-mobile textarea{font:inherit;color:inherit}\r\n.dsh-mobile button{cursor:pointer}\r\n.dsh-mobile button:disabled{opacity:.5;cursor:not-allowed}\r\n.dsh-mobile a{color:#1d7151;overflow-wrap:anywhere}\r\n.dsh-mobile .m-icon{height:20px;width:20px;flex-shrink:0;display:inline-block}\r\n.dsh-mobile .m-shell{height:100%;min-height:0;max-width:580px;width:100%;display:flex;flex-direction:column;overflow:hidden;background:#f5f9f5}\r\n.dsh-mobile .m-page{height:100%;min-height:0;width:100%;display:flex;flex-direction:column;flex:1;overflow:hidden}\r\n.dsh-mobile .m-scroll{min-height:0;flex:1;overflow-y:auto;overscroll-behavior:contain;padding:0 12px 12px}\r\n.dsh-mobile .m-topline{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:10px 0 8px}\r\n.dsh-mobile .m-topline h1{font-size:21px;font-weight:850;letter-spacing:-.5px;margin:0;line-height:1.3}\r\n.dsh-mobile .m-topline small{font-size:10px;color:#819b8a}\r\n.dsh-mobile .m-square,.dsh-mobile .m-send{height:44px;width:44px;min-height:44px;min-width:44px;display:inline-grid;place-items:center;flex-shrink:0;background:#e9f4eb;border:1px solid #cfe3d6;border-radius:11px;color:#296a4c;padding:0}\r\n.dsh-mobile .m-square.m-quiet{background:transparent;border-color:transparent}\r\n.dsh-mobile .m-square.m-add,.dsh-mobile .m-send{background:#286f4c;color:white;border-color:#286f4c}\r\n.dsh-mobile .m-btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:44px;padding:8px 12px;border-radius:11px;border:1px solid #d4e4d8;background:white;color:#426b51;font-size:12px;font-weight:750;text-align:center}\r\n.dsh-mobile .m-btn .m-icon{width:18px;height:18px}\r\n.dsh-mobile .m-btn.m-primary{color:white;background:#246e49;border-color:#246e49}\r\n.dsh-mobile .m-btn.m-soft,.dsh-mobile .m-square.m-soft{background:#e7f3e9;border-color:#c7e3ce}\r\n.dsh-mobile .m-btn.m-danger{color:white;background:#a84d43;border-color:#a84d43}\r\n.dsh-mobile .m-btn.m-full{width:100%}\r\n.dsh-mobile .m-nav{flex-shrink:0;height:calc(60px + env(safe-area-inset-bottom));padding:4px 7px calc(4px + env(safe-area-inset-bottom));display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:3px;background:#fff;border-top:1px solid #dfebe2}\r\n.dsh-mobile .m-nav button{border:0;border-radius:10px;min-height:48px;background:transparent;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:3px;color:#84a38f;font-size:10px;font-weight:750}\r\n.dsh-mobile .m-nav button.selected{background:#eaf4eb;color:#2c6b48}\r\n.dsh-mobile .m-nav .m-icon{width:19px;height:19px}\r\n.dsh-mobile .m-search{height:44px;display:flex;align-items:center;gap:8px;border:1px solid #d9e8de;border-radius:11px;background:white;margin:0 0 7px;padding:0 11px}\r\n.dsh-mobile .m-search .m-icon{width:17px;height:17px;color:#9eb5a3}\r\n.dsh-mobile .m-search input{width:100%;flex:1;min-width:0;height:44px;outline:none;border:0;background:transparent;font-size:13px}\r\n.dsh-mobile .m-filters{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;margin-bottom:8px}\r\n.dsh-mobile .m-filters button{min-height:44px;border:1px solid #d5e6da;background:#fff;border-radius:10px;font-size:11px;font-weight:760}\r\n.dsh-mobile .m-filters button.active{color:#2c734c;background:#e1f1e5;border-color:#afd2b9}\r\n.dsh-mobile .m-project{margin-bottom:10px}\r\n.dsh-mobile .m-project-heading{display:flex;flex-direction:column;gap:1px;padding:0 3px;margin:9px 0 5px}\r\n.dsh-mobile .m-project-heading h2{font-size:11px;font-weight:850;display:flex;align-items:center;gap:6px;color:#5f8168;margin:0}\r\n.dsh-mobile .m-project-heading h2 .m-icon{height:13px;width:13px}\r\n.dsh-mobile .m-project-heading code{font:9px/1.4 Consolas,monospace;color:#7f9585;white-space:nowrap;text-overflow:ellipsis;overflow:hidden}\r\n.dsh-mobile .m-chat-rows{border:1px solid #dbe8df;background:white;border-radius:12px;overflow:hidden}\r\n.dsh-mobile .m-chat-row{width:100%;min-height:77px;display:flex;align-items:flex-start;gap:9px;text-align:left;border:0;border-bottom:1px solid #e4eee6;padding:9px 10px;background:white;color:inherit}\r\n.dsh-mobile .m-chat-row:last-child{border-bottom:0}\r\n.dsh-mobile .m-chat-row:active,.dsh-mobile .m-file-row:active{background:#edf5ef}\r\n.dsh-mobile .m-avatar{width:37px;height:37px;display:grid;place-items:center;flex-shrink:0;margin-top:2px;border-radius:50%;background:#e2f2e7;color:#37845a}\r\n.dsh-mobile .m-avatar .m-icon{height:19px;width:19px}\r\n.dsh-mobile .m-chat-copy{flex:1;min-width:0;display:block}\r\n.dsh-mobile .m-chat-head{display:flex;align-items:baseline;justify-content:space-between;gap:6px;min-width:0}\r\n.dsh-mobile .m-chat-head strong{font-size:12px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;min-width:0;flex:1}\r\n.dsh-mobile .m-chat-head small{font-size:10px;color:#96a99a;flex-shrink:0}\r\n.dsh-mobile .m-chat-excerpt{display:block;color:#789280;font-size:11px;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}\r\n.dsh-mobile .m-chat-meta{display:flex;align-items:center;gap:5px;color:#879b8b;font-size:10px;margin-top:4px}\r\n.dsh-mobile .m-dot{width:6px;height:6px;border-radius:50%;background:#a7b8a9}\r\n.dsh-mobile .m-dot.working{background:#32a46b}\r\n.dsh-mobile .m-dot.waiting{background:#dba348}\r\n.dsh-mobile .m-pagebar{display:flex;align-items:center;gap:6px;min-height:53px;padding:5px 9px;background:#fff;border-bottom:1px solid #e0ebe3;flex-shrink:0}\r\n.dsh-mobile .m-page-title{min-width:0;flex:1;display:flex;flex-direction:column;justify-content:center}\r\n.dsh-mobile .m-page-title strong{font-size:13px;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}\r\n.dsh-mobile .m-page-title small{font-size:10px;color:#819786}\r\n.dsh-mobile .m-new{padding-top:11px}\r\n.dsh-mobile .m-field{margin-bottom:13px}\r\n.dsh-mobile .m-field>label,.dsh-mobile .m-field>h2{display:block;font-size:11px;font-weight:800;margin:0 0 6px;color:#537961}\r\n.dsh-mobile .m-textfield{height:44px;width:100%;background:white;padding:0 11px;border:1px solid #d5e6db;border-radius:11px;font-size:13px}\r\n.dsh-mobile .m-folder-card{border:1px solid #dae9df;background:white;padding:9px;border-radius:12px}\r\n.dsh-mobile .m-path{display:block;min-height:38px;max-height:95px;overflow:auto;padding:8px 9px;border-radius:9px;color:#6a8775;background:#f3f7f4;font:11px/1.4 Consolas,monospace;overflow-wrap:anywhere}\r\n.dsh-mobile .m-actions{display:flex;align-items:stretch;gap:7px;margin-top:8px}\r\n.dsh-mobile .m-actions>.m-btn{flex:1;min-width:0}\r\n.dsh-mobile .m-presets{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}\r\n.dsh-mobile .m-preset{min-height:70px;min-width:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:5px;padding:6px 4px;border:1px solid #d6e7db;border-radius:11px;background:#fff}\r\n.dsh-mobile .m-preset .m-icon{height:24px;width:24px;color:#3a8458}\r\n.dsh-mobile .m-preset strong{font-size:10px;line-height:1.2;overflow-wrap:anywhere}\r\n.dsh-mobile .m-preset.active{background:#e7f4ea;border-color:#83b99b}\r\n.dsh-mobile .m-tuning{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin:0 0 7px}\r\n.dsh-mobile .m-tuning label{display:flex;align-items:center;gap:5px;padding:0 6px;border:1px solid #d4e5d9;background:#f2f7f3;border-radius:10px;height:44px;min-width:0;color:#6b8e79;font-size:10px}\r\n.dsh-mobile .m-tuning select{border:0;background:transparent;outline:0;height:44px;flex:1;min-width:0;width:100%;font-size:11px;color:#285b40}\r\n.dsh-mobile .m-sticky{padding:8px 11px calc(9px + env(safe-area-inset-bottom));border-top:1px solid #e1eae3;background:#fff}\r\n.dsh-mobile .m-chat-path{flex-shrink:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#8b9f90;font:10px/1.3 Consolas,monospace;background:#f4f9f5;padding:6px 12px}\r\n.dsh-mobile .m-task-route{display:flex;gap:6px;align-items:center;padding:3px 8px;background:#eef6f0;flex-shrink:0}\r\n.dsh-mobile .m-task-route>span{flex:1;min-width:0}\r\n.dsh-mobile .m-task-route strong,.dsh-mobile .m-task-route small{display:block;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}\r\n.dsh-mobile .m-task-route strong{font-size:11px}\r\n.dsh-mobile .m-task-route small{font-size:10px;color:#839b88}\r\n.dsh-mobile .m-status{min-height:44px;display:flex;align-items:center;gap:7px;margin:1px 11px;color:#658d73;flex-shrink:0}\r\n.dsh-mobile .m-status>.m-icon{width:25px;height:25px;background:#e7f1e9;border-radius:8px;padding:5px}\r\n.dsh-mobile .m-status strong{font-size:11px;flex:1}\r\n.dsh-mobile .m-messages{min-height:0;flex:1;overflow-y:auto;overscroll-behavior:contain;display:flex;flex-direction:column;gap:12px;padding:9px 12px 13px}\r\n.dsh-mobile .m-bubble-user{align-self:flex-end;max-width:85%;padding:10px 12px;border-radius:14px 14px 4px 14px;background:#e2efe4;color:#315c41;font-size:12px;overflow-wrap:anywhere}\r\n.dsh-mobile .m-agent{overflow-wrap:anywhere;max-width:100%;font-size:12px;color:#31553f}\r\n.dsh-mobile .m-agent-name{display:block;color:#71947a;font-size:10px;font-weight:750;margin:0 0 4px}\r\n.dsh-mobile .m-live{opacity:.82}\r\n.dsh-mobile .m-markdown{overflow-wrap:anywhere}\r\n.dsh-mobile .m-markdown p{line-height:1.5;margin:0 0 7px;white-space:pre-wrap}\r\n.dsh-mobile .m-markdown p:last-child{margin-bottom:0}\r\n.dsh-mobile .m-markdown h1,.dsh-mobile .m-markdown h2,.dsh-mobile .m-markdown h3{margin:8px 0 5px;font-size:14px}\r\n.dsh-mobile .m-markdown ul{padding-left:19px;margin:5px 0}\r\n.dsh-mobile .m-markdown li{line-height:1.5}\r\n.dsh-mobile .m-markdown code{background:#e5eee7;padding:1px 3px;border-radius:4px;font:11px Consolas,monospace}\r\n.dsh-mobile .m-markdown pre,.dsh-mobile .m-tool pre{max-width:100%;overflow:auto;white-space:pre-wrap;word-break:break-word;background:#eaf0e9;border-radius:9px;padding:10px;font:11px/1.5 Consolas,monospace}\r\n.dsh-mobile .m-tool{border:1px solid #dde9df;border-radius:10px;background:white;padding:8px 10px;font-size:11px}\r\n.dsh-mobile .m-note{color:#819a88;font-size:11px;line-height:1.4;text-align:center;margin:5px 0}\r\n.dsh-mobile .m-error{font-size:11px;color:#a14939;background:#fff0e9;border-radius:8px;padding:7px 9px}\r\n.dsh-mobile .m-empty{border:1px solid #e1eae3;border-radius:12px;background:#fff;color:#839b8a;padding:22px 10px;text-align:center;font-size:12px}\r\n.dsh-mobile .m-readonly{padding:13px;text-align:center;color:#799182;background:#fff;border-top:1px solid #dae8dc}\r\n.dsh-mobile .m-composer{flex-shrink:0;border-top:1px solid #deebe1;background:#fff;padding:5px 9px calc(8px + env(safe-area-inset-bottom))}\r\n.dsh-mobile .m-composer-top{display:flex;align-items:center;gap:6px;min-height:44px;margin-bottom:4px}\r\n.dsh-mobile .m-recipient{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:#60806d;font-size:11px}\r\n.dsh-mobile .m-usage{min-height:32px;padding:6px 8px;border:1px solid #dbe6de;border-radius:9px;background:#f5f8f5;font-size:11px;font-weight:750;white-space:nowrap}\r\n.dsh-mobile .m-send-row{display:flex;align-items:flex-end;gap:6px}\r\n.dsh-mobile .m-send-row textarea{flex:1;min-height:44px;max-height:108px;min-width:0;resize:vertical;border-radius:11px;border:1px solid #d5e5db;background:#f9fbf9;padding:10px 12px;font-size:13px}\r\n.dsh-mobile .m-tree-children{padding-left:14px;margin:6px 0 8px 14px;border-left:1px solid #bedaca}\r\n.dsh-mobile .m-tree-entry{margin:0 0 5px}\r\n.dsh-mobile .m-tree-card{display:flex;align-items:center;gap:2px;min-height:54px;padding:2px;border:1px solid #d9e5db;border-radius:12px;background:#fff}\r\n.dsh-mobile .m-tree-card.m-root{max-width:300px;margin:0 auto 7px}\r\n.dsh-mobile .m-tree-card.selected{box-shadow:inset 0 0 0 1px #83bda0}\r\n.dsh-mobile .m-tree-main{display:flex;align-items:center;gap:7px;flex:1;min-width:0;min-height:48px;padding:5px 6px;border:0;background:transparent;text-align:left}\r\n.dsh-mobile .m-tree-main>.m-icon{width:26px;height:26px;color:#368153;background:#eaf4eb;border-radius:8px;padding:5px}\r\n.dsh-mobile .m-tree-main>span{flex:1;min-width:0}\r\n.dsh-mobile .m-tree-main strong,.dsh-mobile .m-tree-main small{display:block;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}\r\n.dsh-mobile .m-tree-main strong{font-size:11px}\r\n.dsh-mobile .m-tree-main small{font-size:9px;color:#8eaa94}\r\n.dsh-mobile .m-tree-main em{flex-shrink:0;font-style:normal;font-size:9px;color:#759d82}\r\n.dsh-mobile .m-questions{padding-top:8px}\r\n.dsh-mobile .m-question{padding:9px 0;margin:0 0 12px;border:0;min-width:0}\r\n.dsh-mobile .m-question legend{font-size:10px;color:#71947b}\r\n.dsh-mobile .m-question h2{font-size:18px;margin:0 0 10px}\r\n.dsh-mobile .m-answer{min-height:48px;padding:8px 10px;display:flex;align-items:center;gap:10px;margin:6px 0;border:1px solid #d7e6db;border-radius:11px;background:#fff}\r\n.dsh-mobile .m-answer input{width:18px;height:18px;accent-color:#2e8055}\r\n.dsh-mobile .m-answer span{font-size:12px}\r\n.dsh-mobile .m-answer small{display:block;font-size:10px;color:#8c9c8f}\r\n.dsh-mobile .m-question textarea{width:100%;padding:10px;border:1px solid #d7e6da;background:#fff;border-radius:11px;margin-top:6px}\r\n.dsh-mobile .m-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;padding:4px;border-radius:11px;background:#eaf3ec;margin:5px 0 12px}\r\n.dsh-mobile .m-tabs button{min-height:44px;border:0;background:transparent;border-radius:9px;font-size:11px;font-weight:800}\r\n.dsh-mobile .m-tabs button.active{background:#fff;color:#34724e;box-shadow:0 1px 4px #1b3d2218}\r\n.dsh-mobile .m-result-caption{font-size:11px;color:#638970;margin:6px 0;overflow-wrap:anywhere}\r\n.dsh-mobile .m-file-row{display:flex;align-items:center;gap:10px;text-align:left;min-height:55px;width:100%;padding:8px 5px;border:0;border-bottom:1px solid #e5eee6;background:#fff;border-radius:0;color:#2d5c42}\r\n.dsh-mobile .m-file-row span{flex:1;min-width:0;overflow-wrap:anywhere;font-size:12px}\r\n.dsh-mobile .m-file-row .m-icon:last-child{color:#7da188}\r\n.dsh-mobile .m-result-list,.dsh-mobile .m-preview{border:1px solid #d9e9de;background:#fff;padding:10px;border-radius:12px}\r\n.dsh-mobile .m-preview-title{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12px;font-weight:850;margin-bottom:10px}\r\n.dsh-mobile .m-preview .m-frame{width:100%;min-height:55vh;border:0;background:white}\r\n.dsh-mobile .m-preview .m-image{max-width:100%;max-height:65vh;object-fit:contain}\r\n.dsh-mobile .m-web-link{padding:9px 11px;margin-bottom:7px;border-radius:10px;background:#fff;border:1px solid #d9e9dd;font-size:11px;overflow-wrap:anywhere}\r\n.dsh-mobile .m-action-card{display:flex;align-items:center;gap:9px;min-height:60px;padding:8px 10px;margin-bottom:7px;background:#fff;border:1px solid #d6e6dc;border-radius:12px}\r\n.dsh-mobile .m-action-card h2{font-size:12px;flex:1;margin:0}\r\n.dsh-mobile .m-modal-mask{position:absolute;inset:0;z-index:50;display:flex;align-items:flex-end;justify-content:center;padding:9px 9px calc(10px + env(safe-area-inset-bottom));background:rgba(18,46,29,.44)}\r\n.dsh-mobile .m-sheet{width:100%;max-width:560px;max-height:84vh;overflow:auto;padding:13px;background:#fff;border-radius:19px;box-shadow:0 21px 62px #18382243}\r\n.dsh-mobile .m-sheet-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:7px}\r\n.dsh-mobile .m-sheet-head h2{margin:0;font-size:16px}\r\n.dsh-mobile .m-toast{position:absolute;z-index:80;bottom:calc(69px + env(safe-area-inset-bottom));left:12px;right:12px;padding:10px 12px;background:#2c523d;color:white;border-radius:10px;box-shadow:0 7px 25px #294d3930;font-size:11px}\r\n.dsh-mobile button:focus-visible,.dsh-mobile input:focus-visible,.dsh-mobile select:focus-visible,.dsh-mobile textarea:focus-visible,.dsh-mobile a:focus-visible{outline:2px solid #2b8559;outline-offset:2px}\r\n@media(min-width:600px){.dsh-mobile .m-shell{width:412px;height:min(872px,calc(100dvh - 36px));border:6px solid #e3ebe4;border-radius:32px;box-shadow:0 30px 80px #18402b1d}}\r\n@media(max-width:359px){.dsh-mobile .m-scroll{padding-left:9px;padding-right:9px}.dsh-mobile .m-chat-row{padding:8px 7px}.dsh-mobile .m-tree-children{padding-left:10px;margin-left:10px}.dsh-mobile .m-tuning label{gap:2px;padding:0 4px}.dsh-mobile .m-tuning select{font-size:10px}}\r\n@media(prefers-reduced-motion:reduce){.dsh-mobile *{transition:none!important;scroll-behavior:auto!important}}\r\n"
 const EMPTY_SESSIONS=Object.freeze({ids:[],byId:{},subagentsByParent:{}})
 const EMPTY_WORKSPACES=Object.freeze({items:[],archivedSessionIds:[]})
 const EMPTY_CHAT=Object.freeze({nodes:[],queue:[],pending:[],partial:null,openState:'cold'})
@@ -59,11 +59,6 @@ function projectRelative(root,cwd){
   return String(cwd||'').replace(/\\/g,'/').slice(String(root||'').replace(/\\/g,'/').replace(/\/+$/,'').length).replace(/^\//,'')
 }
 function pathChild(path,name){return path?path+'/'+name:name}
-function pathForHost(root,path){
-  const windows=/\\/.test(root)
-  const separator=windows?'\\':'/'
-  return root+(path?separator+path.split('/').join(separator):'')
-}
 function pressurePercent(value){
   const count=value?.projectedTokens??value?.pressureTokens
   return count===undefined||!value?.contextWindow?'—':
@@ -85,6 +80,13 @@ function descendantBranches(catalogs,root) {
   }
   visit(root)
   return [...visited]
+}
+function presetLabel(p,index){
+  const name=p.name||''
+  const readable=text=>!!text.trim()&&/^[\p{Script=Latin}\p{Script=Cyrillic}\p{Number}\p{Punctuation}\p{Separator}]+$/u.test(text)
+  if(readable(name))return name
+  const names={standard:'Стандартный',code:'PTC',minimal:'Минимальный',cordis:'Творческий'}
+  return names[p.id]|| (readable(p.id)?p.id:'Пресет '+(index+1))
 }
 function catalogModels(groups){
   const models=[]
@@ -252,7 +254,8 @@ function MobileApp({ctx}){
   const [screen,setScreen]=React.useState('chats')
   const [selected,setSelected]=React.useState(null)
   const [selectedAddress,setSelectedAddress]=React.useState(null)
-  const [createPending,setCreatePending]=React.useState(null)
+  const pendingSessionId=React.useRef(null)
+  const createInFlight=React.useRef(false)
   const [filter,setFilter]=React.useState('all')
   const [search,setSearch]=React.useState('')
   const [searchResults,setSearchResults]=React.useState([])
@@ -260,7 +263,7 @@ function MobileApp({ctx}){
   const [busy,setBusy]=React.useState(false)
   const [modal,setModal]=React.useState(null)
   const [newTitle,setNewTitle]=React.useState('')
-  const [newFolder,setNewFolder]=React.useState(null)
+  const [newWorkspaceId,setNewWorkspaceId]=React.useState('')
   const [newPreset,setNewPreset]=React.useState('')
   const [newModel,setNewModel]=React.useState('')
   const [newEffort,setNewEffort]=React.useState('')
@@ -302,11 +305,7 @@ function MobileApp({ctx}){
   }
   React.useEffect(()=>{
     if(!selected&&sessions.current)setSelected(sessions.current)
-    if(createPending&&sessions.byId[createPending]){
-      navigateChat(createPending)
-      setCreatePending(null)
-    }
-  },[selected,sessions.current,createPending,sessions.byId])
+  },[selected,sessions.current])
   React.useEffect(()=>{
     if(!notice)return
     const timer=setTimeout(()=>setNotice(''),4500)
@@ -325,16 +324,15 @@ function MobileApp({ctx}){
   },[ctx,search])
   React.useEffect(()=>{
     let keep=true
-    Promise.all([
-      ctx.connection.api.agentPresets.list({}),
-      ctx.connection.api.llm.models({})
-    ]).then(([presetsResponse,modelsResponse])=>{
+    ctx.connection.api.agentPresets.list({}).then(response=>{
       if(!keep)return
-      const available=valueOf(presetsResponse).presets.filter(p=>!p.broken)
+      const available=valueOf(response).presets.filter(p=>!p.broken)
       setPresets(available)
-      setNewPreset(old=>old||available[0]?.id||'')
-      setCatalog(valueOf(modelsResponse).groups)
-    }).catch(error=>{if(keep)notify('Не удалось загрузить агенты или модели: '+error.message)})
+      setNewPreset(old=>old||available.find(p=>p.isDefault)?.id||available[0]?.id||'')
+    }).catch(error=>{if(keep)notify('Не удалось загрузить пресеты: '+error.message)})
+    ctx.connection.api.llm.models({}).then(response=>{
+      if(keep)setCatalog(valueOf(response).groups)
+    }).catch(error=>{if(keep)notify('Не удалось загрузить модели: '+error.message)})
     return()=>{keep=false}
   },[ctx,notify])
   React.useEffect(()=>{
@@ -394,29 +392,41 @@ function MobileApp({ctx}){
     })
   }
   async function createSession(){
-    if(!newPreset)throw Error('Агент не выбран')
-    const request={agentPreset:newPreset}
-    if(newFolder){
-      if(newFolder.path)request.cwd=newFolder.absolute
-      else request.workspaceId=newFolder.id
-    }
-    const created=valueOf(await ctx.connection.api.sessions.create(request))
-    let configError=''
+    if(!newPreset||createInFlight.current)return
+    createInFlight.current=true
     try{
+      // getRandomValues also works on private-network HTTP, where randomUUID is absent.
+      // An uncertain transport outcome must be retried with the same session id.
+      const requestId=pendingSessionId.current||'session-'+[...crypto.getRandomValues(new Uint8Array(16))]
+        .map(byte=>byte.toString(16).padStart(2,'0')).join('')
+      pendingSessionId.current=requestId
+      // Unlike the raw API, sessions.create publishes the confirmed id in the
+      // local runtime before returning. No wait for an unrelated Host event.
+      const sessionId=await ctx.sessions.create({
+        sessionId:requestId,...(newWorkspaceId?{workspaceId:newWorkspaceId}:{})
+      })
+      pendingSessionId.current=null
+      navigateChat(sessionId)
+      const errors=[]
+      const selectedPreset=presets.find(p=>p.id===newPreset)
+      if(selectedPreset&&!selectedPreset.isDefault)try{
+        const value=valueOf(await ctx.connection.api.agentPresets.select({sessionId,agentPreset:newPreset}))
+        ctx.sessions.noteAgentPreset(sessionId,value.agentPreset)
+      }catch(error){errors.push('пресет: '+error.message)}
       const route=modelChoicesNew.find(m=>m.key===newModel)
-      if(route)valueOf(await ctx.connection.api.sessions.selectModel({
-        sessionId:created.sessionId,provider:route.provider,model:route.model,
-        ...(newEffort?{reasoningEffort:newEffort}:{})
-      }))
-      if(newTitle.trim())valueOf(await ctx.connection.api.sessions.rename({
-        sessionId:created.sessionId,title:newTitle.trim()
-      }))
-    }catch(error){configError=error.message}
-    setCreatePending(created.sessionId)
-    setScreen('chats')
-    setNewTitle('')
-    setNewFolder(null)
-    if(configError)notify('Чат создан, но параметры не установлены: '+configError)
+      if(route)try{
+        valueOf(await ctx.connection.api.sessions.selectModel({
+          sessionId,provider:route.provider,model:route.model,
+          ...(newEffort?{reasoningEffort:newEffort}:{})
+        }))
+      }catch(error){errors.push('модель: '+error.message)}
+      if(newTitle.trim())try{
+        valueOf(await ctx.connection.api.sessions.rename({sessionId,title:newTitle.trim()}))
+      }catch(error){errors.push('название: '+error.message)}
+      setNewTitle('')
+      setNewWorkspaceId('')
+      if(errors.length)notify('Чат создан, но не все настройки применены: '+errors.join('; '))
+    }finally{createInFlight.current=false}
   }
   async function changeModel(key,effort) {
     const route=modelChoices.find(x=>x.key===key)
@@ -550,11 +560,10 @@ function MobileApp({ctx}){
         ...[['all','Все'],['question','Ожидают'],['archive','Архив']].map(([id,label])=>
           h('button',{type:'button',key:id,className:filter===id?'active':'',
             onClick:()=>setFilter(id)},label))),
-      !listGroups.length?h('p',{className:'m-empty'},createPending?'Создание переписки…':'Нет чатов'):null,
+      !listGroups.length?h('p',{className:'m-empty'},'Нет чатов'):null,
       ...listGroups),
     nav)
 
-  const presetsToShow=presets.slice(0,3)
   const newChat=h('section',{className:'m-page','aria-label':'Новый чат'},
     pageHeader('Новый чат',()=>setScreen('chats')),
     h('div',{className:'m-scroll m-new'},
@@ -564,18 +573,17 @@ function MobileApp({ctx}){
           value:newTitle,onChange:e=>setNewTitle(e.target.value),
           placeholder:'Новый разговор'})),
       h('div',{className:'m-field'},
-        h('h2',null,'Папка проекта'),
-        h('div',{className:'m-folder-card'},
-          h('code',{className:'m-path'},newFolder?.absolute||'Без проекта'),
-          h('div',{className:'m-actions'},
-            btn('Папка','folder',()=>{setBrowse(null);setModal('folders')},'m-btn m-soft'),
-            h('button',{type:'button',className:'m-btn',onClick:()=>setNewFolder(null)},'Без проекта')))),
-      h('div',{className:'m-field'},h('h2',null,'Агент'),
-        h('div',{className:'m-presets',role:'radiogroup','aria-label':'Агент'},
-          ...presetsToShow.map(p=>h('button',{key:p.id,type:'button',
-            className:'m-preset '+(newPreset===p.id?'active':''),
-            role:'radio','aria-checked':newPreset===p.id,onClick:()=>setNewPreset(p.id)},
-            ico('chat'),h('strong',null,p.name||p.id))))),
+        h('label',{htmlFor:'mobile-workspace'},'Папка проекта'),
+        h('select',{id:'mobile-workspace',className:'m-textfield',value:newWorkspaceId,
+          onChange:e=>setNewWorkspaceId(e.target.value)},
+          h('option',{value:''},'Без проекта'),
+          ...(workspaces.items||[]).map(item=>
+            h('option',{value:item.workspaceId,key:item.workspaceId},item.title||item.path)))),
+      h('div',{className:'m-field'},
+        h('label',{htmlFor:'mobile-preset'},'Пресет агента'),
+        h('select',{id:'mobile-preset',className:'m-textfield',value:newPreset,
+          onChange:e=>setNewPreset(e.target.value)},
+          ...presets.map((p,i)=>h('option',{value:p.id,key:p.id},presetLabel(p,i))))),
       h('div',{className:'m-field'},h('h2',null,'Параметры'),
         h('div',{className:'m-tuning'},
           h('label',null,'Модель',h('select',{'aria-label':'Модель',
@@ -589,7 +597,7 @@ function MobileApp({ctx}){
             ...(newChoice?.efforts||[]).map(x=>h('option',{value:x.id,key:x.id},x.name))))))),
     h('div',{className:'m-sticky'},
       h('button',{type:'button',className:'m-btn m-primary m-full',disabled:busy||!newPreset,
-        onClick:()=>void execute(createSession)},ico('plus'),'Создать')))
+        onClick:()=>void execute(createSession)},ico('plus'),busy?'Создаётся…':'Создать')))
 
   const stopped=!snapshot.running&&nodes.some(x=>x.kind==='assistant'&&x.interrupted)
   const status=snapshot.pending?.length?'Ожидает ответа':
@@ -767,29 +775,7 @@ function MobileApp({ctx}){
     nav)
 
   let modalBody=null
-  if(modal==='folders'){
-    const choices=(!browse)?(workspaces.items||[]).map(item=>
-      h('button',{key:item.workspaceId,className:'m-file-row',type:'button',
-        onClick:()=>chooseBrowse(item.workspaceId,'','folder')},
-        ico('folder'),h('span',null,item.title||item.path),ico('next'))):
-      [h('code',{className:'m-path',key:'selected'},browse.root||'',browse.path?'/'+browse.path:''),
-        browse.path?btn('На уровень выше','back',
-          ()=>chooseBrowse(browse.id,browse.path.split('/').slice(0,-1).join('/'),'folder'),'m-btn'):null,
-        browse.loading?h('p',{className:'m-note',key:'loading'},'Загрузка…'):null,
-        browse.error?h('p',{className:'m-error',key:'error'},browse.error):null,
-        ...(browse.entries||[]).filter(x=>x.directory).map(x=>
-          h('button',{className:'m-file-row',type:'button',key:x.name,
-            onClick:()=>chooseBrowse(browse.id,pathChild(browse.path,x.name),'folder')},
-            ico('folder'),h('span',null,x.name),ico('next'))),
-        h('div',{className:'m-actions',key:'actions'},
-          h('button',{type:'button',className:'m-btn',onClick:()=>setBrowse(null)},'Проекты'),
-          h('button',{type:'button',className:'m-btn m-primary',disabled:busy||browse.loading||!!browse.error,
-            onClick:()=>{
-              setNewFolder({id:browse.id,path:browse.path,absolute:pathForHost(browse.root,browse.path)})
-              setModal(null);setScreen('new')
-            }},'Выбрать'))]
-    modalBody=h('div',null,...choices)
-  }else if(modal==='restart')
+  if(modal==='restart')
     modalBody=h('div',null,h('p',null,'Перезапустить Harness? Ответы могут прерваться.'),
       h('div',{className:'m-actions'},
         h('button',{type:'button',className:'m-btn',onClick:()=>setModal(null)},'Отмена'),
@@ -801,9 +787,9 @@ function MobileApp({ctx}){
       h('button',{type:'button',className:'m-btn m-danger',disabled:busy||child,
         onClick:()=>void execute(archive)},'В архив'))
   const modalFrame=modal?h('div',{className:'m-modal-mask',onMouseDown:e=>{if(e.target===e.currentTarget)setModal(null)}},
-    h('div',{className:'m-sheet',role:'dialog','aria-modal':true,'aria-label':modal==='folders'?'Папка проекта':modal==='restart'?'Перезапуск':'Меню чата'},
+    h('div',{className:'m-sheet',role:'dialog','aria-modal':true,'aria-label':modal==='restart'?'Перезапуск':'Меню чата'},
       h('div',{className:'m-sheet-head'},
-        h('h2',null,modal==='folders'?'Папка Windows':modal==='restart'?'Перезапуск Harness':'Меню чата'),
+        h('h2',null,modal==='restart'?'Перезапуск Harness':'Меню чата'),
         btn('Закрыть','close',()=>setModal(null),'m-square m-quiet')),
       modalBody)):null
   const page=screen==='new'?newChat:screen==='chat'?chat:screen==='task'?task:
@@ -828,7 +814,7 @@ function apply(ctx){
   },()=>h(MobileApp,{ctx})))
 }
 module.exports={apply,inject:['slots','sessions','workspaces','connection'],
-  testing:{pressurePercent,rootOf,descendantBranches,catalogModels,urlIfReachable,QuestionForm,Markdown}}
+  testing:{pressurePercent,rootOf,descendantBranches,catalogModels,presetLabel,urlIfReachable,QuestionForm,Markdown}}
 
 
 return module.exports;}});
