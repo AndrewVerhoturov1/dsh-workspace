@@ -123,23 +123,46 @@ function Assert-OwnTask($Task) {
         throw 'TASK_NAME_CONFLICT: existing task does not match this fixed on-demand task'
     }
 
-    $expected = [Security.AccessControl.RawSecurityDescriptor]::new($TaskSddl)
+    # Task Scheduler can return expanded file-specific masks (FA/FR/FX)
+    # and omit DACL_PROTECTED even for our registered SDDL. Verify every
+    # returned ACE and the aggregate rights instead of comparing raw SDDL.
     $actual = [Security.AccessControl.RawSecurityDescriptor]::new($Task.GetSecurityDescriptor(7))
-    if ($actual.Owner.Value -ne $SidAdministrators -or
-        -not ($actual.ControlFlags -band [Security.AccessControl.ControlFlags]::DiscretionaryAclProtected) -or
-        $actual.DiscretionaryAcl.Count -ne $expected.DiscretionaryAcl.Count) {
+    if ($null -eq $actual.Owner -or $actual.Owner.Value -ne $SidAdministrators -or
+        $null -eq $actual.Group -or $actual.Group.Value -ne $SidAdministrators -or
+        -not ($actual.ControlFlags -band [Security.AccessControl.ControlFlags]::DiscretionaryAclPresent) -or
+        $null -eq $actual.DiscretionaryAcl) {
         throw 'TASK_SECURITY_CONFLICT'
     }
-    $expectedAces = @{}
-    foreach ($ace in $expected.DiscretionaryAcl) { $expectedAces[$ace.SecurityIdentifier.Value] = $ace }
+
+    $rights = @{}
+    foreach ($sid in @($SidSystem, $SidAdministrators, $SidUsers)) { $rights[$sid] = 0 }
     foreach ($ace in $actual.DiscretionaryAcl) {
-        $sid = $ace.SecurityIdentifier.Value
-        if (-not $expectedAces.ContainsKey($sid)) { throw 'TASK_SECURITY_CONFLICT' }
-        $ref = $expectedAces[$sid]
-        if ($ace.AccessMask -ne $ref.AccessMask -or $ace.AceQualifier -ne $ref.AceQualifier -or
-            $ace.AceFlags -ne $ref.AceFlags) {
+        if ($ace -isnot [Security.AccessControl.CommonAce] -or
+            $ace.AceQualifier -ne [Security.AccessControl.AceQualifier]::AccessAllowed -or
+            $ace.AceFlags -ne [Security.AccessControl.AceFlags]::None -or
+            $ace.IsCallback -or -not $rights.ContainsKey($ace.SecurityIdentifier.Value)) {
             throw 'TASK_SECURITY_CONFLICT'
         }
+
+        # Task ACLs use file rights: map GA/GR/GW/GX to their specific
+        # equivalents before checking both the maximum and required rights.
+        $mask = $ace.AccessMask -band 0x0FFFFFFF
+        if ($ace.AccessMask -band 0x10000000) { $mask = $mask -bor 0x001F01FF } # GA -> FA
+        if ($ace.AccessMask -band 0x20000000) { $mask = $mask -bor 0x001200A0 } # GX -> FX
+        if ($ace.AccessMask -band 0x40000000) { $mask = $mask -bor 0x00120116 } # GW -> FW
+        if ($ace.AccessMask -band [int]::MinValue) { $mask = $mask -bor 0x00120089 } # GR -> FR
+
+        $sid = $ace.SecurityIdentifier.Value
+        $required = if ($sid -eq $SidUsers) { 0x001200A9 } else { 0x001F01FF }
+        if ($mask -eq 0 -or ($mask -band (-bnot $required)) -ne 0) {
+            throw 'TASK_SECURITY_CONFLICT'
+        }
+        $rights[$sid] = $rights[$sid] -bor $mask
+    }
+    if ($rights[$SidSystem] -ne 0x001F01FF -or
+        $rights[$SidAdministrators] -ne 0x001F01FF -or
+        $rights[$SidUsers] -ne 0x001200A9) {
+        throw 'TASK_SECURITY_CONFLICT'
     }
 }
 

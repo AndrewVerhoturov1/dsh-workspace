@@ -216,6 +216,88 @@ function Test-InstallerGuards {
     Assert-True $rejected 'foreign task with unexpected action must be rejected'
     Pass 'existing foreign task: no update/overwrite'
 
+    # Mock the registered task COM shape; only AST-selected functions are run.
+    $SidAdministrators = 'S-1-5-32-544'
+    $SidUsers = 'S-1-5-32-545'
+    $PowerShellExe = 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'
+    $TaskArgs = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "C:\ProgramData\DSH-MobileLan\Restore-MobileLan.ps1"'
+    $TaskWorkingDirectory = 'C:\Windows\System32'
+    function New-MockOwnTask([string]$Sddl) {
+        $action = [pscustomobject]@{
+            Type = 0; Path = $PowerShellExe; Arguments = $TaskArgs
+            WorkingDirectory = $TaskWorkingDirectory
+        }
+        $actions = [pscustomobject]@{ Count = 1; Item1 = $action }
+        $actions | Add-Member -MemberType ScriptMethod -Name Item -Value {
+            param($Index)
+            if ($Index -ne 1) { throw 'Unexpected action index' }
+            return $this.Item1
+        }
+        $task = [pscustomobject]@{
+            Definition = [pscustomobject]@{
+                Actions = $actions
+                Triggers = [pscustomobject]@{ Count = 0 }
+                Principal = [pscustomobject]@{ UserId = $SidSystem; LogonType = 5; RunLevel = 1 }
+                Settings = [pscustomobject]@{ Enabled = $true; AllowDemandStart = $true; MultipleInstances = 2 }
+            }
+            Sddl = $Sddl
+        }
+        $task | Add-Member -MemberType ScriptMethod -Name GetSecurityDescriptor -Value {
+            param($SecurityInformation)
+            if ($SecurityInformation -ne 7) { throw 'Unexpected descriptor request' }
+            return $this.Sddl
+        }
+        return $task
+    }
+    function Assert-TaskSecurityRejected([string]$Sddl, [string]$Case) {
+        $rejected = $false
+        try { Assert-OwnTask (New-MockOwnTask $Sddl) } catch {
+            $rejected = ($_.Exception.Message -eq 'TASK_SECURITY_CONFLICT')
+        }
+        Assert-True $rejected $Case
+    }
+
+    $intendedSddl = 'O:BAG:BAD:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGX;;;BU)'
+    $windowsSddl = 'O:BAG:BAD:(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x1200a9;;;BU)(A;;FR;;;SY)'
+    Assert-OwnTask (New-MockOwnTask $windowsSddl)
+    Assert-OwnTask (New-MockOwnTask $intendedSddl)
+    Pass 'task ACL: intended generic and observed Windows-expanded descriptors accepted'
+
+    $systemDuplicate = 'O:BAG:BAD:(A;;FA;;;SY)(A;;FR;;;SY)(A;;FA;;;BA)(A;;0x1200a9;;;BU)(A;;FR;;;SY)'
+    Assert-OwnTask (New-MockOwnTask $systemDuplicate)
+    Pass 'task ACL: redundant SYSTEM read ACE cannot expand full rights'
+
+    foreach ($case in @(
+        @{ Name = 'Users write data'; Sddl = 'O:BAG:BAD:(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x1200ab;;;BU)' }
+        @{ Name = 'Users DELETE'; Sddl = 'O:BAG:BAD:(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x1300a9;;;BU)' }
+        @{ Name = 'Users WRITE_DAC'; Sddl = 'O:BAG:BAD:(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x1600a9;;;BU)' }
+        @{ Name = 'Users WRITE_OWNER'; Sddl = 'O:BAG:BAD:(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x1a00a9;;;BU)' }
+        @{ Name = 'Users generic write'; Sddl = 'O:BAG:BAD:(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGWGX;;;BU)' }
+        @{ Name = 'extra SID'; Sddl = 'O:BAG:BAD:(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x1200a9;;;BU)(A;;FR;;;WD)' }
+        @{ Name = 'deny ACE'; Sddl = 'O:BAG:BAD:(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x1200a9;;;BU)(D;;FR;;;BU)' }
+        @{ Name = 'inherited ACE'; Sddl = 'O:BAG:BAD:(A;;FA;;;SY)(A;;FA;;;BA)(A;ID;0x1200a9;;;BU)' }
+        @{ Name = 'owner mismatch'; Sddl = 'O:SYG:BAD:(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x1200a9;;;BU)' }
+        @{ Name = 'group mismatch'; Sddl = 'O:BAG:SYD:(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x1200a9;;;BU)' }
+        @{ Name = 'null DACL'; Sddl = 'O:BAG:BA' }
+        @{ Name = 'empty DACL'; Sddl = 'O:BAG:BAD:' }
+        @{ Name = 'missing Users rights'; Sddl = 'O:BAG:BAD:(A;;FA;;;SY)(A;;FA;;;BA)' }
+        @{ Name = 'missing Users execute'; Sddl = 'O:BAG:BAD:(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;BU)' }
+        @{ Name = 'missing SYSTEM full'; Sddl = 'O:BAG:BAD:(A;;FR;;;SY)(A;;FA;;;BA)(A;;0x1200a9;;;BU)' }
+        @{ Name = 'missing Admin full'; Sddl = 'O:BAG:BAD:(A;;FA;;;SY)(A;;FR;;;BA)(A;;0x1200a9;;;BU)' }
+    )) {
+        Assert-TaskSecurityRejected $case.Sddl $case.Name
+    }
+    Pass 'task ACL: unsafe SID/ACE/flags/owner/rights and missing permissions refused'
+
+    $unsafeAction = New-MockOwnTask $windowsSddl
+    $unsafeAction.Definition.Actions.Item1.Path = 'C:\Windows\System32\cmd.exe'
+    $rejected = $false
+    try { Assert-OwnTask $unsafeAction } catch {
+        $rejected = ($_.Exception.Message -like 'TASK_NAME_CONFLICT:*')
+    }
+    Assert-True $rejected 'unsafe task action must be rejected before task ACL check'
+    Pass 'task action: unsafe executable rejected'
+
     Invoke-Expression $definitions['Get-ExpectedHelperBytes']
     $HelperSource = Join-Path $root 'Restore-MobileLan.ps1'
     $ExpectedHelperSha256 = (Get-FileHash -LiteralPath $HelperSource -Algorithm SHA256).Hash
