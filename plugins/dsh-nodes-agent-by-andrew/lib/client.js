@@ -1743,42 +1743,53 @@ function mountEditor(root, bridge) {
         status: 'UNKNOWN', diagnostic: String(error.message || error)
       } };
     }
-    if (state.selection?.type === 'chat' && state.selection.id === requested.chatId &&
+    if (!document.hidden && !globalEvents.signal.aborted &&
+        state.selection?.type === 'chat' && state.selection.id === requested.chatId &&
         state.runtime.id === requested.runId) renderLunaFacts(chat);
   }
 
+  let runSyncPending = false;
   async function syncRun() {
-    if (state.runtime.status === 'STARTING') return;
+    if (document.hidden || globalEvents.signal.aborted || runSyncPending ||
+        state.runtime.status === 'STARTING') return;
     const id = bridge.sessionId();
     if (!id) return;
-    const run = await bridge.call('runs/for-session', { sessionId: id });
-    if (!run || run.teamDefinitionId !== state.definition.id) {
-      if (state.runtime.status !== 'STOPPED') { resetRuntime(); renderAll(); }
-      return;
-    }
-    const prior = state.runtime;
-    const statusChanged = prior.id !== run.id || prior.status !== run.status;
-    const bindingsChanged = JSON.stringify(prior.bindings) !== JSON.stringify(run.bindings);
-    const lunaChanged = JSON.stringify(prior.lunas) !== JSON.stringify(run.lunas) ||
-      JSON.stringify(prior.lunaArchive) !== JSON.stringify(run.lunaArchive);
-    state.runtime = { id: run.id, status: run.status, bindings: run.bindings,
-      lunas: run.lunas || [], lunaArchive: run.lunaArchive || {} };
-    if (statusChanged || bindingsChanged || lunaChanged) {
-      // Runtime polls update existing nodes in place: pointer target, popup,
-      // inspector selection, drafts and open disclosures stay untouched.
-      updateRuntimeNodes(); renderRuntime(false);
-    } else if (state.runtime.status === 'RUNNING') updateRuntimeNodes();
-    refreshRuntimeInspector();
-    void refreshChatResult();
-    const items = await bridge.call('runs/activity', { id: run.id });
-    const activity = $('nodesActivity');
-    activity.replaceChildren();
-    for (const row of [...(items.tasks || []), ...(items.messages || [])].slice(-12)) {
-      const el = document.createElement('div');
-      el.textContent = row.goal ? 'Task: ' + row.goal + ' (' + row.status + ')' :
-        'Message: ' + (row.text || '').slice(0, 120) + ' (' + row.state + ')';
-      activity.append(el);
-    }
+    runSyncPending = true;
+    try {
+      const run = await bridge.call('runs/for-session', { sessionId: id });
+      if (document.hidden || globalEvents.signal.aborted) return;
+      if (!run || run.teamDefinitionId !== state.definition.id) {
+        if (state.runtime.status !== 'STOPPED') { resetRuntime(); renderAll(); }
+        return;
+      }
+      const prior = state.runtime;
+      const statusChanged = prior.id !== run.id || prior.status !== run.status;
+      const bindingsChanged = JSON.stringify(prior.bindings) !== JSON.stringify(run.bindings);
+      const lunaChanged = JSON.stringify(prior.lunas) !== JSON.stringify(run.lunas) ||
+        JSON.stringify(prior.lunaArchive) !== JSON.stringify(run.lunaArchive);
+      state.runtime = { id: run.id, status: run.status, bindings: run.bindings,
+        lunas: run.lunas || [], lunaArchive: run.lunaArchive || {} };
+      if (statusChanged || bindingsChanged || lunaChanged) {
+        // Runtime polls update existing nodes in place: pointer target, popup,
+        // inspector selection, drafts and open disclosures stay untouched.
+        updateRuntimeNodes(); renderRuntime(false);
+      } else if (state.runtime.status === 'RUNNING') updateRuntimeNodes();
+      refreshRuntimeInspector();
+      void refreshChatResult();
+      const items = await bridge.call('runs/activity', { id: run.id });
+      if (document.hidden || globalEvents.signal.aborted) return;
+      const activity = $('nodesActivity');
+      const rows = [...(items.tasks || []), ...(items.messages || [])].slice(-12).map(row =>
+        row.goal ? 'Task: ' + row.goal + ' (' + row.status + ')' :
+          'Message: ' + (row.text || '').slice(0, 120) + ' (' + row.state + ')');
+      if (activity.children.length === rows.length &&
+          rows.every((text, index) => activity.children[index].textContent === text)) return;
+      activity.replaceChildren(...rows.map(text => {
+        const el = document.createElement('div');
+        el.textContent = text;
+        return el;
+      }));
+    } finally { runSyncPending = false; }
   }
 
   async function startRuntime() {
@@ -2076,6 +2087,9 @@ function mountEditor(root, bridge) {
   }
 
   const globalEvents = new AbortController();
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) void syncRun().catch(() => {});
+  }, { signal: globalEvents.signal });
   const onResize = () => renderEdges();
   loadInitialState();
   bindEvents();

@@ -170,6 +170,7 @@ assert hasattr(stdlib_signal, 'set_wakeup_fd')
         self.assertEqual(result["code"], "DEVSPACE_SIGNAL_RECEIVED")
         self.assertEqual(result["details"]["reportedOutcome"], "DONE")
         self.assertIn("external_result_probe", observed.call_args.kwargs)
+        self.assertEqual(observed.call_args.kwargs["poll_ms"], 1000)
 
     def test_minimal_text_diagnostics_tolerate_format_and_no_envelope(self):
         for text, expected in [("**capability unavailable**\nNo app", "UNKNOWN"), ("arbitrary prose: blocked — decision", "UNKNOWN")]:

@@ -475,7 +475,7 @@ def wait_for_signal(page, prompt, chat_url, binding, *, timeout_ms, interval_ms,
             continue
         observed = observer.observe_next_assistant(page, latest, chat_url,
             timeout_ms=min(3000, max(1, int((control.soft_deadline-monotonic())*1000))), stable_ms=500,
-            poll_ms=250, anchor_binding=anchor, external_result_probe=bell,
+            poll_ms=1000, anchor_binding=anchor, external_result_probe=bell,
             sleep=sleep, monotonic=monotonic)
         received = bell()
         if received:
