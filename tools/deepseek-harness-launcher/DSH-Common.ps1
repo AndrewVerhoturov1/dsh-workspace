@@ -214,7 +214,7 @@ function Invoke-MobileLanStartup {
         return
     }
     $allowedPids = @(4, [int]$helperService[0].ProcessId)
-    for ($i = 0; $i -lt 30; $i++) {
+    while (((Get-Date) - $startedAt).TotalSeconds -lt 75) {
         Start-Sleep -Milliseconds 500
         $now = Get-ScheduledTask -TaskName $taskName -TaskPath '\' -ErrorAction Stop
         $info = Get-ScheduledTaskInfo -TaskName $taskName -TaskPath '\' -ErrorAction Stop

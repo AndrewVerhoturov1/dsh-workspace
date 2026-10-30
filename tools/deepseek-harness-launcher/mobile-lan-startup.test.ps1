@@ -109,6 +109,7 @@ function Test-LauncherIntegration {
         $script:MockLanHealthy = $false
         $script:MockTaskPresent = $false
         $script:MockTaskRunResult = 0
+        $script:MockTaskRecovers = $true
         $script:MockTaskRunCount = 0
         $script:MockTaskReadCount = 0
         function Get-MobileLanListeners {
@@ -129,7 +130,7 @@ function Test-LauncherIntegration {
         }
         function Invoke-MobileLanScheduledTask {
             $script:MockTaskRunCount++
-            if ($script:MockTaskRunResult -eq 0) { $script:MockLanHealthy = $true }
+            if ($script:MockTaskRunResult -eq 0 -and $script:MockTaskRecovers) { $script:MockLanHealthy = $true }
             return $script:MockTaskRunResult
         }
         $outputStart = @(Invoke-DshController -Action 'start' -WarningAction SilentlyContinue)
@@ -168,6 +169,32 @@ function Test-LauncherIntegration {
         $log = Get-Content -LiteralPath (Join-Path $temporaryRoot 'logs/dsh-controller.log') -Raw
         Assert-True ($log.Contains('MOBILE_LAN_NOT_READY: ADMIN_TASK_RUN_DENIED')) 'denied task must emit NOT_READY'
         Pass 'mock task privilege denial: desktop continues, mobile NOT_READY'
+
+        # Advance a fake wall clock instead of sleeping or touching Windows tasks.
+        $script:MockTaskRunResult = 0
+        $script:MockTaskRecovers = $false
+        $script:MockLanHealthy = $false
+        $script:MockNow = [datetime]'2026-10-30T12:00:00'
+        $script:MockClockSteps = 0
+        function Get-Date {
+            param([string]$Format)
+            if ($Format -eq 's') { return $script:MockNow.ToString('s') }
+            return $script:MockNow
+        }
+        function Start-Sleep {
+            param([int]$Milliseconds)
+            Assert-True ($Milliseconds -eq 500) 'fixed wait interval'
+            $script:MockClockSteps++
+            $script:MockNow = $script:MockNow.AddSeconds(25)
+        }
+        $runCount = $script:MockTaskRunCount
+        $outputTimeout = @(Invoke-DshController -Action 'start' -WarningAction SilentlyContinue)
+        Assert-True ($outputTimeout.Count -eq 1 -and $outputTimeout[0] -eq 'MOCK_DSH_SUCCESS') 'bounded wait keeps desktop healthy'
+        Assert-True ($script:MockTaskRunCount -eq ($runCount + 1)) 'bounded wait dispatches task once'
+        Assert-True ($script:MockClockSteps -eq 3) 'wait must stop after 75 elapsed seconds'
+        $log = Get-Content -LiteralPath (Join-Path $temporaryRoot 'logs/dsh-controller.log') -Raw
+        Assert-True ($log.Contains('ADMIN_TASK_COMPLETED_WITHOUT_HEALTHY_LAN')) 'elapsed timeout must report NOT_READY'
+        Pass 'mock wall-clock wait: 75 seconds, one task dispatch, no retry'
     } finally {
         $env:DSH_LAUNCHER_ROOT = $previousRoot
         $env:HTTPS_PROXY = $previousProxy
@@ -222,7 +249,7 @@ function Test-InstallerGuards {
     $PowerShellExe = 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'
     $TaskArgs = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "C:\ProgramData\DSH-MobileLan\Restore-MobileLan.ps1"'
     $TaskWorkingDirectory = 'C:\Windows\System32'
-    function New-MockOwnTask([string]$Sddl) {
+    function New-MockOwnTask([string]$Sddl, [string]$Limit = 'PT20S') {
         $action = [pscustomobject]@{
             Type = 0; Path = $PowerShellExe; Arguments = $TaskArgs
             WorkingDirectory = $TaskWorkingDirectory
@@ -238,7 +265,7 @@ function Test-InstallerGuards {
                 Actions = $actions
                 Triggers = [pscustomobject]@{ Count = 0 }
                 Principal = [pscustomobject]@{ UserId = $SidSystem; LogonType = 5; RunLevel = 1 }
-                Settings = [pscustomobject]@{ Enabled = $true; AllowDemandStart = $true; MultipleInstances = 2 }
+                Settings = [pscustomobject]@{ Enabled = $true; AllowDemandStart = $true; MultipleInstances = 2; ExecutionTimeLimit = $Limit }
             }
             Sddl = $Sddl
         }
@@ -320,6 +347,99 @@ function Test-InstallerGuards {
     Assert-True ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -eq $SidAdministrators) 'directory owner'
     Assert-True (@($entries | Where-Object { $_.IdentityReference.Value -notin @($SidSystem, $SidAdministrators) }).Count -eq 0) 'only admin/SYSTEM rights'
     Pass 'protected helper directory ACL: only SYSTEM/Administrators'
+
+    # Run only the AST-selected installer function against in-memory COM and
+    # filesystem mocks. Never evaluate the installer top-level or use a real task.
+    Invoke-Expression $definitions['Install-MobileLanTask']
+    $TargetDirectory = 'C:\ProgramData\DSH-MobileLan'
+    $TargetHelper = 'C:\ProgramData\DSH-MobileLan\Restore-MobileLan.ps1'
+    $ExpectedHelperSha256 = '3885B2BBAD8C81094F0F40C5D48EAB05447AB40B44EEC3B4A1570B8CDF5F7A89'
+    function Assert-Administrator { }
+    function Get-ExpectedHelperBytes { return ,([byte[]]@(42)) }
+    function Test-Path {
+        param([string]$LiteralPath, [string]$PathType)
+        if ($LiteralPath -notin @($PowerShellExe, $TargetDirectory, $TargetHelper)) { throw 'Unexpected installer path' }
+        return $true
+    }
+    function Assert-AdminOnlyPath { param([string]$Path, [bool]$ForDirectory) }
+    function Get-FileHash {
+        param([string]$LiteralPath, [string]$Algorithm)
+        if ($LiteralPath -ne $TargetHelper -or $Algorithm -ne 'SHA256') { throw 'Unexpected hash request' }
+        return [pscustomobject]@{ Hash = $ExpectedHelperSha256 }
+    }
+    function New-Object {
+        param([string]$ComObject)
+        if ($ComObject -ne 'Schedule.Service') { throw 'Unexpected COM object' }
+        return $script:MockScheduler
+    }
+    $mockFolder = [pscustomobject]@{
+        Task = (New-MockOwnTask $windowsSddl 'PT20S')
+        UpdateCount = 0; UpdateFlags = 0; UpdateSddl = ''; UpdateUser = ''; UpdateLogon = 0
+        CorruptAclOnUpdate = $false
+    }
+    $mockFolder | Add-Member -MemberType ScriptMethod -Name GetTask -Value {
+        param($Name)
+        if ($Name -ne 'DSH-MobileLan-Restore') { throw 'Unexpected task lookup' }
+        return $this.Task
+    }
+    $mockFolder | Add-Member -MemberType ScriptMethod -Name RegisterTaskDefinition -Value {
+        param($Name, $Definition, $Flags, $UserId, $Password, $LogonType, $Sddl)
+        if ($Name -ne 'DSH-MobileLan-Restore') { throw 'Unexpected task update' }
+        $this.UpdateCount++
+        $this.UpdateFlags = $Flags
+        $this.UpdateSddl = $Sddl
+        $this.UpdateUser = $UserId
+        $this.UpdateLogon = $LogonType
+        $this.Task.Definition = $Definition
+        if ($this.CorruptAclOnUpdate) {
+            $this.Task.Sddl = 'O:BAG:BAD:(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x1200ab;;;BU)'
+        }
+        return $this.Task
+    }
+    $script:MockScheduler = [pscustomobject]@{ Folder = $mockFolder }
+    $script:MockScheduler | Add-Member -MemberType ScriptMethod -Name Connect -Value { }
+    $script:MockScheduler | Add-Member -MemberType ScriptMethod -Name GetFolder -Value {
+        param($Path)
+        if ($Path -ne '\') { throw 'Unexpected task folder' }
+        return $this.Folder
+    }
+
+    $updatedOutput = @(Install-MobileLanTask)
+    Assert-True ($updatedOutput.Count -eq 1 -and $updatedOutput[0] -like 'UPDATED:*') 'only own PT20S gets migrated'
+    Assert-True ($mockFolder.UpdateCount -eq 1 -and $mockFolder.UpdateFlags -eq 20) 'update-only plus no principal ACE rewrite'
+    Assert-True ($mockFolder.UpdateSddl -ceq $windowsSddl) 'actual task owner/group/DACL preserved at update'
+    Assert-True ($mockFolder.UpdateUser -eq $SidSystem -and $mockFolder.UpdateLogon -eq 5) 'SYSTEM principal unchanged'
+    Assert-True ($mockFolder.Task.Definition.Settings.ExecutionTimeLimit -eq 'PT60S') 'only 60s task setting changed'
+    Assert-OwnTask $mockFolder.Task
+    Pass 'mock PT20S migration: update-only, exact security descriptor and SYSTEM preserved'
+
+    $mockFolder.Task = New-MockOwnTask $intendedSddl 'PT60S'
+    $mockFolder.UpdateCount = 0
+    $noopOutput = @(Install-MobileLanTask)
+    Assert-True ($noopOutput.Count -eq 1 -and $noopOutput[0] -like 'ALREADY_INSTALLED:*') 'own PT60S no-op'
+    Assert-True ($mockFolder.UpdateCount -eq 0) 'PT60S must not register again'
+    Pass 'mock PT60S existing task: verified no-op'
+
+    foreach ($limit in @('PT30S', 'PT0S', 'PT1M')) {
+        $mockFolder.Task = New-MockOwnTask $intendedSddl $limit
+        $mockFolder.UpdateCount = 0
+        $rejected = $false
+        try { [void](Install-MobileLanTask) } catch {
+            $rejected = ($_.Exception.Message -like 'TASK_EXECUTION_LIMIT_CONFLICT:*')
+        }
+        Assert-True ($rejected -and $mockFolder.UpdateCount -eq 0) "unknown task time limit $limit must STOP"
+    }
+    Pass 'mock conflicting execution limits: STOP without task update'
+
+    $mockFolder.Task = New-MockOwnTask $windowsSddl 'PT20S'
+    $mockFolder.UpdateCount = 0
+    $mockFolder.CorruptAclOnUpdate = $true
+    $rejected = $false
+    try { [void](Install-MobileLanTask) } catch {
+        $rejected = ($_.Exception.Message -eq 'TASK_SECURITY_CONFLICT')
+    }
+    Assert-True ($rejected -and $mockFolder.UpdateCount -eq 1) 'unsafe returned task ACL must fail post-update verification'
+    Pass 'mock update ACL expansion: post-update security verification refuses PASS'
 }
 Test-InstallerGuards
 
@@ -327,7 +447,10 @@ $installer = Get-Content -LiteralPath (Join-Path $root 'Install-MobileLanTask.ps
 $helper = Get-Content -LiteralPath (Join-Path $root 'Restore-MobileLan.ps1') -Raw
 $common = Get-Content -LiteralPath (Join-Path $root 'DSH-Common.ps1') -Raw
 Assert-True ($installer.Contains('O:BAG:BAD:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGX;;;BU)')) 'fixed exact task DACL'
-Assert-True ($installer.Contains('RegisterTaskDefinition($TaskName, $definition, 2,')) 'task create-only'
+Assert-True ($installer.Contains('RegisterTaskDefinition($TaskName, $definition, 2,')) 'task creation remains create-only'
+Assert-True ($installer.Contains("`$definition.Settings.ExecutionTimeLimit = 'PT60S'")) 'finite PT60S task limit'
+Assert-True ($installer.Contains('RegisterTaskDefinition($TaskName, $definition, 20,')) 'update-only preserves principal ACL'
+Assert-True ($installer.Contains('$existing.GetSecurityDescriptor(7)')) 'migration carries actual task security descriptor'
 Assert-True ($installer.Contains('Get-ExpectedHelperBytes')) 'source hash validation'
 Assert-True ($installer.Contains('CreateDirectory($TargetDirectory, $directoryAcl)')) 'atomic secured directory'
 Assert-True ($installer.Contains('Assert-OwnTask $existing')) 'task conflict detection'
@@ -336,6 +459,7 @@ Assert-True ($installer.Contains('::FullControl')) 'SYSTEM/admin file ACL'
 Assert-True ($helper.Contains('listenaddress=192.168.0.5 listenport=4173 connectaddress=127.0.0.1 connectport=4173')) 'exact netsh target'
 Assert-True (-not $helper.Contains('Set-NetFirewallRule')) 'no firewall change'
 Assert-True ($common.Contains('Invoke-MobileLanStartup')) 'launcher post-success path'
+Assert-True ($common.Contains('while (((Get-Date) - $startedAt).TotalSeconds -lt 75)')) 'bounded elapsed wall-clock wait'
 $expectedHash = (Get-FileHash -LiteralPath (Join-Path $root 'Restore-MobileLan.ps1') -Algorithm SHA256).Hash
 Assert-True ($installer.Contains($expectedHash)) 'helper source pinned hash'
 Pass 'fixed protected task action, ACL and netsh static guard'

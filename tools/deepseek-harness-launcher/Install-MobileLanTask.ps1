@@ -123,6 +123,10 @@ function Assert-OwnTask($Task) {
         throw 'TASK_NAME_CONFLICT: existing task does not match this fixed on-demand task'
     }
 
+    if ([string]$definition.Settings.ExecutionTimeLimit -notin @('PT20S', 'PT60S')) {
+        throw 'TASK_EXECUTION_LIMIT_CONFLICT: only PT20S or PT60S is allowed for this fixed task'
+    }
+
     # Task Scheduler can return expanded file-specific masks (FA/FR/FX)
     # and omit DACL_PROTECTED even for our registered SDDL. Verify every
     # returned ACE and the aggregate rights instead of comparing raw SDDL.
@@ -205,9 +209,22 @@ function Install-MobileLanTask {
         Assert-AdminOnlyPath $TargetHelper $false
     }
 
-    # A non-owned object with this task name is never updated or replaced.
+    # Only the verified own PT20S task may receive the bounded PT60S update.
     if ($null -ne $existing) {
-        Write-Output 'ALREADY_INSTALLED: exact task, helper, and protected ACL verified'
+        if ([string]$existing.Definition.Settings.ExecutionTimeLimit -eq 'PT20S') {
+            $existingSddl = $existing.GetSecurityDescriptor(7)
+            $definition = $existing.Definition
+            $definition.Settings.ExecutionTimeLimit = 'PT60S'
+            # TASK_UPDATE=4 plus TASK_DONT_ADD_PRINCIPAL_ACE=16; retain actual owner/group/DACL.
+            $updated = $root.RegisterTaskDefinition($TaskName, $definition, 20, $SidSystem, $null, 5, $existingSddl)
+            Assert-OwnTask $updated
+            if ([string]$updated.Definition.Settings.ExecutionTimeLimit -ne 'PT60S') {
+                throw 'TASK_EXECUTION_LIMIT_UPDATE_UNVERIFIED'
+            }
+            Write-Output 'UPDATED: exact task execution limit PT20S -> PT60S; helper and protected ACL verified'
+        } else {
+            Write-Output 'ALREADY_INSTALLED: exact task PT60S, helper, and protected ACL verified'
+        }
         return
     }
 
@@ -221,7 +238,7 @@ function Install-MobileLanTask {
     $definition.Settings.MultipleInstances = 2 # TASK_INSTANCES_IGNORE_NEW
     $definition.Settings.DisallowStartIfOnBatteries = $false
     $definition.Settings.StopIfGoingOnBatteries = $false
-    $definition.Settings.ExecutionTimeLimit = 'PT20S'
+    $definition.Settings.ExecutionTimeLimit = 'PT60S'
     $action = $definition.Actions.Create(0) # TASK_ACTION_EXEC
     $action.Path = $PowerShellExe
     $action.Arguments = $TaskArgs

@@ -23,9 +23,14 @@ Administrators/SYSTEM-only full-control ACL and Administrators ownership.
 The task runs this protected copy as SYSTEM with fixed absolute PowerShell
 path, fixed arguments, fixed working directory, and no triggers. Ordinary
 local Users receive task read/execute access only; they cannot modify
-its action. The task never reads source files, launcher logs or caller
-arguments. An existing foreign task or untrusted protected-directory
-object causes STOP, not overwrite. An exact existing task/helper is a no-op.
+its action. The task has a finite 60-second execution limit; the launcher
+waits up to 75 seconds of elapsed wall-clock time for one dispatch. The task
+never reads source files, launcher logs or caller arguments. An existing
+foreign task or untrusted protected-directory object causes STOP, not overwrite.
+A verified own task with the former 20-second limit is updated to 60 seconds
+by the same manual installer, preserving its current task security descriptor;
+an already verified 60-second task/helper is a no-op. No task is deleted or
+recreated during this migration.
 
 The helper checks localhost Web, /mobile, physical Wi-Fi IP, exact saved
 portproxy and scoped Public firewall rule, and iphlpsvc. Only if the
