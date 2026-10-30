@@ -91,7 +91,143 @@ function Invoke-DshController([string]$Action) {
     if ($LASTEXITCODE -ne 0) {
         throw (($output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine)
     }
+    if ($Action -in @('start', 'restart') -and $script:Profile -eq 'web' -and $script:WebPort -eq 4173) {
+        try { Invoke-MobileLanStartup }
+        catch { Write-MobileLanNotReady $_.Exception.Message }
+    }
     return $output
+}
+
+# This check runs only after a successful regular Web start/restart.
+# The elevated task itself validates the exact portproxy, firewall, and Wi-Fi
+# conditions before changing any network setting.
+function Test-MobileLanHttp([string]$Url, [int]$ExpectedStatus, [string]$ExpectedLocation = '') {
+    $request = [System.Net.HttpWebRequest]::Create($Url)
+    $request.Proxy = $null
+    $request.AllowAutoRedirect = $false
+    $request.Timeout = 2500
+    $response = $null
+    try {
+        try {
+            $response = $request.GetResponse()
+        } catch [System.Net.WebException] {
+            if ($null -eq $_.Exception.Response) { return $false }
+            $response = $_.Exception.Response
+        }
+        if ([int]$response.StatusCode -ne $ExpectedStatus) { return $false }
+        if ($ExpectedLocation -and [string]$response.Headers['Location'] -ne $ExpectedLocation) { return $false }
+        return $true
+    } catch {
+        return $false
+    } finally {
+        if ($null -ne $response) { $response.Dispose() }
+    }
+}
+
+function Write-MobileLanNotReady([string]$Reason) {
+    $message = "MOBILE_LAN_NOT_READY: $Reason"
+    Write-Warning $message
+    # Informational only; the SYSTEM task never reads this user-writable log.
+    try {
+        Add-Content -LiteralPath (Join-Path $script:LogsRoot 'dsh-controller.log') -Value ("[{0}] {1}" -f (Get-Date -Format s), $message) -ErrorAction Stop
+    } catch { }
+}
+
+function Get-MobileLanListeners {
+    return @(Get-NetTCPConnection -State Listen -LocalPort 4173 -ErrorAction Stop)
+}
+
+function Invoke-MobileLanScheduledTask {
+    # Fixed, installed task only. No executable, task name, or arguments
+    # are supplied by the caller, environment, or mutable .dsh files.
+    & 'C:\Windows\System32\schtasks.exe' /Run /TN '\DSH-MobileLan-Restore' 2>&1 | Out-Null
+    return $LASTEXITCODE
+}
+
+function Invoke-MobileLanStartup {
+    if (-not (Test-MobileLanHttp 'http://127.0.0.1:4173/' 200) -or
+        -not (Test-MobileLanHttp 'http://127.0.0.1:4173/mobile' 302 '/?mobile=1')) {
+        Write-MobileLanNotReady 'LOCAL_WEB_OR_PLUGIN_UNAVAILABLE'
+        return
+    }
+
+    $addresses = @(Get-NetIPAddress -AddressFamily IPv4 -IPAddress '192.168.0.5' -ErrorAction SilentlyContinue)
+    if ($addresses.Count -ne 1) {
+        Write-MobileLanNotReady 'WIFI_192_168_0_5_UNAVAILABLE'
+        return
+    }
+    $physical = @(Get-NetAdapter -Physical -ErrorAction Stop | Where-Object {
+        $_.InterfaceIndex -eq $addresses[0].InterfaceIndex -and [string]$_.Status -eq 'Up' -and
+        ($_.InterfaceDescription -match '(?i)wireless|wi-fi|802\.11' -or [string]$_.MediaType -eq 'Native 802.11')
+    })
+    if ($physical.Count -ne 1) {
+        Write-MobileLanNotReady 'PHYSICAL_WIFI_UNAVAILABLE'
+        return
+    }
+
+    $listeners = @(Get-MobileLanListeners)
+    if (@($listeners | Where-Object { $_.LocalAddress -in @('0.0.0.0', '::') }).Count -gt 0) {
+        Write-MobileLanNotReady 'WILDCARD_LISTENER_CONFLICT'
+        return
+    }
+    $lan = @($listeners | Where-Object { $_.LocalAddress -eq '192.168.0.5' })
+    if ($lan.Count -gt 1) {
+        Write-MobileLanNotReady 'LAN_LISTENER_CONFLICT'
+        return
+    }
+    if ($lan.Count -eq 1) {
+        # Portproxy may be owned by PID 4 or by the running iphlpsvc
+        # svchost. Neither a foreign listener nor a wildcard is trusted.
+        $helperService = @(Get-CimInstance -ClassName Win32_Service -Filter "Name='iphlpsvc'" -ErrorAction Stop)
+        if ($helperService.Count -ne 1 -or [string]$helperService[0].State -ne 'Running' -or
+            [int]$helperService[0].ProcessId -le 0 -or
+            $lan[0].OwningProcess -notin @(4, [int]$helperService[0].ProcessId)) {
+            Write-MobileLanNotReady 'LAN_LISTENER_CONFLICT'
+            return
+        }
+        if (-not (Test-MobileLanHttp 'http://192.168.0.5:4173/?mobile=1' 200)) {
+            Write-MobileLanNotReady 'LAN_LISTENER_HTTP_UNAVAILABLE'
+        }
+        return # Healthy listener means no task invocation, ever.
+    }
+
+    # No elevation or mutable script execution in this process. The user
+    # manually installs the pre-approved, protected SYSTEM task once.
+    $taskName = 'DSH-MobileLan-Restore'
+    $task = Get-ScheduledTask -TaskName $taskName -TaskPath '\' -ErrorAction SilentlyContinue
+    if ($null -eq $task) {
+        Write-MobileLanNotReady 'ADMIN_TASK_NOT_INSTALLED'
+        return
+    }
+    $before = Get-ScheduledTaskInfo -TaskName $taskName -TaskPath '\' -ErrorAction Stop
+    $startedAt = Get-Date
+    if ((Invoke-MobileLanScheduledTask) -ne 0) {
+        Write-MobileLanNotReady 'ADMIN_TASK_RUN_DENIED'
+        return
+    }
+
+    # Bounded wait for ONE asynchronous task run; no repeated repair requests.
+    $helperService = @(Get-CimInstance -ClassName Win32_Service -Filter "Name='iphlpsvc'" -ErrorAction Stop)
+    if ($helperService.Count -ne 1 -or [string]$helperService[0].State -ne 'Running' -or
+        [int]$helperService[0].ProcessId -le 0) {
+        Write-MobileLanNotReady 'IPHLPSVC_UNAVAILABLE_AFTER_TASK'
+        return
+    }
+    $allowedPids = @(4, [int]$helperService[0].ProcessId)
+    while (((Get-Date) - $startedAt).TotalSeconds -lt 75) {
+        Start-Sleep -Milliseconds 500
+        $now = Get-ScheduledTask -TaskName $taskName -TaskPath '\' -ErrorAction Stop
+        $info = Get-ScheduledTaskInfo -TaskName $taskName -TaskPath '\' -ErrorAction Stop
+        $lanNow = @(Get-MobileLanListeners | Where-Object { $_.LocalAddress -eq '192.168.0.5' -and $_.OwningProcess -in $allowedPids })
+        if ($lanNow.Count -eq 1 -and (Test-MobileLanHttp 'http://192.168.0.5:4173/?mobile=1' 200)) {
+            return
+        }
+        if ($now.State -ne 'Running' -and $info.LastRunTime -gt $before.LastRunTime -and
+            [int]$info.LastTaskResult -ne 0) {
+            break
+        }
+    }
+    Write-MobileLanNotReady 'ADMIN_TASK_COMPLETED_WITHOUT_HEALTHY_LAN'
 }
 
 function Open-WebUi {
