@@ -105,3 +105,116 @@ test('shutdown also closes a child whose connection is still opening', async () 
   await Promise.all([call, closing])
   assert.equal(closed, 1)
 })
+
+const settle = () => new Promise(resolve => setImmediate(resolve))
+
+test('30 idle minutes close only the expired child; returning chats get fresh private state', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const clients = [], events = []
+  const router = createVudaSessionRouter(async () => {
+    const state = { id: clients.length, page: null, closed: false }
+    clients.push(state)
+    return {
+      async callTool({ arguments: args }) {
+        if (args.page) state.page = args.page
+        return { content: [{ type: 'text', text: JSON.stringify(state) }] }
+      },
+      async listResources() { return {} },
+      async close() { state.closed = true }
+    }
+  }, event => events.push(event))
+  try {
+    await router.run('tools/call', params('A', 'navigate', { page: 'A' }))
+    t.mock.timers.tick(20 * 60 * 1000)
+    await router.run('tools/call', params('B', 'navigate', { page: 'B' }))
+    t.mock.timers.tick(10 * 60 * 1000 - 1)
+    assert.ok(clients.every(client => !client.closed))
+    t.mock.timers.tick(1)
+    await settle()
+    assert.deepEqual(clients.map(client => client.closed), [true, false])
+    const fresh = JSON.parse((await router.run('tools/call', params('A', 'inspect'))).content[0].text)
+    assert.equal(fresh.page, null)
+    assert.equal(fresh.id, 2)
+    assert.equal(clients[1].page, 'B')
+    assert.ok(events.some(event => event.event === 'session_closed' && event.reason === 'idle'))
+    // Resource calls reset the same idle clock, without touching other chats.
+    await router.run('resources/list', { _meta: params('B')._meta })
+    t.mock.timers.tick(20 * 60 * 1000)
+    await settle()
+    assert.equal(clients[1].closed, false)
+  } finally { await router.close() }
+})
+
+test('connection, active calls and queued actions cannot expire even after 30 minutes', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  let connect, releaseFirst, releaseSecond, firstStarted, secondStarted
+  const firstReady = new Promise(resolve => { firstStarted = resolve })
+  const secondReady = new Promise(resolve => { secondStarted = resolve })
+  const firstWait = new Promise(resolve => { releaseFirst = resolve })
+  const secondWait = new Promise(resolve => { releaseSecond = resolve })
+  let closed = 0
+  const router = createVudaSessionRouter(() => new Promise(resolve => { connect = resolve }))
+  try {
+    const first = router.run('tools/call', params('A', 'first'))
+    const second = router.run('tools/call', params('A', 'second'))
+    await settle()
+    t.mock.timers.tick(60 * 60 * 1000)
+    connect({
+      async callTool({ name }) {
+        if (name === 'first') { firstStarted(); await firstWait }
+        else { secondStarted(); await secondWait }
+        return {}
+      }, async close() { closed++ }
+    })
+    await firstReady
+    t.mock.timers.tick(60 * 60 * 1000)
+    assert.equal(closed, 0)
+    releaseFirst()
+    await secondReady
+    t.mock.timers.tick(60 * 60 * 1000)
+    assert.equal(closed, 0)
+    releaseSecond()
+    await Promise.all([first, second])
+    t.mock.timers.tick(30 * 60 * 1000)
+    await settle()
+    assert.equal(closed, 1)
+  } finally { releaseFirst(); releaseSecond(); await router.close() }
+})
+
+test('a failed call still expires and shutdown waits for an idle child already closing', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  let finishClose, didClose = false
+  const closeWait = new Promise(resolve => { finishClose = resolve })
+  const router = createVudaSessionRouter(async () => ({
+    async callTool() { throw new Error('action failed') },
+    async close() { await closeWait; didClose = true }
+  }))
+  await assert.rejects(router.run('tools/call', params('A', 'inspect')), /action failed/)
+  t.mock.timers.tick(30 * 60 * 1000)
+  await settle()
+  let stopped = false
+  const closing = router.close().then(() => { stopped = true })
+  await settle()
+  assert.equal(stopped, false)
+  finishClose()
+  await closing
+  assert.equal(didClose, true)
+})
+
+test('a disconnected child is discarded without reusing another chat or replaying actions', async () => {
+  const clients = []
+  const router = createVudaSessionRouter(async () => {
+    const client = { async callTool() { return {} }, async close() {} }
+    clients.push(client)
+    return client
+  })
+  try {
+    await router.run('tools/call', params('A', 'inspect'))
+    await router.run('tools/call', params('B', 'inspect'))
+    clients[0].onclose()
+    await router.run('tools/call', params('A', 'inspect'))
+    assert.equal(clients.length, 3)
+    await router.run('tools/call', params('B', 'inspect'))
+    assert.equal(clients.length, 3)
+  } finally { await router.close() }
+})

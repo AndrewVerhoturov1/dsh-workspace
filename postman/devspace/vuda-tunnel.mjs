@@ -6,23 +6,51 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 // Each upstream VUDA server has process-global browser/page/resource state.
 // Keep its unmodified implementation in one child per ChatGPT session.
-export function createVudaSessionRouter(connect, audit = () => {}) {
+export function createVudaSessionRouter(connect, audit = () => {}, { idleMs = 30 * 60 * 1000 } = {}) {
   const sessions = new Map()
+  const retiring = new Set()
   let stopping = false
+  let closing
+  const hash = scope => createHash('sha256').update(scope).digest('hex')
+  function retire(scope, entry, reason) {
+    if (sessions.get(scope) !== entry) return
+    sessions.delete(scope)
+    clearTimeout(entry.timer)
+    // Detach ownership before closing: a returning chat gets a new private child.
+    const disposal = entry.tail.then(async () => {
+      const client = await entry.client
+      await client.close()
+      audit({ event: 'session_closed', scope: hash(scope), reason })
+    })
+    retiring.add(disposal)
+    disposal.then(() => retiring.delete(disposal), () => {
+      retiring.delete(disposal)
+      audit({ event: 'session_close_failed', scope: hash(scope), reason })
+    })
+  }
   function session(meta) {
     const scope = meta?.['openai/session']
     if (typeof scope !== 'string' || !scope.trim()) throw new Error('VUDA_CHAT_SESSION_REQUIRED')
     if (stopping) throw new Error('VUDA_TUNNEL_CLOSED')
     if (!sessions.has(scope)) {
-      const entry = { tail: Promise.resolve() }
-      entry.client = Promise.resolve().then(connect)
+      const entry = { tail: Promise.resolve(), pending: 0 }
+      entry.client = Promise.resolve().then(connect).then(client => {
+        const onclose = client.onclose
+        client.onclose = () => {
+          retire(scope, entry, 'disconnected')
+          onclose?.()
+        }
+        return client
+      })
       sessions.set(scope, entry)
     }
-    return { entry: sessions.get(scope), scope: createHash('sha256').update(scope).digest('hex') }
+    return { entry: sessions.get(scope), scope: hash(scope), key: scope }
   }
   return {
     async run(method, params, rpcRequestId) {
-      const { entry, scope } = session(params._meta)
+      const { entry, scope, key } = session(params._meta)
+      clearTimeout(entry.timer)
+      entry.pending++
       const requestId = randomUUID()
       const fields = { requestId, rpcRequestId, scope, method,
         ...(method === 'tools/call' ? { tool: params.name } : {}) }
@@ -42,15 +70,19 @@ export function createVudaSessionRouter(connect, audit = () => {}) {
         // Errors may contain page content/arguments. Persist only the outcome.
         audit({ ...fields, event: 'failed' })
         throw error
+      } finally {
+        entry.pending--
+        // A queued action is activity too; never expire a running/queued request.
+        if (!stopping && !entry.pending && sessions.get(key) === entry) {
+          entry.timer = setTimeout(() => retire(key, entry, 'idle'), idleMs)
+          entry.timer.unref()
+        }
       }
     },
-    async close() {
+    close() {
       stopping = true
-      await Promise.allSettled([...sessions.values()].map(async entry => {
-        const client = await entry.client
-        await client.close()
-      }))
-      sessions.clear()
+      for (const [scope, entry] of sessions) retire(scope, entry, 'shutdown')
+      return closing ??= Promise.allSettled([...retiring])
     }
   }
 }
