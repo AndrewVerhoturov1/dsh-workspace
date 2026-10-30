@@ -159,6 +159,39 @@ class FakeClock:
 
 
 class ObserverTests(unittest.TestCase):
+    def test_slow_dom_poll_preserves_fast_external_signal_delivery(self):
+        event = {"ok": True, "code": "DEVSPACE_SIGNAL_RECEIVED", "details": {}}
+        counts = []
+        for poll_ms in (250, 1000):
+            page = FakePage([{observer.TURN_CONTAINER_SELECTORS[1]: [turn("user", "probe")]}])
+            clock = [0.0]
+            def sleep(seconds):
+                clock[0] += seconds
+            with patch.object(observer, "snapshot_turns", wraps=observer.snapshot_turns) as snapshots:
+                result = observer.observe_next_assistant(page, "probe", page.url,
+                    timeout_ms=3000, poll_ms=poll_ms, sleep=sleep, monotonic=lambda: clock[0],
+                    external_result_probe=lambda: event if clock[0] >= 0.625 else None)
+            self.assertIs(result, event)
+            self.assertLessEqual(clock[0] - 0.625, 0.25)
+            counts.append(snapshots.call_count)
+        self.assertGreaterEqual(counts[0], counts[1] * 3)
+
+    def test_slow_dom_poll_reduces_reads_and_respects_the_deadline(self):
+        counts = []
+        for poll_ms in (250, 1000):
+            page = FakePage([{observer.TURN_CONTAINER_SELECTORS[1]: [turn("user", "probe")]}])
+            clock = [0.0]
+            def sleep(seconds):
+                clock[0] += seconds
+            with patch.object(observer, "snapshot_turns", wraps=observer.snapshot_turns) as snapshots:
+                result = observer.observe_next_assistant(page, "probe", page.url,
+                    timeout_ms=2500, poll_ms=poll_ms, sleep=sleep, monotonic=lambda: clock[0],
+                    external_result_probe=lambda: None)
+            self.assertFalse(result["ok"])
+            self.assertEqual(clock[0], 2.5)
+            counts.append(snapshots.call_count)
+        self.assertGreater(counts[0], counts[1] * 2)
+
     def test_normalize_only_line_endings(self):
         self.assertEqual(observer._normalize_text("  a\r\nb  "), "  a\nb  ")
 

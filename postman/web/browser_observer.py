@@ -870,6 +870,19 @@ def observe_next_assistant(
     identity = AssistantIdentityTracker()
     image_anchor: tuple[str, ...] | None = None
 
+    def wait_for_next_poll():
+        # The local result signal is cheap; DOM correlation is not. Keep signal
+        # delivery responsive without rereading the conversation at that rate.
+        wake_at = min(deadline, monotonic() + max(poll_ms, 1) / 1000.0)
+        while monotonic() < wake_at:
+            remaining = wake_at - monotonic()
+            sleep(min(0.25, remaining) if external_result_probe is not None else remaining)
+            if external_result_probe is not None:
+                received = external_result_probe()
+                if received is not None:
+                    return received
+        return None
+
     while True:
         if external_result_probe is not None:
             received = external_result_probe()
@@ -915,7 +928,9 @@ def observe_next_assistant(
                 return _result(ADDITIONAL_PROCESSING, ok=False, transitions=tracker.transitions, recoverable=True, details=phase)
             if monotonic() >= deadline:
                 return _result(ASSISTANT_TURN_TIMEOUT, ok=False, transitions=tracker.transitions, recoverable=True, details=phase)
-            sleep(min(max(poll_ms, 1) / 1000.0, max(deadline - monotonic(), 0.0)))
+            received = wait_for_next_poll()
+            if received is not None:
+                return received
             continue
         turns, selector = snapshot_turns(page, image_mode=image_mode, expected_prompt=expected_prompt,
                                          anchor_binding=anchor_binding)
@@ -1030,8 +1045,9 @@ def observe_next_assistant(
                 recoverable=True,
                 details=last_details,
             )
-        remaining_s = max(deadline - monotonic(), 0.0)
-        sleep(min(max(poll_ms, 1) / 1000.0, remaining_s))
+        received = wait_for_next_poll()
+        if received is not None:
+            return received
 
 
 def run_submit_and_observe(
