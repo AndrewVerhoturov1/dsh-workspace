@@ -158,14 +158,23 @@ _COMPOSER_TEXT_JS = r"""
 """
 
 # One DOM read supplies metadata for every plausible composer node. The
-# resulting path lets Python merge wrapper/contenteditable aliases without
-# treating a hidden textarea or an unrelated textbox as the active composer.
+# path uses document-local node identities: ChatGPT can insert siblings between
+# selector reads. Positional paths would count the same moved editor twice.
+# Distinct editors and hidden aliases retain separate identities.
 _COMPOSER_METADATA_JS = r"""
 (root) => {
   const plausible = '#prompt-textarea,[data-testid="composer-text-input"],textarea,.ProseMirror,[contenteditable="true"],[role="textbox"]';
+  const key = Symbol.for('dsh.postman.composerIdentity');
+  const doc = root.ownerDocument;
+  if (!doc[key]) doc[key] = {nodes: new WeakMap(), next: 0};
+  const identity = (node) => {
+    const state = doc[key];
+    if (!state.nodes.has(node)) state.nodes.set(node, ++state.next);
+    return state.nodes.get(node);
+  };
   const path = [];
   for (let node = root; node && node.parentElement; node = node.parentElement) {
-    path.unshift(Array.prototype.indexOf.call(node.parentElement.children, node));
+    path.unshift(identity(node));
   }
   const visible = (() => {
     const rect = root.getBoundingClientRect();
@@ -192,7 +201,7 @@ _COMPOSER_METADATA_JS = r"""
   const ancestorPath = ancestor ? (() => {
     const result = [];
     for (let node = ancestor; node && node.parentElement; node = node.parentElement) {
-      result.unshift(Array.prototype.indexOf.call(node.parentElement.children, node));
+      result.unshift(identity(node));
     }
     return result;
   })() : null;
