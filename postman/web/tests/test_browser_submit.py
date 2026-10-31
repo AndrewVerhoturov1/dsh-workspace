@@ -955,6 +955,81 @@ console.log(JSON.stringify({length: actual.length, sha256: hash(actual), joined,
         self.assertEqual(len(active), 1)
         self.assertGreaterEqual(active[0]["candidateCount"], 2)
 
+    @unittest.skipUnless(shutil.which("node"), "Node.js is required for DOM identity regression")
+    def test_composer_identity_survives_sibling_insertion_but_not_replacement(self):
+        script = r"""
+const vm = require('vm');
+const metadata = vm.runInNewContext(process.argv[1], {
+  Node: {TEXT_NODE: 3, ELEMENT_NODE: 1},
+  getComputedStyle: () => ({visibility: 'visible', display: 'block'}),
+});
+const doc = {};
+const node = (parent = null, editable = false) => {
+  const n = {ownerDocument: doc, parentElement: parent, children: [], childNodes: [],
+    tagName: 'DIV', id: '', innerText: '', textContent: '',
+    getAttribute: name => name === 'contenteditable' && editable ? 'true' : '',
+    getBoundingClientRect: () => ({width: 100, height: 20}),
+    getClientRects: () => [{}], closest: () => null};
+  if (parent) parent.children.push(n);
+  return n;
+};
+const top = node(), host = node(top), live = node(host, true);
+const before = metadata(live);
+// React inserts a sibling while the aliases are read: same DOM node, new index.
+const sibling = node(host); host.children = [sibling, live];
+const after = metadata(live);
+// A genuinely different editor can occupy the same positional path.
+const other = node(host, true); host.children = [sibling, other];
+const replacement = metadata(other);
+console.log(JSON.stringify({before, after, replacement}));
+"""
+        result = subprocess.run([shutil.which("node"), "-e", script, submit._COMPOSER_METADATA_JS],
+                                check=True, capture_output=True, text=True, encoding="utf-8")
+        evidence = json.loads(result.stdout)
+        self.assertEqual(evidence["before"]["domPath"], evidence["after"]["domPath"])
+        self.assertNotEqual(evidence["before"]["domPath"], evidence["replacement"]["domPath"])
+
+        class Editor(FakeLocator):
+            def __init__(self, page, metadata):
+                super().__init__(page, "composer")
+                self.metadata = metadata
+
+            def evaluate(self, script):
+                return {**self.metadata, "innerText": self.page.composer_text,
+                        "textContent": self.page.composer_text,
+                        "semanticText": self.page.composer_text,
+                        "paragraphText": self.page.composer_text}
+
+        class Page(FakePage):
+            def __init__(self, ambiguous=False):
+                super().__init__(composer_text="controlled prompt")
+                self.ambiguous = ambiguous
+                self._postman_presend = {"ownedUrl": self.url, "sendAttempted": False}
+
+            def locator(self, selector):
+                if selector in submit.COMPOSER_SNAPSHOT_SELECTORS:
+                    version = "before" if selector == "#prompt-textarea" else (
+                        "replacement" if self.ambiguous else "after")
+                    return Editor(self, evidence[version])
+                return super().locator(selector)
+
+        page = Page()
+        exact, details = submit._exact_prompt_readback(page, "controlled prompt")
+        self.assertTrue(exact)
+        self.assertEqual(details["logicalComposerCountAfterFill"], 1)
+        sent = submit.submit_once(page, page.locator("#prompt-textarea"),
+                                  "controlled prompt", submit.SendGuard(), timeout_ms=0)
+        self.assertTrue(sent["ok"], sent)
+        self.assertEqual(page.click_count, 1)
+        page = Page(ambiguous=True)
+        refused = submit.submit_once(page, page.locator("#prompt-textarea"),
+                                     "controlled prompt", submit.SendGuard(), timeout_ms=0)
+        self.assertFalse(refused["ok"])
+        self.assertTrue(refused["details"]["exactPromptReadback"])
+        self.assertFalse(refused["details"]["singleLogicalComposer"])
+        self.assertEqual(refused["sendState"], submit.SEND_PROVEN_NOT_SENT)
+        self.assertEqual(page.click_count, 0)
+
     def test_composer_snapshot_deduplicates_all_aliases_of_one_node(self):
         class Node(FakeLocator):
             def __init__(self):
