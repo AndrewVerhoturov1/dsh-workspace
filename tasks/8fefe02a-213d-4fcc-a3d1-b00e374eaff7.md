@@ -1,0 +1,28 @@
+POSTMAN_REQUEST_ID: REQ_20261031T213048Z_2166
+Режим: WRITE_APPROVED_TARGET. Область для чтения: C:\PROJECTS\Real-tactic-wargame\.worktrees\perception-attention-subjective-memory-v2-implementation
+Перед любыми другими DevSpace-инструментами вызови open_workspace с path='postman-writer:8fefe02a-213d-4fcc-a3d1-b00e374eaff7'. Если адрес недоступен, сообщи CAPABILITY_UNAVAILABLE обычным текстом; Этот адрес связывает выполнение с заданием. Назначенная область записи: C:\PROJECTS\Real-tactic-wargame\.worktrees\perception-attention-subjective-memory-v2-implementation.
+Leader разрешил Computer Use для этого поручения.
+DevSpace Bash не является песочницей. Не выходи за scope; не читай секреты/runtime credentials, binding и служебные файлы, не меняй права, не создавай AI-агентов, не устанавливай и не перезапускай Host/DevSpace. GitHub writes/commit/push/PR/merge запрещены здесь; отдельный местный маршрут требует разрешения.
+## Инструкции Host
+instructions_sha256: ec938ce03904eadd3214ef3129f9e261f6d668cd25a726636f68c6420409b907
+- https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/7cbfca08b33f9cdbe8abe1fe513fa5291ea6b6ae/postman/devspace/SKILL.md
+- https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/7cbfca08b33f9cdbe8abe1fe513fa5291ea6b6ae/AGENTS.md
+- https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/7cbfca08b33f9cdbe8abe1fe513fa5291ea6b6ae/REPO_POLICY.md
+- https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/7cbfca08b33f9cdbe8abe1fe513fa5291ea6b6ae/docs/workflow/TASK_CONTRACT.md
+- C:\PROJECTS\Real-tactic-wargame\.worktrees\perception-attention-subjective-memory-v2-implementation\AGENTS.md
+Bell — отдельное узкое разрешение через настоящий DevSpace Bash (не читать скрипт/JSON):
+pwsh -NoProfile -NonInteractive -File 'C:\Users\Andrew\AppData\Local\DSH\Postman\devspace\8fefe02a-213d-4fcc-a3d1-b00e374eaff7\signal.ps1' <done|need-decision|blocked> [-Message 'причина'] [-Report 'report.md']
+## Поручение Leader
+Продолжи незавершённый этап 3 §§6–7 плана plans/2026-10-31-perception-attention-subjective-memory-v2.md в той же рабочей копии и беседе, не начинай заново. Предыдущий результат: транспортное Continuation SEND_UNKNOWN, инженерного bell нет. Worker read-only установил HEAD84517b99ba0c013342dfe3afedde1ca7422b4035;18 изменённых tracked файлов,436 insertions/143 deletions, новые scripts/perception_stage3_smoke.{ts,mjs} и src/core/perception/PerceptionEpisode.ts. artifacts/perception-v2-stage3/report.md пока лишь стартовые15 строк. Сначала установи фактический прогресс и статус собственных native jobs прежнего задания через существующий Bash status; не повторяй неизвестный запуск или уже успешные неизменённые проверки. Обнови отчёт изменениями/точными jobs/проверками прежде продолжения.
+Нужен законченный Stage3: нормализованная физическая Q отдельно от внимания; откалиброванные qualityLow/reliable/recognition; детерминированный исход по значимому эпизоду (seed сцены/наблюдателя/внутреннего источника/index), сохранение без переброса; единственные канонические presenceEvidence/recognitionEvidence, текущий dt, раздельные gain/decay на каждом шаге в профилях; P<25 приватно, cue25/suspicion50/contact80, ID приI120/P80/свежем достаточном зрении, confirmedI150; звуки/доклады/огонь не создают визуальныйI; явная миграция и безопасная свежесть/fire; диагностические причины и совместимый UI. Stage4 C/fusion, Stage5 aging, Stage6 масштабирование не начинать. Сохрани Stage1 anonymity/subjective quantization и Stage2 current-dt/shared-group/detail/max2 new LOS.
+Замечание по прочитанному PerceptionEpisode.ts: абсолютный пожизненный предел episodeIndex<8 (стр126) не заменяет гистерезис и противоречит отсутствию вечной слепоты после настоящих новых сигналов (§14). Защита от jitter/панели/переключенийИИ не должна запрещать последующие реальные события. Учти reappearance/изменение условий и повторы выстрелов, а не только сравнение строк action. Не введи таймер, который сам перебрасывает статичную цель. Проверяй наблюдаемое поведение. Код пока промежуточный и не принят.
+Приёмка: targeted Stage3 тесты (500м static marginal разные seed/один seed/нет гарантии со временем; физический блок; новый реальный сигнал; jitter/mode toggles; save/load; P/I/decay/миграция/свежесть/нет publicP<25;30/60/120+uneven dt), затронутые Stage1/2 regressions,typecheck/build. Stage0 fixtures не переписывать; superseded Stage1 низкоP cue тесты обновить можно. Не повторять известные старые forest assertion/missing AI JSON failures. Если менялся UI — реальная проверка точного URL этой рабочей копии, GPU по факту. Пользовательский Game5173 не останавливать. Работа cover-агента вне scope: src/core/cover/* и physical/heightfield/ray contracts не менять без согласованного контракта. docs/plans/ideas не менять, Git mutation не делать, сохранить .tmp-perception_stage0_browser_fixture_smoke-45236/. Финальный artifacts/perception-v2-stage3/report.md: формулы/калибровка/пути/команды/точные outcomes/native job settlement. Остановись на готовом Stage3 и передай bell.
+## Обязательный формат итогового ответа
+После bell напиши итоговый ответ строго между следующими точными маркерами этого задания.
+Если bell недоступен или поручение требует только текст, эти маркеры всё равно обязательны.
+Каждый маркер — отдельная строка без кавычек, Markdown, пробелов или замены REQ.
+Между ними — непустой итог, ограничения и результаты проверок; вне маркеров ничего не пиши.
+<<<POSTMAN_RESULT_BEGIN:REQ_20261031T213048Z_2166>>>
+<итог работы либо BLOCKED/NEED_DECISION с причиной>
+<<<POSTMAN_RESULT_END:REQ_20261031T213048Z_2166>>>
+Маркеры нужны скрипту получения ответа; они не заменяют bell и не доказывают PASS.
