@@ -44,6 +44,7 @@ import process_lock
 CHATGPT_URL = bootstrap.CHATGPT_URL
 DEFAULT_CDP_URL = bootstrap.DEFAULT_CDP_URL
 DEFAULT_TIMEOUT_MS = 30_000
+DEFAULT_NAVIGATION_TIMEOUT_MS = 150_000
 
 PAGE_OWNED = "PAGE_OWNED"
 FRESH_CHAT_CONFIRMED = "FRESH_CHAT_CONFIRMED"
@@ -891,9 +892,10 @@ def _wait_until(
         sleep(max(poll_ms, 1) / 1000.0)
 
 
-def prepare_fresh_chat(page: Any, *, timeout_ms: int = DEFAULT_TIMEOUT_MS) -> dict[str, Any]:
+def prepare_fresh_chat(page: Any, *, timeout_ms: int = DEFAULT_TIMEOUT_MS,
+                       navigation_timeout_ms: int = DEFAULT_NAVIGATION_TIMEOUT_MS) -> dict[str, Any]:
     try:
-        page.goto(CHATGPT_URL, wait_until="domcontentloaded", timeout=timeout_ms)
+        page.goto(CHATGPT_URL, wait_until="domcontentloaded", timeout=navigation_timeout_ms)
     except Exception as exc:
         return {
             "ok": False,
@@ -950,6 +952,7 @@ def prepare_existing_chat(
     timeout_ms: int = DEFAULT_TIMEOUT_MS,
     navigate: bool = True,
     prior_request_id: str | None = None,
+    navigation_timeout_ms: int = DEFAULT_NAVIGATION_TIMEOUT_MS,
 ) -> dict[str, Any]:
     if not is_bound_chat_url(conversation_url):
         return {"ok": False, "code": SUBMIT_INVALID_CONFIG, "details": {"reason": "invalid_conversation_url"}}
@@ -960,7 +963,7 @@ def prepare_existing_chat(
         return {"ok": False, "code": EXISTING_CHAT_NOT_CONFIRMED, "details": {"reason": "current_chat_mismatch"}}
     if navigate:
         try:
-            page.goto(conversation_url, wait_until="domcontentloaded", timeout=timeout_ms)
+            page.goto(conversation_url, wait_until="domcontentloaded", timeout=navigation_timeout_ms)
         except Exception as exc:
             return {"ok": False, "code": SUBMIT_NAVIGATION_FAILED, "details": {"message": str(exc)}}
 
