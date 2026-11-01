@@ -1,0 +1,68 @@
+--- a/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js
++++ b/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js
+@@ -4 +4 @@
+-import { dirname, join, parse, resolve, toNamespacedPath } from "node:path";
++import { basename, dirname, join, parse, resolve, toNamespacedPath } from "node:path";
+@@ -1037,2 +1037,2 @@
+-	async list(signal) {
+-		return (await this.listArtifacts(signal)).map((artifact) => artifact.header);
++	async list(signal, { excludedSessionIds = this.ctx.get("workspaceRegistry")?.archivedSessionIds ?? [] } = {}) {
++		return (await this.listArtifacts(signal, excludedSessionIds)).map((artifact) => artifact.header);
+@@ -1041 +1041 @@
+-	async listSnapshots(signal) {
++	async listSnapshots(signal, { excludedSessionIds = this.ctx.get("workspaceRegistry")?.archivedSessionIds ?? [] } = {}) {
+@@ -1043 +1043 @@
+-		for (const artifact of await this.listArtifacts(signal)) {
++		for (const artifact of await this.listArtifacts(signal, excludedSessionIds)) {
+@@ -1060,3 +1060,4 @@
+-	async listArtifacts(signal) {
+-		signal?.throwIfAborted();
+-		await this.ensureRootEncoding();
++	async listArtifacts(signal, excludedSessionIds = []) {
++		signal?.throwIfAborted();
++		const excluded = new Set(excludedSessionIds.map(encodeSegment));
++		await this.ensureRootEncoding(excludedSessionIds);
+@@ -1067 +1068 @@
+-			const directories = await this.listSessionDirs(project, signal);
++			const directories = (await this.listSessionDirs(project, signal)).filter(dir => !excluded.has(basename(dir)));
+@@ -1405,2 +1406,2 @@
+-	ensureRootEncoding() {
+-		this.rootEncodingCheck ??= this.checkRootEncoding();
++	ensureRootEncoding(excludedSessionIds = []) {
++		this.rootEncodingCheck ??= this.checkRootEncoding(excludedSessionIds);
+@@ -1409 +1410,2 @@
+-	async checkRootEncoding() {
++	async checkRootEncoding(excludedSessionIds = []) {
++		const excluded = new Set(excludedSessionIds.map(encodeSegment));
+@@ -1411 +1413 @@
+-			const directories = await this.listSessionDirs(project);
++			const directories = (await this.listSessionDirs(project)).filter(dir => !excluded.has(basename(dir)));
+--- a/node_modules/@deepseek-ai/dsh-workspace/lib/index.js
++++ b/node_modules/@deepseek-ai/dsh-workspace/lib/index.js
+@@ -321 +321 @@
+-			const headers = await this.ctx.sessionPersistence.list();
++			const headers = await this.ctx.sessionPersistence.list(undefined, { excludedSessionIds: this.state.archivedSessionIds });
+@@ -324 +324 @@
+-		} else if (this.table.size > 0) await this.replaceHeaderIndex(await this.ctx.sessionPersistence.list());
++		} else if (this.table.size > 0) await this.replaceHeaderIndex(await this.ctx.sessionPersistence.list(undefined, { excludedSessionIds: this.state.archivedSessionIds }));
+@@ -325,0 +326 @@
++		this.ctx.on("session/created", session => this.headers.set(session.id, session.header));
+@@ -365,0 +367,6 @@
++	}
++	/** In-memory lineage catalog; no persistence reads or Agent activation. */
++	sessionHeaders() {
++		const headers = new Map(this.headers);
++		for (const session of this.ctx.get("sessions")?.list() ?? []) headers.set(session.id, session.header);
++		return [...headers.values()];
+@@ -712,0 +720 @@
++				if (this.requireState().archivedSessionIds.includes(sessionId)) continue;
+--- a/node_modules/@deepseek-ai/dsh-host-apiproxy/lib/index.js
++++ b/node_modules/@deepseek-ai/dsh-host-apiproxy/lib/index.js
+@@ -2181,0 +2182 @@
++		const archived = new Set(ctx.workspaceRegistry.archivedSessionIds);
+@@ -2190 +2191 @@
+-		const items = ctx.sessions.list().map(summarizeAttached);
++		const items = ctx.sessions.list().filter(session => !archived.has(session.id)).map(summarizeAttached);
+@@ -2195 +2196 @@
+-			const cold = (await persistence.list(signal)).filter((meta) => !attached.has(meta.id) && meta.cwd !== void 0);
++			const cold = ctx.workspaceRegistry.sessionHeaders().filter((meta) => !archived.has(meta.id) && !attached.has(meta.id) && meta.cwd !== void 0);

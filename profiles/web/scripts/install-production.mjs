@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { spawnSync } from 'node:child_process'
 import { applyPostmanNativeChildCutoff } from '../../../system/patches/apply-postman-native-child-cutoff.mjs'
 import { applyHarnessSessionPerformance } from '../../../system/patches/apply-harness-session-performance.mjs'
+import { applyHarnessArchiveIdle } from '../../../system/patches/apply-harness-archive-idle.mjs'
 
 const profileRoot = resolve(fileURLToPath(new URL('..', import.meta.url)))
 const repositoryRoot = resolve(profileRoot, '../..')
@@ -64,6 +65,7 @@ const sessionIgnorableAnchors = profilePackage.dsh?.profile?.bundles?.includes('
   ? [sdkAnchor, requireFromProfile.resolve('dsh-cost-panel/package.json')] : []
 const nativeTargets = applyPostmanNativeChildCutoff([sdkAnchor, resolve(postmanRoot, 'package.json')], { sessionIgnorableAnchors })
 const sessionTargets = applyHarnessSessionPerformance(sdkAnchor)
+applyHarnessArchiveIdle(sdkAnchor)
 console.log('session performance patches installed: ' + sessionTargets.join(', '))
 const { SubagentRuntime } = await import(pathToFileURL(createRequire(sdkAnchor).resolve('@deepseek-ai/dsh-subagent')).href)
 for (const method of ['closeContinuableChild', 'inspectClosedContinuableChild', 'compactContinuableChild']) {

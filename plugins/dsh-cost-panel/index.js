@@ -4,7 +4,7 @@ import { isAgentLoopRequest } from '@deepseek-ai/dsh-llm';
 import { Session } from '@deepseek-ai/dsh-session';
 import { foldAttempts, summarize, taskTeam, mergeUsage } from './accounting.js';
 export const name = 'cost-panel';
-export const inject = ['sessions', 'llm', 'connection', 'sessionProjections'];
+export const inject = ['sessions', 'llm', 'connection', 'sessionProjections', 'workspaceRegistry'];
 export function apply(ctx) {
   if (Session.create('cost-panel-compatibility-probe').append('cost-panel/attempt', {}, { ignorable: true }).ignorable !== true)
     throw new Error('cost-panel: install the Session ignorable-event compatibility patch before enabling the plugin (see README)');
@@ -38,19 +38,18 @@ export function apply(ctx) {
   ctx.effect(() => ctx.connection.rpc.handle('/cost-panel', async (endpoint, payload, signal) => {
     if (endpoint !== 'get' || typeof payload?.sessionId !== 'string' || payload.sessionId.length > 200) return { ok: false, error: { code: 'bad-request', message: 'Expected sessionId', details: { issues: [] } } };
     try {
+      const archived = new Set(ctx.workspaceRegistry.archivedSessionIds);
+      if (archived.has(payload.sessionId)) return { ok: false, error: { code: 'session-archived', message: 'Archived sessions are excluded from accounting', details: {} } };
       const persistence = ctx.get('sessionPersistence');
       let incomplete = !persistence;
-      const headers = new Map();
-      if (persistence) {
-        try { for (const header of await persistence.list(signal)) headers.set(header.id, header); }
-        catch (error) { signal.throwIfAborted(); incomplete = true; }
-      }
+      const headers = new Map(ctx.workspaceRegistry.sessionHeaders().map(header => [header.id, header]));
       for (const s of ctx.sessions.list()) headers.set(s.id, s.header);
       const team = taskTeam([...headers.values()], payload.sessionId);
+      const teamIds = team.ids.filter(id => !archived.has(id));
       const catalog = JSON.parse(await readFile(new URL('./model-prices.json', import.meta.url), 'utf8'));
       const summaries = new Map();
       incomplete ||= team.incomplete;
-      for (const id of new Set([...team.ids, payload.sessionId])) {
+      for (const id of new Set([...teamIds, payload.sessionId])) {
         signal.throwIfAborted();
         const live = ctx.sessions.get(id);
         if (live) summaries.set(id, summarize(foldAttempts(live.header, live.events), catalog));
@@ -69,8 +68,8 @@ export function apply(ctx) {
       let total = 0;
       let costKnown = false;
       let duplicateUncertain = false;
-      for (const id of team.ids) { const s = summaries.get(id); if (!s) incomplete = true; else { total += s.total; costKnown ||= s.costKnown; incomplete ||= s.costUnknown; duplicateUncertain ||= s.duplicateUncertain; } }
-      return { ok: true, value: { sessionId: payload.sessionId, own, team: { rootId: team.rootId, sessions: team.ids.length, total, costKnown, costUnknown: incomplete, duplicateUncertain }, checkedDate: catalog.checkedDate } };
+      for (const id of teamIds) { const s = summaries.get(id); if (!s) incomplete = true; else { total += s.total; costKnown ||= s.costKnown; incomplete ||= s.costUnknown; duplicateUncertain ||= s.duplicateUncertain; } }
+      return { ok: true, value: { sessionId: payload.sessionId, own, team: { rootId: team.rootId, sessions: teamIds.length, total, costKnown, costUnknown: incomplete, duplicateUncertain }, checkedDate: catalog.checkedDate } };
     } catch (error) {
       if (signal.aborted) return { ok: false, error: { code: 'cancelled', message: 'Request cancelled', details: {} } };
       ctx.logger.warn('cost-panel: accounting read failed', error);
