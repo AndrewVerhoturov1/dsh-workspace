@@ -280,6 +280,20 @@ function createProcessController({ config: configOverrides = {}, runtime, deps =
     return isDshHarnessProcess(operations.getProcessRecord(pid), resolvedRuntime, config) ? pid : null
   }
 
+  function cleanupPostmanPages() {
+    const script = path.join(config.workingDirectory, 'postman', 'web', 'cleanup_owned_pages.py')
+    if (!fs.existsSync(script)) return
+    try {
+      const result = operations.execFileSync('python', ['-X', 'utf8', script, '--apply'], {
+        encoding: 'utf8', timeout: 20_000, windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+      log(config, `Postman page cleanup: ${String(result).trim()}`)
+    } catch {
+      log(config, 'Postman page cleanup unavailable; browser and live pages preserved.')
+    }
+  }
+
   async function start() {
     const found = await discover()
     if (found.status === 'PORT_OCCUPIED_BY_FOREIGN_PROCESS') {
@@ -293,6 +307,7 @@ function createProcessController({ config: configOverrides = {}, runtime, deps =
       return { status: 'ALREADY_RUNNING', pid: found.pid, adopted: found.source !== 'state' }
     }
 
+    cleanupPostmanPages()
     const child = operations.spawn(resolvedRuntime.nodePath, [
       '--expose-internals',
       resolvedRuntime.dshBin,
