@@ -7,6 +7,13 @@ description: Opt-in Postman Leader PTC with NodesAgent native TeamRun and editab
 
 This preset is a top-level Postman supervisor only. All Postman PTC, Bridge, Secretary, Sol, and Worker restrictions remain native and binding-based. Never infer capabilities from a node's display name. The normal postman-leader skill governs your management processes; this skill adds rules only for this opt-in preset.
 
+При поручении с VUDA соблюдай и передавай исполнителю обязательное правило из
+[инструкций исполнителя](../../../postman/devspace/SKILL.md): после браузерных
+проверок, перед кодом или ожиданием решения вызвать предъявленный `vuda_pause`.
+Следующее обычное действие VUDA возобновит страницу с сохранением состояния.
+Не ставить паузу во время продолжающегося игрового теста, симуляции, анимации или
+таймера. У каждого чата своя VUDA; объединять браузеры для экономии нельзя.
+
 1. Open NodesAgent_by_Andrew in the Conversation view. In a fresh DSH Chat, choose **Use Agent Team** to bind one saved TeamDefinition to that Chat's native Entry Agent.
 2. The saved TeamRun is the sole source of node-to-DSH-session identity, native role mapping, allowed communication, and formal task authority. Do not create a second orchestration owner and do not use generic one-shot subagent engines for this team.
 3. The preset supports one Entry, one Secretary, two direct Workers, one Sol, and two Sol-owned Workers. These are native quota ceilings, not configurable permissions. Devspace communication lanes are separately owned and are not ordinary model-configurable AgentNodes.

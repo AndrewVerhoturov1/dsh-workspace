@@ -33,7 +33,9 @@ async function fixture(t, { dotenv = true } = {}) {
     '.agents/skills/pixel-perfect-ui-port/references/vuda-empty.config': '# empty\n',
     'cache/_npx/existing/node_modules/visual-ui-debug-agent-mcp/package.json': JSON.stringify({ name: 'visual-ui-debug-agent-mcp', version: '1.1.0' }),
     'cache/_npx/existing/node_modules/visual-ui-debug-agent-mcp/dist/index.js': '',
-    'cache/_npx/existing/node_modules/@modelcontextprotocol/sdk/package.json': JSON.stringify({ name: '@modelcontextprotocol/sdk', exports: { './client': './client.js', './client/stdio.js': './stdio.js' } }),
+    'cache/_npx/existing/node_modules/@modelcontextprotocol/sdk/package.json': JSON.stringify({ name: '@modelcontextprotocol/sdk', type: 'module', exports: { './client': './client.js', './client/stdio.js': './stdio.js', './server': './dist/cjs/server/index.js' } }),
+    'cache/_npx/existing/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/index.js': '',
+    'cache/_npx/existing/node_modules/@modelcontextprotocol/sdk/dist/esm/server/index.js': 'export class Server { setRequestHandler() {} }',
     'cache/_npx/existing/node_modules/@modelcontextprotocol/sdk/client.js': '',
     'cache/_npx/existing/node_modules/@modelcontextprotocol/sdk/stdio.js': '',
   }

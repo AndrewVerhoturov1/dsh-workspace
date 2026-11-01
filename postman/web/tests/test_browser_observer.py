@@ -159,6 +159,20 @@ class FakeClock:
 
 
 class ObserverTests(unittest.TestCase):
+    def test_phase_and_correlation_share_one_snapshot_per_poll(self):
+        page = FakePage([{observer.TURN_CONTAINER_SELECTORS[1]: [turn("user", "probe")]}])
+        clock = [0.0]
+        def sleep(seconds):
+            clock[0] += seconds
+        with patch.object(observer, "snapshot_turns", wraps=observer.snapshot_turns) as snapshots, \
+             patch.object(observer, "inspect_answer_phase", wraps=observer.inspect_answer_phase) as phases:
+            result = observer.observe_next_assistant(page, "probe", page.url,
+                timeout_ms=2500, poll_ms=1000, sleep=sleep, monotonic=lambda: clock[0])
+        self.assertFalse(result["ok"])
+        self.assertEqual(clock[0], 2.5)
+        self.assertGreater(phases.call_count, 1)
+        self.assertEqual(snapshots.call_count, phases.call_count)
+
     def test_slow_dom_poll_preserves_fast_external_signal_delivery(self):
         event = {"ok": True, "code": "DEVSPACE_SIGNAL_RECEIVED", "details": {}}
         counts = []

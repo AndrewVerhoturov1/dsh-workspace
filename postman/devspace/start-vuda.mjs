@@ -2,6 +2,7 @@ import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { findVudaRuntime } from './vuda-runtime.mjs'
+import { configureVudaPause, installVudaPauseHandlers } from './vuda-pause.mjs'
 
 import { configureHardwareChromium } from '../../.agents/skills/pixel-perfect-ui-port/scripts/browser-runtime.mjs'
 export { configureHardwareChromium as configureVudaChromium, requireHardwareGpu, withHardwareChromium }
@@ -20,6 +21,12 @@ export async function startVuda(options) {
   const require = createRequire(runtime.serverEntry)
   const { chromium } = require('playwright')
   const closeBrowsers = configureHardwareChromium(chromium)
+  const lifecycle = configureVudaPause(chromium)
+  // Upstream imports the SDK's ESM build; createRequire resolves its CJS build.
+  const sdkServer = new URL('../../esm/server/index.js',
+    pathToFileURL(require.resolve('@modelcontextprotocol/sdk/server')))
+  const { Server } = await import(sdkServer.href)
+  const restoreHandlers = installVudaPauseHandlers(Server, lifecycle)
   let closing
   const shutdown = () => {
     // Windows MCP shutdown closes stdin before it forcibly terminates Node.
@@ -30,7 +37,8 @@ export async function startVuda(options) {
   process.stdin.once('close', shutdown)
   process.once('SIGINT', shutdown)
   process.once('SIGTERM', shutdown)
-  await import(pathToFileURL(runtime.serverEntry).href)
+  try { await import(pathToFileURL(runtime.serverEntry).href) }
+  finally { restoreHandlers() }
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

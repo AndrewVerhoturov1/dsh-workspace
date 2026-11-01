@@ -504,7 +504,8 @@ def inspect_answer_phase(page: Any, expected_prompt: str, expected_chat_url: str
                          *, tracker: AnswerPhaseTracker | None = None,
                          image_mode: bool = False,
                          anchor_binding: dict[str, Any] | None = None,
-                         ignore_system_banner: bool = False) -> dict[str, Any]:
+                         ignore_system_banner: bool = False,
+                         turn_snapshot: tuple[list[dict[str, Any]], str] | None = None) -> dict[str, Any]:
     """Classify only a correlated turn using structural DOM evidence."""
     tracker = tracker if tracker is not None else AnswerPhaseTracker()
     details: dict[str, Any] = {"chatUrl": str(getattr(page, "url", "") or ""),
@@ -513,8 +514,9 @@ def inspect_answer_phase(page: Any, expected_prompt: str, expected_chat_url: str
     if details["chatUrl"] != expected_chat_url or not submit.is_bound_chat_url(expected_chat_url):
         details["phaseSource"] = "chat_correlation_lost"
         return details
-    turns, selector = snapshot_turns(page, image_mode=image_mode, expected_prompt=expected_prompt,
-                                         anchor_binding=anchor_binding)
+    turns, selector = (turn_snapshot if turn_snapshot is not None else
+                       snapshot_turns(page, image_mode=image_mode, expected_prompt=expected_prompt,
+                                      anchor_binding=anchor_binding))
     correlation = (correlate_next_assistant(turns, expected_prompt, anchor_binding=anchor_binding)
                    if anchor_binding is not None else correlate_next_assistant(turns, expected_prompt))
     anchor = correlation.get("anchorIndex")
@@ -919,8 +921,11 @@ def observe_next_assistant(
                 },
             )
 
+        # One snapshot per observation; keep phase and correlation on the same DOM.
+        turn_snapshot = snapshot_turns(page, image_mode=image_mode, expected_prompt=expected_prompt,
+                                       anchor_binding=anchor_binding)
         phase = inspect_answer_phase(page, expected_prompt, expected_chat_url, tracker=phases, image_mode=image_mode, anchor_binding=anchor_binding,
-                                     ignore_system_banner=system_probe is not None)
+                                     ignore_system_banner=system_probe is not None, turn_snapshot=turn_snapshot)
         if phase["phase"] == ADDITIONAL_PROCESSING:
             last_code = ADDITIONAL_PROCESSING
             last_details = phase
@@ -932,8 +937,7 @@ def observe_next_assistant(
             if received is not None:
                 return received
             continue
-        turns, selector = snapshot_turns(page, image_mode=image_mode, expected_prompt=expected_prompt,
-                                         anchor_binding=anchor_binding)
+        turns, selector = turn_snapshot
         correlation = (correlate_next_assistant(turns, expected_prompt, anchor_binding=anchor_binding)
                    if anchor_binding is not None else correlate_next_assistant(turns, expected_prompt))
         last_code = correlation["code"]

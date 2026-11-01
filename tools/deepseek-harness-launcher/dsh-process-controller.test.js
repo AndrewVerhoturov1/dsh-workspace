@@ -21,9 +21,16 @@ function commandLine({ profile = 'web', port = 4173, dshBin = runtime.dshBin } =
   return `"${runtime.nodePath}" --expose-internals ${dshBin} --profile ${profile} --port ${port} --no-open`
 }
 
-function createFixture({ state, listenerPids = [], records = {}, probe = true, spawnPid = 7000, spawnListenerPid = null } = {}) {
+function createFixture({ state, listenerPids = [], records = {}, probe = true, spawnPid = 7000, spawnListenerPid = null, pageCleanup = false, cleanupFails = false } = {}) {
   const launcherRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-process-controller-'))
   const config = { launcherRoot, startTimeoutMs: 100, stopTimeoutMs: 100 }
+  const cleanupCalls = []
+  if (pageCleanup) {
+    config.workingDirectory = launcherRoot
+    const script = path.join(launcherRoot, 'postman', 'web', 'cleanup_owned_pages.py')
+    fs.mkdirSync(path.dirname(script), { recursive: true })
+    fs.writeFileSync(script, '# fixture\n')
+  }
   if (state) fs.writeFileSync(path.join(launcherRoot, 'dsh-runtime.json'), `${JSON.stringify(state)}\n`, 'utf8')
   const processRecords = new Map(Object.entries(records).map(([pid, record]) => [Number(pid), record]))
   let nextPid = spawnPid
@@ -42,6 +49,11 @@ function createFixture({ state, listenerPids = [], records = {}, probe = true, s
       return { pid, unref() {} }
     },
     execFileSync: (_file, args) => {
+      if (_file === 'python') {
+        cleanupCalls.push({ args, activePids: [...processRecords.keys()] })
+        if (cleanupFails) throw new Error('CDP unavailable')
+        return '{"closed":[]}'
+      }
       const pid = Number(args[args.indexOf('/PID') + 1])
       processRecords.delete(pid)
       listenerPids.splice(0, listenerPids.length)
@@ -54,6 +66,7 @@ function createFixture({ state, listenerPids = [], records = {}, probe = true, s
     cleanup: () => fs.rmSync(launcherRoot, { recursive: true, force: true }),
     processRecords,
     listenerPids,
+    cleanupCalls,
     get spawnOptions() { return spawnOptions },
   }
 }
@@ -169,4 +182,23 @@ test('should parse controller options for the desktop and web callers', () => {
 
   const preserved = parseArgs(['restart', '--preserve-children'])
   assert.equal(preserved.config.preserveChildren, true)
+})
+
+test('restart cleans orphan pages once after old Host exits and before new Host starts', async () => {
+  const fixture = createFixture({ pageCleanup: true, state: { pid: 1210 }, listenerPids: [1210],
+    records: { 1210: { pid: 1210, commandLine: commandLine() } }, spawnPid: 1211 })
+  try {
+    assert.equal((await fixture.controller.restart()).status, 'RESTARTED')
+    assert.equal(fixture.cleanupCalls.length, 1)
+    assert.deepEqual(fixture.cleanupCalls[0].activePids, [])
+    assert.equal(fixture.cleanupCalls[0].args.at(-1), '--apply')
+  } finally { fixture.cleanup() }
+})
+
+test('cleanup failure does not prevent Host start or trigger browser termination', async () => {
+  const fixture = createFixture({ pageCleanup: true, cleanupFails: true })
+  try {
+    assert.equal((await fixture.controller.start()).status, 'STARTED')
+    assert.equal(fixture.cleanupCalls.length, 1)
+  } finally { fixture.cleanup() }
 })
