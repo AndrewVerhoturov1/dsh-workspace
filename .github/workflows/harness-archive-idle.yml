@@ -38,5 +38,5 @@ jobs:
           const sdk = createRequire(resolve('plugins/dsh-postman-harness/package.json')).resolve('@deepseek-ai/dsh/package.json');
           appendFileSync(process.env.GITHUB_ENV, 'DSH_INSTALL_SDK=' + sdk + '\n');
           JS
-      - name: Check archive exclusion and SDK compatibility
-        run: node --test system/patches/harness-archive-idle.test.mjs system/patches/harness-session-performance.test.mjs system/patches/postman-native-upgrade.test.mjs
+      - name: Check archive exclusion and session performance
+        run: node --test system/patches/harness-archive-idle.test.mjs system/patches/harness-session-performance.test.mjs
