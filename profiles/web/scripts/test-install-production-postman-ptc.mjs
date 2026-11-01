@@ -32,16 +32,13 @@ try {
   assert.notEqual(realpathSync(stagingRoot), realpathSync(repositoryRoot))
   run('tar', ['-xf', 'repository.tar', '-C', '.'], stagingRoot)
   rmSync(archivePath)
-  // Exercise the current frozen profile graph and canonical panel, including uncommitted changes.
+  // Exercise the current frozen profile graph, including uncommitted changes.
   const graphFiles = ['package.json','pnpm-lock.yaml','pnpm-workspace.yaml']
   for (const name of graphFiles)
     copyFileSync(resolve(repositoryRoot,'profiles/web',name),resolve(stagingRoot,'profiles/web',name))
-  cpSync(resolve(repositoryRoot,'plugins/dsh-cost-panel'),resolve(stagingRoot,'plugins/dsh-cost-panel'), {recursive:true,filter:path=>!path.split(sep).includes('node_modules')})
   // Exercise the current installer, including changes not yet committed to HEAD.
   copyFileSync(resolve(repositoryRoot, 'profiles/web/scripts/install-production.mjs'),
     resolve(stagingRoot, 'profiles/web/scripts/install-production.mjs'))
-  copyFileSync(resolve(repositoryRoot, 'plugins/dsh-cost-panel/session-compat.mjs'),
-    resolve(stagingRoot, 'plugins/dsh-cost-panel/session-compat.mjs'))
 
   // Include current transport/runtime sources as well as role code before commit.
   for(const source of ['devspace','postman','plugins/dsh-task-discipline'])
@@ -85,13 +82,7 @@ try {
   const graphBefore = new Map(graphFiles.map(name=>[name,readFileSync(resolve(profileRoot,name))]))
   run(process.execPath, ['profiles/web/scripts/install-production.mjs'], stagingRoot, env)
   const profileRequire = createRequire(resolve(profileRoot,'package.json'))
-  const panelRoot = realpathSync(resolve(stagingRoot,'plugins/dsh-cost-panel'))
-  const installedPanelManifest = realpathSync(profileRequire.resolve('dsh-cost-panel/package.json'))
-  assertInStaging(installedPanelManifest)
-  assert.equal(JSON.parse(readFileSync(installedPanelManifest)).version,'0.1.0')
-  for(const name of ['index.js','client.js','accounting.js','session-compat.mjs','package.json'])
-    assert.deepEqual(readFileSync(resolve(installedPanelManifest,'..',name)),readFileSync(resolve(panelRoot,name)),'canonical panel bytes: '+name)
-  assert.match(readFileSync(resolve(panelRoot,'index.js'),'utf8'),/costPanelRevision/)
+  assert.throws(() => profileRequire.resolve('dsh-cost-panel/package.json'), { code: 'MODULE_NOT_FOUND' })
   const { applyPostmanNativeChildCutoff } = await import(pathToFileURL(resolve(stagingRoot,'system/patches/apply-postman-native-child-cutoff.mjs')).href)
   const targets = applyPostmanNativeChildCutoff([sdkAnchor, resolve(pluginRoot,'package.json')])
   const { applyHarnessSessionPerformance } = await import(pathToFileURL(resolve(stagingRoot, 'system/patches/apply-harness-session-performance.mjs')).href)

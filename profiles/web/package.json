@@ -23,15 +23,11 @@
         "dsh-client-auto-continue",
         "dsh-notification",
         "dsh-tokenledger",
-        "dsh-cost-panel",
         "dsh-branchline",
         "dsh-postman-harness",
         "dsh-ptc-plus"
       ]
     }
-  },
-  "dependenciesMeta": {
-    "dsh-cost-panel": { "injected": true }
   },
   "dependencies": {
     "@anionex/dsh-turn-rewind": "^0.1.2",
@@ -56,7 +52,6 @@
     "dsh-better-sidebar": "link:../../plugins/dsh-better-sidebar-andrew",
     "dsh-branchline": "link:D:/DEEPSEEK/dsh-branchline",
     "dsh-client-auto-continue": "^0.8.1",
-    "dsh-cost-panel": "file:../../plugins/dsh-cost-panel",
     "dsh-codex-oauth": "file:../../vendor/dsh-codex-oauth-0.1.9.tgz",
     "dsh-flowglass-by-andrew": "link:../../plugins/dsh-flowglass-by-andrew",
     "dsh-notification": "^0.1.1",

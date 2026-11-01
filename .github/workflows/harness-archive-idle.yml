@@ -1,0 +1,42 @@
+name: Harness archive exclusion
+
+on:
+  pull_request:
+    paths:
+      - 'system/patches/**'
+      - 'profiles/web/scripts/install-production.mjs'
+      - '.github/workflows/harness-archive-idle.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'system/patches/**'
+      - 'profiles/web/scripts/install-production.mjs'
+      - '.github/workflows/harness-archive-idle.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  native-sdk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '10'
+      - name: Install pinned native SDK
+        run: pnpm --dir plugins/dsh-postman-harness install --frozen-lockfile --ignore-scripts
+      - name: Locate isolated SDK
+        run: |
+          node --input-type=module <<'JS'
+          import { createRequire } from 'node:module';
+          import { appendFileSync } from 'node:fs';
+          import { resolve } from 'node:path';
+          const sdk = createRequire(resolve('plugins/dsh-postman-harness/package.json')).resolve('@deepseek-ai/dsh/package.json');
+          appendFileSync(process.env.GITHUB_ENV, 'DSH_INSTALL_SDK=' + sdk + '\n');
+          JS
+      - name: Check archive exclusion and SDK compatibility
+        run: node --test system/patches/harness-archive-idle.test.mjs system/patches/harness-session-performance.test.mjs system/patches/postman-native-upgrade.test.mjs

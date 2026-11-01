@@ -61,9 +61,7 @@ const requireFromProfile = createRequire(resolve(profileRoot, 'package.json'))
 // The profile fallback identifies the actual CLI SDK; an explicit anchor also
 // permits isolated clean-install tests without touching the running installation.
 const sdkAnchor = realpathSync(process.env.DSH_INSTALL_SDK ?? requireFromProfile.resolve('@deepseek-ai/dsh/package.json'))
-const sessionIgnorableAnchors = profilePackage.dsh?.profile?.bundles?.includes('dsh-cost-panel')
-  ? [sdkAnchor, requireFromProfile.resolve('dsh-cost-panel/package.json')] : []
-const nativeTargets = applyPostmanNativeChildCutoff([sdkAnchor, resolve(postmanRoot, 'package.json')], { sessionIgnorableAnchors })
+const nativeTargets = applyPostmanNativeChildCutoff([sdkAnchor, resolve(postmanRoot, 'package.json')])
 const sessionTargets = applyHarnessSessionPerformance(sdkAnchor)
 applyHarnessArchiveIdle(sdkAnchor)
 console.log('session performance patches installed: ' + sessionTargets.join(', '))
