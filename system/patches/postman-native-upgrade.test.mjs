@@ -30,7 +30,7 @@ const previousImages={...images}
  }
  images['dsh-tool-goal']=Buffer.from(source)
 }
-// Fixtures start at the native-only image even when the installed SDK already has the approved panel delta.
+// Fixtures start at the native-only image even when the installed SDK already has the approved optional-event delta.
 images['dsh-session']=Buffer.from(lf(images['dsh-session']).replace('\t\t\t...surfaceOpts?.ignorable === true ? { ignorable: true } : {},\n',''))
 const canonical=bytes=>lf(bytes).replace('this.ownerCtx.get("agentPresets")?.serviceFor(agent, "compaction")','this.ownerCtx.agentPresets?.serviceFor(agent, "compaction")')
 const blob=bytes=>createHash('sha1').update('blob '+Buffer.byteLength(lf(bytes))+String.fromCharCode(0)).update(lf(bytes)).digest('hex')
@@ -122,11 +122,4 @@ test('later target replacement failure restores exact previous multi-target byte
  assert.throws(()=>applyPostmanNativeChildCutoff([f.anchor],{replaceFile(from,to){if(++calls===2)throw Error('controlled second-target replacement failure');renameSync(from,to)}}),/controlled second-target/)
  assert.equal(calls,2)
  for(const name of names)assert.deepEqual(readFileSync(f.paths[name]),before[name],name+' restored byte-for-byte')
-})
-test('clean final session adds required panel inside the same atomic SDK composition',t=>{
- const f=fixture(t),path=f.paths['dsh-session']
- const before=lf(readFileSync(path));assert.ok(!before.includes('			...surfaceOpts?.ignorable === true ? { ignorable: true } : {},'))
- assert.equal(applyPostmanNativeChildCutoff([f.anchor],{sessionIgnorableAnchors:[f.anchor]}).find(t=>t.path===path).updated,true)
- assert.ok(readFileSync(path,'utf8').includes('			...surfaceOpts?.ignorable === true ? { ignorable: true } : {},'))
- assert.ok(applyPostmanNativeChildCutoff([f.anchor],{sessionIgnorableAnchors:[f.anchor]}).every(t=>!t.updated))
 })

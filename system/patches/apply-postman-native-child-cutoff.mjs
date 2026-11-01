@@ -5,8 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 
-export function applyPostmanNativeChildCutoff(anchors, { replaceFile = renameSync, sessionIgnorableAnchors = [] } = {}) {
-  const requirePanel = sessionIgnorableAnchors.length > 0
+export function applyPostmanNativeChildCutoff(anchors, { replaceFile = renameSync } = {}) {
   const patch = fileURLToPath(new URL('./postman-native-child-cutoff.patch', import.meta.url))
   const targets = new Map()
   for (const anchor of anchors) {
@@ -22,15 +21,6 @@ export function applyPostmanNativeChildCutoff(anchors, { replaceFile = renameSyn
   const jsonl = createRequire(sdk.resolve('@deepseek-ai/dsh-session-persistence-jsonl'))
   const persistence = createRequire(jsonl.resolve('@deepseek-ai/dsh-session-persistence'))
   targets.set(realpathSync(persistence.resolve('@deepseek-ai/dsh-session')), 'node_modules/@deepseek-ai/dsh-session/lib/index.js')
-  for (const anchor of sessionIgnorableAnchors) {
-    // An installed panel may not own a separate Session dependency under
-    // autoInstallPeers:false. The authoritative CLI SDK Session was registered
-    // above; only add another physical Session if this panel really resolves one.
-    let session
-    try { session = createRequire(anchor).resolve('@deepseek-ai/dsh-session') }
-    catch (error) { if (error?.code !== 'MODULE_NOT_FOUND') throw error }
-    if (session) targets.set(realpathSync(session), 'node_modules/@deepseek-ai/dsh-session/lib/index.js')
-  }
   // The first anchor is the actual CLI SDK (or isolated SDK fixture), not
   // the plugin's optional development dependency tree.
   const goalPath = realpathSync(createRequire(anchors[0]).resolve('@deepseek-ai/dsh-goal-round-driver'))
@@ -49,7 +39,7 @@ export function applyPostmanNativeChildCutoff(anchors, { replaceFile = renameSyn
   }
   const sessionRelative = 'node_modules/@deepseek-ai/dsh-session/lib/index.js'
   // Entire pinned rc.2 images: clean, child-cutoff, then session vocabulary.
-  // Cost-panel's sole supported delta is admitted by full image hash, never fragments.
+  // Preserve historical optional-event compatibility using full image hashes.
   const sessionImages = new Map([
     ['dc14c845b915a9faaeb867499966e7b1991af3b6285f314bf353417e939d9c36', false],
     ['c8fab6a1d8cd56613dab9037852d54e35d98358e248ded3c9dfd729cc2df817c', false],
@@ -102,11 +92,11 @@ export function applyPostmanNativeChildCutoff(anchors, { replaceFile = renameSyn
         const end = source.indexOf(' exec.deferContext(createUserMessage({', start)
         writeFileSync(staged, source.slice(0, start) + '\t\t\tif (authority.kind === "goal-round")' + source.slice(end))
       }
-      let restorePanel = false
+      let restoreIgnorable = false
       if (relative === sessionRelative) {
         const source = lf(original), hash = digestText(source)
         if (!sessionImages.has(hash)) throw new Error('Native session patch preimage mismatch: ' + path)
-        restorePanel = sessionImages.get(hash) || requirePanel
+        restoreIgnorable = sessionImages.get(hash)
         writeFileSync(staged, sessionImages.get(hash) ? source.replace(sessionCompatAfter, sessionCompatBefore) : source)
       }
       const normalizedPatch = join(directory, 'cutoff.patch')
@@ -199,11 +189,11 @@ export function applyPostmanNativeChildCutoff(anchors, { replaceFile = renameSyn
         if (createHash('sha256').update(canonical).digest('hex') !== postimages[relative])
           throw new Error('Native SDK postimage mismatch: ' + path)
       }
-      if (relative === sessionRelative && restorePanel) {
+      if (relative === sessionRelative && restoreIgnorable) {
         const canonical = lf(readFileSync(staged, 'utf8'))
         const combined = canonical.replace(sessionCompatBefore, sessionCompatAfter)
         if (digestText(combined) !== 'e76438e4007543a00c58ef1c7c9c623e49cc540db13bfa134da7d3c68011d382')
-          throw new Error('Native panel composition postimage mismatch: ' + path)
+          throw new Error('Native optional-event compatibility postimage mismatch: ' + path)
         writeFileSync(staged, combined)
       }
       // Hashes are LF semantic images; retain the target's actual newline contract.
