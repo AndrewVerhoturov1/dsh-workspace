@@ -22,11 +22,13 @@ async function harness(t) {
   let store;
   let llm;
   let projections;
+  const registry = { archivedSessionIds: [], headers: [], sessionHeaders() { return [...this.headers, ...store.list().map(s => s.header)]; } };
   const infrastructure = root.plugin({ name: 'test-infrastructure', apply(ctx) {
     llm = new LlmRuntime(ctx);
     store = new SessionStore(ctx);
     projections = new SessionProjectionRegistry(ctx);
     ctx.provide('connection', { rpc: { handle: (...args) => { rpcRegistration = args; return async () => {}; } } });
+    ctx.provide('workspaceRegistry', registry);
   } });
   await infrastructure;
   const adapterPlugin = root.plugin({ name: 'test-adapter', inject: ['llm'], apply(ctx) {
@@ -38,10 +40,10 @@ async function harness(t) {
     ctx.llm.registerAdapter(['p', 'test-provider', 'openai'], new FakeAdapter());
   } });
   await adapterPlugin;
-  const fiber = root.plugin({ name: 'cost-panel-test', inject: ['sessions', 'llm', 'connection', 'sessionProjections'], apply });
+  const fiber = root.plugin({ name: 'cost-panel-test', inject: ['sessions', 'llm', 'connection', 'sessionProjections', 'workspaceRegistry'], apply });
   await fiber;
   t.after(async () => { await fiber.dispose(); await adapterPlugin.dispose(); await infrastructure.dispose(); });
-  return { ctx: root, store, llm, projections, rpcRegistration, fiber };
+  return { ctx: root, store, llm, projections, rpcRegistration, fiber, registry };
 }
 
 function sessionWithStep(store, id = 'root', extra = {}) {
@@ -67,7 +69,7 @@ test('native SessionStore + marked Agent Loop request records exact session step
     yielded.push(item);
     session.append('assistant/chunk', { turn: 1, step: 0, chunk: item });
   }
-  session.append('assistant/message', { turn: 1, step: 0, message: { source: { kind: 'model', provider: 'p', model: 'm' } }, usage: usage(10, 4) });
+  session.append('assistant/message', { turn: 1, step: 0, message: { source: { kind: 'model', provider: 'p', model: 'm' } }, usage: usage(10, 4) }, { surfaceOp: 'append' });
   assert.deepEqual(yielded, original);
   const records = session.events.filter(e => e.type === 'cost-panel/attempt').map(e => e.data);
   assert.ok(session.events.filter(e => e.type === 'cost-panel/attempt').every(e => e.ignorable === true));
@@ -96,7 +98,7 @@ test('separate Agent Loop module WeakSet: native stream evidence prevents double
   assert.equal(hostModuleMarks.has(request), true);
   assert.equal(isAgentLoopRequest(request), false); // the panel's peer module cannot see Host marks
   for await (const item of h.llm.stream(request)) session.append('assistant/chunk', { turn: 1, step: 0, chunk: item });
-  session.append('assistant/message', { turn: 1, step: 0, message: { source: { kind: 'model', provider: 'openai', model: 'gpt-6.1-sol' } }, usage: usage(1000, 100) });
+  session.append('assistant/message', { turn: 1, step: 0, message: { source: { kind: 'model', provider: 'openai', model: 'gpt-6.1-sol' } }, usage: usage(1000, 100) }, { surfaceOp: 'append' });
   const folded = foldAttempts(session.header, session.events);
   assert.equal(folded.attempts.length, 1);
   assert.equal(folded.attempts[0].purpose, 'conversation');
@@ -158,7 +160,7 @@ test('separate retry requests on same turn-step survive fold and auxiliary compa
     const iter = h.llm.stream(request);
     for await (const item of iter) session.append('assistant/chunk', { turn: 1, step: 0, chunk: item });
   }
-  session.append('assistant/message', { turn: 1, step: 0, message: { source: { kind: 'model', provider: 'p', model: 'm' } }, usage: usage(1, 1) });
+  session.append('assistant/message', { turn: 1, step: 0, message: { source: { kind: 'model', provider: 'p', model: 'm' } }, usage: usage(1, 1) }, { surfaceOp: 'append' });
   const compact = { sessionId: session.id, provider: 'p', model: 'm', purpose: 'compaction', messages: [] };
   const compIter = h.llm.stream({ ...compact, messages: [], testChunks: [chunk('usage', { usage: usage(3, 2) }), chunk('finish', { reason: { kind: 'stop' } })] });
   for await (const _ of compIter) { /* consume */ }
@@ -214,6 +216,7 @@ test('registered loopback RPC returns own/live-root/live-child/cold-descendant c
     async inspect(id) { assert.equal(id, 'cold'); return { meta: coldHeader, events: coldEvents }; },
   };
   h.ctx.provide('sessionPersistence', persistence);
+  h.registry.headers = [coldHeader];
   const [channel, handler, options] = h.rpcRegistration;
   assert.equal(channel, '/cost-panel');
   assert.deepEqual(options, { authority: 'loopback' });
@@ -248,7 +251,7 @@ test('observer persists merged partial usage, with one attempt and no repeated o
   const chunks = [chunk('usage', { usage: usage(10, 4) }), chunk('usage', { usage: { outputTokens: 6 } }), chunk('usage', { usage: { inputTokens: 0, outputTokens: 0 } }), chunk('finish', { reason: { kind: 'stop' } })];
   for await (const item of h.llm.stream(markAgentLoopRequest({ sessionId: session.id, provider: 'openai', serviceTier: 'default', model: 'gpt-6-luna', messages: [], testChunks: chunks })))
     session.append('assistant/chunk', { turn: 1, step: 0, chunk: item });
-  session.append('assistant/message', { turn: 1, step: 0, message: { source: { kind: 'model', provider: 'openai', model: 'gpt-6-luna' } }, usage: usage(10, 6) });
+  session.append('assistant/message', { turn: 1, step: 0, message: { source: { kind: 'model', provider: 'openai', model: 'gpt-6-luna' } }, usage: usage(10, 6) }, { surfaceOp: 'append' });
   const records = session.events.filter(e => e.type === 'cost-panel/attempt');
   assert.deepEqual(records.at(-1).data.usage, usage(10, 6));
   assert.equal(foldAttempts(session.header, session.events).attempts.length, 1);
@@ -260,25 +263,51 @@ test('observer persists merged partial usage, with one attempt and no repeated o
   assert.ok(Math.abs(result.value.own.total - (10 * 0.1 + 6 * 0.5) / 1e6) < 1e-15);
 });
 
-test('unreadable descendant or persistence list preserves available own/team costs and flags incomplete', async t => {
+test('unreadable non-archived descendant preserves available own/team costs and flags incomplete', async t => {
   const h = await harness(t);
   const root = sessionWithStep(h.store, 'available');
   root.append('cost-panel/attempt', { id: 0, provider: 'openai', serviceTier: 'default', model: 'gpt-6-luna', purpose: 'conversation', usage: usage(10, 4), status: 'stop' });
   const cold = { id: 'unavailable', origin: 'subagent', parentSession: root.id };
-  let failList = false;
+  h.registry.headers = [cold];
   h.ctx.provide('sessionPersistence', {
-    async list() { if (failList) throw new Error('list offline'); return [root.header, cold]; },
+    async list() { throw new Error('Accounting must not enumerate storage'); },
     async inspect() { throw new Error('cold unavailable'); },
   });
-  for (const fail of [false, true]) {
-    failList = fail;
     const result = await h.rpcRegistration[1]('get', { sessionId: root.id }, new AbortController().signal);
     assert.equal(result.ok, true);
     assert.ok(result.value.own.total > 0);
     assert.equal(result.value.team.total, result.value.own.total);
     assert.equal(result.value.team.costKnown, true);
     assert.equal(result.value.team.costUnknown, true);
-  }
+});
+
+test('archived members are excluded without enumeration or reads, while non-archived cold members still count', async t => {
+  const h = await harness(t);
+  const root = sessionWithStep(h.store, 'archive-root');
+  const archived = { id: 'archived', origin: 'subagent', parentSession: root.id };
+  const cold = { id: 'finished-not-archived', origin: 'subagent', parentSession: root.id };
+  h.registry.headers = [archived, cold, ...Array.from({ length: 1448 }, (_, i) => ({ id: `archive-${i}` }))];
+  h.registry.archivedSessionIds = [archived.id, ...h.registry.headers.slice(2).map(h => h.id)];
+  const record = { id: 0, provider: 'openai', model: 'gpt-6-luna', serviceTier: 'default', status: 'stop', usage: usage(10, 4) };
+  root.append('cost-panel/attempt', record, { ignorable: true });
+  let reads = 0;
+  h.ctx.provide('sessionPersistence', {
+    async list() { assert.fail('No full archive scan'); },
+    async inspect(id) { reads++; assert.equal(id, cold.id); return { meta: cold, events: [{ type: 'cost-panel/attempt', seq: 0, data: record }] }; },
+  });
+  const get = id => h.rpcRegistration[1]('get', { sessionId: id }, new AbortController().signal);
+  const result = await get(root.id);
+  assert.equal(result.ok, true);
+  assert.equal(result.value.team.sessions, 2);
+  assert.equal(result.value.team.total, result.value.own.total * 2);
+  assert.equal(reads, 1);
+  assert.equal((await get(archived.id)).error.code, 'session-archived');
+  assert.equal(reads, 1);
+  h.registry.archivedSessionIds.push(cold.id);
+  const changed = await get(root.id);
+  assert.equal(changed.value.team.sessions, 1);
+  assert.equal(changed.value.team.total, changed.value.own.total);
+  assert.equal(reads, 1, 'Archiving takes effect before reading the member again');
 });
 
 test('unknown required SDK placeholders survive observer/RPC without fabricated confirmed zeros', async t => {

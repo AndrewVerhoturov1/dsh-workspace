@@ -5,12 +5,16 @@ on:
     paths:
       - 'plugins/dsh-cost-panel/**'
       - 'profiles/web/scripts/install-production.mjs'
+      - 'system/patches/*archive-idle*'
+      - 'system/patches/*session-performance*'
       - '.github/workflows/cost-panel-session-compat.yml'
   push:
     branches: [main]
     paths:
       - 'plugins/dsh-cost-panel/**'
       - 'profiles/web/scripts/install-production.mjs'
+      - 'system/patches/*archive-idle*'
+      - 'system/patches/*session-performance*'
       - '.github/workflows/cost-panel-session-compat.yml'
 
 permissions:
@@ -33,10 +37,11 @@ jobs:
         run: |
           node --input-type=module <<'JS'
           import { createRequire } from 'node:module';
-          import { symlinkSync, realpathSync, mkdirSync } from 'node:fs';
+          import { symlinkSync, realpathSync, mkdirSync, appendFileSync } from 'node:fs';
           import { resolve, dirname } from 'node:path';
           import { applySessionIgnorableEvents } from './plugins/dsh-cost-panel/session-compat.mjs';
           const sdk = createRequire(resolve('plugins/dsh-postman-harness/package.json')).resolve('@deepseek-ai/dsh/package.json');
+          appendFileSync(process.env.GITHUB_ENV, 'DSH_INSTALL_SDK=' + sdk + '\n');
           const native = createRequire(sdk);
           mkdirSync('plugins/dsh-cost-panel/node_modules/@deepseek-ai', {recursive: true});
           for (const name of ['@deepseek-ai/cordis', '@deepseek-ai/dsh-llm', '@deepseek-ai/dsh-session',
@@ -49,3 +54,5 @@ jobs:
           JS
       - name: Verify persistence with the panel disabled and required-event rejection
         run: node --test plugins/dsh-cost-panel/*.test.js
+      - name: Verify archive exclusion and repeatable SDK installation
+        run: node --test system/patches/harness-archive-idle.test.mjs

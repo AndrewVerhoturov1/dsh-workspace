@@ -5,8 +5,8 @@ import { dirname, join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 
 const images = [
-  ['dsh-session-persistence-jsonl', '8b6ebc4509a3e969ab3ad6e0dfb553ae4861e5b101831afed23e593d148d97f3', '22b987da1a66b00c2e83839f0b00b02fa8d2ea718e60c99f124b073bfb3506d5'],
-  ['dsh-host-apiproxy', '8e32ffc951f499849c155e30cb30813af5ed7abb11008653125092299b693d9f', '5b161ce05078b26486a8713374f9c94310e186423d964d3cbbd426599f055845'],
+  ['dsh-session-persistence-jsonl', '8b6ebc4509a3e969ab3ad6e0dfb553ae4861e5b101831afed23e593d148d97f3', '22b987da1a66b00c2e83839f0b00b02fa8d2ea718e60c99f124b073bfb3506d5', 'd316f5869b0674d56ac16a034b90606af0dbda6d56c017522009b50e47beccb3'],
+  ['dsh-host-apiproxy', '8e32ffc951f499849c155e30cb30813af5ed7abb11008653125092299b693d9f', '5b161ce05078b26486a8713374f9c94310e186423d964d3cbbd426599f055845', '06eea3fe3dd0b8297379682df8c3402de2f11177621c1a5479faa1b4e00adcf4'],
   ['dsh-api-remotes', '5406e17c29e42b81ebb8c36030a67de3db19d4d94bace10052b924d72a10e756', '2512f74714aeddeaeeaa221ad52135fffa5fbf2493c0f84231f24dcb870c4f72'],
 ]
 const hash = text => createHash('sha256').update(text.replaceAll('\r\n', '\n')).digest('hex')
@@ -16,11 +16,11 @@ export function applyHarnessSessionPerformance(sdkAnchor) {
   const resolve = createRequire(sdkAnchor)
   const prepared = []
   try {
-    for (const [name, before, after] of images) {
+    for (const [name, before, after, archiveAfter] of images) {
       const path = realpathSync(resolve.resolve('@deepseek-ai/' + name))
       const original = readFileSync(path, 'utf8')
       const current = hash(original)
-      if (current === after) continue
+      if (current === after || current === archiveAfter) continue
       if (current !== before) throw new Error('Session performance patch preimage mismatch: ' + path)
       const directory = mkdtempSync(join(dirname(path), '.session-performance-'))
       const relative = 'node_modules/@deepseek-ai/' + name + '/lib/index.js'
@@ -36,7 +36,7 @@ export function applyHarnessSessionPerformance(sdkAnchor) {
       })
       if (result.status !== 0) throw new Error('Session performance patch failed: ' + result.stderr)
       if (hash(readFileSync(staged, 'utf8')) !== after) throw new Error('Session performance patch output mismatch: ' + path)
-      if (original.includes('\r\n')) writeFileSync(staged, readFileSync(staged, 'utf8').replaceAll('\n', '\r\n'))
+      if (original.includes('\r\n')) writeFileSync(staged, readFileSync(staged, 'utf8').replaceAll('\r\n', '\n').replaceAll('\n', '\r\n'))
     }
     // Validate all inputs before replacing any installed module.
     for (const item of prepared) {
