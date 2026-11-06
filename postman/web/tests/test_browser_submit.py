@@ -277,6 +277,62 @@ console.log(JSON.stringify({length: actual.length, sha256: hash(actual), joined,
         self.assertTrue(result["ok"])
         self.assertEqual(result["code"], submit.FRESH_CHAT_CONFIRMED)
 
+    def test_fresh_submit_starts_new_chat_after_home_restores_conversation(self):
+        class RestoredPage(FakePage):
+            def __init__(self, *, navigates=True, composer_text=""):
+                super().__init__(turn_count=1, composer_text=composer_text)
+                self.navigates = navigates
+                self.new_chat_clicks = 0
+                self.fill_count = 0
+
+            def goto(self, url, **kwargs):
+                self.url = "https://chatgpt.com/c/restored"
+
+            def get_by_role(self, role, name=None):
+                if role == "link" and name.search("New chat"):
+                    class NewChat(FakeLocator):
+                        def count(inner):
+                            return 1
+
+                        def click(inner, timeout=None):
+                            self.new_chat_clicks += 1
+                            if self.navigates:
+                                self.url = "https://chatgpt.com/"
+                                self.turn_count = 0
+                    return NewChat()
+                return super().get_by_role(role, name)
+
+            def locator(self, selector):
+                locator = super().locator(selector)
+                if selector == "#prompt-textarea":
+                    original_fill = locator.fill
+                    def fill(text, timeout=None):
+                        self.fill_count += 1
+                        self.assert_fresh_before_fill = (
+                            self.url == "https://chatgpt.com/" and self.turn_count == 0)
+                        original_fill(text, timeout=timeout)
+                    locator.fill = fill
+                return locator
+
+        page = RestoredPage()
+        result = submit.submit_fresh_prompt(page, "new request", timeout_ms=500)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(page.new_chat_clicks, 1)
+        self.assertEqual(page.fill_count, 1)
+        self.assertTrue(page.assert_fresh_before_fill)
+        self.assertEqual(page.click_count, 1)
+        self.assertEqual(page.user_turns, ["new request"])
+
+        for navigates, draft, expected_clicks in ((False, "", 1), (True, "foreign draft", 0)):
+            with self.subTest(navigates=navigates, draft=draft):
+                page = RestoredPage(navigates=navigates, composer_text=draft)
+                result = submit.submit_fresh_prompt(page, "new request", timeout_ms=100)
+                self.assertEqual(result["sendState"], submit.SEND_PROVEN_NOT_SENT)
+                self.assertEqual(page.new_chat_clicks, expected_clicks)
+                self.assertEqual(page.fill_count, 0)
+                self.assertEqual(page.click_count, 0)
+                self.assertEqual(page.composer_text, draft)
+
     def test_composer_empty_proof_ignores_prosemirror_placeholder_newline(self):
         class Node(FakeLocator):
             def __init__(self):

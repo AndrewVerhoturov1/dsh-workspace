@@ -912,7 +912,10 @@ def prepare_fresh_chat(page: Any, *, timeout_ms: int = DEFAULT_TIMEOUT_MS,
             "details": {"message": str(exc)},
         }
 
+    new_chat_started = False
+
     def predicate() -> tuple[bool, dict[str, Any]]:
+        nonlocal new_chat_started
         snapshot = _active_composer_groups(page)
         groups = [group for group in snapshot["logicalCandidates"] if group["active"]]
         preferred = [group["preferred"] for group in groups if group["preferred"]]
@@ -934,6 +937,14 @@ def prepare_fresh_chat(page: Any, *, timeout_ms: int = DEFAULT_TIMEOUT_MS,
         # ProseMirror composer hydrates. Do not declare a fresh chat ready on
         # that node; filling it can duplicate the prompt during the swap.
         live_composer_ready = composer["selector"] != "textarea"
+        # Home can restore the last conversation after browser/session startup.
+        # Explicitly start a new chat, then require the same fresh-chat proof.
+        if (not fresh and is_bound_chat_url(page_url) and empty
+                and live_composer_ready and not new_chat_started):
+            new_chat = page.get_by_role("link", name=re.compile(r"^(?:New chat|Новый чат)(?:\s|$)", re.I))
+            if _locator_count(new_chat) == 1 and _visible(new_chat):
+                new_chat_started = True
+                new_chat.click(timeout=timeout_ms)
         return fresh and empty and live_composer_ready, {
             "pageUrl": page_url,
             "turnCount": turns,
