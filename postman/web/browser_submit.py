@@ -45,6 +45,9 @@ CHATGPT_URL = bootstrap.CHATGPT_URL
 DEFAULT_CDP_URL = bootstrap.DEFAULT_CDP_URL
 DEFAULT_TIMEOUT_MS = 30_000
 DEFAULT_NAVIGATION_TIMEOUT_MS = 300_000
+# DOMContentLoaded can precede the live composer by minutes on a cold page.
+# Keep hydration separate from the short fill/click/Send operation budget.
+DEFAULT_FRESH_CHAT_READINESS_TIMEOUT_MS = DEFAULT_NAVIGATION_TIMEOUT_MS
 
 PAGE_OWNED = "PAGE_OWNED"
 FRESH_CHAT_CONFIRMED = "FRESH_CHAT_CONFIRMED"
@@ -902,7 +905,8 @@ def _wait_until(
 
 
 def prepare_fresh_chat(page: Any, *, timeout_ms: int = DEFAULT_TIMEOUT_MS,
-                       navigation_timeout_ms: int = DEFAULT_NAVIGATION_TIMEOUT_MS) -> dict[str, Any]:
+                       navigation_timeout_ms: int = DEFAULT_NAVIGATION_TIMEOUT_MS,
+                       readiness_timeout_ms: int = DEFAULT_FRESH_CHAT_READINESS_TIMEOUT_MS) -> dict[str, Any]:
     try:
         page.goto(CHATGPT_URL, wait_until="domcontentloaded", timeout=navigation_timeout_ms)
     except Exception as exc:
@@ -912,7 +916,10 @@ def prepare_fresh_chat(page: Any, *, timeout_ms: int = DEFAULT_TIMEOUT_MS,
             "details": {"message": str(exc)},
         }
 
+    new_chat_started = False
+
     def predicate() -> tuple[bool, dict[str, Any]]:
+        nonlocal new_chat_started
         snapshot = _active_composer_groups(page)
         groups = [group for group in snapshot["logicalCandidates"] if group["active"]]
         preferred = [group["preferred"] for group in groups if group["preferred"]]
@@ -934,6 +941,14 @@ def prepare_fresh_chat(page: Any, *, timeout_ms: int = DEFAULT_TIMEOUT_MS,
         # ProseMirror composer hydrates. Do not declare a fresh chat ready on
         # that node; filling it can duplicate the prompt during the swap.
         live_composer_ready = composer["selector"] != "textarea"
+        # Home can restore the last conversation after browser/session startup.
+        # Explicitly start a new chat, then require the same fresh-chat proof.
+        if (not fresh and is_bound_chat_url(page_url) and empty
+                and live_composer_ready and not new_chat_started):
+            new_chat = page.get_by_role("link", name=re.compile(r"^(?:New chat|Новый чат)(?:\s|$)", re.I))
+            if _locator_count(new_chat) == 1 and _visible(new_chat):
+                new_chat_started = True
+                new_chat.click(timeout=timeout_ms)
         return fresh and empty and live_composer_ready, {
             "pageUrl": page_url,
             "turnCount": turns,
@@ -943,7 +958,7 @@ def prepare_fresh_chat(page: Any, *, timeout_ms: int = DEFAULT_TIMEOUT_MS,
             "composer": composer["locator"],
         }
 
-    ok, details = _wait_until(predicate, timeout_ms=timeout_ms)
+    ok, details = _wait_until(predicate, timeout_ms=readiness_timeout_ms)
     composer = details.pop("composer", None)
     if not ok:
         if details.get("composerEmpty") is False:
@@ -1430,8 +1445,10 @@ def _presend_transaction(fn=None, *, fresh=False):
 
 
 @_presend_transaction(fresh=True)
-def submit_fresh_prompt(page: Any, prompt: str, *, timeout_ms: int = DEFAULT_TIMEOUT_MS, input_attachment=None, artifact_mode: bool = False) -> dict[str, Any]:
-    prep = prepare_fresh_chat(page, timeout_ms=timeout_ms)
+def submit_fresh_prompt(page: Any, prompt: str, *, timeout_ms: int = DEFAULT_TIMEOUT_MS,
+                        readiness_timeout_ms: int = DEFAULT_FRESH_CHAT_READINESS_TIMEOUT_MS,
+                        input_attachment=None, artifact_mode: bool = False) -> dict[str, Any]:
+    prep = prepare_fresh_chat(page, timeout_ms=timeout_ms, readiness_timeout_ms=readiness_timeout_ms)
     if not prep["ok"]:
         return _result(
             prep["code"],

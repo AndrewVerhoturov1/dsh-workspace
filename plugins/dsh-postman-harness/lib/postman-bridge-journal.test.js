@@ -68,6 +68,8 @@ test('cold bell and text are readable without Luna, model wake, grant or journal
       const result = await jobs.status(f.parent, bridgeJobId, true, true, true)
       assert.equal(result.status, 'POSTMAN_BRIDGE_TERMINAL')
       assert.equal(result.result.source, text ? 'text_fallback' : 'bell')
+      assert.equal(result.result.assistantText, text ? 'saved text' : 'saved result')
+      assert.ok(!result.result.warnings.includes('REPORT_UNAVAILABLE'))
       assert.equal(result.result.conversationRef, 'https://chatgpt.com/c/saved')
       assert.deepEqual(f.row(), before); assert.equal(f.wakes(), 0); assert.equal(f.calls.length, 0)
     }

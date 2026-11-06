@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
 
 WEB_DIR = Path(__file__).resolve().parents[1]
 if str(WEB_DIR) not in sys.path:
@@ -255,27 +256,143 @@ console.log(JSON.stringify({length: actual.length, sha256: hash(actual), joined,
     def test_prepare_fresh_chat_requires_root(self):
         page = FakePage()
         page.goto = lambda *a, **k: setattr(page, "url", "https://chatgpt.com/c/stale")
-        result = submit.prepare_fresh_chat(page, timeout_ms=0)
+        result = submit.prepare_fresh_chat(page, timeout_ms=0, readiness_timeout_ms=0)
         self.assertFalse(result["ok"])
         self.assertEqual(result["code"], submit.FRESH_CHAT_NOT_CONFIRMED)
 
     def test_prepare_fresh_chat_requires_zero_turns(self):
         page = FakePage(turn_count=1)
-        result = submit.prepare_fresh_chat(page, timeout_ms=0)
+        result = submit.prepare_fresh_chat(page, timeout_ms=0, readiness_timeout_ms=0)
         self.assertFalse(result["ok"])
         self.assertEqual(result["code"], submit.FRESH_CHAT_NOT_CONFIRMED)
 
     def test_prepare_fresh_chat_requires_empty_composer(self):
         page = FakePage(composer_text="stale draft")
-        result = submit.prepare_fresh_chat(page, timeout_ms=0)
+        result = submit.prepare_fresh_chat(page, timeout_ms=0, readiness_timeout_ms=0)
         self.assertFalse(result["ok"])
         self.assertEqual(result["code"], submit.COMPOSER_NOT_EMPTY)
 
     def test_prepare_fresh_chat_accepts_root_zero_turn_empty_composer(self):
         page = FakePage()
-        result = submit.prepare_fresh_chat(page, timeout_ms=0)
+        result = submit.prepare_fresh_chat(page, timeout_ms=0, readiness_timeout_ms=0)
         self.assertTrue(result["ok"])
         self.assertEqual(result["code"], submit.FRESH_CHAT_CONFIRMED)
+
+    def test_fresh_readiness_waits_for_slow_hydration_without_longer_send_operations(self):
+        wait_until = submit._wait_until
+        for hydrated_at in (60, None):
+            with self.subTest(hydrated_at=hydrated_at):
+                clock = [0.0]
+                waits = []
+                fills = []
+                navigations = []
+
+                class SlowPage(FakePage):
+                    def goto(self, url, **kwargs):
+                        navigations.append(kwargs)
+                        super().goto(url, **kwargs)
+
+                    def locator(self, selector):
+                        hydrated = hydrated_at is not None and clock[0] >= hydrated_at
+                        if selector == "#prompt-textarea" and not hydrated:
+                            return FakeLocator(items=[])
+                        if selector == "textarea":
+                            if hydrated:
+                                return FakeLocator(items=[])
+                            node = FakeLocator(self, "composer")
+                        else:
+                            node = super().locator(selector)
+                        if node.kind == "composer":
+                            fill = node.fill
+                            def tracked_fill(text, timeout=None):
+                                fills.append((selector, clock[0], timeout))
+                                fill(text, timeout=timeout)
+                            node.fill = tracked_fill
+                        return node
+
+                def sleep(seconds):
+                    clock[0] += max(seconds, 1.0)
+
+                def wait(predicate, *, timeout_ms, **kwargs):
+                    waits.append(timeout_ms)
+                    return wait_until(predicate, timeout_ms=timeout_ms, sleep=sleep,
+                                      monotonic=lambda: clock[0], **kwargs)
+
+                page = SlowPage()
+                with patch.object(submit, "_wait_until", side_effect=wait):
+                    result = submit.submit_fresh_prompt(page, "slow hydration")
+                self.assertEqual(waits[0], 300_000)
+                self.assertEqual(len(navigations), 1)
+                self.assertEqual(navigations[0]["timeout"], 300_000)
+                if hydrated_at is None:
+                    self.assertEqual(clock[0], 300.0)
+                    self.assertEqual(result["code"], submit.FRESH_CHAT_NOT_CONFIRMED)
+                    self.assertEqual(result["sendState"], submit.SEND_PROVEN_NOT_SENT)
+                    self.assertFalse(result["details"]["liveComposerReady"])
+                    self.assertEqual(fills, [])
+                    self.assertEqual(page.click_count, 0)
+                else:
+                    self.assertTrue(result["ok"], result)
+                    self.assertEqual(fills, [("#prompt-textarea", 60.0, 30_000)])
+                    self.assertTrue(all(value == 30_000 for value in waits[1:]))
+                    self.assertEqual(page.click_count, 1)
+                    self.assertEqual(page.user_turns, ["slow hydration"])
+
+    def test_fresh_submit_starts_new_chat_after_home_restores_conversation(self):
+        class RestoredPage(FakePage):
+            def __init__(self, *, navigates=True, composer_text=""):
+                super().__init__(turn_count=1, composer_text=composer_text)
+                self.navigates = navigates
+                self.new_chat_clicks = 0
+                self.fill_count = 0
+
+            def goto(self, url, **kwargs):
+                self.url = "https://chatgpt.com/c/restored"
+
+            def get_by_role(self, role, name=None):
+                if role == "link" and name.search("New chat"):
+                    class NewChat(FakeLocator):
+                        def count(inner):
+                            return 1
+
+                        def click(inner, timeout=None):
+                            self.new_chat_clicks += 1
+                            if self.navigates:
+                                self.url = "https://chatgpt.com/"
+                                self.turn_count = 0
+                    return NewChat()
+                return super().get_by_role(role, name)
+
+            def locator(self, selector):
+                locator = super().locator(selector)
+                if selector == "#prompt-textarea":
+                    original_fill = locator.fill
+                    def fill(text, timeout=None):
+                        self.fill_count += 1
+                        self.assert_fresh_before_fill = (
+                            self.url == "https://chatgpt.com/" and self.turn_count == 0)
+                        original_fill(text, timeout=timeout)
+                    locator.fill = fill
+                return locator
+
+        page = RestoredPage()
+        result = submit.submit_fresh_prompt(page, "new request", timeout_ms=500)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(page.new_chat_clicks, 1)
+        self.assertEqual(page.fill_count, 1)
+        self.assertTrue(page.assert_fresh_before_fill)
+        self.assertEqual(page.click_count, 1)
+        self.assertEqual(page.user_turns, ["new request"])
+
+        for navigates, draft, expected_clicks in ((False, "", 1), (True, "foreign draft", 0)):
+            with self.subTest(navigates=navigates, draft=draft):
+                page = RestoredPage(navigates=navigates, composer_text=draft)
+                result = submit.submit_fresh_prompt(page, "new request", timeout_ms=100, readiness_timeout_ms=100)
+                self.assertEqual(result["sendState"], submit.SEND_PROVEN_NOT_SENT)
+                self.assertEqual(page.new_chat_clicks, expected_clicks)
+                self.assertEqual(page.fill_count, 0)
+                self.assertEqual(page.click_count, 0)
+                self.assertEqual(page.composer_text, draft)
 
     def test_composer_empty_proof_ignores_prosemirror_placeholder_newline(self):
         class Node(FakeLocator):
@@ -578,7 +695,7 @@ console.log(JSON.stringify({length: actual.length, sha256: hash(actual), joined,
 
     def test_prepare_fresh_chat_navigation_failure_is_pre_send(self):
         page = FakePage(goto_error="offline")
-        result = submit.prepare_fresh_chat(page, timeout_ms=0)
+        result = submit.prepare_fresh_chat(page, timeout_ms=0, readiness_timeout_ms=0)
         self.assertEqual(result["code"], submit.SUBMIT_NAVIGATION_FAILED)
 
     def test_insert_prompt_requires_nonempty_prompt(self):
@@ -1411,14 +1528,14 @@ console.log(JSON.stringify({before, after, replacement}));
 
     def test_full_submit_stale_draft_never_clicks(self):
         page = FakePage(composer_text="draft")
-        result = submit.submit_fresh_prompt(page, "new", timeout_ms=0)
+        result = submit.submit_fresh_prompt(page, "new", timeout_ms=0, readiness_timeout_ms=0)
         self.assertFalse(result["ok"])
         self.assertEqual(result["sendState"], submit.SEND_PROVEN_NOT_SENT)
         self.assertEqual(page.click_count, 0)
 
     def test_full_submit_stale_conversation_never_clicks(self):
         page = FakePage(turn_count=2)
-        result = submit.submit_fresh_prompt(page, "new", timeout_ms=0)
+        result = submit.submit_fresh_prompt(page, "new", timeout_ms=0, readiness_timeout_ms=0)
         self.assertFalse(result["ok"])
         self.assertEqual(page.click_count, 0)
 

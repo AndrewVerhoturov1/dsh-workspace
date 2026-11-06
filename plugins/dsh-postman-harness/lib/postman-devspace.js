@@ -213,6 +213,8 @@ export function devspaceTerminal(binding, observed = {}) {
   }
   if (!event && !image && observed.source !== 'transport_diagnostic' && observed.source !== 'text_fallback')
     throw Error('POSTMAN_DEVSPACE_EVENT_MISSING')
+  const assistantText = typeof observed.assistantText === 'string' && observed.assistantText.trim()
+    ? observed.assistantText : event?.message ?? ''
   const source = event ? 'bell' : observed.source
   const code = event ? 'DEVSPACE_SIGNAL_RECEIVED' :
     image ? 'DEVSPACE_IMAGE_RESULT_DURABLE' : 'DEVSPACE_DIAGNOSTIC'
@@ -232,10 +234,10 @@ export function devspaceTerminal(binding, observed = {}) {
     evidenceState: image ? 'BROWSER_VERIFIED_IMAGE' : 'REPORTED_NOT_VERIFIED', ...image, workspaceRef: binding.workspaceRef, writeRoot: binding.writeRoot,
     reportRef, message: event?.message ?? (typeof observed.message === 'string' ? observed.message : ''),
     transportDiagnostics: observed.transportDiagnostics ?? null,
-    assistantText: typeof observed.assistantText === 'string' ? observed.assistantText : '',
+    assistantText,
     conversationRef: typeof observed.conversationRef === 'string' && /^https:\/\/chatgpt\.com\/c\/[a-zA-Z0-9-]+$/.test(observed.conversationRef) ? observed.conversationRef : null,
     diagnostic: event ? null : ['CAPABILITY_UNAVAILABLE', 'BLOCKED', 'PARTIAL', 'UNKNOWN'].includes(observed.diagnostic) ? observed.diagnostic : 'UNKNOWN',
-    warnings: event ? ['REPORT_UNVERIFIED', ...(!reportRef || !existsReport(reportRef) ? ['REPORT_UNAVAILABLE'] : [])] : image ? [] : ['NO_LOCAL_SIGNAL'] }
+    warnings: event ? ['REPORT_UNVERIFIED', ...(!assistantText.trim() && (!reportRef || !existsReport(reportRef)) ? ['REPORT_UNAVAILABLE'] : [])] : image ? [] : ['NO_LOCAL_SIGNAL'] }
 }
 
 /** Separate recovery facts never rewrite the original terminal observation. */

@@ -116,7 +116,7 @@ test('standalone and non-bound coding child cannot send devspace; coordinator st
 })
 test('bell retains missing/arbitrary report, rejects each foreign identity and redacts capability', t => {
   const {binding} = channel(t)
-  bell(binding,{reportRef:join(binding.writeRoot,'missing.md')})
+  bell(binding,{message:'',reportRef:join(binding.writeRoot,'missing.md')})
   const result=devspaceTerminal(binding,{source:'text_fallback',diagnostic:'CAPABILITY_UNAVAILABLE'})
   assert.equal(result.source,'bell');assert.equal(result.reportedOutcome,'DONE')
   assert.ok(result.warnings.includes('REPORT_UNAVAILABLE'));assert.equal(result.evidenceState,'REPORTED_NOT_VERIFIED')
@@ -127,6 +127,20 @@ test('bell retains missing/arbitrary report, rejects each foreign identity and r
   }
   bell(binding,{reportRef:join(binding.channel,'binding.json')})
   assert.equal(devspaceTerminal(binding).reportRef,null)
+})
+test('bell carries an inline report without waiting for post-bell browser prose', t => {
+  const {binding} = channel(t, 'READ_ONLY')
+  const report = 'Прочитан README.md: назначение подтверждено.\nПроверка: только чтение; файлы не изменены.'
+  bell(binding, {message:report})
+  const result = devspaceTerminal(binding, {assistantText:''})
+  assert.equal(result.source, 'bell')
+  assert.equal(result.assistantText, report)
+  assert.equal(result.reportRef, null)
+  assert.equal(result.evidenceState, 'REPORTED_NOT_VERIFIED')
+  assert.ok(!result.warnings.includes('REPORT_UNAVAILABLE'))
+  assert.equal(devspaceTerminal(binding, {assistantText:'correlated final text'}).assistantText, 'correlated final text')
+  bell(binding, {message:''})
+  assert.ok(devspaceTerminal(binding).warnings.includes('REPORT_UNAVAILABLE'))
 })
 test('manager uses private launcher not publisher and stdout cannot forge own bell', async t => {
   const {root}=channel(t,'READ_ONLY')
