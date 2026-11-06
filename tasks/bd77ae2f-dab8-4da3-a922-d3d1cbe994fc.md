@@ -1,0 +1,25 @@
+POSTMAN_REQUEST_ID: REQ_20261106T150348Z_7951
+Режим: READ_ONLY. Область для чтения: C:\PROJECTS\Real-tactic-wargame
+Сначала открой назначенную область обычным open_workspace с path="C:\\PROJECTS\\Real-tactic-wargame". В READ_ONLY не используй postman-writer. Записи в любые файлы запрещены, кроме bell ниже.
+Leader разрешил Computer Use для этого поручения.
+DevSpace Bash не является песочницей. Не выходи за scope; не читай секреты/runtime credentials, binding и служебные файлы, не меняй права, не создавай AI-агентов, не устанавливай и не перезапускай Host/DevSpace. GitHub writes/commit/push/PR/merge запрещены здесь; отдельный местный маршрут требует разрешения.
+## Инструкции Host
+instructions_sha256: 768065a9f45863a319e049b97c0833c598489d11c5f9b3345037f6b3d492bc9d
+- https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/ba417a39240a0aa1c1ced8af4f2e72cace9bee8a/postman/devspace/SKILL.md
+- https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/ba417a39240a0aa1c1ced8af4f2e72cace9bee8a/AGENTS.md
+- https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/ba417a39240a0aa1c1ced8af4f2e72cace9bee8a/REPO_POLICY.md
+- https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/ba417a39240a0aa1c1ced8af4f2e72cace9bee8a/docs/workflow/TASK_CONTRACT.md
+- C:\PROJECTS\Real-tactic-wargame\AGENTS.md
+Bell — отдельное узкое разрешение через настоящий DevSpace Bash (не читать скрипт/JSON):
+pwsh -NoProfile -NonInteractive -File 'C:\Users\Andrew\AppData\Local\DSH\Postman\devspace\bd77ae2f-dab8-4da3-a922-d3d1cbe994fc\signal.ps1' <done|need-decision|blocked> [-Message 'причина'] [-Report 'report.md']
+## Поручение Leader
+Исследуй фактическую реализацию карты опасностей в src/ и относящихся проверках scripts/. Проследи цепочку: источники угроз → знания/память → пространственные слои → выбор маршрута/позиции и решения AI → отображение/диагностика. Проверь ограничения видимости, укрытия, туман войны, затухание, типы юнитов. Отдели работающий код от заглушек. Нужен отчет с точными путями/строками/символами, существенными недостатками и приоритетами доработки. Детальный анализ планов и чужих игр выполняют другие исследователи. Проект C:/PROJECTS/Real-tactic-wargame. Это новый запуск после перезагрузки компьютера, прежнего содержательного результата нет. Только анализ: не менять файлы, refs, не запускать серверы и тяжелые тесты. Начни с README.md, DEVELOPMENT.md и применимых инструкций; проверь pwd. Готово, когда выводы подтверждены источниками и дан содержательный русский отчет. Статическое чтение не называй игровым тестом. Заверши обычным текстовым отчетом без местного bell.
+## Обязательный формат итогового ответа
+После bell напиши итоговый ответ строго между следующими точными маркерами этого задания.
+Если bell недоступен или поручение требует только текст, эти маркеры всё равно обязательны.
+Каждый маркер — отдельная строка без кавычек, Markdown, пробелов или замены REQ.
+Между ними — непустой итог, ограничения и результаты проверок; вне маркеров ничего не пиши.
+<<<POSTMAN_RESULT_BEGIN:REQ_20261106T150348Z_7951>>>
+<итог работы либо BLOCKED/NEED_DECISION с причиной>
+<<<POSTMAN_RESULT_END:REQ_20261106T150348Z_7951>>>
+Маркеры нужны скрипту получения ответа; они не заменяют bell и не доказывают PASS.
