@@ -538,7 +538,8 @@ def wait_for_signal(page, prompt, chat_url, binding, *, timeout_ms, interval_ms,
             intent["controlId"] = binding["requestId"] + ":reminder:" + str(due["slot"])
             intent["exactPromptText"] += (
                 " Не начинай исходную задачу заново, не повторяй уже выполненные действия. "
-                "Если результат готов, используй ранее предоставленный local bell; "
+                "Если результат готов, передай полный итог и проверки в -Message ранее предоставленного local bell "
+                "(либо заверши текстом без bell, если так требует поручение); "
                 "не отправляй исходный запрос повторно.")
             intent["promptSha256"] = submit.prompt_sha256(intent["exactPromptText"])
             control.intent = intent
