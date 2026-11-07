@@ -32,7 +32,7 @@ function withLongContextPricing(cost: BaseCost): CodexModel['cost'] {
   }
 }
 
-function gpt6CodexModel(id: 'gpt-6-sol' | 'gpt-6-luna', name: string, cost: BaseCost): CodexModel {
+function gpt6CodexModel(id: 'gpt-6-sol' | 'gpt-6-luna' | 'gpt-6.1-terra', name: string, cost: BaseCost): CodexModel {
   return {
     id,
     name,
@@ -105,6 +105,15 @@ const BACKFILL_MODELS: readonly CodexModel[] = [
       supportsToolSearch: true,
       supportsMidConvoSystemMessages: true,
     } as CodexModel['compat'], // pi-ai 0.85.1 types predate this catalog flag.
+  },
+  {
+    ...gpt6CodexModel('gpt-6.1-terra', 'GPT-6.1 Terra', {
+      input: 1,
+      output: 5,
+      cacheRead: 0.05,
+      cacheWrite: 1.25,
+    }),
+    contextWindow: 500_000,
   },
 ]
 

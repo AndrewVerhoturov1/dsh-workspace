@@ -24,7 +24,7 @@ function byId(models, id) {
 
 test('backfills GPT-6 Sol and Luna with upstream Codex image metadata', () => {
   const models = backfillGpt6CodexModels([astra])
-  assert.deepEqual(models.map(model => model.id), ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-6.1-sol'])
+  assert.deepEqual(models.map(model => model.id), ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-6.1-sol', 'gpt-6.1-terra'])
 
   const expected = {
     'gpt-6-sol': {
@@ -134,5 +134,8 @@ test('provider wrapper changes only getModels behavior', () => {
   assert.equal(wrapped.auth, provider.auth)
   assert.equal(wrapped.stream, stream)
   assert.equal(wrapped.streamSimple, streamSimple)
-  assert.deepEqual(wrapped.getModels().map(model => model.id), ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-6.1-sol'])
+  const models = wrapped.getModels()
+  const terra = byId(models, 'gpt-6.1-terra')
+  assert.deepEqual(terra.input, ['text', 'image'])
+  assert.equal(terra.contextWindow, 500_000)
 })
