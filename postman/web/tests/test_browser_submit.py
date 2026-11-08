@@ -275,6 +275,21 @@ console.log(JSON.stringify({length: actual.length, sha256: hash(actual), joined,
         page = FakePage()
         result = submit.prepare_fresh_chat(page, timeout_ms=0)
         self.assertTrue(result["ok"])
+
+    def test_devspace_draft_isolation_is_installed_before_navigation(self):
+        page = FakePage()
+        actions = []
+        goto = page.goto
+        page.add_init_script = lambda *, path: actions.append(path.name)
+
+        def navigate(*args, **kwargs):
+            actions.append("navigate")
+            return goto(*args, **kwargs)
+
+        page.goto = navigate
+        result = submit.prepare_fresh_chat(page, timeout_ms=0, isolate_draft=True)
+        self.assertTrue(result["ok"])
+        self.assertEqual(actions, ["isolate_chatgpt_draft.js", "navigate"])
         self.assertEqual(result["code"], submit.FRESH_CHAT_CONFIRMED)
 
     def test_composer_empty_proof_ignores_prosemirror_placeholder_newline(self):

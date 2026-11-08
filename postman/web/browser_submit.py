@@ -902,8 +902,11 @@ def _wait_until(
 
 
 def prepare_fresh_chat(page: Any, *, timeout_ms: int = DEFAULT_TIMEOUT_MS,
-                       navigation_timeout_ms: int = DEFAULT_NAVIGATION_TIMEOUT_MS) -> dict[str, Any]:
+                       navigation_timeout_ms: int = DEFAULT_NAVIGATION_TIMEOUT_MS,
+                       isolate_draft: bool = False) -> dict[str, Any]:
     try:
+        if isolate_draft:
+            page.add_init_script(path=_SCRIPT_DIR / "isolate_chatgpt_draft.js")
         page.goto(CHATGPT_URL, wait_until="domcontentloaded", timeout=navigation_timeout_ms)
     except Exception as exc:
         return {
@@ -1430,8 +1433,9 @@ def _presend_transaction(fn=None, *, fresh=False):
 
 
 @_presend_transaction(fresh=True)
-def submit_fresh_prompt(page: Any, prompt: str, *, timeout_ms: int = DEFAULT_TIMEOUT_MS, input_attachment=None, artifact_mode: bool = False) -> dict[str, Any]:
-    prep = prepare_fresh_chat(page, timeout_ms=timeout_ms)
+def submit_fresh_prompt(page: Any, prompt: str, *, timeout_ms: int = DEFAULT_TIMEOUT_MS,
+                        input_attachment=None, artifact_mode: bool = False, isolate_draft: bool = False) -> dict[str, Any]:
+    prep = prepare_fresh_chat(page, timeout_ms=timeout_ms, isolate_draft=isolate_draft)
     if not prep["ok"]:
         return _result(
             prep["code"],
