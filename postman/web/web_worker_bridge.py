@@ -739,6 +739,7 @@ class WebWorkerBridge:
                     submitted = browser_submit.submit_fresh_prompt(
                         page, prompt, **({"input_attachment": input_attachment} if input_attachment else {}),
                         timeout_ms=max(timeout_ms, 90_000) if image_stage else timeout_ms,
+                        isolate_draft=devspace_binding is not None,
                         artifact_mode=artifact_mode and not image_flow)
                 else:
                     submitted = browser_submit.submit_existing_prompt(
