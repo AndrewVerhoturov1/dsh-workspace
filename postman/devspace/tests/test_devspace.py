@@ -162,6 +162,92 @@ assert hasattr(stdlib_signal, 'set_wakeup_fd')
         self.assertEqual(result["code"], "DEVSPACE_SIGNAL_RECEIVED")
         observed.assert_not_called()
 
+    def test_owned_chat_navigation_restores_once_and_delivers_without_send(self):
+        prompt = "POSTMAN_REQUEST_ID: " + REQ + "\nread only"
+        page = SimpleNamespace(url=CHAT, _postman_page_diagnostic={"requestId": REQ})
+        snapshots = []
+        visits = []
+
+        def navigate(url, **kwargs):
+            visits.append(url)
+            page.url = url
+
+        def observe(*args, **kwargs):
+            if not visits:
+                page.url = "https://chatgpt.com/settings/usage"
+                return {"ok": False, "code": browser_observer.CHAT_CORRELATION_LOST}
+            return {"ok": True, "details": {"assistantText": "100 × 101 / 2 = 5050"}}
+
+        page.goto = navigate
+        with patch.object(observer.observer, "observe_next_assistant", side_effect=observe), \
+             patch.object(observer.observer, "snapshot_turns", return_value=([], "turns")), \
+             patch.object(observer.recovery, "wait_for_chat_ready", return_value={"ok": True}) as ready, \
+             patch.object(observer.submit, "submit_existing_prompt") as send, \
+             patch.object(observer.reminder_policy, "submit_reminder") as reminder:
+            result = observer.wait_for_signal(page, prompt, CHAT, self.binding,
+                timeout_ms=10000, interval_ms=900000, count=3, sleep=lambda _: None,
+                monotonic=lambda: 0, persist=snapshots.append)
+        self.assertEqual(visits, [CHAT])
+        self.assertEqual(result["details"]["source"], "text_fallback")
+        self.assertIn("5050", result["details"]["assistantText"])
+        self.assertEqual(ready.call_args.args, (page, CHAT, prompt))
+        self.assertEqual(ready.call_args.kwargs["original_prompt"], prompt)
+        self.assertTrue(any(event.get("outcome") == "CHAT_RESTORED"
+            for event in snapshots[-1]["transportEventJournal"]))
+        send.assert_not_called()
+        reminder.assert_not_called()
+
+    def test_navigation_restoration_keeps_foreign_page_and_request_guards(self):
+        prompt = "POSTMAN_REQUEST_ID: " + REQ + "\nread only"
+        cases = [
+            ("https://example.org/settings/usage", REQ, prompt, False),
+            ("https://chatgpt.com/c/another-chat", REQ, prompt, False),
+            ("https://chatgpt.com/settings/usage", "REQ_foreign", prompt, False),
+            ("https://chatgpt.com/settings/usage", REQ, "unbound prompt", False),
+            ("https://chatgpt.com/settings/usage", REQ, prompt, True),
+        ]
+        for url, owner, exact_prompt, revoked in cases:
+            with self.subTest(url=url, owner=owner, prompt=exact_prompt, revoked=revoked):
+                page = SimpleNamespace(url=url, _postman_page_diagnostic={"requestId": owner},
+                    goto=unittest.mock.Mock())
+                with patch.object(observer.observer, "observe_next_assistant",
+                        return_value={"ok": False, "code": browser_observer.CHAT_CORRELATION_LOST}), \
+                     patch.object(observer.controls, "revoked", return_value=revoked), \
+                     patch.object(observer.observer, "snapshot_turns", return_value=([], "turns")):
+                    result = observer.wait_for_signal(page, exact_prompt, CHAT, self.binding,
+                        timeout_ms=10000, interval_ms=900000, count=0, sleep=lambda _: None,
+                        monotonic=lambda: 0, persist=lambda _: None)
+                page.goto.assert_not_called()
+                self.assertEqual(result["details"]["diagnostic"], "REVOKED" if revoked else "BLOCKED")
+
+    def test_navigation_restoration_does_not_repeat_or_accept_unproved_lineage(self):
+        prompt = "POSTMAN_REQUEST_ID: " + REQ + "\nread only"
+        for ready, newer in ((False, False), (True, False), (True, True)):
+            with self.subTest(ready=ready, newer=newer):
+                page = SimpleNamespace(url=CHAT, _postman_page_diagnostic={"requestId": REQ})
+                visits = []
+
+                def navigate(url, **kwargs):
+                    visits.append(url)
+                    page.url = url
+
+                def observe(*args, **kwargs):
+                    page.url = "https://chatgpt.com/settings/usage"
+                    return {"ok": False, "code": browser_observer.CHAT_CORRELATION_LOST}
+
+                page.goto = navigate
+                with patch.object(observer.observer, "observe_next_assistant", side_effect=observe), \
+                     patch.object(observer.controls, "newer_user_turn",
+                        side_effect=lambda *args: bool(visits) and newer), \
+                     patch.object(observer.recovery, "wait_for_chat_ready", return_value={"ok": ready}), \
+                     patch.object(observer.submit, "submit_existing_prompt") as send:
+                    result = observer.wait_for_signal(page, prompt, CHAT, self.binding,
+                        timeout_ms=10000, interval_ms=900000, count=0, sleep=lambda _: None,
+                        monotonic=lambda: 0, persist=lambda _: None)
+                self.assertEqual(visits, [CHAT])
+                self.assertEqual(result["details"]["diagnostic"], "BLOCKED")
+                send.assert_not_called()
+
     def test_bell_during_browser_wait_and_diagnostic_race(self):
         def observe(*args, **kwargs):
             self.emit()

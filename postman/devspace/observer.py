@@ -1,5 +1,6 @@
 """Signal-first Devspace checks on the existing single browser transport."""
 import re
+from urllib.parse import urlparse
 import browser_observer as observer
 import browser_recovery as recovery
 import browser_submit as submit
@@ -337,6 +338,7 @@ def wait_for_signal(page, prompt, chat_url, binding, *, timeout_ms, interval_ms,
     anchor = None
     latest_text = ""
     superseded_by_user_turn = False
+    chat_restore_attempted = False
 
     def bell():
         event = read_event(binding)
@@ -495,6 +497,42 @@ def wait_for_signal(page, prompt, chat_url, binding, *, timeout_ms, interval_ms,
             outcome = "UNKNOWN"
             return finish(diagnostic("Completed response without local signal.", source="text_fallback", outcome=outcome))
         if observed.get("code") == observer.CHAT_CORRELATION_LOST and not owned_turn():
+            current = urlparse(str(getattr(page, "url", "")))
+            owned_page = getattr(page, "_postman_page_diagnostic", {})
+            # Recover this request's automation tab from ChatGPT home/settings.
+            # Other conversations, origins and unowned tabs retain the stop guard.
+            can_restore = (not chat_restore_attempted and not superseded_by_user_turn
+                and owned_page.get("requestId") == binding["requestId"]
+                and current.scheme == "https" and current.netloc == "chatgpt.com"
+                and (current.path in ("", "/", "/settings") or current.path.startswith("/settings/"))
+                and bound_prompt(binding, prompt) and not controls.revoked(binding))
+            episode = control.candidate(observer.CHAT_CORRELATION_LOST, can_restore,
+                {"reason": "owned_chat_navigation", "restoreAllowed": can_restore})
+            if episode and control.begin_recovery(observer.CHAT_CORRELATION_LOST, episode):
+                chat_restore_attempted = True
+                persist(control.snapshot())
+                restore_deadline = min(control.soft_deadline,
+                    monotonic() + recovery.DEFAULT_LOAD_TIMEOUT_MS / 1000)
+                restored = False
+                try:
+                    if not controls.revoked(binding):
+                        page.goto(chat_url, wait_until="domcontentloaded",
+                            timeout=max(1, int((restore_deadline - monotonic()) * 1000)))
+                        ready = recovery.wait_for_chat_ready(page, chat_url, latest,
+                            original_prompt=prompt, anchor_binding=anchor, settle_ms=0,
+                            timeout_ms=max(0, int((restore_deadline - monotonic()) * 1000)),
+                            sleep=sleep, monotonic=monotonic)
+                        restored = bool(ready.get("ok") and owned_turn())
+                except Exception as error:
+                    control.event("CHAT_RESTORE_FAILED", exceptionType=type(error).__name__)
+                control.finish_recovery("CHAT_RESTORED" if restored else "CHAT_RESTORE_UNPROVEN")
+                persist(control.snapshot())
+                received = bell()
+                if received:
+                    return finish(received)
+                if restored:
+                    continue
+                return finish(diagnostic("Saved chat restoration not proven; no resend."))
             return finish(diagnostic("Chat correlation lost; no resend."))
         interrupted, evidence = observer.connection_interrupted(page)
         episode = control.candidate(observer.ASSISTANT_CONNECTION_INTERRUPTED, interrupted, evidence)
