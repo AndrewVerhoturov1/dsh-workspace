@@ -45,6 +45,11 @@ CHATGPT_URL = bootstrap.CHATGPT_URL
 DEFAULT_CDP_URL = bootstrap.DEFAULT_CDP_URL
 DEFAULT_TIMEOUT_MS = 30_000
 DEFAULT_NAVIGATION_TIMEOUT_MS = 300_000
+# One native upload moves the whole bundle into ChatGPT and then waits for the
+# server to settle its file card. That is transfer- and server-bound like
+# navigation, not a local fill/click: the 30 s interaction budget expires on
+# multi-MB inputs while the identical text-only prompt is unaffected.
+DEFAULT_UPLOAD_TIMEOUT_MS = 300_000
 
 PAGE_OWNED = "PAGE_OWNED"
 FRESH_CHAT_CONFIRMED = "FRESH_CHAT_CONFIRMED"
@@ -1434,6 +1439,7 @@ def _presend_transaction(fn=None, *, fresh=False):
 
 @_presend_transaction(fresh=True)
 def submit_fresh_prompt(page: Any, prompt: str, *, timeout_ms: int = DEFAULT_TIMEOUT_MS,
+                        upload_timeout_ms: int | None = None,
                         input_attachment=None, artifact_mode: bool = False, isolate_draft: bool = False) -> dict[str, Any]:
     prep = prepare_fresh_chat(page, timeout_ms=timeout_ms, isolate_draft=isolate_draft)
     if not prep["ok"]:
@@ -1452,7 +1458,8 @@ def submit_fresh_prompt(page: Any, prompt: str, *, timeout_ms: int = DEFAULT_TIM
     attachment_id = None
     if input_attachment:
         # Preparation has proved chat identity and an empty live composer. No Send yet.
-        uploaded = attachments.upload(page, composer, input_attachment, timeout_ms=timeout_ms, wait_until=_wait_until)
+        uploaded = attachments.upload(page, composer, input_attachment,
+            timeout_ms=timeout_ms if upload_timeout_ms is None else upload_timeout_ms, wait_until=_wait_until)
         if not uploaded["ok"]:
             return _result(uploaded["code"], ok=False, send_state=SEND_PROVEN_NOT_SENT,
                 transitions=[PAGE_OWNED, FRESH_CHAT_CONFIRMED, COMPOSER_EMPTY_CONFIRMED, attachments.ATTACHMENT_UPLOAD_STARTED],
@@ -1489,6 +1496,7 @@ def submit_existing_prompt(
     conversation_url: str,
     *,
     timeout_ms: int = DEFAULT_TIMEOUT_MS,
+    upload_timeout_ms: int | None = None,
     navigate: bool = True,
     input_attachment=None,
     artifact_mode: bool = False,
@@ -1514,7 +1522,8 @@ def submit_existing_prompt(
     attachment_id = None
     if input_attachment:
         # Preparation has proved chat identity and an empty live composer. No Send yet.
-        uploaded = attachments.upload(page, composer, input_attachment, timeout_ms=timeout_ms, wait_until=_wait_until)
+        uploaded = attachments.upload(page, composer, input_attachment,
+            timeout_ms=timeout_ms if upload_timeout_ms is None else upload_timeout_ms, wait_until=_wait_until)
         if not uploaded["ok"]:
             return _result(uploaded["code"], ok=False, send_state=SEND_PROVEN_NOT_SENT,
                 transitions=[PAGE_OWNED, EXISTING_CHAT_CONFIRMED, COMPOSER_EMPTY_CONFIRMED, attachments.ATTACHMENT_UPLOAD_STARTED],

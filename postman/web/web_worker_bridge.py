@@ -412,6 +412,7 @@ class WebWorkerBridge:
         conversation_url: str | None = None,
         cdp_url: str = browser_bootstrap.DEFAULT_CDP_URL,
         timeout_ms: int = browser_submit.DEFAULT_TIMEOUT_MS,
+        upload_timeout_ms: int = browser_submit.DEFAULT_UPLOAD_TIMEOUT_MS,
         observer_timeout_ms: int = reminder_policy.DEFAULT_OVERALL_TIMEOUT_MS,
         stable_ms: int = browser_observer.DEFAULT_STABLE_MS,
         reminder_interval_ms: int = reminder_policy.DEFAULT_REMINDER_INTERVAL_MS,
@@ -739,12 +740,14 @@ class WebWorkerBridge:
                     submitted = browser_submit.submit_fresh_prompt(
                         page, prompt, **({"input_attachment": input_attachment} if input_attachment else {}),
                         timeout_ms=max(timeout_ms, 90_000) if image_stage else timeout_ms,
+                        upload_timeout_ms=upload_timeout_ms,
                         isolate_draft=devspace_binding is not None,
                         artifact_mode=artifact_mode and not image_flow)
                 else:
                     submitted = browser_submit.submit_existing_prompt(
                         page, prompt, conversation_url,
                         timeout_ms=max(timeout_ms, 60_000) if devspace_binding is not None and devspace_binding.get("recovery") is not None else timeout_ms,
+                        upload_timeout_ms=upload_timeout_ms,
                         artifact_mode=artifact_mode and not image_flow,
                         **({"navigate": False}
                            if devspace_binding is not None and devspace_binding.get("recovery") is not None else {}),
