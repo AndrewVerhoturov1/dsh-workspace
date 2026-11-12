@@ -1,6 +1,6 @@
 # Codex OAuth в DeepSeek Harness
 
-Актуальная схема для текущего `web` profile использует локальный пакет `dsh-codex-oauth` версии `0.1.9` и provider route `codex`.
+Актуальная схема для профиля `web` использует локальный пакет `dsh-codex-oauth` версии `0.1.10` и провайдера `codex`.
 
 ## Где находится реализация
 
@@ -13,7 +13,7 @@ packages/dsh-codex-oauth/
 Production profile подключает готовый пакет:
 
 ```text
-vendor/dsh-codex-oauth-0.1.9.tgz
+vendor/dsh-codex-oauth-0.1.10.tgz
 ```
 
 через `profiles/web/package.json`.
@@ -100,7 +100,7 @@ codex
     model: <model-id-from-current-catalog>
 ```
 
-Пакет `0.1.9` сохраняет проверенный transport/image path на `@earendil-works/pi-ai` `0.85.1` и локально backfill-ит `gpt-6-sol`, `gpt-6-luna` и `gpt-6.1-sol`. Все три модели объявлены как `text + image`; существующие записи `pi-ai` имеют приоритет, поэтому после будущего обновления каталога shim не создаёт дубликаты.
+Пакет `0.1.10` использует `@earendil-works/pi-ai` `0.85.1` и добавляет в каталог `gpt-6-sol`, `gpt-6-luna`, `gpt-6.1-sol` и `gpt-6.1-terra`, если этих моделей там ещё нет. Все четыре принимают текст и изображения.
 
 Не следует фиксировать в этой инструкции конкретный модельный ID как обязательный: доступный каталог может меняться вместе с пакетом и `pi-ai`.
 
