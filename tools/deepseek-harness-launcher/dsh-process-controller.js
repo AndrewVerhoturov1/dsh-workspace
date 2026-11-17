@@ -174,7 +174,8 @@ function listListeningPids(port) {
     return []
   }
   const result = []
-  const portPattern = new RegExp(`^\\s*TCP\\s+[^\\s:]+:${port}\\s+[^\\s]+\\s+LISTENING\\s+(\\d+)\\s*$`, 'i')
+  // Readiness uses IPv4 loopback; a LAN-only portproxy does not occupy it.
+  const portPattern = new RegExp(`^\\s*TCP\\s+(?:127\\.0\\.0\\.1|0\\.0\\.0\\.0|\\[::\\]):${port}\\s+[^\\s]+\\s+LISTENING\\s+(\\d+)\\s*$`, 'i')
   for (const line of output.split(/\r?\n/)) {
     const match = line.match(portPattern)
     if (match && !result.includes(Number(match[1]))) result.push(Number(match[1]))
