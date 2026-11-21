@@ -1,0 +1,26 @@
+POSTMAN_REQUEST_ID: REQ_20261121T144811Z_2333
+Режим: WRITE_TEST. Область для чтения: C:\PROJECTS\Real-tactic-wargame\.worktrees\combat-lab-memory-route-latency
+Перед любыми другими DevSpace-инструментами вызови open_workspace с path="C:\\Users\\Andrew\\AppData\\Local\\DSH\\Postman\\devspace\\04ce2f9d-ccdb-454a-ac72-af91dffa4b84\\workspace" и mode='checkout'. Назначенная область записи: C:\Users\Andrew\AppData\Local\DSH\Postman\devspace\04ce2f9d-ccdb-454a-ac72-af91dffa4b84\workspace. Исходная область только для чтения.
+Leader разрешил Computer Use для этого поручения.
+DevSpace Bash не является песочницей. Не выходи за scope; не читай секреты/runtime credentials, binding и служебные файлы, не меняй права, не создавай AI-агентов, не устанавливай и не перезапускай Host/DevSpace.
+В этом REQ локальные Git-действия и GitHub push/PR/merge допустимы только при явном поручении, в назначенном репозитории и в пределах назначенной области записи. Если поручение не разрешает конкретное действие или репозиторий не определён, не выполняй его; запроси решение Leader. WRITE_TEST сохраняет исходную область только для чтения. Это уточнение для данного REQ имеет приоритет над общей фразой SKILL о выполнении commit/push/PR/merge отдельным местным маршрутом; условие REPO_POLICY «GitHub READ ONLY» применяется, если такое ограничение назначено этому REQ. Не обходи проектные ограничения, фактические права и защиту веток; разрешение не предоставляет доступа или credentials.
+## Инструкции Host
+instructions_sha256: 51ff20d41ca3c3cb03c05d3388840de905413718dcef0996dfe65f2f8ed05a1a
+- https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/55c6b48376f8dd3747eaf2c16a734c430a42e94c/postman/devspace/SKILL.md
+- https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/55c6b48376f8dd3747eaf2c16a734c430a42e94c/AGENTS.md
+- https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/55c6b48376f8dd3747eaf2c16a734c430a42e94c/REPO_POLICY.md
+- https://raw.githubusercontent.com/AndrewVerhoturov1/dsh-workspace/55c6b48376f8dd3747eaf2c16a734c430a42e94c/docs/workflow/TASK_CONTRACT.md
+- C:\PROJECTS\Real-tactic-wargame\.worktrees\combat-lab-memory-route-latency\AGENTS.md
+Bell — отдельное узкое разрешение через настоящий DevSpace Bash (не читать скрипт/JSON):
+pwsh -NoProfile -NonInteractive -File 'C:\Users\Andrew\AppData\Local\DSH\Postman\devspace\04ce2f9d-ccdb-454a-ac72-af91dffa4b84\signal.ps1' <done|need-decision|blocked> [-Message 'причина'] [-Report 'report.md']
+## Поручение Leader
+Добавь ползунок «Бонус к опознаванию, с» в существующий редактор «Память». База для инкрементального патча — уже собранные текущие файлы выбранного worktree codex/combat-lab-memory-route-latency (НЕ чистый origin/main: в worktree уже staged память и телеметрия). Сам worktree только читать, изменения и тесты в твоей частной области. Правь SoldierMemoryEditor, SoldierVisualMemorySettings, узко getVisualMemoryRecognitionBonus и целевые тесты. Отдельный сохраняемый параметр окна распознавания, default 15 с, 0 отключает; окно не длиннее существующего порога «Свежая», учитывает существующую скорость забывания, в UI рядом показывай реальную эффективную длительность и объясни ограничение свежестью. Старые сохранённые настройки без поля получают 15 с, reset восстанавливает 15 с. Не меняй окно оценки угрозы и размер самого бонуса, LOS и граф. Используй существующий общий range control и стиль редактора, не добавляй зависимостей. Тесты: миграция, 0/сброс, изменение реально меняет момент исчезновения бонуса и не меняет вес угрозы; проверь интерфейс и сохранение на изолированном Combat Lab, не на 5173, если браузер доступен. Выдай инкрементальный патч с SHA и reportRef; без Git-записей в пользовательских копиях и без публикации.
+## Обязательный формат итогового ответа
+После bell напиши итоговый ответ строго между следующими точными маркерами этого задания.
+Если bell недоступен или поручение требует только текст, эти маркеры всё равно обязательны.
+Каждый маркер — отдельная строка без кавычек, Markdown, пробелов или замены REQ.
+Между ними — непустой итог, ограничения и результаты проверок; вне маркеров ничего не пиши.
+<<<POSTMAN_RESULT_BEGIN:REQ_20261121T144811Z_2333>>>
+<итог работы либо BLOCKED/NEED_DECISION с причиной>
+<<<POSTMAN_RESULT_END:REQ_20261121T144811Z_2333>>>
+Маркеры нужны скрипту получения ответа; они не заменяют bell и не доказывают PASS.
